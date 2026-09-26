@@ -1,0 +1,149 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R4",
+  "source_commit": "b3cb34361951f332b50f5c4984a02beba2a8a83e",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T19:41:25.217018+00:00",
+  "scope": "控制层开发自查；ARM64 在 staging 私有挂载命名空间运行真实子进程恢复链。官方证据为零请求隔离样本，不是生产升级取证或生产网络验收。",
+  "tool_identity": {
+    "files_sha256": "7305d0155c493be946abd0d84d7b30c91e3f82f8e896824f7dfe97be25a5d691",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "f83a217147f75b2a3f7669b01aa8faade257971975a6e7b7ced97436d553023d"
+  },
+  "identity_layer_changed": "control",
+  "arm64_tool_identity_matches": true,
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "Campaign 阶段失败三分支",
+      "result": "passed",
+      "evidence": "可恢复类保持 recovery_required；VC-1～VC-3 普通失败写 stage_abandoned 与 stage_review_required，保留 Campaign；integrity_mismatch、账本 stop_required、根因上限及当前预算到期仍停线。候选级原合同保持。"
+    },
+    {
+      "item": "COMMIT 与 reservation 决定恢复路径",
+      "result": "passed",
+      "evidence": "未 COMMIT 的 prepare／commit 发布失败同序号重派回归通过；已 COMMIT 的分类失败以 N+1 原命令重派。VC-1 存在预约时拒绝父 run 对账，必须 attempt 对账、批准恢复预览，再恢复原 VC-1 阶段。"
+    },
+    {
+      "item": "动作幂等证明与漂移拒绝",
+      "result": "passed",
+      "evidence": "仅认可受管 classify／stage-profile 合同；未知动作、无合法收据的 Catalog 半成品保持审核。stage-replay 绑定原 run、COMMIT、review、对账入账、命令和已有输入输出摘要；派发前实物漂移拒绝；阶段 checkpoint 缺失时不能跳阶段。"
+    },
+    {
+      "item": "真实分类修复续作",
+      "result": "passed",
+      "evidence": "真实 CLI 在 COMMIT 后写完草案再非零退出；修复隔离工具副本，原 Campaign 对账后 N+1 成功。草案恰一份，官方和草案原字节保留，新增上游请求 0；重复对账不重复账本事件。"
+    },
+    {
+      "item": "中断恢复与 write-once",
+      "result": "passed",
+      "evidence": "真实 SIGKILL 位于 abandon 已写、review 未写之间；重入补写恰一条 review，原事件字节不变。已有完整分类批准／Catalog 结果只读复核和补齐合法 checkpoint，不覆盖半成品。"
+    },
+    {
+      "item": "历史读取、schema 与回退边界",
+      "result": "passed",
+      "evidence": "无新 review 字段的历史 checkpoint 在值为空时兼容；真实 stage-replay 和 timing checkpoint 离线 schema 校验通过。前序工具真实 inspect／replay 拒绝新 producer，底层事件回放拒绝新事件，账本原字节不变；写入新事件后不能直接回退，阶段 1 复验实际 rollback_backup。"
+    },
+    {
+      "item": "身份分层、冻结和发布检查",
+      "result": "passed",
+      "evidence": "wire／evidence／policy 与 R2 一致，仅 control 变化；两端摘要一致。相关回归、部署、认证、check-egress-spec-ci、service 冻结测试及 git diff 检查通过。"
+    }
+  ],
+  "regression": {
+    "local": {
+      "tests": 148,
+      "seconds": 268.272,
+      "result": "passed"
+    },
+    "arm64": {
+      "tests": 148,
+      "seconds": 672.088,
+      "result": "passed"
+    },
+    "deployment": {
+      "tests": 13,
+      "seconds": 10.648,
+      "result": "passed"
+    },
+    "certification": {
+      "tests": 4,
+      "seconds": 10.287,
+      "result": "passed"
+    }
+  },
+  "real_chain_metrics": {
+    "execute_actions": 2,
+    "reused_drafts": 1,
+    "reused_official_jobs": 1,
+    "live_request_count": 0,
+    "unchanged_source_bytes": true
+  },
+  "self_check_findings_resolved": [
+    "两个历史 staging 测试缺少现有零请求夹具的 R15 隔离配置，曾误读生产策略路径；仅修复测试 helper，生产出口门禁未修改。",
+    "早期综合回归期间修改受管源码造成合成部署收据漂移；最终完整回归固定源码后重新执行。",
+    "真实链最初目录只有 staging 前缀，不能满足明确路径组件合同；改用实际 staging 子目录，未放宽校验。"
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "7 条同类提示仍引用已移除的 DEFAULT_TOOL_DIGEST；整树摘要由 staging 自算，未重新引入硬编码。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "13 项通过；supervisor 固定摘要已更新，preparer 未变化。",
+    "unregistered_paths": "10 条路径没有历史冻结边；实际工具身份与测试覆盖，未修改策略登记。"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+      "sha256": "fbfc81dc17f7c5c6c4f2609a017ed9fbebd60abbfcc17d07ef521342b0becafd"
+    }
+  ],
+  "logs": [
+    {
+      "file": "r4-final-regression.log",
+      "sha256": "65348094edf50257875387b1868e7c18564c9164aa7af3ba8bc6f51cc678107a"
+    },
+    {
+      "file": "r4-arm64-final-regression.log",
+      "sha256": "40f169565defdac85dc638574e2867f7e042855e00b91d2ac03ba49f5f39a16c"
+    },
+    {
+      "file": "r4-deployment.log",
+      "sha256": "b61f3a8ccac9fa03b9ac0680854bd08e078513a4987c295d548f232254ffa6f4"
+    },
+    {
+      "file": "r4-certification-tests.log",
+      "sha256": "11bc6395c0e02087de6753854dc8c672d75220fbd2184445a5be4f5298d73f70"
+    },
+    {
+      "file": "r4-egress-ci.log",
+      "sha256": "99e7694dfd5f8df7ced539f7b3416ce638499466e1e0b6c3ffac5757d1d0d16b"
+    },
+    {
+      "file": "r4-service-freeze.log",
+      "sha256": "1decc54fafd28659daf0a3b2598c1d9f582886ee2aa5c8a850d364063674743f"
+    },
+    {
+      "file": "r4-schema-check.log",
+      "sha256": "09404609c911d98aea932bb3a388d7679932e087c59305c0c70a952c30bbd933"
+    },
+    {
+      "file": "r4-rollback-check.log",
+      "sha256": "e1191e6e76a143761029ef2e0426aa29b0ec0432190f50905ab2db8d2ca1bf55"
+    },
+    {
+      "file": "r4-final-identity.json",
+      "sha256": "8d0b0a70329906af3d834b4428341bb5901aa6e4c31c0c19d7605ab2ab38d46b"
+    },
+    {
+      "file": "r4-arm64-identity.json",
+      "sha256": "8d0b0a70329906af3d834b4428341bb5901aa6e4c31c0c19d7605ab2ab38d46b"
+    }
+  ],
+  "scheduled_release_checks": [
+    "阶段 1 统一受监督部署、驱动安装、认证、生产 R15 迁移验收，并对实际 rollback_backup 做只读回放。"
+  ]
+}

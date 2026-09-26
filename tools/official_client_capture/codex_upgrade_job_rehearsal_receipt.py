@@ -2536,6 +2536,12 @@ def _job_document(job: Any) -> dict[str, Any]:
         "model_id": str(job.model_id),
         "expected_use_responses_lite": bool(job.expected_use_responses_lite),
         "required_model_receipt": bool(job.required_model_receipt),
+        # R16：只在作业声明显式依赖时写入，未声明作业的演练文档与旧版逐字节一致。
+        **(
+            {"tool_dependencies": list(job.tool_dependencies)}
+            if getattr(job, "tool_dependencies", ())
+            else {}
+        ),
     }
 
 

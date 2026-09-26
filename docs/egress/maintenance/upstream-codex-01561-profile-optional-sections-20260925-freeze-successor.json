@@ -1,0 +1,66 @@
+{
+  "base_commit": "45d5d1d8da90fb9c03593863c640af4d63b8c646",
+  "changed_path_count": 7,
+  "current_commit": "14e4af5341a7fbcfd56ea29f94733c37e77ec17c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4168,
+  "frozen_path_count": 1399,
+  "identity_sha256": "7e98d09d13a70b7b42cc6b944d96be88c15e49b3034d6ad5684f79a34d6cab6c",
+  "issued_at_utc": "2026-09-25T06:42:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01561-profile-optional-sections-20260925-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "predecessor_sha256s": [
+        "42ce0f27ba7baf16ab2a6b96388bd6f2f67d7ee5479f156204662cf722d9d3eb"
+      ],
+      "reason": "画像契约新增可选跨端点节与 0.156.1 条件、来源枚举（旧画像摘要逐字节不变） path=backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0435585ba23e5e3e478611cdbd3a986702878dbbccbf281c1c8d7805bdfc8f31"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/snapshotcatalog.go",
+      "predecessor_sha256s": [
+        "4c1575491fb79436eca99878a52924fbe4b550bd328cdb32b4f5fd22f30b305f"
+      ],
+      "reason": "画像契约新增可选跨端点节与 0.156.1 条件、来源枚举（旧画像摘要逐字节不变） path=backend/internal/officialegress/profilecontract/snapshotcatalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b4ddd2b80b277ed97804552365acf3505d3669ddc63d6d605bbf5ff37d53b839"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "backend/internal/officialegress/profilecontract/executable_profile.go",
+    "backend/internal/officialegress/profilecontract/optional_sections.go",
+    "backend/internal/officialegress/profilecontract/optional_sections_test.go",
+    "backend/internal/officialegress/profilecontract/profile.go",
+    "backend/internal/officialegress/profilecontract/snapshotdoc.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

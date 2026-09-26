@@ -1,0 +1,150 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R2",
+  "source_commit": "00264f3d52f6e4e7a52620a62af12ec08cfddc71",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T18:59:10.654186+00:00",
+  "scope": "候选构建控制层与驱动开发自查。ARM64 使用真实 Go 二进制、Docker 镜像、装配校验、revision、账本和批次入口；官方／分类／实现测试输入为明确的零请求隔离样本，不是生产升级或生产网络验收。",
+  "tool_identity": {
+    "files_sha256": "b942a37751a1e5e46ebfa96630b3bde0392eeb97c5db2fa048a47076fe94e343",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "84a6f257be6519adde4b43b54456d1ffbd5b49bd3164bb604ee60fc4fbe7caa9"
+  },
+  "identity_layer_changed": "control",
+  "arm64_tool_identity_matches": true,
+  "driver_manifest_sha256": "38d7d03eb6b2a35485ba104345b74e43eb1dd3b47e1d6199aa7290fa24ffa5ca",
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "同源码构建层变化在原 Campaign 承接",
+      "result": "passed",
+      "evidence": "旧候选作废后登记 r2；二进制、image ID、image digest、构建参数的单字段变化均可证明构建层变化。真实同源码换镜像 seal.changed_layers=[build]；VC-3、分类和官方证据原字节保留。"
+    },
+    {
+      "item": "重复身份与伪造差异拒绝",
+      "result": "passed",
+      "evidence": "源码和实物全同拒绝；build_id 不参与同一性。原始参数摘要仍留审计，同时用输入投影排除候选改名、目录迁移和输出摘要；仅元数据变化也拒绝。篡改变化标志、逐字段 diff 或层清单会重新推算并拒绝。"
+    },
+    {
+      "item": "完整输入证明与测试重跑范围",
+      "result": "passed",
+      "evidence": "源码树、go.mod/go.sum/vendor、参数输入投影、Go/Node/pnpm、基础镜像 digest、架构、门禁需求全部一致才全部复用。参数单独变化时执行目标平台门禁并复用本机 check-egress-spec；其他任一变化或旧收据缺完整输入时全集执行。逐项变异用例均通过。"
+    },
+    {
+      "item": "显式实现测试承接及严格读侧",
+      "result": "passed",
+      "evidence": "承接收据绑定当前 Candidate，记录 reused_from=r1、execute/reuse 闭集，沿直接前序 revision/COMMIT/invalidation/构建收据链重放原始证据。证据字节、前序摘要、未 COMMIT revision、当前构建输入不一致均拒绝。既有 evidence 读侧代码未修改。"
+    },
+    {
+      "item": "实际装配、真实中断与原字节恢复",
+      "result": "passed",
+      "evidence": "ARM64 真二进制与镜像经过 inventory、frontend、image 和 capability 检查；seal 写后、build receipt 写前 SIGKILL。正式 record 批次续作，seal 不变，重复 record 不新增，VC-4 checkpoint 恰一份，随后 VC-5 批次退出码 0。"
+    },
+    {
+      "item": "驱动与旧数据兼容",
+      "result": "passed",
+      "evidence": "驱动按账本选择 initial/supersedes；可能复用的轮次构建后按真实输入决定范围，首次或已知必须全集重跑时保留前端与门禁并行。只换镜像复用时不等待新上传日志；依赖变化会重新物化 vendor。历史无扩展字段收据和 seal 可读。"
+    },
+    {
+      "item": "分层、schema、回退边界",
+      "result": "passed",
+      "evidence": "wire/evidence/policy 摘要与 R6 全同，仅 control 变化。七份真实产物经离线 JSON Schema 校验通过；旧工具提交 e05390ed 的真实 reader 明确拒绝新字段，写入新收据后不能直接回退，须保持暂停并前进修复。"
+    },
+    {
+      "item": "门禁与冻结承接",
+      "result": "passed",
+      "evidence": "本机、ARM64、部署测试、check-egress-spec-ci、service Frozen/Transition/Successor/Drift、语法、驱动 manifest 和 git diff 检查均通过。"
+    }
+  ],
+  "regression": {
+    "local": {
+      "tests": 104,
+      "seconds": 62.444,
+      "result": "passed"
+    },
+    "arm64": {
+      "tests": 105,
+      "seconds": 229.597,
+      "result": "passed"
+    },
+    "deployment": {
+      "tests": 13,
+      "seconds": 7.65,
+      "result": "passed"
+    }
+  },
+  "real_chain_metrics": {
+    "改造项": "R2",
+    "实现测试执行": 0,
+    "实现测试复用": 1,
+    "新增上游请求": 0,
+    "SIGKILL断点": "revision-seal 写后、build receipt 写前",
+    "候选revision": 2,
+    "VC4_checkpoint文件数": 1,
+    "VC5批次状态": "stopped",
+    "changed_layers": [
+      "build"
+    ]
+  },
+  "self_check_findings_resolved": [
+    "原始参数摘要含新 Candidate 名称和输出路径，不能单独把这类变化认作新构建；已增加真实输入投影，同时保留原始摘要 diff。",
+    "原实现测试收据绑定旧 Candidate；改用明确的承接收据和可重放来源证明，未更改 evidence 读侧或伪装重新执行。",
+    "首次 ARM64 夹具未使用既有 fixture_only staging 总账被出口准入拒绝；补齐真实夹具标识和目录边界后通过，生产出口检查未改变。",
+    "中断夹具直接封存 checkpoint 后再派发 VC-4 不符合已有批次合同；改为真实 plan-candidate-gates 批次、seal 后 SIGKILL、正式 record 批次续作，再进入 VC-5，未放宽监督器门禁。",
+    "初次 service 冻结测试在新源码未登记承接时失败；生成冻结承接后通过。"
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "注册表仍提示已移除的 DEFAULT_TOOL_DIGEST；实际整树摘要由 staging 自算，未重新引入硬编码。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "13 项通过；两个固定组件本轮未修改。",
+    "unregistered_paths": "21 条为没有历史冻结边的驱动、构建控制模块/schema 和测试文件；受管工具全树摘要及驱动 manifest 已覆盖，未改策略登记。"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+      "sha256": "d22639c209781718fe95ff65f4cd958582f240c92796ebe68d23728103430075"
+    }
+  ],
+  "logs": [
+    {
+      "file": "r2-final-regression.log",
+      "sha256": "7bf87e43150efef510d58d79bd8e206e5d8fc507929bfccfbd459e3c9d6abdaf"
+    },
+    {
+      "file": "r2-arm64-final-regression.log",
+      "sha256": "419227fdc2780b10fc9e235f237abfaa228640944a9ad20a63505a8facabb3ae"
+    },
+    {
+      "file": "r2-deployment-digests.log",
+      "sha256": "300972be80243cbc620993eb5528c0cec685ef1434fe28bc70caa50966354715"
+    },
+    {
+      "file": "r2-egress-ci.log",
+      "sha256": "852c43bbf6c41ccdaf0793f3250133cdda3c9b9bdf853bdbb92a12cde3d5eff1"
+    },
+    {
+      "file": "r2-service-freeze-v2.log",
+      "sha256": "88ef8a7720d11f1117fa1367616976f35c9ec30b13c173e895fb2fb51fd3e8c8"
+    },
+    {
+      "file": "r2-schema-rollback-final.log",
+      "sha256": "1d4ece062e22b2da3cd0cb329411ba130098edbfe9c9804d4a1ce1a3cd41a0a4"
+    },
+    {
+      "file": "r2-final-identity.json",
+      "sha256": "8d43c5abf691c30ad6c00685f83c41613f41057c39524a7dde2eb87ed049413f"
+    },
+    {
+      "file": "r2-arm64-identity.json",
+      "sha256": "234ffbc3840daa426b443a5cbecee3aafbc48d666bcff485bddd29ae7e541f6c"
+    }
+  ],
+  "scheduled_release_checks": [
+    "阶段 1 统一部署、重新安装绑定部署收据的驱动，并对实际 rollback_backup 做只读回放；生产工具／镜像本轮未更新。"
+  ]
+}

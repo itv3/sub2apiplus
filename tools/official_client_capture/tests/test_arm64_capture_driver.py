@@ -22,6 +22,7 @@ import io
 import json
 import os
 import pwd
+import re
 import shutil
 import stat
 import subprocess
@@ -395,10 +396,17 @@ class _DriverFixture:
             "OFFICIAL_CAMPAIGN": str(self.data_root / "evidence" / "campaigns" / "official"), "OFFICIAL_STOP_LEDGER": "/x", "OFFICIAL_STOP_RECEIPT": "r.json",
             "INPUT_RULE_MIGRATION": "/x/m.json", "INPUT_TARGET_SNAPSHOT": "/x/s.json", "PROJECT_DEADLINE_UTC": "2026-09-28T15:59:00Z",
             "STAGE_BUDGETS": "VC-0=45 VC-5=600", "MIN_FREE_GIB": "40", "FRONTEND_DEVIATION_APPROVED_BY": "test",
-            "PROFILE_ID": "codex-0.154.0-official-r154-v2", "PROFILE_DIGEST": "3" * 64,
+            "PROFILE_ID": "codex-0.156.1-official", "PROFILE_DIGEST": "3" * 64,
             "KILO_BIN": "/x/kilo", "KILO_VERSION": "7.7.501", "KILO_SHA256": "c" * 64,
             "COMPOSE_DIR": str(root / "compose"), "COMPOSE_BACKUP": str(root / "compose" / "backup.yml"), "PRODUCTION_IMAGE": "ghcr.io/x:1",
         }
+        values.update({
+            "BASELINE_VERSION": "0.154.0", "TARGET_VERSION": "0.156.1", "TARGET_PROFILE_ID": values["PROFILE_ID"],
+            "CODEX_BIN": "/opt/codex-0.156.1/bin/codex", "CODEX_BIN_SHA256": "a" * 64, "OFFICIAL_ASSET_SHA256": "b" * 64,
+            "MAIN_MODEL": "fixture-main", "LITE_MODEL": "fixture-lite", "CODEX_ACCOUNT_ID": "91", "API_KEY_ID": "92",
+            "PREDECESSOR_CAMPAIGN": values["OFFICIAL_CAMPAIGN"], "POLICY_COMPAT_RECEIPT": "/x/compatibility.json",
+            "POLICY_ACTIVATION": "/x/activation.json", "RELEASE_CERTIFICATION": "/x/release.json",
+        })
         self.env_file.write_text("".join(f"{k}=\"{v}\"\n" for k, v in values.items()), encoding="utf-8")
         self.env_file.chmod(0o600)
         self.env = {"ARM64_VC_ENV": str(self.env_file)}
@@ -412,7 +420,7 @@ class Vc5AllResumeTests(unittest.TestCase):
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc5-all.sh"):
+        for name in ("lib.sh", "parse_env.py", "wait_state.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         calls = root / "stub-calls.log"
         calls.touch()
@@ -489,6 +497,13 @@ class EnvFileParserTests(unittest.TestCase):
 
     PARSER = SCRIPTS / "parse_env.py"
 
+    @staticmethod
+    def _template() -> str:
+        text = (SCRIPTS / "env.example.sh").read_text()
+        for key in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CODEX_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256", "REPLACE_KILO_SHA256"):
+            text = text.replace(key, "a" * 64)
+        return text.replace("REPLACE_CODEX_ACCOUNT_ID", "91").replace("REPLACE_API_KEY_ID", "92")
+
     def _parse(self, text: str) -> subprocess.CompletedProcess[str]:
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as handle:
             handle.write(text)
@@ -499,13 +514,16 @@ class EnvFileParserTests(unittest.TestCase):
             os.unlink(path)
 
     def test_template_parses_and_expands_references(self) -> None:
-        result = subprocess.run([sys.executable, str(self.PARSER), str(SCRIPTS / "env.example.sh")], capture_output=True, text=True)
+        result = self._parse(self._template())
         self.assertEqual(result.returncode, 0, result.stderr)
         exported = dict(line[len("export "):].split("=", 1) for line in result.stdout.splitlines())
-        self.assertEqual(set(exported), set(driver_keys()))
-        self.assertEqual(exported["NEW"], "c0154-formal-vc5-v14r5-20260922t000000z")
-        self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/c0154-candidate-v14r5")
-        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=45 "))
+        parser = load_script("parse_env")
+        values = parser.parse(self._template())
+        self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
+        self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
+        self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/codex-9.1.0-candidate-round1")
+        # R20：示例阶段预算按实测标定（VC-0 60 分钟起）；这里只验证带空格的值被原样加引号导出。
+        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=60 "))
         # 输出的每一行都是可安全 eval 的单一赋值
         for line in result.stdout.splitlines():
             self.assertRegex(line, r"^export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)$")
@@ -513,17 +531,17 @@ class EnvFileParserTests(unittest.TestCase):
     def test_rejects_command_forms_without_executing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / "marker"
-            template = (SCRIPTS / "env.example.sh").read_text(encoding="utf-8")
+            template = self._template()
             cases = {
-                "命令替换": template.replace("ROUND=v14r5", f"ROUND=$(touch {marker})"),
-                "反引号": template.replace("ROUND=v14r5", f"ROUND=`touch {marker}`"),
-                "分号": template.replace("ROUND=v14r5", f"ROUND=v14r5; touch {marker}"),
+                "命令替换": template.replace("ROUND=round1", f"ROUND=$(touch {marker})"),
+                "反引号": template.replace("ROUND=round1", f"ROUND=`touch {marker}`"),
+                "分号": template.replace("ROUND=round1", f"ROUND=round1; touch {marker}"),
                 "算术展开": template.replace("MIN_FREE_GIB=40", "MIN_FREE_GIB=$((40))"),
                 "未知键": template + f"EXTRA=$(touch {marker})\n",
-                "缺键": template.replace("KILO_VERSION=7.7.501\n", ""),
-                "引用未定义键": template.replace("ROUND=v14r5", "ROUND=$LATER"),
+                "缺键": template.replace("KILO_VERSION=REPLACE_KILO_VERSION\n", ""),
+                "引用未定义键": template.replace("ROUND=round1", "ROUND=$LATER"),
                 "非赋值行": template + f"touch {marker}\n",
-                "内嵌引号": template.replace("ROUND=v14r5", "ROUND=v14'r5"),
+                "内嵌引号": template.replace("ROUND=round1", "ROUND=v14'r5"),
                 "重复键": template + "ROUND=v14r6\n",
                 "错误 sha": template.replace("C=0000000000000000000000000000000000000000", "C=abc"),
             }
@@ -558,6 +576,15 @@ class EnvFileParserTests(unittest.TestCase):
             ok = _run(probe, env=fixture2.env, cwd=root)
             self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
             self.assertIn("PROBE_OK ROUND=vtest", ok.stdout)
+
+
+def load_script(name):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("driver_test_" + name, SCRIPTS / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(os.environ, {"D": str(REPO_ROOT)}), mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+        spec.loader.exec_module(module)
+    return module
 
 
 def driver_keys() -> tuple[str, ...]:
@@ -655,6 +682,238 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
             self.assertIn("vc-batch.sh", called, result.stdout + result.stderr)
             self.assertNotIn("SEAL_ABORT: manifest 已存在", result.stdout)
+
+
+class DriverParameterizationTests(unittest.TestCase):
+    """R7：逐轮身份、动态集合与 Catalog 装配均走实际解析／验证函数。"""
+
+    def test_all_new_identity_keys_are_required(self):
+        new_keys = ('BASELINE_VERSION TARGET_VERSION TARGET_PROFILE_ID CODEX_BIN CODEX_BIN_SHA256 '
+                    'OFFICIAL_ASSET_SHA256 MAIN_MODEL LITE_MODEL CODEX_ACCOUNT_ID API_KEY_ID '
+                    'PREDECESSOR_CAMPAIGN POLICY_COMPAT_RECEIPT POLICY_ACTIVATION RELEASE_CERTIFICATION').split()
+        parser = load_script('parse_env')
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = _DriverFixture(Path(directory).resolve())
+            source = fixture.env_file.read_text()
+            for key in new_keys:
+                with self.subTest(key=key), self.assertRaises(parser.EnvFileError):
+                    parser.parse('\n'.join(line for line in source.splitlines() if not line.startswith(key + '=')))
+            for key, value in [('TARGET_VERSION', 'latest'), ('CODEX_BIN_SHA256', 'bad'), ('API_KEY_ID', '0'),
+                               ('TARGET_PROFILE_ID', 'other'), ('NEW', '../escape')]:
+                with self.subTest(key=key), self.assertRaises(parser.EnvFileError):
+                    parser.parse(re.sub('^' + key + '=.*$', key + '=' + value, source, flags=re.M))
+        with self.assertRaises(parser.EnvFileError):
+            parser.parse((SCRIPTS / 'env.example.sh').read_text())
+
+    def test_driver_contains_no_version_digest_or_account_literals(self):
+        patterns = {
+            '版本': r'0[._]15[0-9]|c015[0-9]|codex-015[0-9]',
+            '摘要': r'(?<![a-f0-9])[a-f0-9]{64}(?![a-f0-9])',
+            '账号': r'(?:--(?:codex-account-id|api-key-id)\s+|(?:CODEX_ACCOUNT_ID|API_KEY_ID)\s*=\s*[\"\x27]?|WHERE\s+id\s*=\s*|sched:acc:|账号\s+)[0-9]+',
+        }
+        for kind, pattern in patterns.items():
+            for path in SCRIPTS.rglob('*'):
+                if path.is_file():
+                    with self.subTest(kind=kind, path=path.name):
+                        self.assertIsNone(re.search(pattern, path.read_text(), re.I))
+        for kind, sample in [('版本', 'codex-0.154.0'), ('摘要', 'a' * 64), ('账号', '--api-key-id 91'), ('账号', 'sched:acc:22'), ('账号', '账号 22 调度投影')]:
+            self.assertIsNotNone(re.search(patterns[kind], sample, re.I))
+
+    def test_environment_collect_binds_round_target_version(self):
+        """每一处环境事实采集都必须把本轮参数 TARGET_VERSION 交给 Rust TLS 探针，不能写死或省略。"""
+
+        calls = []
+        for path in sorted(SCRIPTS.rglob('*.sh')):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if 'codex_upgrade_arm64_environment_receipt collect' in line:
+                    calls.append((path.name, number, line))
+        self.assertGreaterEqual(len(calls), 3, calls)
+        for name, number, line in calls:
+            with self.subTest(script=name, line=number):
+                self.assertIn('--rust-tls-codex-version "$TARGET_VERSION"', line)
+
+    def test_target_parameters_generate_vc2_vc4_and_vc5_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = _DriverFixture(root)
+            output = root / 'plans'
+            output.mkdir()
+            environment = {**os.environ, **fixture.env, 'CANDIDATE_DIR': str(fixture.candidate_dir), 'PYTHONDONTWRITEBYTECODE': '1'}
+            image_id = 'sha256:' + 'a' * 64
+            commands = [
+                ['gen_vc2_plans.py', str(output), fixture.new, fixture.inputs, 'b' * 64],
+                ['gen_vc4_record_plan.py', image_id, 'build-test', str(root / 'evidence'), str(output / 'vc4.json'), fixture.new, fixture.cand, str(fixture.candidate_dir)],
+                ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test'],
+            ]
+            for name, *args in commands:
+                result = subprocess.run([sys.executable, str(SCRIPTS / name), *args], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            vc2 = json.loads((output / 'action-plan-vc2-approve.json').read_text())['actions'][0]['command']
+            self.assertEqual(vc2[vc2.index('--profile-patch-manifest') + 1], str(fixture.data_root / 'tools/official_client_capture/profile_rule_patches_0_156_1.json'))
+            for name in ('vc4.json', 'action-plan-vc5-run.json'):
+                command = json.loads((output / name).read_text())['actions'][0]['command']
+                self.assertEqual(command[command.index('--deployed-version') + 1], '0.156.1')
+                self.assertEqual(command[command.index('--runtime-image') + 1], 'sub2apiplus-c01561-candidate@' + image_id)
+                self.assertNotIn('0.154.0', json.dumps(command))
+            vc4 = json.loads((output / 'vc4.json').read_text())['actions'][0]['command']
+            self.assertIn(str(fixture.candidate_dir / 'source/docs/egress/lifecycle/codex-01561-candidate/gate-plan.json'), vc4)
+            # 没有 Campaign／批准集合时，seal 计划必须拒绝，不能退回旧的十个 Job。
+            result = subprocess.run([sys.executable, str(SCRIPTS / 'gen_vc5_plans.py'), str(output), fixture.new, fixture.cand, image_id, 'build-test', 'attempt-test'],
+                                    env={**environment, 'PYTHONPATH': str(REPO_ROOT)}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((output / 'action-plan-vc5-seal-checkpoint.json').exists())
+
+    def test_latest_deployment_uses_timestamp_across_versions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            earlier = root / 'codex-0999-supervisor-enable-20260922t000000z.json'
+            later = root / 'codex-01561-supervisor-enable-20260924t000000z.json'
+            for path in (earlier, later):
+                _write_json(path, {'tool_files_sha256': 'a' * 64})
+            self.assertEqual(driver.latest_deploy_receipt(root)[0], later)
+            duplicate = root / 'codex-other-supervisor-enable-20260924t000000z.json'
+            _write_json(duplicate, {'tool_files_sha256': 'a' * 64})
+            with self.assertRaisesRegex(driver.DriverError, '两份部署收据'):
+                driver.latest_deploy_receipt(root)
+
+    def test_candidate_jobs_follow_approved_manifest_and_reject_drift(self):
+        from tools.official_client_capture import codex_upgrade as upgrade
+        config = load_script('driver_config')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = REPO_ROOT / 'tools/official_client_capture'
+            rules = source / 'codex_upgrade_rules_0_154_0.json'
+            scenario = json.loads((source / 'codex_upgrade_scenarios_0_154_0.json').read_text())
+            # 改名说明集合来自批准输入；保留真实场景校验、模板展开与规则闭集校验。
+            for row in scenario['capture_jobs']:
+                if row['id'] == 'candidate-compact-direct':
+                    row['id'] = 'candidate-approved-renamed'
+            path = root / 'scenario.json'
+            _write_json(path, scenario)
+            shutil.copy2(rules, root / 'rules.json')
+            binding = {'path': path.name, 'sha256': upgrade.file_sha256(path)}
+            manifest = {'campaign_id': 'fixture', 'baseline_version': '0.151.0', 'target_version': '0.154.0',
+                        'campaign_mode': 'formal', 'campaign_purpose': 'production_replacement', 'suite': 'full', 'target_sha256': 'a' * 64,
+                        'official_identity': {'package': {'asset_sha256': 'a' * 64, 'code_mode_host_sha256': 'b' * 64}},
+                        'inputs': {'baseline_rules': {'path': 'rules.json'}, 'discovery_scenarios': binding, 'target_discovery_scenarios': binding}}
+            cfg = {key: str(root / key) for key in ('baseline_source', 'target_source', 'baseline_evidence', 'target_package', 'capture_root')}
+            cfg.update({key: key for key in ('capture_container', 'service_container', 'keeper_container', 'postgres_container', 'redis_container')})
+            cfg.update({key: '/opt/test/bin/' + key for key in ('capture_codex_bin', 'relay_codex_bin', 'capture_code_mode_host_bin', 'relay_code_mode_host_bin')})
+            cfg.update(runtime_image='capture@sha256:' + 'b' * 64, model='gpt-5.4', lite_model='gpt-5.6-luna', codex_account_id=91, api_key_id=92)
+            manifest['configuration'] = cfg
+            classification = {'status': 'complete', 'scenario_manifest': binding,
+                              'target_rule_manifest': {'path': 'rules.json', 'sha256': upgrade.file_sha256(root / 'rules.json')}}
+            with mock.patch.object(upgrade, 'load_campaign_manifest', return_value=manifest), mock.patch.object(upgrade, '_load_stage_result', return_value=classification):
+                expected = sorted(row['id'] for row in scenario['capture_jobs'] if row['phase'] == 'candidate' and 'full' in row['suites'])
+                self.assertEqual(config.candidate_job_ids(root, 'candidate'), expected)
+                path.write_text(path.read_text() + '\n')
+                with self.assertRaisesRegex(upgrade.ConfigurationError, '目标场景清单摘要不一致'):
+                    config.candidate_job_ids(root, 'candidate')
+
+
+class DynamicDriverGateTests(unittest.TestCase):
+    """门禁函数不打桩：只替换 Campaign 读取，真实进程、摘要、计划与统一收据 producer 都执行。"""
+
+    def setUp(self):
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        self.artifacts = artifacts
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.base = self.root / 'candidate'
+        for name in ('source', 'gate-tree'):
+            (self.base / name / 'backend').mkdir(parents=True)
+            (self.base / name / 'backend/fixture.txt').write_text('真实门禁输入\n')
+        self.requirements = artifacts.build_gate_requirements(campaign_id='fixture', target_version='0.156.1', joint_manifest_sha256='a' * 64,
+            affected_rule_ids=['SPEC-HDR-005', 'SPEC-EP-007'], inherited_rule_ids=['SPEC-BODY-001'], migration_manifest={'path':'rules/migration.json', 'sha256':'b' * 64})
+        self.mapping = {'schema_version':artifacts.GATE_MAPPING_SCHEMA, 'requirements_sha256':self.requirements['requirements_sha256'],
+            'gates':[{'gate_id':row['gate_id'], 'test_id':'test-' + str(index), 'working_directory':'backend',
+                      'command':[sys.executable, '-c', f'print("门禁 {index} 通过")'], 'requirement_sha256':artifacts.digest(row)}
+                     for index, row in enumerate(self.requirements['requirements'])]}
+        self.lifecycle = Path('docs/egress/lifecycle/fixture')
+        self.update_plan()
+        self.manifest = {'campaign_id':'fixture', 'campaign_purpose':'production_replacement', 'baseline_version':'0.154.0', 'target_version':'0.156.1'}
+        self.gates = load_script('implementation_gates')
+        patches = [mock.patch.dict(os.environ, {'D':str(self.root), 'B':str(self.base), 'NEW':'fixture', 'C':'c' * 40, 'CAND':'candidate', 'UP':'upgrade', 'LIFECYCLE_DIR':str(self.lifecycle)}),
+                   mock.patch.object(self.gates.upgrade, 'load_campaign_manifest', return_value=self.manifest),
+                   mock.patch.object(self.gates.upgrade, '_load_stage_result', return_value={}),
+                   mock.patch.object(self.gates.upgrade, '_load_vc3_gate_requirements', return_value=(None, None, self.requirements))]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.evidence = self.root / 'evidence'
+        self.evidence.mkdir(mode=0o700)
+
+    def update_plan(self):
+        import hashlib
+        path = self.base / 'source' / self.lifecycle / 'gate-mapping.json'
+        _write_json(path, self.mapping)
+        self.plan = self.artifacts.build_gate_plan(self.requirements, self.mapping, mapping_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        _write_json(path.with_name('gate-plan.json'), self.plan)
+
+    def test_multiple_affected_gates_execute_and_finalize_real_receipt(self):
+        from tools.official_client_capture import codex_upgrade_vc_receipt as receipts
+        self.gates.run_gates(self.evidence)
+        tree = self.gates.upgrade._directory_tree_digest(self.base / 'gate-tree')
+        (self.evidence / 'logs/check-egress-spec.log').write_text('## make check-egress-spec\nexit_code=0\n')
+        self.gates.make_facts(self.evidence, tree)
+        original = (self.evidence / 'facts.json').read_bytes()
+        self.gates.make_facts(self.evidence, tree)
+        self.assertEqual((self.evidence / 'facts.json').read_bytes(), original)
+        facts = json.loads((self.evidence / 'facts.json').read_text())
+        self.assertEqual({row['gate_id'] for row in facts['assertions']['gates']}, {row['gate_id'] for row in self.requirements['requirements']} | {'check-egress-spec'})
+        self.assertEqual(sum(row['kind'] == 'affected' for row in facts['assertions']['gates']), 2)
+        receipts.finalize(self.evidence, 'facts.json', 'receipt.json')
+        receipts.replay(self.evidence, 'receipt.json')
+
+    def test_failed_gate_never_produces_completion(self):
+        self.mapping['gates'][0]['command'] = [sys.executable, '-c', 'raise SystemExit(9)']
+        self.update_plan()
+        with self.assertRaisesRegex(ValueError, '门禁失败'):
+            self.gates.run_gates(self.evidence)
+        self.assertNotIn('GATES_DONE', (self.evidence / 'logs/implementation.log').read_text())
+
+    def test_mapping_and_log_tampering_are_rejected(self):
+        self.gates.run_gates(self.evidence)
+        tree = self.gates.upgrade._directory_tree_digest(self.base / 'gate-tree')
+        log = self.evidence / 'logs/implementation.log'
+        original = log.read_text()
+        log.write_text(original.replace('exit_code=0', 'exit_code=9', 1))
+        with self.assertRaisesRegex(ValueError, '门禁未成功'):
+            self.gates.make_facts(self.evidence, tree)
+        self.mapping['gates'][0]['command'] = ['true']
+        _write_json(self.base / 'source' / self.lifecycle / 'gate-mapping.json', self.mapping)
+        with self.assertRaisesRegex(ValueError, '计划与本轮门禁映射不一致'):
+            self.gates.load_plan()
+        self.mapping['gates'].pop()
+        with self.assertRaisesRegex(self.artifacts.VCArtifactError, '未精确覆盖'):
+            self.update_plan()
+
+    def test_catalog_assembly_uses_inventory_and_preserves_existing_blobs(self):
+        catalog = load_script('catalog_chain')
+        source = self.root / 'catalog'
+        source.mkdir()
+        blob = 'catalogdata/runtime/profiles/0.156.1/' + 'a' * 64 + '.json'
+        paths = sorted(catalog.MUTABLE | {blob})
+        rows = []
+        for relative in paths:
+            path = source / relative
+            _write_json(path, {'path':relative})
+            rows.append({'path':relative, 'size':path.stat().st_size, 'sha256':self.gates.upgrade.file_sha256(path)})
+        receipt = {'inventory':rows, 'inventory_sha256':self.gates.upgrade._fingerprint(rows), 'campaign_id':'fixture', 'target_version':'0.156.1',
+                   'post_promotion_gate_requirements_sha256':self.requirements['requirements_sha256']}
+        _write_json(source / 'catalog-stage-receipt.json', receipt)
+        requirements = self.root / 'requirements.json'
+        _write_json(requirements, self.requirements)
+        mapping = self.base / 'source' / self.lifecycle / 'gate-mapping.json'
+        repository = self.root / 'repository'
+        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        before = {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths}
+        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        self.assertEqual(before, {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths})
+        (repository / 'backend/internal/officialegress' / blob).write_text('非法覆盖')
+        with self.assertRaisesRegex(ValueError, '不可变 Catalog blob'):
+            catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
 
 
 if __name__ == "__main__":

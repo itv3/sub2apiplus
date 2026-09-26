@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/deadline-extension-v1.json",
+  "title": "三层预算延期批准收据：两账 head、批准人及原截止不可改写",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "scope",
+    "phase",
+    "original_deadline_at_utc",
+    "new_deadline_at_utc",
+    "reason",
+    "project_ledger_path",
+    "project_ledger_head",
+    "campaign_ledger_head",
+    "review_sha256",
+    "approved_by",
+    "approved_at_utc",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "deadline-extension/v1"
+    },
+    "campaign_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "scope": {
+      "enum": [
+        "project",
+        "campaign",
+        "stage"
+      ]
+    },
+    "phase": {
+      "enum": [
+        null,
+        "VC-0",
+        "VC-1",
+        "VC-2",
+        "VC-3",
+        "VC-4",
+        "VC-5",
+        "VC-6"
+      ]
+    },
+    "original_deadline_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "new_deadline_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_ledger_path": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "project_ledger_head": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "sha256"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "campaign_ledger_head": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "sha256"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "review_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approved_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scope": {
+            "const": "stage"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "enum": [
+              "VC-0",
+              "VC-1",
+              "VC-2",
+              "VC-3",
+              "VC-4",
+              "VC-5",
+              "VC-6"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "phase": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

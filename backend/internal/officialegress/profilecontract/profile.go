@@ -326,6 +326,15 @@ func NewProfileSpec(doc SnapshotDoc) (ProfileSpec, error) {
 			Name: sec.name, RawJSON: append(json.RawMessage(nil), sec.raw...),
 		})
 	}
+	// 可选节只在存在时纳入：旧版本画像的 crossSections 与往返结果保持原样。
+	for index, field := range doc.optionalSectionFields() {
+		if *field == nil {
+			continue
+		}
+		spec.crossSections = append(spec.crossSections, CrossSection{
+			Name: OptionalSectionNames[index], RawJSON: append(json.RawMessage(nil), (*field)...),
+		})
+	}
 	return spec, nil
 }
 
@@ -431,6 +440,12 @@ func (p ProfileSpec) ToSnapshot() SnapshotDoc {
 			doc.Subagents = raw
 		case "Files":
 			doc.Files = raw
+		default:
+			for index, name := range OptionalSectionNames {
+				if name == sec.Name {
+					*doc.optionalSectionFields()[index] = raw
+				}
+			}
 		}
 	}
 	return doc

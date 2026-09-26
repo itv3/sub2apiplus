@@ -14,11 +14,13 @@ import unittest
 import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.codex_upgrade_supervisor import SupervisorClient, SupervisorError
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CAMPAIGN_ID = "staging-campaign"
@@ -318,15 +320,17 @@ class StagingSupervisorTests(unittest.TestCase):
         state_dir = root / "supervisor"
         state_dir.mkdir(mode=0o700, exist_ok=True)
         binding = self._binding(campaign_dir, sequence=1)
-        return supervisor._campaign_run_locked(
-            self._run_arguments(),
-            manifest=self._v2_manifest(plan),
-            state_dir=state_dir,
-            campaign_dir=campaign_dir,
-            commit=commit,
-            owner_nonce=owner_nonce,
-            staging_binding=binding,
-        )
+        # 本 helper 只有合成总计划和零请求动作；真实出口准入由独立 R15 链验收。
+        with runtime_egress_fixtures.offline_campaign_egress():
+            return supervisor._campaign_run_locked(
+                self._run_arguments(),
+                manifest=self._v2_manifest(plan),
+                state_dir=state_dir,
+                campaign_dir=campaign_dir,
+                commit=commit,
+                owner_nonce=owner_nonce,
+                staging_binding=binding,
+            )
 
     def test_commit_failure_before_commit_is_aborted_prepared_with_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

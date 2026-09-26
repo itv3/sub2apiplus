@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-egress-pause-v1.json",
+  "title": "出口异常导致的不可覆盖暂停窗口",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "owner_nonce",
+    "detected_at_epoch",
+    "detected_at_monotonic_ns",
+    "uncertain_window_start_epoch",
+    "last_valid_status_sha256",
+    "reason",
+    "next_action",
+    "pause_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-egress-pause/v1"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "detected_at_epoch": {
+      "type": "number"
+    },
+    "detected_at_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "uncertain_window_start_epoch": {
+      "type": "number"
+    },
+    "last_valid_status_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pause_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

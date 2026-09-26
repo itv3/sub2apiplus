@@ -234,19 +234,25 @@ class AssertionBundleWiringTest(unittest.TestCase):
             None, None, self.roots, target_version=TARGET_VERSION
         )
         original = codex_upgrade.load_acceptance_profile
+        original_retired = codex_upgrade._retired_official_label_values
         try:
             codex_upgrade.load_acceptance_profile = lambda _path: PROFILE
             codex_upgrade.verify_frozen_contract = (
                 lambda profile: codex_upgrade.build_acceptance_contract(profile)
             )
+            # R21：官方 seal 须提供基线版本以计算弃用标签集合；夹具目标 0.147.0 没有标签
+            # 声明，本用例只验证断言包接线，弃用集合按空集替身。
+            codex_upgrade._retired_official_label_values = _no_retired_labels
             receipt = codex_upgrade._run_seal_assertion_gate(
                 context,
                 self.roots,
                 phase="official",
                 target_version=TARGET_VERSION,
+                baseline_version="0.145.0",
             )
         finally:
             codex_upgrade.load_acceptance_profile = original
+            codex_upgrade._retired_official_label_values = original_retired
         self.assertEqual(receipt["side"], "official")
         self.assertEqual(receipt["checked_rule_count"], 1)
         codex_upgrade.validate_gate_receipt(receipt, side="official")
@@ -269,6 +275,7 @@ class AssertionBundleWiringTest(unittest.TestCase):
             None, None, self.roots, target_version=TARGET_VERSION
         )
         original = codex_upgrade.load_acceptance_profile
+        original_retired = codex_upgrade._retired_official_label_values
         try:
             codex_upgrade.load_acceptance_profile = lambda _path: PROFILE
             codex_upgrade.verify_frozen_contract = (
@@ -277,14 +284,24 @@ class AssertionBundleWiringTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 codex_upgrade.ConfigurationError, "禁止收口自身内容"
             ):
+                codex_upgrade._retired_official_label_values = _no_retired_labels
                 codex_upgrade._run_seal_assertion_gate(
                     context,
                     self.roots,
                     phase="official",
                     target_version=TARGET_VERSION,
+                    baseline_version="0.145.0",
                 )
         finally:
             codex_upgrade.load_acceptance_profile = original
+            codex_upgrade._retired_official_label_values = original_retired
+
+
+
+def _no_retired_labels(baseline_version: str, target_version: str):
+    """R21 替身：夹具版本没有标签声明，本文件只验证断言包接线，弃用集合取空。"""
+
+    return {}, {"baseline": "0" * 64, "target": "1" * 64}
 
 
 def bundle_dir_name() -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 import sys
@@ -13,6 +14,20 @@ from unittest import mock
 
 from tools import arm64_supervised_deploy as deploy
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+
+class ManagedRuntimeDocumentsTest(unittest.TestCase):
+    def test_timing_ledger_runtime_sources_are_deployed_with_tool_tree(self):
+        # 计时账本重放历史 producer 摘要时会从部署后的仓库根逐份读取登记的来源链文档，缺一份即
+        # 失败关闭；这些文档必须全部随工具树进入同一部署事务，否则 ARM64 上的历史回放必然阻断。
+        import re
+
+        ledger = Path(deploy.__file__).resolve().parent / "official_client_capture" / "codex_upgrade_timing_ledger.py"
+        referenced = set(re.findall(r'"docs/(egress/maintenance/[^"]+)"', ledger.read_text(encoding="utf-8")))
+        self.assertTrue(referenced)
+        self.assertEqual(sorted(referenced - set(deploy.MANAGED_RUNTIME_DOCUMENTS)), [])
+        repository = Path(deploy.__file__).resolve().parents[1] / "docs"
+        self.assertEqual([name for name in deploy.MANAGED_RUNTIME_DOCUMENTS if not (repository / name).is_file()], [])
 
 
 class Arm64SupervisedDeployTest(unittest.TestCase):
@@ -325,6 +340,61 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     self.assertIs(sys.modules[name], old_module)
             self.assertEqual(sys.path, original_path)
 
+    def test_project_ledger_summary_resolves_lazy_sibling_imports(self) -> None:
+        """总账回放延期事件时在函数体内裸名导入同级模块；部署器调用暂存总账时须复现加载期的导入环境。
+
+        2026-09-26 部署 0.157.0：项目总账已有 deadline_extended 事件，回放走到
+        ``import codex_upgrade_vc_artifacts``，而 load_supervisor 结束后已恢复 sys.path 并移除同名模块，
+        部署预检 ModuleNotFoundError。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_root = root / "tools" / "official_client_capture"
+            module_root.mkdir(parents=True)
+            for name in deploy.SUPERVISOR_SIBLING_MODULES:
+                (module_root / f"{name}.py").write_text(f"SOURCE = 'staged:{name}'\n", encoding="utf-8")
+            (module_root / "codex_upgrade_project_ledger.py").write_text(
+                "from pathlib import Path\n"
+                "SOURCE = 'staged:codex_upgrade_project_ledger'\n"
+                "def find_project_ledger(path):\n"
+                "    return Path(path) / 'upgrade-project-ledger'\n"
+                "def replay_head(root):\n"
+                "    import codex_upgrade_vc_artifacts as artifacts\n"
+                "    return {'sequence': 7, 'head_sha256': artifacts.SOURCE, 'blocked': False,"
+                " 'remaining_live_requests': None}\n"
+                "def _load_plan(root):\n"
+                "    return {'absolute_deadline_utc': '2026-10-02T15:59:00Z'}, b''\n",
+                encoding="utf-8",
+            )
+            (module_root / "codex_upgrade_supervisor.py").write_text(
+                "".join(
+                    f"import {name} as {attribute}\n"
+                    for name, attribute in deploy.SUPERVISOR_SIBLING_MODULES.items()
+                ),
+                encoding="utf-8",
+            )
+            cached = types.ModuleType("codex_upgrade_vc_artifacts")
+            cached.SOURCE = "cached:codex_upgrade_vc_artifacts"
+            original_path = list(sys.path)
+            with mock.patch.dict(sys.modules, {"codex_upgrade_vc_artifacts": cached}):
+                loaded = deploy.load_supervisor(root)
+                summary = deploy.project_ledger_summary(loaded, root / "data")
+                self.assertEqual(summary["head_sha256"], "staged:codex_upgrade_vc_artifacts")
+                self.assertEqual(
+                    (summary["head_sequence"], summary["absolute_deadline_utc"]),
+                    (7, "2026-10-02T15:59:00Z"),
+                )
+                self.assertIs(sys.modules["codex_upgrade_vc_artifacts"], cached)
+            self.assertEqual(sys.path, original_path)
+            # 反证：不经上下文直接调用，复现部署时的 ModuleNotFoundError。
+            with mock.patch.object(
+                sys, "path", [item for item in sys.path if "official_client_capture" not in item]
+            ), mock.patch.dict(sys.modules):
+                sys.modules.pop("codex_upgrade_vc_artifacts", None)
+                with self.assertRaises(ModuleNotFoundError):
+                    loaded.project_ledger.replay_head(root)
+
     def test_assertion_preparer_switch_and_joint_rollback_are_atomic(self) -> None:
         """主工具树外的 bundle 入口必须随事务切换并可共同回滚。"""
 
@@ -414,6 +484,52 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     label="测试运行时文档",
                     allow_missing=True,
                 )
+
+    def test_runtime_egress_nodes_are_digested_before_supervisor_event(self) -> None:
+        """预检与切换后核验带出口策略节点，第 3 层起的容器必须压成摘要才能写入事件。
+
+        2026-09-25 首次在装有 R15 策略的 ARM64 上部署 0.156.1 时，预检事件因
+        runtime_egress→nodes→origin→endpoint 嵌套过深被监督器拒绝，部署在切换前失败。
+        """
+
+        node = {
+            "interface": "wg-egress",
+            "tunnel_ipv4": "10.79.32.1/30",
+            "public_key": "p" * 44,
+            "endpoint": {"ipv4": "203.0.113.10", "port": 51820},
+            "listen_port": 51821,
+            "mtu": 1380,
+            "public_interface": "eth0",
+        }
+        runtime_egress = {
+            "policy_sha256": "a" * 64,
+            "status_sha256": "b" * 64,
+            "nodes": {"origin": node, "exit": dict(node, interface="wg-egress-exit")},
+            "services": ["capture-cli", "sub2apiplus"],
+        }
+        result = {"staging_file_count": 3, "runtime_egress": runtime_egress}
+        with self.assertRaisesRegex(supervisor.SupervisorError, "嵌套过深"):
+            supervisor._metadata(result)
+        metadata = deploy._bounded_event_metadata(result)
+        self.assertEqual(supervisor._metadata(metadata), metadata)
+        self.assertEqual(metadata["staging_file_count"], 3)
+        compact = metadata["runtime_egress"]
+        self.assertEqual(compact["policy_sha256"], "a" * 64)
+        self.assertEqual(compact["services"], ["capture-cli", "sub2apiplus"])
+        expected = hashlib.sha256(
+            json.dumps(node, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(compact["nodes"]["origin"], "sha256:" + expected)
+        self.assertTrue(compact["nodes"]["exit"].startswith("sha256:"))
+        self.assertNotEqual(compact["nodes"]["origin"], compact["nodes"]["exit"])
+
+    def test_metadata_within_depth_limit_is_unchanged(self) -> None:
+        payload = {
+            "runtime_document_bindings": [{"path": "a", "sha256": "c" * 64}],
+            "legacy_production_documents": {"GUIDE.md": {"status": "present", "size": 1}},
+            "empty": {"nested": {"list": []}},
+        }
+        self.assertEqual(deploy._bounded_event_metadata(payload), payload)
 
     def test_runtime_document_metadata_uses_path_values(self) -> None:
         """带斜杠的仓库坐标只能作为值写入监督器 metadata。"""
@@ -555,6 +671,45 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             with mock.patch.object(deploy, "reject_untrusted_file"):
                 with self.assertRaisesRegex(deploy.DeploymentError, "第二章摘要"):
                     deploy.verify_scenario_source_spec(root, tool_root)
+
+    def test_pre_a3_scenario_entries_ship_with_current_tree(self) -> None:
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+
+        tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
+        result = deploy.verify_pre_a3_scenario_entries(tool_root)
+        self.assertEqual(result["scenario_count"], len(pre_a3.SCENARIOS))
+        self.assertEqual(
+            [{key: row[key] for key in ("id", "test")} for row in result["real_chain_registration"]],
+            pre_a3.real_chain_registration(),
+        )
+        for row in result["real_chain_registration"]:
+            self.assertRegex(row["sha256"], "^[0-9a-f]{64}$")
+
+    def test_missing_or_renamed_pre_a3_entry_blocks_deploy(self) -> None:
+        import shutil
+
+        source_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+
+        with tempfile.TemporaryDirectory() as directory:
+            tool_root = Path(directory) / "official_client_capture"
+            (tool_root / "tests").mkdir(parents=True)
+            shutil.copy2(source_root / deploy.PRE_A3_CERTIFICATION_MODULE, tool_root)
+            for module in {row[2] for row in pre_a3.SCENARIOS}:
+                relative = Path(*module[len(deploy.MANAGED_TEST_MODULE_PREFIX):].split(".")).with_suffix(".py")
+                (tool_root / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_root / relative, tool_root / relative)
+            self.assertEqual(deploy.verify_pre_a3_scenario_entries(tool_root)["scenario_count"], len(pre_a3.SCENARIOS))
+
+            chain = tool_root / "tests/real_chains/test_codex_upgrade_full_chain.py"
+            original = chain.read_text(encoding="utf-8")
+            chain.write_text(original.replace("def test_full_validation_only_chain", "def test_renamed_chain"),
+                             encoding="utf-8")
+            with self.assertRaisesRegex(deploy.DeploymentError, "类或方法缺失：vc-chain.full-validation-only"):
+                deploy.verify_pre_a3_scenario_entries(tool_root)
+            chain.unlink()
+            with self.assertRaisesRegex(deploy.DeploymentError, "未随暂存树部署：vc-chain.full-validation-only"):
+                deploy.verify_pre_a3_scenario_entries(tool_root)
 
 
 if __name__ == "__main__":

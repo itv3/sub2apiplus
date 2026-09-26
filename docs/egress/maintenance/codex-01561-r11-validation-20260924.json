@@ -1,0 +1,276 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R11",
+  "source_commit": "8ff18b2b2e8577b586fbeed65c7b505d847d6714",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T20:33:55.656693+00:00",
+  "scope": "开发逐项自查；ARM64 在 staging 私有挂载命名空间执行真实子进程、权限收口、增量封存与最终验收。外部取证为零请求隔离样本，不是生产升级取证或生产网络验收。",
+  "tool_identity": {
+    "files_sha256": "8235550ddbe0969c0d89d3ae6c81858064735206261a845b9912855e8c6bf454",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "615b4bb141480ecb6c1501b32155f0da04c0f6c0115ffbf7205ec18c3fd5dc49",
+    "control_sha256": "65c40d07602d93f4daec9b47836319f8f92b18a00fdc32dcc60b9063e1377883"
+  },
+  "identity_layers_changed": [
+    "evidence",
+    "control"
+  ],
+  "arm64_tool_identity_matches": true,
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "四项复用判据",
+      "result": "passed",
+      "evidence": "result/checkpoint 内容、nonce、attempt、phase 和摘要一致；证据根属于已收口边界且完成时冻结的逐文件摘要全部复算；source_execution 优先绑定原预约；after 与 restored 报告实际存在且绑定有效，无 restoration_error。"
+    },
+    {
+      "item": "坏证据回到 execute",
+      "result": "passed",
+      "evidence": "同大小内容篡改并恢复 mtime、缺 after、恢复错误、身份漂移、checkpoint 不符和不同预约 nonce 均不复用；额外核验摘要一致但越出权限边界、after 内容改变和证据软链接均拒绝复用。历史 checkpoint 没有 inventory 保持可读并安排执行，扫描字节如实计入。"
+    },
+    {
+      "item": "授权闭集与实际启动",
+      "result": "passed",
+      "evidence": "planned 始终保存原 J*；execute 与 reuse 无交集且并集为 J*，证明键与 reuse 一致。派发和读侧重放四项证明；伪造证明与集合重叠拒绝。复用 Job 无本轮 started_at_utc，估算只覆盖 execute。"
+    },
+    {
+      "item": "真实三段中断收敛",
+      "result": "passed",
+      "evidence": "ar1 一完成一失败；ar2 只启动剩余 Job，权限收口后摘要前真实 SIGKILL；ar3 execute=[]，仅完成收口。来源 Campaign、原 attempt 与已复用 Job 字节不变，三段账本状态可对账。"
+    },
+    {
+      "item": "独立请求计量核对",
+      "result": "passed",
+      "evidence": "只读审计实际产物：三段启动数 2/1/0、复用数 0/1/2；ar2 仅新增剩余 Job 的一份日志与一个合成请求身份，provenance precise_total 从 2 增至 3；ar3 无新 Job 日志，其预览请求估算为零且无未知项。合成证据计数与实际外部请求零次明确区分。"
+    },
+    {
+      "item": "父进程丢失与幂等重派",
+      "result": "passed",
+      "evidence": "ar3 输出绑定后父进程真实 SIGKILL，由 monitor 写失败终态；对账后同批次 N+1 逐字重派成功，段摘要与账本事件不重复。"
+    },
+    {
+      "item": "ARM64 增量封存至 completion",
+      "result": "passed",
+      "evidence": "真实 seal 预演、增量 manifest、封存、入账、compare、assert、accept 和 completion 通过；effective-results 标明 recovered_from=ar2 并绑定 checkpoint。full_seal=true，新增上游请求 0。"
+    },
+    {
+      "item": "schema、历史兼容与回退边界",
+      "result": "passed",
+      "evidence": "实际预约与 effective-results 均通过离线 schema 校验；新预约字段成组约束，旧无字段预约继续读取。前序真实工具接受历史空复用许可，拒绝新复用许可且不改证据；阶段 1 再核验实际 rollback_backup。"
+    },
+    {
+      "item": "身份分层与冻结承接",
+      "result": "passed",
+      "evidence": "两端工具身份一致；wire/policy 与 R4 不变，evidence/control 按预期变化。部署认证 17 项、egress CI、service 冻结与 git diff 检查通过。"
+    }
+  ],
+  "regression": {
+    "local": {
+      "tests": 83,
+      "seconds": 543.511,
+      "result": "passed"
+    },
+    "arm64": {
+      "tests": 83,
+      "seconds": 1419.263,
+      "result": "passed"
+    },
+    "deployment_certification": {
+      "tests": 17,
+      "seconds": 20.209,
+      "result": "passed"
+    },
+    "reuse_proofs": {
+      "tests": 9,
+      "seconds": 0.112,
+      "result": "passed"
+    },
+    "boundary_audit": {
+      "tests": 3,
+      "seconds": 0.031,
+      "result": "passed"
+    }
+  },
+  "real_chain_metrics": {
+    "fixture": "R11 三段收敛",
+    "execute_jobs_by_segment": [
+      2,
+      1,
+      0
+    ],
+    "reuse_jobs_by_segment": [
+      0,
+      1,
+      2
+    ],
+    "upstream_requests": 0,
+    "full_seal": true
+  },
+  "independent_accounting_audit": {
+    "status": "passed",
+    "segments": [
+      {
+        "segment": "ar1",
+        "started_jobs": [
+          "candidate-frozen-aux",
+          "candidate-frozen-core"
+        ],
+        "reused_jobs": [],
+        "new_job_logs": [
+          "candidate-frozen-core-1.log"
+        ]
+      },
+      {
+        "segment": "ar2",
+        "started_jobs": [
+          "candidate-frozen-aux"
+        ],
+        "reused_jobs": [
+          "candidate-frozen-core"
+        ],
+        "new_job_logs": [
+          "candidate-frozen-aux-1.log"
+        ]
+      },
+      {
+        "segment": "ar3",
+        "started_jobs": [],
+        "reused_jobs": [
+          "candidate-frozen-aux",
+          "candidate-frozen-core"
+        ],
+        "new_job_logs": []
+      }
+    ],
+    "provenance": [
+      {
+        "segment": "ar1",
+        "precise_total": 2,
+        "estimated_total": 0,
+        "identities": [
+          "19057d15e9184cadc2e362cd544fc7bc853278f75a78c5fdd384e3699c3be660",
+          "f47634084146b902434cb63a9b90579f23e19c5436d2bbc49dbb81817e71c92d"
+        ]
+      },
+      {
+        "segment": "ar2",
+        "precise_total": 3,
+        "estimated_total": 0,
+        "identities": [
+          "19057d15e9184cadc2e362cd544fc7bc853278f75a78c5fdd384e3699c3be660",
+          "e57c1bc5d9650049aaad2f56561932b80f22441b642b3fe41561d8eb0d8bc235",
+          "f47634084146b902434cb63a9b90579f23e19c5436d2bbc49dbb81817e71c92d"
+        ]
+      }
+    ],
+    "previews": [
+      {
+        "segment": "ar1",
+        "execute_jobs": [
+          "candidate-frozen-aux"
+        ],
+        "reuse_jobs": [
+          "candidate-frozen-core"
+        ],
+        "expected_new_requests": {
+          "basis": "同 Campaign provenance 逐 Job 计数（precise+estimated）",
+          "known_by_job": {},
+          "known_total": 0,
+          "unknown_job_ids": [
+            "candidate-frozen-aux"
+          ]
+        }
+      },
+      {
+        "segment": "ar2",
+        "execute_jobs": [],
+        "reuse_jobs": [
+          "candidate-frozen-aux",
+          "candidate-frozen-core"
+        ],
+        "expected_new_requests": {
+          "basis": "同 Campaign provenance 逐 Job 计数（precise+estimated）",
+          "known_by_job": {},
+          "known_total": 0,
+          "unknown_job_ids": []
+        }
+      }
+    ],
+    "note": "provenance 计数来自合成 HTTP 证据；实际外部上游请求为零。ar2 只新增一个请求身份；ar3 无 Job 启动或新 Job 日志。"
+  },
+  "self_check_findings_resolved": [
+    "旧恢复段测试的外部环境替身只比较固定 continuity 字段；生产 R15 reader 和门禁保持不变。",
+    "测试恢复报告路径对齐 evidence/receipts/restoration-report.json，隔离根使用真实 staging 路径组件。",
+    "实际 effective-results producer 的 schema 形态补齐，同时保留旧形态。",
+    "service 冻结测试初次从仓库根调用而找不到 Go module；改在 backend 目录执行后通过，未因此修改源码。"
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "6 条提示仍引用已移除的 DEFAULT_TOOL_DIGEST；整树摘要继续由 staging 自算，未恢复硬编码。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "部署与认证合计 17 项通过；supervisor 常量已同步，preparer 未变化。",
+    "unregistered_paths": "10 条路径没有历史冻结边；实际工具身份与相关测试覆盖，未修改策略登记。"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+      "sha256": "947c9dc1c0959f7f23538213f2704653db7748e4e95a5e29202b95228ae0529b"
+    }
+  ],
+  "logs": [
+    {
+      "file": "r11-final-regression.log",
+      "sha256": "4412b384c19658bfcc0a7d32fc786731f7d5725b947d1953363fafb05a61ec0e"
+    },
+    {
+      "file": "r11-arm64-final-regression.log",
+      "sha256": "56d51bc66caff76f71dd6630a2264f3ee3783bc830c0d8a29db8f21227585c1f"
+    },
+    {
+      "file": "r11-deployment-certification.log",
+      "sha256": "08a3f6fa36f64ff077d683a67662399e6450342172d3a6d3effb9321a7b4e4b2"
+    },
+    {
+      "file": "r11-proof-final.log",
+      "sha256": "ab71788f5e5e6a38741f21bc94c65849174154cec62278b3f377ae5341e7e4a4"
+    },
+    {
+      "file": "r11-boundary-audit.log",
+      "sha256": "ee4f846b565051bf24ad17ef2a3abc212195aaafb600bdd2501474cc3d2c5fed"
+    },
+    {
+      "file": "r11-egress-ci.log",
+      "sha256": "0de424013c99517c9e02dfe0ba58c5520144cfd53df51a07c716be2a2099da63"
+    },
+    {
+      "file": "r11-service-freeze.log",
+      "sha256": "7be0e6703d00bbf25e6d72f3e5b31943b68de5613f2c89e227ebcd86194e0213"
+    },
+    {
+      "file": "r11-schema-check.log",
+      "sha256": "8b46a6071d0bc63d3f9e5b0ab77ec35753f0d145b3de4dcb9f63b6546cbf131b"
+    },
+    {
+      "file": "r11-rollback-check.log",
+      "sha256": "7bdb6514d3f351f6821e23b6aaf8d24f98478f213b38a38d394688dd3603ffce"
+    },
+    {
+      "file": "r11-accounting-audit.log",
+      "sha256": "96b12095e1a6f2f30653d970b49144ade2c65348694cdca73a2aa5d1ace44d58"
+    },
+    {
+      "file": "r11-final-identity.json",
+      "sha256": "1a2edea13f8db77d0cf4884e949dff12ecab52cb53750ec6f03e32a7ef826b99"
+    },
+    {
+      "file": "r11-arm64-identity.json",
+      "sha256": "1a2edea13f8db77d0cf4884e949dff12ecab52cb53750ec6f03e32a7ef826b99"
+    }
+  ],
+  "scheduled_release_checks": [
+    "阶段 1 统一受监督部署、驱动安装、认证、生产 R15 迁移验收，并对实际 rollback_backup 做只读回放。"
+  ]
+}

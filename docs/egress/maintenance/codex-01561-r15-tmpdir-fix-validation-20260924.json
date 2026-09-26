@@ -1,0 +1,96 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R15（测试隔离收尾：崩溃注入子进程的临时目录泄漏）",
+  "source_commit": "efea917187a6d47ac5255dc7607c247e6762ccbf",
+  "source_commits": [
+    "efea917187a6d47ac5255dc7607c247e6762ccbf"
+  ],
+  "review_basis": "阶段 1 收尾自查新发现，不是审核意见中的条目；归属审核结论第一节第 2 条「R15 测试隔离」。2026-09-24 老板确认现在修复。",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T14:39:59.627468+00:00",
+  "fixes": [
+    {
+      "finding": "test_codex_upgrade_staging_dispatch 的故障注入在子进程里用 os._exit(9) 模拟崩溃，崩溃时子进程仍处在 runtime_egress_fixtures.offline_campaign_egress() 内，TemporaryDirectory 来不及删除；每跑一次该模块在系统临时目录留下 11 个空的 runtime-egress-isolated-* 目录。修改前本机单跑该模块实测新增 11 个；ARM64 收尾全量后 /tmp 残留同样的 11 个（另有更早运行留下的 12 个），本机累计 55 个。测试判定与工具行为不受影响。",
+      "resolution": "只改该测试文件：_run_driver 在本用例临时根目录下建 0700 子目录 driver-tmp 并经配置传给子进程；驱动脚本进入夹具前把 tempfile.tempdir 指向它，崩溃留下的目录随用例临时根目录一起删除。夹具本身、注入方式（仍为 os._exit(9)）与子进程再派生的进程都不变。"
+    }
+  ],
+  "clarifications": [
+    "冻结承接：freeze-successor-generate 判定区间 a1ef06711→efea91718 内没有命中冻结覆盖的路径变化、也没有注册表待办，拒绝生成收据（日志已登记），因此本项没有承接收据；门禁在该提交上重跑。",
+    "不重跑全量：只改一个测试文件，工具四层身份不变、未命中冻结覆盖；该模块在本机与 ARM64 各单跑一遍并统计泄漏数。",
+    "历史残留：本机 55 个、ARM64 23 个空目录已用 rmdir（只能删除空目录）清理；ARM64 另删除了收尾时被强制结束的两个批次留下的临时目录（codex-full-chain-*、r11-staging-*）。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "f3c68ff0fed0a6725efd886e85fc56d24faa9411115f28e6fdfc39845b6fa73e",
+      "after": "f3c68ff0fed0a6725efd886e85fc56d24faa9411115f28e6fdfc39845b6fa73e"
+    },
+    "method": "git archive 按提交号导出 a1ef06711 与 efea91718 的 tools、docs 后复算"
+  },
+  "regression": {
+    "local_module_red": {
+      "tree": "a1ef06711e325ba7bdac341e5bc1cd4af93e9299（工作树未改）",
+      "command": "python3 -m unittest tools.official_client_capture.tests.test_codex_upgrade_staging_dispatch",
+      "tests": 15,
+      "seconds": 153.184,
+      "result": "OK",
+      "leaked_directories": 11
+    },
+    "local_module_green": {
+      "tree": "工作树与 efea917187a6d47ac5255dc7607c247e6762ccbf 内容一致（提交前运行）",
+      "command": "同上",
+      "tests": 15,
+      "seconds": 152.133,
+      "result": "OK",
+      "leaked_directories": 0
+    },
+    "arm64_module": {
+      "tree": "efea917187a6d47ac5255dc7607c247e6762ccbf（tar 传到 staging 私有目录）",
+      "architecture": "aarch64",
+      "command": "arm64_run.py tools.official_client_capture.tests.test_codex_upgrade_staging_dispatch",
+      "tests": 15,
+      "seconds": 295.817,
+      "result": "OK",
+      "leaked_directories": 0,
+      "note": "运行前 /tmp 下 runtime-egress-isolated-* 已清为 0 个，运行后仍为 0 个；修改前 ARM64 收尾全量后残留 11 个与该模块 11 次崩溃注入一一对应"
+    }
+  },
+  "gates": {
+    "commit": "efea917187a6d47ac5255dc7607c247e6762ccbf",
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "freeze_successor": "不需要：freeze-successor-generate 判定区间内无冻结覆盖路径变化、无注册表待办，拒绝生成",
+    "maintenance_markdown_count": 0
+  },
+  "freeze_successors": [],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "r15-tmpdir-fix-red.log",
+      "sha256": "5df0604e33e956226c857ea6ac7e5f84c4ac72c74f1b25772b44cbb8f7f185f8"
+    },
+    {
+      "file": "r15-tmpdir-fix-green.log",
+      "sha256": "cdb3f58dfbd6989bb7ad02c5e9aab6aff4ac8665576f2557312c2a943fcd9eef"
+    },
+    {
+      "file": "r15-tmpdir-fix-freeze-generation.log",
+      "sha256": "7435ad4477dfd9d79266410f67b9d4a3f6909e970877035c005ad5bd35ce7364"
+    },
+    {
+      "file": "r15-tmpdir-fix-gates.log",
+      "sha256": "c3dc4f8da941db06c7a6670d20af8d29fb221d15d9edfc03305ea60939b321b7"
+    },
+    {
+      "file": "r15-tmpdir-fix-arm64.log",
+      "sha256": "2402fa6895d7dea86ac3e2fe41c6fdc5b775020e81f2c79985dfc2a9341afa43"
+    }
+  ]
+}

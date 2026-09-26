@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-attempt-recovery-reservation-v1.json",
+  "title": "恢复段预约及已批准的执行／复用边界（兼容没有复用字段的历史预约）",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "attempt_id",
+    "recovery_revision",
+    "planned_jobs",
+    "reservation_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-attempt-recovery-reservation/v1"
+    },
+    "reservation_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "recovery_revision": {
+      "type": "string",
+      "pattern": "^ar[1-9][0-9]*$"
+    },
+    "planned_jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "execution_sha256",
+          "source_execution_sha256"
+        ]
+      }
+    },
+    "execute_job_ids": {
+      "$ref": "#/$defs/ids"
+    },
+    "reuse_job_ids": {
+      "$ref": "#/$defs/ids"
+    },
+    "reuse_proofs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/proof"
+      }
+    },
+    "reuse_proofs_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "recovery_review_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "reuse_validation_scanned_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "预约时复验复用证明实际读取的证据字节数（同一证据根只计一次）；修正前写出的预约没有该字段"
+    }
+  },
+  "dependentRequired": {
+    "execute_job_ids": [
+      "reuse_job_ids",
+      "reuse_proofs",
+      "reuse_proofs_sha256",
+      "recovery_review_sha256"
+    ],
+    "reuse_job_ids": [
+      "execute_job_ids",
+      "reuse_proofs",
+      "reuse_proofs_sha256",
+      "recovery_review_sha256"
+    ],
+    "reuse_proofs": [
+      "execute_job_ids",
+      "reuse_job_ids",
+      "reuse_proofs_sha256",
+      "recovery_review_sha256"
+    ],
+    "reuse_proofs_sha256": [
+      "execute_job_ids",
+      "reuse_job_ids",
+      "reuse_proofs",
+      "recovery_review_sha256"
+    ],
+    "recovery_review_sha256": [
+      "execute_job_ids",
+      "reuse_job_ids",
+      "reuse_proofs",
+      "reuse_proofs_sha256"
+    ]
+  },
+  "$defs": {
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recovered_from",
+        "source_execution_sha256",
+        "result",
+        "checkpoint",
+        "permission_closeout",
+        "after_probe",
+        "restoration_report",
+        "content_sha256"
+      ],
+      "properties": {
+        "recovered_from": {
+          "type": "string",
+          "pattern": "^ar[1-9][0-9]*$"
+        },
+        "source_execution_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "result": {
+          "$ref": "#/$defs/binding"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/binding"
+        },
+        "permission_closeout": {
+          "$ref": "#/$defs/binding"
+        },
+        "after_probe": {
+          "$ref": "#/$defs/binding"
+        },
+        "restoration_report": {
+          "$ref": "#/$defs/binding"
+        }
+      }
+    }
+  }
+}

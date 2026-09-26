@@ -71,10 +71,13 @@
             "active",
             "recovery_required",
             "candidate_review_required",
+            "stage_review_required",
             "revision_required",
             "stop_required",
             "stopped",
-            "complete"
+            "complete",
+            "deadline_paused",
+            "abandoned"
           ]
         },
         "current_revision": {
@@ -288,6 +291,24 @@
             }
           ]
         },
+        "review_phase": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "VC-1",
+            "VC-2",
+            "VC-3",
+            null
+          ]
+        },
+        "review_root_cause_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "head_sequence": {
           "type": "integer",
           "minimum": 1
@@ -359,6 +380,59 @@
               "type": "null"
             }
           ]
+        },
+        "status_before_pause": {
+          "enum": [
+            "active",
+            "recovery_required",
+            "candidate_review_required",
+            "stage_review_required",
+            "revision_required",
+            "stop_required",
+            "stopped",
+            "complete",
+            "abandoned"
+          ]
+        },
+        "paused_scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "project",
+              "campaign",
+              "stage",
+              "extension_pending"
+            ]
+          }
+        },
+        "paused_since_utc": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paused_hours": {
+          "type": "number",
+          "minimum": 0
+        },
+        "review_reminder": {
+          "type": "boolean"
+        },
+        "original_total_deadline_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deadline_extensions": {
+          "type": "array",
+          "items": {
+            "$ref": "https://sub2apiplus.local/schemas/deadline-extension-v1.json"
+          }
         }
       }
     },

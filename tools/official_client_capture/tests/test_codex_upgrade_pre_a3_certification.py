@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
@@ -62,6 +63,10 @@ class PreA3CertificationTests(unittest.TestCase):
             self.assertEqual(
                 [scenario[0] for scenario in certification.SCENARIOS if scenario[0].startswith("vc-chain.")],
                 [
+                    "vc-chain.full-validation-only",
+                    "vc-chain.late-stage-faults",
+                    "vc-chain.vc1-capture",
+                    "vc-chain.vc1-recovery-chain",
                     "vc-chain.batches-through-vc6",
                     "vc-chain.stopped-ledger-rejected-before-write",
                     "vc-chain.failed-batch-abandons-stage",
@@ -83,6 +88,38 @@ class PreA3CertificationTests(unittest.TestCase):
             policy_certification._write_once(output, receipt)
             verified = certification.verify_certification(output)
             self.assertEqual(verified["scenario_count"], receipt["scenario_count"])
+
+    def test_registered_real_chain_requires_one_passed_matching_entry(self) -> None:
+        registered = [next(row for row in certification.SCENARIOS if row[0] == name) for name in certification.REAL_CHAIN_IDS]
+        rows_passed = [{"name": row[0], "test": f"{row[2]}:{row[3]}.{row[4]}", "status": "passed"} for row in registered]
+        passed, others = rows_passed[0], rows_passed[1:]
+        bound = {"scenarios": rows_passed, "real_chain_registration": certification.real_chain_registration()}
+        self.assertEqual([item["id"] for item in certification.real_chain_coverage(bound)], list(certification.REAL_CHAIN_IDS))
+        self.assertEqual([item["id"] for item in certification.real_chain_coverage(bound, historical=True)], list(certification.REAL_CHAIN_IDS))
+        # 历史回放只核验当时绑定的集合：只登记第一条链的旧收据仍可回放。
+        historical = {"scenarios": [passed], "real_chain_registration": bound["real_chain_registration"][:1]}
+        self.assertEqual(certification.real_chain_coverage(historical, historical=True)[0]["id"], passed["name"])
+        with self.assertRaises(certification.CertificationError):
+            certification.real_chain_coverage(historical)
+        for registration in (None, [], [{}], [bound["real_chain_registration"][0]] * 2):
+            with self.subTest(registration=registration), self.assertRaises(certification.CertificationError):
+                certification.real_chain_coverage({**bound, "real_chain_registration": registration}, historical=True)
+        for rows in ([], [passed, passed], [{**passed, "status": "uncertified"}], [{**passed, "status": "failed"}], [{**passed, "test": "无关入口"}]):
+            with self.subTest(rows=rows), self.assertRaises(certification.CertificationError):
+                certification.real_chain_coverage({**bound, "scenarios": [*rows, *others]})
+        # 任一登记链缺失都拒绝（新增的后段注入链不能被漏认证）。
+        for index in range(len(rows_passed)):
+            with self.subTest(missing=rows_passed[index]["name"]), self.assertRaises(certification.CertificationError):
+                certification.real_chain_coverage({**bound, "scenarios": rows_passed[:index] + rows_passed[index + 1:]})
+
+    def test_registered_real_chain_skip_is_uncertified(self) -> None:
+        class SkippedChain(unittest.TestCase):
+            def runTest(self):
+                self.skipTest("夹具没有 Docker")
+        scenario = next(row for row in certification.SCENARIOS if row[0] in certification.REAL_CHAIN_IDS)
+        with mock.patch.object(certification, "_load_test_case", return_value=SkippedChain()):
+            result = certification.run_scenario(scenario)
+        self.assertEqual(result["status"], "uncertified")
 
     def test_certification_fails_closed_on_scenario_failure_or_stale_deployment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

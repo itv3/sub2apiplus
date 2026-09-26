@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 umask 077
 
 # 采集候选出站在 HTTP/1.1 上的原始请求形态（header 大小写与顺序）。
@@ -78,7 +79,8 @@ cleanup() {
     docker exec "$service_container" update-ca-certificates --fresh >/dev/null 2>&1 || true
   fi
   if [[ $ca_installed == 1 ]]; then
-    docker restart "$service_container" >/dev/null 2>&1 || true
+    python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" --cleanup \
+      -- docker restart "$service_container" >/dev/null 2>&1 || true
     for _ in $(seq 1 90); do
       local health
       health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$service_container" 2>/dev/null || echo "")
@@ -200,7 +202,10 @@ ca_installed=1
 # 先重启让 CA 进入进程的根证书池。docker restart 会重新生成 /etc/hosts，因此必须
 # 在 restart 返回后立即写入探针地址，不能等健康检查结束；启动期的模型刷新会抢先解析
 # chatgpt.com 并建立真实上游连接，晚写 hosts 会让后续请求复用该连接、绕过探针。
-docker restart "$service_container" >/dev/null
+# R15 指定出口下重启必须经受控维护入口：重建期间内核业务闭锁、新网卡在重新准入前拿不到出口租期，
+# 启动期模型刷新无法先连上真实上游；入口在双容器重新准入后返回，随即写 hosts 仍早于任何可用上游连接。
+python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+  -- docker restart "$service_container" >/dev/null
 docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
 docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
 hosts_patched=1

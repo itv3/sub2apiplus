@@ -4,6 +4,7 @@ umask 077
 
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 service_container=${SERVICE_CONTAINER:-sub2apiplus}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 postgres_container=${POSTGRES_CONTAINER:-sub2apiplus-postgres}
 claude_account_id=${CLAUDE_ACCOUNT_ID:-50}
 codex_account_id=${CODEX_ACCOUNT_ID:-90}
@@ -93,7 +94,12 @@ wait_healthy() {
 }
 
 restart_service() {
-  docker restart "$service_container" >/dev/null
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  # R15 指定出口下，受保护网关的重启必须经受控维护入口：声明绑定父 run，重建期间内核业务闭锁，
+  # 双容器重新准入后才返回；裸 docker restart 会被父监督器判为出口异常并暂停整轮（2026-09-26 c01570 r2 批次 13）。
+  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
   wait_healthy
 }
 
@@ -132,7 +138,7 @@ restore_environment() {
       esac
     done <<<"$original_schedulable_state"
   fi
-  restart_service || restore_failed=1
+  restart_service cleanup || restore_failed=1
 
   current_schedulable_state=$(
     db_query "select id || ':' || schedulable::text from accounts where id in ($account_ids_csv) order by id"

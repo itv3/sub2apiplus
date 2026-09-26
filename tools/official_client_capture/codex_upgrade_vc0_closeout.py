@@ -2232,8 +2232,15 @@ def repair_failed_closeout_closure(
                     raise VC0CloseoutError(
                         f"失败闭合修复发现原时间账本字段漂移：{key}"
                     )
+            # R8：预算到期后账本显示 deadline_paused，暂停前仍是 active／stop_required；修复只追加
+            # stage_abandoned 与 stop_the_line，暂停期间允许写入，因此按暂停前状态判断。
+            status = (
+                before.get("status_before_pause")
+                if before.get("status") == "deadline_paused"
+                else before.get("status")
+            )
             if (
-                before.get("status") not in {"active", "stop_required"}
+                status not in {"active", "stop_required"}
                 or before.get("active_phase") not in codex_upgrade_timing_ledger.PHASE_ORDER
             ):
                 raise VC0CloseoutError("原时间账本已不是待闭合的 active／stop_required 阶段")
@@ -2350,7 +2357,9 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         with _ledger_lock(timing_root):
             step = "recheck-active-vc0"
-            recheck_at = _utc_now()
+            # 复检时刻只用于锁内重放，不写入收据；取微秒精度，避免同一毫秒内刚写入的微秒级事件
+            # 显得晚于检查时刻而偶发“检查时间早于最新 event”。
+            recheck_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
             try:
                 current_timing = codex_upgrade_timing_ledger.inspect_ledger(
                     timing_root,

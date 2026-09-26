@@ -4,36 +4,39 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 E="$1"; C9=${C:0:9}
-test -f "$E/logs/check-egress-spec.log"; test -f "$E/logs/implementation.log"; test "$(grep -c '^exit_code=0' "$E/logs/implementation.log")" = 5
+if [ ! -f "$E/receipt.json" ]; then
+  test -f "$E/logs/check-egress-spec.log"; test -f "$E/logs/implementation.log"
+fi
 TREE=$(python3 -c "
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade as cu
 print(cu._directory_tree_digest(Path('$B/source')))"); echo "TREE=$TREE"
 echo "=== 实现测试收据"; if [ -f "$E/receipt.json" ]; then echo "receipt 已存在，跳过 facts/finalize"; else bash "$DRV/vc4-facts.sh" "$E" "$TREE" 2>&1 | tail -n 2; fi; test -f "$E/receipt.json"
 python3 -m tools.official_client_capture.codex_upgrade_vc_receipt replay --evidence-root "$E" --receipt receipt.json > "$RUNROOT/vc4-replay.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("replay:", d.get("kind"), d.get("status"))' "$RUNROOT/vc4-replay.json"
+python3 "$DRV/vc4_resume.py" check --evidence-root "$E" --mode full || exit 3
 echo "=== 批次 plan-candidate-gates：计划 + 预演 + 派发"
 python3 - "$W/action-plan-vc4-plan-gates.json" "$NEW" "$CAND" "$B" "$D" <<'PY'
-import json, sys
+import json, sys, os
 out, NEWID, CAND, B, D = sys.argv[1:]
 NEW = f"{D}/evidence/campaigns/{NEWID}"
-plan = {"schema_version": "codex-upgrade-vc-action-plan/v1", "execute_item_ids": ["plan-candidate-gates"], "reuse_item_ids": [], "actions": [{"action_id": "plan-candidate-gates", "operation": "VC-4:plan-candidate-gates", "timeout_seconds": 900, "command": ["/usr/bin/python3", f"{D}/tools/official_client_capture/codex_upgrade.py", "plan-candidate-gates", "--campaign-dir", NEW, "--candidate-id", CAND, "--candidate-source", f"{B}/plan-source", "--mapping", f"{B}/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-mapping.json", "--output", f"{B}/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-dispatch.json"], "item_ids": ["plan-candidate-gates"]}]}
+plan = {"schema_version": "codex-upgrade-vc-action-plan/v1", "execute_item_ids": ["plan-candidate-gates"], "reuse_item_ids": [], "actions": [{"action_id": "plan-candidate-gates", "operation": "VC-4:plan-candidate-gates", "timeout_seconds": 900, "command": ["/usr/bin/python3", f"{D}/tools/official_client_capture/codex_upgrade.py", "plan-candidate-gates", "--campaign-dir", NEW, "--candidate-id", CAND, "--candidate-source", f"{B}/plan-source", "--mapping", f"{B}/plan-source/{os.environ['LIFECYCLE_DIR']}/gate-mapping.json", "--output", f"{B}/plan-source/{os.environ['LIFECYCLE_DIR']}/gate-plan-dispatch.json"], "item_ids": ["plan-candidate-gates"]}]}
 json.dump(plan, open(out, "w"), ensure_ascii=False, indent=2); print("plan-candidate-gates 计划 ->", out)
 PY
 chmod 600 "$W"/*.json
-rm -f "$B/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-rehearsal.json" "$B/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-dispatch.json"
+rm -f "$B/plan-source/$LIFECYCLE_DIR/gate-plan-rehearsal.json" "$B/plan-source/$LIFECYCLE_DIR/gate-plan-dispatch.json"
 python3 - "$B" "$NEWDIR" "$CAND" > "$RUNROOT/vc4-plan-rehearsal.out" 2>&1 <<'PY'
-import argparse, json, sys
+import argparse, json, sys, os
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade as cu
 B, NEW, CAND = sys.argv[1:]
-args = argparse.Namespace(campaign_dir=Path(NEW), candidate_id=CAND, candidate_source=Path(B)/"plan-source", mapping=Path(B)/"plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-mapping.json", output=Path(B)/"plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-rehearsal.json")
+args = argparse.Namespace(campaign_dir=Path(NEW), candidate_id=CAND, candidate_source=Path(B)/"plan-source", mapping=Path(B)/"plan-source"/os.environ["LIFECYCLE_DIR"]/"gate-mapping.json", output=Path(B)/"plan-source"/os.environ["LIFECYCLE_DIR"]/"gate-plan-rehearsal.json")
 print(json.dumps(cu.plan_candidate_gates(args), ensure_ascii=False))
 PY
 tail -c 300 "$RUNROOT/vc4-plan-rehearsal.out"; echo
-cmp "$B/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-rehearsal.json" "$B/source/docs/egress/lifecycle/codex-0154-candidate/gate-plan.json" && echo "预演 plan 与提交内 gate-plan.json 逐字一致"; rm -f "$B/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-rehearsal.json"
+cmp "$B/plan-source/$LIFECYCLE_DIR/gate-plan-rehearsal.json" "$B/source/$LIFECYCLE_DIR/gate-plan.json" && echo "预演 plan 与提交内 gate-plan.json 逐字一致"; rm -f "$B/plan-source/$LIFECYCLE_DIR/gate-plan-rehearsal.json"
 SEQ=$(next_seq); echo "批次序号=$SEQ"
 bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-4 "$SEQ" VC-3 action-plan-vc4-plan-gates.json | grep -v "^$"
-cmp "$B/plan-source/docs/egress/lifecycle/codex-0154-candidate/gate-plan-dispatch.json" "$B/source/docs/egress/lifecycle/codex-0154-candidate/gate-plan.json" && echo "派发产物 plan 与提交内 gate-plan.json 逐字一致"
+cmp "$B/plan-source/$LIFECYCLE_DIR/gate-plan-dispatch.json" "$B/source/$LIFECYCLE_DIR/gate-plan.json" && echo "派发产物 plan 与提交内 gate-plan.json 逐字一致"
 echo "=== 批次 record-candidate-build：计划 + 预演 + 派发"
 IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
 BUILD_ID="$CAND-$C9-$(python3 -c "import sys; print(sys.argv[1].strip().replace('-','').replace(':','').lower())" "$(cat $B/artifacts/built-at-utc.txt)")"

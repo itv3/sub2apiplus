@@ -156,7 +156,44 @@
         }
       }
     },
-    "binary": {"$ref": "#/$defs/fileBinding"}
+    "binary": {"$ref": "#/$defs/fileBinding"},
+    "input_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "go_version",
+        "base_images"
+      ],
+      "properties": {
+        "go_version": {
+          "type": "string",
+          "pattern": "^go[0-9]+\\.[0-9]+(?:\\.[0-9]+)?(?:[a-z0-9.-]+)?$"
+        },
+        "base_images": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ALPINE_IMAGE",
+            "POSTGRES_IMAGE",
+            "NODE_IMAGE"
+          ],
+          "properties": {
+            "ALPINE_IMAGE": {
+              "type": "string",
+              "pattern": "^.+@sha256:[0-9a-f]{64}$"
+            },
+            "POSTGRES_IMAGE": {
+              "type": "string",
+              "pattern": "^.+@sha256:[0-9a-f]{64}$"
+            },
+            "NODE_IMAGE": {
+              "type": "string",
+              "pattern": "^.+@sha256:[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    }
   },
   "$defs": {
     "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},

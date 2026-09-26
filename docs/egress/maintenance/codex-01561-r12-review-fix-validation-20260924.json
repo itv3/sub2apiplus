@@ -1,0 +1,90 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R12（审核修正）",
+  "source_commit": "5879ae1d0521ccd298aeb5d8203977c2b5bf3244",
+  "source_commits": [
+    "5879ae1d0521ccd298aeb5d8203977c2b5bf3244"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第二节第 10 条中 lib.sh wait_for_marker 一项；审核草稿代理 E 对 R12 的两条观察",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T00:54:33.538858+00:00",
+  "fixes": [
+    {
+      "finding": "lib.sh 的 wait_for_marker 无条件把第 4 个参数当作 PID：省略 PID 直接给 --log 时，--log 被当成 PID，等待器以参数错误退出，错误信息误导",
+      "resolution": "第 4 个参数只在不以 -- 开头时按 PID 取走（空串表示不绑定 PID），省略 PID 时选项原样交给 wait_state.py；非空 PID 必须是正整数，否则直接按等待失败退出 3。新增公共库级用例覆盖省略 PID 的成功与超时、空串 PID、真实已退出 PID 与四种非法 PID；在旧实现上这些用例全部失败，新实现全部通过。README 同步说明，驱动清单重刷"
+    }
+  ],
+  "clarifications": [
+    "上传心跳从未出现满 5 分钟即退出 3，与方案 R12“等待方按心跳过期（5 分钟）或总超时退出”一致，README 已写明，本轮不改。上传方未按时启动时按 --resume-from upload-wait 重起。",
+    "本项只改驱动目录与测试，不涉及冻结路径（冻结承接干跑 0 条承接边），不需要承接收据；受管工具身份四层摘要不变。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": "unchanged"
+  },
+  "regression": {
+    "local_driver": {
+      "tests": 49,
+      "seconds": 69.573,
+      "result": "OK",
+      "detail": "skipped=3",
+      "modules": [
+        "test_arm64_driver_wait",
+        "test_arm64_capture_driver",
+        "real_chains.test_codex_upgrade_fault_fixtures"
+      ],
+      "note": "3 项跳过为 R15 隔离内核链、守护内核链与 Docker 进程链，需要 Linux root，已在 ARM64 执行"
+    },
+    "arm64_driver": {
+      "tests": 49,
+      "seconds": 190.461,
+      "result": "OK",
+      "detail": "skipped=0",
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；R12 上传续跑、VC-5 等待与子进程死亡三条夹具均以退出码 3 检出且零请求"
+    },
+    "red_green": {
+      "old_lib_sh": "FAILED (failures=5)",
+      "new_lib_sh": "OK",
+      "note": "新增两条用例在 9ac3ed017 的 lib.sh 上失败、在 5879ae1d0 上通过"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "freeze_successor_dry_run": "0 条承接边（驱动目录与测试均非冻结路径）",
+    "driver_manifest": "unchanged 9aa9bbe7a23e1daee4e3b4889a61a60b27a70a5fe8561ded55f88189734e10ab",
+    "maintenance_markdown_count": 0
+  },
+  "open_dependencies": [
+    "阶段 1 全部项修正完成后，本机与 ARM64 统一跑全量 make test-capture-tools 与 make test-capture-real-chains。"
+  ],
+  "freeze_successors": [],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r12-local.log",
+      "sha256": "6f53e81877e52aba2b7d68f61a0cbbffbb5a931333202468564cf8ea39f51513"
+    },
+    {
+      "file": "review-fix-r12-arm64.log",
+      "sha256": "dced26d08cd00abcf9b2c584faa543c29e065bef5b03d38107c7046c79e2d61b"
+    },
+    {
+      "file": "review-fix-r12-red-green.log",
+      "sha256": "076e1a08087c5563eaad2c44f00353a5fe8b16cad1e92dfe7b990e66adafc62d"
+    },
+    {
+      "file": "review-fix-r12-freeze-dry-run.log",
+      "sha256": "7d4f07fa4b84a8b82bbb56a6607ca37d9b8d051609fab46d19ec051a88617733"
+    },
+    {
+      "file": "review-fix-r12-gates.log",
+      "sha256": "557696b7f0e5dc5d23fcb3751ab1d5026636dc2e1f243d84a6b8ce4838da3a40"
+    }
+  ]
+}

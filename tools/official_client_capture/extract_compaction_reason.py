@@ -36,7 +36,9 @@ ALLOWED_METADATA = {
         "responses_compaction_v2",
         "responses_compact",
     },
-    "phase": {"standalone_turn", "pre_turn", "mid_turn"},
+    # post_turn 为 0.156.1 新增阶段（analytics/src/facts.rs 的 CompactionPhase），
+    # 默认阈值下不会出现；登记进来只是让摘要保留真实枚举，不改变任何判定。
+    "phase": {"standalone_turn", "pre_turn", "mid_turn", "post_turn"},
     "strategy": {"memento", "summarization"},
 }
 
@@ -307,6 +309,30 @@ def connection_integrity(relay_dir: pathlib.Path) -> dict:
     }
 
 
+def matched_connection_integrity(relay_dir: pathlib.Path, matches: list[dict]) -> dict:
+    """只核对承载匹配请求的连接两向字节是否齐全。
+
+    exec／TUI 驱动的作业在进程退出时会补发 analytics 上报，客户端来不及等响应，
+    中继只留下单向字节（0.154 recapture 的 legacy-compact-default／beta 与
+    relay-compact 各有一条）。这类连接与压缩证据无关，不应让整轮作废；
+    但承载目标 response.create 的连接必须完整，否则匹配结果本身不可信。
+    """
+    connections = sorted({match["source"].split(".", 1)[0] for match in matches})
+    incomplete = 0
+    for connection in connections:
+        sizes = []
+        for direction in ("client_to_upstream", "upstream_to_client"):
+            path = relay_dir / f"{connection}.{direction}.bin"
+            sizes.append(path.stat().st_size if path.is_file() else 0)
+        if not all(sizes):
+            incomplete += 1
+    return {
+        "total": len(connections),
+        "incomplete": incomplete,
+        "clean": bool(connections) and incomplete == 0,
+    }
+
+
 def matches_expected_profile(match: dict, expected_reason: str) -> bool:
     """按源码允许的 trigger／phase 组合核对指定压缩原因。"""
     profile = EXPECTED_REASON_PROFILES[expected_reason]
@@ -327,6 +353,9 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--expected-reason", choices=sorted(ALLOWED_METADATA["reason"]),
                         required=True)
+    # all：全部连接两向齐全（历史口径，app-server 驱动的场景沿用）；
+    # matched：只要求承载匹配请求的连接齐全，用于进程退出时会留下单向上报的 exec／TUI 场景。
+    parser.add_argument("--integrity-scope", choices=("all", "matched"), default="all")
     args = parser.parse_args()
 
     relay_dir = pathlib.Path(args.relay_dir)
@@ -341,14 +370,20 @@ def main() -> int:
         match for match in matches
         if match["compaction"].get("reason") != args.expected_reason
     ]
-    complete = bool(exact) and integrity["clean"] and not unexpected
+    matched_integrity = matched_connection_integrity(relay_dir, exact)
+    clean = (
+        integrity["clean"] if args.integrity_scope == "all" else matched_integrity["clean"]
+    )
+    complete = bool(exact) and clean and not unexpected
     result = {
         "schema_version": "compaction-reason-extract/v1",
         "expected_reason": args.expected_reason,
         "status": "complete" if complete else "incomplete",
         "exact_match_count": len(exact),
         "unexpected_reason_count": len(unexpected),
+        "integrity_scope": args.integrity_scope,
         "connection_integrity": integrity,
+        "matched_connection_integrity": matched_integrity,
         "matches": matches,
     }
     output = pathlib.Path(args.output)

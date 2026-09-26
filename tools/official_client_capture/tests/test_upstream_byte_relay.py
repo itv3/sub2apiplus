@@ -48,6 +48,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _synthetic_claude_response,
     _synthetic_aux_response,
     _synthetic_core_response,
+    _synthetic_record_bytes,
     _upstream_alpn_offer,
 )
 
@@ -183,6 +184,63 @@ class UpstreamByteRelayFileC2paTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("Codex >=0.151.0", result.stderr)
+
+
+class UpstreamByteRelayHandlerTaskRetentionTest(unittest.TestCase):
+    """客户端断开后仍在等上游的处理任务不得被循环 GC 销毁（2026-09-26 VC-1 file create 事故）。"""
+
+    @staticmethod
+    async def _block_on_self_referenced_future() -> None:
+        # 只被本协程栈帧与任务等待槽引用的 future：模拟上游 StreamReader 只被其协议弱引用、
+        # 客户端断开后协议又清掉了任务引用的情形——整组对象成为不可达引用环。
+        await asyncio.get_running_loop().create_future()
+
+    def _collect_pending_handler(self, *, retain: bool) -> tuple[bool, list[str]]:
+        import gc
+        import weakref
+
+        relay = object.__new__(Relay)
+        relay._handler_tasks = set()
+        destroyed_messages: list[str] = []
+
+        async def handler() -> None:
+            if retain:
+                relay._retain_handler_task()
+            await self._block_on_self_referenced_future()
+
+        async def exercise() -> bool:
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(
+                lambda _loop, context: destroyed_messages.append(str(context.get("message")))
+            )
+            task = asyncio.ensure_future(handler())
+            await asyncio.sleep(0)
+            task_ref = weakref.ref(task)
+            del task
+            gc.collect()
+            alive = task_ref() is not None and not task_ref().done()
+            survivor = task_ref()
+            if survivor is not None:
+                survivor.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await survivor
+                await asyncio.sleep(0)
+                self.assertNotIn(survivor, relay._handler_tasks)
+            return alive
+
+        return asyncio.run(exercise()), destroyed_messages
+
+    def test_retained_handler_task_survives_gc_and_is_released_when_done(self) -> None:
+        alive, destroyed = self._collect_pending_handler(retain=True)
+        self.assertTrue(alive)
+        self.assertEqual(destroyed, [])
+
+    def test_unretained_pending_task_is_destroyed_by_gc(self) -> None:
+        """对照：不持有强引用时，同样的挂起任务会被 GC 当垃圾销毁（即事故形态）。"""
+
+        alive, destroyed = self._collect_pending_handler(retain=False)
+        self.assertFalse(alive)
+        self.assertTrue(any("Task was destroyed but it is pending" in item for item in destroyed))
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
@@ -602,6 +660,66 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
                 result = self.response("chatgpt.com", request_line)
                 self.assertIsNotNone(result)
                 self.assertEqual(result.action, action)
+
+    def test_accounts_check_echoes_account_to_candidate_and_masks_record(self) -> None:
+        # 0.156.1 起 QueryUsage 先发工作区路由发现：候选按条目 id 等于请求头账号筛选，
+        # 所以发给候选的响应必须回显账号；证据落盘副本等长遮蔽，账号标识不进产物。
+        account = "acct-1234-abcd"
+        result = self.response(
+            "chatgpt.com",
+            "GET /backend-api/wham/accounts/check HTTP/1.1",
+            b"chatgpt-account-id: " + account.encode("ascii") + b"\r\n",
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "wham_accounts_check")
+        self.assertTrue(result.wire.startswith(b"HTTP/1.1 200 OK\r\n"))
+        document = json.loads(result.wire.split(b"\r\n\r\n", 1)[1])
+        self.assertEqual(
+            document["accounts"],
+            [{"id": account, "workspace_backend_origin": "NO_CONSTRAINT",
+              "account_routing_override": "NO_CONSTRAINT"}],
+        )
+        self.assertEqual(document["default_account_id"], account)
+        self.assertEqual(document["account_ordering"], [account])
+
+        recorded = _synthetic_record_bytes(result)
+        self.assertIs(recorded, result.recorded_wire)
+        self.assertEqual(len(recorded), len(result.wire))
+        self.assertNotIn(account.encode("ascii"), recorded)
+        masked = json.loads(recorded.split(b"\r\n\r\n", 1)[1])
+        self.assertEqual(masked["default_account_id"], "0" * len(account))
+
+        plain = self.response("chatgpt.com", "GET /backend-api/wham/usage HTTP/1.1")
+        self.assertIsNone(plain.recorded_wire)
+        self.assertIs(_synthetic_record_bytes(plain), plain.wire)
+        with self.assertRaisesRegex(RuntimeError, "等长"):
+            _synthetic_record_bytes(SimpleNamespace(wire=b"abc", recorded_wire=b"ab"))
+
+    def test_accounts_check_rejects_missing_duplicate_or_malformed_account(self) -> None:
+        line = "GET /backend-api/wham/accounts/check HTTP/1.1"
+        for label, headers in (
+            ("缺失", b""),
+            ("重复", b"chatgpt-account-id: acct-a\r\nChatGPT-Account-Id: acct-b\r\n"),
+            ("含空白", b"chatgpt-account-id: acct a\r\n"),
+            ("含引号", b'chatgpt-account-id: acct"x\r\n'),
+            ("过长", b"chatgpt-account-id: " + b"a" * 129 + b"\r\n"),
+        ):
+            with self.subTest(label=label):
+                self.assertIsNone(self.response("chatgpt.com", line, headers))
+        self.assertIsNone(
+            self.response(
+                "chatgpt.com",
+                "GET /backend-api/wham/accounts/check?x=1 HTTP/1.1",
+                b"chatgpt-account-id: acct-a\r\n",
+            )
+        )
+        self.assertIsNone(
+            self.response(
+                "chatgpt.com",
+                "POST /backend-api/wham/accounts/check HTTP/1.1",
+                b"chatgpt-account-id: acct-a\r\n",
+            )
+        )
 
     def test_oauth_dummy_is_redacted_before_persistence(self) -> None:
         dummy = b"dummy-refresh-must-not-persist"

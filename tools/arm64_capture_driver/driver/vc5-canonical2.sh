@@ -11,21 +11,21 @@ export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 ATT="$1"; EV="$NEWDIR/candidates/$CAND/attempts/$ATT/evidence"
 test -f "$NEWDIR/acceptance/$CAND/result.json"
 if [ -f "$NEWDIR/control/vc/receipts/$CAND/vc5-completion.json" ]; then echo "CANONICAL2_SKIP: vc5-completion.json 已存在"; echo "CANONICAL2_DONE"; exit 0; fi
-ACTIVE=$D/promotions/c0151-formal-rule-correction-20260905t0033z-c0151-v10-c1-production/catalogdata/runtime/profiles/0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json
-PATCH=$TOOLS/profile_rule_patches_0_154_0.json
+ACTIVE=$ACTIVE_PROFILE
+PATCH=$PROFILE_PATCH_JSON
 echo "=== 离线预览 A（内部函数，零副作用，无父 run）$(utc_now)"
 SHA=$(python3 - "$NEWDIR" "$CAND" "$ATT" "$EV" "$ACTIVE" "$PATCH" <<'PY'
-import argparse, sys
+import argparse, sys, os
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade as cu
 NEW, CAND, ATT, EV, ACTIVE, PATCH = sys.argv[1:]
 a = argparse.Namespace(campaign_dir=Path(NEW), candidate_id=CAND, attempt_id=ATT, kilo_facts=Path(EV)/"client/raw/kilo-facts.json",
     active_profile=Path(ACTIVE), profile_patch_manifest=Path(PATCH), profile_activation_fact=Path(EV)/"client/raw/profile-activation-fact.json",
-    supervisor_run_dir=None, phase="VC-5", retire_version="0.149.1", approve_import_sha256=None)
+    supervisor_run_dir=None, phase="VC-5", retire_version=os.environ["RETIRE_VERSION"], approve_import_sha256=None)
 anchor = cu._canonical_time_anchor(a, Path(NEW)); assert anchor["source"] == "campaign-plan", anchor
 d = cu.import_canonical_checkpoint(a)
 assert d["status"] == "approval_required", d
-assert d["execute_item_ids"][-3:] == ["production-activation", "rollback-verification", "retire-0.149.1"], d["execute_item_ids"]
+assert d["execute_item_ids"][-3:] == ["production-activation", "rollback-verification", "retire-" + os.environ["RETIRE_VERSION"]], d["execute_item_ids"]
 assert d["scanned_bytes"] == 0 and d["live_request_count"] == 0, d
 print(d["review_sha256"])
 PY
@@ -33,7 +33,7 @@ PY
 echo "=== 离线预览 B（CLI，无父 run；核对与 A 同一摘要）$(utc_now)"
 /usr/bin/python3 $TOOLS/codex_upgrade.py canonical-import --campaign-dir "$NEWDIR" --candidate-id "$CAND" --attempt-id "$ATT" \
   --kilo-facts "$EV/client/raw/kilo-facts.json" --active-profile "$ACTIVE" --profile-patch-manifest "$PATCH" \
-  --profile-activation-fact "$EV/client/raw/profile-activation-fact.json" --phase VC-5 --retire-version 0.149.1 > "$W/canonical-preview.out" 2> "$W/canonical-preview.err" || true
+  --profile-activation-fact "$EV/client/raw/profile-activation-fact.json" --phase VC-5 --retire-version "$RETIRE_VERSION" > "$W/canonical-preview.out" 2> "$W/canonical-preview.err" || true
 python3 - "$W/canonical-preview.out" "$SHA" <<'PY'
 import json, sys
 t = open(sys.argv[1]).read()
@@ -47,13 +47,16 @@ print("review_sha256 一致（内部函数 = CLI）")
 PY
 tail -c 300 "$W/canonical-preview.err"; echo
 python3 - "$W" "$NEWDIR" "$CAND" "$ATT" "$EV" "$ACTIVE" "$PATCH" "$SHA" "$D" <<'PY'
-import json, sys
+import json, sys, os
 W, NEW, CAND, ATT, EV, ACTIVE, PATCH, SHA, D = sys.argv[1:]
 TOOLS = f"{D}/tools/official_client_capture"
-JOBS = ["candidate-compact-direct","candidate-compact-mitm","candidate-core-direct","candidate-core-mitm","candidate-frozen-aux","candidate-frozen-core","candidate-h1-wire","candidate-images-wire","candidate-trace-test","candidate-ws-handshake-repeat"]
+sys.path.insert(0, os.environ['DRV'])
+from driver_config import candidate_job_ids
+from pathlib import Path
+JOBS = candidate_job_ids(Path(NEW), CAND)
 py = ["/usr/bin/python3", f"{TOOLS}/codex_upgrade.py"]; ref = ["--campaign-dir", NEW, "--candidate-id", CAND, "--attempt-id", ATT]
 imp = py + ["canonical-import"] + ref + ["--kilo-facts", f"{EV}/client/raw/kilo-facts.json", "--active-profile", ACTIVE, "--profile-patch-manifest", PATCH,
-    "--profile-activation-fact", f"{EV}/client/raw/profile-activation-fact.json", "--phase", "VC-5", "--retire-version", "0.149.1", "--approve-import-sha256", SHA]
+    "--profile-activation-fact", f"{EV}/client/raw/profile-activation-fact.json", "--phase", "VC-5", "--retire-version", os.environ["RETIRE_VERSION"], "--approve-import-sha256", SHA]
 plan_a = {"schema_version": "codex-upgrade-vc-action-plan/v1", "execute_item_ids": ["canonical-import"], "reuse_item_ids": JOBS,
           "actions": [{"action_id": "canonical-1-import", "operation": "VC-5:canonical-import", "timeout_seconds": 1800, "command": imp, "item_ids": ["canonical-import"]}]}
 actions_b = []

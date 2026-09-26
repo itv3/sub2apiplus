@@ -37,7 +37,13 @@ DEFAULT_TOTAL_BUDGET_MINUTES = 360
 # 未绑定项目总账时沿用文档上限；绑定后由总账绝对截止裁剪（见 _budget_ceilings）。
 UNBOUND_TOTAL_BUDGET_CEILING_MINUTES = 360
 PROJECT_LEDGER_BINDING_FIELD = "project_ledger_binding"
+# R8 复审修正（选项 B）：总账不可达时只读回放无法重算核对的摘要字段（受项目层截止、项目级延期与
+# 跨账本未闭合事务影响）；其余字段只由本账本事件决定，降级时仍逐字节比对。
+PROJECT_DEPENDENT_SUMMARY_FIELDS = ("status", "paused_scopes", "paused_since_utc", "paused_hours", "review_reminder")
 PROJECT_LEDGER_BINDING_FIELDS = {"path", "plan_sha256", "absolute_deadline_utc"}
+# R8：新账本在创建时冻结开始时刻的项目有效截止（含此前已批准的项目延期），读侧据此计算预算上限，
+# 不再为校验计划而打开并重放总账；没有该字段的历史绑定按原绝对截止计算（与 main 相同）。
+PROJECT_LEDGER_FROZEN_DEADLINE_FIELD = "effective_deadline_at_start_utc"
 DEFAULT_RETRY_LIMIT = 2
 PURPOSES = frozenset({"validation_only", "production_replacement"})
 EVIDENCE_DECISIONS = frozenset({"reuse", "recapture"})
@@ -57,6 +63,7 @@ EVENT_TYPES = frozenset(
         "upgrade_completed",
         # 改造 2（候选级 revision）：候选动作失败后的只读等待、显式作废与新 revision 激活。
         "candidate_review_required",
+        "stage_review_required",
         "candidate_invalidated",
         "stage_revision",
         # 改造 5（评估失败局部恢复）：评估基线 b<K> 激活与 attempt 恢复段 ar<k> 的三个事件；
@@ -65,6 +72,9 @@ EVENT_TYPES = frozenset(
         "attempt_recovery_started",
         "attempt_recovery_completed",
         "attempt_recovery_failed",
+        "deadline_paused",
+        "deadline_extended",
+        "campaign_abandoned",
     }
 )
 # 候选级阶段：VC-4～VC-6 的阶段／attempt 事件按 revision 归属；VC-0～VC-3 是 Campaign 级。
@@ -105,6 +115,17 @@ EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery")
 ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
     {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
 )
+DEADLINE_CONTROL_EVENTS = frozenset({"deadline_paused", "deadline_extended", "campaign_abandoned"})
+
+
+def _deadline_modules():
+    """延迟导入控制模块，避免计时账本与项目总账初始化时互相依赖。"""
+    if __package__ in {None, ""}:
+        import codex_upgrade_vc_artifacts as artifacts
+        import codex_upgrade_project_ledger as project
+    else:
+        from . import codex_upgrade_vc_artifacts as artifacts, codex_upgrade_project_ledger as project
+    return artifacts, project
 
 
 def _attempt_recovery_revision_admissible(
@@ -144,6 +165,13 @@ RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
 )
+STAGE_REVIEW_ALLOWED_EVENTS = frozenset(
+    {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized"}
+)
+# R18：候选级阶段里只有 VC-4 的两个零请求动作（plan-candidate-gates、record-candidate-build）有幂等重派合同。
+# 候选审核期间，对账写入的阶段幂等重派证明可在同一 revision 重开该阶段（工具缺陷修好后逐字重派）；
+# 判为候选源码问题时仍走 invalidate-candidate。VC-5／VC-6 的零请求后处理走 post-run-tooling，不在此列。
+CANDIDATE_STAGE_REPLAY_PHASES = frozenset({"VC-4"})
 REVISION_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"candidate_invalidated", "stage_revision", "stop_the_line"}
 )
@@ -398,11 +426,63 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "base_commit": "a15f5c74f9e591a4bc3cf7f479d44e5d04ec5259",
+        "scope": "upstream-codex-01561-r4-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "base_commit": "f0cbc122d20236522e87a5f23c2564229f051058",
+        "scope": "upstream-codex-01561-r8-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r8-final-20260924-freeze-successor.json",
+        "base_commit": "3b4df92c191126944bad73e991076285608eee25",
+        "scope": "upstream-codex-01561-r8-final-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r2-review-fix-20260924-freeze-successor.json",
+        "base_commit": "4cad7d625573de351245d424d7efad18ae9529d2",
+        "scope": "upstream-codex-01561-r2-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
+        "base_commit": "69f37a1da95eea876fc8fc85dcb07f506968b137",
+        "scope": "upstream-codex-01561-r4-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r8-review-fix-20260924-freeze-successor.json",
+        "base_commit": "fc071b4b263204d80d24d4152c6c743211e53c9a",
+        "scope": "upstream-codex-01561-r8-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-review2-fix-20260924-freeze-successor.json",
+        "base_commit": "856ee47da800b7f8e068ea5e7a3b8928ee28ca1c",
+        "scope": "upstream-codex-01561-review2-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "base_commit": "4dc24016c786559ae4e3f4d0bbb5abcc68764cf6",
+        "scope": "upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
 class TimingLedgerError(ValueError):
     """计时台账不完整、超时、发生漂移或违反重试纪律。"""
+
+
+class _ProjectLedgerUnreachable(TimingLedgerError):
+    """R8 复审修正：项目总账无法唯一定位（不在记录位置、被移走或出现多份）。只读入口据此降级，写路径失败关闭。"""
 
 
 def _canonical(value: Any) -> bytes:
@@ -426,7 +506,8 @@ def _sha256_file(path: Path) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # 批准事件携带微秒时间；截断到整秒会使紧随其后的读取早于刚写入事件。
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _timestamp(value: Any, label: str) -> datetime:
@@ -1025,14 +1106,17 @@ def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
     未绑定时沿用文档口径（总 360 分钟、阶段各自默认上限）。绑定后 Campaign 账本
     的总预算由总账绝对截止裁剪：上限是从账本开始到绝对截止的整分钟数，阶段预算
     再由 Campaign 计划在总预算内自行规定——VC-2 起的人工核对发生在批次之间，
-    不能再按 75 分钟墙钟硬切。框架 §5.3.5 只要求连续计时与先到即停线，数值由
+    不能再按 75 分钟墙钟硬切。框架 §5.3.5 要求连续计时与到期暂停，数值由
     客户端指南或已批准的 Campaign 计划规定。
     """
 
     binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
     if binding is None:
         return UNBOUND_TOTAL_BUDGET_CEILING_MINUTES, dict(DEFAULT_STAGE_BUDGETS)
-    _expect(binding, set(PROJECT_LEDGER_BINDING_FIELDS), "project_ledger_binding")
+    fields = set(PROJECT_LEDGER_BINDING_FIELDS)
+    if isinstance(binding, dict) and PROJECT_LEDGER_FROZEN_DEADLINE_FIELD in binding:
+        fields.add(PROJECT_LEDGER_FROZEN_DEADLINE_FIELD)
+    _expect(binding, fields, "project_ledger_binding")
     path = binding.get("path")
     if not isinstance(path, str) or not path or not PurePosixPath(path).is_absolute():
         raise TimingLedgerError("project_ledger_binding.path 必须是绝对路径")
@@ -1041,6 +1125,13 @@ def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
         raise TimingLedgerError("project_ledger_binding.plan_sha256 非法")
     deadline = _timestamp(binding.get("absolute_deadline_utc"), "project_ledger_binding.absolute_deadline_utc")
     started = _timestamp(plan.get("started_at_utc"), "started_at_utc")
+    # R8 审核修正：读侧只用绑定字段，不打开总账（总账迁移、归档或权限变化不影响计划校验）。
+    # 创建时已经批准的项目延期由 _project_ledger_binding 冻结进绑定；后续延期不得反过来扩大初始预算。
+    if PROJECT_LEDGER_FROZEN_DEADLINE_FIELD in binding:
+        frozen = _timestamp(binding[PROJECT_LEDGER_FROZEN_DEADLINE_FIELD], "project_ledger_binding.effective_deadline_at_start_utc")
+        if frozen < deadline:
+            raise TimingLedgerError("创建时冻结的项目有效截止不得早于总账原绝对截止")
+        deadline = frozen
     minutes = int((deadline - started).total_seconds() // 60)
     if minutes < 1:
         raise TimingLedgerError("项目总账绝对截止早于账本开始时间，无法冻结预算")
@@ -1123,11 +1214,17 @@ def _validate_binding(root: Path, value: Any, label: str) -> dict[str, Any]:
     }
 
 
+# 写入中的事件临时文件：_write_once 在事件目录内 mkstemp（".<序号>.json.<随机>.tmp"）后原子改名。
+# 并发读取方（例如监督器看门狗每周期重算预算）可能在改名前列到它；它不是事件，读取时忽略，
+# 写入进程中途被杀遗留的同名临时文件也不会让账本永久不可读。其他任何额外文件仍按篡改拒绝。
+INFLIGHT_EVENT_TEMP_RE = re.compile(r"^\.[0-9]{6}\.json\.[A-Za-z0-9_]+\.tmp$")
+
+
 def _load_events(root: Path, *, limit: int | None = None) -> list[tuple[dict[str, Any], bytes]]:
     events_root = root / "events"
     if not events_root.is_dir() or events_root.is_symlink():
         raise TimingLedgerError("events 目录缺失或不可信")
-    paths = sorted(events_root.iterdir())
+    paths = sorted(path for path in events_root.iterdir() if not INFLIGHT_EVENT_TEMP_RE.fullmatch(path.name))
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise TimingLedgerError("events 目录只能包含普通文件")
     expected_names = [f"{index:06d}.json" for index in range(1, len(paths) + 1)]
@@ -1159,6 +1256,8 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
         raise TimingLedgerError(f"event {sequence}.supersedes_revision 必须是正整数或 null")
     event_type = event.get("event_type")
     phase = event.get("phase")
+    if event_type == "stage_review_required" and phase not in {"VC-1", "VC-2", "VC-3"}:
+        raise TimingLedgerError("stage_review_required 只用于 VC-1～VC-3")
     # 改造 5：四个评估基线／恢复段字段只属于对应事件；其他事件出现即拒绝。
     baseline = event.get("evaluation_baseline")
     if baseline is not None and (isinstance(baseline, bool) or not isinstance(baseline, int) or baseline < 1):
@@ -1248,10 +1347,32 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     }
     if not isinstance(event, dict):
         raise TimingLedgerError(f"event {sequence} 必须是对象")
-    extra = set(event) - required - EVENT_REVISION_FIELDS
+    extra = set(event) - required - EVENT_REVISION_FIELDS - {"deadline_control"}
     if extra or not required.issubset(event):
         raise TimingLedgerError(f"event {sequence} 字段不闭合")
     _validate_event_revision_fields(event, sequence)
+    control = event.get("deadline_control")
+    if event.get("event_type") in DEADLINE_CONTROL_EVENTS:
+        if not isinstance(control, dict):
+            raise TimingLedgerError("预算控制事件缺少对应的批准或暂停事实")
+        if event["event_type"] == "deadline_extended":
+            artifacts, _project = _deadline_modules()
+            try:
+                artifacts.validate_deadline_extension(control)
+            except artifacts.VCArtifactError as error:
+                raise TimingLedgerError(str(error)) from error
+        elif event["event_type"] == "deadline_paused":
+            if set(control) != {"scopes", "paused_since_utc"} or not control["scopes"] or not set(control["scopes"]) <= {"project", "campaign", "stage"}:
+                raise TimingLedgerError("预算暂停层级非法")
+            _timestamp(control["paused_since_utc"], "暂停时间")
+        elif set(control) != {"approved_by", "approved_at_utc", "reason"} or not all(isinstance(control[key], str) and control[key].strip() for key in control):
+            raise TimingLedgerError("显式放弃必须有批准人、时间和理由")
+        else:
+            _timestamp(control["approved_at_utc"], "放弃批准时间")
+        if event.get("live_request_count") != 0 or event.get("attempt_id") is not None or event.get("root_cause_id") is not None:
+            raise TimingLedgerError("预算控制事件不得清零、增加请求或裁定根因")
+    elif control is not None:
+        raise TimingLedgerError("普通事件不能携带预算控制字段")
     if event.get("schema_version") != EVENT_SCHEMA or event.get("sequence") != sequence:
         raise TimingLedgerError(f"event {sequence} schema 或序号不一致")
     _safe_id(event.get("event_id"), f"event {sequence}.event_id")
@@ -1300,15 +1421,57 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     return {**event, "receipts": normalized}
 
 
+def _verify_stage_replay_receipts(
+    root: Path,
+    normalized: Mapping[str, Any],
+    *,
+    phase: str,
+    review_root_cause_id: str | None,
+) -> None:
+    """审核后重开阶段的 receipt_passed：阶段幂等重派证明须绑定同一份对账收据、同阶段、同审核根因与同一下一动作。
+
+    阶段审核（VC-1～VC-3）与候选审核下的 VC-4（R18）共用这组核对；角色闭集等入口条件由调用方先判定。
+    """
+
+    reference = next(item for item in normalized["receipts"] if item["role"] == "reconciliation")
+    reconciliation, _ = _load_json(root / reference["path"], "阶段恢复对账收据")
+    proof = next(item for item in normalized["receipts"] if item["role"] == "stage_replay")
+    replay, _ = _load_json(root / proof["path"], "阶段幂等重派证明")
+    if (
+        replay.get("schema_version") != "codex-upgrade-stage-replay/v1"
+        or replay.get("decision") != "recoverable"
+        or replay.get("allowed") is not True
+        or replay.get("reconciliation_receipt_sha256") != _sha256_bytes(
+            (json.dumps(reconciliation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+        or replay.get("phase") != phase
+        or replay.get("review_root_cause_id") != review_root_cause_id
+        or replay.get("next_action") != normalized["next_action"]
+        or reconciliation.get("reservation_exists") is not False
+    ):
+        raise TimingLedgerError("阶段恢复对账未证明动作可幂等重派")
+
+
 def _summarize(
     root: Path,
     plan: dict[str, Any],
     raw_events: list[tuple[dict[str, Any], bytes]],
     *,
     as_of: datetime,
+    project_ledger_optional: bool = False,
 ) -> dict[str, Any]:
+    """按事件重放计时摘要。
+
+    project_ledger_optional 只供人工只读入口使用（R8 复审修正，选项 B）：总账无法定位或读取时不抛错，
+    项目层截止改用绑定里冻结的开始时刻有效截止，本账本延期的总账提交证明记为未核实，摘要附加
+    project_ledger_unreachable 标注。写路径与准入前置保持默认值，总账不可达即失败关闭。
+    """
+
     if not raw_events:
         raise TimingLedgerError("UpgradeTimingLedger 至少需要一个 event")
+    project_unreachable: dict[str, Any] | None = None
+    project_deadline_source: str | None = None
+    unverified_extensions: list[str] = []
     event_ids: set[str] = set()
     attempts: dict[str, dict[str, Any]] = {}
     failure_counts: dict[str, int] = {}
@@ -1328,6 +1491,13 @@ def _summarize(
     revision_phase_state: dict[int, dict[str, str]] = {}
     phase_elapsed: dict[tuple[int | None, str], int] = {}
     review_required = False
+    # R18：候选审核的阶段与根因，只在 VC-4 凭阶段幂等重派证明重开阶段时核对，不进入输出摘要。
+    candidate_review_phase: str | None = None
+    candidate_review_root_cause_id: str | None = None
+    stage_review_required = False
+    review_phase: str | None = None
+    review_root_cause_id: str | None = None
+    abandoned_started: datetime | None = None
     revision_required = False
     last_invalidated: tuple[int, str] | None = None
     revision_commits: dict[int, str] = {}
@@ -1341,6 +1511,13 @@ def _summarize(
     previous_raw: bytes | None = None
     last_successful_receipt: dict[str, Any] | None = None
     last_event: dict[str, Any] | None = None
+    # 最后一条非预算控制事件：预算暂停、延期与显式放弃只记录预算控制，业务步骤的先后按实质事件判断。
+    last_substantive_event: dict[str, Any] | None = None
+    deadline_extensions: list[dict[str, Any]] = []
+    pause_facts: list[dict[str, Any]] = []
+    campaign_extension: datetime | None = None
+    stage_extensions: dict[str, float] = {}
+    abandoned = False
 
     def close_active_phase(recorded_at: datetime) -> None:
         nonlocal active_phase, active_phase_started, active_phase_revision
@@ -1383,11 +1560,11 @@ def _summarize(
                 raise TimingLedgerError(
                     f"event {sequence} 的 revision {event_revision} 不是当前 revision {current_revision}"
                 )
-        if completed:
+        if completed or abandoned:
             raise TimingLedgerError("upgrade_completed 后禁止追加 event")
         if stopped and event_type != "recovery_verified":
             raise TimingLedgerError("stop_the_line 后只能记录 recovery_verified")
-        if recovery_required and event_type not in {
+        if recovery_required and event_type not in DEADLINE_CONTROL_EVENTS | {
             "attempt_started",
             "attempt_failed",
             # 改造 5 M2：恢复段动作失败进入 recovery_required 后，段对账登记 attempt_recovery_failed。
@@ -1400,15 +1577,67 @@ def _summarize(
             raise TimingLedgerError(
                 "recovery_required 期间只允许对账或已批准的恢复动作"
             )
-        if revision_required and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS:
+        if revision_required and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
             raise TimingLedgerError(
                 "revision_required 期间只允许 candidate_invalidated、stage_revision 或 stop_the_line"
             )
-        if review_required and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS:
+        if review_required and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
             raise TimingLedgerError(
                 "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
             )
-        if event_type == "stage_started":
+        if stage_review_required and event_type not in STAGE_REVIEW_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
+            raise TimingLedgerError("stage_review_required 期间只允许对账、停线或已批准恢复")
+        if event_type == "deadline_extended":
+            extension = normalized["deadline_control"]
+            _artifacts, project = _deadline_modules()
+            binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
+            # R8 审核修正：不按收据内嵌的绝对路径直接打开总账，迁移后重新定位。R8 复审修正：有总账绑定时按计划摘要
+            # 唯一定位后核对提交证明；指南允许不绑定总账的账本，它的延期按"含这次延期提交证明"唯一定位，定位即核对。
+            try:
+                if isinstance(binding, Mapping):
+                    project_root = _locate_project_root(root, recorded_path=str(binding["path"]),
+                                                        plan_sha256=binding["plan_sha256"])
+                    project.verify_committed_deadline_extension(extension, root=project_root)
+                else:
+                    _locate_extension_project_root(root, extension)
+            except _ProjectLedgerUnreachable as error:
+                if not project_ledger_optional:
+                    raise
+                # 只读降级：无法到总账核对提交证明，记为未核实；下面与本账本 head、批准时间和
+                # 原截止承接相关的校验照常执行。总账可达而证明缺失属于完整性问题，仍然报错。
+                project_unreachable = project_unreachable or {"reason": str(error)}
+                unverified_extensions.append(str(extension["receipt_sha256"]))
+            expected_head = {"sequence": sequence - 1, "sha256": normalized["previous_event_sha256"]}
+            if extension["campaign_ledger_head"] != expected_head:
+                raise TimingLedgerError("延期批准绑定的 Campaign 账本 head 已过期")
+            if extension["approved_at_utc"] != normalized["recorded_at_utc"]:
+                raise TimingLedgerError("延期事件批准时间不一致")
+            old = _timestamp(extension["original_deadline_at_utc"], "延期原截止")
+            new = _timestamp(extension["new_deadline_at_utc"], "延期新截止")
+            if extension["scope"] == "campaign":
+                previous = campaign_extension or (_timestamp(plan["started_at_utc"], "起点") + timedelta(minutes=plan["total_budget_minutes"]))
+                if old != previous:
+                    raise TimingLedgerError("Campaign 延期没有承接当前有效截止")
+                campaign_extension = new
+            elif extension["scope"] == "stage":
+                extension_phase = extension["phase"]
+                if extension_phase != (active_phase or review_phase):
+                    raise TimingLedgerError("阶段延期只能作用于当前阶段")
+                anchor = active_phase_started if active_phase else abandoned_started
+                carried = sum(seconds for (revision, phase_name), seconds in phase_elapsed.items()
+                              if phase_name == extension_phase and active_phase_revision is not None
+                              and revision is not None and revision != active_phase_revision)
+                if anchor is None or old != anchor + timedelta(minutes=plan["stage_budgets_minutes"][extension_phase],
+                        seconds=stage_extensions.get(extension_phase, 0) - carried):
+                    raise TimingLedgerError("阶段延期没有承接原起点与累计耗时")
+                stage_extensions[extension_phase] = stage_extensions.get(extension_phase, 0) + (new - old).total_seconds()
+            deadline_extensions.append(dict(extension))
+        elif event_type == "campaign_abandoned":
+            abandoned = True
+        elif event_type == "deadline_paused":
+            # 只追加暂停事实；active、review、recovery 及耗时起点均保留。
+            pause_facts.append(normalized)
+        elif event_type == "stage_started":
             if active_phase is not None or normalized["attempt_id"] is not None or normalized["root_cause_id"] is not None:
                 raise TimingLedgerError("stage_started 身份或阶段状态非法")
             if candidate_level:
@@ -1449,10 +1678,27 @@ def _summarize(
             if candidate_level:
                 assert event_revision is not None
                 revision_phase_state.setdefault(event_revision, {})[phase] = "abandoned"
+            abandoned_started = active_phase_started
             close_active_phase(recorded)
             recovery_required = False
             recovery_phase = None
             recovery_root_cause_id = None
+        elif event_type == "stage_review_required":
+            if (
+                stage_review_required
+                or active_phase is not None
+                or last_substantive_event is None
+                or last_substantive_event["event_type"] != "stage_abandoned"
+                or last_substantive_event["phase"] != phase
+                or last_substantive_event["root_cause_id"] != normalized["root_cause_id"]
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is None
+                or not normalized["next_action"]
+            ):
+                raise TimingLedgerError("stage_review_required 必须紧接同阶段同根因的 stage_abandoned")
+            stage_review_required = True
+            review_phase = phase
+            review_root_cause_id = normalized["root_cause_id"]
         elif event_type == "candidate_review_required":
             if (
                 active_phase is not None
@@ -1465,6 +1711,8 @@ def _summarize(
                     "candidate_review_required 必须在阶段已关闭后登记根因与唯一下一动作"
                 )
             review_required = True
+            candidate_review_phase = phase
+            candidate_review_root_cause_id = normalized["root_cause_id"]
         elif event_type == "candidate_invalidated":
             if (
                 active_phase is not None
@@ -1483,6 +1731,8 @@ def _summarize(
             last_invalidated = key
             revision_required = True
             review_required = False
+            candidate_review_phase = None
+            candidate_review_root_cause_id = None
         elif event_type == "stage_revision":
             revision = int(normalized["revision"])
             supersedes = normalized.get("supersedes_revision")
@@ -1596,7 +1846,8 @@ def _summarize(
                     attempt_recoveries[key]["status"] = "completed"
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
-            if active_phase != phase or attempt_id is None or attempt_id in attempts:
+            if (attempt_id is None or attempt_id in attempts
+                    or (active_phase != phase and not (stage_review_required and phase == review_phase == "VC-1"))):
                 raise TimingLedgerError("attempt_started 与当前阶段或 attempt 身份不一致")
             cause = normalized["root_cause_id"]
             if cause is not None and failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
@@ -1631,6 +1882,51 @@ def _summarize(
             recovery_phase = phase
             recovery_root_cause_id = cause
         elif event_type == "receipt_passed":
+            if stage_review_required:
+                roles = tuple(item["role"] for item in normalized["receipts"])
+                if (
+                    phase != review_phase
+                    or normalized["attempt_id"] is not None
+                    or normalized["root_cause_id"] is not None
+                    or roles != ("provenance", "reconciliation", "stage_replay")
+                    or normalized["next_action"] not in {"redispatch-same-sequence", "redispatch-same-batch"}
+                    or abandoned_started is None
+                ):
+                    raise TimingLedgerError("阶段 review 恢复必须绑定同阶段的对账许可")
+                _verify_stage_replay_receipts(root, normalized, phase=phase, review_root_cause_id=review_root_cause_id)
+                stage_review_required = False
+                review_phase = None
+                review_root_cause_id = None
+                active_phase = phase
+                # review 与恢复都不重置阶段时钟；保留失败前的起点。
+                active_phase_started = abandoned_started
+            elif review_required and any(item["role"] == "stage_replay" for item in normalized["receipts"]):
+                # R18：候选审核期间，VC-4 零请求动作的工具缺陷修好后，凭对账写入的阶段幂等重派证明在同一
+                # revision 重开该阶段；不带证明的 receipt_passed 仍按原规则只记录、不改变审核状态。
+                roles = tuple(item["role"] for item in normalized["receipts"])
+                if (
+                    phase not in CANDIDATE_STAGE_REPLAY_PHASES
+                    or phase != candidate_review_phase
+                    or current_revision is None
+                    or normalized["attempt_id"] is not None
+                    or normalized["root_cause_id"] is not None
+                    or roles != ("provenance", "reconciliation", "stage_replay")
+                    or normalized["next_action"] not in {"redispatch-same-sequence", "redispatch-same-batch"}
+                    or abandoned_started is None
+                    or any(item["status"] == "active" for item in attempts.values())
+                ):
+                    raise TimingLedgerError("候选审核的阶段重派只允许 VC-4 且必须绑定同阶段的对账许可")
+                _verify_stage_replay_receipts(
+                    root, normalized, phase=phase, review_root_cause_id=candidate_review_root_cause_id
+                )
+                review_required = False
+                candidate_review_phase = None
+                candidate_review_root_cause_id = None
+                active_phase = phase
+                # 同阶段审核：阶段时钟沿用放弃前的起点，阶段仍归当前 revision。
+                active_phase_started = abandoned_started
+                active_phase_revision = current_revision
+                revision_phase_state.setdefault(current_revision, {})[phase] = "started"
             if recovery_required:
                 roles = tuple(item["role"] for item in normalized["receipts"])
                 if (
@@ -1649,6 +1945,18 @@ def _summarize(
                 recovery_root_cause_id = None
         elif event_type == "recovery_authorized":
             cause = normalized["root_cause_id"]
+            if stage_review_required:
+                if (phase != review_phase or phase != "VC-1" or cause != review_root_cause_id
+                        or any(item["status"] == "active" for item in attempts.values())
+                        or normalized["next_action"] != "resume-rerun-failed"):
+                    raise TimingLedgerError("阶段 review 的预约恢复必须完成对账并绑定恢复批准")
+                active_phase = phase
+                active_phase_started = abandoned_started
+                recovery_required = True
+                recovery_root_cause_id = review_root_cause_id
+                stage_review_required = False
+                review_phase = None
+                review_root_cause_id = None
             if (
                 not recovery_required
                 or active_phase != phase
@@ -1670,6 +1978,9 @@ def _summarize(
             recovery_required = False
             recovery_phase = None
             recovery_root_cause_id = None
+            stage_review_required = False
+            review_phase = None
+            review_root_cause_id = None
         elif event_type == "recovery_verified":
             cause = normalized["root_cause_id"]
             if not stopped or cause is None or failure_counts.get(cause, 0) < plan["same_root_cause_retry_limit"]:
@@ -1690,12 +2001,15 @@ def _summarize(
         last_time = recorded
         previous_raw = raw
         last_event = normalized
+        if event_type not in DEADLINE_CONTROL_EVENTS:
+            last_substantive_event = normalized
     assert last_event is not None and last_time is not None and previous_raw is not None
     if as_of < last_time:
         raise TimingLedgerError("检查时间早于最新 event")
     started = _timestamp(plan["started_at_utc"], "started_at_utc")
     total_elapsed = max(0, int((as_of - started).total_seconds()))
-    total_deadline = started + timedelta(minutes=plan["total_budget_minutes"])
+    original_total_deadline = started + timedelta(minutes=plan["total_budget_minutes"])
+    total_deadline = campaign_extension or original_total_deadline
     stage_elapsed = None
     stage_deadline = None
     if active_phase is not None and active_phase_started is not None:
@@ -1713,29 +2027,105 @@ def _summarize(
         stage_deadline = active_phase_started + timedelta(
             minutes=plan["stage_budgets_minutes"][active_phase]
         ) - timedelta(seconds=carried)
-    budget_exceeded = as_of >= total_deadline or (
-        stage_deadline is not None and as_of >= stage_deadline
-    )
+    elif stage_review_required and review_phase is not None and abandoned_started is not None:
+        # 阶段 review 仍沿原起点计时；对账等待不能规避阶段预算。
+        stage_elapsed = max(0, int((as_of - abandoned_started).total_seconds()))
+        stage_deadline = abandoned_started + timedelta(minutes=plan["stage_budgets_minutes"][review_phase])
+    if stage_deadline is not None:
+        stage_deadline += timedelta(seconds=stage_extensions.get(active_phase or review_phase, 0))
+    deadlines = {"campaign": total_deadline}
+    if stage_deadline is not None:
+        deadlines["stage"] = stage_deadline
+    project_binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
+    relevant_extensions = list(deadline_extensions)
+
+    def owns_extension(extension: Mapping[str, Any]) -> bool:
+        """R8 审核修正：按批准时绑定的本账本 head 判断延期是否属于本账本，不依赖 upgrade_id 等于 campaign_id。"""
+
+        head = extension.get("campaign_ledger_head")
+        sequence = head.get("sequence") if isinstance(head, Mapping) else None
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or not 1 <= sequence <= len(raw_events):
+            return False
+        return _sha256_bytes(raw_events[sequence - 1][1]) == head.get("sha256")
+
+    if isinstance(project_binding, Mapping):
+        _artifacts, project = _deadline_modules()
+        project_head = None
+        try:
+            project_root = _locate_project_root(root, recorded_path=str(project_binding["path"]),
+                                                plan_sha256=str(project_binding["plan_sha256"]))
+            project_deadline = _timestamp(project.effective_project_deadline(project_root, as_of=as_of), "项目有效截止")
+            project_plan, _raw = project._load_plan(project_root)
+            project_head = project._replay(project_root, project_plan, project._load_events(project_root), rebuild_cache=False)
+        except (OSError, TimingLedgerError, project.ProjectLedgerError) as error:
+            if not project_ledger_optional:
+                raise
+            # 只读降级：项目层截止取绑定里冻结的开始时刻有效截止；之后批准的项目级延期与跨账本
+            # 未闭合事务无从得知，由标注说明。旧绑定没有冻结值时不判定项目层。
+            project_unreachable = project_unreachable or {"reason": str(error)}
+            frozen = project_binding.get(PROJECT_LEDGER_FROZEN_DEADLINE_FIELD)
+            if frozen is not None:
+                deadlines["project"] = _timestamp(frozen, "冻结的项目有效截止")
+            project_deadline_source = "binding_frozen_at_start" if frozen is not None else "absent"
+        if project_head is not None:
+            deadlines["project"] = project_deadline
+            relevant_extensions.extend(row for row in project_head["deadline_extensions"]
+                                       if row["scope"] == "project" and _timestamp(row["approved_at_utc"], "批准时间") <= as_of)
+            applied = {row["receipt_sha256"] for row in deadline_extensions}
+            for extension in project_head["deadline_extensions"]:
+                if (owns_extension(extension) or extension["scope"] == "project") and _timestamp(extension["approved_at_utc"], "批准时间") <= as_of:
+                    if extension["receipt_sha256"] not in applied and not project.deadline_extension_applied(extension, project_head):
+                        deadlines["extension_pending"] = _timestamp(extension["approved_at_utc"], "待补齐批准时间")
+    expired = sorted(key for key, expiry in deadlines.items() if as_of >= expiry)
     retry_stop_required = any(
         count >= plan["same_root_cause_retry_limit"] for count in failure_counts.values()
     )
-    status = (
+    status_before_pause = (
         "complete"
         if completed
+        else "abandoned"
+        if abandoned
         else "stopped"
         if stopped
         else "stop_required"
-        if budget_exceeded or retry_stop_required
+        if retry_stop_required
         else "recovery_required"
         if recovery_required
         else "revision_required"
         if revision_required
         else "candidate_review_required"
         if review_required
+        else "stage_review_required"
+        if stage_review_required
         else "active"
     )
-    return {
+    status = "deadline_paused" if expired and status_before_pause not in {"complete", "abandoned", "stopped", "stop_required"} else status_before_pause
+    pause_starts = [deadlines[key] for key in expired]
+    for fact in pause_facts:
+        remaining = set(fact["deadline_control"]["scopes"])
+        for extension in relevant_extensions:
+            # 本 Campaign 用事件序号判断前后；另一 Campaign 的项目延期按批准时间
+            # 生效。部分延期保留连续暂停起点，所有层解除后才开始新的暂停周期。
+            follows = (extension["campaign_ledger_head"]["sequence"] >= fact["sequence"]
+                       if owns_extension(extension)
+                       else _timestamp(extension["approved_at_utc"], "批准时间") >= _timestamp(fact["recorded_at_utc"], "暂停事件时间"))
+            if follows:
+                remaining.discard(extension["scope"])
+        if remaining.intersection(expired):
+            pause_starts.append(_timestamp(fact["deadline_control"]["paused_since_utc"], "连续暂停起点"))
+    paused_since = min(pause_starts) if status == "deadline_paused" else None
+    paused_hours = max(0.0, (as_of - paused_since).total_seconds() / 3600) if paused_since else 0.0
+    review_since = max([paused_since] + [_timestamp(row["approved_at_utc"], "批准时间")
+                                      for row in relevant_extensions]) if paused_since else None
+    summary = {
         "status": status,
+        "status_before_pause": status_before_pause,
+        "paused_scopes": expired if status == "deadline_paused" else [],
+        "paused_since_utc": paused_since.isoformat() if paused_since else None,
+        "paused_hours": paused_hours,
+        "review_reminder": bool(review_since and (as_of - review_since).total_seconds() >= 72 * 3600),
+        "original_total_deadline_at_utc": original_total_deadline.isoformat(),
+        "deadline_extensions": deadline_extensions,
         "upgrade_id": plan["upgrade_id"],
         "baseline_version": plan["baseline_version"],
         "target_version": plan["target_version"],
@@ -1744,6 +2134,8 @@ def _summarize(
         "active_phase": active_phase,
         "recovery_phase": recovery_phase,
         "recovery_root_cause_id": recovery_root_cause_id,
+        "review_phase": review_phase,
+        "review_root_cause_id": review_root_cause_id,
         "current_revision": current_revision,
         "revision_phase_state": {
             str(revision): dict(sorted(states.items()))
@@ -1758,9 +2150,9 @@ def _summarize(
         "head_sha256": _sha256_bytes(previous_raw),
         "total_elapsed_seconds": total_elapsed,
         "stage_elapsed_seconds": stage_elapsed,
-        "total_deadline_at_utc": total_deadline.isoformat(timespec="seconds"),
+        "total_deadline_at_utc": total_deadline.isoformat(),
         "stage_deadline_at_utc": (
-            stage_deadline.isoformat(timespec="seconds") if stage_deadline else None
+            stage_deadline.isoformat() if stage_deadline else None
         ),
         "total_live_request_count": total_live_requests,
         "same_root_cause_failures": dict(sorted(failure_counts.items())),
@@ -1768,14 +2160,27 @@ def _summarize(
         "last_event_id": last_event["event_id"],
         "next_action": last_event["next_action"],
     }
+    if project_unreachable is not None:
+        # 只在降级时附加；总账可达时摘要格式与既有 checkpoint 完全一致。
+        summary["project_ledger_unreachable"] = {
+            "reason": project_unreachable["reason"],
+            "project_deadline_source": project_deadline_source or "absent",
+            "project_deadline_at_utc": deadlines["project"].isoformat() if "project" in deadlines else None,
+            "unverified_deadline_extensions": unverified_extensions,
+        }
+    return summary
 
 
-def inspect_ledger(root: Path, *, now: str | None = None, limit: int | None = None) -> dict[str, Any]:
+def inspect_ledger(
+    root: Path, *, now: str | None = None, limit: int | None = None, project_ledger_optional: bool = False,
+) -> dict[str, Any]:
+    """计时摘要。project_ledger_optional 只供人工只读入口（命令行 status、Campaign status）使用，见 _summarize。"""
+
     root = _private_ledger(root, must_exist=True)
     plan, _ = _load_plan(root)
     events = _load_events(root, limit=limit)
     observed = _timestamp(now or _utc_now(), "检查时间")
-    return _summarize(root, plan, events, as_of=observed)
+    return _summarize(root, plan, events, as_of=observed, project_ledger_optional=project_ledger_optional)
 
 
 def create_ledger(
@@ -1794,7 +2199,7 @@ def create_ledger(
     root = _private_ledger(root, must_exist=False)
     started = started_at_utc or _utc_now()
     binding = (
-        _project_ledger_binding(project_ledger_dir)
+        _project_ledger_binding(project_ledger_dir, started_at_utc=started)
         if project_ledger_dir is not None
         else None
     )
@@ -1838,8 +2243,11 @@ def create_ledger(
     return inspect_ledger(root, now=started)
 
 
-def _project_ledger_binding(project_ledger_dir: Path) -> dict[str, Any]:
-    """只读绑定项目总账 plan：绝对路径、plan 摘要与绝对截止时间。"""
+def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str) -> dict[str, Any]:
+    """绑定项目总账 plan：绝对路径、plan 摘要、绝对截止时间，以及账本开始时刻的项目有效截止。
+
+    创建是写路径，这里按总账重放取开始时刻已批准的项目延期并冻结；此后读侧只用这些字段。
+    """
 
     directory = Path(project_ledger_dir)
     if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
@@ -1852,11 +2260,88 @@ def _project_ledger_binding(project_ledger_dir: Path) -> dict[str, Any]:
         raise TimingLedgerError("项目总账 plan schema 非法")
     deadline = payload.get("absolute_deadline_utc")
     _timestamp(deadline, "项目总账 absolute_deadline_utc")
+    _artifacts, project = _deadline_modules()
+    effective = project.effective_project_deadline(
+        directory.resolve(strict=True), as_of=_timestamp(started_at_utc, "started_at_utc"),
+    )
     return {
         "path": str(directory.resolve(strict=True)),
         "plan_sha256": _sha256_file(plan_path),
         "absolute_deadline_utc": str(deadline),
+        PROJECT_LEDGER_FROZEN_DEADLINE_FIELD: str(effective),
     }
+
+
+def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: str | None) -> Path:
+    """定位项目总账：在记录的路径与计时账本目录逐级向上的同名总账目录中，按计划摘要唯一命中。
+
+    收据与绑定里的绝对路径只作候选之一，数据根整体迁移后靠逐级向上查找重新定位。R8 复审修正：
+    没有计划摘要就无法确认总账身份，不接受任何候选；同一计划的总账出现多份（复制迁移后仍在的旧位置、
+    位于祖先目录的 staging 副本或备份）时无法判断哪份是正在推进的总账，失败关闭，不再取第一个命中。
+    一份都找不到同样失败关闭，不静默跳过预算层。
+    """
+
+    if plan_sha256 is None:
+        raise _ProjectLedgerUnreachable("计时账本没有绑定总账计划摘要，无法确认总账身份，不接受任何候选总账")
+    _artifacts, project = _deadline_modules()
+    candidates = [Path(recorded_path)]
+    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    matches: dict[Path, Path] = {}
+    for candidate in candidates:
+        plan_path = candidate / "plan.json"
+        try:
+            if candidate.is_symlink() or plan_path.is_symlink() or not plan_path.is_file():
+                continue
+            if _sha256_file(plan_path) == plan_sha256:
+                # 未迁移时记录路径与祖先链上的候选是同一目录，按真实路径去重后再计数。
+                matches.setdefault(candidate.resolve(strict=True), candidate)
+        except OSError:
+            continue
+    if len(matches) > 1:
+        raise _ProjectLedgerUnreachable(
+            "同一计划的项目总账存在多份，无法确定正在推进的总账（复制迁移须移走旧位置，"
+            "staging 副本与备份不得位于账本的祖先目录）：" + "、".join(sorted(str(path) for path in matches))
+        )
+    if not matches:
+        raise _ProjectLedgerUnreachable("项目总账不在记录的路径，且无法在数据根内按计划摘要重新定位（数据根迁移须整体移动）")
+    return next(iter(matches.values()))
+
+
+def _locate_extension_project_root(ledger_root: Path, extension: Mapping[str, Any]) -> Path:
+    """R8 复审修正：定位不绑定总账的计时账本里某次延期所在的项目总账，定位即核对提交证明。
+
+    指南允许 Campaign 账本不绑定项目总账（沿用默认预算），这类账本同样可以延期。没有绑定的计划摘要时，以
+    "包含这次延期的提交证明"作为总账身份：候选为延期收据记录的路径与账本目录逐级向上的同名总账目录，按真实
+    路径去重后必须恰好一份包含证明。多于一份（复制迁移后仍在的旧位置、祖先目录下的副本）或一份候选总账都
+    没有时视为不可达；有候选总账却都没有这份证明属于完整性问题，照常报错。
+    """
+
+    _artifacts, project = _deadline_modules()
+    candidates = [Path(str(extension["project_ledger_path"]))]
+    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    present: set[Path] = set()
+    matches: dict[Path, Path] = {}
+    for candidate in candidates:
+        plan_path = candidate / "plan.json"
+        try:
+            if candidate.is_symlink() or plan_path.is_symlink() or not plan_path.is_file():
+                continue
+            resolved = candidate.resolve(strict=True)
+            present.add(resolved)
+            project.verify_committed_deadline_extension(extension, root=candidate)
+        except (OSError, project.ProjectLedgerError):
+            continue
+        matches.setdefault(resolved, candidate)
+    if len(matches) > 1:
+        raise _ProjectLedgerUnreachable(
+            "同一延期的提交证明出现在多份项目总账中，无法确定正在推进的总账（复制迁移须移走旧位置，"
+            "staging 副本与备份不得位于账本的祖先目录）：" + "、".join(sorted(str(path) for path in matches))
+        )
+    if not matches:
+        if present:
+            raise TimingLedgerError("候选项目总账都没有这次延期的提交证明：" + "、".join(sorted(str(path) for path in present)))
+        raise _ProjectLedgerUnreachable("项目总账不在延期收据记录的路径，且无法在数据根内按延期提交证明重新定位（数据根迁移须整体移动）")
+    return next(iter(matches.values()))
 
 
 def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:
@@ -1881,6 +2366,18 @@ def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:
     return {**summary, "completed_phases": completed}
 
 
+def last_substantive_event(root: Path) -> dict[str, Any] | None:
+    """返回最后一条非预算控制事件（预算暂停、延期与显式放弃之外）；没有时返回 None。
+
+    预算控制事件不改变父失败收口等业务步骤的进度，判断收口已写到哪一步时必须跳过它们。
+    """
+
+    for event, _raw in reversed(_load_events(Path(root))):
+        if event.get("event_type") not in DEADLINE_CONTROL_EVENTS:
+            return event
+    return None
+
+
 def append_event(
     root: Path,
     *,
@@ -1901,6 +2398,7 @@ def append_event(
     baseline_commit_sha256: str | None = None,
     baseline_kind: str | None = None,
     recovery_revision: str | None = None,
+    deadline_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = _private_ledger(root, must_exist=True)
     plan, _ = _load_plan(root)
@@ -1908,6 +2406,21 @@ def append_event(
     recorded_raw = recorded_at_utc or _utc_now()
     recorded = _timestamp(recorded_raw, "recorded_at_utc")
     current = _summarize(root, plan, raw_events, as_of=recorded)
+    if current["status"] == "deadline_paused" and event_type not in DEADLINE_CONTROL_EVENTS | {
+        # 到期后的元数据对账允许关闭死亡进程并记账；不得借此启动、复用或封存。
+        "attempt_failed", "attempt_recovery_failed", "receipt_passed", "stage_abandoned", "stop_the_line",
+        # R4×R8：stage_abandoned 之后补齐的阶段／候选审核同属元数据收口，不启动、复用或封存任何动作。
+        "stage_review_required", "candidate_review_required",
+    }:
+        raise TimingLedgerError("预算已暂停；批准延期前禁止继续执行或封存")
+    if current["status"] == "deadline_paused" and (
+        (event_type == "receipt_passed" and not receipts)
+        or (event_type in {"stage_abandoned", "stop_the_line"} and root_cause_id is None)
+    ):
+        raise TimingLedgerError("预算暂停不能冒充普通完成或无根因停线；需要批准延期或显式放弃")
+    if (current["status"] == "deadline_paused" and event_type in {"attempt_failed", "attempt_recovery_failed"}
+            and (receipts or live_request_count != 0)):
+        raise TimingLedgerError("预算暂停只允许元数据失败登记；请求计量必须由后续对账收据承接")
     if phase in CANDIDATE_PHASES and event_type in CANDIDATE_STAGE_EVENT_TYPES:
         # 候选级阶段事件必须绑定 revision：未显式给出时取当前 revision；没有当前
         # revision 的新 Campaign 必须先 revision-open --initial。
@@ -1918,7 +2431,7 @@ def append_event(
                 f"{phase} 的 {event_type} 必须绑定候选 revision；请先执行 revision-open --initial"
             )
     allowed_while_stopping = {"stop_the_line", "recovery_verified"}
-    # 阶段或总预算已经要求停线时，仍必须先把 active 阶段显式废弃，随后才能
+    # 根因重试上限已经要求停线时，仍必须先把 active 阶段显式废弃，随后才能
     # 写 stop_the_line；否则父编排器失败会永久留下 active/VC-x 假象。
     if current["status"] == "stop_required":
         allowed_while_stopping.add("stage_abandoned")
@@ -1928,8 +2441,8 @@ def append_event(
         if event_type == "attempt_failed" and not receipts and live_request_count == 0:
             allowed_while_stopping.add("attempt_failed")
     if current["status"] in {"stop_required", "stopped"} and event_type not in allowed_while_stopping:
-        raise TimingLedgerError("计时或重试门禁已要求停线，禁止继续追加执行事件")
-    if current["status"] == "recovery_required" and event_type not in {
+        raise TimingLedgerError("重试或既有停线门禁已关闭，禁止继续追加执行事件")
+    if current["status"] == "recovery_required" and event_type not in DEADLINE_CONTROL_EVENTS | {
         "attempt_started",
         "attempt_failed",
         "attempt_recovery_failed",
@@ -1941,14 +2454,16 @@ def append_event(
         raise TimingLedgerError(
             "recovery_required 期间只允许对账或已批准的恢复动作"
         )
-    if current["status"] == "revision_required" and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS:
+    if current["status"] == "revision_required" and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
         raise TimingLedgerError(
             "revision_required 期间只允许 candidate_invalidated、stage_revision 或 stop_the_line"
         )
-    if current["status"] == "candidate_review_required" and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS:
+    if current["status"] == "candidate_review_required" and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
         raise TimingLedgerError(
             "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
         )
+    if current["status"] == "stage_review_required" and event_type not in STAGE_REVIEW_ALLOWED_EVENTS | DEADLINE_CONTROL_EVENTS:
+        raise TimingLedgerError("stage_review_required 期间只允许对账、停线或已批准恢复")
     sequence = len(raw_events) + 1
     event = {
         "schema_version": EVENT_SCHEMA,
@@ -1972,6 +2487,8 @@ def append_event(
         "baseline_kind": baseline_kind,
         "recovery_revision": recovery_revision,
     }
+    if deadline_control is not None:
+        event["deadline_control"] = dict(deadline_control)
     candidate_raw = _canonical(event)
     _summarize(root, plan, [*raw_events, (event, candidate_raw)], as_of=recorded)
     _write_once(root / "events" / f"{sequence:06d}.json", event)
@@ -2028,7 +2545,14 @@ def checkpoint(root: Path, output_relative: str) -> dict[str, Any]:
     return receipt
 
 
-def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
+def replay(root: Path, receipt_relative: str, *, project_ledger_optional: bool = False) -> dict[str, Any]:
+    """独立重放历史 checkpoint。
+
+    project_ledger_optional 只供命令行只读回放使用（R8 复审修正，选项 B）：总账不可达时，依赖项目层的
+    摘要字段取冻结值并登记为未核实，计划绑定、事件头、producer 与其余摘要字段仍逐字节比对。程序内的
+    回放（阶段证明、可用性检查）保持默认，总账不可达即失败关闭。
+    """
+
     root = _private_ledger(root, must_exist=True)
     path = _relative(root, receipt_relative, "checkpoint receipt")
     receipt, raw = _load_json(path, "checkpoint receipt")
@@ -2058,9 +2582,32 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         plan,
         events,
         as_of=_timestamp(receipt.get("observed_at_utc"), "observed_at_utc"),
+        project_ledger_optional=project_ledger_optional,
     )
+    unreachable = summary.pop("project_ledger_unreachable", None)
     expected_summary = dict(summary)
     frozen_summary = receipt.get("summary")
+    deadline_fields = ("status_before_pause", "paused_scopes", "paused_since_utc", "paused_hours", "review_reminder",
+                       "original_total_deadline_at_utc", "deadline_extensions")
+    if (isinstance(frozen_summary, dict) and all(key not in frozen_summary for key in deadline_fields)
+            and not any(event["event_type"] in DEADLINE_CONTROL_EVENTS for event, _raw in events)):
+        # 历史 checkpoint 的到期状态仍按原 stop_required 回放；不会生成新的旧式停线事件。
+        # 旧格式只判断 Campaign／阶段到期，且把展示坐标截到秒；原始计算仍保留微秒。
+        legacy_expired = any(summary.get(field) is not None and
+            _timestamp(receipt["observed_at_utc"], "历史检查时间") >= _timestamp(summary[field], "历史截止")
+            for field in ("total_deadline_at_utc", "stage_deadline_at_utc"))
+        expected_summary["status"] = ("stop_required" if legacy_expired and summary["status_before_pause"] not in {"complete", "stopped"}
+                                      else summary["status_before_pause"])
+        for field in ("total_deadline_at_utc", "stage_deadline_at_utc"):
+            if expected_summary[field] is not None:
+                expected_summary[field] = _timestamp(expected_summary[field], field).replace(microsecond=0).isoformat()
+        for key in deadline_fields:
+            expected_summary.pop(key)
+    legacy_review_fields = ("review_phase", "review_root_cause_id")
+    if (isinstance(frozen_summary, dict) and all(field not in frozen_summary for field in legacy_review_fields)
+            and all(expected_summary.get(field) is None for field in legacy_review_fields)):
+        for field in legacy_review_fields:
+            expected_summary.pop(field)
     legacy_recovery_fields = ("recovery_phase", "recovery_root_cause_id")
     if (
         isinstance(frozen_summary, dict)
@@ -2093,6 +2640,12 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         # "无基线、无恢复段"的历史语义，出现 b≥1 或恢复段的账本必须带新字段。
         for field in legacy_evaluation_fields:
             expected_summary.pop(field)
+    unverified_fields: list[str] = []
+    if unreachable is not None and isinstance(frozen_summary, dict):
+        for field in PROJECT_DEPENDENT_SUMMARY_FIELDS:
+            if field in expected_summary and field in frozen_summary and expected_summary[field] != frozen_summary[field]:
+                expected_summary[field] = frozen_summary[field]
+                unverified_fields.append(field)
     expected = {
         "schema_version": RECEIPT_SCHEMA,
         "observed_at_utc": receipt["observed_at_utc"],
@@ -2111,6 +2664,8 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         or _canonical(expected) != raw
     ):
         raise TimingLedgerError("UpgradeTimingLedger checkpoint 重放结果不一致")
+    if unreachable is not None:
+        return {**receipt, "project_ledger_unreachable": {**unreachable, "unverified_summary_fields": unverified_fields}}
     return receipt
 
 
@@ -2496,7 +3051,10 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "checkpoint":
             result = checkpoint(arguments.ledger_dir, arguments.output)["summary"]
         elif arguments.command == "replay":
-            result = replay(arguments.ledger_dir, arguments.receipt)["summary"]
+            receipt = replay(arguments.ledger_dir, arguments.receipt, project_ledger_optional=True)
+            result = receipt["summary"]
+            if "project_ledger_unreachable" in receipt:
+                result = {**result, "project_ledger_unreachable": receipt["project_ledger_unreachable"]}
         elif arguments.command == "close-campaign-ledger":
             result = close_campaign_ledger(
                 arguments.ledger_dir,
@@ -2505,7 +3063,7 @@ def main(argv: list[str] | None = None) -> int:
                 next_action=arguments.next_action,
             )
         else:
-            result = inspect_ledger(arguments.ledger_dir)
+            result = inspect_ledger(arguments.ledger_dir, project_ledger_optional=True)
     except (OSError, TimingLedgerError) as error:
         print(f"UpgradeTimingLedger 失败：{error}", file=sys.stderr)
         return 1

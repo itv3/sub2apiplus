@@ -20,7 +20,9 @@ if [ ! -f "$RUNROOT/vc5-run-batch.out" ]; then
   echo "=== VC-5 start $(utc_now)"; bash "$DRV/vc5-start.sh" 2>&1 | tail -n 12 | cut -c1-240; test -f "$RUNROOT/vc5-run-batch.out"
 fi
 echo "=== 等待 run 批次（candidate run）$(utc_now)"
-until grep -q "RUN_BATCH_DONE" "$RUNROOT/vc5-run-batch.out" 2>/dev/null; do sleep 30; done
+wait_for_marker "$RUNROOT/vc5-run-batch.out" '^RUN_BATCH_DONE ' "$(wait_budget VC-5)" '' \
+  --pid-file "$RUNROOT/vc5-run-batch.pid" --supervisor-root "$D/control/$NEW-supervisor" \
+  --log "$RUNROOT/vc5-all.out"
 grep -E "rc=|actions:|timing events|admission" "$RUNROOT/vc5-run-batch.out" | cut -c1-300
 ATT=$(ls -1t "$NEWDIR/candidates/$CAND/attempts/" | head -1); echo "ATT=$ATT"
 python3 -c "import json; d=json.load(open('$NEWDIR/candidates/$CAND/attempts/$ATT/attempt.json')); rs=d.get('results') or []; print('attempt:', {k:d.get(k) for k in ('status','attempt_id','started_at_utc')}, 'complete:', sum(1 for r in rs if r.get('status')=='complete'), '/', len(rs))"

@@ -9,7 +9,8 @@ ROUND="$1"; C="$2"; DC="$3"; RECEIPT="$4"; OUTROOT="$5"
 REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Developer/.sub2apiplus-gates}
 OUT=$OUTROOT/local-gates; IMPL=$OUTROOT/impl-logs; T=$GATES_ROOT/wt-D; TC=$GATES_ROOT/wt-C
 rm -rf "$OUT" "$IMPL"; mkdir -p "$OUT" "$IMPL/cross-check"
-export CODEX_0_149_1_SOURCE_ROOT=${CODEX_0_149_1_SOURCE_ROOT:-$REPO/local-analysis/sources/codex-cli-0.149.1}
+: "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
+export CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
 TS=$REPO/frontend/node_modules/typescript/lib/typescript.js
 test "$(git -C $T rev-parse HEAD)" = "$DC"; test "$(git -C $TC rev-parse HEAD)" = "$C"
 cd "$T"; START=$(date -u +%Y-%m-%dT%H:%M:%SZ)

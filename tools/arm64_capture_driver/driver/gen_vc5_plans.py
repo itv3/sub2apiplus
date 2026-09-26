@@ -4,6 +4,9 @@
 环境变量：D（数据根）、CANDIDATE_DIR（候选实物目录）、PROFILE_ID／PROFILE_DIGEST（目标画像）。
 未提供 attempt_id 时只生成 run 计划；提供后生成 seal checkpoint、assertion bundle、seal 预览、批准+compare、assert、accept。"""
 import json, os, pathlib, sys
+sys.dont_write_bytecode = True
+from driver_config import load_config, candidate_job_ids
+CONFIG = load_config()
 
 out = pathlib.Path(sys.argv[1]); cid = sys.argv[2]; cand = sys.argv[3]; image_id = sys.argv[4]; build_id = sys.argv[5]
 attempt = sys.argv[6] if len(sys.argv) > 6 else None
@@ -13,8 +16,7 @@ B = os.environ["CANDIDATE_DIR"]
 BUILD_RECEIPT = f"{NEW}/candidates/{cand}/build-receipt.json"
 PROFILE_ID = os.environ["PROFILE_ID"]
 PROFILE_DIGEST = os.environ["PROFILE_DIGEST"]
-JOBS = ["candidate-compact-direct", "candidate-compact-mitm", "candidate-core-direct", "candidate-core-mitm", "candidate-frozen-aux",
-        "candidate-frozen-core", "candidate-h1-wire", "candidate-images-wire", "candidate-trace-test", "candidate-ws-handshake-repeat"]
+JOBS = candidate_job_ids(pathlib.Path(NEW), cand) if attempt else []
 
 
 def action(item, operation, command, stage_item, timeout=1800):
@@ -35,8 +37,8 @@ def write(name, payload):
 
 
 run_cmd = py + ["capture-candidate", "run"] + ref + [
-    "--build-receipt", BUILD_RECEIPT, "--runtime-image", f"sub2apiplus-c0154-candidate@{image_id}", "--candidate-image-id", image_id,
-    "--candidate-source", f"{B}/source", "--build-id", build_id, "--deployed-version", "0.154.0",
+    "--build-receipt", BUILD_RECEIPT, "--runtime-image", f"{CONFIG['CANDIDATE_IMAGE_REPOSITORY']}@{image_id}", "--candidate-image-id", image_id,
+    "--candidate-source", f"{B}/source", "--build-id", build_id, "--deployed-version", CONFIG["TARGET_VERSION"],
     "--profile-id", PROFILE_ID, "--profile-digest", PROFILE_DIGEST, "--candidate-purpose", "production_replacement",
     "--max-wall-seconds", "21600", "--acknowledge-live-requests",
 ]

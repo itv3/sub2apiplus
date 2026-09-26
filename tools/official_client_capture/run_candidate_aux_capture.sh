@@ -174,7 +174,10 @@ wait_healthy() {
 }
 
 restart_service() {
-  docker restart "$service_container" >/dev/null
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
   wait_healthy
 }
 
@@ -253,7 +256,8 @@ services:
 YML
   chmod 600 "$capture_root/runtime/live-attestation/$run_id.override.yml"
   live_attestation_armed=1
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose "${live_attestation_compose_args[@]}" \
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition \
+    --container "$service_container" --compose-service sub2api -- docker compose "${live_attestation_compose_args[@]}" \
     -f "$capture_root/runtime/live-attestation/$run_id.override.yml" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # compose 重建的是全新容器，之前 docker cp 进去的抓包 CA 随旧容器一起消失；
@@ -266,7 +270,8 @@ YML
 restore_deploy_without_live_attestation() {
   [[ $live_attestation_armed == 1 ]] || return 0
   live_attestation_armed=0
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose \
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition \
+    --container "$service_container" --compose-service sub2api --cleanup -- docker compose \
     "${live_attestation_compose_args[@]}" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # 恢复部署同样是新容器：CA 由 EXIT 钩子按基线清理，这里只需保证服务已就绪。
@@ -610,7 +615,7 @@ restore_environment() {
     ca_installed=0
   fi
   if [[ $service_restart_needed == 1 ]]; then
-    restart_service || restore_failed=1
+    restart_service cleanup || restore_failed=1
   fi
 
   # Docker restart 会重建 /etc/hosts；最后按字节恢复运行前快照，随后不再重启。
@@ -1011,7 +1016,12 @@ common_gateway_headers=(
   -H 'X-Codex-Terminal: unknown'
 )
 
-# A09：models、三种 legacy compact header 插槽、两阶段 alpha-search、images 两端点。
+# 0.156.1 起目标画像删除 legacy compact 端点（SPEC-EP-007／014／020），QueryUsage 在配额链路前
+# 先发工作区路由发现 accounts/check（SPEC-EP-019、SPEC-EP-002）。两者按目标版本切换，与末尾 A14
+# 的 C2PA 条件序列同一做法；删除面的拒绝由晋升后门禁在目标制品上断言，本 job 不再发 legacy 请求。
+target_workspace_routing=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 156, 1) else 0)' "$codex_version")
+
+# A09：models、三种 legacy compact header 插槽（仅 0.156.1 之前的目标）、两阶段 alpha-search、images 两端点。
 start_capture A09
 trigger_root="$work_dir/scenarios/A09/trigger"
 code=$(request_with_token "$api_key" --output "$trigger_root/models.json" --write-out '%{http_code}' \
@@ -1025,7 +1035,11 @@ compact_window_id="$compact_session_id:0"
 compact_body=$(printf \
   '{"model":"%s","input":[],"parallel_tool_calls":false,"reasoning":{"effort":"medium"},"prompt_cache_key":"%s","text":{"verbosity":"low"}}' \
   "$model" "$compact_session_id")
-for variant in prime default beta turn_state; do
+legacy_compact_variants=(prime default beta turn_state)
+if (( target_workspace_routing == 1 )); then
+  legacy_compact_variants=()
+fi
+for variant in "${legacy_compact_variants[@]}"; do
   extra_headers=()
   case "$variant" in
     prime) compact_turn_id=22222222-2222-4222-8222-222222222219 ;;
@@ -1108,9 +1122,9 @@ live_call_id=${live_call_id##*/}
 wait_live_cleanup "$live_call_id" "$trigger_root/live-cleanup.txt"
 stop_capture
 
-# A12：目标画像下 QueryUsage 自然发出 settings/user + usage + details；
-# ResetQuota 的 consume 仍由同一生产 service 路径生成 redeem_request_id，
-# 但 TLS 隧道只到纯合成 relay。
+# A12：目标画像下 QueryUsage 自然发出 settings/user + usage + details（0.156.1 起每次 QueryUsage
+# 先发一次 accounts/check 工作区路由发现）；ResetQuota 的 consume 仍由同一生产 service 路径生成
+# redeem_request_id，但 TLS 隧道只到纯合成 relay。
 start_capture A12
 trigger_root="$work_dir/scenarios/A12/trigger"
 code=$(request_with_token "$admin_token" --output "$trigger_root/quota.json" --write-out '%{http_code}' \
@@ -1119,6 +1133,9 @@ assert_2xx A12-quota "$code"
 code=$(request_with_token "$admin_token" --output "$trigger_root/consume.json" --write-out '%{http_code}' \
   -X POST "$admin_base_url/openai/accounts/$account_id/reset-quota")
 assert_2xx A12-consume "$code"
+if (( target_workspace_routing == 1 )); then
+  wait_action A12 wham_accounts_check 2
+fi
 wait_action A12 wham_usage
 wait_action A12 wham_credit_details
 wait_action A12 wham_safe_consume
@@ -1175,10 +1192,12 @@ root = Path(sys.argv[1])
 codex_version = sys.argv[2]
 a14_modes = ["negative", "positive"] if tuple(map(int, codex_version.split("."))) >= (0, 151, 0) else ["negative"]
 a14_count = len(a14_modes)
+# 与 A09／A12 触发段同一版本切换：0.156.1 起无 legacy compact、每次 QueryUsage 先发 accounts/check。
+workspace_routing = tuple(map(int, codex_version.split("."))) >= (0, 156, 1)
 expected = {
     "A09": {
         "models_manifest": 1,
-        "legacy_compact": 4,
+        **({} if workspace_routing else {"legacy_compact": 4}),
         "alpha_search": 2,
         "images_generation": 1,
         "images_edit": 1,
@@ -1188,8 +1207,10 @@ expected = {
     # 的 Step 2，用 WithoutCancel + 独立超时，不受入口 context 取消影响），因此
     # A12 的两次入口调用共产生两轮 settings/user、usage 与 credit_details。
     # settings/user 只在当前画像登记该端点时出现；本 job 绑定的目标画像已登记，
-    # 所以它与其余两条 GET 一样必须计入受控出站事实。
+    # 所以它与其余两条 GET 一样必须计入受控出站事实。0.156.1 起两次 QueryUsage 各先发
+    # 一次 accounts/check（合成 NO_CONSTRAINT 默认路由，落盘副本等长遮蔽账号标识）。
     "A12": {
+        **({"wham_accounts_check": 2} if workspace_routing else {}),
         "wham_settings_user": 2,
         "wham_usage": 2,
         "wham_credit_details": 2,

@@ -1,0 +1,187 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R8",
+  "source_commit": "96ee668a05fcd249aa1df4d8de6e511dacd6a4d8",
+  "source_commits": [
+    "3b4df92c191126944bad73e991076285608eee25",
+    "96ee668a05fcd249aa1df4d8de6e511dacd6a4d8"
+  ],
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T21:57:44.368849+00:00",
+  "scope": "阶段 1 工具开发自查；本机与 ARM64 staging 私有挂载命名空间执行，使用合成官方证据，外部上游请求零次；未执行生产发布或 v0.156.1 正式取证。",
+  "tool_identity": {
+    "files_sha256": "637cb16ed0a001463f56449c92733c8d2d941e757886e37251bf6308b7242991",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "615b4bb141480ecb6c1501b32155f0da04c0f6c0115ffbf7205ec18c3fd5dc49",
+    "control_sha256": "bc26302081a32b6282b52db9b7fa2c44185c7900c2c29e6957d6461242bddc04"
+  },
+  "identity_layers_changed": [
+    "control"
+  ],
+  "arm64_tool_identity_matches": true,
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "三层独立暂停与延期",
+      "result": "passed",
+      "evidence": "项目、Campaign、阶段各自到期进入 deadline_paused；原计划与截止字段不变，批准按独立层级延长。累计墙钟、跨 revision 阶段耗时、累计请求与根因账务不清零。"
+    },
+    {
+      "item": "批准闭集与两账事务",
+      "result": "passed",
+      "evidence": "批准人、时间、理由、旧新截止、两账 head 和预览摘要全部绑定；无批准、过期 head、孤立计时事件拒绝。写总账后进程死亡时保持 extension_pending，项目延期未闭合也阻断其他 Campaign；原 apply 补齐一次。"
+    },
+    {
+      "item": "暂停、提醒与显式放弃",
+      "result": "passed",
+      "evidence": "暂停拒绝派发、恢复、复用、封存；72 小时无批准只提醒。部分延期保留连续暂停起点并重算提醒时间；显式放弃中断后仍拒绝消费者，重入补齐终态。历史 deadline_wall_clock 只读保留且禁止新写。"
+    },
+    {
+      "item": "原 Campaign 实际派发",
+      "result": "passed",
+      "evidence": "实际等待到期，真实 CLI preview/apply，两账间 SIGKILL 后重跑两次，延期事件两账各一条；原 Campaign 的第 2 批实际执行 1 个动作。原计划、证据字节和账务不变，CLI 退出码为 0。"
+    },
+    {
+      "item": "四模块读取与运行期间截止",
+      "result": "passed",
+      "evidence": "编排器、计时账本、监督器及项目准入读取同一有效截止；父 run 时间锚固定，动作和独立 watchdog 仍受三层最早截止约束。父执行锁与存活租约拒绝并发修改本 Campaign 预算。"
+    },
+    {
+      "item": "完整性与其它永久门禁",
+      "result": "passed",
+      "evidence": "延期不解除完整性异常、总账 blocked、请求预算或根因上限；恢复仍须经过既有 admission、环境与证据边界复验。暂停期间的失败事件只登记零请求元数据。"
+    },
+    {
+      "item": "历史、schema 与回退边界",
+      "result": "passed",
+      "evidence": "旧无延期 checkpoint 及秒级展示投影继续严格回放；实时读取先取事件后取时间，显式历史时间早于事件仍拒绝。真实延期收据、批次、计时 checkpoint 通过本地 schema 注册表；前序真实工具读旧账本，拒绝新暂停／延期事件及批次，不改字节。"
+    },
+    {
+      "item": "身份、冻结与注册",
+      "result": "passed",
+      "evidence": "R8 仅 control 改变，policy/wire/evidence 与 R11 全同，两端六项身份字段一致。冻结承接、Go 两组检查、egress CI、部署与 pre-A3 注册测试通过。"
+    }
+  ],
+  "regression": {
+    "local": {
+      "tests": 179,
+      "seconds": 28.014,
+      "result": "passed"
+    },
+    "arm64": {
+      "tests": 182,
+      "seconds": 259.043,
+      "result": "passed"
+    },
+    "deployment_certification": {
+      "tests": 17,
+      "seconds": 22.476,
+      "result": "passed"
+    },
+    "local_real_chain": {
+      "tests": 3,
+      "seconds": 192.546,
+      "result": "passed"
+    },
+    "review_fixes": {
+      "tests": 34,
+      "seconds": 0.799,
+      "result": "passed"
+    }
+  },
+  "real_chain_metrics": {
+    "fixture": "R8 真实延期与续跑",
+    "sigkill_count": 1,
+    "project_extension_events": 1,
+    "campaign_extension_events": 1,
+    "dispatched_batch_sequence": 2,
+    "executed_actions": 1,
+    "upstream_requests": 0,
+    "same_campaign": true,
+    "original_bytes_unchanged": true,
+    "result": "stopped"
+  },
+  "real_chain_metrics_note": "result=stopped 是父监督器正常停止状态；真实 CLI 退出码 0、动作 marker 与计时账本 active 共同证明续跑成功，项目没有 terminal。本机三条链在主源码提交前验证，后续实时快照修正由本机 179 项和 ARM64 182 项（含三条真实链）验证。",
+  "self_check_findings_resolved": [
+    "真实链初始夹具未声明 fixture_only，已修正隔离绑定，未改变生产 R15 门禁。",
+    "批准微秒时间与旧整秒检查产生时间倒退，实时计时改保留微秒；历史 checkpoint 的秒级投影单独兼容。",
+    "真实 CLI 整数参数及初始阶段预算夹具修正；三分钟初始预算容纳正式 120 秒清理窗口，未缩短清理或放宽门禁。",
+    "显式放弃两账中断窗口、部分延期的连续暂停起点、跨 revision 阶段截止及项目延期影响全项目的边界补齐。",
+    "完整回归触发实时快照竞态；调整为事件快照后采样时钟并增加确定性复现，显式历史回放约束保持严格。",
+    "旧关闭账本测试按到期暂停更新；总账集成测试使用明确的零请求出口替身，生产出口门禁和 R15 专项不变。"
+  ],
+  "manual_actions_resolution": {
+    "required_hints": 14,
+    "tool_tree_digest": "提示仍引用已移除的 DEFAULT_TOOL_DIGEST；整树摘要按 staging 自算，不重新硬编码。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "最终 17 项部署与认证测试通过；监督器固定摘要已同步。",
+    "unregistered_paths": "两份收据分别列出 13、4 条未具历史冻结边的路径；全部受管文件已由策略分层测试覆盖，新增测试按真实链登记。"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+      "sha256": "11206b3d23904c8c8587d90b73a92ff803a1dad99cb28bbb093378d3301c0e29"
+    },
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r8-final-20260924-freeze-successor.json",
+      "sha256": "1ea881652fa2a8ecb29c66d21a7d37ff31a07a01cf03df1deced98212674a185"
+    }
+  ],
+  "logs": [
+    {
+      "file": "r8-final-regression.log",
+      "sha256": "7e45ae9e9a1a6dfaa0faa02dd48be49bf4eef3f29d23189d35001a87cdb6e4af"
+    },
+    {
+      "file": "r8-arm64-final-regression.log",
+      "sha256": "8f2f305658880cfeb5391d793a2df001114b51f49daa8904d9dc4770914f58bc"
+    },
+    {
+      "file": "r8-deployment-certification.log",
+      "sha256": "415fb03f67c36b6bc8be116b07626c08b563d126746443c7e68a4a59fd22a117"
+    },
+    {
+      "file": "r8-cli-chain-fifth.log",
+      "sha256": "57b83844f36bf033c9cbe6119bf2af18ddf8875eafb6e7292e6e4a259926d2e8"
+    },
+    {
+      "file": "r8-self-review-fixes.log",
+      "sha256": "be96aea6acff8d0f9b4bbc59520daeb57bd096a17884f8bcba197d154a2d1935"
+    },
+    {
+      "file": "r8-egress-freeze.log",
+      "sha256": "28745ff364e665a92fab08d2ceea058064e79cebd0830ecf9c06a3ea04a15688"
+    },
+    {
+      "file": "r8-service-freeze.log",
+      "sha256": "a3bc2a12304b86bc9ca1f52eafebbdef021b434a85d5bb45c52f2ee6af23c7f1"
+    },
+    {
+      "file": "r8-egress-ci.log",
+      "sha256": "a598b713e1ef03ba9fc244985dc06ce6b655e9e6f7d92e752afc784fa5eb06ba"
+    },
+    {
+      "file": "r8-schema-check.log",
+      "sha256": "ef2c06e3d960b86b01707c0122a0f1c866f33de29dfad5c17f4ab7f7ec3ff676"
+    },
+    {
+      "file": "r8-rollback-check.log",
+      "sha256": "8846a4c767468dd362d4665a0d73315d4ed75a2ec4c3c2a5c6d154bff9ab82b0"
+    },
+    {
+      "file": "r8-final-identity.json",
+      "sha256": "833b7a2173832edcb46d23d8b176224b46434c87c9c0e2203e8d358f8e937f71"
+    },
+    {
+      "file": "r8-arm64-identity.json",
+      "sha256": "833b7a2173832edcb46d23d8b176224b46434c87c9c0e2203e8d358f8e937f71"
+    }
+  ],
+  "scheduled_release_checks": [
+    "按用户指示在阶段 1 工具改造完成后停止，等待审核；之后再执行受监督部署、驱动安装、生产 R15 迁移与验收、兼容／激活／pre-A3／发布认证及实际 rollback_backup 只读复验。"
+  ]
+}

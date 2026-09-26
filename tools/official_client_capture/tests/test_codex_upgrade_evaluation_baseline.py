@@ -26,6 +26,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as policy_module
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 DIGESTS = {
     "checker_sha256": "a1" * 32,
@@ -749,10 +750,13 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             client.begin_commit_step("commit-activate")
             client.activate_committed(commit)
 
-        return supervisor._campaign_run_locked(
-            argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=1.0, ledger_interval_seconds=0.05),
-            manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
-        )
+        # 本 helper 只有合成总计划和零请求动作；真实出口准入由独立 R15 链验收。父 run 状态不带
+        # 出口守卫标记，独立监督器子进程同样不读取生产出口策略。
+        with runtime_egress_fixtures.offline_campaign_egress():
+            return supervisor._campaign_run_locked(
+                argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=1.0, ledger_interval_seconds=0.05),
+                manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
+            )
 
     def test_drifted_evaluator_digests_skip_action_and_fail_as_identity_drift(self) -> None:
         current = dict(policy_module.evaluator_dependency_digests())

@@ -178,6 +178,7 @@ def validate_build_parameters(
 ) -> dict[str, Any]:
     """校验严格构建参数及所有 CLI／参数跨字段等式。"""
 
+    extra = {"input_provenance"} if isinstance(value, Mapping) and "input_provenance" in value else set()
     payload = _require_fields(
         value,
         {
@@ -189,7 +190,7 @@ def validate_build_parameters(
             "go_build",
             "docker_build",
             "binary",
-        },
+        } | extra,
         "Candidate 构建参数",
     )
     if payload.get("schema_version") != BUILD_PARAMETERS_SCHEMA:
@@ -358,7 +359,111 @@ def validate_build_parameters(
         raise CandidateBuildError("docker_build.assembly 必须按 context_path 排序且目标不重复")
     if docker["dockerfile"] not in {item[0] for item in normalized}:
         raise CandidateBuildError("docker_build.assembly 未覆盖 Dockerfile")
+    if extra:
+        validate_input_provenance(payload["input_provenance"])
     return payload
+
+
+def validate_input_provenance(value: Any) -> dict[str, Any]:
+    """新构建冻结实际 Go 版本及三个基础镜像 digest；旧参数只读兼容但不能猜测复用。"""
+
+    value = _require_fields(value, {"go_version", "base_images"}, "构建输入来源")
+    if not re.fullmatch(r"go[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[a-z0-9.-]+)?", str(value["go_version"])):
+        raise CandidateBuildError("构建输入 Go 版本非法")
+    images = _require_fields(value["base_images"], {"ALPINE_IMAGE", "POSTGRES_IMAGE", "NODE_IMAGE"}, "基础镜像")
+    if any(not IMAGE_REFERENCE_RE.fullmatch(str(item)) for item in images.values()):
+        raise CandidateBuildError("基础镜像必须固定到 repository@sha256 digest")
+    return value
+
+
+def implementation_parameter_projection(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """剔除候选名称、存放目录和输出摘要，保留真正影响实现测试的构建参数。
+
+    原始参数摘要仍用于制品身份；这里只规范化明确的输出路径和 OCI 候选名称后缀。
+    ldflags（包括构建日期）、环境、入口、装配路径、前端命令或构建方式的变化均不豁免。
+    """
+
+    value = json.loads(json.dumps(parameters))
+    frontend = value["frontend"]
+    go_build = value["go_build"]
+    go_build["command"] = ["<binary>" if item == value["binary"]["path"] else item
+                           for item in go_build["command"]]
+    docker = value["docker_build"]
+    labels = dict(docker["labels"])
+    suffix = "-" + value["candidate_id"]
+    version = labels["org.opencontainers.image.version"]
+    if version.endswith(suffix):
+        labels["org.opencontainers.image.version"] = version[:-len(suffix)] + "-<candidate>"
+    return {
+        "umask": value["build_tree"]["umask"],
+        "frontend": {key: frontend[key] for key in ("source_root", "package_manifest", "lockfile",
+            "build_command", "dist_build_tree_path")},
+        "builder_kind": frontend["builder"]["kind"],
+        "required_node_major": frontend["toolchain_policy"]["required_node_major"],
+        "go_build": go_build,
+        "docker_build": {"dockerfile": docker["dockerfile"], "platform": docker["platform"],
+            "labels": labels, "entrypoint": docker["entrypoint"], "assembly": [
+                {**row, "source_path": "<binary>" if row["source_kind"] == "binary" else row["source_path"]}
+                for row in docker["assembly"]]},
+    }
+
+
+def validate_implementation_inputs(value: Any) -> dict[str, Any]:
+    value = _require_fields(value, {"source_tree_sha256", "go_mod_sha256", "go_sum_sha256", "vendor_sha256",
+        "parameters_sha256", "go_version", "node_version", "pnpm_version", "base_images",
+        "target_architecture", "requirements_sha256"}, "实现测试构建输入")
+    for field in ("source_tree_sha256", "go_mod_sha256", "go_sum_sha256", "vendor_sha256",
+                  "parameters_sha256", "requirements_sha256"):
+        if not SHA256_RE.fullmatch(str(value[field])):
+            raise CandidateBuildError(f"实现测试输入 {field} 非法")
+    validate_input_provenance({"go_version": value["go_version"], "base_images": value["base_images"]})
+    for field in ("node_version", "pnpm_version"):
+        if not VERSION_OUTPUT_RE.fullmatch(str(value[field])):
+            raise CandidateBuildError(f"实现测试输入 {field} 非法")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", str(value["target_architecture"])):
+        raise CandidateBuildError("实现测试输入架构非法")
+    return value
+
+
+def collect_implementation_inputs(parameters: Mapping[str, Any], *, source_tree_sha256: str,
+                                  requirements_sha256: str, go_version: str) -> dict[str, Any]:
+    """从实际依赖树和已核验的构建参数计算复用键，不以日志中的成功字样代替输入证明。"""
+
+    provenance = validate_input_provenance(parameters.get("input_provenance"))
+    if provenance["go_version"] != go_version:
+        raise CandidateBuildError("实际二进制 Go 版本与构建输入来源不同")
+    source = Path(parameters["source"]["root"])
+    backend = source / parameters["go_build"]["working_directory"]
+    dependency_files = [backend / name for name in ("go.mod", "go.sum")]
+    if any(path.is_symlink() or not path.is_file() for path in dependency_files):
+        raise CandidateBuildError("实现测试依赖文件不存在或为链接")
+    vendor = Path(parameters["build_tree"]["root"]) / parameters["go_build"]["working_directory"] / "vendor"
+    return validate_implementation_inputs({
+        "source_tree_sha256": source_tree_sha256,
+        "go_mod_sha256": file_sha256(dependency_files[0]), "go_sum_sha256": file_sha256(dependency_files[1]),
+        "vendor_sha256": scan_tree_inventory(vendor)["inventory_sha256"],
+        "parameters_sha256": digest(implementation_parameter_projection(parameters)),
+        "go_version": go_version, "node_version": parameters["frontend"]["node_version"],
+        "pnpm_version": parameters["frontend"]["pnpm_version"], "base_images": provenance["base_images"],
+        "target_architecture": parameters["docker_build"]["platform"], "requirements_sha256": requirements_sha256,
+    })
+
+
+def implementation_retest_plan(previous: Any, current: Mapping[str, Any], gate_ids: Sequence[str]) -> dict[str, Any]:
+    """参数变化重跑目标平台完整门禁；源码、依赖、工具链等变化重跑全部实现门禁。"""
+
+    validate_implementation_inputs(current)
+    ids = sorted(set(gate_ids))
+    if "check-egress-spec" not in ids:
+        raise CandidateBuildError("实现测试计划缺少 check-egress-spec")
+    if previous is None:
+        return {"mode": "full", "changed_inputs": ["missing_previous_inputs"], "execute_gate_ids": ids, "reuse_gate_ids": []}
+    validate_implementation_inputs(previous)
+    changed = sorted(key for key in current if current[key] != previous[key])
+    mode = "all" if not changed else "target_platform" if changed == ["parameters_sha256"] else "full"
+    execute = [] if mode == "all" else [item for item in ids if item != "check-egress-spec"] if mode == "target_platform" else ids
+    return {"mode": mode, "changed_inputs": changed, "execute_gate_ids": execute,
+            "reuse_gate_ids": [item for item in ids if item not in execute]}
 
 
 def _entry_mode(mode: int) -> str:
@@ -1071,6 +1176,8 @@ def build_image_inspection(
 
     go_output = _run_checked(["go", "version", "-m", str(binary_path)], "Go build info 检查", runner)
     go_info = _parse_go_build_info(go_output)
+    if "input_provenance" in parameters and go_info["go_version"] != parameters["input_provenance"]["go_version"]:
+        raise CandidateBuildError("镜像二进制的 Go 版本与冻结构建输入不一致")
     required_tags = set(parameters["go_build"]["required_tags"])
     if (
         not required_tags.issubset(set(go_info["tags"]))

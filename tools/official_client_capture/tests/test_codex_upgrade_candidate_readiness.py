@@ -735,6 +735,53 @@ class CandidateReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "非法文件"):
                 readiness._probe_files(first)
 
+    def test_changed_identity_skips_incomplete_session_without_any_dispatch(self) -> None:
+        """2026-09-26 c01570 VC-5 批次 9 在首次 dispatch 前中断，留下只有 session.json 的未完成会话；修好工具
+        受监督部署后 static_receipt_digest 改变，批次 10 因"其它身份未完成会话"失败。零 dispatch 的不匹配会话
+        只跳过：新身份照常完成探测、原身份仍复用该会话；有过 dispatch 的不匹配会话仍失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = readiness._probe_root(Path(directory), "candidate-a")
+            base = {
+                "campaign_id": "campaign-a",
+                "candidate_id": "candidate-a",
+                "image_id": IMAGE_ID,
+                "build_receipt_sha256": BUILD_SHA256,
+                "static_receipt_digest": STATIC_DIGEST,
+                "target_version": "0.154.0",
+                "codex_account_id": 9,
+                "api_key_id": 4,
+                "ttl_seconds": 600,
+                "max_dispatches": 2,
+            }
+            stale, _ = readiness._new_session(
+                root, created_at_utc="2026-09-26T15:31:51.000Z", **base
+            )
+            changed = dict(base, static_receipt_digest="5" * 64)
+            self.assertIsNone(readiness._matching_session(root, **changed))
+            matched = readiness._matching_session(root, **base)
+            assert matched is not None
+            self.assertEqual(matched[0], stale)
+
+            runtime = FakeRuntime()
+            admission = FakeAdmission()
+            common = probe_kwargs(
+                runtime, admission, lambda *_arguments: (200, models_body())
+            )
+            common["static_receipt_digest"] = "5" * 64
+            readiness.ensure_models_probe(
+                Path(directory),
+                now=datetime(2026, 9, 26, 16, 45, tzinfo=timezone.utc),
+                **common,
+            )
+            self.assertEqual(len(admission.operations), 1)
+            self.assertEqual(sorted(path.name for path in stale.iterdir()), ["session.json"])
+
+            readiness._write_once(stale / "dispatch-01.intent.json", {"fixture": True})
+            readiness._write_once(stale / "dispatch-01.result.json", {"fixture": True})
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness._matching_session(root, **changed)
+
     def test_matching_session_uses_created_time_not_filename_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = readiness._probe_root(Path(directory), "candidate-a")

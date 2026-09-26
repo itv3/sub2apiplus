@@ -1016,14 +1016,19 @@ def _mitm_candidate_branches(root: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _frozen_candidate_branches(root: Path) -> list[dict[str, Any]]:
+def _frozen_candidate_branches(
+    root: Path, *, target_version: str | None
+) -> list[dict[str, Any]]:
+    # frozen 采集摘要必须属于本 Campaign 的目标版本。原先写死 0.154.0，
+    # 0.156.1 起的候选 frozen 根会被一律判为形状非法；未给出目标版本时仍失败关闭。
     summary, _raw = _load_run_summary(root)
     schema = summary.get("schema_version")
     scenarios = summary.get("scenarios")
     if (
         schema not in CANDIDATE_CAPTURE_SCHEMAS
         or summary.get("status") not in {"complete", "failed"}
-        or summary.get("codex_version") != "0.154.0"
+        or target_version is None
+        or summary.get("codex_version") != target_version
         or summary.get("explicit_gate") is not True
         or summary.get("production_forwarding_enabled") is not False
         or not isinstance(scenarios, list)
@@ -1304,7 +1309,9 @@ def _apply_estimation(
                 )
 
 
-def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
+def _root_branches(
+    root: Path, *, target_version: str | None = None
+) -> tuple[str, list[dict[str, Any]]]:
     """识别证据根的类别并返回其执行分支；一个根只能属于一个类别。"""
 
     kinds: list[str] = []
@@ -1351,7 +1358,7 @@ def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
     if kind == "candidate_mitm":
         return kind, _mitm_candidate_branches(root)
     if kind == "candidate_frozen":
-        return kind, _frozen_candidate_branches(root)
+        return kind, _frozen_candidate_branches(root, target_version=target_version)
     if kind == "candidate_trace_test":
         return kind, _trace_test_branches(root)
     return kind, _h1_wire_branches(root)
@@ -1626,7 +1633,9 @@ def collect_campaign_provenance(
             logs = closeout._job_logs(campaign_dir, job_id)
         for root in roots:
             if root not in root_cache:
-                kind, branches = _root_branches(root)
+                kind, branches = _root_branches(
+                    root, target_version=manifest.get("target_version")
+                )
                 root_cache[root] = (kind, branches)
                 if kind != "unsupported":
                     collected_roots.append((root, kind, branches))

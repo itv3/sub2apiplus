@@ -22,7 +22,7 @@ config = {
     "official_evidence_root": ctx_o["evidence_root"], "candidate_evidence_root": ctx_c["evidence_root"],
     "official_capture_manifest": ctx_o["capture_manifest_path"], "candidate_capture_manifest": ctx_c["capture_manifest_path"],
     "official_evidence_prefix": ctx_o["evidence_prefix"], "candidate_evidence_prefix": ctx_c["evidence_prefix"],
-    "target_version": "0.154.0", "rules": rule_ids, "profile_id": profile_id, "profile_digest": profile_digest,
+    "target_version": cu.load_campaign_manifest(C)["target_version"], "rules": rule_ids, "profile_id": profile_id, "profile_digest": profile_digest,
     "official_package_digest": comparison["official_package_digest"], "candidate_package_digest": comparison["candidate_package_digest"],
     "comparison_package_digest": comparison["package_digest"],
     "official_authority": {"assertion_profile_sha256": classification["assertion_profile_manifest"]["sha256"], "classification_package_digest": classification["package_digest"], "review_sha256": classification["joint_manifest_sha256"]},

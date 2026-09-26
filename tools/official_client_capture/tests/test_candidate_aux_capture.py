@@ -80,6 +80,18 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertIn('"wham_credit_details": 2', self.source)
         self.assertIn('"wham_safe_consume": 1', self.source)
 
+    def test_workspace_routing_targets_count_discovery_and_drop_legacy_compact(self) -> None:
+        # 0.156.1 起：每次 QueryUsage 先发 accounts/check，legacy compact 端点随画像删除。
+        self.assertIn("(0, 156, 1)", self.source)
+        self.assertIn('**({"wham_accounts_check": 2} if workspace_routing else {})', self.source)
+        self.assertIn("wait_action A12 wham_accounts_check 2", self.source)
+        self.assertIn('**({} if workspace_routing else {"legacy_compact": 4})', self.source)
+        switch = self.source.index("target_workspace_routing=")
+        variants = self.source.index("legacy_compact_variants=(prime default beta turn_state)")
+        loop = self.source.index('for variant in "${legacy_compact_variants[@]}"')
+        self.assertLess(switch, variants)
+        self.assertLess(variants, loop)
+
     def test_a14_0151_runs_fixed_negative_and_positive_body_branches(self) -> None:
         self.assertIn("CANDIDATE_A14_C2PA_SEQUENCE", self.source)
         self.assertIn("negative,positive", self.source)
@@ -98,7 +110,8 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertIn('-H "Thread-Id: $compact_session_id"', self.source)
         self.assertIn('-H "X-Codex-Window-Id: $compact_window_id"', self.source)
         self.assertIn('-H "X-Codex-Turn-Metadata: $compact_turn_metadata"', self.source)
-        self.assertIn("for variant in prime default beta turn_state", self.source)
+        self.assertIn("legacy_compact_variants=(prime default beta turn_state)", self.source)
+        self.assertIn('for variant in "${legacy_compact_variants[@]}"', self.source)
         self.assertIn(
             "beta | turn_state) compact_turn_id=22222222-2222-4222-8222-222222222221",
             self.source,

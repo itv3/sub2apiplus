@@ -748,6 +748,126 @@ class CanonicalImportTests(unittest.TestCase):
             )
             self.assertEqual(result["live_request_count"], 0)
 
+    def test_01561_patch_manifest_binds_real_active_profile(self) -> None:
+        """0.156.1 补丁清单必须绑定当前 active 的 0.154.0 画像文件本身的摘要。
+
+        0.154 初版曾把画像 Digest（文件名）误当成文件摘要，派生校验直接拒绝；
+        active 以发布图 active 节点引用的 0.154.0 快照为准。
+        """
+
+        active_profile = (
+            ROOT
+            / "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0"
+            / "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json"
+        )
+        patch_manifest = (
+            ROOT / "tools/official_client_capture/profile_rule_patches_0_156_1.json"
+        )
+        patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            patch_payload["active_profile_sha256"],
+            codex_upgrade.file_sha256(active_profile),
+        )
+        self.assertEqual(patch_payload["rule_patches"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            active_payload = json.loads(active_profile.read_text(encoding="utf-8"))
+            target_payload, _ = codex_upgrade._replace_json_string_literal(
+                active_payload,
+                "0.154.0",
+                "0.156.1",
+            )
+            target_payload["Digest"] = "e" * 64
+            target_profile = fixture_root / "target-profile.json"
+            migration = fixture_root / "rule-migration.json"
+            self._write(
+                target_profile,
+                {"codex_version": "0.156.1", "profile_payload": target_payload},
+            )
+            self._write(
+                migration,
+                {
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "classification": "inherit",
+                            "baseline_rule": "SPEC-CODEX-IDENTITY",
+                            "target_rule": "SPEC-CODEX-IDENTITY",
+                        }
+                    ],
+                },
+            )
+
+            result = codex_upgrade.validate_profile_derivation(
+                active_profile_path=active_profile,
+                target_profile_path=target_profile,
+                migration_path=migration,
+                patch_manifest_path=patch_manifest,
+            )
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["live_request_count"], 0)
+
+    def test_0157_patch_manifest_binds_real_active_profile(self) -> None:
+        """0.157.0 补丁清单同样绑定当前 active 的 0.154.0 画像文件摘要，补丁为空（VC-2 定稿后承接）。"""
+
+        active_profile = (
+            ROOT
+            / "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0"
+            / "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json"
+        )
+        patch_manifest = (
+            ROOT / "tools/official_client_capture/profile_rule_patches_0_157_0.json"
+        )
+        patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(patch_payload["baseline_version"], "0.154.0")
+        self.assertEqual(patch_payload["target_version"], "0.157.0")
+        self.assertEqual(
+            patch_payload["active_profile_sha256"],
+            codex_upgrade.file_sha256(active_profile),
+        )
+        self.assertEqual(patch_payload["rule_patches"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            active_payload = json.loads(active_profile.read_text(encoding="utf-8"))
+            target_payload, _ = codex_upgrade._replace_json_string_literal(
+                active_payload,
+                "0.154.0",
+                "0.157.0",
+            )
+            target_payload["Digest"] = "f" * 64
+            target_profile = fixture_root / "target-profile.json"
+            migration = fixture_root / "rule-migration.json"
+            self._write(
+                target_profile,
+                {"codex_version": "0.157.0", "profile_payload": target_payload},
+            )
+            self._write(
+                migration,
+                {
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "classification": "inherit",
+                            "baseline_rule": "SPEC-CODEX-IDENTITY",
+                            "target_rule": "SPEC-CODEX-IDENTITY",
+                        }
+                    ],
+                },
+            )
+
+            result = codex_upgrade.validate_profile_derivation(
+                active_profile_path=active_profile,
+                target_profile_path=target_profile,
+                migration_path=migration,
+                patch_manifest_path=patch_manifest,
+            )
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["live_request_count"], 0)
+
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._fixture(Path(directory))
@@ -916,6 +1036,330 @@ class CanonicalImportTests(unittest.TestCase):
             assert completed is not None
             self.assertEqual(completed["phase"], "VC-6")
             self.assertEqual(completed["plan"]["execute_item_ids"], [])
+
+
+class ProfileRulePatchV2Tests(unittest.TestCase):
+    """画像规则补丁 v2：键控寻址、显式增删与多规则归属。
+
+    全部用例以真实 0.154.0 Active 画像为基线、在临时目录构造 0.156.1 目标画像，
+    不读写任何 Campaign；只验证派生校验本身。
+    """
+
+    ACTIVE = (
+        ROOT
+        / "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0"
+        / "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json"
+    )
+    DELETE_RULES = ("SPEC-EP-007", "SPEC-EP-014", "SPEC-EP-020")
+    ADD_RULES = ("SPEC-HDR-009",)
+
+    def setUp(self) -> None:
+        import copy
+
+        self.copy = copy
+        self.active = json.loads(self.ACTIVE.read_text(encoding="utf-8"))
+        self.base, _ = codex_upgrade._replace_json_string_literal(
+            copy.deepcopy(self.active), "0.154.0", "0.156.1"
+        )
+
+    def _endpoint(self, document: dict, endpoint_id: str) -> dict:
+        return next(item for item in document["Endpoints"] if item["ID"] == endpoint_id)
+
+    def _scenario(self) -> tuple[dict, list[dict]]:
+        """构造覆盖增删改与多规则归属的目标画像及其补丁。"""
+
+        copy = self.copy
+        target = copy.deepcopy(self.base)
+        endpoints = target["Endpoints"]
+        compact = self._endpoint(target, "responses_compact")
+        endpoints.remove(compact)
+        check = copy.deepcopy(self._endpoint(target, "wham_usage"))
+        check["ID"] = "wham_accounts_check"
+        check["Path"] = "/backend-api/wham/accounts/check"
+        order = [item["ID"] for item in endpoints]
+        endpoints.insert(order.index("wham_rate_limit_reset_credits"), check)
+        cookie = {
+            "AlternateGroup": "",
+            "Condition": "cookie_present",
+            "Name": "cookie",
+            "Sequence": 0,
+            "Slot": 175,
+            "Source": "session",
+            "Value": "",
+            "WireName": "cookie",
+        }
+        self._endpoint(target, "responses_ws")["Headers"].append(cookie)
+        beta = next(
+            item
+            for item in self._endpoint(target, "responses_http")["Headers"]
+            if item["Name"] == "x-codex-beta-features"
+        )
+        beta_before = beta["Condition"]
+        beta["Condition"] = "always"
+        routing = {"DiscoveryEndpointID": "wham_accounts_check", "NonDefault": "fail_closed"}
+        target["WorkspaceRouting"] = routing
+        rules_before = copy.deepcopy(target["RequiredRules"])
+        target["RequiredRules"] = [*rules_before, "SPEC-HDR-009"]
+        transport = next(
+            item for item in target["Transports"] if item["ID"].endswith("ws-rustls")
+        )
+        sig_before = copy.deepcopy(transport["SignatureAlgorithms"])
+        transport["SignatureAlgorithms"] = [*sig_before, 2308, 2309, 2310]
+        target["Digest"] = "e" * 64
+        patches = [
+            {
+                "rule_ids": sorted(["SPEC-EP-007", "SPEC-EP-014", "SPEC-EP-020", "SPEC-HDR-006"]),
+                "op": "remove",
+                "path": "/Endpoints/ID=responses_compact",
+                "before": self._endpoint(self.base, "responses_compact"),
+                "after": None,
+            },
+            {
+                "rule_ids": ["SPEC-EP-019"],
+                "op": "add",
+                "path": "/Endpoints/ID=wham_accounts_check",
+                "before": None,
+                "after": check,
+            },
+            {
+                "rule_ids": ["SPEC-WS-002"],
+                "op": "add",
+                "path": "/Endpoints/ID=responses_ws/Headers/Name=cookie",
+                "before": None,
+                "after": cookie,
+            },
+            {
+                "rule_ids": ["SPEC-EP-021"],
+                "op": "replace",
+                "path": "/Endpoints/ID=responses_http/Headers/Name=x-codex-beta-features/Condition",
+                "before": beta_before,
+                "after": "always",
+            },
+            {
+                "rule_ids": ["SPEC-EP-002"],
+                "op": "add",
+                "path": "/WorkspaceRouting",
+                "before": None,
+                "after": routing,
+            },
+            {
+                "rule_ids": ["SPEC-HDR-009"],
+                "op": "replace",
+                "path": "/RequiredRules",
+                "before": rules_before,
+                "after": target["RequiredRules"],
+            },
+            {
+                "rule_ids": ["SPEC-TLS-003"],
+                "op": "replace",
+                "path": f"/Transports/ID={transport['ID']}/SignatureAlgorithms",
+                "before": sig_before,
+                "after": transport["SignatureAlgorithms"],
+            },
+        ]
+        return target, patches
+
+    def _validate(
+        self,
+        target: dict,
+        patches: list[dict],
+        affected: list[str] | None = None,
+    ) -> dict:
+        rules = affected or sorted({rule for patch in patches for rule in patch["rule_ids"]})
+        entries: list[dict] = [
+            {
+                "classification": "inherit",
+                "baseline_rule": "SPEC-CODEX-IDENTITY",
+                "target_rule": "SPEC-CODEX-IDENTITY",
+            }
+        ]
+        for rule in rules:
+            if rule in self.ADD_RULES:
+                entries.append({"classification": "add", "baseline_rule": None, "target_rule": rule})
+            elif rule in self.DELETE_RULES:
+                entries.append({"classification": "delete", "baseline_rule": rule, "target_rule": None})
+            else:
+                entries.append({"classification": "change", "baseline_rule": rule, "target_rule": rule})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            CanonicalImportTests._write(
+                root / "target.json",
+                {"codex_version": "0.156.1", "profile_payload": target},
+            )
+            CanonicalImportTests._write(
+                root / "migration.json", {"status": "approved", "entries": entries}
+            )
+            CanonicalImportTests._write(
+                root / "patches.json",
+                {
+                    "schema_version": "codex-upgrade-profile-rule-patches/v2",
+                    "baseline_version": "0.154.0",
+                    "target_version": "0.156.1",
+                    "active_profile_sha256": codex_upgrade.file_sha256(self.ACTIVE),
+                    "rule_patches": patches,
+                },
+            )
+            return codex_upgrade.validate_profile_derivation(
+                active_profile_path=self.ACTIVE,
+                target_profile_path=root / "target.json",
+                migration_path=root / "migration.json",
+                patch_manifest_path=root / "patches.json",
+            )
+
+    def test_keyed_add_remove_and_multi_rule_attribution(self) -> None:
+        """删除端点可同时归属多条规则；新增端点、请求头与顶层节按键控路径登记。"""
+
+        target, patches = self._scenario()
+        result = self._validate(target, patches)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["patch_schema_version"], "codex-upgrade-profile-rule-patches/v2")
+        for rule in ("SPEC-EP-007", "SPEC-EP-014", "SPEC-EP-020", "SPEC-HDR-006"):
+            self.assertEqual(result["rule_field_paths"][rule], ["/Endpoints/ID=responses_compact"])
+        self.assertEqual(
+            result["rule_field_paths"]["SPEC-WS-002"],
+            ["/Endpoints/ID=responses_ws/Headers/Name=cookie"],
+        )
+        self.assertIn("/WorkspaceRouting", result["profile_diff_paths"])
+        # 版本字面替换坐标同样以键控形式给出，不与规则路径重叠。
+        self.assertIn(
+            "/Endpoints/ID=models/Query/Name=client_version/Value",
+            result["version_identity_paths"],
+        )
+        self.assertFalse(
+            set(result["version_identity_paths"]) & {path for patch in patches for path in [patch["path"]]}
+        )
+        self.assertEqual(result["live_request_count"], 0)
+
+    def test_added_element_follows_target_relative_order(self) -> None:
+        """新增元素插在目标里最近的已存在前驱之后，与目标顺序逐项一致。"""
+
+        target, patches = self._scenario()
+        ids = [item["ID"] for item in target["Endpoints"]]
+        self.assertEqual(ids[ids.index("wham_accounts_check") - 1], "responses_ws")
+        self._validate(target, patches)
+        moved = self.copy.deepcopy(target)
+        endpoints = moved["Endpoints"]
+        check = next(item for item in endpoints if item["ID"] == "wham_accounts_check")
+        endpoints.remove(check)
+        endpoints.append(check)
+        # 仅改变新增元素的位置同样可以派生（插入位置取自目标），校验仍通过。
+        self._validate(moved, patches)
+
+    def test_unmapped_target_change_is_rejected(self) -> None:
+        target, patches = self._scenario()
+        self._endpoint(target, "models")["Accept"] = "application/json"
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "未映射路径"):
+            self._validate(target, patches)
+
+    def test_missing_patch_for_affected_rule_is_rejected(self) -> None:
+        target, patches = self._scenario()
+        affected = sorted({rule for patch in patches for rule in patch["rule_ids"]})
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "至少绑定一个画像路径"):
+            self._validate(target, patches[:-1], affected=affected)
+
+    def test_index_segment_on_keyed_list_is_rejected(self) -> None:
+        target, patches = self._scenario()
+        patches[2]["path"] = "/Endpoints/ID=responses_ws/Headers/25"
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "键控字段 Name"):
+            self._validate(target, patches)
+
+    def test_before_mismatch_and_bad_rule_ids_are_rejected(self) -> None:
+        target, patches = self._scenario()
+        bad = self.copy.deepcopy(patches)
+        bad[3]["before"] = "always"
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "before 不匹配"):
+            self._validate(target, bad)
+        bad = self.copy.deepcopy(patches)
+        bad[0]["rule_ids"] = ["SPEC-EP-014", "SPEC-EP-007"]
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "规则、操作或路径非法"):
+            self._validate(target, bad, affected=sorted({r for p in patches for r in p["rule_ids"]}))
+
+    def test_patch_on_version_path_is_rejected(self) -> None:
+        target, patches = self._scenario()
+        extra = {
+            "rule_ids": ["SPEC-EP-021"],
+            "op": "replace",
+            "path": "/Endpoints/ID=models/Query/Name=client_version/Value",
+            "before": "0.156.1",
+            "after": "0.156.1",
+        }
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "规则、操作或路径非法"):
+            self._validate(target, [*patches, extra])
+
+    def test_reorder_of_existing_elements_needs_list_level_patch(self) -> None:
+        """共同元素相对顺序变化只能由整个列表的补丁表达，逐元素补丁无法冒充。"""
+
+        target, patches = self._scenario()
+        headers = self._endpoint(target, "models")["Headers"]
+        before = self.copy.deepcopy(headers)
+        headers[0], headers[1] = headers[1], headers[0]
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "未映射路径=/Endpoints/ID=models/Headers",
+        ):
+            self._validate(target, patches)
+        # 纯重排由整个列表的 replace 表达时放行，并以列表路径归属。
+        reorder = {
+            "rule_ids": ["SPEC-H1-004"],
+            "op": "replace",
+            "path": "/Endpoints/ID=models/Headers",
+            "before": before,
+            "after": headers,
+        }
+        result = self._validate(target, [*patches, reorder])
+        self.assertEqual(
+            result["rule_field_paths"]["SPEC-H1-004"], ["/Endpoints/ID=models/Headers"]
+        )
+
+    def test_v1_manifest_behaviour_is_unchanged(self) -> None:
+        """v1 仍拒绝新增键：同样的顶层新增在 v1 下失败关闭。"""
+
+        target = self.copy.deepcopy(self.base)
+        target["WorkspaceRouting"] = {"NonDefault": "fail_closed"}
+        target["Digest"] = "e" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            CanonicalImportTests._write(
+                root / "target.json",
+                {"codex_version": "0.156.1", "profile_payload": target},
+            )
+            CanonicalImportTests._write(
+                root / "migration.json",
+                {
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "classification": "change",
+                            "baseline_rule": "SPEC-EP-002",
+                            "target_rule": "SPEC-EP-002",
+                        }
+                    ],
+                },
+            )
+            CanonicalImportTests._write(
+                root / "patches.json",
+                {
+                    "schema_version": "codex-upgrade-profile-rule-patches/v1",
+                    "baseline_version": "0.154.0",
+                    "target_version": "0.156.1",
+                    "active_profile_sha256": codex_upgrade.file_sha256(self.ACTIVE),
+                    "rule_patches": [
+                        {
+                            "rule_id": "SPEC-EP-002",
+                            "path": "/WorkspaceRouting",
+                            "before": None,
+                            "after": {"NonDefault": "fail_closed"},
+                        }
+                    ],
+                },
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "路径不存在"):
+                codex_upgrade.validate_profile_derivation(
+                    active_profile_path=self.ACTIVE,
+                    target_profile_path=root / "target.json",
+                    migration_path=root / "migration.json",
+                    patch_manifest_path=root / "patches.json",
+                )
 
 
 if __name__ == "__main__":

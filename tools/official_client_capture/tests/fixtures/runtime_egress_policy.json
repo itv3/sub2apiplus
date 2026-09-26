@@ -1,0 +1,54 @@
+{
+  "schema_version": "codex-runtime-egress-policy/v1",
+  "policy_id": "isolated-egress-fixture",
+  "revision": 1,
+  "authorization": {
+    "actor": "隔离夹具",
+    "authorized_at_utc": "2026-09-23T00:00:00Z",
+    "reason": "仅验证配置与内核合同，不接入生产网络"
+  },
+  "services": {
+    "sub2apiplus": {
+      "cgroup_parent": "sub2api_egress.slice",
+      "dns_servers": ["1.1.1.1", "9.9.9.9"],
+      "dependencies": [{"container": "postgres", "protocol": "tcp", "ports": [5432]}],
+      "ingress_tcp_ports": [8080]
+    },
+    "capture-cli": {
+      "cgroup_parent": "sub2api_egress.slice",
+      "dns_servers": ["1.1.1.1", "9.9.9.9"],
+      "dependencies": [{"container": "sub2apiplus", "protocol": "tcp", "ports": [8080]}],
+      "ingress_tcp_ports": []
+    }
+  },
+  "nodes": {
+    "origin": {
+      "interface": "wg-egress",
+      "tunnel_ipv4": "10.79.32.1/30",
+      "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "endpoint": {"ipv4": "213.35.102.31", "port": 51832},
+      "listen_port": 51832,
+      "mtu": 1420,
+      "public_interface": "eth0"
+    },
+    "exit": {
+      "interface": "wg-egress",
+      "tunnel_ipv4": "10.79.32.2/30",
+      "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+      "endpoint": {"ipv4": "69.63.195.102", "port": 51832},
+      "listen_port": 51832,
+      "mtu": 1420,
+      "public_interface": "eth0"
+    }
+  },
+  "allowed_public_ipv4": ["69.63.195.102"],
+  "probe_urls": ["https://api.ipify.org", "https://checkip.amazonaws.com", "https://ifconfig.me/ip"],
+  "probe_quorum": 2,
+  "probe_refresh_seconds": 15,
+  "probe_max_age_seconds": 30,
+  "lease_seconds": 3,
+  "poll_seconds": 0.5,
+  "route_table": 51832,
+  "rule_priority": 3900,
+  "control_port": 38181
+}

@@ -33,15 +33,18 @@ ORDER = artifacts.VC_PHASES
 
 # 子进程驱动：按配置 patch 入口内部函数（raise／exit_before／exit_after），再跑真实入口。
 DRIVER = r"""
-import argparse, json, os, sys
+import argparse, json, os, sys, tempfile
 from pathlib import Path
 from unittest import mock
 sys.path.insert(0, sys.argv[1])
 config = json.loads(sys.argv[2])
+# 崩溃点用 os._exit 直接结束进程，出口夹具的临时目录来不及删除；让它落在父用例的临时根目录下，随用例一起清理。
+tempfile.tempdir = config["tmpdir"]
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
+from tools.official_client_capture.tests import runtime_egress_fixtures
 modules = {"codex_upgrade": codex_upgrade, "supervisor": supervisor, "reconciler": reconciler}
 for item in config["patches"]:
     module = modules[item["module"]]
@@ -68,7 +71,9 @@ for item in config["patches"]:
     setattr(module, item["name"], make(original, mode))
 path_keys = {"campaign_dir", "state_dir", "predecessor_checkpoint", "action_plan"}
 args = argparse.Namespace(**{k: (Path(v) if k in path_keys else v) for k, v in config["arguments"].items()})
-with mock.patch.object(rehearsal, "_target_evidence_label_declaration_sha256", return_value="d" * 64):
+with mock.patch.object(rehearsal, "_target_evidence_label_declaration_sha256", return_value="d" * 64), \
+     runtime_egress_fixtures.offline_campaign_egress():
+    # 与父测试 _vc_chain_fixture 一致：纯零请求故障夹具不读取生产出口策略。
     try:
         result, returncode = codex_upgrade.compile_and_run_vc_batch(args)
         print(json.dumps({"returncode": returncode, "status": result["status"], "run_dir": result["campaign_run"]["run_dir"]}))
@@ -129,8 +134,12 @@ class StagingDispatchTests(unittest.TestCase):
         campaign_dir = fixture["campaign_dir"]
         action_plan = self._plan(root, campaign_dir, phase, tag=tag)
         arguments = self._arguments(fixture, phase, sequence, action_plan)
+        # 子进程的临时目录放在本用例临时根目录下（0700），os._exit 留下的夹具目录随用例一起删除。
+        driver_tmp = root / "driver-tmp"
+        driver_tmp.mkdir(mode=0o700, exist_ok=True)
         config = {
             "patches": patches,
+            "tmpdir": str(driver_tmp),
             "arguments": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(arguments).items()},
         }
         completed = subprocess.run(

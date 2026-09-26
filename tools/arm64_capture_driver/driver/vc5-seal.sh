@@ -34,9 +34,9 @@ rehearse() { local plan="$1"; local upper="$RUNROOT/seal-rehearsal-upper"; rm -r
   python3 -m tools.official_client_capture.codex_upgrade rehearse-candidate-seal --campaign-dir "$NEWDIR" --candidate-id "$CAND" --attempt-id "$ATT" --action-plan "$W/$plan" --data-root "$D" --alias-root /root/oauth-capture --upper-root "$upper" > "$W/rehearsal-$plan.out" 2> "$W/rehearsal-$plan.err" || { echo "REHEARSAL FAILED"; tail -c 1500 "$W/rehearsal-$plan.err"; return 1; }
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print('预演:', {k:(str(d.get(k))[:70]) for k in ('status','receipt','lower_unchanged','live_request_count','actions_sha256')})" "$W/rehearsal-$plan.out"; rm -rf "$upper"; }
 if [ "$SEALED" = 0 ] && [ ! -f "$EV/client/raw/kilo-facts.json" ]; then
-  echo "=== 等待账号 22 调度投影不再含 candidate-frozen-aux 临时写入的 model_mapping"
+  echo "=== 等待账号 ${CODEX_ACCOUNT_ID} 调度投影不再含 candidate-frozen-aux 临时写入的 model_mapping"
   for i in $(seq 1 60); do
-    if docker exec sub2apiplus-redis sh -c "unset REDISCLI_AUTH; redis-cli --no-auth-warning get sched:acc:22" | python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); sys.exit(0 if 'model_mapping' not in (d.get('Credentials') or {}) else 1)"; then echo "投影已刷新（第 $i 次检查）"; break; fi
+    if docker exec sub2apiplus-redis sh -c "unset REDISCLI_AUTH; redis-cli --no-auth-warning get sched:acc:${CODEX_ACCOUNT_ID}" | python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); sys.exit(0 if 'model_mapping' not in (d.get('Credentials') or {}) else 1)"; then echo "投影已刷新（第 $i 次检查）"; break; fi
     sleep 10
   done
   echo "=== Kilo 双入口"; bash "$DRV/vc5-kilo.sh" "$ATT" 2>&1 | tail -n 6 | cut -c1-300; test -f "$EV/client/raw/kilo-facts.json"

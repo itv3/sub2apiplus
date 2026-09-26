@@ -442,6 +442,16 @@
         },
         "required_model_receipt": {
           "type": "boolean"
+        },
+        "tool_dependencies": {
+          "description": "R16：逐作业显式工具依赖，相对工具根的路径，排序去重；声明后依赖只按清单取摘要，不再递归扫描文件引用。",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+          }
         }
       }
     }

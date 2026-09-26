@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-runtime-egress-compose-v1.json",
+  "title": "容器出口保护配置制品",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_sha256",
+    "container",
+    "compose_service",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-runtime-egress-compose/v1"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "container": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compose_service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolv.conf",
+        "compose.override.json"
+      ],
+      "properties": {
+        "resolv.conf": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "compose.override.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

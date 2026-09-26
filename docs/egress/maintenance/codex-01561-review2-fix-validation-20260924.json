@@ -1,0 +1,278 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "阶段 1 复审修正（总账定位唯一命中、部署切换后客户端核验、读侧只读降级、回退兼容用例补齐）",
+  "source_commit": "da3f78cae2c49807ff308ed75bc9aea431929312",
+  "source_commits": [
+    "3eb3eb7ab4849e60d6f57113b99aaa51d70fcf0c",
+    "6d6b3470beef71a072e41b3bfac389af72b19f2f",
+    "ab49095851db87294e332ee62babf7789ff34075",
+    "da3f78cae2c49807ff308ed75bc9aea431929312"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1修正复审与拍板意见-20260924.md》第二节（8 处措辞）、第三节（两处发布前小修与 v8 登记）、第四节第 7 条（选项 B，老板 2026-09-24 确认按复审意见执行）",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T19:29:08.298513+00:00",
+  "fixes": [
+    {
+      "finding": "_locate_project_root 按记录路径与祖先链候选取第一个命中：数据根被复制、旧位置仍在时，副本树里的计时账本定位回旧位置的总账并按它的事件流判定截止与延期；plan_sha256 为 None 时接受任意带 plan.json 的候选，不绑定总账的计时账本里的延期事件走的正是这个分支。",
+      "resolution": "候选按真实路径去重后，计划摘要唯一命中才返回，多于一份或零份都失败关闭；plan_sha256 为 None 时不接受任何候选。指南允许 Campaign 账本不绑定项目总账，这类账本的延期事件改由 _locate_extension_project_root 以\"包含这次延期的提交证明\"为身份唯一定位（定位即核对），多份或零份候选视为不可达；有候选总账却都没有证明属于完整性问题照常报错。第一版（3eb3eb7ab）曾让延期拒绝不绑定总账的账本，本机真实链 test_cli_sigkill_extension_resumes_original_campaign 因此失败，确认属功能退化后在 da3f78cae 撤回，总账模块恢复与 856ee47da 逐字节一致。红：856ee47da 整棵工具树上复制后的多份总账未被拒绝；ab4909585 上合法的无绑定账本延期被拒。"
+    },
+    {
+      "finding": "部署切换后枚举 /opt/codex-*/bin/codex：只要至少一个客户端可用就放行，本轮目标版本缺失也能通过；非 x.y.z 命名或执行失败的其他目录让整个部署被拒；探针对不可执行的二进制直接异常退出。",
+      "resolution": "read_target_codex_version 从已部署工具树的目标场景清单读取 codex_version（经 reject_untrusted_file 信任检查）；verify_container_codex_binaries 要求 /opt/codex-<目标版本>/bin/codex 存在、returncode 0、版本自报一致，其余目录只记录 verified=false；CODEX_BINARY_PROBE 对任一二进制的执行异常只记录。部署收据新增 codex_target_version。修改前行为演示登记在红日志。"
+    },
+    {
+      "finding": "_summarize 仍打开并重放总账，总账无法定位时计时账本命令行 status、replay 与 Campaign status 都失败；main 上 campaign_status 对总账不可达返回 project_ledger=None 而不失败，R8 的截止投影 _campaign_status_with_deadlines 引入了这一回归。",
+      "resolution": "按复审选项 B：_summarize、inspect_ledger、replay、effective_deadlines 增加 project_ledger_optional 开关，只由计时账本命令行 status／replay 与 _campaign_status_with_deadlines 启用。降级时项目层截止取绑定冻结的 effective_deadline_at_start_utc（无冻结值则不判定项目层），本账本延期的总账提交证明记为未核实，摘要附加 project_ledger_unreachable（reason、project_deadline_source、project_deadline_at_utc、unverified_deadline_extensions）；replay 对 status、paused_scopes、paused_since_utc、paused_hours、review_reminder 五个依赖项目层的字段取冻结值并登记 unverified_summary_fields，其余逐字节比对。总账可达时摘要格式不变。写路径（append_event、checkpoint、close）、准入与程序内回放保持默认，总账不可达即失败关闭。"
+    },
+    {
+      "finding": "回退兼容用例：R11 两条只是纯函数比较，没有落盘数据与字节断言；R8 缺 deadline_extended、campaign_abandoned、deadline_extension_committed 的旧工具拒绝用例。",
+      "resolution": "R8：基线工具建两本账后，当前工具走真实延期与显式放弃流程，基线工具在计时账本的 deadline_extended／campaign_abandoned 处（按报错序号核对事件类型）与总账处失败关闭，两本账字节不变；另核对基线工具两本账事件闭集，R4、R8 新增 7 种事件全部不在旧闭集内。R11：带复用许可的恢复段预约按真实格式与自摘要落盘，基线工具 _load_attempt_recovery_reservation 能读入新字段，后继段范围核对拒绝，读取不改字节。属于补测试覆盖，测的是既有行为，没有修改前失败。"
+    }
+  ],
+  "clarifications": [
+    "偏离复审字面：复审要求 plan_sha256 为 None 时不接受任何候选，_locate_project_root 照此执行；但不绑定总账是指南允许的合法状态，这类账本的延期事件不再走 None 分支，改以延期提交证明为身份判据并同样要求唯一命中，满足\"无法确认身份就不接受\"的原意而不让合法延期失效。",
+    "降级只对人工只读入口开放：inspect_ledger 有 40 余个调用者，多数是写路径或准入前置，默认值保持失败关闭，避免拿降级摘要放行写入。",
+    "降级局限：项目层截止取账本开始时刻的冻结值，不含之后批准的项目级延期与跨账本未闭合事务；replay 在这种情况下把受影响字段登记为未核实而不是通过。",
+    "总账可以定位但证明缺失（延期未在总账提交）属于完整性问题，只读降级下仍然报错。",
+    "v8 环境收据：R15 修正（44c015e78、5d218b931）改变了 PRODUCER_VERSION=8 收据的格式而未升版本，修正前采集的 v8 收据在当前工具下不可重放；生产没有 v8 收据（v14r5 为 v7），不升版本，R15 自查报告已登记“修正前的 v8 视为未发布”。",
+    "承接收据 4 项人工动作均为部署脚本受管摘要：监督器（ecaad15e…）与断言预处理器本轮未改，两个常量与实际一致；工具树摘要部署时计算；部署脚本自身作为承接边登记在收据内。",
+    "测试文件 test_codex_runtime_egress.py 原用例 test_container_codex_binaries_are_enumerated_not_pinned 语义改变，由三条新用例替换。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "f3c68ff0fed0a6725efd886e85fc56d24faa9411115f28e6fdfc39845b6fa73e",
+      "after": "06ed7fd70d4ac4fcb50533b222de0ddd17235db587d58bdb126a01324b97d6fa"
+    },
+    "method": "git archive 按提交号导出 856ee47da 与 fe7b56084 的 tools、docs 后复算"
+  },
+  "regression": {
+    "red": {
+      "locate": "review2-locate-red.log：856ee47da 代码上复制迁移多份总账、缺计划摘要两条用例未抛错；其中第三条 test_unbound_timing_ledger_cannot_extend 属第一版过严做法，已由 test_unbound_timing_ledger_extension_is_located_by_commit_proof 取代",
+      "unbound": "review2-unbound-red.log：git archive 导出的整棵 856ee47da 工具树上复制后的多份总账未被拒绝；ab4909585 上合法的无绑定账本延期被第一版预检拒绝",
+      "codex_client": "review2-codex-client-red.log：修改前签名不支持目标版本、无读取函数、探针遇不可执行二进制整体失败，附修改前行为演示（目标缺失照过、非 x.y.z 目录拒绝整个部署）",
+      "read_only": "review2-readonly-red.log：修改前无降级参数，附行为演示（总账移走后计时账本命令行 status、replay 退出码 1，Campaign status 抛错）",
+      "rollback": "回退兼容用例属补测试覆盖，测的是既有行为，没有修改前失败"
+    },
+    "green_final": {
+      "tree": "fe7b56084736b5c5215b8d54b47ef79643e7f020",
+      "log": "review2-green-final.log",
+      "tests": 14,
+      "result": "OK"
+    },
+    "related_modules": {
+      "tree": "fe7b56084736b5c5215b8d54b47ef79643e7f020",
+      "log": "review2-related-modules.log",
+      "tests": 301,
+      "result": "OK"
+    },
+    "deadline_chain_after_rework": {
+      "tree": "da3f78cae 工作树（提交前）",
+      "log": "review2-deadline-chain-local.log",
+      "tests": 3,
+      "seconds": 199.163,
+      "result": "OK"
+    },
+    "local_full": {
+      "tree": "fe7b56084736b5c5215b8d54b47ef79643e7f020",
+      "units": {
+        "log": "review2-local-capture-tools.log",
+        "tests": 2199,
+        "skipped": 22,
+        "seconds": 952.835,
+        "result": "OK",
+        "skipped_reasons": "18 项依赖本地忽略区证据，3 项需要抓包容器，1 项需要 Linux /proc 与 setsid"
+      },
+      "claude_local_evidence": {
+        "log": "review2-local-claude-local-evidence.log",
+        "tests": 54,
+        "result": "OK",
+        "note": "复制主工作区忽略区证据后补跑上面 18 项所在的 5 个模块，跑完只删复制品"
+      },
+      "real_chains": {
+        "log": "review2-local-real-chains.log",
+        "tests": 46,
+        "skipped": 18,
+        "seconds": 3629.341,
+        "result": "OK",
+        "note": "本机跳过的 18 条需要 ARM64 Linux、Docker、Go 或 root，由 ARM64 执行"
+      }
+    },
+    "local_full_before_rework": {
+      "tree": "ab4909585（含第一版过严预检）",
+      "units": {
+        "log": "review2-local-capture-tools-ab4909585.log",
+        "tests": 2199,
+        "result": "OK"
+      },
+      "real_chains": {
+        "log": "review2-local-real-chains-ab4909585.log",
+        "tests": 46,
+        "result": "FAILED",
+        "detail": "test_cli_sigkill_extension_resumes_original_campaign：延期预览被第一版预检拒绝，据此发现功能退化并返工"
+      }
+    },
+    "arm64_superseded": {
+      "tree": "102ff89bf（含第一版过严预检，已作废）",
+      "A": "评估恢复链 8 项 OK（5336 秒）",
+      "B1": "单测 2199 项 OK（跳过 21）",
+      "B2": "发现本机真实链失败后主动停止（exit=241），未跑到延期真实链",
+      "logs": [
+        "review2-arm64-A-102ff89bf.log",
+        "review2-arm64-B1-102ff89bf.log",
+        "review2-arm64-B2-102ff89bf.log"
+      ]
+    },
+    "arm64_full": {
+      "tree": "fe7b56084736b5c5215b8d54b47ef79643e7f020（增量 git bundle 从收尾检出本地克隆后切换，含完整历史与承接收据）",
+      "architecture": "aarch64",
+      "strict_real_chains": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1：真实链的任何跳过都按失败处理",
+      "A_attempt_recovery_chain": {
+        "log": "review2b-arm64-A.log",
+        "tests": 8,
+        "seconds": 5340.045,
+        "result": "OK"
+      },
+      "B1_units": {
+        "log": "review2b-arm64-B1.log",
+        "tests": 2199,
+        "skipped": 21,
+        "seconds": 1982.245,
+        "result": "OK",
+        "skipped_reasons": "18 项依赖本地忽略区证据（本机补跑覆盖），3 项需要抓包容器依赖（两端都未执行，既有环境限制）"
+      },
+      "B2_other_real_chains": {
+        "log": "review2b-arm64-B2.log",
+        "tests": 38,
+        "skipped": 0,
+        "seconds": 6787.771,
+        "result": "OK"
+      },
+      "real_chains_total": "46 项全部执行并通过，零跳过"
+    }
+  },
+  "gates": {
+    "tree": "fe7b56084736b5c5215b8d54b47ef79643e7f020",
+    "log": "review2-gates.log",
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "maintenance_markdown_count": 0,
+    "freeze_successor": "区间 856ee47da..da3f78cae，3 条承接边（部署脚本、编排器、计时账本）；3 项人工动作均为部署脚本受管摘要，监督器与断言预处理器未改、常量与实际一致，部署脚本自身作为承接边登记"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-review2-fix-20260924-freeze-successor.json",
+      "sha256": "a1b2ff73c1748a256d3bd25399d1a596b78bba721d5c4949f7ad664e2f16188a"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review2-locate-red.log",
+      "sha256": "0b1391e94baff1399eec5907faecf3c382812d736460946a25776645c376844f"
+    },
+    {
+      "file": "review2-unbound-red.log",
+      "sha256": "cd9bcb6d922921e7d156d27eac414f816870c8581656018acd5ac3569a7de84b"
+    },
+    {
+      "file": "review2-codex-client-red.log",
+      "sha256": "eb037a2b23f2ed5939de67a232b2cffcee8123339a4e6b95bc6f402a1827f08b"
+    },
+    {
+      "file": "review2-readonly-red.log",
+      "sha256": "1526a6249e676a80571023804601f97b318372b8433f0ef6d09f02d3b2542c77"
+    },
+    {
+      "file": "review2-codex-client-green.log",
+      "sha256": "66f9219e3ac9b2a0aed291cf14356c664438e88fc495d45374cce69b72f6f2d4"
+    },
+    {
+      "file": "review2-readonly-locate-green.log",
+      "sha256": "4f18d78ca54a48c4ba288f066d482a5d88b3c6eb6901ae2ebdf8d643080f375c"
+    },
+    {
+      "file": "review2-green-final.log",
+      "sha256": "f6230399fa62e316384aea4b1ddfdd51aa0105acc86341b97d1c730dd8c46ce4"
+    },
+    {
+      "file": "review2-related-modules.log",
+      "sha256": "3561f0b3036b5597fd5785f827f60329eb8dbd7a384240c7aafe0e24067f5772"
+    },
+    {
+      "file": "review2-deadline-chain-local.log",
+      "sha256": "710e728aa33f9377c6cf76d539b030690b5df81a8607c932d547a7bf9d73925b"
+    },
+    {
+      "file": "review2-local-capture-tools.log",
+      "sha256": "46dee23fc1ca8077457a19eb6e651d6e999880e91376b480ac0390989565621f"
+    },
+    {
+      "file": "review2-local-claude-local-evidence.log",
+      "sha256": "9deba04245f503a62dc9fdafdad5188f95cef404e9377d9c2c760f662fd1db50"
+    },
+    {
+      "file": "review2-local-real-chains.log",
+      "sha256": "d09ae3d881e6722baff821cfda1fed1e9f0762f0be44ccd397953090bbe29d53"
+    },
+    {
+      "file": "review2-local-capture-tools-ab4909585.log",
+      "sha256": "e816b8e77f996c06f33baa18b7f49e1adbc320d8c234629d821cbb0f6c9173b4"
+    },
+    {
+      "file": "review2-local-claude-local-evidence-ab4909585.log",
+      "sha256": "bfb411c52724cecd22439489d2156f833a52ba367697f205a62633001d59c374"
+    },
+    {
+      "file": "review2-local-real-chains-ab4909585.log",
+      "sha256": "386c9ce86249cb4f9e0a1af81ffcca3be30592a2b3b885a9297ae6937ba84198"
+    },
+    {
+      "file": "review2-arm64-A-102ff89bf.log",
+      "sha256": "ad4560c413f208364672b7c62e72ba7056a6ab00801af9a67c6354b00cf03e1e"
+    },
+    {
+      "file": "review2-arm64-B1-102ff89bf.log",
+      "sha256": "ec5d7eb7ea19f9c24f4ca10907146b81c0a189bb260c3eed5c1491ba944eab17"
+    },
+    {
+      "file": "review2-arm64-B2-102ff89bf.log",
+      "sha256": "739c00428ec09fca2d62835e1d1cbff86f4dfc17ffea04329e812ff8376fffc9"
+    },
+    {
+      "file": "review2-freeze-generation.log",
+      "sha256": "0efac0ac43e3e72cd52239e8b85f8b0458bf35da6c6ba2916e5cfafcafbbc4c9"
+    },
+    {
+      "file": "review2-freeze-generation-superseded-ab4909585.log",
+      "sha256": "60610c1b28f7324fc39d5b5e29d3ea68ab09169db5caaafcfb0b4b5d21c4d394"
+    },
+    {
+      "file": "review2-freeze-successor-superseded-ab4909585.json",
+      "sha256": "f2d8307b0d259498b7cbbc12c254adb8c4bc4e6b47c93b8f1c3dc50c804ec750"
+    },
+    {
+      "file": "review2-gates.log",
+      "sha256": "aeca314175e6c7606b9829f0bfc3f0b6972443cd1d4e59c985312ace61af4bc9"
+    },
+    {
+      "file": "review2b-arm64-A.log",
+      "sha256": "4aa17e5f0f75fc2c3156303699dfd1d549893e34dd502d2520b7a1e552348cd9"
+    },
+    {
+      "file": "review2b-arm64-B1.log",
+      "sha256": "07065476ea20b8f11d0b88cd16f5b0d6c4b274bde231a0638b132cefa90cc231"
+    },
+    {
+      "file": "review2b-arm64-B2.log",
+      "sha256": "b84bfb45013e309adcf3a902e6d9abab811f7f88c3ce1cc8773417de1d65d833"
+    }
+  ]
+}

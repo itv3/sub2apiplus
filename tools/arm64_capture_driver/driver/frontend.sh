@@ -6,7 +6,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # 前端源码副本：frontend/ 与其 ?raw 引用的 docs/legal（LegalDocumentView.vue 引用 ../../../../docs/legal/*.md）
 rm -rf "$B/frontend-build"; mkdir -p "$B/frontend-build"
 git -C "$B/source" archive "$C" frontend docs/legal | tar -x -C "$B/frontend-build"
-docker run --rm -v "$B/frontend-build:/work" -w /work/frontend -e CI=true node:20-slim bash -c '
+E=$(cat "$RUNROOT/E.txt")
+NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")
+docker run --rm -v "$B/frontend-build:/work" -w /work/frontend -e CI=true "$NODE_IMAGE_ID" bash -c '
   set -e; umask 022
   corepack enable && corepack prepare pnpm@9.15.9 --activate
   node --version > /work/node-version.txt; pnpm --version > /work/pnpm-version.txt

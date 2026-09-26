@@ -16,6 +16,7 @@ import re
 import secrets
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -1317,7 +1318,8 @@ def _probe_identity_key(
 
 def _default_restart(service_container: str, runner: CommandRunner) -> dict[str, Any]:
     _run_checked(
-        ["docker", "restart", service_container],
+        [sys.executable, str(Path(__file__).with_name("codex_upgrade_supervisor.py")),
+         "egress-transition", "--container", service_container, "--", "docker", "restart", service_container],
         "Candidate 服务清理 models 缓存",
         runner,
     )
@@ -1546,6 +1548,12 @@ def _matching_session(
         )
         if not receipt_path.exists():
             if not is_matching:
+                if not intent_indexes and not result_indexes:
+                    # 就绪在首次 dispatch 之前中断留下的会话从未发出请求、不涉及记账；工具受监督部署会改变
+                    # static_receipt_digest，若仍按"其它身份未完成会话"失败关闭，就绪中断后修好工具也永远无法
+                    # 重派（2026-09-26 c01570 VC-5 批次 10）。这类会话只跳过、不改写；已有 intent／result 的
+                    # 不匹配会话仍失败关闭。
+                    continue
                 raise ValueError("存在属于其它 Candidate 身份的未完成 probe session")
             incomplete.append((path, payload))
         if is_matching:

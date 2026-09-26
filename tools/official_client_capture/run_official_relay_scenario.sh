@@ -100,6 +100,12 @@ if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 IFS=. read -r codex_major codex_minor _ <<<"$codex_version"
+# daemon-tui 取的是 0.157.0 起默认开启的 daemon 路径；更早的版本默认不拉起 daemon，
+# 跑下去只会得到内嵌模式样本，在任何请求之前拒绝。
+if [[ $scenario == "daemon-tui" ]] && (( codex_major == 0 && codex_minor < 157 )); then
+  echo "daemon-tui 需要 Codex >=0.157.0（daemon_auto_start 默认开启）。" >&2
+  exit 2
+fi
 a14_c2pa_expectation=${A14_C2PA_EXPECTATION:-}
 if [[ $scenario == "file-upload" ]]; then
   # 0.151 起 uploaded Body 受 create 响应中的 pdf_c2pa_reservation 控制。
@@ -169,6 +175,43 @@ if [[ $model_catalog_only == 1 && $require_model_receipt != 1 ]]; then
   exit 2
 fi
 
+# 请求断言（0.156.1 起）。原先只有 REQUIRE_REQUEST_PATH 一条正向门禁，表达不了 delete
+# 规则：legacy /responses/compact 已从官方客户端删除，正场景要证明「原触发条件下不再
+# 发出该请求」，还要证明压缩确实发生过，否则"没发出"可能只是没触发。
+# - FORBID_REQUEST_PATHS：单个空格分隔的绝对路径，任一方法命中即失败；存在解析不了的
+#   连接时同样失败，看不清的字节不能当成"没发出"。
+# - EXPECT_COMPACTION_REASON：要求中继字节里出现该原因的 V2 压缩请求（只认 WS 帧）。
+# - REQUIRE_REQUEST_HEADER：name:value，至少一个请求（含 WS 升级请求）带该头且值完全
+#   相等，用于 guardian 审阅这类只能从请求头确认的目标分支。
+forbid_request_paths=${FORBID_REQUEST_PATHS:-}
+request_path_list_pattern='^/[A-Za-z0-9._/-]+( /[A-Za-z0-9._/-]+)*$'
+if [[ -n $forbid_request_paths && ! $forbid_request_paths =~ $request_path_list_pattern ]]; then
+  echo "FORBID_REQUEST_PATHS 只能是单个空格分隔的绝对路径。" >&2
+  exit 2
+fi
+expect_compaction_reason=${EXPECT_COMPACTION_REASON:-}
+case $expect_compaction_reason in
+  ''|user_requested|context_limit|model_downshift|comp_hash_changed) ;;
+  *)
+    echo "EXPECT_COMPACTION_REASON 只能是 user_requested、context_limit、model_downshift 或 comp_hash_changed。" >&2
+    exit 2 ;;
+esac
+require_request_header=${REQUIRE_REQUEST_HEADER:-}
+if [[ -n $require_request_header && ! $require_request_header =~ ^[a-z0-9-]+:[A-Za-z0-9._=-]+$ ]]; then
+  echo "REQUIRE_REQUEST_HEADER 必须是 name:value，name 用小写。" >&2
+  exit 2
+fi
+# guardian 审阅只在需要审批的动作上触发。workspace-write 默认把 /tmp 列为可写根
+# （exclude_slash_tmp 默认 false），写 /tmp 可能根本不走审批，也就没有 guardian 请求，
+# 所以 0.156.1 起清单改用 /var/tmp。默认值仍是 /tmp，历史只读演练的提示词逐字不变。
+guardian_probe_path=${GUARDIAN_PROBE_PATH:-/tmp/codex-guardian-probe.txt}
+case $guardian_probe_path in
+  /tmp/codex-guardian-probe.txt|/var/tmp/codex-guardian-probe.txt) ;;
+  *)
+    echo "GUARDIAN_PROBE_PATH 只能是 /tmp/codex-guardian-probe.txt 或 /var/tmp/codex-guardian-probe.txt。" >&2
+    exit 2 ;;
+esac
+
 if [[ $capture_host_data_root != /* || $capture_host_data_root == / || -L $capture_host_data_root || ! -d $capture_host_data_root ]]; then
   echo "CAPTURE_HOST_DATA_ROOT 必须是可信的非根绝对目录。" >&2
   exit 2
@@ -212,6 +255,8 @@ memgen_home=""
 file_upload_home=""
 file_upload_path=""
 model_catalog_home=""
+# daemon-tui 的独立 CODEX_HOME（容器内路径）；非空即表示本作业可能拉起过 daemon。
+daemon_home=""
 auth_backup=""
 auth_before_sha256=""
 # SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
@@ -223,6 +268,12 @@ write_observation() {
   install -d -m 0700 "$observation_dir" 2>/dev/null || return 0
   printf '%s\n' "$payload" > "$observation_dir/$name" || return 0
   chmod 600 "$observation_dir/$name" 2>/dev/null || true
+}
+
+daemon_tool() {
+  # Codex app-server daemon 生命周期工具（drive_codex_daemon.py）在采集容器内执行，
+  # stdout 是一行不含凭据的 JSON，退出码 0 成功、3 条件不成立、2 参数非法。
+  docker exec "$capture_container" python3 "$capture_tool_root/drive_codex_daemon.py" "$@"
 }
 
 stop_relay() {
@@ -530,7 +581,13 @@ cleanup() {
   # 容器的 /etc/hosts 因此一直残留着劫持，中继停掉后所有出站都打向 127.0.0.1 被拒。
   # 这个残留会静默污染此后一切在该容器里的观测——A13 的首次手工复现就栽在这上面。
   set +e
-  # hosts 与临时 CA 最先还原：它们是污染后续采集的唯一途径，必须排在最前面。
+  # 唯一排在 hosts 还原之前的是停 daemon：hosts 与 CA 一旦还原，驻留的 daemon 下一次定时
+  # 模型刷新就会绕过中继直连真实上游。停止本身零请求（ARM64 实测 0.06 秒），工具在
+  # 宽限期满后兜底 SIGKILL，最坏约两分钟。作业正常结束时场景分支已停过，这里幂等。
+  if [[ -n $daemon_home ]]; then
+    daemon_tool stop --home "$daemon_home" --codex-bin "$codex_bin" >/dev/null 2>&1 || true
+  fi
+  # 其余环境中，hosts 与临时 CA 最先还原：它们是污染后续采集的唯一途径，必须排在最前面。
   for h in ${RELAY_HOSTS:-chatgpt.com}; do
     docker exec "$capture_container" sh -c \
       "grep -v \" $h\$\" /etc/hosts > /tmp/.hr && cat /tmp/.hr > /etc/hosts && rm -f /tmp/.hr" \
@@ -559,8 +616,14 @@ cleanup() {
   if [[ -n $model_catalog_home ]]; then
     docker exec "$capture_container" rm -rf -- "$model_catalog_home" >/dev/null 2>&1 || true
   fi
+  if [[ -n $daemon_home ]]; then
+    # home 内有 auth.json 副本与约 330 MB 的 daemon 客户端包；工具先核验无残留进程再删除。
+    daemon_tool remove --home "$daemon_home" >/dev/null 2>&1 || true
+  fi
   restore_auth_json
-  docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
+  # 探针文件只可能落在两个白名单位置之一；两处都清，避免模型改写到另一处后残留。
+  docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt \
+    /var/tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
   echo "环境已恢复：中继已停止，hosts 与系统信任库中的临时 CA 均已还原。"
   exit $status
 }
@@ -569,6 +632,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 install -d -m 0700 "$work_dir" "$tls_dir"
+
+# 0.157.0 起 TUI 默认拉起常驻 daemon。先前作业若异常退出留下 daemon，它的定时模型刷新会在
+# 本作业劫持 hosts 后混进中继样本，所以每个作业都在启动中继、改动 hosts 之前清扫：采集作业自己
+# 留下的按进程终止并删除 home；归属其它 CODEX_HOME 的 daemon 说明有人手工启动过客户端，失败关闭
+# 交人工核查。
+echo "=== daemon 残留清扫 ==="
+if ! daemon_tool sweep; then
+  echo "❌ 采集容器存在无法自动清理的 Codex daemon，拒绝发送请求。" >&2
+  exit 1
+fi
 
 # 中继面向客户端的证书——**多域名 SAN**。
 # 验 SPEC-EP-002（域名全集）与 SPEC-EP-012（live 双出站：chatgpt.com 建会话 +
@@ -923,6 +996,13 @@ case "$scenario" in
     # guardian 只在非 bypass 的真实审批链里触发。让模型请求在工作区外创建一个
     # 无害探针文件，auto_review 会启动 guardian 子代理审核该动作。
     prompt='__GUARDIAN_TUI__' ;;
+  daemon-tui)
+    # 0.157.0 起 TUI 默认经常驻 app-server daemon 发请求（daemon_auto_start 转为默认开启）。
+    # 其余 TUI 场景都带 --disable plugins/apps，属白名单外 CLI 覆盖，一律退回内嵌模式，
+    # 默认路径因此没有样本。本场景用独立的冷启动 CODEX_HOME、不带任何 CLI 覆盖启动 TUI，
+    # 功能开关改写进该 home 的 config.toml；daemon 在 TUI initialize 之前发出的 models 与
+    # accounts/check 即 SPEC-HDR-005 的 daemon 条件样本。daemon 在停中继之前停止并核验无残留。
+    prompt='__DAEMON_TUI__' ;;
   memgen)
     # 同一 app-server 内先构造持久线程 A，再由线程 B 启动 memories pipeline。
     # 使用专用临时 CODEX_HOME，避免历史 session/memory 污染候选集合；只在容器内部
@@ -1062,6 +1142,11 @@ case "$scenario" in
     prompt="这是经过授权的官方客户端出站采集。目标：调用一次内置 Sites 的 ${A14_TOOL_NAME:-save_site_version} 工具。如果该工具尚未在当前会话中直接暴露，请先执行必要的工具检索或加载步骤把它取出来——这些检索调用是允许且必要的。取到后只调用它一次，参数必须是：project_id=ep002-probe-do-not-exist，commit_sha=0000000000000000000000000000000000000000，archive=$file_upload_path。即使工具报错也立即停止，不要重试、不要创建站点、不要发布或部署。" ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
+# comp-hash-changed／model-downshift 自带压缩原因；清单只能重申同一原因，不能改判。
+if [[ -n $compaction_reason && -n $expect_compaction_reason && $compaction_reason != "$expect_compaction_reason" ]]; then
+  echo "EXPECT_COMPACTION_REASON 与场景自带的压缩原因不一致。" >&2
+  exit 2
+fi
 
 if [[ $require_model_receipt == 1 ]]; then
   echo "=== 在线模型目录预热（$model_track / $model）==="
@@ -1186,10 +1271,53 @@ elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
     --model "$model" --cwd /work --no-bypass \
     --approval-policy on-request --sandbox-mode workspace-write \
     --config 'approvals_reviewer="auto_review"' \
-    --prompt '请用 shell 在工作区外执行：printf guardian-probe > /tmp/codex-guardian-probe.txt。必须实际执行命令。' \
+    --prompt "请用 shell 在工作区外执行：printf guardian-probe > ${guardian_probe_path}。必须实际执行命令。" \
     --prompt-hold "${TUI_HOLD:-240}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__DAEMON_TUI__" ]]; then
+  # home 放在 /root 而不是 /tmp：客户端拒绝在临时目录下的 CODEX_HOME 里建 helper 别名并告警，
+  # 与默认用户路径不一致。赋值先于 prepare，prepare 半途失败时 cleanup 同样会清掉 home。
+  # home 名取 run_id 的 SHA-256 前 16 位而不是 run_id 本身：daemon 控制 socket 固定在
+  # <home>/app-server-control/app-server-control.sock，Linux 的 socket 路径最多 107 字节，
+  # 正式 Campaign 的 run_id 会让它超限，daemon 起不来、TUI 退回内嵌模式（2026-09-26 实测 120 字节）。
+  # 定长名让路径长度与 run_id 无关（socket 路径 79 字节），prepare 另行兜底核对。
+  daemon_home="/root/.codex-daemon-$(printf '%s' "$run_id" | sha256sum | cut -c1-16)"
+  if [[ ! $daemon_home =~ ^/root/\.codex-daemon-[0-9a-f]{16}$ ]]; then
+    echo "❌ daemon 作业的 home 名计算失败：${daemon_home}" >&2
+    daemon_home=""
+    exit 1
+  fi
+  daemon_prepare=$(daemon_tool prepare --home "$daemon_home" --disable-features "$DISABLE_FEATURES") || {
+    echo "❌ daemon 作业的独立 CODEX_HOME 建立失败：$daemon_prepare" >&2
+    exit 1
+  }
+  write_observation "daemon-home.json" "$daemon_prepare"
+  # 不传 --disable／--enable／--config：任何白名单外覆盖都会让 TUI 退回内嵌模式。
+  docker exec -e CODEX_HOME="$daemon_home" "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --prompt "${TUI_PROMPT:-请只回复 OK，不要做任何其他事。}" \
+    --prompt-hold "${TUI_HOLD:-90}" \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+  # 模式与版本在停 daemon 之前判定；判定失败也先停 daemon、留下观测，再以失败退出。
+  daemon_status_code=0
+  daemon_status=$(daemon_tool status --home "$daemon_home" --codex-bin "$codex_bin" \
+    --require-mode daemon --expect-version "$codex_version") || daemon_status_code=$?
+  write_observation "daemon-mode.json" "$daemon_status"
+  daemon_stop_code=0
+  daemon_stop=$(daemon_tool stop --home "$daemon_home" --codex-bin "$codex_bin") || daemon_stop_code=$?
+  write_observation "daemon-lifecycle.json" "$daemon_stop"
+  if (( daemon_status_code != 0 )); then
+    echo "❌ 本作业要求 TUI 经 daemon 发请求，模式或版本不符：$daemon_status" >&2
+    exit 1
+  fi
+  if (( daemon_stop_code != 0 )); then
+    echo "❌ daemon 未能在停中继之前干净停止：$daemon_stop" >&2
+    exit 1
+  fi
+  echo "daemon 模式已确认并已停止：$daemon_status"
 elif [[ $prompt == "__MEMGEN__" ]]; then
   memgen_home="/tmp/codex-memgen-$run_id"
   docker exec "$capture_container" sh -c \
@@ -1394,48 +1522,189 @@ fi
 # EP-014/legacy-default-headers 与 EP-020 不可达。
 #
 # 收据的语义是"模型条件成立"，不是"目标分支已触发"。两件事必须各自显式表达。
-if [[ -n ${REQUIRE_REQUEST_PATH:-} ]]; then
-  echo "=== 目标请求校验（$REQUIRE_REQUEST_METHOD ${REQUIRE_REQUEST_PATH}）==="
-  if ! docker exec "$capture_container" python3 - \
+#
+# 0.156.1 起统一为请求断言：正向门禁（REQUIRE_REQUEST_METHOD/PATH）、反向断言
+# （FORBID_REQUEST_PATHS）与请求头断言（REQUIRE_REQUEST_HEADER）共用一个解析器，
+# 统计结果写入 scenario-observations/request-assertions.json，只记计数，不记头值原文。
+#
+# 必须带 -i：不带时 heredoc 传不进容器，python3 读到空程序直接以 0 退出。0.154 及更早
+# 的目标请求校验就是这样从未真正执行过——作业日志在标题之后没有任何"命中 N 条"输出。
+if [[ -n ${REQUIRE_REQUEST_PATH:-} || -n $forbid_request_paths || -n $require_request_header ]]; then
+  echo "=== 请求断言 ==="
+  request_assertion_status=0
+  request_assertions=$(docker exec -i "$capture_container" python3 - \
       "/capture/runs/$run_id/relay" \
       "${REQUIRE_REQUEST_METHOD:-POST}" \
-      "$REQUIRE_REQUEST_PATH" <<'PY'
+      "${REQUIRE_REQUEST_PATH:-}" \
+      "$forbid_request_paths" \
+      "$require_request_header" <<'PY'
+import json
+import re
 import sys
 from pathlib import Path
 
-relay, method, target = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-found = 0
-for path in sorted(relay.glob("conn*.client_to_upstream.bin")):
-    data = path.read_bytes()
+relay = Path(sys.argv[1])
+required_method, required_path = sys.argv[2], sys.argv[3]
+forbidden_paths = sys.argv[4].split()
+header_name, _, header_value = sys.argv[5].partition(":")
+CHUNK_SIZE = re.compile(rb"[0-9A-Fa-f]{1,16}")
+CONTENT_LENGTH = re.compile(r"[0-9]{1,15}")
+
+
+def request_path(target):
+    """只比较路径；绝对形式的请求目标先去掉协议与主机，查询串不参与比较。"""
+    if target.startswith(("http://", "https://")):
+        slash = target.find("/", target.index("//") + 2)
+        target = target[slash:] if slash >= 0 else "/"
+    return target.split("?", 1)[0]
+
+
+def skip_chunked(data, pos):
+    """跳过 chunked 消息体，返回 (结束偏移, 状态)。
+
+    数据在消息体中途结束属于连接尾部截断：按 HTTP 分帧，剩余字节只能是这个消息体，
+    其后不可能再有请求头，因此不影响判定。分块格式不合法才是不可判定。
+    """
+    while True:
+        line_end = data.find(b"\r\n", pos)
+        if line_end < 0:
+            return len(data), "truncated"
+        size_text = data[pos:line_end].split(b";", 1)[0].strip()
+        if not CHUNK_SIZE.fullmatch(size_text):
+            return pos, "malformed"
+        size = int(size_text, 16)
+        pos = line_end + 2
+        if size == 0:
+            while True:
+                line_end = data.find(b"\r\n", pos)
+                if line_end < 0:
+                    return len(data), "truncated"
+                if line_end == pos:
+                    return pos + 2, "complete"
+                pos = line_end + 2
+        if pos + size + 2 > len(data):
+            return len(data), "truncated"
+        if data[pos + size:pos + size + 2] != b"\r\n":
+            return pos, "malformed"
+        pos += size + 2
+
+
+def parse_connection(data):
+    """逐个解析一条连接里的 HTTP/1 请求头，返回 (请求, 是否 WS, 是否尾部截断, 不可判定原因)。"""
+    requests = []
     offset = 0
+    truncated = False
     while offset < len(data):
         end = data.find(b"\r\n\r\n", offset)
         if end < 0:
-            break
-        head = data[offset:end].decode("latin-1", "replace")
-        lines = head.split("\r\n")
-        if not lines or " HTTP/1." not in lines[0]:
-            break
+            return requests, False, truncated, "incomplete-head"
+        lines = data[offset:end].decode("latin-1").split("\r\n")
         parts = lines[0].split(" ")
-        if len(parts) >= 2 and parts[0] == method and parts[1].split("?", 1)[0] == target:
-            found += 1
-        headers = {}
+        if len(parts) != 3 or not parts[2].startswith("HTTP/1."):
+            return requests, False, truncated, "not-http1"
+        headers = []
         for line in lines[1:]:
-            if ":" in line:
-                name, _, value = line.partition(":")
-                headers.setdefault(name.strip().lower(), value.strip())
-        if headers.get("transfer-encoding", "").lower() == "chunked":
-            break
-        try:
-            body = int(headers.get("content-length", "0"))
-        except ValueError:
-            body = 0
-        offset = end + 4 + body
-print(f"命中 {found} 条 {method} {target}")
-sys.exit(0 if found else 1)
+            name, separator, value = line.partition(":")
+            if not separator:
+                return requests, False, truncated, "bad-header"
+            headers.append((name.strip().lower(), value.strip()))
+        requests.append((parts[0], request_path(parts[1]), headers))
+        if any(name == "upgrade" for name, _ in headers):
+            # WS 升级请求之后都是帧，不再按 HTTP 解析；WS 握手连接不会被复用给普通请求。
+            return requests, True, truncated, None
+        encodings = [value.lower() for name, value in headers if name == "transfer-encoding"]
+        lengths = {value for name, value in headers if name == "content-length"}
+        body_start = end + 4
+        if encodings:
+            if encodings != ["chunked"] or lengths:
+                return requests, False, truncated, "unsupported-framing"
+            offset, status = skip_chunked(data, body_start)
+            if status == "malformed":
+                return requests, False, truncated, "bad-chunked"
+            truncated = status == "truncated"
+            continue
+        if len(lengths) > 1 or (lengths and not CONTENT_LENGTH.fullmatch(next(iter(lengths)))):
+            return requests, False, truncated, "bad-content-length"
+        offset = body_start + (int(next(iter(lengths))) if lengths else 0)
+        truncated = offset > len(data)
+    return requests, False, truncated, None
+
+
+connections = sorted(relay.glob("conn*.client_to_upstream.bin"))
+required_count = 0
+forbidden_counts = {path: 0 for path in forbidden_paths}
+header_count = 0
+requests_total = 0
+websocket = 0
+truncated_tail = 0
+undeterminable = []
+for path in connections:
+    requests, is_websocket, truncated, problem = parse_connection(path.read_bytes())
+    websocket += is_websocket
+    truncated_tail += truncated
+    if problem:
+        undeterminable.append({"connection": path.name.split(".", 1)[0], "reason": problem})
+    for method, target, headers in requests:
+        requests_total += 1
+        if required_path and method == required_method and target == required_path:
+            required_count += 1
+        if target in forbidden_counts:
+            forbidden_counts[target] += 1
+        if header_name and any(name == header_name and value == header_value for name, value in headers):
+            header_count += 1
+
+failures = []
+if required_path and not required_count:
+    failures.append("required-request-missing")
+if any(forbidden_counts.values()):
+    failures.append("forbidden-request-present")
+if forbidden_counts and undeterminable:
+    failures.append("forbidden-check-undeterminable")
+if forbidden_counts and not requests_total:
+    failures.append("forbidden-check-without-requests")
+if header_name and not header_count:
+    failures.append("required-header-missing")
+print(json.dumps({
+    "schema_version": "relay-request-assertions/v1",
+    "status": "failed" if failures else "passed",
+    "failures": failures,
+    "connections_scanned": len(connections),
+    "requests_parsed": requests_total,
+    "websocket_connections": websocket,
+    "truncated_tail_connections": truncated_tail,
+    "undeterminable_connections": undeterminable,
+    "required_request": (
+        {"method": required_method, "path": required_path, "count": required_count}
+        if required_path else None
+    ),
+    "forbidden_requests": [{"path": key, "count": value} for key, value in forbidden_counts.items()],
+    "required_header": {"name": header_name, "count": header_count} if header_name else None,
+}, ensure_ascii=False, sort_keys=True))
+if required_path:
+    print(f"命中 {required_count} 条 {required_method} {required_path}", file=sys.stderr)
+for key, value in forbidden_counts.items():
+    print(f"禁止路径 {key} 命中 {value} 条", file=sys.stderr)
+if header_name:
+    print(f"请求头 {header_name} 取值相符 {header_count} 条", file=sys.stderr)
+print(
+    f"扫描 {len(connections)} 条连接、{requests_total} 个请求，WS {websocket} 条，"
+    f"尾部截断 {truncated_tail} 条，不可判定 {len(undeterminable)} 条",
+    file=sys.stderr,
+)
+sys.exit(1 if failures else 0)
 PY
-  then
-    echo "❌ 本轮未发出目标请求 ${REQUIRE_REQUEST_METHOD:-POST} ${REQUIRE_REQUEST_PATH}，样本不成立。" >&2
+  ) || request_assertion_status=$?
+  if [[ -z $request_assertions ]]; then
+    echo "❌ 请求断言没有输出，无法证明目标请求条件。" >&2
+    exit 1
+  fi
+  write_observation "request-assertions.json" "$request_assertions"
+  if (( request_assertion_status != 0 )); then
+    # 正向门禁沿用原提示，作业日志的检索方式不变。
+    if [[ $request_assertions == *'"required-request-missing"'* ]]; then
+      echo "❌ 本轮未发出目标请求 ${REQUIRE_REQUEST_METHOD:-POST} ${REQUIRE_REQUEST_PATH:-}，样本不成立。" >&2
+    fi
+    echo "❌ 请求断言不成立：$request_assertions" >&2
     exit 1
   fi
 fi
@@ -1501,12 +1770,22 @@ if [[ -n $target_scenario ]]; then
   fi
 fi
 
-if [[ $prompt == "__COMPACTION_REASON__" ]]; then
+# EXPECT_COMPACTION_REASON 让 exec／TUI 场景也能证明压缩确实发生（delete 规则的正场景
+# 靠它排除"没发出只是没触发"）。这类进程退出时会补发 analytics 上报、来不及等响应，
+# 中继只留下单向字节（0.154 recapture 的 legacy-compact-default／beta 与 relay-compact
+# 各有一条），与压缩证据无关，所以只核对承载匹配请求的连接；app-server 驱动的
+# __COMPACTION_REASON__ 场景仍核对全部连接，与历史一致。只认 WS 帧里的 response.create。
+if [[ $prompt == "__COMPACTION_REASON__" || -n $expect_compaction_reason ]]; then
   echo "=== 压缩原因最小脱敏证据 ==="
+  compaction_integrity_scope=all
+  if [[ $prompt != "__COMPACTION_REASON__" ]]; then
+    compaction_integrity_scope=matched
+  fi
   docker exec "$capture_container" python3 \
     "$capture_tool_root/extract_compaction_reason.py" \
     --relay-dir "/capture/runs/$run_id/relay" \
-    --expected-reason "$compaction_reason" \
+    --expected-reason "${compaction_reason:-$expect_compaction_reason}" \
+    --integrity-scope "$compaction_integrity_scope" \
     --output "/capture/runs/$run_id/compaction-reason.json"
 fi
 

@@ -14,7 +14,7 @@
   先核对源目录与其清单逐字一致，再复制到 ``<target>.staging-<stamp>`` 并原子替换安装目标，
   最后写安装收据 ``<data-root>/control/arm64-capture-driver-install-<stamp>.json``
   （``arm64-capture-driver-install/v1``），绑定：清单摘要、逐文件 sha256／mode、安装目标，以及
-  ``control/`` 下**当前最新**的受管工具部署收据（``codex-0154-supervisor-enable-*.json`` 的路径、
+  ``control/`` 下**当前最新**的受管工具部署收据（``codex-*-supervisor-enable-*.json`` 的路径、
   sha256、``tool_files_sha256``）——这就是老板所说的组合部署收据。
 * ``verify --target <安装目标> --data-root <数据根>``：guard 执行前复验。安装目标内 manifest 自摘要
   合法且自身 0600／root；顶层恰好只有 install.py／README.md／manifest.json／driver/；逐文件 sha256／mode／
@@ -41,7 +41,7 @@ from typing import Any, Mapping
 MANIFEST_SCHEMA = "arm64-capture-driver-manifest/v1"
 INSTALL_RECEIPT_SCHEMA = "arm64-capture-driver-install/v1"
 MANIFEST_NAME = "manifest.json"
-DEPLOY_RECEIPT_GLOB = "codex-0154-supervisor-enable-*.json"
+DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"
 INSTALL_RECEIPT_PREFIX = "arm64-capture-driver-install-"
 # 安装模式：可执行脚本 0700，其余 0600；目录 0700。
 EXECUTABLE_SUFFIXES = {".sh", ".py"}
@@ -235,10 +235,13 @@ def latest_deploy_receipt(control_root: Path) -> tuple[Path, dict[str, Any]]:
     """control/ 下当前最新的受管工具部署收据（按文件名中的时间戳，即部署顺序）。"""
 
     control_root = Path(control_root)
-    candidates = sorted(p for p in control_root.glob(DEPLOY_RECEIPT_GLOB) if p.is_file() and not p.is_symlink())
+    candidates = sorted((p for p in control_root.glob(DEPLOY_RECEIPT_GLOB) if p.is_file() and not p.is_symlink()),
+                        key=lambda path: path.name.split("-supervisor-enable-", 1)[1].lower())
     if not candidates:
         raise DriverError(f"control 目录没有受管工具部署收据：{control_root}")
     path = candidates[-1]
+    if len(candidates) > 1 and path.name.split("-supervisor-enable-", 1)[1].lower() == candidates[-2].name.split("-supervisor-enable-", 1)[1].lower():
+        raise DriverError("同一时刻存在两份部署收据，无法唯一确定最新部署")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:

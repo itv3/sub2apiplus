@@ -1,0 +1,184 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R6（审核修正）",
+  "source_commit": "cff196005939f3c1bfbc80a94c1cb756c602da83",
+  "source_commits": [
+    "b218ca2e9956e40ded84db82bf605e01899fc2eb",
+    "cff196005939f3c1bfbc80a94c1cb756c602da83"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 3 条（R6 真实链停线断言在 R8 后应为 deadline_paused）、第二节第 10 条（固定 event_id 冲突检查在 rename 与总账注册之后）；审核草稿代理 D 第 (f) 条（续作合同冻结全部参数，过严）",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T03:31:27.969589+00:00",
+  "fixes": [
+    {
+      "finding": "官方复用三条固定事件的 event_id 冲突检查位于目录发布（rename）与总账注册之后，冲突时留下已发布、已注册却永远拒绝续作的 Campaign",
+      "resolution": "冲突检查抽成独立函数；新建路径在目录发布与总账注册之前预检，冲突时暂存区随清理、不发布不注册；续作路径在物化与总账注册之前预检；补齐事件时仍在时间账本收口锁内复检，覆盖两次检查之间的并发写入。用例：冲突时连续两次运行目标目录都不存在、账本与总账事件头不变（修改前该用例失败）；发布后并发写入冲突由锁内复检拒绝，续作零写入"
+    },
+    {
+      "finding": "真实链 test_stop_required_prevents_publish_and_event_writes 仍断言 stop_required，R8 之后预算到期实际为 deadline_paused",
+      "resolution": "用例改为断言 deadline_paused 并核对总账未写入；新增用真实事件构造（同一根因两次失败）的 stop_required 负例，同样在发布与任何写入之前拒绝"
+    },
+    {
+      "finding": "续作绑定冻结了完整命令行参数，包括只控制本次执行租约的 --max-wall-seconds 与 --heartbeat-seconds；因墙钟上限中断后放宽上限续作会被要求换新目录",
+      "resolution": "续作比较时两侧都去掉这两个运行控制参数，其余参数与输入文件字节仍逐字段比较；写入的绑定格式不变，旧目录无需迁移。新增用例：导入完成后放宽两项参数重跑被接受，产物、事件与总账均不改写；修改前该用例失败。指南 §4.0.4 同步"
+    }
+  ],
+  "clarifications": [
+    "第三条来自审核草稿代理 D 的细项，桌面结论未列出；它直接限制 R6 的续作能力，且与“修好接着跑”的升级原则一致，因此在本项内一并修正。",
+    "改动的函数都在 control 层，wire 与 evidence 闭包不变；三条固定事件的编号与内容逐字段不变，已有账本与续作绑定兼容。",
+    "R6 在 ARM64 的第二轮复验中，R15 Docker 进程链偶发失败；根因是测试夹具的状态发布线程把 Compose 重建时容器名短暂缺失当成致命错误（已在 ARM64 复现），与 R6 改动无关。已在 87e0832b8 只修改测试夹具（非冻结路径，冻结承接干跑 0 条承接边），ARM64 连续 5 次与故障夹具整体运行均通过。"
+  ],
+  "tool_identity": {
+    "before_commit": "78c14e4b3",
+    "after_commit": "cff196005939f3c1bfbc80a94c1cb756c602da83",
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "eb336ff8588908ed802f5b9f6c380ce2bdf60e7874c41c5fcbb94c842cf029b2",
+      "after": "2b39afeda5bdc96f09c1c49513d81d3020d9975b1e30ec8f07f2f802d9bc7f8a"
+    }
+  },
+  "regression": {
+    "local_final": {
+      "commit": "cff196005939f3c1bfbc80a94c1cb756c602da83",
+      "tests": 306,
+      "seconds": 206.853,
+      "result": "FAILED",
+      "detail": "failures=1, skipped=3",
+      "modules": [
+        "real_chains.test_codex_upgrade_official_reuse_resume",
+        "real_chains.test_codex_upgrade_fault_fixtures",
+        "test_codex_upgrade"
+      ],
+      "note": "唯一失败为 R8 命令闭集（test_campaign_cli_exposes_all_staged_commands）；3 项跳过为需要 Linux root 的 R15 内核链、守护内核链与 Docker 进程链，已在 ARM64 执行"
+    },
+    "local_first": {
+      "commit": "b218ca2e9956e40ded84db82bf605e01899fc2eb",
+      "tests": 21,
+      "seconds": 80.303,
+      "result": "OK",
+      "detail": "skipped=3",
+      "modules": [
+        "real_chains.test_codex_upgrade_official_reuse_resume",
+        "real_chains.test_codex_upgrade_fault_fixtures"
+      ]
+    },
+    "arm64_first": {
+      "commit": "b218ca2e9956e40ded84db82bf605e01899fc2eb",
+      "tests": 320,
+      "seconds": 531.081,
+      "result": "FAILED",
+      "detail": "failures=1, skipped=0",
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1；唯一失败为 R8 命令闭集"
+    },
+    "arm64_final": {
+      "commit": "cff196005939f3c1bfbc80a94c1cb756c602da83",
+      "tests": 321,
+      "seconds": 537.13,
+      "result": "FAILED",
+      "detail": "failures=2, skipped=0",
+      "note": "R6 全部 10 条真实链通过；失败一为 R8 命令闭集，失败二为 R15 Docker 进程链夹具的容器重建窗口竞态（非 R6 改动引起），已在 87e0832b8 修复并在 ARM64 重复复验"
+    },
+    "red_green": {
+      "conflict_before_publish": "旧版 FAIL、新版 OK",
+      "run_control_limits": "旧版 FAIL（要求换新目录）、新版 OK",
+      "locked_recheck": "新旧版均 OK（守护既有兜底行为）"
+    },
+    "arm64_fixture_window": {
+      "commit": "87e0832b8",
+      "docker_chain_repeats": 5,
+      "passed": 5,
+      "fault_fixtures_module": {
+        "tests": 12,
+        "seconds": 183.145,
+        "result": "OK",
+        "detail": "skipped=0"
+      },
+      "reproduction": "ARM64 以同一镜像、Compose 5.0.0 重建 15 次、按名字查询 233 次，其中 2 次“对象不存在”"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "maintenance_markdown_count": 0,
+    "freeze_successor": "2 条承接边（指南、编排器），人工动作仅编排器受管摘要，监督器与断言预处理器摘要不变"
+  },
+  "open_dependencies": [
+    "阶段 1 全部项修正完成后，本机与 ARM64 统一跑全量 make test-capture-tools 与 make test-capture-real-chains。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r6-review-fix-20260924-freeze-successor.json",
+      "sha256": "57b88671680942b04a9c6dd3086336cf4826792e3b9f3ea7ed8dac1797e55f79"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r6-local.log",
+      "sha256": "2a7e4f8c3e919eb06e21bc28255e0e08974436cf160337628290d16a552c55fb"
+    },
+    {
+      "file": "review-fix-r6-local-b218ca2e9.log",
+      "sha256": "4f0b6a6b6df7760d152ec37a15f5bd48be5f47dee53ea6b3973300db9ff5b3d2"
+    },
+    {
+      "file": "review-fix-r6-arm64-b218ca2e9.log",
+      "sha256": "d0716de929c3469e935e5450aaede45fbb8d3c911965c048a8c1e29d6caa2a96"
+    },
+    {
+      "file": "review-fix-r6-arm64-cff196005.log",
+      "sha256": "8f6a2b47dc2c68141c9d0222ab28067c3f6caa7a338ff34cb26fdaa3bedc2a70"
+    },
+    {
+      "file": "review-fix-r6-red-green.log",
+      "sha256": "3d710718a82a85925035d2e413fcd4742b57d9902e255253a15e527b5d9d5e99"
+    },
+    {
+      "file": "review-fix-r6-freeze-generation.log",
+      "sha256": "0f355cf922939e924ea56ebf6d251a29d3959cc1b9031679c2a6349774be2b95"
+    },
+    {
+      "file": "review-fix-r6-gates.log",
+      "sha256": "70240b5a922fd7f18c70d4697af26b4d3d4255291ce6cefa3376a7f48aa0293b"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-freeze-dry-run.log",
+      "sha256": "e2fdcdb2c6bfc624eabf1de131e0513c0c9b5001a72dfd27f6c548a08444e690"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-repeat.log",
+      "sha256": "449a48858f96ed886dcea94a892ed0196d55af49734dc12cf68ae05a0736e063"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-fault-fixtures.log",
+      "sha256": "8975d376e3edcdff63853c08523ec50b446054994612d1ccd757f130c9911058"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-docker-1.log",
+      "sha256": "2ba82342a01dea0a6ca56b88eeb0cc1498c723817621e5c111642b3f8a33c0ba"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-docker-2.log",
+      "sha256": "c10129c1061f9e4b9d33bef02035ab4770a04679be56ba4718ae083b84072cd1"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-docker-3.log",
+      "sha256": "5c948f6bdd2559c88d8f9642580bf261f76f3f14c8ff8ff10c87396ade5eb243"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-docker-4.log",
+      "sha256": "dd6c1bbf58ec630b6957906e52d53ef8d03417922f22f86b11f04aa09a74ceea"
+    },
+    {
+      "file": "review-fix-r15-fixture-window-arm64-docker-5.log",
+      "sha256": "bb29f6486ac2533749d6aa1e354ae838fa227cbd8550228fe29fc23555aeee50"
+    }
+  ]
+}

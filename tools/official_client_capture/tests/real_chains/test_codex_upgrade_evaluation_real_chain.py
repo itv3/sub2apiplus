@@ -46,6 +46,7 @@ from tools.official_client_capture import codex_upgrade_timing_ledger as timing_
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.tests import candidate_identity_fixture as cif
 from tools.official_client_capture.tests import managed_tree_copy as mtc
+from tools.official_client_capture.tests import project_ledger_fixture
 
 DRIVER = "tools.official_client_capture.tests.evaluation_chain_driver"
 TREE_ROOT_ENV = "EVALUATION_CHAIN_TREE_ROOT"
@@ -112,9 +113,12 @@ class _RealChainHarness:
         completed = mtc.run_python(
             tree_root,
             ["-m", DRIVER, "--root", str(self.root), *arguments],
-            extra_env={TREE_ROOT_ENV: str(tree_root)},
+            # 全部动作使用真实校验的 staging 夹具总账，不能借用生产出口策略。
+            extra_env={TREE_ROOT_ENV: str(tree_root), project_ledger_fixture.FIXTURE_ONLY_ENV: "1"},
             timeout=timeout,
         )
+        # 连续链失败时保留工具实际诊断，避免只剩父监督器的动作退出状态。
+        self.last_stdout, self.last_stderr = completed.stdout, completed.stderr
         self.case.assertEqual(
             completed.returncode, expect_exit,
             f"driver {' '.join(arguments)} rc={completed.returncode}\nSTDERR:\n{completed.stderr[-4000:]}\nSTDOUT:\n{completed.stdout[-2000:]}",
@@ -309,7 +313,8 @@ class RealEvaluationChainTests(unittest.TestCase):
             self.skipTest(f"本机存在固定采集执行副本 {mtc.PRODUCTION_EXECUTION_TREE}，但无法建立 mount namespace 绑定（需要 root 与 unshare）")
         self._temporary = tempfile.TemporaryDirectory(prefix="eval-real-chain-")
         self.addCleanup(self._temporary.cleanup)
-        self.work = Path(self._temporary.name).resolve()
+        self.work = Path(self._temporary.name).resolve() / "staging"
+        self.work.mkdir(mode=0o700)
         self.harness = _RealChainHarness(self, self.work)
 
     # ------------------------------------------------------------------

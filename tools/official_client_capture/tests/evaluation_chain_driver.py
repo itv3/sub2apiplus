@@ -134,7 +134,7 @@ def _crash_after_patch(target: Any, attribute: str):
 # ---------------------------------------------------------------------------
 
 
-def _prepare_side_evidence(surface: str | None) -> Callable[[Path], None]:
+def _prepare_side_evidence(surface: str | None, *, client_version: str | None = None) -> Callable[[Path], None]:
     """证据根＝真实 bundle：来源在 ``<root>-source/run``，bundle 输出到证据根本身。"""
 
     from tools.official_client_capture import build_assertion_bundle as bundle_module
@@ -146,7 +146,10 @@ def _prepare_side_evidence(surface: str | None) -> Callable[[Path], None]:
         side_dir = evidence_root.parent / f"{evidence_root.name}-source"
         source_root = side_dir / "run"
         (source_root / "relay").mkdir(parents=True)
-        (source_root / "relay" / "conn001.client_to_upstream.bin").write_bytes(e2e.H1_STREAM)
+        stream = e2e.H1_STREAM
+        if client_version is not None:
+            stream = stream.replace(b"Host: chatgpt.com\r\n", f"Host: chatgpt.com\r\nUser-Agent: codex_cli_rs/{client_version}\r\n".encode())
+        (source_root / "relay" / "conn001.client_to_upstream.bin").write_bytes(stream)
         # provenance 的 source_root 名称必须等于该 Job 声明的证据根目录名（failure-scope 定位链按名称
         # 映射到唯一 Job）：bundle plan 的 root 名取证据根目录名。
         root_name = evidence_root.name
@@ -190,12 +193,32 @@ def _extra_artifacts(candidate_side: bool) -> Callable[[Path], list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def new_real_chain_case() -> Any:
+def new_real_chain_case(*, full_chain: bool = False) -> Any:
     from tools.official_client_capture.tests import test_codex_upgrade
 
     class RealChainCase(test_codex_upgrade.CodexUpgradeTest):
         # 正式 0.154 证据标签声明覆盖的 Job id：受管子进程（CLI）的声明校验无需 mock 即可通过。
         synthetic_job_ids = {"official": "official-core", "candidate": "candidate-frozen-core"}
+
+        def _write_scenario_manifest(self, root, rule_manifest, rules, **kwargs):
+            # 连续链在建 Campaign 前即冻结两条合成规则，不能事后改写 Campaign
+            # 或伪造 classify 结果来绕过基线规则与场景执行合同的对应校验。
+            if full_chain:
+                version = kwargs.get("version", "0.145.0")
+                rule_manifest = root / f"full-chain-rules-{version}.json"
+                self._write_json(rule_manifest, {
+                    "schema_version": "codex-egress-rule-manifest/v1",
+                    "codex_version": version,
+                    "required_rules": list(RULES),
+                })
+                rules = RULES
+            return super()._write_scenario_manifest(root, rule_manifest, rules, **kwargs)
+
+        def _campaign_arguments(self, root, **kwargs):
+            result = super()._campaign_arguments(root, **kwargs)
+            if full_chain:
+                result.rule_manifest = root / f"full-chain-rules-{result.baseline_version}.json"
+            return result
 
     case = RealChainCase("test_bound_evidence_path_accepts_legacy_attempt_relative_binding")
     case.setUp()
@@ -216,17 +239,22 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
         kwargs["reuse_official_jobs"] = True
         return original_create(*args, **kwargs)
 
-    with mock.patch.object(codex_upgrade, "_create_initial_vc_control_artifacts", side_effect=as_reuse):
-        fixture = case._b0_fixture(root, campaign_id=arguments.campaign_id)
+    full_chain = getattr(arguments, "full_chain", False)
+    if full_chain:
+        fixture = case._b0_fixture(root, campaign_id=f"{arguments.campaign_id}-source")
+    else:
+        with mock.patch.object(codex_upgrade, "_create_initial_vc_control_artifacts", side_effect=as_reuse):
+            fixture = case._b0_fixture(root, campaign_id=arguments.campaign_id)
     campaign_dir = Path(str(fixture["campaign_dir"]))
     manifest_path = campaign_dir / "campaign.json"
     manifest = _read(manifest_path)
-    manifest["predecessor"] = {
-        "campaign_dir": str(root / "predecessor-fixture"),
-        "campaign_id": f"{arguments.campaign_id}-predecessor",
-        "campaign_manifest_sha256": "0" * 64,
-        "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
-    }
+    if not full_chain:
+        manifest["predecessor"] = {
+            "campaign_dir": str(root / "predecessor-fixture"),
+            "campaign_id": f"{arguments.campaign_id}-predecessor",
+            "campaign_manifest_sha256": "0" * 64,
+            "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+        }
     if getattr(arguments, "two_job_candidate", False):
         # Campaign 冻结 Job 清单（provenance 按它裁定 Job 收据身份）补第二个候选 Job；执行定义以批准场景清单为准。
         core = next(job for job in manifest["jobs"] if job["id"] == JOB_A)
@@ -234,8 +262,9 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
         aux["id"] = JOB_B
         aux["description"] = f"测试候选抓包 {JOB_B}"
         manifest["jobs"].append(aux)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (campaign_dir / "campaign.sha256").write_text(codex_upgrade.file_sha256(manifest_path) + "\n", encoding="utf-8")
+    if not full_chain:
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (campaign_dir / "campaign.sha256").write_text(codex_upgrade.file_sha256(manifest_path) + "\n", encoding="utf-8")
     state_dir = root / "supervisor"
     state_dir.mkdir(mode=0o700)
     (campaign_dir / "control" / "vc-chain").mkdir(mode=0o700)
@@ -246,9 +275,27 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
         campaign_dir / "official-evidence",
         phase="official",
         identity=manifest["official_identity"],
-        prepare_evidence=_prepare_side_evidence(None),
+        prepare_evidence=_prepare_side_evidence(None, client_version=TARGET_VERSION if full_chain else None),
         extra_artifacts=_extra_artifacts(False),
     )
+    if full_chain:
+        successor = Path(fixture["data"]) / "evidence" / "campaigns" / arguments.campaign_id
+        import_arguments = [
+            "reuse-official-evidence", "--predecessor-campaign-dir", str(campaign_dir),
+            "--campaign-dir", str(successor), "--campaign-id", arguments.campaign_id,
+            "--codex-account-id", str(manifest["configuration"]["codex_account_id"]),
+        ]
+        code, stdout, stderr = case._run_main(import_arguments)
+        if code != 0:
+            raise RuntimeError(f"连续链复用导入失败：{stderr}")
+        imported = json.loads(stdout)
+        if imported["live_request_count"] != 0 or imported["executed_job_count"] != 0:
+            raise RuntimeError("连续链复用导入不满足零请求、零执行边界")
+        campaign_dir = successor
+        manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+        fixture = {**fixture, "campaign_dir": campaign_dir, "manifest": manifest}
+        (campaign_dir / "control" / "vc-chain").mkdir(mode=0o700, exist_ok=True)
+        _write(root / "full-chain-import.json", imported)
     # 最小完整候选身份（老板二次拍板 A 受限版）：docker／go 可用时真实执行 plan-candidate-gates 与
     # record-candidate-build（VC-4 构建收据 + VC-4 checkpoint），accept 可走到 VC-5 completion；不可用时
     # 退回 VC-4 合成动作，accept 段由用例按 candidate_identity_fixture.available() 跳过。
@@ -267,6 +314,13 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
     if getattr(arguments, "two_job_candidate", False):
         profile_payload = two_scenario_profile(profile_payload)
     profile_payload["codex_version"] = TARGET_VERSION
+    if full_chain:
+        # 行为版本由真实 HTTP 头断言承载；场景对象不能添加 schema 未登记的字段。
+        profile_payload["rules"][0]["checks"].append({
+            "id": "client-version", "description": "合成请求的 UA 精确绑定目标客户端版本",
+            "select": {"record_type": "http_request"},
+            "assertion": {"operator": "all_equal", "path": "data.header_values.user-agent", "value": [f"codex_cli_rs/{TARGET_VERSION}"]},
+        })
     spec_path = Path(codex_upgrade.__file__).resolve().parents[2] / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
     if not spec_path.is_file():
         spec_path = Path(arguments.spec_path).resolve()
@@ -277,7 +331,43 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
     )
     if getattr(arguments, "two_job_candidate", False):
         _rewrite_two_job_scenarios(scenario, runs_root=Path(str(fixture["data"])) / "runs")
+    if full_chain:
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import classify_full_chain
+
+        classify_full_chain(case, root, fixture, state_dir, (target, migration, scenario, profile, assertion_profile))
     approved_root = campaign_dir / "classification" / "approved"
+    if full_chain:
+        classify_payload = codex_upgrade._load_stage_result(campaign_dir, "classify")
+        references = {key: classify_payload[key] for key in (
+            "target_rule_manifest", "migration_manifest", "scenario_manifest", "profile_manifest", "assertion_profile_manifest",
+        )}
+        joint = classify_payload["joint_manifest_sha256"]
+        requirements = _read(campaign_dir / classify_payload["post_promotion_gate_requirements"]["path"])
+    else:
+        classify_payload, references, joint, requirements = _prepare_synthetic_classification(
+            campaign_dir, manifest, approved_root, target, migration, scenario, profile, assertion_profile, identity_fixture, case,
+        )
+    # 连续链的 VC-2 已通过 classify 草案、预览、批准三批封存；旧评估链保留原有两批基座。
+    if full_chain:
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import stage_full_chain
+
+        stage_full_chain(case, root, fixture, state_dir, identity_fixture)
+    phases = () if full_chain else ((2, "VC-2"), (3, "VC-3"))
+    vc3_receipt_source = identity_fixture.catalog_receipt_path if identity_fixture is not None else None
+    for sequence, phase in phases:
+        plan = case._vc_chain_action_plan(root, campaign_dir, phase, stage_receipt_source=(vc3_receipt_source if phase == "VC-3" else None))
+        result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, phase, sequence, plan))
+        if returncode != 0:
+            raise SystemExit(f"{phase} 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
+    return _finish_candidate_identity(arguments, case, root, fixture, campaign_dir, manifest, state_dir, identity_fixture, requirements)
+
+
+def _prepare_synthetic_classification(campaign_dir, manifest, approved_root, target, migration, scenario, profile, assertion_profile, identity_fixture, case):
+    """保留旧评估恢复链的合成分类输入；连续链不得调用本函数。"""
+
+    from tools.official_client_capture import codex_upgrade
+    from tools.official_client_capture.tests import candidate_identity_fixture as cif
+
     approved_root.mkdir(parents=True, mode=0o700)
     references: dict[str, dict[str, str]] = {}
     for key, source, name in (
@@ -312,14 +402,53 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
         requirements = extras.pop("requirements")
         classify_payload.update(extras)
     codex_upgrade.save_stage_result(campaign_dir, "classify", classify_payload)
-    # VC-2 合成动作；VC-3 合成动作的阶段收据＝候选树内 Catalog stage 收据字节（record-candidate-build 的
-    # revision-seal 要求二者逐字节一致），无候选身份夹具时沿用合成收据。
-    vc3_receipt_source = identity_fixture.catalog_receipt_path if identity_fixture is not None else None
-    for sequence, phase in ((2, "VC-2"), (3, "VC-3")):
-        plan = case._vc_chain_action_plan(root, campaign_dir, phase, stage_receipt_source=(vc3_receipt_source if phase == "VC-3" else None))
-        result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, phase, sequence, plan))
-        if returncode != 0:
-            raise SystemExit(f"{phase} 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
+    return classify_payload, references, joint, requirements
+
+
+def _record_build_batch(case, root, fixture, state_dir, manifest, identity_fixture, parameters_path, implementation_root, implementation_receipt):
+    """以 VC-4 正式批次派发 record-candidate-build（参数与候选身份夹具的进程内调用逐项相同）。"""
+
+    from tools.official_client_capture.tests import candidate_identity_fixture as cif
+    from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import dispatch_cli
+
+    fixture_identity = identity_fixture
+    campaign_dir = Path(fixture["campaign_dir"])
+    arguments = [
+        "record-candidate-build", "--campaign-dir", str(campaign_dir), "--candidate-id", fixture_identity.candidate_id,
+        "--candidate-purpose", str(manifest["campaign_purpose"]),
+        "--candidate-source", str(fixture_identity.source.resolve()),
+        "--candidate-binary", str(fixture_identity.binary.resolve()),
+        "--runtime-image", str(fixture_identity.runtime_image),
+        "--candidate-image-id", str(fixture_identity.image_id),
+        "--build-id", f"build-eval-{fixture_identity.nonce}",
+        "--deployed-version", str(manifest["target_version"]),
+        "--target-architecture", cif.TARGET_ARCHITECTURE,
+        "--build-parameters", str(parameters_path.resolve()),
+        "--build-tree", str(fixture_identity.build_tree.resolve()),
+        "--docker-context", str(fixture_identity.context.resolve()),
+        "--frontend-dist-source", str(fixture_identity.dist_source.resolve()),
+        "--catalog-stage-dir", str((fixture_identity.source / "catalog").resolve()),
+        "--source-transition", str(fixture_identity.transition_path.resolve()),
+        "--gate-plan", str((fixture_identity.source / "gates" / "gate-plan.json").resolve()),
+        "--implementation-test-root", str(implementation_root.resolve()),
+        "--implementation-test-receipt", str(implementation_receipt.resolve()),
+    ]
+    candidate_id = fixture_identity.candidate_id
+
+    def recorded(campaign):
+        from tools.official_client_capture import codex_upgrade
+
+        return {"status": "complete", "build_receipt": str(codex_upgrade._candidate_build_receipt_path(Path(campaign), candidate_id))}
+
+    return dispatch_cli(case, root, fixture, state_dir, "VC-4", None, "record-candidate-build", arguments,
+                        timeout_seconds=900, payload=recorded)
+
+
+def _finish_candidate_identity(arguments, case, root, fixture, campaign_dir, manifest, state_dir, identity_fixture, requirements):
+    """按共享候选夹具建立真实制品；保留旧链的无 Docker 开发机分支。"""
+
+    from tools.official_client_capture import codex_upgrade
+
     codex_upgrade.open_candidate_revision(argparse.Namespace(campaign_dir=campaign_dir, candidate_id=CANDIDATE_ID, initial=True, supersedes=None))
     identity: dict[str, Any]
     if identity_fixture is not None:
@@ -338,9 +467,19 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
             upgrade_id=str(timing["upgrade_id"]), campaign_id=str(manifest["campaign_id"]), campaign_purpose=str(manifest["campaign_purpose"]),
             source_tree_sha256=codex_upgrade._directory_tree_digest(identity_fixture.source),
         )
-        recorded = identity_fixture.record_build(
-            campaign_dir, manifest, build_parameters=parameters_path, implementation_root=implementation_root, implementation_receipt=implementation_receipt
-        )
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import late_stage_faults
+
+        if "record-candidate-build" in late_stage_faults():
+            # R18 后段注入链：与生产 vc4.sh 同形，经 VC-4 批次派发 record-candidate-build，
+            # 便于注入父批次失败并走对账与同批重派；其余链保持进程内调用不变。
+            recorded = _record_build_batch(
+                case, root, {**fixture, "campaign_dir": campaign_dir}, state_dir, manifest, identity_fixture,
+                parameters_path, implementation_root, implementation_receipt,
+            )
+        else:
+            recorded = identity_fixture.record_build(
+                campaign_dir, manifest, build_parameters=parameters_path, implementation_root=implementation_root, implementation_receipt=implementation_receipt
+            )
         receipt_path = Path(str(recorded["build_receipt"]))
         receipt = _read(receipt_path)
         identity = {
@@ -367,7 +506,8 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
         }
     else:
         plan = case._vc_chain_action_plan(root, campaign_dir, "VC-4")
-        result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, "VC-4", 4, plan))
+        sequence = max(codex_upgrade._committed_vc_sequences(campaign_dir, manifest), default=0) + 1
+        result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, "VC-4", sequence, plan))
         if returncode != 0:
             raise SystemExit(f"VC-4 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
         identity = {
@@ -396,7 +536,7 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
 def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
     from tools.official_client_capture import codex_upgrade
 
-    case = new_real_chain_case()
+    case = new_real_chain_case(full_chain=getattr(arguments, "full_chain", False))
     context = init_campaign_to_vc4(arguments, case)
     root, fixture, campaign_dir, manifest = context["root"], context["fixture"], context["campaign_dir"], context["manifest"]
     state_dir, identity, identity_fixture = context["state_dir"], context["identity"], context["identity_fixture"]
@@ -407,7 +547,7 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
         phase="candidate",
         identity=identity,
         candidate_id=CANDIDATE_ID,
-        prepare_evidence=_prepare_side_evidence(arguments.candidate_surface),
+        prepare_evidence=_prepare_side_evidence(arguments.candidate_surface, client_version=TARGET_VERSION if getattr(arguments, "full_chain", False) else None),
         extra_artifacts=_extra_artifacts(True),
     )
     # 候选 attempt 的 Job checkpoint 链：post-run-tooling 判定要求每个 Job 有 complete 记录
@@ -534,18 +674,22 @@ class attempt_recovery_environment_patches:
             return path, receipt
 
         def probe(_manifest: Any, target: Path, phase: str, **_kwargs: Any) -> dict[str, Any]:
-            # 环境探针替身：写探针清单与五份 guard 规范化状态快照（与真实探针同一目录布局、同一文件名），
+            # 环境探针替身：写五份 guard 规范化状态快照与探针清单（与真实探针同一目录布局、同一文件名、同一快照绑定），
             # 恢复 finalizer（真实 _finalize_attempt_restoration → receipts/restoration-report.json）不再替换。
+            # 清单逐项列出快照摘要：R11 判据④在段摘要缺失时要拿它与恢复报告的 after 引用逐项核对。
             from tools.official_client_capture import codex_upgrade_environment_probe as probe_module
             from tools.official_client_capture.tests import test_codex_upgrade
 
             fixture = test_codex_upgrade.CodexUpgradeTest
             target.mkdir(parents=True, exist_ok=True, mode=0o700)
-            document = {"schema_version": "codex-upgrade-environment-probe/v1", "phase": phase, "observed_at_utc": _utc_now()}
-            _write(target / "probe-manifest.json", document)
+            snapshots = []
             for key, filename in probe_module.STATE_FILES.items():
                 state_payload = fixture._database_state(after=True) if key == "database" else {"probe_kind": f"attempt_recovery_{key}", "stable_value": "restored"}
                 fixture._write_state_snapshot(target / filename, state_payload)
+                snapshots.append(probe_module._snapshot_binding(target / filename, (target / filename).read_bytes(), key))
+            document = {"schema_version": "codex-upgrade-environment-probe/v1", "phase": phase, "observed_at_utc": _utc_now(),
+                        "snapshots": snapshots}
+            _write(target / "probe-manifest.json", document)
             return document
 
         def closeout(attempt_root: Path, roots: list[Path]) -> dict[str, Any]:
@@ -609,6 +753,9 @@ class attempt_recovery_environment_patches:
             mock.patch.object(codex_upgrade, "_verify_candidate_attempt_identity"),
             mock.patch.object(codex_upgrade, "_validate_candidate_admin_credential"),
             mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt", side_effect=arm64_receipt),
+            # 本夹具的环境收据是明确的零请求外部替身，按其固定 continuity 字段模拟相等。
+            mock.patch.object(codex_upgrade.codex_upgrade_arm64_environment_receipt, "receipts_equivalent",
+                              side_effect=lambda _a, before, _b, after: before["continuity_identity_sha256"] == after["continuity_identity_sha256"]),
             mock.patch.object(codex_upgrade, "_probe_capture_environment", side_effect=probe),
             mock.patch.object(codex_upgrade, "_close_attempt_evidence_permissions", side_effect=closeout),
             mock.patch.object(codex_upgrade, "_replay_evidence_permission_closeout", side_effect=replay),
@@ -1322,6 +1469,12 @@ def stage_dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
     for patcher in patches:
         patcher.start()
     result, returncode = codex_upgrade.compile_and_run_vc_batch(namespace)
+    if returncode == 0 and (Path(state["root"]) / "full-chain-import.json").is_file():
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import (
+            _record_duplicate_check, assert_duplicate_dispatch_unchanged,
+        )
+
+        _record_duplicate_check(state["root"], arguments.tag, *assert_duplicate_dispatch_unchanged(namespace))
     summary = {
         "returncode": returncode,
         "status": result.get("status"),
@@ -1343,6 +1496,15 @@ def stage_dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
             "timing_closeout": result["campaign_run"].get("timing_closeout"),
         },
     }
+    if returncode != 0:
+        summary["diagnostics"] = [
+            {key: document.get(key) for key in ("action_id", "message", "failure_class")}
+            for path in Path(result["campaign_run"]["run_dir"]).glob("action-diagnostics/*.json")
+            for document in [_read(path)]
+        ]
+        # 失败时仅展示已落盘的诊断，不能让未封存的 accept 再抛错并掩盖原始原因。
+        _, acceptance_path = codex_upgrade._stage_path(campaign_dir, "accept", str(state["candidate_id"]))
+        summary["acceptance"] = _read(acceptance_path) if acceptance_path.is_file() else None
     return summary
 
 
@@ -1524,6 +1686,7 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--candidate-surface", default="codex")
     init.add_argument("--spec-path", default="")
     init.add_argument("--no-candidate-identity", action="store_true")
+    init.add_argument("--full-chain", action="store_true", help="R13：真实复用导入及三批分类，供连续链调用")
     dispatch = subparsers.add_parser("dispatch")
     dispatch.add_argument("--sequence", type=int, default=None)
     dispatch.add_argument("--accept-wrapper", action="store_true")
@@ -1579,6 +1742,7 @@ def _parser() -> argparse.ArgumentParser:
     accept_direct = subparsers.add_parser("accept-direct")
     accept_direct.add_argument("--crash-at", default="")
     subparsers.add_parser("identity")
+    subparsers.add_parser("deliver-full")
     return parser
 
 
@@ -1596,6 +1760,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_stage(arguments: argparse.Namespace) -> int:
+    from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import deliver_full_chain
+
     stages = {
         "init": stage_init,
         "dispatch": stage_dispatch,
@@ -1610,6 +1776,7 @@ def _run_stage(arguments: argparse.Namespace) -> int:
         "ar-rehearse": stage_ar_rehearse,
         "ar-account": stage_ar_account,
         "reconcile-ar": stage_reconcile_ar,
+        "deliver-full": deliver_full_chain,
     }
     result = stages[arguments.stage](arguments)
     print(json.dumps(result, ensure_ascii=False, default=str, sort_keys=True))

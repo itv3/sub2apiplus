@@ -32,3 +32,5 @@ except Exception:
     print(t[-1200:])
 PY
 tail -c 800 "$WDIR/batch-$SEQ.err"
+# 日志解析成功不代表批次成功；上层只能在正式 CLI 成功时写完成标记。
+exit "$RC"

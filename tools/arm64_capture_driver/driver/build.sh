@@ -6,7 +6,7 @@
 set -Eeuo pipefail; umask 022
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 test "$1" = "$C"; C9=${C:0:9}
-TAG=sub2apiplus-c0154-candidate:$ROUND-$C9; VERSION_LABEL="$(cat $B/source/backend/cmd/server/VERSION)-$CAND"
+TAG=$CANDIDATE_IMAGE_REPOSITORY:$ROUND-$C9; VERSION_LABEL="$(cat $B/source/backend/cmd/server/VERSION)-$CAND"
 mkdir -p "$B/artifacts"; chmod 700 "$B/artifacts"
 test "$(git -C $B/build-tree rev-parse HEAD)" = "$C"
 test -z "$(git -C $B/build-tree status --porcelain --untracked-files=all)"
@@ -14,6 +14,8 @@ test -f "$B/frontend-dist/index.html"; test -f "$B/build-tree/backend/vendor/mod
 # ---------- 同源 go build ----------
 DATE=$(utc_now)
 LDFLAGS="-s -w -X main.Commit=$C -X main.Date=$DATE -X main.BuildType=release"
+E=$(cat "$RUNROOT/E.txt")
+LDFLAGS=$(python3 "$DRV/vc4_resume.py" build-flags --evidence-root "$E" --default "$LDFLAGS")
 echo "$DATE" > "$B/artifacts/built-at-utc.txt"
 ( cd "$B/build-tree/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOFLAGS=-mod=vendor go build -tags=embed,candidatecapture -ldflags "$LDFLAGS" -o "$B/artifacts/sub2api" ./cmd/server )
 chmod 755 "$B/artifacts/sub2api"
@@ -25,14 +27,20 @@ cp -a "$B/build-tree/backend/resources" "$CTX/backend/resources"
 cp -a "$B/build-tree/deploy/docker-entrypoint.sh" "$B/build-tree/deploy/container-healthcheck.sh" "$CTX/deploy/"
 cp -a "$B/build-tree/Dockerfile.goreleaser" "$CTX/Dockerfile"
 find "$CTX" -type d -empty -print -delete
-docker build --platform linux/arm64 --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
+E=$(cat "$RUNROOT/E.txt")
+BASE_ARGS=()
+for name in ALPINE_IMAGE POSTGRES_IMAGE; do
+  digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"][sys.argv[2]]["repo_digests"][0])' "$E/pre-build.json" "$name")
+  BASE_ARGS+=(--build-arg "$name=$digest")
+done
+docker build --platform linux/arm64 "${BASE_ARGS[@]}" --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
 IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG")
-docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "sub2apiplus-c0154-candidate@$IMAGE_ID"
+docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "$CANDIDATE_IMAGE_REPOSITORY@$IMAGE_ID"
 NODE_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/node-version.txt"); PNPM_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/pnpm-version.txt")
-NODE_IMAGE_ID=$(docker inspect --format '{{.Id}}' node:20-slim)
+NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")
 # ---------- 三份收据 ----------
 python3 - "$B" "$C" "$DATE" "$LDFLAGS" "$IMAGE_ID" "$VERSION_LABEL" "$NODE_VERSION" "$PNPM_VERSION" "$NODE_IMAGE_ID" "$CAND" "$FRONTEND_DEVIATION_APPROVED_BY" <<'PY'
-import json, sys, hashlib, platform, datetime
+import json, sys, hashlib, platform, datetime, os
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade_candidate_build as cb
 B, C, DATE, LDFLAGS, IMAGE_ID, VERSION_LABEL, NODE_VERSION, PNPM_VERSION, NODE_IMAGE_ID, CAND, APPROVED_BY = sys.argv[1:]
@@ -94,6 +102,12 @@ params = {
         ],
     },
     "binary": binary,
+}
+evidence = Path((Path(os.environ["RUNROOT"]) / "E.txt").read_text().strip())
+pre_build = json.loads((evidence / "pre-build.json").read_text())
+params["input_provenance"] = {
+    "go_version": pre_build["inputs"]["toolchain"]["go_version"].split()[2],
+    "base_images": {key: row["repo_digests"][0] for key, row in pre_build["inputs"]["base_images"].items()},
 }
 write(art / "build-parameters.json", params)
 # 本地先按严格合同校验参数（不写 Campaign）

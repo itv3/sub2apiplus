@@ -32,12 +32,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
+    import codex_upgrade_arm64_environment_receipt as arm64_environment
     import codex_upgrade_evidence_permissions as evidence_permissions
     import codex_upgrade_project_ledger as project_ledger
     import codex_upgrade_root_cause as root_cause
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
+    from . import codex_upgrade_arm64_environment_receipt as arm64_environment
     from . import codex_upgrade_evidence_permissions as evidence_permissions
     from . import codex_upgrade_project_ledger as project_ledger
     from . import codex_upgrade_root_cause as root_cause
@@ -290,6 +292,244 @@ class SupervisorError(RuntimeError):
 
 class SupervisorTimeout(SupervisorError):
     """统一命令入口达到单步或全局墙钟预算。"""
+
+
+class RuntimeEgressPaused(SupervisorError):
+    """网络内核已闭锁；升级停止派发，后继必须先通过实时准入及既有恢复判据。"""
+
+    failure_class = "environment-prerequisite"
+
+
+def _egress_pause(run_dir: Path, state: Mapping[str, Any], reason: str) -> dict[str, Any]:
+    """追加首个出口暂停窗口；不改写旧证据，也不把窗口内未证明的请求自动判为可信。"""
+
+    with _state_lock(run_dir):
+        path = run_dir / "egress-pause.json"
+        if path.exists():
+            return _read_json(path)
+        last_path = run_dir / "egress-last-valid.json"
+        last = _read_json(last_path) if last_path.exists() else {}
+        observations = [item.get("observed_at_epoch") for service in last.get("runtime", {}).get("services", {}).values()
+                        for item in service.get("observations", []) if item.get("status") == "passed"]
+        verified = [float(value) for value in observations if isinstance(value, (int, float)) and not isinstance(value, bool)]
+        now = time.time()
+        payload = {"schema_version": "codex-upgrade-egress-pause/v1", "campaign_id": state["campaign_id"],
+                   "owner_nonce": state["owner_nonce"], "detected_at_epoch": now,
+                   "detected_at_monotonic_ns": time.monotonic_ns(),
+                   "uncertain_window_start_epoch": max(state["started_at_epoch"], min(verified)) if verified else state["started_at_epoch"],
+                   "last_valid_status_sha256": _sha256(_canonical(last)) if last else None,
+                   "reason": reason, "next_action": "修复指定出口并重新准入；先对账受影响窗口与 Job，再从合法 checkpoint 继续"}
+        payload["pause_sha256"] = _sha256(_canonical(payload))
+        _write_json(path, payload, replace=False)
+        return payload
+
+
+def _process_descends_from(pid: int, ancestor: int) -> bool:
+    """维护等待只覆盖实际运行该命令的进程祖先，不能授权并发的新采集。"""
+
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen and len(seen) < 64:
+        if pid == ancestor:
+            return True
+        seen.add(pid)
+        try:
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
+
+
+def _egress_transition_status(policy_sha256: str, container: str) -> None:
+    """只检查本地维护等待条件，不能代替普通运行准入或签发收据。"""
+
+    policy = arm64_environment.load_egress_policy()
+    if policy_sha256 != arm64_environment.egress_policy_sha256(policy) or container not in policy["services"]:
+        raise RuntimeEgressPaused("容器维护期间指定出口策略发生变化")
+    status = arm64_environment._read_egress_runtime_json(arm64_environment.EGRESS_STATUS_PATH, private=False)
+    arm64_environment.validate_egress_status(
+        policy, status, now_epoch=time.time(), now_monotonic_ns=time.monotonic_ns(),
+        boot_id=Path(arm64_environment.EGRESS_BOOT_ID_PATH).read_text().strip(), _transitioning_service=container,
+    )
+
+
+def _egress_transition_waiting(run_dir: Path, state: Mapping[str, Any], *, command_pid: int | None) -> bool:
+    """已声明重建期间仅容许等待缺失／探测状态；共享故障和不合规出口仍立即暂停。
+
+    此接口不放行网络，不改变内核租期，不允许新派发或生成环境收据；本地维护命令
+    返回前必须通过普通双容器准入。维护声明与独立存档、存活 PID、创建时间和 deadline 同时绑定。
+    """
+
+    try:
+        with _state_lock(run_dir):
+            record = _read_json(run_dir / "egress-transition.json")
+            nonce = record.get("transition_id")
+            fields = {"schema_version", "transition_id", "campaign_id", "owner_nonce", "actor_pid", "start_ticks",
+                      "started_at_epoch", "started_at_monotonic_ns", "deadline_monotonic_ns", "container",
+                      "command_sha256", "policy_sha256", "before_sha256"}
+            if (set(record) != fields or not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce)
+                    or _read_json(run_dir / "egress-transitions" / f"{nonce}.json") != record
+                    or (run_dir / "egress-transitions" / f"{nonce}.finish.json").exists()
+                    or (run_dir / "egress-pause.json").exists()):
+                return False
+        if (record["schema_version"] != "codex-upgrade-egress-transition/v1"
+                or record.get("owner_nonce") != state["owner_nonce"] or record.get("campaign_id") != state["campaign_id"]
+                or type(record["actor_pid"]) is not int or record["actor_pid"] <= 1
+                or not isinstance(record["start_ticks"], str) or not record["start_ticks"].isdigit()
+                or record["start_ticks"] != _process_start_ticks(record["actor_pid"])
+                or not _process_descends_from(record["actor_pid"], state["owner_pid"])
+                or type(record["started_at_monotonic_ns"]) is not int or type(record["deadline_monotonic_ns"]) is not int
+                or not 0 < record["started_at_monotonic_ns"] <= time.monotonic_ns() < record["deadline_monotonic_ns"] <= state["deadline_monotonic_ns"]
+                or record["deadline_monotonic_ns"] - record["started_at_monotonic_ns"] > 60 * 10**9
+                or _parse_epoch(record["started_at_epoch"], "出口维护起点") < state["started_at_epoch"]
+                or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
+                       for key in ("command_sha256", "policy_sha256", "before_sha256"))):
+            return False
+        if command_pid is not None and not _process_descends_from(record["actor_pid"], command_pid):
+            return False
+        _egress_transition_status(record["policy_sha256"], record["container"])
+        return True
+    except (OSError, ValueError, KeyError, TypeError, SupervisorError):
+        return False
+
+
+def _check_runtime_egress(run_dir: Path, state: Mapping[str, Any], *, monitor: bool = False,
+                          command_pid: int | None = None) -> None:
+    """执行端与独立监督器共用同一门禁；不把旧环境收据或工具认证当成当前网络证明。"""
+
+    if state.get("egress_guard") is None:
+        return
+    if (run_dir / "egress-pause.json").exists():
+        raise RuntimeEgressPaused("当前 run 已因出口异常暂停，禁止原进程继续派发")
+    if not monitor and command_pid is None and (run_dir / "egress-transition.json").exists():
+        raise RuntimeEgressPaused("受控容器维护尚未完成，禁止派发新命令")
+    if (monitor or command_pid is not None) and (run_dir / "egress-transition.json").exists():
+        if _egress_transition_waiting(run_dir, state, command_pid=command_pid):
+            return
+        # 正常结束会在同一锁内写 finish 并删除当前声明；已消失时转普通准入复核。
+        if (run_dir / "egress-transition.json").exists():
+            _egress_pause(run_dir, state, "受控容器维护声明失效、超时或进程已结束")
+            raise RuntimeEgressPaused("受控容器维护已失效，升级必须暂停并对账")
+    try:
+        current = arm64_environment.require_runtime_egress()
+    except (OSError, ValueError) as error:
+        if (monitor or command_pid is not None) and _egress_transition_waiting(run_dir, state, command_pid=command_pid):
+            return
+        _egress_pause(run_dir, state, str(error))
+        raise RuntimeEgressPaused("运行时出口不合规或无法确证，升级已暂停") from error
+    with _state_lock(run_dir):
+        # 读取状态期间其他执行端可能已经发现故障；暂停记录一旦存在就不可恢复本 run。
+        if (run_dir / "egress-pause.json").exists():
+            raise RuntimeEgressPaused("当前 run 已因出口异常暂停，禁止原进程继续派发")
+        if monitor:
+            _write_json(run_dir / "egress-last-valid.json", current, replace=True)
+
+
+def _process_start_ticks(pid: int) -> str | None:
+    """信号前绑定 Linux PID 的创建时间，拒绝对复用 PID 发信号。"""
+
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def job_egress_binding(client: "SupervisorClient | None", *, started_at_epoch: float) -> dict[str, Any] | None:
+    """把 Job 的真实执行时段绑定到父监督器，供后续暂停窗口逐 Job 对账。"""
+
+    if client is None:
+        return None
+    run_dir = client._require_started()
+    state = _read_state(run_dir)
+    if state.get("egress_guard") is None:
+        return None
+    _check_runtime_egress(run_dir, state)
+    return {"schema_version": "codex-upgrade-job-egress/v1", "run_dir": str(run_dir),
+            "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
+            "started_at_epoch": started_at_epoch, "finished_at_epoch": time.time()}
+
+
+def job_egress_trusted(result: Mapping[str, Any]) -> bool:
+    """旧结果按原合同读取；新结果只有在暂停影响窗口之外才可封存或复用。
+
+    当前网络恢复不能改变这个判定。窗口内的已完成结果保留原始字节，由对账归入
+    indeterminate 并补采；窗口前完成的结果仍须通过既有身份、环境与证据门禁。
+    """
+
+    binding = result.get("runtime_egress")
+    if binding is None:
+        return True
+    fields = {"schema_version", "run_dir", "campaign_id", "owner_nonce", "started_at_epoch", "finished_at_epoch"}
+    if not isinstance(binding, dict) or set(binding) != fields or binding["schema_version"] != "codex-upgrade-job-egress/v1":
+        raise SupervisorError("Job 出口时段绑定格式非法")
+    run_dir = _validate_state_dir(Path(binding["run_dir"]), create=False)
+    state = _read_state(run_dir)
+    started = _parse_epoch(binding["started_at_epoch"], "Job 出口起点")
+    finished = _parse_epoch(binding["finished_at_epoch"], "Job 出口终点")
+    if (state.get("egress_guard") is None or binding["campaign_id"] != state["campaign_id"]
+            or binding["owner_nonce"] != state["owner_nonce"]
+            or not state["started_at_epoch"] <= started <= finished <= state["deadline_at_epoch"]
+            or finished > state.get("terminal_at_epoch", state["deadline_at_epoch"])):
+        raise SupervisorError("Job 出口时段没有绑定原父任务")
+    pause_path = run_dir / "egress-pause.json"
+    if not pause_path.exists():
+        return True
+    pause = _read_json(pause_path)
+    unsigned = {key: value for key, value in pause.items() if key != "pause_sha256"}
+    if (pause.get("schema_version") != "codex-upgrade-egress-pause/v1"
+            or pause.get("campaign_id") != state["campaign_id"] or pause.get("owner_nonce") != state["owner_nonce"]
+            or pause.get("pause_sha256") != _sha256(_canonical(unsigned))):
+        raise SupervisorError("Job 引用的出口暂停记录被修改")
+    window_start = _parse_epoch(pause.get("uncertain_window_start_epoch"), "出口不确定窗口起点")
+    detected = _parse_epoch(pause.get("detected_at_epoch"), "出口暂停检测时间")
+    if not state["started_at_epoch"] <= window_start <= detected:
+        raise SupervisorError("Job 引用的出口暂停窗口非法")
+    last_path = run_dir / "egress-last-valid.json"
+    last = _read_json(last_path) if last_path.exists() else None
+    if pause.get("last_valid_status_sha256") != (_sha256(_canonical(last)) if last is not None else None):
+        raise SupervisorError("出口暂停引用的最后可信状态发生漂移")
+    return finished < window_start
+
+
+def _request_egress_cleanup(run_dir: Path, state: Mapping[str, Any], path: Path) -> None:
+    """owner 和 monitor 共用一次性信号记录，避免重复 SIGUSR1 再次打断 finally。"""
+
+    with _state_lock(run_dir):
+        record = _read_json(path)
+        pid = int(record["pid"])
+        ticks = record["start_ticks"]
+        if (record["owner_nonce"] != state["owner_nonce"] or path.name != f"{pid}.json"
+                or not isinstance(ticks, str) or ticks != _process_start_ticks(pid) or os.getpgid(pid) != pid):
+            return
+        signalled = path.with_name(f"{pid}.signalled.json")
+        if not signalled.exists():
+            os.kill(pid, signal.SIGUSR1 if record["cleanup_grace_seconds"] > 0 else signal.SIGTERM)
+            _write_json(signalled, {"pid": pid, "requested_at_monotonic_ns": time.monotonic_ns()}, replace=False)
+
+
+def _interrupt_egress_commands(run_dir: Path, state: Mapping[str, Any], now: float) -> None:
+    """owner 未及时响应时由独立进程请求清理；超过原清理预算才终止对应进程组。"""
+
+    pause = _read_json(run_dir / "egress-pause.json")
+    age = (time.monotonic_ns() - int(pause["detected_at_monotonic_ns"])) / 1e9
+    if age < 1:
+        return
+    directory = run_dir / "egress-commands"
+    if not directory.is_dir() or directory.is_symlink():
+        return
+    for path in directory.glob("*.json"):
+        if path.name.endswith(".signalled.json"):
+            continue
+        try:
+            record = _read_json(path)
+            pid = int(record["pid"])
+            if (record["owner_nonce"] != state["owner_nonce"] or path.name != f"{pid}.json" or not isinstance(record["start_ticks"], str)
+                    or record["start_ticks"] != _process_start_ticks(pid) or os.getpgid(pid) != pid):
+                continue
+            _request_egress_cleanup(run_dir, state, path)
+            if age >= max(2, float(record["cleanup_grace_seconds"]) + 1):
+                os.killpg(pid, signal.SIGKILL)
+        except (OSError, ValueError, KeyError, SupervisorError):
+            continue
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -1403,6 +1643,10 @@ def _read_state(run_dir: Path) -> dict[str, Any]:
         _validate_staging_binding(binding)
     if state.get("state") == PREPARED_STATE and binding is None:
         raise SupervisorError("prepared 父监督器必须携带 staging_binding。")
+    guard = state.get("egress_guard")
+    if guard is not None and (not isinstance(guard, dict) or set(guard) != {"campaign_dir", "required"}
+                              or guard["required"] is not True or not Path(str(guard["campaign_dir"])).is_absolute()):
+        raise SupervisorError("监督器实时出口保护绑定非法")
     return state
 
 
@@ -2379,7 +2623,8 @@ def verify_attempt_recovery_orphan_output(
         "sha256": facts["output_sha256"],
         "status": str(summary["status"]),
         "job_count": len(results),
-        "execute_jobs": frozen,
+        "execute_jobs": list(reservation.get("execute_job_ids", frozen)),
+        **({"reuse_job_ids": list(reservation["reuse_job_ids"])} if "reuse_job_ids" in reservation else {}),
         "attempt_recovery_digest": str(summary.get("attempt_recovery_digest")),
     }
 
@@ -2966,6 +3211,19 @@ def _monitor_impl(args: argparse.Namespace) -> int:
             break
         now = time.time()
         now_monotonic_ns = time.monotonic_ns()
+        try:
+            budget_deadline = _runtime_budget_deadline(state)
+            # UTC 截止映射到父 run 的单调时钟；新阶段只可收紧本 run 的
+            # 执行边界，不能因为系统时钟回拨或阶段结束重新获得预算。
+            deadline_monotonic_ns = min(deadline_monotonic_ns, started_monotonic_ns
+                + int((budget_deadline - started_epoch) * 1_000_000_000))
+        except (SupervisorError, ValueError, OSError) as error:
+            abort(f"budget-state-invalid-{type(error).__name__}", operation="supervisor:budget", now=now)
+            continue
+        try:
+            _check_runtime_egress(run_dir, state, monitor=True)
+        except RuntimeEgressPaused:
+            _interrupt_egress_commands(run_dir, state, now)
         heartbeat: dict[str, Any] | None = None
         try:
             heartbeat = _read_latest_heartbeat(
@@ -3340,6 +3598,7 @@ class SupervisorClient:
         watchdog_timeout_seconds: int | float = DEFAULT_WATCHDOG_TIMEOUT_SECONDS,
         ledger_interval_seconds: int | float = DEFAULT_LEDGER_INTERVAL_SECONDS,
         terminate_owner: bool = True,
+        campaign_dir: Path | None = None,
     ) -> None:
         self.base_dir = Path(state_dir)
         self.campaign_id = _safe_id(campaign_id, "campaign_id")
@@ -3360,6 +3619,7 @@ class SupervisorClient:
         # 正式运行由调用方固定为 5/20/60 秒；这里不强制 heartbeat 小于
         # timeout，以便用几十毫秒的短预算做确定性的离线回归测试。
         self.terminate_owner = bool(terminate_owner)
+        self.campaign_dir = Path(campaign_dir).resolve(strict=True) if campaign_dir is not None else None
         self.owner_nonce = (
             _safe_id(owner_nonce, "owner_nonce", maximum=128)
             if owner_nonce is not None
@@ -3528,7 +3788,15 @@ class SupervisorClient:
         }
         if binding is not None:
             state["staging_binding"] = binding
+        if self.campaign_dir is not None and vc_artifacts.campaign_timing_ledger(self.campaign_dir) is not None:
+            state["budget_guard"] = {"campaign_dir": str(self.campaign_dir.resolve(strict=True))}
+        egress_snapshot = None
+        if self.campaign_dir is not None and arm64_environment.campaign_requires_runtime_egress(self.campaign_dir):
+            egress_snapshot = arm64_environment.require_runtime_egress()
+            state["egress_guard"] = {"campaign_dir": str(self.campaign_dir), "required": True}
         _write_json(run_dir / "state.json", state, replace=False)
+        if egress_snapshot is not None:
+            _write_json(run_dir / "egress-last-valid.json", egress_snapshot, replace=False)
         self.run_dir = run_dir
         self._prepared = prepared
         # prepared 期间心跳与 watchdog 与 running 同等对待：心跳合同不新增状态值。
@@ -3910,11 +4178,18 @@ class SupervisorClient:
             raise SupervisorError("统一命令入口 cleanup grace 非法。")
         cleanup_grace = float(cleanup_grace_seconds)
         self._ensure_monitor_alive()
+        run_dir = self._require_started()
+        runtime_state = _read_state(run_dir)
+        _check_runtime_egress(run_dir, runtime_state)
         if self._deadline_monotonic_ns is None:
             raise SupervisorError("监督器单调 deadline 尚未初始化。")
         remaining_wall = (
             self._deadline_monotonic_ns - time.monotonic_ns()
         ) / 1_000_000_000
+        budget_deadline_epoch = _runtime_budget_deadline(runtime_state)
+        budget_deadline_monotonic = int(runtime_state["started_monotonic_ns"]) / 1_000_000_000 + (
+            budget_deadline_epoch - float(runtime_state["started_at_epoch"]))
+        remaining_wall = min(remaining_wall, budget_deadline_monotonic - time.monotonic())
         terminal_drain = (
             min(DEFAULT_TERMINAL_DRAIN_SECONDS, cleanup_grace / 4.0)
             if cleanup_grace > 0
@@ -3942,7 +4217,7 @@ class SupervisorClient:
             )
         )
         process_environment = dict(env) if env is not None else None
-        execution_deadline_epoch = self.deadline_at_epoch - cleanup_grace
+        execution_deadline_epoch = min(self.deadline_at_epoch, budget_deadline_epoch) - cleanup_grace
         if cleanup_grace > 0:
             if process_environment is None:
                 process_environment = os.environ.copy()
@@ -3975,11 +4250,12 @@ class SupervisorClient:
                 pass
             raise
         started = time.monotonic()
+        egress_command_path = None
         # 同时受单步 timeout 和 Campaign 的绝对墙钟截止约束；绝不因为
         # 子命令重试而重新起算全局预算。batched Campaign 会把执行截止提前，
         # 到点先用 SIGUSR1 请求 Python worker 展开 finally；只有清理窗口耗尽
         # 才强杀进程组。原始 Campaign deadline 从未改变。
-        global_deadline = self._deadline_monotonic_ns / 1_000_000_000
+        global_deadline = min(self._deadline_monotonic_ns / 1_000_000_000, budget_deadline_monotonic)
         execution_deadline = min(
             started + timeout_seconds,
             global_deadline - cleanup_grace,
@@ -3988,14 +4264,22 @@ class SupervisorClient:
             global_deadline - terminal_drain,
             execution_deadline + max(0.0, cleanup_grace - terminal_drain),
         )
-        interval = min(float(self.heartbeat_seconds), 1.0)
+        interval = min(float(self.heartbeat_seconds), 0.5)
         try:
+            if runtime_state.get("egress_guard") is not None:
+                directory = _validate_state_dir(run_dir / "egress-commands", create=True)
+                egress_command_path = directory / f"{process.pid}.json"
+                _write_json(egress_command_path, {"pid": process.pid, "start_ticks": _process_start_ticks(process.pid),
+                                                "owner_nonce": self.owner_nonce, "cleanup_grace_seconds": cleanup_grace,
+                                                "operation": operation, "job_id": job_id}, replace=False)
             while True:
+                _check_runtime_egress(run_dir, runtime_state, command_pid=process.pid)
                 remaining = execution_deadline - time.monotonic()
                 if remaining <= 0:
                     raise SupervisorTimeout(f"统一命令超时：{operation}")
                 try:
                     stdout, stderr = process.communicate(timeout=max(0.05, min(interval, remaining)))
+                    _check_runtime_egress(run_dir, runtime_state)
                     result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
                     if result.returncode:
                         self._command_failed = True
@@ -4016,12 +4300,21 @@ class SupervisorClient:
                     if heartbeat_callback is not None:
                         heartbeat_callback(operation)
         except BaseException as error:
+            self._command_failed = True
+            if isinstance(error, RuntimeEgressPaused):
+                cleanup_deadline = min(cleanup_deadline, time.monotonic() + max(0, cleanup_grace - terminal_drain))
             if (
-                isinstance(error, SupervisorTimeout)
+                isinstance(error, (SupervisorTimeout, RuntimeEgressPaused))
                 and cleanup_grace > 0
                 and process.poll() is None
             ):
-                _request_process_cleanup(process)
+                if isinstance(error, RuntimeEgressPaused) and egress_command_path is not None:
+                    try:
+                        _request_egress_cleanup(run_dir, runtime_state, egress_command_path)
+                    except (OSError, ValueError, SupervisorError):
+                        _terminate_process_group(process)
+                else:
+                    _request_process_cleanup(process)
                 cleanup_operation = f"{operation}:cleanup"
                 while process.poll() is None and time.monotonic() < cleanup_deadline:
                     remaining_cleanup = cleanup_deadline - time.monotonic()
@@ -4055,6 +4348,12 @@ class SupervisorClient:
             except BaseException:
                 pass
             raise
+        finally:
+            if egress_command_path is not None:
+                egress_command_path.unlink(missing_ok=True)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
 
     def stop(self, *, reason: str = "normal-completion", status: str = "stopped") -> None:
         if self._stop_completed:
@@ -6904,9 +7203,14 @@ def _validate_batched_official_recovery_preview_successor(
         stop = read_stop_receipt(prior_dir)
     except SupervisorError as error:
         raise SupervisorError(f"VC-1 普通恢复预览的父 stop receipt 漂移：{error}") from error
+    # 两种父失败都产生“完整失败 attempt”：capture-official 以非零状态退出；或动作执行截止到期，
+    # 父监督器发出清理信号后 capture-official 在清理宽限内自行封口 attempt 并退出（stop reason
+    # 为 SupervisorTimeout）。宽限耗尽被强杀时 attempt 可能未封口，不属于本协议。
+    timeout_cleanup = stop.get("reason") == "SupervisorTimeout"
     if (
         stop.get("event_type") != "failed"
-        or stop.get("reason") != "action-failed:capture-official"
+        or stop.get("reason")
+        not in {"action-failed:capture-official", "SupervisorTimeout"}
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != "VC-1"
         or stop.get("owner_pid") != owner_pid
@@ -6927,6 +7231,17 @@ def _validate_batched_official_recovery_preview_successor(
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
     )
+    if timeout_cleanup:
+        if (
+            diagnostic.get("failure_kind") != "handled-error"
+            or diagnostic.get("error_type") != "CampaignCleanupRequested"
+            or diagnostic.get("failure_class") != "deadline-expired"
+            or diagnostic.get("message")
+            != "父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。"
+            or not _official_capture_cleanup_completed(prior_dir)
+        ):
+            raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+        return True
     if (
         diagnostic.get("failure_kind") != "child-returncode"
         or diagnostic.get("error_type") != "ChildProcessError"
@@ -6934,6 +7249,284 @@ def _validate_batched_official_recovery_preview_successor(
         != "子命令以非零状态退出，未提供进一步的脱敏诊断。"
     ):
         raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+    return True
+
+
+def _official_capture_cleanup_completed(prior_dir: Path) -> bool:
+    """父 run 事件链中 capture-official 恰好一次以“清理宽限内退出”失败。
+
+    ``cleanup-requested-timeout`` 表示执行截止到期后子进程在清理宽限内自行退出（已按原
+    deadline 封口 attempt）；``cleanup-window-expired`` 表示宽限耗尽被强杀，attempt 可能
+    未封口，返回 False 让恢复预览失败关闭，改由 reconciler 判定。
+    """
+
+    failures = [
+        event
+        for event in load_events(prior_dir)
+        if event.get("event_type") == "action-failed"
+        and event.get("operation") == "VC-1:capture-official"
+    ]
+    return len(failures) == 1 and failures[0].get("reason") == "cleanup-requested-timeout"
+
+
+# 普通恢复预览动作的唯一形态：零请求、不发布预约、不创建 attempt。
+_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID = "preview-official-recovery"
+_OFFICIAL_RECOVERY_PREVIEW_OPERATION = "VC-1:official-recovery"
+# 预览重派只接纳处理型失败（工具或配置缺陷报错、子进程非零退出）；截止清理、中断等
+# 不在本协议内，仍由 reconciler 判定。
+_OFFICIAL_RECOVERY_PREVIEW_RETRY_FAILURES = frozenset(
+    {("handled-error", "ConfigurationError"), ("child-returncode", "ChildProcessError")}
+)
+
+
+def _validate_batched_official_recovery_preview_retry_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """普通恢复预览批次失败后，允许以 N+1 逐字重派同一零请求预览。
+
+    预览动作只执行 ``resume --rerun-failed --preview-recovery``：不发布预约、不创建
+    attempt、不发任何请求，失败后原样重派没有副作用。0.156.1 VC-1 的预览因复用校验
+    缺陷失败，修复部署后若只能改走真实补跑，就等于跳过零请求预览这一步。本层只核对：
+    父批次确为普通预览且唯一动作以处理型错误失败；后继批次序号为 N+1，除批次身份外与
+    父批次逐字相同（同一动作、同一 execute／reuse 分区）。父预览本身是否合法由链上前一对
+    （采集失败 → 预览）校验，恢复闭集仍由动作内的恢复器逐字复算。
+    """
+
+    prior_actions = prior_manifest.get("actions")
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-1"
+        or not isinstance(prior_actions, list)
+        or len(prior_actions) != 1
+        or not isinstance(prior_actions[0], Mapping)
+        or prior_actions[0].get("action_id") != _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID
+    ):
+        return False
+    prior_action = prior_actions[0]
+    command = prior_action.get("command")
+    if (
+        not isinstance(command, list)
+        or command.count("resume") != 1
+        or command.count("--preview-recovery") != 1
+        or "--acknowledge-live-requests" in command
+    ):
+        raise SupervisorError("VC-1 恢复预览重派的父动作不是普通零请求预览。")
+    tail = command[command.index("resume"):]
+    if (
+        len(tail) != 5
+        or tail[1] != "--campaign-dir"
+        or not Path(str(tail[2])).is_absolute()
+        or tail[3:] != ["--rerun-failed", "--preview-recovery"]
+        or prior_action.get("operation") != _OFFICIAL_RECOVERY_PREVIEW_OPERATION
+    ):
+        raise SupervisorError("VC-1 恢复预览重派的父动作不是普通零请求预览。")
+    prior_sequence = prior_manifest.get("batch_sequence")
+    if (
+        isinstance(prior_sequence, bool)
+        or not isinstance(prior_sequence, int)
+        or prior_sequence < 2
+        or successor_manifest.get("phase") != "VC-1"
+        or successor_manifest.get("batch_sequence") != prior_sequence + 1
+        or successor_manifest.get("actions") != prior_actions
+        or any(
+            successor_manifest.get(field) != prior_manifest.get(field)
+            for field in (
+                "campaign_id",
+                "campaign_plan_sha256",
+                "original_deadline_at_utc",
+                "predecessor_checkpoint",
+                "no_op",
+                "execute_items",
+                "reuse_items",
+            )
+        )
+    ):
+        raise SupervisorError("VC-1 恢复预览重派必须以 N+1 逐字沿用父预览批次。")
+
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
+        label="VC-1 恢复预览重派",
+    )
+    return True
+
+
+
+def _verify_failed_official_recovery_parent(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    *,
+    campaign_id: Any,
+    action_id: str,
+    label: str,
+) -> None:
+    """核验 VC-1 恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
+
+    预览重派与补跑失败后的预览两条协议共用：父 run 目录与 state／stop receipt 必须私有且
+    逐字自洽，stop 原因是该动作失败，动作诊断只能是处理型失败（ConfigurationError 或子进程
+    非零退出）；截止清理、中断等不在协议内，仍由 reconciler 判定。
+    """
+
+    _permission_compensation_private_directory(prior_dir, f"{label}前序 run 目录")
+    recorded_state = _permission_compensation_json(
+        _permission_compensation_private_file(prior_dir / "state.json", f"{label}前序 state"),
+        f"{label}前序 state",
+    )
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        recorded_state != dict(prior_state)
+        or prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != campaign_id
+        or prior_state.get("phase") != "VC-1"
+        or isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+        or not isinstance(owner_nonce, str)
+        or not owner_nonce
+    ):
+        raise SupervisorError(f"{label}的父终态或 owner 身份漂移。")
+    _permission_compensation_private_file(prior_dir / "stop-receipt.json", f"{label}前序 stop receipt")
+    try:
+        stop = read_stop_receipt(prior_dir)
+    except SupervisorError as error:
+        raise SupervisorError(f"{label}的父 stop receipt 漂移：{error}") from error
+    if (
+        stop.get("event_type") != "failed"
+        or stop.get("reason") != f"action-failed:{action_id}"
+        or stop.get("campaign_id") != prior_state.get("campaign_id")
+        or stop.get("phase") != "VC-1"
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+    ):
+        raise SupervisorError(f"{label}的父 stop receipt 漂移。")
+    diagnostic = _validate_action_diagnostic(
+        _action_diagnostic_path(prior_dir, action_id, create_directory=False),
+        run_dir=prior_dir,
+        campaign_id=str(prior_state["campaign_id"]),
+        phase="VC-1",
+        action_id=action_id,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+    )
+    if (
+        diagnostic.get("failure_kind"),
+        diagnostic.get("error_type"),
+    ) not in _OFFICIAL_RECOVERY_PREVIEW_RETRY_FAILURES:
+        raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+
+
+# 按已批准恢复预览真实补跑的动作（resume --rerun-failed --recovery-preview … --acknowledge-live-requests）。
+_OFFICIAL_RECOVERY_RUN_ACTION_ID = "run-official-recovery"
+
+
+def _validate_batched_official_recovery_run_retry_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """真实补跑批次失败后，允许以 N+1 派发新的普通零请求恢复预览。
+
+    补跑批次按已批准预览执行 ``resume --rerun-failed --recovery-preview <预览>
+    --acknowledge-live-requests``；作业失败时新 attempt 以失败状态封口、预约已入账，
+    须 reconcile-attempt 生成新恢复预览再补跑。原协议只接“采集失败 → 序号 2 预览”，
+    补跑再失败（0.156.1：guardian 审阅作业卡在目录信任确认）后 Campaign 无路可走。
+    本层只核对：父批次确为补跑且唯一动作以处理型错误失败；后继是 N+1 的普通零请求预览，
+    命令前缀与 Campaign 目录与父批次相同；execute 只能是父批次 execute 的非空子集、
+    execute∪reuse 与父批次一致（补跑中已通过的 Job 转入复用，不得扩大执行集合）。
+    恢复闭集仍由动作内的恢复器逐字复算。
+    """
+
+    prior_actions = prior_manifest.get("actions")
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-1"
+        or not isinstance(prior_actions, list)
+        or len(prior_actions) != 1
+        or not isinstance(prior_actions[0], Mapping)
+        or prior_actions[0].get("action_id") != _OFFICIAL_RECOVERY_RUN_ACTION_ID
+    ):
+        return False
+    prior_action = prior_actions[0]
+    command = prior_action.get("command")
+    if (
+        not isinstance(command, list)
+        or command.count("resume") != 1
+        or command.count("--recovery-preview") != 1
+        or "--preview-recovery" in command
+    ):
+        raise SupervisorError("VC-1 补跑失败后的预览：父动作不是按预览的真实补跑。")
+    resume_index = command.index("resume")
+    prefix = command[:resume_index]
+    tail = command[resume_index:]
+    if (
+        len(tail) != 7
+        or tail[1] != "--campaign-dir"
+        or not Path(str(tail[2])).is_absolute()
+        or tail[3:5] != ["--rerun-failed", "--recovery-preview"]
+        or not Path(str(tail[5])).is_absolute()
+        or tail[6] != "--acknowledge-live-requests"
+        or prior_action.get("operation") != _OFFICIAL_RECOVERY_PREVIEW_OPERATION
+    ):
+        raise SupervisorError("VC-1 补跑失败后的预览：父动作不是按预览的真实补跑。")
+    prior_sequence = prior_manifest.get("batch_sequence")
+    successor_actions = successor_manifest.get("actions")
+    prior_execute = prior_manifest.get("execute_items")
+    prior_reuse = prior_manifest.get("reuse_items")
+    successor_execute = successor_manifest.get("execute_items")
+    successor_reuse = successor_manifest.get("reuse_items")
+    expected_action = {
+        "action_id": _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
+        "operation": _OFFICIAL_RECOVERY_PREVIEW_OPERATION,
+        "command": [*prefix, "resume", "--campaign-dir", str(tail[2]), "--rerun-failed", "--preview-recovery"],
+        "item_ids": successor_execute,
+    }
+    if (
+        isinstance(prior_sequence, bool)
+        or not isinstance(prior_sequence, int)
+        or prior_sequence < 2
+        or successor_manifest.get("phase") != "VC-1"
+        or successor_manifest.get("batch_sequence") != prior_sequence + 1
+        or any(
+            successor_manifest.get(field) != prior_manifest.get(field)
+            for field in (
+                "campaign_id",
+                "campaign_plan_sha256",
+                "original_deadline_at_utc",
+                "predecessor_checkpoint",
+                "no_op",
+            )
+        )
+        or not isinstance(successor_actions, list)
+        or len(successor_actions) != 1
+        or not isinstance(successor_actions[0], Mapping)
+        or {key: successor_actions[0].get(key) for key in expected_action} != expected_action
+        or not all(isinstance(items, list) for items in (prior_execute, prior_reuse, successor_execute, successor_reuse))
+        or not successor_execute
+        or len(set(successor_execute)) != len(successor_execute)
+        or len(set(successor_reuse)) != len(successor_reuse)
+        or set(successor_execute) & set(successor_reuse)
+        or not set(successor_execute).issubset(set(prior_execute))
+        or set(successor_execute) | set(successor_reuse) != set(prior_execute) | set(prior_reuse)
+    ):
+        raise SupervisorError(
+            "VC-1 补跑失败后的预览必须是 N+1 的普通零请求预览，且不得扩大父补跑的执行集合。"
+        )
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=_OFFICIAL_RECOVERY_RUN_ACTION_ID,
+        label="VC-1 补跑失败后的预览",
+    )
     return True
 
 
@@ -7747,8 +8340,8 @@ def _successor_segment_normalized_command(
 def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: Sequence[str]) -> str | None:
     """P1（授权闭包）：后继段预览的批准范围与请求估算必须恰好覆盖权威链取得的 J*（CLI 与监督器共用）。
 
-    范围：``planned_job_ids == execute_job_ids == J*``（无重复）、``reuse_job_ids == []``；
-    估算：``expected_new_requests.known_by_job`` 的键 ∪ ``unknown_job_ids`` == J*、两者不相交且无重复、
+    范围：planned 等于 J*，execute 与 reuse 无交集且并集等于 J*；reuse 必须带逐项证明。
+    估算：``expected_new_requests.known_by_job`` 的键 ∪ ``unknown_job_ids`` == execute、两者不相交且无重复、
     ``known_total == sum(known_by_job.values())``、计数为非负整数。返回违规说明，合法返回 ``None``。
     """
 
@@ -7763,10 +8356,14 @@ def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: S
         or not isinstance(execute, list)
         or not isinstance(reuse, list)
         or sorted(str(item) for item in planned) != frozen
-        or sorted(str(item) for item in execute) != frozen
+        or any(not isinstance(item, str) for item in planned + execute + reuse)
         or len(set(planned)) != len(planned)
         or len(set(execute)) != len(execute)
-        or reuse != []
+        or len(set(reuse)) != len(reuse)
+        or set(execute) & set(reuse)
+        or sorted(set(execute) | set(reuse)) != frozen
+        or not isinstance(preview.get("reuse_proofs", {}), Mapping)
+        or set(preview.get("reuse_proofs", {})) != set(reuse)
     ):
         return f"批准的执行范围（planned={planned}，execute={execute}，reuse={reuse}）不等于基线冻结的 J*={frozen}"
     estimate = preview.get("expected_new_requests")
@@ -7783,13 +8380,13 @@ def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: S
         or any(not isinstance(item, str) for item in unknown)
         or len(set(unknown)) != len(unknown)
         or set(known) & set(unknown)
-        or sorted(set(known) | set(unknown)) != frozen
+        or set(known) | set(unknown) != set(execute)
         or isinstance(known_total, bool)
         or not isinstance(known_total, int)
         or known_total != sum(int(value) for value in known.values())
     ):
         return (
-            f"请求估算未覆盖完整 J*={frozen}（known_by_job={dict(known) if isinstance(known, Mapping) else known}，"
+            f"请求估算未覆盖完整执行集合 execute={execute}（known_by_job={dict(known) if isinstance(known, Mapping) else known}，"
             f"unknown_job_ids={unknown}，known_total={known_total}）"
         )
     return None
@@ -7803,7 +8400,7 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     prior_revision: str,
     preview: Mapping[str, Any],
 ) -> list[str]:
-    """P1（授权闭包）：后继段预览批准的范围必须等于权威链取得的 J*，且不复用任何段内 Job。
+    """R11：后继段预览的 execute／reuse 分割 J*，复用证明必须逐项重放。
 
     权威链与 CLI／reconciler 完全相同：失败段预约（``evaluation_baseline``／``baseline_commit_sha256``／
     ``recovery_sha256`` 三元组，自摘要重放）→ ``b<K>/COMMIT``（``commit_sha256`` 与 ``recovery_sha256``
@@ -7868,6 +8465,12 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     violation = recovery_preview_scope_violation(preview, frozen)
     if violation is not None:
         raise SupervisorError(f"后继恢复段批次的恢复预览{violation}。")
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        reconciler.validate_segment_reuse_preview(campaign_dir, preview)
+    except (reconciler.ReconcilerError, ValueError, OSError) as error:
+        raise SupervisorError(f"后继恢复段复用证明不成立：{error}") from error
     return frozen
 
 
@@ -7913,11 +8516,13 @@ def _validate_attempt_recovery_segment_successor(
         raise SupervisorError("后继恢复段批次的动作数量与失败批次不一致。")
     preview_argument: str | None = None
     normalized_actions: list[Any] = []
+    normalized_prior_actions: list[Any] = []
     for prior_action, successor_action in zip(prior_actions, successor_actions):
         if not isinstance(prior_action, Mapping) or not isinstance(successor_action, Mapping):
             raise SupervisorError("后继恢复段批次的动作非法。")
         if successor_action.get("action_id") != action_id:
             normalized_actions.append(successor_action)
+            normalized_prior_actions.append(prior_action)
             continue
         command = successor_action.get("command")
         if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
@@ -7926,6 +8531,13 @@ def _validate_attempt_recovery_segment_successor(
             command, prior_revision=prior_revision, successor_revision=successor_revision
         )
         normalized_action = {**successor_action, "command": normalized_command}
+        prior_command = prior_action.get("command", [])
+        if "--rerun-failed" in prior_command:
+            # 连续中断时前序本身也是后继段；两侧仅剥离各自的已批准恢复参数后比较原动作。
+            prior_command, _ = _successor_segment_normalized_command(
+                prior_command, prior_revision=prior_revision, successor_revision=prior_revision,
+            )
+        normalized_prior_actions.append({**prior_action, "command": prior_command})
         bindings = successor_action.get("output_bindings")
         if isinstance(bindings, list):
             # 动作输出绑定（段 run-summary 路径）随段号变化：按同一映射归一化回前序段。
@@ -7951,7 +8563,8 @@ def _validate_attempt_recovery_segment_successor(
         "baseline_commit_sha256",
         "evaluator_digests",
     )
-    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != prior_manifest.get(field)]
+    normalized_prior = {**prior_manifest, "actions": normalized_prior_actions}
+    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != normalized_prior.get(field)]
     if drifted:
         raise SupervisorError("后继恢复段批次只允许失败动作换段号并追加恢复预览，漂移字段：" + "、".join(drifted))
     if preview_argument is None:
@@ -8006,7 +8619,7 @@ def _validate_attempt_recovery_segment_successor(
                 bound = True
     if not bound:
         raise SupervisorError("后继恢复段批次携带的恢复预览与账本 recovery_authorized 绑定的预览不一致。")
-    # P1（授权闭包）：预览批准的执行范围必须恰好等于权威链取得的 J*（reuse 恒空），与 CLI 开段口径一致。
+    # R11：执行与复用集合必须分割权威链 J*，并重放复用判据，与 CLI 开段口径一致。
     _require_segment_preview_scope_matches_frozen_jobs(
         campaign_dir, prior_manifest, attempt_id=str(attempt_id), prior_revision=prior_revision, preview=preview_document
     )
@@ -8076,13 +8689,16 @@ def _validate_reconciled_redispatch_binding(
         raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
     recovery_index, recovery_event = matches[0]
     receipts = recovery_event.get("receipts")
+    expected_roles = ["provenance", "reconciliation"]
+    if isinstance(receipts, list) and any(item.get("role") == "stage_replay" for item in receipts):
+        expected_roles.append("stage_replay")
     if (
         recovery_event.get("event_type") != "receipt_passed"
         or recovery_event.get("next_action") != "redispatch-same-batch"
         or recovery_event.get("phase") != prior_manifest.get("phase")
         or not isinstance(receipts, list)
         or [item.get("role") for item in receipts if isinstance(item, Mapping)]
-        != ["provenance", "reconciliation"]
+        != expected_roles
     ):
         raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
     if recovery_index == len(raw_events) - 1:
@@ -8178,16 +8794,124 @@ def _validate_reconciled_redispatch_binding(
         if successor_manifest.get(field) != prior_manifest.get(field)
     ]
     # 改造 5：同基线逐字重派还要求候选绑定与评估基线三字段逐字相等——工具变化后的重派不是
-    # "逐字"，只能经 evaluation-recover 开新基线承接。
-    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"):
+    # "逐字"，只能经 evaluation-recover 开新基线承接。evaluator_digests 的唯一例外见
+    # _redispatch_evaluator_digests_drifted（b0 下只核 checker／builder）。
+    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256"):
         if field in prior_manifest or field in successor_manifest:
             if successor_manifest.get(field) != prior_manifest.get(field):
                 drifted.append(field)
+    if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
+            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest)):
+        drifted.append("evaluator_digests")
     if drifted:
         raise SupervisorError(
             "reservation 前环境恢复只允许原批次内容重派，漂移字段："
             + "、".join(drifted)
         )
+    return True
+
+
+# b0（评估基线为 plan entry）只对这两项设授权口径；compare／accept reader 在 plan 未登记，b0 不设口径。
+EVALUATOR_B0_AUTHORIZED_DIGESTS = ("checker_sha256", "builder_sha256")
+
+
+def _redispatch_evaluator_digests_drifted(
+    prior_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """reservation 前逐字重派时，评估器摘要是否构成漂移。
+
+    默认四项必须逐字相等（改造 5）。唯一例外：前后批次都处于 b0（evaluation_baseline 与
+    baseline_commit_sha256 均为空）、四项键集合相同且 checker／builder 逐字相等时，compare／accept
+    reader 的变化不算漂移——b0 本就不对 reader 设授权口径，reservation 前失败时尚无任何评估产物，
+    reader 闭包随受监督部署的工具修复变化并不绕过评估基线；其余任何情形（有基线、键集合不同、
+    checker／builder 变化、一侧缺失）仍按漂移失败关闭。2026-09-26 c01570 VC-5 批次 9：修复监督器
+    受控维护竞态只改变两项 reader 摘要，逐字重派被拒、evaluation-recover 又因候选尚未封存不适用。
+    """
+
+    prior = prior_manifest.get("evaluator_digests")
+    successor = successor_manifest.get("evaluator_digests")
+    if prior == successor:
+        return False
+    if (
+        prior_manifest.get("evaluation_baseline") is not None
+        or successor_manifest.get("evaluation_baseline") is not None
+        or prior_manifest.get("baseline_commit_sha256") is not None
+        or successor_manifest.get("baseline_commit_sha256") is not None
+        or not isinstance(prior, Mapping)
+        or not isinstance(successor, Mapping)
+        or set(prior) != set(successor)
+    ):
+        return True
+    return any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS)
+
+
+def _validate_batched_stage_review_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """R4：复核阶段审核的幂等证明；直接重派还复算实物，历史后继只重放冻结许可。
+
+    R18：候选审核下的 VC-4（零请求构建动作的工具缺陷）按同一证明格式承接，审核事件取候选审核事件。
+    """
+
+    phase = prior_manifest.get("phase")
+    candidate_stage = phase in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
+    if campaign_dir is None or (phase not in {"VC-1", "VC-2", "VC-3"} and not candidate_stage):
+        return False
+    proof_path = campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "stage-replay.json"
+    if not proof_path.exists():
+        return False
+    proof = _read_json(proof_path)
+    facts = campaign_run_failure_facts(prior_dir, campaign_dir=campaign_dir)
+    if facts is None or prior_state.get("state") != "failed":
+        raise SupervisorError("阶段重派缺少可信失败父动作")
+    commit = _staging_commit_for_run(campaign_dir, prior_state, prior_manifest, prior_dir)
+    if (commit is None or proof.get("commit_sha256") != commit["commit_sha256"]
+            or proof.get("schema_version") != "codex-upgrade-stage-replay/v1"
+            or proof.get("decision") != "recoverable" or proof.get("allowed") is not True
+            or proof.get("run_id") != prior_dir.name or proof.get("campaign_id") != prior_manifest.get("campaign_id")
+            or proof.get("phase") != prior_manifest.get("phase") or proof.get("next_action") != "redispatch-same-batch"):
+        raise SupervisorError("阶段重派证明与 COMMIT 或失败批次不一致")
+    campaign = _read_json(campaign_dir / "campaign.json")
+    ledger_dir = Path(campaign["control_receipts"]["upgrade_timing"]["ledger_dir"])
+    events = timing_ledger._load_events(ledger_dir)
+    expected_review = (
+        candidate_review_event_id(str(facts["failure_digest"]))
+        if candidate_stage
+        else f"{CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+    )
+    reviews = [event for event, _ in events if event.get("event_id") == expected_review]
+    if (len(reviews) != 1 or proof.get("review_event_id") != expected_review
+            or proof.get("review_root_cause_id") != reviews[0].get("root_cause_id")):
+        raise SupervisorError("阶段重派证明与 review 根因不一致")
+    passes = [event for event, _ in events if event.get("event_id") == f"reconcile-run-passed-{prior_dir.name}"]
+    if len(passes) != 1:
+        raise SupervisorError("阶段重派尚无唯一对账许可")
+    bindings = [item for item in passes[0]["receipts"] if item.get("role") == "stage_replay"]
+    if (len(bindings) != 1 or bindings[0]["sha256"] != _sha256((ledger_dir / bindings[0]["path"]).read_bytes())
+            or _read_json(ledger_dir / bindings[0]["path"]) != proof):
+        raise SupervisorError("阶段重派证明与账本副本漂移")
+    receipt = _read_json(proof_path.parent / "supervisor-run-reconciliation.json")
+    if proof["reconciliation_receipt_sha256"] != _sha256((proof_path.parent / "supervisor-run-reconciliation.json").read_bytes()):
+        raise SupervisorError("阶段重派的对账收据摘要漂移")
+    accounted = _project_ledger_operation_payload(campaign_dir, f"reconcile-supervisor-run:{prior_dir.name}", label="阶段重派")
+    if accounted.get("reconciliation_receipt_sha256") != proof["reconciliation_receipt_sha256"]:
+        raise SupervisorError("阶段重派的对账尚未入账")
+    _validate_reconciled_redispatch_binding(
+        prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir,
+        effective_class=str(receipt["failure_class"]), label="阶段审核",
+    )
+    if events[-1][0]["event_id"] == passes[0]["event_id"]:
+        from tools.official_client_capture import codex_upgrade as upgrade
+
+        current = upgrade._campaign_stage_replay_facts(campaign_dir, prior_manifest)
+        if any(current.get(key) != proof.get(key) for key in ("phase", "allowed", "actions", "reasons")):
+            raise SupervisorError("阶段动作的输入或半成品在对账后漂移，禁止重派")
     return True
 
 
@@ -8522,6 +9246,14 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_stage_review_successor(
+                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_parent_start_redispatch_successor(
                 state,
                 prior_manifest,
@@ -8571,6 +9303,28 @@ def _validate_batched_campaign_history(
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_official_recovery_preview_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_official_recovery_preview_retry_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_official_recovery_run_retry_successor(
                 state,
                 prior_manifest,
                 _run_dir,
@@ -8729,12 +9483,36 @@ PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
         "policy-drift",
         "environment-contaminated",
         "restoration-failed",
-        "deadline-expired",
         "request-budget-exhausted",
         "root-cause-limit",
         "evidence-integrity",
     }
 )
+
+
+def _runtime_budget_deadline(state: Mapping[str, Any]) -> float:
+    """三层最早截止约束执行；父 run 时间锚和原始清单不因阶段切换改写。"""
+    # R8：缺字段按状态合同报 SupervisorError，而不是 KeyError。
+    parent_deadline = _parse_epoch(state.get("deadline_at_epoch"), "deadline_at_epoch")
+    binding = state.get("budget_guard")
+    if binding is None:
+        return parent_deadline
+    if not isinstance(binding, Mapping) or set(binding) != {"campaign_dir"}:
+        raise SupervisorError("预算执行边界绑定非法")
+    campaign_dir = Path(binding["campaign_dir"])
+    if not campaign_dir.is_absolute() or campaign_dir.is_symlink():
+        raise SupervisorError("预算执行边界必须绑定可信 Campaign 路径")
+    try:
+        deadlines = vc_artifacts.effective_deadlines(campaign_dir)
+    except (vc_artifacts.VCArtifactError, project_ledger.ProjectLedgerError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"三层预算无法重放：{error}") from error
+    if "extension_pending" in deadlines["paused_scopes"]:
+        raise SupervisorError("延期双账事务尚未闭合，禁止执行")
+    execution = deadlines.get("execution_deadline_at_utc")
+    if execution is None:
+        # 三层都没有可解析的截止（例如历史 Campaign 无计时账本）时只受父 run 自身时间锚约束。
+        return parent_deadline
+    return min(parent_deadline, datetime.fromisoformat(str(execution).replace("Z", "+00:00")).timestamp())
 
 
 def _candidate_failure_hits_permanent_condition(
@@ -8743,8 +9521,7 @@ def _candidate_failure_hits_permanent_condition(
     *,
     failure_class: str,
 ) -> bool:
-    """改造 2 三分支的"永久条件"：总账 blocked／账务未决／绝对截止／预算／根因上限，
-    账本 deadline（stop_required），以及诊断给出的身份或环境类不可恢复分类。"""
+    """永久条件保留账务、请求预算、根因与完整性门禁；墙钟到期单独暂停。"""
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
@@ -8766,11 +9543,6 @@ def _candidate_failure_hits_permanent_condition(
         return True
     if head.get("root_causes_at_limit"):
         return True
-    absolute = plan.get("absolute_deadline_utc")
-    if isinstance(absolute, str):
-        expiry = datetime.fromisoformat(absolute.replace("Z", "+00:00"))
-        if datetime.now(timezone.utc) >= expiry:
-            return True
     return False
 
 
@@ -8832,7 +9604,7 @@ def _close_failed_campaign_timing_ledger(
     failed_action_id: str,
     failure_class: str = "execution-failure",
 ) -> dict[str, Any]:
-    """按机器失败分类把父动作失败映射为暂停恢复或永久停线。"""
+    """按机器失败分类收口为可恢复暂停、阶段审核或永久停线。"""
 
     campaign_dir = Path(campaign_dir)
     campaign = _read_json(campaign_dir / "campaign.json")
@@ -8956,11 +9728,51 @@ def _close_failed_campaign_timing_ledger(
         "本失败分类不可自动恢复；完成请求与根因入账后永久停线。"
     )
 
+    budget_state = timing_ledger.inspect_ledger(ledger_dir)
+    deadlines = vc_artifacts.effective_deadlines(campaign_dir)
+    # R8：只有真正到期的层才按预算暂停。其他 Campaign 的延期双账事务未闭合（extension_pending）时本账本同样
+    # 被暂停拦截，既不能写 recovery_required，也不能冒报 deadline_paused；明确失败，事务闭合后经对账重入。
+    expired_scopes = set(deadlines["paused_scopes"]) - {"extension_pending"}
+    if "extension_pending" in deadlines["paused_scopes"] and not expired_scopes:
+        raise SupervisorError(
+            "其他 Campaign 的延期双账事务尚未闭合（extension_pending），本次父失败暂不收口；"
+            "事务闭合后以 reconcile-supervisor-run 对账重入。"
+        )
+    budget_paused = bool(expired_scopes) and not _candidate_failure_hits_permanent_condition(
+        campaign_dir, budget_state, failure_class=failure_class
+    )
+    # R4×R8：本次失败的 stage_abandoned 已写、后续 review 未写（中途被杀）时，先在收口锁内补齐 review
+    # 再登记暂停；否则阶段层延期找不到 review 阶段，账本永久卡在“已放弃、未审核”。
+    abandon_pending = (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") == abandon_event_id
+
+    def budget_pause_result() -> dict[str, Any]:
+        # 暂停入口自行取总账、Campaign 与收口锁，只能在离开收口锁之后调用。
+        paused = project_ledger.pause_campaign_deadline(campaign_dir)
+        if paused.get("status") != "deadline_paused":
+            # 判定与登记之间预算状态变化（例如延期刚批准）：不冒报暂停，交由重入按当时状态收口。
+            raise SupervisorError(f"预算状态在收口期间变化（{paused.get('status')}），请重入收口。")
+        return {"status": "passed", "ledger_status": "deadline_paused", "ledger_dir": str(ledger_dir),
+                "failure_class": failure_class, "next_action": "deadline-extend preview/apply", "deadline_pause": paused}
+
+    if budget_paused and not abandon_pending:
+        return budget_pause_result()
+
+    review_result: dict[str, Any] | None = None
     with _timing_closeout_lock(ledger_dir):
         try:
             before = timing_ledger.inspect_ledger(ledger_dir)
         except (OSError, timing_ledger.TimingLedgerError) as error:
             raise SupervisorError(f"UpgradeTimingLedger 无法重放：{error}") from error
+        # 预算暂停／延期事件只记录预算控制，不改变父失败收口进度：判断已写到哪一步时跳过它们，
+        # 账本状态按暂停前状态判断。
+        substantive = timing_ledger.last_substantive_event(ledger_dir) or {}
+        last_id = substantive.get("event_id")
+        last_next_action = substantive.get("next_action")
+        ledger_status = (
+            before.get("status_before_pause")
+            if before.get("status") == "deadline_paused"
+            else before.get("status")
+        )
         if (
             before.get("upgrade_id") != timing.get("upgrade_id")
             or before.get("campaign_purpose") != campaign.get("campaign_purpose")
@@ -8968,10 +9780,10 @@ def _close_failed_campaign_timing_ledger(
             or before.get("target_version") != campaign.get("target_version")
         ):
             raise SupervisorError("UpgradeTimingLedger 与 Campaign 版本或用途漂移。")
-        if before.get("status") == "recovery_required":
+        if ledger_status == "recovery_required":
             if (
-                before.get("last_event_id") != recovery_event_id
-                or before.get("next_action") != recovery_next_action
+                last_id != recovery_event_id
+                or last_next_action != recovery_next_action
                 or before.get("recovery_root_cause_id") != root_cause_id
             ):
                 raise SupervisorError(
@@ -8988,10 +9800,10 @@ def _close_failed_campaign_timing_ledger(
                 "failure_class": failure_class,
                 "next_action": recovery_next_action,
             }
-        if before.get("status") == "stopped":
+        if ledger_status == "stopped":
             if (
-                before.get("last_event_id") != stop_event_id
-                or before.get("next_action") != permanent_next_action
+                last_id != stop_event_id
+                or last_next_action != permanent_next_action
             ):
                 raise SupervisorError("UpgradeTimingLedger 已由其他根因停线。")
             return {
@@ -9015,6 +9827,9 @@ def _close_failed_campaign_timing_ledger(
                 or recovery_segment is not None
             )
             and before.get("status") == "active"
+            and not _candidate_failure_hits_permanent_condition(
+                campaign_dir, before, failure_class=failure_class
+            )
         ):
             if before.get("active_phase") != phase:
                 raise SupervisorError(
@@ -9059,9 +9874,8 @@ def _close_failed_campaign_timing_ledger(
 
         next_action = permanent_next_action
 
-        # 改造 2：候选级阶段（VC-4～VC-6）的不可恢复动作失败，在永久条件未命中时不停线，
-        # 而是 stage_abandoned + candidate_review_required（只读等待人工：对账入账后
-        # invalidate-candidate 或显式停线）。VC-1～VC-3 与 legacy 清单保持现状。
+        # R4：Campaign 级与候选级都保留三分支；普通失败不再自动销毁 Campaign。
+        # 是否能重派由对账复核动作 checkpoint 与幂等条件，COMMIT 只决定序号占用。
         candidate_id = manifest.get("candidate_id")
         review_event_id = candidate_review_event_id(failure_digest)
         review_next_action = (
@@ -9069,6 +9883,13 @@ def _close_failed_campaign_timing_ledger(
             "有：reconcile-attempt）入账；判为候选源码问题则 invalidate-candidate preview/apply，"
             "否则以 close-campaign-ledger 显式停线。"
         )
+        if phase in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES:
+            # R18：VC-4 零请求构建动作的工具缺陷可修好接着跑，不必作废候选或停线。
+            review_next_action = (
+                "candidate_review_required：先 reconcile-supervisor-run 入账；VC-4 工具缺陷修复并部署后，"
+                "对账证明动作可幂等即在同一 revision 重开 VC-4 并逐字重派；判为候选源码问题则 "
+                "invalidate-candidate preview/apply，否则以 close-campaign-ledger 显式停线。"
+            )
         candidate_review = (
             phase in vc_artifacts.CANDIDATE_PHASES
             and isinstance(candidate_id, str)
@@ -9077,13 +9898,26 @@ def _close_failed_campaign_timing_ledger(
                 campaign_dir, before, failure_class=failure_class
             )
         )
-        if candidate_review:
-            if before.get("status") == "candidate_review_required":
-                if before.get("last_event_id") != review_event_id:
-                    raise SupervisorError("UpgradeTimingLedger 已由其他根因进入 candidate_review_required。")
+        stage_review = (
+            phase in {"VC-1", "VC-2", "VC-3"}
+            and not _candidate_failure_hits_permanent_condition(
+                campaign_dir, before, failure_class=failure_class
+            )
+        )
+        review_status = "candidate_review_required" if candidate_review else "stage_review_required"
+        if stage_review:
+            review_event_id = f"{event_prefix}-stage-review-required"
+            review_next_action = (
+                "stage_review_required：先按 reservation 分流对账；已发布预约只允许 reconcile-attempt、"
+                "recovery-preview 和 resume；无预约须核验 COMMIT、checkpoint 与动作幂等条件后逐字重派。"
+            )
+        if candidate_review or stage_review:
+            if ledger_status == review_status:
+                if last_id != review_event_id:
+                    raise SupervisorError(f"UpgradeTimingLedger 已由其他根因进入 {review_status}。")
                 return {
                     "status": "passed",
-                    "ledger_status": "candidate_review_required",
+                    "ledger_status": review_status,
                     "idempotent": True,
                     "ledger_dir": str(ledger_dir),
                     "head_sequence": before["head_sequence"],
@@ -9094,7 +9928,7 @@ def _close_failed_campaign_timing_ledger(
                 }
             next_action = review_next_action
 
-        if before.get("last_event_id") == abandon_event_id:
+        if last_id == abandon_event_id:
             if before.get("active_phase") is not None:
                 raise SupervisorError("stage_abandoned 部分终态仍残留 active 阶段。")
         elif before.get("active_phase") == phase:
@@ -9118,31 +9952,36 @@ def _close_failed_campaign_timing_ledger(
         try:
             middle = timing_ledger.inspect_ledger(ledger_dir)
             if (
-                middle.get("last_event_id") != abandon_event_id
+                (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") != abandon_event_id
                 or middle.get("active_phase") is not None
             ):
                 raise SupervisorError("UpgradeTimingLedger stage_abandoned 未稳定落盘。")
-            if candidate_review:
+            if candidate_review or stage_review:
                 timing_ledger.append_event(
                     ledger_dir,
                     event_id=review_event_id,
                     phase=phase,
-                    event_type="candidate_review_required",
-                    candidate_id=str(candidate_id),
+                    event_type=review_status,
+                    candidate_id=str(candidate_id) if candidate_review else None,
                     root_cause_id=root_cause_id,
                     live_request_count=0,
                     next_action=review_next_action,
                 )
                 final = timing_ledger.inspect_ledger(ledger_dir)
+                final_status = (
+                    final.get("status_before_pause")
+                    if final.get("status") == "deadline_paused"
+                    else final.get("status")
+                )
                 if (
-                    final.get("status") != "candidate_review_required"
+                    final_status != review_status
                     or final.get("active_phase") is not None
-                    or final.get("last_event_id") != review_event_id
+                    or (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") != review_event_id
                 ):
-                    raise SupervisorError("UpgradeTimingLedger candidate_review_required 未闭合。")
-                return {
+                    raise SupervisorError(f"UpgradeTimingLedger {review_status} 未闭合。")
+                review_result = {
                     "status": "passed",
-                    "ledger_status": "candidate_review_required",
+                    "ledger_status": review_status,
                     "idempotent": False,
                     "ledger_dir": str(ledger_dir),
                     "head_sequence": final["head_sequence"],
@@ -9151,38 +9990,46 @@ def _close_failed_campaign_timing_ledger(
                     "failure_class": failure_class,
                     "next_action": review_next_action,
                 }
-            timing_ledger.append_event(
-                ledger_dir,
-                event_id=stop_event_id,
-                phase=phase,
-                event_type="stop_the_line",
-                root_cause_id=root_cause_id,
-                live_request_count=0,
-                next_action=next_action,
-            )
-            final = timing_ledger.inspect_ledger(ledger_dir)
+            else:
+                timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=stop_event_id,
+                    phase=phase,
+                    event_type="stop_the_line",
+                    root_cause_id=root_cause_id,
+                    live_request_count=0,
+                    next_action=next_action,
+                )
+                final = timing_ledger.inspect_ledger(ledger_dir)
         except (OSError, timing_ledger.TimingLedgerError) as error:
             raise SupervisorError(
                 f"UpgradeTimingLedger stop_the_line 写入失败：{error}"
             ) from error
-        if (
-            final.get("status") != "stopped"
-            or final.get("active_phase") is not None
-            or final.get("last_event_id") != stop_event_id
-            or final.get("next_action") != next_action
-        ):
-            raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
-        return {
-            "status": "passed",
-            "ledger_status": "stopped",
-            "idempotent": False,
-            "ledger_dir": str(ledger_dir),
-            "head_sequence": final["head_sequence"],
-            "head_sha256": final["head_sha256"],
-            "root_cause_id": root_cause_id,
-            "failure_class": failure_class,
-            "next_action": next_action,
-        }
+        if review_result is None:
+            if (
+                final.get("status") != "stopped"
+                or final.get("active_phase") is not None
+                or final.get("last_event_id") != stop_event_id
+                or final.get("next_action") != next_action
+            ):
+                raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
+            return {
+                "status": "passed",
+                "ledger_status": "stopped",
+                "idempotent": False,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": final["head_sequence"],
+                "head_sha256": final["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "failure_class": failure_class,
+                "next_action": next_action,
+            }
+    # 收口锁内补齐的 review 已落盘。“已放弃、未审核”中间态既无 active 阶段也无 review 阶段，账本推算不出
+    # 阶段截止，入口处的预算判定看不到阶段层到期；因此离开收口锁后按落盘后的账本重新判定，
+    # 仍有到期层（或总账已登记暂停）则按原协议登记暂停。
+    if set(vc_artifacts.effective_deadlines(campaign_dir)["paused_scopes"]) - {"extension_pending"}:
+        return budget_pause_result()
+    return review_result
 
 
 def _commit_prepared_run(
@@ -9267,7 +10114,19 @@ def _commit_prepared_run(
     }
 
 
-def _campaign_run_locked(
+def _campaign_run_locked(args: argparse.Namespace, *, manifest: Mapping[str, Any], state_dir: Path,
+                         campaign_dir: Path | None = None, commit: Any | None = None,
+                         owner_nonce: str | None = None, staging_binding: Mapping[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """父动作队列运行期间禁止并发延期和显式放弃；进程退出自动释放执行锁。"""
+    arguments = dict(manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir,
+                     commit=commit, owner_nonce=owner_nonce, staging_binding=staging_binding)
+    if campaign_dir is None:
+        return _campaign_run_with_budget_lock(args, **arguments)
+    with project_ledger.deadline_control_scope(campaign_dir, executing=True):
+        return _campaign_run_with_budget_lock(args, **arguments)
+
+
+def _campaign_run_with_budget_lock(
     args: argparse.Namespace,
     *,
     manifest: Mapping[str, Any],
@@ -9336,9 +10195,12 @@ def _campaign_run_locked(
                 campaign_dir=campaign_dir,
                 staging_model=staging_model,
             )
-            deadline = datetime.fromisoformat(
-                str(manifest["original_deadline_at_utc"]).replace("Z", "+00:00")
-            ).timestamp()
+            deadlines = (vc_artifacts.effective_deadlines(campaign_dir,
+                original_deadline_at_utc=str(manifest["original_deadline_at_utc"])) if campaign_dir is not None else
+                {"paused_scopes": [], "total_deadline_at_utc": manifest["original_deadline_at_utc"]})
+            if deadlines["paused_scopes"]:
+                raise SupervisorError("预算已暂停，批准延期前不得派发")
+            deadline = datetime.fromisoformat(str(deadlines["total_deadline_at_utc"]).replace("Z", "+00:00")).timestamp()
             if deadline <= time.time():
                 raise SupervisorError(
                     "Campaign 原始绝对 deadline 已经过期，禁止重新计时。"
@@ -9352,6 +10214,7 @@ def _campaign_run_locked(
             heartbeat_seconds=args.heartbeat_seconds,
             watchdog_timeout_seconds=args.watchdog_timeout_seconds,
             ledger_interval_seconds=args.ledger_interval_seconds,
+            campaign_dir=campaign_dir,
         )
         client.start(prepared=commit is not None, staging_binding=staging_binding)
         if client.run_dir is None:
@@ -9504,6 +10367,7 @@ def _campaign_run_locked(
                             owner_pid=client.owner_pid,
                             owner_nonce=client.owner_nonce,
                             failure_kind="unexpected-error",
+                            failure_class=getattr(error, "failure_class", "execution-failure"),
                             error_type=type(error).__name__,
                             message="子命令未正常返回。",
                         )
@@ -9707,7 +10571,7 @@ def _campaign_run_locked(
                 payload["recovery_mode"] = manifest["recovery_mode"]
         return (0 if status == "stopped" else 1), payload
     except BaseException as error:
-        reason = f"{type(error).__name__}"
+        reason = f"action-failed:{active_action_id}" if isinstance(error, RuntimeEgressPaused) and active_action_id is not None else f"{type(error).__name__}"
         closeout_error: BaseException | None = None
         if campaign_dir is not None and active_action_id is not None:
             try:
@@ -9757,6 +10621,11 @@ def _assert_campaign_run_admitted(campaign_dir: Path | None) -> None:
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return
     campaign_manifest = _read_json(manifest_path)
+    if arm64_environment.campaign_requires_runtime_egress(campaign_dir):
+        try:
+            arm64_environment.require_runtime_egress()
+        except (OSError, ValueError) as error:
+            raise RuntimeEgressPaused("运行时出口准入拒绝派发，须修复后从合法 checkpoint 继续") from error
     try:
         project_ledger.assert_campaign_admitted(
             campaign_dir,
@@ -9788,9 +10657,211 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         os.close(lock_descriptor)
 
 
+def _egress_local_command(arguments: argparse.Namespace) -> list[str]:
+    """维护入口仅接受指定容器 restart 或明确 compose 文件的单服务 up，不运行任意 shell。"""
+
+    command = list(arguments.command_argv)
+    if command[:1] == ["--"]:
+        command.pop(0)
+    name = _safe_id(arguments.container, "维护容器")
+    if command == ["docker", "restart", name]:
+        return command
+    if command[:2] != ["docker", "compose"] or not arguments.compose_service:
+        raise SupervisorError("出口维护只允许指定容器 restart 或 compose 单服务 up")
+    index = 2
+    while index + 1 < len(command) and command[index] in {"-f", "--file"}:
+        path = Path(command[index + 1])
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise SupervisorError("出口维护 compose 必须使用既有普通文件的绝对路径")
+        index += 2
+    if index == 2 or command[index:] not in (["up", "-d", arguments.compose_service],
+                                            ["up", "-d", "--no-deps", arguments.compose_service]):
+        raise SupervisorError("出口维护 compose 只允许明确文件和单个服务，禁止其他 Docker 动作")
+    return command
+
+
+def _egress_transition_log_tail(path: Path | None, limit: int = 2000) -> str:
+    """维护失败时附带输出尾部（有界），便于审计失败原因；日志不可读时不影响失败收口。"""
+
+    if path is None:
+        return ""
+    try:
+        text = path.read_bytes()[-limit:].decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+    return f"；输出尾部：{text}" if text else ""
+
+
+def _egress_transition_command(arguments: argparse.Namespace) -> int:
+    """有界执行本地容器维护，再等待普通准入；故障清理可恢复本地配置但不恢复原 run。"""
+
+    command = _egress_local_command(arguments)
+    timeout = _positive_seconds(arguments.timeout_seconds, "出口维护 timeout")
+    if timeout > 60:
+        raise SupervisorError("出口维护等待不得超过 60 秒，也不得越过原 Campaign 截止")
+    run_dir, state = None, None
+    if os.environ.get(CAMPAIGN_RUN_CONTEXT_ENV) == "1":
+        run_dir = _validate_state_dir(Path(os.environ.get(CAMPAIGN_RUN_DIR_ENV, "")), create=False)
+        state = _read_state(run_dir)
+        if (state.get("state") != "running" or state.get("egress_guard") is None
+                or str(state["owner_pid"]) != os.environ.get(CAMPAIGN_RUN_OWNER_PID_ENV)
+                or state["owner_nonce"] != os.environ.get(CAMPAIGN_RUN_OWNER_NONCE_ENV)
+                or state["campaign_id"] != os.environ.get(CAMPAIGN_RUN_ID_ENV)
+                or not _process_descends_from(os.getpid(), state["owner_pid"])
+                or not _owner_alive(state["monitor_pid"])):
+            raise SupervisorError("出口维护未绑定存活的正式父监督器")
+    started_monotonic_ns = time.monotonic_ns()
+    deadline = started_monotonic_ns + int(timeout * 1e9)
+    if state is not None:
+        deadline = min(deadline, state["deadline_monotonic_ns"])
+    cleanup = bool(arguments.cleanup and (run_dir is None or (run_dir / "egress-pause.json").exists()))
+    before = None
+    if not cleanup:
+        if run_dir is not None:
+            _check_runtime_egress(run_dir, state)
+        try:
+            before = arm64_environment.require_runtime_egress()
+        except (OSError, ValueError) as error:
+            if run_dir is not None:
+                _egress_pause(run_dir, state, "维护开始前指定出口无法确认")
+            raise RuntimeEgressPaused("维护开始前指定出口无法确认") from error
+        if arguments.container not in before["policy"]["services"]:
+            raise SupervisorError("维护容器不在当前指定出口策略内")
+    else:
+        # 已进入清理的本地 restart/up 不能再次发放过渡许可；原暂停事实始终保留。
+        policy = arm64_environment.load_egress_policy()
+        if arguments.container not in policy["services"]:
+            raise SupervisorError("清理容器不在当前指定出口策略内")
+    transition = None
+    process, result, after = None, "failed", None
+    # record_written：本进程已写入维护记录；declared：本进程已写入当前维护声明。拒绝并行维护时两者都为
+    # 假，收口既不写暂停也不触碰其他维护进程的声明。
+    record_written = declared = False
+    log_path: Path | None = None
+    log_stream: Any = None
+    previous_handler = signal.getsignal(signal.SIGUSR1)
+    def interrupt(*_args: Any) -> None:
+        raise RuntimeEgressPaused("容器维护收到父监督器清理请求")
+    # 先安装父监督器清理信号处理器，再写不可覆盖的维护声明：两者之间到达的信号同样走下方统一收口，
+    # 不会按默认动作终止进程而遗留无人清理的维护声明。
+    signal.signal(signal.SIGUSR1, interrupt)
+    try:
+        if run_dir is not None and not cleanup:
+            transition = {"schema_version": "codex-upgrade-egress-transition/v1", "transition_id": secrets.token_hex(16),
+                          "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
+                          "actor_pid": os.getpid(), "start_ticks": _process_start_ticks(os.getpid()),
+                          "started_at_epoch": time.time(), "started_at_monotonic_ns": started_monotonic_ns,
+                          "deadline_monotonic_ns": deadline,
+                          "container": arguments.container, "command_sha256": _sha256(_canonical({"argv": command})),
+                          "policy_sha256": before["policy_sha256"], "before_sha256": _sha256(_canonical(before))}
+            with _state_lock(run_dir):
+                if (run_dir / "egress-transition.json").exists() or (run_dir / "egress-pause.json").exists():
+                    raise RuntimeEgressPaused("已有维护操作或暂停，拒绝并行维护")
+                _validate_state_dir(run_dir / "egress-transitions", create=True)
+                _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.json", transition, replace=False)
+                record_written = True
+                _write_json(run_dir / "egress-transition.json", transition, replace=False)
+                declared = True
+        if run_dir is not None:
+            # 维护命令输出进入父 run 的维护日志（0600、只写一次），失败原因可审计；日志随父 run 一并归档。
+            log_directory = _validate_state_dir(run_dir / "egress-transitions", create=True)
+            log_path = log_directory / (f"{transition['transition_id']}.log" if transition is not None
+                                        else f"cleanup-{secrets.token_hex(8)}.log")
+            log_stream = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
+        if time.monotonic_ns() >= deadline:
+            raise RuntimeEgressPaused("本地维护派发前原有界等待期限已到")
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log_stream,
+                                   stderr=subprocess.STDOUT if log_stream is not None else None, shell=False)
+        while process.poll() is None:
+            if time.monotonic_ns() >= deadline:
+                raise RuntimeEgressPaused("容器维护超过有界等待期限")
+            if run_dir is not None and not cleanup:
+                _check_runtime_egress(run_dir, state, command_pid=os.getpid())
+            time.sleep(.1)
+        if process.returncode:
+            raise SupervisorError(f"本地容器维护失败，退出码 {process.returncode}{_egress_transition_log_tail(log_path)}")
+        # 守护每轮从开始观测到发布状态之间有延迟（要做独立出口验证），命令刚结束时读到的状态可能仍是命令开始前的
+        # 就绪事实（仍在租期内，校验照样通过）。重新准入只采用观测起点晚于命令结束的守护状态，否则继续等下一轮；
+        # 这里取命令结束被检测到的时刻，不早于命令的实际结束时刻。2026-09-26 c01570 VC-5 批次 9：候选就绪清缓存
+        # 重启后 0.43 秒就按陈旧就绪结束维护、撤销声明，0.15 秒后守护发布 blocked，父监督器判出口异常暂停。
+        command_finished_ns = time.monotonic_ns()
+        if not cleanup:
+            while True:
+                if time.monotonic_ns() >= deadline:
+                    raise RuntimeEgressPaused("维护后重新准入超过原有界等待期限")
+                if run_dir is not None:
+                    _check_runtime_egress(run_dir, state, command_pid=os.getpid())
+                try:
+                    after = arm64_environment.require_runtime_egress()
+                    if after["policy_sha256"] != before["policy_sha256"]:
+                        raise RuntimeEgressPaused("容器维护期间指定出口策略发生变化")
+                    if after["runtime"]["observed_at_monotonic_ns"] <= command_finished_ns:
+                        # 陈旧就绪不是维护后的准入证据：不结束维护、不撤销声明，等守护发布命令结束之后的观测。
+                        after = None
+                        time.sleep(.1)
+                        continue
+                    break
+                except (OSError, ValueError) as error:
+                    allowed = False
+                    if run_dir is not None:
+                        allowed = _egress_transition_waiting(run_dir, state, command_pid=os.getpid())
+                    else:
+                        try:
+                            _egress_transition_status(before["policy_sha256"], arguments.container)
+                            allowed = True
+                        except (OSError, ValueError, SupervisorError):
+                            pass
+                    if time.monotonic_ns() >= deadline or not allowed:
+                        raise RuntimeEgressPaused("维护后指定出口无法重新准入") from error
+                    time.sleep(.1)
+        result = "local-cleanup-complete" if cleanup else "passed"
+    except BaseException:
+        if run_dir is not None and not cleanup and declared:
+            _egress_pause(run_dir, state, "受控容器维护发生出口故障或超时，必须按原恢复协议对账")
+        raise
+    finally:
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        if log_stream is not None:
+            log_stream.close()
+        try:
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+                except ProcessLookupError:
+                    pass
+        finally:
+            try:
+                if transition is not None and record_written:
+                    with _state_lock(run_dir):
+                        if (run_dir / "egress-pause.json").exists():
+                            result = "failed"
+                        finish = {"schema_version": "codex-upgrade-egress-transition-finish/v1",
+                                  "transition_id": transition["transition_id"], "transition_sha256": _sha256(_canonical(transition)),
+                                  "status": result, "finished_at_epoch": time.time(),
+                                  "after_sha256": _sha256(_canonical(after)) if after is not None and result == "passed" else None}
+                        _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.finish.json", finish, replace=False)
+                        if declared:
+                            (run_dir / "egress-transition.json").unlink(missing_ok=True)
+            finally:
+                signal.signal(signal.SIGUSR1, previous_handler)
+    if result == "failed":
+        raise RuntimeEgressPaused("维护结束时父任务已暂停，禁止继续原 run")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    transition = commands.add_parser("egress-transition", help="受控容器维护与实时出口重新准入")
+    transition.add_argument("--container", required=True)
+    transition.add_argument("--compose-service")
+    transition.add_argument("--timeout-seconds", type=float, default=60)
+    transition.add_argument("--cleanup", action="store_true")
+    transition.add_argument("command_argv", nargs=argparse.REMAINDER)
     monitor = commands.add_parser("monitor", help="内部：运行独立监督器")
     monitor.add_argument("--state-dir", required=True, type=Path)
     monitor.add_argument("--heartbeat-seconds", type=float, default=DEFAULT_HEARTBEAT_SECONDS)
@@ -9995,6 +11066,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         if arguments.command == "monitor":
             return _monitor(arguments)
+        if arguments.command == "egress-transition":
+            return _egress_transition_command(arguments)
         if arguments.command == "status":
             print(json.dumps(_status_command(arguments.state_dir), ensure_ascii=False, sort_keys=True))
             return 0
@@ -10109,7 +11182,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return int(result.returncode)
-    except (OSError, SupervisorError, subprocess.SubprocessError) as error:
+    except (OSError, SupervisorError, arm64_environment.Arm64EnvironmentReceiptError, subprocess.SubprocessError) as error:
         print(f"Codex 升级监督器失败：{error}", file=sys.stderr)
         return 1
 

@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from tools.official_client_capture.tests import project_ledger_fixture
+from tools.official_client_capture.tests import runtime_egress_fixtures
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -41,6 +42,10 @@ IMMEDIATE_DETECTION_SECONDS = 2.0
 
 
 class SupervisorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 本类只构造离线父动作与账本；实时出口的拒绝、竞态及清理在独立测试类验证。
+        self.enterContext(runtime_egress_fixtures.offline_campaign_egress())
+
     @staticmethod
     def _write_json(path: Path, payload: dict[str, object]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1104,6 +1109,561 @@ class SupervisorTests(unittest.TestCase):
                     [(prior_state, prior_manifest, prior_dir)],
                 )
 
+    def test_failed_official_timeout_cleanup_allows_normal_v2_recovery_preview(self) -> None:
+        """动作执行截止到期、子进程在清理宽限内自行封口时，同样以普通 v2 预览承接。
+
+        宽限耗尽被强杀（cleanup-window-expired）或诊断不是截止清理时仍失败关闭。
+        """
+
+        def build(root: Path, *, event_reason: str, failure_class: str) -> tuple[
+            dict[str, object], dict[str, object], Path, dict[str, object]
+        ]:
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            prior_dir = root / "run-prior"
+            prior_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-timeout"
+            owner_nonce = "8" * 64
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+            prior_manifest: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "5" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["passed-job", "pending-job"],
+                    }
+                ],
+                "execute_items": ["passed-job", "pending-job"],
+                "reuse_items": [],
+            }
+            prior_state: dict[str, object] = {
+                "state": "failed",
+                "campaign_id": campaign_id,
+                "phase": "VC-1",
+                "owner_pid": os.getpid(),
+                "owner_nonce": owner_nonce,
+                "terminal_at_utc": "2026-09-25T06:07:17.000Z",
+            }
+            self._write_json(prior_dir / "state.json", prior_state)
+            stop: dict[str, object] = {
+                "schema_version": supervisor.STOP_SCHEMA,
+                "campaign_id": campaign_id,
+                "detected_at_epoch": 1005.0,
+                "detected_at_utc": "2026-09-25T06:07:17.000Z",
+                "event_type": "failed",
+                "owner_nonce": owner_nonce,
+                "owner_pid": os.getpid(),
+                "phase": "VC-1",
+                "reason": "SupervisorTimeout",
+            }
+            stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+            self._write_json(prior_dir / "stop-receipt.json", stop)
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(
+                    prior_dir, "capture-official", create_directory=True
+                ),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce=owner_nonce,
+                failure_kind="handled-error",
+                failure_class=failure_class,
+                error_type="CampaignCleanupRequested",
+                message="父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。",
+            )
+            # 最小合法事件链：只含父动作的失败事件，序号、自摘要与链摘要成立。
+            event: dict[str, object] = {
+                "sequence": 1,
+                "event_type": "action-failed",
+                "operation": "VC-1:capture-official",
+                "reason": event_reason,
+                "previous_event_sha256": None,
+            }
+            event["event_sha256"] = supervisor._sha256(supervisor._canonical(event))
+            (prior_dir / "events.ndjson").write_text(
+                json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            (prior_dir / "events.ndjson").chmod(0o600)
+            successor: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0002",
+                "batch_sequence": 2,
+                "batch_sha256": "6" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--preview-recovery",
+                        ],
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                "execute_items": ["pending-job"],
+                "reuse_items": ["passed-job"],
+            }
+            return prior_state, prior_manifest, prior_dir, successor
+
+        with tempfile.TemporaryDirectory() as directory:
+            prior_state, prior_manifest, prior_dir, successor = build(
+                Path(directory).resolve(),
+                event_reason="cleanup-requested-timeout",
+                failure_class="deadline-expired",
+            )
+            ordered = supervisor._validate_batched_campaign_history(
+                successor, [(prior_state, prior_manifest, prior_dir)]
+            )
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+
+        for event_reason, failure_class in (
+            ("cleanup-window-expired", "deadline-expired"),
+            ("cleanup-requested-timeout", "execution-failure"),
+        ):
+            with self.subTest(event_reason=event_reason, failure_class=failure_class):
+                with tempfile.TemporaryDirectory() as directory:
+                    prior_state, prior_manifest, prior_dir, successor = build(
+                        Path(directory).resolve(),
+                        event_reason=event_reason,
+                        failure_class=failure_class,
+                    )
+                    with self.assertRaisesRegex(SupervisorError, "父动作诊断漂移|恢复后继"):
+                        supervisor._validate_batched_campaign_history(
+                            successor, [(prior_state, prior_manifest, prior_dir)]
+                        )
+
+    def test_failed_recovery_preview_is_redispatched_verbatim_as_next_sequence(self) -> None:
+        """零请求恢复预览因处理型错误失败后，修复部署即可以 N+1 逐字重派同一预览。
+
+        0.156.1 VC-1：序号 2 预览因复用校验缺陷失败。后继只能是同一预览批次的逐字重派；
+        改成真实补跑、改动 execute／reuse 分区，或父预览以截止清理失败，一律拒绝。
+        """
+
+        def build(root: Path, *, preview_failure: tuple[str, str, str]) -> tuple[
+            list[tuple[dict[str, object], dict[str, object], Path]], dict[str, object]
+        ]:
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-preview-retry"
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+
+            def manifest(sequence: int, actions: list, execute: list, reuse: list) -> dict[str, object]:
+                return {
+                    "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    "campaign_id": campaign_id,
+                    "campaign_plan_sha256": "1" * 64,
+                    "batch_id": f"vc-1-{sequence:04d}",
+                    "batch_sequence": sequence,
+                    "batch_sha256": str(sequence + 4) * 64,
+                    "phase": "VC-1",
+                    "predecessor_checkpoint": checkpoint,
+                    "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                    "no_op": False,
+                    "actions": actions,
+                    "execute_items": execute,
+                    "reuse_items": reuse,
+                }
+
+            def failed_run(name: str, owner_nonce: str, reason: str) -> tuple[dict[str, object], Path]:
+                run_dir = root / name
+                run_dir.mkdir(mode=0o700)
+                state: dict[str, object] = {
+                    "state": "failed",
+                    "campaign_id": campaign_id,
+                    "phase": "VC-1",
+                    "owner_pid": os.getpid(),
+                    "owner_nonce": owner_nonce,
+                    "terminal_at_utc": "2026-09-25T07:16:32.000Z",
+                }
+                self._write_json(run_dir / "state.json", state)
+                stop: dict[str, object] = {
+                    "schema_version": supervisor.STOP_SCHEMA,
+                    "campaign_id": campaign_id,
+                    "detected_at_epoch": 1005.0,
+                    "detected_at_utc": "2026-09-25T07:16:31.986Z",
+                    "event_type": "failed",
+                    "owner_nonce": owner_nonce,
+                    "owner_pid": os.getpid(),
+                    "phase": "VC-1",
+                    "reason": reason,
+                }
+                stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+                self._write_json(run_dir / "stop-receipt.json", stop)
+                return state, run_dir
+
+            capture_manifest = manifest(
+                1,
+                [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["passed-job", "pending-job"],
+                    }
+                ],
+                ["passed-job", "pending-job"],
+                [],
+            )
+            capture_state, capture_dir = failed_run(
+                "run-capture", "8" * 64, "action-failed:capture-official"
+            )
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(
+                    capture_dir, "capture-official", create_directory=True
+                ),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce="8" * 64,
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            preview_actions = [
+                {
+                    "action_id": "preview-official-recovery",
+                    "operation": "VC-1:official-recovery",
+                    "timeout_seconds": 3600.0,
+                    "command": [
+                        *prefix,
+                        "resume",
+                        "--campaign-dir",
+                        str(campaign_dir),
+                        "--rerun-failed",
+                        "--preview-recovery",
+                    ],
+                    "item_ids": ["pending-job"],
+                }
+            ]
+            preview_manifest = manifest(2, preview_actions, ["pending-job"], ["passed-job"])
+            preview_state, preview_dir = failed_run(
+                "run-preview", "9" * 64, "action-failed:preview-official-recovery"
+            )
+            failure_kind, error_type, failure_class = preview_failure
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(
+                    preview_dir, "preview-official-recovery", create_directory=True
+                ),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="preview-official-recovery",
+                owner_pid=os.getpid(),
+                owner_nonce="9" * 64,
+                failure_kind=failure_kind,
+                failure_class=failure_class,
+                error_type=error_type,
+                message="错误详情已按脱敏规则省略。",
+            )
+            history = [
+                (capture_state, capture_manifest, capture_dir),
+                (preview_state, preview_manifest, preview_dir),
+            ]
+            retry = manifest(3, copy.deepcopy(preview_actions), ["pending-job"], ["passed-job"])
+            return history, retry
+
+        handled = ("handled-error", "ConfigurationError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            history, retry = build(Path(directory).resolve(), preview_failure=handled)
+            ordered = supervisor._validate_batched_campaign_history(retry, history)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
+
+            # 失败预览之后直接改走真实补跑：不是逐字重派，拒绝。
+            live = copy.deepcopy(retry)
+            live["actions"][0]["action_id"] = "run-official-recovery"
+            live["actions"][0]["command"] = [
+                *live["actions"][0]["command"][:2],
+                "resume",
+                "--campaign-dir",
+                live["actions"][0]["command"][4],
+                "--rerun-failed",
+                "--recovery-preview",
+                "/tmp/recovery-preview.json",
+                "--acknowledge-live-requests",
+            ]
+            with self.assertRaisesRegex(SupervisorError, "逐字沿用父预览批次"):
+                supervisor._validate_batched_campaign_history(live, history)
+
+            # 改动 execute／reuse 分区：拒绝。
+            drifted = copy.deepcopy(retry)
+            drifted["execute_items"] = ["pending-job", "passed-job"]
+            drifted["reuse_items"] = []
+            drifted["actions"][0]["item_ids"] = ["pending-job", "passed-job"]
+            with self.assertRaisesRegex(SupervisorError, "逐字沿用父预览批次"):
+                supervisor._validate_batched_campaign_history(drifted, history)
+
+        # 父预览以截止清理失败：不属于处理型失败，拒绝。
+        with tempfile.TemporaryDirectory() as directory:
+            history, retry = build(
+                Path(directory).resolve(),
+                preview_failure=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+            )
+            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                supervisor._validate_batched_campaign_history(retry, history)
+
+    def test_failed_recovery_run_is_followed_by_a_new_zero_request_preview(self) -> None:
+        """真实补跑失败后，以 N+1 派发新的普通零请求预览，执行集合不得扩大。
+
+        0.156.1 VC-1：序号 4 补跑中 guardian 审阅作业卡在目录信任确认而失败，新 attempt
+        按失败封口。后继只能是 N+1 的普通预览（同命令前缀、同 Campaign 目录），execute 为
+        父补跑 execute 的非空子集且 execute∪reuse 不变；直接再补跑、扩大执行集合、父补跑以
+        截止清理失败一律拒绝。
+        """
+
+        def build(root: Path, *, run_failure: tuple[str, str, str]) -> tuple[
+            list[tuple[dict[str, object], dict[str, object], Path]], dict[str, object]
+        ]:
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-run-retry"
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+
+            def manifest(sequence: int, actions: list, execute: list, reuse: list) -> dict[str, object]:
+                return {
+                    "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    "campaign_id": campaign_id,
+                    "campaign_plan_sha256": "1" * 64,
+                    "batch_id": f"vc-1-{sequence:04d}",
+                    "batch_sequence": sequence,
+                    "batch_sha256": str(sequence + 4) * 64,
+                    "phase": "VC-1",
+                    "predecessor_checkpoint": checkpoint,
+                    "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                    "no_op": False,
+                    "actions": actions,
+                    "execute_items": execute,
+                    "reuse_items": reuse,
+                }
+
+            def run(name: str, owner_nonce: str, state_name: str, reason: str | None) -> tuple[dict[str, object], Path]:
+                run_dir = root / name
+                run_dir.mkdir(mode=0o700)
+                state: dict[str, object] = {
+                    "state": state_name,
+                    "campaign_id": campaign_id,
+                    "phase": "VC-1",
+                    "owner_pid": os.getpid(),
+                    "owner_nonce": owner_nonce,
+                    "terminal_at_utc": "2026-09-25T09:13:09.000Z",
+                }
+                self._write_json(run_dir / "state.json", state)
+                if reason is not None:
+                    stop: dict[str, object] = {
+                        "schema_version": supervisor.STOP_SCHEMA,
+                        "campaign_id": campaign_id,
+                        "detected_at_epoch": 1005.0,
+                        "detected_at_utc": "2026-09-25T09:13:09.251Z",
+                        "event_type": "failed",
+                        "owner_nonce": owner_nonce,
+                        "owner_pid": os.getpid(),
+                        "phase": "VC-1",
+                        "reason": reason,
+                    }
+                    stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+                    self._write_json(run_dir / "stop-receipt.json", stop)
+                return state, run_dir
+
+            capture_manifest = manifest(
+                1,
+                [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["passed-job", "pending-job"],
+                    }
+                ],
+                ["passed-job", "pending-job"],
+                [],
+            )
+            capture_state, capture_dir = run("run-capture", "8" * 64, "failed", "action-failed:capture-official")
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(capture_dir, "capture-official", create_directory=True),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce="8" * 64,
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            preview_command = [
+                *prefix,
+                "resume",
+                "--campaign-dir",
+                str(campaign_dir),
+                "--rerun-failed",
+                "--preview-recovery",
+            ]
+            preview_manifest = manifest(
+                2,
+                [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": preview_command,
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            preview_state, preview_dir = run("run-preview", "9" * 64, "stopped", None)
+            run_manifest = manifest(
+                3,
+                [
+                    {
+                        "action_id": "run-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 5400.0,
+                        "command": [
+                            *prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--recovery-preview",
+                            str(campaign_dir / "control" / "recovery-preview-01.json"),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            run_state, run_dir = run("run-recovery", "a" * 64, "failed", "action-failed:run-official-recovery")
+            failure_kind, error_type, failure_class = run_failure
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, "run-official-recovery", create_directory=True),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="run-official-recovery",
+                owner_pid=os.getpid(),
+                owner_nonce="a" * 64,
+                failure_kind=failure_kind,
+                failure_class=failure_class,
+                error_type=error_type,
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            history = [
+                (capture_state, capture_manifest, capture_dir),
+                (preview_state, preview_manifest, preview_dir),
+                (run_state, run_manifest, run_dir),
+            ]
+            successor = manifest(
+                4,
+                [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": list(preview_command),
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            return history, successor
+
+        handled = ("child-returncode", "ChildProcessError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            history, successor = build(Path(directory).resolve(), run_failure=handled)
+            ordered = supervisor._validate_batched_campaign_history(successor, history)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2, 3])
+
+            # 补跑失败后直接再补跑：不是普通零请求预览，拒绝。
+            live = copy.deepcopy(successor)
+            live["actions"][0]["action_id"] = "run-official-recovery"
+            live["actions"][0]["command"] = history[2][1]["actions"][0]["command"]
+            with self.assertRaisesRegex(SupervisorError, "普通零请求预览"):
+                supervisor._validate_batched_campaign_history(live, history)
+
+            # 扩大执行集合（把已复用的 Job 放回执行）：拒绝。
+            widened = copy.deepcopy(successor)
+            widened["execute_items"] = ["passed-job", "pending-job"]
+            widened["reuse_items"] = []
+            widened["actions"][0]["item_ids"] = ["passed-job", "pending-job"]
+            with self.assertRaisesRegex(SupervisorError, "不得扩大父补跑的执行集合"):
+                supervisor._validate_batched_campaign_history(widened, history)
+
+        # 父补跑以截止清理失败：不属于处理型失败，拒绝。
+        with tempfile.TemporaryDirectory() as directory:
+            history, successor = build(
+                Path(directory).resolve(),
+                run_failure=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+            )
+            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                supervisor._validate_batched_campaign_history(successor, history)
+
     def test_environment_recovery_only_redispatches_exact_prior_batch(self) -> None:
         """reservation 前环境失败须有对账许可，且后继只能逐字重派原批次。"""
 
@@ -2124,13 +2684,13 @@ raise SystemExit(9)
             )
             self.assertEqual(result["status"], "passed")
             summary = timing_ledger.inspect_ledger(ledger_root)
-            self.assertEqual(summary["status"], "stopped")
+            self.assertEqual(summary["status"], "stage_review_required")
             self.assertIsNone(summary["active_phase"])
             events = [
                 event["event_type"]
                 for event, _raw in timing_ledger._load_events(ledger_root)
             ]
-            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+            self.assertEqual(events[-2:], ["stage_abandoned", "stage_review_required"])
 
     def test_environment_prerequisite_pauses_without_abandoning_stage(self) -> None:
         """机器分类为环境前提失败时只写 recovery_required，保留当前阶段。"""
@@ -2860,13 +3420,13 @@ raise SystemExit(9)
             self.assertEqual(returncode, 1)
             self.assertEqual(payload["timing_closeout"]["status"], "passed")
             summary = timing_ledger.inspect_ledger(ledger_root)
-            self.assertEqual(summary["status"], "stopped")
+            self.assertEqual(summary["status"], "stage_review_required")
             self.assertIsNone(summary["active_phase"])
             events = [
                 event["event_type"]
                 for event, _raw in timing_ledger._load_events(ledger_root)
             ]
-            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+            self.assertEqual(events[-2:], ["stage_abandoned", "stage_review_required"])
 
     def test_timing_closeout_recovers_partial_stage_abandoned(self) -> None:
         """首个事件已落盘而第二个事件失败时，重入只能确定性补齐。"""
@@ -2907,7 +3467,157 @@ raise SystemExit(9)
                 failed_action_id="failing-action",
             )
             self.assertEqual(result["status"], "passed")
-            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
+
+    def _budget_bound_closeout_fixture(self, root: Path):
+        """VC-1 已开始且阶段预算已到期的正式 Campaign；账本绑定项目总账，可真实暂停与批准延期。"""
+
+        from datetime import datetime, timedelta, timezone
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=10)
+
+        def at(seconds: int) -> str:
+            return (start + timedelta(seconds=seconds)).isoformat()
+
+        # 仅供夹具的总账必须位于 staging 目录树内。
+        data_root = root / "staging"
+        data_root.mkdir(mode=0o700)
+        project_root = data_root / project_ledger.LEDGER_DIR_NAME
+        project_ledger.create_project_ledger(
+            project_root, project_id="r4r8-fixture", absolute_deadline_utc=at(24 * 3600),
+            deadline_approved_by="fixture", estimation_policy="none", estimation_policy_approved_by="fixture",
+            fixture_only=True, started_at_utc=at(0), initial_precise_count=0,
+        )
+        campaign_dir = data_root / "evidence" / "campaigns" / "campaign-closeout"
+        campaign_dir.mkdir(parents=True, mode=0o700)
+        for parent in (data_root / "evidence", data_root / "evidence" / "campaigns"):
+            parent.chmod(0o700)
+        ledger_root = data_root / "control" / "timing-ledger"
+        ledger_root.parent.mkdir(mode=0o700)
+        timing_ledger.create_ledger(
+            ledger_root, upgrade_id="campaign-closeout", baseline_version="0.151.0", target_version="0.154.0",
+            campaign_purpose="production_replacement", evidence_decision="recapture", started_at_utc=at(0),
+            total_budget_minutes=600, stage_budgets_minutes={phase: 1 for phase in timing_ledger.PHASE_ORDER},
+            project_ledger_dir=project_root,
+        )
+        timing_ledger.append_event(ledger_root, event_id="fixture-vc0-completed", phase="VC-0",
+                                   event_type="stage_completed", next_action="启动 VC-1", recorded_at_utc=at(1))
+        timing_ledger.append_event(ledger_root, event_id="fixture-vc1-started", phase="VC-1",
+                                   event_type="stage_started", next_action="运行父批次", recorded_at_utc=at(2))
+        self._write_json(campaign_dir / "campaign.json", {
+            "campaign_id": "campaign-closeout", "campaign_mode": "formal",
+            "campaign_purpose": "production_replacement", "baseline_version": "0.151.0", "target_version": "0.154.0",
+            "control_receipts": {"upgrade_timing": {
+                "ledger_dir": str(ledger_root), "upgrade_id": "campaign-closeout",
+                "ledger_plan_sha256": supervisor._sha256((ledger_root / "ledger.json").read_bytes()),
+            }},
+        })
+        (campaign_dir / "control" / "vc").mkdir(parents=True, mode=0o700)
+        (campaign_dir / "control").chmod(0o700)
+        self._write_json(campaign_dir / "control" / "vc" / "campaign-plan.json",
+                         {"campaign_id": "campaign-closeout", "original_deadline_at_utc": at(600 * 60)})
+        project_ledger.register_existing_campaign(campaign_dir)
+        manifest = build_campaign_run_manifest(
+            "campaign-closeout", "VC-1", 30,
+            actions=[{"action_id": "failing-action", "operation": "VC-1:failing-action", "timeout_seconds": 5,
+                      "command": [sys.executable, "-c", "raise SystemExit(7)"]}],
+        )
+        return campaign_dir, ledger_root, manifest
+
+    def test_abandon_then_budget_pause_completes_review_before_pausing(self) -> None:
+        """R4×R8：放弃已写、审核未写时被杀且预算随后到期；重入先补齐审核再登记暂停，阶段层延期随后可用。"""
+
+        from datetime import datetime, timedelta, timezone
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._budget_bound_closeout_fixture(root)
+            real_append = timing_ledger.append_event
+            calls = 0
+
+            def fail_second(*args: object, **kwargs: object) -> dict[str, object]:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise timing_ledger.TimingLedgerError("模拟写入 review 之前进程被杀")
+                return real_append(*args, **kwargs)
+
+            # 首次收口发生在预算到期之前：替身只让这一次看不到暂停，从而落到“已放弃、未审核”的中间态。
+            not_yet_paused = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": []}
+            with (
+                mock.patch.object(supervisor.timing_ledger, "append_event", side_effect=fail_second),
+                mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=not_yet_paused),
+                self.assertRaisesRegex(supervisor.SupervisorError, "stop_the_line"),
+            ):
+                supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            events = [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)]
+            self.assertEqual(events[-1], "stage_abandoned")
+
+            result = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual(result["ledger_status"], "deadline_paused")
+            events = [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)]
+            self.assertEqual(events[-3:], ["stage_abandoned", "stage_review_required", "deadline_paused"])
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual((summary["status"], summary["status_before_pause"]), ("deadline_paused", "stage_review_required"))
+
+            preview = project_ledger.preview_deadline_extension(
+                campaign_dir, scope="stage", phase="VC-1",
+                new_deadline_at_utc=(datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+                reason="隔离测试：补齐审核后继续人工对账",
+            )
+            project_ledger.apply_deadline_extension(
+                campaign_dir, preview_path=Path(preview["preview_path"]),
+                approve_sha256=preview["review_sha256"], approved_by="fixture-reviewer",
+            )
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
+            again = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual((again["ledger_status"], again["idempotent"]), ("stage_review_required", True))
+
+    def test_runtime_budget_deadline_missing_anchor_is_state_contract_error(self) -> None:
+        """R8：父 run 状态缺 deadline_at_epoch 时按状态合同报 SupervisorError，而不是 KeyError。"""
+
+        with self.assertRaisesRegex(supervisor.SupervisorError, "deadline_at_epoch"):
+            supervisor._runtime_budget_deadline({})
+
+    def test_runtime_budget_deadline_without_parsable_layers_uses_parent_anchor(self) -> None:
+        """三层都没有可解析截止（历史 Campaign 无计时账本）时只受父 run 自身时间锚约束。"""
+
+        state = {"deadline_at_epoch": 1_900_000_000.0, "budget_guard": {"campaign_dir": "/nonexistent/campaign"}}
+        with mock.patch.object(supervisor.vc_artifacts, "effective_deadlines",
+                               return_value={"paused_scopes": [], "execution_deadline_at_utc": None}):
+            self.assertEqual(supervisor._runtime_budget_deadline(state), 1_900_000_000.0)
+
+    def test_closeout_with_only_extension_pending_fails_explicitly_without_writes(self) -> None:
+        """R8：只有其他 Campaign 的延期未闭合（extension_pending）时不冒报 deadline_paused，明确失败且不写账本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            before = {path.name: path.read_bytes() for path in (ledger_root / "events").iterdir()}
+            pending = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": ["extension_pending"]}
+            with mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=pending):
+                with self.assertRaisesRegex(supervisor.SupervisorError, "extension_pending"):
+                    supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual(before, {path.name: path.read_bytes() for path in (ledger_root / "events").iterdir()})
+
+    def test_closeout_reports_budget_race_instead_of_claiming_pause(self) -> None:
+        """判定到期后、登记暂停前预算状态变化（登记返回 not_expired）时明确失败，不冒报 deadline_paused。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            expired = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": ["stage"]}
+            with (
+                mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=expired),
+                mock.patch.object(supervisor.project_ledger, "pause_campaign_deadline", return_value={"status": "not_expired"}),
+                self.assertRaisesRegex(supervisor.SupervisorError, "收口期间变化"),
+            ):
+                supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
 
     def test_parent_reports_timing_closeout_failure(self) -> None:
         """账本闭合失败必须进入父结果，不能只留下 action-failed。"""

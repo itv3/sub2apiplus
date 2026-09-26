@@ -122,6 +122,20 @@ func ValidateObservedSubset(observed, supported EnumCatalog) error {
 	return nil
 }
 
+// 0.156.1 目标画像引入、尚未进入快照生成器的枚举值（见 enums_gen.go 的生成规则）。
+// VC-4 把 0.156.1 目标快照纳入 testdata 并重新生成 enums_gen.go 后删除本段，
+// 由生成器提供同名常量；遗留会因重复定义编译失败。
+const (
+	// ConditionGuardianReviewRequest：guardian 审阅子会话发出的 /responses 请求。
+	ConditionGuardianReviewRequest ConditionKind = "guardian_review_request"
+	// ConditionNotGuardianReviewRequest：非 guardian 审阅请求（routing hint 等只在此时生成）。
+	ConditionNotGuardianReviewRequest ConditionKind = "not_guardian_review_request"
+	// ConditionAccountRoutingOverridePresent：工作区路由返回需要 override 的结果（首期失败关闭，不会成立）。
+	ConditionAccountRoutingOverridePresent ConditionKind = "account_routing_override_present"
+	// SourcePromptCacheKey：取请求体 prompt_cache_key（root 会话等于 session_id，临时 fork 为源会话）。
+	SourcePromptCacheKey ValueSource = "prompt_cache_key"
+)
+
 // EngineSupportedEnumValues 是执行引擎认可的显式闭集。
 //
 // 新快照加入观测值时，不能由生成器自动扩充本表；维护者必须确认消费语义后手工登记。
@@ -161,6 +175,9 @@ func EngineSupportedEnumValues() EnumCatalog {
 			string(ConditionSubagentPresent),
 			string(ConditionTurnStatePresent),
 			string(ConditionLunaReservePresent),
+			string(ConditionGuardianReviewRequest),
+			string(ConditionNotGuardianReviewRequest),
+			string(ConditionAccountRoutingOverridePresent),
 		},
 		EnumDomainHeaderOrderKind: {
 			string(HeaderOrderExplicitOrder),
@@ -192,6 +209,7 @@ func EngineSupportedEnumValues() EnumCatalog {
 			string(SourceServerResponse),
 			string(SourceSession),
 			string(SourceTurn),
+			string(SourcePromptCacheKey),
 		},
 	})
 }

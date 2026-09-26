@@ -1,0 +1,114 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R7（审核复核）",
+  "source_commit": "edc980a34329ef9e78e885e2dc2133374ba67af1",
+  "source_commits": [
+    "edc980a34329ef9e78e885e2dc2133374ba67af1"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第四节“R7 全部符合”；复核范围为 R13、R15、R12 审核修正对驱动目录的改动之后 R7 约束是否仍成立",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T00:58:57.368403+00:00",
+  "fixes": [
+    {
+      "finding": "自检发现：R15 审核修正给 stage1.sh 与 vc5-gate-target.sh 的环境事实采集加了 --rust-tls-codex-version \"$TARGET_VERSION\"，但没有测试约束驱动必须传本轮参数",
+      "resolution": "新增静态用例：驱动中每一处环境事实采集调用都必须传 --rust-tls-codex-version \"$TARGET_VERSION\"；临时去掉 stage1.sh 的参数时用例失败，恢复后通过"
+    }
+  ],
+  "self_check": [
+    {
+      "item": "逐轮身份参数",
+      "result": "passed",
+      "evidence": "14 个新增必填键逐一缺失均拒绝，版本、摘要、账号、目标画像与目录标识非法值拒绝（test_all_new_identity_keys_are_required）"
+    },
+    {
+      "item": "驱动无版本、摘要与账号字面量",
+      "result": "passed",
+      "evidence": "驱动目录全部文件扫描为零，含 R15 修正新增的采集参数与 R12 修正后的 lib.sh（test_driver_contains_no_version_digest_or_account_literals）"
+    },
+    {
+      "item": "0.156.1 命令路径形态",
+      "result": "passed",
+      "evidence": "VC-2、VC-4、VC-5 计划的规则补丁路径、部署版本、运行镜像坐标正确且不含 0.154.0（test_target_parameters_generate_vc2_vc4_and_vc5_commands）"
+    },
+    {
+      "item": "批准集合动态闭合与候选源码链",
+      "result": "passed",
+      "evidence": "候选 Job 按批准清单、漂移拒绝；多个 affected 门禁实际执行并生成收据；Catalog 按 inventory 装配（驱动测试同模块用例）"
+    },
+    {
+      "item": "环境采集绑定本轮目标版本",
+      "result": "passed",
+      "evidence": "三处 collect 调用均传 TARGET_VERSION（新增用例）"
+    },
+    {
+      "item": "驱动清单一致",
+      "result": "passed",
+      "evidence": "install.py build-manifest --check 为 unchanged（9aa9bbe7…）"
+    }
+  ],
+  "clarifications": [
+    "ARM64 证据取自 R12 审核修正在 5879ae1d0 上的同模块运行（49 项零跳过全部通过）；本次只新增一条读取脚本文本的静态用例，与平台无关，未单独在 ARM64 重跑。",
+    "本项改动只有测试文件，不涉及冻结路径（冻结承接干跑 0 条承接边），受管工具身份不变。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": "unchanged"
+  },
+  "regression": {
+    "local_driver": {
+      "tests": 38,
+      "result": "OK",
+      "modules": [
+        "test_arm64_capture_driver",
+        "test_arm64_driver_wait"
+      ]
+    },
+    "red_green": {
+      "without_parameter": "FAILED (failures=1)",
+      "restored": "OK"
+    },
+    "arm64_driver_reference": {
+      "commit": "5879ae1d0521ccd298aeb5d8203977c2b5bf3244",
+      "tests": 49,
+      "result": "OK",
+      "detail": "skipped=0",
+      "log": "review-fix-r12-arm64.log"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "freeze_successor_dry_run": "0 条承接边",
+    "driver_manifest": "unchanged 9aa9bbe7a23e1daee4e3b4889a61a60b27a70a5fe8561ded55f88189734e10ab"
+  },
+  "open_dependencies": [],
+  "freeze_successors": [],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-check-r7-local.log",
+      "sha256": "e2ca81f0187aed5df7b2c8d684919de7bac514640ec70eb8d912caf521d942d0"
+    },
+    {
+      "file": "review-check-r7-red-green.log",
+      "sha256": "744ccca47759c48b780cc66143225948a7eac82d21c9c81ba1512016aebbf079"
+    },
+    {
+      "file": "review-check-r7-freeze-dry-run.log",
+      "sha256": "7517818f457828a02bffe8e5a3ad9ac618d28c64c8b0b80ab3be847adbcfc065"
+    },
+    {
+      "file": "review-check-r7-gates.log",
+      "sha256": "e5a768327fbd42686d6bce2798b42215ba4cd827c21fda3d119e812b8305efb4"
+    },
+    {
+      "file": "review-fix-r12-arm64.log",
+      "sha256": "dced26d08cd00abcf9b2c584faa543c29e065bef5b03d38107c7046c79e2d61b"
+    }
+  ]
+}

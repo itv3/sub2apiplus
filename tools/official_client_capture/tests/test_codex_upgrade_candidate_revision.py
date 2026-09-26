@@ -1105,15 +1105,18 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
     # T2.8：record-candidate-build 的 revision-seal 段
     # ------------------------------------------------------------------
 
-    def test_seal_contract_image_only_change_rejected_and_resume_points_are_idempotent(self) -> None:
+    def test_seal_contract_image_only_change_allowed_and_resume_points_are_idempotent(self) -> None:
         superseded = {"revision": 1, "candidate_id": R1, "git_commit": "a" * 40, "source_tree_sha256": "1" * 64, "image_id": "sha256:" + "2" * 64}
         common = dict(campaign_id="codex-0_154_0-campaign", revision=2, candidate_id=R2, build_receipt_sha256="c" * 64, vc3_stage_receipt_sha256="d" * 64, superseded=superseded, sealed_at_utc="2026-09-19T00:00:00Z")
-        # 只有 image 变化：commit／tree 全同 → 拒绝。
+        # 只有 image 变化：留在同一 Campaign，以新 revision 承接。
+        image_only = artifacts.build_candidate_revision_seal(candidate_commit="a" * 40, source_tree_sha256="1" * 64, image_id="sha256:" + "3" * 64, **common)
+        self.assertEqual(image_only["changed_layers"], ["build"])
         with self.assertRaisesRegex(artifacts.VCArtifactError, "全部相同"):
-            artifacts.build_candidate_revision_seal(candidate_commit="a" * 40, source_tree_sha256="1" * 64, image_id="sha256:" + "3" * 64, **common)
+            artifacts.build_candidate_revision_seal(candidate_commit="a" * 40, source_tree_sha256="1" * 64, image_id="sha256:" + "2" * 64, **common)
         # image 相同但 tree 变化 → 通过（image 不强制）。
         sealed = artifacts.build_candidate_revision_seal(candidate_commit="a" * 40, source_tree_sha256="9" * 64, image_id="sha256:" + "2" * 64, **common)
-        self.assertEqual(sealed["identity_change"], {"git_commit_changed": False, "source_tree_changed": True, "image_changed": False})
+        self.assertEqual({key: sealed["identity_change"][key] for key in ("git_commit_changed", "source_tree_changed", "image_changed")},
+                         {"git_commit_changed": False, "source_tree_changed": True, "image_changed": False})
         # r1（无 superseded）不做同一性判定。
         first = artifacts.build_candidate_revision_seal(candidate_commit="a" * 40, source_tree_sha256="1" * 64, image_id=None, **dict(common, revision=1, candidate_id=R1, superseded=None))
         self.assertIsNone(first["identity_change"])

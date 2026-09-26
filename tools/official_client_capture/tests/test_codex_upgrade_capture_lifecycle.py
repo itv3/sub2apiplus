@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 def _reserve_capture_attempt_in_child(
@@ -88,6 +89,7 @@ class CaptureLifecycleTest(unittest.TestCase):
             "campaign_id": "capture-lifecycle-test",
             "campaign_mode": "formal",
             "campaign_purpose": "production_replacement",
+            "target_version": "0.146.0",
             "official_identity": {"version": "0.146.0"},
             "configuration": {
                 "service_container": "sub2apiplus",
@@ -171,7 +173,10 @@ class CaptureLifecycleTest(unittest.TestCase):
         *,
         phase: str,
         subject_id: str,
+        rust_tls_codex_version: str,
     ) -> tuple[Path, dict[str, object]]:
+        # 采集入口必须收到本轮目标版本，Rust TLS 探针不再使用工具内写死的版本。
+        assert rust_tls_codex_version, "采集入口缺少本轮目标版本"
         output_root.mkdir(parents=True, mode=0o700)
         output_root.chmod(0o700)
         path = output_root / "receipt.json"
@@ -232,6 +237,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                 side_effect=self._arm64_receipt,
             )
         )
+        # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+        stack.enter_context(runtime_egress_fixtures.synthetic_environment_equivalence())
         stack.enter_context(
             mock.patch.object(
                 codex_upgrade,
@@ -1721,6 +1728,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                         "continuity_identity_sha256": "a" * 64,
                     },
                 ),
+                # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+                runtime_egress_fixtures.synthetic_environment_equivalence(),
                 mock.patch.object(
                     codex_upgrade,
                     "_campaign_lock",

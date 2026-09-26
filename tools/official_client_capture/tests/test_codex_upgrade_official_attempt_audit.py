@@ -12,6 +12,7 @@ from tools.official_client_capture import (
     codex_upgrade_official_attempt_audit as audit,
 )
 from tools.official_client_capture import incremental_recovery
+from tools.official_client_capture.tests import control_receipt_fixtures
 from tools.official_client_capture.tests.test_codex_upgrade_live_request_provenance import (
     RESPONSES,
     _chmod_tree,
@@ -125,7 +126,14 @@ class AttemptAuditFixture:
             ("arm64_after_receipt", "environment/arm64-after/receipt.json", {"status": "passed", "continuity_identity_sha256": "e" * 64}),
             ("restoration_report", "receipts/restoration-report.json", {"status": "passed"}),
         ):
-            data = _canonical_file(evidence / relative, payload)
+            if role.startswith("arm64_"):
+                path = control_receipt_fixtures.create_arm_receipt(
+                    (evidence / relative).parent, phase="attempt_before" if role == "arm64_before_receipt" else "attempt_after",
+                    subject_id=self.attempt_id, prefix="environment")
+                path.rename(evidence / relative)
+                data = (evidence / relative).read_bytes()
+            else:
+                data = _canonical_file(evidence / relative, payload)
             environment[role] = {"path": relative, "bytes": len(data), "sha256": _sha256(data)}
         # checkpoint 链。
         store = incremental_recovery.CheckpointStore(self.attempt_root / "checkpoints", create=True)
@@ -201,7 +209,8 @@ class OfficialAttemptAuditTests(unittest.TestCase):
             self.assertEqual(plain["wire_models"], [])
             self.assertTrue(plain["track_catalog_consistent"])
             self.assertEqual(receipt["models"]["receipts_passed"], 2)
-            self.assertEqual(receipt["environment"]["continuity"]["before_identity"], "e" * 64)
+            before = fixture.attempt_root / "evidence/environment/arm64-before/receipt.json"
+            self.assertEqual(receipt["environment"]["continuity"]["before_identity"], json.loads(before.read_bytes())["continuity_identity_sha256"])
             self.assertEqual(receipt["integrity"]["checkpoint_count"], 3)
             self.assertEqual(receipt["integrity"]["inventory_file_count"], 6)
             self.assertEqual(receipt["requests"]["precise_total"], 4)
@@ -256,7 +265,10 @@ class OfficialAttemptAuditTests(unittest.TestCase):
             attempt_path = fixture.attempt_root / "attempt.json"
             attempt = json.loads(attempt_path.read_text("utf-8"))
             after = fixture.attempt_root / "evidence" / "environment" / "arm64-after" / "receipt.json"
-            data = _canonical_file(after, {"status": "passed", "continuity_identity_sha256": "f" * 64})
+            updated = control_receipt_fixtures.create_arm_receipt(after.parent, phase="attempt_after",
+                      subject_id=fixture.attempt_id, prefix="changed", continuity_seed="f")
+            updated.replace(after)
+            data = after.read_bytes()
             after.chmod(0o600)
             attempt["environment"]["arm64_after_receipt"]["sha256"] = _sha256(data)
             attempt["environment"]["arm64_after_receipt"]["bytes"] = len(data)

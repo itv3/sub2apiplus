@@ -13,6 +13,7 @@ from unittest import mock
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 def _future(hours: int = 48) -> str:
@@ -61,6 +62,10 @@ def _fake_create(campaign_dir: Path, *, mode: str = "formal", version: str = "0.
 
 
 class ProjectLedgerIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 本组只验证总账消费者；出口数据来自零请求替身，R15 专项独立验证实际门禁。
+        self.enterContext(runtime_egress_fixtures.stubbed_runtime_egress_admission())
+
     def test_plan_registers_campaign_with_frozen_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = _data_root(directory, with_ledger=True)

@@ -7,6 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 
 
@@ -582,6 +583,12 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_action_output_binding.schema.json": artifacts.ACTION_OUTPUT_BINDING_SCHEMA,
             "codex_upgrade_manifest_projection.schema.json": artifacts.MANIFEST_PROJECTION_SCHEMA,
             "codex_upgrade_effective_results.schema.json": artifacts.EFFECTIVE_RESULTS_SCHEMA,
+            # R4：阶段幂等重派证明。
+            "codex_upgrade_stage_replay.schema.json": artifacts.STAGE_REPLAY_SCHEMA,
+            # R11：恢复段预约（执行／复用边界）；版本常量定义在编排器，由恢复段读写两端共用。
+            "codex_upgrade_attempt_recovery_reservation.schema.json": upgrade.ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
+            # R8：三层预算的批准延期收据。
+            "codex_upgrade_deadline_extension.schema.json": artifacts.DEADLINE_EXTENSION_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):
@@ -631,7 +638,7 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         summary = ledger_schema["properties"]["summary"]["properties"]
         self.assertEqual(
             summary["status"]["enum"],
-            ["active", "recovery_required", "candidate_review_required", "revision_required", "stop_required", "stopped", "complete"],
+            ["active", "recovery_required", "candidate_review_required", "stage_review_required", "revision_required", "stop_required", "stopped", "complete", "deadline_paused", "abandoned"],
         )
         for field in ("current_revision", "revision_phase_state", "campaign_completed_phases"):
             self.assertIn(field, summary)

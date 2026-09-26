@@ -1,0 +1,171 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R2（审核修正）",
+  "source_commit": "2e58a8703c73a99f6a35595a31302d05e3b7728f",
+  "source_commits": [
+    "c337fc3964378b033884c630716e1311ae489b95",
+    "8785df1a3020ce9c7cb56f6f817293f8752d6e67",
+    "2e58a8703c73a99f6a35595a31302d05e3b7728f"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 5 条（构建收据只读校验读取实现测试证据根）、第二节第 10 条（换镜像沿用前序 ldflags、新增 schema 零引用）；审核草稿代理 D 第 (b)(c)(e) 条与两条负例缺口",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T05:33:19.722296+00:00",
+  "fixes": [
+    {
+      "finding": "validate_candidate_build_receipt 对含 build.inputs 的构建收据在只读校验中也读取实现测试证据根并要求 0700，证据根移动或清理后 status／replay／作废与驱动读取失败",
+      "resolution": "通用校验只核对收据内的构建输入摘要（源码、平台、门禁需求、参数投影、工具链、基础镜像），不再读取证据根；新增 verify_candidate_build_implementation_evidence 读取证据根并核对实现测试收据绑定本构建完整输入与当前 Candidate，只在 record（build_candidate_build_receipt）与 accept 入口显式调用。实现测试复用上下文本身已显式重放前序证据，保护不变"
+    },
+    {
+      "finding": "作废旧候选时身份快照对构建收据全量校验且不允许历史 v1，缺少机器收据的历史候选无法作废",
+      "resolution": "作废快照以只读兼容方式读取 v1 构建收据，只取身份字段"
+    },
+    {
+      "finding": "缺少 record 层“两次登记只有 --build-id 不同被拒”的端到端用例",
+      "resolution": "R2 真实链在幂等重登记之后追加负例：只改构建标识再登记，seal 内容核对拒绝，已登记的构建收据、seal 与 VC-4 checkpoint 字节不变"
+    },
+    {
+      "finding": "缺少篡改承接声明在重放时被拒的用例",
+      "resolution": "新增用例：篡改 reused_from 或前序构建收据摘要后仍能封存（封存只校验事实结构），重放按真实输入重算后拒绝"
+    },
+    {
+      "finding": "复验中发现（R8 引入）：监督器看门狗每周期重算三层预算都会读计时账本与项目总账，而两本账写事件时先在 events 目录内建临时文件再原子发布，读取方列到临时文件即报“存在额外文件”；父进程追加事件的瞬间撞上该窗口时，看门狗中止运行并结束属主进程。ARM64 上 R2 构建链的 VC-5 故障注入收口正撞上这一窗口，测试进程被 SIGTERM 结束",
+      "resolution": "两本账的事件读取只排除形如 .<六位序号>.json.<随机>.tmp 的写入中临时文件，其他任何额外文件仍按篡改拒绝；写入进程中途被杀遗留的临时文件也不再让账本永久不可读。项目历史快照在并发临时事件下返回旧前缀，仍不触碰任何文件。新增用例：两本账各一条临时文件忽略与额外文件拒绝、并发读取与连续追加零错误（修改前本机稳定复现）。计时工具摘要随之变化，已把本次收据登记进 PRODUCER_FREEZE_SUCCESSORS"
+    }
+  ],
+  "clarifications": [
+    "换镜像沿用前序 ldflags 中的旧 -X main.Date 是方案设计：同源码重建保留原二进制 ldflags，二进制逐字节不变，实现测试输入不因构建日期变化而失效；实际构建时间另记 built-at-utc.txt，驱动 README 已写明，本轮不改。",
+    "审核第二节第 10 条称 R2 新增两份 schema 生产代码零引用：R2 新增的 candidate_invalidation、candidate_invalidation_diagnosis、candidate_revision_seal 三份已在构建制品测试中按 schema 版本常量登记并随门禁运行；没有任何测试引用的是 R4 的 stage_replay、R11 的 attempt_recovery_reservation 与 R8 的 deadline_extension，分别在对应项登记。",
+    "构建参数输入投影一侧缺失时回退比较原始参数摘要：只在被取代 revision 来自 R2 之前的工具时发生，R2 工具封存的 revision 都带投影，当前不可达；回退只会让“是否新候选”判定偏宽松，复用决定另有输入证明、不会漏跑测试；改动会改变已封存 seal 的重放结果，本轮不改。",
+    "审核草稿代理 D 第 (f) 条（续作合同冻结全部参数过严）属于 R6 的官方复用续作绑定，已在 R6 修正。",
+    "第一次 ARM64 运行把四条真实链与相关单测放在一次运行里，超过 90 分钟硬超时被强制结束，输出全部丢失；随后改为边跑边写日志的运行入口并精简范围：R2 构建链、会经过 accept 的全链与相关单测。两条评估链同样经过 accept，放在阶段 1 最后的全量真实链验证中执行。",
+    "第二次 ARM64 运行（精简范围）在 R2 构建链的 VC-5 故障注入处被看门狗误杀，定位为上述账本读取竞态；修复后第三次运行通过。两次中断遗留的测试 registry 容器与临时目录已清理。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "2b39afeda5bdc96f09c1c49513d81d3020d9975b1e30ec8f07f2f802d9bc7f8a",
+      "after": "279f438519668ccedc921cb74573d9770a4e6f1ef6dcfd2e74812041bd5be285"
+    }
+  },
+  "regression": {
+    "local_final": {
+      "commit": "2e58a8703c73a99f6a35595a31302d05e3b7728f",
+      "tests": 509,
+      "seconds": 190.842,
+      "result": "FAILED",
+      "detail": "failures=3",
+      "note": "三项失败均属 R8：命令闭集（test_campaign_cli_exposes_all_staged_commands）与收口两项（append-only、锁内复检毫秒截断）"
+    },
+    "red_green_r2": {
+      "old": "FAILED (errors=3)",
+      "new": "OK",
+      "note": "证据根迁移、别的候选、历史 v1 三条修改前失败；篡改承接声明为补覆盖，新旧均通过"
+    },
+    "red_green_ledger_inflight": {
+      "old": "FAILED (failures=1, errors=2)",
+      "new": "OK",
+      "note": "并发读取用例在修改前本机 120 次追加中多次读到“存在额外文件”"
+    },
+    "arm64_final": {
+      "commit": "2e58a8703c73a99f6a35595a31302d05e3b7728f",
+      "tests": 488,
+      "seconds": 694.669,
+      "result": "FAILED",
+      "detail": "failures=1, skipped=0",
+      "modules": [
+        "real_chains.test_codex_upgrade_build_revision",
+        "real_chains.test_codex_upgrade_full_chain",
+        "test_codex_upgrade_build_revision",
+        "test_codex_upgrade_candidate_revision",
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_candidate_build",
+        "test_codex_upgrade_vc_receipt",
+        "test_arm64_driver_wait",
+        "test_codex_upgrade_timing_ledger",
+        "test_codex_upgrade_project_ledger",
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade_deadline_extension",
+        "test_codex_upgrade"
+      ],
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；R2 构建链（含只改构建标识再登记被拒、VC-5 故障注入收口）与全链（含 accept）通过；唯一失败为 R8 命令闭集"
+    },
+    "arm64_interrupted": [
+      {
+        "run": "第一次（c337fc396）",
+        "result": "90 分钟硬超时被强制结束，输出全部丢失",
+        "log": "review-fix-r2-arm64-timeout.log"
+      },
+      {
+        "run": "第二次（c337fc396，精简范围）",
+        "result": "R2 构建链 VC-5 故障注入收口处被看门狗误杀（账本读取竞态）",
+        "log": "review-fix-r2-arm64-watchdog-killed.log"
+      }
+    ]
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "freeze_successor": "2 条承接边（指南、编排器），人工动作涉及编排器与构建制品模块的受管摘要，监督器与断言预处理器摘要不变",
+    "maintenance_markdown_count": 0
+  },
+  "open_dependencies": [
+    "两条评估真实链（legacy、attempt-recovery）在阶段 1 最后的全量真实链验证中执行。",
+    "R8 命令闭集用例在 R8 修正。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r2-review-fix-20260924-freeze-successor.json",
+      "sha256": "a2d8ba5d1adbf61a1e5989b0dd2bbee44644acc23c4781e5f0f31e1dae59ed9a"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r2-local.log",
+      "sha256": "07f4ca638cb483ac83b216271ba9761d2f71de1ccebe7bcf5fa4108f90886ec2"
+    },
+    {
+      "file": "review-fix-r2-local-c337fc396.log",
+      "sha256": "3d1da45b97b6b6bca7062406b8b123ceeb5fabc69b6f8dabc463770ba7046e04"
+    },
+    {
+      "file": "review-fix-r2-red-green.log",
+      "sha256": "a86446cbe23f964655ed202dbed5841d33b7041d03eed78459d6342cfd4f7cfd"
+    },
+    {
+      "file": "review-fix-ledger-inflight-red-green.log",
+      "sha256": "b3ed6d7fc7f57347087ce42ee54e7713a66f45506c943038a82bfc86c7cef4f7"
+    },
+    {
+      "file": "review-fix-ledger-inflight-local.log",
+      "sha256": "faaab7bad9402c4ad4611b53404f90390d4e9345ef5ac868d35b78602f69d83d"
+    },
+    {
+      "file": "review-fix-r2-freeze-generation.log",
+      "sha256": "4d2c47a9de9e65f5e2b82cc0aaa5b316ecccf8a79dc61c39eadbac6d6d2cf6ac"
+    },
+    {
+      "file": "review-fix-r2-gates.log",
+      "sha256": "4141bb538c536612de11482bc8b04f3828c635076ced03930060bcb733ec0ca7"
+    },
+    {
+      "file": "review-fix-r2-arm64-timeout.log",
+      "sha256": "79382bad5ba2e25880b98b8d13e2c30a204f183dc541bd4bfd7f5f7d047e515e"
+    },
+    {
+      "file": "review-fix-r2-arm64-watchdog-killed.log",
+      "sha256": "424f04643d9d2ebd3917033899e87848b97672e6402f46c635d961ec27d5e7dd"
+    },
+    {
+      "file": "review-fix-r2-arm64.log",
+      "sha256": "c6c320adce4add94bf4642d1c98b47c04b96d2b550be1f55b95d8a7419e86a1d"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-runtime-egress-exit-health-v1.json",
+  "title": "出口宿主的实时健康响应",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_sha256",
+    "status",
+    "boot_id",
+    "lease_remaining_ms"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-runtime-egress-exit-health/v1"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "compliant",
+        "blocked"
+      ]
+    },
+    "boot_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "lease_remaining_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5000
+    }
+  }
+}

@@ -106,6 +106,10 @@ EVENT_TYPES = (
     "reconciliation_corrected",
     "root_cause_repair_corrected",
     "candidate_probe_accounted",
+    "campaign_paused",
+    "deadline_extended",
+    # R8 审核修正：延期的 Campaign 计时事件落盘后追加，证明双账已提交；此后判定不再读取发起方 Campaign。
+    "deadline_extension_committed",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -122,6 +126,7 @@ TERMINAL_REASONS = (
     # 不可变 stat 边界漂移（动作诊断 failure_class=evidence-integrity，reconciler 固定映射）。
     # 与 identity_changed（wire／策略身份漂移）语义不同，不混用。
     "integrity_mismatch",
+    "operator_abandoned",
 )
 REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
 BLOCKED_ALLOWED_EVENTS = frozenset(
@@ -132,6 +137,9 @@ BLOCKED_ALLOWED_EVENTS = frozenset(
         "campaign_terminal",
         "reconciliation_corrected",
         "root_cause_repair_corrected",
+        "campaign_paused",
+        "deadline_extended",
+        "deadline_extension_committed",
     }
 )
 # B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
@@ -630,11 +638,16 @@ EVENT_FIELDS = {
 }
 
 
+# 写入中的事件临时文件（".<序号>.json.<随机>.tmp"，原子改名前短暂存在）不是事件，读取时忽略；
+# 其他任何额外文件仍按篡改拒绝。
+INFLIGHT_EVENT_TEMP_RE = re.compile(r"^\.[0-9]{6}\.json\.[A-Za-z0-9_]+\.tmp$")
+
+
 def _load_events(root: Path) -> list[dict[str, Any]]:
     events_root = root / "events"
     if events_root.is_symlink() or not events_root.is_dir():
         raise ProjectLedgerError("events 目录缺失或不可信")
-    paths = sorted(events_root.iterdir())
+    paths = sorted(path for path in events_root.iterdir() if not INFLIGHT_EVENT_TEMP_RE.fullmatch(path.name))
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise ProjectLedgerError("events 目录只能包含普通文件")
     expected = [f"{index:06d}.json" for index in range(1, len(paths) + 1)]
@@ -897,6 +910,12 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "registered_campaigns": {},
         "rejected_campaigns": {},
         "terminal_campaigns": {},
+        "paused_campaigns": {},
+        "effective_absolute_deadline_utc": plan["absolute_deadline_utc"],
+        "effective_campaign_deadlines": {},
+        "effective_stage_deadlines": {},
+        "deadline_extensions": [],
+        "committed_deadline_extensions": {},
         "unresolved_operation_ids": [],
         "operations": {},
         "repaired_root_causes": [],
@@ -922,6 +941,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 raise ProjectLedgerError(f"Campaign 重复注册：{campaign_id}")
             state["registered_campaigns"][campaign_id] = {
                 "operation_id": operation_id,
+                "campaign_dir": payload.get("campaign_dir"),
                 "campaign_mode": payload.get("campaign_mode"),
                 "target_version": payload.get("target_version"),
                 "deadline_at_utc": payload.get("deadline_at_utc"),
@@ -969,7 +989,81 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_terminal.campaign_id")
             if payload.get("terminal_reason") not in TERMINAL_REASONS:
                 raise ProjectLedgerError("campaign_terminal 的 terminal_reason 非法")
+            if payload.get("terminal_reason") == "operator_abandoned" and (
+                not isinstance(payload.get("approved_by"), str) or not payload["approved_by"].strip()
+                or not isinstance(payload.get("reason"), str) or not payload["reason"].strip()
+            ):
+                raise ProjectLedgerError("显式放弃必须携带批准人和理由")
             state["terminal_campaigns"][campaign_id] = {"operation_id": operation_id, "terminal_reason": payload["terminal_reason"]}
+            state["paused_campaigns"].pop(campaign_id, None)
+        elif event_type == "campaign_paused":
+            campaign_id = _safe_id(payload.get("campaign_id"), "campaign_paused.campaign_id")
+            scopes = payload.get("scopes")
+            if (campaign_id not in state["registered_campaigns"] or campaign_id in state["terminal_campaigns"]
+                    or not isinstance(scopes, list) or not scopes or scopes != sorted(set(scopes))
+                    or not set(scopes) <= {"project", "campaign", "stage"}):
+                raise ProjectLedgerError("预算暂停的 Campaign 或层级非法")
+            _timestamp(payload.get("paused_since_utc"), "暂停时间")
+            previous = state["paused_campaigns"].get(campaign_id)
+            state["paused_campaigns"][campaign_id] = {
+                "scopes": sorted(set(scopes) | set(previous["scopes"] if previous else [])),
+                "paused_since_utc": min(payload["paused_since_utc"], previous["paused_since_utc"]) if previous else payload["paused_since_utc"],
+                "status_before_pause": payload.get("status_before_pause"), "operation_id": operation_id,
+            }
+        elif event_type == "deadline_extended":
+            artifact = _deadline_artifacts()
+            try:
+                extension = artifact.validate_deadline_extension(payload.get("extension"))
+            except artifact.VCArtifactError as error:
+                raise ProjectLedgerError(f"批准延期收据非法：{error}") from error
+            campaign_id = extension["campaign_id"]
+            if campaign_id not in state["registered_campaigns"] or campaign_id in state["terminal_campaigns"]:
+                raise ProjectLedgerError("延期不得用于未注册或已终态 Campaign")
+            expected_head = {"sequence": event["sequence"] - 1,
+                             "sha256": event["previous_event_sha256"] or plan["plan_sha256"]}
+            if extension["project_ledger_head"] != expected_head:
+                raise ProjectLedgerError("延期批准绑定的总账 head 已过期")
+            if extension["approved_at_utc"] != event["recorded_at_utc"]:
+                raise ProjectLedgerError("延期事件必须保留实际批准时间")
+            scope = extension["scope"]
+            if scope == "project":
+                previous_deadline = state["effective_absolute_deadline_utc"]
+                state["effective_absolute_deadline_utc"] = extension["new_deadline_at_utc"]
+            elif scope == "campaign":
+                previous_deadline = state["effective_campaign_deadlines"].get(campaign_id,
+                    state["registered_campaigns"][campaign_id].get("deadline_at_utc"))
+                state["effective_campaign_deadlines"][campaign_id] = extension["new_deadline_at_utc"]
+            else:
+                key = f"{campaign_id}:{extension['phase']}"
+                # 阶段绝对截止会随 revision 起点变化；由批准绑定的计时 head
+                # 核验原起点、跨 revision 已耗时和累计扩展秒数，不能拿上一段
+                # 的绝对坐标直接比较。这里仅保留最近批准坐标供审计。
+                previous_deadline = None
+                state["effective_stage_deadlines"][key] = extension["new_deadline_at_utc"]
+            if previous_deadline is not None and _timestamp(previous_deadline, "旧截止") != _timestamp(extension["original_deadline_at_utc"], "收据旧截止"):
+                raise ProjectLedgerError("延期收据没有承接本层当前有效截止")
+            state["deadline_extensions"].append(extension)
+            for paused_id, pause in list(state["paused_campaigns"].items()):
+                if scope == "project" or paused_id == campaign_id:
+                    pause["scopes"] = [name for name in pause["scopes"] if name != scope]
+                    if not pause["scopes"]:
+                        del state["paused_campaigns"][paused_id]
+        elif event_type == "deadline_extension_committed":
+            receipt = payload.get("receipt_sha256")
+            campaign_event = payload.get("campaign_event")
+            if (
+                not isinstance(receipt, str)
+                or not any(row["receipt_sha256"] == receipt for row in state["deadline_extensions"])
+                or receipt in state["committed_deadline_extensions"]
+                or not isinstance(campaign_event, dict)
+                or set(campaign_event) != {"sequence", "sha256"}
+                or not isinstance(campaign_event["sequence"], int)
+                or isinstance(campaign_event["sequence"], bool)
+                or campaign_event["sequence"] < 1
+                or not SHA256_RE.fullmatch(str(campaign_event["sha256"]))
+            ):
+                raise ProjectLedgerError("延期提交证明必须承接总账中已登记且尚未证明的延期收据")
+            state["committed_deadline_extensions"][receipt] = dict(campaign_event)
     _codes_sha256, _algorithm, mapping = _effective_codes_identity(plan, _code_migrations(root))
     if mapping:
         migrated: dict[str, int] = {}
@@ -997,6 +1091,11 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "registered_campaigns": state["registered_campaigns"],
         "rejected_campaigns": state["rejected_campaigns"],
         "terminal_campaigns": state["terminal_campaigns"],
+        "paused_campaigns": state["paused_campaigns"],
+        "effective_absolute_deadline_utc": state["effective_absolute_deadline_utc"],
+        "effective_campaign_deadlines": state["effective_campaign_deadlines"],
+        "effective_stage_deadlines": state["effective_stage_deadlines"],
+        "deadline_extensions": state["deadline_extensions"],
         "unresolved_operation_ids": list(state["unresolved_operation_ids"]),
         "blocked": bool(state["unresolved_operation_ids"]),
         "operations": state["operations"],
@@ -1006,6 +1105,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "failure_observations": state["failure_observations"],
         "event_corrections": correction_audit,
     }
+    if state["committed_deadline_extensions"]:
+        # 只在出现过提交证明时写入 head，历史总账的 head 字节保持不变。
+        head["committed_deadline_extensions"] = state["committed_deadline_extensions"]
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
         cached, _raw = _read_json(cache_path, "head 缓存")
@@ -1035,9 +1137,9 @@ def _read_project_history_snapshot(root: Path) -> dict[str, Any]:
     """不取锁地重放一份只读项目历史快照。
 
     event 以同目录临时文件加硬链接原子发布，且发布后不可变；
-    因此并发追加时本函数要么看到旧前缀，要么看到新前缀。若列目录恰好
-    观测到尚未发布的临时文件，``_load_events`` 会失败关闭；本函数不会
-    删除临时文件、刷新 head 缓存或追加事件。
+    因此并发追加时本函数要么看到旧前缀，要么看到新前缀。列目录恰好
+    观测到尚未发布的临时文件时，``_load_events`` 把它排除在事件链之外（得到旧前缀）；
+    本函数不会删除临时文件、刷新 head 缓存或追加事件。
 
     这份快照只适合证明历史 head 仍是事件链祖先，不能作为新写入的
     CAS 基准。
@@ -1090,6 +1192,8 @@ def append_project_event(
     _safe_id(operation_id, "operation_id")
     if event_type not in EVENT_TYPES:
         raise ProjectLedgerError(f"事件类型非法：{event_type}")
+    if event_type == "campaign_terminal" and payload.get("terminal_reason") == "deadline_wall_clock":
+        raise ProjectLedgerError("deadline_wall_clock 仅供历史回放；新预算到期必须暂停")
     payload_dict = dict(payload)
     payload_sha256 = _digest(payload_dict)
     with project_lock(root):
@@ -1130,6 +1234,297 @@ def append_project_event(
 # ---------------------------------------------------------------------------
 
 
+def _deadline_artifacts():
+    if __package__ in {None, ""}:
+        import codex_upgrade_vc_artifacts as artifacts
+    else:
+        from . import codex_upgrade_vc_artifacts as artifacts
+    return artifacts
+
+
+def _deadline_write_once(path: Path, payload: Mapping[str, Any]) -> None:
+    """重派只认可相同原字节；既有批准、预览与收据一律不覆盖。"""
+    if path.exists() or path.is_symlink():
+        _existing, raw = _read_json(path, "预算控制既有制品")
+        if raw != _canonical(payload) + b"\n":
+            raise ProjectLedgerError("预算控制制品已经存在且内容不同")
+        return
+    _write_once(path, payload)
+
+
+def verify_committed_deadline_extension(extension: Mapping[str, Any], *, root: Path | None = None) -> None:
+    """Campaign 计时事件只能承接已经进入项目权威链的同一批准收据。
+
+    ``root`` 由调用方按计划摘要定位；未给出时才退回收据记录的路径（迁移后可能已不存在）。
+    """
+    root = Path(root) if root is not None else Path(extension["project_ledger_path"])
+    plan, _raw = _load_plan(root)
+    head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+    if not any(row == extension for row in head["deadline_extensions"]):
+        raise ProjectLedgerError("延期批准尚未进入项目总账，禁止单独放行 Campaign")
+
+
+def effective_project_deadline(root: Path, *, as_of: datetime | None = None) -> str:
+    """只读重放项目截止；历史 checkpoint 只采用当时已经批准的延期。"""
+
+    plan, _raw = _load_plan(root)
+    head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+    deadline = plan["absolute_deadline_utc"]
+    for extension in head["deadline_extensions"]:
+        if extension["scope"] == "project" and (as_of is None or _timestamp(extension["approved_at_utc"], "批准时间") <= as_of):
+            deadline = extension["new_deadline_at_utc"]
+    return str(deadline)
+
+
+def deadline_extension_applied(extension: Mapping[str, Any], head: Mapping[str, Any]) -> bool:
+    """验证另一 Campaign 的延期事件已实际落盘；不递归重放它的预算投影。
+
+    项目延期影响所有 Campaign，项目事件先落盘后的短窗口仍须对全项目关闭。
+    批准绑定的计时前序 head、下一序号和原始摘要链共同证明双账提交完成。
+    """
+    if extension["receipt_sha256"] in head.get("committed_deadline_extensions", {}):
+        # R8 审核修正：双账提交证明已进入总账，不再读取发起方 Campaign（其目录可能已清理）。
+        return True
+    if __package__ in {None, ""}:
+        import codex_upgrade_timing_ledger as timing
+    else:
+        from . import codex_upgrade_timing_ledger as timing
+    owner = head["registered_campaigns"][extension["campaign_id"]].get("campaign_dir")
+    ledger = _deadline_artifacts().campaign_timing_ledger(Path(owner)) if owner else None
+    if ledger is None:
+        raise ProjectLedgerError("延期所属 Campaign 缺少已登记的计时账本")
+    sequence = extension["campaign_ledger_head"]["sequence"] + 1
+    events = timing._load_events(ledger)[:sequence]
+    if len(events) < sequence:
+        return False
+    previous = None
+    for index, (event, raw) in enumerate(events, 1):
+        timing._validate_event_shape(ledger, event, index)
+        if previous is not None and event["previous_event_sha256"] != hashlib.sha256(previous).hexdigest():
+            raise ProjectLedgerError("延期所属 Campaign 计时链断裂")
+        previous = raw
+    event = events[-1][0]
+    if (event["event_type"] != "deadline_extended" or event.get("deadline_control") != extension
+            or event["previous_event_sha256"] != extension["campaign_ledger_head"]["sha256"]):
+        raise ProjectLedgerError("批准绑定的计时 head 后出现不同事件，延期事务未闭合")
+    return True
+
+
+@contextlib.contextmanager
+def deadline_control_scope(campaign_dir: Path, *, executing: bool = False):
+    """父执行持共享锁，延期／放弃持非阻塞排他锁；不等待反向项目锁。
+
+    暂停事实可由父进程的失败收口追加，因此暂停不取这把互斥锁。
+    进程死亡由内核释放 flock，重派不需要删除任何状态文件。
+    """
+    path = Path(campaign_dir) / ".deadline-control.lock"
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ProjectLedgerError("预算控制锁必须是当前用户拥有的 0600 普通文件")
+        try:
+            fcntl.flock(descriptor, (fcntl.LOCK_SH if executing else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ProjectLedgerError("Campaign 仍在执行或变更预算，待收口后重试") from error
+        if not executing:
+            _root, _ledger, _manifest, _artifacts, upgrade, _timing = _deadline_context(campaign_dir)
+            lease = upgrade._read_campaign_lease(campaign_dir)
+            if lease and lease.get("state") == "active" and upgrade._campaign_lease_pid_alive(lease.get("owner_pid")):
+                raise ProjectLedgerError("Campaign 仍有存活执行租约，不得修改运行中的预算")
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _deadline_context(campaign_dir: Path):
+    """预算控制自持项目锁与 Campaign 锁；不申请已经过期的执行租约。"""
+    if __package__ in {None, ""}:
+        import codex_upgrade as upgrade
+        import codex_upgrade_timing_ledger as timing
+    else:
+        from . import codex_upgrade as upgrade, codex_upgrade_timing_ledger as timing
+    artifacts = _deadline_artifacts()
+    root = find_project_ledger(campaign_dir)
+    ledger = artifacts.campaign_timing_ledger(campaign_dir)
+    if root is None or ledger is None:
+        raise ProjectLedgerError("预算控制必须有项目总账与 Campaign 计时账本")
+    manifest, _raw = _read_json(campaign_dir / "campaign.json", "Campaign")
+    return root, ledger, manifest, artifacts, upgrade, timing
+
+
+def _deadline_assert_registered(head: Mapping[str, Any], campaign_id: str) -> None:
+    if campaign_id not in head["registered_campaigns"] or campaign_id in head["terminal_campaigns"]:
+        raise ProjectLedgerError("预算控制拒绝未注册或已终态 Campaign")
+
+
+def pause_campaign_deadline(campaign_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """到期只记录两本账的暂停事实，不关闭阶段、不生成终态；可重复补齐。"""
+
+    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    with project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "计时暂停"):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        campaign_id = manifest["campaign_id"]
+        _deadline_assert_registered(head, campaign_id)
+        deadlines = artifacts.effective_deadlines(campaign_dir, now=observed, project_head=head, project_plan=plan)
+        scopes = sorted(set(deadlines["paused_scopes"]) - {"extension_pending"})
+        if not scopes:
+            return {"status": "not_expired", **deadlines}
+        current = timing.inspect_ledger(ledger, now=observed.isoformat())
+        if current["status_before_pause"] in {"stopped", "stop_required", "complete", "abandoned"}:
+            raise ProjectLedgerError("完整性、重试或既有终态不能改为预算暂停")
+        control = {"scopes": scopes, "paused_since_utc": deadlines["paused_since_utc"]}
+        identity = _digest({"campaign_id": campaign_id, **control})[:32]
+        event_id = f"deadline-paused-{identity}"
+        if not any(row[0]["event_id"] == event_id for row in timing._load_events(ledger)):
+            timing.append_event(ledger, event_id=event_id, phase=current["active_phase"] or current["review_phase"] or "VC-0",
+                event_type="deadline_paused", deadline_control=control, recorded_at_utc=observed.isoformat(),
+                next_action="deadline-extend preview/apply 或 campaign-abandon；72 小时提醒复核")
+        payload = {"campaign_id": campaign_id, **control, "status_before_pause": current["status_before_pause"]}
+        after, result = append_project_event(root, operation_id=f"deadline-paused:{identity}", event_type="campaign_paused",
+            payload=payload, source_batch_sha256=None, recorded_at_utc=observed.isoformat())
+        return {"status": "deadline_paused", **deadlines, "project_event": result, "project_head_sha256": after["head_sha256"]}
+
+
+def preview_deadline_extension(campaign_dir: Path, *, scope: str, phase: str | None,
+                               new_deadline_at_utc: str, reason: str, now: datetime | None = None) -> dict[str, Any]:
+    """冻结三层之一的延期草案；预览不批准、不放行，也不消费请求。"""
+
+    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期预览"):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        _deadline_assert_registered(head, manifest["campaign_id"])
+        current = timing.inspect_ledger(ledger, now=observed.isoformat())
+        if current["status_before_pause"] in {"stopped", "stop_required", "complete", "abandoned"}:
+            raise ProjectLedgerError("既有停线、根因上限或终态不能用延期解除")
+        deadlines = artifacts.effective_deadlines(campaign_dir, now=observed, project_head=head, project_plan=plan)
+        if "extension_pending" in deadlines["paused_scopes"]:
+            raise ProjectLedgerError("前一份延期尚未补齐，请重跑原 apply")
+        fields = {"project": "project_deadline_at_utc", "campaign": "total_deadline_at_utc", "stage": "stage_deadline_at_utc"}
+        if scope not in fields or (scope == "stage" and phase != deadlines["phase"]):
+            raise ProjectLedgerError("延期层级非法或阶段不是当前阶段")
+        document = {"schema_version": artifacts.DEADLINE_EXTENSION_PREVIEW_SCHEMA,
+            "campaign_id": manifest["campaign_id"], "scope": scope, "phase": phase,
+            "original_deadline_at_utc": deadlines[fields[scope]], "new_deadline_at_utc": new_deadline_at_utc,
+            "reason": reason, "project_ledger_path": str(root.resolve()),
+            "project_ledger_head": {"sequence": head["sequence"], "sha256": head["head_sha256"]},
+            "campaign_ledger_head": {"sequence": current["head_sequence"], "sha256": current["head_sha256"]}}
+        document["review_sha256"] = artifacts.digest(document)
+        artifacts.validate_deadline_extension(document, preview=True)
+        if _timestamp(new_deadline_at_utc, "新截止") <= observed:
+            raise ProjectLedgerError("新截止必须晚于当前时间")
+        directory = _private_dir(campaign_dir / "control", "控制目录", create=True)
+        directory = _private_dir(directory / "deadlines", "预算控制目录", create=True)
+        path = directory / f"preview-{document['review_sha256']}.json"
+        _deadline_write_once(path, document)
+        return {"status": "preview", "preview_path": str(path), **document}
+
+
+def apply_deadline_extension(campaign_dir: Path, *, preview_path: Path, approve_sha256: str,
+                             approved_by: str, now: datetime | None = None) -> dict[str, Any]:
+    """先写批准收据和项目事件，再补 Campaign 事件；重派复核同一批准，不重复两本账。"""
+
+    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    preview, _raw = _read_json(preview_path, "延期预览")
+    artifacts.validate_deadline_extension(preview, preview=True)
+    if (approve_sha256 != preview["review_sha256"] or preview["campaign_id"] != manifest["campaign_id"]
+            or Path(preview["project_ledger_path"]) != root.resolve() or not approved_by.strip()):
+        raise ProjectLedgerError("延期批准摘要、Campaign、项目或批准人不一致")
+    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期写入"):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        _deadline_assert_registered(head, manifest["campaign_id"])
+        directory = _private_dir(campaign_dir / "control/deadlines", "预算控制目录", create=True)
+        path = directory / f"extension-{approve_sha256}.json"
+        if path.exists():
+            extension, _raw = _read_json(path, "既有延期批准")
+            artifacts.validate_deadline_extension(extension)
+            if extension["review_sha256"] != approve_sha256 or extension["approved_by"] != approved_by:
+                raise ProjectLedgerError("重派不能修改既有延期批准")
+        else:
+            extension = {**preview, "schema_version": artifacts.DEADLINE_EXTENSION_SCHEMA,
+                         "approved_by": approved_by, "approved_at_utc": observed.isoformat()}
+            extension["receipt_sha256"] = artifacts.digest(extension)
+            artifacts.validate_deadline_extension(extension)
+        operation = f"deadline-extended-{approve_sha256}"
+        recorded = head["operations"].get(operation)
+        current = timing.inspect_ledger(ledger, now=observed.isoformat())
+        if current["status_before_pause"] in {"stopped", "stop_required", "complete", "abandoned"}:
+            raise ProjectLedgerError("既有停线、根因上限或终态不能用延期解除")
+        applied = any(row[0]["event_id"] == operation for row in timing._load_events(ledger))
+        if not applied and extension["campaign_ledger_head"] != {"sequence": current["head_sequence"], "sha256": current["head_sha256"]}:
+            raise ProjectLedgerError("延期批准绑定的 Campaign 账本 head 已过期")
+        if recorded is None:
+            if extension["project_ledger_head"] != {"sequence": head["sequence"], "sha256": head["head_sha256"]}:
+                raise ProjectLedgerError("延期批准绑定的总账 head 已过期")
+            latest_events = _load_events(root)
+            if latest_events and _timestamp(extension["approved_at_utc"], "批准时间") < _timestamp(latest_events[-1]["recorded_at_utc"], "前序事件"):
+                raise ProjectLedgerError("延期批准时间不得早于前序总账事件")
+            deadlines = artifacts.effective_deadlines(campaign_dir, now=observed, project_head=head, project_plan=plan)
+            field = {"project": "project_deadline_at_utc", "campaign": "total_deadline_at_utc", "stage": "stage_deadline_at_utc"}[extension["scope"]]
+            if _timestamp(extension["original_deadline_at_utc"], "旧截止") != _timestamp(deadlines[field], "当前截止"):
+                raise ProjectLedgerError("延期的原截止已变化，请重新预览")
+        _deadline_write_once(path, extension)
+        after, result = append_project_event(root, operation_id=operation, event_type="deadline_extended",
+            payload={"extension": extension}, source_batch_sha256=None,
+            expected_head_sha256=extension["project_ledger_head"]["sha256"], recorded_at_utc=extension["approved_at_utc"])
+        if not applied:
+            timing.append_event(ledger, event_id=operation, phase=current["active_phase"] or current["review_phase"] or "VC-0",
+                event_type="deadline_extended", deadline_control=extension, recorded_at_utc=extension["approved_at_utc"],
+                next_action="按原 checkpoint 重新通过 admission 与环境、证据边界复验后继续")
+        if extension["receipt_sha256"] not in after.get("committed_deadline_extensions", {}):
+            # 双账提交证明：记下 Campaign 计时事件的序号与原始字节摘要，之后判定不再依赖发起方目录。
+            campaign_event = next(((event, raw) for event, raw in timing._load_events(ledger) if event["event_id"] == operation), None)
+            if campaign_event is None:
+                raise ProjectLedgerError("延期的 Campaign 计时事件未落盘，不能登记提交证明")
+            after, _committed = append_project_event(
+                root, operation_id=f"deadline-extension-committed-{approve_sha256}", event_type="deadline_extension_committed",
+                payload={"receipt_sha256": extension["receipt_sha256"],
+                         "campaign_event": {"sequence": campaign_event[0]["sequence"],
+                                            "sha256": hashlib.sha256(campaign_event[1]).hexdigest()}},
+                source_batch_sha256=None, recorded_at_utc=observed.isoformat())
+        effective = artifacts.effective_deadlines(campaign_dir, now=observed, project_head=after, project_plan=plan)
+        return {"status": "extended", "receipt_path": str(path), "receipt_sha256": extension["receipt_sha256"],
+                "project_event": result, "campaign_event": "duplicate" if applied else "appended", "effective_deadlines": effective}
+
+
+def abandon_campaign(campaign_dir: Path, *, approved_by: str, reason: str,
+                     now: datetime | None = None) -> dict[str, Any]:
+    """只有显式指令产生 operator_abandoned；超时与 72 小时提醒均不会调用本入口。"""
+
+    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    if not approved_by.strip() or not reason.strip():
+        raise ProjectLedgerError("显式放弃必须提供批准人和理由")
+    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "显式放弃"):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        if manifest["campaign_id"] not in head["registered_campaigns"]:
+            raise ProjectLedgerError("显式放弃拒绝未注册 Campaign")
+        operation = f"operator-abandoned-{_digest({'campaign_id': manifest['campaign_id']})[:32]}"
+        terminal = head["terminal_campaigns"].get(manifest["campaign_id"])
+        if terminal is not None and terminal["operation_id"] != operation:
+            raise ProjectLedgerError("Campaign 已有其他终态")
+        previous = next((row[0] for row in timing._load_events(ledger) if row[0]["event_id"] == operation), None)
+        control = previous["deadline_control"] if previous else {"approved_by": approved_by, "reason": reason, "approved_at_utc": observed.isoformat()}
+        if control["approved_by"] != approved_by or control["reason"] != reason:
+            raise ProjectLedgerError("显式放弃重派不能修改批准")
+        if previous is None:
+            current = timing.inspect_ledger(ledger, now=observed.isoformat())
+            timing.append_event(ledger, event_id=operation, event_type="campaign_abandoned",
+                phase=current["active_phase"] or current["review_phase"] or "VC-0", deadline_control=control,
+                recorded_at_utc=control["approved_at_utc"], next_action="Campaign 显式放弃，只读保留全部证据")
+        _after, result = append_project_event(root, operation_id=operation, event_type="campaign_terminal",
+            payload={"campaign_id": manifest["campaign_id"], "terminal_reason": "operator_abandoned", **control},
+            source_batch_sha256=None, recorded_at_utc=control["approved_at_utc"])
+        return {"status": "abandoned", "terminal_reason": "operator_abandoned", "project_event": result}
+
+
 def admission_problems(
     plan: Mapping[str, Any],
     head: Mapping[str, Any],
@@ -1146,8 +1541,13 @@ def admission_problems(
     current = now or datetime.now(timezone.utc)
     if head["blocked"]:
         problems.append(f"总账 blocked：未决账务 {head['unresolved_operation_ids']}")
-    if current >= _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
+    if any(row["scope"] == "project" and not deadline_extension_applied(row, head)
+           for row in head.get("deadline_extensions", [])):
+        problems.append("项目延期尚未补齐 Campaign 计时账本")
+    if current >= _timestamp(head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"):
         problems.append("项目绝对截止时间已到")
+    if campaign_id in head.get("paused_campaigns", {}):
+        problems.append("Campaign 预算已暂停，必须批准延期或显式放弃")
     if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
         problems.append("项目请求预算已耗尽")
     if head["root_causes_at_limit"]:
@@ -1537,7 +1937,8 @@ def register_campaign(
         _timestamp(deadline_at_utc, "deadline_at_utc")
     registration_id = operation_id or f"register:{campaign_id}"
     plan, _raw = _load_plan(root)
-    if deadline_at_utc is not None and _timestamp(deadline_at_utc, "deadline_at_utc") > _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
+    head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+    if deadline_at_utc is not None and _timestamp(deadline_at_utc, "deadline_at_utc") > _timestamp(head["effective_absolute_deadline_utc"], "absolute_deadline_utc"):
         raise ProjectLedgerError("Campaign deadline 超过项目绝对截止时间，拒绝注册")
     with campaign_ledger_lock(campaign_dir) as ledger_dir:
         campaign_plan = _campaign_plan(ledger_dir)
@@ -1763,6 +2164,8 @@ def _runtime_admission_problems(
         problems.append("Campaign 缺少注册事件")
     if campaign_id in head["terminal_campaigns"]:
         problems.append("Campaign 已终态")
+    if campaign_id in head.get("paused_campaigns", {}):
+        problems.append("Campaign 预算已暂停")
     if head["blocked"]:
         problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
     remaining = head.get("remaining_live_requests")
@@ -1772,15 +2175,14 @@ def _runtime_admission_problems(
         problems.append(f"根因达上限：{head['root_causes_at_limit']}")
     current = now or datetime.now(timezone.utc)
     project_deadline = _timestamp(
-        plan["absolute_deadline_utc"], "absolute_deadline_utc"
+        head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"
     )
     if current >= project_deadline:
         problems.append("项目绝对截止时间已到")
-    campaign_deadline = campaign_plan.get("deadline_at_utc")
+    campaign_deadline = head.get("effective_campaign_deadlines", {}).get(campaign_id, campaign_plan.get("deadline_at_utc"))
     if isinstance(campaign_deadline, str):
         parsed = _timestamp(campaign_deadline, "deadline_at_utc")
-        if parsed > project_deadline:
-            problems.append("Campaign deadline 超过项目绝对截止时间")
+        # 已批准的三层预算独立扩展；实际执行仍受三层最早截止约束。
         if current >= parsed:
             problems.append("Campaign deadline 已到")
     return problems
@@ -1820,6 +2222,7 @@ def runtime_admission_scope(
             campaign_plan,
             now=now,
         )
+        problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
         if problems:
             raise ProjectLedgerError(f"{command} 拒绝：" + "；".join(problems))
         yield RuntimeAdmission(root, plan, head, campaign_plan)
@@ -1849,7 +2252,9 @@ def admission_scope(
         _check_fixture_only(root, plan, campaign_dir)
         head = _replay(root, plan, _load_events(root), rebuild_cache=True)
         problems = admission_problems(plan, head, campaign_id=campaign_id, campaign_mode=campaign_mode, target_version=target_version, now=now, allow_registered=True)
-        if deadline_at_utc is not None and _timestamp(deadline_at_utc, "deadline_at_utc") > _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
+        if campaign_id in head["registered_campaigns"]:
+            problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
+        if deadline_at_utc is not None and _timestamp(deadline_at_utc, "deadline_at_utc") > _timestamp(head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"):
             problems.append("Campaign deadline 超过项目绝对截止时间")
         if problems:
             raise ProjectLedgerError("admission 拒绝：" + "；".join(problems))
@@ -1905,15 +2310,22 @@ def assert_campaign_admitted(campaign_dir: Path, *, command: str, require: bool,
             problems.append("项目请求预算为 0")
         if head["root_causes_at_limit"]:
             problems.append(f"根因达上限：{head['root_causes_at_limit']}")
+        problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
         current = now or datetime.now(timezone.utc)
-        if current >= _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
+        if current >= _timestamp(head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"):
             problems.append("项目绝对截止时间已到")
-        deadline = campaign_plan.get("deadline_at_utc")
-        if isinstance(deadline, str) and _timestamp(deadline, "deadline_at_utc") > _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
-            problems.append("Campaign deadline 超过项目绝对截止时间")
         if problems:
             raise ProjectLedgerError(f"{command} 拒绝：" + "；".join(problems))
         return {"project_ledger": str(root), "campaign_id": campaign_id, "head_sequence": head["sequence"], "head_sha256": head["head_sha256"], "remaining_live_requests": head["remaining_live_requests"]}
+
+
+def _campaign_deadline_problems(campaign_dir: Path, plan: Mapping[str, Any], head: Mapping[str, Any],
+                                *, now: datetime | None = None) -> list[str]:
+    """派发、恢复、复用与封存共用同一三层门禁；延期不会豁免其它 admission。"""
+    deadlines = _deadline_artifacts().effective_deadlines(campaign_dir, now=now, project_head=head, project_plan=plan)
+    if deadlines["status_before_pause"] == "abandoned":
+        return ["Campaign 已显式放弃；两账补齐前也禁止执行"]
+    return [f"预算已暂停：{','.join(deadlines['paused_scopes'])}，需要批准延期"] if deadlines["paused_scopes"] else []
 
 
 # ---------------------------------------------------------------------------

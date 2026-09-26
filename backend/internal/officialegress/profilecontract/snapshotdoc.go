@@ -22,16 +22,25 @@ import (
 // 在往返后消失，而比较双方又都经过同一套 omitempty，于是一起"变绿"。
 // 上一版的往返测试正是这样假绿的。
 type SnapshotDoc struct {
-	Version          string              `json:"Version"`
-	RequiredRules    json.RawMessage     `json:"RequiredRules"`
-	Surfaces         json.RawMessage     `json:"Surfaces"`
-	FeatureDefaults  SnapshotFeatures    `json:"FeatureDefaults"`
-	ToolPresentation json.RawMessage     `json:"ToolPresentation"`
-	Subagents        json.RawMessage     `json:"Subagents"`
-	Files            json.RawMessage     `json:"Files"`
-	Transports       []SnapshotTransport `json:"Transports"`
-	Endpoints        []SnapshotEndpoint  `json:"Endpoints"`
-	Digest           string              `json:"Digest"`
+	Version          string           `json:"Version"`
+	RequiredRules    json.RawMessage  `json:"RequiredRules"`
+	Surfaces         json.RawMessage  `json:"Surfaces"`
+	FeatureDefaults  SnapshotFeatures `json:"FeatureDefaults"`
+	ToolPresentation json.RawMessage  `json:"ToolPresentation"`
+	Subagents        json.RawMessage  `json:"Subagents"`
+	Files            json.RawMessage  `json:"Files"`
+	// 以下可选节由 0.156.1 起的画像声明（见 optional_sections.go）。缺省时不输出，
+	// 旧版本画像的往返字节、规范化 JSON 与摘要均不受影响；显式 null 在规范化时拒绝。
+	CookieJar             json.RawMessage     `json:"CookieJar,omitempty"`
+	WorkspaceRouting      json.RawMessage     `json:"WorkspaceRouting,omitempty"`
+	TurnMetadata          json.RawMessage     `json:"TurnMetadata,omitempty"`
+	ClientMetadata        json.RawMessage     `json:"ClientMetadata,omitempty"`
+	TurnState             json.RawMessage     `json:"TurnState,omitempty"`
+	WebSocketRetry        json.RawMessage     `json:"WebSocketRetry,omitempty"`
+	WebSocketContinuation json.RawMessage     `json:"WebSocketContinuation,omitempty"`
+	Transports            []SnapshotTransport `json:"Transports"`
+	Endpoints             []SnapshotEndpoint  `json:"Endpoints"`
+	Digest                string              `json:"Digest"`
 }
 
 type SnapshotEndpoint struct {
@@ -134,6 +143,19 @@ type SnapshotFeatures struct {
 }
 
 var ErrTrailingData = errors.New("快照后存在多余数据")
+
+// optionalSectionFields 按 OptionalSectionNames 的顺序返回可选节字段指针。
+func (doc *SnapshotDoc) optionalSectionFields() []*json.RawMessage {
+	return []*json.RawMessage{
+		&doc.CookieJar,
+		&doc.WorkspaceRouting,
+		&doc.TurnMetadata,
+		&doc.ClientMetadata,
+		&doc.TurnState,
+		&doc.WebSocketRetry,
+		&doc.WebSocketContinuation,
+	}
+}
 
 // ParseSnapshot 严格解析：未知字段失败，且**必须**在一个 JSON 值后到达 EOF。
 //

@@ -261,9 +261,10 @@ def _validate_p0_assertions(value: Any, *, allow_historical: bool = False) -> di
 
 
 def _validate_implementation_assertions(value: Any) -> dict[str, Any]:
+    optional = {key for key in ("build_inputs", "reuse") if isinstance(value, Mapping) and key in value}
     assertions = _expect(
         value,
-        {"git_commit", "source_tree_sha256", "target_architecture", "gates"},
+        {"git_commit", "source_tree_sha256", "target_architecture", "gates"} | optional,
         "VC-4 assertions",
     )
     if not isinstance(assertions["git_commit"], str) or not re.fullmatch(
@@ -290,6 +291,30 @@ def _validate_implementation_assertions(value: Any) -> dict[str, Any]:
     ):
         raise VCReceiptError("VC-4 未闭合 check-egress-spec 公共门禁")
     assertions["gates"] = normalized
+    if "build_inputs" in optional:
+        from . import codex_upgrade_candidate_build as build
+        try:
+            inputs = build.validate_implementation_inputs(assertions["build_inputs"])
+        except build.CandidateBuildError as error:
+            raise VCReceiptError(str(error)) from error
+        if inputs["source_tree_sha256"] != assertions["source_tree_sha256"] or inputs["target_architecture"] != assertions["target_architecture"]:
+            raise VCReceiptError("实现测试输入与源码树／架构断言不同")
+    if "reuse" in optional:
+        if "build_inputs" not in optional:
+            raise VCReceiptError("复用实现测试必须冻结完整构建输入")
+        reuse = _expect(assertions["reuse"], {"schema_version", "reused_from", "target_revision", "source_build_receipt",
+            "source_implementation", "mode", "changed_inputs", "execute_gate_ids", "reuse_gate_ids"}, "实现测试复用")
+        if reuse["schema_version"] != "codex-implementation-test-reuse/v1" or reuse["mode"] not in {"all", "target_platform"}:
+            raise VCReceiptError("实现测试复用模式非法")
+        if not re.fullmatch(r"r[1-9][0-9]*", str(reuse["reused_from"])):
+            raise VCReceiptError("实现测试 reused_from 非法")
+        for key in ("execute_gate_ids", "reuse_gate_ids", "changed_inputs"):
+            rows = reuse[key]
+            if not isinstance(rows, list) or any(not isinstance(item, str) for item in rows) or rows != sorted(set(rows)):
+                raise VCReceiptError(f"实现测试复用 {key} 未闭合")
+        if (set(reuse["execute_gate_ids"]) & set(reuse["reuse_gate_ids"])
+                or sorted(reuse["execute_gate_ids"] + reuse["reuse_gate_ids"]) != ids):
+            raise VCReceiptError("实现测试执行／复用集合未精确覆盖门禁")
     return assertions
 
 
@@ -416,6 +441,8 @@ def _expected_roles(kind: str, purpose: str, assertions: Mapping[str, Any]) -> s
             return set(HISTORICAL_P0_EVIDENCE_ROLES)
         return set(P0_EVIDENCE_ROLES)
     if kind == "implementation_tests":
+        if "reuse" in assertions:
+            return set() if assertions["reuse"]["mode"] == "all" else {"implementation_tests"}
         return {"check_egress_spec", "implementation_tests"}
     if kind == "private_archive":
         return {"archive_inventory", "restore_replay"}
@@ -661,11 +688,133 @@ def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str,
     return receipt
 
 
-def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
+def _file_binding(path: Path) -> dict[str, Any]:
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise VCReceiptError(f"复用来源必须是可信绝对普通文件：{path}")
+    return {"path": str(path), "sha256": file_sha256(path), "bytes": path.stat().st_size}
+
+
+def _bound_json(binding: Any, label: str) -> tuple[Path, dict[str, Any]]:
+    binding = _expect(binding, {"path", "sha256", "bytes"}, label)
+    path = Path(str(binding["path"]))
+    if _file_binding(path) != binding:
+        raise VCReceiptError(f"{label} 摘要或大小漂移")
+    return path, _read_json(path, label)
+
+
+def validate_build_input_binding(binding: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, Any]:
+    """构建读侧交叉核对小收据中的输入；完整证据重放仍由既有读侧执行。"""
+
+    root = _private_root(Path(binding["evidence_root"]))
+    path = _inside(root, binding["receipt"]["path"], "实现测试收据")
+    expected = {**binding["receipt"], "path": str(path)}
+    if _file_binding(path) != expected:
+        raise VCReceiptError("实现测试收据文件绑定漂移")
+    receipt = validate_receipt(_read_json(path, "实现测试收据"), allow_historical=True)
+    if (receipt["receipt_digest"] != binding["receipt_digest"] or receipt["kind"] != "implementation_tests"
+            or receipt["assertions"].get("build_inputs") != inputs):
+        raise VCReceiptError("实现测试收据未绑定本构建的完整输入")
+    return receipt
+
+
+def _reuse_context(target_revision_path: Path, current_inputs: Mapping[str, Any], seen: set[Path]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """从已 COMMIT revision 的直接前序取得可信测试，不执行旧镜像或重新装配旧制品。"""
+
+    from . import codex_upgrade_vc_artifacts as artifacts
+    from . import codex_upgrade_candidate_build as build
+    try:
+        target_binding = _file_binding(target_revision_path)
+        target = artifacts.validate_candidate_revision(_read_json(target_revision_path, "目标 revision"))
+        campaign = target_revision_path.parents[4]
+        if target_revision_path != campaign / "control/vc/revisions" / f"r{target['revision']}" / "revision.json":
+            raise VCReceiptError("目标 revision 路径不符合 Campaign 边界")
+        supersedes = target["supersedes"]
+        if not isinstance(supersedes, Mapping):
+            raise VCReceiptError("r1 没有可复用的前序 revision")
+        old_id = supersedes["candidate_id"]
+        previous_path = campaign / "control/vc/revisions" / f"r{supersedes['revision']}" / "revision.json"
+        previous = artifacts.validate_candidate_revision(_read_json(previous_path, "前序 revision"))
+        for path, record in ((target_revision_path, target), (previous_path, previous)):
+            commit_path = path.with_name("COMMIT")
+            _file_binding(commit_path)
+            commit = artifacts.validate_candidate_revision_commit(_read_json(commit_path, "revision COMMIT"))
+            if any(commit[key] != record[key] for key in ("campaign_id", "revision", "candidate_id", "record_sha256")):
+                raise VCReceiptError("实现测试复用的 revision 尚未 COMMIT 或绑定不一致")
+        if (previous["record_sha256"] != target["previous_revision_sha256"]
+                or previous["candidate_id"] != old_id or previous["campaign_id"] != target["campaign_id"]
+                or previous["vc3_stage_receipt"] != target["vc3_stage_receipt"]):
+            raise VCReceiptError("实现测试复用的前序 revision 或 VC-3 绑定漂移")
+        invalidation_path = campaign / "candidates" / old_id / "invalidation.json"
+        if (supersedes["invalidation_receipt"]["path"] != invalidation_path.relative_to(campaign).as_posix()
+                or file_sha256(invalidation_path) != supersedes["invalidation_receipt"]["sha256"] or invalidation_path.is_symlink()):
+            raise VCReceiptError("实现测试复用的 invalidation 绑定漂移")
+        invalidation = artifacts.validate_candidate_invalidation(_read_json(invalidation_path, "前序作废记录"))
+        if (invalidation["campaign_id"] != target["campaign_id"] or invalidation["candidate_id"] != old_id
+                or invalidation["revision"] != previous["revision"]):
+            raise VCReceiptError("实现测试复用的作废对象与前序 revision 不一致")
+        build_path = campaign / "candidates" / old_id / "build-receipt.json"
+        build_binding = _file_binding(build_path)
+        if invalidation["identity_snapshot"]["build_receipt_sha256"] != build_binding["sha256"]:
+            raise VCReceiptError("前序构建收据与作废时冻结摘要不同")
+        previous_build = artifacts.validate_candidate_build_receipt(_read_json(build_path, "前序构建收据"))
+        implementation = previous_build["implementation_tests"]
+        source = _replay(Path(implementation["evidence_root"]), implementation["receipt"]["path"], seen)
+        previous_inputs = previous_build["build"].get("inputs")
+        if previous_inputs is None:
+            raise VCReceiptError("历史构建没有完整输入证明，必须重跑实现测试")
+        validate_build_input_binding(implementation, previous_inputs)
+        if (source["subject"]["candidate_id"] != old_id or previous_build["candidate_id"] != old_id
+                or source["subject"]["campaign_id"] != target["campaign_id"]
+                or previous_build["campaign_id"] != target["campaign_id"]):
+            raise VCReceiptError("前序实现测试的 Candidate／Campaign 身份不一致")
+        plan = build.implementation_retest_plan(previous_inputs, current_inputs,
+            [row["gate_id"] for row in source["assertions"]["gates"]])
+        proof = {"schema_version": "codex-implementation-test-reuse/v1", "reused_from": f"r{supersedes['revision']}",
+            "target_revision": target_binding, "source_build_receipt": build_binding,
+            "source_implementation": implementation, **plan}
+        return proof, source
+    except (artifacts.VCArtifactError, build.CandidateBuildError, KeyError, IndexError) as error:
+        raise VCReceiptError(f"实现测试复用来源不可信：{error}") from error
+
+
+def plan_implementation_reuse(target_revision_path: Path, current_inputs: Mapping[str, Any]) -> dict[str, Any]:
+    """返回真实输入决定的执行／复用集合，调用方不得自行删减 execute。"""
+
+    return _reuse_context(target_revision_path, current_inputs, set())[0]
+
+
+def build_reused_implementation_facts(target_revision_path: Path, current_inputs: Mapping[str, Any],
+                                     executed_gates: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """给当前 Candidate 签发显式承接 facts，保留原测试的身份、结果和证据引用。"""
+
+    proof, source = _reuse_context(target_revision_path, current_inputs, set())
+    if proof["mode"] == "full":
+        raise VCReceiptError("源码、依赖或工具链输入变化，必须重跑全部实现测试")
+    target = _read_json(target_revision_path, "目标 revision")
+    old_gates = {row["gate_id"]: row for row in source["assertions"]["gates"]}
+    executed = {row["gate_id"]: dict(row) for row in executed_gates}
+    if len(executed) != len(executed_gates) or sorted(executed) != proof["execute_gate_ids"]:
+        raise VCReceiptError("当前成功门禁未精确覆盖目标平台重跑集合")
+    for gate_id, row in executed.items():
+        _command_gate(row, gate_id)
+        if any(row[key] != old_gates[gate_id][key] for key in ("kind", "command")):
+            raise VCReceiptError("目标平台门禁命令与批准集合不同")
+    gates = [executed.get(gate_id, old_gates[gate_id]) for gate_id in sorted(old_gates)]
+    assertions = {key: source["assertions"][key] for key in ("git_commit", "source_tree_sha256", "target_architecture")}
+    assertions.update({"gates": gates, "build_inputs": dict(current_inputs), "reuse": proof})
+    return validate_facts({"schema_version": FACTS_SCHEMA, "kind": "implementation_tests",
+        "subject": {**source["subject"], "candidate_id": target["candidate_id"]}, "assertions": assertions,
+        "evidence": [] if proof["mode"] == "all" else [{"role": "implementation_tests", "path": "logs/implementation.log"}]})
+
+
+def _replay(root: Path, receipt_relative: str, seen: set[Path]) -> dict[str, Any]:
     """重放收据自摘要及其逐文件证据绑定。"""
 
     evidence_root = _private_root(root)
     receipt_path = _inside(evidence_root, receipt_relative, "receipt")
+    if receipt_path in seen or len(seen) >= 128:
+        raise VCReceiptError("实现测试复用链循环或超出上限")
+    seen = seen | {receipt_path}
     receipt = validate_receipt(_read_json(receipt_path, "receipt"), allow_historical=True)
     for item in receipt["evidence"]:
         path = _inside(evidence_root, item["path"], f"evidence.{item['role']}")
@@ -676,7 +825,33 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
             or file_sha256(path) != item["sha256"]
         ):
             raise VCReceiptError(f"evidence.{item['role']} 摘要或大小漂移")
+    if receipt["kind"] == "implementation_tests" and "reuse" in receipt["assertions"]:
+        reuse = receipt["assertions"]["reuse"]
+        target_path, target = _bound_json(reuse["target_revision"], "目标 revision")
+        expected, source = _reuse_context(target_path, receipt["assertions"]["build_inputs"], seen)
+        if expected != reuse or expected["mode"] == "full":
+            raise VCReceiptError("实现测试复用声明与前序来源或输入差异不同")
+        subject = {**source["subject"], "candidate_id": target["candidate_id"]}
+        if subject != receipt["subject"]:
+            raise VCReceiptError("实现测试复用未绑定当前 Candidate 或同一 Campaign")
+        for key in ("git_commit", "source_tree_sha256", "target_architecture"):
+            if receipt["assertions"][key] != source["assertions"][key]:
+                raise VCReceiptError("实现测试复用改变了源码或平台")
+        old_gates = {row["gate_id"]: row for row in source["assertions"]["gates"]}
+        for row in receipt["assertions"]["gates"]:
+            prior = old_gates[row["gate_id"]]
+            if row["gate_id"] in reuse["reuse_gate_ids"]:
+                if row != prior:
+                    raise VCReceiptError("复用门禁结果与前序收据不同")
+            elif any(row[key] != prior[key] for key in ("kind", "command")):
+                raise VCReceiptError("目标平台门禁命令发生变化")
     return receipt
+
+
+def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
+    """重放原始证据及显式复用链；旧收据继续走原有逐文件绑定校验。"""
+
+    return _replay(root, receipt_relative, set())
 
 
 def _build_parser() -> argparse.ArgumentParser:

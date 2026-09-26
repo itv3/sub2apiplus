@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-runtime-egress-bundle-v1.json",
+  "title": "持久出口守护运行包",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bundle_sha256",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-runtime-egress-bundle/v1"
+    },
+    "bundle_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "files": {
+      "type": "object",
+      "minProperties": 3,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  }
+}

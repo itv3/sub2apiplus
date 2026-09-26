@@ -34,8 +34,100 @@ from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
+# R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）、
+# 0.156.1 录制证据零请求回放的 VC-1 取证链与 VC-1 连续恢复链。
+REAL_CHAIN_IDS = (
+    "vc-chain.full-validation-only",
+    "vc-chain.late-stage-faults",
+    "vc-chain.vc1-capture",
+    "vc-chain.vc1-recovery-chain",
+)
 # (场景名, 说明, 测试模块, 测试类, 测试方法)
 SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "runtime-egress.kernel-faults",
+        "隔离双端内核：指定路径、分别阻断、路由与 NAT 漂移、新旧连接及重建首包",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressKernelTests",
+        "test_r15_isolated_kernel_failure_and_recovery_chain",
+    ),
+    (
+        "runtime-egress.guard-recovery",
+        "两端真实守护逻辑驱动内核租期，共享修复后重新逐容器验证",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressKernelTests",
+        "test_r15_guard_drives_real_kernel_leases_and_requires_fresh_recovery",
+    ),
+    (
+        "runtime-egress.capture-pause",
+        "运行中出口故障停止采集并在原清理预算内结束",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_active_capture_cleans_up_without_waiting_for_original_deadline",
+    ),
+    (
+        "runtime-egress.immutable-pause",
+        "修复网络不能自行恢复原 run，暂停事实不可覆盖",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_pause_is_immutable_and_repair_does_not_resume_same_run",
+    ),
+    (
+        "runtime-egress.history-equivalence",
+        "同一工具包读取多个出口策略，旧 v7 收据只读回放并保持等价",
+        "tools.official_client_capture.tests.test_codex_upgrade_arm64_environment_receipt",
+        "Arm64EnvironmentReceiptTests",
+        "test_r15_policy_switch_preserves_equivalence_and_history_without_runtime_reads",
+    ),
+    (
+        "runtime-egress.docker-supervisor",
+        "真实父监督器与 Docker 重启重建等待，故障清理后原 run 不可恢复",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "EgressProcessTests",
+        "test_real_parent_waits_for_docker_restart_rebuild_and_never_resumes_after_fault",
+    ),
+    (
+        "runtime-egress.job-window",
+        "按暂停窗口逐 Job 对账，保留窗口外结果并拒绝追认窗口内请求",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_reconciliation_keeps_only_completed_jobs_before_uncertain_window",
+    ),
+    (
+        "runtime-egress.reconcile-resume",
+        "出口暂停后沿真实 checkpoint 与两本账对账，批准后仅派发窗口内任务",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressRecoveryTests",
+        "test_pause_reconciliation_approval_preserves_only_trusted_job",
+    ),
+    (
+        "vc-chain.full-validation-only",
+        "VC-0 复用导入、VC-2 三批、候选构建、真实评估与 VC-6 只读交付连续链",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain",
+        "FullValidationOnlyChainTests",
+        "test_full_validation_only_chain",
+    ),
+    (
+        "vc-chain.late-stage-faults",
+        "连续链在 VC-2 分类、VC-4 构建登记、VC-5 验收各注入一次父失败，逐次对账恢复直至 VC-6 交付",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_late_stage_faults",
+        "LateStageFaultChainTests",
+        "test_late_stage_parent_failures_recover_to_delivery",
+    ),
+    (
+        "vc-chain.vc1-capture",
+        "VC-0 收口真实建 Formal Campaign，0.156.1 录制官方证据零请求回放首批，断言包、seal 门禁（含延后项）、入账与 VC-2 分类草案",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_vc1_recorded_chain",
+        "VC1RecordedCaptureChainTests",
+        "test_vc1_capture_from_recorded_evidence",
+    ),
+    (
+        "vc-chain.vc1-recovery-chain",
+        "录制回放连续恢复：首批超时、预览失败重派、补跑失败、控制面与证据语义修复部署、epoch、封存与分类",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_vc1_recorded_chain",
+        "VC1RecordedRecoveryChainTests",
+        "test_vc1_recovery_chain_from_recorded_evidence",
+    ),
     (
         "reconcile-attempt.recoverable-preview-approve-resume",
         "孤儿 attempt 先入账后判定为可恢复，零请求预览、批准与 resume 门禁",
@@ -58,11 +150,32 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_b0_reconcile_attempt_unresolved_accounting_blocks_and_terminates",
     ),
     (
-        "deadline-interruption.attempt-failed-before-abandon",
-        "deadline 到期：metadata-only attempt_failed 先于 stage_abandoned 与 stop_the_line",
+        "deadline-interruption.attempt-failed-before-pause",
+        "deadline 到期：metadata-only attempt_failed 入账后只暂停，保留原阶段",
         "tools.official_client_capture.tests.test_codex_upgrade",
         "CodexUpgradeTest",
-        "test_b0_reconcile_attempt_deadline_expired_fails_attempt_before_abandoning_stage",
+        "test_b0_reconcile_attempt_deadline_expired_records_failure_and_pauses",
+    ),
+    (
+        "deadline-extension.sigkill-resume",
+        "真实到期、批准两账间 SIGKILL、幂等补齐后原 Campaign 实际派发",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_deadline_extension",
+        "DeadlineExtensionChainTests",
+        "test_cli_sigkill_extension_resumes_original_campaign",
+    ),
+    (
+        "deadline-extension.runtime-stage-boundary",
+        "阶段截止早于父 Campaign 截止时，真实动作仍按阶段边界停止",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_deadline_extension",
+        "DeadlineExtensionChainTests",
+        "test_running_command_honors_stage_before_campaign_deadline",
+    ),
+    (
+        "deadline-extension.watchdog-stage-boundary",
+        "独立 watchdog 持续采用三层最早截止，父时间锚保持不变",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_deadline_extension",
+        "DeadlineExtensionChainTests",
+        "test_watchdog_honors_stage_before_campaign_deadline",
     ),
     (
         "accounting.precise-keys-enter-once",
@@ -172,10 +285,31 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "vc-chain.failed-batch-abandons-stage",
-        "动作失败：父 run 写 stage_abandoned＋stop_the_line，后续批次被拒",
+        "动作失败：父 run 写 stage_abandoned＋stage_review_required，对账前后续批次被拒",
         "tools.official_client_capture.tests.test_codex_upgrade",
         "CodexUpgradeTest",
         "test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch",
+    ),
+    (
+        "stage-recovery.committed-classify",
+        "classify COMMIT 后失败，原 Campaign 对账后 N+1 重派并复用草案，新增请求为零",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_stage_recovery",
+        "StageRecoveryChainTests",
+        "test_classify_commit_failure_reconciles_and_redispatches",
+    ),
+    (
+        "segment-recovery.completed-job-reuse",
+        "三段连续恢复只执行 2、1、0 个 Job，复用 0、1、2 个；真实 SIGKILL 后批准续作及增量封存",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_segment_reuse",
+        "SegmentReuseChainTests",
+        "test_three_segments_reuse_completed_jobs_and_seal",
+    ),
+    (
+        "stage-recovery.interrupted-closeout",
+        "stage_abandoned 后 SIGKILL，重入只补一条 stage_review_required",
+        "tools.official_client_capture.tests.test_codex_upgrade_stage_recovery",
+        "StageRecoveryTests",
+        "test_sigkill_between_abandon_and_review_appends_once",
     ),
     (
         "vc-chain.admission-before-any-write",
@@ -264,7 +398,47 @@ def run_scenario(scenario: tuple[str, str, str, str, str]) -> dict[str, Any]:
         record["error"] = problems[0][-2000:]
     if result.skipped:
         record["error"] = "场景被跳过"
+        if name in REAL_CHAIN_IDS:
+            record["status"] = "uncertified"
+    if hasattr(case, "real_chain_metrics"):
+        record["metrics"] = case.real_chain_metrics
     return record
+
+
+def real_chain_registration() -> list[dict[str, str]]:
+    """冻结本发布包登记的链集合；后续增加链不得改变历史包的回放要求。"""
+
+    return [{"id": name, "test": f"{scenario[2]}:{scenario[3]}.{scenario[4]}"}
+            for name in REAL_CHAIN_IDS
+            for scenario in SCENARIOS if scenario[0] == name]
+
+
+def real_chain_coverage(payload: Mapping[str, Any], *, historical: bool = False) -> list[dict[str, Any]]:
+    """新签发要求当前登记；历史回放只核验当时绑定的集合，缺失与 skip 均拒绝。"""
+
+    rows = payload.get("scenarios")
+    if not isinstance(rows, list):
+        raise CertificationError("路径认证缺少逐场景结果")
+    registration = payload.get("real_chain_registration")
+    if (not isinstance(registration, list) or not registration
+            or any(not isinstance(item, Mapping) or set(item) != {"id", "test"}
+                   or not isinstance(item["id"], str) or not item["id"].startswith("vc-chain.")
+                   or not isinstance(item["test"], str) or not item["test"] for item in registration)
+            or len({item["id"] for item in registration}) != len(registration)):
+        raise CertificationError("真实链登记集合缺失或非法")
+    if not historical and registration != real_chain_registration():
+        raise CertificationError("真实链登记集合与当前发布包不一致")
+    coverage: list[dict[str, Any]] = []
+    for entry in registration:
+        name = entry["id"]
+        matches = [row for row in rows if isinstance(row, Mapping) and row.get("name") == name]
+        if len(matches) != 1 or matches[0].get("status") != "passed":
+            raise CertificationError(f"已登记的真实链未认证：{name}")
+        expected_test = entry["test"]
+        if matches[0].get("test") != expected_test:
+            raise CertificationError(f"真实链测试入口与登记不一致：{name}")
+        coverage.append({"id": name, "test": expected_test, "status": "passed"})
+    return coverage
 
 
 def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
@@ -421,6 +595,7 @@ def run_certification(
             "policy_sha256": activation.get("policy_sha256"),
         },
         "campaign_run_rehearsal_receipt": rehearsal_binding,
+        "real_chain_registration": real_chain_registration(),
         "scenarios": report,
         "scenario_count": len(report),
         "failed_scenarios": failed,

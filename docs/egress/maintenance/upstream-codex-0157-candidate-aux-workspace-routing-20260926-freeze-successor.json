@@ -1,0 +1,112 @@
+{
+  "base_commit": "d8a80f1cfe0b36d804fbe6d7dd3f3f4b87236919",
+  "changed_path_count": 4,
+  "current_commit": "9fd2cf139ed618ad5ed9b629588e2b7834a101dd",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4231,
+  "frozen_path_count": 1399,
+  "identity_sha256": "483b8aea1efa16a24812fa9cdba62a13d30e52826f9ab5b05f30fb9a92470001",
+  "issued_at_utc": "2026-09-26T05:12:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_candidate_aux_capture.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-candidate-aux-workspace-routing-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_candidate_aux_capture.sh",
+      "predecessor_sha256s": [
+        "0f0e93791d07a28dda2b0df8859ff7492a0e585c0ef36ca69504c78e96671f40"
+      ],
+      "reason": "候选辅助采集适配 0.156.1 起的工作区路由发现（accounts/check 合成与 A12 计数）与 legacy compact 删除（A09 不再发 legacy 请求） path=tools/official_client_capture/run_candidate_aux_capture.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "506faec445f5651ddea7ddfbcf175268fd9873e7fd2b1282bc2ad9627f2282c4"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_candidate_aux_capture.py",
+      "predecessor_sha256s": [
+        "410ca65049217ddaa8689a1396a35bda9d82274a2479072abbb59d719b2f768c"
+      ],
+      "reason": "候选辅助采集适配 0.156.1 起的工作区路由发现（accounts/check 合成与 A12 计数）与 legacy compact 删除（A09 不再发 legacy 请求） path=tools/official_client_capture/tests/test_candidate_aux_capture.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3152830a459c5ffe5095dac8b50c9063c62fa5cb20880eef324d8f839986f527"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "predecessor_sha256s": [
+        "4321ed0130e543e749ff00ed1e71b8a290060b8ebad2ea3eb04bf1082081c5a6"
+      ],
+      "reason": "候选辅助采集适配 0.156.1 起的工作区路由发现（accounts/check 合成与 A12 计数）与 legacy compact 删除（A09 不再发 legacy 请求） path=tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0157-relay-task-retention-egress-horizon-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1aabec275082a19525b0a641ecb0e5a3a02c896ad12c8cd407b0767df5d215b4"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "predecessor_sha256s": [
+        "4819aa6b7e51658de6c3c06625841876debef6db1dfc94ef4da626ad2e351239"
+      ],
+      "reason": "候选辅助采集适配 0.156.1 起的工作区路由发现（accounts/check 合成与 A12 计数）与 legacy compact 删除（A09 不再发 legacy 请求） path=tools/official_client_capture/upstream_byte_relay.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-relay-task-retention-egress-horizon-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "873dbf21dbfcd59cc76dc4395d4d92f9d6dbd07821a296e4d70876a1511bf7cc"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}

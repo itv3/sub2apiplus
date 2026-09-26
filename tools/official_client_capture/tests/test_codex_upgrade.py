@@ -24,6 +24,7 @@ from unittest import mock
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture.tests import project_ledger_fixture
+from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
@@ -428,6 +429,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=recovery_id,
                 prefix="p0",
+                rust_tls_codex_version="0.147.0",
             )
 
             preflight_arguments = self._campaign_arguments(
@@ -4444,7 +4446,7 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_current_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
-        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0"):
+        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0"):
             suffix = version.replace(".", "_")
             scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
             scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -4492,7 +4494,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
-            if version in {"0.149.1", "0.151.0", "0.154.0"}:
+            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0"}:
                 auxiliary = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -4510,7 +4512,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 wham_command = wham_job["steps"][1]["argv"][2]
                 self.assertIn("--entrypoint python3", wham_command)
                 self.assertNotIn("{runtime_image} python3 ", wham_command)
-                if version == "0.154.0":
+                if version in {"0.154.0", "0.156.1", "0.157.0"}:
                     self.assertIn(
                         "run_root={repo_root}/runs/{campaign_id}-official-wham-safe",
                         wham_command,
@@ -7536,6 +7538,48 @@ class CodexUpgradeTest(unittest.TestCase):
             updated["capture_jobs"].append(job)
         return updated
 
+    def test_new_campaign_requires_current_p0_producer_and_target_probe_version(self) -> None:
+        """R15：新建或承接 Campaign 的 P0 必须由当前 producer 采集，Rust TLS 探针使用本轮目标版本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "p0-receipt.json").write_text("{}\n", encoding="utf-8")
+            arguments = argparse.Namespace(arm64_environment_root=root, arm64_environment_receipt=root / "p0-receipt.json",
+                                           target_version="0.156.1")
+            current = {"producer": {"version": codex_upgrade.codex_upgrade_arm64_environment_receipt.PRODUCER_VERSION},
+                       "rust_tls_probe": {"binary": "/opt/codex-0.156.1/bin/codex", "codex_version": "0.156.1"}}
+            cases = (
+                (current, None),
+                ({**current, "producer": {"version": "7"}}, "当前环境 producer"),
+                ({**current, "rust_tls_probe": {"binary": "/opt/codex-0.154.0/bin/codex", "codex_version": "0.154.0"}},
+                 "Rust TLS 探针版本"),
+                ({"producer": current["producer"]}, "Rust TLS 探针版本"),
+            )
+            for receipt, message in cases:
+                with self.subTest(message=message), mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt, "replay", return_value=receipt,
+                ):
+                    if message is None:
+                        codex_upgrade._require_current_p0_environment(arguments)
+                    else:
+                        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, message):
+                            codex_upgrade._require_current_p0_environment(arguments)
+
+    def test_plan_rejects_p0_probe_for_other_client_version(self) -> None:
+        """P0 探针用了非本轮目标版本的客户端时，建 Campaign 在写入任何产物前拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            arguments = self._campaign_arguments(root, campaign_mode="preflight_only")
+            mismatched = create_arm_receipt(root / "control" / "arm64-p0-other", phase="p0",
+                                            subject_id=arguments.campaign_id, prefix="p0",
+                                            rust_tls_codex_version="0.145.0")
+            arguments.arm64_environment_root = mismatched.parent
+            arguments.arm64_environment_receipt = mismatched
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Rust TLS 探针版本"):
+                codex_upgrade.create_campaign(arguments)
+            self.assertFalse((arguments.campaign_dir / "campaign.json").exists())
+
     def _campaign_arguments(
         self,
         root: Path,
@@ -7665,6 +7709,8 @@ class CodexUpgradeTest(unittest.TestCase):
             phase="p0",
             subject_id=campaign_id,
             prefix="p0",
+            # P0 由当前 producer 采集，Rust TLS 探针使用本轮目标版本。
+            rust_tls_codex_version=target_version,
         )
         runtime_image = f"capture-runtime@sha256:{'b' * 64}"
         target_sha256 = hashlib.sha256(binary_bytes).hexdigest()
@@ -9419,6 +9465,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "revision-open",
                 "invalidate-candidate",
                 "evaluation-recover",
+                # R8：预算延期与显式放弃是批次之间的控制面命令。
+                "deadline-extend",
+                "campaign-abandon",
                 "status",
                 "resume",
             },
@@ -10843,6 +10892,526 @@ class CodexUpgradeTest(unittest.TestCase):
             )
         )
 
+    def test_historical_result_file_dependencies_exempt_low_risk_components(self) -> None:
+        """逐文件依赖对低风险组件只核冻结摘要，当前摘要变化不作废已完成结果。
+
+        0.156.1 VC-1：relay 类 Job 的依赖闭包经注释引用计入编排器与监督器，采集后
+        control 层修复改了这两个文件，逐文件比对不豁免低风险组件时 27 个已完成
+        官方结果全部无法复用。产出侧文件变化仍必须拒绝。
+        """
+
+        job = Job(
+            job_id="official-relay-ws-default",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                        "codex_upgrade_supervisor.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+
+        def identity(**changed: str) -> dict[str, object]:
+            digests = {
+                "codex_upgrade.py": "3" * 64,
+                "codex_upgrade_supervisor.py": "8" * 64,
+                "run_h1_wire_probe.sh": "1" * 64,
+                "run_sub2api_direct_matrix.sh": "2" * 64,
+            }
+            digests.update(
+                {name.replace("__", ".").replace("_dash_", "-"): value for name, value in changed.items()}
+            )
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(digests.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+            }
+
+        frozen = identity()
+        runtime_identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job,
+            identity=runtime_identity,
+            tool_identity=frozen,
+        )
+        self.assertTrue(
+            {"codex_upgrade.py", "codex_upgrade_supervisor.py"}.issubset(
+                metadata["tool_dependency_files"]
+            )
+        )
+        result = {
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+
+        def matches(result_value: dict, current: dict) -> bool:
+            return codex_upgrade._historical_result_metadata_matches(
+                result_value,
+                job,
+                runtime_identity,
+                frozen,
+                metadata["input_sha256"],
+                current_tool=current,
+            )
+
+        # 编排器与监督器（低风险组件）在采集后变化：已完成结果仍可复用。
+        low_risk_drift = identity(
+            codex_upgrade__py="5" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        self.assertTrue(matches(result, low_risk_drift))
+        # 产出侧脚本变化：必须拒绝。
+        producer_drift = identity(
+            codex_upgrade__py="5" * 64, run_h1_wire_probe__sh="4" * 64
+        )
+        self.assertFalse(matches(result, producer_drift))
+        # 低风险文件也必须证明结果来自冻结工具：记录摘要与冻结摘要不一致即拒绝。
+        forged = json.loads(json.dumps(result))
+        forged["tool_dependency_files"]["codex_upgrade_supervisor.py"] = "7" * 64
+        self.assertFalse(matches(forged, low_risk_drift))
+
+    def test_rereused_result_is_validated_against_original_execution(self) -> None:
+        """再次承接已复用的结果时，沿承接链用原始执行结果验证元数据。
+
+        0.156.1 VC-1 第三轮：第二轮承接把 relay 结果的逐文件依赖重绑为当时的编排器、
+        监督器摘要；控制面再次修复后，这些结果对不上 Campaign 冻结摘要，27 个已完成的
+        官方结果全部无法复用。原始执行结果仍由冻结工具产出，应回溯验证；承接结果与
+        原始结果的证据字段不一致、或出处收据被改动时仍必须拒绝。
+        """
+
+        job = Job(
+            job_id="official-relay-ws-default",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                        "codex_upgrade_supervisor.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+
+        def tool(**changed: str) -> dict[str, object]:
+            digests = {
+                "codex_upgrade.py": "3" * 64,
+                "codex_upgrade_supervisor.py": "8" * 64,
+                "run_h1_wire_probe.sh": "1" * 64,
+            }
+            digests.update(
+                {name.replace("__", "."): value for name, value in changed.items()}
+            )
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(digests.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entry_count": len(entries),
+                "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+                "orchestrator_closures": {
+                    "wire_producer": {"closure_sha256": "7" * 64}
+                },
+            }
+
+        frozen = tool()
+        # 第二、三轮承接时的工具：编排器、监督器先后为控制面修复改动，产出侧不变。
+        second = tool(
+            codex_upgrade__py="5" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        third = tool(
+            codex_upgrade__py="6" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        current = tool(
+            codex_upgrade__py="4" * 64, codex_upgrade_supervisor__py="2" * 64
+        )
+        identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job, identity=identity, tool_identity=frozen
+        )
+        original = {
+            "id": job.job_id,
+            "status": "complete",
+            "disposition": "executed",
+            "evidence_sha256": "a" * 64,
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+        attempt_ids = (
+            "20260925T050731Z-aaaaaaaaaaaaaaaa",
+            "20260925T090527Z-bbbbbbbbbbbbbbbb",
+            "20260925T101500Z-cccccccccccccccc",
+        )
+        manifest = {"campaign_id": "c-same", "tool_identity": frozen}
+
+        def run(campaign_dir: Path, attempt_id: str, payload: dict) -> list[dict]:
+            root = campaign_dir / "official" / "attempts" / attempt_id
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    side_effect=[manifest, manifest],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_ordered_capture_attempts",
+                    return_value=[(root, {})],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(root, payload),
+                ),
+            ):
+                return codex_upgrade._prior_complete_results(
+                    campaign_dir,
+                    Path("official"),
+                    [job],
+                    phase="official",
+                    candidate_id=None,
+                    identity=identity,
+                    tool_identity=current,
+                    expected_reuse_job_ids=[job.job_id],
+                    source_attempt_id=attempt_id,
+                )
+
+        def write_attempt(campaign_dir: Path, attempt_id: str, result: dict) -> Path:
+            root = campaign_dir / "official" / "attempts" / attempt_id
+            root.mkdir(parents=True)
+            receipt = root / "attempt.json"
+            receipt.write_text(
+                json.dumps(
+                    {"status": "failed", "identity": identity, "results": [result]}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return receipt
+
+        def carry(result: dict, receipt: Path, attempt_id: str, tool_identity: dict) -> dict:
+            carried = codex_upgrade._rebase_reused_result(
+                result, job, identity=identity, tool_identity=tool_identity
+            )
+            carried.update(
+                {
+                    "carried_from_attempt": attempt_id,
+                    "disposition": "reused",
+                    "source_receipt": {
+                        "path": f"official/attempts/{attempt_id}/attempt.json",
+                        "sha256": codex_upgrade.file_sha256(receipt),
+                        "bytes": receipt.stat().st_size,
+                    },
+                }
+            )
+            return carried
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory)
+            first_receipt = write_attempt(campaign_dir, attempt_ids[0], original)
+            second_result = carry(original, first_receipt, attempt_ids[0], second)
+            second_receipt = write_attempt(campaign_dir, attempt_ids[1], second_result)
+            second_payload = json.loads(second_receipt.read_text(encoding="utf-8"))
+
+            # 前提：承接结果的逐文件依赖已是第二轮工具摘要，直接按冻结身份验证会被拒绝。
+            self.assertFalse(
+                codex_upgrade._historical_result_metadata_matches(
+                    second_result,
+                    job,
+                    identity,
+                    frozen,
+                    str(second_result["execution_sha256"]),
+                    current_tool=current,
+                )
+            )
+            reused = run(campaign_dir, attempt_ids[1], second_payload)
+            self.assertEqual([item["id"] for item in reused], [job.job_id])
+            self.assertEqual(reused[0]["carried_from_attempt"], attempt_ids[1])
+            self.assertEqual(reused[0]["evidence_sha256"], "a" * 64)
+            self.assertEqual(
+                reused[0]["incremental_result_key"],
+                codex_upgrade._job_incremental_metadata(
+                    job, identity=identity, tool_identity=current
+                )["result_key"],
+            )
+
+            # 两跳承接链同样回溯到原始执行结果。
+            third_result = carry(second_result, second_receipt, attempt_ids[1], third)
+            third_receipt = write_attempt(campaign_dir, attempt_ids[2], third_result)
+            third_payload = json.loads(third_receipt.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["id"] for item in run(campaign_dir, attempt_ids[2], third_payload)],
+                [job.job_id],
+            )
+
+            # 承接结果与原始结果的证据字段不一致：不能借用原始结果的出处。
+            tampered = json.loads(json.dumps(second_payload))
+            tampered["results"][0]["evidence_sha256"] = "b" * 64
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                run(campaign_dir, attempt_ids[1], tampered)
+
+            # 出处收据被改动（摘要不符）：回溯失败，按承接结果本身验证而拒绝。
+            first_receipt.write_text(
+                first_receipt.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                run(campaign_dir, attempt_ids[1], second_payload)
+
+    def test_declared_tool_dependencies_replace_reference_scan(self) -> None:
+        """R16：作业声明显式依赖后只按清单取摘要，参数或注释里的文件名不再算依赖。
+
+        0.156.1 的 relay 作业经注释引用把编排器、监督器拉进依赖（26 → 176 个文件），
+        控制面一改就作废已完成结果。声明清单后依赖以清单为准；未知路径与缺少文件
+        清单都失败关闭；执行摘要不随声明变化，演练文档只在声明时写入该字段。
+        """
+
+        import dataclasses
+
+        from tools.official_client_capture import (
+            codex_upgrade_job_rehearsal_receipt as rehearsal,
+        )
+
+        tool = {
+            "entries": [
+                {"path": "capturelib/model.py", "sha256": "1" * 64},
+                {"path": "codex_upgrade.py", "sha256": "2" * 64},
+                {"path": "codex_upgrade_supervisor.py", "sha256": "3" * 64},
+                {"path": "run_h1_wire_probe.sh", "sha256": "4" * 64},
+            ]
+        }
+        legacy = Job(
+            job_id="official-relay-declared",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+        declared = dataclasses.replace(
+            legacy,
+            tool_dependencies=("capturelib/model.py", "run_h1_wire_probe.sh"),
+        )
+        # 旧算法：参数里出现的文件名即算依赖。
+        self.assertIn(
+            "codex_upgrade.py",
+            codex_upgrade._job_tool_dependency_files(legacy, tool),
+        )
+        self.assertEqual(
+            codex_upgrade._job_tool_dependency_files(declared, tool),
+            {"capturelib/model.py": "1" * 64, "run_h1_wire_probe.sh": "4" * 64},
+        )
+        self.assertEqual(
+            codex_upgrade._job_execution_sha256(legacy),
+            codex_upgrade._job_execution_sha256(declared),
+        )
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError, "不在受管工具清单中"
+        ):
+            codex_upgrade._job_tool_dependency_files(
+                dataclasses.replace(declared, tool_dependencies=("missing.py",)),
+                tool,
+            )
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "缺少文件清单"):
+            codex_upgrade._job_tool_dependency_files(declared, {"entries": []})
+        self.assertNotIn("tool_dependencies", rehearsal._job_document(legacy))
+        self.assertEqual(
+            rehearsal._job_document(declared)["tool_dependencies"],
+            ["capturelib/model.py", "run_h1_wire_probe.sh"],
+        )
+
+    def test_tool_dependency_declaration_validation(self) -> None:
+        """R16：显式依赖清单必须非空、排序去重、相对工具根的安全路径；schema 与校验器一致。"""
+
+        valid = ["capturelib/model.py", "run_h1_wire_probe.sh"]
+        self.assertEqual(
+            codex_upgrade._tool_dependency_declaration(valid, "测试"),
+            tuple(valid),
+        )
+        for invalid in (
+            [],
+            "run_h1_wire_probe.sh",
+            ["run_h1_wire_probe.sh", "capturelib/model.py"],
+            ["a.sh", "a.sh"],
+            ["/abs.sh"],
+            ["../escape.sh"],
+            ["capturelib/../escape.sh"],
+            ["./relative.sh"],
+            ["capturelib\\model.py"],
+            [1],
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "tool_dependencies"
+            ):
+                codex_upgrade._tool_dependency_declaration(invalid, "测试")
+        schema = json.loads(
+            (
+                Path(codex_upgrade.__file__).resolve().parent
+                / "codex_upgrade_scenarios.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        declared = schema["$defs"]["captureJob"]["properties"]["tool_dependencies"]
+        self.assertEqual(
+            declared["items"]["pattern"], codex_upgrade.TOOL_DEPENDENCY_PATH_RE.pattern
+        )
+        self.assertIn("tool_dependencies", codex_upgrade.SCENARIO_JOB_EXECUTION_FIELDS)
+
+    def test_official_label_vocabulary_reflects_target_declaration(self) -> None:
+        """R21：官方 seal 用目标版本标签声明的官方侧取值判定弃用值；缺声明失败关闭。
+
+        0.156.1 的声明把 variant=optional_missing 改为 v2_config_disabled（D8），0.154.0 仍保留。
+        """
+
+        vocabulary_0154, digest_0154 = codex_upgrade._official_label_vocabulary("0.154.0")
+        vocabulary_0156, digest_0156 = codex_upgrade._official_label_vocabulary("0.156.1")
+        self.assertIn("optional_missing", vocabulary_0154["variant"])
+        self.assertNotIn("optional_missing", vocabulary_0156["variant"])
+        self.assertIn("v2_config_disabled", vocabulary_0156["variant"])
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        self.assertEqual(
+            digest_0156,
+            codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_156_1.json"),
+        )
+        self.assertNotEqual(digest_0154, digest_0156)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "缺少证据标签声明"):
+            codex_upgrade._official_label_vocabulary("9.9.9")
+        retired, digests = codex_upgrade._retired_official_label_values("0.154.0", "0.156.1")
+        self.assertEqual(retired["variant"], frozenset({"optional_missing"}))
+        self.assertEqual(
+            retired["session_header_scope"], frozenset({"responses_or_compact"})
+        )
+        self.assertNotIn("v2_config_disabled", retired.get("variant", frozenset()))
+        self.assertEqual(digests, {"baseline": digest_0154, "target": digest_0156})
+        self.assertEqual(
+            codex_upgrade._retired_official_label_values("0.156.1", "0.156.1")[0], {}
+        )
+
+    def test_first_official_batch_timeout_scales_with_job_count(self) -> None:
+        """R16：首批动作超时 = max(3600, 作业数 × 240)，不超过距截止的剩余时间，下限 60 秒。
+
+        0.156.1 首批 31 个官方作业撞上写死的 3600 秒；步骤超时之和约 20.3 小时，太宽。
+        """
+
+        timeout = codex_upgrade._first_official_batch_timeout_seconds
+        self.assertEqual(timeout(31, remaining_seconds=10**6), 31 * 240)
+        self.assertEqual(timeout(10, remaining_seconds=10**6), 3600)
+        self.assertEqual(timeout(31, remaining_seconds=4000), 4000)
+        self.assertEqual(timeout(31, remaining_seconds=30), 60)
+
+    def test_scenario_manifest_carries_tool_dependencies_into_jobs(self) -> None:
+        """R16：场景清单可选声明 tool_dependencies；加载进 Job，并随执行契约冻结。
+
+        声明须覆盖全部作业（全有或全无）；声明非法时场景加载失败关闭。
+        """
+
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        source = json.loads(
+            (tool_root / "codex_upgrade_scenarios_0_156_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for job in source["capture_jobs"]:
+            job["tool_dependencies"] = ["run_official_relay_scenario.sh"]
+        official = next(
+            job for job in source["capture_jobs"] if job["phase"] == "official"
+        )
+        official["tool_dependencies"] = [
+            "capturelib/model.py",
+            "run_h1_wire_probe.sh",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            # _campaign_arguments 会在目录里写自己的 scenarios.json 夹具，这里用独立文件名。
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.target_version = "0.156.1"
+            arguments.campaign_dir = Path(directory).resolve() / "campaign"
+            arguments.output = arguments.campaign_dir
+            context = codex_upgrade._job_context(arguments)
+            path = Path(directory) / "r16-scenarios-0-156-1.json"
+            path.write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+            jobs = {
+                job.job_id: job
+                for job in codex_upgrade.load_scenario_jobs(
+                    path,
+                    context,
+                    expected_version="0.156.1",
+                    require_bindings=True,
+                )
+            }
+            self.assertEqual(
+                jobs[official["id"]].tool_dependencies,
+                ("capturelib/model.py", "run_h1_wire_probe.sh"),
+            )
+            self.assertTrue(
+                all(
+                    job.tool_dependencies == ("run_official_relay_scenario.sh",)
+                    for job_id, job in jobs.items()
+                    if job_id != official["id"]
+                )
+            )
+            contract = codex_upgrade._scenario_job_execution_contract(source)
+            frozen = next(job for job in contract["jobs"] if job["id"] == official["id"])
+            self.assertEqual(frozen["tool_dependencies"], official["tool_dependencies"])
+            official["tool_dependencies"] = [
+                "run_h1_wire_probe.sh",
+                "capturelib/model.py",
+            ]
+            path.write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "tool_dependencies"
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    path,
+                    context,
+                    expected_version="0.156.1",
+                    require_bindings=True,
+                )
+
     def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
         """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
 
@@ -11815,6 +12384,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=preflight_arguments.campaign_id,
                 prefix="recovery-p0",
+                rust_tls_codex_version=preflight_arguments.target_version,
             )
             preflight_manifest = codex_upgrade.create_campaign(
                 preflight_arguments
@@ -12694,6 +13264,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=recovery_id,
                 prefix="recovery-p0",
+                rust_tls_codex_version=predecessor_manifest["target_version"],
             )
             preflight_arguments = self._campaign_arguments(
                 root / "sealed-stopped-preflight",
@@ -14383,6 +14954,82 @@ class CodexUpgradeTest(unittest.TestCase):
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
 
+    def test_01561_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.156.1 沿用 gpt-5.5 主线与 Astra Lite 轨；新增的 gpt-6-sol 等 Lite 模型不能顶替。"""
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.154.0",
+            target_version="0.156.1",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+
+        mutations = (
+            ({"baseline_version": "0.151.0"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.156.0"}, "不支持的 Codex 升级对"),
+            ({"model": "gpt-6-sol"}, "主升级线只能使用 gpt-5.5"),
+            ({"lite_model": "gpt-6-sol"}, "Lite 专项只能使用 gpt-6-astra"),
+        )
+        baseline = {
+            "baseline_version": "0.154.0",
+            "target_version": "0.156.1",
+            "model": "gpt-5.5",
+            "lite_model": "gpt-6-astra",
+        }
+        for mutation, message in mutations:
+            with self.subTest(mutation=mutation):
+                values = {**baseline, **mutation}
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_0157_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.157.0 沿用 gpt-5.5 主线与 Astra Lite 轨；升级对只登记自 0.154.0 起跳。"""
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.154.0",
+            target_version="0.157.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+
+        mutations = (
+            ({"baseline_version": "0.156.1"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.157.1"}, "不支持的 Codex 升级对"),
+            ({"model": "gpt-6-sol"}, "主升级线只能使用 gpt-5.5"),
+            ({"lite_model": "gpt-6-luna"}, "Lite 专项只能使用 gpt-6-astra"),
+        )
+        baseline = {
+            "baseline_version": "0.154.0",
+            "target_version": "0.157.0",
+            "model": "gpt-5.5",
+            "lite_model": "gpt-6-astra",
+        }
+        for mutation, message in mutations:
+            with self.subTest(mutation=mutation):
+                values = {**baseline, **mutation}
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_0157_label_vocabulary_adds_daemon_mode_without_new_retirements(self) -> None:
+        """0.157.0 标签声明新增 A17 的 tui_mode=daemon；相对 0.154.0 的弃用取值与 0.156.1 相同。"""
+
+        vocabulary, digest = codex_upgrade._official_label_vocabulary("0.157.0")
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        self.assertEqual(
+            digest,
+            codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_157_0.json"),
+        )
+        self.assertEqual(vocabulary["tui_mode"], frozenset({"daemon"}))
+        retired_0157, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.157.0")
+        retired_0156, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.156.1")
+        self.assertEqual(retired_0157, retired_0156)
+
     def test_plan_rejects_package_helper_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._campaign_arguments(Path(directory))
@@ -14461,6 +15108,12 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["stages"]["classify"], "complete")
+            frozen = {path: path.read_bytes() for path in (campaign_dir / "classification").rglob("*") if path.is_file()}
+            return_code, _, stderr = self._approve_classification(
+                campaign_dir, (target, migration, scenario, profile, assertion_profile),
+            )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertEqual(frozen, {path: path.read_bytes() for path in frozen})
 
     def test_classify_rejects_target_scenario_execution_contract_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -14543,6 +15196,46 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(return_code, 1)
             self.assertIn("断言画像 codex_version 不一致", stderr)
+
+    def test_classify_verifies_evidence_against_sealed_official_attempt(self) -> None:
+        """classify 以已封存官方 attempt 的 epoch 链判定 evidence semantics。
+
+        seal 前部署的 evidence 层修复已由该 attempt 的 evaluation epoch 承接；classify 若仍比
+        Campaign 冻结值，VC-2 会永远无法分类。只读导入维持原口径，attempt 绑定漂移失败关闭。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            official = codex_upgrade._load_stage_result(
+                campaign_dir, "capture-official", _shallow=True
+            )
+            expected_root = (campaign_dir / official["attempt"]["path"]).parent
+            with mock.patch.object(
+                codex_upgrade,
+                "_verify_plan_identity",
+                side_effect=codex_upgrade._verify_plan_identity,
+            ) as verify:
+                receipt = codex_upgrade.classify_campaign(campaign_dir)
+            self.assertEqual(receipt["status"], "draft")
+            self.assertEqual(verify.call_args.kwargs["operation"], "classify")
+            self.assertEqual(verify.call_args.kwargs["attempt_root"], expected_root)
+
+            imported = {**official, "predecessor_import": {"campaign_id": "x"}}
+            self.assertIsNone(
+                codex_upgrade._classification_official_attempt_root(
+                    campaign_dir, imported
+                )
+            )
+            drifted = {
+                **official,
+                "attempt": {**official["attempt"], "sha256": "0" * 64},
+            }
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "attempt 绑定"):
+                codex_upgrade._classification_official_attempt_root(
+                    campaign_dir, drifted
+                )
 
     def test_classify_draft_rewrites_every_nested_version_coordinate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -14907,6 +15600,13 @@ class CodexUpgradeTest(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertIn("./cmd/egresscatalogstage", command)
             self.assertIn(str(output), command)
+
+            frozen = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            with mock.patch.object(codex_upgrade, "_run_external_command") as repeat:
+                result = codex_upgrade.stage_profile_catalog(campaign_dir, output.resolve())
+            repeat.assert_not_called()
+            self.assertTrue(result["active_unchanged"])
+            self.assertEqual(frozen, {path: path.read_bytes() for path in frozen})
 
     def test_classify_supports_explicit_rule_add_delete_and_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -16943,6 +17643,12 @@ class CodexUpgradeTest(unittest.TestCase):
                         "replay",
                         side_effect=replay_arm64,
                     ),
+                    mock.patch.object(
+                        codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                        "receipts_equivalent",
+                        side_effect=lambda left_root, left, right_root, right:
+                        left["continuity_identity_sha256"] == right["continuity_identity_sha256"],
+                    ),
                 ):
                     preview = codex_upgrade._seal_capture_attempt(seal_arguments, "official")
                     self.assertEqual(preview["status"], "approval_required")
@@ -16972,6 +17678,18 @@ class CodexUpgradeTest(unittest.TestCase):
                 self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
                 self.assertEqual(checkpoint["metrics"]["live_request_count"], 0)
                 self.assertEqual(checkpoint["stage_receipt"]["path"], "official/result.json")
+                # R6：seal 产生派生清单和 preview 后仍可重入原导入命令，自动结束 VC-0／VC-1。
+                sealed_before = self._tree_digests(successor_dir)
+                code, stdout, stderr = self._run_main(
+                    self._official_attempt_import_argv(fixture, successor_dir)
+                )
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(json.loads(stdout)["official_attempt_id"], attempt_id)
+                self.assertEqual(self._tree_digests(successor_dir), sealed_before)
+                timing_dir = codex_upgrade._campaign_timing_ledger_dir(successor_dir, manifest)
+                timing_state = codex_upgrade_timing_ledger.phase_ledger_state(timing_dir)
+                self.assertIsNone(timing_state["active_phase"])
+                self.assertEqual(timing_state["completed_phases"], ["VC-0", "VC-1"])
                 # seal 之后前序仍然逐字节不变，总账请求计数增量为 0。
                 self.assertEqual(self._tree_digests(predecessor_dir), before)
                 head_sealed = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
@@ -16981,7 +17699,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
 
     def test_0154_official_attempt_import_rejects_broken_bindings(self) -> None:
-        """A3a：任一收据缺失、未通过、未绑定该 attempt 或证据漂移都拒绝导入且不留半成品。"""
+        """A3a：非法输入发布前拒绝；R6 物化失败保留已发布事务，原命令可继续。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -17089,18 +17807,6 @@ class CodexUpgradeTest(unittest.TestCase):
                 surface_path.write_bytes(surface_backup)
                 surface_path.chmod(0o600)
                 self.assertEqual(self._tree_digests(predecessor_dir), before)
-                # 物化失败（权限收口拒绝）时整个后继目录被清理，总账不留注册。
-                with mock.patch.object(
-                    codex_upgrade,
-                    "_close_official_reuse_evidence_permissions",
-                    side_effect=codex_upgrade.ConfigurationError("前序证据仍有 1 个条目未达到 0700/0600"),
-                ):
-                    expect_rejection(
-                        self._official_attempt_import_argv(fixture, successor_dir),
-                        "未达到 0700/0600",
-                    )
-                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-                self.assertNotIn("upgrade-0154-official-reuse", head["registered_campaigns"])
                 # 前序未封存却不提供导入参数。
                 expect_rejection(
                     self._official_attempt_import_argv(
@@ -17119,12 +17825,30 @@ class CodexUpgradeTest(unittest.TestCase):
                     ),
                     "前序官方阶段尚未封存",
                 )
+                # R6：物化失败不删除已发布事务；总账尚未注册，原预约保留供原命令续作。
+                with mock.patch.object(
+                    codex_upgrade,
+                    "_close_official_reuse_evidence_permissions",
+                    side_effect=codex_upgrade.ConfigurationError("前序证据仍有 1 个条目未达到 0700/0600"),
+                ):
+                    code, _, stderr = self._run_main(
+                        self._official_attempt_import_argv(fixture, successor_dir)
+                    )
+                    self.assertNotEqual(code, 0)
+                    self.assertIn("未达到 0700/0600", stderr)
+                self.assertTrue((successor_dir / "control/official-reuse-resume.json").is_file())
+                published = self._tree_digests(successor_dir)
+                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                self.assertNotIn("upgrade-0154-official-reuse", head["registered_campaigns"])
                 # 修好全部绑定后仍能成功导入，证明上面的拒绝没有污染前序。
                 return_code, stdout, stderr = self._run_main(
                     self._official_attempt_import_argv(fixture, successor_dir)
                 )
                 self.assertEqual(return_code, 0, stderr)
                 self.assertEqual(json.loads(stdout)["status"], "official_awaiting_receipts")
+                resumed = self._tree_digests(successor_dir)
+                self.assertEqual({key: resumed[key] for key in published}, published)
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
 
     def test_0154_official_attempt_import_arguments_rejected_for_sealed_predecessor(
         self,
@@ -18127,6 +18851,87 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir=campaign_dir,
                 )
 
+            # b0 下受监督部署的工具修复只改变 compare／accept reader 摘要（2026-09-26 c01570 VC-5 批次 9）：
+            # 仍按逐字重派放行；checker／builder 变化失败关闭。前后清单补上同一候选绑定与 b0 评估三字段后核对。
+            binding = {
+                "candidate_revision": 1,
+                "candidate_id": "cand-1",
+                "evaluation_baseline": None,
+                "baseline_commit_sha256": None,
+                "evaluator_digests": {
+                    "checker_sha256": "1" * 64,
+                    "builder_sha256": "2" * 64,
+                    "compare_reader_sha256": "3" * 64,
+                    "accept_reader_sha256": "4" * 64,
+                },
+            }
+            prior_b0 = {**inner, **binding}
+            reader_only = {
+                **successor,
+                **binding,
+                "evaluator_digests": dict(
+                    binding["evaluator_digests"],
+                    compare_reader_sha256="5" * 64,
+                    accept_reader_sha256="6" * 64,
+                ),
+            }
+            self.assertTrue(
+                supervisor._validate_reconciled_redispatch_binding(
+                    prior_state,
+                    prior_b0,
+                    run_dir,
+                    reader_only,
+                    campaign_dir=campaign_dir,
+                    effective_class="post-run-tooling",
+                    label="零请求后处理失败",
+                )
+            )
+            checker_drift = {
+                **reader_only,
+                "evaluator_digests": dict(reader_only["evaluator_digests"], checker_sha256="7" * 64),
+            }
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派.*evaluator_digests"):
+                supervisor._validate_reconciled_redispatch_binding(
+                    prior_state,
+                    prior_b0,
+                    run_dir,
+                    checker_drift,
+                    campaign_dir=campaign_dir,
+                    effective_class="post-run-tooling",
+                    label="零请求后处理失败",
+                )
+
+    def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
+        """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        drifted = supervisor._redispatch_evaluator_digests_drifted
+        digests = {
+            "checker_sha256": "1" * 64,
+            "builder_sha256": "2" * 64,
+            "compare_reader_sha256": "3" * 64,
+            "accept_reader_sha256": "4" * 64,
+        }
+
+        def manifest(evaluator, *, baseline=None, commit=None):
+            return {"evaluation_baseline": baseline, "baseline_commit_sha256": commit, "evaluator_digests": evaluator}
+
+        prior = manifest(dict(digests))
+        self.assertFalse(drifted(prior, manifest(dict(digests))))
+        readers = dict(digests, compare_reader_sha256="5" * 64, accept_reader_sha256="6" * 64)
+        self.assertFalse(drifted(prior, manifest(readers)))
+        for key in ("checker_sha256", "builder_sha256"):
+            with self.subTest(changed=key):
+                self.assertTrue(drifted(prior, manifest(dict(readers, **{key: "7" * 64}))))
+        # 键集合不同、一侧缺失：失败关闭。
+        self.assertTrue(drifted(prior, manifest({k: v for k, v in readers.items() if k != "accept_reader_sha256"})))
+        self.assertTrue(drifted(prior, manifest(None)))
+        self.assertTrue(drifted(manifest(None), manifest(dict(digests))))
+        # 已有评估基线（b≥1）或基线提交：reader 变化同样按漂移处理，只能经 evaluation-recover 承接。
+        self.assertTrue(drifted(manifest(dict(digests), baseline="b1", commit="8" * 64),
+                                manifest(readers, baseline="b1", commit="8" * 64)))
+        self.assertTrue(drifted(manifest(dict(digests), commit="8" * 64), manifest(readers, commit="8" * 64)))
+
     def test_post_run_tooling_receipt_cannot_revive_stopped_ledger(self) -> None:
         """账本已 stop_the_line 的旧 run 即便带 post-run-tooling 收据也只能永久停线。"""
 
@@ -18796,8 +19601,40 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(len(result["root_causes"]), 1)
             self.assertEqual(attempt_path.read_bytes(), before)
 
-    def test_late_reconcile_stops_but_does_not_relabel_a15_as_deadline(self) -> None:
-        """逾期对账仍永久停线，但 attempt 根因固定在其完成时的 A15。"""
+    def test_reconcile_refuses_approval_when_resume_would_reject_reuse(self) -> None:
+        """R17：恢复预览按 resume 同一复用判定只读复算（真实函数，不用替身）。
+
+        失败 attempt 没有已完成 Job 时 resume --rerun-failed 会拒绝原地 transition：对账记账照常、
+        预览照常落盘，但复算标记 inconsistent、提示不可批准；带批准参数时拒绝批准且不产生批准记录。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, _attempt = self._b0_failed_attempt(fixture)
+            result = reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+            self.assertEqual(result["status"], "recoverable")
+            check = result["resume_reuse_check"]
+            self.assertEqual(check["status"], "inconsistent")
+            self.assertIn("没有已完成 Job", check["reason"])
+            self.assertIn("不可批准", result["next_command"])
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertTrue(preview_path.is_file())
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "拒绝批准：.*没有已完成 Job"):
+                reconciler.reconcile_attempt(
+                    fixture["campaign_dir"],
+                    attempt_id,
+                    approve_recovery_sha256=result["recovery_preview"]["review_sha256"],
+                )
+            self.assertEqual(
+                [path.name for path in preview_path.parent.iterdir() if reconciler.APPROVAL_RE.match(path.name)],
+                [],
+            )
+
+    def test_late_reconcile_pauses_but_does_not_relabel_a15_as_deadline(self) -> None:
+        """逾期对账只暂停，attempt 根因仍固定在其完成时的 A15。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -18816,13 +19653,13 @@ class CodexUpgradeTest(unittest.TestCase):
             result = reconciler.reconcile_attempt(
                 fixture["campaign_dir"], attempt_id, now=later
             )
-            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["status"], "paused")
             self.assertEqual(
                 result["root_cause"]["stable_error_code"],
                 "campaign-run.action-failed",
             )
             self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
-            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            self.assertIsNone(result["decision"]["terminal_reason"])
             cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
             self.assertEqual(cause_ids, [a15_cause_id])
             head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
@@ -19106,8 +19943,8 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "blocked|已终态"):
                 codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
-    def test_b0_reconcile_attempt_deadline_expired_fails_attempt_before_abandoning_stage(self) -> None:
-        """deadline 到期时账本 stop_required：先 metadata-only attempt_failed，再 stage_abandoned、stop_the_line。"""
+    def test_b0_reconcile_attempt_deadline_expired_records_failure_and_pauses(self) -> None:
+        """deadline 到期仍先 metadata-only 入账，再暂停；不废弃阶段、不自动终态。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -19130,18 +19967,21 @@ class CodexUpgradeTest(unittest.TestCase):
                 datetime.fromisoformat(deadline.replace("Z", "+00:00")) + timedelta(hours=1)
             ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id, now=later)
-            self.assertEqual(result["status"], "permanent_stop")
-            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            self.assertEqual(result["status"], "paused")
+            self.assertIsNone(result["decision"]["terminal_reason"])
             self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.deadline-expired")
             types = [item[0] for item in self._b0_ledger_events(ledger_dir)]
-            self.assertEqual(types[-3:], ["attempt_failed", "stage_abandoned", "stop_the_line"])
+            self.assertEqual(types[-2:], ["attempt_failed", "deadline_paused"])
+            self.assertNotIn("stage_abandoned", types)
+            self.assertNotIn("stop_the_line", types)
+            self.assertFalse(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"])
             failed_event = next(
                 event for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
                 if event["event_id"] == f"reconcile-attempt-failed-{attempt_id}"
             )
             self.assertEqual(failed_event["receipts"], [])
             self.assertEqual(failed_event["live_request_count"], 0)
-            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir, now=later)["status"], "deadline_paused")
 
     def test_b0_reconcile_attempt_precise_requests_enter_ledger_once(self) -> None:
         """有权威来源的证据按身份键精确入账；同一证据两次对账只计一次。"""
@@ -19404,6 +20244,8 @@ class CodexUpgradeTest(unittest.TestCase):
         这正是 reuse-official-evidence 建出的恢复 Campaign 在 VC-2 开工前的真实状态。
         """
 
+        # 本 helper 只用于本文件的合成子命令；独立 real_chains 使用受限 staging 夹具总账。
+        self.enterContext(runtime_egress_fixtures.offline_campaign_egress())
         original = codex_upgrade._create_initial_vc_control_artifacts
 
         def as_reuse(*args: object, **kwargs: object) -> dict[str, object]:
@@ -19606,7 +20448,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(list(fixture["state_dir"].glob("run-*")), [])
 
     def test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch(self) -> None:
-        """动作失败：父 run 把账本推成 stage_abandoned＋stop_the_line，后续批次被拒。"""
+        """动作失败：父 run 把账本推成 stage_abandoned＋stage_review_required，后续批次被拒。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -19621,10 +20463,10 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(result["campaign_run"]["timing_closeout"]["status"], "passed", result["campaign_run"]["timing_closeout"])
             self.assertIsNone(result["timing_ledger"]["completion"])
             state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
-            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["status"], "stage_review_required")
             self.assertIsNone(state["active_phase"])
             self.assertFalse((campaign_dir / "control" / "vc" / "vc-2-checkpoint.json").exists())
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stopped"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stage_review_required"):
                 codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, "VC-2", 3, self._vc_chain_action_plan(root / "retry", campaign_dir, "VC-2"))
                 )

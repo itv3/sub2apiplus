@@ -15,7 +15,9 @@ manifest 也能封存，缺陷拖到 accept 才暴露。本门禁在 seal 时按
    字节流严禁既被直接解析又被派生解析，防止计数类判据双计数；
 6. **selector 命中预检**：本侧应执行的每条规则的每个 check，其 select 必须
    至少命中一条观测——标签语义错位（k34 的 ``transport: direct``）、证据缺失
-   都在此暴露，不再等到 accept 的 ``actual=[]``。
+   都在此暴露，不再等到 accept 的 ``actual=[]``。唯一例外是官方侧 seal 遇到
+   目标版本整体删除的端点（select 以 ``data.path`` 钉死、该路径在全部官方观测中
+   零出现）：这类 check 登记为延后项写入收据，由 VC-2 批准画像裁决。
 
 门禁只做存在性与一致性预检，不评估 assertion 判据——通过与否仍由 accept 的
 离线重放决定。
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -67,6 +70,11 @@ SIDES = frozenset({"official", "candidate"})
 CANDIDATE_TRACE_PREFIX = "candidate-trace/"
 TRACE_RECEIPT_RELATIVE_PATH = f"{CANDIDATE_TRACE_PREFIX}trace-receipt.json"
 TRACE_RECEIPT_SCHEMA = "codex-candidate-test-trace-receipt/v1"
+# 官方侧 seal 因目标版本整体删除端点、或目标版本标签声明弃用了所选标签值而延后裁决的
+# check（见 ``_verify_selector_reachability``）；只在非空时写入 gate 收据。
+DEFERRED_UNREACHABLE_FIELD = "deferred_unreachable_checks"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_LABEL_KEY_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 class AssertionGateError(RuntimeError):
@@ -197,15 +205,135 @@ def _verify_candidate_trace(bundle_dir: Path, manifest: Mapping[str, Any]) -> st
     return _file_sha256(receipt_path)
 
 
+def _pinned_endpoint_paths(selector: Mapping[str, Any]) -> list[str]:
+    """返回 select.where 用 ``data.path`` 的 equal／in 条件钉死的端点路径；未钉死返回空列表。"""
+
+    paths: set[str] = set()
+    for condition in selector.get("where") or []:
+        if not isinstance(condition, Mapping) or condition.get("path") != "data.path":
+            continue
+        operator = condition.get("operator")
+        value = condition.get("value")
+        if operator == "equal" and isinstance(value, str) and value:
+            paths.add(value)
+        elif (
+            operator == "in"
+            and isinstance(value, list)
+            and value
+            and all(isinstance(item, str) and item for item in value)
+        ):
+            paths.update(value)
+    return sorted(paths)
+
+
+def _pinned_label_values(selector: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+    """返回 select.where 用 ``labels.<键>`` 的 equal／in 条件限定的（键, 取值元组）。"""
+
+    pins: list[tuple[str, tuple[str, ...]]] = []
+    for condition in selector.get("where") or []:
+        if not isinstance(condition, Mapping):
+            continue
+        path = condition.get("path")
+        if not isinstance(path, str) or not path.startswith("labels."):
+            continue
+        key = path[len("labels."):]
+        if not _LABEL_KEY_RE.fullmatch(key):
+            continue
+        operator = condition.get("operator")
+        value = condition.get("value")
+        if operator == "equal" and isinstance(value, str) and value:
+            pins.append((key, (value,)))
+        elif (
+            operator == "in"
+            and isinstance(value, list)
+            and value
+            and all(isinstance(item, str) and item for item in value)
+        ):
+            pins.append((key, tuple(value)))
+    return pins
+
+
+def _retired_label_pins(
+    selector: Mapping[str, Any],
+    retired_label_values: Mapping[str, frozenset[str]],
+) -> list[dict[str, str]]:
+    """select 限定的标签取值中，已被目标版本弃用的部分（R21）。
+
+    ``retired_label_values`` 是“基线版本官方侧声明有、目标版本官方侧声明已删”的取值。
+    select 在某个键上限定的全部取值都属于弃用集合时才算；仍有一个取值未弃用、或取值
+    从未在基线声明过（含拼写错误），都不算，返回空列表。
+    """
+
+    retired: set[tuple[str, str]] = set()
+    for key, values in _pinned_label_values(selector):
+        removed = retired_label_values.get(key, frozenset())
+        if values and all(value in removed for value in values):
+            retired.update((key, value) for value in values)
+    return [{"key": key, "value": value} for key, value in sorted(retired)]
+
+
 def _verify_selector_reachability(
     profile: Mapping[str, Any],
     contract: Mapping[str, Any],
     observations: list[Any],
     side: str,
-) -> tuple[int, int]:
+    *,
+    defer_absent_endpoints: bool = False,
+    retired_label_values: Mapping[str, frozenset[str]] | None = None,
+    label_declaration_sha256: Mapping[str, str] | None = None,
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """逐 check 预检 select 至少命中一条观测，返回（规则数、check 数、延后项）。
+
+    ``defer_absent_endpoints`` 只供官方侧 seal 使用：官方 seal 在 classify 之前执行，
+    只能拿仓库冻结画像（基线行为）做预检。目标版本整体删除某个端点时（0.156.1 删除
+    legacy compact：``/backend-api/codex/responses/compact``），冻结画像里钉死该路径的
+    check 在官方证据上结构性不可达，强制命中会让 VC-1 永远无法封存。这类未命中同时满足
+    下列条件时才延后裁决，逐条写入延后项：
+
+    1. check 的 select.where 以 ``data.path`` 的 equal／in 条件钉死端点路径；
+    2. 这些路径在**全部**官方观测（不分场景、记录类型与标签）中零出现——端点在目标
+       版本官方流量里整体缺席，不可能是标签语义错位或单个场景漏采。
+
+    ``retired_label_values``（R21，同样只供官方侧 seal）是“基线版本官方侧证据标签声明
+    有、目标版本官方侧声明已删”的标签取值。0.156.1 的声明有意把 WS“可选头缺失”样本的
+    variant 从 optional_missing 改为 v2_config_disabled（新版忽略关闭开关、样本实际带该头），
+    并删除了只描述 legacy 请求的 session_header_scope 等标签；冻结画像仍按旧取值选择，
+    必然零命中。未命中的 check 若以 ``labels.<键>`` 限定的全部取值都属于弃用集合，就登记
+    为延后项（附基线与目标两份声明摘要），同样交 VC-2 裁决。取值未弃用却零命中的，属于
+    漏标签或漏样本，仍当场失败。
+
+    其余未命中（标签错位、场景漏采、端点只在部分场景缺失）仍当场失败。延后项计入已
+    核对的 check 数，但由 VC-2 批准画像裁决：批准画像若仍保留该 check，compare／accept
+    的离线重放会因官方侧没有观测而失败关闭。
+    """
+
+    if defer_absent_endpoints and side != "official":
+        raise AssertionGateError("端点整体缺席的延后裁决只适用于官方侧 seal")
+    if retired_label_values is not None:
+        if side != "official":
+            raise AssertionGateError("弃用标签值的延后裁决只适用于官方侧 seal")
+        if (
+            not isinstance(label_declaration_sha256, Mapping)
+            or set(label_declaration_sha256) != {"baseline", "target"}
+            or any(
+                not isinstance(value, str) or not _SHA256_RE.fullmatch(value)
+                for value in label_declaration_sha256.values()
+            )
+        ):
+            raise AssertionGateError("弃用标签值的延后裁决必须绑定基线与目标两份标签声明摘要")
+    observed_paths = (
+        {
+            item.data.get("path")
+            for item in observations
+            if isinstance(item.data, Mapping) and isinstance(item.data.get("path"), str)
+        }
+        if defer_absent_endpoints
+        else set()
+    )
     modes = contract["validation_modes"]
     checked_rules = 0
     checked_checks = 0
+    deferred: list[dict[str, Any]] = []
     for rule in profile["rules"]:
         rule_id = rule["rule_id"]
         if side == "official" and modes[rule_id] != MODE_DUAL_WIRE:
@@ -231,6 +359,38 @@ def _verify_selector_reachability(
                 observations, check["select"], rule["scenario_ids"]
             )
             if not matched:
+                absent_paths = (
+                    _pinned_endpoint_paths(check["select"])
+                    if defer_absent_endpoints
+                    else []
+                )
+                if absent_paths and not observed_paths.intersection(absent_paths):
+                    deferred.append(
+                        {
+                            "rule_id": rule_id,
+                            "check_id": check["id"],
+                            "absent_paths": absent_paths,
+                        }
+                    )
+                    checked_checks += 1
+                    continue
+                retired = (
+                    _retired_label_pins(check["select"], retired_label_values)
+                    if retired_label_values is not None
+                    else []
+                )
+                if retired:
+                    deferred.append(
+                        {
+                            "rule_id": rule_id,
+                            "check_id": check["id"],
+                            "retired_labels": retired,
+                            "baseline_label_declaration_sha256": label_declaration_sha256["baseline"],
+                            "target_label_declaration_sha256": label_declaration_sha256["target"],
+                        }
+                    )
+                    checked_checks += 1
+                    continue
                 raise AssertionGateError(
                     f"seal 预检：规则 {rule_id} 的 check {check['id']} 在"
                     f"{side} 侧无法命中任何观测——证据缺失或标签语义错位"
@@ -238,7 +398,7 @@ def _verify_selector_reachability(
             checked_checks += 1
     if not checked_rules:
         raise AssertionGateError(f"{side} 侧没有任何应执行规则")
-    return checked_rules, checked_checks
+    return checked_rules, checked_checks, deferred
 
 
 def run_assertion_gate(
@@ -249,8 +409,17 @@ def run_assertion_gate(
     profile: Mapping[str, Any],
     contract: Mapping[str, Any],
     target_version: str,
+    defer_absent_endpoints: bool = False,
+    retired_label_values: Mapping[str, frozenset[str]] | None = None,
+    label_declaration_sha256: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """执行全部门禁并返回可封存的 gate 收据；任何一步失败即抛错。"""
+    """执行全部门禁并返回可封存的 gate 收据；任何一步失败即抛错。
+
+    ``defer_absent_endpoints`` 与 ``retired_label_values``（附基线、目标两份声明摘要
+    ``label_declaration_sha256``）只供官方侧 seal 传入，语义见
+    ``_verify_selector_reachability``；延后项非空时写入收据的
+    ``deferred_unreachable_checks``，为空时收据形状与旧版逐字一致。
+    """
 
     if side not in SIDES:
         raise AssertionGateError(f"未知验收侧：{side}")
@@ -305,10 +474,16 @@ def run_assertion_gate(
         raise _gate_wrap(error, "场景 artifact 覆盖不足") from error
     _verify_wire_observation_exclusivity(manifest, observations)
     candidate_trace_receipt_sha256 = _verify_candidate_trace(bundle_dir, manifest)
-    checked_rules, checked_checks = _verify_selector_reachability(
-        profile, contract, observations, side
+    checked_rules, checked_checks, deferred = _verify_selector_reachability(
+        profile,
+        contract,
+        observations,
+        side,
+        defer_absent_endpoints=defer_absent_endpoints,
+        retired_label_values=retired_label_values,
+        label_declaration_sha256=label_declaration_sha256,
     )
-    return {
+    receipt: dict[str, Any] = {
         "side": side,
         "bundle_dir_name": BUNDLE_DIR_NAME,
         "bundle_provenance_sha256": bundle_provenance["provenance_sha256"],
@@ -325,10 +500,86 @@ def run_assertion_gate(
         "checked_rule_count": checked_rules,
         "checked_check_count": checked_checks,
     }
+    if deferred:
+        receipt[DEFERRED_UNREACHABLE_FIELD] = deferred
+    return receipt
+
+
+def _validate_deferred_unreachable_checks(value: Any) -> None:
+    """延后项：非空数组，(规则, check) 不重复；每项恰为以下两种形态之一。
+
+    * 端点整体缺席：``rule_id``／``check_id``／``absent_paths``；
+    * 目标版本弃用标签值（R21）：``rule_id``／``check_id``／``retired_labels``／
+      ``baseline_label_declaration_sha256``／``target_label_declaration_sha256``，
+      ``retired_labels`` 为按（键, 值）排序去重的非空数组。
+    """
+
+    if not isinstance(value, list) or not value:
+        raise AssertionGateError("assertion gate 收据延后项必须是非空数组")
+    absent_shape = {"rule_id", "check_id", "absent_paths"}
+    retired_shape = {
+        "rule_id",
+        "check_id",
+        "retired_labels",
+        "baseline_label_declaration_sha256",
+        "target_label_declaration_sha256",
+    }
+    seen: set[tuple[str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) not in (absent_shape, retired_shape):
+            raise AssertionGateError("assertion gate 收据延后项字段不闭合")
+        rule_id = entry.get("rule_id")
+        check_id = entry.get("check_id")
+        if (
+            not isinstance(rule_id, str)
+            or not rule_id
+            or not isinstance(check_id, str)
+            or not check_id
+        ):
+            raise AssertionGateError("assertion gate 收据延后项的规则或 check 非法")
+        if set(entry) == absent_shape:
+            paths = entry.get("absent_paths")
+            if (
+                not isinstance(paths, list)
+                or not paths
+                or any(not isinstance(path, str) or not path.startswith("/") for path in paths)
+                or paths != sorted(set(paths))
+            ):
+                raise AssertionGateError("assertion gate 收据延后项的缺席路径非法")
+        else:
+            labels = entry.get("retired_labels")
+            if (
+                not isinstance(labels, list)
+                or not labels
+                or any(
+                    not isinstance(item, dict)
+                    or set(item) != {"key", "value"}
+                    or not isinstance(item.get("key"), str)
+                    or not _LABEL_KEY_RE.fullmatch(item["key"])
+                    or not isinstance(item.get("value"), str)
+                    or not item["value"]
+                    for item in labels
+                )
+                or [(item["key"], item["value"]) for item in labels]
+                != sorted({(item["key"], item["value"]) for item in labels})
+            ):
+                raise AssertionGateError("assertion gate 收据延后项的弃用标签非法")
+            for field in ("baseline_label_declaration_sha256", "target_label_declaration_sha256"):
+                digest = entry.get(field)
+                if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
+                    raise AssertionGateError("assertion gate 收据延后项的标签声明摘要非法")
+        key = (rule_id, check_id)
+        if key in seen:
+            raise AssertionGateError("assertion gate 收据延后项重复")
+        seen.add(key)
 
 
 def validate_gate_receipt(value: Any, *, side: str) -> dict[str, Any]:
-    """校验 stage 文档中封存的 gate 收据结构；供 stage 契约消费。"""
+    """校验 stage 文档中封存的 gate 收据结构；供 stage 契约消费。
+
+    ``deferred_unreachable_checks`` 是可选字段：只允许出现在官方侧收据，且出现时必须
+    非空；旧收据没有该字段，按原闭集校验。
+    """
 
     required = {
         "side",
@@ -344,10 +595,14 @@ def validate_gate_receipt(value: Any, *, side: str) -> dict[str, Any]:
         "checked_rule_count",
         "checked_check_count",
     }
-    if not isinstance(value, dict) or set(value) != required:
+    if not isinstance(value, dict) or set(value) - {DEFERRED_UNREACHABLE_FIELD} != required:
         raise AssertionGateError("assertion gate 收据字段不闭合")
     if value.get("side") != side:
         raise AssertionGateError("assertion gate 收据侧别不一致")
+    if DEFERRED_UNREACHABLE_FIELD in value:
+        if side != "official":
+            raise AssertionGateError("只有官方侧 gate 收据可以登记延后的不可达 check")
+        _validate_deferred_unreachable_checks(value[DEFERRED_UNREACHABLE_FIELD])
     if value.get("bundle_dir_name") != BUNDLE_DIR_NAME:
         raise AssertionGateError("assertion gate 收据 bundle 目录名非法")
     manifest_binding = value.get("capture_manifest")

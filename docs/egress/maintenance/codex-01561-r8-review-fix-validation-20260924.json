@@ -1,0 +1,213 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R8（审核修正）",
+  "source_commit": "fb37d8e1a1dced0fabcdd2230b28bce7ccb50e82",
+  "source_commits": [
+    "5f90fb90c697f735c58f14da7bea63a1ade00a34",
+    "fb37d8e1a1dced0fabcdd2230b28bce7ccb50e82"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 2 条（R8 生产路径崩溃、R8×R15 缺字段、命令闭集、vc0_closeout append-only）、第一节第 5 条（_budget_ceilings 读侧重放总账、项目延期绑定发起 Campaign 目录、回退用例未入库）、第二节第 3 条（暂停可被 reuse 绕过）、第二节第 10 条（upgrade_id≠campaign_id 漏报 extension_pending、先延期后对账根因漂移、收据内嵌绝对路径、deadline_extension schema 零引用）；审核草稿代理 B 第 (4)(8) 条",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T11:46:50.368885+00:00",
+  "fixes": [
+    {
+      "finding": "旧批次路径对 effective_deadlines()['total_deadline_at_utc'] 直接 fromisoformat，无 Campaign 账本时为 None 崩溃（atomic_dispatch 3 项）",
+      "resolution": "有效截止读取传入批次冻结的 original_deadline_at_utc 作回退（main 的读法）；atomic_dispatch 三项恢复通过"
+    },
+    {
+      "finding": "_runtime_budget_deadline 缺 deadline_at_epoch 时抛 KeyError；三层都无可解析截止时对 None 调用 replace",
+      "resolution": "缺字段按状态合同报 SupervisorError；execution_deadline 为空时只受父 run 时间锚约束。新增两条用例"
+    },
+    {
+      "finding": "命令闭集用例未包含 R8 新增的 deadline-extend、campaign-abandon",
+      "resolution": "补齐期望集合（代码本已提供这两个命令，属用例过时）"
+    },
+    {
+      "finding": "vc0_closeout append-only 用例前后两次实时 inspect，暂停中的 paused_hours 随墙钟变化；锁内复检时刻截到毫秒，同一毫秒内的微秒级事件会偶发“检查时间早于最新 event”",
+      "resolution": "用例前后用同一固定时刻读取；锁内复检时刻取微秒（只用于重放，不写收据）。修正后又暴露 R8 回归：阶段到期账本显示 deadline_paused，收口修复入口只认 active／stop_required 而拒绝；改为按暂停前状态判定（修复只追加暂停期允许的 stage_abandoned／stop_the_line）。原用例改用同根因失败达上限制造 stop_required 验证停线路径，另新增预算暂停账本的修复用例（关闭阶段、不停线、请求计数不变）"
+    },
+    {
+      "finding": "_budget_ceilings 位于 _load_plan 路径却打开并重放总账，总账目录迁移、归档或权限变化后所有绑定账本 status／inspect／replay 失败",
+      "resolution": "计划校验只用绑定字段；新账本创建时（写路径）按总账重放开始时刻的项目有效截止并冻结进绑定（effective_deadline_at_start_utc），读侧不再为校验计划打开总账；没有该字段的历史绑定按原绝对截止计算（与 main 相同），冻结值早于原绝对截止即拒绝。用例：总账目录移走后计划仍可校验"
+    },
+    {
+      "finding": "计时账本重放 deadline_extended 事件按收据内嵌的 project_ledger_path 打开总账，项目层截止也按绑定的绝对路径读取，迁移后不可重放",
+      "resolution": "新增按计划摘要定位总账：绑定路径仍是同一总账则使用，否则从计时账本目录逐级向上查找同名总账目录并以计划摘要确认；找不到时失败关闭。用例：整个数据根迁移后，账本（含延期事件）重放结果与迁移前逐字段一致"
+    },
+    {
+      "finding": "项目层延期是否闭合要读取发起它的 Campaign 计时账本；该目录被清理后全项目 admission 报错、同总账账本重放失败且无 CLI 可恢复",
+      "resolution": "延期写完 Campaign 计时事件后追加总账事件 deadline_extension_committed（绑定 Campaign 事件序号与原始字节摘要），判定优先读总账中的提交证明；中途崩溃重跑 apply 会补写证明。用例：项目延期后删除发起方 Campaign 目录，其他 Campaign 准入与截止判定正常"
+    },
+    {
+      "finding": "计时账本用 plan.upgrade_id 匹配延期的 campaign_id，两者不同时漏报本账本的 extension_pending",
+      "resolution": "改按延期绑定的批准时本账本 head（序号与原始字节摘要）认领延期。用例：upgrade_id 与 campaign_id 不同、两账中断时账本报 deadline_paused"
+    },
+    {
+      "finding": "对账判历史 attempt 当时是否到期用当前（含后续延期）的 Campaign／阶段截止，先延期后对账根因分类漂移",
+      "resolution": "只计参考时刻之前已批准的延期：某层参考时刻之后第一份延期记录的 original_deadline_at_utc 即该层当时的有效截止。用例：attempt 在原截止后、延期批准前结束仍判到期"
+    },
+    {
+      "finding": "reuse 只要求前任 official_sealed，不查前任预算暂停，可从暂停的前任建新 Campaign 取得新预算",
+      "resolution": "复用与后继的全新创建前拒绝预算暂停的前任：账本 deadline_paused、总账登记暂停，或非终态但三层截止已到期（尚未登记暂停）都拒绝；停线、完成、放弃的前任不受影响。用例含经 codex_upgrade.main 的真实 CLI 路径（返回 1、不生成后继清单），显式放弃后允许"
+    },
+    {
+      "finding": "（审核草稿代理 B 第 4 条）其他 Campaign 发起的项目延期未闭合期间本 Campaign 父失败收口，暂停入口返回 not_expired 却仍报 deadline_paused，且未收口",
+      "resolution": "失败收口只按真正到期的层暂停：仅有 extension_pending 时明确失败（不写账本、不冒报暂停，事务闭合后经 reconcile-supervisor-run 重入）；判定后登记前预算状态变化（返回 not_expired）时同样明确失败。新增两条用例"
+    },
+    {
+      "finding": "（审核草稿代理 B 第 8 条）编译新批次的到期文案仍称“原始绝对 deadline 已过期”",
+      "resolution": "改为“有效截止（含已批准延期）已到期”，并提示 deadline-extend 或 campaign-abandon"
+    },
+    {
+      "finding": "deadline_extension schema 生产代码零引用",
+      "resolution": "登记进构建制品 schema 映射用例"
+    },
+    {
+      "finding": "R8 的 rollback_backup 旧工具只读回放用例只在仓库外",
+      "resolution": "回退兼容模块新增两条：基线工具建的计时账本写入 deadline_paused 后，旧工具 status 失败关闭且字节不变、写入前的 checkpoint 仍可由旧工具重放；基线工具建的总账写入 campaign_paused 后旧工具 status 失败关闭且字节不变（写入前旧工具可读当前工具追加的登记事件）"
+    },
+    {
+      "finding": "暂停消费者只以函数调用验证",
+      "resolution": "R8 真实链在到期暂停后以真实 CLI 执行 compile-and-run-vc-batch：必须失败、不写批次、不执行动作、两本账 head 不变；延期后原命令续跑成功"
+    }
+  ],
+  "clarifications": [
+    "R8 修正前工具已写出、没有冻结字段且创建前已有项目延期的账本，读侧按原绝对截止计算上限，计划可能不再通过；这类账本只存在于测试环境（阶段 1 未发布），生产不受影响。",
+    "修正前写出的项目延期没有提交证明，判定时仍回退读取发起方 Campaign 计时账本；同样只存在于测试环境。",
+    "数据根迁移须整体移动：总账按计划摘要从计时账本目录向上定位；Campaign 清单中计时账本的绝对路径（main 既有设计）不在本项范围。",
+    "预算到期后 VC-0 收口修复只关闭阶段而不停线，这是 R8“到期只暂停”的语义；阶段被放弃后同一阶段重新开始时阶段预算从零计，属于既有行为，列入待拍板。",
+    "审核草稿代理 B 另列的两条（以 stop_required 为前提的离线分类批准与历史 epoch 回退路径在 R8 后不可达、监督器每 0.2 秒 tick 多次重放总账的性能）未进入审核结论，本轮未改，列入观察。"
+  ],
+  "decisions_requested": [
+    "预算到期时阶段被放弃（VC-0 收口修复或 R4 的放弃路径），同一阶段重开是否应继承原阶段已耗时间，以免借放弃重置阶段预算。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "b9d3c3968c75b878ea56b9a7a0da12ff006939f9025af893294343b8c747b0ef",
+      "after": "f3c68ff0fed0a6725efd886e85fc56d24faa9411115f28e6fdfc39845b6fa73e"
+    },
+    "method": "按提交号 git archive 干净导出复算；变化条目为编排器、总账、对账器、监督器、计时账本、VC-0 收口六个文件"
+  },
+  "regression": {
+    "local_modules": {
+      "commit": "fb37d8e1a1dced0fabcdd2230b28bce7ccb50e82",
+      "tests": 528,
+      "seconds": 146.18,
+      "result": "OK",
+      "modules": [
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade_project_ledger",
+        "test_codex_upgrade_deadline_extension",
+        "test_codex_upgrade_timing_ledger",
+        "test_codex_upgrade_time_reconciliation",
+        "test_codex_upgrade_stage_recovery",
+        "test_codex_upgrade_segment_reuse",
+        "test_codex_upgrade_vc0_closeout",
+        "test_codex_upgrade_atomic_dispatch",
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_rollback_readback",
+        "test_codex_upgrade",
+        "test_arm64_supervised_deploy"
+      ],
+      "note": "此前 R8 遗留的命令闭集、vc0_closeout、atomic_dispatch 三项全部转绿；回退兼容 6 条（R4／R11／R8 各两条）在本机真实执行"
+    },
+    "local_real_chains": {
+      "commit": "fb37d8e1a1dced0fabcdd2230b28bce7ccb50e82",
+      "tests": 25,
+      "seconds": 283.843,
+      "result": "OK",
+      "detail": "skipped=3",
+      "modules": [
+        "real_chains.test_codex_upgrade_deadline_extension",
+        "real_chains.test_codex_upgrade_official_reuse_resume",
+        "real_chains.test_codex_upgrade_fault_fixtures"
+      ],
+      "note": "跳过的 3 条为需要 Linux root 的 R15 内核与 Docker 用例，由 ARM64 执行"
+    },
+    "red_green_r8": {
+      "old": "FAILED (failures=4, errors=10)",
+      "new": "OK",
+      "tests": 26,
+      "note": "修改前（fc071b4b2）叠加新用例；命令闭集与原收口修复用例（改用同根因失败制造 stop_required）新旧均通过，属用例修正"
+    },
+    "arm64": {
+      "commit": "fb37d8e1a1dced0fabcdd2230b28bce7ccb50e82",
+      "tests": 516,
+      "seconds": 1113.513,
+      "result": "OK",
+      "detail": "skipped=0",
+      "modules": [
+        "real_chains.test_codex_upgrade_deadline_extension",
+        "real_chains.test_codex_upgrade_official_reuse_resume",
+        "real_chains.test_codex_upgrade_fault_fixtures",
+        "real_chains.test_codex_upgrade_full_chain",
+        "real_chains.test_codex_upgrade_stage_recovery",
+        "test_codex_upgrade_deadline_extension",
+        "test_codex_upgrade_timing_ledger",
+        "test_codex_upgrade_project_ledger",
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade_vc0_closeout",
+        "test_codex_upgrade_atomic_dispatch",
+        "test_codex_upgrade",
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_time_reconciliation",
+        "test_codex_upgrade_stage_recovery"
+      ],
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过零失败；R8 真实延期链（含暂停期间真实 CLI 派发被拒、SIGKILL 后补齐延期、同一 Campaign 续跑、原始字节不变）、R15 内核与 Docker 夹具、全链均通过；回退兼容模块需要 git 历史，未纳入本次传输副本，由本机执行、阶段 1 收尾全量在带历史的检出上执行"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "freeze_successor": "4 条承接边（部署脚本、编排器、计时账本、编排器测试）；6 项人工动作为部署脚本受管摘要：监督器摘要已更新为 ecaad15e…，断言预处理器未改",
+    "maintenance_markdown_count": 0
+  },
+  "open_dependencies": [
+    "回退兼容用例需要 git 历史，阶段 1 收尾的 ARM64 全量改用带完整历史的检出时执行。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r8-review-fix-20260924-freeze-successor.json",
+      "sha256": "eb42a4257576a3940bff74a4d44043a43d08e7e0ae40ac6bc5f883015bf2f371"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r8-red-green.log",
+      "sha256": "a01fb81b02f6bc4bc0b4ef16c0020be014d88b5f8d2c81a573e2f09f2790cb83"
+    },
+    {
+      "file": "review-fix-r8-local-modules-first.log",
+      "sha256": "315269e2c31d9f74da3027937e71699b5066508377b264113a9d2211b4874ec9"
+    },
+    {
+      "file": "review-fix-r8-local.log",
+      "sha256": "18b93fc7fdc5f992941a0f855d1aba8342d70c3f812586a89e998cd367299f9c"
+    },
+    {
+      "file": "review-fix-r8-freeze-generation.log",
+      "sha256": "022b9a429db4622250ec63c870c0f4ee838103cf330208b00f601b1bcc1fd800"
+    },
+    {
+      "file": "review-fix-r8-freeze-generation-superseded-5f90fb90c.log",
+      "sha256": "4c1cb2fc9eaa4f33defbdd2911949810b5cfffabbbb04555ed731d66e64b9c6e"
+    },
+    {
+      "file": "review-fix-r8-gates.log",
+      "sha256": "cc9f134ad7e66095ab9394a15a1e5337ab785301a0cc052d007b16e4b0a09e13"
+    },
+    {
+      "file": "review-fix-r8-arm64.log",
+      "sha256": "aaeb41f72427b6f998ea151bb69c9419cab424657b79b881576d5a40db1ebb7e"
+    }
+  ]
+}

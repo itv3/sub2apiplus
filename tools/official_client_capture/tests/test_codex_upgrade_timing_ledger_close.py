@@ -86,18 +86,17 @@ class CloseCampaignLedgerTests(unittest.TestCase):
             again = ledger.close_campaign_ledger(ledger_dir, root_cause_id="rc1-abc", provenance_receipt=receipt)
             self.assertEqual(again["status"], "already-closed")
 
-    def test_stop_required_ledger_closes_active_attempt_metadata_only_first(self) -> None:
+    def test_deadline_paused_ledger_explicit_root_cause_close_records_metadata_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             ledger_dir = self._ledger(root, started_minutes_ago=5)
             self._open_vc1(ledger_dir)
             ledger.append_event(ledger_dir, event_id="att-1", phase="VC-1", event_type="attempt_started", attempt_id="20260915T000000Z-aaaa", next_action="执行")
-            # 让总预算过期：改写 plan 的开始时间不可行（只写一次），改用 stage 预算耗尽的方式：
-            # 直接以未来时间检查会报错，所以构造 recorded_at 使 VC-1 阶段超过其预算。
+            # 到期只暂停；这里另有显式根因关闭指令，仍须先登记零请求的失败元数据。
             stage_budget = ledger.DEFAULT_STAGE_BUDGETS["VC-1"]
             future = datetime.now(timezone.utc) + timedelta(minutes=stage_budget + 1)
-            self.assertEqual(ledger.inspect_ledger(ledger_dir, now=_iso(future))["status"], "stop_required")
-            with self.assertRaisesRegex(ledger.TimingLedgerError, "禁止继续追加执行事件"):
+            self.assertEqual(ledger.inspect_ledger(ledger_dir, now=_iso(future))["status"], "deadline_paused")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "只允许元数据"):
                 ledger.append_event(ledger_dir, event_id="bad", phase="VC-1", event_type="attempt_failed", attempt_id="20260915T000000Z-aaaa", root_cause_id="rc1-x", live_request_count=1, recorded_at_utc=_iso(future))
             receipt = _write_provenance(root / "prov.json", precise=10, estimated=0)
             result = ledger.close_campaign_ledger(ledger_dir, root_cause_id="rc1-x", provenance_receipt=receipt, recorded_at_utc=_iso(future))

@@ -1,0 +1,66 @@
+{
+  "base_commit": "fa30b4f2e910c387e087f4b1fa5a5a18fcbb826c",
+  "changed_path_count": 2,
+  "current_commit": "a04fe38314e6296b10ff4fd2a1dd4f3c8238e15d",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4160,
+  "frozen_path_count": 1399,
+  "identity_sha256": "37a6d0d85c8c367b1c0ec79a13b1935e28dd8ae89676759514144885b470988a",
+  "issued_at_utc": "2026-09-25T03:10:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01561-request-gate-message-20260925-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "predecessor_sha256s": [
+        "afe51448336681d50a62de6771bb0255f98b7b0393837010edaa3151ce6cf85f"
+      ],
+      "reason": "恢复目标请求缺失时的原提示 path=tools/official_client_capture/run_official_relay_scenario.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-managed-execution-root-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-astra-lite-recovery-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e2eb3a8cfaf5159bb4901d25395910676de5e422f8a1cd06c48e0af27dc08074"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_relay_request_assertions.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}

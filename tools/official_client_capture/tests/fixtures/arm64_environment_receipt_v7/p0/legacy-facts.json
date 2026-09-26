@@ -1,0 +1,270 @@
+{
+  "collector": {
+    "schema_version": "codex-upgrade-arm64-environment-producer/v1",
+    "tool": "/Users/czs/Developer/codex-01561-upgrade-work/r15-v7-snapshot/tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+    "tool_sha256": "d0b6a0650cbb2f3ef33349d914e5aad24c323288d1af618fa6f50313cd570a5f",
+    "version": "7"
+  },
+  "containers": [
+    {
+      "container_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "default_route": {
+        "gateway": "172.30.0.1",
+        "interface": "eth0"
+      },
+      "image_id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "name": "capture-cli",
+      "network_bindings": [
+        {
+          "endpoint_id": "1111111111111111111111111111111111111111111111111111111111111111",
+          "gateway": "172.30.0.1",
+          "ipv4_address": "172.30.0.10",
+          "name": "capture-network",
+          "network_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "public_egress": {
+        "ip_address": "144.34.230.210",
+        "response_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "url": "https://api.ipify.org"
+      },
+      "raw_sha256": {
+        "docker_inspect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "proc_net_route": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "selected_network": {
+        "endpoint_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "gateway": "172.30.0.1",
+        "ipv4_address": "172.30.0.10",
+        "name": "capture-network",
+        "network_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "tls_readiness": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "http_status": 401,
+              "remote_ip": "192.0.2.1",
+              "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 2,
+              "http_status": 401,
+              "remote_ip": "192.0.2.2",
+              "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 3,
+              "http_status": 401,
+              "remote_ip": "192.0.2.3",
+              "response_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "tls_seconds": 0.25
+            }
+          ],
+          "expected_http_status": 401,
+          "name": "chatgpt-cloud-config",
+          "required_successes": 3,
+          "url": "https://chatgpt.com/backend-api/wham/config/bundle"
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "http_status": 401,
+              "remote_ip": "192.0.2.1",
+              "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 2,
+              "http_status": 401,
+              "remote_ip": "192.0.2.2",
+              "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 3,
+              "http_status": 401,
+              "remote_ip": "192.0.2.3",
+              "response_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "tls_seconds": 0.25
+            }
+          ],
+          "expected_http_status": 401,
+          "name": "openai-models",
+          "required_successes": 3,
+          "url": "https://api.openai.com/v1/models"
+        }
+      ]
+    },
+    {
+      "container_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "default_route": {
+        "gateway": "172.25.0.1",
+        "interface": "eth0"
+      },
+      "image_id": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "name": "sub2apiplus",
+      "network_bindings": [
+        {
+          "endpoint_id": "2222222222222222222222222222222222222222222222222222222222222222",
+          "gateway": "172.25.0.1",
+          "ipv4_address": "172.25.0.3",
+          "name": "proxy-network",
+          "network_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "public_egress": {
+        "ip_address": "144.34.230.210",
+        "response_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "url": "https://api.ipify.org"
+      },
+      "raw_sha256": {
+        "docker_inspect": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "proc_net_route": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "selected_network": {
+        "endpoint_id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "gateway": "172.25.0.1",
+        "ipv4_address": "172.25.0.3",
+        "name": "proxy-network",
+        "network_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "tls_readiness": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "http_status": 401,
+              "remote_ip": "192.0.2.1",
+              "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 2,
+              "http_status": 401,
+              "remote_ip": "192.0.2.2",
+              "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 3,
+              "http_status": 401,
+              "remote_ip": "192.0.2.3",
+              "response_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "tls_seconds": 0.25
+            }
+          ],
+          "expected_http_status": 401,
+          "name": "chatgpt-cloud-config",
+          "required_successes": 3,
+          "url": "https://chatgpt.com/backend-api/wham/config/bundle"
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "http_status": 401,
+              "remote_ip": "192.0.2.1",
+              "response_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 2,
+              "http_status": 401,
+              "remote_ip": "192.0.2.2",
+              "response_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "tls_seconds": 0.25
+            },
+            {
+              "attempt": 3,
+              "http_status": 401,
+              "remote_ip": "192.0.2.3",
+              "response_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "tls_seconds": 0.25
+            }
+          ],
+          "expected_http_status": 401,
+          "name": "openai-models",
+          "required_successes": 3,
+          "url": "https://api.openai.com/v1/models"
+        }
+      ]
+    }
+  ],
+  "contract_sha256": "e4fc44a833f0e376bfd6c57c528da93e66b64100e390178f0c607f6aeadd4e2e",
+  "host": {
+    "architecture": "linux/arm64",
+    "hostname": "arm64-test"
+  },
+  "observed_at_utc": "2026-09-23T14:04:21+00:00",
+  "phase": "p0",
+  "root_filesystem": {
+    "available_bytes": 64424509440,
+    "mountpoint": "/",
+    "total_bytes": 107374182400,
+    "used_bytes": 42949672960,
+    "used_percent": 40
+  },
+  "rust_tls_readiness": {
+    "binary": "/opt/codex-0.154.0/bin/codex",
+    "checks": {
+      "auth.credentials": "fail",
+      "config.load": "ok",
+      "network.provider_reachability": "ok"
+    },
+    "codex_version": "0.154.0",
+    "container": "capture-cli",
+    "duration_seconds": 1.25,
+    "failed_check_ids": [
+      "auth.credentials"
+    ],
+    "isolated_empty_codex_home": true,
+    "overall_status": "fail",
+    "process_exit_code": 1,
+    "report_bytes": 4096,
+    "report_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "schema_version": "codex-upgrade-arm64-environment-facts/v1",
+  "subject_id": "r15-legacy-v7",
+  "wireguard": {
+    "config_path": "/etc/wireguard/wg1.conf",
+    "config_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "configured_endpoint": "144.34.230.210:51830",
+    "configured_mtu": 1420,
+    "configured_tcpmss_destinations": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ],
+    "configured_tcpmss_sources": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ],
+    "egress_provider": "BWG",
+    "expected_endpoint": "144.34.230.210:51830",
+    "expected_mtu": 1420,
+    "expected_tcp_mss": 1380,
+    "expected_tcpmss_destinations": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ],
+    "expected_tcpmss_sources": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ],
+    "interface": "wg1",
+    "runtime_endpoint": "144.34.230.210:51830",
+    "runtime_mtu": 1420,
+    "runtime_tcpmss_destinations": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ],
+    "runtime_tcpmss_sources": [
+      "172.25.0.3/32",
+      "172.30.0.0/16"
+    ]
+  }
+}

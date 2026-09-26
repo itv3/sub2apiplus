@@ -51,6 +51,22 @@ def _job_contract() -> dict[str, object]:
 
 
 class CertifyReleaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.platform_patch = mock.patch.object(certify_release, "_require_release_platform")
+        self.platform_patch.start()
+        self.addCleanup(self.platform_patch.stop)
+
+    def test_issue_platform_rejects_non_arm64_and_unavailable_docker(self) -> None:
+        self.platform_patch.stop()
+        with mock.patch.object(certify_release.platform, "system", return_value="Darwin"):
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "Linux ARM64"):
+                certify_release._require_release_platform()
+        with mock.patch.object(certify_release.platform, "system", return_value="Linux"), \
+             mock.patch.object(certify_release.platform, "machine", return_value="aarch64"), \
+             mock.patch.object(certify_release.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "缺少"):
+                certify_release._require_release_platform()
+
     def _inputs(self, root: Path) -> dict[str, Path]:
         identity = policy_certification.current_identity()
         previous = policy_tests._previous_policy(root)
@@ -63,9 +79,13 @@ class CertifyReleaseTests(unittest.TestCase):
             policy_certification.build_activation_certification(deployment, compatibility),
         )
         staging = root / "data" / "staging" / "pre-a3"
-        pre_a3_receipt = pre_a3.run_certification(
-            staging, deployment_receipt=deployment, policy_activation=activation, scenarios=()
-        )
+        chain_scenarios = tuple(row for row in pre_a3.SCENARIOS if row[0] in pre_a3.REAL_CHAIN_IDS)
+        def fixture_scenario(row):
+            return {"name": row[0], "description": row[1], "test": f"{row[2]}:{row[3]}.{row[4]}", "status": "passed", "seconds": 0}
+        with mock.patch.object(pre_a3, "run_scenario", side_effect=fixture_scenario):
+            pre_a3_receipt = pre_a3.run_certification(
+                staging, deployment_receipt=deployment, policy_activation=activation, scenarios=chain_scenarios
+            )
         pre_a3_path = root / "pre-a3.json"
         policy_certification._write_once(pre_a3_path, pre_a3_receipt)
         job_root = root / "job"
@@ -94,6 +114,7 @@ class CertifyReleaseTests(unittest.TestCase):
             certification = certify_release.issue(output, **inputs, require_arm64=False)
             self.assertEqual(certification["schema_version"], certify_release.SCHEMA_VERSION)
             self.assertEqual(certification["status"], "active")
+            self.assertEqual([row["id"] for row in certification["real_chain_coverage"]], list(pre_a3.REAL_CHAIN_IDS))
             self.assertIsNone(certification["superseded_by"])
             identity = policy_certification.current_identity()
             self.assertEqual(
@@ -114,7 +135,26 @@ class CertifyReleaseTests(unittest.TestCase):
             self.assertIsNone(certification["campaign_run_rehearsal"])
             verified = certify_release.verify(output)
             self.assertEqual(verified["receipt_sha256"], certification["receipt_sha256"])
+            # 后续发布包增加登记链时，旧包仍按绑定的 pre-A3 登记集合只读回放。
+            future = ("vc-chain.future", "后续链", "fixture.future", "FutureChain", "test_future")
+            with mock.patch.object(pre_a3, "REAL_CHAIN_IDS", (*pre_a3.REAL_CHAIN_IDS, future[0])), \
+                 mock.patch.object(pre_a3, "SCENARIOS", (*pre_a3.SCENARIOS, future)):
+                self.assertEqual(certify_release.verify(output)["real_chain_coverage"],
+                                 certification["real_chain_coverage"])
+                with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "登记集合"):
+                    certify_release.build_certification(**inputs, require_arm64=False)
             self.assertEqual(certify_release.main(["verify", "--certification", str(output)]), 0)
+            # 无覆盖字段的既有认证仍只读回放；新增字段必须与已绑定的 pre-A3 逐项一致。
+            historical = {key: value for key, value in certification.items() if key not in {"receipt_sha256", "real_chain_coverage"}}
+            historical["receipt_sha256"] = codex_upgrade._fingerprint(historical)
+            historical_path = policy_tests._write_json(root / "historical.json", historical)
+            self.assertNotIn("real_chain_coverage", certify_release.verify(historical_path))
+            mismatched = {**certification, "real_chain_coverage": []}
+            mismatched.pop("receipt_sha256")
+            mismatched["receipt_sha256"] = codex_upgrade._fingerprint(mismatched)
+            mismatch_path = policy_tests._write_json(root / "mismatched-coverage.json", mismatched)
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "真实链覆盖"):
+                certify_release.verify(mismatch_path)
             # 只写一次。
             with self.assertRaises(policy_certification.PolicyCertificationError):
                 certify_release.issue(output, **inputs, require_arm64=False)
@@ -189,6 +229,22 @@ class CertifyReleaseTests(unittest.TestCase):
                 certify_release.build_certification(
                     **inputs, campaign_run_rehearsal_root=root / "x", require_arm64=False
                 )
+            # 旧认证只读兼容不等于允许新签发缺少真实链覆盖的发布包。
+            pre_a3_path = inputs["pre_a3_certification"]
+            original = json.loads(pre_a3_path.read_text(encoding="utf-8"))
+            for disposition in ("missing", "uncertified", "failed"):
+                payload = json.loads(json.dumps(original))
+                if disposition == "missing":
+                    payload["scenarios"] = []
+                else:
+                    payload["scenarios"][0]["status"] = disposition
+                payload.pop("receipt_sha256")
+                payload["receipt_sha256"] = codex_upgrade._fingerprint(payload)
+                pre_a3_path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(disposition=disposition), self.assertRaisesRegex(
+                    certify_release.ReleaseCertificationError, "真实链未认证"
+                ):
+                    certify_release.build_certification(**inputs, require_arm64=False)
 
 
 if __name__ == "__main__":
