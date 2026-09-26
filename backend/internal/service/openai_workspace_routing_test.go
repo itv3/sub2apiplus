@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/stretchr/testify/require"
 )
@@ -197,6 +198,113 @@ func TestOpenAIQuotaQueryUsageDiscoversWorkspaceRoutingFirst(t *testing.T) {
 	require.Equal(t, "https://us.chatgpt.com", result.BackendOrigin)
 	require.Equal(t, "us", result.RoutingOverride)
 	require.Error(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP))
+}
+
+// 发现请求走真实 Executor 时的尝试预算：Executor 在编译之前预留尝试序号，发现请求因此占用
+// WHAM 配额 invocation 的一次尝试。画像声明 WorkspaceRouting 节时，完整配额查询必须在同一
+// invocation 内依次发出 accounts/check、settings/user（画像含该端点时）、usage 与
+// rate-limit-reset-credits，不得因预算耗尽丢掉末尾补查；周期入口与重置入口取同一预算，
+// 三个入口解析出同一 Bundle，账号级 backend client 长连接池不因预算不同而分裂。
+func TestOpenAIQuotaAttemptBudgetCoversWorkspaceRoutingDiscovery(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
+	discoveryMode := ""
+	for _, mode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
+		want := officialCodexQuotaBaseAttemptBudget
+		if officialCodexOptionalSectionsForMode(mode).WorkspaceRouting != nil {
+			want++
+			if discoveryMode == "" {
+				discoveryMode = mode
+			}
+		}
+		require.Equal(t, want, officialCodexQuotaAttemptBudget(mode), "mode=%s", mode)
+	}
+	if discoveryMode == "" {
+		t.Skip("Active/Previous 画像都未声明 WorkspaceRouting 节，预算保持基础值")
+	}
+	section := officialCodexOptionalSectionsForMode(discoveryMode).WorkspaceRouting
+
+	account := &Account{
+		ID: 195, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-routing-budget"},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "token-routing-budget",
+	}}, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("content-type", "application/json")
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	upstream := newQuotaRedirectingUpstream(server)
+	base := officialegress.DefaultGuard()
+	guard, err := officialegress.NewGuard(
+		base.Config(), officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(), base.Recorder(),
+	)
+	require.NoError(t, err)
+	egressRuntime, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		guard, upstream, officialCodexExecutorID, officialegress.ReleaseMode(discoveryMode),
+	)
+	require.NoError(t, err)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	service.officialEgress = egressRuntime
+	runtimeState := defaultOfficialCodexRuntimeState()
+	runtimeState.ProfileMode = discoveryMode
+	runtimeContext, err := withOfficialCodexRuntimeState(context.Background(), runtimeState)
+	require.NoError(t, err)
+
+	_, err = service.QueryUsage(runtimeContext, account.ID)
+	require.NoError(t, err)
+	want := []string{section.DiscoveryEndpointID}
+	if _, settingsErr := resolveCodexEndpointForMode(
+		discoveryMode, codexEndpointID(officialCodexEndpointWhamSettingsUser),
+	); settingsErr == nil {
+		want = append(want, officialCodexEndpointWhamSettingsUser)
+	}
+	want = append(want, officialCodexEndpointWhamUsage, officialCodexEndpointWhamResetCredits)
+	identities := quotaAttemptIdentities(t, upstream.requests)
+	require.Equal(t, want, quotaAttemptEndpointIDs(identities),
+		"发现请求与配额查询共用同一 invocation，末尾仍须补查 rate-limit-reset-credits")
+	for index, identity := range identities {
+		require.Equal(t, uint32(index+1), identity.AttemptOrdinal)
+		require.Equal(t, identities[0].BundleDigest, identity.BundleDigest)
+	}
+	usage := identities[len(identities)-2]
+
+	before := len(upstream.requests)
+	_, err = service.QueryUsageOnly(runtimeContext, account.ID)
+	require.NoError(t, err)
+	_, err = service.ResetCredit(runtimeContext, account.ID)
+	require.NoError(t, err)
+	later := quotaAttemptIdentities(t, upstream.requests[before:])
+	require.Equal(t, []string{
+		officialCodexEndpointWhamUsage, officialCodexEndpointWhamConsumeResetCredit,
+	}, quotaAttemptEndpointIDs(later))
+	for _, identity := range later {
+		require.Equal(t, usage.BundleDigest, identity.BundleDigest, "三个 WHAM 入口必须解析出同一 Bundle")
+	}
+	require.Equal(t, usage.ConnectionPoolDigest, later[0].ConnectionPoolDigest,
+		"周期入口与完整配额查询复用同一账号级长连接池")
+}
+
+func quotaAttemptIdentities(t *testing.T, requests []*http.Request) []officialegress.AttemptIdentity {
+	t.Helper()
+	identities := make([]officialegress.AttemptIdentity, 0, len(requests))
+	for _, request := range requests {
+		identity, ok := officialegress.AttemptIdentityFromContext(request.Context())
+		require.True(t, ok, "%s 缺少 attempt 身份", request.URL.Path)
+		identities = append(identities, identity)
+	}
+	return identities
+}
+
+func quotaAttemptEndpointIDs(identities []officialegress.AttemptIdentity) []string {
+	endpointIDs := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		endpointIDs = append(endpointIDs, identity.EndpointID)
+	}
+	return endpointIDs
 }
 
 func TestOpenAIQuotaWorkspaceRoutingDiscoveryFailureIsNotCached(t *testing.T) {
