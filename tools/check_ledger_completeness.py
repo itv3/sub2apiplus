@@ -44,6 +44,10 @@ CODEX_01491_TERMINAL_STATE = (
     / "maintenance"
     / "CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json"
 )
+# 0.149.1 之后的 Codex 候选新增的出站定型面：§3.5 机器台账与变更集 5／6 清单均已封存，
+# 新增面只能登记在这张独立 successor 登记表里（绑定封存台账摘要），不倒灌改写历史台账。
+CODEX_SURFACE_SUCCESSORS = ROOT / "docs" / "egress" / "validation" / "codex-egress-surface-successors.json"
+CODEX_SURFACE_SUCCESSOR_SCHEMA = "codex-egress-surface-successor/v1"
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 UPSTREAM_MERGE_PLAN_SCHEMA = "official-egress-upstream-merge-plan/v1"
@@ -435,16 +439,20 @@ def current_upstream_merge_entries(
     surface: list[str],
     upstream_commit: str,
     post_upstream_paths: set[str] | None = None,
+    post_upstream_scopes: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     """生成 upstream 合并时点的 Codex 出站 overlay 精确闭集。
 
     后续候选 Campaign 新增的出站面由独立 successor transition 冻结，不能倒灌并改写
-    已经封存的 upstream overlay 台账。
+    已经封存的 upstream overlay 台账：新增文件经 ``post_upstream_paths`` 整体剔除；
+    台账已有文件在合并后新命中的范围经 ``post_upstream_scopes``（路径 → 范围）剔除该范围，
+    其余范围仍逐项与封存台账核对。
     """
 
     strict_surface = set(surface) - set(SCOPE_EXCLUSIONS)
     candidates = strict_surface | REQUIRED_REVIEW_TOUCHPOINTS | IDENTITY_BOUNDARY_TOUCHPOINTS
     candidates -= post_upstream_paths or set()
+    later_scopes = post_upstream_scopes or {}
     entries: list[dict[str, object]] = []
     for path in sorted(candidates):
         if not (ROOT / path).is_file():
@@ -452,7 +460,7 @@ def current_upstream_merge_entries(
         if not git_path_differs(upstream_commit, path):
             continue
         scopes: list[str] = []
-        if path in strict_surface:
+        if path in strict_surface and later_scopes.get(path) != "strict_surface":
             scopes.append("strict_surface")
         if path in REQUIRED_REVIEW_TOUCHPOINTS:
             scopes.append("required_review_touchpoint")
@@ -1052,6 +1060,125 @@ def codex_01491_terminal_surface_additions() -> list[dict[str, str]]:
     return validate_codex_01491_terminal_state(receipt)
 
 
+@dataclass(frozen=True)
+class CodexSurfaceSuccessors:
+    """0.149.1 之后 Codex 候选新增出站定型面的独立 successor 登记（已校验）。"""
+
+    entries: tuple[dict[str, str], ...] = ()
+
+    @property
+    def addition_paths(self) -> set[str]:
+        """新增的出站定型文件：从封存 overlay 复算中整体剔除。"""
+
+        return {item["path"] for item in self.entries if item["kind"] == "surface_addition"}
+
+    @property
+    def scope_additions(self) -> dict[str, str]:
+        """台账已有文件在合并后新命中的范围：复算时只剔除该范围。"""
+
+        return {item["path"]: item["scope"] for item in self.entries if item["kind"] == "scope_addition"}
+
+    def inventory_additions(self) -> list[dict[str, str]]:
+        """出站面清单视角：两类条目都是新命中生产扫描的普通文件。"""
+
+        return [
+            {"path": item["path"], "file_type": item["file_type"], "reason": item["reason"]}
+            for item in self.entries
+        ]
+
+
+def load_codex_surface_successors(
+    path: pathlib.Path,
+    *,
+    sealed_ledger_path: pathlib.Path,
+    surface: set[str],
+    root: pathlib.Path = ROOT,
+) -> CodexSurfaceSuccessors:
+    """读取并失败关闭地校验候选出站面 successor 登记表；登记表不存在时为空。
+
+    登记表必须绑定当前计划封存台账的路径与摘要（台账换代时须先并入再移除本表）；
+    每条登记是命中生产扫描的普通文件：``surface_addition`` 不得已在封存台账中，
+    ``scope_addition`` 只允许给封存台账已有文件追加 ``strict_surface``。
+    """
+
+    if not path.exists() and not path.is_symlink():
+        return CodexSurfaceSuccessors()
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("候选出站面 successor 登记表不是普通文件")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取候选出站面 successor 登记表：{exc}") from exc
+    if not isinstance(document, dict) or set(document) != {"schema_version", "base", "entries"}:
+        raise RuntimeError("候选出站面 successor 登记表字段不闭合")
+    if document["schema_version"] != CODEX_SURFACE_SUCCESSOR_SCHEMA:
+        raise RuntimeError("候选出站面 successor 登记表 schema 非法")
+    if sealed_ledger_path.is_symlink() or not sealed_ledger_path.is_file():
+        raise RuntimeError("候选出站面 successor 登记表绑定的封存台账不存在；台账换代时须先并入再移除本表")
+    sealed_raw = sealed_ledger_path.read_bytes()
+    expected_base = {
+        "upstream_merge_ledger": {
+            "path": sealed_ledger_path.relative_to(root).as_posix(),
+            "sha256": sha256(sealed_raw),
+        }
+    }
+    if document["base"] != expected_base:
+        raise RuntimeError("候选出站面 successor 登记表绑定的封存台账路径或摘要不一致")
+    sealed = json.loads(sealed_raw, object_pairs_hook=_unique_json_object)
+    overlays = sealed.get("overlays") if isinstance(sealed, dict) else None
+    if not isinstance(overlays, list):
+        raise RuntimeError("封存台账缺少 overlays 数组")
+    sealed_scopes = {
+        str(item.get("path")): list(item.get("scopes") or [])
+        for item in overlays
+        if isinstance(item, dict)
+    }
+    entries = document["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise RuntimeError("候选出站面 successor 登记表 entries 必须是非空数组")
+    validated: list[dict[str, str]] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"候选出站面登记条目不是对象：{item!r}")
+        kind = item.get("kind")
+        expected_keys = {"path", "file_type", "kind", "reason"}
+        if kind == "scope_addition":
+            expected_keys = expected_keys | {"scope"}
+        elif kind != "surface_addition":
+            raise RuntimeError(f"候选出站面登记条目 kind 非法：{item!r}")
+        if set(item) != expected_keys or not all(isinstance(value, str) for value in item.values()):
+            raise RuntimeError(f"候选出站面登记条目字段不闭合：{item!r}")
+        relative = item["path"]
+        pure = PurePosixPath(relative)
+        if (
+            not relative
+            or pure.is_absolute()
+            or ".." in pure.parts
+            or pure.as_posix() != relative
+            or item["file_type"] != "regular"
+            or not item["reason"].strip()
+        ):
+            raise RuntimeError(f"候选出站面登记条目路径、类型或理由非法：{item!r}")
+        target = root / relative
+        if target.is_symlink() or not target.is_file():
+            raise RuntimeError(f"候选出站面登记路径不是普通文件：{relative}")
+        if relative not in surface:
+            raise RuntimeError(f"候选出站面登记路径未命中生产扫描：{relative}")
+        if kind == "surface_addition" and relative in sealed_scopes:
+            raise RuntimeError(f"新增出站面已在封存台账中，应登记为 scope_addition：{relative}")
+        if kind == "scope_addition" and (
+            item["scope"] != "strict_surface"
+            or relative not in sealed_scopes
+            or "strict_surface" in sealed_scopes[relative]
+        ):
+            raise RuntimeError(f"范围追加只允许给封存台账已有文件新增 strict_surface：{relative}")
+        validated.append(dict(item))
+    paths = [item["path"] for item in validated]
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise RuntimeError("候选出站面登记路径未排序或重复")
+    return CodexSurfaceSuccessors(tuple(validated))
+
+
 def maintenance_removals(frozen_paths: set[str]) -> list[str]:
     """读取本次退休收据，只允许删除收据绑定且确已不存在的历史出站面。"""
 
@@ -1111,10 +1238,16 @@ def main() -> int:
             item["path"]
             for item in codex_01491_terminal_surface_additions()
         }
+        successors = load_codex_surface_successors(
+            CODEX_SURFACE_SUCCESSORS,
+            sealed_ledger_path=plan.ledger_path,
+            surface=set(surface) - set(SCOPE_EXCLUSIONS),
+        )
         upstream_entries = current_upstream_merge_entries(
             surface,
             plan.upstream_commit,
-            terminal_successor_paths,
+            terminal_successor_paths | successors.addition_paths,
+            successors.scope_additions,
         )
         upstream_payload = upstream_merge_ledger_payload(upstream_entries, plan)
     except RuntimeError as exc:
@@ -1196,7 +1329,12 @@ def main() -> int:
     try:
         changeset6 = changeset6_additions(inventory_raw)
         terminal_additions = codex_01491_terminal_surface_additions()
-        additions = changeset6 + terminal_additions
+        successor_additions = successors.inventory_additions()
+        if {item["path"] for item in changeset6 + terminal_additions} & {
+            item["path"] for item in successor_additions
+        }:
+            raise RuntimeError("候选出站面 successor 登记与变更集 6／0.149.1 终态增量重复")
+        additions = changeset6 + terminal_additions + successor_additions
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
@@ -1245,6 +1383,7 @@ def main() -> int:
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(changeset6)} 面"
         f" + 0.149.1 终态增量 {len(terminal_additions)} 面"
+        f" + 候选 successor 登记 {len(successor_additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
         f"；{plan.upstream_tag} 机器 overlay {len(upstream_entries)} 个文件逐项一致"
         f"（plan={plan.plan_id}）"

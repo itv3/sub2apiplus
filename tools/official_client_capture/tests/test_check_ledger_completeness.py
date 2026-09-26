@@ -377,5 +377,146 @@ class CodexTerminalStateReceiptGateTests(unittest.TestCase):
             ledger.validate_codex_terminal_state_receipts()
 
 
+class CodexSurfaceSuccessorTests(unittest.TestCase):
+    """0.149.1 之后候选新增出站定型面的独立 successor 登记：封存台账逐字保留，登记表失败关闭。"""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        for relative in ("backend/kept.go", "backend/new.go", "backend/sealed_strict.go"):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("package service\n", encoding="utf-8")
+        self.sealed = self.root / "docs/egress/maintenance/ledger.json"
+        self.sealed.parent.mkdir(parents=True)
+        self.sealed.write_text(
+            json.dumps(
+                {
+                    "overlays": [
+                        {"path": "backend/kept.go", "source": "fork", "scopes": ["required_review_touchpoint"]},
+                        {"path": "backend/sealed_strict.go", "source": "fork", "scopes": ["strict_surface"]},
+                    ]
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.registry = self.root / "docs/egress/validation/successors.json"
+        self.registry.parent.mkdir(parents=True)
+        self.surface = {"backend/kept.go", "backend/new.go", "backend/sealed_strict.go"}
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _base(self) -> dict[str, object]:
+        return {
+            "upstream_merge_ledger": {
+                "path": "docs/egress/maintenance/ledger.json",
+                "sha256": ledger.sha256(self.sealed.read_bytes()),
+            }
+        }
+
+    def _entries(self) -> list[dict[str, str]]:
+        return [
+            {"path": "backend/kept.go", "file_type": "regular", "kind": "scope_addition",
+             "scope": "strict_surface", "reason": "合并缝新增命中扫描"},
+            {"path": "backend/new.go", "file_type": "regular", "kind": "surface_addition",
+             "reason": "候选新增出站定型文件"},
+        ]
+
+    def _load(self, entries=None, base=None, surface=None) -> ledger.CodexSurfaceSuccessors:
+        document = {
+            "schema_version": ledger.CODEX_SURFACE_SUCCESSOR_SCHEMA,
+            "base": self._base() if base is None else base,
+            "entries": self._entries() if entries is None else entries,
+        }
+        self.registry.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+        return ledger.load_codex_surface_successors(
+            self.registry,
+            sealed_ledger_path=self.sealed,
+            surface=self.surface if surface is None else surface,
+            root=self.root,
+        )
+
+    def test_missing_registry_is_empty(self) -> None:
+        loaded = ledger.load_codex_surface_successors(
+            self.registry, sealed_ledger_path=self.sealed, surface=self.surface, root=self.root
+        )
+        self.assertEqual(loaded.entries, ())
+        self.assertEqual(loaded.addition_paths, set())
+        self.assertEqual(loaded.scope_additions, {})
+
+    def test_loads_surface_and_scope_additions(self) -> None:
+        loaded = self._load()
+        self.assertEqual(loaded.addition_paths, {"backend/new.go"})
+        self.assertEqual(loaded.scope_additions, {"backend/kept.go": "strict_surface"})
+        self.assertEqual(
+            [set(item) for item in loaded.inventory_additions()],
+            [{"path", "file_type", "reason"}] * 2,
+        )
+
+    def test_rejects_sealed_ledger_drift_or_rotation(self) -> None:
+        base = self._base()
+        base["upstream_merge_ledger"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuntimeError, "封存台账路径或摘要不一致"):
+            self._load(base=base)
+        self.sealed.unlink()
+        with self.assertRaisesRegex(RuntimeError, "先并入再移除本表"):
+            self._load(base={})
+
+    def test_rejects_path_outside_production_scan(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "未命中生产扫描"):
+            self._load(surface={"backend/kept.go"})
+
+    def test_rejects_misclassified_additions(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "应登记为 scope_addition"):
+            self._load(entries=[{"path": "backend/kept.go", "file_type": "regular",
+                                 "kind": "surface_addition", "reason": "误登"}])
+        for path in ("backend/new.go", "backend/sealed_strict.go"):
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "只允许给封存台账已有文件新增"):
+                self._load(entries=[{"path": path, "file_type": "regular", "kind": "scope_addition",
+                                     "scope": "strict_surface", "reason": "误登"}])
+
+    def test_rejects_unsorted_open_or_unknown_entries(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "未排序或重复"):
+            self._load(entries=list(reversed(self._entries())))
+        extra = self._entries()
+        extra[1]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuntimeError, "字段不闭合"):
+            self._load(entries=extra)
+        unknown = self._entries()
+        unknown[1]["kind"] = "removal"
+        with self.assertRaisesRegex(RuntimeError, "kind 非法"):
+            self._load(entries=unknown)
+        with self.assertRaisesRegex(RuntimeError, "非空数组"):
+            self._load(entries=[])
+
+    def test_overlay_recompute_drops_successor_paths_and_scopes(self) -> None:
+        patches = (
+            mock.patch.object(ledger, "ROOT", self.root),
+            mock.patch.object(ledger, "REQUIRED_REVIEW_TOUCHPOINTS", {"backend/kept.go"}),
+            mock.patch.object(ledger, "IDENTITY_BOUNDARY_TOUCHPOINTS", set()),
+            mock.patch.object(ledger, "git_path_differs", lambda _commit, _path: True),
+            mock.patch.object(ledger, "git_path_exists", lambda _commit, _path: False),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        surface = ["backend/kept.go", "backend/new.go"]
+        self.assertEqual(
+            ledger.current_upstream_merge_entries(surface, "1" * 40),
+            [
+                {"path": "backend/kept.go", "source": "fork", "scopes": ["strict_surface", "required_review_touchpoint"]},
+                {"path": "backend/new.go", "source": "fork", "scopes": ["strict_surface"]},
+            ],
+        )
+        self.assertEqual(
+            ledger.current_upstream_merge_entries(
+                surface, "1" * 40, {"backend/new.go"}, {"backend/kept.go": "strict_surface"}
+            ),
+            [{"path": "backend/kept.go", "source": "fork", "scopes": ["required_review_touchpoint"]}],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
