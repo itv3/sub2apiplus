@@ -46,6 +46,47 @@
       "reviewed_by": "codex-version-route-audit",
       "review_ref": "codex-0.147.0-settings-user/2026-08-14",
       "rationale": "0.147 新增 settings/user endpoint；正式 Compiler、Executor、adapter 与 terminal Guard 的合成无外部流量捕获已通过。"
+    },
+    {
+      "sink_id": "codex.quota.wham",
+      "prior_receipt_digest": "c8eb760de16b254fc8ca893b4da28bae75cbc2ac3aaee0e4d8935d87fb6a5d4e",
+      "binding_digest": "9d9f083763f90ddf03407661e7f64400cbb2c4f083d0f6baba73bd70b154a407",
+      "route": {
+        "route": {
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/wham/accounts/check",
+          "purpose": "quota_query",
+          "protocol": "http"
+        },
+        "evidence_kind": "codex_endpoint",
+        "evidence_id": "wham_accounts_check",
+        "backend": "http_upstream",
+        "adapter_id": "officialegress.http_upstream",
+        "transport_id": "codex-0.157.0-http-ubuntu24-native-long-lived",
+        "wire_fixture": {
+          "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/wire.json",
+          "sha256": "245dfb2bc2bd2f7f261fb4ab59909db5ea4e40c3e752e82470c320a0c96b2948"
+        },
+        "execution_verification": {
+          "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/execution-verification.json",
+          "sha256": "94201860aa04cf508694c85056eb5b834fe976774f037f06d73006c23b7f7b1d"
+        }
+      },
+      "profile_digests": [
+        "3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d"
+      ],
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
+        "ast_fingerprint": "1f0eb260f5fa",
+        "file": "backend/internal/service/openai_quota_service.go",
+        "function": "*OpenAIQuotaService.doCodexQuotaRequest",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "source_blob_sha256": "273ea821b1e41851997c9221282834cc614e7b93aa2ea03c82ee9207dab820ea"
+      },
+      "reviewed_by": "codex-version-route-audit",
+      "review_ref": "codex-0.157.0-accounts-check/candidate",
+      "rationale": "0.157.0 新增工作区路由发现 accounts/check endpoint（画像 WorkspaceRouting 节）；正式 Compiler、Executor、adapter 与 terminal Guard 的合成无外部流量捕获已通过；生产 canary acceptance 待生产 canary 实测后补齐。"
     }
   ]
 }
