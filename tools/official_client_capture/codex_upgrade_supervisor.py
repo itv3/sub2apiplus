@@ -10741,6 +10741,11 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
             time.sleep(.1)
         if process.returncode:
             raise SupervisorError(f"本地容器维护失败，退出码 {process.returncode}{_egress_transition_log_tail(log_path)}")
+        # 守护每轮从开始观测到发布状态之间有延迟（要做独立出口验证），命令刚结束时读到的状态可能仍是命令开始前的
+        # 就绪事实（仍在租期内，校验照样通过）。重新准入只采用观测起点晚于命令结束的守护状态，否则继续等下一轮；
+        # 这里取命令结束被检测到的时刻，不早于命令的实际结束时刻。2026-09-26 c01570 VC-5 批次 9：候选就绪清缓存
+        # 重启后 0.43 秒就按陈旧就绪结束维护、撤销声明，0.15 秒后守护发布 blocked，父监督器判出口异常暂停。
+        command_finished_ns = time.monotonic_ns()
         if not cleanup:
             while True:
                 if time.monotonic_ns() >= deadline:
@@ -10751,6 +10756,11 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
                     after = arm64_environment.require_runtime_egress()
                     if after["policy_sha256"] != before["policy_sha256"]:
                         raise RuntimeEgressPaused("容器维护期间指定出口策略发生变化")
+                    if after["runtime"]["observed_at_monotonic_ns"] <= command_finished_ns:
+                        # 陈旧就绪不是维护后的准入证据：不结束维护、不撤销声明，等守护发布命令结束之后的观测。
+                        after = None
+                        time.sleep(.1)
+                        continue
                     break
                 except (OSError, ValueError) as error:
                     allowed = False

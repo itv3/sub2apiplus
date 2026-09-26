@@ -45,6 +45,34 @@ def runtime_fixture():
     return snapshot
 
 
+# 准入序列占位：在被读取的那一刻生成守护新发布的就绪状态（观测起点晚于维护命令结束）。
+FRESH = object()
+
+
+class AdmissionSequence:
+    """把出口准入序列转成 require_runtime_egress 的替身。
+
+    FRESH 在调用时复制首个快照并把观测起点改为当前单调时刻，模拟维护命令结束之后守护发布的状态；
+    异常原样抛出，其余快照原样返回。returned 记录实际返回过的快照，供断言维护按哪份状态结束。
+    """
+
+    def __init__(self, items):
+        self.base = items[0]
+        self.queue = list(items)
+        self.returned = []
+
+    def __call__(self):
+        item = self.queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        if item is FRESH:
+            item = copy.deepcopy(self.base)
+            now = time.monotonic_ns()
+            item["runtime"].update(observed_at_monotonic_ns=now, valid_until_monotonic_ns=now + 2500000000)
+        self.returned.append(item)
+        return item
+
+
 class _ImmediateExecutor:
     """同步执行的替身线程池：守护每轮的出口健康请求在本轮内确定完成，便于断言窗口与状态。"""
 
@@ -753,7 +781,7 @@ class EgressSupervisorTests(unittest.TestCase):
                       mock.patch.object(arm, "_read_egress_runtime_json", return_value=waiting),
                       mock.patch.object(Path, "read_text", autospec=True, side_effect=lambda path, *args, **kwargs:
                                         waiting["boot_id"] if str(path) == "/proc/sys/kernel/random/boot_id" else read_text(path, *args, **kwargs)),
-                      mock.patch.object(arm, "require_runtime_egress", side_effect=[snapshot, snapshot, ValueError("正在重建"), snapshot]),
+                      mock.patch.object(arm, "require_runtime_egress", side_effect=AdmissionSequence([snapshot, snapshot, ValueError("正在重建"), FRESH])),
                       mock.patch.object(supervisor.subprocess, "Popen", return_value=process) as launched):
                     if shared_fault:
                         with self.assertRaises(supervisor.RuntimeEgressPaused):
@@ -865,7 +893,8 @@ class EgressSupervisorTests(unittest.TestCase):
         stack.enter_context(mock.patch.object(supervisor, "_process_start_ticks", return_value="11"))
         stack.enter_context(mock.patch.object(supervisor, "_process_descends_from", return_value=True))
         stack.enter_context(mock.patch.object(supervisor, "_owner_alive", return_value=True))
-        stack.enter_context(mock.patch.object(arm, "require_runtime_egress", side_effect=readiness))
+        self.admission = AdmissionSequence(readiness)
+        stack.enter_context(mock.patch.object(arm, "require_runtime_egress", side_effect=self.admission))
         # 维护进行中执行端核验声明绑定时读取守护状态：按首个准入快照提供合规状态与本机启动身份。
         snapshot = readiness[0]
         read_text = Path.read_text
@@ -891,7 +920,7 @@ class EgressSupervisorTests(unittest.TestCase):
             return real_write(path, *args, **kwargs)
         process = mock.Mock(returncode=0)
         process.poll.return_value = 0
-        with self._transition_context([snapshot] * 4), mock.patch.object(supervisor, "_write_json", side_effect=write), \
+        with self._transition_context([snapshot, snapshot, FRESH]), mock.patch.object(supervisor, "_write_json", side_effect=write), \
                 mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
             self.assertEqual(supervisor._egress_transition_command(self._restart_arguments()), 0)
         self.assertEqual(len(observed), 1)
@@ -928,6 +957,46 @@ class EgressSupervisorTests(unittest.TestCase):
         self.assertEqual((self.root / "egress-transition.json").read_bytes(), before)
         self.assertFalse((self.root / "egress-pause.json").exists())
         self.assertFalse(list((self.root / "egress-transitions").glob("*.finish.json")) if (self.root / "egress-transitions").exists() else [])
+
+    def test_restart_does_not_finish_on_ready_status_observed_before_command_finished(self):
+        """复现 2026-09-26 c01570 VC-5 批次 9：重启命令刚结束时，守护这一轮的观测尚未发布，读到的仍是命令开始前
+        发布的就绪状态（与维护前逐字相同、仍在租期内）。维护不得据此结束；须等守护发布命令结束之后的观测。"""
+
+        stale = runtime_fixture()
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        # 维护前：运行内准入与 before 各一次；维护后：陈旧就绪 → 守护发布重建中 → 守护发布新的就绪。
+        readiness = [stale, stale, copy.deepcopy(stale), ValueError("重建后等待独立出口验证"), FRESH]
+        with self._transition_context(readiness), mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
+            self.assertEqual(supervisor._egress_transition_command(self._restart_arguments()), 0)
+        self.assertEqual(self.admission.queue, [])
+        records = [json.loads(path.read_bytes()) for path in (self.root / "egress-transitions").glob("*.json")
+                   if not path.name.endswith(".finish.json")]
+        finishes = [json.loads(path.read_bytes()) for path in (self.root / "egress-transitions").glob("*.finish.json")]
+        self.assertEqual((len(records), len(finishes)), (1, 1))
+        self.assertEqual(finishes[0]["status"], "passed")
+        self.assertEqual(finishes[0]["after_sha256"], supervisor._sha256(supervisor._canonical(self.admission.returned[-1])))
+        self.assertNotEqual(finishes[0]["after_sha256"], records[0]["before_sha256"])
+        self.assertFalse((self.root / "egress-pause.json").exists())
+        self.assertFalse((self.root / "egress-transition.json").exists())
+
+    def test_restart_pauses_when_only_stale_ready_status_is_seen_until_deadline(self):
+        """守护一直没有发布命令结束之后的观测时，维护按原有界期限失败并暂停，绝不按陈旧就绪放行。"""
+
+        stale = runtime_fixture()
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        arguments = self._restart_arguments()
+        arguments.timeout_seconds = 1
+        readiness = [stale, stale] + [copy.deepcopy(stale) for _ in range(40)]
+        with self._transition_context(readiness), mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(supervisor.RuntimeEgressPaused, "超过原有界等待期限"):
+                supervisor._egress_transition_command(arguments)
+        finishes = [json.loads(path.read_bytes()) for path in (self.root / "egress-transitions").glob("*.finish.json")]
+        self.assertEqual(len(finishes), 1)
+        self.assertEqual((finishes[0]["status"], finishes[0]["after_sha256"]), ("failed", None))
+        self.assertTrue((self.root / "egress-pause.json").exists())
+        self.assertFalse((self.root / "egress-transition.json").exists())
 
     def test_unverifiable_job_egress_binding_fails_closed_with_explicit_reason(self):
         binding = {"schema_version": "codex-upgrade-job-egress/v1", "run_dir": str(self.root / "missing-parent-run"),
