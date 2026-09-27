@@ -7401,11 +7401,23 @@ def _official_capture_cleanup_completed(prior_dir: Path) -> bool:
 # 普通恢复预览动作的唯一形态：零请求、不发布预约、不创建 attempt。
 _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID = "preview-official-recovery"
 _OFFICIAL_RECOVERY_PREVIEW_OPERATION = "VC-1:official-recovery"
-# 预览重派只接纳处理型失败（工具或配置缺陷报错、子进程非零退出）；截止清理、中断等
-# 不在本协议内，仍由 reconciler 判定。
-_OFFICIAL_RECOVERY_PREVIEW_RETRY_FAILURES = frozenset(
-    {("handled-error", "ConfigurationError"), ("child-returncode", "ChildProcessError")}
-)
+# 预览重派只接纳处理型失败：动作在执行中因工具／配置缺陷报错（handled-error、unexpected-error）或子进程非零退出
+# （child-returncode），且诊断类别是 execution-failure；截止清理、中断等不在本协议内，仍由 reconciler 判定。
+# 修好接着跑第 30 项：不再按错误类型白名单（ConfigurationError／ChildProcessError）——补跑动作因任何工具缺陷抛出的
+# 异常（如 ValueError）修好后同样要能用 N+1 零请求预览承接，否则对账可恢复却没有后继协议。
+_RECOVERY_PREVIEW_RETRY_FAILURE_KINDS = frozenset({"handled-error", "unexpected-error", "child-returncode"})
+_RECOVERY_PREVIEW_RETRY_FAILURE_CLASS = "execution-failure"
+_RECOVERY_PREVIEW_EXCLUDED_ERROR_TYPES = frozenset({"CampaignCleanupRequested", "KeyboardInterrupt", "SystemExit"})
+
+
+def _recovery_preview_retry_failure(diagnostic: Mapping[str, Any]) -> bool:
+    """父动作诊断是否属于恢复链协议可承接的处理型失败（第 30 项口径：失败种类＋类别＋排除清理／中断异常）。"""
+
+    return (
+        diagnostic.get("failure_kind") in _RECOVERY_PREVIEW_RETRY_FAILURE_KINDS
+        and diagnostic.get("failure_class") == _RECOVERY_PREVIEW_RETRY_FAILURE_CLASS
+        and diagnostic.get("error_type") not in _RECOVERY_PREVIEW_EXCLUDED_ERROR_TYPES
+    )
 
 
 def _validate_batched_official_recovery_preview_retry_successor(
@@ -7555,8 +7567,8 @@ def _verify_failed_official_recovery_parent(
 
     VC-1 的预览重派与补跑失败后的预览两条协议共用，VC-5 候选采集续跑的同构协议按 ``phase``
     复用：父 run 目录与 state／stop receipt 必须私有且逐字自洽，stop 原因是该动作失败，动作
-    诊断只能是处理型失败（ConfigurationError 或子进程非零退出）；截止清理、中断等不在协议内，
-    仍由 reconciler 判定。
+    诊断只能是处理型失败（执行中因工具／配置缺陷报错或子进程非零退出，类别 execution-failure；第 30 项起
+    不再按错误类型白名单）；截止清理、中断等不在协议内，仍由 reconciler 判定。
 
     第三批 B3-15（第 26 项）：父 run 被看门狗中止（``watchdog-aborted``，没有动作诊断）且已按
     ``_reconciled_watchdog_abort`` 对账时同样接受——stop receipt 须是看门狗中止本身，且该动作不得留有
@@ -7628,10 +7640,7 @@ def _verify_failed_official_recovery_parent(
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
     )
-    if (
-        diagnostic.get("failure_kind"),
-        diagnostic.get("error_type"),
-    ) not in _OFFICIAL_RECOVERY_PREVIEW_RETRY_FAILURES:
+    if not _recovery_preview_retry_failure(diagnostic):
         raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
 
 

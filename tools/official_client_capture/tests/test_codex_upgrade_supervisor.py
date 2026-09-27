@@ -1459,6 +1459,26 @@ class SupervisorTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
                 supervisor._validate_batched_campaign_history(retry, history)
+        # 修好接着跑第 30 项：执行失败不再按错误类型白名单——工具缺陷抛的其它异常、意外异常、子进程非零退出都可承接；
+        # 中断种类、非 execution-failure 类别、清理／中断异常仍拒绝。
+        for accepted in (
+            ("handled-error", "ValueError", "execution-failure"),
+            ("unexpected-error", "RuntimeError", "execution-failure"),
+            ("child-returncode", "ChildProcessError", "execution-failure"),
+        ):
+            with self.subTest(accepted=accepted), tempfile.TemporaryDirectory() as directory:
+                history, retry = build(Path(directory).resolve(), preview_failure=accepted)
+                ordered = supervisor._validate_batched_campaign_history(retry, history)
+                self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
+        for rejected in (
+            ("interrupted", "KeyboardInterrupt", "execution-failure"),
+            ("handled-error", "ConfigurationError", "deadline-expired"),
+            ("handled-error", "CampaignCleanupRequested", "execution-failure"),
+        ):
+            with self.subTest(rejected=rejected), tempfile.TemporaryDirectory() as directory:
+                history, retry = build(Path(directory).resolve(), preview_failure=rejected)
+                with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                    supervisor._validate_batched_campaign_history(retry, history)
 
     def test_failed_recovery_run_is_followed_by_a_new_zero_request_preview(self) -> None:
         """真实补跑失败后，以 N+1 派发新的普通零请求预览，执行集合不得扩大。
@@ -1671,6 +1691,26 @@ class SupervisorTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
                 supervisor._validate_batched_campaign_history(successor, history)
+        # 修好接着跑第 30 项（194249z 批次 16 真实补跑以 ValueError 失败、修好后批次 17 零请求预览被拒的实测）：
+        # 执行失败不再按错误类型白名单；中断种类、非 execution-failure 类别、清理／中断异常仍拒绝。
+        for accepted in (
+            ("handled-error", "ValueError", "execution-failure"),
+            ("unexpected-error", "RuntimeError", "execution-failure"),
+            ("child-returncode", "ChildProcessError", "execution-failure"),
+        ):
+            with self.subTest(accepted=accepted), tempfile.TemporaryDirectory() as directory:
+                history, successor = build(Path(directory).resolve(), run_failure=accepted)
+                ordered = supervisor._validate_batched_campaign_history(successor, history)
+                self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2, 3])
+        for rejected in (
+            ("interrupted", "KeyboardInterrupt", "execution-failure"),
+            ("handled-error", "ConfigurationError", "deadline-expired"),
+            ("handled-error", "CampaignCleanupRequested", "execution-failure"),
+        ):
+            with self.subTest(rejected=rejected), tempfile.TemporaryDirectory() as directory:
+                history, successor = build(Path(directory).resolve(), run_failure=rejected)
+                with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                    supervisor._validate_batched_campaign_history(successor, history)
 
     def _environment_redispatch_fixture(
         self, root: Path

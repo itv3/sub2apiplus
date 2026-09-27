@@ -3399,6 +3399,11 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   （原始异常文本，去控制字符、≤2000 字符，参与自摘要、不参与 write-once 事实核对；历史收据无此字段仍可校验），暂停／停线消息写
   "父 run 创建失败（<类型>：<原文>）；<暂停指引>"。链审计的拒绝理由（如"失败父 run … 尚未对账；先执行 reconcile-supervisor-run"）
   由此可见，不再只剩类型名。
+- **补跑／预览失败后的零请求预览承接任何执行失败**：VC-1／VC-5 恢复链协议核验父动作诊断时不再按错误类型白名单
+  （ConfigurationError／ChildProcessError），改为失败种类 ∈ {handled-error, unexpected-error, child-returncode} 且类别为 `execution-failure`，
+  显式排除 CampaignCleanupRequested／KeyboardInterrupt／SystemExit；`interrupted` 种类与其它类别（deadline-expired、environment-*、
+  evidence-*、tool-evolution-required、post-run-tooling 等）仍由 reconciler 判定。补跑动作因工具缺陷抛出的其它异常（如 ValueError）
+  修好后同样能用 N+1 零请求预览承接，不再是"对账可恢复却没有后继协议"的死路。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，
