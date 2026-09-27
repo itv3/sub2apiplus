@@ -3817,6 +3817,30 @@ class CampaignGlobalPreconditionError(ConfigurationError):
     failure_class = "environment-prerequisite"
 
 
+class EnvironmentContinuityDrift(ConfigurationError):
+    """承接源 attempt 的收尾环境与本轮起始环境不连续（修好接着跑第 22 项）。
+
+    续跑承接上一轮已完成 Job 的前提是两轮之间环境没有漂移；漂移时本 attempt 在任何 Job 执行之前失败
+    （零请求）。此前提示"不带 --rerun-failed 整轮重采"，正式 Campaign 里走不通（有失败 attempt 只能按批准
+    的恢复预览 resume），下一次预览又照样复用，反复失败。现在它是可识别的失败类型：对账的恢复预览与
+    resume 闭集都把这类源 attempt 当作"全部重跑源"——不承接任何结果、全部作业重跑。
+    """
+
+
+CONTINUITY_DRIFT_ERROR_TYPE = "EnvironmentContinuityDrift"
+
+
+def _attempt_continuity_drifted(attempt: Mapping[str, Any]) -> bool:
+    """attempt 是否因环境连续性漂移失败（承接前失败、零请求）。"""
+
+    error = attempt.get("execution_error")
+    return (
+        attempt.get("status") == "failed"
+        and isinstance(error, Mapping)
+        and error.get("type") == CONTINUITY_DRIFT_ERROR_TYPE
+    )
+
+
 class EvidenceIntegrityError(ConfigurationError):
     """已封存证据或不可变控制制品的完整性异常（永久失败类 ``evidence-integrity``）。
 
@@ -32833,6 +32857,9 @@ def _latest_attempt_summary(
         if (phase, candidate_id, path.name) in _isolation_invalidated_attempts(campaign_dir):
             # 修好接着跑第 13 项：被环境隔离作废的 attempt 不是待封存，而是续跑来源（全部重跑）；只在作废时写字段。
             summary["isolation_invalidated"] = True
+        if _attempt_continuity_drifted(attempt):
+            # 修好接着跑第 22 项：环境连续性漂移失败，续跑全部重跑；只在漂移时写字段。
+            summary["continuity_drift"] = True
         return summary
     return None
 
@@ -33859,6 +33886,12 @@ def campaign_status(
             else:
                 status = "candidate_awaiting_client_checkpoint"
                 next_command = "Kilo 两入口完成后执行首次 capture-candidate seal"
+        elif candidate_attempt.get("continuity_drift"):
+            status = "candidate_capture_failed"
+            next_command = (
+                "上一轮结束后环境已漂移（承接前失败、零请求）：reconcile-attempt 对账后恢复预览全部重跑（不承接），"
+                "批准后 resume --rerun-failed"
+            )
         else:
             status = "candidate_capture_failed"
             next_command = "修复失败任务后使用 resume --rerun-failed"
@@ -33935,6 +33968,12 @@ def campaign_status(
                     if official_attempt.get("metadata_only_reuse")
                     else "完成机器 finalizer 后执行 capture-official seal"
                 )
+            )
+        elif official_attempt.get("continuity_drift"):
+            status = "official_capture_failed"
+            next_command = (
+                "上一轮结束后环境已漂移（承接前失败、零请求）：reconcile-attempt 对账后恢复预览全部重跑（不承接），"
+                "批准后 resume --rerun-failed"
             )
         else:
             status = "official_capture_failed"
@@ -37339,6 +37378,13 @@ def _phase_evaluation_recovery_scope(
         isolated_ids = list(completed_ids)
         completed_ids = []
         execute_ids = sorted(set(execute_ids) | set(isolated_ids))
+    drifted_ids: list[str] = []
+    continuity_drifted = isolation_receipt is None and _attempt_continuity_drifted(attempt)
+    if continuity_drifted:
+        # 修好接着跑第 22 项：源 attempt 因环境连续性漂移失败，它承接的结果证据前提不再成立，全部重跑。
+        drifted_ids = list(completed_ids)
+        completed_ids = []
+        execute_ids = sorted(set(execute_ids) | set(drifted_ids))
     if not execute_ids and not allow_empty:
         raise ConfigurationError("失败 attempt 没有可重跑 Job，禁止建立 transition。")
 
@@ -37428,6 +37474,8 @@ def _phase_evaluation_recovery_scope(
             "isolation_sha256": str(isolation_receipt["isolation_sha256"]),
             "invalidated_job_ids": sorted(isolated_ids),
         }
+    if continuity_drifted:
+        scope["continuity_drift"] = {"invalidated_job_ids": sorted(drifted_ids)}
     return scope
 
 
@@ -37517,6 +37565,19 @@ def _validate_recovery_scope_plan(
         ):
             raise ConfigurationError("恢复 transition 的 environment_isolation 作废作业非法。")
         isolated_ids = {str(value) for value in values}
+    # 修好接着跑第 22 项：环境连续性漂移源的已完成作业同样全部并入执行闭集。
+    drift = scope.get("continuity_drift")
+    if drift is not None:
+        values = drift.get("invalidated_job_ids") if isinstance(drift, Mapping) else None
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in values)
+            or completed_ids
+            or isolation is not None
+        ):
+            raise ConfigurationError("恢复 transition 的 continuity_drift 作废作业非法。")
+        isolated_ids = isolated_ids | {str(value) for value in values}
     if (
         not planned_ids
         or (not execute_ids and not allow_empty)
@@ -41414,10 +41475,11 @@ def _prior_complete_results(
             attempt.name,
             _historical_manifest_controls=historical_source_controls,
         )
-        if (phase, history_candidate_id, attempt.name) in isolation_invalidated and payload.get("status") in {
-            "environment_contaminated",
-            "awaiting_receipts",
-        }:
+        if (
+            (phase, history_candidate_id, attempt.name) in isolation_invalidated
+            and payload.get("status") in {"environment_contaminated", "awaiting_receipts"}
+        ) or (not cross_campaign_source and _attempt_continuity_drifted(payload)):
+            # 修好接着跑第 22 项：环境连续性漂移源与隔离作废源一样全部重跑，不承接任何结果。
             if _fingerprint(payload.get("identity")) != _fingerprint(identity):
                 raise ConfigurationError(
                     "先前失败 attempt 身份与本次重跑不一致；不得在同一 Campaign 混用身份，"
@@ -41425,7 +41487,8 @@ def _prior_complete_results(
                 )
             if expected_reuse:
                 raise ConfigurationError(
-                    f"attempt {attempt.name} 已被环境隔离作废，结果永不复用；恢复闭集不得承接任何作业。"
+                    f"attempt {attempt.name} 已被环境隔离作废或因环境连续性漂移失败，结果不再复用；"
+                    "恢复闭集不得承接任何作业。"
                 )
             return []
         if payload.get("status") not in allowed_statuses:
@@ -41955,10 +42018,11 @@ def _verify_environment_continuity(
         if previous.get(kind) != current.get(kind)
     ]
     if drifted:
-        raise ConfigurationError(
+        raise EnvironmentContinuityDrift(
             "承接失败：上一轮结束后环境已漂移（"
             + "、".join(drifted)
-            + "），被承接任务的证据前提不再成立，请不带 --rerun-failed 整轮重采。"
+            + "），被承接任务的证据前提不再成立；本 attempt 在任何 Job 执行前失败（零请求）。"
+            "reconcile-attempt 对账后恢复预览全部重跑（不承接），批准后 resume --rerun-failed。"
         )
     return {
         "schema_version": "codex-upgrade-attempt-continuity/v1",

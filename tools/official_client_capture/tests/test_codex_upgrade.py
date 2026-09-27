@@ -20710,10 +20710,13 @@ class CodexUpgradeTest(unittest.TestCase):
         fixture: dict[str, object],
         *,
         before_probe: bool = True,
+        continuity_drift: bool = False,
     ) -> str:
         """发布环境污染的官方 attempt，形同 _run_capture_attempt：before 探针在位、after／恢复失败，并写旁路标记。
 
         ``before_probe=False`` 时是 before 探针都没取到（没有执行任何 Job）的普通失败：恢复错误不构成污染。
+        ``continuity_drift=True`` 时是承接前环境连续性漂移的失败（修好接着跑第 22 项）：已完成 Job 来自承接，
+        环境本身已恢复，不是污染。
         """
 
         campaign_dir = fixture["campaign_dir"]
@@ -20790,7 +20793,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "phase": "official",
                 "candidate_id": None,
                 "job_checkpoint": job_checkpoint,
-                "status": "environment_contaminated" if before_probe else "failed",
+                "status": "failed" if continuity_drift else "environment_contaminated" if before_probe else "failed",
                 "identity": dict(manifest["official_identity"]),
                 "results": [result] if before_probe else [],
                 "failure_observations": [],
@@ -20813,13 +20816,19 @@ class CodexUpgradeTest(unittest.TestCase):
                     "arm64_after_receipt": None,
                 },
                 "binary_verification": None,
-                "execution_error": None,
-                "restoration_error": {"type": "ConfigurationError", "message": "合成：独立 after 探针或恢复 finalizer 未通过"},
+                "execution_error": (
+                    {"type": codex_upgrade.CONTINUITY_DRIFT_ERROR_TYPE, "message": "合成：上一轮结束后环境已漂移"}
+                    if continuity_drift
+                    else None
+                ),
+                "restoration_error": (
+                    None if continuity_drift else {"type": "ConfigurationError", "message": "合成：独立 after 探针或恢复 finalizer 未通过"}
+                ),
                 "next_gate": None,
             },
         )
         marker = campaign_dir / "environment-contaminated.json"
-        if before_probe and not marker.exists():
+        if before_probe and not continuity_drift and not marker.exists():
             codex_upgrade._secure_write_json_once(
                 marker,
                 {
@@ -20831,6 +20840,50 @@ class CodexUpgradeTest(unittest.TestCase):
                 },
             )
         return attempt_root.name
+
+    def test_b0_continuity_drift_reruns_everything_instead_of_dead_end(self) -> None:
+        """修好接着跑第 22 项：承接前环境连续性漂移（零请求）不是死路——对账的恢复预览全部重跑、不承接，
+        resume 闭集与 R17 复算同口径，批准后 resume 交给 run 全部重跑；此前提示"不带 --rerun-failed 整轮重采"走不通，
+        下一次预览又照样复用、反复失败。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            job_id = fixture["jobs"][0].job_id
+            attempt_id = self._b0_contaminated_attempt(fixture, continuity_drift=True)
+            self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [])
+            status = codex_upgrade.campaign_status(campaign_dir)
+            self.assertEqual(status["status"], "official_capture_failed")
+            self.assertIn("环境已漂移", status["next_command"])
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(result["environment_status"], "continuity_drift")
+            self.assertEqual(result["recovery_preview"]["reuse_job_ids"], [])
+            self.assertEqual(result["recovery_preview"]["execute_job_ids"], [job_id])
+            # 源 attempt 的前后环境收据是只读校验，这里替身返回固定边界；其余全部真实计算。
+            with mock.patch.object(codex_upgrade, "_phase_evaluation_environment_boundary", return_value="e" * 64):
+                source_root, source = codex_upgrade._load_capture_attempt(campaign_dir, "official", None, attempt_id)
+                scope = codex_upgrade._phase_evaluation_recovery_scope(
+                    campaign_dir, fixture["manifest"], phase="official", candidate_id=None,
+                    attempt_root=source_root, attempt=source, allow_evolution_invalidated=True,
+                )
+                self.assertEqual((scope["execute_job_ids"], scope["completed_job_ids"]), ([job_id], []))
+                self.assertEqual(scope["continuity_drift"], {"invalidated_job_ids": [job_id]})
+                approved = reconciler.reconcile_attempt(
+                    campaign_dir, attempt_id, approve_recovery_sha256=result["recovery_preview"]["review_sha256"]
+                )
+            captured: dict[str, object] = {}
+
+            def fake_run(run_arguments: argparse.Namespace, phase: str) -> dict[str, object]:
+                captured["preview"] = getattr(run_arguments, "recovery_preview_payload", None)
+                return {"status": "awaiting_receipts"}
+
+            with mock.patch.object(codex_upgrade, "_run_capture_attempt", side_effect=fake_run):
+                self._b0_resume(campaign_dir, Path(approved["recovery_preview_path"]))
+            self.assertEqual((captured["preview"]["execute_job_ids"], captured["preview"]["reuse_job_ids"]), ([job_id], []))
 
     def test_b0_environment_contamination_pauses_then_isolate_continues(self) -> None:
         """修好接着跑第 13 项：污染只暂停不终态；修复环境并取得晚于污染的干净复核后 environment-isolate 隔离，

@@ -178,5 +178,66 @@ class IsolatedSourceRecoveryScopeTests(unittest.TestCase):
                 )
 
 
+class ContinuityDriftTests(unittest.TestCase):
+    """修好接着跑第 22 项：承接前环境连续性漂移是可识别的失败类型，续跑闭集把它当作全部重跑源。"""
+
+    def test_drift_raises_the_dedicated_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory)
+            relative = Path("official")
+            after = campaign_dir / relative / "attempts" / "a1" / "evidence" / "environment" / "after" / "probe-manifest.json"
+            after.parent.mkdir(parents=True)
+            after.write_text("{}\n", encoding="utf-8")
+            digests = iter([{"service": "a"}, {"service": "b"}])
+            with mock.patch.object(codex_upgrade, "_probe_snapshot_digests", side_effect=lambda _manifest: next(digests)):
+                with self.assertRaises(codex_upgrade.EnvironmentContinuityDrift) as caught:
+                    codex_upgrade._verify_environment_continuity(campaign_dir, relative, {"a1"}, {"phase": "before"})
+            self.assertIsInstance(caught.exception, codex_upgrade.ConfigurationError)
+            self.assertIn("恢复预览全部重跑", str(caught.exception))
+            # 连续时照常返回连续性收据；没有承接时不比较。
+            with mock.patch.object(codex_upgrade, "_probe_snapshot_digests", return_value={"service": "a"}):
+                receipt = codex_upgrade._verify_environment_continuity(campaign_dir, relative, {"a1"}, {"phase": "before"})
+            self.assertEqual(receipt["source_attempt_id"], "a1")
+            self.assertIsNone(codex_upgrade._verify_environment_continuity(campaign_dir, relative, set(), {"phase": "before"}))
+
+    def test_drift_detection_needs_failed_status_and_exact_type(self) -> None:
+        error = {"type": codex_upgrade.CONTINUITY_DRIFT_ERROR_TYPE, "message": "漂移"}
+        self.assertTrue(codex_upgrade._attempt_continuity_drifted({"status": "failed", "execution_error": error}))
+        self.assertFalse(codex_upgrade._attempt_continuity_drifted({"status": "awaiting_receipts", "execution_error": error}))
+        self.assertFalse(
+            codex_upgrade._attempt_continuity_drifted({"status": "failed", "execution_error": {"type": "ConfigurationError"}})
+        )
+        self.assertFalse(codex_upgrade._attempt_continuity_drifted({"status": "failed", "execution_error": None}))
+
+    def test_scope_invariant_rejects_mixed_or_tampered_drift(self) -> None:
+        planned = ("a", "b", "c")
+        base = {
+            "planned_job_ids": ["a", "b", "c"],
+            "completed_job_ids": [],
+            "failed_job_ids": [],
+            "pending_job_ids": ["c"],
+            "execute_job_ids": ["a", "b", "c"],
+            "continuity_drift": {"invalidated_job_ids": ["a", "b"]},
+        }
+
+        def check(scope: dict) -> tuple:
+            with mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value={
+                "planned_jobs": [{"id": job_id, "execution_sha256": job_id * 64} for job_id in planned]
+            }), mock.patch.object(codex_upgrade, "_job_execution_sha256", side_effect=lambda job: job.job_id * 64):
+                return codex_upgrade._validate_recovery_scope_plan(
+                    Path("/nonexistent"), phase="candidate", candidate_id="cand", source_root=Path("/nonexistent"),
+                    scope=scope, planned_jobs=[SimpleNamespace(job_id=job_id) for job_id in planned],
+                )
+
+        self.assertEqual(check(dict(base)), (set(), {"a", "b", "c"}))
+        for label, scope in (
+            ("与隔离作废同时出现", dict(base, environment_isolation={"invalidated_job_ids": []})),
+            ("少报作废作业", dict(base, continuity_drift={"invalidated_job_ids": ["a"]})),
+            ("仍有复用", dict(base, completed_job_ids=["a"], execute_job_ids=["b", "c"], continuity_drift={"invalidated_job_ids": ["b"]})),
+        ):
+            with self.subTest(label=label), self.assertRaises(codex_upgrade.ConfigurationError):
+                check(scope)
+
+
 if __name__ == "__main__":
     unittest.main()

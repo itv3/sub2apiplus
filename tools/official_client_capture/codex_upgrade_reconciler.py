@@ -1502,6 +1502,9 @@ def _environment_facts(
             or (attempt_root / "seal-failure.json").exists()
         ):
             status = "contaminated"
+        elif codex_upgrade._attempt_continuity_drifted(attempt):
+            # 修好接着跑第 22 项：因环境连续性漂移失败的 attempt，它承接的结果证据前提不成立，不复用、全部重跑。
+            status = "continuity_drift"
         elif environment.get("after_probe") is not None and environment.get("restoration_report") is not None:
             status = "restored"
     elif after.is_file() and restoration.is_file():
