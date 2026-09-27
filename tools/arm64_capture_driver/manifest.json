@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "0f9da2ef94e1cae502c970cf816c65f71697e474771229ac4314d3b2c122c6ce",
+      "sha256": "bf1c56fdcf5afab4ee40c9df83141fc77dd2deaa60449a1ccf280eacba32552f",
       "mode": "0600",
-      "bytes": 12762
+      "bytes": 12804
     },
     {
       "path": "driver/build.sh",
@@ -148,9 +148,9 @@
     },
     {
       "path": "driver/pre-a3.sh",
-      "sha256": "6066d9663251299571ce2ba7b9743783453cb792c32fd6c5603900f94a9705b6",
+      "sha256": "8d03e6e56b08b71a8f8d87833679992f5139132a391865efbe3aefced3057e66",
       "mode": "0700",
-      "bytes": 2531
+      "bytes": 3117
     },
     {
       "path": "driver/pre-all.sh",
@@ -166,15 +166,15 @@
     },
     {
       "path": "driver/stage1.sh",
-      "sha256": "e2748f383842279f8f9fd6141aaedc1df26a70def66cf25e7290d454992cc084",
+      "sha256": "3576f72fce4d2b094d5c1d5fa2501bb6237c4de1aff29c76370163f016f7e224",
       "mode": "0700",
-      "bytes": 6182
+      "bytes": 6652
     },
     {
       "path": "driver/stage2.sh",
-      "sha256": "115aa50a92089c23c748258444f7cb8a3203c45fc1b1592aaa6d8d3a5b5ea38e",
+      "sha256": "ab7b84ad565303fe3be5d458c38a638b5a0d3da682c33a4d0658200e4f95e8ee",
       "mode": "0700",
-      "bytes": 4258
+      "bytes": 4865
     },
     {
       "path": "driver/trees.sh",
@@ -327,5 +327,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "c2666a650324c4d76fd341129ed09adce52f4f3111f8b911ae2da99df86a2beb"
+  "manifest_sha256": "8e9c12d5ea790af816691274dcddd5c723aac79cbc804f35094ab95b392c0d20"
 }

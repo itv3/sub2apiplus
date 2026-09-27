@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
@@ -221,7 +222,7 @@ class CertifyReleaseTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "五摘要与当前工具身份不一致"):
                 certify_release.build_certification(**{**inputs, "deployment_receipt": stale}, require_arm64=False)
-            # pre-A3 认证绑定的部署收据必须就是本次发布认证的部署收据。
+            # pre-A3 认证绑定的部署收据不是本次发布认证的部署收据、又没有复用收据：失败关闭。
             other = policy_tests._deployment_receipt(root / "other", policy_certification.current_identity())
             with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不是本次发布认证的部署收据"):
                 certify_release.build_certification(**{**inputs, "deployment_receipt": other}, require_arm64=False)
@@ -245,6 +246,98 @@ class CertifyReleaseTests(unittest.TestCase):
                     certify_release.ReleaseCertificationError, "真实链未认证"
                 ):
                     certify_release.build_certification(**inputs, require_arm64=False)
+
+    def test_issue_binds_reuse_receipt_for_redeployed_pre_a3(self) -> None:
+        """修好接着跑第 19 项：pre-A3 认证跨部署复用时，发布认证绑定复用收据；缺失或绑定不符即失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            inputs = self._inputs(root)
+            identity = policy_certification.current_identity()
+            compatibility = root / "compat.json"
+
+            def redeploy(name: str, created_at: str) -> tuple[Path, Path]:
+                deployment = policy_tests._deployment_receipt(root / name, identity, created_at_utc=created_at)
+                activation = policy_tests._write_json(
+                    root / f"{name}-activation.json", policy_certification.build_activation_certification(deployment, compatibility)
+                )
+                return deployment, activation
+
+            deployment_2, activation_2 = redeploy("redeploy", "2026-09-27T02:00:00.000Z")
+            self.assertNotEqual(codex_upgrade.file_sha256(deployment_2), codex_upgrade.file_sha256(inputs["deployment_receipt"]))
+            redeployed = {**inputs, "deployment_receipt": deployment_2, "policy_activation": activation_2}
+            # 没有复用收据：认证绑定的不是本次部署收据，仍失败关闭。
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "跨部署复用须给出"):
+                certify_release.build_certification(**redeployed, require_arm64=False)
+            store = root / "policy-certification"
+            store.mkdir(mode=0o700)
+            record = pre_a3.record_reuse(
+                inputs["pre_a3_certification"], deployment_receipt=deployment_2, policy_activation=activation_2, receipt_root=store
+            )
+            self.assertEqual(record["status"], "recorded")
+            reuse_path = Path(record["reuse_receipt"])
+            output = root / "release-redeployed.json"
+            certification = certify_release.issue(output, **redeployed, pre_a3_reuse_receipt=reuse_path, require_arm64=False)
+            self.assertEqual(certification["deployment_receipt"]["sha256"], codex_upgrade.file_sha256(deployment_2))
+            self.assertEqual(certification["pre_a3_reuse_receipt"]["path"], str(reuse_path))
+            self.assertEqual(certification["pre_a3_reuse_receipt"]["sha256"], codex_upgrade.file_sha256(reuse_path))
+            self.assertEqual(certification["pre_a3_reuse_receipt"]["schema_version"], pre_a3.REUSE_SCHEMA_VERSION)
+            self.assertEqual(
+                certification["pre_a3_reuse_receipt"]["receipt_sha256"],
+                json.loads(reuse_path.read_text(encoding="utf-8"))["receipt_sha256"],
+            )
+            self.assertEqual(
+                certification["pre_a3_reuse_receipt"]["bound_deployment_receipt_sha256"],
+                codex_upgrade.file_sha256(inputs["deployment_receipt"]),
+            )
+            self.assertEqual(certify_release.verify(output)["receipt_sha256"], certification["receipt_sha256"])
+            # 同一部署下签发的认证不加复用字段（既有收据形状不变）。
+            self.assertNotIn("pre_a3_reuse_receipt", certify_release.build_certification(**inputs, require_arm64=False))
+            # 复用收据漂移即失效。
+            original = reuse_path.read_bytes()
+            reuse_path.write_bytes(original + b"\n")
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "摘要漂移"):
+                certify_release.verify(output)
+            reuse_path.write_bytes(original)
+            # 复用收据绑定的是别的部署：拒绝。
+            deployment_3, activation_3 = redeploy("redeploy-3", "2026-09-27T03:00:00.000Z")
+            other = pre_a3.record_reuse(
+                inputs["pre_a3_certification"], deployment_receipt=deployment_3, policy_activation=activation_3, receipt_root=root / "other-store"
+            )
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不是本次部署收据"):
+                certify_release.build_certification(**redeployed, pre_a3_reuse_receipt=Path(other["reuse_receipt"]), require_arm64=False)
+            # 复用收据绑定的是别的认证（判重键与自摘要都按篡改后内容重签）：拒绝。
+            forged = json.loads(reuse_path.read_text(encoding="utf-8"))
+            forged["reused_certification"]["receipt_sha256"] = "0" * 64
+            forged["binding_sha256"] = codex_upgrade._fingerprint(
+                pre_a3._reuse_binding_key(
+                    certification_receipt_sha256="0" * 64,
+                    deployment_receipt_sha256=forged["deployment_receipt"]["sha256"],
+                    policy_activation_sha256=forged["policy_activation"]["sha256"],
+                    identity=forged["identity"],
+                    policy_version=forged["policy_version"],
+                )
+            )
+            forged.pop("receipt_sha256")
+            forged["receipt_sha256"] = codex_upgrade._fingerprint(forged)
+            forged_path = policy_tests._write_json(root / "forged-reuse.json", forged)
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不是这份路径认证"):
+                certify_release.build_certification(**redeployed, pre_a3_reuse_receipt=forged_path, require_arm64=False)
+            # 命令行：--pre-a3-reuse-receipt。
+            cli_output = root / "release-cli.json"
+            with mock.patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(
+                    certify_release.main([
+                        "issue", "--deployment-receipt", str(deployment_2), "--pre-a3-certification", str(inputs["pre_a3_certification"]),
+                        "--policy-activation", str(activation_2), "--pre-a3-reuse-receipt", str(reuse_path),
+                        "--job-rehearsal-root", str(inputs["job_rehearsal_root"]), "--job-rehearsal-receipt", str(inputs["job_rehearsal_receipt"]),
+                        "--atomic-rehearsal-root", str(inputs["atomic_rehearsal_root"]), "--atomic-rehearsal-receipt", str(inputs["atomic_rehearsal_receipt"]),
+                        "--allow-non-arm64", "--output", str(cli_output),
+                    ]),
+                    0,
+                )
+            self.assertEqual(certify_release.verify(cli_output)["pre_a3_reuse_receipt"]["path"], str(reuse_path))
 
 
 if __name__ == "__main__":

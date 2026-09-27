@@ -1003,6 +1003,27 @@ class PreA3OrderingTests(unittest.TestCase):
         # 复用或新跑之后按 stage1 同一口径复核本轮坐标。
         self.assertLess(pre_a3.index("pre_a3_certification run"), pre_a3.rindex("find-reusable --certification"))
 
+    def test_reuse_receipt_recorded_before_ledger_and_bound_by_release_certification(self) -> None:
+        """修好接着跑第 19 项：跨部署复用的复用收据在 pre-a3.sh 复核后登记、stage1 建账本前补齐，stage2 发布认证绑定它。"""
+
+        pre_a3 = (SCRIPTS / "pre-a3.sh").read_text(encoding="utf-8")
+        record = "codex_upgrade_pre_a3_certification record-reuse --certification"
+        self.assertIn(record, pre_a3)
+        self.assertGreater(pre_a3.index(record), pre_a3.rindex("find-reusable --certification"))
+        self.assertIn('--receipt-root "$(dirname "$PRE_A3_CERTIFICATION")"', pre_a3)
+        stage1 = (SCRIPTS / "stage1.sh").read_text(encoding="utf-8")
+        self.assertGreater(stage1.index(record), stage1.index("find-reusable --certification"))
+        self.assertLess(stage1.index(record), stage1.index("codex_upgrade_zero_request_smoke"))
+        self.assertLess(stage1.index(record), stage1.index("codex_upgrade_timing_ledger create"))
+        stage2 = (SCRIPTS / "stage2.sh").read_text(encoding="utf-8")
+        self.assertLess(stage2.index(record), stage2.index("certify_release issue"))
+        issue = stage2[stage2.index("certify_release issue"):]
+        issue = issue[: issue.index("\n")]
+        self.assertIn('--pre-a3-certification "$PRE_A3_CERTIFICATION"', issue)
+        self.assertIn('${PRE_A3_REUSE:+--pre-a3-reuse-receipt "$PRE_A3_REUSE"}', issue)
+        # 复用收据的登记与旧坐标、账本无关：pre-a3.sh 仍不碰计时账本。
+        self.assertNotIn("codex_upgrade_timing_ledger", pre_a3)
+
 
 if __name__ == "__main__":
     unittest.main()

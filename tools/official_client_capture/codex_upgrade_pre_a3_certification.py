@@ -33,6 +33,9 @@ from tools.official_client_capture import codex_upgrade_zero_request_smoke as sm
 from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
+# 修好接着跑第 19 项：跨部署复用既有 pre-A3 认证时登记的复用收据（write-once、按绑定内容幂等）。
+REUSE_SCHEMA_VERSION = "pre-a3-reuse-receipt/v1"
+REUSE_RECEIPT_PREFIX = "pre-a3-reuse-"
 FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
 # R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）、
 # 0.156.1 录制证据零请求回放的 VC-1 取证链与 VC-1 连续恢复链。
@@ -619,6 +622,46 @@ def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | N
     return payload
 
 
+def _current_bindings(deployment_receipt: Path, policy_activation: Path) -> dict[str, Any]:
+    """本次部署的绑定：当前工具身份、通过校验的部署收据与激活认证（五摘要都必须等于当前身份、策略等于当前策略）。
+
+    任一项不合法即抛错：这不是"没有可复用的认证"，而是本次部署本身不能认证（新跑 pre-A3 同样会失败）。
+    """
+
+    identity = policy_certification.current_identity()
+    deployment_path = Path(deployment_receipt).resolve(strict=True)
+    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity)
+    activation_path = Path(policy_activation).resolve(strict=True)
+    activation = policy_certification.verify_activation_certification(activation_path, expected_identity=identity)
+    return {
+        "identity": identity,
+        "deployment_path": deployment_path,
+        "deployment": deployment,
+        "activation_path": activation_path,
+        "activation": activation,
+    }
+
+
+def verify_reusable_certification(path: Path, *, bindings: Mapping[str, Any]) -> dict[str, Any]:
+    """按工具身份判定一份 pre-A3 认证对本次部署是否可复用（修好接着跑第 19 项）。
+
+    可复用当且仅当：收据通过 ``verify_certification``（自摘要、五摘要等于当前工具身份、零请求）、策略版本
+    等于当前策略、收据绑定的激活策略摘要等于本次激活认证的策略摘要、真实链登记集合等于当前发布包。
+    不再要求收据绑定的部署收据／激活认证与本次逐字相同：重新部署一次但工具五摘要与策略都没变时仍复用；
+    策略变化、任一摘要不同、收据自身校验失败都不复用。
+    """
+
+    identity = bindings["identity"]
+    payload = verify_certification(path, expected_identity=identity)
+    if payload.get("policy_version") != identity["policy_version"]:
+        raise CertificationError("路径认证收据 policy_version 与当前策略不一致")
+    bound_activation = payload.get("policy_activation") or {}
+    if bound_activation.get("policy_sha256") != bindings["activation"].get("policy_sha256"):
+        raise CertificationError("路径认证收据绑定的激活策略与本次激活认证不一致")
+    real_chain_coverage(payload)
+    return payload
+
+
 def find_reusable_certification(
     *,
     deployment_receipt: Path,
@@ -628,33 +671,204 @@ def find_reusable_certification(
 ) -> Path | None:
     """可复用的 pre-A3 认证（修好接着跑第 19 项）。
 
-    每次重建 Campaign 都重跑约 55 分钟的 pre-A3，而工具身份没变。认证可复用当且仅当：收据通过
-    ``verify_certification``（自摘要、五摘要等于当前工具身份、零请求）、真实链登记集合等于当前发布包、
-    绑定的部署收据与激活认证都与本次逐字相同（同一部署）。``certification`` 给出时只核验该份（stage1
-    建账本前的门禁，修好接着跑第 18 项）；否则在 ``search_root`` 下取认证时间最近的一份。
+    每次重建 Campaign 都重跑约 55 分钟的 pre-A3，而工具身份没变——只是重新部署一次（部署收据 sha 变了）
+    也一样。判定只看工具身份：本次部署收据与激活认证先各自通过校验（``_current_bindings``），候选认证再按
+    ``verify_reusable_certification`` 核验，不要求部署收据／激活认证的 sha 逐字相等。``certification`` 给出时
+    只核验该份（stage1 建账本前的门禁，修好接着跑第 18 项）；否则在 ``search_root`` 下取认证时间最近的一份。
     """
 
-    identity = policy_certification.current_identity()
-    deployment_sha256 = codex_upgrade.file_sha256(Path(deployment_receipt))
-    activation_sha256 = codex_upgrade.file_sha256(Path(policy_activation))
+    bindings = _current_bindings(deployment_receipt, policy_activation)
     candidates = [Path(certification)] if certification is not None else sorted(Path(search_root).glob("*.json"))
     best: tuple[str, Path] | None = None
     for path in candidates:
         if path.is_symlink() or not path.is_file():
             continue
         try:
-            payload = verify_certification(path, expected_identity=identity)
-            real_chain_coverage(payload)
+            payload = verify_reusable_certification(path, bindings=bindings)
         except (CertificationError, policy_certification.PolicyCertificationError, OSError, ValueError):
-            continue
-        if (payload.get("deployment_receipt") or {}).get("sha256") != deployment_sha256:
-            continue
-        if (payload.get("policy_activation") or {}).get("sha256") != activation_sha256:
             continue
         key = str(payload.get("certified_at_utc"))
         if best is None or key > best[0]:
             best = (key, path)
     return best[1] if best is not None else None
+
+
+def _reuse_binding_key(
+    *,
+    certification_receipt_sha256: Any,
+    deployment_receipt_sha256: Any,
+    policy_activation_sha256: Any,
+    identity: Any,
+    policy_version: Any,
+) -> dict[str, Any]:
+    """复用收据的判重键：只由内容摘要构成（不含路径与时刻），同一组绑定重复登记时据此判定"已登记"。"""
+
+    return {
+        "reused_certification_receipt_sha256": certification_receipt_sha256,
+        "deployment_receipt_sha256": deployment_receipt_sha256,
+        "policy_activation_sha256": policy_activation_sha256,
+        "identity": identity,
+        "policy_version": policy_version,
+    }
+
+
+def build_reuse_receipt(
+    certification: Path,
+    *,
+    deployment_receipt: Path,
+    policy_activation: Path,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """复用收据（不落盘）：把被复用的 pre-A3 认证与本次部署收据、激活认证、五摘要绑定在一起，供审计与发布认证。
+
+    被复用的认证文件本身不改动、不重签；收据同时记下认证原先绑定的部署收据／激活认证摘要，审计时可以
+    看出"这份认证是在哪次部署下签发、在哪次部署下被复用"。
+    """
+
+    bindings = _current_bindings(deployment_receipt, policy_activation)
+    certification_path = Path(certification).resolve(strict=True)
+    payload = verify_reusable_certification(certification_path, bindings=bindings)
+    identity = bindings["identity"]
+    five = {name: identity[name] for name in policy_certification.IDENTITY_FIELDS}
+    deployment_sha256 = codex_upgrade.file_sha256(bindings["deployment_path"])
+    activation_sha256 = codex_upgrade.file_sha256(bindings["activation_path"])
+    key = _reuse_binding_key(
+        certification_receipt_sha256=str(payload.get("receipt_sha256")),
+        deployment_receipt_sha256=deployment_sha256,
+        policy_activation_sha256=activation_sha256,
+        identity=five,
+        policy_version=identity["policy_version"],
+    )
+    receipt = {
+        "schema_version": REUSE_SCHEMA_VERSION,
+        "reused_at_utc": observed_at_utc or _utc_now(),
+        "identity": five,
+        "policy_version": identity["policy_version"],
+        "reused_certification": {
+            "path": str(certification_path),
+            "sha256": codex_upgrade.file_sha256(certification_path),
+            "receipt_sha256": str(payload.get("receipt_sha256")),
+            "certified_at_utc": payload.get("certified_at_utc"),
+            "bound_deployment_receipt_sha256": (payload.get("deployment_receipt") or {}).get("sha256"),
+            "bound_policy_activation_sha256": (payload.get("policy_activation") or {}).get("sha256"),
+        },
+        "deployment_receipt": {
+            "path": str(bindings["deployment_path"]),
+            "sha256": deployment_sha256,
+            "created_at_utc": bindings["deployment"].get("created_at_utc"),
+            "supervisor_sha256": bindings["deployment"].get("supervisor_sha256"),
+        },
+        "policy_activation": {
+            "path": str(bindings["activation_path"]),
+            "sha256": activation_sha256,
+            "policy_sha256": bindings["activation"].get("policy_sha256"),
+            "activated_at_utc": bindings["activation"].get("activated_at_utc"),
+        },
+        "binding_sha256": _fingerprint(key),
+        "rule": "工具五摘要与策略未变时复用既有 pre-A3 认证；本收据只登记复用事实，不改变被复用的认证文件。",
+    }
+    receipt["receipt_sha256"] = _fingerprint(receipt)
+    return receipt
+
+
+def load_reuse_receipt(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """只读校验复用收据：schema、自摘要、判重键与内容一致、五摘要与策略版本等于期望身份。"""
+
+    payload = policy_certification._read_json(Path(path), "pre-A3 复用收据")
+    if payload.get("schema_version") != REUSE_SCHEMA_VERSION:
+        raise CertificationError("pre-A3 复用收据 schema 非法")
+    unsigned = {k: v for k, v in payload.items() if k != "receipt_sha256"}
+    if _fingerprint(unsigned) != payload.get("receipt_sha256"):
+        raise CertificationError("pre-A3 复用收据自摘要不一致")
+    identity = expected_identity or policy_certification.current_identity()
+    if {k: str(v) for k, v in (payload.get("identity") or {}).items()} != {
+        name: str(identity[name]) for name in policy_certification.IDENTITY_FIELDS
+    } or payload.get("policy_version") != identity["policy_version"]:
+        raise CertificationError("pre-A3 复用收据五摘要或策略版本与当前工具身份不一致")
+    key = _reuse_binding_key(
+        certification_receipt_sha256=(payload.get("reused_certification") or {}).get("receipt_sha256"),
+        deployment_receipt_sha256=(payload.get("deployment_receipt") or {}).get("sha256"),
+        policy_activation_sha256=(payload.get("policy_activation") or {}).get("sha256"),
+        identity=payload.get("identity"),
+        policy_version=payload.get("policy_version"),
+    )
+    if _fingerprint(key) != payload.get("binding_sha256"):
+        raise CertificationError("pre-A3 复用收据判重键与内容不一致")
+    return payload
+
+
+def verify_reuse_receipt(
+    path: Path,
+    *,
+    certification: Mapping[str, Any],
+    deployment_receipt_sha256: str,
+    policy_activation_sha256: str | None = None,
+    expected_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """复用收据必须把给定的 pre-A3 认证（按 ``receipt_sha256``）绑定到给定的部署收据（及激活认证）。"""
+
+    payload = load_reuse_receipt(path, expected_identity=expected_identity)
+    if (payload.get("reused_certification") or {}).get("receipt_sha256") != certification.get("receipt_sha256"):
+        raise CertificationError("pre-A3 复用收据绑定的不是这份路径认证")
+    if (payload.get("deployment_receipt") or {}).get("sha256") != deployment_receipt_sha256:
+        raise CertificationError("pre-A3 复用收据绑定的不是本次部署收据")
+    if policy_activation_sha256 is not None and (payload.get("policy_activation") or {}).get("sha256") != policy_activation_sha256:
+        raise CertificationError("pre-A3 复用收据绑定的不是本次激活认证")
+    return payload
+
+
+def find_reuse_receipt(receipt_root: Path, binding_sha256: str) -> Path | None:
+    """目录下已登记同一组绑定（判重键相同）的复用收据；没有则返回 None。"""
+
+    for path in sorted(Path(receipt_root).glob(f"{REUSE_RECEIPT_PREFIX}*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            payload = load_reuse_receipt(path)
+        except (CertificationError, policy_certification.PolicyCertificationError, OSError, ValueError):
+            continue
+        if payload.get("binding_sha256") == binding_sha256:
+            return path
+    return None
+
+
+def record_reuse(
+    certification: Path,
+    *,
+    deployment_receipt: Path,
+    policy_activation: Path,
+    receipt_root: Path,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """登记复用事实（write-once、幂等），返回摘要供驱动脚本打印：
+
+    * 认证就是本次部署、本次激活认证下签发的（两项绑定逐字相同）：不需要复用收据，``status=not_needed``；
+    * 同一组绑定（认证内容、部署收据、激活认证、五摘要、策略版本）已登记：返回既有收据，不重复写；
+    * 否则写 ``<receipt_root>/pre-a3-reuse-<UTC 时刻>.json``（0600、只写一次）。
+    """
+
+    receipt = build_reuse_receipt(
+        certification, deployment_receipt=deployment_receipt, policy_activation=policy_activation, observed_at_utc=observed_at_utc
+    )
+    reused = receipt["reused_certification"]
+    summary = {
+        "reused_certification": reused["path"],
+        "reused_certification_receipt_sha256": reused["receipt_sha256"],
+        "binding_sha256": receipt["binding_sha256"],
+    }
+    if (
+        reused["bound_deployment_receipt_sha256"] == receipt["deployment_receipt"]["sha256"]
+        and reused["bound_policy_activation_sha256"] == receipt["policy_activation"]["sha256"]
+    ):
+        return {**summary, "status": "not_needed", "reuse_receipt": None}
+    root = Path(receipt_root).resolve(strict=False)
+    existing = find_reuse_receipt(root, receipt["binding_sha256"])
+    if existing is not None:
+        return {**summary, "status": "existing", "reuse_receipt": str(existing)}
+    stamp = "".join(ch for ch in str(receipt["reused_at_utc"]) if ch.isalnum())
+    path = root / f"{REUSE_RECEIPT_PREFIX}{stamp}.json"
+    policy_certification._write_once(path, receipt)
+    return {**summary, "status": "recorded", "reuse_receipt": str(path)}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -670,13 +884,21 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--certification", type=Path, required=True)
     reusable = subparsers.add_parser(
         "find-reusable",
-        help="同一部署、同一激活认证、工具身份未变时可复用的认证：找到打印路径并退出 0，否则退出 1",
+        help="工具身份（五摘要）与策略未变时可复用的认证（重新部署也复用）：找到打印路径并退出 0，否则退出 1",
     )
     scope = reusable.add_mutually_exclusive_group(required=True)
     scope.add_argument("--search-root", type=Path, help="在该目录下找认证时间最近的可复用认证")
     scope.add_argument("--certification", type=Path, help="只核验这一份认证对本次部署是否有效")
     reusable.add_argument("--deployment-receipt", type=Path, required=True)
     reusable.add_argument("--policy-activation", type=Path, required=True)
+    record = subparsers.add_parser(
+        "record-reuse",
+        help="登记本轮认证对本次部署的复用事实（write-once、按绑定内容幂等；认证就是本次部署下签发的则不写）",
+    )
+    record.add_argument("--certification", type=Path, required=True)
+    record.add_argument("--deployment-receipt", type=Path, required=True)
+    record.add_argument("--policy-activation", type=Path, required=True)
+    record.add_argument("--receipt-root", type=Path, required=True, help="复用收据目录（通常就是认证所在目录）")
     return parser
 
 
@@ -708,9 +930,18 @@ def main(argv: list[str] | None = None) -> int:
                 certification=arguments.certification,
             )
             if found is None:
-                print("没有对本次部署与激活认证有效、工具身份未变的 pre-A3 认证。", file=sys.stderr)
+                print("没有工具身份与策略未变、对本次部署有效的 pre-A3 认证。", file=sys.stderr)
                 return 1
             print(found)
+            return 0
+        if arguments.action == "record-reuse":
+            result = record_reuse(
+                arguments.certification,
+                deployment_receipt=arguments.deployment_receipt,
+                policy_activation=arguments.policy_activation,
+                receipt_root=arguments.receipt_root,
+            )
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 0
         payload = verify_certification(arguments.certification)
         print(json.dumps({"status": "valid", "scenario_count": payload["scenario_count"]}, ensure_ascii=False))

@@ -22,8 +22,8 @@
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
-2. 采集主机：先 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/pre-a3.sh`（策略兼容／激活认证与 pre-A3 路径认证；同一部署、
-   同一激活认证、工具身份未变时复用最近一次认证，不重跑约 55 分钟的 pre-A3），再
+2. 采集主机：先 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/pre-a3.sh`（策略兼容／激活认证与 pre-A3 路径认证；工具身份
+   （五摘要）与策略未变时复用最近一次认证——重新部署也不重跑约 55 分钟的 pre-A3，跨部署复用登记复用收据），再
    `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
    （账本一建 VC-0 即开始计时，pre-A3 放在其后必然超时）。新目标首次取证按指南
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。

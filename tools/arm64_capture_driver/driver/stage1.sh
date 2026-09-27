@@ -21,10 +21,12 @@ print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])
 PYDEPLOY
 )
 python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print({k:d.get(k) for k in (\"status\",\"policy_version\",\"tool_files_sha256\",\"control_sha256\",\"wire_producer_sha256\",\"evidence_semantics_sha256\")})" "$DEPLOY"
-# 修好接着跑第 18 项：建账本（VC-0 开始计时）之前必须已有对当前部署有效的 pre-A3 认证——约 55 分钟的 pre-A3
-# 放在账本之后必然超时。缺失即拒绝：先执行 pre-a3.sh（同一部署、工具身份未变时复用最近一次认证）。
+# 修好接着跑第 18、19 项：建账本（VC-0 开始计时）之前必须已有对当前工具身份有效的 pre-A3 认证——约 55 分钟的
+# pre-A3 放在账本之后必然超时。缺失即拒绝：先执行 pre-a3.sh（工具身份与策略未变时复用最近一次认证，重新部署也不重跑）。
 python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null \
-  || { echo "缺少对当前部署有效的 pre-A3 认证：先执行 pre-a3.sh（ARM64_VC_ENV 同本轮），再重跑 stage1"; exit 3; }
+  || { echo "缺少对当前工具身份有效的 pre-A3 认证：先执行 pre-a3.sh（ARM64_VC_ENV 同本轮），再重跑 stage1"; exit 3; }
+# 跨部署复用的复用收据在建账本前就登记齐（幂等；stage2 发布认证据此绑定本次部署收据，缺失不能拖到 stage2 才发现）。
+python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-200
 python3 -m tools.official_client_capture.codex_upgrade_zero_request_smoke --staging-root "$D/staging/zero-request-smoke-$STAMP" --output "$D/audit/zero-request-smoke-$STAMP.json" | cut -c1-200
 # 总预算按项目总账绝对截止设上限（v14 教训：360 分钟到期停线；叫停也计时），留 5 分钟余量
 TOTAL=$(python3 -c "

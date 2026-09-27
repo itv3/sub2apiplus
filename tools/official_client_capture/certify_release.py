@@ -221,6 +221,7 @@ def compose_certification(
     campaign_run_rehearsal: Mapping[str, Any] | None,
     issued_at_utc: str | None = None,
     real_chain_coverage: list[dict[str, Any]] | None = None,
+    pre_a3_reuse_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按固定字段组装并自签发布认证；各绑定由调用方（签发或测试夹具）提供。"""
 
@@ -243,6 +244,9 @@ def compose_certification(
     # 历史夹具不补字段、不改旧自摘要；本次正式签发必须从 pre-A3 结果提取覆盖。
     if real_chain_coverage is not None:
         core["real_chain_coverage"] = real_chain_coverage
+    # 修好接着跑第 19 项：pre-A3 认证是跨部署复用来的才绑定复用收据；同一部署下签发的认证不加此字段。
+    if pre_a3_reuse_receipt is not None:
+        core["pre_a3_reuse_receipt"] = dict(pre_a3_reuse_receipt)
     return {**core, "receipt_sha256": _fingerprint(core)}
 
 
@@ -281,8 +285,13 @@ def build_certification(
     atomic_container: str | None = None,
     data_root: Path | None = None,
     issued_at_utc: str | None = None,
+    pre_a3_reuse_receipt: Path | None = None,
 ) -> dict[str, Any]:
-    """逐项重放输入并组装发布认证；给出 ``atomic_container`` 时在容器内重放 atomic-double。"""
+    """逐项重放输入并组装发布认证；给出 ``atomic_container`` 时在容器内重放 atomic-double。
+
+    pre-A3 认证绑定的部署收据不是本次部署收据时（修好接着跑第 19 项：工具身份未变、跨部署复用），必须给出
+    把这份认证绑定到本次部署收据的复用收据 ``pre_a3_reuse_receipt``，否则失败关闭。
+    """
 
     identity = policy_certification.current_identity()
     _require_release_platform()
@@ -294,8 +303,6 @@ def build_certification(
         raise ReleaseCertificationError(str(error)) from error
     pre_a3_deployment = pre_a3_payload.get("deployment_receipt") or {}
     deployment_binding = _bind_file(deployment_receipt, "ARM64 部署收据")
-    if pre_a3_deployment.get("sha256") != deployment_binding["sha256"]:
-        raise ReleaseCertificationError("pre-A3 路径认证绑定的部署收据不是本次发布认证的部署收据")
     activation_binding: dict[str, Any] | None = None
     if policy_activation is not None:
         try:
@@ -303,6 +310,29 @@ def build_certification(
         except policy_certification.PolicyCertificationError as error:
             raise ReleaseCertificationError(str(error)) from error
         activation_binding = {**_bind_file(policy_activation, "策略激活认证"), "schema_version": policy_certification.POLICY_ACTIVATION_SCHEMA}
+    reuse_binding: dict[str, Any] | None = None
+    if pre_a3_deployment.get("sha256") != deployment_binding["sha256"] and pre_a3_reuse_receipt is None:
+        raise ReleaseCertificationError(
+            "pre-A3 路径认证绑定的部署收据不是本次发布认证的部署收据；跨部署复用须给出 --pre-a3-reuse-receipt"
+        )
+    if pre_a3_reuse_receipt is not None:
+        try:
+            reuse_payload = pre_a3.verify_reuse_receipt(
+                pre_a3_reuse_receipt,
+                certification=pre_a3_payload,
+                deployment_receipt_sha256=deployment_binding["sha256"],
+                policy_activation_sha256=activation_binding["sha256"] if activation_binding else None,
+                expected_identity=identity,
+            )
+        except pre_a3.CertificationError as error:
+            raise ReleaseCertificationError(str(error)) from error
+        reuse_binding = {
+            **_bind_file(pre_a3_reuse_receipt, "pre-A3 复用收据"),
+            "schema_version": pre_a3.REUSE_SCHEMA_VERSION,
+            "receipt_sha256": reuse_payload.get("receipt_sha256"),
+            "reused_at_utc": reuse_payload.get("reused_at_utc"),
+            "bound_deployment_receipt_sha256": (reuse_payload.get("reused_certification") or {}).get("bound_deployment_receipt_sha256"),
+        }
     campaign_run: dict[str, Any] | None = None
     if (campaign_run_rehearsal_root is None) != (campaign_run_rehearsal_receipt is None):
         raise ReleaseCertificationError("campaign-run rehearsal 的证据根与收据必须同时提供")
@@ -335,6 +365,7 @@ def build_certification(
         atomic_double_rehearsal=atomic_binding,
         campaign_run_rehearsal=campaign_run,
         issued_at_utc=issued_at_utc,
+        pre_a3_reuse_receipt=reuse_binding,
     )
 
 
@@ -356,6 +387,8 @@ def verify(path: Path, *, expected_identity: Mapping[str, Any] | None = None) ->
         raise ReleaseCertificationError("发布认证五摘要或策略版本与当前工具身份不一致")
     _check_binding(payload.get("deployment_receipt"), "发布认证绑定的部署收据")
     _check_binding(payload.get("pre_a3_certification"), "发布认证绑定的 pre-A3 路径认证")
+    if payload.get("pre_a3_reuse_receipt") is not None:
+        _check_binding(payload.get("pre_a3_reuse_receipt"), "发布认证绑定的 pre-A3 复用收据")
     if "real_chain_coverage" in payload:
         try:
             paths = policy_certification._read_json(Path(payload["pre_a3_certification"]["path"]), "pre-A3 路径认证")
@@ -390,6 +423,9 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument("--deployment-receipt", type=Path, required=True)
     issue_parser.add_argument("--pre-a3-certification", type=Path, required=True)
     issue_parser.add_argument("--policy-activation", type=Path, help="被替换的 A2.6 策略激活认证；给出时校验并记录")
+    issue_parser.add_argument(
+        "--pre-a3-reuse-receipt", type=Path, help="pre-A3 认证是跨部署复用来的时，把它绑定到本次部署收据的复用收据"
+    )
     issue_parser.add_argument("--job-rehearsal-root", type=Path, required=True)
     issue_parser.add_argument("--job-rehearsal-receipt", type=Path, required=True)
     issue_parser.add_argument("--atomic-rehearsal-root", type=Path, required=True)
@@ -425,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
                 require_arm64=False if arguments.allow_non_arm64 else None,
                 atomic_container=arguments.atomic_container,
                 data_root=arguments.data_root,
+                pre_a3_reuse_receipt=arguments.pre_a3_reuse_receipt,
             )
             summary = {
                 "status": result["status"],

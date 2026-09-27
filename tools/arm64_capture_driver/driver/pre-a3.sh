@@ -1,9 +1,10 @@
 #!/bin/bash
 # 前阶段 0：pre-A3 路径认证（修好接着跑第 18、19 项）。
 # 必须在 stage1 建账本之前完成：stage1 一建账本 VC-0 即开始计时，约 55 分钟的 pre-A3 放在其后必然超时
-# （stage1 建账本前会核验本轮认证，缺失即拒绝）。同一部署（部署收据逐字相同）、同一激活认证、工具五摘要
-# 未变时复用最近一次通过的认证（逐字复制到本轮坐标），不重跑。
-# 产物：$POLICY_COMPAT_RECEIPT、$POLICY_ACTIVATION、$PRE_A3_CERTIFICATION；stage2 发现已存在即跳过。
+# （stage1 建账本前会核验本轮认证，缺失即拒绝）。工具五摘要与策略未变时复用最近一次通过的认证（逐字复制到
+# 本轮坐标），重新部署（部署收据、激活认证换新）也不重跑；跨部署复用登记复用收据 pre-a3-reuse-*.json
+# （write-once、按绑定内容幂等），stage2 的发布认证据此把复用来的认证绑定到本次部署收据。
+# 产物：$POLICY_COMPAT_RECEIPT、$POLICY_ACTIVATION、$PRE_A3_CERTIFICATION（及复用收据）；stage2 发现已存在即跳过。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
@@ -26,4 +27,6 @@ else
 fi
 # 与 stage1 建账本前同一口径复核本轮坐标（复用与新跑都要通过）。
 python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null
+# 跨部署复用登记复用收据（同一组绑定不重复写；认证就是本次部署下签发的则不需要）。
+python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-300
 echo "PRE_A3_DONE $PRE_A3_CERTIFICATION"
