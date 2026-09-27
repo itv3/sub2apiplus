@@ -493,9 +493,16 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         new_timing = sorted(set(timing_ledger.EVENT_TYPES) - set(closures["timing"]))
         new_project = sorted(set(project_ledger.EVENT_TYPES) - set(closures["project"]))
         self.assertEqual(new_timing, ["campaign_abandoned", "deadline_extended", "deadline_paused", "stage_review_required"])
-        # 修好接着跑第 11 项：campaign_resumed 同样是基线工具不认识、读到即拒绝的新事件。
+        # 修好接着跑第 11、14 项：campaign_resumed 与 live_request_budget_extended 同样是基线工具不认识、读到即拒绝的新事件。
         self.assertEqual(
-            new_project, ["campaign_paused", "campaign_resumed", "deadline_extended", "deadline_extension_committed"]
+            new_project,
+            [
+                "campaign_paused",
+                "campaign_resumed",
+                "deadline_extended",
+                "deadline_extension_committed",
+                "live_request_budget_extended",
+            ],
         )
         self.assertLessEqual(set(closures["timing"]), set(timing_ledger.EVENT_TYPES))
         self.assertLessEqual(set(closures["project"]), set(project_ledger.EVENT_TYPES))
