@@ -5057,6 +5057,8 @@ def _mutable_command_coordinates(
         "accounting-resolve",
         # 环境隔离自持 Campaign 锁，只写 control/environment 下的收据副本与一次性隔离收据。
         "environment-isolate",
+        # 证据根冲突隔离（第 24 项）自持 Campaign 锁，只写 control/evidence-conflict 下的一次性隔离收据。
+        "evidence-conflict-quarantine",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -5482,7 +5484,8 @@ def _latest_failed_attempt_for_identity(
     修好接着跑第 13 项：被环境隔离作废的 attempt（污染或 Kilo 后恢复失败）也是续跑来源（全部重跑）。
     """
 
-    isolation_invalidated = _isolation_invalidated_attempts(campaign_dir)
+    # 修好接着跑第 24 项：被证据根冲突隔离的等待封存 attempt 同样是续跑来源（全部重跑）。
+    isolation_invalidated = _rerun_all_invalidated_attempts(campaign_dir)
     for attempt_root, _ in _ordered_capture_attempts(
         campaign_dir, phase, candidate_id
     ):
@@ -5717,10 +5720,11 @@ def _classification_candidate_reuse_source(
         raise ConfigurationError("分类 Candidate 复用来源必须是 awaiting_receipts。")
     if (source_root / "seal-failure.json").exists() or (
         "candidate", source_candidate_id, source_attempt_id
-    ) in _isolation_invalidated_attempts(source_dir):
-        # 修好接着跑第 13 项：Kilo 后环境恢复失败或已被环境隔离作废的 attempt，结果永不复用。
+    ) in _rerun_all_invalidated_attempts(source_dir):
+        # 修好接着跑第 13 项：Kilo 后环境恢复失败或已被环境隔离作废的 attempt，结果永不复用；
+        # 第 24 项：被证据根冲突隔离的 attempt 同样永不复用。
         raise ConfigurationError(
-            "分类 Candidate 复用来源已被判环境污染（Kilo 后恢复失败或已隔离作废），结果永不复用。"
+            "分类 Candidate 复用来源已被判环境污染（Kilo 后恢复失败或已隔离作废）或已被证据根冲突隔离，结果永不复用。"
         )
 
     # 只枚举小型 attempt 收据，证明直接前序没有第二个待封存 Candidate；
@@ -10001,6 +10005,15 @@ def _build_parser() -> argparse.ArgumentParser:
     environment_isolate.add_argument("--reason", required=True)
     environment_isolate.add_argument("--approve-sha256", help="批准预览的 review_sha256")
     environment_isolate.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
+    evidence_conflict = subparsers.add_parser(
+        "evidence-conflict-quarantine",
+        help="续跑重跑来源已完成作业后证据根冲突：隔离卷入冲突的 attempt，Campaign 继续（不带 --approve-sha256 只预览）",
+    )
+    add_campaign_reference(evidence_conflict)
+    evidence_conflict.add_argument("--candidate-id", help="候选阶段的 candidate-id；缺省为 official 阶段")
+    evidence_conflict.add_argument("--reason", required=True)
+    evidence_conflict.add_argument("--approve-sha256", help="批准预览的 review_sha256")
+    evidence_conflict.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
 
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
@@ -20424,10 +20437,11 @@ def _transient_environment_admission(
     contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
     if contamination:
         raise ConfigurationError("Campaign 存在环境污染记录，不能裁定 transient-environment。")
-    if ("candidate", attempt.get("candidate_id"), str(attempt.get("attempt_id"))) in _isolation_invalidated_attempts(campaign_dir):
-        # 修好接着跑第 13 项：被环境隔离作废的 attempt 结果永不复用，只能全部重跑，不能做段恢复。
+    if ("candidate", attempt.get("candidate_id"), str(attempt.get("attempt_id"))) in _rerun_all_invalidated_attempts(campaign_dir):
+        # 修好接着跑第 13 项：被环境隔离作废的 attempt 结果永不复用，只能全部重跑，不能做段恢复（第 24 项证据根
+        # 冲突隔离同理）。
         raise ConfigurationError(
-            "原 attempt 已被环境隔离作废（结果永不复用），不能裁定 transient-environment；"
+            "原 attempt 已被环境隔离作废或证据根冲突隔离（结果永不复用），不能裁定 transient-environment；"
             "reconcile-attempt 入账并批准恢复预览后 resume --rerun-failed 全部重跑。"
         )
     scope = facts["failure_scope"]
@@ -32857,6 +32871,10 @@ def _latest_attempt_summary(
         if (phase, candidate_id, path.name) in _isolation_invalidated_attempts(campaign_dir):
             # 修好接着跑第 13 项：被环境隔离作废的 attempt 不是待封存，而是续跑来源（全部重跑）；只在作废时写字段。
             summary["isolation_invalidated"] = True
+        conflict = _attempt_conflict_quarantine_receipt(campaign_dir, phase, candidate_id, path.name)
+        if conflict is not None:
+            # 修好接着跑第 24 项：被证据根冲突隔离的 attempt 永不 seal、永不复用；只在隔离时写字段。
+            summary["evidence_conflict_quarantine"] = str(conflict[1]["disposition"])
         if _attempt_continuity_drifted(attempt):
             # 修好接着跑第 22 项：环境连续性漂移失败，续跑全部重跑；只在漂移时写字段。
             summary["continuity_drift"] = True
@@ -33326,6 +33344,630 @@ def _campaign_environment_decision(
         "status": status,
         "records": [fact["record"] for fact in effective],
         "official_records": official_effective,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 修好接着跑第 24 项：续跑重跑"来源已完成"的作业不再破坏证据
+#
+# 场景清单为同一 Campaign 固定每个作业的证据根。续跑重跑来源 attempt 中已完成的作业（工具演进作废、环境隔离
+# 作废、连续性漂移全部重跑）时，固定路径仍被来源的成功证据占据：采集脚本拒绝覆盖后 wire 失败归档把来源证据误
+# 改名为 .failed-attemptN、mitm 矩阵按坐标 checkpoint 复用来源旧产物却记 executed、部分脚本在原目录里覆写同名
+# 文件（2026-09-27 194249z VC-5 实测）。现在派发前把这些目录改名为同级 ``.superseded-<新 attempt>``：取代收据
+# （control/evidence-roots/supersession-<新 attempt>.json，写一次）先于 rename 落盘并绑定原目录 inode，重放旧
+# attempt 的收口时按收据映射到归档目录、边界记录仍用原路径，逐字复算。已被破坏的 attempt 由
+# evidence-conflict-quarantine 登记：边界不可复原的只读留档（加载时跳过边界重放），其余作废；两者都永不 seal、
+# 永不作为复用来源，续跑全部重跑。wire 闭包与官方共用的采集脚本都不改（否则官方已封存作业受影响）。
+EVIDENCE_ROOT_SUPERSESSION_SCHEMA = "evidence-root-supersession/v1"
+EVIDENCE_ROOT_SUPERSESSION_DIR = Path("control") / "evidence-roots"
+EVIDENCE_ROOT_SUPERSESSION_RE = re.compile(
+    r"^supersession-(?P<attempt>[A-Za-z0-9][A-Za-z0-9._-]{0,127})\.json$"
+)
+EVIDENCE_CONFLICT_QUARANTINE_SCHEMA = "evidence-conflict-quarantine/v1"
+EVIDENCE_CONFLICT_QUARANTINE_PREVIEW_SCHEMA = "evidence-conflict-quarantine-preview/v1"
+EVIDENCE_CONFLICT_QUARANTINE_DIR = Path("control") / "evidence-conflict"
+EVIDENCE_CONFLICT_QUARANTINE_RE = re.compile(r"^quarantine-(\d{2,})\.json$")
+EVIDENCE_CONFLICT_DISPOSITIONS = frozenset({"compromised", "invalidated"})
+_SUPERSESSION_ROW_FIELDS = frozenset(
+    {
+        "job_id",
+        "logical_root",
+        "host_root",
+        "archived_logical_root",
+        "archived_host_root",
+        "device",
+        "inode",
+        "registered_by",
+    }
+)
+_ATTEMPT_REFERENCE_FIELDS = frozenset({"phase", "candidate_id", "attempt_id", "attempt_sha256"})
+
+
+def _attempt_reference_matches(
+    item: Any, *, phase: str, candidate_id: str | None, attempt_id: str
+) -> bool:
+    return (
+        isinstance(item, Mapping)
+        and item.get("phase") == phase
+        and item.get("candidate_id") == candidate_id
+        and item.get("attempt_id") == attempt_id
+    )
+
+
+def _validate_attempt_reference(item: Any, label: str) -> None:
+    if (
+        not isinstance(item, Mapping)
+        or set(item) != _ATTEMPT_REFERENCE_FIELDS
+        or item.get("phase") not in {"official", "candidate"}
+        or (item.get("phase") == "official") != (item.get("candidate_id") is None)
+        or (item.get("candidate_id") is not None and not SAFE_ID_RE.fullmatch(str(item["candidate_id"])))
+        or not SAFE_ID_RE.fullmatch(str(item.get("attempt_id", "")))
+        or not SHA256_RE.fullmatch(str(item.get("attempt_sha256", "")))
+    ):
+        raise ConfigurationError(f"{label} 的 attempt 引用形态非法。")
+
+
+def _evidence_root_supersessions(campaign_dir: Path) -> list[dict[str, Any]]:
+    """读取并逐项核对取代收据（schema、Campaign、文件名与新 attempt 一致、自摘要、逐根记录形态），按写入时间排序。"""
+
+    directory = campaign_dir / EVIDENCE_ROOT_SUPERSESSION_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("证据根取代收据目录不可信。")
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    receipts: list[dict[str, Any]] = []
+    for child in sorted(directory.iterdir()):
+        match = EVIDENCE_ROOT_SUPERSESSION_RE.fullmatch(child.name)
+        if match is None or child.is_symlink() or not child.is_file():
+            raise ConfigurationError(f"证据根取代收据目录含非收据条目：{child.name}")
+        receipt = _read_json(child, "证据根取代收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        rows = receipt.get("roots")
+        phase = receipt.get("phase")
+        if (
+            receipt.get("schema_version") != EVIDENCE_ROOT_SUPERSESSION_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("superseding_attempt_id") != match.group("attempt")
+            or phase not in {"official", "candidate"}
+            or (phase == "official") != (receipt.get("candidate_id") is None)
+            or not _is_rfc3339_timestamp(receipt.get("recorded_at_utc"))
+            or not isinstance(rows, list)
+            or not rows
+            or _fingerprint(unsigned) != receipt.get("receipt_sha256")
+        ):
+            raise ConfigurationError(f"证据根取代收据形态、Campaign 或自摘要不一致：{child.name}")
+        for row in rows:
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != _SUPERSESSION_ROW_FIELDS
+                or not SAFE_ID_RE.fullmatch(str(row.get("job_id", "")))
+                or not isinstance(row.get("device"), int)
+                or not isinstance(row.get("inode"), int)
+                or not isinstance(row.get("registered_by"), list)
+            ):
+                raise ConfigurationError(f"证据根取代收据 {child.name} 的逐根记录形态非法。")
+            for field in ("logical_root", "host_root", "archived_logical_root", "archived_host_root"):
+                value = Path(str(row.get(field, "")))
+                if not value.is_absolute() or ".." in value.parts:
+                    raise ConfigurationError(f"证据根取代收据 {child.name} 的 {field} 不是规范绝对路径。")
+            for source, target in (("logical_root", "archived_logical_root"), ("host_root", "archived_host_root")):
+                original = Path(str(row[source]))
+                archived = Path(str(row[target]))
+                if archived.parent != original.parent or not archived.name.startswith(
+                    original.name
+                    + codex_upgrade_evidence_permissions.SUPERSEDED_ROOT_INFIX
+                    + match.group("attempt")
+                ):
+                    raise ConfigurationError(f"证据根取代收据 {child.name} 的归档路径不是原根的同级取代目录。")
+            for item in row["registered_by"]:
+                _validate_attempt_reference(item, f"证据根取代收据 {child.name}")
+        receipts.append(receipt)
+    receipts.sort(key=lambda item: (str(item["recorded_at_utc"]), str(item["superseding_attempt_id"])))
+    return receipts
+
+
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ConfigurationError(f"取代证据根路径不是可信目录：{path}")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _supersession_row_state(row: Mapping[str, Any], all_rows: Sequence[Mapping[str, Any]]) -> str:
+    """archived：归档目录就是收据绑定的原目录；pending：收据已写、rename 未完成（原路径仍是原目录）；
+    taken_over：原目录后来由另一张收据归档（崩溃后下一次续跑接管）。其余不一致一律失败关闭。"""
+
+    identity = (int(row["device"]), int(row["inode"]))
+    if _directory_identity(Path(str(row["archived_host_root"]))) == identity:
+        return "archived"
+    if _directory_identity(Path(str(row["host_root"]))) == identity:
+        return "pending"
+    if any(
+        other is not row
+        and (int(other["device"]), int(other["inode"])) == identity
+        and _directory_identity(Path(str(other["archived_host_root"]))) == identity
+        for other in all_rows
+    ):
+        return "taken_over"
+    raise ConfigurationError(
+        f"证据根取代状态不一致：{row['logical_root']} 的原目录既不在归档路径也不在原路径（inode 漂移）。"
+    )
+
+
+def _evidence_root_relocations(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> dict[str, str]:
+    """该 attempt 登记的外部证据根中已被后续续跑取代归档的部分：原逻辑路径 → 归档逻辑路径。"""
+
+    receipts = _evidence_root_supersessions(campaign_dir)
+    if not receipts:
+        return {}
+    all_rows = [row for receipt in receipts for row in receipt["roots"]]
+    relocations: dict[str, str] = {}
+    for row in all_rows:
+        if not any(
+            _attempt_reference_matches(item, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id)
+            for item in row["registered_by"]
+        ):
+            continue
+        state = _supersession_row_state(row, all_rows)
+        if state == "taken_over":
+            # 接管那一行的 registered_by 也会列出本 attempt，由它给出映射。
+            continue
+        if state == "pending":
+            continue
+        source = str(row["logical_root"])
+        target = str(row["archived_logical_root"])
+        if relocations.get(source, target) != target:
+            raise ConfigurationError(f"同一证据根被多张取代收据映射到不同目录：{source}")
+        relocations[source] = target
+    return relocations
+
+
+def _evidence_root_registrants(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    exclude_attempt_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """同阶段（同候选）已有 attempt 的结果当前登记的外部证据根 → 登记者；已被取代映射走的不算。
+
+    只读 attempt.json（其余完整性照常核对），不重放证据边界：被破坏的来源正是要处理的对象。
+    """
+
+    owners: dict[str, list[dict[str, Any]]] = {}
+    for attempt_root, _reservation in _ordered_capture_attempts(
+        campaign_dir, phase, candidate_id, _manifest=manifest
+    ):
+        if attempt_root.name == exclude_attempt_id or not (attempt_root / "attempt.json").is_file():
+            continue
+        _root, payload = _load_capture_attempt(
+            campaign_dir,
+            phase,
+            candidate_id,
+            attempt_root.name,
+            _verified_campaign_manifest=manifest,
+            _replay_evidence_permissions=False,
+        )
+        relocated = _evidence_root_relocations(
+            campaign_dir, phase=phase, candidate_id=candidate_id, attempt_id=attempt_root.name
+        )
+        reference = {
+            "phase": phase,
+            "candidate_id": candidate_id,
+            "attempt_id": attempt_root.name,
+            "attempt_sha256": file_sha256(attempt_root / "attempt.json"),
+        }
+        roots = {
+            str(root)
+            for result in payload.get("results", [])
+            if isinstance(result, Mapping)
+            for root in result.get("evidence_roots", []) or []
+            if isinstance(root, str)
+        }
+        for root in sorted(roots - set(relocated)):
+            owners.setdefault(root, []).append(dict(reference))
+    return owners
+
+
+def _supersede_occupied_evidence_roots(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_root: Path,
+    jobs: Sequence[Job],
+) -> dict[str, Any] | None:
+    """派发前清出执行集合作业的固定证据根：被其它 attempt 登记占据的目录改名为同级 ``.superseded-<本 attempt>``。
+
+    先写取代收据（绑定原目录 inode），再逐个 rename 并核对 inode；未被任何 attempt 登记的孤儿目录不动，保持原有
+    拒绝覆盖／增量语义。返回收据（没有需要取代的目录时返回 None）。
+    """
+
+    registrants = _evidence_root_registrants(
+        campaign_dir, manifest, phase=phase, candidate_id=candidate_id, exclude_attempt_id=attempt_root.name
+    )
+    if not registrants:
+        return None
+    rows: list[dict[str, Any]] = []
+    claimed: set[str] = set()
+    for job in jobs:
+        for pattern in job.evidence_roots:
+            for match in sorted(glob.glob(str(pattern))):
+                logical = Path(match)
+                owners = registrants.get(str(logical))
+                if not owners:
+                    continue
+                if str(logical) in claimed:
+                    raise ConfigurationError(f"同一证据根被执行集合中多个作业声明：{logical}")
+                claimed.add(str(logical))
+                host_root, _relative = _failed_job_evidence_host_route(str(logical))
+                identity = _directory_identity(host_root)
+                if identity is None or _directory_identity(logical) != identity:
+                    raise ConfigurationError(f"被占据的证据根宿主路径与逻辑路径不是同一目录：{logical}")
+                infix = codex_upgrade_evidence_permissions.SUPERSEDED_ROOT_INFIX + attempt_root.name
+                archived_name = f"{host_root.name}{infix}"
+                suffix = 1
+                while (host_root.with_name(archived_name)).exists() or (host_root.with_name(archived_name)).is_symlink():
+                    suffix += 1
+                    archived_name = f"{host_root.name}{infix}-{suffix}"
+                rows.append(
+                    {
+                        "job_id": job.job_id,
+                        "logical_root": str(logical),
+                        "host_root": str(host_root),
+                        "archived_logical_root": str(logical.with_name(archived_name)),
+                        "archived_host_root": str(host_root.with_name(archived_name)),
+                        "device": identity[0],
+                        "inode": identity[1],
+                        "registered_by": owners,
+                    }
+                )
+    if not rows:
+        return None
+    receipt: dict[str, Any] = {
+        "schema_version": EVIDENCE_ROOT_SUPERSESSION_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "superseding_attempt_id": attempt_root.name,
+        "recorded_at_utc": _utc_now(),
+        "roots": rows,
+        "live_request_count": 0,
+    }
+    receipt["receipt_sha256"] = _fingerprint(receipt)
+    directory = campaign_dir / EVIDENCE_ROOT_SUPERSESSION_DIR
+    ensure_private_directory(directory, campaign_dir)
+    _secure_write_json_once(directory / f"supersession-{attempt_root.name}.json", receipt)
+    for row in rows:
+        Path(row["host_root"]).rename(row["archived_host_root"])
+        if _directory_identity(Path(row["archived_host_root"])) != (row["device"], row["inode"]):
+            raise ConfigurationError(f"证据根取代后归档目录 inode 不一致：{row['logical_root']}")
+    return receipt
+
+
+def _evidence_conflict_quarantines(campaign_dir: Path) -> list[dict[str, Any]]:
+    """读取并逐项核对证据根冲突隔离收据链（序号连续、previous 成链、自摘要、Campaign 一致、处置闭集）。"""
+
+    directory = campaign_dir / EVIDENCE_CONFLICT_QUARANTINE_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("证据根冲突隔离收据目录不可信。")
+    indexed: list[tuple[int, Path]] = []
+    for child in directory.iterdir():
+        match = EVIDENCE_CONFLICT_QUARANTINE_RE.fullmatch(child.name)
+        if match is None:
+            raise ConfigurationError(f"证据根冲突隔离目录含非收据条目：{child.name}")
+        indexed.append((int(match.group(1)), child))
+    if not indexed:
+        return []
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for position, (index, path) in enumerate(sorted(indexed), start=1):
+        if index != position or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"证据根冲突隔离收据序号不连续或路径不可信：{path.name}")
+        receipt = _read_json(path, "证据根冲突隔离收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "quarantine_sha256"}
+        attempts = receipt.get("attempts")
+        if (
+            receipt.get("schema_version") != EVIDENCE_CONFLICT_QUARANTINE_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("index") != index
+            or receipt.get("previous_quarantine_sha256") != previous
+            or not isinstance(attempts, list)
+            or not attempts
+            or not isinstance(receipt.get("conflicts"), list)
+            or not receipt["conflicts"]
+            or _fingerprint(unsigned) != receipt.get("quarantine_sha256")
+        ):
+            raise ConfigurationError(f"证据根冲突隔离收据形态、成链或自摘要不一致：{path.name}")
+        for item in attempts:
+            if not isinstance(item, Mapping) or item.get("disposition") not in EVIDENCE_CONFLICT_DISPOSITIONS:
+                raise ConfigurationError(f"证据根冲突隔离收据 {path.name} 的处置非法。")
+            _validate_attempt_reference(
+                {key: item.get(key) for key in _ATTEMPT_REFERENCE_FIELDS}, f"证据根冲突隔离收据 {path.name}"
+            )
+        previous = str(receipt["quarantine_sha256"])
+        chain.append(receipt)
+    return chain
+
+
+def _conflict_quarantined_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
+    """被证据根冲突隔离的 attempt（phase, candidate_id, attempt_id）：永不 seal、永不复用，续跑全部重跑。"""
+
+    return {
+        (str(item["phase"]), item.get("candidate_id"), str(item["attempt_id"]))
+        for receipt in _evidence_conflict_quarantines(campaign_dir)
+        for item in receipt["attempts"]
+    }
+
+
+def _conflict_compromised_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
+    """其中边界不可复原（登记时收口重放已失败）的 attempt：只读留档，加载时跳过边界重放。"""
+
+    return {
+        (str(item["phase"]), item.get("candidate_id"), str(item["attempt_id"]))
+        for receipt in _evidence_conflict_quarantines(campaign_dir)
+        for item in receipt["attempts"]
+        if item.get("disposition") == "compromised"
+    }
+
+
+def _rerun_all_invalidated_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
+    """结果全部作废、续跑全部重跑的 attempt：环境隔离作废（第 13 项）∪ 证据根冲突隔离（第 24 项）。"""
+
+    return _isolation_invalidated_attempts(campaign_dir) | _conflict_quarantined_attempts(campaign_dir)
+
+
+def _evidence_root_conflicts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> list[dict[str, Any]]:
+    """同阶段（同候选）非复用结果的证据根在取代映射后仍被两个以上 attempt 登记即为冲突（机器核验）。
+
+    复用结果与来源共享证据根是合法承接，不计入；正常续跑在派发前已把来源占据的根取代归档，映射后不再相同。
+    """
+
+    owners: dict[str, list[dict[str, Any]]] = {}
+    for attempt_root, _reservation in _ordered_capture_attempts(
+        campaign_dir, phase, candidate_id, _manifest=manifest
+    ):
+        if not (attempt_root / "attempt.json").is_file():
+            continue
+        _root, payload = _load_capture_attempt(
+            campaign_dir,
+            phase,
+            candidate_id,
+            attempt_root.name,
+            _verified_campaign_manifest=manifest,
+            _replay_evidence_permissions=False,
+        )
+        relocated = _evidence_root_relocations(
+            campaign_dir, phase=phase, candidate_id=candidate_id, attempt_id=attempt_root.name
+        )
+        per_root: dict[str, set[str]] = {}
+        for result in payload.get("results", []) or []:
+            if not isinstance(result, Mapping) or result.get("disposition") == "reused":
+                continue
+            for root in result.get("evidence_roots", []) or []:
+                if isinstance(root, str):
+                    per_root.setdefault(relocated.get(root, root), set()).add(str(result.get("id")))
+        for root, job_ids in per_root.items():
+            owners.setdefault(root, []).append({"attempt_id": attempt_root.name, "job_ids": sorted(job_ids)})
+    return [
+        {"evidence_root": root, "attempts": sorted(items, key=lambda item: item["attempt_id"])}
+        for root, items in sorted(owners.items())
+        if len(items) > 1
+    ]
+
+
+def _incremental_noop_job_ids(attempt_root: Path, payload: Mapping[str, Any]) -> list[str]:
+    """附加事实：非复用结果的作业日志里出现"增量空执行"（mitm 矩阵按坐标 checkpoint 全部复用、零执行）。"""
+
+    log_root = attempt_root / "logs"
+    if log_root.is_symlink() or not log_root.is_dir():
+        return []
+    executed = {
+        str(result.get("id"))
+        for result in payload.get("results", []) or []
+        if isinstance(result, Mapping) and result.get("disposition") != "reused"
+    }
+    found: set[str] = set()
+    for path in sorted(log_root.glob("*.log")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        job_id = max((job for job in executed if path.name.startswith(job + "-")), key=len, default=None)
+        if job_id is None:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if re.search(r"(?m)^incremental_noop=true executed=0\b", text):
+            found.add(job_id)
+    return sorted(found)
+
+
+def _evidence_conflict_quarantine_preview(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    reason: str,
+) -> dict[str, Any]:
+    """冻结本次要隔离的全部未隔离冲突 attempt 与逐项事实；预览零写入。
+
+    卷入冲突的 attempt 一律隔离（不可挑选）：收口重放失败的判 compromised（边界不可复原，只读留档），其余判
+    invalidated；两者都永不 seal、永不复用、续跑全部重跑。阶段已封存时拒绝（封存证据异常另有终态处理）。
+    """
+
+    if not reason.strip():
+        raise ConfigurationError("--reason 不得为空。")
+    canonical = "capture-official" if phase == "official" else "capture-candidate"
+    if _stage_path(campaign_dir, canonical, candidate_id)[1].is_file():
+        raise ConfigurationError(f"{canonical} 已封存，封存后的证据不能按冲突隔离续跑。")
+    chain = _evidence_conflict_quarantines(campaign_dir)
+    quarantined = {
+        str(item["attempt_id"])
+        for receipt in chain
+        for item in receipt["attempts"]
+        if item.get("phase") == phase and item.get("candidate_id") == candidate_id
+    }
+    conflicts = _evidence_root_conflicts(campaign_dir, manifest, phase=phase, candidate_id=candidate_id)
+    involved = sorted(
+        {entry["attempt_id"] for conflict in conflicts for entry in conflict["attempts"]} - quarantined
+    )
+    if not involved:
+        raise ConfigurationError("没有未隔离的证据根冲突，无需 evidence-conflict-quarantine。")
+    effective = [
+        conflict
+        for conflict in conflicts
+        if any(entry["attempt_id"] in involved for entry in conflict["attempts"])
+    ]
+    attempts: list[dict[str, Any]] = []
+    for attempt_id in involved:
+        attempt_root, payload = _load_capture_attempt(
+            campaign_dir,
+            phase,
+            candidate_id,
+            attempt_id,
+            _verified_campaign_manifest=manifest,
+            _replay_evidence_permissions=False,
+        )
+        try:
+            _replay_attempt_evidence_permissions(
+                attempt_root,
+                payload,
+                root_relocations=_evidence_root_relocations(
+                    campaign_dir, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
+                ),
+            )
+            boundary = {"status": "passed", "error": None}
+        except ConfigurationError as error:
+            boundary = {"status": "failed", "error": str(error)}
+        attempts.append(
+            {
+                "phase": phase,
+                "candidate_id": candidate_id,
+                "attempt_id": attempt_id,
+                "attempt_sha256": file_sha256(attempt_root / "attempt.json"),
+                "status": str(payload.get("status")),
+                "disposition": "compromised" if boundary["status"] == "failed" else "invalidated",
+                "boundary_replay": boundary,
+                "conflict_roots": sorted(
+                    conflict["evidence_root"]
+                    for conflict in effective
+                    if any(entry["attempt_id"] == attempt_id for entry in conflict["attempts"])
+                ),
+                "incremental_noop_job_ids": _incremental_noop_job_ids(attempt_root, payload),
+            }
+        )
+    preview: dict[str, Any] = {
+        "schema_version": EVIDENCE_CONFLICT_QUARANTINE_PREVIEW_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "index": len(chain) + 1,
+        "previous_quarantine_sha256": str(chain[-1]["quarantine_sha256"]) if chain else None,
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "conflicts": effective,
+        "attempts": attempts,
+        "reason": reason,
+        "live_request_count": 0,
+    }
+    preview["review_sha256"] = _fingerprint(preview)
+    return preview
+
+
+def _evidence_conflict_quarantine_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """evidence-conflict-quarantine：不带 --approve-sha256 只预览；批准后写一次冲突隔离收据。
+
+    要求已登记当前工具的演进、Campaign 静默；锁内重算预览，批准摘要不一致即作废。
+    """
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    candidate_id = getattr(arguments, "candidate_id", None) or None
+    phase = "candidate" if candidate_id else "official"
+    if candidate_id is not None and not SAFE_ID_RE.fullmatch(str(candidate_id)):
+        raise ConfigurationError("--candidate-id 非法。")
+    approval = getattr(arguments, "approve_sha256", None)
+    next_steps = (
+        "隔离已生效：被隔离的等待封存 attempt 以 reconcile-attempt 按作废对账（失败的 seal 链父批次先 "
+        "reconcile-supervisor-run），批准恢复预览后 resume --rerun-failed 全部重跑；被隔离的 attempt 永不复用、永不 seal"
+    )
+    if approval is not None:
+        # 同一批准重跑：隔离收据已写入则幂等返回（写一次的收据是唯一落盘点）。
+        for receipt in _evidence_conflict_quarantines(campaign_dir):
+            if receipt.get("review_sha256") == str(approval):
+                return {
+                    "status": "quarantined",
+                    "reused": True,
+                    "quarantine_index": receipt["index"],
+                    "quarantine_sha256": receipt["quarantine_sha256"],
+                    "attempts": receipt["attempts"],
+                    "next_command": next_steps,
+                }
+    _require_tool_evolution_registered(campaign_dir, manifest, action="evidence-conflict-quarantine")
+    quiet = _tool_evolution_quiescence_problems(campaign_dir)
+    if quiet:
+        raise ConfigurationError("证据根冲突隔离要求 Campaign 静默：" + "；".join(quiet))
+    options = {"phase": phase, "candidate_id": candidate_id, "reason": str(arguments.reason)}
+    preview = _evidence_conflict_quarantine_preview(campaign_dir, manifest, **options)
+    if approval is None:
+        return {
+            "status": "approval_required",
+            **preview,
+            "next_command": "evidence-conflict-quarantine（同样参数）--approve-sha256 <review_sha256> --approved-by <批准人>",
+        }
+    approved_by = str(getattr(arguments, "approved_by", "") or "").strip()
+    if not approved_by:
+        raise ConfigurationError("批准 evidence-conflict-quarantine 必须提供 --approved-by。")
+    with _campaign_lock(campaign_dir):
+        preview = _evidence_conflict_quarantine_preview(campaign_dir, manifest, **options)
+        if str(approval) != preview["review_sha256"]:
+            raise ConfigurationError("批准摘要与重算的冲突隔离预览不一致（冲突事实或隔离链已变化）；重新预览后再批准。")
+        directory = campaign_dir / EVIDENCE_CONFLICT_QUARANTINE_DIR
+        ensure_private_directory(directory, campaign_dir)
+        receipt: dict[str, Any] = {
+            "schema_version": EVIDENCE_CONFLICT_QUARANTINE_SCHEMA,
+            "campaign_id": preview["campaign_id"],
+            "index": preview["index"],
+            "previous_quarantine_sha256": preview["previous_quarantine_sha256"],
+            "phase": phase,
+            "candidate_id": candidate_id,
+            "conflicts": preview["conflicts"],
+            "attempts": preview["attempts"],
+            "reason": preview["reason"],
+            "review_sha256": preview["review_sha256"],
+            "approved_by": approved_by,
+            "approved_at_utc": _utc_now(),
+        }
+        receipt["quarantine_sha256"] = _fingerprint(receipt)
+        _secure_write_json_once(directory / f"quarantine-{int(preview['index']):02d}.json", receipt)
+    return {
+        "status": "quarantined",
+        "reused": False,
+        "quarantine_index": receipt["index"],
+        "quarantine_sha256": receipt["quarantine_sha256"],
+        "attempts": receipt["attempts"],
+        "next_command": next_steps,
     }
 
 
@@ -33854,6 +34496,13 @@ def campaign_status(
                 "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）：reconcile-attempt 入账并批准恢复预览后，"
                 "resume --rerun-failed 全部重跑"
             )
+        elif candidate_attempt.get("evidence_conflict_quarantine"):
+            # 修好接着跑第 24 项：被证据根冲突隔离的 attempt 同样全部重跑。
+            status = "candidate_capture_failed"
+            next_command = (
+                "该 attempt 已被证据根冲突隔离（证据不可信，永不复用、永不 seal）：reconcile-attempt 入账并批准恢复"
+                "预览后，resume --rerun-failed 全部重跑"
+            )
         elif candidate_attempt["status"] == "reconciled_interrupted":
             status = "candidate_capture_failed"
             next_command = "resume --rerun-failed --recovery-preview <已批准的 recovery-preview>"
@@ -33937,6 +34586,13 @@ def campaign_status(
             next_command = (
                 "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）：reconcile-attempt 入账并批准恢复预览后，"
                 "resume --rerun-failed 全部重跑"
+            )
+        elif official_attempt.get("evidence_conflict_quarantine"):
+            # 修好接着跑第 24 项：被证据根冲突隔离的 attempt 同样全部重跑。
+            status = "official_capture_failed"
+            next_command = (
+                "该 attempt 已被证据根冲突隔离（证据不可信，永不复用、永不 seal）：reconcile-attempt 入账并批准恢复"
+                "预览后，resume --rerun-failed 全部重跑"
             )
         elif official_attempt["status"] == "reconciled_interrupted":
             status = "official_capture_failed"
@@ -37245,14 +37901,23 @@ def _phase_evaluation_recovery_scope(
     修好接着跑第 13 项：被环境隔离作废的 attempt（状态 environment_contaminated，或 Kilo 后恢复失败的
     awaiting_receipts）也是来源：已完成作业全部作废（记入 ``environment_isolation``），执行闭集是全部计划作业；
     源 attempt 没有可用的前后环境收据，环境边界改绑隔离收据（它绑定修复后的干净环境复核）。
+
+    修好接着跑第 24 项：被证据根冲突隔离的 attempt（续跑重跑来源已完成作业时证据被误归档、增量复用或覆写）也是
+    来源：已完成作业全部作废（记入 ``evidence_conflict_quarantine``），执行闭集是全部计划作业；它的前后环境收据
+    完好，环境边界照常按源 attempt 计算。
     """
 
     isolation_receipt = _attempt_isolation_receipt(campaign_dir, phase, candidate_id, attempt_root.name)
+    conflict_quarantine = _attempt_conflict_quarantine_receipt(
+        campaign_dir, phase, candidate_id, attempt_root.name
+    )
     source_status = attempt.get("status")
     if source_status != "failed" and not (
         allow_awaiting_failures and source_status == "awaiting_receipts"
     ) and not (
         isolation_receipt is not None and source_status == "environment_contaminated"
+    ) and not (
+        conflict_quarantine is not None and source_status == "awaiting_receipts"
     ):
         raise ConfigurationError("只有 failed attempt 可以建立恢复 transition。")
     if (
@@ -37318,7 +37983,12 @@ def _phase_evaluation_recovery_scope(
     evolution_source = (
         source_status == "awaiting_receipts" and not failed_ids and allow_evolution_invalidated
     )
-    if source_status == "awaiting_receipts" and not evolution_source and isolation_receipt is None:
+    if (
+        source_status == "awaiting_receipts"
+        and not evolution_source
+        and isolation_receipt is None
+        and conflict_quarantine is None
+    ):
         if phase != "candidate" or not failed_ids:
             raise ConfigurationError(
                 "awaiting_receipts 只有包含失败 Candidate Job 时才能作为后继恢复源。"
@@ -37357,7 +38027,7 @@ def _phase_evaluation_recovery_scope(
         and not result_by_id
         and pending_ids == sorted(planned)
     )
-    if not completed_ids and not pre_job_failure and isolation_receipt is None:
+    if not completed_ids and not pre_job_failure and isolation_receipt is None and conflict_quarantine is None:
         raise ConfigurationError("失败 attempt 没有已完成 Job，禁止原地 transition。")
     # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，移入执行闭集重跑。
     # 没有演进时不改变闭集，也不在 scope 里写 tool_evolution，旧 transition 摘要保持不变。
@@ -37365,7 +38035,7 @@ def _phase_evaluation_recovery_scope(
         campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
     )
     evolved_ids = sorted(set(completed_ids) & set(evolution_impact["affected_job_ids"]))
-    if evolution_source and not evolved_ids and isolation_receipt is None:
+    if evolution_source and not evolved_ids and isolation_receipt is None and conflict_quarantine is None:
         raise ConfigurationError(
             "等待封存的 attempt 没有被工具演进作废的作业，不是续跑来源；按正常流程 seal。"
         )
@@ -37378,8 +38048,16 @@ def _phase_evaluation_recovery_scope(
         isolated_ids = list(completed_ids)
         completed_ids = []
         execute_ids = sorted(set(execute_ids) | set(isolated_ids))
+    conflict_ids: list[str] = []
+    if conflict_quarantine is not None:
+        # 修好接着跑第 24 项：证据根冲突隔离的结果永不复用，剩余已完成作业全部作废并入执行闭集。
+        conflict_ids = list(completed_ids)
+        completed_ids = []
+        execute_ids = sorted(set(execute_ids) | set(conflict_ids))
     drifted_ids: list[str] = []
-    continuity_drifted = isolation_receipt is None and _attempt_continuity_drifted(attempt)
+    continuity_drifted = (
+        isolation_receipt is None and conflict_quarantine is None and _attempt_continuity_drifted(attempt)
+    )
     if continuity_drifted:
         # 修好接着跑第 22 项：源 attempt 因环境连续性漂移失败，它承接的结果证据前提不再成立，全部重跑。
         drifted_ids = list(completed_ids)
@@ -37476,6 +38154,13 @@ def _phase_evaluation_recovery_scope(
         }
     if continuity_drifted:
         scope["continuity_drift"] = {"invalidated_job_ids": sorted(drifted_ids)}
+    if conflict_quarantine is not None:
+        receipt, _item = conflict_quarantine
+        scope["evidence_conflict_quarantine"] = {
+            "quarantine_index": int(receipt["index"]),
+            "quarantine_sha256": str(receipt["quarantine_sha256"]),
+            "invalidated_job_ids": sorted(conflict_ids),
+        }
     return scope
 
 
@@ -37497,6 +38182,21 @@ def _attempt_isolation_receipt(
                 and item.get("recovery_revision") is None
             ):
                 return receipt
+    return None
+
+
+def _attempt_conflict_quarantine_receipt(
+    campaign_dir: Path,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """覆盖该 attempt 的最早一份证据根冲突隔离收据及其条目；没有被隔离时返回 None。"""
+
+    for receipt in _evidence_conflict_quarantines(campaign_dir):
+        for item in receipt["attempts"]:
+            if _attempt_reference_matches(item, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id):
+                return receipt, dict(item)
     return None
 
 
@@ -37577,6 +38277,19 @@ def _validate_recovery_scope_plan(
             or isolation is not None
         ):
             raise ConfigurationError("恢复 transition 的 continuity_drift 作废作业非法。")
+        isolated_ids = isolated_ids | {str(value) for value in values}
+    # 修好接着跑第 24 项：证据根冲突隔离源的已完成作业同样全部并入执行闭集（与环境隔离互斥）。
+    conflict = scope.get("evidence_conflict_quarantine")
+    if conflict is not None:
+        values = conflict.get("invalidated_job_ids") if isinstance(conflict, Mapping) else None
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in values)
+            or completed_ids
+            or isolation is not None
+        ):
+            raise ConfigurationError("恢复 transition 的 evidence_conflict_quarantine 作废作业非法。")
         isolated_ids = isolated_ids | {str(value) for value in values}
     if (
         not planned_ids
@@ -41457,6 +42170,10 @@ def _prior_complete_results(
     isolation_invalidated = (
         _isolation_invalidated_attempts(history_campaign_dir) if not cross_campaign_source else set()
     )
+    # 修好接着跑第 24 项：证据根冲突隔离的 attempt（failed 或等待封存）结果一律不承接，全部重跑。
+    conflict_quarantined = (
+        _conflict_quarantined_attempts(history_campaign_dir) if not cross_campaign_source else set()
+    )
     for attempt, _ in _ordered_capture_attempts(
         history_campaign_dir,
         phase,
@@ -41478,7 +42195,9 @@ def _prior_complete_results(
         if (
             (phase, history_candidate_id, attempt.name) in isolation_invalidated
             and payload.get("status") in {"environment_contaminated", "awaiting_receipts"}
-        ) or (not cross_campaign_source and _attempt_continuity_drifted(payload)):
+        ) or (phase, history_candidate_id, attempt.name) in conflict_quarantined or (
+            not cross_campaign_source and _attempt_continuity_drifted(payload)
+        ):
             # 修好接着跑第 22 项：环境连续性漂移源与隔离作废源一样全部重跑，不承接任何结果。
             if _fingerprint(payload.get("identity")) != _fingerprint(identity):
                 raise ConfigurationError(
@@ -41487,7 +42206,7 @@ def _prior_complete_results(
                 )
             if expected_reuse:
                 raise ConfigurationError(
-                    f"attempt {attempt.name} 已被环境隔离作废或因环境连续性漂移失败，结果不再复用；"
+                    f"attempt {attempt.name} 已被环境隔离作废、证据根冲突隔离或因环境连续性漂移失败，结果不再复用；"
                     "恢复闭集不得承接任何作业。"
                 )
             return []
@@ -42437,8 +43156,13 @@ def _close_attempt_evidence_permissions(
 def _replay_attempt_evidence_permissions(
     attempt_root: Path,
     payload: Mapping[str, Any],
+    *,
+    root_relocations: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """重放 v3 Attempt 的权限收口；历史 v2 仅保留只读兼容。"""
+    """重放 v3 Attempt 的权限收口；历史 v2 仅保留只读兼容。
+
+    ``root_relocations``：修好接着跑第 24 项，被后续续跑取代归档的外部根（原路径 → 同级归档路径）。
+    """
 
     schema_version = payload.get("schema_version")
     if schema_version == LEGACY_CAPTURE_ATTEMPT_SCHEMA:
@@ -42482,6 +43206,7 @@ def _replay_attempt_evidence_permissions(
             attempt_root,
             [Path(value) for value in raw_roots],
             binding,
+            root_relocations=root_relocations,
         )
     except (
         OSError,
@@ -42579,8 +43304,13 @@ def _load_capture_attempt(
     *,
     _historical_manifest_controls: bool = False,
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
+    _replay_evidence_permissions: bool = True,
 ) -> tuple[Path, dict[str, Any]]:
-    """读取并重验 run 阶段的不可变 attempt。"""
+    """读取并重验 run 阶段的不可变 attempt。
+
+    ``_replay_evidence_permissions=False`` 只供第 24 项的证据根登记者与冲突识别读取结果：其余完整性照常核对，
+    不重放证据边界（被破坏的来源正是要处理的对象）；这类读取不得用于 seal、复用或评估。
+    """
 
     manifest = (
         dict(_verified_campaign_manifest)
@@ -42654,7 +43384,18 @@ def _load_capture_attempt(
     }:
         raise ConfigurationError("抓包 attempt 状态非法。")
     _validate_attempt_failure_facts(payload)
-    _replay_attempt_evidence_permissions(attempt_root, payload)
+    if _replay_evidence_permissions and (
+        phase, expected_candidate, attempt_id
+    ) not in _conflict_compromised_attempts(campaign_dir):
+        # 修好接着跑第 24 项：被后续续跑取代归档的根按取代收据映射后逐字复算；证据根冲突隔离登记为受损（边界
+        # 不可复原）的 attempt 只读留档、跳过边界重放，永不 seal、永不复用由各门禁另行拒绝。
+        _replay_attempt_evidence_permissions(
+            attempt_root,
+            payload,
+            root_relocations=_evidence_root_relocations(
+                campaign_dir, phase=phase, candidate_id=expected_candidate, attempt_id=attempt_id
+            ),
+        )
     _validate_attempt_incremental_fields(
         payload,
         {str(item["id"]) for item in reservation["planned_jobs"]},
@@ -42887,8 +43628,9 @@ def _active_unsealed_attempts(
             scopes.append((candidate_root.name, candidate_root))
 
     active: list[str] = []
-    # 修好接着跑第 13 项：已被环境隔离作废的 attempt 永不 seal，不再算等待封存（改由失败 attempt 续跑）。
-    invalidated = _isolation_invalidated_attempts(campaign_dir)
+    # 修好接着跑第 13 项：已被环境隔离作废的 attempt 永不 seal，不再算等待封存（改由失败 attempt 续跑）；
+    # 第 24 项证据根冲突隔离同理。
+    invalidated = _rerun_all_invalidated_attempts(campaign_dir)
     for candidate_id, scope in scopes:
         sealed_attempt_id: str | None = None
         result_path = scope / "result.json"
@@ -42973,8 +43715,9 @@ def _failed_capture_attempts(
     """列出尚未通过显式 resume 处理的失败 attempt。"""
 
     failed: list[str] = []
-    # 修好接着跑第 13 项：已被环境隔离作废的 attempt（污染或 Kilo 后恢复失败）按失败 attempt 显式 resume。
-    invalidated = _isolation_invalidated_attempts(campaign_dir)
+    # 修好接着跑第 13 项：已被环境隔离作废的 attempt（污染或 Kilo 后恢复失败）按失败 attempt 显式 resume；
+    # 第 24 项被证据根冲突隔离的等待封存 attempt 同理（failed 状态本来就在列）。
+    invalidated = _rerun_all_invalidated_attempts(campaign_dir)
     for current_phase, candidate_id, attempt_root in _campaign_attempt_roots(
         campaign_dir
     ):
@@ -47978,6 +48721,16 @@ def _run_capture_attempt(
                 evidence_root=evidence_root,
                 campaign_dir=campaign_dir,
             )
+            # 修好接着跑第 24 项：任何真实请求之前清出执行集合作业被其它 attempt 登记占据的固定证据根（续跑重跑
+            # 来源已完成的作业时才会出现），否则来源证据会被误归档、增量复用或覆写。失败即本 attempt 零请求失败。
+            _supersede_occupied_evidence_roots(
+                campaign_dir,
+                manifest,
+                phase=phase,
+                candidate_id=candidate_id,
+                attempt_root=attempt_root,
+                jobs=jobs,
+            )
             for job in jobs:
                 _require_capture_budget_before_data_action(
                     deadline,
@@ -48734,6 +49487,12 @@ def _seal_capture_attempt(
         # 修好接着跑第 13 项：隔离放行的是 Campaign，不是被作废的 attempt 本身；在任何门禁与写入之前拒绝。
         raise ConfigurationError(
             "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）；reconcile-attempt 入账并批准恢复预览后 "
+            "resume --rerun-failed 全部重跑。"
+        )
+    if (phase, candidate_id, attempt_root.name) in _conflict_quarantined_attempts(campaign_dir):
+        # 修好接着跑第 24 项：证据根冲突隔离的 attempt 证据不可信，在任何门禁与写入之前拒绝。
+        raise ConfigurationError(
+            "该 attempt 已被证据根冲突隔离（证据不可信，永不复用、永不 seal）；reconcile-attempt 入账并批准恢复预览后 "
             "resume --rerun-failed 全部重跑。"
         )
     if phase == "candidate" and _requires_complete_vc_artifacts(manifest):
@@ -57613,6 +58372,7 @@ def _reject_unparented_formal_write(
         "campaign-resume",
         "accounting-resolve",
         "environment-isolate",
+        "evidence-conflict-quarantine",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -57993,6 +58753,13 @@ def _refuse_seal_chain_on_evolution_invalidated_attempt(
             raise ConfigurationError(
                 f"compile-and-run-vc-batch 拒绝：{action.get('action_id')} 要封存的 attempt {attempt_id} "
                 "已被环境隔离作废（结果永不复用、永不 seal）。先 reconcile-attempt 入账并批准恢复预览，"
+                "resume --rerun-failed 全部重跑，再对新 attempt 走 seal；本次未写入任何文件。"
+            )
+        if (side, candidate_id, attempt_id) in _conflict_quarantined_attempts(campaign_dir):
+            # 修好接着跑第 24 项：被证据根冲突隔离的 attempt 永不 seal，同样在任何落盘之前拦下。
+            raise ConfigurationError(
+                f"compile-and-run-vc-batch 拒绝：{action.get('action_id')} 要封存的 attempt {attempt_id} "
+                "已被证据根冲突隔离（证据不可信，永不复用、永不 seal）。先 reconcile-attempt 入账并批准恢复预览，"
                 "resume --rerun-failed 全部重跑，再对新 attempt 走 seal；本次未写入任何文件。"
             )
 
@@ -59994,6 +60761,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0
         elif command == "environment-isolate":
             result = _environment_isolate_command(arguments)
+            return_code = 0
+        elif command == "evidence-conflict-quarantine":
+            result = _evidence_conflict_quarantine_command(arguments)
             return_code = 0
         elif command == "wire-transition-intent":
             result = _wire_transition_intent_command(arguments)

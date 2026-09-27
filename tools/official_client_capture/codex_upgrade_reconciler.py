@@ -1502,6 +1502,13 @@ def _environment_facts(
             or (attempt_root / "seal-failure.json").exists()
         ):
             status = "contaminated"
+        elif (
+            str(attempt.get("phase")),
+            attempt.get("candidate_id"),
+            str(attempt.get("attempt_id")),
+        ) in codex_upgrade._conflict_quarantined_attempts(campaign_dir):
+            # 修好接着跑第 24 项：被证据根冲突隔离的 attempt 证据不可信（被误归档、增量复用或覆写），不复用、全部重跑。
+            status = "conflict_quarantined"
         elif codex_upgrade._attempt_continuity_drifted(attempt):
             # 修好接着跑第 22 项：因环境连续性漂移失败的 attempt，它承接的结果证据前提不成立，不复用、全部重跑。
             status = "continuity_drift"
@@ -2447,11 +2454,66 @@ def _isolation_invalidation_facts(
     return None
 
 
-def _invalidation_ledger_event_id(attempt_id: str, isolation_invalidation: Mapping[str, Any] | None) -> str:
-    """作废对账写计时账本 recovery_required 的事件 ID（演进与隔离分开，互不吞并）。"""
+def _conflict_invalidation_facts(
+    campaign_dir: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> dict[str, Any] | None:
+    """等待封存的 attempt 被证据根冲突隔离（修好接着跑第 24 项）时返回失效事实。
 
-    kind = "isolation" if isolation_invalidation is not None else "evolution"
+    与工具演进／环境隔离作废同一协议：不是失败、不计根因；全部已完成作业失效（证据不可信，永不复用），计时账本
+    recovery_required 后按恢复预览全部重跑。
+    """
+
+    try:
+        found = codex_upgrade._attempt_conflict_quarantine_receipt(campaign_dir, phase, candidate_id, attempt_id)
+    except codex_upgrade.ConfigurationError as error:
+        raise ReconcilerError(str(error)) from error
+    if found is None:
+        return None
+    receipt, _item = found
+    jobs = sorted(
+        str(result["id"])
+        for result in attempt.get("results", [])
+        if isinstance(result, Mapping) and result.get("status") == "complete" and isinstance(result.get("id"), str)
+    )
+    return {
+        "quarantine_index": int(receipt["index"]),
+        "quarantine_sha256": str(receipt["quarantine_sha256"]),
+        "invalidated_job_ids": jobs,
+    }
+
+
+def _invalidation_ledger_event_id(
+    attempt_id: str,
+    isolation_invalidation: Mapping[str, Any] | None,
+    conflict_invalidation: Mapping[str, Any] | None = None,
+) -> str:
+    """作废对账写计时账本 recovery_required 的事件 ID（演进、隔离、证据根冲突分开，互不吞并）。"""
+
+    kind = (
+        "isolation"
+        if isolation_invalidation is not None
+        else "conflict"
+        if conflict_invalidation is not None
+        else "evolution"
+    )
     return f"reconcile-attempt-{kind}-{attempt_id}"
+
+
+def _conflict_invalidation_cause(phase: str, facts: Mapping[str, Any]) -> dict[str, Any]:
+    """证据根冲突隔离作废的暂停原因：只作计时账本 recovery_required／授权的原因标识，不入总账计数。"""
+
+    return {
+        "root_cause_id": f"evidence-conflict-{int(facts['quarantine_index']):02d}",
+        "stable_error_code": "attempt.evidence-conflict-quarantined",
+        "failed_step": "evidence-conflict-quarantine",
+        "stable_dimensions": {"phase": phase},
+        "component": COMPONENT,
+    }
 
 
 def _isolation_invalidation_cause(phase: str, facts: Mapping[str, Any]) -> dict[str, Any]:
@@ -2494,6 +2556,8 @@ def reconcile_attempt(
     evolution_invalidation: dict[str, Any] | None = None
     # 修好接着跑第 13 项：等待封存、但被环境隔离作废的 attempt（同一协议，全部作业失效）。
     isolation_invalidation: dict[str, Any] | None = None
+    # 修好接着跑第 24 项：等待封存、但被证据根冲突隔离的 attempt（同一协议，全部作业失效）。
+    conflict_invalidation: dict[str, Any] | None = None
     if recovery_revision is not None:
         if phase != "candidate" or candidate_id is None:
             raise ReconcilerError("恢复段只存在于候选 attempt")
@@ -2544,8 +2608,13 @@ def reconcile_attempt(
                         campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
                     )
                 if evolution_invalidation is None and isolation_invalidation is None:
+                    conflict_invalidation = _conflict_invalidation_facts(
+                        campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
+                    )
+                if evolution_invalidation is None and isolation_invalidation is None and conflict_invalidation is None:
                     raise ReconcilerError(
-                        "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进／环境隔离作废的 attempt"
+                        "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进／环境隔离／"
+                        "证据根冲突隔离作废的 attempt"
                     )
         stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
         if stage_result.exists():
@@ -2606,14 +2675,16 @@ def reconcile_attempt(
         ledger.get("status") == "stopped"
         and fallback_cause["stable_error_code"] == "attempt.identity-changed"
     )
-    if evolution_invalidation is not None or isolation_invalidation is not None:
+    if evolution_invalidation is not None or isolation_invalidation is not None or conflict_invalidation is not None:
         # 演进失效不是失败：不编失败根因、不计同根因次数（总账载荷不带 root_cause）。计时账本的暂停原因
         # 用 tool-evolution-NN（总账里不存在，不会触顶），授权按同一原因恢复阶段。环境隔离作废同一口径，
-        # 原因用 environment-isolation-NN。
+        # 原因用 environment-isolation-NN；证据根冲突隔离作废（第 24 项）用 evidence-conflict-NN。
         cause = (
             _evolution_invalidation_cause(phase, evolution_invalidation)
             if evolution_invalidation is not None
             else _isolation_invalidation_cause(phase, isolation_invalidation)
+            if isolation_invalidation is not None
+            else _conflict_invalidation_cause(phase, conflict_invalidation)
         )
         root_causes = [cause]
         array_contract = False
@@ -2682,6 +2753,8 @@ def reconcile_attempt(
         receipt["tool_evolution_invalidation"] = dict(evolution_invalidation)
     if isolation_invalidation is not None:
         receipt["environment_isolation_invalidation"] = dict(isolation_invalidation)
+    if conflict_invalidation is not None:
+        receipt["evidence_conflict_invalidation"] = dict(conflict_invalidation)
     receipt_path = receipt_dir / ATTEMPT_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -2748,7 +2821,7 @@ def reconcile_attempt(
                 )
             else:
                 ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
-        elif evolution_invalidation is not None or isolation_invalidation is not None:
+        elif evolution_invalidation is not None or isolation_invalidation is not None or conflict_invalidation is not None:
             # attempt 已完成（账本是 attempt_completed），不补 attempt 事件；把所在阶段暂停为 recovery_required，
             # 授权后按恢复预览只重跑失效作业。阶段已因别的原因暂停时沿用该原因（授权一并消费）；到期暂停
             # 由判定提示先延期；其它状态只入账。
@@ -2757,7 +2830,7 @@ def reconcile_attempt(
                 ledger_events.append(
                     _append_ledger_event(
                         ledger_dir,
-                        event_id=_invalidation_ledger_event_id(attempt_id, isolation_invalidation),
+                        event_id=_invalidation_ledger_event_id(attempt_id, isolation_invalidation, conflict_invalidation),
                         phase=expected_phase,
                         event_type="recovery_required",
                         root_cause_id=cause["root_cause_id"],
@@ -2769,6 +2842,8 @@ def reconcile_attempt(
                     f"skipped:evolution_invalidation_ledger_{ledger['status']}"
                     if evolution_invalidation is not None
                     else f"skipped:isolation_invalidation_ledger_{ledger['status']}"
+                    if isolation_invalidation is not None
+                    else f"skipped:conflict_invalidation_ledger_{ledger['status']}"
                 )
         elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
@@ -2864,15 +2939,17 @@ def reconcile_attempt(
             reconciliation_payload["root_causes"] = root_causes
         if recovery_revision is not None:
             reconciliation_payload["recovery_revision"] = recovery_revision
-        if evolution_invalidation is not None or isolation_invalidation is not None:
-            # 演进失效与环境隔离作废只核算请求，不带 root_cause：总账不把它计入同根因次数。
+        if evolution_invalidation is not None or isolation_invalidation is not None or conflict_invalidation is not None:
+            # 演进失效与环境隔离／证据根冲突隔离作废只核算请求，不带 root_cause：总账不把它计入同根因次数。
             del reconciliation_payload["root_cause"]
             if evolution_invalidation is not None:
                 reconciliation_payload["tool_evolution_invalidation"] = dict(evolution_invalidation)
-            else:
+            elif isolation_invalidation is not None:
                 reconciliation_payload["environment_isolation_invalidation"] = dict(isolation_invalidation)
+            else:
+                reconciliation_payload["evidence_conflict_invalidation"] = dict(conflict_invalidation)
             reconciliation_payload["recovery_required_event_sha256"] = _ledger_event_sha256(
-                ledger_dir, _invalidation_ledger_event_id(attempt_id, isolation_invalidation)
+                ledger_dir, _invalidation_ledger_event_id(attempt_id, isolation_invalidation, conflict_invalidation)
             )
         batch = _commit_batch(
             campaign_dir,
@@ -2934,6 +3011,8 @@ def reconcile_attempt(
         result["tool_evolution_invalidation"] = dict(evolution_invalidation)
     if isolation_invalidation is not None:
         result["environment_isolation_invalidation"] = dict(isolation_invalidation)
+    if conflict_invalidation is not None:
+        result["evidence_conflict_invalidation"] = dict(conflict_invalidation)
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")
@@ -3925,7 +4004,8 @@ def reconcile_supervisor_run(
         elif run.get("failure_class") == "post-run-tooling":
             result["next_command"] = (
                 "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
-                "逐字重派同一 seal 批次；Candidate Job 结果只读保留"
+                "逐字重派同一 seal 批次；Candidate Job 结果只读保留。若该批次要封存的 attempt 已被工具演进、环境隔离"
+                "或证据根冲突隔离作废，改为 reconcile-attempt 按作废对账并批准恢复预览，再派发 N+1 零请求恢复预览"
             )
         elif run.get("failure_class") == PARENT_PREPARE_ABANDONED_CLASS:
             result["next_command"] = (

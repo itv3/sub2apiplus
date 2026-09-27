@@ -3340,6 +3340,16 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   针对它的 seal 链批次编译前零写入拒绝，失败的 seal 链批次之后允许 N+1 零请求恢复预览。
 - **承接前环境连续性漂移**：新 attempt 在任何 Job 执行前失败（`EnvironmentContinuityDrift`，零请求）；对账后恢复
   预览全部重跑、不承接。
+- **重跑来源已完成的作业**（工具演进作废、隔离作废、漂移全部重跑）：场景清单为同一 Campaign 固定每个作业的证据根，
+  派发前（第一个 Job 之前）把执行集合作业被其它 attempt 结果登记占据的目录改名为同级 `<名>.superseded-<新 attempt>`，
+  取代收据 `control/evidence-roots/supersession-<新 attempt>.json` 先于改名写入并绑定原目录 inode；旧 attempt 重放收口
+  时按收据映射到归档目录，边界记录仍用原路径、逐字复算。没有 attempt 登记的孤儿目录不动。否则采集脚本拒绝覆盖后
+  wire 失败归档会误搬来源的成功证据、mitm 矩阵按坐标 checkpoint 复用来源旧产物却记为执行、部分脚本在原目录覆写。
+- **证据根冲突**（旧工具下重跑已完成作业留下的：同一证据根被两个 attempt 的执行结果登记，来源证据已被改动，全量加载
+  来源的门禁因收口边界漂移失败）：`evidence-conflict-quarantine` 预览→`--approve-sha256`／`--approved-by`，写
+  `control/evidence-conflict/quarantine-NN.json`（成链、写一次）。卷入冲突的未封存 attempt 一律隔离：收口重放失败的判
+  compromised（只读留档，加载时跳过边界重放），其余判 invalidated；两者都永不 seal、永不复用，等待封存的按作废对账
+  （原因 `evidence-conflict-NN`，不计根因），续跑全部重跑。
 - **执行前评估器摘要变化**（批次运行中部署了新工具）：`tool-evolution-required` 可恢复，登记演进后按同一动作计划
   重新编译 N+1；b0 授权随演进迁移，授权历史只增不减。
 - **VC-1 官方 seal 链零请求失败**：按 `post-run-tooling` 恢复，修好后重派同一 attempt 的 seal 链批次。

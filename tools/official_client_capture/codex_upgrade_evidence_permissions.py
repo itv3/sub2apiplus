@@ -12,7 +12,7 @@ import hashlib
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -45,6 +45,12 @@ TCPDUMP_GID = 102
 TCPDUMP_FILENAMES = frozenset({"egress.pcap", "traffic.pcap"})
 SHA256_CHARS = frozenset("0123456789abcdef")
 MAX_RECEIPT_BYTES = 4 * 1024 * 1024
+# 修好接着跑第 24 项：续跑重跑"来源已完成"的作业前，编排器把被其它 attempt 登记占据的固定证据根改名为同级
+# ``<名>.superseded-<新 attempt>``（取代收据绑定原目录 inode），否则采集脚本拒绝覆盖后 wire 失败归档会误搬来源
+# 的成功证据、mitm 矩阵会按坐标 checkpoint 复用来源旧产物、部分脚本会在原目录里覆写同名文件。重放这些旧
+# attempt 的收口时按收据把原路径映射到归档路径遍历，边界记录仍写原路径字符串：同一文件系统内 rename 不改
+# inode、size、mtime，边界摘要逐字复算。映射只允许指向原根的同级 ``.superseded-`` 目录，内部根不得映射。
+SUPERSEDED_ROOT_INFIX = ".superseded-"
 
 
 class EvidencePermissionError(RuntimeError):
@@ -340,14 +346,46 @@ def _normalized_roots(values: Sequence[Path]) -> tuple[Path, ...]:
     return tuple(roots)
 
 
+def _normalized_relocations(
+    value: Mapping[str, str] | None,
+    roots: Sequence[Path],
+) -> dict[Path, Path]:
+    """校验取代映射：键必须是本次证据根，值必须是同级、名字为 ``<键名>.superseded-…`` 的绝对路径。"""
+
+    if not value:
+        return {}
+    root_set = set(roots)
+    relocations: dict[Path, Path] = {}
+    for raw_source, raw_target in value.items():
+        source = Path(str(raw_source))
+        target = Path(str(raw_target))
+        if source not in root_set:
+            raise EvidencePermissionError(f"证据根取代映射的原路径不在本次证据根中：{source}")
+        if (
+            not target.is_absolute()
+            or ".." in target.parts
+            or target.parent != source.parent
+            or not target.name.startswith(source.name + SUPERSEDED_ROOT_INFIX)
+            or len(target.name) == len(source.name + SUPERSEDED_ROOT_INFIX)
+        ):
+            raise EvidencePermissionError(f"证据根取代映射的目标非法：{source} -> {target}")
+        relocations[source] = target
+    return relocations
+
+
 def _root_aliases(
     attempt_root: Path,
     evidence_roots: Sequence[Path],
     *,
     managed_data_root: Path,
     logical_runs_roots: Sequence[Path],
-) -> tuple[tuple[Path, Path, bool], ...]:
-    """把逻辑证据根映射到唯一受管宿主路径，并验证根 inode。"""
+    root_relocations: Mapping[str, str] | None = None,
+) -> tuple[tuple[Path, Path, bool, Path, Path], ...]:
+    """把逻辑证据根映射到唯一受管宿主路径，并验证根 inode。
+
+    返回 ``(逻辑根, 宿主根, 外部别名, 实际逻辑根, 实际宿主根)``；只有被取代映射的外部根，实际根才指向同级
+    ``.superseded-`` 归档目录（遍历与校验用实际根，边界记录用前两项的原路径）。
+    """
 
     attempt_root = attempt_root.resolve(strict=True)
     _owned_directory(attempt_root, "Attempt 根")
@@ -378,11 +416,15 @@ def _root_aliases(
     if not normalized_aliases:
         raise EvidencePermissionError("逻辑 runs 别名不能为空。")
 
-    aliases: list[tuple[Path, Path, bool]] = []
+    roots = _normalized_roots(evidence_roots)
+    relocations = _normalized_relocations(root_relocations, roots)
+    aliases: list[tuple[Path, Path, bool, Path, Path]] = []
     validated_runs_roots: set[Path] = set()
-    for root in _normalized_roots(evidence_roots):
+    for root in roots:
         if root in current_internal_roots or is_managed_attempt_internal(root):
-            aliases.append((root, root, False))
+            if root in relocations:
+                raise EvidencePermissionError(f"Attempt 内部证据根不得被取代映射：{root}")
+            aliases.append((root, root, False, root, root))
             continue
         match: tuple[Path, Path] | None = None
         for logical_runs_root in normalized_aliases:
@@ -410,8 +452,14 @@ def _root_aliases(
                 raise EvidencePermissionError("逻辑 runs 与受管宿主 runs 不是同一 inode。")
             validated_runs_roots.add(logical_runs_root)
         write_root = writable_runs_root.joinpath(*PurePosixPath(relative.as_posix()).parts)
-        _entry_snapshot(root, write_root, external_alias=True)
-        aliases.append((root, write_root, True))
+        # 取代映射的目标与原根同级（_normalized_relocations 已核），因而落在同一 runs 别名下。
+        actual_root = relocations.get(root, root)
+        actual_relative = actual_root.relative_to(logical_runs_root)
+        actual_write_root = writable_runs_root.joinpath(
+            *PurePosixPath(actual_relative.as_posix()).parts
+        )
+        _entry_snapshot(actual_root, actual_write_root, external_alias=True)
+        aliases.append((root, write_root, True, actual_root, actual_write_root))
     return tuple(aliases)
 
 
@@ -422,8 +470,12 @@ def inspect_evidence_boundary(
     managed_data_root: Path | None = None,
     logical_runs_roots: Sequence[Path] = LOGICAL_RUNS_ROOTS,
     rule: str = BOUNDARY_RULE_V2,
+    root_relocations: Mapping[str, str] | None = None,
 ) -> BoundarySnapshot:
-    """只读取 stat 元数据并形成全部证据根的稳定边界摘要（rule 见 SCHEMA_VERSION 注释）。"""
+    """只读取 stat 元数据并形成全部证据根的稳定边界摘要（rule 见 SCHEMA_VERSION 注释）。
+
+    ``root_relocations`` 只供重放被取代的旧 attempt：遍历实际归档目录，条目的 read_path／write_path 写回原路径。
+    """
 
     data_root = Path(managed_data_root) if managed_data_root is not None else _managed_data_root()
     aliases = _root_aliases(
@@ -431,22 +483,25 @@ def inspect_evidence_boundary(
         evidence_roots,
         managed_data_root=data_root,
         logical_runs_roots=logical_runs_roots,
+        root_relocations=root_relocations,
     )
     entries: list[EntrySnapshot] = []
     seen_read_paths: set[Path] = set()
-    for read_root, write_root, external_alias in aliases:
-        for read_path in _walk_paths(read_root, rule=rule):
+    for read_root, write_root, external_alias, actual_read_root, actual_write_root in aliases:
+        for actual_read_path in _walk_paths(actual_read_root, rule=rule):
+            relative = actual_read_path.relative_to(actual_read_root)
+            read_path = read_root / relative
             if read_path in seen_read_paths:
                 raise EvidencePermissionError(f"证据项被重复枚举：{read_path}")
             seen_read_paths.add(read_path)
-            relative = read_path.relative_to(read_root)
-            entries.append(
-                _entry_snapshot(
-                    read_path,
-                    write_root / relative,
-                    external_alias=external_alias,
-                )
+            entry = _entry_snapshot(
+                actual_read_path,
+                actual_write_root / relative,
+                external_alias=external_alias,
             )
+            if actual_read_root != read_root:
+                entry = replace(entry, read_path=read_path, write_path=write_root / relative)
+            entries.append(entry)
     entries.sort(key=lambda item: str(item.read_path))
     gaps = tuple(item for item in entries if item.mode != item.target_mode)
     return BoundarySnapshot(
@@ -633,8 +688,12 @@ def replay_evidence_permission_closeout(
     *,
     managed_data_root: Path | None = None,
     logical_runs_roots: Sequence[Path] = LOGICAL_RUNS_ROOTS,
+    root_relocations: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """重放收据绑定，并从逻辑路径重新确认元数据边界和私有权限。"""
+    """重放收据绑定，并从逻辑路径重新确认元数据边界和私有权限。
+
+    ``root_relocations``：该 attempt 登记的外部根中已被后续续跑取代归档的部分（原路径 → 同级归档路径）。
+    """
 
     attempt_root = Path(attempt_root).resolve(strict=True)
     expected_fields = {"path", "sha256", "bytes"}
@@ -684,6 +743,7 @@ def replay_evidence_permission_closeout(
             logical_runs_roots=logical_runs_roots,
             extra_fields={"predecessor", "upgraded_from"},
             expected_schema=SCHEMA_VERSION,
+            root_relocations=root_relocations,
         )
     return _replay_receipt_payload(
         payload,
@@ -693,6 +753,7 @@ def replay_evidence_permission_closeout(
         logical_runs_roots=logical_runs_roots,
         extra_fields=set(),
         expected_schema=None,
+        root_relocations=root_relocations,
     )
 
 
@@ -705,6 +766,7 @@ def _replay_receipt_payload(
     logical_runs_roots: Sequence[Path],
     extra_fields: set[str],
     expected_schema: str | None,
+    root_relocations: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """按收据自身 schema 对应的规则复核边界；升级收据必须是 v2。"""
 
@@ -752,6 +814,7 @@ def _replay_receipt_payload(
         managed_data_root=data_root,
         logical_runs_roots=logical_runs_roots,
         rule=rule,
+        root_relocations=root_relocations,
     )
     if (
         payload.get("entry_count") != len(current.entries)

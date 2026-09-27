@@ -9458,6 +9458,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 "campaign-resume",
                 "accounting-resolve",
                 "environment-isolate",
+                # 修好接着跑第 24 项：续跑重跑来源已完成作业后证据根冲突时隔离受损 attempt。
+                "evidence-conflict-quarantine",
                 "wire-transition-intent",
                 "wire-transition-final",
                 "evaluation-epoch",
@@ -19397,6 +19399,174 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             )
 
+    @staticmethod
+    def _write_evidence_conflict_quarantine(campaign_dir: Path, attempt_root: Path, *, disposition: str) -> dict:
+        """按正式收据链形态直接登记一份证据根冲突隔离（单 attempt 夹具造不出跨 attempt 的真实同根冲突；冲突识别与
+        命令本身由 test_codex_upgrade_evidence_conflict 覆盖）。"""
+
+        campaign_id = json.loads((campaign_dir / "campaign.json").read_text(encoding="utf-8"))["campaign_id"]
+        evidence_root = str(attempt_root / "evidence")
+        receipt: dict[str, object] = {
+            "schema_version": codex_upgrade.EVIDENCE_CONFLICT_QUARANTINE_SCHEMA,
+            "campaign_id": campaign_id,
+            "index": 1,
+            "previous_quarantine_sha256": None,
+            "phase": "candidate",
+            "candidate_id": "cand-1",
+            "conflicts": [{
+                "evidence_root": evidence_root,
+                "attempts": [
+                    {"attempt_id": attempt_root.name, "job_ids": ["candidate-core-direct"]},
+                    {"attempt_id": "rerun-attempt", "job_ids": ["candidate-core-direct"]},
+                ],
+            }],
+            "attempts": [{
+                "phase": "candidate",
+                "candidate_id": "cand-1",
+                "attempt_id": attempt_root.name,
+                "attempt_sha256": codex_upgrade.file_sha256(attempt_root / "attempt.json"),
+                "status": "awaiting_receipts",
+                "disposition": disposition,
+                "boundary_replay": {"status": "failed" if disposition == "compromised" else "passed", "error": None},
+                "conflict_roots": [evidence_root],
+                "incremental_noop_job_ids": [],
+            }],
+            "reason": "续跑重跑来源已完成作业时同一证据根被覆写",
+            "review_sha256": "0" * 64,
+            "approved_by": "测试",
+            "approved_at_utc": codex_upgrade._utc_now(),
+        }
+        receipt["quarantine_sha256"] = codex_upgrade._fingerprint(receipt)
+        directory = campaign_dir / codex_upgrade.EVIDENCE_CONFLICT_QUARANTINE_DIR
+        codex_upgrade.ensure_private_directory(directory, campaign_dir)
+        codex_upgrade._secure_write_json_once(directory / "quarantine-01.json", receipt)
+        return receipt
+
+    def test_b0_evidence_conflict_quarantine_unblocks_campaign_and_reruns_everything(self) -> None:
+        """修好接着跑第 24 项：来源 attempt 的证据被后续续跑覆写后收口重放必然漂移，全量加载它的门禁（seal、预约、
+        封存都要遍历污染事实）一律失败，Campaign 卡死（194249z VC-5 seal checkpoint 实测）。证据根冲突隔离登记后：
+        受损 attempt 只读留档、跳过边界重放，Campaign 恢复；被隔离的等待封存 attempt 不再算待封存、seal 前拒绝，
+        按作废对账全部重跑（不计根因），续跑闭集与恢复预览同口径，N+1 零请求恢复预览是允许的后继。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            attempt_id = attempt_root.name
+            jobs = sorted(self._b0_candidate_job_ids(fixture))
+            codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_id)
+            # 续跑把新产物写进了这个 attempt 登记的证据根：收口后的证据边界漂移。
+            overwritten = attempt_root / "evidence" / "overwritten-by-rerun.json"
+            overwritten.write_text("{}\n", encoding="utf-8")
+            overwritten.chmod(0o600)
+            for probe in (
+                lambda: codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_id),
+                lambda: codex_upgrade._campaign_contamination_records(campaign_dir),
+                lambda: codex_upgrade._failed_capture_attempts(campaign_dir, "candidate"),
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "证据权限收口收据未通过"):
+                    probe()
+
+            self._write_evidence_conflict_quarantine(campaign_dir, attempt_root, disposition="compromised")
+            _root, attempt = codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_id)
+            self.assertEqual(attempt["status"], "awaiting_receipts")
+            self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [])
+            self.assertEqual(codex_upgrade._active_unsealed_attempts(campaign_dir, "candidate"), [])
+            self.assertEqual(codex_upgrade._failed_capture_attempts(campaign_dir, "candidate"), [f"cand-1:{attempt_id}"])
+            # seal 链编译前与直接 seal 都拒绝（被隔离的 attempt 证据不可信）。
+            inner = self._b0_seal_batch_manifest(fixture)
+            plan_path = root / "seal-plan.json"
+            plan_path.write_text(json.dumps({
+                "schema_version": "codex-upgrade-vc-action-plan/v1",
+                "execute_item_ids": ["candidate-seal"],
+                "reuse_item_ids": jobs,
+                "actions": inner["actions"],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "证据根冲突隔离"):
+                codex_upgrade._refuse_seal_chain_on_evolution_invalidated_attempt(
+                    campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
+                )
+            with mock.patch.object(codex_upgrade, "_guard_candidate_revision_write"), \
+                    self.assertRaisesRegex(codex_upgrade.ConfigurationError, "证据根冲突隔离"):
+                codex_upgrade._seal_capture_attempt(
+                    argparse.Namespace(campaign_dir=campaign_dir, attempt_id=attempt_id, candidate_id="cand-1",
+                                       attempt_recovery=None, approve_seal_sha256=None),
+                    "candidate",
+                )
+            # 失败的 seal 链父 run 对账：环境无污染，可恢复。
+            run_dir = self._b0_run_dir(
+                fixture, "f" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="child-returncode",
+                error_type="ChildProcessError", post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="post-run-tooling"
+            )
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_dir, campaign_dir)["status"], "recoverable")
+            # attempt 按证据根冲突隔离作废对账：全部作业重跑、不复用、不计根因。
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(result["evidence_conflict_invalidation"]["invalidated_job_ids"], jobs)
+            self.assertEqual(result["root_cause"]["root_cause_id"], "evidence-conflict-01")
+            self.assertEqual(result["environment_status"], "conflict_quarantined")
+            self.assertEqual(result["recovery_preview"]["reuse_job_ids"], [])
+            self.assertEqual(result["recovery_preview"]["execute_job_ids"], jobs)
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["root_cause_counts"], head_before["root_cause_counts"])
+            committed = next(
+                event for event in codex_upgrade_project_ledger._load_events(fixture["ledger"])
+                if event["operation_id"] == f"reconcile-attempt:{attempt_id}"
+            )
+            self.assertNotIn("root_cause", committed["payload"])
+            self.assertEqual(committed["payload"]["evidence_conflict_invalidation"]["invalidated_job_ids"], jobs)
+            # 被隔离的等待封存 attempt 是最近的续跑来源（它的全部重跑闭集由 test_codex_upgrade_evidence_conflict 覆盖：
+            # 本夹具的候选 attempt 不带 Job checkpoint 绑定，无法在这里建立闭集）。
+            source_root, source = codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_id)
+            self.assertEqual(
+                codex_upgrade._latest_failed_attempt_for_identity(
+                    campaign_dir, phase="candidate", candidate_id="cand-1",
+                    identity=source["identity"], manifest=fixture["manifest"],
+                )[0],
+                source_root,
+            )
+            # N+1 零请求恢复预览：监督器核验接受证据根冲突隔离作废（与工具演进、环境隔离作废同一协议）。
+            identity = {
+                "--candidate-id": "cand-1",
+                "--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json"),
+                "--runtime-image": "repo@sha256:" + "1" * 64,
+                "--candidate-image-id": "sha256:" + "1" * 64,
+                "--candidate-source": "/root/candidate/source",
+                "--build-id": "build-1",
+                "--deployed-version": "0.157.0",
+                "--profile-id": "profile-1",
+                "--profile-digest": "2" * 64,
+                "--candidate-purpose": "production_replacement",
+            }
+            preview_action = {
+                "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                "timeout_seconds": 1800,
+                "command": supervisor.candidate_recovery_preview_command(
+                    ["/usr/bin/python3", "/tools/codex_upgrade.py"], str(campaign_dir), identity
+                ),
+                "item_ids": ["candidate-run"],
+            }
+            successor = dict(
+                inner, batch_sequence=2, batch_id="vc-5-0002", batch_sha256="2" * 64,
+                actions=[preview_action], execute_items=["candidate-run"], reuse_items=[],
+            )
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                supervisor._validate_batched_evolution_recovery_successor(
+                    prior_state, inner, run_dir, successor, campaign_dir=campaign_dir
+                )
+            )
     def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
         """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
 

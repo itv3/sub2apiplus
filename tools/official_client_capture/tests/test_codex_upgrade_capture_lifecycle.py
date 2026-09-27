@@ -11,7 +11,7 @@ import multiprocessing
 import tempfile
 import threading
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
@@ -821,6 +821,76 @@ class CaptureLifecycleTest(unittest.TestCase):
                     "/tmp/results.json",
                 ]
             )
+
+    def test_rerun_of_a_registered_root_supersedes_it_before_the_first_job(self) -> None:
+        """修好接着跑第 24 项：执行集合里作业的固定证据根被另一个 attempt 的结果登记占据时，第一个作业之前把它改名为
+        同级 .superseded-<新 attempt>，并先写取代收据；来源按收据映射回归档目录，新作业在空出的原路径上采集。
+        此前 run 脚本见到已存在目录即拒绝覆盖（wire 失败归档随即误搬来源的成功证据），mitm 按坐标复用来源旧产物。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            campaign_dir, job_evidence, job, manifest = self._fixture(root)
+            # 取代收据按 campaign.json 的 campaign_id 核对（正式 Campaign 清单总带它）。
+            (campaign_dir / "campaign.json").write_text(
+                json.dumps({"campaign_id": manifest["campaign_id"]}) + "\n", encoding="utf-8"
+            )
+            order: list[str] = []
+
+            def complete_job(
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
+            ) -> dict[str, object]:
+                del log_root
+                order.append("job:" + ("occupied" if job_evidence.exists() else "free"))
+                job_evidence.mkdir(mode=0o700, exist_ok=True)
+                artifact = job_evidence / "capture.json"
+                artifact.write_text('{"records":[]}\n', encoding="utf-8")
+                artifact.chmod(0o600)
+                return {
+                    "id": current.job_id,
+                    "phase": current.phase,
+                    "required": True,
+                    "execution_sha256": codex_upgrade._job_execution_sha256(current),
+                    "status": "complete",
+                    "steps": [],
+                    "evidence_roots": [str(job_evidence)],
+                }
+
+            with self._patch_runtime(manifest, job, order, run_job=complete_job), mock.patch.multiple(
+                codex_upgrade,
+                FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS=(PurePosixPath(str(root)),),
+                FAILED_JOB_EVIDENCE_HOST_RUN_ROOT=root,
+            ):
+                first = codex_upgrade._run_capture_attempt(self._arguments(campaign_dir), "official")
+                source_identity = (job_evidence.lstat().st_dev, job_evidence.lstat().st_ino)
+                second_start = len(order)
+                # 同一作业再跑一次：来源已完成作业被作废后续跑时的证据根情形（待封存门禁由其它用例覆盖）。
+                with mock.patch.object(codex_upgrade, "_active_unsealed_attempts", return_value=[]):
+                    second = codex_upgrade._run_capture_attempt(self._arguments(campaign_dir), "official")
+                first_id = Path(str(first["attempt"])).name
+                second_id = Path(str(second["attempt"])).name
+                relocations = codex_upgrade._evidence_root_relocations(
+                    campaign_dir, phase="official", candidate_id=None, attempt_id=first_id
+                )
+            archived = job_evidence.with_name(f"{job_evidence.name}.superseded-{second_id}")
+            # 夹具预置的目录没有 attempt 登记（孤儿）：第一次不动；第二次它已被第一次登记，在作业之前被取代。
+            self.assertEqual([item for item in order if item.startswith("job:")], ["job:occupied", "job:free"])
+            self.assertEqual(order[second_start:second_start + 2], ["probe-before", "job:free"])
+            self.assertEqual((archived.lstat().st_dev, archived.lstat().st_ino), source_identity)
+            self.assertTrue((job_evidence / "capture.json").is_file())
+            self.assertEqual(relocations, {str(job_evidence): str(archived)})
+            receipt = json.loads(
+                (campaign_dir / "control" / "evidence-roots" / f"supersession-{second_id}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                [(row["job_id"], [item["attempt_id"] for item in row["registered_by"]]) for row in receipt["roots"]],
+                [(job.job_id, [first_id])],
+            )
+            self.assertEqual(second["status"], "awaiting_receipts")
 
     def test_resume_failed_attempt_really_starts_rerun(self) -> None:
         arguments = argparse.Namespace(

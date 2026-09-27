@@ -8064,8 +8064,8 @@ def verify_evolution_attempt_reconciliation(
 ) -> dict[str, Any]:
     """重放 attempt 的"作废"对账：收据身份、失效事实，以及项目总账 ``reconcile-attempt:<id>`` 的绑定。
 
-    作废来源是工具演进（第 21 项）或环境隔离（修好接着跑第 13 项，Kilo 后环境恢复失败的等待封存 attempt），
-    二者恰有其一；续跑协议相同。
+    作废来源是工具演进（第 21 项）、环境隔离（修好接着跑第 13 项，Kilo 后环境恢复失败的等待封存 attempt）或
+    证据根冲突隔离（第 24 项，续跑重跑来源已完成作业时证据被误归档、增量复用或覆写），三者恰有其一；续跑协议相同。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
@@ -8073,12 +8073,19 @@ def verify_evolution_attempt_reconciliation(
     if receipt_path.is_symlink() or not receipt_path.is_file():
         raise SupervisorError(f"{label}：attempt {attempt_id} 尚未按工具演进作废对账；先执行 reconcile-attempt。")
     receipt = _read_json(receipt_path)
-    evolution_facts = receipt.get("tool_evolution_invalidation")
-    isolation_facts = receipt.get("environment_isolation_invalidation")
-    field = "tool_evolution_invalidation" if isolation_facts is None else "environment_isolation_invalidation"
+    present = [
+        name
+        for name in (
+            "tool_evolution_invalidation",
+            "environment_isolation_invalidation",
+            "evidence_conflict_invalidation",
+        )
+        if receipt.get(name) is not None
+    ]
+    field = present[0] if len(present) == 1 else "tool_evolution_invalidation"
     facts = receipt.get(field)
     if (
-        (evolution_facts is not None and isolation_facts is not None)
+        len(present) > 1
         or receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
         or receipt.get("campaign_id") != campaign_id
         or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())

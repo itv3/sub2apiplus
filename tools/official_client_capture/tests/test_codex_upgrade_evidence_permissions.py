@@ -92,6 +92,69 @@ class EvidencePermissionCloseoutTests(unittest.TestCase):
             self.assertEqual(replayed, receipt)
             self.assertEqual(replayed["boundary_sha256"], receipt["boundary_sha256"])
 
+    def test_superseded_external_root_replays_through_relocation(self) -> None:
+        """修好接着跑第 24 项：外部根被后续续跑改名为同级 .superseded- 目录、原路径被新 attempt 重建后，
+        不带映射重放判漂移，带映射按原路径逐字复算；映射只能指向原根的同级取代目录，内部根不得映射。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            attempt_root, runs_root, evidence_roots = self._fixture(root)
+            receipt_path, receipt = permissions.close_evidence_permissions(
+                attempt_root,
+                evidence_roots,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            binding = permissions.receipt_binding(attempt_root, receipt_path)
+            direct_root = evidence_roots[0]
+            archived = direct_root.with_name(
+                direct_root.name + permissions.SUPERSEDED_ROOT_INFIX + "attempt-b"
+            )
+            direct_root.rename(archived)
+            direct_root.mkdir(mode=0o700)
+            rebuilt = direct_root / "capture.json"
+            rebuilt.write_text('{"records":[1]}\n', encoding="utf-8")
+            rebuilt.chmod(0o600)
+
+            def replay(relocations: dict[str, str] | None = None) -> dict[str, object]:
+                return permissions.replay_evidence_permission_closeout(
+                    attempt_root,
+                    evidence_roots,
+                    binding,
+                    managed_data_root=runs_root.parent,
+                    logical_runs_roots=(runs_root,),
+                    root_relocations=relocations,
+                )
+
+            with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                replay()
+            replayed = replay({str(direct_root): str(archived)})
+            self.assertEqual(replayed["boundary_sha256"], receipt["boundary_sha256"])
+            internal = evidence_roots[2]
+            invalid = {
+                "原路径不在证据根中": {str(runs_root / "other"): str(archived)},
+                "目标不是同级": {str(direct_root): str(runs_root / "official-client" / archived.name)},
+                "目标不是原根的取代目录": {
+                    str(direct_root): str(
+                        direct_root.with_name("x" + permissions.SUPERSEDED_ROOT_INFIX + "attempt-b")
+                    )
+                },
+                "目标缺少取代者": {
+                    str(direct_root): str(
+                        direct_root.with_name(direct_root.name + permissions.SUPERSEDED_ROOT_INFIX)
+                    )
+                },
+                "内部根不得映射": {
+                    str(internal): str(
+                        internal.with_name(internal.name + permissions.SUPERSEDED_ROOT_INFIX + "attempt-b")
+                    )
+                },
+            }
+            for label, relocation in invalid.items():
+                with self.subTest(label), self.assertRaises(permissions.EvidencePermissionError):
+                    replay(relocation)
+
     def test_isolated_rehearsal_context_skips_only_device_bound_boundary_digest(self) -> None:
         """OverlayFS 预演副本上边界摘要（含 st_dev）不可复算；隔离预演只跳过摘要比较，其余判据与正式目录相同。"""
 
