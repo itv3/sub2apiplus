@@ -1131,7 +1131,7 @@ class EgressSupervisorTests(unittest.TestCase):
                 self.root, preview_dir, manifest={"campaign_id": self.state["campaign_id"]}, attempt_id="a1",
                 phase="official", candidate_id=None, attempt_exists=True, jobs=jobs, environment_status="restored",
                 provenance_copy={"jobs": []}, current={}, reconciliation_receipt_sha256="e" * 64,
-                campaign_ledger_head={}, project_ledger_head={}, now=datetime.now(timezone.utc).isoformat())
+                campaign_ledger_head={}, project_ledger_scope={}, now=datetime.now(timezone.utc).isoformat())
             self.assertEqual(preview["reuse_job_ids"], ["trusted"])
             self.assertEqual(preview["execute_job_ids"], ["uncertain"])
             self.assertEqual(preview["live_request_count"], 0)

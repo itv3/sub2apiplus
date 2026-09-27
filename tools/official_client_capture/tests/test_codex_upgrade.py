@@ -19698,9 +19698,13 @@ class CodexUpgradeTest(unittest.TestCase):
                 preview["campaign_ledger_head"]["status"],
                 "recovery_required",
             )
+            # 第 16 项：预览只绑定本 Campaign 的总账事件摘要，不再绑定整本总账 head。
+            self.assertNotIn("project_ledger_head", preview)
             self.assertEqual(
-                preview["project_ledger_head"]["sha256"],
-                result["project_head"]["head_sha256"],
+                preview["project_ledger_scope"],
+                codex_upgrade_project_ledger.campaign_event_scope(
+                    fixture["ledger"], fixture["manifest"]["campaign_id"]
+                ),
             )
             self.assertEqual(
                 codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
@@ -19740,6 +19744,30 @@ class CodexUpgradeTest(unittest.TestCase):
                 ],
                 timing_after["head_sha256"],
             )
+            # 其它 Campaign 的对账事件推进了整本总账 head，但不改变本 Campaign 的恢复前提：预览仍可消费。
+            codex_upgrade_project_ledger.append_project_event(
+                fixture["ledger"],
+                operation_id="other-campaign-reconciliation",
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": "other-campaign",
+                    "request": {
+                        "status": "resolved",
+                        "identity_keys": [],
+                        "estimated_delta": 0,
+                        "estimated_sources": [],
+                    },
+                },
+                source_batch_sha256=None,
+            )
+            self.assertFalse(
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir,
+                    preview_path,
+                    phase="official",
+                    candidate_id=None,
+                )["timing_recovery_event"]["appended"]
+            )
             with codex_upgrade_project_ledger.campaign_ledger_lock(
                 campaign_dir
             ) as campaign_ledger_dir:
@@ -19762,15 +19790,164 @@ class CodexUpgradeTest(unittest.TestCase):
                 fixture["ledger"],
                 campaign_dir=campaign_dir,
             )
+            # 本 Campaign 自己的新对账事件仍使预览作废。
             with self.assertRaisesRegex(
                 reconciler.ReconcilerError,
-                "项目总账 head 已推进",
+                "本 Campaign 在项目总账出现新事件",
             ):
                 reconciler.load_approved_recovery_preview(
                     campaign_dir,
                     preview_path,
                     phase="official",
                     candidate_id=None,
+                )
+
+    def _approved_recovery_preview_fixture(self, root: Path) -> dict[str, object]:
+        """recovery_required 下对账出的已批准恢复预览（第 16 项现场复核用例共用）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        fixture = self._b0_fixture(root)
+        codex_upgrade_timing_ledger.append_event(
+            fixture["timing_ledger"],
+            event_id="post-reservation-recovery-required",
+            phase="VC-0",
+            event_type="recovery_required",
+            root_cause_id="environment-prerequisite",
+            next_action="reconcile-attempt",
+        )
+        attempt_id = self._b0_orphan_attempt(fixture)
+        result = reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+        self.assertEqual(result["status"], "recoverable")
+        reconciler.approve_recovery_preview(
+            fixture["campaign_dir"],
+            attempt_id,
+            approve_sha256=result["recovery_preview"]["review_sha256"],
+        )
+        return {
+            **fixture,
+            "attempt_id": attempt_id,
+            "result": result,
+            "preview_path": Path(result["recovery_preview_path"]),
+        }
+
+    def test_approved_recovery_preview_rechecks_global_ledger_facts_at_consumption(self) -> None:
+        """第 16 项：其它 Campaign 造成的 blocked 与同版本根因累计、本 Campaign 的预算暂停在消费时现场复核。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._approved_recovery_preview_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_root = fixture["ledger"]
+
+            def load() -> dict:
+                return reconciler.load_approved_recovery_preview(
+                    campaign_dir, fixture["preview_path"], phase="official", candidate_id=None
+                )
+
+            def request(status: str) -> dict:
+                return {"status": status, "identity_keys": [], "estimated_delta": 0, "estimated_sources": []}
+
+            # 其它 Campaign 的未决账务：整本总账 blocked，拒绝消费；账务解决后恢复可消费。
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="other-unresolved", event_type="reconciliation_committed",
+                payload={"campaign_id": "other-campaign", "request": request("unresolved")}, source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "项目总账 blocked"):
+                load()
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="other-resolved", event_type="accounting_resolved",
+                payload={"resolved_operation_id": "other-unresolved", "request": request("resolved")}, source_batch_sha256=None,
+            )
+            self.assertTrue(load()["timing_recovery_event"]["appended"])
+
+            # 同版本另一 Campaign 再次入账同一根因：累计达上限，拒绝消费。
+            cause_id = fixture["result"]["root_cause"]["root_cause_id"]
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="other-register", event_type="campaign_registered",
+                payload={
+                    "campaign_id": "other-campaign-0154",
+                    "campaign_dir": str(campaign_dir.parent / "other-campaign-0154"),
+                    "campaign_mode": "formal",
+                    "target_version": fixture["manifest"]["target_version"],
+                    "deadline_at_utc": None,
+                    "registration_batch_sha256": "a" * 64,
+                },
+                source_batch_sha256=None,
+            )
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="other-same-cause", event_type="reconciliation_committed",
+                payload={"campaign_id": "other-campaign-0154", "request": request("resolved"), "root_cause": {"root_cause_id": cause_id}},
+                source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "累计失败已达上限"):
+                load()
+
+    def test_approved_recovery_preview_rejects_paused_campaign_until_extension(self) -> None:
+        """第 16 项：本 Campaign 预算暂停不改变事件摘要，但消费时拒绝并提示先批准延期。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._approved_recovery_preview_fixture(Path(directory).resolve())
+            campaign_id = fixture["manifest"]["campaign_id"]
+            scope_before = codex_upgrade_project_ledger.campaign_event_scope(fixture["ledger"], campaign_id)
+            codex_upgrade_project_ledger.append_project_event(
+                fixture["ledger"], operation_id="pause-this-campaign", event_type="campaign_paused",
+                payload={
+                    "campaign_id": campaign_id,
+                    "scopes": ["stage"],
+                    "paused_since_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                    "status_before_pause": "recovery_required",
+                },
+                source_batch_sha256=None,
+            )
+            self.assertEqual(
+                codex_upgrade_project_ledger.campaign_event_scope(fixture["ledger"], campaign_id), scope_before
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "预算已暂停：先批准延期"):
+                reconciler.load_approved_recovery_preview(
+                    fixture["campaign_dir"], fixture["preview_path"], phase="official", candidate_id=None
+                )
+
+    def test_legacy_recovery_preview_keeps_strict_project_head_binding(self) -> None:
+        """第 16 项之前生成的预览（只有 project_ledger_head）保持整本总账 head 严格相等。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._approved_recovery_preview_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            current = json.loads(fixture["preview_path"].read_text(encoding="utf-8"))
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            legacy = {
+                key: value
+                for key, value in current.items()
+                if key not in {"project_ledger_scope", "review_sha256", "created_at_utc"}
+            }
+            legacy["project_ledger_head"] = {"sequence": head["sequence"], "sha256": head["head_sha256"]}
+            legacy["index"] = int(current["index"]) + 1
+            legacy["review_sha256"] = reconciler._fingerprint(legacy)
+            legacy["created_at_utc"] = current["created_at_utc"]
+            legacy_path = fixture["preview_path"].with_name(f"recovery-preview-{legacy['index']:02d}.json")
+            reconciler._write_once(legacy_path, legacy)
+            reconciler.approve_recovery_preview(
+                campaign_dir, fixture["attempt_id"], approve_sha256=legacy["review_sha256"]
+            )
+            self.assertTrue(
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir, legacy_path, phase="official", candidate_id=None
+                )["timing_recovery_event"]["appended"]
+            )
+            codex_upgrade_project_ledger.append_project_event(
+                fixture["ledger"], operation_id="other-campaign-event", event_type="reconciliation_committed",
+                payload={"campaign_id": "other-campaign", "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0, "estimated_sources": []}},
+                source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "项目总账 head 已推进"):
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir, legacy_path, phase="official", candidate_id=None
                 )
 
     def test_b0_reconcile_attempt_orphan_is_recoverable_and_gates_resume(self) -> None:

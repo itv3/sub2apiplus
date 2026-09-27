@@ -440,7 +440,7 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                     {"job_id": "job-b", "precise_count": 0, "estimated_count": 3},
                 ]},
                 current={"policy_sha256": "1" * 64, "wire_producer_sha256": "2" * 64, "files_sha256": "3" * 64},
-                reconciliation_receipt_sha256="4" * 64, campaign_ledger_head={}, project_ledger_head={},
+                reconciliation_receipt_sha256="4" * 64, campaign_ledger_head={}, project_ledger_scope={},
                 now="2026-09-21T00:00:00Z", recovery_revision="ar1",
             )
             preview = reconciler._recovery_preview(root, receipt_dir, jobs=jobs, recovery_execute_jobs=["job-b", "job-a"], **common)

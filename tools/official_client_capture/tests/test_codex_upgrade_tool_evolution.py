@@ -786,7 +786,7 @@ class EvolutionRecoveryScopeTests(unittest.TestCase):
                         candidate_id="cand", attempt_exists=True, jobs=jobs, environment_status="restored",
                         provenance_copy={"jobs": []}, current={"policy_sha256": "p", "wire_producer_sha256": "w", "files_sha256": "f"},
                         reconciliation_receipt_sha256="r" * 64, campaign_ledger_head={"head_sequence": 3, "head_sha256": "h", "status": "candidate_review_required"},
-                        project_ledger_head={"sequence": 9, "head_sha256": "x"}, now="2026-09-27T00:00:00Z",
+                        project_ledger_scope={"campaign_id": "c", "event_count": 9}, now="2026-09-27T00:00:00Z",
                     )
 
             plain = preview({"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []})

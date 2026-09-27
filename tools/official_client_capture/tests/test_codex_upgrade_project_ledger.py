@@ -466,6 +466,73 @@ class ProjectLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
                 ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
+    def test_campaign_event_scope_binds_only_this_campaign_state_changing_events(self) -> None:
+        """第 16 项：恢复预览的总账绑定只随本 Campaign 的对账、终态、账务解决与对账更正变化。
+
+        其它 Campaign 的事件、全局根因修复、本 Campaign 的预算暂停都不改变摘要（由消费时现场复核）。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            first = _campaign(root, "c1")
+            second = _campaign(root, "c2")
+            _register(root, first, "c1")
+            _register(root, second, "c2")
+            scope = ledger.campaign_event_scope(ledger_root, "c1")
+            self.assertEqual(scope["schema_version"], ledger.CAMPAIGN_EVENT_SCOPE_SCHEMA)
+            self.assertEqual((scope["campaign_id"], scope["event_count"]), ("c1", 1))
+
+            # 其它 Campaign 的对账（含未决）与账务解决、全局根因修复、本 Campaign 的预算暂停：摘要不变。
+            _reconciliation(second, operation_id="rec-c2", keys=["k1"], status="unresolved", root_cause_id="rc1-a")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=second)
+            ledger.append_project_event(
+                ledger_root, operation_id="res-c2", event_type="accounting_resolved",
+                payload={"resolved_operation_id": "rec-c2", "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0, "provenance_receipt_sha256": "b" * 64}},
+                source_batch_sha256=None,
+            )
+            ledger.record_root_cause_repair(
+                ledger_root, root_cause_id="rc1-a", kind="code",
+                bindings={"fix_commit_sha": "1" * 40, "regression_receipt_sha256": "2" * 64, "deployment_receipt_sha256": "3" * 64},
+            )
+            ledger.append_project_event(
+                ledger_root, operation_id="pause-c1", event_type="campaign_paused",
+                payload={"campaign_id": "c1", "scopes": ["stage"], "paused_since_utc": _iso(datetime.now(timezone.utc)), "status_before_pause": "active"},
+                source_batch_sha256=None,
+            )
+            self.assertEqual(ledger.campaign_event_scope(ledger_root, "c1"), scope)
+            self.assertEqual(ledger.campaign_event_scope(ledger_root, "c2")["event_count"], 3)
+
+            # 本 Campaign 的对账：摘要变化。
+            _reconciliation(first, operation_id="rec-c1", keys=["k2"], root_cause_id="rc1-b")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=first)
+            after_reconciliation = ledger.campaign_event_scope(ledger_root, "c1")
+            self.assertEqual(after_reconciliation["event_count"], 2)
+            self.assertNotEqual(after_reconciliation["events_sha256"], scope["events_sha256"])
+
+            # 指向本 Campaign 原操作的对账更正：摘要再变化；对另一 Campaign 不产生影响。
+            events = {event["operation_id"]: event for event in ledger._load_events(ledger_root)}
+            c2_scope = ledger.campaign_event_scope(ledger_root, "c2")
+            ledger.record_historical_reconciliation_correction(
+                ledger_root,
+                original_operation_id="rec-c1",
+                corrected_payload={**events["rec-c1"]["payload"], "root_cause": {"root_cause_id": "rc1-c"}},
+                reason="更正本 Campaign 对账根因",
+                original_event_sha256=events["rec-c1"]["event_sha256"],
+                original_payload_sha256=events["rec-c1"]["payload_sha256"],
+            )
+            corrected = ledger.campaign_event_scope(ledger_root, "c1")
+            self.assertEqual(corrected["event_count"], 3)
+            self.assertEqual(corrected["last_sequence"], len(ledger._load_events(ledger_root)))
+            self.assertEqual(ledger.campaign_event_scope(ledger_root, "c2"), c2_scope)
+
+            # 延期事件按 extension.campaign_id 归属（整体排除在摘要之外，由现场复核截止）。
+            self.assertEqual(
+                ledger._event_campaign_id({"event_type": "deadline_extended", "payload": {"extension": {"campaign_id": "c1"}}}, {}),
+                "c1",
+            )
+            self.assertIn("deadline_extended", ledger.CAMPAIGN_EVENT_SCOPE_EXCLUDED)
+
     def test_campaign_terminal_accepts_integrity_mismatch_and_rejects_unknown_reason(self) -> None:
         """改造 4：COMMIT／父 run 制品完整性异常是独立终态原因，不复用 identity_changed。"""
 

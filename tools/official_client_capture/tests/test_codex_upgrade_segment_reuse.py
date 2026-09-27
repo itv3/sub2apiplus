@@ -128,7 +128,7 @@ class SegmentReuseTests(unittest.TestCase):
             manifest={'campaign_id': 'campaign'}, attempt_id='attempt', phase='candidate', candidate_id='candidate',
             attempt_exists=True, jobs=jobs, environment_status='restored', provenance_copy={'jobs': [
                 {'job_id': 'job-a', 'precise_count': 2}, {'job_id': 'job-b', 'precise_count': 3}]}, current={},
-            reconciliation_receipt_sha256='e' * 64, campaign_ledger_head={}, project_ledger_head={},
+            reconciliation_receipt_sha256='e' * 64, campaign_ledger_head={}, project_ledger_scope={},
             now='2026-09-24T00:00:00Z', recovery_revision='ar1', recovery_execute_jobs=['job-a', 'job-b'])
 
     def test_preview_reuses_only_proven_complete_and_estimates_execute(self):

@@ -543,6 +543,63 @@ def _project_facts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return plan, head
 
 
+def _campaign_event_scope(root: Path, campaign_id: str) -> dict[str, Any]:
+    try:
+        return project_ledger.campaign_event_scope(root, campaign_id)
+    except project_ledger.ProjectLedgerError as error:
+        raise ReconcilerError(f"项目总账事件读取失败：{error}") from error
+
+
+def _recovery_preview_ledger_problems(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    frozen_scope: Mapping[str, Any],
+    receipt_path: Path,
+    *,
+    now: str,
+) -> list[str]:
+    """消费已批准恢复预览时的项目总账现场复核，口径与对账判定 ``_decide`` 相同。
+
+    预览只冻结本 Campaign 的总账事件；其它 Campaign 造成的 blocked、同版本根因累计、请求预算消耗，
+    以及截止与暂停，都在这里按消费时刻的事实判定。截止已到或已暂停时先批准延期——延期不改变
+    本 Campaign 的事件摘要，批准延期后同一份预览仍可消费。
+    """
+
+    campaign_id = str(manifest["campaign_id"])
+    project_root = _project_root(campaign_dir)
+    plan, head = _project_facts(project_root)
+    problems: list[str] = []
+    if _campaign_event_scope(project_root, campaign_id) != dict(frozen_scope):
+        problems.append("预览生成后本 Campaign 在项目总账出现新事件（对账、终态、账务解决或更正），必须重新对账")
+    if head.get("blocked"):
+        problems.append(f"项目总账 blocked：未决账务 {head.get('unresolved_operation_ids')}")
+    if campaign_id in head.get("terminal_campaigns", {}):
+        problems.append("本 Campaign 已在项目总账终态")
+    if campaign_id in head.get("paused_campaigns", {}):
+        problems.append("本 Campaign 预算已暂停：先批准延期（延期不会使本预览作废）")
+    receipt = _read_json(receipt_path, "对账收据")
+    cause_ids = [str(receipt["root_cause"]["root_cause_id"])]
+    for item in receipt.get("root_causes") or []:
+        if isinstance(item, Mapping) and item.get("root_cause_id") not in cause_ids:
+            cause_ids.append(str(item["root_cause_id"]))
+    target_version = project_ledger.campaign_target_version(head, campaign_id)
+    at_limit = sorted(set(cause_ids) & set(project_ledger.root_causes_at_limit_for(head, target_version)))
+    if at_limit:
+        problems.append(f"根因 {at_limit} 累计失败已达上限")
+    remaining = head.get("remaining_live_requests")
+    if remaining is not None and int(remaining) <= 0:
+        problems.append("项目请求预算已耗尽")
+    current = _timestamp(now, "now")
+    if current >= _timestamp(
+        head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"
+    ):
+        problems.append("项目有效截止已到：先批准延期（延期不会使本预览作废）")
+    campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
+    if campaign_deadline is not None and current >= _timestamp(campaign_deadline, "Campaign deadline"):
+        problems.append("Campaign 总预算有效截止已到：先批准延期（延期不会使本预览作废）")
+    return problems
+
+
 def _control_root(campaign_dir: Path, explicit: Path | None) -> Path:
     if explicit is not None:
         return explicit.resolve(strict=False)
@@ -1693,7 +1750,7 @@ def _recovery_preview(
     current: Mapping[str, Any],
     reconciliation_receipt_sha256: str,
     campaign_ledger_head: Mapping[str, Any],
-    project_ledger_head: Mapping[str, Any],
+    project_ledger_scope: Mapping[str, Any],
     now: str,
     recovery_revision: str | None = None,
     recovery_execute_jobs: Sequence[str] | None = None,
@@ -1701,6 +1758,9 @@ def _recovery_preview(
     """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。
 
     段模式：execute 与 reuse 不相交且并集恰为权威链 J*；reuse 必须逐项通过四项判据，估算只覆盖 execute。
+
+    项目总账只绑定本 Campaign 会改变恢复前提的事件（``project_ledger.campaign_event_scope``），不绑定
+    整本总账 head：其它 Campaign 的事件与本 Campaign 的延期／暂停不再使预览作废，全局条件在消费时现场复核。
     """
 
     groups = jobs["groups"]
@@ -1751,10 +1811,7 @@ def _recovery_preview(
             "sha256": campaign_ledger_head.get("head_sha256"),
             "status": campaign_ledger_head.get("status"),
         },
-        "project_ledger_head": {
-            "sequence": project_ledger_head.get("sequence"),
-            "sha256": project_ledger_head.get("head_sha256"),
-        },
+        "project_ledger_scope": dict(project_ledger_scope),
         "planned_job_ids": list(jobs["planned_job_ids"]),
         "complete_job_ids": list(groups["complete"]),
         "failed_job_ids": list(groups["failed"]),
@@ -1965,15 +2022,23 @@ def load_approved_recovery_preview(
     if _file_sha256(receipt_path) != preview.get("reconciliation_receipt_sha256"):
         raise ReconcilerError("恢复预览绑定的对账收据已漂移")
 
-    # 恢复预览同时冻结 Campaign 与项目总账 head。项目 head 后续有任何并发
-    # 推进都必须重新对账；Campaign head 允许且只允许多出本预览对应的
-    # recovery_authorized 事件，以保证重复 resume 幂等。
+    # 恢复预览冻结 Campaign 账本 head 与本 Campaign 的项目总账事件摘要：本 Campaign 在总账出现新事件
+    # （对账、终态、账务解决或更正）必须重新对账；其它 Campaign 的事件与本 Campaign 的延期／暂停只经
+    # 现场复核生效。Campaign head 允许且只允许多出本预览对应的 recovery_authorized 事件，以保证重复
+    # resume 幂等。旧预览（只有 project_ledger_head）保持整本总账 head 严格相等。
     manifest = codex_upgrade._require_formal_campaign(campaign_dir)
     ledger_dir = _campaign_ledger_dir(manifest)
     campaign_head = preview.get("campaign_ledger_head")
+    project_scope = preview.get("project_ledger_scope")
     project_head = preview.get("project_ledger_head")
     authorization_event: dict[str, Any] | None = None
-    if isinstance(project_head, Mapping):
+    if isinstance(project_scope, Mapping):
+        problems = _recovery_preview_ledger_problems(
+            campaign_dir, manifest, project_scope, receipt_path, now=_utc_now()
+        )
+        if problems:
+            raise ReconcilerError("恢复预览不能消费：" + "；".join(problems))
+    elif isinstance(project_head, Mapping):
         project_root = _project_root(campaign_dir)
         _plan, current_project_head = _project_facts(project_root)
         if (
@@ -2533,7 +2598,7 @@ def reconcile_attempt(
             current=current,
             reconciliation_receipt_sha256=receipt_binding["sha256"],
             campaign_ledger_head=_ledger_facts(ledger_dir, now=_utc_now()),
-            project_ledger_head=head_after,
+            project_ledger_scope=_campaign_event_scope(project_root, str(manifest["campaign_id"])),
             now=observed,
             recovery_execute_jobs=recovery_execute_jobs,
         )

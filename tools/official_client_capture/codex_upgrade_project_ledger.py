@@ -1575,6 +1575,83 @@ def abandon_campaign(campaign_dir: Path, *, approved_by: str, reason: str,
         return {"status": "abandoned", "terminal_reason": "operator_abandoned", "project_event": result}
 
 
+# 恢复预览的总账绑定（2026-09-27 修好接着跑第 16 项）：已批准的恢复预览只绑定本 Campaign 在总账中
+# 会改变恢复前提的事件，不再绑定整本总账 head——否则并发 Campaign 的任何事件都让预览作废，只能重新
+# 对账、重新批准。
+# - 纳入：本 Campaign 的注册／注册拒绝、对账入账、终态、候选探针计量，以及指向本 Campaign 原操作的
+#   账务解决与对账更正。
+# - 排除：延期（deadline_extended／deadline_extension_committed）与预算暂停（campaign_paused）只改变
+#   截止与暂停状态；根因修复（root_cause_repaired 及其更正）不属于任何 Campaign、只会清零计数。它们与
+#   其它 Campaign 的事件一样，由消费预览时的现场复核（blocked、终态、暂停、根因上限、剩余请求、有效
+#   截止）判定，不让预览整体作废。
+CAMPAIGN_EVENT_SCOPE_SCHEMA = "project-ledger-campaign-scope/v1"
+CAMPAIGN_EVENT_SCOPE_EXCLUDED = frozenset(
+    {
+        "deadline_extended",
+        "deadline_extension_committed",
+        "campaign_paused",
+        "root_cause_repaired",
+        "root_cause_repair_corrected",
+    }
+)
+
+
+def _event_campaign_id(
+    event: Mapping[str, Any],
+    by_operation: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    """返回总账事件归属的 Campaign；全局事件或无法归属时返回 None。"""
+
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return None
+    event_type = event.get("event_type")
+    if event_type in CORRECTION_TARGET_EVENT or event_type == "accounting_resolved":
+        # 历史更正与账务解决不带 campaign_id，归属其指向的原操作（原操作一定在其之前）。
+        key = "resolved_operation_id" if event_type == "accounting_resolved" else "original_operation_id"
+        original = by_operation.get(str(payload.get(key)))
+        return None if original is None else _event_campaign_id(original, by_operation)
+    if event_type == "deadline_extended":
+        extension = payload.get("extension")
+        value = extension.get("campaign_id") if isinstance(extension, Mapping) else None
+    else:
+        value = payload.get("campaign_id")
+    return value if isinstance(value, str) and value else None
+
+
+def campaign_event_scope(root: Path, campaign_id: str) -> dict[str, Any]:
+    """返回本 Campaign 在总账中会改变恢复前提的事件摘要（不取项目锁的只读快照）。
+
+    事件以临时文件加硬链接原子发布、发布后不可变，列目录只会看到某个完整前缀；与
+    ``read_project_history_snapshot`` 同理，可在已持有 Campaign 锁时调用，不形成锁顺序反转。
+    """
+
+    _safe_id(campaign_id, "campaign_event_scope.campaign_id")
+    by_operation: dict[str, Mapping[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    for event in _load_events(root):
+        by_operation[str(event["operation_id"])] = event
+        if event["event_type"] in CAMPAIGN_EVENT_SCOPE_EXCLUDED:
+            continue
+        if _event_campaign_id(event, by_operation) != campaign_id:
+            continue
+        rows.append(
+            {
+                "sequence": int(event["sequence"]),
+                "operation_id": str(event["operation_id"]),
+                "event_type": str(event["event_type"]),
+                "payload_sha256": str(event["payload_sha256"]),
+            }
+        )
+    return {
+        "schema_version": CAMPAIGN_EVENT_SCOPE_SCHEMA,
+        "campaign_id": campaign_id,
+        "event_count": len(rows),
+        "last_sequence": rows[-1]["sequence"] if rows else 0,
+        "events_sha256": _digest(rows),
+    }
+
+
 def campaign_target_version(head: Mapping[str, Any], campaign_id: str) -> str | None:
     """从总账注册事件取 Campaign 的目标版本；未注册返回 None。"""
 
