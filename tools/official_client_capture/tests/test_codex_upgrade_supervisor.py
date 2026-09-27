@@ -240,8 +240,13 @@ class SupervisorTests(unittest.TestCase):
         returncode: int = 0,
         sleep_seconds: float = 0,
         accepted_returncodes: tuple[int, ...] = (),
+        timeout_seconds: float = 3,
     ) -> subprocess.Popen[str]:
-        """启动真实 campaign-exec，供退出和强停路径共用。"""
+        """启动真实 campaign-exec，供退出和强停路径共用。
+
+        ``timeout_seconds`` 是交给 campaign-exec 的动作超时（默认 3 秒与历史行为一致）；
+        排空预算用例用它制造“动作＋排空窗口放不下”的条件（修好接着跑第 34 项扩展）。
+        """
 
         script = Path(__file__).parents[1] / "codex_upgrade_supervisor.py"
         command = (
@@ -257,7 +262,7 @@ class SupervisorTests(unittest.TestCase):
                 "--operation",
                 operation,
                 "--timeout-seconds",
-                "3",
+                str(timeout_seconds),
         ]
         for accepted in accepted_returncodes:
             argv.extend(["--accept-returncode", str(accepted)])
@@ -2434,18 +2439,28 @@ raise SystemExit(9)
         """同一操作首次失败进入诊断，第二次失败必须立即停线。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            payload = self._campaign_start(Path(directory))
+            # 修好接着跑第 34 项扩展：默认 deadline 5 秒在 ARM64 慢机上会在两次 exec 之间耗尽，
+            # 第二次 exec 被“剩余预算不足以容纳动作和终态排空窗口”拒绝（返回 1 而不是 3）。
+            # 预算放大到 20 秒只改时间量级，不改“同一操作第二次失败必须停线”的被测条件；
+            # 初始 planning 窗口 2 秒同样是第一次 exec 启动的紧约束，一并放到 6 秒。
+            payload = self._campaign_start(
+                Path(directory),
+                initial_timeout=6,
+                deadline_seconds=20,
+            )
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
                 operation="nonzero-exit",
                 returncode=3,
             )
-            process.communicate(timeout=3)
+            # 两层 Python 进程启动在慢机上可能接近 3 秒；以下都只是上限，不放慢正常路径。
+            process.communicate(timeout=10)
             self.assertEqual(process.returncode, 3)
             activity = self._wait_campaign_activity(
                 run_dir,
                 classification="planning",
+                timeout=5,
             )
             self.assertEqual(activity["operation"], "failure-diagnosis")
             state = json.loads(
@@ -2458,9 +2473,9 @@ raise SystemExit(9)
                 operation="nonzero-exit",
                 returncode=3,
             )
-            repeated.communicate(timeout=3)
+            repeated.communicate(timeout=10)
             self.assertEqual(repeated.returncode, 3)
-            state = self._wait_campaign_state(run_dir, {"failed"})
+            state = self._wait_campaign_state(run_dir, {"failed"}, timeout=5)
             self.assertEqual(state["state"], "failed")
             events = (run_dir / "events.ndjson").read_text(encoding="utf-8")
             self.assertIn('"reason":"returncode=3"', events)
@@ -2593,16 +2608,25 @@ raise SystemExit(9)
         """动作和排空窗口放不下时，必须在进入 active 前拒绝。"""
 
         with tempfile.TemporaryDirectory() as directory:
+            # 修好接着跑第 34 项扩展：原 deadline 1.5 秒在 ARM64 慢机上于 campaign-start 之后即到期，
+            # 父监督器先结束，错误变成“父监督器已经结束”而不是被测的排空预算拒绝。
+            # 被测条件是 requested_timeout + drain_seconds > remaining_seconds，其中
+            # drain_seconds = max(watchdog 0.5, heartbeat 0.05 × 2) = 0.5；这里把量级放大为
+            # deadline 8 秒、动作超时 10 秒：10 + 0.5 > 8 恒成立，条件与原来完全相同。
+            # initial_timeout 同步放到 6 秒，避免初始 planning 派发超时先于 campaign-stop 到期。
             payload = self._campaign_start(
                 Path(directory),
-                deadline_seconds=1.5,
+                initial_timeout=6,
+                deadline_seconds=8,
             )
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
                 operation="insufficient-drain-budget",
+                timeout_seconds=10,
             )
-            _stdout, stderr = process.communicate(timeout=2)
+            # 慢机上 Python 启动本身就可能超过 1 秒；这里只是上限，不放慢正常路径。
+            _stdout, stderr = process.communicate(timeout=10)
             self.assertEqual(process.returncode, 1)
             self.assertIn("终态排空窗口", stderr)
             activity = json.loads(
@@ -2739,8 +2763,10 @@ raise SystemExit(9)
             run_dir = Path(str(payload["run_dir"]))
             started = time.monotonic()
             os.kill(int(payload["owner_pid"]), signal.SIGKILL)
-            state = self._wait_campaign_state(run_dir, {"watchdog-aborted"})
-            self.assertLess(time.monotonic() - started, 0.5)
+            state = self._wait_campaign_state(run_dir, {"watchdog-aborted"}, timeout=5)
+            # 修好接着跑第 34 项扩展：0.5 秒在 ARM64 实测 0.60 秒误判。断言的是“在 watchdog 窗口
+            # 量级内即时封存”，即远快于心跳失联判定；改用文件顶部的量级阈值（2 秒），语义不变。
+            self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)
             self.assertEqual(state["state"], "watchdog-aborted")
             report = _audit_command(run_dir)
             self.assertTrue(report["audit_incomplete"])

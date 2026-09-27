@@ -22476,7 +22476,13 @@ class EvidenceManifestTest(unittest.TestCase):
             job_a, job_b, delta_root, source, _delta = self._projection_fixture(base)
             self._private_file(delta_root / "nested" / "b2.json", b'{"job":"b2","recovered":true}\n')
             self._private_file(delta_root / "nested" / "b3.json", b'{"job":"b3","recovered":true}\n')
-            projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            # 修好接着跑第 34 项扩展：completed_at_utc 取自模块时钟 _utc_now() 并参与 manifest_digest，
+            # 两次投影跨秒时时间戳与摘要都不同（ARM64 实测 :01:23Z 与 :01:24Z）。投影是纯函数，时钟是
+            # 它唯一的隐式输入：把时钟固定为同一值后仍逐字比较全部字段，不放松任何断言。
+            frozen_now = codex_upgrade_evidence_manifest._utc_now()
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_utc_now", return_value=frozen_now):
+                projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            self.assertEqual(projected["completed_at_utc"], frozen_now)
             checkpoint = base / "segment-delta-checkpoint.json"
             original_scan = codex_upgrade_evidence_manifest._hash_and_scan
             scanned: list[str] = []
@@ -22507,7 +22513,8 @@ class EvidenceManifestTest(unittest.TestCase):
             self.assertEqual(sorted(resumed + completed_before), sorted(entry["path"] for entry in delta["entries"]))
             self.assertEqual(delta["entry_count"], 3)
             # 投影纯函数：中断后重算逐字相同 → 投影收据 write-or-verify 不会冲突。
-            reprojected, receipt_again = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_utc_now", return_value=frozen_now):
+                reprojected, receipt_again = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
             self.assertEqual((reprojected, receipt_again), (projected, receipt))
             # 合并结果与一次成功扫描相同（不含 elapsed／完成时间等易变字段的条目与摘要）。
             clean = codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=base / "clean-checkpoint.json")
