@@ -313,5 +313,259 @@ class ContinuityDriftTests(unittest.TestCase):
                 check(scope)
 
 
+class PreviewContinuityTests(unittest.TestCase):
+    """第三批 B3-12（第 22 项）：零请求预览阶段先采探针查环境连续性，漂移即预览直接给出复用 0、全部重跑。"""
+
+    KINDS = codex_upgrade.CONTINUITY_PROBE_KINDS
+
+    @staticmethod
+    def _manifest(digests: dict[str, str]) -> dict:
+        return {"phase": "after", "snapshots": [{"kind": kind, "sha256": sha} for kind, sha in digests.items()]}
+
+    def _campaign_with_after(self, root: Path, digests: dict[str, str]) -> Path:
+        campaign_dir = root / "campaign"
+        after = campaign_dir / "official" / "attempts" / "a1" / "evidence" / "environment" / "after" / "probe-manifest.json"
+        after.parent.mkdir(parents=True)
+        after.write_text(json.dumps(self._manifest(digests)), encoding="utf-8")
+        return campaign_dir
+
+    def test_preview_continuity_statuses(self) -> None:
+        same = {kind: kind * 4 for kind in self.KINDS}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir = self._campaign_with_after(root, same)
+            manifest = {"campaign_id": "c", "configuration": {}}
+
+            def probe(current: dict[str, str]):
+                def run(_manifest, output_dir: Path, phase: str) -> dict:
+                    self.assertEqual(phase, "before")
+                    payload = self._manifest(current)
+                    (output_dir / "probe-manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+                    return payload
+                return run
+
+            def check(current: dict[str, str] | None, attempt: str = "a1", name: str = "p") -> dict:
+                side_effect = probe(current) if current is not None else RuntimeError("docker 不可用")
+                with mock.patch.object(codex_upgrade, "_probe_capture_environment", side_effect=side_effect):
+                    return codex_upgrade.recovery_preview_continuity(
+                        campaign_dir, manifest=manifest, phase="official", candidate_id=None,
+                        source_attempt_id=attempt, output_dir=root / "probes" / name,
+                    )
+
+            consistent = check(same, name="same")
+            self.assertEqual((consistent["status"], consistent["drifted_kinds"]), ("consistent", []))
+            self.assertTrue((root / "probes" / "same" / "probe-manifest.json").is_file())
+            self.assertEqual(consistent["probe_manifest_sha256"], codex_upgrade.file_sha256(root / "probes" / "same" / "probe-manifest.json"))
+            drifted = check(dict(same, containers="x" * 4), name="drift")
+            self.assertEqual((drifted["status"], drifted["drifted_kinds"]), ("drifted", ["containers"]))
+            failed = check(None, name="fail")
+            self.assertEqual((failed["status"], failed["drifted_kinds"]), ("probe_failed", list(self.KINDS)))
+            self.assertIn("docker 不可用", failed["reason"])
+            missing = check(same, attempt="a2", name="missing")
+            self.assertEqual((missing["status"], missing["drifted_kinds"]), ("unverifiable", []))
+            # database 快照不参与比较（随采集自然增长）。
+            self.assertEqual(check(dict(same, database="y" * 4), name="db")["status"], "consistent")
+
+    def test_drift_receipt_reader_validates_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            self.assertIsNone(codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1"))
+            path = codex_upgrade._recovery_continuity_receipt_path(campaign_dir, "a1")
+            self.assertEqual(path, campaign_dir / "control" / "reconciliation" / "attempt-a1" / "continuity-drift.json")
+            path.parent.mkdir(parents=True)
+            valid = {
+                "schema_version": codex_upgrade.RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA,
+                "source_attempt_id": "a1", "status": "drifted", "drifted_kinds": ["service"],
+            }
+            path.write_text(json.dumps(valid), encoding="utf-8")
+            self.assertEqual(codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1"), valid)
+            for label, tampered in (
+                ("schema", dict(valid, schema_version="x/v1")),
+                ("其它 attempt", dict(valid, source_attempt_id="a2")),
+                ("状态非法", dict(valid, status="consistent")),
+                ("kinds 非列表", dict(valid, drifted_kinds="service")),
+            ):
+                path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.subTest(label=label), self.assertRaises(codex_upgrade.ConfigurationError):
+                    codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1")
+            path.unlink()
+            path.symlink_to(campaign_dir / "elsewhere.json")
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1")
+
+
+class PreviewContinuityPreviewTests(unittest.TestCase):
+    """第三批 B3-12：恢复预览生成时的连续性检查落到预览载荷与漂移收据；漂移收据只写一次、重跑预览不再采探针。"""
+
+    PLANNED = ("a", "b", "c")
+    KINDS = list(codex_upgrade.CONTINUITY_PROBE_KINDS)
+
+    def _preview(self, campaign_dir: Path, *, environment_status: str = "restored", now: str = "2026-09-27T12:00:00Z") -> dict:
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        jobs = {
+            "planned_job_ids": list(self.PLANNED),
+            "groups": {"complete": ["a", "b"], "failed": ["c"], "indeterminate": [], "pending": []},
+        }
+        provenance = {"jobs": [{"job_id": job_id, "precise_count": 1, "estimated_count": 0} for job_id in self.PLANNED]}
+        return reconciler._recovery_preview(
+            campaign_dir, campaign_dir / "control" / "reconciliation" / "attempt-a1",
+            manifest={"campaign_id": "c", "configuration": {}}, attempt_id="a1", phase="official", candidate_id=None,
+            attempt_exists=True, jobs=jobs, environment_status=environment_status, provenance_copy=provenance,
+            current={"policy_sha256": "p" * 64, "wire_producer_sha256": "w" * 64, "files_sha256": "f" * 64},
+            reconciliation_receipt_sha256="r" * 64,
+            campaign_ledger_head={"head_sequence": 1, "head_sha256": "h" * 64, "status": "recovery_required"},
+            project_ledger_scope={"campaign_id": "c", "event_count": 0}, now=now,
+        )
+
+    @staticmethod
+    def _no_evolution():
+        return mock.patch.object(
+            codex_upgrade, "_attempt_evolution_impact",
+            return_value={"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []},
+        )
+
+    def _verdict(self, status: str, **extra: object) -> dict:
+        base = {"status": status, "drifted_kinds": [], "compared_kinds": list(self.KINDS), "source_after_probe_sha256": "a" * 64}
+        base.update(extra)
+        return base
+
+    def test_drift_moves_completed_jobs_to_execute_writes_receipt_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            drifted = self._verdict("drifted", drifted_kinds=["containers"], probe_manifest_sha256="b" * 64, probe_dir=str(campaign_dir / "probe"))
+            with self._no_evolution(), mock.patch.object(codex_upgrade, "recovery_preview_continuity", return_value=dict(drifted)) as probe:
+                preview = self._preview(campaign_dir)
+                self.assertEqual((preview["reuse_job_ids"], preview["execute_job_ids"]), ([], ["a", "b", "c"]))
+                self.assertEqual(preview["continuity_drift"], {"invalidated_job_ids": ["a", "b"]})
+                # 预览只放确定性结论字段：探针目录、探针文件摘要留在收据里，重跑预览字节不变。
+                self.assertEqual(
+                    preview["environment_continuity"],
+                    {"status": "drifted", "drifted_kinds": ["containers"], "compared_kinds": self.KINDS, "source_after_probe_sha256": "a" * 64},
+                )
+                self.assertIn("全部重跑", preview["reuse_basis"])
+                self.assertEqual(preview["expected_new_requests"]["known_total"], 3)
+                probe.assert_called_once()
+                kwargs = probe.call_args.kwargs
+                self.assertEqual((kwargs["phase"], kwargs["candidate_id"], kwargs["source_attempt_id"]), ("official", None, "a1"))
+                self.assertEqual(
+                    kwargs["output_dir"],
+                    campaign_dir / "control" / "reconciliation" / "attempt-a1" / "continuity-probes" / "20260927T120000Z",
+                )
+                receipt = codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1")
+                self.assertEqual(
+                    (receipt["schema_version"], receipt["status"], receipt["drifted_kinds"], receipt["phase"], receipt["candidate_id"],
+                     receipt["probe_dir"], receipt["probe_manifest_sha256"], receipt["created_at_utc"]),
+                    (codex_upgrade.RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA, "drifted", ["containers"], "official", None,
+                     str(campaign_dir / "probe"), "b" * 64, "2026-09-27T12:00:00Z"),
+                )
+                # 再次生成预览：从收据读，不再采探针；预览幂等（同一份、同序号、同摘要）。
+                again = self._preview(campaign_dir, now="2026-09-27T12:30:00Z")
+                self.assertEqual(probe.call_count, 1)
+                self.assertEqual((again["index"], again["review_sha256"]), (preview["index"], preview["review_sha256"]))
+
+    def test_probe_failure_is_fail_closed_like_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            failed = self._verdict("probe_failed", drifted_kinds=list(self.KINDS), reason="RuntimeError: docker 不可用")
+            with self._no_evolution(), mock.patch.object(codex_upgrade, "recovery_preview_continuity", return_value=failed):
+                preview = self._preview(campaign_dir)
+            self.assertEqual((preview["reuse_job_ids"], preview["execute_job_ids"]), ([], ["a", "b", "c"]))
+            self.assertEqual(preview["environment_continuity"]["status"], "probe_failed")
+            self.assertIn("docker 不可用", preview["environment_continuity"]["reason"])
+            receipt = codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1")
+            self.assertEqual((receipt["status"], receipt["reason"]), ("probe_failed", "RuntimeError: docker 不可用"))
+
+    def test_consistent_and_unverifiable_keep_reuse_without_receipt(self) -> None:
+        for status in ("consistent", "unverifiable"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                campaign_dir = Path(directory).resolve()
+                verdict = self._verdict(status, probe_manifest_sha256="b" * 64, probe_dir="/x") if status == "consistent" else {
+                    "status": "unverifiable", "reason": "缺 after 探针", "drifted_kinds": [], "compared_kinds": list(self.KINDS),
+                }
+                with self._no_evolution(), mock.patch.object(codex_upgrade, "recovery_preview_continuity", return_value=verdict):
+                    preview = self._preview(campaign_dir)
+                self.assertEqual((preview["reuse_job_ids"], preview["execute_job_ids"]), (["a", "b"], ["c"]))
+                self.assertEqual(preview["environment_continuity"]["status"], status)
+                self.assertNotIn("probe_dir", preview["environment_continuity"])
+                self.assertNotIn("continuity_drift", preview)
+                self.assertIsNone(codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, "a1"))
+        # 没有可复用作业（环境未恢复）：不采探针、预览没有连续性键，字节与改造前一致。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            with self._no_evolution(), mock.patch.object(codex_upgrade, "recovery_preview_continuity") as probe:
+                preview = self._preview(campaign_dir, environment_status="not_restored")
+            probe.assert_not_called()
+            self.assertEqual(preview["reuse_job_ids"], [])
+            self.assertNotIn("environment_continuity", preview)
+            self.assertNotIn("continuity_drift", preview)
+
+
+class DriftReceiptScopeTests(unittest.TestCase):
+    """第三批 B3-12：范围函数（resume 与 R17 复算的执行集合事实源）从预览期漂移收据读同一事实——已完成作业全部作废。"""
+
+    PLANNED = ("a", "b", "c")
+
+    def _scope(self, campaign_dir: Path) -> dict:
+        (campaign_dir / "campaign.json").write_text("{}\n", encoding="utf-8")
+        attempt_root = campaign_dir / "a1"
+        attempt_root.mkdir(exist_ok=True)
+        attempt = {
+            "status": "failed",
+            "phase": "candidate",
+            "candidate_id": "cand",
+            "campaign_id": "c",
+            "campaign_manifest_sha256": codex_upgrade.file_sha256(campaign_dir / "campaign.json"),
+            "attempt_id": "a1",
+            "run_nonce": "1" * 64,
+            "attempt_digest": "2" * 64,
+            "execution_error": {"type": "ConfigurationError", "message": "c 失败"},
+            "results": [
+                {"id": job_id, "execution_sha256": job_id * 64, "status": "complete", "required": True} for job_id in ("a", "b")
+            ],
+            "job_checkpoint": {"path": "checkpoints", "record_count": 2, "last_sequence": 2, "last_sha256": "3" * 64},
+        }
+        store = mock.Mock()
+        store.records.return_value = [1, 2]
+        with mock.patch.multiple(
+            codex_upgrade,
+            _attempt_isolation_receipt=mock.Mock(return_value=None),
+            _attempt_conflict_quarantine_receipt=mock.Mock(return_value=None),
+            _load_capture_reservation=mock.Mock(return_value={
+                "planned_jobs": [{"id": job_id, "execution_sha256": job_id * 64} for job_id in self.PLANNED]
+            }),
+            _attempt_evolution_impact=mock.Mock(
+                return_value={"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []}
+            ),
+            _resolve_attempt_binding=mock.Mock(return_value=attempt_root / "checkpoints"),
+            _validate_checkpoint_records=mock.Mock(),
+            _phase_evaluation_environment_boundary=mock.Mock(return_value="5" * 64),
+        ), mock.patch.object(codex_upgrade.incremental_recovery, "CheckpointStore", mock.Mock(return_value=store)):
+            return codex_upgrade._phase_evaluation_recovery_scope(
+                campaign_dir, {"campaign_id": "c"}, phase="candidate", candidate_id="cand",
+                attempt_root=attempt_root, attempt=attempt,
+            )
+
+    def test_receipt_invalidates_completed_jobs_and_absence_keeps_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            baseline = self._scope(campaign_dir)
+            self.assertEqual((baseline["completed_job_ids"], baseline["execute_job_ids"]), (["a", "b"], ["c"]))
+            self.assertNotIn("continuity_drift", baseline)
+            path = codex_upgrade._recovery_continuity_receipt_path(campaign_dir, "a1")
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({
+                "schema_version": codex_upgrade.RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA,
+                "source_attempt_id": "a1", "status": "drifted", "drifted_kinds": ["containers"],
+            }), encoding="utf-8")
+            drifted = self._scope(campaign_dir)
+            self.assertEqual((drifted["completed_job_ids"], drifted["execute_job_ids"]), ([], ["a", "b", "c"]))
+            self.assertEqual(drifted["continuity_drift"], {"invalidated_job_ids": ["a", "b"]})
+            # 形态非法的收据失败关闭。
+            path.write_text(json.dumps({"schema_version": "x/v1", "source_attempt_id": "a1", "status": "drifted", "drifted_kinds": []}), encoding="utf-8")
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                self._scope(campaign_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1975,6 +1975,9 @@ def _recovery_preview(
 
     groups = jobs["groups"]
     scan_stats = {"scanned_bytes": 0}
+    # 第三批 B3-12：只有非段模式且有可复用作业时才做预览期连续性检查；其余情况两者保持空值、预览字节不变。
+    continuity: dict[str, Any] | None = None
+    continuity_invalidated: list[str] = []
     if recovery_revision is not None:
         if recovery_execute_jobs is None:
             raise ReconcilerError("恢复段预览必须提供权威链取得的 execute_jobs")
@@ -2002,6 +2005,47 @@ def _recovery_preview(
         evolution_invalidated = sorted(set(reusable) & set(evolution_impact["affected_job_ids"]))
         reusable = sorted(set(reusable) - set(evolution_invalidated))
         execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
+        # 第三批 B3-12（第 22 项）：有可复用作业时先采一次只读探针核对环境连续性；漂移（或探针采不到，失败关闭）
+        # 即写下漂移收据（resume 与 R17 复算从同一收据读同一事实），已完成作业全部移入执行集合，预览直接给出复用 0。
+        if reusable:
+            receipt_path = codex_upgrade._recovery_continuity_receipt_path(campaign_dir, attempt_id)
+            try:
+                recorded = codex_upgrade._attempt_continuity_drift_receipt(campaign_dir, attempt_id)
+            except codex_upgrade.ConfigurationError as error:
+                raise ReconcilerError(str(error)) from error
+            if recorded is not None:
+                probed = dict(recorded)
+            else:
+                probed = codex_upgrade.recovery_preview_continuity(
+                    campaign_dir,
+                    manifest=manifest,
+                    phase=phase,
+                    candidate_id=candidate_id,
+                    source_attempt_id=attempt_id,
+                    output_dir=receipt_dir / "continuity-probes" / now.replace(":", "").replace("-", ""),
+                )
+                if probed["status"] in codex_upgrade.RECOVERY_CONTINUITY_DRIFT_STATUSES:
+                    _write_once(
+                        receipt_path,
+                        {
+                            "schema_version": codex_upgrade.RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA,
+                            "source_attempt_id": attempt_id,
+                            "phase": phase,
+                            "candidate_id": candidate_id,
+                            **{key: value for key, value in probed.items()},
+                            "created_at_utc": now,
+                        },
+                    )
+            # 预览里只放确定性的结论字段（探针目录、时间戳等留在收据与探针目录里），重跑预览字节不变。
+            continuity = {
+                key: probed[key]
+                for key in ("status", "drifted_kinds", "compared_kinds", "reason", "source_after_probe_sha256")
+                if key in probed
+            }
+            if probed["status"] in codex_upgrade.RECOVERY_CONTINUITY_DRIFT_STATUSES:
+                continuity_invalidated = list(reusable)
+                execute = sorted(set(execute) | set(reusable))
+                reusable = []
     per_job: dict[str, int] = {}
     for job in provenance_copy.get("jobs", []):
         if isinstance(job, Mapping) and isinstance(job.get("job_id"), str):
@@ -2063,6 +2107,14 @@ def _recovery_preview(
         preview["reuse_basis"] = (
             "source attempt 环境已恢复，complete Job 只读复用；工具演进受影响的已完成 Job 移入执行集合"
         )
+    if continuity is not None:
+        # 第三批 B3-12：只在做过连续性检查（有可复用作业）时写入，其余预览字节不变。
+        preview["environment_continuity"] = continuity
+        if continuity_invalidated:
+            preview["continuity_drift"] = {"invalidated_job_ids": sorted(continuity_invalidated)}
+            preview["reuse_basis"] = (
+                "零请求预览采探针发现环境连续性漂移（或探针采不到，失败关闭）：已完成作业全部重跑，不承接"
+            )
     index, latest = _latest_indexed(receipt_dir, PREVIEW_RE)
     if latest is not None:
         existing = _read_json(latest, "既有恢复预览")

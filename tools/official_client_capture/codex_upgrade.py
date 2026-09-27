@@ -3841,6 +3841,41 @@ def _attempt_continuity_drifted(attempt: Mapping[str, Any]) -> bool:
     )
 
 
+RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA = "codex-upgrade-recovery-continuity-drift/v1"
+RECOVERY_CONTINUITY_DRIFT_RECEIPT_NAME = "continuity-drift.json"
+# 预览阶段按漂移处理的两种探针结论：确有漂移；探针采不到（失败关闭）。
+RECOVERY_CONTINUITY_DRIFT_STATUSES = ("drifted", "probe_failed")
+
+
+def _recovery_continuity_receipt_path(campaign_dir: Path, attempt_id: str) -> Path:
+    """零请求预览阶段发现环境连续性漂移的收据位置（第三批 B3-12，第 22 项）：对账目录，不写 attempt 证据。"""
+
+    return campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / RECOVERY_CONTINUITY_DRIFT_RECEIPT_NAME
+
+
+def _attempt_continuity_drift_receipt(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:
+    """读取该 attempt 的预览期连续性漂移收据；没有即 None，形态非法失败关闭。
+
+    收据一旦写入，源 attempt 的已完成作业不再复用（环境已在两轮之间漂移，证据前提不成立），与 resume 真实执行前
+    ``_verify_environment_continuity`` 的判定同口径；预览、R17 复算与 resume 都从这里读同一事实。
+    """
+
+    path = _recovery_continuity_receipt_path(campaign_dir, attempt_id)
+    if path.is_symlink():
+        raise ConfigurationError("连续性漂移收据不能是符号链接。")
+    if not path.is_file():
+        return None
+    receipt = _read_json(path, "连续性漂移收据")
+    if (
+        receipt.get("schema_version") != RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA
+        or receipt.get("source_attempt_id") != attempt_id
+        or receipt.get("status") not in RECOVERY_CONTINUITY_DRIFT_STATUSES
+        or not isinstance(receipt.get("drifted_kinds"), list)
+    ):
+        raise ConfigurationError("连续性漂移收据形态非法或不属于该 attempt。")
+    return receipt
+
+
 class EvidenceIntegrityError(ConfigurationError):
     """已封存证据或不可变控制制品的完整性异常（永久失败类 ``evidence-integrity``）。
 
@@ -39317,8 +39352,15 @@ def _phase_evaluation_recovery_scope(
         completed_ids = []
         execute_ids = sorted(set(execute_ids) | set(conflict_ids))
     drifted_ids: list[str] = []
+    # 第三批 B3-12（第 22 项）：零请求预览阶段采探针发现漂移（或探针采不到，失败关闭）写下的收据，与源 attempt
+    # 自身因漂移失败同口径：已完成作业全部作废重跑；预览、R17 复算与 resume 从同一收据读。
     continuity_drifted = (
-        isolation_receipt is None and conflict_quarantine is None and _attempt_continuity_drifted(attempt)
+        isolation_receipt is None
+        and conflict_quarantine is None
+        and (
+            _attempt_continuity_drifted(attempt)
+            or _attempt_continuity_drift_receipt(campaign_dir, attempt_root.name) is not None
+        )
     )
     if continuity_drifted:
         # 修好接着跑第 22 项：源 attempt 因环境连续性漂移失败，它承接的结果证据前提不再成立，全部重跑。
@@ -44074,6 +44116,70 @@ def _verify_environment_continuity(
         "source_attempt_id": source_attempt,
         "compared_kinds": list(CONTINUITY_PROBE_KINDS),
         "source_after_probe_sha256": file_sha256(after_path),
+    }
+
+
+def recovery_preview_continuity(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    phase: str,
+    candidate_id: str | None,
+    source_attempt_id: str,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """零请求预览阶段的环境连续性检查（第三批 B3-12，第 22 项）。
+
+    与 resume 真实执行前的 ``_verify_environment_continuity`` 同一比较口径：新采一次只读探针（写到对账目录下的
+    ``output_dir``，不写 attempt 证据），与被承接 attempt 的 after 探针比 ``CONTINUITY_PROBE_KINDS``。返回
+    ``status``：consistent（可复用）、drifted（漂移，附 drifted_kinds）、probe_failed（探针采不到，失败关闭按漂移
+    处理）、unverifiable（源 attempt 没有 after 探针，无从比较；真实执行按既有规则拒绝承接）。
+    """
+
+    relative = _capture_attempt_relative(phase, candidate_id)
+    after_path = (
+        campaign_dir.resolve(strict=True)
+        / relative
+        / "attempts"
+        / source_attempt_id
+        / "evidence"
+        / "environment"
+        / "after"
+        / "probe-manifest.json"
+    )
+    if after_path.is_symlink() or not after_path.is_file():
+        return {
+            "status": "unverifiable",
+            "reason": "被承接 attempt 缺少 after 环境探针，无法比较连续性",
+            "drifted_kinds": [],
+            "compared_kinds": list(CONTINUITY_PROBE_KINDS),
+        }
+    after_manifest = _read_json(after_path, "被承接 attempt 的 after 探针")
+    previous = _probe_snapshot_digests(after_manifest)
+    probe_manifest = dict(manifest)
+    if phase == "candidate":
+        probe_manifest = _apply_candidate_runtime_override(campaign_dir, probe_manifest, candidate_id)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        current_manifest = _probe_capture_environment(probe_manifest, output_dir, "before")
+    except Exception as error:  # noqa: BLE001 —— 探针采不到一律失败关闭：按漂移处理并记录原因
+        return {
+            "status": "probe_failed",
+            "reason": f"{type(error).__name__}: {error}",
+            "drifted_kinds": list(CONTINUITY_PROBE_KINDS),
+            "compared_kinds": list(CONTINUITY_PROBE_KINDS),
+            "source_after_probe_sha256": file_sha256(after_path),
+        }
+    current = _probe_snapshot_digests(current_manifest)
+    drifted = [kind for kind in CONTINUITY_PROBE_KINDS if previous.get(kind) != current.get(kind)]
+    probe_path = output_dir / "probe-manifest.json"
+    return {
+        "status": "drifted" if drifted else "consistent",
+        "drifted_kinds": drifted,
+        "compared_kinds": list(CONTINUITY_PROBE_KINDS),
+        "source_after_probe_sha256": file_sha256(after_path),
+        "probe_manifest_sha256": file_sha256(probe_path) if probe_path.is_file() else None,
+        "probe_dir": str(output_dir),
     }
 
 
