@@ -60,12 +60,49 @@ def _sealed_evidence_root(root: Path) -> tuple[Path, Path]:
 
 
 def _drift_ctime_only(evidence_root: Path) -> None:
-    """复现事故形态：对已封存文件再次 chmod，最终 mode 不变、只有 ctime_ns 漂移。"""
+    """复现事故形态：对已封存文件再次 chmod，最终 mode 不变、只有 ctime_ns 漂移（第三批 R3：元数据漂移，可 rebind）。"""
 
     for path in sorted(evidence_root.rglob("*")):
         if path.is_file():
             path.chmod(0o400)
             path.chmod(0o600)
+
+
+def _drift_mode(evidence_root: Path) -> None:
+    """完整性异常形态：权限位变化（0600→0400），零内容读取即可判定，仍永久停线。"""
+
+    for path in sorted(evidence_root.rglob("*")):
+        if path.is_file():
+            path.chmod(0o400)
+            break
+
+
+def _drift_content_same_size(evidence_root: Path) -> None:
+    """内容改一个字节、大小不变：零内容读取的边界核验只看到元数据漂移，rebind 复算内容时必须拒绝。"""
+
+    target = next(path for path in sorted(evidence_root.rglob("*")) if path.is_file())
+    data = bytearray(target.read_bytes())
+    data[0] = (data[0] + 1) % 256
+    target.write_bytes(bytes(data))
+
+
+def _write_rebind(manifest_path: Path, manifest: dict, evidence_root: Path, chain: list) -> list:
+    """按生产口径生成并落盘下一份 rebind 收据，返回重放后的链。"""
+
+    payload = evidence_manifest.build_boundary_rebind(
+        manifest, manifest_path, [evidence_root], existing_rebinds=chain,
+        campaign_id="c", phase="candidate", candidate_id="cand", attempt_id="a1", operator="test",
+    )
+    path = manifest_path.parent / f"evidence-manifest-rebind-{payload['index']:02d}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+
+
+METADATA_OBSERVATION = {
+    "check_id": "evidence-manifest.boundary",
+    "failure_code": "metadata-only-drift",
+}
 
 
 class EvidenceIntegrityClassificationTests(unittest.TestCase):
@@ -80,23 +117,76 @@ class EvidenceIntegrityClassificationTests(unittest.TestCase):
             # 未漂移：复核通过、零扫描。
             passed = evidence_manifest.verify_manifest_boundary(manifest, [evidence_root])
             self.assertEqual((passed["status"], passed["scanned_bytes"]), ("passed", 0))
+            # 第三批 R3：只有 ctime 漂移是可恢复的元数据漂移，rebind 后通过并成链。
             _drift_ctime_only(evidence_root)
-            with self.assertRaises(evidence_manifest.EvidenceManifestBoundaryDriftError) as caught:
+            with self.assertRaises(evidence_manifest.EvidenceManifestMetadataDriftError) as caught:
                 evidence_manifest.verify_manifest_boundary(manifest, [evidence_root])
             error = caught.exception
             self.assertIsInstance(error, evidence_manifest.EvidenceManifestError)
-            self.assertEqual(error.failure_class, "evidence-integrity")
-            self.assertEqual(error.failure_observations, [EXPECTED_OBSERVATION])
+            self.assertEqual(error.failure_class, "evidence-metadata-drift")
+            self.assertEqual(error.failure_observations, [METADATA_OBSERVATION])
+            self.assertTrue(error.drifted_entries)
+            self.assertTrue(all(set(item["fields"]) <= {"mtime_ns", "ctime_ns", "inode"} for item in error.drifted_entries))
             self.assertIn(error.failure_class, supervisor.ACTION_DIAGNOSTIC_FAILURE_CLASSES)
-            self.assertIn(error.failure_class, supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
-            self.assertNotIn(error.failure_class, supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES)
+            self.assertIn(error.failure_class, supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES)
+            self.assertNotIn(error.failure_class, supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
 
             wrapped = codex_upgrade._evidence_manifest_configuration_error(error)
             self.assertIsInstance(wrapped, codex_upgrade.EvidenceIntegrityError)
             self.assertIsInstance(wrapped, codex_upgrade.ConfigurationError)
             self.assertEqual(str(wrapped), str(error))
-            self.assertEqual(wrapped.failure_class, "evidence-integrity")
-            self.assertEqual(wrapped.failure_observations, [EXPECTED_OBSERVATION])
+            self.assertEqual((wrapped.failure_class, wrapped.failure_observations), ("evidence-metadata-drift", [METADATA_OBSERVATION]))
+            chain = _write_rebind(manifest_path, manifest, evidence_root, [])
+            self.assertEqual(len(chain), 1)
+            passed = evidence_manifest.verify_manifest_boundary(manifest, [evidence_root], rebinds=chain)
+            self.assertEqual((passed["status"], passed["scanned_bytes"], passed["rebind_index"]), ("passed", 0, 1))
+            self.assertEqual(codex_upgrade._verify_evidence_manifest_file(manifest_path, [evidence_root])["rebind_index"], 1)
+            # 第二次漂移相对链末判定，再 rebind 成链；无漂移时拒绝重复 rebind。
+            _drift_ctime_only(evidence_root)
+            with self.assertRaises(evidence_manifest.EvidenceManifestMetadataDriftError):
+                evidence_manifest.verify_manifest_boundary(manifest, [evidence_root], rebinds=chain)
+            chain = _write_rebind(manifest_path, manifest, evidence_root, chain)
+            self.assertEqual([item["index"] for item in chain], [1, 2])
+            self.assertEqual(chain[1]["previous_rebind_sha256"], chain[0]["receipt_sha256"])
+            self.assertEqual(chain[1]["previous_boundary_sha256"], chain[0]["new_boundary_sha256"])
+            self.assertEqual(codex_upgrade._verify_evidence_manifest_file(manifest_path, [evidence_root])["rebind_index"], 2)
+            with self.assertRaisesRegex(evidence_manifest.EvidenceManifestError, "无需 rebind"):
+                _write_rebind(manifest_path, manifest, evidence_root, chain)
+            # 篡改链：自摘要与衔接都拦住。
+            second_path = manifest_path.parent / "evidence-manifest-rebind-02.json"
+            original = second_path.read_text(encoding="utf-8")
+            tampered = json.loads(original)
+            tampered["new_boundary_sha256"] = "0" * 64
+            second_path.write_text(json.dumps(tampered, sort_keys=True) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(evidence_manifest.EvidenceManifestError, "自摘要不一致"):
+                evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            second_path.write_text(original, encoding="utf-8")
+            first_path = manifest_path.parent / "evidence-manifest-rebind-01.json"
+            first_text = first_path.read_text(encoding="utf-8")
+            first_path.unlink()
+            with self.assertRaisesRegex(evidence_manifest.EvidenceManifestError, "链缺少"):
+                evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            first_path.write_text(first_text, encoding="utf-8")
+            first_path.chmod(0o600)
+            chain = evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            # mode 变化：完整性异常（永久类），不能 rebind。
+            _drift_mode(evidence_root)
+            with self.assertRaises(evidence_manifest.EvidenceManifestBoundaryDriftError) as boundary:
+                evidence_manifest.verify_manifest_boundary(manifest, [evidence_root], rebinds=chain)
+            self.assertEqual(boundary.exception.failure_class, "evidence-integrity")
+            self.assertEqual(boundary.exception.failure_observations, [EXPECTED_OBSERVATION])
+            self.assertIn("evidence-integrity", supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
+            with self.assertRaisesRegex(evidence_manifest.EvidenceManifestBoundaryDriftError, "不能 rebind"):
+                _write_rebind(manifest_path, manifest, evidence_root, chain)
+            for path in sorted(evidence_root.rglob("*")):
+                if path.is_file():
+                    path.chmod(0o600)
+            # 内容改一字节（大小不变）：零内容核验只看到元数据漂移，rebind 复算内容时拒绝。
+            _drift_content_same_size(evidence_root)
+            with self.assertRaises(evidence_manifest.EvidenceManifestMetadataDriftError):
+                evidence_manifest.verify_manifest_boundary(manifest, [evidence_root], rebinds=chain)
+            with self.assertRaisesRegex(evidence_manifest.EvidenceManifestBoundaryDriftError, "内容与 EvidenceManifest 不一致"):
+                _write_rebind(manifest_path, manifest, evidence_root, chain)
             # 其他 EvidenceManifest 异常没有生产者分类：仍是普通 ConfigurationError，不得凭 message 猜。
             plain = codex_upgrade._evidence_manifest_configuration_error(
                 evidence_manifest.EvidenceManifestError("EvidenceManifest 的不可变 stat 边界发生漂移。")
@@ -120,23 +210,19 @@ class EvidenceIntegrityCampaignTests(_ChainMixin, unittest.TestCase):
         """VC-5 动作：在子进程里对真实证据根复核 EvidenceManifest，沿生产包装写动作诊断后退出 1。"""
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
+        # 第三批 R3：按生产的文件口径核验（含同目录 rebind 链），通过即退出 0，便于 rebind 后逐字重派同一计划。
         script = (
-            "import json, sys\n"
+            "import sys\n"
             "from pathlib import Path\n"
             "sys.path.insert(0, sys.argv[3])\n"
             "from tools.official_client_capture import codex_upgrade\n"
-            "from tools.official_client_capture import codex_upgrade_evidence_manifest as em\n"
-            "manifest = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))\n"
             "try:\n"
-            "    try:\n"
-            "        em.verify_manifest_boundary(manifest, [Path(sys.argv[1])])\n"
-            "    except em.EvidenceManifestError as error:\n"
-            "        raise codex_upgrade._evidence_manifest_configuration_error(error) from error\n"
+            "    codex_upgrade._verify_evidence_manifest_file(Path(sys.argv[2]), [Path(sys.argv[1])])\n"
             "except codex_upgrade.ConfigurationError as error:\n"
             "    codex_upgrade._record_campaign_run_action_failure('handled-error', error)\n"
             "    print(f'升级审计失败：{error}', file=sys.stderr)\n"
             "    sys.exit(1)\n"
-            "sys.exit(9)\n"
+            "sys.exit(0)\n"
         )
         action_id = "candidate-accept"
         plan = {
@@ -171,7 +257,8 @@ class EvidenceIntegrityCampaignTests(_ChainMixin, unittest.TestCase):
             self.assertEqual(returncode, 0, result)
 
             evidence_root, manifest_path = _sealed_evidence_root(root / "sealed")
-            _drift_ctime_only(evidence_root)
+            # 第三批 R3 后 ctime 漂移可恢复，这里用权限位漂移复现完整性异常。
+            _drift_mode(evidence_root)
             plan = self._drift_plan(root, campaign_dir, evidence_root, manifest_path)
             result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 5, plan))
             self.assertEqual(returncode, 1)
@@ -243,6 +330,61 @@ class EvidenceIntegrityCampaignTests(_ChainMixin, unittest.TestCase):
             again = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
             self.assertEqual((again["status"], again["decision"]["terminal_reason"]), (reconciler.DECISION_STOP, "integrity_mismatch"))
             self.assertEqual(self._head(fixture)["sequence"], head["sequence"])
+
+    def test_metadata_drift_action_pauses_then_rebind_allows_verbatim_redispatch(self) -> None:
+        """第三批 R3：seal 后再次 chmod 只让 ctime 漂移——动作诊断 evidence-metadata-drift（可恢复），账本 recovery_required
+        而不是 stopped，对账 recoverable 且下一步指向 rebind-boundary；rebind 后逐字重派同一批次通过，Campaign 与 revision 都不变。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = Path(str(fixture["campaign_dir"]))
+            self._advance_to_vc3(fixture, root)
+            self._open(fixture, R1, initial=True)
+            result, returncode = self._dispatch(fixture, root, "VC-4", 4, tag="vc4-r1")
+            self.assertEqual(returncode, 0, result)
+
+            evidence_root, manifest_path = _sealed_evidence_root(root / "sealed")
+            _drift_ctime_only(evidence_root)
+            plan = self._drift_plan(root, campaign_dir, evidence_root, manifest_path)
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 5, plan))
+            self.assertEqual(returncode, 1)
+            run = result["campaign_run"]
+            self.assertEqual(run["reason"], "action-failed:candidate-accept")
+            diagnostic = run["actions"][0]["diagnostic"]
+            self.assertEqual(
+                (diagnostic["failure_class"], diagnostic["effective_failure_class"]),
+                ("evidence-metadata-drift", "evidence-metadata-drift"),
+            )
+            self.assertEqual(diagnostic["failure_observations"], [METADATA_OBSERVATION])
+            closeout = run["timing_closeout"]
+            self.assertEqual((closeout["ledger_status"], closeout["failure_class"]), ("recovery_required", "evidence-metadata-drift"))
+            self.assertIn("rebind-boundary", closeout["next_action"])
+            self.assertEqual(self._summary(fixture)["status"], "recovery_required")
+            events = [event_type for event_type, _event_id in self._events(fixture)]
+            self.assertNotIn("stop_the_line", events)
+            self.assertEqual(events[-1], "recovery_required")
+
+            run_dir = Path(str(run["run_dir"]))
+            outcome = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(outcome["status"], reconciler.DECISION_RECOVERABLE, outcome.get("decision"))
+            self.assertIn("rebind-boundary", outcome["next_command"])
+            self.assertEqual(self._summary(fixture)["status"], "active")
+            self.assertEqual(self._head(fixture)["terminal_campaigns"], {})
+            receipt = json.loads((campaign_dir / str(outcome["reconciliation_receipt"]["path"])).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["run"]["failure_class"], "evidence-metadata-drift")
+
+            # rebind（证据根不在 Campaign attempt 结构内，按生产口径直接写收据），文件口径核验通过。
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            chain = _write_rebind(manifest_path, manifest, evidence_root, [])
+            self.assertEqual(len(chain), 1)
+            self.assertEqual(codex_upgrade._verify_evidence_manifest_file(manifest_path, [evidence_root])["rebind_index"], 1)
+            # 逐字重派同一批次：通过，Campaign 不新建、revision 不变。
+            result2, returncode2 = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 6, plan))
+            self.assertEqual(returncode2, 0, result2)
+            self.assertEqual(result2["campaign_run"]["reason"], "queue-complete")
+            self.assertEqual(self._summary(fixture)["status"], "active")
+            self.assertEqual(self._head(fixture)["terminal_campaigns"], {})
 
 
 if __name__ == "__main__":

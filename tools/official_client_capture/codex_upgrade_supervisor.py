@@ -99,6 +99,9 @@ ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
     {
         "environment-prerequisite",
         "evidence-integrity",
+        # 第三批 R3：已封存 EvidenceManifest 只有 mtime／ctime／inode 漂移（内容、size、mode、增删都不变），
+        # 生产者 EvidenceManifestMetadataDriftError 给出；可恢复：harden-evidence-permissions rebind-boundary 后逐字重派。
+        "evidence-metadata-drift",
         "identity-drift",
         "policy-drift",
         "request-accounting-uncertain",
@@ -126,6 +129,8 @@ RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
         "tool-evolution-required",
         # 修好接着跑第 14 项：请求预算耗尽只暂停，批准 request-budget-extend 后对账重派。
         "request-budget-exhausted",
+        # 第三批 R3：证据元数据漂移可恢复——rebind-boundary 后逐字重派同一批次，不需要部署工具。
+        "evidence-metadata-drift",
     }
 )
 # 改造 4（staging/WAL）：父 run 取得执行权之前的两类失败不是动作失败，没有动作诊断，
@@ -10609,6 +10614,12 @@ def _close_failed_campaign_timing_ledger(
             "VC-5 候选采集续跑：有预约的失败先 reconcile-attempt（无预约的预览失败用 reconcile-supervisor-run）入账；"
             "修好工具并受监督部署、登记 tool-evolution 后批准恢复预览，以 resume --rerun-failed 只重跑失败与"
             "受工具演进影响的作业；判为候选源码问题则 invalidate-candidate；同根因达上限即停线。"
+        )
+    elif failure_class == "evidence-metadata-drift":
+        # 第三批 R3：已封存证据只有 mtime／ctime／inode 漂移，内容未变——不是完整性异常，也不需要部署工具。
+        recovery_next_action = (
+            "reconcile-supervisor-run 入账后执行 harden-evidence-permissions rebind-boundary --attempt-id <attempt>"
+            "（候选加 --candidate-id）：逐文件复算内容一致后绑定新边界；再以 compile-and-run-vc-batch 逐字重派同一批次。"
         )
     elif failure_class == "request-budget-exhausted":
         recovery_next_action = (

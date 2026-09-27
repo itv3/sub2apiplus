@@ -75,12 +75,23 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def _evidence_roots(campaign_dir: Path, attempt_id: str) -> tuple[Path, list[Path], dict[str, Any]]:
+def _evidence_roots(
+    campaign_dir: Path, attempt_id: str, *, candidate_id: str | None = None
+) -> tuple[Path, list[Path], dict[str, Any]]:
+    """attempt 根、证据根（容器坐标映射到宿主）与 attempt 收据；``candidate_id`` 给出时解析候选 attempt（第三批 R3）。"""
+
     campaign = closeout._trusted_directory(Path(campaign_dir), "Campaign")
     manifest, _raw = closeout._load_json(campaign / "campaign.json", "Campaign 清单")
     if not closeout.SAFE_ID_RE.fullmatch(attempt_id):
         raise HardenError("attempt_id 非法")
-    attempt_root = closeout._trusted_directory(campaign / "official" / "attempts" / attempt_id, "official attempt")
+    if candidate_id is not None:
+        if not closeout.SAFE_ID_RE.fullmatch(candidate_id):
+            raise HardenError("candidate_id 非法")
+        attempt_root = closeout._trusted_directory(
+            campaign / "candidates" / candidate_id / "attempts" / attempt_id, "candidate attempt"
+        )
+    else:
+        attempt_root = closeout._trusted_directory(campaign / "official" / "attempts" / attempt_id, "official attempt")
     attempt, _attempt_raw = closeout._load_json(attempt_root / "attempt.json", "attempt")
     configuration = manifest.get("configuration") or {}
     capture_root = Path(str(configuration.get("capture_root", "")))
@@ -361,15 +372,101 @@ def upgrade_closeout(campaign_dir: Path, attempt_id: str) -> dict[str, Any]:
         os.close(descriptor)
 
 
+REBIND_RECORD_RE = re.compile(r"^boundary-rebind-(\d{2})\.json$")
+REBIND_RECORD_SCHEMA = "evidence-manifest-boundary-rebind-record/v1"
+
+
+def rebind_boundary(
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    candidate_id: str | None = None,
+    operator: str = "harden-evidence-permissions",
+) -> dict[str, Any]:
+    """第三批 R3：已封存 EvidenceManifest 只有 mtime／ctime／inode 漂移时，逐文件复算内容一致后在 attempt 根写一份
+    rebind 收据（write-once、成链、绑定清单摘要与新旧边界摘要），读侧核验按链末边界通过；再把记录登记到
+    ``control/evidence-permissions/<attempt_id>/``。清单文件本身不改。内容、size、mode、增删任一不一致即拒绝。
+    """
+
+    from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    descriptor = _campaign_lock(campaign_dir)
+    try:
+        attempt_root, roots, attempt = _evidence_roots(campaign_dir, attempt_id, candidate_id=candidate_id)
+        manifest_path = attempt_root / "evidence-manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise HardenError("attempt 没有 EvidenceManifest（尚未封存），无需 rebind")
+        manifest = _read_json(manifest_path, "EvidenceManifest")
+        try:
+            existing = evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            payload = evidence_manifest.build_boundary_rebind(
+                manifest,
+                manifest_path,
+                roots,
+                existing_rebinds=existing,
+                campaign_id=str(attempt.get("campaign_id")),
+                phase="candidate" if candidate_id is not None else "official",
+                candidate_id=candidate_id,
+                attempt_id=attempt_id,
+                operator=operator,
+            )
+        except evidence_manifest.EvidenceManifestError as error:
+            raise HardenError(f"证据边界 rebind 失败：{error}") from error
+        rebind_path = attempt_root / f"evidence-manifest-rebind-{int(payload['index']):02d}.json"
+        _write_once(rebind_path, payload)
+        try:
+            chain = evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            verified = evidence_manifest.verify_manifest_boundary(manifest, roots, rebinds=chain)
+        except evidence_manifest.EvidenceManifestError as error:
+            raise HardenError(f"rebind 写入后重放失败：{error}") from error
+        if verified.get("rebind_index") != int(payload["index"]):
+            raise HardenError("rebind 写入后核验未落到本收据绑定的边界")
+        receipt_dir = _receipt_dir(campaign_dir, attempt_id)
+        receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        receipt_dir.chmod(0o700)
+        index, _latest_path = _latest(receipt_dir, REBIND_RECORD_RE)
+        record = {
+            "schema_version": REBIND_RECORD_SCHEMA,
+            "index": index + 1,
+            "campaign_id": attempt.get("campaign_id"),
+            "phase": payload["phase"],
+            "candidate_id": candidate_id,
+            "attempt_id": attempt_id,
+            "attempt_sha256": _file_sha256(attempt_root / "attempt.json"),
+            "rebind_receipt": {
+                "path": str(rebind_path),
+                "sha256": _file_sha256(rebind_path),
+                "bytes": rebind_path.stat().st_size,
+                "index": int(payload["index"]),
+            },
+            "manifest_digest": payload["manifest_digest"],
+            "previous_boundary_sha256": payload["previous_boundary_sha256"],
+            "new_boundary_sha256": payload["new_boundary_sha256"],
+            "drifted_entry_count": len(payload["drifted_entries"]),
+            "operator": operator,
+            "status": "rebound",
+            "recorded_at_utc": _utc_now(),
+        }
+        record["record_sha256"] = _fingerprint({k: v for k, v in record.items() if k != "recorded_at_utc"})
+        _write_once(receipt_dir / f"boundary-rebind-{record['index']:02d}.json", record)
+        return record
+    finally:
+        os.close(descriptor)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="两步式证据权限收口：preview 只读，apply 需批准摘要。")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for name in ("preview", "apply", "replay", "upgrade-closeout"):
+    for name in ("preview", "apply", "replay", "upgrade-closeout", "rebind-boundary"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--campaign-dir", type=Path, required=True)
         sub.add_argument("--attempt-id", required=True)
         if name == "apply":
             sub.add_argument("--approve-sha256", required=True)
+        if name == "rebind-boundary":
+            sub.add_argument("--candidate-id")
+            sub.add_argument("--operator", default="harden-evidence-permissions")
     return parser
 
 
@@ -384,13 +481,18 @@ def main(argv: list[str] | None = None) -> int:
             result = {k: v for k, v in result.items() if k != "changed"}
         elif arguments.action == "upgrade-closeout":
             result = upgrade_closeout(arguments.campaign_dir, arguments.attempt_id)
+        elif arguments.action == "rebind-boundary":
+            result = rebind_boundary(
+                arguments.campaign_dir, arguments.attempt_id,
+                candidate_id=arguments.candidate_id, operator=arguments.operator,
+            )
         else:
             result = replay(arguments.campaign_dir, arguments.attempt_id)
     except (HardenError, closeout.VC0CloseoutError, OSError, ValueError) as error:
         print(f"证据权限收口失败：{error}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("status", "passed") in {"passed", "applied", "upgraded"} or "review_sha256" in result else 2
+    return 0 if result.get("status", "passed") in {"passed", "applied", "upgraded", "rebound"} or "review_sha256" in result else 2
 
 
 if __name__ == "__main__":

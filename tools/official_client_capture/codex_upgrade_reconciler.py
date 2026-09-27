@@ -84,6 +84,9 @@ COMMIT_INTEGRITY_MISMATCH_CLASS = supervisor.COMMIT_INTEGRITY_MISMATCH_CLASS
 # post-run-tooling 收据、不给出同批次重派建议（v14r4 批次 15 事故：ctime 不可回写、manifest
 # write-once，当前 attempt 不可恢复）。
 EVIDENCE_INTEGRITY_CLASS = "evidence-integrity"
+# 第三批 R3：已封存证据只有 mtime／ctime／inode 漂移（内容未变）——可恢复，不进 INTEGRITY_MISMATCH；
+# 对账后 rebind-boundary 再逐字重派。
+EVIDENCE_METADATA_DRIFT_CLASS = "evidence-metadata-drift"
 INTEGRITY_MISMATCH_FAILURE_CLASSES = frozenset(
     {COMMIT_INTEGRITY_MISMATCH_CLASS, EVIDENCE_INTEGRITY_CLASS}
 )
@@ -3999,6 +4002,12 @@ def reconcile_supervisor_run(
                 "phase 保持 active：动作执行前评估器摘要已变化、动作未执行、无请求；登记 tool-evolution 后以 "
                 "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
                 "迁移到的授权口径，b≥1 改走 evaluation-recover）"
+            )
+        elif run.get("failure_class") == EVIDENCE_METADATA_DRIFT_CLASS:
+            # 第三批 R3：内容未变、只有元数据漂移——不需要部署工具，rebind 后逐字重派。
+            result["next_command"] = (
+                "phase 保持 active：已封存证据只有 mtime／ctime／inode 漂移；执行 harden-evidence-permissions rebind-boundary "
+                "--attempt-id <attempt>（候选加 --candidate-id）复算内容并绑定新边界，再以 compile-and-run-vc-batch 逐字重派同一批次"
             )
         elif run.get("failure_class") == "post-run-tooling" and run.get("phase") == "VC-1":
             result["next_command"] = (

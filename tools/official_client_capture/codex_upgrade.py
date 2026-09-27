@@ -10061,10 +10061,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     harden.add_argument(
         "harden_action",
-        choices=("preview", "apply", "replay", "upgrade-closeout"),
+        choices=("preview", "apply", "replay", "upgrade-closeout", "rebind-boundary"),
         help=(
             "preview：只读预览；apply：按批准摘要收口；replay：只读复核最新收据；"
-            "upgrade-closeout：在 assertion bundle 发布前把 v1 run 末收口升级为 v2 边界。"
+            "upgrade-closeout：在 assertion bundle 发布前把 v1 run 末收口升级为 v2 边界；"
+            "rebind-boundary（第三批 R3）：已封存 EvidenceManifest 只有 mtime／ctime／inode 漂移时，逐文件复算内容"
+            "一致后写 rebind 收据绑定新边界（候选 attempt 加 --candidate-id）。"
         ),
     )
     add_campaign_reference(harden)
@@ -10073,6 +10075,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approve-sha256",
         help="apply 必需：preview 输出的 review_sha256。",
     )
+    harden.add_argument("--candidate-id", help="rebind-boundary：候选 attempt 的 candidate-id（official attempt 不带）。")
+    harden.add_argument("--operator", help="rebind-boundary：操作者标识（记入收据）。")
     revision_open = subparsers.add_parser(
         "revision-open",
         help=(
@@ -45313,6 +45317,26 @@ def _load_evidence_manifest(path: Path) -> dict[str, Any]:
         raise ConfigurationError(str(error)) from error
 
 
+def _evidence_manifest_rebinds(manifest_path: Path, manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """第三批 R3：清单同目录的 rebind 链（evidence-manifest-rebind-NN.json）；链损坏即失败关闭。"""
+
+    try:
+        return codex_upgrade_evidence_manifest.load_boundary_rebinds(Path(manifest_path), manifest)
+    except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+        raise ConfigurationError(f"EvidenceManifest rebind 链无法重放：{error}") from error
+
+
+def _verify_evidence_manifest_file(manifest_path: Path, roots: Sequence[Path]) -> dict[str, Any]:
+    """按文件核验既有清单的 stat 边界（含 rebind 链）；生产者给出的失败分类原样携带到 ConfigurationError。"""
+
+    manifest = _load_evidence_manifest(Path(manifest_path))
+    rebinds = _evidence_manifest_rebinds(Path(manifest_path), manifest)
+    try:
+        return codex_upgrade_evidence_manifest.verify_manifest_boundary(manifest, list(roots), rebinds=rebinds)
+    except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+        raise _evidence_manifest_configuration_error(error) from error
+
+
 def _imported_stage_evidence_manifest_path(
     campaign_dir: Path,
     stage_payload: Mapping[str, Any],
@@ -45458,6 +45482,7 @@ def _stage_evidence_manifest(
             codex_upgrade_evidence_manifest.verify_manifest_boundary(
                 manifest,
                 roots,
+                rebinds=_evidence_manifest_rebinds(path, manifest),
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
             raise _evidence_manifest_configuration_error(error) from error
@@ -45623,6 +45648,7 @@ def _materialize_stage_evidence_manifest(
             codex_upgrade_evidence_manifest.verify_manifest_boundary(
                 evidence_manifest,
                 roots,
+                rebinds=_evidence_manifest_rebinds(manifest_path, evidence_manifest),
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
             raise _evidence_manifest_configuration_error(error) from error
@@ -45810,6 +45836,7 @@ def deep_verify_campaign(
                 boundary = codex_upgrade_evidence_manifest.verify_manifest_boundary(
                     source_manifest,
                     source_roots,
+                    rebinds=_evidence_manifest_rebinds(local_manifest_path, source_manifest),
                 )
             except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
                 raise _evidence_manifest_configuration_error(error) from error
@@ -47287,7 +47314,9 @@ def _seal_attempt_recovery_segment(
         evidence_manifest = _load_evidence_manifest(manifest_path)
         projection_receipt = _read_json(projection_path, "投影收据")
         try:
-            codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
+            codex_upgrade_evidence_manifest.verify_manifest_boundary(
+                evidence_manifest, list(roots), rebinds=_evidence_manifest_rebinds(manifest_path, evidence_manifest)
+            )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
             raise _evidence_manifest_configuration_error(error) from error
     else:
@@ -50456,6 +50485,7 @@ def _seal_capture_attempt(
             codex_upgrade_evidence_manifest.verify_manifest_boundary(
                 evidence_manifest,
                 roots,
+                rebinds=_evidence_manifest_rebinds(manifest_path, evidence_manifest),
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
             raise _evidence_manifest_configuration_error(error) from error
@@ -50482,6 +50512,7 @@ def _seal_capture_attempt(
                 codex_upgrade_evidence_manifest.verify_manifest_boundary(
                     source_manifest,
                     source_roots,
+                    rebinds=_evidence_manifest_rebinds(source_manifest_path, source_manifest),
                 )
                 source_root_set = {path.resolve(strict=True) for path in source_roots}
                 delta_roots = [
@@ -60873,6 +60904,17 @@ def _harden_evidence_permissions_command(arguments: argparse.Namespace) -> dict[
             result = {key: value for key, value in result.items() if key != "changed"}
         elif action == "upgrade-closeout":
             result = harden.upgrade_closeout(campaign_dir, attempt_id)
+        elif action == "rebind-boundary":
+            # 第三批 R3：已封存证据只有 mtime／ctime／inode 漂移时复算内容并绑定新边界（official 或候选 attempt）。
+            candidate_id = getattr(arguments, "candidate_id", None)
+            if candidate_id is not None and not SAFE_ID_RE.fullmatch(str(candidate_id)):
+                raise ConfigurationError("--candidate-id 格式非法。")
+            result = harden.rebind_boundary(
+                campaign_dir,
+                attempt_id,
+                candidate_id=str(candidate_id) if candidate_id is not None else None,
+                operator=str(getattr(arguments, "operator", None) or "harden-evidence-permissions"),
+            )
         else:
             result = harden.replay(campaign_dir, attempt_id)
     except (harden.HardenError, OSError, ValueError) as error:

@@ -64,6 +64,39 @@ class EvidenceManifestBoundaryDriftError(EvidenceManifestError):
         ]
 
 
+# 第三批 R3（ctime 部分）：只有 mtime_ns／ctime_ns／inode 漂移（路径集合、size、mode、nlink、device 都不变）的边界
+# 差异是"元数据漂移"，不是完整性异常——seal 后再 chmod、复制回原路径都只改这三项而内容未变。它可经
+# ``harden-evidence-permissions rebind-boundary`` 逐文件复算内容一致后写一份 rebind 收据（write-once、成链、绑定清单
+# 摘要与新旧边界摘要），读侧核验时接受 rebind 链末绑定的边界。清单文件本身仍是 write-once、不改。
+METADATA_DRIFT_FAILURE_CODE = "metadata-only-drift"
+METADATA_DRIFT_FAILURE_CLASS = "evidence-metadata-drift"
+METADATA_DRIFT_FIELDS = frozenset({"mtime_ns", "ctime_ns", "inode"})
+REBIND_SCHEMA = "evidence-manifest-boundary-rebind/v1"
+REBIND_RE = re.compile(r"^evidence-manifest-rebind-(\d{2})\.json$")
+REBIND_MAX_INDEX = 99
+MAX_REBIND_BYTES = 16 * 1024 * 1024
+
+
+class EvidenceManifestMetadataDriftError(EvidenceManifestError):
+    """既有 EvidenceManifest 只有 mtime／ctime／inode 漂移：可恢复，先 rebind-boundary 再继续。
+
+    ``failure_class``／``failure_observations`` 形态与 ``EvidenceManifestBoundaryDriftError`` 相同，分类为
+    可恢复类 ``evidence-metadata-drift``，观测 ``evidence-manifest.boundary／metadata-only-drift``。
+    """
+
+    failure_class = METADATA_DRIFT_FAILURE_CLASS
+
+    def __init__(self, message: str, *, drifted_entries: Sequence[Mapping[str, Any]] = ()) -> None:
+        super().__init__(message)
+        self.failure_observations = [
+            {
+                "check_id": BOUNDARY_DRIFT_CHECK_ID,
+                "failure_code": METADATA_DRIFT_FAILURE_CODE,
+            }
+        ]
+        self.drifted_entries = [dict(item) for item in drifted_entries]
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -822,10 +855,220 @@ def _isolated_rehearsal_context(roots: Iterable[Path]) -> bool:
     return isolated
 
 
-def verify_manifest_boundary(
-    manifest: Mapping[str, Any], roots: Iterable[Path]
+def _boundary_view(
+    roots: Sequence[Mapping[str, Any]],
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    drop: frozenset[str],
 ) -> dict[str, Any]:
-    """只比较目录项和 stat 边界，绝不读取文件内容。"""
+    """stat 边界视图：去掉内容摘要与绝对路径（隔离预演时再去 device），供比较与 rebind 摘要。"""
+
+    return {
+        "roots": [{key: value for key, value in item.items() if key not in drop} for item in roots],
+        "entries": [{key: value for key, value in item.items() if key not in drop} for item in entries],
+    }
+
+
+# 正式口径的视图只去内容摘要与绝对路径；rebind 收据里的边界摘要按这一口径计算。
+_BOUNDARY_VIEW_DROP = frozenset({"sha256", "absolute_path"})
+
+
+def _view_drop(rehearsal: bool) -> frozenset[str]:
+    return _BOUNDARY_VIEW_DROP | (frozenset({"device"}) if rehearsal else frozenset())
+
+
+def boundary_view_sha256(view: Mapping[str, Any]) -> str:
+    return canonical_json_sha256({"roots": list(view["roots"]), "entries": list(view["entries"])})
+
+
+def classify_boundary_drift(
+    expected_view: Mapping[str, Any], current_view: Mapping[str, Any]
+) -> tuple[str, list[dict[str, Any]]]:
+    """比较两份 stat 视图：路径集合一致、字段集合一致且每条只有 mtime_ns／ctime_ns／inode 不同 → ``metadata-only``
+    并给出逐条漂移清单；其余任何差异（增删条目、size、mode、nlink、device）→ ``boundary``。"""
+
+    def diff(expected_items: Sequence[Mapping[str, Any]], current_items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
+        expected_map = {str(item["path"]): item for item in expected_items}
+        current_map = {str(item["path"]): item for item in current_items}
+        if set(expected_map) != set(current_map) or len(expected_map) != len(expected_items) or len(current_map) != len(current_items):
+            return None
+        drifted: list[dict[str, Any]] = []
+        for path in sorted(expected_map):
+            before, after = expected_map[path], current_map[path]
+            if set(before) != set(after):
+                return None
+            changed = {field for field in before if before[field] != after[field]}
+            if not changed:
+                continue
+            if not changed <= METADATA_DRIFT_FIELDS:
+                return None
+            drifted.append(
+                {
+                    "path": path,
+                    "fields": {field: {"expected": before[field], "current": after[field]} for field in sorted(changed)},
+                }
+            )
+        return drifted
+
+    root_drift = diff(expected_view["roots"], current_view["roots"])
+    entry_drift = diff(expected_view["entries"], current_view["entries"])
+    if root_drift is None or entry_drift is None:
+        return "boundary", []
+    return "metadata-only", [*root_drift, *entry_drift]
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_boundary_rebinds(manifest_path: Path, manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """读取并校验清单同目录的 rebind 链（evidence-manifest-rebind-NN.json）；没有即空链。
+
+    校验：编号连续、schema、自摘要、绑定本清单 manifest_digest、previous 成链、起点等于上一有效边界
+    （首条等于清单自身的 stat 视图摘要）、new_boundary 摘要由视图重算、内容已复算。任何不一致失败关闭。
+    """
+
+    manifest_path = Path(manifest_path)
+    directory = manifest_path.parent
+    if directory.is_symlink() or not directory.is_dir():
+        raise EvidenceManifestError(f"EvidenceManifest 所在目录不可信：{directory}")
+    found: dict[int, dict[str, Any]] = {}
+    for child in sorted(directory.iterdir()):
+        match = REBIND_RE.fullmatch(child.name)
+        if not match:
+            continue
+        if child.is_symlink() or not child.is_file():
+            raise EvidenceManifestError(f"rebind 收据不是普通文件：{child}")
+        if child.stat().st_size > MAX_REBIND_BYTES:
+            raise EvidenceManifestError(f"rebind 收据超过大小上限：{child}")
+        try:
+            payload = json.loads(child.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise EvidenceManifestError(f"rebind 收据无法读取：{child}") from error
+        index = int(match.group(1))
+        if not isinstance(payload, dict) or payload.get("schema_version") != REBIND_SCHEMA or payload.get("index") != index:
+            raise EvidenceManifestError(f"rebind 收据 {child.name} schema 或编号非法")
+        unsigned = {key: value for key, value in payload.items() if key != "receipt_sha256"}
+        if payload.get("receipt_sha256") != canonical_json_sha256(unsigned):
+            raise EvidenceManifestError(f"rebind 收据 {child.name} 自摘要不一致")
+        found[index] = payload
+    if not found:
+        return []
+    expected = validate_manifest_document(manifest)
+    previous_sha: str | None = None
+    previous_boundary = boundary_view_sha256(
+        _boundary_view(expected["roots"], expected["entries"], drop=_BOUNDARY_VIEW_DROP)
+    )
+    chain: list[dict[str, Any]] = []
+    for index in range(1, max(found) + 1):
+        payload = found.get(index)
+        if payload is None:
+            raise EvidenceManifestError(f"rebind 链缺少 evidence-manifest-rebind-{index:02d}.json")
+        label = f"rebind-{index:02d}"
+        if payload.get("manifest_digest") != expected["manifest_digest"]:
+            raise EvidenceManifestError(f"{label} 绑定的清单摘要不是本 EvidenceManifest")
+        if payload.get("previous_rebind_sha256") != previous_sha:
+            raise EvidenceManifestError(f"{label} 未衔接上一 rebind")
+        if payload.get("previous_boundary_sha256") != previous_boundary:
+            raise EvidenceManifestError(f"{label} 的起点不是上一有效边界")
+        new_boundary = payload.get("new_boundary")
+        if (
+            not isinstance(new_boundary, dict)
+            or set(new_boundary) != {"roots", "entries"}
+            or not isinstance(new_boundary.get("roots"), list)
+            or not isinstance(new_boundary.get("entries"), list)
+        ):
+            raise EvidenceManifestError(f"{label} 的 new_boundary 形态非法")
+        if payload.get("new_boundary_sha256") != boundary_view_sha256(new_boundary):
+            raise EvidenceManifestError(f"{label} 的 new_boundary 摘要与视图不一致")
+        if payload.get("content_recomputed") is not True:
+            raise EvidenceManifestError(f"{label} 没有逐文件复算内容")
+        if not isinstance(payload.get("drifted_entries"), list) or not payload["drifted_entries"]:
+            raise EvidenceManifestError(f"{label} 缺少漂移条目清单")
+        previous_sha = str(payload["receipt_sha256"])
+        previous_boundary = str(payload["new_boundary_sha256"])
+        chain.append(payload)
+    return chain
+
+
+def build_boundary_rebind(
+    manifest: Mapping[str, Any],
+    manifest_path: Path,
+    roots: Iterable[Path],
+    *,
+    existing_rebinds: Sequence[Mapping[str, Any]],
+    campaign_id: str,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+    operator: str,
+) -> dict[str, Any]:
+    """生成下一份 rebind 收据（不落盘）：当前边界相对上一有效边界必须只有元数据漂移，且逐文件内容等于清单。"""
+
+    expected = validate_manifest_document(manifest)
+    root_list = list(roots)
+    current = preflight_evidence_roots(root_list)
+    if existing_rebinds:
+        base_view: Mapping[str, Any] = existing_rebinds[-1]["new_boundary"]
+    else:
+        base_view = _boundary_view(expected["roots"], expected["entries"], drop=_BOUNDARY_VIEW_DROP)
+    current_view = _boundary_view(current["roots"], current["entries"], drop=_BOUNDARY_VIEW_DROP)
+    if current_view == base_view:
+        raise EvidenceManifestError("证据边界与上一有效边界一致，无需 rebind。")
+    kind, drifted = classify_boundary_drift(base_view, current_view)
+    if kind != "metadata-only":
+        raise EvidenceManifestBoundaryDriftError(
+            "证据边界不是只有 mtime／ctime／inode 的元数据漂移（路径集合、size、mode、nlink 或 device 已变化），不能 rebind。"
+        )
+    expected_sha256 = {str(item["path"]): str(item["sha256"]) for item in expected["entries"]}
+    for entry in current["entries"]:
+        actual = _file_sha256(Path(str(entry["absolute_path"])))
+        if actual != expected_sha256.get(str(entry["path"])):
+            raise EvidenceManifestBoundaryDriftError(
+                f"证据文件内容与 EvidenceManifest 不一致，不能 rebind：{entry['path']}"
+            )
+    index = len(existing_rebinds) + 1
+    if index > REBIND_MAX_INDEX:
+        raise EvidenceManifestError("rebind 次数已达上限。")
+    manifest_path = Path(manifest_path)
+    payload: dict[str, Any] = {
+        "schema_version": REBIND_SCHEMA,
+        "index": index,
+        "campaign_id": campaign_id,
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "manifest": {"path": manifest_path.name, "sha256": _file_sha256(manifest_path)},
+        "manifest_digest": expected["manifest_digest"],
+        "previous_rebind_sha256": str(existing_rebinds[-1]["receipt_sha256"]) if existing_rebinds else None,
+        "previous_boundary_sha256": boundary_view_sha256(base_view),
+        "drifted_entries": drifted,
+        "content_recomputed": True,
+        "new_boundary": current_view,
+        "new_boundary_sha256": boundary_view_sha256(current_view),
+        "operator": operator,
+        "recorded_at_utc": _utc_now(),
+    }
+    payload["receipt_sha256"] = canonical_json_sha256(payload)
+    return payload
+
+
+def verify_manifest_boundary(
+    manifest: Mapping[str, Any],
+    roots: Iterable[Path],
+    *,
+    rebinds: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """只比较目录项和 stat 边界，绝不读取文件内容。
+
+    ``rebinds`` 是已校验的 rebind 链（``load_boundary_rebinds``）：当前边界等于链末绑定的边界即通过；
+    否则相对上一有效边界分类——只有 mtime／ctime／inode 漂移抛可恢复的
+    ``EvidenceManifestMetadataDriftError``，其余抛 ``EvidenceManifestBoundaryDriftError``。
+    """
 
     expected = validate_manifest_document(manifest)
     current = preflight_evidence_roots(roots)
@@ -833,56 +1076,61 @@ def verify_manifest_boundary(
     # 正式目录不同；隔离预演只忽略 device 字段（及由其派生的 metadata_sha256），
     # 目录项、大小、mtime、inode 等其余 stat 边界仍逐项比较。正式目录上判据不变。
     rehearsal = _isolated_rehearsal_context(roots)
-    expected_drop = {"sha256"} | ({"device"} if rehearsal else set())
-    current_drop = {"absolute_path"} | ({"device"} if rehearsal else set())
-    expected_entries = [
-        {key: value for key, value in item.items() if key not in expected_drop}
-        for item in expected["entries"]
-    ]
-    current_entries = [
-        {key: value for key, value in item.items() if key not in current_drop}
-        for item in current["entries"]
-    ]
-    expected_roots = [
-        {key: value for key, value in item.items() if key not in expected_drop}
-        for item in expected["roots"]
-    ]
-    current_roots = [
-        {key: value for key, value in item.items() if key not in expected_drop}
-        for item in current["roots"]
-    ]
-    if (
-        current_roots != expected_roots
-        or current_entries != expected_entries
-        or (
-            not rehearsal
-            and current["metadata_sha256"] != expected["metadata_sha256"]
-        )
-    ):
-        if rehearsal:
-            # 隔离预演下把首个差异条目写到 stderr，便于区分 overlay 固有差异与真实漂移。
-            import sys
+    drop = _view_drop(rehearsal)
+    expected_view = _boundary_view(expected["roots"], expected["entries"], drop=drop)
+    current_view = _boundary_view(current["roots"], current["entries"], drop=drop)
+    if current_view == expected_view and (rehearsal or current["metadata_sha256"] == expected["metadata_sha256"]):
+        return {
+            "status": "passed",
+            "entry_count": current["entry_count"],
+            "total_bytes": current["total_bytes"],
+            "manifest_digest": expected["manifest_digest"],
+            "scanned_bytes": 0,
+            "rebind_index": None,
+        }
+    if rebinds:
+        latest = rebinds[-1]
+        latest_view = _boundary_view(latest["new_boundary"]["roots"], latest["new_boundary"]["entries"], drop=drop)
+        if current_view == latest_view:
+            return {
+                "status": "passed",
+                "entry_count": current["entry_count"],
+                "total_bytes": current["total_bytes"],
+                "manifest_digest": expected["manifest_digest"],
+                "scanned_bytes": 0,
+                "rebind_index": int(latest["index"]),
+            }
+        # 链末之后再次漂移：以链末边界为基准分类。
+        expected_view = latest_view
+    kind, drifted = classify_boundary_drift(expected_view, current_view)
+    if rehearsal:
+        # 隔离预演下把首个差异条目写到 stderr，便于区分 overlay 固有差异与真实漂移。
+        import sys
 
-            detail: dict[str, Any] = {"roots_equal": current_roots == expected_roots, "expected_count": len(expected_entries), "current_count": len(current_entries)}
-            if current_roots != expected_roots:
-                detail["roots"] = {"expected": expected_roots, "current": current_roots}
-            for index, (left, right) in enumerate(zip(expected_entries, current_entries)):
-                if left != right:
-                    detail["first_diff_index"] = index
-                    detail["expected"] = left
-                    detail["current"] = right
-                    break
-            sys.stderr.write("EvidenceManifest 隔离预演差异：" + json.dumps(detail, ensure_ascii=False, default=str) + "\n")
-        raise EvidenceManifestBoundaryDriftError(
-            "EvidenceManifest 的不可变 stat 边界发生漂移。"
+        detail: dict[str, Any] = {
+            "kind": kind,
+            "roots_equal": current_view["roots"] == expected_view["roots"],
+            "expected_count": len(expected_view["entries"]),
+            "current_count": len(current_view["entries"]),
+        }
+        if current_view["roots"] != expected_view["roots"]:
+            detail["roots"] = {"expected": expected_view["roots"], "current": current_view["roots"]}
+        for index, (left, right) in enumerate(zip(expected_view["entries"], current_view["entries"])):
+            if left != right:
+                detail["first_diff_index"] = index
+                detail["expected"] = left
+                detail["current"] = right
+                break
+        sys.stderr.write("EvidenceManifest 隔离预演差异：" + json.dumps(detail, ensure_ascii=False, default=str) + "\n")
+    if kind == "metadata-only":
+        raise EvidenceManifestMetadataDriftError(
+            "EvidenceManifest 只有 mtime／ctime／inode 元数据漂移；执行 harden-evidence-permissions rebind-boundary "
+            "逐文件复算内容并绑定新边界后可继续。",
+            drifted_entries=drifted,
         )
-    return {
-        "status": "passed",
-        "entry_count": current["entry_count"],
-        "total_bytes": current["total_bytes"],
-        "manifest_digest": expected["manifest_digest"],
-        "scanned_bytes": 0,
-    }
+    raise EvidenceManifestBoundaryDriftError(
+        "EvidenceManifest 的不可变 stat 边界发生漂移。"
+    )
 
 
 def deep_verify_manifest(

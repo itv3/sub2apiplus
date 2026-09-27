@@ -156,6 +156,93 @@ class HardenEvidencePermissionsTests(unittest.TestCase):
             with self.assertRaisesRegex(harden.HardenError, "无需升级"):
                 harden.upgrade_closeout(fixture.campaign_dir, fixture.attempt_id)
 
+    def test_rebind_boundary_records_metadata_drift_and_refuses_content_change(self) -> None:
+        """第三批 R3：已封存清单只有 ctime 漂移时 rebind-boundary 在 attempt 根写收据成链并登记控制记录；无清单、无漂移、
+        内容改变、权限位改变各拒；候选 attempt 走 candidate_id；CLI 往返。"""
+
+        from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = HardenFixture(Path(directory).resolve())
+            with self.assertRaisesRegex(harden.HardenError, "没有 EvidenceManifest"):
+                harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            preview = harden.preview(fixture.campaign_dir, fixture.attempt_id)
+            harden.apply(fixture.campaign_dir, fixture.attempt_id, approve_sha256=preview["review_sha256"])
+            _attempt_root, roots, _attempt = harden._evidence_roots(fixture.campaign_dir, fixture.attempt_id)
+            manifest = evidence_manifest.build_evidence_manifest(
+                roots, checkpoint_path=fixture.root / "manifest.checkpoint.json", secret_env_names=()
+            )
+            manifest_path = fixture.attempt_root / "evidence-manifest.json"
+            _write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(harden.HardenError, "无需 rebind"):
+                harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            for root in roots:
+                for path in sorted(root.rglob("*")):
+                    if path.is_file():
+                        path.chmod(0o400)
+                        path.chmod(0o600)
+            record = harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id, operator="tester")
+            self.assertEqual(
+                (record["status"], record["index"], record["phase"], record["candidate_id"], record["rebind_receipt"]["index"]),
+                ("rebound", 1, "official", None, 1),
+            )
+            self.assertGreater(record["drifted_entry_count"], 0)
+            rebind_path = fixture.attempt_root / "evidence-manifest-rebind-01.json"
+            self.assertTrue(rebind_path.is_file())
+            self.assertEqual(rebind_path.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(
+                (fixture.campaign_dir / "control" / "evidence-permissions" / fixture.attempt_id / "boundary-rebind-01.json").is_file()
+            )
+            chain = evidence_manifest.load_boundary_rebinds(manifest_path, manifest)
+            self.assertEqual(evidence_manifest.verify_manifest_boundary(manifest, roots, rebinds=chain)["rebind_index"], 1)
+            with self.assertRaisesRegex(harden.HardenError, "无需 rebind"):
+                harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            # 内容改一字节（大小不变）：复算内容拒绝；还原内容后（mtime／ctime 变）可再 rebind 成链。
+            probe = fixture.attempt_root / "evidence" / "probe.json"
+            probe.write_text("[]\n", "utf-8")
+            with self.assertRaisesRegex(harden.HardenError, "内容与 EvidenceManifest 不一致"):
+                harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            probe.write_text("{}\n", "utf-8")
+            second = harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            self.assertEqual((second["index"], second["rebind_receipt"]["index"]), (2, 2))
+            # 权限位漂移：完整性异常，拒绝。
+            probe.chmod(0o400)
+            with self.assertRaisesRegex(harden.HardenError, "不能 rebind"):
+                harden.rebind_boundary(fixture.campaign_dir, fixture.attempt_id)
+            probe.chmod(0o600)
+            # 候选 attempt：另一 attempt_id 只在 candidates/ 下存在，不带 candidate_id 找不到 official attempt。
+            cand_id = "20260914T232051Z-cand000000000001"
+            candidate_root = fixture.campaign_dir / "candidates" / "cand" / "attempts" / cand_id
+            (candidate_root / "evidence").mkdir(parents=True)
+            for path in (
+                fixture.campaign_dir / "candidates", fixture.campaign_dir / "candidates" / "cand",
+                fixture.campaign_dir / "candidates" / "cand" / "attempts", candidate_root, candidate_root / "evidence",
+            ):
+                path.chmod(0o700)
+            kilo = candidate_root / "evidence" / "kilo.json"
+            kilo.write_text("{}\n", "utf-8")
+            kilo.chmod(0o600)
+            _write_json(candidate_root / "attempt.json", {"attempt_id": cand_id, "campaign_id": "c1", "evidence_roots": [str(candidate_root / "evidence")]})
+            cand_manifest = evidence_manifest.build_evidence_manifest(
+                [candidate_root / "evidence"], checkpoint_path=fixture.root / "cand.checkpoint.json", secret_env_names=()
+            )
+            _write_json(candidate_root / "evidence-manifest.json", cand_manifest)
+            kilo.chmod(0o400)
+            kilo.chmod(0o600)
+            with self.assertRaises(harden.closeout.VC0CloseoutError):
+                harden.rebind_boundary(fixture.campaign_dir, cand_id)
+            cand_record = harden.rebind_boundary(fixture.campaign_dir, cand_id, candidate_id="cand", operator="tester")
+            self.assertEqual((cand_record["phase"], cand_record["candidate_id"], cand_record["index"]), ("candidate", "cand", 1))
+            self.assertTrue((candidate_root / "evidence-manifest-rebind-01.json").is_file())
+            # CLI 往返：official 第三次漂移。
+            probe.chmod(0o400)
+            probe.chmod(0o600)
+            self.assertEqual(
+                harden.main(["rebind-boundary", "--campaign-dir", str(fixture.campaign_dir), "--attempt-id", fixture.attempt_id, "--operator", "cli"]),
+                0,
+            )
+            self.assertTrue((fixture.attempt_root / "evidence-manifest-rebind-03.json").is_file())
+
     def test_cli_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = HardenFixture(Path(directory).resolve())
