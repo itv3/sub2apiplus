@@ -63,6 +63,19 @@ class EvolutionFixture:
             "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
         }
 
+    def added_identity(self, base: dict, path: str) -> dict:
+        """在身份清单里新增一个文件条目（模拟工具修复新增的文件）。"""
+
+        template = dict(base["entries"][0])
+        entries = [dict(e) for e in base["entries"]] + [dict(template, path=path, sha256="a" * 64)]
+        v2 = tip.compute_identity_v2(self.policy, TOOL_ROOT, entries)
+        return {
+            **base,
+            "entries": entries,
+            **{k: v2[k] for k in ("wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "policy_sha256")},
+            "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+        }
+
     def manifest_sha256(self) -> str:
         return hashlib.sha256((self.campaign_dir / "campaign.json").read_bytes()).hexdigest()
 
@@ -633,6 +646,27 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
             preview = self._run(fixture, unmapped, path_map={})
             self.assertEqual(preview["impact"]["official"]["affected_job_ids"], self.OFFICIAL)
             self.assertEqual(preview["impact"]["candidates"]["cand"]["affected_job_ids"], self.CANDIDATE)
+
+    def test_new_control_file_outside_v1_whitelist_is_not_production_impact(self) -> None:
+        """2026-09-27 第二批演练实测：新增的控制收据 schema 不在 v1 评估侧白名单里，被当作映射不到作业的产出侧变化，
+        判全部作业受影响、官方已封存即拒绝登记——修好也接不着跑。按冻结策略它是 control 层，不计入产出侧影响；
+        未登记层级的新工具文件（默认 wire）仍按映射不到判全部受影响。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            schema = "codex_upgrade_fixture_receipt.schema.json"
+            self.assertEqual(tip.classify_path(fixture.policy, schema), "control")
+            self.assertNotIn(schema, codex_upgrade._EVALUATION_SIDE_FILES)
+            current = fixture.added_identity(fixture.identity, schema)
+            preview = self._run(fixture, current, path_map={}, sealed={"capture-official:None"})
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual((preview["changes"]["impact_paths"], preview["changes"]["unmapped_paths"]), ([], []))
+            self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
+            self.assertEqual(preview["impact"]["candidates"]["cand"]["affected_job_ids"], [])
+            tool = "brand_new_fixture_tool.py"
+            self.assertEqual(tip.classify_path(fixture.policy, tool), "wire_producer")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已封存的 official"):
+                self._run(fixture, fixture.added_identity(fixture.identity, tool), path_map={}, sealed={"capture-official:None"})
 
     def test_checker_change_moves_b0_authorization_only_without_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

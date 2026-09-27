@@ -58294,6 +58294,11 @@ def _tool_evolution_preview(
     production = set(_tool_identity_drift(current, from_identity).get("production", []))
     if not wire_closure_changed:
         production -= set(_PHASE_EVALUATION_HYBRID_FILES)
+    # v1 产出侧是"不在评估侧白名单即算产出侧"的保守口径；新增的控制文件（如新收据的 schema）若没进白名单，就会被当作
+    # 映射不到作业的产出侧变化，判全部作业受影响、官方已封存即拒绝登记——修好也接不着跑（2026-09-27 第二批演练实测）。
+    # Campaign 冻结策略已把这些路径分到 control 层：只影响控制门禁，不影响请求字节与证据语义，不计入产出侧影响。
+    # 不能靠补白名单：_EVALUATION_SIDE_FILES 在 wire 闭包内，改它本身就改变 wire 身份、判全部作业受影响。
+    production -= set(drift["control"])
     impact_paths = sorted(production | set(drift["wire_producer"]))
 
     # 逐作业影响：official 与每个活跃候选。已作废／已取代的候选只读，不再计入。
