@@ -3395,6 +3395,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   事实的前缀：同一 `source_index`、序号前缀、该序号演进收据摘要相同、作废作业子集），通过后收据、总账 payload、账本事件与暂停原因
   逐字节沿用，叠加的其它来源只记入命令输出 `stacked_invalidations`；恢复预览按当前链重算执行集合并 index+1。记录与当前链不衔接
   即失败关闭，不改写 write-once 收据。
+- **staging 中止保留原始拒因**：prepare／parent-run-create 阶段写下的 `codex-upgrade-staging-abort/v1` 收据可选携带 `error_message`
+  （原始异常文本，去控制字符、≤2000 字符，参与自摘要、不参与 write-once 事实核对；历史收据无此字段仍可校验），暂停／停线消息写
+  "父 run 创建失败（<类型>：<原文>）；<暂停指引>"。链审计的拒绝理由（如"失败父 run … 尚未对账；先执行 reconcile-supervisor-run"）
+  由此可见，不再只剩类型名。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，

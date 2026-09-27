@@ -591,6 +591,8 @@ class StagingDispatchTests(unittest.TestCase):
             # 父 run 创建前被拒：入口当场把 staging attempt 以 parent-run-create 中止并入账（P1 语义）。
             abort = artifacts.validate_staging_abort(self._read(self._staging_dir(campaign_dir, 3, "VC-2") / "attempt-1" / "ABORT"))
             self.assertEqual((abort["stage"], abort["failure_kind"], abort["error_type"]), ("parent-run-create", "prepare-failed", "SupervisorError"))
+            # 修好接着跑第 29 项：ABORT 保留原始拒因文本，操作员能看到父 run 为什么建不起来。
+            self.assertIn("漂移字段：actions", abort["error_message"])
             self.assertIn("staging-abort:0003:1", self._head(fixture)["operations"])
             # 仅命令 argv 不同（解释器加 -u，动作行为不变）：同阶段、同动作、同候选、同输入，身份相同，
             # 放行并真实执行成功，没有遗留孤儿；执行的清单里就是新 argv。
@@ -606,6 +608,59 @@ class StagingDispatchTests(unittest.TestCase):
     # ------------------------------------------------------------------
     # P2：prepared 父 run，commit 未开始，owner 崩溃（子进程 SIGKILL）
     # ------------------------------------------------------------------
+
+    def test_parent_run_create_failure_keeps_original_message_when_paused(self) -> None:
+        """修好接着跑第 29 项：父 run 创建失败且对账判定暂停（如同根因达上限）时，暂停消息写"父 run 创建失败（类型：原文）；
+        暂停指引"，ABORT 同样带原文——194249z 批次 17 实测只剩"（SupervisorError）"与暂停指引，链审计的拒因不可见。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+
+            def broken_activate(self_client, commit):
+                raise supervisor.SupervisorError("simulated state write failure")
+
+            with mock.patch.object(supervisor.SupervisorClient, "activate_committed", broken_activate):
+                result, _returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-p4")
+            reconciler.reconcile_supervisor_run(Path(result["campaign_run"]["run_dir"]), campaign_dir)
+            base_plan = self._plan(root, campaign_dir, "VC-2", tag="-p4")
+            renamed_plan = self._rewrite_plan(
+                base_plan, root / "drift" / "vc-2-operation.json", operation="VC-2:synthetic-checkpoint-renamed"
+            )
+            paused = codex_upgrade.StagingDeadlinePaused("对账判定暂停：登记根因修复证据后按同序号重新派发")
+            with mock.patch.object(codex_upgrade, "_reconcile_staging_abort_receipt", side_effect=paused), \
+                    self.assertRaisesRegex(
+                        codex_upgrade.StagingDeadlinePaused,
+                        r"父 run 创建失败（SupervisorError：.*漂移字段：actions.*）；对账判定暂停：登记根因修复证据",
+                    ):
+                codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-2", 3, renamed_plan))
+            abort = artifacts.validate_staging_abort(self._read(self._staging_dir(campaign_dir, 3, "VC-2") / "attempt-1" / "ABORT"))
+            self.assertEqual((abort["stage"], abort["error_type"]), ("parent-run-create", "SupervisorError"))
+            self.assertIn("漂移字段：actions", abort["error_message"])
+
+    def test_write_staging_abort_ignores_error_message_when_verifying_existing_receipt(self) -> None:
+        """修好接着跑第 29 项：既有（历史形态、无 error_message）的 ABORT 再次写入时带原文，write-once 核对把 error_message
+        当诊断附注：返回既有收据、文件字节不变；事实字段（如 error_type）不同仍失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            attempt_dir = Path(directory).resolve() / "attempt-1"
+            attempt_dir.mkdir(mode=0o700)
+            common = dict(
+                campaign_id="codex-0_154_0-campaign", campaign_plan_sha256="8" * 64, phase="VC-2", sequence=3, attempt=1,
+                stage="parent-run-create", failure_kind="prepare-failed", error_type="SupervisorError",
+                root_cause_id="rc1-" + "9" * 20, batch_sha256=None, manifest_sha256=None, parent_run_dir=None,
+                parent_run_state=None, reconciliation_receipt=None,
+            )
+            first = codex_upgrade._write_staging_abort(attempt_dir, **common)
+            self.assertNotIn("error_message", first)
+            abort_path = attempt_dir / codex_upgrade.STAGING_ABORT_FILENAME
+            raw = abort_path.read_bytes()
+            again = codex_upgrade._write_staging_abort(attempt_dir, **common, error_message="失败父 run 尚未对账")
+            self.assertEqual(again, first)
+            self.assertEqual(abort_path.read_bytes(), raw)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "漂移字段：error_type"):
+                codex_upgrade._write_staging_abort(attempt_dir, **dict(common, error_type="ValueError"))
 
     def test_prepared_orphan_is_finalized_reconciled_and_same_sequence_redispatched(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

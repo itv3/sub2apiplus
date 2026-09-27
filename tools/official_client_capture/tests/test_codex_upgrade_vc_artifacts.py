@@ -823,6 +823,51 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         self.assertFalse(built["failure"]["action_started"])
         self.assertFalse(built["failure"]["reservation_exists"])
 
+    def test_staging_abort_optional_error_message_and_cleaning(self) -> None:
+        """修好接着跑第 29 项：ABORT 收据可选携带原始异常文本 error_message（参与自摘要）；缺省时字段缺席、与历史
+        收据同形；未知键仍不闭合；空串／超长／控制字符／首尾空白／非字符串拒绝；清洗函数去控制字符、截断、空退回类型名；
+        schema 文件同步（可选、不进 required）。"""
+
+        base = self._staging_artifacts()["abort"]
+        self.assertNotIn("error_message", base)
+        params = {
+            key: value
+            for key, value in base.items()
+            if key not in {"schema_version", "live_request_count", "scanned_bytes", "receipt_sha256"}
+        }
+        original = "失败父 run run-x 尚未对账（缺对账收据）；先执行 reconcile-supervisor-run。"
+        with_message = artifacts.build_staging_abort(**params, error_message=original)
+        self.assertEqual(with_message["error_message"], original)
+        self.assertEqual(artifacts.validate_staging_abort(with_message), with_message)
+        unsigned = {key: value for key, value in with_message.items() if key != "receipt_sha256"}
+        self.assertEqual(artifacts.digest(unsigned), with_message["receipt_sha256"])
+        self.assertNotEqual(with_message["receipt_sha256"], base["receipt_sha256"])
+        self.assertEqual(set(with_message) - set(base), {"error_message"})
+        self.assertEqual(artifacts.build_staging_abort(**params), base)
+        extra = dict(with_message)
+        extra["note"] = "x"
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "不闭合"):
+            artifacts.validate_staging_abort(extra)
+        for bad in ("", "x" * (artifacts.STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS + 1), "a\x00b", " padded", "tail ", 42):
+            tampered = dict(with_message)
+            tampered["error_message"] = bad
+            tampered["receipt_sha256"] = artifacts.digest({k: v for k, v in tampered.items() if k != "receipt_sha256"})
+            with self.subTest(bad=bad), self.assertRaisesRegex(artifacts.VCArtifactError, "error_message 非法"):
+                artifacts.validate_staging_abort(tampered)
+        self.assertEqual(artifacts.staging_abort_error_message(RuntimeError("  a\x1fb\nc  ")), "a b c")
+        self.assertEqual(
+            len(artifacts.staging_abort_error_message("y" * 5000)), artifacts.STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS
+        )
+        self.assertEqual(artifacts.staging_abort_error_message(ValueError()), "ValueError")
+        self.assertEqual(artifacts.staging_abort_error_message("   "), "unknown")
+        schema_path = Path(artifacts.__file__).resolve().parent / "codex_upgrade_staging_abort.schema.json"
+        abort_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            abort_schema["properties"]["error_message"],
+            {"type": "string", "minLength": 1, "maxLength": artifacts.STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS},
+        )
+        self.assertNotIn("error_message", abort_schema["required"])
+
     def test_staging_artifacts_reject_semantic_tampering(self) -> None:
         built = self._staging_artifacts()
         cases = [

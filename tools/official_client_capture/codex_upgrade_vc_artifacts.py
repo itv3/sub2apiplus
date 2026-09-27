@@ -1173,6 +1173,23 @@ def validate_vc_commit(value: Any) -> dict[str, Any]:
     return payload
 
 
+STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS = 2000
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def staging_abort_error_message(error: BaseException | str) -> str:
+    """staging 中止收据与暂停／停线消息里保留的原始异常文本（修好接着跑第 29 项）。
+
+    去控制字符、去首尾空白、截到 2000 字符；空文本退回异常类型名，保证字段非空。
+    """
+
+    text = error if isinstance(error, str) else str(error)
+    cleaned = _CONTROL_CHARS_RE.sub(" ", text).strip()
+    if not cleaned:
+        cleaned = (error if isinstance(error, str) else type(error).__name__).strip() or "unknown"
+    return cleaned[:STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS]
+
+
 def build_staging_abort(
     *,
     campaign_id: str,
@@ -1190,8 +1207,13 @@ def build_staging_abort(
     parent_run_state: str | None,
     reconciliation_receipt: Mapping[str, Any] | None,
     recorded_at_utc: str,
+    error_message: str | None = None,
 ) -> dict[str, Any]:
-    """staging 中止事实：只记录发生了什么，不携带任何"可续跑"授权字段。"""
+    """staging 中止事实：只记录发生了什么，不携带任何"可续跑"授权字段。
+
+    ``error_message``（第 29 项）是可选的原始异常文本附注：给出时写入并参与自摘要，不给出时字段缺席，
+    与历史收据字节兼容。
+    """
 
     payload = {
         "schema_version": STAGING_ABORT_SCHEMA,
@@ -1215,6 +1237,8 @@ def build_staging_abort(
         "scanned_bytes": 0,
         "recorded_at_utc": _timestamp(recorded_at_utc, "recorded_at_utc"),
     }
+    if error_message is not None:
+        payload["error_message"] = error_message
     payload["receipt_sha256"] = digest(payload)
     return validate_staging_abort(payload)
 
@@ -1241,7 +1265,13 @@ def validate_staging_abort(value: Any) -> dict[str, Any]:
         "recorded_at_utc",
         "receipt_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    # 第 29 项：error_message 是唯一可选字段（原始异常文本附注）；必填集合不变，其它未知键仍不闭合。
+    optional = {"error_message"}
+    if (
+        not isinstance(value, Mapping)
+        or not required <= set(value)
+        or (set(value) - required - optional)
+    ):
         raise VCArtifactError("staging-abort 收据字段不闭合")
     payload = dict(value)
     if payload.get("schema_version") != STAGING_ABORT_SCHEMA:
@@ -1258,6 +1288,16 @@ def validate_staging_abort(value: Any) -> dict[str, Any]:
     error_type = payload.get("error_type")
     if not isinstance(error_type, str) or not error_type or len(error_type) > 128:
         raise VCArtifactError("staging-abort error_type 非法")
+    if "error_message" in payload:
+        message = payload.get("error_message")
+        if (
+            not isinstance(message, str)
+            or not message
+            or len(message) > STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS
+            or _CONTROL_CHARS_RE.search(message) is not None
+            or message != message.strip()
+        ):
+            raise VCArtifactError("staging-abort error_message 非法")
     root_cause_id = payload.get("root_cause_id")
     if not isinstance(root_cause_id, str) or not _ROOT_CAUSE_ID_RE.fullmatch(root_cause_id):
         raise VCArtifactError("staging-abort root_cause_id 非法")

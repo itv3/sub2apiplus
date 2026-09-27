@@ -18124,6 +18124,7 @@ def _write_staging_abort(
     parent_run_dir: str | None,
     parent_run_state: str | None,
     reconciliation_receipt: Mapping[str, Any] | None,
+    error_message: str | None = None,
 ) -> dict[str, Any]:
     """写 staging ABORT（write-once + 内容核对）：已存在时逐字段核对当前事实，不同即失败关闭。
 
@@ -18151,6 +18152,7 @@ def _write_staging_abort(
             parent_run_state=parent_run_state,
             reconciliation_receipt=reconciliation_receipt,
             recorded_at_utc=_utc_now(),
+            error_message=error_message,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -18163,7 +18165,8 @@ def _write_staging_abort(
             )
         except codex_upgrade_vc_artifacts.VCArtifactError as error:
             raise ConfigurationError(f"既有 staging ABORT 无法校验：{error}") from error
-        volatile = {"recorded_at_utc", "receipt_sha256"}
+        # 第 29 项：error_message 是诊断附注，不参与事实核对（既有无消息的 ABORT 重新对账不漂移）。
+        volatile = {"recorded_at_utc", "receipt_sha256", "error_message"}
         drifted = sorted(
             field
             for field in abort
@@ -18255,6 +18258,13 @@ def _reconcile_staging_abort_receipt(
     return outcome
 
 
+def _staging_error_summary(error: BaseException) -> str:
+    """暂停／停线消息里的"类型：原文"（修好接着跑第 29 项）：原文经同一清洗并截到 600 字符。"""
+
+    message = codex_upgrade_vc_artifacts.staging_abort_error_message(error)
+    return f"{type(error).__name__}：{message[:600]}"
+
+
 def _abort_staging_attempt_without_parent(
     campaign_dir: Path,
     attempt_dir: Path,
@@ -18266,6 +18276,7 @@ def _abort_staging_attempt_without_parent(
     stage: str,
     failure_kind: str,
     error_type: str,
+    error_message: str | None = None,
 ) -> dict[str, Any] | None:
     """P1：没有父 run 的 staging attempt → ABORT → outbox → 总账 → 判定（态 A→B→C）。
 
@@ -18299,6 +18310,7 @@ def _abort_staging_attempt_without_parent(
         parent_run_dir=None,
         parent_run_state=None,
         reconciliation_receipt=None,
+        error_message=error_message,
     )
     return _reconcile_staging_abort_receipt(
         campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
@@ -18829,14 +18841,15 @@ def _compile_and_run_vc_batch_staging(
                     stage="prepare",
                     failure_kind=failure_kind,
                     error_type=type(error).__name__,
+                    error_message=codex_upgrade_vc_artifacts.staging_abort_error_message(error),
                 )
             except StagingStopTheLine as stop_error:
                 raise StagingStopTheLine(
-                    f"prepare 失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                    f"prepare 失败（{_staging_error_summary(error)}）且对账命中永久停线：{stop_error}"
                 ) from error
             except StagingDeadlinePaused as paused_error:
                 raise StagingDeadlinePaused(
-                    f"prepare 失败（{type(error).__name__}）；{paused_error}"
+                    f"prepare 失败（{_staging_error_summary(error)}）；{paused_error}"
                 ) from error
             raise
         staging_binding = {
@@ -18945,14 +18958,15 @@ def _compile_and_run_vc_batch_staging(
                         stage="parent-run-create",
                         failure_kind=failure_kind,
                         error_type=type(error).__name__,
+                        error_message=codex_upgrade_vc_artifacts.staging_abort_error_message(error),
                     )
                 except StagingStopTheLine as stop_error:
                     raise StagingStopTheLine(
-                        f"父 run 创建失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                        f"父 run 创建失败（{_staging_error_summary(error)}）且对账命中永久停线：{stop_error}"
                     ) from error
                 except StagingDeadlinePaused as paused_error:
                     raise StagingDeadlinePaused(
-                        f"父 run 创建失败（{type(error).__name__}）；{paused_error}"
+                        f"父 run 创建失败（{_staging_error_summary(error)}）；{paused_error}"
                     ) from error
             # 父 run 已建立（含 commit 中被中断后已封存 aborted_prepared）：由下次入口的
             # 孤儿处理幂等续接对账、ABORT 与归档。

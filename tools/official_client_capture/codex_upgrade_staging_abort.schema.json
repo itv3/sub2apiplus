@@ -20,6 +20,7 @@
     "stage": {"enum": ["prepare", "parent-run-create", "parent-run", "nonce-mismatch", "evaluator-digests", "commit-ledger", "commit-publish", "commit-mark"]},
     "failure_kind": {"enum": ["abandoned", "prepare-failed", "commit-failed", "interrupted"]},
     "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "error_message": {"type": "string", "minLength": 1, "maxLength": 2000},
     "root_cause_id": {"type": "string", "pattern": "^rc1-[0-9a-f]{20}$"},
     "batch_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
     "manifest_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
