@@ -7,6 +7,8 @@ from tools.official_client_capture import codex_upgrade as cu
 campaign_dir, cand, official_dir, out = sys.argv[1:]
 C = pathlib.Path(campaign_dir); O = pathlib.Path(official_dir)
 classification = json.load(open(C / "classification" / "result.json"))
+# 第三批 R5：按当前评估基线生效的批准画像投影（approval-revision 基线下取修订画像，其余批准包身份不变）。
+classification = cu._effective_classification_view(C, cand, classification)
 candidate = json.load(open(C / "candidates" / cand / "result.json"))
 comparison = json.load(open(C / "comparisons" / cand / "result.json"))
 official = json.load(open(O / "official" / "result.json"))
@@ -17,7 +19,7 @@ profile_id, profile_digest = cu._profile_binding_from_manifest(C, classification
 ctx_o = official["assertion_context"]; ctx_c = candidate["assertion_context"]
 config = {
     "campaign_dir": str(C), "candidate_id": cand,
-    "assertion_profile": str(approved / "assertion-profile.json"), "rule_manifest": str(approved / "target-rules.json"),
+    "assertion_profile": str(C / classification["assertion_profile_manifest"]["path"]), "rule_manifest": str(approved / "target-rules.json"),
     "expected_profile_sha256": classification["assertion_profile_manifest"]["sha256"],
     "official_evidence_root": ctx_o["evidence_root"], "candidate_evidence_root": ctx_c["evidence_root"],
     "official_capture_manifest": ctx_o["capture_manifest_path"], "candidate_capture_manifest": ctx_c["capture_manifest_path"],

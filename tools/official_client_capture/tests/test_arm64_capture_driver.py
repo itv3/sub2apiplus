@@ -300,15 +300,20 @@ class PermissionCloseoutTests(unittest.TestCase):
             self.assertIn("PERMISSION_CLOSEOUT_VERIFY_FAILED", fourth.stdout)
             self.assertEqual(stat.S_IMODE(drifted.stat().st_mode), 0o640, "manifest 存在时脚本不得修改条目")
             self.assertEqual(log.read_text(encoding="utf-8").count("\n"), calls_after_first)
-            # 5b. 事故形态：模式改回 0600（与 manifest 一致）但 ctime 已漂移 → 读侧判 evidence-integrity，不可恢复
+            # 5b. 事故形态：模式改回 0600（与 manifest 一致）但 ctime 已漂移 → 第三批 R3 起读侧判可恢复的
+            # evidence-metadata-drift（内容未变，rebind-boundary 复算内容后可继续），不再是 evidence-integrity 永久停线。
             drifted.chmod(0o600)
             fifth = _run(self.CLOSEOUT, str(attempt), env=env)
             self.assertEqual(fifth.returncode, 0, fifth.stderr)
             self.assertEqual(log.read_text(encoding="utf-8").count("\n"), calls_after_first)
-            with self.assertRaises(evidence_manifest.EvidenceManifestBoundaryDriftError) as caught:
+            with self.assertRaises(evidence_manifest.EvidenceManifestMetadataDriftError) as caught:
                 evidence_manifest.verify_manifest_boundary(manifest, [evidence_root])
-            self.assertEqual(caught.exception.failure_class, "evidence-integrity")
-            self.assertEqual(caught.exception.failure_observations, [{"check_id": "evidence-manifest.boundary", "failure_code": "stat-boundary-drift"}])
+            self.assertEqual(caught.exception.failure_class, evidence_manifest.METADATA_DRIFT_FAILURE_CLASS)
+            self.assertEqual(
+                caught.exception.failure_observations,
+                [{"check_id": evidence_manifest.BOUNDARY_DRIFT_CHECK_ID, "failure_code": evidence_manifest.METADATA_DRIFT_FAILURE_CODE}],
+            )
+            self.assertEqual([entry["path"] for entry in caught.exception.drifted_entries], [drifted.relative_to(attempt).as_posix()])
 
     def test_closeout_resumes_after_interruption_before_manifest(self) -> None:
         """manifest 生成前收口中断（chmod 第一次调用失败）：再次执行即完成，不留半成品状态。"""

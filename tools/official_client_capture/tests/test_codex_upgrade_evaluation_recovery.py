@@ -300,6 +300,9 @@ class _EvaluationChainMixin(_ChainMixin):
                     "status": "complete",
                     "assertion_profile_manifest": {"path": context["profile_path"].relative_to(campaign_dir).as_posix(), "sha256": _sha(context["profile_path"])},
                     "target_rule_manifest": {"path": context["rules_path"].relative_to(campaign_dir).as_posix(), "sha256": _sha(context["rules_path"])},
+                    # 第三批 R5：批准包身份（approval-revision 记录绑定 package digest 与联合摘要）。
+                    "package_digest": e2e.AUTHORITY["classification_package_digest"],
+                    "joint_manifest_sha256": e2e.AUTHORITY["review_sha256"],
                 }
             return original(campaign_dir_arg, stage, candidate_id, **kwargs)
 
@@ -320,6 +323,7 @@ class _EvaluationChainMixin(_ChainMixin):
             deployment_receipt=extra.get("deployment_receipt"),
             approve_sha256=extra.get("approve_sha256"),
             reason=extra.get("reason"),
+            assertion_profile=extra.get("assertion_profile"),
         )
 
 
@@ -602,6 +606,221 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
                 _read(campaign_dir / "candidates" / R1 / "revisions" / "b1" / "reevaluation.json")
             )
             self.assertEqual(fact["evaluator_changed_fields"], ["checker_sha256"])
+
+    def test_reopened_vc5_lands_checkpoint_and_completion_in_reopen_directory(self) -> None:
+        """第三批 R5 前置：VC-5 在同一 revision 完成后经 reevaluate 重开——再次派发 VC-5 不被"已有 checkpoint"拒绝，
+        checkpoint／完成收据落到 reopen-b<K>/、首次完成的制品原样保留，VC-6 的前序绑定指向重开后的 checkpoint。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            ledger_dir = Path(str(fixture["timing_ledger"]))
+            for patcher in self._stage_patches(context, context["candidate"]):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            attempt_id = context["attempt_root"].name
+            completion = dict(
+                kind="vc5_completion", candidate_id=R1, attempt_id=attempt_id,
+                assertions={"acceptance_passed": True, "vc5_pending_count": 0, "canonical_handoff": "not_required"},
+            )
+            # b0 评估产出（reevaluate 的前提）：断言目录内任何文件即可，不经失败批次（失败后账本只允许逐字重派原批次）。
+            b0_outputs = campaign_dir / "assertions" / R1 / "machine"
+            b0_outputs.mkdir(parents=True, mode=0o700)
+            (b0_outputs / "SPEC-H1-001.json").write_text("{}\n", encoding="utf-8")
+            (b0_outputs / "SPEC-H1-001.json").chmod(0o600)
+            # 首次完成 VC-5：合成批次封存原路径 checkpoint、账本登记完成；完成收据写在原路径。
+            result, returncode = self._dispatch(fixture, root, "VC-5", 5, tag="vc5-first")
+            self.assertEqual(returncode, 0, result)
+            first_checkpoint = campaign_dir / "control" / "vc" / "vc-5-checkpoint.json"
+            self.assertTrue(first_checkpoint.is_file())
+            first_checkpoint_sha = _sha(first_checkpoint)
+            self.assertIn("VC-5", timing_ledger.phase_ledger_state(ledger_dir)["completed_phases"])
+            stage_receipt = campaign_dir / "control" / "vc-chain" / "vc-5-stage-result.json"
+            first_receipt_path, _ = codex_upgrade._write_vc_completion_receipt(
+                campaign_dir, manifest, evidence_paths={"acceptance_fact": stage_receipt}, **completion
+            )
+            self.assertEqual(first_receipt_path, campaign_dir / "control" / "vc" / "receipts" / R1 / "vc5-completion.json")
+            # 重开：评估器摘要变化 → reevaluate 落盘 b1（evaluation_reopened），账本记下重开基线。
+            fixed = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f7" * 32)
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed):
+                preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+                self.assertEqual(preview["ledger_event_type"], "evaluation_reopened")
+                applied = codex_upgrade.evaluation_recover(self._recover_arguments(
+                    fixture, "reevaluate", approve_sha256=preview["review_sha256"], fix_commit="a" * 40,
+                    deployment_receipt=Path(str(fixture["deployment"])),
+                ))
+                self.assertEqual(
+                    (applied["status"], applied["evaluation_baseline"], applied["ledger_event"]["event_type"]),
+                    ("applied", 1, "evaluation_reopened"),
+                )
+                summary = timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["active_phase"], summary["vc5_reopened_baseline"]), ("VC-5", 1))
+                reopen_dir = campaign_dir / "control" / "vc" / "reopen-b1"
+                self.assertEqual(codex_upgrade._vc_checkpoint_path(campaign_dir, "VC-5", revision=1), reopen_dir / "vc-5-checkpoint.json")
+                self.assertEqual(
+                    codex_upgrade._vc_checkpoint_path(campaign_dir, "VC-4", revision=1),
+                    campaign_dir / "control" / "vc" / "vc-4-checkpoint.json",
+                )
+                # 重开后再次派发 VC-5：不再被"已有 checkpoint，禁止再编译"拒绝，checkpoint 落到 reopen-b1/，原 checkpoint 不动。
+                result, returncode = self._dispatch(fixture, root, "VC-5", 6, tag="vc5-reopened")
+                self.assertEqual(returncode, 0, result)
+                self.assertTrue((reopen_dir / "vc-5-checkpoint.json").is_file())
+                self.assertEqual(_sha(first_checkpoint), first_checkpoint_sha)
+                self.assertIn("VC-5", timing_ledger.phase_ledger_state(ledger_dir)["completed_phases"])
+                # 完成收据同样落到 reopen-b1/，与首次收据并存。
+                second_receipt_path, _ = codex_upgrade._write_vc_completion_receipt(
+                    campaign_dir, manifest, evidence_paths={"acceptance_fact": stage_receipt}, **completion
+                )
+                self.assertEqual(
+                    second_receipt_path,
+                    campaign_dir / "control" / "vc" / "receipts" / R1 / "reopen-b1" / "vc5-completion.json",
+                )
+                self.assertTrue(first_receipt_path.is_file())
+                # VC-6 的前序绑定指向重开后的 VC-5 checkpoint。
+                result, returncode = self._dispatch(fixture, root, "VC-6", 7, tag="vc6")
+                self.assertEqual(returncode, 0, result)
+                vc6 = _read(campaign_dir / "control" / "vc" / "vc-6-checkpoint.json")
+                self.assertEqual(vc6["predecessor_checkpoint"]["path"], "control/vc/reopen-b1/vc-5-checkpoint.json")
+
+    def test_approval_revision_opens_baseline_with_revised_profile_and_read_side_projection(self) -> None:
+        """第三批 R5：批准画像 selector 修正在原 Campaign 内以 approval-revision 基线承接——账本位置、第一类判据（规则增删／
+        check 集合／场景／版本／规则其它字段／无差异各拒，工具已变先 reevaluate）、预览批准摘要；apply 落盘修订画像／批准记录／
+        五步制品，账本切换基线（kind approval-revision）、总账根因计数不变；读侧投影与 accept 机器命令用修订画像；
+        b1 再修订 → b2 沿链取最近。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            ledger_dir = Path(str(fixture["timing_ledger"]))
+            for patcher in self._stage_patches(context, context["candidate"]):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            profile = _read(context["profile_path"])
+
+            def revised(name: str, mutate) -> Path:
+                document = json.loads(json.dumps(profile))
+                mutate(document)
+                path = root / f"profile-{name}.json"
+                path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+                path.chmod(0o600)
+                return path
+
+            def selector_fix(document: dict) -> None:
+                check = document["rules"][0]["checks"][0]
+                check["select"]["where"] = {"data.method": {"operator": "present"}}
+                check["description"] = "方法为 POST（修正 selector）"
+
+            def approval(profile_path: Path, **extra: object) -> argparse.Namespace:
+                return self._recover_arguments(fixture, "approval-revision", assertion_profile=profile_path, **extra)
+
+            good = revised("good", selector_fix)
+            # VC-5 尚未开始：账本位置不允许修订。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "只能在 VC-5 进行中"):
+                codex_upgrade.evaluation_recover(approval(good))
+            timing_ledger.append_event(ledger_dir, event_id="s5-approval", phase="VC-5", event_type="stage_started", next_action="x")
+            # 第二／三类与规则其它字段变化各拒；与生效画像无差异也拒。
+            for name, mutate, message in (
+                ("drop-rule", lambda d: d["rules"].pop(), "规则 id 集"),
+                ("rename-check", lambda d: d["rules"][0]["checks"][0].__setitem__("id", "method-post-2"), "acceptance_contract"),
+                ("scenario", lambda d: d["scenarios"][0].__setitem__("description", "改了场景"), "scenarios"),
+                ("version", lambda d: d.__setitem__("codex_version", "0.999.0"), "codex_version"),
+                ("rule-field", lambda d: d["rules"][0].__setitem__("note", "x"), r"SPEC-H1-001\.note"),
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, message, msg=name):
+                    codex_upgrade.evaluation_recover(approval(revised(name, mutate)))
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有差异|逐字节相同"):
+                codex_upgrade.evaluation_recover(approval(revised("same", lambda d: None)))
+            # 工具已变（评估器摘要≠当前基线授权口径）：先 reevaluate，不混在修订基线里。
+            drifted = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f8" * 32)
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=drifted):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "先以 evaluation-recover reevaluate"):
+                    codex_upgrade.evaluation_recover(approval(good))
+            head_before = project_ledger.replay_head(Path(str(fixture["ledger"])))
+            preview = codex_upgrade.evaluation_recover(approval(good, reason="修正 where"))
+            self.assertEqual(
+                (preview["status"], preview["kind"], preview["ledger_event_type"], preview["approval_revision"]),
+                ("preview", "approval-revision", "evaluation_baseline", 1),
+            )
+            self.assertEqual(preview["changed_rule_ids"], ["SPEC-H1-001"])
+            self.assertEqual(preview["changed_check_ids"], ["SPEC-H1-001:method-post"])
+            self.assertEqual(preview["previous_profile"]["sha256"], _sha(context["profile_path"]))
+            revised_binding = {"path": f"candidates/{R1}/revisions/b1/assertion-profile.json", "sha256": _sha(good)}
+            self.assertEqual(preview["revised_profile"], revised_binding)
+            self.assertFalse((campaign_dir / "candidates" / R1 / "revisions" / "b1").exists())
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "请重新预览"):
+                codex_upgrade.evaluation_recover(approval(good, approve_sha256="0" * 64))
+            applied = codex_upgrade.evaluation_recover(approval(good, reason="修正 where", approve_sha256=preview["review_sha256"]))
+            self.assertEqual(
+                (applied["status"], applied["kind"], applied["evaluation_baseline"], applied["approval_revision"]),
+                ("applied", "approval-revision", 1, 1),
+            )
+            self.assertEqual(applied["ledger_event"], {**applied["ledger_event"], "event_type": "evaluation_baseline", "appended": True})
+            baseline_dir = campaign_dir / "candidates" / R1 / "revisions" / "b1"
+            self.assertEqual(_sha(baseline_dir / "assertion-profile.json"), _sha(good))
+            record = artifacts.validate_approval_revision(_read(baseline_dir / "approval-revision.json"))
+            self.assertEqual(
+                (record["approval_revision"], record["from_baseline"], record["changed_rule_ids"], record["revised_profile"]),
+                (1, 0, ["SPEC-H1-001"], revised_binding),
+            )
+            recovery = codex_upgrade._load_evaluation_baseline_recovery(campaign_dir, R1, 1)
+            self.assertEqual(
+                (recovery["kind"], recovery["failure_source"], recovery["root_cause_class"], recovery["fix_commit"], recovery["deployment_receipt"]),
+                ("approval-revision", "approval-revision", "approval-revision", None, None),
+            )
+            self.assertEqual(recovery["diagnosis"]["path"], f"candidates/{R1}/revisions/b1/approval-revision.json")
+            commit = codex_upgrade._read_evaluation_baseline_commit(campaign_dir, R1, 1)
+            self.assertEqual(
+                {stage: source["source"] for stage, source in commit["stage_sources"].items()},
+                {"capture-candidate": "reused", "compare": "local", "assertions": "local", "accept": "local"},
+            )
+            summary = timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(
+                (summary["status"], summary["active_phase"], summary["current_evaluation_baseline"]["baseline_kind"],
+                 summary["current_evaluation_baseline"]["evaluation_baseline"]),
+                ("active", "VC-5", "approval-revision", 1),
+            )
+            head = project_ledger.replay_head(Path(str(fixture["ledger"])))
+            self.assertEqual(head["root_cause_counts"], head_before["root_cause_counts"])
+            self.assertFalse(head["blocked"])
+            # 读侧投影：生效画像 = b1 修订画像；accept 重建的 checker 命令引用修订画像路径与摘要，不再引用批准画像。
+            effective = codex_upgrade._effective_assertion_profile(campaign_dir, R1, 1)
+            self.assertEqual((effective["path"], effective["sha256"], effective["approval_revision"]), (revised_binding["path"], _sha(good), 1))
+            classification = codex_upgrade._load_stage_result(campaign_dir, "classify")
+            view = codex_upgrade._effective_classification_view(campaign_dir, R1, classification)
+            self.assertEqual(view["assertion_profile_manifest"], revised_binding)
+            self.assertEqual(view["target_rule_manifest"], classification["target_rule_manifest"])
+            command = codex_upgrade._campaign_machine_command(
+                campaign_dir, manifest, view, codex_upgrade._load_stage_result(campaign_dir, "capture-candidate", R1),
+                rule="SPEC-H1-001", output=root / "out.json", side="candidate",
+            )
+            self.assertIn(str((baseline_dir / "assertion-profile.json").resolve()), command)
+            self.assertIn(_sha(good), command)
+            self.assertNotIn(str(context["profile_path"].resolve()), command)
+            self.assertNotIn(_sha(context["profile_path"]), command)
+            # b1 生效后再提交同一画像：与生效画像相同，拒绝（不会无限开基线）。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有差异|逐字节相同"):
+                codex_upgrade.evaluation_recover(approval(good))
+            # b1 再修订另一条规则的 assertion → b2（第 2 次修订）：沿链取最近的修订画像，历史基线各取各的。
+
+            def second_fix(document: dict) -> None:
+                selector_fix(document)
+                document["rules"][1]["checks"][0]["assertion"]["value"] = "codex-cli"
+
+            good2 = revised("good2", second_fix)
+            preview2 = codex_upgrade.evaluation_recover(approval(good2))
+            self.assertEqual(
+                (preview2["approval_revision"], preview2["previous_profile"]["sha256"], preview2["changed_rule_ids"]),
+                (2, _sha(good), ["SPEC-EP-006"]),
+            )
+            applied2 = codex_upgrade.evaluation_recover(approval(good2, approve_sha256=preview2["review_sha256"]))
+            self.assertEqual((applied2["evaluation_baseline"], applied2["approval_revision"]), (2, 2))
+            self.assertEqual(codex_upgrade._effective_assertion_profile(campaign_dir, R1, 2)["sha256"], _sha(good2))
+            self.assertEqual(codex_upgrade._effective_assertion_profile(campaign_dir, R1, 1)["sha256"], _sha(good))
+            self.assertIsNone(codex_upgrade._effective_assertion_profile(campaign_dir, R1, 0))
 
     def test_apply_paths_refuse_unregistered_tool_evolution_before_writing(self) -> None:
         """第三批 B3-5（第 7 项⑥）：evaluation-recover apply 与 reevaluate 落盘前做零写入预检——未登记的工具变化只提示

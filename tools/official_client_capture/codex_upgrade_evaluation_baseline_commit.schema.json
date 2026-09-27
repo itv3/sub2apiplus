@@ -39,7 +39,8 @@
       "enum": [
         "evaluator-only",
         "attempt-recovery",
-        "tool-evolution"
+        "tool-evolution",
+        "approval-revision"
       ]
     },
     "recovery_sha256": {

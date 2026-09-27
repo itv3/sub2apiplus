@@ -215,6 +215,78 @@ class BatchV3ContractTests(unittest.TestCase):
             recovery(epoch, kind="attempt-recovery")
 
 
+    def test_approval_revision_recovery_and_record_contracts(self) -> None:
+        """第三批 R5：approval-revision 基线——failure_source／root_cause_class 固定 approval-revision、不绑 attempt、不绑修复
+        提交与部署收据、reuse none；诊断制品不接受该来源；stage_sources 与 tool-evolution 同构；批准修订记录：前后画像摘要
+        必须不同、changed_rule_ids 非空且 changed_check_ids 只能引用其中的规则；两处 kind 闭集都含 approval-revision。"""
+
+        def recovery(**overrides: object) -> dict:
+            common = dict(
+                campaign_id="campaign-r2", candidate_id="cand", candidate_revision=1, evaluation_baseline=2, kind="approval-revision",
+                diagnosis={"path": "candidates/cand/revisions/b2/approval-revision.json", "sha256": "1" * 64},
+                failure_source="approval-revision", reuse_authority="none", root_cause_class="approval-revision",
+                root_cause_id="rc1-" + "0" * 20, failed_step="approval-revision-01", previous_baseline=1,
+                previous_baseline_commit_sha256="2" * 64, execute_rules=["SPEC-EP-006", "SPEC-H1-001"], reuse_rules=[],
+                execute_jobs=[], reuse_jobs=["job-a"], attempt_id=None, recovery_revision=None, fix_commit=None,
+                deployment_receipt=None, evaluation_epoch=None,
+                failed_evaluator_digests=DIGESTS, current_evaluator_digests=DIGESTS,
+                reviewer="boss", approved_at_utc="2026-09-27T00:00:00Z",
+            )
+            common.update(overrides)
+            return artifacts.build_evaluation_recovery(**common)
+
+        payload = recovery()
+        self.assertEqual((payload["kind"], payload["failure_source"], payload["root_cause_class"]), ("approval-revision",) * 3)
+        for bad, pattern in (
+            (dict(failure_source="tool-evolution"), "failure_source 是 approval-revision"),
+            (dict(failure_source="assertion-failed"), "failure_source 是 approval-revision"),
+            (dict(root_cause_class="tool-evolution"), "root_cause_class 与 kind 不对应"),
+            (
+                dict(kind="evaluator-only", root_cause_class="evaluator-defect", fix_commit="a" * 40,
+                     deployment_receipt={"path": "/deploy/receipt.json", "sha256": "3" * 64}),
+                "failure_source 是 tool-evolution／approval-revision",
+            ),
+            (dict(fix_commit="a" * 40), "不绑定修复提交或部署收据"),
+            (dict(attempt_id="attempt-a"), "不得绑定 attempt"),
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
+                recovery(**bad)
+        self.assertNotIn("approval-revision", artifacts.DIAGNOSIS_FAILURE_SOURCES)
+        self.assertIn("approval-revision", artifacts.EVALUATION_BASELINE_KINDS)
+        self.assertIn("approval-revision", ledger.EVALUATION_BASELINE_KINDS)
+        good = {
+            "capture-candidate": {"source": "reused", "baseline": 1, "path": "candidates/cand/revisions/b1/result.json", "sha256": "4" * 64},
+            "compare": {"source": "local", "target": "comparisons/cand/revisions/b2/result.json"},
+            "assertions": {"source": "local", "target": "assertions/cand/revisions/b2"},
+            "accept": {"source": "local", "target": "acceptance/cand/revisions/b2/result.json"},
+        }
+        artifacts.validate_stage_sources(good, kind="approval-revision", label="t")
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "approval-revision 基线的 capture-candidate 必须 reused"):
+            artifacts.validate_stage_sources(
+                {**good, "capture-candidate": {"source": "local", "target": "candidates/cand/revisions/b2/result.json"}},
+                kind="approval-revision", label="t",
+            )
+        record = artifacts.build_approval_revision(
+            campaign_id="campaign-r2", campaign_manifest_sha256="5" * 64, candidate_id="cand", candidate_revision=1,
+            from_baseline=1, from_baseline_commit_sha256="2" * 64, approval_revision=1,
+            previous_profile={"path": "classification/approved/assertion-profile.json", "sha256": "6" * 64},
+            revised_profile={"path": "candidates/cand/revisions/b2/assertion-profile.json", "sha256": "7" * 64},
+            classification_package_digest="8" * 64, joint_manifest_sha256="9" * 64, contract_sha256="a" * 64,
+            changed_rule_ids=["SPEC-H1-001"], changed_check_ids=["SPEC-H1-001:method-post"], evaluator_digests=DIGESTS,
+            tool_evolution_index=0, reason="selector 修正", reviewer="boss", reviewed_at_utc="2026-09-27T00:00:00Z",
+        )
+        self.assertEqual(artifacts.validate_approval_revision(record), record)
+        self.assertEqual(record["review_sha256"], artifacts.approval_revision_review_sha256({**record, "reviewer": "other"}))
+        for bad, pattern in (
+            (dict(revised_profile={"path": "x", "sha256": "6" * 64}), "没有修订"),
+            (dict(changed_rule_ids=[]), "changed_rule_ids"),
+            (dict(changed_check_ids=["SPEC-EP-006:surface-codex"]), "不在 changed_rule_ids 内"),
+            (dict(from_baseline=0), "只有 b0 前序没有 COMMIT 摘要"),
+            (dict(reason=""), "reason 非法"),
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
+                artifacts.validate_approval_revision({**record, **bad})
+
     def test_tool_evolution_recovery_and_reevaluation_contracts(self) -> None:
         """第三批 B3-3：tool-evolution 基线——failure_source 固定 tool-evolution、类别与 kind 一一对应、不绑 attempt、
         须绑定修复提交与部署收据、reuse none；诊断制品不接受该来源；stage_sources 候选证据 reused、其余 local；
@@ -358,15 +430,24 @@ class TimingLedgerEvaluationEventsTests(unittest.TestCase):
             ledger.append_event(root, event_id="c5", phase="VC-5", event_type="stage_completed", next_action="x",
                                 recorded_at_utc=self._at(minute + 1))
             self.assertIn("VC-5", ledger.phase_ledger_state(root)["completed_phases"])
+            # 第三批 R5 前置：未重开时摘要新键为空；R5 前置之前冻结的 checkpoint 收据（没有该键）仍可回放。
+            self.assertIsNone(ledger.inspect_ledger(root, now=self._at(minute + 1))["vc5_reopened_baseline"])
+            legacy = ledger.build_checkpoint(root, observed_at_utc=self._at(minute + 1))
+            legacy["summary"].pop("vc5_reopened_baseline")
+            ledger._write_once(root / "receipts" / "legacy-reopen.json", legacy)
+            self.assertEqual(ledger.replay(root, "receipts/legacy-reopen.json"), legacy)
             summary = ledger.append_event(root, event_id="ro1", event_type="evaluation_reopened", evaluation_baseline=1,
                                           baseline_commit_sha256="1" * 64, recorded_at_utc=self._at(minute + 2), **base)
             self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
             self.assertEqual(summary["current_evaluation_baseline"]["baseline_kind"], "tool-evolution")
             self.assertEqual(summary["current_evaluation_baseline"]["evaluation_baseline"], 1)
             self.assertEqual(summary["revision_phase_state"]["1"]["VC-5"], "started")
+            self.assertEqual(summary["vc5_reopened_baseline"], 1)
             self.assertNotIn("VC-5", ledger.phase_ledger_state(root)["completed_phases"])
             ledger.append_event(root, event_id="c5b", phase="VC-5", event_type="stage_completed", next_action="x",
                                 recorded_at_utc=self._at(minute + 3))
+            # 重开基线在 VC-5 再次完成后仍保留（重开后的 checkpoint／完成收据继续按它解析），直到 revision 切换。
+            self.assertEqual(ledger.inspect_ledger(root, now=self._at(minute + 3))["vc5_reopened_baseline"], 1)
             with self.assertRaisesRegex(ledger.TimingLedgerError, "必须大于当前基线"):
                 ledger.append_event(root, event_id="ro-same", event_type="evaluation_reopened", evaluation_baseline=1,
                                     baseline_commit_sha256="1" * 64, recorded_at_utc=self._at(minute + 4), **base)

@@ -151,7 +151,8 @@
                   "enum": [
                     "evaluator-only",
                     "attempt-recovery",
-                    "tool-evolution"
+                    "tool-evolution",
+                    "approval-revision"
                   ]
                 },
                 "recovery_revision": {
@@ -180,6 +181,17 @@
                   ]
                 }
               }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vc5_reopened_baseline": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
             },
             {
               "type": "null"

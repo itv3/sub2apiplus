@@ -115,7 +115,8 @@ EVENT_REVISION_FIELDS = frozenset(
     }
 )
 # 第三批 B3-3：tool-evolution 基线（评估器／证据层修好后对已有评估产出全量重评）。
-EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution")
+# 第三批 R5：approval-revision 基线（批准断言画像 selector 修正后按修订画像全量重评）。
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution", "approval-revision")
 ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
     {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
 )
@@ -1619,6 +1620,9 @@ def _summarize(
     # attempt 恢复段以 (attempt_id, ar<k>) 为键记录段状态，段 active 时阶段不得关闭。
     current_evaluation_baseline: dict[str, Any] | None = None
     attempt_recoveries: dict[str, dict[str, Any]] = {}
+    # 第三批 R5 前置：当前 revision 最近一次经 evaluation_reopened 重开 VC-5 时的评估基线号。VC-5 重开后的
+    # checkpoint 与完成收据按它落到 reopen-b<K>/ 目录，与首次完成的 write-once 制品并存；随候选 revision 切换清零。
+    vc5_reopened_baseline: int | None = None
     total_live_requests = 0
     last_time: datetime | None = None
     previous_raw: bytes | None = None
@@ -1884,6 +1888,7 @@ def _summarize(
             # 候选 revision 切换后旧候选的全部评估基线只读；新候选从 b0 开始。
             current_evaluation_baseline = None
             attempt_recoveries = {}
+            vc5_reopened_baseline = None
         elif event_type == "evaluation_reopened":
             # 第三批 B3-3／R5：VC-5 在当前 revision 已完成、VC-6 尚未开始时，凭新评估基线把 VC-5 置回进行中
             # 并切换当前基线（评估器／证据层修好后重评，或批准输入修订）。VC-6 一旦开始就不能回头。
@@ -1916,6 +1921,7 @@ def _summarize(
             active_phase = "VC-5"
             active_phase_started = recorded
             active_phase_revision = event_revision
+            vc5_reopened_baseline = baseline
             current_evaluation_baseline = {
                 "evaluation_baseline": baseline,
                 "baseline_commit_sha256": str(normalized["baseline_commit_sha256"]),
@@ -2392,6 +2398,7 @@ def _summarize(
         "current_evaluation_baseline": (
             dict(current_evaluation_baseline) if current_evaluation_baseline is not None else None
         ),
+        "vc5_reopened_baseline": vc5_reopened_baseline,
         "attempt_recoveries": {key: dict(value) for key, value in sorted(attempt_recoveries.items())},
         "head_sequence": len(raw_events),
         "head_sha256": _sha256_bytes(previous_raw),
@@ -2887,6 +2894,14 @@ def replay(root: Path, receipt_relative: str, *, project_ledger_optional: bool =
         # "无基线、无恢复段"的历史语义，出现 b≥1 或恢复段的账本必须带新字段。
         for field in legacy_evaluation_fields:
             expected_summary.pop(field)
+    if (
+        isinstance(frozen_summary, dict)
+        and "vc5_reopened_baseline" not in frozen_summary
+        and expected_summary.get("vc5_reopened_baseline") is None
+    ):
+        # 第三批 R5 前置之前冻结的 checkpoint 没有 VC-5 重开基线字段；只兼容重算结果仍为空的历史语义，
+        # 重开过 VC-5 的账本必须带新字段。
+        expected_summary.pop("vc5_reopened_baseline")
     unverified_fields: list[str] = []
     if unreachable is not None and isinstance(frozen_summary, dict):
         for field in PROJECT_DEPENDENT_SUMMARY_FIELDS:

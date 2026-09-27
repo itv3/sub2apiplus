@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-approval-revision-v1.json",
+  "title": "批准修订记录（第三批 R5：批准断言画像的 selector 修正在原 Campaign 内以 approval-revision 基线按修订画像全量重评；该基线的 recovery.diagnosis 绑定它）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "candidate_id",
+    "candidate_revision",
+    "from_baseline",
+    "from_baseline_commit_sha256",
+    "approval_revision",
+    "previous_profile",
+    "revised_profile",
+    "classification_package_digest",
+    "joint_manifest_sha256",
+    "contract_sha256",
+    "changed_rule_ids",
+    "changed_check_ids",
+    "evaluator_digests",
+    "tool_evolution_index",
+    "reason",
+    "reviewer",
+    "reviewed_at_utc",
+    "review_sha256",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-approval-revision/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "campaign_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "from_baseline": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "from_baseline_commit_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "approval_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_profile": {
+      "$ref": "#/$defs/binding"
+    },
+    "revised_profile": {
+      "$ref": "#/$defs/binding"
+    },
+    "classification_package_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "joint_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "contract_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "changed_rule_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "changed_check_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$"
+      }
+    },
+    "evaluator_digests": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "tool_evolution_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "reviewed_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluatorDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checker_sha256",
+        "builder_sha256",
+        "compare_reader_sha256",
+        "accept_reader_sha256"
+      ],
+      "properties": {
+        "checker_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "builder_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compare_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

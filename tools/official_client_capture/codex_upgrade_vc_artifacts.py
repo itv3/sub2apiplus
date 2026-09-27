@@ -44,16 +44,21 @@ ACTION_OUTPUT_BINDING_SCHEMA = "codex-upgrade-action-output-binding/v1"
 MANIFEST_PROJECTION_SCHEMA = "codex-upgrade-evidence-manifest-projection/v1"
 EFFECTIVE_RESULTS_SCHEMA = "codex-upgrade-effective-results/v1"
 # 第三批 B3-3：tool-evolution 基线——不依赖失败父 run、不计根因，全量重评；其余两种不变。
-EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution")
+# 第三批 R5：approval-revision 基线——批准断言画像的 selector 修正（第一类批准输入修订）在原 Campaign 内以新基线
+# 按修订画像全量重评；同样不是失败、不计根因。
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution", "approval-revision")
 EVALUATION_BASELINE_ROOT_CAUSE_CLASSES = {
     "evaluator-only": "evaluator-defect",
     "attempt-recovery": "transient-environment",
     "tool-evolution": "tool-evolution",
+    "approval-revision": "approval-revision",
 }
+# 不是失败产物的两种基线：recovery 的 failure_source 固定等于 kind，诊断制品不接受它们。
+NON_FAILURE_BASELINE_KINDS = ("tool-evolution", "approval-revision")
 # 失败来源只由失败父 run 的动作推出（前三者互斥）；复用授权只由 stop-receipt 的
 # action_outputs_sha256 是否为 null 决定，读侧不得以字段缺失表达语义。
-# tool-evolution 不是失败：只用于 tool-evolution 基线的 recovery，诊断制品不接受它。
-FAILURE_SOURCES = ("assertion-failed", "offline-compare-failed", "offline-accept-failed", "tool-evolution")
+# tool-evolution／approval-revision 不是失败：只用于对应基线的 recovery，诊断制品不接受它们。
+FAILURE_SOURCES = ("assertion-failed", "offline-compare-failed", "offline-accept-failed", "tool-evolution", "approval-revision")
 DIAGNOSIS_FAILURE_SOURCES = FAILURE_SOURCES[:3]
 REUSE_AUTHORITIES = ("anchored", "none")
 ROOT_CAUSE_CLASSES = (
@@ -2002,12 +2007,12 @@ def validate_stage_sources(value: Any, *, kind: str, label: str) -> dict[str, di
     elif kind == "attempt-recovery":
         if normalized["capture-candidate"]["source"] != "local" or normalized["compare"]["source"] != "local":
             raise VCArtifactError(f"{label} attempt-recovery 基线的 capture-candidate 与 compare 必须 local")
-    elif kind == "tool-evolution":
-        # 第三批 B3-3：按新工具全量重评——候选证据 reused，compare／断言／accept 全部本基线 local 重做。
+    elif kind in NON_FAILURE_BASELINE_KINDS:
+        # 第三批 B3-3／R5：按新工具或修订画像全量重评——候选证据 reused，compare／断言／accept 全部本基线 local 重做。
         if normalized["capture-candidate"]["source"] != "reused":
-            raise VCArtifactError(f"{label} tool-evolution 基线的 capture-candidate 必须 reused")
+            raise VCArtifactError(f"{label} {kind} 基线的 capture-candidate 必须 reused")
         if any(normalized[stage]["source"] != "local" for stage in ("compare", "assertions", "accept")):
-            raise VCArtifactError(f"{label} tool-evolution 基线的 compare／assertions／accept 必须 local（全量重评）")
+            raise VCArtifactError(f"{label} {kind} 基线的 compare／assertions／accept 必须 local（全量重评）")
     else:
         raise VCArtifactError(f"{label} kind 非法")
     return normalized
@@ -2131,12 +2136,17 @@ def validate_evaluation_recovery(value: Any) -> dict[str, Any]:
         raise VCArtifactError(f"{label} reuse_authority 非法")
     root_cause_class = payload.get("root_cause_class")
     if root_cause_class not in set(EVALUATION_BASELINE_ROOT_CAUSE_CLASSES.values()):
-        raise VCArtifactError(f"{label} root_cause_class 只允许 evaluator-defect／transient-environment／tool-evolution")
+        raise VCArtifactError(
+            f"{label} root_cause_class 只允许 evaluator-defect／transient-environment／tool-evolution／approval-revision"
+        )
     if EVALUATION_BASELINE_ROOT_CAUSE_CLASSES[str(kind)] != root_cause_class:
         raise VCArtifactError(f"{label} root_cause_class 与 kind 不对应")
-    # 第三批 B3-3：tool-evolution 基线不是失败产物，failure_source 固定为 tool-evolution；其他基线不得使用该来源。
-    if (kind == "tool-evolution") != (payload.get("failure_source") == "tool-evolution"):
-        raise VCArtifactError(f"{label} 只有 tool-evolution 基线的 failure_source 是 tool-evolution")
+    # 第三批 B3-3／R5：tool-evolution／approval-revision 基线不是失败产物，failure_source 固定等于 kind；其他基线不得使用这两个来源。
+    if kind in NON_FAILURE_BASELINE_KINDS:
+        if payload.get("failure_source") != kind:
+            raise VCArtifactError(f"{label} {kind} 基线的 failure_source 是 {kind}，收到 {payload.get('failure_source')}")
+    elif payload.get("failure_source") in NON_FAILURE_BASELINE_KINDS:
+        raise VCArtifactError(f"{label} 只有 tool-evolution／approval-revision 基线的 failure_source 是 tool-evolution／approval-revision")
     if not isinstance(payload.get("root_cause_id"), str) or not ROOT_CAUSE_ID_RE.fullmatch(payload["root_cause_id"]):
         raise VCArtifactError(f"{label} root_cause_id 非法")
     failed_step = payload.get("failed_step")
@@ -2172,10 +2182,15 @@ def validate_evaluation_recovery(value: Any) -> dict[str, Any]:
         if attempt_id is not None or recovery_revision is not None or execute_jobs:
             raise VCArtifactError(f"{label} evaluator-only 不得绑定 attempt、恢复段或重采 Job")
         fix_commit = payload.get("fix_commit")
-        if not isinstance(fix_commit, str) or not GIT_COMMIT_RE.fullmatch(fix_commit):
-            raise VCArtifactError(f"{label} evaluator-defect 必须绑定完整修复提交")
-        if payload.get("deployment_receipt") is None:
-            raise VCArtifactError(f"{label} evaluator-defect 必须绑定部署收据")
+        if kind == "approval-revision":
+            # 第三批 R5：批准输入修订不改工具，不绑定修复提交与部署收据。
+            if fix_commit is not None or payload.get("deployment_receipt") is not None:
+                raise VCArtifactError(f"{label} approval-revision 不绑定修复提交或部署收据")
+        else:
+            if not isinstance(fix_commit, str) or not GIT_COMMIT_RE.fullmatch(fix_commit):
+                raise VCArtifactError(f"{label} evaluator-defect 必须绑定完整修复提交")
+            if payload.get("deployment_receipt") is None:
+                raise VCArtifactError(f"{label} evaluator-defect 必须绑定部署收据")
     _optional_binding(payload.get("deployment_receipt"), f"{label} deployment_receipt")
     validate_evaluation_epoch_binding(payload.get("evaluation_epoch"), f"{label} evaluation_epoch")
     if kind == "attempt-recovery" and payload.get("evaluation_epoch") is not None:
@@ -2677,6 +2692,136 @@ def validate_evaluation_reevaluation(value: Any) -> dict[str, Any]:
         raise VCArtifactError(f"{label} reviewer 非法")
     _timestamp(payload.get("reviewed_at_utc"), f"{label} reviewed_at_utc")
     if payload.get("review_sha256") != evaluation_reevaluation_review_sha256(payload):
+        raise VCArtifactError(f"{label} review_sha256 与内容不一致")
+    _self_digest(payload, "receipt_sha256", label)
+    return payload
+
+
+APPROVAL_REVISION_SCHEMA = "codex-upgrade-approval-revision/v1"
+CHANGED_CHECK_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
+
+
+def approval_revision_review_sha256(payload: Mapping[str, Any]) -> str:
+    """批准修订记录的批准摘要：预览与 apply 共用，不含审核人、时间与两个摘要字段。"""
+
+    return digest(
+        {k: v for k, v in payload.items() if k not in {"reviewer", "reviewed_at_utc", "review_sha256", "receipt_sha256"}}
+    )
+
+
+def build_approval_revision(
+    *,
+    campaign_id: str,
+    campaign_manifest_sha256: str,
+    candidate_id: str,
+    candidate_revision: int,
+    from_baseline: int,
+    from_baseline_commit_sha256: str | None,
+    approval_revision: int,
+    previous_profile: Mapping[str, Any],
+    revised_profile: Mapping[str, Any],
+    classification_package_digest: str,
+    joint_manifest_sha256: str,
+    contract_sha256: str,
+    changed_rule_ids: Sequence[str],
+    changed_check_ids: Sequence[str],
+    evaluator_digests: Mapping[str, Any],
+    tool_evolution_index: int,
+    reason: str,
+    reviewer: str,
+    reviewed_at_utc: str,
+) -> dict[str, Any]:
+    """第三批 R5：批准断言画像 selector 修正的批准记录（write-once；apply 复算 review_sha256）。
+
+    记录修订前后画像的逐字摘要、批准包身份（package digest 与联合摘要不变）、验收契约摘要（不变，证明只改了
+    契约外的 selector／assertion 字段）、逐规则／逐 check 的变化闭集与当前评估器口径；approval-revision 基线的
+    recovery.diagnosis 绑定它。
+    """
+
+    payload: dict[str, Any] = {
+        "schema_version": APPROVAL_REVISION_SCHEMA,
+        "campaign_id": campaign_id,
+        "campaign_manifest_sha256": campaign_manifest_sha256,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "from_baseline": from_baseline,
+        "from_baseline_commit_sha256": from_baseline_commit_sha256,
+        "approval_revision": approval_revision,
+        "previous_profile": dict(previous_profile),
+        "revised_profile": dict(revised_profile),
+        "classification_package_digest": classification_package_digest,
+        "joint_manifest_sha256": joint_manifest_sha256,
+        "contract_sha256": contract_sha256,
+        "changed_rule_ids": sorted(set(changed_rule_ids)),
+        "changed_check_ids": sorted(set(changed_check_ids)),
+        "evaluator_digests": dict(evaluator_digests),
+        "tool_evolution_index": tool_evolution_index,
+        "reason": reason,
+        "reviewer": reviewer,
+        "reviewed_at_utc": reviewed_at_utc,
+    }
+    payload["review_sha256"] = approval_revision_review_sha256(payload)
+    payload["receipt_sha256"] = digest(payload)
+    return validate_approval_revision(payload)
+
+
+def validate_approval_revision(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "campaign_manifest_sha256", "candidate_id", "candidate_revision",
+        "from_baseline", "from_baseline_commit_sha256", "approval_revision", "previous_profile", "revised_profile",
+        "classification_package_digest", "joint_manifest_sha256", "contract_sha256", "changed_rule_ids",
+        "changed_check_ids", "evaluator_digests", "tool_evolution_index", "reason", "reviewer", "reviewed_at_utc",
+        "review_sha256", "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("批准修订记录字段不闭合")
+    payload = dict(value)
+    label = "批准修订记录"
+    if payload.get("schema_version") != APPROVAL_REVISION_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _safe_id(payload.get("campaign_id"), f"{label} campaign_id")
+    _sha256(payload.get("campaign_manifest_sha256"), f"{label} campaign_manifest_sha256")
+    _safe_id(payload.get("candidate_id"), f"{label} candidate_id")
+    _positive_int(payload.get("candidate_revision"), f"{label} candidate_revision")
+    from_baseline = _non_negative_int(payload.get("from_baseline"), f"{label} from_baseline")
+    from_commit = _optional_sha256(payload.get("from_baseline_commit_sha256"), f"{label} from_baseline_commit_sha256")
+    if (from_baseline == 0) != (from_commit is None):
+        raise VCArtifactError(f"{label} 只有 b0 前序没有 COMMIT 摘要")
+    _positive_int(payload.get("approval_revision"), f"{label} approval_revision")
+    previous = _binding(payload.get("previous_profile"), f"{label} previous_profile")
+    revised = _binding(payload.get("revised_profile"), f"{label} revised_profile")
+    if previous["sha256"] == revised["sha256"]:
+        raise VCArtifactError(f"{label} 修订前后画像摘要相同，没有修订")
+    _sha256(payload.get("classification_package_digest"), f"{label} classification_package_digest")
+    _sha256(payload.get("joint_manifest_sha256"), f"{label} joint_manifest_sha256")
+    _sha256(payload.get("contract_sha256"), f"{label} contract_sha256")
+    rules = payload.get("changed_rule_ids")
+    if (
+        not isinstance(rules, list)
+        or not rules
+        or rules != sorted(set(rules))
+        or any(not isinstance(rule, str) or not rule for rule in rules)
+    ):
+        raise VCArtifactError(f"{label} changed_rule_ids 必须是非空、排序去重的规则 id 列表")
+    checks = payload.get("changed_check_ids")
+    if (
+        not isinstance(checks, list)
+        or checks != sorted(set(checks))
+        or any(not isinstance(check, str) or not CHANGED_CHECK_ID_RE.fullmatch(check) for check in checks)
+    ):
+        raise VCArtifactError(f"{label} changed_check_ids 必须是排序去重的 rule:check 列表")
+    if any(check.split(":", 1)[0] not in rules for check in checks):
+        raise VCArtifactError(f"{label} changed_check_ids 引用了不在 changed_rule_ids 内的规则")
+    validate_evaluator_digests(payload.get("evaluator_digests"), f"{label} evaluator_digests")
+    _non_negative_int(payload.get("tool_evolution_index"), f"{label} tool_evolution_index")
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+        raise VCArtifactError(f"{label} reason 非法")
+    reviewer = payload.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer or len(reviewer) > 128:
+        raise VCArtifactError(f"{label} reviewer 非法")
+    _timestamp(payload.get("reviewed_at_utc"), f"{label} reviewed_at_utc")
+    if payload.get("review_sha256") != approval_revision_review_sha256(payload):
         raise VCArtifactError(f"{label} review_sha256 与内容不一致")
     _self_digest(payload, "receipt_sha256", label)
     return payload
