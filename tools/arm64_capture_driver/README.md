@@ -22,7 +22,10 @@
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
-2. 采集主机：`ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练。新目标首次取证按指南
+2. 采集主机：先 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/pre-a3.sh`（策略兼容／激活认证与 pre-A3 路径认证；同一部署、
+   同一激活认证、工具身份未变时复用最近一次认证，不重跑约 55 分钟的 pre-A3），再
+   `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
+   （账本一建 VC-0 即开始计时，pre-A3 放在其后必然超时）。新目标首次取证按指南
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
    closeout 编排必须先执行 `client_launch_probe.py verify --output-dir "$PROBE" --campaign-dir "$PRE"`（坐标取自
    `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
@@ -50,8 +53,10 @@
 * 验收参数：`--test-mutation untrust:<目录>`／`unack_migration:<模型>` 只改覆盖层里的 config.toml 副本，
   `--only-scenario` 只探测指定场景；带这两类参数的报告一律不能作为放行依据。
 3. 本机：候选提交链（A／C／D 三段，见 `driver/local/`）→ `git bundle` 推到 `$BUNDLE`。
-4. 采集主机：`setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`；本机同时跑
-   `driver/local/local-gate.sh` 与 `local-full-regression.sh`，产物由 `local-upload.sh` 上传到 `$RUNROOT/`。
+4. 采集主机：`setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`；本机执行
+   `bash driver/local/local-vc4.sh <ROUND> <C> <DC> <RECEIPT> <输出根> $RUNROOT`：门禁一开始就向采集主机发上传心跳，
+   `local-gate.sh`（check-egress-spec）与 `local-full-regression.sh`（make test）都完成后由 `local-upload.sh` 上传到
+   `$RUNROOT/`。此前心跳要到上传才开始，本机门禁一旦超过 300 秒，vc4-all.sh 就因"上传心跳一直缺失"退出。
 5. 采集主机：`setsid -f bash driver/vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null`。
 
 ## 每轮身份与批准集合

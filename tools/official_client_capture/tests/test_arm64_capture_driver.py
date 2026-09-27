@@ -916,5 +916,88 @@ class DynamicDriverGateTests(unittest.TestCase):
             catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
 
 
+class LocalVc4HeartbeatTests(unittest.TestCase):
+    """修好接着跑第 20 项：本机门禁一开始就向采集主机发上传心跳，门禁与全量回归都完成才上传。
+
+    此前心跳要到 local-upload.sh 才开始，本机门禁一旦超过 300 秒，vc4-all.sh 就因"上传心跳一直缺失"退出。
+    这里用假 ssh 与假门禁脚本记录事件顺序（心跳间隔调成 1 秒），不连任何主机。
+    """
+
+    def test_heartbeat_starts_before_gates_and_upload_waits_for_both(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local"
+            local.mkdir()
+            shutil.copy(SCRIPTS / "local" / "local-vc4.sh", local / "local-vc4.sh")
+            events = root / "events.log"
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            scripts = {
+                fake_bin / "ssh": f'#!/bin/bash\necho "ssh ${{@: -1}}" >> "{events}"\n',
+                local / "local-gate.sh": (
+                    f'#!/bin/bash\necho "gate-start" >> "{events}"\n'
+                    'rm -rf "$5/local-gates" "$5/impl-logs"; mkdir -p "$5/local-gates" "$5/impl-logs/cross-check"\n'
+                    f'sleep 3\necho "gate-end" >> "{events}"\n'
+                ),
+                local / "local-full-regression.sh": (
+                    f'#!/bin/bash\n[ -d "$2/impl-logs/cross-check" ] && echo "regression-start dir-ready" >> "{events}" '
+                    f'|| echo "regression-start dir-missing" >> "{events}"\nsleep 1\necho "regression-end" >> "{events}"\n'
+                ),
+                local / "local-upload.sh": f'#!/bin/bash\necho "upload" >> "{events}"\n',
+            }
+            for path, text in scripts.items():
+                path.write_text(text, encoding="utf-8")
+                path.chmod(0o700)
+            environment = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", LOCAL_VC4_HEARTBEAT_SECONDS="1")
+            result = subprocess.run(
+                ["bash", str(local / "local-vc4.sh"), "r1", "c" * 40, "d" * 40, "receipt.json", str(root / "out"), "/root/vc-rounds/t"],
+                env=environment, capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("LOCAL_VC4_DONE", result.stdout)
+            lines = events.read_text(encoding="utf-8").splitlines()
+            kinds = [line.split()[0] for line in lines]
+            # 第一件事就是建远端目录、清 READY 并 touch 心跳，早于门禁开始。
+            self.assertEqual(kinds[0], "ssh")
+            self.assertIn("HEARTBEAT", lines[0])
+            self.assertIn("rm -f", lines[0])
+            gate_start, gate_end = kinds.index("gate-start"), kinds.index("gate-end")
+            # 门禁进行中持续有心跳。
+            self.assertTrue(any(kind == "ssh" for kind in kinds[gate_start:gate_end]), lines)
+            # 全量回归在门禁清空并重建输出目录之后才启动（否则产物会被清掉）。
+            self.assertIn("regression-start dir-ready", lines)
+            # 上传在门禁与全量回归都结束之后；交接后包装自身的心跳已停（至多一条恰在停止时发出的）。
+            upload = kinds.index("upload")
+            self.assertGreater(upload, gate_end)
+            self.assertGreater(upload, kinds.index("regression-end"))
+            self.assertLessEqual(sum(1 for kind in kinds[upload + 1:] if kind == "ssh"), 1)
+
+    def test_rejects_unsafe_remote_root(self) -> None:
+        for runroot in ("/", "/root", "relative/path", "/root/../etc", "/root/x;rm"):
+            with self.subTest(runroot=runroot):
+                # PATH 指向不存在的目录：校验失败必须发生在任何 ssh 之前（bash 用绝对路径启动）。
+                result = subprocess.run(
+                    [shutil.which("bash") or "/bin/bash", str(SCRIPTS / "local" / "local-vc4.sh"), "r1", "c", "d", "r.json", "/tmp/out", runroot],
+                    capture_output=True, text=True, timeout=30, env=dict(os.environ, PATH="/nonexistent"),
+                )
+                self.assertEqual(result.returncode, 3)
+
+
+class PreA3OrderingTests(unittest.TestCase):
+    """修好接着跑第 18、19 项：pre-A3 认证在 stage1 建账本之前完成；stage1 建账本前按复用同一口径核验本轮认证。"""
+
+    def test_stage1_checks_certification_before_ledger_and_pre_a3_never_opens_a_ledger(self) -> None:
+        stage1 = (SCRIPTS / "stage1.sh").read_text(encoding="utf-8")
+        check = stage1.index("codex_upgrade_pre_a3_certification find-reusable --certification")
+        self.assertLess(check, stage1.index("codex_upgrade_zero_request_smoke"))
+        self.assertLess(check, stage1.index("codex_upgrade_timing_ledger create"))
+        pre_a3 = (SCRIPTS / "pre-a3.sh").read_text(encoding="utf-8")
+        self.assertIn("find-reusable --search-root", pre_a3)
+        self.assertIn("find-reusable --certification", pre_a3)
+        self.assertNotIn("codex_upgrade_timing_ledger", pre_a3)
+        # 复用或新跑之后按 stage1 同一口径复核本轮坐标。
+        self.assertLess(pre_a3.index("pre_a3_certification run"), pre_a3.rindex("find-reusable --certification"))
+
+
 if __name__ == "__main__":
     unittest.main()

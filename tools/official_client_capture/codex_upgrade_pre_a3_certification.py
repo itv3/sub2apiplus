@@ -619,6 +619,44 @@ def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | N
     return payload
 
 
+def find_reusable_certification(
+    *,
+    deployment_receipt: Path,
+    policy_activation: Path,
+    search_root: Path | None = None,
+    certification: Path | None = None,
+) -> Path | None:
+    """可复用的 pre-A3 认证（修好接着跑第 19 项）。
+
+    每次重建 Campaign 都重跑约 55 分钟的 pre-A3，而工具身份没变。认证可复用当且仅当：收据通过
+    ``verify_certification``（自摘要、五摘要等于当前工具身份、零请求）、真实链登记集合等于当前发布包、
+    绑定的部署收据与激活认证都与本次逐字相同（同一部署）。``certification`` 给出时只核验该份（stage1
+    建账本前的门禁，修好接着跑第 18 项）；否则在 ``search_root`` 下取认证时间最近的一份。
+    """
+
+    identity = policy_certification.current_identity()
+    deployment_sha256 = codex_upgrade.file_sha256(Path(deployment_receipt))
+    activation_sha256 = codex_upgrade.file_sha256(Path(policy_activation))
+    candidates = [Path(certification)] if certification is not None else sorted(Path(search_root).glob("*.json"))
+    best: tuple[str, Path] | None = None
+    for path in candidates:
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            payload = verify_certification(path, expected_identity=identity)
+            real_chain_coverage(payload)
+        except (CertificationError, policy_certification.PolicyCertificationError, OSError, ValueError):
+            continue
+        if (payload.get("deployment_receipt") or {}).get("sha256") != deployment_sha256:
+            continue
+        if (payload.get("policy_activation") or {}).get("sha256") != activation_sha256:
+            continue
+        key = str(payload.get("certified_at_utc"))
+        if best is None or key > best[0]:
+            best = (key, path)
+    return best[1] if best is not None else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="A2.5：pre-A3 路径认证。")
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -630,6 +668,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", type=Path, required=True)
     verify = subparsers.add_parser("verify", help="只读校验收据对当前工具是否有效")
     verify.add_argument("--certification", type=Path, required=True)
+    reusable = subparsers.add_parser(
+        "find-reusable",
+        help="同一部署、同一激活认证、工具身份未变时可复用的认证：找到打印路径并退出 0，否则退出 1",
+    )
+    scope = reusable.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--search-root", type=Path, help="在该目录下找认证时间最近的可复用认证")
+    scope.add_argument("--certification", type=Path, help="只核验这一份认证对本次部署是否有效")
+    reusable.add_argument("--deployment-receipt", type=Path, required=True)
+    reusable.add_argument("--policy-activation", type=Path, required=True)
     return parser
 
 
@@ -653,6 +700,18 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
             return 0 if receipt["status"] == "passed" else 2
+        if arguments.action == "find-reusable":
+            found = find_reusable_certification(
+                deployment_receipt=arguments.deployment_receipt,
+                policy_activation=arguments.policy_activation,
+                search_root=arguments.search_root,
+                certification=arguments.certification,
+            )
+            if found is None:
+                print("没有对本次部署与激活认证有效、工具身份未变的 pre-A3 认证。", file=sys.stderr)
+                return 1
+            print(found)
+            return 0
         payload = verify_certification(arguments.certification)
         print(json.dumps({"status": "valid", "scenario_count": payload["scenario_count"]}, ensure_ascii=False))
         return 0

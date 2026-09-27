@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 52,
+  "file_count": 54,
   "files": [
     {
       "path": "README.md",
-      "sha256": "27a20403ede2215e986db5bbca4d9a6d613246aa5cf82a121da5d692ed9e23a7",
+      "sha256": "0f9da2ef94e1cae502c970cf816c65f71697e474771229ac4314d3b2c122c6ce",
       "mode": "0600",
-      "bytes": 12091
+      "bytes": 12762
     },
     {
       "path": "driver/build.sh",
@@ -52,9 +52,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "78420c036241a792d83eac26e6b8052b705dc8256f18dc027b980912b77a58a8",
+      "sha256": "4e13ee36946fc5382bef5ac9f638eb34ff7da0fc37ca60271db25af1dbc47f49",
       "mode": "0700",
-      "bytes": 4099
+      "bytes": 4229
     },
     {
       "path": "driver/frontend.sh",
@@ -135,10 +135,22 @@
       "bytes": 2034
     },
     {
+      "path": "driver/local/local-vc4.sh",
+      "sha256": "417a37fd24e323630f11fd729bee303038d9b711580af8f1e8518008f9828ad7",
+      "mode": "0700",
+      "bytes": 3951
+    },
+    {
       "path": "driver/parse_env.py",
       "sha256": "9dc0c53dc485143a171f10bcb56d9aab1b7a84f8a024115117c8d79a1c0e5828",
       "mode": "0700",
       "bytes": 8986
+    },
+    {
+      "path": "driver/pre-a3.sh",
+      "sha256": "6066d9663251299571ce2ba7b9743783453cb792c32fd6c5603900f94a9705b6",
+      "mode": "0700",
+      "bytes": 2531
     },
     {
       "path": "driver/pre-all.sh",
@@ -154,9 +166,9 @@
     },
     {
       "path": "driver/stage1.sh",
-      "sha256": "a3c8421714d3f8d6eb40edaafaa7bb53f07aaabd8a2e38d8df8813e5eacdecff",
+      "sha256": "e2748f383842279f8f9fd6141aaedc1df26a70def66cf25e7290d454992cc084",
       "mode": "0700",
-      "bytes": 5485
+      "bytes": 6182
     },
     {
       "path": "driver/stage2.sh",
@@ -315,5 +327,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "1f097f506d052c1623d5715ee3bd22c8d1ea61e948908b13e2641eb155025fc1"
+  "manifest_sha256": "b8040847be8d34b63f1f424f5cf4571969f4254da55eef2147589a28c7557e1a"
 }

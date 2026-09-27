@@ -1,5 +1,5 @@
 #!/bin/bash
-# 前阶段 1：派发前检查（pre-plan）→ 零请求 smoke → 新账本（总预算按项目总账绝对截止设上限，留 5 分钟余量）
+# 前阶段 1（先跑 pre-a3.sh）：派发前检查（pre-plan）→ 本轮 pre-A3 认证核验 → 零请求 smoke → 新账本（总预算按项目总账绝对截止设上限，留 5 分钟余量）
 #   → ARM64 环境收据（p0）→ 账本 checkpoint → preflight plan → 写 stage1.partial.env
 #   → stage1-finish.sh（Job 演练收据 → 客户端启动探测 → atomic-double 收据 → 写 stage1.env）。
 # 全部参数来自 $ARM64_VC_ENV；产物坐标写入 $RUNROOT/stage1.env 供 stage2 使用。
@@ -21,6 +21,10 @@ print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])
 PYDEPLOY
 )
 python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print({k:d.get(k) for k in (\"status\",\"policy_version\",\"tool_files_sha256\",\"control_sha256\",\"wire_producer_sha256\",\"evidence_semantics_sha256\")})" "$DEPLOY"
+# 修好接着跑第 18 项：建账本（VC-0 开始计时）之前必须已有对当前部署有效的 pre-A3 认证——约 55 分钟的 pre-A3
+# 放在账本之后必然超时。缺失即拒绝：先执行 pre-a3.sh（同一部署、工具身份未变时复用最近一次认证）。
+python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null \
+  || { echo "缺少对当前部署有效的 pre-A3 认证：先执行 pre-a3.sh（ARM64_VC_ENV 同本轮），再重跑 stage1"; exit 3; }
 python3 -m tools.official_client_capture.codex_upgrade_zero_request_smoke --staging-root "$D/staging/zero-request-smoke-$STAMP" --output "$D/audit/zero-request-smoke-$STAMP.json" | cut -c1-200
 # 总预算按项目总账绝对截止设上限（v14 教训：360 分钟到期停线；叫停也计时），留 5 分钟余量
 TOTAL=$(python3 -c "

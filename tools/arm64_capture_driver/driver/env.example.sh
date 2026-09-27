@@ -61,6 +61,7 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # TARGET_PACKAGE=$D/official/codex-$TARGET_VERSION/assets/codex-package-aarch64-unknown-linux-musl.tar.gz
 # ACTIVE_PROFILE=$D/control/$IN/baseline-profile.json
 # PREVIOUS_POLICY=$D/control/policy-certification/REPLACE_PREVIOUS_POLICY.json
+# 默认 $D/control/policy-certification/pre-a3-path-certification-$STAMP.json，由 pre-a3.sh 生成或复用（stage1 前）。
 # PRE_A3_CERTIFICATION=$D/control/policy-certification/REPLACE_PRE_A3.json
 # 本机候选提交链要求本轮完整、已绑定 VC-3 需求的映射；canonical 要求明确退役版本。
 # GATE_MAPPING_INPUT=/absolute/local/path/gate-mapping.json

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import tempfile
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
 from tools.official_client_capture.tests import project_ledger_fixture
@@ -148,6 +150,89 @@ class PreA3CertificationTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(certification.CertificationError, "staging 目录树内"):
                 certification.run_certification(root / "outside", deployment_receipt=deployment, policy_activation=activation, scenarios=())
+
+
+class PreA3CertificationReuseTests(unittest.TestCase):
+    """修好接着跑第 18、19 项：同一部署、同一激活认证、工具身份未变时复用最近一次认证；stage1 按同一口径核验。"""
+
+    def _receipt(self, root: Path, name: str, *, deployment: Path, activation: Path, certified_at: str, identity: dict | None = None) -> Path:
+        current = policy_certification.current_identity()
+        payload = {
+            "schema_version": certification.SCHEMA_VERSION,
+            "status": "passed",
+            "certified_at_utc": certified_at,
+            "fixture_only": True,
+            "identity": identity or {field: current[field] for field in policy_certification.IDENTITY_FIELDS},
+            "policy_version": current["policy_version"],
+            "deployment_receipt": {"path": str(deployment), "sha256": codex_upgrade.file_sha256(deployment)},
+            "policy_activation": {"path": str(activation), "sha256": codex_upgrade.file_sha256(activation)},
+            "real_chain_registration": certification.real_chain_registration(),
+            "scenarios": [
+                {"name": item["id"], "test": item["test"], "status": "passed"} for item in certification.real_chain_registration()
+            ],
+            "network_attempts": 0,
+            "live_request_count": 0,
+        }
+        payload["receipt_sha256"] = certification._fingerprint(payload)
+        path = root / name
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def test_reuse_requires_same_deployment_activation_and_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = root / "policy-certification"
+            store.mkdir()
+            deployment = root / "deploy.json"
+            deployment.write_text('{"status": "passed"}\n', encoding="utf-8")
+            activation = root / "activation.json"
+            activation.write_text('{"activation": 1}\n', encoding="utf-8")
+            other_deployment = root / "deploy-2.json"
+            other_deployment.write_text('{"status": "passed", "n": 2}\n', encoding="utf-8")
+            older = self._receipt(store, "a.json", deployment=deployment, activation=activation, certified_at="2026-09-27T01:00:00Z")
+            newer = self._receipt(store, "b.json", deployment=deployment, activation=activation, certified_at="2026-09-27T02:00:00Z")
+            self._receipt(store, "c.json", deployment=other_deployment, activation=activation, certified_at="2026-09-27T03:00:00Z")
+            stale = dict(policy_certification.current_identity())
+            stale_identity = {field: stale[field] for field in policy_certification.IDENTITY_FIELDS}
+            stale_identity[policy_certification.IDENTITY_FIELDS[0]] = "0" * 64
+            self._receipt(store, "d.json", deployment=deployment, activation=activation, certified_at="2026-09-27T04:00:00Z", identity=stale_identity)
+            (store / "not-a-receipt.json").write_text("{}\n", encoding="utf-8")
+            found = certification.find_reusable_certification(
+                deployment_receipt=deployment, policy_activation=activation, search_root=store
+            )
+            # 最新一份绑定别的部署、再新一份工具身份已变：都不复用，取同一部署下最近的一份。
+            self.assertEqual(found, newer)
+            self.assertEqual(
+                certification.find_reusable_certification(
+                    deployment_receipt=deployment, policy_activation=activation, certification=older
+                ),
+                older,
+            )
+            self.assertIsNone(
+                certification.find_reusable_certification(
+                    deployment_receipt=other_deployment, policy_activation=activation, certification=older
+                )
+            )
+            other_activation = root / "activation-2.json"
+            other_activation.write_text('{"activation": 2}\n', encoding="utf-8")
+            self.assertIsNone(
+                certification.find_reusable_certification(
+                    deployment_receipt=deployment, policy_activation=other_activation, search_root=store
+                )
+            )
+            # 命令行：找到打印路径退出 0；没有则退出 1。
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(
+                    certification.main(["find-reusable", "--search-root", str(store), "--deployment-receipt", str(deployment), "--policy-activation", str(activation)]),
+                    0,
+                )
+            self.assertEqual(stdout.getvalue().strip(), str(newer))
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                self.assertEqual(
+                    certification.main(["find-reusable", "--certification", str(older), "--deployment-receipt", str(deployment), "--policy-activation", str(other_activation)]),
+                    1,
+                )
 
 
 if __name__ == "__main__":
