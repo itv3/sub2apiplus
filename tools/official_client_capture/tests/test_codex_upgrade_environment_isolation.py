@@ -94,7 +94,19 @@ class IsolatedSourceRecoveryScopeTests(unittest.TestCase):
     PLANNED = ("a", "b", "c")
     ISOLATION = {"index": 1, "isolation_sha256": "9" * 64}
 
-    def _scope(self, *, status: str, isolation: dict | None) -> dict:
+    @staticmethod
+    def _result(job_id: str, finished_at_epoch: float | None = None) -> dict:
+        """已完成作业结果；给出完成时刻即附带出口时段绑定（第三批 B3-14 的窗口判定读它）。"""
+
+        item = {"id": job_id, "execution_sha256": job_id * 64, "status": "complete", "required": True}
+        if finished_at_epoch is not None:
+            item["runtime_egress"] = {
+                "schema_version": "codex-upgrade-job-egress/v1", "run_dir": "/run", "campaign_id": "c", "owner_nonce": "n" * 64,
+                "started_at_epoch": finished_at_epoch - 10.0, "finished_at_epoch": finished_at_epoch,
+            }
+        return item
+
+    def _scope(self, *, status: str, isolation: dict | None, results: list[dict] | None = None, egress_trusted: bool = True) -> dict:
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir = Path(directory)
             (campaign_dir / "campaign.json").write_text("{}\n", encoding="utf-8")
@@ -110,15 +122,14 @@ class IsolatedSourceRecoveryScopeTests(unittest.TestCase):
                 "run_nonce": "1" * 64,
                 "attempt_digest": "2" * 64,
                 # a、b 已完成，c 未执行（pending）。
-                "results": [
-                    {"id": job_id, "execution_sha256": job_id * 64, "status": "complete", "required": True}
-                    for job_id in ("a", "b")
-                ],
+                "results": results if results is not None else [self._result(job_id) for job_id in ("a", "b")],
                 "job_checkpoint": {"path": "checkpoints", "record_count": 2, "last_sequence": 2, "last_sha256": "3" * 64},
             }
             store = mock.Mock()
             store.records.return_value = [1, 2]
-            with mock.patch.multiple(
+            with mock.patch.object(
+                codex_upgrade.codex_upgrade_supervisor, "job_egress_trusted", return_value=egress_trusted
+            ), mock.patch.multiple(
                 codex_upgrade,
                 _attempt_isolation_receipt=mock.Mock(return_value=isolation),
                 _load_capture_reservation=mock.Mock(return_value={
@@ -148,7 +159,11 @@ class IsolatedSourceRecoveryScopeTests(unittest.TestCase):
                 self.assertEqual(scope["pending_job_ids"], ["c"])
                 self.assertEqual(
                     scope["environment_isolation"],
-                    {"isolation_index": 1, "isolation_sha256": "9" * 64, "invalidated_job_ids": ["a", "b"]},
+                    {
+                        "isolation_index": 1, "isolation_sha256": "9" * 64, "invalidated_job_ids": ["a", "b"],
+                        # 无窗口：没有污染前可复用的作业。
+                        "contamination_started_at_utc": None, "reused_job_ids": [],
+                    },
                 )
                 self.assertEqual(scope["environment_boundary_sha256"], "9" * 64)
                 # 闭集不变式：隔离作废作业与失败／未执行作业一起恰好构成执行闭集。
@@ -160,6 +175,65 @@ class IsolatedSourceRecoveryScopeTests(unittest.TestCase):
                         scope=scope, planned_jobs=[SimpleNamespace(job_id=job_id) for job_id in self.PLANNED],
                     )
                 self.assertEqual((completed, execute), (set(), {"a", "b", "c"}))
+
+    def test_windowed_isolation_reuses_jobs_finished_before_contamination(self) -> None:
+        """第三批 B3-14（R3 污染部分）：隔离收据带污染发生时刻——之前完成且出口绑定可核验的作业保留复用、之后的重跑；
+        缺出口绑定或绑定不可核验一律重跑；闭集不变式要求 completed 恰好等于 reused，篡改即拒。"""
+
+        window = "2026-09-27T10:00:00Z"
+        window_epoch = codex_upgrade._rfc3339_datetime(window, "t").timestamp()
+        isolation = dict(self.ISOLATION, contamination_started_at_utc=window)
+        planned = {"planned_jobs": [{"id": job_id, "execution_sha256": job_id * 64} for job_id in self.PLANNED]}
+        scope = self._scope(
+            status="environment_contaminated", isolation=isolation,
+            results=[self._result("a", window_epoch - 60), self._result("b", window_epoch + 60)],
+        )
+        self.assertEqual((scope["completed_job_ids"], scope["execute_job_ids"], scope["pending_job_ids"]), (["a"], ["b", "c"], ["c"]))
+        self.assertEqual(
+            scope["environment_isolation"],
+            {
+                "isolation_index": 1, "isolation_sha256": "9" * 64, "invalidated_job_ids": ["b"],
+                "contamination_started_at_utc": window, "reused_job_ids": ["a"],
+            },
+        )
+        self.assertEqual(scope["environment_boundary_sha256"], "9" * 64)
+        with mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value=planned), mock.patch.object(
+            codex_upgrade, "_job_execution_sha256", side_effect=lambda job: job.job_id * 64
+        ):
+            completed, execute = codex_upgrade._validate_recovery_scope_plan(
+                Path("/nonexistent"), phase="candidate", candidate_id="cand", source_root=Path("/nonexistent"),
+                scope=scope, planned_jobs=[SimpleNamespace(job_id=job_id) for job_id in self.PLANNED],
+            )
+            self.assertEqual((completed, execute), ({"a"}, {"b", "c"}))
+            for tampered in (
+                dict(scope, environment_isolation=dict(scope["environment_isolation"], reused_job_ids=[])),
+                dict(scope, environment_isolation=dict(scope["environment_isolation"], contamination_started_at_utc=None)),
+                dict(scope, completed_job_ids=["a", "b"], execute_job_ids=["c"],
+                     environment_isolation=dict(scope["environment_isolation"], invalidated_job_ids=[])),
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "environment_isolation 作废作业非法"):
+                    codex_upgrade._validate_recovery_scope_plan(
+                        Path("/nonexistent"), phase="candidate", candidate_id="cand", source_root=Path("/nonexistent"),
+                        scope=tampered, planned_jobs=[SimpleNamespace(job_id=job_id) for job_id in self.PLANNED],
+                    )
+        # 缺出口绑定（a）或绑定不可核验（b，job_egress_trusted 为假）：全部重跑。
+        scope = self._scope(
+            status="environment_contaminated", isolation=isolation,
+            results=[self._result("a"), self._result("b", window_epoch - 60)], egress_trusted=False,
+        )
+        self.assertEqual((scope["completed_job_ids"], scope["execute_job_ids"]), ([], ["a", "b", "c"]))
+        self.assertEqual(scope["environment_isolation"]["reused_job_ids"], [])
+        self.assertEqual(scope["environment_isolation"]["invalidated_job_ids"], ["a", "b"])
+        # 判定函数本身：缺绑定、核验抛错、完成时刻不早于窗口都为假。
+        self.assertFalse(codex_upgrade._job_finished_before(self._result("a"), window_epoch))
+        with mock.patch.object(codex_upgrade.codex_upgrade_supervisor, "job_egress_trusted", return_value=True):
+            self.assertTrue(codex_upgrade._job_finished_before(self._result("a", window_epoch - 1), window_epoch))
+            self.assertFalse(codex_upgrade._job_finished_before(self._result("a", window_epoch), window_epoch))
+        with mock.patch.object(
+            codex_upgrade.codex_upgrade_supervisor, "job_egress_trusted",
+            side_effect=codex_upgrade.codex_upgrade_supervisor.SupervisorError("父 run 记录缺失"),
+        ):
+            self.assertFalse(codex_upgrade._job_finished_before(self._result("a", window_epoch - 1), window_epoch))
 
     def test_unisolated_contaminated_source_is_refused(self) -> None:
         with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "只有 failed attempt"):

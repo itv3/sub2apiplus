@@ -21187,6 +21187,37 @@ class CodexUpgradeTest(unittest.TestCase):
                 preview["invalidated_attempts"],
                 [{"phase": "official", "candidate_id": None, "attempt_id": attempt_id, "recovery_revision": None}],
             )
+            # 文本修复收据没有污染发生时刻：无窗口（隔离作废 attempt 的已完成作业全部重跑）。
+            self.assertIsNone(preview["contamination_started_at_utc"])
+            # 第三批 B3-14：JSON 修复收据可给出污染发生时刻——晚于最早发现、不晚于被作废 attempt 预约时刻各拒；
+            # 落在（预约，发现）之间即冻结进预览。
+            official_attempt = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
+            reservation_started = codex_upgrade._rfc3339_datetime(
+                json.loads((official_attempt / "reservation.json").read_text(encoding="utf-8"))["started_at_utc"], "预约"
+            )
+
+            def windowed(name: str, started_at: str) -> Path:
+                path = root / f"repair-{name}.json"
+                path.write_text(json.dumps({"summary": "重建网关状态", "contamination_started_at_utc": started_at}), encoding="utf-8")
+                return path
+
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "最早发现时刻"):
+                codex_upgrade._environment_isolate_command(
+                    arguments(clean, environment_repair_receipt=windowed("late", codex_upgrade._utc_now()))
+                )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不晚于被作废 attempt"):
+                codex_upgrade._environment_isolate_command(arguments(
+                    clean,
+                    environment_repair_receipt=windowed(
+                        "early", reservation_started.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    ),
+                ))
+            valid_window = (reservation_started + timedelta(milliseconds=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            windowed_preview = codex_upgrade._environment_isolate_command(
+                arguments(clean, environment_repair_receipt=windowed("valid", valid_window))
+            )
+            self.assertEqual(windowed_preview["contamination_started_at_utc"], valid_window)
+            self.assertNotEqual(windowed_preview["review_sha256"], preview["review_sha256"])
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "批准摘要与重算"):
                 codex_upgrade._environment_isolate_command(arguments(clean, approve_sha256="0" * 64, approved_by="老板"))
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "--approved-by"):
@@ -21202,6 +21233,8 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [])
             copy = campaign_dir / "control" / "environment" / f"repair-{codex_upgrade.file_sha256(repair)}"
             self.assertEqual(copy.read_bytes(), repair.read_bytes())
+            # 文本修复收据隔离：收据登记无窗口（全部重跑），且收据链能重放该字段。
+            self.assertIsNone(codex_upgrade._environment_isolations(campaign_dir)[0]["contamination_started_at_utc"])
             codex_upgrade._reject_contaminated_campaign(campaign_dir)
             # 状态：被作废的 attempt 按失败 attempt 续跑。
             status = codex_upgrade.campaign_status(campaign_dir)

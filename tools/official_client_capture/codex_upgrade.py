@@ -34460,6 +34460,11 @@ def _environment_isolations(campaign_dir: Path) -> list[dict[str, Any]]:
             or not isinstance(receipt.get("covered"), list)
             or not receipt["covered"]
             or not isinstance(receipt.get("invalidated_attempts"), list)
+            # 第三批 B3-14：污染发生时刻可选（旧收据没有该键＝无窗口），给出即须是 RFC3339。
+            or (
+                receipt.get("contamination_started_at_utc") is not None
+                and not _is_rfc3339_timestamp(receipt.get("contamination_started_at_utc"))
+            )
             or _fingerprint(unsigned) != receipt.get("isolation_sha256")
         ):
             raise ConfigurationError(f"环境隔离收据形态、成链或自摘要不一致：{path.name}")
@@ -39240,10 +39245,17 @@ def _phase_evaluation_recovery_scope(
         completed_ids = sorted(set(completed_ids) - set(evolved_ids))
         execute_ids = sorted(set(execute_ids) | set(evolved_ids))
     isolated_ids: list[str] = []
+    reused_before_contamination: list[str] = []
     if isolation_receipt is not None:
-        # 污染后的结果永不复用：剩余已完成作业全部作废，并入执行闭集。
-        isolated_ids = list(completed_ids)
-        completed_ids = []
+        # 污染后的结果永不复用：剩余已完成作业作废，并入执行闭集。第三批 B3-14（R3 污染部分）：隔离收据带污染发生
+        # 时刻时，在该时刻之前完成且出口时段绑定可核验的作业仍是污染前的结果，保留复用；缺任一前提即重跑。
+        window_start = _contamination_window_start_epoch(isolation_receipt)
+        for job_id in completed_ids:
+            if window_start is not None and _job_finished_before(result_by_id[job_id], window_start):
+                reused_before_contamination.append(job_id)
+            else:
+                isolated_ids.append(job_id)
+        completed_ids = sorted(reused_before_contamination)
         execute_ids = sorted(set(execute_ids) | set(isolated_ids))
     conflict_ids: list[str] = []
     if conflict_quarantine is not None:
@@ -39348,6 +39360,9 @@ def _phase_evaluation_recovery_scope(
             "isolation_index": int(isolation_receipt["index"]),
             "isolation_sha256": str(isolation_receipt["isolation_sha256"]),
             "invalidated_job_ids": sorted(isolated_ids),
+            # 第三批 B3-14：污染发生时刻与据此保留复用的作业（无窗口时为 null／空）。
+            "contamination_started_at_utc": isolation_receipt.get("contamination_started_at_utc"),
+            "reused_job_ids": sorted(reused_before_contamination),
         }
     if continuity_drifted:
         scope["continuity_drift"] = {"invalidated_job_ids": sorted(drifted_ids)}
@@ -39359,6 +39374,35 @@ def _phase_evaluation_recovery_scope(
             "invalidated_job_ids": sorted(conflict_ids),
         }
     return scope
+
+
+def _contamination_window_start_epoch(isolation_receipt: Mapping[str, Any]) -> float | None:
+    """隔离收据登记的污染发生时刻（epoch 秒）；旧收据或未给出时为 None（无窗口，全部重跑）。"""
+
+    raw = isolation_receipt.get("contamination_started_at_utc")
+    if raw is None:
+        return None
+    return _rfc3339_datetime(str(raw), "隔离收据 contamination_started_at_utc").timestamp()
+
+
+def _job_finished_before(result: Mapping[str, Any], window_start_epoch: float) -> bool:
+    """作业结果带可核验的出口时段绑定且在污染窗口起点之前完成。
+
+    第三批 B3-14：缺绑定、绑定无法核验（父 run 记录或暂停事实缺失）或完成时刻不早于窗口起点，一律按污染后处理（重跑）。
+    """
+
+    binding = result.get("runtime_egress")
+    if not isinstance(binding, Mapping):
+        return False
+    try:
+        if not codex_upgrade_supervisor.job_egress_trusted(result):
+            return False
+    except codex_upgrade_supervisor.SupervisorError:
+        return False
+    finished = binding.get("finished_at_epoch")
+    if isinstance(finished, bool) or not isinstance(finished, (int, float)):
+        return False
+    return float(finished) < window_start_epoch
 
 
 def _attempt_isolation_receipt(
@@ -39454,11 +39498,21 @@ def _validate_recovery_scope_plan(
     isolation = scope.get("environment_isolation")
     if isolation is not None:
         values = isolation.get("invalidated_job_ids") if isinstance(isolation, Mapping) else None
+        # 第三批 B3-14：隔离收据带污染发生时刻时，污染前完成的作业保留复用（reused_job_ids）；已完成集合必须恰好等于它，
+        # 无窗口时两者都为空（原不变式不变）；旧 transition 摘要没有这两个键，按无窗口读取。
+        reused_values = isolation.get("reused_job_ids", []) if isinstance(isolation, Mapping) else None
+        window = isolation.get("contamination_started_at_utc") if isinstance(isolation, Mapping) else None
         if (
             not isinstance(values, list)
             or values != sorted(set(values))
             or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in values)
-            or completed_ids
+            or not isinstance(reused_values, list)
+            or reused_values != sorted(set(reused_values))
+            or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in reused_values)
+            or (window is not None and not _is_rfc3339_timestamp(window))
+            or (window is None and reused_values)
+            or set(values) & set(reused_values)
+            or completed_ids != {str(value) for value in reused_values}
         ):
             raise ConfigurationError("恢复 transition 的 environment_isolation 作废作业非法。")
         isolated_ids = {str(value) for value in values}
@@ -43389,10 +43443,23 @@ def _prior_complete_results(
             attempt.name,
             _historical_manifest_controls=historical_source_controls,
         )
-        if (
+        # 第三批 B3-14：隔离作废源的隔离收据带污染发生时刻时，只承接污染前完成的作业（下方逐结果过滤）；
+        # 无窗口仍是全部重跑、不承接任何结果。
+        isolation_window: float | None = None
+        isolated_source = (
             (phase, history_candidate_id, attempt.name) in isolation_invalidated
             and payload.get("status") in {"environment_contaminated", "awaiting_receipts"}
-        ) or (phase, history_candidate_id, attempt.name) in conflict_quarantined or (
+        )
+        if isolated_source:
+            isolation_receipt = _attempt_isolation_receipt(
+                history_campaign_dir, phase, history_candidate_id, attempt.name
+            )
+            isolation_window = (
+                _contamination_window_start_epoch(isolation_receipt) if isolation_receipt is not None else None
+            )
+        if (isolated_source and isolation_window is None) or (
+            phase, history_candidate_id, attempt.name
+        ) in conflict_quarantined or (
             not cross_campaign_source and _attempt_continuity_drifted(payload)
         ):
             # 修好接着跑第 22 项：环境连续性漂移源与隔离作废源一样全部重跑，不承接任何结果。
@@ -43430,6 +43497,9 @@ def _prior_complete_results(
                     f"先前 attempt 的 Job 出口时段绑定无法核验（父 run 记录与暂停事实须随 attempt 完整保留）：{error}"
                 ) from error
             if not egress_trusted:
+                continue
+            if isolation_window is not None and not _job_finished_before(item, isolation_window):
+                # 第三批 B3-14：污染发生时刻之后（或无法证明在其之前）完成的作业不承接，留给执行闭集重跑。
                 continue
             job_id = item.get("id")
             if not isinstance(job_id, str) or job_id not in expected_jobs:
@@ -61295,6 +61365,16 @@ def _apply_accounting_resolution(
 # ---------------------------------------------------------------------------
 
 
+def _optional_json_object(path: Path) -> dict[str, Any] | None:
+    """文件是 JSON 对象时返回它；不是 JSON 或不是对象时返回 None（修复收据允许是任意文本）。"""
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def _environment_isolate_preview(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -61361,6 +61441,34 @@ def _environment_isolate_preview(
             if fact["kind"] in {"attempt", "seal", "recovery"}
         }
     )
+    # 第三批 B3-14（R3 污染部分）：repair 收据可选给出污染发生时刻（RFC3339，操作者依据修复取证给出）。给出即校验：
+    # 不晚于所覆盖事实的最早发现时刻、早于干净环境复核、晚于每个被作废 attempt 的预约时刻；缺省或收据不是 JSON 对象即
+    # 无窗口（隔离作废 attempt 的已完成作业全部重跑，原口径）。
+    contamination_started_raw: str | None = None
+    repair_document = _optional_json_object(repair_receipt)
+    if repair_document is not None and repair_document.get("contamination_started_at_utc") is not None:
+        contamination_started_raw = str(repair_document["contamination_started_at_utc"])
+        contamination_started_at = _rfc3339_datetime(contamination_started_raw, "修复收据 contamination_started_at_utc")
+        if timed and contamination_started_at > min(timed):
+            raise ConfigurationError(
+                "修复收据的污染发生时刻晚于所覆盖事实的最早发现时刻；窗口起点只能在发现之前"
+                f"（发生 {contamination_started_raw}，最早发现 {min(timed).isoformat()}）。"
+            )
+        if contamination_started_at >= clean_at:
+            raise ConfigurationError("修复收据的污染发生时刻不早于干净环境复核时间。")
+        for phase, candidate_id, attempt_id, recovery_revision in invalidated:
+            if recovery_revision:
+                continue
+            attempt_root = campaign_dir / _capture_attempt_relative(phase, candidate_id or None) / "attempts" / attempt_id
+            reservation = _load_capture_reservation(
+                campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id or None, _manifest=manifest
+            )
+            begun = _rfc3339_datetime(str(reservation.get("started_at_utc")), f"attempt {attempt_id} 预约时间")
+            if contamination_started_at <= begun:
+                raise ConfigurationError(
+                    f"修复收据的污染发生时刻不晚于被作废 attempt {attempt_id} 的预约时刻；该 attempt 没有污染前的作业可复用，"
+                    "删去该字段按全部重跑隔离。"
+                )
     preview = {
         "schema_version": ENVIRONMENT_ISOLATION_PREVIEW_SCHEMA,
         "campaign_id": str(manifest["campaign_id"]),
@@ -61382,6 +61490,7 @@ def _environment_isolate_preview(
             "sha256": file_sha256(clean_receipt),
             "observed_at_utc": str(clean_document[field]),
         },
+        "contamination_started_at_utc": contamination_started_raw,
         "reason": reason,
         "live_request_count": 0,
     }
@@ -61458,6 +61567,8 @@ def _environment_isolate_command(arguments: argparse.Namespace) -> dict[str, Any
             "invalidated_attempts": preview["invalidated_attempts"],
             "environment_repair": bindings["environment_repair"],
             "clean_environment": bindings["clean_environment"],
+            # 第三批 B3-14：污染发生时刻（无窗口为 null）；恢复范围按它区分污染前可复用与污染后重跑的作业。
+            "contamination_started_at_utc": preview["contamination_started_at_utc"],
             "reason": preview["reason"],
             "review_sha256": preview["review_sha256"],
             "approved_by": approved_by,
