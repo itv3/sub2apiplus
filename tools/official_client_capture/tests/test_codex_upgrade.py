@@ -18904,6 +18904,177 @@ class CodexUpgradeTest(unittest.TestCase):
                     label="零请求后处理失败",
                 )
 
+    def _b0_completed_official_attempt(self, fixture: dict[str, object]) -> Path:
+        """按正式预约与封存合同发布一个全部 Job complete、等待 seal 收据的官方 attempt。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        jobs = fixture["jobs"]
+        attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            identity=dict(manifest["official_identity"]),
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
+        previous: str | None = None
+        results: list[dict[str, object]] = []
+        for job in jobs:
+            result = {
+                "id": job.job_id, "phase": "official", "required": True,
+                "execution_sha256": codex_upgrade._job_execution_sha256(job), "status": "complete",
+                "description": "合成官方 Job", "duration_seconds": 0.0, "steps": [], "evidence_roots": [],
+                "missing_evidence_patterns": [], "empty_evidence_patterns": [], "covers": [],
+                "scenario_ids": list(job.scenario_ids), "scenario_receipts": [], "scenario_receipt_failures": [],
+                "track": "main", "model_id": "gpt-5.5", "expected_use_responses_lite": False,
+                "required_model_receipt": False, "model_condition_receipt": None,
+                "model_condition_receipt_failure": None, "disposition": "executed",
+            }
+            codex_upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+            appended = store.append({
+                "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                "campaign_id": manifest["campaign_id"], "phase": "official", "attempt_id": attempt_root.name,
+                "run_nonce": reservation["run_nonce"], "item_id": job.job_id, "status": "complete",
+                "disposition": "executed", "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                "result_key": None, "result": result, "source_receipt": None,
+                "previous_checkpoint_sha256": previous,
+            })
+            previous = str(appended["checkpoint_sha256"])
+            results.append(result)
+        evidence_root = attempt_root / "evidence"
+        logs_root = attempt_root / "logs"
+        evidence_root.mkdir(mode=0o700, exist_ok=True)
+        logs_root.mkdir(mode=0o700, exist_ok=True)
+        closeout = codex_upgrade._close_attempt_evidence_permissions(attempt_root, [evidence_root, logs_root])
+        codex_upgrade._write_capture_attempt(campaign_dir, attempt_root, {
+            "campaign_id": manifest["campaign_id"], "phase": "official", "candidate_id": None,
+            "status": "awaiting_receipts", "identity": dict(manifest["official_identity"]), "results": results,
+            "failure_observations": [], "evidence_roots": [str(evidence_root), str(logs_root)],
+            "evidence_permission_closeout": closeout, "evidence_permission_error": None,
+            "environment": {
+                "evidence_root": str(evidence_root), "before_probe": None, "after_probe": {"status": "passed"},
+                "restoration_report": {"status": "passed"}, "arm64_before_receipt": None, "arm64_after_receipt": None,
+            },
+            "binary_verification": None, "execution_error": None, "restoration_error": None,
+            "next_gate": "运行 capture manifest finalizer。",
+        })
+        return attempt_root
+
+    def _b0_vc1_seal_batch_manifest(
+        self,
+        fixture: dict[str, object],
+        attempt_id: str,
+        *,
+        batch_sequence: int = 2,
+        actions: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        """VC-1 官方 seal 链批次（断言包＋seal 预览，录制链同形）的 v2 内层清单。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        campaign_dir = fixture["campaign_dir"]
+        plan = codex_upgrade._vc_campaign_plan(campaign_dir, fixture["manifest"])
+        seal = ["/usr/bin/python3", "/tools/codex_upgrade.py", "capture-official", "seal",
+                "--campaign-dir", str(campaign_dir), "--attempt-id", attempt_id]
+        actions = actions if actions is not None else [
+            {"action_id": "prepare-official-assertion-bundle", "operation": "VC-1:prepare-official-assertion-bundle",
+             "timeout_seconds": 5.0, "item_ids": ["prepare-official-assertion-bundle"],
+             "command": ["/usr/bin/env", f"CAMPAIGN_DIR={campaign_dir}", f"ATTEMPT_ID={attempt_id}", "SIDE=official",
+                         "/usr/bin/bash", "/tmp/prepare_assertion_bundle.sh"]},
+            {"action_id": "seal-official-preview", "operation": "VC-1:capture-official-seal-preview",
+             "timeout_seconds": 5.0, "item_ids": ["seal-official-preview"], "command": seal},
+        ]
+        return supervisor.build_batched_campaign_run_manifest(
+            campaign_id=str(fixture["manifest"]["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id=f"vc-1-{batch_sequence:04d}",
+            batch_sequence=batch_sequence,
+            batch_sha256=str(batch_sequence) * 64,
+            phase="VC-1",
+            predecessor_checkpoint={"path": "control/vc/vc-0-checkpoint.json", "sha256": "3" * 64,
+                                    "phase": "VC-0", "checkpoint_sha256": "4" * 64},
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=actions,
+            execute_items=[item for action in actions for item in action["item_ids"]],
+            reuse_items=[],
+        )
+
+    def test_b0_vc1_seal_chain_failure_is_post_run_tooling_and_redispatchable(self) -> None:
+        """修好接着跑第 15 项：VC-1 官方 seal 链零请求失败归为 post-run-tooling、账本进入 recovery_required；
+        对账后可逐字重派，也可（修复改变预览时）改派同一 attempt 的重新预览批次；指向别的 attempt 失败关闭。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        # VC-1 断言包前的证据权限收口重放由 VC-1 门禁用例单独覆盖；这里只测失败分类、对账与后继协议。
+        gate = mock.patch.object(supervisor, "_validate_vc1_assertion_seal_gate")
+        gate.start()
+        self.addCleanup(gate.stop)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-0-completed", phase="VC-0", event_type="stage_completed", next_action="启动 VC-1"
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次"
+            )
+            attempt_root = self._b0_completed_official_attempt(fixture)
+            inner = self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name)
+            later = supervisor._epoch_to_utc(time.time() + 5)
+            facts = supervisor.post_run_tooling_facts(campaign_dir, inner, run_started_at_utc=later)
+            self.assertTrue(facts["qualifies"], facts["reasons"])
+            self.assertEqual((facts["facts"]["side"], facts["facts"]["attempt_id"]), ("official", attempt_root.name))
+            # 含非官方 seal 链阶段项的 VC-1 批次不归类。
+            self.assertFalse(
+                supervisor.post_run_tooling_facts(campaign_dir, dict(inner, execute_items=["official-test"]), run_started_at_utc=later)["qualifies"]
+            )
+            run_dir = self._b0_run_dir(
+                fixture, "e" * 64, phase="VC-1", failure_class="execution-failure", batched_manifest=inner,
+                action_id="seal-official-preview", failure_kind="child-returncode", error_type="ChildProcessError",
+                post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="seal-official-preview", failure_class="post-run-tooling"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertIn("官方 seal 链", summary["next_action"])
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertIn("官方 seal 链", result["next_command"])
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            verbatim = self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3)
+            self.assertTrue(
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state, inner, run_dir, verbatim, campaign_dir=campaign_dir
+                )
+            )
+            self.assertFalse(
+                supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, verbatim, campaign_dir=campaign_dir)
+            )
+            repreview = self._b0_vc1_seal_batch_manifest(
+                fixture, attempt_root.name, batch_sequence=3, actions=[inner["actions"][1]]
+            )
+            self.assertTrue(
+                supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, repreview, campaign_dir=campaign_dir)
+            )
+            other_action = dict(inner["actions"][1])
+            other_action["command"] = [
+                token if token != attempt_root.name else "20990101T000000Z-" + "0" * 16 for token in other_action["command"]
+            ]
+            with self.assertRaisesRegex(supervisor.SupervisorError, "同一个 attempt"):
+                supervisor._validate_batched_seal_chain_successor(
+                    prior_state, inner, run_dir,
+                    self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3, actions=[other_action]),
+                    campaign_dir=campaign_dir,
+                )
+
     def _evolution_patches(self, invalidated: list[str]) -> list:
         """模拟"其后登记的工具演进作废了部分作业"：演进影响与演进链两处读口径同一份事实。"""
 

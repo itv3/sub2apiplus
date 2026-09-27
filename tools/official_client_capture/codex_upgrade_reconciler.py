@@ -3650,6 +3650,11 @@ def reconcile_supervisor_run(
                 "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
                 "迁移到的授权口径，b≥1 改走 evaluation-recover）"
             )
+        elif run.get("failure_class") == "post-run-tooling" and run.get("phase") == "VC-1":
+            result["next_command"] = (
+                "phase 保持 active：官方 seal 链零请求失败已对账；以 compile-and-run-vc-batch 逐字重派同一批次，"
+                "若修复改变了 seal 预览，改派同一 attempt 的重新预览批次；官方 Job 结果只读保留"
+            )
         elif run.get("failure_class") == "post-run-tooling":
             result["next_command"] = (
                 "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "

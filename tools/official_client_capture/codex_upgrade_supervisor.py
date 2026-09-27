@@ -1219,6 +1219,11 @@ def post_run_tooling_facts(
         return fail("批次清单缺少 execute_items／reuse_items")
     facts["execute_items"] = [str(item) for item in execute_items]
     facts["reuse_items"] = sorted(str(item) for item in reuse_items)
+    if inner_manifest.get("phase") == "VC-1":
+        # 修好接着跑第 15 项：VC-1 官方 seal 链走独立判据；VC-5 的判据与事实结构保持逐字不变。
+        return _official_post_run_tooling_facts(
+            Path(campaign_dir), inner_manifest, run_started=run_started, facts=facts, reasons=reasons
+        )
     if not all(_post_run_tooling_item_allowed(item) for item in execute_items):
         return fail("execute_items 含非零请求后处理阶段项")
 
@@ -1380,6 +1385,106 @@ def post_run_tooling_facts(
             window_started = _parse_rfc3339_utc(window.get("started_at_utc"), "Kilo 窗口")
             if window_started >= run_started:
                 return fail("本次父 run 已启动 Kilo 请求窗口，不是零请求失败")
+    except (OSError, SupervisorError) as error:
+        return fail(f"attempt 判据文件无法读取：{error}")
+    facts["bound_files"] = bound
+    return {"qualifies": True, "reasons": [], "facts": facts}
+
+
+# VC-1 官方 seal 链的零请求后处理阶段项：官方断言包、seal 预览、seal 批准（修好接着跑第 15 项）。
+OFFICIAL_POST_RUN_TOOLING_ITEM_IDS = frozenset(
+    {"prepare-official-assertion-bundle", "seal-official-preview", "seal-official-approve"}
+)
+
+
+def _official_post_run_tooling_facts(
+    campaign_dir: Path,
+    inner_manifest: Mapping[str, Any],
+    *,
+    run_started: datetime,
+    facts: dict[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """VC-1 官方 seal 链失败能否归为 post-run-tooling（修好接着跑第 15 项）。
+
+    此前 VC-1 的断言包／seal 预览／seal 批准失败没有预约、只能记 execution-failure 进入阶段审核，
+    父 run 对账只入账、reconcile-attempt 又拒绝等待封存的 attempt，只能停线。与 VC-5 同构的判据：批次只含
+    官方 seal 链阶段项；全部动作指向本 Campaign 同一个等待收据的官方 attempt；其 Job 结果与 checkpoint
+    全部 complete；预约早于本次父 run。满足即零请求后处理失败：修好工具、对账后逐字重派。官方 seal
+    批次不复用作业项（reuse 为空），因此不核对 reuse 覆盖。事实里多一个 ``side=official``。
+    """
+
+    def fail(note: str) -> dict[str, Any]:
+        reasons.append(note)
+        return {"qualifies": False, "reasons": reasons, "facts": facts}
+
+    facts["side"] = "official"
+    if not all(item in OFFICIAL_POST_RUN_TOOLING_ITEM_IDS for item in facts["execute_items"]):
+        return fail("execute_items 含非官方 seal 链阶段项")
+    actions = inner_manifest.get("actions")
+    targets = [_seal_chain_attempt_target(action) for action in actions] if isinstance(actions, list) and actions else [None]
+    if any(target is None for target in targets) or len(set(targets)) != 1:
+        return fail("动作不全是指向同一 attempt 的官方 seal 链动作")
+    target_campaign, side, _candidate, attempt_id = targets[0]  # type: ignore[misc]
+    try:
+        if side != "official" or Path(target_campaign).resolve(strict=True) != campaign_dir.resolve(strict=True):
+            return fail("seal 链动作的 Campaign 或侧与本批次不一致")
+    except OSError:
+        return fail("seal 链动作的 Campaign 目录不存在")
+    facts["attempt_id"] = attempt_id
+    attempt_root = campaign_dir / "official" / "attempts" / attempt_id
+    bound: list[dict[str, str]] = []
+
+    def bind(path: Path, role: str) -> dict[str, Any]:
+        payload = _read_bounded_json(path, role)
+        bound.append({"role": role, "path": path.relative_to(campaign_dir).as_posix(), "sha256": _sha256(path.read_bytes())})
+        return payload
+
+    try:
+        if attempt_root.is_symlink() or not (attempt_root / "attempt.json").is_file():
+            return fail("官方 attempt 不存在")
+        attempt = bind(attempt_root / "attempt.json", "attempt")
+        facts["attempt_status"] = attempt.get("status")
+        if attempt.get("attempt_id") != attempt_id or attempt.get("phase") != "official":
+            return fail("attempt.json 身份与目录不一致")
+        if attempt.get("status") not in POST_RUN_TOOLING_ATTEMPT_STATUSES:
+            return fail("官方 attempt 不处于等待收据状态")
+        results = attempt.get("results")
+        if not isinstance(results, list) or not results:
+            return fail("attempt 没有 Job 结果")
+        job_ids: list[str] = []
+        complete = 0
+        for item in results:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                return fail("attempt Job 结果结构非法")
+            job_ids.append(str(item["id"]))
+            if item.get("status") == "complete":
+                complete += 1
+        facts["job_count"] = len(job_ids)
+        facts["complete_job_count"] = complete
+        if complete != len(job_ids):
+            return fail(f"{len(job_ids) - complete} 个官方 Job 尚未 complete")
+        checkpoints_root = attempt_root / "checkpoints"
+        if checkpoints_root.is_symlink() or not checkpoints_root.is_dir():
+            return fail("attempt 没有 Job checkpoint 目录")
+        checkpoint_paths = sorted(
+            path for path in checkpoints_root.iterdir() if path.suffix == ".json" and not path.name.startswith(".")
+        )
+        complete_jobs: set[str] = set()
+        for path in checkpoint_paths:
+            record = _read_bounded_json(path, "Job checkpoint 记录")
+            if record.get("status") == "complete" and isinstance(record.get("item_id"), str):
+                complete_jobs.add(str(record["item_id"]))
+        facts["checkpoint_record_count"] = len(checkpoint_paths)
+        facts["checkpoint_complete_job_count"] = len(complete_jobs & set(job_ids))
+        if set(job_ids) - complete_jobs:
+            return fail("Job checkpoint 缺少 complete 记录")
+        if checkpoint_paths:
+            bind(checkpoint_paths[-1], "job_checkpoint_tail")
+        reservation = bind(attempt_root / "reservation.json", "reservation")
+        facts["reservation_started_at_utc"] = reservation.get("started_at_utc")
+        if _parse_rfc3339_utc(reservation.get("started_at_utc"), "reservation") >= run_started:
+            return fail("reservation 在本次父 run 内创建，属于 attempt 中断")
     except (OSError, SupervisorError) as error:
         return fail(f"attempt 判据文件无法读取：{error}")
     facts["bound_files"] = bound
@@ -8097,6 +8202,92 @@ def _validate_batched_evolution_recovery_successor(
     return True
 
 
+def _validate_batched_seal_chain_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """失败的 seal 链批次 N（post-run-tooling、已对账）由 N+1 的同一 attempt 的另一 seal 链批次承接（修好接着跑第 15 项）。
+
+    逐字重派仍由环境／post-run-tooling 协议判定（这里对逐字相同的后继返回 False）；本协议只放行"修复后 seal
+    预览变化，批准摘要作废，需要重新预览"这类情形：后继全部动作也是零请求 seal 链动作、指向同一 attempt，
+    同阶段、同候选、N+1，批次级冻结字段不变，评估器摘要按重派同一口径核对；父 run 必须已按 post-run-tooling
+    对账。形态不符返回 False，形态相符后任何绑定不闭合都失败关闭。
+    """
+
+    phase = prior_manifest.get("phase")
+    if (
+        phase not in {"VC-1", "VC-5"}
+        or prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("phase") != phase
+        or successor_manifest.get("actions") == prior_manifest.get("actions")
+    ):
+        return False
+    prior_actions = prior_manifest.get("actions")
+    successor_actions = successor_manifest.get("actions")
+    if not isinstance(prior_actions, list) or not prior_actions or not isinstance(successor_actions, list) or not successor_actions:
+        return False
+    prior_targets = {_seal_chain_attempt_target(action) for action in prior_actions}
+    successor_targets = {_seal_chain_attempt_target(action) for action in successor_actions}
+    if None in prior_targets or None in successor_targets:
+        return False
+    label = f"{phase} seal 链续派"
+    if len(prior_targets) != 1 or successor_targets != prior_targets:
+        raise SupervisorError(f"{label}：后继 seal 链动作必须与失败批次指向同一个 attempt。")
+    target_campaign, side, candidate_id, attempt_id = next(iter(prior_targets))
+    allowed_items = OFFICIAL_POST_RUN_TOOLING_ITEM_IDS if phase == "VC-1" else None
+    execute = successor_manifest.get("execute_items")
+    if (
+        not isinstance(execute, list)
+        or not execute
+        or not all(
+            (item in allowed_items) if allowed_items is not None else _post_run_tooling_item_allowed(item)
+            for item in execute
+        )
+    ):
+        raise SupervisorError(f"{label}：后继批次只能含零请求 seal 链阶段项。")
+    prior_sequence = prior_manifest.get("batch_sequence")
+    frozen_fields = ("campaign_id", "campaign_plan_sha256", "original_deadline_at_utc", "predecessor_checkpoint", "no_op")
+    if phase == "VC-5":
+        frozen_fields += ("candidate_id", "candidate_revision", "evaluation_baseline", "baseline_commit_sha256")
+    if (
+        isinstance(prior_sequence, bool)
+        or not isinstance(prior_sequence, int)
+        or successor_manifest.get("batch_sequence") != prior_sequence + 1
+        or any(successor_manifest.get(field) != prior_manifest.get(field) for field in frozen_fields)
+    ):
+        raise SupervisorError(f"{label}：必须是同阶段、同候选的 N+1 批次，批次级冻结字段不得变化。")
+    if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
+            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
+        raise SupervisorError(f"{label}：评估器摘要变化不在已登记工具演进的授权口径内。")
+    if campaign_dir is None:
+        raise SupervisorError(f"{label}：历史校验必须绑定 Campaign 目录。")
+    resolved_campaign = Path(campaign_dir).resolve(strict=True)
+    if Path(target_campaign).resolve(strict=False) != resolved_campaign:
+        raise SupervisorError(f"{label}：seal 链动作绑定的 Campaign 与本 Campaign 不一致。")
+    if prior_state.get("state") != "failed":
+        raise SupervisorError(f"{label}：父批次不是失败终态。")
+    verify_supervisor_run_reconciliation_binding(
+        resolved_campaign,
+        campaign_id=str(prior_manifest.get("campaign_id", "")),
+        run_id=prior_dir.name,
+        phase=str(phase),
+        batch_sequence=prior_sequence,
+        batch_sha256=prior_manifest.get("batch_sha256"),
+        label=label,
+    )
+    receipt = _read_json(
+        resolved_campaign / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
+    )
+    if receipt.get("failure_class") != "post-run-tooling":
+        raise SupervisorError(f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling）失败。")
+    return True
+
+
 def _validate_batched_environment_redispatch_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -9851,6 +10042,16 @@ def _validate_batched_campaign_history(
             )
         ):
             continue
+        # 修好接着跑第 15 项：失败的 seal 链批次（已按 post-run-tooling 对账）之后，同一 attempt 的非逐字 seal 链
+        # 批次（例如预览变化后重新预览）；逐字相同的后继仍交给下方逐字重派协议。
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_seal_chain_successor(
+                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
+            )
+        ):
+            continue
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
@@ -10370,6 +10571,13 @@ def _close_failed_campaign_timing_ledger(
             "reconcile-supervisor-run：动作执行前受管工具的评估器摘要已变化（批次运行中部署了新工具），"
             "动作未执行、无请求；登记 tool-evolution 并对账通过后，以 compile-and-run-vc-batch 按同一动作计划"
             "重新编译派发 N+1（按新评估器摘要冻结）。"
+        )
+    elif failure_class == "post-run-tooling" and phase == "VC-1":
+        # 修好接着跑第 15 项：官方 seal 链零请求失败，与 VC-5 同一恢复口径（VC-5 文案保持不变，参与幂等核对）。
+        recovery_next_action = (
+            "reconcile-supervisor-run：官方 seal 链（断言包／seal 预览／seal 批准）零请求失败，官方 Job 结果只读保留；"
+            "修复工具并受监督部署、登记 tool-evolution 后，对账通过即以 compile-and-run-vc-batch 重派同一 attempt 的 "
+            "seal 链批次（逐字重派，或预览变化后重新预览）。"
         )
     elif failure_class == "post-run-tooling":
         # 数据面 Job 已闭合，失败的是零请求后处理动作：修复评估／控制工具并
