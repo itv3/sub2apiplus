@@ -263,8 +263,10 @@ from urllib.parse import urlsplit
 # 收据），旧 attempt 按收据映射重放收口；新增 evidence-conflict-quarantine 隔离已被破坏的 attempt（受损只读留档、其余
 # 作废，全部重跑）；监督器作废对账核验接受证据根冲突隔离。control 层与 evidence 层变化，wire 闭包与 wire producer 不变；
 # 受管工具树与监督器摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
+# 2026-09-27（修好接着跑第 25 项）：看门狗每轮不持锁重放三层预算，撞上动作进程写总账／账本的中间态会瞬时失败；改为自首次
+# 失败起持续 15 秒才判预算状态无效，容忍期间沿用已收紧的截止。control 层变化，wire／evidence 不变；监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "12c17af73611ec71cab06adaaa9b78e3d10f0634e2592e68d378cc43ea8d2ca8"
+    "f61f8260a698b215c4466879f538419ec053f8ea0e4febe073f24717a29706c8"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
