@@ -655,13 +655,14 @@ P0 只做离线预检，不采集目标 live 证据、不创建 Candidate、不�
 |---|---|---|
 | 身份与依赖均未变化的临时失败 | 保留原 Campaign、candidate 和 attempt | 从最近合法 checkpoint 继续，只执行 `failed` 或 `pending` 项 |
 | 目标、基线、用途、账号权限条件或官方产物身份变化 | 停止当前 Campaign，建立新 Campaign | 回到 VC-0 重新冻结；从 VC-1 补齐新身份所需证据 |
-| 规则分类或目标画像变化 | 停止当前 Campaign，建立后继 Campaign | 分别从 VC-2 或 VC-3 继续；仍有效的官方证据只读复用 |
+| 只改断言 selector 的批准修正 | 保留 Campaign、candidate 和 attempt，以 approval revision（新评估基线）承接 | 零请求重评受影响规则；旧验收结论对新批准版本失效，不得引用 |
+| 规则分类、场景定义或目标画像变化 | 停止当前 Campaign，建立后继 Campaign | 分别从 VC-2 或 VC-3 继续；仍有效的官方证据只读复用 |
 | Candidate 的源码、画像或构建产物变化 | 保留 Campaign，建立新 Candidate | 从 VC-4 继续，只执行受影响闭集 |
 | 仅运行坐标变化，且产物、权限和环境语义均不变 | 保留 Campaign 和 Candidate | 在首次 attempt 前按客户端指南登记坐标变化；否则重新判定身份 |
 | 控制面或 evaluator 工具变化 | 不改变数据面身份 | 按 §5.1.3 只重跑受影响的离线门禁 |
 | wire producer 变化 | 保留 Campaign，`wire_producer_sha256` 进入两阶段 transition | 只补跑受影响 Job，经 intent／final 两阶段 transition 承接；全部 Job 受影响则建普通后继 |
 | evidence semantics 变化 | 保留 Campaign，追加 evaluation epoch | 只重跑离线处理，原始字节不重采 |
-| policy 变化 | 建立新 Campaign | 经兼容收据与发布认证后从 VC-0 重新开始；既有 Campaign 保持自身冻结策略 |
+| policy 变化 | 保留 Campaign，经策略演进（绑定兼容收据、激活认证与部署收据的两阶段演进登记）承接 | 有效策略取最新演进；新策略下 wire 身份相等即放行，不等仍按 wire producer 行处理；未登记演进前身份差异只提示、不写终态 |
 
 自客户端指南声明采用对账合同起，任何中断只有两个只读入口：尚无 attempt 的父监督器中断由
 supervisor-run reconciler 对账；reservation 之后的任何中断由 attempt reconciler 对账。两者输出独立不可变
