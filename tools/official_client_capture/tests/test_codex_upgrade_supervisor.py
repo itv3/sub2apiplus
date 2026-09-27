@@ -165,6 +165,37 @@ class SupervisorTests(unittest.TestCase):
             "0.05",
         )
 
+    def _wait_for_file(self, path: Path, *, timeout: float = 5) -> None:
+        """有界等待文件出现（修好接着跑第 34 项：替代固定 sleep）。"""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.is_file():
+                return
+            time.sleep(0.02)
+        self.fail(f"文件未在预算内出现：{path}")
+
+    def _wait_campaign_monitor_exit(self, run_dir: Path, *, timeout: float = 5) -> None:
+        """等父监督器常驻进程退出：终态之后它还会收尾写入，tempfile 清理前不等会偶发 Directory not empty（第 34 项）。"""
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+            pid = state.get("monitor_pid")
+            if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                return
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                pass
+            time.sleep(0.05)
+        self.fail("父监督器进程未在预算内退出")
+
     def _wait_campaign_state(
         self,
         run_dir: Path,
@@ -2209,9 +2240,10 @@ raise SystemExit(9)
         with tempfile.TemporaryDirectory() as directory:
             client = self._client(Path(directory), timeout=0.15)
             client.start()
-            time.sleep(0.35)
-            state = json.loads((client.run_dir / "state.json").read_text())
+            # 修好接着跑第 34 项：固定 sleep 0.35 秒在慢 CI runner 上偶发读到 running；改为有界等待终态。
+            state = self._wait_campaign_state(client.run_dir, {"watchdog-aborted"}, timeout=5)
             self.assertEqual(state["state"], "watchdog-aborted")
+            self._wait_for_file(client.run_dir / "stop-receipt.json", timeout=5)
             self.assertTrue((client.run_dir / "stop-receipt.json").is_file())
             # owner 仍在运行，说明 Campaign lease 的共享宿主不会被误杀。
             self.assertTrue(client.status()["owner_alive"])
@@ -2613,6 +2645,8 @@ raise SystemExit(9)
             archive = run_dir / "campaign-actions" / f"{activity['action_id']}.json"
             receipt = json.loads(archive.read_text(encoding="utf-8"))
             self.assertEqual(receipt["reason"], "worker-lost")
+            # 第 34 项：终态后父监督器还在收尾写入，等它退出再让 tempfile 清理目录。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_exec_session_hangup_is_detected(self) -> None:
         """会话断开使包装器收到 SIGHUP 时，不得留下假 active。"""
