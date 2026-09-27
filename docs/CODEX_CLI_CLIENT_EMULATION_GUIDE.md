@@ -3390,6 +3390,11 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 - **已完成待封存的 attempt 被作废**（工具演进作废其作业，或 Kilo 后环境恢复失败被隔离）：`reconcile-attempt`
   按作废对账，只核算请求、不计根因，计时账本写 `recovery_required`；恢复预览只重跑失效作业（隔离作废全部重跑）。
   针对它的 seal 链批次编译前零写入拒绝，失败的 seal 链批次之后允许 N+1 零请求恢复预览。
+- **作废来源叠加**（作废对账之后又登记了作废其作业的工具演进，或演进作废后再被隔离／冲突、再登记更多演进）：作废来源以首次
+  落盘的 `attempt-reconciliation/v1` 收据为准——重新对账先核对记录的作废事实仍由当前链支持（隔离／冲突逐字段相等；演进须是当前
+  事实的前缀：同一 `source_index`、序号前缀、该序号演进收据摘要相同、作废作业子集），通过后收据、总账 payload、账本事件与暂停原因
+  逐字节沿用，叠加的其它来源只记入命令输出 `stacked_invalidations`；恢复预览按当前链重算执行集合并 index+1。记录与当前链不衔接
+  即失败关闭，不改写 write-once 收据。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，

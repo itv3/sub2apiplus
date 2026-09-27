@@ -19094,8 +19094,16 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir=campaign_dir,
                 )
 
-    def _evolution_patches(self, invalidated: list[str]) -> list:
-        """模拟"其后登记的工具演进作废了部分作业"：演进影响与演进链两处读口径同一份事实。"""
+    def _evolution_patches(
+        self,
+        invalidated: list[str],
+        *,
+        evolution_indexes: list[int] | None = None,
+        chain: list[dict] | None = None,
+    ) -> list:
+        """模拟"其后登记的工具演进作废了部分作业"：演进影响与演进链两处读口径同一份事实。
+
+        ``evolution_indexes``／``chain`` 用于模拟后续又登记了更多演进（第 28 项：作废来源叠加）。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -19103,11 +19111,12 @@ class CodexUpgradeTest(unittest.TestCase):
             "index": 0,
             "affected_job_ids": [*invalidated, "job-of-other-phase"],
             "changed_paths": ["run_candidate_core_capture.sh"],
-            "evolution_indexes": [1],
+            "evolution_indexes": list(evolution_indexes or [1]),
         }
+        evolutions = [dict(item) for item in chain] if chain is not None else [{"receipt_sha256": "e" * 64}]
         return [
             mock.patch.object(codex_upgrade, "_attempt_evolution_impact", mock.Mock(return_value=impact)),
-            mock.patch.object(codex_upgrade, "_campaign_tool_evolutions", mock.Mock(return_value=[{"receipt_sha256": "e" * 64}])),
+            mock.patch.object(codex_upgrade, "_campaign_tool_evolutions", mock.Mock(return_value=evolutions)),
             # 夹具的环境探针是占位绑定，R17 复算在这里不成立；R17 对演进失效来源的口径由单测覆盖。
             mock.patch.object(reconciler, "_resume_reuse_check", mock.Mock(return_value={"status": "consistent"})),
         ]
@@ -19746,6 +19755,162 @@ class CodexUpgradeTest(unittest.TestCase):
                     prior_state, inner, run_dir, successor, campaign_dir=campaign_dir
                 )
             )
+    def test_b0_conflict_quarantined_attempt_reconciles_again_after_stacked_tool_evolution(self) -> None:
+        """修好接着跑第 28 项：等待封存的 attempt 先按证据根冲突隔离作废对账（write-once 收据记 evidence_conflict_invalidation），
+        之后又登记了作废其作业的工具演进（194249z evolution-06 首次 wire_producer 层变化）。作废来源以首次落盘的收据为准：
+        重新对账收据字节不变、总账幂等、暂停原因不变，叠加的演进事实只记入命令输出；恢复预览按当前链重算并 index+1。
+        记录的作废事实与当前链不一致仍失败关闭。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            attempt_id = attempt_root.name
+            jobs = sorted(self._b0_candidate_job_ids(fixture))
+            overwritten = attempt_root / "evidence" / "overwritten-by-rerun.json"
+            overwritten.write_text("{}\n", encoding="utf-8")
+            overwritten.chmod(0o600)
+            self._write_evidence_conflict_quarantine(campaign_dir, attempt_root, disposition="compromised")
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture, "f" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="child-returncode",
+                error_type="ChildProcessError", post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="post-run-tooling"
+            )
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_dir, campaign_dir)["status"], "recoverable")
+            first = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(first["status"], "recoverable", first.get("decision"))
+            self.assertEqual(first["root_cause"]["root_cause_id"], "evidence-conflict-01")
+            self.assertEqual(first["recovery_preview"]["index"], 1)
+            receipt_path = campaign_dir / first["reconciliation_receipt"]["path"]
+            receipt_bytes = receipt_path.read_bytes()
+            events_before = codex_upgrade_project_ledger._load_events(fixture["ledger"])
+            ledger_head_before = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["head_sequence"]
+
+            # 其后登记的工具演进作废了其中两个已完成作业：作废来源叠加，收据以首次落盘的冲突作废为准。
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(jobs[:2]):
+                    stack.enter_context(patcher)
+                second = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(second["status"], "recoverable", second.get("decision"))
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+            self.assertEqual(second["reconciliation_receipt"]["sha256"], first["reconciliation_receipt"]["sha256"])
+            self.assertEqual(second["root_cause"]["root_cause_id"], "evidence-conflict-01")
+            self.assertEqual(second["evidence_conflict_invalidation"], first["evidence_conflict_invalidation"])
+            self.assertNotIn("tool_evolution_invalidation", second)
+            self.assertEqual(
+                second["stacked_invalidations"],
+                {
+                    "tool_evolution_invalidation": {
+                        "source_index": 0,
+                        "evolution_indexes": [1],
+                        "latest_evolution_index": 1,
+                        "latest_evolution_receipt_sha256": "e" * 64,
+                        "invalidated_job_ids": jobs[:2],
+                    }
+                },
+            )
+            self.assertEqual(second["ledger_events"], [])
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["head_sequence"], ledger_head_before)
+            self.assertEqual(codex_upgrade_project_ledger._load_events(fixture["ledger"]), events_before)
+            preview = second["recovery_preview"]
+            self.assertEqual(preview["index"], 2)
+            self.assertEqual(preview["execute_job_ids"], jobs)
+            self.assertEqual(preview["reuse_job_ids"], [])
+            self.assertEqual(preview["tool_evolution"], {"source_index": 0, "evolution_indexes": [1], "invalidated_job_ids": []})
+            # 监督器读侧不变：收据仍恰有其一，且与总账 reconcile-attempt:<id> 的绑定成立。
+            supervisor.verify_evolution_attempt_reconciliation(
+                campaign_dir, campaign_id=fixture["manifest"]["campaign_id"], side="candidate",
+                candidate_id="cand-1", attempt_id=attempt_id, label="第 28 项",
+            )
+            # 反证：记录的冲突作废事实与当前隔离链不一致（隔离收据摘要不同）仍失败关闭，收据不动。
+            drifted = dict(first["evidence_conflict_invalidation"], quarantine_sha256="0" * 64)
+            with mock.patch.object(reconciler, "_conflict_invalidation_facts", mock.Mock(return_value=drifted)), \
+                    self.assertRaisesRegex(reconciler.ReconcilerError, "记录的作废事实.*与当前链不一致"):
+                reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+
+    def test_b0_evolution_invalidated_attempt_reconciles_again_after_further_evolution(self) -> None:
+        """修好接着跑第 28 项（演进叠加演进）：演进作废对账后又登记了作废更多作业的演进——收据沿用首个演进事实
+        （记录须是当前链的前缀：同一 source_index、序号前缀、该序号收据摘要相同、作废作业子集），叠加事实记入输出，
+        恢复预览按当前链把新作废的作业移入执行集合；链摘要或作废集合与记录不衔接即失败关闭。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            attempt_id = attempt_root.name
+            jobs = sorted(self._b0_candidate_job_ids(fixture))
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(jobs[:2]):
+                    stack.enter_context(patcher)
+                first = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(first["status"], "recoverable", first.get("decision"))
+            self.assertEqual(first["recovery_preview"]["execute_job_ids"], jobs[:2])
+            receipt_path = campaign_dir / first["reconciliation_receipt"]["path"]
+            receipt_bytes = receipt_path.read_bytes()
+            events_before = codex_upgrade_project_ledger._load_events(fixture["ledger"])
+            chain = [{"receipt_sha256": "e" * 64}, {"receipt_sha256": "f" * 64}]
+
+            # 第二次演进作废了第三个作业。
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(jobs[:3], evolution_indexes=[1, 2], chain=chain):
+                    stack.enter_context(patcher)
+                second = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(second["status"], "recoverable", second.get("decision"))
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+            self.assertEqual(second["tool_evolution_invalidation"], first["tool_evolution_invalidation"])
+            self.assertEqual(second["root_cause"]["root_cause_id"], "tool-evolution-01")
+            self.assertEqual(
+                second["stacked_invalidations"]["tool_evolution_invalidation"],
+                {
+                    "source_index": 0,
+                    "evolution_indexes": [1, 2],
+                    "latest_evolution_index": 2,
+                    "latest_evolution_receipt_sha256": "f" * 64,
+                    "invalidated_job_ids": jobs[:3],
+                },
+            )
+            self.assertEqual(second["ledger_events"], [])
+            self.assertEqual(codex_upgrade_project_ledger._load_events(fixture["ledger"]), events_before)
+            preview = second["recovery_preview"]
+            self.assertEqual(preview["index"], 2)
+            self.assertEqual(preview["execute_job_ids"], jobs[:3])
+            self.assertEqual(preview["reuse_job_ids"], jobs[3:])
+            self.assertEqual(
+                preview["tool_evolution"], {"source_index": 0, "evolution_indexes": [1, 2], "invalidated_job_ids": jobs[:3]}
+            )
+
+            # 反证一：链上首个演进收据摘要与记录不同。
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(
+                    jobs[:3], evolution_indexes=[1, 2], chain=[{"receipt_sha256": "d" * 64}, {"receipt_sha256": "f" * 64}]
+                ):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(reconciler.ReconcilerError, "记录的作废事实.*与当前链不一致"):
+                    reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            # 反证二：记录的作废作业不是当前作废集合的子集。
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(jobs[1:3], evolution_indexes=[1, 2], chain=chain):
+                    stack.enter_context(patcher)
+                with self.assertRaisesRegex(reconciler.ReconcilerError, "记录的作废事实.*与当前链不一致"):
+                    reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+
     def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
         """重派评估器摘要口径（不带 Campaign 目录的旧调用）：只有 b0 下 compare／accept reader 的变化不算漂移；
         b0 的 checker／builder 变化、键集合不同、一侧缺失、b≥1 的任何变化（无基线授权可核）一律失败关闭。

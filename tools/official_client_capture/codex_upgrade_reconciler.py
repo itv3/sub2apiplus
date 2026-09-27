@@ -2564,6 +2564,128 @@ def _conflict_invalidation_facts(
     }
 
 
+INVALIDATION_FIELDS = (
+    "tool_evolution_invalidation",
+    "environment_isolation_invalidation",
+    "evidence_conflict_invalidation",
+)
+
+
+def _recorded_invalidation(campaign_dir: Path, attempt_id: str) -> tuple[str, dict[str, Any]] | None:
+    """既有 attempt 对账收据记录的作废来源（字段名与事实）；没有收据或收据不是作废对账时为 None。"""
+
+    path = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}") / ATTEMPT_RECEIPT_NAME
+    if path.is_symlink() or not path.is_file():
+        return None
+    payload = _read_json(path, "既有对账收据")
+    if (
+        payload.get("schema_version") != ATTEMPT_SCHEMA
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("recovery_revision") is not None
+    ):
+        raise ReconcilerError(f"既有对账收据身份非法：{path}")
+    present = [name for name in INVALIDATION_FIELDS if isinstance(payload.get(name), Mapping)]
+    if not present:
+        return None
+    if len(present) > 1:
+        raise ReconcilerError(f"既有对账收据的作废来源不唯一：{path}")
+    return present[0], dict(payload[present[0]])
+
+
+def _require_recorded_invalidation_current(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    field: str,
+    recorded: Mapping[str, Any],
+    current: Mapping[str, Any] | None,
+) -> None:
+    """记录的作废事实必须仍由当前链支持：隔离／冲突逐字段相等；演进须是当前事实的前缀（同一 source_index、
+    序号前缀、该序号的演进收据摘要相同、作废作业子集）。否则失败关闭，不按当前事实改写 write-once 收据。"""
+
+    consistent = False
+    if current is not None:
+        if field == "tool_evolution_invalidation":
+            try:
+                chain = codex_upgrade._campaign_tool_evolutions(campaign_dir, manifest)
+            except codex_upgrade.ConfigurationError as error:
+                raise ReconcilerError(str(error)) from error
+            recorded_indexes = [int(item) for item in recorded.get("evolution_indexes") or []]
+            current_indexes = [int(item) for item in current.get("evolution_indexes") or []]
+            latest = recorded.get("latest_evolution_index")
+            recorded_jobs = recorded.get("invalidated_job_ids")
+            consistent = (
+                bool(recorded_indexes)
+                and isinstance(latest, int)
+                and latest == max(recorded_indexes)
+                and recorded.get("source_index") == current.get("source_index")
+                and current_indexes[: len(recorded_indexes)] == recorded_indexes
+                and 1 <= latest <= len(chain)
+                and str(chain[latest - 1].get("receipt_sha256")) == recorded.get("latest_evolution_receipt_sha256")
+                and isinstance(recorded_jobs, list)
+                and bool(recorded_jobs)
+                and set(recorded_jobs) <= set(current.get("invalidated_job_ids") or [])
+            )
+        else:
+            consistent = dict(current) == dict(recorded)
+    if not consistent:
+        raise ReconcilerError(
+            f"既有对账收据记录的作废事实（{field}）与当前链不一致，拒绝按当前事实改写 write-once 收据"
+        )
+
+
+def _attempt_invalidation_facts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, dict[str, Any]]]:
+    """等待封存 attempt 的三类作废事实（演进、隔离、证据根冲突）与叠加的其它来源。
+
+    修好接着跑第 28 项：作废来源以首次落盘的对账收据为准。没有既有收据时按演进 > 隔离 > 冲突取其一（历史字节不变）；
+    既有收据已记录某类作废时，核对该类事实仍由当前链支持后沿用记录（收据、总账、账本事件与暂停原因幂等），其余
+    类别的当前事实作为叠加只返回给命令输出——它们对执行范围的影响由恢复预览按当前链重算承担。
+    """
+
+    current: dict[str, dict[str, Any] | None] = {
+        "tool_evolution_invalidation": _evolution_invalidation_facts(
+            campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
+        ),
+        "environment_isolation_invalidation": _isolation_invalidation_facts(
+            campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
+        ),
+        "evidence_conflict_invalidation": _conflict_invalidation_facts(
+            campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
+        ),
+    }
+    recorded = _recorded_invalidation(campaign_dir, attempt_id)
+    stacked: dict[str, dict[str, Any]] = {}
+    if recorded is None:
+        chosen_field = next((name for name in INVALIDATION_FIELDS if current[name] is not None), None)
+    else:
+        chosen_field, facts = recorded
+        _require_recorded_invalidation_current(
+            campaign_dir, manifest, field=chosen_field, recorded=facts, current=current[chosen_field]
+        )
+        latest_same_kind = current[chosen_field]
+        if latest_same_kind is not None and dict(latest_same_kind) != dict(facts):
+            # 同类叠加（演进作废后又登记了更多演进）：当前链的事实只留痕，收据沿用首次记录。
+            stacked[chosen_field] = dict(latest_same_kind)
+        current[chosen_field] = dict(facts)
+    stacked.update({name: dict(value) for name, value in current.items() if name != chosen_field and value is not None})
+    chosen = {name: (dict(current[name]) if name == chosen_field and current[name] is not None else None) for name in INVALIDATION_FIELDS}
+    return (
+        chosen["tool_evolution_invalidation"],
+        chosen["environment_isolation_invalidation"],
+        chosen["evidence_conflict_invalidation"],
+        stacked,
+    )
+
+
 def _invalidation_ledger_event_id(
     attempt_id: str,
     isolation_invalidation: Mapping[str, Any] | None,
@@ -2635,6 +2757,8 @@ def reconcile_attempt(
     isolation_invalidation: dict[str, Any] | None = None
     # 修好接着跑第 24 项：等待封存、但被证据根冲突隔离的 attempt（同一协议，全部作业失效）。
     conflict_invalidation: dict[str, Any] | None = None
+    # 修好接着跑第 28 项：首次作废之后叠加的其它作废来源（只记入输出）。
+    stacked_invalidations: dict[str, dict[str, Any]] = {}
     if recovery_revision is not None:
         if phase != "candidate" or candidate_id is None:
             raise ReconcilerError("恢复段只存在于候选 attempt")
@@ -2677,17 +2801,15 @@ def reconcile_attempt(
                 campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
             )
             if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
-                evolution_invalidation = _evolution_invalidation_facts(
-                    campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
+                # 修好接着跑第 28 项：作废来源以首次落盘的对账收据为准；其后叠加的作废来源只记入输出，不改写 write-once 收据。
+                (
+                    evolution_invalidation,
+                    isolation_invalidation,
+                    conflict_invalidation,
+                    stacked_invalidations,
+                ) = _attempt_invalidation_facts(
+                    campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
                 )
-                if evolution_invalidation is None:
-                    isolation_invalidation = _isolation_invalidation_facts(
-                        campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
-                    )
-                if evolution_invalidation is None and isolation_invalidation is None:
-                    conflict_invalidation = _conflict_invalidation_facts(
-                        campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
-                    )
                 if evolution_invalidation is None and isolation_invalidation is None and conflict_invalidation is None:
                     raise ReconcilerError(
                         "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进／环境隔离／"
@@ -3090,6 +3212,9 @@ def reconcile_attempt(
         result["environment_isolation_invalidation"] = dict(isolation_invalidation)
     if conflict_invalidation is not None:
         result["evidence_conflict_invalidation"] = dict(conflict_invalidation)
+    if stacked_invalidations:
+        # 第 28 项：首次作废之后叠加的作废来源只在输出里留痕；收据、总账与账本沿用首次落盘的作废事实。
+        result["stacked_invalidations"] = {name: dict(facts) for name, facts in stacked_invalidations.items()}
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")
