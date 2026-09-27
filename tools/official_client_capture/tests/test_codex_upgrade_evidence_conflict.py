@@ -11,7 +11,6 @@ import argparse
 import contextlib
 import glob
 import json
-import shutil
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -150,8 +149,10 @@ class SupersessionTests(_CampaignRoot):
         jobs = [SimpleNamespace(job_id="candidate-core-direct", evidence_roots=(str(direct),))]
         self._supersede("a1", jobs, {str(direct): [_reference("a0")]})
         archived = direct.with_name(direct.name + ".superseded-a1")
-        # 归档目录被替换：原目录既不在归档路径也不在原路径。
-        shutil.rmtree(archived)
+        # 归档目录被替换：原目录被挪走、归档路径换成另一个目录——原目录既不在归档路径也不在原路径。旧目录仍占着
+        # 原 inode，新目录的 inode 必然不同（直接删除后重建时 ext4 会立即复用同一 inode 号，那种情形 inode 判据识别
+        # 不出，由随后的收口边界重放按条目 inode／mtime／size 失败关闭）。
+        archived.rename(self.runs / "moved-away")
         archived.mkdir(mode=0o700)
         with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "取代状态不一致"):
             self._relocations("a0")
