@@ -2694,6 +2694,8 @@ raise SystemExit(9)
             state = self._wait_campaign_state(run_dir, {"failed"})
             self.assertLess(time.monotonic() - started, IMMEDIATE_DETECTION_SECONDS)
             self.assertEqual(state["state"], "failed")
+            # 第 34 项：与 SIGKILL 用例同理，等父监督器收尾退出再让 tempfile 清理（4 路分片并行实测撞到 Directory not empty）。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_dispatch_timeout_is_failed_without_audit_gap(self) -> None:
         """父编排器未派发下一动作必须自动失败，不能伪装成审计不完整。"""
