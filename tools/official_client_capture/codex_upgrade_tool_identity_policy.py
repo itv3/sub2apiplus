@@ -405,7 +405,9 @@ def evaluator_dependency_digests(
     * ``checker_sha256``：``candidate_rule_assertion.py`` 整文件摘要；
     * ``builder_sha256``：``build_rule_assertion_results.py`` 整文件摘要（三方裁定的强制口径）；
     * ``compare_reader_sha256``／``accept_reader_sha256``：``codex_upgrade.py`` 中 ``compare_campaign``／
-      ``accept_campaign`` 函数根的静态符号闭包摘要，``layer=None`` 计入闭包引用的全部受管模块。
+      ``accept_campaign`` 根的读侧闭包摘要（evaluator-reader-closure/v2，修好接着跑第 8 项后半：
+      排除登记的守卫与账本读取，control 层按符号计入，补上延迟导入；旧口径见
+      ``legacy_evaluator_reader_digests``）。
 
     编译器与派发入口的 commit 回调调用同一个纯函数，保证"冻结值"与"核对值"口径一致。
     """
@@ -416,11 +418,11 @@ def evaluator_dependency_digests(
     for relative in (EVALUATOR_CHECKER_RELATIVE, EVALUATOR_BUILDER_RELATIVE):
         if relative not in digests:
             raise ToolIdentityPolicyError(f"evaluator 直接依赖不在工具树内：{relative}")
-    compare_closure = orchestrator_closure(
-        active_policy, root, list(EVALUATOR_COMPARE_READER_ROOTS), digests, layer=None
+    compare_closure = evaluator_reader_closure(
+        active_policy, root, list(EVALUATOR_COMPARE_READER_ROOTS), digests
     )
-    accept_closure = orchestrator_closure(
-        active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests, layer=None
+    accept_closure = evaluator_reader_closure(
+        active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests
     )
     return {
         "checker_sha256": digests[EVALUATOR_CHECKER_RELATIVE],
@@ -428,3 +430,326 @@ def evaluator_dependency_digests(
         "compare_reader_sha256": compare_closure["closure_sha256"],
         "accept_reader_sha256": accept_closure["closure_sha256"],
     }
+
+
+# ---------------------------------------------------------------------------
+# 修好接着跑第 8 项后半：评估器读侧闭包收窄
+# ---------------------------------------------------------------------------
+#
+# 旧口径（``orchestrator_closure(layer=None)``）从 compare／accept 根出发，经 ``load_campaign_manifest``、
+# ``_verify_plan_identity`` 等枢纽把几乎全部控制面拉进来，且闭包引用的受管模块整文件计入：改一行监督器、
+# 账本、租约都会让两项 reader 摘要变化。b≥1 时编译授权因此失配，而 evaluation-recover 又不受理非评估器
+# 缺陷的变化——修一次基础设施就卡死。新口径（evaluator-reader-closure/v2）：
+#   · 根不变，根本体与评估链函数一律函数级计入；
+#   · ``codex_upgrade.py`` 内登记的守卫／副作用函数是屏障（不展开、不计入），登记时写明调用点形态，
+#     测试逐一核对（代码一旦开始使用纯守卫的返回值，测试即失败）；
+#   · control 层模块按符号跨模块递归计入（旧口径整文件），evidence／wire 与未分层模块仍整文件计入；
+#   · 函数体内的延迟导入与 ``模块.属性`` 引用按符号解析（旧口径的盲区：reconciler 的恢复段复用证明
+#     明明影响 accept 的读取结果，却不在摘要里）；
+#   · 账本读取（``_campaign_ledger_summary_for_baseline`` 与 timing_ledger 的 replay／stopped_phase）是
+#     屏障，当前评估基线改由 compare／accept 运行时与父 run 冻结值核对（``codex_upgrade`` 负责）。
+# 旧算法保留为 ``legacy_evaluator_reader_digests``，只用于识别旧口径冻结值（b≥1 编译授权与
+# evaluation-recover 的变化判定）；wire／evidence 闭包所用的函数一律不改，两层摘要逐字不变。
+READER_CLOSURE_SCHEMA = "evaluator-reader-closure/v2"
+READER_READER_FIELDS = ("compare_reader_sha256", "accept_reader_sha256")
+# ``codex_upgrade.py`` 内的读侧屏障 → 该函数在读侧闭包内允许的调用点形态。
+#   discard：纯守卫，全部调用点丢弃返回值（只会拒绝，不改变读取结果）；
+#   with：锁等上下文管理副作用；
+#   assign／compare／return：人工审查登记——返回值只用于"不等即报错"的比较、控制面路径或 CLI 输出，
+#   不进入比较收据、断言模板或验收结论；_campaign_ledger_summary_for_baseline 决定当前基线，配运行时核对。
+READER_BARRIERS: dict[str, frozenset[str]] = {
+    # 纯守卫（19）
+    "_bind_active_lease_attempt": frozenset({"discard"}),
+    "_guard_candidate_revision_write": frozenset({"discard"}),
+    "_reject_contaminated_campaign": frozenset({"discard"}),
+    "_verify_plan_identity": frozenset({"discard"}),
+    "_verify_control_receipts": frozenset({"discard"}),
+    "_validate_initial_vc_control_artifacts": frozenset({"discard"}),
+    "_validate_attempt_failure_facts": frozenset({"discard"}),
+    "_validate_attempt_incremental_fields": frozenset({"discard"}),
+    "_validate_attempt_watchdog_bindings": frozenset({"discard"}),
+    "_validate_deadline_orphan_attempt_bindings": frozenset({"discard"}),
+    "_replay_attempt_evidence_permissions": frozenset({"discard"}),
+    "_official_evidence_reuse_attempt_source": frozenset({"discard"}),
+    "_load_classification_candidate_reuse_transition": frozenset({"discard"}),
+    "_assert_sealed_stage_checkpoint_progression": frozenset({"discard"}),
+    "_validate_direct_predecessor_official_attempt": frozenset({"discard"}),
+    "_write_blocked_acceptance_attempt": frozenset({"discard"}),
+    "_validate_candidate_readiness_binding": frozenset({"discard"}),
+    "_replay_attempt_recovery_evidence_permissions": frozenset({"discard"}),
+    "_verify_baseline_evaluation_epoch": frozenset({"discard"}),
+    # 副作用（2）：CLI 输出的 VC 完成收据、Campaign 锁
+    "_complete_vc_with_receipt": frozenset({"assign"}),
+    "_campaign_lock": frozenset({"with"}),
+    # 比较型守卫与控制面路径（人工审查登记）
+    "_control_replacement_context": frozenset({"assign"}),
+    "_supervisor_audit_bound_mapping_matches": frozenset({"compare", "return"}),
+    "_imported_stage_evaluation_transition_source": frozenset({"assign"}),
+    "_candidate_control_refresh_source_transition": frozenset({"assign"}),
+    "_sealed_stage_timing_checkpoint": frozenset({"assign"}),
+    "_successor_runtime_configuration": frozenset({"assign"}),
+    "_successor_copy_expectations": frozenset({"assign"}),
+    "_control_receipt_relative": frozenset({"assign"}),
+    "_load_capture_reservation": frozenset({"assign", "discard"}),
+    "_replay_evidence_permission_closeout": frozenset({"return"}),
+    # 唯一非守卫：账本决定当前评估基线，配 compare／accept 运行时核对
+    "_campaign_ledger_summary_for_baseline": frozenset({"assign"}),
+}
+# 其它模块的读侧屏障（模块名 → 符号）：账本回放与停线阶段只经屏障函数进入，同样由运行时核对兜底。
+READER_MODULE_BARRIERS: dict[str, frozenset[str]] = {
+    "codex_upgrade_timing_ledger": frozenset({"replay", "stopped_phase"}),
+}
+_MANAGED_PACKAGE = "tools.official_client_capture"
+
+
+def _managed_module_path(module: str, digests: Mapping[str, str]) -> str | None:
+    base = module.replace(".", "/")
+    for candidate in (f"{base}.py", f"{base}/__init__.py"):
+        if candidate in digests:
+            return candidate
+    return None
+
+
+def _reader_imports(
+    nodes: Any,
+    package: str,
+    digests: Mapping[str, str],
+) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+    """从导入语句解析受管模块别名（别名 → 模块）与符号导入（别名 → (模块, 符号)）。
+
+    覆盖包形式（``from tools.official_client_capture import m``、``from ...m import s``）、相对形式
+    （``from . import m``、``from .m import s``）与脚本形式（``import m``），模块须在受管树内。
+    """
+
+    modules: dict[str, str] = {}
+    symbols: dict[str, tuple[str, str]] = {}
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom):
+            if node.level > 0:
+                base = package
+                for _ in range(node.level - 1):
+                    base = base.rpartition(".")[0]
+                owner = ".".join(part for part in (base, node.module or "") if part)
+            elif node.module == _MANAGED_PACKAGE:
+                owner = ""
+            elif (node.module or "").startswith(_MANAGED_PACKAGE + "."):
+                owner = (node.module or "")[len(_MANAGED_PACKAGE) + 1:]
+            else:
+                continue
+            for alias in node.names:
+                name = alias.asname or alias.name
+                if not owner:
+                    # 包形式 ``from tools.official_client_capture import m`` 与顶层包内的 ``from . import m``。
+                    if _managed_module_path(alias.name, digests):
+                        modules[name] = alias.name
+                    continue
+                submodule = f"{owner}.{alias.name}"
+                if _managed_module_path(submodule, digests):
+                    modules[name] = submodule
+                elif _managed_module_path(owner, digests):
+                    symbols[name] = (owner, alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                full = alias.name
+                if full.startswith(_MANAGED_PACKAGE + "."):
+                    full = full[len(_MANAGED_PACKAGE) + 1:]
+                if _managed_module_path(full, digests):
+                    modules[alias.asname or alias.name.split(".")[0]] = full
+    return modules, symbols
+
+
+def _top_level_import_nodes(tree: ast.Module) -> list[ast.AST]:
+    """模块顶层（含 if／try／with 块内、不进函数与类）的导入语句。"""
+
+    found: list[ast.AST] = []
+    pending: list[ast.AST] = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.append(node)
+        elif isinstance(node, (ast.If, ast.Try, ast.With)):
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                pending.extend(getattr(node, field, []) or [])
+        elif isinstance(node, ast.ExceptHandler):
+            pending.extend(node.body)
+    return found
+
+
+@functools.lru_cache(maxsize=64)
+def _reader_parsed_module(
+    path: str, sha256: str
+) -> tuple[str, ast.Module, dict[str, ast.AST], dict[str, ast.AST], tuple[bytes, ...] | None]:
+    del sha256  # 只作缓存键：内容变化即重新解析
+    source = Path(path).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions, constants, _imports = _module_symbols(tree)
+    # 预先按行切成 UTF-8 字节：ast.get_source_segment 每次都把整个源码重新分行，4 万行的编排器上
+    # 数百个符号会慢到秒级。只含 \n 换行时逐行切片与其逐字相同；含 \r 时退回标准实现。
+    lines: tuple[bytes, ...] | None = None
+    if "\r" not in source:
+        parts = source.split("\n")
+        lines = tuple(
+            [(part + "\n").encode("utf-8") for part in parts[:-1]] + ([parts[-1].encode("utf-8")] if parts[-1] else [])
+        )
+    return source, tree, functions, constants, lines
+
+
+def _reader_source_segment(source: str, lines: tuple[bytes, ...] | None, node: ast.AST) -> str:
+    """与 ``ast.get_source_segment(source, node)`` 逐字相同的源码段（行已预切时按字节偏移切片）。"""
+
+    if lines is None or getattr(node, "end_lineno", None) is None:
+        return ast.get_source_segment(source, node) or ""
+    start, end = node.lineno - 1, node.end_lineno - 1
+    if start == end:
+        return lines[start][node.col_offset:node.end_col_offset].decode("utf-8")
+    return (
+        lines[start][node.col_offset:] + b"".join(lines[start + 1:end]) + lines[end][:node.end_col_offset]
+    ).decode("utf-8")
+
+
+def evaluator_reader_closure(
+    policy: Mapping[str, Any],
+    tool_root: Path,
+    roots: list[str],
+    digests: Mapping[str, str],
+) -> dict[str, Any]:
+    """读侧闭包（evaluator-reader-closure/v2）：见本节说明。返回闭包明细与 ``closure_sha256``。"""
+
+    root = Path(tool_root)
+    orchestrator = Path(str(policy["orchestrator"]["file"])).with_suffix("").as_posix().replace("/", ".")
+    dynamic_policy = {"orchestrator": {"dynamic_call_names": list(policy["orchestrator"]["dynamic_call_names"])}}
+    if _managed_module_path(orchestrator, digests) is None:
+        raise ToolIdentityPolicyError("编排器文件不存在")
+    parsed: dict[str, tuple[Any, ...]] = {}
+
+    def module_info(module: str):
+        if module not in parsed:
+            relative = _managed_module_path(module, digests)
+            if relative is None:
+                raise ToolIdentityPolicyError(f"读侧闭包引用的受管模块不在工具树内：{module}")
+            source, tree, functions, constants, lines = _reader_parsed_module(str(root / relative), digests[relative])
+            package = module.rpartition(".")[0]
+            aliases, symbol_imports = _reader_imports(_top_level_import_nodes(tree), package, digests)
+            parsed[module] = (source, tree, functions, constants, aliases, symbol_imports, lines)
+        return parsed[module]
+
+    _source, _tree, orchestrator_functions, _constants, _aliases, _symbols, _lines = module_info(orchestrator)
+    missing = [name for name in roots if name not in orchestrator_functions]
+    if missing:
+        raise ToolIdentityPolicyError(f"读侧闭包的根函数不存在：{missing}")
+    symbols: dict[tuple[str, str], dict[str, str]] = {}
+    whole: dict[str, dict[str, str]] = {}
+    pending: list[tuple[str, str]] = [(orchestrator, name) for name in roots]
+
+    def whole_module(module: str) -> None:
+        relative = _managed_module_path(module, digests)
+        if relative is not None and module not in whole:
+            whole[module] = {"module": module, "path": relative, "sha256": digests[relative]}
+
+    def refer(module: str, name: str) -> None:
+        relative = _managed_module_path(module, digests)
+        if relative is None:
+            return
+        if module == orchestrator or classify_path(policy, relative) == "control":
+            pending.append((module, name))
+        else:
+            whole_module(module)
+
+    while pending:
+        module, name = pending.pop()
+        if (module, name) in symbols:
+            continue
+        if module == orchestrator and name in READER_BARRIERS:
+            continue
+        if name in READER_MODULE_BARRIERS.get(module, frozenset()):
+            continue
+        source, tree, functions, constants, aliases, symbol_imports, lines = module_info(module)
+        node = functions.get(name) or constants.get(name)
+        if node is None:
+            # control 模块里静态找不到的符号（类属性、再导出、动态定义）：保守整文件计入。
+            if module != orchestrator:
+                whole_module(module)
+            continue
+        kind = "function" if name in functions else "constant"
+        symbols[(module, name)] = {
+            "module": module,
+            "name": name,
+            "kind": kind,
+            "sha256": hashlib.sha256(_reader_source_segment(source, lines, node).encode("utf-8")).hexdigest(),
+        }
+        local_aliases, local_symbols = _reader_imports(
+            [child for child in ast.walk(node) if isinstance(child, (ast.Import, ast.ImportFrom))],
+            module.rpartition(".")[0],
+            digests,
+        )
+        scope_aliases = {**aliases, **local_aliases}
+        scope_symbols = {**symbol_imports, **local_symbols}
+        if kind == "function":
+            try:
+                _reject_dynamic(node, f"{module}.{name}", dynamic_policy, scope_aliases, functions)
+            except ToolIdentityPolicyError:
+                if module == orchestrator:
+                    raise
+                # control 模块里无法静态解析的函数：保守把本模块与被动态分发的模块整文件计入。
+                whole_module(module)
+                for child in ast.walk(node):
+                    if (
+                        isinstance(child, ast.Call)
+                        and isinstance(child.func, ast.Name)
+                        and child.func.id in {"getattr", "setattr", "delattr"}
+                        and child.args
+                        and isinstance(child.args[0], ast.Name)
+                        and child.args[0].id in scope_aliases
+                    ):
+                        whole_module(scope_aliases[child.args[0].id])
+        attribute_bases: set[int] = set()
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Attribute)
+                and isinstance(child.value, ast.Name)
+                and child.value.id in scope_aliases
+                and child.value.id not in functions
+                and child.value.id not in constants
+            ):
+                attribute_bases.add(id(child.value))
+                refer(scope_aliases[child.value.id], child.attr)
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Name) or id(child) in attribute_bases or child.id == name:
+                continue
+            if child.id in functions or child.id in constants:
+                pending.append((module, child.id))
+            elif child.id in scope_symbols:
+                refer(*scope_symbols[child.id])
+            elif child.id in scope_aliases:
+                # 模块对象整体被传递或赋值：无法按符号追踪，保守整文件计入。
+                whole_module(scope_aliases[child.id])
+
+    closure = {
+        "schema_version": READER_CLOSURE_SCHEMA,
+        "roots": sorted(roots),
+        "barriers": sorted(READER_BARRIERS),
+        "module_barriers": sorted(f"{module}:{name}" for module, names in READER_MODULE_BARRIERS.items() for name in names),
+        "symbols": [symbols[key] for key in sorted(symbols)],
+        "modules": [whole[key] for key in sorted(whole)],
+    }
+    return {**closure, "closure_sha256": _fingerprint(closure)}
+
+
+def legacy_evaluator_reader_digests(
+    tool_root: Path | None = None,
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """旧口径（``orchestrator_closure(layer=None)``）的两项 reader 摘要：只用于识别旧口径冻结值。"""
+
+    root = Path(tool_root) if tool_root is not None else Path(__file__).resolve().parent
+    active_policy = dict(policy) if policy is not None else load_policy(root / POLICY_FILENAME)
+    digests = _managed_tree_digests(root)
+    return {
+        "compare_reader_sha256": orchestrator_closure(
+            active_policy, root, list(EVALUATOR_COMPARE_READER_ROOTS), digests, layer=None
+        )["closure_sha256"],
+        "accept_reader_sha256": orchestrator_closure(
+            active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests, layer=None
+        )["closure_sha256"],
+    }
+

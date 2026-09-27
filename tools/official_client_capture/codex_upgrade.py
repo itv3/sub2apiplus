@@ -20324,6 +20324,9 @@ def _evaluation_defect_admission(
     ):
         if receipt.get(field) != current.get(current_field):
             raise ConfigurationError(f"部署收据的 {field} 不等于当前受管工具树身份；修复尚未部署到当前树。")
+    # 修好接着跑第 8 项后半：失败批次冻结于旧读侧口径时，reader 两项会因口径切换显示变化——这里有意不按旧
+    # 口径复算去掉它：否则 b≥1 下重派判漂移、evaluation-recover 又判"没变化"，两头拒绝即卡死。多放行的后果
+    # 只是开新基线按当前工具重评一次（真实缺陷未修则再次失败，届时同口径比较即被拒），不会得出错误结论。
     changed = sorted(
         field
         for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
@@ -30099,6 +30102,24 @@ def _verify_evaluator_digests_authorized(
 
     authorized = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, baseline)
     drift = sorted(field for field, value in authorized.items() if str(digests.get(field)) != value)
+    reader_drift = [field for field in drift if field in codex_upgrade_tool_identity_policy.READER_READER_FIELDS]
+    if reader_drift:
+        # 修好接着跑第 8 项后半：授权冻结于旧读侧口径、核对值为新口径——两者指向同一棵读侧代码树（授权值
+        # 等于当前树按旧口径复算、核对值等于当前树按新口径）时不是工具变化，只是口径切换。
+        try:
+            current = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+            legacy = codex_upgrade_tool_identity_policy.legacy_evaluator_reader_digests()
+        except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+            raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+        drift = [
+            field
+            for field in drift
+            if not (
+                field in reader_drift
+                and legacy.get(field) == authorized[field]
+                and current.get(field) == str(digests.get(field))
+            )
+        ]
     if drift:
         origin = "plan 工具身份" if baseline == 0 else f"b{baseline} recovery.json 授权"
         raise ConfigurationError(
@@ -55317,12 +55338,42 @@ def _capture_stage_attempt_context(
     return attempt_root, attempt
 
 
+def _verify_reader_runtime_baseline(campaign_dir: Path, candidate_id: str, *, label: str) -> None:
+    """当前评估基线的运行时核对（修好接着跑第 8 项后半）。
+
+    读侧摘要（evaluator-reader-closure/v2）不再计入账本读取——账本、监督器等基础设施的修复不该让
+    compare／accept reader 变化——但账本决定当前评估基线（按哪个基线读写）。改由运行时保证：正式派发
+    （campaign-run 父监督器下）时，账本给出的当前基线编号与 COMMIT 摘要必须逐字等于父 run 清单冻结的
+    ``evaluation_baseline``／``baseline_commit_sha256``。清单没有冻结基线（非 VC-5 批次）、属于别的候选、
+    或不在父监督器下运行时不核对，仍由既有准入把关。
+    """
+
+    run_value = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV)
+    if not run_value:
+        return
+    inner = codex_upgrade_supervisor._run_inner_manifest(Path(run_value))
+    if inner is None:
+        raise ConfigurationError(f"{label}：父监督器 run 清单缺失或摘要不一致，不能核对当前评估基线。")
+    if "evaluation_baseline" not in inner or inner.get("candidate_id") not in (None, candidate_id):
+        return
+    frozen_baseline = int(inner.get("evaluation_baseline") or 0)
+    frozen_commit = inner.get("baseline_commit_sha256")
+    baseline, commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    actual_commit = commit.get("commit_sha256") if isinstance(commit, Mapping) else None
+    if baseline != frozen_baseline or actual_commit != frozen_commit:
+        raise ConfigurationError(
+            f"{label}：账本当前评估基线 b{baseline}（COMMIT {str(actual_commit)[:12]}）与父 run 冻结的 "
+            f"b{frozen_baseline}（COMMIT {str(frozen_commit)[:12]}）不一致；基线已变化，按当前基线重新编译派发。"
+        )
+
+
 def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
     """只读取封存材料并写比较收据；本函数不运行任何命令或网络请求。"""
 
     _reject_contaminated_campaign(campaign_dir)
     manifest = _require_formal_campaign(campaign_dir)
     _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="compare")
+    _verify_reader_runtime_baseline(campaign_dir, candidate_id, label="compare")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
@@ -56943,6 +56994,7 @@ def accept_campaign(
         raise ConfigurationError("逐规则断言结果必须是非符号链接普通文件。")
     manifest = _require_formal_campaign(campaign_dir)
     _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="accept")
+    _verify_reader_runtime_baseline(campaign_dir, candidate_id, label="accept")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
