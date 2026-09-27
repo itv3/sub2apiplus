@@ -113,10 +113,14 @@ ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
         # 不由子进程自述，只能由父监督器按 post_run_tooling_facts 的文件事实
         # 判定并写独立收据；reconciler 与重派门禁复算同一函数。
         "post-run-tooling",
+        # 修好接着跑第 17 项：动作执行前发现受管工具的评估器摘要与批次冻结值不一致（工具在批次运行中
+        # 被部署替换），动作未执行、本批次此前也没有执行过会发请求的动作。登记工具演进、对账后重新编译
+        # 同一动作计划派发 N+1；不再按 identity-drift 永久停线。
+        "tool-evolution-required",
     }
 )
 RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
-    {"environment-prerequisite", "post-run-tooling"}
+    {"environment-prerequisite", "post-run-tooling", "tool-evolution-required"}
 )
 # 改造 4（staging/WAL）：父 run 取得执行权之前的两类失败不是动作失败，没有动作诊断，
 # 由 reconciler 按 state／stop reason 分类；两类都可恢复但恢复目标不同：
@@ -8748,6 +8752,15 @@ def _validate_evaluation_baseline_successor(
     candidate_id = str(prior_manifest.get("candidate_id"))
     revision = prior_manifest.get("candidate_revision")
     if (
+        successor_baseline == prior_baseline
+        and successor_manifest.get("candidate_id") == candidate_id
+        and successor_manifest.get("candidate_revision") == revision
+    ):
+        # 修好接着跑第 9 项：同候选同 revision 同基线不是"开新评估基线"，而是 b≥1 评估批次失败后的
+        # 重派（例如环境前提失败或动作执行前评估器摘要变化），交给逐字重派等其它协议判定；此前在
+        # 这里失败关闭，b≥1 的评估批次连环境失败都无法重派。
+        return False
+    if (
         successor_manifest.get("candidate_id") != candidate_id
         or successor_manifest.get("candidate_revision") != revision
         or successor_baseline <= prior_baseline
@@ -9124,10 +9137,14 @@ def _validate_attempt_recovery_segment_successor(
         "candidate_id",
         "evaluation_baseline",
         "baseline_commit_sha256",
-        "evaluator_digests",
     )
     normalized_prior = {**prior_manifest, "actions": normalized_prior_actions}
     drifted = [field for field in immutable_fields if normalized_manifest.get(field) != normalized_prior.get(field)]
+    # 修好接着跑第 9 项：评估器摘要与逐字重派同一口径——b0 只变 reader，或 checker／builder 等于已登记
+    # 工具演进迁移到的授权口径时不算漂移；b≥1 任何变化仍失败关闭（改走 evaluation-recover）。
+    if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
+            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
+        drifted.append("evaluator_digests")
     if drifted:
         raise SupervisorError("后继恢复段批次只允许失败动作换段号并追加恢复预览，漂移字段：" + "、".join(drifted))
     if preview_argument is None:
@@ -9364,7 +9381,7 @@ def _validate_reconciled_redispatch_binding(
             if successor_manifest.get(field) != prior_manifest.get(field):
                 drifted.append(field)
     if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
-            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest)):
+            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
         drifted.append("evaluator_digests")
     if drifted:
         raise SupervisorError(
@@ -9381,6 +9398,8 @@ EVALUATOR_B0_AUTHORIZED_DIGESTS = ("checker_sha256", "builder_sha256")
 def _redispatch_evaluator_digests_drifted(
     prior_manifest: Mapping[str, Any],
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """reservation 前逐字重派时，评估器摘要是否构成漂移。
 
@@ -9406,7 +9425,23 @@ def _redispatch_evaluator_digests_drifted(
         or set(prior) != set(successor)
     ):
         return True
-    return any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS)
+    if not any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS):
+        return False
+    # 修好接着跑第 9 项：b0 下 checker／builder 的变化只接受"随已登记工具演进迁移的 b0 授权口径"——
+    # 后继两项须等于该候选 b0 授权历史中的某一值（plan 冻结值或某次迁移到的演进 to 值）。授权历史
+    # 只增不减，历史链重放时早先放行的后继依然成立；授权没有迁移（b0 已有评估产出）时照常失败关闭，
+    # 改走 evaluation-recover 开新基线。
+    candidate_id = successor_manifest.get("candidate_id")
+    if campaign_dir is None or not isinstance(candidate_id, str) or not candidate_id:
+        return True
+    from tools.official_client_capture import codex_upgrade as upgrade
+
+    try:
+        manifest = upgrade._require_formal_campaign(Path(campaign_dir))
+        history = upgrade._b0_evaluator_authorized_digest_history(Path(campaign_dir), manifest, candidate_id)
+    except upgrade.ConfigurationError:
+        return True
+    return {key: successor.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS} not in history
 
 
 def _validate_batched_stage_review_successor(
@@ -10330,6 +10365,12 @@ def _close_failed_campaign_timing_ledger(
             "修好工具并受监督部署、登记 tool-evolution 后批准恢复预览，以 resume --rerun-failed 只重跑失败与"
             "受工具演进影响的作业；判为候选源码问题则 invalidate-candidate；同根因达上限即停线。"
         )
+    elif failure_class == "tool-evolution-required":
+        recovery_next_action = (
+            "reconcile-supervisor-run：动作执行前受管工具的评估器摘要已变化（批次运行中部署了新工具），"
+            "动作未执行、无请求；登记 tool-evolution 并对账通过后，以 compile-and-run-vc-batch 按同一动作计划"
+            "重新编译派发 N+1（按新评估器摘要冻结）。"
+        )
     elif failure_class == "post-run-tooling":
         # 数据面 Job 已闭合，失败的是零请求后处理动作：修复评估／控制工具并
         # 受监督部署后，reconcile-supervisor-run 通过即逐字重派同一 seal 批次，
@@ -10906,9 +10947,15 @@ def _campaign_run_with_budget_lock(
                     f"action-{action_id}-failure.json"
                 )
                 # 改造 5（T5.9）：动作执行前核对当前受管树 evaluator 四项摘要等于清单冻结值。
-                # 不等即该动作不执行、父 run failed（identity-drift，永久失败类，不可 evaluation-recover）；
-                # 动作未执行，不写动作输出绑定（stop-receipt 记 null）。
+                # 不等即该动作不执行、父 run failed；动作未执行，不写动作输出绑定（stop-receipt 记 null）。
+                # 修好接着跑第 17 项：本批次此前没有执行过会发请求的动作（第一个动作，或此前都是零请求
+                # 后处理）时判为可恢复的 tool-evolution-required——登记工具演进、对账后重新编译派发；
+                # 否则仍是 identity-drift 永久失败类。
                 identity_drift = _evaluator_identity_drift(manifest.get("evaluator_digests"))
+                drift_recoverable = not results or all(
+                    _post_run_tooling_item_allowed(item) for item in manifest.get("execute_items", [])
+                )
+                drift_class = "tool-evolution-required" if drift_recoverable else "identity-drift"
                 if identity_drift:
                     _write_action_diagnostic(
                         diagnostic_path,
@@ -10918,7 +10965,12 @@ def _campaign_run_with_budget_lock(
                         owner_pid=client.owner_pid,
                         owner_nonce=client.owner_nonce,
                         failure_kind="handled-error",
-                        failure_class="identity-drift",
+                        failure_class=drift_class,
+                        failure_observations=(
+                            [{"check_id": "pre-action-evaluator-identity", "failure_code": "tool-evolution-required"}]
+                            if drift_class == "tool-evolution-required"
+                            else None
+                        ),
                         error_type="EvaluatorIdentityDrift",
                         message=(
                             "动作执行前核对：当前受管树 evaluator 摘要与批次冻结值不一致，动作未执行："
@@ -10935,7 +10987,7 @@ def _campaign_run_with_budget_lock(
                         owner_nonce=client.owner_nonce,
                     )
                     failed_action_diagnostic = diagnostic
-                    failed_action_effective_class = "identity-drift"
+                    failed_action_effective_class = drift_class
                     results.append(
                         {
                             "action_id": action_id,
@@ -10948,7 +11000,7 @@ def _campaign_run_with_budget_lock(
                                 "sha256": diagnostic["diagnostic_sha256"],
                                 "failure_class": diagnostic["failure_class"],
                                 "failure_observations": list(diagnostic["failure_observations"]),
-                                "effective_failure_class": "identity-drift",
+                                "effective_failure_class": drift_class,
                             },
                         }
                     )

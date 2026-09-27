@@ -3644,6 +3644,12 @@ def reconcile_supervisor_run(
                 "preview/apply，否则以 close-campaign-ledger 显式停线"
                 + ("；VC-4 工具缺陷须先修复不可幂等半成品再重新对账" if candidate_scope else "")
             )
+        elif run.get("failure_class") == "tool-evolution-required":
+            result["next_command"] = (
+                "phase 保持 active：动作执行前评估器摘要已变化、动作未执行、无请求；登记 tool-evolution 后以 "
+                "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
+                "迁移到的授权口径，b≥1 改走 evaluation-recover）"
+            )
         elif run.get("failure_class") == "post-run-tooling":
             result["next_command"] = (
                 "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "

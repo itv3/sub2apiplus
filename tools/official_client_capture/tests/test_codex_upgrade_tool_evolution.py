@@ -935,5 +935,62 @@ class EvolutionInvalidatedAwaitingSourceTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(target({"command": command}))
 
+
+class RedispatchEvaluatorAuthorizationTests(unittest.TestCase):
+    """修好接着跑第 9 项：逐字重派时 b0 的 checker／builder 变化只接受已登记工具演进迁移到的授权口径。"""
+
+    DIGESTS = {"checker_sha256": "1" * 64, "builder_sha256": "2" * 64, "compare_reader_sha256": "3" * 64, "accept_reader_sha256": "4" * 64}
+
+    def _pair(self, *, baseline: int | None = None, **changes: str) -> tuple[dict, dict]:
+        prior = {
+            "candidate_id": "cand",
+            "evaluation_baseline": baseline,
+            "baseline_commit_sha256": None if baseline is None else "9" * 64,
+            "evaluator_digests": dict(self.DIGESTS),
+        }
+        successor = copy.deepcopy(prior)
+        successor["evaluator_digests"].update(changes)
+        return prior, successor
+
+    def test_b0_checker_change_follows_evolution_migrated_authorization_history(self) -> None:
+        history = [
+            {"checker_sha256": "1" * 64, "builder_sha256": "2" * 64},
+            {"checker_sha256": "5" * 64, "builder_sha256": "2" * 64},
+        ]
+        drifted = supervisor._redispatch_evaluator_digests_drifted
+        with mock.patch.object(codex_upgrade, "_require_formal_campaign", mock.Mock(return_value={})), \
+                mock.patch.object(codex_upgrade, "_b0_evaluator_authorized_digest_history", mock.Mock(return_value=history)):
+            self.assertFalse(drifted(*self._pair(checker_sha256="5" * 64), campaign_dir=Path("/c")))
+            self.assertTrue(drifted(*self._pair(checker_sha256="6" * 64), campaign_dir=Path("/c")))
+            # b≥1：任何变化仍算漂移（改走 evaluation-recover）。
+            self.assertTrue(drifted(*self._pair(baseline=1, checker_sha256="5" * 64), campaign_dir=Path("/c")))
+        # 不带 Campaign 目录（旧调用）：checker 变化照常算漂移；b0 只变 reader 不算。
+        self.assertTrue(drifted(*self._pair(checker_sha256="5" * 64)))
+        self.assertFalse(drifted(*self._pair(compare_reader_sha256="7" * 64)))
+
+    def test_b0_authorization_history_grows_along_migrating_evolutions_only(self) -> None:
+        plan = {"checker_sha256": "1" * 64, "builder_sha256": "2" * 64}
+
+        def evolution(index: int, checker: str, record: object) -> dict:
+            return {
+                "index": index,
+                "evaluator": {
+                    "to": {"checker_sha256": checker * 64, "builder_sha256": "2" * 64},
+                    "candidates": {} if record is None else {"cand": record},
+                },
+            }
+
+        chain = [
+            evolution(1, "5", {"b0_authorization_moved": True}),
+            evolution(2, "6", {"b0_authorization_moved": False}),  # 已有评估产出，不迁移
+            evolution(3, "7", None),  # 登记时候选尚无记录，迁移
+        ]
+        manifest = {"tool_identity": {"policy_version": "v2"}}
+        with mock.patch.object(codex_upgrade, "_plan_evaluator_entry_digests", mock.Mock(return_value=plan)), \
+                mock.patch.object(codex_upgrade, "_is_policy_v2_identity", mock.Mock(return_value=True)), \
+                mock.patch.object(codex_upgrade, "_campaign_tool_evolutions", mock.Mock(return_value=chain)):
+            history = codex_upgrade._b0_evaluator_authorized_digest_history(Path("/c"), manifest, "cand")
+        self.assertEqual([item["checker_sha256"][0] for item in history], ["1", "5", "7"])
+
 if __name__ == "__main__":
     unittest.main()

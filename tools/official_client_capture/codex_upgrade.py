@@ -29925,6 +29925,39 @@ def _b0_evaluator_authorized_digests(
     return _plan_evaluator_entry_digests(manifest)
 
 
+def _b0_evaluator_authorized_digest_history(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+) -> list[dict[str, str]]:
+    """该候选 b0 的 checker／builder 授权口径历史：plan 冻结值，再按演进链顺序加上每次迁移到的 to 值。
+
+    供逐字重派核对（修好接着跑第 9 项）：后继批次冻结的两项必须是历史中的某一值。历史只增不减，
+    因此历史链重放时早先放行的后继依然成立；迁移条件与 ``_b0_evaluator_authorized_digests`` 相同。
+    """
+
+    history = [_plan_evaluator_entry_digests(manifest)]
+    frozen = manifest.get("tool_identity")
+    if isinstance(frozen, Mapping) and _is_policy_v2_identity(frozen):
+        for evolution in _campaign_tool_evolutions(campaign_dir, manifest):
+            evaluator = evolution.get("evaluator")
+            if not isinstance(evaluator, Mapping) or not isinstance(evaluator.get("candidates"), Mapping):
+                raise ConfigurationError(f"evolution-{int(evolution['index']):02d} 的评估器记录形态非法。")
+            record = evaluator["candidates"].get(candidate_id)
+            if record is None or (isinstance(record, Mapping) and record.get("b0_authorization_moved") is True):
+                target = evaluator.get("to")
+                if (
+                    not isinstance(target, Mapping)
+                    or set(target) != {"checker_sha256", "builder_sha256"}
+                    or not all(isinstance(value, str) and SHA256_RE.fullmatch(value) for value in target.values())
+                ):
+                    raise ConfigurationError(f"evolution-{int(evolution['index']):02d} 的评估器 to 摘要非法。")
+                entry = {field: str(target[field]) for field in ("checker_sha256", "builder_sha256")}
+                if entry not in history:
+                    history.append(entry)
+    return history
+
+
 def _authorized_evaluator_digests(
     campaign_dir: Path,
     manifest: Mapping[str, Any],

@@ -438,6 +438,13 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertTrue(check(successor))
             # 不带基线字段：入口不成立（交给既有逐字重派协议判定）。
             self.assertFalse(check(dict(successor, evaluation_baseline=None, baseline_commit_sha256=None)))
+            # 修好接着跑第 9 项：同候选同 revision 同基线（b≥1 评估批次失败后的重派）不是开新基线，入口不成立，
+            # 交给逐字重派等协议；此前在这里失败关闭，b≥1 评估批次连环境失败都无法重派。
+            self.assertFalse(
+                supervisor._validate_evaluation_baseline_successor(
+                    prior_state, dict(prior_manifest, evaluation_baseline=1), run_b0, successor, campaign_dir=campaign_dir
+                )
+            )
             # 七类伪造各拒。
             with self.assertRaisesRegex(supervisor.SupervisorError, "未由账本以同一 COMMIT 摘要激活"):
                 check(dict(successor, baseline_commit_sha256="0" * 64))

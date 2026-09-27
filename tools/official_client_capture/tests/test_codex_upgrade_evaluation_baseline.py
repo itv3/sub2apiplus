@@ -710,7 +710,11 @@ class MonitorOrphanSealingTests(unittest.TestCase):
 
 
 class PreActionIdentityCheckTests(unittest.TestCase):
-    """T5.9：动作执行前核对 evaluator 四项摘要——清单冻结值与当前受管树不一致时动作不执行、父 run failed（identity-drift）。"""
+    """T5.9：动作执行前核对 evaluator 四项摘要——清单冻结值与当前受管树不一致时动作不执行、父 run failed。
+
+    修好接着跑第 17 项：本批次此前没有执行过会发请求的动作时判为可恢复的 tool-evolution-required（登记工具演进、
+    对账后重新编译派发），不再按 identity-drift 永久停线。
+    """
 
     def _run(self, root: Path, *, digests: dict, marker: Path) -> tuple[int, dict]:
         from tools.official_client_capture.tests import test_codex_upgrade_staging_supervisor as staging_tests
@@ -758,7 +762,7 @@ class PreActionIdentityCheckTests(unittest.TestCase):
                 manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
             )
 
-    def test_drifted_evaluator_digests_skip_action_and_fail_as_identity_drift(self) -> None:
+    def test_drifted_evaluator_digests_skip_action_and_fail_as_recoverable_tool_evolution_required(self) -> None:
         current = dict(policy_module.evaluator_dependency_digests())
         # 冻结值＝当前树：动作执行。
         with tempfile.TemporaryDirectory() as directory:
@@ -767,7 +771,8 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             returncode, payload = self._run(root, digests=current, marker=marker)
             self.assertEqual((returncode, payload["reason"]), (0, "queue-complete"), payload)
             self.assertTrue(marker.is_file())
-        # 冻结值与当前树不一致：动作不执行、诊断 identity-drift、stop-receipt action_outputs_sha256=None、无绑定文件。
+        # 冻结值与当前树不一致：动作不执行、诊断 tool-evolution-required（可恢复）、stop-receipt action_outputs_sha256=None、
+        # 无绑定文件；独立的检查观测让对账根因与该操作的真实失败分开计数。
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             marker = root / "executed.txt"
@@ -777,7 +782,11 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             result = payload["actions"][0]
             self.assertEqual(
                 (result["status"], result["executed"], result["diagnostic"]["failure_class"], result["diagnostic"]["effective_failure_class"]),
-                ("failed", False, "identity-drift", "identity-drift"),
+                ("failed", False, "tool-evolution-required", "tool-evolution-required"),
+            )
+            self.assertEqual(
+                result["diagnostic"]["failure_observations"],
+                [{"check_id": "pre-action-evaluator-identity", "failure_code": "tool-evolution-required"}],
             )
             run_dir = Path(payload["run_dir"])
             receipt = supervisor.read_stop_receipt(run_dir)
@@ -786,6 +795,8 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             diagnostic = json.loads((run_dir / "action-diagnostics" / "action-assert-rules-failure.json").read_text(encoding="utf-8"))
             self.assertIn("checker_sha256", diagnostic["message"])
             self.assertIn("identity-drift", supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
+            self.assertIn("tool-evolution-required", supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES)
+            self.assertNotIn("tool-evolution-required", supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
 
 
 class ReconcilerOrphanBackfillTests(unittest.TestCase):
