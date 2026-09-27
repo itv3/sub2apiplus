@@ -114,7 +114,9 @@ class _Admission:
         *,
         expected_sequence: int,
         expected_head_sha256: str,
+        retry_root_cause_ids: list[str] | None = None,
     ) -> dict[str, object]:
+        # 第三批 B3-9：主流程把已批准恢复预览的根因集合传给 reservation_cas（只挡本次要重试的根因）。
         self.events.append("project-cas")
         if (expected_sequence, expected_head_sha256) != (
             self.head_sequence,

@@ -492,7 +492,11 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         closures = json.loads(completed.stdout)
         new_timing = sorted(set(timing_ledger.EVENT_TYPES) - set(closures["timing"]))
         new_project = sorted(set(project_ledger.EVENT_TYPES) - set(closures["project"]))
-        self.assertEqual(new_timing, ["campaign_abandoned", "deadline_extended", "deadline_paused", "stage_review_required"])
+        # 第三批 B3-3：evaluation_reopened（VC-5 完成后按 tool-evolution／approval-revision 基线重开）同样是基线工具读到即拒绝的新事件。
+        self.assertEqual(
+            new_timing,
+            ["campaign_abandoned", "deadline_extended", "deadline_paused", "evaluation_reopened", "stage_review_required"],
+        )
         # 修好接着跑第 11、14 项：campaign_resumed 与 live_request_budget_extended 同样是基线工具不认识、读到即拒绝的新事件。
         self.assertEqual(
             new_project,
