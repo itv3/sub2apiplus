@@ -4,6 +4,7 @@ set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 IMAGE_ID="$1"; BUILD_ID="$2"
 export ADMIN_BEARER_TOKEN_FILE="$D/state/$UP/admin-token"
+ensure_admin_token
 python3 - "$NEWDIR" "$CAND" "$B/source" "$IMAGE_ID" "$BUILD_ID" "$PROFILE_ID" "$PROFILE_DIGEST" <<'PY'
 import argparse, json, sys, os
 from pathlib import Path

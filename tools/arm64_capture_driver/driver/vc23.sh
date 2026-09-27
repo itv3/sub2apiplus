@@ -3,12 +3,7 @@
 # 用法：ARM64_VC_ENV=… bash vc23.sh
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-echo "=== 管理 token"; ST=$D/state/$UP; mkdir -p "$ST"; chmod 700 "$ST"
-( cd "$COMPOSE_DIR" && set -a && . ./.env && set +a; DATABASE_HOST="$(docker inspect sub2apiplus-postgres --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}")" DATABASE_PORT=5432 DATABASE_USER="$POSTGRES_USER" DATABASE_PASSWORD="$POSTGRES_PASSWORD" DATABASE_DBNAME="$POSTGRES_DB" DATABASE_SSLMODE=disable JWT_SECRET="$JWT_SECRET" JWT_EXPIRE_HOUR="${JWT_EXPIRE_HOUR:-24}" timeout 30 "$JWTGEN_BIN" -email "$ADMIN_EMAIL" 2>/dev/null | sed -n "s/^JWT=//p" | head -1 ) > "$ST/admin-token.tmp"
-test -s "$ST/admin-token.tmp"; printf "%s" "$(cat "$ST/admin-token.tmp")" > "$ST/admin-token"; rm -f "$ST/admin-token.tmp"; chmod 400 "$ST/admin-token"
-python3 -c "
-import base64,json,sys,time
-t=open(sys.argv[1]).read().strip(); p=t.split(\".\")[1]; p+=\"=\"*(-len(p)%4); d=json.loads(base64.urlsafe_b64decode(p)); print(\"token exp 剩余分钟:\", (d[\"exp\"]-int(time.time()))//60)" "$ST/admin-token"
+echo "=== 管理 token"; ensure_admin_token force
 echo "=== 五清单与计划"; mkdir -p "$W"; chmod 700 "$W"
 cp "$RULES_JSON" "$W/target-rules.json"
 cp "$INPUT_RULE_MIGRATION" "$W/rule-migration.json"

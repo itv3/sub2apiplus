@@ -11,6 +11,7 @@ set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 PREVIEW="$1"; test -f "$PREVIEW"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
+ensure_admin_token
 OUT="$RUNROOT/vc5-run-batch.out"
 if [ -f "$OUT" ] && grep -q '^RUN_BATCH_DONE ' "$OUT"; then echo "VC5_RECOVER_SKIP: $OUT 已有 RUN_BATCH_DONE"; exit 0; fi
 if [ -f "$OUT" ]; then mv "$OUT" "$OUT.failed-$(date -u +%Y%m%dt%H%M%Sz)"; fi

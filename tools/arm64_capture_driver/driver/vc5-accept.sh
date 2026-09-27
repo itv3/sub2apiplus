@@ -5,6 +5,7 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
+ensure_admin_token
 ATT="$1"
 batch() { local seq="$1" plan="$2"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$seq" VC-4 "$plan" | grep -v "^$"; python3 - "$W/batch-$seq.out" <<'PY'
 import json, sys

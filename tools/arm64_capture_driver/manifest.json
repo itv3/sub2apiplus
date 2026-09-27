@@ -106,9 +106,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "4960e6ecff31119aa05eb856e329c4d265955d9cf77ced54dc12699442c6ab24",
+      "sha256": "67334f14163dc9a6f5b247c6cea78c6e2aabbaa908ea2fd21c7eef0d8f7ef92f",
       "mode": "0700",
-      "bytes": 3429
+      "bytes": 6052
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -202,9 +202,9 @@
     },
     {
       "path": "driver/vc23.sh",
-      "sha256": "b676d7a40ed69c6dd36f79b731af11fccc3fc6f80cee935eca7a37b1c0bb0258",
+      "sha256": "c7802034bc343e3c892cb85391c5b4571fe6b62b26f0e93f05629e948ae712f0",
       "mode": "0700",
-      "bytes": 6023
+      "bytes": 5091
     },
     {
       "path": "driver/vc4-all.sh",
@@ -244,21 +244,21 @@
     },
     {
       "path": "driver/vc5-accept.sh",
-      "sha256": "55f633a2ace99ebff13e4fda58e2d9e9e48aeaa8882d168d54da5e8952e3fe1d",
+      "sha256": "7b459dcf281866787d1969f5c6bc0acf95168fdbb150bcdea94c1723fcb3130e",
       "mode": "0700",
-      "bytes": 5252
+      "bytes": 5271
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "38f522eac43562ad5e5243df71066cd5be8439cd0d3513ef2d1413025a99999e",
+      "sha256": "e521a1716fd4c034b668eb36d79abd11d17808fdad2bbfe6ae8e5c984247a184",
       "mode": "0700",
-      "bytes": 4251
+      "bytes": 4270
     },
     {
       "path": "driver/vc5-canonical2.sh",
-      "sha256": "8825f995049f196cbcb88a46cbf8c6a11309113260be451e79b5e771af0fa753",
+      "sha256": "312bb43f8f034a2e5d79a58e8f11c3fe4205b0447d96b6825ecbfdc70efb018e",
       "mode": "0700",
-      "bytes": 7335
+      "bytes": 7354
     },
     {
       "path": "driver/vc5-gate-target.sh",
@@ -280,15 +280,15 @@
     },
     {
       "path": "driver/vc5-precheck.sh",
-      "sha256": "b8086195537e4a18e6e5ab12db9b8828b841c5e3ab03e6ac2b3ca82016781bf5",
+      "sha256": "7a21820d6b688055e24b227c54c6e06bf90968b91170500365a5977c0005fe6b",
       "mode": "0700",
-      "bytes": 2733
+      "bytes": 2752
     },
     {
       "path": "driver/vc5-recover.sh",
-      "sha256": "4cd27575a11c89d9d743b9dbc5aa923fe899d94b0febd446430eda16215f3eb7",
+      "sha256": "4a99202af9ac2bed9779c39e3d50ec3f5b09ee908733725e2c4c69c2a4c0749a",
       "mode": "0700",
-      "bytes": 4059
+      "bytes": 4078
     },
     {
       "path": "driver/vc5-seal-receipts.sh",
@@ -298,9 +298,9 @@
     },
     {
       "path": "driver/vc5-seal.sh",
-      "sha256": "925e5c855618dad1b81acc51bbbb47ca162096e57cf25f37498f8137481e523a",
+      "sha256": "04773475a49cff02cac3b2976eddadf57cfb6e9dd886ef58128be87283e44e63",
       "mode": "0700",
-      "bytes": 6832
+      "bytes": 6851
     },
     {
       "path": "driver/vc5-start.sh",
@@ -327,5 +327,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "8e9c12d5ea790af816691274dcddd5c723aac79cbc804f35094ab95b392c0d20"
+  "manifest_sha256": "3dcd28780cc42539b745de7ad88c3b07b64c1165071f4e594707173e0b5973e4"
 }

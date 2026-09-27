@@ -8,6 +8,7 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
+ensure_admin_token
 ATT="$1"; EV="$NEWDIR/candidates/$CAND/attempts/$ATT/evidence"
 test -f "$NEWDIR/acceptance/$CAND/result.json"
 if [ -f "$NEWDIR/control/vc/receipts/$CAND/vc5-completion.json" ]; then echo "CANONICAL2_SKIP: vc5-completion.json 已存在"; echo "CANONICAL2_DONE"; exit 0; fi

@@ -7,6 +7,7 @@
 # 用法：ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+ensure_admin_token
 LOCAL_GATES=$RUNROOT/local-gates
 if [ ! -f "$G/local/full-regression.gate.json" ]; then
   echo "=== 外部门禁：本机 check-egress-spec 与 full-regression 六件套注入 + 复核 test-tree（DC 提交 ${DC}）$(utc_now)"

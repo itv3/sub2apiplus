@@ -21,6 +21,32 @@ AS=$D/control/$NEW-assertions
 # 下一批次序号：按 control/vc/batches 中已 COMMIT 的最大序号 +1
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# 管理 token 自动续签（修好接着跑第 33 项）：候选采集用的 admin JWT 由 JWT_EXPIRE_HOUR（默认 24 小时）控制，VC-5 预检要求
+# 剩余 ≥1800 秒，而 run／seal／accept／canonical 全程可能跨越十几个小时。剩余不足 ${ADMIN_TOKEN_MIN_SECONDS:-43200} 秒（12 小时）
+# 或传入 force 时，按 vc23.sh 同一方式在服务容器内重签（旧 token 改名留档、只输出剩余分钟、绝不输出 token 本身）。
+# 用法：ensure_admin_token [force]
+ensure_admin_token() {
+  local st="$D/state/$UP" min="${ADMIN_TOKEN_MIN_SECONDS:-43200}" remaining=0
+  if [ "${1:-}" = "force" ]; then
+    echo "管理 token：force 重签"
+  elif [ ! -s "$st/admin-token" ]; then
+    # 首次签发一直是 vc23.sh 的事；续签入口遇到缺失只提示，交给后续预检失败关闭（stub／只读场景不触碰签发环境）。
+    echo "管理 token 缺失：本入口不签发（由 vc23.sh 首次签发，后续预检失败关闭）"; return 0
+  else
+    remaining=$(python3 -c "
+import base64,json,sys,time
+t=open(sys.argv[1]).read().strip(); p=t.split('.')[1]; p+='='*(-len(p)%4); d=json.loads(base64.urlsafe_b64decode(p)); print(max(0, int(d['exp'])-int(time.time())))" "$st/admin-token") || { echo "管理 token 无法解码，失败关闭"; return 3; }
+    if [ "$remaining" -ge "$min" ]; then echo "管理 token 剩余 $((remaining/60)) 分钟（≥ $((min/60)) 分钟，不重签）"; return 0; fi
+    echo "管理 token 剩余 $((remaining/60)) 分钟 < $((min/60)) 分钟，重签"
+  fi
+  mkdir -p "$st"; chmod 700 "$st"
+  if [ -e "$st/admin-token" ]; then mv "$st/admin-token" "$st/admin-token.superseded-$(date -u +%Y%m%dt%H%M%Sz)"; fi
+  ( cd "$COMPOSE_DIR" && set -a && . ./.env && set +a; DATABASE_HOST="$(docker inspect sub2apiplus-postgres --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}")" DATABASE_PORT=5432 DATABASE_USER="$POSTGRES_USER" DATABASE_PASSWORD="$POSTGRES_PASSWORD" DATABASE_DBNAME="$POSTGRES_DB" DATABASE_SSLMODE=disable JWT_SECRET="$JWT_SECRET" JWT_EXPIRE_HOUR="${JWT_EXPIRE_HOUR:-24}" timeout 30 "$JWTGEN_BIN" -email "$ADMIN_EMAIL" 2>/dev/null | sed -n "s/^JWT=//p" | head -1 ) > "$st/admin-token.tmp"
+  test -s "$st/admin-token.tmp"; printf "%s" "$(cat "$st/admin-token.tmp")" > "$st/admin-token"; rm -f "$st/admin-token.tmp"; chmod 400 "$st/admin-token"
+  python3 -c "
+import base64,json,sys,time
+t=open(sys.argv[1]).read().strip(); p=t.split('.')[1]; p+='='*(-len(p)%4); d=json.loads(base64.urlsafe_b64decode(p)); print('token exp 剩余分钟:', (int(d['exp'])-int(time.time()))//60)" "$st/admin-token"
+}
 # 等待失败统一退出 3；只退出当前驱动，不改 Campaign／账本或猜测恢复分支。
 # 用法：wait_for_marker <文件> <正则> <总秒数> [PID] [wait_state.py 选项…]
 # PID 可选：第 4 个参数不以 -- 开头时才按 PID 取走（空串表示不绑定 PID）；省略 PID 直接跟 --log 等选项时，
