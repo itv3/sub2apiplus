@@ -1289,8 +1289,10 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标 wire、不改画像或实现、不创建 candidate，也不改
 生产 selector。
 
-执行顺序如下。第 1～9 步由 ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh`（收尾段 `stage1-finish.sh`）完成，
-第 10～11 步由 `stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
+执行顺序如下。第 10 步中的策略兼容／激活认证与 pre-A3 路径认证由 `pre-a3.sh` 在 stage1 之前完成（账本一建 VC-0 即开始
+计时，约 55 分钟的 pre-A3 放在其后必然超时；同一部署、同一激活认证、工具身份未变时复用最近一次认证）；第 1～9 步由
+ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh`（收尾段 `stage1-finish.sh`）完成，stage1 建账本前核验本轮
+pre-A3 认证，缺失即拒绝；第 10～11 步的其余部分由 `stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
 `codex_upgrade_vc0_closeout` 重新取证，再进入 `vc23.sh`。参数全部来自每轮一份 `ARM64_VC_ENV`（见驱动链 README）。
 
 驱动要求明确的基线／目标版本、目标画像、官方 binary／package 摘要、主／Lite 模型、账号／API Key 与三份发布认证路径；
@@ -1302,7 +1304,7 @@ VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名�
 | 步骤 | 做什么 | 命令或脚本 |
 |---:|---|---|
 | 0 | 受管工具已受监督部署到 ARM64，驱动链已按当前部署收据安装 | `tools/arm64_supervised_deploy.py`、`tools/arm64_capture_driver/install.py install` |
-| 1 | 派发前检查：驱动安装复验、磁盘水位、项目总账 | `guard.sh pre-plan` |
+| 1 | 派发前检查：驱动安装复验、磁盘水位、项目总账；本轮 pre-A3 认证对当前部署有效 | `guard.sh pre-plan`、`codex_upgrade_pre_a3_certification find-reusable --certification` |
 | 2 | 零请求 smoke | `codex_upgrade_zero_request_smoke` |
 | 3 | 建时间账本，总预算不超过项目总账截止时间 | `codex_upgrade_timing_ledger create` |
 | 4 | ARM64 环境收据（§4.0.3） | `codex_upgrade_arm64_environment_receipt collect／finalize --phase p0` |
@@ -1311,7 +1313,7 @@ VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名�
 | 7 | 完整 Job 演练（§4.0.3） | `codex_upgrade_job_rehearsal_receipt collect／finalize` |
 | 8 | 客户端启动探测：按目标场景清单里每类 TUI 作业的工作目录、启动参数与运行模式（含 0.157.0 起的 daemon 路径），在采集容器私有命名空间内启动目标客户端，上游指向本地替身（零真实请求），限时内发出含口令的首个 turn 请求即通过（daemon 场景另须判定为 daemon 模式）；出现交互确认（信任目录、迁移提示、登录等）或首帧超时即失败，失败阻断建 Formal Campaign | `client_launch_probe.py run／verify`（`stage1-finish.sh` 调用，`stage2.sh` 派发前复验） |
 | 9 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
-| 10 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证 → `certify_release issue／verify` |
+| 10 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证（这三项由 `pre-a3.sh` 在 stage1 之前完成）→ `certify_release issue／verify` |
 | 11 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`，导入已封存证据后自动对齐账本；新目标或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
@@ -1700,8 +1702,9 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **本机**：`driver/local/local-candidate-chain.sh` 把本轮 VC-3 Catalog 与门禁需求拉回仓库，按三段提交——
   A 段按已核验 inventory 纳入所有新 blob、测试快照索引与本轮 lifecycle 目录（catalog-stage、显式门禁映射与执行计划）；C 段只改
   `release-catalog.json` 与 `releasecontract/testdata/release-graph.json` 两个冻结路径，切换候选 RuntimeCatalog；
-  D 段是 C 段的冻结承接收据——再打 git bundle 传到 ARM64。同时用 `local-gate.sh`（check-egress-spec）和
-  `local-full-regression.sh`（make test）跑本机门禁，`local-upload.sh` 把结果上传到 ARM64。
+  D 段是 C 段的冻结承接收据——再打 git bundle 传到 ARM64。本机门禁用 `local-vc4.sh` 包装：门禁一开始就向 ARM64
+  发上传心跳，`local-gate.sh`（check-egress-spec）与 `local-full-regression.sh`（make test）都完成后由 `local-upload.sh`
+  上传结果（此前心跳要到上传才开始，本机门禁一超过 5 分钟 `vc4-all.sh` 就因心跳缺失退出）。
 - **ARM64**：`setsid -f bash vc4-all.sh` 一条龙完成源码树准备、前端构建与外部门禁、镜像构建、派发前检查、
   `revision-open --initial`，以及实现测试收据、`plan-candidate-gates` 和 `record-candidate-build`。
 
@@ -3309,6 +3312,46 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 比对，不一致即拒绝；传输要保留 git 记录的可执行位（100755），统一 chmod 644 会让容器里的
 `start_direct.sh` 报 permission denied（摘要只按内容计算，恢复模式不改工具身份）；每次重新部署后驱动链都要
 重新 `install`。
+
+### 修好接着跑：出问题先暂停，修好后在原 Campaign 接着跑（0.157 起）
+
+工具、账务、环境、预算任何一处出问题，对账都先判暂停（不写终态），修好并留下可重放的证据后在原 Campaign
+接着跑；只有 Campaign 内确实无法重做的情形（官方已封存证据受污染、已封存证据或不可变控制制品完整性异常、显式
+放弃）才终态。进行中的 Campaign 部署新工具后先登记工具演进，再对账续跑。对账结果的 `pause_kinds` 标出暂停
+种类，`next_command` 按种类给出下一步：
+
+- **受管工具修复**：受监督部署后 `tool-evolution` 预览→`--approve-sha256`／`--approved-by` 登记
+  `control/tool-evolution/evolution-NN.json`（成链、写一次），有效工具身份取最新演进的 to；影响口径是产出侧
+  漂移与 wire 漂移，受影响的已完成作业移入重跑闭集，已封存官方证据受影响即拒绝。`tool-evolution-status` 只读查看。
+- **预算到期**（`deadline`）：`deadline-extend preview/apply`。
+- **请求预算耗尽**（`request_budget`）：`request-budget-extend preview/apply`，有效预算只增不减；
+  `deadline_live_requests` 终态只供历史回放。
+- **账务无法核清**（`accounting`，总账 blocked）：在未决 operation 所属 Campaign 执行 `accounting-resolve`。
+  仍无法核清的作业按批准的请求数上界补账，附来源审计（逐字节复制进 `control/accounting/`），并登记作业特征，
+  同一批未决事实不再判未决；补回证据后已能核清的按与对账同一口径精确补账。`accounting_unresolved` 终态只供历史回放。
+- **环境污染**（`environment`）：修复环境并取得晚于污染的干净环境复核（新取的环境探针清单或 ARM64 环境收据）后
+  `environment-isolate` 写隔离收据 `control/environment/isolation-NN.json`（覆盖当前未隔离的污染事实，含恢复段污染）。
+  被覆盖的 attempt 永不复用、永不 seal，按失败 attempt 全部重跑；官方已封存且官方侧受污染时不可隔离，终态。
+  before 探针都没取到（没有执行任何 Job）的恢复错误不是污染，照常续跑。
+- **同根因达上限或已停线**：`campaign-resume` 凭修复提交、离线回归与部署收据恢复——总账根因修复、计时账本以原
+  起点重开被放弃的阶段、总账 `campaign_resumed`；恢复纪元后缀使恢复后的再次停线照常落账。
+- **已完成待封存的 attempt 被作废**（工具演进作废其作业，或 Kilo 后环境恢复失败被隔离）：`reconcile-attempt`
+  按作废对账，只核算请求、不计根因，计时账本写 `recovery_required`；恢复预览只重跑失效作业（隔离作废全部重跑）。
+  针对它的 seal 链批次编译前零写入拒绝，失败的 seal 链批次之后允许 N+1 零请求恢复预览。
+- **承接前环境连续性漂移**：新 attempt 在任何 Job 执行前失败（`EnvironmentContinuityDrift`，零请求）；对账后恢复
+  预览全部重跑、不承接。
+- **执行前评估器摘要变化**（批次运行中部署了新工具）：`tool-evolution-required` 可恢复，登记演进后按同一动作计划
+  重新编译 N+1；b0 授权随演进迁移，授权历史只增不减。
+- **VC-1 官方 seal 链零请求失败**：按 `post-run-tooling` 恢复，修好后重派同一 attempt 的 seal 链批次。
+- **恢复预览的总账绑定**：只绑定本 Campaign 会改变恢复前提的事件（`campaign_event_scope`）；延期、暂停、请求预算
+  延长不再使已批准的预览作废，消费时现场复核全局条件。
+- **评估器读侧口径**（`evaluator-reader-closure/v2`）：compare／accept reader 只计评估链和真正影响读取的函数；登记的
+  守卫与账本读取不计，control 层按符号计入，函数体内的延迟导入按符号解析。修监督器、账本、租约等基础设施不再改变
+  reader。当前评估基线改由 compare／accept 运行时与父 run 冻结值逐字核对；旧口径冻结值在编译与 accept 授权时按旧
+  算法识别。
+- **驱动**：`driver/pre-a3.sh` 在 stage1 建账本之前完成 pre-A3，同一部署、同一激活认证、工具身份未变时复用最近一次
+  认证；stage1 建账本前核验本轮认证。本机 VC-4 门禁用 `driver/local/local-vc4.sh`，门禁一开始就向采集主机发上传心跳，
+  门禁与全量回归都完成后才上传。
 
 
 ---
