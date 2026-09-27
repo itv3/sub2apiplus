@@ -217,6 +217,10 @@ DEFAULT_LEDGER_INTERVAL_SECONDS = 60
 # 该计时器独立于 worker watchdog，防止“没有命令但持续心跳”的空转。
 DEFAULT_ORCHESTRATOR_DISPATCH_TIMEOUT_SECONDS = 15
 DEFAULT_POLL_SECONDS = 0.2
+# 修好接着跑第 25 项：看门狗每轮不持锁重放三层预算（总账、Campaign 账本、阶段），同一时刻动作进程可能正在锁内
+# 写总账或账本（例如候选就绪探针记账），读到写入中间态会抛错；2026-09-27 194249z VC-5 批次 14 因此在任何请求之前被
+# 判"预算状态无效"中止。连续失败持续这么久才判无效；容忍期间沿用已收紧的截止（只收紧不放宽），其余检查照常。
+BUDGET_STATE_TOLERANCE_SECONDS = 15.0
 DEFAULT_STOP_WAIT_SECONDS = 2
 # v2 及后续批次必须在原始总截止前主动结束数据面动作，为 attempt after、
 # restoration、ARM64 after、timeout checkpoint 和父监督器终态留下固定窗口。
@@ -3177,6 +3181,7 @@ def _monitor_impl(args: argparse.Namespace) -> int:
     last_watchdog_monotonic_ns = 0
     next_bucket = _bucket_start(started_epoch, ledger_interval)
     poll_seconds = max(0.05, min(DEFAULT_POLL_SECONDS, heartbeat_seconds / 2.0))
+    budget_tolerance = _BudgetStateTolerance(int(BUDGET_STATE_TOLERANCE_SECONDS * 1_000_000_000))
     terminal_state: str | None = None
     terminal_ledger_finalized = False
 
@@ -3332,9 +3337,13 @@ def _monitor_impl(args: argparse.Namespace) -> int:
             # 执行边界，不能因为系统时钟回拨或阶段结束重新获得预算。
             deadline_monotonic_ns = min(deadline_monotonic_ns, started_monotonic_ns
                 + int((budget_deadline - started_epoch) * 1_000_000_000))
+            budget_tolerance.succeeded()
         except (SupervisorError, ValueError, OSError) as error:
-            abort(f"budget-state-invalid-{type(error).__name__}", operation="supervisor:budget", now=now)
-            continue
+            # 修好接着跑第 25 项：不持锁读取可能撞上动作进程的写入中间态；持续失败达到容忍窗口才中止，
+            # 窗口内沿用已收紧的截止，本轮其余检查（出口、心跳、截止、停止请求、owner）照常执行。
+            if budget_tolerance.failed(now_monotonic_ns):
+                abort(f"budget-state-invalid-{type(error).__name__}", operation="supervisor:budget", now=now)
+                continue
         try:
             _check_runtime_egress(run_dir, state, monitor=True)
         except RuntimeEgressPaused:
@@ -10350,6 +10359,26 @@ PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
         "evidence-integrity",
     }
 )
+
+
+class _BudgetStateTolerance:
+    """看门狗预算重放的瞬时失败容忍（修好接着跑第 25 项）：连续失败超过窗口才判无效，任一次成功即清零。"""
+
+    def __init__(self, window_ns: int) -> None:
+        if window_ns <= 0:
+            raise SupervisorError("预算重放容忍窗口必须为正")
+        self.window_ns = window_ns
+        self.failing_since_ns: int | None = None
+
+    def succeeded(self) -> None:
+        self.failing_since_ns = None
+
+    def failed(self, now_monotonic_ns: int) -> bool:
+        """记录一次重放失败；自首次失败起持续达到窗口时返回 True（调用方应中止）。"""
+
+        if self.failing_since_ns is None:
+            self.failing_since_ns = now_monotonic_ns
+        return now_monotonic_ns - self.failing_since_ns >= self.window_ns
 
 
 def _runtime_budget_deadline(state: Mapping[str, Any]) -> float:

@@ -41,6 +41,14 @@ from tools.official_client_capture.codex_upgrade_supervisor import (
 IMMEDIATE_DETECTION_SECONDS = 2.0
 
 
+
+def textwrap_dedent(source: str) -> str:
+    """inspect.getsource 取到的是缩进为零的顶层函数，这里只做防御性去缩进。"""
+
+    import textwrap
+
+    return textwrap.dedent(source)
+
 class SupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         # 本类只构造离线父动作与账本；实时出口的拒绝、竞态及清理在独立测试类验证。
@@ -3589,6 +3597,62 @@ raise SystemExit(9)
         with mock.patch.object(supervisor.vc_artifacts, "effective_deadlines",
                                return_value={"paused_scopes": [], "execution_deadline_at_utc": None}):
             self.assertEqual(supervisor._runtime_budget_deadline(state), 1_900_000_000.0)
+
+    def test_budget_state_tolerance_only_aborts_after_sustained_failure(self) -> None:
+        """修好接着跑第 25 项：看门狗不持锁重放三层预算，撞上动作进程写总账／账本的中间态会瞬时失败（194249z 批次 14
+        在任何请求之前被判"预算状态无效"中止）。首次失败与窗口内持续失败都不中止，持续达到窗口才中止，任一次成功清零。"""
+
+        window = int(supervisor.BUDGET_STATE_TOLERANCE_SECONDS * 1_000_000_000)
+        self.assertGreaterEqual(window, 3 * supervisor.DEFAULT_HEARTBEAT_SECONDS * 1_000_000_000)
+        tolerance = supervisor._BudgetStateTolerance(window)
+        start = 1_000_000_000_000
+        self.assertFalse(tolerance.failed(start))
+        self.assertFalse(tolerance.failed(start + window - 1))
+        tolerance.succeeded()
+        # 成功后重新起算：原窗口之后的新一次失败仍是首次。
+        self.assertFalse(tolerance.failed(start + window + 5))
+        self.assertFalse(tolerance.failed(start + 2 * window + 4))
+        self.assertTrue(tolerance.failed(start + 2 * window + 5))
+        for invalid in (0, -1):
+            with self.subTest(window=invalid), self.assertRaises(supervisor.SupervisorError):
+                supervisor._BudgetStateTolerance(invalid)
+
+    def test_watchdog_budget_abort_is_gated_by_tolerance(self) -> None:
+        """结构：看门狗主循环里"预算状态无效"的中止只在容忍判定为真的分支内，重放成功时清零。"""
+
+        import ast
+        import inspect as inspect_module
+
+        source = inspect_module.getsource(supervisor._monitor_impl)
+        tree = ast.parse(textwrap_dedent(source))
+        budget_aborts = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                test = node.test
+                gated = (
+                    isinstance(test, ast.Call)
+                    and isinstance(test.func, ast.Attribute)
+                    and test.func.attr == "failed"
+                    and isinstance(test.func.value, ast.Name)
+                    and test.func.value.id == "budget_tolerance"
+                )
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Call)
+                        and isinstance(inner.func, ast.Name)
+                        and inner.func.id == "abort"
+                        and inner.args
+                        and "budget-state-invalid" in ast.unparse(inner.args[0])
+                    ):
+                        budget_aborts.append(gated)
+        all_aborts = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "abort"
+            and node.args and "budget-state-invalid" in ast.unparse(node.args[0])
+        ]
+        self.assertEqual(len(all_aborts), 1)
+        self.assertEqual(budget_aborts, [True])
+        self.assertIn("budget_tolerance.succeeded()", source)
 
     def test_closeout_with_only_extension_pending_fails_explicitly_without_writes(self) -> None:
         """R8：只有其他 Campaign 的延期未闭合（extension_pending）时不冒报 deadline_paused，明确失败且不写账本。"""
