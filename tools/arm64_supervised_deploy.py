@@ -440,6 +440,10 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0157-batch1-tool-evolution-20260927-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+    # 2026-09-27：第三批 R3 改过 codex_upgrade_evidence_manifest.py（0.151 评估恢复 addition 闭集），台账链重签的承接收据与本清单
+    # 变更的承接收据都要随工具树部署，否则部署后重放历史账本会因找不到收据而阻断（先例 09-22 ledger-resign／deploy-manifest-22）。
+    "egress/maintenance/upstream-codex-0157-batch3-ledger-resign-evidence-manifest-20260927-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0157-batch3-deploy-manifest-r12-20260927-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_157_0.json"
