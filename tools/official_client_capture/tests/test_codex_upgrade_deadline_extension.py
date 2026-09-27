@@ -297,11 +297,14 @@ class DeadlineExtensionTests(unittest.TestCase):
         # 根因上限按目标版本取：注入时全局、共同底数与各版本桶一起到上限，保持"任一消费者都停线"的原意。
         limit_everywhere={'root_causes_at_limit':['fixture'],'root_causes_at_limit_base':['fixture'],
                           'root_causes_at_limit_by_version':{v:['fixture'] for v in head.get('root_causes_at_limit_by_version',{})}}
-        for changed in ({'blocked':True},{'remaining_live_requests':0},limit_everywhere):
+        # 修好接着跑第 14 项：请求预算耗尽只暂停（批准 request-budget-extend 后继续），不再停线。
+        for changed, expected in (({'blocked':True},'permanent_stop'),({'remaining_live_requests':0},'paused'),(limit_everywhere,'permanent_stop')):
             decision=reconciler._decide(head={**head,**changed},plan=plan,ledger=summary,identity={'unchanged':True},
                 environment_status='restored',campaign_deadline_at_utc=deadlines['total_deadline_at_utc'],
                 root_cause_id='fixture',request_status='resolved',now=self.at(24))
-            self.assertEqual(decision['decision'],'permanent_stop')
+            self.assertEqual(decision['decision'],expected)
+            if expected == 'paused':
+                self.assertEqual(decision['pause_kinds'],['request_budget'])
 
     def test_live_deadline_read_does_not_precede_concurrent_event_snapshot(self):
         inspect = timing.inspect_ledger

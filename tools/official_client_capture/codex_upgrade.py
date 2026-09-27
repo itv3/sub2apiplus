@@ -5021,6 +5021,8 @@ def _mutable_command_coordinates(
         # 改造 5：评估失败的分类与评估基线状态机同样自持 Campaign 排他锁与账本锁。
         "evaluation-recover",
         "deadline-extend",
+        # 修好接着跑第 14 项：请求预算延长与延期同类，自持预算控制锁与项目锁。
+        "request-budget-extend",
         "campaign-abandon",
         # 工具演进登记在 Campaign 排他锁内核对静默并写一次演进收据；状态查询只读。
         "tool-evolution",
@@ -9873,6 +9875,16 @@ def _build_parser() -> argparse.ArgumentParser:
     deadline_extend.add_argument("--preview", type=Path)
     deadline_extend.add_argument("--approve-sha256")
     deadline_extend.add_argument("--approved-by")
+    budget_extend = subparsers.add_parser(
+        "request-budget-extend", help="请求预算延长：先冻结预览，再按批准摘要写入项目总账（修好接着跑第 14 项）"
+    )
+    budget_extend.add_argument("budget_action", choices=("preview", "apply"))
+    add_campaign_reference(budget_extend)
+    budget_extend.add_argument("--new-budget", type=int, help="新的有效请求预算（必须大于原有效预算与已消耗数）")
+    budget_extend.add_argument("--reason")
+    budget_extend.add_argument("--preview", type=Path)
+    budget_extend.add_argument("--approve-sha256")
+    budget_extend.add_argument("--approved-by")
     campaign_abandon = subparsers.add_parser("campaign-abandon", help="按明确批准显式放弃 Campaign，保留全部历史证据")
     add_campaign_reference(campaign_abandon)
     campaign_abandon.add_argument("--approved-by", required=True)
@@ -19701,9 +19713,8 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
             # 摘要重跑 apply 即从二次判定续接。本函数持有 Campaign 锁，不在锁内登记暂停事实（登记需要同一把锁），
             # 对账或派发入口遇到到期时会登记。
             result["status"] = "paused"
-            result["next_command"] = (
-                "预算已到期暂停：deadline-extend preview/apply 批准延期后，以同一批准摘要重新执行 "
-                "invalidate-candidate --action apply（幂等续接）"
+            result["next_command"] = "预算已暂停：" + reconciler._paused_next_command(
+                decision, "以同一批准摘要重新执行 invalidate-candidate --action apply（幂等续接）"
             )
             return result
         if decision["decision"] != reconciler.DECISION_RECOVERABLE:
@@ -20822,9 +20833,8 @@ def _evaluation_recover_locked(
             # 预算到期只是暂停，不是停线（同 invalidate-candidate）：诊断、recovery、prepared 与根因 batch 都已幂等落盘，
             # 批准延期后重跑本命令即从二次判定续接；持有 Campaign 锁，不在锁内登记暂停事实。
             result["status"] = "paused"
-            result["next_command"] = (
-                "预算已到期暂停：deadline-extend preview/apply 批准延期后，以同一批准摘要重新执行 "
-                "evaluation-recover（幂等续接）"
+            result["next_command"] = "预算已暂停：" + reconciler._paused_next_command(
+                decision, "以同一批准摘要重新执行 evaluation-recover（幂等续接）"
             )
             return result
         if decision["decision"] != reconciler.DECISION_RECOVERABLE:
@@ -21045,6 +21055,23 @@ def _deadline_extend_command(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("延期 apply 必须绑定预览、批准摘要与批准人")
     return codex_upgrade_project_ledger.apply_deadline_extension(arguments.campaign_dir,
         preview_path=arguments.preview, approve_sha256=arguments.approve_sha256, approved_by=arguments.approved_by)
+
+
+def _request_budget_extend_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """请求预算延长（修好接着跑第 14 项）：不申请执行租约；批准只放宽请求预算，不替代恢复准入。"""
+
+    if arguments.budget_action == "preview":
+        if arguments.new_budget is None or not arguments.reason:
+            raise ConfigurationError("请求预算延长预览必须提供 --new-budget 与 --reason")
+        return codex_upgrade_project_ledger.preview_live_request_budget_extension(
+            arguments.campaign_dir, new_budget=int(arguments.new_budget), reason=str(arguments.reason)
+        )
+    if not arguments.preview or not arguments.approve_sha256 or not arguments.approved_by:
+        raise ConfigurationError("请求预算延长 apply 必须绑定预览、批准摘要与批准人")
+    return codex_upgrade_project_ledger.apply_live_request_budget_extension(
+        arguments.campaign_dir, preview_path=arguments.preview, approve_sha256=arguments.approve_sha256,
+        approved_by=arguments.approved_by,
+    )
 
 
 def _campaign_status_with_deadlines(campaign_dir: Path, candidate_id: str | None) -> dict[str, Any]:
@@ -57044,6 +57071,7 @@ def _reject_unparented_formal_write(
         # 改造 5：评估失败分类与评估基线状态机同样是批次之间的控制面命令。
         "evaluation-recover",
         "deadline-extend",
+        "request-budget-extend",
         "campaign-abandon",
     }
     if command in direct_control_commands:
@@ -58971,6 +58999,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         elif command == "deadline-extend":
             result = _deadline_extend_command(arguments)
+            return_code = 0
+        elif command == "request-budget-extend":
+            result = _request_budget_extend_command(arguments)
             return_code = 0
         elif command == "campaign-abandon":
             result = codex_upgrade_project_ledger.abandon_campaign(arguments.campaign_dir,

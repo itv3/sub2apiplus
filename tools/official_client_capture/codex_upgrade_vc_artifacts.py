@@ -341,6 +341,57 @@ def validate_deadline_extension(value: Any, *, preview: bool = False) -> dict[st
     return result
 
 
+# 修好接着跑第 14 项：请求预算（项目总账 plan.live_request_budget）的批准延长，与三层时间预算延期同口径：
+# 先冻结预览（原有效预算、新预算、预览时已消耗数、总账 head），再按批准摘要写总账事件；预算只增不减，
+# 已消耗数不清零，plan 字节不变。
+LIVE_REQUEST_BUDGET_EXTENSION_SCHEMA = "live-request-budget-extension/v1"
+LIVE_REQUEST_BUDGET_EXTENSION_PREVIEW_SCHEMA = "live-request-budget-extension-preview/v1"
+LIVE_REQUEST_BUDGET_PREVIEW_FIELDS = frozenset({
+    "schema_version", "campaign_id", "original_budget", "new_budget", "consumed_at_preview", "reason",
+    "project_ledger_path", "project_ledger_head", "review_sha256",
+})
+
+
+def validate_live_request_budget_extension(value: Any, *, preview: bool = False) -> dict[str, Any]:
+    """请求预算延长收据：批准人、原有效预算承接与总账 head 冻结，新预算必须大于原预算与已消耗数。"""
+
+    required = set(LIVE_REQUEST_BUDGET_PREVIEW_FIELDS)
+    if not preview:
+        required.update({"approved_by", "approved_at_utc", "receipt_sha256"})
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("请求预算延长收据字段不闭合，必须提供批准收据")
+    result = dict(value)
+    expected = LIVE_REQUEST_BUDGET_EXTENSION_PREVIEW_SCHEMA if preview else LIVE_REQUEST_BUDGET_EXTENSION_SCHEMA
+    if result["schema_version"] != expected:
+        raise VCArtifactError("请求预算延长收据 schema 非法")
+    _safe_id(result["campaign_id"], "请求预算延长 Campaign")
+    _absolute_path(result["project_ledger_path"], "请求预算延长项目总账")
+    for field in ("original_budget", "new_budget", "consumed_at_preview"):
+        number = result[field]
+        if not isinstance(number, int) or isinstance(number, bool) or number < 0:
+            raise VCArtifactError(f"请求预算延长的 {field} 必须是非负整数")
+    if result["original_budget"] < 1 or result["new_budget"] <= max(result["original_budget"], result["consumed_at_preview"]):
+        raise VCArtifactError("新请求预算必须大于原有效预算与预览时已消耗数")
+    if not isinstance(result["reason"], str) or not result["reason"].strip():
+        raise VCArtifactError("请求预算延长理由不得为空")
+    head = result["project_ledger_head"]
+    if not isinstance(head, Mapping) or set(head) != {"sequence", "sha256"}:
+        raise VCArtifactError("请求预算延长必须绑定完整总账 head")
+    if not isinstance(head["sequence"], int) or isinstance(head["sequence"], bool) or head["sequence"] < 0:
+        raise VCArtifactError("请求预算延长的总账序号非法")
+    _sha256(head["sha256"], "project_ledger_head")
+    review = {key: result[key] for key in LIVE_REQUEST_BUDGET_PREVIEW_FIELDS if key != "review_sha256"}
+    review["schema_version"] = LIVE_REQUEST_BUDGET_EXTENSION_PREVIEW_SCHEMA
+    if result["review_sha256"] != digest(review):
+        raise VCArtifactError("请求预算延长预览摘要不一致")
+    if not preview:
+        if not isinstance(result["approved_by"], str) or not result["approved_by"].strip():
+            raise VCArtifactError("请求预算延长必须指定批准人")
+        _timestamp(result["approved_at_utc"], "请求预算延长批准时间")
+        _self_digest(result, "receipt_sha256", "请求预算延长收据")
+    return result
+
+
 def campaign_timing_ledger(campaign_dir: Path) -> Path | None:
     """从既有 Campaign 控制绑定定位计时账本；缺失旧绑定不凭空创建账本。"""
 

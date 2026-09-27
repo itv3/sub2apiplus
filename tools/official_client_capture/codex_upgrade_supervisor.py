@@ -120,7 +120,13 @@ ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
     }
 )
 RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
-    {"environment-prerequisite", "post-run-tooling", "tool-evolution-required"}
+    {
+        "environment-prerequisite",
+        "post-run-tooling",
+        "tool-evolution-required",
+        # 修好接着跑第 14 项：请求预算耗尽只暂停，批准 request-budget-extend 后对账重派。
+        "request-budget-exhausted",
+    }
 )
 # 改造 4（staging/WAL）：父 run 取得执行权之前的两类失败不是动作失败，没有动作诊断，
 # 由 reconciler 按 state／stop reason 分类；两类都可恢复但恢复目标不同：
@@ -10325,7 +10331,6 @@ PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
         "policy-drift",
         "environment-contaminated",
         "restoration-failed",
-        "request-budget-exhausted",
         "root-cause-limit",
         "evidence-integrity",
     }
@@ -10363,7 +10368,7 @@ def _candidate_failure_hits_permanent_condition(
     *,
     failure_class: str,
 ) -> bool:
-    """永久条件保留账务、请求预算、根因与完整性门禁；墙钟到期单独暂停。"""
+    """永久条件保留账务、根因与完整性门禁；墙钟到期与请求预算耗尽（修好接着跑第 14 项）单独暂停。"""
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
@@ -10379,9 +10384,6 @@ def _candidate_failure_hits_permanent_condition(
     except project_ledger.ProjectLedgerError as error:
         raise SupervisorError(f"项目总账重放失败：{error}") from error
     if head.get("blocked") or head.get("unresolved_operation_ids"):
-        return True
-    remaining = head.get("remaining_live_requests")
-    if remaining is not None and int(remaining) <= 0:
         return True
     # 只看本 Campaign 目标版本的根因上限，其他版本项目的记录不再牵连。
     if project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version")):
@@ -10565,6 +10567,11 @@ def _close_failed_campaign_timing_ledger(
             "VC-5 候选采集续跑：有预约的失败先 reconcile-attempt（无预约的预览失败用 reconcile-supervisor-run）入账；"
             "修好工具并受监督部署、登记 tool-evolution 后批准恢复预览，以 resume --rerun-failed 只重跑失败与"
             "受工具演进影响的作业；判为候选源码问题则 invalidate-candidate；同根因达上限即停线。"
+        )
+    elif failure_class == "request-budget-exhausted":
+        recovery_next_action = (
+            "request-budget-extend preview/apply：项目请求预算耗尽，批准延长后 reconcile-supervisor-run，"
+            "对账通过即以 compile-and-run-vc-batch 逐字重派同一批次。"
         )
     elif failure_class == "tool-evolution-required":
         recovery_next_action = (

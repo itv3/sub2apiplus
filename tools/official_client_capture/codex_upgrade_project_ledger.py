@@ -112,6 +112,8 @@ EVENT_TYPES = (
     "deadline_extension_committed",
     # 修好接着跑第 11 项：campaign-resume 凭修复证据撤销可恢复的 Campaign 终态（计时账本先写恢复事件）。
     "campaign_resumed",
+    # 修好接着跑第 14 项：请求预算的批准延长（与三层时间预算延期同口径），预算耗尽不再是终态。
+    "live_request_budget_extended",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -150,6 +152,8 @@ BLOCKED_ALLOWED_EVENTS = frozenset(
         "root_cause_repaired",
         "reconciliation_committed",
         "campaign_terminal",
+        # 修好接着跑第 14 项：请求预算延长只增加预算，blocked 期间也可批准（账务仍由各门禁把关）。
+        "live_request_budget_extended",
         "reconciliation_corrected",
         "root_cause_repair_corrected",
         "campaign_paused",
@@ -933,6 +937,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "resumed_campaigns": {},
         "paused_campaigns": {},
         "effective_absolute_deadline_utc": plan["absolute_deadline_utc"],
+        # 修好接着跑第 14 项：有效请求预算＝plan 预算或最近一次批准延长的新预算（只增不减）。
+        "effective_live_request_budget": plan["live_request_budget"],
+        "live_request_budget_extensions": [],
         "effective_campaign_deadlines": {},
         "effective_stage_deadlines": {},
         "deadline_extensions": [],
@@ -1107,6 +1114,30 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                     pause["scopes"] = [name for name in pause["scopes"] if name != scope]
                     if not pause["scopes"]:
                         del state["paused_campaigns"][paused_id]
+        elif event_type == "live_request_budget_extended":
+            artifact = _deadline_artifacts()
+            try:
+                extension = artifact.validate_live_request_budget_extension(payload.get("extension"))
+            except artifact.VCArtifactError as error:
+                raise ProjectLedgerError(f"请求预算延长收据非法：{error}") from error
+            campaign_id = extension["campaign_id"]
+            terminal = state["terminal_campaigns"].get(campaign_id)
+            expected_head = {"sequence": event["sequence"] - 1, "sha256": event["previous_event_sha256"] or plan["plan_sha256"]}
+            if (
+                plan["live_request_budget"] is None
+                or campaign_id not in state["registered_campaigns"]
+                # 例外：因请求预算耗尽而终态的历史 Campaign 可以发起延长（否则延长与恢复互为前提而死锁）。
+                or (terminal is not None and terminal["terminal_reason"] != "deadline_live_requests")
+                or extension["project_ledger_head"] != expected_head
+                or extension["approved_at_utc"] != event["recorded_at_utc"]
+                or extension["original_budget"] != state["effective_live_request_budget"]
+            ):
+                raise ProjectLedgerError("请求预算延长必须承接当前有效预算、绑定上一条总账事件并由未终态的已注册 Campaign 发起")
+            state["effective_live_request_budget"] = extension["new_budget"]
+            state["live_request_budget_extensions"].append(
+                {"receipt_sha256": extension["receipt_sha256"], "campaign_id": campaign_id,
+                 "original_budget": extension["original_budget"], "new_budget": extension["new_budget"]}
+            )
         elif event_type == "deadline_extension_committed":
             receipt = payload.get("receipt_sha256")
             campaign_event = payload.get("campaign_event")
@@ -1157,7 +1188,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         )
         for version in sorted(known_versions)
     }
-    budget = plan["live_request_budget"]
+    budget = state["effective_live_request_budget"]
     consumed = state["precise_total"] + state["estimated_total"]
     head = {
         "schema_version": HEAD_SCHEMA,
@@ -1191,7 +1222,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "unresolved_operation_ids": list(state["unresolved_operation_ids"]),
         "blocked": bool(state["unresolved_operation_ids"]),
         "operations": state["operations"],
-        "live_request_budget": budget,
+        "live_request_budget": plan["live_request_budget"],
         "remaining_live_requests": (None if budget is None else max(int(budget) - consumed, 0)),
         "repaired_root_causes": state["repaired_root_causes"],
         "failure_observations": state["failure_observations"],
@@ -1203,6 +1234,10 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
     if state["resumed_campaigns"]:
         # 同上：只在出现过 campaign_resumed 时写入。
         head["resumed_campaigns"] = state["resumed_campaigns"]
+    if state["live_request_budget_extensions"]:
+        # 同上：只在批准过请求预算延长时写入；剩余请求按有效预算计算。
+        head["effective_live_request_budget"] = state["effective_live_request_budget"]
+        head["live_request_budget_extensions"] = state["live_request_budget_extensions"]
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
         cached, _raw = _read_json(cache_path, "head 缓存")
@@ -1289,6 +1324,9 @@ def append_project_event(
         raise ProjectLedgerError(f"事件类型非法：{event_type}")
     if event_type == "campaign_terminal" and payload.get("terminal_reason") == "deadline_wall_clock":
         raise ProjectLedgerError("deadline_wall_clock 仅供历史回放；新预算到期必须暂停")
+    if event_type == "campaign_terminal" and payload.get("terminal_reason") == "deadline_live_requests":
+        # 修好接着跑第 14 项：请求预算耗尽只暂停，批准延长后继续；历史终态照常重放。
+        raise ProjectLedgerError("deadline_live_requests 仅供历史回放；请求预算耗尽必须暂停并批准延长")
     payload_dict = dict(payload)
     payload_sha256 = _digest(payload_dict)
     with project_lock(root):
@@ -1588,6 +1626,96 @@ def apply_deadline_extension(campaign_dir: Path, *, preview_path: Path, approve_
                 "project_event": result, "campaign_event": "duplicate" if applied else "appended", "effective_deadlines": effective}
 
 
+def _budget_assert_initiator(head: Mapping[str, Any], campaign_id: str) -> None:
+    if campaign_id not in head["registered_campaigns"]:
+        raise ProjectLedgerError("请求预算延长的发起 Campaign 未在总账注册")
+    terminal = head["terminal_campaigns"].get(campaign_id)
+    if terminal is not None and terminal["terminal_reason"] != "deadline_live_requests":
+        raise ProjectLedgerError(f"Campaign 已终态：{terminal['terminal_reason']}，不能发起请求预算延长")
+
+
+def preview_live_request_budget_extension(campaign_dir: Path, *, new_budget: int, reason: str) -> dict[str, Any]:
+    """修好接着跑第 14 项：冻结请求预算延长预览（原有效预算、新预算、已消耗数与总账 head），只写一次。"""
+
+    root, _ledger, manifest, artifacts, _upgrade, _timing = _deadline_context(campaign_dir)
+    with deadline_control_scope(campaign_dir), project_lock(root):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        campaign_id = str(manifest["campaign_id"])
+        _budget_assert_initiator(head, campaign_id)
+        if plan["live_request_budget"] is None:
+            raise ProjectLedgerError("项目总账没有设请求预算，无需延长")
+        preview: dict[str, Any] = {
+            "schema_version": artifacts.LIVE_REQUEST_BUDGET_EXTENSION_PREVIEW_SCHEMA,
+            "campaign_id": campaign_id,
+            "original_budget": int(head.get("effective_live_request_budget", plan["live_request_budget"])),
+            "new_budget": int(new_budget),
+            "consumed_at_preview": int(head["precise_total"]) + int(head["estimated_total"]),
+            "reason": reason,
+            "project_ledger_path": str(root.resolve()),
+            "project_ledger_head": {"sequence": head["sequence"], "sha256": head["head_sha256"]},
+        }
+        preview["review_sha256"] = artifacts.digest(preview)
+        try:
+            artifacts.validate_live_request_budget_extension(preview, preview=True)
+        except artifacts.VCArtifactError as error:
+            raise ProjectLedgerError(str(error)) from error
+        directory = _private_dir(campaign_dir / "control/budget", "请求预算控制目录", create=True)
+        path = directory / f"preview-{preview['review_sha256']}.json"
+        _deadline_write_once(path, preview)
+        return {"status": "approval_required", "preview_path": str(path), **preview}
+
+
+def apply_live_request_budget_extension(campaign_dir: Path, *, preview_path: Path, approve_sha256: str,
+                                        approved_by: str, now: datetime | None = None) -> dict[str, Any]:
+    """按批准摘要写请求预算延长：批准收据只写一次，总账事件按预览冻结的 head 做 CAS；重跑幂等。"""
+
+    root, _ledger, manifest, artifacts, _upgrade, _timing = _deadline_context(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    preview, _raw = _read_json(preview_path, "请求预算延长预览")
+    try:
+        artifacts.validate_live_request_budget_extension(preview, preview=True)
+    except artifacts.VCArtifactError as error:
+        raise ProjectLedgerError(str(error)) from error
+    if (approve_sha256 != preview["review_sha256"] or preview["campaign_id"] != manifest["campaign_id"]
+            or Path(preview["project_ledger_path"]) != root.resolve() or not approved_by.strip()):
+        raise ProjectLedgerError("请求预算延长的批准摘要、Campaign、项目或批准人不一致")
+    with deadline_control_scope(campaign_dir), project_lock(root):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        _budget_assert_initiator(head, str(manifest["campaign_id"]))
+        directory = _private_dir(campaign_dir / "control/budget", "请求预算控制目录", create=True)
+        path = directory / f"extension-{approve_sha256}.json"
+        if path.exists():
+            extension, _raw = _read_json(path, "既有请求预算延长批准")
+            if extension.get("review_sha256") != approve_sha256 or extension.get("approved_by") != approved_by:
+                raise ProjectLedgerError("重跑不能修改既有请求预算延长批准")
+        else:
+            extension = {**preview, "schema_version": artifacts.LIVE_REQUEST_BUDGET_EXTENSION_SCHEMA,
+                         "approved_by": approved_by, "approved_at_utc": observed.isoformat()}
+            extension["receipt_sha256"] = artifacts.digest(extension)
+        try:
+            artifacts.validate_live_request_budget_extension(extension)
+        except artifacts.VCArtifactError as error:
+            raise ProjectLedgerError(str(error)) from error
+        operation = f"live-request-budget-extended-{approve_sha256}"
+        if head["operations"].get(operation) is None and extension["project_ledger_head"] != {
+            "sequence": head["sequence"], "sha256": head["head_sha256"],
+        }:
+            raise ProjectLedgerError("请求预算延长批准绑定的总账 head 已过期，请重新预览")
+        _deadline_write_once(path, extension)
+        after, result = append_project_event(
+            root, operation_id=operation, event_type="live_request_budget_extended",
+            payload={"extension": extension}, source_batch_sha256=None,
+            expected_head_sha256=extension["project_ledger_head"]["sha256"], recorded_at_utc=extension["approved_at_utc"],
+        )
+        return {
+            "status": "extended", "receipt_path": str(path), "receipt_sha256": extension["receipt_sha256"],
+            "project_event": result, "effective_live_request_budget": after.get("effective_live_request_budget"),
+            "remaining_live_requests": after.get("remaining_live_requests"),
+        }
+
+
 def abandon_campaign(campaign_dir: Path, *, approved_by: str, reason: str,
                      now: datetime | None = None) -> dict[str, Any]:
     """只有显式指令产生 operator_abandoned；超时与 72 小时提醒均不会调用本入口。"""
@@ -1634,6 +1762,8 @@ CAMPAIGN_EVENT_SCOPE_EXCLUDED = frozenset(
     {
         "deadline_extended",
         "deadline_extension_committed",
+        # 修好接着跑第 14 项：请求预算延长只放宽预算，由现场复核剩余请求判定。
+        "live_request_budget_extended",
         "campaign_paused",
         "root_cause_repaired",
         "root_cause_repair_corrected",

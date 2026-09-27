@@ -543,6 +543,24 @@ def _project_facts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return plan, head
 
 
+def _pause_time(observed: str) -> datetime:
+    """登记暂停事实的时刻：不早于本次对账已追加的账本事件（对账开始时刻之后可能已写 attempt 事件）。"""
+
+    return max(_timestamp(observed, "now"), datetime.now(timezone.utc))
+
+
+def _paused_next_command(decision: Mapping[str, Any], resume_from: str) -> str:
+    """暂停判定的下一步：到期的时间层先 deadline-extend，请求预算耗尽先 request-budget-extend。"""
+
+    kinds = list(decision.get("pause_kinds") or ["deadline"])
+    steps = []
+    if "deadline" in kinds:
+        steps.append("deadline-extend preview/apply")
+    if "request_budget" in kinds:
+        steps.append("request-budget-extend preview/apply")
+    return "；".join(steps) + f"；批准后{resume_from}"
+
+
 def _campaign_resume_epoch(campaign_dir: Path, campaign_id: str) -> int:
     root = project_ledger.find_project_ledger(campaign_dir)
     if root is None:
@@ -1068,8 +1086,12 @@ def _decide(
         deadline_paused = True
         reasons.append("项目绝对有效截止已到")
     remaining = head.get("remaining_live_requests")
+    budget_paused = False
     if remaining is not None and int(remaining) <= 0:
-        stop("deadline_live_requests", "项目请求预算已耗尽")
+        # 修好接着跑第 14 项：请求预算耗尽只暂停（与时间预算同口径），批准 request-budget-extend 后继续；
+        # 不再写 deadline_live_requests 终态（该原因只供历史回放）。
+        budget_paused = True
+        reasons.append("项目请求预算已耗尽（暂停：批准请求预算延长后继续）")
     evaluated_root_causes = list(
         dict.fromkeys(root_cause_ids or [root_cause_id])
     )
@@ -1083,13 +1105,24 @@ def _decide(
     )
     if at_limit:
         stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
-    decision = DECISION_STOP if terminal_reason is not None else DECISION_PAUSED if deadline_paused else DECISION_RECOVERABLE
+    decision = (
+        DECISION_STOP
+        if terminal_reason is not None
+        else DECISION_PAUSED
+        if deadline_paused or budget_paused
+        else DECISION_RECOVERABLE
+    )
     scoped_counts = project_ledger.root_cause_counts_for(head, target_version)
     root_cause_counts = {
         cause_id: int(scoped_counts.get(cause_id, 0))
         for cause_id in evaluated_root_causes
     }
+    extra: dict[str, Any] = {}
+    if decision == DECISION_PAUSED:
+        # 暂停种类只在暂停时写入，其余判定的输出字节不变。
+        extra["pause_kinds"] = [kind for kind, on in (("deadline", deadline_paused), ("request_budget", budget_paused)) if on]
     return {
+        **extra,
         "decision": decision,
         "terminal_reason": terminal_reason,
         "reasons": reasons,
@@ -2761,8 +2794,8 @@ def reconcile_attempt(
     elif decision["decision"] == DECISION_PAUSED:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("预算暂停期间不接受恢复批准；必须先批准延期")
-        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
-        result["next_command"] = "deadline-extend preview/apply；批准延期后从原对账 checkpoint 继续"
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
+        result["next_command"] = _paused_next_command(decision, "从原对账 checkpoint 继续")
     else:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("判定为永久停线，不接受恢复批准")
@@ -3711,8 +3744,8 @@ def reconcile_supervisor_run(
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
     elif decision["decision"] == DECISION_PAUSED:
-        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
-        result["next_command"] = "deadline-extend preview/apply；批准延期后从原对账 checkpoint 继续"
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
+        result["next_command"] = _paused_next_command(decision, "从原对账 checkpoint 继续")
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(
@@ -3879,8 +3912,8 @@ def reconcile_staging_abort(
     if decision["decision"] == DECISION_RECOVERABLE:
         result["next_command"] = "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
     elif decision["decision"] == DECISION_PAUSED:
-        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
-        result["next_command"] = "deadline-extend preview/apply；批准延期后从原 staging checkpoint 继续"
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
+        result["next_command"] = _paused_next_command(decision, "从原 staging checkpoint 继续")
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(

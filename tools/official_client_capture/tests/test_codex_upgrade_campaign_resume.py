@@ -203,5 +203,95 @@ class CampaignResumeTests(unittest.TestCase):
             self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stopped")
 
 
+
+class RequestBudgetExtensionTests(unittest.TestCase):
+    """修好接着跑第 14 项：请求预算耗尽只暂停（不再写 deadline_live_requests 终态），批准延长后原对象续跑。"""
+
+    def setUp(self) -> None:
+        self.helper = test_codex_upgrade.CodexUpgradeTest("test_b0_reconcile_attempt_same_root_cause_limit_stops_the_line")
+        self.helper.setUp()
+        self.addCleanup(self.helper.doCleanups)
+
+    def _fixture_with_budget(self, root: Path, budget: int) -> dict:
+        # 先建带请求预算的项目总账，b0 夹具的安装器见到已有总账即原样复用。
+        data = root / "data"
+        data.mkdir(parents=True)
+        data.chmod(0o700)
+        project_ledger.create_project_ledger(
+            data / project_ledger.LEDGER_DIR_NAME,
+            project_id="fixture-project",
+            absolute_deadline_utc=(datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            deadline_approved_by="fixture",
+            estimation_policy="upper_bound_from_sibling_or_turn_ratio",
+            estimation_policy_approved_by="fixture",
+            fixture_only=False,
+            live_request_budget=budget,
+            formal_open_limit=64,
+        )
+        return self.helper._b0_fixture(root)
+
+    def test_exhausted_budget_pauses_and_extension_resumes_same_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture_with_budget(root, 1)
+            campaign_dir = fixture["campaign_dir"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            project_ledger.append_project_event(
+                fixture["ledger"], operation_id="consume-budget", event_type="reconciliation_committed",
+                payload={"campaign_id": campaign_id, "request": {"status": "resolved", "identity_keys": ["k-used"], "estimated_delta": 0, "estimated_sources": []}},
+                source_batch_sha256=None,
+            )
+            self.assertEqual(project_ledger.replay_head(fixture["ledger"])["remaining_live_requests"], 0)
+            attempt = self.helper._b0_orphan_attempt(fixture)
+            paused = reconciler.reconcile_attempt(campaign_dir, attempt)
+            self.assertEqual(paused["status"], "paused", paused.get("decision"))
+            self.assertEqual(paused["decision"]["pause_kinds"], ["request_budget"])
+            self.assertIn("request-budget-extend", paused["next_command"])
+            head = project_ledger.replay_head(fixture["ledger"])
+            self.assertNotIn(campaign_id, head["terminal_campaigns"])
+            self.assertNotIn(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], {"stopped", "stop_required"})
+            # 新请求预算必须大于原有效预算与已消耗数。
+            with self.assertRaisesRegex(project_ledger.ProjectLedgerError, "新请求预算必须大于"):
+                project_ledger.preview_live_request_budget_extension(campaign_dir, new_budget=1, reason="补预算")
+            preview = project_ledger.preview_live_request_budget_extension(campaign_dir, new_budget=5, reason="VC-5 续跑需要")
+            self.assertEqual((preview["original_budget"], preview["consumed_at_preview"]), (1, 1))
+            applied = project_ledger.apply_live_request_budget_extension(
+                campaign_dir, preview_path=Path(preview["preview_path"]), approve_sha256=preview["review_sha256"], approved_by="老板"
+            )
+            self.assertEqual((applied["effective_live_request_budget"], applied["remaining_live_requests"]), (5, 4))
+            again = project_ledger.apply_live_request_budget_extension(
+                campaign_dir, preview_path=Path(preview["preview_path"]), approve_sha256=preview["review_sha256"], approved_by="老板"
+            )
+            self.assertEqual(again["project_event"], "duplicate")
+            # 延长后同一对象重新对账：可恢复。
+            self.assertEqual(reconciler.reconcile_attempt(campaign_dir, attempt)["status"], "recoverable")
+            # 历史原因只供回放：新写 deadline_live_requests 终态被拒。
+            with self.assertRaisesRegex(project_ledger.ProjectLedgerError, "仅供历史回放"):
+                project_ledger.append_project_event(
+                    fixture["ledger"], operation_id="terminal-budget", event_type="campaign_terminal",
+                    payload={"campaign_id": campaign_id, "terminal_reason": "deadline_live_requests"}, source_batch_sha256=None,
+                )
+
+    def test_extension_rejects_unbudgeted_project_and_stale_head(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self.helper._b0_fixture(root)
+            with self.assertRaisesRegex(project_ledger.ProjectLedgerError, "没有设请求预算"):
+                project_ledger.preview_live_request_budget_extension(fixture["campaign_dir"], new_budget=5, reason="无预算")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture_with_budget(root, 3)
+            preview = project_ledger.preview_live_request_budget_extension(fixture["campaign_dir"], new_budget=9, reason="补预算")
+            project_ledger.append_project_event(
+                fixture["ledger"], operation_id="concurrent", event_type="reconciliation_committed",
+                payload={"campaign_id": "other", "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0, "estimated_sources": []}},
+                source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(project_ledger.ProjectLedgerError, "head 已过期"):
+                project_ledger.apply_live_request_budget_extension(
+                    fixture["campaign_dir"], preview_path=Path(preview["preview_path"]),
+                    approve_sha256=preview["review_sha256"], approved_by="老板",
+                )
+
 if __name__ == "__main__":
     unittest.main()

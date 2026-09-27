@@ -589,6 +589,8 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_attempt_recovery_reservation.schema.json": upgrade.ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
             # R8：三层预算的批准延期收据。
             "codex_upgrade_deadline_extension.schema.json": artifacts.DEADLINE_EXTENSION_SCHEMA,
+            # 修好接着跑第 14 项：请求预算延长批准收据。
+            "codex_upgrade_live_request_budget_extension.schema.json": artifacts.LIVE_REQUEST_BUDGET_EXTENSION_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):
