@@ -17754,6 +17754,10 @@ class StagingStopTheLine(ConfigurationError):
     """孤儿对账或判定命中永久停线条件；入口以停线错误退出，该序号不得再派。"""
 
 
+class StagingDeadlinePaused(ConfigurationError):
+    """孤儿对账判定预算到期暂停（对账已登记暂停事实）：不是停线，批准延期后按同序号重新派发。"""
+
+
 def _staging_run_arguments(arguments: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
         heartbeat_seconds=(
@@ -18009,6 +18013,12 @@ def _reconcile_staging_abort_receipt(
         "root_cause_id": abort["root_cause_id"],
         "root_cause_count": result["project_head"]["root_cause_count"],
     }
+    if result["status"] == reconciler.DECISION_PAUSED:
+        # 预算到期只是暂停（对账已登记暂停事实），不是停线：批准延期后按同序号重新派发即从原 checkpoint 续接。
+        raise StagingDeadlinePaused(
+            f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账判定预算已到期暂停："
+            "deadline-extend preview/apply 批准延期后，按同序号重新派发。"
+        )
     if result["status"] != reconciler.DECISION_RECOVERABLE:
         raise StagingStopTheLine(
             f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账命中永久停线："
@@ -18329,6 +18339,8 @@ def _reconcile_staging_orphans(
     campaign_id = str(plan["campaign_id"])
     handled: list[dict[str, Any]] = []
     stops: list[str] = []
+    # 预算到期暂停的对象：不是停线，全部处理完后提示先批准延期（对账已登记暂停事实）。
+    paused: list[str] = []
     changed = False
     referenced_attempts: set[tuple[int, str, int]] = set()
     supervisor = codex_upgrade_supervisor
@@ -18408,7 +18420,9 @@ def _reconcile_staging_orphans(
             continue
         handled.append(outcome)
         changed = True
-        if outcome["decision"] not in {reconciler.DECISION_RECOVERABLE, "closed"}:
+        if outcome["decision"] == reconciler.DECISION_PAUSED:
+            paused.append(f"父 run {run_dir.name} 对账判定预算已到期暂停")
+        elif outcome["decision"] not in {reconciler.DECISION_RECOVERABLE, "closed"}:
             stops.append(
                 f"父 run {run_dir.name} 对账命中永久停线：{outcome['terminal_reason']}"
             )
@@ -18491,6 +18505,10 @@ def _reconcile_staging_orphans(
                 )
     if stops:
         raise StagingStopTheLine("；".join(stops))
+    if paused:
+        raise StagingDeadlinePaused(
+            "；".join(paused) + "：deadline-extend preview/apply 批准延期后，按同序号重新派发。"
+        )
     return {"changed": changed, "handled": handled}
 
 
@@ -18583,6 +18601,10 @@ def _compile_and_run_vc_batch_staging(
             except StagingStopTheLine as stop_error:
                 raise StagingStopTheLine(
                     f"prepare 失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                ) from error
+            except StagingDeadlinePaused as paused_error:
+                raise StagingDeadlinePaused(
+                    f"prepare 失败（{type(error).__name__}）；{paused_error}"
                 ) from error
             raise
         staging_binding = {
@@ -18696,6 +18718,10 @@ def _compile_and_run_vc_batch_staging(
                     raise StagingStopTheLine(
                         f"父 run 创建失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
                     ) from error
+                except StagingDeadlinePaused as paused_error:
+                    raise StagingDeadlinePaused(
+                        f"父 run 创建失败（{type(error).__name__}）；{paused_error}"
+                    ) from error
             # 父 run 已建立（含 commit 中被中断后已封存 aborted_prepared）：由下次入口的
             # 孤儿处理幂等续接对账、ABORT 与归档。
             if isinstance(error, supervisor.SupervisorError):
@@ -18716,6 +18742,11 @@ def _compile_and_run_vc_batch_staging(
                 f"（{run['commit_failure']['error_type']}），父 run {run_dir.name} 已封存 aborted_prepared，"
                 f"序号 {sequence:04d} 未占；对账根因 {outcome['root_cause_id']}"
             )
+            if outcome["decision"] == "paused":
+                raise StagingDeadlinePaused(
+                    f"{summary}；已归档 {moved or '无'}；对账判定预算已到期暂停："
+                    "deadline-extend preview/apply 批准延期后，按同序号重新派发。"
+                )
             if outcome["decision"] not in {"recoverable", "closed"}:
                 raise StagingStopTheLine(
                     f"{summary}；对账命中永久停线：{outcome['terminal_reason']}"
@@ -19628,6 +19659,17 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
             "ledger_events": ledger_events,
             "live_request_count": 0,
         }
+        if decision["decision"] == reconciler.DECISION_PAUSED:
+            # 预算到期只是暂停，不是停线（此前误把暂停也送进永久停线，写出 terminal_reason="None" 的终态 batch，
+            # 总账重放拒收、batch 永远推不进）。作废收据、根因 batch 与账本事件都已幂等落盘，批准延期后以同一批准
+            # 摘要重跑 apply 即从二次判定续接。本函数持有 Campaign 锁，不在锁内登记暂停事实（登记需要同一把锁），
+            # 对账或派发入口遇到到期时会登记。
+            result["status"] = "paused"
+            result["next_command"] = (
+                "预算已到期暂停：deadline-extend preview/apply 批准延期后，以同一批准摘要重新执行 "
+                "invalidate-candidate --action apply（幂等续接）"
+            )
+            return result
         if decision["decision"] != reconciler.DECISION_RECOVERABLE:
             try:
                 stop = reconciler._permanent_stop(
@@ -20740,6 +20782,15 @@ def _evaluation_recover_locked(
             "decision": decision,
             "live_request_count": 0,
         }
+        if decision["decision"] == reconciler.DECISION_PAUSED:
+            # 预算到期只是暂停，不是停线（同 invalidate-candidate）：诊断、recovery、prepared 与根因 batch 都已幂等落盘，
+            # 批准延期后重跑本命令即从二次判定续接；持有 Campaign 锁，不在锁内登记暂停事实。
+            result["status"] = "paused"
+            result["next_command"] = (
+                "预算已到期暂停：deadline-extend preview/apply 批准延期后，以同一批准摘要重新执行 "
+                "evaluation-recover（幂等续接）"
+            )
+            return result
         if decision["decision"] != reconciler.DECISION_RECOVERABLE:
             try:
                 stop = reconciler._permanent_stop(

@@ -650,6 +650,44 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
             # 无关历史 attempt（r1 的）与本次无关：不在本候选目录下，也不在 r2 失败父 run 窗口内。
             self.assertEqual([item["attempt_id"] for item in preview["accounting"]["attempts"]], [attempt_r2])
 
+    def test_invalidation_paused_decision_does_not_stop_and_resumes_after_extension(self) -> None:
+        """二次判定为预算暂停时不写停线与终态（此前误送永久停线，写出 terminal_reason="None" 的终态 batch，
+        总账重放拒收）；批准延期后（此处以取消暂停判定模拟）同一批准摘要重跑 apply 即完成作废。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = Path(str(fixture["campaign_dir"]))
+            campaign_id = str(codex_upgrade._require_formal_campaign(campaign_dir)["campaign_id"])
+            self._advance_to_vc3(fixture, root)
+            self._open(fixture, R1, initial=True)
+            result, returncode = self._dispatch(fixture, root, "VC-4", 4, tag="vc4-r1")
+            self.assertEqual(returncode, 0, result)
+            failed_r1 = self._fail_vc5_into_review(fixture, root, sequence=5, tag="vc5-r1-fail")
+            self.assertEqual(reconciler.reconcile_supervisor_run(failed_r1, campaign_dir)["status"], "recoverable")
+            source_r1 = self._candidate_source(root, "r1")
+            real_decide = reconciler._decide
+
+            def paused_decide(**kwargs: object) -> dict:
+                decision = real_decide(**kwargs)
+                return {**decision, "decision": reconciler.DECISION_PAUSED, "terminal_reason": None}
+
+            with mock.patch.object(codex_upgrade, "_git_commit", return_value="a" * 40):
+                preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source_r1))
+                apply = self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source_r1)
+                with mock.patch.object(reconciler, "_decide", side_effect=paused_decide):
+                    paused = codex_upgrade.invalidate_candidate(apply)
+                self.assertEqual(paused["status"], "paused")
+                self.assertIn("deadline-extend", paused["next_command"])
+                self.assertNotIn(campaign_id, self._head(fixture)["terminal_campaigns"])
+                self.assertNotIn(self._summary(fixture)["status"], {"stopped", "stop_required"})
+                self.assertNotIn("stop_the_line", [event_type for event_type, _event_id in self._events(fixture)])
+                applied = codex_upgrade.invalidate_candidate(
+                    self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source_r1)
+                )
+            self.assertEqual(applied["status"], "applied")
+            self.assertEqual(self._summary(fixture)["status"], "revision_required")
+
     def test_second_invalidation_with_same_root_cause_hits_limit_and_stops(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

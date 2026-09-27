@@ -33,6 +33,7 @@ from tools.official_client_capture import build_assertion_bundle as bundle
 from tools.official_client_capture import candidate_rule_assertion as assertion
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture.codex_upgrade import Job
+from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
@@ -363,6 +364,50 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertEqual(returncode, 1, result)
             self.assertTrue((campaign_dir / "control" / "vc" / "commits" / "0005-vc-5.json").is_file())
             self.assertEqual(_read(campaign_dir / "control" / "vc" / "batches" / "0005-vc-5.json")["evaluator_digests"], original)
+
+    def test_evaluation_recover_paused_decision_does_not_stop_and_resumes(self) -> None:
+        """二次判定为预算暂停时不写停线与终态；批准延期后（以取消暂停判定模拟）同一批准摘要重跑即完成授权。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            plan_b0 = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="b0")
+            result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
+            self.assertEqual(returncode, 1, result)
+            run_b0 = Path(str(result["campaign_run"]["run_dir"]))
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_b0, campaign_dir)["status"], "recoverable")
+            patches = self._stage_patches(context, context["candidate"])
+            for patcher in patches:
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            real_decide = reconciler._decide
+
+            def paused_decide(**kwargs: object) -> dict:
+                decision = real_decide(**kwargs)
+                return {**decision, "decision": reconciler.DECISION_PAUSED, "terminal_reason": None}
+
+            fixed = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f6" * 32)
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed):
+                preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
+
+                def apply() -> dict:
+                    return codex_upgrade.evaluation_recover(self._recover_arguments(
+                        fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=preview["review_sha256"],
+                        fix_commit="a" * 40, deployment_receipt=Path(str(fixture["deployment"])),
+                    ))
+
+                with mock.patch.object(reconciler, "_decide", side_effect=paused_decide):
+                    paused = apply()
+                self.assertEqual(paused["status"], "paused")
+                self.assertIn("deadline-extend", paused["next_command"])
+                head = project_ledger.replay_head(Path(str(fixture["ledger"])))
+                self.assertEqual(head["terminal_campaigns"], {})
+                self.assertNotIn(
+                    timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], {"stopped", "stop_required"}
+                )
+                applied = apply()
+            self.assertEqual(applied["status"], "applied")
 
     def test_successor_protocol_rejects_forged_baseline_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -814,5 +814,31 @@ class StagingDispatchTests(unittest.TestCase):
             self.assertEqual(head, summary["head_sequence"])
 
 
+
+class StagingDeadlinePausedTests(unittest.TestCase):
+    def test_paused_staging_abort_decision_is_not_stop_the_line(self) -> None:
+        """预算到期暂停不是停线：staging 中止对账判定暂停时入口报暂停（先批准延期），不再报"永久停线：None"。"""
+
+        abort = {"stage": "prepare", "receipt_sha256": "a" * 64, "root_cause_id": "rc1-x"}
+        paused = {
+            "status": reconciler.DECISION_PAUSED,
+            "decision": {"decision": reconciler.DECISION_PAUSED, "terminal_reason": None, "reasons": ["Campaign 总预算有效截止已到"]},
+            "project_head": {"root_cause_count": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            attempt_dir = Path(directory) / "attempt-1"
+            attempt_dir.mkdir()
+            (attempt_dir / codex_upgrade.STAGING_ABORT_FILENAME).write_text("{}\n", encoding="utf-8")
+            with mock.patch.object(artifacts, "validate_staging_abort", return_value=abort), \
+                    mock.patch.object(reconciler, "reconcile_staging_abort", return_value=paused):
+                with self.assertRaises(codex_upgrade.StagingDeadlinePaused) as raised:
+                    codex_upgrade._reconcile_staging_abort_receipt(
+                        Path(directory), attempt_dir, sequence=2, phase="VC-2", attempt=1
+                    )
+        self.assertNotIsInstance(raised.exception, codex_upgrade.StagingStopTheLine)
+        self.assertIn("deadline-extend", str(raised.exception))
+        self.assertNotIn("None", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
