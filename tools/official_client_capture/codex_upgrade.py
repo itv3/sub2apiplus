@@ -59201,6 +59201,15 @@ def _tool_evolution_preview(
     # Campaign 冻结策略已把这些路径分到 control 层：只影响控制门禁，不影响请求字节与证据语义，不计入产出侧影响。
     # 不能靠补白名单：_EVALUATION_SIDE_FILES 在 wire 闭包内，改它本身就改变 wire 身份、判全部作业受影响。
     production -= set(drift["control"])
+    # 第三批 B3-2：evidence 层文件按冻结策略的定义"变化只追加 evaluation epoch、原始字节不重采"（0.157 清单里 32 个
+    # 不在 v1 白名单的 evidence 文件——规则／预期 json、证据提取与脱敏脚本——被 38 个作业声明依赖，按 v1 口径会映射到
+    # 已封存的 official 作业而拒绝登记）。它们不进 impact_paths，单独记为 evaluation_paths：登记即 Campaign 级 epoch，
+    # 已有评估结果按 B3-3 作废重评；续跑复用侧这些文件属放行组件，逐文件依赖比对放行。
+    evaluation_paths = sorted(set(drift["evidence_semantics"]))
+    production -= set(evaluation_paths)
+    # 第三批 B3-6：ignored 前缀（其它客户端）文件不进 impact_paths——映射不到作业不能判全部受影响；被作业声明依赖的
+    # 仍按下方 path_map 逐作业计入。
+    production -= set(drift["ignored"])
     impact_paths = sorted(production | set(drift["wire_producer"]))
 
     # 逐作业影响：official 与每个活跃候选。已作废／已取代的候选只读，不再计入。
@@ -59312,6 +59321,8 @@ def _tool_evolution_preview(
         "changes": {
             "paths_by_layer": {layer: list(paths) for layer, paths in sorted(drift.items())},
             "impact_paths": impact_paths,
+            # B3-2：evidence 层变化路径（不重采、按 B3-3 重评）；旧收据没有该键。
+            "evaluation_paths": evaluation_paths,
             "unmapped_paths": unmapped,
             "wire_closure_changed": wire_closure_changed,
             "evidence_closure_changed": from_summary["evidence_closure_sha256"]

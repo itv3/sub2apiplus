@@ -812,6 +812,41 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已封存的 official"):
                 self._run(fixture, fixture.added_identity(fixture.identity, tool), path_map={}, sealed={"capture-official:None"})
 
+    def test_evidence_layer_and_ignored_changes_are_not_production_impact(self) -> None:
+        """第三批 B3-2／B3-6：按冻结策略 evidence 层文件"变化只追加 epoch、不重采"，0.157 清单里 32 个不在 v1 白名单的
+        evidence 文件（如 relay_extract.py）被 38 个作业声明依赖——改它们按旧口径映射到已封存的 official 作业而拒绝登记。
+        现在它们不进 impact_paths、记入 evaluation_paths、影响为空；ignored 前缀（其它客户端）文件映射不到不再判全部
+        受影响，被作业声明依赖的仍逐作业计入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            evidence_file = "relay_extract.py"
+            self.assertEqual(tip.classify_path(fixture.policy, evidence_file), "evidence_semantics")
+            self.assertNotIn(evidence_file, codex_upgrade._EVALUATION_SIDE_FILES)
+            current = fixture.mutated_identity(fixture.identity, evidence_file)
+            path_map = {evidence_file: {"official-core", "candidate-core-direct"}}
+            preview = self._run(fixture, current, path_map=path_map, sealed={"capture-official:None"})
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual((preview["changes"]["impact_paths"], preview["changes"]["unmapped_paths"]), ([], []))
+            self.assertEqual(preview["changes"]["evaluation_paths"], [evidence_file])
+            self.assertEqual(preview["changes"]["paths_by_layer"]["evidence_semantics"], [evidence_file])
+            self.assertTrue(preview["changes"]["evidence_closure_changed"] in (True, False))
+            self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
+            self.assertEqual(preview["impact"]["candidates"]["cand"]["affected_job_ids"], [])
+            ignored_file = "claude_fw_e_relay.py"
+            self.assertIsNone(tip.classify_path(fixture.policy, ignored_file))
+            changed = fixture.mutated_identity(fixture.identity, ignored_file)
+            self.assertNotEqual(changed["files_sha256"], fixture.identity["files_sha256"])
+            unmapped = self._run(fixture, changed, path_map={}, sealed={"capture-official:None"})
+            self.assertEqual((unmapped["changes"]["impact_paths"], unmapped["changes"]["unmapped_paths"]), ([], []))
+            self.assertEqual(unmapped["changes"]["evaluation_paths"], [])
+            self.assertEqual(unmapped["impact"]["official"]["affected_job_ids"], [])
+            self.assertEqual(unmapped["impact"]["candidates"]["cand"]["affected_job_ids"], [])
+            mapped = self._run(fixture, changed, path_map={ignored_file: {"candidate-trace-test"}},
+                               sealed={"capture-official:None"})
+            self.assertEqual(mapped["impact"]["candidates"]["cand"]["affected_job_ids"], ["candidate-trace-test"])
+            self.assertEqual(mapped["impact"]["official"]["affected_job_ids"], [])
+
     def test_checker_change_moves_b0_authorization_only_without_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = EvolutionFixture(Path(directory).resolve())
