@@ -170,6 +170,9 @@ class ProjectLedgerTests(unittest.TestCase):
                 )
                 self.assertEqual(first["status"], "appended")
                 self.assertEqual(first["remaining_live_requests"], 2)
+                # 第三批 B3-16：入账后按 dispatch_id 能查到该 operation（候选就绪判定用它识别被工具部署取代的旧会话）。
+                self.assertTrue(admission.probe_dispatch_accounted("dispatch-a"))
+                self.assertFalse(admission.probe_dispatch_accounted("dispatch-unknown"))
                 duplicate = admission.account_candidate_probe(
                     campaign_id="probe-campaign",
                     candidate_id="candidate-a",

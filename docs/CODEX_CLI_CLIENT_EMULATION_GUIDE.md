@@ -3383,6 +3383,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 - **父 run 被看门狗中止**（`watchdog-aborted`，没有动作诊断）：`reconcile-supervisor-run` 对账（legacy-interruption、无 reservation、
   零请求，收据绑定总账事件）后它是可信终态，批次链审计按失败终态走后继协议（例如补跑批次被中止后接 N+1 零请求恢复预览）；
   未对账的看门狗中止前序明确拒绝并指向对账入口，中止却留有动作失败诊断的按失败终态协议处理。
+- **工具部署取代的旧就绪探针会话**：候选就绪 models 探针会话在 dispatch 之后中断（无 receipt），修好工具部署后
+  `static_receipt_digest` 改变；只有工具部署派生摘要不同、其余身份字段全等、每个 dispatch 都有 result 且已按 operation 幂等键
+  计入总账（`candidate_probe_accounted`）的会话才被视为已取代——只跳过、不改写，新身份另建会话；未入账、缺 dispatch_id、
+  候选／镜像／账号等真实身份不同，或 admission 没有入账查询能力时仍失败关闭。零 dispatch 的不匹配会话照旧跳过。
 - **已完成待封存的 attempt 被作废**（工具演进作废其作业，或 Kilo 后环境恢复失败被隔离）：`reconcile-attempt`
   按作废对账，只核算请求、不计根因，计时账本写 `recovery_required`；恢复预览只重跑失效作业（隔离作废全部重跑）。
   针对它的 seal 链批次编译前零写入拒绝，失败的 seal 链批次之后允许 N+1 零请求恢复预览。

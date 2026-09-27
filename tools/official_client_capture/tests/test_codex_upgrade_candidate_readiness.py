@@ -782,6 +782,85 @@ class CandidateReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
                 readiness._matching_session(root, **changed)
 
+    def test_changed_tool_identity_skips_incomplete_session_with_accounted_dispatches(self) -> None:
+        """第三批 B3-16（第 27 项）：补跑父 run 在探针 dispatch 之后被看门狗中止（2026-09-27 c01570 VC-5 批次 14），留下带
+        dispatch、无 receipt 的会话；修好工具受监督部署后 static_receipt_digest 改变，批次 16 因"其它身份未完成会话"失败。
+        只有工具部署派生摘要不同、其余身份全等、每个 dispatch 都有 result 且已按 operation 幂等键入总账的会话才跳过（不改写）；
+        没有入账查询能力、未入账、缺 dispatch_id、候选／镜像等真实身份不同都仍失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = readiness._probe_root(Path(directory), "candidate-a")
+            base = {
+                "campaign_id": "campaign-a",
+                "candidate_id": "candidate-a",
+                "image_id": IMAGE_ID,
+                "build_receipt_sha256": BUILD_SHA256,
+                "static_receipt_digest": STATIC_DIGEST,
+                "target_version": "0.154.0",
+                "codex_account_id": 9,
+                "api_key_id": 4,
+                "ttl_seconds": 600,
+                "max_dispatches": 2,
+            }
+            stale, _ = readiness._new_session(
+                root, created_at_utc="2026-09-27T07:09:14.000Z", **base
+            )
+            readiness._write_once(stale / "dispatch-01.intent.json", {"dispatch_id": "stale-dispatch-1"})
+            readiness._write_once(
+                stale / "dispatch-01.result.json", {"dispatch_id": "stale-dispatch-1", "response_status": 200}
+            )
+            changed = dict(base, static_receipt_digest="5" * 64)
+            accounted = lambda dispatch_id: dispatch_id == "stale-dispatch-1"  # noqa: E731
+            # 已入账且只有工具部署派生摘要不同：新身份无匹配会话（跳过），原身份仍复用该未完成会话。
+            self.assertIsNone(readiness._matching_session(root, **changed, dispatch_accounted=accounted))
+            matched = readiness._matching_session(root, **base, dispatch_accounted=accounted)
+            assert matched is not None
+            self.assertEqual(matched[0], stale)
+            # 没有入账查询能力、未入账、真实身份不同：仍失败关闭。
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness._matching_session(root, **changed)
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness._matching_session(root, **changed, dispatch_accounted=lambda _dispatch_id: False)
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness._matching_session(
+                    root, **dict(changed, image_id="sha256:" + "7" * 64), dispatch_accounted=accounted
+                )
+            # 缺 dispatch_id 的 result 不能证明入账：失败关闭。
+            other, _ = readiness._new_session(
+                root, created_at_utc="2026-09-27T07:10:14.000Z", **dict(base, candidate_id="candidate-a")
+            )
+            readiness._write_once(other / "dispatch-01.intent.json", {"fixture": True})
+            readiness._write_once(other / "dispatch-01.result.json", {"fixture": True})
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness._matching_session(root, **changed, dispatch_accounted=lambda _dispatch_id: True)
+            for path in other.iterdir():
+                path.unlink()
+            other.rmdir()
+
+            class AccountedAdmission(FakeAdmission):
+                def probe_dispatch_accounted(self, dispatch_id: str) -> bool:
+                    return dispatch_id == "stale-dispatch-1"
+
+            # 端到端：新工具身份的就绪判定跳过旧会话、新建会话完成一次 dispatch 并入账；旧会话原样不动。
+            runtime = FakeRuntime()
+            admission = AccountedAdmission()
+            common = probe_kwargs(runtime, admission, lambda *_arguments: (200, models_body()))
+            common["static_receipt_digest"] = "5" * 64
+            readiness.ensure_models_probe(
+                Path(directory), now=datetime(2026, 9, 27, 17, 20, tzinfo=timezone.utc), **common
+            )
+            self.assertEqual(len(admission.operations), 1)
+            self.assertEqual(
+                sorted(path.name for path in stale.iterdir()),
+                ["dispatch-01.intent.json", "dispatch-01.result.json", "session.json"],
+            )
+            # 没有入账查询能力的 admission（旧替身）走原路径：失败关闭。
+            with self.assertRaisesRegex(ValueError, "其它 Candidate 身份的未完成 probe session"):
+                readiness.ensure_models_probe(
+                    Path(directory), now=datetime(2026, 9, 27, 17, 21, tzinfo=timezone.utc),
+                    **dict(common, static_receipt_digest="6" * 64, admission=FakeAdmission()),
+                )
+
     def test_matching_session_uses_created_time_not_filename_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = readiness._probe_root(Path(directory), "candidate-a")

@@ -2560,6 +2560,16 @@ class RuntimeAdmission:
         )
         return dict(self.head)
 
+    def probe_dispatch_accounted(self, dispatch_id: str) -> bool:
+        """该 ``/models`` wire dispatch 是否已按 operation 幂等键计入总账（candidate_probe_accounted）。
+
+        第三批 B3-16（第 27 项）：候选就绪判定用它识别被工具部署取代的旧探针会话——其 dispatch 已入账才能跳过。
+        """
+
+        operation_id = f"candidate-probe:{hashlib.sha256(dispatch_id.encode('utf-8')).hexdigest()[:32]}"
+        meta = self.head.get("operations", {}).get(operation_id)
+        return isinstance(meta, Mapping) and meta.get("event_type") == "candidate_probe_accounted"
+
     def account_candidate_probe(
         self,
         *,

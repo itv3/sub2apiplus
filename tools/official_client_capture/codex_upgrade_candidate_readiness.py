@@ -1472,6 +1472,55 @@ def _validate_session_payload(path: Path, payload: Mapping[str, Any]) -> dict[st
     return session
 
 
+def _superseded_by_tool_deployment(
+    payload: Mapping[str, Any],
+    results: Sequence[Path],
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    image_id: str,
+    build_receipt_sha256: str,
+    target_version: str,
+    codex_account_id: int,
+    api_key_id: int,
+    ttl_seconds: int,
+    max_dispatches: int,
+    dispatch_accounted: Callable[[str], bool] | None,
+) -> bool:
+    """未完成会话是否只是被工具部署取代（第三批 B3-16，第 27 项）。
+
+    条件：除 ``static_receipt_digest`` 外的身份字段全等；每个 dispatch 都有 result，其 ``dispatch_id`` 都已按
+    operation 幂等键计入项目总账（由调用方给出的 ``dispatch_accounted`` 判定）。没有入账查询能力时一律不算，
+    保持失败关闭。
+    """
+
+    if dispatch_accounted is None:
+        return False
+    if not (
+        payload.get("campaign_id") == campaign_id
+        and payload.get("candidate_id") == candidate_id
+        and payload.get("image_id") == image_id
+        and payload.get("build_receipt_sha256") == build_receipt_sha256
+        and payload.get("target_version") == target_version
+        and payload.get("codex_account_id") == codex_account_id
+        and payload.get("api_key_id") == api_key_id
+        and payload.get("ttl_seconds") == ttl_seconds
+        and payload.get("max_dispatches") == max_dispatches
+        and payload.get("accounting_category") == ACCOUNTING_CATEGORY
+        and payload.get("accounting_policy") == ACCOUNTING_POLICY
+        and payload.get("cache_policy") == CACHE_POLICY
+    ):
+        return False
+    if not results:
+        return False
+    for result_path in results:
+        result = _load_json(result_path, "Candidate models probe result")
+        dispatch_id = result.get("dispatch_id")
+        if not isinstance(dispatch_id, str) or not dispatch_id or not dispatch_accounted(dispatch_id):
+            return False
+    return True
+
+
 def _matching_session(
     root: Path,
     *,
@@ -1485,6 +1534,7 @@ def _matching_session(
     api_key_id: int,
     ttl_seconds: int,
     max_dispatches: int,
+    dispatch_accounted: Callable[[str], bool] | None = None,
 ) -> tuple[Path, dict[str, Any]] | None:
     matching: list[tuple[datetime, str, Path, dict[str, Any]]] = []
     incomplete: list[tuple[Path, dict[str, Any]]] = []
@@ -1553,6 +1603,26 @@ def _matching_session(
                     # static_receipt_digest，若仍按"其它身份未完成会话"失败关闭，就绪中断后修好工具也永远无法
                     # 重派（2026-09-26 c01570 VC-5 批次 10）。这类会话只跳过、不改写；已有 intent／result 的
                     # 不匹配会话仍失败关闭。
+                    continue
+                # 第三批 B3-16（第 27 项）：补跑父 run 在探针 dispatch 之后被看门狗中止，留下带 dispatch 但没有
+                # receipt 的会话；修好工具受监督部署后 static_receipt_digest 改变，它就成了"其它身份的未完成会话"，
+                # 候选采集永远无法重派（2026-09-27 c01570 VC-5 批次 16）。只有工具部署派生的摘要不同、其余身份
+                # 字段全等，且每个 dispatch 都有 result 并已按 operation 幂等键计入项目总账的会话，才是被工具部署
+                # 取代的旧会话：请求已入账、不可续用，只跳过、不改写；缺入账或候选／镜像／账号等真实身份不同仍失败关闭。
+                if _superseded_by_tool_deployment(
+                    payload,
+                    results,
+                    campaign_id=campaign_id,
+                    candidate_id=candidate_id,
+                    image_id=image_id,
+                    build_receipt_sha256=build_receipt_sha256,
+                    target_version=target_version,
+                    codex_account_id=codex_account_id,
+                    api_key_id=api_key_id,
+                    ttl_seconds=ttl_seconds,
+                    max_dispatches=max_dispatches,
+                    dispatch_accounted=dispatch_accounted,
+                ):
                     continue
                 raise ValueError("存在属于其它 Candidate 身份的未完成 probe session")
             incomplete.append((path, payload))
@@ -2345,6 +2415,8 @@ def ensure_models_probe(
         api_key_id=api_key_id,
         ttl_seconds=ttl_seconds,
         max_dispatches=max_dispatches,
+        # 第三批 B3-16：总账侧 admission 提供 dispatch 入账查询；测试替身或旧 admission 没有该能力时保持失败关闭。
+        dispatch_accounted=getattr(admission, "probe_dispatch_accounted", None),
     )
     if matched is None:
         session_root, session = _new_session(
