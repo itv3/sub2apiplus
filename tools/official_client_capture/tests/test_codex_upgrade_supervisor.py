@@ -4066,6 +4066,202 @@ raise SystemExit(9)
                     require_bound_files=True,
                 )
 
+    # ------------------------------------------------------------------
+    # B4-1 后继协议层失败矩阵改造（草表 b4-successor-matrix-draft.md）
+    # ------------------------------------------------------------------
+
+    def _b4_failed_run(
+        self,
+        root: Path,
+        name: str,
+        *,
+        reason: str,
+        state_name: str = "failed",
+        event_type: str = "failed",
+        campaign_id: str = "campaign-b4",
+        phase: str = "VC-1",
+        owner_nonce: str = "8" * 64,
+        diagnostics: tuple[tuple[str, tuple[str, str, str]], ...] = (),
+        started_actions: tuple[str, ...] = (),
+    ) -> tuple[dict[str, object], Path]:
+        """B4-1 夹具：一个已终态的父 run 目录（state／stop receipt／可选的动作诊断与 action-started 事件链）。"""
+
+        run_dir = root / name
+        run_dir.mkdir(mode=0o700)
+        state: dict[str, object] = {
+            "state": state_name,
+            "campaign_id": campaign_id,
+            "phase": phase,
+            "owner_pid": os.getpid(),
+            "owner_nonce": owner_nonce,
+            "terminal_at_utc": "2026-09-28T00:00:00.000Z",
+        }
+        self._write_json(run_dir / "state.json", state)
+        supervisor._stop_receipt(
+            run_dir,
+            event_type=event_type,
+            reason=reason,
+            detected_at_epoch=1005.0,
+            owner_pid=os.getpid(),
+            owner_nonce=owner_nonce,
+            campaign_id=campaign_id,
+            phase=phase,
+        )
+        for action_id, (failure_kind, error_type, failure_class) in diagnostics:
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, action_id, create_directory=True),
+                campaign_id=campaign_id,
+                phase=phase,
+                action_id=action_id,
+                owner_pid=os.getpid(),
+                owner_nonce=owner_nonce,
+                failure_kind=failure_kind,
+                failure_class=failure_class,
+                error_type=error_type,
+                message="B4 夹具：错误详情已按脱敏规则省略。",
+            )
+        for action_id in started_actions:
+            supervisor._append_event(
+                run_dir,
+                event_type="action-started",
+                operation=f"{phase}:{action_id}",
+                owner_pid=os.getpid(),
+                owner_nonce=owner_nonce,
+                campaign_id=campaign_id,
+                phase=phase,
+                job_id=action_id,
+                status="running",
+                started_at_epoch=1000.0,
+            )
+        return state, run_dir
+
+    def test_b4_1_failed_parent_facts_classifies_terminal_kinds_and_locates_action(self) -> None:
+        """B4-1 改法 1：失败父 run 的共享事实按"终态种类＋失败动作"给出，不按异常名白名单。
+
+        action-failed:<id> 直接取 stop reason；SupervisorTimeout／KeyboardInterrupt／其它异常类名的终态依次从唯一的
+        动作诊断、事件链最后一条 action-started 定位动作；定位不到（无诊断且无事件、诊断不唯一、诊断指向清单外的
+        动作）时 action_id 为 None——保守，不硬接；不是失败终态或 stop reason 不是异常类名／已知形态时返回 None。
+        """
+
+        handled = ("handled-error", "CampaignCleanupRequested", "deadline-expired")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            manifest = {"actions": [{"action_id": "capture-official"}, {"action_id": "seal-official-preview"}]}
+
+            state, run_dir = self._b4_failed_run(root, "run-action-failed", reason="action-failed:capture-official")
+            facts = supervisor._failed_parent_facts(state, run_dir)
+            self.assertEqual(
+                (facts["terminal_kind"], facts["action_id"], facts["action_id_source"], facts["state"], facts["reason"]),
+                ("action-failed", "capture-official", "stop-reason", "failed", "action-failed:capture-official"),
+            )
+            self.assertEqual(facts["stop"]["event_type"], "failed")
+
+            # 动作级超时：stop reason 是异常类名 SupervisorTimeout，动作由唯一诊断定位。
+            state, run_dir = self._b4_failed_run(
+                root, "run-timeout", reason="SupervisorTimeout", diagnostics=(("capture-official", handled),)
+            )
+            facts = supervisor._failed_parent_facts(state, run_dir, prior_manifest=manifest)
+            self.assertEqual(
+                (facts["terminal_kind"], facts["action_id"], facts["action_id_source"]),
+                ("action-timeout", "capture-official", "diagnostic"),
+            )
+            # 中断：无诊断时由事件链最后一条 action-started 定位。
+            state, run_dir = self._b4_failed_run(
+                root, "run-interrupt", reason="KeyboardInterrupt", started_actions=("capture-official", "seal-official-preview")
+            )
+            facts = supervisor._failed_parent_facts(state, run_dir, prior_manifest=manifest)
+            self.assertEqual(
+                (facts["terminal_kind"], facts["action_id"], facts["action_id_source"]),
+                ("interrupted", "seal-official-preview", "events"),
+            )
+            state, run_dir = self._b4_failed_run(root, "run-exit", reason="SystemExit", started_actions=("capture-official",))
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["terminal_kind"], "interrupted")
+            # 父进程其它异常：类名不在任何白名单里也能归类。
+            state, run_dir = self._b4_failed_run(root, "run-other", reason="RuntimeError", diagnostics=(("capture-official", handled),))
+            facts = supervisor._failed_parent_facts(state, run_dir, prior_manifest=manifest)
+            self.assertEqual((facts["terminal_kind"], facts["action_id"]), ("other-exception", "capture-official"))
+            # 定位不到动作：无诊断且无事件链；诊断不唯一；诊断指向清单外的动作。
+            state, run_dir = self._b4_failed_run(root, "run-blind", reason="SupervisorTimeout")
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["action_id"], None)
+            state, run_dir = self._b4_failed_run(
+                root, "run-two", reason="SupervisorTimeout",
+                diagnostics=(("capture-official", handled), ("seal-official-preview", handled)),
+            )
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["action_id"], None)
+            state, run_dir = self._b4_failed_run(root, "run-ghost", reason="SupervisorTimeout", diagnostics=(("ghost", handled),))
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir, prior_manifest=manifest)["action_id"], None)
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["action_id"], "ghost")
+            # 看门狗中止与两类父失败：种类各自独立，不带动作（看门狗可由事件链定位）。
+            state, run_dir = self._b4_failed_run(
+                root, "run-watchdog", state_name="watchdog-aborted", event_type="watchdog-aborted",
+                reason="owner-process-not-alive", started_actions=("capture-official",),
+            )
+            facts = supervisor._failed_parent_facts(state, run_dir)
+            self.assertEqual((facts["terminal_kind"], facts["action_id"]), ("watchdog", "capture-official"))
+            state, run_dir = self._b4_failed_run(root, "run-parent-start", reason="parent-start-failed")
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["terminal_kind"], "parent-start-failed")
+            state, run_dir = self._b4_failed_run(root, "run-parent-finalize", reason="parent-finalize-lost")
+            self.assertEqual(supervisor._failed_parent_facts(state, run_dir)["terminal_kind"], "parent-finalize-lost")
+            # 不可归类：非失败终态；stop receipt 缺失；failed 终态却带 stopped 的 reason；state 与 stop 事件类型不符。
+            state, run_dir = self._b4_failed_run(root, "run-stopped", state_name="stopped", event_type="stopped", reason="queue-complete")
+            self.assertIsNone(supervisor._failed_parent_facts(state, run_dir))
+            state, run_dir = self._b4_failed_run(root, "run-odd", reason="queue-complete")
+            self.assertIsNone(supervisor._failed_parent_facts(state, run_dir))
+            state, run_dir = self._b4_failed_run(root, "run-mismatch", state_name="watchdog-aborted", reason="owner-process-not-alive")
+            self.assertIsNone(supervisor._failed_parent_facts(state, run_dir))
+            missing = root / "run-missing"
+            missing.mkdir(mode=0o700)
+            self.assertIsNone(supervisor._failed_parent_facts({"state": "failed"}, missing))
+
+    def test_b4_1_environment_redispatch_accepts_timeout_parent_with_located_action(self) -> None:
+        """B4-1 改法 1（草表 D-04）：环境前提失败的父 run 以动作级超时终止（stop reason SupervisorTimeout）——
+        诊断已定位到唯一动作、对账许可齐全时，逐字重派协议同样承接；定位不到动作（诊断不唯一）或 stop reason
+        不是异常类名的失败终态仍不承接。"""
+
+        def rewrite_stop(prior_dir: Path, prior_state: dict[str, object], reason: str) -> None:
+            stop_path = prior_dir / "stop-receipt.json"
+            stop_path.chmod(0o600)
+            stop_path.unlink()
+            supervisor._stop_receipt(
+                prior_dir, event_type="failed", reason=reason, detected_at_epoch=1005.0,
+                owner_pid=int(prior_state["owner_pid"]), owner_nonce=str(prior_state["owner_nonce"]),
+                campaign_id=str(prior_state["campaign_id"]), phase="VC-1",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+            history = [(prior_state, prior_manifest, prior_dir)]
+            rewrite_stop(prior_dir, prior_state, "SupervisorTimeout")
+            ordered = supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+            # 父进程其它异常同样按诊断定位动作后承接。
+            rewrite_stop(prior_dir, prior_state, "RuntimeError")
+            ordered = supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+            # 定位不到动作（第二份诊断让诊断不唯一）：不硬接，兜底文案说明无法定位失败动作。
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(prior_dir, "other-action", create_directory=True),
+                campaign_id=str(prior_state["campaign_id"]), phase="VC-1", action_id="other-action",
+                owner_pid=int(prior_state["owner_pid"]), owner_nonce=str(prior_state["owner_nonce"]),
+                failure_kind="handled-error", failure_class="environment-prerequisite",
+                error_type="ConfigurationError", message="第二份诊断。",
+            )
+            with self.assertRaisesRegex(SupervisorError, "无法定位失败动作"):
+                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+            history = [(prior_state, prior_manifest, prior_dir)]
+            # failed 终态却带 stopped 的 reason：不是异常类名，不可归类，任何协议都不承接。
+            rewrite_stop(prior_dir, prior_state, "queue-complete")
+            with self.assertRaisesRegex(SupervisorError, "没有被任何后继协议承接|唯一直接 v3 恢复后继"):
+                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+
 
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""

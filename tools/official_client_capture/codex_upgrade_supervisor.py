@@ -7108,6 +7108,144 @@ def _recovery_predecessor_from_run(
     }
 
 
+# ---------------------------------------------------------------------------
+# B4-1 改法 1：失败父 run 的共享事实（终态种类＋失败动作）
+# ---------------------------------------------------------------------------
+#
+# 后继协议原来各自以 stop reason 的字面形态（``action-failed:<id>``）作入口；动作级超时（stop reason 为异常类名
+# ``SupervisorTimeout``）、父进程中断（``KeyboardInterrupt``／``SystemExit``）与其它未捕获异常的终态虽被收账判为
+# 可恢复，却没有任何协议承接（草表 D-04／D-11）。这里统一给出"终态种类＋失败动作"，各协议按种类判定，不再按
+# 异常名或文案白名单；推断不出失败动作的前序不硬接（action_id 为 None，协议返回 False，兜底文案说明）。
+FAILED_PARENT_TERMINAL_KINDS = frozenset(
+    {
+        "action-failed",  # stop reason action-failed:<id>（预检漂移、动作非零退出、RuntimeEgressPaused）
+        "action-timeout",  # 动作级 timeout_seconds 到期，父 campaign-run 以 SupervisorTimeout 收口
+        "interrupted",  # 父 campaign-run 进程被 KeyboardInterrupt／SystemExit 打断
+        "other-exception",  # 父进程其它未捕获异常（stop reason 为该异常类名）
+        "watchdog",  # 看门狗中止（state watchdog-aborted，无动作诊断）
+        PARENT_START_FAILED_REASON,
+        PARENT_FINALIZE_LOST_REASON,
+    }
+)
+# 动作类终态：失败对象是某个动作（含看门狗中止时正在执行的动作）；两类父失败没有动作。
+FAILED_PARENT_ACTION_KINDS = frozenset({"action-failed", "action-timeout", "interrupted", "other-exception", "watchdog"})
+# 父 campaign-run 以"异常类名"收口的终态里，非动作失败的两类。
+_ACTION_TIMEOUT_STOP_REASON = "SupervisorTimeout"
+_INTERRUPTED_STOP_REASONS = frozenset({"KeyboardInterrupt", "SystemExit"})
+
+
+def _failed_parent_action_from_diagnostics(prior_dir: Path) -> str | None:
+    """唯一的 ``action-diagnostics/action-<id>-failure.json`` 指向的动作；没有或不唯一返回 None。"""
+
+    diagnostics_dir = Path(prior_dir) / "action-diagnostics"
+    if diagnostics_dir.is_symlink() or not diagnostics_dir.is_dir():
+        return None
+    names = sorted(
+        path.name
+        for path in diagnostics_dir.glob("action-*-failure.json")
+        if not path.is_symlink() and path.is_file()
+    )
+    if len(names) != 1:
+        return None
+    action_id = names[0][len("action-") : -len("-failure.json")]
+    return action_id if _is_safe_id(action_id) else None
+
+
+def _failed_parent_action_from_events(prior_dir: Path) -> str | None:
+    """事件链最后一条 ``action-started`` 的 job_id（父 campaign-run 以动作 ID 作 job_id）；链不可信或没有返回 None。"""
+
+    try:
+        events = load_events(prior_dir)
+    except SupervisorError:
+        return None
+    for event in reversed(events):
+        if event.get("event_type") == "action-started":
+            job_id = event.get("job_id")
+            return job_id if _is_safe_id(job_id) else None
+    return None
+
+
+def _failed_parent_facts(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    *,
+    prior_manifest: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """失败父 run 的共享事实：终态种类、失败动作与 stop receipt（B4-1 改法 1）。
+
+    返回 None 表示前序不是本层能归类的失败终态：state 不在 failed／watchdog-aborted、stop receipt 缺失、
+    stop 事件类型与 state 不符，或 failed 终态的 stop reason 既不是已知形态也不是异常类名。stop receipt
+    存在但不可信时照常抛错（失败关闭）。
+
+    ``action_id`` 的来源依次是：``action-failed:<id>`` 的 stop reason（``stop-reason``）、唯一的动作诊断
+    （``diagnostic``）、事件链最后一条 action-started（``events``）；给出 ``prior_manifest`` 时，由诊断／事件
+    推断的动作必须是该批次清单里的动作，否则视为定位不到（None）。两类父失败没有动作。
+    """
+
+    state_name = prior_state.get("state")
+    if state_name not in {"failed", "watchdog-aborted"}:
+        return None
+    stop_path = Path(prior_dir) / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return None
+    stop = read_stop_receipt(Path(prior_dir))
+    reason = stop.get("reason")
+    event_type = stop.get("event_type")
+    if not isinstance(reason, str) or not reason:
+        return None
+    action_id: str | None = None
+    source: str | None = None
+    if state_name == "watchdog-aborted":
+        if event_type != "watchdog-aborted":
+            return None
+        kind = "watchdog"
+    elif event_type != "failed":
+        return None
+    elif reason == PARENT_START_FAILED_REASON or reason == PARENT_FINALIZE_LOST_REASON:
+        kind = reason
+    elif reason.startswith("action-failed:"):
+        kind = "action-failed"
+        action_id = reason.split(":", 1)[1]
+        source = "stop-reason"
+        if not _is_safe_id(action_id):
+            return None
+    elif reason == _ACTION_TIMEOUT_STOP_REASON:
+        kind = "action-timeout"
+    elif reason in _INTERRUPTED_STOP_REASONS:
+        kind = "interrupted"
+    elif reason.isidentifier():
+        # 父 campaign-run 顶层异常路径把异常类名写成 stop reason（type(error).__name__）；campaign-exec
+        # 活动型路径的 reason（worker-lost、repeated-<reason>…）都带连字符，不会被当作异常类名。
+        kind = "other-exception"
+    else:
+        return None
+    if action_id is None and kind in FAILED_PARENT_ACTION_KINDS:
+        action_id = _failed_parent_action_from_diagnostics(Path(prior_dir))
+        source = "diagnostic" if action_id is not None else None
+        if action_id is None:
+            action_id = _failed_parent_action_from_events(Path(prior_dir))
+            source = "events" if action_id is not None else None
+        if action_id is not None and prior_manifest is not None:
+            actions = prior_manifest.get("actions")
+            declared = (
+                {action.get("action_id") for action in actions if isinstance(action, Mapping)}
+                if isinstance(actions, list)
+                else set()
+            )
+            if action_id not in declared:
+                action_id = None
+                source = None
+    return {
+        "terminal_kind": kind,
+        "state": state_name,
+        "event_type": event_type,
+        "reason": reason,
+        "action_id": action_id,
+        "action_id_source": source,
+        "stop": stop,
+    }
+
+
 def _permission_compensation_private_directory(path: Path, label: str) -> None:
     """校验一次性权限补偿控制目录的属主、类型和最小权限。"""
 
@@ -8478,16 +8616,15 @@ def _validate_batched_environment_redispatch_successor(
     漂移都必须失败关闭，不能退回更宽松的普通后继规则。
     """
 
-    stop_path = prior_dir / "stop-receipt.json"
-    if stop_path.is_symlink() or not stop_path.is_file():
+    # B4-1 改法 1：入口按"终态种类＋失败动作"判定——动作级超时、中断与父进程其它异常的终态只要能定位到
+    # 唯一失败动作，与 action-failed 同样进入本协议；定位不到动作的前序不硬接（返回 False）。
+    facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS:
         return False
-    stop = read_stop_receipt(prior_dir)
-    reason = stop.get("reason")
-    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+    action_id = facts["action_id"]
+    if action_id is None:
         return False
-    action_id = reason.split(":", 1)[1]
-    if not action_id:
-        return False
+    stop = facts["stop"]
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
     if (
@@ -8612,19 +8749,23 @@ def campaign_run_failure_facts(run_dir: Path, *, campaign_dir: Path) -> dict[str
     state = _read_state(run_dir)
     if state.get("state") != "failed":
         return None
-    stop_path = run_dir / "stop-receipt.json"
-    if stop_path.is_symlink() or not stop_path.is_file():
-        return None
-    reason = read_stop_receipt(run_dir).get("reason")
-    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
-        return None
-    action_id = reason.split(":", 1)[1]
     manifest_path = run_dir / "campaign-run-manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return None
     inner = _read_json(manifest_path).get("manifest")
     if not isinstance(inner, Mapping):
         return None
+    # B4-1 改法 1：与父监督器顶层异常路径的收账同口径——超时／中断／其它异常的终态按定位到的失败动作
+    # （唯一诊断或最后一条 action-started）与诊断类别给出事实；定位不到动作仍返回 None。
+    facts = _failed_parent_facts(state, run_dir, prior_manifest=inner)
+    if (
+        facts is None
+        or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS
+        or facts["terminal_kind"] == "watchdog"
+        or facts["action_id"] is None
+    ):
+        return None
+    action_id = str(facts["action_id"])
     campaign_id = str(state.get("campaign_id", ""))
     phase = str(state.get("phase", ""))
     owner_pid = state.get("owner_pid")
@@ -8871,11 +9012,10 @@ def _validate_candidate_revision_successor(
 
     if prior_state.get("state") != "failed":
         return False
-    stop_path = prior_dir / "stop-receipt.json"
-    if stop_path.is_symlink() or not stop_path.is_file():
-        return False
-    reason = read_stop_receipt(prior_dir).get("reason")
-    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+    # B4-1 改法 1：候选级失败按"终态种类＋失败动作"入口——超时／中断／其它异常的终态能定位到失败动作时同样
+    # 可作废候选开新 revision；定位不到动作的前序不硬接。
+    facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
         return False
     prior_phase = str(prior_manifest.get("phase", ""))
     prior_revision = prior_manifest.get("candidate_revision")
@@ -9090,12 +9230,11 @@ def _validate_evaluation_baseline_successor(
     if prior_state.get("state") != "failed":
         return False
     stop_path = prior_dir / "stop-receipt.json"
-    if stop_path.is_symlink() or not stop_path.is_file():
+    # B4-1 改法 1：评估动作以超时／中断／其它异常终止时同样按定位到的失败动作进入本协议。
+    facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
         return False
-    reason = read_stop_receipt(prior_dir).get("reason")
-    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
-        return False
-    action_id = reason.split(":", 1)[1]
+    action_id = str(facts["action_id"])
     prior_action = next(
         (item for item in prior_manifest.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == action_id),
         None,
@@ -9433,15 +9572,12 @@ def _validate_attempt_recovery_segment_successor(
     ``ar<k+1>`` 并追加 ``--rerun-failed --recovery-preview <该预览>``。
     """
 
-    stop_path = prior_dir / "stop-receipt.json"
-    if stop_path.is_symlink() or not stop_path.is_file():
+    # B4-1 改法 1：恢复段 run 以超时／中断／其它异常终止时同样按定位到的失败动作进入本协议。
+    facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
         return False
-    stop = read_stop_receipt(prior_dir)
-    reason = stop.get("reason")
-    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
-        return False
-    action_id = reason.split(":", 1)[1]
-    prior_revision = _attempt_recovery_run_revision(prior_manifest, action_id) if action_id else None
+    action_id = str(facts["action_id"])
+    prior_revision = _attempt_recovery_run_revision(prior_manifest, action_id)
     if prior_revision is None:
         return False
     if campaign_dir is None:
@@ -10113,6 +10249,61 @@ def _validate_batched_parent_start_redispatch_successor(
     )
 
 
+def _unclaimed_failed_batch_message(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    rejections: Sequence[str] = (),
+) -> str:
+    """没有任何后继协议承接失败前序时的兜底文案：带前序事实（run、阶段、序号、终态、失败动作）与各协议拒因。
+
+    B4-1 改法 1／改法 9（草表 D-12／D-15）：原文案只说"只能由唯一直接 v3 恢复后继承接"，既不说前序是什么终态、
+    也不说各协议为何不接；这里把事实拼进去，并指明未对账的前序先走哪个对账入口。首句保持原文，供既有调用方
+    按文案定位。
+    """
+
+    if prior_manifest.get("schema_version") == CAMPAIGN_RUN_BATCHED_SCHEMA:
+        head = "失败批次只能由唯一直接 v3 恢复后继承接。"
+    else:
+        head = "失败批次没有被唯一允许的直接恢复后继承接。"
+    try:
+        facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    except SupervisorError as error:
+        facts = None
+        terminal = f"终态 {prior_state.get('state')}（stop receipt 不可信：{error}）"
+    else:
+        terminal = (
+            f"终态 {prior_state.get('state')}（stop receipt 缺失或不可归类）"
+            if facts is None
+            else f"终态 {facts['state']}／{facts['event_type']}／{facts['reason']}（种类 {facts['terminal_kind']}）"
+        )
+    if facts is None:
+        action = "无法定位失败动作"
+    elif facts["action_id"] is not None:
+        action = f"失败动作 {facts['action_id']}（来源 {facts['action_id_source']}）"
+    elif facts["terminal_kind"] in FAILED_PARENT_ACTION_KINDS:
+        action = "无法定位失败动作（stop reason 不带动作、诊断不唯一或事件链没有 action-started）"
+    else:
+        action = "无失败动作（父 run 取得执行权前后的父失败）"
+    successor_actions = successor_manifest.get("actions")
+    successor_ids = (
+        "、".join(str(item.get("action_id")) for item in successor_actions if isinstance(item, Mapping))
+        if isinstance(successor_actions, list)
+        else "非法"
+    )
+    detail = (
+        f"前序 run {prior_dir.name}：phase {prior_manifest.get('phase')}、序号 {prior_manifest.get('batch_sequence')}、"
+        f"{terminal}、{action}；后继批次序号 {successor_manifest.get('batch_sequence')}"
+        f"（phase {successor_manifest.get('phase')}，动作 {successor_ids or '无'}）。"
+    )
+    if rejections:
+        detail += "各协议拒因：" + "；".join(rejections) + "。"
+    detail += "未对账的失败前序先执行 reconcile-supervisor-run（run 期间无预约）或 reconcile-attempt（有预约）。"
+    return head + detail
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
@@ -10417,9 +10608,7 @@ def _validate_batched_campaign_history(
             )
         ):
             continue
-        if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
-            raise SupervisorError("失败批次只能由唯一直接 v3 恢复后继承接。")
-        raise SupervisorError("失败批次没有被唯一允许的直接恢复后继承接。")
+        raise SupervisorError(_unclaimed_failed_batch_message(state, prior_manifest, _run_dir, successor_manifest))
 
     seen_batch_ids = {
         str(prior_manifest.get("batch_id"))

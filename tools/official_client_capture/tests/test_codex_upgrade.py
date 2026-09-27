@@ -22386,6 +22386,157 @@ class CodexUpgradeTest(unittest.TestCase):
                     self._vc_chain_arguments(fixture, "VC-2", 3, self._vc_chain_action_plan(root / "retry", campaign_dir, "VC-2"))
                 )
 
+    # ------------------------------------------------------------------
+    # B4-1 后继协议层失败矩阵改造（草表 b4-successor-matrix-draft.md）
+    # ------------------------------------------------------------------
+
+    _B4_PREFIX = ["/usr/bin/python3", "/tools/codex_upgrade.py"]
+    _B4_IDENTITY = {
+        "--candidate-id": "cand-1",
+        "--build-receipt": "/campaign/candidates/cand-1/build-receipt.json",
+        "--runtime-image": "repo@sha256:" + "1" * 64,
+        "--candidate-image-id": "sha256:" + "1" * 64,
+        "--candidate-source": "/root/candidate/source",
+        "--build-id": "build-1",
+        "--deployed-version": "0.157.0",
+        "--profile-id": "profile-1",
+        "--profile-digest": "2" * 64,
+        "--candidate-purpose": "production_replacement",
+    }
+
+    def _b4_terminal_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        inner: dict[str, object],
+        reason: str,
+        action_id: str,
+        phase: str = "VC-5",
+        state: str = "failed",
+        event_type: str = "failed",
+        diagnostic: tuple[str, str, str] | None = None,
+        started_offset_seconds: float = 5.0,
+    ) -> tuple[dict[str, object], Path]:
+        """B4-1 夹具：按 ``_b0_run_dir`` 写出终态父 run，再按给定 stop reason／诊断收口（非 action-failed 终态）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        run_dir = self._b0_run_dir(
+            fixture, name, phase=phase, state=state, batched_manifest=inner, started_offset_seconds=started_offset_seconds,
+        )
+        run_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        supervisor._stop_receipt(
+            run_dir, event_type=event_type, reason=reason, detected_at_epoch=float(run_state["terminal_at_epoch"]),
+            owner_pid=int(run_state["owner_pid"]), owner_nonce=str(run_state["owner_nonce"]),
+            campaign_id=str(run_state["campaign_id"]), phase=phase,
+        )
+        if diagnostic is not None:
+            failure_kind, error_type, failure_class = diagnostic
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, action_id, create_directory=True),
+                campaign_id=str(run_state["campaign_id"]), phase=phase, action_id=action_id,
+                owner_pid=int(run_state["owner_pid"]), owner_nonce=str(run_state["owner_nonce"]),
+                failure_kind=failure_kind, failure_class=failure_class, error_type=error_type, message="B4 夹具。",
+            )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        return run_state, run_dir
+
+    def test_b4_1_failure_facts_and_protocol_entries_accept_timeout_and_interrupt_parents(self) -> None:
+        """B4-1 改法 1（草表 D-04／D-11）：动作级超时（SupervisorTimeout）与中断（KeyboardInterrupt）的失败父 run
+        能定位到失败动作时，``campaign_run_failure_facts`` 给出与收账同口径的动作与类别（原来返回 None），评估基线、
+        候选 revision 与恢复段后继协议的入口同样接受（形态相符后进入失败关闭，而不是返回 False 落入死路）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            seal = dict(self._b0_seal_batch_manifest(fixture), candidate_id="cand-1", candidate_revision=1)
+            cleanup = ("handled-error", "CampaignCleanupRequested", "deadline-expired")
+            interrupted = ("interrupted", "KeyboardInterrupt", "execution-failure")
+
+            # ① 收账口径的失败事实：超时按诊断类，中断按 execution-failure；动作由唯一诊断定位。
+            state, run_dir = self._b4_terminal_run(
+                fixture, "a" * 64, inner=seal, reason="SupervisorTimeout",
+                action_id="prepare-candidate-assertion-bundle", diagnostic=cleanup,
+            )
+            facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            self.assertIsNotNone(facts)
+            self.assertEqual(
+                (facts["action_id"], facts["failure_class"], facts["batch_sequence"]),
+                ("prepare-candidate-assertion-bundle", "deadline-expired", 1),
+            )
+            self.assertEqual(
+                facts["failure_digest"],
+                supervisor.campaign_run_failure_digest(
+                    campaign_id=str(seal["campaign_id"]), phase="VC-5", batch_sequence=1,
+                    failed_action_id="prepare-candidate-assertion-bundle", failure_class="deadline-expired",
+                ),
+            )
+            state, run_dir = self._b4_terminal_run(
+                fixture, "b" * 64, inner=seal, reason="KeyboardInterrupt",
+                action_id="prepare-candidate-assertion-bundle", diagnostic=interrupted,
+            )
+            facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            self.assertEqual((facts["action_id"], facts["failure_class"]), ("prepare-candidate-assertion-bundle", "execution-failure"))
+            # 定位不到动作（无诊断、无 action-started 事件）：仍返回 None，不硬接。
+            _state, blind = self._b4_terminal_run(
+                fixture, "c" * 64, inner=seal, reason="SupervisorTimeout", action_id="prepare-candidate-assertion-bundle",
+            )
+            self.assertIsNone(supervisor.campaign_run_failure_facts(blind, campaign_dir=campaign_dir))
+
+            # ② 候选 revision 后继入口：中断的候选级失败形态相符（进入失败关闭：需要 Campaign 目录）。
+            revision_successor = dict(
+                seal, phase="VC-4", candidate_id="cand-2", candidate_revision=2,
+                batch_sequence=2, batch_id="vc-4-0002", batch_sha256="2" * 64,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "候选 revision 后继必须绑定 Campaign 目录"):
+                supervisor._validate_candidate_revision_successor(state, seal, run_dir, revision_successor, campaign_dir=None)
+
+            # ③ 评估基线后继入口：评估动作（compare）以超时终止，后继开新基线的形态相符。
+            evaluation = dict(
+                seal,
+                actions=[{
+                    "action_id": "compare", "operation": "VC-5:compare", "timeout_seconds": 5.0,
+                    "command": [*self._B4_PREFIX, "compare", "--campaign-dir", str(campaign_dir)], "item_ids": ["compare"],
+                }],
+                execute_items=["compare"], evaluation_baseline=None, baseline_commit_sha256=None,
+            )
+            state, run_dir = self._b4_terminal_run(
+                fixture, "d" * 64, inner=evaluation, reason="SupervisorTimeout", action_id="compare", diagnostic=cleanup,
+            )
+            baseline_successor = dict(
+                evaluation, batch_sequence=2, batch_id="vc-5-0002", batch_sha256="2" * 64,
+                evaluation_baseline=1, baseline_commit_sha256="9" * 64,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "评估基线后继必须绑定 Campaign 目录"):
+                supervisor._validate_evaluation_baseline_successor(state, evaluation, run_dir, baseline_successor, campaign_dir=None)
+
+            # ④ 恢复段后继入口：恢复段 run（--attempt-recovery ar1）被中断，后继段 ar2 的形态相符。
+            segment = dict(
+                seal,
+                actions=[{
+                    "action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 5.0,
+                    "command": [
+                        *self._B4_PREFIX, "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                        "--attempt-recovery", "ar1", "--candidate-id", "cand-1", "--acknowledge-live-requests",
+                    ],
+                    "item_ids": ["candidate-run"],
+                }],
+                execute_items=["candidate-run"], reuse_items=[],
+            )
+            state, run_dir = self._b4_terminal_run(
+                fixture, "e" * 64, inner=segment, reason="KeyboardInterrupt", action_id="candidate-run", diagnostic=interrupted,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "后继恢复段批次必须绑定 Campaign 目录"):
+                supervisor._validate_attempt_recovery_segment_successor(
+                    state, segment, run_dir, dict(segment, batch_sequence=2), campaign_dir=None
+                )
+
+
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
 
