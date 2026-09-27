@@ -8350,8 +8350,11 @@ def _validate_batched_seal_chain_successor(
     receipt = _read_json(
         resolved_campaign / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
     )
-    if receipt.get("failure_class") != "post-run-tooling":
-        raise SupervisorError(f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling）失败。")
+    # 第三批 B3-5：批次内采集已收口、后处理动作因评估器漂移未执行（tool-evolution-required）的前序同样可改派 seal 链批次。
+    if receipt.get("failure_class") not in {"post-run-tooling", "tool-evolution-required"}:
+        raise SupervisorError(
+            f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling）或评估器漂移（tool-evolution-required）失败。"
+        )
     return True
 
 
@@ -10673,10 +10676,13 @@ def _close_failed_campaign_timing_ledger(
             "对账通过即以 compile-and-run-vc-batch 逐字重派同一批次。"
         )
     elif failure_class == "tool-evolution-required":
+        # 第三批 B3-5（第 17 项）：批次内此前的采集动作可能已经收口（attempt 等待封存），文案同时覆盖两种情形，
+        # 具体走哪条由对账按父 run 窗口内已收口的 attempt 给出。
         recovery_next_action = (
-            "reconcile-supervisor-run：动作执行前受管工具的评估器摘要已变化（批次运行中部署了新工具），"
-            "动作未执行、无请求；登记 tool-evolution 并对账通过后，以 compile-and-run-vc-batch 按同一动作计划"
-            "重新编译派发 N+1（按新评估器摘要冻结）。"
+            "reconcile-supervisor-run：动作执行前受管工具的评估器摘要已变化（批次运行中部署了新工具），该动作未执行；"
+            "登记 tool-evolution 并对账通过后：本批次尚无已收口采集则以 compile-and-run-vc-batch 按同一动作计划"
+            "重新编译派发 N+1（按新评估器摘要冻结）；采集已收口（attempt 等待封存）则改派同一 attempt 的 seal 链批次，"
+            "演进作废了其作业时先 reconcile-attempt 入账并批准恢复预览、resume --rerun-failed 续跑。"
         )
     elif failure_class == "post-run-tooling" and phase == "VC-1":
         # 修好接着跑第 15 项：官方 seal 链零请求失败，与 VC-5 同一恢复口径（VC-5 文案保持不变，参与幂等核对）。
@@ -11263,14 +11269,12 @@ def _campaign_run_with_budget_lock(
                 )
                 # 改造 5（T5.9）：动作执行前核对当前受管树 evaluator 四项摘要等于清单冻结值。
                 # 不等即该动作不执行、父 run failed；动作未执行，不写动作输出绑定（stop-receipt 记 null）。
-                # 修好接着跑第 17 项：本批次此前没有执行过会发请求的动作（第一个动作，或此前都是零请求
-                # 后处理）时判为可恢复的 tool-evolution-required——登记工具演进、对账后重新编译派发；
-                # 否则仍是 identity-drift 永久失败类。
+                # 修好接着跑第 17 项／第三批 B3-5：不论本批次此前是否执行过发请求的动作，一律判可恢复的
+                # tool-evolution-required——评估器摘要不影响已生成的请求字节，已完成的采集结果保留在 awaiting
+                # attempt；登记工具演进、对账后按作废作业续跑（第 21 项）或改派同一 attempt 的 seal 链批次。
+                # identity-drift 不再由这里产生（保留给历史诊断与 v1 Campaign 的读侧）。
                 identity_drift = _evaluator_identity_drift(manifest.get("evaluator_digests"))
-                drift_recoverable = not results or all(
-                    _post_run_tooling_item_allowed(item) for item in manifest.get("execute_items", [])
-                )
-                drift_class = "tool-evolution-required" if drift_recoverable else "identity-drift"
+                drift_class = "tool-evolution-required"
                 if identity_drift:
                     _write_action_diagnostic(
                         diagnostic_path,
@@ -11281,11 +11285,7 @@ def _campaign_run_with_budget_lock(
                         owner_nonce=client.owner_nonce,
                         failure_kind="handled-error",
                         failure_class=drift_class,
-                        failure_observations=(
-                            [{"check_id": "pre-action-evaluator-identity", "failure_code": "tool-evolution-required"}]
-                            if drift_class == "tool-evolution-required"
-                            else None
-                        ),
+                        failure_observations=[{"check_id": "pre-action-evaluator-identity", "failure_code": drift_class}],
                         error_type="EvaluatorIdentityDrift",
                         message=(
                             "动作执行前核对：当前受管树 evaluator 摘要与批次冻结值不一致，动作未执行："

@@ -603,6 +603,45 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             )
             self.assertEqual(fact["evaluator_changed_fields"], ["checker_sha256"])
 
+    def test_apply_paths_refuse_unregistered_tool_evolution_before_writing(self) -> None:
+        """第三批 B3-5（第 7 项⑥）：evaluation-recover apply 与 reevaluate 落盘前做零写入预检——未登记的工具变化只提示
+        先登记演进，不写任何基线文件、不写终态、账本不变。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            for patcher in self._stage_patches(context, context["candidate"]):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            plan_b0 = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="b0")
+            result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
+            self.assertEqual(returncode, 1, result)
+            self.assertEqual(
+                reconciler.reconcile_supervisor_run(Path(str(result["campaign_run"]["run_dir"])), campaign_dir)["status"],
+                "recoverable",
+            )
+            fixed = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f6" * 32)
+            refusal = mock.Mock(side_effect=codex_upgrade.ToolEvolutionRequired("未登记的工具演进：先执行 tool-evolution"))
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed):
+                preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
+                reevaluate = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+                with mock.patch.object(codex_upgrade, "_require_tool_evolution_registered", refusal):
+                    with self.assertRaisesRegex(codex_upgrade.ToolEvolutionRequired, "未登记的工具演进"):
+                        codex_upgrade.evaluation_recover(self._recover_arguments(
+                            fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=preview["review_sha256"],
+                            fix_commit="a" * 40, deployment_receipt=Path(str(fixture["deployment"])),
+                        ))
+                    with self.assertRaisesRegex(codex_upgrade.ToolEvolutionRequired, "未登记的工具演进"):
+                        codex_upgrade.evaluation_recover(self._recover_arguments(
+                            fixture, "reevaluate", approve_sha256=reevaluate["review_sha256"],
+                            fix_commit="a" * 40, deployment_receipt=Path(str(fixture["deployment"])),
+                        ))
+            self.assertEqual(refusal.call_count, 2)
+            self.assertFalse((campaign_dir / "candidates" / R1 / "revisions" / "b1").exists())
+            self.assertEqual(project_ledger.replay_head(Path(str(fixture["ledger"])))["terminal_campaigns"], {})
+            self.assertEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], "active")
+
 
 if __name__ == "__main__":
     unittest.main()

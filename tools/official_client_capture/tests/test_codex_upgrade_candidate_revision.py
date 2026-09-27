@@ -248,6 +248,15 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
                 with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "重新 preview"):
                     codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "apply", approve="0" * 64, source=source_r1))
                 self.assertFalse((campaign_dir / "candidates" / R1 / "invalidation.json").exists())
+                # 第三批 B3-5（第 7 项⑥）：apply 落盘前零写入预检——未登记的工具变化只提示先登记演进，不写 invalidation.json。
+                refusal = mock.Mock(side_effect=codex_upgrade.ToolEvolutionRequired("未登记的工具演进：先执行 tool-evolution"))
+                with mock.patch.object(codex_upgrade, "_require_tool_evolution_registered", refusal):
+                    with self.assertRaisesRegex(codex_upgrade.ToolEvolutionRequired, "未登记的工具演进"):
+                        codex_upgrade.invalidate_candidate(
+                            self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source_r1)
+                        )
+                self.assertEqual(refusal.call_count, 1)
+                self.assertFalse((campaign_dir / "candidates" / R1 / "invalidation.json").exists())
                 applied = codex_upgrade.invalidate_candidate(
                     self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source_r1)
                 )

@@ -66,7 +66,8 @@
       "enum": [
         "assertion-failed",
         "offline-compare-failed",
-        "offline-accept-failed"
+        "offline-accept-failed",
+        "tool-evolution"
       ]
     },
     "reuse_authority": {
@@ -78,7 +79,8 @@
     "root_cause_class": {
       "enum": [
         "evaluator-defect",
-        "transient-environment"
+        "transient-environment",
+        "tool-evolution"
       ]
     },
     "root_cause_id": {

@@ -19714,6 +19714,9 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ConfigurationError(
                 "apply 的批准摘要与当前草案不一致（总账 head、身份快照或证据已变化），请重新 preview。"
             )
+        # 第三批 B3-5（第 7 项⑥）：任何写入之前先做零写入预检——未登记的 wire／策略／evidence 变化只提示先登记
+        # 工具演进，不能在二次判定里被写成 identity_changed 永久终态。
+        _require_tool_evolution_registered(campaign_dir, manifest, action="invalidate-candidate apply")
         if existing_invalidation is None:
             # apply 首次落盘前：head 与 --candidate-source 已在本次重算的草案里复验（不一致
             # 即 review_sha256 不同）；这里写 invalidation.json（write-once）。
@@ -20805,6 +20808,8 @@ def _evaluation_reevaluate_locked(
             raise ConfigurationError(
                 "reevaluate 的批准摘要与当前触发事实不一致（评估器摘要、证据语义或当前基线已变化），请重新预览。"
             )
+        # 第三批 B3-5（第 7 项⑥）：写入前零写入预检，未登记的工具变化只提示先登记演进。
+        _require_tool_evolution_registered(campaign_dir, manifest, action="evaluation-recover reevaluate")
         fix_commit = getattr(arguments, "fix_commit", None)
         receipt_path = getattr(arguments, "deployment_receipt", None)
         if not isinstance(fix_commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", fix_commit):
@@ -21234,6 +21239,8 @@ def _evaluation_recover_locked(
             return {**preview_payload, "status": "redirect", "next_command": f"invalidate-candidate preview --candidate-id {candidate_id}"}
         if root_cause_class == "approval-inputs":
             return {**preview_payload, "status": "redirect", "next_command": "close-campaign-ledger（显式停线）后从 VC-2 建后继 Campaign"}
+        # 第三批 B3-5（第 7 项⑥）：写入前零写入预检，未登记的工具变化只提示先登记演进，不写 identity_changed 终态。
+        _require_tool_evolution_registered(campaign_dir, manifest, action="evaluation-recover apply")
         _verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, facts["failed"], head=head)
         transient: dict[str, Any] | None = None
         defect: dict[str, Any] | None = None

@@ -8,12 +8,14 @@ v1 只读兼容、动作输出绑定 write-once、R2 四层判定与 monitor 封
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import signal
 import subprocess
 import sys
+from unittest import mock
 import tempfile
 import time
 import unittest
@@ -817,11 +819,12 @@ class MonitorOrphanSealingTests(unittest.TestCase):
 class PreActionIdentityCheckTests(unittest.TestCase):
     """T5.9：动作执行前核对 evaluator 四项摘要——清单冻结值与当前受管树不一致时动作不执行、父 run failed。
 
-    修好接着跑第 17 项：本批次此前没有执行过会发请求的动作时判为可恢复的 tool-evolution-required（登记工具演进、
-    对账后重新编译派发），不再按 identity-drift 永久停线。
+    修好接着跑第 17 项／第三批 B3-5：不论本批次此前是否执行过会发请求的动作，一律判为可恢复的 tool-evolution-required
+    （登记工具演进、对账后重新编译派发或改派同一 attempt 的 seal 链），不再按 identity-drift 永久停线。
     """
 
-    def _run(self, root: Path, *, digests: dict, marker: Path) -> tuple[int, dict]:
+    def _run(self, root: Path, *, digests: dict, marker: Path, actions: list | None = None,
+             execute_items: list | None = None, drift_side_effect=None) -> tuple[int, dict]:
         from tools.official_client_capture.tests import test_codex_upgrade_staging_supervisor as staging_tests
 
         helper = staging_tests.StagingSupervisorTests("test_commit_failure_before_commit_is_aborted_prepared_with_step")
@@ -838,7 +841,9 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             campaign_id=staging_tests.CAMPAIGN_ID, campaign_plan_sha256=str(plan["plan_sha256"]), batch_id="vc-5-0001", batch_sequence=1,
             batch_sha256="1".zfill(64), phase="VC-5",
             predecessor_checkpoint={"path": "control/vc/vc-4-checkpoint.json", "sha256": "4" * 64, "phase": "VC-4", "checkpoint_sha256": "5" * 64},
-            original_deadline_at_utc=str(plan["original_deadline_at_utc"]), actions=[action], execute_items=["assert-rules"], reuse_items=[],
+            original_deadline_at_utc=str(plan["original_deadline_at_utc"]),
+            actions=list(actions) if actions is not None else [action],
+            execute_items=list(execute_items) if execute_items is not None else ["assert-rules"], reuse_items=[],
         )
         binding = {
             "campaign_dir": str(campaign_dir.resolve()), "sequence": 1, "phase": "VC-5", "staging_attempt": 1,
@@ -861,11 +866,52 @@ class PreActionIdentityCheckTests(unittest.TestCase):
 
         # 本 helper 只有合成总计划和零请求动作；真实出口准入由独立 R15 链验收。父 run 状态不带
         # 出口守卫标记，独立监督器子进程同样不读取生产出口策略。
-        with runtime_egress_fixtures.offline_campaign_egress():
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(runtime_egress_fixtures.offline_campaign_egress())
+            if drift_side_effect is not None:
+                stack.enter_context(mock.patch.object(supervisor, "_evaluator_identity_drift", side_effect=drift_side_effect))
             return supervisor._campaign_run_locked(
                 argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=1.0, ledger_interval_seconds=0.05),
                 manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
             )
+
+    def test_drift_after_a_request_bearing_action_is_still_recoverable(self) -> None:
+        """第三批 B3-5（第 17 项）：批次内第一个动作（发请求的采集项）已执行，第二个动作前评估器漂移——仍判可恢复的
+        tool-evolution-required（评估器不影响已生成的请求字节，采集结果保留），不再 identity-drift 永久停线。"""
+
+        current = dict(policy_module.evaluator_dependency_digests())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            first_marker = root / "first.txt"
+            second_marker = root / "second.txt"
+            actions = [
+                {
+                    "action_id": "candidate-run", "operation": "VC-5:capture", "timeout_seconds": 5.0,
+                    "command": [sys.executable, "-c", f"open({str(first_marker)!r}, 'w').write('ran')"],
+                    "item_ids": ["candidate-run"], "output_bindings": ["assertions/cand/evaluation-run.json"],
+                },
+                {
+                    "action_id": "candidate-seal", "operation": "VC-5:seal", "timeout_seconds": 5.0,
+                    "command": [sys.executable, "-c", f"open({str(second_marker)!r}, 'w').write('ran')"],
+                    "item_ids": ["candidate-seal"], "output_bindings": ["assertions/cand/evaluation-run.json"],
+                },
+            ]
+            drift = iter([[], ["checker_sha256"]])
+            returncode, payload = self._run(
+                root, digests=current, marker=first_marker, actions=actions,
+                execute_items=["candidate-run", "candidate-seal"], drift_side_effect=lambda _digests: next(drift),
+            )
+            self.assertEqual((returncode, payload["reason"]), (1, "action-failed:candidate-seal"), payload)
+            self.assertTrue(first_marker.is_file())
+            self.assertFalse(second_marker.exists())
+            results = payload["actions"]
+            self.assertNotEqual(results[0]["status"], "failed")
+            self.assertNotIn("diagnostic", results[0])
+            self.assertEqual(
+                (results[1]["executed"], results[1]["diagnostic"]["failure_class"], results[1]["diagnostic"]["effective_failure_class"]),
+                (False, "tool-evolution-required", "tool-evolution-required"),
+            )
+            self.assertIn("tool-evolution-required", supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES)
 
     def test_drifted_evaluator_digests_skip_action_and_fail_as_recoverable_tool_evolution_required(self) -> None:
         current = dict(policy_module.evaluator_dependency_digests())

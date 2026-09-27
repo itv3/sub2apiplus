@@ -3110,6 +3110,41 @@ def reconcile_attempt(
 # ---------------------------------------------------------------------------
 
 
+def _capture_attempt_settled(attempt_root: Path) -> bool:
+    """主 attempt 的采集是否已完整收口：attempt 等待封存（awaiting_receipts）且结果里没有失败 Job。
+
+    第三批 B3-5（第 17 项）：父 run 窗口内这样的 attempt 不是中断——采集已完成，只是之后的零请求后处理
+    动作因评估器漂移没有执行；父 run 按 tool-evolution-required 对账，采集结果只读保留。
+    """
+
+    attempt_path = Path(attempt_root) / "attempt.json"
+    if attempt_path.is_symlink() or not attempt_path.is_file():
+        return False
+    attempt_payload = _read_json(attempt_path, "attempt 收据")
+    return attempt_payload.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(
+        attempt_payload.get("results")
+    )
+
+
+def _settled_capture_attempts_in_window(run_dir: Path, campaign_dir: Path) -> list[str]:
+    """父 run 启动之后预约、且采集已完整收口的主 attempt 名（只读，供对账 next_command 区分情形）。"""
+
+    state = supervisor._read_state(Path(run_dir))
+    started_utc = datetime.fromtimestamp(float(state["started_at_epoch"]), tz=timezone.utc)
+    settled: list[str] = []
+    for _phase, _candidate, attempt_root in codex_upgrade._campaign_attempt_roots(campaign_dir):
+        reservation_path = attempt_root / "reservation.json"
+        if not reservation_path.is_file():
+            continue
+        try:
+            begun = _timestamp(_read_json(reservation_path, "预约收据").get("started_at_utc"), "reservation.started_at_utc")
+        except ReconcilerError:
+            continue
+        if begun >= started_utc and _capture_attempt_settled(attempt_root):
+            settled.append(attempt_root.name)
+    return settled
+
+
 def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
     run_dir = Path(run_dir)
     if not run_dir.is_absolute() or run_dir.is_symlink() or not run_dir.is_dir():
@@ -3145,8 +3180,14 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
             begun = _timestamp(payload.get("started_at_utc"), "reservation.started_at_utc")
         except ReconcilerError:
             continue
-        if begun >= started_utc:
-            reservations_in_window.append(attempt_root.name)
+        if begun < started_utc:
+            continue
+        # 第三批 B3-5（第 17 项）：同一父 run 内采集已经完整收口（attempt 等待封存、无失败 Job），之后的后处理动作
+        # 才因评估器漂移未执行——这不是 attempt 中断，父 run 按 tool-evolution-required 对账；采集结果只读保留，
+        # 登记演进后按作废作业续跑或改派 seal 链批次（判定与 _settled_capture_attempts_in_window 共用）。
+        if _capture_attempt_settled(attempt_root):
+            continue
+        reservations_in_window.append(attempt_root.name)
     # 改造 5 M2：父 run 期间发布的恢复段预约同样分流到 reconcile-attempt --recovery-revision，但只针对
     # 未成功收口的段；已 awaiting_receipts 的段不是中断（父 run 在动作退出后崩溃属崩溃矩阵 R2 的
     # attempt-recovery 变体：父 run 对账后环境恢复重派，段 run 幂等返回）。
@@ -4016,11 +4057,20 @@ def reconcile_supervisor_run(
                 + ("；VC-4 工具缺陷须先修复不可幂等半成品再重新对账" if candidate_scope else "")
             )
         elif run.get("failure_class") == "tool-evolution-required":
-            result["next_command"] = (
-                "phase 保持 active：动作执行前评估器摘要已变化、动作未执行、无请求；登记 tool-evolution 后以 "
-                "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
-                "迁移到的授权口径，b≥1 改走 evaluation-recover）"
-            )
+            # 第三批 B3-5（第 17 项）：父 run 窗口内已有采集收口的 attempt 时，采集结果保留，只补后处理。
+            settled = _settled_capture_attempts_in_window(resolved_run_dir, campaign_dir)
+            if settled:
+                result["next_command"] = (
+                    f"phase 保持 active：批次内采集已收口（attempt {'、'.join(settled)} 等待封存），之后的动作执行前评估器摘要"
+                    "已变化、动作未执行；登记 tool-evolution 后：演进作废了该 attempt 的作业则 reconcile-attempt 入账并批准"
+                    "恢复预览、resume --rerun-failed 续跑；未作废则以 compile-and-run-vc-batch 改派同一 attempt 的 seal 链批次 N+1"
+                )
+            else:
+                result["next_command"] = (
+                    "phase 保持 active：动作执行前评估器摘要已变化、动作未执行、无请求；登记 tool-evolution 后以 "
+                    "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
+                    "迁移到的授权口径，b≥1 改走 evaluation-recover）"
+                )
         elif _candidate_post_run_recovery_run(resolved_run_dir, run):
             # 第三批 B3-4：零请求后处理动作以 execution-failure 收口（中断类失败或同 run 内有请求窗口），请求账已核算。
             result["next_command"] = (

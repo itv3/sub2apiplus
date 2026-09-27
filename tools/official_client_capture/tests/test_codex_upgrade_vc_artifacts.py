@@ -598,6 +598,20 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             with self.subTest(name=name):
                 schema = json.loads((root / name).read_text(encoding="utf-8"))
                 self.assertEqual(schema["properties"]["schema_version"]["const"], schema_version)
+        # 第三批 B3-5 自查补：评估基线 recovery／COMMIT schema 的闭集枚举必须逐项等于运行时闭集
+        # （B3-3 加 tool-evolution 时只改了 kind，漏了 failure_source 与 root_cause_class）。
+        baseline_schema = json.loads((root / "codex_upgrade_evaluation_baseline.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(tuple(baseline_schema["properties"]["kind"]["enum"]), artifacts.EVALUATION_BASELINE_KINDS)
+        self.assertEqual(tuple(baseline_schema["properties"]["failure_source"]["enum"]), artifacts.FAILURE_SOURCES)
+        self.assertEqual(
+            tuple(baseline_schema["properties"]["root_cause_class"]["enum"]),
+            tuple(dict.fromkeys(artifacts.EVALUATION_BASELINE_ROOT_CAUSE_CLASSES.values())),
+        )
+        commit_schema = json.loads((root / "codex_upgrade_evaluation_baseline_commit.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(tuple(commit_schema["properties"]["kind"]["enum"]), artifacts.EVALUATION_BASELINE_KINDS)
+        ledger_schema = json.loads((root / "codex_upgrade_timing_ledger.schema.json").read_text(encoding="utf-8"))
+        ledger_baseline = ledger_schema["properties"]["summary"]["properties"]["current_evaluation_baseline"]["oneOf"][0]
+        self.assertEqual(tuple(ledger_baseline["properties"]["baseline_kind"]["enum"]), artifacts.EVALUATION_BASELINE_KINDS)
         # batch/v3：候选两字段与评估基线三字段必填（Campaign 级／b0 为 null）；v2／v1 只读兼容由 validate_vc_batch 覆盖。
         batch_schema = json.loads((root / "codex_upgrade_vc_batch.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(batch_schema["properties"]["schema_version"]["const"], artifacts.VC_BATCH_SCHEMA)

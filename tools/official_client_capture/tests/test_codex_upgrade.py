@@ -19183,6 +19183,82 @@ class CodexUpgradeTest(unittest.TestCase):
                 campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
             )
 
+    def test_b0_evaluator_drift_after_capture_in_same_run_reconciles_as_tool_evolution_required(self) -> None:
+        """第三批 B3-5（第 17 项）：同一父 run 内采集已完整收口（attempt 等待封存、无失败 Job），之后的后处理动作因评估器
+        漂移未执行——父 run 按 tool-evolution-required 对账（不再报 attempt 中断），账本回到 active、采集结果只读保留；
+        attempt 有失败 Job 时同一窗口内的父 run 仍按 attempt 中断处理。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            drift = dict(
+                phase="VC-5", failure_class="tool-evolution-required", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="handled-error", error_type="EvaluatorIdentityDrift",
+                failure_observations=[{"check_id": "pre-action-evaluator-identity", "failure_code": "tool-evolution-required"}],
+                started_offset_seconds=-30.0,
+            )
+            run_dir = self._b0_run_dir(fixture, "e" * 64, **drift)
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="tool-evolution-required"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertIn("tool-evolution", result["next_command"])
+            # next_command 区分情形：采集已收口 → 指向续跑或改派同一 attempt 的 seal 链，不再说"无请求、重新编译派发"。
+            self.assertIn(f"采集已收口（attempt {attempt_root.name} 等待封存）", result["next_command"])
+            self.assertIn("seal 链批次", result["next_command"])
+            self.assertNotIn("无请求", result["next_command"])
+            self.assertIn("采集已收口", closeout["next_action"])
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            _root, attempt = codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_root.name)
+            self.assertEqual(attempt["status"], "awaiting_receipts")
+            # 有失败 Job 的 attempt（孤儿失败）落在同一窗口：仍按 attempt 中断，改用 reconcile-attempt。
+            self._b0_orphan_attempt(fixture)
+            interrupted = self._b0_run_dir(fixture, "d" * 64, **drift)
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "attempt 中断"):
+                reconciler.reconcile_supervisor_run(interrupted, campaign_dir)
+
+    def test_b0_evaluator_drift_before_any_capture_in_run_keeps_recompile_next_command(self) -> None:
+        """第三批 B3-5（第 17 项）对照：采集收口早于父 run 启动（不在窗口内）——仍是"动作未执行、无请求"的原文案，
+        按同一动作计划重新编译派发；不误指向 seal 链改派。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture, "f" * 64, phase="VC-5", failure_class="tool-evolution-required", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="handled-error", error_type="EvaluatorIdentityDrift",
+                failure_observations=[{"check_id": "pre-action-evaluator-identity", "failure_code": "tool-evolution-required"}],
+                started_offset_seconds=5.0,
+            )
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="tool-evolution-required"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertIn("无请求", result["next_command"])
+            self.assertIn("按同一动作计划重新编译派发", result["next_command"])
+            self.assertNotIn("采集已收口", result["next_command"])
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+
     def test_b0_seal_chain_failure_then_evolution_allows_recovery_preview_successor(self) -> None:
         """修好接着跑第 21 项：seal 链批次失败（post-run-tooling）并对账后，修复作废了该 attempt 的作业——
         逐字重派 seal 必然再败；attempt 按演进作废对账后，N+1 零请求恢复预览是唯一允许的后继。"""
@@ -19624,12 +19700,13 @@ class CodexUpgradeTest(unittest.TestCase):
                 post_run_tooling=True,
                 started_offset_seconds=5.0,
             )
-            # 父监督器按默认分类关账（例如收据写入后父进程自身异常）：账本停线。
+            # 父监督器按永久分类关账（例如证据完整性异常）：账本停线。第三批 B3-4 起后处理动作的
+            # execution-failure 已进 recovery_required，不再能用默认分类构造停线账本。
             closeout = supervisor._close_failed_campaign_timing_ledger(
                 campaign_dir,
                 inner,
                 failed_action_id="prepare-candidate-assertion-bundle",
-                failure_class="execution-failure",
+                failure_class="evidence-integrity",
             )
             self.assertEqual(closeout["ledger_status"], "stopped")
             result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
