@@ -213,6 +213,75 @@ class BatchV3ContractTests(unittest.TestCase):
             recovery(epoch, kind="attempt-recovery")
 
 
+    def test_tool_evolution_recovery_and_reevaluation_contracts(self) -> None:
+        """第三批 B3-3：tool-evolution 基线——failure_source 固定 tool-evolution、类别与 kind 一一对应、不绑 attempt、
+        须绑定修复提交与部署收据、reuse none；诊断制品不接受该来源；stage_sources 候选证据 reused、其余 local；
+        重评触发事实必须有评估器差异或证据语义变化，且 changed_fields 与两组摘要的差异一致。"""
+
+        def recovery(**overrides: object) -> dict:
+            common = dict(
+                campaign_id="campaign-r2", candidate_id="cand", candidate_revision=1, evaluation_baseline=2, kind="tool-evolution",
+                diagnosis={"path": "candidates/cand/revisions/b2/reevaluation.json", "sha256": "1" * 64},
+                failure_source="tool-evolution", reuse_authority="none", root_cause_class="tool-evolution",
+                root_cause_id="rc1-" + "0" * 20, failed_step="tool-evolution-02", previous_baseline=1,
+                previous_baseline_commit_sha256="2" * 64, execute_rules=["SPEC-EP-006", "SPEC-H1-001"], reuse_rules=[],
+                execute_jobs=[], reuse_jobs=["job-a"], attempt_id=None, recovery_revision=None, fix_commit="a" * 40,
+                deployment_receipt={"path": "/deploy/receipt.json", "sha256": "3" * 64}, evaluation_epoch=None,
+                failed_evaluator_digests=DIGESTS, current_evaluator_digests=dict(DIGESTS, checker_sha256="f6" * 32),
+                reviewer="boss", approved_at_utc="2026-09-27T00:00:00Z",
+            )
+            common.update(overrides)
+            return artifacts.build_evaluation_recovery(**common)
+
+        payload = recovery()
+        self.assertEqual(
+            (payload["kind"], payload["failure_source"], payload["root_cause_class"]),
+            ("tool-evolution", "tool-evolution", "tool-evolution"),
+        )
+        for bad, pattern in (
+            (dict(failure_source="assertion-failed"), "failure_source 是 tool-evolution"),
+            (dict(root_cause_class="evaluator-defect"), "root_cause_class 与 kind 不对应"),
+            (dict(kind="evaluator-only", root_cause_class="evaluator-defect"), "failure_source 是 tool-evolution"),
+            (dict(attempt_id="attempt-a"), "不得绑定 attempt"),
+            (dict(fix_commit=None), "必须绑定完整修复提交"),
+            (dict(reuse_rules=["SPEC-H1-001"], execute_rules=["SPEC-EP-006"]), "reuse_authority=none"),
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
+                recovery(**bad)
+        self.assertNotIn("tool-evolution", artifacts.DIAGNOSIS_FAILURE_SOURCES)
+        good = {
+            "capture-candidate": {"source": "reused", "baseline": 1, "path": "candidates/cand/revisions/b1/result.json", "sha256": "4" * 64},
+            "compare": {"source": "local", "target": "comparisons/cand/revisions/b2/result.json"},
+            "assertions": {"source": "local", "target": "assertions/cand/revisions/b2"},
+            "accept": {"source": "local", "target": "acceptance/cand/revisions/b2/result.json"},
+        }
+        artifacts.validate_stage_sources(good, kind="tool-evolution", label="t")
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "compare／assertions／accept 必须 local"):
+            artifacts.validate_stage_sources(
+                {**good, "compare": {"source": "reused", "baseline": 1, "path": "comparisons/cand/result.json", "sha256": "4" * 64}},
+                kind="tool-evolution", label="t",
+            )
+        fact = artifacts.build_evaluation_reevaluation(
+            campaign_id="campaign-r2", campaign_manifest_sha256="5" * 64, candidate_id="cand", candidate_revision=1,
+            from_baseline=1, from_baseline_commit_sha256="2" * 64, tool_evolution_index=2,
+            evaluator_changed_fields=["checker_sha256"], evidence_from_sha256="6" * 64, evidence_to_sha256="6" * 64,
+            authorized_evaluator_digests=DIGESTS, current_evaluator_digests=dict(DIGESTS, checker_sha256="f6" * 32),
+            evaluation_outputs=["assertions/cand/results.json"], reviewer="boss", reviewed_at_utc="2026-09-27T00:00:00Z",
+        )
+        self.assertEqual(fact["evaluator_changed_fields"], ["checker_sha256"])
+        self.assertEqual(artifacts.validate_evaluation_reevaluation(fact), fact)
+        inputs = {k: v for k, v in fact.items() if k not in {"schema_version", "review_sha256", "receipt_sha256"}}
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "没有需要重评的理由"):
+            artifacts.build_evaluation_reevaluation(**{**inputs, "evaluator_changed_fields": [], "current_evaluator_digests": DIGESTS})
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "差异不一致"):
+            artifacts.build_evaluation_reevaluation(**{**inputs, "evaluator_changed_fields": ["builder_sha256"]})
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "只有 b0 前序没有 COMMIT"):
+            artifacts.build_evaluation_reevaluation(**{**inputs, "from_baseline": 0})
+        tampered = dict(fact, tool_evolution_index=3)
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "review_sha256 与内容不一致"):
+            artifacts.validate_evaluation_reevaluation(tampered)
+
+
 class TimingLedgerEvaluationEventsTests(unittest.TestCase):
     """T5.2：evaluation_baseline 与 attempt_recovery_* 四类事件。"""
 
@@ -271,6 +340,42 @@ class TimingLedgerEvaluationEventsTests(unittest.TestCase):
             receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(minute + 2))
             ledger._write_once(root / "receipts" / "b.json", receipt)
             self.assertEqual(ledger.replay(root, "receipts/b.json"), receipt)
+
+    def test_evaluation_reopened_event_contract(self) -> None:
+        """第三批 B3-3／R5：VC-5 在当前 revision 完成后凭新评估基线重开（回到进行中、切换当前基线、不再算已完成）；
+        VC-5 进行中、基线不递增、VC-6 已开始各拒；checkpoint 可回放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            minute = self._to_vc5(root)
+            base = dict(phase="VC-5", candidate_id="cand-a", revision=1, next_action="x", baseline_kind="tool-evolution")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "evaluation_reopened 只能在"):
+                ledger.append_event(root, event_id="ro-bad", event_type="evaluation_reopened", evaluation_baseline=1,
+                                    baseline_commit_sha256="1" * 64, recorded_at_utc=self._at(minute), **base)
+            ledger.append_event(root, event_id="c5", phase="VC-5", event_type="stage_completed", next_action="x",
+                                recorded_at_utc=self._at(minute + 1))
+            self.assertIn("VC-5", ledger.phase_ledger_state(root)["completed_phases"])
+            summary = ledger.append_event(root, event_id="ro1", event_type="evaluation_reopened", evaluation_baseline=1,
+                                          baseline_commit_sha256="1" * 64, recorded_at_utc=self._at(minute + 2), **base)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+            self.assertEqual(summary["current_evaluation_baseline"]["baseline_kind"], "tool-evolution")
+            self.assertEqual(summary["current_evaluation_baseline"]["evaluation_baseline"], 1)
+            self.assertEqual(summary["revision_phase_state"]["1"]["VC-5"], "started")
+            self.assertNotIn("VC-5", ledger.phase_ledger_state(root)["completed_phases"])
+            ledger.append_event(root, event_id="c5b", phase="VC-5", event_type="stage_completed", next_action="x",
+                                recorded_at_utc=self._at(minute + 3))
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "必须大于当前基线"):
+                ledger.append_event(root, event_id="ro-same", event_type="evaluation_reopened", evaluation_baseline=1,
+                                    baseline_commit_sha256="1" * 64, recorded_at_utc=self._at(minute + 4), **base)
+            ledger.append_event(root, event_id="s6", phase="VC-6", event_type="stage_started", next_action="x",
+                                recorded_at_utc=self._at(minute + 4))
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "evaluation_reopened 只能在"):
+                ledger.append_event(root, event_id="ro-late", event_type="evaluation_reopened", evaluation_baseline=2,
+                                    baseline_commit_sha256="2" * 64, recorded_at_utc=self._at(minute + 5), **base)
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(minute + 6))
+            ledger._write_once(root / "receipts" / "ro.json", receipt)
+            self.assertEqual(ledger.replay(root, "receipts/ro.json"), receipt)
 
     def test_attempt_recovery_segment_state_machine(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -38,7 +38,8 @@
     "kind": {
       "enum": [
         "evaluator-only",
-        "attempt-recovery"
+        "attempt-recovery",
+        "tool-evolution"
       ]
     },
     "recovery_sha256": {

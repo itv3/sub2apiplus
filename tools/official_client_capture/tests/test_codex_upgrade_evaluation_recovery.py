@@ -522,6 +522,87 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertEqual(second["root_cause"]["root_cause_id"], reconciled["root_cause"]["root_cause_id"])
             self.assertIn("permanent_stop", second)
 
+    def test_reevaluate_opens_tool_evolution_baseline_without_failed_run(self) -> None:
+        """第三批 B3-3：b0 已有评估产出后修评估器（checker 摘要变化）——reevaluate 不依赖失败父 run：预览给出触发事实，
+        落盘后 b1 为 tool-evolution 基线（候选证据 reused、compare／断言／accept 全部 local 全量重评），账本切换当前基线、
+        总账根因计数不变、b1 授权口径＝当前工具；无产出、无变化、缺修复提交各拒。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            for patcher in self._stage_patches(context, context["candidate"]):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            # VC-5 尚未开始：账本位置不允许重评。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "只能在 VC-5 进行中"):
+                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+            timing_ledger.append_event(
+                Path(str(fixture["timing_ledger"])), event_id="s5-reevaluate", phase="VC-5", event_type="stage_started",
+                next_action="x",
+            )
+            # VC-5 进行中但还没有评估产出：不需要重评。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "还没有任何评估产出"):
+                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+            plan_b0 = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="b0")
+            result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
+            self.assertEqual(returncode, 1, result)
+            run_b0 = Path(str(result["campaign_run"]["run_dir"]))
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_b0, campaign_dir)["status"], "recoverable")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有需要重评的理由"):
+                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+            head_before = project_ledger.replay_head(Path(str(fixture["ledger"])))
+            fixed = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f6" * 32)
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed):
+                preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+                self.assertEqual(
+                    (preview["status"], preview["kind"], preview["ledger_event_type"]),
+                    ("preview", "tool-evolution", "evaluation_baseline"),
+                )
+                self.assertEqual(preview["trigger"]["evaluator_changed_fields"], ["checker_sha256"])
+                self.assertFalse(preview["trigger"]["evidence_changed"])
+                self.assertTrue(preview["trigger"]["evaluation_outputs"])
+                self.assertEqual(preview["reevaluation"]["from_baseline"], 0)
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须以 --fix-commit"):
+                    codex_upgrade.evaluation_recover(
+                        self._recover_arguments(fixture, "reevaluate", approve_sha256=preview["review_sha256"])
+                    )
+                applied = codex_upgrade.evaluation_recover(self._recover_arguments(
+                    fixture, "reevaluate", approve_sha256=preview["review_sha256"], fix_commit="a" * 40,
+                    deployment_receipt=Path(str(fixture["deployment"])),
+                ))
+                self.assertEqual(
+                    (applied["status"], applied["kind"], applied["evaluation_baseline"], applied["reuse_rules"]),
+                    ("applied", "tool-evolution", 1, []),
+                )
+                self.assertEqual(applied["ledger_event"], {**applied["ledger_event"], "event_type": "evaluation_baseline", "appended": True})
+                manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+                self.assertEqual(codex_upgrade._authorized_evaluator_digests(campaign_dir, manifest, R1, 1)["checker_sha256"], "f6" * 32)
+                # b1 生效后再 reevaluate：b1 还没有评估产出，拒绝（不会无限开基线）。
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "还没有任何评估产出"):
+                    codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+            summary = timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))
+            self.assertEqual(summary["current_evaluation_baseline"]["baseline_kind"], "tool-evolution")
+            self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+            head = project_ledger.replay_head(Path(str(fixture["ledger"])))
+            self.assertEqual(head["root_cause_counts"], head_before["root_cause_counts"])
+            self.assertFalse(head["blocked"])
+            commit = codex_upgrade._read_evaluation_baseline_commit(campaign_dir, R1, 1)
+            self.assertEqual(
+                {stage: source["source"] for stage, source in commit["stage_sources"].items()},
+                {"capture-candidate": "reused", "compare": "local", "assertions": "local", "accept": "local"},
+            )
+            recovery = codex_upgrade._load_evaluation_baseline_recovery(campaign_dir, R1, 1)
+            self.assertEqual(
+                (recovery["kind"], recovery["failure_source"], recovery["root_cause_class"], recovery["reuse_authority"]),
+                ("tool-evolution", "tool-evolution", "tool-evolution", "none"),
+            )
+            self.assertEqual(recovery["diagnosis"]["path"], f"candidates/{R1}/revisions/b1/reevaluation.json")
+            fact = artifacts.validate_evaluation_reevaluation(
+                _read(campaign_dir / "candidates" / R1 / "revisions" / "b1" / "reevaluation.json")
+            )
+            self.assertEqual(fact["evaluator_changed_fields"], ["checker_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -580,6 +580,8 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_evaluation_checkpoint.schema.json": artifacts.EVALUATION_CHECKPOINT_SCHEMA,
             "codex_upgrade_evaluation_run.schema.json": artifacts.EVALUATION_RUN_SCHEMA,
             "codex_upgrade_evaluation_failure_diagnosis.schema.json": artifacts.EVALUATION_FAILURE_DIAGNOSIS_SCHEMA,
+            # 第三批 B3-3：tool-evolution 基线的重评触发事实。
+            "codex_upgrade_evaluation_reevaluation.schema.json": artifacts.EVALUATION_REEVALUATION_SCHEMA,
             "codex_upgrade_action_output_binding.schema.json": artifacts.ACTION_OUTPUT_BINDING_SCHEMA,
             "codex_upgrade_manifest_projection.schema.json": artifacts.MANIFEST_PROJECTION_SCHEMA,
             "codex_upgrade_effective_results.schema.json": artifacts.EFFECTIVE_RESULTS_SCHEMA,

@@ -10108,10 +10108,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "改造 5：候选证据封存后离线评估失败的分类与局部恢复（零请求，两步式）。preview 输出"
             "失败来源、复用授权、failure-scope 与诊断草案；apply 以 --approve-sha256 与 --root-cause-class"
-            "开评估基线 b<K>（prepared→authorized→committed）；abandon 作废未 COMMIT 的 PREPARED 基线"
+            "开评估基线 b<K>（prepared→authorized→committed）；abandon 作废未 COMMIT 的 PREPARED 基线；"
+            "reevaluate（第三批 B3-3）：评估器／证据层修好并登记演进后，不依赖失败父 run，对已有评估产出"
+            "开 tool-evolution 基线全量重评（不带 --approve-sha256 只预览；VC-5 已完成时重开 VC-5）"
         ),
     )
-    evaluation_recover_parser.add_argument("recover_action", choices=("preview", "apply", "abandon"))
+    evaluation_recover_parser.add_argument("recover_action", choices=("preview", "apply", "abandon", "reevaluate"))
     add_campaign_reference(evaluation_recover_parser)
     evaluation_recover_parser.add_argument("--candidate-id", required=True)
     evaluation_recover_parser.add_argument("--reviewer", required=True, help="人工审核人标识（非空即可）")
@@ -19893,6 +19895,8 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
 
 EVALUATION_RECOVER_COMMAND = "evaluation-recover"
 EVALUATION_BASELINE_DIAGNOSIS_FILENAME = "diagnosis.json"
+# 第三批 B3-3：tool-evolution 基线的重评触发事实（作为 recovery.diagnosis 绑定，与 diagnosis.json 同目录）。
+EVALUATION_REEVALUATION_FILENAME = "reevaluation.json"
 EVALUATION_ACTION_KINDS_BY_SOURCE = {
     "assertion": "assertion-failed",
     "compare": "offline-compare-failed",
@@ -20326,6 +20330,41 @@ def _evaluation_failure_diagnosis_facts(
     }
 
 
+def _verify_current_deployment_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    receipt_path: Path,
+) -> dict[str, Any]:
+    """修复已受监督部署且正在被使用：部署收据 passed、wire／policy 等于 Campaign 有效身份、五摘要等于当前受管树。
+
+    evaluator-defect 与第三批 B3-3 的 reevaluate 共用同一口径。
+    """
+
+    receipt = _read_json(Path(receipt_path), "部署收据")
+    if receipt.get("status") != "passed":
+        raise ConfigurationError("部署收据 status 不是 passed。")
+    frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    # 基准是 Campaign 有效工具身份：登记过工具演进时为最新演进的 to 身份（wire 修复已逐作业裁定）。
+    if _is_policy_v2_identity(frozen):
+        frozen = _campaign_effective_tool_identity(campaign_dir, manifest)["identity"]
+    for field in ("wire_producer_sha256", "policy_sha256"):
+        frozen_value = frozen.get(field)
+        if frozen_value is None or receipt.get(field) != frozen_value:
+            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 有效工具身份不一致或缺失。")
+    # 部署收据必须就是当前运行工具树的那一份：五摘要等于当前受管身份（修复已部署且正在被使用）。
+    current = _tool_identity(include_git=False)
+    for field, current_field in (
+        ("tool_files_sha256", "files_sha256"),
+        ("policy_sha256", "policy_sha256"),
+        ("wire_producer_sha256", "wire_producer_sha256"),
+        ("evidence_semantics_sha256", "evidence_semantics_sha256"),
+        ("control_sha256", "control_sha256"),
+    ):
+        if receipt.get(field) != current.get(current_field):
+            raise ConfigurationError(f"部署收据的 {field} 不等于当前受管工具树身份；修复尚未部署到当前树。")
+    return receipt
+
+
 def _evaluation_defect_admission(
     arguments: argparse.Namespace,
     campaign_dir: Path,
@@ -20349,28 +20388,8 @@ def _evaluation_defect_admission(
         raise ConfigurationError("evaluator-defect 必须以 --fix-commit 给出完整 40 位修复提交。")
     if receipt_path is None or not Path(receipt_path).is_absolute() or Path(receipt_path).is_symlink() or not Path(receipt_path).is_file():
         raise ConfigurationError("evaluator-defect 必须以 --deployment-receipt 给出可信绝对路径的部署收据。")
-    receipt = _read_json(Path(receipt_path), "部署收据")
-    if receipt.get("status") != "passed":
-        raise ConfigurationError("部署收据 status 不是 passed。")
-    frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
-    # 基准是 Campaign 有效工具身份：登记过工具演进时为最新演进的 to 身份（wire 修复已逐作业裁定）。
-    if _is_policy_v2_identity(frozen):
-        frozen = _campaign_effective_tool_identity(campaign_dir, manifest)["identity"]
-    for field in ("wire_producer_sha256", "policy_sha256"):
-        frozen_value = frozen.get(field)
-        if frozen_value is None or receipt.get(field) != frozen_value:
-            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 有效工具身份不一致或缺失。")
-    # 部署收据必须就是当前运行工具树的那一份：五摘要等于当前受管身份（修复已部署且正在被使用）。
+    _verify_current_deployment_receipt(campaign_dir, manifest, Path(receipt_path))
     current = _tool_identity(include_git=False)
-    for field, current_field in (
-        ("tool_files_sha256", "files_sha256"),
-        ("policy_sha256", "policy_sha256"),
-        ("wire_producer_sha256", "wire_producer_sha256"),
-        ("evidence_semantics_sha256", "evidence_semantics_sha256"),
-        ("control_sha256", "control_sha256"),
-    ):
-        if receipt.get(field) != current.get(current_field):
-            raise ConfigurationError(f"部署收据的 {field} 不等于当前受管工具树身份；修复尚未部署到当前树。")
     # 修好接着跑第 8 项后半：失败批次冻结于旧读侧口径时，reader 两项会因口径切换显示变化——这里有意不按旧
     # 口径复算去掉它：否则 b≥1 下重派判漂移、evaluation-recover 又判"没变化"，两头拒绝即卡死。多放行的后果
     # 只是开新基线按当前工具重评一次（真实缺陷未修则再次失败，届时同口径比较即被拒），不会得出错误结论。
@@ -20569,8 +20588,8 @@ def evaluation_recover(arguments: argparse.Namespace) -> dict[str, Any]:
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
     action = str(getattr(arguments, "recover_action", ""))
-    if action not in {"preview", "apply", "abandon"}:
-        raise ConfigurationError("evaluation-recover 只接受 preview、apply 或 abandon。")
+    if action not in {"preview", "apply", "abandon", "reevaluate"}:
+        raise ConfigurationError("evaluation-recover 只接受 preview、apply、abandon 或 reevaluate。")
     campaign_dir = Path(arguments.campaign_dir)
     manifest = _require_formal_campaign(campaign_dir)
     if not _requires_complete_vc_artifacts(manifest):
@@ -20591,12 +20610,473 @@ def evaluation_recover(arguments: argparse.Namespace) -> dict[str, Any]:
     admission = _assert_revision_admission(campaign_dir, manifest, command=EVALUATION_RECOVER_COMMAND)
     ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
     campaign_root = campaign_dir.resolve(strict=True)
+    if action == "reevaluate":
+        # 第三批 B3-3：不依赖失败父 run 的重评；--approve-sha256 缺省即预览，带上才落盘。
+        if approve_sha256 is not None and not (isinstance(approve_sha256, str) and SHA256_RE.fullmatch(approve_sha256)):
+            raise ConfigurationError("reevaluate 的 --approve-sha256 必须是预览输出的 review_sha256。")
+        try:
+            return _evaluation_reevaluate_locked(
+                arguments, campaign_dir, campaign_root, manifest, candidate_id, reviewer, approve_sha256, admission, ledger_dir, reconciler
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"评估基线制品非法：{error}") from error
     try:
         return _evaluation_recover_locked(
             arguments, action, campaign_dir, campaign_root, manifest, candidate_id, reviewer, approve_sha256, root_cause_class, admission, ledger_dir, reconciler
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(f"评估基线制品非法：{error}") from error
+
+
+def _evaluation_baseline_has_outputs(campaign_dir: Path, candidate_id: str, baseline: int) -> list[str]:
+    """当前评估基线已有的评估产出（Campaign 相对路径）：b0 看断言目录／compare／accept 原路径，b≥1 看本基线各阶段读源。"""
+
+    if baseline == 0:
+        return _candidate_b0_evaluation_outputs(campaign_dir, candidate_id)
+    found: list[str] = []
+    for stage in ("assertions", "compare", "accept"):
+        source = _stage_read_source(campaign_dir, candidate_id, baseline, stage)
+        if source["status"] == "complete":
+            found.append(Path(source["path"]).relative_to(campaign_dir).as_posix())
+    return found
+
+
+def _evaluation_reevaluate_locked(
+    arguments: argparse.Namespace,
+    campaign_dir: Path,
+    campaign_root: Path,
+    manifest: dict[str, Any],
+    candidate_id: str,
+    reviewer: str,
+    approve_sha256: Any,
+    admission: dict[str, Any] | None,
+    ledger_dir: Path,
+    reconciler: Any,
+) -> dict[str, Any]:
+    """第三批 B3-3：``evaluation-recover reevaluate``——评估器／证据层修好并登记演进后，对已有评估产出的候选开
+    tool-evolution 基线按新工具全量重评。不依赖失败父 run，不计根因；VC-5 已在本 revision 完成时经
+    ``evaluation_reopened`` 重开。五步 write-once 与 evaluator-defect 同构，续作收敛。
+    """
+
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        status = str(summary.get("status"))
+        if status != "active":
+            raise ConfigurationError(f"evaluation-recover reevaluate 拒绝：账本状态 {status}（须 active）。")
+        revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+        if revision is None:
+            raise ConfigurationError("没有 active 候选 revision。")
+        current_candidate = record["candidate_id"] if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+        if current_candidate != candidate_id:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 不是当前 revision r{revision} 的候选（当前 {current_candidate}）。"
+            )
+        # 账本位置：VC-5 进行中直接切换基线；VC-5 已在本 revision 完成且 VC-6 未开始则重开；其余拒绝。
+        active_phase = summary.get("active_phase")
+        phase_states = (summary.get("revision_phase_state") or {}).get(str(revision), {})
+        if active_phase == "VC-5":
+            ledger_event_type = "evaluation_baseline"
+        elif active_phase is None and phase_states.get("VC-5") == "completed" and "VC-6" not in phase_states:
+            ledger_event_type = "evaluation_reopened"
+        else:
+            raise ConfigurationError(
+                f"evaluation-recover reevaluate 拒绝：账本 active_phase={active_phase}、VC-5 状态 {phase_states.get('VC-5')}、"
+                f"VC-6 状态 {phase_states.get('VC-6')}；只能在 VC-5 进行中，或 VC-5 已完成且 VC-6 未开始时重评。"
+            )
+        current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        states = _evaluation_baseline_states(campaign_dir, candidate_id)
+        pending = sorted(
+            number
+            for number, flags in states.items()
+            if flags["prepared"] and not flags["abandon"] and (not flags["commit"] or number > current_baseline)
+        )
+        if len(pending) > 1:
+            raise ConfigurationError(f"存在多个未 COMMIT 的 PREPARED 评估基线：{pending}，状态不可信。")
+        resume_number = pending[-1] if pending else None
+        if resume_number is not None:
+            pending_recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, resume_number)
+            if pending_recovery["kind"] != "tool-evolution":
+                raise ConfigurationError(
+                    f"存在未 COMMIT 的 PREPARED 评估基线 b{resume_number}（{pending_recovery['kind']}），先 apply 或 abandon 它。"
+                )
+        candidate = _load_stage_result(campaign_dir, "capture-candidate", candidate_id)
+        if candidate.get("status") != "complete":
+            raise ConfigurationError("候选阶段结果不是 complete；未封存的候选没有需要重评的评估产出。")
+        attempt_root, attempt = _capture_stage_attempt_context(
+            campaign_dir, candidate, phase="candidate", candidate_id=candidate_id
+        )
+        rules = _approved_rules(campaign_dir, manifest, require_approved=True)
+        outputs = _evaluation_baseline_has_outputs(campaign_dir, candidate_id, current_baseline)
+        if not outputs:
+            raise ConfigurationError(
+                f"当前评估基线 b{current_baseline} 还没有任何评估产出，不需要重评；直接派发 VC-5 评估批次即可。"
+            )
+        # 触发事实：基线授权的评估器口径 vs 当前工具；基线绑定的证据语义 vs 当前工具。
+        try:
+            current_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+        except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+            raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+        authorized_partial = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, current_baseline)
+        # b0 只对 checker／builder 设口径：reader 两项按当前值补齐，不构成差异。
+        authorized = {
+            field: str(authorized_partial.get(field, current_digests[field]))
+            for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
+        }
+        changed_fields = sorted(
+            field for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS if authorized[field] != current_digests[field]
+        )
+        current_tool = _tool_identity(include_git=False)
+        current_evidence = str(current_tool["evidence_semantics_sha256"])
+        frozen_identity = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+        frozen_evidence = str(frozen_identity.get("evidence_semantics_sha256", ""))
+        if current_baseline == 0:
+            baseline_evidence = frozen_evidence
+        else:
+            bound = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, current_baseline).get("evaluation_epoch")
+            baseline_evidence = str(bound["to_evidence_semantics_sha256"]) if isinstance(bound, Mapping) else frozen_evidence
+        evidence_changed = current_evidence != baseline_evidence
+        if not changed_fields and not evidence_changed:
+            raise ConfigurationError("评估器四项摘要与证据语义相对当前评估基线都没有变化，没有需要重评的理由。")
+        # 与 evaluator-defect 同一 A2 合同：证据语义变化后须先对候选 attempt 追加 evaluation-epoch。
+        evaluation_epoch = _evaluation_epoch_for_recovery(
+            campaign_dir, manifest, attempt_root, current_evidence=current_evidence
+        )
+        effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+        project_root = reconciler._project_root(campaign_root)
+        plan, head = reconciler._project_facts(project_root)
+        existing: dict[str, Any] | None = None
+        if resume_number is not None:
+            existing = codex_upgrade_vc_artifacts.validate_evaluation_reevaluation(
+                _read_json(
+                    _evaluation_baseline_dir(campaign_dir, candidate_id, resume_number) / EVALUATION_REEVALUATION_FILENAME,
+                    "评估重评触发事实",
+                )
+            )
+            reevaluation = existing
+        else:
+            reevaluation = codex_upgrade_vc_artifacts.build_evaluation_reevaluation(
+                campaign_id=str(manifest["campaign_id"]),
+                campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                from_baseline=current_baseline,
+                from_baseline_commit_sha256=(str(current_commit["commit_sha256"]) if current_commit is not None else None),
+                tool_evolution_index=int(effective["index"]),
+                evaluator_changed_fields=changed_fields,
+                evidence_from_sha256=baseline_evidence,
+                evidence_to_sha256=current_evidence,
+                authorized_evaluator_digests=authorized,
+                current_evaluator_digests=current_digests,
+                evaluation_outputs=outputs,
+                reviewer=reviewer,
+                reviewed_at_utc=_utc_now(),
+            )
+        review_sha256 = str(reevaluation["review_sha256"])
+        preview_payload: dict[str, Any] = {
+            "status": "preview",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "current_evaluation_baseline": current_baseline,
+            "pending_baseline": resume_number,
+            "ledger_status": status,
+            "ledger_event_type": ledger_event_type,
+            "kind": "tool-evolution",
+            "trigger": {
+                "evaluator_changed_fields": changed_fields,
+                "evidence_changed": evidence_changed,
+                "evidence_from_sha256": baseline_evidence,
+                "evidence_to_sha256": current_evidence,
+                "tool_evolution_index": int(effective["index"]),
+                "evaluation_outputs": outputs,
+            },
+            "reevaluation": reevaluation,
+            "review_sha256": review_sha256,
+            "project_ledger": admission,
+            "live_request_count": 0,
+        }
+        if approve_sha256 is None:
+            return preview_payload
+        if approve_sha256 != review_sha256:
+            raise ConfigurationError(
+                "reevaluate 的批准摘要与当前触发事实不一致（评估器摘要、证据语义或当前基线已变化），请重新预览。"
+            )
+        fix_commit = getattr(arguments, "fix_commit", None)
+        receipt_path = getattr(arguments, "deployment_receipt", None)
+        if not isinstance(fix_commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", fix_commit):
+            raise ConfigurationError("reevaluate 落盘必须以 --fix-commit 给出完整 40 位修复提交。")
+        if (
+            receipt_path is None
+            or not Path(receipt_path).is_absolute()
+            or Path(receipt_path).is_symlink()
+            or not Path(receipt_path).is_file()
+        ):
+            raise ConfigurationError("reevaluate 落盘必须以 --deployment-receipt 给出可信绝对路径的部署收据。")
+        _verify_current_deployment_receipt(campaign_dir, manifest, Path(receipt_path))
+        deployment_binding = {
+            "path": str(Path(receipt_path).resolve(strict=True)),
+            "sha256": file_sha256(Path(receipt_path)),
+        }
+        # ① 编号与触发事实／recovery.json／PREPARED（write-once；续作即校验一致）。
+        number = resume_number if resume_number is not None else (max(states) + 1 if states else 1)
+        if number <= current_baseline:
+            raise ConfigurationError("新评估基线编号必须大于当前基线。")
+        baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+        ensure_private_directory(baseline_dir.parent, campaign_dir)
+        ensure_private_directory(baseline_dir, campaign_dir)
+        reevaluation_path = baseline_dir / EVALUATION_REEVALUATION_FILENAME
+        if existing is None:
+            _secure_write_json_once(reevaluation_path, reevaluation)
+        cause_step = f"tool-evolution-{int(effective['index']):02d}"
+        # 根因 ID 只用于 AUTHORIZATION 记录与二次判定的上限交集，不写进总账（重评不是失败、不计数）；复用评估器
+        # 组件既有的错误码，failed_step 用演进序号与真实失败规则（SPEC-*）区分——新增错误码要配总账迁移收据，本批不做。
+        try:
+            root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+                component="evaluator",
+                stable_error_code="evaluation.rule-failed",
+                failed_step=cause_step,
+                stable_dimensions={"phase": "VC-5"},
+            )
+        except codex_upgrade_root_cause.RootCauseError as error:
+            raise ConfigurationError(f"根因编码失败：{error}") from error
+        recovery_path = baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME
+        if recovery_path.is_file():
+            recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path, "评估基线 recovery"))
+        else:
+            recovery = codex_upgrade_vc_artifacts.build_evaluation_recovery(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                kind="tool-evolution",
+                diagnosis={"path": reevaluation_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(reevaluation_path)},
+                failure_source="tool-evolution",
+                reuse_authority="none",
+                root_cause_class="tool-evolution",
+                root_cause_id=root_cause_id,
+                failed_step=cause_step,
+                previous_baseline=current_baseline,
+                previous_baseline_commit_sha256=(str(current_commit["commit_sha256"]) if current_commit is not None else None),
+                execute_rules=sorted(rules),
+                reuse_rules=[],
+                execute_jobs=[],
+                reuse_jobs=sorted(
+                    str(result.get("id"))
+                    for result in attempt.get("results", [])
+                    if isinstance(result, Mapping) and isinstance(result.get("id"), str)
+                ),
+                attempt_id=None,
+                recovery_revision=None,
+                fix_commit=fix_commit,
+                deployment_receipt=deployment_binding,
+                evaluation_epoch=evaluation_epoch,
+                failed_evaluator_digests=authorized,
+                current_evaluator_digests=current_digests,
+                reviewer=reviewer,
+                approved_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(recovery_path, recovery)
+        prepared_path = baseline_dir / EVALUATION_BASELINE_PREPARED_FILENAME
+        if prepared_path.is_file():
+            prepared = codex_upgrade_vc_artifacts.validate_evaluation_baseline_prepared(_read_json(prepared_path, "评估基线 PREPARED"))
+            if prepared["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("PREPARED 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            prepared = codex_upgrade_vc_artifacts.build_evaluation_baseline_prepared(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                project_ledger_head_sequence=int(head["sequence"]),
+                project_ledger_head_sha256=str(head["head_sha256"]),
+                prepared_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(prepared_path, prepared)
+        # ② outbox 事件（请求 0；重评不是失败，payload 不带 root_cause、不计根因）→ 推总账 → 重放 → 二次判定。
+        receipt_binding = reconciler._binding(campaign_root, recovery_path, "reconciliation")
+        operation_id = f"evaluation-reevaluate:{candidate_id}:r{revision}:b{number}"
+        try:
+            batch = reconciler._commit_batch(
+                campaign_root,
+                operation_id=operation_id,
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": str(manifest["campaign_id"]),
+                    "subject_kind": "evaluation_baseline",
+                    "subject_id": f"{candidate_id}:r{revision}:b{number}",
+                    "phase": "VC-5",
+                    "request": dict(reconciler.ZERO_REQUEST_PART),
+                    "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                    "attempt_failed_event_sha256": None,
+                    "tool_evolution_reevaluation": {
+                        "evaluation_baseline": number,
+                        "tool_evolution_index": int(effective["index"]),
+                        "evaluator_changed_fields": changed_fields,
+                        "evidence_changed": evidence_changed,
+                    },
+                },
+                source={"kind": "evaluation_baseline", "sha256": receipt_binding["sha256"]},
+                receipt_bindings=[receipt_binding],
+            )
+            observed = _utc_now()
+            pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
+            ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
+            environment_decision = _campaign_environment_decision(campaign_dir, _manifest=manifest)
+            decision = reconciler._decide(
+                head=head_after,
+                plan=plan,
+                ledger=ledger_facts,
+                identity=identity,
+                environment_status=reconciler._environment_decision_status(environment_decision),
+                campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+                root_cause_id=root_cause_id,
+                request_status="resolved",
+                now=observed,
+                campaign_id=str(manifest["campaign_id"]),
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"评估重评入账失败：{error}") from error
+        result: dict[str, Any] = {
+            "status": "applied",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "evaluation_baseline": number,
+            "kind": "tool-evolution",
+            "ledger_event_type": ledger_event_type,
+            "recovery_sha256": recovery["recovery_sha256"],
+            "execute_rules": list(recovery["execute_rules"]),
+            "reuse_rules": [],
+            "execute_jobs": [],
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "attempt_id": None,
+            "recovery_revision": None,
+            "root_cause_id": root_cause_id,
+            "trigger": preview_payload["trigger"],
+            "batch": batch,
+            "project_push": pushed,
+            "decision": decision,
+            "live_request_count": 0,
+        }
+        if decision["decision"] == reconciler.DECISION_PAUSED:
+            result["status"] = "paused"
+            result["next_command"] = "预算已暂停：" + reconciler._paused_next_command(
+                decision, "以同一批准摘要重新执行 evaluation-recover reevaluate（幂等续接）"
+            )
+            return result
+        if decision["decision"] != reconciler.DECISION_RECOVERABLE:
+            try:
+                stop = reconciler._permanent_stop(
+                    campaign_root,
+                    manifest,
+                    ledger_dir,
+                    subject_id=f"evaluation-baseline-{candidate_id}-r{revision}-b{number}",
+                    root_cause_id=root_cause_id,
+                    terminal_reason=str(decision["terminal_reason"]),
+                    receipt_bindings=[receipt_binding],
+                    ledger_receipts=[],
+                    live_request_count=0,
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    ledger_facts=ledger_facts,
+                )
+                pushed_terminal, head_terminal = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"评估重评二次判定停线收口失败：{error}") from error
+            result["status"] = "permanent_stop"
+            result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+            result["next_command"] = stop["next_action"]
+            return result
+        # ③ AUTHORIZATION（绑定 outbox 事件摘要、head 与判定；根因计数为 0）。
+        authorization_path = baseline_dir / EVALUATION_BASELINE_AUTHORIZATION_FILENAME
+        batch_commit_path = Path(str(batch["batch_dir"])) / "COMMIT"
+        if authorization_path.is_file():
+            authorization = codex_upgrade_vc_artifacts.validate_evaluation_baseline_authorization(
+                _read_json(authorization_path, "评估基线 AUTHORIZATION")
+            )
+            if authorization["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("AUTHORIZATION 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            authorization = codex_upgrade_vc_artifacts.build_evaluation_baseline_authorization(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                ledger_operation_id=operation_id,
+                ledger_event_sha256=file_sha256(batch_commit_path),
+                project_ledger_head_sequence=int(head_after["sequence"]),
+                project_ledger_head_sha256=str(head_after["head_sha256"]),
+                root_cause_id=root_cause_id,
+                root_cause_count=int(decision.get("root_cause_count", 0)),
+                authorized_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(authorization_path, authorization)
+        # ④ COMMIT（stage_sources：候选证据 reused；compare／断言／accept 全部本基线 local——全量重评）。
+        commit_path = baseline_dir / EVALUATION_BASELINE_COMMIT_FILENAME
+        if commit_path.is_file():
+            commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(_read_json(commit_path, "评估基线 COMMIT"))
+        else:
+            capture_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "capture-candidate")
+            stage_sources: dict[str, Any] = {
+                "capture-candidate": {
+                    "source": "reused",
+                    "baseline": int(capture_source["baseline_of_record"]),
+                    "path": Path(capture_source["path"]).relative_to(campaign_dir).as_posix(),
+                    "sha256": str(capture_source["sha256"]),
+                },
+                "compare": {"source": "local", "target": f"comparisons/{candidate_id}/revisions/b{number}/result.json"},
+                "assertions": {"source": "local", "target": f"assertions/{candidate_id}/revisions/b{number}"},
+                "accept": {"source": "local", "target": f"acceptance/{candidate_id}/revisions/b{number}/result.json"},
+            }
+            commit = codex_upgrade_vc_artifacts.build_evaluation_baseline_commit(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                kind="tool-evolution",
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                authorization_sha256=str(authorization["authorization_sha256"]),
+                stage_sources=stage_sources,
+                committed_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(commit_path, commit)
+        # ⑤ 账本：VC-5 进行中登记 evaluation_baseline；VC-5 已完成登记 evaluation_reopened（重开）。幂等：最后一条已引用本 COMMIT。
+        last = _ledger_last_event_of_type(ledger_dir, ledger_event_type)
+        if (
+            last is not None
+            and last[0].get("candidate_id") == candidate_id
+            and last[0].get("evaluation_baseline") == number
+            and last[0].get("baseline_commit_sha256") == commit["commit_sha256"]
+        ):
+            result["ledger_event"] = {"event_type": ledger_event_type, "appended": False}
+        else:
+            try:
+                appended = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"{ledger_event_type.replace('_', '-')}-{candidate_id}-r{revision}-b{number}",
+                    phase="VC-5",
+                    event_type=ledger_event_type,
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    evaluation_baseline=number,
+                    baseline_commit_sha256=str(commit["commit_sha256"]),
+                    baseline_kind="tool-evolution",
+                    recovery_revision=None,
+                    next_action=f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}，按新工具全量重评）",
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"账本登记 {ledger_event_type} 失败：{error}") from error
+            result["ledger_event"] = {
+                "event_type": ledger_event_type,
+                "appended": True,
+                "head_sequence": appended.get("head_sequence"),
+                "status": appended.get("status"),
+                "active_phase": appended.get("active_phase"),
+            }
+        result["next_command"] = f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}）"
+        return result
 
 
 def _evaluation_recover_locked(

@@ -75,6 +75,9 @@ EVENT_TYPES = frozenset(
         "deadline_paused",
         "deadline_extended",
         "campaign_abandoned",
+        # 第三批 B3-3／R5：VC-5 在当前 revision 已完成、VC-6 未开始时，凭新评估基线重开 VC-5
+        #（评估器／证据层修好后重评，或批准输入修订）；字段与 evaluation_baseline 相同。
+        "evaluation_reopened",
     }
 )
 # 候选级阶段：VC-4～VC-6 的阶段／attempt 事件按 revision 归属；VC-0～VC-3 是 Campaign 级。
@@ -111,7 +114,8 @@ EVENT_REVISION_FIELDS = frozenset(
         "recovery_revision",
     }
 )
-EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery")
+# 第三批 B3-3：tool-evolution 基线（评估器／证据层修好后对已有评估产出全量重评）。
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution")
 ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
     {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
 )
@@ -1307,7 +1311,7 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
         not isinstance(recovery_revision, str) or not RECOVERY_REVISION_RE.fullmatch(recovery_revision)
     ):
         raise TimingLedgerError(f"event {sequence}.recovery_revision 必须是 ar<k> 或 null")
-    if event_type == "evaluation_baseline":
+    if event_type in {"evaluation_baseline", "evaluation_reopened"}:
         if (
             phase != "VC-5"
             or revision is None
@@ -1317,15 +1321,15 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
             or baseline_kind is None
         ):
             raise TimingLedgerError(
-                f"event {sequence} evaluation_baseline 必须在 VC-5 且携带 revision、candidate_id、"
+                f"event {sequence} {event_type} 必须在 VC-5 且携带 revision、candidate_id、"
                 "evaluation_baseline、baseline_commit_sha256 与 baseline_kind"
             )
         if (baseline_kind == "attempt-recovery") != (recovery_revision is not None):
             raise TimingLedgerError(
-                f"event {sequence} evaluation_baseline 只有 attempt-recovery 基线携带 recovery_revision"
+                f"event {sequence} {event_type} 只有 attempt-recovery 基线携带 recovery_revision"
             )
         if commit is not None or supersedes is not None:
-            raise TimingLedgerError(f"event {sequence} evaluation_baseline 不接受 revision 提交字段")
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
         return
     if event_type in ATTEMPT_RECOVERY_EVENT_TYPES:
         if phase != "VC-5" or revision is None or candidate_id is None or recovery_revision is None:
@@ -1880,6 +1884,46 @@ def _summarize(
             # 候选 revision 切换后旧候选的全部评估基线只读；新候选从 b0 开始。
             current_evaluation_baseline = None
             attempt_recoveries = {}
+        elif event_type == "evaluation_reopened":
+            # 第三批 B3-3／R5：VC-5 在当前 revision 已完成、VC-6 尚未开始时，凭新评估基线把 VC-5 置回进行中
+            # 并切换当前基线（评估器／证据层修好后重评，或批准输入修订）。VC-6 一旦开始就不能回头。
+            baseline = int(normalized["evaluation_baseline"])
+            assert event_revision is not None
+            phase_states = revision_phase_state.get(event_revision, {})
+            if (
+                phase != "VC-5"
+                or active_phase is not None
+                or phase_states.get("VC-5") != "completed"
+                or "VC-6" in phase_states
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is not None
+                or any(item["status"] == "active" for item in attempts.values())
+                or any(item["status"] == "active" for item in attempt_recoveries.values())
+            ):
+                raise TimingLedgerError(
+                    "evaluation_reopened 只能在 VC-5 于当前 revision 已完成、VC-6 未开始且无 active attempt／恢复段时登记"
+                )
+            previous_baseline = (
+                int(current_evaluation_baseline["evaluation_baseline"])
+                if current_evaluation_baseline is not None
+                else 0
+            )
+            if baseline <= previous_baseline:
+                raise TimingLedgerError(
+                    f"evaluation_reopened 的评估基线必须大于当前基线 b{previous_baseline}，收到 b{baseline}"
+                )
+            revision_phase_state.setdefault(event_revision, {})["VC-5"] = "started"
+            active_phase = "VC-5"
+            active_phase_started = recorded
+            active_phase_revision = event_revision
+            current_evaluation_baseline = {
+                "evaluation_baseline": baseline,
+                "baseline_commit_sha256": str(normalized["baseline_commit_sha256"]),
+                "baseline_kind": str(normalized["baseline_kind"]),
+                "recovery_revision": normalized.get("recovery_revision"),
+                "candidate_id": str(normalized["candidate_id"]),
+                "revision": int(event_revision),
+            }
         elif event_type == "evaluation_baseline":
             # 只在 VC-5 进行中、无 active attempt／恢复段时切换当前基线，不改变 active_phase。
             baseline = int(normalized["evaluation_baseline"])
