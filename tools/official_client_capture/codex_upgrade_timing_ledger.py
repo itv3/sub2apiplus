@@ -511,6 +511,14 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        # 修好接着跑第三批（R1／R3／R5 与第 9、10、12、19、22 项）：VC-5 重开后的 checkpoint 落盘、approval-revision 基线、
+        # resume_facts.limit_event；生产者身份从第 25 项收据提交 a651780cb 承接。
+        "path": "docs/egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+        "base_commit": "a651780cb4dc5c615012ac496cc6510c7647346f",
+        "scope": "upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 

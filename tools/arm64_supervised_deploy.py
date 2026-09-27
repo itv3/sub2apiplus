@@ -265,8 +265,15 @@ from urllib.parse import urlsplit
 # 受管工具树与监督器摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
 # 2026-09-27（修好接着跑第 25 项）：看门狗每轮不持锁重放三层预算，撞上动作进程写总账／账本的中间态会瞬时失败；改为自首次
 # 失败起持续 15 秒才判预算状态无效，容忍期间沿用已收紧的截止。control 层变化，wire／evidence 不变；监督器摘要随之变化。
+# 2026-09-27（修好接着跑第三批：R1／R3／R5 与第 9、10、12、19、22 项）：策略变化经策略演进在原 Campaign 承接；已封存证据只有
+# mtime／ctime／inode 漂移可 rebind 继续，环境隔离按污染发生时刻保留污染前作业复用；评估器／证据层修好后 reevaluate 开
+# tool-evolution 基线，selector 修正开 approval-revision 基线，VC-5 重开后的 checkpoint 落 reopen-b<K>；候选零请求后处理失败
+# 与批次中途评估器漂移可恢复；同根因达上限只暂停、门禁只挡本次根因；总账 blocked 按 Campaign 归属；零请求预览先采探针查
+# 连续性并写漂移收据；重派按批次身份而非命令全文；pre-A3 认证按工具身份复用并登记复用收据。control 层、evidence 层
+# （闭包 54dbc763→3aa27c1e）与计时账本生产者变化，wire 闭包 b1e4c251 不变；受管工具树与监督器摘要随之变化；断言预处理器
+# 与 egress-guard 逻辑未变，出口守护无需重装。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "f61f8260a698b215c4466879f538419ec053f8ea0e4febe073f24717a29706c8"
+    "c1c7e59b455be9b308f3963ffb9c0ac3f7f622b7855396059ea54738d1dd1a0a"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
@@ -432,6 +439,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch1-tool-evolution-20260927-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_157_0.json"
