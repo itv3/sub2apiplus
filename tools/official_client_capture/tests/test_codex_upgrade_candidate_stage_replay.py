@@ -242,10 +242,15 @@ class CandidateStageReplayChainTests(unittest.TestCase):
         inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
         prior_state = supervisor._read_state(run_dir)
         self.assertTrue(supervisor._validate_batched_stage_review_successor(prior_state, inner, run_dir, inner, campaign_dir=campaign))
+        # 修好接着跑第 9 项（B3-11）：只改命令 argv 的重派身份不变（同阶段、同动作、同候选、同输入），放行；
+        # 改 item_ids（输入）才是身份漂移，拒绝并点名字段。
         changed = json.loads(json.dumps(inner))
         changed["actions"][0]["command"] = [*changed["actions"][0]["command"], "--heartbeat-seconds", "5"]
-        with self.assertRaisesRegex(supervisor.SupervisorError, "原批次内容重派"):
-            supervisor._validate_batched_stage_review_successor(prior_state, inner, run_dir, changed, campaign_dir=campaign)
+        self.assertTrue(supervisor._validate_batched_stage_review_successor(prior_state, inner, run_dir, changed, campaign_dir=campaign))
+        drifted_inputs = json.loads(json.dumps(inner))
+        drifted_inputs["actions"][0]["item_ids"] = sorted([*drifted_inputs["actions"][0]["item_ids"], "extra-item"])
+        with self.assertRaisesRegex(supervisor.SupervisorError, "原批次内容重派，漂移字段：actions"):
+            supervisor._validate_batched_stage_review_successor(prior_state, inner, run_dir, drifted_inputs, campaign_dir=campaign)
         parameters = Path(flags["--build-parameters"])
         original = parameters.read_bytes()
         parameters.write_bytes(original + b"\n")

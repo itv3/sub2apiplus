@@ -105,6 +105,24 @@ class StagingDispatchTests(unittest.TestCase):
     def _plan(self, root: Path, campaign_dir: Path, phase: str, *, tag: str = "") -> Path:
         return self.helper._vc_chain_action_plan(root / f"plans{tag}", campaign_dir, phase)
 
+    @staticmethod
+    def _rewrite_plan(
+        source: Path, target: Path, *, operation: str | None = None, command_insert: tuple[str, int] | None = None
+    ) -> Path:
+        """复制动作计划，只改第一个动作的 operation，或在其 command 指定位置插入一个 token（B3-11 身份重派夹具）。"""
+
+        plan = json.loads(source.read_text(encoding="utf-8"))
+        action = plan["actions"][0]
+        if operation is not None:
+            action["operation"] = operation
+        if command_insert is not None:
+            token, index = command_insert
+            action["command"] = [*action["command"][:index], token, *action["command"][index:]]
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        target.chmod(0o600)
+        return target.resolve(strict=True)
+
     def _open_r1(self, fixture: dict[str, object]) -> None:
         """改造 2：候选级首批（VC-4）派发前先激活 r1；幂等，可重复调用。"""
 
@@ -538,7 +556,7 @@ class StagingDispatchTests(unittest.TestCase):
             # 幂等：再对账不重复入账。
             reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
             self.assertEqual(self._head(fixture)["root_cause_counts"][expected_cause], 1)
-            # N+1 逐字重派（同一 action plan → 九个不可变字段逐字相等）→ 成功，链继续到 VC-6。
+            # N+1 重派（同一 action plan → 批次身份一致，B3-11 起不再逐字比较动作全文）→ 成功，链继续到 VC-6。
             result, returncode = self._dispatch(fixture, root, "VC-2", 3, tag="-p4")
             self.assertEqual(returncode, 0, result)
             self.assertEqual(result["orphans"], [])
@@ -561,20 +579,29 @@ class StagingDispatchTests(unittest.TestCase):
                 result, _returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-p4")
             run_dir = Path(result["campaign_run"]["run_dir"])
             reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
-            # 用失败动作计划（不同 command）派发 N+1：不可变字段漂移 → 拒绝，且不产生 COMMIT。
-            drifted_plan = self.helper._vc_chain_action_plan(root / "drift", campaign_dir, "VC-2", fail=True)
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "漂移字段"):
-                codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-2", 3, drifted_plan))
+            # 修好接着跑第 9 项（B3-11）：重派按批次身份而不是命令全文。改 operation（同 action_id／item_ids）
+            # 即身份漂移 → 拒绝并点名 actions，且不产生 COMMIT。
+            base_plan = self._plan(root, campaign_dir, "VC-2", tag="-p4")
+            renamed_plan = self._rewrite_plan(
+                base_plan, root / "drift" / "vc-2-operation.json", operation="VC-2:synthetic-checkpoint-renamed"
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "漂移字段：actions"):
+                codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-2", 3, renamed_plan))
             self.assertFalse(self._commit_path(campaign_dir, 3, "VC-2").exists())
             # 父 run 创建前被拒：入口当场把 staging attempt 以 parent-run-create 中止并入账（P1 语义）。
             abort = artifacts.validate_staging_abort(self._read(self._staging_dir(campaign_dir, 3, "VC-2") / "attempt-1" / "ABORT"))
             self.assertEqual((abort["stage"], abort["failure_kind"], abort["error_type"]), ("parent-run-create", "prepare-failed", "SupervisorError"))
             self.assertIn("staging-abort:0003:1", self._head(fixture)["operations"])
-            # 随后逐字重派成功，且没有遗留孤儿。
-            result, returncode = self._dispatch(fixture, root, "VC-2", 3, tag="-p4-ok")
+            # 仅命令 argv 不同（解释器加 -u，动作行为不变）：同阶段、同动作、同候选、同输入，身份相同，
+            # 放行并真实执行成功，没有遗留孤儿；执行的清单里就是新 argv。
+            argv_plan = self._rewrite_plan(base_plan, root / "drift" / "vc-2-argv.json", command_insert=("-u", 1))
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-2", 3, argv_plan))
             self.assertEqual(returncode, 0, result)
             self.assertEqual(result["orphans"], [])
             self.assertEqual(result["staging_attempt"], 2)
+            self.assertTrue(self._commit_path(campaign_dir, 3, "VC-2").is_file())
+            executed = self._read(Path(result["campaign_run"]["run_dir"]) / "campaign-run-manifest.json")["manifest"]
+            self.assertEqual(executed["actions"][0]["command"][1], "-u")
 
     # ------------------------------------------------------------------
     # P2：prepared 父 run，commit 未开始，owner 崩溃（子进程 SIGKILL）

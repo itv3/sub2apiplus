@@ -1672,172 +1672,186 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
                 supervisor._validate_batched_campaign_history(successor, history)
 
-    def test_environment_recovery_only_redispatches_exact_prior_batch(self) -> None:
-        """reservation 前环境失败须有对账许可，且后继只能逐字重派原批次。"""
+    def _environment_redispatch_fixture(
+        self, root: Path
+    ) -> tuple[Path, dict[str, object], dict[str, object], Path, dict[str, object], Path]:
+        """reservation 前环境前提失败、已对账许可 redispatch-same-batch 的父批次与逐字相同的 N+1 后继。
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            root.chmod(0o700)
-            campaign_dir, ledger_root, _fixture = self._timing_closeout_fixture(
-                root
-            )
-            campaign_id = "campaign-closeout"
-            prior_dir = root / "run-prior"
-            prior_dir.mkdir(mode=0o700)
-            owner_nonce = "8" * 64
-            checkpoint = {
-                "path": "control/vc/vc-0-checkpoint.json",
-                "sha256": "3" * 64,
-                "phase": "VC-0",
-                "checkpoint_sha256": "4" * 64,
-            }
-            action = {
-                "action_id": "candidate-readiness",
-                "operation": "VC-1:candidate-readiness",
-                "timeout_seconds": 60.0,
-                "command": [
-                    sys.executable,
-                    "/managed/codex_upgrade.py",
-                    "candidate-readiness",
-                    "--campaign-dir",
-                    str(campaign_dir),
-                ],
-                "item_ids": ["candidate-readiness"],
-            }
-            prior_manifest: dict[str, object] = {
-                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
-                "campaign_id": campaign_id,
-                "campaign_plan_sha256": "1" * 64,
+        返回 (campaign_dir, prior_state, prior_manifest, prior_dir, successor, campaign_receipt)；
+        修好接着跑第 9 项（B3-11）的身份重派用例共用这套夹具。
+        """
+
+        root.chmod(0o700)
+        campaign_dir, ledger_root, _fixture = self._timing_closeout_fixture(
+            root
+        )
+        campaign_id = "campaign-closeout"
+        prior_dir = root / "run-prior"
+        prior_dir.mkdir(mode=0o700)
+        owner_nonce = "8" * 64
+        checkpoint = {
+            "path": "control/vc/vc-0-checkpoint.json",
+            "sha256": "3" * 64,
+            "phase": "VC-0",
+            "checkpoint_sha256": "4" * 64,
+        }
+        action = {
+            "action_id": "candidate-readiness",
+            "operation": "VC-1:candidate-readiness",
+            "timeout_seconds": 60.0,
+            "command": [
+                sys.executable,
+                "/managed/codex_upgrade.py",
+                "candidate-readiness",
+                "--campaign-dir",
+                str(campaign_dir),
+            ],
+            "item_ids": ["candidate-readiness"],
+        }
+        prior_manifest: dict[str, object] = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": campaign_id,
+            "campaign_plan_sha256": "1" * 64,
+            "batch_id": "vc-1-0001",
+            "batch_sequence": 1,
+            "batch_sha256": "5" * 64,
+            "phase": "VC-1",
+            "predecessor_checkpoint": checkpoint,
+            "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+            "no_op": False,
+            "actions": [action],
+            "execute_items": ["candidate-readiness"],
+            "reuse_items": [],
+        }
+        prior_state: dict[str, object] = {
+            "state": "failed",
+            "campaign_id": campaign_id,
+            "phase": "VC-1",
+            "owner_pid": os.getpid(),
+            "owner_nonce": owner_nonce,
+            "terminal_at_utc": "2026-09-17T01:00:00Z",
+        }
+        self._write_json(prior_dir / "state.json", prior_state)
+        stop: dict[str, object] = {
+            "schema_version": supervisor.STOP_SCHEMA,
+            "campaign_id": campaign_id,
+            "detected_at_epoch": 1005.0,
+            "detected_at_utc": "2026-09-17T01:00:00Z",
+            "event_type": "failed",
+            "owner_nonce": owner_nonce,
+            "owner_pid": os.getpid(),
+            "phase": "VC-1",
+            "reason": "action-failed:candidate-readiness",
+        }
+        stop["receipt_sha256"] = supervisor._sha256(
+            supervisor._canonical(stop)
+        )
+        self._write_json(prior_dir / "stop-receipt.json", stop)
+        diagnostic_path = supervisor._action_diagnostic_path(
+            prior_dir,
+            "candidate-readiness",
+            create_directory=True,
+        )
+        supervisor._write_action_diagnostic(
+            diagnostic_path,
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id="candidate-readiness",
+            owner_pid=os.getpid(),
+            owner_nonce=owner_nonce,
+            failure_kind="handled-error",
+            failure_class="environment-prerequisite",
+            error_type="ConfigurationError",
+            message="候选就绪前提失败。",
+        )
+
+        timing_ledger.append_event(
+            ledger_root,
+            event_id="environment-prerequisite-paused",
+            phase="VC-1",
+            event_type="recovery_required",
+            root_cause_id="campaign-run.action-failed",
+            next_action="reconcile-supervisor-run",
+        )
+        reconciliation = {
+            "schema_version": "supervisor-run-reconciliation/v1",
+            "campaign_id": campaign_id,
+            "failure_class": "environment-prerequisite",
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+            "run": {
+                "run_dir": str(prior_dir.resolve(strict=True)),
+                "run_id": prior_dir.name,
+                "state": "failed",
+                "phase": "VC-1",
                 "batch_id": "vc-1-0001",
                 "batch_sequence": 1,
                 "batch_sha256": "5" * 64,
-                "phase": "VC-1",
-                "predecessor_checkpoint": checkpoint,
-                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
-                "no_op": False,
-                "actions": [action],
                 "execute_items": ["candidate-readiness"],
                 "reuse_items": [],
-            }
-            prior_state: dict[str, object] = {
-                "state": "failed",
-                "campaign_id": campaign_id,
-                "phase": "VC-1",
-                "owner_pid": os.getpid(),
-                "owner_nonce": owner_nonce,
-                "terminal_at_utc": "2026-09-17T01:00:00Z",
-            }
-            self._write_json(prior_dir / "state.json", prior_state)
-            stop: dict[str, object] = {
-                "schema_version": supervisor.STOP_SCHEMA,
-                "campaign_id": campaign_id,
-                "detected_at_epoch": 1005.0,
-                "detected_at_utc": "2026-09-17T01:00:00Z",
-                "event_type": "failed",
-                "owner_nonce": owner_nonce,
-                "owner_pid": os.getpid(),
-                "phase": "VC-1",
-                "reason": "action-failed:candidate-readiness",
-            }
-            stop["receipt_sha256"] = supervisor._sha256(
-                supervisor._canonical(stop)
-            )
-            self._write_json(prior_dir / "stop-receipt.json", stop)
-            diagnostic_path = supervisor._action_diagnostic_path(
-                prior_dir,
-                "candidate-readiness",
-                create_directory=True,
-            )
-            supervisor._write_action_diagnostic(
-                diagnostic_path,
-                campaign_id=campaign_id,
-                phase="VC-1",
-                action_id="candidate-readiness",
-                owner_pid=os.getpid(),
-                owner_nonce=owner_nonce,
-                failure_kind="handled-error",
-                failure_class="environment-prerequisite",
-                error_type="ConfigurationError",
-                message="候选就绪前提失败。",
-            )
-
-            timing_ledger.append_event(
-                ledger_root,
-                event_id="environment-prerequisite-paused",
-                phase="VC-1",
-                event_type="recovery_required",
-                root_cause_id="campaign-run.action-failed",
-                next_action="reconcile-supervisor-run",
-            )
-            reconciliation = {
-                "schema_version": "supervisor-run-reconciliation/v1",
-                "campaign_id": campaign_id,
                 "failure_class": "environment-prerequisite",
-                "reservation_exists": False,
-                "live_request_count": 0,
-                "scanned_bytes": 0,
-                "run": {
-                    "run_dir": str(prior_dir.resolve(strict=True)),
-                    "run_id": prior_dir.name,
-                    "state": "failed",
-                    "phase": "VC-1",
-                    "batch_id": "vc-1-0001",
-                    "batch_sequence": 1,
-                    "batch_sha256": "5" * 64,
-                    "execute_items": ["candidate-readiness"],
-                    "reuse_items": [],
-                    "failure_class": "environment-prerequisite",
+            },
+        }
+        campaign_receipt = (
+            campaign_dir
+            / "control"
+            / "reconciliation"
+            / f"run-{prior_dir.name}"
+            / "supervisor-run-reconciliation.json"
+        )
+        ledger_receipt = (
+            ledger_root
+            / "receipts"
+            / "reconciliation"
+            / f"run-{prior_dir.name}"
+            / "reconciliation.json"
+        )
+        provenance = ledger_receipt.with_name("provenance.json")
+        self._write_json(campaign_receipt, reconciliation)
+        self._write_json(ledger_receipt, reconciliation)
+        # Campaign 收据按可读格式写入，而 TimingLedger 副本按紧凑格式保存；
+        # 两者只要 JSON 事实相同，就不能因空白字节不同误报绑定漂移。
+        campaign_receipt.write_text(
+            json.dumps(reconciliation, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        campaign_receipt.chmod(0o600)
+        self._write_json(provenance, {"status": "complete"})
+        timing_ledger.append_event(
+            ledger_root,
+            event_id=f"reconcile-run-passed-{prior_dir.name}",
+            phase="VC-1",
+            event_type="receipt_passed",
+            receipts=[
+                {
+                    "role": "provenance",
+                    "path": provenance.relative_to(ledger_root).as_posix(),
+                    "sha256": timing_ledger._sha256_file(provenance),
                 },
-            }
-            campaign_receipt = (
-                campaign_dir
-                / "control"
-                / "reconciliation"
-                / f"run-{prior_dir.name}"
-                / "supervisor-run-reconciliation.json"
-            )
-            ledger_receipt = (
-                ledger_root
-                / "receipts"
-                / "reconciliation"
-                / f"run-{prior_dir.name}"
-                / "reconciliation.json"
-            )
-            provenance = ledger_receipt.with_name("provenance.json")
-            self._write_json(campaign_receipt, reconciliation)
-            self._write_json(ledger_receipt, reconciliation)
-            # Campaign 收据按可读格式写入，而 TimingLedger 副本按紧凑格式保存；
-            # 两者只要 JSON 事实相同，就不能因空白字节不同误报绑定漂移。
-            campaign_receipt.write_text(
-                json.dumps(reconciliation, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            campaign_receipt.chmod(0o600)
-            self._write_json(provenance, {"status": "complete"})
-            timing_ledger.append_event(
-                ledger_root,
-                event_id=f"reconcile-run-passed-{prior_dir.name}",
-                phase="VC-1",
-                event_type="receipt_passed",
-                receipts=[
-                    {
-                        "role": "provenance",
-                        "path": provenance.relative_to(ledger_root).as_posix(),
-                        "sha256": timing_ledger._sha256_file(provenance),
-                    },
-                    {
-                        "role": "reconciliation",
-                        "path": ledger_receipt.relative_to(ledger_root).as_posix(),
-                        "sha256": timing_ledger._sha256_file(ledger_receipt),
-                    },
-                ],
-                next_action="redispatch-same-batch",
-            )
+                {
+                    "role": "reconciliation",
+                    "path": ledger_receipt.relative_to(ledger_root).as_posix(),
+                    "sha256": timing_ledger._sha256_file(ledger_receipt),
+                },
+            ],
+            next_action="redispatch-same-batch",
+        )
 
-            successor = copy.deepcopy(prior_manifest)
-            successor["batch_id"] = "vc-1-0002"
-            successor["batch_sequence"] = 2
-            successor["batch_sha256"] = "6" * 64
+        successor = copy.deepcopy(prior_manifest)
+        successor["batch_id"] = "vc-1-0002"
+        successor["batch_sequence"] = 2
+        successor["batch_sha256"] = "6" * 64
+        return campaign_dir, prior_state, prior_manifest, prior_dir, successor, campaign_receipt
+
+    def test_environment_recovery_only_redispatches_exact_prior_batch(self) -> None:
+        """reservation 前环境失败须有对账许可；后继按批次身份重派——修好接着跑第 9 项（B3-11）：执行细节可变。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, campaign_receipt = (
+                self._environment_redispatch_fixture(root)
+            )
             ordered = supervisor._validate_batched_campaign_history(
                 successor,
                 [(prior_state, prior_manifest, prior_dir)],
@@ -1845,14 +1859,16 @@ class SupervisorTests(unittest.TestCase):
             )
             self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
 
-            drifted = copy.deepcopy(successor)
-            drifted["actions"][0]["timeout_seconds"] = 61.0
-            with self.assertRaisesRegex(SupervisorError, "原批次内容重派"):
-                supervisor._validate_batched_campaign_history(
-                    drifted,
-                    [(prior_state, prior_manifest, prior_dir)],
-                    campaign_dir=campaign_dir,
-                )
+            # 只改执行细节（timeout、命令 argv）：同阶段、同动作、同候选、同输入，身份不变，放行。
+            details = copy.deepcopy(successor)
+            details["actions"][0]["timeout_seconds"] = 61.0
+            details["actions"][0]["command"] = [*details["actions"][0]["command"], "--heartbeat-seconds", "5"]
+            ordered = supervisor._validate_batched_campaign_history(
+                details,
+                [(prior_state, prior_manifest, prior_dir)],
+                campaign_dir=campaign_dir,
+            )
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
 
             campaign_receipt.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(SupervisorError, "对账收据绑定漂移"):
@@ -1861,6 +1877,131 @@ class SupervisorTests(unittest.TestCase):
                     [(prior_state, prior_manifest, prior_dir)],
                     campaign_dir=campaign_dir,
                 )
+
+    def test_environment_redispatch_rejects_identity_drift_but_allows_execution_details(self) -> None:
+        """修好接着跑第 9 项（B3-11）：改 item_ids／operation／action_id／阶段／候选／分区即身份漂移，拒绝并点名字段；
+        跨评估基线不是重派，拒绝并指向 evaluation-recover。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _campaign_receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+
+            def variant(**changes: object) -> dict[str, object]:
+                manifest = copy.deepcopy(successor)
+                action_changes = changes.pop("action", None)
+                manifest.update(changes)
+                if isinstance(action_changes, dict):
+                    manifest["actions"][0].update(action_changes)
+                return manifest
+
+            cases = [
+                ("actions", variant(action={"item_ids": ["other-item"]})),
+                ("actions", variant(action={"operation": "VC-1:candidate-readiness-renamed"})),
+                ("actions", variant(action={"action_id": "candidate-readiness-renamed"})),
+                ("phase", variant(phase="VC-2")),
+                ("candidate_id", variant(candidate_id="cand-other")),
+                ("candidate_revision", variant(candidate_revision=2)),
+                ("execute_items", variant(execute_items=["candidate-readiness", "other-item"])),
+                ("reuse_items", variant(reuse_items=["reused-item"])),
+                (
+                    "predecessor_checkpoint",
+                    variant(predecessor_checkpoint={**successor["predecessor_checkpoint"], "sha256": "9" * 64}),
+                ),
+            ]
+            for field, manifest in cases:
+                with self.subTest(field=field):
+                    with self.assertRaisesRegex(SupervisorError, f"只允许原批次内容重派，漂移字段：{field}$"):
+                        supervisor._validate_batched_campaign_history(
+                            manifest, [(prior_state, prior_manifest, prior_dir)], campaign_dir=campaign_dir
+                        )
+            # 跨基线（后继带评估基线与 COMMIT，前序为 b0）：共享重派许可拒绝并指向 evaluation-recover。
+            crossing = variant(evaluation_baseline=1, baseline_commit_sha256="a" * 64)
+            with self.assertRaisesRegex(
+                SupervisorError, "漂移字段：evaluation_baseline、baseline_commit_sha256；跨评估基线.*evaluation-recover"
+            ):
+                supervisor._validate_reconciled_redispatch_binding(
+                    prior_state, prior_manifest, prior_dir, crossing, campaign_dir=campaign_dir,
+                    effective_class="environment-prerequisite", label="环境前提失败",
+                )
+
+    def test_redispatch_identity_ignores_execution_details_and_orders_actions(self) -> None:
+        """修好接着跑第 9 项（B3-11）：重派身份 = 12 个批次级／候选级字段 + 按 action_id 排序的 (action_id, operation, item_ids)。"""
+
+        base: dict[str, object] = {
+            "campaign_id": "c",
+            "campaign_plan_sha256": "1" * 64,
+            "phase": "VC-5",
+            "predecessor_checkpoint": {"path": "p", "sha256": "2" * 64},
+            "original_deadline_at_utc": "2099-01-01T00:00:00Z",
+            "execute_items": ["a", "b"],
+            "reuse_items": ["r"],
+            "no_op": False,
+            "candidate_revision": 1,
+            "candidate_id": "cand",
+            "evaluation_baseline": 1,
+            "baseline_commit_sha256": "3" * 64,
+            "batch_id": "vc-5-0001",
+            "batch_sequence": 1,
+            "batch_sha256": "4" * 64,
+            "actions": [
+                {"action_id": "act-b", "operation": "VC-5:b", "timeout_seconds": 10, "command": ["x", "b"], "item_ids": ["b"]},
+                {
+                    "action_id": "act-a",
+                    "operation": "VC-5:a",
+                    "timeout_seconds": 20,
+                    "command": ["x", "a"],
+                    "item_ids": ["a"],
+                    "output_bindings": ["o1"],
+                },
+            ],
+        }
+        reordered = copy.deepcopy(base)
+        reordered["actions"].reverse()
+        reordered["actions"][0].update({"timeout_seconds": 99, "command": ["y", "--flag"], "output_bindings": ["o2"]})
+        reordered.update(
+            {"batch_id": "vc-5-0002", "batch_sequence": 2, "batch_sha256": "5" * 64, "evaluator_digests": {"checker_sha256": "6" * 64}}
+        )
+        identity = supervisor._redispatch_identity(base)
+        self.assertEqual(identity, supervisor._redispatch_identity(reordered))
+        self.assertEqual(set(identity), {*supervisor.REDISPATCH_IDENTITY_FIELDS, "actions"})
+        self.assertEqual(len(supervisor.REDISPATCH_IDENTITY_FIELDS), 12)
+        self.assertEqual(
+            identity["actions"],
+            [
+                {"action_id": "act-a", "operation": "VC-5:a", "item_ids": ["a"]},
+                {"action_id": "act-b", "operation": "VC-5:b", "item_ids": ["b"]},
+            ],
+        )
+        self.assertEqual(supervisor._redispatch_identity_drift(base, reordered), [])
+        for change in ({"item_ids": ["a", "c"]}, {"operation": "VC-5:renamed"}, {"action_id": "act-c"}):
+            with self.subTest(change=change):
+                drifted = copy.deepcopy(base)
+                drifted["actions"][1].update(change)
+                self.assertEqual(supervisor._redispatch_identity_drift(base, drifted), ["actions"])
+        for field in supervisor.REDISPATCH_IDENTITY_FIELDS:
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(base)
+                drifted[field] = "changed"
+                self.assertEqual(supervisor._redispatch_identity_drift(base, drifted), [field])
+        # 动作列表缺失／含非对象项：身份不等，失败关闭。
+        self.assertEqual(supervisor._redispatch_identity_drift(base, {**base, "actions": None}), ["actions"])
+        self.assertEqual(
+            supervisor._redispatch_identity_drift(base, {**base, "actions": [*base["actions"], "junk"]}), ["actions"]
+        )
+        # legacy 清单（无候选级键）：候选级键取 None，与自身身份相等。
+        legacy = {
+            key: value
+            for key, value in base.items()
+            if key not in {"candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256"}
+        }
+        self.assertIsNone(supervisor._redispatch_identity(legacy)["candidate_id"])
+        self.assertEqual(supervisor._redispatch_identity_drift(legacy, copy.deepcopy(legacy)), [])
+        # 拒绝信息：只有含评估基线字段时才指向 evaluation-recover。
+        self.assertEqual(supervisor._redispatch_drift_message("x", ["actions"]), "x，漂移字段：actions")
+        self.assertIn("evaluation-recover", supervisor._redispatch_drift_message("x", ["evaluation_baseline"]))
+        self.assertIn("evaluation-recover", supervisor._redispatch_drift_message("x", ["actions", "baseline_commit_sha256"]))
 
     def test_campaign_run_locked_dispatches_failed_v2_normal_v2_preview(self) -> None:
         """真实父入口必须能从失败 sequence 1 派发普通 sequence 2 预览。"""

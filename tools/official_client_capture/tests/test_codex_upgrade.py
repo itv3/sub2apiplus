@@ -18834,7 +18834,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 head_after["sequence"],
             )
 
-            # 重派门禁：后继批次逐字相同才放行；actions 漂移失败关闭。
+            # 重派门禁（修好接着跑第 9 项，B3-11）：后继批次与父批次重派身份相同即放行——同阶段、同动作
+            # （action_id／operation／item_ids）、同候选、同输入；只改命令 argv（工具修复后脚本路径变化）
+            # 不算漂移；改 item_ids（输入）才失败关闭并点名字段。
             prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
             successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
             self.assertTrue(
@@ -18846,12 +18848,23 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir=campaign_dir,
                 )
             )
-            drifted_actions = json.loads(json.dumps(inner["actions"]))
-            drifted_actions[0]["command"][-1] = "/tmp/other_assertion_bundle.sh"
-            drifted = self._b0_seal_batch_manifest(
-                fixture, batch_sequence=2, actions=drifted_actions
+            argv_only_actions = json.loads(json.dumps(inner["actions"]))
+            argv_only_actions[0]["command"][-1] = "/tmp/other_assertion_bundle.sh"
+            argv_only = self._b0_seal_batch_manifest(
+                fixture, batch_sequence=2, actions=argv_only_actions
             )
-            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派"):
+            self.assertTrue(
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state,
+                    inner,
+                    run_dir,
+                    argv_only,
+                    campaign_dir=campaign_dir,
+                )
+            )
+            drifted = json.loads(json.dumps(successor))
+            drifted["actions"][0]["item_ids"] = ["candidate-seal-other"]
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派，漂移字段：actions"):
                 supervisor._validate_batched_environment_redispatch_successor(
                     prior_state,
                     inner,
@@ -19644,7 +19657,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             )
     def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
-        """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
+        """重派评估器摘要口径（不带 Campaign 目录的旧调用）：只有 b0 下 compare／accept reader 的变化不算漂移；
+        b0 的 checker／builder 变化、键集合不同、一侧缺失、b≥1 的任何变化（无基线授权可核）一律失败关闭。
+        b0 授权历史与 b≥1 基线授权四项的口径见 test_codex_upgrade_tool_evolution.RedispatchEvaluatorAuthorizationTests。"""
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         drifted = supervisor._redispatch_evaluator_digests_drifted
@@ -19669,10 +19684,14 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertTrue(drifted(prior, manifest({k: v for k, v in readers.items() if k != "accept_reader_sha256"})))
         self.assertTrue(drifted(prior, manifest(None)))
         self.assertTrue(drifted(manifest(None), manifest(dict(digests))))
-        # 已有评估基线（b≥1）或基线提交：reader 变化同样按漂移处理，只能经 evaluation-recover 承接。
-        self.assertTrue(drifted(manifest(dict(digests), baseline="b1", commit="8" * 64),
-                                manifest(readers, baseline="b1", commit="8" * 64)))
+        # 已有评估基线（b≥1）或基线提交：没有 Campaign 目录就取不到基线授权四项，reader 变化同样按漂移处理。
+        self.assertTrue(drifted(manifest(dict(digests), baseline=1, commit="8" * 64),
+                                manifest(readers, baseline=1, commit="8" * 64)))
         self.assertTrue(drifted(manifest(dict(digests), commit="8" * 64), manifest(readers, commit="8" * 64)))
+        # 跨基线（evaluation_baseline 或 baseline_commit_sha256 与前序不同）：不是重派，即使四项相同也算漂移。
+        self.assertTrue(drifted(manifest(dict(digests)), manifest(dict(digests), baseline=1, commit="8" * 64)))
+        self.assertTrue(drifted(manifest(dict(digests), baseline=1, commit="8" * 64),
+                                manifest(dict(digests), baseline=2, commit="9" * 64)))
 
     def test_post_run_tooling_receipt_cannot_revive_stopped_ledger(self) -> None:
         """账本已 stop_the_line 的旧 run 即便带 post-run-tooling 收据也只能永久停线。"""

@@ -1317,7 +1317,8 @@ class EvolutionInvalidatedAwaitingSourceTests(unittest.TestCase):
 
 
 class RedispatchEvaluatorAuthorizationTests(unittest.TestCase):
-    """修好接着跑第 9 项：逐字重派时 b0 的 checker／builder 变化只接受已登记工具演进迁移到的授权口径。"""
+    """修好接着跑第 9 项：重派时评估器摘要按演进身份核对——b0 的 checker／builder 变化只接受已登记工具演进迁移到的
+    授权口径；b≥1（第三批 B3-11）须等于该基线授权的四项，不与上一次批次逐字比较；跨基线不是重派。"""
 
     DIGESTS = {"checker_sha256": "1" * 64, "builder_sha256": "2" * 64, "compare_reader_sha256": "3" * 64, "accept_reader_sha256": "4" * 64}
 
@@ -1342,7 +1343,7 @@ class RedispatchEvaluatorAuthorizationTests(unittest.TestCase):
                 mock.patch.object(codex_upgrade, "_b0_evaluator_authorized_digest_history", mock.Mock(return_value=history)):
             self.assertFalse(drifted(*self._pair(checker_sha256="5" * 64), campaign_dir=Path("/c")))
             self.assertTrue(drifted(*self._pair(checker_sha256="6" * 64), campaign_dir=Path("/c")))
-            # b≥1：任何变化仍算漂移（改走 evaluation-recover）。
+            # b≥1：授权口径来自基线 recovery.json（/c 下没有 b1 recovery，取不到）→ 失败关闭。
             self.assertTrue(drifted(*self._pair(baseline=1, checker_sha256="5" * 64), campaign_dir=Path("/c")))
         # 不带 Campaign 目录（旧调用）：checker 变化照常算漂移；b0 只变 reader 不算。
         self.assertTrue(drifted(*self._pair(checker_sha256="5" * 64)))
@@ -1371,6 +1372,32 @@ class RedispatchEvaluatorAuthorizationTests(unittest.TestCase):
                 mock.patch.object(codex_upgrade, "_campaign_tool_evolutions", mock.Mock(return_value=chain)):
             history = codex_upgrade._b0_evaluator_authorized_digest_history(Path("/c"), manifest, "cand")
         self.assertEqual([item["checker_sha256"][0] for item in history], ["1", "5", "7"])
+
+    def test_b1_digests_follow_baseline_authorization_not_prior_batch(self) -> None:
+        """第三批 B3-11：b≥1 的后继四项等于该基线授权四项即放行（前序批次的冻结值不同也无妨）；
+        任一项不等于授权值、取不到授权、跨基线、不带 Campaign 目录都失败关闭。"""
+
+        drifted = supervisor._redispatch_evaluator_digests_drifted
+        authorized = dict(self.DIGESTS, checker_sha256="5" * 64, compare_reader_sha256="8" * 64)
+        with mock.patch.object(codex_upgrade, "_require_formal_campaign", mock.Mock(return_value={})), \
+                mock.patch.object(codex_upgrade, "_authorized_evaluator_digests", mock.Mock(return_value=authorized)) as authorized_mock:
+            prior, successor = self._pair(baseline=1, checker_sha256="5" * 64, compare_reader_sha256="8" * 64)
+            self.assertFalse(drifted(prior, successor, campaign_dir=Path("/c")))
+            authorized_mock.assert_called_with(Path("/c"), {}, "cand", 1)
+            # 只要不等于授权四项——checker 之外的 reader 项也计入——即漂移。
+            self.assertTrue(drifted(*self._pair(baseline=1, checker_sha256="5" * 64), campaign_dir=Path("/c")))
+            self.assertTrue(drifted(
+                *self._pair(baseline=1, checker_sha256="5" * 64, compare_reader_sha256="8" * 64, accept_reader_sha256="9" * 64),
+                campaign_dir=Path("/c"),
+            ))
+            # 跨基线（evaluation_baseline 或 baseline_commit_sha256 与前序不同）：不是重派，即使四项等于授权值也拒绝。
+            self.assertTrue(drifted(prior, dict(successor, evaluation_baseline=2), campaign_dir=Path("/c")))
+            self.assertTrue(drifted(prior, dict(successor, baseline_commit_sha256="a" * 64), campaign_dir=Path("/c")))
+            # 取不到授权口径（基线 recovery 缺失等）：失败关闭。
+            authorized_mock.side_effect = codex_upgrade.ConfigurationError("no recovery")
+            self.assertTrue(drifted(prior, successor, campaign_dir=Path("/c")))
+        # 不带 Campaign 目录：b≥1 任何变化都算漂移。
+        self.assertTrue(drifted(*self._pair(baseline=1, compare_reader_sha256="8" * 64)))
 
 if __name__ == "__main__":
     unittest.main()

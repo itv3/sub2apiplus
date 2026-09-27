@@ -442,6 +442,20 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertTrue(check(successor))
             # 不带基线字段：入口不成立（交给既有逐字重派协议判定）。
             self.assertFalse(check(dict(successor, evaluation_baseline=None, baseline_commit_sha256=None)))
+            # 修好接着跑第 9 项（B3-11）：b1 失败批次的重派按该基线 recovery.json 授权的四项核对评估器摘要
+            # （真实 apply 冻结的 current_evaluator_digests），不与上一次批次逐字比较；不等于授权四项或跨基线即漂移。
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            authorized = codex_upgrade._authorized_evaluator_digests(campaign_dir, manifest, R1, 1)
+            self.assertEqual(authorized["checker_sha256"], "f6" * 32)
+            prior_b1 = dict(successor, evaluator_digests=dict(authorized, compare_reader_sha256="0" * 64))
+            successor_b1 = dict(successor, evaluator_digests=dict(authorized))
+            self.assertFalse(supervisor._redispatch_evaluator_digests_drifted(prior_b1, successor_b1, campaign_dir=campaign_dir))
+            self.assertTrue(supervisor._redispatch_evaluator_digests_drifted(
+                prior_b1, dict(successor_b1, evaluator_digests=dict(authorized, checker_sha256="0" * 64)), campaign_dir=campaign_dir
+            ))
+            self.assertTrue(supervisor._redispatch_evaluator_digests_drifted(
+                prior_b1, dict(successor_b1, evaluation_baseline=2), campaign_dir=campaign_dir
+            ))
             # 修好接着跑第 9 项：同候选同 revision 同基线（b≥1 评估批次失败后的重派）不是开新基线，入口不成立，
             # 交给逐字重派等协议；此前在这里失败关闭，b≥1 评估批次连环境失败都无法重派。
             self.assertFalse(

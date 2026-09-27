@@ -8330,7 +8330,9 @@ def _validate_batched_seal_chain_successor(
         raise SupervisorError(f"{label}：必须是同阶段、同候选的 N+1 批次，批次级冻结字段不得变化。")
     if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
             _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
-        raise SupervisorError(f"{label}：评估器摘要变化不在已登记工具演进的授权口径内。")
+        raise SupervisorError(
+            f"{label}：评估器摘要变化不在授权口径内（b0 须为已登记工具演进迁移到的授权历史值，b≥1 须等于基线授权四项）。"
+        )
     if campaign_dir is None:
         raise SupervisorError(f"{label}：历史校验必须绑定 Campaign 目录。")
     resolved_campaign = Path(campaign_dir).resolve(strict=True)
@@ -9323,8 +9325,9 @@ def _validate_attempt_recovery_segment_successor(
 
     返回 ``False`` 表示前序失败动作不是恢复段 run，应继续匹配其他协议；一旦是，任何漂移都失败关闭：
     段对账（``reconcile-attempt --recovery-revision ar<k>``）与批准的恢复预览已被账本 ``recovery_authorized``
-    消费（事件绑定预览与批准的账本副本），后继批次除失败动作外逐字相同，失败动作只允许把
-    ``--attempt-recovery ar<k>`` 改为 ``ar<k+1>`` 并追加 ``--rerun-failed --recovery-preview <该预览>``。
+    消费（事件绑定预览与批准的账本副本），后继批次与失败批次重派身份相同（修好接着跑第 9 项：同阶段、
+    同动作、同候选、同输入，不再逐字比较动作全文），失败动作把 ``--attempt-recovery ar<k>`` 改为
+    ``ar<k+1>`` 并追加 ``--rerun-failed --recovery-preview <该预览>``。
     """
 
     stop_path = prior_dir / "stop-receipt.json"
@@ -9343,71 +9346,33 @@ def _validate_attempt_recovery_segment_successor(
     if prior_state.get("state") != "failed":
         raise SupervisorError("后继恢复段只能承接 failed 终态的段 run 批次。")
     successor_revision = f"ar{int(prior_revision[2:]) + 1}"
-    prior_actions = prior_manifest.get("actions")
     successor_actions = successor_manifest.get("actions")
-    if (
-        not isinstance(prior_actions, list)
-        or not isinstance(successor_actions, list)
-        or len(prior_actions) != len(successor_actions)
-    ):
-        raise SupervisorError("后继恢复段批次的动作数量与失败批次不一致。")
-    preview_argument: str | None = None
-    normalized_actions: list[Any] = []
-    normalized_prior_actions: list[Any] = []
-    for prior_action, successor_action in zip(prior_actions, successor_actions):
-        if not isinstance(prior_action, Mapping) or not isinstance(successor_action, Mapping):
-            raise SupervisorError("后继恢复段批次的动作非法。")
-        if successor_action.get("action_id") != action_id:
-            normalized_actions.append(successor_action)
-            normalized_prior_actions.append(prior_action)
-            continue
-        command = successor_action.get("command")
-        if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
-            raise SupervisorError("后继恢复段动作命令非法。")
-        normalized_command, preview_argument = _successor_segment_normalized_command(
-            command, prior_revision=prior_revision, successor_revision=successor_revision
+    if not isinstance(successor_actions, list) or not all(isinstance(action, Mapping) for action in successor_actions):
+        raise SupervisorError("后继恢复段批次的动作非法。")
+    failed_successors = [action for action in successor_actions if action.get("action_id") == action_id]
+    if len(failed_successors) != 1:
+        raise SupervisorError("后继恢复段批次必须恰有一个与失败动作同 action_id 的动作。")
+    command = failed_successors[0].get("command")
+    if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
+        raise SupervisorError("后继恢复段动作命令非法。")
+    if _attempt_recovery_run_revision(successor_manifest, action_id) != successor_revision:
+        raise SupervisorError(
+            f"后继恢复段的失败动作必须把 --attempt-recovery {prior_revision} 改为 {successor_revision}。"
         )
-        normalized_action = {**successor_action, "command": normalized_command}
-        prior_command = prior_action.get("command", [])
-        if "--rerun-failed" in prior_command:
-            # 连续中断时前序本身也是后继段；两侧仅剥离各自的已批准恢复参数后比较原动作。
-            prior_command, _ = _successor_segment_normalized_command(
-                prior_command, prior_revision=prior_revision, successor_revision=prior_revision,
-            )
-        normalized_prior_actions.append({**prior_action, "command": prior_command})
-        bindings = successor_action.get("output_bindings")
-        if isinstance(bindings, list):
-            # 动作输出绑定（段 run-summary 路径）随段号变化：按同一映射归一化回前序段。
-            normalized_action["output_bindings"] = [
-                str(item).replace(f"/recovery/{successor_revision}/", f"/recovery/{prior_revision}/") if isinstance(item, str) else item
-                for item in bindings
-            ]
-        normalized_actions.append(normalized_action)
-    normalized_manifest = {**successor_manifest, "actions": normalized_actions}
-    immutable_fields = (
-        "campaign_id",
-        "campaign_plan_sha256",
-        "phase",
-        "predecessor_checkpoint",
-        "original_deadline_at_utc",
-        "actions",
-        "execute_items",
-        "reuse_items",
-        "no_op",
-        "candidate_revision",
-        "candidate_id",
-        "evaluation_baseline",
-        "baseline_commit_sha256",
+    # 后继失败动作必须带 --rerun-failed 与 --recovery-preview <path>（合同由归一化函数校验），这里只取预览路径。
+    _normalized_command, preview_argument = _successor_segment_normalized_command(
+        command, prior_revision=prior_revision, successor_revision=successor_revision
     )
-    normalized_prior = {**prior_manifest, "actions": normalized_prior_actions}
-    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != normalized_prior.get(field)]
-    # 修好接着跑第 9 项：评估器摘要与逐字重派同一口径——b0 只变 reader，或 checker／builder 等于已登记
-    # 工具演进迁移到的授权口径时不算漂移；b≥1 任何变化仍失败关闭（改走 evaluation-recover）。
+    # 修好接着跑第 9 项（第三批 B3-11）：后继段批次按批次身份而不是逐字全文承接——同阶段、同动作
+    # （action_id／operation／item_ids）、同候选（含同基线）、同输入即同一 attempt 的后继段；失败动作的
+    # 命令 argv（段号、恢复预览、工具修复后的参数）与 output_bindings（段 run-summary 路径随段号变化）
+    # 不进身份。评估器摘要按演进身份校验：b0 授权历史口径、b≥1 等于基线授权四项。
+    drifted = _redispatch_identity_drift(prior_manifest, successor_manifest)
     if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
             _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
         drifted.append("evaluator_digests")
     if drifted:
-        raise SupervisorError("后继恢复段批次只允许失败动作换段号并追加恢复预览，漂移字段：" + "、".join(drifted))
+        raise SupervisorError(_redispatch_drift_message("后继恢复段批次只允许失败动作换段号并追加恢复预览", drifted))
     if preview_argument is None:
         raise SupervisorError("后继恢复段批次没有携带恢复预览。")
 
@@ -9477,10 +9442,15 @@ def _validate_reconciled_redispatch_binding(
     effective_class: str,
     label: str,
 ) -> bool:
-    """reservation 前失败的共享重派许可：账本 receipt_passed + 对账收据 + 九个不可变字段。
+    """reservation 前失败的共享重派许可：账本 receipt_passed + 对账收据 + 批次身份一致。
 
     环境前提失败／零请求后处理失败与改造 4 的父启动失败共用这段绑定校验；
     入口条件（stop reason、诊断种类）由各自的协议函数先行判定。
+
+    修好接着跑第 9 项（第三批 B3-11）：重派一致性按 ``_redispatch_identity`` 判定——同阶段、同动作
+    （action_id／operation／item_ids）、同候选（含同评估基线）、同输入（execute／reuse 分区、前序
+    checkpoint）；命令 argv、timeout、output_bindings 等执行细节可随工具修复变化。评估器摘要按
+    ``_redispatch_evaluator_digests_drifted`` 的演进身份校验。
     """
 
     if campaign_dir is None:
@@ -9551,7 +9521,7 @@ def _validate_reconciled_redispatch_binding(
         ):
             raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
     # 许可已被后继消费（阶段随后推进）时，历史链再校验只核对许可事件本身与
-    # 收据绑定、九个不可变字段；当前能否派发由治理预检按账本现状判定。
+    # 收据绑定、批次身份；当前能否派发由治理预检按账本现状判定。
 
     reconciliation_binding = next(
         item
@@ -9618,38 +9588,83 @@ def _validate_reconciled_redispatch_binding(
     ):
         raise SupervisorError(f"{label}的 reservation 前对账事实漂移。")
 
-    immutable_fields = (
-        "campaign_id",
-        "campaign_plan_sha256",
-        "phase",
-        "predecessor_checkpoint",
-        "original_deadline_at_utc",
-        "actions",
-        "execute_items",
-        "reuse_items",
-        "no_op",
-    )
-    drifted = [
-        field
-        for field in immutable_fields
-        if successor_manifest.get(field) != prior_manifest.get(field)
-    ]
-    # 改造 5：同基线逐字重派还要求候选绑定与评估基线三字段逐字相等——工具变化后的重派不是
-    # "逐字"，只能经 evaluation-recover 开新基线承接。evaluator_digests 的唯一例外见
-    # _redispatch_evaluator_digests_drifted（b0 下只核 checker／builder）。
-    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256"):
-        if field in prior_manifest or field in successor_manifest:
-            if successor_manifest.get(field) != prior_manifest.get(field):
-                drifted.append(field)
+    # 修好接着跑第 9 项（B3-11）：批次身份（12 个批次级／候选级字段＋按 action_id 排序的动作三元组）
+    # 一致即视为同一批次的重派；动作全文不再逐字比较。候选绑定含评估基线两字段——跨基线不是重派，
+    # 只能经 evaluation-recover 开新基线承接。评估器摘要按演进身份校验：b0 见
+    # _redispatch_evaluator_digests_drifted 的授权历史口径，b≥1 须等于该基线授权的四项。
+    drifted = _redispatch_identity_drift(prior_manifest, successor_manifest)
     if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
             _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
         drifted.append("evaluator_digests")
     if drifted:
-        raise SupervisorError(
-            "reservation 前环境恢复只允许原批次内容重派，漂移字段："
-            + "、".join(drifted)
-        )
+        raise SupervisorError(_redispatch_drift_message("reservation 前环境恢复只允许原批次内容重派", drifted))
     return True
+
+
+# 修好接着跑第 9 项（第三批 B3-11）：重派身份的批次级／候选级字段。批次级 8 项来自 v2 队列清单的冻结字段
+# （去掉动作全文），候选级 4 项是 staging 模型的候选绑定与评估基线（legacy 清单没有这些键时两侧都取 None）。
+REDISPATCH_IDENTITY_FIELDS = (
+    "campaign_id",
+    "campaign_plan_sha256",
+    "phase",
+    "predecessor_checkpoint",
+    "original_deadline_at_utc",
+    "execute_items",
+    "reuse_items",
+    "no_op",
+    "candidate_revision",
+    "candidate_id",
+    "evaluation_baseline",
+    "baseline_commit_sha256",
+)
+# 每个动作只取"同动作、同输入"的三元组；command argv、timeout_seconds、output_bindings 是执行细节，
+# 可随受监督部署的工具修复变化，不进身份。
+REDISPATCH_ACTION_IDENTITY_FIELDS = ("action_id", "operation", "item_ids")
+# 候选级评估基线两字段：漂移即"跨基线"，不是重派，错误信息指向 evaluation-recover。
+REDISPATCH_BASELINE_FIELDS = ("evaluation_baseline", "baseline_commit_sha256")
+
+
+def _redispatch_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """批次清单的重派身份：12 个批次级／候选级字段 + 按 action_id 排序的 (action_id, operation, item_ids) 列表。
+
+    同阶段、同动作、同候选、同输入的两份清单身份相等；只改命令 argv、timeout、output_bindings 的清单
+    身份不变。动作列表不是 list（清单非法）时原样记入，非对象的动作记为带 ``invalid`` 标记的占位，
+    让比较失败关闭。
+    """
+
+    identity: dict[str, Any] = {field: manifest.get(field) for field in REDISPATCH_IDENTITY_FIELDS}
+    actions = manifest.get("actions")
+    if isinstance(actions, list):
+        triples = [
+            {field: action.get(field) for field in REDISPATCH_ACTION_IDENTITY_FIELDS}
+            if isinstance(action, Mapping)
+            else {"action_id": None, "operation": None, "item_ids": None, "invalid": repr(action)}
+            for action in actions
+        ]
+        identity["actions"] = sorted(triples, key=lambda triple: (str(triple["action_id"]), str(triple)))
+    else:
+        identity["actions"] = actions
+    return identity
+
+
+def _redispatch_identity_drift(
+    prior_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+) -> list[str]:
+    """两份清单重派身份不一致的字段名（按 ``REDISPATCH_IDENTITY_FIELDS`` 顺序，动作差异记为 ``actions``）。"""
+
+    prior = _redispatch_identity(prior_manifest)
+    successor = _redispatch_identity(successor_manifest)
+    return [field for field in (*REDISPATCH_IDENTITY_FIELDS, "actions") if successor.get(field) != prior.get(field)]
+
+
+def _redispatch_drift_message(prefix: str, drifted: Sequence[str]) -> str:
+    """重派拒绝信息：列出漂移字段；含评估基线字段时指明跨基线要走 evaluation-recover。"""
+
+    message = f"{prefix}，漂移字段：" + "、".join(drifted)
+    if any(field in REDISPATCH_BASELINE_FIELDS for field in drifted):
+        message += "；跨评估基线不是同一批次的重派，改走 evaluation-recover 开新基线承接"
+    return message
 
 
 # b0（评估基线为 plan entry）只对这两项设授权口径；compare／accept reader 在 plan 未登记，b0 不设口径。
@@ -9662,47 +9677,66 @@ def _redispatch_evaluator_digests_drifted(
     *,
     campaign_dir: Path | None = None,
 ) -> bool:
-    """reservation 前逐字重派时，评估器摘要是否构成漂移。
+    """重派（含恢复段后继、seal 链续派）时，评估器摘要是否构成漂移——按演进身份而不是与前序逐字相等。
 
-    默认四项必须逐字相等（改造 5）。唯一例外：前后批次都处于 b0（evaluation_baseline 与
-    baseline_commit_sha256 均为空）、四项键集合相同且 checker／builder 逐字相等时，compare／accept
-    reader 的变化不算漂移——b0 本就不对 reader 设授权口径，reservation 前失败时尚无任何评估产物，
-    reader 闭包随受监督部署的工具修复变化并不绕过评估基线；其余任何情形（有基线、键集合不同、
-    checker／builder 变化、一侧缺失）仍按漂移失败关闭。2026-09-26 c01570 VC-5 批次 9：修复监督器
-    受控维护竞态只改变两项 reader 摘要，逐字重派被拒、evaluation-recover 又因候选尚未封存不适用。
+    "同候选"含同基线：``evaluation_baseline``／``baseline_commit_sha256`` 与前序不同即跨基线，不是重派
+    （改走 evaluation-recover），四项即使相同也不能沿用。同基线下四项键集合必须相同、一侧缺失即漂移；
+    四项相同不算漂移；不同时：
+
+    - b0（两字段均为空）：compare／accept reader 的变化不算漂移——b0 本就不对 reader 设授权口径，
+      reservation 前失败时尚无任何评估产物（2026-09-26 c01570 VC-5 批次 9：修复监督器受控维护竞态只改变
+      两项 reader 摘要）；checker／builder 的变化只接受该候选 b0 授权历史中的值（plan 冻结值与每次随已
+      登记工具演进迁移到的 to 值，只增不减，历史链重放时早先放行的后继依然成立）；授权没有迁移（b0
+      已有评估产出）时照常失败关闭，改走 evaluation-recover 开新基线。
+    - b≥1（修好接着跑第 9 项，第三批 B3-11）：后继四项须等于该基线 ``recovery.json`` 授权的四项
+      （``_authorized_evaluator_digests``），不再要求与上一次批次逐字相等；不等即漂移。
+
+    不带 Campaign 目录（旧调用）时，b0 的 checker／builder 变化与 b≥1 的任何变化都按漂移失败关闭。
     """
 
+    if any(successor_manifest.get(field) != prior_manifest.get(field) for field in REDISPATCH_BASELINE_FIELDS):
+        return True
     prior = prior_manifest.get("evaluator_digests")
     successor = successor_manifest.get("evaluator_digests")
     if prior == successor:
         return False
-    if (
-        prior_manifest.get("evaluation_baseline") is not None
-        or successor_manifest.get("evaluation_baseline") is not None
-        or prior_manifest.get("baseline_commit_sha256") is not None
-        or successor_manifest.get("baseline_commit_sha256") is not None
-        or not isinstance(prior, Mapping)
-        or not isinstance(successor, Mapping)
-        or set(prior) != set(successor)
-    ):
+    if not isinstance(prior, Mapping) or not isinstance(successor, Mapping) or set(prior) != set(successor):
         return True
-    if not any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS):
-        return False
-    # 修好接着跑第 9 项：b0 下 checker／builder 的变化只接受"随已登记工具演进迁移的 b0 授权口径"——
-    # 后继两项须等于该候选 b0 授权历史中的某一值（plan 冻结值或某次迁移到的演进 to 值）。授权历史
-    # 只增不减，历史链重放时早先放行的后继依然成立；授权没有迁移（b0 已有评估产出）时照常失败关闭，
-    # 改走 evaluation-recover 开新基线。
     candidate_id = successor_manifest.get("candidate_id")
-    if campaign_dir is None or not isinstance(candidate_id, str) or not candidate_id:
+    baseline = successor_manifest.get("evaluation_baseline")
+    commit = successor_manifest.get("baseline_commit_sha256")
+    if baseline is None and commit is None:
+        if not any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS):
+            return False
+        if campaign_dir is None or not isinstance(candidate_id, str) or not candidate_id:
+            return True
+        from tools.official_client_capture import codex_upgrade as upgrade
+
+        try:
+            manifest = upgrade._require_formal_campaign(Path(campaign_dir))
+            history = upgrade._b0_evaluator_authorized_digest_history(Path(campaign_dir), manifest, candidate_id)
+        except upgrade.ConfigurationError:
+            return True
+        return {key: successor.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS} not in history
+    if (
+        campaign_dir is None
+        or not isinstance(candidate_id, str)
+        or not candidate_id
+        or isinstance(baseline, bool)
+        or not isinstance(baseline, int)
+        or baseline < 1
+        or not isinstance(commit, str)
+        or not commit
+    ):
         return True
     from tools.official_client_capture import codex_upgrade as upgrade
 
     try:
         manifest = upgrade._require_formal_campaign(Path(campaign_dir))
-        history = upgrade._b0_evaluator_authorized_digest_history(Path(campaign_dir), manifest, candidate_id)
+        authorized = upgrade._authorized_evaluator_digests(Path(campaign_dir), manifest, candidate_id, baseline)
     except upgrade.ConfigurationError:
         return True
-    return {key: successor.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS} not in history
+    return {key: successor.get(key) for key in vc_artifacts.EVALUATOR_DIGEST_FIELDS} != authorized
 
 
 def _validate_batched_stage_review_successor(
