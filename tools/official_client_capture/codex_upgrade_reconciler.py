@@ -569,6 +569,13 @@ def _paused_next_command(decision: Mapping[str, Any], resume_from: str) -> str:
         steps.append("accounting-resolve preview/apply（为未决 operation 补账）")
     if "environment" in kinds:
         steps.append("修复环境并取得晚于污染的干净环境复核后 environment-isolate preview/apply（隔离污染 attempt）")
+    if "root_cause_repair" in kinds:
+        # 第三批 B3-9：同根因重试上限只暂停，登记修复证据（清零达上限的根因）后重新对账即可继续。
+        steps.append(
+            "登记根因修复证据：本 Campaign 账本已 stop_required 用 campaign-resume preview/apply（绑定修复提交、离线回归与部署收据）；"
+            "只是项目总账根因达上限用 codex_upgrade_project_ledger record-root-cause-repair（code：修复提交／回归收据／部署收据）；"
+            "随后重新执行本对账"
+        )
     return "；".join(steps) + f"；批准后{resume_from}"
 
 
@@ -1119,6 +1126,8 @@ def _decide(
     reasons: list[str] = []
     terminal_reason: str | None = None
     deadline_paused = False
+    # 第三批 B3-9（第 10 项②③）：同根因重试上限不再写终态，改为暂停到修复证据登记（campaign-resume 清零该根因）为止。
+    root_cause_paused = False
 
     def stop(reason: str, note: str) -> None:
         nonlocal terminal_reason
@@ -1156,7 +1165,9 @@ def _decide(
     if not identity.get("unchanged"):
         stop("identity_changed", "当前有效 wire 身份或策略摘要已变化")
     if ledger_status == "stop_required":
-        stop("root_cause_limit", "Campaign 账本重试上限已要求停线，禁止继续执行 Job")
+        # 第三批 B3-9（第 10 项②）：账本同根因重试上限不再写终态——暂停，campaign-resume 登记修复证据、清零该根因后继续。
+        root_cause_paused = True
+        reasons.append("Campaign 账本同根因重试已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）")
     elif ledger_status == "deadline_paused":
         deadline_paused = True
         reasons.append("Campaign 计时预算已暂停")
@@ -1187,12 +1198,14 @@ def _decide(
         & set(project_ledger.root_causes_at_limit_for(head, target_version))
     )
     if at_limit:
-        stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
+        # 第三批 B3-9（第 10 项②③）：只挡本次要重试的根因，且不写终态——暂停到修复证据登记为止。
+        root_cause_paused = True
+        reasons.append(f"根因 {at_limit} 累计失败已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）")
     decision = (
         DECISION_STOP
         if terminal_reason is not None
         else DECISION_PAUSED
-        if deadline_paused or budget_paused or accounting_paused or environment_paused
+        if deadline_paused or budget_paused or accounting_paused or environment_paused or root_cause_paused
         else DECISION_RECOVERABLE
     )
     scoped_counts = project_ledger.root_cause_counts_for(head, target_version)
@@ -1210,6 +1223,7 @@ def _decide(
                 ("request_budget", budget_paused),
                 ("accounting", accounting_paused),
                 ("environment", environment_paused),
+                ("root_cause_repair", root_cause_paused),
             )
             if on
         ]
@@ -3078,7 +3092,9 @@ def reconcile_attempt(
     elif decision["decision"] == DECISION_PAUSED:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("预算暂停期间不接受恢复批准；必须先批准延期")
-        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
+        if set(decision.get("pause_kinds") or []) - {"root_cause_repair"}:
+            # 纯根因修复暂停（第三批 B3-9）不写预算暂停：账本已处于 stop_required，预算暂停会被账本拒绝。
+            result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
         result["next_command"] = _paused_next_command(decision, "从原对账 checkpoint 继续")
     else:
         if approve_recovery_sha256 is not None:
@@ -4111,7 +4127,9 @@ def reconcile_supervisor_run(
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
     elif decision["decision"] == DECISION_PAUSED:
-        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
+        if set(decision.get("pause_kinds") or []) - {"root_cause_repair"}:
+            # 纯根因修复暂停（第三批 B3-9）不写预算暂停：账本已处于 stop_required，预算暂停会被账本拒绝。
+            result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_pause_time(observed))
         result["next_command"] = _paused_next_command(decision, "从原对账 checkpoint 继续")
     else:
         with codex_upgrade._campaign_lock(campaign_dir):

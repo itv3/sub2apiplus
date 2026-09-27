@@ -1929,6 +1929,22 @@ def root_causes_at_limit_for(head: Mapping[str, Any], target_version: str | None
     return list(head.get("root_causes_at_limit_base", head["root_causes_at_limit"]))
 
 
+def _blocking_root_causes(
+    head: Mapping[str, Any], target_version: str | None, retry_root_cause_ids: list[str] | None
+) -> list[str]:
+    """达上限根因中挡住本次动作的子集。
+
+    第三批 B3-9（第 10 项③）：给出待重试根因集合（续跑路径从对账收据取）时只取交集——别的根因达上限不挡本次；
+    未给出（新派发、无根因上下文）时整版本保守挡，与注册准入一致。
+    """
+
+    at_limit = root_causes_at_limit_for(head, target_version)
+    if retry_root_cause_ids is None:
+        return list(at_limit)
+    retry = {str(value) for value in retry_root_cause_ids}
+    return sorted(set(at_limit) & retry)
+
+
 def admission_problems(
     plan: Mapping[str, Any],
     head: Mapping[str, Any],
@@ -2526,8 +2542,9 @@ class RuntimeAdmission:
         *,
         expected_sequence: int,
         expected_head_sha256: str,
+        retry_root_cause_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """在 reservation 前复核 probe 后 head 与剩余额度。"""
+        """在 reservation 前复核 probe 后 head 与剩余额度。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。"""
 
         _sha_field(expected_head_sha256, "reservation expected_head_sha256")
         if (
@@ -2547,8 +2564,8 @@ class RuntimeAdmission:
         remaining = current.get("remaining_live_requests")
         if remaining is not None and remaining <= 0:
             raise ProjectLedgerError("probe 已耗尽项目请求预算，拒绝 reservation")
-        at_limit = root_causes_at_limit_for(
-            current, campaign_target_version(current, str(self.campaign_plan["campaign_id"]))
+        at_limit = _blocking_root_causes(
+            current, campaign_target_version(current, str(self.campaign_plan["campaign_id"])), retry_root_cause_ids
         )
         if at_limit:
             raise ProjectLedgerError(f"probe 入账后存在达到上限的根因，拒绝 reservation：{at_limit}")
@@ -2561,8 +2578,9 @@ def _runtime_admission_problems(
     campaign_plan: Mapping[str, Any],
     *,
     now: datetime | None,
+    retry_root_cause_ids: list[str] | None = None,
 ) -> list[str]:
-    """抓包派发门禁；同时检查项目与 Campaign 的绝对截止。"""
+    """抓包派发门禁；同时检查项目与 Campaign 的绝对截止。``retry_root_cause_ids`` 给出时根因上限只挡交集（第三批 B3-9）。"""
 
     problems: list[str] = []
     campaign_id = str(campaign_plan["campaign_id"])
@@ -2579,7 +2597,7 @@ def _runtime_admission_problems(
     remaining = head.get("remaining_live_requests")
     if remaining is not None and remaining <= 0:
         problems.append("项目请求预算为 0")
-    at_limit = root_causes_at_limit_for(head, campaign_target_version(head, campaign_id))
+    at_limit = _blocking_root_causes(head, campaign_target_version(head, campaign_id), retry_root_cause_ids)
     if at_limit:
         problems.append(f"根因达上限：{at_limit}")
     current = now or datetime.now(timezone.utc)
@@ -2604,8 +2622,9 @@ def runtime_admission_scope(
     require: bool,
     command: str = "capture-run",
     now: datetime | None = None,
+    retry_root_cause_ids: list[str] | None = None,
 ) -> Iterator[RuntimeAdmission | None]:
-    """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。"""
+    """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。"""
 
     root = find_project_ledger(campaign_dir)
     if root is None:
@@ -2630,6 +2649,7 @@ def runtime_admission_scope(
             head,
             campaign_plan,
             now=now,
+            retry_root_cause_ids=retry_root_cause_ids,
         )
         problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
         if problems:
@@ -2685,7 +2705,14 @@ def _check_fixture_only(root: Path, plan: Mapping[str, Any], campaign_dir: Path)
         raise ProjectLedgerError("fixture_only 总账只允许 staging 路径下的 Campaign") from error
 
 
-def assert_campaign_admitted(campaign_dir: Path, *, command: str, require: bool, now: datetime | None = None) -> dict[str, Any] | None:
+def assert_campaign_admitted(
+    campaign_dir: Path,
+    *,
+    command: str,
+    require: bool,
+    now: datetime | None = None,
+    retry_root_cause_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
     """消费者门禁：补齐器先行，再锁内重放；不满足即拒绝。"""
 
     if command not in CONSUMER_COMMANDS:
@@ -2717,7 +2744,7 @@ def assert_campaign_admitted(campaign_dir: Path, *, command: str, require: bool,
             problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
         if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
             problems.append("项目请求预算为 0")
-        at_limit = root_causes_at_limit_for(head, campaign_target_version(head, campaign_id))
+        at_limit = _blocking_root_causes(head, campaign_target_version(head, campaign_id), retry_root_cause_ids)
         if at_limit:
             problems.append(f"根因达上限：{at_limit}")
         problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))

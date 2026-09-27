@@ -3824,5 +3824,35 @@ raise SystemExit(9)
                 )
 
 
+class RootCauseLimitPermanentConditionTests(unittest.TestCase):
+    """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
+
+    def _hits(self, *, root_cause_id: str | None, failure_class: str = "execution-failure", status: str = "active") -> bool:
+        head = {
+            "root_causes_at_limit": ["rc1-a"],
+            "root_causes_at_limit_by_version": {"0.157.0": ["rc1-a"], "0.154.0": []},
+            "root_causes_at_limit_base": [],
+        }
+        with mock.patch.object(supervisor.project_ledger, "find_project_ledger", return_value=Path("/ledger")), mock.patch.object(
+            supervisor.project_ledger, "replay_head", return_value=head
+        ), mock.patch.object(supervisor.project_ledger, "project_lock", return_value=contextlib.nullcontext()), mock.patch.object(
+            supervisor.project_ledger, "_load_plan", return_value=({}, b"")
+        ):
+            return supervisor._candidate_failure_hits_permanent_condition(
+                Path("/campaign"), {"status": status, "target_version": "0.157.0"},
+                failure_class=failure_class, root_cause_id=root_cause_id,
+            )
+
+    def test_only_this_failures_root_cause_at_limit_is_permanent(self) -> None:
+        self.assertTrue(self._hits(root_cause_id="rc1-a"))
+        self.assertFalse(self._hits(root_cause_id="rc1-b"))
+        # 没有根因上下文：整版本保守判永久（与旧口径一致）。
+        self.assertTrue(self._hits(root_cause_id=None))
+        # 永久失败类与账本已停线／完成仍永久，不看根因。
+        self.assertTrue(self._hits(root_cause_id="rc1-b", failure_class="evidence-integrity"))
+        self.assertTrue(self._hits(root_cause_id="rc1-b", status="stopped"))
+        self.assertTrue(self._hits(root_cause_id="rc1-b", status="stop_required"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10451,8 +10451,13 @@ def _candidate_failure_hits_permanent_condition(
     ledger_summary: Mapping[str, Any],
     *,
     failure_class: str,
+    root_cause_id: str | None = None,
 ) -> bool:
-    """永久条件保留根因与完整性门禁；墙钟到期、请求预算耗尽与账务无法核清（修好接着跑第 12、14 项）单独暂停。"""
+    """永久条件保留根因与完整性门禁；墙钟到期、请求预算耗尽与账务无法核清（修好接着跑第 12、14 项）单独暂停。
+
+    第三批 B3-9（第 10 项③）：给出本次根因时，项目总账的达上限根因只有包含它才算永久条件——别的根因达上限
+    不牵连本次失败（本次仍按可恢复／审核收口，续跑时由对账按根因暂停）。
+    """
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
@@ -10468,7 +10473,8 @@ def _candidate_failure_hits_permanent_condition(
     except project_ledger.ProjectLedgerError as error:
         raise SupervisorError(f"项目总账重放失败：{error}") from error
     # 只看本 Campaign 目标版本的根因上限，其他版本项目的记录不再牵连。
-    if project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version")):
+    at_limit = project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version"))
+    if at_limit and (root_cause_id is None or root_cause_id in at_limit):
         return True
     return False
 
@@ -10721,7 +10727,7 @@ def _close_failed_campaign_timing_ledger(
             "事务闭合后以 reconcile-supervisor-run 对账重入。"
         )
     budget_paused = bool(expired_scopes) and not _candidate_failure_hits_permanent_condition(
-        campaign_dir, budget_state, failure_class=failure_class
+        campaign_dir, budget_state, failure_class=failure_class, root_cause_id=root_cause_id
     )
     # R4×R8：本次失败的 stage_abandoned 已写、后续 review 未写（中途被杀）时，先在收口锁内补齐 review
     # 再登记暂停；否则阶段层延期找不到 review 阶段，账本永久卡在“已放弃、未审核”。
@@ -10812,7 +10818,7 @@ def _close_failed_campaign_timing_ledger(
             )
             and before.get("status") == "active"
             and not _candidate_failure_hits_permanent_condition(
-                campaign_dir, before, failure_class=failure_class
+                campaign_dir, before, failure_class=failure_class, root_cause_id=root_cause_id
             )
         ):
             if before.get("active_phase") != phase:
@@ -10879,13 +10885,13 @@ def _close_failed_campaign_timing_ledger(
             and isinstance(candidate_id, str)
             and bool(candidate_id)
             and not _candidate_failure_hits_permanent_condition(
-                campaign_dir, before, failure_class=failure_class
+                campaign_dir, before, failure_class=failure_class, root_cause_id=root_cause_id
             )
         )
         stage_review = (
             phase in {"VC-1", "VC-2", "VC-3"}
             and not _candidate_failure_hits_permanent_condition(
-                campaign_dir, before, failure_class=failure_class
+                campaign_dir, before, failure_class=failure_class, root_cause_id=root_cause_id
             )
         )
         review_status = "candidate_review_required" if candidate_review else "stage_review_required"

@@ -18206,10 +18206,11 @@ def _reconcile_staging_abort_receipt(
         "root_cause_count": result["project_head"]["root_cause_count"],
     }
     if result["status"] == reconciler.DECISION_PAUSED:
-        # 预算到期只是暂停（对账已登记暂停事实），不是停线：批准延期后按同序号重新派发即从原 checkpoint 续接。
+        # 预算到期、账务未决、环境污染或同根因达上限（第三批 B3-9）只是暂停（对账已登记暂停事实），不是停线：
+        # 按暂停种类处理后按同序号重新派发即从原 checkpoint 续接。
         raise StagingDeadlinePaused(
-            f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账判定预算已到期暂停："
-            "deadline-extend preview/apply 批准延期后，按同序号重新派发。"
+            f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账判定暂停："
+            + reconciler._paused_next_command(result["decision"], "按同序号重新派发")
         )
     if result["status"] != reconciler.DECISION_RECOVERABLE:
         raise StagingStopTheLine(
@@ -18451,6 +18452,7 @@ def _reconcile_prepared_parent_run(
         }
         decision = "closed"
         terminal_reason = None
+        pause_kinds = None
         root_cause_id = str(receipt["root_cause"]["root_cause_id"])
     else:
         try:
@@ -18460,6 +18462,8 @@ def _reconcile_prepared_parent_run(
         receipt_binding = result["reconciliation_receipt"]
         decision = str(result["decision"]["decision"])
         terminal_reason = result["decision"].get("terminal_reason")
+        # 第三批 B3-9：暂停种类随判定带出，入口按种类给下一步（同根因达上限不再是"预算到期"）。
+        pause_kinds = result["decision"].get("pause_kinds")
         root_cause_id = str(result["root_cause"]["root_cause_id"])
     stop_reason = _read_stop_reason(run_dir) or ""
     if stop_reason == codex_upgrade_supervisor.PREPARED_ABANDONED_REASON:
@@ -18506,6 +18510,7 @@ def _reconcile_prepared_parent_run(
         "abort_written": abort_written,
         "decision": decision,
         "terminal_reason": terminal_reason,
+        "pause_kinds": pause_kinds,
         "root_cause_id": root_cause_id,
         "reconciliation_receipt": dict(receipt_binding),
     }
@@ -18613,7 +18618,7 @@ def _reconcile_staging_orphans(
         handled.append(outcome)
         changed = True
         if outcome["decision"] == reconciler.DECISION_PAUSED:
-            paused.append(f"父 run {run_dir.name} 对账判定预算已到期暂停")
+            paused.append(f"父 run {run_dir.name} 对账判定暂停（预算到期、账务未决、环境污染或同根因达上限）")
         elif outcome["decision"] not in {reconciler.DECISION_RECOVERABLE, "closed"}:
             stops.append(
                 f"父 run {run_dir.name} 对账命中永久停线：{outcome['terminal_reason']}"
@@ -18935,9 +18940,14 @@ def _compile_and_run_vc_batch_staging(
                 f"序号 {sequence:04d} 未占；对账根因 {outcome['root_cause_id']}"
             )
             if outcome["decision"] == "paused":
+                # 第三批 B3-9：暂停种类可能是预算到期、账务未决、环境污染或同根因达上限，下一步按种类给出。
+                from tools.official_client_capture import codex_upgrade_reconciler as paused_reconciler
+
                 raise StagingDeadlinePaused(
-                    f"{summary}；已归档 {moved or '无'}；对账判定预算已到期暂停："
-                    "deadline-extend preview/apply 批准延期后，按同序号重新派发。"
+                    f"{summary}；已归档 {moved or '无'}；对账判定暂停："
+                    + paused_reconciler._paused_next_command(
+                        {"pause_kinds": outcome.get("pause_kinds")}, "按同序号重新派发"
+                    )
                 )
             if outcome["decision"] not in {"recoverable", "closed"}:
                 raise StagingStopTheLine(
@@ -22395,6 +22405,36 @@ def _campaign_status_with_deadlines(campaign_dir: Path, candidate_id: str | None
     return result
 
 
+def _recovery_preview_retry_root_cause_ids(preview_path: Any) -> list[str] | None:
+    """已批准恢复预览对应对账收据登记的根因集合（第三批 B3-9：续跑只挡本次要重试的根因）。
+
+    预览与对账收据（``attempt-reconciliation.json``）同目录；预览缺省、路径不可信或收据读不到时返回 None，
+    门禁退回整版本保守挡。收据本身由 ``load_approved_recovery_preview`` 按摘要核对，这里只取根因 ID。
+    """
+
+    if not isinstance(preview_path, Path):
+        return None
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    if preview_path.is_symlink() or not preview_path.is_file():
+        return None
+    receipt_path = preview_path.resolve().parent / reconciler.ATTEMPT_RECEIPT_NAME
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        return None
+    try:
+        receipt = _read_json(receipt_path, "attempt 对账收据")
+    except ConfigurationError:
+        return None
+    ids: list[str] = []
+    for item in receipt.get("root_causes") if isinstance(receipt.get("root_causes"), list) else []:
+        if isinstance(item, Mapping) and isinstance(item.get("root_cause_id"), str):
+            ids.append(item["root_cause_id"])
+    cause = receipt.get("root_cause")
+    if isinstance(cause, Mapping) and isinstance(cause.get("root_cause_id"), str):
+        ids.append(cause["root_cause_id"])
+    return sorted(set(ids)) if ids else None
+
+
 def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace) -> None:
     """A0a-12 消费者门禁：resume 与 capture-official seal 开始前先补齐再锁内重放总账。"""
 
@@ -22424,10 +22464,15 @@ def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace)
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return
     manifest = _read_json(manifest_path, "Campaign 清单")
+    # 第三批 B3-9（第 10 项③）：resume 按已批准恢复预览对应的根因集合只挡交集；其余消费者命令整版本保守挡。
+    retry_root_cause_ids = (
+        _recovery_preview_retry_root_cause_ids(getattr(arguments, "recovery_preview", None)) if consumer == "resume" else None
+    )
     codex_upgrade_project_ledger.assert_campaign_admitted(
         campaign_dir,
         command=consumer,
         require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+        retry_root_cause_ids=retry_root_cause_ids,
     )
 
 
@@ -43088,8 +43133,12 @@ def _reserve_candidate_capture_attempt(
     allow_failed_rerun: bool,
     deadline: incremental_recovery.WallClockDeadline,
     lease: CampaignLease | None,
+    retry_root_cause_ids: list[str] | None = None,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     """在项目锁内完成静态门禁、受控 probe、总账 CAS 与 reservation。
+
+    ``retry_root_cause_ids``（第三批 B3-9）：续跑时由已批准恢复预览给出本次要重试的根因集合，运行期准入与
+    reservation CAS 只挡与达上限根因的交集；新派发不给（整版本保守挡）。
 
     锁顺序固定为项目锁 → Campaign 锁。静态失败不会产生 wire、attempt 或
     reservation；probe 的每次真实 dispatch 先形成本地 result，再逐条幂等入账。
@@ -43126,6 +43175,7 @@ def _reserve_candidate_capture_attempt(
         campaign_dir,
         require=require_ledger,
         command="capture-candidate-readiness",
+        retry_root_cause_ids=retry_root_cause_ids,
     ) as admission:
         if admission is None:
             raise ConfigurationError("Candidate 就绪 probe 缺少项目总账作用域。")
@@ -43180,6 +43230,7 @@ def _reserve_candidate_capture_attempt(
         reservation_head = admission.reservation_cas(
             expected_sequence=admission.head_sequence,
             expected_head_sha256=admission.head_sha256,
+            retry_root_cause_ids=retry_root_cause_ids,
         )
         session_id = probe_receipt.get("session_id")
         if not isinstance(session_id, str) or not SAFE_ID_RE.fullmatch(session_id):
@@ -49704,6 +49755,8 @@ def _run_capture_attempt(
             allow_failed_rerun=bool(getattr(arguments, "rerun_failed", False)),
             deadline=deadline,
             lease=_lease,
+            # 第三批 B3-9：续跑按已批准恢复预览对应的根因集合只挡交集；新派发（无预览）整版本保守挡。
+            retry_root_cause_ids=_recovery_preview_retry_root_cause_ids(getattr(arguments, "recovery_preview", None)),
         )
     else:
         attempt_root, reservation = _reserve_capture_attempt(
@@ -60869,8 +60922,10 @@ def _campaign_resume_preview(
     except (reconciler.ReconcilerError, reconciler.closeout.VC0CloseoutError) as error:
         raise ConfigurationError(f"campaign-resume 必须绑定当前工具的通过部署收据：{error}") from error
     assert deployment is not None
-    if stop_event is not None and _rfc3339_datetime(deployment["created_at_utc"], "部署收据时间") <= _rfc3339_datetime(
-        stop_event["recorded_at_utc"], "停线事件时间"
+    # 第三批 B3-9：同根因达上限只暂停、没有停线事件时，以导致达上限的最后一次失败事件为修复部署的时间基准。
+    reference_event = stop_event if stop_event is not None else facts.get("limit_event")
+    if reference_event is not None and _rfc3339_datetime(deployment["created_at_utc"], "部署收据时间") <= _rfc3339_datetime(
+        reference_event["recorded_at_utc"], "停线事件时间"
     ):
         raise ConfigurationError("部署收据早于停线；修复必须在停线之后受监督部署。")
     regression = Path(regression_receipt)

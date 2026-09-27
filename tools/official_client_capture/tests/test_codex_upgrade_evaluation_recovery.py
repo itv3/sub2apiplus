@@ -519,12 +519,13 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertEqual(sorted(p.name for p in (campaign_dir / "assertions" / R1 / "checkpoints").iterdir()), checkpoints_before)
             index = artifacts.validate_evaluation_run(_read(campaign_dir / "assertions" / R1 / "evaluation-run.json"))
             self.assertEqual({row["rule"]: row["status"] for row in index["rules"]}, {"SPEC-EP-006": "fail", "SPEC-H1-001": "pass"})
-            # 再对账即同根因第二次（同一动作 VC-5:assert-rules 再次失败）→ 按 root_causes_at_limit 停线
-            # （门禁正确行为，不进恢复主链）。
+            # 再对账即同根因第二次（同一动作 VC-5:assert-rules 再次失败）→ 第三批 B3-9：同根因达上限只暂停
+            # （暂停种类 root_cause_repair，登记修复证据后重新对账继续），不再写终态。
             second = reconciler.reconcile_supervisor_run(run_b0_again, campaign_dir)
-            self.assertEqual(second["status"], "permanent_stop")
+            self.assertEqual(second["status"], "paused")
             self.assertEqual(second["root_cause"]["root_cause_id"], reconciled["root_cause"]["root_cause_id"])
-            self.assertIn("permanent_stop", second)
+            self.assertEqual(second["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertNotIn("permanent_stop", second)
 
     def test_reevaluate_opens_tool_evolution_baseline_without_failed_run(self) -> None:
         """第三批 B3-3：b0 已有评估产出后修评估器（checker 摘要变化）——reevaluate 不依赖失败父 run：预览给出触发事实，

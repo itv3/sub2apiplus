@@ -29,7 +29,7 @@ class CampaignResumeTests(unittest.TestCase):
         self.addCleanup(self.helper.doCleanups)
 
     def _stopped(self, root: Path) -> tuple[dict, str, str]:
-        """同根因第二次失败：对账判 root_cause_limit，计时账本 stopped、总账终态。"""
+        """同根因第二次失败：第三批 B3-9 起对账只暂停（root_cause_repair），计时账本 stop_required、总账无终态。"""
 
         fixture = self.helper._b0_fixture(root)
         campaign_dir = fixture["campaign_dir"]
@@ -37,7 +37,8 @@ class CampaignResumeTests(unittest.TestCase):
         self.assertEqual(reconciler.reconcile_attempt(campaign_dir, first)["status"], "recoverable")
         second = self.helper._b0_orphan_attempt(fixture)
         stopped = reconciler.reconcile_attempt(campaign_dir, second)
-        self.assertEqual((stopped["status"], stopped["decision"]["terminal_reason"]), ("permanent_stop", "root_cause_limit"))
+        self.assertEqual((stopped["status"], stopped["decision"]["pause_kinds"]), ("paused", ["root_cause_repair"]))
+        self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stop_required")
         return fixture, second, str(stopped["root_cause"]["root_cause_id"])
 
     def _fresh_deployment(self, fixture: dict, *, seconds: int = 2) -> Path:
@@ -99,7 +100,8 @@ class CampaignResumeTests(unittest.TestCase):
             preview = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
             self.assertEqual(preview["status"], "approval_required")
             self.assertEqual(preview["timing"]["cleared_root_cause_ids"], [cause])
-            self.assertEqual(preview["project"]["terminal"]["terminal_reason"], "root_cause_limit")
+            # 第三批 B3-9：总账没有终态（上限只暂停），campaign-resume 仍按项目 at_limit 清零该根因。
+            self.assertIsNone(preview["project"]["terminal"])
             self.assertEqual(preview["project"]["cleared_root_cause_ids"], [cause])
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "批准摘要与重算"):
                 codex_upgrade._campaign_resume_command(self._arguments(fixture, regression, approve="0" * 64))
@@ -109,7 +111,8 @@ class CampaignResumeTests(unittest.TestCase):
             self.assertEqual((applied["status"], applied["resume_epoch"]), ("resumed", 1))
             # 计时账本：清零根因，以原起点重开被放弃的阶段为 recovery_required；总账：撤销终态、清零本版本根因。
             summary = timing_ledger.inspect_ledger(fixture["timing_ledger"])
-            self.assertEqual((summary["status"], summary["active_phase"], summary["recovery_root_cause_id"]), ("recovery_required", "VC-0", cause))
+            # 第三批 B3-9：上限只暂停、没有放弃阶段，清零后账本直接回到 active（VC-0 仍在进行中），由重新对账再登记恢复。
+            self.assertEqual((summary["status"], summary["active_phase"], summary["recovery_root_cause_id"]), ("active", "VC-0", None))
             self.assertEqual(summary["same_root_cause_failures"][cause], 0)
             head = project_ledger.replay_head(fixture["ledger"])
             self.assertNotIn(campaign_id, head["terminal_campaigns"])
@@ -128,17 +131,19 @@ class CampaignResumeTests(unittest.TestCase):
             replay = reconciler.reconcile_attempt(campaign_dir, second)
             self.assertEqual(replay["status"], "recoverable", replay.get("decision"))
             self.assertIn("recovery_preview", replay)
-            # 恢复后同根因再失败两次：按恢复纪元写新的停线与终态，不被旧幂等键吞掉。
+            # 恢复后同根因再失败两次：第三批 B3-9 起同样只暂停（root_cause_repair），账本回到 stop_required、总账仍无终态，
+            # 再次 campaign-resume 即可（恢复纪元 e1 的幂等键不吞掉新一轮）。
             third = self.helper._b0_orphan_attempt(fixture)
             self.assertEqual(reconciler.reconcile_attempt(campaign_dir, third)["status"], "recoverable")
             fourth = self.helper._b0_orphan_attempt(fixture)
             stopped_again = reconciler.reconcile_attempt(campaign_dir, fourth)
-            self.assertEqual((stopped_again["status"], stopped_again["decision"]["terminal_reason"]), ("permanent_stop", "root_cause_limit"))
-            self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stopped")
+            self.assertEqual((stopped_again["status"], stopped_again["decision"]["pause_kinds"]), ("paused", ["root_cause_repair"]))
+            self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stop_required")
             event_ids = [event["event_id"] for event, _raw in timing_ledger._load_events(fixture["timing_ledger"])]
-            self.assertIn(f"reconcile-stop-the-line-{fourth}-e1", event_ids)
+            self.assertNotIn(f"reconcile-stop-the-line-{fourth}-e1", event_ids)
             head = project_ledger.replay_head(fixture["ledger"])
-            self.assertEqual(head["terminal_campaigns"][campaign_id]["operation_id"], f"campaign-terminal:{campaign_id}:e1")
+            self.assertNotIn(campaign_id, head["terminal_campaigns"])
+            self.assertEqual(head["root_cause_counts"][cause], 2)
 
     def test_policy_evolution_moves_the_resume_policy_baseline(self) -> None:
         """第三批 R1：策略变化不再让 campaign-resume 无路可走——未登记策略演进时零写入拒绝并指向 tool-evolution，
@@ -265,7 +270,7 @@ class CampaignResumeTests(unittest.TestCase):
                 codex_upgrade._apply_campaign_resume(
                     fixture["campaign_dir"], fixture["manifest"], forged, approved_by="老板", next_steps=""
                 )
-            self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stop_required")
 
 
 

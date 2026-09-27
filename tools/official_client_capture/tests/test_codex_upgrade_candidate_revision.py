@@ -729,18 +729,20 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
                 stopped = codex_upgrade.invalidate_candidate(
                     self._invalidate_arguments(fixture, R2, "apply", approve=str(preview["review_sha256"]), source=source_r2)
                 )
-            self.assertEqual(stopped["status"], "permanent_stop")
-            self.assertEqual(stopped["decision"]["terminal_reason"], "root_cause_limit")
+            # 第三批 B3-9（第 10 项②）：同根因达上限不再写终态——暂停为根因修复；作废事实与根因入账保留，账本不写 stop_the_line。
+            self.assertEqual(stopped["status"], "paused", stopped.get("decision"))
+            self.assertIsNone(stopped["decision"]["terminal_reason"])
+            self.assertEqual(stopped["decision"]["pause_kinds"], ["root_cause_repair"])
             head = self._head(fixture)
             self.assertEqual(head["root_cause_counts"][cause], 2)
             self.assertIn(cause, head["root_causes_at_limit"])
+            self.assertNotIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
             summary = self._summary(fixture)
-            self.assertEqual(summary["status"], "stopped")
-            # 停线合同：不写 candidate_invalidated；invalidation.json 仍存在（作废事实已入账）。
-            self.assertNotIn(("candidate_invalidated", f"candidate-invalidated-{R2}-r2"), self._events(fixture))
+            self.assertNotEqual(summary["status"], "stopped")
+            self.assertNotIn("stop_the_line", [kind for kind, _ in self._events(fixture)])
             self.assertTrue((campaign_dir / "candidates" / R2 / "invalidation.json").is_file())
-            # 总账已登记 Campaign 终态：任何 revision 命令在 admission 即被拒。
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已终态：root_cause_limit"):
+            # 总账根因达上限：revision 命令在 admission 即被拒（不再是终态拒绝），登记修复证据后才能继续。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "根因达上限"):
                 self._open(fixture, R3, supersedes=R2)
 
 
@@ -1219,7 +1221,9 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 stopped = supervisor._close_failed_campaign_timing_ledger(campaign2, manifest_2, failed_action_id="seal", failure_class="identity-drift")
                 self.assertEqual(stopped["ledger_status"], "stopped")
                 self.assertEqual(timing_ledger.inspect_ledger(ledger2)["status"], "stopped")
-            # 分支 2'：永久条件来自总账（根因已达上限）→ 也停线。
+            # 分支 2'：总账里别的根因（rc-x）达上限，本次失败的根因不是它——第三批 B3-9 起永久条件只看本次根因，
+            # 不再一概停线，落到分支 3（stage_abandoned + candidate_review_required）；"本次根因达上限仍永久"由
+            # test_codex_upgrade_supervisor.RootCauseLimitPermanentConditionTests 覆盖。
             with tempfile.TemporaryDirectory() as third:
                 fixture3, campaign3, manifest3 = self._r1_ready(Path(third).resolve())
                 ledger3 = Path(str(fixture3["timing_ledger"]))
@@ -1232,8 +1236,9 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 with mock.patch.object(project_ledger, "replay_head", side_effect=lambda r: dict(
                         real_head(r), root_causes_at_limit=["rc-x"], root_causes_at_limit_base=["rc-x"],
                         root_causes_at_limit_by_version={v: ["rc-x"] for v in real_head(r).get("root_causes_at_limit_by_version", {})})):
-                    stopped = supervisor._close_failed_campaign_timing_ledger(campaign3, manifest_3, failed_action_id="seal", failure_class="execution-failure")
-                self.assertEqual(stopped["ledger_status"], "stopped")
+                    reviewed = supervisor._close_failed_campaign_timing_ledger(campaign3, manifest_3, failed_action_id="seal", failure_class="execution-failure")
+                self.assertEqual(reviewed["ledger_status"], "candidate_review_required")
+                self.assertEqual(timing_ledger.inspect_ledger(ledger3)["status"], "candidate_review_required")
             # 分支 3：其余 → stage_abandoned + candidate_review_required，幂等。
             with tempfile.TemporaryDirectory() as fourth:
                 fixture4, campaign4, manifest4 = self._r1_ready(Path(fourth).resolve())

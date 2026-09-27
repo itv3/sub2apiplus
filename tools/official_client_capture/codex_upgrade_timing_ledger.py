@@ -1504,6 +1504,9 @@ def resume_facts(root: Path) -> dict[str, Any]:
     plan, _raw = _load_plan(root)
     limit = int(plan["same_root_cause_retry_limit"])
     stop_event: dict[str, Any] | None = None
+    # 第三批 B3-9：同根因达上限不再写停线事件（只暂停），campaign-resume 需要"导致达上限的最后一次失败事件"作为
+    # 修复部署时间基准；按根因记最后一次失败事件，恢复后清空。
+    last_failure_by_cause: dict[str, dict[str, Any]] = {}
     resumes = 0
     for event, raw in _load_events(root):
         if event["event_type"] == "stop_the_line":
@@ -1515,18 +1518,33 @@ def resume_facts(root: Path) -> dict[str, Any]:
                 "root_cause_id": event["root_cause_id"],
                 "recorded_at_utc": event["recorded_at_utc"],
             }
+        elif event["event_type"] in {"attempt_failed", "attempt_recovery_failed", "stage_abandoned"} and isinstance(
+            event.get("root_cause_id"), str
+        ):
+            last_failure_by_cause[str(event["root_cause_id"])] = {
+                "sequence": int(event["sequence"]),
+                "sha256": _sha256_bytes(raw),
+                "event_id": event["event_id"],
+                "phase": event["phase"],
+                "root_cause_id": event["root_cause_id"],
+                "recorded_at_utc": event["recorded_at_utc"],
+            }
         elif event["event_type"] == "recovery_verified":
             stop_event = None
+            last_failure_by_cause = {}
             if tuple(item.get("role") for item in event.get("receipts", [])) == RESUME_RECOVERY_ROLES:
                 resumes += 1
     stopped = summary["status_before_pause"] == "stopped"
+    at_limit_root_cause_ids = sorted(
+        cause for cause, count in summary["same_root_cause_failures"].items() if int(count) >= limit
+    )
+    limit_events = [last_failure_by_cause[cause] for cause in at_limit_root_cause_ids if cause in last_failure_by_cause]
     return {
         "status": summary["status_before_pause"],
         "stopped": stopped,
         "stop_event": stop_event if stopped else None,
-        "at_limit_root_cause_ids": sorted(
-            cause for cause, count in summary["same_root_cause_failures"].items() if int(count) >= limit
-        ),
+        "limit_event": max(limit_events, key=lambda item: item["sequence"]) if limit_events else None,
+        "at_limit_root_cause_ids": at_limit_root_cause_ids,
         "resume_epoch": resumes,
         "head_sequence": summary["head_sequence"],
         "head_sha256": summary["head_sha256"],

@@ -20810,23 +20810,36 @@ class CodexUpgradeTest(unittest.TestCase):
             root_cause_id = first_result["root_cause"]["root_cause_id"]
             second = self._b0_orphan_attempt(fixture)
             second_result = reconciler.reconcile_attempt(campaign_dir, second)
-            self.assertEqual(second_result["status"], "permanent_stop")
+            # 第三批 B3-9（第 10 项②）：同根因达上限不再写终态——暂停为根因修复，账本停在 stop_required，总账无终态。
+            self.assertEqual(second_result["status"], "paused", second_result.get("decision"))
             self.assertEqual(second_result["root_cause"]["root_cause_id"], root_cause_id)
-            self.assertEqual(second_result["decision"]["terminal_reason"], "root_cause_limit")
+            self.assertIsNone(second_result["decision"]["terminal_reason"])
+            self.assertEqual(second_result["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIn("campaign-resume", second_result["next_command"])
+            self.assertNotIn("deadline_pause", second_result)
             self.assertEqual(second_result["project_head"]["root_cause_count"], 2)
             events = self._b0_ledger_events(fixture["timing_ledger"])
             types = [item[0] for item in events]
-            self.assertEqual(types[-2:], ["stage_abandoned", "stop_the_line"])
-            self.assertLess(types.index("attempt_failed"), types.index("stage_abandoned"))
-            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stopped")
+            self.assertEqual(types[-1], "attempt_failed")
+            self.assertNotIn("stage_abandoned", types)
+            self.assertNotIn("stop_the_line", types)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stop_required")
             head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-            self.assertEqual(head["terminal_campaigns"][str(fixture["manifest"]["campaign_id"])]["terminal_reason"], "root_cause_limit")
+            self.assertNotIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
             self.assertIn(root_cause_id, head["root_causes_at_limit"])
-            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "已终态"):
+            # 门禁只挡该根因：重试别的根因放行，重试该根因（或无根因上下文）仍拒。
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "根因达上限"):
                 codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="resume", require=True)
-            # 停线后再对账同一 attempt：幂等，不再追加事件。
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "根因达上限"):
+                codex_upgrade_project_ledger.assert_campaign_admitted(
+                    campaign_dir, command="resume", require=True, retry_root_cause_ids=[root_cause_id]
+                )
+            self.assertIsNotNone(codex_upgrade_project_ledger.assert_campaign_admitted(
+                campaign_dir, command="resume", require=True, retry_root_cause_ids=["rc1-" + "f" * 20]
+            ))
+            # 暂停后再对账同一 attempt：幂等，不追加事件、总账不前进；暂停期间不接受恢复批准。
             replay = reconciler.reconcile_attempt(campaign_dir, second)
-            self.assertEqual(replay["status"], "permanent_stop")
+            self.assertEqual(replay["status"], "paused")
             self.assertEqual(self._b0_ledger_events(fixture["timing_ledger"]), events)
             self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head["sequence"])
             with self.assertRaisesRegex(reconciler.ReconcilerError, "不接受恢复批准"):
@@ -21613,11 +21626,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 classification="failed",
             )
             second_result = reconciler.reconcile_supervisor_run(second, campaign_dir)
-            self.assertEqual(second_result["status"], "permanent_stop")
-            self.assertEqual(second_result["decision"]["terminal_reason"], "root_cause_limit")
-            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
-            terminal = codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"]
-            self.assertEqual(terminal[str(fixture["manifest"]["campaign_id"])]["terminal_reason"], "root_cause_limit")
+            # 第三批 B3-9（第 10 项②）：同根因第二次不再写终态——根因修复暂停，总账无终态，账本不写 stop_the_line。
+            self.assertEqual(second_result["status"], "paused", second_result.get("decision"))
+            self.assertIsNone(second_result["decision"]["terminal_reason"])
+            self.assertEqual(second_result["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIn("record-root-cause-repair", second_result["next_command"])
+            self.assertNotEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+            self.assertNotIn(
+                str(fixture["manifest"]["campaign_id"]),
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"],
+            )
 
     def test_formal_campaign_run_enforcement_covers_future_target_versions(self) -> None:
         """campaign-run 强制派发与旧写入拒绝按历史豁免集合判定，不再逐版本硬编码。"""

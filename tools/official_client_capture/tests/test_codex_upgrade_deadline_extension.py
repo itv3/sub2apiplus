@@ -298,10 +298,11 @@ class DeadlineExtensionTests(unittest.TestCase):
         limit_everywhere={'root_causes_at_limit':['fixture'],'root_causes_at_limit_base':['fixture'],
                           'root_causes_at_limit_by_version':{v:['fixture'] for v in head.get('root_causes_at_limit_by_version',{})}}
         # 修好接着跑第 14 项：请求预算耗尽只暂停（批准 request-budget-extend 后继续），不再停线；
-        # 修好接着跑第 12 项：总账 blocked（账务无法核清）也只暂停（accounting-resolve 补账后继续）。
+        # 修好接着跑第 12 项：总账 blocked（账务无法核清）也只暂停（accounting-resolve 补账后继续）；
+        # 第三批 B3-9（第 10 项②）：本次根因达上限也只暂停（登记修复证据后继续），不再写终态。
         for changed, expected, kinds in (({'blocked':True},'paused',['accounting']),
                                          ({'remaining_live_requests':0},'paused',['request_budget']),
-                                         (limit_everywhere,'permanent_stop',None)):
+                                         (limit_everywhere,'paused',['root_cause_repair'])):
             decision=reconciler._decide(head={**head,**changed},plan=plan,ledger=summary,identity={'unchanged':True},
                 environment_status='restored',campaign_deadline_at_utc=deadlines['total_deadline_at_utc'],
                 root_cause_id='fixture',request_status='resolved',now=self.at(24))

@@ -632,6 +632,14 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertEqual(head["root_causes_at_limit"], ["rc1-a"])
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "根因"):
                 ledger.assert_campaign_admitted(campaign_dir, command="resume", require=True)
+            # 第三批 B3-9（第 10 项③）：给出待重试根因集合时只挡交集——重试别的根因放行，重试达上限的根因仍拒。
+            self.assertIsNotNone(
+                ledger.assert_campaign_admitted(campaign_dir, command="resume", require=True, retry_root_cause_ids=["rc1-b"])
+            )
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "根因达上限：\\['rc1-a'\\]"):
+                ledger.assert_campaign_admitted(campaign_dir, command="resume", require=True, retry_root_cause_ids=["rc1-a", "rc1-b"])
+            self.assertEqual(ledger._blocking_root_causes(head, None, None), ["rc1-a"])
+            self.assertEqual(ledger._blocking_root_causes(head, None, []), [])
             ledger.append_project_event(ledger_root, operation_id="term-c1", event_type="campaign_terminal", payload={"campaign_id": "c1", "terminal_reason": "root_cause_limit"}, source_batch_sha256=None)
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "绑定必须恰好是"):
                 ledger.record_root_cause_repair(ledger_root, root_cause_id="rc1-a", kind="code", bindings={"fix_commit_sha": "1" * 40})
@@ -759,8 +767,11 @@ class ProjectLedgerTests(unittest.TestCase):
                 )
             self.assertEqual(decisions["0.157.0"]["decision"], reconciler.DECISION_RECOVERABLE)
             self.assertEqual(decisions["0.157.0"]["root_cause_counts"], {"rc1-a": 0})
-            self.assertEqual(decisions["0.154.0"]["decision"], reconciler.DECISION_STOP)
-            self.assertEqual(decisions["0.154.0"]["terminal_reason"], "root_cause_limit")
+            # 第三批 B3-9（第 10 项②）：同根因达上限不再写终态，改为根因修复暂停（campaign-resume 登记修复证据后继续）。
+            self.assertEqual(decisions["0.154.0"]["decision"], reconciler.DECISION_PAUSED)
+            self.assertIsNone(decisions["0.154.0"]["terminal_reason"])
+            self.assertEqual(decisions["0.154.0"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIn("campaign-resume", reconciler._paused_next_command(decisions["0.154.0"], "继续"))
             self.assertEqual(decisions["0.154.0"]["root_cause_counts"], {"rc1-a": 2})
 
     def test_multiple_failure_observations_are_deduplicated_and_partial_repair_keeps_uncovered_cause(self) -> None:

@@ -334,14 +334,17 @@ class StagingDispatchTests(unittest.TestCase):
             with self._inject_prepare_crash():
                 with self.assertRaisesRegex(RuntimeError, "crash-after-prepare"):
                     self._dispatch(fixture, root, "VC-2", 2, tag="-p1a")
-                with self.assertRaisesRegex(codex_upgrade.StagingStopTheLine, "root_cause_limit"):
+                # 第三批 B3-9（第 10 项②）：同根因第二次不再永久停线，对账判根因修复暂停；总账无终态、账本 stop_required。
+                with self.assertRaisesRegex(codex_upgrade.StagingDeadlinePaused, "登记根因修复证据"):
                     self._dispatch(fixture, root, "VC-2", 2, tag="-p1b")
             head = self._head(fixture)
             campaign_id = str(fixture["manifest"]["campaign_id"])
-            self.assertEqual(head["terminal_campaigns"][campaign_id]["terminal_reason"], "root_cause_limit")
-            self.assertEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], "stopped")
+            self.assertNotIn(campaign_id, head["terminal_campaigns"])
+            self.assertEqual(sorted(head["root_cause_counts"].values()), [2])
+            # prepare 阶段失败不写账本 attempt 事件：账本不计同根因次数，只由总账根因上限暂停，不再写 stop_the_line。
+            self.assertNotEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], "stopped")
             self.assertTrue((self._staging_dir(campaign_dir, 2, "VC-2") / "attempt-2" / "ABORT").is_file())
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "拒绝派发|已终态"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "拒绝派发|已终态|根因达上限|禁止"):
                 self._dispatch(fixture, root, "VC-2", 2, tag="-p1c")
 
     # ------------------------------------------------------------------
@@ -436,13 +439,16 @@ class StagingDispatchTests(unittest.TestCase):
                 with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "可按同序号重新派发"):
                     self._dispatch(fixture, root, "VC-2", 2, tag="-cf-a")
             with self._inject_publish_crash():
-                with self.assertRaisesRegex(codex_upgrade.StagingStopTheLine, "root_cause_limit"):
+                # 第三批 B3-9（第 10 项②）：同根因第二次不再永久停线，对账判根因修复暂停（入口按暂停种类给下一步）；
+                # 总账无终态。staging commit 失败不写计时账本的 attempt 事件，账本不计失败次数、保持 active，
+                # 上限事实只在总账根因计数与对账收据里。
+                with self.assertRaisesRegex(codex_upgrade.StagingDeadlinePaused, "登记根因修复证据"):
                     self._dispatch(fixture, root, "VC-2", 2, tag="-cf-b")
             campaign_id = str(fixture["manifest"]["campaign_id"])
             head = self._head(fixture)
-            self.assertEqual(head["terminal_campaigns"][campaign_id]["terminal_reason"], "root_cause_limit")
+            self.assertNotIn(campaign_id, head["terminal_campaigns"])
             self.assertEqual(sorted(head["root_cause_counts"].values()), [2])
-            self.assertEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["status"], "active")
             # 两个 attempt 都有 ABORT，且都绑定各自父 run 的对账收据。
             for attempt in (1, 2):
                 abort = artifacts.validate_staging_abort(self._read(self._staging_dir(fixture["campaign_dir"], 2, "VC-2") / f"attempt-{attempt}" / "ABORT"))
