@@ -5025,6 +5025,8 @@ def _mutable_command_coordinates(
         # 工具演进登记在 Campaign 排他锁内核对静默并写一次演进收据；状态查询只读。
         "tool-evolution",
         "tool-evolution-status",
+        # campaign-resume 与延期同类：自持预算控制锁、项目锁与 Campaign 锁，核对静默后写两本账。
+        "campaign-resume",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -9894,6 +9896,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "tool-evolution-status", help="只读：Campaign 有效工具身份、演进链与是否需要登记"
     )
     add_campaign_reference(tool_evolution_status)
+    campaign_resume = subparsers.add_parser(
+        "campaign-resume",
+        help="凭修复证据恢复停线的 Campaign（不带 --approve-sha256 只预览）",
+    )
+    add_campaign_reference(campaign_resume)
+    campaign_resume.add_argument("--fix-commit", required=True, help="修复所在提交（40 位）")
+    campaign_resume.add_argument("--regression-receipt", required=True, type=Path, help="修复后的离线回归收据（绝对路径）")
+    campaign_resume.add_argument("--reason", required=True, help="停线原因已如何消除")
+    campaign_resume.add_argument(
+        "--control-root",
+        type=Path,
+        help="部署收据所在控制根；缺省为 Campaign 数据根下的 control",
+    )
+    campaign_resume.add_argument("--approve-sha256", help="批准预览的 review_sha256")
+    campaign_resume.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
 
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
@@ -32689,12 +32706,13 @@ def _latest_attempt_summary(
                 else None
             ),
         }
-        if attempt["status"] == "awaiting_receipts" and not summary["failed_job_ids"]:
+        if attempt["status"] == "awaiting_receipts" and not summary["failed_job_ids"] and _manifest is not None:
             # 修好接着跑第 21 项：等待封存的 attempt 若有作业被其后登记的工具演进作废，就不是正常待封存，
-            # 而是续跑来源；只在确有失效作业时写字段，状态输出的其余字节不变。
+            # 而是续跑来源；只在确有失效作业时写字段，状态输出的其余字节不变。正式状态查询（campaign_status）
+            # 总会传入已校验的清单；不带清单的旧调用方不做这项判定。
             invalidated = _attempt_evolution_invalidated_job_ids(
                 campaign_dir,
-                _manifest if _manifest is not None else load_campaign_manifest(campaign_dir),
+                _manifest,
                 path,
                 attempt,
                 phase=phase,
@@ -57012,6 +57030,7 @@ def _reject_unparented_formal_write(
         "rehearse-candidate-seal",
         "tool-evolution",
         "tool-evolution-status",
+        "campaign-resume",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -57940,6 +57959,333 @@ def _tool_evolution_status_command(arguments: argparse.Namespace) -> dict[str, A
     }
 
 
+# ---------------------------------------------------------------------------
+# campaign-resume：凭修复证据恢复停线的 Campaign（修好接着跑第 10 项后半、第 11 项）
+# ---------------------------------------------------------------------------
+#
+# 停线（计时账本 stopped／同根因达上限 stop_required）与总账可恢复终态此前基本不可恢复：recovery_verified
+# 只覆盖"同根因两次且无编排入口"，总账 campaign_terminal 不可撤销，只能新建 Campaign。现在：绑定修复提交、
+# 离线回归收据与晚于停线的部署收据，经预览→批准后，先写计时账本的恢复事件（清零达上限根因、恢复停线前
+# 状态或以原起点重开被放弃的阶段为 recovery_required），再写总账 campaign_resumed 撤销终态；之后统一走
+# "对账 → 恢复预览批准 → 续跑"。不可恢复：完整性异常、人工放弃／取代、已完成、显式关账本。
+CAMPAIGN_RESUME_PREVIEW_SCHEMA = "campaign-resume-preview/v1"
+CAMPAIGN_RESUME_DIR = Path("control") / "resume"
+# 显式关账本（人工决定）写的停线不可恢复。
+_NON_RESUMABLE_STOP_EVENT_PREFIXES = ("close-stop-the-line",)
+
+
+def _campaign_resume_preview(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    fix_commit: str,
+    regression_receipt: Path,
+    reason: str,
+    control_root: Path | None,
+) -> dict[str, Any]:
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    frozen = manifest.get("tool_identity")
+    if not _requires_complete_vc_artifacts(manifest) or not isinstance(frozen, Mapping) or not _is_policy_v2_identity(frozen):
+        raise ConfigurationError("campaign-resume 只用于 0.154.0 起、v2 工具身份的完整 VC 链 Campaign。")
+    if not TOOL_EVOLUTION_FIX_COMMIT_RE.fullmatch(fix_commit):
+        raise ConfigurationError("--fix-commit 必须是 40 位小写十六进制提交号。")
+    if not reason.strip():
+        raise ConfigurationError("--reason 不得为空。")
+    problems = _tool_evolution_quiescence_problems(campaign_dir)
+    if problems:
+        raise ConfigurationError("campaign-resume 要求 Campaign 静默：" + "；".join(problems))
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    try:
+        facts = codex_upgrade_timing_ledger.resume_facts(ledger_dir)
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"Campaign 计时账本无法重放：{error}") from error
+    if facts["status"] not in {"stopped", "stop_required"}:
+        raise ConfigurationError(f"Campaign 计时账本状态为 {facts['status']}，不是停线，无需 campaign-resume。")
+    stop_event = facts["stop_event"]
+    if facts["stopped"] and (
+        stop_event is None or str(stop_event["event_id"]).startswith(_NON_RESUMABLE_STOP_EVENT_PREFIXES)
+    ):
+        raise ConfigurationError("该停线是显式关账本（人工决定），不可由 campaign-resume 恢复。")
+    project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if project_root is None:
+        raise ConfigurationError("campaign-resume 必须在项目总账内进行。")
+    try:
+        with codex_upgrade_project_ledger.project_lock(project_root):
+            plan, _raw = codex_upgrade_project_ledger._load_plan(project_root)
+            head = codex_upgrade_project_ledger.replay_head(project_root)
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账重放失败：{error}") from error
+    campaign_id = str(manifest["campaign_id"])
+    terminal = head["terminal_campaigns"].get(campaign_id)
+    if terminal is not None and terminal["terminal_reason"] not in codex_upgrade_project_ledger.RESUMABLE_TERMINAL_REASONS:
+        raise ConfigurationError(f"总账终态原因 {terminal['terminal_reason']} 不可恢复（完整性、人工放弃／取代或已完成）。")
+    target_version = codex_upgrade_project_ledger.campaign_target_version(head, campaign_id)
+    project_at_limit = sorted(codex_upgrade_project_ledger.root_causes_at_limit_for(head, target_version))
+    # 以下三项在对应的隔离能力落地前失败关闭：未决账务、请求预算与环境污染。
+    if head.get("blocked"):
+        raise ConfigurationError(f"项目总账 blocked（未决账务 {head.get('unresolved_operation_ids')}），先处理账务再恢复。")
+    remaining = head.get("remaining_live_requests")
+    if remaining is not None and int(remaining) <= 0:
+        raise ConfigurationError("项目请求预算已耗尽，先批准请求预算延长再恢复。")
+    if _campaign_contamination_records(campaign_dir, _manifest=manifest):
+        raise ConfigurationError("Campaign 存在未隔离的环境污染记录，先隔离污染再恢复。")
+    if terminal is not None:
+        open_formal = [
+            cid
+            for cid, item in head["registered_campaigns"].items()
+            if item.get("campaign_mode") == "formal"
+            and item.get("target_version") == target_version
+            and cid not in head["terminal_campaigns"]
+            and cid != campaign_id
+        ]
+        if len(open_formal) >= int(plan["formal_open_limit"]):
+            raise ConfigurationError(f"同版本无终态 formal Campaign 已达上限：{open_formal}，恢复会超额。")
+    current = _tool_identity(include_git=False)
+    if current.get("policy_sha256") != frozen.get("policy_sha256"):
+        raise ConfigurationError("当前工具策略与 Campaign 冻结策略不同；策略变化不能恢复，只能新建 Campaign。")
+    try:
+        deployment = reconciler._deployment_receipt(
+            reconciler._control_root(campaign_dir, control_root), current, required=True
+        )
+    except (reconciler.ReconcilerError, reconciler.closeout.VC0CloseoutError) as error:
+        raise ConfigurationError(f"campaign-resume 必须绑定当前工具的通过部署收据：{error}") from error
+    assert deployment is not None
+    if stop_event is not None and _rfc3339_datetime(deployment["created_at_utc"], "部署收据时间") <= _rfc3339_datetime(
+        stop_event["recorded_at_utc"], "停线事件时间"
+    ):
+        raise ConfigurationError("部署收据早于停线；修复必须在停线之后受监督部署。")
+    regression = Path(regression_receipt)
+    if not regression.is_absolute() or regression.is_symlink() or not regression.is_file():
+        raise ConfigurationError("--regression-receipt 必须是可信的绝对路径普通文件。")
+    effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+    drift = _tool_evolution_unregistered_drift(effective["identity"], current)
+    primary = (
+        (stop_event or {}).get("root_cause_id")
+        or (facts["at_limit_root_cause_ids"] or [None])[0]
+        or (project_at_limit or [None])[0]
+    )
+    if not isinstance(primary, str) or not primary:
+        raise ConfigurationError("停线没有登记根因，无法绑定恢复。")
+    preview = {
+        "schema_version": CAMPAIGN_RESUME_PREVIEW_SCHEMA,
+        "campaign_id": campaign_id,
+        "campaign_manifest_sha256": file_sha256(campaign_dir / "campaign.json"),
+        "root_cause_id": primary,
+        "timing": {
+            "status": facts["status"],
+            "stop_event": (
+                None if stop_event is None else {"sequence": stop_event["sequence"], "sha256": stop_event["sha256"]}
+            ),
+            "stop_event_id": None if stop_event is None else stop_event["event_id"],
+            "cleared_root_cause_ids": list(facts["at_limit_root_cause_ids"]),
+            "resume_epoch": int(facts["resume_epoch"]),
+            "campaign_ledger_head": {"sequence": facts["head_sequence"], "sha256": facts["head_sha256"]},
+        },
+        "project": {
+            "terminal": None if terminal is None else {
+                "operation_id": terminal["operation_id"], "terminal_reason": terminal["terminal_reason"],
+            },
+            "cleared_root_cause_ids": project_at_limit,
+            "head": {"sequence": head["sequence"], "sha256": head["head_sha256"]},
+        },
+        "bindings": {
+            "fix_commit": fix_commit,
+            "regression_receipt": {"path": str(regression), "sha256": file_sha256(regression)},
+            "deployment_receipt": {
+                "path": str(deployment["path"]),
+                "sha256": str(deployment["sha256"]),
+                "created_at_utc": deployment["created_at_utc"],
+            },
+        },
+        "unregistered_tool_drift": drift,
+        "reason": reason,
+        "live_request_count": 0,
+    }
+    preview["review_sha256"] = _fingerprint(preview)
+    return preview
+
+
+def _campaign_resume_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """campaign-resume：不带 --approve-sha256 只预览；批准后按"批准收据 → 总账根因修复 → 计时账本恢复 →
+    总账 campaign_resumed"顺序幂等写入，重跑同一批准即补齐半完成状态。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    next_steps = (
+        "恢复后先按 tool-evolution-status 登记未登记的工具演进，再对账停线对象（reconcile-attempt／"
+        "reconcile-supervisor-run），批准恢复预览后续跑"
+    )
+    approval = getattr(arguments, "approve_sha256", None)
+    if approval is not None:
+        # 同一批准重跑：批准收据已落盘时按收据冻结的预览续接（计时账本可能已恢复、不再是停线，
+        # 不能重算预览），补齐半完成的两本账；已完成则幂等返回。
+        stored_path = campaign_dir / CAMPAIGN_RESUME_DIR / f"resume-{approval}.json"
+        if stored_path.is_file() and not stored_path.is_symlink():
+            stored = _read_json(stored_path, "campaign-resume 批准收据")
+            frozen_preview = stored.get("preview")
+            if (
+                stored.get("approved_sha256") != str(approval)
+                or not isinstance(frozen_preview, Mapping)
+                or frozen_preview.get("review_sha256") != str(approval)
+                or _fingerprint({k: v for k, v in frozen_preview.items() if k != "review_sha256"}) != str(approval)
+            ):
+                raise ConfigurationError("既有 campaign-resume 批准收据与批准摘要不一致。")
+            return _apply_campaign_resume(
+                campaign_dir, manifest, frozen_preview, approved_by=str(stored["approved_by"]), next_steps=next_steps
+            )
+    preview = _campaign_resume_preview(
+        campaign_dir,
+        manifest,
+        fix_commit=str(arguments.fix_commit),
+        regression_receipt=Path(arguments.regression_receipt),
+        reason=str(arguments.reason),
+        control_root=getattr(arguments, "control_root", None),
+    )
+    if approval is None:
+        return {"status": "approval_required", **preview, "next_command": "campaign-resume --approve-sha256 <review_sha256> --approved-by <批准人>"}
+    if str(approval) != preview["review_sha256"]:
+        raise ConfigurationError("批准摘要与重算的 campaign-resume 预览不一致；重新预览后再批准。")
+    approved_by = str(getattr(arguments, "approved_by", "") or "").strip()
+    if not approved_by:
+        raise ConfigurationError("批准 campaign-resume 必须提供 --approved-by。")
+    return _apply_campaign_resume(campaign_dir, manifest, preview, approved_by=approved_by, next_steps=next_steps)
+
+
+def _apply_campaign_resume(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    preview: Mapping[str, Any],
+    *,
+    approved_by: str,
+    next_steps: str,
+) -> dict[str, Any]:
+    campaign_id = str(manifest["campaign_id"])
+    project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    assert project_root is not None
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    review = str(preview["review_sha256"])
+    timing = preview["timing"]
+    resume_dir = campaign_dir / CAMPAIGN_RESUME_DIR
+    try:
+        with codex_upgrade_project_ledger.deadline_control_scope(campaign_dir), \
+                codex_upgrade_project_ledger.project_lock(project_root), \
+                _campaign_lock(campaign_dir), \
+                codex_upgrade_project_ledger._flock(ledger_dir / ".vc0-closeout.lock", "campaign-resume"):
+            ensure_private_directory(resume_dir, campaign_dir)
+            receipt_path = resume_dir / f"resume-{review}.json"
+            if receipt_path.exists():
+                receipt = _read_json(receipt_path, "campaign-resume 批准收据")
+                if receipt.get("approved_sha256") != review:
+                    raise ConfigurationError("既有 campaign-resume 批准收据与本次批准不一致。")
+            else:
+                receipt = {
+                    "schema_version": codex_upgrade_timing_ledger.CAMPAIGN_RESUME_SCHEMA,
+                    "campaign_id": campaign_id,
+                    "root_cause_id": preview["root_cause_id"],
+                    "campaign_ledger_head": dict(timing["campaign_ledger_head"]),
+                    "timing_stop_event": timing["stop_event"],
+                    "timing_cleared_root_cause_ids": list(timing["cleared_root_cause_ids"]),
+                    "project_terminal": preview["project"]["terminal"],
+                    "project_cleared_root_cause_ids": list(preview["project"]["cleared_root_cause_ids"]),
+                    "bindings": preview["bindings"],
+                    "reason": preview["reason"],
+                    "preview": dict(preview),
+                    "approved_sha256": review,
+                    "approved_by": approved_by,
+                    "approved_at_utc": _utc_now(),
+                }
+                receipt["receipt_sha256"] = _fingerprint(receipt)
+                _secure_write_json_once(receipt_path, receipt)
+            # 总账根因修复：只清零批准时本版本已达上限的根因（修复收据按绑定幂等）。
+            bindings = preview["bindings"]
+            if preview["project"]["cleared_root_cause_ids"]:
+                codex_upgrade_project_ledger.record_root_cause_repair(
+                    project_root,
+                    root_cause_ids=list(preview["project"]["cleared_root_cause_ids"]),
+                    kind="code",
+                    bindings={
+                        "fix_commit_sha": bindings["fix_commit"],
+                        "regression_receipt_sha256": bindings["regression_receipt"]["sha256"],
+                        "deployment_receipt_sha256": bindings["deployment_receipt"]["sha256"],
+                    },
+                    note=f"campaign-resume {review[:16]}",
+                    # 修复收据时间取批准时间：收据摘要与 operation 确定，同一批准重跑不会重复入账。
+                    now=str(receipt["approved_at_utc"]),
+                )
+            # 计时账本恢复事件：三份收据复制进账本目录（账本只接受目录内文件）。
+            event_id = f"campaign-resume-{review[:16]}"
+            existing = [event for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir) if event["event_id"] == event_id]
+            if not existing:
+                receipts_dir = ledger_dir / "receipts" / "campaign-resume" / review[:16]
+                receipts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                copies = {
+                    "campaign_resume": (receipts_dir / "campaign-resume.json", receipt_path.read_bytes()),
+                    "offline_regression": (receipts_dir / "offline-regression.receipt", Path(bindings["regression_receipt"]["path"]).read_bytes()),
+                    "tool_fix": (receipts_dir / "tool-fix-deployment.json", Path(bindings["deployment_receipt"]["path"]).read_bytes()),
+                }
+                ledger_receipts = []
+                for role, (path, content) in sorted(copies.items()):
+                    if path.exists():
+                        if path.read_bytes() != content:
+                            raise ConfigurationError(f"账本内既有 {role} 收据副本与本次不一致。")
+                    else:
+                        path.write_bytes(content)
+                        path.chmod(0o600)
+                    ledger_receipts.append({"role": role, "path": path.relative_to(ledger_dir).as_posix(), "sha256": file_sha256(path)})
+                if bindings["regression_receipt"]["sha256"] != file_sha256(copies["offline_regression"][0]):
+                    raise ConfigurationError("回归收据在预览后被修改。")
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=event_id,
+                    phase=str((timing.get("stop_event") and _timing_event_phase(ledger_dir, int(timing["stop_event"]["sequence"]))) or codex_upgrade_timing_ledger.inspect_ledger(ledger_dir).get("active_phase") or "VC-0"),
+                    event_type="recovery_verified",
+                    root_cause_id=str(preview["root_cause_id"]),
+                    receipts=ledger_receipts,
+                    next_action="campaign-resume：按恢复后的状态对账停线对象，批准恢复预览后续跑",
+                )
+            campaign_event = next(
+                (event, raw) for event, raw in codex_upgrade_timing_ledger._load_events(ledger_dir) if event["event_id"] == event_id
+            )
+            epoch = int(timing["resume_epoch"]) + 1
+            _after, project_event = codex_upgrade_project_ledger.append_project_event(
+                project_root,
+                operation_id=f"campaign-resumed:{campaign_id}:e{epoch}",
+                event_type="campaign_resumed",
+                payload={
+                    "campaign_id": campaign_id,
+                    "terminal_operation_id": (preview["project"]["terminal"] or {}).get("operation_id"),
+                    "terminal_reason": (preview["project"]["terminal"] or {}).get("terminal_reason"),
+                    "resume_receipt_sha256": str(receipt["receipt_sha256"]),
+                    "campaign_event": {
+                        "sequence": int(campaign_event[0]["sequence"]),
+                        "sha256": hashlib.sha256(campaign_event[1]).hexdigest(),
+                    },
+                },
+                source_batch_sha256=None,
+            )
+    except (codex_upgrade_project_ledger.ProjectLedgerError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        raise ConfigurationError(f"campaign-resume 写入失败（以同一批准重跑即续接）：{error}") from error
+    summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+    return {
+        "status": "resumed",
+        "receipt_path": str(receipt_path),
+        "receipt_sha256": receipt["receipt_sha256"],
+        "timing_status": summary["status"],
+        "active_phase": summary["active_phase"],
+        "project_event": project_event,
+        "resume_epoch": int(timing["resume_epoch"]) + 1,
+        "next_command": next_steps,
+    }
+
+
+def _timing_event_phase(ledger_dir: Path, sequence: int) -> str:
+    for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+        if int(event["sequence"]) == sequence:
+            return str(event["phase"])
+    raise ConfigurationError(f"计时账本缺少序号 {sequence} 的事件。")
+
+
 def _wire_transition_intent_command(arguments: argparse.Namespace) -> dict[str, Any]:
     """两阶段 wire transition 第一步：预览变化与受影响 Job 闭集，批准后落 intent。"""
 
@@ -58592,6 +58938,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0
         elif command == "tool-evolution-status":
             result = _tool_evolution_status_command(arguments)
+            return_code = 0
+        elif command == "campaign-resume":
+            result = _campaign_resume_command(arguments)
             return_code = 0
         elif command == "wire-transition-intent":
             result = _wire_transition_intent_command(arguments)

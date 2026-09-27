@@ -110,6 +110,8 @@ EVENT_TYPES = (
     "deadline_extended",
     # R8 审核修正：延期的 Campaign 计时事件落盘后追加，证明双账已提交；此后判定不再读取发起方 Campaign。
     "deadline_extension_committed",
+    # 修好接着跑第 11 项：campaign-resume 凭修复证据撤销可恢复的 Campaign 终态（计时账本先写恢复事件）。
+    "campaign_resumed",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -127,6 +129,19 @@ TERMINAL_REASONS = (
     # 与 identity_changed（wire／策略身份漂移）语义不同，不混用。
     "integrity_mismatch",
     "operator_abandoned",
+)
+# campaign-resume 可撤销的终态原因：修复证据能证明问题已消除、证据链本身仍可信的那些。
+# 不可撤销：integrity_mismatch（不可变证据链不可信）、superseded／operator_abandoned（人工决定，可能已被承接）、
+# prior_upgrade_complete（已完成）、deadline_wall_clock（仅历史回放）。
+RESUMABLE_TERMINAL_REASONS = frozenset(
+    {
+        "root_cause_limit",
+        "identity_changed",
+        "accounting_unresolved",
+        "environment_contaminated",
+        "deadline_live_requests",
+        "prior_stop_the_line",
+    }
 )
 REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
 BLOCKED_ALLOWED_EVENTS = frozenset(
@@ -915,6 +930,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "registered_campaigns": {},
         "rejected_campaigns": {},
         "terminal_campaigns": {},
+        "resumed_campaigns": {},
         "paused_campaigns": {},
         "effective_absolute_deadline_utc": plan["absolute_deadline_utc"],
         "effective_campaign_deadlines": {},
@@ -1013,6 +1029,32 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 raise ProjectLedgerError("显式放弃必须携带批准人和理由")
             state["terminal_campaigns"][campaign_id] = {"operation_id": operation_id, "terminal_reason": payload["terminal_reason"]}
             state["paused_campaigns"].pop(campaign_id, None)
+        elif event_type == "campaign_resumed":
+            campaign_id = _safe_id(payload.get("campaign_id"), "campaign_resumed.campaign_id")
+            if campaign_id not in state["registered_campaigns"]:
+                raise ProjectLedgerError("campaign_resumed 的 Campaign 未注册")
+            terminal = state["terminal_campaigns"].get(campaign_id)
+            campaign_event = payload.get("campaign_event")
+            if (
+                (terminal is None and payload.get("terminal_operation_id") is not None)
+                or (terminal is not None and (
+                    payload.get("terminal_operation_id") != terminal["operation_id"]
+                    or terminal["terminal_reason"] not in RESUMABLE_TERMINAL_REASONS
+                ))
+                or not isinstance(payload.get("resume_receipt_sha256"), str)
+                or not SHA256_RE.fullmatch(payload["resume_receipt_sha256"])
+                or not isinstance(campaign_event, dict)
+                or set(campaign_event) != {"sequence", "sha256"}
+                or not isinstance(campaign_event["sequence"], int)
+                or isinstance(campaign_event["sequence"], bool)
+                or campaign_event["sequence"] < 1
+                or not SHA256_RE.fullmatch(str(campaign_event["sha256"]))
+            ):
+                raise ProjectLedgerError("campaign_resumed 必须承接当前可恢复终态并绑定批准收据与计时恢复事件")
+            state["terminal_campaigns"].pop(campaign_id, None)
+            state["resumed_campaigns"].setdefault(campaign_id, []).append(
+                {"operation_id": operation_id, "sequence": event["sequence"], "terminal_operation_id": payload.get("terminal_operation_id")}
+            )
         elif event_type == "campaign_paused":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_paused.campaign_id")
             scopes = payload.get("scopes")
@@ -1158,6 +1200,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
     if state["committed_deadline_extensions"]:
         # 只在出现过提交证明时写入 head，历史总账的 head 字节保持不变。
         head["committed_deadline_extensions"] = state["committed_deadline_extensions"]
+    if state["resumed_campaigns"]:
+        # 同上：只在出现过 campaign_resumed 时写入。
+        head["resumed_campaigns"] = state["resumed_campaigns"]
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
         cached, _raw = _read_json(cache_path, "head 缓存")
@@ -1650,6 +1695,23 @@ def campaign_event_scope(root: Path, campaign_id: str) -> dict[str, Any]:
         "last_sequence": rows[-1]["sequence"] if rows else 0,
         "events_sha256": _digest(rows),
     }
+
+
+def campaign_resume_epoch(head: Mapping[str, Any], campaign_id: str) -> int:
+    """本 Campaign 已被 campaign-resume 恢复的次数（修好接着跑第 11 项）；终态写入的幂等键据此加纪元后缀。"""
+
+    return len(dict(head.get("resumed_campaigns") or {}).get(campaign_id, []))
+
+
+def campaign_resume_epoch_snapshot(root: Path, campaign_id: str) -> int:
+    """不取项目锁的恢复次数快照（与 campaign_event_scope 同理，可在持有 Campaign 锁时调用）。"""
+
+    _safe_id(campaign_id, "campaign_resume_epoch.campaign_id")
+    return sum(
+        1
+        for event in _load_events(root)
+        if event["event_type"] == "campaign_resumed" and event["payload"].get("campaign_id") == campaign_id
+    )
 
 
 def campaign_target_version(head: Mapping[str, Any], campaign_id: str) -> str | None:

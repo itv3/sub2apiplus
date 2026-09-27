@@ -543,6 +543,35 @@ def _project_facts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return plan, head
 
 
+def _campaign_resume_epoch(campaign_dir: Path, campaign_id: str) -> int:
+    root = project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        return 0
+    try:
+        return project_ledger.campaign_resume_epoch_snapshot(root, campaign_id)
+    except project_ledger.ProjectLedgerError as error:
+        raise ReconcilerError(f"项目总账事件读取失败：{error}") from error
+
+
+def _require_resume_closed(campaign_dir: Path, manifest: Mapping[str, Any], ledger_dir: Path) -> None:
+    """campaign-resume 半完成（计时账本已写恢复、总账未写 campaign_resumed）时零写入拒绝对账。
+
+    先写计时账本、后写总账：半完成期间自动对账若按旧终态再停线，会把这次恢复作废；重跑同一批准的
+    campaign-resume apply 即补齐。
+    """
+
+    try:
+        timing_epoch = timing_ledger.resume_epoch(ledger_dir)
+    except timing_ledger.TimingLedgerError as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    project_epoch = _campaign_resume_epoch(campaign_dir, str(manifest["campaign_id"]))
+    if timing_epoch != project_epoch:
+        raise ReconcilerError(
+            f"campaign-resume 未完成：计时账本已恢复 {timing_epoch} 次、项目总账 {project_epoch} 次；先以同一批准重跑 "
+            "campaign-resume apply 补齐，再对账；本次未写入任何文件"
+        )
+
+
 def _campaign_event_scope(root: Path, campaign_id: str) -> dict[str, Any]:
     try:
         return project_ledger.campaign_event_scope(root, campaign_id)
@@ -1139,6 +1168,10 @@ def _permanent_stop(
     """步骤 6 停线分支：stage_abandoned → stop_the_line → campaign_terminal batch。"""
 
     next_action = f"permanent-stop-{terminal_reason}"
+    # 修好接着跑第 11 项：campaign-resume 撤销终态后同一对象可能再次停线；事件 ID 与总账 operation 按恢复
+    # 纪元加后缀，否则会被幂等键静默吞掉（纪元 0 保持原字节，历史幂等不变）。
+    epoch = _campaign_resume_epoch(campaign_dir, str(manifest["campaign_id"]))
+    suffix = f"-e{epoch}" if epoch else ""
     events: list[dict[str, Any]] = []
     status = str(ledger_facts.get("status"))
     if status not in {"stopped", "complete"}:
@@ -1148,7 +1181,7 @@ def _permanent_stop(
             events.append(
                 _append_ledger_event(
                     ledger_dir,
-                    event_id=f"reconcile-stage-abandoned-{subject_id}",
+                    event_id=f"reconcile-stage-abandoned-{subject_id}{suffix}",
                     phase=str(active_phase),
                     event_type="stage_abandoned",
                     root_cause_id=root_cause_id,
@@ -1162,7 +1195,7 @@ def _permanent_stop(
             events.append(
                 _append_ledger_event(
                     ledger_dir,
-                    event_id=f"reconcile-stop-the-line-{subject_id}",
+                    event_id=f"reconcile-stop-the-line-{subject_id}{suffix}",
                     phase=last_phase,
                     event_type="stop_the_line",
                     root_cause_id=root_cause_id,
@@ -1173,7 +1206,7 @@ def _permanent_stop(
             )
     batch = _commit_batch(
         campaign_dir,
-        operation_id=f"campaign-terminal:{manifest['campaign_id']}",
+        operation_id=f"campaign-terminal:{manifest['campaign_id']}" + (f":e{epoch}" if epoch else ""),
         event_type="campaign_terminal",
         payload={
             "campaign_id": str(manifest["campaign_id"]),
@@ -2319,6 +2352,7 @@ def reconcile_attempt(
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
     _require_registered_tool_identity(identity, ledger)
+    _require_resume_closed(campaign_dir, manifest, ledger_dir)
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     deployment = _deployment_receipt(
@@ -3384,6 +3418,7 @@ def reconcile_supervisor_run(
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
     _require_registered_tool_identity(identity, _ledger_facts(ledger_dir, now=observed))
+    _require_resume_closed(campaign_dir, manifest, ledger_dir)
     _finalize_orphaned_prepared_run(resolved_run_dir)
     orphan_backfill = _backfill_orphaned_action_failure(resolved_run_dir, campaign_dir, manifest)
     run = _run_facts(resolved_run_dir, campaign_dir, manifest)
@@ -3775,6 +3810,7 @@ def reconcile_staging_abort(
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
     _require_registered_tool_identity(identity, ledger)
+    _require_resume_closed(campaign_dir, manifest, ledger_dir)
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)

@@ -9455,6 +9455,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 # 修好接着跑：工具修复部署后在原 Campaign 登记工具演进，状态只读查询。
                 "tool-evolution",
                 "tool-evolution-status",
+                "campaign-resume",
                 "wire-transition-intent",
                 "wire-transition-final",
                 "evaluation-epoch",

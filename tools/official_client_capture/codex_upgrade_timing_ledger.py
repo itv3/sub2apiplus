@@ -173,22 +173,29 @@ REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
         # 两类事件的阶段、根因与前置在事件处理处严格限定（CANDIDATE_CAPTURE_RECOVERY_PHASES）。
         "attempt_started",
         "recovery_authorized",
+        # 修好接着跑第 11 项：停线不清候选审核标志，恢复（campaign-resume）必须能在审核下登记。
+        "recovery_verified",
     }
 )
 # 候选审核期间允许「对账 → 恢复授权 → 同 revision 续跑」的阶段：VC-5 采集 attempt 有预约、checkpoint
 # 与逐作业结果，可按已批准的恢复预览只重跑失败与受工具演进影响的作业。
 CANDIDATE_CAPTURE_RECOVERY_PHASES = frozenset({"VC-5"})
 STAGE_REVIEW_ALLOWED_EVENTS = frozenset(
-    {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized"}
+    {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized",
+     "recovery_verified"}
 )
 # R18：候选级阶段里只有 VC-4 的两个零请求动作（plan-candidate-gates、record-candidate-build）有幂等重派合同。
 # 候选审核期间，对账写入的阶段幂等重派证明可在同一 revision 重开该阶段（工具缺陷修好后逐字重派）；
 # 判为候选源码问题时仍走 invalidate-candidate。VC-5／VC-6 的零请求后处理走 post-run-tooling，不在此列。
 CANDIDATE_STAGE_REPLAY_PHASES = frozenset({"VC-4"})
 REVISION_REQUIRED_ALLOWED_EVENTS = frozenset(
-    {"candidate_invalidated", "stage_revision", "stop_the_line"}
+    {"candidate_invalidated", "stage_revision", "stop_the_line", "recovery_verified"}
 )
 RECOVERY_ROLES = ("clean_p0", "offline_regression", "tool_fix")
+# 修好接着跑第 11 项：campaign-resume 形态的 recovery_verified——批准收据、离线回归与工具修复（部署收据）三份，
+# 可从 stopped 或 stop_required 恢复任意可恢复原因的停线（旧形态只覆盖同根因两次）。
+RESUME_RECOVERY_ROLES = ("campaign_resume", "offline_regression", "tool_fix")
+CAMPAIGN_RESUME_SCHEMA = "campaign-resume/v1"
 RECOVERY_AUTHORIZATION_ROLES = ("recovery_approval", "recovery_preview")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -1412,8 +1419,10 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     if roles != sorted(roles) or len(set(roles)) != len(roles):
         raise TimingLedgerError(f"event {sequence}.receipts 必须按 role 唯一排序")
     normalized = [_validate_binding(root, item, f"event {sequence}.receipts") for item in receipts]
-    if event["event_type"] == "recovery_verified" and tuple(roles) != RECOVERY_ROLES:
-        raise TimingLedgerError("recovery_verified 必须绑定工具修复、离线回归和干净 P0 三份收据")
+    if event["event_type"] == "recovery_verified" and tuple(roles) not in {RECOVERY_ROLES, RESUME_RECOVERY_ROLES}:
+        raise TimingLedgerError(
+            "recovery_verified 必须绑定工具修复、离线回归和干净 P0（或 campaign-resume 批准）三份收据"
+        )
     if (
         event["event_type"] == "recovery_authorized"
         and tuple(roles) != RECOVERY_AUTHORIZATION_ROLES
@@ -1438,6 +1447,81 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     elif not isinstance(previous, str) or not SHA256_RE.fullmatch(previous):
         raise TimingLedgerError(f"event {sequence}.previous_event_sha256 非法")
     return {**event, "receipts": normalized}
+
+
+def _verify_campaign_resume_receipt(
+    root: Path,
+    normalized: Mapping[str, Any],
+    *,
+    sequence: int,
+    stop_snapshot: Mapping[str, Any] | None,
+    at_limit: list[str],
+) -> None:
+    """campaign-resume 形态的 recovery_verified：批准收据必须绑定上一条事件（批准时的账本 head）、恢复的那次
+    停线事件与清零的达上限根因集合，根因字段与收据一致（修好接着跑第 11 项）。"""
+
+    binding = next(item for item in normalized["receipts"] if item["role"] == "campaign_resume")
+    receipt, _raw = _load_json(_relative(root, binding["path"], "campaign-resume 批准收据"), "campaign-resume 批准收据")
+    expected_stop = (
+        None if stop_snapshot is None else {"sequence": stop_snapshot["sequence"], "sha256": stop_snapshot["sha256"]}
+    )
+    if (
+        receipt.get("schema_version") != CAMPAIGN_RESUME_SCHEMA
+        or receipt.get("campaign_ledger_head") != {"sequence": sequence - 1, "sha256": normalized["previous_event_sha256"]}
+        or receipt.get("timing_stop_event") != expected_stop
+        or receipt.get("timing_cleared_root_cause_ids") != list(at_limit)
+        or receipt.get("root_cause_id") != normalized["root_cause_id"]
+    ):
+        raise TimingLedgerError("campaign-resume 批准收据没有绑定当前账本 head、所恢复的停线或达上限根因")
+
+
+def resume_epoch(root: Path) -> int:
+    """计时账本里 campaign-resume 形态 recovery_verified 的次数（只扫事件，不重放）。"""
+
+    return sum(
+        1
+        for event, _raw in _load_events(root)
+        if event["event_type"] == "recovery_verified"
+        and tuple(item.get("role") for item in event.get("receipts", [])) == RESUME_RECOVERY_ROLES
+    )
+
+
+def resume_facts(root: Path) -> dict[str, Any]:
+    """campaign-resume 预览用的只读事实：当前状态、最近一次停线事件、达上限根因与已恢复次数（修好接着跑第 11 项）。"""
+
+    summary = inspect_ledger(root)
+    plan, _raw = _load_plan(root)
+    limit = int(plan["same_root_cause_retry_limit"])
+    stop_event: dict[str, Any] | None = None
+    resumes = 0
+    for event, raw in _load_events(root):
+        if event["event_type"] == "stop_the_line":
+            stop_event = {
+                "sequence": int(event["sequence"]),
+                "sha256": _sha256_bytes(raw),
+                "event_id": event["event_id"],
+                "phase": event["phase"],
+                "root_cause_id": event["root_cause_id"],
+                "recorded_at_utc": event["recorded_at_utc"],
+            }
+        elif event["event_type"] == "recovery_verified":
+            stop_event = None
+            if tuple(item.get("role") for item in event.get("receipts", [])) == RESUME_RECOVERY_ROLES:
+                resumes += 1
+    stopped = summary["status_before_pause"] == "stopped"
+    return {
+        "status": summary["status_before_pause"],
+        "stopped": stopped,
+        "stop_event": stop_event if stopped else None,
+        "at_limit_root_cause_ids": sorted(
+            cause for cause, count in summary["same_root_cause_failures"].items() if int(count) >= limit
+        ),
+        "resume_epoch": resumes,
+        "head_sequence": summary["head_sequence"],
+        "head_sha256": summary["head_sha256"],
+        "active_phase": summary["active_phase"],
+        "review_phase": summary["review_phase"],
+    }
 
 
 def _verify_stage_replay_receipts(
@@ -1533,6 +1617,8 @@ def _summarize(
     # 最后一条非预算控制事件：预算暂停、延期与显式放弃只记录预算控制，业务步骤的先后按实质事件判断。
     last_substantive_event: dict[str, Any] | None = None
     deadline_extensions: list[dict[str, Any]] = []
+    # 修好接着跑第 11 项：最近一次 stop_the_line 之前的可恢复状态快照，campaign-resume 据此恢复。
+    stop_snapshot: dict[str, Any] | None = None
     pause_facts: list[dict[str, Any]] = []
     campaign_extension: datetime | None = None
     stage_extensions: dict[str, float] = {}
@@ -1592,6 +1678,7 @@ def _summarize(
             "recovery_authorized",
             "stage_abandoned",
             "stop_the_line",
+            "recovery_verified",
         }:
             raise TimingLedgerError(
                 "recovery_required 期间只允许对账或已批准的恢复动作"
@@ -2024,6 +2111,29 @@ def _summarize(
         elif event_type == "stop_the_line":
             if not normalized["next_action"]:
                 raise TimingLedgerError("stop_the_line 必须冻结唯一下一动作")
+            # 修好接着跑第 11 项：停线会清掉恢复／阶段审核标志；先留快照，campaign-resume 据此恢复。停线写入方
+            # （对账器、父监督器）先以同根因 stage_abandoned 放弃了当前阶段时，记下该阶段与原起点以便重开。
+            abandoned_stage: dict[str, Any] | None = None
+            if (
+                last_substantive_event is not None
+                and last_substantive_event["event_type"] == "stage_abandoned"
+                and last_substantive_event["root_cause_id"] == normalized["root_cause_id"]
+                and abandoned_started is not None
+            ):
+                abandoned_phase = str(last_substantive_event["phase"])
+                abandoned_stage = {
+                    "phase": abandoned_phase,
+                    "started": abandoned_started,
+                    "revision": current_revision if abandoned_phase in CANDIDATE_PHASES else None,
+                }
+            stop_snapshot = {
+                "sequence": sequence,
+                "sha256": _sha256_bytes(raw),
+                "root_cause_id": normalized["root_cause_id"],
+                "recovery": (recovery_required, recovery_phase, recovery_root_cause_id),
+                "stage_review": (stage_review_required, review_phase, review_root_cause_id),
+                "abandoned_stage": abandoned_stage,
+            }
             stopped = True
             recovery_required = False
             recovery_phase = None
@@ -2031,6 +2141,43 @@ def _summarize(
             stage_review_required = False
             review_phase = None
             review_root_cause_id = None
+        elif event_type == "recovery_verified" and tuple(
+            item["role"] for item in normalized["receipts"]
+        ) == RESUME_RECOVERY_ROLES:
+            # 修好接着跑第 11 项：campaign-resume 凭修复证据恢复任意可恢复原因的停线（stopped），或同根因
+            # 已达上限（stop_required）。清零全部达上限的根因；恢复停线前的恢复／审核状态；停线写入方先放弃
+            # 了阶段的，以原起点重开该阶段并置 recovery_required——之后统一走"对账 → 恢复预览批准 → 续跑"。
+            limit = plan["same_root_cause_retry_limit"]
+            at_limit = sorted(cause for cause, count in failure_counts.items() if count >= limit)
+            if not stopped and not at_limit:
+                raise TimingLedgerError("campaign-resume 只能恢复 stopped 或同根因已达上限的账本")
+            _verify_campaign_resume_receipt(
+                root, normalized, sequence=sequence, stop_snapshot=stop_snapshot if stopped else None, at_limit=at_limit
+            )
+            for cause in at_limit:
+                failure_counts[cause] = 0
+            if stopped:
+                stopped = False
+                snapshot = stop_snapshot or {}
+                recovery_required, recovery_phase, recovery_root_cause_id = snapshot.get("recovery", (False, None, None))
+                stage_review_required, review_phase, review_root_cause_id = snapshot.get(
+                    "stage_review", (False, None, None)
+                )
+                reopened = snapshot.get("abandoned_stage")
+                if (
+                    reopened is not None
+                    and active_phase is None
+                    and not (recovery_required or stage_review_required or review_required or revision_required)
+                ):
+                    active_phase = str(reopened["phase"])
+                    active_phase_started = reopened["started"]
+                    active_phase_revision = reopened["revision"]
+                    if active_phase_revision is not None:
+                        revision_phase_state.setdefault(active_phase_revision, {})[active_phase] = "started"
+                    recovery_required = True
+                    recovery_phase = active_phase
+                    recovery_root_cause_id = snapshot.get("root_cause_id")
+                stop_snapshot = None
         elif event_type == "recovery_verified":
             cause = normalized["root_cause_id"]
             if not stopped or cause is None or failure_counts.get(cause, 0) < plan["same_root_cause_retry_limit"]:
