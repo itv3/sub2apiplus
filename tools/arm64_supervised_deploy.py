@@ -274,8 +274,10 @@ from urllib.parse import urlsplit
 # 与 egress-guard 逻辑未变，出口守护无需重装。
 # 2026-09-28（修好接着跑第 26 项，B3-15）：被看门狗中止并已对账（无 reservation、零请求、总账绑定）的父 run 是可信终态，批次链
 # 审计按失败终态走后继协议，续跑协议透传 Campaign 目录。control 层变化，wire／evidence 不变；监督器摘要随之变化。
+# 2026-09-28（修好接着跑第 30 项，B3-19）：恢复链协议核验父动作诊断不再按错误类型白名单，改为失败种类＋execution-failure 类别，
+# 显式排除清理／中断异常；补跑动作因任何工具缺陷抛出的异常修好后都能用 N+1 零请求预览承接。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "0819e07220baa8d926cfcde40177aadaa28986181bcf68c450e1fcce7376c3db"
+    "ae9ce809e9f8ed16ed364952e31f3ec044e4859879f0f57091302f45dcdf3579"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
