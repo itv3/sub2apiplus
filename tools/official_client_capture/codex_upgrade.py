@@ -5440,11 +5440,13 @@ def _latest_failed_attempt_for_identity(
     phase: str,
     candidate_id: str | None,
     identity: Mapping[str, Any],
+    manifest: Mapping[str, Any] | None = None,
 ) -> tuple[Path, dict[str, Any]] | None:
     """返回最近且身份完全相同的失败 attempt，供 transition 只读承接。
 
     兼容旧工具把“仅可选 Job 失败”误写为 ``awaiting_receipts`` 的历史
     attempt；具体的 Kilo／seal 空边界仍由恢复 scope 做完整校验。
+    修好接着跑第 21 项：等待封存但有作业被其后登记的工具演进作废的 attempt 也是续跑来源。
     """
 
     for attempt_root, _ in _ordered_capture_attempts(
@@ -5471,7 +5473,21 @@ def _latest_failed_attempt_for_identity(
                 for result in raw_results
             )
         )
-        if source_status != "failed" and not legacy_optional_failures:
+        evolution_invalidated = (
+            source_status == "awaiting_receipts"
+            and not legacy_optional_failures
+            and bool(
+                _attempt_evolution_invalidated_job_ids(
+                    campaign_dir,
+                    manifest if manifest is not None else load_campaign_manifest(campaign_dir),
+                    attempt_root,
+                    payload,
+                    phase=phase,
+                    candidate_id=candidate_id,
+                )
+            )
+        )
+        if source_status != "failed" and not legacy_optional_failures and not evolution_invalidated:
             continue
         if _fingerprint(payload.get("identity")) != _fingerprint(identity):
             raise ConfigurationError(
@@ -17460,6 +17476,9 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     if not _requires_complete_vc_artifacts(manifest):
         raise ConfigurationError("compile-and-run-vc-batch 只用于 0.154.0 起的完整 VC 链。")
     _require_tool_evolution_registered(campaign_dir, manifest, action="compile-and-run-vc-batch")
+    _refuse_seal_chain_on_evolution_invalidated_attempt(
+        campaign_dir, manifest, phase=phase, action_plan=getattr(arguments, "action_plan", None)
+    )
     # 与 campaign-run CLI（codex_upgrade_supervisor._assert_campaign_run_admitted）同一底层门禁：
     # 补齐器先行、锁内重放，0.154 formal 必须已注册且未 blocked／终态／超预算。
     try:
@@ -32620,7 +32639,7 @@ def _latest_attempt_summary(
                 or preview.get("review_sha256") != _fingerprint(core)
             ):
                 raise ConfigurationError("seal 预览身份或复核摘要不一致。")
-        return {
+        summary: dict[str, Any] = {
             "attempt_id": path.name,
             "status": attempt["status"],
             "failed_job_ids": _failed_job_ids(attempt.get("results")),
@@ -32637,6 +32656,20 @@ def _latest_attempt_summary(
                 else None
             ),
         }
+        if attempt["status"] == "awaiting_receipts" and not summary["failed_job_ids"]:
+            # 修好接着跑第 21 项：等待封存的 attempt 若有作业被其后登记的工具演进作废，就不是正常待封存，
+            # 而是续跑来源；只在确有失效作业时写字段，状态输出的其余字节不变。
+            invalidated = _attempt_evolution_invalidated_job_ids(
+                campaign_dir,
+                _manifest if _manifest is not None else load_campaign_manifest(campaign_dir),
+                path,
+                attempt,
+                phase=phase,
+                candidate_id=candidate_id,
+            )
+            if invalidated:
+                summary["evolution_invalidated_job_ids"] = invalidated
+        return summary
     return None
 
 
@@ -33366,6 +33399,14 @@ def campaign_status(
                     "存在失败 Job，禁止 seal；使用 resume --rerun-failed，"
                     "产出侧变化须先建立同版本后继"
                 )
+            elif candidate_attempt.get("evolution_invalidated_job_ids"):
+                status = "candidate_capture_failed"
+                next_command = (
+                    "工具演进使已完成作业失效（"
+                    + "、".join(candidate_attempt["evolution_invalidated_job_ids"])
+                    + "），禁止 seal：reconcile-attempt 入账并批准恢复预览后，"
+                    "resume --rerun-failed 只重跑失效作业，再重新走 Kilo 与 seal"
+                )
             elif candidate_attempt["seal_preview"]:
                 status = "candidate_awaiting_seal_approval"
                 next_command = (
@@ -33423,6 +33464,16 @@ def campaign_status(
         elif official_attempt["status"] == "reserved_or_interrupted":
             status = "official_capture_interrupted"
             next_command = "先执行 reconcile-attempt；按判定与已批准预览决定 resume 或永久停线"
+        elif official_attempt["status"] == "awaiting_receipts" and official_attempt.get(
+            "evolution_invalidated_job_ids"
+        ):
+            status = "official_capture_failed"
+            next_command = (
+                "工具演进使已完成作业失效（"
+                + "、".join(official_attempt["evolution_invalidated_job_ids"])
+                + "），禁止 seal：reconcile-attempt 入账并批准恢复预览后，"
+                "resume --rerun-failed 只重跑失效作业，再 seal"
+            )
         elif official_attempt["status"] == "awaiting_receipts":
             status = (
                 "official_awaiting_seal_approval"
@@ -36693,12 +36744,16 @@ def _phase_evaluation_recovery_scope(
     attempt: Mapping[str, Any],
     allow_empty: bool = False,
     allow_awaiting_failures: bool = False,
+    allow_evolution_invalidated: bool = False,
 ) -> dict[str, Any]:
     """建立失败 attempt 的确定性重跑闭集。
 
     普通 partial attempt 只有至少一个 Job 已完成时才允许恢复；首个 Job 前
     失败则必须满足严格空边界，并把全部冻结 Job 纳入执行闭集。返回值会写入
     transition 摘要，使下一轮不能扩大执行范围。
+
+    ``allow_evolution_invalidated``（resume 与 R17 复算打开）：等待封存、没有失败作业、但有已完成作业被
+    其后登记的工具演进作废的 attempt 也是来源（官方与候选均可，修好接着跑第 21 项），执行闭集只是失效作业。
     """
 
     source_status = attempt.get("status")
@@ -36763,7 +36818,13 @@ def _phase_evaluation_recovery_scope(
     )
     pending_ids = sorted(set(planned) - set(result_by_id))
     execute_ids = sorted(set(failed_ids) | set(pending_ids))
-    if source_status == "awaiting_receipts":
+    # 等待封存且无失败作业：只有确有作业被工具演进作废时才是续跑来源（下方算出失效作业后核对）。
+    # 不拦 Kilo／seal 边界：新 attempt 重新走 Kilo 与 seal，旧 attempt 的 Kilo 与 seal 草稿不被沿用；
+    # 环境连续性比较的是采集收尾的 after 探针，不受 Kilo 影响。
+    evolution_source = (
+        source_status == "awaiting_receipts" and not failed_ids and allow_evolution_invalidated
+    )
+    if source_status == "awaiting_receipts" and not evolution_source:
         if phase != "candidate" or not failed_ids:
             raise ConfigurationError(
                 "awaiting_receipts 只有包含失败 Candidate Job 时才能作为后继恢复源。"
@@ -36810,6 +36871,10 @@ def _phase_evaluation_recovery_scope(
         campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
     )
     evolved_ids = sorted(set(completed_ids) & set(evolution_impact["affected_job_ids"]))
+    if evolution_source and not evolved_ids:
+        raise ConfigurationError(
+            "等待封存的 attempt 没有被工具演进作废的作业，不是续跑来源；按正常流程 seal。"
+        )
     if evolved_ids:
         completed_ids = sorted(set(completed_ids) - set(evolved_ids))
         execute_ids = sorted(set(execute_ids) | set(evolved_ids))
@@ -41172,6 +41237,7 @@ def recovery_reuse_check(
         phase=phase,
         candidate_id=candidate_id,
         identity=identity,
+        manifest=manifest,
     )
     if source is None:
         raise ConfigurationError(
@@ -41193,6 +41259,7 @@ def recovery_reuse_check(
         attempt_root=source_root,
         attempt=source_attempt,
         allow_awaiting_failures=allow_awaiting_failures,
+        allow_evolution_invalidated=True,
     )
     completed_ids, execute_ids = _validate_recovery_scope_plan(
         campaign_dir,
@@ -42298,6 +42365,9 @@ def _active_unsealed_attempts(
             if (
                 attempt.get("status") == "awaiting_receipts"
                 and attempt_root.name != sealed_attempt_id
+                # 已按"工具演进作废作业"对账的等待封存 attempt 以对账收据为终态（同已对账孤儿），
+                # 不再阻塞续跑的新预约；它改由 _failed_capture_attempts 要求显式 resume。
+                and not _attempt_evolution_reconciled(campaign_dir, attempt_root.name)
             ):
                 active.append(
                     f"{candidate_id or 'official'}:{attempt_root.name}"
@@ -42330,7 +42400,10 @@ def _failed_capture_attempts(
             attempt_root.name,
             _verified_campaign_manifest=_manifest,
         )
-        if attempt.get("status") == "failed":
+        if attempt.get("status") == "failed" or (
+            attempt.get("status") == "awaiting_receipts"
+            and _attempt_evolution_reconciled(campaign_dir, attempt_root.name)
+        ):
             failed.append(f"{candidate_id or 'official'}:{attempt_root.name}")
     return failed
 
@@ -46439,6 +46512,7 @@ def _run_capture_attempt(
             phase=phase,
             candidate_id=candidate_id,
             identity=identity,
+            manifest=manifest,
         )
         if source is None and phase == "candidate" and candidate_id is not None:
             runtime_successor_recovery = _runtime_successor_recovery_source(
@@ -46509,6 +46583,7 @@ def _run_capture_attempt(
                     attempt_root=recovery_source_root,
                     attempt=recovery_source_attempt,
                     allow_awaiting_failures=allow_awaiting_failures,
+                    allow_evolution_invalidated=True,
                 )
                 (
                     recovery_completed_ids,
@@ -57236,6 +57311,50 @@ def _tool_evolution_unregistered_drift(
     return drift
 
 
+def _refuse_seal_chain_on_evolution_invalidated_attempt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    action_plan: Any,
+) -> None:
+    """编译 VC-1／VC-5 seal 链批次前：目标 attempt 有作业被工具演进作废就零写入拒绝（修好接着跑第 21 项）。
+
+    seal 本身也会拒绝，但派发后才失败会让父批次落入恢复或审核、多绕一轮；这里在任何落盘之前拦下，
+    指向真实可走的续跑路径。动作计划本身的合法性仍由编译器校验，读不到就交给编译器报错。
+    """
+
+    if phase not in {"VC-1", "VC-5"} or not isinstance(action_plan, Path) or not action_plan.is_file():
+        return
+    try:
+        plan = _read_json(action_plan, "VC action plan")
+    except ConfigurationError:
+        return
+    actions = plan.get("actions") if isinstance(plan, Mapping) else None
+    for action in actions if isinstance(actions, list) else []:
+        target = codex_upgrade_supervisor._seal_chain_attempt_target(action)
+        if target is None:
+            continue
+        _campaign, side, candidate_id, attempt_id = target
+        if side == "candidate" and not candidate_id:
+            continue
+        attempt_root = campaign_dir / _capture_attempt_relative(side, candidate_id) / "attempts" / attempt_id
+        if not (attempt_root / "attempt.json").is_file():
+            continue
+        _root, attempt = _load_capture_attempt(
+            campaign_dir, side, candidate_id, attempt_id, _verified_campaign_manifest=manifest
+        )
+        invalidated = _attempt_evolution_invalidated_job_ids(
+            campaign_dir, manifest, attempt_root, attempt, phase=side, candidate_id=candidate_id
+        )
+        if invalidated:
+            raise ToolEvolutionRequired(
+                f"compile-and-run-vc-batch 拒绝：{action.get('action_id')} 要封存的 attempt {attempt_id} "
+                f"有作业被工具演进作废（{'、'.join(invalidated)}）。先 reconcile-attempt 入账并批准恢复预览，"
+                "resume --rerun-failed 只重跑失效作业，再对新 attempt 走 seal；本次未写入任何文件。"
+            )
+
+
 def _require_tool_evolution_registered(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -57297,6 +57416,34 @@ def _attempt_evolution_impact(
     except codex_upgrade_wire_transition.WireTransitionError as error:
         raise ConfigurationError(f"attempt 工具演进影响无法判定：{error}") from error
     return {"index": index, **impact}
+
+
+def _attempt_evolution_invalidated_job_ids(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> list[str]:
+    """已完成作业中被 attempt 生产序号之后的工具演进作废的作业（没有演进时为空，不读预约）。
+
+    非空说明这个 attempt 的部分结果已失效：不能 seal，也不能当作正常等待封存；它是续跑来源——
+    对账后按恢复预览只重跑这些作业，其余已完成作业只读复用（修好接着跑第 21 项）。
+    """
+
+    impact = _attempt_evolution_impact(
+        campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+    )
+    if not impact["affected_job_ids"]:
+        return []
+    completed = {
+        str(item.get("id"))
+        for item in attempt.get("results", [])
+        if isinstance(item, Mapping) and item.get("status") == "complete"
+    }
+    return sorted(completed & set(impact["affected_job_ids"]))
 
 
 def _require_attempt_current_under_evolutions(
@@ -57989,6 +58136,17 @@ def _account_sealed_candidate_command(arguments: argparse.Namespace) -> dict[str
         )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
+
+
+def _attempt_evolution_reconciled(campaign_dir: Path, attempt_id: str) -> bool:
+    """等待封存的 attempt 已按"工具演进作废作业"对账（收据带 tool_evolution_invalidation）。
+
+    这样的 attempt 不再算待封存：新 attempt 只能经已批准恢复预览的显式 resume 创建，只重跑失效作业
+    （修好接着跑第 21 项）。
+    """
+
+    receipt = _attempt_reconciled_terminal(campaign_dir, attempt_id)
+    return isinstance(receipt, Mapping) and isinstance(receipt.get("tool_evolution_invalidation"), Mapping)
 
 
 def _attempt_reconciled_terminal(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:

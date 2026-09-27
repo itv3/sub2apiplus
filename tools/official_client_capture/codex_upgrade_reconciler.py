@@ -2184,6 +2184,51 @@ def authorize_recovery_preview(
     }
 
 
+def _evolution_invalidation_facts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> dict[str, Any] | None:
+    """等待封存的 attempt 若有已完成作业被其生产序号之后登记的工具演进作废，返回失效事实；否则 None。"""
+
+    try:
+        invalidated = codex_upgrade._attempt_evolution_invalidated_job_ids(
+            campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
+        )
+        if not invalidated:
+            return None
+        impact = codex_upgrade._attempt_evolution_impact(
+            campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+        )
+        chain = codex_upgrade._campaign_tool_evolutions(campaign_dir, manifest)
+    except codex_upgrade.ConfigurationError as error:
+        raise ReconcilerError(str(error)) from error
+    latest = max(int(index) for index in impact["evolution_indexes"])
+    return {
+        "source_index": int(impact["index"]),
+        "evolution_indexes": [int(index) for index in impact["evolution_indexes"]],
+        "latest_evolution_index": latest,
+        "latest_evolution_receipt_sha256": str(chain[latest - 1]["receipt_sha256"]),
+        "invalidated_job_ids": list(invalidated),
+    }
+
+
+def _evolution_invalidation_cause(phase: str, facts: Mapping[str, Any]) -> dict[str, Any]:
+    """演进失效的暂停原因：不是失败根因，只作计时账本 recovery_required／授权的原因标识，不入总账计数。"""
+
+    return {
+        "root_cause_id": f"tool-evolution-{int(facts['latest_evolution_index']):02d}",
+        "stable_error_code": "attempt.tool-evolution-invalidated",
+        "failed_step": "tool-evolution",
+        "stable_dimensions": {"phase": phase},
+        "component": COMPONENT,
+    }
+
+
 def reconcile_attempt(
     campaign_dir: Path,
     attempt_id: str,
@@ -2208,6 +2253,8 @@ def reconcile_attempt(
     observed = now or _utc_now()
     phase, candidate_id, attempt_root = _locate_attempt(campaign_dir, attempt_id)
     attempt: dict[str, Any] | None = None
+    # 修好接着跑第 21 项：等待封存、但有已完成作业被其后登记的工具演进作废的 attempt（不是失败）。
+    evolution_invalidation: dict[str, Any] | None = None
     if recovery_revision is not None:
         if phase != "candidate" or candidate_id is None:
             raise ReconcilerError("恢复段只存在于候选 attempt")
@@ -2250,7 +2297,13 @@ def reconcile_attempt(
                 campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
             )
             if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
-                raise ReconcilerError("attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败或中断的 attempt")
+                evolution_invalidation = _evolution_invalidation_facts(
+                    campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
+                )
+                if evolution_invalidation is None:
+                    raise ReconcilerError(
+                        "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进作废作业的 attempt"
+                    )
         stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
         if stage_result.exists():
             raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
@@ -2307,7 +2360,14 @@ def reconcile_attempt(
         ledger.get("status") == "stopped"
         and fallback_cause["stable_error_code"] == "attempt.identity-changed"
     )
-    if (
+    if evolution_invalidation is not None:
+        # 演进失效不是失败：不编失败根因、不计同根因次数（总账载荷不带 root_cause）。计时账本的暂停原因
+        # 用 tool-evolution-NN（总账里不存在，不会触顶），授权按同一原因恢复阶段。
+        cause = _evolution_invalidation_cause(phase, evolution_invalidation)
+        root_causes = [cause]
+        array_contract = False
+        failure_observations = []
+    elif (
         recorded_root_causes
         and recorded_cause_preferred
     ):
@@ -2367,6 +2427,8 @@ def reconcile_attempt(
     if array_contract:
         receipt["failure_observations"] = failure_observations
         receipt["root_causes"] = root_causes
+    if evolution_invalidation is not None:
+        receipt["tool_evolution_invalidation"] = dict(evolution_invalidation)
     receipt_path = receipt_dir / ATTEMPT_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -2430,6 +2492,24 @@ def reconcile_attempt(
                 )
             else:
                 ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
+        elif evolution_invalidation is not None:
+            # attempt 已完成（账本是 attempt_completed），不补 attempt 事件；把所在阶段暂停为 recovery_required，
+            # 授权后按恢复预览只重跑失效作业。阶段已因别的原因暂停时沿用该原因（授权一并消费）；到期暂停
+            # 由判定提示先延期；其它状态只入账。
+            expected_phase = "VC-1" if phase == "official" else "VC-5"
+            if ledger["status"] == "active" and ledger.get("active_phase") == expected_phase:
+                ledger_events.append(
+                    _append_ledger_event(
+                        ledger_dir,
+                        event_id=f"reconcile-attempt-evolution-{attempt_id}",
+                        phase=expected_phase,
+                        event_type="recovery_required",
+                        root_cause_id=cause["root_cause_id"],
+                        next_action="resume-rerun-failed",
+                    )
+                )
+            else:
+                ledger_note = f"skipped:evolution_invalidation_ledger_{ledger['status']}"
         elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
         elif ledger["status"] in {"active", "recovery_required", "stage_review_required"} or (ledger["status"] == "deadline_paused" and attempt_id in active_ids):
@@ -2524,6 +2604,13 @@ def reconcile_attempt(
             reconciliation_payload["root_causes"] = root_causes
         if recovery_revision is not None:
             reconciliation_payload["recovery_revision"] = recovery_revision
+        if evolution_invalidation is not None:
+            # 演进失效只核算请求，不带 root_cause：总账不把它计入同根因次数。
+            del reconciliation_payload["root_cause"]
+            reconciliation_payload["tool_evolution_invalidation"] = dict(evolution_invalidation)
+            reconciliation_payload["recovery_required_event_sha256"] = _ledger_event_sha256(
+                ledger_dir, f"reconcile-attempt-evolution-{attempt_id}"
+            )
         batch = _commit_batch(
             campaign_dir,
             operation_id=f"reconcile-attempt:{subject}",
@@ -2580,6 +2667,8 @@ def reconcile_attempt(
     if array_contract:
         result["failure_observations"] = failure_observations
         result["root_causes"] = root_causes
+    if evolution_invalidation is not None:
+        result["tool_evolution_invalidation"] = dict(evolution_invalidation)
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")

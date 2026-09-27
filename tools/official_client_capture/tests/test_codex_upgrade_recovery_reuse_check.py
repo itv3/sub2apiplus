@@ -25,7 +25,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
 # resume 失败重跑代码块（从 rerun_failed 分支到承接集合比对之前）的摘要。
-RERUN_BLOCK_SHA256 = "c9cfb143eed431989c93a3d7277a20399515eb3e67d11e948169cc183254caeb"
+RERUN_BLOCK_SHA256 = "10e805267cce8819445592369700f39861f0d20c5911ad0612225283e3b5b9aa"
 # resume 与复算共同按序调用的内部函数（候选专用的 runtime successor 只在 resume 里）。
 SHARED_SEQUENCE = (
     "_latest_failed_attempt_for_identity(",
@@ -210,7 +210,12 @@ class OfficialRecoveryReuseCheckTests(unittest.TestCase):
                 reuse_job_ids=["b", "a"], execute_job_ids=["c"],
             )
         self.assertEqual((result["status"], result["phase"], result["candidate_id"]), ("consistent", "candidate", "cand"))
-        self.assertEqual(latest.call_args.kwargs, {"phase": "candidate", "candidate_id": "cand", "identity": identity})
+        # 第 21 项：同时传入 Campaign 清单，供识别"等待封存但有作业被工具演进作废"的来源。
+        self.assertEqual(
+            latest.call_args.kwargs,
+            {"phase": "candidate", "candidate_id": "cand", "identity": identity,
+             "manifest": self.patches["_require_formal_campaign"].return_value},
+        )
         job_kwargs = self.patches["_campaign_jobs"].call_args.kwargs
         self.assertEqual((job_kwargs["candidate_id"], job_kwargs["build_id"], job_kwargs["candidate_image_id"]), ("cand", "b", identity["image_id"]))
         prior = self.patches["_prior_complete_results"].call_args

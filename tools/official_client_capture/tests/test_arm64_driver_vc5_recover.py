@@ -96,6 +96,35 @@ class VC5RecoverPlanTests(unittest.TestCase):
                 supervisor.candidate_recovery_parent_identity({**failed, "actions": run_plan["actions"]})[2], self.IDENTITY
             )
 
+    def test_parent_is_latest_capture_or_recovery_batch_even_after_seal_chain_batches(self) -> None:
+        """修好接着跑第 21 项：工具演进作废作业后 seal 被拒，最新 VC-5 批次可能是 seal 链批次；
+        续跑计划仍取最新的采集／续跑批次作父身份，续跑预览批次本身也可作父。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign, preview, failed = self._layout(root)
+            manifests = campaign / "control" / "vc" / "run-manifests"
+            seal = dict(failed, batch_id="vc-5-0010", batch_sequence=10, execute_items=["candidate-seal"], actions=[
+                {"action_id": "candidate-seal-a-assertion-bundle", "operation": "VC-5:prepare-candidate-assertion-bundle",
+                 "timeout_seconds": 1800.0, "command": ["/usr/bin/env", "CAMPAIGN_DIR=/c", "ATTEMPT_ID=a1", "SIDE=candidate",
+                                                        "CANDIDATE_ID=cand-r5", "/usr/bin/bash", "/d/prepare_assertion_bundle.sh"],
+                 "item_ids": ["candidate-seal"]}])
+            (manifests / "0010-vc-5.json").write_text(json.dumps(seal), encoding="utf-8")
+            completed = self._generate(root / "plans", campaign, preview)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("parent 0009-vc-5.json", completed.stdout)
+            preview_plan = json.loads((root / "plans" / "action-plan-vc5-recovery-preview.json").read_text(encoding="utf-8"))
+            # 续跑预览批次作最新父：身份参数逐字相同。
+            preview_batch = dict(failed, batch_id="vc-5-0011", batch_sequence=11, actions=preview_plan["actions"])
+            (manifests / "0011-vc-5.json").write_text(json.dumps(preview_batch), encoding="utf-8")
+            again = self._generate(root / "plans2", campaign, preview)
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertIn("parent 0011-vc-5.json", again.stdout)
+            self.assertEqual(
+                json.loads((root / "plans2" / "action-plan-vc5-recovery-preview.json").read_text(encoding="utf-8")),
+                preview_plan,
+            )
+
     def test_generator_refuses_mismatched_preview_or_campaign(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

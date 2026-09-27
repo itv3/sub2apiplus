@@ -18904,6 +18904,192 @@ class CodexUpgradeTest(unittest.TestCase):
                     label="零请求后处理失败",
                 )
 
+    def _evolution_patches(self, invalidated: list[str]) -> list:
+        """模拟"其后登记的工具演进作废了部分作业"：演进影响与演进链两处读口径同一份事实。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        impact = {
+            "index": 0,
+            "affected_job_ids": [*invalidated, "job-of-other-phase"],
+            "changed_paths": ["run_candidate_core_capture.sh"],
+            "evolution_indexes": [1],
+        }
+        return [
+            mock.patch.object(codex_upgrade, "_attempt_evolution_impact", mock.Mock(return_value=impact)),
+            mock.patch.object(codex_upgrade, "_campaign_tool_evolutions", mock.Mock(return_value=[{"receipt_sha256": "e" * 64}])),
+            # 夹具的环境探针是占位绑定，R17 复算在这里不成立；R17 对演进失效来源的口径由单测覆盖。
+            mock.patch.object(reconciler, "_resume_reuse_check", mock.Mock(return_value={"status": "consistent"})),
+        ]
+
+    def test_b0_evolution_invalidated_awaiting_attempt_reconciles_and_authorizes_resume(self) -> None:
+        """修好接着跑第 21 项：等待 seal 的候选 attempt 有作业被其后登记的工具演进作废——状态指向续跑；
+        对账只核算请求、不计根因，把 VC-5 暂停为 recovery_required；批准预览并授权后回到 active；该 attempt
+        不再算待封存（改由显式 resume 续跑），针对它的 seal 链批次编译前零写入拒绝。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            attempt_id = attempt_root.name
+            jobs = sorted(self._b0_candidate_job_ids(fixture))
+            invalidated = jobs[:2]
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(invalidated):
+                    stack.enter_context(patcher)
+                status = codex_upgrade.campaign_status(campaign_dir, "cand-1")
+                self.assertEqual(status["status"], "candidate_capture_failed")
+                self.assertIn("工具演进使已完成作业失效", status["next_command"])
+                self.assertEqual(status["candidate_attempt"]["evolution_invalidated_job_ids"], invalidated)
+                # 对账前仍算待封存：不能绕过对账直接续跑。
+                self.assertEqual(
+                    codex_upgrade._active_unsealed_attempts(campaign_dir, "candidate"), [f"cand-1:{attempt_id}"]
+                )
+
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                self.assertEqual(result["tool_evolution_invalidation"]["invalidated_job_ids"], invalidated)
+                self.assertEqual(result["root_cause"]["root_cause_id"], "tool-evolution-01")
+                self.assertEqual(
+                    [item["event_id"] for item in result["ledger_events"]], [f"reconcile-attempt-evolution-{attempt_id}"]
+                )
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual(
+                    (summary["status"], summary["recovery_root_cause_id"]), ("recovery_required", "tool-evolution-01")
+                )
+                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                payload = head["operations"][f"reconcile-attempt:{attempt_id}"]
+                self.assertEqual(head["root_cause_counts"], head_before["root_cause_counts"])
+                events = codex_upgrade_project_ledger._load_events(fixture["ledger"])
+                committed = next(event for event in events if event["operation_id"] == f"reconcile-attempt:{attempt_id}")
+                self.assertNotIn("root_cause", committed["payload"])
+                self.assertEqual(committed["payload"]["tool_evolution_invalidation"]["invalidated_job_ids"], invalidated)
+                self.assertEqual(payload["event_type"], "reconciliation_committed")
+                preview = result["recovery_preview"]
+                self.assertEqual(preview["execute_job_ids"], invalidated)
+                self.assertEqual(preview["reuse_job_ids"], jobs[2:])
+
+                # 对账后：不再算待封存，改由显式 resume（失败门）续跑。
+                self.assertEqual(codex_upgrade._active_unsealed_attempts(campaign_dir, "candidate"), [])
+                self.assertEqual(codex_upgrade._failed_capture_attempts(campaign_dir, "candidate"), [f"cand-1:{attempt_id}"])
+
+                approved = reconciler.reconcile_attempt(
+                    campaign_dir, attempt_id, approve_recovery_sha256=preview["review_sha256"]
+                )
+                authorized = reconciler.authorize_recovery_preview(
+                    campaign_dir, attempt_id, Path(approved["recovery_preview_path"])
+                )
+                self.assertTrue(authorized["timing_recovery_event"]["appended"])
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+
+                # 针对该 attempt 的 seal 链批次：编译前零写入拒绝，指向续跑。
+                plan_path = root / "seal-plan.json"
+                plan_path.write_text(json.dumps({
+                    "schema_version": "codex-upgrade-vc-action-plan/v1",
+                    "execute_item_ids": ["candidate-seal"],
+                    "reuse_item_ids": jobs,
+                    "actions": self._b0_seal_batch_manifest(fixture)["actions"],
+                }), encoding="utf-8")
+                with self.assertRaisesRegex(codex_upgrade.ToolEvolutionRequired, "有作业被工具演进作废"):
+                    codex_upgrade._refuse_seal_chain_on_evolution_invalidated_attempt(
+                        campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
+                    )
+            # 没有演进时同一 attempt 是正常待封存：seal 链不拦、等待 seal 的对账仍被拒绝。
+            codex_upgrade._refuse_seal_chain_on_evolution_invalidated_attempt(
+                campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
+            )
+
+    def test_b0_seal_chain_failure_then_evolution_allows_recovery_preview_successor(self) -> None:
+        """修好接着跑第 21 项：seal 链批次失败（post-run-tooling）并对账后，修复作废了该 attempt 的作业——
+        逐字重派 seal 必然再败；attempt 按演进作废对账后，N+1 零请求恢复预览是唯一允许的后继。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture, "f" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="child-returncode",
+                error_type="ChildProcessError", post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="post-run-tooling"
+            )
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_dir, campaign_dir)["status"], "recoverable")
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            invalidated = sorted(self._b0_candidate_job_ids(fixture))[:1]
+            identity = {
+                "--candidate-id": "cand-1",
+                "--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json"),
+                "--runtime-image": "repo@sha256:" + "1" * 64,
+                "--candidate-image-id": "sha256:" + "1" * 64,
+                "--candidate-source": "/root/candidate/source",
+                "--build-id": "build-1",
+                "--deployed-version": "0.157.0",
+                "--profile-id": "profile-1",
+                "--profile-digest": "2" * 64,
+                "--candidate-purpose": "production_replacement",
+            }
+            preview_action = {
+                "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                "timeout_seconds": 1800,
+                "command": supervisor.candidate_recovery_preview_command(
+                    ["/usr/bin/python3", "/tools/codex_upgrade.py"], str(campaign_dir), identity
+                ),
+                "item_ids": ["candidate-run"],
+            }
+            successor = dict(
+                inner, batch_sequence=2, batch_id="vc-5-0002", batch_sha256="2" * 64,
+                actions=[preview_action], execute_items=["candidate-run"], reuse_items=[],
+            )
+
+            def check(manifest: dict) -> bool:
+                return supervisor._validate_batched_evolution_recovery_successor(
+                    prior_state, inner, run_dir, manifest, campaign_dir=campaign_dir
+                )
+
+            # attempt 尚未按演进作废对账：形态相符即失败关闭。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "尚未按工具演进作废对账"):
+                check(successor)
+            with contextlib.ExitStack() as stack:
+                for patcher in self._evolution_patches(invalidated):
+                    stack.enter_context(patcher)
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            # 账本已因 post-run-tooling 对账回到 active，演进作废对账再暂停为 recovery_required。
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "recovery_required")
+            self.assertTrue(check(successor))
+            # 不是恢复预览的后继：交给其它协议（这里是逐字重派协议）。
+            self.assertFalse(check(self._b0_seal_batch_manifest(fixture, batch_sequence=2)))
+            # 形态相符但冻结字段漂移或候选不一致：失败关闭。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "N\\+1 批次"):
+                check(dict(successor, batch_sequence=3))
+            with self.assertRaisesRegex(supervisor.SupervisorError, "零请求恢复预览"):
+                check(dict(successor, reuse_items=["x"]))
+            # 历史链校验：失败的 seal 批次之后接恢复预览通过（先于逐字重派协议匹配）。
+            history = [(prior_state, inner, run_dir)]
+            self.assertEqual(
+                supervisor._validate_batched_campaign_history(
+                    successor, history, campaign_dir=campaign_dir, staging_model=False
+                ),
+                history,
+            )
+
     def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
         """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
 

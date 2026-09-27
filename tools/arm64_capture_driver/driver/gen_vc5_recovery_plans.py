@@ -3,8 +3,8 @@
 
 用法：gen_vc5_recovery_plans.py <输出目录> <Campaign 目录> <已授权的 recovery-preview 绝对路径>
 
-从 Campaign 最新的 VC-5 批次清单（失败的 capture-candidate run 或上一轮续跑补跑）取解释器前缀、
-Campaign 目录与候选身份参数，调用监督器后继协议同一组构造函数生成：
+从 Campaign 最新的、唯一动作为候选采集／续跑预览／续跑补跑的 VC-5 批次清单取解释器前缀、Campaign 目录与
+候选身份参数（其后可能还有 seal 链批次，例如工具演进作废作业后 seal 被拒），调用监督器后继协议同一组构造函数生成：
   action-plan-vc5-recovery-preview.json：零请求恢复预览（resume --rerun-failed --preview-recovery）；
   action-plan-vc5-recovery-run.json：按已批准预览的真实补跑（resume --rerun-failed --recovery-preview …）。
 两份计划的 execute／reuse 与父批次相同（execute=candidate-run，reuse 为空），满足续跑后继协议的逐字要求。
@@ -32,8 +32,18 @@ if preview.get("phase") != "candidate" or preview.get("recovery_revision") is no
 manifests = sorted((campaign_dir / "control" / "vc" / "run-manifests").glob("*-vc-5.json"))
 if not manifests:
     raise SystemExit("Campaign 没有 VC-5 批次清单")
-latest = json.loads(manifests[-1].read_text(encoding="utf-8"))
-prefix, campaign, identity = supervisor.candidate_recovery_parent_identity(latest)
+parent_path = None
+for candidate_path in reversed(manifests):
+    try:
+        prefix, campaign, identity = supervisor.candidate_recovery_parent_identity(
+            json.loads(candidate_path.read_text(encoding="utf-8"))
+        )
+    except supervisor.SupervisorError:
+        continue
+    parent_path = candidate_path
+    break
+if parent_path is None:
+    raise SystemExit("Campaign 没有候选采集或续跑批次清单，无法取候选身份参数")
 if pathlib.Path(campaign).resolve(strict=True) != campaign_dir:
     raise SystemExit("父批次命令的 Campaign 目录与参数不一致")
 if identity["--candidate-id"] != preview.get("candidate_id"):
@@ -74,5 +84,5 @@ for name, payload in plans.items():
     target = out / name
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     target.chmod(0o600)
-print("recovery plans ->", out, sorted(plans), "parent", manifests[-1].name,
+print("recovery plans ->", out, sorted(plans), "parent", parent_path.name,
       "execute", preview.get("execute_job_ids"), "reuse", preview.get("reuse_job_ids"))

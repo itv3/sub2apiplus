@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/gen_vc5_recovery_plans.py",
-      "sha256": "7652e45b40354ebf4e8719866d2b2d6f5741d97fad10ea3daf3e6d730907f56c",
+      "sha256": "5eeeeb42bdca925cfd38d8623888da56975a6890a3e263f336c59e057b2c6a52",
       "mode": "0700",
-      "bytes": 3608
+      "bytes": 4006
     },
     {
       "path": "driver/guard.sh",
@@ -315,5 +315,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "2cbc7a4dc4248b17032bf14153ea3edbc7d3acd3e5cf102371fe0369af3efc76"
+  "manifest_sha256": "1f097f506d052c1623d5715ee3bd22c8d1ea61e948908b13e2641eb155025fc1"
 }

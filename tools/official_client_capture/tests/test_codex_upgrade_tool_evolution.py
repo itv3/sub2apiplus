@@ -798,5 +798,142 @@ class EvolutionRecoveryScopeTests(unittest.TestCase):
             self.assertEqual(evolved["index"], 2)
 
 
+
+class EvolutionInvalidatedAwaitingSourceTests(unittest.TestCase):
+    """修好接着跑第 21 项：等待封存、无失败、但有作业被其后工具演进作废的 attempt 作为续跑来源。"""
+
+    def _scope(self, *, affected: list[str], allow: bool = True, phase: str = "candidate", kilo: bool = False) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory)
+            (campaign_dir / "campaign.json").write_text("{}\n", encoding="utf-8")
+            attempt_root = campaign_dir / "a1"
+            attempt_root.mkdir()
+            if kilo:
+                # 已进入 Kilo／seal 边界的等待封存 attempt：作为演进续跑来源不拦（新 attempt 重走 Kilo 与 seal）。
+                (attempt_root / "seal-preview-01.json").write_text("{}\n", encoding="utf-8")
+            candidate_id = "cand" if phase == "candidate" else None
+            attempt = {
+                "status": "awaiting_receipts",
+                "phase": phase,
+                "candidate_id": candidate_id,
+                "campaign_id": "c",
+                "campaign_manifest_sha256": codex_upgrade.file_sha256(campaign_dir / "campaign.json"),
+                "attempt_id": "a1",
+                "run_nonce": "1" * 64,
+                "attempt_digest": "2" * 64,
+                "results": [
+                    {"id": job_id, "execution_sha256": job_id * 64, "status": "complete", "required": True}
+                    for job_id in ("a", "b", "c")
+                ],
+                "job_checkpoint": {"path": "checkpoints", "record_count": 3, "last_sequence": 3, "last_sha256": "3" * 64},
+            }
+            impact = {
+                "index": 0,
+                "affected_job_ids": affected,
+                "changed_paths": ["run_x.sh"] if affected else [],
+                "evolution_indexes": [1] if affected else [],
+            }
+            store = mock.Mock()
+            store.records.return_value = [1, 2, 3]
+            with mock.patch.multiple(
+                codex_upgrade,
+                _load_capture_reservation=mock.Mock(return_value={
+                    "planned_jobs": [{"id": job_id, "execution_sha256": job_id * 64} for job_id in ("a", "b", "c")]
+                }),
+                _attempt_evolution_impact=mock.Mock(return_value=impact),
+                _resolve_attempt_binding=mock.Mock(return_value=attempt_root / "checkpoints"),
+                _validate_checkpoint_records=mock.Mock(),
+                _phase_evaluation_environment_boundary=mock.Mock(return_value="4" * 64),
+            ), mock.patch.object(codex_upgrade.incremental_recovery, "CheckpointStore", mock.Mock(return_value=store)):
+                return codex_upgrade._phase_evaluation_recovery_scope(
+                    campaign_dir, {"campaign_id": "c"}, phase=phase, candidate_id=candidate_id,
+                    attempt_root=attempt_root, attempt=attempt,
+                    allow_awaiting_failures=True, allow_evolution_invalidated=allow,
+                )
+
+    def test_scope_reruns_only_evolution_invalidated_jobs_for_official_and_candidate(self) -> None:
+        for phase in ("candidate", "official"):
+            with self.subTest(phase=phase):
+                scope = self._scope(affected=["b", "z"], phase=phase)
+                self.assertEqual(scope["execute_job_ids"], ["b"])
+                self.assertEqual(scope["completed_job_ids"], ["a", "c"])
+                self.assertEqual(scope["failed_job_ids"], [])
+                self.assertEqual(scope["tool_evolution"]["invalidated_job_ids"], ["b"])
+        # Kilo／seal 边界不拦演进续跑来源。
+        self.assertEqual(self._scope(affected=["a"], kilo=True)["execute_job_ids"], ["a"])
+
+    def test_awaiting_source_without_invalidation_or_permission_is_refused(self) -> None:
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有被工具演进作废的作业"):
+            self._scope(affected=[])
+        # 其它调用方（未打开演进来源）保持原规则：等待封存只有含可选失败时才是来源。
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "只有包含失败 Candidate Job"):
+            self._scope(affected=["b"], allow=False)
+
+    def test_invalidated_job_ids_are_completed_results_hit_by_later_evolutions(self) -> None:
+        attempt = {"results": [
+            {"id": "a", "status": "complete"}, {"id": "b", "status": "complete"}, {"id": "c", "status": "failed"},
+        ]}
+        impact = {"index": 0, "affected_job_ids": ["b", "c", "z"], "changed_paths": ["x.sh"], "evolution_indexes": [1]}
+        with mock.patch.object(codex_upgrade, "_attempt_evolution_impact", mock.Mock(return_value=impact)):
+            self.assertEqual(
+                codex_upgrade._attempt_evolution_invalidated_job_ids(
+                    Path("/c"), {}, Path("/c/a1"), attempt, phase="candidate", candidate_id="cand"
+                ),
+                ["b"],
+            )
+        empty = {"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []}
+        with mock.patch.object(codex_upgrade, "_attempt_evolution_impact", mock.Mock(return_value=empty)):
+            self.assertEqual(
+                codex_upgrade._attempt_evolution_invalidated_job_ids(
+                    Path("/c"), {}, Path("/c/a1"), attempt, phase="candidate", candidate_id="cand"
+                ),
+                [],
+            )
+
+    def test_latest_source_prefers_newest_evolution_invalidated_awaiting_attempt(self) -> None:
+        newest = (Path("/c/candidates/cand/attempts/a2"), {})
+        older = (Path("/c/candidates/cand/attempts/a1"), {})
+        payloads = {
+            "a2": {"status": "awaiting_receipts", "identity": {"k": 1}, "results": [{"id": "a", "status": "complete"}]},
+            "a1": {"status": "failed", "identity": {"k": 1}, "results": [{"id": "a", "status": "failed"}]},
+        }
+
+        def load(_campaign, _phase, _candidate, attempt_id, **_kwargs):
+            return Path(f"/c/candidates/cand/attempts/{attempt_id}"), payloads[attempt_id]
+
+        def run(invalidated: list[str]):
+            with mock.patch.object(codex_upgrade, "_ordered_capture_attempts", mock.Mock(return_value=[newest, older])), \
+                    mock.patch.object(codex_upgrade, "_load_capture_attempt", side_effect=load), \
+                    mock.patch.object(Path, "is_file", return_value=True), \
+                    mock.patch.object(Path, "is_symlink", return_value=False), \
+                    mock.patch.object(codex_upgrade, "_attempt_evolution_invalidated_job_ids", mock.Mock(return_value=invalidated)):
+                return codex_upgrade._latest_failed_attempt_for_identity(
+                    Path("/c"), phase="candidate", candidate_id="cand", identity={"k": 1}, manifest={}
+                )
+
+        self.assertEqual(run(["a"])[0].name, "a2")
+        # 等待封存且没有失效作业：维持原口径跳过，取更早的失败 attempt。
+        self.assertEqual(run([])[0].name, "a1")
+
+    def test_seal_chain_attempt_target_parses_seal_and_assertion_bundle_actions(self) -> None:
+        seal = ["/usr/bin/python3", "/t/codex_upgrade.py", "capture-candidate", "seal", "--campaign-dir", "/c",
+                "--candidate-id", "cand", "--attempt-id", "a1"]
+        official = ["/usr/bin/python3", "/t/codex_upgrade.py", "capture-official", "seal", "--campaign-dir", "/c",
+                    "--attempt-id", "a9"]
+        bundle = ["/usr/bin/env", "CAMPAIGN_DIR=/c", "ATTEMPT_ID=a1", "SIDE=candidate", "CANDIDATE_ID=cand",
+                  "/usr/bin/bash", "/d/tools/prepare_assertion_bundle.sh"]
+        target = supervisor._seal_chain_attempt_target
+        self.assertEqual(target({"command": seal}), ("/c", "candidate", "cand", "a1"))
+        self.assertEqual(target({"command": official}), ("/c", "official", None, "a9"))
+        self.assertEqual(target({"command": bundle}), ("/c", "candidate", "cand", "a1"))
+        for command in (
+            ["/usr/bin/python3", "/t/codex_upgrade.py", "compare", "--campaign-dir", "/c"],
+            seal[:-2],  # 缺 attempt
+            [item for item in bundle if not item.startswith("SIDE=")],
+            "not-a-list",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(target({"command": command}))
+
 if __name__ == "__main__":
     unittest.main()

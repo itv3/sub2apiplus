@@ -7698,7 +7698,13 @@ def candidate_recovery_parent_identity(manifest: Mapping[str, Any]) -> tuple[lis
         if recovery is not None:
             prefix, campaign, identity, _preview = recovery
             return prefix, campaign, identity
-    raise SupervisorError("父批次不是普通 capture-candidate run 或候选续跑补跑，不能生成续跑命令。")
+    if actions[0].get("action_id") == CANDIDATE_RECOVERY_PREVIEW_ACTION_ID:
+        # 续跑预览批次之后（其后可能有 seal 链批次）重新生成续跑计划：身份参数与预览命令逐字相同。
+        preview_identity = _candidate_recovery_command_identity(command, preview=True)
+        if preview_identity is not None:
+            prefix, campaign, identity, _preview = preview_identity
+            return prefix, campaign, identity
+    raise SupervisorError("父批次不是普通 capture-candidate run 或候选续跑预览／补跑，不能生成续跑命令。")
 
 
 def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: str) -> str | None:
@@ -7887,6 +7893,203 @@ def _validate_batched_candidate_recovery_run_retry_successor(
         label="VC-5 补跑失败后的预览",
         phase="VC-5",
     )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 工具演进作废作业后的续跑（修好接着跑第 21 项）
+# ---------------------------------------------------------------------------
+#
+# seal 链批次（capture-* seal、断言包准备）失败后，修复工具时若作废了该 attempt 的部分已完成作业，
+# 逐字重派 seal 必然再败（seal 逐结果核对生产序号之后的演进）。此时 attempt 先按"工具演进作废"
+# 对账入账，N+1 改派零请求恢复预览，只重跑失效作业。
+
+
+def _seal_chain_attempt_target(action: Any) -> tuple[str, str, str | None, str] | None:
+    """seal 链动作指向的（Campaign 目录, 侧, 候选, attempt）；不是 seal 链动作返回 None。"""
+
+    command = action.get("command") if isinstance(action, Mapping) else None
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        return None
+    try:
+        for index, token in enumerate(command[:-1]):
+            if token in {"capture-candidate", "capture-official"} and command[index + 1] == "seal":
+                side = "candidate" if token == "capture-candidate" else "official"
+                candidate = _command_flag(command, "--candidate-id") if side == "candidate" else None
+                return (
+                    _command_flag(command, "--campaign-dir"),
+                    side,
+                    candidate,
+                    _safe_id(_command_flag(command, "--attempt-id"), "--attempt-id"),
+                )
+        if any(Path(value).name == "prepare_assertion_bundle.sh" for value in command):
+            side = _command_assignment(command, "SIDE")
+            if side not in {"official", "candidate"}:
+                return None
+            candidate = _command_assignment(command, "CANDIDATE_ID") if side == "candidate" else None
+            return (
+                _command_assignment(command, "CAMPAIGN_DIR"),
+                side,
+                candidate,
+                _safe_id(_command_assignment(command, "ATTEMPT_ID"), "ATTEMPT_ID"),
+            )
+    except SupervisorError:
+        return None
+    return None
+
+
+def verify_evolution_attempt_reconciliation(
+    campaign_dir: Path,
+    *,
+    campaign_id: str,
+    side: str,
+    candidate_id: str | None,
+    attempt_id: str,
+    label: str,
+) -> dict[str, Any]:
+    """重放 attempt 的"工具演进作废"对账：收据身份、失效事实，以及项目总账 ``reconcile-attempt:<id>`` 的绑定。"""
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise SupervisorError(f"{label}：attempt {attempt_id} 尚未按工具演进作废对账；先执行 reconcile-attempt。")
+    receipt = _read_json(receipt_path)
+    facts = receipt.get("tool_evolution_invalidation")
+    if (
+        receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
+        or receipt.get("campaign_id") != campaign_id
+        or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
+        or receipt.get("phase") != side
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("attempt_id") != attempt_id
+        or receipt.get("recovery_revision") is not None
+        or not isinstance(facts, Mapping)
+        or not isinstance(facts.get("invalidated_job_ids"), list)
+        or not facts["invalidated_job_ids"]
+    ):
+        raise SupervisorError(f"{label}：attempt {attempt_id} 的对账收据不是工具演进作废对账，或身份不闭合。")
+    payload = _project_ledger_operation_payload(campaign_dir, f"reconcile-attempt:{attempt_id}", label=label)
+    if (
+        payload.get("campaign_id") != campaign_id
+        or payload.get("subject_kind") != "attempt"
+        or payload.get("subject_id") != attempt_id
+        or payload.get("reconciliation_receipt_sha256") != _sha256(receipt_path.read_bytes())
+        or payload.get("tool_evolution_invalidation") != facts
+    ):
+        raise SupervisorError(f"{label}：attempt {attempt_id} 的演进作废对账与项目总账绑定不一致。")
+    return {"attempt_id": attempt_id, "invalidated_job_ids": list(facts["invalidated_job_ids"])}
+
+
+def _validate_batched_evolution_recovery_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """失败的 seal 链批次 N，其 attempt 已按"工具演进作废"对账时，由 N+1 零请求恢复预览承接。
+
+    返回 False 表示形态不符（后继不是恢复预览，或父批次不是 seal 链批次），交给其它协议；形态相符后
+    任何绑定不闭合都失败关闭。只核对结构与绑定：父批次全部动作指向同一个 attempt，该 attempt 已按工具
+    演进作废对账入账，父 run 已由 reconcile-supervisor-run 对账；后继与父批次同阶段、同候选、N+1，
+    唯一动作是零请求恢复预览（VC-1 执行集合恰为失效作业）。恢复闭集仍由动作内恢复器逐字复算。
+    """
+
+    phase = prior_manifest.get("phase")
+    successor_action = _single_action(successor_manifest)
+    preview_action_id = (
+        _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID if phase == "VC-1" else CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
+    )
+    if (
+        phase not in {"VC-1", "VC-5"}
+        or prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("phase") != phase
+        or successor_action is None
+        or successor_action.get("action_id") != preview_action_id
+    ):
+        return False
+    prior_actions = prior_manifest.get("actions")
+    if not isinstance(prior_actions, list) or not prior_actions:
+        return False
+    targets = [_seal_chain_attempt_target(action) for action in prior_actions]
+    if any(target is None for target in targets):
+        return False
+    label = f"{phase} 工具演进作废后的续跑预览"
+    if len(set(targets)) != 1:
+        raise SupervisorError(f"{label}：父 seal 链批次的动作指向多个 attempt。")
+    target_campaign, side, candidate_id, attempt_id = targets[0]
+    if campaign_dir is None:
+        raise SupervisorError(f"{label}：历史校验必须绑定 Campaign 目录。")
+    resolved_campaign = Path(campaign_dir).resolve(strict=True)
+    if Path(target_campaign).resolve(strict=False) != resolved_campaign or side != (
+        "official" if phase == "VC-1" else "candidate"
+    ):
+        raise SupervisorError(f"{label}：父批次绑定的 Campaign 或侧与本 Campaign 不一致。")
+    prior_sequence = prior_manifest.get("batch_sequence")
+    frozen_fields = ("campaign_id", "campaign_plan_sha256", "original_deadline_at_utc", "predecessor_checkpoint")
+    if phase == "VC-5":
+        frozen_fields += ("candidate_id", "candidate_revision", "evaluation_baseline", "baseline_commit_sha256")
+    if (
+        isinstance(prior_sequence, bool)
+        or not isinstance(prior_sequence, int)
+        or successor_manifest.get("batch_sequence") != prior_sequence + 1
+        or successor_manifest.get("no_op") is not False
+        or any(successor_manifest.get(field) != prior_manifest.get(field) for field in frozen_fields)
+    ):
+        raise SupervisorError(f"{label}：必须是同阶段、同候选的 N+1 批次，批次级冻结字段不得变化。")
+    campaign_id = str(prior_manifest.get("campaign_id", ""))
+    facts = verify_evolution_attempt_reconciliation(
+        resolved_campaign,
+        campaign_id=campaign_id,
+        side=side,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+        label=label,
+    )
+    command = successor_action.get("command")
+    execute = successor_manifest.get("execute_items")
+    reuse = successor_manifest.get("reuse_items")
+    if phase == "VC-5":
+        parsed = _candidate_recovery_command_identity(command, preview=True)
+        if (
+            parsed is None
+            or Path(parsed[1]).resolve(strict=False) != resolved_campaign
+            or parsed[2].get("--candidate-id") != candidate_id
+            # 批次级 candidate_id 已与父批次逐字相同（冻结字段）；早期不带候选绑定的清单两边都是 None。
+            or successor_manifest.get("candidate_id") not in (candidate_id, None)
+            or successor_action.get("operation") != CANDIDATE_RECOVERY_OPERATION
+            or successor_action.get("item_ids") != ["candidate-run"]
+            or execute != ["candidate-run"]
+            or reuse != []
+        ):
+            raise SupervisorError(f"{label}：后继不是本候选的零请求恢复预览。")
+    else:
+        if (
+            not isinstance(command, list)
+            or command.count("resume") != 1
+            or command[command.index("resume"):]
+            != ["resume", "--campaign-dir", str(target_campaign), "--rerun-failed", "--preview-recovery"]
+            or successor_action.get("operation") != _OFFICIAL_RECOVERY_PREVIEW_OPERATION
+            or not isinstance(execute, list)
+            or not isinstance(reuse, list)
+            or successor_action.get("item_ids") != execute
+            or sorted(execute) != sorted(facts["invalidated_job_ids"])
+            or set(execute) & set(reuse)
+        ):
+            raise SupervisorError(f"{label}：后继不是官方零请求恢复预览，或执行集合不是失效作业。")
+    verify_supervisor_run_reconciliation_binding(
+        resolved_campaign,
+        campaign_id=campaign_id,
+        run_id=prior_dir.name,
+        phase=str(phase),
+        batch_sequence=prior_sequence,
+        batch_sha256=prior_manifest.get("batch_sha256"),
+        label=label,
+    )
+    if prior_state.get("state") != "failed":
+        raise SupervisorError(f"{label}：父批次不是失败终态。")
     return True
 
 
@@ -9601,6 +9804,16 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
+        ):
+            continue
+        # 修好接着跑第 21 项：必须先于环境／post-run-tooling 逐字重派协议匹配——后者一旦认出可恢复的
+        # seal 链失败就只接受逐字重派，而 attempt 作业已被工具演进作废时逐字重派必然再败。
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_evolution_recovery_successor(
+                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
+            )
         ):
             continue
         if (
