@@ -5031,6 +5031,8 @@ def _mutable_command_coordinates(
         "campaign-resume",
         # 补账自持 Campaign 锁与总账锁，写一次批准收据与 outbox batch 后推送。
         "accounting-resolve",
+        # 环境隔离自持 Campaign 锁，只写 control/environment 下的收据副本与一次性隔离收据。
+        "environment-isolate",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -5453,8 +5455,10 @@ def _latest_failed_attempt_for_identity(
     兼容旧工具把“仅可选 Job 失败”误写为 ``awaiting_receipts`` 的历史
     attempt；具体的 Kilo／seal 空边界仍由恢复 scope 做完整校验。
     修好接着跑第 21 项：等待封存但有作业被其后登记的工具演进作废的 attempt 也是续跑来源。
+    修好接着跑第 13 项：被环境隔离作废的 attempt（污染或 Kilo 后恢复失败）也是续跑来源（全部重跑）。
     """
 
+    isolation_invalidated = _isolation_invalidated_attempts(campaign_dir)
     for attempt_root, _ in _ordered_capture_attempts(
         campaign_dir, phase, candidate_id
     ):
@@ -5493,7 +5497,16 @@ def _latest_failed_attempt_for_identity(
                 )
             )
         )
-        if source_status != "failed" and not legacy_optional_failures and not evolution_invalidated:
+        isolated_source = (
+            source_status in {"environment_contaminated", "awaiting_receipts"}
+            and (phase, candidate_id, attempt_root.name) in isolation_invalidated
+        )
+        if (
+            source_status != "failed"
+            and not legacy_optional_failures
+            and not evolution_invalidated
+            and not isolated_source
+        ):
             continue
         if _fingerprint(payload.get("identity")) != _fingerprint(identity):
             raise ConfigurationError(
@@ -5678,6 +5691,13 @@ def _classification_candidate_reuse_source(
     )
     if source_attempt.get("status") != "awaiting_receipts":
         raise ConfigurationError("分类 Candidate 复用来源必须是 awaiting_receipts。")
+    if (source_root / "seal-failure.json").exists() or (
+        "candidate", source_candidate_id, source_attempt_id
+    ) in _isolation_invalidated_attempts(source_dir):
+        # 修好接着跑第 13 项：Kilo 后环境恢复失败或已被环境隔离作废的 attempt，结果永不复用。
+        raise ConfigurationError(
+            "分类 Candidate 复用来源已被判环境污染（Kilo 后恢复失败或已隔离作废），结果永不复用。"
+        )
 
     # 只枚举小型 attempt 收据，证明直接前序没有第二个待封存 Candidate；
     # 不读取任何原始抓包证据，也不遍历 evidence root。
@@ -9940,6 +9960,23 @@ def _build_parser() -> argparse.ArgumentParser:
     accounting_resolve.add_argument("--reason", required=True)
     accounting_resolve.add_argument("--approve-sha256", help="批准预览的 review_sha256")
     accounting_resolve.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
+    environment_isolate = subparsers.add_parser(
+        "environment-isolate",
+        help="修复环境后隔离污染 attempt，Campaign 继续（不带 --approve-sha256 只预览）",
+    )
+    add_campaign_reference(environment_isolate)
+    environment_isolate.add_argument(
+        "--environment-repair-receipt", required=True, type=Path, help="环境修复记录（绝对路径）"
+    )
+    environment_isolate.add_argument(
+        "--clean-environment-receipt",
+        required=True,
+        type=Path,
+        help="修复后新取、晚于污染的干净环境复核收据（环境探针清单或 ARM64 环境收据，绝对路径）",
+    )
+    environment_isolate.add_argument("--reason", required=True)
+    environment_isolate.add_argument("--approve-sha256", help="批准预览的 review_sha256")
+    environment_isolate.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
 
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
@@ -19695,13 +19732,14 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
             pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
             identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
             ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
-            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            # 修好接着跑第 13 项：未隔离污染暂停待 environment-isolate，官方已封存受污染才终态。
+            environment_decision = _campaign_environment_decision(campaign_dir, _manifest=manifest)
             decision = reconciler._decide(
                 head=head_after,
                 plan=plan,
                 ledger=ledger_facts,
                 identity=identity,
-                environment_status="contaminated" if contamination else "restored",
+                environment_status=reconciler._environment_decision_status(environment_decision),
                 campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
                 root_cause_id=cause["root_cause_id"],
                 request_status="resolved",
@@ -20359,6 +20397,12 @@ def _transient_environment_admission(
     contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
     if contamination:
         raise ConfigurationError("Campaign 存在环境污染记录，不能裁定 transient-environment。")
+    if ("candidate", attempt.get("candidate_id"), str(attempt.get("attempt_id"))) in _isolation_invalidated_attempts(campaign_dir):
+        # 修好接着跑第 13 项：被环境隔离作废的 attempt 结果永不复用，只能全部重跑，不能做段恢复。
+        raise ConfigurationError(
+            "原 attempt 已被环境隔离作废（结果永不复用），不能裁定 transient-environment；"
+            "reconcile-attempt 入账并批准恢复预览后 resume --rerun-failed 全部重跑。"
+        )
     scope = facts["failure_scope"]
     if not isinstance(scope, Mapping):
         raise ConfigurationError("失败事实缺少 failure-scope，不能裁定 transient-environment。")
@@ -20811,13 +20855,14 @@ def _evaluation_recover_locked(
             pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
             identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
             ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
-            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            # 修好接着跑第 13 项：未隔离污染暂停待 environment-isolate，官方已封存受污染才终态。
+            environment_decision = _campaign_environment_decision(campaign_dir, _manifest=manifest)
             decision = reconciler._decide(
                 head=head_after,
                 plan=plan,
                 ledger=ledger_facts,
                 identity=identity,
-                environment_status="contaminated" if contamination else "restored",
+                environment_status=reconciler._environment_decision_status(environment_decision),
                 campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
                 root_cause_id=cause["root_cause_id"],
                 request_status="resolved",
@@ -32764,6 +32809,9 @@ def _latest_attempt_summary(
             )
             if invalidated:
                 summary["evolution_invalidated_job_ids"] = invalidated
+        if (phase, candidate_id, path.name) in _isolation_invalidated_attempts(campaign_dir):
+            # 修好接着跑第 13 项：被环境隔离作废的 attempt 不是待封存，而是续跑来源（全部重跑）；只在作废时写字段。
+            summary["isolation_invalidated"] = True
         return summary
     return None
 
@@ -32849,17 +32897,88 @@ def _campaign_attempt_roots(
     return attempts
 
 
-def _campaign_contamination_records(
+# ---------------------------------------------------------------------------
+# 修好接着跑第 13 项：环境污染按 attempt 隔离
+# ---------------------------------------------------------------------------
+#
+# 此前任一污染事实都让整个 Campaign 永久封锁（16 处门禁 + 对账判 environment_contaminated 终态），只能新建
+# Campaign。现在污染事实结构化（补上恢复段污染），修复环境并取得晚于污染的干净环境复核后，以 environment-isolate
+# 写隔离收据（control/environment/isolation-NN.json，写一次、成链）覆盖这些事实：被覆盖的 attempt 永不复用、永不
+# seal，Campaign 继续。只有官方已封存且存在未隔离的官方侧污染（Campaign 内无法重采官方证据）才不可恢复。
+ENVIRONMENT_ISOLATION_SCHEMA = "environment-isolation/v1"
+ENVIRONMENT_ISOLATION_PREVIEW_SCHEMA = "environment-isolation-preview/v1"
+ENVIRONMENT_ISOLATION_DIR = Path("control") / "environment"
+ENVIRONMENT_ISOLATION_RE = re.compile(r"^isolation-(\d{2,})\.json$")
+# 干净环境复核收据的时间字段（环境探针清单、ARM64 环境收据等），取第一个存在的字段。
+CLEAN_ENVIRONMENT_TIME_FIELDS = (
+    "observed_at_utc",
+    "generated_at_utc",
+    "created_at_utc",
+    "recorded_at_utc",
+    "certified_at_utc",
+)
+
+
+def _contamination_fact(
+    campaign_dir: Path,
+    record: str,
+    kind: str,
+    source: Path,
+    *,
+    phase: Any,
+    candidate_id: Any,
+    attempt_id: Any,
+    recovery_revision: str | None = None,
+    at_utc: Any = None,
+) -> dict[str, Any]:
+    """一条结构化污染事实；来源文件按 Campaign 相对路径＋摘要绑定（隔离收据按 record＋摘要覆盖）。"""
+
+    return {
+        "record": record,
+        "kind": kind,
+        "phase": phase if isinstance(phase, str) else None,
+        "candidate_id": candidate_id if isinstance(candidate_id, str) else None,
+        "attempt_id": attempt_id if isinstance(attempt_id, str) else None,
+        "recovery_revision": recovery_revision,
+        "at_utc": at_utc if _is_rfc3339_timestamp(at_utc) else None,
+        "source": {
+            "path": source.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(source) if source.is_file() and not source.is_symlink() else None,
+        },
+    }
+
+
+def _campaign_contamination_facts(
     campaign_dir: Path,
     *,
     _manifest: Mapping[str, Any] | None = None,
-) -> list[str]:
-    """从主 attempt／seal 失败事实推导污染，旁路 marker 仅作冗余提示。"""
+) -> list[dict[str, Any]]:
+    """从主 attempt／seal 失败／恢复段事实推导结构化污染事实，旁路 marker 仅作冗余提示。
 
-    records: list[str] = []
+    record 沿用旧 ID（``campaign-marker``、``<cid|phase>:<attempt>:attempt``、``...:seal``），修好接着跑第 13 项
+    新增恢复段 ``<cid>:<attempt>.<ar>:recovery``（此前恢复段污染只经一次写入的 marker 间接体现，常被漏记）。
+    """
+
+    facts: list[dict[str, Any]] = []
     marker = campaign_dir / "environment-contaminated.json"
     if marker.exists() or marker.is_symlink():
-        records.append("campaign-marker")
+        content: Mapping[str, Any] = {}
+        if marker.is_file() and not marker.is_symlink():
+            try:
+                content = _read_json(marker, "环境污染旁路标记")
+            except (ConfigurationError, OSError, ValueError):
+                content = {}
+        facts.append(
+            _contamination_fact(
+                campaign_dir,
+                "campaign-marker",
+                "marker",
+                marker,
+                phase=content.get("phase"),
+                candidate_id=content.get("candidate_id"),
+                attempt_id=content.get("attempt_id"),
+            )
+        )
     for phase, current_candidate_id, attempt_root in _campaign_attempt_roots(
         campaign_dir
     ):
@@ -32882,8 +33001,17 @@ def _campaign_contamination_records(
                 _verified_campaign_manifest=_manifest,
             )
             if attempt.get("status") == "environment_contaminated":
-                records.append(
-                    f"{current_candidate_id or phase}:{attempt_root.name}:attempt"
+                facts.append(
+                    _contamination_fact(
+                        campaign_dir,
+                        f"{current_candidate_id or phase}:{attempt_root.name}:attempt",
+                        "attempt",
+                        attempt_path,
+                        phase=phase,
+                        candidate_id=current_candidate_id,
+                        attempt_id=attempt_root.name,
+                        at_utc=attempt.get("completed_at_utc"),
+                    )
                 )
         seal_failure = attempt_root / "seal-failure.json"
         if seal_failure.exists() or seal_failure.is_symlink():
@@ -32923,12 +33051,27 @@ def _campaign_contamination_records(
                 or _fingerprint(unsigned_failure) != failure_digest
             ):
                 raise ConfigurationError("候选 seal 失败收据身份或摘要不一致。")
-            records.append(
-                f"{current_candidate_id or phase}:{attempt_root.name}:seal"
+            facts.append(
+                _contamination_fact(
+                    campaign_dir,
+                    f"{current_candidate_id or phase}:{attempt_root.name}:seal",
+                    "seal",
+                    seal_failure,
+                    phase=phase,
+                    candidate_id=current_candidate_id,
+                    attempt_id=attempt_root.name,
+                    at_utc=failure.get("failed_at_utc"),
+                )
             )
+        facts.extend(
+            _recovery_segment_contamination_facts(
+                campaign_dir, attempt_root, phase=phase, candidate_id=current_candidate_id
+            )
+        )
     # 旧工具可能把 metadata-only attempt 缺少恢复收据误记成污染。收据已经
     # 由受管修复路径生成并可独立重放后，该冗余 marker／seal-failure 不再
     # 阻断后续的 canonical seal；其他污染事实仍原样保留。
+    records = [fact["record"] for fact in facts]
     if records:
         for phase, current_candidate_id, attempt_root in _campaign_attempt_roots(
             campaign_dir
@@ -32960,13 +33103,182 @@ def _campaign_contamination_records(
                 )
                 and _metadata_only_repair_receipt_complete(attempt_root, attempt)
             ):
-                records = [
-                    item
-                    for item in records
-                    if item not in {"campaign-marker", seal_record}
+                facts = [
+                    fact
+                    for fact in facts
+                    if fact["record"] not in {"campaign-marker", seal_record}
                 ]
                 break
-    return records
+    return facts
+
+
+def _recovery_segment_contamination_facts(
+    campaign_dir: Path,
+    attempt_root: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> list[dict[str, Any]]:
+    """恢复段 run-summary 状态为 environment_contaminated 的事实（只对污染状态逐项核对身份与自摘要）。"""
+
+    recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+    if phase != "candidate" or candidate_id is None or not recovery_root.exists():
+        return []
+    if recovery_root.is_symlink() or not recovery_root.is_dir():
+        raise ConfigurationError("attempt 恢复段目录不可信。")
+    facts: list[dict[str, Any]] = []
+    for segment_root in sorted(recovery_root.iterdir()):
+        if (
+            segment_root.is_symlink()
+            or not segment_root.is_dir()
+            or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(segment_root.name)
+        ):
+            continue
+        summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+        if not summary_path.exists() and not summary_path.is_symlink():
+            continue
+        if summary_path.is_symlink() or not summary_path.is_file():
+            raise ConfigurationError("恢复段 run-summary 路径不可信。")
+        summary = _read_json(summary_path, "恢复段 run-summary")
+        if summary.get("status") != "environment_contaminated":
+            continue
+        unsigned = dict(summary)
+        digest = unsigned.pop("attempt_recovery_digest", None)
+        if (
+            summary.get("schema_version") != ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+            or summary.get("attempt_id") != attempt_root.name
+            or summary.get("recovery_revision") != segment_root.name
+            or summary.get("candidate_id") != candidate_id
+            or digest != _fingerprint(unsigned)
+        ):
+            raise ConfigurationError(f"恢复段 {segment_root.name} run-summary 身份或自摘要不一致。")
+        facts.append(
+            _contamination_fact(
+                campaign_dir,
+                f"{candidate_id}:{attempt_root.name}.{segment_root.name}:recovery",
+                "recovery",
+                summary_path,
+                phase=phase,
+                candidate_id=candidate_id,
+                attempt_id=attempt_root.name,
+                recovery_revision=segment_root.name,
+                at_utc=summary.get("completed_at_utc"),
+            )
+        )
+    return facts
+
+
+def _environment_isolations(campaign_dir: Path) -> list[dict[str, Any]]:
+    """读取并逐项核对隔离收据链（序号连续、previous 成链、自摘要、Campaign 一致、制品副本摘要一致）。"""
+
+    directory = campaign_dir / ENVIRONMENT_ISOLATION_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("环境隔离收据目录不可信。")
+    indexed: list[tuple[int, Path]] = []
+    for child in directory.iterdir():
+        match = ENVIRONMENT_ISOLATION_RE.fullmatch(child.name)
+        if match:
+            indexed.append((int(match.group(1)), child))
+    if not indexed:
+        return []
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for position, (index, path) in enumerate(sorted(indexed), start=1):
+        if index != position or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"环境隔离收据序号不连续或路径不可信：{path.name}")
+        receipt = _read_json(path, "环境隔离收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "isolation_sha256"}
+        if (
+            receipt.get("schema_version") != ENVIRONMENT_ISOLATION_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("index") != index
+            or receipt.get("previous_isolation_sha256") != previous
+            or not isinstance(receipt.get("covered"), list)
+            or not receipt["covered"]
+            or not isinstance(receipt.get("invalidated_attempts"), list)
+            or _fingerprint(unsigned) != receipt.get("isolation_sha256")
+        ):
+            raise ConfigurationError(f"环境隔离收据形态、成链或自摘要不一致：{path.name}")
+        for role in ("environment_repair", "clean_environment"):
+            binding = receipt.get(role)
+            copy = campaign_dir / str(binding.get("path")) if isinstance(binding, Mapping) else None
+            if copy is None or copy.is_symlink() or not copy.is_file() or file_sha256(copy) != binding.get("sha256"):
+                raise ConfigurationError(f"环境隔离收据 {path.name} 的 {role} 副本缺失或摘要不一致。")
+        previous = str(receipt["isolation_sha256"])
+        chain.append(receipt)
+    return chain
+
+
+def _isolated_contamination_keys(campaign_dir: Path) -> set[tuple[str, str | None]]:
+    return {
+        (str(item.get("record")), (item.get("source") or {}).get("sha256"))
+        for receipt in _environment_isolations(campaign_dir)
+        for item in receipt["covered"]
+        if isinstance(item, Mapping)
+    }
+
+
+def _isolation_invalidated_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
+    """已被隔离作废的 attempt（phase, candidate_id, attempt_id）：结果永不复用、永不 seal，按失败 attempt 续跑。
+
+    只含 attempt 级事实（attempt／seal）；恢复段事实只作废该段，原 attempt 仍按自身状态处理。
+    """
+
+    return {
+        (str(item["phase"]), item.get("candidate_id"), str(item["attempt_id"]))
+        for receipt in _environment_isolations(campaign_dir)
+        for item in receipt["invalidated_attempts"]
+        if isinstance(item, Mapping) and item.get("recovery_revision") is None
+    }
+
+
+def _campaign_contamination_records(
+    campaign_dir: Path,
+    *,
+    _manifest: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """未被隔离收据覆盖的污染记录（修好接着跑第 13 项起已隔离的事实不再封锁 Campaign）。"""
+
+    facts = _campaign_contamination_facts(campaign_dir, _manifest=_manifest)
+    if not facts:
+        return []
+    covered = _isolated_contamination_keys(campaign_dir)
+    return [
+        fact["record"]
+        for fact in facts
+        if (fact["record"], fact["source"]["sha256"]) not in covered
+    ]
+
+
+def _campaign_environment_decision(
+    campaign_dir: Path,
+    *,
+    _manifest: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """对账与状态共用的环境判定：clear／contaminated（未隔离，暂停待隔离）／official_sealed_contaminated（不可恢复）。"""
+
+    facts = _campaign_contamination_facts(campaign_dir, _manifest=_manifest)
+    covered = _isolated_contamination_keys(campaign_dir) if facts else set()
+    effective = [
+        fact for fact in facts if (fact["record"], fact["source"]["sha256"]) not in covered
+    ]
+    official_sealed = bool(effective) and _stage_path(campaign_dir, "capture-official", None)[1].is_file()
+    official_effective = [fact["record"] for fact in effective if fact["phase"] == "official"]
+    status = (
+        "official_sealed_contaminated"
+        if official_sealed and official_effective
+        else "contaminated"
+        if effective
+        else "clear"
+    )
+    return {
+        "status": status,
+        "records": [fact["record"] for fact in effective],
+        "official_records": official_effective,
+    }
 
 
 def _metadata_only_seal_repair_allowed(
@@ -33098,11 +33410,11 @@ def _reject_contaminated_campaign(
     attempt_root: Path | None = None,
     attempt: Mapping[str, Any] | None = None,
 ) -> None:
-    """任何主污染事实存在时，除只读 status 外禁止继续使用 Campaign。
+    """存在未隔离的主污染事实时，除只读 status 与 environment-isolate 外禁止继续使用 Campaign。
 
     ``allow_metadata_only_repair`` 只由候选 seal 的一次性收据修复路径传入，
     且必须再次通过零执行边界校验；它不放宽普通 run、resume、compare 或
-    production 写入入口。
+    production 写入入口。修好接着跑第 13 项起已被隔离收据覆盖的事实不再封锁。
     """
 
     records = _campaign_contamination_records(campaign_dir)
@@ -33120,8 +33432,9 @@ def _reject_contaminated_campaign(
         ):
             return
         raise ConfigurationError(
-            "环境恢复失败已封锁 Campaign；只能只读 status，并在人工恢复后新建 "
-            f"Campaign。污染事实={records}"
+            "存在未隔离的环境污染，Campaign 已封锁：修复环境并取得晚于污染的干净环境复核后，以 "
+            "environment-isolate preview/apply 隔离污染 attempt 再继续（官方已封存且官方侧受污染时不可恢复）。"
+            f"污染事实={records}"
         )
 
 
@@ -33391,10 +33704,11 @@ def campaign_status(
                             candidate_production_states[current_candidate_id] = str(
                                 delivery["production_state"]
                             )
-    contamination_records = _campaign_contamination_records(
+    environment_decision = _campaign_environment_decision(
         campaign_dir,
         _manifest=manifest,
     )
+    contamination_records = environment_decision["records"]
     contaminated = bool(contamination_records)
     active_unsealed = {
         "official": _active_unsealed_attempts(
@@ -33442,7 +33756,12 @@ def campaign_status(
     )
     if contaminated:
         status = "environment_contaminated"
-        next_command = "人工恢复并证明环境洁净后新建 Campaign"
+        next_command = (
+            "官方已封存且官方侧存在未隔离污染：Campaign 内无法重采官方证据，只读保留"
+            if environment_decision["status"] == "official_sealed_contaminated"
+            else "修复环境并取得晚于污染的干净环境复核后，执行 environment-isolate preview/apply "
+            "隔离污染 attempt，再对账续跑"
+        )
     elif (
         stage_status["capture-official"] == "complete"
         and active_unsealed["official"]
@@ -33481,7 +33800,13 @@ def campaign_status(
                 "compared": "accept",
             }[status]
     elif candidate_attempt is not None:
-        if candidate_attempt["status"] == "reconciled_interrupted":
+        if candidate_attempt.get("isolation_invalidated"):
+            status = "candidate_capture_failed"
+            next_command = (
+                "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）：reconcile-attempt 入账并批准恢复预览后，"
+                "resume --rerun-failed 全部重跑"
+            )
+        elif candidate_attempt["status"] == "reconciled_interrupted":
             status = "candidate_capture_failed"
             next_command = "resume --rerun-failed --recovery-preview <已批准的 recovery-preview>"
         elif candidate_attempt["status"] == "reserved_or_interrupted":
@@ -33553,7 +33878,13 @@ def campaign_status(
         status = "official_sealed"
         next_command = "classify"
     elif official_attempt is not None:
-        if official_attempt["status"] == "reconciled_interrupted":
+        if official_attempt.get("isolation_invalidated"):
+            status = "official_capture_failed"
+            next_command = (
+                "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）：reconcile-attempt 入账并批准恢复预览后，"
+                "resume --rerun-failed 全部重跑"
+            )
+        elif official_attempt["status"] == "reconciled_interrupted":
             status = "official_capture_failed"
             next_command = "resume --rerun-failed --recovery-preview <已批准的 recovery-preview>"
         elif official_attempt["status"] == "reserved_or_interrupted":
@@ -36850,11 +37181,18 @@ def _phase_evaluation_recovery_scope(
 
     ``allow_evolution_invalidated``（resume 与 R17 复算打开）：等待封存、没有失败作业、但有已完成作业被
     其后登记的工具演进作废的 attempt 也是来源（官方与候选均可，修好接着跑第 21 项），执行闭集只是失效作业。
+
+    修好接着跑第 13 项：被环境隔离作废的 attempt（状态 environment_contaminated，或 Kilo 后恢复失败的
+    awaiting_receipts）也是来源：已完成作业全部作废（记入 ``environment_isolation``），执行闭集是全部计划作业；
+    源 attempt 没有可用的前后环境收据，环境边界改绑隔离收据（它绑定修复后的干净环境复核）。
     """
 
+    isolation_receipt = _attempt_isolation_receipt(campaign_dir, phase, candidate_id, attempt_root.name)
     source_status = attempt.get("status")
     if source_status != "failed" and not (
         allow_awaiting_failures and source_status == "awaiting_receipts"
+    ) and not (
+        isolation_receipt is not None and source_status == "environment_contaminated"
     ):
         raise ConfigurationError("只有 failed attempt 可以建立恢复 transition。")
     if (
@@ -36920,7 +37258,7 @@ def _phase_evaluation_recovery_scope(
     evolution_source = (
         source_status == "awaiting_receipts" and not failed_ids and allow_evolution_invalidated
     )
-    if source_status == "awaiting_receipts" and not evolution_source:
+    if source_status == "awaiting_receipts" and not evolution_source and isolation_receipt is None:
         if phase != "candidate" or not failed_ids:
             raise ConfigurationError(
                 "awaiting_receipts 只有包含失败 Candidate Job 时才能作为后继恢复源。"
@@ -36959,7 +37297,7 @@ def _phase_evaluation_recovery_scope(
         and not result_by_id
         and pending_ids == sorted(planned)
     )
-    if not completed_ids and not pre_job_failure:
+    if not completed_ids and not pre_job_failure and isolation_receipt is None:
         raise ConfigurationError("失败 attempt 没有已完成 Job，禁止原地 transition。")
     # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，移入执行闭集重跑。
     # 没有演进时不改变闭集，也不在 scope 里写 tool_evolution，旧 transition 摘要保持不变。
@@ -36967,13 +37305,19 @@ def _phase_evaluation_recovery_scope(
         campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
     )
     evolved_ids = sorted(set(completed_ids) & set(evolution_impact["affected_job_ids"]))
-    if evolution_source and not evolved_ids:
+    if evolution_source and not evolved_ids and isolation_receipt is None:
         raise ConfigurationError(
             "等待封存的 attempt 没有被工具演进作废的作业，不是续跑来源；按正常流程 seal。"
         )
     if evolved_ids:
         completed_ids = sorted(set(completed_ids) - set(evolved_ids))
         execute_ids = sorted(set(execute_ids) | set(evolved_ids))
+    isolated_ids: list[str] = []
+    if isolation_receipt is not None:
+        # 污染后的结果永不复用：剩余已完成作业全部作废，并入执行闭集。
+        isolated_ids = list(completed_ids)
+        completed_ids = []
+        execute_ids = sorted(set(execute_ids) | set(isolated_ids))
     if not execute_ids and not allow_empty:
         raise ConfigurationError("失败 attempt 没有可重跑 Job，禁止建立 transition。")
 
@@ -37009,7 +37353,9 @@ def _phase_evaluation_recovery_scope(
         planned_job_ids=set(planned),
         strict_context=True,
     )
-    if pre_job_failure:
+    if isolation_receipt is not None:
+        environment_boundary_sha256 = str(isolation_receipt["isolation_sha256"])
+    elif pre_job_failure:
         environment_boundary_sha256 = (
             _phase_evaluation_pre_job_environment_boundary(
                 campaign_dir,
@@ -37055,7 +37401,34 @@ def _phase_evaluation_recovery_scope(
             ),
             "invalidated_job_ids": evolved_ids,
         }
+    if isolation_receipt is not None:
+        scope["environment_isolation"] = {
+            "isolation_index": int(isolation_receipt["index"]),
+            "isolation_sha256": str(isolation_receipt["isolation_sha256"]),
+            "invalidated_job_ids": sorted(isolated_ids),
+        }
     return scope
+
+
+def _attempt_isolation_receipt(
+    campaign_dir: Path,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> dict[str, Any] | None:
+    """覆盖该 attempt（attempt 级，不含恢复段）的最早一份隔离收据；没有被隔离作废时返回 None。"""
+
+    for receipt in _environment_isolations(campaign_dir):
+        for item in receipt["invalidated_attempts"]:
+            if (
+                isinstance(item, Mapping)
+                and item.get("phase") == phase
+                and item.get("candidate_id") == candidate_id
+                and item.get("attempt_id") == attempt_id
+                and item.get("recovery_revision") is None
+            ):
+                return receipt
+    return None
 
 
 def _validate_recovery_scope_plan(
@@ -37110,6 +37483,19 @@ def _validate_recovery_scope_plan(
         ):
             raise ConfigurationError("恢复 transition 的 tool_evolution 失效作业非法。")
         evolved_ids = {str(value) for value in values}
+    # 修好接着跑第 13 项：环境隔离作废的已完成作业同样并入执行闭集；没有隔离时为空，原不变式不变。
+    isolated_ids: set[str] = set()
+    isolation = scope.get("environment_isolation")
+    if isolation is not None:
+        values = isolation.get("invalidated_job_ids") if isinstance(isolation, Mapping) else None
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in values)
+            or completed_ids
+        ):
+            raise ConfigurationError("恢复 transition 的 environment_isolation 作废作业非法。")
+        isolated_ids = {str(value) for value in values}
     if (
         not planned_ids
         or (not execute_ids and not allow_empty)
@@ -37118,7 +37504,8 @@ def _validate_recovery_scope_plan(
         or failed_ids & completed_ids
         or failed_ids & pending_ids
         or evolved_ids & (failed_ids | pending_ids | completed_ids)
-        or failed_ids | pending_ids | evolved_ids != execute_ids
+        or isolated_ids & (failed_ids | pending_ids | completed_ids | evolved_ids)
+        or failed_ids | pending_ids | evolved_ids | isolated_ids != execute_ids
         or completed_ids | execute_ids != planned_ids
     ):
         raise ConfigurationError("恢复 transition 的 Job 闭集不一致。")
@@ -40984,6 +41371,10 @@ def _prior_complete_results(
     ):
         raise ConfigurationError("增量恢复源 attempt 状态白名单非法。")
     authorized_runtime_transition_ids: frozenset[str] | None = None
+    # 修好接着跑第 13 项：同 Campaign 里被环境隔离作废的 attempt 也是续跑来源，但其结果一律不承接（全部重跑）。
+    isolation_invalidated = (
+        _isolation_invalidated_attempts(history_campaign_dir) if not cross_campaign_source else set()
+    )
     for attempt, _ in _ordered_capture_attempts(
         history_campaign_dir,
         phase,
@@ -41002,6 +41393,20 @@ def _prior_complete_results(
             attempt.name,
             _historical_manifest_controls=historical_source_controls,
         )
+        if (phase, history_candidate_id, attempt.name) in isolation_invalidated and payload.get("status") in {
+            "environment_contaminated",
+            "awaiting_receipts",
+        }:
+            if _fingerprint(payload.get("identity")) != _fingerprint(identity):
+                raise ConfigurationError(
+                    "先前失败 attempt 身份与本次重跑不一致；不得在同一 Campaign 混用身份，"
+                    "请新建 Campaign。"
+                )
+            if expected_reuse:
+                raise ConfigurationError(
+                    f"attempt {attempt.name} 已被环境隔离作废，结果永不复用；恢复闭集不得承接任何作业。"
+                )
+            return []
         if payload.get("status") not in allowed_statuses:
             continue
         if _fingerprint(payload.get("identity")) != _fingerprint(identity):
@@ -42397,6 +42802,8 @@ def _active_unsealed_attempts(
             scopes.append((candidate_root.name, candidate_root))
 
     active: list[str] = []
+    # 修好接着跑第 13 项：已被环境隔离作废的 attempt 永不 seal，不再算等待封存（改由失败 attempt 续跑）。
+    invalidated = _isolation_invalidated_attempts(campaign_dir)
     for candidate_id, scope in scopes:
         sealed_attempt_id: str | None = None
         result_path = scope / "result.json"
@@ -42464,6 +42871,7 @@ def _active_unsealed_attempts(
                 # 已按"工具演进作废作业"对账的等待封存 attempt 以对账收据为终态（同已对账孤儿），
                 # 不再阻塞续跑的新预约；它改由 _failed_capture_attempts 要求显式 resume。
                 and not _attempt_evolution_reconciled(campaign_dir, attempt_root.name)
+                and (phase, candidate_id, attempt_root.name) not in invalidated
             ):
                 active.append(
                     f"{candidate_id or 'official'}:{attempt_root.name}"
@@ -42480,6 +42888,8 @@ def _failed_capture_attempts(
     """列出尚未通过显式 resume 处理的失败 attempt。"""
 
     failed: list[str] = []
+    # 修好接着跑第 13 项：已被环境隔离作废的 attempt（污染或 Kilo 后恢复失败）按失败 attempt 显式 resume。
+    invalidated = _isolation_invalidated_attempts(campaign_dir)
     for current_phase, candidate_id, attempt_root in _campaign_attempt_roots(
         campaign_dir
     ):
@@ -42499,6 +42909,9 @@ def _failed_capture_attempts(
         if attempt.get("status") == "failed" or (
             attempt.get("status") == "awaiting_receipts"
             and _attempt_evolution_reconciled(campaign_dir, attempt_root.name)
+        ) or (
+            attempt.get("status") in {"environment_contaminated", "awaiting_receipts"}
+            and (phase, candidate_id, attempt_root.name) in invalidated
         ):
             failed.append(f"{candidate_id or 'official'}:{attempt_root.name}")
     return failed
@@ -48232,6 +48645,12 @@ def _seal_capture_attempt(
     attempt_root, attempt = _load_capture_attempt(
         campaign_dir, phase, candidate_id, attempt_id
     )
+    if (phase, candidate_id, attempt_root.name) in _isolation_invalidated_attempts(campaign_dir):
+        # 修好接着跑第 13 项：隔离放行的是 Campaign，不是被作废的 attempt 本身；在任何门禁与写入之前拒绝。
+        raise ConfigurationError(
+            "该 attempt 已被环境隔离作废（结果永不复用、永不 seal）；reconcile-attempt 入账并批准恢复预览后 "
+            "resume --rerun-failed 全部重跑。"
+        )
     if phase == "candidate" and _requires_complete_vc_artifacts(manifest):
         assert candidate_id is not None
         build_receipt, build_binding = _replay_candidate_build_receipt(
@@ -57077,6 +57496,7 @@ def _reject_unparented_formal_write(
         "tool-evolution-status",
         "campaign-resume",
         "accounting-resolve",
+        "environment-isolate",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -57451,6 +57871,13 @@ def _refuse_seal_chain_on_evolution_invalidated_attempt(
                 f"compile-and-run-vc-batch 拒绝：{action.get('action_id')} 要封存的 attempt {attempt_id} "
                 f"有作业被工具演进作废（{'、'.join(invalidated)}）。先 reconcile-attempt 入账并批准恢复预览，"
                 "resume --rerun-failed 只重跑失效作业，再对新 attempt 走 seal；本次未写入任何文件。"
+            )
+        if (side, candidate_id, attempt_id) in _isolation_invalidated_attempts(campaign_dir):
+            # 修好接着跑第 13 项：被环境隔离作废的 attempt 永不 seal，同样在任何落盘之前拦下。
+            raise ConfigurationError(
+                f"compile-and-run-vc-batch 拒绝：{action.get('action_id')} 要封存的 attempt {attempt_id} "
+                "已被环境隔离作废（结果永不复用、永不 seal）。先 reconcile-attempt 入账并批准恢复预览，"
+                "resume --rerun-failed 全部重跑，再对新 attempt 走 seal；本次未写入任何文件。"
             )
 
 
@@ -58078,7 +58505,7 @@ def _campaign_resume_preview(
     if remaining is not None and int(remaining) <= 0:
         raise ConfigurationError("项目请求预算已耗尽，先批准请求预算延长再恢复。")
     if _campaign_contamination_records(campaign_dir, _manifest=manifest):
-        raise ConfigurationError("Campaign 存在未隔离的环境污染记录，先隔离污染再恢复。")
+        raise ConfigurationError("Campaign 存在未隔离的环境污染记录，先以 environment-isolate 隔离污染再恢复。")
     if terminal is not None:
         open_formal = [
             cid
@@ -58588,6 +59015,193 @@ def _apply_accounting_resolution(
             if remaining
             else "账务已补齐：重新对账暂停的对象（reconcile-attempt／reconcile-supervisor-run）后续跑"
         ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# environment-isolate：修复环境后隔离污染 attempt，Campaign 继续（修好接着跑第 13 项）
+# ---------------------------------------------------------------------------
+
+
+def _environment_isolate_preview(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    repair_receipt: Path,
+    clean_receipt: Path,
+    reason: str,
+) -> dict[str, Any]:
+    """冻结本次要覆盖的未隔离污染事实、作废的 attempt 与两份环境收据；预览零写入。"""
+
+    if not reason.strip():
+        raise ConfigurationError("--reason 不得为空。")
+    for label, path in (
+        ("--environment-repair-receipt", repair_receipt),
+        ("--clean-environment-receipt", clean_receipt),
+    ):
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"{label} 必须是可信的绝对路径普通文件。")
+    clean_document = _read_json(clean_receipt, "干净环境复核收据")
+    field = next((name for name in CLEAN_ENVIRONMENT_TIME_FIELDS if name in clean_document), None)
+    if field is None:
+        raise ConfigurationError(
+            f"干净环境复核收据缺少观测时间（{'／'.join(CLEAN_ENVIRONMENT_TIME_FIELDS)} 之一）；"
+            "应使用修复后新取的环境探针清单或 ARM64 环境收据。"
+        )
+    clean_at = _rfc3339_datetime(clean_document[field], f"干净环境复核收据 {field}")
+    if clean_at > datetime.now(timezone.utc):
+        raise ConfigurationError("干净环境复核收据的观测时间晚于当前时间。")
+    facts = _campaign_contamination_facts(campaign_dir, _manifest=manifest)
+    chain = _environment_isolations(campaign_dir)
+    covered_keys = {
+        (str(item.get("record")), (item.get("source") or {}).get("sha256"))
+        for receipt in chain
+        for item in receipt["covered"]
+        if isinstance(item, Mapping)
+    }
+    effective = [
+        fact for fact in facts if (fact["record"], fact["source"]["sha256"]) not in covered_keys
+    ]
+    if not effective:
+        raise ConfigurationError("没有未隔离的环境污染事实，无需 environment-isolate。")
+    if any(fact["source"]["sha256"] is None for fact in effective):
+        raise ConfigurationError("污染事实的来源文件不可信（不是普通文件），不能按摘要覆盖；先人工审计。")
+    if _stage_path(campaign_dir, "capture-official", None)[1].is_file() and any(
+        fact["phase"] == "official" for fact in effective
+    ):
+        raise ConfigurationError(
+            "官方阶段已封存且官方侧存在未隔离的环境污染：Campaign 内无法重采官方证据，不能隔离（只能终态）。"
+        )
+    timed = [
+        _rfc3339_datetime(fact["at_utc"], f"污染事实 {fact['record']} 时间")
+        for fact in effective
+        if fact["at_utc"] is not None
+    ]
+    if timed and clean_at <= max(timed):
+        raise ConfigurationError(
+            "干净环境复核必须晚于所覆盖的全部污染事实（修复后重新取证）；"
+            f"复核时间 {clean_document[field]}，最近污染 {max(timed).isoformat()}。"
+        )
+    invalidated = sorted(
+        {
+            (str(fact["phase"]), fact["candidate_id"] or "", str(fact["attempt_id"]), fact["recovery_revision"] or "")
+            for fact in effective
+            if fact["kind"] in {"attempt", "seal", "recovery"}
+        }
+    )
+    preview = {
+        "schema_version": ENVIRONMENT_ISOLATION_PREVIEW_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "index": len(chain) + 1,
+        "previous_isolation_sha256": str(chain[-1]["isolation_sha256"]) if chain else None,
+        "covered": [dict(fact) for fact in effective],
+        "invalidated_attempts": [
+            {
+                "phase": phase,
+                "candidate_id": candidate_id or None,
+                "attempt_id": attempt_id,
+                "recovery_revision": recovery_revision or None,
+            }
+            for phase, candidate_id, attempt_id, recovery_revision in invalidated
+        ],
+        "environment_repair": {"source_path": str(repair_receipt), "sha256": file_sha256(repair_receipt)},
+        "clean_environment": {
+            "source_path": str(clean_receipt),
+            "sha256": file_sha256(clean_receipt),
+            "observed_at_utc": str(clean_document[field]),
+        },
+        "reason": reason,
+        "live_request_count": 0,
+    }
+    preview["review_sha256"] = _fingerprint(preview)
+    return preview
+
+
+def _environment_isolate_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """environment-isolate：不带 --approve-sha256 只预览；批准后复制两份环境收据并写一次隔离收据。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    approval = getattr(arguments, "approve_sha256", None)
+    next_steps = (
+        "隔离已生效：对账暂停的对象（reconcile-attempt／reconcile-supervisor-run）后按恢复预览续跑；"
+        "被作废的 attempt 永不复用、永不 seal，按失败 attempt 全部重跑"
+    )
+    if approval is not None:
+        # 同一批准重跑：隔离收据已写入则幂等返回（写一次的收据是唯一落盘点）。
+        for receipt in _environment_isolations(campaign_dir):
+            if receipt.get("review_sha256") == str(approval):
+                return {
+                    "status": "isolated",
+                    "reused": True,
+                    "isolation_index": receipt["index"],
+                    "isolation_sha256": receipt["isolation_sha256"],
+                    "invalidated_attempts": receipt["invalidated_attempts"],
+                    "next_command": next_steps,
+                }
+    options = {
+        "repair_receipt": Path(arguments.environment_repair_receipt),
+        "clean_receipt": Path(arguments.clean_environment_receipt),
+        "reason": str(arguments.reason),
+    }
+    preview = _environment_isolate_preview(campaign_dir, manifest, **options)
+    if approval is None:
+        return {
+            "status": "approval_required",
+            **preview,
+            "next_command": "environment-isolate（同样参数）--approve-sha256 <review_sha256> --approved-by <批准人>",
+        }
+    approved_by = str(getattr(arguments, "approved_by", "") or "").strip()
+    if not approved_by:
+        raise ConfigurationError("批准 environment-isolate 必须提供 --approved-by。")
+    with _campaign_lock(campaign_dir):
+        # 锁内重算：预览之后若出现新的污染事实或别的隔离，批准即作废，必须重新预览。
+        preview = _environment_isolate_preview(campaign_dir, manifest, **options)
+        if str(approval) != preview["review_sha256"]:
+            raise ConfigurationError("批准摘要与重算的隔离预览不一致（污染事实、隔离链或环境收据已变化）；重新预览后再批准。")
+        directory = campaign_dir / ENVIRONMENT_ISOLATION_DIR
+        ensure_private_directory(directory, campaign_dir)
+        bindings: dict[str, dict[str, Any]] = {}
+        for role, prefix in (("environment_repair", "repair"), ("clean_environment", "clean")):
+            frozen = preview[role]
+            copy = directory / f"{prefix}-{frozen['sha256']}"
+            if not copy.exists():
+                copied = _secure_copy_file_once(Path(frozen["source_path"]), copy)
+                if copied["sha256"] != frozen["sha256"]:
+                    copy.unlink(missing_ok=True)
+                    raise ConfigurationError(f"{role} 收据在复制途中被改动；重新预览后再批准。")
+            elif copy.is_symlink() or file_sha256(copy) != frozen["sha256"]:
+                raise ConfigurationError(f"{role} 收据副本与预览摘要不一致：{copy}")
+            bindings[role] = {
+                "path": copy.relative_to(campaign_dir).as_posix(),
+                "sha256": frozen["sha256"],
+                **({"observed_at_utc": frozen["observed_at_utc"]} if "observed_at_utc" in frozen else {}),
+            }
+        receipt = {
+            "schema_version": ENVIRONMENT_ISOLATION_SCHEMA,
+            "campaign_id": preview["campaign_id"],
+            "index": preview["index"],
+            "previous_isolation_sha256": preview["previous_isolation_sha256"],
+            "covered": preview["covered"],
+            "invalidated_attempts": preview["invalidated_attempts"],
+            "environment_repair": bindings["environment_repair"],
+            "clean_environment": bindings["clean_environment"],
+            "reason": preview["reason"],
+            "review_sha256": preview["review_sha256"],
+            "approved_by": approved_by,
+            "approved_at_utc": _utc_now(),
+        }
+        receipt["isolation_sha256"] = _fingerprint(receipt)
+        receipt_path = directory / f"isolation-{int(preview['index']):02d}.json"
+        _secure_write_json_once(receipt_path, receipt)
+    return {
+        "status": "isolated",
+        "reused": False,
+        "isolation_index": receipt["index"],
+        "isolation_sha256": receipt["isolation_sha256"],
+        "receipt_path": str(receipt_path),
+        "invalidated_attempts": receipt["invalidated_attempts"],
+        "next_command": next_steps,
     }
 
 
@@ -59256,6 +59870,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0
         elif command == "accounting-resolve":
             result = _accounting_resolve_command(arguments)
+            return_code = 0
+        elif command == "environment-isolate":
+            result = _environment_isolate_command(arguments)
             return_code = 0
         elif command == "wire-transition-intent":
             result = _wire_transition_intent_command(arguments)

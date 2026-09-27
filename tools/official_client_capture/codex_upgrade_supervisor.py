@@ -8062,16 +8062,24 @@ def verify_evolution_attempt_reconciliation(
     attempt_id: str,
     label: str,
 ) -> dict[str, Any]:
-    """重放 attempt 的"工具演进作废"对账：收据身份、失效事实，以及项目总账 ``reconcile-attempt:<id>`` 的绑定。"""
+    """重放 attempt 的"作废"对账：收据身份、失效事实，以及项目总账 ``reconcile-attempt:<id>`` 的绑定。
+
+    作废来源是工具演进（第 21 项）或环境隔离（修好接着跑第 13 项，Kilo 后环境恢复失败的等待封存 attempt），
+    二者恰有其一；续跑协议相同。
+    """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
     if receipt_path.is_symlink() or not receipt_path.is_file():
         raise SupervisorError(f"{label}：attempt {attempt_id} 尚未按工具演进作废对账；先执行 reconcile-attempt。")
     receipt = _read_json(receipt_path)
-    facts = receipt.get("tool_evolution_invalidation")
+    evolution_facts = receipt.get("tool_evolution_invalidation")
+    isolation_facts = receipt.get("environment_isolation_invalidation")
+    field = "tool_evolution_invalidation" if isolation_facts is None else "environment_isolation_invalidation"
+    facts = receipt.get(field)
     if (
-        receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
+        (evolution_facts is not None and isolation_facts is not None)
+        or receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
         or receipt.get("campaign_id") != campaign_id
         or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
         or receipt.get("phase") != side
@@ -8089,7 +8097,7 @@ def verify_evolution_attempt_reconciliation(
         or payload.get("subject_kind") != "attempt"
         or payload.get("subject_id") != attempt_id
         or payload.get("reconciliation_receipt_sha256") != _sha256(receipt_path.read_bytes())
-        or payload.get("tool_evolution_invalidation") != facts
+        or payload.get(field) != facts
     ):
         raise SupervisorError(f"{label}：attempt {attempt_id} 的演进作废对账与项目总账绑定不一致。")
     return {"attempt_id": attempt_id, "invalidated_job_ids": list(facts["invalidated_job_ids"])}

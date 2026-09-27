@@ -9457,6 +9457,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "tool-evolution-status",
                 "campaign-resume",
                 "accounting-resolve",
+                "environment-isolate",
                 "wire-transition-intent",
                 "wire-transition-final",
                 "evaluation-epoch",
@@ -19264,6 +19265,138 @@ class CodexUpgradeTest(unittest.TestCase):
                 history,
             )
 
+    def test_b0_seal_failure_isolated_attempt_reruns_via_recovery_preview_successor(self) -> None:
+        """修好接着跑第 13 项：候选 seal 时 Kilo 后环境恢复失败（seal-failure）→ Campaign 封锁、对账只暂停；
+        environment-isolate 后该 attempt 不再算待封存、seal 链编译前拒绝；按"环境隔离作废"对账（全部作业重跑、
+        不计根因），N+1 零请求恢复预览是允许的后继。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            attempt_id = attempt_root.name
+            jobs = sorted(self._b0_candidate_job_ids(fixture))
+            _root, attempt = codex_upgrade._load_capture_attempt(campaign_dir, "candidate", "cand-1", attempt_id)
+            codex_upgrade._record_candidate_seal_failure(
+                campaign_dir, attempt_root, dict(attempt), RuntimeError("合成：Kilo 后环境恢复失败")
+            )
+            self.assertEqual(
+                sorted(codex_upgrade._campaign_contamination_records(campaign_dir)),
+                sorted(["campaign-marker", f"cand-1:{attempt_id}:seal"]),
+            )
+            # seal 链批次失败（零请求后处理，post-run-tooling）并对账：环境未隔离，只暂停。
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture, "f" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle", failure_kind="child-returncode",
+                error_type="ChildProcessError", post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="prepare-candidate-assertion-bundle", failure_class="post-run-tooling"
+            )
+            paused = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(paused["status"], "paused", paused.get("decision"))
+            self.assertEqual(paused["decision"]["pause_kinds"], ["environment"])
+            # 修复环境、取得晚于污染的干净复核后隔离。
+            repair = root / "repair.txt"
+            repair.write_text("恢复 Kilo 改动的账号状态\n", encoding="utf-8")
+            clean = root / "clean.json"
+            clean.write_text(json.dumps({"observed_at_utc": codex_upgrade._utc_now()}), encoding="utf-8")
+            arguments = argparse.Namespace(
+                campaign_dir=campaign_dir, environment_repair_receipt=repair, clean_environment_receipt=clean,
+                reason="Kilo 后恢复失败已修复", approve_sha256=None, approved_by=None,
+            )
+            preview = codex_upgrade._environment_isolate_command(arguments)
+            self.assertEqual(
+                preview["invalidated_attempts"],
+                [{"phase": "candidate", "candidate_id": "cand-1", "attempt_id": attempt_id, "recovery_revision": None}],
+            )
+            arguments.approve_sha256 = preview["review_sha256"]
+            arguments.approved_by = "老板"
+            self.assertEqual(codex_upgrade._environment_isolate_command(arguments)["status"], "isolated")
+            # 隔离后：不再算待封存，按失败 attempt 续跑；seal 链编译前零写入拒绝。
+            self.assertEqual(codex_upgrade._active_unsealed_attempts(campaign_dir, "candidate"), [])
+            self.assertEqual(codex_upgrade._failed_capture_attempts(campaign_dir, "candidate"), [f"cand-1:{attempt_id}"])
+            status = codex_upgrade.campaign_status(campaign_dir, "cand-1")
+            self.assertEqual(status["status"], "candidate_capture_failed")
+            self.assertIn("环境隔离作废", status["next_command"])
+            plan_path = root / "seal-plan.json"
+            plan_path.write_text(json.dumps({
+                "schema_version": "codex-upgrade-vc-action-plan/v1",
+                "execute_item_ids": ["candidate-seal"],
+                "reuse_item_ids": jobs,
+                "actions": inner["actions"],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "环境隔离作废"):
+                codex_upgrade._refuse_seal_chain_on_evolution_invalidated_attempt(
+                    campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
+                )
+            # 运行时第二道防线：直接 seal 也拒绝（隔离放行的是 Campaign，不是被作废的 attempt）。
+            # 候选 revision 写入门依赖夹具之外的 revision 目录，这里旁路它，只验证隔离作废检查。
+            with mock.patch.object(codex_upgrade, "_guard_candidate_revision_write"), \
+                    self.assertRaisesRegex(codex_upgrade.ConfigurationError, "环境隔离作废"):
+                codex_upgrade._seal_capture_attempt(
+                    argparse.Namespace(campaign_dir=campaign_dir, attempt_id=attempt_id, candidate_id="cand-1",
+                                       attempt_recovery=None, approve_seal_sha256=None),
+                    "candidate",
+                )
+            # 父 run 再对账：环境已隔离，可恢复。
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_dir, campaign_dir)["status"], "recoverable")
+            # attempt 按环境隔离作废对账：全部作业重跑、不计根因。
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(result["environment_isolation_invalidation"]["invalidated_job_ids"], jobs)
+            self.assertEqual(result["root_cause"]["root_cause_id"], "environment-isolation-01")
+            self.assertEqual(result["recovery_preview"]["reuse_job_ids"], [])
+            self.assertEqual(result["recovery_preview"]["execute_job_ids"], jobs)
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["root_cause_counts"], head_before["root_cause_counts"])
+            committed = next(
+                event for event in codex_upgrade_project_ledger._load_events(fixture["ledger"])
+                if event["operation_id"] == f"reconcile-attempt:{attempt_id}"
+            )
+            self.assertNotIn("root_cause", committed["payload"])
+            self.assertEqual(committed["payload"]["environment_isolation_invalidation"]["invalidated_job_ids"], jobs)
+            # N+1 零请求恢复预览：监督器核验接受环境隔离作废（与工具演进作废同一协议）。
+            identity = {
+                "--candidate-id": "cand-1",
+                "--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json"),
+                "--runtime-image": "repo@sha256:" + "1" * 64,
+                "--candidate-image-id": "sha256:" + "1" * 64,
+                "--candidate-source": "/root/candidate/source",
+                "--build-id": "build-1",
+                "--deployed-version": "0.157.0",
+                "--profile-id": "profile-1",
+                "--profile-digest": "2" * 64,
+                "--candidate-purpose": "production_replacement",
+            }
+            preview_action = {
+                "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                "timeout_seconds": 1800,
+                "command": supervisor.candidate_recovery_preview_command(
+                    ["/usr/bin/python3", "/tools/codex_upgrade.py"], str(campaign_dir), identity
+                ),
+                "item_ids": ["candidate-run"],
+            }
+            successor = dict(
+                inner, batch_sequence=2, batch_id="vc-5-0002", batch_sha256="2" * 64,
+                actions=[preview_action], execute_items=["candidate-run"], reuse_items=[],
+            )
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                supervisor._validate_batched_evolution_recovery_successor(
+                    prior_state, inner, run_dir, successor, campaign_dir=campaign_dir
+                )
+            )
+
     def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
         """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
 
@@ -20571,6 +20704,298 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(head["unresolved_operation_ids"], [])
             self.assertNotIn("accounting_resolutions", head)
             self.assertEqual(reconciler.reconcile_attempt(campaign_dir, attempt_id)["status"], "recoverable")
+
+    def _b0_contaminated_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        before_probe: bool = True,
+    ) -> str:
+        """发布环境污染的官方 attempt，形同 _run_capture_attempt：before 探针在位、after／恢复失败，并写旁路标记。
+
+        ``before_probe=False`` 时是 before 探针都没取到（没有执行任何 Job）的普通失败：恢复错误不构成污染。
+        """
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        jobs = fixture["jobs"]
+        job = jobs[0]
+        attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            identity=dict(manifest["official_identity"]),
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        result = {
+            "id": job.job_id,
+            "phase": "official",
+            "required": True,
+            "execution_sha256": codex_upgrade._job_execution_sha256(job),
+            "status": "complete",
+            "description": "合成 Job",
+            "duration_seconds": 0.0,
+            "steps": [],
+            "evidence_roots": [],
+            "missing_evidence_patterns": [],
+            "empty_evidence_patterns": [],
+            "covers": [],
+            "scenario_ids": [],
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [],
+            "track": "main",
+            "model_id": "gpt-5.5",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
+            "disposition": "executed",
+        }
+        job_checkpoint = None
+        if before_probe:
+            # 与真实采集一致：Job 收据与 checkpoint 链在位（续跑闭集要逐条重放）。
+            codex_upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+            store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
+            store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete",
+                    "disposition": "executed",
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                    "result_key": None,
+                    "result": result,
+                    "source_receipt": None,
+                    "previous_checkpoint_sha256": None,
+                }
+            )
+            records = store.records()
+            # 夹具不带 watchdog：checkpoint 绑定只用四个基础字段（与 attempt 收据合同一致）。
+            job_checkpoint = {
+                "path": (attempt_root / "checkpoints").relative_to(campaign_dir).as_posix(),
+                "record_count": len(records),
+                "last_sequence": records[-1].get("checkpoint_sequence"),
+                "last_sha256": records[-1].get("checkpoint_sha256"),
+            }
+        codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "official",
+                "candidate_id": None,
+                "job_checkpoint": job_checkpoint,
+                "status": "environment_contaminated" if before_probe else "failed",
+                "identity": dict(manifest["official_identity"]),
+                "results": [result] if before_probe else [],
+                "failure_observations": [],
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {
+                    "type": "SyntheticFailure",
+                    "message": "合成污染 attempt 没有证据目录。",
+                },
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": (
+                        {"path": "environment/before/probe-manifest.json", "sha256": "0" * 64, "bytes": 1}
+                        if before_probe
+                        else None
+                    ),
+                    "after_probe": None,
+                    "restoration_report": None,
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": {"type": "ConfigurationError", "message": "合成：独立 after 探针或恢复 finalizer 未通过"},
+                "next_gate": None,
+            },
+        )
+        marker = campaign_dir / "environment-contaminated.json"
+        if before_probe and not marker.exists():
+            codex_upgrade._secure_write_json_once(
+                marker,
+                {
+                    "schema_version": "codex-upgrade-environment-contamination/v1",
+                    "phase": "official",
+                    "candidate_id": None,
+                    "attempt_id": attempt_root.name,
+                    "reason": "独立 after 探针或恢复 finalizer 未通过：ConfigurationError",
+                },
+            )
+        return attempt_root.name
+
+    def test_b0_environment_contamination_pauses_then_isolate_continues(self) -> None:
+        """修好接着跑第 13 项：污染只暂停不终态；修复环境并取得晚于污染的干净复核后 environment-isolate 隔离，
+        被作废的 attempt 按失败 attempt 全部重跑（不复用），Campaign 继续；新的污染不被旧隔离覆盖。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            attempt_id = self._b0_contaminated_attempt(fixture)
+            records = codex_upgrade._campaign_contamination_records(campaign_dir)
+            self.assertEqual(sorted(records), sorted(["campaign-marker", f"official:{attempt_id}:attempt"]))
+            status = codex_upgrade.campaign_status(campaign_dir)
+            self.assertEqual(status["status"], "environment_contaminated")
+            self.assertIn("environment-isolate", status["next_command"])
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "environment-isolate"):
+                codex_upgrade._reject_contaminated_campaign(campaign_dir)
+            # 对账：只暂停、不写终态，下一步指向 environment-isolate。
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "paused", result.get("decision"))
+            self.assertEqual(result["decision"]["pause_kinds"], ["environment"])
+            self.assertIsNone(result["decision"]["terminal_reason"])
+            self.assertIn("environment-isolate", result["next_command"])
+            self.assertNotIn(campaign_id, codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"])
+
+            repair = root / "environment-repair.txt"
+            repair.write_text("重建网关测试账号状态并重启 capture 容器。\n", encoding="utf-8")
+
+            def arguments(clean: Path, **overrides: object) -> argparse.Namespace:
+                values: dict[str, object] = dict(
+                    campaign_dir=campaign_dir, environment_repair_receipt=repair, clean_environment_receipt=clean,
+                    reason="修复后重新取证，环境洁净", approve_sha256=None, approved_by=None,
+                )
+                values.update(overrides)
+                return argparse.Namespace(**values)
+
+            stale = root / "clean-stale.json"
+            stale.write_text(json.dumps({"phase": "before", "observed_at_utc": "2020-01-01T00:00:00Z"}), encoding="utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须晚于"):
+                codex_upgrade._environment_isolate_command(arguments(stale))
+            untimed = root / "clean-untimed.json"
+            untimed.write_text(json.dumps({"phase": "before"}), encoding="utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "缺少观测时间"):
+                codex_upgrade._environment_isolate_command(arguments(untimed))
+            clean = root / "clean.json"
+            clean.write_text(json.dumps({"phase": "before", "observed_at_utc": codex_upgrade._utc_now()}), encoding="utf-8")
+            preview = codex_upgrade._environment_isolate_command(arguments(clean))
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual(sorted(item["record"] for item in preview["covered"]), sorted(records))
+            self.assertEqual(
+                preview["invalidated_attempts"],
+                [{"phase": "official", "candidate_id": None, "attempt_id": attempt_id, "recovery_revision": None}],
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "批准摘要与重算"):
+                codex_upgrade._environment_isolate_command(arguments(clean, approve_sha256="0" * 64, approved_by="老板"))
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "--approved-by"):
+                codex_upgrade._environment_isolate_command(arguments(clean, approve_sha256=preview["review_sha256"]))
+            isolated = codex_upgrade._environment_isolate_command(
+                arguments(clean, approve_sha256=preview["review_sha256"], approved_by="老板")
+            )
+            self.assertEqual((isolated["status"], isolated["reused"], isolated["isolation_index"]), ("isolated", False, 1))
+            rerun = codex_upgrade._environment_isolate_command(
+                arguments(clean, approve_sha256=preview["review_sha256"], approved_by="老板")
+            )
+            self.assertEqual((rerun["status"], rerun["reused"]), ("isolated", True))
+            self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [])
+            copy = campaign_dir / "control" / "environment" / f"repair-{codex_upgrade.file_sha256(repair)}"
+            self.assertEqual(copy.read_bytes(), repair.read_bytes())
+            codex_upgrade._reject_contaminated_campaign(campaign_dir)
+            # 状态：被作废的 attempt 按失败 attempt 续跑。
+            status = codex_upgrade.campaign_status(campaign_dir)
+            self.assertEqual(status["status"], "official_capture_failed")
+            self.assertIn("环境隔离作废", status["next_command"])
+            # 同一 attempt 再对账：可恢复，恢复预览全部重跑、不复用。
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(again["status"], "recoverable", again.get("decision"))
+            job_id = fixture["jobs"][0].job_id
+            self.assertEqual(again["recovery_preview"]["reuse_job_ids"], [])
+            self.assertEqual(again["recovery_preview"]["execute_job_ids"], [job_id])
+            # 续跑闭集（真实计算，不替身）：已完成作业全部作废重跑，环境边界绑定隔离收据。
+            source_root, source = codex_upgrade._load_capture_attempt(campaign_dir, "official", None, attempt_id)
+            self.assertEqual(
+                codex_upgrade._latest_failed_attempt_for_identity(
+                    campaign_dir, phase="official", candidate_id=None,
+                    identity=source["identity"], manifest=fixture["manifest"],
+                )[0],
+                source_root,
+            )
+            scope = codex_upgrade._phase_evaluation_recovery_scope(
+                campaign_dir, fixture["manifest"], phase="official", candidate_id=None,
+                attempt_root=source_root, attempt=source, allow_evolution_invalidated=True,
+            )
+            self.assertEqual((scope["execute_job_ids"], scope["completed_job_ids"]), ([job_id], []))
+            self.assertEqual(scope["environment_isolation"]["invalidated_job_ids"], [job_id])
+            self.assertEqual(scope["environment_boundary_sha256"], isolated["isolation_sha256"])
+            # 批准预览后 resume 通过门禁，并把全部重跑的冻结闭集交给 run（替身截住真实派发）。
+            approved = reconciler.reconcile_attempt(
+                campaign_dir, attempt_id, approve_recovery_sha256=again["recovery_preview"]["review_sha256"]
+            )
+            captured: dict[str, object] = {}
+
+            def fake_run(run_arguments: argparse.Namespace, phase: str) -> dict[str, object]:
+                captured["phase"] = phase
+                captured["preview"] = getattr(run_arguments, "recovery_preview_payload", None)
+                return {"status": "awaiting_receipts"}
+
+            with mock.patch.object(codex_upgrade, "_run_capture_attempt", side_effect=fake_run):
+                resumed = self._b0_resume(campaign_dir, Path(approved["recovery_preview_path"]))
+            self.assertEqual(resumed["status"], "awaiting_receipts")
+            self.assertEqual((captured["phase"], captured["preview"]["execute_job_ids"]), ("official", [job_id]))
+            self.assertEqual(captured["preview"]["reuse_job_ids"], [])
+            # 新的污染不被旧隔离覆盖（旁路标记已覆盖，只剩新 attempt 本身）。
+            second = self._b0_contaminated_attempt(fixture)
+            self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [f"official:{second}:attempt"])
+
+    def test_b0_environment_decision_official_sealed_is_terminal_and_isolation_refused(self) -> None:
+        """修好接着跑第 13 项：官方已封存且官方侧存在未隔离污染时 Campaign 内无法重采，判定终态、隔离拒绝；
+        before 探针都没取到的恢复错误不是污染，不再停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            plain = self._b0_contaminated_attempt(fixture, before_probe=False)
+            self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [])
+            plain_result = reconciler.reconcile_attempt(campaign_dir, plain)
+            self.assertNotEqual(plain_result["status"], "permanent_stop", plain_result.get("decision"))
+            self.assertEqual(plain_result["recovery_preview"]["reuse_job_ids"], [])
+            attempt_id = self._b0_contaminated_attempt(fixture)
+            self.assertEqual(codex_upgrade._campaign_environment_decision(campaign_dir)["status"], "contaminated")
+            stage = codex_upgrade._stage_path(campaign_dir, "capture-official", None)[1]
+            stage.parent.mkdir(parents=True, exist_ok=True)
+            stage.write_text("{}\n", encoding="utf-8")
+            decision = codex_upgrade._campaign_environment_decision(campaign_dir)
+            self.assertEqual(decision["status"], "official_sealed_contaminated")
+            self.assertIn(f"official:{attempt_id}:attempt", decision["official_records"])
+            repair = root / "repair.txt"
+            repair.write_text("修复\n", encoding="utf-8")
+            clean = root / "clean.json"
+            clean.write_text(json.dumps({"observed_at_utc": codex_upgrade._utc_now()}), encoding="utf-8")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法重采官方证据"):
+                codex_upgrade._environment_isolate_preview(
+                    campaign_dir, fixture["manifest"], repair_receipt=repair, clean_receipt=clean, reason="试图隔离"
+                )
+            plan, _raw = codex_upgrade_project_ledger._load_plan(fixture["ledger"])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            ledger_facts = reconciler._ledger_facts(fixture["timing_ledger"], now=codex_upgrade._utc_now())
+            for status, expected, kinds in (
+                ("official_sealed_contaminated", "permanent_stop", None),
+                ("contaminated", "paused", ["environment"]),
+                ("restored", "recoverable", None),
+            ):
+                verdict = reconciler._decide(
+                    head=head, plan=plan, ledger=ledger_facts, identity={"unchanged": True},
+                    environment_status=status, campaign_deadline_at_utc=None, root_cause_id="fixture",
+                    request_status="resolved", now=codex_upgrade._utc_now(),
+                )
+                self.assertEqual((verdict["decision"], verdict.get("pause_kinds")), (expected, kinds), status)
+                if expected == "permanent_stop":
+                    self.assertEqual(verdict["terminal_reason"], "environment_contaminated")
 
     def test_b0_reconcile_attempt_deadline_expired_records_failure_and_pauses(self) -> None:
         """deadline 到期仍先 metadata-only 入账，再暂停；不废弃阶段、不自动终态。"""

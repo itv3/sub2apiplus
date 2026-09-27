@@ -560,6 +560,8 @@ def _paused_next_command(decision: Mapping[str, Any], resume_from: str) -> str:
         steps.append("request-budget-extend preview/apply")
     if "accounting" in kinds:
         steps.append("accounting-resolve preview/apply（为未决 operation 补账）")
+    if "environment" in kinds:
+        steps.append("修复环境并取得晚于污染的干净环境复核后 environment-isolate preview/apply（隔离污染 attempt）")
     return "；".join(steps) + f"；批准后{resume_from}"
 
 
@@ -1129,8 +1131,14 @@ def _decide(
     elif request_status == "unresolved":
         accounting_paused = True
         reasons.append("本次请求账务无法确定（暂停：accounting-resolve 补账后继续）")
-    if environment_status == "contaminated":
-        stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
+    # 修好接着跑第 13 项：未隔离的环境污染只暂停（修复环境后 environment-isolate 隔离污染 attempt 继续）；
+    # 官方已封存且官方侧受污染时 Campaign 内无法重采官方证据，才写 environment_contaminated 终态。
+    environment_paused = False
+    if environment_status == "official_sealed_contaminated":
+        stop("environment_contaminated", "官方已封存且官方侧存在未隔离的环境污染：Campaign 内无法重采官方证据")
+    elif environment_status == "contaminated":
+        environment_paused = True
+        reasons.append("存在未隔离的环境污染（暂停：修复环境、取得干净环境复核后以 environment-isolate 隔离继续）")
     ledger_status = ledger.get("status")
     if ledger_status == "abandoned":
         raise ReconcilerError("Campaign 已显式放弃，不再生成恢复批准；两账未闭合时重跑原 campaign-abandon")
@@ -1177,7 +1185,7 @@ def _decide(
         DECISION_STOP
         if terminal_reason is not None
         else DECISION_PAUSED
-        if deadline_paused or budget_paused or accounting_paused
+        if deadline_paused or budget_paused or accounting_paused or environment_paused
         else DECISION_RECOVERABLE
     )
     scoped_counts = project_ledger.root_cause_counts_for(head, target_version)
@@ -1190,7 +1198,12 @@ def _decide(
         # 暂停种类只在暂停时写入，其余判定的输出字节不变。
         extra["pause_kinds"] = [
             kind
-            for kind, on in (("deadline", deadline_paused), ("request_budget", budget_paused), ("accounting", accounting_paused))
+            for kind, on in (
+                ("deadline", deadline_paused),
+                ("request_budget", budget_paused),
+                ("accounting", accounting_paused),
+                ("environment", environment_paused),
+            )
             if on
         ]
     return {
@@ -1449,13 +1462,27 @@ def _classify_jobs(
     return {"planned_job_ids": sorted(planned), "states": states, "groups": grouped, "details": details}
 
 
+def _environment_decision_status(decision: Mapping[str, Any]) -> str:
+    """把 codex_upgrade._campaign_environment_decision 映射为 _decide 的环境口径（clear 记为 restored，旧字节不变）。"""
+
+    status = str(decision["status"])
+    return "restored" if status == "clear" else status
+
+
 def _environment_facts(
     campaign_dir: Path,
     attempt_root: Path,
     attempt: Mapping[str, Any] | None,
     contamination: list[str],
+    *,
+    decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """环境已恢复（after 探针与恢复收据在位）／未恢复／污染。"""
+    """环境已恢复（after 探针与恢复收据在位）／未恢复／污染。
+
+    ``status`` 是本 attempt 自身的环境（决定能否复用已完成作业）；``decision_status`` 是判定口径
+    （修好接着跑第 13 项）：只看未隔离的污染事实与官方已封存受污染，本 attempt 自身已被隔离时不再停线，
+    before 探针都没取到（没有执行任何 Job）时的恢复错误也不再误判为污染。
+    """
 
     evidence_root = attempt_root / "evidence"
     before = evidence_root / "environment" / "before" / "probe-manifest.json"
@@ -1468,13 +1495,23 @@ def _environment_facts(
     elif attempt is not None:
         environment = attempt.get("environment") if isinstance(attempt.get("environment"), Mapping) else {}
         restoration_error = attempt.get("restoration_error")
-        if attempt.get("status") == "environment_contaminated" or restoration_error is not None:
+        if (
+            attempt.get("status") == "environment_contaminated"
+            or restoration_error is not None
+            # Kilo 后环境恢复失败（seal-failure）：该 attempt 的结果永不复用。
+            or (attempt_root / "seal-failure.json").exists()
+        ):
             status = "contaminated"
         elif environment.get("after_probe") is not None and environment.get("restoration_report") is not None:
             status = "restored"
     elif after.is_file() and restoration.is_file():
         status = "restored"
     return {
+        "decision_status": (
+            _environment_decision_status(decision)
+            if decision is not None
+            else ("contaminated" if contamination else status)
+        ),
         "status": status,
         "before_probe_present": before.is_file(),
         "after_probe_present": after.is_file(),
@@ -2367,6 +2404,65 @@ def _evolution_invalidation_cause(phase: str, facts: Mapping[str, Any]) -> dict[
     }
 
 
+def _isolation_invalidation_facts(
+    campaign_dir: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+) -> dict[str, Any] | None:
+    """等待封存的 attempt 被环境隔离作废（Kilo 后环境恢复失败等，修好接着跑第 13 项）时返回失效事实。
+
+    与工具演进作废同一协议：不是失败、不计根因；全部已完成作业失效（污染后结果永不复用），计时账本
+    recovery_required 后按恢复预览全部重跑。
+    """
+
+    try:
+        chain = codex_upgrade._environment_isolations(campaign_dir)
+    except codex_upgrade.ConfigurationError as error:
+        raise ReconcilerError(str(error)) from error
+    for receipt in chain:
+        for item in receipt["invalidated_attempts"]:
+            if (
+                isinstance(item, Mapping)
+                and item.get("phase") == phase
+                and item.get("candidate_id") == candidate_id
+                and item.get("attempt_id") == attempt_id
+                and item.get("recovery_revision") is None
+            ):
+                jobs = sorted(
+                    str(result["id"])
+                    for result in attempt.get("results", [])
+                    if isinstance(result, Mapping) and result.get("status") == "complete" and isinstance(result.get("id"), str)
+                )
+                return {
+                    "isolation_index": int(receipt["index"]),
+                    "isolation_sha256": str(receipt["isolation_sha256"]),
+                    "invalidated_job_ids": jobs,
+                }
+    return None
+
+
+def _invalidation_ledger_event_id(attempt_id: str, isolation_invalidation: Mapping[str, Any] | None) -> str:
+    """作废对账写计时账本 recovery_required 的事件 ID（演进与隔离分开，互不吞并）。"""
+
+    kind = "isolation" if isolation_invalidation is not None else "evolution"
+    return f"reconcile-attempt-{kind}-{attempt_id}"
+
+
+def _isolation_invalidation_cause(phase: str, facts: Mapping[str, Any]) -> dict[str, Any]:
+    """隔离作废的暂停原因：只作计时账本 recovery_required／授权的原因标识，不入总账计数。"""
+
+    return {
+        "root_cause_id": f"environment-isolation-{int(facts['isolation_index']):02d}",
+        "stable_error_code": "attempt.environment-isolation-invalidated",
+        "failed_step": "environment-isolation",
+        "stable_dimensions": {"phase": phase},
+        "component": COMPONENT,
+    }
+
+
 def reconcile_attempt(
     campaign_dir: Path,
     attempt_id: str,
@@ -2393,6 +2489,8 @@ def reconcile_attempt(
     attempt: dict[str, Any] | None = None
     # 修好接着跑第 21 项：等待封存、但有已完成作业被其后登记的工具演进作废的 attempt（不是失败）。
     evolution_invalidation: dict[str, Any] | None = None
+    # 修好接着跑第 13 项：等待封存、但被环境隔离作废的 attempt（同一协议，全部作业失效）。
+    isolation_invalidation: dict[str, Any] | None = None
     if recovery_revision is not None:
         if phase != "candidate" or candidate_id is None:
             raise ReconcilerError("恢复段只存在于候选 attempt")
@@ -2439,8 +2537,12 @@ def reconcile_attempt(
                     campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
                 )
                 if evolution_invalidation is None:
+                    isolation_invalidation = _isolation_invalidation_facts(
+                        campaign_dir, attempt, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id
+                    )
+                if evolution_invalidation is None and isolation_invalidation is None:
                     raise ReconcilerError(
-                        "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进作废作业的 attempt"
+                        "attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败、中断或被工具演进／环境隔离作废的 attempt"
                     )
         stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
         if stage_result.exists():
@@ -2450,8 +2552,10 @@ def reconcile_attempt(
     subject = _recovery_segment_subject(attempt_id, recovery_revision)
     records, latest_checkpoints, chain = _checkpoint_facts(work_root)
     jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, work_root)
-    contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
-    environment = _environment_facts(campaign_dir, work_root, attempt, contamination)
+    environment_decision = codex_upgrade._campaign_environment_decision(campaign_dir, _manifest=manifest)
+    environment = _environment_facts(
+        campaign_dir, work_root, attempt, environment_decision["records"], decision=environment_decision
+    )
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
@@ -2499,10 +2603,15 @@ def reconcile_attempt(
         ledger.get("status") == "stopped"
         and fallback_cause["stable_error_code"] == "attempt.identity-changed"
     )
-    if evolution_invalidation is not None:
+    if evolution_invalidation is not None or isolation_invalidation is not None:
         # 演进失效不是失败：不编失败根因、不计同根因次数（总账载荷不带 root_cause）。计时账本的暂停原因
-        # 用 tool-evolution-NN（总账里不存在，不会触顶），授权按同一原因恢复阶段。
-        cause = _evolution_invalidation_cause(phase, evolution_invalidation)
+        # 用 tool-evolution-NN（总账里不存在，不会触顶），授权按同一原因恢复阶段。环境隔离作废同一口径，
+        # 原因用 environment-isolation-NN。
+        cause = (
+            _evolution_invalidation_cause(phase, evolution_invalidation)
+            if evolution_invalidation is not None
+            else _isolation_invalidation_cause(phase, isolation_invalidation)
+        )
         root_causes = [cause]
         array_contract = False
         failure_observations = []
@@ -2568,6 +2677,8 @@ def reconcile_attempt(
         receipt["root_causes"] = root_causes
     if evolution_invalidation is not None:
         receipt["tool_evolution_invalidation"] = dict(evolution_invalidation)
+    if isolation_invalidation is not None:
+        receipt["environment_isolation_invalidation"] = dict(isolation_invalidation)
     receipt_path = receipt_dir / ATTEMPT_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -2582,6 +2693,9 @@ def reconcile_attempt(
                 "root_cause",
                 "request_part_status",
                 "provenance_receipt_sha256",
+                # 修好接着跑第 13 项：污染记录与判定口径随 environment-isolate 变化，隔离后同一对象要能重新对账
+                # （与监督器运行对账的 contamination_records 同口径）。
+                "environment",
             ),
         )
         # 中断后重放：根因与请求状态以首次落盘的收据为准，后续步骤按同一根因幂等推进。
@@ -2631,7 +2745,7 @@ def reconcile_attempt(
                 )
             else:
                 ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
-        elif evolution_invalidation is not None:
+        elif evolution_invalidation is not None or isolation_invalidation is not None:
             # attempt 已完成（账本是 attempt_completed），不补 attempt 事件；把所在阶段暂停为 recovery_required，
             # 授权后按恢复预览只重跑失效作业。阶段已因别的原因暂停时沿用该原因（授权一并消费）；到期暂停
             # 由判定提示先延期；其它状态只入账。
@@ -2640,7 +2754,7 @@ def reconcile_attempt(
                 ledger_events.append(
                     _append_ledger_event(
                         ledger_dir,
-                        event_id=f"reconcile-attempt-evolution-{attempt_id}",
+                        event_id=_invalidation_ledger_event_id(attempt_id, isolation_invalidation),
                         phase=expected_phase,
                         event_type="recovery_required",
                         root_cause_id=cause["root_cause_id"],
@@ -2648,7 +2762,11 @@ def reconcile_attempt(
                     )
                 )
             else:
-                ledger_note = f"skipped:evolution_invalidation_ledger_{ledger['status']}"
+                ledger_note = (
+                    f"skipped:evolution_invalidation_ledger_{ledger['status']}"
+                    if evolution_invalidation is not None
+                    else f"skipped:isolation_invalidation_ledger_{ledger['status']}"
+                )
         elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
         elif ledger["status"] in {"active", "recovery_required", "stage_review_required"} or (ledger["status"] == "deadline_paused" and attempt_id in active_ids):
@@ -2743,12 +2861,15 @@ def reconcile_attempt(
             reconciliation_payload["root_causes"] = root_causes
         if recovery_revision is not None:
             reconciliation_payload["recovery_revision"] = recovery_revision
-        if evolution_invalidation is not None:
-            # 演进失效只核算请求，不带 root_cause：总账不把它计入同根因次数。
+        if evolution_invalidation is not None or isolation_invalidation is not None:
+            # 演进失效与环境隔离作废只核算请求，不带 root_cause：总账不把它计入同根因次数。
             del reconciliation_payload["root_cause"]
-            reconciliation_payload["tool_evolution_invalidation"] = dict(evolution_invalidation)
+            if evolution_invalidation is not None:
+                reconciliation_payload["tool_evolution_invalidation"] = dict(evolution_invalidation)
+            else:
+                reconciliation_payload["environment_isolation_invalidation"] = dict(isolation_invalidation)
             reconciliation_payload["recovery_required_event_sha256"] = _ledger_event_sha256(
-                ledger_dir, f"reconcile-attempt-evolution-{attempt_id}"
+                ledger_dir, _invalidation_ledger_event_id(attempt_id, isolation_invalidation)
             )
         batch = _commit_batch(
             campaign_dir,
@@ -2766,7 +2887,7 @@ def reconcile_attempt(
         plan=plan,
         ledger=ledger,
         identity=identity,
-        environment_status=environment["status"],
+        environment_status=environment["decision_status"],
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
         root_cause_ids=[item["root_cause_id"] for item in root_causes],
@@ -2808,6 +2929,8 @@ def reconcile_attempt(
         result["root_causes"] = root_causes
     if evolution_invalidation is not None:
         result["tool_evolution_invalidation"] = dict(evolution_invalidation)
+    if isolation_invalidation is not None:
+        result["environment_isolation_invalidation"] = dict(isolation_invalidation)
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")
@@ -3552,7 +3675,8 @@ def reconcile_supervisor_run(
     request_part, provenance_binding, provenance_copy_path = _request_part(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
-    contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
+    environment_decision = codex_upgrade._campaign_environment_decision(campaign_dir, _manifest=manifest)
+    contamination = environment_decision["records"]
     failure_observations, root_causes = _supervisor_run_failures(run)
     cause = root_causes[0]
     receipt = {
@@ -3637,7 +3761,7 @@ def reconcile_supervisor_run(
             receipt_bindings=[receipt_binding, provenance_binding],
         )
     pushed, head_after = _push_and_replay(project_root, campaign_dir, now=observed)
-    environment_status = "contaminated" if contamination else "restored"
+    environment_status = _environment_decision_status(environment_decision)
     decision = _decide(
         head=head_after,
         plan=plan,
@@ -3919,7 +4043,7 @@ def reconcile_staging_abort(
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
-    contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
+    environment_decision = codex_upgrade._campaign_environment_decision(campaign_dir, _manifest=manifest)
     receipt_binding = _binding(campaign_dir, abort_path, "reconciliation")
     payload = {
         "campaign_id": str(manifest["campaign_id"]),
@@ -3952,7 +4076,7 @@ def reconcile_staging_abort(
         plan=plan,
         ledger=ledger,
         identity=identity,
-        environment_status="contaminated" if contamination else "restored",
+        environment_status=_environment_decision_status(environment_decision),
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
         request_status="resolved",
