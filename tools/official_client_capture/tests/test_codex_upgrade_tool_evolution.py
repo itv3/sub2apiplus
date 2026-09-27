@@ -673,6 +673,40 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
         self.assertIsNone(supervisor.candidate_capture_recovery_action({**manifest, "phase": "VC-4"}, "candidate-run"))
 
 
+class CandidatePostRunRecoveryTests(unittest.TestCase):
+    """第三批 B3-4：VC-5／VC-6 零请求后处理动作的判定——candidate-seal／compare／assert-*／acceptance／canonical 项放行，
+    采集项、混入非后处理项、VC-4 都不放行。"""
+
+    def _manifest(self, phase: str, action_id: str, item_ids: list[str], execute_items: list[str] | None = None) -> dict:
+        return {
+            "phase": phase,
+            "execute_items": list(execute_items if execute_items is not None else item_ids),
+            "actions": [{"action_id": action_id, "operation": f"{phase}:{action_id}", "command": ["true"], "item_ids": item_ids}],
+        }
+
+    def test_post_run_action_classification(self) -> None:
+        classify = supervisor.candidate_post_run_recovery_action
+        self.assertEqual(classify(self._manifest("VC-5", "candidate-seal", ["candidate-seal"]), "candidate-seal"), "post-run")
+        self.assertEqual(classify(self._manifest("VC-5", "assert-rules", ["assert-rules"]), "assert-rules"), "post-run")
+        self.assertEqual(classify(self._manifest("VC-5", "accept", ["acceptance"]), "accept"), "post-run")
+        self.assertEqual(
+            classify(self._manifest("VC-6", "production-activation", ["production-activation"]), "production-activation"),
+            "post-run",
+        )
+        self.assertEqual(
+            classify(self._manifest("VC-6", "retire", ["retire-0.154.0"]), "retire"), "post-run"
+        )
+        # 采集项、批次混入非后处理项、VC-4、找不到动作、空 item：不放行。
+        self.assertIsNone(classify(self._manifest("VC-5", "candidate-run", ["candidate-run"]), "candidate-run"))
+        self.assertIsNone(
+            classify(self._manifest("VC-5", "candidate-seal", ["candidate-seal"], execute_items=["candidate-run", "candidate-seal"]), "candidate-seal")
+        )
+        self.assertIsNone(classify(self._manifest("VC-4", "candidate-seal", ["candidate-seal"]), "candidate-seal"))
+        self.assertIsNone(classify(self._manifest("VC-5", "candidate-seal", ["candidate-seal"]), "other"))
+        self.assertIsNone(classify(self._manifest("VC-5", "candidate-seal", []), "candidate-seal"))
+        self.assertIsNone(classify(self._manifest("VC-5", "vc-5-synthetic", ["vc-5-synthetic"]), "vc-5-synthetic"))
+
+
 class ToolEvolutionPreviewTests(unittest.TestCase):
     """编排器 tool-evolution 预览／批准：逐作业影响、拒绝条件、评估器 b0 授权迁移与落盘后的门禁。"""
 

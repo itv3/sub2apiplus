@@ -1145,6 +1145,31 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source))
             self.assertEqual(preview["status"], "preview")
 
+    def test_post_run_action_execution_failure_enters_recovery_required_and_reconciles(self) -> None:
+        """第三批 B3-4（第 5 项①）：VC-5 零请求后处理动作（candidate-seal）以 execution-failure 收口——post-run-tooling
+        五条判据不成立（本夹具没有 awaiting attempt）时也进 recovery_required 而不是候选待审；对账可恢复且下一步为
+        逐字重派同一批次，账本回到 active，不作废候选、不停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, campaign_dir, _manifest = self._r1_ready(root)
+            result, returncode = self._dispatch(fixture, root, "VC-5", 5, tag="vc5-post-run", fail=True, action_id="candidate-seal")
+            self.assertEqual(returncode, 1)
+            self.assertEqual(result["status"], "failed")
+            closeout = result["campaign_run"]["timing_closeout"]
+            self.assertEqual((closeout["ledger_status"], closeout["failure_class"]), ("recovery_required", "execution-failure"))
+            self.assertIn("逐字重派", closeout["next_action"])
+            summary = self._summary(fixture)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("recovery_required", "VC-5"))
+            self.assertNotEqual(summary["status"], "candidate_review_required")
+            outcome = reconciler.reconcile_supervisor_run(Path(str(result["campaign_run"]["run_dir"])), campaign_dir)
+            self.assertEqual(outcome["status"], reconciler.DECISION_RECOVERABLE, outcome.get("decision"))
+            self.assertIn("逐字重派", outcome["next_command"])
+            self.assertEqual(self._summary(fixture)["status"], "active")
+            self.assertEqual(self._head(fixture)["terminal_campaigns"], {})
+
     def test_candidate_failure_three_branches_and_campaign_level_still_stops(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

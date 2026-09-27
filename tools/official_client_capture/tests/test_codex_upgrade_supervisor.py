@@ -3064,10 +3064,13 @@ raise SystemExit(9)
             self.assertFalse(
                 list((run_dir / "action-diagnostics").glob("*-post-run-tooling.json"))
             )
-            # 改造 2：候选级（VC-5）execution-failure 未命中永久条件时不再直接停线，
-            # 而是 stage_abandoned + candidate_review_required（只读等待人工对账／作废）。
-            self.assertEqual(payload["timing_closeout"]["ledger_status"], "candidate_review_required")
-            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "candidate_review_required")
+            # 第三批 B3-4（第 5 项①）：失败动作是零请求后处理动作（candidate-seal），即使 post-run-tooling 五条判据
+            # 不成立（同 run 内开过 Kilo 窗口），也进入 recovery_required 而不是候选待审；请求账交对账核算。
+            closeout = payload["timing_closeout"]
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            self.assertIn("逐字重派", closeout["next_action"])
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("recovery_required", "VC-5"))
 
     def test_post_run_tooling_facts_negative_cases(self) -> None:
         """五条判据逐条失效时都不得升级，且不抛异常。"""

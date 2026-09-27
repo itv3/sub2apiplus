@@ -3323,9 +3323,27 @@ def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bo
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return False
     inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    action_id = str(diagnostic.get("action_id"))
+    return isinstance(inner, Mapping) and (
+        supervisor.candidate_capture_recovery_action(inner, action_id) is not None
+        # 第三批 B3-4：VC-5／VC-6 零请求后处理动作的 execution-failure 同样进入 recovery_required。
+        or supervisor.candidate_post_run_recovery_action(inner, action_id) is not None
+    )
+
+
+def _candidate_post_run_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bool:
+    """第三批 B3-4：父 run 的失败动作是 VC-5／VC-6 的零请求后处理动作（post-run-tooling 判据未成立而以 execution-failure 收口）。"""
+
+    diagnostic = run.get("action_diagnostic")
+    if run.get("failure_class") != "execution-failure" or not isinstance(diagnostic, Mapping):
+        return False
+    manifest_path = Path(run_dir) / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
     return (
         isinstance(inner, Mapping)
-        and supervisor.candidate_capture_recovery_action(inner, str(diagnostic.get("action_id"))) is not None
+        and supervisor.candidate_post_run_recovery_action(inner, str(diagnostic.get("action_id"))) is not None
     )
 
 
@@ -4002,6 +4020,13 @@ def reconcile_supervisor_run(
                 "phase 保持 active：动作执行前评估器摘要已变化、动作未执行、无请求；登记 tool-evolution 后以 "
                 "compile-and-run-vc-batch 按同一动作计划重新编译派发 N+1（b0 的 checker／builder 须是已登记演进"
                 "迁移到的授权口径，b≥1 改走 evaluation-recover）"
+            )
+        elif _candidate_post_run_recovery_run(resolved_run_dir, run):
+            # 第三批 B3-4：零请求后处理动作以 execution-failure 收口（中断类失败或同 run 内有请求窗口），请求账已核算。
+            result["next_command"] = (
+                "phase 保持 active：候选级零请求后处理动作失败已对账（请求账已核算）；修复评估／控制工具或环境并受监督"
+                "部署、登记 tool-evolution 后，以 compile-and-run-vc-batch 逐字重派同一批次（VC-6 canonical 步骤幂等）；"
+                "判为候选源码问题则 invalidate-candidate preview/apply"
             )
         elif run.get("failure_class") == EVIDENCE_METADATA_DRIFT_CLASS:
             # 第三批 R3：内容未变、只有元数据漂移——不需要部署工具，rebind 后逐字重派。

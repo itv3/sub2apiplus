@@ -7868,6 +7868,37 @@ def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: st
     return None
 
 
+def candidate_post_run_recovery_action(manifest: Mapping[str, Any], action_id: str) -> str | None:
+    """第三批 B3-4（第 5 项①）：VC-5／VC-6 的失败动作是零请求后处理动作（candidate-seal／compare／assert-*／
+    acceptance／canonical 三步）时返回 ``post-run``，否则 None。
+
+    这些动作幂等、不发请求：修好工具或环境后逐字重派同一批次即可，不必作废候选或停线。post-run-tooling
+    五条判据不成立的残余情形（中断类失败、同 run 内开过 Kilo 窗口、awaiting attempt 数不为 1 等）也由此进入
+    recovery_required，请求账交给对账核算；批次 execute 项含非后处理项时不放行。
+    """
+
+    if manifest.get("phase") not in {"VC-5", "VC-6"}:
+        return None
+    actions = manifest.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("action_id") != action_id:
+            continue
+        item_ids = action.get("item_ids")
+        if not isinstance(item_ids, list) or not item_ids:
+            return None
+        execute_items = manifest.get("execute_items")
+        if not isinstance(execute_items, list) or not execute_items:
+            return None
+        if all(_post_run_tooling_item_allowed(item) for item in item_ids) and all(
+            _post_run_tooling_item_allowed(item) for item in execute_items
+        ):
+            return "post-run"
+        return None
+    return None
+
+
 def _candidate_recovery_batch_fields_match(
     prior_manifest: Mapping[str, Any], successor_manifest: Mapping[str, Any]
 ) -> bool:
@@ -8254,8 +8285,9 @@ def _validate_batched_seal_chain_successor(
     """
 
     phase = prior_manifest.get("phase")
+    # 第三批 B3-4：VC-6 的 canonical 三步也是零请求后处理，修复后 --step-receipt 变化时同样以 N+1 非逐字承接。
     if (
-        phase not in {"VC-1", "VC-5"}
+        phase not in {"VC-1", "VC-5", "VC-6"}
         or prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
         or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
         or successor_manifest.get("phase") != phase
@@ -10599,6 +10631,13 @@ def _close_failed_campaign_timing_ledger(
         if failure_class == "execution-failure" and recovery_segment is None
         else None
     )
+    # 第三批 B3-4（第 5 项①）：VC-5／VC-6 的零请求后处理动作以 execution-failure 收口（post-run-tooling 五条判据
+    # 不成立的残余情形：中断类失败、同 run 内开过 Kilo 窗口等）同样进入 recovery_required，不再进候选待审。
+    candidate_post_run = (
+        candidate_post_run_recovery_action(manifest, failed_action_id)
+        if failure_class == "execution-failure" and recovery_segment is None and candidate_capture is None
+        else None
+    )
     if recovery_segment is not None:
         try:
             successor = f"ar{int(recovery_segment[2:]) + 1}"
@@ -10614,6 +10653,13 @@ def _close_failed_campaign_timing_ledger(
             "VC-5 候选采集续跑：有预约的失败先 reconcile-attempt（无预约的预览失败用 reconcile-supervisor-run）入账；"
             "修好工具并受监督部署、登记 tool-evolution 后批准恢复预览，以 resume --rerun-failed 只重跑失败与"
             "受工具演进影响的作业；判为候选源码问题则 invalidate-candidate；同根因达上限即停线。"
+        )
+    elif candidate_post_run is not None:
+        # 第三批 B3-4：零请求后处理动作以 execution-failure 收口（中断类失败、同 run 内有请求窗口等），请求账交对账核算。
+        recovery_next_action = (
+            "reconcile-supervisor-run：候选级零请求后处理动作失败（post-run-tooling 判据未成立：中断类失败或同 run 内有"
+            "请求窗口），对账核算请求账并入账；修复评估／控制工具或环境并受监督部署、登记 tool-evolution 后，以 "
+            "compile-and-run-vc-batch 逐字重派同一批次；判为候选源码问题则 invalidate-candidate。"
         )
     elif failure_class == "evidence-metadata-drift":
         # 第三批 R3：已封存证据只有 mtime／ctime／inode 漂移，内容未变——不是完整性异常，也不需要部署工具。
@@ -10756,6 +10802,7 @@ def _close_failed_campaign_timing_ledger(
                 or failure_class in RECOVERABLE_PARENT_FAILURE_CLASSES
                 or recovery_segment is not None
                 or candidate_capture is not None
+                or candidate_post_run is not None
             )
             and before.get("status") == "active"
             and not _candidate_failure_hits_permanent_condition(
