@@ -272,8 +272,10 @@ from urllib.parse import urlsplit
 # 连续性并写漂移收据；重派按批次身份而非命令全文；pre-A3 认证按工具身份复用并登记复用收据。control 层、evidence 层
 # （闭包 54dbc763→3aa27c1e）与计时账本生产者变化，wire 闭包 b1e4c251 不变；受管工具树与监督器摘要随之变化；断言预处理器
 # 与 egress-guard 逻辑未变，出口守护无需重装。
+# 2026-09-28（修好接着跑第 26 项，B3-15）：被看门狗中止并已对账（无 reservation、零请求、总账绑定）的父 run 是可信终态，批次链
+# 审计按失败终态走后继协议，续跑协议透传 Campaign 目录。control 层变化，wire／evidence 不变；监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c1c7e59b455be9b308f3963ffb9c0ac3f7f622b7855396059ea54738d1dd1a0a"
+    "0819e07220baa8d926cfcde40177aadaa28986181bcf68c450e1fcce7376c3db"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
