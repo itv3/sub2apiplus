@@ -500,6 +500,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0157-batch1-tool-evolution-20260927-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor.json",
+        "base_commit": "d2d2388c9920f23046ee6eb1a0d89ca6e01a6cef",
+        "scope": "upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 

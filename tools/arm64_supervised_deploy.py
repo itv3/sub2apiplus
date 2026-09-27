@@ -253,8 +253,14 @@ from urllib.parse import urlsplit
 # recovery_required，新增候选采集续跑三条后继协议（采集失败→零请求预览、预览逐字重派、补跑失败→新预览）；编排器
 # 新增工具演进登记与续跑闭集，计时账本允许候选审核下 VC-5 恢复授权。control 层与 evidence 层（checker）变化，
 # wire 层随 A15 采集脚本修复变化；受管工具树与监督器摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
+# 2026-09-27（修好接着跑第二批）：对账把预算到期、请求预算耗尽、账务无法核清、未隔离的环境污染一律判暂停并给出
+# 下一步（deadline-extend／request-budget-extend／accounting-resolve／environment-isolate），campaign-resume 凭修复证据
+# 恢复停线的 Campaign；监督器新增续跑后继（工具演进或环境隔离作废 attempt 的零请求恢复预览、VC-1 官方 seal 链零请求
+# 失败的重派、执行前评估器漂移改为可恢复 tool-evolution-required），永久条件去掉账务 blocked 与请求预算耗尽；评估器
+# 读侧口径换为 evaluator-reader-closure/v2。control 层与 evidence 层（污染判定）变化，wire 闭包不变；受管工具树与监督器
+# 摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "e3828e29adc994b194f06b3b155bf398edec56353875dde59aaffa561f0174b0"
+    "b41820b13dc8ee063cc32eedb5f4cad59ba290e6061eaafba802b823361c5594"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
@@ -419,6 +425,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     # 2026-09-26：R18 改过计时账本，其承接收据登记进计时账本来源链，须随工具树部署。
     "egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch1-tool-evolution-20260927-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0157-batch2-fix-and-continue-20260927-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_157_0.json"
