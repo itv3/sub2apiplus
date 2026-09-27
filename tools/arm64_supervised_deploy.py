@@ -259,8 +259,12 @@ from urllib.parse import urlsplit
 # 失败的重派、执行前评估器漂移改为可恢复 tool-evolution-required），永久条件去掉账务 blocked 与请求预算耗尽；评估器
 # 读侧口径换为 evaluator-reader-closure/v2。control 层与 evidence 层（污染判定）变化，wire 闭包不变；受管工具树与监督器
 # 摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
+# 2026-09-27（修好接着跑第 24 项）：续跑重跑来源已完成的作业前把被其它 attempt 登记占据的固定证据根取代归档（先写取代
+# 收据），旧 attempt 按收据映射重放收口；新增 evidence-conflict-quarantine 隔离已被破坏的 attempt（受损只读留档、其余
+# 作废，全部重跑）；监督器作废对账核验接受证据根冲突隔离。control 层与 evidence 层变化，wire 闭包与 wire producer 不变；
+# 受管工具树与监督器摘要随之变化；断言预处理器与 egress-guard 逻辑未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "b41820b13dc8ee063cc32eedb5f4cad59ba290e6061eaafba802b823361c5594"
+    "12c17af73611ec71cab06adaaa9b78e3d10f0634e2592e68d378cc43ea8d2ca8"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
