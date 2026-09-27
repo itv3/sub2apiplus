@@ -7413,6 +7413,8 @@ def _validate_batched_official_recovery_preview_retry_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """普通恢复预览批次失败后，允许以 N+1 逐字重派同一零请求预览。
 
@@ -7482,9 +7484,61 @@ def _validate_batched_official_recovery_preview_retry_successor(
         campaign_id=successor_manifest.get("campaign_id"),
         action_id=_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
         label="VC-1 恢复预览重派",
+        campaign_dir=campaign_dir,
     )
     return True
 
+
+
+def _reconciled_watchdog_abort(
+    campaign_dir: Path,
+    prior_dir: Path,
+    prior_state: Mapping[str, Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """被看门狗中止的父 run 已按 reconcile-supervisor-run 对账的事实（第三批 B3-15，第 26 项）。
+
+    看门狗中止（``watchdog-aborted``）没有动作诊断，reconciler 把它归为 ``legacy-interruption``；只有对账收据
+    证明 run 期间没有 reservation、零请求，且项目总账事件绑定了该收据，它才是可信终态。任一不成立即失败关闭，
+    并明确指向对账入口。
+    """
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    receipt_path = (
+        campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
+    )
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise SupervisorError(
+            f"{label}：父 run {prior_dir.name} 被看门狗中止且尚未对账；先执行 reconcile-supervisor-run。"
+        )
+    receipt = _read_json(receipt_path)
+    run = receipt.get("run")
+    if (
+        receipt.get("schema_version") != SUPERVISOR_RUN_RECONCILIATION_SCHEMA
+        or receipt.get("campaign_id") != prior_state.get("campaign_id")
+        or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
+        or receipt.get("failure_class") != "legacy-interruption"
+        or receipt.get("reservation_exists") is not False
+        or receipt.get("live_request_count") != 0
+        or not isinstance(receipt.get("root_cause"), Mapping)
+        or not isinstance(run, Mapping)
+        or run.get("run_id") != prior_dir.name
+        or run.get("state") != "watchdog-aborted"
+        or run.get("phase") != prior_state.get("phase")
+        or run.get("failure_class") != "legacy-interruption"
+    ):
+        raise SupervisorError(f"{label}：看门狗中止父 run {prior_dir.name} 的对账收据 schema 或身份不闭合。")
+    operation_id = f"reconcile-supervisor-run:{prior_dir.name}"
+    payload = _project_ledger_operation_payload(campaign_dir, operation_id, label=label)
+    if (
+        payload.get("campaign_id") != receipt.get("campaign_id")
+        or payload.get("subject_kind") != "supervisor_run"
+        or payload.get("subject_id") != prior_dir.name
+        or payload.get("reconciliation_receipt_sha256") != _sha256(receipt_path.read_bytes())
+    ):
+        raise SupervisorError(f"{label}：看门狗中止父 run {prior_dir.name} 的对账未绑定项目总账事件。")
+    return receipt
 
 
 def _verify_failed_official_recovery_parent(
@@ -7495,6 +7549,7 @@ def _verify_failed_official_recovery_parent(
     action_id: str,
     label: str,
     phase: str = "VC-1",
+    campaign_dir: Path | None = None,
 ) -> None:
     """核验恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
 
@@ -7502,6 +7557,10 @@ def _verify_failed_official_recovery_parent(
     复用：父 run 目录与 state／stop receipt 必须私有且逐字自洽，stop 原因是该动作失败，动作
     诊断只能是处理型失败（ConfigurationError 或子进程非零退出）；截止清理、中断等不在协议内，
     仍由 reconciler 判定。
+
+    第三批 B3-15（第 26 项）：父 run 被看门狗中止（``watchdog-aborted``，没有动作诊断）且已按
+    ``_reconciled_watchdog_abort`` 对账时同样接受——stop receipt 须是看门狗中止本身，且该动作不得留有
+    失败诊断（留有诊断说明动作先失败，应按 failed 终态处理）。
     """
 
     _permission_compensation_private_directory(prior_dir, f"{label}前序 run 目录")
@@ -7511,9 +7570,14 @@ def _verify_failed_official_recovery_parent(
     )
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
+    watchdog_aborted = prior_state.get("state") == "watchdog-aborted"
+    if watchdog_aborted:
+        if campaign_dir is None:
+            raise SupervisorError(f"{label}的父 run 被看门狗中止：核验其对账收据需要 Campaign 目录。")
+        _reconciled_watchdog_abort(Path(campaign_dir), prior_dir, prior_state, label=label)
     if (
         recorded_state != dict(prior_state)
-        or prior_state.get("state") != "failed"
+        or prior_state.get("state") not in {"failed", "watchdog-aborted"}
         or prior_state.get("campaign_id") != campaign_id
         or prior_state.get("phase") != phase
         or isinstance(owner_pid, bool)
@@ -7528,6 +7592,24 @@ def _verify_failed_official_recovery_parent(
         stop = read_stop_receipt(prior_dir)
     except SupervisorError as error:
         raise SupervisorError(f"{label}的父 stop receipt 漂移：{error}") from error
+    if watchdog_aborted:
+        if (
+            stop.get("event_type") != "watchdog-aborted"
+            or not isinstance(stop.get("reason"), str)
+            or not stop.get("reason")
+            or stop.get("campaign_id") != prior_state.get("campaign_id")
+            or stop.get("phase") != phase
+            or stop.get("owner_pid") != owner_pid
+            or stop.get("owner_nonce") != owner_nonce
+        ):
+            raise SupervisorError(f"{label}的父 stop receipt 漂移。")
+        diagnostics_dir = prior_dir / "action-diagnostics"
+        if diagnostics_dir.is_symlink() or (
+            diagnostics_dir.is_dir()
+            and _action_diagnostic_path(prior_dir, action_id, create_directory=False).exists()
+        ):
+            raise SupervisorError(f"{label}的父 run 被看门狗中止却留有动作失败诊断，按失败终态协议处理。")
+        return
     if (
         stop.get("event_type") != "failed"
         or stop.get("reason") != f"action-failed:{action_id}"
@@ -7562,6 +7644,8 @@ def _validate_batched_official_recovery_run_retry_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """真实补跑批次失败后，允许以 N+1 派发新的普通零请求恢复预览。
 
@@ -7657,6 +7741,7 @@ def _validate_batched_official_recovery_run_retry_successor(
         campaign_id=successor_manifest.get("campaign_id"),
         action_id=_OFFICIAL_RECOVERY_RUN_ACTION_ID,
         label="VC-1 补跑失败后的预览",
+        campaign_dir=campaign_dir,
     )
     return True
 
@@ -7932,6 +8017,8 @@ def _validate_batched_candidate_recovery_preview_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """失败的普通 VC-5 ``capture-candidate run`` 批次 N 由 N+1 零请求恢复预览承接。
 
@@ -7974,6 +8061,7 @@ def _validate_batched_candidate_recovery_preview_successor(
         action_id=str(prior_action.get("action_id")),
         label="VC-5 候选采集续跑预览",
         phase="VC-5",
+        campaign_dir=campaign_dir,
     )
     return True
 
@@ -7983,6 +8071,8 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """VC-5 零请求恢复预览批次失败后，以 N+1 逐字重派同一预览（不预约、不发请求，无副作用）。"""
 
@@ -8008,6 +8098,7 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
         action_id=CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
         label="VC-5 候选采集续跑预览重派",
         phase="VC-5",
+        campaign_dir=campaign_dir,
     )
     return True
 
@@ -8017,6 +8108,8 @@ def _validate_batched_candidate_recovery_run_retry_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> bool:
     """VC-5 按预览真实补跑批次失败后，以 N+1 派发新的零请求恢复预览（须先对账新失败 attempt）。"""
 
@@ -8052,6 +8145,7 @@ def _validate_batched_candidate_recovery_run_retry_successor(
         action_id=CANDIDATE_RECOVERY_RUN_ACTION_ID,
         label="VC-5 补跑失败后的预览",
         phase="VC-5",
+        campaign_dir=campaign_dir,
     )
     return True
 
@@ -10126,7 +10220,14 @@ def _validate_batched_campaign_history(
         terminal_state = state.get("state")
         if terminal_state == "stopped":
             continue
-        if terminal_state != "failed":
+        if terminal_state == "watchdog-aborted":
+            # 第三批 B3-15（第 26 项）：被看门狗中止的父 run（无动作诊断）经 reconcile-supervisor-run 对账
+            # （legacy-interruption、无 reservation、零请求）后是可信终态，按失败终态走下方后继协议；
+            # 未对账仍失败关闭，但明确指向对账入口，不再是"没有可信终态"的死路。
+            if campaign_dir is None:
+                raise SupervisorError("前序 Campaign 批次被看门狗中止：核验其对账收据需要 Campaign 目录。")
+            _reconciled_watchdog_abort(Path(campaign_dir), _run_dir, state, label="看门狗中止的前序批次")
+        elif terminal_state != "failed":
             raise SupervisorError("前序 Campaign 批次没有可信终态。")
         successor_manifest = combined[index + 1][1]
         prior_schema = prior_manifest.get("schema_version")
@@ -10231,6 +10332,7 @@ def _validate_batched_campaign_history(
                 prior_manifest,
                 _run_dir,
                 successor_manifest,
+                campaign_dir=campaign_dir,
             )
         ):
             continue
@@ -10242,6 +10344,7 @@ def _validate_batched_campaign_history(
                 prior_manifest,
                 _run_dir,
                 successor_manifest,
+                campaign_dir=campaign_dir,
             )
         ):
             continue
@@ -10253,6 +10356,7 @@ def _validate_batched_campaign_history(
                 prior_manifest,
                 _run_dir,
                 successor_manifest,
+                campaign_dir=campaign_dir,
             )
         ):
             continue
@@ -10264,6 +10368,7 @@ def _validate_batched_campaign_history(
                 prior_manifest,
                 _run_dir,
                 successor_manifest,
+                campaign_dir=campaign_dir,
             )
         ):
             continue
@@ -10275,6 +10380,7 @@ def _validate_batched_campaign_history(
                 prior_manifest,
                 _run_dir,
                 successor_manifest,
+                campaign_dir=campaign_dir,
             )
         ):
             continue

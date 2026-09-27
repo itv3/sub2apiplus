@@ -3380,6 +3380,9 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   只核批次身份（12 个字段＋按 action_id 排序的动作三元组），命令 argv、timeout 等执行细节可随工具修复变化；恢复段后继
   必须把 `--attempt-recovery` 改为 ar<k+1>；b≥1 评估器按该基线授权的四项核对，跨基线不是重派、指向 `evaluation-recover`。
   VC-1／VC-5 零请求预览的快速通道与 seal 链入口条件仍逐字比较动作（协议固定命令形态）。
+- **父 run 被看门狗中止**（`watchdog-aborted`，没有动作诊断）：`reconcile-supervisor-run` 对账（legacy-interruption、无 reservation、
+  零请求，收据绑定总账事件）后它是可信终态，批次链审计按失败终态走后继协议（例如补跑批次被中止后接 N+1 零请求恢复预览）；
+  未对账的看门狗中止前序明确拒绝并指向对账入口，中止却留有动作失败诊断的按失败终态协议处理。
 - **已完成待封存的 attempt 被作废**（工具演进作废其作业，或 Kilo 后环境恢复失败被隔离）：`reconcile-attempt`
   按作废对账，只核算请求、不计根因，计时账本写 `recovery_required`；恢复预览只重跑失效作业（隔离作废全部重跑）。
   针对它的 seal 链批次编译前零写入拒绝，失败的 seal 链批次之后允许 N+1 零请求恢复预览。

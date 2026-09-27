@@ -19356,6 +19356,96 @@ class CodexUpgradeTest(unittest.TestCase):
                 history,
             )
 
+    def test_b0_watchdog_aborted_recovery_run_is_followed_by_new_preview_after_reconciliation(self) -> None:
+        """第三批 B3-15（第 26 项）：按预览真实补跑的父 run 被看门狗中止（watchdog-aborted，无动作诊断）——未对账时
+        批次链审计明确指向 reconcile-supervisor-run（不再是"没有可信终态"的死路）；对账（legacy-interruption、无 reservation、
+        零请求）后 N+1 零请求恢复预览是允许的后继；不是恢复预览的后继、留有动作失败诊断的看门狗中止仍被拒绝。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            prefix = ["/usr/bin/python3", "/tools/codex_upgrade.py"]
+            identity = {
+                "--candidate-id": "cand-1",
+                "--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json"),
+                "--runtime-image": "repo@sha256:" + "1" * 64,
+                "--candidate-image-id": "sha256:" + "1" * 64,
+                "--candidate-source": "/root/candidate/source",
+                "--build-id": "build-1",
+                "--deployed-version": "0.157.0",
+                "--profile-id": "profile-1",
+                "--profile-digest": "2" * 64,
+                "--candidate-purpose": "production_replacement",
+            }
+            run_action = {
+                "action_id": supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+                "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                "timeout_seconds": 21600,
+                "command": supervisor.candidate_recovery_run_command(
+                    prefix, str(campaign_dir), identity,
+                    str(campaign_dir / "control" / "reconciliation" / "attempt-x" / "recovery-preview-01.json"),
+                ),
+                "item_ids": ["candidate-run"],
+            }
+            prior = dict(inner, actions=[run_action], execute_items=["candidate-run"], reuse_items=[])
+            run_dir = self._b0_run_dir(
+                fixture, "e" * 64, phase="VC-5", state="watchdog-aborted", batched_manifest=prior,
+                action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, started_offset_seconds=5.0,
+            )
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            supervisor._stop_receipt(
+                run_dir, event_type="watchdog-aborted", reason="budget-state-invalid-SupervisorError",
+                detected_at_epoch=__import__("time").time(), owner_pid=state["owner_pid"], owner_nonce=state["owner_nonce"],
+                campaign_id=state["campaign_id"], phase="VC-5",
+            )
+            preview_action = {
+                "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                "timeout_seconds": 1800,
+                "command": supervisor.candidate_recovery_preview_command(prefix, str(campaign_dir), identity),
+                "item_ids": ["candidate-run"],
+            }
+            successor = dict(
+                inner, batch_sequence=2, batch_id="vc-5-0002", batch_sha256="2" * 64,
+                actions=[preview_action], execute_items=["candidate-run"], reuse_items=[],
+            )
+            history = [(state, prior, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账"):
+                check(successor)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                (receipt["failure_class"], receipt["run"]["state"], receipt["reservation_exists"], receipt["live_request_count"]),
+                ("legacy-interruption", "watchdog-aborted", False, 0),
+            )
+            self.assertEqual(check(successor), history)
+            # 不是零请求恢复预览的后继（seal 链批次）：没有协议承接。
+            with self.assertRaises(supervisor.SupervisorError):
+                check(self._b0_seal_batch_manifest(fixture, batch_sequence=2))
+            # 看门狗中止却留有该动作的失败诊断：不按本协议放行（应是 failed 终态）。
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, create_directory=True),
+                campaign_id=state["campaign_id"], phase="VC-5", action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+                owner_pid=state["owner_pid"], owner_nonce=state["owner_nonce"], failure_kind="child-returncode",
+                failure_class="execution-failure", error_type="ChildProcessError", message="子命令以非零状态退出。",
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "留有动作失败诊断"):
+                check(successor)
+
     def test_b0_seal_failure_isolated_attempt_reruns_via_recovery_preview_successor(self) -> None:
         """修好接着跑第 13 项：候选 seal 时 Kilo 后环境恢复失败（seal-failure）→ Campaign 封锁、对账只暂停；
         environment-isolate 后该 attempt 不再算待封存、seal 链编译前拒绝；按"环境隔离作废"对账（全部作业重跑、
