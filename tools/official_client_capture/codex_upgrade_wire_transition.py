@@ -177,10 +177,11 @@ def effective_wire_identity(campaign_dir: Path, manifest: Mapping[str, Any]) -> 
         if _load_transitions(campaign_dir):
             raise WireTransitionError("wire transition 链与工具演进链不能并存")
         last = evolutions[-1]
+        # R1：策略演进登记后，有效策略是最新演进的 to 身份策略，不再是 plan 冻结值。
         return {
-            "policy_version": base["policy_version"],
+            "policy_version": int(last["to_summary"].get("policy_version") or base["policy_version"]),
             "wire_producer_sha256": str(last["to_summary"]["wire_producer_sha256"]),
-            "policy_sha256": base["policy_sha256"],
+            "policy_sha256": str(last["to_summary"]["policy_sha256"]),
             "evidence_semantics_sha256": str(last["to_summary"]["evidence_semantics_sha256"]),
             "source": f"evolution-{int(last['index']):02d}",
             "pending_intent": None,
@@ -344,11 +345,82 @@ def build_final(campaign_dir: Path, manifest: Mapping[str, Any], attempt: Mappin
 # 其余已完成结果只读复用；seal 逐结果核对作业不在其生产序号之后任何演进的受影响集合内。
 # 演进链只增不改：evolution-NN.json 写一次、自摘要、previous 成链，起点衔接 plan 身份。
 # 影响范围由编排器计算（需要作业定义），本模块只负责存储、校验与按序号查询。
+#
+# 第三批 R1（策略变化在原 Campaign 承接）：工具身份策略文件（tool_identity_policy_v2.json）变化也能
+# 用演进承接，条件是该次演进只改策略文件（其余受管文件逐字节等于起点身份），并携带
+# ``policy_transition``：绑定 A2.6 兼容收据（同一棵树在旧、新策略下的分层对照）与策略激活认证。
+# 策略只是分层标签，作业产出只取决于文件字节，所以策略演进的影响为空；登记后有效身份的
+# policy_sha256／policy_version 取最新演进的 to 身份，读侧一律对照有效策略而不是 plan 冻结策略。
 
 EVOLUTION_SCHEMA = "tool-evolution/v1"
 EVOLUTION_DIR = Path("control") / "tool-evolution"
 EVOLUTION_RE = re.compile(r"^evolution-(\d{2})\.json$")
 EVOLUTION_MAX_INDEX = 99
+POLICY_TRANSITION_FIELDS = frozenset(
+    {
+        "from_policy_sha256",
+        "from_policy_version",
+        "to_policy_sha256",
+        "to_policy_version",
+        "compatibility_receipt",
+        "activation_certification",
+    }
+)
+POLICY_TRANSITION_BINDING_FIELDS = frozenset({"path", "sha256"})
+
+
+def _validate_policy_transition(
+    transition: Any,
+    *,
+    previous_summary: Mapping[str, Any],
+    to_summary: Mapping[str, Any],
+    changes: Mapping[str, Any],
+    policy_relative_path: str,
+    label: str,
+) -> None:
+    """策略演进收据的 ``policy_transition`` 形态与衔接：起点＝上一有效策略、终点＝to 身份策略、版本严格升级、只改策略文件。"""
+
+    if not isinstance(transition, Mapping) or set(transition) != POLICY_TRANSITION_FIELDS:
+        raise WireTransitionError(f"{label} 的 policy_transition 字段不闭合")
+    for field in ("from_policy_sha256", "to_policy_sha256"):
+        value = transition.get(field)
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            raise WireTransitionError(f"{label} 的 policy_transition.{field} 非法")
+    for field in ("from_policy_version", "to_policy_version"):
+        value = transition.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 2:
+            raise WireTransitionError(f"{label} 的 policy_transition.{field} 非法")
+    for field in ("compatibility_receipt", "activation_certification"):
+        binding = transition.get(field)
+        if (
+            not isinstance(binding, Mapping)
+            or set(binding) != POLICY_TRANSITION_BINDING_FIELDS
+            or not isinstance(binding.get("path"), str)
+            or not binding["path"]
+            or not isinstance(binding.get("sha256"), str)
+            or not SHA256_RE.fullmatch(str(binding["sha256"]))
+        ):
+            raise WireTransitionError(f"{label} 的 policy_transition.{field} 绑定非法")
+    if transition["from_policy_sha256"] != previous_summary.get("policy_sha256"):
+        raise WireTransitionError(f"{label} 的策略起点不是上一有效策略")
+    if transition["to_policy_sha256"] != to_summary.get("policy_sha256"):
+        raise WireTransitionError(f"{label} 的策略终点与 to 身份的策略不一致")
+    if transition["from_policy_version"] != previous_summary.get("policy_version"):
+        raise WireTransitionError(f"{label} 的策略起点版本与上一有效身份不一致")
+    if transition["to_policy_version"] != to_summary.get("policy_version"):
+        raise WireTransitionError(f"{label} 的策略终点版本与 to 身份不一致")
+    if int(transition["to_policy_version"]) <= int(transition["from_policy_version"]):
+        raise WireTransitionError(f"{label} 的策略版本必须严格升级")
+    changed_paths: set[str] = set()
+    for layer_paths in changes.get("paths_by_layer", {}).values():
+        if not isinstance(layer_paths, list):
+            raise WireTransitionError(f"{label} 的变化路径记录非法")
+        changed_paths.update(str(path) for path in layer_paths)
+    if changed_paths != {policy_relative_path}:
+        raise WireTransitionError(
+            f"{label} 是策略演进，变化路径只能是策略文件 {policy_relative_path}，实际："
+            + "、".join(sorted(changed_paths))
+        )
 
 
 def identity_summary(identity: Mapping[str, Any]) -> dict[str, Any]:
@@ -455,8 +527,6 @@ def _validate_evolution_payload(
         raise WireTransitionError(f"{label} 的 to 摘要与完整身份不一致")
     if payload.get("to_summary") == dict(previous_summary):
         raise WireTransitionError(f"{label} 的 to 身份与起点相同，没有需要登记的演进")
-    if to_identity.get("policy_sha256") != frozen.get("policy_sha256"):
-        raise WireTransitionError(f"{label} 改变了工具身份策略；策略变化不能用演进承接")
     if _fingerprint({"entries": list(to_identity["entries"])}) != to_identity.get("files_sha256"):
         raise WireTransitionError(f"{label} 的 to 文件清单与整树摘要不一致")
     impact = payload.get("impact")
@@ -469,6 +539,25 @@ def _validate_evolution_payload(
         or not isinstance(changes.get("paths_by_layer"), Mapping)
     ):
         raise WireTransitionError(f"{label} 的影响或变化记录形态非法")
+    # R1：策略变化的演进必须是"只改策略文件"的策略演进，并携带 policy_transition 绑定兼容收据与激活认证；
+    # 策略未变的演进不得携带 policy_transition。plan 冻结策略之后的比较对象是上一有效身份的策略。
+    policy_changed = to_identity.get("policy_sha256") != previous_summary.get("policy_sha256")
+    transition = payload.get("policy_transition")
+    if policy_changed:
+        if transition is None:
+            raise WireTransitionError(
+                f"{label} 改变了工具身份策略但没有 policy_transition；策略变化只能以策略演进（绑定 A2.6 兼容收据与激活认证）承接"
+            )
+        _validate_policy_transition(
+            transition,
+            previous_summary=previous_summary,
+            to_summary=dict(payload["to_summary"]),
+            changes=changes,
+            policy_relative_path=tip.POLICY_FILENAME,
+            label=label,
+        )
+    elif transition is not None:
+        raise WireTransitionError(f"{label} 策略未变化，不得携带 policy_transition")
 
 
 def effective_tool_identity(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -627,12 +716,21 @@ def current_evidence_semantics(attempt_root: Path, manifest: Mapping[str, Any]) 
     return str(chain[-1]["to_evidence_semantics_sha256"]) if chain else base["evidence_semantics_sha256"]
 
 
-def append_epoch(attempt_root: Path, manifest: Mapping[str, Any], *, current_identity: Mapping[str, Any], reason: str) -> Path:
+def append_epoch(
+    attempt_root: Path,
+    manifest: Mapping[str, Any],
+    *,
+    current_identity: Mapping[str, Any],
+    reason: str,
+    effective_policy_sha256: str | None = None,
+) -> Path:
     base = _v2_identity(manifest)
     if base is None:
         raise WireTransitionError("v1 Campaign 没有 evidence semantics 身份，不能追加 epoch")
-    if current_identity.get("policy_sha256") != base["policy_sha256"]:
-        raise WireTransitionError("策略变化不能用 epoch 承接")
+    # R1：策略经策略演进承接后，epoch 对照的是 Campaign 有效策略（调用方传入），没有传入时仍是 plan 冻结策略。
+    expected_policy = effective_policy_sha256 if effective_policy_sha256 is not None else base["policy_sha256"]
+    if current_identity.get("policy_sha256") != expected_policy:
+        raise WireTransitionError("当前工具策略与 Campaign 有效策略不一致；策略变化先以策略演进（tool-evolution）承接，再追加 epoch")
     chain = load_epochs(attempt_root)
     from_sha = str(chain[-1]["to_evidence_semantics_sha256"]) if chain else base["evidence_semantics_sha256"]
     to_sha = str(current_identity["evidence_semantics_sha256"])

@@ -140,6 +140,71 @@ class CampaignResumeTests(unittest.TestCase):
             head = project_ledger.replay_head(fixture["ledger"])
             self.assertEqual(head["terminal_campaigns"][campaign_id]["operation_id"], f"campaign-terminal:{campaign_id}:e1")
 
+    def test_policy_evolution_moves_the_resume_policy_baseline(self) -> None:
+        """第三批 R1：策略变化不再让 campaign-resume 无路可走——未登记策略演进时零写入拒绝并指向 tool-evolution，
+        登记后以 Campaign 有效策略为基准，恢复预览照常生成。"""
+
+        from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
+        from tools.official_client_capture import codex_upgrade_wire_transition as wt
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, _second, _cause = self._stopped(root)
+            campaign_dir = fixture["campaign_dir"]
+            manifest = fixture["manifest"]
+            frozen = manifest["tool_identity"]
+            policy_file = tip.POLICY_FILENAME
+            entries = [dict(e, sha256="9" * 64) if e["path"] == policy_file else dict(e) for e in frozen["entries"]]
+            v2 = tip.compute_identity_v2(tip.load_policy(), Path(codex_upgrade.__file__).resolve().parent, entries)
+            evolved = {
+                **frozen,
+                "entries": entries,
+                "control_sha256": v2["control_sha256"],
+                "policy_sha256": "9" * 64,
+                "policy_version": int(frozen["policy_version"]) + 1,
+                "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+            }
+            regression = self._regression(root)
+            with mock.patch.object(codex_upgrade, "_tool_identity", mock.Mock(return_value=evolved)):
+                self._fresh_deployment(fixture)
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "先以 tool-evolution 登记策略演进"):
+                    codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+                payload = {
+                    "schema_version": wt.EVOLUTION_SCHEMA,
+                    "index": 1,
+                    "campaign_id": manifest["campaign_id"],
+                    "campaign_manifest_sha256": codex_upgrade.file_sha256(campaign_dir / "campaign.json"),
+                    "previous_evolution_sha256": None,
+                    "from_summary": wt.identity_summary(frozen),
+                    "to_summary": wt.identity_summary(evolved),
+                    "to_identity": evolved,
+                    "to_evaluator_digests": {},
+                    "changes": {"paths_by_layer": {"control": [policy_file]}},
+                    "impact": {
+                        "official": {"planned_job_ids": [], "affected_job_ids": [], "sealed": False},
+                        "candidates": {},
+                        "inactive_candidates": [],
+                    },
+                    "evaluator": {"from": {}, "to": {}, "changed_fields": [], "candidates": {}},
+                    "bindings": {"fix_commit": "f" * 40, "deployment_receipt": {"created_at_utc": "2026-09-27T00:00:00Z"}},
+                    "policy_transition": {
+                        "from_policy_sha256": frozen["policy_sha256"],
+                        "from_policy_version": int(frozen["policy_version"]),
+                        "to_policy_sha256": "9" * 64,
+                        "to_policy_version": int(frozen["policy_version"]) + 1,
+                        "compatibility_receipt": {"path": "/control/policy-compatibility.json", "sha256": "c" * 64},
+                        "activation_certification": {"path": "/control/policy-activation.json", "sha256": "a" * 64},
+                    },
+                    "reason": "测试：策略演进",
+                    "approved_sha256": "a" * 64,
+                    "approved_by": "tester",
+                    "approved_at_utc": "2026-09-27T00:00:01Z",
+                }
+                payload["receipt_sha256"] = wt._fingerprint(payload)
+                wt.write_evolution(campaign_dir, manifest, payload)
+                preview = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+            self.assertEqual(preview["status"], "approval_required")
+
     def test_half_applied_resume_blocks_reconciliation_until_reapplied(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

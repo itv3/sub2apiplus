@@ -9954,6 +9954,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     tool_evolution.add_argument("--approve-sha256", help="批准预览的 review_sha256")
     tool_evolution.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
+    tool_evolution.add_argument(
+        "--policy-compatibility-receipt",
+        type=Path,
+        help="策略演进必需：A2.6 policy-compatibility-receipt/v1（旧策略＝Campaign 有效策略、新策略＝当前策略，绝对路径）",
+    )
+    tool_evolution.add_argument(
+        "--policy-activation-certification",
+        type=Path,
+        help="策略演进必需：当前策略的 policy-activation-certification/v1（绑定同一兼容收据与本次部署收据，绝对路径）",
+    )
     tool_evolution_status = subparsers.add_parser(
         "tool-evolution-status", help="只读：Campaign 有效工具身份、演进链与是否需要登记"
     )
@@ -35338,7 +35348,8 @@ def _verify_plan_identity_v2(
     ``expected_tool`` 是 Campaign 有效工具身份（最新工具演进的 to 身份，或 plan 冻结身份），
     ``evolution_index`` 为其演进序号（0 表示没有演进）。
 
-    * 策略摘要不等：拒绝，策略变化须经 A2.6 兼容收据并以新 Campaign 承接。
+    * 策略摘要与有效策略不等：拒绝——策略变化须先以策略演进（tool-evolution 绑定 A2.6 兼容收据
+      与激活认证）承接，登记后 ``expected_tool`` 就是新策略下的身份（第三批 R1）。
     * wire 身份不等：只有生效且指向当前 wire 的 intent 才放行执行类操作，并把
       闭集交给调用方补跑；评估类操作在 intent 未 final 前一律拒绝；其余情况提示先登记工具演进。
     * wire 身份相等：evidence semantics 变化时评估类操作要求当前 attempt 已追加
@@ -35347,7 +35358,8 @@ def _verify_plan_identity_v2(
 
     if current_tool.get("policy_sha256") != expected_tool.get("policy_sha256"):
         raise ConfigurationError(
-            "工具身份策略已变化；策略变化必须经 A2.6 兼容收据与激活认证，并以新 Campaign 承接。"
+            "当前工具身份策略与 Campaign 有效策略不一致；先以 tool-evolution 登记策略演进"
+            "（--policy-compatibility-receipt 与 --policy-activation-certification）再继续。"
         )
     try:
         policy = codex_upgrade_tool_identity_policy.load_policy()
@@ -58977,6 +58989,106 @@ def _tool_evolution_quiescence_problems(campaign_dir: Path) -> list[str]:
     return problems
 
 
+def _policy_only_change_paths(
+    from_identity: Mapping[str, Any], current: Mapping[str, Any]
+) -> list[str]:
+    """两份身份之间除策略文件之外的变化路径；策略演进要求它为空。"""
+
+    before = _tool_entry_digest_map(from_identity)
+    after = _tool_entry_digest_map(current)
+    policy_file = codex_upgrade_tool_identity_policy.POLICY_FILENAME
+    return sorted(
+        path
+        for path in set(before) | set(after)
+        if before.get(path) != after.get(path) and path != policy_file
+    )
+
+
+def _policy_evolution_transition(
+    from_identity: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    deployment: Mapping[str, Any],
+    compatibility_receipt: Path | None,
+    activation_certification: Path | None,
+) -> dict[str, Any]:
+    """第三批 R1：策略演进的 ``policy_transition`` 绑定。
+
+    策略只是分层标签，作业产出只取决于文件字节：只有"同一棵树、只改策略文件"才能证明作业不受影响。
+    因此要求（1）除策略文件外当前树逐文件等于有效身份；（2）A2.6 兼容收据在这棵树上出具：旧策略＝有效策略、
+    新策略＝当前策略、版本严格升级、旧策略下三层摘要等于有效身份、新策略下等于当前工具；（3）策略激活认证
+    对当前五摘要有效、绑定同一份兼容收据与本次演进绑定的部署收据。
+    """
+
+    from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
+
+    policy_file = codex_upgrade_tool_identity_policy.POLICY_FILENAME
+    extra = _policy_only_change_paths(from_identity, current)
+    if extra:
+        raise ConfigurationError(
+            f"工具身份策略已变化，但本次部署还改了策略文件之外的受管文件：{'、'.join(extra)}；"
+            f"策略演进只允许改 {policy_file}。请拆成两次部署：先只改策略并登记策略演进，再部署代码改动并登记常规演进。"
+        )
+    for label, value in (
+        ("--policy-compatibility-receipt", compatibility_receipt),
+        ("--policy-activation-certification", activation_certification),
+    ):
+        if value is None:
+            raise ConfigurationError(
+                f"工具身份策略已变化，登记策略演进必须提供 {label}（A2.6 兼容收据与策略激活认证）。"
+            )
+        path = Path(value)
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"{label} 必须是可信的绝对路径普通文件：{path}")
+    compatibility_path = Path(compatibility_receipt).resolve(strict=True)
+    activation_path = Path(activation_certification).resolve(strict=True)
+    try:
+        compatibility = policy_certification.load_compatibility_receipt(compatibility_path)
+        activation = policy_certification.verify_activation_certification(
+            activation_path,
+            expected_identity={**current, "tool_files_sha256": current["files_sha256"]},
+        )
+    except policy_certification.PolicyCertificationError as error:
+        raise ConfigurationError(f"策略演进的认证收据不可信：{error}") from error
+    previous = compatibility.get("previous") or {}
+    latest = compatibility.get("current") or {}
+    if (
+        previous.get("policy_sha256") != from_identity.get("policy_sha256")
+        or int(previous.get("policy_version", -1)) != int(from_identity.get("policy_version", -2))
+    ):
+        raise ConfigurationError("兼容收据的旧策略不是 Campaign 当前有效策略（先按有效身份出具兼容收据）。")
+    if (
+        latest.get("policy_sha256") != current.get("policy_sha256")
+        or int(latest.get("policy_version", -1)) != int(current.get("policy_version", -2))
+    ):
+        raise ConfigurationError("兼容收据的新策略不是当前受管工具的策略。")
+    if compatibility.get("tool_files_sha256") != current.get("files_sha256"):
+        raise ConfigurationError("兼容收据不是在当前受管树上出具的（tool_files_sha256 不一致）。")
+    # 兼容收据在"已换上新策略文件"的树上出具：旧策略下的 control 摘要必然含新策略文件而不等于有效身份，
+    # 只有 wire／evidence 两层（不含策略文件）能证明"除策略文件外是同一棵树"；新策略下三层都必须等于当前工具。
+    two = ("wire_producer_sha256", "evidence_semantics_sha256")
+    three = (*two, "control_sha256")
+    under_previous = compatibility.get("identity_under_previous_policy") or {}
+    under_current = compatibility.get("identity_under_current_policy") or {}
+    if {key: under_previous.get(key) for key in two} != {key: from_identity.get(key) for key in two}:
+        raise ConfigurationError("兼容收据在旧策略下算出的 wire／evidence 摘要与 Campaign 有效身份不一致；不是同一棵树。")
+    if {key: under_current.get(key) for key in three} != {key: current.get(key) for key in three}:
+        raise ConfigurationError("兼容收据在新策略下算出的三层摘要与当前工具不一致。")
+    compatibility_sha256 = file_sha256(compatibility_path)
+    if (activation.get("compatibility_receipt") or {}).get("sha256") != compatibility_sha256:
+        raise ConfigurationError("策略激活认证绑定的兼容收据不是本次提供的兼容收据。")
+    if (activation.get("deployment_receipt") or {}).get("sha256") != deployment.get("sha256"):
+        raise ConfigurationError("策略激活认证绑定的部署收据不是本次演进绑定的部署收据。")
+    return {
+        "from_policy_sha256": str(from_identity["policy_sha256"]),
+        "from_policy_version": int(from_identity["policy_version"]),
+        "to_policy_sha256": str(current["policy_sha256"]),
+        "to_policy_version": int(current["policy_version"]),
+        "compatibility_receipt": {"path": str(compatibility_path), "sha256": compatibility_sha256},
+        "activation_certification": {"path": str(activation_path), "sha256": file_sha256(activation_path)},
+    }
+
+
 def _tool_evolution_preview(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -58984,8 +59096,14 @@ def _tool_evolution_preview(
     fix_commit: str,
     reason: str,
     control_root: Path | None,
+    compatibility_receipt: Path | None = None,
+    activation_certification: Path | None = None,
 ) -> dict[str, Any]:
-    """计算工具演进预览：变化路径、逐作业影响、评估器授权迁移与绑定；只读，不写文件。"""
+    """计算工具演进预览：变化路径、逐作业影响、评估器授权迁移与绑定；只读，不写文件。
+
+    第三批 R1：工具身份策略文件变化不再拒绝，而是作为策略演进承接（只改策略文件、绑定兼容收据与激活认证，
+    影响为空）；登记后有效策略随之迁移。
+    """
 
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -59000,10 +59118,15 @@ def _tool_evolution_preview(
     effective = _campaign_effective_tool_identity(campaign_dir, manifest)
     from_identity = effective["identity"]
     current = _tool_identity(include_git=False)
-    if current.get("policy_sha256") != frozen.get("policy_sha256"):
-        raise ConfigurationError(
-            "工具身份策略文件已变化；策略变化不能用工具演进承接（须经 A2.6 兼容收据与新 Campaign）。"
-        )
+    policy_changed = current.get("policy_sha256") != from_identity.get("policy_sha256")
+    if policy_changed:
+        extra = _policy_only_change_paths(from_identity, current)
+        if extra:
+            raise ConfigurationError(
+                "工具身份策略已变化，但本次部署还改了策略文件之外的受管文件："
+                + "、".join(extra)
+                + "；策略演进只允许改策略文件，请拆成两次部署（先只改策略并登记策略演进，再登记常规演进）。"
+            )
     from_summary = codex_upgrade_wire_transition.identity_summary(from_identity)
     to_summary = codex_upgrade_wire_transition.identity_summary(current)
     if from_summary != effective["summary"]:
@@ -59029,6 +59152,18 @@ def _tool_evolution_preview(
             str(previous_deployment["created_at_utc"]), "上一演进部署收据 created_at_utc"
         ):
             raise ConfigurationError("当前部署收据不晚于上一次演进绑定的部署，拒绝登记。")
+    # R1：策略演进绑定兼容收据与激活认证（激活认证必须绑定本次演进的部署收据，所以放在部署绑定之后）。
+    policy_transition: dict[str, Any] | None = None
+    if policy_changed:
+        policy_transition = _policy_evolution_transition(
+            from_identity,
+            current,
+            deployment=deployment,
+            compatibility_receipt=compatibility_receipt,
+            activation_certification=activation_certification,
+        )
+    elif compatibility_receipt is not None or activation_certification is not None:
+        raise ConfigurationError("工具身份策略未变化，不得提供策略兼容收据或激活认证。")
     # 两个账本：Campaign 账本不得已终态；总账不得 blocked。
     ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
     if ledger_dir is None:
@@ -59197,6 +59332,8 @@ def _tool_evolution_preview(
             "fix_commit": str(fix_commit),
             "deployment_receipt": dict(deployment),
         },
+        # R1：只有策略演进才写 policy_transition 键，常规演进收据字节不变。
+        **({"policy_transition": policy_transition} if policy_transition is not None else {}),
         "campaign_ledger_head": {
             "sequence": ledger.get("head_sequence"),
             "sha256": ledger.get("head_sha256"),
@@ -59246,6 +59383,8 @@ def _tool_evolution_command(arguments: argparse.Namespace) -> dict[str, Any]:
             fix_commit=str(arguments.fix_commit),
             reason=str(arguments.reason),
             control_root=getattr(arguments, "control_root", None),
+            compatibility_receipt=getattr(arguments, "policy_compatibility_receipt", None),
+            activation_certification=getattr(arguments, "policy_activation_certification", None),
         )
         summary = {
             "index": preview["index"],
@@ -59255,6 +59394,7 @@ def _tool_evolution_command(arguments: argparse.Namespace) -> dict[str, Any]:
             "impact": preview["impact"],
             "evaluator": preview["evaluator"],
             "bindings": preview["bindings"],
+            "policy_transition": preview.get("policy_transition"),
             "review_sha256": preview["review_sha256"],
             "live_request_count": 0,
         }
@@ -59309,6 +59449,15 @@ def _tool_evolution_status_command(arguments: argparse.Namespace) -> dict[str, A
                 "receipt_sha256": item["receipt_sha256"],
                 "fix_commit": item["bindings"]["fix_commit"],
                 "approved_at_utc": item.get("approved_at_utc"),
+                "policy_transition": (
+                    {
+                        "from_policy_sha256": item["policy_transition"]["from_policy_sha256"],
+                        "to_policy_sha256": item["policy_transition"]["to_policy_sha256"],
+                        "to_policy_version": item["policy_transition"]["to_policy_version"],
+                    }
+                    if isinstance(item.get("policy_transition"), Mapping)
+                    else None
+                ),
                 "official_affected": item["impact"]["official"].get("affected_job_ids"),
                 "candidates_affected": {
                     cid: part.get("affected_job_ids")
@@ -59406,8 +59555,16 @@ def _campaign_resume_preview(
         if len(open_formal) >= int(plan["formal_open_limit"]):
             raise ConfigurationError(f"同版本无终态 formal Campaign 已达上限：{open_formal}，恢复会超额。")
     current = _tool_identity(include_git=False)
-    if current.get("policy_sha256") != frozen.get("policy_sha256"):
-        raise ConfigurationError("当前工具策略与 Campaign 冻结策略不同；策略变化不能恢复，只能新建 Campaign。")
+    # R1：对照 Campaign 有效策略（策略演进登记后即最新演进的策略），而不是 plan 冻结策略。
+    effective_policy = (
+        _campaign_effective_tool_identity(campaign_dir, manifest)["identity"].get("policy_sha256")
+        if _is_policy_v2_identity(frozen)
+        else frozen.get("policy_sha256")
+    )
+    if current.get("policy_sha256") != effective_policy:
+        raise ConfigurationError(
+            "当前工具策略与 Campaign 有效策略不同；先以 tool-evolution 登记策略演进（绑定 A2.6 兼容收据与激活认证）再恢复。"
+        )
     try:
         deployment = reconciler._deployment_receipt(
             reconciler._control_root(campaign_dir, control_root), current, required=True
@@ -60161,11 +60318,18 @@ def _evaluation_epoch_command(arguments: argparse.Namespace) -> dict[str, Any]:
     else:
         attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
     try:
+        # R1：策略经策略演进承接后，epoch 对照 Campaign 有效策略而不是 plan 冻结策略。
+        effective_policy = (
+            str(_campaign_effective_tool_identity(campaign_dir, manifest)["identity"].get("policy_sha256"))
+            if _is_policy_v2_identity(manifest.get("tool_identity") or {})
+            else None
+        )
         path = codex_upgrade_wire_transition.append_epoch(
             attempt_root,
             manifest,
             current_identity=_tool_identity(include_git=False),
             reason=str(arguments.reason),
+            effective_policy_sha256=effective_policy,
         )
         chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
     except codex_upgrade_wire_transition.WireTransitionError as error:

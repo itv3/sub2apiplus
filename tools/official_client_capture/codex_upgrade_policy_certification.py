@@ -171,8 +171,10 @@ def build_compatibility_receipt(
         manifest = _read_json(manifest_path, "Campaign 清单")
         frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
         frozen_policy = frozen.get("policy_sha256")
+        # 第三批 R1：冻结策略等于旧策略的 v2 Campaign 可以在原 Campaign 以策略演进承接新策略
+        # （tool-evolution 绑定本收据与激活认证）；不登记时仍沿用自身冻结策略。
         if frozen_policy == previous["policy_sha256"]:
-            disposition = "retain_frozen_policy"
+            disposition = "retain_frozen_policy_or_evolve_via_tool_evolution"
         elif frozen_policy is None:
             disposition = "v1_identity_unaffected"
         elif frozen_policy == current["policy_sha256"]:
@@ -218,7 +220,8 @@ def build_compatibility_receipt(
         "layer_counts_under_current_policy": current_identity_v2["layer_counts"],
         "existing_campaigns": campaigns,
         "rule": (
-            "Campaign 永远使用自身冻结的 policy；既有 v2 Campaign 不换策略，新策略只用于之后创建的 Campaign；"
+            "Campaign 默认使用自身冻结的 policy；冻结策略等于本收据旧策略的 v2 Campaign 可经 tool-evolution 策略演进"
+            "（只改策略文件、绑定本收据与激活认证）在原 Campaign 承接新策略，否则新策略只用于之后创建的 Campaign；"
             "v1 Campaign 按整树身份不受影响。"
         ),
     }

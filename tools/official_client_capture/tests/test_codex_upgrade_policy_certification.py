@@ -65,7 +65,11 @@ class PolicyCertificationTests(unittest.TestCase):
             self.assertEqual(receipt["defaulted_paths_under_current_policy"], [])
             self.assertNotEqual(receipt["identity_under_previous_policy"]["control_sha256"], receipt["identity_under_current_policy"]["control_sha256"])
             dispositions = {item["campaign_id"]: item["disposition"] for item in receipt["existing_campaigns"]}
-            self.assertEqual(dispositions, {"c-v2": "retain_frozen_policy", "c-v1": "v1_identity_unaffected"})
+            # 第三批 R1：冻结策略等于旧策略的 v2 Campaign 可经策略演进在原 Campaign 承接新策略。
+            self.assertEqual(
+                dispositions,
+                {"c-v2": "retain_frozen_policy_or_evolve_via_tool_evolution", "c-v1": "v1_identity_unaffected"},
+            )
             unsigned = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
             self.assertEqual(codex_upgrade._fingerprint(unsigned), receipt["receipt_sha256"])
             # 策略未变化或版本未升级都拒绝。

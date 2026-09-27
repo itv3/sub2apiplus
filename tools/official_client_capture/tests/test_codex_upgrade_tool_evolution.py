@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_policy_certification as certification
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
@@ -90,6 +91,8 @@ class EvolutionFixture:
         candidates: dict | None = None,
         evaluator_candidates: dict | None = None,
         changed_paths: list[str] | None = None,
+        changes_by_layer: dict | None = None,
+        policy_transition: dict | None = None,
     ) -> dict:
         payload = {
             "schema_version": wt.EVOLUTION_SCHEMA,
@@ -101,7 +104,14 @@ class EvolutionFixture:
             "to_summary": wt.identity_summary(to_identity),
             "to_identity": to_identity,
             "to_evaluator_digests": {},
-            "changes": {"paths_by_layer": {"wire_producer": list(changed_paths or [])}},
+            "changes": {
+                "paths_by_layer": (
+                    dict(changes_by_layer) if changes_by_layer is not None
+                    else {"wire_producer": list(changed_paths or [])}
+                )
+            },
+            # R1：策略演进收据携带 policy_transition；常规演进不写该键。
+            **({"policy_transition": dict(policy_transition)} if policy_transition is not None else {}),
             "impact": {
                 "official": {
                     "planned_job_ids": ["official-core"],
@@ -254,6 +264,135 @@ class EvolutionChainTests(unittest.TestCase):
             ):
                 with self.subTest(bad=bad), self.assertRaises(wt.WireTransitionError):
                     wt.reservation_production_index({"tool_evolution": bad}, chain)
+
+    def _policy_identity(self, fixture: EvolutionFixture, base: dict) -> dict:
+        """只改策略文件的 to 身份：策略摘要与版本变化，entries 里策略文件条目变化（control 层），其余文件不变。"""
+
+        policy_file = tip.POLICY_FILENAME
+        entries = [dict(e, sha256="9" * 64) if e["path"] == policy_file else dict(e) for e in base["entries"]]
+        v2 = tip.compute_identity_v2(fixture.policy, TOOL_ROOT, entries)
+        return {
+            **base,
+            "entries": entries,
+            **{k: v2[k] for k in ("wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")},
+            "policy_sha256": "9" * 64,
+            "policy_version": int(base["policy_version"]) + 1,
+            "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+        }
+
+    @staticmethod
+    def _policy_transition(from_identity: dict, to_identity: dict, **overrides: object) -> dict:
+        transition = {
+            "from_policy_sha256": from_identity["policy_sha256"],
+            "from_policy_version": int(from_identity["policy_version"]),
+            "to_policy_sha256": to_identity["policy_sha256"],
+            "to_policy_version": int(to_identity["policy_version"]),
+            "compatibility_receipt": {"path": "/control/policy-compatibility.json", "sha256": "c" * 64},
+            "activation_certification": {"path": "/control/policy-activation.json", "sha256": "a" * 64},
+        }
+        transition.update(overrides)
+        return transition
+
+    def test_policy_evolution_moves_effective_policy_and_rejects_malformed_transitions(self) -> None:
+        """第三批 R1：策略演进收据必须带闭合、衔接的 policy_transition 且只改策略文件；写入后有效策略迁移，
+        对账身份事实与未登记漂移都以新策略为基准；策略未变的演进不得携带 policy_transition。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            policy_to = self._policy_identity(fixture, fixture.identity)
+            changes = {"control": [tip.POLICY_FILENAME]}
+            good = self._policy_transition(fixture.identity, policy_to)
+
+            def write(**kwargs: object) -> None:
+                wt.write_evolution(fixture.campaign_dir, fixture.manifest, fixture.payload(**kwargs))
+
+            common = dict(index=1, previous=None, from_identity=fixture.identity)
+            with self.assertRaisesRegex(wt.WireTransitionError, "策略起点不是上一有效策略"):
+                write(**common, to_identity=policy_to, changes_by_layer=changes,
+                      policy_transition=dict(good, from_policy_sha256="1" * 64))
+            downgraded = dict(policy_to, policy_version=int(fixture.identity["policy_version"]))
+            with self.assertRaisesRegex(wt.WireTransitionError, "严格升级"):
+                write(**common, to_identity=downgraded, changes_by_layer=changes,
+                      policy_transition=self._policy_transition(fixture.identity, downgraded))
+            with self.assertRaisesRegex(wt.WireTransitionError, "只能是策略文件"):
+                write(**common, to_identity=policy_to,
+                      changes_by_layer={"control": [tip.POLICY_FILENAME], "wire_producer": ["run_candidate_core_capture.sh"]},
+                      policy_transition=good)
+            with self.assertRaisesRegex(wt.WireTransitionError, "字段不闭合"):
+                write(**common, to_identity=policy_to, changes_by_layer=changes,
+                      policy_transition={k: v for k, v in good.items() if k != "activation_certification"})
+            wire_to = fixture.mutated_identity(fixture.identity, "run_candidate_core_capture.sh")
+            with self.assertRaisesRegex(wt.WireTransitionError, "不得携带 policy_transition"):
+                write(**common, to_identity=wire_to, changed_paths=["run_candidate_core_capture.sh"],
+                      policy_transition=self._policy_transition(fixture.identity, fixture.identity))
+            self.assertEqual(wt.load_evolutions(fixture.campaign_dir, fixture.manifest), [])
+
+            first = fixture.payload(**common, to_identity=policy_to, changes_by_layer=changes, policy_transition=good)
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, first)
+            effective = wt.effective_wire_identity(fixture.campaign_dir, fixture.manifest)
+            self.assertEqual(
+                (effective["policy_sha256"], effective["policy_version"], effective["source"]),
+                ("9" * 64, int(fixture.identity["policy_version"]) + 1, "evolution-01"),
+            )
+            self.assertEqual(
+                wt.effective_tool_identity(fixture.campaign_dir, fixture.manifest)["identity"]["policy_sha256"], "9" * 64
+            )
+            facts = reconciler._identity_facts(fixture.campaign_dir, fixture.manifest, policy_to)
+            self.assertTrue(facts["unchanged"])
+            self.assertEqual(
+                (facts["frozen_policy_sha256"], facts["effective_policy_sha256"]),
+                (fixture.identity["policy_sha256"], "9" * 64),
+            )
+            self.assertFalse(reconciler._identity_facts(fixture.campaign_dir, fixture.manifest, fixture.identity)["unchanged"])
+            self.assertEqual(codex_upgrade._tool_evolution_unregistered_drift(policy_to, policy_to), [])
+            self.assertIn("工具身份策略", codex_upgrade._tool_evolution_unregistered_drift(policy_to, fixture.identity))
+            # 后续常规演进从新策略下的身份衔接，策略不变不得再带 transition。
+            second_to = dict(
+                fixture.mutated_identity(policy_to, "run_candidate_core_capture.sh"),
+                policy_sha256="9" * 64, policy_version=policy_to["policy_version"],
+            )
+            with self.assertRaisesRegex(wt.WireTransitionError, "不得携带 policy_transition"):
+                write(index=2, previous=first, from_identity=policy_to, to_identity=second_to,
+                      changed_paths=["run_candidate_core_capture.sh"], policy_transition=good)
+            second = fixture.payload(index=2, previous=first, from_identity=policy_to, to_identity=second_to,
+                                     changed_paths=["run_candidate_core_capture.sh"])
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, second)
+            chain = wt.load_evolutions(fixture.campaign_dir, fixture.manifest)
+            self.assertEqual([item["index"] for item in chain], [1, 2])
+            self.assertEqual(chain[0]["policy_transition"], good)
+            self.assertNotIn("policy_transition", chain[1])
+            # 篡改 transition：自摘要拦住。
+            path = fixture.campaign_dir / wt.EVOLUTION_DIR / "evolution-01.json"
+            payload = json.loads(path.read_text("utf-8"))
+            payload["policy_transition"]["to_policy_version"] = 99
+            path.write_text(json.dumps(payload, sort_keys=True), "utf-8")
+            with self.assertRaisesRegex(wt.WireTransitionError, "自摘要不一致"):
+                wt.load_evolutions(fixture.campaign_dir, fixture.manifest)
+
+    def test_epoch_after_policy_evolution_compares_against_effective_policy(self) -> None:
+        """第三批 R1：策略演进之后追加 evaluation epoch 对照的是有效策略；不传有效策略仍按 plan 冻结策略拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            policy_to = self._policy_identity(fixture, fixture.identity)
+            evolved = dict(
+                fixture.mutated_identity(policy_to, "build_rule_assertion_results.py"),
+                policy_sha256="9" * 64, policy_version=policy_to["policy_version"],
+            )
+            self.assertNotEqual(evolved["evidence_semantics_sha256"], fixture.identity["evidence_semantics_sha256"])
+            attempt_root = fixture.root / "attempt"
+            attempt_root.mkdir(mode=0o700)
+            with self.assertRaisesRegex(wt.WireTransitionError, "有效策略不一致"):
+                wt.append_epoch(attempt_root, fixture.manifest, current_identity=evolved, reason="策略演进后的证据语义变化")
+            self.assertEqual(wt.load_epochs(attempt_root), [])
+            path = wt.append_epoch(
+                attempt_root, fixture.manifest, current_identity=evolved, reason="策略演进后的证据语义变化",
+                effective_policy_sha256="9" * 64,
+            )
+            self.assertTrue(path.is_file())
+            self.assertEqual(
+                wt.current_evidence_semantics(attempt_root, fixture.manifest), evolved["evidence_semantics_sha256"]
+            )
 
 
 class CandidateReviewRecoveryLedgerTests(unittest.TestCase):
@@ -542,7 +681,8 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
 
     def _run(self, fixture: EvolutionFixture, current: dict, *, path_map: dict, sealed: set[str] = frozenset(),
              outputs: dict | None = None, approve: str | None = None, approved_by: str | None = "tester",
-             deployment_created: str = "2026-09-27T01:00:00Z") -> dict:
+             deployment_created: str = "2026-09-27T01:00:00Z", deployment_override: dict | None = None,
+             policy_receipts: tuple[Path, Path] | None = None) -> dict:
         root = fixture.root
         stage_paths = {}
         for stage, cid in (("capture-official", None), ("capture-candidate", "cand")):
@@ -563,11 +703,15 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
             "compare_reader_sha256": "7" * 64,
             "accept_reader_sha256": "8" * 64,
         }
-        deployment = {"path": "/control/deploy.json", "sha256": "d" * 64, "created_at_utc": deployment_created,
-                      "tool_files_sha256": current["files_sha256"], "policy_sha256": current["policy_sha256"],
-                      "wire_producer_sha256": current["wire_producer_sha256"]}
+        deployment = deployment_override or {
+            "path": "/control/deploy.json", "sha256": "d" * 64, "created_at_utc": deployment_created,
+            "tool_files_sha256": current["files_sha256"], "policy_sha256": current["policy_sha256"],
+            "wire_producer_sha256": current["wire_producer_sha256"],
+        }
         arguments = SimpleNamespace(campaign_dir=fixture.campaign_dir, fix_commit="f" * 40, reason="修复 A15 采集脚本",
-                                    control_root=root / "control", approve_sha256=approve, approved_by=approved_by)
+                                    control_root=root / "control", approve_sha256=approve, approved_by=approved_by,
+                                    policy_compatibility_receipt=policy_receipts[0] if policy_receipts else None,
+                                    policy_activation_certification=policy_receipts[1] if policy_receipts else None)
         with mock.patch.multiple(
             codex_upgrade,
             _require_formal_campaign=mock.Mock(return_value=fixture.manifest),
@@ -696,6 +840,139 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
             self.assertEqual(
                 codex_upgrade._b0_evaluator_authorized_digests(fixture.campaign_dir, fixture.manifest, "cand"), plan_digests
             )
+
+    def _policy_evolution_fixture(self, fixture: EvolutionFixture, *, extra_paths: tuple[str, ...] = (),
+                                  tag: str = "policy") -> dict:
+        """真实工具树上"只改策略文件（版本 +1）"的当前身份，以及在这棵树上出具的兼容收据、部署收据与激活认证。
+
+        ``tag`` 区分同一夹具内多次构造的输出目录，避免后一次覆盖前一次的收据文件。
+        """
+
+        root = fixture.root / tag
+        raw = json.loads(tip.DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
+        raw["policy_version"] = int(raw["policy_version"]) + 1
+        raw["description"] = str(raw.get("description", "")) + "（测试：策略演进）"
+        new_policy_path = root / "policy" / tip.POLICY_FILENAME
+        new_policy_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        new_policy_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", "utf-8")
+        new_policy = tip.load_policy(new_policy_path)
+        entries = [
+            dict(e, sha256=new_policy["policy_sha256"]) if e["path"] == tip.POLICY_FILENAME
+            else dict(e, sha256="0" * 64) if e["path"] in extra_paths
+            else dict(e)
+            for e in fixture.identity["entries"]
+        ]
+        v2 = tip.compute_identity_v2(new_policy, TOOL_ROOT, entries)
+        current = {
+            **fixture.identity,
+            "entries": entries,
+            "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+            **{k: v2[k] for k in ("policy_version", "policy_sha256", "wire_producer_sha256",
+                                  "evidence_semantics_sha256", "control_sha256", "orchestrator_closures")},
+        }
+        with mock.patch.object(codex_upgrade, "_tool_tree_entries", mock.Mock(return_value=entries)):
+            compatibility = certification.build_compatibility_receipt(tip.DEFAULT_POLICY_PATH, current_policy=new_policy_path)
+        compat_path = root / "control" / "policy-compatibility.json"
+        _write_json(compat_path, compatibility)
+        deploy_path = root / "control" / "deploy-policy.json"
+        _write_json(deploy_path, {
+            "schema_version": certification.DEPLOY_RECEIPT_SCHEMA, "status": "passed", "campaign_id": "deploy-policy",
+            "created_at_utc": "2026-09-27T02:00:00Z", "policy_version": current["policy_version"],
+            "policy_sha256": current["policy_sha256"], "wire_producer_sha256": current["wire_producer_sha256"],
+            "evidence_semantics_sha256": current["evidence_semantics_sha256"], "control_sha256": current["control_sha256"],
+            "tool_files_sha256": current["files_sha256"], "supervisor_sha256": "1" * 64,
+        })
+        with mock.patch.object(codex_upgrade, "_tool_identity", mock.Mock(return_value=current)):
+            activation = certification.build_activation_certification(deploy_path, compat_path)
+        activation_path = root / "control" / "policy-activation.json"
+        _write_json(activation_path, activation)
+        deployment = {
+            "path": str(deploy_path), "sha256": codex_upgrade.file_sha256(deploy_path), "created_at_utc": "2026-09-27T02:00:00Z",
+            "tool_files_sha256": current["files_sha256"], "policy_sha256": current["policy_sha256"],
+            "wire_producer_sha256": current["wire_producer_sha256"],
+        }
+        return {"current": current, "new_policy": new_policy, "new_policy_path": new_policy_path,
+                "compat": compat_path, "activation": activation_path, "deployment": deployment}
+
+    def test_policy_only_change_registers_policy_evolution_with_zero_impact(self) -> None:
+        """第三批 R1：只改策略文件的部署带兼容收据与激活认证登记为策略演进——影响为空、收据带 policy_transition，
+        批准后有效策略迁移，未登记漂移与对账身份事实都以新策略为基准，状态查询展示策略演进。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            setup = self._policy_evolution_fixture(fixture)
+            current = setup["current"]
+            kwargs = dict(path_map={}, sealed={"capture-official:None"}, deployment_override=setup["deployment"],
+                          policy_receipts=(setup["compat"], setup["activation"]))
+            preview = self._run(fixture, current, **kwargs)
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual(preview["changes"]["impact_paths"], [])
+            self.assertEqual(preview["changes"]["unmapped_paths"], [])
+            self.assertEqual(preview["changes"]["paths_by_layer"].get("control"), [tip.POLICY_FILENAME])
+            self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
+            self.assertEqual(preview["impact"]["candidates"]["cand"]["affected_job_ids"], [])
+            transition = preview["policy_transition"]
+            self.assertEqual(
+                (transition["from_policy_sha256"], transition["from_policy_version"],
+                 transition["to_policy_sha256"], transition["to_policy_version"]),
+                (fixture.identity["policy_sha256"], int(fixture.identity["policy_version"]),
+                 setup["new_policy"]["policy_sha256"], int(fixture.identity["policy_version"]) + 1),
+            )
+            self.assertEqual(transition["compatibility_receipt"]["sha256"], codex_upgrade.file_sha256(setup["compat"]))
+            self.assertEqual(transition["activation_certification"]["sha256"], codex_upgrade.file_sha256(setup["activation"]))
+
+            applied = self._run(fixture, current, approve=preview["review_sha256"], **kwargs)
+            self.assertEqual(applied["status"], "evolution_applied")
+            chain = wt.load_evolutions(fixture.campaign_dir, fixture.manifest)
+            self.assertEqual(len(chain), 1)
+            self.assertEqual(chain[0]["policy_transition"], transition)
+            effective = codex_upgrade._campaign_effective_tool_identity(fixture.campaign_dir, fixture.manifest)
+            self.assertEqual(effective["identity"]["policy_sha256"], setup["new_policy"]["policy_sha256"])
+            self.assertEqual(codex_upgrade._tool_evolution_unregistered_drift(effective["identity"], current), [])
+            self.assertTrue(reconciler._identity_facts(fixture.campaign_dir, fixture.manifest, current)["unchanged"])
+            with mock.patch.multiple(
+                codex_upgrade,
+                _require_formal_campaign=mock.Mock(return_value=fixture.manifest),
+                _tool_identity=mock.Mock(return_value=current),
+            ):
+                status = codex_upgrade._tool_evolution_status_command(SimpleNamespace(campaign_dir=fixture.campaign_dir))
+            self.assertEqual((status["status"], status["effective_index"]), ("registered", 1))
+            self.assertEqual(
+                status["evolutions"][0]["policy_transition"],
+                {"from_policy_sha256": fixture.identity["policy_sha256"],
+                 "to_policy_sha256": setup["new_policy"]["policy_sha256"],
+                 "to_policy_version": int(fixture.identity["policy_version"]) + 1},
+            )
+
+    def test_policy_change_refusals(self) -> None:
+        """第三批 R1 反例：缺认证收据、策略与代码同时变化、兼容收据起点不是有效策略、策略未变却带收据，都零写入拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            setup = self._policy_evolution_fixture(fixture)
+            base = dict(path_map={}, sealed={"capture-official:None"}, deployment_override=setup["deployment"])
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须提供 --policy-compatibility-receipt"):
+                self._run(fixture, setup["current"], **base)
+            mixed = self._policy_evolution_fixture(fixture, extra_paths=("run_candidate_core_capture.sh",), tag="mixed")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "拆成两次部署"):
+                self._run(fixture, mixed["current"], path_map={}, sealed={"capture-official:None"},
+                          deployment_override=mixed["deployment"], policy_receipts=(mixed["compat"], mixed["activation"]))
+            older = json.loads(tip.DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
+            older["policy_version"] = int(older["policy_version"]) - 1
+            older["description"] = str(older.get("description", "")) + "（更旧）"
+            older_path = fixture.root / "older-policy.json"
+            older_path.write_text(json.dumps(older, ensure_ascii=False) + "\n", "utf-8")
+            with mock.patch.object(codex_upgrade, "_tool_tree_entries", mock.Mock(return_value=setup["current"]["entries"])):
+                wrong = certification.build_compatibility_receipt(older_path, current_policy=setup["new_policy_path"])
+            wrong_path = fixture.root / "control" / "wrong-compatibility.json"
+            _write_json(wrong_path, wrong)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "旧策略不是 Campaign 当前有效策略"):
+                self._run(fixture, setup["current"], policy_receipts=(wrong_path, setup["activation"]), **base)
+            plain = fixture.mutated_identity(fixture.identity, "run_candidate_core_capture.sh")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不得提供策略兼容收据"):
+                self._run(fixture, plain, path_map={"run_candidate_core_capture.sh": {"candidate-core-direct"}},
+                          sealed={"capture-official:None"}, policy_receipts=(setup["compat"], setup["activation"]))
+            self.assertEqual(wt.load_evolutions(fixture.campaign_dir, fixture.manifest), [])
 
 
 class EvolutionRecoveryScopeTests(unittest.TestCase):

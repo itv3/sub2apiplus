@@ -231,7 +231,10 @@ def _current_identity() -> dict[str, Any]:
 
 
 def _identity_facts(campaign_dir: Path, manifest: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
-    """身份不变 = 当前有效 wire 身份与 policy_sha256 相等（v1 Campaign 比整树）。"""
+    """身份不变 = 当前有效 wire 身份与有效 policy_sha256 相等（v1 Campaign 比整树）。
+
+    第三批 R1：策略经策略演进承接后，有效策略是最新演进的 to 身份策略；这里对照有效策略而不是 plan 冻结值。
+    """
 
     frozen = manifest.get("tool_identity")
     if not isinstance(frozen, Mapping):
@@ -243,7 +246,7 @@ def _identity_facts(campaign_dir: Path, manifest: Mapping[str, Any], current: Ma
             raise ReconcilerError(f"当前有效 wire 身份无法重放：{error}") from error
         unchanged = (
             str(current.get("wire_producer_sha256")) == str(effective["wire_producer_sha256"])
-            and str(current.get("policy_sha256")) == str(frozen.get("policy_sha256"))
+            and str(current.get("policy_sha256")) == str(effective["policy_sha256"])
         )
         return {
             "policy_version": "v2",
@@ -253,6 +256,7 @@ def _identity_facts(campaign_dir: Path, manifest: Mapping[str, Any], current: Ma
             "pending_intent": effective.get("pending_intent"),
             "current_wire_producer_sha256": current.get("wire_producer_sha256"),
             "frozen_policy_sha256": frozen.get("policy_sha256"),
+            "effective_policy_sha256": effective["policy_sha256"],
             "current_policy_sha256": current.get("policy_sha256"),
         }
     unchanged = str(current.get("files_sha256")) == str(frozen.get("files_sha256"))

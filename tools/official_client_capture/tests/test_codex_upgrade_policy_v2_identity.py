@@ -121,7 +121,8 @@ class PolicyV2IdentityTests(unittest.TestCase):
     def test_policy_change_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = PolicyV2IdentityFixture(Path(directory).resolve())
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "策略已变化"):
+            # 第三批 R1：策略变化不再指向新 Campaign，而是要求先登记策略演进。
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "有效策略不一致；先以 tool-evolution 登记策略演进"):
                 fixture.verify(fixture.mutated("codex_upgrade_supervisor.py", policy_sha256="9" * 64), operation=None)
 
     def test_v1_campaign_keeps_v1_semantics(self) -> None:
