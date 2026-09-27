@@ -558,6 +558,8 @@ def _paused_next_command(decision: Mapping[str, Any], resume_from: str) -> str:
         steps.append("deadline-extend preview/apply")
     if "request_budget" in kinds:
         steps.append("request-budget-extend preview/apply")
+    if "accounting" in kinds:
+        steps.append("accounting-resolve preview/apply（为未决 operation 补账）")
     return "；".join(steps) + f"；批准后{resume_from}"
 
 
@@ -730,6 +732,46 @@ def _request_part(
     stored = _write_or_verify(copy_path, receipt, volatile=("observed_at_utc",))
     with project_ledger.project_lock(project_root):
         initial_keys = project_ledger._initial_keys(project_root, plan)
+    accounting = request_accounting(stored, head=head, initial_keys=initial_keys, campaign_id=campaign_id)
+    identity_keys = accounting["identity_keys"]
+    new_keys = accounting["new_keys"]
+    estimated_sources = accounting["estimated_sources"]
+    unresolved = accounting["unresolved_job_ids"]
+    if unresolved:
+        status = "unresolved"
+    elif estimated_sources:
+        status = "estimated"
+    else:
+        status = "resolved"
+    part = {
+        "status": status,
+        "identity_keys": new_keys,
+        "identity_key_count_total": len(identity_keys),
+        "estimated_delta": sum(int(item["estimated_count"]) for item in estimated_sources),
+        "estimated_sources": estimated_sources,
+        "unresolved_job_ids": unresolved,
+        "counting_rule": stored.get("counting_rule"),
+        "estimation_policy": stored.get("estimation_policy"),
+        "provenance_receipt_sha256": _file_sha256(copy_path),
+    }
+    binding = _binding(campaign_dir, copy_path, "provenance")
+    return part, binding, copy_path
+
+
+def request_accounting(
+    stored: Mapping[str, Any],
+    *,
+    head: Mapping[str, Any],
+    initial_keys: set[str],
+    campaign_id: str,
+) -> dict[str, Any]:
+    """按总账已入账索引，从来源核算结果算出本次应入账的内容（纯计算，不写文件）。
+
+    返回全部身份键、未入账的新身份键、未入账的估计来源（按 producer run 去重）与仍未决的作业；
+    accounting-resolve 已核清且特征未变的作业不再算未决。对账（_request_part）与 accounting-resolve
+    共用本函数，保证补账与对账同一口径。
+    """
+
     accounted = set(head.get("accounted_identity_index", []))
     accounted_estimates = set(head.get("accounted_estimated_sources", []))
     identity_keys = sorted(
@@ -760,25 +802,47 @@ def _request_part(
                 {"source_id": source_id, "job_id": str(job.get("job_id")), "estimated_count": count}
             )
     unresolved = [str(item) for item in stored.get("unresolved_job_ids", [])]
-    if unresolved:
-        status = "unresolved"
-    elif estimated_sources:
-        status = "estimated"
-    else:
-        status = "resolved"
-    part = {
-        "status": status,
-        "identity_keys": new_keys,
-        "identity_key_count_total": len(identity_keys),
-        "estimated_delta": sum(int(item["estimated_count"]) for item in estimated_sources),
+    # 修好接着跑第 12 项：accounting-resolve 已核清、且未决事实（证据根与分支状态）没有变化的作业不再判为未决；
+    # 出现新证据时特征随之变化，照常重新核算。
+    resolved_signatures = project_ledger.accounting_resolution_signatures(head, campaign_id)
+    if unresolved and resolved_signatures:
+        entries = {
+            str(item.get("job_id")): item
+            for item in stored.get("jobs", [])
+            if isinstance(item, Mapping) and item.get("status") == "unresolved"
+        }
+        unresolved = [
+            job_id
+            for job_id in unresolved
+            if (job_id, unresolved_job_signature(entries.get(job_id, {"job_id": job_id}))) not in resolved_signatures
+        ]
+    return {
+        "identity_keys": identity_keys,
+        "new_keys": new_keys,
         "estimated_sources": estimated_sources,
         "unresolved_job_ids": unresolved,
-        "counting_rule": stored.get("counting_rule"),
-        "estimation_policy": stored.get("estimation_policy"),
-        "provenance_receipt_sha256": _file_sha256(copy_path),
     }
-    binding = _binding(campaign_dir, copy_path, "provenance")
-    return part, binding, copy_path
+
+
+def unresolved_job_signature(job_entry: Mapping[str, Any]) -> str:
+    """未决作业的特征摘要：作业、证据根与各分支状态（不含观测时间）。accounting-resolve 按它登记覆盖范围。
+
+    证据根只取 producer run 名、种类、首个归属作业与分支内容，不取绝对路径：同一 Campaign 经别名根
+    （如 ARM64 的 /root/oauth-capture）或真实路径访问时特征必须一致，否则补账后重新对账仍判未决。
+    """
+
+    roots = [
+        {key: value for key, value in item.items() if key != "root"} if isinstance(item, Mapping) else item
+        for item in job_entry.get("roots", [])
+    ]
+    return _fingerprint(
+        {
+            "job_id": job_entry.get("job_id"),
+            "phase": job_entry.get("phase"),
+            "roots": roots,
+            "reason": job_entry.get("reason"),
+        }
+    )
 
 
 def _require_segment_accounting_scope(
@@ -1057,10 +1121,14 @@ def _decide(
         if forced_terminal_reason not in project_ledger.TERMINAL_REASONS:
             raise ReconcilerError(f"强制终态原因非法：{forced_terminal_reason}")
         stop(forced_terminal_reason, "对象分类本身不可恢复（不可变控制或证据制品完整性异常）")
+    # 修好接着跑第 12 项：账务无法核清只暂停（accounting-resolve 补账后继续），不再写 accounting_unresolved 终态。
+    accounting_paused = False
     if head.get("blocked"):
-        stop("accounting_unresolved", f"总账 blocked：{head.get('unresolved_operation_ids')}")
+        accounting_paused = True
+        reasons.append(f"总账 blocked：{head.get('unresolved_operation_ids')}（暂停：accounting-resolve 补账后继续）")
     elif request_status == "unresolved":
-        stop("accounting_unresolved", "本次请求账务无法确定")
+        accounting_paused = True
+        reasons.append("本次请求账务无法确定（暂停：accounting-resolve 补账后继续）")
     if environment_status == "contaminated":
         stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
     ledger_status = ledger.get("status")
@@ -1109,7 +1177,7 @@ def _decide(
         DECISION_STOP
         if terminal_reason is not None
         else DECISION_PAUSED
-        if deadline_paused or budget_paused
+        if deadline_paused or budget_paused or accounting_paused
         else DECISION_RECOVERABLE
     )
     scoped_counts = project_ledger.root_cause_counts_for(head, target_version)
@@ -1120,7 +1188,11 @@ def _decide(
     extra: dict[str, Any] = {}
     if decision == DECISION_PAUSED:
         # 暂停种类只在暂停时写入，其余判定的输出字节不变。
-        extra["pause_kinds"] = [kind for kind, on in (("deadline", deadline_paused), ("request_budget", budget_paused)) if on]
+        extra["pause_kinds"] = [
+            kind
+            for kind, on in (("deadline", deadline_paused), ("request_budget", budget_paused), ("accounting", accounting_paused))
+            if on
+        ]
     return {
         **extra,
         "decision": decision,

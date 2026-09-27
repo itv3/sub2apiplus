@@ -143,11 +143,11 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_b0_reconcile_attempt_same_root_cause_limit_stops_the_line",
     ),
     (
-        "accounting.unresolved-blocks-terminal-allowed",
-        "请求数无法确定：unresolved 使总账 blocked，campaign_terminal 仍可写",
+        "accounting.unresolved-pauses-then-resolves",
+        "请求数无法确定：总账 blocked 但只暂停；accounting-resolve 按批准上界带证据补账后同一对象重新对账可续跑",
         "tools.official_client_capture.tests.test_codex_upgrade",
         "CodexUpgradeTest",
-        "test_b0_reconcile_attempt_unresolved_accounting_blocks_and_terminates",
+        "test_b0_reconcile_attempt_unresolved_accounting_pauses_and_accounting_resolve_continues",
     ),
     (
         "deadline-interruption.attempt-failed-before-pause",
@@ -442,20 +442,21 @@ def real_chain_coverage(payload: Mapping[str, Any], *, historical: bool = False)
 
 
 def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
-    """unresolved → accounting_resolved：以新的已解析 provenance 逐个补账并解除 blocked。"""
+    """unresolved → 暂停 → 新证据可核清 → accounting-resolve 精确补账解除 blocked → 同一对象重新对账可恢复。"""
 
-    from tools.official_client_capture import codex_upgrade_live_request_provenance as provenance
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
     from tools.official_client_capture.tests import test_codex_upgrade as upgrade_tests
 
     started = time.monotonic()
     record: dict[str, Any] = {
         "name": "accounting.resolved-unblocks",
-        "description": "accounting_resolved 绑定新 provenance 逐个补账，未决集合清空后解除 blocked",
+        "description": "账务无法核清只暂停；补回证据后 accounting-resolve 按当前证据精确补账，解除 blocked 后同一对象续跑",
         "test": "inline:codex_upgrade_pre_a3_certification._accounting_resolved_scenario",
     }
     try:
-        case = upgrade_tests.CodexUpgradeTest("test_b0_reconcile_attempt_unresolved_accounting_blocks_and_terminates")
+        case = upgrade_tests.CodexUpgradeTest(
+            "test_b0_reconcile_attempt_unresolved_accounting_pauses_and_accounting_resolve_continues"
+        )
         case.setUp()
         root = Path(tempfile.mkdtemp(prefix="accounting-resolved-", dir=staging_root)).resolve()
         fixture = case._b0_fixture(root)
@@ -469,42 +470,36 @@ def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
             evidence_roots=[evidence_root],
         )
         result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
-        if result["status"] != "permanent_stop" or result["decision"]["terminal_reason"] != "accounting_unresolved":
-            raise CertificationError("未决账务未使总账 blocked")
+        if (
+            result["status"] != "paused"
+            or result["decision"].get("pause_kinds") != ["accounting"]
+            or result["decision"]["terminal_reason"] is not None
+        ):
+            raise CertificationError(f"未决账务没有只暂停：{result['status']} {result['decision']}")
         operation_id = f"reconcile-attempt:{attempt_id}"
         head = project_ledger.replay_head(fixture["ledger"])
         if not head["blocked"] or operation_id not in head["unresolved_operation_ids"]:
             raise CertificationError("总账未登记未决 operation")
-        # 夹具内把无法识别的证据根移除后重新核算：得到已解析的 provenance（夹具专用操作）。
+        if str(fixture["manifest"]["campaign_id"]) in head["terminal_campaigns"]:
+            raise CertificationError("账务无法核清仍写了终态")
+        # 夹具内把无法识别的证据根移除，模拟"补回证据后按当前证据已能核清"（夹具专用操作）。
         (evidence_root / "surface.json").unlink()
         evidence_root.rmdir()
-        resolved = provenance.collect_campaign_provenance(
-            campaign_dir, formal_campaign_id=str(fixture["manifest"]["campaign_id"]), estimation_policy="none"
+        arguments = argparse.Namespace(
+            campaign_dir=campaign_dir, operation_id=operation_id, estimated_count=None, evidence=None,
+            reason="补回证据后按当前证据精确补账", approve_sha256=None, approved_by=None,
         )
-        if resolved["status"] != "complete":
-            raise CertificationError("重新核算后的 provenance 仍未解析")
-        with project_ledger.campaign_ledger_lock(campaign_dir) as ledger_dir:
-            project_ledger.write_batch(
-                ledger_dir,
-                operation_id=f"accounting-resolved:{attempt_id}",
-                event_type="accounting_resolved",
-                payload={
-                    "campaign_id": fixture["manifest"]["campaign_id"],
-                    "resolved_operation_id": operation_id,
-                    "request": {
-                        "status": "resolved",
-                        "identity_keys": [item["identity_key"] for item in resolved["requests"]],
-                        "estimated_delta": 0,
-                        "estimated_sources": [],
-                        "provenance_identity_keys_sha256": resolved["identity_keys_sha256"],
-                    },
-                },
-                source={"kind": "provenance", "sha256": _fingerprint(resolved)},
-            )
-        project_ledger.reconcile_project_ledger(fixture["ledger"], campaign_dir=campaign_dir)
-        head = project_ledger.replay_head(fixture["ledger"])
-        if head["blocked"] or head["unresolved_operation_ids"]:
+        preview = codex_upgrade._accounting_resolve_command(arguments)
+        if preview["status"] != "approval_required" or preview["resolution_mode"] != "precise_from_current_evidence":
+            raise CertificationError(f"补账预览口径错误：{preview.get('resolution_mode')}")
+        arguments.approve_sha256 = preview["review_sha256"]
+        arguments.approved_by = "pre-A3 认证"
+        resolved = codex_upgrade._accounting_resolve_command(arguments)
+        if resolved["status"] != "resolved" or resolved["blocked"]:
             raise CertificationError("补账后总账仍 blocked")
+        again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+        if again["status"] != "recoverable":
+            raise CertificationError(f"补账后同一对象重新对账不可恢复：{again['status']}")
         case.doCleanups()
         record["status"] = "passed"
     except Exception as error:  # noqa: BLE001

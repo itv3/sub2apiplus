@@ -9456,6 +9456,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "tool-evolution",
                 "tool-evolution-status",
                 "campaign-resume",
+                "accounting-resolve",
                 "wire-transition-intent",
                 "wire-transition-final",
                 "evaluation-epoch",
@@ -20451,8 +20452,9 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(reconciler.ReconcilerError, "不接受恢复批准"):
                 reconciler.reconcile_attempt(campaign_dir, second, approve_recovery_sha256="0" * 64)
 
-    def test_b0_reconcile_attempt_unresolved_accounting_blocks_and_terminates(self) -> None:
-        """请求数无法确定：请求部分 unresolved、总账 blocked，但 campaign_terminal 仍可写。"""
+    def test_b0_reconcile_attempt_unresolved_accounting_pauses_and_accounting_resolve_continues(self) -> None:
+        """修好接着跑第 12 项：请求数无法确定时请求部分 unresolved、总账 blocked，但只暂停、不写终态；
+        accounting-resolve 带证据补账后解除 blocked，同一 attempt 重新对账即可续跑（同一批未决事实不再判未决）。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -20460,6 +20462,7 @@ class CodexUpgradeTest(unittest.TestCase):
             root = Path(directory).resolve()
             fixture = self._b0_fixture(root)
             campaign_dir = fixture["campaign_dir"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
             # Job 证据根存在但没有任何权威来源（无 manifest／result／relay），也没有证明请求前失败的日志。
             evidence_root = campaign_dir / "official-evidence"
             evidence_root.mkdir(mode=0o700)
@@ -20470,17 +20473,104 @@ class CodexUpgradeTest(unittest.TestCase):
                 evidence_roots=[evidence_root],
             )
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
-            self.assertEqual(result["status"], "permanent_stop")
-            self.assertEqual(result["decision"]["terminal_reason"], "accounting_unresolved")
-            self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.accounting-unresolved")
+            self.assertEqual(result["status"], "paused", result.get("decision"))
+            self.assertEqual(result["decision"]["pause_kinds"], ["accounting"])
+            self.assertIsNone(result["decision"]["terminal_reason"])
+            self.assertIn("accounting-resolve", result["next_command"])
             self.assertEqual(result["jobs"]["indeterminate"], ["official-test"])
-            self.assertTrue(result["project_head"]["blocked"])
             head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-            self.assertTrue(head["blocked"])
-            self.assertEqual(head["unresolved_operation_ids"], [f"reconcile-attempt:{attempt_id}"])
-            self.assertIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
-            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "blocked|已终态"):
+            operation = f"reconcile-attempt:{attempt_id}"
+            self.assertEqual((head["blocked"], head["unresolved_operation_ids"]), (True, [operation]))
+            self.assertNotIn(campaign_id, head["terminal_campaigns"])
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "blocked"):
                 codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+            # 新写 accounting_unresolved 终态被拒（只供历史回放）。
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "仅供历史回放"):
+                codex_upgrade_project_ledger.append_project_event(
+                    fixture["ledger"], operation_id="terminal-accounting", event_type="campaign_terminal",
+                    payload={"campaign_id": campaign_id, "terminal_reason": "accounting_unresolved"}, source_batch_sha256=None,
+                )
+            evidence = root / "provenance-audit.txt"
+            evidence.write_text("official-test 被打断，按同类作业上界估计 3 次请求。\n", encoding="utf-8")
+            arguments = argparse.Namespace(
+                campaign_dir=campaign_dir, operation_id=operation, estimated_count=3, evidence=evidence,
+                reason="被打断作业没有 Job 收据，按上界估计", approve_sha256=None, approved_by=None,
+            )
+            preview = codex_upgrade._accounting_resolve_command(arguments)
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual(preview["resolution_mode"], "estimated_upper_bound")
+            self.assertEqual([item["job_id"] for item in preview["covered_unresolved"]], ["official-test"])
+            arguments.approve_sha256 = preview["review_sha256"]
+            arguments.approved_by = "老板"
+            resolved = codex_upgrade._accounting_resolve_command(arguments)
+            self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["unresolved_operation_ids"], [])
+            self.assertEqual(head["estimated_total"], 3)
+            self.assertEqual(len(head["accounting_resolutions"][campaign_id]), 1)
+            # 证据逐字节随 Campaign 保存；原文件被清理后以同一批准重跑按冻结预览幂等续接，总账不重复写。
+            evidence_copy = campaign_dir / "control" / "accounting" / f"evidence-{preview['evidence']['sha256']}"
+            self.assertEqual(evidence_copy.read_bytes(), evidence.read_bytes())
+            evidence.unlink()
+            rerun = codex_upgrade._accounting_resolve_command(arguments)
+            self.assertEqual((rerun["status"], rerun["batch"]["reused"]), ("resolved", True))
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head["sequence"])
+            # 同一 attempt 重新对账：同一批未决事实已核清，不再判未决，可恢复。
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(again["status"], "recoverable", again.get("decision"))
+            codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+
+    def test_b0_accounting_resolve_precise_when_new_evidence_resolves_and_rejects_misuse(self) -> None:
+        """修好接着跑第 12 项：补回证据后原未决作业已能核清——accounting-resolve 按与对账同一口径精确补账
+        （不接受上界），否则补账入口走不通、重新对账又复用旧 batch，总账永远 blocked；仍无法核清时必须给出上界与证据。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            evidence_root = campaign_dir / "official-evidence"
+            evidence_root.mkdir(mode=0o700)
+            self._write_json(evidence_root / "surface.json", {"records": []})
+            (evidence_root / "surface.json").chmod(0o600)
+            attempt_id = self._b0_orphan_attempt(fixture, evidence_roots=[evidence_root])
+            self.assertEqual(reconciler.reconcile_attempt(campaign_dir, attempt_id)["status"], "paused")
+            operation = f"reconcile-attempt:{attempt_id}"
+
+            def arguments(**overrides: object) -> argparse.Namespace:
+                values: dict[str, object] = dict(
+                    campaign_dir=campaign_dir, operation_id=operation, estimated_count=None, evidence=None,
+                    reason="补回证据后补账", approve_sha256=None, approved_by=None,
+                )
+                values.update(overrides)
+                return argparse.Namespace(**values)
+
+            # 仍无法核清：必须给出上界与证据；不在未决集合的 operation 拒绝。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须以 --estimated-count"):
+                codex_upgrade._accounting_resolve_command(arguments())
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须以 --estimated-count"):
+                codex_upgrade._accounting_resolve_command(arguments(estimated_count=3))
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不在总账未决集合"):
+                codex_upgrade._accounting_resolve_command(arguments(operation_id="reconcile-attempt:not-found"))
+            # 补回证据（夹具内移除无法识别的证据根）后已能核清：按精确入账，不接受上界。
+            (evidence_root / "surface.json").unlink()
+            evidence_root.rmdir()
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不接受 --estimated-count"):
+                codex_upgrade._accounting_resolve_command(arguments(estimated_count=3))
+            preview = codex_upgrade._accounting_resolve_command(arguments())
+            self.assertEqual((preview["resolution_mode"], preview["covered_unresolved"]), ("precise_from_current_evidence", []))
+            self.assertEqual((preview["request"]["status"], preview["evidence"]), ("resolved", None))
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "批准摘要与重算"):
+                codex_upgrade._accounting_resolve_command(arguments(approve_sha256="0" * 64, approved_by="老板"))
+            resolved = codex_upgrade._accounting_resolve_command(
+                arguments(approve_sha256=preview["review_sha256"], approved_by="老板")
+            )
+            self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["unresolved_operation_ids"], [])
+            self.assertNotIn("accounting_resolutions", head)
+            self.assertEqual(reconciler.reconcile_attempt(campaign_dir, attempt_id)["status"], "recoverable")
 
     def test_b0_reconcile_attempt_deadline_expired_records_failure_and_pauses(self) -> None:
         """deadline 到期仍先 metadata-only 入账，再暂停；不废弃阶段、不自动终态。"""

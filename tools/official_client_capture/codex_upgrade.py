@@ -5029,6 +5029,8 @@ def _mutable_command_coordinates(
         "tool-evolution-status",
         # campaign-resume 与延期同类：自持预算控制锁、项目锁与 Campaign 锁，核对静默后写两本账。
         "campaign-resume",
+        # 补账自持 Campaign 锁与总账锁，写一次批准收据与 outbox batch 后推送。
+        "accounting-resolve",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -9923,6 +9925,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     campaign_resume.add_argument("--approve-sha256", help="批准预览的 review_sha256")
     campaign_resume.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
+    accounting_resolve = subparsers.add_parser(
+        "accounting-resolve",
+        help="为账务无法核清的 operation 带证据补账（不带 --approve-sha256 只预览）",
+    )
+    add_campaign_reference(accounting_resolve)
+    accounting_resolve.add_argument("--operation-id", required=True, help="总账未决集合里本 Campaign 的 operation")
+    accounting_resolve.add_argument(
+        "--estimated-count", type=int, help="仍无法核清的未决作业请求数批准上界（按当前证据已能核清时不提供）"
+    )
+    accounting_resolve.add_argument(
+        "--evidence", type=Path, help="补账依据的来源审计文件（绝对路径；给出上界时必须提供）"
+    )
+    accounting_resolve.add_argument("--reason", required=True)
+    accounting_resolve.add_argument("--approve-sha256", help="批准预览的 review_sha256")
+    accounting_resolve.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
 
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
@@ -27858,7 +27875,7 @@ def _official_attempt_import_context(
     except codex_upgrade_project_ledger.ProjectLedgerError as error:
         raise ConfigurationError(f"项目总账重放失败：{error}") from error
     if head.get("blocked"):
-        raise ConfigurationError("项目总账处于 blocked，拒绝官方证据复用导入。")
+        raise ConfigurationError("项目总账处于 blocked，拒绝官方证据复用导入；先在未决 operation 所属 Campaign 以 accounting-resolve 补账。")
     ledger_plan_path = ledger_path / "plan.json"
 
     receipt = {
@@ -33586,7 +33603,8 @@ def campaign_status(
         elif project_ledger_status["blocked"]:
             next_command = (
                 "项目总账 blocked：只允许 accounting_resolved／root_cause_repaired／"
-                "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal"
+                "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal；"
+                "在未决 operation 所属 Campaign 以 accounting-resolve 补账后继续"
             )
     result = {
         "schema_version": "codex-upgrade-status/v2",
@@ -57058,6 +57076,7 @@ def _reject_unparented_formal_write(
         "tool-evolution",
         "tool-evolution-status",
         "campaign-resume",
+        "accounting-resolve",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -57717,7 +57736,7 @@ def _tool_evolution_preview(
         except codex_upgrade_project_ledger.ProjectLedgerError as error:
             raise ConfigurationError(f"项目总账无法重放：{error}") from error
         if head.get("blocked"):
-            raise ConfigurationError("项目总账 blocked，先核清请求账务再登记工具演进。")
+            raise ConfigurationError("项目总账 blocked，先以 accounting-resolve 补清请求账务再登记工具演进。")
 
     # 变化路径：按 Campaign 冻结策略分层，另算 v1 产出侧漂移。
     try:
@@ -58050,9 +58069,11 @@ def _campaign_resume_preview(
         raise ConfigurationError(f"总账终态原因 {terminal['terminal_reason']} 不可恢复（完整性、人工放弃／取代或已完成）。")
     target_version = codex_upgrade_project_ledger.campaign_target_version(head, campaign_id)
     project_at_limit = sorted(codex_upgrade_project_ledger.root_causes_at_limit_for(head, target_version))
-    # 以下三项在对应的隔离能力落地前失败关闭：未决账务、请求预算与环境污染。
+    # 以下三项先各自处理再恢复：未决账务（accounting-resolve）、请求预算（request-budget-extend）与环境污染。
     if head.get("blocked"):
-        raise ConfigurationError(f"项目总账 blocked（未决账务 {head.get('unresolved_operation_ids')}），先处理账务再恢复。")
+        raise ConfigurationError(
+            f"项目总账 blocked（未决账务 {head.get('unresolved_operation_ids')}），先以 accounting-resolve 补账再恢复。"
+        )
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:
         raise ConfigurationError("项目请求预算已耗尽，先批准请求预算延长再恢复。")
@@ -58304,6 +58325,269 @@ def _apply_campaign_resume(
         "project_event": project_event,
         "resume_epoch": int(timing["resume_epoch"]) + 1,
         "next_command": next_steps,
+    }
+
+
+# ---------------------------------------------------------------------------
+# accounting-resolve：为账务无法核清的 operation 带证据补账（修好接着跑第 12 项）
+# ---------------------------------------------------------------------------
+#
+# 此前请求来源无法核清（例如被打断的作业没有 Job 收据，只剩日志）即判 accounting_unresolved 终态，总账 blocked
+# 让所有 Campaign 的对账都终止，也没有生产上的补账入口。现在对账把它判为暂停，由本命令按当前证据复算后补账：
+#   · 原未决作业按当前证据仍无法核清：登记它们的特征摘要，按批准的请求数上界（--estimated-count，附 --evidence
+#     来源审计）入账；之后对账遇到同一批未决事实不再重复判为未决（新证据出现时特征变化，照常重新核算）；
+#   · 原未决作业按当前证据已能核清（例如补回了中继日志）：按与对账同一口径（reconciler.request_accounting）
+#     把未入账的精确身份键与估计来源一并入账，不接受 --estimated-count。
+# 两种情况都写 accounting_resolved 解除该 operation 的 blocked；同一批准重跑按收据冻结的预览幂等续接。
+ACCOUNTING_RESOLUTION_PREVIEW_SCHEMA = "accounting-resolution-preview/v1"
+ACCOUNTING_RESOLUTION_SCHEMA = "accounting-resolution/v1"
+ACCOUNTING_RESOLUTION_DIR = Path("control") / "accounting"
+
+
+def _accounting_resolve_preview(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    operation_id: str,
+    estimated_count: int | None,
+    evidence: Path | None,
+    reason: str,
+) -> dict[str, Any]:
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    if estimated_count is not None and (
+        isinstance(estimated_count, bool) or not isinstance(estimated_count, int) or estimated_count < 0
+    ):
+        raise ConfigurationError("--estimated-count 必须是非负整数（未决作业请求数的批准上界）。")
+    if not reason.strip():
+        raise ConfigurationError("--reason 不得为空。")
+    if evidence is not None:
+        evidence = Path(evidence)
+        if not evidence.is_absolute() or evidence.is_symlink() or not evidence.is_file():
+            raise ConfigurationError("--evidence 必须是可信的绝对路径普通文件（补账依据的来源审计）。")
+    project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if project_root is None:
+        raise ConfigurationError("accounting-resolve 必须在项目总账内进行。")
+    campaign_id = str(manifest["campaign_id"])
+    try:
+        with codex_upgrade_project_ledger.project_lock(project_root):
+            plan, _raw = codex_upgrade_project_ledger._load_plan(project_root)
+            head = codex_upgrade_project_ledger.replay_head(project_root)
+            events = codex_upgrade_project_ledger._load_events(project_root)
+            initial_keys = codex_upgrade_project_ledger._initial_keys(project_root, plan)
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账重放失败：{error}") from error
+    if operation_id not in head["unresolved_operation_ids"]:
+        raise ConfigurationError(f"operation {operation_id} 不在总账未决集合里。")
+    original = next((event for event in events if event["operation_id"] == operation_id), None)
+    # 与总账重放同一口径：原 operation 若有追加式历史更正，按更正后的 payload 判断归属与未决作业。
+    overlays, _audit = codex_upgrade_project_ledger._correction_overlays(events)
+    original_payload = overlays.get(operation_id, original["payload"]) if original is not None else {}
+    if original is None or original_payload.get("campaign_id") != campaign_id:
+        raise ConfigurationError("未决 operation 不属于本 Campaign；只能由所属 Campaign 补账。")
+    original_unresolved = {
+        str(item) for item in (original_payload.get("request") or {}).get("unresolved_job_ids", [])
+    }
+    try:
+        receipt = reconciler.provenance.collect_campaign_provenance(
+            campaign_dir,
+            formal_campaign_id=campaign_id,
+            estimation_policy=str(plan["estimation_policy"]),
+            observed_at_utc=_utc_now(),
+        )
+    except Exception as error:  # 来源核算的各类失败都只意味着本次不能补账
+        raise ConfigurationError(f"来源核算失败：{error}") from error
+    accounting = reconciler.request_accounting(receipt, head=head, initial_keys=initial_keys, campaign_id=campaign_id)
+    entries = {
+        str(item.get("job_id")): item
+        for item in receipt.get("jobs", [])
+        if isinstance(item, Mapping) and item.get("status") == "unresolved"
+    }
+    still_unresolved = sorted(original_unresolved & set(accounting["unresolved_job_ids"]))
+    if any(job_id not in entries for job_id in still_unresolved):
+        raise ConfigurationError("来源核算的未决作业清单与作业条目不一致；先排查来源核算。")
+    covered = [
+        {"job_id": job_id, "signature_sha256": reconciler.unresolved_job_signature(entries[job_id])}
+        for job_id in still_unresolved
+    ]
+    if covered and (estimated_count is None or evidence is None):
+        raise ConfigurationError(
+            f"原 operation 仍有按当前证据无法核清的作业 {still_unresolved}：必须以 --estimated-count 给出请求数批准上界，"
+            "并以 --evidence 附来源审计。"
+        )
+    if not covered and estimated_count is not None:
+        raise ConfigurationError(
+            "原 operation 的未决作业按当前证据已全部核清：按精确入账补账，不接受 --estimated-count。"
+        )
+    sources = [dict(item) for item in accounting["estimated_sources"]]
+    if covered and int(estimated_count or 0) > 0:
+        sources.append(
+            {
+                "source_id": f"{campaign_id}:accounting-resolve:{operation_id}",
+                "job_id": covered[0]["job_id"],
+                "estimated_count": int(estimated_count or 0),
+            }
+        )
+    request = {
+        # 批准上界为 0 且没有其他估计来源，表示未决作业确认未发出请求，按已核清入账。
+        "status": "estimated" if sources else "resolved",
+        "identity_keys": list(accounting["new_keys"]),
+        "estimated_delta": sum(int(item["estimated_count"]) for item in sources),
+        "estimated_sources": sources,
+        # 去掉观测时间的来源核算稳定摘要：任何人在同一证据上复算都得到同一值。
+        "provenance_receipt_sha256": _fingerprint({k: v for k, v in receipt.items() if k != "observed_at_utc"}),
+    }
+    preview = {
+        "schema_version": ACCOUNTING_RESOLUTION_PREVIEW_SCHEMA,
+        "campaign_id": campaign_id,
+        "operation_id": operation_id,
+        "original_payload_sha256": str(original["payload_sha256"]),
+        "resolution_mode": "estimated_upper_bound" if covered else "precise_from_current_evidence",
+        "covered_unresolved": covered,
+        "estimated_count": int(estimated_count) if covered and estimated_count is not None else None,
+        "request": request,
+        "evidence": (
+            {"path": str(evidence), "sha256": file_sha256(evidence)} if evidence is not None else None
+        ),
+        "reason": reason,
+        "project_ledger_head": {"sequence": head["sequence"], "sha256": head["head_sha256"]},
+        "live_request_count": 0,
+    }
+    preview["review_sha256"] = _fingerprint(preview)
+    return preview
+
+
+def _accounting_resolve_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """accounting-resolve：不带 --approve-sha256 只预览；批准后写一次批准收据与 accounting_resolved batch 并推送。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    approval = getattr(arguments, "approve_sha256", None)
+    if approval is not None:
+        # 同一批准重跑：批准收据已落盘时按收据冻结的预览续接（operation 可能已被本批准核清、不再未决，
+        # 不能重算预览），补齐未推送的 batch；已完成则幂等返回。
+        stored_path = campaign_dir / ACCOUNTING_RESOLUTION_DIR / f"resolve-{approval}.json"
+        if stored_path.is_file() and not stored_path.is_symlink():
+            stored = _read_json(stored_path, "补账批准收据")
+            frozen_preview = stored.get("preview")
+            if (
+                stored.get("approved_sha256") != str(approval)
+                or not isinstance(frozen_preview, Mapping)
+                or frozen_preview.get("review_sha256") != str(approval)
+                or _fingerprint({k: v for k, v in frozen_preview.items() if k != "review_sha256"}) != str(approval)
+            ):
+                raise ConfigurationError("既有补账批准收据与批准摘要不一致。")
+            return _apply_accounting_resolution(
+                campaign_dir, manifest, frozen_preview, approved_by=str(stored["approved_by"])
+            )
+    preview = _accounting_resolve_preview(
+        campaign_dir,
+        manifest,
+        operation_id=str(arguments.operation_id),
+        estimated_count=None if arguments.estimated_count is None else int(arguments.estimated_count),
+        evidence=None if arguments.evidence is None else Path(arguments.evidence),
+        reason=str(arguments.reason),
+    )
+    if approval is None:
+        return {
+            "status": "approval_required",
+            **preview,
+            "next_command": "accounting-resolve（同样参数）--approve-sha256 <review_sha256> --approved-by <批准人>",
+        }
+    if str(approval) != preview["review_sha256"]:
+        raise ConfigurationError("批准摘要与重算的补账预览不一致（总账或证据已变化）；重新预览后再批准。")
+    approved_by = str(getattr(arguments, "approved_by", "") or "").strip()
+    if not approved_by:
+        raise ConfigurationError("批准补账必须提供 --approved-by。")
+    return _apply_accounting_resolution(campaign_dir, manifest, preview, approved_by=approved_by)
+
+
+def _apply_accounting_resolution(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    preview: Mapping[str, Any],
+    *,
+    approved_by: str,
+) -> dict[str, Any]:
+    """按"证据副本 → 批准收据 → outbox batch → 推送"顺序幂等写入；任一步中断后以同一批准重跑即续接。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    campaign_id = str(manifest["campaign_id"])
+    operation_id = str(preview["operation_id"])
+    review = str(preview["review_sha256"])
+    evidence = preview.get("evidence")
+    with _campaign_lock(campaign_dir):
+        directory = campaign_dir / ACCOUNTING_RESOLUTION_DIR
+        ensure_private_directory(directory, campaign_dir)
+        evidence_copy: Path | None = None
+        if isinstance(evidence, Mapping):
+            # 证据逐字节复制进 Campaign（按摘要命名、只写一次）：批准依据随 Campaign 保存，原文件之后被清理也可审计。
+            evidence_sha256 = str(evidence["sha256"])
+            evidence_copy = directory / f"evidence-{evidence_sha256}"
+            if not evidence_copy.exists():
+                source = Path(str(evidence["path"]))
+                if source.is_symlink() or not source.is_file() or file_sha256(source) != evidence_sha256:
+                    raise ConfigurationError("补账证据在预览后被移走或改动；重新预览后再批准。")
+                copied = _secure_copy_file_once(source, evidence_copy)
+                if copied["sha256"] != evidence_sha256:
+                    # 复制途中被改动：删掉按预期摘要命名的错误副本，避免之后的重跑被它卡住。
+                    evidence_copy.unlink(missing_ok=True)
+                    raise ConfigurationError("补账证据在复制途中被改动；重新预览后再批准。")
+            elif evidence_copy.is_symlink() or file_sha256(evidence_copy) != evidence_sha256:
+                raise ConfigurationError(f"补账证据副本与预览摘要不一致：{evidence_copy}")
+        receipt_path = directory / f"resolve-{review}.json"
+        if receipt_path.exists():
+            receipt = _read_json(receipt_path, "补账批准收据")
+            if receipt.get("approved_sha256") != review:
+                raise ConfigurationError("既有补账批准收据与本次批准不一致。")
+        else:
+            receipt = {
+                "schema_version": ACCOUNTING_RESOLUTION_SCHEMA,
+                "preview": dict(preview),
+                "approved_sha256": review,
+                "approved_by": approved_by,
+                "approved_at_utc": _utc_now(),
+            }
+            receipt["receipt_sha256"] = _fingerprint(receipt)
+            _secure_write_json_once(receipt_path, receipt)
+    bindings = [reconciler._binding(campaign_dir, receipt_path, "accounting_resolution")]
+    if evidence_copy is not None:
+        bindings.append(reconciler._binding(campaign_dir, evidence_copy, "accounting_resolution_evidence"))
+    try:
+        batch = reconciler._commit_batch(
+            campaign_dir,
+            operation_id=f"accounting-resolved:{operation_id}",
+            event_type="accounting_resolved",
+            payload={
+                "campaign_id": campaign_id,
+                "resolved_operation_id": operation_id,
+                # 预览按与对账同一口径算好的请求部分（精确身份键、未入账估计来源、批准上界），批准后逐字入账。
+                "request": dict(preview["request"]),
+                "covered_unresolved": list(preview["covered_unresolved"]),
+                "resolution_receipt_sha256": str(receipt["receipt_sha256"]),
+            },
+            source={"kind": "accounting_resolution", "sha256": str(receipt["receipt_sha256"])},
+            receipt_bindings=bindings,
+        )
+        project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+        assert project_root is not None
+        pushed, head_after = reconciler._push_and_replay(project_root, campaign_dir, now=_utc_now())
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(f"补账写入失败（以同一批准重跑即续接）：{error}") from error
+    remaining = [str(item) for item in head_after.get("unresolved_operation_ids", [])]
+    return {
+        "status": "resolved",
+        "receipt_path": str(receipt_path),
+        "receipt_sha256": receipt["receipt_sha256"],
+        "batch": batch,
+        "project_push": pushed,
+        "blocked": bool(head_after.get("blocked")),
+        "next_command": (
+            f"总账仍有未决 operation {remaining}：由各自所属 Campaign 逐个 accounting-resolve 后再对账"
+            if remaining
+            else "账务已补齐：重新对账暂停的对象（reconcile-attempt／reconcile-supervisor-run）后续跑"
+        ),
     }
 
 
@@ -58969,6 +59253,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0
         elif command == "campaign-resume":
             result = _campaign_resume_command(arguments)
+            return_code = 0
+        elif command == "accounting-resolve":
+            result = _accounting_resolve_command(arguments)
             return_code = 0
         elif command == "wire-transition-intent":
             result = _wire_transition_intent_command(arguments)

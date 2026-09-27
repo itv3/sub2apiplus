@@ -455,7 +455,8 @@ class ProjectLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "blocked"):
                 _register(root, other, "c2")
             # blocked 白名单：terminal、repair、reconciliation、accounting_resolved 仍可写
-            ledger.append_project_event(ledger_root, operation_id="term-c1", event_type="campaign_terminal", payload={"campaign_id": "c1", "terminal_reason": "accounting_unresolved"}, source_batch_sha256=None)
+            # （修好接着跑第 12 项起 accounting_unresolved 终态不再新写，这里用根因上限终态验证白名单）
+            ledger.append_project_event(ledger_root, operation_id="term-c1", event_type="campaign_terminal", payload={"campaign_id": "c1", "terminal_reason": "root_cause_limit"}, source_batch_sha256=None)
             ledger.append_project_event(ledger_root, operation_id="res-1", event_type="accounting_resolved", payload={"resolved_operation_id": "rec-1", "request": {"status": "resolved", "identity_keys": ["k9"], "estimated_delta": 0, "provenance_receipt_sha256": "b" * 64}}, source_batch_sha256=None)
             self.assertTrue(ledger.replay_head(ledger_root)["blocked"])
             ledger.append_project_event(ledger_root, operation_id="res-2", event_type="accounting_resolved", payload={"resolved_operation_id": "rec-2", "request": {"status": "estimated", "identity_keys": [], "estimated_delta": 3, "provenance_receipt_sha256": "b" * 64}}, source_batch_sha256=None)
@@ -465,6 +466,60 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertEqual(head["root_cause_counts"], {"rc1-a": 1})
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
                 ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+
+    def test_accounting_resolve_new_form_binds_original_unresolved_jobs_and_history_replays(self) -> None:
+        """第 12 项：新形态补账只能核销原 operation 登记的未决作业；历史 accounting_unresolved 终态照常重放、不再新写。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            campaign_dir = _campaign(root, "c1")
+            _register(root, campaign_dir, "c1")
+            with ledger.campaign_ledger_lock(campaign_dir) as ledger_dir:
+                ledger.write_batch(
+                    ledger_dir, operation_id="rec-1", event_type="reconciliation_committed",
+                    payload={"campaign_id": "c1", "request": {"status": "unresolved", "identity_keys": [], "estimated_delta": 0,
+                             "unresolved_job_ids": ["job-a"], "provenance_receipt_sha256": "b" * 64}},
+                    source={"kind": "campaign_event", "sha256": "c" * 64},
+                )
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            self.assertEqual(ledger.replay_head(ledger_root)["unresolved_operation_ids"], ["rec-1"])
+            base = {"campaign_id": "c1", "resolved_operation_id": "rec-1", "resolution_receipt_sha256": "d" * 64,
+                    "request": {"status": "estimated", "identity_keys": [], "estimated_delta": 2,
+                                "estimated_sources": [{"source_id": "c1:accounting-resolve:rec-1", "job_id": "job-a", "estimated_count": 2}],
+                                "provenance_receipt_sha256": "b" * 64}}
+            # 覆盖原 operation 未登记的作业、或归属别的 Campaign：一律拒绝，不落盘。
+            for index, (label, payload) in enumerate((
+                ("外来作业", {**base, "covered_unresolved": [{"job_id": "job-z", "signature_sha256": "e" * 64}]}),
+                ("外来 Campaign", {**base, "campaign_id": "c2", "covered_unresolved": [{"job_id": "job-a", "signature_sha256": "e" * 64}]}),
+                ("特征非法", {**base, "covered_unresolved": [{"job_id": "job-a", "signature_sha256": "短"}]}),
+            )):
+                with self.subTest(label=label), self.assertRaisesRegex(ledger.ProjectLedgerError, "accounting-resolve 补账必须"):
+                    ledger.append_project_event(ledger_root, operation_id=f"bad-{index}", event_type="accounting_resolved", payload=payload, source_batch_sha256=None)
+            ledger.append_project_event(
+                ledger_root, operation_id="res-1", event_type="accounting_resolved",
+                payload={**base, "covered_unresolved": [{"job_id": "job-a", "signature_sha256": "e" * 64}]}, source_batch_sha256=None,
+            )
+            head = ledger.replay_head(ledger_root)
+            self.assertFalse(head["blocked"])
+            self.assertEqual(head["estimated_total"], 32)
+            self.assertEqual(ledger.accounting_resolution_signatures(head, "c1"), {("job-a", "e" * 64)})
+            self.assertEqual(ledger.accounting_resolution_signatures(head, "c2"), set())
+            # 历史事件（本项之前写入的 accounting_unresolved 终态）：绕过追加入口直接落盘，重放照常承认。
+            plan, _raw = ledger._load_plan(ledger_root)
+            events = ledger._load_events(ledger_root)
+            payload = {"campaign_id": "c1", "terminal_reason": "accounting_unresolved"}
+            event = {
+                "schema_version": ledger.EVENT_SCHEMA, "sequence": len(events) + 1, "operation_id": "historic-term",
+                "recorded_at_utc": _iso(datetime.now(timezone.utc)), "event_type": "campaign_terminal", "payload": payload,
+                "payload_sha256": ledger._digest(payload), "source_batch_sha256": None,
+                "previous_event_sha256": events[-1]["event_sha256"],
+            }
+            event["event_sha256"] = ledger._digest(event)
+            ledger._write_once(ledger_root / "events" / f"{event['sequence']:06d}.json", event)
+            self.assertEqual(ledger.replay_head(ledger_root)["terminal_campaigns"]["c1"]["terminal_reason"], "accounting_unresolved")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "仅供历史回放"):
+                ledger.append_project_event(ledger_root, operation_id="new-term", event_type="campaign_terminal", payload=payload, source_batch_sha256=None)
 
     def test_campaign_event_scope_binds_only_this_campaign_state_changing_events(self) -> None:
         """第 16 项：恢复预览的总账绑定只随本 Campaign 的对账、终态、账务解决与对账更正变化。

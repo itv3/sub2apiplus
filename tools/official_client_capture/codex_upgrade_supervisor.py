@@ -10368,7 +10368,7 @@ def _candidate_failure_hits_permanent_condition(
     *,
     failure_class: str,
 ) -> bool:
-    """永久条件保留账务、根因与完整性门禁；墙钟到期与请求预算耗尽（修好接着跑第 14 项）单独暂停。"""
+    """永久条件保留根因与完整性门禁；墙钟到期、请求预算耗尽与账务无法核清（修好接着跑第 12、14 项）单独暂停。"""
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
@@ -10383,8 +10383,6 @@ def _candidate_failure_hits_permanent_condition(
             plan, _raw = project_ledger._load_plan(root)
     except project_ledger.ProjectLedgerError as error:
         raise SupervisorError(f"项目总账重放失败：{error}") from error
-    if head.get("blocked") or head.get("unresolved_operation_ids"):
-        return True
     # 只看本 Campaign 目标版本的根因上限，其他版本项目的记录不再牵连。
     if project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version")):
         return True

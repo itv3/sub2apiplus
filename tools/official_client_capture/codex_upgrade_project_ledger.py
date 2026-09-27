@@ -935,6 +935,8 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "rejected_campaigns": {},
         "terminal_campaigns": {},
         "resumed_campaigns": {},
+        # 修好接着跑第 12 项：accounting-resolve 已核清的未决作业特征（按 Campaign）；对账不再重复判为未决。
+        "accounting_resolutions": {},
         "paused_campaigns": {},
         "effective_absolute_deadline_utc": plan["absolute_deadline_utc"],
         # 修好接着跑第 14 项：有效请求预算＝plan 预算或最近一次批准延长的新预算（只增不减）。
@@ -1009,6 +1011,40 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             request = payload.get("request")
             if not isinstance(request, dict) or request.get("status") == "unresolved":
                 raise ProjectLedgerError("accounting_resolved 必须携带已解析的请求部分")
+            if "resolution_receipt_sha256" in payload:
+                # 修好接着跑第 12 项：accounting-resolve 写的新形态——批准收据、与原未决 operation 同一 Campaign、
+                # 覆盖的未决作业特征（job_id＋特征摘要）形态合法；旧形态（历史补账）按原规则重放。
+                original = next(
+                    (item for item in events if item["operation_id"] == resolved), None
+                )
+                original_payload = correction_overlays.get(resolved, original["payload"]) if original else {}
+                original_request = original_payload.get("request")
+                # 覆盖的作业必须是原 operation 登记的未决作业，不能借补账核销其他 operation 的作业。
+                original_unresolved = set(
+                    original_request.get("unresolved_job_ids", []) if isinstance(original_request, Mapping) else []
+                )
+                # 覆盖清单可为空：原未决作业按新证据已能核清时，请求部分直接带精确身份键入账，无需登记特征。
+                covered = payload.get("covered_unresolved")
+                if (
+                    not isinstance(payload["resolution_receipt_sha256"], str)
+                    or not SHA256_RE.fullmatch(payload["resolution_receipt_sha256"])
+                    or payload.get("campaign_id") != original_payload.get("campaign_id")
+                    or not isinstance(covered, list)
+                    or any(
+                        not isinstance(item, dict)
+                        or set(item) != {"job_id", "signature_sha256"}
+                        or not isinstance(item["job_id"], str)
+                        or item["job_id"] not in original_unresolved
+                        or not SHA256_RE.fullmatch(str(item["signature_sha256"]))
+                        for item in covered
+                    )
+                ):
+                    raise ProjectLedgerError("accounting-resolve 补账必须绑定批准收据、原 operation 的 Campaign 与其登记的未决作业特征")
+                if covered:
+                    state["accounting_resolutions"].setdefault(str(payload["campaign_id"]), []).extend(
+                        {"job_id": item["job_id"], "signature_sha256": item["signature_sha256"], "operation_id": operation_id}
+                        for item in covered
+                    )
             _apply_request_part(state, request, operation_id, "accounting_resolved")
             state["unresolved_operation_ids"].remove(resolved)
         elif event_type == "root_cause_repaired":
@@ -1234,6 +1270,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
     if state["resumed_campaigns"]:
         # 同上：只在出现过 campaign_resumed 时写入。
         head["resumed_campaigns"] = state["resumed_campaigns"]
+    if state["accounting_resolutions"]:
+        # 同上：只在出现过新形态补账时写入。
+        head["accounting_resolutions"] = state["accounting_resolutions"]
     if state["live_request_budget_extensions"]:
         # 同上：只在批准过请求预算延长时写入；剩余请求按有效预算计算。
         head["effective_live_request_budget"] = state["effective_live_request_budget"]
@@ -1324,6 +1363,9 @@ def append_project_event(
         raise ProjectLedgerError(f"事件类型非法：{event_type}")
     if event_type == "campaign_terminal" and payload.get("terminal_reason") == "deadline_wall_clock":
         raise ProjectLedgerError("deadline_wall_clock 仅供历史回放；新预算到期必须暂停")
+    if event_type == "campaign_terminal" and payload.get("terminal_reason") == "accounting_unresolved":
+        # 修好接着跑第 12 项：账务无法核清只暂停，accounting-resolve 补账后继续；历史终态照常重放。
+        raise ProjectLedgerError("accounting_unresolved 仅供历史回放；账务无法核清必须暂停并以 accounting-resolve 补账")
     if event_type == "campaign_terminal" and payload.get("terminal_reason") == "deadline_live_requests":
         # 修好接着跑第 14 项：请求预算耗尽只暂停，批准延长后继续；历史终态照常重放。
         raise ProjectLedgerError("deadline_live_requests 仅供历史回放；请求预算耗尽必须暂停并批准延长")
@@ -1824,6 +1866,15 @@ def campaign_event_scope(root: Path, campaign_id: str) -> dict[str, Any]:
         "event_count": len(rows),
         "last_sequence": rows[-1]["sequence"] if rows else 0,
         "events_sha256": _digest(rows),
+    }
+
+
+def accounting_resolution_signatures(head: Mapping[str, Any], campaign_id: str) -> set[tuple[str, str]]:
+    """本 Campaign 已由 accounting-resolve 核清的未决作业特征（修好接着跑第 12 项）。"""
+
+    return {
+        (str(item["job_id"]), str(item["signature_sha256"]))
+        for item in dict(head.get("accounting_resolutions") or {}).get(campaign_id, [])
     }
 
 
