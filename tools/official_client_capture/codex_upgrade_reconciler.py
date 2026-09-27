@@ -636,8 +636,10 @@ def _recovery_preview_ledger_problems(
     problems: list[str] = []
     if _campaign_event_scope(project_root, campaign_id) != dict(frozen_scope):
         problems.append("预览生成后本 Campaign 在项目总账出现新事件（对账、终态、账务解决或更正），必须重新对账")
-    if head.get("blocked"):
-        problems.append(f"项目总账 blocked：未决账务 {head.get('unresolved_operation_ids')}")
+    blocking = project_ledger.campaign_blocked(head, campaign_id)
+    if blocking:
+        # 第三批 B3-10：只有本 Campaign 或无归属的未决账务才挡消费；其它 Campaign 的账务问题不挡本预览。
+        problems.append(f"项目总账 blocked：未决账务 {blocking}")
     if campaign_id in head.get("terminal_campaigns", {}):
         problems.append("本 Campaign 已在项目总账终态")
     if campaign_id in head.get("paused_campaigns", {}):
@@ -1141,9 +1143,11 @@ def _decide(
         stop(forced_terminal_reason, "对象分类本身不可恢复（不可变控制或证据制品完整性异常）")
     # 修好接着跑第 12 项：账务无法核清只暂停（accounting-resolve 补账后继续），不再写 accounting_unresolved 终态。
     accounting_paused = False
-    if head.get("blocked"):
+    blocking = project_ledger.campaign_blocked(head, campaign_id)
+    if blocking:
+        # 第三批 B3-10：只有本 Campaign 或无归属的未决账务才暂停本 Campaign；其它 Campaign 的未决不计。
         accounting_paused = True
-        reasons.append(f"总账 blocked：{head.get('unresolved_operation_ids')}（暂停：accounting-resolve 补账后继续）")
+        reasons.append(f"总账 blocked：{blocking}（暂停：accounting-resolve 补账后继续）")
     elif request_status == "unresolved":
         accounting_paused = True
         reasons.append("本次请求账务无法确定（暂停：accounting-resolve 补账后继续）")

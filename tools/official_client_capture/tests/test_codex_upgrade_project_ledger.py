@@ -451,9 +451,25 @@ class ProjectLedgerTests(unittest.TestCase):
             for command in sorted(ledger.CONSUMER_COMMANDS):
                 with self.assertRaisesRegex(ledger.ProjectLedgerError, "blocked"):
                     ledger.assert_campaign_admitted(campaign_dir, command=command, require=True)
+            # 第三批 B3-10（第 12 项①）：c1 的未决账务只挡 c1；新 Campaign c2 照常注册、消费者放行、非白名单事件可写。
+            self.assertEqual(
+                (head["unresolved_by_campaign"], head["unresolved_unattributed"], head["blocked_campaigns"]),
+                ({"c1": ["rec-1", "rec-2"]}, [], ["c1"]),
+            )
+            self.assertEqual(ledger.campaign_blocked(head, "c1"), ["rec-1", "rec-2"])
+            self.assertEqual(ledger.campaign_blocked(head, "c2"), [])
             other = _campaign(root, "c2")
-            with self.assertRaisesRegex(ledger.ProjectLedgerError, "blocked"):
-                _register(root, other, "c2")
+            _register(root, other, "c2")
+            for command in sorted(ledger.CONSUMER_COMMANDS):
+                ledger.assert_campaign_admitted(other, command=command, require=True)
+            probe = {
+                "accounting_category": "candidate_readiness_models_probe/v1",
+                "request": {"status": "resolved", "identity_keys": ["probe-key"], "estimated_delta": 0},
+            }
+            ledger.append_project_event(ledger_root, operation_id="probe-c2", event_type="candidate_probe_accounted", payload={"campaign_id": "c2", **probe}, source_batch_sha256=None)
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "总账 blocked，禁止事件"):
+                ledger.append_project_event(ledger_root, operation_id="probe-c1", event_type="candidate_probe_accounted", payload={"campaign_id": "c1", **probe}, source_batch_sha256=None)
+            self.assertEqual(ledger.replay_head(ledger_root)["blocked_campaigns"], ["c1"])
             # blocked 白名单：terminal、repair、reconciliation、accounting_resolved 仍可写
             # （修好接着跑第 12 项起 accounting_unresolved 终态不再新写，这里用根因上限终态验证白名单）
             ledger.append_project_event(ledger_root, operation_id="term-c1", event_type="campaign_terminal", payload={"campaign_id": "c1", "terminal_reason": "root_cause_limit"}, source_batch_sha256=None)
@@ -466,6 +482,48 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertEqual(head["root_cause_counts"], {"rc1-a": 1})
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
                 ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+
+    def test_unattributed_unresolved_blocks_every_campaign_and_helper_fails_closed(self) -> None:
+        """第三批 B3-10：payload 没带 campaign_id 的未决账务进无归属桶，挡注册、消费者与非白名单事件；helper 失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            c1 = _campaign(root, "c1")
+            _register(root, c1, "c1")
+            request = {"status": "unresolved", "identity_keys": [], "estimated_delta": 0, "provenance_receipt_sha256": "b" * 64}
+            ledger.append_project_event(ledger_root, operation_id="anon-1", event_type="reconciliation_committed", payload={"request": request}, source_batch_sha256=None)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(
+                (head["blocked"], head["unresolved_by_campaign"], head["unresolved_unattributed"], head["blocked_campaigns"]),
+                (True, {}, ["anon-1"], []),
+            )
+            self.assertEqual(ledger.campaign_blocked(head, "c1"), ["anon-1"])
+            self.assertEqual(ledger.campaign_blocked(head, "c9"), ["anon-1"])
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "blocked"):
+                ledger.assert_campaign_admitted(c1, command="seal", require=True)
+            c2 = _campaign(root, "c2")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "blocked"):
+                _register(root, c2, "c2")
+            probe = {
+                "accounting_category": "candidate_readiness_models_probe/v1",
+                "request": {"status": "resolved", "identity_keys": ["probe-key"], "estimated_delta": 0},
+            }
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "总账 blocked，禁止事件"):
+                ledger.append_project_event(ledger_root, operation_id="probe-c1", event_type="candidate_probe_accounted", payload={"campaign_id": "c1", **probe}, source_batch_sha256=None)
+            ledger.append_project_event(ledger_root, operation_id="anon-res", event_type="accounting_resolved", payload={"resolved_operation_id": "anon-1", "request": {"status": "resolved", "identity_keys": ["k-anon"], "estimated_delta": 0, "provenance_receipt_sha256": "b" * 64}}, source_batch_sha256=None)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual((head["blocked"], head["unresolved_unattributed"], head["blocked_campaigns"]), (False, [], []))
+            _register(root, c2, "c2")
+            ledger.append_project_event(ledger_root, operation_id="probe-c1", event_type="candidate_probe_accounted", payload={"campaign_id": "c1", **probe}, source_batch_sha256=None)
+            # helper 失败关闭：campaign_id 未知、head 缺归属键（旧格式／mock）、head 声称 blocked 却无未决 ID。
+            scoped = {"blocked": True, "unresolved_operation_ids": ["x"], "unresolved_by_campaign": {"other": ["x"]}, "unresolved_unattributed": []}
+            self.assertEqual(ledger.campaign_blocked(scoped, "mine"), [])
+            self.assertEqual(ledger.campaign_blocked(scoped, "other"), ["x"])
+            self.assertEqual(ledger.campaign_blocked(scoped, None), ["x"])
+            self.assertEqual(ledger.campaign_blocked({"blocked": True, "unresolved_operation_ids": ["x"]}, "mine"), ["x"])
+            self.assertEqual(ledger.campaign_blocked({"blocked": True, "unresolved_operation_ids": [], "unresolved_by_campaign": {}, "unresolved_unattributed": []}, "mine"), ["<unattributed>"])
+            self.assertEqual(ledger.campaign_blocked({"blocked": False}, "mine"), [])
 
     def test_accounting_resolve_new_form_binds_original_unresolved_jobs_and_history_replays(self) -> None:
         """第 12 项：新形态补账只能核销原 operation 登记的未决作业；历史 accounting_unresolved 终态照常重放、不再新写。"""

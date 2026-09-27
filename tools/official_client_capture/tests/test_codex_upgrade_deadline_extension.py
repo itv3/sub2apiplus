@@ -309,6 +309,32 @@ class DeadlineExtensionTests(unittest.TestCase):
             self.assertEqual(decision['decision'],expected)
             self.assertEqual(decision.get('pause_kinds'),kinds)
 
+    def test_decide_accounting_pause_only_for_this_campaign_or_unattributed(self):
+        """第三批 B3-10（第 12 项①）：其它 Campaign 的未决账务不暂停本 Campaign；本 Campaign 或无归属的未决才暂停；
+        campaign_id 未知时失败关闭。"""
+        self.apply(self.preview('stage',now=20,new=900),now=21)
+        self.apply(self.preview('campaign',now=22,new=1200),now=23)
+        with mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock, \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(24)):
+            clock.now.return_value=self.moment(24)
+            deadlines=artifacts.effective_deadlines(self.campaign)
+        summary=timing.inspect_ledger(self.ledger,now=self.at(24))
+        head=project.replay_head(self.project)
+        plan,_=project._load_plan(self.project)
+        def decide(changed, campaign_id):
+            return reconciler._decide(head={**head,**changed},plan=plan,ledger=summary,identity={'unchanged':True},
+                environment_status='restored',campaign_deadline_at_utc=deadlines['total_deadline_at_utc'],
+                root_cause_id='fixture',request_status='resolved',now=self.at(24),campaign_id=campaign_id)
+        other={'blocked':True,'unresolved_operation_ids':['op-other'],'unresolved_by_campaign':{'other':['op-other']},
+               'unresolved_unattributed':[],'blocked_campaigns':['other']}
+        decision=decide(other,'r8-campaign')
+        self.assertEqual((decision['decision'],decision.get('pause_kinds')),('recoverable',None))
+        mine={**other,'unresolved_by_campaign':{'r8-campaign':['op-other']},'blocked_campaigns':['r8-campaign']}
+        self.assertEqual((decide(mine,'r8-campaign')['decision'],decide(mine,'r8-campaign')['pause_kinds']),('paused',['accounting']))
+        anon={**other,'unresolved_by_campaign':{},'unresolved_unattributed':['op-other'],'blocked_campaigns':[]}
+        self.assertEqual(decide(anon,'r8-campaign')['pause_kinds'],['accounting'])
+        self.assertEqual(decide(other,None)['pause_kinds'],['accounting'])
+
     def test_live_deadline_read_does_not_precede_concurrent_event_snapshot(self):
         inspect = timing.inspect_ledger
         def read_after_append(root, *, now=None, **kwargs):

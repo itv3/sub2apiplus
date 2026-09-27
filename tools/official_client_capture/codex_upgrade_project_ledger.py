@@ -707,7 +707,20 @@ def _initial_keys(root: Path, plan: Mapping[str, Any]) -> set[str]:
     return set(keys)
 
 
-def _apply_request_part(state: dict[str, Any], part: Mapping[str, Any], operation_id: str, label: str) -> None:
+def _apply_request_part(
+    state: dict[str, Any],
+    part: Mapping[str, Any],
+    operation_id: str,
+    label: str,
+    *,
+    campaign_id: str | None = None,
+) -> None:
+    """把一次 operation 的请求部分计入总账状态。
+
+    第三批 B3-10（第 12 项①）：未决账务按 ``campaign_id`` 归属到本 Campaign 的桶；payload 没带
+    Campaign 的未决 operation 进无归属桶，对所有 Campaign 生效（失败关闭）。
+    """
+
     status = part.get("status")
     keys = part.get("identity_keys")
     if status not in REQUEST_STATUSES or not isinstance(keys, list) or any(not isinstance(k, str) for k in keys):
@@ -741,6 +754,13 @@ def _apply_request_part(state: dict[str, Any], part: Mapping[str, Any], operatio
     if status == "unresolved":
         if operation_id not in state["unresolved_operation_ids"]:
             state["unresolved_operation_ids"].append(operation_id)
+        bucket = (
+            state["unresolved_by_campaign"].setdefault(campaign_id, [])
+            if isinstance(campaign_id, str) and campaign_id
+            else state["unresolved_unattributed"]
+        )
+        if operation_id not in bucket:
+            bucket.append(operation_id)
 
 
 def _cause_id(value: Any, label: str) -> str:
@@ -947,6 +967,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "deadline_extensions": [],
         "committed_deadline_extensions": {},
         "unresolved_operation_ids": [],
+        # 第三批 B3-10：未决账务按 Campaign 归属；无归属桶挡全部 Campaign。
+        "unresolved_by_campaign": {},
+        "unresolved_unattributed": [],
         "operations": {},
         "repaired_root_causes": [],
         "failure_observations": [],
@@ -957,14 +980,16 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         if operation_id in state["operations"]:
             raise ProjectLedgerError(f"operation_id 重复出现在事件链中：{operation_id}")
         state["operations"][operation_id] = {"event_type": event_type, "payload_sha256": event["payload_sha256"], "sequence": event["sequence"]}
-        blocked = bool(state["unresolved_operation_ids"])
-        if blocked and event_type not in BLOCKED_ALLOWED_EVENTS:
-            raise ProjectLedgerError(f"总账 blocked 期间出现禁止事件：{event_type}")
+        payload = correction_overlays.get(operation_id, event["payload"])
+        # 第三批 B3-10（第 12 项①）：blocked 按事件归属的 Campaign 判——只有本 Campaign 或无归属的未决账务
+        # 才挡该事件；其它 Campaign 的未决账务不再挡整本总账（无归属事件失败关闭，按整本判）。
+        blocking = _state_blocking_unresolved(state, _payload_campaign_id(payload))
+        if blocking and event_type not in BLOCKED_ALLOWED_EVENTS:
+            raise ProjectLedgerError(f"总账 blocked 期间出现禁止事件：{event_type}（未决账务 {blocking}）")
         if event_type in CORRECTION_TARGET_EVENT:
             # 更正事件自身不叠加业务数据；它在本轮重放开始时已将原事件的
             # payload 解释替换为 corrected_payload。
             continue
-        payload = correction_overlays.get(operation_id, event["payload"])
         if event_type == "campaign_registered":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_registered.campaign_id")
             if campaign_id in state["registered_campaigns"]:
@@ -989,7 +1014,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             request = payload.get("request")
             if not isinstance(request, dict):
                 raise ProjectLedgerError("reconciliation_committed 缺少请求部分")
-            _apply_request_part(state, request, operation_id, "reconciliation_committed")
+            _apply_request_part(
+                state, request, operation_id, "reconciliation_committed", campaign_id=_payload_campaign_id(payload)
+            )
             observations, cause_ids = _reconciliation_failures(payload, operation_id)
             for observation in observations:
                 state["failure_observations"].append({"operation_id": operation_id, **observation})
@@ -1047,6 +1074,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                     )
             _apply_request_part(state, request, operation_id, "accounting_resolved")
             state["unresolved_operation_ids"].remove(resolved)
+            _discard_unresolved_attribution(state, resolved)
         elif event_type == "root_cause_repaired":
             for rc in _repair_root_cause_ids(payload, "root_cause_repaired"):
                 state["root_cause_counts"][rc] = 0
@@ -1060,7 +1088,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 raise ProjectLedgerError("candidate_probe_accounted 缺少请求部分")
             if payload.get("accounting_category") != "candidate_readiness_models_probe/v1":
                 raise ProjectLedgerError("candidate_probe_accounted 计量类别非法")
-            _apply_request_part(state, request, operation_id, "candidate_probe_accounted")
+            _apply_request_part(
+                state, request, operation_id, "candidate_probe_accounted", campaign_id=_payload_campaign_id(payload)
+            )
         elif event_type == "campaign_terminal":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_terminal.campaign_id")
             if payload.get("terminal_reason") not in TERMINAL_REASONS:
@@ -1257,6 +1287,13 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "deadline_extensions": state["deadline_extensions"],
         "unresolved_operation_ids": list(state["unresolved_operation_ids"]),
         "blocked": bool(state["unresolved_operation_ids"]),
+        # 第三批 B3-10：未决账务的 Campaign 归属；``blocked`` 仍是"任一未决"（旧读侧不变），
+        # 门禁改用 campaign_blocked() 只看本 Campaign 桶与无归属桶。
+        "unresolved_by_campaign": {
+            campaign: list(ops) for campaign, ops in sorted(state["unresolved_by_campaign"].items()) if ops
+        },
+        "unresolved_unattributed": list(state["unresolved_unattributed"]),
+        "blocked_campaigns": sorted(campaign for campaign, ops in state["unresolved_by_campaign"].items() if ops),
         "operations": state["operations"],
         "live_request_budget": plan["live_request_budget"],
         "remaining_live_requests": (None if budget is None else max(int(budget) - consumed, 0)),
@@ -1382,8 +1419,10 @@ def append_project_event(
             return head, "duplicate"
         if expected_head_sha256 is not None and head["head_sha256"] != expected_head_sha256:
             raise ProjectLedgerError("总账 head 已变化，CAS 失败")
-        if head["blocked"] and event_type not in BLOCKED_ALLOWED_EVENTS:
-            raise ProjectLedgerError(f"总账 blocked，禁止事件：{event_type}")
+        blocking = campaign_blocked(head, _payload_campaign_id(payload_dict))
+        if blocking and event_type not in BLOCKED_ALLOWED_EVENTS:
+            # 第三批 B3-10：只有事件归属的 Campaign（或无归属桶）有未决账务才拒；其它 Campaign 的未决不挡。
+            raise ProjectLedgerError(f"总账 blocked，禁止事件：{event_type}（未决账务 {blocking}）")
         sequence = len(events) + 1
         event = {
             "schema_version": EVENT_SCHEMA,
@@ -1929,6 +1968,53 @@ def root_causes_at_limit_for(head: Mapping[str, Any], target_version: str | None
     return list(head.get("root_causes_at_limit_base", head["root_causes_at_limit"]))
 
 
+def _payload_campaign_id(payload: Mapping[str, Any]) -> str | None:
+    """事件 payload 的 Campaign 归属；没带或非法即无归属。"""
+
+    campaign_id = payload.get("campaign_id") if isinstance(payload, Mapping) else None
+    return campaign_id if isinstance(campaign_id, str) and campaign_id else None
+
+
+def _state_blocking_unresolved(state: Mapping[str, Any], campaign_id: str | None) -> list[str]:
+    """重放中挡住某 Campaign 的未决 operation：本 Campaign 桶 ∪ 无归属桶；归属未知按整本判（失败关闭）。"""
+
+    if not campaign_id:
+        return list(state["unresolved_operation_ids"])
+    own = list(state["unresolved_by_campaign"].get(campaign_id, []))
+    return own + [item for item in state["unresolved_unattributed"] if item not in own]
+
+
+def _discard_unresolved_attribution(state: dict[str, Any], operation_id: str) -> None:
+    """账务解决后把 operation 从归属桶里移除（与 unresolved_operation_ids 同步）。"""
+
+    for ops in state["unresolved_by_campaign"].values():
+        if operation_id in ops:
+            ops.remove(operation_id)
+    if operation_id in state["unresolved_unattributed"]:
+        state["unresolved_unattributed"].remove(operation_id)
+
+
+def campaign_blocked(head: Mapping[str, Any], campaign_id: str | None) -> list[str]:
+    """挡住该 Campaign 的未决账务 operation 清单（第三批 B3-10，第 12 项①）。
+
+    只看本 Campaign 的桶与无归属桶：其它 Campaign 的未决账务不挡本 Campaign。失败关闭：campaign_id 未知、
+    head 缺归属键（旧格式或 mock）、或 head 声称 blocked 却没有任何未决 ID 时，退回整本 blocked 的口径。
+    """
+
+    if not head.get("blocked"):
+        return []
+    by_campaign = head.get("unresolved_by_campaign")
+    unattributed = head.get("unresolved_unattributed")
+    all_ids = [str(item) for item in head.get("unresolved_operation_ids", [])]
+    if not isinstance(by_campaign, Mapping) or not isinstance(unattributed, list) or not campaign_id:
+        return all_ids or ["<unattributed>"]
+    own = [str(item) for item in by_campaign.get(campaign_id, [])]
+    blocking = own + [str(item) for item in unattributed if str(item) not in own]
+    if not blocking and not all_ids:
+        return ["<unattributed>"]
+    return blocking
+
+
 def _blocking_root_causes(
     head: Mapping[str, Any], target_version: str | None, retry_root_cause_ids: list[str] | None
 ) -> list[str]:
@@ -1959,8 +2045,10 @@ def admission_problems(
 
     problems: list[str] = []
     current = now or datetime.now(timezone.utc)
-    if head["blocked"]:
-        problems.append(f"总账 blocked：未决账务 {head['unresolved_operation_ids']}")
+    blocking = campaign_blocked(head, campaign_id)
+    if blocking:
+        # 第三批 B3-10：只有本 Campaign 或无归属的未决账务才挡注册；其它 Campaign 的账务问题不挡新 Campaign。
+        problems.append(f"总账 blocked：未决账务 {blocking}")
     if any(row["scope"] == "project" and not deadline_extension_applied(row, head)
            for row in head.get("deadline_extensions", [])):
         problems.append("项目延期尚未补齐 Campaign 计时账本")
@@ -2559,8 +2647,9 @@ class RuntimeAdmission:
             or current["head_sha256"] != expected_head_sha256
         ):
             raise ProjectLedgerError("probe 入账后项目总账 head 已并发前进，拒绝 reservation")
-        if current["blocked"]:
-            raise ProjectLedgerError("probe 入账后项目总账 blocked，拒绝 reservation")
+        blocking = campaign_blocked(current, str(self.campaign_plan["campaign_id"]))
+        if blocking:
+            raise ProjectLedgerError(f"probe 入账后项目总账 blocked（未决账务 {blocking}），拒绝 reservation")
         remaining = current.get("remaining_live_requests")
         if remaining is not None and remaining <= 0:
             raise ProjectLedgerError("probe 已耗尽项目请求预算，拒绝 reservation")
@@ -2592,8 +2681,9 @@ def _runtime_admission_problems(
         problems.append("Campaign 已终态")
     if campaign_id in head.get("paused_campaigns", {}):
         problems.append("Campaign 预算已暂停")
-    if head["blocked"]:
-        problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
+    blocking = campaign_blocked(head, campaign_id)
+    if blocking:
+        problems.append(f"总账 blocked：{blocking}")
     remaining = head.get("remaining_live_requests")
     if remaining is not None and remaining <= 0:
         problems.append("项目请求预算为 0")
@@ -2740,8 +2830,9 @@ def assert_campaign_admitted(
         if campaign_id in head["terminal_campaigns"]:
             raise ProjectLedgerError(f"{command} 拒绝：Campaign {campaign_id} 已终态：{head['terminal_campaigns'][campaign_id]['terminal_reason']}")
         problems: list[str] = []
-        if head["blocked"]:
-            problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
+        blocking = campaign_blocked(head, campaign_id)
+        if blocking:
+            problems.append(f"总账 blocked：{blocking}")
         if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
             problems.append("项目请求预算为 0")
         at_limit = _blocking_root_causes(head, campaign_target_version(head, campaign_id), retry_root_cause_ids)

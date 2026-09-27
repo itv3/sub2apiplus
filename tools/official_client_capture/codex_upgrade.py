@@ -29200,8 +29200,13 @@ def _official_attempt_import_context(
         head = codex_upgrade_project_ledger.replay_head(ledger_path)
     except codex_upgrade_project_ledger.ProjectLedgerError as error:
         raise ConfigurationError(f"项目总账重放失败：{error}") from error
-    if head.get("blocked"):
-        raise ConfigurationError("项目总账处于 blocked，拒绝官方证据复用导入；先在未决 operation 所属 Campaign 以 accounting-resolve 补账。")
+    blocking = codex_upgrade_project_ledger.campaign_blocked(head, predecessor_campaign_id)
+    if blocking:
+        # 第三批 B3-10：按来源 Campaign 判——只有来源 Campaign 或无归属的未决账务才挡导入。
+        raise ConfigurationError(
+            f"项目总账对来源 Campaign blocked（未决账务 {blocking}），拒绝官方证据复用导入；"
+            "先在未决 operation 所属 Campaign 以 accounting-resolve 补账。"
+        )
     ledger_plan_path = ledger_path / "plan.json"
 
     receipt = {
@@ -35431,6 +35436,8 @@ def _project_ledger_status(campaign_dir: Path, campaign_id: str) -> dict[str, An
         "head_sequence": head["sequence"],
         "head_sha256": head["head_sha256"],
         "blocked": head["blocked"],
+        # 第三批 B3-10：挡住本 Campaign 的未决账务（本 Campaign 桶 ∪ 无归属桶）；其它 Campaign 的未决不计。
+        "blocked_for_campaign": codex_upgrade_project_ledger.campaign_blocked(head, campaign_id),
         "absolute_deadline_utc": plan["absolute_deadline_utc"],
         "live_request_budget": head["live_request_budget"],
         "remaining_live_requests": head["remaining_live_requests"],
@@ -35892,10 +35899,11 @@ def campaign_status(
                 f"{project_ledger_status['campaign_terminal']['terminal_reason']}）；"
                 "只读保留，不得派发、resume、复用或 seal"
             )
-        elif project_ledger_status["blocked"]:
+        elif project_ledger_status.get("blocked_for_campaign", project_ledger_status["blocked"]):
+            # 第三批 B3-10：只有本 Campaign 或无归属的未决账务才挡本 Campaign。
             next_command = (
-                "项目总账 blocked：只允许 accounting_resolved／root_cause_repaired／"
-                "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal；"
+                "项目总账对本 Campaign blocked：只允许 accounting_resolved／root_cause_repaired／"
+                "reconciliation_committed／campaign_terminal，禁止派发、resume、复用与 seal；"
                 "在未决 operation 所属 Campaign 以 accounting-resolve 补账后继续"
             )
     result = {
@@ -60519,8 +60527,12 @@ def _tool_evolution_preview(
             head = codex_upgrade_project_ledger.replay_head(project_root)
         except codex_upgrade_project_ledger.ProjectLedgerError as error:
             raise ConfigurationError(f"项目总账无法重放：{error}") from error
-        if head.get("blocked"):
-            raise ConfigurationError("项目总账 blocked，先以 accounting-resolve 补清请求账务再登记工具演进。")
+        blocking = codex_upgrade_project_ledger.campaign_blocked(head, str(manifest["campaign_id"]))
+        if blocking:
+            # 第三批 B3-10：只看本 Campaign 或无归属的未决账务。
+            raise ConfigurationError(
+                f"项目总账 blocked（未决账务 {blocking}），先以 accounting-resolve 补清请求账务再登记工具演进。"
+            )
 
     # 变化路径：按 Campaign 冻结策略分层，另算 v1 产出侧漂移。
     try:
@@ -60884,9 +60896,11 @@ def _campaign_resume_preview(
     target_version = codex_upgrade_project_ledger.campaign_target_version(head, campaign_id)
     project_at_limit = sorted(codex_upgrade_project_ledger.root_causes_at_limit_for(head, target_version))
     # 以下三项先各自处理再恢复：未决账务（accounting-resolve）、请求预算（request-budget-extend）与环境污染。
-    if head.get("blocked"):
+    blocking = codex_upgrade_project_ledger.campaign_blocked(head, campaign_id)
+    if blocking:
+        # 第三批 B3-10：只看本 Campaign 或无归属的未决账务。
         raise ConfigurationError(
-            f"项目总账 blocked（未决账务 {head.get('unresolved_operation_ids')}），先以 accounting-resolve 补账再恢复。"
+            f"项目总账 blocked（未决账务 {blocking}），先以 accounting-resolve 补账再恢复。"
         )
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:

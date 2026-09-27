@@ -274,6 +274,44 @@ class CampaignResumeTests(unittest.TestCase):
 
 
 
+    def test_campaign_resume_is_scoped_to_this_campaign_unresolved_accounting(self) -> None:
+        """第三批 B3-10（第 12 项①）：其它 Campaign 的未决账务不挡本 Campaign 的 campaign-resume；
+        没带 campaign_id 的未决账务进无归属桶仍挡（失败关闭），补账后恢复。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, _second, _cause = self._stopped(root)
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            regression = self._regression(root)
+            self._fresh_deployment(fixture)
+            ledger_root = fixture["ledger"]
+
+            def request(status: str) -> dict:
+                return {"status": status, "identity_keys": [], "estimated_delta": 0, "estimated_sources": []}
+
+            project_ledger.append_project_event(
+                ledger_root, operation_id="other-unresolved", event_type="reconciliation_committed",
+                payload={"campaign_id": "other-campaign", "request": request("unresolved")}, source_batch_sha256=None,
+            )
+            head = project_ledger.replay_head(ledger_root)
+            self.assertEqual((head["blocked"], head["blocked_campaigns"]), (True, ["other-campaign"]))
+            self.assertEqual(project_ledger.campaign_blocked(head, campaign_id), [])
+            preview = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+            self.assertEqual(preview["status"], "approval_required")
+            project_ledger.append_project_event(
+                ledger_root, operation_id="anon-unresolved", event_type="reconciliation_committed",
+                payload={"request": request("unresolved")}, source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "项目总账 blocked"):
+                codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+            project_ledger.append_project_event(
+                ledger_root, operation_id="anon-resolved", event_type="accounting_resolved",
+                payload={"resolved_operation_id": "anon-unresolved", "request": request("resolved")}, source_batch_sha256=None,
+            )
+            again = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+            self.assertEqual(again["status"], "approval_required")
+
+
 class RequestBudgetExtensionTests(unittest.TestCase):
     """修好接着跑第 14 项：请求预算耗尽只暂停（不再写 deadline_live_requests 终态），批准延长后原对象续跑。"""
 

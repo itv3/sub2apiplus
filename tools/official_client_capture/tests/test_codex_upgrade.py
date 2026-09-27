@@ -20589,18 +20589,29 @@ class CodexUpgradeTest(unittest.TestCase):
             def request(status: str) -> dict:
                 return {"status": status, "identity_keys": [], "estimated_delta": 0, "estimated_sources": []}
 
-            # 其它 Campaign 的未决账务：整本总账 blocked，拒绝消费；账务解决后恢复可消费。
+            # 第三批 B3-10（第 12 项①）：其它 Campaign 的未决账务不再挡本 Campaign 的消费；
+            # 没带 campaign_id 的未决账务进无归属桶，仍挡全部（失败关闭），补账后恢复可消费。
             codex_upgrade_project_ledger.append_project_event(
                 ledger_root, operation_id="other-unresolved", event_type="reconciliation_committed",
                 payload={"campaign_id": "other-campaign", "request": request("unresolved")}, source_batch_sha256=None,
             )
+            self.assertTrue(codex_upgrade_project_ledger.replay_head(ledger_root)["blocked"])
+            self.assertTrue(load()["timing_recovery_event"]["appended"])
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="anon-unresolved", event_type="reconciliation_committed",
+                payload={"request": request("unresolved")}, source_batch_sha256=None,
+            )
             with self.assertRaisesRegex(reconciler.ReconcilerError, "项目总账 blocked"):
                 load()
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="anon-resolved", event_type="accounting_resolved",
+                payload={"resolved_operation_id": "anon-unresolved", "request": request("resolved")}, source_batch_sha256=None,
+            )
             codex_upgrade_project_ledger.append_project_event(
                 ledger_root, operation_id="other-resolved", event_type="accounting_resolved",
                 payload={"resolved_operation_id": "other-unresolved", "request": request("resolved")}, source_batch_sha256=None,
             )
-            self.assertTrue(load()["timing_recovery_event"]["appended"])
+            self.assertIn("timing_recovery_event", load())
 
             # 同版本另一 Campaign 再次入账同一根因：累计达上限，拒绝消费。
             cause_id = fixture["result"]["root_cause"]["root_cause_id"]
