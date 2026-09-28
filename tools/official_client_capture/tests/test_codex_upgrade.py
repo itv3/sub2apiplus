@@ -23045,6 +23045,68 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(supervisor.SupervisorError, "指向同一个 attempt"):
                 supervisor._validate_batched_seal_chain_successor(state, inner, run_dir, other, campaign_dir=campaign_dir)
 
+    def test_b4_7_official_capture_killed_after_reservation_is_followed_by_preview_after_attempt_reconciliation(self) -> None:
+        """B4-1 改法 7（草表 D-01，行 3）：VC-1 采集动作超时、宽限耗尽被强杀（cleanup-window-expired，父兜底诊断）且
+        run 期间已发布官方预约——attempt 未封口属 attempt 中断：reconcile-supervisor-run 拒绝，零请求预览协议要求
+        attempt 对账收据；reconcile-attempt（官方孤儿）入账后 N=2 预览是允许的后继。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-0-completed", phase="VC-0", event_type="stage_completed", next_action="启动 VC-1",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次",
+            )
+            jobs = [job.job_id for job in fixture["jobs"]]
+            capture = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=1, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                    "command": [*self._B4_PREFIX, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                    "item_ids": jobs,
+                }],
+            )
+            preview = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=2, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 600.0,
+                    "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                    "item_ids": jobs,
+                }],
+            )
+            state, run_dir = self._b4_terminal_run(
+                fixture, "d" * 64, inner=capture, reason="SupervisorTimeout", action_id="capture-official", phase="VC-1",
+                diagnostic=("unexpected-error", "SupervisorTimeout", "execution-failure"), started_offset_seconds=-30.0,
+            )
+            for event_type, status, reason in (("action-started", "running", None), ("action-failed", "failed", "cleanup-window-expired")):
+                supervisor._append_event(
+                    run_dir, event_type=event_type, operation="VC-1:capture-official", owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]), campaign_id=str(state["campaign_id"]), phase="VC-1",
+                    job_id="capture-official", status=status, reason=reason, started_at_epoch=float(state["started_at_epoch"]),
+                )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            history = [(state, capture, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "官方 attempt .* 尚未对账.*先执行 reconcile-attempt"):
+                check(preview)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check(preview), history)
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""

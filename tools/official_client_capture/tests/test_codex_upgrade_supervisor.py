@@ -1297,6 +1297,8 @@ class SupervisorTests(unittest.TestCase):
             )
             self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
 
+        # B4-1 改法 7：宽限耗尽强杀（cleanup-window-expired）或诊断不是截止清理时 attempt 可能未封口——不再按诊断
+        # 白名单失败关闭，改为要求父 run 已对账（有预约认 attempt 收据、无预约认 supervisor-run 收据）后承接。
         for event_reason, failure_class in (
             ("cleanup-window-expired", "deadline-expired"),
             ("cleanup-requested-timeout", "execution-failure"),
@@ -1308,10 +1310,18 @@ class SupervisorTests(unittest.TestCase):
                         event_reason=event_reason,
                         failure_class=failure_class,
                     )
-                    with self.assertRaisesRegex(SupervisorError, "父动作诊断漂移|恢复后继"):
-                        supervisor._validate_batched_campaign_history(
-                            successor, [(prior_state, prior_manifest, prior_dir)]
-                        )
+                    history = [(prior_state, prior_manifest, prior_dir)]
+                    campaign_dir = prior_dir.parent / "campaign"
+                    # 协议 8 从后继命令里就知道 Campaign 目录：不传目录参数也按同一目录核对对账收据。
+                    with self.assertRaisesRegex(SupervisorError, "尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"):
+                        supervisor._validate_batched_campaign_history(successor, history)
+                    with self.assertRaisesRegex(SupervisorError, "尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"):
+                        supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+                    self._b4_bind_supervisor_run_reconciliation(
+                        campaign_dir, prior_dir, prior_state, prior_manifest, failure_class=failure_class
+                    )
+                    ordered = supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+                    self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
 
     def test_failed_recovery_preview_is_redispatched_verbatim_as_next_sequence(self) -> None:
         """零请求恢复预览因处理型错误失败后，修复部署即可以 N+1 逐字重派同一预览。
@@ -4559,6 +4569,132 @@ raise SystemExit(9)
                                 "--attempt-id", "att-1"], "item_ids": ["candidate-seal"]}),
             expected,
         )
+
+    def _b4_vc1_capture_prior(
+        self,
+        root: Path,
+        *,
+        stop_reason: str,
+        diagnostic: tuple[str, str, str] | None,
+        message: str = "B4 夹具：错误详情已按脱敏规则省略。",
+        event_reason: str | None = None,
+    ) -> tuple[Path, dict[str, object], dict[str, object], Path, dict[str, object]]:
+        """B4-1 夹具：VC-1 序号 1 的 capture-official 批次按给定终态失败，序号 2 是普通零请求恢复预览。"""
+
+        campaign_dir = root / "campaign"
+        campaign_dir.mkdir(mode=0o700)
+        campaign_id = "campaign-b4-capture"
+        self._write_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id})
+        prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+        checkpoint = {"path": "control/vc/vc-0-checkpoint.json", "sha256": "3" * 64, "phase": "VC-0", "checkpoint_sha256": "4" * 64}
+
+        def manifest(sequence: int, actions: list, execute: list, reuse: list) -> dict[str, object]:
+            return {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": f"vc-1-{sequence:04d}",
+                "batch_sequence": sequence,
+                "batch_sha256": str(sequence + 4) * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": actions,
+                "execute_items": execute,
+                "reuse_items": reuse,
+            }
+
+        prior_manifest = manifest(
+            1,
+            [{
+                "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                "command": [*prefix, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                "item_ids": ["passed-job", "pending-job"],
+            }],
+            ["passed-job", "pending-job"],
+            [],
+        )
+        prior_state, prior_dir = self._b4_failed_run(
+            root, "run-prior", reason=stop_reason, campaign_id=campaign_id,
+            diagnostics=(("capture-official", diagnostic),) if diagnostic is not None else (), message=message,
+            started_actions=("capture-official",),
+        )
+        if event_reason is not None:
+            supervisor._append_event(
+                prior_dir, event_type="action-failed", operation="VC-1:capture-official", owner_pid=os.getpid(),
+                owner_nonce=str(prior_state["owner_nonce"]), campaign_id=campaign_id, phase="VC-1",
+                job_id="capture-official", status="failed", reason=event_reason, started_at_epoch=1000.0, ended_at_epoch=1001.0,
+            )
+        successor = manifest(
+            2,
+            [{
+                "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 3600.0,
+                "command": [*prefix, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                "item_ids": ["pending-job"],
+            }],
+            ["pending-job"],
+            ["passed-job"],
+        )
+        return campaign_dir, prior_state, prior_manifest, prior_dir, successor
+
+    def test_b4_7_official_preview_uses_recovery_failure_criteria_and_reconciled_kill(self) -> None:
+        """B4-1 改法 7（草表 D-01／D-02／D-16）：VC-1 采集失败→零请求预览协议不再按错误类型／文案白名单——非超时分支
+        按恢复链同一判据（处理型失败：失败种类＋类别，不比 message），超时分支只比 error_type／failure_class／failure_kind
+        与事件链的清理完成事实；宽限耗尽强杀（cleanup-window-expired）或诊断不是截止清理时，attempt 可能未封口，改为
+        要求父 run 已对账（有预约认 attempt 收据、无预约认 supervisor-run 收据）。中断种类的诊断与永久失败类仍拒绝。"""
+
+        def check(successor, history, campaign_dir=None):
+            return supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+
+        # ① 非超时分支：子进程自写的 handled-error 诊断（如 EnvironmentContinuityDrift），message 任意。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, state, manifest, run_dir, successor = self._b4_vc1_capture_prior(
+                Path(directory).resolve(), stop_reason="action-failed:capture-official",
+                diagnostic=("handled-error", "EnvironmentContinuityDrift", "execution-failure"),
+            )
+            ordered = check(successor, [(state, manifest, run_dir)])
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+        # ② 超时分支：清理宽限内自行封口，message 不逐字。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, state, manifest, run_dir, successor = self._b4_vc1_capture_prior(
+                Path(directory).resolve(), stop_reason="SupervisorTimeout",
+                diagnostic=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+                message="清理信号：自定义文案。", event_reason="cleanup-requested-timeout",
+            )
+            ordered = check(successor, [(state, manifest, run_dir)])
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+        # ③ 宽限耗尽强杀：父兜底诊断（unexpected-error），attempt 可能未封口——要求父 run 已对账。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, state, manifest, run_dir, successor = self._b4_vc1_capture_prior(
+                Path(directory).resolve(), stop_reason="SupervisorTimeout",
+                diagnostic=("unexpected-error", "SupervisorTimeout", "execution-failure"), event_reason="cleanup-window-expired",
+            )
+            history = [(state, manifest, run_dir)]
+            # 协议 8 从后继命令里就知道 Campaign 目录：不传目录参数也按同一目录核对对账收据。
+            with self.assertRaisesRegex(SupervisorError, "尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"):
+                check(successor, history)
+            with self.assertRaisesRegex(SupervisorError, "尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"):
+                check(successor, history, campaign_dir)
+            self._b4_bind_supervisor_run_reconciliation(campaign_dir, run_dir, state, manifest)
+            ordered = check(successor, history, campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+        # ④ 仍拒绝：中断种类的诊断；超时前序的诊断是永久失败类。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, state, manifest, run_dir, successor = self._b4_vc1_capture_prior(
+                Path(directory).resolve(), stop_reason="action-failed:capture-official",
+                diagnostic=("interrupted", "KeyboardInterrupt", "execution-failure"),
+            )
+            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                check(successor, [(state, manifest, run_dir)], campaign_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, state, manifest, run_dir, successor = self._b4_vc1_capture_prior(
+                Path(directory).resolve(), stop_reason="SupervisorTimeout",
+                diagnostic=("handled-error", "PolicyDrift", "identity-drift"), event_reason="cleanup-requested-timeout",
+            )
+            self._b4_bind_supervisor_run_reconciliation(campaign_dir, run_dir, state, manifest, failure_class="identity-drift")
+            with self.assertRaisesRegex(SupervisorError, "永久失败类"):
+                check(successor, [(state, manifest, run_dir)], campaign_dir)
 
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""

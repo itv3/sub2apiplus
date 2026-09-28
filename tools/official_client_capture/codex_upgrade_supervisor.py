@@ -7380,7 +7380,9 @@ def _validate_batched_official_recovery_preview_successor(
         or "--acknowledge-live-requests" in successor_command
     ):
         raise SupervisorError("VC-1 普通恢复预览动作或零请求边界漂移。")
-    campaign_dir = Path(successor_tail[2])
+    command_campaign_dir = Path(successor_tail[2])
+    # 对账收据与 0-W 用入口传入的 Campaign 目录核对；旧调用不传时退回后继命令里的 --campaign-dir（同一目录）。
+    reconciliation_campaign_dir = Path(campaign_dir) if campaign_dir is not None else command_campaign_dir
 
     prior_actions = prior_manifest.get("actions")
     prior_execute = prior_manifest.get("execute_items")
@@ -7429,7 +7431,7 @@ def _validate_batched_official_recovery_preview_successor(
             "capture-official",
             "run",
             "--campaign-dir",
-            str(campaign_dir),
+            str(command_campaign_dir),
             "--acknowledge-live-requests",
         ]
         or prior_action.get("action_id") != "capture-official"
@@ -7477,7 +7479,7 @@ def _validate_batched_official_recovery_preview_successor(
         # stop receipt 须是看门狗中止本身，capture-official 不得留有失败诊断（留有诊断说明动作先失败，
         # 应按失败终态处理）。run 期间有预约时 0-W 按 attempt 对账收据分流（改法 3）。
         label = "VC-1 普通恢复预览"
-        _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label=label)
+        _require_reconciled_watchdog_parent(prior_state, prior_dir, reconciliation_campaign_dir, label=label)
         if (
             stop.get("event_type") != "watchdog-aborted"
             or not isinstance(stop.get("reason"), str)
@@ -7495,52 +7497,74 @@ def _validate_batched_official_recovery_preview_successor(
         ):
             raise SupervisorError(f"{label}的父 run 被看门狗中止却留有动作失败诊断，按失败终态协议处理。")
         return True
-    # 两种父失败都产生“完整失败 attempt”：capture-official 以非零状态退出；或动作执行截止到期，
-    # 父监督器发出清理信号后 capture-official 在清理宽限内自行封口 attempt 并退出（stop reason
-    # 为 SupervisorTimeout）。宽限耗尽被强杀时 attempt 可能未封口，不属于本协议。
-    timeout_cleanup = stop.get("reason") == "SupervisorTimeout"
+    # B4-1 改法 7（草表 D-01／D-02／D-16）：父失败按终态种类判定，不再按错误类型／文案白名单——
+    # · action-failed（capture-official 以非零状态退出或自写诊断）：与恢复链协议同一处理型失败判据；
+    # · action-timeout：动作执行截止到期，父监督器发出清理信号后 capture-official 在清理宽限内自行封口 attempt 并退出
+    #   （事件链恰一次 cleanup-requested-timeout，诊断为 CampaignCleanupRequested／deadline-expired，不比 message）时
+    #   attempt 已封口，直接承接；宽限耗尽被强杀（cleanup-window-expired）或诊断不是截止清理时 attempt 可能未封口，
+    #   属 attempt 中断，改为要求父 run 已对账（run 期间有预约认 attempt 对账收据，无预约认 supervisor-run 收据）；
+    # · other-exception（父进程其它异常）：同强杀，要求已对账。诊断为永久失败类一律拒绝。
+    label = "VC-1 普通恢复预览"
+    try:
+        facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+    except SupervisorError as error:
+        raise SupervisorError(f"{label}的父 stop receipt 漂移：{error}") from error
+    kind = facts["terminal_kind"] if facts is not None else None
     if (
-        stop.get("event_type") != "failed"
-        or stop.get("reason")
-        not in {"action-failed:capture-official", "SupervisorTimeout"}
+        facts is None
+        or kind not in {"action-failed", "action-timeout", "other-exception"}
+        or (kind == "action-failed" and facts["action_id"] != "capture-official")
+        or stop.get("event_type") != "failed"
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != "VC-1"
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
     ):
-        raise SupervisorError("VC-1 普通恢复预览的父 stop receipt 漂移。")
-
-    diagnostic = _validate_action_diagnostic(
-        _action_diagnostic_path(
-            prior_dir,
-            "capture-official",
-            create_directory=False,
-        ),
-        run_dir=prior_dir,
-        campaign_id=str(prior_state["campaign_id"]),
-        phase="VC-1",
-        action_id="capture-official",
-        owner_pid=owner_pid,
-        owner_nonce=owner_nonce,
-    )
-    if timeout_cleanup:
-        if (
-            diagnostic.get("failure_kind") != "handled-error"
-            or diagnostic.get("error_type") != "CampaignCleanupRequested"
-            or diagnostic.get("failure_class") != "deadline-expired"
-            or diagnostic.get("message")
-            != "父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。"
-            or not _official_capture_cleanup_completed(prior_dir)
-        ):
-            raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+        raise SupervisorError(f"{label}的父 stop receipt 漂移。")
+    diagnostics_dir = prior_dir / "action-diagnostics"
+    if diagnostics_dir.is_symlink():
+        raise SupervisorError(f"{label}的父动作诊断目录不可信。")
+    diagnostic: dict[str, Any] | None = None
+    if diagnostics_dir.is_dir():
+        diagnostic_path = _action_diagnostic_path(prior_dir, "capture-official", create_directory=False)
+        if diagnostic_path.is_symlink() or (diagnostic_path.exists() and not diagnostic_path.is_file()):
+            raise SupervisorError(f"{label}的父动作诊断不可信。")
+        if diagnostic_path.is_file():
+            diagnostic = _validate_action_diagnostic(
+                diagnostic_path,
+                run_dir=prior_dir,
+                campaign_id=str(prior_state["campaign_id"]),
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=owner_pid,
+                owner_nonce=owner_nonce,
+            )
+    if kind == "action-failed":
+        if diagnostic is None:
+            raise SupervisorError(f"{label}的父动作缺少失败诊断。")
+        if not _recovery_preview_retry_failure(diagnostic):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
         return True
     if (
-        diagnostic.get("failure_kind") != "child-returncode"
-        or diagnostic.get("error_type") != "ChildProcessError"
-        or diagnostic.get("message")
-        != "子命令以非零状态退出，未提供进一步的脱敏诊断。"
+        kind == "action-timeout"
+        and diagnostic is not None
+        and diagnostic.get("failure_kind") == "handled-error"
+        and diagnostic.get("error_type") == "CampaignCleanupRequested"
+        and diagnostic.get("failure_class") == "deadline-expired"
+        and _official_capture_cleanup_completed(prior_dir)
     ):
-        raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+        return True
+    if diagnostic is not None and diagnostic.get("failure_class") in PERMANENT_ACTION_FAILURE_CLASSES:
+        raise SupervisorError(f"{label}的父动作诊断是永久失败类 {diagnostic.get('failure_class')}，不能续跑。")
+    _require_failed_parent_reconciled(
+        prior_state,
+        prior_dir,
+        reconciliation_campaign_dir,
+        campaign_id=prior_state.get("campaign_id"),
+        phase="VC-1",
+        prior_manifest=prior_manifest,
+        label=label,
+    )
     return True
 
 
@@ -7884,6 +7908,27 @@ def _verify_failed_official_recovery_parent(
                         f"{label}的父动作诊断是永久失败类 {diagnostic.get('failure_class')}，不能续跑。"
                     )
     # 第 31 项：failed 类终态必须已对账（无预约认 supervisor-run 收据，有预约认每个预约的 attempt 收据）。
+    _require_failed_parent_reconciled(
+        prior_state, prior_dir, campaign_dir, campaign_id=campaign_id, phase=phase, prior_manifest=prior_manifest, label=label
+    )
+
+
+def _require_failed_parent_reconciled(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    campaign_dir: Path | None,
+    *,
+    campaign_id: Any,
+    phase: str,
+    prior_manifest: Mapping[str, Any] | None,
+    label: str,
+) -> None:
+    """第 31 项（B4-1 改法 4）：failed 类终态的父 run 必须已对账。
+
+    run 期间无预约要求 supervisor-run 对账收据与总账 ``reconcile-supervisor-run:<run>`` 绑定；有预约（未完整收口）
+    要求每个预约的 attempt 对账收据与总账 ``reconcile-attempt:<id>`` 绑定（官方或候选侧）。缺 Campaign 目录失败关闭。
+    """
+
     if campaign_dir is None:
         raise SupervisorError(f"{label}：核验父 run {prior_dir.name} 的对账收据需要 Campaign 目录。")
     resolved_campaign = Path(campaign_dir).resolve(strict=True)
