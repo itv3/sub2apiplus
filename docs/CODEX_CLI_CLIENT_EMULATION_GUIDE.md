@@ -2905,8 +2905,9 @@ VC-4～VC-6（候选级阶段）沿用下文“候选级 revision”三分支。
 父 run 转 `running` 四步；**正式序号只由 COMMIT 占用**（序号 1 由 VC-0 在 `campaign.json` 内绑定），
 `batches/` 里没有 COMMIT 的半产物不计入序号并由下一次入口归档。取得执行权前的失败分四类处置：
 P1 prepare 之后、父 run 之前失败（没有父 run）——入口写 `codex-upgrade-staging-abort/v1`（`ABORT`，write-once
-且逐字段内容核对）并自行对账入账（`staging-abort-reconciliation/v1`，根因一律 `staging.abandoned`，维度
-`phase`＋`stage`），序号未占，同序号以新 staging attempt 重新 prepare；
+且逐字段内容核对）并自行对账入账（`staging-abort-reconciliation/v1`；带异常原文与签名的中止记根因 `staging.attempt-failed`，维度
+`phase`＋`stage`＋`error_type`＋`error_signature`；无原文的遗弃与历史收据仍记 `staging.abandoned`，维度 `phase`＋`stage`，旧根因 ID 不变），
+序号未占，同序号以新 staging attempt 重新 prepare；
 P2 父 run `prepared` 后 owner 丢失——monitor 或 reconciler 把它封存为 `aborted_prepared`
 （`prepared-abandoned`，`reconcile-supervisor-run` 归根因 `staging.abandoned`，stage=`parent-run`），同序号重派；
 P3 提交四步中途失败——按 `staging-commit-failed:<step>` 封存为 `aborted_prepared`（根因
@@ -3382,7 +3383,13 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   VC-1／VC-5 零请求预览的快速通道与 seal 链入口条件仍逐字比较动作（协议固定命令形态）。
 - **父 run 被看门狗中止**（`watchdog-aborted`，没有动作诊断）：`reconcile-supervisor-run` 对账（legacy-interruption、无 reservation、
   零请求，收据绑定总账事件）后它是可信终态，批次链审计按失败终态走后继协议（例如补跑批次被中止后接 N+1 零请求恢复预览）；
-  未对账的看门狗中止前序明确拒绝并指向对账入口，中止却留有动作失败诊断的按失败终态协议处理。
+  未对账的看门狗中止前序明确拒绝并指向对账入口；中止却留有动作失败诊断的见下一条。
+- **看门狗中止却留有动作失败诊断**：子进程已写出 `action-diagnostics/action-<id>-failure.json`、父 campaign-run 在追加
+  action-failed 之前丢失，或父进程心跳超时、撞上截止等被中止时，run 维持 `watchdog-aborted`。先对账：run 期间无预约用
+  `reconcile-supervisor-run`（收据 `failure_class` 为诊断有效类），有预约用 `reconcile-attempt`。之后失败动作取诊断动作，按与
+  `failed／action-failed:<诊断动作>` 相同的判据选后继（恢复链动作的处理型失败接 N+1 零请求恢复预览，可恢复类逐字重派，其余同 failed），
+  不走看门狗中止的无诊断承接。诊断不唯一、指向清单外动作、无法重放、是永久失败类、绑定被判漂移或不能按 R2 核对，都失败关闭；
+  对账后诊断才出现或消失，同样失败关闭，须人工核查。
 - **工具部署取代的旧就绪探针会话**：候选就绪 models 探针会话在 dispatch 之后中断（无 receipt），修好工具部署后
   `static_receipt_digest` 改变；只有工具部署派生摘要不同、其余身份字段全等、每个 dispatch 都有 result 且已按 operation 幂等键
   计入总账（`candidate_probe_accounted`）的会话才被视为已取代——只跳过、不改写，新身份另建会话；未入账、缺 dispatch_id、
@@ -3415,7 +3422,7 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   "既有对账收据与当前事实不一致，拒绝覆盖"失败关闭；批次按 operation 复用、账本事件幂等、决策按当前账务重算。
 - **后继协议层失败矩阵（B4-1，含第 31 项）**：失败父 run 的终态种类与失败动作由 `_failed_parent_facts` 统一判定
   （action-failed／超时／中断／其它异常／看门狗／父 run 创建或收尾失败；推断不出失败动作不硬接），协议 3／6／7／14／15 共用；
-  已对账的看门狗中止与 failed 同等对待，run 期间有预约时按 attempt 对账收据分流；恢复链协议要求失败父 run 已对账
+  已对账的看门狗中止与 failed 同等对待（留有动作诊断的按诊断有效类对账），run 期间有预约时按 attempt 对账收据分流；恢复链协议要求失败父 run 已对账
   （无预约认 supervisor-run 收据与总账 `reconcile-supervisor-run:<run>`，有预约认每个预约的 attempt 收据与
   `reconcile-attempt:<id>`；缺 Campaign 目录失败关闭）；协议 7／2 用 `candidate_post_run_recovery_action` 同一判定接受候选零请求
   后处理的 execution-failure；seal 链动作解析识别 canonical 命令；协议 8 改用恢复链失败判据（超时不比 message、强杀由对账收据
@@ -3425,6 +3432,31 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   发生预算暂停，账本只追加 `deadline_extended`／`deadline_paused`，授权核对容许冻结点之后只有这两类事件（前缀仍按 head_sha256
   核对），同一份预览照常授权；出现其它任何事件（对账、根因、阶段、attempt、`campaign_abandoned`）仍要求重新对账。阶段截止已过
   而尚未生成预览时，照旧先延期、再对账（预算暂停期间不接受恢复批准）。
+- **staging 中止根因按原因细分（第 32 项）**：同一 stage 的不同拒因不再累计到同一根因。中止收据带 `error_signature`（es1：对完整
+  异常原文归一化，去掉路径、各类 ID、时间戳、十六进制摘要与数字，集合字面量排序后取摘要），根因码 `staging.attempt-failed` 以
+  `error_type`＋`error_signature` 为维度；同一原因重复仍得到同一 ID，上限保护不削弱。改码表会改变 codes sha，部署前必须紧邻在
+  项目总账写 `root-cause-code-migration/v1` 迁移收据（`migrations/NNNNNN.json`，from／to codes sha 与算法版本逐字、`id_mapping` 为空），
+  写完旧工具即拒绝服务；历史事件与旧 ID 计数不变，新事件按新 ID 计数。
+- **账务未决只是暂停原因（第 32 项之二）**：请求账务无法核清时对账暂停（`pause_kinds` 含 accounting），主根因按环境污染＞工具身份
+  变化＞到期＞中断选取，账务未决不进根因计数。按旧口径把账务未决记成主根因的历史对账，续接时按首次收据的不可变事实重算真实
+  根因，写 `root-cause-reattribution.json` 并在总账追加 `reconciliation_corrected`（原 payload 逐字副本，只替换根因），计数随之移到
+  真实根因；修复证据按对账输出里的真实根因 ID 登记。每个 operation 只能更正一次，已有人工更正且根因对不上时失败关闭。
+- **码表演进不使历史 attempt 失效**：attempt 根因数组里记着写入时的 `codes_sha256`，加载校验比较时忽略该字段（要求存在且格式合法），
+  根因 ID、错误码、步骤与维度仍逐字比较。该校验属 evidence 闭包，变化登记即 Campaign 级 evaluation epoch，已有评估结果零请求重评。
+- **VC-1 官方 seal 链审核类失败（草表 D-10）**：断言包准备、seal 预览、seal 批准以 execution-failure 等收口而 post-run-tooling 判据不成立
+  （典型是导入的零执行 attempt 没有 Job checkpoint）时进入 `stage_review_required`。`reconcile-supervisor-run` 按官方 seal 链幂等合同复核：
+  名实相符、受管脚本或受管 codex_upgrade 直接调用且参数闭合、同一官方 attempt、官方证据未封存、断言包未发布、attempt 未作废或隔离、
+  批准有冻结草案与一致预览。成立即写阶段重放证明并重开 VC-1，N+1 按批次身份重派（只调 timeout 或 argv 也可），只由阶段审核协议
+  承接；不成立时对账文案点名原因。采集批次仍只走 `reconcile-attempt`。
+- **owner 在失败收账前丢失（第 39 项）**：R2 确定性封存为 `failed/action-failed` 的 VC-1～VC-3 阶段审核类失败，由
+  `reconcile-supervisor-run` 调用监督器同一收账函数补写 `stage_abandoned`／`stage_review_required` 后再按阶段审核对账；可恢复类与
+  永久类不补账，行为不变；owner 死在收账中途时续作且两条事件各只一条。
+- **生成器只读重放身份登记与门禁（第 36 项事故后改进、第 40 项）**：以文件摘要作生成器身份、历史收据须按旧身份重放的生成器
+  （ARM64 环境收据、收据终结器、计时账本、门禁收据）改动后，部署边界处的旧摘要必须登记为只读重放身份（只允许重放、不允许生成
+  新收据）；capture-tools 单元测试门禁按承接收据记录的变更集前后提交复算，漏登记即失败并写明要登记的摘要与位置。
+- **一条命令续跑（第 35 项）**：`driver/fix-and-continue.sh <轮次参数文件> [--from <步骤>]` 按部署、部署后核对、实测、工具演进、
+  对账前延期、链尾父 run 对账、目标 attempt 对账、根因修复登记、批准、授权、授权后延期、接受检查、重派的顺序执行，每步幂等、
+  失败即停并给出下一步；账务暂停、环境污染、永久停线、请求预算与需审核一律停下交人，绝不补账、隔离、放弃或强制。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，
