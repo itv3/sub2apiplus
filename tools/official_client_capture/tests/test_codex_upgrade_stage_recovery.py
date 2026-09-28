@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -589,6 +590,262 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
                 )
                 self.assertEqual(closeout["ledger_status"], "stopped", closeout)
                 self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stopped")
+
+
+# 第 39 项：owner 在失败收账前（或收账中途）丢失的父进程替身。独立子进程按夹具同一口径（离线出口、合成证据标签
+# 声明）经原子入口真实派发；动作失败、诊断与 action-failed 生命周期事件都已落盘后 SIGKILL 自身（OOM／被杀的真实
+# 时点），由独立会话里的 monitor 按 R2 确定性封存。杀点：``closeout`` 在失败收账入口；``before-review`` 在收账已写
+# stage_abandoned、正要写 stage_review_required 时。
+_OWNER_LOST_AT_CLOSEOUT = r'''
+import argparse, json, os, signal, sys
+from pathlib import Path
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+from tools.official_client_capture import codex_upgrade as upgrade
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
+from tools.official_client_capture.tests import runtime_egress_fixtures
+
+original = rehearsal._target_evidence_label_declaration_sha256
+original_append = supervisor.timing_ledger.append_event
+
+
+def declaration(target_version, target_scenario, **kwargs):
+    try:
+        return original(target_version, target_scenario, **kwargs)
+    except rehearsal.JobRehearsalReceiptError:
+        return "d" * 64
+
+
+def owner_lost(*_args, **_kwargs):
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def append_until_review(*args, **kwargs):
+    if kwargs.get("event_type") == "stage_review_required":
+        owner_lost()
+    return original_append(*args, **kwargs)
+
+
+values = json.loads(sys.argv[2])
+paths = {"campaign_dir", "state_dir", "predecessor_checkpoint", "action_plan"}
+namespace = argparse.Namespace(**{key: Path(value) if key in paths else value for key, value in values.items()})
+kill_point = (
+    mock.patch.object(supervisor, "_close_failed_campaign_timing_ledger", side_effect=owner_lost)
+    if sys.argv[3] == "closeout"
+    else mock.patch.object(supervisor.timing_ledger, "append_event", side_effect=append_until_review)
+)
+with runtime_egress_fixtures.offline_campaign_egress(), \
+        mock.patch.object(rehearsal, "_target_evidence_label_declaration_sha256", side_effect=declaration), \
+        kill_point:
+    upgrade.compile_and_run_vc_batch(namespace)
+'''
+
+
+class OrphanedStageFailureCloseoutTests(unittest.TestCase):
+    """第 39 项：VC-1～VC-3 的阶段审核类动作失败后 owner 在失败收账前丢失，monitor 按 R2 确定性封存为
+    ``failed／action-failed:<id>``——monitor 按设计不写 Campaign 账本，账本停在 active。修复前对账只按 active 写
+    receipt_passed 并指向"重新派发同一批次"，阶段幂等重派证明只在账本处于阶段审核态时才写，后继协议全部拒绝。
+    修复后对账先以父监督器同一收账函数补齐 stage_abandoned＋stage_review_required，再按既有阶段审核对账。
+    """
+
+    def setUp(self) -> None:
+        self.case = upgrade_tests.CodexUpgradeTest()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+
+    @staticmethod
+    def _plan(root: Path, name: str, action: dict) -> Path:
+        path = root / "action-plans" / f"{name}.json"
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": list(action["item_ids"]),
+            "reuse_item_ids": [], "actions": [action],
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+        return path.resolve(strict=True)
+
+    def _classify_plan(self, root: Path, campaign: Path) -> Path:
+        """受管 CLI 的真实 classify 动作（阶段幂等合同可复核的形态）；夹具 Campaign 的官方证据是合成的，它会失败。"""
+
+        return self._plan(root, "classify", {
+            "action_id": "classify-draft", "operation": "VC-2:classify-draft", "timeout_seconds": 120,
+            "item_ids": ["classify-draft"],
+            "command": [sys.executable, str(Path(upgrade.__file__).resolve()), "classify", "--campaign-dir", str(campaign)],
+        })
+
+    def _declared_failure_plan(self, root: Path, failure_class: str) -> Path:
+        """合成动作：以给定失败类写动作诊断后非零退出（诊断类别由子进程声明，与真实工具异常的 failure_class 同路）。"""
+
+        script = (
+            "import sys\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from tools.official_client_capture import codex_upgrade_supervisor as supervisor\n"
+            "class StageFailure(RuntimeError):\n"
+            "    failure_class = sys.argv[2]\n"
+            "supervisor.write_campaign_run_action_diagnostic(\n"
+            "    failure_kind='handled-error', error=StageFailure('合成阶段失败'), failure_class=sys.argv[2])\n"
+            "sys.exit(1)\n"
+        )
+        return self._plan(root, f"declared-{failure_class}", {
+            "action_id": "vc-2-declared", "operation": "VC-2:declared-failure", "timeout_seconds": 120,
+            "item_ids": ["vc-2-declared"],
+            "command": [sys.executable, "-c", script, str(Path(upgrade.__file__).resolve().parents[2]), failure_class],
+        })
+
+    def _dispatch_owner_lost_at_closeout(self, fixture: dict, sequence: int, plan: Path, *,
+                                         kill_point: str = "closeout") -> Path:
+        """独立子进程经原子入口派发 VC-2 批次，owner 在失败收账入口（或收账中途）被 SIGKILL；等 monitor 封存终态后
+        返回父 run。"""
+
+        arguments = upgrade_tests.CodexUpgradeTest._vc_chain_arguments(fixture, "VC-2", sequence, plan)
+        values = {key: str(value) if isinstance(value, Path) else value for key, value in vars(arguments).items()}
+        repo_root = Path(upgrade.__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [sys.executable, "-c", _OWNER_LOST_AT_CLOSEOUT, str(repo_root), json.dumps(values), kill_point],
+            cwd=repo_root, capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(completed.returncode, -signal.SIGKILL, completed.stdout[-2000:] + completed.stderr[-2000:])
+        runs = [path for path in fixture["state_dir"].glob("run-*")
+                if supervisor._read_state(path).get("phase") == "VC-2"]
+        self.assertEqual(len(runs), 1, runs)
+        run_dir = runs[0]
+        deadline = time.monotonic() + 60.0
+        while supervisor._read_state(run_dir)["state"] not in supervisor.TERMINAL_STATES:
+            self.assertLess(time.monotonic(), deadline, "monitor 未在 60 秒内封存 owner 丢失的父 run")
+            time.sleep(0.2)
+        return run_dir
+
+    @staticmethod
+    def _owner_check_sealed(run_dir: Path) -> bool:
+        return any(event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
+                   for event in supervisor.load_events(run_dir))
+
+    def test_r2_sealed_stage_failure_backfills_review_then_single_protocol_redispatch(self) -> None:
+        """真实 classify 动作失败、owner 在收账前丢失 → monitor R2 封存、账本停在 active → 对账补齐阶段审核收账并按
+        阶段幂等合同写证明、重开 VC-2 → 有且只有阶段审核协议承接 N+1 重派 → N+1 被原子入口接纳并真实执行；
+        重复对账不再补账、不重复写事件；全程零请求。"""
+
+        root = self.base / "r2-classify"
+        root.mkdir(mode=0o700)
+        fixture = self.case._vc_chain_fixture(root)
+        campaign, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+        plan = self._classify_plan(root, campaign)
+        run_dir = self._dispatch_owner_lost_at_closeout(fixture, 2, plan)
+        self.assertEqual(supervisor._read_state(run_dir)["state"], "failed")
+        self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "action-failed:classify-draft")
+        self.assertTrue(self._owner_check_sealed(run_dir))
+        diagnostic = json.loads((run_dir / "action-diagnostics" / "action-classify-draft-failure.json").read_text(encoding="utf-8"))
+        self.assertEqual(diagnostic["failure_class"], "execution-failure")
+        before = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((before["status"], before["active_phase"]), ("active", "VC-2"))
+
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertIn("ledger_closeout_backfill", result, result)
+        self.assertEqual(result["ledger_closeout_backfill"], {
+            "action_id": "classify-draft", "failure_class": "execution-failure",
+            "ledger_status": "stage_review_required", "idempotent": False,
+        })
+        self.assertEqual(result["status"], "recoverable", result)
+        proof = result["stage_replay"]
+        self.assertTrue(proof["allowed"], proof)
+        self.assertEqual((proof["phase"], proof["next_action"]), ("VC-2", "redispatch-same-batch"))
+        self.assertTrue((campaign / "control" / "reconciliation" / f"run-{run_dir.name}" / "stage-replay.json").is_file())
+        events = [event for event, _ in timing._load_events(ledger_dir)]
+        self.assertEqual([event["event_type"] for event in events[len(events) - 3:]],
+                         ["stage_abandoned", "stage_review_required", "receipt_passed"])
+        self.assertEqual(sorted(item["role"] for item in events[-1]["receipts"]),
+                         ["provenance", "reconciliation", "stage_replay"])
+        state = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]),
+                         ("active", "VC-2", "redispatch-same-batch"))
+        head = state["head_sequence"]
+        again = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertNotIn("ledger_closeout_backfill", again)
+        self.assertEqual(again["stage_replay"], proof)
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["head_sequence"], head)
+
+        inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+        prior_state = supervisor._read_state(run_dir)
+        successor = json.loads(json.dumps(inner))
+        successor.update(batch_id="vc-2-0003", batch_sequence=3, batch_sha256="3" * 64)
+        accepted = [name for name, protocol in supervisor._SUCCESSOR_PROTOCOLS
+                    if protocol(prior_state, inner, run_dir, successor, campaign_dir=campaign)]
+        self.assertEqual(accepted, ["stage_review"])
+        again_failed, code = upgrade.compile_and_run_vc_batch(
+            upgrade_tests.CodexUpgradeTest._vc_chain_arguments(fixture, "VC-2", 3, plan)
+        )
+        self.assertEqual((code, again_failed["campaign_run"]["reason"]), (1, "action-failed:classify-draft"), again_failed)
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0003-vc-2.json").is_file())
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stage_review_required")
+        totals = project.replay_head(fixture["ledger"])
+        self.assertEqual((totals["precise_total"], totals["estimated_total"]), (0, 0))
+
+    def test_r2_sealed_after_stage_abandoned_completes_review_once(self) -> None:
+        """owner 在收账中途（已写 stage_abandoned、正要写 stage_review_required）丢失：账本停在"已放弃、未审核"，修复前
+        对账连 receipt_passed 都不写。对账以同一收账函数续作补齐审核，stage_abandoned 与 stage_review_required
+        各只一条，随后按阶段幂等合同写证明并重开阶段。"""
+
+        root = self.base / "r2-mid-closeout"
+        root.mkdir(mode=0o700)
+        fixture = self.case._vc_chain_fixture(root)
+        campaign, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+        run_dir = self._dispatch_owner_lost_at_closeout(
+            fixture, 2, self._classify_plan(root, campaign), kill_point="before-review"
+        )
+        self.assertTrue(self._owner_check_sealed(run_dir))
+        events = [event for event, _ in timing._load_events(ledger_dir)]
+        self.assertEqual(events[-1]["event_type"], "stage_abandoned")
+        self.assertIsNone(timing.inspect_ledger(ledger_dir)["active_phase"])
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertIn("ledger_closeout_backfill", result, result)
+        self.assertEqual(result["ledger_closeout_backfill"]["ledger_status"], "stage_review_required")
+        self.assertTrue(result["stage_replay"]["allowed"], result)
+        events = [event for event, _ in timing._load_events(ledger_dir)]
+        self.assertEqual(sum(event["event_type"] == "stage_abandoned" for event in events), 1)
+        self.assertEqual(sum(event["event_type"] == "stage_review_required" for event in events), 1)
+        state = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]),
+                         ("active", "VC-2", "redispatch-same-batch"))
+
+    def test_r2_sealed_recoverable_and_permanent_failures_keep_existing_paths(self) -> None:
+        """可恢复类（environment-prerequisite）与永久类（evidence-integrity）的 R2 封存不补账、行为不变：前者对账后
+        由环境／后处理重派协议唯一承接，后者照旧永久停线且没有任何后继协议。"""
+
+        for failure_class in ("environment-prerequisite", "evidence-integrity"):
+            with self.subTest(failure_class=failure_class):
+                root = self.base / f"r2-{failure_class}"
+                root.mkdir(mode=0o700)
+                fixture = self.case._vc_chain_fixture(root)
+                campaign, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+                run_dir = self._dispatch_owner_lost_at_closeout(fixture, 2, self._declared_failure_plan(root, failure_class))
+                self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "action-failed:vc-2-declared")
+                self.assertTrue(self._owner_check_sealed(run_dir))
+                result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+                self.assertNotIn("ledger_closeout_backfill", result)
+                self.assertIsNone(result.get("stage_replay"))
+                inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+                prior_state = supervisor._read_state(run_dir)
+                successor = json.loads(json.dumps(inner))
+                successor.update(batch_id="vc-2-0003", batch_sequence=3, batch_sha256="3" * 64)
+                accepted = []
+                for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+                    try:
+                        if protocol(prior_state, inner, run_dir, successor, campaign_dir=campaign):
+                            accepted.append(name)
+                    except supervisor.SupervisorError:
+                        accepted.append(f"{name}:拒绝")
+                if failure_class == "environment-prerequisite":
+                    self.assertEqual(result["status"], "recoverable", result)
+                    self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "active")
+                    self.assertEqual(accepted, ["environment_redispatch"])
+                else:
+                    self.assertEqual(result["status"], "permanent_stop", result)
+                    self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stopped")
+                    self.assertFalse([name for name in accepted if ":" not in name], accepted)
 
 
 if __name__ == "__main__":

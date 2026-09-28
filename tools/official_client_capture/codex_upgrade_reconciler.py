@@ -4313,6 +4313,84 @@ def _backfill_orphaned_action_failure(
     }
 
 
+# 第 39 项：阶段审核阶段（VC-1～VC-3）。这些阶段的非可恢复动作失败由父监督器收账为阶段审核（永久类停线），
+# 阶段幂等重派证明只在账本处于阶段审核态时才写，所以收账缺失时后继协议全部无路。
+ORPHANED_CLOSEOUT_BACKFILL_PHASES = frozenset({"VC-1", "VC-2", "VC-3"})
+
+
+def _backfill_orphaned_failure_closeout(
+    run_dir: Path,
+    campaign_dir: Path,
+    run: Mapping[str, Any],
+    orphan_backfill: Mapping[str, Any] | None,
+    ledger_dir: Path,
+) -> dict[str, Any] | None:
+    """第 39 项：R2 确定性封存的父 run（owner 在账本收口前丢失）补做父监督器本应完成的失败收账。
+
+    monitor 的 R2 只封存 run-local 终态（``failed／action-failed:<id>``），按设计不写 Campaign 账本；前置锁段
+    ``_backfill_orphaned_action_failure`` 只补 post-run-tooling 收据，也不收账。VC-1～VC-3 的非可恢复失败因此让
+    账本停在 active：对账按 active 写 receipt_passed、指向"重新派发同一批次"，却永远不写阶段幂等重派证明，
+    阶段审核协议不可达、其余协议都不认 execution-failure——死路。这里以父监督器同一收账函数
+    （``_close_failed_campaign_timing_ledger``，幂等、可从 stage_abandoned 续作）补齐 owner 本应写下的
+    stage_abandoned＋stage_review_required（根因已达上限或账本已停线时它照旧停线，预算到期照旧暂停），随后
+    沿用既有阶段审核对账：动作幂等合同成立才写证明并由阶段审核协议唯一承接 N+1 重派，不成立留在审核。
+
+    只在同时满足时补做：前置锁段确认是 R2 封存且 owner 已死（``orphan_backfill`` 非 None）；阶段属
+    VC-1～VC-3；有效失败类是阶段审核类——不在可恢复集合（它们的 receipt_passed 与逐字重派协议原本可走），
+    也不在永久集合（完整性类由对账强制停线，其余永久类照旧没有后继协议；两者行为都不变）；账本里还没有
+    本次失败的审核、恢复、停线事件或对账许可。已收口（含对账后已重开的阶段）一律不动，避免对同一次失败
+    重复放弃阶段。看门狗中止（``watchdog-aborted``）不在这里：它没有动作已退出的生命周期事实，归看门狗分支处置。
+    """
+
+    if orphan_backfill is None or run.get("phase") not in ORPHANED_CLOSEOUT_BACKFILL_PHASES:
+        return None
+    failure_class = str(run.get("failure_class"))
+    if (
+        failure_class in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
+        or failure_class in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
+        or failure_class in supervisor.PERMANENT_ACTION_FAILURE_CLASSES
+    ):
+        return None
+    try:
+        facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"R2 封存父 run 的失败事实不可信：{error}") from error
+    if facts is None or facts["action_id"] != orphan_backfill["orphan_facts"]["action_id"]:
+        raise ReconcilerError("R2 封存父 run 的失败动作与孤儿失败身份不一致，不能补做失败收账")
+    prefix = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}"
+    settled_ids = {
+        f"{prefix}-stage-review-required",
+        f"{prefix}-recovery-required",
+        f"{prefix}-stop-the-line",
+        supervisor.candidate_review_event_id(str(facts["failure_digest"])),
+        f"reconcile-run-passed-{run['run_id']}",
+    }
+    try:
+        events = [event for event, _raw in timing_ledger._load_events(ledger_dir)]
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    if any(event.get("event_id") in settled_ids for event in events):
+        return None
+    inner = supervisor._read_json(Path(run_dir) / "campaign-run-manifest.json").get("manifest")
+    if not isinstance(inner, Mapping):
+        raise ReconcilerError("R2 封存父 run 缺少 campaign-run 清单，不能补做失败收账")
+    try:
+        closeout = supervisor._close_failed_campaign_timing_ledger(
+            campaign_dir,
+            inner,
+            failed_action_id=str(facts["action_id"]),
+            failure_class=str(facts["failure_class"]),
+        )
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"R2 封存父 run 的失败收账补做失败：{error}") from error
+    return {
+        "action_id": str(facts["action_id"]),
+        "failure_class": str(facts["failure_class"]),
+        "ledger_status": closeout.get("ledger_status"),
+        "idempotent": bool(closeout.get("idempotent")),
+    }
+
+
 def reconcile_supervisor_run(
     run_dir: Path,
     campaign_dir: Path,
@@ -4342,6 +4420,14 @@ def reconcile_supervisor_run(
         if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
             action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
         run["orphan_facts"] = orphan_backfill["orphan_facts"]
+    # 第 39 项：R2 封存的 VC-1～VC-3 非可恢复失败，先补做 owner 丢失前未完成的失败收账，再按账本现状对账。
+    closeout_backfill = _backfill_orphaned_failure_closeout(
+        resolved_run_dir, campaign_dir, run, orphan_backfill, ledger_dir
+    )
+    if closeout_backfill is not None:
+        # 补做的收账事件按写入时刻记账，晚于入口观察时刻；此后的账本、总账判定都按补账之后的时刻观察，
+        # 否则账本重放会以"检查时间早于最新 event"拒绝。
+        observed = _utc_now()
     ledger = _ledger_facts(ledger_dir, now=observed)
     if (
         ledger.get("status") == "recovery_required"
@@ -4493,6 +4579,9 @@ def reconcile_supervisor_run(
     if failure_observations:
         result["failure_observations"] = failure_observations
         result["root_causes"] = root_causes
+    if closeout_backfill is not None:
+        # 第 39 项：本次对账补做了 owner 丢失前未完成的失败收账（只进命令输出，不进 write-once 收据）。
+        result["ledger_closeout_backfill"] = closeout_backfill
     if decision["decision"] == DECISION_RECOVERABLE:
         result["ledger_events"] = []
         staging = run.get("staging")
