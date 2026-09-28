@@ -4696,6 +4696,74 @@ raise SystemExit(9)
             with self.assertRaisesRegex(SupervisorError, "永久失败类"):
                 check(successor, [(state, manifest, run_dir)], campaign_dir)
 
+    def test_b4_9_unclaimed_failure_message_lists_facts_and_protocol_rejections(self) -> None:
+        """B4-1 改法 9（草表 D-12／D-13／D-15）：没有协议承接时兜底文案带前序事实（run、阶段、序号、终态、失败动作）与
+        每条协议的拒因，并指向对账入口；共享绑定的身份漂移文案以调用协议的 label 开头（不再写死"reservation 前环境恢复"）。"""
+
+        def rewrite_stop(prior_dir: Path, prior_state: dict[str, object], reason: str) -> None:
+            stop_path = prior_dir / "stop-receipt.json"
+            stop_path.chmod(0o600)
+            stop_path.unlink()
+            supervisor._stop_receipt(
+                prior_dir, event_type="failed", reason=reason, detected_at_epoch=1005.0,
+                owner_pid=int(prior_state["owner_pid"]), owner_nonce=str(prior_state["owner_nonce"]),
+                campaign_id=str(prior_state["campaign_id"]), phase="VC-1",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+            history = [(prior_state, prior_manifest, prior_dir)]
+            # 共享绑定的身份漂移文案以调用协议的 label 开头。
+            drifted = copy.deepcopy(successor)
+            drifted["reuse_items"] = ["x"]
+            with self.assertRaisesRegex(SupervisorError, "^环境前提失败对账后只允许原批次内容重派，漂移字段：reuse_items"):
+                supervisor._validate_batched_campaign_history(drifted, history, campaign_dir=campaign_dir)
+            # 不可归类的终态（failed 却带 stopped 的 reason）：兜底文案列出前序事实与每条协议的拒因。
+            rewrite_stop(prior_dir, prior_state, "queue-complete")
+            with self.assertRaises(SupervisorError) as caught:
+                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            message = str(caught.exception)
+            for fragment in (
+                "失败批次只能由唯一直接 v3 恢复后继承接。",
+                "前序 run run-prior",
+                "phase VC-1",
+                "序号 1",
+                "终态 failed（stop receipt 缺失或不可归类）",
+                "各协议拒因：",
+                "evolution_recovery：",
+                "seal_chain：",
+                "environment_redispatch：前序不是可归类的失败终态",
+                "official_recovery_preview：",
+                "candidate_revision：",
+                "attempt_recovery_segment：",
+                "先执行 reconcile-supervisor-run（run 期间无预约）或 reconcile-attempt（有预约）",
+            ):
+                self.assertIn(fragment, message)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+            history = [(prior_state, prior_manifest, prior_dir)]
+            # 超时前序定位不到失败动作（诊断不唯一）：兜底事实与逐字重派协议的拒因都点名"无法定位失败动作"。
+            rewrite_stop(prior_dir, prior_state, "SupervisorTimeout")
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(prior_dir, "other-action", create_directory=True),
+                campaign_id=str(prior_state["campaign_id"]), phase="VC-1", action_id="other-action",
+                owner_pid=int(prior_state["owner_pid"]), owner_nonce=str(prior_state["owner_nonce"]),
+                failure_kind="handled-error", failure_class="environment-prerequisite",
+                error_type="ConfigurationError", message="第二份诊断。",
+            )
+            with self.assertRaises(SupervisorError) as caught:
+                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            message = str(caught.exception)
+            self.assertIn("终态 failed／failed／SupervisorTimeout（种类 action-timeout）", message)
+            self.assertIn("无法定位失败动作（stop reason 不带动作、诊断不唯一或事件链没有 action-started）", message)
+            self.assertIn("environment_redispatch：无法定位失败动作", message)
+
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
 

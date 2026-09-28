@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import contextvars
 import errno
 import fcntl
 import hashlib
@@ -7116,6 +7117,22 @@ def _recovery_predecessor_from_run(
 # ``SupervisorTimeout``）、父进程中断（``KeyboardInterrupt``／``SystemExit``）与其它未捕获异常的终态虽被收账判为
 # 可恢复，却没有任何协议承接（草表 D-04／D-11）。这里统一给出"终态种类＋失败动作"，各协议按种类判定，不再按
 # 异常名或文案白名单；推断不出失败动作的前序不硬接（action_id 为 None，协议返回 False，兜底文案说明）。
+# B4-1 改法 9（草表 D-12）：入口逐条尝试后继协议时收集每条协议的拒因，兜底文案据此说明为何没有协议承接。
+# 协议函数返回 False 的入口处改调 _protocol_reject(原因)；入口循环外（协议函数被单独调用）它只返回 False。
+_PROTOCOL_REJECTIONS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "codex_upgrade_supervisor_protocol_rejections", default=None
+)
+
+
+def _protocol_reject(reason: str) -> bool:
+    """登记一条协议拒因并返回 False（形态不符、交给下一条协议）。"""
+
+    rejections = _PROTOCOL_REJECTIONS.get()
+    if rejections is not None:
+        rejections.append(reason)
+    return False
+
+
 FAILED_PARENT_TERMINAL_KINDS = frozenset(
     {
         "action-failed",  # stop reason action-failed:<id>（预检漂移、动作非零退出、RuntimeEgressPaused）
@@ -7352,7 +7369,7 @@ def _validate_batched_official_recovery_preview_successor(
         or len(successor_actions) != 1
         or not isinstance(successor_actions[0], Mapping)
     ):
-        return False
+        return _protocol_reject("后继不是 VC-1 序号 2 的单动作批次")
     successor_action = successor_actions[0]
     successor_command = successor_action.get("command")
     if (
@@ -7360,7 +7377,7 @@ def _validate_batched_official_recovery_preview_successor(
         or successor_command.count("resume") != 1
         or successor_command.count("--preview-recovery") != 1
     ):
-        return False
+        return _protocol_reject("后继命令不是 resume --preview-recovery 零请求预览")
 
     resume_index = successor_command.index("resume")
     successor_prefix = successor_command[:resume_index]
@@ -7638,7 +7655,7 @@ def _validate_batched_official_recovery_preview_retry_successor(
         or not isinstance(prior_actions[0], Mapping)
         or prior_actions[0].get("action_id") != _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID
     ):
-        return False
+        return _protocol_reject("前序不是单动作的 VC-1 普通恢复预览批次")
     prior_action = prior_actions[0]
     command = prior_action.get("command")
     if (
@@ -7991,7 +8008,7 @@ def _validate_batched_official_recovery_run_retry_successor(
         or not isinstance(prior_actions[0], Mapping)
         or prior_actions[0].get("action_id") != _OFFICIAL_RECOVERY_RUN_ACTION_ID
     ):
-        return False
+        return _protocol_reject("前序不是单动作的 VC-1 真实补跑批次")
     prior_action = prior_actions[0]
     command = prior_action.get("command")
     if (
@@ -8359,10 +8376,10 @@ def _validate_batched_candidate_recovery_preview_successor(
         or successor_action is None
         or successor_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
     ):
-        return False
+        return _protocol_reject("前序不是单动作 VC-5 批次，或后继不是候选零请求恢复预览")
     parent = candidate_capture_run_identity(prior_action.get("command"))
     if parent is None:
-        return False
+        return _protocol_reject("前序动作不是普通 capture-candidate run")
     prefix, campaign, identity = parent
     expected = {
         "action_id": CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
@@ -8407,7 +8424,7 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
         or prior_action is None
         or prior_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
     ):
-        return False
+        return _protocol_reject("前序不是单动作的 VC-5 候选恢复预览批次")
     if (
         prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION
         or _candidate_recovery_command_identity(prior_action.get("command"), preview=True) is None
@@ -8446,7 +8463,7 @@ def _validate_batched_candidate_recovery_run_retry_successor(
         or prior_action is None
         or prior_action.get("action_id") != CANDIDATE_RECOVERY_RUN_ACTION_ID
     ):
-        return False
+        return _protocol_reject("前序不是单动作的 VC-5 候选真实补跑批次")
     parsed = _candidate_recovery_command_identity(prior_action.get("command"), preview=False)
     if parsed is None or prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION:
         raise SupervisorError("VC-5 补跑失败后的预览：父动作不是按预览的候选真实补跑。")
@@ -8620,13 +8637,13 @@ def _validate_batched_evolution_recovery_successor(
         or successor_action is None
         or successor_action.get("action_id") != preview_action_id
     ):
-        return False
+        return _protocol_reject("阶段不在 VC-1／VC-5，或后继不是单动作零请求恢复预览")
     prior_actions = prior_manifest.get("actions")
     if not isinstance(prior_actions, list) or not prior_actions:
-        return False
+        return _protocol_reject("前序批次没有动作")
     targets = [_seal_chain_attempt_target(action) for action in prior_actions]
     if any(target is None for target in targets):
-        return False
+        return _protocol_reject("前序动作不全是 seal 链（含 canonical）动作")
     label = f"{phase} 工具演进作废后的续跑预览"
     if len(set(targets)) != 1:
         raise SupervisorError(f"{label}：父 seal 链批次的动作指向多个 attempt。")
@@ -8731,15 +8748,15 @@ def _validate_batched_seal_chain_successor(
         or successor_manifest.get("phase") != phase
         or successor_manifest.get("actions") == prior_manifest.get("actions")
     ):
-        return False
+        return _protocol_reject("阶段不在 VC-1／VC-5／VC-6，或后继动作与前序逐字相同（逐字重派交给环境／后处理重派协议）")
     prior_actions = prior_manifest.get("actions")
     successor_actions = successor_manifest.get("actions")
     if not isinstance(prior_actions, list) or not prior_actions or not isinstance(successor_actions, list) or not successor_actions:
-        return False
+        return _protocol_reject("前序或后继批次没有动作")
     prior_targets = {_seal_chain_attempt_target(action) for action in prior_actions}
     successor_targets = {_seal_chain_attempt_target(action) for action in successor_actions}
     if None in prior_targets or None in successor_targets:
-        return False
+        return _protocol_reject("前序或后继含非 seal 链（含 canonical）动作")
     label = f"{phase} seal 链续派"
     if len(prior_targets) != 1 or successor_targets != prior_targets:
         raise SupervisorError(f"{label}：后继 seal 链动作必须与失败批次指向同一个 attempt。")
@@ -8832,10 +8849,10 @@ def _validate_batched_environment_redispatch_successor(
     # 唯一失败动作，与 action-failed 同样进入本协议；定位不到动作的前序不硬接（返回 False）。
     facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS:
-        return False
+        return _protocol_reject("前序不是可归类的失败终态")
     action_id = facts["action_id"]
     if action_id is None:
-        return False
+        return _protocol_reject("无法定位失败动作")
     stop = facts["stop"]
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
@@ -8846,7 +8863,7 @@ def _validate_batched_environment_redispatch_successor(
         or not isinstance(owner_nonce, str)
         or not owner_nonce
     ):
-        return False
+        return _protocol_reject("前序 owner 身份非法")
     diagnostic_path = prior_dir / "action-diagnostics" / (
         f"action-{action_id}-failure.json"
     )
@@ -8858,14 +8875,14 @@ def _validate_batched_environment_redispatch_successor(
         # 看门狗中止的合法后继不止逐字重派（采集批次中止后改派零请求恢复预览走协议 8），所以后继与前序
         # 批次身份不同时交给后面的协议，而不是在这里失败关闭。
         if _redispatch_identity_drift(prior_manifest, successor_manifest):
-            return False
+            return _protocol_reject("后继与前序批次身份不同（不是同一批次的重派）")
         watchdog_facts = _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label="环境前提失败")
         if watchdog_facts.get("reservation_exists") is not False or diagnostic_path.is_symlink() or diagnostic_path.exists():
-            return False
+            return _protocol_reject("看门狗中止的 run 期间有预约或留有诊断（属 attempt 中断）")
         effective_class = "legacy-interruption"
     else:
         if diagnostic_path.is_symlink() or not diagnostic_path.is_file():
-            return False
+            return _protocol_reject("失败动作没有诊断")
         diagnostic = _validate_action_diagnostic(
             diagnostic_path,
             run_dir=prior_dir,
@@ -8900,7 +8917,7 @@ def _validate_batched_environment_redispatch_successor(
             effective_class == "execution-failure"
             and candidate_post_run_recovery_action(prior_manifest, action_id) is not None
         ):
-            return False
+            return _protocol_reject(f"有效失败类 {effective_class} 不可逐字重派")
         # B4-1 改法 8（草表 D-03）：reservation 之后的失败属 attempt 中断——reconcile-supervisor-run 拒绝这类 run，
         # 本协议（"reservation 前"）让位给恢复链协议（按 attempt 对账收据承接），不再形态相符即失败关闭；没有
         # Campaign 目录时无法判断预约，保持原判定。
@@ -8911,7 +8928,7 @@ def _validate_batched_environment_redispatch_successor(
                 Path(campaign_dir).resolve(strict=True), float(prior_state.get("started_at_epoch", 0.0))
             )
         ):
-            return False
+            return _protocol_reject("reservation 之后的失败属 attempt 中断，交给恢复链协议")
 
     if (
         stop.get("event_type") != ("watchdog-aborted" if watchdog else "failed")
@@ -9346,12 +9363,15 @@ def _validate_candidate_revision_successor(
 
     # B4-1 改法 2：已对账的看门狗中止与 failed 同等对待（看门狗中止在下方先过 0-W）。
     if prior_state.get("state") not in FAILED_TERMINAL_STATES:
-        return False
+        return _protocol_reject("前序不是 failed／已对账的看门狗中止终态")
     # B4-1 改法 1：候选级失败按"终态种类＋失败动作"入口——超时／中断／其它异常的终态能定位到失败动作时同样
     # 可作废候选开新 revision；定位不到动作的前序不硬接。
     facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
-        return False
+        return _protocol_reject(
+            "无法定位失败动作" if facts is not None and facts["terminal_kind"] in FAILED_PARENT_ACTION_KINDS
+            else "前序不是动作类失败终态"
+        )
     prior_phase = str(prior_manifest.get("phase", ""))
     prior_revision = prior_manifest.get("candidate_revision")
     prior_candidate = prior_manifest.get("candidate_id")
@@ -9369,7 +9389,7 @@ def _validate_candidate_revision_successor(
         or not isinstance(successor_candidate, str)
         or successor_candidate == prior_candidate
     ):
-        return False
+        return _protocol_reject("前序不是候选级阶段批次，或后继不是新 revision 新候选的 VC-4 批次")
     label = "候选 revision 后继"
     if campaign_dir is None:
         raise SupervisorError(f"{label}必须绑定 Campaign 目录。")
@@ -9565,19 +9585,22 @@ def _validate_evaluation_baseline_successor(
 
     # B4-1 改法 2：已对账的看门狗中止与 failed 同等对待（看门狗中止在下方先过 0-W）。
     if prior_state.get("state") not in FAILED_TERMINAL_STATES:
-        return False
+        return _protocol_reject("前序不是 failed／已对账的看门狗中止终态")
     stop_path = prior_dir / "stop-receipt.json"
     # B4-1 改法 1：评估动作以超时／中断／其它异常终止时同样按定位到的失败动作进入本协议。
     facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
-        return False
+        return _protocol_reject(
+            "无法定位失败动作" if facts is not None and facts["terminal_kind"] in FAILED_PARENT_ACTION_KINDS
+            else "前序不是动作类失败终态"
+        )
     action_id = str(facts["action_id"])
     prior_action = next(
         (item for item in prior_manifest.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == action_id),
         None,
     )
     if prior_action is None or _evaluation_action_kind(list(prior_action.get("command", []))) is None:
-        return False
+        return _protocol_reject("失败动作不是评估动作（断言 builder／compare／accept）")
     successor_baseline = successor_manifest.get("evaluation_baseline")
     if (
         prior_manifest.get("phase") != "VC-5"
@@ -9586,7 +9609,7 @@ def _validate_evaluation_baseline_successor(
         or not manifest_has_candidate_binding(successor_manifest)
         or successor_baseline is None
     ):
-        return False
+        return _protocol_reject("不是 VC-5 候选级批次，或后继未开新评估基线")
     label = "评估基线后继"
     if isinstance(successor_baseline, bool) or not isinstance(successor_baseline, int) or successor_baseline < 1:
         raise SupervisorError(f"{label}：后继清单 evaluation_baseline 非法。")
@@ -9601,7 +9624,7 @@ def _validate_evaluation_baseline_successor(
         # 修好接着跑第 9 项：同候选同 revision 同基线不是"开新评估基线"，而是 b≥1 评估批次失败后的
         # 重派（例如环境前提失败或动作执行前评估器摘要变化），交给逐字重派等其它协议判定；此前在
         # 这里失败关闭，b≥1 的评估批次连环境失败都无法重派。
-        return False
+        return _protocol_reject("同候选同 revision 同基线不是开新基线（交给重派协议）")
     if (
         successor_manifest.get("candidate_id") != candidate_id
         or successor_manifest.get("candidate_revision") != revision
@@ -9913,11 +9936,14 @@ def _validate_attempt_recovery_segment_successor(
     # B4-1 改法 1：恢复段 run 以超时／中断／其它异常终止时同样按定位到的失败动作进入本协议。
     facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS or facts["action_id"] is None:
-        return False
+        return _protocol_reject(
+            "无法定位失败动作" if facts is not None and facts["terminal_kind"] in FAILED_PARENT_ACTION_KINDS
+            else "前序不是动作类失败终态"
+        )
     action_id = str(facts["action_id"])
     prior_revision = _attempt_recovery_run_revision(prior_manifest, action_id)
     if prior_revision is None:
-        return False
+        return _protocol_reject("失败动作不是恢复段 run（--attempt-recovery ar<k>）")
     if campaign_dir is None:
         raise SupervisorError("后继恢复段批次必须绑定 Campaign 目录。")
     # B4-1 改法 2：已对账的看门狗中止（段预约后由 attempt 对账收据分流，改法 3）与 failed 同等对待。
@@ -10177,7 +10203,8 @@ def _validate_reconciled_redispatch_binding(
             _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
         drifted.append("evaluator_digests")
     if drifted:
-        raise SupervisorError(_redispatch_drift_message("reservation 前环境恢复只允许原批次内容重派", drifted))
+        # B4-1 改法 9（草表 D-13）：前缀按调用协议的 label，不再写死"reservation 前环境恢复"。
+        raise SupervisorError(_redispatch_drift_message(f"{label}对账后只允许原批次内容重派", drifted))
     return True
 
 
@@ -10335,10 +10362,10 @@ def _validate_batched_stage_review_successor(
     phase = prior_manifest.get("phase")
     candidate_stage = phase in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
     if campaign_dir is None or (phase not in {"VC-1", "VC-2", "VC-3"} and not candidate_stage):
-        return False
+        return _protocol_reject("缺 Campaign 目录，或阶段不适用阶段审核重派")
     proof_path = campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "stage-replay.json"
     if not proof_path.exists():
-        return False
+        return _protocol_reject("没有 stage-replay.json（阶段审核尚未许可重派）")
     proof = _read_json(proof_path)
     facts = campaign_run_failure_facts(prior_dir, campaign_dir=campaign_dir)
     # B4-1 改法 2：state 判断与其它协议同口径；看门狗中止没有收账、reconciler 不为它写 stage-replay，
@@ -10491,10 +10518,10 @@ def _validate_batched_parent_finalize_redispatch_successor(
 
     stop_path = prior_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
-        return False
+        return _protocol_reject("stop receipt 缺失")
     stop = read_stop_receipt(prior_dir)
     if stop.get("reason") != PARENT_FINALIZE_LOST_REASON:
-        return False
+        return _protocol_reject("stop reason 不是 parent-finalize-lost")
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
     if (
@@ -10547,10 +10574,10 @@ def _validate_batched_parent_start_redispatch_successor(
 
     stop_path = prior_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
-        return False
+        return _protocol_reject("stop receipt 缺失")
     stop = read_stop_receipt(prior_dir)
     if stop.get("reason") != PARENT_START_FAILED_REASON:
-        return False
+        return _protocol_reject("stop reason 不是 parent-start-failed")
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
     if (
@@ -10590,6 +10617,26 @@ def _validate_batched_parent_start_redispatch_successor(
         effective_class=PARENT_START_FAILED_REASON,
         label="父启动失败",
     )
+
+
+# B4-1 改法 9：后继协议的固定尝试顺序（与草表第一节"协议尝试顺序"一致），名字进兜底文案的拒因清单。
+_SUCCESSOR_PROTOCOLS: tuple[tuple[str, Any], ...] = (
+    ("evolution_recovery", _validate_batched_evolution_recovery_successor),
+    ("seal_chain", _validate_batched_seal_chain_successor),
+    ("stage_review", _validate_batched_stage_review_successor),
+    ("parent_start", _validate_batched_parent_start_redispatch_successor),
+    ("parent_finalize", _validate_batched_parent_finalize_redispatch_successor),
+    ("evaluation_baseline", _validate_evaluation_baseline_successor),
+    ("environment_redispatch", _validate_batched_environment_redispatch_successor),
+    ("official_recovery_preview", _validate_batched_official_recovery_preview_successor),
+    ("official_recovery_preview_retry", _validate_batched_official_recovery_preview_retry_successor),
+    ("official_recovery_run_retry", _validate_batched_official_recovery_run_retry_successor),
+    ("candidate_recovery_preview", _validate_batched_candidate_recovery_preview_successor),
+    ("candidate_recovery_preview_retry", _validate_batched_candidate_recovery_preview_retry_successor),
+    ("candidate_recovery_run_retry", _validate_batched_candidate_recovery_run_retry_successor),
+    ("candidate_revision", _validate_candidate_revision_successor),
+    ("attempt_recovery_segment", _validate_attempt_recovery_segment_successor),
+)
 
 
 def _unclaimed_failed_batch_message(
@@ -10780,179 +10827,30 @@ def _validate_batched_campaign_history(
             and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
         ):
             continue
-        # 修好接着跑第 21 项：必须先于环境／post-run-tooling 逐字重派协议匹配——后者一旦认出可恢复的
-        # seal 链失败就只接受逐字重派，而 attempt 作业已被工具演进作废时逐字重派必然再败。
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_evolution_recovery_successor(
-                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
-            )
-        ):
+        # B4-1 改法 9：15 条后继协议按 _SUCCESSOR_PROTOCOLS 的固定顺序逐条尝试（顺序即原有的 if 链：工具演进作废
+        # 续跑预览必须先于环境／post-run-tooling 逐字重派——后者一旦认出可恢复的 seal 链失败就只接受逐字重派，而
+        # attempt 作业已被工具演进作废时逐字重派必然再败；seal 链非逐字续派先于逐字重派协议…），任一返回 True 即
+        # 通过；每条协议返回 False 时登记的拒因收进兜底文案。
+        rejections: list[str] = []
+        accepted = False
+        if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            for name, protocol in _SUCCESSOR_PROTOCOLS:
+                token = _PROTOCOL_REJECTIONS.set([])
+                try:
+                    accepted = bool(
+                        protocol(state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir)
+                    )
+                    reasons = list(_PROTOCOL_REJECTIONS.get() or [])
+                finally:
+                    _PROTOCOL_REJECTIONS.reset(token)
+                if accepted:
+                    break
+                rejections.append(f"{name}：{'；'.join(reasons) if reasons else '形态不符'}")
+        if accepted:
             continue
-        # 修好接着跑第 15 项：失败的 seal 链批次（已按 post-run-tooling 对账）之后，同一 attempt 的非逐字 seal 链
-        # 批次（例如预览变化后重新预览）；逐字相同的后继仍交给下方逐字重派协议。
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_seal_chain_successor(
-                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_stage_review_successor(
-                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_parent_start_redispatch_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_parent_finalize_redispatch_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_evaluation_baseline_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_environment_redispatch_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_official_recovery_preview_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_official_recovery_preview_retry_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_official_recovery_run_retry_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_candidate_recovery_preview_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_candidate_recovery_preview_retry_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_batched_candidate_recovery_run_retry_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_candidate_revision_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and _validate_attempt_recovery_segment_successor(
-                state,
-                prior_manifest,
-                _run_dir,
-                successor_manifest,
-                campaign_dir=campaign_dir,
-            )
-        ):
-            continue
-        raise SupervisorError(_unclaimed_failed_batch_message(state, prior_manifest, _run_dir, successor_manifest))
+        raise SupervisorError(
+            _unclaimed_failed_batch_message(state, prior_manifest, _run_dir, successor_manifest, rejections=rejections)
+        )
 
     seen_batch_ids = {
         str(prior_manifest.get("batch_id"))
