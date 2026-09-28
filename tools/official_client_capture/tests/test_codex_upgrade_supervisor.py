@@ -4512,6 +4512,54 @@ raise SystemExit(9)
             with self.assertRaisesRegex(SupervisorError, "定位到的失败动作不是"):
                 supervisor._validate_batched_campaign_history(retry, history, campaign_dir=campaign_dir)
 
+    def test_b4_6_seal_chain_attempt_target_recognizes_canonical_actions(self) -> None:
+        """B4-1 改法 6（草表 D-09）：seal 链动作解析按 vc_artifacts 冻结映射识别 canonical 动作（VC-5 canonical-import／
+        canonical-advance 与 VC-6 三步），给出它指向的（Campaign 目录, 候选侧, 候选, attempt）；不符合冻结映射（item 与
+        子命令不对应）或不是 canonical／seal 链的动作仍返回 None。"""
+
+        campaign = "/campaign"
+        prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+        target = supervisor._seal_chain_attempt_target
+        import_action = {
+            "action_id": "canonical-1-import", "operation": "VC-5:canonical-import", "timeout_seconds": 60.0,
+            "command": [
+                *prefix, "canonical-import", "--campaign-dir", campaign, "--candidate-id", "cand-1", "--attempt-id", "att-1",
+                "--retire-version", "0.154.0", "--approve-import-sha256", "0" * 64,
+            ],
+            "item_ids": ["canonical-import"],
+        }
+        seal_action = {
+            "action_id": "canonical-2-seal", "operation": "VC-5:canonical-advance", "timeout_seconds": 60.0,
+            "command": [
+                *prefix, "canonical-advance", "--campaign-dir", campaign, "--candidate-id", "cand-1", "--attempt-id", "att-1",
+                "--canonical-step", "seal",
+            ],
+            "item_ids": ["canonical-seal"],
+        }
+        activation_action = {
+            "action_id": "canonical-5-production-activation", "operation": "VC-6:canonical-advance", "timeout_seconds": 60.0,
+            "command": [
+                *prefix, "canonical-advance", "--campaign-dir", campaign, "--candidate-id", "cand-1", "--attempt-id", "att-1",
+                "--canonical-step", "production-activation", "--step-receipt", "/campaign/control/canonical/step-4.json",
+            ],
+            "item_ids": ["production-activation"],
+        }
+        expected = (campaign, "candidate", "cand-1", "att-1")
+        self.assertEqual(target(import_action), expected)
+        self.assertEqual(target(seal_action), expected)
+        self.assertEqual(target(activation_action), expected)
+        # item 与子命令不对应（canonical-compare 挂在 seal 步上）：不符合冻结映射，不是 seal 链动作。
+        self.assertIsNone(target(dict(seal_action, item_ids=["canonical-compare"])))
+        # 普通评估动作与非 CLI 动作：None。
+        self.assertIsNone(target({"command": [*prefix, "compare", "--campaign-dir", campaign], "item_ids": ["compare"]}))
+        self.assertIsNone(target({"command": ["/usr/bin/true"], "item_ids": ["x"]}))
+        # 既有 seal／断言包动作不受影响。
+        self.assertEqual(
+            target({"command": [*prefix, "capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", "cand-1",
+                                "--attempt-id", "att-1"], "item_ids": ["candidate-seal"]}),
+            expected,
+        )
+
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
 

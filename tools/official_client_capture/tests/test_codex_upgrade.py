@@ -22988,6 +22988,63 @@ class CodexUpgradeTest(unittest.TestCase):
             # 非候选阶段（VC-1）的同名动作不在本判定内。
             self.assertIsNone(supervisor.candidate_post_run_recovery_action(dict(inner, phase="VC-1"), action_id))
 
+    def test_b4_6_canonical_batch_failure_is_followed_by_non_verbatim_canonical_batch(self) -> None:
+        """B4-1 改法 6（草表 D-09，行 61 C 列）：VC-5 canonical 批次（canonical-import）零请求失败按 post-run-tooling 对账后，
+        修复改变批准摘要的非逐字 canonical 批次 N+1 由 seal 链续派协议承接（原来 canonical 命令解析为 None，协议恒返回
+        False）；指向别的 attempt 的 canonical 后继仍失败关闭。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            jobs = self._b0_candidate_job_ids(fixture)
+
+            def import_action(approval: str, *, attempt_id: str = attempt_root.name) -> dict[str, object]:
+                return {
+                    "action_id": "canonical-1-import", "operation": "VC-5:canonical-import", "timeout_seconds": 60.0,
+                    "command": [
+                        *self._B4_PREFIX, "canonical-import", "--campaign-dir", str(campaign_dir), "--candidate-id", "cand-1",
+                        "--attempt-id", attempt_id, "--retire-version", "0.151.0", "--approve-import-sha256", approval,
+                    ],
+                    "item_ids": ["canonical-import"],
+                }
+
+            inner = self._b4_vc5_manifest(
+                fixture, batch_sequence=1, actions=[import_action("1" * 64)], execute=["canonical-import"], reuse=jobs
+            )
+            run_dir = self._b0_run_dir(
+                fixture, "a" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id="canonical-1-import", failure_kind="child-returncode", error_type="ChildProcessError",
+                post_run_tooling=True, started_offset_seconds=5.0,
+            )
+            supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="canonical-1-import", failure_class="post-run-tooling"
+            )
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_dir, campaign_dir)["status"], "recoverable")
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            history = [(state, inner, run_dir)]
+            changed = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, actions=[import_action("2" * 64)], execute=["canonical-import"], reuse=jobs
+            )
+            self.assertTrue(
+                supervisor._validate_batched_seal_chain_successor(state, inner, run_dir, changed, campaign_dir=campaign_dir)
+            )
+            self.assertEqual(
+                supervisor._validate_batched_campaign_history(changed, history, campaign_dir=campaign_dir, staging_model=False),
+                history,
+            )
+            other = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, actions=[import_action("2" * 64, attempt_id="other-attempt")],
+                execute=["canonical-import"], reuse=jobs,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "指向同一个 attempt"):
+                supervisor._validate_batched_seal_chain_successor(state, inner, run_dir, other, campaign_dir=campaign_dir)
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""

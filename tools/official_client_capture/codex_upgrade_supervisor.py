@@ -8438,11 +8438,27 @@ def _validate_batched_candidate_recovery_run_retry_successor(
 
 
 def _seal_chain_attempt_target(action: Any) -> tuple[str, str, str | None, str] | None:
-    """seal 链动作指向的（Campaign 目录, 侧, 候选, attempt）；不是 seal 链动作返回 None。"""
+    """seal 链动作指向的（Campaign 目录, 侧, 候选, attempt）；不是 seal 链动作返回 None。
+
+    B4-1 改法 6（草表 D-09）：canonical 批次（VC-5 canonical-import／canonical-advance 与 VC-6 生产激活链三步）
+    同样是零请求后处理动作，按 vc_artifacts 的冻结映射解析它指向的候选 attempt（与 post-run-tooling 判据用同一
+    解析）；不符合冻结映射的动作不是 seal 链动作。
+    """
 
     command = action.get("command") if isinstance(action, Mapping) else None
     if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
         return None
+    try:
+        canonical = vc_artifacts.canonical_action_binding(action)
+    except vc_artifacts.VCArtifactError:
+        return None
+    if canonical is not None:
+        return (
+            str(canonical["campaign_dir"]),
+            "candidate",
+            str(canonical["candidate_id"]),
+            str(canonical["attempt_id"]),
+        )
     try:
         for index, token in enumerate(command[:-1]):
             if token in {"capture-candidate", "capture-official"} and command[index + 1] == "seal":
