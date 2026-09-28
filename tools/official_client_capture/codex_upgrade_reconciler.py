@@ -3492,6 +3492,8 @@ def reconcile_attempt(
             attempt_id=attempt_id,
             recovery_revision=recovery_revision,
             reservation=reservation,
+            # 第 47 项：首批父 run 没有 COMMIT，按控制根下的监督器状态目录定位。
+            control_root=control_root,
         )
         if closeout_backfill is not None:
             # 补做的收账事件按写入时刻记账；之后的账本重放与判定按不早于它的时刻观察。
@@ -4608,6 +4610,76 @@ def _attempt_reserving_action(
     return action_id in {"capture-official", supervisor._OFFICIAL_RECOVERY_RUN_ACTION_ID}
 
 
+def _first_batch_owner_runs(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    reserved: float,
+    control_root: Path | None,
+) -> list[tuple[Path, dict[str, Any]]]:
+    """第 47 项：首批 VC-1 批次（序号 1）的父 run 候选——窗口包住预约时刻、队列清单等于 Campaign 绑定的首批清单。
+
+    首批由 VC-0 收口以 ``_campaign_run_command`` 直接派发，没有 staging／COMMIT，``--supervisor-state-dir`` 只记在收口审计
+    目录里、不在 Campaign 内。这里按 ``vc_control.first_campaign_run_manifest``（路径＋摘要，派发门禁 ``_validate_first_batch_binding``
+    同一绑定）取首批清单，在控制根（``--control-root``，缺省 ``<宿主数据根>/control``）本身及其一级子目录（约定的
+    ``<campaign_id>-supervisor``、驱动的 VC_STATE_DIR 等）里找 ``run-*``：同一 Campaign、队列清单与首批清单逐字相同
+    （含清单摘要）、窗口（开始到终态时刻）包住预约时刻。绑定缺失或漂移、控制根不在规范宿主布局下时返回空（与修复前
+    相同：定位不到、不补账）；首批清单含批次序号与 Campaign 身份，别的批次不会逐字相同。
+    """
+
+    campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+    vc_control = campaign.get("vc_control")
+    binding = vc_control.get("first_campaign_run_manifest") if isinstance(vc_control, Mapping) else None
+    if not isinstance(binding, Mapping) or not isinstance(binding.get("path"), str) or not binding.get("path"):
+        return []
+    first_path = campaign_dir / str(binding["path"])
+    if first_path.is_symlink() or not first_path.is_file() or _file_sha256(first_path) != binding.get("sha256"):
+        return []
+    try:
+        first_manifest = supervisor._campaign_run_manifest(first_path)
+    except supervisor.SupervisorError:
+        return []
+    if first_manifest.get("campaign_id") != manifest.get("campaign_id") or first_manifest.get("phase") != "VC-1":
+        return []
+    first_sha256 = supervisor._sha256(supervisor._canonical(first_manifest))
+    try:
+        root = _control_root(campaign_dir, control_root)
+    except (closeout.VC0CloseoutError, OSError):
+        return []
+    if root.is_symlink() or not root.is_dir():
+        return []
+    found: list[tuple[Path, dict[str, Any]]] = []
+    for state_path in [*sorted(root.glob("run-*/state.json")), *sorted(root.glob("*/run-*/state.json"))]:
+        run_dir = state_path.parent
+        if run_dir.is_symlink() or run_dir.parent.is_symlink() or state_path.is_symlink():
+            continue
+        try:
+            state = supervisor._read_state(run_dir)
+        except supervisor.SupervisorError:
+            continue
+        if state.get("campaign_id") != manifest.get("campaign_id"):
+            continue
+        record_path = run_dir / "campaign-run-manifest.json"
+        if record_path.is_symlink() or not record_path.is_file():
+            continue
+        try:
+            record = _read_json(record_path, "campaign-run 清单")
+        except ReconcilerError:
+            continue
+        if record.get("manifest") != first_manifest or record.get("manifest_sha256") != first_sha256:
+            continue
+        started, terminal = state.get("started_at_epoch"), state.get("terminal_at_epoch")
+        if (
+            isinstance(started, (int, float))
+            and isinstance(terminal, (int, float))
+            and not isinstance(started, bool)
+            and not isinstance(terminal, bool)
+            and float(started) <= reserved <= float(terminal)
+        ):
+            found.append((run_dir, state))
+    return found
+
+
 def _attempt_owner_run(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -4616,6 +4688,7 @@ def _attempt_owner_run(
     candidate_id: str | None,
     recovery_revision: str | None,
     reservation: Mapping[str, Any],
+    control_root: Path | None = None,
 ) -> dict[str, Any] | None:
     """第 45 项：定位发布本预约、又在失败收账前丢失 owner 的父 campaign-run；找不到返回 None。
 
@@ -4624,8 +4697,12 @@ def _attempt_owner_run(
     关闭。再要求：父 run 终态为 failed／watchdog-aborted 且 owner 已退出；COMMIT 与父 run 的 staging 绑定互相一致；失败
     动作（``campaign_run_failure_facts``，与父监督器收账同一失败摘要）正是发布这类预约的动作；并且是 owner 在失败收账前
     丢失的两种形态之一——monitor 按 R2 确定性封存的 failed（supervisor:owner-check），或看门狗中止且留有可信的动作
-    诊断（``watchdog_action_failure_facts``，与入口 0-W 同一核对）。owner 自己收口的 run 不在此列。首批序号 1 由 VC-0
-    绑定在 campaign.json、没有 COMMIT 文件，legacy 批次同样没有，这两种都定位不到（返回 None，与修复前相同）。
+    诊断（``watchdog_action_failure_facts``，与入口 0-W 同一核对）。owner 自己收口的 run 不在此列。
+
+    第 47 项：首批序号 1 由 VC-0 绑定在 campaign.json、没有 COMMIT 文件——没有 COMMIT 包住预约时刻的官方 attempt，改按
+    ``_first_batch_owner_runs`` 在控制根下的监督器状态目录里定位首批父 run（队列清单须与 Campaign 绑定的首批清单逐字
+    相同，并按派发门禁同一函数复核首批绑定、且没有 staging 绑定），其余核对与 COMMIT 定位的父 run 相同。此前定位不到、
+    不补账：永久失败类仍判 recoverable 并提示续跑，而后继协议拒绝。legacy 批次仍定位不到（返回 None，与修复前相同）。
     """
 
     vc_phase = _ATTEMPT_OWNER_VC_PHASES.get(phase)
@@ -4638,11 +4715,9 @@ def _attempt_owner_run(
     commits_root = campaign_dir / "control" / "vc" / "commits"
     if commits_root.is_symlink():
         raise ReconcilerError("COMMIT 目录不得是符号链接")
-    if not commits_root.is_dir():
-        return None
     sequences: list[int] = []
     matches: list[tuple[dict[str, Any], Path, dict[str, Any]]] = []
-    for path in sorted(commits_root.iterdir()):
+    for path in sorted(commits_root.iterdir()) if commits_root.is_dir() else []:
         if codex_upgrade._VC_SEQUENCE_FILE_RE.fullmatch(path.name) is None or path.is_symlink() or not path.is_file():
             raise ReconcilerError(f"COMMIT 目录含非法条目：{path.name}")
         try:
@@ -4670,13 +4745,28 @@ def _attempt_owner_run(
             and float(started) <= reserved <= float(terminal)
         ):
             matches.append((commit, run_dir, state))
+    commit: dict[str, Any] | None
     if not matches:
-        return None
-    if len(matches) > 1:
+        # 第 47 项：没有 COMMIT 包住预约时刻——官方 attempt 可能是 VC-0 收口派发的首批（序号 1）发布的。
+        if vc_phase != "VC-1" or recovery_revision is not None:
+            return None
+        first_runs = _first_batch_owner_runs(campaign_dir, manifest, reserved=reserved, control_root=control_root)
+        if not first_runs:
+            return None
+        if len(first_runs) > 1:
+            raise ReconcilerError(
+                "预约时刻落在多个首批父 run 的窗口内，无法唯一定位发布它的父 run：" + "、".join(run.name for run, _s in first_runs)
+            )
+        commit = None
+        run_dir, state = first_runs[0]
+        sequence = 1
+    elif len(matches) > 1:
         raise ReconcilerError(
             "预约时刻落在多个父 run 的窗口内，无法唯一定位发布它的父 run：" + "、".join(run.name for _c, run, _s in matches)
         )
-    commit, run_dir, state = matches[0]
+    else:
+        commit, run_dir, state = matches[0]
+        sequence = int(commit["sequence"])
     if state.get("state") not in {"failed", "watchdog-aborted"} or supervisor._owner_alive(int(state["owner_pid"])):
         return None
     manifest_path = run_dir / "campaign-run-manifest.json"
@@ -4686,7 +4776,12 @@ def _attempt_owner_run(
     if not isinstance(inner, Mapping):
         return None
     try:
-        if supervisor._staging_commit_for_run(campaign_dir, state, inner, run_dir) != commit:
+        if commit is None:
+            # 首批：派发门禁同一函数复核 Campaign 绑定的首批清单；首批不经 staging，不得带 staging 绑定。
+            supervisor._validate_first_batch_binding(campaign_dir, inner)
+            if state.get("staging_binding") is not None:
+                raise ReconcilerError(f"首批父 run {run_dir.name} 不应带 staging 绑定")
+        elif supervisor._staging_commit_for_run(campaign_dir, state, inner, run_dir) != commit:
             raise ReconcilerError(f"父 run {run_dir.name} 的 staging 绑定与定位它的 COMMIT 不一致")
         facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
     except supervisor.SupervisorError as error:
@@ -4719,8 +4814,9 @@ def _attempt_owner_run(
         "run_dir": run_dir,
         "inner": inner,
         "facts": facts,
-        "sequence": int(commit["sequence"]),
-        "latest_sequence": max(sequences),
+        "sequence": sequence,
+        # 首批之后若已有任何 COMMIT（序号 ≥ 2 的续跑批次已派发），下面的补账守卫据此不补。
+        "latest_sequence": max([sequence, *sequences]),
     }
 
 
@@ -4765,6 +4861,7 @@ def _backfill_attempt_owner_closeout(
     attempt_id: str,
     recovery_revision: str | None,
     reservation: Mapping[str, Any],
+    control_root: Path | None = None,
 ) -> dict[str, Any] | None:
     """第 45 项：有预约的父 run 来不及收账时，reconcile-attempt 补做父监督器本应完成的失败收账。
 
@@ -4784,7 +4881,7 @@ def _backfill_attempt_owner_closeout(
 
     owner = _attempt_owner_run(
         campaign_dir, manifest, phase=phase, candidate_id=candidate_id,
-        recovery_revision=recovery_revision, reservation=reservation,
+        recovery_revision=recovery_revision, reservation=reservation, control_root=control_root,
     )
     if owner is None:
         return None
