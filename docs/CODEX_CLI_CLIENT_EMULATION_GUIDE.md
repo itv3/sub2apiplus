@@ -2137,6 +2137,11 @@ Candidate MITM Job 的 producer 合同只包含应用层 JSONL 和场景摘要�
 证据标签只能从采集参数和场景 precondition 推出，不能根据待通过的 selector 或断言结果反推；
 侧别豁免只允许结构上没有产出路径的 check，采集遗漏必须重采。按连接编号写的规则必须与采集脚本在目标版本下的
 实际请求顺序一致：编目器不读被测内容，编号错位时只有缺号会以 glob-unmatched 暴露，错贴的标签完全静默。
+候选 direct sidecar 与 ARM64 出口守护同处网关容器网络命名空间，pcap 会录进出口守护按 `probe_urls` 发起的公网探针握手。
+这类采集环境自身的连接用候选侧 pcap 规则的 `environment_probe_sni` 声明主机：取值来自出口守护策略、不来自 pcap，严格升序，
+不得含 chatgpt.com、openai.com、oaiusercontent.com 及其子域，官方侧不得声明。断言器把命中的握手改记为
+`environment_probe_client_hello`，并在选 `tls_client_hello` 的 check 的 `actual.environment_probe_exclusion` 中逐条列出。
+出口守护更换探针 URL 时，同步修改目标版本声明与测试常量 `EGRESS_GUARD_PROBE_URLS`，并登记工具演进。
 
 `candidate_sealed` 只表示：本轮 execute／reuse Job 闭合、Kilo 双入口通过、运行画像和同源结构化测试
 可复算、环境恢复、secret scan、inventory 与 evidence seal 完整，且 `review_sha256` 已批准。seal 内的
@@ -3385,6 +3390,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   里逐字相同的 relay 启动器只对这一次下发 _cfuvid（`upstream_byte_relay.py` 被已封存官方作业依赖，不能改；演进按文件映射，
   改候选专用脚本只影响候选作业），采集收尾逐字节核对预热冷 jar、后续请求回放 Cookie 与不泄漏。`test_candidate_relay_extension`
   与 `test_candidate_aux_label_sequence` 锁定启动器、版本开关、调用序列与逐连接标签；改候选采集脚本后全部候选作业重采。
+- **候选 direct 抓包混入出口守护探针（第 56 项）**：探针 ClientHello 带 h2／http/1.1 ALPN，让 SPEC-TLS-001 `alpn-absent`、
+  SPEC-PROTO-001 `no-alpn` 在候选侧失败。按 §4.5.3 声明 `environment_probe_sni`；断言器、编目器、声明属 evidence_semantics，
+  manifest schema 属 control，wire 不变。修好后登记工具演进（追加评估 epoch，不重采）；候选断言包按新声明重新生成后，
+  再从 seal 链续跑。
 - **批准画像 selector 修正**：`evaluation-recover approval-revision --assertion-profile`（§4.5.5）开 approval-revision 基线
   零请求重评，候选 revision 不变。
 - **候选阶段零请求后处理动作失败**：进 `recovery_required`，修好工具后重派，不再进候选待审；批次中途评估器漂移
