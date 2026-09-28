@@ -7660,6 +7660,7 @@ def _validate_batched_official_recovery_preview_retry_successor(
         action_id=_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
         label="VC-1 恢复预览重派",
         campaign_dir=campaign_dir,
+        prior_manifest=prior_manifest,
     )
     return True
 
@@ -7761,17 +7762,24 @@ def _verify_failed_official_recovery_parent(
     label: str,
     phase: str = "VC-1",
     campaign_dir: Path | None = None,
+    prior_manifest: Mapping[str, Any] | None = None,
 ) -> None:
-    """核验恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
+    """核验恢复链父 run：私有落盘、可信失败终态、失败动作就是该动作，且已对账。
 
-    VC-1 的预览重派与补跑失败后的预览两条协议共用，VC-5 候选采集续跑的同构协议按 ``phase``
-    复用：父 run 目录与 state／stop receipt 必须私有且逐字自洽，stop 原因是该动作失败，动作
-    诊断只能是处理型失败（执行中因工具／配置缺陷报错或子进程非零退出，类别 execution-failure；第 30 项起
-    不再按错误类型白名单）；截止清理、中断等不在协议内，仍由 reconciler 判定。
+    VC-1 的预览重派与补跑失败后的预览两条协议共用，VC-5 候选采集续跑的同构协议按 ``phase`` 复用。
+    父 run 目录与 state／stop receipt 必须私有且逐字自洽；终态按种类判定（B4-1 改法 1，草表 D-04／D-11）：
 
-    第三批 B3-15（第 26 项）：父 run 被看门狗中止（``watchdog-aborted``，没有动作诊断）且已按
-    ``_reconciled_watchdog_abort`` 对账时同样接受——stop receipt 须是看门狗中止本身，且该动作不得留有
-    失败诊断（留有诊断说明动作先失败，应按 failed 终态处理）。
+    - ``action-failed``：stop 原因是该动作失败，诊断只能是处理型失败（执行中因工具／配置缺陷报错或子进程
+      非零退出；第 30 项起不再按错误类型白名单，类别见 ``_recovery_preview_retry_failure``）；
+    - ``action-timeout``／``interrupted``／``other-exception``：定位到的失败动作（唯一诊断或最后一条
+      action-started）必须就是该动作；诊断若存在须身份自洽且不是永久失败类（中断可能发生在诊断写出之前，
+      允许没有诊断）；
+    - ``watchdog``（第三批 B3-15，第 26 项）：已按 ``_reconciled_watchdog_abort`` 对账（run 期间有预约时按
+      attempt 收据分流，改法 3），stop receipt 须是看门狗中止本身，且该动作不得留有失败诊断。
+
+    B4-1 改法 4（第 31 项，草表 D-18）：failed 类终态还必须已对账——run 期间无预约要求 supervisor-run 对账
+    收据与总账 ``reconcile-supervisor-run:<run>`` 绑定，有预约要求每个预约的 attempt 对账收据与总账绑定；
+    此前历史链本身不核对对账，只靠派发前账本门禁（它不核对 recovery_authorized）。
     """
 
     _permission_compensation_private_directory(prior_dir, f"{label}前序 run 目录")
@@ -7788,7 +7796,7 @@ def _verify_failed_official_recovery_parent(
         _reconciled_watchdog_abort(Path(campaign_dir), prior_dir, prior_state, label=label)
     if (
         recorded_state != dict(prior_state)
-        or prior_state.get("state") not in {"failed", "watchdog-aborted"}
+        or prior_state.get("state") not in FAILED_TERMINAL_STATES
         or prior_state.get("campaign_id") != campaign_id
         or prior_state.get("phase") != phase
         or isinstance(owner_pid, bool)
@@ -7800,9 +7808,13 @@ def _verify_failed_official_recovery_parent(
         raise SupervisorError(f"{label}的父终态或 owner 身份漂移。")
     _permission_compensation_private_file(prior_dir / "stop-receipt.json", f"{label}前序 stop receipt")
     try:
-        stop = read_stop_receipt(prior_dir)
+        facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     except SupervisorError as error:
         raise SupervisorError(f"{label}的父 stop receipt 漂移：{error}") from error
+    if facts is None:
+        raise SupervisorError(f"{label}的父 stop receipt 漂移。")
+    stop = facts["stop"]
+    kind = facts["terminal_kind"]
     if watchdog_aborted:
         if (
             stop.get("event_type") != "watchdog-aborted"
@@ -7822,25 +7834,79 @@ def _verify_failed_official_recovery_parent(
             raise SupervisorError(f"{label}的父 run 被看门狗中止却留有动作失败诊断，按失败终态协议处理。")
         return
     if (
-        stop.get("event_type") != "failed"
-        or stop.get("reason") != f"action-failed:{action_id}"
+        kind not in FAILED_PARENT_ACTION_KINDS
+        or stop.get("event_type") != "failed"
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != phase
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
     ):
         raise SupervisorError(f"{label}的父 stop receipt 漂移。")
-    diagnostic = _validate_action_diagnostic(
-        _action_diagnostic_path(prior_dir, action_id, create_directory=False),
-        run_dir=prior_dir,
-        campaign_id=str(prior_state["campaign_id"]),
-        phase=phase,
-        action_id=action_id,
-        owner_pid=owner_pid,
-        owner_nonce=owner_nonce,
-    )
-    if not _recovery_preview_retry_failure(diagnostic):
-        raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+    if kind == "action-failed":
+        if facts["action_id"] != action_id:
+            raise SupervisorError(f"{label}的父 stop receipt 漂移。")
+        diagnostic = _validate_action_diagnostic(
+            _action_diagnostic_path(prior_dir, action_id, create_directory=False),
+            run_dir=prior_dir,
+            campaign_id=str(prior_state["campaign_id"]),
+            phase=phase,
+            action_id=action_id,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+        )
+        if not _recovery_preview_retry_failure(diagnostic):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+    else:
+        if facts["action_id"] != action_id:
+            raise SupervisorError(
+                f"{label}的父 run 以 {facts['reason']} 终止，定位到的失败动作不是 {action_id}"
+                f"（{facts['action_id'] or '无法定位失败动作'}）。"
+            )
+        diagnostics_dir = prior_dir / "action-diagnostics"
+        if diagnostics_dir.is_symlink():
+            raise SupervisorError(f"{label}的父动作诊断目录不可信。")
+        if diagnostics_dir.is_dir():
+            diagnostic_path = _action_diagnostic_path(prior_dir, action_id, create_directory=False)
+            if diagnostic_path.is_symlink() or (diagnostic_path.exists() and not diagnostic_path.is_file()):
+                raise SupervisorError(f"{label}的父动作诊断不可信。")
+            if diagnostic_path.is_file():
+                diagnostic = _validate_action_diagnostic(
+                    diagnostic_path,
+                    run_dir=prior_dir,
+                    campaign_id=str(prior_state["campaign_id"]),
+                    phase=phase,
+                    action_id=action_id,
+                    owner_pid=owner_pid,
+                    owner_nonce=owner_nonce,
+                )
+                if diagnostic.get("failure_class") in PERMANENT_ACTION_FAILURE_CLASSES:
+                    raise SupervisorError(
+                        f"{label}的父动作诊断是永久失败类 {diagnostic.get('failure_class')}，不能续跑。"
+                    )
+    # 第 31 项：failed 类终态必须已对账（无预约认 supervisor-run 收据，有预约认每个预约的 attempt 收据）。
+    if campaign_dir is None:
+        raise SupervisorError(f"{label}：核验父 run {prior_dir.name} 的对账收据需要 Campaign 目录。")
+    resolved_campaign = Path(campaign_dir).resolve(strict=True)
+    reservations = _reservations_in_run_window(resolved_campaign, float(prior_state.get("started_at_epoch", 0.0)))
+    if reservations:
+        for reserved_candidate_id, _subject, attempt_root in reservations:
+            verify_attempt_reconciliation_binding(
+                resolved_campaign,
+                campaign_id=str(campaign_id),
+                candidate_id=reserved_candidate_id,
+                attempt_root=attempt_root,
+                label=label,
+            )
+    else:
+        verify_supervisor_run_reconciliation_binding(
+            resolved_campaign,
+            campaign_id=str(campaign_id),
+            run_id=prior_dir.name,
+            phase=phase,
+            batch_sequence=prior_manifest.get("batch_sequence") if prior_manifest is not None else None,
+            batch_sha256=prior_manifest.get("batch_sha256") if prior_manifest is not None else None,
+            label=label,
+        )
 
 
 # 按已批准恢复预览真实补跑的动作（resume --rerun-failed --recovery-preview … --acknowledge-live-requests）。
@@ -7950,6 +8016,7 @@ def _validate_batched_official_recovery_run_retry_successor(
         action_id=_OFFICIAL_RECOVERY_RUN_ACTION_ID,
         label="VC-1 补跑失败后的预览",
         campaign_dir=campaign_dir,
+        prior_manifest=prior_manifest,
     )
     return True
 
@@ -8270,6 +8337,7 @@ def _validate_batched_candidate_recovery_preview_successor(
         label="VC-5 候选采集续跑预览",
         phase="VC-5",
         campaign_dir=campaign_dir,
+        prior_manifest=prior_manifest,
     )
     return True
 
@@ -8307,6 +8375,7 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
         label="VC-5 候选采集续跑预览重派",
         phase="VC-5",
         campaign_dir=campaign_dir,
+        prior_manifest=prior_manifest,
     )
     return True
 
@@ -8354,6 +8423,7 @@ def _validate_batched_candidate_recovery_run_retry_successor(
         label="VC-5 补跑失败后的预览",
         phase="VC-5",
         campaign_dir=campaign_dir,
+        prior_manifest=prior_manifest,
     )
     return True
 
