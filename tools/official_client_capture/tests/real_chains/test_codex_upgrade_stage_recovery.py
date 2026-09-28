@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import signal
@@ -81,6 +82,7 @@ class StageRecoveryChainTests(unittest.TestCase):
             run_dir = Path(first["campaign_run"]["run_dir"])
             # 真实修改隔离副本中的 control 函数；wire、evidence 和 Campaign 不换身份。
             trees.replace_once(Path(upgrade.__file__).resolve().parents[2], "codex_upgrade.py", INJECTION, ANCHOR)
+            self._register_control_fix(case, fixture, campaign, plan)
             reconciled = reconciler.reconcile_supervisor_run(run_dir, campaign)
             self.assertEqual(reconciled["status"], "recoverable", reconciled)
             self.assertTrue(reconciled["stage_replay"]["allowed"])
@@ -108,8 +110,10 @@ class StageRecoveryChainTests(unittest.TestCase):
             count = timing.inspect_ledger(ledger)["head_sequence"]
             reconciler.reconcile_supervisor_run(run_dir, campaign)
             self.assertEqual(timing.inspect_ledger(ledger)["head_sequence"], count)
-            with self.assertRaises(upgrade.ConfigurationError):
+            with self.assertRaises(upgrade.ConfigurationError) as refused:
                 upgrade.compile_and_run_vc_batch(case._vc_chain_arguments(fixture, "VC-3", 3, plan))
+            # VC-2 仍在审核中，VC-3 必须因阶段次序被拒；演进已登记，拒因不能是工具身份门禁。
+            self.assertNotIsInstance(refused.exception, upgrade.ToolEvolutionRequired)
             final, code = upgrade.compile_and_run_vc_batch(case._vc_chain_arguments(fixture, "VC-2", 3, plan))
             self.assertEqual(code, 0, final)
             self.assertEqual(timing.inspect_ledger(ledger)["status"], "active")
@@ -123,6 +127,65 @@ class StageRecoveryChainTests(unittest.TestCase):
             print(json.dumps({"fixture": "R4 原 Campaign 分类恢复", "execute_actions": 2,
                               "reused_drafts": 1, "reused_official_jobs": 1,
                               "live_request_count": 0, "unchanged_source_bytes": True}), flush=True)
+
+    def _register_control_fix(self, case, fixture, campaign: Path, plan: Path) -> None:
+        """修复部署后按修好接着跑的正式顺序登记工具演进（修好接着跑第 52 项）。
+
+        工具演进登记（2026-09-27 起）的不变式：Campaign 继续执行时当前受管树必须恰是有效工具身份的树，control 层单独
+        变化也要登记（影响为空，只是一次预览＋批准）。本链真实改了隔离副本的 control 函数，所以：① 未登记前派发入口以
+        ToolEvolutionRequired 零写入拒绝；② 写一份五摘要按当前受管树现算的受监督部署收据（字段沿用夹具首份收据，不写死
+        任何摘要，受管树以后怎么变都跟得上）；③ tool-evolution 预览→批准，影响为空；④ 登记后当前树即有效身份。
+        """
+
+        staging_root = campaign / "control" / "vc" / "staging"
+
+        def staging_snapshot() -> list[str]:
+            return sorted(str(path.relative_to(campaign)) for path in staging_root.rglob("*")) if staging_root.exists() else []
+
+        before = staging_snapshot()
+        with self.assertRaisesRegex(upgrade.ToolEvolutionRequired, "control"):
+            upgrade.compile_and_run_vc_batch(case._vc_chain_arguments(fixture, "VC-2", 3, plan))
+        self.assertEqual(staging_snapshot(), before)
+        current = upgrade._tool_identity(include_git=False)
+        # 场景前提直接核对：Campaign 与当前受管树出自同一份副本，唯一差别是撤回注入，只动 control 层。
+        effective = upgrade._campaign_effective_tool_identity(campaign, upgrade._require_formal_campaign(campaign))["identity"]
+        for field in ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256"):
+            self.assertEqual(current[field], effective[field], field)
+        self.assertNotEqual(current["control_sha256"], effective["control_sha256"])
+        receipt = json.loads(Path(fixture["deployment"]).read_text(encoding="utf-8"))
+        receipt.update(
+            {
+                "created_at_utc": upgrade._utc_now(),
+                "tool_files_sha256": current["files_sha256"],
+                "policy_version": current["policy_version"],
+                "policy_sha256": current["policy_sha256"],
+                "wire_producer_sha256": current["wire_producer_sha256"],
+                "evidence_semantics_sha256": current["evidence_semantics_sha256"],
+                "control_sha256": current["control_sha256"],
+            }
+        )
+        control = Path(fixture["control"])
+        case._write_import_receipt(control / "codex-r4-fix-supervisor-enable-20260928t000000z.json", receipt)
+        arguments = argparse.Namespace(
+            campaign_dir=campaign,
+            fix_commit="4" * 40,
+            reason="R4 隔离副本：修复分类草案写后非零退出（control 层）",
+            control_root=control,
+            approve_sha256=None,
+            approved_by=None,
+            policy_compatibility_receipt=None,
+            policy_activation_certification=None,
+        )
+        preview = upgrade._tool_evolution_command(arguments)
+        self.assertEqual(preview["status"], "approval_required", preview)
+        self.assertEqual(preview["changes"]["impact_paths"], [])
+        self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
+        arguments.approve_sha256 = preview["review_sha256"]
+        arguments.approved_by = "r4-fixture"
+        applied = upgrade._tool_evolution_command(arguments)
+        self.assertEqual(applied["status"], "evolution_applied", applied)
+        effective = upgrade._require_tool_evolution_registered(campaign, upgrade._require_formal_campaign(campaign), action="t")
+        self.assertEqual(effective["index"], 1)
 
 
 if __name__ == "__main__":
