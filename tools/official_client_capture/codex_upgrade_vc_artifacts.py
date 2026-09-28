@@ -1180,14 +1180,16 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 def staging_abort_error_message(error: BaseException | str) -> str:
     """staging 中止收据与暂停／停线消息里保留的原始异常文本（修好接着跑第 29 项）。
 
-    去控制字符、去首尾空白、截到 2000 字符；空文本退回异常类型名，保证字段非空。
+    去控制字符、去首尾空白、截到 2000 字符；空文本退回异常类型名，保证字段非空。截断后再去一次尾部空白
+    （第 32 项前置）：截断点恰落在换行／空格上时，残留的尾随空白会让收据校验拒绝整份 ABORT，盖住原始拒因。
+    清洗后首字符必非空白，所以截断再去尾部空白后仍非空。
     """
 
     text = error if isinstance(error, str) else str(error)
     cleaned = _CONTROL_CHARS_RE.sub(" ", text).strip()
     if not cleaned:
         cleaned = (error if isinstance(error, str) else type(error).__name__).strip() or "unknown"
-    return cleaned[:STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS]
+    return cleaned[:STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS].rstrip()
 
 
 def build_staging_abort(

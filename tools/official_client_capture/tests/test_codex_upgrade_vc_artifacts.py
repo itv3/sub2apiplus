@@ -868,6 +868,28 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         )
         self.assertNotIn("error_message", abort_schema["required"])
 
+    def test_staging_abort_error_message_truncation_never_leaves_trailing_whitespace(self) -> None:
+        """修好接着跑第 32 项前置（第 29 项遗留）：原文第 2000 个字符恰是换行、制表或空格时，截断结果不得以空白结尾。
+
+        否则 build_staging_abort 以"error_message 非法"拒绝，_write_staging_abort 抛配置错误盖住原始拒因、ABORT 写不出、
+        根因无法入账；下一次入口的孤儿扫描再把这个 attempt 记成无原文的 staging.abandoned。链审计兜底文案（15 条协议
+        拒因）多行且可超过 2000 字符，触发概率不低。
+        """
+
+        base = self._staging_artifacts()["abort"]
+        params = {
+            key: value
+            for key, value in base.items()
+            if key not in {"schema_version", "live_request_count", "scanned_bytes", "receipt_sha256"}
+        }
+        limit = artifacts.STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS
+        for separator in ("\n", " ", "\t", "\r\n"):
+            with self.subTest(separator=repr(separator)):
+                message = artifacts.staging_abort_error_message(RuntimeError("x" * (limit - 1) + separator + "y" * 600))
+                self.assertEqual(message, "x" * (limit - 1))
+                abort = artifacts.build_staging_abort(**params, error_message=message)
+                self.assertEqual(artifacts.validate_staging_abort(abort)["error_message"], message)
+
     def test_staging_artifacts_reject_semantic_tampering(self) -> None:
         built = self._staging_artifacts()
         cases = [
