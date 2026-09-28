@@ -6,7 +6,8 @@
 - 旧工具读不了新数据时不回退，保持暂停，用最小修复继续前进。
 
 覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可与落盘预约（SegmentReuseRollbackReadbackTests）、
-R8 预算暂停、延期（两本账）、显式放弃事件与两本账事件闭集（DeadlineControlRollbackReadbackTests）。
+R8 预算暂停、延期（两本账）、显式放弃事件与两本账事件闭集（DeadlineControlRollbackReadbackTests，前提是根因枚举表未变），
+以及根因枚举表变更＋迁移收据之后基线工具拒绝服务这条独立边界（RootCauseCodesMigrationRollbackBoundaryTests）。
 
 阶段 1 发布时 ARM64 的 rollback_backup 就是 main 基线的受管工具树。这里用 git archive 按固定提交导出同一棵树，
 旧工具只在子进程里以 ``-m`` 运行，不与当前模块混用。CI 以 fetch-depth: 0 检出，基线提交必然可读；
@@ -15,6 +16,7 @@ R8 预算暂停、延期（两本账）、显式放弃事件与两本账事件�
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -26,8 +28,10 @@ import textwrap
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+from tools.official_client_capture import codex_upgrade_root_cause as root_cause
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 
@@ -98,6 +102,12 @@ def setUpModule() -> None:
 def tearDownModule() -> None:
     if _TREE_DIRECTORY is not None:
         _TREE_DIRECTORY.cleanup()
+
+
+def rollback_root_cause_codes_path(tree: Path) -> Path:
+    """基线工具树自带的根因枚举表；基线工具建的项目总账冻结的就是它的摘要。"""
+
+    return tree / "tools" / "official_client_capture" / "root_cause_codes.json"
 
 
 def ledger_snapshot(ledger_root: Path) -> dict[str, bytes]:
@@ -302,6 +312,13 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
     """R8：预算暂停写进计时账本或项目总账后，基线工具只能失败关闭且不改字节；此前封存的 checkpoint 仍可由旧工具重放。
 
     回退边界同 R4：账本一旦写入 R8 预算控制事件就不能直接回退，保持暂停并向前修复。
+
+    前提是根因枚举表未变：本类只检验 R8 事件闭集这一条边界，所以在进程内把当前工具的根因码表身份钉成基线工具树的
+    码表（``setUp``）。否则基线工具建的项目总账冻结的是基线码表摘要，当前工具一读仓库里已演进的码表（修好接着跑
+    第 32 项起）就先以"根因枚举表或算法已变更且没有衔接的旧新 ID 映射收据，总账拒绝服务"拒绝，拒绝点不再是 R8 事件；
+    而补迁移收据后基线工具按设计也拒绝服务，同样测不到 R8。码表变更＋迁移收据这条独立边界见
+    ``RootCauseCodesMigrationRollbackBoundaryTests``。钉住只替换本进程 ``load_codes`` 的默认路径，产品代码不变，
+    子进程里的基线工具始终用它自己的码表。
     """
 
     def setUp(self) -> None:
@@ -312,6 +329,17 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         (self.staging / "control").mkdir(parents=True, mode=0o700)
         self.staging.chmod(0o700)
         self.start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=10)
+        assert ROLLBACK_TREE is not None
+        pin = mock.patch.object(root_cause, "DEFAULT_CODES_PATH", rollback_root_cause_codes_path(ROLLBACK_TREE))
+        pin.start()
+        self.addCleanup(pin.stop)
+
+    def _assert_codes_unchanged(self, project_root: Path) -> None:
+        """本类的前提：基线工具建总账时冻结的码表摘要就是当前工具（已钉住）读到的码表摘要。"""
+
+        plan = json.loads((project_root / "plan.json").read_text(encoding="utf-8"))
+        self.assertEqual(plan["root_cause_codes_sha256"], root_cause.load_codes()["codes_sha256"])
+        self.assertFalse((project_root / "migrations").exists())
 
     def tearDown(self) -> None:
         self._work.cleanup()
@@ -368,6 +396,7 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
             "--estimation-policy-approved-by", "fixture", "--fixture-only",
         )
         self.assertEqual(created.returncode, 0, created.stderr)
+        self._assert_codes_unchanged(project_root)
         project_ledger.append_project_event(
             project_root, operation_id="register-r8-rollback", event_type="campaign_registered",
             payload={"campaign_id": "r8-rollback", "campaign_dir": str(self.staging / "campaign"), "campaign_mode": "formal",
@@ -402,6 +431,7 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
             "--estimation-policy-approved-by", "fixture", "--fixture-only",
         )
         self.assertEqual(created.returncode, 0, created.stderr)
+        self._assert_codes_unchanged(project_root)
         ledger = self.staging / "timing"
         script = textwrap.dedent(f"""
             from pathlib import Path
@@ -510,6 +540,71 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         )
         self.assertLessEqual(set(closures["timing"]), set(timing_ledger.EVENT_TYPES))
         self.assertLessEqual(set(closures["project"]), set(project_ledger.EVENT_TYPES))
+
+
+@unittest.skipUnless(
+    (REPOSITORY_ROOT / ".git").exists(),
+    "传输副本没有 .git，无法导出回退基线；CI 与本机全历史检出必跑",
+)
+class RootCauseCodesMigrationRollbackBoundaryTests(unittest.TestCase):
+    """根因枚举表变更是一条独立的回退边界（修好接着跑第 32 项起码表已演进，部署前写项目总账迁移收据）。
+
+    码表一变，当前工具没有衔接的迁移收据就拒绝服务；补上迁移收据后当前工具照常服务，而基线工具沿同一条迁移链走到
+    新码表摘要、与自带码表不符，按设计拒绝服务且不改字节。所以总账一旦承接了码表迁移就不能直接回退到基线工具，
+    与 R4、R8 一样保持暂停、向前修复。本类不钉码表，用的就是仓库当前的码表。
+    """
+
+    def test_codes_change_with_migration_receipt_makes_rollback_tool_refuse_service_without_touching_bytes(self) -> None:
+        assert ROLLBACK_TREE is not None
+        rollback_sha256 = hashlib.sha256(rollback_root_cause_codes_path(ROLLBACK_TREE).read_bytes()).hexdigest()
+        current = root_cause.load_codes()
+        if current["codes_sha256"] == rollback_sha256:
+            self.skipTest("基线工具树与当前仓库的根因枚举表相同，没有码表变更可验证")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            staging = root / "staging"
+            staging.mkdir(mode=0o700)
+            project_root = staging / project_ledger.LEDGER_DIR_NAME
+            deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+            created = run_rollback_python(
+                ROLLBACK_TREE, "-m", PROJECT_LEDGER_MODULE, "create-project-ledger", "--ledger-dir", str(project_root),
+                "--project-id", "codes-migration-rollback", "--absolute-deadline-utc", deadline,
+                "--deadline-approved-by", "fixture", "--estimation-policy", "none",
+                "--estimation-policy-approved-by", "fixture", "--fixture-only",
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            plan = json.loads((project_root / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["root_cause_codes_sha256"], rollback_sha256)
+            # 当前工具：码表已变更且没有迁移收据 → 拒绝服务（R8 回读用例因此把码表钉成基线）。
+            with self.assertRaisesRegex(project_ledger.ProjectLedgerError, "没有衔接的旧新 ID 映射收据"):
+                project_ledger.replay_head(project_root)
+            migration = {
+                "schema_version": project_ledger.MIGRATION_SCHEMA,
+                "sequence": 1,
+                "from_codes_sha256": rollback_sha256,
+                "to_codes_sha256": current["codes_sha256"],
+                "from_algorithm_version": plan["root_cause_algorithm_version"],
+                "to_algorithm_version": current["algorithm_version"],
+                "id_mapping": {},
+                "approved_by": "fixture",
+                "approved_at_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            migrations = project_root / "migrations"
+            migrations.mkdir(mode=0o700)
+            receipt = migrations / "000001.json"
+            receipt.write_text(json.dumps(migration, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            receipt.chmod(0o600)
+            # 补上迁移收据后当前工具照常服务。
+            self.assertEqual(project_ledger.replay_head(project_root)["sequence"], 0)
+            before = ledger_snapshot(project_root)
+            # 基线工具沿迁移链走到新码表摘要，与自带码表不符：拒绝服务、不改字节（预期的回退边界，不是缺陷）。
+            refused = run_rollback_python(ROLLBACK_TREE, "-m", PROJECT_LEDGER_MODULE, "status", "--ledger-dir", str(project_root))
+            self.assertEqual(refused.returncode, 2, refused.stdout)
+            self.assertEqual(refused.stdout, "")
+            self.assertIn("根因枚举表或算法已变更", refused.stderr)
+            self.assertIn("总账拒绝服务", refused.stderr)
+            self.assertEqual(ledger_snapshot(project_root), before)
 
 
 if __name__ == "__main__":
