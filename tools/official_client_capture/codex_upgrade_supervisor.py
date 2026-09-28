@@ -10566,6 +10566,59 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     return frozen
 
 
+def _validate_attempt_recovery_prereservation_redispatch(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    prior_revision: str,
+    successor_revision: str,
+) -> bool:
+    """第 53 项：恢复段 run 在段预约之前失败（执行失败或截止类），N+1 以同一段号重派同一批次。
+
+    段预约在 Campaign 锁内原子发布，预约之前失败即没有段目录、账本没有登记该段，段号仍可开，也没有请求发生；续跑
+    就是同一批次按同一段号再跑（首段直接跑冻结的 J*，后继段仍消费前序失败段已授权的同一份恢复预览）。核对：该段确实
+    从未发布预约（``attempt_recovery_segment_reserved`` 为假，账本登记与段目录都没有）；父动作失败类别是执行失败或截止类
+    失败；父 run 已按 ``reconcile-supervisor-run`` 入账并留下原批次重派许可，且后继与父批次重派身份一致（与环境前提失败
+    的逐字重派同一段绑定校验）。段已预约时同段不得重开，仍须段对账后以 ar<k+1> 承接。
+    """
+
+    label = "恢复段同段重派"
+    resolved = campaign_dir.resolve(strict=True)
+    campaign = _read_json(resolved / "campaign.json")
+    controls = campaign.get("control_receipts")
+    timing_control = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing_control, Mapping) or not isinstance(timing_control.get("ledger_dir"), str):
+        raise SupervisorError(f"{label}缺少 Campaign 时间账本绑定。")
+    try:
+        ledger_summary = timing_ledger.inspect_ledger(Path(str(timing_control["ledger_dir"])).resolve(strict=True))
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
+    if attempt_recovery_segment_reserved(resolved, prior_manifest, prior_revision, ledger_summary=ledger_summary):
+        raise SupervisorError(
+            f"恢复段 {prior_revision} 已发布预约（段已开），同段不得重开：失败段先 reconcile-attempt --recovery-revision "
+            f"{prior_revision} 对账，后继恢复段的失败动作必须把 --attempt-recovery {prior_revision} 改为 {successor_revision}。"
+        )
+    facts = campaign_run_failure_facts(prior_dir, campaign_dir=resolved)
+    failure_class = str(facts["failure_class"]) if facts is not None else None
+    if failure_class not in ATTEMPT_RECOVERY_SEGMENT_FAILURE_CLASSES:
+        raise SupervisorError(
+            f"恢复段 {prior_revision} 在段预约之前失败，但失败类别（{failure_class or '无法判定'}）不是执行失败或截止类失败，"
+            "同段重派不承接（可恢复类由逐字重派协议承接，永久失败类停线）。"
+        )
+    return _validate_reconciled_redispatch_binding(
+        prior_state,
+        prior_manifest,
+        prior_dir,
+        successor_manifest,
+        campaign_dir=resolved,
+        effective_class=failure_class,
+        label=label,
+    )
+
+
 def _validate_attempt_recovery_segment_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -10575,6 +10628,9 @@ def _validate_attempt_recovery_segment_successor(
     campaign_dir: Path | None,
 ) -> bool:
     """改造 5 M2（崩溃矩阵 A1）：恢复段 run 动作失败／中断的批次，只能由同一 attempt 的后继段批次承接。
+
+    第 53 项：后继沿用同一段号时转入 ``_validate_attempt_recovery_prereservation_redispatch``——只在该段从未发布预约
+    （段预约之前失败）时承接同段重派，段已预约仍拒绝并指向 ar<k+1>。
 
     返回 ``False`` 表示前序失败动作不是恢复段 run，应继续匹配其他协议；一旦是，任何漂移都失败关闭：
     段对账（``reconcile-attempt --recovery-revision ar<k>``）与批准的恢复预览已被账本 ``recovery_authorized``
@@ -10612,6 +10668,17 @@ def _validate_attempt_recovery_segment_successor(
     command = failed_successors[0].get("command")
     if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
         raise SupervisorError("后继恢复段动作命令非法。")
+    if _attempt_recovery_run_revision(successor_manifest, action_id) == prior_revision:
+        # 第 53 项：后继沿用同一段号——只在该段从未发布预约（段预约之前失败）时是受支持的同段重派。
+        return _validate_attempt_recovery_prereservation_redispatch(
+            prior_state,
+            prior_manifest,
+            prior_dir,
+            successor_manifest,
+            campaign_dir=Path(campaign_dir),
+            prior_revision=prior_revision,
+            successor_revision=successor_revision,
+        )
     if _attempt_recovery_run_revision(successor_manifest, action_id) != successor_revision:
         raise SupervisorError(
             f"后继恢复段的失败动作必须把 --attempt-recovery {prior_revision} 改为 {successor_revision}。"
@@ -11778,6 +11845,12 @@ def _evaluator_identity_drift(frozen: Any) -> list[str]:
     )
 
 
+# 恢复段 run 以这些类别失败时有受支持的续跑：段已发布预约 → 按段失败收口、段对账后开后继段 ar<k+1>（改造 5 M2 与第 48 项）；
+# 段预约之前失败 → 同一段号 ar<k> 重派（第 53 项）。其余审核类（request-accounting-uncertain 只由候选采集预约前的就绪 probe
+# 产生，段 run 不做 probe）与永久失败类不在其列。
+ATTEMPT_RECOVERY_SEGMENT_FAILURE_CLASSES = frozenset({"execution-failure", "deadline-expired"})
+
+
 def _attempt_recovery_segment_failure(
     manifest: Mapping[str, Any],
     action_id: str,
@@ -11785,24 +11858,147 @@ def _attempt_recovery_segment_failure(
     *,
     segment_reserved: bool,
 ) -> str | None:
-    """失败动作是恢复段 run、且这次失败按段失败收口（recovery_required，账本允许 active 段）时返回段编号，否则 None。
+    """失败动作是恢复段 run、段已发布预约、且这次失败按段失败收口（recovery_required，账本允许 active 段）时返回段编号，
+    否则 None。
 
-    执行失败：修好部署后开后继段（改造 5 M2，不变）。第 48 项：截止类失败（deadline-expired：子进程预算检查或父监督器
-    截止清理）在段已发布预约之后同样按段失败收口——延期、段对账后开后继段。此前它落到候选审核分支：owner 在线时段仍
-    active，stage_abandoned 被账本拒绝、收账失败，账本停在 active，授权不写 recovery_authorized，协议 15 拒绝后继段（死路）；
-    owner 丢失时第 45 项补账进候选审核，对账提示"批准预览后开 ar<k+1>"，授权却以"候选审核只允许 VC-5 采集失败 attempt 的
-    续跑授权"拒绝。段预约之前的截止失败（段号尚未启用、没有可对账的段）维持原路由（候选审核），后继段协议也接不住它。
-    其余审核类（request-accounting-uncertain 只由候选采集预约前的就绪 probe 产生，段 run 不做 probe）与永久失败类不在其列。
+    执行失败：修好部署后开后继段（改造 5 M2）。第 48 项：截止类失败（deadline-expired：子进程预算检查或父监督器截止清理）
+    同样按段失败收口——延期、段对账后开后继段；此前它落到候选审核分支，owner 在线时收账失败、owner 丢失时授权被拒。
+    第 53 项：段预约之前的失败（段号尚未启用、没有可对账的段）不再按段失败收口——此前执行失败也走这里，收账提示
+    "reconcile-attempt --recovery-revision ar<k> 后开 ar<k+1>"，而该段没有预约可对账，reconcile-supervisor-run 又以"父动作
+    分类不可恢复"拒绝入账（死路）；截止类则落到候选审核只能作废候选或停线。它们改由 ``_attempt_recovery_segment_redispatch``
+    按同一段号重派收口。
     """
 
     revision = _attempt_recovery_run_revision(manifest, action_id)
-    if revision is None:
+    if revision is None or not segment_reserved:
         return None
-    if failure_class == "execution-failure":
-        return revision
-    if failure_class == "deadline-expired" and segment_reserved:
-        return revision
-    return None
+    return revision if failure_class in ATTEMPT_RECOVERY_SEGMENT_FAILURE_CLASSES else None
+
+
+def _attempt_recovery_segment_redispatch(
+    manifest: Mapping[str, Any],
+    action_id: str,
+    failure_class: str,
+    *,
+    segment_reserved: bool,
+) -> str | None:
+    """第 53 项：失败动作是恢复段 run、在段预约之前以执行失败或截止类失败收口时返回段编号，否则 None。
+
+    段预约在 Campaign 锁内以临时目录改名原子发布，预约之前失败即没有段目录、账本也没有登记该段，段号 ar<k> 仍可开；
+    续跑是按同一段号 N+1 重派同一批次（``_validate_attempt_recovery_segment_successor`` 的同段分支承接）：
+    ``reconcile-supervisor-run`` 入账、账本回到 active 后派发，不作废候选、不需停线，也不走
+    ``reconcile-attempt --recovery-revision``（该段没有预约可对账）。
+    """
+
+    revision = _attempt_recovery_run_revision(manifest, action_id)
+    if revision is None or segment_reserved or failure_class not in ATTEMPT_RECOVERY_SEGMENT_FAILURE_CLASSES:
+        return None
+    return revision
+
+
+def _attempt_recovery_baseline_attempt(campaign_dir: Path, manifest: Mapping[str, Any]) -> str | None:
+    """段批次清单冻结的 attempt-recovery 基线所恢复的原 attempt（第 53 项）；定位不到返回 None，由调用方失败关闭。"""
+
+    recovery = _attempt_recovery_baseline_recovery(campaign_dir, manifest)
+    if recovery is None:
+        return None
+    attempt_id = recovery.get("attempt_id")
+    return str(attempt_id) if _is_safe_id(attempt_id) else None
+
+
+def attempt_recovery_redispatch_steps(campaign_dir: Path, manifest: Mapping[str, Any], recovery_revision: str) -> str:
+    """第 53 项：段预约之前失败后，同段重派的操作步骤（收账 next_action 与对账提示共用）。
+
+    首段（基线冻结的段）直接重派同一批次、执行冻结的 J*。后继段 ar<k>（k≥2）重派时仍要消费前序失败段已批准的恢复预览，
+    而本次失败的对账会在项目总账为本 Campaign 追加事件，原预览按"冻结的本 Campaign 总账事件"核对失效——须先对前序段
+    ar<k-1> 重新对账、批准新的恢复预览，重派批次携带新预览。
+    """
+
+    recovery = _attempt_recovery_baseline_recovery(campaign_dir, manifest)
+    frozen = recovery.get("recovery_revision") if recovery is not None else None
+    if frozen == recovery_revision:
+        return (
+            f"以 compile-and-run-vc-batch 按 N+1 重派同一恢复段 {recovery_revision}（基线冻结的首段，直接执行冻结的 J*）"
+        )
+    try:
+        previous = f"ar{int(recovery_revision[2:]) - 1}"
+    except ValueError:
+        previous = "ar<k-1>"
+    return (
+        f"先 reconcile-attempt --recovery-revision {previous} 对前序失败段重新对账并批准新的恢复预览（本次失败入账后原预览"
+        f"失效），再以 compile-and-run-vc-batch 按 N+1 重派同一恢复段 {recovery_revision}、携带新预览"
+    )
+
+
+def _attempt_recovery_baseline_recovery(campaign_dir: Path, manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """段批次清单冻结的 attempt-recovery 基线的 ``recovery.json``（第 53 项）。
+
+    按清单的 ``candidate_id``／``evaluation_baseline``／``baseline_commit_sha256`` 读 ``b<K>/COMMIT`` 与 ``recovery.json``，
+    两者与清单逐项自洽（COMMIT 摘要等于清单冻结值、recovery 自摘要等于 COMMIT 绑定值、kind 为 attempt-recovery）时
+    返回 recovery；任一不成立返回 None，由调用方失败关闭。
+    """
+
+    candidate_id = manifest.get("candidate_id")
+    baseline = manifest.get("evaluation_baseline")
+    if (
+        not isinstance(candidate_id, str)
+        or not _is_safe_id(candidate_id)
+        or isinstance(baseline, bool)
+        or not isinstance(baseline, int)
+        or baseline < 1
+    ):
+        return None
+    baseline_dir = Path(campaign_dir) / "candidates" / candidate_id / "revisions" / f"b{baseline}"
+    commit_path = baseline_dir / "COMMIT"
+    recovery_path = baseline_dir / "recovery.json"
+    if any(path.is_symlink() or not path.is_file() for path in (commit_path, recovery_path)):
+        return None
+    try:
+        commit = vc_artifacts.validate_evaluation_baseline_commit(_read_json(commit_path))
+        recovery = vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path))
+    except (vc_artifacts.VCArtifactError, SupervisorError, OSError, ValueError):
+        return None
+    if (
+        commit.get("candidate_id") != candidate_id
+        or commit.get("evaluation_baseline") != baseline
+        or commit.get("commit_sha256") != manifest.get("baseline_commit_sha256")
+        or recovery.get("recovery_sha256") != commit.get("recovery_sha256")
+        or recovery.get("candidate_id") != candidate_id
+        or recovery.get("evaluation_baseline") != baseline
+        or recovery.get("kind") != "attempt-recovery"
+    ):
+        return None
+    return recovery
+
+
+def attempt_recovery_segment_reserved(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    recovery_revision: str,
+    *,
+    ledger_summary: Mapping[str, Any],
+) -> bool:
+    """恢复段是否已发布段预约（第 48／53 项共用：收账、对账与后继段协议同一判定）。
+
+    段预约在 Campaign 锁内以临时目录改名原子发布（``recovery/ar<k>`` 目录存在即已预约），随后才登记账本
+    ``attempt_recovery_started``。依次认：账本里该段号有 active 恢复段（第 48 项原判据）；段批次清单冻结的基线 attempt
+    在账本里登记过该段；该 attempt 的段目录存在。定位不到基线 attempt（清单缺字段、COMMIT／recovery 不自洽）时失败关闭，
+    按已预约处理——不开同段重派，维持段失败路由。
+    """
+
+    if _attempt_recovery_segment_active(ledger_summary, recovery_revision):
+        return True
+    attempt_id = _attempt_recovery_baseline_attempt(campaign_dir, manifest)
+    if attempt_id is None:
+        return True
+    recoveries = ledger_summary.get("attempt_recoveries")
+    if isinstance(recoveries, Mapping) and f"{attempt_id}:{recovery_revision}" in recoveries:
+        return True
+    segment_root = (
+        Path(campaign_dir) / "candidates" / str(manifest["candidate_id"]) / "attempts" / attempt_id / "recovery"
+        / recovery_revision
+    )
+    return segment_root.exists() or segment_root.is_symlink()
 
 
 def _attempt_recovery_segment_active(summary: Mapping[str, Any], recovery_revision: str) -> bool:
@@ -11856,8 +12052,9 @@ def _close_failed_campaign_timing_ledger(
 ) -> dict[str, Any]:
     """按机器失败分类收口为可恢复暂停、阶段审核或永久停线。
 
-    ``segment_reserved``（第 48 项）：失败动作是恢复段 run 时，段是否已发布段预约。None 由账本推断（该段号有 active
-    恢复段，父监督器收账时即如此）；reconcile-attempt 对段补账时段已登记失败、不再 active，由调用方显式给 True。
+    ``segment_reserved``（第 48 项）：失败动作是恢复段 run 时，段是否已发布段预约。None 时按
+    ``attempt_recovery_segment_reserved`` 推断（第 53 项：账本 active 段、账本登记过该段或段目录存在任一成立即已预约）；
+    reconcile-attempt 对段补账时段已登记失败、不再 active，由调用方显式给 True。
     """
 
     campaign_dir = Path(campaign_dir)
@@ -11953,13 +12150,19 @@ def _close_failed_campaign_timing_ledger(
     # 不是候选级失败——它是 transient-environment 裁定后的补跑，失败对象是环境瞬态而非候选源码；
     # 阶段保持 active 进入 recovery_required，由段对账（同根因计数）与批准的恢复预览决定是否开后继段。
     # 第 48 项：段 run 在段预约之后的截止类失败（deadline-expired）同样按段失败收口（见 _attempt_recovery_segment_failure）。
+    # 第 53 项：段预约之前的执行失败或截止类失败按同一段号重派收口（见 _attempt_recovery_segment_redispatch）。
     segment_revision = _attempt_recovery_run_revision(manifest, failed_action_id)
     if segment_revision is not None and segment_reserved is None:
         try:
-            segment_reserved = _attempt_recovery_segment_active(timing_ledger.inspect_ledger(ledger_dir), segment_revision)
+            segment_reserved = attempt_recovery_segment_reserved(
+                campaign_dir, manifest, segment_revision, ledger_summary=timing_ledger.inspect_ledger(ledger_dir)
+            )
         except (OSError, timing_ledger.TimingLedgerError) as error:
             raise SupervisorError(f"UpgradeTimingLedger 无法重放：{error}") from error
     recovery_segment = _attempt_recovery_segment_failure(
+        manifest, failed_action_id, failure_class, segment_reserved=bool(segment_reserved)
+    )
+    segment_redispatch = _attempt_recovery_segment_redispatch(
         manifest, failed_action_id, failure_class, segment_reserved=bool(segment_reserved)
     )
     # 修好接着跑：VC-5 候选采集（及其续跑预览／补跑）失败不再进候选审核，阶段保持 active 进入
@@ -11968,17 +12171,28 @@ def _close_failed_campaign_timing_ledger(
     # 同样进入 recovery_required（预算已到期时上面的预算暂停先行），延期、对账后以 N+1 零请求预览续跑。
     candidate_capture = (
         candidate_capture_recovery_route(manifest, failed_action_id, failure_class)
-        if recovery_segment is None
+        if recovery_segment is None and segment_redispatch is None
         else None
     )
     # 第三批 B3-4（第 5 项①）：VC-5／VC-6 的零请求后处理动作以 execution-failure 收口（post-run-tooling 五条判据
     # 不成立的残余情形：中断类失败、同 run 内开过 Kilo 窗口等）同样进入 recovery_required，不再进候选待审。
     candidate_post_run = (
         candidate_post_run_recovery_action(manifest, failed_action_id)
-        if failure_class == "execution-failure" and recovery_segment is None and candidate_capture is None
+        if failure_class == "execution-failure"
+        and recovery_segment is None
+        and segment_redispatch is None
+        and candidate_capture is None
         else None
     )
-    if recovery_segment is not None:
+    if segment_redispatch is not None:
+        # 第 53 项：段预约之前失败，段号 ar<k> 仍可开；入账后按同一段号重派，不作废候选、不需停线。
+        recovery_next_action = (
+            f"reconcile-supervisor-run：恢复段 {segment_redispatch} 在段预约之前失败（未开段、零请求）；截止类先 "
+            "deadline-extend 延期，执行失败先修复并受监督部署；入账后"
+            + attempt_recovery_redispatch_steps(campaign_dir, manifest, segment_redispatch)
+            + f"；不作废候选、不需停线；{segment_redispatch} 本身没有预约，不对它做 reconcile-attempt --recovery-revision。"
+        )
+    elif recovery_segment is not None:
         try:
             successor = f"ar{int(recovery_segment[2:]) + 1}"
         except ValueError:
@@ -12191,6 +12405,7 @@ def _close_failed_campaign_timing_ledger(
                 failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
                 or failure_class in RECOVERABLE_PARENT_FAILURE_CLASSES
                 or recovery_segment is not None
+                or segment_redispatch is not None
                 or candidate_capture is not None
                 or candidate_post_run is not None
             )

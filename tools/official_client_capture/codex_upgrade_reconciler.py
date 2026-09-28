@@ -3978,6 +3978,41 @@ def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bo
     )
 
 
+def _segment_prereservation_revision(
+    run_dir: Path, run: Mapping[str, Any], campaign_dir: Path, ledger_dir: Path
+) -> str | None:
+    """第 53 项：父 run 的失败动作是恢复段 run、在段预约之前以执行失败或截止类失败收口时返回段编号，否则 None。
+
+    判定与父监督器收账同一组函数（``supervisor.attempt_recovery_segment_reserved``＋
+    ``supervisor._attempt_recovery_segment_redispatch``）：段目录不存在、账本没有登记该段。这类失败收账进 recovery_required，
+    续跑是按同一段号 N+1 重派；此前 reconcile-supervisor-run 以"父动作分类不可恢复"拒绝入账（死路）。
+    """
+
+    diagnostic = run.get("action_diagnostic")
+    if run.get("failure_class") not in supervisor.ATTEMPT_RECOVERY_SEGMENT_FAILURE_CLASSES or not isinstance(
+        diagnostic, Mapping
+    ):
+        return None
+    manifest_path = Path(run_dir) / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    action_id = str(diagnostic.get("action_id"))
+    revision = supervisor._attempt_recovery_run_revision(inner, action_id)
+    if revision is None:
+        return None
+    try:
+        summary = timing_ledger.inspect_ledger(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    reserved = supervisor.attempt_recovery_segment_reserved(campaign_dir, inner, revision, ledger_summary=summary)
+    return supervisor._attempt_recovery_segment_redispatch(
+        inner, action_id, str(run.get("failure_class")), segment_reserved=reserved
+    )
+
+
 def _vc1_published_bundle_continuation(run_dir: Path, campaign_dir: Path) -> bool:
     """第 43 项：VC-1 父批次含断言包动作，且该 attempt 的断言证据包已发布、能核对为同一冻结输入的产物（结构核对）。
 
@@ -5085,11 +5120,14 @@ def reconcile_supervisor_run(
         # 否则账本重放会以"检查时间早于最新 event"拒绝。
         observed = _utc_now()
     ledger = _ledger_facts(ledger_dir, now=observed)
+    # 第 53 项：恢复段在段预约之前失败（收账已按同一段号重派收口为 recovery_required）。
+    segment_redispatch = _segment_prereservation_revision(resolved_run_dir, run, campaign_dir, ledger_dir)
     if (
         ledger.get("status") == "recovery_required"
         and run.get("failure_class") not in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
         and run.get("failure_class") not in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
         and not _candidate_capture_recovery_run(resolved_run_dir, run)
+        and segment_redispatch is None
     ):
         raise ReconcilerError(
             "Campaign 账本处于 recovery_required，但父动作分类不可恢复"
@@ -5429,6 +5467,16 @@ def reconcile_supervisor_run(
             result["next_command"] = (
                 "phase 保持 active：VC-5 候选零请求续跑预览失败已对账；截止类失败先确认预算已延期，执行失败先修复并受监督"
                 "部署；以 compile-and-run-vc-batch 按 N+1 逐字重派同一预览批次"
+            )
+        elif segment_redispatch is not None:
+            # 第 53 项：恢复段在段预约之前失败，段号仍可开；协议 15 的同段分支承接 N+1 同段重派（后继段 ar<k+1> 没有可授权的
+            # 段预览，会被拒绝）。后继段重派还要消费前序失败段的恢复预览，本次入账已使原预览失效，步骤里点明先重新对账前序段。
+            inner = _read_json(resolved_run_dir / "campaign-run-manifest.json", "campaign-run 清单").get("manifest")
+            result["next_command"] = (
+                f"phase 保持 active：恢复段 {segment_redispatch} 在段预约之前失败已对账（未开段、零请求）；截止类失败先确认预算"
+                "已延期，执行失败先修复并受监督部署；"
+                + supervisor.attempt_recovery_redispatch_steps(campaign_dir, inner, segment_redispatch)
+                + f"；不作废候选、不需停线；{segment_redispatch} 本身没有预约，不对它做 reconcile-attempt --recovery-revision"
             )
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"

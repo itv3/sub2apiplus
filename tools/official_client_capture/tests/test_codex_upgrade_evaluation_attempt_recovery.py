@@ -24,6 +24,7 @@ from unittest import mock
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture.codex_upgrade import Job
 from tools.official_client_capture import codex_upgrade_evidence_permissions as permissions
+from tools.official_client_capture import incremental_recovery
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
@@ -1098,9 +1099,10 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                 )
 
     def test_item48_segment_failure_routing_depends_on_class_and_segment_reservation(self) -> None:
-        """第 48 项的收账判定边界（纯函数）：执行失败不论段是否已预约都按段失败收口（原口径）；截止类失败只在段已发布预约后
-        按段失败收口——段预约之前失败时段号尚未启用、没有可对账的段，后继段协议也接不住，维持原路由（候选审核）；其余审核类
-        与永久失败类不按段失败收口；不是恢复段 run 的动作不算。段是否已预约由账本推断：该段号有 active 恢复段。"""
+        """第 48 项的收账判定边界（纯函数），第 53 项起按段是否已预约分两路：段已发布预约时，执行失败与截止类失败按段失败
+        收口（段对账后开 ar<k+1>）；段预约之前的执行失败与截止类失败改按同一段号重派收口（第 53 项，此前执行失败也按段失败
+        收口、截止类进候选审核，都没有可走的续跑）；其余审核类与永久失败类两路都不走；不是恢复段 run 的动作不算。段是否已预约
+        由账本推断的一路：该段号有 active 恢复段。"""
 
         import sys
 
@@ -1113,17 +1115,22 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                                                  "--candidate-id", R1]},
         ]}
         route = supervisor._attempt_recovery_segment_failure
-        for failure_class, reserved, expected in (
-            ("execution-failure", False, "ar3"),
-            ("execution-failure", True, "ar3"),
-            ("deadline-expired", True, "ar3"),
-            ("deadline-expired", False, None),
-            ("request-accounting-uncertain", True, None),
-            ("restoration-failed", True, None),
+        redispatch = supervisor._attempt_recovery_segment_redispatch
+        for failure_class, reserved, expected_segment, expected_redispatch in (
+            ("execution-failure", False, None, "ar3"),
+            ("execution-failure", True, "ar3", None),
+            ("deadline-expired", True, "ar3", None),
+            ("deadline-expired", False, None, "ar3"),
+            ("request-accounting-uncertain", True, None, None),
+            ("request-accounting-uncertain", False, None, None),
+            ("restoration-failed", True, None, None),
+            ("restoration-failed", False, None, None),
         ):
             with self.subTest(failure_class=failure_class, reserved=reserved):
-                self.assertEqual(route(manifest, "ar-run", failure_class, segment_reserved=reserved), expected)
+                self.assertEqual(route(manifest, "ar-run", failure_class, segment_reserved=reserved), expected_segment)
+                self.assertEqual(redispatch(manifest, "ar-run", failure_class, segment_reserved=reserved), expected_redispatch)
         self.assertIsNone(route(manifest, "capture", "execution-failure", segment_reserved=True))
+        self.assertIsNone(redispatch(manifest, "capture", "execution-failure", segment_reserved=False))
         active = supervisor._attempt_recovery_segment_active
         summary = {"attempt_recoveries": {
             "a1:ar2": {"attempt_id": "a1", "recovery_revision": "ar2", "status": "failed"},
@@ -1198,6 +1205,244 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             self.assertEqual((backfill["failure_class"], backfill["ledger_status"]), ("restoration-failed", "stopped"))
             self.assertEqual(reconciled["status"], reconciler.DECISION_STOP, reconciled.get("decision"))
             self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
+    # ---- 第 53 项：恢复段在段预约之前失败 ------------------------------------------------------------
+
+    @staticmethod
+    def _item53_source_jobs(context: dict) -> list[Job]:
+        """候选 Job 全集（步骤真实执行、证据写到段重定位后的新根），与既有段用例同形。"""
+
+        original_roots = {str(item["id"]): list(item["evidence_roots"]) for item in context["attempt"]["results"]}
+        return [
+            Job(
+                job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                steps=_job_steps(job_id, original_roots[job_id][0]), evidence_roots=(original_roots[job_id][0],), covers=(),
+                scenario_ids=("A03",),
+            )
+            for job_id in context["job_ids"]
+        ]
+
+    @staticmethod
+    def _item53_segment_manifest(
+        fixture: dict, campaign_dir: Path, job_ids: list[str], *, sequence: int, revision: str, preview: Path | None = None,
+    ) -> dict:
+        """某个恢复段 run 的单动作批次清单（与既有段用例同形）；后继段带 ``--rerun-failed --recovery-preview``。"""
+
+        import sys
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        commit = artifacts.validate_evaluation_baseline_commit(_read(campaign_dir / "candidates" / R1 / "revisions" / "b1" / "COMMIT"))
+        command = [
+            sys.executable, "/managed/codex_upgrade.py", "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+            "--candidate-id", R1, "--attempt-recovery", revision,
+        ]
+        if preview is not None:
+            command += ["--rerun-failed", "--recovery-preview", str(preview)]
+        command += ["--heartbeat-seconds", "1"]
+        return {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": str(fixture["manifest"]["campaign_id"]),
+            "campaign_plan_sha256": str(codex_upgrade._vc_campaign_plan(campaign_dir, fixture["manifest"])["plan_sha256"]),
+            "batch_id": f"vc-5-{sequence:04d}", "batch_sequence": sequence, "batch_sha256": str(sequence) * 64, "phase": "VC-5",
+            "predecessor_checkpoint": {"path": "control/vc/vc-4-checkpoint.json", "sha256": "3" * 64, "phase": "VC-4", "checkpoint_sha256": "4" * 64},
+            "original_deadline_at_utc": "2099-09-15T08:12:43Z", "no_op": False,
+            "actions": [{
+                "action_id": "ar-run", "operation": "VC-5:attempt-recovery-run", "timeout_seconds": 600.0, "command": command,
+                "item_ids": [job_ids[0]],
+            }],
+            "execute_items": [job_ids[0]], "reuse_items": [],
+            "candidate_revision": 1, "candidate_id": R1, "evaluation_baseline": 1, "baseline_commit_sha256": commit["commit_sha256"],
+        }
+
+    def _item53_prereservation_run(
+        self, pseudo: dict, campaign_dir: Path, name: str, manifest: dict, *, diagnostic: tuple[str, str, str], shape: str,
+    ) -> tuple[dict, Path]:
+        """发布某个恢复段批次的父 campaign-run：段 run 在段预约之前失败、写出 ``diagnostic``——``alive`` 父进程自己封存（stop
+        原因 action-failed:ar-run），``r2`` 父进程在收账前丢失、monitor 按 R2 封存；已登记 COMMIT。父 run 窗口从半秒前开始，晚于
+        原 attempt 与既有段的预约（本 run 期间没有任何预约）。"""
+
+        if shape == "alive":
+            run_dir = self.helper._b0_run_dir(
+                pseudo, name, phase="VC-5", state="failed", batched_manifest=manifest, failure_class=diagnostic[2],
+                action_id="ar-run", failure_kind=diagnostic[0], error_type=diagnostic[1], started_offset_seconds=-0.5,
+            )
+        else:
+            _state, run_dir = self.helper._r2_sealed_run(
+                pseudo, name, inner=manifest, action_id="ar-run", phase="VC-5", diagnostic=diagnostic,
+                action_failed_reason="returncode=1", started_offset_seconds=-0.5,
+            )
+        self.helper._item45_bind_commit(campaign_dir, run_dir, manifest)
+        return json.loads((run_dir / "state.json").read_text(encoding="utf-8")), run_dir
+
+    def test_item53_segment_failure_before_reservation_redispatches_same_segment(self) -> None:
+        """第 53 项：恢复段 ar1（当前基线冻结的首段）的 run 在段预约之前失败——预约准入处抛错，段目录与账本段事件都不存在：
+        ① owner 在线、执行失败（ConfigurationError）；② owner 在线、截止类失败（WallClockTimeoutError）；③ 截止类失败、父进程在
+        收账前丢失被 R2 封存（对账补账）。
+
+        修复前：① 收账按段失败收口，提示"reconcile-attempt --recovery-revision ar1 后开 ar2"（该段没有预约可对账），
+        reconcile-supervisor-run 又以"账本处于 recovery_required，但父动作分类不可恢复"拒绝入账——死路；②③ 落到候选审核，只能
+        作废候选或停线。修复后三种形态都收为 recovery_required（同段重派文案），reconcile-supervisor-run 入账、账本回到 active 并
+        提示按 N+1 重派同一恢复段 ar1；N+1 同段重派只有协议 15 承接，后继段 ar2（没有可授权的段预览）不承接；真实重跑 ar1 发布段
+        预约、登记账本并正常收口。"""
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        cases = (
+            ("execution-failure", codex_upgrade.ConfigurationError("合成：段预约准入前的工具缺陷"),
+             ("handled-error", "ConfigurationError", "execution-failure"), "alive"),
+            ("deadline-expired", incremental_recovery.WallClockTimeoutError(
+                "attempt-recovery:reservation-admission", elapsed_seconds=600.0, budget_seconds=600.0),
+             ("handled-error", "WallClockTimeoutError", "deadline-expired"), "alive"),
+            ("deadline-expired-r2", incremental_recovery.WallClockTimeoutError(
+                "attempt-recovery:reservation-admission", elapsed_seconds=600.0, budget_seconds=600.0),
+             ("handled-error", "WallClockTimeoutError", "deadline-expired"), "r2"),
+        )
+        for label, error, diagnostic, shape in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, context = self._failed_b0_and_reconciled(root)
+                campaign_dir, attempt_root, job_ids = context["campaign_dir"], context["attempt_root"], context["job_ids"]
+                ledger_dir = Path(str(fixture["timing_ledger"]))
+                self.assertEqual(self._apply_transient(fixture, context)["status"], "applied")
+                jobs = self._item53_source_jobs(context)
+                with self._segment_patches_started(context, jobs), mock.patch.object(
+                    codex_upgrade, "_require_capture_budget_before_data_action", side_effect=error
+                ):
+                    with self.assertRaises(type(error)):
+                        codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+                segment_root = attempt_root / codex_upgrade.ATTEMPT_RECOVERY_DIRNAME / "ar1"
+                self.assertFalse(segment_root.exists())
+                self.assertNotIn(f"{attempt_root.name}:ar1", timing_ledger.inspect_ledger(ledger_dir)["attempt_recoveries"])
+                manifest = self._item53_segment_manifest(fixture, campaign_dir, job_ids, sequence=7, revision="ar1")
+                state_root = root / "supervisor-state"
+                state_root.mkdir(mode=0o700)
+                pseudo = {"control": state_root, "manifest": fixture["manifest"], "campaign_dir": campaign_dir}
+                prior_state, prior_dir = self._item53_prereservation_run(
+                    pseudo, campaign_dir, "a" * 64, manifest, diagnostic=diagnostic, shape=shape
+                )
+                case = {"prior_state": prior_state, "prior_manifest": manifest, "prior_dir": prior_dir, "campaign_dir": campaign_dir}
+                if shape == "alive":
+                    closeout = supervisor._close_failed_campaign_timing_ledger(
+                        campaign_dir, manifest, failed_action_id="ar-run", failure_class=diagnostic[2]
+                    )
+                    self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+                    self.assertIn("重派同一恢复段 ar1", closeout["next_action"])
+                    self.assertNotIn("ar2", closeout["next_action"])
+                with self._segment_patches_started(context, jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                    reconciled = reconciler.reconcile_supervisor_run(prior_dir, campaign_dir)
+                self.assertEqual(reconciled["status"], "recoverable", reconciled.get("decision"))
+                if shape == "r2":
+                    self.assertEqual(reconciled["ledger_closeout_backfill"]["ledger_status"], "recovery_required", reconciled)
+                self.assertIn("重派同一恢复段 ar1", reconciled["next_command"])
+                self.assertNotIn("invalidate-candidate", reconciled["next_command"])
+                summary = timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual(
+                    (summary["status"], summary["active_phase"], summary["next_action"]), ("active", "VC-5", "redispatch-same-batch")
+                )
+                same = dict(manifest, batch_id="vc-5-0008", batch_sequence=8, batch_sha256="8" * 64)
+                self.assertEqual(self._item45_accepting(case, same), ["attempt_recovery_segment"])
+                successor = self._item53_segment_manifest(
+                    fixture, campaign_dir, job_ids, sequence=8, revision="ar2", preview=root / "no-such-preview.json"
+                )
+                self.assertEqual(self._item45_accepting(case, successor), [])
+                # 修好接着跑：同一段号真实重跑，段预约发布并登记账本。
+                with self._segment_patches_started(context, jobs):
+                    rerun = codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+                self.assertEqual(rerun["status"], "awaiting_receipts", rerun)
+                self.assertTrue((segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME).is_file())
+                self.assertIn(f"{attempt_root.name}:ar1", timing_ledger.inspect_ledger(ledger_dir)["attempt_recoveries"])
+
+    def test_item53_successor_segment_failure_before_reservation_redispatches_after_rereconciling_previous(self) -> None:
+        """第 53 项（后继段）：ar1 执行失败（段已预约）→ 父监督器收账 → reconcile-attempt --recovery-revision ar1 → 批准并授权恢复
+        预览 → 派发 ar2 的批次，ar2 的段 run 在消费已授权预览之后、段预约之前以截止类失败收口（段目录与账本段事件都不存在）。
+
+        修复前收账把它当作未预约的截止失败送进候选审核（只能作废候选或停线）。修复后收为 recovery_required，reconcile-supervisor-run
+        入账、账本回到 active，提示先对前序段 ar1 重新对账、批准新预览——本次入账在项目总账追加了本 Campaign 的事件，原预览按冻结
+        的总账事件核对已不能消费（真实重跑用原预览被拒）；重新对账 ar1 得到新预览、批准后，N+1 同段重派 ar2 只有协议 15 承接，真实
+        重跑 ar2 消费新预览并发布段预约。"""
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            case = self._item45_owner_lost_segment(root, shape="alive")
+            campaign_dir, attempt_root, job_ids = case["campaign_dir"], case["attempt_root"], case["job_ids"]
+            attempt_id = attempt_root.name
+            fixture, context = case["fixture"], case["context"]
+            ledger_dir = Path(str(fixture["timing_ledger"]))
+            jobs = self._item53_source_jobs(context)
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, case["prior_manifest"], failed_action_id="ar-run", failure_class="execution-failure"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+            with self._segment_patches_started(context, jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                reconciled = reconciler.reconcile_attempt(campaign_dir, attempt_id, recovery_revision="ar1")
+                self.assertEqual(reconciled["status"], "recoverable", reconciled.get("decision"))
+                reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_id, approve_sha256=reconciled["recovery_preview"]["review_sha256"], recovery_revision="ar1"
+                )
+                old_preview = Path(reconciled["recovery_preview_path"])
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, old_preview, recovery_revision="ar1")
+            self.assertTrue(authorized["timing_recovery_event"]["appended"], authorized)
+            deadline = incremental_recovery.WallClockTimeoutError(
+                "attempt-recovery:reservation-admission", elapsed_seconds=600.0, budget_seconds=600.0
+            )
+
+            def ar2_arguments(preview: Path) -> argparse.Namespace:
+                arguments = self._run_arguments(campaign_dir, "ar2")
+                arguments.rerun_failed = True
+                arguments.recovery_preview = preview
+                return arguments
+
+            with self._segment_patches_started(context, jobs), mock.patch.object(
+                codex_upgrade, "_require_capture_budget_before_data_action", side_effect=deadline
+            ):
+                with self.assertRaises(incremental_recovery.WallClockTimeoutError):
+                    codex_upgrade._run_capture_attempt(ar2_arguments(old_preview), "candidate")
+            ar2_root = attempt_root / codex_upgrade.ATTEMPT_RECOVERY_DIRNAME / "ar2"
+            self.assertFalse(ar2_root.exists())
+            ar2_manifest = self._item53_segment_manifest(fixture, campaign_dir, job_ids, sequence=8, revision="ar2", preview=old_preview)
+            pseudo = {"control": Path(case["prior_dir"]).parent, "manifest": fixture["manifest"], "campaign_dir": campaign_dir}
+            prior_state, prior_dir = self._item53_prereservation_run(
+                pseudo, campaign_dir, "b" * 64, ar2_manifest,
+                diagnostic=("handled-error", "WallClockTimeoutError", "deadline-expired"), shape="alive",
+            )
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, ar2_manifest, failed_action_id="ar-run", failure_class="deadline-expired"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+            self.assertIn("重派同一恢复段 ar2", closeout["next_action"])
+            self.assertIn("reconcile-attempt --recovery-revision ar1", closeout["next_action"])
+            with self._segment_patches_started(context, jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                reconciled_run = reconciler.reconcile_supervisor_run(prior_dir, campaign_dir)
+            self.assertEqual(reconciled_run["status"], "recoverable", reconciled_run.get("decision"))
+            self.assertIn("reconcile-attempt --recovery-revision ar1", reconciled_run["next_command"])
+            self.assertIn("重派同一恢复段 ar2", reconciled_run["next_command"])
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            # 原预览已不能消费：本次对账在项目总账追加了本 Campaign 的事件。
+            with self._segment_patches_started(context, jobs):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须重新对账"):
+                    codex_upgrade._run_capture_attempt(ar2_arguments(old_preview), "candidate")
+            self.assertFalse(ar2_root.exists())
+            with self._segment_patches_started(context, jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                again = reconciler.reconcile_attempt(campaign_dir, attempt_id, recovery_revision="ar1")
+                self.assertEqual(again["status"], "recoverable", again.get("decision"))
+                new_preview = Path(again["recovery_preview_path"])
+                self.assertNotEqual(new_preview, old_preview)
+                reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_id, approve_sha256=again["recovery_preview"]["review_sha256"], recovery_revision="ar1"
+                )
+            case2 = {"prior_state": prior_state, "prior_manifest": ar2_manifest, "prior_dir": prior_dir, "campaign_dir": campaign_dir}
+            same = self._item53_segment_manifest(fixture, campaign_dir, job_ids, sequence=9, revision="ar2", preview=new_preview)
+            self.assertEqual(self._item45_accepting(case2, same), ["attempt_recovery_segment"])
+            with self._segment_patches_started(context, jobs):
+                rerun = codex_upgrade._run_capture_attempt(ar2_arguments(new_preview), "candidate")
+            self.assertEqual(rerun["status"], "awaiting_receipts", rerun)
+            self.assertTrue((ar2_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME).is_file())
+            self.assertIn(f"{attempt_id}:ar2", timing_ledger.inspect_ledger(ledger_dir)["attempt_recoveries"])
 
     def test_parent_finalize_lost_summary_is_verified_with_segment_load_strength_and_frozen_jobs(self) -> None:
         """R2 attempt-recovery 变体（2026-09-21 三审 P1）：对账／后继协议对绑定的段摘要用与幂等重派相同强度的
