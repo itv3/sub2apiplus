@@ -317,11 +317,18 @@ class StagingDispatchTests(unittest.TestCase):
             abort = artifacts.validate_staging_abort(self._read(attempt_dir / "ABORT"))
             self.assertEqual((abort["stage"], abort["failure_kind"], abort["error_type"]), ("prepare", "prepare-failed", "RuntimeError"))
             self.assertIsNone(abort["parent_run_dir"])
+            # 修好接着跑第 32 项：带原始异常的 prepare 失败记 staging.attempt-failed（异常类型＋归一化拒因签名）。
+            self.assertEqual(abort["error_signature"], artifacts.staging_abort_error_signature("crash-after-prepare"))
             expected_cause = root_cause.structured_root_cause(
                 component="orchestrator",
-                stable_error_code="staging.abandoned",
+                stable_error_code="staging.attempt-failed",
                 failed_step="prepare",
-                stable_dimensions={"phase": "VC-2", "stage": "prepare"},
+                stable_dimensions={
+                    "phase": "VC-2",
+                    "stage": "prepare",
+                    "error_type": "RuntimeError",
+                    "error_signature": abort["error_signature"],
+                },
             )
             self.assertEqual(abort["root_cause_id"], expected_cause)
             head = self._head(fixture)
@@ -638,6 +645,238 @@ class StagingDispatchTests(unittest.TestCase):
             abort = artifacts.validate_staging_abort(self._read(self._staging_dir(campaign_dir, 3, "VC-2") / "attempt-1" / "ABORT"))
             self.assertEqual((abort["stage"], abort["error_type"]), ("parent-run-create", "SupervisorError"))
             self.assertIn("漂移字段：actions", abort["error_message"])
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 32 项：根因粒度（同一步骤的不同拒因互不累计）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _chain_audit_refusal(prior_run_hex: str, sequence: int, reason: str) -> str:
+        """与监督器 _unclaimed_failed_batch_message 同形的链审计兜底文案（194249z 批次 17 实测形态）。"""
+
+        return (
+            "失败批次只能由唯一直接 v3 恢复后继承接。"
+            f"前序 run run-{prior_run_hex}：phase VC-5、序号 {sequence - 1}、终态 failed／supervisor-stop／"
+            "action-failed:candidate-recovery-run（种类 action-failed）、失败动作 candidate-recovery-run（来源 stop-reason）；"
+            f"后继批次序号 {sequence}（phase VC-5，动作 candidate-recovery-preview）。"
+            "各协议拒因：evolution_recovery：形态不符；seal_chain：形态不符；"
+            f"candidate_recovery_run_retry：{reason}。"
+            "未对账的失败前序先执行 reconcile-supervisor-run（run 期间无预约）或 reconcile-attempt（有预约）。"
+        )
+
+    @staticmethod
+    def _unreconciled_reason(run_hex: str) -> str:
+        return f"VC-5 补跑失败后继：失败父 run {run_hex} 尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"
+
+    @staticmethod
+    def _refuse_parent_run_create(message: str):
+        """父 run 建立前被监督器拒绝（链审计）：staging 父 run 的 _campaign_run_locked 直接抛 SupervisorError，run 目录不存在。
+
+        只拦带 staging_binding 的调用；no-op 引导首批也走同一入口，必须放行。
+        """
+
+        original = supervisor._campaign_run_locked
+
+        def refuse(*args, **kwargs):
+            if kwargs.get("staging_binding") is not None:
+                raise supervisor.SupervisorError(message)
+            return original(*args, **kwargs)
+
+        return mock.patch.object(supervisor, "_campaign_run_locked", side_effect=refuse)
+
+    @staticmethod
+    def _attempt_failed_cause(phase: str, stage: str, abort: dict[str, object]) -> str:
+        return root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.attempt-failed",
+            failed_step=stage,
+            stable_dimensions={
+                "phase": phase,
+                "stage": stage,
+                "error_type": str(abort["error_type"]),
+                "error_signature": str(abort["error_signature"]),
+            },
+        )
+
+    def test_parent_run_create_refusals_with_different_reasons_get_distinct_root_causes(self) -> None:
+        """修好接着跑第 32 项（194249z 批次 17 实测）：同一序号 parent-run-create 两次因不同工具缺陷被链审计拒绝——
+        attempt-1 拒因"失败父 run … 尚未对账"，attempt-2 拒因"补跑失败后的预览的父动作诊断不是处理型失败"。修复前两次都记
+        staging.abandoned(phase, parent-run-create) 同一根因，第二次即达上限暂停、要登记修复证据才能放行；修复后按异常类型与
+        归一化拒因签名得到不同根因、各计 1 次，第二次不暂停；修好后第三次同序号派发直接成功。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            prior = "0123456789abcdef" * 4
+            first_refusal = self._chain_audit_refusal(prior, 2, self._unreconciled_reason(prior))
+            second_refusal = self._chain_audit_refusal(prior, 2, "VC-5 补跑失败后的预览的父动作诊断不是处理型失败")
+            with self._refuse_parent_run_create(first_refusal):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未对账") as first:
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-rc-a")
+            self.assertNotIsInstance(first.exception, codex_upgrade.StagingDeadlinePaused)
+            with self._refuse_parent_run_create(second_refusal):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不是处理型失败") as second:
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-rc-b")
+            # 第二次不再因"同根因达上限"暂停。
+            self.assertNotIsInstance(second.exception, codex_upgrade.StagingDeadlinePaused)
+            sequence_dir = self._staging_dir(campaign_dir, 2, "VC-2")
+            aborts = [artifacts.validate_staging_abort(self._read(sequence_dir / f"attempt-{n}" / "ABORT")) for n in (1, 2)]
+            self.assertEqual(
+                [(item["stage"], item["failure_kind"], item["error_type"]) for item in aborts],
+                [("parent-run-create", "prepare-failed", "SupervisorError")] * 2,
+            )
+            self.assertNotEqual(aborts[0]["error_signature"], aborts[1]["error_signature"])
+            causes = [item["root_cause_id"] for item in aborts]
+            self.assertEqual(causes, [self._attempt_failed_cause("VC-2", "parent-run-create", item) for item in aborts])
+            self.assertNotEqual(causes[0], causes[1])
+            historical = root_cause.structured_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.abandoned",
+                failed_step="parent-run-create",
+                stable_dimensions={"phase": "VC-2", "stage": "parent-run-create"},
+            )
+            self.assertNotIn(historical, causes)
+            head = self._head(fixture)
+            self.assertEqual({cause: head["root_cause_counts"][cause] for cause in causes}, {causes[0]: 1, causes[1]: 1})
+            self.assertEqual(head["root_causes_at_limit"], [])
+            self.assertNotIn(historical, head["root_cause_counts"])
+            # 总账事件带新维度，操作员能从总账读出是哪一种拒因（事件发布后不可变，只读快照即可）。
+            events = project_ledger._load_events(Path(str(fixture["ledger"])))
+            recorded = {
+                event["operation_id"]: event["payload"]["root_cause"]
+                for event in events
+                if event["operation_id"] in {"staging-abort:0002:1", "staging-abort:0002:2"}
+            }
+            self.assertEqual(recorded["staging-abort:0002:1"]["stable_error_code"], "staging.attempt-failed")
+            self.assertEqual(
+                recorded["staging-abort:0002:2"]["stable_dimensions"],
+                {
+                    "phase": "VC-2",
+                    "stage": "parent-run-create",
+                    "error_type": "SupervisorError",
+                    "error_signature": aborts[1]["error_signature"],
+                },
+            )
+            # 修好接着跑：第三次同序号派发直接成功，没有要登记的修复证据。
+            result, returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-rc-c")
+            self.assertEqual(returncode, 0, result)
+            self.assertEqual(result["staging_attempt"], 3)
+
+    def test_parent_run_create_same_refusal_twice_still_hits_root_cause_limit(self) -> None:
+        """修好接着跑第 32 项：上限保护不削弱——同一拒因（只在前序 run ID、序号上不同）两次 parent-run-create 失败得同一
+        根因，第二次累计达上限、对账判根因修复暂停（登记修复证据才能放行）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            run_one = "0123456789abcdef" * 4
+            run_two = "fedcba9876543210" * 4
+            with self._refuse_parent_run_create(self._chain_audit_refusal(run_one, 2, self._unreconciled_reason(run_one))):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未对账") as first:
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-same-a")
+            self.assertNotIsInstance(first.exception, codex_upgrade.StagingDeadlinePaused)
+            with self._refuse_parent_run_create(self._chain_audit_refusal(run_two, 3, self._unreconciled_reason(run_two))):
+                with self.assertRaisesRegex(codex_upgrade.StagingDeadlinePaused, "父 run 创建失败.*登记根因修复证据"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-same-b")
+            sequence_dir = self._staging_dir(campaign_dir, 2, "VC-2")
+            aborts = [artifacts.validate_staging_abort(self._read(sequence_dir / f"attempt-{n}" / "ABORT")) for n in (1, 2)]
+            self.assertEqual(aborts[0]["error_signature"], aborts[1]["error_signature"])
+            self.assertEqual(aborts[0]["root_cause_id"], aborts[1]["root_cause_id"])
+            cause = aborts[0]["root_cause_id"]
+            self.assertEqual(cause, self._attempt_failed_cause("VC-2", "parent-run-create", aborts[0]))
+            head = self._head(fixture)
+            self.assertEqual(head["root_cause_counts"][cause], 2)
+            self.assertIn(cause, head["root_causes_at_limit"])
+
+    def test_prepare_failures_with_different_errors_get_distinct_root_causes(self) -> None:
+        """修好接着跑第 32 项：prepare（编译落盘后）失败同理——同类型异常、不同拒因得不同根因，第二次不暂停。"""
+
+        original = codex_upgrade.compile_vc_batch
+
+        def crashing(message: str):
+            def compile_then_fail(arguments, **kwargs):
+                original(arguments, **kwargs)
+                raise RuntimeError(message)
+
+            return mock.patch.object(codex_upgrade, "compile_vc_batch", side_effect=compile_then_fail)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            with crashing("批次编译后校验失败：evaluator 依赖摘要漂移"):
+                with self.assertRaisesRegex(RuntimeError, "evaluator"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-prep-a")
+            with crashing("批次编译后校验失败：候选 revision 未激活"):
+                with self.assertRaisesRegex(RuntimeError, "候选 revision"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-prep-b")
+            sequence_dir = self._staging_dir(campaign_dir, 2, "VC-2")
+            aborts = [artifacts.validate_staging_abort(self._read(sequence_dir / f"attempt-{n}" / "ABORT")) for n in (1, 2)]
+            causes = [item["root_cause_id"] for item in aborts]
+            self.assertEqual(causes, [self._attempt_failed_cause("VC-2", "prepare", item) for item in aborts])
+            self.assertNotEqual(causes[0], causes[1])
+            head = self._head(fixture)
+            self.assertEqual(sorted(head["root_cause_counts"][cause] for cause in causes), [1, 1])
+            result, returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-prep-c")
+            self.assertEqual(returncode, 0, result)
+            self.assertEqual(result["staging_attempt"], 3)
+
+    def test_historical_abort_without_signature_reconciles_with_historical_root_cause(self) -> None:
+        """修好接着跑第 32 项：历史收据照旧重放——第 32 项之前写下、尚未入账的 ABORT（第 29 项形态：有原文、无
+        error_signature）由新入口的孤儿对账按 staging.abandoned 旧维度复算，旧 ID 逐字不变地入账；同序号随后正常派发。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            # 编译落盘后进程被杀：attempt-1 有 PREPARED 三件套、没有 ABORT。
+            self._run_driver(
+                fixture, root, "VC-2", 2, patches=[{"module": "codex_upgrade", "name": "compile_vc_batch", "mode": "exit_after"}]
+            )
+            attempt_dir = self._staging_dir(campaign_dir, 2, "VC-2") / "attempt-1"
+            self.assertFalse((attempt_dir / "ABORT").exists())
+            legacy_id = "rc1-9d06b6a370a064931a07"
+            self.assertEqual(
+                legacy_id,
+                root_cause.structured_root_cause(
+                    component="orchestrator",
+                    stable_error_code="staging.abandoned",
+                    failed_step="prepare",
+                    stable_dimensions={"phase": "VC-2", "stage": "prepare"},
+                ),
+            )
+            plan = codex_upgrade._vc_campaign_plan(campaign_dir, self._read(campaign_dir / "campaign.json"))
+            batch_sha256, manifest_sha256 = codex_upgrade._staging_attempt_sha256s(attempt_dir)
+            historical = codex_upgrade._write_staging_abort(
+                attempt_dir,
+                campaign_id=str(plan["campaign_id"]),
+                campaign_plan_sha256=str(plan["plan_sha256"]),
+                phase="VC-2",
+                sequence=2,
+                attempt=1,
+                stage="prepare",
+                failure_kind="prepare-failed",
+                error_type="RuntimeError",
+                root_cause_id=legacy_id,
+                batch_sha256=batch_sha256,
+                manifest_sha256=manifest_sha256,
+                parent_run_dir=None,
+                parent_run_state=None,
+                reconciliation_receipt=None,
+                error_message="crash-after-prepare",
+            )
+            self.assertNotIn("error_signature", historical)
+            raw = (attempt_dir / "ABORT").read_bytes()
+            result, returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-legacy")
+            self.assertEqual(returncode, 0, result)
+            self.assertEqual(result["staging_attempt"], 2)
+            self.assertEqual([(item["kind"], item["root_cause_id"]) for item in result["orphans"]], [("staging-attempt", legacy_id)])
+            head = self._head(fixture)
+            self.assertIn("staging-abort:0002:1", head["operations"])
+            self.assertEqual(head["root_cause_counts"], {legacy_id: 1})
+            self.assertEqual((attempt_dir / "ABORT").read_bytes(), raw)
 
     def test_write_staging_abort_ignores_error_message_when_verifying_existing_receipt(self) -> None:
         """修好接着跑第 29 项：既有（历史形态、无 error_message）的 ABORT 再次写入时带原文，write-once 核对把 error_message

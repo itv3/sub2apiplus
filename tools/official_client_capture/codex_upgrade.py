@@ -18125,13 +18125,14 @@ def _write_staging_abort(
     parent_run_state: str | None,
     reconciliation_receipt: Mapping[str, Any] | None,
     error_message: str | None = None,
+    error_signature: str | None = None,
 ) -> dict[str, Any]:
     """写 staging ABORT（write-once + 内容核对）：已存在时逐字段核对当前事实，不同即失败关闭。
 
     只有 ``recorded_at_utc`` 与自摘要 ``receipt_sha256`` 是易变字段；其余字段（Campaign、
     总计划摘要、阶段、序号、attempt、stage、failure_kind、error_type、根因、产物摘要、父 run
     绑定、对账收据绑定、零请求断言）必须与既有收据完全一致，避免孤儿对账把错误的根因或
-    收据绑定到既有 ABORT 上。
+    收据绑定到既有 ABORT 上。``error_signature``（第 32 项）决定根因编码，是事实字段、参与核对。
     """
 
     abort_path = attempt_dir / STAGING_ABORT_FILENAME
@@ -18153,6 +18154,7 @@ def _write_staging_abort(
             reconciliation_receipt=reconciliation_receipt,
             recorded_at_utc=_utc_now(),
             error_message=error_message,
+            error_signature=error_signature,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -18277,11 +18279,16 @@ def _abort_staging_attempt_without_parent(
     failure_kind: str,
     error_type: str,
     error_message: str | None = None,
+    error_signature: str | None = None,
 ) -> dict[str, Any] | None:
     """P1：没有父 run 的 staging attempt → ABORT → outbox → 总账 → 判定（态 A→B→C）。
 
     attempt 目录不存在（编译在落盘前失败）时没有事实可登记，返回 ``None``。
     判定命中永久停线时抛 ``StagingStopTheLine``。
+
+    修好接着跑第 32 项：带原始异常的失败同时给出 ``error_message`` 与 ``error_signature``，根因按
+    ``staging.attempt-failed``（异常类型＋归一化拒因签名）编码，同一步骤的不同拒因互不累计；孤儿扫描发现的
+    遗弃 attempt 没有异常原文，两者都不给，仍记 ``staging.abandoned``。
     """
 
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
@@ -18289,8 +18296,15 @@ def _abort_staging_attempt_without_parent(
     if not attempt_dir.exists():
         return None
     campaign_id = str(plan["campaign_id"])
+    # ABORT 只记前 128 个字符的类型名；根因用同一截断值，对账器从收据复算才能得到同一 ID。
+    recorded_error_type = error_type[:128]
     try:
-        cause = reconciler.staging_abort_root_cause(phase, stage)
+        cause = reconciler.staging_abort_root_cause(
+            phase,
+            stage,
+            error_type=recorded_error_type if error_signature is not None else None,
+            error_signature=error_signature,
+        )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
     batch_sha256, manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
@@ -18303,7 +18317,7 @@ def _abort_staging_attempt_without_parent(
         attempt=attempt,
         stage=stage,
         failure_kind=failure_kind,
-        error_type=error_type,
+        error_type=recorded_error_type,
         root_cause_id=str(cause["root_cause_id"]),
         batch_sha256=batch_sha256,
         manifest_sha256=manifest_sha256,
@@ -18311,6 +18325,7 @@ def _abort_staging_attempt_without_parent(
         parent_run_state=None,
         reconciliation_receipt=None,
         error_message=error_message,
+        error_signature=error_signature,
     )
     return _reconcile_staging_abort_receipt(
         campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
@@ -18842,6 +18857,7 @@ def _compile_and_run_vc_batch_staging(
                     failure_kind=failure_kind,
                     error_type=type(error).__name__,
                     error_message=codex_upgrade_vc_artifacts.staging_abort_error_message(error),
+                    error_signature=codex_upgrade_vc_artifacts.staging_abort_error_signature(error),
                 )
             except StagingStopTheLine as stop_error:
                 raise StagingStopTheLine(
@@ -18959,6 +18975,7 @@ def _compile_and_run_vc_batch_staging(
                         failure_kind=failure_kind,
                         error_type=type(error).__name__,
                         error_message=codex_upgrade_vc_artifacts.staging_abort_error_message(error),
+                        error_signature=codex_upgrade_vc_artifacts.staging_abort_error_signature(error),
                     )
                 except StagingStopTheLine as stop_error:
                     raise StagingStopTheLine(

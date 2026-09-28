@@ -94,12 +94,17 @@
     "staging.abandoned": {
       "component": "orchestrator",
       "stable_dimensions": ["phase", "stage"],
-      "description": "VC 批次 staging 制品或 prepared 父 run 在取得执行权前被遗弃（进程崩溃、SIGKILL 或 owner 丢失），正式序号未占用。"
+      "description": "VC 批次 staging 制品或 prepared 父 run 在取得执行权前被遗弃（进程崩溃、SIGKILL 或 owner 丢失），正式序号未占用。第 32 项起带原始异常的 prepare／parent-run-create 失败改记 staging.attempt-failed；本码只用于没有异常原文可归因的遗弃（入口孤儿扫描、prepared-abandoned 父 run）以及不带 error_signature 的历史 ABORT 重放，维度与旧 ID 不变。"
     },
     "staging.commit-failed": {
       "component": "orchestrator",
       "stable_dimensions": ["phase", "stage"],
       "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。"
+    },
+    "staging.attempt-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage", "error_type", "error_signature"],
+      "description": "修好接着跑第 32 项：VC 批次 staging attempt 在父 run 建立前（prepare 编译落盘，或 parent-run-create 链审计／父 run 创建）因异常中止，正式序号未占用。failed_step 与 stage 相同；error_type 为异常类名（非标识符记 unrecognized）；error_signature 为归一化拒因签名 es1：原始异常全文去控制字符后，把绝对路径、Campaign／attempt／run ID、UUID、时间戳、0x 地址、十六进制摘要替换为占位符，其余数字替换为 #，Python 字符串集合字面量元素排序，空白折叠，取 SHA-256 前 16 位。同一步骤的不同拒因互不累计；同一拒因只在上述波动片段上不同仍得同一 ID，上限保护不削弱。ABORT 收据带 error_signature 时按本码复算，不带时按 staging.abandoned 复算（历史收据照旧重放）。"
     },
     "parent-start.failed": {
       "component": "supervisor",

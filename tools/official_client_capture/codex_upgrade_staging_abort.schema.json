@@ -10,6 +10,7 @@
     "parent_run_dir", "parent_run_state", "reconciliation_receipt",
     "live_request_count", "scanned_bytes", "recorded_at_utc", "receipt_sha256"
   ],
+  "dependentRequired": {"error_signature": ["error_message"]},
   "properties": {
     "schema_version": {"const": "codex-upgrade-staging-abort/v1"},
     "campaign_id": {"$ref": "#/$defs/safeId"},
@@ -21,6 +22,7 @@
     "failure_kind": {"enum": ["abandoned", "prepare-failed", "commit-failed", "interrupted"]},
     "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
     "error_message": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "error_signature": {"type": "string", "pattern": "^es1-[0-9a-f]{16}$"},
     "root_cause_id": {"type": "string", "pattern": "^rc1-[0-9a-f]{20}$"},
     "batch_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
     "manifest_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},

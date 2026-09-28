@@ -171,6 +171,58 @@ class StructuredRootCauseTests(unittest.TestCase):
         )
         self.assertEqual(len({abandoned, parent_run, commit_failed}), 3)
 
+    def test_staging_attempt_failed_splits_same_step_by_error_and_keeps_historical_ids(self) -> None:
+        """修好接着跑第 32 项：staging.attempt-failed 按异常类型与归一化拒因签名细分同一步骤的失败。
+
+        登记为 orchestrator 生产、维度恰为 phase、stage、error_type、error_signature；同一拒因（签名相同）得同一 ID，
+        不同拒因或不同异常类型得不同 ID，且都不等于历史 staging.abandoned 的 ID。历史 ID 字面量逐字不变：194249z
+        批次 17 两次 parent-run-create 失败记成的 rc1-9878a53825675a7668ea 仍由 staging.abandoned 旧维度复算得到。
+        """
+
+        entry = root_cause.load_codes()["codes"]["staging.attempt-failed"]
+        self.assertEqual(entry["component"], "orchestrator")
+        self.assertEqual(entry["stable_dimensions"], ("phase", "stage", "error_type", "error_signature"))
+        self.assertFalse(entry["legacy"])
+        historical = root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.abandoned",
+            failed_step="parent-run-create",
+            stable_dimensions={"phase": "VC-5", "stage": "parent-run-create"},
+        )
+        self.assertEqual(historical, "rc1-9878a53825675a7668ea")
+
+        def cause(signature: str, error_type: str = "SupervisorError") -> str:
+            return root_cause.structured_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.attempt-failed",
+                failed_step="parent-run-create",
+                stable_dimensions={
+                    "phase": "VC-5",
+                    "stage": "parent-run-create",
+                    "error_type": error_type,
+                    "error_signature": signature,
+                },
+            )
+
+        unreconciled = cause("es1-" + "1" * 16)
+        not_handled = cause("es1-" + "2" * 16)
+        self.assertEqual(unreconciled, cause("es1-" + "1" * 16))
+        self.assertNotEqual(unreconciled, not_handled)
+        self.assertNotEqual(unreconciled, cause("es1-" + "1" * 16, error_type="ConfigurationError"))
+        self.assertNotIn(historical, {unreconciled, not_handled})
+        # 签名维度同样受波动值拒绝：长摘要、绝对路径不能冒充签名。
+        for value in ("f" * 64, "/root/docker/capture-cli/data"):
+            with self.subTest(value=value), self.assertRaisesRegex(root_cause.RootCauseError, "不是稳定根因输入"):
+                cause(value)
+        # 维度键必须恰好四个：少了签名或异常类型都拒绝（不能退化成旧的两维）。
+        with self.assertRaisesRegex(root_cause.RootCauseError, "维度键"):
+            root_cause.structured_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.attempt-failed",
+                failed_step="parent-run-create",
+                stable_dimensions={"phase": "VC-5", "stage": "parent-run-create"},
+            )
+
     def test_legacy_literals_map_to_structured_ids(self) -> None:
         mapped = root_cause.legacy_root_cause_id("vc1-parent-lease-deadline-missing")
         self.assertTrue(root_cause.is_structured(mapped))

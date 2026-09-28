@@ -890,6 +890,118 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
                 abort = artifacts.build_staging_abort(**params, error_message=message)
                 self.assertEqual(artifacts.validate_staging_abort(abort)["error_message"], message)
 
+    @staticmethod
+    def _chain_audit_refusal(prior_run_hex: str, sequence: int, reason: str) -> str:
+        """与监督器 _unclaimed_failed_batch_message 同形的链审计兜底文案（194249z 批次 17 实测形态）。"""
+
+        return (
+            "失败批次只能由唯一直接 v3 恢复后继承接。"
+            f"前序 run run-{prior_run_hex}：phase VC-5、序号 {sequence - 1}、终态 failed／supervisor-stop／"
+            "action-failed:candidate-recovery-run（种类 action-failed）、失败动作 candidate-recovery-run（来源 stop-reason）；"
+            f"后继批次序号 {sequence}（phase VC-5，动作 candidate-recovery-preview）。"
+            "各协议拒因：evolution_recovery：形态不符；seal_chain：形态不符；"
+            f"candidate_recovery_run_retry：{reason}。"
+            "未对账的失败前序先执行 reconcile-supervisor-run（run 期间无预约）或 reconcile-attempt（有预约）。"
+        )
+
+    def test_staging_abort_error_signature_is_stable_across_volatile_fragments(self) -> None:
+        """修好接着跑第 32 项：归一化拒因签名 es1。
+
+        同一拒因只在波动片段（run／attempt／Campaign ID、绝对路径、时间戳、十六进制摘要、0x 地址、UUID、数字、
+        Python 集合字面量顺序）上不同时签名相同——上限保护不削弱；不同拒因签名不同——194249z 批次 17 的"失败父 run
+        尚未对账"与"补跑失败后的预览的父动作诊断不是处理型失败"不再合并。签名基于清洗后的完整原文（不受 2000 字符截断
+        影响），未截断时与收据原文复算一致；格式能作为根因维度（不触发波动值拒绝）。
+        """
+
+        signature = artifacts.staging_abort_error_signature
+        run_one = "0123456789abcdef" * 4
+        run_two = "fedcba9876543210" * 4
+        unreconciled = lambda run: f"VC-5 补跑失败后继：失败父 run {run} 尚未对账（缺对账收据）；先执行 reconcile-supervisor-run"
+        not_handled = "VC-5 补跑失败后的预览的父动作诊断不是处理型失败"
+        first = signature(RuntimeError(self._chain_audit_refusal(run_one, 17, unreconciled(run_one))))
+        again = signature(RuntimeError(self._chain_audit_refusal(run_two, 18, unreconciled(run_two))))
+        second = signature(RuntimeError(self._chain_audit_refusal(run_one, 17, not_handled)))
+        self.assertRegex(first, r"^es1-[0-9a-f]{16}$")
+        self.assertEqual(first, again)
+        self.assertNotEqual(first, second)
+        same_reason_pairs = [
+            (
+                "正式产物路径不可信：/root/docker/capture-cli/data/evidence/campaigns/c0157-formal-arm64-20260926t194249z/control/vc/batches/0017-vc-5.json",
+                "正式产物路径不可信：/srv/other/campaigns/c0154-formal-bwg-20260914t223835z/control/vc/batches/0003-vc-2.json",
+            ),
+            ("attempt 20260927T231538Z-1f51c72cdc7dca99 尚未对账", "attempt 20260928T010203Z-0a1b2c3d4e5f6789 尚未对账"),
+            ("截止 2026-09-28T10:08:05.123+08:00 已到", "截止 2026-10-02T00:00:00Z 已到"),
+            ("批次摘要 3f2a9c0d1e 不一致", "批次摘要 9c81d0e7ab 不一致"),
+            ("对象 <Job at 0x7f3a2b1c> 状态非法", "对象 <Job at 0x10a2b3c4d> 状态非法"),
+            ("预约 123e4567-e89b-12d3-a456-426614174000 已占用", "预约 00000000-0000-4000-8000-00000000abcd 已占用"),
+            ("漂移字段：{'actions', 'inputs'}", "漂移字段：{'inputs', 'actions'}"),
+            ("owner pid 4242 已退出，重试 3 次", "owner pid 17 已退出，重试 12 次"),
+            ("多行\n拒因\t文本", "多行 拒因  文本"),
+        ]
+        for left, right in same_reason_pairs:
+            with self.subTest(left=left):
+                self.assertEqual(signature(left), signature(right))
+        different_reason_pairs = [
+            ("漂移字段：{'actions'}", "漂移字段：{'inputs'}"),
+            ("父动作诊断不是处理型失败", "父动作诊断缺失"),
+            ("前序 run 已 stopped", "前序 run 未终态化"),
+        ]
+        for left, right in different_reason_pairs:
+            with self.subTest(left=left):
+                self.assertNotEqual(signature(left), signature(right))
+        # 签名基于清洗后的完整原文：前 2000 字符相同、之后不同的两条拒因，收据原文相同而签名不同。
+        limit = artifacts.STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS
+        long_left = RuntimeError("甲" * limit + "拒因一")
+        long_right = RuntimeError("甲" * limit + "拒因二")
+        self.assertEqual(
+            artifacts.staging_abort_error_message(long_left), artifacts.staging_abort_error_message(long_right)
+        )
+        self.assertNotEqual(signature(long_left), signature(long_right))
+        # 未截断时，由异常对象算出的签名与由收据原文复算的签名一致；空文本退回异常类型名（与原文同一口径）。
+        for error in (RuntimeError(" 链审计\x1f拒绝\n "), ValueError(), RuntimeError(self._chain_audit_refusal(run_one, 17, not_handled))):
+            with self.subTest(error=repr(error)[:40]):
+                self.assertEqual(signature(error), signature(artifacts.staging_abort_error_message(error)))
+        self.assertEqual(signature(ValueError()), signature("ValueError"))
+        self.assertNotEqual(signature(ValueError()), signature(KeyError()))
+
+    def test_staging_abort_optional_error_signature(self) -> None:
+        """修好接着跑第 32 项：ABORT 可选携带 error_signature（参与自摘要）；缺省时字段缺席、与历史收据同形；签名必须伴随
+        原文；格式非法拒绝；schema 文件同步（可选、pattern 与运行时一致、依赖 error_message）。"""
+
+        base = self._staging_artifacts()["abort"]
+        params = {
+            key: value
+            for key, value in base.items()
+            if key not in {"schema_version", "live_request_count", "scanned_bytes", "receipt_sha256"}
+        }
+        message = "父 run 创建失败：失败父 run 0123 尚未对账（缺对账收据）"
+        error_signature = artifacts.staging_abort_error_signature(message)
+        signed = artifacts.build_staging_abort(**params, error_message=message, error_signature=error_signature)
+        self.assertEqual(signed["error_signature"], error_signature)
+        self.assertEqual(artifacts.validate_staging_abort(signed), signed)
+        unsigned = {key: value for key, value in signed.items() if key != "receipt_sha256"}
+        self.assertEqual(artifacts.digest(unsigned), signed["receipt_sha256"])
+        self.assertEqual(set(signed) - set(base), {"error_message", "error_signature"})
+        # 历史形态（第 29 项之前无原文、第 29 项起只有原文）字节不变。
+        self.assertEqual(artifacts.build_staging_abort(**params), base)
+        self.assertNotIn("error_signature", artifacts.build_staging_abort(**params, error_message=message))
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "error_signature"):
+            artifacts.build_staging_abort(**params, error_signature=error_signature)
+        for bad in ("es2-" + "0" * 16, "es1-" + "g" * 16, "es1-" + "0" * 15, "", 42):
+            tampered = dict(signed)
+            tampered["error_signature"] = bad
+            tampered["receipt_sha256"] = artifacts.digest({k: v for k, v in tampered.items() if k != "receipt_sha256"})
+            with self.subTest(bad=bad), self.assertRaisesRegex(artifacts.VCArtifactError, "error_signature 非法"):
+                artifacts.validate_staging_abort(tampered)
+        schema_path = Path(artifacts.__file__).resolve().parent / "codex_upgrade_staging_abort.schema.json"
+        abort_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            abort_schema["properties"]["error_signature"],
+            {"type": "string", "pattern": artifacts.STAGING_ABORT_ERROR_SIGNATURE_RE.pattern},
+        )
+        self.assertNotIn("error_signature", abort_schema["required"])
+        self.assertEqual(abort_schema["dependentRequired"], {"error_signature": ["error_message"]})
+
     def test_staging_artifacts_reject_semantic_tampering(self) -> None:
         built = self._staging_artifacts()
         cases = [

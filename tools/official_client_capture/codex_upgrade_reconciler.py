@@ -4379,18 +4379,73 @@ def staging_abort_operation_id(sequence: int, staging_attempt: int) -> str:
     return f"staging-abort:{int(sequence):04d}:{int(staging_attempt)}"
 
 
-def staging_abort_root_cause(phase: str, stage: str) -> dict[str, Any]:
-    """无父 run 的 staging 中止一律归 ``staging.abandoned``（维度 phase、stage）。"""
+_ERROR_TYPE_DIMENSION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def staging_abort_error_type_dimension(error_type: str) -> str:
+    """``staging.attempt-failed`` 的 error_type 维度：异常类名原样；不是合法标识符时记 ``unrecognized``。
+
+    类名来自 ``type(error).__name__``，恒为标识符；这层兜底只防动态造出的怪异类名让根因编码失败、盖住原始拒因。
+    """
+
+    return error_type if _ERROR_TYPE_DIMENSION_RE.fullmatch(error_type) else "unrecognized"
+
+
+def staging_abort_root_cause(
+    phase: str,
+    stage: str,
+    *,
+    error_type: str | None = None,
+    error_signature: str | None = None,
+) -> dict[str, Any]:
+    """无父 run 的 staging 中止根因。
+
+    - 带 ``error_signature``（修好接着跑第 32 项：有原始异常的 prepare／parent-run-create 失败）→
+      ``staging.attempt-failed``，维度 phase、stage、error_type、error_signature：同一步骤的不同拒因互不累计，
+      同一拒因重复出现仍是同一 ID，上限保护不削弱。
+    - 不带（入口孤儿扫描发现的遗弃 attempt，以及第 32 项之前写下的历史 ABORT）→ ``staging.abandoned``，维度
+      phase、stage，旧 ID 逐字不变。
+    """
 
     try:
+        if error_signature is None:
+            return root_cause.describe_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.abandoned",
+                failed_step=stage,
+                stable_dimensions={"phase": phase, "stage": stage},
+            )
+        if not isinstance(error_type, str) or not error_type:
+            raise ReconcilerError("带拒因签名的 staging 中止必须给出异常类型")
         return root_cause.describe_root_cause(
             component="orchestrator",
-            stable_error_code="staging.abandoned",
+            stable_error_code="staging.attempt-failed",
             failed_step=stage,
-            stable_dimensions={"phase": phase, "stage": stage},
+            stable_dimensions={
+                "phase": phase,
+                "stage": stage,
+                "error_type": staging_abort_error_type_dimension(error_type),
+                "error_signature": error_signature,
+            },
         )
     except root_cause.RootCauseError as error:
         raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
+def staging_abort_receipt_root_cause(abort: Mapping[str, Any]) -> dict[str, Any]:
+    """按 ABORT 收据的形态复算根因：带 ``error_signature`` 走 ``staging.attempt-failed``，否则走历史码。
+
+    收据形态由写入方在第一次落盘时决定、之后不可变，所以同一份收据无论何时重放都得到同一根因；第 32 项之前
+    写下的收据没有该字段，按旧维度复算，旧 ID 不变。
+    """
+
+    signature = abort.get("error_signature")
+    return staging_abort_root_cause(
+        str(abort["phase"]),
+        str(abort["stage"]),
+        error_type=str(abort["error_type"]) if signature is not None else None,
+        error_signature=str(signature) if signature is not None else None,
+    )
 
 
 def reconcile_staging_abort(
@@ -4402,8 +4457,9 @@ def reconcile_staging_abort(
     """对账一个没有父 run 的 staging attempt 中止（P1）：ABORT 即对账收据。
 
     步骤与 ``reconcile_supervisor_run`` 同序：outbox ``reconciliation_committed``
-    （请求 0／resolved，根因 ``staging.abandoned``）→ 推总账 → 重放 → 判定；命中永久条件
-    走现有停线合同。各步幂等：outbox 按 operation_id ``reused``、推送 ``duplicate``。
+    （请求 0／resolved，根因按收据形态：带拒因签名为 ``staging.attempt-failed``，否则 ``staging.abandoned``）
+    → 推总账 → 重放 → 判定；命中永久条件走现有停线合同。各步幂等：outbox 按 operation_id ``reused``、
+    推送 ``duplicate``。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
@@ -4420,9 +4476,9 @@ def reconcile_staging_abort(
         raise ReconcilerError("staging-abort 收据的 campaign_id 与 Campaign 不一致")
     if abort["parent_run_dir"] is not None:
         raise ReconcilerError("有父 run 的 staging 中止必须走 reconcile-supervisor-run")
-    cause = staging_abort_root_cause(str(abort["phase"]), str(abort["stage"]))
+    cause = staging_abort_receipt_root_cause(abort)
     if cause["root_cause_id"] != abort["root_cause_id"]:
-        raise ReconcilerError("staging-abort 收据的根因 ID 与其 phase／stage 不一致")
+        raise ReconcilerError("staging-abort 收据的根因 ID 与其 phase／stage（及异常类型、拒因签名）不一致")
     subject_id = (
         f"staging-{int(abort['sequence']):04d}-{str(abort['phase']).lower()}"
         f"-attempt-{int(abort['staging_attempt'])}"

@@ -1177,6 +1177,16 @@ STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS = 2000
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
 
 
+def _staging_abort_clean_text(error: BaseException | str) -> str:
+    """原文与签名共用的清洗：去控制字符、去首尾空白；空文本退回异常类型名（仍空则 unknown），保证非空。"""
+
+    text = error if isinstance(error, str) else str(error)
+    cleaned = _CONTROL_CHARS_RE.sub(" ", text).strip()
+    if not cleaned:
+        cleaned = (error if isinstance(error, str) else type(error).__name__).strip() or "unknown"
+    return cleaned
+
+
 def staging_abort_error_message(error: BaseException | str) -> str:
     """staging 中止收据与暂停／停线消息里保留的原始异常文本（修好接着跑第 29 项）。
 
@@ -1185,11 +1195,65 @@ def staging_abort_error_message(error: BaseException | str) -> str:
     清洗后首字符必非空白，所以截断再去尾部空白后仍非空。
     """
 
-    text = error if isinstance(error, str) else str(error)
-    cleaned = _CONTROL_CHARS_RE.sub(" ", text).strip()
-    if not cleaned:
-        cleaned = (error if isinstance(error, str) else type(error).__name__).strip() or "unknown"
-    return cleaned[:STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS].rstrip()
+    return _staging_abort_clean_text(error)[:STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS].rstrip()
+
+
+# 修好接着跑第 32 项：归一化拒因签名 es1——staging.attempt-failed 根因的 error_signature 维度。
+#
+# 根因模块的原则是"波动值拒绝而不剥离"：剥离会让不同故障因为剥掉了同一段而被合并。这里的签名是对这条原则的
+# 显式、受控的例外：它不是把诊断全文塞进主键，而是在枚举表里登记为独立维度，只替换下列已知的波动片段后取摘要。
+# 误差方向只有一个——两条拒因若只在被替换的片段上不同（例如只差一个数字），会得到同一签名而合并计数，上限更早
+# 触发（失败关闭方向）；不会把同一拒因拆成两个 ID 而削弱上限保护，除非拒因文本本身不确定（例如未排序的集合
+# 以外的随机内容），那是拒因文本的缺陷，应在生产方修成确定文本。替换规则或顺序一旦改变，同一拒因的签名随之
+# 改变，必须升级前缀（es2）并同步修改枚举表描述，使枚举表摘要变化、由总账迁移收据显式承接。
+STAGING_ABORT_ERROR_SIGNATURE_VERSION = "es1"
+STAGING_ABORT_ERROR_SIGNATURE_RE = re.compile(r"^es1-[0-9a-f]{16}$")
+# 签名输入上限：拒因再长也只取清洗后前 64 KiB 字符，保证计算有界且确定（远大于收据原文的 2000 字符）。
+STAGING_ABORT_ERROR_SIGNATURE_MAX_INPUT_CHARS = 65536
+# 顺序即优先级：先整体替换含 ID 的绝对路径，再替换独立出现的各类 ID、时间戳与摘要，最后把其余数字换成 #。
+_ERROR_SIGNATURE_SUBSTITUTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 绝对路径：前一个字符不是 ASCII 标识符或路径字符（排除 control/vc 这类相对路径里的斜杠），止于空白、引号、
+    # 括号与中英文标点。
+    (re.compile(r"(?<![A-Za-z0-9_.~-])/[^\s\"'`，。；：、（）()\[\]{}<>,;:]+"), "<path>"),
+    # Campaign ID（与根因模块的波动值同一模式）。
+    (re.compile(r"c\d{3,4}-[a-z0-9-]*\d{8}t\d{4,6}z"), "<campaign>"),
+    # attempt ID：<紧凑时间戳>-<16 位十六进制>。
+    (re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{16}"), "<attempt>"),
+    # 监督器 run 目录名：run-<64 位十六进制 owner nonce>。
+    (re.compile(r"run-[0-9a-f]{64}"), "<run>"),
+    (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "<uuid>"),
+    # ISO 8601 时间戳（秒、小数秒、时区可缺省）。
+    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"), "<time>"),
+    # 紧凑时间戳（部署 STAMP、attempt ID 前缀），大小写都收。
+    (re.compile(r"\d{8}[Tt]\d{4,6}[Zz]"), "<time>"),
+    (re.compile(r"0x[0-9a-fA-F]+"), "<hex>"),
+    # 独立的十六进制摘要：至少 7 位、同时含数字与 a-f（run_id、nonce、sha256、短提交号），纯字母单词与纯数字不在此列。
+    (re.compile(r"(?<![0-9A-Za-z])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,}(?![0-9A-Za-z])"), "<hex>"),
+    # 其余数字：序号、计数、PID、端口、版本号。
+    (re.compile(r"\d+"), "#"),
+)
+# Python 字符串集合字面量（至少两个元素）：元素顺序随哈希种子变化，排序后再取摘要。
+_ERROR_SIGNATURE_SET_RE = re.compile(r"\{('[^']*'(?:, '[^']*')+)\}")
+_ERROR_SIGNATURE_SET_ITEM_RE = re.compile(r"'[^']*'")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def staging_abort_error_signature(error: BaseException | str) -> str:
+    """归一化拒因签名 es1（修好接着跑第 32 项）：``es1-`` 加归一化文本 SHA-256 的前 16 位十六进制。
+
+    输入与 :func:`staging_abort_error_message` 同一清洗口径，但不截到 2000 字符——签名基于完整原文，收据原文被截断时
+    截断点之后的差异仍能区分拒因。未截断时由收据原文复算得到同一签名。
+    """
+
+    text = _staging_abort_clean_text(error)[:STAGING_ABORT_ERROR_SIGNATURE_MAX_INPUT_CHARS]
+    for pattern, placeholder in _ERROR_SIGNATURE_SUBSTITUTIONS:
+        text = pattern.sub(placeholder, text)
+    text = _ERROR_SIGNATURE_SET_RE.sub(
+        lambda match: "{" + ", ".join(sorted(_ERROR_SIGNATURE_SET_ITEM_RE.findall(match.group(1)))) + "}",
+        text,
+    )
+    normalized = _WHITESPACE_RE.sub(" ", text).strip()
+    return f"{STAGING_ABORT_ERROR_SIGNATURE_VERSION}-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def build_staging_abort(
@@ -1210,11 +1274,16 @@ def build_staging_abort(
     reconciliation_receipt: Mapping[str, Any] | None,
     recorded_at_utc: str,
     error_message: str | None = None,
+    error_signature: str | None = None,
 ) -> dict[str, Any]:
     """staging 中止事实：只记录发生了什么，不携带任何"可续跑"授权字段。
 
     ``error_message``（第 29 项）是可选的原始异常文本附注：给出时写入并参与自摘要，不给出时字段缺席，
     与历史收据字节兼容。
+
+    ``error_signature``（第 32 项）是可选的归一化拒因签名（:func:`staging_abort_error_signature`，基于完整原文），
+    只能与 ``error_message`` 同时给出；给出即表示根因按 ``staging.attempt-failed``（phase、stage、error_type、
+    error_signature）编码，缺席的收据（孤儿遗弃、第 32 项之前的历史收据）按 ``staging.abandoned`` 旧维度复算。
     """
 
     payload = {
@@ -1241,6 +1310,8 @@ def build_staging_abort(
     }
     if error_message is not None:
         payload["error_message"] = error_message
+    if error_signature is not None:
+        payload["error_signature"] = error_signature
     payload["receipt_sha256"] = digest(payload)
     return validate_staging_abort(payload)
 
@@ -1267,8 +1338,9 @@ def validate_staging_abort(value: Any) -> dict[str, Any]:
         "recorded_at_utc",
         "receipt_sha256",
     }
-    # 第 29 项：error_message 是唯一可选字段（原始异常文本附注）；必填集合不变，其它未知键仍不闭合。
-    optional = {"error_message"}
+    # 第 29 项：error_message 是可选字段（原始异常文本附注）；第 32 项：error_signature（归一化拒因签名）也可选，
+    # 但只能伴随 error_message 出现。必填集合不变，其它未知键仍不闭合。
+    optional = {"error_message", "error_signature"}
     if (
         not isinstance(value, Mapping)
         or not required <= set(value)
@@ -1300,6 +1372,14 @@ def validate_staging_abort(value: Any) -> dict[str, Any]:
             or message != message.strip()
         ):
             raise VCArtifactError("staging-abort error_message 非法")
+    if "error_signature" in payload:
+        # 签名基于完整原文，而收据原文可能被截断，所以这里只校验格式与"必须伴随原文"；签名与异常的一致性由生产方
+        # 用同一异常对象同时生成原文与签名保证（未截断时两者可互相复算，见 staging_abort_error_signature）。
+        signature = payload.get("error_signature")
+        if not isinstance(signature, str) or STAGING_ABORT_ERROR_SIGNATURE_RE.fullmatch(signature) is None:
+            raise VCArtifactError("staging-abort error_signature 非法")
+        if "error_message" not in payload:
+            raise VCArtifactError("staging-abort error_signature 必须伴随 error_message")
     root_cause_id = payload.get("root_cause_id")
     if not isinstance(root_cause_id, str) or not _ROOT_CAUSE_ID_RE.fullmatch(root_cause_id):
         raise VCArtifactError("staging-abort root_cause_id 非法")
