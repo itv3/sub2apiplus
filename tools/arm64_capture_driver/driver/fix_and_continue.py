@@ -2035,9 +2035,10 @@ def run_tests(params: Mapping[str, str], log: Path, pid_file: Path) -> int:
     SIGHUP 先恢复默认处置：nohup 启动会让子进程继承 SIG_IGN，监督器的 hangup 用例就会必红
     （ARM64 已踩过）；禁写字节码、不写 PYTHONPATH，结束后核对 staging 树仍干净。
 
-    不设 PYTHONPYCACHEPREFIX 并清除继承来的值（修好接着跑第 67 项）：禁写字节码时树外前缀永远是空的，
-    解释器却改到前缀下查找全部 .pyc（含标准库自带的），每个子进程都从源码重编标准库，ARM64 上监督器
-    CLI 启动由 323 毫秒变成 584 毫秒，计时用例会被拖红。
+    树外只读字节码缓存（修好接着跑第 67 项）：禁写字节码时，空的缓存前缀会让解释器找不到任何 .pyc（含标准库
+    自带的），每个子进程都从源码重编，ARM64 上监督器 CLI 启动 584 毫秒；不设前缀也要每次编译受管模块（约 323
+    毫秒），监督器心跳间隔用例只剩约 20 毫秒余量。先用 bytecode_cache.py 把标准库与 staging 树 tools 预编译进
+    本轮输出目录下重建的缓存（失败即停，不跑实测），再设 PYTHONPYCACHEPREFIX 指向它、保持禁写，实测只读使用。
     """
 
     signal.signal(signal.SIGHUP, signal.SIG_DFL)
@@ -2047,6 +2048,7 @@ def run_tests(params: Mapping[str, str], log: Path, pid_file: Path) -> int:
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONPYCACHEPREFIX", None)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    cache = _out(params) / ".pycache-item-tests"
     commands = [[sys.executable, "-m", "unittest", *params["ITEM_TESTS"].split()]]
     if params.get("ITEM_TESTS_K"):
         second = [sys.executable, "-m", "unittest"]
@@ -2058,7 +2060,19 @@ def run_tests(params: Mapping[str, str], log: Path, pid_file: Path) -> int:
     with log.open("w", encoding="utf-8") as handle:
         handle.write(f"head={params['HEAD_COMMIT']}\ntests={test_signature(params)}\nstarted_at_utc={_utc_now()}\n")
         handle.flush()
-        for command in commands:
+        prepared = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().with_name("bytecode_cache.py")), str(cache), str(tree / "tools")],
+            env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        )
+        summary = (prepared.stdout or "").strip().splitlines()
+        handle.write(f"bytecode-cache={summary[-1] if summary else ''}\n")
+        if prepared.returncode != 0:
+            handle.write(((prepared.stdout or "")[-4000:] + (prepared.stderr or "")[-4000:]).rstrip() + "\n")
+            rc = prepared.returncode
+        else:
+            environment["PYTHONPYCACHEPREFIX"] = str(cache)
+        handle.flush()
+        for command in commands if rc == 0 else []:
             segments += 1
             handle.write(f"== 第 {segments} 段：{' '.join(command[1:])}\n")
             handle.flush()

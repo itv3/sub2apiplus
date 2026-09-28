@@ -1,5 +1,5 @@
 #!/bin/bash
-# 目标平台外部门禁（禁写字节码、不设树外缓存前缀）：gate_before 环境收据 → 在 DC 提交测试树上隔离 make test → gate_after 环境收据。
+# 目标平台外部门禁（禁写字节码、只读使用预编译的树外字节码缓存）：gate_before 环境收据 → 在 DC 提交测试树上隔离 make test → gate_after 环境收据。
 # 用法：bash vc5-gate-target.sh <attempt_id> <gate_root> <test_tree>
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
@@ -7,10 +7,14 @@ ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT
 mkdir -p "$GATE/environment" "$GATE/logs"; chmod 700 "$GATE" "$GATE/environment" "$GATE/logs"
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
-# 不设 PYTHONPYCACHEPREFIX（修好接着跑第 67 项）：lib.sh 已全局 PYTHONDONTWRITEBYTECODE=1，树外前缀永远写不进
-# 字节码，却让解释器改到前缀下查找全部 .pyc（含标准库自带的），每个 Python 子进程都从源码重编标准库——ARM64 实测
-# 监督器 CLI 启动 323→584 毫秒，候选树监督器计时用例因此在门禁里确定性失败。显式清除，解释器行为与 CI／本机一致。
-unset PYTHONPYCACHEPREFIX
+# 树外只读字节码缓存（修好接着跑第 67 项）：lib.sh 全局禁写字节码。缓存前缀若是空目录，解释器改到前缀下找全部 .pyc
+# （含标准库自带的）而全部落空，每个子进程都从源码重编，ARM64 监督器 CLI 启动 584 毫秒，候选树监督器计时用例确定性失败；
+# 不设前缀也要每次从源码编译测试树模块（约 323 毫秒），心跳间隔用例只剩约 20 毫秒余量。make test 前把标准库与测试树
+# tools 预编译进本次重建的缓存目录（bytecode_cache.py，失败即停），make test 期间只读使用（约 187 毫秒），测试树不留
+# __pycache__。PYTHONPATH=. 会让当前目录里的同名文件遮住标准库，调用辅助脚本时去掉。
+PYC="$RUNROOT/pycache-target-platform"
+env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
+export PYTHONPYCACHEPREFIX="$PYC"
 export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"
 export CAPTURE_TYPESCRIPT_MODULE="$T/frontend/node_modules/typescript/lib/typescript.js"
 # 采集主机上 /root/oauth-capture 是受管工具树的 bind 别名，候选测试树会把它当执行副本比对；

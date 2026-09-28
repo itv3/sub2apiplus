@@ -19,7 +19,8 @@
   未知种类，父 run 与 attempt 对象）；各暂停提示给出能照做的续跑步骤（含 deadline 回到 pre-extend，其余回到停下的
   步骤），用例照做续跑到底；reconcile-attempt 步骤目标 attempt 每次都重新对账、deadline 暂停续跑回到 pre-extend；
   永久停线与 Campaign 账本 stop_required 行为不变。
-* 第 67 项：实测子进程清除继承来的 PYTHONPYCACHEPREFIX、不另设前缀，禁写字节码照旧。
+* 第 67 项：实测前用 bytecode_cache.py 把标准库与 staging 树 tools 预编译进本轮输出目录下的树外缓存，实测子进程只读使用
+  （替换继承来的前缀、禁写照旧、staging 树不留 __pycache__）；缓存建不成即停、不跑实测。
 
 受管工具替身只在 ``FC_TEST_STUB_DIR`` 下读写；PATH 垫片只替换 setsid（同步执行）、systemctl、id、chown。
 git、python3、wait_state.py、parse_env.py 都是真的。
@@ -591,7 +592,8 @@ class ItemTests(unittest.TestCase):
         if os.environ.get("FC_ITEM_ENV_RECORD"):
             with open(os.environ["FC_ITEM_ENV_RECORD"], "w", encoding="utf-8") as handle:
                 json.dump({"PYTHONPYCACHEPREFIX": os.environ.get("PYTHONPYCACHEPREFIX"), "pycache_prefix": sys.pycache_prefix,
-                           "PYTHONDONTWRITEBYTECODE": os.environ.get("PYTHONDONTWRITEBYTECODE")}, handle)
+                           "PYTHONDONTWRITEBYTECODE": os.environ.get("PYTHONDONTWRITEBYTECODE"),
+                           "cached": __cached__, "cached_exists": os.path.isfile(__cached__)}, handle)
         if os.environ.get("FC_ITEM_DIRTY") == "1":
             with open("stray-output.txt", "w", encoding="utf-8") as handle:
                 handle.write("实测往 staging 树里写了文件")
@@ -1261,22 +1263,44 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertEqual(fixture.step("item-tests")["status"], "failed")
         self.assertNotIn("tool-evolution-status", fixture.call_keys())
 
-    def test_item_tests_run_without_pycache_prefix(self) -> None:
-        """第 67 项：实测子进程清除继承来的 PYTHONPYCACHEPREFIX、不另设前缀，禁写字节码照旧。
+    def test_item_tests_read_prebuilt_bytecode_cache(self) -> None:
+        """第 67 项：实测前把标准库与 staging 树 tools 预编译进本轮输出目录下的缓存，实测子进程只读使用。
 
-        禁写字节码时树外前缀永远是空的，解释器却改到前缀下查找全部 .pyc（含标准库自带的），每个子进程都从源码
-        重编标准库；ARM64 上监督器 CLI 启动 323→584 毫秒，实测里的监督器计时用例会被拖红。
+        禁写字节码时，空的缓存前缀让解释器找不到任何 .pyc（含标准库自带的），不设前缀也要每次编译受管模块；
+        ARM64 上监督器 CLI 启动 584／323 毫秒，心跳间隔用例会被拖红。继承来的前缀必须被替换，staging 树不留缓存。
         """
 
         fixture = _Round(self.root)
         record = self.root / "item-environment.json"
-        result = fixture.run(env={"FC_ITEM_ENV_RECORD": str(record), "PYTHONPYCACHEPREFIX": str(self.root / "inherited-prefix")})
+        inherited = self.root / "inherited-prefix"
+        result = fixture.run(env={"FC_ITEM_ENV_RECORD": str(record), "PYTHONPYCACHEPREFIX": str(inherited)})
         self._assert_ok(result)
+        cache = str(fixture.out / ".pycache-item-tests")
         seen = json.loads(record.read_text(encoding="utf-8"))
-        self.assertEqual(seen, {"PYTHONPYCACHEPREFIX": None, "pycache_prefix": None, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(seen["PYTHONPYCACHEPREFIX"], cache)
+        self.assertEqual(seen["pycache_prefix"], cache)
+        self.assertEqual(seen["PYTHONDONTWRITEBYTECODE"], "1")
+        self.assertTrue(seen["cached"].startswith(cache) and seen["cached_exists"], seen["cached"])
         log = (fixture.out / "item-tests.log").read_text(encoding="utf-8")
+        self.assertRegex(log, r'(?m)^bytecode-cache=\{"status": "ready"')
         self.assertRegex(log, r"(?m)^staging-clean=yes$")
-        self.assertEqual(list(fixture.out.glob(".pycache*")), [])
+        self.assertEqual(list(fixture.staging_tree.rglob("__pycache__")), [])
+        self.assertFalse(inherited.exists())
+
+    def test_item_tests_stop_when_bytecode_cache_cannot_be_built(self) -> None:
+        """缓存目录位置被普通文件占住：缓存建不成即停，不跑任何实测段，item-tests 记为失败。"""
+
+        fixture = _Round(self.root)
+        fixture.out.mkdir(parents=True, exist_ok=True)
+        (fixture.out / ".pycache-item-tests").write_text("占位的普通文件", encoding="utf-8")
+        result = fixture.run()
+        self.assertEqual(result.returncode, EXIT_FAILED, result.stdout + result.stderr)
+        self.assertEqual(fixture.step("item-tests")["status"], "failed")
+        log = (fixture.out / "item-tests.log").read_text(encoding="utf-8")
+        self.assertRegex(log, r'(?m)^bytecode-cache=\{"status": "failed"')
+        self.assertRegex(log, r"(?m)^segments=0$")
+        self.assertNotIn("== 第 1 段", log)
+        self.assertNotIn("tool-evolution-status", fixture.call_keys())
 
     def test_from_requires_passed_predecessors(self) -> None:
         fixture = _Round(self.root)

@@ -15,7 +15,7 @@
 #                     staging 已是同 HEAD 干净检出且最新部署收据 passed、摘要与 EXPECT 一致则跳过
 #   postdeploy        部署收据与期望摘要（整树／五摘要／监督器）、数据根监督器文件与 wire 闭包 → 同步数据根部署脚本副本
 #                     → 出口守护代码与状态核对（守护逻辑变了只停下，不重装守护）→ 驱动重装与复验 → 入口断言
-#   item-tests        部署用 staging 树上实测（setsid 启动、SIGHUP 复位、禁写字节码且不设缓存前缀），日志 exit=0 且
+#   item-tests        部署用 staging 树上实测（setsid 启动、SIGHUP 复位、禁写字节码并只读使用预编译缓存），日志 exit=0 且
 #                     staging-clean=yes、各段 OK 才继续；本轮已通过则跳过
 #   evolution         tool-evolution-status 无未登记漂移则跳过；否则预览（wire 闭包变化等与 EXPECT 不符即停）→ 按预览
 #                     review_sha256 与批准人登记 → 复核无漂移
