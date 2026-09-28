@@ -11571,30 +11571,19 @@ def _candidate_failure_hits_permanent_condition(
     failure_class: str,
     root_cause_id: str | None = None,
 ) -> bool:
-    """永久条件保留根因与完整性门禁；墙钟到期、请求预算耗尽与账务无法核清（修好接着跑第 12、14 项）单独暂停。
+    """收账的永久条件：分类本身不可恢复（永久失败类），或账本已停线／已完成（无从路由）。
 
-    第三批 B3-9（第 10 项③）：给出本次根因时，项目总账的达上限根因只有包含它才算永久条件——别的根因达上限
-    不牵连本次失败（本次仍按可恢复／审核收口，续跑时由对账按根因暂停）。
+    墙钟到期、请求预算耗尽与账务无法核清单独暂停（修好接着跑第 12、14 项）。第 46 项：同根因重试上限也不再是永久
+    条件，按第三批 B3-9 与对账判定同口径只暂停、登记修复证据后放行——项目总账里本次根因达上限时收账照常路由
+    （recovery_required／阶段审核／候选审核），对账按 root_cause_repair 暂停并指向 record-root-cause-repair；Campaign 账本
+    stop_required 时由 ``_close_failed_campaign_timing_ledger`` 返回暂停结果、不写事件（见那里）。此前收账在这两种情形都
+    直接停线，对账判定却暂停，两处口径不一致；停线后还得 campaign-resume 撤销终态，阶段审核等路由也被停线快照归并成
+    recovery_required。``campaign_dir``、``root_cause_id`` 留在签名里，调用方不变。
     """
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
-    if ledger_summary.get("status") in {"stop_required", "stopped", "complete"}:
-        return True
-    root = project_ledger.find_project_ledger(Path(campaign_dir))
-    if root is None:
-        return False
-    try:
-        head = project_ledger.replay_head(root)
-        with project_ledger.project_lock(root):
-            plan, _raw = project_ledger._load_plan(root)
-    except project_ledger.ProjectLedgerError as error:
-        raise SupervisorError(f"项目总账重放失败：{error}") from error
-    # 只看本 Campaign 目标版本的根因上限，其他版本项目的记录不再牵连。
-    at_limit = project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version"))
-    if at_limit and (root_cause_id is None or root_cause_id in at_limit):
-        return True
-    return False
+    return ledger_summary.get("status") in {"stopped", "complete"}
 
 
 def _evaluator_identity_drift(frozen: Any) -> list[str]:
@@ -11833,6 +11822,10 @@ def _close_failed_campaign_timing_ledger(
         "resume-from-checkpoint：先执行 reconcile-supervisor-run／reconcile-attempt 对账，"
         "本失败分类不可自动恢复；完成请求与根因入账后永久停线。"
     )
+    root_cause_pause_next_action = (
+        "campaign-resume preview/apply：同根因重试已达上限（stop_required），本次失败暂不收口；登记修复证据、清零该根因后"
+        "以 reconcile-supervisor-run／reconcile-attempt 重新对账，补做收口后续跑。"
+    )
 
     budget_state = timing_ledger.inspect_ledger(ledger_dir)
     deadlines = vc_artifacts.effective_deadlines(campaign_dir)
@@ -11844,8 +11837,14 @@ def _close_failed_campaign_timing_ledger(
             "其他 Campaign 的延期双账事务尚未闭合（extension_pending），本次父失败暂不收口；"
             "事务闭合后以 reconcile-supervisor-run 对账重入。"
         )
-    budget_paused = bool(expired_scopes) and not _candidate_failure_hits_permanent_condition(
-        campaign_dir, budget_state, failure_class=failure_class, root_cause_id=root_cause_id
+    # 第 46 项：账本 stop_required（同根因重试上限）本身就是暂停，预算暂停会被账本拒绝（与 B3-9 对账同口径），不登记；
+    # 永久条件照旧不走预算暂停。
+    budget_paused = (
+        bool(expired_scopes)
+        and budget_state.get("status") != "stop_required"
+        and not _candidate_failure_hits_permanent_condition(
+            campaign_dir, budget_state, failure_class=failure_class, root_cause_id=root_cause_id
+        )
     )
     # R4×R8：本次失败的 stage_abandoned 已写、后续 review 未写（中途被杀）时，先在收口锁内补齐 review
     # 再登记暂停；否则阶段层延期找不到 review 阶段，账本永久卡在“已放弃、未审核”。
@@ -11924,8 +11923,27 @@ def _close_failed_campaign_timing_ledger(
                 "next_action": permanent_next_action,
             }
 
-        # 仅精确的环境前提失败可暂停；deadline／重试上限已使账本进入
-        # stop_required 时，即便动作分类可恢复也必须走永久停线分支。
+        # 第 46 项：同根因重试上限（账本 stop_required）按第三批 B3-9 与对账同口径只暂停，不停线。计时账本在 stop_required 时
+        # 只接受放弃阶段、停线与 campaign-resume 的恢复登记（写入门禁），收口路由写不进去；这里不写任何事件、返回暂停结果：
+        # 对账按 root_cause_repair 暂停并指向 campaign-resume，登记修复证据、清零该根因后重新对账，由补收账（或重入收口）
+        # 完成路由。永久条件（永久失败类）照旧走下面的停线分支。
+        if before.get("status") == "stop_required" and not _candidate_failure_hits_permanent_condition(
+            campaign_dir, before, failure_class=failure_class, root_cause_id=root_cause_id
+        ):
+            return {
+                "status": "passed",
+                "ledger_status": "stop_required",
+                "idempotent": True,
+                "root_cause_paused": True,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": before["head_sequence"],
+                "head_sha256": before["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "failure_class": failure_class,
+                "next_action": root_cause_pause_next_action,
+            }
+
+        # 可恢复类收口为 recovery_required（账本须 active；stop_required 已在上面按暂停返回）。
         if (
             (
                 failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES

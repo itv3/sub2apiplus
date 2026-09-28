@@ -116,7 +116,10 @@ s._close_failed_campaign_timing_ledger(Path(sys.argv[1]),json.loads(sys.argv[2])
             self.assertEqual(sum(e["event_type"] == "stage_abandoned" for e in events), 1)
             self.assertEqual(originals, {p: p.read_bytes() for p in originals})
 
-    def test_integrity_and_existing_stop_required_still_stop(self):
+    def test_integrity_still_stops_and_existing_stop_required_only_pauses(self):
+        """完整性类照旧停线。第 46 项：账本已 stop_required（同根因重试上限）时不再停线——计时账本此时只接受放弃阶段、停线与
+        campaign-resume，收账不写事件、返回暂停结果（与对账的 root_cause_repair 暂停同口径）。"""
+
         for failure in ("evidence-integrity", "stop_required"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
@@ -126,9 +129,15 @@ s._close_failed_campaign_timing_ledger(Path(sys.argv[1]),json.loads(sys.argv[2])
                     for index in range(2):
                         timing.append_event(ledger, event_id=f"start-{index}", phase="VC-1", event_type="attempt_started", attempt_id=f"attempt-{index}")
                         timing.append_event(ledger, event_id=f"failed-{index}", phase="VC-1", event_type="attempt_failed", attempt_id=f"attempt-{index}", root_cause_id="same-cause")
+                head = timing.inspect_ledger(ledger)["head_sequence"]
                 result = supervisor._close_failed_campaign_timing_ledger(campaign, manifest, failed_action_id="failing-action",
                     failure_class="evidence-integrity" if failure == "evidence-integrity" else "execution-failure")
-                self.assertEqual(result["ledger_status"], "stopped")
+                if failure == "evidence-integrity":
+                    self.assertEqual(result["ledger_status"], "stopped")
+                else:
+                    self.assertEqual((result["ledger_status"], result.get("root_cause_paused")), ("stop_required", True), result)
+                    summary = timing.inspect_ledger(ledger)
+                    self.assertEqual((summary["status"], summary["head_sequence"]), ("stop_required", head))
 
     def test_legacy_checkpoint_without_review_fields_replays(self):
         with tempfile.TemporaryDirectory() as directory:

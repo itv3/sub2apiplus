@@ -24562,6 +24562,44 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertNotIn("ledger_closeout_backfill", result)
             self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "active")
 
+    def test_item46_orphaned_failure_under_retry_limit_pauses_instead_of_stopping(self) -> None:
+        """第 46 项（对账层）：账本已因同根因两次 attempt 失败进入 stop_required 时，R2 封存的 VC-1 采集失败（审核类，无预约）
+        对账。修复前补收账把同根因上限当永久条件，写 stage_abandoned＋stop_the_line，对账随后按 prior_stop_the_line 永久
+        停线并写 campaign_terminal；修复后收口与对账同口径只暂停：补收账不写事件（账本仍 stop_required），对账判 paused、
+        暂停种类只有 root_cause_repair、提示 campaign-resume 登记修复证据，没有终态。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            for index in (1, 2):
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir, event_id=f"item46-attempt-{index}-started", phase="VC-1", event_type="attempt_started",
+                    attempt_id=f"item46-attempt-{index}", next_action="夹具",
+                )
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir, event_id=f"item46-attempt-{index}-failed", phase="VC-1", event_type="attempt_failed",
+                    attempt_id=f"item46-attempt-{index}", root_cause_id="rc1-item46", next_action="夹具",
+                )
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stop_required")
+            _state, run_dir = self._r2_sealed_run(
+                fixture, "5" * 64, inner=capture, action_id="capture-official", phase="VC-1",
+                diagnostic=("child-returncode", "ChildProcessError", "execution-failure"), action_failed_reason="returncode=1",
+            )
+            events = self._b0_ledger_events(ledger_dir)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], reconciler.DECISION_PAUSED, result.get("decision"))
+            self.assertEqual(result["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIsNone(result["decision"]["terminal_reason"])
+            self.assertIn("campaign-resume", result["next_command"])
+            self.assertEqual(result["ledger_closeout_backfill"]["ledger_status"], "stop_required")
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stop_required")
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertNotIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""

@@ -1221,9 +1221,9 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 stopped = supervisor._close_failed_campaign_timing_ledger(campaign2, manifest_2, failed_action_id="seal", failure_class="identity-drift")
                 self.assertEqual(stopped["ledger_status"], "stopped")
                 self.assertEqual(timing_ledger.inspect_ledger(ledger2)["status"], "stopped")
-            # 分支 2'：总账里别的根因（rc-x）达上限，本次失败的根因不是它——第三批 B3-9 起永久条件只看本次根因，
-            # 不再一概停线，落到分支 3（stage_abandoned + candidate_review_required）；"本次根因达上限仍永久"由
-            # test_codex_upgrade_supervisor.RootCauseLimitPermanentConditionTests 覆盖。
+            # 分支 2'：总账里别的根因（rc-x）达上限，本次失败的根因不是它——第三批 B3-9 起不牵连本次失败，落到分支 3
+            # （stage_abandoned + candidate_review_required）；第 46 项起本次根因达上限同样只暂停不停线，由
+            # test_codex_upgrade_supervisor 的第 46 项用例与 RootCauseLimitPermanentConditionTests 覆盖。
             with tempfile.TemporaryDirectory() as third:
                 fixture3, campaign3, manifest3 = self._r1_ready(Path(third).resolve())
                 ledger3 = Path(str(fixture3["timing_ledger"]))

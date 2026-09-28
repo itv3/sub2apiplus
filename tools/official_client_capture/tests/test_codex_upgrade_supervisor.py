@@ -3740,8 +3740,10 @@ raise SystemExit(9)
             self.assertEqual(result["status"], "passed")
             self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
 
-    def _budget_bound_closeout_fixture(self, root: Path):
-        """VC-1 已开始且阶段预算已到期的正式 Campaign；账本绑定项目总账，可真实暂停与批准延期。"""
+    def _budget_bound_closeout_fixture(self, root: Path, *, stage_budget_minutes: int = 1):
+        """VC-1 已开始且阶段预算已到期的正式 Campaign；账本绑定项目总账，可真实暂停与批准延期。
+
+        ``stage_budget_minutes`` 放大时阶段预算不到期（第 46 项只看根因上限的收口口径）。"""
 
         from datetime import datetime, timedelta, timezone
         from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
@@ -3769,7 +3771,7 @@ raise SystemExit(9)
         timing_ledger.create_ledger(
             ledger_root, upgrade_id="campaign-closeout", baseline_version="0.151.0", target_version="0.154.0",
             campaign_purpose="production_replacement", evidence_decision="recapture", started_at_utc=at(0),
-            total_budget_minutes=600, stage_budgets_minutes={phase: 1 for phase in timing_ledger.PHASE_ORDER},
+            total_budget_minutes=600, stage_budgets_minutes={phase: stage_budget_minutes for phase in timing_ledger.PHASE_ORDER},
             project_ledger_dir=project_root,
         )
         timing_ledger.append_event(ledger_root, event_id="fixture-vc0-completed", phase="VC-0",
@@ -3846,6 +3848,75 @@ raise SystemExit(9)
             self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
             again = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
             self.assertEqual((again["ledger_status"], again["idempotent"]), ("stage_review_required", True))
+
+    def test_item46_root_cause_limit_pauses_closeout_instead_of_stopping_the_line(self) -> None:
+        """第 46 项（与第三批 B3-9 的对账判定同口径）：收账遇到同根因重试上限不再停线——达上限只暂停、登记修复证据后
+        放行，永久失败类照旧停线。
+
+        ① 项目总账里本次失败的根因已达上限：VC-1 的阶段审核类失败照常写 stage_abandoned＋stage_review_required（修复前
+           写 stop_the_line 停线，而对账判定只按 root_cause_repair 暂停）；
+        ② Campaign 账本已 stop_required（同根因两次 attempt 失败）：计时账本此时只接受放弃阶段、停线与 campaign-resume 的
+           恢复登记，收口不写任何事件、返回暂停结果（指向 campaign-resume；修复前写 stage_abandoned＋stop_the_line 停线）；
+           重复收账同样只返回暂停，账本不动；清零后重新对账由补收账完成路由；
+        ③ 同样上限下的永久失败类（identity-drift）照旧停线。"""
+
+        cause = supervisor.root_cause.structured_root_cause(
+            component="supervisor", stable_error_code="campaign-run.action-failed",
+            failed_step="failing-action", stable_dimensions={"phase": "VC-1"},
+        )
+        real_head = supervisor.project_ledger.replay_head
+
+        def at_limit(root: Path) -> dict:
+            head = real_head(root)
+            versions = head.get("root_causes_at_limit_by_version") or {"0.154.0": []}
+            return dict(
+                head, root_causes_at_limit=[cause], root_causes_at_limit_base=[cause],
+                root_causes_at_limit_by_version={version: [cause] for version in versions},
+            )
+
+        with self.subTest(limit="总账本次根因达上限"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._budget_bound_closeout_fixture(root, stage_budget_minutes=600)
+            with mock.patch.object(supervisor.project_ledger, "replay_head", side_effect=at_limit):
+                routed = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual((routed["ledger_status"], routed["idempotent"]), ("stage_review_required", False), routed)
+            events = [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)]
+            self.assertEqual(events[-2:], ["stage_abandoned", "stage_review_required"])
+            self.assertNotIn("stop_the_line", events)
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
+        with self.subTest(limit="账本 stop_required"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._budget_bound_closeout_fixture(root, stage_budget_minutes=600)
+            for index in (1, 2):
+                timing_ledger.append_event(ledger_root, event_id=f"item46-attempt-{index}-started", phase="VC-1",
+                                           event_type="attempt_started", attempt_id=f"item46-attempt-{index}", next_action="夹具")
+                timing_ledger.append_event(ledger_root, event_id=f"item46-attempt-{index}-failed", phase="VC-1",
+                                           event_type="attempt_failed", attempt_id=f"item46-attempt-{index}",
+                                           root_cause_id="rc1-item46", next_action="夹具")
+            before = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual((before["status"], before["active_phase"]), ("stop_required", "VC-1"))
+            for _round in range(2):
+                paused = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+                self.assertEqual((paused["ledger_status"], paused.get("root_cause_paused")), ("stop_required", True), paused)
+                self.assertIn("campaign-resume", paused["next_action"])
+                summary = timing_ledger.inspect_ledger(ledger_root)
+                self.assertEqual(
+                    (summary["status"], summary["active_phase"], summary["head_sequence"]),
+                    ("stop_required", "VC-1", before["head_sequence"]),
+                )
+            self.assertNotIn("stop_the_line", [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)])
+        with self.subTest(limit="永久失败类"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._budget_bound_closeout_fixture(root, stage_budget_minutes=600)
+            with mock.patch.object(supervisor.project_ledger, "replay_head", side_effect=at_limit):
+                stopped = supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir, manifest, failed_action_id="failing-action", failure_class="identity-drift"
+                )
+            self.assertEqual(stopped["ledger_status"], "stopped", stopped)
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
 
     def test_runtime_budget_deadline_missing_anchor_is_state_contract_error(self) -> None:
         """R8：父 run 状态缺 deadline_at_epoch 时按状态合同报 SupervisorError，而不是 KeyError。"""
@@ -4964,7 +5035,8 @@ raise SystemExit(9)
                 check(campaign_dir, history, retry)
 
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
-    """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
+    """收口的永久条件。第三批 B3-9（第 10 项③）起总账别的根因达上限不牵连本次失败；第 46 项起同根因重试上限（本次
+    根因达上限、账本 stop_required）一律不再是永久条件——与对账判定同口径只暂停，登记修复证据后放行。"""
 
     def _hits(self, *, root_cause_id: str | None, failure_class: str = "execution-failure", status: str = "active") -> bool:
         head = {
@@ -4982,15 +5054,16 @@ class RootCauseLimitPermanentConditionTests(unittest.TestCase):
                 failure_class=failure_class, root_cause_id=root_cause_id,
             )
 
-    def test_only_this_failures_root_cause_at_limit_is_permanent(self) -> None:
-        self.assertTrue(self._hits(root_cause_id="rc1-a"))
+    def test_root_cause_limit_is_a_pause_not_a_permanent_condition(self) -> None:
+        # 第 46 项：本次根因达上限、没有根因上下文、账本 stop_required 都只暂停（对账按 root_cause_repair 处置）。
+        self.assertFalse(self._hits(root_cause_id="rc1-a"))
         self.assertFalse(self._hits(root_cause_id="rc1-b"))
-        # 没有根因上下文：整版本保守判永久（与旧口径一致）。
-        self.assertTrue(self._hits(root_cause_id=None))
+        self.assertFalse(self._hits(root_cause_id=None))
+        self.assertFalse(self._hits(root_cause_id="rc1-b", status="stop_required"))
         # 永久失败类与账本已停线／完成仍永久，不看根因。
         self.assertTrue(self._hits(root_cause_id="rc1-b", failure_class="evidence-integrity"))
         self.assertTrue(self._hits(root_cause_id="rc1-b", status="stopped"))
-        self.assertTrue(self._hits(root_cause_id="rc1-b", status="stop_required"))
+        self.assertTrue(self._hits(root_cause_id="rc1-b", status="complete"))
 
 
 if __name__ == "__main__":
