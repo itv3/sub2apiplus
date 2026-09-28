@@ -1605,6 +1605,57 @@ def stage_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def stage_evolve(arguments: argparse.Namespace) -> dict[str, Any]:
+    """修复副本部署后，按修好接着跑的正式顺序登记工具演进：tool-evolution 预览→以预览摘要批准。
+
+    工具演进登记（2026-09-27 起）的不变式：Campaign 继续执行时，当前受管树必须恰是 Campaign 有效工具身份的树。
+    修复副本相对缺陷副本改了 evidence 层（checker）或 control 层（accept／compare 读侧），未登记前
+    ``evaluation-recover apply`` 与派发入口都零写入拒绝（ToolEvolutionRequired）。本阶段先只读查
+    ``tool-evolution-status``：当前树已是有效身份（崩溃续作时的再次 apply、在仍是有效身份的缺陷副本上做负例）
+    就原样返回 ``registered``，不写任何文件；否则做一次预览（部署绑定取父进程按本副本树五摘要现算的受监督部署
+    收据），再以预览摘要批准，落盘 ``control/tool-evolution/evolution-NN.json``。预览的变化、影响与评估器摘要一并
+    返回，由父进程断言影响为空（修复只在评估器与读侧，官方与候选作业都不重采）。修好接着跑第 57 项补进夹具。
+    """
+
+    from tools.official_client_capture import codex_upgrade
+
+    state = _load_state(arguments)
+    campaign_dir = Path(state["campaign_dir"])
+    status = codex_upgrade._tool_evolution_status_command(argparse.Namespace(campaign_dir=campaign_dir))
+    if status["status"] == "registered":
+        return {"status": "registered", "effective_index": status["effective_index"], "unregistered_drift": []}
+    namespace = argparse.Namespace(
+        campaign_dir=campaign_dir,
+        fix_commit=arguments.fix_commit,
+        reason=arguments.reason,
+        control_root=Path(state["control"]),
+        approve_sha256=None,
+        approved_by=None,
+        policy_compatibility_receipt=None,
+        policy_activation_certification=None,
+    )
+    try:
+        preview = codex_upgrade._tool_evolution_command(namespace)
+        if preview.get("status") != "approval_required":
+            return {"status": "error", "error": f"工具演进预览状态异常：{preview.get('status')}", "preview": preview}
+        namespace.approve_sha256 = preview["review_sha256"]
+        namespace.approved_by = "evaluation-chain-fixture"
+        applied = codex_upgrade._tool_evolution_command(namespace)
+    except codex_upgrade.ConfigurationError as error:
+        return {"status": "error", "error": str(error), "unregistered_drift": status["unregistered_drift"]}
+    return {
+        "status": applied["status"],
+        "index": applied["index"],
+        "unregistered_drift": status["unregistered_drift"],
+        "review_sha256": preview["review_sha256"],
+        "receipt_sha256": applied["receipt_sha256"],
+        "path": applied["path"],
+        "changes": applied["changes"],
+        "impact": applied["impact"],
+        "evaluator": applied["evaluator"],
+    }
+
+
 def stage_accept_direct(arguments: argparse.Namespace) -> dict[str, Any]:
     """在本副本树进程内直接调用真实 ``accept_campaign``（不经父监督器），供 C1 崩溃注入：
     ``--crash-at completion`` 让 accept 结果已封存、VC-5 completion 写出前 SIGKILL。"""
@@ -1737,6 +1788,9 @@ def _parser() -> argparse.ArgumentParser:
     epoch = subparsers.add_parser("epoch")
     epoch.add_argument("--attempt-id", default=None)
     epoch.add_argument("--reason", required=True)
+    evolve = subparsers.add_parser("evolve")
+    evolve.add_argument("--fix-commit", required=True)
+    evolve.add_argument("--reason", required=True)
     gate = subparsers.add_parser("gate")
     gate.add_argument("--tag", required=True)
     accept_direct = subparsers.add_parser("accept-direct")
@@ -1768,6 +1822,7 @@ def _run_stage(arguments: argparse.Namespace) -> int:
         "reconcile": stage_reconcile,
         "recover": stage_recover,
         "epoch": stage_epoch,
+        "evolve": stage_evolve,
         "gate": stage_gate,
         "accept-direct": stage_accept_direct,
         "identity": stage_identity,

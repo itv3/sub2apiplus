@@ -316,6 +316,7 @@ class RealAttemptRecoveryChainTests(unittest.TestCase):
         self.assertEqual(h.run(tree_d, "reconcile", "--run-dir", compare0["campaign_run"]["run_dir"])["status"], "recoverable")
         preview = h.preview(tree_b)
         self.assertEqual((preview["failure_source"], preview["reuse_authority"]), ("offline-compare-failed", "none"), preview)
+        # compare 读侧修复属 control 层：apply_fix 先登记工具演进（影响为空）；之后的 transient 恢复工具不变，无需再登记。
         applied1 = h.apply_fix(tree_b, h.deployment_receipt(tree_b, "fix-b"))
         self.assertEqual((applied1["status"], applied1["evaluation_baseline"], applied1["kind"]), ("applied", 1, "evaluator-only"), applied1)
         self.assertEqual(h.dispatch(tree_b, "compare1", ["compare"], baseline=1)["returncode"], 0)

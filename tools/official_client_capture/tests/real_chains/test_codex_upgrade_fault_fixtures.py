@@ -198,7 +198,9 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
                                        "BuildRevisionTests",
                                        "test_same_inputs_reuse_source_receipt_and_preserve_original_bytes")
 
-    def test_r3_metadata_only_drift_is_currently_permanent(self):
+    def test_r3_metadata_only_drift_recovers_by_rebind(self):
+        # 故障现象：对已封存证据再次 chmod（最终 mode 不变），只有 ctime 漂移、内容字节不变。第三批 R3（ctime 部分，
+        # 561ed0c8e）起它不再判永久的 evidence-integrity，而是可恢复的元数据漂移 evidence-metadata-drift。
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             evidence_root, manifest_path = integrity_tests._sealed_evidence_root(root)
@@ -206,9 +208,25 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             originals = {path: path.read_bytes() for path in evidence_root.rglob("*") if path.is_file()}
             integrity_tests._drift_ctime_only(evidence_root)
             self.assertEqual(originals, {path: path.read_bytes() for path in originals})
-            with self.assertRaises(evidence.EvidenceManifestBoundaryDriftError) as caught:
+            with self.assertRaises(evidence.EvidenceManifestMetadataDriftError) as caught:
                 evidence.verify_manifest_boundary(manifest, [evidence_root])
-            self.assertEqual(caught.exception.failure_class, "evidence-integrity")
+            # 两个异常类互不继承：不能被永久类的完整性异常分支接住。
+            self.assertNotIsInstance(caught.exception, evidence.EvidenceManifestBoundaryDriftError)
+            self.assertEqual(caught.exception.failure_class, "evidence-metadata-drift")
+            self.assertIn(caught.exception.failure_class, supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES)
+            self.assertNotIn(caught.exception.failure_class, supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
+            # 恢复：rebind-boundary 逐文件复算内容并绑定新边界，之后零扫描复核通过，证据字节始终不变。
+            chain = integrity_tests._write_rebind(manifest_path, manifest, evidence_root, [])
+            passed = evidence.verify_manifest_boundary(manifest, [evidence_root], rebinds=chain)
+            self.assertEqual((passed["status"], passed["scanned_bytes"], passed["rebind_index"]), ("passed", 0, 1))
+            self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+        # 恢复链路：动作诊断 evidence-metadata-drift → 账本 recovery_required（不停线）→ 对账 recoverable、
+        # 下一步指向 rebind-boundary → rebind 后逐字重派同一批次通过（改造项自己的端到端用例）。
+        self._assert_delegate_recovers("tools.official_client_capture.tests.test_codex_upgrade_evidence_integrity",
+                                       "EvidenceIntegrityCampaignTests",
+                                       "test_metadata_drift_action_pauses_then_rebind_allows_verbatim_redispatch")
+        print(json.dumps({"fixture": "r3-metadata-drift", "rebind_index": 1, "scanned_bytes": 0,
+                          "execute_jobs": 0, "live_request_count": 0, "evidence_bytes_unchanged": True}), flush=True)
 
     def test_r4_parent_failure_requires_review_before_redispatch(self):
         # 故障现象：父动作失败写 stage_review_required，对账前后续批次被拒（不再 stop_the_line）。

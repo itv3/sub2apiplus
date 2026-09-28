@@ -12,7 +12,8 @@ VC-4 构建收据），accept 因而真实运行到 AcceptanceFact 与 VC-5 comp
 路径绑定到当前副本树，执行树一致性校验原样生效，不放宽（``managed_tree_copy.python_command``）。
 
 * 用例 1（checker 缺陷）：正式 Campaign 在缺陷副本 A（checker 对 SPEC-EP-006 误判）下建立并执行 b0 →
-  父 run failed（post-run-tooling）→ reconcile → 修复副本 B（原 checker）：无 epoch 的 apply 被拒 →
+  父 run failed（post-run-tooling）→ reconcile → A 上两条准入负例 → 修复副本 B（原 checker）：未登记工具演进的
+  apply 零写入拒绝 → ``tool-evolution`` 预览→批准（evidence 层，影响为空）→ 无 epoch 的 apply 被拒 →
   ``evaluation-epoch`` → apply（evaluator-defect，部署收据按 B 身份）→ b1 committed（两条规则全部重跑）→
   派发 b1（后继协议）→ compare 重跑、断言全部重跑全 pass、accept 真实 CLI 动作通过 → VC-5 completion
   绑定 b1 的 AcceptanceFact——候选证据全程不换；
@@ -28,6 +29,10 @@ VC-4 构建收据），accept 因而真实运行到 AcceptanceFact 与 VC-5 comp
   相同）→ accept 整份重放一致即复用既有 AcceptanceFact（字节不变）只补 completion；b0 变体带三条漂移负例，
   b1 变体在 evaluator 恢复链之后以 ``[assert, accept]`` 整批崩溃／整批重派（assert 零 checker）；
 * 后继协议伪造负例（篡改 b1 COMMIT）。
+
+修复副本相对缺陷副本改了 evidence 层（checker）或 control 层（accept／compare 读侧）。2026-09-27 起（工具演进登记）
+Campaign 继续执行时当前受管树必须恰是有效工具身份的树，所以每条链在 apply 之前都按修好接着跑的正式顺序登记工具
+演进：``apply_fix`` 默认先经驱动 ``evolve`` 阶段做 tool-evolution 预览→批准（已是有效身份时只读跳过）。
 
 本文件位于 tests/，不进受管摘要。
 """
@@ -52,6 +57,8 @@ DRIVER = "tools.official_client_capture.tests.evaluation_chain_driver"
 TREE_ROOT_ENV = "EVALUATION_CHAIN_TREE_ROOT"
 CANDIDATE = "candidate-r1"
 RULES = ("SPEC-H1-001", "SPEC-EP-006")
+# 修复提交号：evaluation-recover apply 与工具演进登记绑定同一份修复。
+FIX_COMMIT = "a" * 40
 
 
 # 候选身份夹具（docker + go，linux/arm64）可用时 accept／VC-5 completion 段真实执行；模块导入时判定一次。
@@ -65,6 +72,12 @@ def _read(path: Path) -> dict:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _campaign_snapshot(campaign_dir: Path) -> dict[str, bytes]:
+    """Campaign 目录下全部普通文件的相对路径与字节，用于核对"零写入拒绝"。"""
+
+    return {path.relative_to(campaign_dir).as_posix(): path.read_bytes() for path in sorted(campaign_dir.rglob("*")) if path.is_file()}
 
 
 def _stage_fingerprint(document: dict) -> str:
@@ -293,12 +306,34 @@ class _RealChainHarness:
             arguments.extend(["--crash-at", crash_at])
         return self.run(tree_root, *arguments, expect_exit=expect_exit)
 
-    def apply_fix(self, tree_root: Path, receipt: Path, *, crash_at: str = "", expect_exit: int = 0) -> dict:
+    def evolve(self, tree_root: Path) -> dict:
+        """修复部署后登记工具演进（修好接着跑第 57 项）：驱动先只读查状态，当前树已是有效身份即返回
+        ``registered``（不写任何文件），否则 tool-evolution 预览→批准。修复只在评估器与读侧，登记时断言影响为空：
+        变化落在 control／evidence 层、编排器 wire 闭包不变，官方与候选作业都不重采。"""
+
+        result = self.run(tree_root, "evolve", "--fix-commit", FIX_COMMIT, "--reason", "评估链副本：修复评估器／读侧缺陷后登记工具演进")
+        self.case.assertIn(result["status"], {"evolution_applied", "registered"}, result)
+        if result["status"] == "evolution_applied":
+            self.case.assertEqual(result["changes"]["impact_paths"], [], result)
+            self.case.assertFalse(result["changes"]["wire_closure_changed"], result)
+            self.case.assertEqual(result["impact"]["official"]["affected_job_ids"], [], result)
+            self.case.assertEqual(
+                {candidate: part["affected_job_ids"] for candidate, part in result["impact"]["candidates"].items()},
+                {candidate: [] for candidate in result["impact"]["candidates"]},
+                result,
+            )
+        return result
+
+    def apply_fix(self, tree_root: Path, receipt: Path, *, crash_at: str = "", expect_exit: int = 0, evolve: bool = True) -> dict:
+        if evolve:
+            # 修好接着跑（2026-09-27 起）：修复部署后先登记工具演进，未登记的 apply 零写入拒绝；
+            # 崩溃续作的再次 apply、在仍是有效身份的缺陷副本上做负例时驱动只读跳过。
+            self.evolve(tree_root)
         preview = self.run(tree_root, "recover", "preview")
         self.case.assertEqual(preview["status"], "preview", preview)
         arguments = [
             "recover", "apply", "--root-cause-class", "evaluator-defect", "--approve-sha256", preview["review_sha256"],
-            "--fix-commit", "a" * 40, "--deployment-receipt", str(receipt),
+            "--fix-commit", FIX_COMMIT, "--deployment-receipt", str(receipt),
         ]
         if crash_at:
             arguments.extend(["--crash-at", crash_at])
@@ -355,15 +390,14 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual(reconciled["status"], "recoverable", reconciled)
         self.assertEqual(h.summary()["status"], "active")
 
-        # ---- 修复副本 B：preview 定位 failure-scope；无 epoch 的 apply 被拒（既有 A2 合同）----
+        # ---- 修复副本 B：preview 定位 failure-scope ----
         receipt_b = h.deployment_receipt(tree_b, "fix-b")
         preview = h.run(tree_b, "recover", "preview")
         self.assertEqual((preview["status"], preview["failure_source"], preview["reuse_authority"], preview["failed_step"]), ("preview", "assertion-failed", "anchored", "SPEC-EP-006"))
         self.assertEqual(preview["failure_scope"]["failed_rules"], ["SPEC-EP-006"])
         self.assertEqual(preview["failure_scope"]["jobs"], h.state()["job_ids"])
-        rejected = h.apply_fix(tree_b, receipt_b)
-        self.assertEqual(rejected["status"], "error", rejected)
-        self.assertIn("evaluation-epoch", rejected["error"])
+        # 修好接着跑（2026-09-27 起）：登记工具演进之后 Campaign 有效身份是 B，缺陷副本 A 上的 apply 会先被演进门禁
+        # 拦下；A 上两条准入负例因此放在登记之前做（此时 A 仍是 plan 身份，门禁放行，拒因是准入判定本身）。
         # 在缺陷副本 A 上 apply：四项摘要相对失败批次没有变化 → 拒绝。
         receipt_a = h.deployment_receipt(tree_a, "no-fix-a")
         no_change = h.apply_fix(tree_a, receipt_a)
@@ -373,6 +407,22 @@ class RealEvaluationChainTests(unittest.TestCase):
         stale_receipt = h.apply_fix(tree_a, receipt_b)
         self.assertEqual(stale_receipt["status"], "error")
         self.assertIn("修复尚未部署到当前树", stale_receipt["error"])
+        # 修复副本 B 已部署、尚未登记工具演进：apply 零写入拒绝并指向先登记（checker 属 evidence 层）。
+        before = _campaign_snapshot(h.campaign_dir())
+        unregistered = h.apply_fix(tree_b, receipt_b, evolve=False)
+        self.assertEqual(unregistered["status"], "error", unregistered)
+        self.assertIn("evidence semantics", unregistered["error"])
+        self.assertIn("尚未登记工具演进", unregistered["error"])
+        self.assertEqual(_campaign_snapshot(h.campaign_dir()), before)
+        # ---- 登记工具演进：变化只在 evidence 层（checker），影响为空；b0 已有评估产出，授权不迁移 ----
+        evolved = h.evolve(tree_b)
+        self.assertEqual((evolved["status"], evolved["index"], evolved["unregistered_drift"]), ("evolution_applied", 1, ["evidence semantics"]), evolved)
+        self.assertEqual(evolved["evaluator"]["changed_fields"], ["checker_sha256"], evolved)
+        self.assertFalse(evolved["evaluator"]["candidates"][CANDIDATE]["b0_authorization_moved"], evolved)
+        # 已登记、无 epoch 的 apply 被拒（既有 A2 合同：evidence 变化后先对候选 attempt 追加 evaluation-epoch）。
+        rejected = h.apply_fix(tree_b, receipt_b)
+        self.assertEqual(rejected["status"], "error", rejected)
+        self.assertIn("evaluation-epoch", rejected["error"])
 
         # ---- epoch → apply → b1 committed ----
         epoch = h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
@@ -443,7 +493,7 @@ class RealEvaluationChainTests(unittest.TestCase):
         preview = h.run(tree_b, "recover", "preview")
         self.assertEqual((preview["failure_source"], preview["reuse_authority"], preview["failed_step"]), ("offline-accept-failed", "anchored", "acceptance"))
         self.assertEqual(preview["failure_scope"]["failed_rules"], [])
-        # accept 读侧变化属 control 层：evidence 未变，无需 epoch。
+        # accept 读侧变化属 control 层：evidence 未变，无需 epoch；但仍要登记工具演进（apply_fix 先登记，影响为空）。
         receipt_b = h.deployment_receipt(tree_b, "fix-b")
         applied = h.apply_fix(tree_b, receipt_b)
         self.assertEqual((applied["status"], applied["evaluation_baseline"]), ("applied", 1), applied)
