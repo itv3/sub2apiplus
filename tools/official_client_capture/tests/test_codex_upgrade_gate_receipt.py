@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -549,6 +552,186 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("finalize", completed.stdout)
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 40 项：修好生成器后，修改前版本生成的收据按已登记的旧摘要只读重放。
+    # 这些用例把当前生成器逐字复制到临时受管坐标（证据根之外），用副本生成收据，再真实改动
+    # 副本字节（模拟修好生成器），用改后的副本重放——生成器身份就是文件摘要，必须真改文件。
+    # ------------------------------------------------------------------
+
+    GENERATOR_RELATIVE = "tools/official_client_capture/codex_upgrade_gate_receipt.py"
+
+    def _generator_copy(self) -> Path:
+        """把当前生成器逐字复制到一个新的临时受管坐标（证据根之外），返回副本路径。"""
+
+        holder = tempfile.TemporaryDirectory(prefix="gate-receipt-generator-")
+        self.addCleanup(holder.cleanup)
+        path = Path(holder.name) / self.GENERATOR_RELATIVE
+        path.parent.mkdir(parents=True)
+        path.write_bytes(Path(receipt.__file__).resolve().read_bytes())
+        return path
+
+    @staticmethod
+    def _load_generator(path: Path):
+        """以包内模块名加载副本，使其内部的包内导入照常解析；加载后从 sys.modules 移除。"""
+
+        name = f"tools.official_client_capture._gate_receipt_copy_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(name, None)
+        return module
+
+    @staticmethod
+    def _edit_generator(path: Path, *, register: str | None) -> str:
+        """改动副本字节；register 给出时把该摘要登记进 v4 只读重放分组。返回改后摘要。"""
+
+        text = path.read_text(encoding="utf-8")
+        if register is not None:
+            markers = list(re.finditer(r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", text))
+            assert len(markers) == 1, "生成器登记格式变化，测试夹具需要同步更新"
+            end = markers[0].end()
+            text = text[:end] + f'"{register}",\n            ' + text[end:]
+        text += "\n# 测试：修好生成器（字节变化）。\n"
+        path.write_text(text, encoding="utf-8")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _historical_receipt(self, generator: Path, output: str = "receipt.json") -> dict[str, object]:
+        """用修改前的副本生成一份 v4 候选外部门禁收据。"""
+
+        before = self._load_generator(generator)
+        self._write("facts.json", self._facts(receipt.CANDIDATE_PHASE))
+        historical = before.finalize(self.root, "facts.json", output)
+        self.assertEqual(
+            historical["producer"]["tool_sha256"],
+            hashlib.sha256(generator.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(historical["producer"]["tool"], str(generator.resolve()))
+        return historical
+
+    def test_registry_is_keyed_by_current_v4_producer_schema(self) -> None:
+        self.assertEqual(set(receipt.REGISTERED_REPLAY_PRODUCER_HASHES), {receipt.PRODUCER_SCHEMA})
+        for digest in receipt.REGISTERED_REPLAY_PRODUCER_HASHES[receipt.PRODUCER_SCHEMA]:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        current = hashlib.sha256(Path(receipt.__file__).resolve().read_bytes()).hexdigest()
+        self.assertNotIn(current, receipt.REGISTERED_REPLAY_PRODUCER_HASHES[receipt.PRODUCER_SCHEMA])
+
+    def test_edited_generator_replays_registered_historical_receipt(self) -> None:
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator)
+        old_digest = str(historical["producer"]["tool_sha256"])
+        new_digest = self._edit_generator(generator, register=old_digest)
+        self.assertNotEqual(new_digest, old_digest)
+        after = self._load_generator(generator)
+        self.assertEqual(after.replay(self.root, "receipt.json"), historical)
+
+    def test_edited_generator_without_registration_fails_closed(self) -> None:
+        generator = self._generator_copy()
+        self._historical_receipt(generator)
+        self._edit_generator(generator, register=None)
+        after = self._load_generator(generator)
+        with self.assertRaisesRegex(after.GateReceiptError, "未登记为只读重放身份"):
+            after.replay(self.root, "receipt.json")
+
+    def test_registered_digest_only_replays_and_never_generates(self) -> None:
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator, "old-receipt.json")
+        new_digest = self._edit_generator(
+            generator, register=str(historical["producer"]["tool_sha256"])
+        )
+        after = self._load_generator(generator)
+        fresh = after.finalize(self.root, "facts.json", "new-receipt.json")
+        # 新收据只写当前生成器的路径与摘要；除摘要外与修改前生成的收据逐字相同。
+        self.assertEqual(fresh["producer"]["tool_sha256"], new_digest)
+        self.assertEqual(fresh["producer"]["tool"], str(generator.resolve()))
+
+        def without_digest(value: dict[str, object]) -> dict[str, object]:
+            return {**value, "producer": {**value["producer"], "tool_sha256": None}}
+
+        self.assertEqual(without_digest(fresh), without_digest(historical))
+        self.assertEqual(after.replay(self.root, "new-receipt.json"), fresh)
+        self.assertEqual(after.replay(self.root, "old-receipt.json"), historical)
+
+    def test_current_digest_receipt_still_requires_same_generator_path(self) -> None:
+        # 既有行为不变：摘要等于当前生成器的收据，路径不同仍在逐字比较处失败。
+        generator = self._generator_copy()
+        self._historical_receipt(generator)
+        elsewhere = self._generator_copy()
+        relocated = self._load_generator(elsewhere)
+        self.assertEqual(
+            hashlib.sha256(elsewhere.read_bytes()).hexdigest(),
+            hashlib.sha256(generator.read_bytes()).hexdigest(),
+        )
+        with self.assertRaisesRegex(relocated.GateReceiptError, "门禁收据重放结果不一致"):
+            relocated.replay(self.root, "receipt.json")
+
+    def test_registered_digest_does_not_relax_generator_path(self) -> None:
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator)
+        elsewhere = self._generator_copy()
+        self._edit_generator(elsewhere, register=str(historical["producer"]["tool_sha256"]))
+        relocated = self._load_generator(elsewhere)
+        with self.assertRaisesRegex(relocated.GateReceiptError, "不是当前受管生成器路径"):
+            relocated.replay(self.root, "receipt.json")
+
+    def test_retry_after_generator_fix_chains_registered_previous_receipt(self) -> None:
+        generator = self._generator_copy()
+        original = generator.read_bytes()
+        before = self._load_generator(generator)
+        first = self._facts(receipt.CANDIDATE_PHASE, root_cause_id="root-cause-a")
+        first["gates"][1].update({"status": "failed", "exit_code": 1, "failed_count": 1})
+        failed_id = first["gates"][1]["gate_id"]
+        self._write("attempt-1-facts.json", first)
+        failed = before.finalize(self.root, "attempt-1-facts.json", "attempt-1-receipt.json")
+        second = self._facts(
+            receipt.CANDIDATE_PHASE,
+            attempt_id="gate-attempt-002",
+            root_cause_id="root-cause-a",
+            previous_receipt="attempt-1-receipt.json",
+        )
+        second["gates"] = [item for item in second["gates"] if item["gate_id"] == failed_id]
+        self._write("attempt-2-facts.json", second)
+
+        # 修好生成器但未登记修改前摘要：补跑重放前序失败收据时失败关闭，不写输出。
+        self._edit_generator(generator, register=None)
+        unregistered = self._load_generator(generator)
+        with self.assertRaisesRegex(unregistered.GateReceiptError, "未登记为只读重放身份"):
+            unregistered.finalize(self.root, "attempt-2-facts.json", "attempt-2-receipt.json")
+        self.assertFalse((self.root / "attempt-2-receipt.json").exists())
+
+        # 登记修改前摘要后：补跑承接前序失败收据，新收据由修好后的生成器写入。
+        generator.write_bytes(original)
+        new_digest = self._edit_generator(generator, register=str(failed["producer"]["tool_sha256"]))
+        registered = self._load_generator(generator)
+        completed = registered.finalize(self.root, "attempt-2-facts.json", "attempt-2-receipt.json")
+        self.assertEqual(completed["status"], "passed")
+        self.assertEqual(completed["executed_gate_ids"], [failed_id])
+        self.assertEqual(completed["producer"]["tool_sha256"], new_digest)
+        self.assertEqual(registered.replay(self.root, "attempt-2-receipt.json"), completed)
+
+    def test_retired_and_unknown_producer_schemas_are_rejected(self) -> None:
+        current = str(Path(receipt.__file__).resolve())
+        for schema in (
+            "codex-upgrade-external-gate-producer/v1",
+            "codex-upgrade-external-gate-producer/v2",
+            "codex-upgrade-external-gate-producer/v5",
+        ):
+            with self.subTest(schema=schema):
+                with self.assertRaisesRegex(receipt.GateReceiptError, "不受支持"):
+                    receipt._replay_producer_identity(
+                        {"schema_version": schema, "tool": current, "tool_sha256": "a" * 64}
+                    )
+        # v3 仍原样承接历史身份（第 40 项之前的既有行为）。
+        self.assertEqual(
+            receipt._replay_producer_identity(
+                {"schema_version": receipt.LEGACY_PRODUCER_SCHEMA, "tool": "/old/tool.py", "tool_sha256": "b" * 64}
+            ),
+            ("/old/tool.py", "b" * 64),
+        )
 
 
 if __name__ == "__main__":

@@ -2,16 +2,18 @@
 
 门禁的定义与实现见 ``producer_replay_registration``（同目录只读辅助模块）。本模块验证四件事：
 
-1. 当前工作树：三个生成器在全部部署边界处的旧摘要都已登记为只读重放身份，或属于门禁基线前
-   已审计的历史豁免；豁免表恰好等于"不带豁免时的违规集合"（没有多余、没有遗漏）且全部来自
-   基线前的收据；任何模块新增只读重放登记常量都必须先纳入覆盖清单。
+1. 当前工作树：四个生成器（第 40 项起含门禁收据生成器）在全部部署边界处的旧摘要都已登记为
+   只读重放身份，或属于门禁基线前已审计的历史豁免；豁免表恰好等于"不带豁免时的违规集合"（没有
+   多余、没有遗漏）且全部来自基线前的收据；任何模块新增只读重放登记常量都必须先纳入覆盖清单。
 2. 事故形态（只读导出真实历史，不改历史）：4cf336fbf（第 36 项提交）与 3cf1a543f（第 36 项承接
    收据已登记）都必须失败，且恰好指出 9e10bd0f… 要登记到 ``REGISTERED_REPLAY_PRODUCER_HASHES["8"]``；
    补登记后的 f9727c765、b2c088d99 与事故前的 5d218b931 都必须通过（历史已处理的版本不误报）。
 3. 反证（在当前树副本上变异）：改生成器却不登记上一部署边界、删掉已有登记、登记到错误版本、
-   计时账本不追加承接描述，都必须失败；按处置提示正确登记后必须通过。
+   计时账本不追加承接描述，都必须失败；按处置提示正确登记后必须通过。门禁收据生成器另覆盖第 40 项
+   自身的形态：改了生成器却没登记修改前摘要 034331e5 必须失败。
 4. 合成临时 git 仓库：变更集内部的中间提交不要求登记；不在 git 历史里的显式节点必须登记；浅克隆
-   失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免；缺失提交只跳过前后提交边界。
+   失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免；缺失提交只跳过前后提交边界；新增
+   文件的空内容前序不计边界；尚无只读重放判定的生成器如实跳过并报告。
 
 真实形态与反证需要完整 git 历史（CI 的 capture-tools job 以 fetch-depth: 0 检出）；不是 git 工作树时
 跳过，浅克隆时门禁本身失败关闭。全程只读真实仓库：历史形态用 ``git ls-tree``／``git cat-file``
@@ -55,6 +57,11 @@ MODULE_CONSTANT_RE = re.compile(r"^([A-Z][A-Z0-9_]*)\s*(?::[^=\n]*)?=", re.MULTI
 ENVIRONMENT_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.ENVIRONMENT_RECEIPT_PRODUCER)
 FINALIZER_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.RECEIPT_FINALIZER_PRODUCER)
 TIMING_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.TIMING_LEDGER_PRODUCER)
+GATE_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.GATE_RECEIPT_PRODUCER)
+# 第 40 项修改前的门禁收据生成器摘要（5d218b931 起部署），以及 0.154 期间的受管版本。
+GATE_RECEIPT_PRE_ITEM40_DIGEST = "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4d76daf4b16b8e14020"
+GATE_RECEIPT_0154_DIGEST = "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552"
+GATE_RECEIPT_V4_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 
 # 合成临时仓库的写操作（init／commit／clone）专用的 git 隔离：不读用户全局／系统配置（签名、钩子、
 # 默认分支）。只读真实仓库时不隔离，以保留 CI 检出写入全局配置的 safe.directory 等设置。
@@ -191,6 +198,8 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
 
     def test_every_deployment_boundary_is_registered_for_replay(self) -> None:
         self.assertTrue(self.report.passed, gate.format_report(self.report))
+        # 当前工作树里每个覆盖对象都必须已有登记常量，不允许因"尚无登记机制"被跳过。
+        self.assertEqual([], self.report.skipped, gate.format_report(self.report))
         for spec in gate.PRODUCERS:
             boundaries = self.report.boundaries[spec.path]
             # 至少有一个非当前的部署边界，证明门禁真的在检查历史（而不是空集合恒通过）。
@@ -253,6 +262,40 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
         self.assertTrue(
             all(not source.kind.startswith("显式") for source in finalizer[FINALIZER_REGISTERED_BOUNDARY].sources)
         )
+
+    def test_gate_receipt_boundaries_follow_producer_schema(self) -> None:
+        boundaries = self.report.boundaries[gate.GATE_RECEIPT_PRODUCER]
+        # 新增文件的前序是空内容摘要（upstream-merge-framework-v2 收据），它不是生成器版本。
+        self.assertNotIn(gate.EMPTY_FILE_SHA256, boundaries)
+        self.assertNotIn(gate.EMPTY_FILE_SHA256, self.unexempted.boundaries[gate.GATE_RECEIPT_PRODUCER])
+        schemas = {
+            digest: gate.historical_producer_constants(boundary.content)[0]
+            for digest, boundary in boundaries.items()
+            if digest != self.report.current[gate.GATE_RECEIPT_PRODUCER]
+        }
+        unexempted = {item.boundary_sha256: item for item in self.unexempted.violations}
+        for digest, schema in schemas.items():
+            with self.subTest(digest=digest[:12], schema=schema):
+                if schema == "codex-upgrade-external-gate-producer/v3":
+                    # v3 历史收据原样承接旧身份，无需登记。
+                    self.assertNotIn(digest, unexempted)
+                elif schema == GATE_RECEIPT_V4_SCHEMA and digest in {
+                    GATE_RECEIPT_PRE_ITEM40_DIGEST,
+                    GATE_RECEIPT_0154_DIGEST,
+                }:
+                    # 生成过收据的 v4 部署版本必须登记为只读重放身份。
+                    self.assertNotIn(digest, unexempted)
+                else:
+                    # 其余（v1／v2 已退役格式、未部署的 R15 首版）只能靠门禁基线前的历史豁免。
+                    self.assertIn(digest, unexempted)
+                    self.assertIn(digest, gate.HISTORICAL_EXEMPTIONS[gate.GATE_RECEIPT_PRODUCER])
+                    self.assertEqual(
+                        unexempted[digest].registrable,
+                        schema == GATE_RECEIPT_V4_SCHEMA,
+                        "退役格式的摘要登记无效，门禁须如实指出",
+                    )
+        self.assertIn(GATE_RECEIPT_PRE_ITEM40_DIGEST, schemas)
+        self.assertIn(GATE_RECEIPT_0154_DIGEST, schemas)
 
     def test_every_replay_registry_constant_is_covered(self) -> None:
         # 任何模块新增只读重放登记常量，都必须先纳入门禁覆盖清单。
@@ -336,7 +379,7 @@ class Item36IncidentShapeTest(unittest.TestCase):
         )
         violation = report.violations[0]
         self.assertEqual(violation.current_sha256, ITEM36_BROKEN_DIGEST)
-        self.assertEqual(violation.producer_version, "8")
+        self.assertEqual(violation.registry_key, "8")
         self.assertIn("ARM64 事实采集器身份漂移", violation.detail)
         message = gate.format_report(report)
         self.assertIn(ITEM36_MISSING_DIGEST, message)
@@ -370,6 +413,16 @@ class Item36IncidentShapeTest(unittest.TestCase):
         report = self.reports[R15_REVIEW_FIX_COMMIT]
         self.assertTrue(report.passed, gate.format_report(report))
         self.assertEqual(report.current[gate.ENVIRONMENT_RECEIPT_PRODUCER], ITEM36_MISSING_DIGEST)
+
+    def test_generators_without_registry_in_historical_shapes_are_skipped(self) -> None:
+        # 第 40 项之前门禁收据生成器还没有登记机制：历史形态上如实跳过，不影响其它生成器的判定。
+        for commit, report in self.reports.items():
+            with self.subTest(commit=commit[:9]):
+                self.assertEqual(
+                    [spec.path for spec, _ in report.skipped],
+                    [gate.GATE_RECEIPT_PRODUCER],
+                )
+                self.assertIn("尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES", report.skipped[0][1])
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +489,7 @@ class RegistrationMutationTest(unittest.TestCase):
         self._mutate(ENVIRONMENT_SPEC, lambda text: text + "\n# 反证：只改一行注释，生成器身份即改变。\n")
         report = self._check(ENVIRONMENT_SPEC)
         self.assertEqual({(ENVIRONMENT_SPEC.path, head)}, _violation_digests(report), gate.format_report(report))
-        self.assertEqual(report.violations[0].producer_version, version)
+        self.assertEqual(report.violations[0].registry_key, version)
         self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{version}"]', gate.format_report(report))
 
     def test_environment_edit_cannot_exempt_previous_boundary(self) -> None:
@@ -536,7 +589,7 @@ class RegistrationMutationTest(unittest.TestCase):
         )
         return text[:end] + descriptor + text[end:]
 
-    def _write_probe_receipt(self, predecessor: str, successor: str) -> None:
+    def _write_probe_receipt(self, predecessor: str, successor: str, path: str | None = None) -> None:
         """按 freeze-successor-generate 的字段合同合成一份承接收据（compact 自摘要，无尾换行）。"""
 
         unsigned = {
@@ -552,7 +605,7 @@ class RegistrationMutationTest(unittest.TestCase):
             "changed_path_count": 1,
             "transitions": [
                 {
-                    "path": TIMING_SPEC.path,
+                    "path": path or TIMING_SPEC.path,
                     "old_path": "",
                     "status": "M",
                     "predecessor_sha256s": [predecessor],
@@ -600,6 +653,53 @@ class RegistrationMutationTest(unittest.TestCase):
         self.assertTrue(report.passed, gate.format_report(report))
         self.assertGreater(len(report.boundaries[TIMING_SPEC.path]), 2)
 
+    # --- 门禁收据（按 producer schema 分组的显式摘要集合，第 40 项纳入） ---
+
+    def _assert_single_gate_violation(self, report: gate.GateReport, digest: str) -> None:
+        self.assertEqual({(GATE_SPEC.path, digest)}, _violation_digests(report), gate.format_report(report))
+        violation = report.violations[0]
+        self.assertEqual(violation.registry_key, GATE_RECEIPT_V4_SCHEMA)
+        self.assertTrue(violation.registrable)
+        self.assertIn("未登记为只读重放身份", violation.detail)
+        message = gate.format_report(report)
+        self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{GATE_RECEIPT_V4_SCHEMA}"]', message)
+        self.assertIn("codex_upgrade_gate_receipt.py", message)
+
+    def test_gate_receipt_item40_edit_without_registering_pre_edit_digest_fails(self) -> None:
+        # 第 40 项自身的事故形态：改了门禁收据生成器，却没把修改前的 034331e5 登记为只读重放身份。
+        self._mutate(GATE_SPEC, lambda text: _replace_once(text, f'"{GATE_RECEIPT_PRE_ITEM40_DIGEST}",', ""))
+        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_PRE_ITEM40_DIGEST)
+
+    def test_gate_receipt_dropping_0154_registration_fails(self) -> None:
+        self._mutate(GATE_SPEC, lambda text: _replace_once(text, f'"{GATE_RECEIPT_0154_DIGEST}",', ""))
+        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_0154_DIGEST)
+
+    def test_gate_receipt_registration_under_wrong_schema_fails(self) -> None:
+        def move_to_legacy_group(text: str) -> str:
+            text = _replace_once(text, f'"{GATE_RECEIPT_PRE_ITEM40_DIGEST}",', "")
+            anchor = "REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {\n"
+            return _replace_once(
+                text,
+                anchor,
+                anchor + f'    LEGACY_PRODUCER_SCHEMA: frozenset({{"{GATE_RECEIPT_PRE_ITEM40_DIGEST}"}}),\n',
+            )
+
+        self._mutate(GATE_SPEC, move_to_legacy_group)
+        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_PRE_ITEM40_DIGEST)
+
+    def test_gate_receipt_next_edit_must_register_current_digest(self) -> None:
+        # 模拟第 40 项的承接收据已生成（当前摘要成为部署边界）之后，再次修改生成器。
+        head = self.baseline.current[GATE_SPEC.path]
+        self._write_probe_receipt(GATE_RECEIPT_PRE_ITEM40_DIGEST, head, GATE_SPEC.path)
+        self._mutate(GATE_SPEC, lambda text: text + "\n# 反证：再次修改门禁收据生成器。\n")
+        self._assert_single_gate_violation(self._check(GATE_SPEC), head)
+        self._mutate(
+            GATE_SPEC,
+            lambda text: _insert_into_group(text, r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", head),
+        )
+        report = self._check(GATE_SPEC)
+        self.assertTrue(report.passed, gate.format_report(report))
+
 
 # ---------------------------------------------------------------------------
 # 4. 合成临时 git 仓库：部署边界定义的细节
@@ -610,6 +710,7 @@ SYNTHETIC_SPEC = gate.ProducerSpec(
     path=SYNTHETIC_PRODUCER,
     mechanism=gate.MECHANISM_VERSIONED_HASH_SET,
     registry="REGISTERED_REPLAY_PRODUCER_HASHES",
+    judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_validated_producer_version"),
 )
 
 
@@ -747,12 +848,39 @@ class SyntheticRepositoryBoundaryTest(unittest.TestCase):
         self.repository.write_producer(_synthetic_producer("d", {"1": [digest_a, digest_c]}))
         report = self.repository.check()
         self.assertEqual({(SYNTHETIC_PRODUCER, workspace)}, _violation_digests(report))
-        self.assertIsNone(report.violations[0].producer_version)
+        self.assertIsNone(report.violations[0].registry_key)
         self.assertIn("<该摘要生成收据时的 PRODUCER_VERSION>", gate.format_report(report))
         # 引用了不存在的提交：只跳过前后提交边界，并如实记录。
         self.assertEqual({"f" * 40, "e" * 40}, set(report.unreachable_commits))
         self.repository.write_producer(_synthetic_producer("d", {"1": [digest_a, digest_c, workspace]}))
         self.assertTrue(self.repository.check().passed)
+
+    def test_empty_file_predecessor_is_not_a_boundary(self) -> None:
+        # 冻结承接图把新增文件的前序记为空内容摘要：它表示"文件尚不存在"，不是生成器版本。
+        digest_a = self.repository.write_producer(_synthetic_producer("a"))
+        added = self.repository.commit("新增生成器 a")
+        receipt = _change_set_receipt(added, added, gate.EMPTY_FILE_SHA256, digest_a, "2026-09-20T00:00:00Z")
+        self.repository.write_receipt("added-freeze-successor.json", receipt)
+        self.repository.write_producer(_synthetic_producer("b", {"1": [digest_a]}))
+        report = self.repository.check()
+        self.assertTrue(report.passed, gate.format_report(report))
+        self.assertNotIn(gate.EMPTY_FILE_SHA256, report.boundaries[SYNTHETIC_PRODUCER])
+        self.assertIn(digest_a, report.boundaries[SYNTHETIC_PRODUCER])
+
+    def test_generator_without_registry_is_skipped_and_reported(self) -> None:
+        # 历史形态里登记机制尚未引入的生成器：如实跳过并记入报告（当前树由测试保证不会出现）。
+        self._change_set()
+        text = _synthetic_producer("d").decode("utf-8").replace(
+            "REGISTERED_REPLAY_PRODUCER_HASHES", "UNRELATED_CONSTANT"
+        )
+        self.repository.write_producer(text.encode("utf-8"))
+        report = self.repository.check()
+        self.assertTrue(report.passed)
+        self.assertEqual(
+            [(SYNTHETIC_SPEC, "生成器尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES")],
+            report.skipped,
+        )
+        self.assertIn("跳过：synthetic_replay_producer.py", gate.format_report(report))
 
     def test_new_boundary_after_baseline_cannot_be_exempted(self) -> None:
         digest_a, _, _ = self._change_set(issued="2026-10-01T00:00:00Z")

@@ -16,8 +16,8 @@
 
 二、盘点结论：哪些生成器以"文件摘要即身份"且需要按旧身份重放
 ============================================================
-只有下面三个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
-并且各自带有旧身份登记机制（``PRODUCERS``）：
+下面四个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
+并且各自带有旧身份登记机制（``PRODUCERS``；第 4 个由修好接着跑第 40 项补上登记机制后纳入）：
 
 1. ``codex_upgrade_arm64_environment_receipt.py``（ARM64 环境收据，P0／attempt 等 12 个 phase）：
    写入 ``producer.tool_sha256``；重放时 ``_validated_producer_version`` 要求等于当前摘要，否则必须
@@ -31,6 +31,10 @@
    ``codex-cli-0151-worktree-successor.json`` 与 ``PRODUCER_FREEZE_SUCCESSORS`` 登记的承接收据
    摘要边，从旧摘要逐跳走到当前摘要——**承接收据链**，登记方式是把本次变更集的 freeze successor
    描述追加进 ``PRODUCER_FREEZE_SUCCESSORS`` 并生成该收据。
+4. ``codex_upgrade_gate_receipt.py``（候选外部门禁与 post-promotion 门禁收据，accept 与生产激活时
+   重放）：写入 ``producer.tool_sha256``；重放时 ``_replay_producer_identity`` 对 v4 收据要求摘要等于
+   当前摘要，否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[PRODUCER_SCHEMA]`` 中——**按 producer
+   schema 分组的显式摘要集合**；v3 历史收据原样承接旧身份，v1／v2 收据格式已退役。
 
 其余写入 producer 摘要的生成器不在本门禁范围，原因见测试模块文档与提交说明（严格等于当前、
 只记录不校验、Campaign 运行时授权链或 Claude 台账钉值等）。``tests`` 中另有自检：任何模块新增
@@ -52,19 +56,23 @@
 
 同一变更集内部的中间提交既不是收据记录的前后提交，也不是显式节点，因此**不会被要求登记**；
 承接收据引用、但仓库里已不存在的提交（0.151 时期的两份工作区基线）只跳过 (B)，其显式节点仍计入。
+冻结承接图把新增文件的前序记为空内容摘要（``EMPTY_FILE_SHA256``），它表示"文件尚不存在"，不是
+生成器版本，不计为边界。生成器在某个历史形态里还没有只读重放判定时（``judge_attributes`` 中的
+函数或登记常量缺失），门禁在该形态上跳过它并记入报告；当前工作树由测试保证不得跳过。
 
 四、检查规则与历史豁免
 ======================
 对每个生成器，当前摘要记为 C；每个部署边界摘要 B ≠ C 时，B 必须被该生成器**自身的只读重放
 逻辑**接受（直接调用生成器模块里的判定函数或登记常量，不另写一套判定）。不接受即违规。
 
-门禁引入前已经人工处理过、确认从未生成需重放收据的历史边界，登记在 ``HISTORICAL_EXEMPTIONS``
-（逐条写明依据）。豁免只允许覆盖 ``GATE_BASELINE_ISSUED_AT_UTC`` 之前签发的收据引入的边界，且
+门禁引入前已经人工处理过的历史边界——确认从未生成需重放收据，或其收据格式早已按设计退役——
+登记在 ``HISTORICAL_EXEMPTIONS``（逐条写明依据）。豁免只允许覆盖 ``GATE_BASELINE_ISSUED_AT_UTC`` 之前签发的收据引入的边界，且
 永远不覆盖基线时已部署的版本 ``GATE_BASELINE_CURRENT_SHA256``；此后出现的新边界不提供豁免
 通道——即便某个变更集终点确实没部署过，把它登记为只读重放身份也无害（只读重放不允许生成
 新事实）。
 
-本模块只读：不写仓库、不改生成器、不生成收据、不访问网络。
+本模块只读：不写仓库、不改生成器、不生成收据、不访问网络。第 40 项起它同时覆盖门禁收据生成器
+（其登记机制由同一变更集加入 ``codex_upgrade_gate_receipt.py``），本模块自身仍不改变任何生成器。
 """
 
 from __future__ import annotations
@@ -91,8 +99,14 @@ from typing import Any, Iterable, Mapping, Sequence
 MECHANISM_VERSIONED_HASH_SET = "versioned_hash_set"
 MECHANISM_FLAT_HASH_SET = "flat_hash_set"
 MECHANISM_SUCCESSOR_CHAIN = "successor_chain"
+MECHANISM_SCHEMA_KEYED_HASH_SET = "schema_keyed_hash_set"
 MECHANISMS = frozenset(
-    {MECHANISM_VERSIONED_HASH_SET, MECHANISM_FLAT_HASH_SET, MECHANISM_SUCCESSOR_CHAIN}
+    {
+        MECHANISM_VERSIONED_HASH_SET,
+        MECHANISM_FLAT_HASH_SET,
+        MECHANISM_SUCCESSOR_CHAIN,
+        MECHANISM_SCHEMA_KEYED_HASH_SET,
+    }
 )
 
 ENVIRONMENT_RECEIPT_PRODUCER = (
@@ -100,6 +114,7 @@ ENVIRONMENT_RECEIPT_PRODUCER = (
 )
 RECEIPT_FINALIZER_PRODUCER = "tools/official_client_capture/codex_upgrade_receipt_finalizer.py"
 TIMING_LEDGER_PRODUCER = "tools/official_client_capture/codex_upgrade_timing_ledger.py"
+GATE_RECEIPT_PRODUCER = "tools/official_client_capture/codex_upgrade_gate_receipt.py"
 
 
 @dataclass(frozen=True)
@@ -108,12 +123,15 @@ class ProducerSpec:
 
     * ``path``：仓库相对路径（POSIX）；
     * ``mechanism``：旧身份登记方式（见模块文档第二节）；
-    * ``registry``：登记所在的模块级常量名，只用于失败信息与覆盖自检。
+    * ``registry``：登记所在的模块级常量名，只用于失败信息与覆盖自检；
+    * ``judge_attributes``：门禁判定要调用的生成器函数与常量。历史形态里缺任何一个，说明那时
+      还没有这套只读重放判定，门禁在该形态上跳过该生成器（当前工作树由测试保证不会跳过）。
     """
 
     path: str
     mechanism: str
     registry: str
+    judge_attributes: tuple[str, ...] = ()
 
 
 PRODUCERS: tuple[ProducerSpec, ...] = (
@@ -121,16 +139,27 @@ PRODUCERS: tuple[ProducerSpec, ...] = (
         path=ENVIRONMENT_RECEIPT_PRODUCER,
         mechanism=MECHANISM_VERSIONED_HASH_SET,
         registry="REGISTERED_REPLAY_PRODUCER_HASHES",
+        judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_validated_producer_version"),
     ),
     ProducerSpec(
         path=RECEIPT_FINALIZER_PRODUCER,
         mechanism=MECHANISM_FLAT_HASH_SET,
         registry="LEGACY_REPLAY_PRODUCER_HASHES",
+        judge_attributes=("LEGACY_REPLAY_PRODUCER_HASHES",),
     ),
     ProducerSpec(
         path=TIMING_LEDGER_PRODUCER,
         mechanism=MECHANISM_SUCCESSOR_CHAIN,
         registry="PRODUCER_FREEZE_SUCCESSORS",
+        # 计时账本早于 PRODUCER_FREEZE_SUCCESSORS 就有承接判定（0.151 的 PRODUCER_SUCCESSOR_TRANSITIONS），
+        # 历史形态以判定函数是否存在为准，不以当前的登记常量为准。
+        judge_attributes=("_producer", "_producer_identity_matches"),
+    ),
+    ProducerSpec(
+        path=GATE_RECEIPT_PRODUCER,
+        mechanism=MECHANISM_SCHEMA_KEYED_HASH_SET,
+        registry="REGISTERED_REPLAY_PRODUCER_HASHES",
+        judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_replay_producer_identity"),
     ),
 )
 
@@ -156,6 +185,8 @@ GATE_BASELINE_CURRENT_SHA256: Mapping[str, str] = {
     ENVIRONMENT_RECEIPT_PRODUCER: "1b62b096cc543350d0060c0eea5f97e2f833e47a95b22c346fdffaa27fe66968",
     RECEIPT_FINALIZER_PRODUCER: "02bc3d7e4d7b8df11a0c8ce3289dd270275d748c67cc19d83e27b00c3c3a1e78",
     TIMING_LEDGER_PRODUCER: "bb799f9e817bb3e30e41c1792ee1c4fe61fc51e96685abadc78605e0218ff564",
+    # 第 40 项修改前的门禁收据生成器；第 40 项本身改了该文件，因此它必须登记为只读重放身份。
+    GATE_RECEIPT_PRODUCER: "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4d76daf4b16b8e14020",
 }
 
 HISTORICAL_EXEMPTIONS: Mapping[str, Mapping[str, str]] = {
@@ -164,22 +195,40 @@ HISTORICAL_EXEMPTIONS: Mapping[str, Mapping[str, str]] = {
         # 的 base_commit 77e338de5。
         "a55967eeb5ea8c55c301779595f1aa132df81755a588f5d88070b1fb903dc1d7": (
             "0.151 时期提交 77e338de5 的中间版本，15 分钟后即被 e90e15b9a（317ea2c8，已登记）取代；"
-            "同一份承接收据显式登记的前序是工作区快照 a62a269e（已登记），该提交版本从未被登记为部署"
-            "版本，据此判断它没有生成需要重放的收据；0.151 升级已收口"
+            "同一份承接收据显式登记的前序是工作区快照 a62a269e（已登记）。2026-09-28 已在 ARM64 现场"
+            "核实：没有任何收据由它生成，它只出现在承接收据备份副本中"
         ),
         # 来源：upstream-codex-01561-r15-20260923-freeze-successor.json 的 to_sha256／current_commit
         # e30ed6f82，以及 r15-review-fix 收据的 predecessor_sha256s。
         "532bbe60a63b3b4c36b56ca1b0c0d593b58b1aa412c674be68ac5f31d9cdc583": (
-            "R15 首版（0a888dadc）：次日即被审核修正 5d218b931（9e10bd0f）取代；生成器版本 8 的登记注释"
-            "写明已生成的 P0 与 attempt 收据由 9e10bd0f 生成，补登记提交 f9727c765 也只登记了 9e10bd0f，"
-            "据此判断该版本没有生成需要重放的收据"
+            "R15 首版（0a888dadc），次日即被审核修正 5d218b931（9e10bd0f，已登记）取代。2026-09-28 已在"
+            " ARM64 现场核实：没有任何收据由它生成，它只出现在承接收据备份副本中"
         ),
         # 来源：upstream-codex-0157-item36-maintenance-wait-invalid-transient-20260928-freeze-successor.json
         # 的 to_sha256／current_commit 4cf336fbf，以及 item36b 收据的 predecessor_sha256s。
         "48304c4c7c8028b7ac613d862bff88ec7abf8d98fa21cc87fe6d46eb337a015a": (
-            "第 36 项事故版本（4cf336fbf）：据事故记录，部署到 ARM64 后状态命令即报 P0 环境收据无法重放；"
-            "补登记提交 f9727c765 只登记了 9e10bd0f，据此判断该版本没有生成需要重放的收据。本门禁正是"
-            "为在提交阶段拦下这一形态而设"
+            "第 36 项事故版本（4cf336fbf）：部署到 ARM64 后状态命令即报 P0 环境收据无法重放，补登记"
+            "提交 f9727c765 只登记了 9e10bd0f。2026-09-28 已在 ARM64 现场核实：没有任何收据由它生成，"
+            "它只出现在承接收据备份副本中。本门禁正是为在提交阶段拦下这一形态而设"
+        ),
+    },
+    GATE_RECEIPT_PRODUCER: {
+        # 来源：historical-source-drift-successor.json 等收据的前序与前后提交（7d0d6c98f 起的版本）。
+        "c60b3c4992b5a6081e678eb6c3b23e308ca6ea82e8be395e66a9705c01375abb": (
+            "v1 门禁收据格式（codex-upgrade-external-gate-producer/v1）已随 v3 升级（d691afcb6）退役："
+            "replay 只接受 v3／v4 收据，该版本生成的收据按设计不再重放，对应升级均已收口"
+        ),
+        # 来源：codex-cli-0151-tool-readiness-source-transition.json 的 from_sha256 等（bd638c411 版本）。
+        "861d07d5d6574c0e953df930907bfc8d5a2a64f34072b2f204992362f22327d8": (
+            "v2 门禁收据格式（codex-upgrade-external-gate-producer/v2）已随 v3 升级（d691afcb6）退役："
+            "replay 只接受 v3／v4 收据，该版本生成的收据按设计不再重放，对应升级均已收口"
+        ),
+        # 来源：upstream-codex-01561-r15-20260923-freeze-successor.json 的 to_sha256／current_commit
+        # e30ed6f82，以及 r15-review-fix 收据的 predecessor_sha256s。
+        "72c1020ec44b43b9efa305a70b3a1d4853cccee9375e0329cde7469abc691dc1": (
+            "R15 首版（0a888dadc），次日即被 5d218b931（034331e5，已登记）取代。门禁收据必须绑定同一"
+            " attempt 的 gate_before／gate_after 环境收据，而同一版本的环境收据生成器 532bbe60 已于"
+            " 2026-09-28 在 ARM64 现场核实没有生成任何收据，因此该版本不可能生成过门禁收据"
         ),
     },
 }
@@ -194,6 +243,8 @@ RECEIPT_SCHEMA_KEYWORDS = ("successor", "transition", "ledger", "receipt")
 PREDECESSOR_FIELDS = ("predecessor_sha256s", "predecessor_sha256", "from_sha256", "before")
 SUCCESSOR_FIELDS = ("to_sha256", "current_sha256", "head_sha256", "after")
 COMMIT_FIELDS = ("base_commit", "current_commit")
+# 冻结承接图用空内容摘要作新增文件的前序，表示"文件尚不存在"，不是生成器版本。
+EMPTY_FILE_SHA256 = hashlib.sha256(b"").hexdigest()
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 PRODUCER_VERSION_RE = re.compile(rb'^PRODUCER_VERSION\s*=\s*"([^"\n]+)"', re.MULTILINE)
@@ -233,24 +284,47 @@ class Boundary:
 
 @dataclass(frozen=True)
 class Violation:
-    """部署边界处的旧摘要未被生成器只读重放逻辑接受。"""
+    """部署边界处的旧摘要未被生成器只读重放逻辑接受。
+
+    ``registry_key`` 是该摘要应登记的分组键：环境收据为它生成收据时的 ``PRODUCER_VERSION``，
+    门禁收据为它生成收据时的 ``PRODUCER_SCHEMA``；扁平集合与承接链只作参考（其 PRODUCER_VERSION）。
+    ``registrable`` 为假表示该分组已不受生成器只读重放支持（例如已退役的收据格式），登记无效。
+    """
 
     producer: ProducerSpec
     current_sha256: str
     boundary_sha256: str
-    producer_version: str | None
+    registry_key: str | None
     sources: tuple[BoundarySource, ...]
     detail: str
+    registrable: bool = True
+
+    def key_label(self) -> str:
+        if self.registry_key is None:
+            return ""
+        name = "PRODUCER_SCHEMA" if self.producer.mechanism == MECHANISM_SCHEMA_KEYED_HASH_SET else "PRODUCER_VERSION"
+        return f"（该版本 {name}=\"{self.registry_key}\"）"
 
     def remedy(self) -> str:
         """给出要把哪个摘要登记到哪里。"""
 
         name = Path(self.producer.path).name
         if self.producer.mechanism == MECHANISM_VERSIONED_HASH_SET:
-            version = self.producer_version or "<该摘要生成收据时的 PRODUCER_VERSION>"
+            version = self.registry_key or "<该摘要生成收据时的 PRODUCER_VERSION>"
             return (
                 f"把 {self.boundary_sha256} 加入 {name} 的 {self.producer.registry}[\"{version}\"]"
                 "（只读重放身份，不允许生成新 facts），并在注释写明该版本生成过哪些收据"
+            )
+        if self.producer.mechanism == MECHANISM_SCHEMA_KEYED_HASH_SET:
+            schema = self.registry_key or "<该摘要生成收据时的 PRODUCER_SCHEMA>"
+            if not self.registrable:
+                return (
+                    f"该摘要生成的是 {schema} 格式的收据，{name} 已不支持该格式的只读重放，登记无效；"
+                    "若仍有此格式的收据需要重放，须在生成器中恢复该格式的只读重放"
+                )
+            return (
+                f"把 {self.boundary_sha256} 加入 {name} 的 {self.producer.registry}[\"{schema}\"]"
+                "（只读重放身份，新收据仍只由当前生成器生成），并在注释写明该版本生成过哪些收据"
             )
         if self.producer.mechanism == MECHANISM_FLAT_HASH_SET:
             return (
@@ -274,6 +348,8 @@ class GateReport:
     boundaries: dict[str, dict[str, Boundary]] = field(default_factory=dict)
     current: dict[str, str] = field(default_factory=dict)
     unreachable_commits: dict[str, list[str]] = field(default_factory=dict)
+    # 该形态下还没有登记常量（登记机制尚未引入）而跳过的生成器及原因；当前工作树必须为空。
+    skipped: list[tuple[ProducerSpec, str]] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -428,6 +504,8 @@ def collect_boundaries(
     boundaries: dict[str, Boundary] = {}
 
     def add(digest: str, source: BoundarySource, content: bytes | None = None) -> None:
+        if digest == EMPTY_FILE_SHA256:
+            return
         boundary = boundaries.setdefault(digest, Boundary(sha256=digest))
         boundary.sources.append(source)
         if content is not None and boundary.content is None:
@@ -516,14 +594,41 @@ def historical_producer_constants(content: bytes | None) -> tuple[str | None, st
     )
 
 
+@dataclass(frozen=True)
+class Verdict:
+    """一个旧摘要的只读重放判定：是否接受、判定说明、登记分组键、该分组是否仍可登记。"""
+
+    accepted: bool
+    detail: str
+    registry_key: str | None
+    registrable: bool = True
+
+
 def replay_verdict(
     spec: ProducerSpec,
     module: ModuleType,
     boundary: Boundary,
-) -> tuple[bool, str, str | None]:
-    """用生成器自身的只读重放逻辑判定旧摘要是否可重放，返回 (接受, 说明, 历史版本号)。"""
+) -> Verdict:
+    """用生成器自身的只读重放逻辑判定旧摘要是否可重放。"""
 
     schema, version = historical_producer_constants(boundary.content)
+    if spec.mechanism == MECHANISM_SCHEMA_KEYED_HASH_SET:
+        # 与 replay() 相同的生成器身份承接入口 _replay_producer_identity。历史内容读不到时
+        # （只在显式节点出现、不在 git 历史里）只按当前 producer schema 判定，不会因旧格式的
+        # 宽松承接（v3）而被放行。
+        candidate = schema or module.PRODUCER_SCHEMA
+        producer = {
+            "schema_version": candidate,
+            "tool": str(Path(module.__file__).resolve()),
+            "tool_sha256": boundary.sha256,
+        }
+        # 生成器只对当前 producer schema 查登记；其它旧格式要么整体承接（v3），要么已退役。
+        registrable = candidate == module.PRODUCER_SCHEMA
+        try:
+            module._replay_producer_identity(producer)
+        except Exception as error:  # noqa: BLE001 - 生成器以异常表达拒绝
+            return Verdict(False, f"producer schema={candidate}：{error}", candidate, registrable)
+        return Verdict(True, f"可按 {candidate} 只读重放", candidate)
     if spec.mechanism == MECHANISM_VERSIONED_HASH_SET:
         # 与 _build_receipt(replay_producer=…) → validate_facts 相同的只读重放入口：allow_legacy_replay=True。
         tool = str(Path(module.__file__).resolve())
@@ -543,15 +648,15 @@ def replay_verdict(
                 reasons.append(f"version={candidate}：{error}")
                 continue
             if accepted == candidate:
-                return True, f"已登记为版本 {candidate} 的只读重放身份", version or candidate
+                return Verdict(True, f"已登记为版本 {candidate} 的只读重放身份", version or candidate)
             reasons.append(f"version={candidate}：判定为版本 {accepted}")
-        return False, "；".join(reasons) or "无可尝试的版本号", version
+        return Verdict(False, "；".join(reasons) or "无可尝试的版本号", version)
     if spec.mechanism == MECHANISM_FLAT_HASH_SET:
         # 与 _validate_replay_producer 相同：不等于当前摘要时必须在扁平登记集合中。
         registry = getattr(module, spec.registry)
         if boundary.sha256 in registry:
-            return True, f"已登记在 {spec.registry}", version
-        return False, f"不在 {spec.registry} 中", version
+            return Verdict(True, f"已登记在 {spec.registry}", version)
+        return Verdict(False, f"不在 {spec.registry} 中", version)
     if spec.mechanism == MECHANISM_SUCCESSOR_CHAIN:
         current = module._producer()
         frozen = dict(current)
@@ -563,10 +668,10 @@ def replay_verdict(
         try:
             accepted = module._producer_identity_matches(frozen, current)
         except Exception as error:  # noqa: BLE001 - 登记描述或承接收据本身不合法
-            return False, f"承接链加载失败：{type(error).__name__}：{error}", version
+            return Verdict(False, f"承接链加载失败：{type(error).__name__}：{error}", version)
         if accepted:
-            return True, "沿登记的承接边可达当前摘要", version
-        return False, "沿登记的承接边无法到达当前摘要（链断裂或版本不一致）", version
+            return Verdict(True, "沿登记的承接边可达当前摘要", version)
+        return Verdict(False, "沿登记的承接边无法到达当前摘要（链断裂或版本不一致）", version)
     raise GateError(f"未知登记方式：{spec.mechanism}")
 
 
@@ -654,6 +759,11 @@ def check_registration(
         )
         report.boundaries[spec.path] = boundaries
         module = load_producer_module(tree_root, spec)
+        missing = [name for name in (spec.judge_attributes or (spec.registry,)) if not hasattr(module, name)]
+        if missing:
+            # 该形态下生成器还没有只读重放判定（历史形态）；当前工作树由测试保证不会走到这里。
+            report.skipped.append((spec, f"生成器尚无只读重放判定所需的 {'、'.join(missing)}"))
+            continue
         if spec.mechanism == MECHANISM_SUCCESSOR_CHAIN:
             _memoize_successor_edges(module)
         exempt = exemptions.get(spec.path, {})
@@ -662,9 +772,10 @@ def check_registration(
             if digest == current_sha256:
                 continue
             boundary = boundaries[digest]
-            accepted, detail, version = replay_verdict(spec, module, boundary)
-            if accepted:
+            verdict = replay_verdict(spec, module, boundary)
+            if verdict.accepted:
                 continue
+            detail = verdict.detail
             if digest in exempt:
                 if digest == baseline_current:
                     detail += "；该摘要是门禁基线时已部署的版本，修改生成器后必须登记，不得豁免"
@@ -678,9 +789,10 @@ def check_registration(
                     producer=spec,
                     current_sha256=current_sha256,
                     boundary_sha256=digest,
-                    producer_version=version,
+                    registry_key=verdict.registry_key,
                     sources=tuple(boundary.sources),
                     detail=detail,
+                    registrable=verdict.registrable,
                 )
             )
     return report
@@ -702,12 +814,11 @@ def format_report(report: GateReport, *, max_sources: int = 4) -> str:
             sources = list(violation.sources)
             shown = "；".join(source.describe() for source in sources[:max_sources])
             more = f"；等共 {len(sources)} 处" if len(sources) > max_sources else ""
-            version = f"（该版本 PRODUCER_VERSION=\"{violation.producer_version}\"）" if violation.producer_version else ""
             lines.extend(
                 [
                     f"[{index}] 生成器：{violation.producer.path}",
                     f"    当前摘要：{violation.current_sha256}",
-                    f"    未登记的旧摘要：{violation.boundary_sha256}{version}",
+                    f"    未登记的旧摘要：{violation.boundary_sha256}{violation.key_label()}",
                     f"    部署边界出处：{shown}{more}",
                     f"    重放判定：{violation.detail}",
                     f"    处置：{violation.remedy()}",
@@ -720,6 +831,8 @@ def format_report(report: GateReport, *, max_sources: int = 4) -> str:
         )
     for spec, digest, reason in report.exempted:
         lines.append(f"历史豁免：{Path(spec.path).name} {digest[:12]}…：{reason}")
+    for spec, reason in report.skipped:
+        lines.append(f"跳过：{Path(spec.path).name}：{reason}")
     return "\n".join(lines)
 
 

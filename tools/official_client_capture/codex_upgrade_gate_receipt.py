@@ -28,6 +28,25 @@ LEGACY_PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v3"
 FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v4"
 RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v4"
 PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v4"
+# 只读重放登记（修好接着跑第 40 项）：收据的生成器身份是本文件的 sha256。修好本文件后，修改前
+# 已部署版本生成的 v4 收据（候选外部门禁、post-promotion）仍要能在 accept／生产激活时重放，所以
+# 每次修改都必须把修改前已部署版本的摘要登记在它生成收据时的 producer schema 下。登记只服务
+# replay：build_receipt 不读取本登记，新收据始终写入当前路径与当前摘要；重放时也只承接摘要这一
+# 个字段，路径和其余字段仍须由当前实现从原始事实逐字重建。v3 历史收据本就承接原 tool 与
+# tool_sha256，无需登记；v1／v2 收据格式已退役、不可重放。登记是否完整由
+# tests/test_producer_replay_registration_gate.py 按承接收据记录的部署边界检查。
+REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
+    PRODUCER_SCHEMA: frozenset(
+        {
+            # 931ae5b3：bb39c94b6 起部署的受管版本，0.154 期间的外部门禁收据由它生成（入库的
+            # docs/egress/maintenance/CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json 即是）。
+            "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552",
+            # 034331e5：5d218b931 起部署、第 40 项修改前的受管版本；0.157 Campaign 期间生成的
+            # 外部门禁收据都由它生成。
+            "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4d76daf4b16b8e14020",
+        }
+    ),
+}
 SAME_ROOT_CAUSE_RETRY_LIMIT = 2
 CANDIDATE_PHASE = "candidate_external"
 POST_PROMOTION_PHASE = "post_promotion"
@@ -927,6 +946,46 @@ def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str,
     return receipt
 
 
+def _replay_producer_identity(producer: Mapping[str, Any]) -> tuple[str, str]:
+    """只读重放时承接收据中的生成器身份，返回写回重建收据的 ``(tool, tool_sha256)``。
+
+    * v3 历史收据：升级到 v4 后已无法从当前文件字节复现旧摘要，但仍可用当前实现完整重放旧
+      facts、静态合同、前序链和证据绑定；因此原样承接这两个历史 producer 身份字段。
+    * v4 收据：摘要等于当前生成器摘要时返回当前身份（与原先逐字比较完全一致，路径不同仍在
+      逐字比较处失败）；摘要不同时，必须已登记在 ``REGISTERED_REPLAY_PRODUCER_HASHES`` 的 v4
+      分组中，且 ``tool`` 仍须是当前受管生成器路径——只承接摘要这一个字段，不放宽路径。
+    * 其它 producer schema（v1／v2 已退役）一律拒绝。
+
+    本函数只服务重放；``build_receipt`` 不经过这里，新收据始终写入当前路径与当前摘要。
+    """
+
+    schema = producer.get("schema_version")
+    tool = producer.get("tool")
+    tool_sha256 = producer.get("tool_sha256")
+    if schema == LEGACY_PRODUCER_SCHEMA:
+        if not isinstance(tool, str) or not tool or not isinstance(
+            tool_sha256, str
+        ):
+            raise GateReceiptError("v3 receipt producer 身份非法")
+        _sha256(tool_sha256, "v3 receipt producer.tool_sha256")
+        return tool, tool_sha256
+    if schema != PRODUCER_SCHEMA:
+        raise GateReceiptError("receipt.producer 不受支持")
+    current_tool = Path(__file__).resolve()
+    current_sha256 = _sha256_file(current_tool)
+    if tool_sha256 == current_sha256:
+        return str(current_tool), current_sha256
+    registered = REGISTERED_REPLAY_PRODUCER_HASHES.get(schema, frozenset())
+    if not isinstance(tool_sha256, str) or tool_sha256 not in registered:
+        raise GateReceiptError(
+            "门禁收据生成器身份漂移：v4 收据的 producer.tool_sha256 既不是当前生成器摘要，"
+            "也未登记为只读重放身份（REGISTERED_REPLAY_PRODUCER_HASHES）"
+        )
+    if tool != str(current_tool):
+        raise GateReceiptError("v4 历史收据的 producer.tool 不是当前受管生成器路径")
+    return tool, tool_sha256
+
+
 def replay(
     root: Path,
     receipt_relative: str,
@@ -963,19 +1022,11 @@ def replay(
         _seen_receipts=seen,
         _allow_legacy=receipt_schema == LEGACY_RECEIPT_SCHEMA,
     )
-    if receipt_schema == LEGACY_RECEIPT_SCHEMA:
-        # v3 收据冻结了当时的 producer 路径与工具摘要。升级到 v4 后已无法从
-        # 当前文件字节复现旧摘要，但仍可用当前实现完整重放旧 facts、静态合同、
-        # 前序链和证据绑定；因此只承接这两个历史 producer 身份字段。
-        tool = producer.get("tool")
-        tool_sha256 = producer.get("tool_sha256")
-        if not isinstance(tool, str) or not tool or not isinstance(
-            tool_sha256, str
-        ):
-            raise GateReceiptError("v3 receipt producer 身份非法")
-        _sha256(tool_sha256, "v3 receipt producer.tool_sha256")
-        expected["producer"]["tool"] = tool
-        expected["producer"]["tool_sha256"] = tool_sha256
+    # v3 承接原 producer 路径与摘要；v4 只在摘要已登记为只读重放身份时承接旧摘要。其余字段
+    # 仍须由当前实现从原始事实逐字重建（见 _replay_producer_identity）。
+    tool, tool_sha256 = _replay_producer_identity(producer)
+    expected["producer"]["tool"] = tool
+    expected["producer"]["tool_sha256"] = tool_sha256
     if _canonical(expected) != raw:
         raise GateReceiptError("门禁收据重放结果不一致")
     return receipt
