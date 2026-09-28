@@ -712,6 +712,151 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             with self.assertRaisesRegex(supervisor.SupervisorError, "必须带 --rerun-failed 与 --recovery-preview"):
                 check(successor_manifest([token for token in successor_command if token != "--rerun-failed"]))
 
+    def test_d07_watchdog_segment_parent_with_diagnostic_is_claimed_through_0w(self) -> None:
+        """草表 D-07（第 1 项补充）：经 0-W 继承的代表协议——恢复段 run（ar1）批次的父 campaign-run 在段 run 子进程写出
+        失败诊断后被看门狗中止，run 期间发布的段预约按 attempt 对账收据分流。处理型 execution-failure 时，段对账、批准
+        并消费恢复预览后，后继段协议（15）按 failed 同一判据承接 ar2，且 15 条协议里只有这一条承接；诊断换成永久失败类
+        即在 0-W 失败关闭——修复前 0-W 在有预约时只核对 attempt 收据，永久失败类的看门狗中止也会被后继段协议放行。
+
+        父 run 是合成的：账本收口与既有 failed 段用例一样显式调用父监督器收账函数。看门狗中止的父进程自己来不及收账，
+        有预约时账本不会自动进入 recovery_required，恢复预览也就无从消费——这是另一处缺口，不在本用例范围内。"""
+
+        import os
+        import sys
+        import time
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, context = self._failed_b0_and_reconciled(root)
+            campaign_dir = context["campaign_dir"]
+            attempt_root = context["attempt_root"]
+            job_ids = context["job_ids"]
+            original_roots = {str(item["id"]): list(item["evidence_roots"]) for item in context["attempt"]["results"]}
+            applied = self._apply_transient(fixture, context)
+            self.assertEqual(applied["status"], "applied", applied)
+            failing_jobs = [
+                Job(
+                    job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                    steps=_job_steps(job_id, original_roots[job_id][0]), evidence_roots=(original_roots[job_id][0],), covers=(), scenario_ids=("A03",),
+                )
+                for job_id in job_ids
+            ]
+            failed_result = lambda job, *a, **k: {
+                "id": job.job_id, "phase": "candidate", "required": True, "execution_sha256": codex_upgrade._job_execution_sha256(job),
+                "status": "failed", "description": job.description, "duration_seconds": 0.0, "steps": [{"argv": ["sh"], "return_code": 3, "log": ""}],
+                "evidence_roots": [], "missing_evidence_patterns": list(job.evidence_roots), "empty_evidence_patterns": [], "covers": [],
+                "scenario_ids": list(job.scenario_ids), "scenario_receipts": [], "scenario_receipt_failures": [], "track": "main", "model_id": "",
+                "expected_use_responses_lite": False, "required_model_receipt": False, "model_condition_receipt": None,
+                "model_condition_receipt_failure": None, "disposition": "executed",
+            }
+            # 父批次 vc-5-0007 取得执行权的时刻：原 attempt 的预约早于它，段 ar1 的预约在它之后发布（run 期间的预约）。
+            run_started = time.time()
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(codex_upgrade, "run_job", side_effect=failed_result):
+                self.assertEqual(codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")["status"], "failed")
+            commit = artifacts.validate_evaluation_baseline_commit(_read(campaign_dir / "candidates" / R1 / "revisions" / "b1" / "COMMIT"))
+
+            # 看门狗中止的父 run：state／stop receipt 是看门狗中止本身；段 run 子进程写出的失败诊断留在 run 目录。
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            prior_dir = root / "run-ar1"
+            prior_dir.mkdir(mode=0o700)
+            owner_nonce = "8" * 64
+            prior_state = {
+                "state": "watchdog-aborted", "campaign_id": campaign_id, "phase": "VC-5", "owner_pid": os.getpid(),
+                "owner_nonce": owner_nonce, "terminal_at_utc": "2026-09-28T01:00:00Z", "started_at_epoch": run_started,
+            }
+            stop = {
+                "schema_version": supervisor.STOP_SCHEMA, "campaign_id": campaign_id, "detected_at_epoch": 1005.0,
+                "detected_at_utc": "2026-09-28T01:00:00Z", "event_type": "watchdog-aborted", "owner_nonce": owner_nonce,
+                "owner_pid": os.getpid(), "phase": "VC-5", "reason": "owner-process-not-alive",
+            }
+            stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+            for name, document in (("state.json", prior_state), ("stop-receipt.json", stop)):
+                path = prior_dir / name
+                path.write_text(json.dumps(document, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+                path.chmod(0o600)
+            segment_command = [
+                sys.executable, "/managed/codex_upgrade.py", "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                "--candidate-id", R1, "--attempt-recovery", "ar1", "--heartbeat-seconds", "1",
+            ]
+            prior_manifest = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": str(codex_upgrade._vc_campaign_plan(campaign_dir, fixture["manifest"])["plan_sha256"]),
+                "batch_id": "vc-5-0007", "batch_sequence": 7, "batch_sha256": "7" * 64, "phase": "VC-5",
+                "predecessor_checkpoint": {"path": "control/vc/vc-4-checkpoint.json", "sha256": "3" * 64, "phase": "VC-4", "checkpoint_sha256": "4" * 64},
+                "original_deadline_at_utc": "2099-09-15T08:12:43Z", "no_op": False,
+                "actions": [{"action_id": "ar-run", "operation": "VC-5:attempt-recovery-run", "timeout_seconds": 600.0, "command": segment_command, "item_ids": [job_ids[0]]}],
+                "execute_items": [job_ids[0]], "reuse_items": [],
+                "candidate_revision": 1, "candidate_id": R1, "evaluation_baseline": 1, "baseline_commit_sha256": commit["commit_sha256"],
+            }
+            diagnostic_path = supervisor._action_diagnostic_path(prior_dir, "ar-run", create_directory=True)
+
+            def write_diagnostic(failure_kind: str, error_type: str, failure_class: str) -> None:
+                supervisor._write_action_diagnostic(
+                    diagnostic_path, campaign_id=campaign_id, phase="VC-5", action_id="ar-run", owner_pid=os.getpid(),
+                    owner_nonce=owner_nonce, failure_kind=failure_kind, failure_class=failure_class, error_type=error_type,
+                    message="D-07 段 run 夹具。",
+                )
+
+            write_diagnostic("child-returncode", "ChildProcessError", "execution-failure")
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, prior_manifest, failed_action_id="ar-run", failure_class="execution-failure"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                reconciled = reconciler.reconcile_attempt(campaign_dir, attempt_root.name, recovery_revision="ar1")
+            self.assertEqual(reconciled["status"], "recoverable", reconciled.get("decision"))
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                approval = reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_root.name, approve_sha256=reconciled["recovery_preview"]["review_sha256"], recovery_revision="ar1"
+                )
+            self.assertEqual(approval["approved_sha256"], reconciled["recovery_preview"]["review_sha256"])
+            preview_path = Path(reconciled["recovery_preview_path"])
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_root.name, preview_path, recovery_revision="ar1")
+            self.assertEqual(authorized["status"], "authorized", authorized)
+            successor = dict(
+                prior_manifest, batch_id="vc-5-0008", batch_sequence=8, batch_sha256="8" * 64,
+                actions=[{
+                    "action_id": "ar-run", "operation": "VC-5:attempt-recovery-run", "timeout_seconds": 900.0,
+                    "command": [
+                        sys.executable, "/managed/codex_upgrade.py", "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                        "--candidate-id", R1, "--attempt-recovery", "ar2", "--rerun-failed", "--recovery-preview", str(preview_path),
+                    ],
+                    "item_ids": [job_ids[0]],
+                    "output_bindings": [f"candidates/{R1}/attempts/{attempt_root.name}/recovery/ar2/attempt-recovery.json"],
+                }],
+            )
+
+            def accepting_protocols() -> list[str]:
+                accepted: list[str] = []
+                for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+                    try:
+                        if protocol(prior_state, prior_manifest, prior_dir, successor, campaign_dir=campaign_dir):
+                            accepted.append(name)
+                    except supervisor.SupervisorError:
+                        pass
+                return accepted
+
+            self.assertTrue(
+                supervisor._validate_attempt_recovery_segment_successor(
+                    prior_state, prior_manifest, prior_dir, successor, campaign_dir=campaign_dir
+                )
+            )
+            self.assertEqual(accepting_protocols(), ["attempt_recovery_segment"])
+            # 诊断换成永久失败类：0-W 失败关闭（段预约的 attempt 对账收据不绑定父 run 的诊断，改写只改变后继判据的输入）。
+            diagnostic_path.chmod(0o600)
+            diagnostic_path.unlink()
+            write_diagnostic("handled-error", "PolicyDrift", "identity-drift")
+            with self.assertRaisesRegex(supervisor.SupervisorError, "后继恢复段：看门狗中止父 run run-ar1 的动作诊断是永久失败类 identity-drift"):
+                supervisor._validate_attempt_recovery_segment_successor(
+                    prior_state, prior_manifest, prior_dir, successor, campaign_dir=campaign_dir
+                )
+            self.assertEqual(accepting_protocols(), [])
+
     def test_parent_finalize_lost_summary_is_verified_with_segment_load_strength_and_frozen_jobs(self) -> None:
         """R2 attempt-recovery 变体（2026-09-21 三审 P1）：对账／后继协议对绑定的段摘要用与幂等重派相同强度的
         段加载校验（自摘要、身份、预约绑定、权限收口重放）并要求结果 Job 集合恰等于权威链 J*；

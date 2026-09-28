@@ -23928,6 +23928,143 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(supervisor.SupervisorError, "动作输出绑定无法按 R2 核对或已漂移（action-output-binding-invalid"):
                 check(successor)
 
+    def _d07_vc5_recovery_run_batches(self, fixture: dict[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+        """D-07 夹具：VC-5 按预览真实补跑（run-candidate-recovery）批次 N=1 与 N+1 的零请求续跑预览（与候选 test_b4_4 同形）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        plan = codex_upgrade._vc_campaign_plan(campaign_dir, manifest)
+        identity = dict(
+            self._B4_IDENTITY, **{"--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json")}
+        )
+
+        def batch(sequence: int, action: dict[str, object]) -> dict[str, object]:
+            return supervisor.build_batched_campaign_run_manifest(
+                campaign_id=str(manifest["campaign_id"]),
+                campaign_plan_sha256=str(plan["plan_sha256"]),
+                batch_id=f"vc-5-{sequence:04d}",
+                batch_sequence=sequence,
+                batch_sha256=str(sequence) * 64,
+                phase="VC-5",
+                predecessor_checkpoint={"path": "control/vc/vc-4-checkpoint.json", "sha256": "3" * 64,
+                                        "phase": "VC-4", "checkpoint_sha256": "4" * 64},
+                original_deadline_at_utc="2099-09-15T08:12:43Z",
+                actions=[action],
+                execute_items=["candidate-run"],
+                reuse_items=[],
+            )
+
+        prior = batch(1, {
+            "action_id": supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+            "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+            "timeout_seconds": 21600.0,
+            "command": supervisor.candidate_recovery_run_command(
+                self._B4_PREFIX, str(campaign_dir), identity,
+                str(campaign_dir / "control" / "reconciliation" / "attempt-x" / "recovery-preview-01.json"),
+            ),
+            "item_ids": ["candidate-run"],
+        })
+        successor = batch(2, {
+            "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+            "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+            "timeout_seconds": 1800.0,
+            "command": supervisor.candidate_recovery_preview_command(self._B4_PREFIX, str(campaign_dir), identity),
+            "item_ids": ["candidate-run"],
+        })
+        return prior, successor
+
+    def test_d07_watchdog_candidate_recovery_run_parent_is_followed_by_candidate_preview(self) -> None:
+        """草表 D-07（第 1 项补充，批次 18 所在路径）："VC-5 补跑失败后的预览"（协议 13）对看门狗中止＋动作诊断的父 run 按
+        failed 同口径承接——父 run 按已批准预览真实补跑（run-candidate-recovery），补跑子进程写出失败诊断后父进程丢失。
+
+        ① run 期间已发布补跑 attempt 的候选预约（真实补跑的常见形态）：reconcile-supervisor-run 拒绝、后继校验指向
+           reconcile-attempt；attempt 入账后，处理型 execution-failure 的 N+1 零请求续跑预览放行，且 15 条协议里只有这一条
+           承接。attempt 对账收据不绑定父 run 的诊断，改写诊断只改变后继判据的输入：截止清理（deadline-expired）不是
+           处理型失败，拒绝；永久失败类（environment-contaminated）在 0-W 即拒绝。
+        ② 补跑在发布预约之前失败（run 期间无预约）：reconcile-supervisor-run 以诊断有效类对账后同样放行。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        action_id = supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID
+        handled = ("child-returncode", "ChildProcessError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._b0_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            manifest = fixture["manifest"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            prior, successor = self._d07_vc5_recovery_run_batches(fixture)
+            # 父 run 先启动（30 秒前）；补跑发布候选预约（孤儿：attempt.json 未写出），子进程失败写出诊断后父进程丢失。
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "f" * 64, inner=prior, action_id=action_id, phase="VC-5", reason="owner-process-not-alive",
+                started_offset_seconds=-30.0,
+            )
+            attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+                campaign_dir,
+                phase="candidate",
+                candidate_id="cand-1",
+                identity={"candidate_purpose": manifest["campaign_purpose"]},
+                jobs=[
+                    Job(
+                        job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                        steps=({"argv": ["bash", f"{job_id}.sh"]},), evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                        covers=(), scenario_ids=("A03",),
+                    )
+                    for job_id in self._b0_candidate_job_ids(fixture)
+                ],
+                allow_failed_rerun=True,
+            )
+            self._d07_write_diagnostic(run_dir, state, action_id, handled)
+            history = [(state, prior, run_dir)]
+
+            def check(manifest_: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest_, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "候选 cand-1 的 attempt .* 尚未对账.*先执行 reconcile-attempt"):
+                check(successor)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check(successor), history)
+            self.assertEqual(
+                self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+            )
+            diagnostic_path = supervisor._action_diagnostic_path(run_dir, action_id, create_directory=False)
+            for diagnostic, expected in (
+                (("handled-error", "CampaignCleanupRequested", "deadline-expired"), "VC-5 补跑失败后的预览的父动作诊断不是处理型失败"),
+                (("handled-error", "EnvironmentContaminated", "environment-contaminated"), "永久失败类 environment-contaminated"),
+            ):
+                diagnostic_path.chmod(0o600)
+                diagnostic_path.unlink()
+                self._d07_write_diagnostic(run_dir, state, action_id, diagnostic)
+                with self.subTest(failure_class=diagnostic[2]), self.assertRaisesRegex(supervisor.SupervisorError, expected):
+                    check(successor)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._b0_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            prior, successor = self._d07_vc5_recovery_run_batches(fixture)
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "e" * 64, inner=prior, action_id=action_id, phase="VC-5", reason="owner-process-not-alive",
+            )
+            self._d07_write_diagnostic(run_dir, state, action_id, handled)
+            history = [(state, prior, run_dir)]
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual((receipt["failure_class"], receipt["run"]["state"]), ("execution-failure", "watchdog-aborted"))
+            self.assertEqual(
+                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir, staging_model=False),
+                history,
+            )
+            self.assertEqual(
+                self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+            )
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
