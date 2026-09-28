@@ -3658,6 +3658,243 @@ class CodexUpgradeTest(unittest.TestCase):
                     attempt=ordinary_failure,
                 )
 
+    def test_item65_pre_job_failure_with_only_carried_reuse_executes_all_frozen_jobs(self) -> None:
+        """修好接着跑第 65 项：attempt 开始时先承接复用（checkpoint 1 条），随后在作业前的 ARM64 环境探针阶段失败。
+
+        2026-09-28 194249z 批次 26：attempt 20260928T135332Z-b23de48cb06bde03 承接复用 trace-test 后，ARM64 before 收据的
+        TLS 就绪探针 DNS 超时，未执行任何作业、before 探针未取到。原判定要求结果为空才算作业前失败，于是落到完整环境
+        绑定校验（"缺少完整 before_probe 收据绑定"），resume 与 R17 复算都接不上。只有承接复用结果、没有执行任何作业、
+        心跳停在 attempt:reserved 或作业前的 arm64: 环境探针时，按作业前失败处理：执行闭集是全部冻结作业（含承接作业）。
+        """
+
+        def build(root: Path, *, carried_disposition: str = "reused", heartbeat_operation: str = "arm64:tls-ready:capture-cli:openai-models:3", log_file: bool = False):
+            campaign = root / "campaign"
+            attempt_root = campaign / "official" / "attempts" / "attempt-b"
+            carried_root = root / "runs" / "job-c-run"
+            evidence_root = attempt_root / "evidence"
+            environment_root = evidence_root / "environment"
+            after_root = environment_root / "after"
+            for path in (
+                campaign,
+                attempt_root,
+                attempt_root / "checkpoints",
+                attempt_root / "logs",
+                after_root,
+                environment_root / "arm64-before",
+                environment_root / "arm64-after",
+                evidence_root / "receipts",
+                carried_root,
+            ):
+                path.mkdir(parents=True, exist_ok=True)
+                path.chmod(0o700)
+            if log_file:
+                (attempt_root / "logs" / "job-a-1.log").write_text("started\n", encoding="utf-8")
+            (campaign / "campaign.json").write_text("{}\n", encoding="utf-8")
+            configuration = {
+                "service_container": "sub2apiplus",
+                "keeper_container": "sub2apiplus-keeper",
+                "postgres_container": "sub2apiplus-postgres",
+                "redis_container": "sub2apiplus-redis",
+                "capture_container": "capture-cli",
+                "codex_account_id": 22,
+                "api_key_id": 4,
+            }
+            manifest = {"campaign_id": "campaign-a", "configuration": configuration}
+            planned = {"job-a": "a" * 64, "job-b": "b" * 64, "job-c": "e" * 64}
+            snapshots: list[dict[str, object]] = []
+            for kind, name in codex_upgrade.ENVIRONMENT_STATE_FILES.items():
+                payload = (json.dumps({"kind": kind}, sort_keys=True) + "\n").encode()
+                (after_root / name).write_bytes(payload)
+                snapshots.append(
+                    {
+                        "bytes": len(payload),
+                        "comparison": {"mode": "byte_equal"},
+                        "kind": kind,
+                        "path": name,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                )
+            probe = {
+                "observed_at_utc": "2026-09-28T13:54:05Z",
+                "phase": "after",
+                "schema_version": codex_upgrade.codex_upgrade_environment_probe.PROBE_MANIFEST_SCHEMA,
+                "selected_account_id": configuration["codex_account_id"],
+                "selected_key_id": configuration["api_key_id"],
+                "snapshots": snapshots,
+                "targets": {
+                    "service": configuration["service_container"],
+                    "keeper": configuration["keeper_container"],
+                    "postgres": configuration["postgres_container"],
+                    "redis": configuration["redis_container"],
+                    "capture": configuration["capture_container"],
+                },
+            }
+            probe_path = after_root / "probe-manifest.json"
+            probe_path.write_text(json.dumps(probe, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            heartbeat_path = attempt_root / "watchdog-heartbeat.json"
+            heartbeat = {
+                "schema_version": codex_upgrade.WATCHDOG_HEARTBEAT_SCHEMA,
+                "phase": "official",
+                "operation": heartbeat_operation,
+                "elapsed_seconds": 175.0,
+                "remaining_seconds": 3425.0,
+                "last_completed_job_id": None,
+                "updated_at_utc": "2026-09-28T13:54:02Z",
+            }
+            heartbeat_path.write_text(json.dumps(heartbeat, sort_keys=True) + "\n", encoding="utf-8")
+            relative_attempt = attempt_root.relative_to(campaign)
+            carried = {
+                "id": "job-c",
+                "status": "complete",
+                "disposition": carried_disposition,
+                "carried_from_attempt": "attempt-z",
+                # 与真实承接结果一样指向来源 attempt 收据（批次 26 真实值：承接自 20260928T123549Z 的 attempt.json）。
+                "source_receipt": {"path": "official/attempts/attempt-z/attempt.json", "sha256": "5" * 64, "bytes": 276254},
+                "execution_sha256": planned["job-c"],
+                # 与真实承接结果一样带全套增量身份字段（_validate_incremental_job_result 要求齐全）。
+                "tool_components": ["relay"],
+                "tool_component_digests": {"relay": "1" * 64},
+                "input_sha256": "2" * 64,
+                "environment_sha256": "3" * 64,
+                "dependency_sha256": "4" * 64,
+                "incremental_result_key": "f" * 64,
+                "evidence_roots": [str(carried_root.resolve())],
+            }
+            unsigned_plan = {
+                "schema_version": codex_upgrade.incremental_recovery.SCHEMA_VERSION,
+                "planned_job_ids": sorted(planned),
+                "changed_components": [],
+                "affected_job_ids": ["job-a", "job-b"],
+                "reused_job_ids": ["job-c"] if carried_disposition == "reused" else [],
+                "executed_job_ids": [] if carried_disposition == "reused" else ["job-c"],
+                "failed_job_ids": [],
+                "pending_job_ids": ["job-a", "job-b"],
+            }
+            incremental_plan = {
+                **unsigned_plan,
+                "plan_sha256": codex_upgrade.incremental_recovery.digest(unsigned_plan),
+            }
+            store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
+            record = store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": "c" * 64,
+                    "item_id": "job-c",
+                    "status": "complete",
+                    "disposition": carried_disposition,
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(carried),
+                    "result_key": carried["incremental_result_key"],
+                    "result": carried,
+                    "previous_checkpoint_sha256": None,
+                }
+            )
+            attempt = {
+                "status": "failed",
+                "phase": "official",
+                "candidate_id": None,
+                "campaign_id": manifest["campaign_id"],
+                "campaign_manifest_sha256": codex_upgrade.file_sha256(campaign / "campaign.json"),
+                "attempt_id": attempt_root.name,
+                "run_nonce": "c" * 64,
+                "attempt_digest": "d" * 64,
+                "started_at_utc": "2026-09-28T13:53:32Z",
+                "completed_at_utc": "2026-09-28T13:54:05Z",
+                "results": [carried],
+                "continuity": None,
+                "incremental_plan": incremental_plan,
+                "execution_error": {
+                    "type": "Arm64EnvironmentReceiptError",
+                    "message": "capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：curl: (28) Resolving timed out after 6000 milliseconds",
+                },
+                "restoration_error": {"type": "ReceiptFinalizerError", "message": "service_before父目录不存在或不是目录"},
+                "evidence_roots": [
+                    str(carried_root.resolve()),
+                    str(evidence_root.resolve()),
+                    str((attempt_root / "logs").resolve()),
+                ],
+                "environment": {
+                    "evidence_root": str(evidence_root.resolve()),
+                    "before_probe": None,
+                    "after_probe": {
+                        "path": "environment/after/probe-manifest.json",
+                        "sha256": codex_upgrade.file_sha256(probe_path),
+                        "bytes": probe_path.stat().st_size,
+                    },
+                    "restoration_report": None,
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "watchdog": {
+                    "schema_version": codex_upgrade.WATCHDOG_HEARTBEAT_SCHEMA,
+                    "budget_seconds": 3600.0,
+                    "heartbeat_seconds": 5,
+                    "elapsed_seconds": 176.0,
+                    "remaining_seconds": 3424.0,
+                    "heartbeat": {
+                        "path": str((relative_attempt / heartbeat_path.name).as_posix()),
+                        "sha256": codex_upgrade.file_sha256(heartbeat_path),
+                        "bytes": heartbeat_path.stat().st_size,
+                    },
+                    "timeout_checkpoint": None,
+                    "last_completed_job_id": None,
+                },
+                "job_checkpoint": {
+                    "schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": "c" * 64,
+                    "path": str((relative_attempt / "checkpoints").as_posix()),
+                    "record_count": 1,
+                    "last_sequence": 1,
+                    "last_sha256": record["checkpoint_sha256"],
+                },
+            }
+            reservation = {"planned_jobs": [{"id": job_id, "execution_sha256": digest} for job_id, digest in planned.items()]}
+            return campaign, attempt_root, manifest, attempt, reservation, planned
+
+        def scope_of(campaign, attempt_root, manifest, attempt, reservation):
+            with mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value=reservation):
+                return codex_upgrade._phase_evaluation_recovery_scope(
+                    campaign,
+                    manifest,
+                    phase="official",
+                    candidate_id=None,
+                    attempt_root=attempt_root,
+                    attempt=attempt,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign, attempt_root, manifest, attempt, reservation, planned = build(Path(directory))
+            scope = scope_of(campaign, attempt_root, manifest, attempt, reservation)
+            self.assertEqual(scope["source_mode"], "pre_job_failure")
+            self.assertEqual(scope["completed_job_ids"], [])
+            # 与无承接的作业前失败同一闭集：全部 pending、全部执行（恢复 transition 闭集不变式要求 pending∪… 等于执行集）。
+            self.assertEqual(scope["pending_job_ids"], sorted(planned))
+            self.assertEqual(scope["execute_job_ids"], sorted(planned))
+            self.assertEqual(scope["checkpoint"]["record_count"], 1)
+
+        # 反例一：承接之外有任何作业真正执行过（disposition executed）——不是作业前失败，照旧要求完整环境绑定。
+        with tempfile.TemporaryDirectory() as directory:
+            built = build(Path(directory), carried_disposition="executed")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "before_probe"):
+                scope_of(*built[:5])
+
+        # 反例二：心跳已进入作业——不是作业前失败。
+        with tempfile.TemporaryDirectory() as directory:
+            built = build(Path(directory), heartbeat_operation="job:job-a:start")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "heartbeat 已进入 Job"):
+                scope_of(*built[:5])
+
+        # 反例三：logs 目录有作业日志——边界不再是空运行。
+        with tempfile.TemporaryDirectory() as directory:
+            built = build(Path(directory), log_file=True)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "logs 目录不为空"):
+                scope_of(*built[:5])
+
     def test_failed_transition_keeps_source_capture_only_and_unlocks_closed_successor(self) -> None:
         """失败源只可补跑；后继闭集完成后才可进入离线阶段。"""
 

@@ -39349,12 +39349,15 @@ def _phase_evaluation_pre_job_environment_boundary(
     *,
     planned_job_ids: set[str],
     checkpoint_path: Path,
+    carried_job_ids: list[str] | None = None,
 ) -> str:
     """校验首个 Job 前失败的严格边界，不读取任何抓包正文。
 
-    该特例不会复用 Job 结果；它只证明运行停在 ``attempt:reserved``、没有
-    Job／日志／checkpoint 产物，并绑定唯一 after 探针。目录枚举和小文件
-    读取均有固定上限，不能退化为对历史证据树的递归扫描。
+    该特例不会复用 Job 结果；它只证明运行停在 ``attempt:reserved``（或作业前的 ``arm64:`` 环境探针）、没有
+    Job／日志产物，并绑定唯一 after 探针。目录枚举和小文件读取均有固定上限，不能退化为对历史证据树的递归扫描。
+
+    修好接着跑第 65 项：attempt 开始时承接复用的作业（``carried_job_ids``）会先写入结果、增量计划的
+    reused_job_ids、checkpoint 与证据根；这些承接记录逐项核对后仍是空运行边界（承接作业一并重跑、不复用）。
     """
 
     def directory_names(path: Path, label: str, *, maximum: int) -> list[str]:
@@ -39369,18 +39372,36 @@ def _phase_evaluation_pre_job_environment_boundary(
         return sorted(names)
 
     _validate_attempt_incremental_fields(attempt, planned_job_ids)
+    carried = sorted(carried_job_ids or [])
+    results = attempt.get("results")
+    if not isinstance(results, list) or len(results) != len(carried):
+        raise ConfigurationError("首个 Job 前失败的结果只能是承接复用的作业。")
+    carried_roots: list[str] = []
+    for item in results:
+        if (
+            not isinstance(item, Mapping)
+            or item.get("id") not in carried
+            or item.get("disposition") != "reused"
+            or item.get("status") != "complete"
+            or not SAFE_ID_RE.fullmatch(str(item.get("carried_from_attempt", "")))
+            or not isinstance(item.get("evidence_roots"), list)
+            or not all(isinstance(root, str) and Path(root).is_absolute() for root in item["evidence_roots"])
+        ):
+            raise ConfigurationError("首个 Job 前失败的结果只能是承接复用的作业。")
+        carried_roots.extend(str(root) for root in item["evidence_roots"])
     plan = attempt.get("incremental_plan")
+    pending = sorted(planned_job_ids - set(carried))
     if (
-        attempt.get("results") != []
-        or not isinstance(plan, Mapping)
+        not isinstance(plan, Mapping)
         or plan.get("planned_job_ids") != sorted(planned_job_ids)
-        or plan.get("pending_job_ids") != sorted(planned_job_ids)
+        or plan.get("pending_job_ids") != pending
+        or plan.get("reused_job_ids") != carried
+        # 受工具演进影响的作业必须都还在 pending（承接作业不受影响才会被承接）。
+        or not set(plan.get("affected_job_ids") or []).issubset(pending)
         or any(
             plan.get(name) != []
             for name in (
                 "changed_components",
-                "affected_job_ids",
-                "reused_job_ids",
                 "executed_job_ids",
                 "failed_job_ids",
             )
@@ -39405,15 +39426,18 @@ def _phase_evaluation_pre_job_environment_boundary(
     watchdog = attempt.get("watchdog")
     if (
         not isinstance(checkpoint, Mapping)
-        or checkpoint.get("record_count") != 0
-        or checkpoint.get("last_sequence") is not None
-        or checkpoint.get("last_sha256") is not None
+        or checkpoint.get("record_count") != len(carried)
+        or checkpoint.get("last_sequence") != (len(carried) or None)
+        or (checkpoint.get("last_sha256") is None) != (not carried)
         or not isinstance(watchdog, Mapping)
         or watchdog.get("last_completed_job_id") is not None
         or watchdog.get("timeout_checkpoint") is not None
     ):
         raise ConfigurationError("首个 Job 前失败的 checkpoint 或 watchdog 不是空边界。")
-    if directory_names(checkpoint_path, "checkpoint 目录", maximum=1):
+    # 只允许承接记录（逐条内容由调用方 _validate_checkpoint_records 按 attempt 结果严格核对）。
+    if directory_names(checkpoint_path, "checkpoint 目录", maximum=len(carried) + 1) != [
+        f"{index:08d}.json" for index in range(1, len(carried) + 1)
+    ]:
         raise ConfigurationError("首个 Job 前失败的 checkpoint 目录不为空。")
 
     _validate_attempt_watchdog_bindings(
@@ -39431,8 +39455,11 @@ def _phase_evaluation_pre_job_environment_boundary(
     )
     assert heartbeat_path is not None
     heartbeat = _read_json(heartbeat_path, "首个 Job 前失败 watchdog heartbeat")
+    operation = heartbeat.get("operation")
     if (
-        heartbeat.get("operation") != "attempt:reserved"
+        not isinstance(operation, str)
+        # 第 65 项：作业前的 ARM64 环境收据探针（arm64:tls-ready 等）也在首个 Job 之前。
+        or not (operation == "attempt:reserved" or operation.startswith("arm64:"))
         or heartbeat.get("last_completed_job_id") is not None
     ):
         raise ConfigurationError("首个 Job 前失败的 heartbeat 已进入 Job 或其它操作。")
@@ -39449,7 +39476,8 @@ def _phase_evaluation_pre_job_environment_boundary(
         str(evidence_root.resolve(strict=True)),
         str(log_root.resolve(strict=True)),
     ]
-    if attempt.get("evidence_roots") != expected_evidence_roots:
+    # 第 65 项：承接作业的证据根按结果顺序排在前面（只比对路径字符串，不遍历其内容）。
+    if attempt.get("evidence_roots") != carried_roots + expected_evidence_roots:
         raise ConfigurationError("首个 Job 前失败的证据根不是固定空运行边界。")
     if directory_names(log_root, "logs 目录", maximum=1):
         raise ConfigurationError("首个 Job 前失败的 logs 目录不为空。")
@@ -39600,23 +39628,31 @@ def _phase_evaluation_pre_job_environment_boundary(
     if set(directory_names(after_root, "after 目录", maximum=8)) != expected_after_names:
         raise ConfigurationError("首个 Job 前失败的 after 目录存在额外产物。")
 
-    return _fingerprint(
-        {
-            "source_mode": "pre_job_failure",
-            "evidence_root": expected_evidence_roots[0],
-            "after_probe": dict(after_binding),
-            "snapshots": [snapshot_bindings[kind] for kind in sorted(snapshot_bindings)],
-            "watchdog_heartbeat": dict(watchdog["heartbeat"]),
-            "checkpoint": {
-                "path": checkpoint.get("path"),
-                "record_count": 0,
-                "last_sequence": None,
-                "last_sha256": None,
-            },
-            "execution_error": dict(execution_error),
-            "restoration_error": dict(restoration_error),
+    boundary: dict[str, Any] = {
+        "source_mode": "pre_job_failure",
+        "evidence_root": expected_evidence_roots[0],
+        "after_probe": dict(after_binding),
+        "snapshots": [snapshot_bindings[kind] for kind in sorted(snapshot_bindings)],
+        "watchdog_heartbeat": dict(watchdog["heartbeat"]),
+        "checkpoint": {
+            "path": checkpoint.get("path"),
+            "record_count": 0,
+            "last_sequence": None,
+            "last_sha256": None,
+        },
+        "execution_error": dict(execution_error),
+        "restoration_error": dict(restoration_error),
+    }
+    if carried:
+        # 第 65 项：带承接时绑定实际 checkpoint 与承接作业；不带承接时摘要与原实现逐字相同（历史 transition 照旧重放）。
+        boundary["checkpoint"] = {
+            "path": checkpoint.get("path"),
+            "record_count": len(carried),
+            "last_sequence": checkpoint.get("last_sequence"),
+            "last_sha256": checkpoint.get("last_sha256"),
         }
-    )
+        boundary["carried_job_ids"] = carried
+    return _fingerprint(boundary)
 
 
 def _phase_evaluation_recovery_scope(
@@ -39763,12 +39799,25 @@ def _phase_evaluation_recovery_scope(
             raise ConfigurationError(
                 "awaiting_receipts 已进入 Kilo／seal 边界，禁止改作产出工具后继恢复源。"
             )
-    pre_job_failure = (
-        not completed_ids
-        and not failed_ids
-        and not result_by_id
-        and pending_ids == sorted(planned)
+    # 修好接着跑第 65 项：attempt 开始时先把承接复用的作业（disposition reused、status complete）记入结果与 checkpoint，
+    # 随后在首个作业之前失败（2026-09-28 194249z 批次 26：ARM64 before 收据 TLS 就绪探针 DNS 超时）。只有承接复用、没有任何
+    # 作业真正执行时仍是首个 Job 前失败：不复用任何结果（含承接作业），执行闭集是全部冻结作业；严格空边界按承接记录核对。
+    # 没有承接时与原判定逐字等价（结果为空且全部 pending）。
+    carried_ids = sorted(
+        job_id
+        for job_id, result in result_by_id.items()
+        if result.get("disposition") == "reused" and result.get("status") == "complete"
     )
+    pre_job_failure = (
+        not failed_ids
+        and set(result_by_id) == set(carried_ids)
+        and pending_ids == sorted(set(planned) - set(carried_ids))
+    )
+    if pre_job_failure and carried_ids:
+        # 与无承接的作业前失败同一闭集：全部冻结作业 pending 并执行（transition 校验要求 pending 等于计划、无已完成）。
+        completed_ids = []
+        pending_ids = sorted(planned)
+        execute_ids = sorted(planned)
     if not completed_ids and not pre_job_failure and isolation_receipt is None and conflict_quarantine is None:
         raise ConfigurationError("失败 attempt 没有已完成 Job，禁止原地 transition。")
     # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，移入执行闭集重跑。
@@ -39825,7 +39874,7 @@ def _phase_evaluation_recovery_scope(
     checkpoint = attempt.get("job_checkpoint")
     if not isinstance(checkpoint, Mapping) or (
         pre_job_failure
-        and int(checkpoint.get("record_count", -1)) != 0
+        and int(checkpoint.get("record_count", -1)) != len(carried_ids)
         or not pre_job_failure
         and int(checkpoint.get("record_count", 0)) <= 0
     ):
@@ -39865,6 +39914,7 @@ def _phase_evaluation_recovery_scope(
                 attempt,
                 planned_job_ids=set(planned),
                 checkpoint_path=checkpoint_path,
+                carried_job_ids=carried_ids,
             )
         )
     else:
