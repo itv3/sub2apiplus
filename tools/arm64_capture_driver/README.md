@@ -114,3 +114,21 @@
 * `vc5-seal.sh` 在 manifest 存在时不再派发 Kilo／seal checkpoint／assertion bundle／seal 预览任何写动作；四项前置
   产物缺一即失败关闭（退出 3，需人工裁定），只允许读侧复核与批准 + compare。
 * attempt 根外或未纳入 manifest 的控制制品（门禁目录、断言目录）仍按各自合同 write-once，不因此禁止写入。
+
+## 修好接着跑一条命令（第 35 项，`driver/fix-and-continue.sh`）
+
+* 用途：候选采集（VC-5）续跑的一轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"由一条命令编排，取代按 sed 复制改写的
+  upload-rN／repair-rN 轮次脚本。每轮只换一份轮次参数文件（模板 `driver/fix-and-continue.example.params`，经
+  `parse_env.py` 同一词法层安全解析、与 `$ARM64_VC_ENV` 交叉核对）＋本机生成的期望摘要 JSON（EXPECT：部署收据的整树／
+  五摘要／监督器、数据根 wire 闭包、守护基线与差异）与入口断言 JSON（ENTRY_GREPS）。
+* 用法（采集主机 root）：`setsid -f bash /root/arm64-capture-driver/driver/fix-and-continue.sh <参数文件> > <日志> 2>&1 < /dev/null`；
+  `--from <步骤>` 续跑（前序步骤在本轮必须有 passed／skipped 记录），`--list` 查看本轮各步骤记录。
+* 步骤：deploy → postdeploy → item-tests → evolution → pre-extend → reconcile-runs → reconcile-attempt → repair → approve →
+  authorize → extend → accepted → recover；每步幂等（同 HEAD 且收据一致则不重部署、实测已过不重跑、无漂移不登记、
+  链尾父 run 已对账不重复、同一修复提交已登记不重复、本轮已启动 vc5-recover 不重复派发），输出写
+  `$RUNROOT/fix-and-continue/<轮次>/<步骤>.json`，受管命令原始输出在同目录 `raw/`。
+* 停下即退出并打印"下一步"与 `--from` 续跑命令：失败 1，需要人工 4（账务暂停、环境污染、永久停线、需审核、请求预算、
+  需要人给出估计上界或证据文件、wire 闭包变化、守护代码变化），驱动被本轮重装更新 5（用新驱动 `--from item-tests`）。
+  本脚本从不调用 accounting-resolve／environment-isolate／campaign-resume／request-budget-extend，从不传 `--force`，不重装守护。
+* 阶段延期在对账前（pre-extend）与授权后（extend）各判一次：对账前阶段截止已过时计时账本是 deadline_paused、对账判预算
+  暂停且拒绝批准；延期写入又会推进 Campaign 账本 head，放在批准与授权之间会让授权拒绝"账本 head 已推进"。

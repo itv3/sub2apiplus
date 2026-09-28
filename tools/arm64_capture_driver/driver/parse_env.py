@@ -45,7 +45,14 @@ class EnvFileError(ValueError):
     pass
 
 
-def parse(text: str) -> dict[str, str]:
+def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set[str] | frozenset[str]) -> dict[str, str]:
+    """词法层：逐行解析 ``KEY=VALUE``，键必须在 ``allowed_keys`` 内，值按本模块规则拒绝命令形态并展开已定义键引用。
+
+    驱动参数文件（``parse``）与修好接着跑轮次参数文件（``fix_and_continue.py``，第 35 项）共用这一层，保证两类
+    参数文件是**同一安全解析**；必填键与逐键格式校验由各自调用方在其后完成。
+    """
+
+    allowed = frozenset(allowed_keys)
     values: dict[str, str] = {}
     for number, raw in enumerate(text.split("\n"), 1):
         line = raw.rstrip("\r")
@@ -55,7 +62,7 @@ def parse(text: str) -> dict[str, str]:
         if match is None:
             raise EnvFileError(f"第 {number} 行不是 KEY=VALUE 赋值")
         key, value = match.group(1), match.group(2)
-        if key not in (*REQUIRED_KEYS, *OPTIONAL_KEYS):
+        if key not in allowed:
             raise EnvFileError(f"第 {number} 行的键不在允许集合内：{key}")
         if key in values:
             raise EnvFileError(f"第 {number} 行重复定义：{key}")
@@ -81,6 +88,11 @@ def parse(text: str) -> dict[str, str]:
         if not value:
             raise EnvFileError(f"第 {number} 行的值为空：{key}")
         values[key] = value
+    return values
+
+
+def parse(text: str) -> dict[str, str]:
+    values = parse_assignments(text, (*REQUIRED_KEYS, *OPTIONAL_KEYS))
     missing = [key for key in REQUIRED_KEYS if key not in values]
     if missing:
         raise EnvFileError(f"参数文件缺少键：{missing}")

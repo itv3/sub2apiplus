@@ -1,0 +1,52 @@
+# 修好接着跑一条命令（第 35 项，driver/fix-and-continue.sh）的轮次参数模板。
+# 复制为 $RUNROOT/fix-and-continue-<轮次>.env 后逐项填写；REPLACE_* 与全零提交号都是占位符，不能直接执行。
+# （模板在仓库里用 .params 后缀：仓库 .gitignore 忽略 *.env。）
+# 解析规则与驱动参数文件相同（driver/parse_env.py 词法层 parse_assignments）：只接受 KEY=VALUE 或 KEY="VALUE"；
+# 值里只允许引用本文件前面已定义的键（$NAME／${NAME}）；任何 $(…)、反引号、; & | < > ( ) \ 与内嵌引号一律拒绝，
+# 理由文本请用全角括号与全角分号。D／RUNROOT／CAMPAIGN／CANDIDATE 必须与 VC_ENV（驱动参数文件）里的 D／RUNROOT／NEW／CAND 一致。
+
+# ---- 轮次与坐标 ----
+ROUND=rNN
+D=/root/docker/capture-cli/data
+RUNROOT=/root/vc-rounds/REPLACE_RUNROOT
+VC_ENV=$RUNROOT/env.sh
+VC_STATE_DIR=$D/control/REPLACE_SUPERVISOR_STATE_DIR
+CAMPAIGN=REPLACE_CAMPAIGN_ID
+ATTEMPT=REPLACE_TARGET_ATTEMPT_ID
+CANDIDATE=REPLACE_CANDIDATE_ID
+# DRIVER_TARGET=/root/arm64-capture-driver
+
+# ---- 部署（本机生成 bundle／期望摘要／入口断言／sha256 清单后上传）----
+SRC=$D/staging/REPLACE_STAGING_SOURCE_REPO
+STAGING_TREE=$D/staging/REPLACE_MANAGED_TOOLS_STAGING
+BUNDLE=$RUNROOT/upload-$ROUND/deploy-$ROUND.bundle
+BUNDLE_BRANCH=codex/REPLACE_BRANCH
+HEAD_COMMIT=0000000000000000000000000000000000000000
+EXPECT=$RUNROOT/upload-$ROUND/expect.json
+ENTRY_GREPS=$RUNROOT/upload-$ROUND/entry-assertions.json
+# UPLOAD_SHA256=$RUNROOT/upload-$ROUND/upload.sha256
+# DEPLOY_MAX_SECONDS=1800
+
+# ---- 实测（部署用 staging 树）----
+ITEM_TESTS="tools.official_client_capture.tests.REPLACE_MODULE"
+# ITEM_TESTS_K="REPLACE_PATTERN_A REPLACE_PATTERN_B"
+# ITEM_TESTS_K_MODULES="tools.official_client_capture.tests.REPLACE_MODULE"
+# ITEM_TESTS_MAX_SECONDS=7200
+
+# ---- 工具演进登记 ----
+FIX_COMMIT=0000000000000000000000000000000000000000
+EVOLUTION_REASON="REPLACE：修了什么（全角括号）；提交范围；受管树哪一层变化"
+APPROVER="REPLACE：批准人与授权原话"
+
+# ---- 可选：阶段延期（给了才延期；对账前与授权后各判一次，已延期即跳过）----
+# EXTEND_DEADLINE=2026-01-01T00:00:00Z
+# EXTEND_PHASE=VC-5
+# EXTEND_REASON="REPLACE：延期理由"
+
+# ---- 可选：根因修复登记（给了 REPAIR_ROOT_CAUSES 才登记；同一修复提交已登记即跳过）----
+# REPAIR_ROOT_CAUSES="REPLACE_ROOT_CAUSE_ID"
+# REPAIR_FIX_COMMIT=0000000000000000000000000000000000000000
+# REPAIR_SEQ=1
+# REGRESSION_RECEIPT=$RUNROOT/REPLACE-regression-receipt.json
+# REGRESSION_DRAFT=$RUNROOT/upload-$ROUND/regression-draft.json
+# REPAIR_NOTE="REPLACE：哪一次失败（总账序号 $REPAIR_SEQ）、修复 $REPAIR_FIX_COMMIT、回归收据"

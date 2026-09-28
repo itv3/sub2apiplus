@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 54,
+  "file_count": 57,
   "files": [
     {
       "path": "README.md",
-      "sha256": "bf1c56fdcf5afab4ee40c9df83141fc77dd2deaa60449a1ccf280eacba32552f",
+      "sha256": "e8f1bcd687fde614d376ab7ae979f948b6ded22a47f400740cd555c8e72a040f",
       "mode": "0600",
-      "bytes": 12804
+      "bytes": 15050
     },
     {
       "path": "driver/build.sh",
@@ -55,6 +55,24 @@
       "sha256": "4e13ee36946fc5382bef5ac9f638eb34ff7da0fc37ca60271db25af1dbc47f49",
       "mode": "0700",
       "bytes": 4229
+    },
+    {
+      "path": "driver/fix-and-continue.example.params",
+      "sha256": "c7e8f8b7dbff7a7873bcb5b69f1fc930bacac918e87442036537f8620c164918",
+      "mode": "0600",
+      "bytes": 2804
+    },
+    {
+      "path": "driver/fix-and-continue.sh",
+      "sha256": "4e55bb2c39ed70f525c28f42a1d58db8251f58f98e2f9eed67c366a115ce774a",
+      "mode": "0700",
+      "bytes": 19575
+    },
+    {
+      "path": "driver/fix_and_continue.py",
+      "sha256": "a138fca0a522a9b1dce247add0cea542a85fb6bc01601a6c200c347a5782f90f",
+      "mode": "0700",
+      "bytes": 105835
     },
     {
       "path": "driver/frontend.sh",
@@ -142,9 +160,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "9dc0c53dc485143a171f10bcb56d9aab1b7a84f8a024115117c8d79a1c0e5828",
+      "sha256": "63b3c5a4846341f6fb8f73fa5432e3334267926a3a090eb40bf6326d1a66638f",
       "mode": "0700",
-      "bytes": 8986
+      "bytes": 9634
     },
     {
       "path": "driver/pre-a3.sh",
@@ -327,5 +345,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "3dcd28780cc42539b745de7ad88c3b07b64c1165071f4e594707173e0b5973e4"
+  "manifest_sha256": "9ac585bdc320f26d65c21cff8df489c1663063c4563ecab04c7e4026658a744e"
 }
