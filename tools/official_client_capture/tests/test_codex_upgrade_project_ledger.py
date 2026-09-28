@@ -582,6 +582,45 @@ class ProjectLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "仅供历史回放"):
                 ledger.append_project_event(ledger_root, operation_id="new-term", event_type="campaign_terminal", payload=payload, source_batch_sha256=None)
 
+    def test_accounting_resolution_records_expose_registration_time_without_changing_totals(self) -> None:
+        """第 63 项：补账登记明细带登记时刻（事件 recorded_at_utc），只是 head 派生视图多一个字段；
+        入账数字、登记特征集合与重放结果都不变，删 head 缓存后重放逐字相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            campaign_dir = _campaign(root, "c1")
+            _register(root, campaign_dir, "c1")
+            with ledger.campaign_ledger_lock(campaign_dir) as ledger_dir:
+                ledger.write_batch(
+                    ledger_dir, operation_id="rec-1", event_type="reconciliation_committed",
+                    payload={"campaign_id": "c1", "request": {"status": "unresolved", "identity_keys": ["k-1"], "estimated_delta": 0,
+                             "unresolved_job_ids": ["job-a"], "counting_rule": "codex_model_requests/v2",
+                             "provenance_receipt_sha256": "b" * 64}},
+                    source={"kind": "campaign_event", "sha256": "c" * 64},
+                )
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            ledger.append_project_event(
+                ledger_root, operation_id="res-1", event_type="accounting_resolved",
+                payload={"campaign_id": "c1", "resolved_operation_id": "rec-1", "resolution_receipt_sha256": "d" * 64,
+                         "request": {"status": "estimated", "identity_keys": [], "estimated_delta": 23,
+                                     "estimated_sources": [{"source_id": "c1:accounting-resolve:rec-1", "job_id": "job-a", "estimated_count": 23}],
+                                     "provenance_receipt_sha256": "b" * 64},
+                         "covered_unresolved": [{"job_id": "job-a", "signature_sha256": "e" * 64}]},
+                source_batch_sha256=None,
+            )
+            head = ledger.replay_head(ledger_root)
+            event = next(item for item in ledger._load_events(ledger_root) if item["operation_id"] == "res-1")
+            self.assertEqual((head["precise_total"], head["estimated_total"]), (3, 53))
+            self.assertEqual(ledger.accounting_resolution_signatures(head, "c1"), {("job-a", "e" * 64)})
+            self.assertEqual(
+                ledger.accounting_resolution_records(head, "c1"),
+                [{"job_id": "job-a", "signature_sha256": "e" * 64, "operation_id": "res-1", "recorded_at_utc": event["recorded_at_utc"]}],
+            )
+            self.assertEqual(ledger.accounting_resolution_records(head, "c2"), [])
+            (ledger_root / "head.json").unlink()
+            self.assertEqual(ledger.replay_head(ledger_root), head)
+
     def test_campaign_event_scope_binds_only_this_campaign_state_changing_events(self) -> None:
         """第 16 项：恢复预览的总账绑定只随本 Campaign 的对账、终态、账务解决与对账更正变化。
 

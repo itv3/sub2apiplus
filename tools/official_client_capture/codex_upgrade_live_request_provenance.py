@@ -36,6 +36,20 @@ compact 类按“完成 turn”计数，对 relay 类按“Responses 请求”�
 
 每个执行分支只允许一个权威计数来源，重复来源失败关闭。v1 审计收据与其
 严格字段集合原样保留，本模块只产生 v2 schema。
+
+计数规则 v3（修好接着跑第 63 项，收据 schema 不变，``counting_rule`` 由 v2 升为 v3）：
+
+* 背景：第 24 项在续跑派发前把被其它 attempt 登记占据的固定证据根改名为同级
+  ``<名>.superseded-<新 attempt>``，新 attempt 沿用原名重采。v2 身份键只含目录名，新一代里与
+  更早世代同坐标的请求（WS 行号、relay 连接与消息序号）得到同一个键，估计来源也只按目录名，
+  于是被总账当作已入账去重掉（ARM64 194249z 第 299／303 条只入账 5／8 个键、估计 0）。
+* 世代：逻辑根同级已有 n 个 ``.superseded-`` 归档，当前目录就是第 n 代（首代 n=0）。
+* 精确键：只改真正撞键的请求——当前一代里 v2 键与任一更早世代（读归档证据、按逻辑根名重算
+  v2 键）相同的请求，改用并入世代号的身份键；其余请求（首代、从未被取代的根、失败重试归档、
+  后代里不撞键的请求）与 v2 逐字相同。所以历史已入账的键不会换值重复入账，而 v2 漏掉的正是
+  换了键的那些，v3 补上。
+* 估计来源、作业特征：证据根条目带 ``supersession``，作业条目带 ``superseded_roots``，由对账器
+  决定估计来源 ID 与特征摘要（见 ``codex_upgrade_reconciler.request_accounting``）。
 """
 
 from __future__ import annotations
@@ -56,7 +70,10 @@ from tools.official_client_capture import model_condition_receipts
 
 SCHEMA_VERSION = "live-request-provenance/v2"
 PROJECT_SCHEMA_VERSION = "project-live-request-audit/v2"
-COUNTING_RULE = "codex_model_requests/v2"
+# 第 63 项：收据 schema 仍是 live-request-provenance/v2（字段只增不改，计时账本等读侧按 schema 校验），
+# 计数口径由 counting_rule 显式声明。v2 写入的历史收据与总账事件照旧重放，不重算、不改写。
+COUNTING_RULE = "codex_model_requests/v3"
+LEGACY_COUNTING_RULE = "codex_model_requests/v2"
 COUNTING_UNIT = "http_post_model_endpoint_or_client_ws_response_create"
 MODEL_ENDPOINTS = frozenset(
     {
@@ -88,6 +105,19 @@ CONN_FILE_RE = re.compile(r"^(conn\d+)\.client_to_upstream\.bin$")
 TURN_EVENTS_RE = re.compile(r"^turn(\d+)-events\.jsonl$")
 FAILED_ATTEMPT_ROOT_RE = re.compile(
     r"^(?P<base>.+)\.failed-attempt(?P<attempt>[1-9][0-9]*)(?:-(?P<collision>[1-9][0-9]*))?$"
+)
+# 第 63 项：续跑取代归档（第 24 项）的命名与编排器同一来源：``<原名>.superseded-<新 attempt>[-<k>]``。
+SUPERSEDED_ROOT_INFIX = evidence_permissions.SUPERSEDED_ROOT_INFIX
+SUPERSEDED_SUFFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,160}$")
+SUPERSEDED_ROOT_RE = re.compile(
+    r"^(?P<base>.+?)" + re.escape(SUPERSEDED_ROOT_INFIX) + r"(?P<suffix>[A-Za-z0-9][A-Za-z0-9._-]{0,160})$"
+)
+# 取代收据（codex_upgrade.EVIDENCE_ROOT_SUPERSESSION_*）只读取其取代时刻，供对账器判断 v2 形态作业特征
+# 覆盖到哪一代；本模块不依赖编排器，常量在此按同一值登记。
+SUPERSESSION_RECEIPT_SCHEMA = "evidence-root-supersession/v1"
+SUPERSESSION_RECEIPT_DIR = Path("control") / "evidence-roots"
+SUPERSESSION_RECEIPT_RE = re.compile(
+    r"^supersession-(?P<attempt>[A-Za-z0-9][A-Za-z0-9._-]{0,127})\.json$"
 )
 # v7 第三次 frozen-core 摘要已经由历史 producer 合同冻结。provenance 对同一
 # 事故也必须绑定这份字节事实，不能只凭同名 schema 接受替代摘要。
@@ -137,19 +167,33 @@ def _utc_now() -> str:
 
 
 def identity_key(
-    producer_run_id: str, source_kind: str, native_coordinate: Mapping[str, Any]
+    producer_run_id: str,
+    source_kind: str,
+    native_coordinate: Mapping[str, Any],
+    *,
+    supersession_generation: int | None = None,
 ) -> str:
-    """身份键只由三项生成；同一请求被复制到别处仍是同一个键。"""
+    """身份键；同一请求被复制到别处仍是同一个键。
 
-    return _sha256(
-        _canonical(
-            {
-                "producer_run_id": producer_run_id,
-                "source_kind": source_kind,
-                "native_coordinate": dict(native_coordinate),
-            }
-        )
-    )
+    不带 ``supersession_generation`` 时只由三项生成，与 v2 逐字相同，历史已入账的键不变。
+    v3 只对“续跑取代后第 n 代（n≥1）里、与更早世代同名同坐标撞键”的请求传入世代号，
+    把它与更早世代的同坐标请求区分开（第 63 项）。
+    """
+
+    identity: dict[str, Any] = {
+        "producer_run_id": producer_run_id,
+        "source_kind": source_kind,
+        "native_coordinate": dict(native_coordinate),
+    }
+    if supersession_generation is not None:
+        if (
+            not isinstance(supersession_generation, int)
+            or isinstance(supersession_generation, bool)
+            or supersession_generation < 1
+        ):
+            raise ProvenanceError("续跑取代世代号必须是正整数")
+        identity["supersession_generation"] = supersession_generation
+    return _sha256(_canonical(identity))
 
 
 def _read_jsonl(path: Path, label: str) -> list[tuple[int, dict[str, Any]]]:
@@ -791,8 +835,18 @@ def _relay_branches(
 
 
 def _logical_run_name(root: Path) -> str:
-    match = FAILED_ATTEMPT_ROOT_RE.fullmatch(root.name)
-    return match.group("base") if match is not None else root.name
+    """去掉物理根名上的归档后缀，得到 run-summary 登记的逻辑 run 名。
+
+    ``.failed-attemptN``：同一 attempt 内失败重试的归档；``.superseded-<attempt>``：续跑取代留下的
+    更早世代（第 63 项起只为冲突检测读取），逻辑名与原根相同。当前根名从不带这两个后缀。
+    """
+
+    name = root.name
+    superseded = SUPERSEDED_ROOT_RE.fullmatch(name)
+    if superseded is not None:
+        name = superseded.group("base")
+    match = FAILED_ATTEMPT_ROOT_RE.fullmatch(name)
+    return match.group("base") if match is not None else name
 
 
 def _candidate_pairing_group(root: Path, subject: str, scenario: str) -> str | None:
@@ -1395,6 +1449,288 @@ def _all_attempt_roots(base: Path) -> list[Path]:
     return roots
 
 
+# ---------------------------------------------------------------------------
+# 第 63 项：续跑取代的世代（计数规则 v3）
+# ---------------------------------------------------------------------------
+
+
+def _superseded_archives(root: Path) -> list[Path]:
+    """列出逻辑根 ``root`` 的续跑取代归档（同级 ``<root 名>.superseded-<attempt>[-<k>]``），按名排序。
+
+    归档个数就是 ``root`` 当前目录的世代号 n（首代 n=0）。只有逻辑根才有世代：失败重试归档与取代归档
+    本身的物理名唯一，v2 键不会撞，不参与。只看文件系统里实际存在的归档，所以取代收据已写、改名尚未
+    完成的崩溃窗口里仍按旧世代算，与编排器“先写收据再改名”的顺序一致。
+    """
+
+    if FAILED_ATTEMPT_ROOT_RE.fullmatch(root.name) or SUPERSEDED_ROOT_RE.fullmatch(root.name):
+        return []
+    parent = root.parent
+    if parent.is_symlink() or not parent.is_dir():
+        return []
+    prefix = root.name + SUPERSEDED_ROOT_INFIX
+    archives: list[Path] = []
+    for path in sorted(parent.iterdir()):
+        if not path.name.startswith(prefix):
+            continue
+        # 同名前缀的条目必须是编排器写出的可信归档目录；其它形态说明不可变证据区被改动，失败关闭。
+        if (
+            not SUPERSEDED_SUFFIX_RE.fullmatch(path.name[len(prefix) :])
+            or path.is_symlink()
+            or not path.is_dir()
+        ):
+            raise ProvenanceError(f"续跑取代归档不可信：{path}")
+        archives.append(path.resolve(strict=True))
+    return archives
+
+
+def _supersession_receipt_index(
+    campaign_dir: Path, campaign_id: str
+) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
+    """只读索引本 Campaign 的证据根取代收据：归档目录名 → [{取代时刻, 取代它的 attempt}]。
+
+    取代时刻只用于对账器判断“v3 部署前按 v2 形态登记的作业特征覆盖到哪一代”。坏收据只记原因、不抛错：
+    查不到时刻的世代由对账器按未知处理（不让 v2 形态特征覆盖，失败关闭到账务暂停），不会让整个来源
+    核算失败。
+    """
+
+    directory = campaign_dir / SUPERSESSION_RECEIPT_DIR
+    index: dict[str, list[dict[str, str]]] = {}
+    errors: list[str] = []
+    if not directory.exists() and not directory.is_symlink():
+        return index, errors
+    if directory.is_symlink() or not directory.is_dir():
+        return index, ["证据根取代收据目录不可信"]
+    for path in sorted(directory.iterdir()):
+        match = SUPERSESSION_RECEIPT_RE.fullmatch(path.name)
+        if match is None:
+            errors.append(f"{path.name}：不是取代收据")
+            continue
+        try:
+            payload, _raw = closeout._load_json(path, "证据根取代收据")
+            recorded = payload.get("recorded_at_utc")
+            closeout._timestamp(recorded, "取代收据 recorded_at_utc")
+        except (closeout.VC0CloseoutError, OSError, ValueError) as error:
+            errors.append(f"{path.name}：{error}")
+            continue
+        unsigned = {key: value for key, value in payload.items() if key != "receipt_sha256"}
+        rows = payload.get("roots")
+        if (
+            payload.get("schema_version") != SUPERSESSION_RECEIPT_SCHEMA
+            or payload.get("campaign_id") != campaign_id
+            or payload.get("superseding_attempt_id") != match.group("attempt")
+            or not isinstance(rows, list)
+            or payload.get("receipt_sha256") != _sha256(_canonical(unsigned))
+        ):
+            errors.append(f"{path.name}：形态、Campaign、attempt 或自摘要不一致")
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                errors.append(f"{path.name}：逐根记录不是对象")
+                continue
+            names = {
+                PurePosixPath(str(row.get(field))).name
+                for field in ("archived_host_root", "archived_logical_root")
+                if isinstance(row.get(field), str) and row.get(field)
+            }
+            for name in names:
+                entry = {"superseded_at_utc": str(recorded), "superseding_attempt_id": match.group("attempt")}
+                if entry not in index.setdefault(name, []):
+                    index[name].append(entry)
+    return index, errors
+
+
+def _older_generation_facts(
+    logical_name: str, older_roots: list[Path], *, target_version: str | None
+) -> dict[str, Any]:
+    """解析全部更早世代的归档，按逻辑根名重算其请求的 v2 身份键，作为当前一代的撞键集合。
+
+    更早世代在它还是当前目录时就是以逻辑根名入账的，所以撞键判定必须用逻辑根名、不能用归档物理名。
+    同时记录更早世代有没有 direct 估计分支：有则当前一代的整根估计必须换新来源 ID（见对账器）。
+    解析失败直接抛出，由调用方决定降级或失败关闭。
+    """
+
+    keys: set[str] = set()
+    prior_estimate = False
+    for archive in older_roots:
+        _kind, branches = _root_branches(archive, target_version=target_version)
+        for branch in branches:
+            if branch.get("status") == "pending_estimate":
+                prior_estimate = True
+            for request in branch.get("requests", []):
+                keys.add(
+                    identity_key(
+                        logical_name, str(request["source_kind"]), request["native_coordinate"]
+                    )
+                )
+    return {"conflict_keys": keys, "prior_estimate_branches": prior_estimate}
+
+
+def _rekey_generation(
+    branches: list[dict[str, Any]],
+    *,
+    logical_name: str,
+    generation: int,
+    conflict_keys: set[str],
+    rekey_all: bool,
+) -> int:
+    """把第 ``generation`` 代里与更早世代撞键的请求改用并入世代号的身份键（原地修改），返回改键条数。
+
+    不撞键的请求保持 v2 键：它们在 v2 口径下已正确入账（或尚未入账、按原键入账），换键会重复计数。
+    ``rekey_all`` 只在更早世代无法解析时使用：宁可把整代都当新请求（可能多计），也不漏计。
+    """
+
+    rekeyed = 0
+    for branch in branches:
+        for request in branch.get("requests", []):
+            legacy = identity_key(logical_name, str(request["source_kind"]), request["native_coordinate"])
+            if not rekey_all and legacy not in conflict_keys:
+                continue
+            request["identity_key"] = identity_key(
+                logical_name,
+                str(request["source_kind"]),
+                request["native_coordinate"],
+                supersession_generation=generation,
+            )
+            request["supersession_generation"] = generation
+            request["legacy_identity_key"] = legacy
+            rekeyed += 1
+    return rekeyed
+
+
+def _root_supersession(
+    root: Path,
+    kind: str,
+    branches: list[dict[str, Any]],
+    *,
+    target_version: str | None,
+    receipt_index: Mapping[str, list[Mapping[str, str]]],
+) -> dict[str, Any] | None:
+    """当前证据根的续跑取代事实；从未被取代返回 None（与 v2 完全一致），否则按 v3 改撞键请求的身份键。"""
+
+    archives = _superseded_archives(root)
+    if not archives:
+        return None
+    times: list[str] = []
+    attempts: set[str] = set()
+    for archive in archives:
+        entries = list(receipt_index.get(archive.name, []))
+        distinct = {entry["superseded_at_utc"] for entry in entries}
+        if len(distinct) != 1:
+            times = []
+            attempts = set()
+            break
+        times.append(entries[0]["superseded_at_utc"])
+        attempts.update(entry["superseding_attempt_id"] for entry in entries)
+    superseded_at: str | None = None
+    if times:
+        superseded_at = max(times, key=lambda value: closeout._timestamp(value, "取代时刻"))
+    facts: dict[str, Any] = {
+        "generation": len(archives),
+        "archives": [archive.name for archive in archives],
+        # 当前这一代的产生时刻＝最近一次取代的收据时刻；查不到（收据缺失或损坏）记 None，由对账器失败关闭。
+        "superseded_at_utc": superseded_at,
+        "superseding_attempt_ids": sorted(attempts),
+    }
+    if kind == "unsupported":
+        facts.update({"conflict_basis": "no_requests", "prior_estimate_branches": False, "rekeyed_request_count": 0})
+        return facts
+    try:
+        older = _older_generation_facts(root.name, archives, target_version=target_version)
+    except (ProvenanceError, closeout.VC0CloseoutError, OSError, ValueError, KeyError) as error:
+        # 更早世代无法解析：整代按新请求改键、估计按新来源计（可能多计、不会漏计），并在收据里写明原因。
+        facts["conflict_basis"] = "unavailable"
+        facts["conflict_error"] = f"{type(error).__name__}: {error}"
+        facts["prior_estimate_branches"] = True
+        facts["rekeyed_request_count"] = _rekey_generation(
+            branches, logical_name=root.name, generation=len(archives), conflict_keys=set(), rekey_all=True
+        )
+        return facts
+    facts["conflict_basis"] = "archives"
+    facts["prior_estimate_branches"] = bool(older["prior_estimate_branches"])
+    facts["rekeyed_request_count"] = _rekey_generation(
+        branches,
+        logical_name=root.name,
+        generation=len(archives),
+        conflict_keys=older["conflict_keys"],
+        rekey_all=False,
+    )
+    return facts
+
+
+def generation_identity_keys(
+    generation_root: Path,
+    *,
+    older_generation_roots: list[Path] | tuple[Path, ...] = (),
+    target_version: str | None = None,
+) -> dict[str, Any]:
+    """按 v3 口径算某一世代证据根的全部请求身份键（只读；历史更正与复核用）。
+
+    ``generation_root`` 可以是当前逻辑根，也可以是已归档的 ``.superseded-`` 目录；
+    ``older_generation_roots`` 是比它更早的全部世代归档（按取代收据的时间顺序由调用方确定），
+    其个数就是该世代号。与 live 对账同一套撞键判定与换键规则，得到的身份键逐字一致；总账按身份键
+    去重，所以历史更正与之后的对账无论先后都不会重复计数。
+    """
+
+    generation_root = Path(generation_root)
+    if not generation_root.is_absolute() or generation_root.is_symlink() or not generation_root.is_dir():
+        raise ProvenanceError("世代证据根必须是可信绝对目录")
+    physical = generation_root.name
+    logical_name = _logical_run_name(generation_root)
+    superseded = SUPERSEDED_ROOT_RE.fullmatch(physical)
+    if FAILED_ATTEMPT_ROOT_RE.fullmatch(superseded.group("base") if superseded else physical):
+        raise ProvenanceError("失败重试归档的物理名唯一，不属于续跑取代世代")
+    older = [Path(item) for item in older_generation_roots]
+    for item in older:
+        if (
+            not item.is_absolute()
+            or item.is_symlink()
+            or not item.is_dir()
+            or SUPERSEDED_ROOT_RE.fullmatch(item.name) is None
+            or _logical_run_name(item) != logical_name
+            or item.resolve(strict=True) == generation_root.resolve(strict=True)
+        ):
+            raise ProvenanceError(f"更早世代必须是同一逻辑根的 .superseded- 归档：{item}")
+    kind, branches = _root_branches(generation_root, target_version=target_version)
+    for branch in branches:
+        for request in branch.get("requests", []):
+            # 归档的物理名不是逻辑名：先按逻辑根名还原它在当时入账的 v2 键。
+            request["producer_run_id"] = logical_name
+            request["identity_key"] = identity_key(
+                logical_name, str(request["source_kind"]), request["native_coordinate"]
+            )
+    prior_estimate = False
+    rekeyed = 0
+    if older:
+        facts = _older_generation_facts(logical_name, older, target_version=target_version)
+        prior_estimate = bool(facts["prior_estimate_branches"])
+        rekeyed = _rekey_generation(
+            branches,
+            logical_name=logical_name,
+            generation=len(older),
+            conflict_keys=facts["conflict_keys"],
+            rekey_all=False,
+        )
+    requests = [dict(request) for branch in branches for request in branch.get("requests", [])]
+    return {
+        "counting_rule": COUNTING_RULE,
+        "generation_root": str(generation_root),
+        "logical_name": logical_name,
+        "generation": len(older),
+        "kind": kind,
+        "prior_estimate_branches": prior_estimate,
+        "rekeyed_request_count": rekeyed,
+        "identity_keys": sorted(request["identity_key"] for request in requests),
+        "rekeyed_identity_keys": sorted(
+            request["identity_key"] for request in requests if "supersession_generation" in request
+        ),
+        "requests": requests,
+        "branches": [
+            {**{key: value for key, value in branch.items() if key != "requests"}, "request_count": len(branch.get("requests", []))}
+            for branch in branches
+        ],
+    }
+
+
 RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 
 
@@ -1596,11 +1932,16 @@ def collect_campaign_provenance(
         host_data_root=host_data_root,
         job_phases=job_phases,
     )
+    # 第 63 项：取代收据只提供各世代的产生时刻（审计与 v2 形态作业特征的覆盖判断），坏收据不阻断核算。
+    receipt_index, receipt_errors = _supersession_receipt_index(campaign_dir, formal_campaign_id)
+    if receipt_errors:
+        receipt["supersession_receipt_errors"] = receipt_errors
 
     # 第一遍：发现每个 Job 的证据根与执行分支，不做估计。
     job_plans: list[dict[str, Any]] = []
     collected_roots: list[tuple[Path, str, list[dict[str, Any]]]] = []
     root_cache: dict[Path, tuple[str, list[dict[str, Any]]]] = {}
+    supersession_by_root: dict[Path, dict[str, Any]] = {}
     for item in jobs:
         phase = str(item.get("phase"))
         if phase == "candidate" and not attempts_present["candidate"]:
@@ -1637,6 +1978,16 @@ def collect_campaign_provenance(
                     root, target_version=manifest.get("target_version")
                 )
                 root_cache[root] = (kind, branches)
+                # 第 63 项：被续跑取代过的逻辑根，当前一代里与更早世代撞键的请求在这里换键（估计只看请求条数，不受影响）。
+                facts = _root_supersession(
+                    root,
+                    kind,
+                    branches,
+                    target_version=manifest.get("target_version"),
+                    receipt_index=receipt_index,
+                )
+                if facts is not None:
+                    supersession_by_root[root] = facts
                 if kind != "unsupported":
                     collected_roots.append((root, kind, branches))
         job_plans.append(
@@ -1666,7 +2017,18 @@ def collect_campaign_provenance(
         supported = False
         unresolved = False
         estimated = False
+        superseded_roots: list[dict[str, Any]] = []
         for root in roots:
+            facts = supersession_by_root.get(root)
+            if facts is not None:
+                # 第 63 项：作业级只登记世代与产生时刻（含没有权威来源的根），供未决作业特征区分世代。
+                superseded_roots.append(
+                    {
+                        "producer_run_id": root.name,
+                        "generation": facts["generation"],
+                        "superseded_at_utc": facts["superseded_at_utc"],
+                    }
+                )
             kind, branches = root_cache[root]
             if kind == "unsupported":
                 continue
@@ -1679,6 +2041,8 @@ def collect_campaign_provenance(
                 "first_owner_job_id": owner,
                 "branches": [],
             }
+            if facts is not None:
+                root_entry["supersession"] = dict(facts)
             for branch in branches:
                 slim = {k: v for k, v in branch.items() if k != "requests"}
                 slim["request_count"] = len(branch["requests"])
@@ -1697,6 +2061,8 @@ def collect_campaign_provenance(
                     receipt["requests"].append({**request, "job_id": job_id})
                     job_entry["precise_count"] += 1
             job_entry["roots"].append(root_entry)
+        if superseded_roots:
+            job_entry["superseded_roots"] = superseded_roots
         if not supported:
             if job_id == "official-http-fallback" or closeout._logs_prove_pre_request_failure(logs):
                 job_entry["status"] = "pre_request_zero"

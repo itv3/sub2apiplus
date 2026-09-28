@@ -22777,6 +22777,469 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(head["accounted_estimated_sources"], ["c:run-direct"])
             self.assertEqual(head["root_cause_counts"]["rc1-" + "a" * 20], 2)
 
+    # ------------------------------------------------------------------
+    # 修好接着跑第 63 项：同一 Campaign 内重采复用证据根目录名，请求账务不得按目录名去重漏计
+    # ------------------------------------------------------------------
+
+    def _item63_write_capture_generation(self, root: Path, *, ws_creates: int, flow_prefix: str) -> None:
+        """在 ``root`` 写一代官方 capture 证据（与 ARM64 同形的 official-client-capture/v1）。
+
+        mitm 分支：codex-ws/s1 有 ``ws_creates`` 条客户端 ``response.create``（中间夹服务端消息，原生坐标是
+        JSONL 行号，重采时前几条与上一代同坐标）；codex-http/s4 有 2 条 POST，flow_id 以 ``flow_prefix`` 区分
+        世代（mitmproxy 每次生成新 flow，所以 HTTP 请求在 v2 下本来就不撞键）。direct 分支两个，按同根 mitm
+        sibling 估计上界。
+        """
+
+        from tools.official_client_capture.tests.test_codex_upgrade_live_request_provenance import (
+            RESPONSES,
+            _mitm_http_row,
+            _mitm_ws_row,
+            _turn_events,
+            _write_jsonl,
+        )
+
+        cases = []
+        for evidence in ("mitm", "direct"):
+            for subject, scenario in (("codex-ws", "s1"), ("codex-http", "s4")):
+                cases.append(
+                    {"evidence": evidence, "subject": subject, "scenario": scenario, "scenario_result": {"turn_count": 1}}
+                )
+                _turn_events(root / "results" / evidence / subject / scenario / "turn1-events.jsonl", 1)
+        self._write_json(root / "manifest.json", {"schema_version": "official-client-capture/v1", "case_results": cases})
+        ws_rows = []
+        for _ in range(ws_creates):
+            ws_rows.append(_mitm_ws_row("run", "codex-ws", "s1", True, {"type": "response.create", "model": "gpt-6-astra"}))
+            ws_rows.append(_mitm_ws_row("run", "codex-ws", "s1", False, {"type": "response.created"}))
+        _write_jsonl(root / "mitm" / "codex-ws" / "s1" / "codex-ws.jsonl", ws_rows)
+        http_rows = [_mitm_http_row("run", "codex-http", "s4", "POST", RESPONSES, "gpt-5.5") for _ in range(2)]
+        for index, row in enumerate(http_rows):
+            row["_flow_id"] = f"{flow_prefix}-{index}"
+        _write_jsonl(root / "mitm" / "codex-http" / "s4" / "codex-http.jsonl", http_rows)
+        self._make_private_tree(root)
+
+    def _item63_supersede(
+        self,
+        fixture: dict[str, object],
+        root: Path,
+        *,
+        previous_attempt_id: str,
+        write_generation: Callable[[Path], None],
+    ) -> str:
+        """模拟第 24 项的续跑取代：旧目录改名为同级 ``<名>.superseded-<新 attempt>``，新 attempt 在原名下重采。
+
+        取代收据按 ``codex_upgrade._supersede_occupied_evidence_roots`` 的同一形态写在
+        ``control/evidence-roots/supersession-<新 attempt>.json``（绑定原目录 inode 与登记它的旧 attempt）。
+        返回新 attempt id。
+        """
+
+        campaign_dir = Path(fixture["campaign_dir"])
+        manifest = fixture["manifest"]
+        original = root.stat()
+        parked = root.with_name(root.name + "-parked")
+        root.rename(parked)
+        root.mkdir(mode=0o700)
+        write_generation(root)
+        attempt_id = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[root])
+        infix = codex_upgrade.codex_upgrade_evidence_permissions.SUPERSEDED_ROOT_INFIX
+        archived = root.with_name(f"{root.name}{infix}{attempt_id}")
+        parked.rename(archived)
+        receipt: dict[str, object] = {
+            "schema_version": codex_upgrade.EVIDENCE_ROOT_SUPERSESSION_SCHEMA,
+            "campaign_id": manifest["campaign_id"],
+            "phase": "official",
+            "candidate_id": None,
+            "superseding_attempt_id": attempt_id,
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "roots": [
+                {
+                    "job_id": "official-test",
+                    "logical_root": str(root),
+                    "host_root": str(root),
+                    "archived_logical_root": str(archived),
+                    "archived_host_root": str(archived),
+                    "device": original.st_dev,
+                    "inode": original.st_ino,
+                    "registered_by": [
+                        {
+                            "phase": "official",
+                            "candidate_id": None,
+                            "attempt_id": previous_attempt_id,
+                            "attempt_sha256": "0" * 64,
+                        }
+                    ],
+                }
+            ],
+            "live_request_count": 0,
+        }
+        receipt["receipt_sha256"] = codex_upgrade._fingerprint(receipt)
+        directory = campaign_dir / codex_upgrade.EVIDENCE_ROOT_SUPERSESSION_DIR
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        codex_upgrade._secure_write_json_once(directory / f"supersession-{attempt_id}.json", receipt)
+        return attempt_id
+
+    def _item63_accounting(self, fixture: dict[str, object]) -> dict[str, object]:
+        """按当前总账 head 与当前证据纯计算一次“下一次对账会入账什么”（不写任何文件）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        campaign_dir = Path(fixture["campaign_dir"])
+        campaign_id = str(fixture["manifest"]["campaign_id"])
+        plan, head = reconciler._project_facts(Path(fixture["ledger"]))
+        receipt = reconciler.provenance.collect_campaign_provenance(
+            campaign_dir, formal_campaign_id=campaign_id, estimation_policy=str(plan["estimation_policy"])
+        )
+        with codex_upgrade_project_ledger.project_lock(Path(fixture["ledger"])):
+            initial = codex_upgrade_project_ledger._initial_keys(Path(fixture["ledger"]), plan)
+        return reconciler.request_accounting(receipt, head=head, initial_keys=initial, campaign_id=campaign_id)
+
+    def test_b0_accounting_recapture_reusing_run_root_counts_new_generation(self) -> None:
+        """修好接着跑第 63 项（复现）：首个 attempt 入账后，新 attempt 复用证据根目录名重采。
+
+        第 24 项把旧目录改名为 ``.superseded-<新 attempt>``、新 attempt 沿用原名；v2 口径的身份键只由目录名＋
+        来源＋原生坐标生成、估计来源只按目录名，新一代与首代同坐标的请求和整根估计都被当作已入账去重
+        （ARM64 194249z 第 299／303 条只入账 5／8 个键、估计 0）。v3 必须把新一代的真实请求全部入账；
+        同一 attempt 重复对账与之后任何对账都不重复计数。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            capture = campaign_dir / "official-evidence"
+            capture.mkdir(mode=0o700)
+            self._item63_write_capture_generation(capture, ws_creates=2, flow_prefix="gen0")
+            before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            first = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[capture])
+            reconciler.reconcile_attempt(campaign_dir, first)
+            after_first = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            # 首代：mitm 2 条 WS response.create + 2 条 HTTP POST；两个 direct 分支按同根 sibling 各估 2。
+            self.assertEqual(after_first["precise_total"] - before["precise_total"], 4)
+            self.assertEqual(after_first["estimated_total"] - before["estimated_total"], 4)
+
+            second = self._item63_supersede(
+                fixture,
+                capture,
+                previous_attempt_id=first,
+                write_generation=lambda path: self._item63_write_capture_generation(path, ws_creates=3, flow_prefix="gen1"),
+            )
+            self.assertTrue((campaign_dir / f"official-evidence.superseded-{second}").is_dir())
+            result = reconciler.reconcile_attempt(campaign_dir, second)
+            after_second = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            # 新一代：3 条 WS（前 2 条与首代同坐标）+ 2 条 HTTP 全部入账；两个 direct 分支上界 3 + 2 以新来源入账。
+            self.assertEqual(after_second["precise_total"] - after_first["precise_total"], 5)
+            self.assertEqual(after_second["estimated_total"] - after_first["estimated_total"], 5)
+            entry = json.loads((Path(result["batch"]["batch_dir"]) / "entry-01.json").read_text(encoding="utf-8"))
+            self.assertEqual(entry["payload_fragment"]["request"]["counting_rule"], "codex_model_requests/v3")
+
+            # 同一 attempt 重复对账：复用首次 batch，不重复计数。
+            again = reconciler.reconcile_attempt(campaign_dir, second)
+            self.assertTrue(again["batch"]["reused"])
+            after_again = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                (after_again["precise_total"], after_again["estimated_total"]),
+                (after_second["precise_total"], after_second["estimated_total"]),
+            )
+            # 之后任何新 operation 按同一批证据（Campaign 级 provenance 仍含当前一代）核算也没有新增。
+            accounting = self._item63_accounting(fixture)
+            self.assertEqual((accounting["new_keys"], accounting["estimated_sources"]), ([], []))
+
+    def _item63_write_unresolvable_generation(self, root: Path) -> None:
+        """写一代无法估计的官方 capture 证据：只有 direct 分支，本 Campaign 也没有同 subject 的 mitm 观测。"""
+
+        from tools.official_client_capture.tests.test_codex_upgrade_live_request_provenance import _turn_events
+
+        self._write_json(
+            root / "manifest.json",
+            {
+                "schema_version": "official-client-capture/v1",
+                "case_results": [
+                    {"evidence": "direct", "subject": "codex-lone", "scenario": "s9", "scenario_result": {"turn_count": 1}}
+                ],
+            },
+        )
+        _turn_events(root / "results" / "direct" / "codex-lone" / "s9" / "turn1-events.jsonl", 1)
+        self._make_private_tree(root)
+
+    def _item63_accounting_resolve(self, root: Path, campaign_dir: Path, attempt_id: str, *, estimated_count: int) -> dict[str, object]:
+        """accounting-resolve 按批准上界为该 attempt 的未决 operation 补账（预览 → 批准 → 应用）。"""
+
+        evidence = root / f"provenance-audit-{attempt_id}.txt"
+        evidence.write_text(f"{attempt_id} 的 direct 分支无法估计，按上界补账。\n", encoding="utf-8")
+        arguments = argparse.Namespace(
+            campaign_dir=campaign_dir, operation_id=f"reconcile-attempt:{attempt_id}", estimated_count=estimated_count,
+            evidence=evidence, reason="direct 分支无法估计，按上界补账", approve_sha256=None, approved_by=None,
+        )
+        preview = codex_upgrade._accounting_resolve_command(arguments)
+        self.assertEqual(preview["status"], "approval_required", preview)
+        arguments.approve_sha256 = preview["review_sha256"]
+        arguments.approved_by = "老板"
+        return codex_upgrade._accounting_resolve_command(arguments)
+
+    def test_b0_accounting_resolve_signature_does_not_cover_recaptured_generation(self) -> None:
+        """修好接着跑第 63 项（复现）：accounting-resolve 登记的未决作业特征只覆盖登记时的那一代证据。
+
+        v2 特征摘要只含目录名与分支形状；重采后新一代同形状（turn 数、状态、原因都相同），会被当作“已核清”，
+        新一代的请求既不估计也不补账。v3 把续跑取代的世代并入特征：新一代必须重新判未决、由 accounting-resolve
+        补账；补账后同一代不再重复判未决。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            capture = campaign_dir / "official-evidence"
+            capture.mkdir(mode=0o700)
+            self._item63_write_unresolvable_generation(capture)
+            first = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[capture])
+            paused = reconciler.reconcile_attempt(campaign_dir, first)
+            self.assertEqual(paused["decision"]["pause_kinds"], ["accounting"], paused["decision"])
+            resolved = self._item63_accounting_resolve(root, campaign_dir, first, estimated_count=3)
+            self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
+            self.assertEqual(self._item63_accounting(fixture)["unresolved_job_ids"], [])
+
+            second = self._item63_supersede(
+                fixture, capture, previous_attempt_id=first, write_generation=self._item63_write_unresolvable_generation
+            )
+            # 新一代与首代形状相同，但不是登记时的那一代：必须重新判未决。
+            self.assertEqual(self._item63_accounting(fixture)["unresolved_job_ids"], ["official-test"])
+            again = reconciler.reconcile_attempt(campaign_dir, second)
+            # 第二次对账同根因累计到上限，暂停原因还会带 root_cause_repair；这里只关心账务暂停。
+            self.assertIn("accounting", again["decision"]["pause_kinds"], again["decision"])
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self._item63_accounting_resolve(root, campaign_dir, second, estimated_count=4)
+            head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head_after["estimated_total"] - head_before["estimated_total"], 4)
+            # 补账后同一代不再判未决（特征含世代，只覆盖这一代）。
+            self.assertEqual(self._item63_accounting(fixture)["unresolved_job_ids"], [])
+
+    def test_b0_accounting_legacy_signature_covers_only_generations_before_registration(self) -> None:
+        """修好接着跑第 63 项：v3 部署前按 v2 形态登记的特征（ARM64 第 304 条）继续兼容，但只覆盖登记时已存在的世代。
+
+        模拟：首代正常入账；重采出的新一代无法估计、按 v2 形态特征补账（登记晚于这一代的取代时刻）。
+        部署 v3 后同一代仍视为已核清（不会重新 blocked）；再次重采出的更晚一代则必须重新判未决。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            capture = campaign_dir / "official-evidence"
+            capture.mkdir(mode=0o700)
+            self._item63_write_capture_generation(capture, ws_creates=2, flow_prefix="gen0")
+            first = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[capture])
+            reconciler.reconcile_attempt(campaign_dir, first)
+            second = self._item63_supersede(
+                fixture, capture, previous_attempt_id=first, write_generation=self._item63_write_unresolvable_generation
+            )
+            paused = reconciler.reconcile_attempt(campaign_dir, second)
+            # 第二次对账同根因累计到上限，暂停原因还会带 root_cause_repair；这里只关心账务暂停。
+            self.assertIn("accounting", paused["decision"]["pause_kinds"], paused["decision"])
+            # 部署前的 accounting-resolve 只会登记 v2 形态特征：作业条目里没有世代信息（去掉 v3 新增的两个字段）。
+            signature = reconciler.unresolved_job_signature
+
+            def v2_form_signature(entry: dict, **_kwargs: object) -> str:
+                stripped = {key: value for key, value in entry.items() if key != "superseded_roots"}
+                stripped["roots"] = [
+                    {key: value for key, value in item.items() if key != "supersession"}
+                    for item in entry.get("roots", [])
+                ]
+                return signature(stripped)
+
+            with mock.patch.object(reconciler, "unresolved_job_signature", v2_form_signature):
+                self._item63_accounting_resolve(root, campaign_dir, second, estimated_count=23)
+            # 同一代：v2 形态特征仍然覆盖，不会因 v3 特征多了世代而重新 blocked。
+            self.assertEqual(self._item63_accounting(fixture)["unresolved_job_ids"], [])
+            # 登记之后再重采出的更晚一代：v2 形态特征不能覆盖，必须重新判未决。
+            self._item63_supersede(
+                fixture, capture, previous_attempt_id=second, write_generation=self._item63_write_unresolvable_generation
+            )
+            self.assertEqual(self._item63_accounting(fixture)["unresolved_job_ids"], ["official-test"])
+            # 总账 head 给出登记时刻，供上面的世代比较使用。
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            registered = head["accounting_resolutions"][str(fixture["manifest"]["campaign_id"])]
+            self.assertEqual(len(registered), 1)
+            self.assertIn("recorded_at_utc", registered[0])
+
+    def test_b0_accounting_estimated_source_ids_and_signatures_follow_supersession_generation(self) -> None:
+        """第 63 项的纯计算口径：v2 形态来源核算结果不变；续跑取代后的估计来源与未决特征按世代区分。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        def stored(root_entry: dict[str, object]) -> dict[str, object]:
+            return {
+                "requests": [],
+                "jobs": [
+                    {
+                        "job_id": "official-core",
+                        "phase": "official",
+                        "status": "estimated",
+                        "roots": [
+                            {
+                                "first_owner_job_id": "official-core",
+                                "producer_run_id": "run-core",
+                                "branches": [{"status": "estimated", "estimated_count": 4}],
+                                **root_entry,
+                            }
+                        ],
+                    }
+                ],
+                "unresolved_job_ids": [],
+            }
+
+        def sources(root_entry: dict[str, object], accounted: list[str]) -> list[str]:
+            head = {"accounted_identity_index": [], "accounted_estimated_sources": accounted}
+            result = reconciler.request_accounting(stored(root_entry), head=head, initial_keys=set(), campaign_id="c")
+            return [item["source_id"] for item in result["estimated_sources"]]
+
+        # v2 形态（没有 supersession）：与第 63 项之前逐字相同。
+        self.assertEqual(sources({}, []), ["c:run-core"])
+        self.assertEqual(sources({}, ["c:run-core"]), [])
+        # 第 2 代、更早世代也有 direct 估计分支：同名来源已被占用，改用带世代的新来源；同一代再对账按新来源去重。
+        second = {"supersession": {"generation": 2, "prior_estimate_branches": True}}
+        self.assertEqual(sources(second, ["c:run-core"]), ["c:run-core#superseded-2"])
+        self.assertEqual(sources(second, ["c:run-core", "c:run-core#superseded-2"]), [])
+        # 更早世代没有 direct 分支：同名来源从未被别的世代占用，沿用 v2 ID（v2 时期已入账的不重复）。
+        clean = {"supersession": {"generation": 1, "prior_estimate_branches": False}}
+        self.assertEqual(sources(clean, []), ["c:run-core"])
+        self.assertEqual(sources(clean, ["c:run-core"]), [])
+
+        # 特征摘要：作业不涉及续跑取代时 v3 与 v2 形态逐字相同；涉及时 v3 带世代、v2 形态去掉世代与审计字段。
+        plain = {"job_id": "official-core", "phase": "official", "roots": [{"root": "/a", "producer_run_id": "r"}], "reason": None}
+        self.assertEqual(
+            reconciler.unresolved_job_signature(plain), reconciler.unresolved_job_signature(plain, legacy=True)
+        )
+        superseded = {
+            **plain,
+            "roots": [{"root": "/b", "producer_run_id": "r", "supersession": {"generation": 1}}],
+            "superseded_roots": [{"producer_run_id": "r", "generation": 1, "superseded_at_utc": "2026-09-28T08:31:09.000Z"}],
+        }
+        self.assertEqual(
+            reconciler.unresolved_job_signature(superseded, legacy=True), reconciler.unresolved_job_signature(plain)
+        )
+        self.assertNotEqual(reconciler.unresolved_job_signature(superseded), reconciler.unresolved_job_signature(plain))
+
+    def test_b0_accounting_historical_correction_backfills_v2_era_generations_once(self) -> None:
+        """第 63 项的历史更正方案（本 Campaign 第 299／303 条同形）：v2 时期漏计的世代按 v3 键追加式更正补记。
+
+        模拟：首代正常入账；第 1、2 代都在 v2 口径下对账（只入账不撞键的请求、估计 0）。部署 v3 后：
+        先由 live 对账自动补记仍是当前目录的第 2 代，再对第 1、2 代的原对账事件各追加一次历史更正。
+        更正用与 live 同一函数算键，总账按身份键与来源去重：无论先后，每个真实请求恰好计一次；
+        同一更正重放幂等，更正不改原事件字节。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            ledger_root = Path(fixture["ledger"])
+            capture = campaign_dir / "official-evidence"
+            capture.mkdir(mode=0o700)
+            self._item63_write_capture_generation(capture, ws_creates=2, flow_prefix="gen0")
+            before = codex_upgrade_project_ledger.replay_head(ledger_root)
+            first = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[capture])
+            reconciler.reconcile_attempt(campaign_dir, first)
+
+            def v2_era_reconcile(attempt_id: str) -> None:
+                # v2 时期的核算：没有世代判定（不换键、不带世代字段），收据声明 v2 口径。
+                with mock.patch.object(reconciler.provenance, "_root_supersession", return_value=None), mock.patch.object(
+                    reconciler.provenance, "COUNTING_RULE", reconciler.provenance.LEGACY_COUNTING_RULE
+                ):
+                    reconciler.reconcile_attempt(campaign_dir, attempt_id)
+
+            second = self._item63_supersede(
+                fixture, capture, previous_attempt_id=first,
+                write_generation=lambda path: self._item63_write_capture_generation(path, ws_creates=3, flow_prefix="gen1"),
+            )
+            v2_era_reconcile(second)
+            third = self._item63_supersede(
+                fixture, capture, previous_attempt_id=second,
+                write_generation=lambda path: self._item63_write_capture_generation(path, ws_creates=3, flow_prefix="gen2"),
+            )
+            v2_era_reconcile(third)
+            v2_head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            # v2 时期：首代 4 + 第 1 代 3（1 条新 WS、2 条新 HTTP）+ 第 2 代 2（2 条新 HTTP）；估计只有首代 4。
+            self.assertEqual(v2_head["precise_total"] - before["precise_total"], 9)
+            self.assertEqual(v2_head["estimated_total"] - before["estimated_total"], 4)
+
+            # 部署 v3：下一次 live 对账自动补记当前目录（第 2 代）的撞键请求 3 条与整根估计 5。
+            fourth = self._b0_orphan_attempt(fixture, complete_job=True, evidence_roots=[capture])
+            reconciler.reconcile_attempt(campaign_dir, fourth)
+            live_head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(live_head["precise_total"] - v2_head["precise_total"], 3)
+            self.assertEqual(live_head["estimated_total"] - v2_head["estimated_total"], 5)
+
+            # 历史更正：按取代收据的时间顺序确定世代（首代归档由第 1 次取代产生，第 1 代归档由第 2 次取代产生）。
+            gen0_archive = campaign_dir / f"official-evidence.superseded-{second}"
+            gen1_archive = campaign_dir / f"official-evidence.superseded-{third}"
+            corrections = {
+                second: reconciler.provenance.generation_identity_keys(gen1_archive, older_generation_roots=[gen0_archive]),
+                third: reconciler.provenance.generation_identity_keys(capture, older_generation_roots=[gen0_archive, gen1_archive]),
+            }
+            self.assertEqual(corrections[second]["rekeyed_request_count"], 2)
+            self.assertEqual(corrections[third]["rekeyed_request_count"], 3)
+            events = codex_upgrade_project_ledger._load_events(ledger_root)
+            original_bytes = {path.name: path.read_bytes() for path in sorted((ledger_root / "events").iterdir())}
+            for attempt_id, keys in corrections.items():
+                operation_id = f"reconcile-attempt:{attempt_id}"
+                original = next(event for event in events if event["operation_id"] == operation_id)
+                corrected = copy.deepcopy(original["payload"])
+                request = corrected["request"]
+                request["identity_keys"] = sorted(set(request["identity_keys"]) | set(keys["rekeyed_identity_keys"]))
+                # 该世代的整根估计上界（同根 direct 分支按 mitm sibling：3 + 2），来源 ID 与 live 口径相同。
+                source = {
+                    "source_id": f"{campaign_id}:official-evidence#superseded-{keys['generation']}",
+                    "job_id": "official-test",
+                    "estimated_count": 5,
+                }
+                request["estimated_sources"] = [*request.get("estimated_sources", []), source]
+                request["estimated_delta"] = sum(int(item["estimated_count"]) for item in request["estimated_sources"])
+                request["counting_rule"] = "codex_model_requests/v3"
+                # 审计字段（重放不解释）：补记依据的世代与键数；status／unresolved_job_ids 保持原值不动。
+                request["supersession_backfill"] = {
+                    "generation": keys["generation"],
+                    "rekeyed_identity_key_count": len(keys["rekeyed_identity_keys"]),
+                }
+                result = codex_upgrade_project_ledger.record_historical_reconciliation_correction(
+                    ledger_root,
+                    original_operation_id=operation_id,
+                    corrected_payload=corrected,
+                    reason="第 63 项：续跑取代复用目录名导致 v2 口径漏计，按 v3 身份键补记该世代撞键请求与整根估计",
+                    original_event_sha256=original["event_sha256"],
+                    original_payload_sha256=original["payload_sha256"],
+                )
+                self.assertEqual(result["status"], "appended")
+            corrected_head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            # 每个真实请求恰好一次：首代 4 + 第 1 代 5 + 第 2 代 5；估计：首代 4 + 第 1 代 5 + 第 2 代 5。
+            self.assertEqual(corrected_head["precise_total"] - before["precise_total"], 14)
+            self.assertEqual(corrected_head["estimated_total"] - before["estimated_total"], 14)
+            # 第 2 代先被 live 补记、后被更正补记：重放把它归到原事件位置，live 那次成为重复（不计数）。
+            fourth_keys = set(corrections[third]["rekeyed_identity_keys"])
+            duplicates = {
+                item["identity_key"]
+                for item in corrected_head["duplicate_identity_keys"]
+                if item["operation_id"] == f"reconcile-attempt:{fourth}"
+            }
+            self.assertEqual(duplicates, fourth_keys)
+            self.assertEqual(
+                set(corrected_head["event_corrections"]), {f"reconcile-attempt:{second}", f"reconcile-attempt:{third}"}
+            )
+            # 追加式：原事件文件逐字节不变；同一更正重放幂等；之后的对账没有新增。
+            for name, raw in original_bytes.items():
+                self.assertEqual((ledger_root / "events" / name).read_bytes(), raw)
+            accounting = self._item63_accounting(fixture)
+            self.assertEqual((accounting["new_keys"], accounting["estimated_sources"]), ([], []))
+            (ledger_root / "head.json").unlink()
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(ledger_root), corrected_head)
+
     def test_b0_uncommitted_batch_is_not_pushed_and_blocks_new_batches(self) -> None:
         """batch 写了 entry 未 COMMIT：补齐器不推送，对账也不得在其后再写新 batch。"""
 

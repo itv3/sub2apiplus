@@ -1068,8 +1068,15 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 ):
                     raise ProjectLedgerError("accounting-resolve 补账必须绑定批准收据、原 operation 的 Campaign 与其登记的未决作业特征")
                 if covered:
+                    # 第 63 项：同时记下登记时刻（事件 recorded_at_utc），对账器据此判断 v2 形态特征只覆盖登记时
+                    # 已存在的续跑取代世代。只是 head 派生视图多一个字段，入账数字与事件字节都不变。
                     state["accounting_resolutions"].setdefault(str(payload["campaign_id"]), []).extend(
-                        {"job_id": item["job_id"], "signature_sha256": item["signature_sha256"], "operation_id": operation_id}
+                        {
+                            "job_id": item["job_id"],
+                            "signature_sha256": item["signature_sha256"],
+                            "operation_id": operation_id,
+                            "recorded_at_utc": event["recorded_at_utc"],
+                        }
                         for item in covered
                     )
             _apply_request_part(state, request, operation_id, "accounting_resolved")
@@ -1915,6 +1922,19 @@ def accounting_resolution_signatures(head: Mapping[str, Any], campaign_id: str) 
         (str(item["job_id"]), str(item["signature_sha256"]))
         for item in dict(head.get("accounting_resolutions") or {}).get(campaign_id, [])
     }
+
+
+def accounting_resolution_records(head: Mapping[str, Any], campaign_id: str) -> list[dict[str, Any]]:
+    """本 Campaign 的 accounting-resolve 登记明细：作业、特征、补账 operation 与登记时刻（第 63 项）。
+
+    对账器用登记时刻判断 v3 部署前登记的 v2 形态特征覆盖到哪一代续跑取代证据。
+    """
+
+    return [
+        dict(item)
+        for item in dict(head.get("accounting_resolutions") or {}).get(campaign_id, [])
+        if isinstance(item, Mapping)
+    ]
 
 
 def campaign_resume_epoch(head: Mapping[str, Any], campaign_id: str) -> int:

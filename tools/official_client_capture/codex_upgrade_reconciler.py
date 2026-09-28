@@ -789,6 +789,10 @@ def request_accounting(
     返回全部身份键、未入账的新身份键、未入账的估计来源（按 producer run 去重）与仍未决的作业；
     accounting-resolve 已核清且特征未变的作业不再算未决。对账（_request_part）与 accounting-resolve
     共用本函数，保证补账与对账同一口径。
+
+    修好接着跑第 63 项（计数规则 v3）：同一 Campaign 内续跑取代复用目录名时，
+    精确键已由 provenance 按世代换键；估计来源 ID 与未决作业特征在这里按世代区分，见
+    ``_estimated_source_id`` 与 ``_resolution_covers``。v2 写入的来源核算（没有世代字段）按原规则计算，结果不变。
     """
 
     accounted = set(head.get("accounted_identity_index", []))
@@ -814,7 +818,7 @@ def request_accounting(
                     count += int(branch.get("estimated_count", 0))
             if count <= 0:
                 continue
-            source_id = f"{campaign_id}:{root_entry.get('producer_run_id')}"
+            source_id = _estimated_source_id(campaign_id, root_entry)
             if source_id in accounted_estimates:
                 continue
             estimated_sources.append(
@@ -822,9 +826,10 @@ def request_accounting(
             )
     unresolved = [str(item) for item in stored.get("unresolved_job_ids", [])]
     # 修好接着跑第 12 项：accounting-resolve 已核清、且未决事实（证据根与分支状态）没有变化的作业不再判为未决；
-    # 出现新证据时特征随之变化，照常重新核算。
-    resolved_signatures = project_ledger.accounting_resolution_signatures(head, campaign_id)
-    if unresolved and resolved_signatures:
+    # 出现新证据时特征随之变化，照常重新核算。第 63 项：续跑取代产生的新一代也算新证据（特征含世代）。
+    records = project_ledger.accounting_resolution_records(head, campaign_id)
+    if unresolved and records:
+        signatures = {(str(item.get("job_id")), str(item.get("signature_sha256"))) for item in records}
         entries = {
             str(item.get("job_id")): item
             for item in stored.get("jobs", [])
@@ -833,7 +838,7 @@ def request_accounting(
         unresolved = [
             job_id
             for job_id in unresolved
-            if (job_id, unresolved_job_signature(entries.get(job_id, {"job_id": job_id}))) not in resolved_signatures
+            if not _resolution_covers(entries.get(job_id, {"job_id": job_id}), job_id, signatures, records)
         ]
     return {
         "identity_keys": identity_keys,
@@ -843,25 +848,105 @@ def request_accounting(
     }
 
 
-def unresolved_job_signature(job_entry: Mapping[str, Any]) -> str:
+def _estimated_source_id(campaign_id: str, root_entry: Mapping[str, Any]) -> str:
+    """证据根整根估计上界的来源 ID（总账按它去重，同一来源只计一次上界）。
+
+    v2：``<campaign>:<producer run 名>``。第 63 项：续跑取代后第 n 代（证据根条目带 ``supersession``）
+    若更早世代也有 direct 估计分支，同名来源已被更早世代占用，第 n 代改用 ``…#superseded-<n>``；更早世代
+    没有 direct 分支时同名来源从未被占用，沿用 v2 ID（v2 口径下已为这一代入账的不会重复）。更早世代
+    无法解析时 provenance 记 ``prior_estimate_branches=True``，按新来源计（可能多计上界、不会漏计）。
+    判定只依赖不可变证据，同一代反复对账得到同一 ID，幂等。
+    """
+
+    legacy = f"{campaign_id}:{root_entry.get('producer_run_id')}"
+    supersession = root_entry.get("supersession")
+    if not isinstance(supersession, Mapping):
+        return legacy
+    generation = supersession.get("generation")
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        return legacy
+    if supersession.get("prior_estimate_branches") is False:
+        return legacy
+    return f"{legacy}#superseded-{generation}"
+
+
+def _resolution_covers(
+    entry: Mapping[str, Any],
+    job_id: str,
+    signatures: set[tuple[str, str]],
+    records: Sequence[Mapping[str, Any]],
+) -> bool:
+    """未决作业是否已被 accounting-resolve 登记的特征覆盖（第 12 项；第 63 项按世代收紧）。
+
+    先按当前（v3）特征精确匹配。v3 部署前登记的特征是 v2 形态（不含世代，ARM64 第 304 条即是）：只有作业
+    涉及续跑取代的根时两种形态才不同，此时 v2 形态特征只覆盖登记时已经存在的那一代——登记时刻（总账事件
+    ``recorded_at_utc``）不早于当前这一代的产生时刻（最近一次取代收据的时刻）。更晚重采出的世代、或产生时刻
+    查不到（取代收据缺失／损坏），一律不覆盖，重新判未决由 accounting-resolve 补账（失败关闭到账务暂停）。
+    """
+
+    if (job_id, unresolved_job_signature(entry)) in signatures:
+        return True
+    superseded = entry.get("superseded_roots")
+    if not isinstance(superseded, list) or not superseded:
+        return False
+    legacy = unresolved_job_signature(entry, legacy=True)
+    try:
+        produced = max(
+            _timestamp(item.get("superseded_at_utc") if isinstance(item, Mapping) else None, "续跑取代时刻")
+            for item in superseded
+        )
+    except ReconcilerError:
+        return False
+    for record in records:
+        if str(record.get("job_id")) != job_id or str(record.get("signature_sha256")) != legacy:
+            continue
+        try:
+            registered = _timestamp(record.get("recorded_at_utc"), "特征登记时刻")
+        except ReconcilerError:
+            continue
+        if registered >= produced:
+            return True
+    return False
+
+
+# 第 63 项：v3 在证据根条目加 ``supersession``（改键与估计的审计事实）、在作业条目加 ``superseded_roots``（世代）。
+# 特征只用作业级世代区分代次；证据根条目上的审计事实不进特征，v2 形态与 v2 逐字相同。
+_SIGNATURE_ROOT_EXCLUDED_FIELDS = frozenset({"root", "supersession"})
+
+
+def unresolved_job_signature(job_entry: Mapping[str, Any], *, legacy: bool = False) -> str:
     """未决作业的特征摘要：作业、证据根与各分支状态（不含观测时间）。accounting-resolve 按它登记覆盖范围。
 
     证据根只取 producer run 名、种类、首个归属作业与分支内容，不取绝对路径：同一 Campaign 经别名根
     （如 ARM64 的 /root/oauth-capture）或真实路径访问时特征必须一致，否则补账后重新对账仍判未决。
+
+    第 63 项：作业涉及续跑取代的根（作业条目带 ``superseded_roots``）时，v3 特征并入各根的世代号，
+    重采出的新一代即使形状相同也是不同特征；世代号只由文件系统里的归档个数决定，不含产生时刻，
+    取代收据是否可读不影响特征。``legacy=True`` 给出 v2 形态（不含世代），只供兼容 v3 部署前登记的特征。
+    作业不涉及续跑取代时两种形态逐字相同。
     """
 
     roots = [
-        {key: value for key, value in item.items() if key != "root"} if isinstance(item, Mapping) else item
+        {key: value for key, value in item.items() if key not in _SIGNATURE_ROOT_EXCLUDED_FIELDS}
+        if isinstance(item, Mapping)
+        else item
         for item in job_entry.get("roots", [])
     ]
-    return _fingerprint(
-        {
-            "job_id": job_entry.get("job_id"),
-            "phase": job_entry.get("phase"),
-            "roots": roots,
-            "reason": job_entry.get("reason"),
-        }
-    )
+    payload: dict[str, Any] = {
+        "job_id": job_entry.get("job_id"),
+        "phase": job_entry.get("phase"),
+        "roots": roots,
+        "reason": job_entry.get("reason"),
+    }
+    superseded = job_entry.get("superseded_roots")
+    if not legacy and superseded:
+        payload["superseded_roots"] = [
+            {"producer_run_id": item.get("producer_run_id"), "generation": item.get("generation")}
+            if isinstance(item, Mapping)
+            else item
+            for item in superseded
+        ]
+    return _fingerprint(payload)
 
 
 def _require_segment_accounting_scope(

@@ -756,6 +756,249 @@ class LiveRequestProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(provenance.ProvenanceError, "不得覆盖"):
                 provenance.write_receipt(payload, output)
 
+    # ------------------------------------------------------------------
+    # 修好接着跑第 63 项：续跑取代复用目录名（计数规则 v3）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _v2_key(producer_run_id: str, source_kind: str, native_coordinate: dict) -> str:
+        """逐字照抄 v2 的身份键公式，用来证明未换键的请求与 v2 字节一致。"""
+
+        raw = json.dumps(
+            {"producer_run_id": producer_run_id, "source_kind": source_kind, "native_coordinate": native_coordinate},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
+
+    @staticmethod
+    def _supersession_receipt(fixture: ProvenanceFixture, attempt_id: str, logical: Path, archived: Path, recorded: str) -> Path:
+        """按编排器同一形态写取代收据（schema、Campaign、attempt、逐根记录与自摘要）。"""
+
+        receipt = {
+            "schema_version": "evidence-root-supersession/v1",
+            "campaign_id": fixture.campaign_id,
+            "phase": "official",
+            "candidate_id": None,
+            "superseding_attempt_id": attempt_id,
+            "recorded_at_utc": recorded,
+            "roots": [
+                {
+                    "job_id": "official-core",
+                    "logical_root": str(logical),
+                    "host_root": str(logical),
+                    "archived_logical_root": str(archived),
+                    "archived_host_root": str(archived),
+                    "device": 1,
+                    "inode": 2,
+                    "registered_by": [],
+                }
+            ],
+            "live_request_count": 0,
+        }
+        receipt["receipt_sha256"] = hashlib.sha256(
+            json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        path = fixture.campaign_dir / "control" / "evidence-roots" / f"supersession-{attempt_id}.json"
+        _write_json(path, receipt)
+        return path
+
+    def _supersede_capture_root(self, fixture: ProvenanceFixture, attempt_id: str, *, flow_prefix: str, recorded: str) -> Path:
+        """把 oauth-run 当前一代复制成 ``.superseded-<attempt>`` 归档，原名下重采一代：
+        WS 在末尾多一条 response.create（上一代已有的行号保持不变，因而与更早世代同坐标撞键），
+        HTTP 换新 flow（不撞键）。返回归档路径。"""
+
+        current = fixture.runs / "oauth-run"
+        archived = fixture.runs / f"oauth-run.superseded-{attempt_id}"
+        shutil.copytree(current, archived)
+        ws_path = current / "mitm" / "codex-ws" / "s1" / "codex-ws.jsonl"
+        rows = [json.loads(line) for line in ws_path.read_text("utf-8").splitlines() if line.strip()]
+        rows.append(_mitm_ws_row("oauth-run", "codex-ws", "s1", True, {"type": "response.create", "model": "gpt-6-astra"}))
+        _write_jsonl(ws_path, rows)
+        http_path = current / "mitm" / "codex-http" / "s4" / "codex-http.jsonl"
+        rows = [json.loads(line) for line in http_path.read_text("utf-8").splitlines() if line.strip()]
+        for index, row in enumerate(rows):
+            row["_flow_id"] = f"{flow_prefix}-{index}"
+        _write_jsonl(http_path, rows)
+        self._supersession_receipt(fixture, attempt_id, current, archived, recorded)
+        _chmod_tree(fixture.data)
+        return archived
+
+    def test_superseded_generation_rekeys_only_colliding_requests_and_keeps_v2_keys_elsewhere(self) -> None:
+        """v3 只给续跑取代后与更早世代撞键的请求换键；首代、从未被取代的根与后代里不撞键的请求与 v2 逐字相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            baseline = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            self.assertEqual(baseline["counting_rule"], "codex_model_requests/v3")
+            self.assertEqual(provenance.LEGACY_COUNTING_RULE, "codex_model_requests/v2")
+            # 没有任何续跑取代：全部身份键与 v2 公式逐字相同，也没有新增的世代字段。
+            for request in baseline["requests"]:
+                self.assertEqual(
+                    request["identity_key"],
+                    self._v2_key(request["producer_run_id"], request["source_kind"], request["native_coordinate"]),
+                )
+                self.assertNotIn("supersession_generation", request)
+            self.assertTrue(all("superseded_roots" not in job for job in baseline["jobs"]))
+
+            recorded = "2026-09-28T08:31:09.000Z"
+            self._supersede_capture_root(fixture, "20260928T083108Z", flow_prefix="gen1", recorded=recorded)
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            self.assertNotIn("supersession_receipt_errors", receipt)
+            capture = [r for r in receipt["requests"] if r["producer_run_id"] == "oauth-run"]
+            rekeyed = [r for r in capture if "supersession_generation" in r]
+            kept = [r for r in capture if "supersession_generation" not in r]
+            # WS 三条里前两条与首代同行号 → 换键；第三条与两条新 flow 的 HTTP 不撞键 → 保持 v2 键。
+            self.assertEqual(sorted(r["native_coordinate"]["record_index"] for r in rekeyed), [0, 2])
+            self.assertTrue(all(r["native_coordinate"]["transport"] == "ws" for r in rekeyed))
+            self.assertEqual(len(kept), 3)
+            for request in rekeyed:
+                self.assertEqual(request["supersession_generation"], 1)
+                self.assertEqual(
+                    request["legacy_identity_key"],
+                    self._v2_key("oauth-run", request["source_kind"], request["native_coordinate"]),
+                )
+                self.assertNotEqual(request["identity_key"], request["legacy_identity_key"])
+                self.assertEqual(
+                    request["identity_key"],
+                    provenance.identity_key(
+                        "oauth-run", request["source_kind"], request["native_coordinate"], supersession_generation=1
+                    ),
+                )
+            # 其它请求（含其它根）逐字保持 v2 键。
+            for request in receipt["requests"]:
+                if "supersession_generation" in request:
+                    continue
+                self.assertEqual(
+                    request["identity_key"],
+                    self._v2_key(request["producer_run_id"], request["source_kind"], request["native_coordinate"]),
+                )
+            # 首代的全部键都不会以同值再次出现在新一代里（换键后不再撞）。
+            first_keys = {r["identity_key"] for r in baseline["requests"] if r["producer_run_id"] == "oauth-run"}
+            self.assertFalse(first_keys & {r["identity_key"] for r in capture})
+            # Campaign 级精确数只是多了新一代多出的那一条 WS，口径与 v2 相同（证据根内部不跨代去重）。
+            self.assertEqual(receipt["precise_total"], baseline["precise_total"] + 1)
+            core = next(job for job in receipt["jobs"] if job["job_id"] == "official-core")
+            self.assertEqual(
+                core["superseded_roots"],
+                [{"producer_run_id": "oauth-run", "generation": 1, "superseded_at_utc": recorded}],
+            )
+            facts = core["roots"][0]["supersession"]
+            self.assertEqual(facts["generation"], 1)
+            self.assertEqual(facts["archives"], ["oauth-run.superseded-20260928T083108Z"])
+            self.assertEqual(facts["superseding_attempt_ids"], ["20260928T083108Z"])
+            self.assertEqual(facts["conflict_basis"], "archives")
+            self.assertEqual(facts["rekeyed_request_count"], 2)
+            self.assertTrue(facts["prior_estimate_branches"])
+            # 同一批证据反复核算得到同一组键（幂等）。
+            again = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            self.assertEqual(again["identity_keys_sha256"], receipt["identity_keys_sha256"])
+
+    def test_generation_identity_keys_matches_live_rekey_for_current_and_archived_generations(self) -> None:
+        """历史更正用的只读助手与 live 核算同一套规则：当前一代键逐字一致；已归档世代按它当时的世代号换键。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            first_archive = self._supersede_capture_root(
+                fixture, "20260928T083108Z", flow_prefix="gen1", recorded="2026-09-28T08:31:09.000Z"
+            )
+            second_archive = self._supersede_capture_root(
+                fixture, "20260928T123549Z", flow_prefix="gen2", recorded="2026-09-28T12:35:50.000Z"
+            )
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            live = sorted(r["identity_key"] for r in receipt["requests"] if r["producer_run_id"] == "oauth-run")
+            current = provenance.generation_identity_keys(
+                fixture.runs / "oauth-run", older_generation_roots=[first_archive, second_archive]
+            )
+            self.assertEqual(current["identity_keys"], live)
+            self.assertEqual(current["generation"], 2)
+            core = next(job for job in receipt["jobs"] if job["job_id"] == "official-core")
+            self.assertEqual(core["superseded_roots"][0]["superseded_at_utc"], "2026-09-28T12:35:50.000Z")
+            self.assertEqual(core["roots"][0]["supersession"]["generation"], 2)
+            # 已归档的第 1 代：更早世代只有首代归档；前两条 WS 撞首代 → 以世代 1 换键，其余保持 v2 键。
+            archived = provenance.generation_identity_keys(second_archive, older_generation_roots=[first_archive])
+            self.assertEqual(archived["logical_name"], "oauth-run")
+            self.assertEqual(archived["generation"], 1)
+            self.assertEqual(archived["rekeyed_request_count"], 2)
+            for request in archived["requests"]:
+                self.assertEqual(request["producer_run_id"], "oauth-run")
+                expected = (
+                    provenance.identity_key("oauth-run", request["source_kind"], request["native_coordinate"], supersession_generation=1)
+                    if request.get("supersession_generation") == 1
+                    else self._v2_key("oauth-run", request["source_kind"], request["native_coordinate"])
+                )
+                self.assertEqual(request["identity_key"], expected)
+            # 首代归档自身：没有更早世代，全部是 v2 键。
+            origin = provenance.generation_identity_keys(first_archive)
+            self.assertEqual(origin["rekeyed_identity_keys"], [])
+            # 误用：更早世代不是同一逻辑根的归档、或给失败重试归档算世代，一律拒绝。
+            with self.assertRaisesRegex(provenance.ProvenanceError, "更早世代"):
+                provenance.generation_identity_keys(second_archive, older_generation_roots=[fixture.runs / "c-compact"])
+            with self.assertRaisesRegex(provenance.ProvenanceError, "失败重试归档"):
+                provenance.generation_identity_keys(fixture.runs / "c-compact-fail.failed-attempt1")
+
+    def test_unparseable_superseded_archive_rekeys_whole_generation_and_marks_basis(self) -> None:
+        """更早世代无法解析时不能让核算失败，也不能漏计：整代按新请求换键、估计按新来源计，并在收据写明原因。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            archived = self._supersede_capture_root(
+                fixture, "20260928T083108Z", flow_prefix="gen1", recorded="2026-09-28T08:31:09.000Z"
+            )
+            _write_json(archived / "manifest.json", {"schema_version": "broken", "case_results": []})
+            _chmod_tree(fixture.data)
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            capture = [r for r in receipt["requests"] if r["producer_run_id"] == "oauth-run"]
+            self.assertEqual(len(capture), 5)
+            self.assertTrue(all(r["supersession_generation"] == 1 for r in capture))
+            facts = next(job for job in receipt["jobs"] if job["job_id"] == "official-core")["roots"][0]["supersession"]
+            self.assertEqual(facts["conflict_basis"], "unavailable")
+            self.assertIn("ProvenanceError", facts["conflict_error"])
+            self.assertTrue(facts["prior_estimate_branches"])
+            self.assertEqual(facts["rekeyed_request_count"], 5)
+
+    def test_superseded_archive_anomaly_fails_closed(self) -> None:
+        """与逻辑根同名前缀的条目必须是可信归档目录；符号链接或普通文件说明证据区被改动，失败关闭。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            (fixture.runs / "oauth-run.superseded-20260928T083108Z").write_text("not a directory\n", "utf-8")
+            _chmod_tree(fixture.data)
+            with self.assertRaisesRegex(provenance.ProvenanceError, "续跑取代归档不可信"):
+                fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+
+    def test_bad_supersession_receipt_is_recorded_and_leaves_generation_time_unknown(self) -> None:
+        """取代收据损坏只影响“这一代何时产生”（记 None、写明原因），不影响换键与精确核算。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            self._supersede_capture_root(
+                fixture, "20260928T083108Z", flow_prefix="gen1", recorded="2026-09-28T08:31:09.000Z"
+            )
+            path = fixture.campaign_dir / "control" / "evidence-roots" / "supersession-20260928T083108Z.json"
+            payload = json.loads(path.read_text("utf-8"))
+            payload["recorded_at_utc"] = "2026-09-28T09:00:00.000Z"
+            _write_json(path, payload)
+            _chmod_tree(fixture.data)
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            self.assertEqual(len(receipt["supersession_receipt_errors"]), 1)
+            self.assertIn("自摘要", receipt["supersession_receipt_errors"][0])
+            core = next(job for job in receipt["jobs"] if job["job_id"] == "official-core")
+            self.assertIsNone(core["superseded_roots"][0]["superseded_at_utc"])
+            self.assertEqual(core["roots"][0]["supersession"]["rekeyed_request_count"], 2)
+
+    def test_identity_key_rejects_non_positive_generation(self) -> None:
+        with self.assertRaisesRegex(provenance.ProvenanceError, "正整数"):
+            provenance.identity_key("r", "relay", {"connection": "conn001"}, supersession_generation=0)
+        with self.assertRaisesRegex(provenance.ProvenanceError, "正整数"):
+            provenance.identity_key("r", "relay", {"connection": "conn001"}, supersession_generation=True)
+
     def test_mitm_body_summary_and_turn_metadata_are_parsed(self) -> None:
         """mitm 正文是摘要对象：模型取自 body.json 或 body.text，线程元数据取自 client_metadata。"""
 
