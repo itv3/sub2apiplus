@@ -22887,8 +22887,10 @@ class CodexUpgradeTest(unittest.TestCase):
         actions: list[dict[str, object]],
         execute: list[str],
         reuse: list[str],
+        **candidate_binding: object,
     ) -> dict[str, object]:
-        """B4-1 夹具：VC-5 批次的 v2 内层清单（动作／execute 由调用方给定，其余批次字段与 seal 段夹具同形）。"""
+        """B4-1 夹具：VC-5 批次的 v2 内层清单（动作／execute 由调用方给定，其余批次字段与 seal 段夹具同形；
+        ``candidate_id``／``candidate_revision`` 关键字原样传给清单构造器）。"""
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
@@ -22905,6 +22907,7 @@ class CodexUpgradeTest(unittest.TestCase):
             actions=actions,
             execute_items=execute,
             reuse_items=reuse,
+            **candidate_binding,
         )
 
     def test_b4_5_candidate_post_run_execution_failure_is_redispatched_or_re_sealed(self) -> None:
@@ -23106,6 +23109,115 @@ class CodexUpgradeTest(unittest.TestCase):
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(result["status"], "recoverable", result.get("decision"))
             self.assertEqual(check(preview), history)
+
+    def test_b4_8_environment_prerequisite_after_reservation_is_followed_by_recovery_preview(self) -> None:
+        """B4-1 改法 8（草表 D-03，行 5／18／35／48）：候选采集动作在 Job 循环内因全局前提错误失败（environment-prerequisite，
+        预约已发布）——收账按可恢复进入 recovery_required，但 reconcile-supervisor-run 拒绝有预约的 run、逐字重派协议
+        （reservation 前）让位；恢复链协议接受 environment-prerequisite 的处理型失败，attempt 对账入账后 N+1 零请求预览是
+        允许的后继。deadline-expired／request-accounting-uncertain 仍不是处理型失败。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            manifest = fixture["manifest"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            identity = dict(
+                self._B4_IDENTITY, **{"--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json")}
+            )
+            capture_action = {
+                "action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600.0,
+                "command": [
+                    *self._B4_PREFIX, "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                    *[token for flag, value in identity.items() for token in (flag, value)],
+                    "--acknowledge-live-requests",
+                ],
+                "item_ids": ["candidate-run"],
+            }
+            binding = {"candidate_id": "cand-1", "candidate_revision": 1}
+            prior = self._b4_vc5_manifest(
+                fixture, batch_sequence=1, actions=[capture_action], execute=["candidate-run"], reuse=[], **binding
+            )
+            run_dir = self._b0_run_dir(
+                fixture, "g" * 64, phase="VC-5", failure_class="environment-prerequisite", batched_manifest=prior,
+                action_id="candidate-run", failure_kind="handled-error", error_type="CampaignGlobalPreconditionError",
+                started_offset_seconds=-30.0,
+            )
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            # Job 循环内抛出全局前提错误时预约已发布：run 期间的候选预约（孤儿）。
+            attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+                campaign_dir,
+                phase="candidate",
+                candidate_id="cand-1",
+                identity={"candidate_purpose": manifest["campaign_purpose"]},
+                jobs=[
+                    Job(
+                        job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                        steps=({"argv": ["bash", f"{job_id}.sh"]},), evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                        covers=(), scenario_ids=("A03",),
+                    )
+                    for job_id in self._b0_candidate_job_ids(fixture)
+                ],
+                allow_failed_rerun=True,
+            )
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, prior, failed_action_id="candidate-run", failure_class="environment-prerequisite"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            successor = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, execute=["candidate-run"], reuse=[],
+                actions=[{
+                    "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                    "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                    "timeout_seconds": 1800.0,
+                    "command": supervisor.candidate_recovery_preview_command(self._B4_PREFIX, str(campaign_dir), identity),
+                    "item_ids": ["candidate-run"],
+                }],
+                **binding,
+            )
+            verbatim = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, actions=[capture_action], execute=["candidate-run"], reuse=[], **binding
+            )
+            history = [(state, prior, run_dir)]
+
+            def check(manifest_: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest_, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            # reservation 之后的环境前提失败：逐字重派协议让位（不再形态相符即失败关闭）。
+            self.assertFalse(
+                supervisor._validate_batched_environment_redispatch_successor(state, prior, run_dir, verbatim, campaign_dir=campaign_dir)
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "先执行 reconcile-attempt"):
+                check(successor)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check(successor), history)
+            self.assertTrue(
+                supervisor._validate_batched_candidate_recovery_preview_successor(
+                    state, prior, run_dir, successor, campaign_dir=campaign_dir
+                )
+            )
+            # 仍拒绝：截止到期／请求账不确定不是处理型失败。
+            diagnostic_path = supervisor._action_diagnostic_path(run_dir, "candidate-run", create_directory=False)
+            for failure_class in ("deadline-expired", "request-accounting-uncertain"):
+                diagnostic_path.chmod(0o600)
+                diagnostic_path.unlink()
+                supervisor._write_action_diagnostic(
+                    diagnostic_path, campaign_id=str(state["campaign_id"]), phase="VC-5", action_id="candidate-run",
+                    owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]), failure_kind="handled-error",
+                    failure_class=failure_class, error_type="ConfigurationError", message="B4。",
+                )
+                with self.subTest(failure_class=failure_class), self.assertRaisesRegex(supervisor.SupervisorError, "不是处理型失败"):
+                    supervisor._validate_batched_candidate_recovery_preview_successor(
+                        state, prior, run_dir, successor, campaign_dir=campaign_dir
+                    )
 
 
 class EvidenceManifestTest(unittest.TestCase):

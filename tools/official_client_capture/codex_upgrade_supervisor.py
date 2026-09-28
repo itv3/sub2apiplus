@@ -7593,7 +7593,10 @@ _OFFICIAL_RECOVERY_PREVIEW_OPERATION = "VC-1:official-recovery"
 # 修好接着跑第 30 项：不再按错误类型白名单（ConfigurationError／ChildProcessError）——补跑动作因任何工具缺陷抛出的
 # 异常（如 ValueError）修好后同样要能用 N+1 零请求预览承接，否则对账可恢复却没有后继协议。
 _RECOVERY_PREVIEW_RETRY_FAILURE_KINDS = frozenset({"handled-error", "unexpected-error", "child-returncode"})
-_RECOVERY_PREVIEW_RETRY_FAILURE_CLASS = "execution-failure"
+# B4-1 改法 8（草表 D-03）：environment-prerequisite 也是处理型失败——Job 循环内的 CampaignGlobalPreconditionError 与
+# 动作中的 RuntimeEgressPaused 发生在预约之后，收账判可恢复、reconcile-supervisor-run 却拒绝有预约的 run，此前恢复链
+# 协议只认 execution-failure，无路可走；修好环境后同样以 N+1 零请求预览承接（attempt 对账收据由第 31 项核对）。
+_RECOVERY_PREVIEW_RETRY_FAILURE_CLASSES = frozenset({"execution-failure", "environment-prerequisite"})
 _RECOVERY_PREVIEW_EXCLUDED_ERROR_TYPES = frozenset({"CampaignCleanupRequested", "KeyboardInterrupt", "SystemExit"})
 
 
@@ -7602,7 +7605,7 @@ def _recovery_preview_retry_failure(diagnostic: Mapping[str, Any]) -> bool:
 
     return (
         diagnostic.get("failure_kind") in _RECOVERY_PREVIEW_RETRY_FAILURE_KINDS
-        and diagnostic.get("failure_class") == _RECOVERY_PREVIEW_RETRY_FAILURE_CLASS
+        and diagnostic.get("failure_class") in _RECOVERY_PREVIEW_RETRY_FAILURE_CLASSES
         and diagnostic.get("error_type") not in _RECOVERY_PREVIEW_EXCLUDED_ERROR_TYPES
     )
 
@@ -8896,6 +8899,17 @@ def _validate_batched_environment_redispatch_successor(
             # 这里用同一判定放行，对账许可（receipt_passed／收据 failure_class）仍由共享绑定逐项核对。
             effective_class == "execution-failure"
             and candidate_post_run_recovery_action(prior_manifest, action_id) is not None
+        ):
+            return False
+        # B4-1 改法 8（草表 D-03）：reservation 之后的失败属 attempt 中断——reconcile-supervisor-run 拒绝这类 run，
+        # 本协议（"reservation 前"）让位给恢复链协议（按 attempt 对账收据承接），不再形态相符即失败关闭；没有
+        # Campaign 目录时无法判断预约，保持原判定。
+        if (
+            campaign_dir is not None
+            and Path(campaign_dir).is_dir()
+            and _reservations_in_run_window(
+                Path(campaign_dir).resolve(strict=True), float(prior_state.get("started_at_epoch", 0.0))
+            )
         ):
             return False
 
