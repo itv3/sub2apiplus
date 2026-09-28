@@ -7677,9 +7677,24 @@ def _reconciled_watchdog_abort(
     看门狗中止（``watchdog-aborted``）没有动作诊断，reconciler 把它归为 ``legacy-interruption``；只有对账收据
     证明 run 期间没有 reservation、零请求，且项目总账事件绑定了该收据，它才是可信终态。任一不成立即失败关闭，
     并明确指向对账入口。
+
+    B4-1 改法 3（草表 D-05）：run 期间发布过预约（未完整收口）的看门狗中止属 attempt 中断——reconcile-supervisor-run
+    拒绝这类 run，可信终态的证明改为窗口内每个预约的 attempt 对账收据（官方或候选侧，含恢复段）与总账绑定；
+    缺失文案指向 reconcile-attempt。返回值带 ``reservation_exists``：False 为 supervisor-run 收据，True 为
+    attempt 收据（``attempts`` 列出各绑定事实）。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
+    reservations = _reservations_in_run_window(campaign_dir, float(prior_state.get("started_at_epoch", 0.0)))
+    if reservations:
+        campaign_id = str(prior_state.get("campaign_id", ""))
+        attempts = [
+            verify_attempt_reconciliation_binding(
+                campaign_dir, campaign_id=campaign_id, candidate_id=candidate_id, attempt_root=root, label=label
+            )
+            for candidate_id, _subject, root in reservations
+        ]
+        return {"reconciliation": "attempt", "reservation_exists": True, "attempts": attempts}
     receipt_path = (
         campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
     )
@@ -8937,18 +8952,108 @@ def candidate_reservations_in_run_window(
     return found
 
 
+def _capture_results_have_failure(results: Any) -> bool:
+    """与 ``codex_upgrade._failed_job_ids`` 同口径：已封存结果里是否有 ``status == failed`` 的 Job。"""
+
+    return isinstance(results, list) and any(
+        isinstance(result, Mapping) and isinstance(result.get("id"), str) and result.get("status") == "failed"
+        for result in results
+    )
+
+
+def _capture_summary_settled(summary_path: Path) -> bool:
+    """attempt（``attempt.json``）或恢复段（``attempt-recovery.json``）的采集是否已完整收口：等待封存且没有失败 Job。
+
+    与 reconciler ``_capture_attempt_settled`` 及其恢复段分支同判据（第三批 B3-5）：这样的预约不是中断，
+    之后的零请求后处理动作失败按父 run 对账，采集结果只读保留。
+    """
+
+    if summary_path.is_symlink() or not summary_path.is_file():
+        return False
+    payload = _read_json(summary_path)
+    return payload.get("status") == "awaiting_receipts" and not _capture_results_have_failure(payload.get("results"))
+
+
+def _reservations_in_run_window(
+    campaign_dir: Path,
+    started_at_epoch: float,
+) -> list[tuple[str | None, str, Path]]:
+    """父 run 期间发布、且未完整收口的全部 reservation（B4-1 改法 3；只读，与 reconciler 父 run 对账同判据）。
+
+    枚举官方 ``official/attempts/<id>`` 与候选 ``candidates/<cid>/attempts/<id>`` 的主预约及其恢复段
+    ``recovery/ar<k>`` 的段预约：``started_at_utc`` 不早于父 run 开始时刻即在窗口内；采集已完整收口
+    （等待封存且无失败 Job）的 attempt／段不算中断，不计入。返回 ``(candidate_id, subject, root)``，
+    官方侧 candidate_id 为 None，恢复段 subject 为 ``<id>:ar<k>``。
+    """
+
+    started = datetime.fromtimestamp(float(started_at_epoch), tz=timezone.utc)
+    campaign_dir = Path(campaign_dir)
+
+    def begun_in_window(reservation_path: Path) -> bool:
+        if reservation_path.is_symlink() or not reservation_path.is_file():
+            return False
+        begun_raw = _read_json(reservation_path).get("started_at_utc")
+        if not isinstance(begun_raw, str):
+            return False
+        try:
+            begun = datetime.fromisoformat(begun_raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return begun.tzinfo is not None and begun >= started
+
+    scopes: list[tuple[str | None, Path]] = [(None, campaign_dir / "official" / "attempts")]
+    candidates_root = campaign_dir / "candidates"
+    if not candidates_root.is_symlink() and candidates_root.is_dir():
+        for candidate_root in sorted(candidates_root.iterdir()):
+            if candidate_root.is_symlink() or not candidate_root.is_dir() or not _is_safe_id(candidate_root.name):
+                continue
+            scopes.append((candidate_root.name, candidate_root / "attempts"))
+    found: list[tuple[str | None, str, Path]] = []
+    for candidate_id, attempts_root in scopes:
+        if attempts_root.is_symlink() or not attempts_root.is_dir():
+            continue
+        for attempt_root in sorted(attempts_root.iterdir()):
+            if attempt_root.is_symlink() or not attempt_root.is_dir() or not _is_safe_id(attempt_root.name):
+                continue
+            if begun_in_window(attempt_root / "reservation.json") and not _capture_summary_settled(
+                attempt_root / "attempt.json"
+            ):
+                found.append((candidate_id, attempt_root.name, attempt_root))
+            recovery_root = attempt_root / "recovery"
+            if recovery_root.is_symlink() or not recovery_root.is_dir():
+                continue
+            for segment_root in sorted(recovery_root.iterdir()):
+                if (
+                    segment_root.is_symlink()
+                    or not segment_root.is_dir()
+                    or not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(segment_root.name)
+                ):
+                    continue
+                if begun_in_window(segment_root / "recovery-reservation.json") and not _capture_summary_settled(
+                    segment_root / "attempt-recovery.json"
+                ):
+                    found.append((candidate_id, f"{attempt_root.name}:{segment_root.name}", segment_root))
+    return found
+
+
 def verify_attempt_reconciliation_binding(
     campaign_dir: Path,
     *,
     campaign_id: str,
-    candidate_id: str,
+    candidate_id: str | None,
     attempt_root: Path,
     label: str,
 ) -> dict[str, Any]:
-    """完整重放一个候选 attempt 的对账收据：schema、Campaign／候选／attempt 身份、reservation
-    绑定，以及项目总账 ``reconcile-attempt:<id>`` 事件对收据摘要的绑定。"""
+    """完整重放一个 attempt 的对账收据：schema、Campaign／侧／候选／attempt 身份、reservation
+    绑定，以及项目总账 ``reconcile-attempt:<id>`` 事件对收据摘要的绑定。
+
+    B4-1 改法 3：``candidate_id`` 为 None 时核验官方侧 attempt（收据 ``phase`` 为 ``official``、
+    ``candidate_id`` 为 None，收据路径与候选侧相同）。
+    """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
+    phase = "candidate" if candidate_id is not None else "official"
+    subject_label = f"候选 {candidate_id} 的 attempt" if candidate_id is not None else "官方 attempt"
     # 改造 5 M2：attempt_root 也可以是恢复段目录 attempts/<id>/recovery/ar<k>（段预约文件不同，
     # 收据带 recovery_revision，subject 为 <id>:ar<k>）。
     recovery_revision: str | None = None
@@ -8963,7 +9068,7 @@ def verify_attempt_reconciliation_binding(
         subject = attempt_id
     receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{subject.replace(':', '-')}" / "attempt-reconciliation.json"
     if receipt_path.is_symlink() or not receipt_path.is_file():
-        raise SupervisorError(f"{label}：候选 {candidate_id} 的 attempt {subject} 尚未对账（缺 attempt-reconciliation.json）；先执行 reconcile-attempt。")
+        raise SupervisorError(f"{label}：{subject_label} {subject} 尚未对账（缺 attempt-reconciliation.json）；先执行 reconcile-attempt。")
     receipt = _read_json(receipt_path)
     if reservation_path.is_symlink() or not reservation_path.is_file():
         raise SupervisorError(f"{label}：attempt {subject} 缺少预约收据。")
@@ -8972,7 +9077,7 @@ def verify_attempt_reconciliation_binding(
         receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
         or receipt.get("campaign_id") != campaign_id
         or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
-        or receipt.get("phase") != "candidate"
+        or receipt.get("phase") != phase
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("attempt_id") != attempt_id
         or receipt.get("recovery_revision") != recovery_revision

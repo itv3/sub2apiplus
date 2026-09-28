@@ -4263,6 +4263,42 @@ raise SystemExit(9)
                 supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
 
 
+    def test_b4_3_reservations_in_run_window_follow_reconciler_criteria(self) -> None:
+        """B4-1 改法 3：0-W 分流用的"run 期间预约"只读判据与 reconciler 父 run 对账同口径——官方与候选主 attempt、
+        恢复段都按 reservation.started_at_utc 不早于父 run 开始时刻计入；采集已完整收口（awaiting_receipts 且无失败
+        Job）的 attempt／段不是中断，不计入；早于父 run 的预约不计入。"""
+
+        def write(path: Path, payload: dict[str, object]) -> None:
+            self._write_json(path, payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir = root / "campaign"
+            official = campaign_dir / "official" / "attempts"
+            candidate = campaign_dir / "candidates" / "cand-1" / "attempts"
+            late = "2026-09-28T00:10:00.000Z"
+            early = "2026-09-27T23:50:00.000Z"
+            started = 1_790_553_600.0  # 2026-09-28T00:00:00Z
+            write(official / "att-a" / "reservation.json", {"started_at_utc": late})
+            write(official / "att-b" / "reservation.json", {"started_at_utc": early})
+            write(candidate / "att-c" / "reservation.json", {"started_at_utc": late})
+            write(candidate / "att-c" / "attempt.json", {"status": "awaiting_receipts", "results": [{"id": "j", "status": "complete"}]})
+            write(candidate / "att-d" / "reservation.json", {"started_at_utc": late})
+            write(candidate / "att-d" / "attempt.json", {"status": "awaiting_receipts", "results": [{"id": "j", "status": "failed"}]})
+            write(candidate / "att-e" / "reservation.json", {"started_at_utc": early})
+            write(candidate / "att-e" / "recovery" / "ar1" / "recovery-reservation.json", {"started_at_utc": late})
+            write(candidate / "att-e" / "recovery" / "ar1" / "attempt-recovery.json", {"status": "awaiting_receipts", "results": []})
+            write(candidate / "att-e" / "recovery" / "ar2" / "recovery-reservation.json", {"started_at_utc": late})
+            found = supervisor._reservations_in_run_window(campaign_dir, started)
+            self.assertEqual(
+                [(candidate_id, subject) for candidate_id, subject, _root in found],
+                [(None, "att-a"), ("cand-1", "att-d"), ("cand-1", "att-e:ar2")],
+            )
+            self.assertEqual(found[0][2], official / "att-a")
+            self.assertEqual(found[2][2], candidate / "att-e" / "recovery" / "ar2")
+            # 没有任何 attempt 目录的 Campaign：空。
+            self.assertEqual(supervisor._reservations_in_run_window(root / "empty", started), [])
+
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
 

@@ -22545,12 +22545,14 @@ class CodexUpgradeTest(unittest.TestCase):
         action_id: str,
         phase: str = "VC-5",
         reason: str = "owner-heartbeat-timeout-30s",
+        started_offset_seconds: float = 5.0,
     ) -> tuple[dict[str, object], Path]:
         """B4-1 夹具：被看门狗中止的父 run（无动作诊断；事件链最后一条 action-started 指向正在执行的动作）。"""
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         run_dir = self._b0_run_dir(
-            fixture, name, phase=phase, state="watchdog-aborted", batched_manifest=inner, started_offset_seconds=5.0,
+            fixture, name, phase=phase, state="watchdog-aborted", batched_manifest=inner,
+            started_offset_seconds=started_offset_seconds,
         )
         state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
         supervisor._append_event(
@@ -22703,6 +22705,82 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(supervisor.SupervisorError, "留有动作失败诊断"):
                 check(preview)
+    def test_b4_3_watchdog_abort_after_reservation_is_reconciled_via_attempt_receipt(self) -> None:
+        """B4-1 改法 3（草表 D-05，行 9）：VC-1 官方采集批次在发布预约后被看门狗中止——reconcile-supervisor-run 拒绝
+        有预约的 run，0-W 改按 run 期间的预约分流：未对账时文案指向 reconcile-attempt；attempt 按孤儿对账（官方侧收据，
+        phase official／candidate_id None）入账后，看门狗中止是可信终态，N=2 零请求恢复预览是允许的后继；attempt 对账
+        收据身份不闭合仍拒绝。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-0-completed", phase="VC-0", event_type="stage_completed", next_action="启动 VC-1",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次",
+            )
+            jobs = [job.job_id for job in fixture["jobs"]]
+            capture = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=1, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                    "command": [*self._B4_PREFIX, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                    "item_ids": jobs,
+                }],
+            )
+            preview = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=2, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 600.0,
+                    "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                    "item_ids": jobs,
+                }],
+            )
+            # 父 run 先启动（30 秒前），随后发布官方预约（孤儿：attempt.json 未写出），看门狗在预约后中止父 run。
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "c" * 64, inner=capture, action_id="capture-official", phase="VC-1", started_offset_seconds=-30.0,
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            attempt_root = campaign_dir / "official" / "attempts" / attempt_id
+            history = [(state, capture, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            # reconcile-supervisor-run 拒绝有预约的 run；0-W 按预约分流，文案指向 reconcile-attempt。
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "先执行 reconcile-attempt"):
+                check(preview)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt_path = campaign_dir / result["reconciliation_receipt"]["path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual((receipt["phase"], receipt["candidate_id"], receipt["reservation_exists"]), ("official", None, True))
+            # 官方侧 attempt 对账绑定校验（原来只做候选侧）。
+            bound = supervisor.verify_attempt_reconciliation_binding(
+                campaign_dir, campaign_id=str(capture["campaign_id"]), candidate_id=None, attempt_root=attempt_root, label="B4",
+            )
+            self.assertEqual((bound["attempt_id"], bound["operation_id"]), (attempt_id, f"reconcile-attempt:{attempt_id}"))
+            # 0-W 按 attempt 对账收据分流后，看门狗中止是可信终态：N=2 零请求恢复预览是允许的后继。
+            self.assertEqual(check(preview), history)
+            # attempt 对账收据身份不闭合（campaign_id 漂移）：仍拒绝。
+            original = receipt_path.read_bytes()
+            receipt_path.chmod(0o600)
+            receipt_path.write_text(json.dumps(dict(receipt, campaign_id="other"), ensure_ascii=False) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(supervisor.SupervisorError, "schema 或身份不闭合"):
+                check(preview)
+            receipt_path.write_bytes(original)
+            self.assertEqual(check(preview), history)
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
