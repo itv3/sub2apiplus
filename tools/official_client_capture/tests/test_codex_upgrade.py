@@ -21376,10 +21376,75 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(again["status"], "recoverable", again.get("decision"))
             codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
+    def _b0_array_contract_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        restoration_error: dict[str, str] | None = None,
+    ) -> str:
+        """带失败数组（数组合同）的失败 attempt，请求账务无法核清（证据根无权威来源）；可选恢复失败（环境污染）。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        job = fixture["jobs"][0]
+        evidence_root = campaign_dir / "official-evidence"
+        evidence_root.mkdir(mode=0o700)
+        self._write_json(evidence_root / "surface.json", {"records": []})
+        (evidence_root / "surface.json").chmod(0o600)
+        attempt_id = self._b0_orphan_attempt(fixture, evidence_roots=[evidence_root])
+        attempt_root = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
+        result = json.loads((attempt_root / f"job-{job.job_id}.json").read_text(encoding="utf-8"))
+        # 写带失败数组的 attempt.json（新 schema，数组合同），账务仍无法核清（证据根无权威来源）。
+        codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "official",
+                "candidate_id": None,
+                "status": "failed",
+                "identity": dict(manifest["official_identity"]),
+                "results": [result],
+                "failure_observations": [],
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {"type": "SyntheticFailure", "message": "合成 attempt 不封存证据权限收据。"},
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"} if restoration_error is None else None,
+                    "restoration_report": {"status": "passed"} if restoration_error is None else None,
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": restoration_error,
+                "next_gate": "对账数组合同 attempt。",
+            },
+        )
+        return attempt_id
+
+    def _b0_accounting_resolve(self, root: Path, campaign_dir: Path, attempt_id: str) -> dict[str, object]:
+        """accounting-resolve 按批准上界为该 attempt 的未决 operation 补账（预览 → 批准 → 应用）。"""
+
+        evidence = root / "provenance-audit.txt"
+        evidence.write_text("official-test 被打断，按同类作业上界估计 3 次请求。\n", encoding="utf-8")
+        arguments = argparse.Namespace(
+            campaign_dir=campaign_dir, operation_id=f"reconcile-attempt:{attempt_id}", estimated_count=3, evidence=evidence,
+            reason="被打断作业没有 Job 收据，按上界估计", approve_sha256=None, approved_by=None,
+        )
+        preview = codex_upgrade._accounting_resolve_command(arguments)
+        arguments.approve_sha256 = preview["review_sha256"]
+        arguments.approved_by = "老板"
+        return codex_upgrade._accounting_resolve_command(arguments)
+
     def test_b0_reconcile_attempt_array_contract_accounting_pause_then_resolve_continues(self) -> None:
         """修好接着跑第 37 项：带结构化失败数组（数组合同）的 attempt 账务暂停后补账，同一 attempt 重新对账必须能续接。
         首次收据的 root_causes 是"账务未决"根因，补账后重算成真实根因；root_cause 单值在易变字段里、root_causes 数组不在，
-        write-once 比对以"既有对账收据与当前事实不一致，拒绝覆盖"卡死续接（2026-09-28 194249z A2 隔离作废后实测）。"""
+        write-once 比对以"既有对账收据与当前事实不一致，拒绝覆盖"卡死续接（2026-09-28 194249z A2 隔离作废后实测）。
+
+        第 38 项起账务未决不再是根因：首次收据直接记真实根因（这里是被打断的 attempt.interrupted），续接语义不变。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -21387,62 +21452,15 @@ class CodexUpgradeTest(unittest.TestCase):
             root = Path(directory).resolve()
             fixture = self._b0_fixture(root)
             campaign_dir = fixture["campaign_dir"]
-            manifest = fixture["manifest"]
-            job = fixture["jobs"][0]
-            evidence_root = campaign_dir / "official-evidence"
-            evidence_root.mkdir(mode=0o700)
-            self._write_json(evidence_root / "surface.json", {"records": []})
-            (evidence_root / "surface.json").chmod(0o600)
-            attempt_id = self._b0_orphan_attempt(fixture, evidence_roots=[evidence_root])
-            attempt_root = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
-            result = json.loads((attempt_root / f"job-{job.job_id}.json").read_text(encoding="utf-8"))
-            # 写带失败数组的 attempt.json（新 schema，数组合同），账务仍无法核清（证据根无权威来源）。
-            codex_upgrade._write_capture_attempt(
-                campaign_dir,
-                attempt_root,
-                {
-                    "campaign_id": manifest["campaign_id"],
-                    "phase": "official",
-                    "candidate_id": None,
-                    "status": "failed",
-                    "identity": dict(manifest["official_identity"]),
-                    "results": [result],
-                    "failure_observations": [],
-                    "evidence_roots": [],
-                    "evidence_permission_closeout": None,
-                    "evidence_permission_error": {"type": "SyntheticFailure", "message": "合成 attempt 不封存证据权限收据。"},
-                    "environment": {
-                        "evidence_root": str(attempt_root / "evidence"),
-                        "before_probe": None,
-                        "after_probe": {"status": "passed"},
-                        "restoration_report": {"status": "passed"},
-                        "arm64_before_receipt": None,
-                        "arm64_after_receipt": None,
-                    },
-                    "binary_verification": None,
-                    "execution_error": None,
-                    "restoration_error": None,
-                    "next_gate": "对账数组合同 attempt。",
-                },
-            )
+            attempt_id = self._b0_array_contract_attempt(fixture)
             first = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(first["status"], "paused", first.get("decision"))
             self.assertEqual(first["decision"]["pause_kinds"], ["accounting"])
-            self.assertEqual([item["stable_error_code"] for item in first["root_causes"]], ["attempt.accounting-unresolved"])
+            self.assertEqual([item["stable_error_code"] for item in first["root_causes"]], ["attempt.interrupted"])
             receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
             first_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertEqual(first_receipt["root_causes"], first["root_causes"])
-            operation = f"reconcile-attempt:{attempt_id}"
-            evidence = root / "provenance-audit.txt"
-            evidence.write_text("official-test 被打断，按同类作业上界估计 3 次请求。\n", encoding="utf-8")
-            arguments = argparse.Namespace(
-                campaign_dir=campaign_dir, operation_id=operation, estimated_count=3, evidence=evidence,
-                reason="被打断作业没有 Job 收据，按上界估计", approve_sha256=None, approved_by=None,
-            )
-            preview = codex_upgrade._accounting_resolve_command(arguments)
-            arguments.approve_sha256 = preview["review_sha256"]
-            arguments.approved_by = "老板"
-            resolved = codex_upgrade._accounting_resolve_command(arguments)
+            resolved = self._b0_accounting_resolve(root, campaign_dir, attempt_id)
             self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
             # 续接：以首次落盘的收据为准（根因数组不改写、收据字节不变），批次按 operation 复用，决策不再暂停。
             again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
@@ -21452,6 +21470,258 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertTrue(again["batch"]["reused"])
             self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8")), first_receipt)
             codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+            # 第 38 项：同一步骤的账务根因从未入账（账务未决只暂停、不计数）。
+            from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+            placeholder = root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="attempt.accounting-unresolved",
+                failed_step=str(first_receipt["root_cause"]["failed_step"]),
+                stable_dimensions={"phase": "official"},
+            )
+            self.assertNotIn(placeholder, codex_upgrade_project_ledger.replay_head(fixture["ledger"])["root_cause_counts"])
+
+    _REAL_CASE_RESTORATION_ERROR = {"type": "ProbeUnavailable", "message": "after 探针采不到（工具缺陷）"}
+
+    def test_b0_reconcile_attempt_accounting_pause_records_real_root_cause(self) -> None:
+        """修好接着跑第 38 项：请求账务无法核清只是暂停原因，不再盖住真实根因。
+
+        attempt 同时满足"环境判污染（恢复失败）"与"请求账务无法核清"（194249z 候选 attempt 20260927T231538Z-… 实测形态）。
+        修复前主根因选 attempt.accounting-unresolved，总账计数与修复证据都只能落在账务根因上；修复后主根因是真实原因
+        attempt.environment-contaminated，总账按它计数；账务未决仍由请求部分 unresolved／总账 blocked 暂停（accounting）。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            attempt_id = self._b0_array_contract_attempt(fixture, restoration_error=self._REAL_CASE_RESTORATION_ERROR)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "paused", result.get("decision"))
+            self.assertIn("accounting", result["decision"]["pause_kinds"])
+            self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.environment-contaminated")
+            self.assertEqual(
+                [item["stable_error_code"] for item in result["root_causes"]], ["attempt.environment-contaminated"]
+            )
+            real = str(result["root_cause"]["root_cause_id"])
+            placeholder = root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="attempt.accounting-unresolved",
+                failed_step=str(result["root_cause"]["failed_step"]),
+                stable_dimensions={"phase": "official"},
+            )
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["root_cause_counts"].get(real), 1)
+            self.assertNotIn(placeholder, head["root_cause_counts"])
+            self.assertEqual(head["unresolved_operation_ids"], [f"reconcile-attempt:{attempt_id}"])
+            self.assertEqual(result["decision"]["root_cause_counts"], {real: 1})
+            self.assertNotIn("root_cause_reattribution", result)
+
+    def test_b0_reconcile_attempt_legacy_accounting_placeholder_is_corrected_to_real_root_cause(self) -> None:
+        """修好接着跑第 38 项：已按旧口径入账的账务占位根因，在补账后的续接对账里改记为真实根因。
+
+        模拟 r21 部署前的首次对账（旧口径：主根因 attempt.accounting-unresolved，总账 reconciliation_committed 已提交，
+        对应 ARM64 总账第 292 条）→ accounting-resolve 补账（第 293 条）→ 新代码续接对账：按首次收据的事实重算真实根因
+        attempt.environment-contaminated，写 write-once 重归属收据，并以追加式历史更正 reconciliation_corrected 把总账中该
+        operation 的根因改记为真实根因。原事件与首次收据字节不变；计数从账务根因移到真实根因；修复证据能绑定真实根因、
+        账务根因已无计数可修；再次续接幂等；续跑门禁与预览现场复核读到真实根因，真实根因达上限时照样挡住。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            ledger_root = Path(str(fixture["ledger"]))
+            attempt_id = self._b0_array_contract_attempt(fixture, restoration_error=self._REAL_CASE_RESTORATION_ERROR)
+            placeholder = root_cause.describe_root_cause(
+                component="reconciler",
+                stable_error_code="attempt.accounting-unresolved",
+                failed_step="official-test",
+                stable_dimensions={"phase": "official"},
+            )
+            # 旧口径（第 38 项之前）：请求账务无法核清时根因选择直接返回账务根因，且没有续接重归属。
+            with mock.patch.object(reconciler, "_attempt_root_cause", return_value=placeholder), mock.patch.object(
+                reconciler, "_legacy_accounting_placeholder", return_value=False, create=True
+            ):
+                first = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(first["status"], "paused", first.get("decision"))
+            self.assertEqual(first["root_cause"]["root_cause_id"], placeholder["root_cause_id"])
+            operation = f"reconcile-attempt:{attempt_id}"
+            original = next(
+                event for event in codex_upgrade_project_ledger._load_events(ledger_root) if event["operation_id"] == operation
+            )
+            original_path = ledger_root / "events" / f"{int(original['sequence']):06d}.json"
+            original_bytes = original_path.read_bytes()
+            self.assertEqual(original["payload"]["root_cause"]["root_cause_id"], placeholder["root_cause_id"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(ledger_root)["root_cause_counts"][placeholder["root_cause_id"]], 1
+            )
+            receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+            receipt_bytes = receipt_path.read_bytes()
+            resolved = self._b0_accounting_resolve(root, campaign_dir, attempt_id)
+            self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
+
+            # r21 部署后 A2 续接对账（新代码，不打补丁）。
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            real = again["root_cause"]
+            self.assertEqual(
+                (real["stable_error_code"], real["failed_step"]), ("attempt.environment-contaminated", "official-test")
+            )
+            real_id = str(real["root_cause_id"])
+            self.assertEqual([item["root_cause_id"] for item in again["root_causes"]], [real_id])
+            # 补账后账务不再暂停；本夹具的环境判定干净，续接直接可恢复并生成恢复预览。
+            self.assertEqual(again["status"], "recoverable", again.get("decision"))
+            self.assertEqual(again["decision"]["root_cause_counts"], {real_id: 1})
+            reattribution = again["root_cause_reattribution"]
+            self.assertEqual(reattribution["placeholder_root_cause_id"], placeholder["root_cause_id"])
+            self.assertEqual(reattribution["project_correction"]["status"], "appended")
+            stored = json.loads((receipt_path.parent / "root-cause-reattribution.json").read_text(encoding="utf-8"))
+            self.assertEqual(stored["reconciliation_receipt_sha256"], hashlib.sha256(receipt_bytes).hexdigest())
+            self.assertEqual(stored["root_cause"]["root_cause_id"], real_id)
+            self.assertEqual(stored["basis"]["environment_status"], "contaminated")
+            # 首次收据与总账原事件字节都不改写；计数从账务根因移到真实根因（按 Campaign 目标版本分桶）。
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+            self.assertEqual(original_path.read_bytes(), original_bytes)
+            head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertIn(operation, head["event_corrections"])
+            self.assertNotIn(placeholder["root_cause_id"], head["root_cause_counts"])
+            self.assertEqual(head["root_cause_counts"][real_id], 1)
+            target = codex_upgrade_project_ledger.campaign_target_version(head, campaign_id)
+            self.assertEqual(codex_upgrade_project_ledger.root_cause_counts_for(head, target)[real_id], 1)
+            # 再次续接幂等：不追加任何总账事件。
+            sequence = head["sequence"]
+            third = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(third["root_cause"]["root_cause_id"], real_id)
+            self.assertEqual(third["root_cause_reattribution"]["project_correction"]["status"], "already_corrected")
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(ledger_root)["sequence"], sequence)
+            # 消费者读到真实根因；真实根因累计达上限时续跑门禁与预览现场复核照样挡住（不被账务根因绕过）。
+            self.assertEqual(reconciler.receipt_root_cause_ids(receipt_path), [real_id])
+            retry_ids = codex_upgrade._recovery_preview_retry_root_cause_ids(Path(third["recovery_preview_path"]))
+            self.assertEqual(retry_ids, [real_id])
+            with codex_upgrade_project_ledger.campaign_ledger_lock(campaign_dir) as ledger_dir:
+                codex_upgrade_project_ledger.write_batch(
+                    ledger_dir,
+                    operation_id="synthetic-same-real-cause",
+                    event_type="reconciliation_committed",
+                    payload={
+                        "campaign_id": campaign_id,
+                        "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0, "provenance_receipt_sha256": "b" * 64},
+                        "root_cause": {"root_cause_id": real_id},
+                    },
+                    source={"kind": "campaign_event", "sha256": "c" * 64},
+                )
+            codex_upgrade_project_ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "根因达上限"):
+                codex_upgrade_project_ledger.assert_campaign_admitted(
+                    campaign_dir, command="resume", require=True, retry_root_cause_ids=retry_ids
+                )
+            problems = reconciler._recovery_preview_ledger_problems(
+                campaign_dir,
+                fixture["manifest"],
+                reconciler._campaign_event_scope(ledger_root, campaign_id),
+                receipt_path,
+                now=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+            self.assertTrue(any(real_id in item and "上限" in item for item in problems), problems)
+            self.assertFalse(any(placeholder["root_cause_id"] in item for item in problems), problems)
+            # 修复证据绑定真实根因；账务占位根因已无计数可修。
+            bindings = {"fix_commit_sha": "a" * 40, "regression_receipt_sha256": "b" * 64, "deployment_receipt_sha256": "c" * 64}
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "未在总账出现过"):
+                codex_upgrade_project_ledger.record_root_cause_repair(
+                    ledger_root, root_cause_id=placeholder["root_cause_id"], kind="code", bindings=bindings
+                )
+            codex_upgrade_project_ledger.record_root_cause_repair(ledger_root, root_cause_id=real_id, kind="code", bindings=bindings)
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(ledger_root)["root_cause_counts"][real_id], 0)
+
+    def _b0_legacy_placeholder(self):
+        """第 38 项之前的账务占位根因（本夹具 Job 分组下 failed_step 为 official-test）。"""
+
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        return root_cause.describe_root_cause(
+            component="reconciler",
+            stable_error_code="attempt.accounting-unresolved",
+            failed_step="official-test",
+            stable_dimensions={"phase": "official"},
+        )
+
+    def test_b0_reconcile_attempt_legacy_placeholder_before_outbox_is_recorded_as_real_root_cause(self) -> None:
+        """修好接着跑第 38 项：旧口径首次对账写下收据（账务占位根因）后、写 outbox 前中断（部署切换窗口）——续接对账直接
+        按真实根因写 outbox 入账，总账无需更正（not_needed），也不留下账务根因计数。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_root = Path(str(fixture["ledger"]))
+            attempt_id = self._b0_array_contract_attempt(fixture, restoration_error=self._REAL_CASE_RESTORATION_ERROR)
+            placeholder = self._b0_legacy_placeholder()
+            with mock.patch.object(reconciler, "_attempt_root_cause", return_value=placeholder), mock.patch.object(
+                reconciler, "_legacy_accounting_placeholder", return_value=False, create=True
+            ), mock.patch.object(reconciler, "_commit_batch", side_effect=RuntimeError("旧代码在写 outbox 前中断")):
+                with self.assertRaisesRegex(RuntimeError, "写 outbox 前中断"):
+                    reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            operation = f"reconcile-attempt:{attempt_id}"
+            receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+            self.assertEqual(
+                json.loads(receipt_path.read_text(encoding="utf-8"))["root_cause"]["root_cause_id"], placeholder["root_cause_id"]
+            )
+            self.assertNotIn(operation, codex_upgrade_project_ledger.replay_head(ledger_root)["operations"])
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            real_id = str(again["root_cause"]["root_cause_id"])
+            self.assertEqual(again["root_cause"]["stable_error_code"], "attempt.environment-contaminated")
+            self.assertEqual(again["root_cause_reattribution"]["project_correction"]["status"], "not_needed")
+            event = next(
+                item for item in codex_upgrade_project_ledger._load_events(ledger_root) if item["operation_id"] == operation
+            )
+            self.assertEqual(event["payload"]["root_cause"]["root_cause_id"], real_id)
+            self.assertEqual([item["root_cause_id"] for item in event["payload"]["root_causes"]], [real_id])
+            head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(head["event_corrections"], {})
+            self.assertEqual(head["root_cause_counts"].get(real_id), 1)
+            self.assertNotIn(placeholder["root_cause_id"], head["root_cause_counts"])
+
+    def test_b0_reconcile_attempt_legacy_placeholder_with_conflicting_manual_correction_fails_closed(self) -> None:
+        """修好接着跑第 38 项：总账里该 operation 已有人工历史更正、且其根因不是重算的真实根因——自动重归属不覆盖、失败关闭，
+        总账不追加任何事件（每个原 operation 只能更正一次，冲突需人工审计）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_root = Path(str(fixture["ledger"]))
+            attempt_id = self._b0_array_contract_attempt(fixture, restoration_error=self._REAL_CASE_RESTORATION_ERROR)
+            placeholder = self._b0_legacy_placeholder()
+            with mock.patch.object(reconciler, "_attempt_root_cause", return_value=placeholder), mock.patch.object(
+                reconciler, "_legacy_accounting_placeholder", return_value=False, create=True
+            ):
+                reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            operation = f"reconcile-attempt:{attempt_id}"
+            original = next(
+                item for item in codex_upgrade_project_ledger._load_events(ledger_root) if item["operation_id"] == operation
+            )
+            manual_cause = {"root_cause_id": "rc1-" + "e" * 20}
+            manual = dict(original["payload"], root_cause=manual_cause)
+            if "root_causes" in manual:
+                manual["root_causes"] = [manual_cause]
+            codex_upgrade_project_ledger.record_historical_reconciliation_correction(
+                ledger_root, original_operation_id=operation, corrected_payload=manual, reason="人工历史更正（测试夹具）"
+            )
+            sequence = codex_upgrade_project_ledger.replay_head(ledger_root)["sequence"]
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "已有其它历史更正"):
+                reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(ledger_root)["sequence"], sequence)
 
     def test_b0_accounting_resolve_precise_when_new_evidence_resolves_and_rejects_misuse(self) -> None:
         """修好接着跑第 12 项：补回证据后原未决作业已能核清——accounting-resolve 按与对账同一口径精确补账

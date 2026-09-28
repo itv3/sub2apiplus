@@ -648,11 +648,8 @@ def _recovery_preview_ledger_problems(
         problems.append("本 Campaign 已在项目总账终态")
     if campaign_id in head.get("paused_campaigns", {}):
         problems.append("本 Campaign 预算已暂停：先批准延期（延期不会使本预览作废）")
-    receipt = _read_json(receipt_path, "对账收据")
-    cause_ids = [str(receipt["root_cause"]["root_cause_id"])]
-    for item in receipt.get("root_causes") or []:
-        if isinstance(item, Mapping) and item.get("root_cause_id") not in cause_ids:
-            cause_ids.append(str(item["root_cause_id"]))
+    # 第 38 项：有效根因（重归属收据优先），真实根因达上限时不会因读到账务占位根因而放行。
+    cause_ids = receipt_root_cause_ids(receipt_path)
     target_version = project_ledger.campaign_target_version(head, campaign_id)
     at_limit = sorted(set(cause_ids) & set(project_ledger.root_causes_at_limit_for(head, target_version)))
     if at_limit:
@@ -1567,10 +1564,15 @@ def _attempt_root_cause(
     environment_status: str,
     identity_unchanged: bool,
     deadline_expired: bool,
-    request_status: str | None,
     jobs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """生成硬停线或历史 fallback 根因；账本 ``stopped`` 本身不是 deadline 证据。"""
+    """生成硬停线或历史 fallback 根因；账本 ``stopped`` 本身不是 deadline 证据。
+
+    修好接着跑第 38 项：请求账务无法核清不再是根因。账务未决是"失败之后请求数核算不了"的记账状态，不是 attempt
+    失败的原因：它由判定按请求部分 unresolved／总账 blocked 暂停（accounting-resolve 补账后继续），不进根因计数。
+    否则它会盖住环境污染、中断等真实原因——修复证据只能绑到账务根因上，而不同真实原因引起的账务未决又都累计到
+    同一个账务根因（与第 32 项同构）。优先级：环境污染 > 工具身份变化 > 到期 > 中断。
+    """
 
     groups = jobs["groups"]
     failed_step = "reservation"
@@ -1583,9 +1585,7 @@ def _attempt_root_cause(
     elif groups["complete"]:
         failed_step = "after-" + groups["complete"][-1]
     code = "attempt.interrupted"
-    if request_status == "unresolved":
-        code = "attempt.accounting-unresolved"
-    elif environment_status == "contaminated":
+    if environment_status == "contaminated":
         code = "attempt.environment-contaminated"
     elif not identity_unchanged:
         code = "attempt.identity-changed"
@@ -1704,6 +1704,288 @@ def _merge_root_causes(
         seen.add(cause_id)
         merged.append(dict(item))
     return merged
+
+
+def _attempt_effective_root_causes(
+    *,
+    phase: str,
+    attempt: Mapping[str, Any] | None,
+    environment_status: str,
+    identity_unchanged: bool,
+    deadline_expired: bool,
+    jobs: Mapping[str, Any],
+    ledger_status: Any,
+    recorded_root_causes: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """attempt 失败的有效根因：主根因与按稳定 ID 去重的根因数组（主根因在首位）。
+
+    结构化 Job／门禁观测优先于普通 interrupted，也不能被历史 stopped 倒推成 deadline。旧 Campaign 已经 stopped 时，
+    当前部署造成的身份漂移只决定不能恢复，不能追溯改写 attempt 当时已经结构化记录的失败根因。首次对账与第 38 项的
+    续接重归属共用本函数，保证同一组事实得到同一根因。
+    """
+
+    fallback = _attempt_root_cause(
+        phase=phase,
+        attempt=attempt,
+        environment_status=environment_status,
+        identity_unchanged=identity_unchanged,
+        deadline_expired=deadline_expired,
+        jobs=jobs,
+    )
+    recorded_preferred = fallback["stable_error_code"] == "attempt.interrupted" or (
+        ledger_status == "stopped" and fallback["stable_error_code"] == "attempt.identity-changed"
+    )
+    cause = dict(recorded_root_causes[0]) if recorded_root_causes and recorded_preferred else fallback
+    return cause, _merge_root_causes(cause, recorded_root_causes)
+
+
+# 修好接着跑第 38 项：第 38 项之前的首次对账会把 attempt.accounting-unresolved 写成主根因（下称"账务占位根因"）。对账收据
+# 只写一次、续接以首次收据为准（第 37 项），占位根因于是永远盖住真实根因：补账后真实根因不入账，修复证据只能绑到
+# 账务根因上。续接时识别占位根因，按首次收据记录的事实（不看当前环境、身份与账务）重算真实根因，写 write-once 的
+# 重归属收据，再以追加式历史更正（reconciliation_corrected）把总账里该 operation 的根因改记为真实根因：原事件字节
+# 不动，重放时计数从占位根因移到真实根因（占位根因不计数）。
+ACCOUNTING_PLACEHOLDER_CODE = "attempt.accounting-unresolved"
+ROOT_CAUSE_REATTRIBUTION_SCHEMA = "attempt-root-cause-reattribution/v1"
+ROOT_CAUSE_REATTRIBUTION_NAME = "root-cause-reattribution.json"
+_PAYLOAD_ROOT_CAUSE_FIELDS = ("root_cause_id", "stable_error_code", "failed_step", "stable_dimensions", "component")
+
+
+def _payload_root_cause(cause: Mapping[str, Any]) -> dict[str, Any]:
+    """总账 payload 与重归属收据里的根因形态：只留身份字段，不含随枚举表变化的 codes_sha256。"""
+
+    return {field: cause[field] for field in _PAYLOAD_ROOT_CAUSE_FIELDS if field in cause}
+
+
+def _legacy_accounting_placeholder(stored: Mapping[str, Any]) -> bool:
+    """首次对账收据的主根因是否为第 38 项之前的账务占位根因。"""
+
+    cause = stored.get("root_cause")
+    return isinstance(cause, Mapping) and cause.get("stable_error_code") == ACCOUNTING_PLACEHOLDER_CODE
+
+
+def _reattributed_root_causes(
+    stored: Mapping[str, Any],
+    *,
+    phase: str,
+    attempt: Mapping[str, Any] | None,
+    plan: Mapping[str, Any],
+    project_root: Path,
+    array_contract: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """按首次对账收据记录的事实重算真实根因，返回（主根因、根因数组、重算依据）。
+
+    只读首次收据里不可变的事实（环境状态、工具身份是否未变、账本状态与截止、Job 分组、观测时刻）与不可变的 attempt，
+    所以任何时候续接都得到同一结果；数组合同下保留首次收据里除占位根因外的已记录根因。
+    """
+
+    environment = stored.get("environment")
+    identity = stored.get("tool_identity")
+    ledger = stored.get("campaign_ledger")
+    jobs = stored.get("jobs")
+    if not (
+        isinstance(environment, Mapping)
+        and isinstance(environment.get("status"), str)
+        and isinstance(identity, Mapping)
+        and isinstance(identity.get("unchanged"), bool)
+        and isinstance(ledger, Mapping)
+        and isinstance(jobs, Mapping)
+        and isinstance(jobs.get("groups"), Mapping)
+        and isinstance(stored.get("observed_at_utc"), str)
+    ):
+        raise ReconcilerError("首次对账收据缺少重算真实根因所需的事实（environment／tool_identity／campaign_ledger／jobs）")
+    deadline_expired = _attempt_deadline_expired(
+        attempt=attempt,
+        ledger=ledger,
+        plan=plan,
+        campaign_deadline_at_utc=stored.get("campaign_deadline_at_utc"),
+        now=str(stored["observed_at_utc"]),
+        project_ledger_root=project_root,
+    )
+    recorded = (
+        [
+            dict(item)
+            for item in stored.get("root_causes") or []
+            if isinstance(item, Mapping) and item.get("stable_error_code") != ACCOUNTING_PLACEHOLDER_CODE
+        ]
+        if array_contract
+        else []
+    )
+    cause, root_causes = _attempt_effective_root_causes(
+        phase=phase,
+        attempt=attempt,
+        environment_status=str(environment["status"]),
+        identity_unchanged=bool(identity["unchanged"]),
+        deadline_expired=deadline_expired,
+        jobs=jobs,
+        ledger_status=ledger.get("status"),
+        recorded_root_causes=recorded,
+    )
+    basis = {
+        "environment_status": str(environment["status"]),
+        "identity_unchanged": bool(identity["unchanged"]),
+        "deadline_expired": deadline_expired,
+        "ledger_status": ledger.get("status"),
+        "job_groups": {state: list(jobs["groups"].get(state, [])) for state in JOB_STATES},
+    }
+    return cause, root_causes, basis
+
+
+def _write_root_cause_reattribution(
+    receipt_path: Path,
+    *,
+    campaign_id: str,
+    attempt_id: str,
+    recovery_revision: str | None,
+    operation_id: str,
+    placeholder: Mapping[str, Any],
+    cause: Mapping[str, Any],
+    root_causes: Sequence[Mapping[str, Any]],
+    basis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """写重归属收据（与对账收据同目录、write-once、不含时间戳，重跑逐字相同）并返回其绑定。"""
+
+    payload = {
+        "schema_version": ROOT_CAUSE_REATTRIBUTION_SCHEMA,
+        "campaign_id": campaign_id,
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "operation_id": operation_id,
+        "reconciliation_receipt_sha256": _file_sha256(receipt_path),
+        "placeholder_root_cause": _payload_root_cause(placeholder),
+        "root_cause": _payload_root_cause(cause),
+        "root_causes": [_payload_root_cause(item) for item in root_causes],
+        "basis": dict(basis),
+        "reason": "修好接着跑第 38 项：请求账务无法核清只是暂停原因、不是失败根因；按首次对账收据的事实把账务占位根因重归属为真实根因。",
+    }
+    path = receipt_path.parent / ROOT_CAUSE_REATTRIBUTION_NAME
+    _write_or_verify(path, payload, volatile=())
+    return {"path": path, "sha256": _file_sha256(path)}
+
+
+def _root_cause_identity(payload: Mapping[str, Any]) -> tuple[str | None, tuple[str, ...]]:
+    """payload 的根因身份：主根因 ID 与全部根因 ID（排序去重）。只比 ID，不受 codes_sha256 等审计字段影响。"""
+
+    primary = payload.get("root_cause")
+    primary_id = str(primary["root_cause_id"]) if isinstance(primary, Mapping) and primary.get("root_cause_id") else None
+    ids = {primary_id} if primary_id is not None else set()
+    for item in payload.get("root_causes") or []:
+        if isinstance(item, Mapping) and item.get("root_cause_id"):
+            ids.add(str(item["root_cause_id"]))
+    return primary_id, tuple(sorted(ids))
+
+
+def _ensure_reattribution_correction(
+    project_root: Path,
+    *,
+    operation_id: str,
+    placeholder_id: str,
+    cause: Mapping[str, Any],
+    root_causes: Sequence[Mapping[str, Any]],
+    reattribution_sha256: str,
+) -> dict[str, Any]:
+    """让总账中该 operation 的有效根因等于重归属后的真实根因（幂等）。
+
+    - 原事件已按真实根因写入（outbox 在本次续接中才由新代码生成）→ ``not_needed``；
+    - 已有同一真实根因的历史更正 → ``already_corrected``；已有别的更正 → 失败关闭（与人工更正冲突，需审计）；
+    - 否则原事件根因必须含占位根因，追加 ``reconciliation_corrected``：corrected_payload 是原 payload 的副本，只把
+      主根因换成真实根因、根因数组去掉占位项并以真实根因为首；请求部分、失败观测与 Campaign 归属逐字不变，所以
+      账务（含其后的 accounting_resolved 补账）与按目标版本分桶都照旧重放。
+    """
+
+    expected = (
+        str(cause["root_cause_id"]),
+        tuple(sorted({str(item["root_cause_id"]) for item in root_causes} | {str(cause["root_cause_id"])})),
+    )
+    try:
+        events = project_ledger._load_events(project_root)
+    except project_ledger.ProjectLedgerError as error:
+        raise ReconcilerError(f"项目总账事件读取失败：{error}") from error
+    original = next((event for event in events if event["operation_id"] == operation_id), None)
+    if original is None or original["event_type"] != "reconciliation_committed":
+        raise ReconcilerError(f"对账 operation {operation_id} 未以 reconciliation_committed 进入项目总账，无法重归属根因")
+    corrections = [
+        event
+        for event in events
+        if event["event_type"] == "reconciliation_corrected"
+        and isinstance(event.get("payload"), Mapping)
+        and event["payload"].get("original_operation_id") == operation_id
+    ]
+    if corrections:
+        corrected_payload = corrections[0]["payload"].get("corrected_payload")
+        if isinstance(corrected_payload, Mapping) and _root_cause_identity(corrected_payload) == expected:
+            return {
+                "status": "already_corrected",
+                "operation_id": corrections[0]["operation_id"],
+                "corrected_payload_sha256": corrections[0]["payload"].get("corrected_payload_sha256"),
+            }
+        raise ReconcilerError(
+            f"operation {operation_id} 已有其它历史更正，其根因与真实根因重归属不一致；需人工审计后再续接"
+        )
+    original_payload = original["payload"]
+    original_identity = _root_cause_identity(original_payload)
+    if original_identity == expected:
+        return {"status": "not_needed", "operation_id": None, "corrected_payload_sha256": None}
+    if placeholder_id not in original_identity[1]:
+        raise ReconcilerError(
+            f"operation {operation_id} 在总账的根因既不是账务占位根因也不是重算的真实根因，拒绝自动更正"
+        )
+    corrected = json.loads(json.dumps(original_payload, ensure_ascii=False))
+    corrected["root_cause"] = _payload_root_cause(cause)
+    if "root_causes" in original_payload:
+        kept = [
+            dict(item)
+            for item in original_payload.get("root_causes") or []
+            if isinstance(item, Mapping) and item.get("root_cause_id") != placeholder_id
+        ]
+        primary = next((item for item in kept if item.get("root_cause_id") == cause["root_cause_id"]), dict(cause))
+        corrected["root_causes"] = _merge_root_causes(primary, kept)
+    reason = (
+        f"修好接着跑第 38 项：账务未决不是失败根因。把账务占位根因 {placeholder_id}（{ACCOUNTING_PLACEHOLDER_CODE}）"
+        f"重归属为真实根因 {cause['root_cause_id']}（{cause['stable_error_code']}），依据首次对账收据的事实；"
+        f"重归属收据 sha256 {reattribution_sha256}。"
+    )
+    try:
+        written = project_ledger.record_historical_reconciliation_correction(
+            project_root,
+            original_operation_id=operation_id,
+            corrected_payload=corrected,
+            reason=reason,
+            original_event_sha256=original["event_sha256"],
+            original_payload_sha256=original["payload_sha256"],
+        )
+    except project_ledger.ProjectLedgerError as error:
+        raise ReconcilerError(f"总账根因重归属更正失败：{error}") from error
+    return {
+        "status": written["status"],
+        "operation_id": written["operation_id"],
+        "corrected_payload_sha256": written["corrected_payload_sha256"],
+    }
+
+
+def receipt_root_cause_ids(receipt_path: Path) -> list[str]:
+    """attempt 对账收据的有效根因 ID（主根因在前、去重）。
+
+    修好接着跑第 38 项：同目录存在重归属收据时以它为准（首次收据的账务占位根因已在总账更正为真实根因）；重归属收据
+    存在却不绑定本收据即失败关闭。续跑门禁（resume 只挡本次根因）与恢复预览现场复核共用本函数，真实根因达上限时
+    不会因为读到占位根因而被绕过。
+    """
+
+    receipt = _read_json(receipt_path, "attempt 对账收据")
+    source: Mapping[str, Any] = receipt
+    reattribution_path = receipt_path.parent / ROOT_CAUSE_REATTRIBUTION_NAME
+    if reattribution_path.exists() or reattribution_path.is_symlink():
+        reattribution = _read_json(reattribution_path, "根因重归属收据")
+        if (
+            reattribution.get("schema_version") != ROOT_CAUSE_REATTRIBUTION_SCHEMA
+            or reattribution.get("reconciliation_receipt_sha256") != _file_sha256(receipt_path)
+        ):
+            raise ReconcilerError("根因重归属收据与同目录的对账收据不绑定")
+        source = reattribution
+    ids: list[str] = []
+    for item in [source.get("root_cause"), *(source.get("root_causes") or [])]:
+        if isinstance(item, Mapping) and isinstance(item.get("root_cause_id"), str) and item["root_cause_id"] not in ids:
+            ids.append(item["root_cause_id"])
+    return ids
 
 
 def recovery_job_inventory(roots: Sequence[str], *, scan_stats: dict[str, int] | None = None) -> dict[str, Any]:
@@ -2870,11 +3152,11 @@ def reconcile_attempt(
         _attempt_recorded_failures(attempt)
     )
 
-    # 步骤 2 的请求部分随后核算（它也是根因 accounting-unresolved 的依据）。
+    # 步骤 2 的请求部分随后核算。第 38 项起它只决定账务暂停（unresolved），不再是根因依据。
     request_part, provenance_binding, provenance_copy_path = _request_part(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
-    fallback_cause = _attempt_root_cause(
+    failure_cause, failure_root_causes = _attempt_effective_root_causes(
         phase=phase,
         attempt=attempt,
         environment_status=environment["status"],
@@ -2887,15 +3169,9 @@ def reconcile_attempt(
             now=observed,
             project_ledger_root=project_root,
         ),
-        request_status=request_part["status"],
         jobs=jobs,
-    )
-    # 结构化 Job／门禁观测优先于普通 interrupted，也不能被历史 stopped 倒推成
-    # deadline。旧 Campaign 已经 stopped 时，当前部署造成的身份漂移只决定不能恢复，
-    # 不能追溯改写 attempt 当时已经结构化记录的失败根因。
-    recorded_cause_preferred = fallback_cause["stable_error_code"] == "attempt.interrupted" or (
-        ledger.get("status") == "stopped"
-        and fallback_cause["stable_error_code"] == "attempt.identity-changed"
+        ledger_status=ledger.get("status"),
+        recorded_root_causes=recorded_root_causes,
     )
     if evolution_invalidation is not None or isolation_invalidation is not None or conflict_invalidation is not None:
         # 演进失效不是失败：不编失败根因、不计同根因次数（总账载荷不带 root_cause）。计时账本的暂停原因
@@ -2911,15 +3187,8 @@ def reconcile_attempt(
         root_causes = [cause]
         array_contract = False
         failure_observations = []
-    elif (
-        recorded_root_causes
-        and recorded_cause_preferred
-    ):
-        cause = dict(recorded_root_causes[0])
-        root_causes = _merge_root_causes(cause, recorded_root_causes)
     else:
-        cause = fallback_cause
-        root_causes = _merge_root_causes(cause, recorded_root_causes)
+        cause, root_causes = failure_cause, failure_root_causes
 
     # 步骤 1：Campaign 侧写 reconciliation 收据（写一次），再登记账本 attempt_failed。
     receipt = {
@@ -3003,6 +3272,34 @@ def reconcile_attempt(
                 dict(item) for item in stored["failure_observations"]
             ]
             root_causes = [dict(item) for item in stored["root_causes"]]
+        # 修好接着跑第 38 项：首次收据（第 38 项之前写下）的主根因是账务占位根因时，按首次收据的事实重算真实根因并写
+        # 重归属收据；之后的账本事件、outbox 与判定都用真实根因，推送后再把总账里的占位根因更正为真实根因。
+        reattribution: dict[str, Any] | None = None
+        if _legacy_accounting_placeholder(stored):
+            placeholder = dict(cause)
+            cause, root_causes, basis = _reattributed_root_causes(
+                stored,
+                phase=phase,
+                attempt=attempt,
+                plan=plan,
+                project_root=project_root,
+                array_contract=array_contract,
+            )
+            reattribution = {
+                "placeholder": placeholder,
+                "basis": basis,
+                "receipt": _write_root_cause_reattribution(
+                    receipt_path,
+                    campaign_id=str(manifest["campaign_id"]),
+                    attempt_id=attempt_id,
+                    recovery_revision=recovery_revision,
+                    operation_id=f"reconcile-attempt:{subject}",
+                    placeholder=placeholder,
+                    cause=cause,
+                    root_causes=root_causes,
+                    basis=basis,
+                ),
+            }
         receipt_binding = _binding(campaign_dir, receipt_path, "reconciliation")
         ledger_events: list[dict[str, Any]] = []
         ledger_note = "recorded"
@@ -3183,6 +3480,26 @@ def reconcile_attempt(
         )
     # 步骤 3、4：推送并锁内重放。
     pushed, head_after = _push_and_replay(project_root, campaign_dir, now=observed)
+    reattribution_output: dict[str, Any] | None = None
+    if reattribution is not None:
+        # 第 38 项：总账原事件若是按占位根因写入的（首次对账已推送），追加历史更正把它改记为真实根因，再重放。
+        correction = _ensure_reattribution_correction(
+            project_root,
+            operation_id=f"reconcile-attempt:{subject}",
+            placeholder_id=str(reattribution["placeholder"]["root_cause_id"]),
+            cause=cause,
+            root_causes=root_causes,
+            reattribution_sha256=str(reattribution["receipt"]["sha256"]),
+        )
+        if correction["status"] == "appended":
+            _plan_after, head_after = _project_facts(project_root)
+        reattribution_output = {
+            "placeholder_root_cause_id": reattribution["placeholder"]["root_cause_id"],
+            "root_cause_id": cause["root_cause_id"],
+            "basis": reattribution["basis"],
+            "receipt": _binding(campaign_dir, reattribution["receipt"]["path"], "root_cause_reattribution"),
+            "project_correction": correction,
+        }
     # 步骤 5：判定。
     decision = _decide(
         head=head_after,
@@ -3229,6 +3546,8 @@ def reconcile_attempt(
     if array_contract:
         result["failure_observations"] = failure_observations
         result["root_causes"] = root_causes
+    if reattribution_output is not None:
+        result["root_cause_reattribution"] = reattribution_output
     if evolution_invalidation is not None:
         result["tool_evolution_invalidation"] = dict(evolution_invalidation)
     if isolation_invalidation is not None:

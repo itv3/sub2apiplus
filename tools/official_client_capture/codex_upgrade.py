@@ -22488,16 +22488,10 @@ def _recovery_preview_retry_root_cause_ids(preview_path: Any) -> list[str] | Non
     if receipt_path.is_symlink() or not receipt_path.is_file():
         return None
     try:
-        receipt = _read_json(receipt_path, "attempt 对账收据")
-    except ConfigurationError:
+        # 修好接着跑第 38 项：取有效根因（同目录重归属收据优先），账务占位根因不能替真实根因绕过上限门禁。
+        ids = reconciler.receipt_root_cause_ids(receipt_path)
+    except reconciler.ReconcilerError:
         return None
-    ids: list[str] = []
-    for item in receipt.get("root_causes") if isinstance(receipt.get("root_causes"), list) else []:
-        if isinstance(item, Mapping) and isinstance(item.get("root_cause_id"), str):
-            ids.append(item["root_cause_id"])
-    cause = receipt.get("root_cause")
-    if isinstance(cause, Mapping) and isinstance(cause.get("root_cause_id"), str):
-        ids.append(cause["root_cause_id"])
     return sorted(set(ids)) if ids else None
 
 

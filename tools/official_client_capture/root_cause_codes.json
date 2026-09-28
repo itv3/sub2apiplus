@@ -31,7 +31,7 @@
     "attempt.accounting-unresolved": {
       "component": "reconciler",
       "stable_dimensions": ["phase"],
-      "description": "attempt 的模型请求数无法从不可变证据确定。"
+      "description": "attempt 的模型请求数无法从不可变证据确定。修好接着跑第 38 项起不再作为根因生成：账务未决只是暂停原因（请求部分 unresolved／总账 blocked，accounting-resolve 补账后继续），不进根因计数；本码只供历史事件重放，第 38 项之前以它为主根因入账的 attempt 在续接对账时由 reconciliation_corrected 更正为按首次收据事实重算的真实根因。"
     },
     "attempt.environment-contaminated": {
       "component": "reconciler",
