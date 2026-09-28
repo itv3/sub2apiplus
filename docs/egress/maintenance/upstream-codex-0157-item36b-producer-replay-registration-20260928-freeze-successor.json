@@ -1,0 +1,86 @@
+{
+  "base_commit": "0dbea31e6b6a5c4cc224decd4e90f87a99e94d98",
+  "changed_path_count": 2,
+  "current_commit": "f9727c765eaf96003577d0d6d5ee67a166655b8b",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4323,
+  "frozen_path_count": 1399,
+  "identity_sha256": "0469864c40eb20c16e1dbe2311109bed73110d3dd665c269809af8af7e770421",
+  "issued_at_utc": "2026-09-28T01:24:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-item36b-producer-replay-registration-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "predecessor_sha256s": [
+        "48304c4c7c8028b7ac613d862bff88ec7abf8d98fa21cc87fe6d46eb337a015a"
+      ],
+      "reason": "修好接着跑第 36 项补丁：登记修复前的环境收据生成器 9e10bd0f 为版本 8 只读重放身份（r18 部署后 P0 收据重放报采集器身份漂移）；事实合同不变、只允许重放不允许生成新 facts path=tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-coordinate-decoupling-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item36-maintenance-wait-invalid-transient-20260928-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1b62b096cc543350d0060c0eea5f97e2f833e47a95b22c346fdffaa27fe66968"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_arm64_environment_receipt.py",
+      "predecessor_sha256s": [
+        "94466886cdd2cc1b3552d9e10fa11973ee676529f41d8af97b770bf0dde50a1c"
+      ],
+      "reason": "修好接着跑第 36 项补丁：登记修复前的环境收据生成器 9e10bd0f 为版本 8 只读重放身份（r18 部署后 P0 收据重放报采集器身份漂移）；事实合同不变、只允许重放不允许生成新 facts path=tools/official_client_capture/tests/test_codex_upgrade_arm64_environment_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5556d822ff7f76654de449434862c21a9ebeca21dc715ac7128a91e37ea9e833"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
