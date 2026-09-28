@@ -54192,6 +54192,57 @@ def validate_profile_derivation(
     }
 
 
+def _canonical_deleted_rule_entries(migration: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """批准迁移清单里的 delete 决策，按旧规则编号索引（修好接着跑第 68 项）。
+
+    canonical 分区把 delete 决策以旧规则编号计入 affected_rule_ids，但目标版本已没有这些规则：逐规则
+    断言结果（results.json）只唯一覆盖目标规则全集，不会、也不得出现已删除规则的行。它们的 assert 项
+    由批准迁移清单里的删除决策承接，与 inherited 规则从批准迁移收据重放同一口径。
+    """
+
+    deleted: dict[str, dict[str, Any]] = {}
+    for entry in migration.get("entries", []):
+        if isinstance(entry, Mapping) and entry.get("classification") == "delete":
+            deleted[str(entry.get("baseline_rule"))] = dict(entry)
+    return deleted
+
+
+def _canonical_require_target_rule_facts(
+    rows: Any,
+    migration: Mapping[str, Any],
+    partition: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """逐规则通过事实必须唯一覆盖目标规则全集，每条 pass／full；返回按规则编号索引的行。
+
+    目标规则全集 = affected（去掉以旧编号计入的 delete 决策）∪ inherited（第 68 项）：results.json 只覆盖
+    目标版本的规则，delete 规则既不要求、也不接受断言行，由批准迁移清单承接。
+    """
+
+    if not isinstance(rows, list):
+        raise ConfigurationError("逐规则断言结果 rules 非法。")
+    rule_rows = {
+        str(row.get("rule")): row
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("rule"), str)
+    }
+    deleted_rules = _canonical_deleted_rule_entries(migration)
+    if not set(deleted_rules).issubset(partition["affected_rule_ids"]):
+        raise ConfigurationError("规则迁移清单的删除决策未计入 affected_rule_ids。")
+    expected_rules = (set(partition["affected_rule_ids"]) - set(deleted_rules)) | set(
+        partition["inherited_rule_ids"]
+    )
+    if (
+        set(rule_rows) != expected_rules
+        or len(rule_rows) != len(rows)
+        or any(
+            row.get("status") != "pass" or row.get("evidence_level") != "full"
+            for row in rule_rows.values()
+        )
+    ):
+        raise ConfigurationError("canonical import 的逐规则通过事实未唯一覆盖批准规则全集。")
+    return rule_rows
+
+
 def _canonical_import_verified_vc5_subject(
     arguments: argparse.Namespace,
     manifest: dict[str, Any],
@@ -54278,26 +54329,8 @@ def _canonical_import_verified_vc5_subject(
         "逐规则断言结果",
     )
     assertions = _read_json(assertion_path, "逐规则断言结果")
-    rows = assertions.get("rules")
-    if not isinstance(rows, list):
-        raise ConfigurationError("逐规则断言结果 rules 非法。")
-    rule_rows = {
-        str(row.get("rule")): row
-        for row in rows
-        if isinstance(row, Mapping) and isinstance(row.get("rule"), str)
-    }
-    expected_rules = set(partition["affected_rule_ids"]) | set(
-        partition["inherited_rule_ids"]
-    )
-    if (
-        set(rule_rows) != expected_rules
-        or len(rule_rows) != len(rows)
-        or any(
-            row.get("status") != "pass" or row.get("evidence_level") != "full"
-            for row in rule_rows.values()
-        )
-    ):
-        raise ConfigurationError("canonical import 的逐规则通过事实未唯一覆盖批准规则全集。")
+    # 目标规则全集 = affected（去掉以旧编号计入的 delete 决策）∪ inherited；delete 规则由迁移清单承接（第 68 项）。
+    _canonical_require_target_rule_facts(assertions.get("rules"), migration, partition)
 
     build_reference = acceptance.get("candidate_build_receipt")
     if (
@@ -55292,7 +55325,47 @@ def _canonical_compare(campaign_dir: Path, checkpoint: Mapping[str, Any]) -> dic
             for row in rows
             if isinstance(row, Mapping) and isinstance(row.get("rule"), str)
         }
+        # 第 68 项：delete 决策以旧编号计入 affected，目标版本没有这些规则、不会有机器断言行；它们的 assert 项
+        # 由 checkpoint 绑定的同一份批准迁移清单里的删除决策承接，其余 affected 规则照旧要求 pass／full 断言。
+        classification = _load_stage_result(
+            campaign_dir,
+            "classify",
+            _replay_machine_receipts=False,
+            _shallow=True,
+            _verified_campaign_manifest=manifest,
+        )
+        migration_reference = classification.get("migration_manifest")
+        _require_file_binding(migration_reference, "规则迁移清单")
+        assert isinstance(migration_reference, dict)
+        migration_path = _campaign_file(campaign_dir, migration_reference["path"])
+        if file_sha256(migration_path) != checkpoint["migration"].get("manifest_sha256"):
+            raise ConfigurationError("canonical compare 的规则迁移清单与 checkpoint 绑定不一致。")
+        deleted_rules = _canonical_deleted_rule_entries(_read_json(migration_path, "规则迁移清单"))
+        if not set(deleted_rules).issubset(affected) or set(deleted_rules).intersection(rule_rows):
+            raise ConfigurationError("canonical compare 的删除决策与 affected 规则或断言结果不一致。")
         for rule_id in affected:
+            if rule_id in deleted_rules:
+                current = _canonical_latest_checkpoint(campaign_dir)
+                assertion_id = f"assert-{rule_id}"
+                if assertion_id in _canonical_item_index(current):
+                    continue
+                current = _canonical_complete_item(
+                    campaign_dir,
+                    item_id=assertion_id,
+                    receipt_path=migration_path,
+                    result_key=_fingerprint(
+                        {
+                            "migration_manifest_sha256": checkpoint["migration"]["manifest_sha256"],
+                            "entry": deleted_rules[rule_id],
+                        }
+                    ),
+                    details={
+                        "kind": "deleted-rule",
+                        "rule_id": rule_id,
+                        "classification": "delete",
+                    },
+                )
+                continue
             row = rule_rows.get(rule_id)
             if (
                 not isinstance(row, Mapping)

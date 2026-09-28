@@ -287,6 +287,116 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "acceptance"):
                 codex_upgrade._canonical_accept(Path("/unused"), checkpoint)
 
+    # ---- 修好接着跑第 68 项：delete 决策不要求目标版本的机器断言 ------------------------------------------
+    # 2026-09-28 0.157 VC-5 accept 通过后 canonical 离线预览 A 报“逐规则通过事实未唯一覆盖批准规则全集”：迁移清单 46 项
+    # （inherit 21、change 9、condition_change 9、add 4、delete 3），results.json 按指南只唯一覆盖目标规则全集 43 条，
+    # 判定却把以旧编号计入 affected 的 3 条 delete 也算进必须有通过事实的集合；compare 对它们同样要求机器断言。
+
+    _MIGRATION_68 = {
+        "status": "approved",
+        "entries": [
+            {"classification": "inherit", "baseline_rule": "SPEC-I-001", "target_rule": "SPEC-I-001"},
+            {"classification": "change", "baseline_rule": "SPEC-C-002", "target_rule": "SPEC-C-002"},
+            {"classification": "delete", "baseline_rule": "SPEC-D-003", "target_rule": None},
+        ],
+    }
+
+    @staticmethod
+    def _rule_row(rule: str, status: str = "pass") -> dict[str, str]:
+        return {"rule": rule, "status": status, "evidence_level": "full"}
+
+    def test_item68_target_rule_facts_cover_target_rules_without_deleted(self) -> None:
+        from tools.official_client_capture import incremental_recovery
+
+        partition = incremental_recovery.canonical_rule_partition(self._MIGRATION_68)
+        self.assertEqual(partition["affected_rule_ids"], ["SPEC-C-002", "SPEC-D-003"])
+        rows = [self._rule_row("SPEC-C-002"), self._rule_row("SPEC-I-001")]
+        facts = codex_upgrade._canonical_require_target_rule_facts(rows, self._MIGRATION_68, partition)
+        self.assertEqual(sorted(facts), ["SPEC-C-002", "SPEC-I-001"])
+        rejected = {
+            "断言里出现已删除规则": [*rows, self._rule_row("SPEC-D-003")],
+            "缺目标规则": [self._rule_row("SPEC-I-001")],
+            "重复行": [*rows, self._rule_row("SPEC-C-002")],
+            "未通过": [self._rule_row("SPEC-C-002", "fail"), self._rule_row("SPEC-I-001")],
+        }
+        for label, candidate_rows in rejected.items():
+            with self.subTest(label), self.assertRaisesRegex(codex_upgrade.ConfigurationError, "未唯一覆盖批准规则全集"):
+                codex_upgrade._canonical_require_target_rule_facts(candidate_rows, self._MIGRATION_68, partition)
+        # 迁移清单里的删除决策必须计入 affected：分区被改动时失败关闭。
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "删除决策未计入"):
+            codex_upgrade._canonical_require_target_rule_facts(
+                rows, self._MIGRATION_68, {**partition, "affected_rule_ids": ["SPEC-C-002"]}
+            )
+
+    def _item68_compare(self, root: Path, *, rows: list[dict[str, str]], manifest_sha256: str | None = None):
+        assertion_file = root / "assertions" / "results.json"
+        migration_file = root / "classification" / "approved" / "rule-migration.json"
+        self._write(assertion_file, {"rules": rows})
+        self._write(migration_file, self._MIGRATION_68)
+        migration_sha256 = codex_upgrade.file_sha256(migration_file)
+        checkpoint = {
+            "campaign": {"target_version": "0.157.0", "candidate_id": "candidate-a", "attempt_id": "attempt-a"},
+            "migration": {
+                "manifest_sha256": manifest_sha256 or migration_sha256,
+                "total_rule_count": 3,
+                "affected_rule_ids": ["SPEC-C-002", "SPEC-D-003"],
+                "inherited_rule_ids": ["SPEC-I-001"],
+            },
+            "items": [
+                {"item_id": "candidate-seal", "details": {"kind": "candidate-seal"}},
+                {"item_id": "compare", "details": {"kind": "compare"}},
+            ],
+            "checkpoint_sha256": "1" * 64,
+        }
+        stages = {
+            "compare": {"status": "complete", "offline_only": True, "equal": True, "package_digest": "a" * 64},
+            "accept": {"assertion_result": {"path": "assertions/results.json",
+                                            "sha256": codex_upgrade.file_sha256(assertion_file)}},
+            "classify": {"migration_manifest": {"path": "classification/approved/rule-migration.json",
+                                                "sha256": migration_sha256}},
+        }
+        completed = mock.Mock(return_value=checkpoint)
+        with (
+            mock.patch.object(codex_upgrade, "_require_formal_campaign", return_value=self._manifest("0.157.0")),
+            mock.patch.object(codex_upgrade, "_load_stage_result",
+                              side_effect=lambda _campaign, stage, *args, **kwargs: stages[stage]),
+            mock.patch.object(codex_upgrade, "_campaign_file", side_effect=lambda _campaign, path: root / path),
+            mock.patch.object(codex_upgrade, "_canonical_latest_checkpoint", return_value=checkpoint),
+            mock.patch.object(codex_upgrade, "_canonical_complete_item", completed),
+        ):
+            result = codex_upgrade._canonical_compare(root, checkpoint)
+        return result, completed, assertion_file, migration_file, migration_sha256
+
+    def test_item68_canonical_compare_completes_deleted_rule_from_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result, completed, assertion_file, migration_file, migration_sha256 = self._item68_compare(
+                root, rows=[self._rule_row("SPEC-C-002"), self._rule_row("SPEC-I-001")]
+            )
+        self.assertEqual(result["affected_assertion_count"], 2)
+        calls = {call.kwargs["item_id"]: call.kwargs for call in completed.call_args_list}
+        self.assertEqual(sorted(calls), ["assert-SPEC-C-002", "assert-SPEC-D-003"])
+        self.assertEqual(calls["assert-SPEC-C-002"]["receipt_path"], assertion_file)
+        self.assertEqual(calls["assert-SPEC-C-002"]["details"]["kind"], "affected-rule-assertion")
+        deleted = calls["assert-SPEC-D-003"]
+        self.assertEqual(deleted["receipt_path"], migration_file)
+        self.assertEqual(deleted["details"], {"kind": "deleted-rule", "rule_id": "SPEC-D-003", "classification": "delete"})
+        self.assertEqual(deleted["result_key"], codex_upgrade._fingerprint(
+            {"migration_manifest_sha256": migration_sha256, "entry": self._MIGRATION_68["entries"][2]}))
+
+    def test_item68_canonical_compare_rejects_deleted_row_binding_drift_and_missing_target(self) -> None:
+        cases = {
+            "断言里出现已删除规则": ({"rows": [self._rule_row("SPEC-C-002"), self._rule_row("SPEC-I-001"),
+                                               self._rule_row("SPEC-D-003")]}, "删除决策与 affected 规则或断言结果不一致"),
+            "迁移清单与 checkpoint 绑定漂移": ({"rows": [self._rule_row("SPEC-C-002"), self._rule_row("SPEC-I-001")],
+                                               "manifest_sha256": "f" * 64}, "迁移清单与 checkpoint 绑定不一致"),
+            "目标规则缺断言": ({"rows": [self._rule_row("SPEC-I-001")]}, "缺少已通过的机器断言：SPEC-C-002"),
+        }
+        for label, (options, message) in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, message):
+                    self._item68_compare(Path(directory), **options)
+
     def test_intermediate_status_is_success_only_inside_campaign_run(self) -> None:
         """合法停靠点只对父批次成功，直接 CLI 仍以退出码 2 提醒。
 
