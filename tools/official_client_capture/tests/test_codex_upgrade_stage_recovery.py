@@ -1232,8 +1232,10 @@ class OrphanedStageFailureCloseoutTests(unittest.TestCase):
                          ("active", "VC-2", "redispatch-same-batch"))
 
     def test_r2_sealed_recoverable_and_permanent_failures_keep_existing_paths(self) -> None:
-        """可恢复类（environment-prerequisite）与永久类（evidence-integrity）的 R2 封存不补账、行为不变：前者对账后
-        由环境／后处理重派协议唯一承接，后者照旧永久停线且没有任何后继协议。"""
+        """可恢复类（environment-prerequisite）与永久类（evidence-integrity）的 R2 封存，后继路径不变：前者不补账，对账后
+        由环境／后处理重派协议唯一承接；后者照旧永久停线且没有任何后继协议。第 38 项起永久类先补做 owner 未完成的失败
+        收账（与 owner 在线时父监督器收账的结果相同）：补 stage_abandoned＋stop_the_line，停线事件出自收账函数而不是
+        对账自拟。"""
 
         for failure_class in ("environment-prerequisite", "evidence-integrity"):
             with self.subTest(failure_class=failure_class):
@@ -1245,8 +1247,9 @@ class OrphanedStageFailureCloseoutTests(unittest.TestCase):
                 self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "action-failed:vc-2-declared")
                 self.assertTrue(self._owner_check_sealed(run_dir))
                 result = reconciler.reconcile_supervisor_run(run_dir, campaign)
-                self.assertNotIn("ledger_closeout_backfill", result)
+                backfill = result.get("ledger_closeout_backfill")
                 self.assertIsNone(result.get("stage_replay"))
+                events = [event for event, _ in timing._load_events(ledger_dir)]
                 inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
                 prior_state = supervisor._read_state(run_dir)
                 successor = json.loads(json.dumps(inner))
@@ -1259,10 +1262,19 @@ class OrphanedStageFailureCloseoutTests(unittest.TestCase):
                     except supervisor.SupervisorError:
                         accepted.append(f"{name}:拒绝")
                 if failure_class == "environment-prerequisite":
+                    self.assertIsNone(backfill, result)
+                    self.assertEqual(events[-1]["event_type"], "receipt_passed")
                     self.assertEqual(result["status"], "recoverable", result)
                     self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "active")
                     self.assertEqual(accepted, ["environment_redispatch"])
                 else:
+                    self.assertIsNotNone(backfill, result)
+                    self.assertEqual(
+                        (backfill["action_id"], backfill["failure_class"], backfill["ledger_status"], backfill["idempotent"]),
+                        ("vc-2-declared", failure_class, "stopped", False),
+                    )
+                    self.assertEqual([event["event_type"] for event in events[-2:]], ["stage_abandoned", "stop_the_line"])
+                    self.assertTrue(events[-1]["event_id"].startswith(supervisor.CANDIDATE_REVIEW_EVENT_PREFIX), events[-1])
                     self.assertEqual(result["status"], "permanent_stop", result)
                     self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stopped")
                     self.assertFalse([name for name in accepted if ":" not in name], accepted)

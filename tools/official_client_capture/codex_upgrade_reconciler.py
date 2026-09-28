@@ -4365,11 +4365,17 @@ def _backfill_orphaned_failure_closeout(
     沿用既有阶段审核对账：动作幂等合同成立才写证明并由阶段审核协议唯一承接 N+1 重派，不成立留在审核。
 
     只在同时满足时补做：前置锁段确认是 R2 封存且 owner 已死（``orphan_backfill`` 非 None）；阶段属
-    VC-1～VC-3（第 44 项起含候选级阶段 VC-4～VC-6，收账函数按阶段路由为候选审核或 recovery_required）；
-    有效失败类是阶段审核类——不在可恢复集合（它们的 receipt_passed 与逐字重派协议原本可走），
-    也不在永久集合（完整性类由对账强制停线，其余永久类照旧没有后继协议；两者行为都不变）；账本里还没有
-    本次失败的审核、恢复、停线事件或对账许可。已收口（含对账后已重开的阶段）一律不动，避免对同一次失败
+    VC-1～VC-3（第 44 项起含候选级阶段 VC-4～VC-6，收账函数按阶段路由为候选审核或 recovery_required）；有效失败类不在
+    可恢复集合（它们的 receipt_passed 与逐字重派协议原本可走）；账本里还没有本次失败的审核、恢复、停线事件或对账
+    许可，且账本不是终态（stopped／complete／abandoned）。已收口（含对账后已重开的阶段）一律不动，避免对同一次失败
     重复放弃阶段。
+
+    第 38 项：永久失败类同样补做。此前永久类不补——``_decide`` 不看失败分类，永久失败类（完整性类以外）也被判
+    recoverable、写 reconcile-run-passed 并提示"重新派发同一批次"，而后继协议全部拒绝；预算到期时还先暂停、指向延期，
+    延期后照样落到这条死路。现在以同一收账函数停线（stage_abandoned＋stop_the_line，永久类不走预算暂停），对账随后
+    按账本停线永久停线——与 owner 在线时父监督器自己收账、以及后继协议对永久类的拒绝一致。可恢复类仍不补：对账判定
+    recoverable、许可逐字重派，与后继协议本就一致，预算到期、请求预算与根因上限都由对账判定暂停（根因上限按 B3-9
+    暂停待修复）；补做收账反而会把根因已达上限的可恢复失败从"暂停待修复"改成停线。
 
     第 39 项剩余形态（草表 D-07 口径）：看门狗中止（``watchdog-aborted``）且留有唯一动作诊断、owner 已丢失时同样
     补做——动作子进程写出诊断之后、父进程追加 action-failed 之前丢失，R2 判定不成立（缺 action-failed 生命周期
@@ -4380,11 +4386,11 @@ def _backfill_orphaned_failure_closeout(
 
     if run.get("phase") not in ORPHANED_CLOSEOUT_BACKFILL_PHASES:
         return None
+    # 第 38 项：只有可恢复类不补（对账判定与逐字重派协议本就一致）；审核类与永久失败类都补，由收账函数按分类路由。
     failure_class = str(run.get("failure_class"))
     if (
         failure_class in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
         or failure_class in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
-        or failure_class in supervisor.PERMANENT_ACTION_FAILURE_CLASSES
     ):
         return None
     if run.get("state") == "watchdog-aborted":
@@ -4426,6 +4432,15 @@ def _backfill_orphaned_failure_closeout(
     except (OSError, timing_ledger.TimingLedgerError) as error:
         raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
     if any(event.get("event_id") in settled_ids for event in events):
+        return None
+    # 第 38 项：账本已是终态（历史对账已停线、显式 close-campaign-ledger、放弃或完成）时收账无事可做——父监督器收账
+    # 只把 active 阶段路由为恢复、审核或停线。这里不补，由对账按终态判定（与补账前相同）；否则历史上已由对账自拟
+    # 停线的完整性类失败再次对账时，收账会以"已由其他根因停线"拒绝，对账无法幂等重放。
+    try:
+        ledger_status = timing_ledger.inspect_ledger(ledger_dir).get("status")
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    if ledger_status in {"stopped", "complete", "abandoned"}:
         return None
     inner = supervisor._read_json(Path(run_dir) / "campaign-run-manifest.json").get("manifest")
     if not isinstance(inner, Mapping):
@@ -4476,8 +4491,8 @@ def reconcile_supervisor_run(
         if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
             action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
         run["orphan_facts"] = orphan_backfill["orphan_facts"]
-    # 第 39 项／第 44 项：R2 封存（以及看门狗中止＋动作诊断）的 VC-1～VC-6 非可恢复失败，先补做 owner 丢失前未完成的
-    # 失败收账，再按账本现状对账。
+    # 第 39 项／第 44 项／第 38 项：R2 封存（以及看门狗中止＋动作诊断）的 VC-1～VC-6 非可恢复失败（审核类与永久失败类），
+    # 先补做 owner 丢失前未完成的失败收账，再按账本现状对账。
     closeout_backfill = _backfill_orphaned_failure_closeout(
         resolved_run_dir, campaign_dir, run, orphan_backfill, ledger_dir
     )

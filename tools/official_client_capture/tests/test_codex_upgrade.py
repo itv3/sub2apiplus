@@ -24205,6 +24205,123 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertNotIn("ledger_closeout_backfill", again)
             self.assertEqual(self._b0_ledger_events(ledger_dir), events)
 
+    @staticmethod
+    def _item38_closeout_event_ids(
+        campaign_id: str, phase: str, sequence: int, action_id: str, failure_class: str
+    ) -> dict[str, str]:
+        """父监督器收账对这次失败会写的事件 ID（与 _close_failed_campaign_timing_ledger 同一失败摘要）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        digest = supervisor.campaign_run_failure_digest(
+            campaign_id=campaign_id, phase=phase, batch_sequence=sequence, failed_action_id=action_id, failure_class=failure_class
+        )
+        prefix = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{digest[:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}"
+        return {"recovery": f"{prefix}-recovery-required", "abandon": f"{prefix}-stage-abandoned", "stop": f"{prefix}-stop-the-line"}
+
+    def test_item38_orphaned_failure_reconciliation_routes_like_parent_closeout(self) -> None:
+        """第 38 项：父进程来不及收账的动作失败（R2 确定性封存的 failed、看门狗中止＋动作诊断），此前只有阶段／候选审核类
+        补收账，永久失败类不补——对账判定不看失败分类，永久失败类也给出 recoverable、写 reconcile-run-passed 并提示
+        "重新派发同一批次"，而后继协议全部拒绝。修复后永久失败类同样先补做与父进程同一的收账，再按收口后的账本判定：
+
+        ① R2 封存的 failed＋永久失败类（identity-drift）：账本停线，对账永久停线（与 owner 在线时相同）；
+        ② 看门狗中止＋永久失败类：同样停线（后继校验在 0-W 即拒绝永久失败类）；
+        ③ 看门狗中止＋可恢复类（environment-prerequisite）不补账、行为不变：对账判定 recoverable、许可逐字重派，只有逐字
+           重派协议承接——判定、提示与后继判据本就一致；
+        ④ 账本已是终态（历史对账已按完整性类自拟停线）后再次对账：不补账、不因"已由其他根因停线"失败，照旧永久停线且
+           账本不增事件——补账不破坏既有对账的幂等重放。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+
+        def accepting(state, prior, run_dir, successor, campaign_dir) -> list[str]:
+            return self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir)
+
+        def verbatim_of(fixture: dict[str, object], capture: dict[str, object]) -> dict[str, object]:
+            jobs = [job.job_id for job in fixture["jobs"]]
+            return self._b4_vc1_capture_manifest(fixture, batch_sequence=2, execute=jobs, reuse=[], actions=list(capture["actions"]))
+
+        permanent = ("handled-error", "PolicyDrift", "identity-drift")
+        for shape in ("r2", "watchdog"):
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as directory:
+                fixture, capture, preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+                campaign_dir = fixture["campaign_dir"]
+                ledger_dir = fixture["timing_ledger"]
+                campaign_id = str(fixture["manifest"]["campaign_id"])
+                if shape == "r2":
+                    state, run_dir = self._r2_sealed_run(
+                        fixture, "5" * 64, inner=capture, action_id="capture-official", phase="VC-1", diagnostic=permanent,
+                        action_failed_reason="returncode=1",
+                    )
+                else:
+                    state, run_dir = self._b4_watchdog_run(
+                        fixture, "6" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+                    )
+                    self._d07_write_diagnostic(run_dir, state, "capture-official", permanent)
+                result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+                self.assertEqual(result["status"], reconciler.DECISION_STOP, result)
+                self.assertEqual(result["ledger_closeout_backfill"]["ledger_status"], "stopped")
+                ids = self._item38_closeout_event_ids(campaign_id, "VC-1", 1, "capture-official", "identity-drift")
+                events = self._b0_ledger_events(ledger_dir)
+                self.assertIn(("stop_the_line", ids["stop"]), events)
+                self.assertNotIn(("receipt_passed", f"reconcile-run-passed-{run_dir.name}"), events)
+                self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+                self.assertEqual(accepting(state, capture, run_dir, verbatim_of(fixture, capture), campaign_dir), [])
+                self.assertEqual(accepting(state, capture, run_dir, preview, campaign_dir), [])
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            campaign_id = str(fixture["manifest"]["campaign_id"])
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "7" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+            )
+            self._d07_write_diagnostic(
+                run_dir, state, "capture-official", ("handled-error", "CampaignGlobalPreconditionError", "environment-prerequisite")
+            )
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result)
+            self.assertNotIn("ledger_closeout_backfill", result)
+            ids = self._item38_closeout_event_ids(campaign_id, "VC-1", 1, "capture-official", "environment-prerequisite")
+            events = self._b0_ledger_events(ledger_dir)
+            self.assertFalse([event_id for _event_type, event_id in events if event_id in ids.values()], events)
+            self.assertEqual(events[-1], ("receipt_passed", f"reconcile-run-passed-{run_dir.name}"))
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            verbatim = verbatim_of(fixture, capture)
+            history = [(state, capture, run_dir)]
+            self.assertEqual(
+                supervisor._validate_batched_campaign_history(verbatim, history, campaign_dir=campaign_dir, staging_model=False),
+                history,
+            )
+            self.assertEqual(accepting(state, capture, run_dir, verbatim, campaign_dir), ["environment_redispatch"])
+            # 重复对账幂等：对账许可已写，账本不增事件。
+            again = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertNotIn("ledger_closeout_backfill", again)
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            _state, run_dir = self._r2_sealed_run(
+                fixture, "8" * 64, inner=capture, action_id="capture-official", phase="VC-1",
+                diagnostic=("handled-error", "EvidenceIntegrityError", "evidence-integrity"), action_failed_reason="returncode=1",
+            )
+            # 补账之前的对账对完整性类强制停线时自拟的两条事件（_permanent_stop 的事件 ID）。
+            for event_id, event_type in (
+                (f"reconcile-stage-abandoned-{run_dir.name}", "stage_abandoned"),
+                (f"reconcile-stop-the-line-{run_dir.name}", "stop_the_line"),
+            ):
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir, event_id=event_id, phase="VC-1", event_type=event_type, root_cause_id="fixture-legacy-stop",
+                    live_request_count=0, next_action="permanent-stop-integrity_mismatch",
+                )
+            events = self._b0_ledger_events(ledger_dir)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], reconciler.DECISION_STOP, result)
+            self.assertNotIn("ledger_closeout_backfill", result)
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
