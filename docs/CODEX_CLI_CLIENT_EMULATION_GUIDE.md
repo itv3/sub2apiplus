@@ -3483,6 +3483,16 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   零请求续跑预览（续跑预览失败则 N+1 逐字重派预览）→ 批准后补跑。首次候选采集的截止失败仍进候选审核：有预约时审核下对账、批准、
   授权后同样派发零请求续跑预览；预约前失败由人工裁定。官方 VC-1 采集与补跑的截止失败仍进阶段审核，有预约时对账、批准、授权后由
   N+1 零请求预览承接。中断类诊断与自称 deadline-expired 的其它异常类型仍拒绝；请求账务不确定须先 `accounting-resolve`。
+- **恢复段截止类失败（第 48 项）**：恢复段在段预约之后以截止类失败（deadline-expired）收口时，与执行失败一样进入
+  `recovery_required`：`deadline-extend` 延期 → `reconcile-attempt --recovery-revision ar<k>` → 批准恢复预览并授权 →
+  `capture-candidate run --attempt-recovery ar<k+1> --rerun-failed --recovery-preview`。恢复段失败处于候选审核时，`reconcile-attempt`
+  不提示开后继段、不接受批准，按候选审核处置（`invalidate-candidate` 或 `close-campaign-ledger`）。段预约之前的截止失败维持候选审核。
+- **首批采集父 run 丢失（第 47 项）**：首批 VC-1 采集（序号 1，VC-0 收口派发、无 COMMIT）的父进程在失败收账前丢失时，
+  `reconcile-attempt` 按 Campaign 绑定的首批清单，在控制根本身及其下一层目录的监督器状态目录里定位父 run 并补账；VC-0 收口的
+  `--supervisor-state-dir` 放在控制根之外时仍定位不到。
+- **收账暂停后的补做收口（第 50 项）**：父监督器收账遇同根因上限只暂停、遇预算到期只登记预算暂停；`campaign-resume` 清零或
+  `deadline-extend` 延期之后，`reconcile-supervisor-run` 与 `reconcile-attempt` 用同一收账函数补做收口（阶段审核、候选审核、
+  `recovery_required` 或停线），无需手工补事件。恢复段以永久类失败、父收账因段仍在运行而失败时，段对账后同样补做收口（停线）。
 - **根因上限只暂停（第 46 项）**：同根因重试上限在父监督器收账与对账判定两处同一口径，按第三批 B3-9 只暂停、不停线。项目总账里
   本次根因达上限（Campaign 账本仍 active）时收账照常路由到 `recovery_required`／阶段审核／候选审核；Campaign 账本已 `stop_required`
   时计时账本只接受放弃阶段、停线与 campaign-resume，收账不写任何事件、返回暂停结果（也不登记预算暂停）。是否暂停由对账照 B3-9 判定：

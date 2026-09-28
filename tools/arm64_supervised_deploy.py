@@ -287,8 +287,10 @@ from urllib.parse import urlsplit
 # control 层变化，监督器摘要随之变化。
 # 2026-09-28（第 49 项）：恢复链截止类失败（WallClockTimeoutError／CampaignCleanupRequested 的 deadline-expired）由协议承接，
 # VC-5 续跑链截止失败收账进 recovery_required。control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 48 项）：恢复段在段预约之后以截止类失败收口时与执行失败一样进 recovery_required，父收账按账本里段是否
+# 仍在运行判定；候选审核下的段不再提示开后继段。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "75cc47665f3eb83229a73507353a4ad1214dbab662f36d4098f6f1339170ccb4"
+    "7ca5acfb6219a002de6378152f9248a9e1bcb8359f5633e957a1390cc45ecd4b"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
