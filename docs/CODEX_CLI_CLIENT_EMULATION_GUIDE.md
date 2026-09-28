@@ -3387,7 +3387,7 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 - **看门狗中止却留有动作失败诊断**：子进程已写出 `action-diagnostics/action-<id>-failure.json`、父 campaign-run 在追加
   action-failed 之前丢失，或父进程心跳超时、撞上截止等被中止时，run 维持 `watchdog-aborted`。先对账：run 期间无预约用
   `reconcile-supervisor-run`（收据 `failure_class` 为诊断有效类），有预约用 `reconcile-attempt`。之后失败动作取诊断动作，按与
-  `failed／action-failed:<诊断动作>` 相同的判据选后继（恢复链动作的处理型失败接 N+1 零请求恢复预览，可恢复类逐字重派，其余同 failed），
+  `failed／action-failed:<诊断动作>` 相同的判据选后继（恢复链动作的处理型失败接 N+1 零请求恢复预览——VC-1 官方恢复链、VC-5 候选恢复链与恢复段协议都一样——可恢复类逐字重派，其余同 failed），
   不走看门狗中止的无诊断承接。诊断不唯一、指向清单外动作、无法重放、是永久失败类、绑定被判漂移或不能按 R2 核对，都失败关闭；
   对账后诊断才出现或消失，同样失败关闭，须人工核查。
 - **工具部署取代的旧就绪探针会话**：候选就绪 models 探针会话在 dispatch 之后中断（无 receipt），修好工具部署后
@@ -3448,9 +3448,25 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   名实相符、受管脚本或受管 codex_upgrade 直接调用且参数闭合、同一官方 attempt、官方证据未封存、断言包未发布、attempt 未作废或隔离、
   批准有冻结草案与一致预览。成立即写阶段重放证明并重开 VC-1，N+1 按批次身份重派（只调 timeout 或 argv 也可），只由阶段审核协议
   承接；不成立时对账文案点名原因。采集批次仍只走 `reconcile-attempt`。
-- **owner 在失败收账前丢失（第 39 项）**：R2 确定性封存为 `failed/action-failed` 的 VC-1～VC-3 阶段审核类失败，由
-  `reconcile-supervisor-run` 调用监督器同一收账函数补写 `stage_abandoned`／`stage_review_required` 后再按阶段审核对账；可恢复类与
-  永久类不补账，行为不变；owner 死在收账中途时续作且两条事件各只一条。
+- **owner 在失败收账前丢失（第 39、44、38、45 项）**：父 campaign-run 在失败收账之前丢失 owner——monitor 按 R2 确定性封存为
+  `failed/action-failed`，或看门狗中止但留有唯一可信动作诊断——账本可能还停在 active。
+  run 期间没有发布预约：`reconcile-supervisor-run` 先调用监督器同一收账函数补做 owner 未完成的收账，再按收口后的账本对账。
+  VC-1～VC-3 的审核类失败补写 `stage_abandoned`／`stage_review_required` 后按阶段审核对账；VC-4～VC-6 的审核类失败进入候选审核
+  （VC-4 按 R18 写证明；VC-5 候选采集续跑链与 VC-5／VC-6 零请求后处理的 execution-failure 进入 `recovery_required`）；永久失败类补写
+  `stage_abandoned`＋`stop_the_line`，对账永久停线、不再提示重派；可恢复类不补账，对账按类给出逐字重派命令。
+  run 期间发布了预约：`reconcile-attempt` 在登记本 attempt／恢复段失败之后，沿正式 COMMIT 找到发布该预约的父 run，以同一收账函数
+  补账（全部分类，与 owner 在线时相同），再判定并生成恢复预览——恢复段因此进入 `recovery_required`，批准并消费恢复预览写
+  `recovery_authorized`，后继段 ar<k+1> 由协议 15 承接；永久失败类停线。旧工具已对账、卡在"消费预览不写授权"的现场，部署修复后重新
+  执行 `reconcile-attempt` 即补账，按新生成的恢复预览批准、授权后接着跑。首批序号 1（VC-0 收口派发的首个 VC-1 官方采集批次）没有
+  COMMIT 文件，定位不到父 run，行为与修复前相同。两条路径都只在账本仍停在这次失败现场时补：已收口、已有对账许可、账本已是终态
+  （stopped／complete／abandoned）时不补；有预约路径另要求账本 active 且处于失败阶段、父 run 之后没有更高序号的 COMMIT、同阶段没有
+  更晚的预约、本 attempt／恢复段最后一条账本事件之后只有预算控制或 campaign-resume 的恢复登记。看门狗形态的诊断不唯一、指向清单外
+  动作、无法重放或绑定漂移时对账失败关闭，不补账也不入账。owner 死在收账中途时续作，两条事件各只一条。
+- **根因上限只暂停（第 46 项）**：同根因重试上限在父监督器收账与对账判定两处同一口径，按第三批 B3-9 只暂停、不停线。项目总账里
+  本次根因达上限（Campaign 账本仍 active）时收账照常路由到 `recovery_required`／阶段审核／候选审核；Campaign 账本已 `stop_required`
+  时计时账本只接受放弃阶段、停线与 campaign-resume，收账不写任何事件、返回暂停结果（也不登记预算暂停）。是否暂停由对账照 B3-9 判定：
+  账本 `stop_required` 用 `campaign-resume`、只是总账达上限用 `record-root-cause-repair` 登记修复证据，之后重新对账即放行（需要时由
+  补收账完成路由）。永久失败类与已停线／已完成的账本照旧停线。
 - **生成器只读重放身份登记与门禁（第 36 项事故后改进、第 40 项）**：以文件摘要作生成器身份、历史收据须按旧身份重放的生成器
   （ARM64 环境收据、收据终结器、计时账本、门禁收据）改动后，部署边界处的旧摘要必须登记为只读重放身份（只允许重放、不允许生成
   新收据）；capture-tools 单元测试门禁按承接收据记录的变更集前后提交复算，漏登记即失败并写明要登记的摘要与位置。

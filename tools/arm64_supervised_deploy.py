@@ -281,8 +281,10 @@ from urllib.parse import urlsplit
 # 监督器摘要随之变化。
 # 2026-09-28（草表 D-07／D-10、第 39／43 项）：看门狗中止却留有动作诊断按 failed 同口径承接；VC-1 官方 seal 链零请求后处理的
 # 阶段幂等重派合同；断言包已发布后 seal 预览续派的门禁与协议；看门狗形态阶段审核类失败的收账补做。control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 46 项）：父监督器收账遇同根因重试上限按 B3-9 只暂停、不停线（永久失败类与已停线／已完成账本照旧停线）。
+# control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "4c86198d7271a7818033eb9a5cfabb8025faa8af1f22e751a1ae0e9b68535b42"
+    "760d5925fc1b6ccbd01733cd34638f223959fc7fcf0eb8a76795af568a7bebd1"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
