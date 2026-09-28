@@ -108,6 +108,16 @@
                 "pattern": "\\S"
               }
             }
+          },
+          "environment_probe_sni": {
+            "description": "修好接着跑第 56 项：证据标签声明给候选侧 pcap 规则登记的采集环境探针主机（如 ARM64 出口守护 probe_urls 的主机），由编目器原样写入。断言器把 SNI 命中的 ClientHello 改记为 environment_probe_client_hello，不作为被测客户端出站面，并在选 tls_client_hello 的 check 的 actual.environment_probe_exclusion 中逐条列出。严格升序、不重复，且不得包含 chatgpt.com、openai.com、oaiusercontent.com 及其子域（断言器另行校验）。",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+            }
           }
         },
         "allOf": [
@@ -124,6 +134,20 @@
                     "h1_request_stream",
                     "observation_jsonl"
                   ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "environment_probe_sni"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parser": {
+                  "const": "pcap_client_hello"
                 }
               }
             }

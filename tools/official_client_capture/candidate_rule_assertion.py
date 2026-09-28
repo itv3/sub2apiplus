@@ -222,6 +222,32 @@ ALLOWED_ASSERTION_OPERATORS = frozenset(
         "same_set_distinct_order",
     }
 )
+# 修好接着跑第 56 项：采集环境自身发起的 TLS 连接（非被测客户端）按声明排除出候选出站面。
+#
+# 候选 direct sidecar 在目标容器（网关）的网络命名空间里按 ``tcp port 443`` 抓包，而 ARM64
+# 出口守护 ``sub2api-egress-guard.service`` 也在同一命名空间按策略 ``probe_urls`` 周期探测公网
+# 出口；探针握手（带 h2／http/1.1 ALPN）因此被录进 ``direct/*/egress.pcap``。它们不是被测
+# 客户端的出站，却会被 SPEC-TLS-001 ``alpn-absent``、SPEC-PROTO-001 ``no-alpn`` 这类只按
+# transport／ca_mode 选样的判据选中。
+#
+# 排除集合只来自证据标签声明：候选侧 pcap 规则的 ``environment_probe_sni`` 由编目器原样写进
+# capture manifest 的同名字段，断言器按 manifest 声明把 SNI 命中的 ClientHello 改记为
+# ``ENVIRONMENT_PROBE_RECORD_TYPE``。改记而非丢弃：它仍是一条带原始数据的观测（seal 收据的
+# observation_count 不变），只是任何选 ``tls_client_hello`` 的 selector 都选不中它；选
+# ``tls_client_hello`` 的 check 再在 ``actual[ENVIRONMENT_PROBE_AUDIT_FIELD]`` 里逐条列出同条件
+# 下被排除的记录。manifest 没有该字段（官方侧、历史版本）时行为与修复前逐字相同。
+ENVIRONMENT_PROBE_SNI_FIELD = "environment_probe_sni"
+ENVIRONMENT_PROBE_RECORD_TYPE = "environment_probe_client_hello"
+ENVIRONMENT_PROBE_AUDIT_FIELD = "environment_probe_exclusion"
+# 被测出站面域名（SPEC-EP-002：chatgpt.com、auth／api.openai.com、区域文件域名
+# *.oaiusercontent.com）及其子域永远不能声明为环境探针；否则一条错写的声明就能把被测
+# 客户端的真实握手整个排除掉，判据随之失去意义。
+PROTECTED_EGRESS_SNI_SUFFIXES = ("chatgpt.com", "openai.com", "oaiusercontent.com")
+# 规范主机名：小写 ASCII、至少两段、每段 1～63 字符；不带端口、通配符或结尾点。
+ENVIRONMENT_PROBE_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
 MISSING = object()
 
 
@@ -593,6 +619,33 @@ def source_spec_section_sha256(source_path: Path, fragment: str) -> str:
     return hashlib.sha256(section).hexdigest()
 
 
+def validate_environment_probe_sni(value: Any, description: str) -> list[str]:
+    """校验一份环境探针主机声明，返回原样列表；任何不规范都失败关闭。
+
+    约束（编目器校验证据标签声明、断言器校验 capture manifest 共用本函数）：
+
+    * 必须是非空数组，元素是规范主机名（见 ``ENVIRONMENT_PROBE_HOST_RE``）；
+    * 不得等于或隶属被测出站面域名（``PROTECTED_EGRESS_SNI_SUFFIXES``）；
+    * 必须严格升序且不重复——声明与 manifest 的字节因此唯一确定，审核时一眼可比。
+    """
+
+    if not isinstance(value, list) or not value:
+        raise AssertionConfigurationError(f"{description} 必须是非空主机名数组")
+    for host in value:
+        if not isinstance(host, str) or not ENVIRONMENT_PROBE_HOST_RE.fullmatch(host):
+            raise AssertionConfigurationError(f"{description} 含非法主机名：{host!r}")
+        if any(
+            host == suffix or host.endswith("." + suffix)
+            for suffix in PROTECTED_EGRESS_SNI_SUFFIXES
+        ):
+            raise AssertionConfigurationError(
+                f"{description} 不能包含被测出站面域名：{host}"
+            )
+    if value != sorted(set(value)):
+        raise AssertionConfigurationError(f"{description} 必须严格升序且不重复")
+    return list(value)
+
+
 def _validate_capture_manifest(
     value: Any,
     expected_codex_version: str = CODEX_VERSION,
@@ -635,7 +688,7 @@ def _validate_capture_manifest(
                 "scenario_ids",
                 "labels",
             },
-            optional={"frame_labels"},
+            optional={"frame_labels", ENVIRONMENT_PROBE_SNI_FIELD},
             description=f"artifacts[{index}]",
         )
         _relative_path(artifact.get("path"), f"artifacts[{index}].path")
@@ -665,6 +718,18 @@ def _validate_capture_manifest(
         labels = artifact.get("labels")
         if not isinstance(labels, dict):
             raise AssertionConfigurationError(f"artifacts[{index}].labels 必须是对象")
+        if ENVIRONMENT_PROBE_SNI_FIELD in artifact:
+            # 环境探针声明只对 ClientHello 观测有意义：其它 parser 产出的观测没有 SNI，
+            # 允许挂在它们身上只会让一条声明看起来生效、实际什么也没排除。
+            if parser != "pcap_client_hello":
+                raise AssertionConfigurationError(
+                    f"artifacts[{index}].{ENVIRONMENT_PROBE_SNI_FIELD} "
+                    "仅支持 pcap_client_hello"
+                )
+            validate_environment_probe_sni(
+                artifact[ENVIRONMENT_PROBE_SNI_FIELD],
+                f"artifacts[{index}].{ENVIRONMENT_PROBE_SNI_FIELD}",
+            )
         if "frame_labels" in artifact:
             # 帧级标签只对能产出 websocket_frame 观测的两条路径有意义：
             # h1_request_stream 直接解析原始字节，或派生器产出的 observation_jsonl
@@ -751,7 +816,17 @@ def _pcap_observations(
     artifact_path: str,
     scenario_ids: Sequence[str],
     labels: Mapping[str, Any],
+    environment_probe_sni: Iterable[str] = (),
 ) -> list[Observation]:
+    """把 pcap 中每个 ClientHello 解析成一条观测。
+
+    ``environment_probe_sni`` 是 manifest 为本 artifact 声明的采集环境探针主机（第 56 项）：
+    SNI 命中的 ClientHello 改记为 ``ENVIRONMENT_PROBE_RECORD_TYPE``，数据、标签与记录号都
+    保持原样，只是不再作为被测客户端的 ``tls_client_hello``。声明为空时与修复前逐字相同。
+    主机名比较不区分大小写（DNS 语义）；声明本身已被校验为小写规范形式。
+    """
+
+    probe_hosts = frozenset(environment_probe_sni)
     observations: list[Observation] = []
     packet_index = 0
     for linktype, packet in iter_packets(path):
@@ -774,12 +849,17 @@ def _pcap_observations(
             "alpn_protocols": alpn_protocols,
             "has_alpn_extension": 16 in extension_types,
         }
+        record_type = (
+            ENVIRONMENT_PROBE_RECORD_TYPE
+            if isinstance(sni, str) and sni.lower() in probe_hosts
+            else "tls_client_hello"
+        )
         for scenario_id in scenario_ids:
             observations.append(
                 Observation(
                     record_id=f"{artifact_path}#packet-{packet_index}",
                     scenario_id=scenario_id,
-                    record_type="tls_client_hello",
+                    record_type=record_type,
                     artifact_path=artifact_path,
                     evidence_paths=(artifact_path,),
                     labels=dict(labels),
@@ -1803,6 +1883,7 @@ def load_observations(
                 artifact["path"],
                 artifact["scenario_ids"],
                 artifact["labels"],
+                artifact.get(ENVIRONMENT_PROBE_SNI_FIELD, ()),
             )
         elif parser == "h1_request_stream":
             parsed = _h1_observations(
@@ -2211,6 +2292,36 @@ def _side_restriction_contract(profile: Mapping[str, Any]) -> dict[str, Any]:
     return {"side_restricted_checks": derive_side_restricted_checks(profile)}
 
 
+def _environment_probe_exclusion(
+    observations: Sequence[Observation],
+    selector: Mapping[str, Any],
+    default_scenarios: Sequence[str],
+) -> dict[str, Any] | None:
+    """列出一个选 ``tls_client_hello`` 的 check 若无声明本会选中的环境探针记录（第 56 项）。
+
+    只把 selector 的 record_type 换成 ``ENVIRONMENT_PROBE_RECORD_TYPE``，场景与 where 条件
+    原样复用，因此审计口径与判据选样口径逐条对应：列出的恰是“没有排除声明时会混进本
+    check 的那些握手”。``excluded_count`` 与判据的 ``matched_count`` 同一口径（按观测条数）。
+    没有命中时返回 None，调用方不附加任何字段，结果形状与修复前逐字相同。
+    """
+
+    if selector.get("record_type") != "tls_client_hello":
+        return None
+    excluded = _select_observations(
+        observations,
+        {**selector, "record_type": ENVIRONMENT_PROBE_RECORD_TYPE},
+        default_scenarios,
+    )
+    if not excluded:
+        return None
+    return {
+        "record_type": ENVIRONMENT_PROBE_RECORD_TYPE,
+        "excluded_count": len(excluded),
+        "excluded_hosts": sorted({str(item.data.get("sni")) for item in excluded}),
+        "excluded_record_ids": sorted({item.record_id for item in excluded}),
+    }
+
+
 def evaluate_rule(
     profile: Mapping[str, Any],
     rule_id: str,
@@ -2223,6 +2334,10 @@ def evaluate_rule(
     给出 ``side`` 时跳过验收契约登记为本侧不适用的 check——这类 check 依赖的实验
     条件在本侧结构性不可能成立（依据见 acceptance_contract.SIDE_RESTRICTED_CHECKS），
     强制执行只会把"造不出该条件"记成失败。不给 ``side`` 时按全集评估。
+
+    ``side == "official"`` 时 manifest 不得携带环境探针声明（第 56 项）：官方证据已封存，
+    官方侧断言口径不能被排除声明改变。编目器已拒绝官方侧声明，这里在判据层再失败关闭
+    一次，防止手写或篡改的 manifest 绕过编目器。
     """
 
     rules = {
@@ -2239,6 +2354,14 @@ def evaluate_rule(
     artifacts = capture_manifest.get("artifacts")
     if not isinstance(artifacts, list):
         raise AssertionConfigurationError("capture manifest artifacts 缺失")
+    if side == "official" and any(
+        isinstance(artifact, Mapping) and ENVIRONMENT_PROBE_SNI_FIELD in artifact
+        for artifact in artifacts
+    ):
+        raise AssertionConfigurationError(
+            f"官方侧 capture manifest 不得携带 {ENVIRONMENT_PROBE_SNI_FIELD}："
+            "官方证据已封存，其断言口径不能被环境探针声明改变"
+        )
     coverage_actual: dict[str, list[str]] = {}
     coverage_expected: dict[str, list[str]] = {}
     coverage_paths: set[str] = set()
@@ -2284,6 +2407,12 @@ def evaluate_rule(
             observations, check["select"], rule["scenario_ids"]
         )
         passed, actual = _evaluate_assertion(matched, check["assertion"])
+        exclusion = _environment_probe_exclusion(
+            observations, check["select"], rule["scenario_ids"]
+        )
+        if exclusion is not None and isinstance(actual, dict):
+            # 排除只改变选样，不改变判据：被排除的握手逐条留在结果里供审核。
+            actual = {**actual, ENVIRONMENT_PROBE_AUDIT_FIELD: exclusion}
         evidence_paths = sorted(
             {
                 evidence_path

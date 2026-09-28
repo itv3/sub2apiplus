@@ -23,6 +23,14 @@ capture manifest 一直由执行者临时手写。本工具把编目变成确定
 
 同一原始文件在 manifest 中二选一：直接以原生 parser 解析，或以 `opaque_bound_source`
 登记并由派生器产出结构化观测（声明中的 `derive`）。该互斥由 ACC-03 seal 门禁强制。
+
+环境探针声明（修好接着跑第 56 项）：候选侧 pcap 规则可以声明 ``environment_probe_sni``，
+列出与被测客户端无关、却和它共用抓包面的采集环境连接主机（ARM64 出口守护按策略
+``probe_urls`` 发起的公网出口探针）。编目器原样把它写进该规则每个 artifact 的同名字段，
+断言器据此把 SNI 命中的 ClientHello 改记为环境探针观测并在判据结果里逐条列出。它同样
+只来自声明：取值由采集拓扑与出口守护策略在采集前决定，编目器不打开 pcap，也不按判据
+所验证的属性（ALPN、cipher 数等）挑选要排除的握手，因此不构成“按被测内容反推标签”。
+只允许候选侧声明（官方证据已封存，其断言口径不得变化），且不得包含被测出站面域名。
 """
 
 from __future__ import annotations
@@ -42,6 +50,11 @@ if __package__ in {None, ""}:
 from tools.official_client_capture.build_assertion_bundle import (  # noqa: E402
     AssertionBundleError,
     validate_relative_path,
+)
+from tools.official_client_capture.candidate_rule_assertion import (  # noqa: E402
+    ENVIRONMENT_PROBE_SNI_FIELD,
+    AssertionConfigurationError,
+    validate_environment_probe_sni,
 )
 from tools.official_client_capture.model_condition_receipts import (  # noqa: E402
     ModelConditionReceiptError,
@@ -109,7 +122,7 @@ def load_label_declaration(
             raise EvidenceCatalogError(f"job {job_id} 的 rules 必须非空")
         seen_globs: set[tuple[str, ...]] = set()
         for rule in rules:
-            _validate_rule(rule, job_id, seen_globs)
+            _validate_rule(rule, job_id, seen_globs, entry["side"])
     return document
 
 
@@ -125,8 +138,37 @@ def root_suffix_matches(root_name: str, root_suffix: Any) -> bool:
     return fnmatch.fnmatchcase(str(root_name), "*" + str(root_suffix))
 
 
+def _validate_environment_probe_sni(
+    value: Any, *, job_id: str, side: str, rule: Mapping[str, Any]
+) -> list[str]:
+    """环境探针声明的全部约束；编目入口与声明加载共用，任一不满足即失败关闭。
+
+    * 只允许候选侧：官方证据已封存，其断言口径不能因新声明而变化；
+    * 只允许 ``kind=pcap``／``parser=pcap_client_hello`` 的规则：只有 ClientHello 观测带 SNI；
+    * 主机集合的格式、排序与“不得包含被测出站面域名”由断言器同一函数校验，
+      保证声明与 manifest 两道校验不会各执一词。
+    """
+
+    glob = rule.get("glob")
+    if side != "candidate":
+        raise EvidenceCatalogError(
+            f"job {job_id} 的 {ENVIRONMENT_PROBE_SNI_FIELD} 只允许候选侧声明：{glob}"
+        )
+    if rule.get("kind") != "pcap" or rule.get("parser") != "pcap_client_hello":
+        raise EvidenceCatalogError(
+            f"job {job_id} 的 {ENVIRONMENT_PROBE_SNI_FIELD} 只能用于 "
+            f"kind=pcap、parser=pcap_client_hello 的规则：{glob}"
+        )
+    try:
+        return validate_environment_probe_sni(
+            value, f"job {job_id} 的 {ENVIRONMENT_PROBE_SNI_FIELD}（{glob}）"
+        )
+    except AssertionConfigurationError as error:
+        raise EvidenceCatalogError(str(error)) from error
+
+
 def _validate_rule(
-    rule: Any, job_id: str, seen_globs: set[tuple[str, ...]]
+    rule: Any, job_id: str, seen_globs: set[tuple[str, ...]], side: str
 ) -> None:
     if not isinstance(rule, dict):
         raise EvidenceCatalogError(f"job {job_id} 的 rule 必须是对象")
@@ -140,6 +182,7 @@ def _validate_rule(
         "frame_labels",
         "derive",
         "receipt_role",
+        ENVIRONMENT_PROBE_SNI_FIELD,
         "rationale",
     }
     if set(rule) - allowed:
@@ -194,6 +237,10 @@ def _validate_rule(
     ):
         raise EvidenceCatalogError(f"job {job_id} 的 labels 必须是非空字符串映射：{glob}")
     _require_str(rule.get("rationale"), f"job {job_id} 的 rationale")
+    if ENVIRONMENT_PROBE_SNI_FIELD in rule:
+        _validate_environment_probe_sni(
+            rule[ENVIRONMENT_PROBE_SNI_FIELD], job_id=job_id, side=side, rule=rule
+        )
     derive = rule.get("derive")
     if derive is not None:
         if not isinstance(derive, dict) or set(derive) != {"parser", "kind"}:
@@ -406,6 +453,18 @@ def build_catalog(
 
     for job_id, prefix, _root, matched_rules in root_inventory:
         for rule, hits in matched_rules:
+            # 环境探针声明在编目入口再校验一次：调用方可能绕过 load_label_declaration
+            # 直接传入声明对象，官方侧或非 pcap 规则携带它都必须失败关闭。
+            probe_hosts = (
+                _validate_environment_probe_sni(
+                    rule[ENVIRONMENT_PROBE_SNI_FIELD],
+                    job_id=job_id,
+                    side=side,
+                    rule=rule,
+                )
+                if ENVIRONMENT_PROBE_SNI_FIELD in rule
+                else None
+            )
             relative: str
             for relative in hits:
                 target = f"{prefix}/{relative}"
@@ -415,6 +474,13 @@ def build_catalog(
                     # 但把新场景并入已登记 artifact 的 scenario_ids。
                     for existing in artifacts:
                         if existing["path"] == target:
+                            # 同一份 pcap 只能有一种排除口径；两条规则声明不一致时
+                            # 无法判断哪条代表采集环境，必须失败关闭而不是任取其一。
+                            if existing.get(ENVIRONMENT_PROBE_SNI_FIELD) != probe_hosts:
+                                raise EvidenceCatalogError(
+                                    f"同一原件被多条规则命中但 {ENVIRONMENT_PROBE_SNI_FIELD} "
+                                    f"声明不一致：{target}"
+                                )
                             merged = sorted(
                                 set(existing["scenario_ids"])
                                 | set(rule["scenario_ids"])
@@ -426,15 +492,17 @@ def build_catalog(
                     bundle_entries.append(
                         {"root": prefix, "path": relative, "target": target}
                     )
-                    artifacts.append(
-                        {
-                            "path": target,
-                            "kind": rule["kind"],
-                            "parser": rule["parser"],
-                            "scenario_ids": list(rule["scenario_ids"]),
-                            "labels": dict(rule["labels"]),
-                        }
-                    )
+                    artifact = {
+                        "path": target,
+                        "kind": rule["kind"],
+                        "parser": rule["parser"],
+                        "scenario_ids": list(rule["scenario_ids"]),
+                        "labels": dict(rule["labels"]),
+                    }
+                    # 没有声明时不写该字段，manifest 与修复前逐字相同。
+                    if probe_hosts is not None:
+                        artifact[ENVIRONMENT_PROBE_SNI_FIELD] = list(probe_hosts)
+                    artifacts.append(artifact)
                 derive = rule.get("derive")
                 if derive is None:
                     continue

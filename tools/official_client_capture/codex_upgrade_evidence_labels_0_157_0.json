@@ -7,7 +7,8 @@
     "labels 必须能由 job 的采集参数与场景 precondition 推出，不得由被该标签选中的判据所验证的属性反推——否则判据退化为同义反复。",
     "同一原始文件在 manifest 中只能二选一：以原生 parser 直接解析，或以 opaque_bound_source 登记并由 ACC-02b 派生器产出结构化观测。",
     "本声明随场景清单在 plan 阶段冻结摘要；任何修改都必须重新审核并重建 Campaign。",
-    "0.154.0 起模型目录预热会并发产生插件目录请求；models_request 与 responses_request 必须由 v2 模型条件收据选择，禁止按连接序号猜测。"
+    "0.154.0 起模型目录预热会并发产生插件目录请求；models_request 与 responses_request 必须由 v2 模型条件收据选择，禁止按连接序号猜测。",
+    "environment_probe_sni 只登记采集环境自身（非被测客户端）在同一抓包面发起的连接主机，取值必须来自采集环境配置（ARM64 出口守护策略的 probe_urls），不得由 pcap 内容或判据所验证的属性反推；只允许候选侧 kind=pcap、parser=pcap_client_hello 的规则声明，不得包含 chatgpt.com、openai.com、oaiusercontent.com 及其子域。断言器把 SNI 命中的 ClientHello 改记为 environment_probe_client_hello，并在选 tls_client_hello 的 check 结果 actual.environment_probe_exclusion 中逐条列出被排除的记录。"
   ],
   "entries": [
     {
@@ -1289,7 +1290,12 @@
             "ca_mode": "system",
             "surface": "direct"
           },
-          "rationale": "direct 面不安装自定义 CA（A01 precondition），subject 为 codex-http。"
+          "environment_probe_sni": [
+            "api.ipify.org",
+            "ifconfig.me",
+            "ipv4.icanhazip.com"
+          ],
+          "rationale": "direct 面不安装自定义 CA（A01 precondition），subject 为 codex-http。environment_probe_sni：direct sidecar 在网关容器网络命名空间按 tcp port 443 抓包，ARM64 出口守护 sub2api-egress-guard.service 也在同一命名空间按策略 codex-01561-arm64-via-dmit 的 probe_urls（https://api.ipify.org、https://ipv4.icanhazip.com、https://ifconfig.me/ip，每 15 秒）探测公网出口，其 ClientHello 会被录进本 pcap；这些连接不是被测客户端发起的，取值由出口守护策略决定、不由 pcap 内容反推。官方 direct 抓包没有探针，官方侧不声明。"
         },
         {
           "glob": "direct/codex-ws-*/egress.pcap",
@@ -1303,7 +1309,12 @@
             "ca_mode": "system",
             "surface": "direct"
           },
-          "rationale": "核心 direct 矩阵与补采矩阵使用独立批次真实触发 codex-ws；两批 pcap 共同构成 A02 的独立握手样本，避免已采集字节因目录漏登记而被静默排除。"
+          "environment_probe_sni": [
+            "api.ipify.org",
+            "ifconfig.me",
+            "ipv4.icanhazip.com"
+          ],
+          "rationale": "核心 direct 矩阵与补采矩阵使用独立批次真实触发 codex-ws；两批 pcap 共同构成 A02 的独立握手样本，避免已采集字节因目录漏登记而被静默排除。environment_probe_sni：direct sidecar 在网关容器网络命名空间按 tcp port 443 抓包，ARM64 出口守护 sub2api-egress-guard.service 也在同一命名空间按策略 codex-01561-arm64-via-dmit 的 probe_urls（https://api.ipify.org、https://ipv4.icanhazip.com、https://ifconfig.me/ip，每 15 秒）探测公网出口，其 ClientHello 会被录进本 pcap；这些连接不是被测客户端发起的，取值由出口守护策略决定、不由 pcap 内容反推。官方 direct 抓包没有探针，官方侧不声明。"
         }
       ]
     },
@@ -1323,7 +1334,12 @@
             "ca_mode": "system",
             "surface": "direct"
           },
-          "rationale": "direct 面不安装自定义 CA，subject 为 codex-ws，用于 WS 握手重复观测。"
+          "environment_probe_sni": [
+            "api.ipify.org",
+            "ifconfig.me",
+            "ipv4.icanhazip.com"
+          ],
+          "rationale": "direct 面不安装自定义 CA，subject 为 codex-ws，用于 WS 握手重复观测。environment_probe_sni：direct sidecar 在网关容器网络命名空间按 tcp port 443 抓包，ARM64 出口守护 sub2api-egress-guard.service 也在同一命名空间按策略 codex-01561-arm64-via-dmit 的 probe_urls（https://api.ipify.org、https://ipv4.icanhazip.com、https://ifconfig.me/ip，每 15 秒）探测公网出口，其 ClientHello 会被录进本 pcap；这些连接不是被测客户端发起的，取值由出口守护策略决定、不由 pcap 内容反推。官方 direct 抓包没有探针，官方侧不声明。"
         }
       ]
     },
@@ -1494,7 +1510,12 @@
             "ca_mode": "system",
             "surface": "direct"
           },
-          "rationale": "compact direct 面不装自定义 CA，subject 为 codex-compact。"
+          "environment_probe_sni": [
+            "api.ipify.org",
+            "ifconfig.me",
+            "ipv4.icanhazip.com"
+          ],
+          "rationale": "compact direct 面不装自定义 CA，subject 为 codex-compact。environment_probe_sni：direct sidecar 在网关容器网络命名空间按 tcp port 443 抓包，ARM64 出口守护 sub2api-egress-guard.service 也在同一命名空间按策略 codex-01561-arm64-via-dmit 的 probe_urls（https://api.ipify.org、https://ipv4.icanhazip.com、https://ifconfig.me/ip，每 15 秒）探测公网出口，其 ClientHello 会被录进本 pcap；这些连接不是被测客户端发起的，取值由出口守护策略决定、不由 pcap 内容反推。官方 direct 抓包没有探针，官方侧不声明。"
         },
         {
           "glob": "ingress/codex-compact-*/codex-ingress-http.jsonl",
