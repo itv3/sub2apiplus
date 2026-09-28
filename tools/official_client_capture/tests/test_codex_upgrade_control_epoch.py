@@ -2516,6 +2516,10 @@ class CodexUpgradeControlEpochTest(unittest.TestCase):
             )
             (run_dir / "events.ndjson").write_text("{}\n", encoding="utf-8")
             (run_dir / "minute-ledger.ndjson").write_text("{}\n", encoding="utf-8")
+            # read_stop_receipt 要求监督器文件权限恰为 0600：夹具显式设置，不依赖前序测试模块把进程 umask 改成 077
+            # （全量串行时被掩盖，分片并行或单跑本模块时 umask 022 下 write_text 得到 0644 而报错）。
+            for name in ("state.json", "stop-receipt.json", "events.ndjson", "minute-ledger.ndjson"):
+                (run_dir / name).chmod(0o600)
             audit = {
                 "schema_version": "codex-upgrade-supervisor/v1",
                 "run_dir": str(run_dir),
