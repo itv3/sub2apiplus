@@ -1012,7 +1012,8 @@ class OfficialSealContinuationTests(_OfficialSealChainFixture, unittest.TestCase
 # 第 39 项：owner 在失败收账前（或收账中途）丢失的父进程替身。独立子进程按夹具同一口径（离线出口、合成证据标签
 # 声明）经原子入口真实派发；动作失败、诊断与 action-failed 生命周期事件都已落盘后 SIGKILL 自身（OOM／被杀的真实
 # 时点），由独立会话里的 monitor 按 R2 确定性封存。杀点：``closeout`` 在失败收账入口；``before-review`` 在收账已写
-# stage_abandoned、正要写 stage_review_required 时。
+# stage_abandoned、正要写 stage_review_required 时；``before-action-failed``（第 39 项剩余形态，草表 D-07）在动作子进程
+# 写出诊断并退出之后、父进程追加 action-failed 生命周期事件之前——R2 判定不成立，monitor 封存为 watchdog-aborted。
 _OWNER_LOST_AT_CLOSEOUT = r'''
 import argparse, json, os, signal, sys
 from pathlib import Path
@@ -1050,6 +1051,8 @@ namespace = argparse.Namespace(**{key: Path(value) if key in paths else value fo
 kill_point = (
     mock.patch.object(supervisor, "_close_failed_campaign_timing_ledger", side_effect=owner_lost)
     if sys.argv[3] == "closeout"
+    else mock.patch.object(supervisor.SupervisorClient, "event_fail", side_effect=owner_lost)
+    if sys.argv[3] == "before-action-failed"
     else mock.patch.object(supervisor.timing_ledger, "append_event", side_effect=append_until_review)
 )
 with runtime_egress_fixtures.offline_campaign_egress(), \
@@ -1263,6 +1266,67 @@ class OrphanedStageFailureCloseoutTests(unittest.TestCase):
                     self.assertEqual(result["status"], "permanent_stop", result)
                     self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stopped")
                     self.assertFalse([name for name in accepted if ":" not in name], accepted)
+
+    def test_watchdog_aborted_stage_failure_with_diagnostic_backfills_review_then_single_protocol_redispatch(self) -> None:
+        """第 39 项剩余形态（草表 D-07 口径）：真实 classify 动作子进程写出失败诊断并退出后、父进程追加 action-failed
+        之前 owner 丢失——R2 判定不成立，monitor 封存为 watchdog-aborted，诊断留在 run 目录。对账按诊断有效类记账、
+        补齐阶段审核收账、按阶段幂等合同写证明并重开 VC-2；有且只有阶段审核协议承接 N+1（与 failed 同判据），N+1 被
+        原子入口接纳并真实执行；重复对账不再补账。修复前对账只按 active 写 receipt_passed、指向"重新派发同一批次"，
+        不写证明，N+1 没有任何协议承接。"""
+
+        root = self.base / "watchdog-classify"
+        root.mkdir(mode=0o700)
+        fixture = self.case._vc_chain_fixture(root)
+        campaign, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+        plan = self._classify_plan(root, campaign)
+        run_dir = self._dispatch_owner_lost_at_closeout(fixture, 2, plan, kill_point="before-action-failed")
+        self.assertEqual(supervisor._read_state(run_dir)["state"], "watchdog-aborted")
+        self.assertIn(supervisor.read_stop_receipt(run_dir)["reason"],
+                      {"owner-process-not-alive", "owner-process-not-alive-after-heartbeat-gap"})
+        self.assertFalse(self._owner_check_sealed(run_dir))
+        diagnostic = json.loads((run_dir / "action-diagnostics" / "action-classify-draft-failure.json").read_text(encoding="utf-8"))
+        self.assertEqual(diagnostic["failure_class"], "execution-failure")
+        before = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((before["status"], before["active_phase"]), ("active", "VC-2"))
+
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertEqual(result.get("ledger_closeout_backfill"), {
+            "action_id": "classify-draft", "failure_class": "execution-failure",
+            "ledger_status": "stage_review_required", "idempotent": False,
+        }, result)
+        self.assertEqual(result["status"], "recoverable", result)
+        receipt = json.loads((campaign / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+        self.assertEqual((receipt["failure_class"], receipt["run"]["state"]), ("execution-failure", "watchdog-aborted"))
+        proof = result["stage_replay"]
+        self.assertTrue(proof["allowed"], proof)
+        events = [event for event, _ in timing._load_events(ledger_dir)]
+        self.assertEqual([event["event_type"] for event in events[len(events) - 3:]],
+                         ["stage_abandoned", "stage_review_required", "receipt_passed"])
+        head = timing.inspect_ledger(ledger_dir)["head_sequence"]
+        again = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertNotIn("ledger_closeout_backfill", again)
+        self.assertEqual(again["stage_replay"], proof)
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["head_sequence"], head)
+
+        inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+        prior_state = supervisor._read_state(run_dir)
+        successor = json.loads(json.dumps(inner))
+        successor.update(batch_id="vc-2-0003", batch_sequence=3, batch_sha256="3" * 64)
+        accepted = []
+        for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+            try:
+                if protocol(prior_state, inner, run_dir, successor, campaign_dir=campaign):
+                    accepted.append(name)
+            except supervisor.SupervisorError:
+                pass
+        self.assertEqual(accepted, ["stage_review"])
+        again_failed, code = upgrade.compile_and_run_vc_batch(
+            upgrade_tests.CodexUpgradeTest._vc_chain_arguments(fixture, "VC-2", 3, plan)
+        )
+        self.assertEqual((code, again_failed["campaign_run"]["reason"]), (1, "action-failed:classify-draft"), again_failed)
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0003-vc-2.json").is_file())
+        totals = project.replay_head(fixture["ledger"])
+        self.assertEqual((totals["precise_total"], totals["estimated_total"]), (0, 0))
 
 
 if __name__ == "__main__":

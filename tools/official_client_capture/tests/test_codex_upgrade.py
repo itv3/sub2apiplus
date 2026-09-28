@@ -23766,7 +23766,9 @@ class CodexUpgradeTest(unittest.TestCase):
 
         ① run 期间无预约：真实 reconcile-supervisor-run 以诊断有效类（execution-failure）对账、收据 run.state 为
         watchdog-aborted。修复前 0-W 只认 legacy-interruption，报"对账收据 schema 或身份不闭合"（死路）；修复后按 failed
-        同口径（处理型失败判据）由 N=2 零请求恢复预览承接。
+        同口径（处理型失败判据）由 N=2 零请求恢复预览承接。第 39 项剩余形态起，对账先补做父进程来不及写的失败收账：
+        VC-1 的阶段审核类失败与 failed 一样进入阶段审核（采集动作不在 VC-1 阶段幂等合同内，留在审核），批次链审计
+        （协议 8）的判定不变——与 failed 形态完全相同。
         ② run 期间已发布官方预约：reconcile-supervisor-run 拒绝、reconcile-attempt 入账。修复前 0-W 认 attempt 收据后，
         协议 8 的看门狗分支仍抛"留有动作失败诊断，按失败终态协议处理"（死路）；修复后同样按 failed 同口径承接。"""
 
@@ -23794,7 +23796,9 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
                 check(preview)
             result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
-            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            # 第 39 项剩余形态：对账补做父进程的失败收账，VC-1 的阶段审核类失败进入阶段审核（与 failed 相同）。
+            self.assertEqual(result["status"], "stage_review_required", result.get("decision"))
+            self.assertEqual(result["ledger_closeout_backfill"]["ledger_status"], "stage_review_required")
             receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
             self.assertEqual(
                 (receipt["failure_class"], receipt["run"]["state"], receipt["run"]["failure_class"], receipt["reservation_exists"]),
@@ -24064,6 +24068,28 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
             )
+
+    def test_item39_watchdog_diagnostic_closeout_backfill_fails_closed_on_untrusted_facts(self) -> None:
+        """第 39 项剩余形态：对账为看门狗中止＋动作诊断补做失败收账之前，按入口 0-W 同一判据核对事实——诊断指向批次
+        清单外的动作（推断不出失败动作）时失败关闭：不补账、不写对账收据、账本不增事件。修复前对账不核对，照常判
+        recoverable 并写 reconcile-run-passed，而后继校验在 0-W 即拒绝，两边不一致。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "9" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+            )
+            self._d07_write_diagnostic(run_dir, state, "ghost-action", ("child-returncode", "ChildProcessError", "execution-failure"))
+            events_before = self._b0_ledger_events(ledger_dir)
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "指向批次清单外的动作 ghost-action"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events_before)
+            receipt = campaign_dir / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json"
+            self.assertFalse(receipt.exists())
 
 
 class EvidenceManifestTest(unittest.TestCase):

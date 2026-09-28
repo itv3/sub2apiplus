@@ -7992,7 +7992,7 @@ def _validate_batched_official_recovery_preview_retry_successor(
 _WATCHDOG_BINDING_MISMATCH_REASON_PREFIX = "action-output-binding-mismatch"
 
 
-def _watchdog_action_failure(
+def watchdog_action_failure_facts(
     prior_state: Mapping[str, Any],
     prior_dir: Path,
     campaign_dir: Path | None,
@@ -8004,10 +8004,13 @@ def _watchdog_action_failure(
 
     返回 ``{"action_id", "diagnostic", "effective_class"}``：失败动作即唯一诊断指向的动作，有效类用 reconciler
     ``_run_facts`` 的同一函数（``effective_action_failure_class``，内层清单取 run 目录的 campaign-run 清单）复算。
-    ``prior_manifest`` 用来确认诊断动作属于该批次清单（缺省时退回 run 目录的内层清单）。以下情形失败关闭（抛错，
-    任何协议都不承接）：诊断目录或诊断文件不可信、诊断不唯一、诊断指向批次清单外的动作（推断不出失败动作）、诊断
-    无法重放、monitor 已判动作输出绑定漂移（stop reason 以 action-output-binding-mismatch 开头）、动作输出绑定存在
-    却无法按 R2 核对或已漂移、有效类无法复算、有效类是永久失败类。只读，不写任何文件。
+    ``prior_manifest`` 用来确认诊断动作属于该批次清单（缺省时退回 run 目录的内层清单）。以下情形失败关闭（抛错）：
+    诊断目录或诊断文件不可信、诊断不唯一、诊断指向批次清单外的动作（推断不出失败动作）、诊断无法重放、monitor 已判
+    动作输出绑定漂移（stop reason 以 action-output-binding-mismatch 开头）、动作输出绑定存在却无法按 R2 核对或已漂移、
+    有效类无法复算。只读，不写任何文件。
+
+    第 39 项：对账补收账也用这一层可信性核对（有效类是永久失败类时由收账停线，不在这里拒绝）；后继协议的门禁是
+    ``_watchdog_action_failure``，在此之上再拒绝永久失败类。
     """
 
     if prior_state.get("state") != "watchdog-aborted":
@@ -8104,9 +8107,28 @@ def _watchdog_action_failure(
         )
     except SupervisorError as error:
         raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作有效失败类无法复算：{error}") from error
-    if effective_class in PERMANENT_ACTION_FAILURE_CLASSES:
-        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作诊断是永久失败类 {effective_class}，不能续跑。")
     return {"action_id": action_id, "diagnostic": diagnostic, "effective_class": effective_class}
+
+
+def _watchdog_action_failure(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    campaign_dir: Path | None,
+    *,
+    prior_manifest: Mapping[str, Any] | None,
+    label: str,
+) -> dict[str, Any] | None:
+    """后继协议的看门狗中止＋动作诊断门禁（草表 D-07）：``watchdog_action_failure_facts`` 的全部可信性核对，再加
+    有效类是永久失败类即拒绝（任何协议都不承接）。没有诊断返回 None。"""
+
+    failure = watchdog_action_failure_facts(
+        prior_state, prior_dir, campaign_dir, prior_manifest=prior_manifest, label=label
+    )
+    if failure is not None and failure["effective_class"] in PERMANENT_ACTION_FAILURE_CLASSES:
+        raise SupervisorError(
+            f"{label}：看门狗中止父 run {Path(prior_dir).name} 的动作诊断是永久失败类 {failure['effective_class']}，不能续跑。"
+        )
+    return failure
 
 
 def _reconciled_watchdog_abort(
@@ -9458,13 +9480,17 @@ def campaign_run_failure_facts(run_dir: Path, *, campaign_dir: Path) -> dict[str
     只读 state.json、stop-receipt、内层清单与动作诊断；非 ``action-failed`` 终态返回 None。
     失败分类用与父监督器收账相同的 ``effective_action_failure_class`` 重算，摘要用
     ``campaign_run_failure_digest``——两者与 ``_close_failed_campaign_timing_ledger`` 一致。
+
+    第 39 项（剩余形态，草表 D-07 口径）：看门狗中止的 run 留有唯一动作诊断、失败动作取自该诊断时同样给出事实——
+    对账已按诊断有效类补做收账，阶段／候选审核要按同一失败摘要绑定到它；没有诊断（动作只能由事件链推断）的看门狗
+    中止没有失败分类，仍返回 None。
     """
 
     run_dir = Path(run_dir)
     if run_dir.is_symlink() or not run_dir.is_dir():
         return None
     state = _read_state(run_dir)
-    if state.get("state") != "failed":
+    if state.get("state") not in {"failed", "watchdog-aborted"}:
         return None
     manifest_path = run_dir / "campaign-run-manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
@@ -9478,7 +9504,8 @@ def campaign_run_failure_facts(run_dir: Path, *, campaign_dir: Path) -> dict[str
     if (
         facts is None
         or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS
-        or facts["terminal_kind"] == "watchdog"
+        # 看门狗中止只有失败动作取自唯一诊断时才有失败分类（第 39 项剩余形态）；由事件链推断的动作不算。
+        or (facts["terminal_kind"] == "watchdog" and facts["action_id_source"] != "diagnostic")
         or facts["action_id"] is None
     ):
         return None
@@ -10869,10 +10896,15 @@ def _validate_batched_stage_review_successor(
         return _protocol_reject("没有 stage-replay.json（阶段审核尚未许可重派）")
     proof = _read_json(proof_path)
     facts = campaign_run_failure_facts(prior_dir, campaign_dir=campaign_dir)
-    # B4-1 改法 2：state 判断与其它协议同口径；看门狗中止没有收账、reconciler 不为它写 stage-replay，
-    # campaign_run_failure_facts 对它返回 None，这里仍失败关闭。
+    # B4-1 改法 2：state 判断与其它协议同口径。没有动作诊断的看门狗中止没有收账、reconciler 不为它写 stage-replay，
+    # campaign_run_failure_facts 对它返回 None，这里仍失败关闭。第 39 项剩余形态（草表 D-07 口径）：留有唯一动作诊断的
+    # 看门狗中止由对账按诊断有效类补做收账、写证明，与 failed 同样由本协议承接；它先过 0-W（按诊断有效类核对对账
+    # 收据、诊断可信、不是永久失败类），本协议被单独调用时也不绕过。
     if facts is None or prior_state.get("state") not in FAILED_TERMINAL_STATES:
         raise SupervisorError("阶段重派缺少可信失败父动作")
+    _require_reconciled_watchdog_parent(
+        prior_state, prior_dir, campaign_dir, label="阶段重派", prior_manifest=prior_manifest
+    )
     commit = _staging_commit_for_run(campaign_dir, prior_state, prior_manifest, prior_dir)
     if (commit is None or proof.get("commit_sha256") != commit["commit_sha256"]
             or proof.get("schema_version") != "codex-upgrade-stage-replay/v1"
