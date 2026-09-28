@@ -289,8 +289,10 @@ from urllib.parse import urlsplit
 # VC-5 续跑链截止失败收账进 recovery_required。control 层变化，监督器摘要随之变化。
 # 2026-09-28（第 48 项）：恢复段在段预约之后以截止类失败收口时与执行失败一样进 recovery_required，父收账按账本里段是否
 # 仍在运行判定；候选审核下的段不再提示开后继段。control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 53 项）：恢复段在段预约之前失败（执行失败或截止类）收为 recovery_required，经 reconcile-supervisor-run
+# 入账后由协议 15 承接同一段号重派；已预约的段仍按第 48 项。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "7ca5acfb6219a002de6378152f9248a9e1bcb8359f5633e957a1390cc45ecd4b"
+    "95a8b409b5f725dc09aaca8eed515c988638215d3f794e3967cc810b67370913"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

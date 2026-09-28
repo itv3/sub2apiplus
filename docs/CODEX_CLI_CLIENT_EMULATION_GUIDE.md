@@ -3495,7 +3495,12 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 - **恢复段截止类失败（第 48 项）**：恢复段在段预约之后以截止类失败（deadline-expired）收口时，与执行失败一样进入
   `recovery_required`：`deadline-extend` 延期 → `reconcile-attempt --recovery-revision ar<k>` → 批准恢复预览并授权 →
   `capture-candidate run --attempt-recovery ar<k+1> --rerun-failed --recovery-preview`。恢复段失败处于候选审核时，`reconcile-attempt`
-  不提示开后继段、不接受批准，按候选审核处置（`invalidate-candidate` 或 `close-campaign-ledger`）。段预约之前的截止失败维持候选审核。
+  不提示开后继段、不接受批准，按候选审核处置（`invalidate-candidate` 或 `close-campaign-ledger`）。
+- **恢复段预约之前失败（第 53 项）**：恢复段 ar<k> 在段预约之前失败（段目录与账本段事件都不存在；执行失败或截止类失败）时，
+  收账进入 `recovery_required`，不作废候选、不需停线。处置：截止类先 `deadline-extend` 延期，执行失败先修复并受监督部署 →
+  `reconcile-supervisor-run` 入账（账本回到 active；不要对 ar<k> 做 `reconcile-attempt --recovery-revision`，它没有预约）→
+  首段：`compile-and-run-vc-batch` 按 N+1 重派同一恢复段批次；后继段 ar<k>（k≥2）：先 `reconcile-attempt --recovery-revision
+  ar<k-1>` 重新对账并批准新的恢复预览（本次入账使原预览失效），再按 N+1 重派同一段、携带新预览。段已发布预约的失败仍按第 48 项。
 - **首批采集父 run 丢失（第 47 项）**：首批 VC-1 采集（序号 1，VC-0 收口派发、无 COMMIT）的父进程在失败收账前丢失时，
   `reconcile-attempt` 按 Campaign 绑定的首批清单，在控制根本身及其下一层目录的监督器状态目录里定位父 run 并补账；VC-0 收口的
   `--supervisor-state-dir` 放在控制根之外时仍定位不到。
