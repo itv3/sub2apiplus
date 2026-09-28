@@ -1170,6 +1170,35 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                     reconciler.authorize_recovery_preview(campaign_dir, attempt_id, preview_path, recovery_revision="ar1")
             self.assertEqual(self._item45_accepting(case, self._item45_segment_successor(case, preview_path)), [])
 
+    def test_item50_owner_alive_segment_permanent_failure_is_closed_out_after_segment_reconciliation(self) -> None:
+        """第 50 项（第 48 项遗留）：恢复段 ar1 在段预约之后以永久失败类（restoration-failed）收口，owner 在线。父监督器收账走永久
+        分支先写 stage_abandoned，此时段仍 active，被账本拒绝、收账失败，账本停在 active。修复前段对账登记段失败后不补收口，
+        判 recoverable 并提示"批准预览后开 ar2"——永久类却被提示续跑，而授权不写 recovery_authorized、协议 15 拒绝。修复后段对账
+        把段登记为失败之后，以父监督器同一收账函数补做收口：停线，对账永久停线。"""
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        permanent = ("handled-error", "RestorationError", "restoration-failed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            case = self._item45_owner_lost_segment(root, diagnostic=permanent, shape="alive")
+            campaign_dir, attempt_id = case["campaign_dir"], case["attempt_root"].name
+            ledger_dir = Path(str(case["fixture"]["timing_ledger"]))
+            with self.assertRaisesRegex(supervisor.SupervisorError, "stage_abandoned"):
+                supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir, case["prior_manifest"], failed_action_id="ar-run", failure_class="restoration-failed"
+                )
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            with self._segment_patches_started(case["context"], case["failing_jobs"]), \
+                    mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                reconciled = reconciler.reconcile_attempt(campaign_dir, attempt_id, recovery_revision="ar1")
+            backfill = reconciled.get("ledger_closeout_backfill")
+            self.assertIsNotNone(backfill, reconciled)
+            self.assertEqual((backfill["failure_class"], backfill["ledger_status"]), ("restoration-failed", "stopped"))
+            self.assertEqual(reconciled["status"], reconciler.DECISION_STOP, reconciled.get("decision"))
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
     def test_parent_finalize_lost_summary_is_verified_with_segment_load_strength_and_frozen_jobs(self) -> None:
         """R2 attempt-recovery 变体（2026-09-21 三审 P1）：对账／后继协议对绑定的段摘要用与幂等重派相同强度的
         段加载校验（自摘要、身份、预约绑定、权限收口重放）并要求结果 Job 集合恰等于权威链 J*；

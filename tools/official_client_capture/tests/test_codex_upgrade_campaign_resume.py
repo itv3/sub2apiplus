@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -311,6 +313,218 @@ class CampaignResumeTests(unittest.TestCase):
             again = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
             self.assertEqual(again["status"], "approval_required")
 
+
+    # ------------------------------------------------------------------
+    # 第 50 项：收账遇 stop_required 暂停后，campaign-resume 清零、重新对账补做收口
+    # ------------------------------------------------------------------
+
+    def _item50_limit(self, ledger_dir: Path, phase: str) -> None:
+        """把账本推到 stop_required：同一根因在当前阶段连续两次 attempt 失败（批次运行期间另一次对账把计数推到上限的形态）。"""
+
+        for index in (1, 2):
+            timing_ledger.append_event(
+                ledger_dir, event_id=f"item50-attempt-{index}-started", phase=phase, event_type="attempt_started",
+                attempt_id=f"item50-attempt-{index}", next_action="夹具",
+            )
+            timing_ledger.append_event(
+                ledger_dir, event_id=f"item50-attempt-{index}-failed", phase=phase, event_type="attempt_failed",
+                attempt_id=f"item50-attempt-{index}", root_cause_id="rc1-item50", next_action="夹具",
+            )
+        self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["status"], "stop_required")
+
+    def _item50_resume(self, root: Path, fixture: dict) -> None:
+        """campaign-resume：修复后受监督部署（晚于达上限）、回归收据、预览、批准；账本回到 active。"""
+
+        self._fresh_deployment(fixture)
+        regression = self._regression(root)
+        preview = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression))
+        self.assertEqual(preview["status"], "approval_required", preview)
+        self.assertEqual(preview["timing"]["cleared_root_cause_ids"], ["rc1-item50"])
+        applied = codex_upgrade._campaign_resume_command(self._arguments(fixture, regression, approve=preview["review_sha256"]))
+        self.assertEqual(applied["status"], "resumed", applied)
+        self.assertEqual(timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "active")
+
+    def _item50_vc2_stage_failure(self, root: Path, *, shape: str) -> dict:
+        """第 50 项夹具：VC-2 已开工的 Formal Campaign，批次 2（staging 模型、已登记 COMMIT）的真实 classify 动作（阶段幂等
+        合同可复核的形态）以执行失败收口；此时账本已因同根因两次失败处于 stop_required。``shape="alive"``：父进程自己封存
+        （stop 原因 action-failed:classify-draft，没有 owner-check 事件），父监督器收账遇 stop_required 只暂停、不写事件（第 46 项）；
+        ``shape="r2"``：父进程在收账前丢失，monitor 按 R2 封存，账本没有任何收口事件。"""
+
+        import sys
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        helper = self.helper
+        fixture = helper._b0_fixture(root)
+        campaign_dir, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+        for completed, started in (("VC-0", "VC-1"), ("VC-1", "VC-2")):
+            timing_ledger.append_event(
+                ledger_dir, event_id=f"item50-{completed.lower()}-completed", phase=completed, event_type="stage_completed",
+                next_action=f"启动 {started}",
+            )
+            timing_ledger.append_event(
+                ledger_dir, event_id=f"item50-{started.lower()}-started", phase=started, event_type="stage_started",
+                next_action="运行父批次",
+            )
+        plan = codex_upgrade._vc_campaign_plan(campaign_dir, fixture["manifest"])
+        inner = supervisor.build_batched_campaign_run_manifest(
+            campaign_id=str(fixture["manifest"]["campaign_id"]), campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id="vc-2-0002", batch_sequence=2, batch_sha256="2" * 64, phase="VC-2",
+            predecessor_checkpoint={"path": "control/vc/vc-1-checkpoint.json", "sha256": "3" * 64, "phase": "VC-1",
+                                    "checkpoint_sha256": "4" * 64},
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=[{
+                "action_id": "classify-draft", "operation": "VC-2:classify-draft", "timeout_seconds": 120.0,
+                "item_ids": ["classify-draft"],
+                "command": [sys.executable, str(Path(codex_upgrade.__file__).resolve()), "classify", "--campaign-dir", str(campaign_dir)],
+            }],
+            execute_items=["classify-draft"], reuse_items=[],
+        )
+        diagnostic = ("child-returncode", "ChildProcessError", "execution-failure")
+        if shape == "r2":
+            _state, run_dir = helper._r2_sealed_run(
+                fixture, "5" * 64, inner=inner, action_id="classify-draft", phase="VC-2", diagnostic=diagnostic,
+                action_failed_reason="returncode=1", started_offset_seconds=-30.0,
+            )
+        else:
+            run_dir = helper._b0_run_dir(
+                fixture, "5" * 64, phase="VC-2", state="failed", batched_manifest=inner, failure_class=diagnostic[2],
+                action_id="classify-draft", failure_kind=diagnostic[0], error_type=diagnostic[1],
+            )
+        helper._item45_bind_commit(campaign_dir, run_dir, inner)
+        self._item50_limit(ledger_dir, "VC-2")
+        return {"fixture": fixture, "campaign_dir": campaign_dir, "ledger_dir": ledger_dir, "inner": inner, "run_dir": run_dir}
+
+    def test_item50_owner_alive_stage_failure_paused_at_limit_is_closed_out_after_resume(self) -> None:
+        """第 50 项①（owner 在线）：VC-2 批次 2 的真实 classify 动作以执行失败收口时，账本已因同根因两次失败处于 stop_required，
+        父监督器收账按第 46 项只暂停、不写事件；对账判暂停（root_cause_repair），也不写事件。campaign-resume 清零根因、账本回到
+        active 之后，修复前重新对账不补收口：写 receipt_passed 并提示"重新派发同一批次"，而阶段审核协议要求阶段审核与幂等证明、
+        逐字重派协议不接执行失败——N+1 没有任何协议承接（死路）。修复后对账对"父进程自己封存、收账当时被暂停"的失败 run 以父
+        监督器同一收账函数补做：进入阶段审核、按阶段幂等合同写证明并重开 VC-2，N+1 逐字重派只有阶段审核协议承接；重复对账不再补账。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            case = self._item50_vc2_stage_failure(root, shape="alive")
+            campaign_dir, ledger_dir, run_dir, inner = case["campaign_dir"], case["ledger_dir"], case["run_dir"], case["inner"]
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id="classify-draft", failure_class="execution-failure"
+            )
+            self.assertEqual((closeout["ledger_status"], closeout.get("root_cause_paused")), ("stop_required", True), closeout)
+            events = self.helper._b0_ledger_events(ledger_dir)
+            paused = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(paused["status"], reconciler.DECISION_PAUSED, paused.get("decision"))
+            self.assertEqual(paused["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertNotIn("ledger_closeout_backfill", paused)
+            self.assertEqual(self.helper._b0_ledger_events(ledger_dir), events)
+            self._item50_resume(root, case["fixture"])
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            backfill = result.get("ledger_closeout_backfill")
+            self.assertIsNotNone(backfill, result)
+            self.assertEqual(
+                (backfill["action_id"], backfill["failure_class"], backfill["ledger_status"]),
+                ("classify-draft", "execution-failure", "stage_review_required"),
+            )
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertTrue(result["stage_replay"]["allowed"], result["stage_replay"])
+            summary = timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(
+                (summary["status"], summary["active_phase"], summary["next_action"]), ("active", "VC-2", "redispatch-same-batch")
+            )
+            successor = dict(inner, batch_id="vc-2-0003", batch_sequence=3, batch_sha256="3" * 64)
+            self.assertEqual(
+                self.helper._d07_accepting_protocols(supervisor._read_state(run_dir), inner, run_dir, successor, campaign_dir),
+                ["stage_review"],
+            )
+            head = summary["head_sequence"]
+            again = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertNotIn("ledger_closeout_backfill", again)
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_dir)["head_sequence"], head)
+
+    def test_item50_owner_lost_stage_failure_paused_at_limit_is_closed_out_after_resume(self) -> None:
+        """第 50 项②（owner 丢失，此前只有代码核对）：同一 VC-2 失败由 monitor 按 R2 封存。stop_required 时对账补账由收账函数只暂停、
+        不写事件，对账判暂停；campaign-resume 清零后重新对账补齐阶段审核并写幂等证明，N+1 只有阶段审核协议承接。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            case = self._item50_vc2_stage_failure(root, shape="r2")
+            campaign_dir, ledger_dir, run_dir, inner = case["campaign_dir"], case["ledger_dir"], case["run_dir"], case["inner"]
+            events = self.helper._b0_ledger_events(ledger_dir)
+            paused = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual((paused["status"], paused["decision"]["pause_kinds"]), (reconciler.DECISION_PAUSED, ["root_cause_repair"]))
+            self.assertEqual(paused["ledger_closeout_backfill"]["ledger_status"], "stop_required")
+            self.assertEqual(self.helper._b0_ledger_events(ledger_dir), events)
+            self._item50_resume(root, case["fixture"])
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["ledger_closeout_backfill"]["ledger_status"], "stage_review_required", result)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertTrue(result["stage_replay"]["allowed"], result["stage_replay"])
+            successor = dict(inner, batch_id="vc-2-0003", batch_sequence=3, batch_sha256="3" * 64)
+            self.assertEqual(
+                self.helper._d07_accepting_protocols(supervisor._read_state(run_dir), inner, run_dir, successor, campaign_dir),
+                ["stage_review"],
+            )
+
+    def test_item50_reserved_attempt_paused_at_limit_is_closed_out_after_resume(self) -> None:
+        """第 50 项（有预约路径）：VC-1 按预览真实补跑（批次 3，已登记 COMMIT）在 run 期间发布官方预约后以执行失败收口，此时账本
+        已处于 stop_required。① owner 在线：父监督器收账只暂停；② owner 丢失（R2）：对账补账按账本守卫不补。两种形态在 stop_required
+        期间 reconcile-attempt 都只判暂停、账本不增事件；campaign-resume 清零后重新对账，① 修复前不补收口（账本停在 active，与
+        owner 在线且未遇暂停时父监督器收账进阶段审核不一致），修复后与 ② 一样补齐阶段审核；批准并授权写 recovery_authorized、
+        阶段回到 active，N+1 零请求预览只有 official_recovery_run_retry 承接。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        diagnostic = ("child-returncode", "ChildProcessError", "execution-failure")
+        for shape in ("alive", "r2"):
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                fixture, _capture, _preview = self.helper._d07_vc1_capture_fixture(root)
+                campaign_dir, ledger_dir = fixture["campaign_dir"], fixture["timing_ledger"]
+                prior, successor = self.helper._item45_vc1_recovery_run_batches(fixture)
+                attempt_id = self.helper._b0_orphan_attempt(fixture)
+                reservation = campaign_dir / "official" / "attempts" / attempt_id / "reservation.json"
+                if shape == "r2":
+                    state, run_dir = self.helper._item45_owner_lost_run(
+                        fixture, "c" * 64, inner=prior, action_id="run-official-recovery", phase="VC-1",
+                        reservation_path=reservation, diagnostic=diagnostic, shape="r2",
+                    )
+                else:
+                    reserved = json.loads(reservation.read_text(encoding="utf-8"))["started_at_utc"]
+                    offset = datetime.fromisoformat(str(reserved).replace("Z", "+00:00")).timestamp() - 0.5 - time.time()
+                    run_dir = self.helper._b0_run_dir(
+                        fixture, "c" * 64, phase="VC-1", state="failed", batched_manifest=prior, failure_class=diagnostic[2],
+                        action_id="run-official-recovery", failure_kind=diagnostic[0], error_type=diagnostic[1],
+                        started_offset_seconds=offset,
+                    )
+                    self.helper._item45_bind_commit(campaign_dir, run_dir, prior)
+                    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+                self._item50_limit(ledger_dir, "VC-1")
+                if shape == "alive":
+                    closeout = supervisor._close_failed_campaign_timing_ledger(
+                        campaign_dir, prior, failed_action_id="run-official-recovery", failure_class="execution-failure"
+                    )
+                    self.assertEqual((closeout["ledger_status"], closeout.get("root_cause_paused")), ("stop_required", True))
+                events = self.helper._b0_ledger_events(ledger_dir)
+                paused = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                self.assertEqual((paused["status"], paused["decision"]["pause_kinds"]), (reconciler.DECISION_PAUSED, ["root_cause_repair"]))
+                self.assertNotIn("ledger_closeout_backfill", paused)
+                self.assertEqual(self.helper._b0_ledger_events(ledger_dir), events)
+                self._item50_resume(root, fixture)
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                backfill = result.get("ledger_closeout_backfill")
+                self.assertIsNotNone(backfill, result)
+                self.assertEqual(
+                    (backfill["run_id"], backfill["failure_class"], backfill["ledger_status"]),
+                    (run_dir.name, "execution-failure", "stage_review_required"),
+                )
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                reconciler.approve_recovery_preview(campaign_dir, attempt_id, approve_sha256=result["recovery_preview"]["review_sha256"])
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, Path(result["recovery_preview_path"]))
+                self.assertTrue(authorized["timing_recovery_event"]["appended"], authorized)
+                summary = timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+                self.assertEqual(
+                    self.helper._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["official_recovery_run_retry"]
+                )
 
 class RequestBudgetExtensionTests(unittest.TestCase):
     """修好接着跑第 14 项：请求预算耗尽只暂停（不再写 deadline_live_requests 终态），批准延长后原对象续跑。"""

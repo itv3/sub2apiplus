@@ -4436,6 +4436,62 @@ def _backfill_orphaned_action_failure(
     }
 
 
+# 第 50 项：父监督器收账当时被暂停的痕迹。父进程自己封存的失败 run（owner 在线时收账）遇账本 stop_required 只暂停、不写
+# 任何事件（第 46 项），遇预算到期先登记预算暂停、不写路由事件；两者之后都要人工处理——campaign-resume 清零根因（账本写
+# recovery_verified）、deadline-extend 延期（deadline_paused／deadline_extended）。补做收口只针对 run 开始之后账本出现过这类
+# 事件的父 run；其余父进程自己封存的 run 视为收账已按当时账本完成（夹具与历史现场不受影响）。
+_CLOSEOUT_PAUSE_FOOTPRINT_EVENTS = frozenset({"recovery_verified", "deadline_paused", "deadline_extended"})
+
+
+def _closeout_paused_after(ledger_dir: Path, started_at_epoch: float) -> bool:
+    """账本在父 run 开始之后出现过收账暂停的痕迹（campaign-resume 的恢复登记、预算暂停或延期）。"""
+
+    started = datetime.fromtimestamp(float(started_at_epoch), tz=timezone.utc)
+    try:
+        events = timing_ledger._load_events(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    for event, _raw in events:
+        if event.get("event_type") not in _CLOSEOUT_PAUSE_FOOTPRINT_EVENTS:
+            continue
+        try:
+            recorded = _timestamp(event.get("recorded_at_utc"), "账本事件 recorded_at_utc")
+        except ReconcilerError:
+            continue
+        if recorded >= started:
+            return True
+    return False
+
+
+def _owner_check_sealed(run_dir: Path) -> bool:
+    """monitor 按 R2 确定性封存留下的 ``supervisor:owner-check`` failed 事件；父进程自己封存的 run 没有它。"""
+
+    try:
+        events = supervisor.load_events(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"父 run 事件账本无法重放：{error}") from error
+    return any(event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check" for event in events)
+
+
+def _latest_commit_sequence(campaign_dir: Path, campaign_id: Any) -> int:
+    """本 Campaign 已登记 COMMIT 的最大序号（没有 COMMIT 为 0）。"""
+
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ReconcilerError("COMMIT 目录不得是符号链接")
+    latest = 0
+    for path in sorted(commits_root.iterdir()) if commits_root.is_dir() else []:
+        if codex_upgrade._VC_SEQUENCE_FILE_RE.fullmatch(path.name) is None or path.is_symlink() or not path.is_file():
+            raise ReconcilerError(f"COMMIT 目录含非法条目：{path.name}")
+        try:
+            commit = supervisor._read_vc_commit(path)
+        except vc_artifacts.VCArtifactError as error:
+            raise ReconcilerError(f"COMMIT 无法校验：{path.name}：{error}") from error
+        if commit["campaign_id"] == campaign_id:
+            latest = max(latest, int(commit["sequence"]))
+    return latest
+
+
 # 第 39 项：阶段审核阶段（VC-1～VC-3）。这些阶段的非可恢复动作失败由父监督器收账为阶段审核（永久类停线），
 # 阶段幂等重派证明只在账本处于阶段审核态时才写，所以收账缺失时后继协议全部无路。
 # 第 44 项：候选级阶段（VC-4～VC-6）同构——非可恢复动作失败由父监督器收账为候选审核（VC-4 的 R18 幂等重派证明也只在
@@ -4479,6 +4535,13 @@ def _backfill_orphaned_failure_closeout(
     事实），但诊断给出了失败动作与失败分类，与后继协议、入口 0-W 用的是同一份事实。可信性按
     ``supervisor.watchdog_action_failure_facts`` 核对（诊断唯一可重放、动作属批次清单、动作输出绑定未漂移），
     不可信即失败关闭、不补账；没有诊断的看门狗中止不补（它没有失败分类，照旧按 legacy-interruption 对账）。
+
+    第 50 项：父进程自己封存的 failed 终态（owner 在线时父监督器收账）同样补做，但只在收账当时被暂停的情形——账本在 run
+    开始之后出现过 campaign-resume 的恢复登记或预算暂停／延期（``_closeout_paused_after``）：收账遇 stop_required 只暂停、
+    不写事件（第 46 项），遇预算到期只登记预算暂停，清零根因或批准延期后没有任何人再收口，账本停在 active——阶段审核类
+    拿不到审核与幂等证明、永久类判 recoverable。补做前还要求账本（去掉预算暂停）是 active 或 stop_required 且当前阶段就是
+    父 run 的阶段、父 run 的批次仍是本 Campaign 最新已提交的批次（此后没有更高序号的 COMMIT）：已经推进的现场不改写；
+    stop_required 期间补账由收账函数照旧只暂停、不写事件，清零后重新对账即完成路由。
     """
 
     if run.get("phase") not in ORPHANED_CLOSEOUT_BACKFILL_PHASES:
@@ -4508,6 +4571,31 @@ def _backfill_orphaned_failure_closeout(
         failed_action_id = str(watchdog_failure["action_id"])
     elif orphan_backfill is not None:
         failed_action_id = str(orphan_backfill["orphan_facts"]["action_id"])
+    elif (
+        run.get("state") == "failed"
+        and not run.get("owner_alive")
+        and run.get("staging") is None
+        and not _owner_check_sealed(run_dir)
+        and _closeout_paused_after(ledger_dir, float(supervisor._read_state(run_dir).get("started_at_epoch", 0.0)))
+    ):
+        # 第 50 项：父进程自己封存、收账当时被暂停。失败动作取父监督器收账同一失败事实；再核对账本仍停在这次失败的阶段、
+        # 父 run 的批次仍是最新已提交批次。
+        try:
+            paused_facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"父 run 的失败事实不可信：{error}") from error
+        if paused_facts is None:
+            return None
+        try:
+            summary = timing_ledger.inspect_ledger(ledger_dir)
+        except (OSError, timing_ledger.TimingLedgerError) as error:
+            raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+        frontier_status = summary.get("status_before_pause") if summary.get("status") == "deadline_paused" else summary.get("status")
+        if frontier_status not in {"active", "stop_required"} or summary.get("active_phase") != run.get("phase"):
+            return None
+        if _latest_commit_sequence(campaign_dir, paused_facts["campaign_id"]) > int(paused_facts["batch_sequence"]):
+            return None
+        failed_action_id = str(paused_facts["action_id"])
     else:
         return None
     try:
@@ -4697,7 +4785,10 @@ def _attempt_owner_run(
     关闭。再要求：父 run 终态为 failed／watchdog-aborted 且 owner 已退出；COMMIT 与父 run 的 staging 绑定互相一致；失败
     动作（``campaign_run_failure_facts``，与父监督器收账同一失败摘要）正是发布这类预约的动作；并且是 owner 在失败收账前
     丢失的两种形态之一——monitor 按 R2 确定性封存的 failed（supervisor:owner-check），或看门狗中止且留有可信的动作
-    诊断（``watchdog_action_failure_facts``，与入口 0-W 同一核对）。owner 自己收口的 run 不在此列。
+    诊断（``watchdog_action_failure_facts``，与入口 0-W 同一核对）。owner 自己收口的 run 原本不在此列；第 50 项起收账没能
+    落地的同样纳入：收账当时被暂停（run 开始之后账本出现过 campaign-resume 的恢复登记或预算暂停／延期，
+    ``_closeout_paused_after``——收账遇 stop_required 只暂停、不写事件，遇预算到期只登记预算暂停，清零或延期之后没有人再收口），
+    以及恢复段 run 以不按段失败收口的类别失败（父监督器收账时段仍 active，stage_abandoned 必然被账本拒绝）。
 
     第 47 项：首批序号 1 由 VC-0 绑定在 campaign.json、没有 COMMIT 文件——没有 COMMIT 包住预约时刻的官方 attempt，改按
     ``_first_batch_owner_runs`` 在控制根下的监督器状态目录里定位首批父 run（队列清单须与 Campaign 绑定的首批清单逐字
@@ -4796,10 +4887,21 @@ def _attempt_owner_run(
     try:
         if state.get("state") == "failed":
             stop = supervisor.read_stop_receipt(run_dir)
-            sealed = stop.get("reason") == f"action-failed:{action_id}" and any(
-                event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
-                for event in supervisor.load_events(run_dir)
-            )
+            if _owner_check_sealed(run_dir):
+                sealed = stop.get("reason") == f"action-failed:{action_id}"
+            else:
+                # 第 50 项：父进程自己封存（owner 在线时父监督器收账），只在收账没能落地的两种情形补账（是否仍停在这次失败
+                # 现场由调用方的账本守卫判定）：
+                # · 收账当时被暂停——run 开始之后账本出现过 campaign-resume 的恢复登记或预算暂停／延期；
+                # · 恢复段 run 以不按段失败收口的类别失败（永久失败类等）——父监督器收账时段仍 active，stage_abandoned 必然被
+                #   账本拒绝、收账失败；段对账把段登记为失败之后才能落地（第 48 项遗留）。
+                segment_unlanded = recovery_revision is not None and supervisor._attempt_recovery_segment_failure(
+                    inner, action_id, str(facts["failure_class"]), segment_reserved=True
+                ) is None
+                sealed = stop.get("event_type") == "failed" and (
+                    segment_unlanded
+                    or _closeout_paused_after(_campaign_ledger_dir(manifest), float(state.get("started_at_epoch", 0.0)))
+                )
             if not sealed:
                 return None
         else:
