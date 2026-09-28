@@ -279,8 +279,10 @@ from urllib.parse import urlsplit
 # 2026-09-28（B4-1 后继协议层失败矩阵，含第 31 项）：失败父 run 共享事实、已对账的看门狗中止等同 failed、恢复链协议要求失败父 run
 # 已对账、候选后处理 execution-failure 与 canonical 动作识别、协议 8 判据、environment-prerequisite、拒因收集。control 层变化，
 # 监督器摘要随之变化。
+# 2026-09-28（草表 D-07／D-10、第 39／43 项）：看门狗中止却留有动作诊断按 failed 同口径承接；VC-1 官方 seal 链零请求后处理的
+# 阶段幂等重派合同；断言包已发布后 seal 预览续派的门禁与协议；看门狗形态阶段审核类失败的收账补做。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c58dd8561b1b055889b79f511961ae8ceffdcc7cd922c3b8f5391b02b35ea16c"
+    "4c86198d7271a7818033eb9a5cfabb8025faa8af1f22e751a1ae0e9b68535b42"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
