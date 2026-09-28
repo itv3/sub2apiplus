@@ -11778,6 +11778,49 @@ def _evaluator_identity_drift(frozen: Any) -> list[str]:
     )
 
 
+def _attempt_recovery_segment_failure(
+    manifest: Mapping[str, Any],
+    action_id: str,
+    failure_class: str,
+    *,
+    segment_reserved: bool,
+) -> str | None:
+    """失败动作是恢复段 run、且这次失败按段失败收口（recovery_required，账本允许 active 段）时返回段编号，否则 None。
+
+    执行失败：修好部署后开后继段（改造 5 M2，不变）。第 48 项：截止类失败（deadline-expired：子进程预算检查或父监督器
+    截止清理）在段已发布预约之后同样按段失败收口——延期、段对账后开后继段。此前它落到候选审核分支：owner 在线时段仍
+    active，stage_abandoned 被账本拒绝、收账失败，账本停在 active，授权不写 recovery_authorized，协议 15 拒绝后继段（死路）；
+    owner 丢失时第 45 项补账进候选审核，对账提示"批准预览后开 ar<k+1>"，授权却以"候选审核只允许 VC-5 采集失败 attempt 的
+    续跑授权"拒绝。段预约之前的截止失败（段号尚未启用、没有可对账的段）维持原路由（候选审核），后继段协议也接不住它。
+    其余审核类（request-accounting-uncertain 只由候选采集预约前的就绪 probe 产生，段 run 不做 probe）与永久失败类不在其列。
+    """
+
+    revision = _attempt_recovery_run_revision(manifest, action_id)
+    if revision is None:
+        return None
+    if failure_class == "execution-failure":
+        return revision
+    if failure_class == "deadline-expired" and segment_reserved:
+        return revision
+    return None
+
+
+def _attempt_recovery_segment_active(summary: Mapping[str, Any], recovery_revision: str) -> bool:
+    """计时账本里该段号有 active 的恢复段（已 attempt_recovery_started、尚未失败或完成）。
+
+    账本同一时刻至多一个 active 恢复段；父监督器收账发生在段对账之前，段已发布预约即仍是 active——据此判断段 run 是在
+    段预约之后失败（第 48 项）。
+    """
+
+    recoveries = summary.get("attempt_recoveries")
+    if not isinstance(recoveries, Mapping):
+        return False
+    return any(
+        isinstance(item, Mapping) and item.get("recovery_revision") == recovery_revision and item.get("status") == "active"
+        for item in recoveries.values()
+    )
+
+
 def _attempt_recovery_run_revision(manifest: Mapping[str, Any], action_id: str) -> str | None:
     """失败动作是恢复段 run（``capture-candidate run --attempt-recovery ar<k>``）时返回段编号，否则 None。"""
 
@@ -11809,8 +11852,13 @@ def _close_failed_campaign_timing_ledger(
     *,
     failed_action_id: str,
     failure_class: str = "execution-failure",
+    segment_reserved: bool | None = None,
 ) -> dict[str, Any]:
-    """按机器失败分类收口为可恢复暂停、阶段审核或永久停线。"""
+    """按机器失败分类收口为可恢复暂停、阶段审核或永久停线。
+
+    ``segment_reserved``（第 48 项）：失败动作是恢复段 run 时，段是否已发布段预约。None 由账本推断（该段号有 active
+    恢复段，父监督器收账时即如此）；reconcile-attempt 对段补账时段已登记失败、不再 active，由调用方显式给 True。
+    """
 
     campaign_dir = Path(campaign_dir)
     campaign = _read_json(campaign_dir / "campaign.json")
@@ -11904,7 +11952,16 @@ def _close_failed_campaign_timing_ledger(
     # 改造 5 M2（崩溃矩阵 A1）：恢复段 run 动作（capture-candidate run --attempt-recovery ar<k>）失败或中断
     # 不是候选级失败——它是 transient-environment 裁定后的补跑，失败对象是环境瞬态而非候选源码；
     # 阶段保持 active 进入 recovery_required，由段对账（同根因计数）与批准的恢复预览决定是否开后继段。
-    recovery_segment = _attempt_recovery_run_revision(manifest, failed_action_id) if failure_class == "execution-failure" else None
+    # 第 48 项：段 run 在段预约之后的截止类失败（deadline-expired）同样按段失败收口（见 _attempt_recovery_segment_failure）。
+    segment_revision = _attempt_recovery_run_revision(manifest, failed_action_id)
+    if segment_revision is not None and segment_reserved is None:
+        try:
+            segment_reserved = _attempt_recovery_segment_active(timing_ledger.inspect_ledger(ledger_dir), segment_revision)
+        except (OSError, timing_ledger.TimingLedgerError) as error:
+            raise SupervisorError(f"UpgradeTimingLedger 无法重放：{error}") from error
+    recovery_segment = _attempt_recovery_segment_failure(
+        manifest, failed_action_id, failure_class, segment_reserved=bool(segment_reserved)
+    )
     # 修好接着跑：VC-5 候选采集（及其续跑预览／补跑）失败不再进候选审核，阶段保持 active 进入
     # recovery_required；对账后按工具缺陷／环境／候选源码三类裁定，前两类修复部署、登记工具演进后
     # 在原 revision 续跑，只有候选源码问题才作废候选。第 49 项：续跑预览与补跑的截止类失败（deadline-expired）
@@ -11926,11 +11983,20 @@ def _close_failed_campaign_timing_ledger(
             successor = f"ar{int(recovery_segment[2:]) + 1}"
         except ValueError:
             successor = "ar<k+1>"
-        recovery_next_action = (
-            f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段动作失败／中断，段对账入账并批准"
-            f"恢复预览后，以 capture-candidate run --attempt-recovery {successor} --rerun-failed --recovery-preview 开后继段；"
-            "同根因达上限即停线。"
-        )
+        if failure_class == "deadline-expired":
+            # 第 48 项：截止类段失败的文案与执行失败分开（执行失败文案参与既有账本的幂等核对，保持不变；两者失败摘要
+            # 不同，事件 ID 本就不同）：先延期，不需要部署。
+            recovery_next_action = (
+                f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段因预算截止失败（deadline-expired），先 "
+                f"deadline-extend preview/apply 延期；段对账入账并批准恢复预览后，以 capture-candidate run --attempt-recovery "
+                f"{successor} --rerun-failed --recovery-preview 开后继段；不需要部署或登记 tool-evolution。"
+            )
+        else:
+            recovery_next_action = (
+                f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段动作失败／中断，段对账入账并批准"
+                f"恢复预览后，以 capture-candidate run --attempt-recovery {successor} --rerun-failed --recovery-preview 开后继段；"
+                "同根因达上限即停线。"
+            )
     elif candidate_capture is not None and failure_class == "deadline-expired":
         # 第 49 项：截止类失败不是工具缺陷，不需要部署；文案与执行失败分开（执行失败的文案参与既有账本的幂等核对，
         # 保持不变；两者失败摘要不同，事件 ID 本就不同）。

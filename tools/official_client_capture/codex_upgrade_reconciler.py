@@ -3624,7 +3624,24 @@ def reconcile_attempt(
                 "恢复预览与 resume 复用判定不一致（见 resume_reuse_check.reason），不可批准；"
                 "按原因修复后重新执行 reconcile-attempt"
             )
+        # 第 48 项：恢复段失败而账本处于候选审核（段 run 的审核类失败经补账进入候选审核，或第 48 项之前按旧口径收口的
+        # 截止类段失败）时，授权只接 VC-5 采集失败 attempt 的续跑、拒绝恢复段，不能再提示"批准预览后开后继段"：改为候选
+        # 审核的处置，并拒绝批准（批准了也无法授权）。
+        segment_under_candidate_review = (
+            recovery_revision is not None
+            and _ledger_facts(ledger_dir, now=_utc_now()).get("status") == "candidate_review_required"
+        )
+        if segment_under_candidate_review:
+            result["next_command"] = (
+                "candidate_review_required：恢复段失败已入账；候选审核下不接受恢复段续跑授权（批准预览后开后继段会被授权拒绝）"
+                "——判为候选源码问题则 invalidate-candidate preview/apply，否则以 close-campaign-ledger 显式停线"
+            )
         if approve_recovery_sha256 is not None:
+            if segment_under_candidate_review:
+                raise ReconcilerError(
+                    "候选审核下不接受恢复段续跑批准：授权只允许 VC-5 采集失败 attempt 的续跑；恢复段按候选审核处置"
+                    "（invalidate-candidate 或 close-campaign-ledger）"
+                )
             if result["resume_reuse_check"]["status"] == "inconsistent":
                 raise ReconcilerError(
                     "恢复预览与 resume 复用判定不一致，拒绝批准："
@@ -4810,6 +4827,8 @@ def _backfill_attempt_owner_closeout(
             owner["inner"],
             failed_action_id=str(facts["action_id"]),
             failure_class=str(facts["failure_class"]),
+            # 第 48 项：对段补账时段已发布预约（本次对账刚把它登记为失败，账本不再 active），显式告知收账。
+            segment_reserved=True if recovery_revision is not None else None,
         )
     except supervisor.SupervisorError as error:
         raise ReconcilerError(f"预约所属父 run 的失败收账补做失败：{error}") from error
