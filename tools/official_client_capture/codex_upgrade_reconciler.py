@@ -3871,6 +3871,10 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                 ),
                 "error_type": diagnostic["error_type"],
             }
+            # 修好接着跑第 60 项：v4 诊断的归一化拒因签名（只有 handled-error／unexpected-error 才有）是动作失败细分根因的
+            # 门控。v1～v3 历史诊断没有该字段，run 事实保持原形态，不补键。
+            if diagnostic.get("error_signature") is not None:
+                action_diagnostic["error_signature"] = diagnostic["error_signature"]
             if post_run_receipt is not None:
                 action_diagnostic["post_run_tooling"] = {
                     "schema_version": post_run_receipt["schema_version"],
@@ -4248,6 +4252,44 @@ def _staging_run_facts(
     return None
 
 
+# 修好接着跑第 60 项：有诊断、无枚举观测、带归一化拒因签名的动作失败的根因码。
+ACTION_ERROR_ROOT_CAUSE_CODE = "campaign-run.action-error"
+
+
+def action_error_root_cause(
+    phase: str,
+    failed_step: str,
+    *,
+    failure_kind: str,
+    error_type: str,
+    error_signature: str,
+) -> dict[str, Any]:
+    """动作以异常失败（v4 诊断带归一化拒因签名）的根因 ``campaign-run.action-error``（修好接着跑第 60 项）。
+
+    维度 phase、failure_kind、error_type、error_signature；failed_step 与 ``supervisor-run.interrupted`` 同源（失败动作的
+    operation，冒号换成连字符）。同一动作的不同根本原因（异常类型或归一化原文不同）得到不同 ID、互不累计；同一原因只在
+    路径、ID、时间戳、数字等波动片段上不同仍得同一 ID，上限保护不削弱。error_type 维度与 staging 中止同口径：异常类名
+    原样，不是合法标识符时记 ``unrecognized``。
+    """
+
+    if failure_kind not in supervisor.ACTION_DIAGNOSTIC_SIGNED_FAILURE_KINDS:
+        raise ReconcilerError(f"动作诊断的失败种类 {failure_kind!r} 不带归一化拒因签名，不能按 {ACTION_ERROR_ROOT_CAUSE_CODE} 编码")
+    try:
+        return root_cause.describe_root_cause(
+            component=COMPONENT,
+            stable_error_code=ACTION_ERROR_ROOT_CAUSE_CODE,
+            failed_step=failed_step,
+            stable_dimensions={
+                "phase": phase,
+                "failure_kind": failure_kind,
+                "error_type": staging_abort_error_type_dimension(error_type),
+                "error_signature": error_signature,
+            },
+        )
+    except root_cause.RootCauseError as error:
+        raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
 def _supervisor_run_failures(
     run: Mapping[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
@@ -4256,6 +4298,11 @@ def _supervisor_run_failures(
     历史 v1/v2 诊断没有枚举观测，仍保守重放为原来的单一
     ``supervisor-run.interrupted``；新 v3 诊断不得再按错误正文或最后操作猜测。
     改造 4 的四类父 run 失败没有动作诊断，根因直接由分类事实生成。
+
+    修好接着跑第 60 项：有诊断、无枚举观测的动作失败，诊断带归一化拒因签名（v4 诊断的 handled-error／unexpected-error，
+    由写诊断的监督器从同一异常的完整原文生成）时按 ``campaign-run.action-error`` 细分（:func:`action_error_root_cause`）；
+    没有签名的（v1～v3 历史诊断，以及 v4 的 interrupted／child-returncode）照旧 ``supervisor-run.interrupted``，维度与旧 ID
+    逐字不变。签名只取自诊断文件本身，绝不从 message 复算——历史诊断因此不会被重算出新 ID。
     """
 
     staging = run.get("staging")
@@ -4278,19 +4325,33 @@ def _supervisor_run_failures(
         # operation：父 run 最后事件恒为 supervisor-stop，会把 VC-5:assert 与 VC-5:accept 的失败
         # 编成同一根因，逐字重派后另一动作失败即被误判为同根因第二次而停线（M2-G0 真机暴露）。
         # 非动作失败（owner-loss／中断）仍按父 run 最后事件编码。
+        # 修好接着跑第 60 项：只有 operation 还不够——同一动作操作（如 VC-5:candidate-recovery 的预览与补跑）先后因两个完全
+        # 不同的原因失败会编成同一根因，第二次即达上限、总账暂停（194249z 项目总账第 287／300 条）。诊断带归一化拒因签名时
+        # 再按失败种类、异常类型与签名细分；没有签名时维持原编码。
         diagnostic = run.get("action_diagnostic")
         operation = diagnostic.get("operation") if isinstance(diagnostic, Mapping) else None
         step_source = operation if isinstance(operation, str) and operation else run["last_operation"]
+        signature = diagnostic.get("error_signature") if isinstance(diagnostic, Mapping) else None
         try:
-            legacy = root_cause.describe_root_cause(
-                component=COMPONENT,
-                stable_error_code="supervisor-run.interrupted",
-                failed_step=str(step_source).replace(":", "-")[:128],
-                stable_dimensions={"phase": str(run["phase"])},
-            )
+            failed_step = str(step_source).replace(":", "-")[:128]
+            if signature is not None:
+                cause = action_error_root_cause(
+                    str(run["phase"]),
+                    failed_step,
+                    failure_kind=str(diagnostic["failure_kind"]),
+                    error_type=str(diagnostic["error_type"]),
+                    error_signature=str(signature),
+                )
+            else:
+                cause = root_cause.describe_root_cause(
+                    component=COMPONENT,
+                    stable_error_code="supervisor-run.interrupted",
+                    failed_step=failed_step,
+                    stable_dimensions={"phase": str(run["phase"])},
+                )
         except (KeyError, root_cause.RootCauseError) as error:
             raise ReconcilerError(f"根因编码失败：{error}") from error
-        return [], [legacy]
+        return [], [cause]
 
     observations: list[dict[str, str]] = []
     causes: list[dict[str, Any]] = []

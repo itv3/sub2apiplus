@@ -536,6 +536,8 @@ class SupervisorTests(unittest.TestCase):
             payload["schema_version"] = supervisor.ACTION_DIAGNOSTIC_LEGACY_SCHEMA
             payload.pop("failure_class")
             payload.pop("failure_observations")
+            # 第 60 项起写入方写 v4（多一个 error_signature）；历史 v1 没有该字段。
+            payload.pop("error_signature")
             payload.pop("diagnostic_sha256")
             payload["diagnostic_sha256"] = supervisor._sha256(
                 supervisor._canonical(payload)
@@ -581,6 +583,8 @@ class SupervisorTests(unittest.TestCase):
             )
             payload["schema_version"] = supervisor.ACTION_DIAGNOSTIC_V2_SCHEMA
             payload.pop("failure_observations")
+            # 第 60 项起写入方写 v4（多一个 error_signature）；历史 v2 没有该字段。
+            payload.pop("error_signature")
             payload.pop("diagnostic_sha256")
             payload["diagnostic_sha256"] = supervisor._sha256(
                 supervisor._canonical(payload)
@@ -599,6 +603,229 @@ class SupervisorTests(unittest.TestCase):
                 replayed["failure_class"], "environment-prerequisite"
             )
             self.assertEqual(replayed["failure_observations"], [])
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 60 项：动作诊断 v4 的归一化拒因签名
+    # ------------------------------------------------------------------
+
+    def test_v3_action_diagnostic_replays_without_signature_and_v4_signature_shape_is_enforced(self) -> None:
+        """修好接着跑第 60 项：历史 v3 诊断照旧重放、返回值不补 error_signature；v4 的签名形态失败关闭。
+
+        v4 里 handled-error／unexpected-error 必须带 es1 签名，interrupted／child-returncode 必须为 null；v3 私加签名字段、
+        v4 去掉签名字段都是字段不闭合；签名被改写而自摘要未同步即摘要不符。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory).resolve()
+            run_dir.chmod(0o700)
+            identity = {"campaign_id": "v4-campaign", "phase": "VC-5", "owner_pid": os.getpid(), "owner_nonce": "8" * 64}
+
+            def write(action_id: str, failure_kind: str, message: str) -> tuple[Path, dict[str, object]]:
+                path = supervisor._action_diagnostic_path(run_dir, action_id, create_directory=True)
+                payload = supervisor._write_action_diagnostic(
+                    path, action_id=action_id, failure_kind=failure_kind, error_type="ValueError", message=message, **identity
+                )
+                return path, payload
+
+            def validate(path: Path, action_id: str) -> dict[str, object]:
+                return supervisor._validate_action_diagnostic(path, run_dir=run_dir, action_id=action_id, **identity)
+
+            def rewrite(path: Path, payload: dict[str, object]) -> None:
+                unsigned = {key: value for key, value in payload.items() if key != "diagnostic_sha256"}
+                supervisor._write_json(
+                    path, {**unsigned, "diagnostic_sha256": supervisor._sha256(supervisor._canonical(unsigned))}, replace=True
+                )
+
+            # 历史 v3：第 60 项之前的监督器写下的形态（没有 error_signature），照旧重放、返回值不补该字段。
+            path, payload = write("historical", "handled-error", "历史 v3 诊断。")
+            v3 = {key: value for key, value in payload.items() if key not in {"error_signature", "diagnostic_sha256"}}
+            v3["schema_version"] = supervisor.ACTION_DIAGNOSTIC_V3_SCHEMA
+            rewrite(path, v3)
+            replayed = validate(path, "historical")
+            self.assertEqual(replayed["schema_version"], "codex-upgrade-campaign-action-diagnostic/v3")
+            self.assertEqual(replayed["failure_observations"], [])
+            self.assertNotIn("error_signature", replayed)
+            rewrite(path, {**v3, "error_signature": "es1-" + "0" * 16})
+            with self.assertRaisesRegex(supervisor.SupervisorError, "字段不闭合"):
+                validate(path, "historical")
+
+            # 当前 v4：写入即可重放；签名缺失、格式非法都拒绝。
+            path, payload = write("signed", "handled-error", "当前 v4 诊断。")
+            self.assertEqual(payload["schema_version"], "codex-upgrade-campaign-action-diagnostic/v4")
+            self.assertEqual(
+                validate(path, "signed")["error_signature"], vc_artifacts.staging_abort_error_signature("当前 v4 诊断。")
+            )
+            for tampered, pattern in (
+                ({key: value for key, value in payload.items() if key != "error_signature"}, "字段不闭合"),
+                ({**payload, "error_signature": None}, "error_signature 非法"),
+                ({**payload, "error_signature": "es2-" + "0" * 16}, "error_signature 非法"),
+                ({**payload, "error_signature": "f" * 64}, "error_signature 非法"),
+            ):
+                with self.subTest(pattern=pattern, signature=tampered.get("error_signature")):
+                    rewrite(path, tampered)
+                    with self.assertRaisesRegex(supervisor.SupervisorError, pattern):
+                        validate(path, "signed")
+            # 签名被改写而自摘要未同步：摘要不符。
+            supervisor._write_json(path, {**payload, "error_signature": "es1-" + "0" * 16}, replace=True)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "摘要非法"):
+                validate(path, "signed")
+
+            # 没有异常原文的失败种类：写入方给 null，带签名即拒绝。
+            for failure_kind in ("interrupted", "child-returncode"):
+                with self.subTest(failure_kind=failure_kind):
+                    path, payload = write(f"unsigned-{failure_kind}", failure_kind, "")
+                    self.assertIsNone(payload["error_signature"])
+                    self.assertIsNone(validate(path, f"unsigned-{failure_kind}")["error_signature"])
+                    rewrite(path, {**payload, "error_signature": "es1-" + "0" * 16})
+                    with self.assertRaisesRegex(supervisor.SupervisorError, "只属于 handled-error"):
+                        validate(path, f"unsigned-{failure_kind}")
+
+    def test_action_diagnostic_v4_signature_uses_complete_error_text(self) -> None:
+        """修好接着跑第 60 项：签名来源是异常的完整原文，不是脱敏后的 message。
+
+        原文按脱敏规则整段改写（含来源标签）或超过 512 字时，两条不同原文的 message 相同，签名仍各等于完整原文的 es1、
+        互不相同；父监督器兜底写固定说明文案时以 error_source 传异常，签名按异常原文生成，不同原因得不同签名。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory).resolve()
+            run_dir.chmod(0o700)
+            identity = {"campaign_id": "v4-campaign", "phase": "VC-5", "owner_pid": os.getpid(), "owner_nonce": "8" * 64}
+
+            def write(
+                action_id: str,
+                message: str,
+                *,
+                error_source: BaseException | None = None,
+                failure_kind: str = "handled-error",
+            ) -> dict[str, object]:
+                path = supervisor._action_diagnostic_path(run_dir, action_id, create_directory=True)
+                extra: dict[str, object] = {} if error_source is None else {"error_source": error_source}
+                return supervisor._write_action_diagnostic(
+                    path,
+                    action_id=action_id,
+                    failure_kind=failure_kind,
+                    error_type="ConfigurationError",
+                    message=message,
+                    **identity,
+                    **extra,
+                )
+
+            redacted = (
+                "argv 已省略：存在属于其它 Candidate 身份的未完成 probe session",
+                "argv 已省略：ARM64 完整 Job 离线演练收据无法重放",
+            )
+            oversized = ("甲" * 600, "乙" * 600)
+            for index, (first, second) in enumerate((redacted, oversized)):
+                with self.subTest(case=index):
+                    one = write(f"text-{index}-a", first)
+                    two = write(f"text-{index}-b", second)
+                    self.assertEqual(one["message"], "错误详情已按脱敏规则省略。")
+                    self.assertEqual(one["message"], two["message"])
+                    self.assertEqual(one["error_signature"], vc_artifacts.staging_abort_error_signature(first))
+                    self.assertEqual(two["error_signature"], vc_artifacts.staging_abort_error_signature(second))
+                    self.assertNotEqual(one["error_signature"], two["error_signature"])
+            timeouts = [
+                write(
+                    f"fallback-{index}",
+                    "子命令未正常返回。",
+                    error_source=supervisor.SupervisorTimeout(text),
+                    failure_kind="unexpected-error",
+                )
+                for index, text in enumerate(("统一命令超时：VC-5:candidate-recovery", "统一命令超时：VC-5:assert-rules"))
+            ]
+            self.assertEqual({item["message"] for item in timeouts}, {"子命令未正常返回。"})
+            self.assertEqual(
+                timeouts[0]["error_signature"],
+                vc_artifacts.staging_abort_error_signature("统一命令超时：VC-5:candidate-recovery"),
+            )
+            self.assertNotEqual(timeouts[0]["error_signature"], timeouts[1]["error_signature"])
+            self.assertNotEqual(
+                timeouts[0]["error_signature"], vc_artifacts.staging_abort_error_signature("子命令未正常返回。")
+            )
+            # 没有异常原文的失败种类不签名（即使给了异常对象）。
+            self.assertIsNone(
+                write("child", "子命令以非零状态退出，未提供进一步的脱敏诊断。", failure_kind="child-returncode")[
+                    "error_signature"
+                ]
+            )
+            self.assertIsNone(
+                write("interrupt", "", error_source=KeyboardInterrupt(), failure_kind="interrupted")["error_signature"]
+            )
+
+    def test_campaign_run_child_error_diagnostic_is_v4_signed_from_complete_text(self) -> None:
+        """修好接着跑第 60 项：真实 campaign-run 子进程经 write_campaign_run_action_diagnostic 写 v4 诊断，签名由同一异常的完整
+        原文生成；原文按脱敏规则被整段改写时签名照样可区分，原文不进诊断文件；父监督器独立校验并绑定同一摘要。"""
+
+        signatures: dict[str, str] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            for tag, text in (
+                ("probe", "argv 已省略：存在属于其它 Candidate 身份的未完成 probe session"),
+                ("rehearsal", "argv 已省略：ARM64 完整 Job 离线演练收据无法重放"),
+            ):
+                root = Path(directory) / tag
+                root.mkdir()
+                child = (
+                    "import sys; "
+                    "from tools.official_client_capture import codex_upgrade_supervisor as s; "
+                    f"error=ValueError({text!r}); "
+                    "s.write_campaign_run_action_diagnostic(failure_kind='handled-error', error=error); sys.exit(1)"
+                )
+                result = self._campaign_run(
+                    root,
+                    actions=[
+                        {
+                            "action_id": "signed",
+                            "operation": "queue-signed",
+                            "timeout_seconds": 2,
+                            "command": [sys.executable, "-c", child],
+                        }
+                    ],
+                )
+                self.assertNotEqual(result.returncode, 0)
+                payload = json.loads(result.stdout)
+                run_dir = Path(str(payload["run_dir"]))
+                binding = payload["actions"][0]["diagnostic"]
+                diagnostic = json.loads((run_dir / binding["path"]).read_text(encoding="utf-8"))
+                self.assertEqual(diagnostic["schema_version"], supervisor.ACTION_DIAGNOSTIC_SCHEMA)
+                self.assertEqual((diagnostic["failure_kind"], diagnostic["error_type"]), ("handled-error", "ValueError"))
+                self.assertEqual(diagnostic["message"], "错误详情已按脱敏规则省略。")
+                self.assertEqual(diagnostic["error_signature"], vc_artifacts.staging_abort_error_signature(text))
+                self.assertEqual(binding["sha256"], diagnostic["diagnostic_sha256"])
+                rendered = json.dumps(diagnostic, ensure_ascii=False)
+                for fragment in ("probe session", "离线演练", "argv"):
+                    self.assertNotIn(fragment, rendered)
+                signatures[tag] = str(diagnostic["error_signature"])
+        self.assertNotEqual(signatures["probe"], signatures["rehearsal"])
+
+    def test_campaign_run_parent_fallback_unexpected_error_signs_exception_text(self) -> None:
+        """修好接着跑第 60 项：动作未正常返回（统一命令超时）时父监督器兜底写 unexpected-error 诊断——说明文案固定，签名按父
+        进程手里的异常原文（统一命令超时：<operation>）生成，同一操作的超时恒得同一签名。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self._campaign_run(
+                root,
+                actions=[
+                    {
+                        "action_id": "slow",
+                        "operation": "queue-slow",
+                        "timeout_seconds": 0.5,
+                        "command": [sys.executable, "-c", "import time; time.sleep(30)"],
+                    }
+                ],
+            )
+            self.assertNotEqual(result.returncode, 0)
+            paths = sorted(root.glob("campaign/run-*/action-diagnostics/action-slow-failure.json"))
+            self.assertEqual(len(paths), 1, result.stderr)
+            diagnostic = json.loads(paths[0].read_text(encoding="utf-8"))
+            self.assertEqual(
+                (diagnostic["schema_version"], diagnostic["failure_kind"], diagnostic["error_type"], diagnostic["message"]),
+                (supervisor.ACTION_DIAGNOSTIC_SCHEMA, "unexpected-error", "SupervisorTimeout", "子命令未正常返回。"),
+            )
+            self.assertEqual(
+                diagnostic["error_signature"], vc_artifacts.staging_abort_error_signature("统一命令超时：queue-slow")
+            )
 
     def test_action_diagnostic_preserves_enumerated_failure_observations(self) -> None:
         """就绪失败的枚举观测须去重排序，并把账务别名收敛为冻结分类。"""

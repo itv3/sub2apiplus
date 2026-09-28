@@ -1278,6 +1278,144 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0")[unreconciled], 2)
             self.assertEqual(sorted(ledger.root_causes_at_limit_for(head, "0.157.0")), sorted([legacy, unreconciled]))
 
+    def test_root_cause_code_migration_000006_replays_history_and_counts_new_ids_separately(self) -> None:
+        """修好接着跑第 60 项：root_cause_codes.json 新增 campaign-run.action-error（并改写 supervisor-run.interrupted 的描述）后，
+        部署前必须在 ARM64 项目总账写 migrations/000006.json（d4478b55… → 当前摘要，算法版本不变，id_mapping 为空）。
+
+        按 ARM64 的迁移链重建 plan 冻结身份（000003：a7212d52…→6cc4d62c…；000004：6cc4d62c…→89c7f604…，第 32 项；000005：
+        89c7f604…→d4478b55…，第 51 项；000001、000002 的摘要为虚构占位）后证明：缺 000006 时总账拒绝服务（部署预检失败），
+        000006 接错起点同样拒绝；带 000006 时历史事件逐字节不变地照旧重放——194249z 第 287、300 条两次都记成的旧 ID
+        rc1-f3d2956a…（第二次达上限）与第 301 条修复登记后的清零状态都不变；之后的新事件按 campaign-run.action-error 的新 ID
+        分别计数，两个不同原因互不累计、也不累计到旧 ID，同一新 ID 第二次仍达上限。
+        """
+
+        codes_before_item32 = "6cc4d62c8028ee6313c2fcd25768b5a8dee352fcba29927bc41eb1ac87a30184"
+        codes_after_item32 = "89c7f604a96606d594998a2ae6ea4ec3e19b7b4701446bec0f103fa69310499c"
+        codes_after_item51 = "d4478b55314477bd64239f73039b8a387405fb5a87a3a2a1d4d9c3a97649a254"
+        codes_before_000003 = "a7212d52f08742214d75811cc128a9500b9002cbac8dfe25626bea292ee833b9"
+        current_sha = root_cause.load_codes()["codes_sha256"]
+        self.assertNotIn(current_sha, {codes_after_item51, codes_after_item32}, "码表未变化就不需要 000006")
+        legacy = "rc1-f3d2956a367d76818302"
+        self.assertEqual(
+            legacy,
+            root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="supervisor-run.interrupted",
+                failed_step="VC-5-candidate-recovery",
+                stable_dimensions={"phase": "VC-5"},
+            ),
+        )
+
+        def action_error(error_type: str, signature: str) -> str:
+            return root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="campaign-run.action-error",
+                failed_step="VC-5-candidate-recovery",
+                stable_dimensions={
+                    "phase": "VC-5",
+                    "failure_kind": "handled-error",
+                    "error_type": error_type,
+                    "error_signature": signature,
+                },
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            campaign_dir = _campaign(root, "c1", target_version="0.157.0")
+            _register(root, campaign_dir, "c1", target_version="0.157.0")
+            # 第 287、300 条：同一动作操作两次不同原因的失败都记成旧 ID，第二次达上限；第 301 条登记修复证据后清零。
+            for operation in ("reconcile-supervisor-run:run-9fe20d26", "reconcile-supervisor-run:run-080a56c9"):
+                _reconciliation(campaign_dir, operation_id=operation, keys=[], root_cause_id=legacy)
+                ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0")[legacy], 2)
+            self.assertIn(legacy, ledger.root_causes_at_limit_for(head, "0.157.0"))
+            ledger.record_root_cause_repair(
+                ledger_root,
+                root_cause_id=legacy,
+                kind="code",
+                bindings={"fix_commit_sha": "1" * 40, "regression_receipt_sha256": "2" * 64, "deployment_receipt_sha256": "3" * 64},
+            )
+            before = ledger.replay_head(ledger_root)
+            self.assertEqual(before["root_cause_counts"][legacy], 0)
+            self.assertEqual(ledger.root_causes_at_limit_for(before, "0.157.0"), [])
+            events_before = {path.name: path.read_bytes() for path in sorted((ledger_root / "events").iterdir())}
+            # plan 冻结身份改成 ARM64 迁移链的起点。
+            plan_path = ledger_root / "plan.json"
+            plan = json.loads(plan_path.read_text("utf-8"))
+            algorithm = plan["root_cause_algorithm_version"]
+            self.assertEqual(algorithm, "structured-root-cause/v1")
+            plan["root_cause_codes_sha256"] = "1" * 64
+            plan["plan_sha256"] = ledger._digest({k: v for k, v in plan.items() if k != "plan_sha256"})
+            plan_path.unlink()
+            _write_json(plan_path, plan)
+
+            def migration(sequence: int, source: str, target: str) -> dict[str, object]:
+                return {
+                    "schema_version": "root-cause-code-migration/v1",
+                    "sequence": sequence,
+                    "from_codes_sha256": source,
+                    "to_codes_sha256": target,
+                    "from_algorithm_version": algorithm,
+                    "to_algorithm_version": algorithm,
+                    "id_mapping": {},
+                    "approved_by": "老板",
+                    "approved_at_utc": "2026-09-28T13:00:00.000Z",
+                }
+
+            chain = [
+                ("1" * 64, "2" * 64),
+                ("2" * 64, codes_before_000003),
+                (codes_before_000003, codes_before_item32),
+                (codes_before_item32, codes_after_item32),
+                (codes_after_item32, codes_after_item51),
+            ]
+            for sequence, (source, target) in enumerate(chain, start=1):
+                _write_json(ledger_root / "migrations" / f"{sequence:06d}.json", migration(sequence, source, target))
+            (ledger_root / "migrations").chmod(0o700)
+            # 只有 000001～000005（ARM64 现状）而码表已变：总账拒绝服务，部署预检在此失败。
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "没有衔接的旧新 ID 映射收据"):
+                ledger.replay_head(ledger_root)
+            # 000006 接错起点（不是 000005 的终点）：映射链不衔接，同样拒绝。
+            wrong = ledger_root / "migrations" / "000006.json"
+            _write_json(wrong, migration(6, codes_after_item32, current_sha))
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "不衔接"):
+                ledger.replay_head(ledger_root)
+            wrong.unlink()
+            _write_json(ledger_root / "migrations" / "000006.json", migration(6, codes_after_item51, current_sha))
+            after = ledger.replay_head(ledger_root)
+            # 历史事件逐字节不变、head 摘要不变；旧 ID 的计数、上限与修复状态原样保留（id_mapping 为空，不迁移旧 ID）。
+            self.assertEqual({path.name: path.read_bytes() for path in sorted((ledger_root / "events").iterdir())}, events_before)
+            self.assertEqual((after["sequence"], after["head_sha256"]), (before["sequence"], before["head_sha256"]))
+            for field in (
+                "root_cause_counts",
+                "root_cause_counts_by_version",
+                "root_causes_at_limit_by_version",
+                "repaired_root_causes",
+            ):
+                self.assertEqual(after[field], before[field], field)
+            # 新事件：同一动作操作的两个不同原因各得一个新 ID、各计 1，互不累计，也不累计到旧 ID。
+            probe_session = action_error("ValueError", "es1-" + "1" * 16)
+            rehearsal = action_error("ConfigurationError", "es1-" + "2" * 16)
+            self.assertEqual(len({legacy, probe_session, rehearsal}), 3)
+            for operation, cause in (
+                ("reconcile-supervisor-run:run-item60-a", probe_session),
+                ("reconcile-supervisor-run:run-item60-b", rehearsal),
+            ):
+                _reconciliation(campaign_dir, operation_id=operation, keys=[], root_cause_id=cause)
+                ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            head = ledger.replay_head(ledger_root)
+            counts = ledger.root_cause_counts_for(head, "0.157.0")
+            self.assertEqual((counts.get(legacy, 0), counts[probe_session], counts[rehearsal]), (0, 1, 1))
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), [])
+            # 同一新 ID 第二次：上限保护不削弱。
+            _reconciliation(campaign_dir, operation_id="reconcile-supervisor-run:run-item60-c", keys=[], root_cause_id=probe_session)
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0")[probe_session], 2)
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), [probe_session])
+
     def test_cli_create_status_and_admission(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -18490,11 +18490,13 @@ class CodexUpgradeTest(unittest.TestCase):
         error_type: str = "ConfigurationError",
         post_run_tooling: bool = False,
         started_offset_seconds: float = -30.0,
+        message: str = "机器分类测试失败。",
     ) -> Path:
         """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。
 
         ``batched_manifest`` 给出时以它替代默认的 v2 内层清单（seal 段批次等场景）；
         ``post_run_tooling`` 为真时按父监督器的判据函数写 post-run-tooling 收据。
+        ``message`` 是写诊断时交给监督器的异常原文（修好接着跑第 60 项起，v4 诊断的归一化拒因签名按它的完整原文生成）。
         """
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
@@ -18598,7 +18600,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 failure_class=failure_class,
                 failure_observations=failure_observations,
                 error_type=error_type,
-                message="机器分类测试失败。",
+                message=message,
             )
             if post_run_tooling:
                 classification = supervisor.post_run_tooling_facts(
@@ -20408,9 +20410,11 @@ class CodexUpgradeTest(unittest.TestCase):
             result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
             self.assertEqual(result["status"], "recoverable")
             self.assertEqual(result["live_request_count"], 0)
+            # 修好接着跑第 60 项：环境门禁以 handled-error 写 v4 诊断（带归一化拒因签名、无枚举观测），根因按
+            # campaign-run.action-error 细分；修复前记 supervisor-run.interrupted。
             self.assertEqual(
                 result["root_cause"]["stable_error_code"],
-                "supervisor-run.interrupted",
+                "campaign-run.action-error",
             )
             head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
             self.assertEqual(head_after["sequence"], head_before["sequence"] + 1)
@@ -22693,6 +22697,259 @@ class CodexUpgradeTest(unittest.TestCase):
                 str(fixture["manifest"]["campaign_id"]),
                 codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"],
             )
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 60 项：动作失败（有诊断、无枚举观测）按失败种类、异常类型与归一化拒因签名细分根因
+    # ------------------------------------------------------------------
+
+    # 194249z 项目总账第 287 条（补跑 run-candidate-recovery，ValueError）与第 300 条（零请求预览 preview-candidate-recovery，
+    # ConfigurationError）的失败原文。两条诊断都是 v3、failure_kind handled-error、failure_observations 为空，两个动作同属
+    # operation VC-5:candidate-recovery，修复前都记成同一个根因 ITEM60_LEGACY_ROOT_CAUSE。
+    ITEM60_PROBE_SESSION_MESSAGE = "存在属于其它 Candidate 身份的未完成 probe session"
+    ITEM60_REHEARSAL_MESSAGE = "ARM64 完整 Job 离线演练收据无法重放：Formal 执行合同与 ARM64 完整 Job 演练不一致"
+    ITEM60_LEGACY_ROOT_CAUSE = "rc1-f3d2956a367d76818302"
+
+    def _item60_candidate_recovery_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        action_id: str,
+        error_type: str,
+        message: str,
+        failure_kind: str = "handled-error",
+        historical_v3: bool = False,
+    ) -> Path:
+        """VC-5 候选续跑批次（零请求预览与补跑两个动作同属 operation VC-5:candidate-recovery）里某个动作失败的父 run。
+
+        诊断由监督器写诊断的同一函数写出，``message`` 就是交给它的异常原文。``historical_v3`` 为真时把诊断改写成第 60 项之前
+        的监督器写下的 v3 形态：没有 error_signature，自摘要按 v3 字段重算（修复前监督器写的本来就是 v3，改写是恒等的，所以
+        本辅助在修复前后都可运行）。
+        """
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        inner = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": fixture["manifest"]["campaign_id"],
+            "phase": "VC-5",
+            "deadline_seconds": 3600,
+            "no_op": False,
+            "execute_items": ["candidate-test"],
+            "reuse_items": [],
+            "actions": [
+                {
+                    "action_id": item,
+                    "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                    "timeout_seconds": 60,
+                    "command": ["true"],
+                }
+                for item in (
+                    supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                    supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+                )
+            ],
+        }
+        run_dir = self._b0_run_dir(
+            fixture,
+            name,
+            phase="VC-5",
+            failure_class="execution-failure",
+            batched_manifest=inner,
+            action_id=action_id,
+            failure_kind=failure_kind,
+            error_type=error_type,
+            message=message,
+        )
+        if historical_v3:
+            path = run_dir / "action-diagnostics" / f"action-{action_id}-failure.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload.pop("error_signature", None)
+            payload["schema_version"] = "codex-upgrade-campaign-action-diagnostic/v3"
+            payload.pop("diagnostic_sha256")
+            payload["diagnostic_sha256"] = supervisor._sha256(supervisor._canonical(payload))
+            supervisor._write_json(path, payload, replace=True)
+        return run_dir
+
+    def test_reconcile_supervisor_run_splits_action_failures_of_same_operation_by_error(self) -> None:
+        """修好接着跑第 60 项：同一动作操作 VC-5:candidate-recovery 先后因两个完全不同的原因失败（194249z 项目总账第 287、300 条）。
+
+        修复前两次都记 supervisor-run.interrupted(VC-5-candidate-recovery) = rc1-f3d2956a367d76818302，第二次即达同根因上限 2、
+        总账暂停，只能 record-root-cause-repair 放行（第 301 条）。修复后监督器写 v4 诊断，带由同一异常的完整原文生成的归一化
+        拒因签名；对账按 campaign-run.action-error（维度 phase、failure_kind、error_type、error_signature）得到两个不同根因、
+        各计 1，第二次仍可恢复；都不是旧 ID，也不累计到旧 ID。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        failures = (
+            ("a" * 64, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, "ValueError", self.ITEM60_PROBE_SESSION_MESSAGE),
+            ("b" * 64, supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID, "ConfigurationError", self.ITEM60_REHEARSAL_MESSAGE),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            results = []
+            for name, action_id, error_type, message in failures:
+                run_dir = self._item60_candidate_recovery_run(
+                    fixture, name, action_id=action_id, error_type=error_type, message=message
+                )
+                results.append(reconciler.reconcile_supervisor_run(run_dir, campaign_dir))
+            ids = [result["root_cause"]["root_cause_id"] for result in results]
+            # 缺陷行为：修复前两次同一根因、第二次达上限暂停。
+            self.assertNotEqual(ids[0], ids[1])
+            self.assertEqual(
+                [result["status"] for result in results], ["recoverable", "recoverable"], results[-1].get("decision")
+            )
+            self.assertNotIn(self.ITEM60_LEGACY_ROOT_CAUSE, ids)
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            counts = codex_upgrade_project_ledger.root_cause_counts_for(head, "0.154.0")
+            self.assertEqual((counts.get(ids[0]), counts.get(ids[1])), (1, 1))
+            self.assertNotIn(self.ITEM60_LEGACY_ROOT_CAUSE, counts)
+            self.assertEqual(codex_upgrade_project_ledger.root_causes_at_limit_for(head, "0.154.0"), [])
+            for result, (_name, _action_id, error_type, message) in zip(results, failures):
+                cause = result["root_cause"]
+                signature = codex_upgrade_vc_artifacts.staging_abort_error_signature(message)
+                self.assertEqual(cause["stable_error_code"], "campaign-run.action-error")
+                self.assertEqual(cause["component"], "reconciler")
+                self.assertEqual(cause["failed_step"], "VC-5-candidate-recovery")
+                self.assertEqual(
+                    cause["stable_dimensions"],
+                    {
+                        "phase": "VC-5",
+                        "failure_kind": "handled-error",
+                        "error_type": error_type,
+                        "error_signature": signature,
+                    },
+                )
+                receipt = json.loads(
+                    (campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8")
+                )
+                self.assertEqual(receipt["root_cause"]["root_cause_id"], cause["root_cause_id"])
+                diagnostic = receipt["run"]["action_diagnostic"]
+                self.assertEqual(diagnostic["schema_version"], supervisor.ACTION_DIAGNOSTIC_SCHEMA)
+                self.assertEqual(diagnostic["operation"], supervisor.CANDIDATE_RECOVERY_OPERATION)
+                self.assertEqual(diagnostic["error_signature"], signature)
+
+    def test_reconcile_supervisor_run_same_action_error_differing_only_in_volatile_fragments_hits_limit(self) -> None:
+        """修好接着跑第 60 项：上限保护不削弱——同一原因只在绝对路径、run ID 与序号上不同，两次失败得同一个
+        campaign-run.action-error 根因，第二次达上限暂停、待登记根因修复证据（与修复前同根因第二次的行为一致）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        messages = (
+            f"{self.ITEM60_PROBE_SESSION_MESSAGE}：/srv/a/control/probe/run-{'1' * 64}/session.json（序号 3）",
+            f"{self.ITEM60_PROBE_SESSION_MESSAGE}：/srv/b/control/probe/run-{'2' * 64}/session.json（序号 17）",
+        )
+        self.assertEqual(len({codex_upgrade_vc_artifacts.staging_abort_error_signature(item) for item in messages}), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            results = []
+            for name, message in zip(("c" * 64, "d" * 64), messages):
+                run_dir = self._item60_candidate_recovery_run(
+                    fixture,
+                    name,
+                    action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+                    error_type="ValueError",
+                    message=message,
+                )
+                results.append(reconciler.reconcile_supervisor_run(run_dir, campaign_dir))
+            cause = results[0]["root_cause"]
+            self.assertEqual(cause["stable_error_code"], "campaign-run.action-error")
+            self.assertEqual(results[1]["root_cause"]["root_cause_id"], cause["root_cause_id"])
+            self.assertEqual(results[0]["status"], "recoverable", results[0].get("decision"))
+            self.assertEqual(results[1]["status"], "paused", results[1].get("decision"))
+            self.assertEqual(results[1]["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIn("record-root-cause-repair", results[1]["next_command"])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(codex_upgrade_project_ledger.root_cause_counts_for(head, "0.154.0")[cause["root_cause_id"]], 2)
+            self.assertIn(cause["root_cause_id"], codex_upgrade_project_ledger.root_causes_at_limit_for(head, "0.154.0"))
+
+    def test_reconcile_supervisor_run_historical_v3_action_diagnostics_keep_legacy_root_cause(self) -> None:
+        """修好接着跑第 60 项：历史照旧——第 60 项之前的监督器写下的 v3 诊断没有归一化拒因签名，对账不从 message 猜原因，
+        仍按 supervisor-run.interrupted 旧维度复算：194249z 第 287、300 条两次失败都得 rc1-f3d2956a367d76818302 逐字不变，
+        第二次达上限暂停（与当时入账一致）；收据 run 事实里的诊断保持 v3 形态、不带签名字段。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        failures = (
+            ("a" * 64, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, "ValueError", self.ITEM60_PROBE_SESSION_MESSAGE),
+            ("b" * 64, supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID, "ConfigurationError", self.ITEM60_REHEARSAL_MESSAGE),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            results = []
+            for name, action_id, error_type, message in failures:
+                run_dir = self._item60_candidate_recovery_run(
+                    fixture, name, action_id=action_id, error_type=error_type, message=message, historical_v3=True
+                )
+                results.append(reconciler.reconcile_supervisor_run(run_dir, campaign_dir))
+            for result in results:
+                cause = result["root_cause"]
+                self.assertEqual(cause["root_cause_id"], self.ITEM60_LEGACY_ROOT_CAUSE)
+                self.assertEqual(
+                    (cause["stable_error_code"], cause["failed_step"], cause["stable_dimensions"]),
+                    ("supervisor-run.interrupted", "VC-5-candidate-recovery", {"phase": "VC-5"}),
+                )
+                receipt = json.loads(
+                    (campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8")
+                )
+                diagnostic = receipt["run"]["action_diagnostic"]
+                self.assertEqual(diagnostic["schema_version"], "codex-upgrade-campaign-action-diagnostic/v3")
+                self.assertNotIn("error_signature", diagnostic)
+            self.assertEqual(results[0]["status"], "recoverable", results[0].get("decision"))
+            self.assertEqual(results[1]["status"], "paused", results[1].get("decision"))
+            self.assertEqual(results[1]["decision"]["pause_kinds"], ["root_cause_repair"])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.root_cause_counts_for(head, "0.154.0")[self.ITEM60_LEGACY_ROOT_CAUSE], 2
+            )
+
+    def test_reconcile_supervisor_run_interrupted_and_child_returncode_keep_legacy_root_cause(self) -> None:
+        """修好接着跑第 60 项：新诊断里没有异常原文的两类失败不细分——子进程被中断（interrupted，KeyboardInterrupt 原文为空）
+        与父监督器兜底的 child-returncode（子进程没写诊断）不带签名，照旧按 supervisor-run.interrupted(VC-5-candidate-recovery)
+        编码，旧 ID rc1-f3d2956a367d76818302 不变：同一动作操作的真实中断跨部署仍累计到同一根因，第二次照样达上限暂停。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        failures = (
+            ("e" * 64, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, "interrupted", "KeyboardInterrupt", ""),
+            (
+                "f" * 64,
+                supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                "child-returncode",
+                "ChildProcessError",
+                "子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            results = []
+            for name, action_id, failure_kind, error_type, message in failures:
+                run_dir = self._item60_candidate_recovery_run(
+                    fixture, name, action_id=action_id, error_type=error_type, message=message, failure_kind=failure_kind
+                )
+                diagnostic = json.loads(
+                    (run_dir / "action-diagnostics" / f"action-{action_id}-failure.json").read_text(encoding="utf-8")
+                )
+                self.assertIsNone(diagnostic.get("error_signature"))
+                results.append(reconciler.reconcile_supervisor_run(run_dir, campaign_dir))
+            for result in results:
+                cause = result["root_cause"]
+                self.assertEqual(cause["root_cause_id"], self.ITEM60_LEGACY_ROOT_CAUSE)
+                self.assertEqual(cause["stable_error_code"], "supervisor-run.interrupted")
+            self.assertEqual(results[0]["status"], "recoverable", results[0].get("decision"))
+            self.assertEqual(results[1]["status"], "paused", results[1].get("decision"))
 
     def test_formal_campaign_run_enforcement_covers_future_target_versions(self) -> None:
         """campaign-run 强制派发与旧写入拒绝按历史豁免集合判定，不再逐版本硬编码。"""

@@ -92,12 +92,20 @@ CAMPAIGN_RUN_EXECUTION_DEADLINE_ENV = (
     "CODEX_UPGRADE_CAMPAIGN_EXECUTION_DEADLINE_AT_EPOCH"
 )
 CAMPAIGN_RUN_CLEANUP_GRACE_ENV = "CODEX_UPGRADE_CAMPAIGN_CLEANUP_GRACE_SECONDS"
-ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v3"
+# 修好接着跑第 60 项：v4 在 v3 字段上增加 error_signature（归一化拒因签名，见 ACTION_DIAGNOSTIC_SIGNED_FAILURE_KINDS）。
+# v1～v3 是历史诊断，照旧可重放；只有本版本起的写入方才写 v4。
+ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v4"
+ACTION_DIAGNOSTIC_V3_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v3"
 ACTION_DIAGNOSTIC_V2_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v2"
 ACTION_DIAGNOSTIC_LEGACY_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v1"
 ACTION_DIAGNOSTIC_FAILURE_KINDS = frozenset(
     {"handled-error", "interrupted", "unexpected-error", "child-returncode"}
 )
+# 修好接着跑第 60 项：有异常原文可归因的失败种类。v4 诊断只对这两类写归一化拒因签名 error_signature（es1，由写诊断的
+# 同一异常的完整原文生成，口径同 vc_artifacts.staging_abort_error_signature），对账据此把"有诊断、无枚举观测"的动作失败
+# 按原因细分为 campaign-run.action-error。interrupted（KeyboardInterrupt，原文为空，中断来源在进程外）与 child-returncode
+# （子进程没写诊断，父进程只知道非零退出）没有异常原文，签名为 null，对账照旧按 supervisor-run.interrupted 编码。
+ACTION_DIAGNOSTIC_SIGNED_FAILURE_KINDS = frozenset({"handled-error", "unexpected-error"})
 ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
     {
         "environment-prerequisite",
@@ -197,7 +205,7 @@ POST_RUN_TOOLING_MAX_JSON_BYTES = 4 * 1024 * 1024
 # environment_contaminated；Job 闭合后直到 seal 完成前 attempt.json 始终是
 # awaiting_receipts（客户端检查点记在 evidence/receipts 下，不改 attempt 状态）。
 POST_RUN_TOOLING_ATTEMPT_STATUSES = frozenset({"awaiting_receipts"})
-ACTION_DIAGNOSTIC_FIELDS = frozenset(
+ACTION_DIAGNOSTIC_V3_FIELDS = frozenset(
     {
         "schema_version",
         "campaign_id",
@@ -214,7 +222,9 @@ ACTION_DIAGNOSTIC_FIELDS = frozenset(
         "diagnostic_sha256",
     }
 )
-ACTION_DIAGNOSTIC_V2_FIELDS = ACTION_DIAGNOSTIC_FIELDS - {
+# 当前 v4：v3 字段加 error_signature（修好接着跑第 60 项）。
+ACTION_DIAGNOSTIC_FIELDS = ACTION_DIAGNOSTIC_V3_FIELDS | {"error_signature"}
+ACTION_DIAGNOSTIC_V2_FIELDS = ACTION_DIAGNOSTIC_V3_FIELDS - {
     "failure_observations"
 }
 ACTION_DIAGNOSTIC_LEGACY_FIELDS = ACTION_DIAGNOSTIC_V2_FIELDS - {
@@ -951,7 +961,12 @@ def _validate_action_diagnostic(
     owner_pid: int,
     owner_nonce: str,
 ) -> dict[str, Any]:
-    """校验动作失败诊断的闭合字段、父身份、权限与自摘要。"""
+    """校验动作失败诊断的闭合字段、父身份、权限与自摘要。
+
+    修好接着跑第 60 项：v4 的 error_signature 只校验形态——handled-error／unexpected-error 必须是 es1 签名，其余失败种类
+    必须为 null。签名基于完整原文，而 message 可能已按脱敏规则改写或截断，所以不能也不应从 message 复算；签名与异常的
+    一致性由写入方用同一异常同时生成保证，写入后由自摘要防篡改。v1～v3 历史诊断没有该字段，返回值也不补该字段。
+    """
 
     expected = _action_diagnostic_path(
         run_dir,
@@ -965,6 +980,8 @@ def _validate_action_diagnostic(
         expected_fields = ACTION_DIAGNOSTIC_LEGACY_FIELDS
     elif schema_version == ACTION_DIAGNOSTIC_V2_SCHEMA:
         expected_fields = ACTION_DIAGNOSTIC_V2_FIELDS
+    elif schema_version == ACTION_DIAGNOSTIC_V3_SCHEMA:
+        expected_fields = ACTION_DIAGNOSTIC_V3_FIELDS
     else:
         expected_fields = ACTION_DIAGNOSTIC_FIELDS
     if set(payload) != expected_fields:
@@ -974,6 +991,7 @@ def _validate_action_diagnostic(
     if (
         schema_version not in {
             ACTION_DIAGNOSTIC_SCHEMA,
+            ACTION_DIAGNOSTIC_V3_SCHEMA,
             ACTION_DIAGNOSTIC_V2_SCHEMA,
             ACTION_DIAGNOSTIC_LEGACY_SCHEMA,
         }
@@ -985,7 +1003,7 @@ def _validate_action_diagnostic(
         or payload.get("failure_kind") not in ACTION_DIAGNOSTIC_FAILURE_KINDS
         or (
             schema_version
-            in {ACTION_DIAGNOSTIC_SCHEMA, ACTION_DIAGNOSTIC_V2_SCHEMA}
+            in {ACTION_DIAGNOSTIC_SCHEMA, ACTION_DIAGNOSTIC_V3_SCHEMA, ACTION_DIAGNOSTIC_V2_SCHEMA}
             and payload.get("failure_class")
             not in ACTION_DIAGNOSTIC_FAILURE_CLASSES
         )
@@ -999,13 +1017,25 @@ def _validate_action_diagnostic(
     ):
         raise SupervisorError("动作失败诊断身份、内容或摘要非法。")
     if (
-        schema_version == ACTION_DIAGNOSTIC_SCHEMA
+        schema_version in {ACTION_DIAGNOSTIC_SCHEMA, ACTION_DIAGNOSTIC_V3_SCHEMA}
         and payload.get("failure_observations")
         != _action_failure_observations(payload.get("failure_observations"))
     ):
         raise SupervisorError(
             "动作失败诊断 failure_observations 未按稳定键唯一排序。"
         )
+    if schema_version == ACTION_DIAGNOSTIC_SCHEMA:
+        signature = payload.get("error_signature")
+        if payload.get("failure_kind") in ACTION_DIAGNOSTIC_SIGNED_FAILURE_KINDS:
+            if (
+                not isinstance(signature, str)
+                or vc_artifacts.STAGING_ABORT_ERROR_SIGNATURE_RE.fullmatch(signature) is None
+            ):
+                raise SupervisorError("动作失败诊断 error_signature 非法。")
+        elif signature is not None:
+            raise SupervisorError(
+                "动作失败诊断 error_signature 只属于 handled-error／unexpected-error。"
+            )
     _validate_action_diagnostic_timestamp(payload.get("recorded_at_utc"))
     if schema_version == ACTION_DIAGNOSTIC_LEGACY_SCHEMA:
         # 历史 v1 没有机器失败分类；只读重放时按不可自动恢复处理，绝不从
@@ -1018,6 +1048,19 @@ def _validate_action_diagnostic(
     if schema_version == ACTION_DIAGNOSTIC_V2_SCHEMA:
         return {**payload, "failure_observations": []}
     return payload
+
+
+def _action_error_signature(failure_kind: str, source: BaseException | str) -> str | None:
+    """动作诊断 v4 的归一化拒因签名（修好接着跑第 60 项）：只有 handled-error／unexpected-error 才有，其余为 None。
+
+    口径与 staging 中止收据、提交步骤失败诊断相同（``vc_artifacts.staging_abort_error_signature``，es1）：基于清洗后的完整
+    原文，只替换已知波动片段（路径、各类 ID、时间戳、摘要、数字）后取摘要。诊断的 message 会按脱敏规则整段改写或受 512 字
+    上限约束，签名不受影响；签名本身是摘要，不把原文、argv、环境或原始输出带进诊断。
+    """
+
+    if failure_kind not in ACTION_DIAGNOSTIC_SIGNED_FAILURE_KINDS:
+        return None
+    return vc_artifacts.staging_abort_error_signature(source)
 
 
 def _write_action_diagnostic(
@@ -1033,8 +1076,14 @@ def _write_action_diagnostic(
     failure_observations: Sequence[Mapping[str, str]] | None = None,
     error_type: str,
     message: str,
+    error_source: BaseException | str | None = None,
 ) -> dict[str, Any]:
-    """以不可覆盖方式写一份动作失败诊断。"""
+    """以不可覆盖方式写一份动作失败诊断（v4）。
+
+    ``error_source`` 是归一化拒因签名的来源：有异常对象时传异常本身（签名按它的完整原文生成），不传时按 ``message``
+    参数的原文（脱敏改写之前）生成——campaign-run 子进程传的 ``message`` 就是 ``str(error)``，两者一致；父监督器兜底
+    写的固定说明文案没有原文信息，有异常对象时必须另传 ``error_source``。
+    """
 
     campaign_id = _safe_id(campaign_id, "campaign_id")
     phase = _safe_id(phase, "phase", maximum=32)
@@ -1059,6 +1108,9 @@ def _write_action_diagnostic(
         "failure_observations": observations,
         "error_type": error_type,
         "message": _action_diagnostic_message(message),
+        "error_signature": _action_error_signature(
+            failure_kind, error_source if error_source is not None else message
+        ),
         "recorded_at_utc": _utc_now(),
     }
     payload["diagnostic_sha256"] = _sha256(_canonical(payload))
@@ -1076,6 +1128,7 @@ def write_campaign_run_action_diagnostic(
 
     非 campaign-run 上下文不创建文件。调用方必须忽略这里的写入异常并保留
     原始失败；父进程会在子命令退出后独立校验或生成固定的兜底诊断。
+    修好接着跑第 60 项：handled-error／unexpected-error 的归一化拒因签名由同一异常对象的完整原文生成。
     """
 
     if os.environ.get(CAMPAIGN_RUN_CONTEXT_ENV) != "1":
@@ -1105,6 +1158,7 @@ def write_campaign_run_action_diagnostic(
         failure_observations=getattr(error, "failure_observations", None),
         error_type=type(error).__name__,
         message=str(error),
+        error_source=error,
     )
     return path
 
@@ -12972,6 +13026,9 @@ def _campaign_run_with_budget_lock(
                             failure_class=getattr(error, "failure_class", "execution-failure"),
                             error_type=type(error).__name__,
                             message="子命令未正常返回。",
+                            # 修好接着跑第 60 项：说明文案是固定的，签名按父进程手里的异常原文生成（统一命令超时、
+                            # 出口暂停等文案都是确定的），不同原因才能得到不同根因。
+                            error_source=error,
                         )
                     failed_action_diagnostic = _validate_action_diagnostic(
                         diagnostic_path,

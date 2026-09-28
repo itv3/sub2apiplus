@@ -281,6 +281,92 @@ class StructuredRootCauseTests(unittest.TestCase):
                 stable_dimensions={"phase": "VC-2", "stage": "commit-publish"},
             )
 
+    def test_campaign_run_action_error_splits_same_operation_by_error_and_keeps_historical_ids(self) -> None:
+        """修好接着跑第 60 项：campaign-run.action-error 按失败种类、异常类型与归一化拒因签名细分同一动作操作的失败。
+
+        登记为 reconciler 生产（与 supervisor-run.interrupted 同一生产者）、维度恰为 phase、failure_kind、error_type、
+        error_signature；同一原因（签名相同）得同一 ID，不同拒因、不同异常类型或不同失败种类得不同 ID，且都不等于历史
+        supervisor-run.interrupted 的 ID。历史 ID 字面量逐字不变：194249z 项目总账第 287、300 条（VC-5:candidate-recovery
+        两次不同原因的失败）都记成的 rc1-f3d2956a367d76818302 仍由 supervisor-run.interrupted 旧维度复算得到。
+        """
+
+        codes = root_cause.load_codes()["codes"]
+        entry = codes["campaign-run.action-error"]
+        self.assertEqual(entry["component"], "reconciler")
+        self.assertEqual(entry["stable_dimensions"], ("phase", "failure_kind", "error_type", "error_signature"))
+        self.assertFalse(entry["legacy"])
+        # 旧码的生产者与维度不变（维度一变旧 ID 全变）。
+        self.assertEqual(
+            (codes["supervisor-run.interrupted"]["component"], codes["supervisor-run.interrupted"]["stable_dimensions"]),
+            ("reconciler", ("phase",)),
+        )
+        historical = root_cause.structured_root_cause(
+            component="reconciler",
+            stable_error_code="supervisor-run.interrupted",
+            failed_step="VC-5-candidate-recovery",
+            stable_dimensions={"phase": "VC-5"},
+        )
+        self.assertEqual(historical, "rc1-f3d2956a367d76818302")
+
+        def cause(signature: str, *, error_type: str = "ValueError", failure_kind: str = "handled-error") -> str:
+            return root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="campaign-run.action-error",
+                failed_step="VC-5-candidate-recovery",
+                stable_dimensions={
+                    "phase": "VC-5",
+                    "failure_kind": failure_kind,
+                    "error_type": error_type,
+                    "error_signature": signature,
+                },
+            )
+
+        probe_session = cause("es1-" + "1" * 16)
+        rehearsal = cause("es1-" + "2" * 16, error_type="ConfigurationError")
+        self.assertEqual(probe_session, cause("es1-" + "1" * 16))
+        self.assertNotEqual(probe_session, rehearsal)
+        self.assertNotEqual(probe_session, cause("es1-" + "2" * 16))
+        self.assertNotEqual(probe_session, cause("es1-" + "1" * 16, error_type="ConfigurationError"))
+        self.assertNotEqual(probe_session, cause("es1-" + "1" * 16, failure_kind="unexpected-error"))
+        self.assertNotIn(historical, {probe_session, rehearsal})
+        # 与第 32 项 staging.attempt-failed 用同一签名口径，但码与组件都不同，不会混成一个根因。
+        attempt_failed = root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.attempt-failed",
+            failed_step="VC-5-candidate-recovery",
+            stable_dimensions={
+                "phase": "VC-5",
+                "stage": "VC-5-candidate-recovery",
+                "error_type": "ValueError",
+                "error_signature": "es1-" + "1" * 16,
+            },
+        )
+        self.assertNotEqual(probe_session, attempt_failed)
+        # 签名维度同样受波动值拒绝：长摘要、绝对路径不能冒充签名。
+        for value in ("f" * 64, "/root/docker/capture-cli/data"):
+            with self.subTest(value=value), self.assertRaisesRegex(root_cause.RootCauseError, "不是稳定根因输入"):
+                cause(value)
+        # 维度键必须恰好四个：退化成旧的单维不行；也不能由其它组件生产。
+        with self.assertRaisesRegex(root_cause.RootCauseError, "维度键"):
+            root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="campaign-run.action-error",
+                failed_step="VC-5-candidate-recovery",
+                stable_dimensions={"phase": "VC-5"},
+            )
+        with self.assertRaisesRegex(root_cause.RootCauseError, "不能由"):
+            root_cause.structured_root_cause(
+                component="supervisor",
+                stable_error_code="campaign-run.action-error",
+                failed_step="VC-5-candidate-recovery",
+                stable_dimensions={
+                    "phase": "VC-5",
+                    "failure_kind": "handled-error",
+                    "error_type": "ValueError",
+                    "error_signature": "es1-" + "1" * 16,
+                },
+            )
+
     def test_legacy_literals_map_to_structured_ids(self) -> None:
         mapped = root_cause.legacy_root_cause_id("vc1-parent-lease-deadline-missing")
         self.assertTrue(root_cause.is_structured(mapped))

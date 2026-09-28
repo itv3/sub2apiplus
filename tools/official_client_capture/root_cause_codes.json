@@ -16,7 +16,12 @@
     "supervisor-run.interrupted": {
       "component": "reconciler",
       "stable_dimensions": ["phase"],
-      "description": "父监督器在派发前或运行中被中断，尚无 attempt。"
+      "description": "父监督器在派发前或运行中被中断，尚无 attempt。也用于有动作诊断、但既没有枚举失败观测也没有归一化拒因签名的动作失败：failed_step 为失败动作的 operation（冒号换成连字符；清单没有动作表时为父 run 最后操作）。修好接着跑第 60 项起带签名的动作失败改记 campaign-run.action-error；本码继续用于没有动作诊断的中断（owner 丢失、SIGKILL、看门狗）、历史 v1～v3 诊断，以及 v4 诊断的 interrupted、child-returncode（没有异常原文），维度与旧 ID 不变。"
+    },
+    "campaign-run.action-error": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase", "failure_kind", "error_type", "error_signature"],
+      "description": "修好接着跑第 60 项：campaign-run 父批次的动作以异常失败且没有枚举失败观测，动作诊断为 codex-upgrade-campaign-action-diagnostic/v4、failure_kind 为 handled-error 或 unexpected-error。failed_step 与 supervisor-run.interrupted 同源（失败动作的 operation，冒号换成连字符）；failure_kind 为诊断的失败种类；error_type 为异常类名（非标识符记 unrecognized）；error_signature 为监督器写诊断时由同一异常的完整原文生成的归一化拒因签名 es1（口径同 staging.attempt-failed，不受诊断 message 的脱敏改写与长度上限影响）。同一动作的不同根本原因互不累计；同一原因只在波动片段上不同仍得同一 ID，上限保护不削弱。v1～v3 诊断没有签名，按 supervisor-run.interrupted 复算，历史对账收据与总账事件照旧重放。"
     },
     "attempt.interrupted": {
       "component": "reconciler",
