@@ -88,6 +88,9 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
     ),
     # v7 的出口、WireGuard 与资源降级语义保持原样，仅允许重放已封存收据。
     "7": frozenset({"d0b6a0650cbb2f3ef33349d914e5aad24c323288d1af618fa6f50313cd570a5f"}),
+    # v8 事实合同不变；9e10 为修好接着跑第 36 项（受控维护等待放行"进程仍在、网络命名空间已不可进入"的守护瞬态）
+    # 修复前的受管版本，已生成 0.157 194249z 的 P0 与 attempt 收据，只允许按同一合同只读重放，不允许生成新 facts。
+    "8": frozenset({"9e10bd0f91b588ee6aefd0ab06ac845c248faaa45b75c906bd5df91933845f98"}),
 }
 PUBLIC_EGRESS_URL = "https://api.ipify.org"
 TLS_READINESS_PROBES = (

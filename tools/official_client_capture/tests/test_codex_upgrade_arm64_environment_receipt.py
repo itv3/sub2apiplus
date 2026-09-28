@@ -993,6 +993,37 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             ):
                 receipt.build_receipt(root, facts_path.name)
 
+    def test_replays_v8_receipts_generated_before_maintenance_wait_fix(self) -> None:
+        """修好接着跑第 36 项：维护等待口径的修复只改校验、不改事实合同，修复前 producer（9e10bd0f…，r17 树）生成的
+        194249z P0／attempt 收据在当前 producer 下只读重放通过；旧身份不能再生成新收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            facts_path, facts = self._fixture(root)
+            producer = dict(facts["collector"])
+            producer["tool"] = (
+                "/root/docker/capture-cli/data/tools/official_client_capture/"
+                "codex_upgrade_arm64_environment_receipt.py"
+            )
+            producer["tool_sha256"] = "9e10bd0f91b588ee6aefd0ab06ac845c248faaa45b75c906bd5df91933845f98"
+            self.assertEqual(producer["version"], "8")
+            self.assertIn(producer["tool_sha256"], receipt.REGISTERED_REPLAY_PRODUCER_HASHES["8"])
+            self.assertNotEqual(producer["tool_sha256"], receipt._current_producer()["tool_sha256"])
+            facts["collector"] = producer
+            self._rewrite(facts_path, facts)
+            legacy_receipt = receipt._build_receipt(root, facts_path.name, replay_producer=producer)
+            receipt_path = root / "p0-pre-item36-receipt.json"
+            receipt._write_once(receipt_path, legacy_receipt)
+
+            replayed = receipt.replay(root, receipt_path.name)
+            self.assertEqual(replayed, legacy_receipt)
+            self.assertEqual(replayed["producer"], producer)
+            self.assertEqual(replayed["contract_sha256"], receipt.contract_sha256())
+            self.assertIn("environment_equivalence", replayed)
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "身份漂移"):
+                receipt.build_receipt(root, facts_path.name)
+
     def test_replay_rejects_registered_hash_at_wrong_coordinate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
