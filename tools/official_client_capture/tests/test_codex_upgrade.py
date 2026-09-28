@@ -22536,6 +22536,173 @@ class CodexUpgradeTest(unittest.TestCase):
                     state, segment, run_dir, dict(segment, batch_sequence=2), campaign_dir=None
                 )
 
+    def _b4_watchdog_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        inner: dict[str, object],
+        action_id: str,
+        phase: str = "VC-5",
+        reason: str = "owner-heartbeat-timeout-30s",
+    ) -> tuple[dict[str, object], Path]:
+        """B4-1 夹具：被看门狗中止的父 run（无动作诊断；事件链最后一条 action-started 指向正在执行的动作）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        run_dir = self._b0_run_dir(
+            fixture, name, phase=phase, state="watchdog-aborted", batched_manifest=inner, started_offset_seconds=5.0,
+        )
+        state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        supervisor._append_event(
+            run_dir, event_type="action-started", operation=f"{phase}:{action_id}", owner_pid=int(state["owner_pid"]),
+            owner_nonce=str(state["owner_nonce"]), campaign_id=str(state["campaign_id"]), phase=phase, job_id=action_id,
+            status="running", started_at_epoch=float(state["started_at_epoch"]),
+        )
+        supervisor._stop_receipt(
+            run_dir, event_type="watchdog-aborted", reason=reason, detected_at_epoch=float(state["terminal_at_epoch"]),
+            owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]),
+            campaign_id=str(state["campaign_id"]), phase=phase,
+        )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        return state, run_dir
+
+    def _b4_vc1_capture_manifest(
+        self, fixture: dict[str, object], *, batch_sequence: int, actions: list[dict[str, object]], execute: list[str], reuse: list[str],
+    ) -> dict[str, object]:
+        """B4-1 夹具：VC-1 官方采集／恢复预览批次的 v2 内层清单。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
+        return supervisor.build_batched_campaign_run_manifest(
+            campaign_id=str(fixture["manifest"]["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id=f"vc-1-{batch_sequence:04d}",
+            batch_sequence=batch_sequence,
+            batch_sha256=str(batch_sequence) * 64,
+            phase="VC-1",
+            predecessor_checkpoint={"path": "control/vc/vc-0-checkpoint.json", "sha256": "3" * 64,
+                                    "phase": "VC-0", "checkpoint_sha256": "4" * 64},
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=actions,
+            execute_items=execute,
+            reuse_items=reuse,
+        )
+
+    def test_b4_2_reconciled_watchdog_abort_is_accepted_like_failed_terminal(self) -> None:
+        """B4-1 改法 2（草表 D-06／D-17）：被看门狗中止、已按 legacy-interruption 对账（无预约、零请求）的父 run 与
+        failed 终态同等对待——逐字重派协议承接，对账收据绑定校验接受 run.state watchdog-aborted，候选 revision 后继
+        入口形态相符；未对账仍指向 reconcile-supervisor-run，批次身份漂移仍拒绝。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            state, run_dir = self._b4_watchdog_run(fixture, "a" * 64, inner=inner, action_id="prepare-candidate-assertion-bundle")
+            history = [(state, inner, run_dir)]
+            successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
+                check(successor)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual((receipt["failure_class"], receipt["run"]["state"]), ("legacy-interruption", "watchdog-aborted"))
+            self.assertIn(
+                ("receipt_passed", f"reconcile-run-passed-{run_dir.name}"), self._b0_ledger_events(fixture["timing_ledger"])
+            )
+            # 已对账的看门狗中止与 failed 同等对待：逐字重派同一批次是允许的后继。
+            self.assertEqual(check(successor), history)
+            bound = supervisor.verify_supervisor_run_reconciliation_binding(
+                campaign_dir, campaign_id=str(inner["campaign_id"]), run_id=run_dir.name, phase="VC-5",
+                batch_sequence=1, batch_sha256=str(inner["batch_sha256"]), label="B4",
+            )
+            self.assertEqual(bound["run_id"], run_dir.name)
+            # 批次身份漂移（复用分区变化）：不是同一批次的重派，逐字重派协议不接，也没有别的协议承接。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "没有被任何后继协议承接|唯一直接 v3 恢复后继"):
+                check(dict(successor, reuse_items=[]))
+            # 候选 revision 后继入口对已对账的看门狗中止同样形态相符（失败关闭：需要 Campaign 目录）。
+            bound_inner = dict(inner, candidate_id="cand-1", candidate_revision=1)
+            revision_successor = dict(
+                bound_inner, phase="VC-4", candidate_id="cand-2", candidate_revision=2,
+                batch_sequence=2, batch_id="vc-4-0002", batch_sha256="2" * 64,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "候选 revision 后继必须绑定 Campaign 目录"):
+                supervisor._validate_candidate_revision_successor(state, bound_inner, run_dir, revision_successor, campaign_dir=None)
+
+    def test_b4_2_official_capture_watchdog_abort_is_followed_by_zero_request_preview(self) -> None:
+        """B4-1 改法 2（草表行 10）：VC-1 官方采集批次在发布预约前被看门狗中止——未对账时指向 reconcile-supervisor-run；
+        对账后 N=2 的零请求恢复预览是允许的后继；留有该动作失败诊断的看门狗中止不按本协议放行。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-0-completed", phase="VC-0", event_type="stage_completed", next_action="启动 VC-1",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次",
+            )
+            jobs = [job.job_id for job in fixture["jobs"]]
+            capture = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=1, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                    "command": [*self._B4_PREFIX, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                    "item_ids": jobs,
+                }],
+            )
+            preview = self._b4_vc1_capture_manifest(
+                fixture, batch_sequence=2, execute=jobs, reuse=[],
+                actions=[{
+                    "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 600.0,
+                    "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                    "item_ids": jobs,
+                }],
+            )
+            state, run_dir = self._b4_watchdog_run(fixture, "b" * 64, inner=capture, action_id="capture-official", phase="VC-1")
+            history = [(state, capture, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
+                check(preview)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check(preview), history)
+            self.assertTrue(
+                supervisor._validate_batched_official_recovery_preview_successor(
+                    state, capture, run_dir, preview, campaign_dir=campaign_dir
+                )
+            )
+            # 看门狗中止却留有该动作的失败诊断：按失败终态协议处理，本协议拒绝。
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, "capture-official", create_directory=True),
+                campaign_id=str(state["campaign_id"]), phase="VC-1", action_id="capture-official",
+                owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]), failure_kind="child-returncode",
+                failure_class="execution-failure", error_type="ChildProcessError", message="子命令以非零状态退出。",
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "留有动作失败诊断"):
+                check(preview)
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
