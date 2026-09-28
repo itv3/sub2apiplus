@@ -610,10 +610,20 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
             direct_run = self._manifest(2, [self._run_action(campaign)], campaign_id=campaign_id)
             with self.assertRaisesRegex(SupervisorError, "唯一直接 v3 恢复后继"):
                 supervisor._validate_batched_campaign_history(direct_run, history, campaign_dir=Path(campaign))
+        # 第 49 项：采集以截止类失败（deadline-expired）收口、父 run 已对账时同样由 N+1 零请求预览承接（首次采集的截止
+        # 失败收账仍进候选审核，有预约时审核下对账、授权后派发，这里只核协议层）；中断诊断仍拒绝。
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             campaign, campaign_id, history = self._capture_history(
                 root, failure=("handled-error", "CampaignCleanupRequested", "deadline-expired")
+            )
+            preview = self._manifest(2, [self._preview_action(campaign)], campaign_id=campaign_id)
+            ordered = supervisor._validate_batched_campaign_history(preview, history, campaign_dir=Path(campaign))
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign, campaign_id, history = self._capture_history(
+                root, failure=("interrupted", "KeyboardInterrupt", "execution-failure")
             )
             preview = self._manifest(2, [self._preview_action(campaign)], campaign_id=campaign_id)
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):

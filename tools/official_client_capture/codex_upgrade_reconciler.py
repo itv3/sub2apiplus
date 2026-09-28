@@ -3915,9 +3915,37 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
     }
 
 
-def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bool:
-    """父 run 的失败动作属于 VC-5 候选采集续跑链（采集／续跑预览／补跑），其失败进入 recovery_required。"""
+def _candidate_capture_recovery_kind(run_dir: Path, run: Mapping[str, Any]) -> str | None:
+    """父 run 的失败动作属于 VC-5 候选采集续跑链、且这一失败类别由父监督器收账路由到 recovery_required 时，返回动作
+    种类（capture／preview／run），否则 None。
 
+    判定与收账同一个函数（``supervisor.candidate_capture_recovery_route``：执行失败对三种动作都算，第 49 项起续跑预览
+    与补跑的截止类失败 deadline-expired 也算）；没有动作诊断（无从判定类别与动作）时不算。
+    """
+
+    diagnostic = run.get("action_diagnostic")
+    if not isinstance(diagnostic, Mapping):
+        return None
+    manifest_path = Path(run_dir) / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    return supervisor.candidate_capture_recovery_route(
+        inner, str(diagnostic.get("action_id")), str(run.get("failure_class"))
+    )
+
+
+def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bool:
+    """父 run 的失败动作属于 VC-5 候选采集续跑链（采集／续跑预览／补跑），其失败进入 recovery_required。
+
+    第 49 项：续跑预览与补跑的截止类失败（deadline-expired）与执行失败同样属于这里（与收账同一判定）；此前只认
+    execution-failure，收账把截止失败路由为 recovery_required 后，reconcile-supervisor-run 会以"父动作分类不可恢复"拒绝入账。
+    """
+
+    if _candidate_capture_recovery_kind(run_dir, run) is not None:
+        return True
     diagnostic = run.get("action_diagnostic")
     if run.get("failure_class") != "execution-failure" or not isinstance(diagnostic, Mapping):
         return False
@@ -3925,11 +3953,9 @@ def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bo
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return False
     inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
-    action_id = str(diagnostic.get("action_id"))
+    # 第三批 B3-4：VC-5／VC-6 零请求后处理动作的 execution-failure 同样进入 recovery_required。
     return isinstance(inner, Mapping) and (
-        supervisor.candidate_capture_recovery_action(inner, action_id) is not None
-        # 第三批 B3-4：VC-5／VC-6 零请求后处理动作的 execution-failure 同样进入 recovery_required。
-        or supervisor.candidate_post_run_recovery_action(inner, action_id) is not None
+        supervisor.candidate_post_run_recovery_action(inner, str(diagnostic.get("action_id"))) is not None
     )
 
 
@@ -5170,6 +5196,21 @@ def reconcile_supervisor_run(
             result["next_command"] = (
                 "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
                 "（恢复段 run 幂等返回，零请求；随后按段 seal 批次继续）"
+            )
+        elif _candidate_capture_recovery_kind(resolved_run_dir, run) == "run":
+            # 第 49 项：按预览真实补跑在预约前失败（执行失败或预算截止；run 期间有预约的走 reconcile-attempt，不到这里）。
+            # 后继协议只承接 N+1 零请求续跑预览（协议 13），逐字重派同一补跑会被全部协议拒绝（它消费的恢复批准冻结的账本
+            # head 也已推进）；此前落到下面的通用提示"重新派发同一批次"，与放行不一致。
+            result["next_command"] = (
+                "phase 保持 active：VC-5 按预览真实补跑在预约前失败已对账（本 run 未发布预约）；截止类失败先确认预算已延期，"
+                "执行失败先修复并受监督部署；以 compile-and-run-vc-batch 派发 N+1 零请求续跑预览（resume --rerun-failed "
+                "--preview-recovery，候选身份参数与父补跑逐字相同），批准预览后再补跑；逐字重派同一补跑会被后继协议拒绝"
+            )
+        elif _candidate_capture_recovery_kind(resolved_run_dir, run) == "preview":
+            # 第 49 项：零请求续跑预览失败（执行失败或截止清理）由协议 12 承接 N+1 逐字重派同一预览。
+            result["next_command"] = (
+                "phase 保持 active：VC-5 候选零请求续跑预览失败已对账；截止类失败先确认预算已延期，执行失败先修复并受监督"
+                "部署；以 compile-and-run-vc-batch 按 N+1 逐字重派同一预览批次"
             )
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"

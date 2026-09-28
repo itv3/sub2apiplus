@@ -7853,11 +7853,17 @@ def _validate_batched_official_recovery_preview_successor(
             raise SupervisorError(
                 f"{label}的父 run 被看门狗中止，留有的动作失败诊断指向 {watchdog_failure['action_id']}，不是 capture-official。"
             )
-        if not _recovery_preview_retry_failure(watchdog_failure["diagnostic"]):
-            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+        # 第 49 项：截止类失败诊断（deadline-expired）同样承接——0-W 已按诊断有效类核对对账收据。
+        if not (
+            _recovery_preview_retry_failure(watchdog_failure["diagnostic"])
+            or _recovery_chain_deadline_failure(watchdog_failure["diagnostic"])
+        ):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败，也不是截止类失败（deadline-expired）。")
         return True
     # B4-1 改法 7（草表 D-01／D-02／D-16）：父失败按终态种类判定，不再按错误类型／文案白名单——
-    # · action-failed（capture-official 以非零状态退出或自写诊断）：与恢复链协议同一处理型失败判据；
+    # · action-failed（capture-official 以非零状态退出或自写诊断）：与恢复链协议同一处理型失败判据；第 49 项起截止类
+    #   失败（子进程预算检查先于父监督器截止触发的 WallClockTimeoutError 等）同样承接，但它可能发生在预约之后，要求
+    #   父 run 已对账；
     # · action-timeout：动作执行截止到期，父监督器发出清理信号后 capture-official 在清理宽限内自行封口 attempt 并退出
     #   （事件链恰一次 cleanup-requested-timeout，诊断为 CampaignCleanupRequested／deadline-expired，不比 message）时
     #   attempt 已封口，直接承接；宽限耗尽被强杀（cleanup-window-expired）或诊断不是截止清理时 attempt 可能未封口，
@@ -7901,8 +7907,20 @@ def _validate_batched_official_recovery_preview_successor(
     if kind == "action-failed":
         if diagnostic is None:
             raise SupervisorError(f"{label}的父动作缺少失败诊断。")
-        if not _recovery_preview_retry_failure(diagnostic):
-            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+        if _recovery_preview_retry_failure(diagnostic):
+            return True
+        if not _recovery_chain_deadline_failure(diagnostic):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败，也不是截止类失败（deadline-expired）。")
+        # 第 49 项：截止类失败可能发生在预约之后（attempt 未必封口），与强杀／其它异常同样要求父 run 已对账。
+        _require_failed_parent_reconciled(
+            prior_state,
+            prior_dir,
+            reconciliation_campaign_dir,
+            campaign_id=prior_state.get("campaign_id"),
+            phase="VC-1",
+            prior_manifest=prior_manifest,
+            label=label,
+        )
         return True
     if (
         kind == "action-timeout"
@@ -7966,6 +7984,31 @@ def _recovery_preview_retry_failure(diagnostic: Mapping[str, Any]) -> bool:
         diagnostic.get("failure_kind") in _RECOVERY_PREVIEW_RETRY_FAILURE_KINDS
         and diagnostic.get("failure_class") in _RECOVERY_PREVIEW_RETRY_FAILURE_CLASSES
         and diagnostic.get("error_type") not in _RECOVERY_PREVIEW_EXCLUDED_ERROR_TYPES
+    )
+
+
+# 第 49 项：采集续跑链动作的截止类失败。动作子进程只在两种情形下写出 deadline-expired 诊断（见 codex_upgrade
+# ``_record_campaign_run_action_failure``）：自身的预算检查在预约准入或逐 Job 准入时发现剩余预算不足以保留清理预留
+# （WallClockTimeoutError），或父监督器执行截止到期发出清理信号（CampaignCleanupRequested）；两者都经 handled-error
+# （顶层兜底时为 unexpected-error）写出。它不是工具缺陷，也不是候选源码问题——预算延期、父 run 已对账后，与处理型失败
+# 一样以 N+1 零请求预览续跑（预览失败则逐字重派预览）。此前恢复链协议只认处理型失败：子进程预算检查先于父监督器截止
+# 触发（终态 action-failed），或 owner 在收账前丢失被 R2 封存，截止失败都没有任何后继协议，只能作废候选或停线。
+# 类别与错误类型一并核对：别的错误类型自称 deadline-expired 不是这两种来源，失败关闭。
+_RECOVERY_CHAIN_DEADLINE_FAILURE_KINDS = frozenset({"handled-error", "unexpected-error"})
+_RECOVERY_CHAIN_DEADLINE_ERROR_TYPES = frozenset({"CampaignCleanupRequested", "WallClockTimeoutError"})
+
+
+def _recovery_chain_deadline_failure(diagnostic: Mapping[str, Any]) -> bool:
+    """父动作诊断是否属于采集续跑链可承接的截止类失败（第 49 项）。
+
+    只判诊断本身；调用方必须另行要求父 run 已对账（``_require_failed_parent_reconciled`` 或看门狗的 0-W）——截止失败
+    可能发生在预约之后，attempt 须经 reconcile-attempt 入账。预算是否已延期由派发准入（计时账本与项目总账）把关。
+    """
+
+    return (
+        diagnostic.get("failure_kind") in _RECOVERY_CHAIN_DEADLINE_FAILURE_KINDS
+        and diagnostic.get("failure_class") == "deadline-expired"
+        and diagnostic.get("error_type") in _RECOVERY_CHAIN_DEADLINE_ERROR_TYPES
     )
 
 
@@ -8346,14 +8389,16 @@ def _verify_failed_official_recovery_parent(
     父 run 目录与 state／stop receipt 必须私有且逐字自洽；终态按种类判定（B4-1 改法 1，草表 D-04／D-11）：
 
     - ``action-failed``：stop 原因是该动作失败，诊断只能是处理型失败（执行中因工具／配置缺陷报错或子进程
-      非零退出；第 30 项起不再按错误类型白名单，类别见 ``_recovery_preview_retry_failure``）；
+      非零退出；第 30 项起不再按错误类型白名单，类别见 ``_recovery_preview_retry_failure``），或第 49 项起的截止类
+      失败（``_recovery_chain_deadline_failure``：子进程预算检查的 WallClockTimeoutError、父监督器截止清理信号的
+      CampaignCleanupRequested，类别 deadline-expired）——预算延期、父 run 已对账（见下）后同样续跑；
     - ``action-timeout``／``interrupted``／``other-exception``：定位到的失败动作（唯一诊断或最后一条
       action-started）必须就是该动作；诊断若存在须身份自洽且不是永久失败类（中断可能发生在诊断写出之前，
       允许没有诊断）；
     - ``watchdog``（第三批 B3-15，第 26 项）：已按 ``_reconciled_watchdog_abort`` 对账（run 期间有预约时按
       attempt 收据分流，改法 3），stop receipt 须是看门狗中止本身。run 目录没有动作诊断时即可承接；留有动作
       失败诊断时（草表 D-07）按诊断的失败种类与类别走与 ``action-failed`` 相同的判定——诊断动作必须就是该动作、
-      诊断是处理型失败、父 run 按 failed 同口径已对账（0-W 已按诊断有效类核对收据）。
+      诊断是处理型失败（或第 49 项的截止类失败）、父 run 按 failed 同口径已对账（0-W 已按诊断有效类核对收据）。
 
     B4-1 改法 4（第 31 项，草表 D-18）：failed 类终态还必须已对账——run 期间无预约要求 supervisor-run 对账
     收据与总账 ``reconcile-supervisor-run:<run>`` 绑定，有预约要求每个预约的 attempt 对账收据与总账绑定；
@@ -8414,8 +8459,11 @@ def _verify_failed_official_recovery_parent(
             raise SupervisorError(
                 f"{label}的父 run 被看门狗中止，留有的动作失败诊断指向 {watchdog_failure['action_id']}，不是 {action_id}。"
             )
-        if not _recovery_preview_retry_failure(watchdog_failure["diagnostic"]):
-            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+        if not (
+            _recovery_preview_retry_failure(watchdog_failure["diagnostic"])
+            or _recovery_chain_deadline_failure(watchdog_failure["diagnostic"])
+        ):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败，也不是截止类失败（deadline-expired）。")
         _require_failed_parent_reconciled(
             prior_state, prior_dir, campaign_dir, campaign_id=campaign_id, phase=phase, prior_manifest=prior_manifest, label=label
         )
@@ -8441,8 +8489,10 @@ def _verify_failed_official_recovery_parent(
             owner_pid=owner_pid,
             owner_nonce=owner_nonce,
         )
-        if not _recovery_preview_retry_failure(diagnostic):
-            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+        # 第 49 项：截止类失败（子进程预算检查先于父监督器截止触发，或 owner 收账前丢失被 R2 封存的截止清理）同样
+        # 承接；它可能发生在预约之后，由下面的对账核验（attempt 收据或 supervisor-run 收据）兜住。
+        if not (_recovery_preview_retry_failure(diagnostic) or _recovery_chain_deadline_failure(diagnostic)):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败，也不是截止类失败（deadline-expired）。")
     else:
         if facts["action_id"] != action_id:
             raise SupervisorError(
@@ -8804,11 +8854,39 @@ def candidate_recovery_parent_identity(manifest: Mapping[str, Any]) -> tuple[lis
     raise SupervisorError("父批次不是普通 capture-candidate run 或候选续跑预览／补跑，不能生成续跑命令。")
 
 
+# 第 49 项：截止类失败（deadline-expired：子进程预算检查或父监督器截止清理）进入 recovery_required 的续跑链动作种类。
+# 零请求续跑预览与按预览真实补跑总有可续跑的失败 attempt（补跑在预约前失败时就是它续跑的那个），预算延期、对账后以
+# N+1 零请求预览（预览失败则逐字重派预览）接着跑；此前截止类失败进候选审核：有预约时要在审核下授权，无预约时对账
+# 只提示作废候选或停线，而它既不是候选源码问题也不是工具缺陷。首次采集（普通 capture-candidate run）的截止失败维持
+# 候选审核：有预约时审核下对账、授权后同样由零请求预览承接；预约前失败时本候选可能还没有任何 attempt，零请求预览无从
+# 恢复，留在审核由人工裁定（与它的执行失败一样，另行处理）。
+CANDIDATE_CAPTURE_DEADLINE_RECOVERY_KINDS = frozenset({"preview", "run"})
+
+
+def candidate_capture_recovery_route(manifest: Mapping[str, Any], action_id: str, failure_class: str) -> str | None:
+    """失败动作属于 VC-5 候选采集续跑链、且这一失败类别由收账路由到 recovery_required 时返回动作种类，否则 None。
+
+    执行失败（工具缺陷，修好部署后续跑）对三种动作都路由；截止类失败（第 49 项）只对续跑预览与补跑路由（见
+    ``CANDIDATE_CAPTURE_DEADLINE_RECOVERY_KINDS``）。收账（``_close_failed_campaign_timing_ledger``）与对账
+    （reconciler 的 recovery_required 核对与续跑提示）用这同一个判定。
+    """
+
+    kind = candidate_capture_recovery_action(manifest, action_id)
+    if kind is None:
+        return None
+    if failure_class == "execution-failure":
+        return kind
+    if failure_class == "deadline-expired" and kind in CANDIDATE_CAPTURE_DEADLINE_RECOVERY_KINDS:
+        return kind
+    return None
+
+
 def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: str) -> str | None:
     """失败动作属于 VC-5 候选采集续跑链时返回其种类（capture／preview／run），否则 None。
 
     ``capture`` 是普通 ``capture-candidate run``；``preview``／``run`` 是续跑的零请求恢复预览与
-    按已批准预览的真实补跑。三者失败都进入 recovery_required，对账后修好接着跑。
+    按已批准预览的真实补跑。哪些失败类别进入 recovery_required、对账后修好（或延期）接着跑，见
+    ``candidate_capture_recovery_route``。
     """
 
     if manifest.get("phase") != "VC-5":
@@ -11829,10 +11907,11 @@ def _close_failed_campaign_timing_ledger(
     recovery_segment = _attempt_recovery_run_revision(manifest, failed_action_id) if failure_class == "execution-failure" else None
     # 修好接着跑：VC-5 候选采集（及其续跑预览／补跑）失败不再进候选审核，阶段保持 active 进入
     # recovery_required；对账后按工具缺陷／环境／候选源码三类裁定，前两类修复部署、登记工具演进后
-    # 在原 revision 续跑，只有候选源码问题才作废候选。
+    # 在原 revision 续跑，只有候选源码问题才作废候选。第 49 项：续跑预览与补跑的截止类失败（deadline-expired）
+    # 同样进入 recovery_required（预算已到期时上面的预算暂停先行），延期、对账后以 N+1 零请求预览续跑。
     candidate_capture = (
-        candidate_capture_recovery_action(manifest, failed_action_id)
-        if failure_class == "execution-failure" and recovery_segment is None
+        candidate_capture_recovery_route(manifest, failed_action_id, failure_class)
+        if recovery_segment is None
         else None
     )
     # 第三批 B3-4（第 5 项①）：VC-5／VC-6 的零请求后处理动作以 execution-failure 收口（post-run-tooling 五条判据
@@ -11851,6 +11930,15 @@ def _close_failed_campaign_timing_ledger(
             f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段动作失败／中断，段对账入账并批准"
             f"恢复预览后，以 capture-candidate run --attempt-recovery {successor} --rerun-failed --recovery-preview 开后继段；"
             "同根因达上限即停线。"
+        )
+    elif candidate_capture is not None and failure_class == "deadline-expired":
+        # 第 49 项：截止类失败不是工具缺陷，不需要部署；文案与执行失败分开（执行失败的文案参与既有账本的幂等核对，
+        # 保持不变；两者失败摘要不同，事件 ID 本就不同）。
+        recovery_next_action = (
+            "VC-5 候选采集续跑链因预算截止失败（deadline-expired）：先 deadline-extend preview/apply 延期；有预约的失败"
+            " reconcile-attempt（无预约的用 reconcile-supervisor-run）入账，批准恢复预览后以 compile-and-run-vc-batch 派发"
+            " N+1 零请求续跑预览（预览失败则按 N+1 逐字重派预览），resume --rerun-failed 只重跑失败作业；不需要部署或登记"
+            " tool-evolution，也不作废候选。"
         )
     elif candidate_capture is not None:
         recovery_next_action = (

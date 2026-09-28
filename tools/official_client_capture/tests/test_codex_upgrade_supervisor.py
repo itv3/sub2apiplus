@@ -1328,7 +1328,8 @@ class SupervisorTests(unittest.TestCase):
         """零请求恢复预览因处理型错误失败后，修复部署即可以 N+1 逐字重派同一预览。
 
         0.156.1 VC-1：序号 2 预览因复用校验缺陷失败。后继只能是同一预览批次的逐字重派；
-        改成真实补跑、改动 execute／reuse 分区，或父预览以截止清理失败，一律拒绝。
+        改成真实补跑、改动 execute／reuse 分区一律拒绝。第 49 项起父预览以截止清理失败（deadline-expired）
+        同样承接（父 run 已对账、预算延期后逐字重派预览）。
         """
 
         def build(root: Path, *, preview_failure: tuple[str, str, str]) -> tuple[
@@ -1502,14 +1503,15 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "逐字沿用父预览批次"):
                 supervisor._validate_batched_campaign_history(drifted, history, campaign_dir=campaign_dir)
 
-        # 父预览以截止清理失败：不属于处理型失败，拒绝。
+        # 第 49 项：父预览以截止清理失败（deadline-expired）是截止类失败，父 run 已对账即由预览重派承接（此前判"不是处理型
+        # 失败"拒绝，预算延期后无路可走）。
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir, history, retry = build(
                 Path(directory).resolve(),
                 preview_failure=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
             )
-            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
-                supervisor._validate_batched_campaign_history(retry, history, campaign_dir=campaign_dir)
+            ordered = supervisor._validate_batched_campaign_history(retry, history, campaign_dir=campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
         # 修好接着跑第 30 项：执行失败不再按错误类型白名单——工具缺陷抛的其它异常、意外异常、子进程非零退出都可承接；
         # 中断种类、非 execution-failure 类别、清理／中断异常仍拒绝。
         for accepted in (
@@ -1536,8 +1538,8 @@ class SupervisorTests(unittest.TestCase):
 
         0.156.1 VC-1：序号 4 补跑中 guardian 审阅作业卡在目录信任确认而失败，新 attempt
         按失败封口。后继只能是 N+1 的普通预览（同命令前缀、同 Campaign 目录），execute 为
-        父补跑 execute 的非空子集且 execute∪reuse 不变；直接再补跑、扩大执行集合、父补跑以
-        截止清理失败一律拒绝。
+        父补跑 execute 的非空子集且 execute∪reuse 不变；直接再补跑、扩大执行集合一律拒绝。第 49 项起
+        父补跑以截止清理失败（deadline-expired）同样由 N+1 普通预览承接（父 run 已对账）。
         """
 
         def build(root: Path, *, run_failure: tuple[str, str, str]) -> tuple[
@@ -1736,14 +1738,15 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "不得扩大父补跑的执行集合"):
                 supervisor._validate_batched_campaign_history(widened, history, campaign_dir=campaign_dir)
 
-        # 父补跑以截止清理失败：不属于处理型失败，拒绝。
+        # 第 49 项：父补跑以截止清理失败（deadline-expired）是截止类失败，父 run 已对账即由 N+1 普通预览承接（此前判"不是
+        # 处理型失败"拒绝，预算延期后无路可走）。
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir, history, successor = build(
                 Path(directory).resolve(),
                 run_failure=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
             )
-            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
-                supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            ordered = supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2, 3])
         # 修好接着跑第 30 项（194249z 批次 16 真实补跑以 ValueError 失败、修好后批次 17 零请求预览被拒的实测）：
         # 执行失败不再按错误类型白名单；中断种类、非 execution-failure 类别、清理／中断异常仍拒绝。
         for accepted in (
@@ -4933,8 +4936,9 @@ raise SystemExit(9)
         """草表 D-07：恢复链共享父核验（预览重派等协议 9～13）对"看门狗中止＋动作诊断"的父 run 只走一条口径——按诊断的
         失败种类与类别走与 failed 相同的判定（失败动作即诊断动作、处理型失败判据、已对账）。修复前看门狗分支抛"留有动作
         失败诊断，按失败终态协议处理"，而 state 不是 failed，没有协议可走。安全边界不变：未对账、对账收据分类与 run 目录
-        事实不符、永久失败类、非处理型失败（截止清理诊断、中断）、诊断指向清单外动作或不唯一、诊断被篡改、monitor 已判
-        绑定漂移、动作输出绑定无法核对，一律拒绝；其中截止清理诊断若按看门狗零请求预览放行（另一种口径）就会绕开诊断判据。"""
+        事实不符、永久失败类、中断诊断、诊断指向清单外动作或不唯一、诊断被篡改、monitor 已判绑定漂移、动作输出绑定无法
+        核对，一律拒绝。第 49 项起截止清理诊断（deadline-expired）按截止类失败承接——走的仍是诊断判据（已按诊断有效类
+        对账），不是看门狗零请求预览的无诊断承接。"""
 
         handled = ("handled-error", "ValueError", "execution-failure")
 
@@ -4987,10 +4991,9 @@ raise SystemExit(9)
                 "对账收据分类 legacy-interruption 与 run 目录现存事实不一致（留有动作失败诊断 preview-official-recovery",
             ):
                 check(campaign_dir, history, retry)
-        # ③ 仍拒绝：永久失败类；截止清理诊断（deadline-expired，failed 下同样不是处理型失败）；中断诊断。
+        # ③ 仍拒绝：永久失败类；中断诊断（不是处理型失败，也不是截止类失败）。
         cases = (
             (("handled-error", "PolicyDrift", "identity-drift"), "identity-drift", "永久失败类 identity-drift"),
-            (("handled-error", "CampaignCleanupRequested", "deadline-expired"), "deadline-expired", "不是处理型失败"),
             (("interrupted", "KeyboardInterrupt", "execution-failure"), "execution-failure", "不是处理型失败"),
         )
         for diagnostic, bind_class, expected in cases:
@@ -4998,6 +5001,17 @@ raise SystemExit(9)
                 campaign_dir, history, retry = chain(Path(directory).resolve(), diagnostic, bind_class=bind_class)
                 with self.assertRaisesRegex(SupervisorError, expected):
                     check(campaign_dir, history, retry)
+        # ③' 第 49 项：截止清理诊断（deadline-expired）按截止类失败承接（已按诊断有效类对账），仍只有预览重派一条协议。
+        with tempfile.TemporaryDirectory() as directory:
+            deadline = ("handled-error", "CampaignCleanupRequested", "deadline-expired")
+            campaign_dir, history, retry = chain(Path(directory).resolve(), deadline, bind_class="deadline-expired")
+            ordered = check(campaign_dir, history, retry)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
+            preview_state, preview_manifest, preview_dir = history[1]
+            self.assertEqual(
+                self._d07_accepting_protocols(preview_state, preview_manifest, preview_dir, retry, campaign_dir),
+                ["official_recovery_preview_retry"],
+            )
         # ④ 推断不出失败动作：诊断指向批次清单外的动作；诊断不唯一。
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir, history, retry = chain(Path(directory).resolve(), None)

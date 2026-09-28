@@ -19515,7 +19515,7 @@ class CodexUpgradeTest(unittest.TestCase):
         """修好接着跑第 30 项（194249z 批次 16→17 实测）：按预览真实补跑的父 run 以工具缺陷抛出的 ValueError（handled-error、
         execution-failure）失败——N+1 零请求恢复预览是允许的后继，不再因错误类型不在白名单而被"不是处理型失败"拒绝
         （B4-1 第 31 项起父 run 的对账是本协议的前置：未对账先指向 reconcile-supervisor-run，对账入账后接受）；
-        截止清理失败的父补跑仍拒绝。"""
+        第 49 项起截止清理失败（deadline-expired）的父补跑同样承接，中断种类的诊断仍拒绝。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -19589,23 +19589,36 @@ class CodexUpgradeTest(unittest.TestCase):
                     state, prior, run_dir, successor, campaign_dir=campaign_dir
                 )
             )
-            # 父补跑以截止清理失败：该协议仍判"不是处理型失败"。
+            # 第 49 项：父补跑以截止清理失败（deadline-expired）同样由该协议承接（此前判"不是处理型失败"）；中断种类的诊断
+            # 仍判"不是处理型失败"。
             diagnostic_path = supervisor._action_diagnostic_path(
                 run_dir, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, create_directory=False
             )
             original = diagnostic_path.read_bytes()
-            diagnostic_path.chmod(0o600)
-            diagnostic_path.unlink()
-            supervisor._write_action_diagnostic(
-                diagnostic_path, campaign_id=state["campaign_id"], phase="VC-5",
-                action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, owner_pid=state["owner_pid"],
-                owner_nonce=state["owner_nonce"], failure_kind="handled-error", failure_class="deadline-expired",
-                error_type="CampaignCleanupRequested", message="截止清理。",
-            )
-            with self.assertRaisesRegex(supervisor.SupervisorError, "不是处理型失败"):
-                supervisor._validate_batched_candidate_recovery_run_retry_successor(
-                    state, prior, run_dir, successor, campaign_dir=campaign_dir
+            for failure_kind, failure_class, error_type, accepted in (
+                ("handled-error", "deadline-expired", "CampaignCleanupRequested", True),
+                ("interrupted", "execution-failure", "KeyboardInterrupt", False),
+            ):
+                diagnostic_path.chmod(0o600)
+                diagnostic_path.unlink()
+                supervisor._write_action_diagnostic(
+                    diagnostic_path, campaign_id=state["campaign_id"], phase="VC-5",
+                    action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, owner_pid=state["owner_pid"],
+                    owner_nonce=state["owner_nonce"], failure_kind=failure_kind, failure_class=failure_class,
+                    error_type=error_type, message="截止清理或中断。",
                 )
+                with self.subTest(failure_class=failure_class, error_type=error_type):
+                    if accepted:
+                        self.assertTrue(
+                            supervisor._validate_batched_candidate_recovery_run_retry_successor(
+                                state, prior, run_dir, successor, campaign_dir=campaign_dir
+                            )
+                        )
+                    else:
+                        with self.assertRaisesRegex(supervisor.SupervisorError, "不是处理型失败"):
+                            supervisor._validate_batched_candidate_recovery_run_retry_successor(
+                                state, prior, run_dir, successor, campaign_dir=campaign_dir
+                            )
             diagnostic_path.unlink()
             diagnostic_path.write_bytes(original)
             diagnostic_path.chmod(0o600)
@@ -23984,8 +23997,8 @@ class CodexUpgradeTest(unittest.TestCase):
 
         ① run 期间已发布补跑 attempt 的候选预约（真实补跑的常见形态）：reconcile-supervisor-run 拒绝、后继校验指向
            reconcile-attempt；attempt 入账后，处理型 execution-failure 的 N+1 零请求续跑预览放行，且 15 条协议里只有这一条
-           承接。attempt 对账收据不绑定父 run 的诊断，改写诊断只改变后继判据的输入：截止清理（deadline-expired）不是
-           处理型失败，拒绝；永久失败类（environment-contaminated）在 0-W 即拒绝。
+           承接。attempt 对账收据不绑定父 run 的诊断，改写诊断只改变后继判据的输入：第 49 项起截止清理（deadline-expired）
+           按截止类失败同样承接；中断种类的诊断不是处理型失败，拒绝；永久失败类（environment-contaminated）在 0-W 即拒绝。
         ② 补跑在发布预约之前失败（run 期间无预约）：reconcile-supervisor-run 以诊断有效类对账后同样放行。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
@@ -24038,8 +24051,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
             )
             diagnostic_path = supervisor._action_diagnostic_path(run_dir, action_id, create_directory=False)
+            # 第 49 项：截止清理（deadline-expired）按截止类失败承接，仍只有协议 13 一条。
+            diagnostic_path.chmod(0o600)
+            diagnostic_path.unlink()
+            self._d07_write_diagnostic(run_dir, state, action_id, ("handled-error", "CampaignCleanupRequested", "deadline-expired"))
+            self.assertEqual(check(successor), history)
+            self.assertEqual(
+                self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+            )
             for diagnostic, expected in (
-                (("handled-error", "CampaignCleanupRequested", "deadline-expired"), "VC-5 补跑失败后的预览的父动作诊断不是处理型失败"),
+                (("interrupted", "KeyboardInterrupt", "execution-failure"), "VC-5 补跑失败后的预览的父动作诊断不是处理型失败"),
                 (("handled-error", "EnvironmentContaminated", "environment-contaminated"), "永久失败类 environment-contaminated"),
             ):
                 diagnostic_path.chmod(0o600)
@@ -24599,6 +24620,358 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stop_required")
             head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
             self.assertNotIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
+
+    # ------------------------------------------------------------------
+    # 第 49 项：采集续跑链的截止类失败（deadline-expired）延期、对账后接着跑
+    # ------------------------------------------------------------------
+
+    def _item49_vc5_batches(
+        self, fixture: dict[str, object]
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        """第 49 项夹具：VC-5 候选 cand-1（revision 1）按已批准预览真实补跑的批次 N=1（resume --rerun-failed
+        --recovery-preview … --acknowledge-live-requests）、N+1 的零请求续跑预览，以及 N+1 逐字重派同一补跑。序号从 1 起，
+        派发门禁的批次链审计（``_validate_batched_campaign_history``）才能对单个失败前序做完整校验。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        campaign_dir = fixture["campaign_dir"]
+        identity = dict(
+            self._B4_IDENTITY, **{"--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json")}
+        )
+        binding = {"candidate_id": "cand-1", "candidate_revision": 1}
+        prior = self._b4_vc5_manifest(fixture, batch_sequence=1, execute=["candidate-run"], reuse=[], actions=[{
+            "action_id": supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
+            "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+            "timeout_seconds": 21600.0,
+            "command": supervisor.candidate_recovery_run_command(
+                self._B4_PREFIX, str(campaign_dir), identity,
+                str(campaign_dir / "control" / "reconciliation" / "attempt-x" / "recovery-preview-01.json"),
+            ),
+            "item_ids": ["candidate-run"],
+        }], **binding)
+        successor = self._b4_vc5_manifest(fixture, batch_sequence=2, execute=["candidate-run"], reuse=[], actions=[{
+            "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+            "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+            "timeout_seconds": 1800.0,
+            "command": supervisor.candidate_recovery_preview_command(self._B4_PREFIX, str(campaign_dir), identity),
+            "item_ids": ["candidate-run"],
+        }], **binding)
+        verbatim = self._b4_vc5_manifest(
+            fixture, batch_sequence=2, execute=["candidate-run"], reuse=[], actions=list(prior["actions"]), **binding
+        )
+        return prior, successor, verbatim
+
+    def _item49_reserve_candidate_attempt(self, fixture: dict[str, object]) -> Path:
+        """第 49 项夹具：补跑在父 run 期间发布的候选预约（孤儿 attempt：attempt.json 未写出）。"""
+
+        attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+            fixture["campaign_dir"],
+            phase="candidate",
+            candidate_id="cand-1",
+            identity={"candidate_purpose": fixture["manifest"]["campaign_purpose"]},
+            jobs=[
+                Job(
+                    job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                    steps=({"argv": ["bash", f"{job_id}.sh"]},), evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                    covers=(), scenario_ids=("A03",),
+                )
+                for job_id in self._b0_candidate_job_ids(fixture)
+            ],
+            allow_failed_rerun=True,
+        )
+        return attempt_root
+
+    def _item49_supervisor_timeout_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        inner: dict[str, object],
+        action_id: str,
+        diagnostic: tuple[str, str, str],
+        action_started: bool,
+    ) -> tuple[dict[str, object], Path]:
+        """第 49 项夹具：父 run 以 SupervisorTimeout 终止（终态种类 action-timeout），与真实父进程写出的形态一致。
+
+        ``action_started=True``（S1）：执行截止到期，run_command 发清理信号，补跑子进程以 CampaignCleanupRequested 收口并写出
+        诊断，run_command 记 action-failed（cleanup-requested-timeout）后抛 SupervisorTimeout；``action_started=False``（S5）：
+        run_command 在 event_start 之前发现剩余预算不足以容纳清理与终态排空就抛 SupervisorTimeout，没有 action-started，调用处
+        except 补写 unexpected-error／execution-failure／SupervisorTimeout 诊断。两者都由外层异常路径按诊断类别收账。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        run_dir = self._b0_run_dir(fixture, name, phase=str(inner["phase"]), state="failed", batched_manifest=inner)
+        state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        identity = {
+            "owner_pid": int(state["owner_pid"]), "owner_nonce": str(state["owner_nonce"]),
+            "campaign_id": str(state["campaign_id"]), "phase": str(inner["phase"]),
+        }
+        operation = next(str(item["operation"]) for item in inner["actions"] if item["action_id"] == action_id)
+        if action_started:
+            supervisor._append_event(run_dir, event_type="action-started", operation=operation, job_id=action_id, status="running", **identity)
+            supervisor._append_event(
+                run_dir, event_type="action-failed", operation=operation, job_id=action_id, status="failed",
+                reason="cleanup-requested-timeout", **identity,
+            )
+        self._d07_write_diagnostic(run_dir, state, action_id, diagnostic)
+        supervisor._append_event(run_dir, event_type="failed", operation="supervisor:stop", status="failed", reason="SupervisorTimeout", **identity)
+        supervisor._stop_receipt(
+            run_dir, event_type="failed", reason="SupervisorTimeout", detected_at_epoch=float(state["terminal_at_epoch"]), **identity
+        )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        return state, run_dir
+
+    def test_item49_recovery_run_deadline_after_reservation_continues_with_zero_request_preview(self) -> None:
+        """第 49 项 S1／S2（有预约）：VC-5 按已批准预览真实补跑发布候选预约之后以截止类失败收口——
+        S1 父监督器执行截止先到（终态 SupervisorTimeout，种类 action-timeout，诊断 CampaignCleanupRequested）；S2 子进程逐 Job
+        准入的预算检查先失败（终态 action-failed，诊断 WallClockTimeoutError）。两者的诊断类别都是 deadline-expired，父监督器
+        （S1 外层异常路径、S2 正常路径）都按它收账。
+
+        修复前：收账把 deadline-expired 路由到候选审核；S2 在审核下对账、授权后 N+1 零请求续跑预览仍被协议以"不是处理型失败"
+        拒绝（死路）；S1 的协议能接但要绕道候选审核。修复后：收账进入 recovery_required（截止类文案：先延期，不需要部署），
+        reconcile-attempt 可恢复 → 批准 → 授权写 recovery_authorized、账本回 active → N+1 零请求续跑预览由
+        candidate_recovery_run_retry 唯一承接，逐字重派同一补跑仍无协议承接。S2（收账时预算已到期）：收账先登记预算暂停、
+        不写路由事件；延期后账本回 active，对账、批准、授权（head 为 active，不写授权事件）后同样由该协议承接。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        action_id = supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID
+        for scenario in ("S1", "S2", "S2-budget-expired"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                fixture = self._b0_fixture(Path(directory).resolve())
+                campaign_dir = fixture["campaign_dir"]
+                ledger_dir = fixture["timing_ledger"]
+                self._b0_advance_ledger_to_vc5(ledger_dir)
+                prior, successor, verbatim = self._item49_vc5_batches(fixture)
+                if scenario == "S1":
+                    state, run_dir = self._item49_supervisor_timeout_run(
+                        fixture, "1" * 64, inner=prior, action_id=action_id,
+                        diagnostic=("handled-error", "CampaignCleanupRequested", "deadline-expired"), action_started=True,
+                    )
+                else:
+                    run_dir = self._b0_run_dir(
+                        fixture, "2" * 64, phase="VC-5", failure_class="deadline-expired", batched_manifest=prior,
+                        action_id=action_id, failure_kind="handled-error", error_type="WallClockTimeoutError",
+                    )
+                self._item45_bind_commit(campaign_dir, run_dir, prior)
+                state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+                attempt_root = self._item49_reserve_candidate_attempt(fixture)
+                facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+                self.assertEqual((facts["action_id"], facts["failure_class"]), (action_id, "deadline-expired"))
+                if scenario == "S2-budget-expired":
+                    # 收账时预算已到期：预算暂停先于路由（替身只让这次收账看到到期并登记暂停）。
+                    expired = {**codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": ["stage"]}
+                    with (
+                        mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=expired),
+                        mock.patch.object(
+                            supervisor.project_ledger, "pause_campaign_deadline", return_value={"status": "deadline_paused"}
+                        ) as paused,
+                    ):
+                        closeout = supervisor._close_failed_campaign_timing_ledger(
+                            campaign_dir, prior, failed_action_id=action_id, failure_class="deadline-expired"
+                        )
+                    self.assertEqual((closeout["ledger_status"], closeout["next_action"]), ("deadline_paused", "deadline-extend preview/apply"))
+                    paused.assert_called_once()
+                    # 延期（这里以替身的暂停未落账等价）后账本回到 active：没有路由事件。
+                    self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+                else:
+                    closeout = supervisor._close_failed_campaign_timing_ledger(
+                        campaign_dir, prior, failed_action_id=action_id, failure_class="deadline-expired"
+                    )
+                    self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+                    self.assertIn("deadline-extend", closeout["next_action"])
+                    self.assertNotIn("invalidate-candidate", closeout["next_action"])
+                    self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "recovery_required")
+                history = [(state, prior, run_dir)]
+
+                def check(manifest_: dict) -> list:
+                    return supervisor._validate_batched_campaign_history(
+                        manifest_, history, campaign_dir=campaign_dir, staging_model=False
+                    )
+
+                with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                    reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+                with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账.*先执行 reconcile-attempt"):
+                    check(successor)
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                self.assertNotIn("ledger_closeout_backfill", result)
+                reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_root.name, approve_sha256=result["recovery_preview"]["review_sha256"]
+                )
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_root.name, Path(result["recovery_preview_path"]))
+                if scenario == "S2-budget-expired":
+                    self.assertIsNone(authorized["timing_recovery_event"], authorized)
+                else:
+                    self.assertTrue(authorized["timing_recovery_event"]["appended"], authorized)
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+                self.assertEqual(check(successor), history)
+                self.assertEqual(
+                    self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+                )
+                self.assertEqual(self._d07_accepting_protocols(state, prior, run_dir, verbatim, campaign_dir), [])
+
+    def test_item49_recovery_run_failure_before_reservation_points_to_zero_request_preview(self) -> None:
+        """第 49 项 S3／S5（无预约）：补跑在发布预约之前失败——S3 子进程预约准入的预算检查先失败（WallClockTimeoutError，
+        deadline-expired，终态 action-failed）；S5 父监督器在动作启动前发现剩余预算不足以容纳清理与终态排空（run_command 在
+        event_start 之前抛 SupervisorTimeout，调用处补写 unexpected-error／execution-failure／SupervisorTimeout 诊断，终态
+        SupervisorTimeout）。
+
+        修复前：S3 收账进候选审核，reconcile-supervisor-run 只提示作废候选或 close-campaign-ledger，账本停在审核，N+1 零请求
+        续跑预览也被协议以"不是处理型失败"拒绝——死路；S5 收账进 recovery_required、对账能入账，但提示"以 compile-and-run-vc-batch
+        重新派发同一批次"，而逐字重派补跑被全部协议拒绝、只有 N+1 零请求续跑预览被承接——提示与放行不一致。修复后两者都进
+        recovery_required，reconcile-supervisor-run 入账、账本回 active，提示派发 N+1 零请求续跑预览；协议 13
+        （candidate_recovery_run_retry）唯一承接它，逐字重派仍被拒。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        action_id = supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID
+        for scenario in ("S3", "S5"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                fixture = self._b0_fixture(Path(directory).resolve())
+                campaign_dir = fixture["campaign_dir"]
+                ledger_dir = fixture["timing_ledger"]
+                self._b0_advance_ledger_to_vc5(ledger_dir)
+                prior, successor, verbatim = self._item49_vc5_batches(fixture)
+                if scenario == "S3":
+                    run_dir = self._b0_run_dir(
+                        fixture, "3" * 64, phase="VC-5", failure_class="deadline-expired", batched_manifest=prior,
+                        action_id=action_id, failure_kind="handled-error", error_type="WallClockTimeoutError",
+                    )
+                    closeout_class = "deadline-expired"
+                else:
+                    _state, run_dir = self._item49_supervisor_timeout_run(
+                        fixture, "5" * 64, inner=prior, action_id=action_id,
+                        diagnostic=("unexpected-error", "SupervisorTimeout", "execution-failure"), action_started=False,
+                    )
+                    closeout_class = "execution-failure"
+                self._item45_bind_commit(campaign_dir, run_dir, prior)
+                state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+                facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+                self.assertEqual((facts["action_id"], facts["failure_class"]), (action_id, closeout_class))
+                closeout = supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir, prior, failed_action_id=action_id, failure_class=closeout_class
+                )
+                self.assertEqual(closeout["ledger_status"], "recovery_required", closeout)
+                result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                self.assertIn("N+1 零请求续跑预览", result["next_command"])
+                self.assertNotIn("重新派发同一批次", result["next_command"])
+                self.assertNotIn("invalidate-candidate", result["next_command"])
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+                history = [(state, prior, run_dir)]
+                self.assertEqual(
+                    supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir, staging_model=False),
+                    history,
+                )
+                self.assertEqual(
+                    self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+                )
+                self.assertEqual(self._d07_accepting_protocols(state, prior, run_dir, verbatim, campaign_dir), [])
+
+    def test_item49_owner_lost_deadline_recovery_run_backfills_recovery_required_and_continues(self) -> None:
+        """第 49 项 S4：S1 形态（父监督器截止清理，诊断 CampaignCleanupRequested／deadline-expired）的补跑，父进程在失败收账
+        之前丢失 owner，monitor 按 R2 封存为 failed（stop 原因变成 action-failed:<补跑>，终态种类 action-failed）。
+
+        修复前：第 45 项补账按 deadline-expired 进候选审核，审核下对账、授权后 N+1 零请求续跑预览仍被拒（action-failed 且诊断
+        不是处理型失败）——死路。修复后补账进 recovery_required，reconcile-attempt 可恢复 → 批准 → 授权 → N+1 零请求续跑预览
+        由 candidate_recovery_run_retry 唯一承接；重复对账不再补账。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        action_id = supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._b0_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            prior, successor, verbatim = self._item49_vc5_batches(fixture)
+            attempt_root = self._item49_reserve_candidate_attempt(fixture)
+            reserved = json.loads((attempt_root / "reservation.json").read_text(encoding="utf-8"))["started_at_utc"]
+            offset = datetime.fromisoformat(str(reserved).replace("Z", "+00:00")).timestamp() - 0.5 - time.time()
+            state, run_dir = self._r2_sealed_run(
+                fixture, "4" * 64, inner=prior, action_id=action_id, phase="VC-5",
+                diagnostic=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+                action_failed_reason="cleanup-requested-timeout", started_offset_seconds=offset,
+            )
+            self._item45_bind_commit(campaign_dir, run_dir, prior)
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            backfill = result.get("ledger_closeout_backfill")
+            self.assertIsNotNone(backfill, result)
+            self.assertEqual(
+                (backfill["action_id"], backfill["failure_class"], backfill["ledger_status"]),
+                (action_id, "deadline-expired", "recovery_required"),
+            )
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            events = self._b0_ledger_events(ledger_dir)
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            self.assertNotIn("ledger_closeout_backfill", again)
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+            reconciler.approve_recovery_preview(
+                campaign_dir, attempt_root.name, approve_sha256=again["recovery_preview"]["review_sha256"]
+            )
+            authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_root.name, Path(again["recovery_preview_path"]))
+            self.assertTrue(authorized["timing_recovery_event"]["appended"], authorized)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            self.assertEqual(
+                self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+            )
+            self.assertEqual(self._d07_accepting_protocols(state, prior, run_dir, verbatim, campaign_dir), [])
+
+    def test_item49_vc1_official_deadline_after_reservation_continues_with_zero_request_preview(self) -> None:
+        """第 49 项（官方 VC-1，同一共享判据）：官方采集在发布官方预约之后因子进程预算检查失败（WallClockTimeoutError，
+        deadline-expired，终态 action-failed）——① 首批 capture-official（批次 1）；② 按预览真实补跑 run-official-recovery
+        （批次 3）。VC-1 的采集失败按设计进阶段审核；reconcile-attempt 可恢复 → 批准 → 授权（阶段审核可授权，账本回 active）。
+
+        修复前 N+1 零请求预览被协议以"不是处理型失败"拒绝（死路）；修复后 ① 由 official_recovery_preview、② 由
+        official_recovery_run_retry 唯一承接。截止失败可能在预约之后（attempt 未必封口），① 的协议对它要求父 run 已对账：
+        对账前指向 reconcile-attempt（此前处理型失败在这里不查对账，截止失败沿用强杀同一要求）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        deadline = ("handled-error", "WallClockTimeoutError", "deadline-expired")
+        for case in ("capture-official", "run-official-recovery"):
+            with self.subTest(action=case), tempfile.TemporaryDirectory() as directory:
+                fixture, capture, preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+                campaign_dir = fixture["campaign_dir"]
+                ledger_dir = fixture["timing_ledger"]
+                if case == "capture-official":
+                    prior, successor, expected = capture, preview, "official_recovery_preview"
+                else:
+                    prior, successor = self._item45_vc1_recovery_run_batches(fixture)
+                    expected = "official_recovery_run_retry"
+                run_dir = self._b0_run_dir(
+                    fixture, "6" * 64, phase="VC-1", failure_class=deadline[2], batched_manifest=prior,
+                    action_id=case, failure_kind=deadline[0], error_type=deadline[1],
+                )
+                state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+                attempt_id = self._b0_orphan_attempt(fixture)
+                closeout = supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir, prior, failed_action_id=case, failure_class="deadline-expired"
+                )
+                self.assertEqual(closeout["ledger_status"], "stage_review_required", closeout)
+                if case == "capture-official":
+                    with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账.*先执行 reconcile-attempt"):
+                        supervisor._validate_batched_official_recovery_preview_successor(
+                            state, prior, run_dir, successor, campaign_dir=campaign_dir
+                        )
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_id, approve_sha256=result["recovery_preview"]["review_sha256"]
+                )
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, Path(result["recovery_preview_path"]))
+                self.assertTrue(authorized["timing_recovery_event"]["appended"], authorized)
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+                self.assertEqual(self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), [expected])
 
 
 class EvidenceManifestTest(unittest.TestCase):
