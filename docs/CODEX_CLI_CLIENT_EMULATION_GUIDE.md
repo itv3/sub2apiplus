@@ -2910,8 +2910,9 @@ P1 prepare 之后、父 run 之前失败（没有父 run）——入口写 `code
 序号未占，同序号以新 staging attempt 重新 prepare；
 P2 父 run `prepared` 后 owner 丢失——monitor 或 reconciler 把它封存为 `aborted_prepared`
 （`prepared-abandoned`，`reconcile-supervisor-run` 归根因 `staging.abandoned`，stage=`parent-run`），同序号重派；
-P3 提交四步中途失败——按 `staging-commit-failed:<step>` 封存为 `aborted_prepared`（根因
-`staging.commit-failed`，stage=失败的那一步），同序号重派；P4 COMMIT 已写但父 run 未取得执行权（`owner-lost`／`state-write-failed`，
+P3 提交四步中途失败——监督器先把异常类型、原文与签名写进 `staging-commit-failure.json`，再按
+`staging-commit-failed:<step>` 封存为 `aborted_prepared`（根因 `staging.commit-step-failed`，维度 phase＋stage＋error_type＋
+error_signature；没有该诊断的历史 run 仍记 `staging.commit-failed`、stage=失败的那一步，旧 ID 不变），同序号重派；P4 COMMIT 已写但父 run 未取得执行权（`owner-lost`／`state-write-failed`，
 `codex-upgrade-parent-start-failure/v1`）——序号已占，账本按可恢复父失败暂停（`recovery_required`，根因
 `parent-start.failed`），对账通过后只能以 N+1 按批次身份重派同一批次（12 个身份字段与动作三元组相等，执行细节可变）。
 COMMIT 存在但自摘要无效、owner nonce／run 目录不匹配、Campaign／阶段／序号／规范路径任一不一致的外来
@@ -3437,6 +3438,8 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   `error_type`＋`error_signature` 为维度；同一原因重复仍得到同一 ID，上限保护不削弱。改码表会改变 codes sha，部署前必须紧邻在
   项目总账写 `root-cause-code-migration/v1` 迁移收据（`migrations/NNNNNN.json`，from／to codes sha 与算法版本逐字、`id_mapping` 为空），
   写完旧工具即拒绝服务；历史事件与旧 ID 计数不变，新事件按新 ID 计数。
+- **提交步骤失败同样按拒因细分（第 51 项）**：同一提交步骤的不同拒因各自计数，同一拒因只差波动片段仍达上限暂停；诊断写不出时
+  只退回原来的粗粒度根因，不盖住原失败；staging commit 失败消息带原文（截 600 字）。部署前要登记监督器摘要，并写入衔接的码表迁移收据。
 - **账务未决只是暂停原因（第 32 项之二）**：请求账务无法核清时对账暂停（`pause_kinds` 含 accounting），主根因按环境污染＞工具身份
   变化＞到期＞中断选取，账务未决不进根因计数。按旧口径把账务未决记成主根因的历史对账，续接时按首次收据的不可变事实重算真实
   根因，写 `root-cause-reattribution.json` 并在总账追加 `reconciliation_corrected`（原 payload 逐字副本，只替换根因），计数随之移到

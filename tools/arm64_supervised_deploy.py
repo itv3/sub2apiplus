@@ -283,8 +283,10 @@ from urllib.parse import urlsplit
 # 阶段幂等重派合同；断言包已发布后 seal 预览续派的门禁与协议；看门狗形态阶段审核类失败的收账补做。control 层变化，监督器摘要随之变化。
 # 2026-09-28（第 46 项）：父监督器收账遇同根因重试上限按 B3-9 只暂停、不停线（永久失败类与已停线／已完成账本照旧停线）。
 # control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 51 项）：staging 提交步骤失败时监督器先把异常类型、原文与签名写进 staging-commit-failure.json 再封存。
+# control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "760d5925fc1b6ccbd01733cd34638f223959fc7fcf0eb8a76795af568a7bebd1"
+    "0136cb8b281234df57e2e07a2b412ef7aacb3977f6ee1aa31eaecabda5f900dc"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
