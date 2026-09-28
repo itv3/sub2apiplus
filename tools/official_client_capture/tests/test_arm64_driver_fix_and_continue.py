@@ -15,6 +15,10 @@
   同一命令、同一回归收据生成与校验、同一幂等规则），登记后对该对象重新对账一次；没给材料时停下且提示的 ``--from``
   真能通过 check_from；Campaign 账本 stop_required 不走旁路；前次判定暂停的对象续跑时重新对账（受管对账器先写收据、
   入总账再判定，暂停对象的收据按监督器判据核验是通过的，不能据此当作已对账跳过）。
+* 第 62 项：续跑重新对账推广到全部暂停种类（deadline、accounting、environment、request_budget、root_cause_repair 与
+  未知种类，父 run 与 attempt 对象）；各暂停提示给出能照做的续跑步骤（含 deadline 回到 pre-extend，其余回到停下的
+  步骤），用例照做续跑到底；reconcile-attempt 步骤目标 attempt 每次都重新对账、deadline 暂停续跑回到 pre-extend；
+  永久停线与 Campaign 账本 stop_required 行为不变。
 
 受管工具替身只在 ``FC_TEST_STUB_DIR`` 下读写；PATH 垫片只替换 setsid（同步执行）、systemctl、id、chown。
 git、python3、wait_state.py、parse_env.py 都是真的。
@@ -135,30 +139,63 @@ def stage_expired(st):
     return st.get("phase") == "VC-5" and bool(deadline) and parse_utc(deadline) <= datetime.now(timezone.utc)
 
 
-# 第 59 项：根因达上限暂停的替身口径与受管对账器 _decide／_paused_next_command 同文。
+# 第 59／62 项：暂停判定的替身口径与受管对账器 _decide／_paused_next_command 同文（原因、种类顺序与下一步）。
 ROOT_CAUSE_REASON = "根因 {causes} 累计失败已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）"
 CAMPAIGN_STOP_REASON = "Campaign 账本同根因重试已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）"
-ROOT_CAUSE_NEXT = ("登记根因修复证据：本 Campaign 账本已 stop_required 用 campaign-resume preview/apply（绑定修复提交、离线回归与部署收据）；"
-                   "只是项目总账根因达上限用 codex_upgrade_project_ledger record-root-cause-repair（code：修复提交／回归收据／部署收据）；"
-                   "随后重新执行本对账；批准后从原对账 checkpoint 继续")
+PAUSE_REASONS = {
+    "deadline": "Campaign 计时预算已暂停",
+    "request_budget": "项目请求预算已耗尽（暂停：批准请求预算延长后继续）",
+    "accounting": "总账 blocked：['reconcile-attempt:x']（暂停：accounting-resolve 补账后继续）",
+    "environment": "存在未隔离的环境污染（暂停：修复环境、取得干净环境复核后以 environment-isolate 隔离继续）",
+}
+PAUSE_STEPS = {
+    "deadline": "deadline-extend preview/apply",
+    "request_budget": "request-budget-extend preview/apply",
+    "accounting": "accounting-resolve preview/apply（为未决 operation 补账）",
+    "environment": "修复环境并取得晚于污染的干净环境复核后 environment-isolate preview/apply（隔离污染 attempt）",
+    "root_cause_repair": ("登记根因修复证据：本 Campaign 账本已 stop_required 用 campaign-resume preview/apply（绑定修复提交、离线回归与部署收据）；"
+                          "只是项目总账根因达上限用 codex_upgrade_project_ledger record-root-cause-repair（code：修复提交／回归收据／部署收据）；"
+                          "随后重新执行本对账"),
+}
+PAUSE_ORDER = ("deadline", "request_budget", "accounting", "environment")
 
 
-def root_cause_pause(st, subject):
-    """场景 root_cause_limits {对象: 根因}：该根因在总账还没有修复事件时，对账判"项目总账根因达上限"暂停；
-    场景 campaign_stop_required [对象]：Campaign 账本 stop_required，人工 campaign-resume（状态 campaign_resumed）前一直暂停。
-    与受管对账器同：暂停只是判定——对账收据与总账入账在判定之前已经写下（调用方先写收据再调本函数）。"""
+def pause_decision(st, subject):
+    """对象 subject 当前的暂停判定，没有暂停返回 None。与受管对账器同：暂停只是判定——调用方先写对账收据再调本函数。
+
+    * deadline：阶段截止已过（stage_expired，与目标 attempt 同一口径；pre-extend 延期后解除）；
+    * 场景 pauses {对象: [种类…]}：状态键 "<种类>_resolved" 为真之前一直暂停（模拟人工 accounting-resolve、
+      environment-isolate、request-budget-extend 或其他处理）；受管将来新增的未知种类照样给出；
+    * 场景 root_cause_limits {对象: 根因}：该根因在总账还没有修复事件时，项目总账根因达上限（第 59 项）；
+    * 场景 campaign_stop_required [对象]：Campaign 账本 stop_required，人工 campaign-resume（状态 campaign_resumed）前一直暂停。
+    """
     sc = scenario()
-    reasons = []
+    kinds, reasons = [], []
+    if stage_expired(st):
+        kinds.append("deadline")
+        reasons.append(PAUSE_REASONS["deadline"])
+    listed = [kind for kind in (sc.get("pauses") or {}).get(subject, []) if not st.get(f"{kind}_resolved")]
+    for kind in sorted(listed, key=lambda item: (PAUSE_ORDER.index(item) if item in PAUSE_ORDER else len(PAUSE_ORDER), item)):
+        if kind not in kinds:
+            kinds.append(kind)
+            reasons.append(PAUSE_REASONS.get(kind, f"暂停（{kind}）：待人处理"))
     cause = (sc.get("root_cause_limits") or {}).get(subject)
+    root = []
     if subject in (sc.get("campaign_stop_required") or []) and not st.get("campaign_resumed"):
-        reasons.append(CAMPAIGN_STOP_REASON)
+        root.append(CAMPAIGN_STOP_REASON)
     if cause is not None and not any(cause in repair["root_cause_ids"] for repair in st.get("repairs", [])):
-        reasons.append(ROOT_CAUSE_REASON.format(causes=[cause]))
-    if not reasons:
+        root.append(ROOT_CAUSE_REASON.format(causes=[cause]))
+    if root:
+        kinds.append("root_cause_repair")
+        reasons.extend(root)
+    if not kinds:
         return None
-    return {"status": "paused", "root_cause": {"root_cause_id": cause or "rc1-fixture-campaign"},
-            "decision": {"decision": "paused", "pause_kinds": ["root_cause_repair"], "reasons": reasons},
-            "next_command": ROOT_CAUSE_NEXT}
+    steps = [PAUSE_STEPS.get(kind, f"{kind}：由人按受管提示处理") for kind in kinds]
+    payload = {"status": "paused", "decision": {"decision": "paused", "pause_kinds": kinds, "reasons": reasons},
+               "next_command": "；".join(steps) + "；批准后从原对账 checkpoint 继续"}
+    if root:
+        payload["root_cause"] = {"root_cause_id": cause or "rc1-fixture-campaign"}
+    return payload
 
 
 def campaign_dir():
@@ -210,16 +247,12 @@ def _override(key):
 
 
 def _attempt(st, attempt_id, *, approve=None):
-    if stage_expired(st):
-        if approve is not None:
-            return emit(None, 1, "升级审计失败：预算暂停期间不接受恢复批准；必须先批准延期")
-        return emit({"status": "paused", "attempt_id": attempt_id,
-                     "decision": {"decision": "paused", "pause_kinds": ["deadline"], "reasons": ["Campaign 计时预算已暂停"]},
-                     "next_command": "deadline-extend preview/apply；批准后从原对账 checkpoint 继续"}, 3)
+    if approve is not None and stage_expired(st):
+        return emit(None, 1, "升级审计失败：预算暂停期间不接受恢复批准；必须先批准延期")
     directory = campaign_dir() / "control" / "reconciliation" / f"attempt-{attempt_id}"
     write_json(directory / "attempt-reconciliation.json", {"attempt_id": attempt_id})
-    # 与受管对账器同：对账收据先于判定写下，根因达上限暂停时收据也已存在（不生成恢复预览）。
-    paused = root_cause_pause(st, attempt_id)
+    # 与受管对账器同：对账收据先于判定写下，任何暂停（deadline／账务／环境／请求预算／根因……）时收据都已存在（不生成恢复预览）。
+    paused = pause_decision(st, attempt_id)
     if paused is not None:
         return emit({**paused, "attempt_id": attempt_id}, 3)
     preview = directory / "recovery-preview-01.json"
@@ -277,10 +310,16 @@ def cli(module, argv):
         if redirect:
             return emit(None, 1, "升级审计失败：该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt"
                                  "（恢复段加 --recovery-revision）：" + "、".join(redirect))
-        # 与受管 reconcile_supervisor_run 同：收据写入与总账入账在判定之前（暂停时收据也已存在，扫描会按"已对账"核验通过）。
+        # 与受管 reconcile_supervisor_run 同：收据写入与总账入账在判定之前（暂停、永久停线时收据也已存在，扫描会按"已对账"核验通过）。
         write_json(campaign_dir() / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json",
                    {"run_id": run_dir.name})
-        paused = root_cause_pause(st, run_dir.name)
+        terminal = (sc.get("stops") or {}).get(run_dir.name)
+        if terminal:
+            return emit({"status": "permanent_stop", "run_id": run_dir.name,
+                         "decision": {"decision": "permanent_stop", "terminal_reason": terminal,
+                                      "reasons": ["当前有效 wire 身份或策略摘要已变化"]},
+                         "next_command": "stop-the-line"}, 3)
+        paused = pause_decision(st, run_dir.name)
         if paused is not None:
             return emit({**paused, "run_id": run_dir.name}, 3)
         return emit({"status": "recoverable", "run_id": run_dir.name,
@@ -1402,14 +1441,8 @@ STEP_RECORD_KEYS = {"schema_version", "round", "step", "status", "identity", "pa
                     "recorded_at_utc", "summary", "reason", "next", "resume_from"}
 
 
-class ReconcileRunsRootCauseRepairTests(unittest.TestCase):
-    """第 59 项：reconcile-runs 对账遇"项目总账根因达上限"暂停时，与 reconcile-attempt 旁路走同一条登记路径。
-
-    缺陷（2026-09-28 r24 真实续跑暴露）：reconcile-runs 的判定对暂停一律停下，提示"填参数后 --from reconcile-attempt"，
-    但 reconcile-runs 不是 passed，check_from 拒绝；--from repair 同样被拒；而受管对账器在判定之前就写下了对账收据与总账
-    入账，扫描续跑时会把暂停的父 run 当作"已对账"跳过、暂停判定被悄悄丢掉。只能绕开编排手工登记。
-    替身与受管对账器同：暂停时对账收据已存在。
-    """
+class _ResumableRoundCase(unittest.TestCase):
+    """停下—照提示处理—续跑类用例的共用夹具与断言（本类没有用例）。"""
 
     def setUp(self) -> None:
         self._directory = tempfile.TemporaryDirectory()
@@ -1440,6 +1473,16 @@ class ReconcileRunsRootCauseRepairTests(unittest.TestCase):
         for step in {*hinted, resumed}:
             check = fixture.check_from(step)
             self.assertEqual(check.returncode, 0, f"提示的 --from {step} 通不过 check_from：{check.stderr}")
+
+
+class ReconcileRunsRootCauseRepairTests(_ResumableRoundCase):
+    """第 59 项：reconcile-runs 对账遇"项目总账根因达上限"暂停时，与 reconcile-attempt 旁路走同一条登记路径。
+
+    缺陷（2026-09-28 r24 真实续跑暴露）：reconcile-runs 的判定对暂停一律停下，提示"填参数后 --from reconcile-attempt"，
+    但 reconcile-runs 不是 passed，check_from 拒绝；--from repair 同样被拒；而受管对账器在判定之前就写下了对账收据与总账
+    入账，扫描续跑时会把暂停的父 run 当作"已对账"跳过、暂停判定被悄悄丢掉。只能绕开编排手工登记。
+    替身与受管对账器同：暂停时对账收据已存在。
+    """
 
     def test_runs_pause_registers_inline_and_reconciles_again(self) -> None:
         """目标 1：参数已给登记材料——同一次运行内登记（同一判定、同一命令、同一回归收据生成与校验），
@@ -1689,6 +1732,177 @@ class ReconcileRunsRootCauseRepairTests(unittest.TestCase):
         self._assert_ok(fixture.run("--from", "reconcile-attempt"))
         self.assertEqual(fixture.call_keys().count("record-root-cause-repair"), 1)
         self.assertEqual(fixture.step("repair")["status"], "passed")
+
+
+EXPIRED_STAGE = {"stage_deadline": "2020-01-01T00:00:00Z"}
+EXTEND_PARAMS = {"EXTEND_DEADLINE": "2099-06-01T00:00:00Z", "EXTEND_REASON": "修好接着跑：测试轮次续跑（阶段延期）"}
+OTHER_ATTEMPT = "20260928T000000Z-aaaaaaaaaaaaaaaa"
+
+
+class PauseHintMappingTests(unittest.TestCase):
+    """第 62 项：暂停判定 → 续跑步骤与提示的对应（直接调用 judge_reconciliation）。"""
+
+    def test_every_pause_kind_names_one_resumable_step(self) -> None:
+        """含 deadline 时续跑步骤是 pre-extend（阶段延期在对账之前执行，从对账步骤续跑会绕过延期），其余种类（含受管将来
+        新增的未知种类）回到停下的步骤；提示里恰好一个 --from 且与之相同。永久停线、需审核、命令失败不变。"""
+
+        helper = load_helper()
+        cases = (
+            # (pause_kinds, reasons, 是否回到 pre-extend, 提示关键字)
+            (["deadline"], ["Campaign 计时预算已暂停"], True, "EXTEND_DEADLINE"),
+            (["accounting"], ["总账 blocked"], False, "accounting-resolve"),
+            (["environment"], ["存在未隔离的环境污染"], False, "environment-isolate"),
+            (["request_budget"], ["项目请求预算已耗尽"], False, "request-budget-extend"),
+            (["vendor_hold"], ["暂停（vendor_hold）"], False, "vendor_hold"),
+            (["root_cause_repair"], ["根因 ['rc1-x'] 累计失败已达上限（暂停）"], False, "record-root-cause-repair"),
+            (["root_cause_repair"], ["Campaign 账本同根因重试已达上限（暂停）"], False, "campaign-resume"),
+            (["deadline", "accounting"], ["Campaign 计时预算已暂停", "总账 blocked"], True, "accounting-resolve"),
+            (None, ["Campaign 计时预算已暂停"], True, "EXTEND_DEADLINE"),  # 缺 pause_kinds 按 deadline（与受管同口径）
+        )
+        for step in ("reconcile-runs", "reconcile-attempt", "approve"):
+            for kinds, reasons, to_pre_extend, needle in cases:
+                with self.subTest(step=step, kinds=kinds):
+                    decision = {"decision": "paused", "reasons": reasons}
+                    if kinds is not None:
+                        decision["pause_kinds"] = kinds
+                    payload = {"status": "paused", "decision": decision, "next_command": "受管提示"}
+                    category, _reason, hint, got = helper.judge_reconciliation(payload, 3, "", step=step)
+                    expected = "pre-extend" if to_pre_extend else step
+                    self.assertEqual((category, got), ("paused", expected))
+                    self.assertEqual(re.findall(r"--from ([a-z-]+)", hint), [expected], hint)
+                    self.assertIn(needle, hint)
+        for payload, category in (
+            ({"status": "permanent_stop", "decision": {"terminal_reason": "identity_changed", "reasons": []}}, "stop"),
+            ({"status": "stage_review_required", "decision": {"reasons": []}}, "stop"),
+            (None, "failed"),
+        ):
+            with self.subTest(category=category, payload=payload):
+                got = helper.judge_reconciliation(payload, 3, "替身输出", step="reconcile-runs")
+                self.assertEqual((got[0], got[3]), (category, "reconcile-runs"))
+
+
+class ReconcileRunsPauseRevisitTests(_ResumableRoundCase):
+    """第 62 项：reconcile-runs 里任何因对账判"暂停"而停下的对象都进 revisit 记忆，续跑时即使收据核验通过也重新对账。
+
+    受管对账器先写对账收据、入总账再判定（替身同），暂停对象的收据按监督器判据核验是通过的；第 59 项只记"根因达上限"，
+    其它暂停种类停下后照提示续跑，扫描会把该对象当作已对账跳过——暂停判定丢失、拿不到 reconcile-run-passed。
+    ARM64 已实测 Campaign 账本里没有 run-080a56c9 的 reconcile-run-passed。
+    """
+
+    def _operate(self, fixture: _Round, operator: dict) -> None:
+        """照提示的人工处理：参数文件补延期材料，或模拟人工 accounting-resolve 等受管处理。"""
+
+        if "params" in operator:
+            fixture.write_params(operator["params"])
+        if "state" in operator:
+            fixture.set_stub_state(**operator["state"])
+
+    def test_runs_pause_of_every_kind_is_revisited_after_hinted_resume(self) -> None:
+        """目标 1、2：deadline／accounting／environment／request_budget／未知种类／组合暂停——停在 reconcile-runs，提示里的
+        --from 与续跑行一致（deadline 是 pre-extend）且通过 check_from；照提示处理后续跑，前次暂停的父 run 即使收据已写
+        也重新对账，判可恢复即记 done，一路跑到 recover。"""
+
+        cases = {
+            "deadline": (EXPIRED_STAGE, {}, "pre-extend", "EXTEND_DEADLINE", {"params": EXTEND_PARAMS}),
+            "accounting": ({}, {"pauses": {"run-b": ["accounting"]}}, "reconcile-runs", "accounting-resolve",
+                           {"state": {"accounting_resolved": True}}),
+            "environment": ({}, {"pauses": {"run-b": ["environment"]}}, "reconcile-runs", "environment-isolate",
+                            {"state": {"environment_resolved": True}}),
+            "request_budget": ({}, {"pauses": {"run-b": ["request_budget"]}}, "reconcile-runs", "request-budget-extend",
+                               {"state": {"request_budget_resolved": True}}),
+            "未知种类": ({}, {"pauses": {"run-b": ["vendor_hold"]}}, "reconcile-runs", "vendor_hold",
+                        {"state": {"vendor_hold_resolved": True}}),
+            "deadline＋accounting": (EXPIRED_STAGE, {"pauses": {"run-b": ["accounting"]}}, "pre-extend", "accounting-resolve",
+                                     {"params": EXTEND_PARAMS, "state": {"accounting_resolved": True}}),
+        }
+        for name, (state, scenario, resume, needle, operator) in cases.items():
+            with self.subTest(kind=name):
+                fixture = _Round(self._new_root(), state=state, scenario=scenario)
+                stopped = fixture.run()
+                output = stopped.stdout + stopped.stderr
+                self.assertEqual(stopped.returncode, EXIT_OPERATOR, output[-4000:])
+                self.assertIn(f"FIX_AND_CONTINUE_STOPPED step=reconcile-runs status=needs-operator resume_from={resume}", output)
+                self.assertIn(needle, output)
+                self._assert_hints_resumable(fixture, output, expected=resume)
+                self.assertEqual(fixture.step("reconcile-runs")["summary"]["revisit"], [{"kind": "supervisor-run", "subject": "run-b"}])
+                keys = fixture.call_keys()
+                self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 1)
+                self.assertNotIn(f"reconcile-attempt:plain:{ATTEMPT}", keys)
+                self._operate(fixture, operator)
+                self._assert_ok(fixture.run("--from", resume))
+                keys = fixture.call_keys()
+                runs = [index for index, key in enumerate(keys) if key == "reconcile-supervisor-run:run-b"]
+                self.assertEqual(len(runs), 2, "续跑时应重新对账前次暂停的父 run（收据虽已写）")
+                record = fixture.step("reconcile-runs")
+                self.assertEqual(record["status"], "passed")
+                self.assertEqual(record["summary"]["revisit"], [])
+                self.assertEqual([item["subject"] for item in record["summary"]["done"]], ["run-b"])
+                if resume == "pre-extend":
+                    # pre-extend 先于 reconcile-runs：先延期，再重新对账。
+                    self.assertEqual(fixture.step("pre-extend")["status"], "passed")
+                    self.assertLess(keys.index("deadline-extend:apply"), runs[1])
+                self.assertEqual(keys[-1], "vc5-recover.sh")
+
+    def test_runs_pause_on_reserved_attempt_is_revisited(self) -> None:
+        """目标 1（attempt 对象）：父 run 窗口内有预约、扫描改走 attempt 对账的对象判暂停，同样记入 revisit；
+        续跑时该 attempt 的对账收据核验通过，仍重新对账一次。"""
+
+        fixture = _Round(self.root, scenario={"pauses": {OTHER_ATTEMPT: ["accounting"]}})
+        fixture.update_scenario(reservations=[{"started_at_epoch": 250.0, "candidate_id": fixture.candidate, "subject": OTHER_ATTEMPT}])
+        stopped = fixture.run()
+        output = stopped.stdout + stopped.stderr
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, output[-4000:])
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-runs status=needs-operator resume_from=reconcile-runs", output)
+        self._assert_hints_resumable(fixture, output)
+        self.assertEqual(fixture.step("reconcile-runs")["summary"]["revisit"], [{"kind": "attempt", "subject": OTHER_ATTEMPT}])
+        self.assertTrue((fixture.campaign_dir / "control" / "reconciliation" / f"attempt-{OTHER_ATTEMPT}" /
+                         "attempt-reconciliation.json").is_file(), "替身与受管同：暂停时 attempt 对账收据已写")
+        fixture.set_stub_state(accounting_resolved=True)
+        self._assert_ok(fixture.run("--from", "reconcile-runs"))
+        keys = fixture.call_keys()
+        self.assertEqual(keys.count(f"reconcile-attempt:plain:{OTHER_ATTEMPT}"), 2)
+        self.assertNotIn("reconcile-supervisor-run:run-b", keys)
+        record = fixture.step("reconcile-runs")
+        self.assertEqual((record["status"], record["summary"]["revisit"]), ("passed", []))
+
+    def test_attempt_step_pause_resumes_hinted_step_and_target_is_reconciled_again(self) -> None:
+        """目标 4：reconcile-attempt 步骤每次都对目标 attempt 重新对账（不经扫描、不看收据），没有"暂停后续跑被跳过"。
+        同类缺口是续跑步骤：deadline 暂停的续跑行原写 --from reconcile-attempt，照做会绕过对账前的 pre-extend 延期、
+        再次暂停——改为 pre-extend；账务等暂停提示里补上 --from reconcile-attempt。"""
+
+        cases = {
+            "deadline": (EXPIRED_STAGE, {}, "pre-extend", {"params": EXTEND_PARAMS}),
+            "accounting": ({}, {"pauses": {ATTEMPT: ["accounting"]}}, "reconcile-attempt", {"state": {"accounting_resolved": True}}),
+        }
+        for name, (state, scenario, resume, operator) in cases.items():
+            with self.subTest(kind=name):
+                fixture = _Round(self._new_root(), runs=[("run-a", "stopped", 100.0)], state=state, scenario=scenario)
+                stopped = fixture.run()
+                output = stopped.stdout + stopped.stderr
+                self.assertEqual(stopped.returncode, EXIT_OPERATOR, output[-4000:])
+                self.assertIn(f"FIX_AND_CONTINUE_STOPPED step=reconcile-attempt status=needs-operator resume_from={resume}", output)
+                self._assert_hints_resumable(fixture, output, expected=resume)
+                self.assertEqual(fixture.call_keys().count(f"reconcile-attempt:plain:{ATTEMPT}"), 1)
+                self._operate(fixture, operator)
+                self._assert_ok(fixture.run("--from", resume))
+                # 目标 attempt 在续跑时照例重新对账（reconcile-attempt 一次、approve 的恢复预览一次），收据已写也不跳过。
+                self.assertEqual(fixture.call_keys().count(f"reconcile-attempt:plain:{ATTEMPT}"), 3)
+                self.assertEqual(fixture.step("reconcile-attempt")["status"], "passed")
+
+    def test_runs_permanent_stop_is_not_revisited(self) -> None:
+        """目标 3：永久停线不是暂停，行为不变——停下（needs-operator）、续跑步骤 reconcile-runs、不进 revisit 记忆、不越权。"""
+
+        fixture = _Round(self.root, scenario={"stops": {"run-b": "identity_changed"}})
+        result = fixture.run()
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, EXIT_OPERATOR, output[-4000:])
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-runs status=needs-operator resume_from=reconcile-runs", output)
+        self.assertIn("永久停线", output)
+        self.assertEqual(fixture.step("reconcile-runs")["summary"]["revisit"], [])
+        keys = fixture.call_keys()
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 1)
+        self.assertNotIn(f"reconcile-attempt:plain:{ATTEMPT}", keys)
+        self.assertNotIn("record-root-cause-repair", keys)
 
 
 if __name__ == "__main__":

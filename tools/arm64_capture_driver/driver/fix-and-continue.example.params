@@ -39,6 +39,7 @@ EVOLUTION_REASON="REPLACE：修了什么（全角括号）；提交范围；受�
 APPROVER="REPLACE：批准人与授权原话"
 
 # ---- 可选：阶段延期（给了才延期；对账前与授权后各判一次，已延期即跳过）----
+# 对账判预算截止（deadline）暂停停下时：填这三项后按停下提示 --from pre-extend 续跑（先延期，再重新对账暂停过的对象）。
 # EXTEND_DEADLINE=2026-01-01T00:00:00Z
 # EXTEND_PHASE=VC-5
 # EXTEND_REASON="REPLACE：延期理由"
