@@ -21381,8 +21381,9 @@ class CodexUpgradeTest(unittest.TestCase):
         fixture: dict[str, object],
         *,
         restoration_error: dict[str, str] | None = None,
+        failure_observations: list[dict[str, str]] | None = None,
     ) -> str:
-        """带失败数组（数组合同）的失败 attempt，请求账务无法核清（证据根无权威来源）；可选恢复失败（环境污染）。"""
+        """带失败数组（数组合同）的失败 attempt，请求账务无法核清（证据根无权威来源）；可选恢复失败（环境污染）与结构化失败观测。"""
 
         campaign_dir = fixture["campaign_dir"]
         manifest = fixture["manifest"]
@@ -21405,7 +21406,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "status": "failed",
                 "identity": dict(manifest["official_identity"]),
                 "results": [result],
-                "failure_observations": [],
+                "failure_observations": list(failure_observations or []),
                 "evidence_roots": [],
                 "evidence_permission_closeout": None,
                 "evidence_permission_error": {"type": "SyntheticFailure", "message": "合成 attempt 不封存证据权限收据。"},
@@ -21722,6 +21723,56 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(reconciler.ReconcilerError, "已有其它历史更正"):
                 reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(codex_upgrade_project_ledger.replay_head(ledger_root)["sequence"], sequence)
+
+    def test_attempt_failure_arrays_written_under_previous_codes_table_still_load(self) -> None:
+        """修好接着跑第 32 项前置（码表演进兼容）：根因枚举表按总账迁移收据演进、摘要变化后，部署前写下的 attempt.json
+        根因数组必须照旧通过重放校验并可加载、对账。
+
+        每个根因对象里的 codes_sha256 只是写入时的表摘要注记，不参与根因 ID。修复前 _validate_attempt_failure_facts 连同该
+        注记逐字比较：任何码表变化都让带失败观测的历史 attempt 以"attempt 失败观测或根因数组漂移"拒绝加载，部署即挡住对账、
+        续跑与封存（第 32／38 项正要改码表）。根因 ID 等身份字段被改动、注记缺失仍失败关闭。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            # 部署前的码表：与当前表只差一个无关登记项（摘要不同，campaign-run.action-failed 的登记不变）。
+            previous_codes = json.loads(root_cause.DEFAULT_CODES_PATH.read_text(encoding="utf-8"))
+            previous_codes["codes"]["previous.only-code"] = {"component": "reconciler", "stable_dimensions": ["phase"]}
+            previous_path = root / "previous-root-cause-codes.json"
+            previous_path.write_text(json.dumps(previous_codes, ensure_ascii=False), encoding="utf-8")
+            previous = root_cause.load_codes(previous_path)
+            self.assertNotEqual(previous["codes_sha256"], root_cause.load_codes()["codes_sha256"])
+            with mock.patch.object(root_cause, "load_codes", return_value=previous):
+                attempt_id = self._b0_array_contract_attempt(
+                    fixture, failure_observations=[{"check_id": "A15", "failure_code": "cache_contract"}]
+                )
+            attempt_root = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
+            written = json.loads((attempt_root / "attempt.json").read_text(encoding="utf-8"))
+            self.assertEqual({item["codes_sha256"] for item in written["root_causes"]}, {previous["codes_sha256"]})
+            # 当前码表下照旧加载与对账：数组逐字保留，根因 ID 不变。
+            _root, loaded = codex_upgrade._load_capture_attempt(campaign_dir, "official", None, attempt_id)
+            self.assertEqual(loaded["root_causes"], written["root_causes"])
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(
+                [item["root_cause_id"] for item in result["root_causes"]],
+                [item["root_cause_id"] for item in written["root_causes"]],
+            )
+            # 身份字段被改动、注记缺失或非法仍失败关闭（直接校验，不改写 write-once 文件）。
+            first = dict(written["root_causes"][0])
+            for causes, pattern in (
+                ([dict(first, failed_step="failure-observation-" + "0" * 20)], "漂移"),
+                ([dict(first, root_cause_id="rc1-" + "0" * 20)], "漂移"),
+                ([{key: value for key, value in first.items() if key != "codes_sha256"}], "注记"),
+                ([dict(first, codes_sha256="not-a-digest")], "注记"),
+            ):
+                with self.subTest(pattern=pattern, causes=str(causes)[:60]):
+                    with self.assertRaisesRegex(codex_upgrade.ConfigurationError, pattern):
+                        codex_upgrade._validate_attempt_failure_facts(dict(written, root_causes=causes))
 
     def test_b0_accounting_resolve_precise_when_new_evidence_resolves_and_rejects_misuse(self) -> None:
         """修好接着跑第 12 项：补回证据后原未决作业已能核清——accounting-resolve 按与对账同一口径精确补账

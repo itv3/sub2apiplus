@@ -7917,8 +7917,27 @@ def _attempt_failure_facts(
         raise ConfigurationError(f"attempt 失败根因编码失败：{error}") from error
 
 
+def _attempt_cause_identity(causes: Any) -> Any:
+    """根因数组的身份视图：去掉每项的 ``codes_sha256`` 注记（修好接着跑第 32 项前置）。
+
+    ``codes_sha256`` 只记录写入时的根因枚举表摘要，不参与根因 ID（ID 由算法版本、组件、错误码、步骤与维度决定）；
+    枚举表按项目总账迁移收据演进后，部署前写下的 attempt 根因数组仍须照旧通过重放校验。其余字段（根因 ID、错误码、
+    步骤、维度、组件、算法版本、观测键）照旧逐字比较。
+    """
+
+    if not isinstance(causes, list):
+        return causes
+    return [
+        {key: value for key, value in item.items() if key != "codes_sha256"} if isinstance(item, Mapping) else item
+        for item in causes
+    ]
+
+
 def _validate_attempt_failure_facts(payload: Mapping[str, Any]) -> None:
-    """新 attempt 重放数组闭集；没有数组的历史 v2/v3 继续只读兼容。"""
+    """新 attempt 重放数组闭集；没有数组的历史 v2/v3 继续只读兼容。
+
+    根因数组按身份视图比较（见 ``_attempt_cause_identity``），每项的 codes_sha256 注记必须存在且是合法摘要。
+    """
 
     has_observations = "failure_observations" in payload
     has_causes = "root_causes" in payload
@@ -7927,9 +7946,15 @@ def _validate_attempt_failure_facts(payload: Mapping[str, Any]) -> None:
     if not has_observations or not has_causes:
         raise ConfigurationError("attempt 失败观测与根因数组必须同时存在。")
     expected_observations, expected_causes = _attempt_failure_facts(payload)
+    stored_causes = payload.get("root_causes")
+    if isinstance(stored_causes, list) and any(
+        not isinstance(item, Mapping) or not SHA256_RE.fullmatch(str(item.get("codes_sha256", "")))
+        for item in stored_causes
+    ):
+        raise ConfigurationError("attempt 根因数组的枚举表摘要注记缺失或非法。")
     if (
         payload.get("failure_observations") != expected_observations
-        or payload.get("root_causes") != expected_causes
+        or _attempt_cause_identity(stored_causes) != _attempt_cause_identity(expected_causes)
     ):
         raise ConfigurationError("attempt 失败观测或根因数组漂移。")
 
