@@ -8925,7 +8925,8 @@ def _validate_batched_seal_chain_successor(
     逐字重派仍由环境／post-run-tooling 协议判定（这里对逐字相同的后继返回 False）；本协议只放行"修复后 seal
     预览变化，批准摘要作废，需要重新预览"这类情形：后继全部动作也是零请求 seal 链动作、指向同一 attempt，
     同阶段、同候选、N+1，批次级冻结字段不变，评估器摘要按重派同一口径核对；父 run 必须已按 post-run-tooling
-    对账。形态不符返回 False，形态相符后任何绑定不闭合都失败关闭。
+    对账。形态不符返回 False，形态相符后任何绑定不闭合都失败关闭。D-10：VC-1 审核类失败已由对账写出阶段幂等
+    重派证明时让位给阶段审核协议（返回 False），不在这里失败关闭。
     """
 
     phase = prior_manifest.get("phase")
@@ -9012,6 +9013,14 @@ def _validate_batched_seal_chain_successor(
             and candidate_post_run_recovery_action(prior_manifest, str(facts["action_id"])) is not None
         )
     if receipt_class not in {"post-run-tooling", "tool-evolution-required"} and not post_run_execution_failure:
+        # D-10（草表 D-10）：VC-1 官方 seal 链审核类失败（如 execution-failure）经对账取得阶段幂等重派证明后，唯一承接
+        # 是阶段审核协议的原批次重派（批次身份相同，命令 argv／timeout 可随修复变化）。这里让位而不失败关闭——否则
+        # 只调执行细节的重派会先在本协议被拒，阶段审核协议轮不到；批次身份不同的续派由阶段审核协议按身份漂移
+        # 失败关闭。没有证明时照旧拒绝。
+        if phase == "VC-1" and (
+            resolved_campaign / "control" / "reconciliation" / f"run-{prior_dir.name}" / "stage-replay.json"
+        ).exists():
+            return _protocol_reject("VC-1 官方 seal 链审核类失败已有阶段幂等重派证明，原批次重派交阶段审核协议")
         raise SupervisorError(
             f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling，或候选零请求后处理的 execution-failure）"
             "或评估器漂移（tool-evolution-required）失败。"
@@ -10563,6 +10572,8 @@ def _validate_batched_stage_review_successor(
     """R4：复核阶段审核的幂等证明；直接重派还复算实物，历史后继只重放冻结许可。
 
     R18：候选审核下的 VC-4（零请求构建动作的工具缺陷）按同一证明格式承接，审核事件取候选审核事件。
+    D-10：VC-1 官方 seal 链零请求后处理批次以审核类失败收口时，同样凭对账写出的阶段幂等重派证明由本协议唯一
+    承接 N+1 原批次重派（合同见 codex_upgrade._official_seal_chain_stage_replay_actions）。
     """
 
     phase = prior_manifest.get("phase")

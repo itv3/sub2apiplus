@@ -17020,16 +17020,329 @@ def _candidate_stage_replay_action_facts(
     return inputs, outputs
 
 
+# D-10（草表 D-10，矩阵第 24 行）：VC-1 官方 seal 链三个零请求后处理动作的幂等重派合同。动作种类按命令形态判定，
+# action_id 与唯一 item_id 必须恰为种类名——监督器按 action_id 执行 VC-1 断言包门禁与收口重放，名实不符即不认。
+# 采集（capture-official run）、零请求恢复预览与按预览补跑都不在合同内：它们发请求，或由 attempt 恢复链承接。
+OFFICIAL_SEAL_CHAIN_REPLAY_KINDS = (
+    "prepare-official-assertion-bundle",
+    "seal-official-preview",
+    "seal-official-approve",
+)
+# 断言包动作 ``/usr/bin/env KEY=VALUE… <bash> <prepare_assertion_bundle.sh>`` 的坐标闭集（必需，可选）。
+# BASELINE／CANDIDATE_* 属候选侧；DECLARATION 会绕过按目标版本选取的证据标签声明，都不在合同内。
+OFFICIAL_ASSERTION_REPLAY_ASSIGNMENTS: tuple[frozenset[str], frozenset[str]] = (
+    frozenset({"CAMPAIGN_DIR", "ATTEMPT_ID", "SIDE"}),
+    frozenset({"REPO_ROOT", "TOOL_ROOT"}),
+)
+# ``capture-official seal`` 的参数闭集（必需，可选）：带 --approve-seal-sha256 是批准，否则是预览。可重复的
+# --evidence-root、--restoration-report 与 --campaign 别名不在合同内；--acknowledge-live-requests 与零请求 seal
+# 无关，出现即参数不闭合。
+OFFICIAL_SEAL_REPLAY_FLAGS: tuple[frozenset[str], frozenset[str]] = (
+    frozenset({"--campaign-dir", "--attempt-id"}),
+    frozenset({
+        "--capture-manifest", "--assertion-evidence-root", "--approve-seal-sha256",
+        "--max-wall-seconds", "--heartbeat-seconds",
+    }),
+)
+_OFFICIAL_ASSERTION_REPLAY_ASSIGNMENT_RE = re.compile(r"([A-Z][A-Z0-9_]*)=(.*)", re.DOTALL)
+
+
+def _official_seal_chain_replay_kind(action: Any) -> str | None:
+    """按命令形态识别官方 seal 链动作种类（断言包准备／seal 预览／seal 批准）；不是这三种返回 None。"""
+
+    command = action.get("command") if isinstance(action, Mapping) else None
+    if not isinstance(command, list) or not command or not all(isinstance(token, str) for token in command):
+        return None
+    if any(PurePosixPath(token).name == "prepare_assertion_bundle.sh" for token in command):
+        return "prepare-official-assertion-bundle"
+    for index, token in enumerate(command[:-1]):
+        if token == "capture-official" and command[index + 1] == "seal":
+            return "seal-official-approve" if "--approve-seal-sha256" in command else "seal-official-preview"
+    return None
+
+
+def _official_assertion_replay_coordinates(command: Sequence[str], campaign_dir: Path) -> dict[str, str]:
+    """D-10：断言包动作须是 ``/usr/bin/env`` 调起当前受管 prepare_assertion_bundle.sh 的形态，坐标精确闭合。
+
+    解释器是绝对路径的 bash；SIDE 必须是 official；脚本、TOOL_ROOT、REPO_ROOT 都解析到当前受管树（与本模块同一
+    tools 目录与仓库根）；CAMPAIGN_DIR 是本 Campaign。返回坐标字典（含 ATTEMPT_ID）。
+    """
+
+    if not command or not PurePosixPath(command[0]).is_absolute() or PurePosixPath(command[0]).name != "env":
+        raise ConfigurationError("断言包动作不是 /usr/bin/env 形态，没有幂等合同")
+    assignments: dict[str, str] = {}
+    index = 1
+    while index < len(command):
+        match = _OFFICIAL_ASSERTION_REPLAY_ASSIGNMENT_RE.fullmatch(command[index])
+        if match is None:
+            break
+        if match.group(1) in assignments:
+            raise ConfigurationError("断言包动作坐标没有精确闭合：坐标重复")
+        assignments[match.group(1)] = match.group(2)
+        index += 1
+    tail = list(command[index:])
+    required, optional = OFFICIAL_ASSERTION_REPLAY_ASSIGNMENTS
+    if len(tail) != 2 or not required <= set(assignments) or set(assignments) - required - optional:
+        raise ConfigurationError(
+            "断言包动作坐标没有精确闭合：只允许 CAMPAIGN_DIR／ATTEMPT_ID／SIDE 与可选的 REPO_ROOT／TOOL_ROOT，"
+            "其后恰为 bash 与脚本"
+        )
+    shell, script = tail
+    if not PurePosixPath(shell).is_absolute() or PurePosixPath(shell).name != "bash":
+        raise ConfigurationError("断言包动作的解释器不是绝对路径的 bash")
+    if assignments["SIDE"] != "official":
+        raise ConfigurationError("VC-1 断言包动作必须声明 SIDE=official")
+    managed_module = Path(__file__).resolve(strict=True)
+    managed_script = (managed_module.parents[1] / "prepare_assertion_bundle.sh").resolve(strict=True)
+    script_path = Path(script)
+    if (
+        not script_path.is_absolute()
+        or script_path.is_symlink()
+        or not script_path.is_file()
+        or script_path.resolve(strict=True) != managed_script
+    ):
+        raise ConfigurationError("断言包脚本不是当前受管树的 prepare_assertion_bundle.sh")
+    for name, expected in (("TOOL_ROOT", managed_module.parent), ("REPO_ROOT", managed_module.parents[2])):
+        if name in assignments:
+            value = Path(assignments[name])
+            if not value.is_absolute() or value.resolve(strict=True) != expected:
+                raise ConfigurationError(f"断言包动作的 {name} 不是当前受管树")
+    campaign_value = Path(assignments["CAMPAIGN_DIR"])
+    if not campaign_value.is_absolute() or campaign_value.resolve(strict=True) != campaign_dir.resolve(strict=True):
+        raise ConfigurationError("断言包动作的 CAMPAIGN_DIR 不是本 Campaign")
+    if not SAFE_ID_RE.fullmatch(assignments["ATTEMPT_ID"]):
+        raise ConfigurationError("断言包动作的 ATTEMPT_ID 非法")
+    return assignments
+
+
+def _official_seal_replay_flags(command: Sequence[str], campaign_dir: Path) -> dict[str, str]:
+    """D-10：seal 动作须是受管 Python 对受管 codex_upgrade 的直接调用，``capture-official seal`` 参数精确闭合。"""
+
+    if len(command) > 3 and list(command[1:3]) == ["-m", "tools.official_client_capture.codex_upgrade"]:
+        argv = list(command[3:])
+    elif len(command) > 2 and Path(command[1]).resolve() == Path(__file__).resolve():
+        argv = list(command[2:])
+    else:
+        raise ConfigurationError("不是受管 codex_upgrade 的直接调用，不能证明幂等")
+    if Path(command[0]).resolve(strict=True) != Path(sys.executable).resolve(strict=True):
+        raise ConfigurationError("阶段动作解释器不是当前受管 Python")
+    required, optional = OFFICIAL_SEAL_REPLAY_FLAGS
+    flags = dict(zip(argv[2::2], argv[3::2]))
+    if (
+        argv[:2] != ["capture-official", "seal"]
+        or len(argv[2:]) % 2
+        or len(flags) * 2 != len(argv) - 2
+        or not required <= set(flags)
+        or set(flags) - required - optional
+    ):
+        raise ConfigurationError("capture-official seal 参数没有精确闭合")
+    campaign_value = Path(flags["--campaign-dir"])
+    if not campaign_value.is_absolute() or campaign_value.resolve(strict=True) != campaign_dir.resolve(strict=True):
+        raise ConfigurationError("seal 动作的 --campaign-dir 不是本 Campaign")
+    if not SAFE_ID_RE.fullmatch(flags["--attempt-id"]):
+        raise ConfigurationError("seal 动作的 --attempt-id 非法")
+    for flag in ("--capture-manifest", "--assertion-evidence-root"):
+        if flag in flags and not PurePosixPath(flags[flag]).is_absolute():
+            raise ConfigurationError(f"seal 动作的 {flag} 必须是绝对路径")
+    if "--approve-seal-sha256" in flags and not SHA256_RE.fullmatch(flags["--approve-seal-sha256"]):
+        raise ConfigurationError("seal 动作的 --approve-seal-sha256 格式非法")
+    for flag in ("--max-wall-seconds", "--heartbeat-seconds"):
+        if flag in flags and not flags[flag].isdigit():
+            raise ConfigurationError(f"seal 动作的 {flag} 必须是正整数")
+    return flags
+
+
+def _official_seal_chain_stage_replay_actions(
+    campaign_dir: Path,
+    run_manifest: Mapping[str, Any],
+) -> list[dict[str, Any]] | None:
+    """D-10：VC-1 官方 seal 链批次的幂等重派合同（与 R18 同构），只读核验，不执行命令、不补写产物。
+
+    返回 None 表示批次不是纯官方 seal 链批次（含采集、恢复预览／补跑等任何其它动作或执行项），调用方维持
+    "已发布预约只能走 attempt 恢复"的原结论；是纯 seal 链批次但合同不成立时抛出带原因的 ConfigurationError，
+    留在阶段审核。合同成立须同时满足：
+
+    1. action_id 与唯一 item_id 等于命令形态判定的种类，种类不重复，execute_items 恰为这些种类、reuse_items 为空；
+    2. 断言包动作是 ``/usr/bin/env`` 调起受管 prepare_assertion_bundle.sh（见 ``_official_assertion_replay_coordinates``），
+       seal 动作是受管 Python 对受管 codex_upgrade 的直接调用（见 ``_official_seal_replay_flags``），全部指向本
+       Campaign 同一个官方 attempt，且与监督器 seal 链解析一致；
+    3. 官方证据尚未封存：official 阶段结果与 VC-1 checkpoint 都不存在——已封存不重封，写入方本身也拒绝覆盖；
+    4. 含断言包动作时：断言证据包尚未发布（脚本 write-once、拒绝覆盖，已发布即逐字重派必败），证据目录没有被
+       强杀留下的 ``.assertion-work.*`` 暂存残留（它让证据权限收口边界漂移）；
+    5. attempt 可重放（含证据权限收口）、处于 awaiting_receipts，没有作业被工具演进作废，未被环境隔离或证据根
+       冲突隔离（这三类只走 reconcile-attempt 的恢复链）；历史 v2 attempt 不得重派断言包动作（与监督器同一规则）；
+    6. seal 批准且同批次没有先行的 seal 预览时：已有冻结草案与摘要等于批准参数的预览，否则批准必然被拒。
+
+    输入按摘要绑定：受管断言包脚本、attempt 收据、权限收口收据、已存在的 capture manifest。seal 动作的已写派生
+    半成品（EvidenceManifest 及其 checkpoint、finalized、seal 草案与预览）按摘要绑定为输出：seal 的写入都是
+    write-once 或逐字核对，逐字重派在其上续作。直接后继派发前再复算一次，任何漂移都拒绝重派。
+    """
+
+    actions = run_manifest.get("actions")
+    execute = run_manifest.get("execute_items")
+    if not isinstance(actions, list) or not actions or not isinstance(execute, list) or not execute:
+        return None
+    detected = [_official_seal_chain_replay_kind(action) for action in actions]
+    if any(kind is None for kind in detected) or any(item not in OFFICIAL_SEAL_CHAIN_REPLAY_KINDS for item in execute):
+        return None
+    kinds = [str(kind) for kind in detected]
+    for action, kind in zip(actions, kinds):
+        if action.get("action_id") != kind or action.get("item_ids") != [kind]:
+            raise ConfigurationError(
+                f"动作 {action.get('action_id')} 的 action_id／item_ids 与命令形态（{kind}）不一致，没有幂等合同"
+            )
+    if len(set(kinds)) != len(kinds) or sorted(execute) != sorted(kinds):
+        raise ConfigurationError("官方 seal 链批次的动作种类重复，或 execute_items 与动作不一致")
+    if run_manifest.get("reuse_items") != []:
+        raise ConfigurationError("官方 seal 链批次不复用作业项，reuse_items 必须为空")
+    coordinates: list[dict[str, str]] = []
+    targets: set[str] = set()
+    for action, kind in zip(actions, kinds):
+        command = list(action["command"])
+        if kind == "prepare-official-assertion-bundle":
+            parsed = _official_assertion_replay_coordinates(command, campaign_dir)
+            attempt_id = parsed["ATTEMPT_ID"]
+        else:
+            parsed = _official_seal_replay_flags(command, campaign_dir)
+            attempt_id = parsed["--attempt-id"]
+        target = codex_upgrade_supervisor._seal_chain_attempt_target(action)
+        if target is None or target[1] != "official" or target[3] != attempt_id:
+            raise ConfigurationError("官方 seal 链动作与监督器的 seal 链解析不一致")
+        coordinates.append(parsed)
+        targets.add(attempt_id)
+    if len(targets) != 1:
+        raise ConfigurationError("官方 seal 链动作必须指向同一个官方 attempt")
+    attempt_id = next(iter(targets))
+    _stage, stage_result = _legacy_stage_path(campaign_dir, "capture-official")
+    for sealed in (stage_result, _vc_checkpoint_path(campaign_dir, "VC-1")):
+        if sealed.exists() or sealed.is_symlink():
+            raise ConfigurationError(
+                f"官方证据已封存（{sealed.relative_to(campaign_dir).as_posix()} 已存在）：已封存不重封，逐字重派会被拒绝覆盖"
+            )
+    attempt_root = _capture_attempt_path(campaign_dir, "official", None, attempt_id)
+    if "prepare-official-assertion-bundle" in kinds:
+        evidence_dir = attempt_root / "evidence"
+        bundle = evidence_dir / codex_upgrade_evidence_permissions.ASSERTION_BUNDLE_DIRNAME
+        if bundle.exists() or bundle.is_symlink():
+            raise ConfigurationError("断言证据包已发布：断言包脚本 write-once、拒绝覆盖，逐字重派必然失败，不可幂等")
+        residue = (
+            sorted(path.name for path in evidence_dir.iterdir() if path.name.startswith(".assertion-work."))
+            if evidence_dir.is_dir() and not evidence_dir.is_symlink()
+            else []
+        )
+        if residue:
+            raise ConfigurationError(
+                "断言包暂存残留（" + "、".join(residue) + "）：脚本被强杀未清理，证据权限收口边界已漂移，先人工核对"
+            )
+    manifest = _require_formal_campaign(campaign_dir)
+    _root, attempt = _load_capture_attempt(
+        campaign_dir, "official", None, attempt_id, _verified_campaign_manifest=manifest
+    )
+    if attempt.get("status") != "awaiting_receipts":
+        raise ConfigurationError(f"官方 attempt {attempt_id} 不处于 awaiting_receipts（当前 {attempt.get('status')}），不能 seal")
+    if "prepare-official-assertion-bundle" in kinds and attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA:
+        raise ConfigurationError("历史 v2 Attempt 不得重新派发断言包动作（与监督器同一规则）")
+    key = ("official", None, attempt_id)
+    if key in _isolation_invalidated_attempts(campaign_dir):
+        raise ConfigurationError(
+            f"官方 attempt {attempt_id} 已被环境隔离作废（永不 seal）：先 reconcile-attempt 入账并批准恢复预览"
+        )
+    if key in _conflict_quarantined_attempts(campaign_dir):
+        raise ConfigurationError(
+            f"官方 attempt {attempt_id} 已被证据根冲突隔离（永不 seal）：先 reconcile-attempt 入账并批准恢复预览"
+        )
+    invalidated = _attempt_evolution_invalidated_job_ids(
+        campaign_dir, manifest, attempt_root, attempt, phase="official", candidate_id=None
+    )
+    if invalidated:
+        raise ConfigurationError(
+            f"官方 attempt {attempt_id} 有作业被工具演进作废（{'、'.join(invalidated)}）："
+            "先 reconcile-attempt 按作废对账，改派零请求恢复预览"
+        )
+
+    def bound(path: Path, label: str) -> str:
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"{label}不存在或不可信")
+        return file_sha256(path)
+
+    attempt_inputs = {
+        (attempt_root / "attempt.json").relative_to(campaign_dir).as_posix(): bound(attempt_root / "attempt.json", "attempt 收据")
+    }
+    closeout = attempt_root / codex_upgrade_evidence_permissions.RECEIPT_FILENAME
+    if closeout.exists() or closeout.is_symlink():
+        attempt_inputs[closeout.relative_to(campaign_dir).as_posix()] = bound(closeout, "证据权限收口收据")
+    finalized = attempt_root / "finalized"
+    if finalized.is_symlink():
+        raise ConfigurationError("attempt 的 finalized 目录不可信")
+    half_products = [
+        attempt_root / "evidence-manifest.json",
+        _evidence_manifest_checkpoint_path(attempt_root),
+        *sorted(attempt_root.glob("evidence-manifest-rebind-*.json")),
+        *sorted(attempt_root.glob("seal-draft*.json")),
+        *sorted(attempt_root.glob("seal-preview*.json")),
+        *(sorted(finalized.iterdir()) if finalized.is_dir() else []),
+    ]
+    seal_outputs: dict[str, str] = {}
+    for path in half_products:
+        if path.exists() or path.is_symlink():
+            seal_outputs[path.relative_to(campaign_dir).as_posix()] = bound(path, "seal 已写半成品")
+    results: list[dict[str, Any]] = []
+    preview_before = False
+    for action, kind, parsed in zip(actions, kinds, coordinates):
+        inputs = dict(attempt_inputs)
+        outputs: dict[str, str] = {}
+        if kind == "prepare-official-assertion-bundle":
+            inputs["prepare_assertion_bundle.sh"] = bound(
+                Path(__file__).resolve(strict=True).parents[1] / "prepare_assertion_bundle.sh", "受管断言包脚本"
+            )
+        else:
+            capture_manifest = parsed.get("--capture-manifest")
+            if capture_manifest is not None and (Path(capture_manifest).exists() or Path(capture_manifest).is_symlink()):
+                inputs["--capture-manifest"] = bound(Path(capture_manifest), "capture manifest")
+            outputs = dict(seal_outputs)
+            if kind == "seal-official-preview":
+                preview_before = True
+            elif not preview_before:
+                # 批准只重放冻结草案与预览：同批次没有先行的预览时，二者必须已在盘上且预览摘要等于批准参数。
+                approve = parsed["--approve-seal-sha256"]
+                previews = [
+                    path for path in sorted(attempt_root.glob("seal-preview*.json"))
+                    if path.is_file() and not path.is_symlink()
+                    and _read_json(path, "seal 预览").get("review_sha256") == approve
+                ]
+                if not previews:
+                    raise ConfigurationError("没有与批准摘要一致的 seal 预览：批准重派必然被拒，先派发 seal 预览批次")
+                drafts = [path.with_name(path.name.replace("seal-preview", "seal-draft", 1)) for path in previews]
+                if not any(draft.is_file() and not draft.is_symlink() for draft in drafts):
+                    raise ConfigurationError("seal 冻结草案缺失：批准重派必然被拒，先派发 seal 预览批次")
+        results.append({"action_id": kind, "command": list(action["command"]), "inputs": inputs, "outputs": outputs})
+    return results
+
+
 def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
     """R4：仅为已有实现能够安全续作的 Campaign 级动作提供重派证明。
 
     这里不执行命令、不补写产物。任意脚本、未知动作、未闭合的批准目录和 Catalog
     均留在 review；输出及输入按当前实物绑定，派发直接后继时还须逐字复核。
     R18：候选级 VC-4 的两个零请求动作按同一证明格式提供合同（见 ``_candidate_stage_replay_action_facts``）。
+    D-10：VC-1 只有官方 seal 链零请求后处理批次有合同（见 ``_official_seal_chain_stage_replay_actions``）；
+    采集与恢复预览／补跑批次维持原结论，已发布预约只走 attempt 恢复。
     """
 
     phase = str(run_manifest.get("phase"))
     result: dict[str, Any] = {"phase": phase, "allowed": False, "actions": [], "reasons": []}
+    if phase == "VC-1":
+        try:
+            official_actions = _official_seal_chain_stage_replay_actions(Path(campaign_dir), run_manifest)
+        except (OSError, ValueError, KeyError, ConfigurationError, codex_upgrade_supervisor.SupervisorError) as error:
+            result["reasons"].append(str(error))
+            return result
+        if official_actions is None:
+            result["reasons"].append("VC-1 已发布预约只能走 attempt 恢复；无已知幂等动作合同")
+            return result
+        result["actions"] = official_actions
+        result["allowed"] = True
+        return result
     if phase not in {"VC-2", "VC-3", *codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES}:
         result["reasons"].append("VC-1 已发布预约只能走 attempt 恢复；无已知幂等动作合同")
         return result

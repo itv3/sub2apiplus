@@ -4549,8 +4549,16 @@ def reconcile_supervisor_run(
                     raise ReconcilerError("VC-4 阶段幂等重派证明已写出，但动作输入或半成品已漂移，禁止重派")
                 result["stage_replay"] = replay
             elif ledger_next_action == "review-required" or not replay["allowed"]:
-                result.update(status="stage_review_required", stage_replay=replay,
-                              next_command="保持 stage_review_required：先修复不可幂等半成品或补齐受支持的恢复合同")
+                review_command = "保持 stage_review_required：先修复不可幂等半成品或补齐受支持的恢复合同"
+                if run.get("phase") == "VC-1" and replay["reasons"]:
+                    # D-10：VC-1 官方 seal 链已有幂等动作合同；不成立时点名原因（断言包已发布、官方已封存、attempt 已作废
+                    # 等），可修复的半成品修复后重新对账即取得许可。采集等已发布预约的批次仍只走 reconcile-attempt。
+                    review_command = (
+                        "保持 stage_review_required：VC-1 阶段幂等重派合同不成立（" + "；".join(replay["reasons"])
+                        + "）；可修复的半成品修复后重新对账取得重派许可，否则以 close-campaign-ledger 显式停线；"
+                        "已发布预约的采集批次只走 reconcile-attempt"
+                    )
+                result.update(status="stage_review_required", stage_replay=replay, next_command=review_command)
                 result["decision"] = {**decision, "decision": "review_required", "reasons": replay["reasons"]}
                 return result
             else:
