@@ -19546,7 +19546,8 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_b0_watchdog_aborted_recovery_run_is_followed_by_new_preview_after_reconciliation(self) -> None:
         """第三批 B3-15（第 26 项）：按预览真实补跑的父 run 被看门狗中止（watchdog-aborted，无动作诊断）——未对账时
         批次链审计明确指向 reconcile-supervisor-run（不再是"没有可信终态"的死路）；对账（legacy-interruption、无 reservation、
-        零请求）后 N+1 零请求恢复预览是允许的后继；不是恢复预览的后继、留有动作失败诊断的看门狗中止仍被拒绝。"""
+        零请求）后 N+1 零请求恢复预览是允许的后继；不是恢复预览的后继仍被拒绝；对账之后 run 目录才出现动作失败诊断时
+        收据分类与目录事实不再闭合，同样拒绝（草表 D-07）。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -19623,14 +19624,17 @@ class CodexUpgradeTest(unittest.TestCase):
             # 不是零请求恢复预览的后继（seal 链批次）：没有协议承接。
             with self.assertRaises(supervisor.SupervisorError):
                 check(self._b0_seal_batch_manifest(fixture, batch_sequence=2))
-            # 看门狗中止却留有该动作的失败诊断：不按本协议放行（应是 failed 终态）。
+            # 对账之后 run 目录才出现该动作的失败诊断：收据分类（legacy-interruption）与目录事实不再闭合，拒绝——
+            # 草表 D-07：留有诊断的看门狗中止须按诊断有效类对账后，才按 failed 同口径承接。
             supervisor._write_action_diagnostic(
                 supervisor._action_diagnostic_path(run_dir, supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID, create_directory=True),
                 campaign_id=state["campaign_id"], phase="VC-5", action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
                 owner_pid=state["owner_pid"], owner_nonce=state["owner_nonce"], failure_kind="child-returncode",
                 failure_class="execution-failure", error_type="ChildProcessError", message="子命令以非零状态退出。",
             )
-            with self.assertRaisesRegex(supervisor.SupervisorError, "留有动作失败诊断"):
+            with self.assertRaisesRegex(
+                supervisor.SupervisorError, "对账收据分类 legacy-interruption 与 run 目录现存事实不一致（留有动作失败诊断"
+            ):
                 check(successor)
 
     def test_b0_seal_failure_isolated_attempt_reruns_via_recovery_preview_successor(self) -> None:
@@ -23047,7 +23051,7 @@ class CodexUpgradeTest(unittest.TestCase):
 
     def test_b4_2_official_capture_watchdog_abort_is_followed_by_zero_request_preview(self) -> None:
         """B4-1 改法 2（草表行 10）：VC-1 官方采集批次在发布预约前被看门狗中止——未对账时指向 reconcile-supervisor-run；
-        对账后 N=2 的零请求恢复预览是允许的后继；留有该动作失败诊断的看门狗中止不按本协议放行。"""
+        对账后 N=2 的零请求恢复预览是允许的后继；对账之后才出现该动作失败诊断时收据与目录事实不闭合，拒绝（草表 D-07）。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -23098,14 +23102,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     state, capture, run_dir, preview, campaign_dir=campaign_dir
                 )
             )
-            # 看门狗中止却留有该动作的失败诊断：按失败终态协议处理，本协议拒绝。
+            # 对账之后 run 目录才出现该动作的失败诊断：收据分类（legacy-interruption）与目录事实不再闭合，拒绝——
+            # 草表 D-07：留有诊断的看门狗中止须按诊断有效类对账后，才按 failed 同口径由本协议承接。
             supervisor._write_action_diagnostic(
                 supervisor._action_diagnostic_path(run_dir, "capture-official", create_directory=True),
                 campaign_id=str(state["campaign_id"]), phase="VC-1", action_id="capture-official",
                 owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]), failure_kind="child-returncode",
                 failure_class="execution-failure", error_type="ChildProcessError", message="子命令以非零状态退出。",
             )
-            with self.assertRaisesRegex(supervisor.SupervisorError, "留有动作失败诊断"):
+            with self.assertRaisesRegex(
+                supervisor.SupervisorError, "对账收据分类 legacy-interruption 与 run 目录现存事实不一致（留有动作失败诊断"
+            ):
                 check(preview)
     def test_b4_3_watchdog_abort_after_reservation_is_reconciled_via_attempt_receipt(self) -> None:
         """B4-1 改法 3（草表 D-05，行 9）：VC-1 官方采集批次在发布预约后被看门狗中止——reconcile-supervisor-run 拒绝
@@ -23617,6 +23624,241 @@ class CodexUpgradeTest(unittest.TestCase):
                     supervisor._validate_batched_candidate_recovery_preview_successor(
                         state, prior, run_dir, successor, campaign_dir=campaign_dir
                     )
+
+    # ------------------------------------------------------------------
+    # 草表 D-07（矩阵第 69 行）：看门狗中止且留有动作失败诊断的父 run
+    # ------------------------------------------------------------------
+
+    def _d07_vc1_capture_fixture(self, root: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        """D-07 夹具：VC-1 已开工的 Formal Campaign，序号 1 的 capture-official 批次与序号 2 的普通零请求恢复预览。"""
+
+        fixture = self._b0_fixture(root)
+        campaign_dir = fixture["campaign_dir"]
+        ledger_dir = fixture["timing_ledger"]
+        codex_upgrade_timing_ledger.append_event(
+            ledger_dir, event_id="fixture-vc-0-completed", phase="VC-0", event_type="stage_completed", next_action="启动 VC-1",
+        )
+        codex_upgrade_timing_ledger.append_event(
+            ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次",
+        )
+        jobs = [job.job_id for job in fixture["jobs"]]
+        capture = self._b4_vc1_capture_manifest(
+            fixture, batch_sequence=1, execute=jobs, reuse=[],
+            actions=[{
+                "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                "command": [*self._B4_PREFIX, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                "item_ids": jobs,
+            }],
+        )
+        preview = self._b4_vc1_capture_manifest(
+            fixture, batch_sequence=2, execute=jobs, reuse=[],
+            actions=[{
+                "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 600.0,
+                "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                "item_ids": jobs,
+            }],
+        )
+        return fixture, capture, preview
+
+    @staticmethod
+    def _d07_accepting_protocols(
+        state: dict[str, object], prior: dict[str, object], run_dir: Path, successor: dict[str, object], campaign_dir: Path
+    ) -> list[str]:
+        """按入口同一顺序逐条调用后继协议，列出放行的协议名；返回 False 与抛错（失败关闭）都算不承接。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        accepted: list[str] = []
+        for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+            try:
+                if protocol(state, prior, run_dir, successor, campaign_dir=campaign_dir):
+                    accepted.append(name)
+            except supervisor.SupervisorError:
+                pass
+        return accepted
+
+    def _d07_write_diagnostic(
+        self, run_dir: Path, state: dict[str, object], action_id: str, diagnostic: tuple[str, str, str]
+    ) -> None:
+        """D-07 夹具：动作子进程失败时经 CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV 写出的诊断（父 run 身份、run 目录私有权限）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        failure_kind, error_type, failure_class = diagnostic
+        supervisor._write_action_diagnostic(
+            supervisor._action_diagnostic_path(run_dir, action_id, create_directory=True),
+            campaign_id=str(state["campaign_id"]), phase=str(state["phase"]), action_id=action_id,
+            owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]),
+            failure_kind=failure_kind, failure_class=failure_class, error_type=error_type, message="D-07 夹具。",
+        )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+
+    def test_d07_reconciled_capture_watchdog_abort_with_diagnostic_is_followed_by_zero_request_preview(self) -> None:
+        """草表 D-07（矩阵第 69 行）：VC-1 采集批次的父进程在子进程写出失败诊断之后、追加 action-failed 事件之前丢失——
+        monitor 的 R2 判定不成立，维持 watchdog-aborted（owner-process-not-alive），诊断留在 run 目录。
+
+        ① run 期间无预约：真实 reconcile-supervisor-run 以诊断有效类（execution-failure）对账、收据 run.state 为
+        watchdog-aborted。修复前 0-W 只认 legacy-interruption，报"对账收据 schema 或身份不闭合"（死路）；修复后按 failed
+        同口径（处理型失败判据）由 N=2 零请求恢复预览承接。
+        ② run 期间已发布官方预约：reconcile-supervisor-run 拒绝、reconcile-attempt 入账。修复前 0-W 认 attempt 收据后，
+        协议 8 的看门狗分支仍抛"留有动作失败诊断，按失败终态协议处理"（死路）；修复后同样按 failed 同口径承接。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        handled = ("child-returncode", "ChildProcessError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "d" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+            )
+            self._d07_write_diagnostic(run_dir, state, "capture-official", handled)
+            # monitor／reconciler／后继协议共用的 R2 判据：诊断可重放，但事件链末条动作生命周期事件是 action-started。
+            orphan = supervisor.evaluation_orphan_facts(run_dir, state, capture)
+            self.assertEqual((orphan["complete"], orphan["reasons"]), (False, ["last-lifecycle-event-not-action-failed"]))
+            history = [(state, capture, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(supervisor.SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
+                check(preview)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                (receipt["failure_class"], receipt["run"]["state"], receipt["run"]["failure_class"], receipt["reservation_exists"]),
+                ("execution-failure", "watchdog-aborted", "execution-failure", False),
+            )
+            self.assertEqual(check(preview), history)
+            # 有且只有一条后继协议承接：零请求恢复预览（协议 8，按 failed 同口径的处理型失败判据）。
+            self.assertEqual(
+                self._d07_accepting_protocols(state, capture, run_dir, preview, campaign_dir), ["official_recovery_preview"]
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            # 父 run 先启动（30 秒前），随后发布官方预约（孤儿），子进程失败写出诊断后父进程丢失。
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "c" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+                started_offset_seconds=-30.0,
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            self._d07_write_diagnostic(run_dir, state, "capture-official", handled)
+            history = [(state, capture, run_dir)]
+
+            def check_reserved(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "先执行 reconcile-attempt"):
+                check_reserved(preview)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check_reserved(preview), history)
+            self.assertEqual(
+                self._d07_accepting_protocols(state, capture, run_dir, preview, campaign_dir), ["official_recovery_preview"]
+            )
+
+    def test_d07_reconciled_watchdog_abort_with_environment_diagnostic_is_redispatched_verbatim(self) -> None:
+        """草表 D-07：按 failed 同口径承接不只限于零请求预览——VC-5 seal 批次的父进程失去心跳（被挂起／卡死）期间动作
+        以 environment-prerequisite 失败并写出诊断，monitor 心跳超时中止（abort 不做 R2 判定）。真实 reconcile-supervisor-run
+        以诊断有效类对账并许可 redispatch-same-batch；修复前 0-W 报"对账收据 schema 或身份不闭合"（死路），修复后逐字重派
+        协议按 failed 的可恢复类判据承接 N+1 同批次。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            state, run_dir = self._b4_watchdog_run(fixture, "a" * 64, inner=inner, action_id="prepare-candidate-assertion-bundle")
+            self._d07_write_diagnostic(
+                run_dir, state, "prepare-candidate-assertion-bundle", ("handled-error", "ConfigurationError", "environment-prerequisite")
+            )
+            history = [(state, inner, run_dir)]
+            successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual((receipt["failure_class"], receipt["run"]["state"]), ("environment-prerequisite", "watchdog-aborted"))
+            self.assertIn(
+                ("receipt_passed", f"reconcile-run-passed-{run_dir.name}"), self._b0_ledger_events(fixture["timing_ledger"])
+            )
+            self.assertEqual(check(successor), history)
+            # 有且只有一条后继协议承接：逐字重派（协议 7，按 failed 同口径的可恢复类判据）。
+            self.assertEqual(
+                self._d07_accepting_protocols(state, inner, run_dir, successor, campaign_dir), ["environment_redispatch"]
+            )
+
+    def test_d07_watchdog_abort_with_action_output_binding_is_checked_like_r2(self) -> None:
+        """草表 D-07：父进程在 run_command 返回之后（已追加 action-failed、已写出诊断与动作输出绑定）卡住，monitor 心跳超时
+        中止——abort 不做 R2 判定，留下 watchdog-aborted＋诊断＋绑定。绑定按 R2 同一判据（同一内层清单）复算一致时，
+        与 failed 同口径由逐字重派承接；绑定被改写（自摘要不再闭合）即失败关闭，不因看门狗中止绕开 R2 的绑定一致性。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            action_id = "prepare-candidate-assertion-bundle"
+            action = dict(self._b0_seal_batch_manifest(fixture)["actions"][0], output_bindings=["assertions/cand-1/bundle.json"])
+            inner = self._b0_seal_batch_manifest(fixture, actions=[action])
+            successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2, actions=[action])
+            state, run_dir = self._b4_watchdog_run(fixture, "b" * 64, inner=inner, action_id=action_id)
+            # 父进程的收口顺序：run_command 以非零状态收口（action-failed 事件）→ 诊断 → 动作输出绑定，随后卡住。
+            supervisor._append_event(
+                run_dir, event_type="action-failed", operation="VC-5:prepare-candidate-assertion-bundle",
+                owner_pid=int(state["owner_pid"]), owner_nonce=str(state["owner_nonce"]), campaign_id=str(state["campaign_id"]),
+                phase="VC-5", job_id=action_id, status="failed", reason="returncode=1",
+            )
+            self._d07_write_diagnostic(run_dir, state, action_id, ("handled-error", "ConfigurationError", "environment-prerequisite"))
+            supervisor.write_action_output_binding(
+                run_dir, campaign_dir=campaign_dir, campaign_id=str(state["campaign_id"]), phase="VC-5", action_id=action_id,
+                run_manifest_sha256=supervisor._sha256(supervisor._canonical(inner)), owner_nonce=str(state["owner_nonce"]),
+                output_bindings=["assertions/cand-1/bundle.json"],
+            )
+            for path in run_dir.rglob("*"):
+                path.chmod(0o700 if path.is_dir() else 0o600)
+            # R2 同一判据：失败身份完整、绑定一致（owner 丢失时 monitor 会据此改写为 failed；心跳超时路径不做这一步）。
+            orphan = supervisor.evaluation_orphan_facts(run_dir, state, inner)
+            self.assertEqual((orphan["complete"], orphan["binding_mismatch"]), (True, False))
+            history = [(state, inner, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertEqual(check(successor), history)
+            # 绑定被改写（recorded_at_utc 变了、自摘要不再闭合）：R2 复算判绑定不可核对，失败关闭。
+            binding_path = supervisor._action_outputs_path(run_dir, action_id)
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["recorded_at_utc"] = "2000-01-01T00:00:00.000Z"
+            binding_path.write_text(json.dumps(binding, ensure_ascii=False) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(supervisor.SupervisorError, "动作输出绑定无法按 R2 核对或已漂移（action-output-binding-invalid"):
+                check(successor)
 
 
 class EvidenceManifestTest(unittest.TestCase):

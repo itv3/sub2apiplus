@@ -7139,7 +7139,9 @@ FAILED_PARENT_TERMINAL_KINDS = frozenset(
         "action-timeout",  # 动作级 timeout_seconds 到期，父 campaign-run 以 SupervisorTimeout 收口
         "interrupted",  # 父 campaign-run 进程被 KeyboardInterrupt／SystemExit 打断
         "other-exception",  # 父进程其它未捕获异常（stop reason 为该异常类名）
-        "watchdog",  # 看门狗中止（state watchdog-aborted，无动作诊断）
+        # 看门狗中止（state watchdog-aborted）；留有动作失败诊断时失败动作取诊断动作，按草表 D-07 与 failed 同口径判定
+        # （见 _watchdog_action_failure）。
+        "watchdog",
         PARENT_START_FAILED_REASON,
         PARENT_FINALIZE_LOST_REASON,
     }
@@ -7493,10 +7495,13 @@ def _validate_batched_official_recovery_preview_successor(
         raise SupervisorError(f"VC-1 普通恢复预览的父 stop receipt 漂移：{error}") from error
     if prior_state.get("state") == "watchdog-aborted":
         # B4-1 改法 2（草表行 10）：采集批次被看门狗中止、已按 0-W 对账的父 run 同样由零请求预览承接——
-        # stop receipt 须是看门狗中止本身，capture-official 不得留有失败诊断（留有诊断说明动作先失败，
-        # 应按失败终态处理）。run 期间有预约时 0-W 按 attempt 对账收据分流（改法 3）。
+        # stop receipt 须是看门狗中止本身。run 期间有预约时 0-W 按 attempt 对账收据分流（改法 3）。
+        # 草表 D-07：capture-official 留有失败诊断（动作先失败、父进程在追加 action-failed 前丢失）时不走这条无诊断
+        # 承接，按诊断的失败种类与类别走与下方 action-failed 分支相同的处理型失败判据；0-W 已按诊断有效类核对收据。
         label = "VC-1 普通恢复预览"
-        _require_reconciled_watchdog_parent(prior_state, prior_dir, reconciliation_campaign_dir, label=label)
+        _require_reconciled_watchdog_parent(
+            prior_state, prior_dir, reconciliation_campaign_dir, label=label, prior_manifest=prior_manifest
+        )
         if (
             stop.get("event_type") != "watchdog-aborted"
             or not isinstance(stop.get("reason"), str)
@@ -7507,12 +7512,17 @@ def _validate_batched_official_recovery_preview_successor(
             or stop.get("owner_nonce") != owner_nonce
         ):
             raise SupervisorError(f"{label}的父 stop receipt 漂移。")
-        diagnostics_dir = prior_dir / "action-diagnostics"
-        if diagnostics_dir.is_symlink() or (
-            diagnostics_dir.is_dir()
-            and _action_diagnostic_path(prior_dir, "capture-official", create_directory=False).exists()
-        ):
-            raise SupervisorError(f"{label}的父 run 被看门狗中止却留有动作失败诊断，按失败终态协议处理。")
+        watchdog_failure = _watchdog_action_failure(
+            prior_state, prior_dir, reconciliation_campaign_dir, prior_manifest=prior_manifest, label=label
+        )
+        if watchdog_failure is None:
+            return True
+        if watchdog_failure["action_id"] != "capture-official":
+            raise SupervisorError(
+                f"{label}的父 run 被看门狗中止，留有的动作失败诊断指向 {watchdog_failure['action_id']}，不是 capture-official。"
+            )
+        if not _recovery_preview_retry_failure(watchdog_failure["diagnostic"]):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
         return True
     # B4-1 改法 7（草表 D-01／D-02／D-16）：父失败按终态种类判定，不再按错误类型／文案白名单——
     # · action-failed（capture-official 以非零状态退出或自写诊断）：与恢复链协议同一处理型失败判据；
@@ -7710,26 +7720,178 @@ def _validate_batched_official_recovery_preview_retry_successor(
 
 
 
+# ---------------------------------------------------------------------------
+# 草表 D-07（矩阵第 69 行）：看门狗中止且留有动作失败诊断的父 run
+# ---------------------------------------------------------------------------
+#
+# 时序：monitor 在 owner 丢失时先做 R2 判定（evaluation_orphan_facts）——唯一诊断＋事件链末条动作生命周期事件是该动作
+# 的 action-failed＋动作属冻结清单、且动作输出绑定一致时，确定性改写为 failed／action-failed:<id>；否则中止为
+# watchdog-aborted。以下时序会留下"watchdog-aborted＋动作诊断"：① 父 campaign-run 已为动作追加 action-started，子进程
+# 失败时经 CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV 自写诊断（或动作执行前核对评估器摘要漂移、由父进程写诊断而动作未执行），
+# 父进程在追加 action-failed 事件前被 SIGKILL／OOM——R2 因"末条生命周期事件不是该动作的 action-failed"不成立
+# （owner-process-not-alive）；② 父进程在动作失败前后失去心跳（被挂起／卡死），monitor 按心跳超时中止，abort 不做 R2
+# 判定；③ 父进程收尾期间撞上全局截止、预算状态或心跳文件不可读等中止。reconciler 的 _run_facts 以诊断有效类作
+# failure_class 对账（与 failed 同口径），此前 0-W 只认 legacy-interruption，恢复链协议的看门狗分支又拒绝留有诊断的
+# 前序（文案说"按失败终态协议处理"，可 state 不是 failed），续跑是死路。
+#
+# 处置（后继协议层只有一条口径）：这类前序按诊断的失败种类与类别走与 failed 相同的判定——失败动作即诊断动作，各协议
+# 用它们对 failed 终态的同一判据（恢复链协议的处理型失败判据、逐字重派的可恢复类判据、seal 链续派的收据类判据……）；
+# 看门狗中止的"无诊断"分支（零请求预览、legacy-interruption 逐字重派）不再接纳留有诊断的前序。不按"看门狗中止走零请求
+# 预览"处理，是因为那样会忽略诊断：同一动作以截止清理、请求账不确定或中断失败时 failed 形态被拒绝，只因父进程恰好在
+# 追加 action-failed 前丢失就能续跑，等于用时序偶然绕开诊断判据；而且它只覆盖恢复链动作，seal 链、评估、canonical 等
+# 动作留有诊断的看门狗中止仍无路可走。
+#
+# 不削弱安全：诊断必须唯一、可重放（_validate_action_diagnostic）且指向批次清单内的动作；monitor 已判动作输出绑定漂移
+# 的终态、以及动作输出绑定存在却无法按 R2 核对或已漂移的 run 一律失败关闭；有效类是永久失败类即拒绝（未收账的看门狗
+# 中止没有"永久类→stop_required"这道闸，reconciler 的判定又不看 failure_class，这里补上）；父 run 必须已对账（0-W：
+# 无预约认按诊断有效类对账的 supervisor-run 收据与总账 operation，有预约认 attempt 对账收据）。
+_WATCHDOG_BINDING_MISMATCH_REASON_PREFIX = "action-output-binding-mismatch"
+
+
+def _watchdog_action_failure(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    campaign_dir: Path | None,
+    *,
+    prior_manifest: Mapping[str, Any] | None,
+    label: str,
+) -> dict[str, Any] | None:
+    """看门狗中止的父 run 留下的动作失败事实（草表 D-07）；不是看门狗中止或 run 目录没有动作诊断时返回 None。
+
+    返回 ``{"action_id", "diagnostic", "effective_class"}``：失败动作即唯一诊断指向的动作，有效类用 reconciler
+    ``_run_facts`` 的同一函数（``effective_action_failure_class``，内层清单取 run 目录的 campaign-run 清单）复算。
+    ``prior_manifest`` 用来确认诊断动作属于该批次清单（缺省时退回 run 目录的内层清单）。以下情形失败关闭（抛错，
+    任何协议都不承接）：诊断目录或诊断文件不可信、诊断不唯一、诊断指向批次清单外的动作（推断不出失败动作）、诊断
+    无法重放、monitor 已判动作输出绑定漂移（stop reason 以 action-output-binding-mismatch 开头）、动作输出绑定存在
+    却无法按 R2 核对或已漂移、有效类无法复算、有效类是永久失败类。只读，不写任何文件。
+    """
+
+    if prior_state.get("state") != "watchdog-aborted":
+        return None
+    prior_dir = Path(prior_dir)
+    run = prior_dir.name
+    diagnostics_dir = prior_dir / "action-diagnostics"
+    if diagnostics_dir.is_symlink():
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作诊断目录不可信。")
+    if not diagnostics_dir.is_dir():
+        return None
+    paths = sorted(diagnostics_dir.glob("action-*-failure.json"))
+    if not paths:
+        return None
+    if len(paths) != 1:
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 留有多份动作失败诊断，无法确定唯一失败动作，不承接。")
+    path = paths[0]
+    action_id = path.name[len("action-") : -len("-failure.json")]
+    if path.is_symlink() or not path.is_file() or not _is_safe_id(action_id):
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作失败诊断不可信。")
+    run_inner = _run_inner_manifest(prior_dir)
+    manifest = prior_manifest if prior_manifest is not None else run_inner
+    actions = manifest.get("actions") if isinstance(manifest, Mapping) else None
+    declared = (
+        {action.get("action_id") for action in actions if isinstance(action, Mapping)}
+        if isinstance(actions, list)
+        else set()
+    )
+    if action_id not in declared:
+        raise SupervisorError(
+            f"{label}：看门狗中止父 run {run} 的动作失败诊断指向批次清单外的动作 {action_id}，推断不出失败动作，不承接。"
+        )
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+        or not isinstance(owner_nonce, str)
+        or not owner_nonce
+    ):
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的 owner 身份非法。")
+    campaign_id = str(prior_state.get("campaign_id", ""))
+    phase = str(prior_state.get("phase", ""))
+    try:
+        diagnostic = _validate_action_diagnostic(
+            path,
+            run_dir=prior_dir,
+            campaign_id=campaign_id,
+            phase=phase,
+            action_id=action_id,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+        )
+    except SupervisorError as error:
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作失败诊断无法重放：{error}") from error
+    stop_path = prior_dir / "stop-receipt.json"
+    stop_reason = (
+        read_stop_receipt(prior_dir).get("reason") if not stop_path.is_symlink() and stop_path.is_file() else None
+    )
+    if isinstance(stop_reason, str) and stop_reason.startswith(_WATCHDOG_BINDING_MISMATCH_REASON_PREFIX):
+        raise SupervisorError(
+            f"{label}：看门狗中止父 run {run} 的动作输出绑定已被 monitor 判为漂移（{stop_reason}），失败关闭。"
+        )
+    # 父进程写入顺序固定为 action-failed 事件 → 诊断（子进程未写时兜底）→ 动作输出绑定 → post-run-tooling 收据：绑定
+    # 存在即应能按 R2 完整核对（与 monitor 同一判据、同一内层清单），核对不了或漂移都失败关闭。
+    if (prior_dir / ACTION_OUTPUTS_DIRNAME).is_symlink():
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作输出绑定目录不可信。")
+    outputs_path = _action_outputs_path(prior_dir, action_id)
+    if outputs_path.exists() or outputs_path.is_symlink():
+        orphan = evaluation_orphan_facts(prior_dir, prior_state, run_inner)
+        if not orphan["complete"] or orphan["binding_mismatch"]:
+            raise SupervisorError(
+                f"{label}：看门狗中止父 run {run} 的动作输出绑定无法按 R2 核对或已漂移"
+                f"（{'、'.join(orphan['reasons']) or '绑定漂移'}），失败关闭。"
+            )
+    resolved_campaign = (
+        Path(campaign_dir).resolve(strict=True)
+        if campaign_dir is not None and Path(campaign_dir).is_dir()
+        else None
+    )
+    try:
+        effective_class, _post_run_receipt = effective_action_failure_class(
+            prior_dir,
+            diagnostic,
+            campaign_dir=resolved_campaign,
+            inner_manifest=run_inner,
+            campaign_id=campaign_id,
+            phase=phase,
+            action_id=action_id,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+            run_started_at_utc=str(prior_state.get("started_at_utc", "")),
+        )
+    except SupervisorError as error:
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作有效失败类无法复算：{error}") from error
+    if effective_class in PERMANENT_ACTION_FAILURE_CLASSES:
+        raise SupervisorError(f"{label}：看门狗中止父 run {run} 的动作诊断是永久失败类 {effective_class}，不能续跑。")
+    return {"action_id": action_id, "diagnostic": diagnostic, "effective_class": effective_class}
+
+
 def _reconciled_watchdog_abort(
     campaign_dir: Path,
     prior_dir: Path,
     prior_state: Mapping[str, Any],
     *,
     label: str,
+    prior_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """被看门狗中止的父 run 已按 reconcile-supervisor-run 对账的事实（第三批 B3-15，第 26 项）。
+    """被看门狗中止的父 run 已对账的事实（第三批 B3-15，第 26 项；0-W）。
 
-    看门狗中止（``watchdog-aborted``）没有动作诊断，reconciler 把它归为 ``legacy-interruption``；只有对账收据
-    证明 run 期间没有 reservation、零请求，且项目总账事件绑定了该收据，它才是可信终态。任一不成立即失败关闭，
-    并明确指向对账入口。
+    run 目录没有动作诊断的看门狗中止，reconciler 把它归为 ``legacy-interruption``；只有对账收据证明 run 期间没有
+    reservation、零请求，且项目总账事件绑定了该收据，它才是可信终态。任一不成立即失败关闭，并明确指向对账入口。
 
     B4-1 改法 3（草表 D-05）：run 期间发布过预约（未完整收口）的看门狗中止属 attempt 中断——reconcile-supervisor-run
     拒绝这类 run，可信终态的证明改为窗口内每个预约的 attempt 对账收据（官方或候选侧，含恢复段）与总账绑定；
     缺失文案指向 reconcile-attempt。返回值带 ``reservation_exists``：False 为 supervisor-run 收据，True 为
     attempt 收据（``attempts`` 列出各绑定事实）。
+
+    草表 D-07：留有动作失败诊断的看门狗中止先过 ``_watchdog_action_failure``（诊断唯一可重放、动作在批次清单内、绑定
+    不漂移、不是永久失败类，``prior_manifest`` 用于核对清单），无预约时 supervisor-run 收据的分类必须等于该诊断的
+    有效类（reconciler ``_run_facts`` 同口径）；收据分类与 run 目录现存事实不符（对账后诊断才出现或消失）即失败关闭。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
+    action_failure = _watchdog_action_failure(
+        prior_state, prior_dir, campaign_dir, prior_manifest=prior_manifest, label=label
+    )
     reservations = _reservations_in_run_window(campaign_dir, float(prior_state.get("started_at_epoch", 0.0)))
     if reservations:
         campaign_id = str(prior_state.get("campaign_id", ""))
@@ -7753,7 +7915,6 @@ def _reconciled_watchdog_abort(
         receipt.get("schema_version") != SUPERVISOR_RUN_RECONCILIATION_SCHEMA
         or receipt.get("campaign_id") != prior_state.get("campaign_id")
         or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
-        or receipt.get("failure_class") != "legacy-interruption"
         or receipt.get("reservation_exists") is not False
         or receipt.get("live_request_count") != 0
         or not isinstance(receipt.get("root_cause"), Mapping)
@@ -7761,9 +7922,20 @@ def _reconciled_watchdog_abort(
         or run.get("run_id") != prior_dir.name
         or run.get("state") != "watchdog-aborted"
         or run.get("phase") != prior_state.get("phase")
-        or run.get("failure_class") != "legacy-interruption"
     ):
         raise SupervisorError(f"{label}：看门狗中止父 run {prior_dir.name} 的对账收据 schema 或身份不闭合。")
+    # 草表 D-07：收据分类按 run 目录现存事实复算——没有动作诊断为 legacy-interruption，留有诊断为诊断有效类。
+    expected_class = action_failure["effective_class"] if action_failure is not None else "legacy-interruption"
+    if receipt.get("failure_class") != expected_class or run.get("failure_class") != expected_class:
+        fact = (
+            f"留有动作失败诊断 {action_failure['action_id']}，有效类 {expected_class}"
+            if action_failure is not None
+            else "没有动作失败诊断，应为 legacy-interruption"
+        )
+        raise SupervisorError(
+            f"{label}：看门狗中止父 run {prior_dir.name} 的对账收据分类 {receipt.get('failure_class')} 与 run 目录"
+            f"现存事实不一致（{fact}）；对账后 run 目录发生了变化，须人工核查。"
+        )
     operation_id = f"reconcile-supervisor-run:{prior_dir.name}"
     payload = _project_ledger_operation_payload(campaign_dir, operation_id, label=label)
     if (
@@ -7787,14 +7959,20 @@ def _require_reconciled_watchdog_parent(
     campaign_dir: Path | None,
     *,
     label: str,
+    prior_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """前序被看门狗中止时先过 0-W（返回对账事实）；不是看门狗中止返回 None；缺 Campaign 目录失败关闭。"""
+    """前序被看门狗中止时先过 0-W（返回对账事实）；不是看门狗中止返回 None；缺 Campaign 目录失败关闭。
+
+    ``prior_manifest`` 交给 0-W 核对留有的动作失败诊断指向批次清单内的动作（草表 D-07）。
+    """
 
     if prior_state.get("state") != "watchdog-aborted":
         return None
     if campaign_dir is None:
         raise SupervisorError(f"{label}：父 run {prior_dir.name} 被看门狗中止，核验其对账收据需要 Campaign 目录。")
-    return _reconciled_watchdog_abort(Path(campaign_dir), prior_dir, prior_state, label=label)
+    return _reconciled_watchdog_abort(
+        Path(campaign_dir), prior_dir, prior_state, label=label, prior_manifest=prior_manifest
+    )
 
 
 def _verify_failed_official_recovery_parent(
@@ -7819,7 +7997,9 @@ def _verify_failed_official_recovery_parent(
       action-started）必须就是该动作；诊断若存在须身份自洽且不是永久失败类（中断可能发生在诊断写出之前，
       允许没有诊断）；
     - ``watchdog``（第三批 B3-15，第 26 项）：已按 ``_reconciled_watchdog_abort`` 对账（run 期间有预约时按
-      attempt 收据分流，改法 3），stop receipt 须是看门狗中止本身，且该动作不得留有失败诊断。
+      attempt 收据分流，改法 3），stop receipt 须是看门狗中止本身。run 目录没有动作诊断时即可承接；留有动作
+      失败诊断时（草表 D-07）按诊断的失败种类与类别走与 ``action-failed`` 相同的判定——诊断动作必须就是该动作、
+      诊断是处理型失败、父 run 按 failed 同口径已对账（0-W 已按诊断有效类核对收据）。
 
     B4-1 改法 4（第 31 项，草表 D-18）：failed 类终态还必须已对账——run 期间无预约要求 supervisor-run 对账
     收据与总账 ``reconcile-supervisor-run:<run>`` 绑定，有预约要求每个预约的 attempt 对账收据与总账绑定；
@@ -7837,7 +8017,7 @@ def _verify_failed_official_recovery_parent(
     if watchdog_aborted:
         if campaign_dir is None:
             raise SupervisorError(f"{label}的父 run 被看门狗中止：核验其对账收据需要 Campaign 目录。")
-        _reconciled_watchdog_abort(Path(campaign_dir), prior_dir, prior_state, label=label)
+        _reconciled_watchdog_abort(Path(campaign_dir), prior_dir, prior_state, label=label, prior_manifest=prior_manifest)
     if (
         recorded_state != dict(prior_state)
         or prior_state.get("state") not in FAILED_TERMINAL_STATES
@@ -7870,12 +8050,21 @@ def _verify_failed_official_recovery_parent(
             or stop.get("owner_nonce") != owner_nonce
         ):
             raise SupervisorError(f"{label}的父 stop receipt 漂移。")
-        diagnostics_dir = prior_dir / "action-diagnostics"
-        if diagnostics_dir.is_symlink() or (
-            diagnostics_dir.is_dir()
-            and _action_diagnostic_path(prior_dir, action_id, create_directory=False).exists()
-        ):
-            raise SupervisorError(f"{label}的父 run 被看门狗中止却留有动作失败诊断，按失败终态协议处理。")
+        watchdog_failure = _watchdog_action_failure(
+            prior_state, prior_dir, campaign_dir, prior_manifest=prior_manifest, label=label
+        )
+        if watchdog_failure is None:
+            return
+        # 草表 D-07：留有动作失败诊断的看门狗中止只走一条口径——与 action-failed 相同的判定（不走上面的无诊断承接）。
+        if watchdog_failure["action_id"] != action_id:
+            raise SupervisorError(
+                f"{label}的父 run 被看门狗中止，留有的动作失败诊断指向 {watchdog_failure['action_id']}，不是 {action_id}。"
+            )
+        if not _recovery_preview_retry_failure(watchdog_failure["diagnostic"]):
+            raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+        _require_failed_parent_reconciled(
+            prior_state, prior_dir, campaign_dir, campaign_id=campaign_id, phase=phase, prior_manifest=prior_manifest, label=label
+        )
         return
     if (
         kind not in FAILED_PARENT_ACTION_KINDS
@@ -8719,7 +8908,7 @@ def _validate_batched_evolution_recovery_successor(
     # B4-1 改法 2：已对账的看门狗中止与 failed 同等对待（看门狗中止先过 0-W）。
     if prior_state.get("state") not in FAILED_TERMINAL_STATES:
         raise SupervisorError(f"{label}：父批次不是失败终态。")
-    _require_reconciled_watchdog_parent(prior_state, prior_dir, resolved_campaign, label=label)
+    _require_reconciled_watchdog_parent(prior_state, prior_dir, resolved_campaign, label=label, prior_manifest=prior_manifest)
     return True
 
 
@@ -8796,7 +8985,7 @@ def _validate_batched_seal_chain_successor(
     # B4-1 改法 2：已对账的看门狗中止与 failed 同等对待（看门狗中止先过 0-W）。
     if prior_state.get("state") not in FAILED_TERMINAL_STATES:
         raise SupervisorError(f"{label}：父批次不是失败终态。")
-    _require_reconciled_watchdog_parent(prior_state, prior_dir, resolved_campaign, label=label)
+    _require_reconciled_watchdog_parent(prior_state, prior_dir, resolved_campaign, label=label, prior_manifest=prior_manifest)
     verify_supervisor_run_reconciliation_binding(
         resolved_campaign,
         campaign_id=str(prior_manifest.get("campaign_id", "")),
@@ -8868,7 +9057,14 @@ def _validate_batched_environment_redispatch_successor(
         f"action-{action_id}-failure.json"
     )
     watchdog = facts["terminal_kind"] == "watchdog"
-    if watchdog:
+    # 草表 D-07：看门狗中止却留有动作失败诊断时不走下面的无诊断分支，按诊断分支（与 failed 同口径）判定——
+    # 失败动作即诊断动作（_failed_parent_facts 与 _watchdog_action_failure 取同一份唯一诊断）。
+    watchdog_failure = (
+        _watchdog_action_failure(prior_state, prior_dir, campaign_dir, prior_manifest=prior_manifest, label="环境前提失败")
+        if watchdog
+        else None
+    )
+    if watchdog and watchdog_failure is None:
         # B4-1 改法 2（草表 D-06）：已按 0-W 对账（legacy-interruption、无预约、零请求）的看门狗中止是可信终态，
         # 与 failed 同等对待——它没有动作诊断，有效类取对账收据的 legacy-interruption，按同一条"对账许可 +
         # 逐字重派"协议承接；run 期间有预约的看门狗中止属 attempt 中断，由恢复预览协议承接，这里不接。
@@ -8876,11 +9072,19 @@ def _validate_batched_environment_redispatch_successor(
         # 批次身份不同时交给后面的协议，而不是在这里失败关闭。
         if _redispatch_identity_drift(prior_manifest, successor_manifest):
             return _protocol_reject("后继与前序批次身份不同（不是同一批次的重派）")
-        watchdog_facts = _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label="环境前提失败")
+        watchdog_facts = _require_reconciled_watchdog_parent(
+            prior_state, prior_dir, campaign_dir, label="环境前提失败", prior_manifest=prior_manifest
+        )
         if watchdog_facts.get("reservation_exists") is not False or diagnostic_path.is_symlink() or diagnostic_path.exists():
-            return _protocol_reject("看门狗中止的 run 期间有预约或留有诊断（属 attempt 中断）")
+            return _protocol_reject("看门狗中止的 run 期间有预约（属 attempt 中断，交给恢复链协议）")
         effective_class = "legacy-interruption"
     else:
+        if watchdog:
+            # 留有诊断的看门狗中止也必须已对账（0-W：无预约认按诊断有效类对账的 supervisor-run 收据，有预约认
+            # attempt 收据）；随后与 failed 走同一段诊断判定、预约让位与共享重派绑定。
+            _require_reconciled_watchdog_parent(
+                prior_state, prior_dir, campaign_dir, label="环境前提失败", prior_manifest=prior_manifest
+            )
         if diagnostic_path.is_symlink() or not diagnostic_path.is_file():
             return _protocol_reject("失败动作没有诊断")
         diagnostic = _validate_action_diagnostic(
@@ -9415,7 +9619,7 @@ def _validate_candidate_revision_successor(
         raw_events = timing_ledger._load_events(ledger_dir.resolve(strict=True))
     except (OSError, timing_ledger.TimingLedgerError) as error:
         raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
-    _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label=label)
+    _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label=label, prior_manifest=prior_manifest)
 
     # ① 账本事件顺序与绑定。
     invalidated_index: int | None = None
@@ -9637,7 +9841,7 @@ def _validate_evaluation_baseline_successor(
         campaign_dir = Path(campaign_dir).resolve(strict=True)
     except OSError as error:
         raise SupervisorError(f"{label}的 Campaign 目录不存在。") from error
-    _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label=label)
+    _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label=label, prior_manifest=prior_manifest)
     campaign = _read_json(campaign_dir / "campaign.json")
     campaign_id = str(prior_manifest.get("campaign_id", ""))
     controls = campaign.get("control_receipts")
@@ -9949,7 +10153,9 @@ def _validate_attempt_recovery_segment_successor(
     # B4-1 改法 2：已对账的看门狗中止（段预约后由 attempt 对账收据分流，改法 3）与 failed 同等对待。
     if prior_state.get("state") not in FAILED_TERMINAL_STATES:
         raise SupervisorError("后继恢复段只能承接 failed 或已对账的看门狗中止终态的段 run 批次。")
-    _require_reconciled_watchdog_parent(prior_state, prior_dir, campaign_dir, label="后继恢复段")
+    _require_reconciled_watchdog_parent(
+        prior_state, prior_dir, campaign_dir, label="后继恢复段", prior_manifest=prior_manifest
+    )
     successor_revision = f"ar{int(prior_revision[2:]) + 1}"
     successor_actions = successor_manifest.get("actions")
     if not isinstance(successor_actions, list) or not all(isinstance(action, Mapping) for action in successor_actions):
@@ -10814,9 +11020,13 @@ def _validate_batched_campaign_history(
             # 第三批 B3-15（第 26 项）：被看门狗中止的父 run（无动作诊断）经 reconcile-supervisor-run 对账
             # （legacy-interruption、无 reservation、零请求）后是可信终态，按失败终态走下方后继协议；
             # 未对账仍失败关闭，但明确指向对账入口，不再是"没有可信终态"的死路。
+            # 草表 D-07：留有动作失败诊断的看门狗中止按诊断有效类对账后同样是可信终态，下方各协议按与 failed
+            # 相同的判定承接（诊断不可信、清单外、绑定漂移、永久失败类在 0-W 内即失败关闭）。
             if campaign_dir is None:
                 raise SupervisorError("前序 Campaign 批次被看门狗中止：核验其对账收据需要 Campaign 目录。")
-            _reconciled_watchdog_abort(Path(campaign_dir), _run_dir, state, label="看门狗中止的前序批次")
+            _reconciled_watchdog_abort(
+                Path(campaign_dir), _run_dir, state, label="看门狗中止的前序批次", prior_manifest=prior_manifest
+            )
         elif terminal_state != "failed":
             raise SupervisorError("前序 Campaign 批次没有可信终态。")
         successor_manifest = combined[index + 1][1]

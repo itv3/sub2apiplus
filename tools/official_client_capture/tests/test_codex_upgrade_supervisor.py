@@ -4339,8 +4339,13 @@ raise SystemExit(9)
         preview_stop: str,
         preview_diagnostic: tuple[str, str, str] | None,
         started_actions: tuple[str, ...] = (),
+        preview_state_name: str = "failed",
+        preview_event_type: str = "failed",
     ) -> tuple[Path, list[tuple[dict[str, object], dict[str, object], Path]], dict[str, object]]:
-        """B4-1 夹具：VC-1 采集失败（序号 1）→ 零请求恢复预览失败（序号 2，终态由参数决定）→ 序号 3 逐字重派预览。"""
+        """B4-1 夹具：VC-1 采集失败（序号 1）→ 零请求恢复预览失败（序号 2，终态由参数决定）→ 序号 3 逐字重派预览。
+
+        草表 D-07 用例经 ``preview_state_name``／``preview_event_type`` 把预览父 run 写成看门狗中止（默认仍是 failed）。
+        """
 
         campaign_dir = root / "campaign"
         campaign_dir.mkdir(mode=0o700)
@@ -4390,7 +4395,7 @@ raise SystemExit(9)
         preview_state, preview_dir = self._b4_failed_run(
             root, "run-preview", reason=preview_stop, campaign_id=campaign_id, owner_nonce="9" * 64,
             diagnostics=(("preview-official-recovery", preview_diagnostic),) if preview_diagnostic is not None else (),
-            started_actions=started_actions,
+            started_actions=started_actions, state_name=preview_state_name, event_type=preview_event_type,
         )
         history = [(capture_state, capture_manifest, capture_dir), (preview_state, preview_manifest, preview_dir)]
         retry = manifest(3, copy.deepcopy(preview_actions), ["pending-job"], ["passed-job"])
@@ -4714,6 +4719,249 @@ raise SystemExit(9)
             self.assertIn("终态 failed／failed／SupervisorTimeout（种类 action-timeout）", message)
             self.assertIn("无法定位失败动作（stop reason 不带动作、诊断不唯一或事件链没有 action-started）", message)
             self.assertIn("environment_redispatch：无法定位失败动作", message)
+
+    # ------------------------------------------------------------------
+    # 草表 D-07（矩阵第 69 行）：看门狗中止且留有动作失败诊断的父 run
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _d07_accepting_protocols(
+        state: dict[str, object], prior: dict[str, object], run_dir: Path, successor: dict[str, object], campaign_dir: Path
+    ) -> list[str]:
+        """按入口同一顺序逐条调用后继协议，列出放行的协议名；返回 False 与抛错（失败关闭）都算不承接。"""
+
+        accepted: list[str] = []
+        for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+            try:
+                if protocol(state, prior, run_dir, successor, campaign_dir=campaign_dir):
+                    accepted.append(name)
+            except SupervisorError:
+                pass
+        return accepted
+
+    def _d07_vc1_capture_manifests(
+        self, campaign_dir: Path, campaign_id: str
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """D-07 夹具：VC-1 序号 1 的 capture-official 批次与序号 2 的普通零请求恢复预览（与 _b4_vc1_capture_prior 同形）。"""
+
+        prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+        checkpoint = {"path": "control/vc/vc-0-checkpoint.json", "sha256": "3" * 64, "phase": "VC-0", "checkpoint_sha256": "4" * 64}
+
+        def manifest(sequence: int, actions: list, execute: list, reuse: list) -> dict[str, object]:
+            return {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": f"vc-1-{sequence:04d}",
+                "batch_sequence": sequence,
+                "batch_sha256": str(sequence + 4) * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": actions,
+                "execute_items": execute,
+                "reuse_items": reuse,
+            }
+
+        capture = manifest(
+            1,
+            [{
+                "action_id": "capture-official", "operation": "VC-1:capture-official", "timeout_seconds": 3600.0,
+                "command": [*prefix, "capture-official", "run", "--campaign-dir", str(campaign_dir), "--acknowledge-live-requests"],
+                "item_ids": ["passed-job", "pending-job"],
+            }],
+            ["passed-job", "pending-job"],
+            [],
+        )
+        preview = manifest(
+            2,
+            [{
+                "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 3600.0,
+                "command": [*prefix, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                "item_ids": ["pending-job"],
+            }],
+            ["pending-job"],
+            ["passed-job"],
+        )
+        return capture, preview
+
+    def test_d07_owner_lost_after_child_diagnostic_is_watchdog_abort_claimed_like_failed(self) -> None:
+        """草表 D-07（矩阵第 69 行）的真实时序：父 campaign-run 已为 capture-official 追加 action-started、子进程失败时已
+        自写诊断（child-returncode／execution-failure），父进程在追加 action-failed 事件前被 SIGKILL。独立 monitor 的 R2
+        判定因"事件链末条动作生命周期事件不是该动作的 action-failed"不成立，维持 watchdog-aborted（owner-process-not-alive），
+        诊断留在 run 目录；reconciler 以诊断有效类（execution-failure）对账。修复前 0-W 只认 legacy-interruption，对账后
+        仍报"对账收据 schema 或身份不闭合"（死路）；修复后按 failed 同口径由 N=2 零请求恢复预览承接。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_id = "campaign-d07"
+            # deadline 与初始操作超时放宽到远大于本用例耗时，只让"owner 丢失"这一条路径触发中止。
+            payload = self._campaign_command(
+                "campaign-start", "--state-dir", str(root / "state"), "--campaign-id", campaign_id, "--phase", "VC-1",
+                "--deadline-seconds", "60", "--initial-operation", "d07-capture", "--initial-timeout-seconds", "30",
+                "--heartbeat-seconds", "0.05", "--watchdog-timeout-seconds", "0.5", "--ledger-interval-seconds", "0.05",
+            )
+            run_dir = Path(str(payload["run_dir"]))
+            owner_pid = int(payload["owner_pid"])
+            owner_nonce = str(json.loads((run_dir / "state.json").read_text(encoding="utf-8"))["owner_nonce"])
+            # 父 campaign-run 为动作追加 action-started 后启动子进程；子进程失败时经 CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV
+            # 指向的路径自写诊断，随后退出。
+            supervisor._append_event(
+                run_dir, event_type="action-started", operation="VC-1:capture-official", owner_pid=owner_pid,
+                owner_nonce=owner_nonce, campaign_id=campaign_id, phase="VC-1", job_id="capture-official",
+                status="running", started_at_epoch=time.time(),
+            )
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, "capture-official", create_directory=True),
+                campaign_id=campaign_id, phase="VC-1", action_id="capture-official", owner_pid=owner_pid,
+                owner_nonce=owner_nonce, failure_kind="child-returncode", failure_class="execution-failure",
+                error_type="ChildProcessError", message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            # 父进程在 run_command 追加 action-failed 事件之前丢失（SIGKILL／OOM）。
+            os.kill(owner_pid, signal.SIGKILL)
+            self._wait_campaign_state(run_dir, {"watchdog-aborted", "failed"}, timeout=5)
+            self._wait_campaign_monitor_exit(run_dir)
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "watchdog-aborted")
+            stop = supervisor.read_stop_receipt(run_dir)
+            self.assertEqual(stop["event_type"], "watchdog-aborted")
+            # 通常是 owner-process-not-alive；机器繁忙时心跳线程可能先超时，monitor 判 owner-process-not-alive-after-
+            # heartbeat-gap 或 owner-heartbeat-timeout-*——三者都是 D-07 的真实来源（后者 abort 不做 R2 判定）。
+            self.assertTrue(
+                stop["reason"] in {"owner-process-not-alive", "owner-process-not-alive-after-heartbeat-gap"}
+                or str(stop["reason"]).startswith("owner-heartbeat-timeout-"),
+                stop["reason"],
+            )
+
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            self._write_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id})
+            capture, preview = self._d07_vc1_capture_manifests(campaign_dir, campaign_id)
+            # R2 判据（monitor／reconciler／后继协议共用）：诊断可重放、动作在清单内，但失败身份不完整，所以没有改写为 failed。
+            orphan = supervisor.evaluation_orphan_facts(run_dir, state, capture)
+            self.assertEqual(
+                (orphan["complete"], orphan["action_id"], orphan["reasons"]),
+                (False, "capture-official", ["last-lifecycle-event-not-action-failed"]),
+            )
+            history = [(state, capture, run_dir)]
+            # 未对账：指向 reconcile-supervisor-run。
+            with self.assertRaisesRegex(SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
+                supervisor._validate_batched_campaign_history(preview, history, campaign_dir=campaign_dir)
+            # reconciler 以诊断有效类作 failure_class（_run_facts 同口径），收据 run.state 为 watchdog-aborted。
+            self._b4_bind_supervisor_run_reconciliation(campaign_dir, run_dir, state, capture, failure_class="execution-failure")
+            ordered = supervisor._validate_batched_campaign_history(preview, history, campaign_dir=campaign_dir)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+            # 有且只有一条后继协议承接：采集失败 → 零请求恢复预览（协议 8，按 failed 同口径的处理型失败判据）。
+            self.assertEqual(
+                self._d07_accepting_protocols(state, capture, run_dir, preview, campaign_dir), ["official_recovery_preview"]
+            )
+
+    def test_d07_recovery_chain_watchdog_parent_with_diagnostic_uses_failed_criteria(self) -> None:
+        """草表 D-07：恢复链共享父核验（预览重派等协议 9～13）对"看门狗中止＋动作诊断"的父 run 只走一条口径——按诊断的
+        失败种类与类别走与 failed 相同的判定（失败动作即诊断动作、处理型失败判据、已对账）。修复前看门狗分支抛"留有动作
+        失败诊断，按失败终态协议处理"，而 state 不是 failed，没有协议可走。安全边界不变：未对账、对账收据分类与 run 目录
+        事实不符、永久失败类、非处理型失败（截止清理诊断、中断）、诊断指向清单外动作或不唯一、诊断被篡改、monitor 已判
+        绑定漂移、动作输出绑定无法核对，一律拒绝；其中截止清理诊断若按看门狗零请求预览放行（另一种口径）就会绕开诊断判据。"""
+
+        handled = ("handled-error", "ValueError", "execution-failure")
+
+        def chain(root: Path, diagnostic, *, reason: str = "owner-process-not-alive", bind_class: str | None = "execution-failure"):
+            campaign_dir, history, retry = self._b4_vc1_recovery_chain(
+                root, preview_stop=reason, preview_diagnostic=diagnostic, started_actions=("preview-official-recovery",),
+                preview_state_name="watchdog-aborted", preview_event_type="watchdog-aborted",
+            )
+            if bind_class is not None:
+                preview_state, preview_manifest, preview_dir = history[1]
+                self._b4_bind_supervisor_run_reconciliation(
+                    campaign_dir, preview_dir, preview_state, preview_manifest, failure_class=bind_class
+                )
+            return campaign_dir, history, retry
+
+        def check(campaign_dir: Path, history, retry):
+            return supervisor._validate_batched_campaign_history(retry, history, campaign_dir=campaign_dir)
+
+        # ① 处理型失败诊断、已按诊断有效类对账：预览重派按 failed 同口径承接；未对账先指向 reconcile-supervisor-run。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), handled, bind_class=None)
+            with self.assertRaisesRegex(SupervisorError, "尚未对账；先执行 reconcile-supervisor-run"):
+                check(campaign_dir, history, retry)
+            preview_state, preview_manifest, preview_dir = history[1]
+            self._b4_bind_supervisor_run_reconciliation(campaign_dir, preview_dir, preview_state, preview_manifest)
+            ordered = check(campaign_dir, history, retry)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
+            # 有且只有一条后继协议承接：预览重派（协议 9，共享父核验按 failed 同口径判定）。
+            self.assertEqual(
+                self._d07_accepting_protocols(preview_state, preview_manifest, preview_dir, retry, campaign_dir),
+                ["official_recovery_preview_retry"],
+            )
+            # 诊断被篡改（自摘要不再闭合）：无法重放，拒绝。
+            diagnostic_path = supervisor._action_diagnostic_path(preview_dir, "preview-official-recovery", create_directory=False)
+            original = diagnostic_path.read_bytes()
+            tampered = json.loads(original.decode("utf-8"))
+            tampered["message"] = "改写后的文案。"
+            diagnostic_path.write_text(json.dumps(tampered, ensure_ascii=False) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(SupervisorError, "动作失败诊断无法重放"):
+                check(campaign_dir, history, retry)
+            # 对账后诊断消失：收据分类（execution-failure）与 run 目录事实（无诊断）不再闭合。
+            diagnostic_path.unlink()
+            with self.assertRaisesRegex(SupervisorError, "对账收据分类 execution-failure 与 run 目录现存事实不一致（没有动作失败诊断"):
+                check(campaign_dir, history, retry)
+        # ② 对账时还没有诊断（收据 legacy-interruption），诊断在对账之后才出现：收据与目录事实不闭合，拒绝。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), handled, bind_class="legacy-interruption")
+            with self.assertRaisesRegex(
+                SupervisorError,
+                "对账收据分类 legacy-interruption 与 run 目录现存事实不一致（留有动作失败诊断 preview-official-recovery",
+            ):
+                check(campaign_dir, history, retry)
+        # ③ 仍拒绝：永久失败类；截止清理诊断（deadline-expired，failed 下同样不是处理型失败）；中断诊断。
+        cases = (
+            (("handled-error", "PolicyDrift", "identity-drift"), "identity-drift", "永久失败类 identity-drift"),
+            (("handled-error", "CampaignCleanupRequested", "deadline-expired"), "deadline-expired", "不是处理型失败"),
+            (("interrupted", "KeyboardInterrupt", "execution-failure"), "execution-failure", "不是处理型失败"),
+        )
+        for diagnostic, bind_class, expected in cases:
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as directory:
+                campaign_dir, history, retry = chain(Path(directory).resolve(), diagnostic, bind_class=bind_class)
+                with self.assertRaisesRegex(SupervisorError, expected):
+                    check(campaign_dir, history, retry)
+        # ④ 推断不出失败动作：诊断指向批次清单外的动作；诊断不唯一。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), None)
+            preview_state, _preview_manifest, preview_dir = history[1]
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(preview_dir, "capture-official", create_directory=True),
+                campaign_id=str(preview_state["campaign_id"]), phase="VC-1", action_id="capture-official",
+                owner_pid=int(preview_state["owner_pid"]), owner_nonce=str(preview_state["owner_nonce"]),
+                failure_kind="handled-error", failure_class="execution-failure", error_type="ValueError", message="D-07。",
+            )
+            with self.assertRaisesRegex(SupervisorError, "指向批次清单外的动作 capture-official，推断不出失败动作"):
+                check(campaign_dir, history, retry)
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), handled)
+            preview_state, _preview_manifest, preview_dir = history[1]
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(preview_dir, "capture-official", create_directory=True),
+                campaign_id=str(preview_state["campaign_id"]), phase="VC-1", action_id="capture-official",
+                owner_pid=int(preview_state["owner_pid"]), owner_nonce=str(preview_state["owner_nonce"]),
+                failure_kind="handled-error", failure_class="execution-failure", error_type="ValueError", message="D-07。",
+            )
+            with self.assertRaisesRegex(SupervisorError, "留有多份动作失败诊断"):
+                check(campaign_dir, history, retry)
+        # ⑤ 绑定：monitor 已判动作输出绑定漂移的终态失败关闭；动作输出绑定存在却无法按 R2 核对（事件链没有该动作的
+        # action-failed）同样失败关闭。
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), handled, reason="action-output-binding-mismatch")
+            with self.assertRaisesRegex(SupervisorError, "动作输出绑定已被 monitor 判为漂移"):
+                check(campaign_dir, history, retry)
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir, history, retry = chain(Path(directory).resolve(), handled)
+            _preview_state, _preview_manifest, preview_dir = history[1]
+            self._write_json(supervisor._action_outputs_path(preview_dir, "preview-official-recovery"), {"action_id": "x"})
+            with self.assertRaisesRegex(SupervisorError, "动作输出绑定无法按 R2 核对或已漂移"):
+                check(campaign_dir, history, retry)
 
 class RootCauseLimitPermanentConditionTests(unittest.TestCase):
     """第三批 B3-9（第 10 项③）：收口的永久条件只看本次根因——总账别的根因达上限不牵连本次失败。"""
