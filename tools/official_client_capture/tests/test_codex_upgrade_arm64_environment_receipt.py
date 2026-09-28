@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as receipt
@@ -448,14 +452,24 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         )
 
     def test_tls_readiness_collector_repeats_both_endpoints(self) -> None:
-        outputs = [
+        outputs = iter(
             f"{expected_status}\t192.0.2.1\t0.250000\n".encode()
             for _probe_name, _url, expected_status in receipt.TLS_READINESS_PROBES
             for _attempt in range(receipt.TLS_READINESS_ATTEMPTS)
-        ]
-        with mock.patch.object(receipt, "_run", side_effect=outputs) as runner:
+        )
+        expected_calls = len(receipt.TLS_READINESS_PROBES) * receipt.TLS_READINESS_ATTEMPTS
+
+        # 第 64 项起探针经 _run_completed 取得退出码与原文，以便区分网络瞬态；无瞬态时逐次调用次数不变。
+        def run(argv: list[str], _label: str, _timeout: int = 30, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            self.assertEqual(
+                kwargs["allowed_returncodes"],
+                frozenset({0}) | receipt.TLS_READINESS_TRANSIENT_CURL_EXIT_CODES,
+            )
+            return subprocess.CompletedProcess(argv, 0, next(outputs), b"")
+
+        with mock.patch.object(receipt, "_run_completed", side_effect=run) as runner:
             observed = receipt._tls_readiness_observation("capture-cli")
-        self.assertEqual(runner.call_count, len(outputs))
+        self.assertEqual(runner.call_count, expected_calls)
         self.assertEqual(
             [len(item["attempts"]) for item in observed],
             [receipt.TLS_READINESS_ATTEMPTS] * len(receipt.TLS_READINESS_PROBES),
@@ -1222,6 +1236,481 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             ["6", "7", receipt.PRODUCER_VERSION],
         )
         self.assertEqual(len(schema["allOf"]), 5)
+
+
+# 假 docker：只模拟 ``docker exec <容器> /usr/bin/curl … <URL>``，按"容器＋探针"分别计数。
+# ``$FAKE_DOCKER_STATE/plan-<容器>-<探针>`` 每行是一次调用的计划 ``退出码|内容``：退出码非 0 时把内容写到
+# 标准错误并以该码退出（模拟 curl 失败原文）；退出码为 0 时按 printf %b 输出内容（模拟 HTTP 状态不符、响应
+# 非法等）。计划用尽后的调用一律按成功返回冻结端点的 401 响应。每次调用都追加一行到 calls.log。
+FAKE_DOCKER_SCRIPT = r"""#!/bin/sh
+set -eu
+state="${FAKE_DOCKER_STATE:?}"
+if [ "$1" != "exec" ]; then
+  echo "fake docker: unexpected subcommand $1" >&2
+  exit 97
+fi
+container="$2"
+url=""
+for arg in "$@"; do url="$arg"; done
+case "$url" in
+  https://chatgpt.com/backend-api/wham/config/bundle) probe="chatgpt-cloud-config" ;;
+  https://api.openai.com/v1/models) probe="openai-models" ;;
+  *) echo "fake docker: unexpected url $url" >&2; exit 97 ;;
+esac
+counter="$state/count-$container-$probe"
+count=0
+if [ -f "$counter" ]; then count=$(cat "$counter"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$counter"
+printf '%s %s %s\n' "$container" "$probe" "$count" >> "$state/calls.log"
+plan="$state/plan-$container-$probe"
+line=""
+if [ -f "$plan" ]; then line=$(sed -n "${count}p" "$plan"); fi
+if [ -n "$line" ]; then
+  code="${line%%|*}"
+  body="${line#*|}"
+  if [ "$code" = "0" ]; then
+    printf '%b' "$body"
+    exit 0
+  fi
+  printf '%s\n' "$body" >&2
+  exit "$code"
+fi
+printf '401\t104.18.32.47\t0.250000\n'
+"""
+
+
+class TlsReadinessTransientRetryTests(unittest.TestCase):
+    """修好接着跑第 64 项：TLS 就绪探针遇网络瞬态有界重试（假 docker 真实子进程驱动）。
+
+    现场：2026-09-28 13:54Z，Campaign c01570-formal-vc1-r2-20260926t194249z 的 VC-5 批次 26 新 attempt
+    20260928T135332Z-b23de48cb06bde03 在任何作业开始前的环境收据阶段失败，动作诊断原文为
+    "capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：curl: (28) Resolving timed out after 6000
+    milliseconds"；随后在容器内解析 chatgpt.com 即时成功，属网络瞬态。
+    """
+
+    DNS_TIMEOUT = "curl: (28) Resolving timed out after 6000 milliseconds"
+
+    @staticmethod
+    def _fake_docker(
+        directory: Path, plans: dict[tuple[str, str], list[str]]
+    ) -> tuple[Path, Path]:
+        """在临时目录放置假 docker 与逐次调用计划，返回（可执行目录, 状态目录）。"""
+
+        fake_bin = directory / "fake-bin"
+        state = directory / "fake-docker-state"
+        fake_bin.mkdir()
+        state.mkdir()
+        docker = fake_bin / "docker"
+        docker.write_text(FAKE_DOCKER_SCRIPT, encoding="utf-8")
+        docker.chmod(0o755)
+        for (container, probe), lines in plans.items():
+            (state / f"plan-{container}-{probe}").write_text(
+                "".join(f"{line}\n" for line in lines), encoding="utf-8"
+            )
+        return fake_bin, state
+
+    @staticmethod
+    def _fake_environment(fake_bin: Path, state: Path) -> Any:
+        """让 ``docker`` 解析到假脚本；只作用于本测试进程及其子进程。"""
+
+        return mock.patch.dict(
+            os.environ,
+            {
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                "FAKE_DOCKER_STATE": str(state),
+            },
+        )
+
+    @staticmethod
+    def _calls(state: Path) -> list[tuple[str, str, int]]:
+        """按调用顺序返回（容器, 探针, 该探针第几次调用）。"""
+
+        path = state / "calls.log"
+        if not path.exists():
+            return []
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            container, probe, count = line.split()
+            rows.append((container, probe, int(count)))
+        return rows
+
+    def test_first_curl_dns_timeout_retries_and_restarts_consecutive_successes(
+        self,
+    ) -> None:
+        """复现现场：第 1 次 curl 以退出码 28 报 DNS 解析超时、之后成功。
+
+        修复前第 1 次失败即抛"TLS 就绪探针第 1 次失败：curl: (28) …"，环境收据整批失败；修复后退避一次、
+        清零连续计数重新验证，最终每个探针仍是连续 3 次成功。瞬态按最小方案只进 ARM64 环境收据日志：
+        facts／收据字段与无瞬态时同形（编号 1..3），按 v8 合同 build_receipt 照常通过。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            fake_bin, state = self._fake_docker(
+                workspace,
+                {("capture-cli", "chatgpt-cloud-config"): [f"28|{self.DNS_TIMEOUT}"]},
+            )
+            log = io.StringIO()
+            with (
+                self._fake_environment(fake_bin, state),
+                contextlib.redirect_stderr(log),
+                # 退避秒数置零只为测试提速；默认退避序列由单独用例锁定。
+                mock.patch.object(
+                    receipt, "TLS_READINESS_TRANSIENT_BACKOFF_SECONDS", (0, 0, 0), create=True
+                ),
+            ):
+                observed = receipt._tls_readiness_observation("capture-cli")
+            calls = self._calls(state)
+
+            # 1 次瞬态 + 连续 3 次成功；另一个端点不受影响。
+            probes = [probe for _container, probe, _count in calls]
+            self.assertEqual(probes.count("chatgpt-cloud-config"), 4)
+            self.assertEqual(probes.count("openai-models"), receipt.TLS_READINESS_ATTEMPTS)
+            self.assertEqual(
+                [(item["name"], [attempt["attempt"] for attempt in item["attempts"]]) for item in observed],
+                [
+                    (name, list(range(1, receipt.TLS_READINESS_ATTEMPTS + 1)))
+                    for name, _url, _status in receipt.TLS_READINESS_PROBES
+                ],
+            )
+            self.assertTrue(
+                all(
+                    attempt["http_status"] == 401
+                    for item in observed
+                    for attempt in item["attempts"]
+                )
+            )
+
+            # 瞬态进入 ARM64 环境收据日志：退出码与现场原文都在。
+            text = log.getvalue()
+            self.assertIn("capture-cli chatgpt-cloud-config TLS 就绪探针网络瞬态第 1 次", text)
+            self.assertIn("退出码 28", text)
+            self.assertIn(self.DNS_TIMEOUT, text)
+            self.assertIn("在 1 次网络瞬态后连续 3 次通过", text)
+
+            # 收据形态不变：把观测放进完整 v8 facts，仍按当前合同封存与重放。
+            root = workspace / "evidence"
+            root.mkdir(mode=0o700)
+            create_arm_receipt(root, phase="attempt_before", subject_id="attempt-064", prefix="before")
+            facts_path = root / "before-facts.json"
+            facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            capture = next(item for item in facts["containers"] if item["name"] == "capture-cli")
+            capture["tls_readiness"] = observed
+            Arm64EnvironmentReceiptTests._rewrite(facts_path, facts)
+            built = receipt.build_receipt(root, facts_path.name)
+            self.assertEqual(built["producer"]["version"], "8")
+            self.assertEqual(built["contract_sha256"], receipt.contract_sha256())
+
+    def test_transient_failures_beyond_retry_limit_fail_with_each_exit_code(self) -> None:
+        """第 4 次瞬态即失败；报错逐条带退出码与原文摘要，且整条能被动作失败诊断原样保留。"""
+
+        from tools.official_client_capture import codex_upgrade_supervisor
+
+        long_connect = (
+            "curl: (7) Failed to connect to chatgpt.com port 443 after 3002 ms: "
+            "Couldn't connect to server " + "x" * 200
+        )
+        plan = [
+            f"28|{self.DNS_TIMEOUT}",
+            "6|curl: (6) Could not resolve host: chatgpt.com",
+            f"7|{long_connect}",
+            "28|curl: (28) Connection timed out after 6001 milliseconds",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bin, state = self._fake_docker(
+                Path(directory), {("capture-cli", "chatgpt-cloud-config"): plan}
+            )
+            log = io.StringIO()
+            with (
+                self._fake_environment(fake_bin, state),
+                contextlib.redirect_stderr(log),
+                mock.patch.object(receipt, "_transient_backoff") as backoff,
+                self.assertRaises(receipt.Arm64EnvironmentReceiptError) as raised,
+            ):
+                receipt._tls_readiness_observation("capture-cli")
+            calls = self._calls(state)
+
+        message = str(raised.exception)
+        self.assertTrue(
+            message.startswith(
+                "capture-cli chatgpt-cloud-config TLS 就绪探针网络瞬态超过重试上限 3 次：#1 退出码 28"
+            ),
+            message,
+        )
+        for index, code in enumerate((28, 6, 7, 28), 1):
+            self.assertIn(f"#{index} 退出码 {code}「", message)
+        self.assertIn(f"「{self.DNS_TIMEOUT}」", message)
+        self.assertIn("Could not resolve host: chatgpt.com", message)
+        self.assertIn("Connection timed out after 6001 milliseconds", message)
+        self.assertNotIn("x" * 100, message)
+        self.assertLessEqual(len(message), receipt.TLS_READINESS_TRANSIENT_MESSAGE_LIMIT)
+        # 动作失败诊断超过 512 字或含敏感来源标签会整段改写；这里必须原样保留。
+        self.assertEqual(codex_upgrade_supervisor._action_diagnostic_message(message), message)
+        # 默认退避序列 2、4、8 秒各用一次；失败即停止，不再去探下一个端点。
+        self.assertEqual([item.args[0] for item in backoff.call_args_list], [2, 4, 8])
+        self.assertEqual(
+            [item.kwargs["operation"] for item in backoff.call_args_list],
+            ["arm64:tls-ready:capture-cli:chatgpt-cloud-config:backoff"] * 3,
+        )
+        self.assertEqual(
+            [(probe, count) for _container, probe, count in calls],
+            [("chatgpt-cloud-config", count) for count in range(1, 5)],
+        )
+        self.assertEqual(log.getvalue().count("网络瞬态第"), 3)
+
+    def test_transient_restarts_consecutive_count_after_partial_successes(self) -> None:
+        """成功、成功、瞬态之后必须重新连续成功 3 次；瞬态前的成功不计入最终连续次数。"""
+
+        success = "0|401\\t104.18.32.47\\t0.250000\\n"
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bin, state = self._fake_docker(
+                Path(directory),
+                {
+                    ("capture-cli", "openai-models"): [
+                        success,
+                        success,
+                        "7|curl: (7) Failed to connect to api.openai.com port 443: Connection refused",
+                    ]
+                },
+            )
+            log = io.StringIO()
+            with (
+                self._fake_environment(fake_bin, state),
+                contextlib.redirect_stderr(log),
+                mock.patch.object(receipt, "_transient_backoff") as backoff,
+            ):
+                observed = receipt._tls_readiness_observation("capture-cli")
+            calls = self._calls(state)
+
+        probes = [probe for _container, probe, _count in calls]
+        self.assertEqual(probes.count("chatgpt-cloud-config"), 3)
+        self.assertEqual(probes.count("openai-models"), 6)
+        openai = next(item for item in observed if item["name"] == "openai-models")
+        self.assertEqual([attempt["attempt"] for attempt in openai["attempts"]], [1, 2, 3])
+        self.assertEqual([item.args[0] for item in backoff.call_args_list], [2])
+        self.assertIn("本轮连续第 3 次尝试", log.getvalue())
+
+    def test_non_transient_failures_fail_immediately_with_unchanged_message(self) -> None:
+        """证书错误、TLS 握手出错、docker 自身错误、HTTP 状态不符、响应非法：不重试，报错与修复前逐字一致。"""
+
+        cases = (
+            (
+                "60|curl: (60) SSL certificate problem: unable to get local issuer certificate",
+                "capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：curl: (60) SSL certificate problem: "
+                "unable to get local issuer certificate",
+            ),
+            (
+                "35|curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to chatgpt.com:443",
+                "capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：curl: (35) OpenSSL SSL_connect: "
+                "SSL_ERROR_SYSCALL in connection to chatgpt.com:443",
+            ),
+            (
+                "125|Error response from daemon: No such container: capture-cli",
+                "capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：Error response from daemon: "
+                "No such container: capture-cli",
+            ),
+            (
+                "0|403\\t104.18.32.47\\t0.250000\\n",
+                "capture-cli chatgpt-cloud-config TLS 就绪探针未通过",
+            ),
+            ("0|garbage\\n", "capture-cli chatgpt-cloud-config TLS 就绪探针响应非法"),
+        )
+        for line, expected in cases:
+            with self.subTest(plan=line), tempfile.TemporaryDirectory() as directory:
+                fake_bin, state = self._fake_docker(
+                    Path(directory), {("capture-cli", "chatgpt-cloud-config"): [line]}
+                )
+                log = io.StringIO()
+                with (
+                    self._fake_environment(fake_bin, state),
+                    contextlib.redirect_stderr(log),
+                    mock.patch.object(receipt, "_transient_backoff") as backoff,
+                    self.assertRaises(receipt.Arm64EnvironmentReceiptError) as raised,
+                ):
+                    receipt._tls_readiness_observation("capture-cli")
+                self.assertEqual(str(raised.exception), expected)
+                self.assertEqual(len(self._calls(state)), 1)
+                backoff.assert_not_called()
+                self.assertEqual(log.getvalue(), "")
+
+    def test_non_transient_failure_after_transient_still_fails_immediately(self) -> None:
+        """瞬态之后出现证书错误：证书错误照旧立即失败，不因为之前有过瞬态而继续重试。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bin, state = self._fake_docker(
+                Path(directory),
+                {
+                    ("capture-cli", "chatgpt-cloud-config"): [
+                        f"28|{self.DNS_TIMEOUT}",
+                        "60|curl: (60) SSL certificate problem: certificate has expired",
+                    ]
+                },
+            )
+            with (
+                self._fake_environment(fake_bin, state),
+                contextlib.redirect_stderr(io.StringIO()),
+                mock.patch.object(receipt, "_transient_backoff") as backoff,
+                self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError,
+                    r"^capture-cli chatgpt-cloud-config TLS 就绪探针第 1 次失败：curl: \(60\) "
+                    r"SSL certificate problem: certificate has expired$",
+                ),
+            ):
+                receipt._tls_readiness_observation("capture-cli")
+            self.assertEqual(len(self._calls(state)), 2)
+            self.assertEqual(backoff.call_count, 1)
+
+    def test_transient_retry_stops_at_total_window(self) -> None:
+        """退避后会越过每个探针的瞬态总时限时不再重试，报错带已发生的瞬态摘要。"""
+
+        def run(argv: list[str], _label: str, _timeout: int = 30, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(argv, 28, b"", f"{self.DNS_TIMEOUT}\n".encode())
+
+        window = receipt.TLS_READINESS_TRANSIENT_WINDOW_SECONDS
+        with (
+            mock.patch.object(receipt, "_run_completed", side_effect=run) as runner,
+            mock.patch.object(receipt, "_transient_backoff") as backoff,
+            # 探针起点 0 秒；第 1 次瞬态判定时已过 window-1 秒，再退避 2 秒就越过总时限。
+            mock.patch.object(receipt.time, "monotonic", side_effect=[0.0, float(window - 1)]),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(receipt.Arm64EnvironmentReceiptError) as raised,
+        ):
+            receipt._tls_readiness_observation("capture-cli")
+        self.assertEqual(
+            str(raised.exception),
+            f"capture-cli chatgpt-cloud-config TLS 就绪探针网络瞬态重试将超过总时限 {window} 秒："
+            f"#1 退出码 28「{self.DNS_TIMEOUT}」",
+        )
+        self.assertEqual(runner.call_count, 1)
+        backoff.assert_not_called()
+
+    def test_backoff_runs_inside_shared_attempt_deadline(self) -> None:
+        """有受管 deadline 时退避走 deadline.sleep；预算到期的 WallClockTimeoutError 原样上抛，不当作瞬态。"""
+
+        deadline = mock.Mock()
+        with mock.patch.object(receipt, "_ACTIVE_DEADLINE", deadline), mock.patch.object(receipt.time, "sleep") as sleep:
+            receipt._transient_backoff(4, operation="arm64:tls-ready:capture-cli:openai-models:backoff")
+        deadline.sleep.assert_called_once_with(4, operation="arm64:tls-ready:capture-cli:openai-models:backoff")
+        sleep.assert_not_called()
+        with mock.patch.object(receipt, "_ACTIVE_DEADLINE", None), mock.patch.object(receipt.time, "sleep") as sleep:
+            receipt._transient_backoff(8, operation="arm64:tls-ready:capture-cli:openai-models:backoff")
+        sleep.assert_called_once_with(8)
+
+        expired = receipt.incremental_recovery.WallClockTimeoutError(
+            "arm64:tls-ready:capture-cli:chatgpt-cloud-config:backoff",
+            elapsed_seconds=10.0,
+            budget_seconds=10.0,
+        )
+        deadline = mock.Mock()
+        deadline.sleep.side_effect = expired
+
+        def run(argv: list[str], _label: str, _timeout: int = 30, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(argv, 28, b"", f"{self.DNS_TIMEOUT}\n".encode())
+
+        with (
+            mock.patch.object(receipt, "_ACTIVE_DEADLINE", deadline),
+            mock.patch.object(receipt, "_run_completed", side_effect=run),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(receipt.incremental_recovery.WallClockTimeoutError) as raised,
+        ):
+            receipt._tls_readiness_observation("capture-cli")
+        self.assertIs(raised.exception, expired)
+
+    def test_transient_retry_through_real_bounded_subprocess_with_deadline(self) -> None:
+        """生产路径：collect_facts 把 attempt deadline 设为 _ACTIVE_DEADLINE 后，curl 改经 run_bounded_subprocess
+        执行（这里直接设置同一作用域），瞬态同样有界重试，退避走真实 WallClockDeadline.sleep。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bin, state = self._fake_docker(
+                Path(directory),
+                {("sub2apiplus", "chatgpt-cloud-config"): [f"28|{self.DNS_TIMEOUT}"]},
+            )
+            deadline = receipt.incremental_recovery.WallClockDeadline(60, label="item64-test")
+            with (
+                self._fake_environment(fake_bin, state),
+                contextlib.redirect_stderr(io.StringIO()),
+                mock.patch.object(receipt, "_ACTIVE_DEADLINE", deadline),
+                mock.patch.object(receipt, "TLS_READINESS_TRANSIENT_BACKOFF_SECONDS", (0, 0, 0)),
+                mock.patch.object(
+                    receipt.incremental_recovery,
+                    "run_bounded_subprocess",
+                    wraps=receipt.incremental_recovery.run_bounded_subprocess,
+                ) as bounded,
+            ):
+                observed = receipt._tls_readiness_observation("sub2apiplus")
+            probes = [probe for _container, probe, _count in self._calls(state)]
+        self.assertEqual(probes.count("chatgpt-cloud-config"), 4)
+        self.assertEqual(bounded.call_count, 7)
+        self.assertTrue(all(call.kwargs["deadline"] is deadline for call in bounded.call_args_list))
+        self.assertEqual(
+            [len(item["attempts"]) for item in observed],
+            [receipt.TLS_READINESS_ATTEMPTS] * len(receipt.TLS_READINESS_PROBES),
+        )
+
+    def test_retry_policy_keeps_v8_contract_version_and_fact_shape(self) -> None:
+        """最小方案：PRODUCER_VERSION 仍为 8，合同摘要与第 64 项修改前逐字相同，重试参数不进入合同。"""
+
+        self.assertEqual(receipt.PRODUCER_VERSION, "8")
+        self.assertEqual(
+            receipt.contract_sha256(),
+            "e195b1cfa8c4d117ad1d51eb6e20aa36609c7ed03074ae8a69ade6774459b5cf",
+        )
+        with (
+            mock.patch.object(receipt, "TLS_READINESS_TRANSIENT_CURL_EXIT_CODES", frozenset({28})),
+            mock.patch.object(receipt, "TLS_READINESS_TRANSIENT_RETRIES", 9),
+            mock.patch.object(receipt, "TLS_READINESS_TRANSIENT_BACKOFF_SECONDS", (1,)),
+            mock.patch.object(receipt, "TLS_READINESS_TRANSIENT_WINDOW_SECONDS", 5),
+        ):
+            self.assertEqual(
+                receipt.contract_sha256(),
+                "e195b1cfa8c4d117ad1d51eb6e20aa36609c7ed03074ae8a69ade6774459b5cf",
+            )
+        self.assertEqual(receipt.TLS_READINESS_TRANSIENT_CURL_EXIT_CODES, frozenset({6, 7, 28}))
+        self.assertEqual(receipt.TLS_READINESS_TRANSIENT_RETRIES, 3)
+        self.assertEqual(receipt.TLS_READINESS_TRANSIENT_BACKOFF_SECONDS, (2, 4, 8))
+        self.assertEqual(receipt.TLS_READINESS_TRANSIENT_WINDOW_SECONDS, 90)
+
+    def test_replays_v8_receipts_generated_before_tls_transient_fix(self) -> None:
+        """第 64 项修改前的受管 producer（1b62b096…，生成器重放登记门禁基线时已部署）生成的 v8 收据只读重放通过；
+        旧身份不能再生成新收据。部署后同一 Campaign 的旧 attempt 收据与新 attempt 收据因此可以并存比较。"""
+
+        legacy_sha = "1b62b096cc543350d0060c0eea5f97e2f833e47a95b22c346fdffaa27fe66968"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            create_arm_receipt(root, phase="attempt_after", subject_id="attempt-063", prefix="after")
+            facts_path = root / "after-facts.json"
+            facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            producer = dict(facts["collector"])
+            producer["tool"] = (
+                "/root/docker/capture-cli/data/tools/official_client_capture/"
+                "codex_upgrade_arm64_environment_receipt.py"
+            )
+            producer["tool_sha256"] = legacy_sha
+            self.assertEqual(producer["version"], "8")
+            self.assertIn(legacy_sha, receipt.REGISTERED_REPLAY_PRODUCER_HASHES["8"])
+            self.assertNotEqual(legacy_sha, receipt._current_producer()["tool_sha256"])
+            facts["collector"] = producer
+            Arm64EnvironmentReceiptTests._rewrite(facts_path, facts)
+            legacy_receipt = receipt._build_receipt(root, facts_path.name, replay_producer=producer)
+            legacy_path = root / "after-pre-item64-receipt.json"
+            receipt._write_once(legacy_path, legacy_receipt)
+
+            replayed = receipt.replay(root, legacy_path.name)
+            self.assertEqual(replayed, legacy_receipt)
+            self.assertEqual(replayed["contract_sha256"], receipt.contract_sha256())
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "身份漂移"):
+                receipt.build_receipt(root, facts_path.name)
+
+            # 旧 producer 的 after 与当前 producer 的 before 做跨 attempt 等价比较（投影不含 TLS 就绪事实）。
+            current_root = root / "current"
+            current_path = create_arm_receipt(
+                current_root, phase="attempt_before", subject_id="attempt-064", prefix="before"
+            )
+            current = receipt.replay(current_root, current_path.name)
+            self.assertEqual(current["producer"]["tool_sha256"], receipt._current_producer()["tool_sha256"])
+            self.assertTrue(receipt.receipts_equivalent(root, replayed, current_root, current))
 
 
 if __name__ == "__main__":

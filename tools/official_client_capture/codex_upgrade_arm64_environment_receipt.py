@@ -90,7 +90,16 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
     "7": frozenset({"d0b6a0650cbb2f3ef33349d914e5aad24c323288d1af618fa6f50313cd570a5f"}),
     # v8 事实合同不变；9e10 为修好接着跑第 36 项（受控维护等待放行"进程仍在、网络命名空间已不可进入"的守护瞬态）
     # 修复前的受管版本，已生成 0.157 194249z 的 P0 与 attempt 收据，只允许按同一合同只读重放，不允许生成新 facts。
-    "8": frozenset({"9e10bd0f91b588ee6aefd0ab06ac845c248faaa45b75c906bd5df91933845f98"}),
+    # 1b62 为第 36 项补登记（f9727c765）之后、修好接着跑第 64 项（TLS 就绪探针网络瞬态有界重试）修改前的受管版本，
+    # 即生成器重放登记门禁基线时已部署的版本；0.157 194249z 在此期间的 attempt 环境收据由它生成。第 64 项只改采集
+    # 时的重试行为，facts／收据字段、contract_sha256 与 PRODUCER_VERSION 均不变，它同样只允许按原合同只读重放。
+    # 9e10 保持在最后且不带尾随逗号：生成器重放登记门禁的反证用例会原地删掉该字面量，删后仍须是合法语法。
+    "8": frozenset(
+        {
+            "1b62b096cc543350d0060c0eea5f97e2f833e47a95b22c346fdffaa27fe66968",
+            "9e10bd0f91b588ee6aefd0ab06ac845c248faaa45b75c906bd5df91933845f98"
+        }
+    ),
 }
 PUBLIC_EGRESS_URL = "https://api.ipify.org"
 TLS_READINESS_PROBES = (
@@ -102,6 +111,36 @@ TLS_READINESS_PROBES = (
     ("openai-models", "https://api.openai.com/v1/models", 401),
 )
 TLS_READINESS_ATTEMPTS = 3
+# 修好接着跑第 64 项（2026-09-28 13:54Z，c01570 r2 VC-5 批次 26）：ARM64 出口经 DMIT 跨洋隧道，抓包容器
+# resolv.conf 为 1.1.1.1／9.9.9.9、timeout:2 attempts:2，curl 偶发 DNS 解析超时（退出码 28），随后容器内解析即时
+# 成功。就绪探针原先任何一次 curl 非零退出都立即抛错，环境收据整批失败，还要多走一轮"对账 → 预览 → 批准 → 重派"。
+#
+# 下列 curl 退出码表示拿到任何 HTTP 响应之前的网络层失败，按网络瞬态有界重试：
+#   6  = 无法解析主机（DNS 解析失败）；
+#   7  = 无法连接主机（TCP 连接被拒绝或不可达）；
+#   28 = 超时（DNS 解析超时、TCP 连接超时、TLS 握手超时，以及 --max-time 整体超时；curl 对这几种超时用同一个
+#        退出码，这里不按原文细分，避免依赖随 curl 版本变化的文案）。
+# 其余退出码一律按非瞬态照旧立即失败，例如 35（TLS 握手出错）、60（证书校验失败）、docker 自身的 125～127；
+# 拿到响应后的 HTTP 状态不符、响应格式非法也照旧立即失败，不重试。
+#
+# 重试不削弱"连续验证"：遇到瞬态后连续成功计数清零，最终每个探针仍须连续 TLS_READINESS_ATTEMPTS 次成功，facts
+# 只记录最后连续成功的那几次（编号 1..N，与 v8 合同同形）。重试策略是采集行为而非校验规则，不进入 contract_sha256()；
+# facts／收据字段与 PRODUCER_VERSION 都不变（选最小方案的理由见 _tls_readiness_observation 文档）。
+#
+# 审计落点：每次瞬态写入 ARM64 环境收据日志（进程标准错误）；超过上限时的报错逐条带退出码与原文摘要，经
+# campaign-run 写进动作失败诊断（持久）。注意 campaign-run 批次动作的标准输出／标准错误由监督器按"不落盘可能
+# 含秘密的输出"原则丢弃，重试后最终成功的瞬态在那种运行方式下只存在于当时的进程输出里，不会随收据留档。
+TLS_READINESS_TRANSIENT_CURL_EXIT_CODES = frozenset({6, 7, 28})
+# 每个探针最多为网络瞬态重试 3 次：第 1～3 次瞬态退避后重新验证，第 4 次瞬态即失败。
+TLS_READINESS_TRANSIENT_RETRIES = 3
+# 第 n 次瞬态后退避第 n 项秒数；退避在 attempt 共享 deadline 内进行，不能延长全局墙钟预算。
+TLS_READINESS_TRANSIENT_BACKOFF_SECONDS = (2, 4, 8)
+# 每个探针从第一次尝试起的瞬态容错总时限（秒）：退避后会越过该时限时不再重试，直接失败。
+TLS_READINESS_TRANSIENT_WINDOW_SECONDS = 90
+# 报错里每次瞬态的原文摘要上限与整条报错上限。动作失败诊断的说明超过 512 字
+# （codex_upgrade_supervisor.MAX_NOTE_LENGTH）会被整段改写成固定文案，这里留出余量保证逐条摘要能完整落盘。
+TLS_READINESS_TRANSIENT_SUMMARY_CHARS = 80
+TLS_READINESS_TRANSIENT_MESSAGE_LIMIT = 480
 EXPECTED_EGRESS_PROVIDER = "BWG"
 EXPECTED_PUBLIC_EGRESS = "144.34.230.210"
 LEGACY_DMIT_PUBLIC_EGRESS = "179.255.100.158"
@@ -910,14 +949,115 @@ def _parse_default_route(raw: bytes, container: str) -> dict[str, str]:
     return routes[0]
 
 
+def _log_tls_transient(message: str) -> None:
+    """把 TLS 就绪探针的网络瞬态写入 ARM64 环境收据日志（进程标准错误）。
+
+    只写容器、端点名、退出码与 curl 原文摘要，不含凭据或请求内容；不进入 facts／收据，不改变 v8 合同。
+    """
+
+    print(f"ARM64 环境收据：{message}", file=sys.stderr, flush=True)
+
+
+def _tls_transient_summary(raw: bytes | None) -> str:
+    """把 curl 原文规整为单行摘要：控制字符换成空格、合并空白，截断到 TLS_READINESS_TRANSIENT_SUMMARY_CHARS 字。"""
+
+    text = (raw or b"").decode("utf-8", errors="replace")
+    text = "".join(char if ord(char) >= 0x20 else " " for char in text)
+    summary = " ".join(text.split())[:TLS_READINESS_TRANSIENT_SUMMARY_CHARS]
+    return summary or "（无原文）"
+
+
+def _tls_transient_failure_message(prefix: str, transients: list[dict[str, Any]]) -> str:
+    """逐次列出瞬态退出码与原文摘要，整条不超过 TLS_READINESS_TRANSIENT_MESSAGE_LIMIT 字。
+
+    先按完整摘要组装；超长时依次把每条摘要缩到 40 字、再只保留退出码，保证动作失败诊断能原样落盘。
+    """
+
+    message = prefix
+    for width in (TLS_READINESS_TRANSIENT_SUMMARY_CHARS, 40, 0):
+        parts = [
+            f"#{index} 退出码 {item['exit_code']}"
+            + (f"「{item['summary'][:width]}」" if width else "")
+            for index, item in enumerate(transients, 1)
+        ]
+        message = f"{prefix}：" + "；".join(parts)
+        if len(message) <= TLS_READINESS_TRANSIENT_MESSAGE_LIMIT:
+            return message
+    return message[:TLS_READINESS_TRANSIENT_MESSAGE_LIMIT]
+
+
+def _transient_backoff(seconds: float, *, operation: str) -> None:
+    """在 attempt 共享 deadline 内退避：到期抛 WallClockTimeoutError，重试不能延长全局墙钟预算。
+
+    没有受管 deadline（例如在 ARM64 上直接运行 collect 子命令）时按固定秒数等待。
+    """
+
+    if _ACTIVE_DEADLINE is not None:
+        _ACTIVE_DEADLINE.sleep(seconds, operation=operation)
+    else:
+        time.sleep(seconds)
+
+
+def _tls_transient_retry(
+    container: str,
+    probe_name: str,
+    transients: list[dict[str, Any]],
+    started: float,
+) -> None:
+    """登记一次网络瞬态后决定是否重试：超过次数或总时限即失败，否则写日志并退避。"""
+
+    count = len(transients)
+    label = f"{container} {probe_name} TLS 就绪探针"
+    if count > TLS_READINESS_TRANSIENT_RETRIES:
+        raise Arm64EnvironmentReceiptError(
+            _tls_transient_failure_message(
+                f"{label}网络瞬态超过重试上限 {TLS_READINESS_TRANSIENT_RETRIES} 次",
+                transients,
+            )
+        )
+    backoff = TLS_READINESS_TRANSIENT_BACKOFF_SECONDS
+    delay = backoff[min(count, len(backoff)) - 1]
+    if time.monotonic() - started + delay > TLS_READINESS_TRANSIENT_WINDOW_SECONDS:
+        raise Arm64EnvironmentReceiptError(
+            _tls_transient_failure_message(
+                f"{label}网络瞬态重试将超过总时限 {TLS_READINESS_TRANSIENT_WINDOW_SECONDS} 秒",
+                transients,
+            )
+        )
+    latest = transients[-1]
+    _log_tls_transient(
+        f"{label}网络瞬态第 {count} 次（退出码 {latest['exit_code']}，本轮连续第 "
+        f"{latest['attempt']} 次尝试），{delay} 秒后清零连续计数重新验证：{latest['summary']}"
+    )
+    _transient_backoff(
+        delay, operation=f"arm64:tls-ready:{container}:{probe_name}:backoff"
+    )
+
+
 def _tls_readiness_observation(container: str) -> list[dict[str, Any]]:
-    """连续验证 Codex 启动前实际依赖的 ChatGPT 与 OpenAI TLS 路径。"""
+    """连续验证 Codex 启动前实际依赖的 ChatGPT 与 OpenAI TLS 路径。
+
+    修好接着跑第 64 项：curl 以 TLS_READINESS_TRANSIENT_CURL_EXIT_CODES 中的退出码失败（拿到 HTTP 响应之前的
+    网络层瞬态）时，清零连续成功计数、按 TLS_READINESS_TRANSIENT_BACKOFF_SECONDS 退避后重新开始连续验证，最多重试
+    TLS_READINESS_TRANSIENT_RETRIES 次且不越过 TLS_READINESS_TRANSIENT_WINDOW_SECONDS；其余失败（其它退出码、
+    HTTP 状态不符、响应非法）照旧立即失败，报错与修复前逐字一致。返回的 attempts 仍是最后连续成功的
+    TLS_READINESS_ATTEMPTS 次，编号 1..N。
+
+    瞬态只进 ARM64 环境收据日志、不写进 facts，是有意选择的最小方案：升 PRODUCER_VERSION 会让
+    ``codex_upgrade._require_current_p0_environment`` 拒绝进行中 Campaign 的 v8 原 P0（"已封存阶段控制恢复"
+    要求沿用原 P0 且版本等于当前），validate_facts／_build_receipt 的 v8 分支与 schema 版本枚举也要连带修改；
+    不升版本而在 v8 facts 里加字段，会让同一版本号出现两种字段闭集，破坏"一个版本号一份事实合同"的只读重放登记前提。
+    """
 
     observations: list[dict[str, Any]] = []
     for probe_name, url, expected_status in TLS_READINESS_PROBES:
         attempts: list[dict[str, Any]] = []
-        for attempt_index in range(1, TLS_READINESS_ATTEMPTS + 1):
-            raw = _run(
+        # 每次网络瞬态：发生时的连续序号、curl 退出码与原文摘要，用于日志与超限报错。
+        transients: list[dict[str, Any]] = []
+        started = time.monotonic()
+        while len(attempts) < TLS_READINESS_ATTEMPTS:
+            attempt_index = len(attempts) + 1
+            completed = _run_completed(
                 [
                     "docker",
                     "exec",
@@ -944,7 +1084,24 @@ def _tls_readiness_observation(container: str) -> list[dict[str, Any]]:
                 operation=(
                     f"arm64:tls-ready:{container}:{probe_name}:{attempt_index}"
                 ),
+                # 瞬态退出码放行到这里再判定；其余非零退出码由 _run_completed 按原文案立即失败。
+                allowed_returncodes=(
+                    frozenset({0}) | TLS_READINESS_TRANSIENT_CURL_EXIT_CODES
+                ),
             )
+            if completed.returncode != 0:
+                transients.append(
+                    {
+                        "attempt": attempt_index,
+                        "exit_code": completed.returncode,
+                        "summary": _tls_transient_summary(completed.stderr),
+                    }
+                )
+                # 连续验证从头开始：瞬态之前的成功不计入最终的连续成功次数。
+                attempts = []
+                _tls_transient_retry(container, probe_name, transients, started)
+                continue
+            raw = completed.stdout
             try:
                 fields = raw.decode("ascii").strip().split("\t")
                 if len(fields) != 3:
@@ -968,6 +1125,14 @@ def _tls_readiness_observation(container: str) -> list[dict[str, Any]]:
                     "tls_seconds": tls_seconds,
                     "response_sha256": _sha256_bytes(raw),
                 }
+            )
+        if transients:
+            # 审计收尾：本探针经历过瞬态，最终仍是连续成功通过。
+            _log_tls_transient(
+                f"{container} {probe_name} TLS 就绪探针在 {len(transients)} 次网络瞬态后连续 "
+                f"{TLS_READINESS_ATTEMPTS} 次通过（瞬态退出码："
+                + "、".join(str(item["exit_code"]) for item in transients)
+                + "）"
             )
         observations.append(
             {
