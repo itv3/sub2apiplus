@@ -3421,6 +3421,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   后处理的 execution-failure；seal 链动作解析识别 canonical 命令；协议 8 改用恢复链失败判据（超时不比 message、强杀由对账收据
   承接）；恢复链类别集合加 environment-prerequisite（run 期间有未收口预约时协议 7 让位）；入口表驱动并收集每条协议的拒因，
   兜底文案带前序事实与全部拒因。
+- **批准后再延期不使恢复预览作废**：恢复预览冻结 Campaign 账本 head；批准之后、授权之前若批准了阶段／Campaign／项目延期或
+  发生预算暂停，账本只追加 `deadline_extended`／`deadline_paused`，授权核对容许冻结点之后只有这两类事件（前缀仍按 head_sha256
+  核对），同一份预览照常授权；出现其它任何事件（对账、根因、阶段、attempt、`campaign_abandoned`）仍要求重新对账。阶段截止已过
+  而尚未生成预览时，照旧先延期、再对账（预算暂停期间不接受恢复批准）。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，

@@ -19205,6 +19205,84 @@ class CodexUpgradeTest(unittest.TestCase):
                 campaign_dir, fixture["manifest"], phase="VC-5", action_plan=plan_path
             )
 
+    def _b0_approved_evolution_recovery(self, root: Path) -> tuple[dict[str, object], str, Path]:
+        """第 41 项夹具：等待 seal 的候选 attempt 被工具演进作废 → 对账 recoverable → 批准恢复预览（尚未授权）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        fixture = self._b0_fixture(root)
+        campaign_dir = fixture["campaign_dir"]
+        self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+        attempt_id = self._b0_completed_candidate_attempt(fixture).name
+        invalidated = sorted(self._b0_candidate_job_ids(fixture))[:2]
+        stack = contextlib.ExitStack()
+        for patcher in self._evolution_patches(invalidated):
+            stack.enter_context(patcher)
+        self.addCleanup(stack.close)
+        result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+        self.assertEqual(result["status"], "recoverable", result.get("decision"))
+        approved = reconciler.reconcile_attempt(
+            campaign_dir, attempt_id, approve_recovery_sha256=result["recovery_preview"]["review_sha256"]
+        )
+        return fixture, attempt_id, Path(approved["recovery_preview_path"])
+
+    def test_b0_stage_extension_between_approval_and_authorization_keeps_preview_consumable(self) -> None:
+        """修好接着跑第 41 项：预览批准后、授权前批准阶段延期，只在 Campaign 账本追加截止控制事件，不改变本 attempt 的失败
+        事实与恢复范围；授权照常消费同一份预览（与消费复核"延期不会使本预览作废"同口径）。延期以外的新事件仍要求重新对账。
+        修复前授权按 head 严格相等拒绝"恢复批准消费前 Campaign 账本 head 已推进"，按工具自己的提示先延期反而绕回重新对账。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, attempt_id, preview_path = self._b0_approved_evolution_recovery(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            before = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(before["status"], "recovery_required")
+            # 延期预览写在 Campaign control/deadlines 下，要求与生产一致的 0700 控制目录。
+            (campaign_dir / "control").chmod(0o700)
+            current_deadline = datetime.fromisoformat(str(before["stage_deadline_at_utc"]).replace("Z", "+00:00"))
+            extension = codex_upgrade_project_ledger.preview_deadline_extension(
+                campaign_dir,
+                scope="stage",
+                phase="VC-5",
+                new_deadline_at_utc=(current_deadline + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+                reason="第 41 项：批准后授权前延期",
+            )
+            codex_upgrade_project_ledger.apply_deadline_extension(
+                campaign_dir,
+                preview_path=Path(extension["preview_path"]),
+                approve_sha256=extension["review_sha256"],
+                approved_by="fixture-reviewer",
+            )
+            extended = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(extended["status"], "recovery_required")
+            self.assertGreater(extended["head_sequence"], before["head_sequence"])
+            authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, preview_path)
+            self.assertEqual(authorized["status"], "authorized")
+            self.assertTrue(authorized["timing_recovery_event"]["appended"])
+            summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-5"))
+            # 授权后再次消费（resume 前的核对）幂等。
+            again = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, preview_path)
+            self.assertFalse(again["timing_recovery_event"]["appended"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, attempt_id, preview_path = self._b0_approved_evolution_recovery(root)
+            # 延期以外的事件（这里是另一 attempt 的开始）推进了 head：仍须重新对账。
+            codex_upgrade_timing_ledger.append_event(
+                fixture["timing_ledger"],
+                event_id="fixture-other-attempt-started",
+                phase="VC-5",
+                event_type="attempt_started",
+                attempt_id="20260928T000000Z-0000000000000000",
+                next_action="reconcile-attempt",
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "必须重新对账"):
+                reconciler.authorize_recovery_preview(fixture["campaign_dir"], attempt_id, preview_path)
+
     def test_b0_evaluator_drift_after_capture_in_same_run_reconciles_as_tool_evolution_required(self) -> None:
         """第三批 B3-5（第 17 项）：同一父 run 内采集已完整收口（attempt 等待封存、无失败 Job），之后的后处理动作因评估器
         漂移未执行——父 run 按 tool-evolution-required 对账（不再报 attempt 中断），账本回到 active、采集结果只读保留；

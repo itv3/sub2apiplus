@@ -2343,9 +2343,9 @@ def load_approved_recovery_preview(
                         current_campaign_head.get("head_sequence") != sequence
                         or current_campaign_head.get("head_sha256")
                         != campaign_head.get("sha256")
-                    ):
+                    ) and not _campaign_head_advanced_only_by_deadline_control(ledger_dir, sequence):
                         raise ReconcilerError(
-                            "恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"
+                            "恢复批准消费前 Campaign 账本 head 已推进（出现延期／预算暂停以外的事件），必须重新对账"
                         )
                     if current_campaign_head.get("status") == "candidate_review_required":
                         # 候选审核（VC-5 采集失败）续跑：阶段与根因取审核事件；审核必须唯一绑定
@@ -2411,6 +2411,25 @@ def load_approved_recovery_preview(
 
 def _recovery_segment_subject(attempt_id: str, recovery_revision: str | None) -> str:
     return attempt_id if recovery_revision is None else f"{attempt_id}:{recovery_revision}"
+
+
+# 修好接着跑第 41 项：预览冻结 Campaign 账本 head 之后，批准延期或预算暂停只追加截止控制事件，不改变本 attempt 的
+# 失败事实与恢复范围（与 _recovery_preview_ledger_problems 的"延期不会使本预览作废"同口径）；其它任何事件——对账、
+# 根因、阶段、attempt、放弃（campaign_abandoned 属截止控制但是终态，不容许）——仍要求重新对账。
+PREVIEW_TOLERATED_CAMPAIGN_EVENT_TYPES = frozenset({"deadline_paused", "deadline_extended"})
+
+
+def _campaign_head_advanced_only_by_deadline_control(ledger_dir: Path, frozen_sequence: int) -> bool:
+    """冻结点（前缀已由调用方按 head_sha256 核对）之后是否只追加了延期／预算暂停事件。"""
+
+    try:
+        events = timing_ledger._load_events(ledger_dir)
+    except timing_ledger.TimingLedgerError as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    tail = events[frozen_sequence:]
+    return bool(tail) and all(
+        event.get("event_type") in PREVIEW_TOLERATED_CAMPAIGN_EVENT_TYPES for event, _raw in tail
+    )
 
 
 def authorize_recovery_preview(
