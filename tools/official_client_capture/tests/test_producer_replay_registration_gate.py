@@ -5,7 +5,8 @@
 1. 当前工作树：五个生成器（第 40、42 项起含门禁收据与生产激活收据生成器）在全部部署边界处的旧
    摘要都已登记为只读重放身份，或属于门禁基线前已审计的历史豁免；豁免表恰好等于"不带豁免时的违规
    集合"（没有多余、没有遗漏）且全部来自基线前的收据；仓库内入库的门禁收据与生产激活收据，其生成器
-   摘要都能被当前生成器承接；任何模块新增只读重放登记常量都必须先纳入覆盖清单。
+   摘要都能被当前生成器承接；任何模块新增只读重放登记常量都必须先纳入覆盖清单。登记集合与入库收据
+   按仓库实际内容判定、只要求已知条目仍在，今后按门禁提示追加登记或新收据入库时不误红。
 1b. 覆盖自检（第 42 项）：静态发现"计算自身摘要、且校验路径要求等于当前"的生成器，每个都必须
    纳入覆盖清单或在分类表写明不跨工具版本重放的依据；只按门禁引入时的覆盖清单判定，当前树恰好
    报出第 40、42 项补登记的两个生成器。
@@ -14,7 +15,9 @@
    补登记后的 f9727c765、b2c088d99 与事故前的 5d218b931 都必须通过（历史已处理的版本不误报）。
 3. 反证（在当前树副本上变异）：改生成器却不登记上一部署边界、删掉已有登记、登记到错误版本、
    计时账本不追加承接描述，都必须失败；按处置提示正确登记后必须通过。门禁收据生成器另覆盖第 40 项
-   自身的形态：改了生成器却没登记修改前摘要 034331e5 必须失败。
+   自身的形态：改了生成器却没登记修改前摘要 034331e5 必须失败。判定一律按变异前后违规集合的差集，
+   不写死与仓库承接收据数量相关的精确集合；另一组用例追加一份模拟的"今后新增承接收据"后重跑，
+   证明新增边界不会让这些用例误红。
 4. 合成临时 git 仓库：变更集内部的中间提交不要求登记；不在 git 历史里的显式节点必须登记；浅克隆
    失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免；缺失提交只跳过前后提交边界；新增
    文件的空内容前序不计边界；尚无只读重放判定的生成器如实跳过并报告。
@@ -191,6 +194,12 @@ def _violation_digests(report: gate.GateReport) -> set[tuple[str, str]]:
     return {(item.producer.path, item.boundary_sha256) for item in report.violations}
 
 
+def _violation_digest_set(report: gate.GateReport) -> set[str]:
+    """单个生成器报告里的违规摘要集合（变异用例按它做差集判定）。"""
+
+    return {item.boundary_sha256 for item in report.violations}
+
+
 # ---------------------------------------------------------------------------
 # 1. 当前工作树
 # ---------------------------------------------------------------------------
@@ -286,17 +295,19 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
             for digest, boundary in boundaries.items()
             if digest != self.report.current[gate.GATE_RECEIPT_PRODUCER]
         }
+        # v4 登记集合按生成器的登记常量判定，不写死：生成过收据的 0.154 版本与第 40 项修改前版本必须
+        # 一直在登记里；此后每次修改生成器，门禁都会要求追加登记上一部署边界（例如 r21 部署的当前摘要），
+        # 按提示登记后这里不得误红。
+        registered = gate_receipt_module.REGISTERED_REPLAY_PRODUCER_HASHES[GATE_RECEIPT_V4_SCHEMA]
+        self.assertLessEqual({GATE_RECEIPT_PRE_ITEM40_DIGEST, GATE_RECEIPT_0154_DIGEST}, set(registered))
         unexempted = {item.boundary_sha256: item for item in self.unexempted.violations}
         for digest, schema in schemas.items():
             with self.subTest(digest=digest[:12], schema=schema):
                 if schema == "codex-upgrade-external-gate-producer/v3":
                     # v3 历史收据原样承接旧身份，无需登记。
                     self.assertNotIn(digest, unexempted)
-                elif schema == GATE_RECEIPT_V4_SCHEMA and digest in {
-                    GATE_RECEIPT_PRE_ITEM40_DIGEST,
-                    GATE_RECEIPT_0154_DIGEST,
-                }:
-                    # 生成过收据的 v4 部署版本必须登记为只读重放身份。
+                elif schema == GATE_RECEIPT_V4_SCHEMA and digest in registered:
+                    # 已登记的 v4 部署版本只允许只读重放，不需要也不得再豁免。
                     self.assertNotIn(digest, unexempted)
                 else:
                     # 其余（v1／v2 已退役格式、未部署的 R15 首版）只能靠门禁基线前的历史豁免。
@@ -354,14 +365,16 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
                     f"{path.name} 的生成器摘要 {producer['tool_sha256']} 未登记为只读重放身份",
                 )
             checked.append(path.name)
-        self.assertEqual(
-            sorted(checked),
-            [
+        # 至少覆盖目前已入库的这四份（证明确实在检查）；今后新入库的门禁／生产激活收据同样逐份校验，
+        # 不写死清单，新收据入库时不误红。
+        self.assertLessEqual(
+            {
                 "CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json",
                 "CODEX_CLI_01491_TO_0151_PRODUCTION_ACTIVATION_RECEIPT.json",
                 "CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json",
                 "CODEX_CLI_0151_TO_0154_PRODUCTION_ACTIVATION_RECEIPT.json",
-            ],
+            },
+            set(checked),
         )
 
     def test_every_replay_registry_constant_is_covered(self) -> None:
@@ -516,22 +529,125 @@ def _replace_once(source: str, old: str, new: str) -> str:
 
 
 class RegistrationMutationTest(unittest.TestCase):
-    """在当前树副本上模拟"改生成器"与"改登记"，证明门禁确实会拦、按提示登记后确实放行。"""
+    """在当前树副本上模拟"改生成器"与"改登记"，证明门禁确实会拦、按提示登记后确实放行。
+
+    判定一律按差集，不写死与仓库承接收据数量相关的精确违规集合：
+
+    * 副本中生成器任何字节变化都会让真实 HEAD 摘要 C 变成"旧摘要"。C 是否已是部署边界，取决于
+      之后有没有承接收据登记过它（785a66bdb 的收据登记了门禁收据 6cea115b、生产激活收据 ef971f5a，
+      以前写死"恰好一条违规"的用例因此多出 C 而误红）。
+    * ``before``：未变异副本上的违规集合；``control``：只给该生成器追加一行注释（只改字节、不动登记）
+      后的违规集合。两者按类缓存。
+    * "改生成器却不登记上一边界"类用例断言 ``after − before`` 恰为 {C}；"删／挪某条登记"类用例断言
+      ``after − control`` 恰为该条目标摘要；"正确登记"类用例断言 ``after − before`` 为空。同时要求
+      变异不得让已有违规消失，且每条违规都对应真实部署边界。
+    * 基线自检只要求未变异副本复现真实树自己的门禁结果（副本保真）；真实树是否通过由第 1 组用例负责，
+      同一原因不在两处报红。
+
+    这样仓库里今后新增的承接收据，无论让 C 还是别的摘要成为新边界，都同时出现在基线与变异结果中，
+    不会让用例误红；门禁本身的判定一字未改。``RegistrationMutationWithSimulatedReceiptTest`` 追加一份
+    模拟承接收据重跑全部用例，证明这一点。
+    """
+
+    SIMULATE_FUTURE_RECEIPT = False
+    SIMULATED_RECEIPT = "upstream-codex-replay-gate-simulated-future-20261001-freeze-successor.json"
+    NEUTRAL_EDIT = "\n# 反证：只改一行注释，生成器身份即改变。\n"
 
     @classmethod
     def setUpClass(cls) -> None:
         _require_full_history()
         cls.baseline = gate.check_registration(REPOSITORY_ROOT)
         cls.head_commit = _git(REPOSITORY_ROOT, "rev-parse", "HEAD").decode().strip()
+        cls._class_temporary = tempfile.TemporaryDirectory(prefix="replay-gate-mutation-baseline-")
+        root = Path(cls._class_temporary.name)
+        before_shape = cls._prepare_shape(root / "before")
+        control_shape = cls._prepare_shape(root / "control")
+        cls.before_by_producer: dict[str, set[str]] = {}
+        cls.before_boundaries: dict[str, set[str]] = {}
+        cls.control_by_producer: dict[str, set[str]] = {}
+        for spec in gate.PRODUCERS:
+            before = gate.check_registration(before_shape, git_root=REPOSITORY_ROOT, producers=[spec])
+            cls.before_by_producer[spec.path] = _violation_digest_set(before)
+            cls.before_boundaries[spec.path] = set(before.boundaries[spec.path])
+            path = control_shape / spec.path
+            _write(path, path.read_bytes() + cls.NEUTRAL_EDIT.encode("utf-8"))
+            cls.control_by_producer[spec.path] = _violation_digest_set(
+                gate.check_registration(control_shape, git_root=REPOSITORY_ROOT, producers=[spec])
+            )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._class_temporary.cleanup()
+
+    @classmethod
+    def _prepare_shape(cls, destination: Path) -> Path:
+        shape = _copy_worktree_shape(destination)
+        if cls.SIMULATE_FUTURE_RECEIPT:
+            cls._write_simulated_future_receipt(shape)
+        return shape
+
+    @classmethod
+    def simulated_future_digest(cls, spec: gate.ProducerSpec) -> str:
+        """模拟收据里"今后部署过、副本却从未登记"的新边界摘要（最坏情况）。"""
+
+        return _sha256(f"replay-gate-simulated-future-deployment:{spec.path}".encode("utf-8"))
+
+    @classmethod
+    def _write_simulated_future_receipt(cls, shape: Path) -> None:
+        """追加一份模拟的承接收据，为每个生成器新增部署边界。
+
+        每个生成器两条边：已知边界 → 当前摘要 C（与 785a66bdb 的收据同形态，把当前摘要登记为边界），
+        以及 C → 一个从未登记的新摘要（最坏情况：新增了一个门禁会报的边界）。前后提交都写 HEAD，
+        使前后提交口径同样把 C 计为边界。
+        """
+
+        # 前序取真实树上已被接受（非当前、非豁免、非违规）的已知边界：只添节点，不引入额外违规。
+        unaccepted = {digest for _, digest, _ in cls.baseline.exempted} | _violation_digest_set(cls.baseline)
+        transitions = []
+        for spec in gate.PRODUCERS:
+            current = cls.baseline.current[spec.path]
+            known = sorted(
+                digest
+                for digest in cls.baseline.boundaries[spec.path]
+                if digest != current and digest not in unaccepted
+            )
+            edges = [(known[0], current)] if known else []
+            edges.append((current, cls.simulated_future_digest(spec)))
+            for predecessor, successor in edges:
+                transitions.append(
+                    {
+                        "path": spec.path,
+                        "old_path": "",
+                        "status": "M",
+                        "predecessor_sha256s": [predecessor],
+                        "to_sha256": successor,
+                        "source_receipts": [],
+                        "reason": "门禁反证：模拟今后新增的承接收据",
+                    }
+                )
+        unsigned = {
+            "schema_version": "official-egress-upstream-freeze-successor/v1",
+            "issued_at_utc": "2026-10-01T00:00:00Z",
+            "base_commit": cls.head_commit,
+            "current_commit": cls.head_commit,
+            "scope": cls.SIMULATED_RECEIPT[:-5],
+            "mode": "commit",
+            "transitions": transitions,
+            "result": "manual_actions_required",
+        }
+        _write(
+            shape / gate.MAINTENANCE_RELATIVE / cls.SIMULATED_RECEIPT,
+            (json.dumps(unsigned, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        )
 
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory(prefix="replay-gate-mutation-")
         self.addCleanup(self._temporary.cleanup)
-        self.shape = _copy_worktree_shape(Path(self._temporary.name))
+        self.shape = self._prepare_shape(Path(self._temporary.name))
 
     def _head_digest(self, spec: gate.ProducerSpec) -> str:
         digest = self.baseline.current[spec.path]
-        if digest not in self.baseline.boundaries[spec.path]:
+        if digest not in self.before_boundaries[spec.path]:
             self.skipTest(f"{spec.path} 当前改动尚未登记冻结承接收据，当前摘要还不是部署边界")
         return digest
 
@@ -541,8 +657,29 @@ class RegistrationMutationTest(unittest.TestCase):
         _write(path, text.encode("utf-8"))
         return _sha256(path.read_bytes())
 
-    def _check(self, spec: gate.ProducerSpec) -> gate.GateReport:
-        return gate.check_registration(self.shape, git_root=REPOSITORY_ROOT, producers=[spec])
+    def _check(self, spec: gate.ProducerSpec, **options) -> gate.GateReport:
+        return gate.check_registration(self.shape, git_root=REPOSITORY_ROOT, producers=[spec], **options)
+
+    def _new_violations(self, spec: gate.ProducerSpec, report: gate.GateReport, baseline: set[str]) -> set[str]:
+        """变异后相对基线新增的违规摘要；同时要求已有违规不消失、每条违规都是真实部署边界。"""
+
+        after = _violation_digest_set(report)
+        self.assertEqual(set(), baseline - after, "变异不应让基线上已有的违规消失\n" + gate.format_report(report))
+        for digest in after:
+            self.assertIn(digest, report.boundaries[spec.path], "每条违规都必须对应真实部署边界")
+        return after - baseline
+
+    def _assert_new_since_before(self, spec: gate.ProducerSpec, report: gate.GateReport, expected: set[str]) -> None:
+        new = self._new_violations(spec, report, self.before_by_producer[spec.path])
+        self.assertEqual(expected, new, gate.format_report(report))
+
+    def _assert_new_since_control(self, spec: gate.ProducerSpec, report: gate.GateReport, expected: set[str]) -> None:
+        new = self._new_violations(spec, report, self.control_by_producer[spec.path])
+        self.assertEqual(expected, new, gate.format_report(report))
+
+    @staticmethod
+    def _violation_for(report: gate.GateReport, digest: str) -> gate.Violation:
+        return next(item for item in report.violations if item.boundary_sha256 == digest)
 
     def _producer_version(self, spec: gate.ProducerSpec) -> str:
         # 测试自己解析版本号，不复用门禁的解析函数，反证替换门禁逻辑时不会波及夹具。
@@ -550,15 +687,40 @@ class RegistrationMutationTest(unittest.TestCase):
         self.assertIsNotNone(match, f"{spec.path} 缺少 PRODUCER_VERSION")
         return match.group(1)
 
+    # --- 基线自检 ---
+
+    def test_unmodified_and_control_baselines(self) -> None:
+        # 未变异副本必须复现真实树自己的门禁结果（副本保真；真实树是否通过由第 1 组用例负责，这里
+        # 不重复报），追加模拟收据时另含该生成器的模拟新边界。只改字节的对照组不得让已有违规消失；
+        # 相对未变异副本，摘要集合类恰好新增当前摘要 C（C 还不是部署边界时不新增），承接链类的新增
+        # 全是部署边界且含 C（改了计时账本又不追加承接描述，旧边界都走不到新摘要）。
+        for spec in gate.PRODUCERS:
+            with self.subTest(path=spec.path):
+                real = {item.boundary_sha256 for item in self.baseline.violations if item.producer.path == spec.path}
+                simulated = {self.simulated_future_digest(spec)} if self.SIMULATE_FUTURE_RECEIPT else set()
+                before = self.before_by_producer[spec.path]
+                self.assertEqual(real | simulated, before)
+                control = self.control_by_producer[spec.path]
+                self.assertEqual(set(), before - control)
+                added = control - before
+                current = self.baseline.current[spec.path]
+                head_is_boundary = current in self.before_boundaries[spec.path]
+                if spec.mechanism == gate.MECHANISM_SUCCESSOR_CHAIN:
+                    self.assertLessEqual(added, self.before_boundaries[spec.path])
+                    if head_is_boundary:
+                        self.assertIn(current, added)
+                else:
+                    self.assertEqual({current} if head_is_boundary else set(), added)
+
     # --- ARM64 环境收据（按版本分组的显式摘要集合） ---
 
     def test_environment_edit_without_registering_previous_boundary_fails(self) -> None:
         head = self._head_digest(ENVIRONMENT_SPEC)
         version = self._producer_version(ENVIRONMENT_SPEC)
-        self._mutate(ENVIRONMENT_SPEC, lambda text: text + "\n# 反证：只改一行注释，生成器身份即改变。\n")
+        self._mutate(ENVIRONMENT_SPEC, lambda text: text + self.NEUTRAL_EDIT)
         report = self._check(ENVIRONMENT_SPEC)
-        self.assertEqual({(ENVIRONMENT_SPEC.path, head)}, _violation_digests(report), gate.format_report(report))
-        self.assertEqual(report.violations[0].registry_key, version)
+        self._assert_new_since_before(ENVIRONMENT_SPEC, report, {head})
+        self.assertEqual(self._violation_for(report, head).registry_key, version)
         self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{version}"]', gate.format_report(report))
 
     def test_environment_edit_cannot_exempt_previous_boundary(self) -> None:
@@ -569,11 +731,9 @@ class RegistrationMutationTest(unittest.TestCase):
             path: dict(digests) for path, digests in gate.HISTORICAL_EXEMPTIONS.items()
         }
         exemptions.setdefault(ENVIRONMENT_SPEC.path, {})[head] = "反证：声称该版本从未部署"
-        report = gate.check_registration(
-            self.shape, git_root=REPOSITORY_ROOT, producers=[ENVIRONMENT_SPEC], exemptions=exemptions
-        )
-        self.assertEqual({(ENVIRONMENT_SPEC.path, head)}, _violation_digests(report), gate.format_report(report))
-        self.assertIn("不得豁免", report.violations[0].detail)
+        report = self._check(ENVIRONMENT_SPEC, exemptions=exemptions)
+        self._assert_new_since_before(ENVIRONMENT_SPEC, report, {head})
+        self.assertIn("不得豁免", self._violation_for(report, head).detail)
 
     def test_environment_registration_in_producing_version_passes(self) -> None:
         head = self._head_digest(ENVIRONMENT_SPEC)
@@ -582,8 +742,7 @@ class RegistrationMutationTest(unittest.TestCase):
             ENVIRONMENT_SPEC,
             lambda text: _insert_into_group(text, rf'"{version}"\s*:\s*frozenset\(\s*\{{\s*', head),
         )
-        report = self._check(ENVIRONMENT_SPEC)
-        self.assertTrue(report.passed, gate.format_report(report))
+        self._assert_new_since_before(ENVIRONMENT_SPEC, self._check(ENVIRONMENT_SPEC), set())
 
     def test_environment_registration_in_wrong_version_fails(self) -> None:
         head = self._head_digest(ENVIRONMENT_SPEC)
@@ -593,30 +752,23 @@ class RegistrationMutationTest(unittest.TestCase):
             ENVIRONMENT_SPEC,
             lambda text: _insert_into_group(text, rf'"{wrong}"\s*:\s*frozenset\(\s*\{{\s*', head),
         )
-        report = self._check(ENVIRONMENT_SPEC)
-        self.assertEqual({(ENVIRONMENT_SPEC.path, head)}, _violation_digests(report), gate.format_report(report))
+        self._assert_new_since_before(ENVIRONMENT_SPEC, self._check(ENVIRONMENT_SPEC), {head})
 
     def test_environment_dropping_item36_registration_fails(self) -> None:
-        head = self._head_digest(ENVIRONMENT_SPEC)
-        # 把版本 8 里的 9e10bd0f 换成当前摘要：当前摘要已登记，但事故中的旧摘要被删掉。
+        # 删掉事故中的 9e10bd0f 登记：只改字节的对照组之外，恰好多出 9e10bd0f。
         self._mutate(
             ENVIRONMENT_SPEC,
-            lambda text: _replace_once(text, f'"{ITEM36_MISSING_DIGEST}"', f'"{head}"'),
+            lambda text: _replace_once(text, f'"{ITEM36_MISSING_DIGEST}"', ""),
         )
-        report = self._check(ENVIRONMENT_SPEC)
-        self.assertEqual(
-            {(ENVIRONMENT_SPEC.path, ITEM36_MISSING_DIGEST)},
-            _violation_digests(report),
-            gate.format_report(report),
-        )
+        self._assert_new_since_control(ENVIRONMENT_SPEC, self._check(ENVIRONMENT_SPEC), {ITEM36_MISSING_DIGEST})
 
     # --- 收据终结器（扁平摘要集合） ---
 
     def test_finalizer_edit_without_registering_previous_boundary_fails(self) -> None:
         head = self._head_digest(FINALIZER_SPEC)
-        self._mutate(FINALIZER_SPEC, lambda text: text + "\n# 反证：只改一行注释，生成器身份即改变。\n")
+        self._mutate(FINALIZER_SPEC, lambda text: text + self.NEUTRAL_EDIT)
         report = self._check(FINALIZER_SPEC)
-        self.assertEqual({(FINALIZER_SPEC.path, head)}, _violation_digests(report), gate.format_report(report))
+        self._assert_new_since_before(FINALIZER_SPEC, report, {head})
         self.assertIn("LEGACY_REPLAY_PRODUCER_HASHES", gate.format_report(report))
 
     def test_finalizer_registration_passes(self) -> None:
@@ -625,20 +777,15 @@ class RegistrationMutationTest(unittest.TestCase):
             FINALIZER_SPEC,
             lambda text: _insert_into_group(text, r"LEGACY_REPLAY_PRODUCER_HASHES\s*=\s*frozenset\(\s*\{\s*", head),
         )
-        report = self._check(FINALIZER_SPEC)
-        self.assertTrue(report.passed, gate.format_report(report))
+        self._assert_new_since_before(FINALIZER_SPEC, self._check(FINALIZER_SPEC), set())
 
     def test_finalizer_dropping_existing_registration_fails(self) -> None:
-        head = self._head_digest(FINALIZER_SPEC)
         self._mutate(
             FINALIZER_SPEC,
-            lambda text: _replace_once(text, f'"{FINALIZER_REGISTERED_BOUNDARY}"', f'"{head}"'),
+            lambda text: _replace_once(text, f'"{FINALIZER_REGISTERED_BOUNDARY}",', ""),
         )
-        report = self._check(FINALIZER_SPEC)
-        self.assertEqual(
-            {(FINALIZER_SPEC.path, FINALIZER_REGISTERED_BOUNDARY)},
-            _violation_digests(report),
-            gate.format_report(report),
+        self._assert_new_since_control(
+            FINALIZER_SPEC, self._check(FINALIZER_SPEC), {FINALIZER_REGISTERED_BOUNDARY}
         )
 
     # --- 计时账本（承接收据链） ---
@@ -711,7 +858,8 @@ class RegistrationMutationTest(unittest.TestCase):
         edited = self._mutate(TIMING_SPEC, lambda text: text + "\n# 反证：改了计时账本但没有追加承接描述。\n")
         self._write_probe_receipt(head, edited)
         report = self._check(TIMING_SPEC)
-        self.assertIn((TIMING_SPEC.path, head), _violation_digests(report), gate.format_report(report))
+        new = self._new_violations(TIMING_SPEC, report, self.before_by_producer[TIMING_SPEC.path])
+        self.assertIn(head, new, gate.format_report(report))
         self.assertIn("PRODUCER_FREEZE_SUCCESSORS", gate.format_report(report))
 
     def test_timing_ledger_edit_with_successor_descriptor_passes(self) -> None:
@@ -719,20 +867,19 @@ class RegistrationMutationTest(unittest.TestCase):
         edited = self._mutate(TIMING_SPEC, self._append_successor_descriptor)
         self._write_probe_receipt(head, edited)
         report = self._check(TIMING_SPEC)
-        self.assertTrue(report.passed, gate.format_report(report))
+        self._assert_new_since_before(TIMING_SPEC, report, set())
         self.assertGreater(len(report.boundaries[TIMING_SPEC.path]), 2)
 
-    # --- 门禁收据（按 producer schema 分组的显式摘要集合，第 40 项纳入） ---
+    # --- 按 producer schema 分组的显式摘要集合：门禁收据（第 40 项）与生产激活收据（第 42 项） ---
 
-    def _assert_single_schema_keyed_violation(
+    def _assert_schema_keyed_violation(
         self,
         report: gate.GateReport,
         spec: gate.ProducerSpec,
         schema: str,
         digest: str,
     ) -> None:
-        self.assertEqual({(spec.path, digest)}, _violation_digests(report), gate.format_report(report))
-        violation = report.violations[0]
+        violation = self._violation_for(report, digest)
         self.assertEqual(violation.registry_key, schema)
         self.assertTrue(violation.registrable)
         self.assertIn("未登记为只读重放身份", violation.detail)
@@ -740,17 +887,48 @@ class RegistrationMutationTest(unittest.TestCase):
         self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{schema}"]', message)
         self.assertIn(Path(spec.path).name, message)
 
-    def _assert_single_gate_violation(self, report: gate.GateReport, digest: str) -> None:
-        self._assert_single_schema_keyed_violation(report, GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, digest)
+    def _assert_dropping_registration_fails(
+        self,
+        spec: gate.ProducerSpec,
+        schema: str,
+        digest: str,
+        transform=None,
+    ) -> None:
+        """删掉（或挪走）一条登记：与只改字节的对照组相比，恰好多出这条登记的摘要。"""
+
+        transform = transform or (lambda text: _replace_once(text, f'"{digest}",', ""))
+        self._mutate(spec, transform)
+        report = self._check(spec)
+        self._assert_new_since_control(spec, report, {digest})
+        self._assert_schema_keyed_violation(report, spec, schema, digest)
+
+    def _assert_next_edit_must_register_current(
+        self,
+        spec: gate.ProducerSpec,
+        schema: str,
+        predecessor: str,
+    ) -> None:
+        """当前摘要成为部署边界之后再次修改生成器：必须登记当前摘要，登记后不再新增违规。"""
+
+        head = self.baseline.current[spec.path]
+        # 探针收据保证当前摘要是部署边界（仓库里已有承接收据登记它时，这里不改变任何结论）。
+        self._write_probe_receipt(predecessor, head, spec.path)
+        self._mutate(spec, lambda text: text + "\n# 反证：再次修改生成器。\n")
+        report = self._check(spec)
+        self._assert_new_since_before(spec, report, {head})
+        self._assert_schema_keyed_violation(report, spec, schema, head)
+        self._mutate(
+            spec,
+            lambda text: _insert_into_group(text, r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", head),
+        )
+        self._assert_new_since_before(spec, self._check(spec), set())
 
     def test_gate_receipt_item40_edit_without_registering_pre_edit_digest_fails(self) -> None:
         # 第 40 项自身的事故形态：改了门禁收据生成器，却没把修改前的 034331e5 登记为只读重放身份。
-        self._mutate(GATE_SPEC, lambda text: _replace_once(text, f'"{GATE_RECEIPT_PRE_ITEM40_DIGEST}",', ""))
-        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_PRE_ITEM40_DIGEST)
+        self._assert_dropping_registration_fails(GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, GATE_RECEIPT_PRE_ITEM40_DIGEST)
 
     def test_gate_receipt_dropping_0154_registration_fails(self) -> None:
-        self._mutate(GATE_SPEC, lambda text: _replace_once(text, f'"{GATE_RECEIPT_0154_DIGEST}",', ""))
-        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_0154_DIGEST)
+        self._assert_dropping_registration_fails(GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, GATE_RECEIPT_0154_DIGEST)
 
     def test_gate_receipt_registration_under_wrong_schema_fails(self) -> None:
         def move_to_legacy_group(text: str) -> str:
@@ -762,50 +940,37 @@ class RegistrationMutationTest(unittest.TestCase):
                 anchor + f'    LEGACY_PRODUCER_SCHEMA: frozenset({{"{GATE_RECEIPT_PRE_ITEM40_DIGEST}"}}),\n',
             )
 
-        self._mutate(GATE_SPEC, move_to_legacy_group)
-        self._assert_single_gate_violation(self._check(GATE_SPEC), GATE_RECEIPT_PRE_ITEM40_DIGEST)
+        self._assert_dropping_registration_fails(
+            GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, GATE_RECEIPT_PRE_ITEM40_DIGEST, move_to_legacy_group
+        )
 
     def test_gate_receipt_next_edit_must_register_current_digest(self) -> None:
-        # 模拟第 40 项的承接收据已生成（当前摘要成为部署边界）之后，再次修改生成器。
-        head = self.baseline.current[GATE_SPEC.path]
-        self._write_probe_receipt(GATE_RECEIPT_PRE_ITEM40_DIGEST, head, GATE_SPEC.path)
-        self._mutate(GATE_SPEC, lambda text: text + "\n# 反证：再次修改门禁收据生成器。\n")
-        self._assert_single_gate_violation(self._check(GATE_SPEC), head)
-        self._mutate(
-            GATE_SPEC,
-            lambda text: _insert_into_group(text, r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", head),
+        self._assert_next_edit_must_register_current(
+            GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, GATE_RECEIPT_PRE_ITEM40_DIGEST
         )
-        report = self._check(GATE_SPEC)
-        self.assertTrue(report.passed, gate.format_report(report))
-
-    # --- 生产激活收据（按 producer schema 分组的显式摘要集合，第 42 项纳入） ---
-
-    def _assert_single_activation_violation(self, report: gate.GateReport, digest: str) -> None:
-        self._assert_single_schema_keyed_violation(report, ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, digest)
 
     def test_activation_item42_edit_without_registering_pre_edit_digest_fails(self) -> None:
         # 第 42 项自身的事故形态：改了生产激活收据生成器，却没把修改前的 3b4ddbf8 登记为只读重放身份。
-        self._mutate(
-            ACTIVATION_SPEC, lambda text: _replace_once(text, f'"{ACTIVATION_PRE_ITEM42_DIGEST}",', "")
-        )
-        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), ACTIVATION_PRE_ITEM42_DIGEST)
+        self._assert_dropping_registration_fails(ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, ACTIVATION_PRE_ITEM42_DIGEST)
 
     def test_activation_dropping_r34_registration_fails(self) -> None:
-        self._mutate(ACTIVATION_SPEC, lambda text: _replace_once(text, f'"{ACTIVATION_R34_DIGEST}",', ""))
-        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), ACTIVATION_R34_DIGEST)
+        self._assert_dropping_registration_fails(ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, ACTIVATION_R34_DIGEST)
 
     def test_activation_next_edit_must_register_current_digest(self) -> None:
-        # 模拟第 42 项的承接收据已生成（当前摘要成为部署边界）之后，再次修改生成器。
-        head = self.baseline.current[ACTIVATION_SPEC.path]
-        self._write_probe_receipt(ACTIVATION_PRE_ITEM42_DIGEST, head, ACTIVATION_SPEC.path)
-        self._mutate(ACTIVATION_SPEC, lambda text: text + "\n# 反证：再次修改生产激活收据生成器。\n")
-        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), head)
-        self._mutate(
-            ACTIVATION_SPEC,
-            lambda text: _insert_into_group(text, r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", head),
+        self._assert_next_edit_must_register_current(
+            ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, ACTIVATION_PRE_ITEM42_DIGEST
         )
-        report = self._check(ACTIVATION_SPEC)
-        self.assertTrue(report.passed, gate.format_report(report))
+
+
+class RegistrationMutationWithSimulatedReceiptTest(RegistrationMutationTest):
+    """追加一份模拟的"今后新增承接收据"后重跑全部变异用例：新增边界不得让它们误红。
+
+    模拟收据为每个生成器新增两条边：已知边界 → 当前摘要（785a66bdb 收据的形态），以及当前摘要 →
+    一个从未登记的新摘要（最坏情况，门禁会把它当违规报出）。未变异副本与对照组都带着这些新边界，
+    变异用例按差集判定，结论与不追加时相同。
+    """
+
+    SIMULATE_FUTURE_RECEIPT = True
 
 
 # ---------------------------------------------------------------------------
