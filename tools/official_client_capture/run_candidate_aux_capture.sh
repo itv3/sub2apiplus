@@ -1175,11 +1175,19 @@ assert_2xx A09-models "$code"
 if (( target_workspace_routing == 1 )); then
   cookie_prime_session_id=44444444-4444-4444-8444-444444444444
   cookie_prime_installation_id=33333333-3333-4333-8333-333333333333
-  cookie_prime_body=$(python3 - "$model" "$cookie_prime_session_id" <<'PY'
+  cookie_prime_turn_id=22222222-2222-4222-8222-222222222218
+  cookie_prime_metadata=$(printf \
+    '{"installation_id":"%s","session_id":"%s","thread_id":"%s","turn_id":"%s","window_id":"%s:0","request_kind":"turn","thread_source":"user","capture_variant":"cookie_prime"}' \
+    "$cookie_prime_installation_id" "$cookie_prime_session_id" "$cookie_prime_session_id" \
+    "$cookie_prime_turn_id" "$cookie_prime_session_id")
+  # 请求体与 core 采集的 write_request_body（lite 模式）同形：Lite 定型后的 input 前缀、关闭并行工具调用、
+  # client_metadata 与请求头的会话坐标和 turn-metadata 逐字一致。
+  cookie_prime_body=$(python3 - "$model" "$cookie_prime_session_id" "$cookie_prime_installation_id" \
+    "$cookie_prime_turn_id" "$cookie_prime_metadata" <<'PY'
 import json
 import sys
 
-model, session_id = sys.argv[1:]
+model, session_id, installation_id, turn_id, turn_metadata = sys.argv[1:]
 payload = {
     "model": model,
     "input": [
@@ -1194,24 +1202,32 @@ payload = {
                 "parameters": {"type": "object", "properties": {}},
             }],
         },
-        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "候选辅助抓包 Cookie 预热"}]},
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "候选辅助抓包 Cookie 预热"}],
+        },
         {"type": "message", "role": "user", "content": "candidate aux cookie prime"},
     ],
     "tool_choice": "auto",
     "parallel_tool_calls": False,
-    "reasoning": {"context": "all_turns"},
+    "reasoning": {"effort": "high", "context": "all_turns", "summary": "auto"},
     "store": False,
     "stream": True,
     "include": ["reasoning.encrypted_content"],
     "prompt_cache_key": session_id,
+    "client_metadata": {
+        "x-codex-installation-id": installation_id,
+        "session_id": session_id,
+        "thread_id": session_id,
+        "turn_id": turn_id,
+        "x-codex-window-id": session_id + ":0",
+        "x-codex-turn-metadata": turn_metadata,
+    },
 }
 print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 PY
 )
-  cookie_prime_metadata=$(printf \
-    '{"installation_id":"%s","session_id":"%s","thread_id":"%s","turn_id":"%s","window_id":"%s:0","request_kind":"turn","thread_source":"user","capture_variant":"cookie_prime"}' \
-    "$cookie_prime_installation_id" "$cookie_prime_session_id" "$cookie_prime_session_id" \
-    22222222-2222-4222-8222-222222222218 "$cookie_prime_session_id")
   code=$(request_with_token "$api_key" --output "$trigger_root/cookie-prime.sse" \
     --write-out '%{http_code}' -X POST "${common_gateway_headers[@]}" \
     -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
