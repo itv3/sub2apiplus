@@ -291,8 +291,11 @@ from urllib.parse import urlsplit
 # 仍在运行判定；候选审核下的段不再提示开后继段。control 层变化，监督器摘要随之变化。
 # 2026-09-28（第 53 项）：恢复段在段预约之前失败（执行失败或截止类）收为 recovery_required，经 reconcile-supervisor-run
 # 入账后由协议 15 承接同一段号重派；已预约的段仍按第 48 项。control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 60 项）：动作诊断升 v4，handled-error／unexpected-error 由写入方按异常原文落 es1 归一化拒因签名，
+# 对账器据此编成 campaign-run.action-error（维度 phase、failure_kind、error_type、error_signature）；v1～v3 照旧读、旧 ID 不变。
+# control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "95a8b409b5f725dc09aaca8eed515c988638215d3f794e3967cc810b67370913"
+    "c8db8176dbe6dfe9c88572a2ad20ede05d7cd2a682127b8129c8799720c92855"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
