@@ -276,8 +276,11 @@ from urllib.parse import urlsplit
 # 审计按失败终态走后继协议，续跑协议透传 Campaign 目录。control 层变化，wire／evidence 不变；监督器摘要随之变化。
 # 2026-09-28（修好接着跑第 30 项，B3-19）：恢复链协议核验父动作诊断不再按错误类型白名单，改为失败种类＋execution-failure 类别，
 # 显式排除清理／中断异常；补跑动作因任何工具缺陷抛出的异常修好后都能用 N+1 零请求预览承接。control 层变化，监督器摘要随之变化。
+# 2026-09-28（B4-1 后继协议层失败矩阵，含第 31 项）：失败父 run 共享事实、已对账的看门狗中止等同 failed、恢复链协议要求失败父 run
+# 已对账、候选后处理 execution-failure 与 canonical 动作识别、协议 8 判据、environment-prerequisite、拒因收集。control 层变化，
+# 监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "ae9ce809e9f8ed16ed364952e31f3ec044e4859879f0f57091302f45dcdf3579"
+    "c58dd8561b1b055889b79f511961ae8ceffdcc7cd922c3b8f5391b02b35ea16c"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
