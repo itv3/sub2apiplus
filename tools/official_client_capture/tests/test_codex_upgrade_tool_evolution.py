@@ -24,6 +24,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_policy_certification as certification
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+from tools.official_client_capture.tests import b4_reconciliation_fixtures
 from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
 from tools.official_client_capture import codex_upgrade_wire_transition as wt
@@ -567,15 +568,23 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
             "item_ids": ["candidate-run"],
         }
 
+    def _reconciled(self, campaign: str, state: dict, manifest: dict, run_dir: Path) -> tuple[dict, dict, Path]:
+        """第 31 项（B4-1 改法 4）：failed 类父 run 必须已对账——写最小合法 supervisor-run 收据并登记祖先总账。"""
+
+        b4_reconciliation_fixtures.bind_supervisor_run_reconciliation(Path(campaign), run_dir, state, manifest)
+        return state, manifest, run_dir
+
     def _capture_history(self, root: Path, *, failure=("child-returncode", "ChildProcessError", "execution-failure")):
-        campaign = str(root / "campaign")
+        campaign_dir = root / "campaign"
+        campaign_dir.mkdir(mode=0o700)
+        campaign = str(campaign_dir)
         campaign_id = "c-vc5-recovery"
         capture = self._manifest(1, [{
             "action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600.0,
             "command": self._capture_command(campaign), "item_ids": ["candidate-run"],
         }], campaign_id=campaign_id)
         state, run_dir = self._failed_run(root, "run-capture", campaign_id=campaign_id, action_id="candidate-run", failure=failure)
-        return campaign, campaign_id, [(state, capture, run_dir)]
+        return campaign, campaign_id, [self._reconciled(campaign, state, capture, run_dir)]
 
     def test_failed_capture_is_followed_by_zero_request_preview(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -584,23 +593,23 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
             preview = self._manifest(2, [self._preview_action(campaign)], campaign_id=campaign_id)
             # 修复后评估器摘要可以随工具演进变化（续跑批次按新授权编译）。
             preview["evaluator_digests"] = {**preview["evaluator_digests"], "checker_sha256": "9" * 64}
-            ordered = supervisor._validate_batched_campaign_history(preview, history)
+            ordered = supervisor._validate_batched_campaign_history(preview, history, campaign_dir=Path(campaign))
             self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
             # 候选身份参数漂移（换了构建）：拒绝。
             drifted = copy.deepcopy(preview)
             drifted["actions"][0]["command"][drifted["actions"][0]["command"].index("--build-id") + 1] = "other-build"
             with self.assertRaisesRegex(SupervisorError, "候选身份参数"):
-                supervisor._validate_batched_campaign_history(drifted, history)
+                supervisor._validate_batched_campaign_history(drifted, history, campaign_dir=Path(campaign))
             # 候选 revision 或 execute 分区变化：拒绝。
             for field, value in (("candidate_revision", 2), ("execute_items", ["candidate-run", "x"]), ("reuse_items", ["candidate-core-direct"])):
                 changed = copy.deepcopy(preview)
                 changed[field] = value
                 with self.subTest(field=field), self.assertRaisesRegex(SupervisorError, "候选身份参数|批次结构"):
-                    supervisor._validate_batched_campaign_history(changed, history)
+                    supervisor._validate_batched_campaign_history(changed, history, campaign_dir=Path(campaign))
             # 失败采集之后直接真实补跑（跳过零请求预览）：没有协议承接。
             direct_run = self._manifest(2, [self._run_action(campaign)], campaign_id=campaign_id)
             with self.assertRaisesRegex(SupervisorError, "唯一直接 v3 恢复后继"):
-                supervisor._validate_batched_campaign_history(direct_run, history)
+                supervisor._validate_batched_campaign_history(direct_run, history, campaign_dir=Path(campaign))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             campaign, campaign_id, history = self._capture_history(
@@ -608,7 +617,7 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
             )
             preview = self._manifest(2, [self._preview_action(campaign)], campaign_id=campaign_id)
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
-                supervisor._validate_batched_campaign_history(preview, history)
+                supervisor._validate_batched_campaign_history(preview, history, campaign_dir=Path(campaign))
 
     def test_failed_preview_is_redispatched_verbatim_and_failed_run_gets_new_preview(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -619,15 +628,15 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
                 root, "run-preview", campaign_id=campaign_id, action_id=supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
                 failure=("handled-error", "ConfigurationError", "execution-failure"),
             )
-            history = [*history, (preview_state, preview, preview_dir)]
+            history = [*history, self._reconciled(campaign, preview_state, preview, preview_dir)]
             retry = copy.deepcopy(preview)
             retry.update(batch_id="vc-5-0003", batch_sequence=3, batch_sha256="3" * 64)
-            ordered = supervisor._validate_batched_campaign_history(retry, history)
+            ordered = supervisor._validate_batched_campaign_history(retry, history, campaign_dir=Path(campaign))
             self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2])
             live = copy.deepcopy(retry)
             live["actions"] = [self._run_action(campaign)]
             with self.assertRaisesRegex(SupervisorError, "逐字沿用父预览批次"):
-                supervisor._validate_batched_campaign_history(live, history)
+                supervisor._validate_batched_campaign_history(live, history, campaign_dir=Path(campaign))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             campaign, campaign_id, history = self._capture_history(root)
@@ -638,13 +647,13 @@ class CandidateRecoverySuccessorTests(unittest.TestCase):
                 root, "run-recovery", campaign_id=campaign_id, action_id=supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID,
                 failure=("child-returncode", "ChildProcessError", "execution-failure"),
             )
-            history = [*history, (preview_state, preview, root / "run-preview-ok"), (run_state, run, run_dir)]
+            history = [*history, (preview_state, preview, root / "run-preview-ok"), self._reconciled(campaign, run_state, run, run_dir)]
             next_preview = self._manifest(4, [self._preview_action(campaign)], campaign_id=campaign_id)
-            ordered = supervisor._validate_batched_campaign_history(next_preview, history)
+            ordered = supervisor._validate_batched_campaign_history(next_preview, history, campaign_dir=Path(campaign))
             self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2, 3])
             again = self._manifest(4, [self._run_action(campaign)], campaign_id=campaign_id)
             with self.assertRaisesRegex(SupervisorError, "零请求预览"):
-                supervisor._validate_batched_campaign_history(again, history)
+                supervisor._validate_batched_campaign_history(again, history, campaign_dir=Path(campaign))
 
     def test_capture_command_parsing_and_action_classification(self) -> None:
         campaign = "/campaign"

@@ -3413,6 +3413,14 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   重新对账）以首次落盘的收据为准；`root_cause` 单值与 `failure_observations`／`root_causes` 数组同源（暂停时是
   attempt.accounting-unresolved，补账后重算成真实根因），三者都是易变字段（`RECEIPT_ROOT_CAUSE_VOLATILE_FIELDS`），续接时不再以
   "既有对账收据与当前事实不一致，拒绝覆盖"失败关闭；批次按 operation 复用、账本事件幂等、决策按当前账务重算。
+- **后继协议层失败矩阵（B4-1，含第 31 项）**：失败父 run 的终态种类与失败动作由 `_failed_parent_facts` 统一判定
+  （action-failed／超时／中断／其它异常／看门狗／父 run 创建或收尾失败；推断不出失败动作不硬接），协议 3／6／7／14／15 共用；
+  已对账的看门狗中止与 failed 同等对待，run 期间有预约时按 attempt 对账收据分流；恢复链协议要求失败父 run 已对账
+  （无预约认 supervisor-run 收据与总账 `reconcile-supervisor-run:<run>`，有预约认每个预约的 attempt 收据与
+  `reconcile-attempt:<id>`；缺 Campaign 目录失败关闭）；协议 7／2 用 `candidate_post_run_recovery_action` 同一判定接受候选零请求
+  后处理的 execution-failure；seal 链动作解析识别 canonical 命令；协议 8 改用恢复链失败判据（超时不比 message、强杀由对账收据
+  承接）；恢复链类别集合加 environment-prerequisite（run 期间有未收口预约时协议 7 让位）；入口表驱动并收集每条协议的拒因，
+  兜底文案带前序事实与全部拒因。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，
