@@ -285,8 +285,10 @@ from urllib.parse import urlsplit
 # control 层变化，监督器摘要随之变化。
 # 2026-09-28（第 51 项）：staging 提交步骤失败时监督器先把异常类型、原文与签名写进 staging-commit-failure.json 再封存。
 # control 层变化，监督器摘要随之变化。
+# 2026-09-28（第 49 项）：恢复链截止类失败（WallClockTimeoutError／CampaignCleanupRequested 的 deadline-expired）由协议承接，
+# VC-5 续跑链截止失败收账进 recovery_required。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "0136cb8b281234df57e2e07a2b412ef7aacb3977f6ee1aa31eaecabda5f900dc"
+    "75cc47665f3eb83229a73507353a4ad1214dbab662f36d4098f6f1339170ccb4"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

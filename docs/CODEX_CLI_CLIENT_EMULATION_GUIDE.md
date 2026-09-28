@@ -3465,6 +3465,13 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   （stopped／complete／abandoned）时不补；有预约路径另要求账本 active 且处于失败阶段、父 run 之后没有更高序号的 COMMIT、同阶段没有
   更晚的预约、本 attempt／恢复段最后一条账本事件之后只有预算控制或 campaign-resume 的恢复登记。看门狗形态的诊断不唯一、指向清单外
   动作、无法重放或绑定漂移时对账失败关闭，不补账也不入账。owner 死在收账中途时续作，两条事件各只一条。
+- **VC-5 续跑链截止类失败（第 49 项）**：按预览真实补跑或零请求续跑预览以截止类失败收口（诊断 deadline-expired：子进程预算检查的
+  WallClockTimeoutError，或父监督器执行截止清理的 CampaignCleanupRequested）时，收账进入 `recovery_required`（收账时预算已到期则先
+  登记预算暂停），不进候选审核，不需要部署、登记 tool-evolution 或作废候选。处置：`deadline-extend` 预览与批准延期 → 补跑已发布预约
+  的用 `reconcile-attempt`，补跑在预约前失败或续跑预览失败的用 `reconcile-supervisor-run` → 有预约时批准恢复预览并授权 → 派发 N+1
+  零请求续跑预览（续跑预览失败则 N+1 逐字重派预览）→ 批准后补跑。首次候选采集的截止失败仍进候选审核：有预约时审核下对账、批准、
+  授权后同样派发零请求续跑预览；预约前失败由人工裁定。官方 VC-1 采集与补跑的截止失败仍进阶段审核，有预约时对账、批准、授权后由
+  N+1 零请求预览承接。中断类诊断与自称 deadline-expired 的其它异常类型仍拒绝；请求账务不确定须先 `accounting-resolve`。
 - **根因上限只暂停（第 46 项）**：同根因重试上限在父监督器收账与对账判定两处同一口径，按第三批 B3-9 只暂停、不停线。项目总账里
   本次根因达上限（Campaign 账本仍 active）时收账照常路由到 `recovery_required`／阶段审核／候选审核；Campaign 账本已 `stop_required`
   时计时账本只接受放弃阶段、停线与 campaign-resume，收账不写任何事件、返回暂停结果（也不登记预算暂停）。是否暂停由对账照 B3-9 判定：
