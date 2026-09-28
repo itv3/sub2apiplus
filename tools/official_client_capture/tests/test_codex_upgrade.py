@@ -24091,6 +24091,120 @@ class CodexUpgradeTest(unittest.TestCase):
             receipt = campaign_dir / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json"
             self.assertFalse(receipt.exists())
 
+    def _r2_sealed_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        inner: dict[str, object],
+        action_id: str,
+        phase: str,
+        diagnostic: tuple[str, str, str],
+        action_failed_reason: str,
+    ) -> tuple[dict[str, object], Path]:
+        """第 44 项／第 38 项夹具：monitor 按 R2 确定性封存的 failed／action-failed:<id> 父 run。
+
+        父进程已追加该动作的 action-failed 事件、诊断已落盘，随后在失败收账之前丢失；monitor 以 supervisor:owner-check
+        追加 failed 事件并写 stop receipt（没有动作输出绑定时摘要为 null），账本没有任何收口事件。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        run_dir = self._b0_run_dir(fixture, name, phase=phase, state="failed", batched_manifest=inner, started_offset_seconds=5.0)
+        state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        identity = {
+            "owner_pid": int(state["owner_pid"]), "owner_nonce": str(state["owner_nonce"]),
+            "campaign_id": str(state["campaign_id"]), "phase": phase,
+        }
+        operation = next(str(item["operation"]) for item in inner["actions"] if item["action_id"] == action_id)
+        supervisor._append_event(run_dir, event_type="action-started", operation=operation, job_id=action_id, status="running", **identity)
+        supervisor._append_event(
+            run_dir, event_type="action-failed", operation=operation, job_id=action_id, status="failed",
+            reason=action_failed_reason, **identity,
+        )
+        self._d07_write_diagnostic(run_dir, state, action_id, diagnostic)
+        supervisor._append_event(
+            run_dir, event_type="failed", operation="supervisor:owner-check", status="failed",
+            reason=f"action-failed:{action_id}", **identity,
+        )
+        supervisor._stop_receipt(
+            run_dir, event_type="failed", reason=f"action-failed:{action_id}", detected_at_epoch=float(state["terminal_at_epoch"]),
+            action_outputs_sha256=None, **identity,
+        )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        return state, run_dir
+
+    def test_item44_r2_sealed_candidate_failure_enters_candidate_review(self) -> None:
+        """第 44 项（VC-4～VC-6 的 R2 封存非可恢复失败）：VC-5 候选绑定批次的 candidate-run 以截止清理诊断（deadline-expired）
+        失败，父进程在失败收账之前丢失、monitor 按 R2 封存。修复前对账不收账，判 recoverable、写 reconcile-run-passed 并
+        提示"重新派发同一批次"，而逐字重派（只接可恢复类）与零请求续跑预览（只接处理型失败）都拒绝这个诊断；修复后对账
+        以父监督器同一收账函数补齐 stage_abandoned＋candidate_review_required，提示按候选审核处置（作废候选或显式停线），
+        不再许可重派——与后继协议的判据一致。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._b0_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            identity = dict(
+                self._B4_IDENTITY, **{"--build-receipt": str(campaign_dir / "candidates" / "cand-1" / "build-receipt.json")}
+            )
+            capture_action = {
+                "action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600.0,
+                "command": [
+                    *self._B4_PREFIX, "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                    *[token for flag, value in identity.items() for token in (flag, value)],
+                    "--acknowledge-live-requests",
+                ],
+                "item_ids": ["candidate-run"],
+            }
+            binding = {"candidate_id": "cand-1", "candidate_revision": 1}
+            prior = self._b4_vc5_manifest(
+                fixture, batch_sequence=1, actions=[capture_action], execute=["candidate-run"], reuse=[], **binding
+            )
+            state, run_dir = self._r2_sealed_run(
+                fixture, "4" * 64, inner=prior, action_id="candidate-run", phase="VC-5",
+                diagnostic=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+                action_failed_reason="cleanup-requested-timeout",
+            )
+            verbatim = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, actions=[capture_action], execute=["candidate-run"], reuse=[], **binding
+            )
+            preview = self._b4_vc5_manifest(
+                fixture, batch_sequence=2, execute=["candidate-run"], reuse=[],
+                actions=[{
+                    "action_id": supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                    "operation": supervisor.CANDIDATE_RECOVERY_OPERATION,
+                    "timeout_seconds": 1800.0,
+                    "command": supervisor.candidate_recovery_preview_command(self._B4_PREFIX, str(campaign_dir), identity),
+                    "item_ids": ["candidate-run"],
+                }],
+                **binding,
+            )
+            history = [(state, prior, run_dir)]
+            for successor in (verbatim, preview):
+                with self.assertRaises(supervisor.SupervisorError):
+                    supervisor._validate_batched_campaign_history(successor, history, campaign_dir=campaign_dir, staging_model=False)
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            backfill = result.get("ledger_closeout_backfill")
+            self.assertIsNotNone(backfill, result)
+            self.assertEqual(
+                (backfill["action_id"], backfill["failure_class"], backfill["ledger_status"]),
+                ("candidate-run", "deadline-expired", "candidate_review_required"),
+            )
+            self.assertIn("invalidate-candidate", result["next_command"])
+            self.assertNotIn("重新派发同一批次", result["next_command"])
+            events = self._b0_ledger_events(ledger_dir)
+            self.assertIn("candidate_review_required", [event_type for event_type, _event_id in events])
+            self.assertNotIn(("receipt_passed", f"reconcile-run-passed-{run_dir.name}"), events)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "candidate_review_required")
+            # 重复对账幂等：不再补账，账本不增事件。
+            again = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertNotIn("ledger_closeout_backfill", again)
+            self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""

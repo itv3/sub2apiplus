@@ -4341,7 +4341,10 @@ def _backfill_orphaned_action_failure(
 
 # 第 39 项：阶段审核阶段（VC-1～VC-3）。这些阶段的非可恢复动作失败由父监督器收账为阶段审核（永久类停线），
 # 阶段幂等重派证明只在账本处于阶段审核态时才写，所以收账缺失时后继协议全部无路。
-ORPHANED_CLOSEOUT_BACKFILL_PHASES = frozenset({"VC-1", "VC-2", "VC-3"})
+# 第 44 项：候选级阶段（VC-4～VC-6）同构——非可恢复动作失败由父监督器收账为候选审核（VC-4 的 R18 幂等重派证明也只在
+# 候选审核态才写；VC-5 候选采集续跑链与 VC-5／VC-6 零请求后处理的 execution-failure 收为 recovery_required），收账缺失时
+# 对账同样按 active 提示"重新派发同一批次"，而后继协议拒绝重派与续跑预览。VC-0 不经 campaign-run 动作失败收账，不在此列。
+ORPHANED_CLOSEOUT_BACKFILL_PHASES = frozenset({"VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"})
 
 
 def _backfill_orphaned_failure_closeout(
@@ -4362,7 +4365,8 @@ def _backfill_orphaned_failure_closeout(
     沿用既有阶段审核对账：动作幂等合同成立才写证明并由阶段审核协议唯一承接 N+1 重派，不成立留在审核。
 
     只在同时满足时补做：前置锁段确认是 R2 封存且 owner 已死（``orphan_backfill`` 非 None）；阶段属
-    VC-1～VC-3；有效失败类是阶段审核类——不在可恢复集合（它们的 receipt_passed 与逐字重派协议原本可走），
+    VC-1～VC-3（第 44 项起含候选级阶段 VC-4～VC-6，收账函数按阶段路由为候选审核或 recovery_required）；
+    有效失败类是阶段审核类——不在可恢复集合（它们的 receipt_passed 与逐字重派协议原本可走），
     也不在永久集合（完整性类由对账强制停线，其余永久类照旧没有后继协议；两者行为都不变）；账本里还没有
     本次失败的审核、恢复、停线事件或对账许可。已收口（含对账后已重开的阶段）一律不动，避免对同一次失败
     重复放弃阶段。
@@ -4472,8 +4476,8 @@ def reconcile_supervisor_run(
         if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
             action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
         run["orphan_facts"] = orphan_backfill["orphan_facts"]
-    # 第 39 项：R2 封存（以及看门狗中止＋动作诊断）的 VC-1～VC-3 非可恢复失败，先补做 owner 丢失前未完成的失败收账，
-    # 再按账本现状对账。
+    # 第 39 项／第 44 项：R2 封存（以及看门狗中止＋动作诊断）的 VC-1～VC-6 非可恢复失败，先补做 owner 丢失前未完成的
+    # 失败收账，再按账本现状对账。
     closeout_backfill = _backfill_orphaned_failure_closeout(
         resolved_run_dir, campaign_dir, run, orphan_backfill, ledger_dir
     )

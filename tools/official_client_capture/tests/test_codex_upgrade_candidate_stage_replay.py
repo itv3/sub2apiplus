@@ -341,6 +341,86 @@ class CandidateStageReplayChainTests(unittest.TestCase):
         self.assertIn("无已知幂等动作合同", " ".join(vc5["reasons"]))
         self.assertTrue(os.path.islink(link))
 
+    def _dispatch_owner_lost(self, fixture: dict, phase: str, sequence: int, plan: Path, *, kill_point: str) -> Path:
+        """第 44 项：独立子进程经原子入口派发该阶段批次，owner 在给定杀点被 SIGKILL（与第 39 项同一替身脚本）；
+        等 monitor 封存终态后返回父 run。"""
+
+        import signal
+        import subprocess
+        import time
+
+        from tools.official_client_capture.tests.test_codex_upgrade_stage_recovery import _OWNER_LOST_AT_CLOSEOUT
+
+        arguments = self.case._vc_chain_arguments(fixture, phase, sequence, plan)
+        values = {key: str(value) if isinstance(value, Path) else value for key, value in vars(arguments).items()}
+        repo_root = Path(upgrade.__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [sys.executable, "-c", _OWNER_LOST_AT_CLOSEOUT, str(repo_root), json.dumps(values), kill_point],
+            cwd=repo_root, capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(completed.returncode, -signal.SIGKILL, completed.stdout[-2000:] + completed.stderr[-2000:])
+        runs = [path for path in fixture["state_dir"].glob("run-*") if supervisor._read_state(path).get("phase") == phase]
+        self.assertEqual(len(runs), 1, runs)
+        run_dir = runs[0]
+        deadline = time.monotonic() + 60.0
+        while supervisor._read_state(run_dir)["state"] not in supervisor.TERMINAL_STATES:
+            self.assertLess(time.monotonic(), deadline, "monitor 未在 60 秒内封存 owner 丢失的父 run")
+            time.sleep(0.2)
+        return run_dir
+
+    def test_r2_sealed_record_failure_backfills_candidate_review_then_single_protocol_redispatch(self) -> None:
+        """第 44 项（VC-4～VC-6 的 R2 封存非可恢复失败）：VC-4 record 动作失败、owner 在失败收账入口丢失，monitor 按 R2
+        确定性封存为 failed／action-failed:record-candidate-build，账本停在 active、没有候选审核。修复前对账只按 active
+        写 receipt_passed、提示"重新派发同一批次"，不写 R18 证明，N+1 没有协议承接；修复后对账以父监督器同一收账函数
+        补齐 stage_abandoned＋candidate_review_required，随后沿用 R18：证明成立即在同一 revision 重开 VC-4，只有阶段审核
+        协议承接 N+1，N+1 被原子入口接纳并真实执行；重复对账不再补账。"""
+
+        root = self.base / "r2-record"
+        root.mkdir(mode=0o700)
+        fixture = self._to_vc4(root)
+        campaign, timing = fixture["campaign_dir"], fixture["timing_ledger"]
+        flags = self._record_flags(root, fixture)
+        plan = self._plan(root, "record", "record-candidate-build", flags)
+        run_dir = self._dispatch_owner_lost(fixture, "VC-4", 4, plan, kill_point="closeout")
+        self.assertEqual(supervisor._read_state(run_dir)["state"], "failed")
+        self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "action-failed:record-candidate-build")
+        self.assertTrue(any(event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
+                            for event in supervisor.load_events(run_dir)))
+        before = ledger.inspect_ledger(timing)
+        self.assertEqual((before["status"], before["active_phase"]), ("active", "VC-4"))
+
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        backfill = result.get("ledger_closeout_backfill")
+        self.assertIsNotNone(backfill, result)
+        self.assertEqual((backfill["action_id"], backfill["ledger_status"]), ("record-candidate-build", "candidate_review_required"))
+        proof = result["stage_replay"]
+        self.assertTrue(proof["allowed"], proof)
+        self.assertIn("同一 revision 重开", result["next_command"])
+        state = ledger.inspect_ledger(timing)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]),
+                         ("active", "VC-4", "redispatch-same-batch"))
+        head = state["head_sequence"]
+        again = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertNotIn("ledger_closeout_backfill", again)
+        self.assertEqual(again["stage_replay"], proof)
+        self.assertEqual(ledger.inspect_ledger(timing)["head_sequence"], head)
+
+        inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+        prior_state = supervisor._read_state(run_dir)
+        successor = json.loads(json.dumps(inner))
+        successor.update(batch_id="vc-4-0005", batch_sequence=5, batch_sha256="5" * 64)
+        accepted = []
+        for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+            try:
+                if protocol(prior_state, inner, run_dir, successor, campaign_dir=campaign):
+                    accepted.append(name)
+            except supervisor.SupervisorError:
+                pass
+        self.assertEqual(accepted, ["stage_review"])
+        again_failed, code = upgrade.compile_and_run_vc_batch(self.case._vc_chain_arguments(fixture, "VC-4", 5, plan))
+        self.assertEqual((code, again_failed["campaign_run"]["reason"]), (1, "action-failed:record-candidate-build"), again_failed)
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0005-vc-4.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
