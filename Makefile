@@ -235,6 +235,42 @@ test-frontend-critical:
 # 抓包工具提交态测试只使用合成数据，不联网、不读取真实凭据、不启动抓包进程；
 # 依赖 local-analysis 的原始证据复算仅在本机证据存在时执行。Claude bundle AST 用
 # frontend lockfile 中的 TypeScript 解析器，禁止临时下载或浮动版本。
+# 分片并行（2026-09-28 老板拍板：保持全量门禁、把 test-capture-tools 拆成 N 片并行）。分片与全量共用同一 discover 语义，
+# 分片器先做闭合自检（并集＝全量、互不相交、权重表无陈旧条目），任一片失败即失败。CI 按 matrix 逐片跑，本机门禁跑 parallel。
+CAPTURE_TEST_SHARDS ?= 4
+CAPTURE_TEST_SHARD_LOG_DIR ?= $(or $(RUNNER_TEMP),$(TMPDIR),/tmp)/capture-test-shards
+define CAPTURE_TS_MODULE_CHECK
+	python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and hashlib.sha256(p.read_bytes()).hexdigest() == expected) or sys.exit("CAPTURE_TYPESCRIPT_MODULE 非法或摘要不符")' \
+		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"
+	node --version >/dev/null
+endef
+
+test-capture-tools-shard-check:
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_test_shards.py check --count $(CAPTURE_TEST_SHARDS)
+
+# 单片：SHARD_INDEX=1..$(CAPTURE_TEST_SHARDS)
+test-capture-tools-shard:
+	@$(CAPTURE_TS_MODULE_CHECK)
+	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
+		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_test_shards.py run \
+		--count $(CAPTURE_TEST_SHARDS) --index $(SHARD_INDEX)
+
+# 本机并行：N 片同时跑，日志各写一份，全部通过才成功。
+test-capture-tools-parallel: test-capture-tools-shard-check
+	@$(CAPTURE_TS_MODULE_CHECK)
+	@mkdir -p "$(CAPTURE_TEST_SHARD_LOG_DIR)"; rc=0; pids=""; \
+	for i in $$(seq 1 $(CAPTURE_TEST_SHARDS)); do \
+		( CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" PYTHONDONTWRITEBYTECODE=1 \
+		  python3 tools/ci/capture_test_shards.py run --count $(CAPTURE_TEST_SHARDS) --index $$i \
+		  > "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" 2>&1; echo "exit=$$?" >> "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" ) & pids="$$pids $$!"; \
+	done; \
+	for p in $$pids; do wait $$p || rc=1; done; \
+	for i in $$(seq 1 $(CAPTURE_TEST_SHARDS)); do \
+		printf 'shard %s: %s | %s\n' "$$i" "$$(grep -E '^Ran ' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" | tail -1)" "$$(grep -E '^(OK|FAILED)' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" | tail -1)"; \
+		grep -q '^exit=0$$' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" || rc=1; \
+	done; \
+	exit $$rc
+
 test-capture-tools:
 	@python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and p.is_file()) or sys.exit("🔴 TypeScript AST 解析器必须是绝对路径下的普通文件（允许 pnpm 父目录符号链接）"); actual = hashlib.sha256(p.read_bytes()).hexdigest(); actual == expected or sys.exit(f"🔴 TypeScript AST 解析器摘要不一致：{actual}")' \
 		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"

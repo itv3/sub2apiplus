@@ -10,8 +10,14 @@ permissions:
   contents: read
 
 jobs:
+  # 2026-09-28：保持全量、分 4 片并行（tools/ci/capture_test_shards.py 与 make test-capture-tools 同一 discover 语义；
+  # 每片先做闭合自检：并集＝全量、互不相交、权重表无陈旧条目）。
   capture-tools:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -32,8 +38,10 @@ jobs:
       - name: Install locked AST parser
         working-directory: frontend
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Official client capture tool tests
-        run: make test-capture-tools
+      - name: Capture test shard closure check
+        run: make test-capture-tools-shard-check CAPTURE_TEST_SHARDS=4
+      - name: Official client capture tool tests (shard ${{ matrix.shard }}/4)
+        run: make test-capture-tools-shard CAPTURE_TEST_SHARDS=4 SHARD_INDEX=${{ matrix.shard }}
 
   egress-spec-gates:
     runs-on: ubuntu-latest
