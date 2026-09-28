@@ -35204,29 +35204,38 @@ def _evidence_root_supersessions(campaign_dir: Path) -> list[dict[str, Any]]:
     return receipts
 
 
-def _directory_identity(path: Path) -> tuple[int, int] | None:
+def _directory_identity(path: Path, *, ignore_device: bool = False) -> tuple[int, int] | None:
     try:
         metadata = path.lstat()
     except FileNotFoundError:
         return None
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
         raise ConfigurationError(f"取代证据根路径不是可信目录：{path}")
-    return metadata.st_dev, metadata.st_ino
+    # 第 66 项：隔离封存预演（OverlayFS 副本）里目录 st_dev 是 overlay 自己的设备号，调用方判定后只比 inode。
+    return (0 if ignore_device else metadata.st_dev), metadata.st_ino
 
 
 def _supersession_row_state(row: Mapping[str, Any], all_rows: Sequence[Mapping[str, Any]]) -> str:
     """archived：归档目录就是收据绑定的原目录；pending：收据已写、rename 未完成（原路径仍是原目录）；
     taken_over：原目录后来由另一张收据归档（崩溃后下一次续跑接管）。其余不一致一律失败关闭。"""
 
-    identity = (int(row["device"]), int(row["inode"]))
-    if _directory_identity(Path(str(row["archived_host_root"]))) == identity:
+    # 修好接着跑第 66 项：rehearse-candidate-seal 在私有 mount namespace 的 OverlayFS 副本上复核取代状态时，目录 st_dev
+    # 必然与收据记录的正式设备号不同。与 EvidenceManifest 同一判据（预演标记为 1 且证据根确在 overlay 上）只忽略 device，
+    # inode 照常比较；正式目录上判据不变。
+    rehearsal = codex_upgrade_evidence_manifest._isolated_rehearsal_context([Path(str(row["host_root"])).parent])
+
+    def recorded(item: Mapping[str, Any]) -> tuple[int, int]:
+        return (0 if rehearsal else int(item["device"])), int(item["inode"])
+
+    identity = recorded(row)
+    if _directory_identity(Path(str(row["archived_host_root"])), ignore_device=rehearsal) == identity:
         return "archived"
-    if _directory_identity(Path(str(row["host_root"]))) == identity:
+    if _directory_identity(Path(str(row["host_root"])), ignore_device=rehearsal) == identity:
         return "pending"
     if any(
         other is not row
-        and (int(other["device"]), int(other["inode"])) == identity
-        and _directory_identity(Path(str(other["archived_host_root"]))) == identity
+        and recorded(other) == identity
+        and _directory_identity(Path(str(other["archived_host_root"])), ignore_device=rehearsal) == identity
         for other in all_rows
     ):
         return "taken_over"
