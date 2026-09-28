@@ -3394,6 +3394,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   SPEC-PROTO-001 `no-alpn` 在候选侧失败。按 §4.5.3 声明 `environment_probe_sni`；断言器、编目器、声明属 evidence_semantics，
   manifest schema 属 control，wire 不变。修好后登记工具演进（追加评估 epoch，不重采）；候选断言包按新声明重新生成后，
   再从 seal 链续跑。
+- **标签换版后的演练合同（第 58 项）**：完整 Job 演练合同含目标版本证据标签摘要，执行前原本要求与当前一致，标签经工具演进
+  换版后恢复预览会以“Formal 执行合同与 ARM64 完整 Job 演练不一致”失败。现在执行前只要当前标签由有效演进登记、演练时的标签是
+  更早登记过的状态（plan 冻结身份或此前某次演进）、其余合同字段逐字段相同，就沿用原演练收据；当前标签仍在构造合同时重新校验
+  覆盖正式 Job 集。没有登记演进、登记的不是当前标签、来源对不上或其他字段变化，一律按当前合同关闭。
 - **批准画像 selector 修正**：`evaluation-recover approval-revision --assertion-profile`（§4.5.5）开 approval-revision 基线
   零请求重评，候选 revision 不变。
 - **候选阶段零请求后处理动作失败**：进 `recovery_required`，修好工具后重派，不再进候选待审；批次中途评估器漂移

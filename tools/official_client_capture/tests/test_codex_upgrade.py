@@ -14881,6 +14881,117 @@ class CodexUpgradeTest(unittest.TestCase):
                     _control_override=drifted,
                 )
 
+    def test_item58_label_change_registered_by_tool_evolution_keeps_rehearsal_for_execution(
+        self,
+    ) -> None:
+        """修好接着跑第 58 项：证据标签（evidence_semantics）经工具演进登记换版后，执行前仍可沿用原完整 Job 演练收据。
+
+        0.157 194249z 的第 54～56 项改了目标版本标签文件，演进 14 已登记；恢复预览却因演练合同里的
+        evidence_label_declaration_sha256 与当前不同，以“Formal 执行合同与 ARM64 完整 Job 演练不一致”失败——
+        标签按设计只追加评估 epoch、不重采，演练的 Job／工具／容器合同逐字段未变。修复后只在“当前标签由有效演进
+        登记、演练时的标签是更早登记过的状态、其余合同字段全部相同”时沿用原收据，其余一律按当前合同关闭。
+        """
+
+        from tools.official_client_capture import codex_upgrade_wire_transition as transition
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "campaign-root",
+                campaign_id="upgrade-0154-item58-label-evolution",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+            rehearsal = manifest["control_receipts"]["job_rehearsal"]
+            receipt = json.loads(
+                (Path(rehearsal["evidence_root"]) / rehearsal["receipt"]["path"]).read_text(encoding="utf-8")
+            )
+            historical = receipt["execution_contract"]
+            frozen_digest = historical["evidence_label_declaration_sha256"]
+            label_path = "codex_upgrade_evidence_labels_0_154_0.json"
+            rotated = "0" * 64 if frozen_digest != "0" * 64 else "1" * 64
+            unrelated = "2" * 64
+            # 本类夹具的合成 Job id 不在正式声明内，演练收据里的标签摘要回退为固定值（见 setUp）；真实环境中它就是
+            # plan 冻结身份里目标版本标签文件的摘要。aligned 复现真实关系：plan 身份的标签条目等于演练摘要。
+            aligned = json.loads(json.dumps(manifest))
+            for entry in aligned["tool_identity"]["entries"]:
+                if entry["path"] == label_path:
+                    entry["sha256"] = frozen_digest
+            self.assertIn(label_path, {entry["path"] for entry in aligned["tool_identity"]["entries"]})
+
+            def chain_registering(digest: str) -> list[dict]:
+                identity = json.loads(json.dumps(aligned["tool_identity"]))
+                for entry in identity["entries"]:
+                    if entry["path"] == label_path:
+                        entry["sha256"] = digest
+                return [{
+                    "index": 1,
+                    "receipt_sha256": "e" * 64,
+                    "to_identity": identity,
+                    "to_summary": transition.identity_summary(identity),
+                }]
+
+            def contract(target_manifest: dict) -> dict:
+                return codex_upgrade._job_rehearsal_contract_from_manifest(
+                    campaign_dir, target_manifest, recovery_rehearsal_receipt=receipt
+                )
+
+            with mock.patch.object(
+                codex_upgrade_job_rehearsal_receipt,
+                "_target_evidence_label_declaration_sha256",
+                return_value=rotated,
+            ):
+                # 1) 没有登记演进：执行前仍按当前合同关闭（原语义不变）。
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Formal 执行合同"):
+                    codex_upgrade._verify_control_receipts(campaign_dir, manifest, require_active=True)
+                self.assertEqual(contract(manifest)["evidence_label_declaration_sha256"], rotated)
+
+                # 2) 有效演进登记的正是当前标签：沿用原演练合同，Formal 兼容检查通过。
+                with mock.patch.object(transition, "load_evolutions", return_value=chain_registering(rotated)):
+                    reused = contract(aligned)
+                    self.assertEqual(reused, historical)
+                    codex_upgrade_job_rehearsal_receipt.assert_formal_compatible(receipt, reused)
+
+                # 3) 演进登记的是别的标签：当前标签未登记，关闭。
+                with mock.patch.object(transition, "load_evolutions", return_value=chain_registering(unrelated)):
+                    current = contract(aligned)
+                    self.assertEqual(current["evidence_label_declaration_sha256"], rotated)
+                    with self.assertRaisesRegex(
+                        codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError, "Formal 执行合同"
+                    ):
+                        codex_upgrade_job_rehearsal_receipt.assert_formal_compatible(receipt, current)
+
+                # 4) 演练时的标签不是任何登记过的状态（plan 身份里的标签与演练对不上）：关闭。
+                drifted = json.loads(json.dumps(aligned))
+                for entry in drifted["tool_identity"]["entries"]:
+                    if entry["path"] == label_path:
+                        entry["sha256"] = unrelated
+                drifted_chain = chain_registering(rotated)
+                with mock.patch.object(transition, "load_evolutions", return_value=drifted_chain):
+                    self.assertEqual(contract(drifted)["evidence_label_declaration_sha256"], rotated)
+
+                # 5) 标签之外还有其他合同字段变化：即使演进登记了当前标签也关闭。
+                original_build = codex_upgrade_job_rehearsal_receipt.build_execution_contract
+
+                def build_with_suite_drift(**kwargs):
+                    built = original_build(**kwargs)
+                    built["suite"] = str(built.get("suite")) + "-drift"
+                    return built
+
+                with mock.patch.object(transition, "load_evolutions", return_value=chain_registering(rotated)), \
+                        mock.patch.object(
+                            codex_upgrade_job_rehearsal_receipt,
+                            "build_execution_contract",
+                            side_effect=build_with_suite_drift,
+                        ):
+                    self.assertNotEqual(contract(aligned), historical)
+
     def test_frozen_rehearsal_replays_after_evaluator_label_digest_rotation(
         self,
     ) -> None:

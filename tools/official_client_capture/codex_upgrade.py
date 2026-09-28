@@ -12302,6 +12302,49 @@ def _job_rehearsal_contract_from_arguments(
         raise ConfigurationError(f"Formal Job 执行合同非法：{error}") from error
 
 
+def _evidence_label_change_registered_by_evolution(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    historical_digest: str,
+    current_digest: str,
+) -> bool:
+    """判断完整 Job 演练合同里的证据标签摘要变化是否已由本 Campaign 的工具演进逐次登记（第 58 项）。
+
+    同时满足才算登记：
+    * 工具演进链非空；
+    * 当前标签摘要等于有效身份（最新演进的 to 身份）登记的目标版本标签文件摘要；
+    * 演练收据里的历史摘要是更早登记过的状态（plan 冻结身份或此前某次演进的 to 身份），
+      即标签从演练时的版本一路经演进登记变到当前版本，中间没有未登记的来源。
+    演进链无法重放时失败关闭（抛出 ConfigurationError），不静默放行。
+    """
+
+    if historical_digest == current_digest or not SHA256_RE.fullmatch(current_digest):
+        return False
+    target_version = str(manifest.get("target_version", ""))
+    label_path = f"codex_upgrade_evidence_labels_{target_version.replace('.', '_')}.json"
+    try:
+        chain = codex_upgrade_wire_transition.load_evolutions(campaign_dir, manifest)
+        if not chain:
+            return False
+        identities = [
+            codex_upgrade_wire_transition.evolution_identity_at(chain, manifest, index)
+            for index in range(len(chain) + 1)
+        ]
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"工具演进链无法重放：{error}") from error
+
+    def label_digest(identity: Mapping[str, Any]) -> str | None:
+        for entry in identity.get("entries") or []:
+            if isinstance(entry, Mapping) and entry.get("path") == label_path:
+                value = entry.get("sha256")
+                return str(value) if isinstance(value, str) else None
+        return None
+
+    states = [label_digest(identity) for identity in identities]
+    return states[-1] == current_digest and historical_digest in states[:-1]
+
+
 def _job_rehearsal_contract_from_manifest(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -12367,9 +12410,7 @@ def _job_rehearsal_contract_from_manifest(
             wire_producer_sha256=tool_identity.get("wire_producer_sha256"),
             policy_sha256=tool_identity.get("policy_sha256"),
         )
-        if not _allow_bound_evidence_label_digest or not isinstance(
-            recovery_rehearsal_receipt, Mapping
-        ):
+        if not isinstance(recovery_rehearsal_receipt, Mapping):
             return current_contract
         historical_contract = recovery_rehearsal_receipt.get(
             "execution_contract"
@@ -12385,10 +12426,28 @@ def _job_rehearsal_contract_from_manifest(
             for key in set(current_contract) | set(historical_contract)
             if current_contract.get(key) != historical_contract.get(key)
         }
-        if changed == {"evidence_label_declaration_sha256"}:
+        if changed != {"evidence_label_declaration_sha256"}:
+            # Job、场景、环境、工具和其他合同字段任一变化，一律按当前合同关闭。
+            return current_contract
+        if _allow_bound_evidence_label_digest:
             # 调用方已按 Campaign／control epoch 的不可变文件绑定重放这份
-            # 演练收据。证据标签属于 evaluator 身份；只允许承接其旧摘要，
-            # Job、场景、环境、工具和其他合同字段任一变化仍按当前合同关闭。
+            # 演练收据。证据标签属于 evaluator 身份；只读历史校验允许承接其旧摘要。
+            return historical_contract
+        # 修好接着跑第 58 项：真正执行前原本一律要求当前标签合同，防止旧演练绕过新 evaluator；但标签属
+        # evidence_semantics，按设计变化只追加评估 epoch、不重采。标签变化已由本 Campaign 的工具演进逐次登记
+        # （受监督部署＋预览＋批准）时，新 evaluator 已被显式批准，当前标签仍在上方 build_execution_contract
+        # 里重新校验覆盖正式 Job 集，旧演练收据的其余合同与当前逐字段相同，因此沿用原收据；未登记或来源
+        # 对不上时仍按当前合同关闭。
+        if _evidence_label_change_registered_by_evolution(
+            campaign_dir,
+            manifest,
+            historical_digest=str(
+                historical_contract.get("evidence_label_declaration_sha256")
+            ),
+            current_digest=str(
+                current_contract.get("evidence_label_declaration_sha256")
+            ),
+        ):
             return historical_contract
         return current_contract
 
