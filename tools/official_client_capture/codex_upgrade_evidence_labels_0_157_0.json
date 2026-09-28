@@ -2151,96 +2151,7 @@
           "rationale": "A09 job 固定 Lite 模型（MODEL 为 gpt-6-astra）；首连接是 models GET，models 属辅助出站面（endpoint_class=auxiliary），供 HDR-006 auxiliary-wildcard 与 EP-005 选样。"
         },
         {
-          "glob": "scenarios/A09/relay/conn002.client_to_upstream.bin",
-          "scenario_ids": [
-            "A09"
-          ],
-          "kind": "relay_binary",
-          "parser": "opaque_bound_source",
-          "derive": {
-            "parser": "h1_request_stream",
-            "kind": "process_trace"
-          },
-          "labels": {
-            "transport": "http",
-            "track": "lite",
-            "mode": "lite",
-            "cookie_state": "absent",
-            "session_header_scope": "responses_or_compact",
-            "body_length": "automatic",
-            "provider": "openai_oauth"
-          },
-          "rationale": "A09 compact 驱动序列第 1 轮是冷启动 prime（为 turn-state 闭环准备受控状态），Cookie jar 尚未建立；不属于任何官方变体，不标 variant。"
-        },
-        {
-          "glob": "scenarios/A09/relay/conn003.client_to_upstream.bin",
-          "scenario_ids": [
-            "A09"
-          ],
-          "kind": "relay_binary",
-          "parser": "opaque_bound_source",
-          "derive": {
-            "parser": "h1_request_stream",
-            "kind": "process_trace"
-          },
-          "labels": {
-            "transport": "http",
-            "track": "lite",
-            "mode": "lite",
-            "variant": "default",
-            "cookie_state": "present",
-            "session_header_scope": "responses_or_compact",
-            "body_length": "automatic",
-            "provider": "openai_oauth"
-          },
-          "rationale": "compact 驱动序列第 2 轮是暖会话 default：不注入条件头，prime 响应已建立 Cookie jar，因此在固定槽携带 cookie；track=lite 由 job 冻结模型坐标（gpt-6-astra，use_responses_lite=true）推出。"
-        },
-        {
-          "glob": "scenarios/A09/relay/conn004.client_to_upstream.bin",
-          "scenario_ids": [
-            "A09"
-          ],
-          "kind": "relay_binary",
-          "parser": "opaque_bound_source",
-          "derive": {
-            "parser": "h1_request_stream",
-            "kind": "process_trace"
-          },
-          "labels": {
-            "transport": "http",
-            "track": "lite",
-            "mode": "lite",
-            "variant": "beta",
-            "session_header_scope": "responses_or_compact",
-            "body_length": "automatic",
-            "provider": "openai_oauth"
-          },
-          "rationale": "compact 驱动序列第 3 轮是 beta：入站显式携带 X-Codex-Beta-Features: candidate_aux_beta（脚本 extra_headers），variant=beta 由该采集参数推出，供 EP-014 beta 插槽判据选样。"
-        },
-        {
-          "glob": "scenarios/A09/relay/conn005.client_to_upstream.bin",
-          "scenario_ids": [
-            "A09"
-          ],
-          "kind": "relay_binary",
-          "parser": "opaque_bound_source",
-          "derive": {
-            "parser": "h1_request_stream",
-            "kind": "process_trace"
-          },
-          "labels": {
-            "transport": "http",
-            "track": "lite",
-            "mode": "lite",
-            "variant": "turn_state",
-            "session_header_scope": "responses_or_compact",
-            "body_length": "automatic",
-            "provider": "openai_oauth"
-          },
-          "rationale": "compact 驱动序列第 4 轮是 turn_state：与 beta 轮共用同一 session+turn 坐标，由 beta 轮响应向状态仓库回送 turn-state 后触发，variant=turn_state 由驱动轮次推出，供 EP-014 turn-state 插槽判据选样。"
-        },
-        {
-          "glob": "scenarios/A09/relay/conn00[67].client_to_upstream.bin",
+          "glob": "scenarios/A09/relay/conn00[23].client_to_upstream.bin",
           "scenario_ids": [
             "A09"
           ],
@@ -2258,10 +2169,10 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "compact 之后两连接是两阶段 alpha-search（phase 1/2），alpha-search 属辅助端点面。"
+          "rationale": "0.156.1 起目标画像删除 legacy compact 端点（SPEC-EP-007／014／020），采集脚本按目标版本不再发 compact 驱动序列（target_workspace_routing 切换），models 之后两连接即两阶段 alpha-search（phase 1/2），alpha-search 属辅助端点面。"
         },
         {
-          "glob": "scenarios/A09/relay/conn00[89].client_to_upstream.bin",
+          "glob": "scenarios/A09/relay/conn00[45].client_to_upstream.bin",
           "scenario_ids": [
             "A09"
           ],
@@ -2277,7 +2188,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。"
+          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。0.156.1 起没有 compact 驱动序列，两连接依次落在 conn004、conn005。"
         },
         {
           "glob": "scenarios/A09/egress.pcap",

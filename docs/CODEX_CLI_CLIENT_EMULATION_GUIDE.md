@@ -2135,7 +2135,8 @@ Candidate MITM Job 的 producer 合同只包含应用层 JSONL 和场景摘要�
 必须以 `scanned_bytes=0` 结束 pcap 排查，禁止调用 tshark 或扩大扫描目录。
 
 证据标签只能从采集参数和场景 precondition 推出，不能根据待通过的 selector 或断言结果反推；
-侧别豁免只允许结构上没有产出路径的 check，采集遗漏必须重采。
+侧别豁免只允许结构上没有产出路径的 check，采集遗漏必须重采。按连接编号写的规则必须与采集脚本在目标版本下的
+实际请求顺序一致：编目器不读被测内容，编号错位时只有缺号会以 glob-unmatched 暴露，错贴的标签完全静默。
 
 `candidate_sealed` 只表示：本轮 execute／reuse Job 闭合、Kilo 双入口通过、运行画像和同源结构化测试
 可复算、环境恢复、secret scan、inventory 与 evidence seal 完整，且 `review_sha256` 已批准。seal 内的
@@ -3374,6 +3375,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   恢复后的再次停线照常落账。
 - **评估器／证据层修好后的已有评估产出**：登记演进后 `evaluation-recover reevaluate` 开 `tool-evolution` 基线全量重评
   （不依赖失败父 run）；VC-5 已完成时账本 `evaluation_reopened`，重开后的 checkpoint／完成收据落 `control/vc/reopen-b<K>/`。
+- **证据标签跟不上采集序列（第 54 项）**：候选辅助采集按目标版本增删请求后（0.156.1 起 A09 不发 legacy compact 四轮），
+  逐连接编号的证据标签必须同步改写；`test_candidate_aux_label_sequence` 在桩环境执行采集脚本的 A09 段，与收尾冻结计数、
+  各版本声明逐连接核对。标签文件属 evidence_semantics 层，修好后登记工具演进（追加评估 epoch，不重采）；尚无评估产出时
+  seal 链按产物续跑，从 assertion bundle 预演重新开始。
 - **批准画像 selector 修正**：`evaluation-recover approval-revision --assertion-profile`（§4.5.5）开 approval-revision 基线
   零请求重评，候选 revision 不变。
 - **候选阶段零请求后处理动作失败**：进 `recovery_required`，修好工具后重派，不再进候选待审；批次中途评估器漂移
