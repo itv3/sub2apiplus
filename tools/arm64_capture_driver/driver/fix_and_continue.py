@@ -138,6 +138,14 @@ DEPLOY_RECEIPT_KEYS = (
 DEFAULT_GUARD_STATUS = "/run/sub2api-egress/status.json"
 AUTHORIZABLE_LEDGER_STATES = frozenset({"recovery_required", "stage_review_required", "candidate_review_required"})
 CANDIDATE_RECOVER_SCRIPT = "vc5-recover.sh"
+# 第 59 项：受管对账器 _decide 两类"根因重试达上限"暂停原因的原文片段。Campaign 账本 stop_required 只能由人执行
+# campaign-resume（本脚本不代办）；项目总账根因达上限由本脚本按参数给的材料执行 record-root-cause-repair 后重新对账。
+CAMPAIGN_ROOT_CAUSE_STOP = "Campaign 账本同根因重试已达上限"
+PROJECT_ROOT_CAUSE_LIMIT = "累计失败已达上限"
+# 在步骤内登记根因修复的步骤：reconcile-runs 在 repair 步骤之前，停下后 --from repair 过不了前序核对，只能在步骤内登记。
+INLINE_REPAIR_STEPS = frozenset({"reconcile-runs"})
+# reconcile-runs 续跑时要重新对账的对象类别（与扫描结果、run-verdict 的 kind 一致）。
+REVISIT_KINDS = frozenset({"supervisor-run", "attempt"})
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -301,6 +309,14 @@ def note(params: Mapping[str, str], step: str, **values: Any) -> None:
     current = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     current.update(values)
     _write_private_json(path, current)
+
+
+def _partial(params: Mapping[str, str], step: str) -> dict[str, Any]:
+    """本步骤已累积的摘要字段（fix-and-continue.sh 每步开始时清空）。"""
+
+    path = _partial_path(params, step)
+    payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def read_step(params: Mapping[str, str], step: str) -> dict[str, Any] | None:
@@ -645,6 +661,7 @@ def scan_reconciliation_targets(
     target_attempt: str,
     supervisor: Any,
     exclude_runs: Iterable[str] = (),
+    revisit: Iterable[Mapping[str, str]] = (),
 ) -> dict[str, Any]:
     """扫描监督器状态目录，列出链尾失败父 run 还缺的对账（只读）。
 
@@ -657,16 +674,31 @@ def scan_reconciliation_targets(
     * 已有对账收据的，按监督器 ``verify_*_reconciliation_binding`` 完整核验（收据与项目总账绑定），核验不过记为
       problems（失败关闭，不重复对账）；
     * 链尾里其它终态（audit-incomplete、aborted_prepared）不在本脚本处理范围，记为 unsupported；
-      运行中／prepared 的 run 记为 active。
+      运行中／prepared 的 run 记为 active；
+    * 第 59 项 ``revisit``（``{"kind", "subject"}``，来自上一次 reconcile-runs 停下记录）：受管对账器先写对账收据、
+      入总账，再判定——判"根因达上限"暂停的对象，收据按监督器判据核验是通过的。这些对象核验通过后仍列为待对账
+      （条目带 ``revisit: true``，并记入 ``result["revisit"]``），不能据收据当作已对账跳过；核验不过照旧记 problems；
+      不在链尾的不再处理。
     """
 
     campaign_dir = Path(campaign_dir)
     state_dir = Path(state_dir)
     excluded = set(exclude_runs)
+    wanted = {(str(item.get("kind")), str(item.get("subject"))) for item in revisit}
     result: dict[str, Any] = {
         "active": [], "unsupported": [], "foreign": [], "tail": [], "pending": [], "reconciled": [],
-        "problems": [], "excluded": [], "target_in_window": False,
+        "problems": [], "excluded": [], "target_in_window": False, "revisit": [],
     }
+
+    def settle(entry: dict[str, Any], kind: str, subject: str) -> None:
+        """对账收据核验通过：前次判定暂停（revisit）的仍待重新对账，其余记为已对账。"""
+
+        if (kind, subject) in wanted:
+            result["pending"].append({**entry, "revisit": True})
+            result["revisit"].append({"kind": kind, "subject": subject})
+        else:
+            result["reconciled"].append(entry)
+
     if state_dir.is_symlink() or not state_dir.is_dir():
         result["problems"].append(f"监督器状态目录不存在或不可信：{state_dir}")
         return result
@@ -732,7 +764,7 @@ def scan_reconciliation_targets(
                     except Exception as error:
                         result["problems"].append(f"attempt {subject} 的对账收据核验不过：{error}")
                     else:
-                        result["reconciled"].append(entry)
+                        settle(entry, "attempt", str(subject))
                 else:
                     result["pending"].append(entry)
             continue
@@ -753,10 +785,40 @@ def scan_reconciliation_targets(
             except Exception as error:
                 result["problems"].append(f"父 run {name} 的对账收据核验不过：{error}")
             else:
-                result["reconciled"].append(entry)
+                settle(entry, "supervisor-run", name)
         else:
             result["pending"].append(entry)
     return result
+
+
+def prior_revisit(params: Mapping[str, str]) -> list[dict[str, str]]:
+    """上一次 reconcile-runs 记录里判"根因达上限"暂停、还没重新对账到 recoverable 的对象（第 59 项）。
+
+    受管对账器先写对账收据、入总账再判定，暂停对象的收据按监督器判据核验是通过的；扫描若据此当作已对账，续跑时暂停
+    判定就被悄悄丢掉（根因上限形同虚设，也等不到本步骤内登记修复）。停下记录带上这些对象，续跑扫描时重新对账。
+    """
+
+    record = read_step(params, "reconcile-runs") or {}
+    if record.get("schema_version") != STEP_SCHEMA:
+        return []
+    items = (record.get("summary") or {}).get("revisit")
+    keys: list[dict[str, str]] = []
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("kind") in REVISIT_KINDS and isinstance(item.get("subject"), str):
+            key = {"kind": str(item["kind"]), "subject": str(item["subject"])}
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _merge_keys(*groups: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    for group in groups:
+        for item in group:
+            key = {"kind": str(item["kind"]), "subject": str(item["subject"])}
+            if key not in merged:
+                merged.append(key)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -787,18 +849,34 @@ PAUSE_HINTS = {
     "environment": "环境污染暂停：修复环境、取得晚于污染的干净环境复核与环境修复记录后执行 environment-isolate preview/apply",
     "request_budget": "请求预算耗尽：由人批准新预算后执行 request-budget-extend preview/apply",
     "deadline": "预算截止暂停：阶段层可在参数文件填 EXTEND_DEADLINE／EXTEND_REASON 后 --from pre-extend；Campaign／项目层由人批准 deadline-extend",
-    "root_cause_repair": (
-        "根因重试达上限：项目总账层由本脚本 repair 步骤执行 record-root-cause-repair——在参数文件填 "
-        "REPAIR_ROOT_CAUSES／REPAIR_NOTE 与回归收据（或草稿 REGRESSION_DRAFT）后 --from reconcile-attempt；"
-        "Campaign 账本 stop_required 须人工 campaign-resume"
-    ),
 }
 
 
-def judge_reconciliation(payload: Any, rc: int, stderr: str) -> tuple[str, str, str]:
+def root_cause_hint(reasons: str, resume_step: str) -> str:
+    """根因重试达上限暂停的下一步（第 59 项）：提示里的 ``--from`` 就是本次停下记录的续跑步骤，照做一定能通过 check_from。
+
+    此前固定写"--from reconcile-attempt"，reconcile-runs 停下时照做会被 check_from 拒绝（前序 reconcile-runs 不是 passed）。
+    Campaign 账本 stop_required 只能由人执行 campaign-resume（本脚本不代办）；项目总账根因达上限由本脚本按参数给的材料
+    执行 record-root-cause-repair（reconcile-runs 在步骤内、reconcile-attempt 交给 repair 步骤，同一判定、命令与核对）后
+    重新对账。
+    """
+
+    parts: list[str] = []
+    if CAMPAIGN_ROOT_CAUSE_STOP in reasons:
+        parts.append("Campaign 账本同根因重试达上限（stop_required）：须由人执行 campaign-resume（本脚本不代办）")
+    if PROJECT_ROOT_CAUSE_LIMIT in reasons or not parts:
+        parts.append(
+            "项目总账根因重试达上限：在参数文件填写 REPAIR_ROOT_CAUSES／REPAIR_NOTE 与回归收据 REGRESSION_RECEIPT（或草稿 "
+            "REGRESSION_DRAFT），由本脚本执行 record-root-cause-repair 登记（与 repair 步骤同一判定、命令与核对）后重新对账"
+        )
+    return "；".join(parts) + f"；之后 --from {resume_step}"
+
+
+def judge_reconciliation(payload: Any, rc: int, stderr: str, *, resume_step: str) -> tuple[str, str, str]:
     """把对账（reconcile-supervisor-run／reconcile-attempt）结果归为 (类别, 原因, 下一步)。
 
     类别：recoverable；paused；stop（永久停线／需审核）；failed（命令本身失败或输出不可解析）。
+    ``resume_step`` 是调用方停下时记录的续跑步骤，暂停提示里的 ``--from`` 与它一致（第 59 项）。
     """
 
     if not isinstance(payload, dict):
@@ -811,7 +889,9 @@ def judge_reconciliation(payload: Any, rc: int, stderr: str) -> tuple[str, str, 
         return "recoverable", "", upstream
     if status == "paused":
         kinds = list(decision.get("pause_kinds") or ["deadline"])
-        hints = "；".join(PAUSE_HINTS.get(kind, kind) for kind in kinds)
+        hints = "；".join(
+            root_cause_hint(reasons, resume_step) if kind == "root_cause_repair" else PAUSE_HINTS.get(kind, kind) for kind in kinds
+        )
         return "paused", f"对账判定暂停（{'、'.join(kinds)}）：{reasons}", f"{hints}。受管工具提示：{upstream}"
     if status == "permanent_stop":
         terminal = decision.get("terminal_reason")
@@ -1447,15 +1527,24 @@ def _extend_apply(params: dict[str, str], args: argparse.Namespace) -> tuple[int
 @decider("scan-runs")
 def _scan_runs(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
     step, stamp = "reconcile-runs", args.run_stamp
+    final = args.mode == "final"
+    # 第 59 项：上一次停下时判"根因达上限"暂停的对象，续跑扫描时重新对账（收据虽已写，判定没有通过）。收尾扫描不带入：
+    # 本次运行里这些对象要么已重新对账到 recoverable（从 revisit 移除），要么已让本步骤停下。
+    carried = [] if final else prior_revisit(params)
     try:
         supervisor = _managed(params, "codex_upgrade_supervisor")
         result = scan_reconciliation_targets(Path(params["C"]), Path(params["VC_STATE_DIR"]), campaign_id=params["CAMPAIGN"],
                                              target_attempt=params["ATTEMPT"], supervisor=supervisor,
-                                             exclude_runs=args.exclude_run or ())
+                                             exclude_runs=args.exclude_run or (), revisit=carried)
     except Exception as error:
-        return stop(params, step, "failed", f"对账扫描失败：{error}", "人工核对监督器状态目录与受管监督器版本", run_stamp=stamp), {}
+        return stop(params, step, "failed", f"对账扫描失败：{error}", "人工核对监督器状态目录与受管监督器版本", run_stamp=stamp,
+                    summary={"revisit": carried} if carried else None), {}
     summary = {key: result[key] for key in ("tail", "foreign", "reconciled", "excluded", "target_in_window")}
     summary["redirected_runs"] = list(args.exclude_run or [])
+    if not final:
+        # 扫描没走完就停下时照旧带上前次的暂停对象（下次续跑仍重新对账）；走完则以本次在链尾找到的为准。
+        blocked = bool(result["active"] or result["unsupported"] or result["problems"])
+        summary["revisit"] = _merge_keys(carried, result["revisit"]) if blocked else result["revisit"]
     if result["active"]:
         return stop(params, step, "needs-operator", f"有运行中／prepared 的父 run：{result['active']}", "等批次结束后再运行",
                     run_stamp=stamp, summary=summary), {}
@@ -1465,11 +1554,16 @@ def _scan_runs(params: dict[str, str], args: argparse.Namespace) -> tuple[int, d
     if result["problems"]:
         return stop(params, step, "failed", "对账扫描发现不可信事实：" + "；".join(result["problems"]),
                     "已有对账收据核验不过属完整性问题，人工核对，不重复对账", run_stamp=stamp, summary=summary), {}
+    if final:
+        leftover = _partial(params, step).get("revisit") or []
+        if leftover:
+            return stop(params, step, "failed", f"前次判定暂停的对象本次没有重新对账到 recoverable：{leftover}",
+                        "人工核对本步骤记录与 raw 输出后 --from reconcile-runs", run_stamp=stamp, summary=summary), {}
     if not result["pending"]:
-        if args.mode == "final":
+        if final:
             return passed(params, step, run_stamp=stamp, summary=summary), {}
         return skip(params, step, f"链尾失败父 run 均已对账（链尾 {result['tail']}）", run_stamp=stamp, summary=summary), {}
-    if args.mode == "final":
+    if final:
         return stop(params, step, "failed", f"对账后仍有待对账：{result['pending']}",
                     "扫描判据与对账器不一致：人工核对后再续跑", run_stamp=stamp, summary=summary), {}
     pending_file = _out(params) / "raw" / f"{stamp}-reconcile-runs-pending.tsv"
@@ -1487,32 +1581,72 @@ def _scan_runs(params: dict[str, str], args: argparse.Namespace) -> tuple[int, d
 
 @decider("run-verdict")
 def _run_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
-    """reconcile-runs 里单个对账的判定；父 run 对账被拒且提示改走 attempt 时输出 REDIRECT。"""
+    """reconcile-runs 里单个对账的判定；父 run 对账被拒且提示改走 attempt 时输出 REDIRECT。
+
+    第 59 项：暂停只因项目总账根因达上限、且参数给了登记材料（与 reconcile-attempt 旁路同一判据 ``_paused_needs_repair``）
+    时输出 ACTION=repair——fix-and-continue.sh 在本步骤内按 repair 步骤同一路径登记（``root_cause_repair inline``），再以
+    ``--mode after-repair`` 对该对象重新对账一次；重新对账仍暂停即停下（不再登记，不循环）。因根因达上限暂停的对象记入
+    ``revisit``：受管对账器先写收据、入总账再判定，停下后续跑扫描时据此重新对账，而不是当作已对账跳过。停下的续跑步骤
+    一律是本步骤，提示里的 ``--from`` 与之一致。
+    """
 
     step, stamp = "reconcile-runs", args.run_stamp
+    after_repair = args.mode == "after-repair"
     rc, payload, stderr = read_raw(args.raw)
+    partial = _partial(params, step)
+    key = {"kind": args.kind, "subject": args.subject}
+    revisit = [item for item in partial.get("revisit") or [] if item != key]
     if args.kind == "supervisor-run" and rc != 0 and payload is None:
         redirect = parse_redirect(stderr)
         if redirect is not None:
+            # 父 run 的对账归到 attempt 对账（收尾扫描排除该 run），它本身不再需要重新对账。
+            note(params, step, revisit=revisit)
             return _ok(ACTION="redirect", REDIRECT=" ".join(f"{a}:{r or '-'}" for a, r in redirect))
-    category, reason, hint = judge_reconciliation(payload, rc, stderr)
+    category, reason, hint = judge_reconciliation(payload, rc, stderr, resume_step=step)
     if category == "recoverable":
-        done = json.loads(_partial_path(params, step).read_text(encoding="utf-8")).get("done", []) if _partial_path(params, step).is_file() else []
-        done.append({"kind": args.kind, "subject": args.subject, "next_command": hint})
-        note(params, step, done=done)
+        done = list(partial.get("done") or [])
+        entry = {"kind": args.kind, "subject": args.subject, "next_command": hint}
+        if after_repair:
+            entry["after_root_cause_repair"] = True
+        done.append(entry)
+        note(params, step, done=done, revisit=revisit)
         return _ok(ACTION="done")
+    decision = payload.get("decision") if isinstance(payload, dict) and isinstance(payload.get("decision"), dict) else {}
+    kinds = list(decision.get("pause_kinds") or [])
+    if category == "paused" and "root_cause_repair" in kinds:
+        revisit.append(key)
+        if not after_repair and _paused_needs_repair(params, payload):
+            repairs = list(partial.get("root_cause_repairs") or [])
+            repairs.append({"kind": args.kind, "object": args.subject, "action": "planned", "pause_kinds": kinds,
+                            "reasons": decision.get("reasons"),
+                            "root_cause": (payload.get("root_cause") or {}).get("root_cause_id")})
+            note(params, step, revisit=revisit, root_cause_repairs=repairs)
+            print(f"  [{step}] {args.kind} {args.subject}：项目总账根因达上限暂停，参数已给登记材料——本步骤内登记根因修复后重新对账",
+                  file=sys.stderr)
+            return _ok(ACTION="repair")
+        note(params, step, revisit=revisit)
+    if category == "paused" and after_repair:
+        reason = f"登记根因修复后重新对账仍暂停——{reason}"
+        hint = (f"本步骤已按参数登记根因修复（REPAIR_ROOT_CAUSES={params.get('REPAIR_ROOT_CAUSES')}，修复提交 "
+                f"{params['REPAIR_FIX_COMMIT'][:12]}），重新对账仍判暂停：核对暂停原因里的根因是否都在 REPAIR_ROOT_CAUSES 内、"
+                f"修复是否对症（需要新的修复提交就开新一轮）；{hint}")
     status = "failed" if category == "failed" else "needs-operator"
-    return stop(params, step, status, f"{args.kind} {args.subject}：{reason}", hint, run_stamp=stamp), {}
+    return stop(params, step, status, f"{args.kind} {args.subject}：{reason}", hint, run_stamp=stamp, resume_from=step), {}
 
 
 def _paused_needs_repair(params: Mapping[str, str], payload: Mapping[str, Any]) -> bool:
-    """暂停只因项目总账根因达上限、且参数给了根因修复登记材料：交给 repair 步骤登记后再对账。"""
+    """暂停只因项目总账根因达上限、且参数给了根因修复登记材料：按根因修复登记路径登记后再对账。
+
+    reconcile-attempt 与 reconcile-runs 两处同一判据（第 59 项）：reconcile-attempt 记 passed（needs_repair）交给 repair
+    步骤登记、approve 重新对账；reconcile-runs 在 repair 之前，在本步骤内登记后对该对象重新对账。Campaign 账本
+    stop_required（原因含"Campaign 账本同根因重试已达上限"）不走此路径，只能由人 campaign-resume。
+    """
 
     decision = payload.get("decision") or {}
     kinds = set(decision.get("pause_kinds") or [])
     reasons = " ".join(str(item) for item in decision.get("reasons") or [])
     material = "REGRESSION_RECEIPT" in params and (Path(params["REGRESSION_RECEIPT"]).is_file() or "REGRESSION_DRAFT" in params)
-    return (kinds == {"root_cause_repair"} and "Campaign 账本同根因重试已达上限" not in reasons
+    return (kinds == {"root_cause_repair"} and CAMPAIGN_ROOT_CAUSE_STOP not in reasons
             and bool(params.get("REPAIR_ROOT_CAUSES")) and material)
 
 
@@ -1536,7 +1670,8 @@ def _attempt_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[
     step = "reconcile-attempt" if args.mode == "reconcile" else "approve"
     stamp = args.run_stamp
     rc, payload, stderr = read_raw(args.raw)
-    category, reason, hint = judge_reconciliation(payload, rc, stderr)
+    # 暂停时两种模式的续跑步骤都是 reconcile-attempt（见本函数末尾 stop 的 resume_from）。
+    category, reason, hint = judge_reconciliation(payload, rc, stderr, resume_step="reconcile-attempt")
     if category == "recoverable":
         check = (payload.get("resume_reuse_check") or {}) if isinstance(payload, dict) else {}
         if check.get("status") == "inconsistent":
@@ -1566,37 +1701,36 @@ def _attempt_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[
                 resume_from="reconcile-attempt" if category == "paused" else None), {}
 
 
-@decider("repair-plan")
-def _repair_plan(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
-    step, stamp = "repair", args.run_stamp
-    reconcile = read_step(params, "reconcile-attempt") or {}
-    needs = bool((reconcile.get("summary") or {}).get("needs_repair"))
+def plan_root_cause_repair(params: Mapping[str, str], *, on_written: Callable[[Path], None]) -> dict[str, Any]:
+    """根因修复登记计划：repair 步骤与 reconcile-runs 步骤内登记共用的同一判定（第 59 项从 repair 步骤原样抽出）。
+
+    只读判定＋回归收据生成与校验，按原顺序返回 ``outcome`` 之一：
+      no_causes       参数没给 REPAIR_ROOT_CAUSES；
+      ledger_error    读项目总账失败（error）；
+      already         根因都已登记同一修复提交——幂等跳过，不再执行登记命令（causes、fix）；
+      no_receipt      没给回归收据，或收据不存在又没给草稿（causes、evidence_hint）；
+      material_error  草稿／回归收据不合格或读不到最新部署收据（error、evidence_hint）；
+      ready           可以登记（todo、ledger_root、receipt_path、deploy_path）。
+    回归收据不存在时由草稿补本轮实测日志与最新部署收据后 O_EXCL 写一次（写后回调 ``on_written``），随后与已存在的收据
+    一样逐项校验（schema、fix_commit_sha、根因集合、引用的实测日志摘要）。
+    """
+
     causes = params.get("REPAIR_ROOT_CAUSES", "").split()
     if not causes:
-        if needs:
-            return stop(params, step, "needs-operator", "对账判定根因达上限暂停，但参数文件没有根因修复登记材料",
-                        "填写 REPAIR_ROOT_CAUSES／REPAIR_NOTE 与回归收据（或草稿）后 --from reconcile-attempt", run_stamp=stamp,
-                        resume_from="reconcile-attempt"), {}
-        return skip(params, step, "参数文件未给 REPAIR_ROOT_CAUSES，不登记根因修复", run_stamp=stamp), {}
+        return {"outcome": "no_causes"}
     try:
         ledger_root, registered = registered_repairs(params)
     except Exception as error:
-        return stop(params, step, "failed", f"读取项目总账失败：{error}", "人工核对项目总账", run_stamp=stamp), {}
+        return {"outcome": "ledger_error", "error": str(error)}
     fix = params["REPAIR_FIX_COMMIT"]
     todo = [cause for cause in causes if fix not in registered.get(cause, set())]
     if not todo:
-        return skip(params, step, f"根因 {causes} 已登记同一修复提交 {fix[:12]}", run_stamp=stamp,
-                    summary={"root_causes": causes, "fix_commit_sha": fix}), {}
+        return {"outcome": "already", "causes": causes, "fix": fix}
     receipt_path = Path(params["REGRESSION_RECEIPT"]) if "REGRESSION_RECEIPT" in params else None
     log = _out(params) / "item-tests.log"
     evidence_hint = f"本轮实测日志 {log}（sha256 {_sha256_file(log) if log.is_file() else '无'}）"
     if receipt_path is None or (not receipt_path.is_file() and "REGRESSION_DRAFT" not in params):
-        if needs:
-            return stop(params, step, "needs-operator", "登记根因修复需要回归收据（证据文件），参数文件未给或文件不存在",
-                        f"按 arm64-code-regression-receipt/v1 生成回归收据（或提供草稿 REGRESSION_DRAFT），可引用{evidence_hint}；"
-                        "然后 --from repair（record-root-cause-repair 由本脚本执行）", run_stamp=stamp), {}
-        return skip(params, step, "未给回归收据：只做实测不登记（设计：REGRESSION_RECEIPT 可空）", run_stamp=stamp,
-                    summary={"root_causes": causes}), {}
+        return {"outcome": "no_receipt", "causes": causes, "evidence_hint": evidence_hint}
     try:
         if not receipt_path.is_file():
             draft = _read_json(Path(params["REGRESSION_DRAFT"]), "回归收据草稿 ")
@@ -1608,43 +1742,146 @@ def _repair_plan(params: dict[str, str], args: argparse.Namespace) -> tuple[int,
             descriptor = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-            note(params, step, regression_receipt_written=str(receipt_path))
+            on_written(receipt_path)
         payload = _read_json(receipt_path, "回归收据 ")
         problems = regression_problems(payload, params, causes)
         if problems:
             raise FixAndContinueError("回归收据不合格：" + "；".join(problems))
         deploy_path, _deploy = latest_deploy_receipt(params)
     except (FixAndContinueError, OSError) as error:
-        return stop(params, step, "needs-operator", str(error), f"修正回归收据后 --from repair（可引用{evidence_hint}）",
+        return {"outcome": "material_error", "error": str(error), "evidence_hint": evidence_hint}
+    return {"outcome": "ready", "causes": causes, "fix": fix, "todo": todo, "ledger_root": ledger_root,
+            "receipt_path": receipt_path, "deploy_path": deploy_path}
+
+
+def _inline_repair_entry(params: Mapping[str, str], step: str, args: argparse.Namespace,
+                         expected: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """步骤内登记的当前条目：必须是本步骤对账判定 ACTION=repair 时记下的同一对象、处在期望阶段，否则失败关闭。"""
+
+    repairs = list(_partial(params, step).get("root_cause_repairs") or [])
+    entry = repairs[-1] if repairs and isinstance(repairs[-1], dict) else {}
+    if (entry.get("kind"), entry.get("object"), entry.get("action")) != (args.kind, args.object, expected):
+        raise FixAndContinueError(
+            f"步骤内根因修复登记与本步骤的对账暂停记录对不上（期望 {args.kind} {args.object} 处于 {expected}）：{entry or '无记录'}"
+        )
+    return repairs, entry
+
+
+def _repair_plan_inline(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    """reconcile-runs 步骤内登记（第 59 项）：同一判定，结果并入本步骤记录，停下的续跑步骤是本步骤。"""
+
+    step, stamp = args.step, args.run_stamp
+    if step not in INLINE_REPAIR_STEPS:
+        raise FixAndContinueError(f"步骤内根因修复登记只用于 {sorted(INLINE_REPAIR_STEPS)}，不能在 {step} 里执行")
+    repairs, entry = _inline_repair_entry(params, step, args, "planned")
+
+    def written(path: Path) -> None:
+        entry["regression_receipt_written"] = str(path)
+        note(params, step, root_cause_repairs=repairs)
+
+    plan = plan_root_cause_repair(params, on_written=written)
+    outcome = plan["outcome"]
+    if outcome in {"no_causes", "no_receipt"}:
+        # 对账判定已按 _paused_needs_repair 核过材料，到这里说明判定之后材料没了：失败关闭。
+        return stop(params, step, "needs-operator", "对账判定根因达上限暂停，但登记材料不全（REPAIR_ROOT_CAUSES 或回归收据／草稿不存在）",
+                    f"填写 REPAIR_ROOT_CAUSES／REPAIR_NOTE 与回归收据（或草稿 REGRESSION_DRAFT）后 --from {step}",
+                    run_stamp=stamp, resume_from=step), {}
+    if outcome == "ledger_error":
+        return stop(params, step, "failed", f"读取项目总账失败：{plan['error']}", f"人工核对项目总账后 --from {step}",
+                    run_stamp=stamp, resume_from=step), {}
+    if outcome == "material_error":
+        return stop(params, step, "needs-operator", plan["error"],
+                    f"修正回归收据后 --from {step}（可引用{plan['evidence_hint']}）", run_stamp=stamp, resume_from=step), {}
+    if outcome == "already":
+        entry.update(action="already", root_causes=plan["causes"], fix_commit_sha=plan["fix"])
+        note(params, step, root_cause_repairs=repairs)
+        print(f"  [{step}] 根因 {plan['causes']} 已登记同一修复提交 {plan['fix'][:12]}：不重复登记，重新对账", file=sys.stderr)
+        return _ok(REPAIR_ACTION="already")
+    receipt_path, deploy_path = plan["receipt_path"], plan["deploy_path"]
+    entry.update(action="recording", todo=plan["todo"], fix_commit_sha=plan["fix"], regression_receipt=str(receipt_path),
+                 regression_receipt_sha256=_sha256_file(receipt_path), deployment_receipt=str(deploy_path))
+    note(params, step, root_cause_repairs=repairs)
+    return _ok(REPAIR_ACTION="record", TODO_RCS=" ".join(plan["todo"]), LEDGER_DIR=plan["ledger_root"],
+               REG_SHA256=_sha256_file(receipt_path), DEPLOY_RECEIPT_SHA256=_sha256_file(deploy_path))
+
+
+@decider("repair-plan")
+def _repair_plan(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    """根因修复登记判定。``--mode inline``：reconcile-runs 步骤内登记；其余（``step``）：repair 步骤，记录与提示同第 35 项。"""
+
+    if args.mode == "inline":
+        return _repair_plan_inline(params, args)
+    step, stamp = "repair", args.run_stamp
+    reconcile = read_step(params, "reconcile-attempt") or {}
+    needs = bool((reconcile.get("summary") or {}).get("needs_repair"))
+    plan = plan_root_cause_repair(params, on_written=lambda path: note(params, step, regression_receipt_written=str(path)))
+    outcome = plan["outcome"]
+    if outcome == "no_causes":
+        if needs:
+            return stop(params, step, "needs-operator", "对账判定根因达上限暂停，但参数文件没有根因修复登记材料",
+                        "填写 REPAIR_ROOT_CAUSES／REPAIR_NOTE 与回归收据（或草稿）后 --from reconcile-attempt", run_stamp=stamp,
+                        resume_from="reconcile-attempt"), {}
+        return skip(params, step, "参数文件未给 REPAIR_ROOT_CAUSES，不登记根因修复", run_stamp=stamp), {}
+    if outcome == "ledger_error":
+        return stop(params, step, "failed", f"读取项目总账失败：{plan['error']}", "人工核对项目总账", run_stamp=stamp), {}
+    if outcome == "already":
+        causes, fix = plan["causes"], plan["fix"]
+        return skip(params, step, f"根因 {causes} 已登记同一修复提交 {fix[:12]}", run_stamp=stamp,
+                    summary={"root_causes": causes, "fix_commit_sha": fix}), {}
+    if outcome == "no_receipt":
+        if needs:
+            return stop(params, step, "needs-operator", "登记根因修复需要回归收据（证据文件），参数文件未给或文件不存在",
+                        f"按 arm64-code-regression-receipt/v1 生成回归收据（或提供草稿 REGRESSION_DRAFT），可引用{plan['evidence_hint']}；"
+                        "然后 --from repair（record-root-cause-repair 由本脚本执行）", run_stamp=stamp), {}
+        return skip(params, step, "未给回归收据：只做实测不登记（设计：REGRESSION_RECEIPT 可空）", run_stamp=stamp,
+                    summary={"root_causes": plan["causes"]}), {}
+    if outcome == "material_error":
+        return stop(params, step, "needs-operator", plan["error"], f"修正回归收据后 --from repair（可引用{plan['evidence_hint']}）",
                     run_stamp=stamp), {}
-    note(params, step, todo=todo, regression_receipt=str(receipt_path), regression_receipt_sha256=_sha256_file(receipt_path),
+    receipt_path, deploy_path = plan["receipt_path"], plan["deploy_path"]
+    note(params, step, todo=plan["todo"], regression_receipt=str(receipt_path), regression_receipt_sha256=_sha256_file(receipt_path),
          deployment_receipt=str(deploy_path))
-    return _ok(TODO_RCS=" ".join(todo), LEDGER_DIR=ledger_root, REG_SHA256=_sha256_file(receipt_path),
+    return _ok(TODO_RCS=" ".join(plan["todo"]), LEDGER_DIR=plan["ledger_root"], REG_SHA256=_sha256_file(receipt_path),
                DEPLOY_RECEIPT_SHA256=_sha256_file(deploy_path))
 
 
 @decider("repair-verdict")
 def _repair_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
-    step, stamp = "repair", args.run_stamp
+    """登记命令的核对（两种模式同一核对）：命令成功且回显覆盖待登记根因，登记后总账里必须有该根因以同一修复提交的修复事件。"""
+
+    inline = args.mode == "inline"
+    step, stamp = (args.step if inline else "repair"), args.run_stamp
+    resume = step if inline else None
     rc, payload, stderr = read_raw(args.raw)
     todo = set(args.subject.split()) if args.subject else set()
+    repairs: list[dict[str, Any]] = []
+    entry: dict[str, Any] = {}
+    if inline:
+        if step not in INLINE_REPAIR_STEPS:
+            raise FixAndContinueError(f"步骤内根因修复登记只用于 {sorted(INLINE_REPAIR_STEPS)}，不能在 {step} 里执行")
+        repairs, entry = _inline_repair_entry(params, step, args, "recording")
     if rc != 0 or not isinstance(payload, dict) or not todo <= set(payload.get("root_cause_ids") or []):
-        return stop(params, step, "failed", f"record-root-cause-repair 失败（rc={rc}）：{_tail(stderr)}", "按报错处理后 --from repair",
-                    run_stamp=stamp), {}
+        return stop(params, step, "failed", f"record-root-cause-repair 失败（rc={rc}）：{_tail(stderr)}", f"按报错处理后 --from {step}",
+                    run_stamp=stamp, resume_from=resume), {}
     _root, registered = registered_repairs(params)
     missing = [cause for cause in todo if params["REPAIR_FIX_COMMIT"] not in registered.get(cause, set())]
     if missing:
-        return stop(params, step, "failed", f"登记后总账里仍没有 {missing} 的修复事件", "人工核对项目总账", run_stamp=stamp), {}
-    return passed(params, step, run_stamp=stamp, summary={"operation_id": payload.get("operation_id"),
-                                                           "receipt_sha256": payload.get("receipt_sha256"),
-                                                           "head_sequence": payload.get("head_sequence")}), {}
+        return stop(params, step, "failed", f"登记后总账里仍没有 {missing} 的修复事件",
+                    "人工核对项目总账" + (f"后 --from {step}" if inline else ""), run_stamp=stamp, resume_from=resume), {}
+    facts = {"operation_id": payload.get("operation_id"), "receipt_sha256": payload.get("receipt_sha256"),
+             "head_sequence": payload.get("head_sequence")}
+    if inline:
+        entry.update(action="recorded", **facts)
+        note(params, step, root_cause_repairs=repairs)
+        return _ok()
+    return passed(params, step, run_stamp=stamp, summary=facts), {}
 
 
 @decider("approve-verdict")
 def _approve_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
     step, stamp = "approve", args.run_stamp
     rc, payload, stderr = read_raw(args.raw)
-    category, reason, hint = judge_reconciliation(payload, rc, stderr)
+    category, reason, hint = judge_reconciliation(payload, rc, stderr, resume_step=step)
     if category != "recoverable":
         return stop(params, step, "failed" if category == "failed" else "needs-operator", f"批准恢复预览失败：{reason}", hint,
                     run_stamp=stamp), {}
@@ -1851,6 +2088,7 @@ def main(argv: list[str] | None = None) -> int:
     dec.add_argument("--mode")
     dec.add_argument("--kind")
     dec.add_argument("--subject")
+    dec.add_argument("--object", help="步骤内根因修复登记所属的对账对象（第 59 项）")
     dec.add_argument("--log")
     dec.add_argument("--pid-file")
     dec.add_argument("--file")

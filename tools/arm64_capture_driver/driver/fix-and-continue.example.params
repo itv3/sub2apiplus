@@ -44,6 +44,7 @@ APPROVER="REPLACE：批准人与授权原话"
 # EXTEND_REASON="REPLACE：延期理由"
 
 # ---- 可选：根因修复登记（给了 REPAIR_ROOT_CAUSES 才登记；同一修复提交已登记即跳过）----
+# reconcile-runs／reconcile-attempt 对账判"项目总账根因达上限"暂停时按这些材料登记后重新对账；Campaign 账本 stop_required 仍须人工 campaign-resume。
 # REPAIR_ROOT_CAUSES="REPLACE_ROOT_CAUSE_ID"
 # REPAIR_FIX_COMMIT=0000000000000000000000000000000000000000
 # REPAIR_SEQ=1

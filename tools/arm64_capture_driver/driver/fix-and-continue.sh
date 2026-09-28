@@ -23,10 +23,13 @@
 #                     已过时，计时账本是 deadline_paused，对账判预算暂停、拒绝批准；候选审核等阶段未开的状态跳过）
 #   reconcile-runs    扫描监督器状态目录链尾（最后一个正常结束的父 run 之后）终态 failed／watchdog-aborted 且缺对账收据的
 #                     父 run：run 期间无预约的 reconcile-supervisor-run，有预约的（监督器同一判据）reconcile-attempt，
-#                     父 run 对账提示"属于 attempt 中断"时按提示改走 reconcile-attempt；目标 attempt 留给下一步
+#                     父 run 对账提示"属于 attempt 中断"时按提示改走 reconcile-attempt；目标 attempt 留给下一步。
+#                     对账判"项目总账根因达上限"暂停且参数给了登记材料（与 reconcile-attempt 同一判据）时，在本步骤内按
+#                     repair 步骤同一路径登记（root_cause_repair inline），再对该对象重新对账一次，仍暂停即停下；没给材料
+#                     停下时续跑步骤就是本步骤。上次停在根因暂停的对象（收据虽已写）续跑时重新对账（第 59 项）
 #   reconcile-attempt 目标 attempt 对账；账务暂停／环境污染／永久停线／请求预算／需审核一律停下，不越权
 #   repair            给了 REPAIR_ROOT_CAUSES 才登记根因修复（同一修复提交已登记则跳过；回归收据缺失时可由草稿补本轮
-#                     实测日志与部署收据写一次）；对账因根因达上限暂停而没给材料时停下
+#                     实测日志与部署收据写一次）；对账因根因达上限暂停而没给材料时停下（root_cause_repair step）
 #   approve           重新对账取同一次运行的恢复预览 review_sha256 → --approve-recovery-sha256
 #   authorize         --authorize-recovery-preview（批准步骤记录的预览路径）
 #   extend            给了 EXTEND_DEADLINE 时授权后再做一次（候选审核重开阶段后才能阶段延期；已延期则跳过）
@@ -37,7 +40,10 @@
 #   1. 根因修复登记放在对账之后、批准之前（根因要先由对账入账；登记后批准步骤的重新对账会验证是否解除暂停）；
 #   2. 延期不放在"批准与授权之间"：延期 apply 会在 Campaign 计时账本追加 deadline_extended 事件，授权消费预览时要求账本
 #      head 仍是预览冻结的 head（否则"恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"），该位置必然让授权失败；
-#      改为对账前 pre-extend ＋ 授权后 extend 两处，同一参数、各自幂等。
+#      改为对账前 pre-extend ＋ 授权后 extend 两处，同一参数、各自幂等；
+#   3. 第 59 项：reconcile-runs 也会遇"项目总账根因达上限"暂停，但它在 repair 之前，停下后 --from repair／reconcile-attempt
+#      都过不了前序核对。不调步骤顺序（repair 仍须在 reconcile-attempt 入账之后），而把登记抽成共用函数 root_cause_repair：
+#      repair 步骤与 reconcile-runs 步骤内登记走同一判定、同一命令、同一核对。
 #
 # 停下与续跑：任一步失败或需要人工时写 $RUNROOT/fix-and-continue/<轮次>/<步骤>.json 并打印原因、下一步与
 #   "续跑：bash … --from <步骤>"；所有受管命令的 stdout／stderr／退出码原样落在同目录 raw/。
@@ -258,6 +264,40 @@ extend_round() {
 step_pre_extend() { extend_round pre; }
 step_extend() { extend_round post; }
 
+# root_cause_repair <标签> <模式> [<对象类别> <对象>]：项目总账根因修复登记（第 59 项抽出，repair 步骤与 reconcile-runs 共用）。
+#   同一判定（repair-plan：待登记根因、同一修复提交已登记即跳过、回归收据由草稿补本轮实测日志与部署收据写一次并校验）、
+#   同一命令（record-root-cause-repair，参数逐字相同）、同一核对（repair-verdict：命令结果、登记后总账里必须有修复事件）。
+#   模式 step：repair 步骤，结果写 repair 步骤记录（第 35 项原行为）；
+#   模式 inline：reconcile-runs 对账判"项目总账根因达上限"暂停时在步骤内登记，结果并入本步骤记录，停下的续跑步骤是本步骤；
+#     同一修复提交已登记时判定输出 REPAIR_ACTION=already，不再执行登记命令。
+root_cause_repair() {
+  local label="$1" mode="$2" object=() args=() cause
+  if [ "$#" -ge 4 ]; then object=(--kind "$3" --object "$4"); fi
+  REPAIR_ACTION=""
+  decide repair-plan --mode "$mode" ${object[@]+"${object[@]}"}
+  if skipped || [ "$REPAIR_ACTION" = already ]; then return 0; fi
+  args=(record-root-cause-repair --ledger-dir "$LEDGER_DIR")
+  for cause in $TODO_RCS; do args+=(--root-cause-id "$cause"); done
+  args+=(--kind code --binding "fix_commit_sha=$REPAIR_FIX_COMMIT" --binding "regression_receipt_sha256=$REG_SHA256"
+         --binding "deployment_receipt_sha256=$DEPLOY_RECEIPT_SHA256" --note "$REPAIR_NOTE")
+  managed codex_upgrade_project_ledger "$label" "${args[@]}"
+  decide repair-verdict --raw "$RAW" --subject "$TODO_RCS" --mode "$mode" ${object[@]+"${object[@]}"}
+}
+
+# reconcile_object <标签> <对象类别> <对象> <受管对账命令与参数…>：reconcile-runs 里对账一个对象（父 run 或 attempt）。
+#   判定 ACTION=repair（暂停只因项目总账根因达上限且参数给了登记材料，与 reconcile-attempt 旁路同一判据）时，按
+#   root_cause_repair inline 在本步骤内登记，再对该对象重新对账一次（--mode after-repair：仍暂停即停下，不再登记）。
+reconcile_object() {
+  local label="$1" kind="$2" subject="$3"
+  shift 3
+  managed codex_upgrade "$label" "$@"
+  decide run-verdict --raw "$RAW" --kind "$kind" --subject "$subject"
+  if [ "$ACTION" != repair ]; then return 0; fi
+  root_cause_repair "$label-repair" inline "$kind" "$subject"
+  managed codex_upgrade "$label-after-repair" "$@"
+  decide run-verdict --raw "$RAW" --kind "$kind" --subject "$subject" --mode after-repair
+}
+
 # reconcile_one_attempt <序号> <attempt> <恢复段或 ->：链尾父 run 窗口内非目标 attempt 的对账。
 reconcile_one_attempt() {
   local n="$1" attempt="$2" revision="$3" subject extra=()
@@ -270,8 +310,8 @@ reconcile_one_attempt() {
     extra=(--recovery-revision "$revision")
     subject="$attempt:$revision"
   fi
-  managed codex_upgrade "attempt-$n-$attempt" reconcile-attempt --campaign-dir "$C" --attempt-id "$attempt" ${extra[@]+"${extra[@]}"}
-  decide run-verdict --raw "$RAW" --kind attempt --subject "$subject"
+  reconcile_object "attempt-$n-$attempt" attempt "$subject" \
+    reconcile-attempt --campaign-dir "$C" --attempt-id "$attempt" ${extra[@]+"${extra[@]}"}
 }
 
 step_reconcile_runs() {
@@ -285,8 +325,7 @@ step_reconcile_runs() {
     IFS=$'\t' read -r kind run a b <<< "$row"
     n=$((n + 1))
     if [ "$kind" = supervisor-run ]; then
-      managed codex_upgrade "run-$n" reconcile-supervisor-run --run-dir "$a" --campaign-dir "$C"
-      decide run-verdict --raw "$RAW" --kind supervisor-run --subject "$run"
+      reconcile_object "run-$n" supervisor-run "$run" reconcile-supervisor-run --run-dir "$a" --campaign-dir "$C"
       if [ "$ACTION" = redirect ]; then
         echo "  [reconcile-runs] $run 期间已有预约，按对账器提示改走 reconcile-attempt：$REDIRECT"
         redirected+=("$run")
@@ -308,14 +347,7 @@ step_reconcile_attempt() {
 }
 
 step_repair() {
-  decide repair-plan
-  if skipped; then return 0; fi
-  local args=(record-root-cause-repair --ledger-dir "$LEDGER_DIR") cause
-  for cause in $TODO_RCS; do args+=(--root-cause-id "$cause"); done
-  args+=(--kind code --binding "fix_commit_sha=$REPAIR_FIX_COMMIT" --binding "regression_receipt_sha256=$REG_SHA256"
-         --binding "deployment_receipt_sha256=$DEPLOY_RECEIPT_SHA256" --note "$REPAIR_NOTE")
-  managed codex_upgrade_project_ledger repair "${args[@]}"
-  decide repair-verdict --raw "$RAW" --subject "$TODO_RCS"
+  root_cause_repair repair step
 }
 
 step_approve() {

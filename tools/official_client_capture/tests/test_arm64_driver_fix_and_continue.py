@@ -11,6 +11,10 @@
   下一步、``--from`` 续跑与前序记录核对、账务暂停／环境污染／永久停线停下不越权、阶段截止已过时对账前先延期、
   候选审核时授权后再延期、根因修复只登记一次、wire 闭包变化时演进停下、父 run 对账按提示改走 attempt 对账、
   守护代码差异不符与实测失败即停。
+* 第 59 项：reconcile-runs 对账遇"项目总账根因达上限"暂停时，与 reconcile-attempt 旁路走同一条登记路径（同一判定、
+  同一命令、同一回归收据生成与校验、同一幂等规则），登记后对该对象重新对账一次；没给材料时停下且提示的 ``--from``
+  真能通过 check_from；Campaign 账本 stop_required 不走旁路；前次判定暂停的对象续跑时重新对账（受管对账器先写收据、
+  入总账再判定，暂停对象的收据按监督器判据核验是通过的，不能据此当作已对账跳过）。
 
 受管工具替身只在 ``FC_TEST_STUB_DIR`` 下读写；PATH 垫片只替换 setsid（同步执行）、systemctl、id、chown。
 git、python3、wait_state.py、parse_env.py 都是真的。
@@ -131,6 +135,32 @@ def stage_expired(st):
     return st.get("phase") == "VC-5" and bool(deadline) and parse_utc(deadline) <= datetime.now(timezone.utc)
 
 
+# 第 59 项：根因达上限暂停的替身口径与受管对账器 _decide／_paused_next_command 同文。
+ROOT_CAUSE_REASON = "根因 {causes} 累计失败已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）"
+CAMPAIGN_STOP_REASON = "Campaign 账本同根因重试已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）"
+ROOT_CAUSE_NEXT = ("登记根因修复证据：本 Campaign 账本已 stop_required 用 campaign-resume preview/apply（绑定修复提交、离线回归与部署收据）；"
+                   "只是项目总账根因达上限用 codex_upgrade_project_ledger record-root-cause-repair（code：修复提交／回归收据／部署收据）；"
+                   "随后重新执行本对账；批准后从原对账 checkpoint 继续")
+
+
+def root_cause_pause(st, subject):
+    """场景 root_cause_limits {对象: 根因}：该根因在总账还没有修复事件时，对账判"项目总账根因达上限"暂停；
+    场景 campaign_stop_required [对象]：Campaign 账本 stop_required，人工 campaign-resume（状态 campaign_resumed）前一直暂停。
+    与受管对账器同：暂停只是判定——对账收据与总账入账在判定之前已经写下（调用方先写收据再调本函数）。"""
+    sc = scenario()
+    reasons = []
+    cause = (sc.get("root_cause_limits") or {}).get(subject)
+    if subject in (sc.get("campaign_stop_required") or []) and not st.get("campaign_resumed"):
+        reasons.append(CAMPAIGN_STOP_REASON)
+    if cause is not None and not any(cause in repair["root_cause_ids"] for repair in st.get("repairs", [])):
+        reasons.append(ROOT_CAUSE_REASON.format(causes=[cause]))
+    if not reasons:
+        return None
+    return {"status": "paused", "root_cause": {"root_cause_id": cause or "rc1-fixture-campaign"},
+            "decision": {"decision": "paused", "pause_kinds": ["root_cause_repair"], "reasons": reasons},
+            "next_command": ROOT_CAUSE_NEXT}
+
+
 def campaign_dir():
     return DATA / "evidence" / "campaigns" / scenario()["campaign"]
 
@@ -188,6 +218,10 @@ def _attempt(st, attempt_id, *, approve=None):
                      "next_command": "deadline-extend preview/apply；批准后从原对账 checkpoint 继续"}, 3)
     directory = campaign_dir() / "control" / "reconciliation" / f"attempt-{attempt_id}"
     write_json(directory / "attempt-reconciliation.json", {"attempt_id": attempt_id})
+    # 与受管对账器同：对账收据先于判定写下，根因达上限暂停时收据也已存在（不生成恢复预览）。
+    paused = root_cause_pause(st, attempt_id)
+    if paused is not None:
+        return emit({**paused, "attempt_id": attempt_id}, 3)
     preview = directory / "recovery-preview-01.json"
     # 与真实预览同形：冻结生成时的 Campaign 计时账本 head（授权消费时核对 head 未推进）。
     write_json(preview, {"review_sha256": PREVIEW_SHA, "source_attempt_id": attempt_id,
@@ -243,8 +277,12 @@ def cli(module, argv):
         if redirect:
             return emit(None, 1, "升级审计失败：该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt"
                                  "（恢复段加 --recovery-revision）：" + "、".join(redirect))
+        # 与受管 reconcile_supervisor_run 同：收据写入与总账入账在判定之前（暂停时收据也已存在，扫描会按"已对账"核验通过）。
         write_json(campaign_dir() / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json",
                    {"run_id": run_dir.name})
+        paused = root_cause_pause(st, run_dir.name)
+        if paused is not None:
+            return emit({**paused, "run_id": run_dir.name}, 3)
         return emit({"status": "recoverable", "run_id": run_dir.name,
                      "next_command": "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"})
     if module == "codex_upgrade" and key == "reconcile-attempt":
@@ -287,8 +325,13 @@ def cli(module, argv):
     if module == "codex_upgrade_project_ledger" and key == "record-root-cause-repair":
         bindings = dict(item.split("=", 1) for item in options(argv, "--binding"))
         causes = options(argv, "--root-cause-id")
-        st.setdefault("repairs", []).append({"root_cause_ids": causes, "bindings": bindings, "note": option(argv, "--note")})
-        save_state(st)
+        if sc.get("repair_cli_fail"):
+            # 与受管 CLI 同：失败只在 stderr 给原因、退出码 2、零写入。
+            return emit(None, 2, f"项目总账失败：根因 {causes} 未在总账出现过，无从修复")
+        if not sc.get("repair_not_in_ledger"):
+            # repair_not_in_ledger：CLI 报成功但总账里没有修复事件（驱动必须按总账复核失败关闭）。
+            st.setdefault("repairs", []).append({"root_cause_ids": causes, "bindings": bindings, "note": option(argv, "--note")})
+            save_state(st)
         return emit({"operation_id": f"repair:{causes[0]}:0000", "root_cause_ids": causes,
                      "receipt_sha256": "c" * 64, "head_sequence": 294})
     return emit(None, 99, f"替身不认识的调用：{module} {argv}")
@@ -751,9 +794,60 @@ class _Round:
     def stub_state(self) -> dict:
         return json.loads((self.stub / "state.json").read_text(encoding="utf-8"))
 
+    def set_stub_state(self, **changes: object) -> None:
+        """模拟编排之外的人工操作（如人工 campaign-resume）改变受管现场。"""
+
+        payload = self.stub_state()
+        payload.update(changes)
+        _write_json(self.stub / "state.json", payload)
+
+    def check_from(self, step: str) -> subprocess.CompletedProcess[str]:
+        """与 fix-and-continue.sh 续跑前同一核对（check-from 子命令）。"""
+
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+               "PYTHONPYCACHEPREFIX": os.environ.get("PYTHONPYCACHEPREFIX", "/tmp/pyc-agent-item35")}
+        env.pop("PYTHONPATH", None)
+        return subprocess.run([sys.executable, str(HELPER), "check-from", "--params", str(self.params_path), "--step", step],
+                              capture_output=True, text=True, env=env)
+
 
 def load_helper():
     return driver_tests.load_script("fix_and_continue")
+
+
+def _repair_params(root: Path, *, causes: str = "rc1-fixture", fix: str = "4" * 40,
+                   draft: dict | None = None) -> tuple[dict[str, str], Path]:
+    """根因修复登记材料（与 repair 步骤用例同形的回归收据草稿）：返回 (参数覆盖, 回归收据写入位置)。"""
+
+    payload = {
+        "schema_version": "arm64-code-regression-receipt/v1",
+        "fix_commit_sha": fix,
+        "fix_commits": [fix],
+        "root_cause_id": causes.split()[0],
+        "defect": "测试缺陷描述",
+        "triggering_failure": {"campaign_id": "c", "batch_sequence": 18},
+        "targeted_regression": {"local_unit_tests": ["t"], "arm64_real_check": {"summary": "测试"},
+                                "deployment_receipt": {"summary": "测试部署"}},
+        "operator": "测试",
+    }
+    payload.update(draft or {})
+    draft_path = _write_json(root / "upload" / "regression-draft.json", payload)
+    receipt = root / "runroot-receipts" / "regression.json"
+    return {
+        "REPAIR_ROOT_CAUSES": causes, "REPAIR_FIX_COMMIT": fix, "REPAIR_SEQ": "293",
+        "REGRESSION_DRAFT": str(draft_path), "REGRESSION_RECEIPT": str(receipt),
+        "REPAIR_NOTE": "测试登记（总账序号 $REPAIR_SEQ，修复 $REPAIR_FIX_COMMIT）",
+    }, receipt
+
+
+def _stop_hints(output: str) -> tuple[list[str], str | None]:
+    """停下输出里"下一步"行给出的全部 --from 步骤，与"续跑"行的 --from 步骤。"""
+
+    lines = output.splitlines()
+    hint = next((line for line in lines if line.startswith("下一步：")), "")
+    resume = next((line for line in lines if line.startswith("续跑：")), "")
+    resumed = re.findall(r"--from ([a-z-]+)", resume)
+    return re.findall(r"--from ([a-z-]+)", hint), (resumed[0] if resumed else None)
 
 
 FULL_ORDER = [
@@ -967,6 +1061,51 @@ class ReconciliationScanTests(unittest.TestCase):
                                                         target_attempt="att", supervisor=supervisor)
             self.assertEqual(result["active"], ["run-c"])
             self.assertEqual(result["unsupported"], [{"run_id": "run-b", "state": "audit-incomplete"}])
+
+    def test_scan_revisits_objects_whose_last_verdict_paused(self) -> None:
+        """第 59 项：受管对账器先写收据、入总账，再判定——判"根因达上限"暂停的父 run 收据与绑定都已完整，
+        按监督器判据核验通过。前次对账停在暂停的对象（revisit）核验通过后仍列为待对账，不能当作已对账跳过；
+        核验不过照旧失败关闭，不因 revisit 改走对账。"""
+
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_id = "c-revisit"
+            campaign_dir = root / "evidence" / "campaigns" / campaign_id
+            campaign_dir.mkdir(parents=True)
+            b4_reconciliation_fixtures.write_private_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id})
+            state_dir = root / "state"
+            state_dir.mkdir(mode=0o700)
+            t0 = 1_790_553_600.0
+            self._run(state_dir, campaign_id, "run-ok", "stopped", t0 - 2000)
+            paused = self._run(state_dir, campaign_id, "run-paused", "failed", t0 - 1000)
+            state = json.loads((paused / "state.json").read_text(encoding="utf-8"))
+            manifest = json.loads((paused / "campaign-run-manifest.json").read_text(encoding="utf-8"))["manifest"]
+            receipt = b4_reconciliation_fixtures.bind_supervisor_run_reconciliation(campaign_dir, paused, state, manifest)
+            revisit = [{"kind": "supervisor-run", "subject": "run-paused"}]
+            plain = helper.scan_reconciliation_targets(campaign_dir, state_dir, campaign_id=campaign_id,
+                                                       target_attempt="att", supervisor=supervisor)
+            self.assertEqual([item["run_id"] for item in plain["reconciled"]], ["run-paused"])
+            self.assertEqual(plain["pending"], [])
+            again = helper.scan_reconciliation_targets(campaign_dir, state_dir, campaign_id=campaign_id,
+                                                       target_attempt="att", supervisor=supervisor, revisit=revisit)
+            self.assertEqual(again["reconciled"], [])
+            self.assertEqual([(item["kind"], item["run_id"], item["run_dir"], item.get("revisit")) for item in again["pending"]],
+                             [("supervisor-run", "run-paused", str(paused), True)])
+            self.assertEqual(again["revisit"], revisit)
+            self.assertEqual(again["problems"], [])
+            # 不在链尾的对象（其后已有正常结束的 run）不再重新对账：revisit 只作用于链尾。
+            self._run(state_dir, campaign_id, "run-later-ok", "stopped", t0)
+            beyond = helper.scan_reconciliation_targets(campaign_dir, state_dir, campaign_id=campaign_id,
+                                                        target_attempt="att", supervisor=supervisor, revisit=revisit)
+            self.assertEqual((beyond["pending"], beyond["revisit"], beyond["tail"]), ([], [], []))
+            shutil.rmtree(state_dir / "run-later-ok")
+            receipt.write_text(receipt.read_text(encoding="utf-8").replace("b4-fixture-01", "b4-fixture-02"), encoding="utf-8")
+            broken = helper.scan_reconciliation_targets(campaign_dir, state_dir, campaign_id=campaign_id,
+                                                        target_attempt="att", supervisor=supervisor, revisit=revisit)
+            self.assertEqual((broken["pending"], broken["reconciled"], broken["revisit"]), ([], [], []))
+            self.assertEqual(len(broken["problems"]), 1)
+            self.assertIn("run-paused", broken["problems"][0])
 
 
 class FixAndContinueScriptTests(unittest.TestCase):
@@ -1256,6 +1395,300 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, EXIT_OPERATOR, result.stdout + result.stderr)
         self.assertIn("run-live", result.stdout + result.stderr)
         self.assertEqual(fixture.calls(), [])
+
+
+ROOT_CAUSE_REASON_FIXTURE = "根因 ['rc1-fixture'] 累计失败已达上限（暂停：campaign-resume 登记修复证据、清零该根因后继续）"
+STEP_RECORD_KEYS = {"schema_version", "round", "step", "status", "identity", "params_path", "params_sha256", "run_stamp",
+                    "recorded_at_utc", "summary", "reason", "next", "resume_from"}
+
+
+class ReconcileRunsRootCauseRepairTests(unittest.TestCase):
+    """第 59 项：reconcile-runs 对账遇"项目总账根因达上限"暂停时，与 reconcile-attempt 旁路走同一条登记路径。
+
+    缺陷（2026-09-28 r24 真实续跑暴露）：reconcile-runs 的判定对暂停一律停下，提示"填参数后 --from reconcile-attempt"，
+    但 reconcile-runs 不是 passed，check_from 拒绝；--from repair 同样被拒；而受管对账器在判定之前就写下了对账收据与总账
+    入账，扫描续跑时会把暂停的父 run 当作"已对账"跳过、暂停判定被悄悄丢掉。只能绕开编排手工登记。
+    替身与受管对账器同：暂停时对账收据已存在。
+    """
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.root = Path(self._directory.name).resolve()
+        self.root.chmod(0o700)
+
+    def tearDown(self) -> None:
+        self._directory.cleanup()
+
+    def _new_root(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name).resolve()
+        root.chmod(0o700)
+        return root
+
+    def _assert_ok(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.assertEqual(result.returncode, 0, result.stdout[-6000:] + result.stderr[-6000:])
+        self.assertIn("FIX_AND_CONTINUE_DONE", result.stdout)
+
+    def _assert_hints_resumable(self, fixture: _Round, output: str, expected: str = "reconcile-runs") -> None:
+        """停下提示里的每个 --from 与"续跑"行一致，且都真的能通过 check_from。"""
+
+        hinted, resumed = _stop_hints(output)
+        self.assertEqual(resumed, expected, output[-4000:])
+        self.assertTrue(hinted, f"下一步里应给出 --from：{output[-4000:]}")
+        self.assertEqual(set(hinted), {expected}, output[-4000:])
+        for step in {*hinted, resumed}:
+            check = fixture.check_from(step)
+            self.assertEqual(check.returncode, 0, f"提示的 --from {step} 通不过 check_from：{check.stderr}")
+
+    def test_runs_pause_registers_inline_and_reconciles_again(self) -> None:
+        """目标 1：参数已给登记材料——同一次运行内登记（同一判定、同一命令、同一回归收据生成与校验），
+        登记后对该父 run 重新对账一次，接着跑到底；repair 步骤按"已登记同一修复提交"跳过。"""
+
+        repair, receipt = _repair_params(self.root)
+        fixture = _Round(self.root, scenario={"root_cause_limits": {"run-b": "rc1-fixture"}}, params=repair)
+        self._assert_ok(fixture.run())
+        keys = fixture.call_keys()
+        start = keys.index("reconcile-supervisor-run:run-b")
+        self.assertEqual(keys[start:start + 4], [
+            "reconcile-supervisor-run:run-b", "record-root-cause-repair", "reconcile-supervisor-run:run-b",
+            f"reconcile-attempt:plain:{ATTEMPT}",
+        ])
+        self.assertEqual(keys.count("record-root-cause-repair"), 1)
+        # 同一命令：与 repair 步骤逐字相同的 record-root-cause-repair（总账目录、根因、三项绑定、note）。
+        call = [c["argv"] for c in fixture.calls() if c["argv"][:1] == ["record-root-cause-repair"]][0]
+        deploy_receipt = sorted((fixture.data / "control").glob("codex-*-supervisor-enable-*.json"))[-1]
+        self.assertEqual(call, [
+            "record-root-cause-repair", "--ledger-dir", str(fixture.data / "evidence" / "campaigns" / "upgrade-project-ledger"),
+            "--root-cause-id", "rc1-fixture", "--kind", "code",
+            "--binding", f"fix_commit_sha={'4' * 40}", "--binding", f"regression_receipt_sha256={_sha256(receipt)}",
+            "--binding", f"deployment_receipt_sha256={_sha256(deploy_receipt)}",
+            "--note", f"测试登记（总账序号 293，修复 {'4' * 40}）",
+        ])
+        # 同一回归收据生成：草稿 + 本轮实测日志摘要 + 最新部署收据。
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(payload["targeted_regression"]["arm64_real_check"]["tests"]["sha256"],
+                         _sha256(fixture.out / "item-tests.log"))
+        self.assertEqual(payload["targeted_regression"]["deployment_receipt"]["sha256"], _sha256(deploy_receipt))
+        self.assertEqual(payload["defect"], "测试缺陷描述")
+        runs = fixture.step("reconcile-runs")
+        self.assertEqual(runs["status"], "passed")
+        repairs = runs["summary"]["root_cause_repairs"]
+        self.assertEqual([(item["kind"], item["object"], item["action"]) for item in repairs], [("supervisor-run", "run-b", "recorded")])
+        self.assertEqual(repairs[0]["todo"], ["rc1-fixture"])
+        self.assertEqual(repairs[0]["pause_kinds"], ["root_cause_repair"])
+        self.assertEqual(repairs[0]["operation_id"], "repair:rc1-fixture:0000")
+        self.assertEqual(repairs[0]["regression_receipt_sha256"], _sha256(receipt))
+        self.assertEqual(runs["summary"]["revisit"], [])
+        self.assertEqual([(item["subject"], item.get("after_root_cause_repair")) for item in runs["summary"]["done"]],
+                         [("run-b", True)])
+        # 同一幂等规则：repair 步骤见同一修复提交已登记即跳过；再跑一整轮不重复登记、不重复对账。
+        self.assertEqual(fixture.step("repair")["status"], "skipped")
+        self.assertIn("已登记同一修复提交", fixture.step("repair")["reason"])
+        self._assert_ok(fixture.run())
+        self.assertEqual(fixture.call_keys().count("record-root-cause-repair"), 1)
+        self.assertEqual(fixture.call_keys().count("reconcile-supervisor-run:run-b"), 2)
+        self.assertEqual(fixture.step("reconcile-runs")["status"], "skipped")
+
+    def test_runs_pause_without_material_hint_resumes_from_reconcile_runs(self) -> None:
+        """目标 2：没给材料时停下，提示的 --from 能通过 check_from；照提示补材料续跑，登记后跑到底。"""
+
+        fixture = _Round(self.root, scenario={"root_cause_limits": {"run-b": "rc1-fixture"}})
+        stopped = fixture.run()
+        output = stopped.stdout + stopped.stderr
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, output)
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-runs status=needs-operator resume_from=reconcile-runs", output)
+        self.assertIn("REPAIR_ROOT_CAUSES", output)
+        self.assertIn("record-root-cause-repair", output)
+        self.assertNotIn("--from reconcile-attempt", output)
+        self._assert_hints_resumable(fixture, output)
+        self.assertNotIn("record-root-cause-repair", fixture.call_keys())
+        self.assertEqual(fixture.step("reconcile-runs")["summary"]["revisit"], [{"kind": "supervisor-run", "subject": "run-b"}])
+        # 照提示：参数文件补登记材料，按提示的 --from 续跑。
+        repair, _receipt = _repair_params(self.root)
+        fixture.write_params(repair)
+        _hinted, resume = _stop_hints(output)
+        self._assert_ok(fixture.run("--from", resume))
+        keys = fixture.call_keys()
+        # 暂停 → 续跑重新对账（收据虽已写，前次判定是暂停）→ 登记后重新对账 recoverable。
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 3)
+        self.assertEqual(keys.count("record-root-cause-repair"), 1)
+        self.assertLess(keys.index("record-root-cause-repair"), keys.index(f"reconcile-attempt:plain:{ATTEMPT}"))
+        for name in ("reconcile-runs", "reconcile-attempt", "approve", "authorize", "accepted", "recover"):
+            self.assertEqual(fixture.step(name)["status"], "passed", name)
+        self.assertEqual(fixture.step("repair")["status"], "skipped")
+
+    def test_runs_campaign_stop_required_stops_without_registering(self) -> None:
+        """目标 3：Campaign 账本 stop_required 不走本旁路——给了登记材料也不登记，停下等人工 campaign-resume；
+        人工恢复后按提示续跑，前次暂停的父 run 重新对账，登记仍由 repair 步骤按原规则做。"""
+
+        repair, receipt = _repair_params(self.root)
+        fixture = _Round(self.root, scenario={"campaign_stop_required": ["run-b"]}, params=repair)
+        stopped = fixture.run()
+        output = stopped.stdout + stopped.stderr
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, output)
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-runs status=needs-operator", output)
+        self.assertIn("campaign-resume", output)
+        keys = fixture.call_keys()
+        self.assertNotIn("record-root-cause-repair", keys)
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 1)
+        self.assertFalse(receipt.exists(), "不走旁路：不得生成回归收据")
+        self.assertFalse(any("campaign-resume" in arg for call in fixture.calls() for arg in call["argv"]))
+        self._assert_hints_resumable(fixture, output)
+        self.assertNotIn("root_cause_repairs", fixture.step("reconcile-runs")["summary"])
+        fixture.set_stub_state(campaign_resumed=True)
+        self._assert_ok(fixture.run("--from", "reconcile-runs"))
+        keys = fixture.call_keys()
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 2)
+        self.assertEqual(fixture.step("reconcile-runs")["status"], "passed")
+        self.assertNotIn("root_cause_repairs", fixture.step("reconcile-runs")["summary"])
+        self.assertEqual(keys.count("record-root-cause-repair"), 1)
+        self.assertLess(keys.index(f"reconcile-attempt:plain:{ATTEMPT}"), keys.index("record-root-cause-repair"))
+        self.assertEqual(fixture.step("repair")["status"], "passed")
+
+    def test_runs_pause_on_redirected_attempt_registers_inline(self) -> None:
+        """目标 1（attempt 对象）：父 run 按对账器提示改走 attempt 对账，该 attempt 判根因达上限暂停，同样内联登记后重新对账。"""
+
+        other = "20260928T000000Z-aaaaaaaaaaaaaaaa"
+        repair, _receipt = _repair_params(self.root)
+        fixture = _Round(self.root, scenario={"redirect_runs": {"run-b": [other]}, "root_cause_limits": {other: "rc1-fixture"}},
+                         params=repair)
+        self._assert_ok(fixture.run())
+        keys = fixture.call_keys()
+        start = keys.index("reconcile-supervisor-run:run-b")
+        self.assertEqual(keys[start:start + 5], [
+            "reconcile-supervisor-run:run-b", f"reconcile-attempt:plain:{other}", "record-root-cause-repair",
+            f"reconcile-attempt:plain:{other}", f"reconcile-attempt:plain:{ATTEMPT}",
+        ])
+        record = fixture.step("reconcile-runs")
+        self.assertEqual([(item["kind"], item["object"], item["action"]) for item in record["summary"]["root_cause_repairs"]],
+                         [("attempt", other, "recorded")])
+        self.assertEqual(record["summary"]["redirected_runs"], ["run-b"])
+        self.assertEqual(fixture.step("repair")["status"], "skipped")
+
+    def test_runs_still_paused_after_repair_stops_and_never_registers_twice(self) -> None:
+        """目标 1：登记后重新对账仍暂停就停下；照提示续跑时同一修复提交已登记即不再执行登记命令。"""
+
+        # 参数里登记的根因不是暂停的根因（人填错）：登记一次、重新对账一次仍暂停。
+        repair, _receipt = _repair_params(self.root, causes="rc1-fixture")
+        fixture = _Round(self.root, scenario={"root_cause_limits": {"run-b": "rc1-other"}}, params=repair)
+        stopped = fixture.run()
+        output = stopped.stdout + stopped.stderr
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, output)
+        self.assertIn("登记根因修复后重新对账仍暂停", output)
+        self.assertIn("rc1-other", output)
+        keys = fixture.call_keys()
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 2)
+        self.assertEqual(keys.count("record-root-cause-repair"), 1)
+        self.assertNotIn(f"reconcile-attempt:plain:{ATTEMPT}", keys)
+        self._assert_hints_resumable(fixture, output)
+        record = fixture.step("reconcile-runs")
+        self.assertEqual((record["status"], record["resume_from"]), ("needs-operator", "reconcile-runs"))
+        self.assertEqual(record["summary"]["revisit"], [{"kind": "supervisor-run", "subject": "run-b"}])
+        self.assertEqual([item["action"] for item in record["summary"]["root_cause_repairs"]], ["recorded"])
+        again = fixture.run("--from", "reconcile-runs")
+        self.assertEqual(again.returncode, EXIT_OPERATOR, again.stdout + again.stderr)
+        keys = fixture.call_keys()
+        self.assertEqual(keys.count("record-root-cause-repair"), 1)
+        self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 4)
+        self.assertEqual([item["action"] for item in fixture.step("reconcile-runs")["summary"]["root_cause_repairs"]], ["already"])
+        self.assertNotIn("vc5-recover.sh", keys)
+
+    def test_runs_inline_repair_keeps_every_check(self) -> None:
+        """目标 4：内联登记不削弱任何核对——回归收据字段、fix_commit_sha、根因集合、实测日志摘要、登记命令结果、
+        登记后总账里必须有修复事件；任何一项不过都停在 reconcile-runs（续跑步骤仍是它），不重新对账、不往下走。"""
+
+        cases = {
+            "草稿修复提交不符": ({"draft": {"fix_commit_sha": "5" * 40}}, {}, EXIT_OPERATOR, "fix_commit_sha", 0),
+            "草稿根因不在参数内": ({"draft": {"root_cause_id": "rc1-foreign"}}, {}, EXIT_OPERATOR, "不在 REPAIR_ROOT_CAUSES 内", 0),
+            "收据实测日志摘要不符": (None, {}, EXIT_OPERATOR, "实测日志摘要不符", 0),
+            "登记命令失败": ({}, {"repair_cli_fail": True}, EXIT_FAILED, "record-root-cause-repair 失败", 1),
+            "登记后总账无修复事件": ({}, {"repair_not_in_ledger": True}, EXIT_FAILED, "登记后总账里仍没有", 1),
+        }
+        for name, (options, scenario, code, needle, records) in cases.items():
+            with self.subTest(name=name):
+                root = self._new_root()
+                if options is None:
+                    # 已存在的回归收据（不走草稿）引用的实测日志与摘要对不上。
+                    log = _write(root / "upload" / "other-tests.log", "别的实测日志\n")
+                    receipt = _write_json(root / "runroot-receipts" / "regression.json", {
+                        "schema_version": "arm64-code-regression-receipt/v1", "fix_commit_sha": "4" * 40,
+                        "root_cause_id": "rc1-fixture",
+                        "targeted_regression": {"arm64_real_check": {"tests": {"path": str(log), "sha256": "0" * 64}}},
+                    })
+                    params = {"REPAIR_ROOT_CAUSES": "rc1-fixture", "REPAIR_FIX_COMMIT": "4" * 40,
+                              "REGRESSION_RECEIPT": str(receipt), "REPAIR_NOTE": "测试登记"}
+                else:
+                    params, receipt = _repair_params(root, **options)
+                fixture = _Round(root, scenario={"root_cause_limits": {"run-b": "rc1-fixture"}, **scenario}, params=params)
+                result = fixture.run()
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, code, output[-4000:])
+                self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-runs", output)
+                self.assertIn(needle, output)
+                self._assert_hints_resumable(fixture, output)
+                keys = fixture.call_keys()
+                self.assertEqual(keys.count("record-root-cause-repair"), records)
+                self.assertEqual(keys.count("reconcile-supervisor-run:run-b"), 1)
+                self.assertNotIn(f"reconcile-attempt:plain:{ATTEMPT}", keys)
+                self.assertNotIn("vc5-recover.sh", keys)
+                record = fixture.step("reconcile-runs")
+                self.assertEqual(record["resume_from"], "reconcile-runs")
+                self.assertEqual(record["summary"]["revisit"], [{"kind": "supervisor-run", "subject": "run-b"}])
+                if name.startswith("草稿"):
+                    self.assertFalse(receipt.exists(), "草稿不合格不得写回归收据")
+
+    def test_attempt_pause_repair_step_record_format_unchanged(self) -> None:
+        """目标 5：reconcile-attempt 旁路（passed needs_repair → repair 步骤登记 → approve 重新对账）行为与步骤记录格式不变，
+        --list 仍每步一行可读。"""
+
+        repair, _receipt = _repair_params(self.root)
+        fixture = _Round(self.root, scenario={"root_cause_limits": {ATTEMPT: "rc1-fixture"}}, params=repair)
+        self._assert_ok(fixture.run())
+        keys = fixture.call_keys()
+        start = keys.index(f"reconcile-attempt:plain:{ATTEMPT}")
+        self.assertEqual(keys[start:start + 4], [
+            f"reconcile-attempt:plain:{ATTEMPT}", "record-root-cause-repair", f"reconcile-attempt:plain:{ATTEMPT}",
+            f"reconcile-attempt:approve:{ATTEMPT}",
+        ])
+        attempt = fixture.step("reconcile-attempt")
+        self.assertEqual(set(attempt), STEP_RECORD_KEYS)
+        self.assertEqual((attempt["status"], attempt["summary"]), ("passed", {
+            "decision": "paused", "needs_repair": True, "pause_kinds": ["root_cause_repair"],
+            "reasons": [ROOT_CAUSE_REASON_FIXTURE], "root_cause": "rc1-fixture"}))
+        record = fixture.step("repair")
+        self.assertEqual(set(record), STEP_RECORD_KEYS)
+        self.assertEqual((record["status"], record["reason"], record["next"], record["resume_from"]), ("passed", None, None, None))
+        self.assertEqual(set(record["summary"]), {"todo", "regression_receipt", "regression_receipt_sha256",
+                                                  "regression_receipt_written", "deployment_receipt", "operation_id",
+                                                  "receipt_sha256", "head_sequence"})
+        self.assertEqual(record["summary"]["todo"], ["rc1-fixture"])
+        self.assertEqual(len(list((fixture.out / "raw").glob("*-repair-repair.out"))), 1)
+        self.assertNotIn("root_cause_repairs", fixture.step("reconcile-runs")["summary"])
+        listing = fixture.run("--list")
+        self.assertEqual(listing.returncode, 0, listing.stderr)
+        lines = listing.stdout.splitlines()
+        self.assertEqual([line.split()[0] for line in lines], [
+            "deploy", "postdeploy", "item-tests", "evolution", "pre-extend", "reconcile-runs", "reconcile-attempt",
+            "repair", "approve", "authorize", "extend", "accepted", "recover",
+        ])
+        for line in lines:
+            self.assertRegex(line, r"^[a-z-]+ +(passed|skipped)  \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+    def test_attempt_pause_without_material_hint_passes_check_from(self) -> None:
+        """目标 2（reconcile-attempt 一侧）：没给材料时停在 reconcile-attempt，提示 --from 能通过 check_from，照做续跑到底。"""
+
+        fixture = _Round(self.root, scenario={"root_cause_limits": {ATTEMPT: "rc1-fixture"}})
+        stopped = fixture.run()
+        output = stopped.stdout + stopped.stderr
+        self.assertEqual(stopped.returncode, EXIT_OPERATOR, output)
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=reconcile-attempt status=needs-operator resume_from=reconcile-attempt", output)
+        self._assert_hints_resumable(fixture, output, expected="reconcile-attempt")
+        repair, _receipt = _repair_params(self.root)
+        fixture.write_params(repair)
+        self._assert_ok(fixture.run("--from", "reconcile-attempt"))
+        self.assertEqual(fixture.call_keys().count("record-root-cause-repair"), 1)
+        self.assertEqual(fixture.step("repair")["status"], "passed")
 
 
 if __name__ == "__main__":
