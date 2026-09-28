@@ -22879,6 +22879,115 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             )
 
+    def _b4_vc5_manifest(
+        self,
+        fixture: dict[str, object],
+        *,
+        batch_sequence: int,
+        actions: list[dict[str, object]],
+        execute: list[str],
+        reuse: list[str],
+    ) -> dict[str, object]:
+        """B4-1 夹具：VC-5 批次的 v2 内层清单（动作／execute 由调用方给定，其余批次字段与 seal 段夹具同形）。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
+        return supervisor.build_batched_campaign_run_manifest(
+            campaign_id=str(fixture["manifest"]["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id=f"vc-5-{batch_sequence:04d}",
+            batch_sequence=batch_sequence,
+            batch_sha256=str(batch_sequence) * 64,
+            phase="VC-5",
+            predecessor_checkpoint={"path": "control/vc/vc-4-checkpoint.json", "sha256": "3" * 64,
+                                    "phase": "VC-4", "checkpoint_sha256": "4" * 64},
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=actions,
+            execute_items=execute,
+            reuse_items=reuse,
+        )
+
+    def test_b4_5_candidate_post_run_execution_failure_is_redispatched_or_re_sealed(self) -> None:
+        """B4-1 改法 5（草表 D-08，行 55／59／62／64）：VC-5 零请求后处理动作以 execution-failure 收口（post-run-tooling
+        五判据不成立：中断类失败不可升级）——收账（B3-4）与 reconciler 判它可恢复并许可逐字重派，后继协议按同一判定
+        candidate_post_run_recovery_action 承接：逐字重派走环境／后处理重派协议，非逐字 seal 链后继走 seal 链续派协议；
+        候选采集动作（非后处理）的 execution-failure 仍不走逐字重派协议（由续跑预览协议承接）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            self._b0_advance_ledger_to_vc5(fixture["timing_ledger"])
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            action_id = "prepare-candidate-assertion-bundle"
+            self.assertEqual(supervisor.candidate_post_run_recovery_action(inner, action_id), "post-run")
+            run_dir = self._b0_run_dir(
+                fixture, "a" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=inner,
+                action_id=action_id, failure_kind="interrupted", error_type="KeyboardInterrupt", started_offset_seconds=5.0,
+            )
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir, inner, failed_action_id=action_id, failure_class="execution-failure"
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertIn("逐字重派同一批次", result["next_command"])
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["failure_class"], "execution-failure")
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            history = [(state, inner, run_dir)]
+
+            def check(manifest: dict) -> list:
+                return supervisor._validate_batched_campaign_history(
+                    manifest, history, campaign_dir=campaign_dir, staging_model=False
+                )
+
+            # 逐字重派 N+1：环境／后处理重派协议承接（原来 execution-failure 不在 RECOVERABLE 集合，返回 False 落入死路）。
+            verbatim = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
+            self.assertTrue(
+                supervisor._validate_batched_environment_redispatch_successor(state, inner, run_dir, verbatim, campaign_dir=campaign_dir)
+            )
+            self.assertEqual(check(verbatim), history)
+            # 修复后动作细节变化（非逐字）的同一 attempt seal 链后继：seal 链续派协议承接（原来只认 post-run-tooling／
+            # tool-evolution-required 的对账收据）。
+            changed = self._b0_seal_batch_manifest(
+                fixture, batch_sequence=2, actions=[dict(inner["actions"][0], timeout_seconds=6.0)]
+            )
+            self.assertTrue(
+                supervisor._validate_batched_seal_chain_successor(state, inner, run_dir, changed, campaign_dir=campaign_dir)
+            )
+            self.assertEqual(check(changed), history)
+            # 仍拒绝：候选采集动作（非零请求后处理）的 execution-failure 不走逐字重派协议。
+            capture_action = {
+                "action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600.0,
+                "command": [
+                    *self._B4_PREFIX, "capture-candidate", "run", "--campaign-dir", str(campaign_dir),
+                    *[token for flag, value in self._B4_IDENTITY.items() for token in (flag, value)],
+                    "--acknowledge-live-requests",
+                ],
+                "item_ids": ["candidate-run"],
+            }
+            capture_prior = self._b4_vc5_manifest(fixture, batch_sequence=1, actions=[capture_action], execute=["candidate-run"], reuse=[])
+            capture_run = self._b0_run_dir(
+                fixture, "b" * 64, phase="VC-5", failure_class="execution-failure", batched_manifest=capture_prior,
+                action_id="candidate-run", failure_kind="child-returncode", error_type="ChildProcessError", started_offset_seconds=5.0,
+            )
+            capture_state = json.loads((capture_run / "state.json").read_text(encoding="utf-8"))
+            self.assertIsNone(supervisor.candidate_post_run_recovery_action(capture_prior, "candidate-run"))
+            self.assertFalse(
+                supervisor._validate_batched_environment_redispatch_successor(
+                    capture_state, capture_prior, capture_run,
+                    self._b4_vc5_manifest(fixture, batch_sequence=2, actions=[capture_action], execute=["candidate-run"], reuse=[]),
+                    campaign_dir=campaign_dir,
+                )
+            )
+            # 非候选阶段（VC-1）的同名动作不在本判定内。
+            self.assertIsNone(supervisor.candidate_post_run_recovery_action(dict(inner, phase="VC-1"), action_id))
+
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""

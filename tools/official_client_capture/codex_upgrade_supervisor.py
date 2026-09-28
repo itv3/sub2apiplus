@@ -8729,9 +8729,22 @@ def _validate_batched_seal_chain_successor(
         resolved_campaign / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
     )
     # 第三批 B3-5：批次内采集已收口、后处理动作因评估器漂移未执行（tool-evolution-required）的前序同样可改派 seal 链批次。
-    if receipt.get("failure_class") not in {"post-run-tooling", "tool-evolution-required"}:
+    receipt_class = receipt.get("failure_class")
+    # B4-1 改法 5（草表 D-08）：零请求后处理动作以 execution-failure 收口（post-run-tooling 五判据不成立的残余情形）
+    # 时，收账与 reconciler 按 candidate_post_run_recovery_action 判它可恢复；这里用同一判定放行——失败动作由
+    # _failed_parent_facts 定位，定位不到即不放行。
+    post_run_execution_failure = False
+    if receipt_class == "execution-failure":
+        facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
+        post_run_execution_failure = (
+            facts is not None
+            and facts["action_id"] is not None
+            and candidate_post_run_recovery_action(prior_manifest, str(facts["action_id"])) is not None
+        )
+    if receipt_class not in {"post-run-tooling", "tool-evolution-required"} and not post_run_execution_failure:
         raise SupervisorError(
-            f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling）或评估器漂移（tool-evolution-required）失败。"
+            f"{label}：失败批次不是已对账的零请求后处理（post-run-tooling，或候选零请求后处理的 execution-failure）"
+            "或评估器漂移（tool-evolution-required）失败。"
         )
     return True
 
@@ -8816,7 +8829,13 @@ def _validate_batched_environment_redispatch_successor(
             owner_nonce=owner_nonce,
             run_started_at_utc=str(prior_state.get("started_at_utc", "")),
         )
-        if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES:
+        if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES and not (
+            # B4-1 改法 5（草表 D-08）：VC-5／VC-6 零请求后处理动作以 execution-failure 收口（post-run-tooling 五判据
+            # 不成立的残余情形）时，收账与 reconciler 按 candidate_post_run_recovery_action 判它可恢复并许可逐字重派；
+            # 这里用同一判定放行，对账许可（receipt_passed／收据 failure_class）仍由共享绑定逐项核对。
+            effective_class == "execution-failure"
+            and candidate_post_run_recovery_action(prior_manifest, action_id) is not None
+        ):
             return False
 
     if (
