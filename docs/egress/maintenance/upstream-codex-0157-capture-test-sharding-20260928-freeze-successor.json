@@ -1,0 +1,82 @@
+{
+  "base_commit": "3cf1a543fee56e975954ddc3b42570adc36fa5bd",
+  "changed_path_count": 4,
+  "current_commit": "aeef4e0329d30e424b9dad55b3a9da4439cb0802",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4319,
+  "frozen_path_count": 1399,
+  "identity_sha256": "5247f1172385772c840738e79d1c6400b18278ec39669b82d17e55d4c5e21cec",
+  "issued_at_utc": "2026-09-28T00:26:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-capture-test-sharding-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "087bd7c74f21841633c550f6fec6ab9356fd224644e03156f6ecbef1a8e69ac0"
+      ],
+      "reason": "test-capture-tools 分片并行：Makefile 新增分片三目标、CI capture-tools job 改 matrix 4 片＋闭合检查；tools/ci 新增分片器与权重表；不改受管工具与指南 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6883553c3cb7ce27397e5398ebba0b02de43af2bb08f949f3197424560b1635c"
+    },
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "292e57085eb0bc8c510f8cbfc606efb237923540679bf2c197713931d10a00a8"
+      ],
+      "reason": "test-capture-tools 分片并行：Makefile 新增分片三目标、CI capture-tools job 改 matrix 4 片＋闭合检查；tools/ci 新增分片器与权重表；不改受管工具与指南 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7cdcf56e49a3e25902835b2a17090085e8e51bede84f1503d7bcc661d10a397e"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/ci/capture_test_shards.py",
+    "tools/ci/capture_test_weights.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
