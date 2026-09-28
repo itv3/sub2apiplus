@@ -64,15 +64,15 @@
     },
     {
       "path": "driver/fix-and-continue.sh",
-      "sha256": "b2ab83729a871852714f49b20a8b073514c6ff67d2ebc8b7cba10572a6d06de4",
+      "sha256": "35cb42c2355cbc43be4f290e7fc1e459780b49786a33f2ba5bafbef20df97316",
       "mode": "0700",
-      "bytes": 22595
+      "bytes": 22607
     },
     {
       "path": "driver/fix_and_continue.py",
-      "sha256": "e2d60b8f11f326630f8dcb583781d75193873ac500dd0f90db57a26337623bb4",
+      "sha256": "46bf3d5f11db038a73c039540e8aa4d3f47e55b7b92fbf204b0c110aaac6bea9",
       "mode": "0700",
-      "bytes": 124785
+      "bytes": 125099
     },
     {
       "path": "driver/frontend.sh",
@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "685dd4308007bd21841106a5f43ac04c2d4a9bc082d52dc0ccf0b3ee478c1395",
+      "sha256": "2d145083789359a90fc65f91738fd00cc59045eeafd2f61e681b38771f928e64",
       "mode": "0700",
-      "bytes": 3380
+      "bytes": 3599
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -280,9 +280,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "395a4c8a3a8f2293834dfcb6c4e0a4b37f8a9e09aaeeccac0a36b4561bc5be6f",
+      "sha256": "908e3faba56b0b96801a28a1baec6d8e29fb68fb564f43be178f50f964f37246",
       "mode": "0700",
-      "bytes": 2834
+      "bytes": 3283
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -345,5 +345,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "e96df63d23ba84b3c40a32c5815761a5829e6aad5ca0438bf9c422ee7c68a168"
+  "manifest_sha256": "b5265165722924bf6f32b7dc405fd65b10b2dff486afc58c1acfe3d2db7a1aa3"
 }

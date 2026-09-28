@@ -24,7 +24,10 @@ if [ "$MODE" = full-regression-isolated ]; then
   # --capture-root 会把它当执行副本比对而整批报「执行位置与受管工具树不一致」；
   # 在私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机（无此路径）环境一致。
   export CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT
-  export CAPTURE_TYPESCRIPT_MODULE=$T/frontend/node_modules/typescript/lib/typescript.js PYTHONPYCACHEPREFIX=$RUNROOT/pycache
+  export CAPTURE_TYPESCRIPT_MODULE=$T/frontend/node_modules/typescript/lib/typescript.js
+  # 不设 PYTHONPYCACHEPREFIX（第 67 项，原因同 vc5-gate-target.sh）：lib.sh 已禁写字节码，树外前缀写不进却让
+  # 标准库 .pyc 也读不到，子进程启动变慢会把监督器计时用例拖红。
+  unset PYTHONPYCACHEPREFIX
   cd "$T"; START=$(utc_now); set +e
   unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$G/local/full-regression.stdout.log" 2> "$G/local/full-regression.stderr.log"; RC=$?; set -e; END=$(utc_now)
   python3 - "$G/local/full-regression.gate.json" "$START" "$END" "$RC" "$T" "$(git -C $T rev-parse HEAD)" <<'PY'

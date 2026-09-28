@@ -2033,7 +2033,11 @@ def run_tests(params: Mapping[str, str], log: Path, pid_file: Path) -> int:
     """在部署用 staging 树上跑实测，写日志（头部 head／tests，尾部 segments／staging-clean／exit）。
 
     SIGHUP 先恢复默认处置：nohup 启动会让子进程继承 SIG_IGN，监督器的 hangup 用例就会必红
-    （ARM64 已踩过）；字节码缓存放树外、不写 PYTHONPATH，结束后核对 staging 树仍干净。
+    （ARM64 已踩过）；禁写字节码、不写 PYTHONPATH，结束后核对 staging 树仍干净。
+
+    不设 PYTHONPYCACHEPREFIX 并清除继承来的值（修好接着跑第 67 项）：禁写字节码时树外前缀永远是空的，
+    解释器却改到前缀下查找全部 .pyc（含标准库自带的），每个子进程都从源码重编标准库，ARM64 上监督器
+    CLI 启动由 323 毫秒变成 584 毫秒，计时用例会被拖红。
     """
 
     signal.signal(signal.SIGHUP, signal.SIG_DFL)
@@ -2041,8 +2045,8 @@ def run_tests(params: Mapping[str, str], log: Path, pid_file: Path) -> int:
     tree = Path(params["STAGING_TREE"])
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONPYCACHEPREFIX", None)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["PYTHONPYCACHEPREFIX"] = str(_out(params) / ".pycache-item-tests")
     commands = [[sys.executable, "-m", "unittest", *params["ITEM_TESTS"].split()]]
     if params.get("ITEM_TESTS_K"):
         second = [sys.executable, "-m", "unittest"]

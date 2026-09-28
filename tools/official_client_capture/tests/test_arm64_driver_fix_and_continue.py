@@ -19,6 +19,7 @@
   未知种类，父 run 与 attempt 对象）；各暂停提示给出能照做的续跑步骤（含 deadline 回到 pre-extend，其余回到停下的
   步骤），用例照做续跑到底；reconcile-attempt 步骤目标 attempt 每次都重新对账、deadline 暂停续跑回到 pre-extend；
   永久停线与 Campaign 账本 stop_required 行为不变。
+* 第 67 项：实测子进程清除继承来的 PYTHONPYCACHEPREFIX、不另设前缀，禁写字节码照旧。
 
 受管工具替身只在 ``FC_TEST_STUB_DIR`` 下读写；PATH 垫片只替换 setsid（同步执行）、systemctl、id、chown。
 git、python3、wait_state.py、parse_env.py 都是真的。
@@ -579,12 +580,18 @@ python3 -c 'import json,os,sys; open(os.environ["FC_TEST_STUB_DIR"] + "/calls.js
 echo "VC5_RECOVER_STUB $*"
 '''
 
-_ITEM_TEST_MODULE = '''import os
+_ITEM_TEST_MODULE = '''import json
+import os
+import sys
 import unittest
 
 
 class ItemTests(unittest.TestCase):
     def test_item(self):
+        if os.environ.get("FC_ITEM_ENV_RECORD"):
+            with open(os.environ["FC_ITEM_ENV_RECORD"], "w", encoding="utf-8") as handle:
+                json.dump({"PYTHONPYCACHEPREFIX": os.environ.get("PYTHONPYCACHEPREFIX"), "pycache_prefix": sys.pycache_prefix,
+                           "PYTHONDONTWRITEBYTECODE": os.environ.get("PYTHONDONTWRITEBYTECODE")}, handle)
         if os.environ.get("FC_ITEM_DIRTY") == "1":
             with open("stray-output.txt", "w", encoding="utf-8") as handle:
                 handle.write("实测往 staging 树里写了文件")
@@ -793,6 +800,7 @@ class _Round:
         merged.pop("PYTHONPATH", None)
         merged.pop("FC_ITEM_FAIL", None)
         merged.pop("FC_ITEM_DIRTY", None)
+        merged.pop("FC_ITEM_ENV_RECORD", None)
         merged.update(env or {})
         return subprocess.run(["bash", str(SCRIPT), str(self.params_path), *extra], capture_output=True, text=True,
                               errors="replace", env=merged, cwd=str(self.root), timeout=600)
@@ -1252,6 +1260,23 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertIn("staging-clean=no", result.stdout + result.stderr)
         self.assertEqual(fixture.step("item-tests")["status"], "failed")
         self.assertNotIn("tool-evolution-status", fixture.call_keys())
+
+    def test_item_tests_run_without_pycache_prefix(self) -> None:
+        """第 67 项：实测子进程清除继承来的 PYTHONPYCACHEPREFIX、不另设前缀，禁写字节码照旧。
+
+        禁写字节码时树外前缀永远是空的，解释器却改到前缀下查找全部 .pyc（含标准库自带的），每个子进程都从源码
+        重编标准库；ARM64 上监督器 CLI 启动 323→584 毫秒，实测里的监督器计时用例会被拖红。
+        """
+
+        fixture = _Round(self.root)
+        record = self.root / "item-environment.json"
+        result = fixture.run(env={"FC_ITEM_ENV_RECORD": str(record), "PYTHONPYCACHEPREFIX": str(self.root / "inherited-prefix")})
+        self._assert_ok(result)
+        seen = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(seen, {"PYTHONPYCACHEPREFIX": None, "pycache_prefix": None, "PYTHONDONTWRITEBYTECODE": "1"})
+        log = (fixture.out / "item-tests.log").read_text(encoding="utf-8")
+        self.assertRegex(log, r"(?m)^staging-clean=yes$")
+        self.assertEqual(list(fixture.out.glob(".pycache*")), [])
 
     def test_from_requires_passed_predecessors(self) -> None:
         fixture = _Round(self.root)

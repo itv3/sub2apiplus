@@ -11,6 +11,8 @@
 * vc5-all 按阶段状态续跑：compare／acceptance 结果存在时不再进入 seal／accept 链，目标平台门禁重跑不进 seal 链；
 * 2026-09-22 审核三条：参数文件经 parse_env.py 安全解析（命令替换／反引号／分号／未知键／缺键一律拒绝且不执行）；
   manifest 存在时 vc5-seal.sh 不再派发任何写动作、前置缺失即失败关闭；install.py 顶层精确闭合、manifest 自身 0600。
+* 修好接着跑第 67 项：目标平台门禁与 ARM64 全量回归门禁在 make test 前清除 PYTHONPYCACHEPREFIX（禁写字节码时
+  前缀只会让标准库 .pyc 也读不到，子进程启动变慢把监督器计时用例拖红）。
 
 bash 用例只调用脚本本身，chmod／chown 经 PATH 注入的计数包装（记录调用后转调真实命令）。
 """
@@ -1023,6 +1025,91 @@ class PreA3OrderingTests(unittest.TestCase):
         self.assertIn('${PRE_A3_REUSE:+--pre-a3-reuse-receipt "$PRE_A3_REUSE"}', issue)
         # 复用收据的登记与旧坐标、账本无关：pre-a3.sh 仍不碰计时账本。
         self.assertNotIn("codex_upgrade_timing_ledger", pre_a3)
+
+
+# 受管环境收据 CLI 的替身：只按 --evidence-root／--output 写出一个空 JSON，供门禁脚本走完 before／after 收据。
+_ENVIRONMENT_RECEIPT_STUB = '''import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+root = Path(arguments[arguments.index("--evidence-root") + 1])
+output = root / arguments[arguments.index("--output") + 1]
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text("{}\\n", encoding="utf-8")
+print("环境收据替身", arguments[0], output.name)
+'''
+
+
+class GateBytecodeEnvironmentTests(unittest.TestCase):
+    """修好接着跑第 67 项：ARM64 上跑 make test 的两个门禁不得带 PYTHONPYCACHEPREFIX。
+
+    lib.sh 全局导出 PYTHONDONTWRITEBYTECODE=1，树外缓存前缀永远写不进字节码；前缀一旦设置，解释器改到前缀下
+    查找全部 .pyc（含标准库自带的），每个 Python 子进程都从源码重编标准库。2026-09-28 0.157 VC-5 accept 的
+    目标平台门禁因此在候选树监督器 4 条计时用例上连续两次确定性失败（ARM64 实测监督器 CLI 启动 323→584 毫秒），
+    同样的用例不带前缀单跑、整模块跑都通过。
+    """
+
+    GATE_SCRIPTS = ("vc5-gate-target.sh", "gates.sh")
+
+    def test_gate_scripts_clear_pycache_prefix_before_make_test(self) -> None:
+        lib_code = [line for line in (SCRIPTS / "lib.sh").read_text(encoding="utf-8").splitlines()
+                    if line.startswith("export ")]
+        self.assertTrue(any("PYTHONDONTWRITEBYTECODE=1" in line.split() for line in lib_code),
+                        "lib.sh 必须全局禁写字节码（门禁不写 __pycache__ 靠它，不靠缓存前缀）")
+        for name in self.GATE_SCRIPTS:
+            code = [line for line in (SCRIPTS / name).read_text(encoding="utf-8").splitlines()
+                    if not line.lstrip().startswith("#")]
+            self.assertEqual([line for line in code if re.search(r"PYTHONPYCACHEPREFIX\s*=", line)], [], name)
+            unset = [index for index, line in enumerate(code) if line.strip() == "unset PYTHONPYCACHEPREFIX"]
+            make = [index for index, line in enumerate(code) if "exec make test" in line]
+            self.assertEqual(len(make), 1, name)
+            self.assertTrue(unset and unset[0] < make[0], f"{name} 必须在 make test 之前清除继承来的 PYTHONPYCACHEPREFIX")
+
+    def test_target_gate_runs_make_test_without_inherited_pycache_prefix(self) -> None:
+        """脚本级：调用方环境带着前缀进入目标平台门禁，make test 看到的环境里前缀已清除、禁写照旧，数据根不留缓存。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv = root / "drv"
+            drv.mkdir(mode=0o700)
+            for name in ("lib.sh", "parse_env.py", "vc5-gate-target.sh"):
+                (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+            package = fixture.data_root / "tools" / "official_client_capture"
+            (fixture.data_root / "tools" / "__init__.py").write_text("", encoding="utf-8")
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "codex_upgrade_arm64_environment_receipt.py").write_text(_ENVIRONMENT_RECEIPT_STUB, encoding="utf-8")
+            # unshare 垫片代替“私有挂载命名空间 + make test”：只记录它收到的环境。
+            bin_dir = root / "bin"
+            bin_dir.mkdir(mode=0o700)
+            record = root / "make-test-environment.json"
+            shim = bin_dir / "unshare"
+            shim.write_text(
+                "#!/bin/bash\n"
+                f"python3 -c 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], \"w\"))' '{record}'\n"
+                "echo make-test-stub-ok\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o700)
+            tree = root / "test-tree"
+            tree.mkdir()
+            gate = root / "gate"
+            inherited = root / "inherited-pycache-prefix"
+            env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "PYTHONPYCACHEPREFIX": str(inherited)}
+            result = _run(drv / "vc5-gate-target.sh", "20260928T000000Z-0123456789abcdef", str(gate), str(tree), env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("GATE_TARGET_DONE rc=0", result.stdout)
+            seen = json.loads(record.read_text(encoding="utf-8"))
+            self.assertNotIn("PYTHONPYCACHEPREFIX", seen)
+            self.assertEqual(seen.get("PYTHONDONTWRITEBYTECODE"), "1")
+            self.assertEqual(json.loads((gate / "logs" / "target-platform.gate.json").read_text(encoding="utf-8"))["exit_code"], 0)
+            self.assertEqual(sorted(path.name for path in (gate / "environment").iterdir()), [
+                "20260928T000000Z-0123456789abcdef-after-facts.json", "20260928T000000Z-0123456789abcdef-after.json",
+                "20260928T000000Z-0123456789abcdef-before-facts.json", "20260928T000000Z-0123456789abcdef-before.json",
+            ])
+            self.assertEqual(list(fixture.data_root.rglob("__pycache__")), [])
+            self.assertFalse(inherited.exists())
 
 
 if __name__ == "__main__":
