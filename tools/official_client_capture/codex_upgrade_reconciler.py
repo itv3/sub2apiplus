@@ -3478,6 +3478,25 @@ def reconcile_attempt(
             source={"kind": "attempt_reconciliation", "sha256": receipt_binding["sha256"]},
             receipt_bindings=[receipt_binding, provenance_binding],
         )
+    # 第 45 项：发布本预约的父 run 来不及收账（R2 封存或看门狗中止＋动作诊断）时，按父监督器同一收账函数补账，再按
+    # 收口后的账本判定与生成恢复预览。放在本 attempt／恢复段的失败登记之后、Campaign 锁之外（收账可能登记预算暂停，
+    # 那会自取 Campaign 锁）；作废对账（演进、隔离、证据根冲突）不是动作失败，不补。
+    closeout_backfill: dict[str, Any] | None = None
+    if evolution_invalidation is None and isolation_invalidation is None and conflict_invalidation is None:
+        closeout_backfill = _backfill_attempt_owner_closeout(
+            campaign_dir,
+            manifest,
+            ledger_dir,
+            phase=phase,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+            recovery_revision=recovery_revision,
+            reservation=reservation,
+        )
+        if closeout_backfill is not None:
+            # 补做的收账事件按写入时刻记账；之后的账本重放与判定按不早于它的时刻观察。
+            observed = _later_timestamp(observed, _utc_now())
+            ledger = _ledger_facts(ledger_dir, now=observed)
     # 步骤 3、4：推送并锁内重放。
     pushed, head_after = _push_and_replay(project_root, campaign_dir, now=observed)
     reattribution_output: dict[str, Any] | None = None
@@ -3546,6 +3565,9 @@ def reconcile_attempt(
     if array_contract:
         result["failure_observations"] = failure_observations
         result["root_causes"] = root_causes
+    if closeout_backfill is not None:
+        # 第 45 项：本次对账补做了预约所属父 run 未完成的失败收账（只进命令输出，不进 write-once 收据）。
+        result["ledger_closeout_backfill"] = closeout_backfill
     if reattribution_output is not None:
         result["root_cause_reattribution"] = reattribution_output
     if evolution_invalidation is not None:
@@ -4460,6 +4482,294 @@ def _backfill_orphaned_failure_closeout(
         "ledger_status": closeout.get("ledger_status"),
         "idempotent": bool(closeout.get("idempotent")),
     }
+
+
+# 第 45 项：有预约的父 run 来不及收账（有预约路径）。attempt 所属的 VC 阶段：官方 VC-1，候选与恢复段 VC-5。
+_ATTEMPT_OWNER_VC_PHASES = {"official": "VC-1", "candidate": "VC-5"}
+# 失败登记之后账本里仍可出现、却不代表续跑已推进的事件：预算暂停／延期与 campaign-resume 的恢复登记。
+_ATTEMPT_BACKFILL_TOLERATED_EVENTS = frozenset({"deadline_paused", "deadline_extended", "recovery_verified"})
+
+
+def _command_flag(command: Any, flag: str) -> str | None:
+    """动作命令里 ``flag <值>`` 或 ``flag=<值>`` 的值；没有或形态不对返回 None。"""
+
+    if not isinstance(command, list):
+        return None
+    for index, token in enumerate(command):
+        if token == flag and index + 1 < len(command) and isinstance(command[index + 1], str):
+            return command[index + 1]
+        if isinstance(token, str) and token.startswith(f"{flag}="):
+            return token.partition("=")[2]
+    return None
+
+
+def _attempt_reserving_action(
+    inner: Mapping[str, Any],
+    action_id: str,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    recovery_revision: str | None,
+) -> bool:
+    """父 run 的失败动作是否正是发布这类预约的动作：恢复段 run（``--attempt-recovery ar<k>``）发布段预约；候选采集
+    （``capture-candidate run``）与按预览补跑发布候选 attempt 预约；官方采集与按预览补跑发布官方 attempt 预约。候选与
+    恢复段还要求动作命令的 ``--candidate-id`` 就是 attempt 所属候选。零请求预览不发布预约，不在其列。"""
+
+    command = next(
+        (
+            action.get("command")
+            for action in inner.get("actions", []) or []
+            if isinstance(action, Mapping) and action.get("action_id") == action_id
+        ),
+        None,
+    )
+    segment = supervisor._attempt_recovery_run_revision(inner, action_id)
+    if recovery_revision is not None:
+        return segment == recovery_revision and _command_flag(command, "--candidate-id") == candidate_id
+    if phase == "candidate":
+        return (
+            segment is None
+            and supervisor.candidate_capture_recovery_action(inner, action_id) in {"capture", "run"}
+            and _command_flag(command, "--candidate-id") == candidate_id
+        )
+    return action_id in {"capture-official", supervisor._OFFICIAL_RECOVERY_RUN_ACTION_ID}
+
+
+def _attempt_owner_run(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    recovery_revision: str | None,
+    reservation: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """第 45 项：定位发布本预约、又在失败收账前丢失 owner 的父 campaign-run；找不到返回 None。
+
+    沿正式 COMMIT（``control/vc/commits``，与 invalidate-candidate 定位失败父 run 同一索引）取父 run：COMMIT 属本
+    Campaign 与 attempt 所属的 VC 阶段、父 run 窗口（开始到终态时刻）包住预约时刻；窗口互不重叠，落在多个窗口即失败
+    关闭。再要求：父 run 终态为 failed／watchdog-aborted 且 owner 已退出；COMMIT 与父 run 的 staging 绑定互相一致；失败
+    动作（``campaign_run_failure_facts``，与父监督器收账同一失败摘要）正是发布这类预约的动作；并且是 owner 在失败收账前
+    丢失的两种形态之一——monitor 按 R2 确定性封存的 failed（supervisor:owner-check），或看门狗中止且留有可信的动作
+    诊断（``watchdog_action_failure_facts``，与入口 0-W 同一核对）。owner 自己收口的 run 不在此列。首批序号 1 由 VC-0
+    绑定在 campaign.json、没有 COMMIT 文件，legacy 批次同样没有，这两种都定位不到（返回 None，与修复前相同）。
+    """
+
+    vc_phase = _ATTEMPT_OWNER_VC_PHASES.get(phase)
+    if vc_phase is None:
+        return None
+    try:
+        reserved = _timestamp(reservation.get("started_at_utc"), "预约 started_at_utc").timestamp()
+    except ReconcilerError:
+        return None
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ReconcilerError("COMMIT 目录不得是符号链接")
+    if not commits_root.is_dir():
+        return None
+    sequences: list[int] = []
+    matches: list[tuple[dict[str, Any], Path, dict[str, Any]]] = []
+    for path in sorted(commits_root.iterdir()):
+        if codex_upgrade._VC_SEQUENCE_FILE_RE.fullmatch(path.name) is None or path.is_symlink() or not path.is_file():
+            raise ReconcilerError(f"COMMIT 目录含非法条目：{path.name}")
+        try:
+            commit = supervisor._read_vc_commit(path)
+        except vc_artifacts.VCArtifactError as error:
+            raise ReconcilerError(f"COMMIT 无法校验：{path.name}：{error}") from error
+        if commit["campaign_id"] != manifest.get("campaign_id"):
+            continue
+        sequences.append(int(commit["sequence"]))
+        if commit["phase"] != vc_phase:
+            continue
+        run_dir = Path(str(commit["parent_run_dir"]))
+        if not run_dir.is_absolute() or run_dir.is_symlink() or not run_dir.is_dir():
+            continue
+        try:
+            state = supervisor._read_state(run_dir)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"COMMIT {path.name} 的父 run 状态不可信：{error}") from error
+        started, terminal = state.get("started_at_epoch"), state.get("terminal_at_epoch")
+        if (
+            isinstance(started, (int, float))
+            and isinstance(terminal, (int, float))
+            and not isinstance(started, bool)
+            and not isinstance(terminal, bool)
+            and float(started) <= reserved <= float(terminal)
+        ):
+            matches.append((commit, run_dir, state))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ReconcilerError(
+            "预约时刻落在多个父 run 的窗口内，无法唯一定位发布它的父 run：" + "、".join(run.name for _c, run, _s in matches)
+        )
+    commit, run_dir, state = matches[0]
+    if state.get("state") not in {"failed", "watchdog-aborted"} or supervisor._owner_alive(int(state["owner_pid"])):
+        return None
+    manifest_path = run_dir / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    try:
+        if supervisor._staging_commit_for_run(campaign_dir, state, inner, run_dir) != commit:
+            raise ReconcilerError(f"父 run {run_dir.name} 的 staging 绑定与定位它的 COMMIT 不一致")
+        facts = supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"预约所属父 run {run_dir.name} 的失败事实不可信：{error}") from error
+    if facts is None:
+        return None
+    action_id = str(facts["action_id"])
+    if not _attempt_reserving_action(
+        inner, action_id, phase=phase, candidate_id=candidate_id, recovery_revision=recovery_revision
+    ):
+        return None
+    try:
+        if state.get("state") == "failed":
+            stop = supervisor.read_stop_receipt(run_dir)
+            sealed = stop.get("reason") == f"action-failed:{action_id}" and any(
+                event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
+                for event in supervisor.load_events(run_dir)
+            )
+            if not sealed:
+                return None
+        else:
+            watchdog = supervisor.watchdog_action_failure_facts(
+                state, run_dir, campaign_dir, prior_manifest=inner, label="有预约的失败收账补做"
+            )
+            if watchdog is None or str(watchdog["action_id"]) != action_id:
+                return None
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"预约所属父 run {run_dir.name} 的动作失败事实不可信，不能补做失败收账：{error}") from error
+    return {
+        "run_dir": run_dir,
+        "inner": inner,
+        "facts": facts,
+        "sequence": int(commit["sequence"]),
+        "latest_sequence": max(sequences),
+    }
+
+
+def _newer_reservation_exists(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    reserved_epoch: float,
+) -> bool:
+    """同一阶段（候选按同一候选）是否有晚于本预约发布的 attempt 预约或恢复段预约——有就说明已经续跑。"""
+
+    def later(path: Path, label: str) -> bool:
+        if path.is_symlink() or not path.is_file():
+            return False
+        try:
+            return _timestamp(_read_json(path, label).get("started_at_utc"), f"{label}.started_at_utc").timestamp() > reserved_epoch
+        except ReconcilerError:
+            return False
+
+    for root_phase, root_candidate, attempt_root in codex_upgrade._campaign_attempt_roots(campaign_dir):
+        if root_phase != phase or root_candidate != candidate_id:
+            continue
+        if later(attempt_root / "reservation.json", "预约收据"):
+            return True
+        recovery_root = attempt_root / codex_upgrade.ATTEMPT_RECOVERY_DIRNAME
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            continue
+        for segment_root in sorted(recovery_root.iterdir()):
+            if later(segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME, "恢复段预约收据"):
+                return True
+    return False
+
+
+def _backfill_attempt_owner_closeout(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    ledger_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+    recovery_revision: str | None,
+    reservation: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """第 45 项：有预约的父 run 来不及收账时，reconcile-attempt 补做父监督器本应完成的失败收账。
+
+    run 期间发布了预约的父 run 只能走 reconcile-attempt（reconcile-supervisor-run 拒绝），第 39／44／38 项的补收账覆盖
+    不到。父 run 在失败收账前丢失 owner（R2 封存或看门狗中止＋动作诊断）时账本停在 active：恢复段失败后批准并消费
+    恢复预览不写 recovery_authorized（只有 recovery_required／审核态可授权），协议 15 拒绝后继段——死路；永久失败类
+    判 recoverable、提示续跑，而后继协议全部拒绝。这里沿 ``_attempt_owner_run`` 定位父 run，以父监督器同一收账函数
+    （``_close_failed_campaign_timing_ledger``，事件 ID 由同一失败摘要派生，幂等）补账，与 owner 在线时收账的结果
+    相同：恢复段、候选采集续跑链与可恢复类进入 recovery_required（预算到期先暂停），阶段／候选审核类进审核，永久
+    失败类停线。在对账已登记本 attempt／恢复段失败之后调用：此时它们不再是 active，收账才能关闭阶段。
+
+    只在账本仍停在这次失败现场时补：本次失败没有收账或审核事件；账本（去掉预算暂停）是 active 且处于失败阶段；父 run
+    之后没有更高序号的 COMMIT（续跑批次未派发）；同阶段（候选按同一候选）没有更晚的预约；账本在本 attempt／恢复段的
+    最后一条事件之后只出现过预算控制或 campaign-resume 的恢复登记。于是旧工具已对账过、卡在死路上的现场，部署修复
+    后重新对账即可补账接着跑；已经续跑推进的现场不会被补账改写。
+    """
+
+    owner = _attempt_owner_run(
+        campaign_dir, manifest, phase=phase, candidate_id=candidate_id,
+        recovery_revision=recovery_revision, reservation=reservation,
+    )
+    if owner is None:
+        return None
+    facts = owner["facts"]
+    digest = str(facts["failure_digest"])
+    prefix = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{digest[:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}"
+    settled_ids = {
+        f"{prefix}-stage-review-required",
+        f"{prefix}-recovery-required",
+        f"{prefix}-stop-the-line",
+        supervisor.candidate_review_event_id(digest),
+    }
+    try:
+        events = [event for event, _raw in timing_ledger._load_events(ledger_dir)]
+        summary = timing_ledger.inspect_ledger(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise ReconcilerError(f"Campaign 账本无法重放：{error}") from error
+    if any(event.get("event_id") in settled_ids for event in events):
+        return None
+    status = summary.get("status_before_pause") if summary.get("status") == "deadline_paused" else summary.get("status")
+    if status != "active" or summary.get("active_phase") != facts["phase"]:
+        return None
+    if owner["latest_sequence"] > owner["sequence"]:
+        return None
+    reserved = _timestamp(reservation.get("started_at_utc"), "预约 started_at_utc").timestamp()
+    if _newer_reservation_exists(campaign_dir, phase=phase, candidate_id=candidate_id, reserved_epoch=reserved):
+        return None
+    subject = [
+        index
+        for index, event in enumerate(events)
+        if event.get("attempt_id") == attempt_id and event.get("recovery_revision") == recovery_revision
+    ]
+    if not subject or any(
+        event.get("event_type") not in _ATTEMPT_BACKFILL_TOLERATED_EVENTS for event in events[subject[-1] + 1 :]
+    ):
+        return None
+    try:
+        routed = supervisor._close_failed_campaign_timing_ledger(
+            campaign_dir,
+            owner["inner"],
+            failed_action_id=str(facts["action_id"]),
+            failure_class=str(facts["failure_class"]),
+        )
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"预约所属父 run 的失败收账补做失败：{error}") from error
+    return {
+        "run_id": Path(owner["run_dir"]).name,
+        "action_id": str(facts["action_id"]),
+        "failure_class": str(facts["failure_class"]),
+        "ledger_status": routed.get("ledger_status"),
+        "idempotent": bool(routed.get("idempotent")),
+    }
+
+
+def _later_timestamp(first: str, second: str) -> str:
+    """两个 UTC 时刻里较晚的一个（原样返回字符串）。"""
+
+    return second if _timestamp(second, "时刻") > _timestamp(first, "时刻") else first
 
 
 def reconcile_supervisor_run(

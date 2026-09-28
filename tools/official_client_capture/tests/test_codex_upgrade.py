@@ -24101,6 +24101,7 @@ class CodexUpgradeTest(unittest.TestCase):
         phase: str,
         diagnostic: tuple[str, str, str],
         action_failed_reason: str,
+        started_offset_seconds: float = 5.0,
     ) -> tuple[dict[str, object], Path]:
         """第 44 项／第 38 项夹具：monitor 按 R2 确定性封存的 failed／action-failed:<id> 父 run。
 
@@ -24108,7 +24109,9 @@ class CodexUpgradeTest(unittest.TestCase):
         追加 failed 事件并写 stop receipt（没有动作输出绑定时摘要为 null），账本没有任何收口事件。"""
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
-        run_dir = self._b0_run_dir(fixture, name, phase=phase, state="failed", batched_manifest=inner, started_offset_seconds=5.0)
+        run_dir = self._b0_run_dir(
+            fixture, name, phase=phase, state="failed", batched_manifest=inner, started_offset_seconds=started_offset_seconds
+        )
         state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
         identity = {
             "owner_pid": int(state["owner_pid"]), "owner_nonce": str(state["owner_nonce"]),
@@ -24321,6 +24324,243 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertNotIn("ledger_closeout_backfill", result)
             self.assertEqual(self._b0_ledger_events(ledger_dir), events)
             self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
+    def _item45_bind_commit(self, campaign_dir: Path, run_dir: Path, inner: dict[str, object]) -> Path:
+        """第 45 项夹具：把合成父 run 登记为 staging 模型下已 COMMIT 的批次——正式队列清单、COMMIT 与 state 里的
+        staging_binding 三者互相绑定（与原子入口写出的形态一致），对账才能沿 COMMIT 定位预约所属的父 run。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        sequence = int(inner["batch_sequence"])
+        phase = str(inner["phase"])
+        formal = campaign_dir / "control" / "vc" / "run-manifests" / f"{sequence:04d}-{phase.lower()}.json"
+        formal.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        formal.write_text(json.dumps(inner, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        formal.chmod(0o600)
+        state_path = run_dir / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        commit_path = supervisor._staging_commit_path(campaign_dir, sequence, phase)
+        commit = codex_upgrade_vc_artifacts.build_vc_commit(
+            campaign_id=str(inner["campaign_id"]), sequence=sequence, phase=phase, staging_attempt=1,
+            batch_sha256=str(inner["batch_sha256"]),
+            manifest_sha256=supervisor._sha256(supervisor._canonical(json.loads(formal.read_text(encoding="utf-8")))),
+            parent_run_dir=str(run_dir.resolve()), owner_nonce=str(state["owner_nonce"]), ledger_event_ids=[],
+            committed_at_utc=datetime.now(timezone.utc).isoformat(),
+        )
+        commit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        commit_path.write_text(json.dumps(commit, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        commit_path.chmod(0o600)
+        state["staging_binding"] = {
+            "campaign_dir": str(campaign_dir), "sequence": sequence, "phase": phase, "staging_attempt": 1,
+            "commit_path": str(commit_path), "prepared_marker_sha256": "a" * 64,
+        }
+        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        state_path.chmod(0o600)
+        return commit_path
+
+    def _item45_owner_lost_run(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        inner: dict[str, object],
+        action_id: str,
+        phase: str,
+        reservation_path: Path,
+        diagnostic: tuple[str, str, str],
+        shape: str,
+    ) -> tuple[dict[str, object], Path]:
+        """第 45 项夹具：发布了该预约、又在失败收账前丢失 owner 的父 run（run 窗口包住预约时刻），并登记 COMMIT。
+
+        ``shape="watchdog"``：动作子进程写出诊断后父进程丢失，monitor 中止为 watchdog-aborted；``shape="r2"``：父进程已追加
+        action-failed，monitor 按 R2 确定性封存为 failed。两种形态账本都没有收口事件。"""
+
+        reserved = json.loads(reservation_path.read_text(encoding="utf-8"))["started_at_utc"]
+        reserved_epoch = datetime.fromisoformat(str(reserved).replace("Z", "+00:00")).timestamp()
+        offset = reserved_epoch - 0.5 - time.time()
+        if shape == "watchdog":
+            state, run_dir = self._b4_watchdog_run(
+                fixture, name, inner=inner, action_id=action_id, phase=phase, reason="owner-process-not-alive",
+                started_offset_seconds=offset,
+            )
+            self._d07_write_diagnostic(run_dir, state, action_id, diagnostic)
+        else:
+            state, run_dir = self._r2_sealed_run(
+                fixture, name, inner=inner, action_id=action_id, phase=phase, diagnostic=diagnostic,
+                action_failed_reason="returncode=1", started_offset_seconds=offset,
+            )
+        self._item45_bind_commit(fixture["campaign_dir"], run_dir, inner)
+        return json.loads((run_dir / "state.json").read_text(encoding="utf-8")), run_dir
+
+    def _item45_vc1_recovery_run_batches(self, fixture: dict[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+        """第 45 项夹具：VC-1 按已批准预览真实补跑的批次 N=3（staging 模型下有 COMMIT；首批序号 1 由 VC-0 绑定在
+        campaign.json 里、没有 COMMIT 文件）与 N+1 的普通零请求恢复预览。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        jobs = [job.job_id for job in fixture["jobs"]]
+        approved = campaign_dir / "control" / "reconciliation" / "attempt-x" / "recovery-preview-01.json"
+        prior = self._b4_vc1_capture_manifest(
+            fixture, batch_sequence=3, execute=jobs, reuse=[],
+            actions=[{
+                "action_id": "run-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 3600.0,
+                "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed",
+                            "--recovery-preview", str(approved), "--acknowledge-live-requests"],
+                "item_ids": jobs,
+            }],
+        )
+        successor = self._b4_vc1_capture_manifest(
+            fixture, batch_sequence=4, execute=jobs, reuse=[],
+            actions=[{
+                "action_id": "preview-official-recovery", "operation": "VC-1:official-recovery", "timeout_seconds": 600.0,
+                "command": [*self._B4_PREFIX, "resume", "--campaign-dir", str(campaign_dir), "--rerun-failed", "--preview-recovery"],
+                "item_ids": jobs,
+            }],
+        )
+        return prior, successor
+
+    def test_item45_reserved_capture_owner_lost_reconciliation_backfills_parent_closeout(self) -> None:
+        """第 45 项（有预约路径）：采集批次在 run 期间发布了预约，父进程来不及收账（看门狗中止＋动作诊断，或 R2 封存），
+        monitor 不写 Campaign 账本，账本停在 active；reconcile-supervisor-run 拒绝有预约的 run，只能走 reconcile-attempt。
+        修复前它不补收账：永久失败类也判 recoverable 并提示"批准恢复预览后 resume"，而后继协议全部拒绝；其余分类留在
+        active，与 owner 在线时父监督器收账的结果（阶段审核、recovery_required）不同。修复后 reconcile-attempt 沿 COMMIT
+        找到预约所属的父 run，以父监督器同一收账函数补账：
+
+        ① VC-1 按预览真实补跑（批次 3）＋永久失败类（restoration-failed）：账本停线，对账永久停线，N+1 零请求预览没有协议承接；
+        ② VC-1 按预览真实补跑＋execution-failure：补齐 stage_abandoned＋stage_review_required（与 owner 在线时相同），对账许可
+           恢复预览；批准并消费预览写 recovery_authorized、重开 VC-1，N+1 零请求预览仍由 official_recovery_run_retry 唯一承接；
+           重复对账不再补账；
+        ③ VC-5 候选按预览补跑（R2 封存）＋execution-failure：补 recovery_required，批准并消费预览写 recovery_authorized，
+           N+1 续跑预览由 candidate_recovery_run_retry 唯一承接。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        for name, diagnostic in (
+            ("restoration-failed", ("handled-error", "RestorationError", "restoration-failed")),
+            ("execution-failure", ("child-returncode", "ChildProcessError", "execution-failure")),
+        ):
+            with self.subTest(phase="VC-1", failure_class=name), tempfile.TemporaryDirectory() as directory:
+                fixture, _capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+                campaign_dir = fixture["campaign_dir"]
+                ledger_dir = fixture["timing_ledger"]
+                prior, successor = self._item45_vc1_recovery_run_batches(fixture)
+                attempt_id = self._b0_orphan_attempt(fixture)
+                reservation = campaign_dir / "official" / "attempts" / attempt_id / "reservation.json"
+                state, run_dir = self._item45_owner_lost_run(
+                    fixture, "c" * 64, inner=prior, action_id="run-official-recovery", phase="VC-1",
+                    reservation_path=reservation, diagnostic=diagnostic, shape="watchdog",
+                )
+                with self.assertRaisesRegex(reconciler.ReconcilerError, "请改用 reconcile-attempt"):
+                    reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                backfill = result.get("ledger_closeout_backfill")
+                self.assertIsNotNone(backfill, result)
+                self.assertEqual(
+                    (backfill["run_id"], backfill["action_id"], backfill["failure_class"]), (run_dir.name, "run-official-recovery", name)
+                )
+                if name == "restoration-failed":
+                    self.assertEqual(backfill["ledger_status"], "stopped")
+                    self.assertEqual(result["status"], reconciler.DECISION_STOP, result.get("decision"))
+                    self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+                    self.assertEqual(self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), [])
+                    continue
+                self.assertEqual(backfill["ledger_status"], "stage_review_required")
+                self.assertEqual(result["status"], "recoverable", result.get("decision"))
+                events = self._b0_ledger_events(ledger_dir)
+                self.assertEqual([event_type for event_type, _event_id in events[-4:]],
+                                 ["attempt_started", "attempt_failed", "stage_abandoned", "stage_review_required"])
+                again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+                self.assertNotIn("ledger_closeout_backfill", again)
+                self.assertEqual(self._b0_ledger_events(ledger_dir), events)
+                reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_id, approve_sha256=result["recovery_preview"]["review_sha256"]
+                )
+                authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_id, Path(result["recovery_preview_path"]))
+                self.assertIsNotNone(authorized["timing_recovery_event"], authorized)
+                summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+                self.assertEqual(
+                    self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["official_recovery_run_retry"]
+                )
+        with self.subTest(phase="VC-5"), tempfile.TemporaryDirectory() as directory:
+            fixture = self._b0_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            manifest = fixture["manifest"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            prior, successor = self._d07_vc5_recovery_run_batches(fixture)
+            attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+                campaign_dir,
+                phase="candidate",
+                candidate_id="cand-1",
+                identity={"candidate_purpose": manifest["campaign_purpose"]},
+                jobs=[
+                    Job(
+                        job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                        steps=({"argv": ["bash", f"{job_id}.sh"]},), evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                        covers=(), scenario_ids=("A03",),
+                    )
+                    for job_id in self._b0_candidate_job_ids(fixture)
+                ],
+                allow_failed_rerun=True,
+            )
+            action_id = supervisor.CANDIDATE_RECOVERY_RUN_ACTION_ID
+            state, run_dir = self._item45_owner_lost_run(
+                fixture, "f" * 64, inner=prior, action_id=action_id, phase="VC-5",
+                reservation_path=attempt_root / "reservation.json",
+                diagnostic=("child-returncode", "ChildProcessError", "execution-failure"), shape="r2",
+            )
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_root.name)
+            backfill = result.get("ledger_closeout_backfill")
+            self.assertIsNotNone(backfill, result)
+            self.assertEqual((backfill["action_id"], backfill["ledger_status"]), (action_id, "recovery_required"))
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            reconciler.approve_recovery_preview(
+                campaign_dir, attempt_root.name, approve_sha256=result["recovery_preview"]["review_sha256"]
+            )
+            authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt_root.name, Path(result["recovery_preview_path"]))
+            self.assertIsNotNone(authorized["timing_recovery_event"], authorized)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
+            self.assertEqual(
+                self._d07_accepting_protocols(state, prior, run_dir, successor, campaign_dir), ["candidate_recovery_run_retry"]
+            )
+
+    def test_item45_attempt_backfill_only_when_ledger_is_still_at_the_failure(self) -> None:
+        """第 45 项的安全边界：补账只在能沿 COMMIT 定位父 run、且账本仍停在这次失败现场时进行，否则与修复前一样只入账——
+        ① 没有 COMMIT 可定位父 run（首批序号 1 由 VC-0 绑定在 campaign.json、没有 COMMIT 文件；legacy 批次同理）：不补；
+        ② 父 run 之后已有更高序号的 COMMIT（续跑已经派发）：不补，即使失败动作与预约都对得上。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        diagnostic = ("child-returncode", "ChildProcessError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            state, run_dir = self._b4_watchdog_run(
+                fixture, "c" * 64, inner=capture, action_id="capture-official", phase="VC-1", reason="owner-process-not-alive",
+                started_offset_seconds=-30.0,
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            self._d07_write_diagnostic(run_dir, state, "capture-official", diagnostic)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertNotIn("ledger_closeout_backfill", result)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "active")
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, _capture, _preview = self._d07_vc1_capture_fixture(Path(directory).resolve())
+            campaign_dir = fixture["campaign_dir"]
+            prior, successor = self._item45_vc1_recovery_run_batches(fixture)
+            attempt_id = self._b0_orphan_attempt(fixture)
+            reservation = campaign_dir / "official" / "attempts" / attempt_id / "reservation.json"
+            self._item45_owner_lost_run(
+                fixture, "c" * 64, inner=prior, action_id="run-official-recovery", phase="VC-1",
+                reservation_path=reservation, diagnostic=diagnostic, shape="watchdog",
+            )
+            later_run = self._b0_run_dir(fixture, "d" * 64, phase="VC-1", state="stopped", batched_manifest=successor)
+            self._item45_bind_commit(campaign_dir, later_run, successor)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable", result.get("decision"))
+            self.assertNotIn("ledger_closeout_backfill", result)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "active")
 
 
 class EvidenceManifestTest(unittest.TestCase):
