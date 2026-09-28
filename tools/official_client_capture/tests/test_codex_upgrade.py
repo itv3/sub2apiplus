@@ -21295,6 +21295,83 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(again["status"], "recoverable", again.get("decision"))
             codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
+    def test_b0_reconcile_attempt_array_contract_accounting_pause_then_resolve_continues(self) -> None:
+        """修好接着跑第 37 项：带结构化失败数组（数组合同）的 attempt 账务暂停后补账，同一 attempt 重新对账必须能续接。
+        首次收据的 root_causes 是"账务未决"根因，补账后重算成真实根因；root_cause 单值在易变字段里、root_causes 数组不在，
+        write-once 比对以"既有对账收据与当前事实不一致，拒绝覆盖"卡死续接（2026-09-28 194249z A2 隔离作废后实测）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            manifest = fixture["manifest"]
+            job = fixture["jobs"][0]
+            evidence_root = campaign_dir / "official-evidence"
+            evidence_root.mkdir(mode=0o700)
+            self._write_json(evidence_root / "surface.json", {"records": []})
+            (evidence_root / "surface.json").chmod(0o600)
+            attempt_id = self._b0_orphan_attempt(fixture, evidence_roots=[evidence_root])
+            attempt_root = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
+            result = json.loads((attempt_root / f"job-{job.job_id}.json").read_text(encoding="utf-8"))
+            # 写带失败数组的 attempt.json（新 schema，数组合同），账务仍无法核清（证据根无权威来源）。
+            codex_upgrade._write_capture_attempt(
+                campaign_dir,
+                attempt_root,
+                {
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "candidate_id": None,
+                    "status": "failed",
+                    "identity": dict(manifest["official_identity"]),
+                    "results": [result],
+                    "failure_observations": [],
+                    "evidence_roots": [],
+                    "evidence_permission_closeout": None,
+                    "evidence_permission_error": {"type": "SyntheticFailure", "message": "合成 attempt 不封存证据权限收据。"},
+                    "environment": {
+                        "evidence_root": str(attempt_root / "evidence"),
+                        "before_probe": None,
+                        "after_probe": {"status": "passed"},
+                        "restoration_report": {"status": "passed"},
+                        "arm64_before_receipt": None,
+                        "arm64_after_receipt": None,
+                    },
+                    "binary_verification": None,
+                    "execution_error": None,
+                    "restoration_error": None,
+                    "next_gate": "对账数组合同 attempt。",
+                },
+            )
+            first = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(first["status"], "paused", first.get("decision"))
+            self.assertEqual(first["decision"]["pause_kinds"], ["accounting"])
+            self.assertEqual([item["stable_error_code"] for item in first["root_causes"]], ["attempt.accounting-unresolved"])
+            receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+            first_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(first_receipt["root_causes"], first["root_causes"])
+            operation = f"reconcile-attempt:{attempt_id}"
+            evidence = root / "provenance-audit.txt"
+            evidence.write_text("official-test 被打断，按同类作业上界估计 3 次请求。\n", encoding="utf-8")
+            arguments = argparse.Namespace(
+                campaign_dir=campaign_dir, operation_id=operation, estimated_count=3, evidence=evidence,
+                reason="被打断作业没有 Job 收据，按上界估计", approve_sha256=None, approved_by=None,
+            )
+            preview = codex_upgrade._accounting_resolve_command(arguments)
+            arguments.approve_sha256 = preview["review_sha256"]
+            arguments.approved_by = "老板"
+            resolved = codex_upgrade._accounting_resolve_command(arguments)
+            self.assertEqual((resolved["status"], resolved["blocked"]), ("resolved", False))
+            # 续接：以首次落盘的收据为准（根因数组不改写、收据字节不变），批次按 operation 复用，决策不再暂停。
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(again["status"], "recoverable", again.get("decision"))
+            self.assertEqual(again["root_causes"], first_receipt["root_causes"])
+            self.assertEqual(again["root_cause"], first_receipt["root_cause"])
+            self.assertTrue(again["batch"]["reused"])
+            self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8")), first_receipt)
+            codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+
     def test_b0_accounting_resolve_precise_when_new_evidence_resolves_and_rejects_misuse(self) -> None:
         """修好接着跑第 12 项：补回证据后原未决作业已能核清——accounting-resolve 按与对账同一口径精确补账
         （不接受上界），否则补账入口走不通、重新对账又复用旧 batch，总账永远 blocked；仍无法核清时必须给出上界与证据。"""

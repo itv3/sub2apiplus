@@ -3409,6 +3409,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   守护快照：docker restart 发出 SIGTERM 到容器进程退出之间，守护库存仍 inspect 到运行中的进程而进入其网络命名空间读网卡已失败
   （"出口命令失败：nsenter，退出码 1"），发布 invalid、绑定与观测清空、不发租期——没有可放行路径即与缺失等价。仍带绑定或观测的
   invalid 是重建后的真实配置故障，照旧中止等待并暂停；普通准入与事实采集不传此参数，invalid 仍按"尚未完成准入"拒绝。
+- **账务暂停后补账续接不被根因数组卡死**：attempt／监督器 run 的对账收据只写一次，账务暂停（accounting-resolve 补账后
+  重新对账）以首次落盘的收据为准；`root_cause` 单值与 `failure_observations`／`root_causes` 数组同源（暂停时是
+  attempt.accounting-unresolved，补账后重算成真实根因），三者都是易变字段（`RECEIPT_ROOT_CAUSE_VOLATILE_FIELDS`），续接时不再以
+  "既有对账收据与当前事实不一致，拒绝覆盖"失败关闭；批次按 operation 复用、账本事件幂等、决策按当前账务重算。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，

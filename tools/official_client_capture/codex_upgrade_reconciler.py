@@ -66,6 +66,10 @@ RECOVERY_APPROVAL_SCHEMA = "recovery-approval/v1"
 RECONCILIATION_DIR = "reconciliation"
 ATTEMPT_RECEIPT_NAME = "attempt-reconciliation.json"
 SUPERVISOR_RUN_RECEIPT_NAME = "supervisor-run-reconciliation.json"
+# 修好接着跑第 37 项：对账收据只写一次，中断／账务暂停（第 12 项）后重新对账以首次落盘的收据为准。root_cause 单值与
+# failure_observations／root_causes 数组同源——账务暂停时是 attempt.accounting-unresolved，补账后重算成真实根因——
+# 三者都必须是易变字段，否则数组合同下续接被"既有对账收据与当前事实不一致，拒绝覆盖"卡死（2026-09-28 194249z A2）。
+RECEIPT_ROOT_CAUSE_VOLATILE_FIELDS = ("root_cause", "failure_observations", "root_causes")
 PREVIEW_RE = re.compile(r"^recovery-preview-(\d{2})\.json$")
 APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2})\.json$")
 COMPONENT = "reconciler"
@@ -2965,7 +2969,7 @@ def reconcile_attempt(
                 "project_ledger",
                 "deployment_receipt",
                 "tool_identity",
-                "root_cause",
+                *RECEIPT_ROOT_CAUSE_VOLATILE_FIELDS,
                 "request_part_status",
                 "provenance_receipt_sha256",
                 # 修好接着跑第 13 项：污染记录与判定口径随 environment-isolate 变化，隔离后同一对象要能重新对账
@@ -4065,7 +4069,7 @@ def reconcile_supervisor_run(
                 "deployment_receipt",
                 "tool_identity",
                 "run",
-                "root_cause",
+                *RECEIPT_ROOT_CAUSE_VOLATILE_FIELDS,
                 "request_part_status",
                 "provenance_receipt_sha256",
                 "contamination_records",
