@@ -3474,6 +3474,10 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   写完旧工具即拒绝服务；历史事件与旧 ID 计数不变，新事件按新 ID 计数。
 - **提交步骤失败同样按拒因细分（第 51 项）**：同一提交步骤的不同拒因各自计数，同一拒因只差波动片段仍达上限暂停；诊断写不出时
   只退回原来的粗粒度根因，不盖住原失败；staging commit 失败消息带原文（截 600 字）。部署前要登记监督器摘要，并写入衔接的码表迁移收据。
+- **动作失败同样按拒因细分（第 60 项）**：动作诊断升 v4，handled-error／unexpected-error 由写入方按异常原文落 es1 归一化
+  拒因签名，对账器编成 `campaign-run.action-error`（维度 phase、failure_kind、error_type、error_signature），同一动作的
+  不同拒因各自计数；interrupted／child-returncode 没有原文、签名为空，仍按 `supervisor-run.interrupted` 旧口径。v1～v3
+  诊断照旧读、旧 ID 不变。部署前要登记监督器摘要，并写入衔接的码表迁移收据（000006，d4478b55→40462cad）。
 - **账务未决只是暂停原因（第 32 项之二）**：请求账务无法核清时对账暂停（`pause_kinds` 含 accounting），主根因按环境污染＞工具身份
   变化＞到期＞中断选取，账务未决不进根因计数。按旧口径把账务未决记成主根因的历史对账，续接时按首次收据的不可变事实重算真实
   根因，写 `root-cause-reattribution.json` 并在总账追加 `reconciliation_corrected`（原 payload 逐字副本，只替换根因），计数随之移到
@@ -3539,6 +3543,12 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 - **一条命令续跑（第 35 项）**：`driver/fix-and-continue.sh <轮次参数文件> [--from <步骤>]` 按部署、部署后核对、实测、工具演进、
   对账前延期、链尾父 run 对账、目标 attempt 对账、根因修复登记、批准、授权、授权后延期、接受检查、重派的顺序执行，每步幂等、
   失败即停并给出下一步；账务暂停、环境污染、永久停线、请求预算与需审核一律停下交人，绝不补账、隔离、放弃或强制。
+- **编排的对账暂停登记与续跑（第 59、62 项）**：受管对账器先写收据、入总账再判定暂停，暂停对象的收据核验照样通过，原先
+  续跑扫描会把它当已对账跳过，暂停判定被悄悄丢掉。现在 reconcile-runs 里凡对账判暂停而停下的对象都记入续跑记忆，续跑时即使
+  收据已写也重新对账；项目总账根因达上限且参数给了登记材料时，reconcile-runs 与 repair 步骤走同一登记路径（同一判据、同一
+  `record-root-cause-repair`、同一回归收据核对），步骤内登记后对该对象重新对账一次，仍暂停即停。暂停提示只给一个能通过
+  前序核对的 `--from`：含 deadline 的回到 `pre-extend`（先填 EXTEND_DEADLINE／EXTEND_REASON），其余按受管提示处理后从
+  停下的步骤续跑；Campaign 账本 stop_required 仍停下等人工 `campaign-resume`。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，
