@@ -17167,15 +17167,19 @@ def _official_seal_chain_stage_replay_actions(
        seal 动作是受管 Python 对受管 codex_upgrade 的直接调用（见 ``_official_seal_replay_flags``），全部指向本
        Campaign 同一个官方 attempt，且与监督器 seal 链解析一致；
     3. 官方证据尚未封存：official 阶段结果与 VC-1 checkpoint 都不存在——已封存不重封，写入方本身也拒绝覆盖；
-    4. 含断言包动作时：断言证据包尚未发布（脚本 write-once、拒绝覆盖，已发布即逐字重派必败），证据目录没有被
-       强杀留下的 ``.assertion-work.*`` 暂存残留（它让证据权限收口边界漂移）；
+    4. 含断言包动作时：证据目录没有被强杀留下的 ``.assertion-work.*`` 暂存残留（它让证据权限收口边界漂移）；
+       断言证据包未发布（脚本会重新编目发布），或已发布且能核对为本 attempt 同一冻结输入的产物（第 43 项：该
+       动作已完成，outputs 绑定 capture manifest 与 provenance，N+1 续派去掉它、只执行其后的 seal 动作——脚本
+       write-once，逐字重派它必然被拒绝覆盖）；已发布却核对不上即不成立；
     5. attempt 可重放（含证据权限收口）、处于 awaiting_receipts，没有作业被工具演进作废，未被环境隔离或证据根
        冲突隔离（这三类只走 reconcile-attempt 的恢复链）；历史 v2 attempt 不得重派断言包动作（与监督器同一规则）；
+       v3 attempt 的批次只含 seal 预览（不含断言包动作）时，断言证据包必须已发布且一致（与监督器 VC-1 门禁同一规则）；
     6. seal 批准且同批次没有先行的 seal 预览时：已有冻结草案与摘要等于批准参数的预览，否则批准必然被拒。
 
     输入按摘要绑定：受管断言包脚本、attempt 收据、权限收口收据、已存在的 capture manifest。seal 动作的已写派生
     半成品（EvidenceManifest 及其 checkpoint、finalized、seal 草案与预览）按摘要绑定为输出：seal 的写入都是
-    write-once 或逐字核对，逐字重派在其上续作。直接后继派发前再复算一次，任何漂移都拒绝重派。
+    write-once 或逐字核对，逐字重派在其上续作。断言包核对在这里只做结构核对（对账保持零扫描），内容摘要由派发
+    门禁重放。直接后继派发前再复算一次，任何漂移都拒绝重派。
     """
 
     actions = run_manifest.get("actions")
@@ -17222,9 +17226,6 @@ def _official_seal_chain_stage_replay_actions(
     attempt_root = _capture_attempt_path(campaign_dir, "official", None, attempt_id)
     if "prepare-official-assertion-bundle" in kinds:
         evidence_dir = attempt_root / "evidence"
-        bundle = evidence_dir / codex_upgrade_evidence_permissions.ASSERTION_BUNDLE_DIRNAME
-        if bundle.exists() or bundle.is_symlink():
-            raise ConfigurationError("断言证据包已发布：断言包脚本 write-once、拒绝覆盖，逐字重派必然失败，不可幂等")
         residue = (
             sorted(path.name for path in evidence_dir.iterdir() if path.name.startswith(".assertion-work."))
             if evidence_dir.is_dir() and not evidence_dir.is_symlink()
@@ -17234,6 +17235,18 @@ def _official_seal_chain_stage_replay_actions(
             raise ConfigurationError(
                 "断言包暂存残留（" + "、".join(residue) + "）：脚本被强杀未清理，证据权限收口边界已漂移，先人工核对"
             )
+    # 第 43 项：产出或读取断言证据包的批次（含断言包动作或 seal 预览）按断言包的发布状态与一致性判定（结构核对，
+    # 与监督器 VC-1 门禁同一判定函数、同一适用范围）；只含 seal 批准的批次重放冻结草案，不在这里判定。
+    bundle_facts: dict[str, Any] = {"published": False, "consistent": False, "reasons": [], "bindings": {}}
+    if {"prepare-official-assertion-bundle", "seal-official-preview"} & set(kinds):
+        bundle_facts = codex_upgrade_supervisor.official_assertion_bundle_facts(
+            campaign_dir, attempt_id, verify_content=False
+        )
+        if bundle_facts["published"] and not bundle_facts["consistent"]:
+            raise ConfigurationError(
+                "断言证据包已发布但不能核对为本 attempt 同一冻结输入的产物（" + "；".join(bundle_facts["reasons"])
+                + "）：逐字重派与续派都不可行，先人工核对"
+            )
     manifest = _require_formal_campaign(campaign_dir)
     _root, attempt = _load_capture_attempt(
         campaign_dir, "official", None, attempt_id, _verified_campaign_manifest=manifest
@@ -17242,6 +17255,13 @@ def _official_seal_chain_stage_replay_actions(
         raise ConfigurationError(f"官方 attempt {attempt_id} 不处于 awaiting_receipts（当前 {attempt.get('status')}），不能 seal")
     if "prepare-official-assertion-bundle" in kinds and attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA:
         raise ConfigurationError("历史 v2 Attempt 不得重新派发断言包动作（与监督器同一规则）")
+    if (
+        "seal-official-preview" in kinds
+        and "prepare-official-assertion-bundle" not in kinds
+        and attempt.get("schema_version") == CAPTURE_ATTEMPT_SCHEMA
+        and not bundle_facts["published"]
+    ):
+        raise ConfigurationError("只含 seal 预览的批次要求断言证据包已发布且一致（与监督器 VC-1 门禁同一规则）")
     key = ("official", None, attempt_id)
     if key in _isolation_invalidated_attempts(campaign_dir):
         raise ConfigurationError(
@@ -17295,6 +17315,10 @@ def _official_seal_chain_stage_replay_actions(
             inputs["prepare_assertion_bundle.sh"] = bound(
                 Path(__file__).resolve(strict=True).parents[1] / "prepare_assertion_bundle.sh", "受管断言包脚本"
             )
+            if bundle_facts["published"]:
+                # 第 43 项：断言包已发布且一致——该动作已完成；outputs 绑定 capture manifest 与 provenance，协议 3
+                # 据此只接受去掉它的续派（codex_upgrade_supervisor.stage_replay_completed_action_ids）。
+                outputs = dict(bundle_facts["bindings"])
         else:
             capture_manifest = parsed.get("--capture-manifest")
             if capture_manifest is not None and (Path(capture_manifest).exists() or Path(capture_manifest).is_symlink()):
@@ -18024,6 +18048,9 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     _require_tool_evolution_registered(campaign_dir, manifest, action="compile-and-run-vc-batch")
     _refuse_seal_chain_on_evolution_invalidated_attempt(
         campaign_dir, manifest, phase=phase, action_plan=getattr(arguments, "action_plan", None)
+    )
+    _refuse_vc1_seal_batch_against_bundle_state(
+        manifest, phase=phase, action_plan=getattr(arguments, "action_plan", None)
     )
     # 与 campaign-run CLI（codex_upgrade_supervisor._assert_campaign_run_admitted）同一底层门禁：
     # 补齐器先行、锁内重放，0.154 formal 必须已注册且未 blocked／终态／超预算。
@@ -60590,6 +60617,41 @@ def _refuse_seal_chain_on_evolution_invalidated_attempt(
                 "已被证据根冲突隔离（证据不可信，永不复用、永不 seal）。先 reconcile-attempt 入账并批准恢复预览，"
                 "resume --rerun-failed 全部重跑，再对新 attempt 走 seal；本次未写入任何文件。"
             )
+
+
+def _refuse_vc1_seal_batch_against_bundle_state(
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    action_plan: Any,
+) -> None:
+    """第 43 项：编译 VC-1 seal 链批次前，按断言证据包的实际状态零写入核对动作组合。
+
+    与监督器 VC-1 断言包门禁（``_validate_vc1_assertion_seal_gate``，编译与派发时的队列清单校验）同一实现：断言包
+    已发布后再派发断言包动作必然被脚本 write-once 拒绝覆盖；只含 seal 预览的续派要求断言包已发布且能核对为本
+    attempt 同一冻结输入的产物；官方证据已封存则两者都拒绝。门禁在编译内拒绝会被记成 staging prepare 失败并计入
+    根因上限，这里在任何落盘之前拦下并给出原因。动作计划本身的合法性仍由编译器校验，读不到就交给编译器报错。
+    """
+
+    if phase != "VC-1" or not isinstance(action_plan, Path) or not action_plan.is_file():
+        return
+    try:
+        plan = _read_json(action_plan, "VC action plan")
+    except ConfigurationError:
+        return
+    actions = plan.get("actions") if isinstance(plan, Mapping) else None
+    if not isinstance(actions, list) or not all(isinstance(action, Mapping) for action in actions):
+        return
+    try:
+        codex_upgrade_supervisor._validate_vc1_assertion_seal_gate(
+            schema_version=codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            campaign_id=str(manifest.get("campaign_id", "")),
+            phase=phase,
+            actions=[dict(action) for action in actions],
+            require_bound_files=True,
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"compile-and-run-vc-batch 拒绝：{error}本次未写入任何文件。") from error
 
 
 def _require_tool_evolution_registered(

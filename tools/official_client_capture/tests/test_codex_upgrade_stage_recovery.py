@@ -14,8 +14,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tools.official_client_capture import build_evidence_catalog
 from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_evidence_permissions as evidence_permissions
+from tools.official_client_capture import codex_upgrade_live_request_provenance as request_provenance
 from tools.official_client_capture import codex_upgrade_project_ledger as project
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -140,33 +142,20 @@ s._close_failed_campaign_timing_ledger(Path(sys.argv[1]),json.loads(sys.argv[2])
             self.assertEqual(timing.replay(root, "receipts/legacy.json"), receipt)
 
 
-class OfficialSealChainStageReplayTests(unittest.TestCase):
-    """D-10（草表 D-10，矩阵第 24 行）：VC-1 官方 seal 链零请求后处理动作以 execution-failure 失败后，
-    凭阶段幂等重派合同修好接着跑。
-
-    真实可达形态：只读导入的 Formal Campaign（no-op 首批、VC-1 尚未封存），待封存的官方 attempt 与
-    reuse-official-evidence 导入的零执行 attempt 一样没有 Job checkpoint 目录，post-run-tooling 五条判据因此
-    必然不成立。录制链同形的 VC-1 seal 预览批次（断言包准备＋seal 预览）经原子入口真实派发：断言包脚本非零
-    退出、未发布断言包，父监督器按 child-returncode 记诊断、判据不成立保持 execution-failure，账本进入
-    stage_abandoned＋stage_review_required。修复前 ``_campaign_stage_replay_facts`` 对 VC-1 固定不许可：
-    对账只入账、账本停在审核、任何后继都被拒——死路。
-    """
+class _OfficialSealChainFixture:
+    """VC-1 官方 seal 链用例共用的夹具与动作（D-10 与第 43 项共用；只作混入，本身不是用例）。"""
 
     ASSERTION = "prepare-official-assertion-bundle"
     PREVIEW = "seal-official-preview"
     APPROVE = "seal-official-approve"
+    # 第 43 项：官方 Job 证据根里唯一的一份抓包原件（命中 official-ws-handshake-repeat 的唯一声明规则
+    # direct/codex-ws/*/traffic.pcap；编目只按 glob 登记、不解析内容）。
+    JOB_ROOT_NAME = "ws-handshake-repeat"
+    PCAP_RELATIVE = "direct/codex-ws/batch-01/traffic.pcap"
 
-    def setUp(self) -> None:
-        self.case = upgrade_tests.CodexUpgradeTest()
-        self.case.setUp()
-        self.addCleanup(self.case.doCleanups)
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.base = Path(temporary.name).resolve()
-
-    def _fixture(self, root: Path) -> dict:
+    def _import_campaign(self, root: Path, *, campaign_id: str) -> dict:
         """只读导入形态的 Formal Campaign：no-op 首批、账本停在 active VC-0、VC-1 尚未封存（与
-        ``_vc_chain_fixture`` 同形，只是不写 VC-1 checkpoint），外加一个待封存的零执行官方 attempt。"""
+        ``_vc_chain_fixture`` 同形，只是不写 VC-1 checkpoint）。"""
 
         self.case.enterContext(runtime_egress_fixtures.offline_campaign_egress())
         original = upgrade._create_initial_vc_control_artifacts
@@ -176,7 +165,7 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
             return original(*args, **kwargs)
 
         with mock.patch.object(upgrade, "_create_initial_vc_control_artifacts", side_effect=as_reuse):
-            fixture = self.case._b0_fixture(root, campaign_id="upgrade-0154-d10")
+            fixture = self.case._b0_fixture(root, campaign_id=campaign_id)
         # 生产布局里受管数据根只有一个（工具树与 Campaign 同在 data 根下）；夹具的 Campaign 在临时 data 根，
         # 收口、attempt 读取与监督器 VC-1 断言包门禁都按这同一个数据根核对权限收口边界。
         self.case.enterContext(mock.patch.object(
@@ -187,7 +176,7 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["predecessor"] = {
             "campaign_dir": str(root / "predecessor-fixture"),
-            "campaign_id": "upgrade-0154-d10-predecessor",
+            "campaign_id": f"{campaign_id}-predecessor",
             "campaign_manifest_sha256": "0" * 64,
             "reason": upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
         }
@@ -197,33 +186,61 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
         state_dir = root / "supervisor"
         state_dir.mkdir(mode=0o700)
         fixture["state_dir"] = state_dir
-        fixture["attempt_root"] = self._zero_execution_official_attempt(fixture)
         return fixture
 
-    def _zero_execution_official_attempt(self, fixture: dict) -> Path:
-        """待封存的零执行官方 attempt：正式预约、证据权限收口与 attempt 收据，没有 Job checkpoint 与逐 Job 结果文件。"""
+    def _official_attempt(self, fixture: dict, *, job_evidence: bool = False, checkpoints: bool = False) -> Path:
+        """待封存的官方 attempt：正式预约、证据权限收口与 attempt 收据。
+
+        默认是零执行边界（没有 Job checkpoint 与逐 Job 结果文件、Job 结果不登记证据根）；``job_evidence`` 时每个官方
+        Job 结果登记一个真实证据根（attempt 证据目录内，收口之前落盘一份抓包原件）；``checkpoints`` 时按正式合同写
+        逐 Job 结果文件与 complete checkpoint（普通采集 attempt 的边界，post-run-tooling 判据可以成立）。
+        """
 
         campaign, manifest = fixture["campaign_dir"], fixture["manifest"]
-        attempt_root, _reservation = upgrade._reserve_capture_attempt(
+        attempt_root, reservation = upgrade._reserve_capture_attempt(
             campaign, phase="official", candidate_id=None, identity=dict(manifest["official_identity"]),
             jobs=fixture["jobs"], allow_failed_rerun=True,
         )
-        results = [
-            {
+        evidence_root, logs_root = attempt_root / "evidence", attempt_root / "logs"
+        evidence_root.mkdir(mode=0o700, exist_ok=True)
+        logs_root.mkdir(mode=0o700, exist_ok=True)
+        job_roots: list[str] = []
+        if job_evidence:
+            pcap = evidence_root / self.JOB_ROOT_NAME / self.PCAP_RELATIVE
+            pcap.parent.mkdir(parents=True, mode=0o700)
+            pcap.write_bytes(b"\xd4\xc3\xb2\xa1\x02\x00\x04\x00" + b"\x00" * 16 + b"fixture-client-hello")
+            # 零连接 relay 收据：请求核算（live request provenance）按零请求闭合，不因夹具证据不可识别而账务未决。
+            relay = evidence_root / self.JOB_ROOT_NAME / "relay" / "relay.json"
+            relay.parent.mkdir(mode=0o700)
+            relay.write_text(json.dumps({"schema_version": request_provenance.RELAY_MANIFEST_SCHEMA,
+                                         "connections": []}) + "\n", encoding="utf-8")
+            job_roots = [str(evidence_root / self.JOB_ROOT_NAME)]
+        store = upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints") if checkpoints else None
+        previous: str | None = None
+        results = []
+        for job in fixture["jobs"]:
+            result = {
                 "id": job.job_id, "phase": "official", "required": True,
                 "execution_sha256": upgrade._job_execution_sha256(job), "status": "complete",
-                "description": "零执行导入的官方 Job", "duration_seconds": 0.0, "steps": [], "evidence_roots": [],
+                "description": "官方 Job", "duration_seconds": 0.0, "steps": [], "evidence_roots": list(job_roots),
                 "missing_evidence_patterns": [], "empty_evidence_patterns": [], "covers": [],
                 "scenario_ids": list(job.scenario_ids), "scenario_receipts": [], "scenario_receipt_failures": [],
                 "track": "main", "model_id": "gpt-5.5", "expected_use_responses_lite": False,
                 "required_model_receipt": False, "model_condition_receipt": None,
                 "model_condition_receipt_failure": None, "disposition": "executed",
             }
-            for job in fixture["jobs"]
-        ]
-        evidence_root, logs_root = attempt_root / "evidence", attempt_root / "logs"
-        evidence_root.mkdir(mode=0o700, exist_ok=True)
-        logs_root.mkdir(mode=0o700, exist_ok=True)
+            if store is not None:
+                upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+                appended = store.append({
+                    "checkpoint_schema_version": upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"], "phase": "official", "attempt_id": attempt_root.name,
+                    "run_nonce": reservation["run_nonce"], "item_id": job.job_id, "status": "complete",
+                    "disposition": "executed", "result_sha256": upgrade.incremental_recovery.digest(result),
+                    "result_key": None, "result": result, "source_receipt": None,
+                    "previous_checkpoint_sha256": previous,
+                })
+                previous = str(appended["checkpoint_sha256"])
+            results.append(result)
         closeout = upgrade._close_attempt_evidence_permissions(attempt_root, [evidence_root, logs_root])
         upgrade._write_capture_attempt(campaign, attempt_root, {
             "campaign_id": manifest["campaign_id"], "phase": "official", "candidate_id": None,
@@ -237,8 +254,13 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
             "binary_verification": None, "execution_error": None, "restoration_error": None,
             "next_gate": "零请求：执行 capture-official seal 生成预览，再以 --approve-seal-sha256 批准封存。",
         })
-        self.assertFalse((attempt_root / "checkpoints").exists())
+        self.assertEqual((attempt_root / "checkpoints").exists(), checkpoints)
         return attempt_root
+
+    def _zero_execution_official_attempt(self, fixture: dict) -> Path:
+        """待封存的零执行官方 attempt：正式预约、证据权限收口与 attempt 收据，没有 Job checkpoint 与逐 Job 结果文件。"""
+
+        return self._official_attempt(fixture)
 
     def _assertion_action(self, campaign: Path, attempt_id: str) -> dict:
         """受管断言包脚本的 /usr/bin/env 形态（录制链同形；解释器取本机 /bin/bash）。"""
@@ -295,6 +317,34 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
             "execute_items": execute if execute is not None else sorted(i for a in actions for i in a["item_ids"]),
             "reuse_items": [] if reuse is None else reuse, "actions": actions,
         }
+
+
+class OfficialSealChainStageReplayTests(_OfficialSealChainFixture, unittest.TestCase):
+    """D-10（草表 D-10，矩阵第 24 行）：VC-1 官方 seal 链零请求后处理动作以 execution-failure 失败后，
+    凭阶段幂等重派合同修好接着跑。
+
+    真实可达形态：只读导入的 Formal Campaign（no-op 首批、VC-1 尚未封存），待封存的官方 attempt 与
+    reuse-official-evidence 导入的零执行 attempt 一样没有 Job checkpoint 目录，post-run-tooling 五条判据因此
+    必然不成立。录制链同形的 VC-1 seal 预览批次（断言包准备＋seal 预览）经原子入口真实派发：断言包脚本非零
+    退出、未发布断言包，父监督器按 child-returncode 记诊断、判据不成立保持 execution-failure，账本进入
+    stage_abandoned＋stage_review_required。修复前 ``_campaign_stage_replay_facts`` 对 VC-1 固定不许可：
+    对账只入账、账本停在审核、任何后继都被拒——死路。
+    """
+
+    def setUp(self) -> None:
+        self.case = upgrade_tests.CodexUpgradeTest()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+
+    def _fixture(self, root: Path) -> dict:
+        """只读导入形态的 Formal Campaign，外加一个待封存的零执行官方 attempt（Job 结果不登记证据根）。"""
+
+        fixture = self._import_campaign(root, campaign_id="upgrade-0154-d10")
+        fixture["attempt_root"] = self._zero_execution_official_attempt(fixture)
+        return fixture
 
     def test_seal_chain_execution_failure_reconciles_to_single_protocol_redispatch(self) -> None:
         """真实派发的 VC-1 seal 链批次失败 → 对账按合同写阶段幂等重派证明、账本重开 VC-1 → 有且只有阶段审核
@@ -527,7 +577,8 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
                 self.assertEqual(result["actions"], [])
                 self.assertIn(reason.strip(), " ".join(result["reasons"]))
 
-        # 半成品与封存状态：断言包已发布（脚本 write-once 拒绝覆盖）、暂存残留、官方阶段结果或 VC-1 checkpoint 已存在。
+        # 半成品与封存状态：断言包已发布却核对不上（空目录，缺 capture manifest；已发布且一致的形态见第 43 项
+        # OfficialSealContinuationTests）、暂存残留、官方阶段结果或 VC-1 checkpoint 已存在。
         evidence = attempt_root / "evidence"
         stage_result = campaign / "official" / "result.json"
         checkpoint = upgrade._vc_checkpoint_path(campaign, "VC-1")
@@ -546,7 +597,7 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
                     self.assertIn(reason.strip(), " ".join(result["reasons"]))
                 finally:
                     remove(path)
-        # 断言包已发布只挡断言包动作：单独的 seal 批准批次不受影响。
+        # 断言包状态只影响含断言包或 seal 预览的批次：单独的 seal 批准批次不受影响。
         (evidence / "assertion-bundle").mkdir(mode=0o700)
         draft.write_text("{}\n", encoding="utf-8")
         preview.write_text(json.dumps({"review_sha256": review}) + "\n", encoding="utf-8")
@@ -590,6 +641,372 @@ class OfficialSealChainStageReplayTests(unittest.TestCase):
                 )
                 self.assertEqual(closeout["ledger_status"], "stopped", closeout)
                 self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stopped")
+
+
+def _declared_official_job_case() -> upgrade_tests.CodexUpgradeTest:
+    """官方 Job 取正式 0.154 证据标签声明覆盖、且只有一条抓包规则的 official-ws-handshake-repeat：受管断言包脚本
+    （编目、收口、回填 manifest、重放核验、原子发布）能对夹具证据真实发布断言包。子类在函数内定义，避免被用例
+    发现机制当作独立用例类重复执行 CodexUpgradeTest 的全部用例。"""
+
+    class DeclaredOfficialJobCase(upgrade_tests.CodexUpgradeTest):
+        synthetic_job_ids = {"official": "official-ws-handshake-repeat", "candidate": "candidate-test"}
+
+    return DeclaredOfficialJobCase()
+
+
+class OfficialSealContinuationTests(_OfficialSealChainFixture, unittest.TestCase):
+    """第 43 项：断言包已发布后 seal 预览失败的受支持续派路径。
+
+    录制链同形的 VC-1 seal 预览批次（断言包准备＋seal 预览）里，断言包脚本已原子发布断言包、随后 seal 预览失败。
+    修复前：逐字重派的断言包动作必然被脚本 write-once 拒绝覆盖；只含 seal 预览的续派又被 v3 门禁（新 VC-1 批次
+    必须同时声明断言包与 seal 预览）拒绝；阶段审核的幂等合同也判"断言包已发布、不可幂等"——post-run-tooling 与
+    阶段审核两条路径都走不通。修复后：断言包已发布且能核对为本 attempt 同一冻结输入的产物时，门禁放行只含 seal
+    预览（可加 seal 批准）的续派并拒绝再派发断言包动作；阶段审核路径由协议 3、post-run-tooling 路径由协议 2
+    各自唯一承接续派；断言包不一致、官方证据已封存、attempt 已作废照旧拒绝。
+
+    夹具全程真实：只读导入的 Formal Campaign、官方 Job 结果登记的证据根里一份抓包原件、经原子入口真实派发的
+    断言包脚本（真实编目与发布）与 seal 预览（真实子进程失败）、真实收账、对账与后继协议链。
+    """
+
+    def setUp(self) -> None:
+        self.case = _declared_official_job_case()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+
+    def _fixture(self, root: Path, *, checkpoints: bool) -> dict:
+        """``checkpoints`` 为假：导入的零执行 attempt 边界（判据不成立，seal 链失败进阶段审核）；为真：普通采集
+        attempt 边界（判据成立，seal 链零请求失败按 post-run-tooling 进 recovery_required）。"""
+
+        fixture = self._import_campaign(root, campaign_id="upgrade-0154-d43")
+        self.assertEqual([job.job_id for job in fixture["jobs"]], ["official-ws-handshake-repeat"])
+        fixture["attempt_root"] = self._official_attempt(fixture, job_evidence=True, checkpoints=checkpoints)
+        return fixture
+
+    def _publish_bundle(self, fixture: dict) -> Path:
+        """直接运行受管断言包脚本（与动作命令同一环境坐标），真实发布断言包。"""
+
+        module = Path(upgrade.__file__).resolve()
+        attempt_root = fixture["attempt_root"]
+        completed = subprocess.run(
+            ["/bin/bash", str(module.parents[1] / "prepare_assertion_bundle.sh")],
+            env={**os.environ, "CAMPAIGN_DIR": str(fixture["campaign_dir"]), "ATTEMPT_ID": attempt_root.name,
+                 "SIDE": "official", "REPO_ROOT": str(module.parents[2]), "TOOL_ROOT": str(module.parent)},
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout[-2000:] + completed.stderr[-2000:])
+        bundle = attempt_root / "evidence" / "assertion-bundle"
+        self.assertTrue((bundle / "capture-manifest.json").is_file())
+        return bundle
+
+    @staticmethod
+    def _protocol_outcomes(prior_state: dict, prior_manifest: dict, prior_dir: Path, successor: dict,
+                           campaign: Path) -> list[tuple[str, str]]:
+        outcomes = []
+        for name, protocol in supervisor._SUCCESSOR_PROTOCOLS:
+            try:
+                accepted = protocol(prior_state, prior_manifest, prior_dir, successor, campaign_dir=campaign)
+                outcomes.append((name, "accept" if accepted else "reject"))
+            except supervisor.SupervisorError as error:
+                outcomes.append((name, f"raise：{error}"))
+        return outcomes
+
+    def _assert_single_protocol(self, outcomes: list[tuple[str, str]], expected: str) -> None:
+        """有且只有 ``expected`` 承接；按入口尝试顺序排在它前面的协议必须形态不符返回 False（不得抛错拦截）。"""
+
+        self.assertEqual([name for name, outcome in outcomes if outcome == "accept"], [expected], outcomes)
+        before = outcomes[: [name for name, _ in outcomes].index(expected)]
+        self.assertTrue(all(outcome == "reject" for _, outcome in before), before)
+
+    @staticmethod
+    def _continuation(inner: dict, *, sequence: int) -> dict:
+        successor = json.loads(json.dumps(inner))
+        successor.update(batch_id=f"vc-1-{sequence:04d}", batch_sequence=sequence, batch_sha256=str(sequence) * 64,
+                         actions=[action for action in successor["actions"] if action["action_id"] != "prepare-official-assertion-bundle"],
+                         execute_items=["seal-official-preview"])
+        return successor
+
+    @staticmethod
+    def _tamper(path: Path, data: bytes):
+        """改写一个（可能只读的）文件并返回恢复函数。"""
+
+        original, mode = path.read_bytes(), path.stat().st_mode & 0o777
+        path.chmod(0o600)
+        path.write_bytes(data)
+
+        def restore() -> None:
+            path.chmod(0o600)
+            path.write_bytes(original)
+            path.chmod(mode)
+
+        return restore
+
+    def test_bundle_published_preview_failure_continues_in_stage_review_by_single_protocol(self) -> None:
+        """导入的零执行 attempt：真实断言包脚本发布断言包、seal 预览真实失败（execution-failure）→ 阶段审核 → 对账按
+        合同写证明（断言包动作已完成、outputs 绑定断言包）并重开 VC-1 → 去掉断言包动作的续派由协议 3 唯一承接、真实
+        派发；逐字重派在编译前零写入拒绝，断言包被改动后续派失败关闭；全程零请求。"""
+
+        root = self.base / "stage-review"
+        root.mkdir(mode=0o700)
+        fixture = self._fixture(root, checkpoints=False)
+        campaign, ledger_dir, attempt_root = fixture["campaign_dir"], fixture["timing_ledger"], fixture["attempt_root"]
+        bundle = attempt_root / "evidence" / "assertion-bundle"
+        arguments = upgrade_tests.CodexUpgradeTest._vc_chain_arguments
+        plan = self._plan(root, "seal-preview", self._preview_batch(campaign, attempt_root.name))
+        failed, code = upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 2, plan))
+        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, f"action-failed:{self.PREVIEW}"), failed)
+        actions = {action["action_id"]: action for action in failed["campaign_run"]["actions"]}
+        self.assertEqual(actions[self.ASSERTION]["status"], "passed")
+        self.assertEqual(actions[self.PREVIEW]["diagnostic"]["effective_failure_class"], "execution-failure")
+        published = supervisor.official_assertion_bundle_facts(campaign, attempt_root.name, verify_content=True)
+        self.assertTrue(published["published"] and published["consistent"], published)
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stage_review_required")
+        run_dir = Path(failed["campaign_run"]["run_dir"])
+        inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+        prior_state = supervisor._read_state(run_dir)
+
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertEqual(result["status"], "recoverable", result)
+        proof = result["stage_replay"]
+        self.assertTrue(proof["allowed"], proof)
+        self.assertEqual(proof["actions"][0]["action_id"], self.ASSERTION)
+        self.assertEqual(proof["actions"][0]["outputs"], published["bindings"])
+        self.assertEqual(supervisor.stage_replay_completed_action_ids(proof), frozenset({self.ASSERTION}))
+        self.assertIn("续派", result["next_command"])
+        state = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]),
+                         ("active", "VC-1", "redispatch-same-batch"))
+
+        continuation = self._continuation(inner, sequence=3)
+        self._assert_single_protocol(
+            self._protocol_outcomes(prior_state, inner, run_dir, continuation, campaign), "stage_review"
+        )
+        history = supervisor._campaign_run_history(fixture["state_dir"], str(inner["campaign_id"]))
+        accepted_history = supervisor._validate_batched_campaign_history(continuation, history, campaign_dir=campaign)
+        self.assertEqual([item[2] for item in accepted_history], sorted(
+            (item[2] for item in history), key=lambda run: supervisor._read_json(run / "campaign-run-manifest.json")["manifest"]["batch_sequence"]
+        ))
+        verbatim = json.loads(json.dumps(inner))
+        verbatim.update(batch_id="vc-1-0003", batch_sequence=3, batch_sha256="3" * 64)
+        with self.assertRaisesRegex(supervisor.SupervisorError, "只允许去掉已完成动作"):
+            supervisor._validate_batched_campaign_history(verbatim, history, campaign_dir=campaign)
+        staging = campaign / "control" / "vc" / "staging"
+        staged_before = sorted(path.name for path in staging.iterdir())
+        with self.assertRaisesRegex(upgrade.ConfigurationError, "断言证据包已发布：断言包脚本 write-once"):
+            upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 3, plan))
+        self.assertEqual(sorted(path.name for path in staging.iterdir()), staged_before)
+
+        continuation_plan = self._plan(root, "seal-preview-continuation", [self._seal_action(campaign, attempt_root.name)])
+        # 断言包被改动后续派失败关闭：改 provenance（结构）→ 协议 3 复算漂移；改复制件内容 → 派发门禁内容核对拒绝。
+        restore = self._tamper(bundle / "provenance.json", (bundle / "provenance.json").read_bytes().replace(b'"entry_count": 1', b'"entry_count": 2'))
+        try:
+            with self.assertRaisesRegex(supervisor.SupervisorError, "漂移"):
+                supervisor._validate_batched_stage_review_successor(prior_state, inner, run_dir, continuation, campaign_dir=campaign)
+        finally:
+            restore()
+        copy = bundle / self.JOB_ROOT_NAME / self.PCAP_RELATIVE
+        restore = self._tamper(copy, copy.read_bytes() + b"tampered")
+        try:
+            with self.assertRaisesRegex(upgrade.ConfigurationError, "不能核对为本 attempt 同一冻结输入的产物"):
+                upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 3, continuation_plan))
+            self.assertEqual(sorted(path.name for path in staging.iterdir()), staged_before)
+        finally:
+            restore()
+
+        again, code = upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 3, continuation_plan))
+        self.assertEqual((code, again["campaign_run"]["reason"]), (1, f"action-failed:{self.PREVIEW}"), again)
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0003-vc-1.json").is_file())
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stage_review_required")
+        # 续派批次本身的合同：只含 seal 预览、断言包已发布且一致，没有已完成动作——再失败时按 D-10 逐字重派它。
+        again_dir = Path(again["campaign_run"]["run_dir"])
+        again_inner = supervisor._read_json(again_dir / "campaign-run-manifest.json")["manifest"]
+        again_facts = upgrade._campaign_stage_replay_facts(campaign, again_inner)
+        self.assertTrue(again_facts["allowed"], again_facts)
+        self.assertEqual([item["action_id"] for item in again_facts["actions"]], [self.PREVIEW])
+        self.assertEqual(supervisor.stage_replay_completed_action_ids({"phase": "VC-1", **again_facts}), frozenset())
+        # 夹具的 seal 预览在同一步骤再次失败：同根因第二次触顶，对账暂停等根因修复、不写证明（根因上限照旧）。
+        reconciled = reconciler.reconcile_supervisor_run(again_dir, campaign)
+        self.assertEqual(reconciled["status"], "paused", reconciled)
+        self.assertEqual(reconciled["decision"]["pause_kinds"], ["root_cause_repair"], reconciled["decision"])
+        root_cause_id = reconciled["root_cause"]["root_cause_id"]
+        self.assertEqual(reconciled["project_head"]["root_cause_counts"][root_cause_id], 2)
+        self.assertNotIn("stage_replay", reconciled)
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "stage_review_required")
+        # 登记根因修复后重新对账：续派批次按 D-10 合同写证明（没有已完成动作），逐字重派续派批次仍由协议 3 唯一承接。
+        project.record_root_cause_repair(fixture["ledger"], root_cause_id=root_cause_id, kind="code", bindings={
+            "fix_commit_sha": "a" * 40, "regression_receipt_sha256": "b" * 64, "deployment_receipt_sha256": "c" * 64,
+        })
+        resumed = reconciler.reconcile_supervisor_run(again_dir, campaign)
+        self.assertEqual(resumed["status"], "recoverable", resumed)
+        self.assertTrue(resumed["stage_replay"]["allowed"], resumed["stage_replay"])
+        self.assertEqual(supervisor.stage_replay_completed_action_ids(resumed["stage_replay"]), frozenset())
+        state = timing.inspect_ledger(ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"]), ("active", "VC-1"))
+        verbatim_again = json.loads(json.dumps(again_inner))
+        verbatim_again.update(batch_id="vc-1-0004", batch_sequence=4, batch_sha256="4" * 64)
+        self._assert_single_protocol(
+            self._protocol_outcomes(supervisor._read_state(again_dir), again_inner, again_dir, verbatim_again, campaign),
+            "stage_review",
+        )
+        totals = project.replay_head(fixture["ledger"])
+        self.assertEqual((totals["precise_total"], totals["estimated_total"]), (0, 0))
+
+    def test_bundle_published_preview_post_run_tooling_continues_by_seal_chain_protocol(self) -> None:
+        """普通采集 attempt：真实断言包脚本发布断言包、seal 预览真实失败按 post-run-tooling 收口 → 对账文案指向续派 →
+        去掉断言包动作的续派由协议 2 唯一承接、真实派发；逐字重派在编译前零写入拒绝。"""
+
+        root = self.base / "post-run-tooling"
+        root.mkdir(mode=0o700)
+        fixture = self._fixture(root, checkpoints=True)
+        campaign, ledger_dir, attempt_root = fixture["campaign_dir"], fixture["timing_ledger"], fixture["attempt_root"]
+        arguments = upgrade_tests.CodexUpgradeTest._vc_chain_arguments
+        plan = self._plan(root, "seal-preview", self._preview_batch(campaign, attempt_root.name))
+        failed, code = upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 2, plan))
+        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, f"action-failed:{self.PREVIEW}"), failed)
+        actions = {action["action_id"]: action for action in failed["campaign_run"]["actions"]}
+        self.assertEqual(actions[self.ASSERTION]["status"], "passed")
+        self.assertEqual(actions[self.PREVIEW]["diagnostic"]["effective_failure_class"], "post-run-tooling")
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "recovery_required")
+        run_dir = Path(failed["campaign_run"]["run_dir"])
+        inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
+        prior_state = supervisor._read_state(run_dir)
+        result = reconciler.reconcile_supervisor_run(run_dir, campaign)
+        self.assertEqual(result["status"], "recoverable", result)
+        self.assertIn("续派", result["next_command"])
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "active")
+
+        continuation = self._continuation(inner, sequence=3)
+        self._assert_single_protocol(
+            self._protocol_outcomes(prior_state, inner, run_dir, continuation, campaign), "seal_chain"
+        )
+        staging = campaign / "control" / "vc" / "staging"
+        staged_before = sorted(path.name for path in staging.iterdir())
+        with self.assertRaisesRegex(upgrade.ConfigurationError, "断言证据包已发布：断言包脚本 write-once"):
+            upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 3, plan))
+        self.assertEqual(sorted(path.name for path in staging.iterdir()), staged_before)
+        continuation_plan = self._plan(root, "seal-preview-continuation", [self._seal_action(campaign, attempt_root.name)])
+        again, code = upgrade.compile_and_run_vc_batch(arguments(fixture, "VC-1", 3, continuation_plan))
+        self.assertEqual((code, again["campaign_run"]["reason"]), (1, f"action-failed:{self.PREVIEW}"), again)
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0003-vc-1.json").is_file())
+        self.assertEqual(again["campaign_run"]["actions"][0]["diagnostic"]["effective_failure_class"], "post-run-tooling")
+        self.assertEqual(timing.inspect_ledger(ledger_dir)["status"], "recovery_required")
+        totals = project.replay_head(fixture["ledger"])
+        self.assertEqual((totals["precise_total"], totals["estimated_total"]), (0, 0))
+
+    def test_gate_and_contract_follow_bundle_state(self) -> None:
+        """门禁（内容核对）与阶段幂等合同（结构核对）按断言包状态判定：未发布时断言包与 seal 预览必须同批次；
+        已发布且一致时放行只含 seal 预览（可加批准）的续派、拒绝再派发断言包动作；不一致、已封存、已作废照旧拒绝。"""
+
+        root = self.base / "matrix"
+        root.mkdir(mode=0o700)
+        fixture = self._fixture(root, checkpoints=False)
+        campaign, attempt_root = fixture["campaign_dir"], fixture["attempt_root"]
+        attempt_id = attempt_root.name
+        assertion, preview = self._preview_batch(campaign, attempt_id)
+        approve = self._seal_action(campaign, attempt_id, approve="a" * 64)
+
+        def gate(actions: list[dict]) -> None:
+            supervisor._validate_vc1_assertion_seal_gate(
+                schema_version=supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA, campaign_id=str(fixture["manifest"]["campaign_id"]),
+                phase="VC-1", actions=actions, require_bound_files=True,
+            )
+
+        def contract(actions: list[dict]) -> dict:
+            return upgrade._campaign_stage_replay_facts(campaign, self._manifest(fixture, actions))
+
+        self.assertEqual(supervisor.OFFICIAL_ASSERTION_CAPTURE_MANIFEST_SCHEMA,
+                         build_evidence_catalog.CAPTURE_MANIFEST_SCHEMA)
+        # 断言包未发布：断言包与 seal 预览必须同批次。
+        self.assertFalse(supervisor.official_assertion_bundle_facts(campaign, attempt_id, verify_content=True)["published"])
+        gate([assertion, preview])
+        with self.assertRaisesRegex(supervisor.SupervisorError, "必须连续声明"):
+            gate([preview])
+        self.assertIn("要求断言证据包已发布且一致", " ".join(contract([preview])["reasons"]))
+
+        # 受管断言包脚本真实发布断言包。
+        bundle = self._publish_bundle(fixture)
+        for verify_content in (False, True):
+            facts = supervisor.official_assertion_bundle_facts(campaign, attempt_id, verify_content=verify_content)
+            self.assertTrue(facts["published"] and facts["consistent"], facts)
+        relative = bundle.relative_to(campaign).as_posix()
+        self.assertEqual(set(facts["bindings"]), {f"{relative}/capture-manifest.json", f"{relative}/provenance.json"})
+        with self.assertRaisesRegex(supervisor.SupervisorError, "断言证据包已发布：断言包脚本 write-once"):
+            gate([assertion, preview])
+        with self.assertRaisesRegex(supervisor.SupervisorError, "断言证据包已发布"):
+            gate([assertion])
+        gate([preview])
+        gate([preview, approve])
+        allowed = contract([assertion, preview])
+        self.assertTrue(allowed["allowed"], allowed)
+        self.assertEqual(allowed["actions"][0]["outputs"], facts["bindings"])
+        self.assertEqual(supervisor.stage_replay_completed_action_ids({"phase": "VC-1", **allowed}), frozenset({self.ASSERTION}))
+        continuation = contract([preview])
+        self.assertTrue(continuation["allowed"], continuation)
+        self.assertEqual(supervisor.stage_replay_completed_action_ids({"phase": "VC-1", **continuation}), frozenset())
+
+        # 不一致形态（逐项改动后恢复）：结构不一致门禁与合同都拒绝；只改复制件内容时结构仍一致，由门禁的内容核对拒绝。
+        manifest_path = bundle / "capture-manifest.json"
+        copy = bundle / self.JOB_ROOT_NAME / self.PCAP_RELATIVE
+        structural = {
+            "capture manifest 目标版本": (manifest_path, manifest_path.read_bytes().replace(b'"0.154.0"', b'"0.153.0"')),
+            "provenance 自摘要": (bundle / "provenance.json",
+                                 (bundle / "provenance.json").read_bytes().replace(b'"entry_count": 1', b'"entry_count": 2')),
+        }
+        for label, (path, data) in structural.items():
+            with self.subTest(inconsistent=label):
+                restore = self._tamper(path, data)
+                try:
+                    with self.assertRaisesRegex(supervisor.SupervisorError, "不能核对为本 attempt 同一冻结输入的产物"):
+                        gate([preview])
+                    self.assertIn("不能核对", " ".join(contract([assertion, preview])["reasons"]))
+                finally:
+                    restore()
+        extra = bundle / "unregistered.json"
+        extra.write_text("{}\n", encoding="utf-8")
+        try:
+            with self.assertRaisesRegex(supervisor.SupervisorError, "未登记文件"):
+                gate([preview])
+            self.assertIn("未登记文件", " ".join(contract([preview])["reasons"]))
+        finally:
+            extra.unlink()
+        restore = self._tamper(copy, copy.read_bytes() + b"tampered")
+        try:
+            with self.assertRaisesRegex(supervisor.SupervisorError, "按 provenance 重放断言证据包未通过"):
+                gate([preview])
+            self.assertTrue(contract([preview])["allowed"])
+        finally:
+            restore()
+        gate([preview])
+        # 读取中途的文件系统错误按"已发布但核对不上"失败关闭：门禁拒绝，调用方收不到未分类异常。
+        with mock.patch.object(supervisor, "_file_digest", side_effect=PermissionError("权限被拒")):
+            broken = supervisor.official_assertion_bundle_facts(campaign, attempt_id, verify_content=True)
+            self.assertEqual((broken["published"], broken["consistent"], broken["bindings"]), (True, False, {}), broken)
+            self.assertIn("读取断言证据包或其来源失败", " ".join(broken["reasons"]))
+            with self.assertRaisesRegex(supervisor.SupervisorError, "不能核对为本 attempt 同一冻结输入的产物"):
+                gate([preview])
+
+        # 官方证据已封存：门禁与合同都拒绝（已封存不重封）。
+        stage_result = campaign / "official" / "result.json"
+        stage_result.write_text("{}\n", encoding="utf-8")
+        try:
+            with self.assertRaisesRegex(supervisor.SupervisorError, "已封存"):
+                gate([preview])
+            self.assertIn("已封存", " ".join(contract([preview])["reasons"]))
+        finally:
+            stage_result.unlink()
+        # attempt 已被环境隔离作废：合同拒绝；只含 seal 预览的续派批次在编译前零写入拒绝（第 13 项同一检查，先于断言包核对）。
+        continuation_plan = self._plan(root, "seal-preview-continuation", [preview])
+        staging = campaign / "control" / "vc" / "staging"
+        staged_before = sorted(path.name for path in staging.iterdir()) if staging.is_dir() else None
+        with mock.patch.object(upgrade, "_isolation_invalidated_attempts", return_value={("official", None, attempt_id)}):
+            self.assertIn("环境隔离作废", " ".join(contract([preview])["reasons"]))
+            with self.assertRaisesRegex(upgrade.ConfigurationError, "已被环境隔离作废（结果永不复用、永不 seal）"):
+                upgrade.compile_and_run_vc_batch(
+                    upgrade_tests.CodexUpgradeTest._vc_chain_arguments(fixture, "VC-1", 2, continuation_plan)
+                )
+        self.assertEqual(sorted(path.name for path in staging.iterdir()) if staging.is_dir() else None, staged_before)
 
 
 # 第 39 项：owner 在失败收账前（或收账中途）丢失的父进程替身。独立子进程按夹具同一口径（离线出口、合成证据标签

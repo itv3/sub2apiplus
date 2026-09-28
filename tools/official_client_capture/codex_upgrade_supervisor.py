@@ -33,6 +33,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
+    import build_assertion_bundle
     import codex_upgrade_arm64_environment_receipt as arm64_environment
     import codex_upgrade_evidence_permissions as evidence_permissions
     import codex_upgrade_project_ledger as project_ledger
@@ -40,6 +41,7 @@ if __package__ in {None, ""}:
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
+    from . import build_assertion_bundle
     from . import codex_upgrade_arm64_environment_receipt as arm64_environment
     from . import codex_upgrade_evidence_permissions as evidence_permissions
     from . import codex_upgrade_project_ledger as project_ledger
@@ -6188,6 +6190,223 @@ def _replay_vc1_evidence_permission_closeout(
     return schema_version
 
 
+# 第 43 项：断言包脚本（tools/prepare_assertion_bundle.sh）在全新暂存目录编目、逐文件只读复制并写 provenance、回填
+# capture manifest，按下列允许额外项重放核验通过后，才把官方断言证据包原子发布到 attempt 证据根内的固定位置。
+OFFICIAL_ASSERTION_BUNDLE_RELATIVE = PurePosixPath("evidence") / "assertion-bundle"
+# 重放 provenance 时 bundle 内允许存在、不由 provenance 逐项登记的产物（与脚本 --verify --allow-extra 同一闭集）。
+OFFICIAL_ASSERTION_BUNDLE_EXTRA_PREFIXES = ("derived/", "candidate-trace/", "capture-manifest.json")
+# 与 build_evidence_catalog.CAPTURE_MANIFEST_SCHEMA 同值（断言包脚本回填的统一 capture manifest；用例核对二者一致）。
+# 不在这里导入该模块：监督器也以脚本方式运行（monitor），那种方式下它的包路径导入不可用。
+OFFICIAL_ASSERTION_CAPTURE_MANIFEST_SCHEMA = "codex-candidate-capture-manifest/v1"
+# 阶段幂等重派证明里，断言包动作的 outputs 绑定已发布断言包时所用键的后缀（capture manifest 的 Campaign 相对路径）。
+OFFICIAL_ASSERTION_BUNDLE_MANIFEST_SUFFIX = "/evidence/assertion-bundle/capture-manifest.json"
+OFFICIAL_ASSERTION_ACTION_ID = "prepare-official-assertion-bundle"
+_ASSERTION_SOURCE_ROOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def official_assertion_bundle_facts(
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    verify_content: bool,
+) -> dict[str, Any]:
+    """第 43 项：官方 attempt 的断言证据包是否已发布、能否核对为本 attempt 同一冻结输入的产物（零请求、只读）。
+
+    返回 ``{"published", "consistent", "reasons", "bindings"}``。``bindings`` 只在一致时给出：capture manifest 与
+    provenance 两个文件的 Campaign 相对路径及摘要——provenance 逐文件绑定来源与目标摘要、capture manifest 逐
+    artifact 绑定摘要，二者合起来绑定 bundle 内每个文件。
+
+    结构核对（总做，只读小文件与目录项）：bundle 是 attempt 证据根内的普通目录；capture manifest 的 schema、目标版本
+    （Campaign ``target_version``）、``capture_id``（Campaign ID）、状态闭合，artifact 路径都在 bundle 内；provenance
+    自摘要成立；provenance 的来源根集合恰为该 attempt 官方 Job 结果登记的权威证据根（与断言包脚本同一派生口径：必需
+    Job 须 complete、每个 complete Job 须登记证据根、根名合法且唯一），每个条目的来源与目标文件都在；bundle 内没有
+    符号链接和未登记文件。内容核对（``verify_content``，读 bundle 与来源文件）：按 provenance 重放来源与目标摘要
+    （``build_assertion_bundle.verify_bundle``，即脚本发布前 ``--verify`` 的同一实现），并逐项复算 capture manifest
+    的 artifact 摘要。派发门禁做内容核对；对账与阶段幂等合同只做结构核对——对账保持零扫描，内容由紧接着的派发
+    门禁与 seal 本身核对。未发布时 ``published`` 为 False，其余不核对。读取中途的文件系统错误（权限、竞态删除）
+    一律按"已发布但核对不上"失败关闭，不让调用方收到未分类异常。
+    """
+
+    facts: dict[str, Any] = {"published": False, "consistent": False, "reasons": [], "bindings": {}}
+    try:
+        _collect_official_assertion_bundle_facts(facts, Path(campaign_dir), attempt_id, verify_content=verify_content)
+    except OSError as error:
+        facts.update(published=True, consistent=False, bindings={})
+        facts["reasons"].append(f"读取断言证据包或其来源失败：{error}")
+    return facts
+
+
+def _collect_official_assertion_bundle_facts(
+    facts: dict[str, Any],
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    verify_content: bool,
+) -> dict[str, Any]:
+    """``official_assertion_bundle_facts`` 的核对主体：就地填写 ``facts``，不一致时追加原因后提前返回。"""
+
+    attempt_root = campaign_dir / "official" / "attempts" / _safe_id(attempt_id, "attempt_id")
+    bundle = attempt_root / OFFICIAL_ASSERTION_BUNDLE_RELATIVE
+    if not bundle.exists() and not bundle.is_symlink():
+        return facts
+    facts["published"] = True
+
+    def fail(reason: str) -> dict[str, Any]:
+        facts["reasons"].append(reason)
+        return facts
+
+    if bundle.is_symlink() or not bundle.is_dir():
+        return fail("断言证据包不是 attempt 证据根内的普通目录")
+    manifest_path = bundle / "capture-manifest.json"
+    provenance_path = bundle / build_assertion_bundle.PROVENANCE_FILENAME
+    for path in (manifest_path, provenance_path):
+        if path.is_symlink() or not path.is_file():
+            return fail(f"断言证据包缺少 {path.name}")
+    try:
+        campaign = _read_json(campaign_dir / "campaign.json")
+        attempt = _read_json(attempt_root / "attempt.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        provenance = build_assertion_bundle.load_provenance(bundle)
+    except (OSError, ValueError, SupervisorError, build_assertion_bundle.AssertionBundleError) as error:
+        return fail(f"断言证据包或其 Campaign／attempt 收据不可读：{error}")
+    artifacts = manifest.get("artifacts") if isinstance(manifest, Mapping) else None
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("schema_version") != OFFICIAL_ASSERTION_CAPTURE_MANIFEST_SCHEMA
+        or manifest.get("codex_version") != campaign.get("target_version")
+        or manifest.get("capture_id") != campaign.get("campaign_id")
+        or manifest.get("status") != "complete"
+        or not isinstance(artifacts, list)
+        or not artifacts
+    ):
+        return fail("capture manifest 的 schema、目标版本、Campaign 或状态与本 attempt 不一致")
+    artifact_files: list[tuple[str, Path, Any]] = []
+    for artifact in artifacts:
+        try:
+            relative = build_assertion_bundle.validate_relative_path(
+                artifact.get("path") if isinstance(artifact, Mapping) else None, "capture manifest artifact"
+            )
+        except build_assertion_bundle.AssertionBundleError as error:
+            return fail(str(error))
+        target = bundle / relative
+        if target.is_symlink() or not target.is_file():
+            return fail(f"capture manifest 引用的 artifact 不存在：{relative}")
+        artifact_files.append((relative, target, artifact.get("sha256")))
+    results = attempt.get("results")
+    by_id = (
+        {str(item.get("id")): item for item in results if isinstance(item, Mapping)}
+        if isinstance(results, list)
+        else {}
+    )
+    jobs = campaign.get("jobs")
+    roots: dict[str, Path] = {}
+    for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, Mapping) or job.get("phase") != "official":
+            continue
+        result = by_id.get(str(job.get("id")))
+        if result is None:
+            return fail(f"官方 Job {job.get('id')} 缺少 attempt 结果")
+        if result.get("status") != "complete":
+            if result.get("required", job.get("required", True)):
+                return fail(f"必需官方 Job {job.get('id')} 未完成")
+            continue
+        raw_roots = result.get("evidence_roots")
+        if not isinstance(raw_roots, list) or not raw_roots:
+            return fail(f"官方 Job {job.get('id')} 没有登记权威证据根")
+        for raw in raw_roots:
+            root = Path(str(raw))
+            if (
+                not root.is_absolute()
+                or root.is_symlink()
+                or not root.is_dir()
+                or not _ASSERTION_SOURCE_ROOT_NAME_RE.fullmatch(root.name)
+                or root.name in roots
+            ):
+                return fail(f"官方 Job {job.get('id')} 的权威证据根不可信、名称非法或重名：{root.name}")
+            roots[root.name] = root.resolve(strict=True)
+    if not roots:
+        return fail("没有已完成官方 Job 的权威证据根")
+    entry_fields = {
+        "source_root", "source_path", "source_inventory_path", "source_sha256", "target_path", "target_sha256",
+    }
+    registered: set[str] = set()
+    source_names: set[str] = set()
+    for entry in provenance["entries"]:
+        if not isinstance(entry, Mapping) or set(entry) != entry_fields:
+            return fail("provenance 条目字段不闭合")
+        name = entry["source_root"]
+        if name not in roots:
+            return fail(f"provenance 的来源根 {name} 不是本 attempt 的权威证据根")
+        try:
+            source_path = build_assertion_bundle.validate_relative_path(entry["source_path"], "provenance 来源路径")
+            target_path = build_assertion_bundle.validate_relative_path(entry["target_path"], "provenance 目标路径")
+        except build_assertion_bundle.AssertionBundleError as error:
+            return fail(str(error))
+        source, target = roots[name] / source_path, bundle / target_path
+        if source.is_symlink() or not source.is_file() or target.is_symlink() or not target.is_file():
+            return fail(f"provenance 条目的来源或目标文件缺失：{target_path}")
+        source_names.add(str(name))
+        registered.add(target_path)
+    if source_names != set(roots):
+        return fail("provenance 的来源根集合与本 attempt 权威证据根不闭合")
+    for path in sorted(bundle.rglob("*")):
+        if path.is_symlink():
+            return fail(f"断言证据包内有符号链接：{path.relative_to(bundle).as_posix()}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle).as_posix()
+        if (
+            relative == build_assertion_bundle.PROVENANCE_FILENAME
+            or relative in registered
+            or any(relative.startswith(prefix) for prefix in OFFICIAL_ASSERTION_BUNDLE_EXTRA_PREFIXES)
+        ):
+            continue
+        return fail(f"断言证据包内有未登记文件：{relative}")
+    if verify_content:
+        try:
+            build_assertion_bundle.verify_bundle(
+                roots, bundle, allowed_extra_prefixes=OFFICIAL_ASSERTION_BUNDLE_EXTRA_PREFIXES
+            )
+        except (OSError, build_assertion_bundle.AssertionBundleError) as error:
+            return fail(f"按 provenance 重放断言证据包未通过：{error}")
+        for relative, target, digest in artifact_files:
+            if _file_digest(target) != digest:
+                return fail(f"capture manifest 的 artifact 摘要漂移：{relative}")
+    facts["bindings"] = {
+        path.relative_to(campaign_dir).as_posix(): _file_digest(path) for path in (manifest_path, provenance_path)
+    }
+    facts["consistent"] = True
+    return facts
+
+
+def stage_replay_completed_action_ids(proof: Mapping[str, Any]) -> frozenset[str]:
+    """第 43 项：阶段幂等重派证明里已完成、N+1 续派不再执行的动作。
+
+    目前只有 VC-1 断言包动作：幂等合同在断言包已发布且一致时，把 capture manifest 与 provenance 绑定为它的
+    outputs——断言包脚本 write-once，逐字重派它必然被拒绝覆盖，续派只执行其后的 seal 动作。
+    """
+
+    actions = proof.get("actions")
+    if proof.get("phase") != "VC-1" or not isinstance(actions, list):
+        return frozenset()
+    return frozenset(
+        str(action["action_id"])
+        for action in actions
+        if isinstance(action, Mapping)
+        and action.get("action_id") == OFFICIAL_ASSERTION_ACTION_ID
+        and isinstance(action.get("outputs"), Mapping)
+        and any(str(key).endswith(OFFICIAL_ASSERTION_BUNDLE_MANIFEST_SUFFIX) for key in action["outputs"])
+    )
+
+
 def _validate_vc1_assertion_seal_gate(
     *,
     schema_version: str,
@@ -6196,7 +6415,13 @@ def _validate_vc1_assertion_seal_gate(
     actions: Sequence[Mapping[str, Any]],
     require_bound_files: bool,
 ) -> None:
-    """强制新 VC-1 形成权限收口→assertion→seal 的单向顺序。"""
+    """强制新 VC-1 形成权限收口→assertion→seal 的单向顺序。
+
+    第 43 项：v3 attempt 的顺序按断言证据包的实际状态保证，而不是一律要求同批次连续声明——断言包尚未发布时，
+    含 seal 预览的批次必须同批次先声明断言包动作；断言包已发布且能核对为本 attempt 同一冻结输入的产物时，放行
+    只含 seal 预览（可加 seal 批准）的续派批次，此时再派发断言包动作必然被脚本 write-once 拒绝覆盖，一律拒绝；
+    断言包已发布却核对不上、或官方证据已封存，一律拒绝。
+    """
 
     if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-1":
         return
@@ -6230,10 +6455,29 @@ def _validate_vc1_assertion_seal_gate(
         *coordinates,
         expected_campaign_id=campaign_id,
     )
-    if attempt_schema == "codex-upgrade-capture-attempt/v3" and (
-        not assertion_indices or not seal_indices
-    ):
-        raise SupervisorError("新 VC-1 批次必须连续声明 assertion bundle 与 seal preview。")
+    if attempt_schema != "codex-upgrade-capture-attempt/v3":
+        return
+    campaign_root = coordinates[0].resolve(strict=True)
+    stage_result = campaign_root / "official" / "result.json"
+    if stage_result.exists() or stage_result.is_symlink():
+        raise SupervisorError("VC-1 官方证据已封存：不得再派发断言包或 seal 预览动作（已封存不重封）。")
+    bundle = official_assertion_bundle_facts(campaign_root, coordinates[1], verify_content=True)
+    if assertion_indices:
+        if bundle["published"]:
+            raise SupervisorError(
+                "VC-1 断言证据包已发布：断言包脚本 write-once、必然拒绝覆盖，不得再派发断言包动作；"
+                "改派同一 attempt 只含 seal 预览（可加 seal 批准）的续派批次。"
+            )
+        if not seal_indices:
+            raise SupervisorError("新 VC-1 批次必须连续声明 assertion bundle 与 seal preview。")
+        return
+    if not bundle["published"]:
+        raise SupervisorError("新 VC-1 批次必须连续声明 assertion bundle 与 seal preview（断言证据包尚未发布）。")
+    if not bundle["consistent"]:
+        raise SupervisorError(
+            "VC-1 断言证据包已发布但不能核对为本 attempt 同一冻结输入的产物，拒绝只含 seal 预览的续派："
+            + "；".join(bundle["reasons"])
+        )
 
 
 def _candidate_seal_chain_coordinates(
@@ -10261,6 +10505,7 @@ def _validate_reconciled_redispatch_binding(
     campaign_dir: Path | None,
     effective_class: str,
     label: str,
+    completed_action_ids: frozenset[str] = frozenset(),
 ) -> bool:
     """reservation 前失败的共享重派许可：账本 receipt_passed + 对账收据 + 批次身份一致。
 
@@ -10271,6 +10516,9 @@ def _validate_reconciled_redispatch_binding(
     （action_id／operation／item_ids）、同候选（含同评估基线）、同输入（execute／reuse 分区、前序
     checkpoint）；命令 argv、timeout、output_bindings 等执行细节可随工具修复变化。评估器摘要按
     ``_redispatch_evaluator_digests_drifted`` 的演进身份校验。
+
+    第 43 项：``completed_action_ids`` 非空时（只由阶段审核协议按证明给出），期望的后继是去掉这些已完成动作
+    （连同它们的 item_ids 从 execute_items 去掉）的续派，而不是逐字重派；逐字重派同样按身份漂移拒绝。
     """
 
     if campaign_dir is None:
@@ -10413,14 +10661,48 @@ def _validate_reconciled_redispatch_binding(
     # 一致即视为同一批次的重派；动作全文不再逐字比较。候选绑定含评估基线两字段——跨基线不是重派，
     # 只能经 evaluation-recover 开新基线承接。评估器摘要按演进身份校验：b0 见
     # _redispatch_evaluator_digests_drifted 的授权历史口径，b≥1 须等于该基线授权的四项。
-    drifted = _redispatch_identity_drift(prior_manifest, successor_manifest)
+    expected_manifest = (
+        _manifest_without_completed_actions(prior_manifest, completed_action_ids, label=label)
+        if completed_action_ids
+        else prior_manifest
+    )
+    drifted = _redispatch_identity_drift(expected_manifest, successor_manifest)
     if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
             _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest, campaign_dir=campaign_dir)):
         drifted.append("evaluator_digests")
     if drifted:
         # B4-1 改法 9（草表 D-13）：前缀按调用协议的 label，不再写死"reservation 前环境恢复"。
-        raise SupervisorError(_redispatch_drift_message(f"{label}对账后只允许原批次内容重派", drifted))
+        prefix = (
+            f"{label}对账后只允许去掉已完成动作（{'、'.join(sorted(completed_action_ids))}）的续派"
+            if completed_action_ids
+            else f"{label}对账后只允许原批次内容重派"
+        )
+        raise SupervisorError(_redispatch_drift_message(prefix, drifted))
     return True
+
+
+def _manifest_without_completed_actions(
+    manifest: Mapping[str, Any],
+    completed_action_ids: frozenset[str],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """第 43 项：去掉已完成动作后的期望续派清单（只用于身份比较）——动作与其 item_ids 一并从 execute_items 去掉。"""
+
+    actions = manifest.get("actions")
+    execute = manifest.get("execute_items")
+    if not isinstance(actions, list) or not isinstance(execute, list):
+        raise SupervisorError(f"{label}：前序清单的动作或执行集合非法，无法推导续派身份。")
+    kept = [action for action in actions if not (isinstance(action, Mapping) and action.get("action_id") in completed_action_ids)]
+    if len(kept) == len(actions) or not kept:
+        raise SupervisorError(f"{label}：已完成动作不在前序批次内，或去掉后没有可续派的动作。")
+    removed_items = {
+        item
+        for action in actions
+        if isinstance(action, Mapping) and action.get("action_id") in completed_action_ids
+        for item in (action.get("item_ids") or [])
+    }
+    return {**manifest, "actions": kept, "execute_items": [item for item in execute if item not in removed_items]}
 
 
 # 修好接着跑第 9 项（第三批 B3-11）：重派身份的批次级／候选级字段。批次级 8 项来自 v2 队列清单的冻结字段
@@ -10574,6 +10856,8 @@ def _validate_batched_stage_review_successor(
     R18：候选审核下的 VC-4（零请求构建动作的工具缺陷）按同一证明格式承接，审核事件取候选审核事件。
     D-10：VC-1 官方 seal 链零请求后处理批次以审核类失败收口时，同样凭对账写出的阶段幂等重派证明由本协议唯一
     承接 N+1 原批次重派（合同见 codex_upgrade._official_seal_chain_stage_replay_actions）。
+    第 43 项：证明记录断言包动作已完成（断言包已发布且一致，见 ``stage_replay_completed_action_ids``）时，本协议
+    唯一承接去掉它的 N+1 续派（只含 seal 预览），逐字重派按身份漂移拒绝（它必然被断言包 write-once 拒绝覆盖）。
     """
 
     phase = prior_manifest.get("phase")
@@ -10624,6 +10908,7 @@ def _validate_batched_stage_review_successor(
     _validate_reconciled_redispatch_binding(
         prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir,
         effective_class=str(receipt["failure_class"]), label="阶段审核",
+        completed_action_ids=stage_replay_completed_action_ids(proof),
     )
     if events[-1][0]["event_id"] == passes[0]["event_id"]:
         from tools.official_client_capture import codex_upgrade as upgrade

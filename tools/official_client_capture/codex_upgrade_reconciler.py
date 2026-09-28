@@ -3911,6 +3911,32 @@ def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bo
     )
 
 
+def _vc1_published_bundle_continuation(run_dir: Path, campaign_dir: Path) -> bool:
+    """第 43 项：VC-1 父批次含断言包动作，且该 attempt 的断言证据包已发布、能核对为同一冻结输入的产物（结构核对）。
+
+    这时逐字重派的断言包动作必然被脚本 write-once 拒绝覆盖（监督器 VC-1 门禁也拒绝派发），唯一可行的后继是
+    去掉断言包动作、只含 seal 预览（可加 seal 批准）的续派。
+    """
+
+    manifest_path = Path(run_dir) / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    actions = inner.get("actions") if isinstance(inner, Mapping) else None
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, Mapping) or action.get("action_id") != supervisor.OFFICIAL_ASSERTION_ACTION_ID:
+            continue
+        target = supervisor._seal_chain_attempt_target(action)
+        if target is None or target[1] != "official":
+            return False
+        try:
+            facts = supervisor.official_assertion_bundle_facts(campaign_dir, target[3], verify_content=False)
+        except supervisor.SupervisorError:
+            return False
+        return bool(facts["published"] and facts["consistent"])
+    return False
+
+
 def _candidate_post_run_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bool:
     """第三批 B3-4：父 run 的失败动作是 VC-5／VC-6 的零请求后处理动作（post-run-tooling 判据未成立而以 execution-failure 收口）。"""
 
@@ -4675,7 +4701,13 @@ def reconcile_supervisor_run(
                     next_action=ledger_next_action,
                 )
             result["ledger_events"] = [event]
-        if stage_review:
+        if stage_review and supervisor.stage_replay_completed_action_ids(result.get("stage_replay") or {}):
+            # 第 43 项：证明记录断言包动作已完成（断言包已发布且一致），唯一可行的后继是去掉它的续派。
+            result["next_command"] = (
+                f"{ledger_next_action}：断言证据包已发布且一致（断言包动作已完成），以 compile-and-run-vc-batch 派发"
+                "去掉断言包动作、只含 seal 预览的 N+1 续派批次；逐字重派会被断言包门禁拒绝，禁止跳阶段"
+            )
+        elif stage_review:
             result["next_command"] = f"{ledger_next_action}：按原命令与合法 checkpoint 重派，禁止跳阶段"
         elif candidate_review and candidate_replay_allowed:
             # R18：VC-4 零请求动作的工具缺陷已修复并部署，证明动作可幂等续作，同一 revision 重开 VC-4。
@@ -4719,6 +4751,15 @@ def reconcile_supervisor_run(
             result["next_command"] = (
                 "phase 保持 active：已封存证据只有 mtime／ctime／inode 漂移；执行 harden-evidence-permissions rebind-boundary "
                 "--attempt-id <attempt>（候选加 --candidate-id）复算内容并绑定新边界，再以 compile-and-run-vc-batch 逐字重派同一批次"
+            )
+        elif run.get("failure_class") == "post-run-tooling" and run.get("phase") == "VC-1" and (
+            _vc1_published_bundle_continuation(resolved_run_dir, campaign_dir)
+        ):
+            # 第 43 项：父批次的断言包动作已发布断言包（且一致），逐字重派会被断言包门禁拒绝，只能续派。
+            result["next_command"] = (
+                "phase 保持 active：官方 seal 链零请求失败已对账；断言证据包已发布且一致，以 compile-and-run-vc-batch "
+                "改派同一 attempt 只含 seal 预览（可加 seal 批准）的 N+1 续派批次（逐字重派会被断言包门禁拒绝）；"
+                "官方 Job 结果只读保留"
             )
         elif run.get("failure_class") == "post-run-tooling" and run.get("phase") == "VC-1":
             result["next_command"] = (

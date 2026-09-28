@@ -18923,8 +18923,12 @@ class CodexUpgradeTest(unittest.TestCase):
                     label="零请求后处理失败",
                 )
 
-    def _b0_completed_official_attempt(self, fixture: dict[str, object]) -> Path:
-        """按正式预约与封存合同发布一个全部 Job complete、等待 seal 收据的官方 attempt。"""
+    def _b0_completed_official_attempt(self, fixture: dict[str, object], *, job_evidence: bool = False) -> Path:
+        """按正式预约与封存合同发布一个全部 Job complete、等待 seal 收据的官方 attempt。
+
+        ``job_evidence``（第 43 项）：每个 Job 结果登记一个真实证据根（attempt 证据目录内、收口之前落盘一份原件），
+        断言证据包可从它编目收口；默认 Job 结果不登记证据根（历史用例口径不变）。
+        """
 
         campaign_dir = fixture["campaign_dir"]
         manifest = fixture["manifest"]
@@ -18937,6 +18941,21 @@ class CodexUpgradeTest(unittest.TestCase):
             jobs=jobs,
             allow_failed_rerun=True,
         )
+        job_roots: list[str] = []
+        if job_evidence:
+            from tools.official_client_capture import codex_upgrade_live_request_provenance as request_provenance
+
+            job_root = attempt_root / "evidence" / "official-job-root"
+            job_root.mkdir(parents=True, mode=0o700)
+            (attempt_root / "evidence").chmod(0o700)
+            (job_root / "facts.json").write_text('{"fixture": "official"}\n', encoding="utf-8")
+            # 零连接 relay 收据：请求核算按零请求闭合，不因夹具证据不可识别而账务未决。
+            (job_root / "relay").mkdir(mode=0o700)
+            (job_root / "relay" / "relay.json").write_text(
+                json.dumps({"schema_version": request_provenance.RELAY_MANIFEST_SCHEMA, "connections": []}) + "\n",
+                encoding="utf-8",
+            )
+            job_roots = [str(job_root)]
         store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
         previous: str | None = None
         results: list[dict[str, object]] = []
@@ -18944,7 +18963,7 @@ class CodexUpgradeTest(unittest.TestCase):
             result = {
                 "id": job.job_id, "phase": "official", "required": True,
                 "execution_sha256": codex_upgrade._job_execution_sha256(job), "status": "complete",
-                "description": "合成官方 Job", "duration_seconds": 0.0, "steps": [], "evidence_roots": [],
+                "description": "合成官方 Job", "duration_seconds": 0.0, "steps": [], "evidence_roots": list(job_roots),
                 "missing_evidence_patterns": [], "empty_evidence_patterns": [], "covers": [],
                 "scenario_ids": list(job.scenario_ids), "scenario_receipts": [], "scenario_receipt_failures": [],
                 "track": "main", "model_id": "gpt-5.5", "expected_use_responses_lite": False,
@@ -19021,18 +19040,27 @@ class CodexUpgradeTest(unittest.TestCase):
 
     def test_b0_vc1_seal_chain_failure_is_post_run_tooling_and_redispatchable(self) -> None:
         """修好接着跑第 15 项：VC-1 官方 seal 链零请求失败归为 post-run-tooling、账本进入 recovery_required；
-        对账后可逐字重派，也可（修复改变预览时）改派同一 attempt 的重新预览批次；指向别的 attempt 失败关闭。"""
+        对账后改派同一 attempt 的续派批次；指向别的 attempt 失败关闭。
 
+        第 43 项：清单一律经真实 VC-1 断言包门禁构建（此前 mock 掉门禁，掩盖了"断言包已发布后逐字重派必然被
+        write-once 拒绝、只含 seal 预览的续派又被门禁拒绝"的死路）。夹具按真实时序：先编译断言包＋seal 预览批次
+        （断言包未发布，门禁放行），再按断言包脚本同一组库函数收口发布断言包，随后 seal 预览失败。"""
+
+        from tools.official_client_capture import build_assertion_bundle
+        from tools.official_client_capture import build_evidence_catalog
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
-        # VC-1 断言包前的证据权限收口重放由 VC-1 门禁用例单独覆盖；这里只测失败分类、对账与后继协议。
-        gate = mock.patch.object(supervisor, "_validate_vc1_assertion_seal_gate")
-        gate.start()
-        self.addCleanup(gate.stop)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = self._b0_fixture(root)
+            # 生产布局只有一个受管数据根：收口、attempt 读取与门禁按夹具 data 根同一口径核对权限收口边界。
+            data_root = mock.patch.object(
+                codex_upgrade.codex_upgrade_evidence_permissions, "_managed_data_root",
+                return_value=Path(fixture["data"]).resolve(strict=True),
+            )
+            data_root.start()
+            self.addCleanup(data_root.stop)
             campaign_dir = fixture["campaign_dir"]
             ledger_dir = fixture["timing_ledger"]
             codex_upgrade_timing_ledger.append_event(
@@ -19041,8 +19069,29 @@ class CodexUpgradeTest(unittest.TestCase):
             codex_upgrade_timing_ledger.append_event(
                 ledger_dir, event_id="fixture-vc-1-started", phase="VC-1", event_type="stage_started", next_action="运行父批次"
             )
-            attempt_root = self._b0_completed_official_attempt(fixture)
+            attempt_root = self._b0_completed_official_attempt(fixture, job_evidence=True)
             inner = self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name)
+            # 断言包动作成功：与 prepare_assertion_bundle.sh 同一组库函数收口、回填 manifest、重放核验后发布。
+            job_root = attempt_root / "evidence" / "official-job-root"
+            bundle = attempt_root / "evidence" / "assertion-bundle"
+            target = f"{job_root.name}/facts.json"
+            build_assertion_bundle.build_bundle(
+                {job_root.name: job_root}, [{"root": job_root.name, "path": "facts.json", "target": target}], bundle
+            )
+            capture_manifest = build_evidence_catalog.finalize_manifest(
+                {"artifacts": [{"path": target, "kind": "process_trace", "parser": "opaque_bound_source",
+                                "scenario_ids": ["A01"], "labels": {}}]},
+                bundle, codex_version=str(fixture["manifest"]["target_version"]),
+                capture_id=str(fixture["manifest"]["campaign_id"]),
+            )
+            (bundle / "capture-manifest.json").write_text(
+                json.dumps(capture_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            (bundle / "capture-manifest.json").chmod(0o600)
+            build_assertion_bundle.verify_bundle(
+                {job_root.name: job_root}, bundle,
+                allowed_extra_prefixes=supervisor.OFFICIAL_ASSERTION_BUNDLE_EXTRA_PREFIXES,
+            )
             later = supervisor._epoch_to_utc(time.time() + 5)
             facts = supervisor.post_run_tooling_facts(campaign_dir, inner, run_started_at_utc=later)
             self.assertTrue(facts["qualifies"], facts["reasons"])
@@ -19067,32 +19116,51 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertIn("官方 seal 链", result["next_command"])
             self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "active")
 
+            self.assertIn("续派", result["next_command"])
+
             prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-            verbatim = self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3)
-            self.assertTrue(
-                supervisor._validate_batched_environment_redispatch_successor(
-                    prior_state, inner, run_dir, verbatim, campaign_dir=campaign_dir
-                )
-            )
-            self.assertFalse(
-                supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, verbatim, campaign_dir=campaign_dir)
-            )
+            # 第 43 项：断言包已发布，逐字重派的断言包动作必然被脚本 write-once 拒绝覆盖——真实门禁在构建清单时拒绝。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "断言证据包已发布：断言包脚本 write-once"):
+                self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3)
+            # 去掉断言包动作的续派（只含 seal 预览）经真实门禁构建（断言包已发布且一致），由 seal 链续派协议承接；
+            # 入口尝试顺序排在它前面的工具演进续跑协议形态不符返回 False。
             repreview = self._b0_vc1_seal_batch_manifest(
                 fixture, attempt_root.name, batch_sequence=3, actions=[inner["actions"][1]]
+            )
+            self.assertFalse(
+                supervisor._validate_batched_evolution_recovery_successor(
+                    prior_state, inner, run_dir, repreview, campaign_dir=campaign_dir
+                )
             )
             self.assertTrue(
                 supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, repreview, campaign_dir=campaign_dir)
             )
+            # 断言包复制件被改动：真实门禁的内容核对拒绝构建续派，恢复后放行。
+            copied = bundle / target
+            original_bytes, original_mode = copied.read_bytes(), copied.stat().st_mode & 0o777
+            copied.chmod(0o600)
+            copied.write_bytes(original_bytes + b"tampered")
+            try:
+                with self.assertRaisesRegex(supervisor.SupervisorError, "不能核对为本 attempt 同一冻结输入的产物"):
+                    self._b0_vc1_seal_batch_manifest(
+                        fixture, attempt_root.name, batch_sequence=3, actions=[inner["actions"][1]]
+                    )
+            finally:
+                copied.write_bytes(original_bytes)
+                copied.chmod(original_mode)
+            self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3, actions=[inner["actions"][1]])
+            # 指向别的 attempt 的续派：真实门禁在构建时就拒绝（该 attempt 没有可重放的收口）；绕过门禁直接交给
+            # seal 链续派协议同样失败关闭。
             other_action = dict(inner["actions"][1])
             other_action["command"] = [
                 token if token != attempt_root.name else "20990101T000000Z-" + "0" * 16 for token in other_action["command"]
             ]
+            with self.assertRaisesRegex(supervisor.SupervisorError, "监督器文件不存在：attempt.json"):
+                self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3, actions=[other_action])
+            crossed = json.loads(json.dumps(repreview))
+            crossed["actions"] = [other_action]
             with self.assertRaisesRegex(supervisor.SupervisorError, "同一个 attempt"):
-                supervisor._validate_batched_seal_chain_successor(
-                    prior_state, inner, run_dir,
-                    self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name, batch_sequence=3, actions=[other_action]),
-                    campaign_dir=campaign_dir,
-                )
+                supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, crossed, campaign_dir=campaign_dir)
 
     def _evolution_patches(
         self,
