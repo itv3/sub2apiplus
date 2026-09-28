@@ -344,6 +344,30 @@ class EgressGuardTests(unittest.TestCase):
         self.assertEqual(len(status["services"]["capture-cli"]["observations"]), len(self.guard.policy["probe_urls"]))
         arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
 
+    def test_stopping_container_with_live_pid_publishes_invalid_without_egress_path_and_maintenance_waits(self):
+        # 修好接着跑第 36 项（2026-09-27 c01570 r2 批次 18）：docker restart 发出 SIGTERM 到容器进程退出之间，库存仍 inspect 到
+        # 运行中的进程，但进入其网络命名空间读网卡已失败——container_id 保留、绑定为空、valid=False。守护发布 blocked＋invalid、
+        # 观测清空、撤销旧身份且不给该容器发租期；没有任何可放行路径，维护等待口径视同缺失继续等待，普通口径照旧拒绝。
+        self.guard.step()
+        maps = self.guard.maps["sub2api_egress.slice"]
+        maps.reset_mock()
+        candidate = copy.deepcopy(self.guard.inventory)
+        candidate["services"]["sub2apiplus"] = {"container_id": "1" * 64, "bindings": [], "dependencies": [],
+                                                "reason": "出口命令失败：nsenter，退出码 1", "valid": False}
+        self.inventory.side_effect = lambda *args: copy.deepcopy(candidate)
+        status = self.guard.step()
+        service = status["services"]["sub2apiplus"]
+        self.assertEqual((service["status"], service["admission_state"], service["container_id"],
+                          service["network_bindings"], service["observations"], service["reason"]),
+                         ("blocked", "invalid", "1" * 64, [], [], "出口命令失败：nsenter，退出码 1"))
+        self.assertEqual(status["services"]["capture-cli"]["admission_state"], "ready")
+        self.assertEqual([call.args for call in maps.revoke.call_args_list], [(1, 2, "172.31.1.1")])
+        self.assertTrue(maps.lease.call_args_list)
+        self.assertTrue(all(call.args[0] != 1 for call in maps.lease.call_args_list))
+        arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+        with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "尚未完成准入"):
+            arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time())
+
 
 class EgressEffectiveObservationTests(unittest.TestCase):
     def test_recent_pass_replaces_timeout_but_never_masks_conflict(self):
@@ -897,6 +921,81 @@ class EgressSupervisorTests(unittest.TestCase):
                     selected["admission_state"] = "invalid"
                 with self.assertRaises(arm.Arm64EnvironmentReceiptError):
                     arm.validate_egress_status(snapshot["policy"], status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+
+    @staticmethod
+    def _stopping_container_snapshot():
+        """第 36 项真实形态：维护中容器 blocked＋invalid，container_id 保留、绑定与观测为空（守护在 SIGTERM 后、进程退出前采样）。"""
+
+        snapshot = runtime_fixture()
+        status = copy.deepcopy(snapshot["runtime"])
+        status["services"]["sub2apiplus"].update(status="blocked", admission_state="invalid", network_bindings=[], observations=[],
+                                                 reason="出口命令失败：nsenter，退出码 1", blocked_at_epoch=time.time())
+        return snapshot, status
+
+    def test_transition_scope_waits_through_unverifiable_container_without_egress_path(self):
+        # 修好接着跑第 36 项（2026-09-27 c01570 r2 批次 18）：第三次受控重启发出 SIGTERM 后约 90 毫秒内守护采样到进程仍在但
+        # nsenter 已失败，发布 blocked＋invalid（container_id 保留、绑定与观测为空）；维护口径原只放行 missing／probing，判
+        # "路径或配置故障"立即暂停整轮。没有绑定与观测即没有可放行路径，与缺失等价，维护等待应继续。
+        snapshot, status = self._stopping_container_snapshot()
+        arm.validate_egress_status(snapshot["policy"], status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+        # 仍带绑定或观测（重建后的真实配置故障）、容器身份非法、普通口径、维护中的是另一容器：照旧拒绝。
+        original = snapshot["runtime"]["services"]["sub2apiplus"]
+        for fault in ("bindings", "observations", "container-id", "ordinary", "other-container"):
+            with self.subTest(fault=fault):
+                changed = copy.deepcopy(status)
+                target = changed["services"]["sub2apiplus"]
+                kwargs = {"_transitioning_service": "sub2apiplus"}
+                if fault == "bindings":
+                    target["network_bindings"] = copy.deepcopy(original["network_bindings"])
+                elif fault == "observations":
+                    target["observations"] = copy.deepcopy(original["observations"])
+                elif fault == "container-id":
+                    target["container_id"] = "restarting"
+                elif fault == "ordinary":
+                    kwargs = {}
+                else:
+                    kwargs = {"_transitioning_service": "capture-cli"}
+                with self.assertRaises(arm.Arm64EnvironmentReceiptError):
+                    arm.validate_egress_status(snapshot["policy"], changed, now_epoch=time.time(), **kwargs)
+
+    def test_maintenance_wait_survives_guard_snapshot_of_stopping_container(self):
+        # 第 36 项端到端：有效维护声明期间守护发布上述瞬态，monitor 与 owner（command_pid）视角的门禁都继续等待、不写暂停；
+        # 同一形态若仍带绑定则照旧判声明失效并暂停。
+        self.state.update(owner_pid=os.getppid(), deadline_monotonic_ns=time.monotonic_ns() + 90 * 10**9)
+        snapshot, waiting = self._stopping_container_snapshot()
+        now = time.monotonic_ns()
+        record = {"schema_version": "codex-upgrade-egress-transition/v1", "transition_id": "2" * 32,
+                  "campaign_id": self.state["campaign_id"], "owner_nonce": self.state["owner_nonce"],
+                  "actor_pid": os.getpid(), "start_ticks": "11", "started_at_epoch": time.time(),
+                  "started_at_monotonic_ns": now, "deadline_monotonic_ns": now + 10 * 10**9,
+                  "container": "sub2apiplus", "command_sha256": "b" * 64,
+                  "policy_sha256": arm.egress_policy_sha256(snapshot["policy"]), "before_sha256": "d" * 64}
+        archive = self.root / "egress-transitions" / f"{record['transition_id']}.json"
+        archive.parent.mkdir(mode=0o700)
+        supervisor._write_json(archive, record, replace=False)
+        supervisor._write_json(self.root / "egress-transition.json", record, replace=False)
+        boot_path = self.root / "boot_id"
+        boot_path.write_text(waiting["boot_id"], encoding="ascii")
+        guard = lambda: (mock.patch.object(supervisor, "_process_start_ticks", return_value="11"),
+                         mock.patch.object(supervisor, "_process_descends_from", return_value=True),
+                         mock.patch.object(arm, "load_egress_policy", return_value=snapshot["policy"]),
+                         mock.patch.object(arm, "_read_egress_runtime_json", return_value=waiting),
+                         mock.patch.object(arm, "EGRESS_BOOT_ID_PATH", boot_path),
+                         mock.patch.object(arm, "require_runtime_egress", side_effect=ValueError("sub2apiplus 尚未完成准入")))
+        with contextlib.ExitStack() as stack:
+            ordinary = [stack.enter_context(item) for item in guard()][-1]
+            supervisor._check_runtime_egress(self.root, self.state, monitor=True)
+            supervisor._check_runtime_egress(self.root, self.state, command_pid=os.getpid())
+            ordinary.assert_not_called()
+        self.assertFalse((self.root / "egress-pause.json").exists())
+        waiting["services"]["sub2apiplus"]["network_bindings"] = copy.deepcopy(snapshot["runtime"]["services"]["sub2apiplus"]["network_bindings"])
+        with contextlib.ExitStack() as stack:
+            for item in guard():
+                stack.enter_context(item)
+            with self.assertRaises(supervisor.RuntimeEgressPaused):
+                supervisor._check_runtime_egress(self.root, self.state, monitor=True)
+        pause = json.loads((self.root / "egress-pause.json").read_bytes())
+        self.assertEqual(pause["reason"], "受控容器维护声明失效、超时或进程已结束")
 
     def test_maintenance_does_not_authorize_new_dispatch_or_arbitrary_command(self):
         (self.root / "egress-transition.json").write_text("{}")

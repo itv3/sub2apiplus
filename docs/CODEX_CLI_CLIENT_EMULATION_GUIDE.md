@@ -3404,6 +3404,11 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   显式排除 CampaignCleanupRequested／KeyboardInterrupt／SystemExit；`interrupted` 种类与其它类别（deadline-expired、environment-*、
   evidence-*、tool-evolution-required、post-run-tooling 等）仍由 reconciler 判定。补跑动作因工具缺陷抛出的其它异常（如 ValueError）
   修好后同样能用 N+1 零请求预览承接，不再是"对账可恢复却没有后继协议"的死路。
+- **受控维护等待放行"存在但不可验证且无出口路径"的守护瞬态**：维护等待口径（`validate_egress_status` 的
+  `_transitioning_service`）除 blocked＋missing／probing 外，也放行维护中容器 blocked＋invalid 且 container_id 合法、绑定与观测均为空的
+  守护快照：docker restart 发出 SIGTERM 到容器进程退出之间，守护库存仍 inspect 到运行中的进程而进入其网络命名空间读网卡已失败
+  （"出口命令失败：nsenter，退出码 1"），发布 invalid、绑定与观测清空、不发租期——没有可放行路径即与缺失等价。仍带绑定或观测的
+  invalid 是重建后的真实配置故障，照旧中止等待并暂停；普通准入与事实采集不传此参数，invalid 仍按"尚未完成准入"拒绝。
 - **承接前环境连续性漂移**：零请求恢复预览有可复用作业时先采一次只读探针（写到
   `control/reconciliation/attempt-<id>/continuity-probes/<时间戳>/`，不写 attempt），与来源 after 探针比 service／containers／
   account／configuration 四类快照；漂移或探针采不到（失败关闭）即写 write-once 收据 `attempt-<id>/continuity-drift.json`，

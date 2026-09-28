@@ -459,13 +459,23 @@ def validate_egress_status(
         if name == _transitioning_service and service["status"] == "blocked":
             # 仅独立监督器可在已绑定的本地维护命令存活期间请求此检查；普通准入与事实采集不传此参数。
             # 内核业务仍闭锁，且共享故障、其他容器故障、配置错误与出口观测冲突均不能等待放行。
-            if (service["admission_state"] not in {"missing", "probing"}
+            if (service["admission_state"] not in {"missing", "probing", "invalid"}
                     or any(item.get("status") == "passed" and item.get("ip_address") not in policy["allowed_public_ipv4"]
                            for item in service["observations"])):
                 raise Arm64EnvironmentReceiptError("受控重建期间出现路径或配置故障，必须中止维护等待")
             if service["admission_state"] == "missing":
                 if service["container_id"] or service["network_bindings"] or service["observations"]:
                     raise Arm64EnvironmentReceiptError("受控重建的缺失容器状态不闭合")
+                continue
+            if service["admission_state"] == "invalid":
+                # 修好接着跑第 36 项（2026-09-27 c01570 r2 批次 18）：docker restart 发出 SIGTERM 到容器进程退出之间，守护库存
+                # 仍能 inspect 到运行中的进程，但进入其网络命名空间读网卡已失败（"出口命令失败：nsenter，退出码 1"），于是
+                # 发布 blocked＋invalid、container_id 保留、绑定与观测为空、不发租期。没有任何绑定与观测即没有可放行的出口
+                # 路径，与缺失态等价，维护等待继续；仍带绑定或观测的 invalid 才是重建后的真实配置故障（cgroup／DNS／依赖），
+                # 照旧中止。普通准入与事实采集不传此参数，invalid 仍按"尚未完成准入"拒绝。
+                if (not CONTAINER_ID_RE.fullmatch(str(service["container_id"])) or service["network_bindings"]
+                        or service["observations"]):
+                    raise Arm64EnvironmentReceiptError("受控重建期间容器身份不可验证且仍带出口绑定或观测，必须中止维护等待")
                 continue
             if not CONTAINER_ID_RE.fullmatch(str(service["container_id"])) or not service["network_bindings"]:
                 raise Arm64EnvironmentReceiptError("受控重建的探针身份不完整")
