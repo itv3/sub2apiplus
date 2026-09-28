@@ -59,6 +59,141 @@ ca_full="$capture_root/state/mitm/mitmproxy-ca.pem"
 ca_cert="$capture_root/state/mitm/mitmproxy-ca-cert.pem"
 custom_ca_path=/usr/local/share/ca-certificates/candidate-core-capture.crt
 relay_tool="$capture_mount/tools/official_client_capture/upstream_byte_relay.py"
+# >>> candidate-relay-extension（两份候选采集脚本逐字相同，测试锁定）
+# 候选专用 relay 扩展（修好接着跑第 55 项）：官方 0.157 的 WS 握手与 alpha-search／图像请求都带 Cloudflare
+# Cookie（来自先前响应的 Set-Cookie），候选场景必须先建立同样的账号 Cookie jar 前提，头序判据才可比。
+# upstream_byte_relay.py 被已封存的官方作业声明依赖，改它会作废官方证据；候选合成行为因此只放在候选采集脚本里：
+# 本启动器按路径加载同一份 relay 模块，只包装候选合成分派，再调用它的 main()，relay 文件本身一个字节不改。
+# 扩展只在两处生效，其余请求一律交回原分派（原分派返回 None 即本地拒绝，失败关闭不变）：
+#   - candidate-core-v1、场景 A05、目标 ≥0.157.0：第 1 个 HTTP POST /responses（Cookie 预热）返回 SSE 成功并下发
+#     _cfuvid；其后的 HTTP POST 一律拒绝。A05 与 A06 之间不重启网关，A06 沿用同一 jar。
+#   - candidate-aux-v1、目标 ≥0.156.1（legacy compact 已删除，原 prime compact 不再发生）：第 1 个
+#     POST /responses 返回 SSE 成功并下发 _cfuvid；其后的 POST /responses 一律拒绝。
+IFS= read -r -d '' candidate_relay_launcher <<'PY' || true
+import importlib.util
+import json
+import os
+import sys
+
+# 按模块加载 relay 会写字节码缓存（直接当脚本运行时不会）；受管工具树里不得出现 __pycache__。
+sys.dont_write_bytecode = True
+relay_path = sys.argv[1]
+relay_args = sys.argv[2:]
+spec = importlib.util.spec_from_file_location("upstream_byte_relay", relay_path)
+relay = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = relay
+spec.loader.exec_module(relay)
+
+
+def _argument(name):
+    return relay_args[relay_args.index(name) + 1] if name in relay_args else ""
+
+
+def _version(text):
+    try:
+        return tuple(int(part) for part in text.split("."))
+    except ValueError:
+        return ()
+
+
+PRIME_REQUEST_LINE = "POST /backend-api/codex/responses HTTP/1.1"
+profile = _argument("--synthetic-profile")
+version = _version(_argument("--codex-version"))
+core_scenario = _argument("--candidate-core-scenario")
+extensions = []
+
+
+def _prime_sse(response_id):
+    completed = json.dumps(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "model": "gpt-5.5",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+    return b"data: " + completed + b"\n\ndata: [DONE]\n\n"
+
+
+def _chatgpt(host):
+    return host.lower().rstrip(".") == "chatgpt.com"
+
+
+if profile == "candidate-core-v1" and core_scenario == "A05" and version >= (0, 157, 0):
+    original_core = relay._synthetic_core_response
+
+    def _core_with_cookie_prime(scenario, host, request_line, head, body, ordinal, codex_version):
+        if scenario == "A05" and request_line == PRIME_REQUEST_LINE:
+            if not _chatgpt(host) or ordinal != 1:
+                return None
+            return relay.SyntheticCoreResponse(
+                "responses_http_success",
+                relay._h1_response(
+                    200,
+                    "OK",
+                    _prime_sse("resp_candidate_core_a05_cookie_prime"),
+                    content_type="text/event-stream",
+                    headers=(("set-cookie", relay._SYNTHETIC_CORE_CFUV_COOKIE),),
+                ),
+                set_cookie_names=("_cfuvid",),
+            )
+        return original_core(scenario, host, request_line, head, body, ordinal, codex_version)
+
+    relay._synthetic_core_response = _core_with_cookie_prime
+    extensions.append("core-a05-cookie-prime")
+
+if profile == "candidate-aux-v1" and version >= (0, 156, 1):
+    original_aux = relay._synthetic_aux_response
+    aux_primes = {"count": 0}
+
+    def _aux_with_cookie_prime(
+        host,
+        request_line,
+        head,
+        body,
+        codex_version,
+        legacy_compact_ordinal=0,
+        file_c2pa_reservation=False,
+    ):
+        if request_line == PRIME_REQUEST_LINE and _chatgpt(host):
+            aux_primes["count"] += 1
+            if aux_primes["count"] != 1:
+                return None
+            return relay.SyntheticAuxResponse(
+                "responses_cookie_prime",
+                relay._h1_response(
+                    200,
+                    "OK",
+                    _prime_sse("resp_candidate_aux_cookie_prime"),
+                    content_type="text/event-stream",
+                    headers=(("set-cookie", relay._SYNTHETIC_AUX_CFUV_COOKIE),),
+                ),
+            )
+        return original_aux(
+            host,
+            request_line,
+            head,
+            body,
+            codex_version,
+            legacy_compact_ordinal,
+            file_c2pa_reservation,
+        )
+
+    relay._synthetic_aux_response = _aux_with_cookie_prime
+    extensions.append("aux-responses-cookie-prime")
+
+print(json.dumps({"candidate_relay_extensions": extensions}), file=sys.stderr, flush=True)
+if os.environ.get("CANDIDATE_RELAY_LAUNCHER_NO_MAIN") != "1":
+    sys.argv = [relay_path, *relay_args]
+    relay.main()
+PY
+# <<< candidate-relay-extension
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 scrub_tool="$script_dir/scrub_raw_bytes.py"
 gateway_ws_driver="$script_dir/drive_candidate_gateway_ws.py"
@@ -643,16 +778,20 @@ start_capture() {
   current_scenario=$scenario
   clear_account_gate
 
+  # relay 经候选专用启动器运行（见 candidate-relay-extension 段）：第 1 个参数是启动器代码，
+  # shift 之后与原先直接执行 relay 的参数逐位相同。
   docker exec "$capture_container" sh -c '
     umask 077
-    python3 "$1" --cert "$2" --key "$3" --mode connect --port "$4" \
+    launcher=$1
+    shift
+    python3 -c "$launcher" "$1" --cert "$2" --key "$3" --mode connect --port "$4" \
       --upstream-host chatgpt.com --output "$5" --timeout 420 \
       --codex-version "$8" \
       --synthetic-profile candidate-core-v1 --allow-synthetic-responses \
       --candidate-core-scenario "$6" --candidate-core-ws-failures "$7" \
       >"$9" 2>&1 &
     echo $! >"${10}"
-  ' sh "$relay_tool" "$container_tls_dir/relay.crt" "$container_tls_dir/relay.key" \
+  ' sh "$candidate_relay_launcher" "$relay_tool" "$container_tls_dir/relay.crt" "$container_tls_dir/relay.key" \
     "$relay_port" "$container_scenario_root/relay-private" "$scenario" \
     "$ws_failure_count" "$codex_version" "$container_scenario_root/relay.log" \
     "$container_scenario_root/relay.pid"
@@ -762,7 +901,9 @@ from pathlib import Path
     compaction_reason,
     subagent_header,
 ) = sys.argv[1:]
-session_id = "11111111-1111-4111-8111-111111111111"
+# 第 55 项：A05 的 Cookie 预热用独立会话，避免与 A05 两轮 WS 共用 session 状态；只有调用方在子 shell 里
+# 显式导出 CANDIDATE_BODY_SESSION_ID 时才覆盖，其余请求体保持固定会话不变。
+session_id = os.environ.get("CANDIDATE_BODY_SESSION_ID") or "11111111-1111-4111-8111-111111111111"
 thread_id = session_id
 if thread_source in {"memory_consolidation", "subagent"}:
     thread_id = "55555555-5555-4555-8555-555555555555"
@@ -968,6 +1109,11 @@ tui_ua="codex-tui/$codex_version (Ubuntu 24.4.0; x86_64) xterm-256color (codex-t
 gateway_driver_ua='sub2apiplus-candidate-capture/1.0'
 gateway_driver_originator='sub2apiplus_candidate_capture'
 session_id=11111111-1111-4111-8111-111111111111
+# 第 55 项：0.157.0 起官方 WS 握手带账号 Cookie（HeaderMap 末位 cookie），官方样本的 Cookie 来自先前响应的
+# Set-Cookie。候选网关的 Cookie jar 只在进程内按账号保存，A04 调整账号特性会重启网关清空它，所以 A05 开头要先用
+# 一次官方入口的 HTTP 冷请求建立 jar（relay 扩展只对这一次下发 _cfuvid）；A05 与 A06 之间不重启，A06 沿用。
+target_ws_cookie_prime=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 157, 0) else 0)' "$codex_version")
+cookie_prime_session_id=44444444-4444-4444-8444-444444444444
 parent_id=44444444-4444-4444-8444-444444444444
 
 official_headers() {
@@ -1085,6 +1231,19 @@ stop_capture
 # 官方 HTTP 入口代表 CLI 已耗尽自身 WS 预算，生产代码会按画像强制 HTTP fallback。
 start_capture A05
 trigger_root="$work_dir/scenarios/A05/trigger"
+if (( target_ws_cookie_prime == 1 )); then
+  # 第 55 项 Cookie 预热：与 A04 同形的非 Lite 明文请求经官方入口走 HTTP（连接顺序为启动期 models、
+  # 本预热、两轮 WS），独立会话；预热本身是冷 jar，不带 Cookie。
+  (
+    export CANDIDATE_BODY_SESSION_ID=$cookie_prime_session_id
+    write_request_body "$trigger_root/cookie-prime.json" "$main_model" non_lite a05-cookie-prime
+  )
+  saved_session_id=$session_id
+  session_id=$cookie_prime_session_id
+  run_response_request A05 cookie-prime "$trigger_root/cookie-prime.json" "$exec_ua" codex_exec
+  session_id=$saved_session_id
+  wait_action A05 responses_http_success
+fi
 write_request_body "$trigger_root/lite.json" "$lite_model" lite a05-turn
 for turn in 1 2; do
   run_response_request A05 "turn-$turn" "$trigger_root/lite.json" \
@@ -2343,6 +2502,10 @@ minimums = {
     "A10": {"responses_http_success": 4},
     "A15": {"models_manifest": 1},
 }
+# 第 55 项：与采集段同一版本切换，0.157.0 起 A05 多一次 Cookie 预热 HTTP 成功（下方逐字节核对前提）。
+ws_cookie_prime = tuple(map(int, codex_version.split("."))) >= (0, 157, 0)
+if ws_cookie_prime:
+    minimums["A05"] = {**minimums["A05"], "responses_http_success": 1}
 for scenario, wanted in minimums.items():
     scenario_root = root / "scenarios" / scenario / "relay"
     manifest = json.loads((scenario_root / "relay.json").read_text(encoding="utf-8"))
@@ -2421,6 +2584,49 @@ cookie_events = [
 ]
 if len(cookie_events) != 1:
     raise SystemExit(f"A03 allowlist Set-Cookie _cfuvid 事件数 {len(cookie_events)} != 1")
+if ws_cookie_prime:
+    # 第 55 项：A05 只有一次 HTTP 预热，且是冷 jar；其响应保留已脱敏 Set-Cookie；A05 两轮与 A06 的 WS 握手
+    # 全部回放已脱敏 Cookie（官方 WS 样本的前提）；公开产物不得泄漏 _cfuvid。
+    def _requests(scenario):
+        folder = root / "scenarios" / scenario / "relay"
+        return [(path, path.read_bytes().lower()) for path in sorted(folder.glob("*.client_to_upstream.bin"))]
+
+    a05_requests = _requests("A05")
+    a05_posts = [
+        (path, data) for path, data in a05_requests
+        if data.startswith(b"post /backend-api/codex/responses http/1.1\r\n")
+    ]
+    if len(a05_posts) != 1:
+        raise SystemExit(f"A05 Cookie 预热 HTTP 请求数 {len(a05_posts)} != 1")
+    prime_path, prime_request = a05_posts[0]
+    prime_response = Path(str(prime_path).replace(
+        ".client_to_upstream.bin", ".upstream_to_client.bin"
+    )).read_bytes().lower()
+    if b"\r\ncookie:" in prime_request:
+        raise SystemExit("A05 Cookie 预热请求的冷 jar 意外非空")
+    if b"\r\nset-cookie: <secret>" not in prime_response:
+        raise SystemExit("A05 Cookie 预热响应未保留已脱敏 Set-Cookie 证据")
+    handshakes = [
+        (scenario, path.name, data)
+        for scenario in ("A05", "A06")
+        for path, data in _requests(scenario)
+        if data.startswith(b"get /backend-api/codex/responses http/1.1\r\n")
+    ]
+    if not handshakes or any(b"\r\ncookie: <secret>" not in data for _, _, data in handshakes):
+        missing = [f"{scenario}/{name}" for scenario, name, data in handshakes if b"\r\ncookie: <secret>" not in data]
+        raise SystemExit(f"A05／A06 WS 握手未回放 Cookie 预热建立的 jar：{missing or '无 WS 握手'}")
+    a05_events = [
+        json.loads(line)
+        for line in (root / "scenarios/A05/relay/intervention.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    prime_events = [event for event in a05_events if event.get("set_cookie_names") == ["_cfuvid"]]
+    if len(prime_events) != 1 or prime_events[0].get("action") != "responses_http_success":
+        raise SystemExit(f"A05 Cookie 预热 Set-Cookie 事件不唯一或动作不符：{prime_events}")
+    for scenario in ("A05", "A06"):
+        for path in (root / "scenarios" / scenario / "relay").glob("*.bin"):
+            if b"_cfuvid" in path.read_bytes():
+                raise SystemExit(f"{scenario} 公开 relay 产物泄漏 _cfuvid Cookie 名或值：{path.name}")
 a04_bytes = b"".join(
     path.read_bytes()
     for path in (root / "scenarios/A04/relay").glob("*.client_to_upstream.bin")

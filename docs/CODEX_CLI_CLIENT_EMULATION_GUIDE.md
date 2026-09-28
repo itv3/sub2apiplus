@@ -3379,6 +3379,12 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   逐连接编号的证据标签必须同步改写；`test_candidate_aux_label_sequence` 在桩环境执行采集脚本的 A09 段，与收尾冻结计数、
   各版本声明逐连接核对。标签文件属 evidence_semantics 层，修好后登记工具演进（追加评估 epoch，不重采）；尚无评估产出时
   seal 链按产物续跑，从 assertion bundle 预演重新开始。
+- **候选场景复现官方 Cookie 前提（第 55 项）**：官方 0.157 的 WS 握手与 alpha-search／图像请求都带 Cloudflare Cookie，候选
+  网关的 Cookie jar 只在进程内按账号保存（A04 改账号特性会重启网关清空它，0.156.1 起 A09 也没有 prime compact 了），
+  WS-002／EP-015／EP-022 头序因而失配。0.157.0 起 A05、0.156.1 起 A09 先经官方入口发一次冷请求预热，由两份候选采集脚本
+  里逐字相同的 relay 启动器只对这一次下发 _cfuvid（`upstream_byte_relay.py` 被已封存官方作业依赖，不能改；演进按文件映射，
+  改候选专用脚本只影响候选作业），采集收尾逐字节核对预热冷 jar、后续请求回放 Cookie 与不泄漏。`test_candidate_relay_extension`
+  与 `test_candidate_aux_label_sequence` 锁定启动器、版本开关、调用序列与逐连接标签；改候选采集脚本后全部候选作业重采。
 - **批准画像 selector 修正**：`evaluation-recover approval-revision --assertion-profile`（§4.5.5）开 approval-revision 基线
   零请求重评，候选 revision 不变。
 - **候选阶段零请求后处理动作失败**：进 `recovery_required`，修好工具后重派，不再进候选待审；批次中途评估器漂移

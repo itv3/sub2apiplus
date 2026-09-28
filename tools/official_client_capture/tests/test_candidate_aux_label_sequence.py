@@ -8,6 +8,10 @@ prime／default／beta／turn_state，原本给 alpha-search 与图像预留的 
 VC-5 预演 assertion bundle 时只有“落空”以 glob-unmatched 暴露，错标部分完全静默，会让
 SPEC-EP-022（图像线序）选不到样本、SPEC-HDR-006／EP-005（辅助端点）漏掉 alpha-search。
 
+第 55 项：删 compact 也删掉了首轮 prime compact 建立账号 Cookie jar 的作用，官方 alpha-search／图像请求都带
+Cookie，候选因此在 EP-015／EP-022 头序上失配。0.156.1 起 A09 在 models 之后加一次 Responses 冷请求预热
+（relay 候选扩展只对它下发 _cfuvid），连接变为 models、预热、alpha-search×2、images×2。
+
 本测试把三份事实对齐，任何一方单独改动都会失败：
 
 1. 桩环境里真实执行采集脚本的 A09 触发段，得到每个目标版本的有序入口请求序列；
@@ -46,6 +50,7 @@ GATEWAY = "http://gateway.invalid"
 TRIGGER_ACTIONS = {
     "/backend-api/codex/models": "models_manifest",
     "/v1/responses/compact": "legacy_compact",
+    "/v1/responses": "responses_cookie_prime",
     "/v1/alpha/search": "alpha_search",
     "/v1/images/generations": "images_generation",
     "/v1/images/edits": "images_edit",
@@ -173,6 +178,16 @@ def label_mismatch(action: str, variant: str, labels: Mapping[str, str]) -> str 
         if extra:
             return f"图像端点与 Lite／compact 语义无关，不得带 {sorted(extra)}"
         return None
+    if action == "responses_cookie_prime":
+        # 第 55 项的 Cookie 预热：冷 jar、Responses 会话头作用域，不属于辅助／图像端点面，也不是任何官方变体。
+        if labels.get("session_header_scope") != "responses_or_compact":
+            return "Cookie 预热必须标 session_header_scope=responses_or_compact"
+        if labels.get("cookie_state") != "absent":
+            return "Cookie 预热是冷 jar，必须标 cookie_state=absent"
+        extra = keys & {"endpoint_class", "variant"}
+        if extra:
+            return f"Cookie 预热不得带 {sorted(extra)}"
+        return None
     if action == "legacy_compact":
         if labels.get("session_header_scope") != "responses_or_compact":
             return "compact 轮必须标 session_header_scope=responses_or_compact"
@@ -223,7 +238,7 @@ def _concrete_path(glob: str) -> str:
 
 class A09TriggerSequenceTest(unittest.TestCase):
     def test_workspace_routing_switch_drops_legacy_compact_connections(self) -> None:
-        """0.156.1 之前发 prime／default／beta／turn_state 四轮 compact，之后一轮不发。"""
+        """0.156.1 之前发 prime／default／beta／turn_state 四轮 compact；之后不发 compact，改在 models 后发一次 Cookie 预热。"""
 
         before = a09_trigger_sequence("0.154.0")
         self.assertEqual(
@@ -238,7 +253,8 @@ class A09TriggerSequenceTest(unittest.TestCase):
         for version in ("0.156.1", "0.157.0"):
             self.assertEqual(
                 [action for action, _ in a09_trigger_sequence(version)],
-                ["models_manifest", "alpha_search", "alpha_search", "images_generation", "images_edit"],
+                ["models_manifest", "responses_cookie_prime", "alpha_search", "alpha_search",
+                 "images_generation", "images_edit"],
             )
 
     def test_trigger_sequence_matches_frozen_action_counts(self) -> None:

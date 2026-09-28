@@ -1787,7 +1787,30 @@
           "rationale": "A05 首连接是启动期 models GET（HTTP），Lite 模型 job；派生 process_trace 与实际记录形态一致。"
         },
         {
-          "glob": "scenarios/A05/relay/conn00[23].client_to_upstream.bin",
+          "glob": "scenarios/A05/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "cookie_state": "absent",
+            "session_header_scope": "responses_or_compact",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "0.157.0 起官方 WS 握手带账号 Cookie（来自先前响应的 Set-Cookie），而 A04 调整账号特性会重启网关清空进程内 Cookie jar；A05 在启动期 models 之后先发一次与 A04 同形的非 Lite 明文请求（官方入口、独立会话）建立 jar，relay 候选扩展只对这一次下发 _cfuvid。预热本身是冷 jar（cookie_state=absent），不属于任何官方变体，不标 variant。"
+        },
+        {
+          "glob": "scenarios/A05/relay/conn00[34].client_to_upstream.bin",
           "scenario_ids": [
             "A05"
           ],
@@ -1804,7 +1827,7 @@
             "variant": "default",
             "provider": "openai_oauth"
           },
-          "rationale": "A05 两轮 Lite WS 会话：驱动不注入条件头、不关闭任何 feature，握手为默认完整形态（variant=default 由驱动参数推出）；permessage-deflate 由握手自身协商，turn-state 由受控上游在 response.metadata 边界回送。"
+          "rationale": "A05 两轮 Lite WS 会话：驱动不注入条件头、不关闭任何 feature，握手为默认完整形态（variant=default 由驱动参数推出）；permessage-deflate 由握手自身协商，turn-state 由受控上游在 response.metadata 边界回送。 0.157.0 起两轮 WS 排在 Cookie 预热之后（conn003、conn004），握手回放预热建立的 Cookie。"
         },
         {
           "glob": "scenarios/A05/egress.pcap",
@@ -2151,7 +2174,29 @@
           "rationale": "A09 job 固定 Lite 模型（MODEL 为 gpt-6-astra）；首连接是 models GET，models 属辅助出站面（endpoint_class=auxiliary），供 HDR-006 auxiliary-wildcard 与 EP-005 选样。"
         },
         {
-          "glob": "scenarios/A09/relay/conn00[23].client_to_upstream.bin",
+          "glob": "scenarios/A09/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "cookie_state": "absent",
+            "session_header_scope": "responses_or_compact",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "0.156.1 起不再发 legacy compact，原先由首轮 prime compact 建立的账号 Cookie jar 随之消失，而官方 alpha-search／图像请求都带 Cloudflare Cookie；models 之后先发一次官方入口的 Responses 冷请求（A09 固定 Lite 模型，独立会话）建立 jar，relay 候选扩展只对这一次下发 _cfuvid。预热本身是冷 jar，不属于任何官方变体，不标 variant。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn00[34].client_to_upstream.bin",
           "scenario_ids": [
             "A09"
           ],
@@ -2169,10 +2214,10 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "0.156.1 起目标画像删除 legacy compact 端点（SPEC-EP-007／014／020），采集脚本按目标版本不再发 compact 驱动序列（target_workspace_routing 切换），models 之后两连接即两阶段 alpha-search（phase 1/2），alpha-search 属辅助端点面。"
+          "rationale": "0.156.1 起 models 与 Cookie 预热之后的两连接是两阶段 alpha-search（phase 1/2），alpha-search 属辅助端点面；两者都回放预热建立的 Cookie。"
         },
         {
-          "glob": "scenarios/A09/relay/conn00[45].client_to_upstream.bin",
+          "glob": "scenarios/A09/relay/conn00[56].client_to_upstream.bin",
           "scenario_ids": [
             "A09"
           ],
@@ -2188,7 +2233,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。0.156.1 起没有 compact 驱动序列，两连接依次落在 conn004、conn005。"
+          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。0.156.1 起依次落在 conn005、conn006，并回放预热建立的 Cookie。"
         },
         {
           "glob": "scenarios/A09/egress.pcap",
