@@ -223,6 +223,64 @@ class StructuredRootCauseTests(unittest.TestCase):
                 stable_dimensions={"phase": "VC-5", "stage": "parent-run-create"},
             )
 
+    def test_staging_commit_step_failed_splits_same_step_by_error_and_keeps_historical_ids(self) -> None:
+        """修好接着跑第 51 项：staging.commit-step-failed 按异常类型与归一化拒因签名细分同一提交步骤的失败。
+
+        登记为 orchestrator 生产、维度恰为 phase、stage、error_type、error_signature；同一拒因得同一 ID，不同拒因得不同 ID，
+        且都不等于历史 staging.commit-failed 的 ID；历史 ID 字面量逐字不变（没有提交失败诊断的父 run 仍按旧维度复算）。
+        """
+
+        entry = root_cause.load_codes()["codes"]["staging.commit-step-failed"]
+        self.assertEqual(entry["component"], "orchestrator")
+        self.assertEqual(entry["stable_dimensions"], ("phase", "stage", "error_type", "error_signature"))
+        self.assertFalse(entry["legacy"])
+        historical = root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.commit-failed",
+            failed_step="commit-publish",
+            stable_dimensions={"phase": "VC-2", "stage": "commit-publish"},
+        )
+        self.assertEqual(historical, "rc1-a484558473bf5300fd9b")
+
+        def cause(signature: str, stage: str = "commit-publish") -> str:
+            return root_cause.structured_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.commit-step-failed",
+                failed_step=stage,
+                stable_dimensions={
+                    "phase": "VC-2",
+                    "stage": stage,
+                    "error_type": "StagingCommitError",
+                    "error_signature": signature,
+                },
+            )
+
+        first = cause("es1-" + "1" * 16)
+        self.assertEqual(first, cause("es1-" + "1" * 16))
+        self.assertNotEqual(first, cause("es1-" + "2" * 16))
+        self.assertNotEqual(first, cause("es1-" + "1" * 16, stage="commit-ledger"))
+        self.assertNotIn(historical, {first, cause("es1-" + "2" * 16)})
+        # 与第 32 项的 staging.attempt-failed 同维度不同码：同一签名也不会混成一个根因。
+        attempt_failed = root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.attempt-failed",
+            failed_step="commit-publish",
+            stable_dimensions={
+                "phase": "VC-2",
+                "stage": "commit-publish",
+                "error_type": "StagingCommitError",
+                "error_signature": "es1-" + "1" * 16,
+            },
+        )
+        self.assertNotEqual(first, attempt_failed)
+        with self.assertRaisesRegex(root_cause.RootCauseError, "维度键"):
+            root_cause.structured_root_cause(
+                component="orchestrator",
+                stable_error_code="staging.commit-step-failed",
+                failed_step="commit-publish",
+                stable_dimensions={"phase": "VC-2", "stage": "commit-publish"},
+            )
+
     def test_legacy_literals_map_to_structured_ids(self) -> None:
         mapped = root_cause.legacy_root_cause_id("vc1-parent-lease-deadline-missing")
         self.assertTrue(root_cause.is_structured(mapped))

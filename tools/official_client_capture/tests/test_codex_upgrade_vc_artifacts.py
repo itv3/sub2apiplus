@@ -565,6 +565,8 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_vc_staging_marker.schema.json": artifacts.STAGING_MARKER_SCHEMA,
             "codex_upgrade_staging_abort.schema.json": artifacts.STAGING_ABORT_SCHEMA,
             "codex_upgrade_parent_start_failure.schema.json": artifacts.PARENT_START_FAILURE_SCHEMA,
+            # 修好接着跑第 51 项：提交步骤失败诊断。
+            "codex_upgrade_staging_commit_failure.schema.json": artifacts.STAGING_COMMIT_FAILURE_SCHEMA,
             # 改造 2（候选级 revision）五种控制制品。
             "codex_upgrade_candidate_revision.schema.json": artifacts.CANDIDATE_REVISION_SCHEMA,
             "codex_upgrade_candidate_revision_commit.schema.json": artifacts.CANDIDATE_REVISION_COMMIT_SCHEMA,
@@ -1001,6 +1003,69 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         )
         self.assertNotIn("error_signature", abort_schema["required"])
         self.assertEqual(abort_schema["dependentRequired"], {"error_signature": ["error_message"]})
+
+    def _commit_failure_kwargs(self, message: str) -> dict[str, object]:
+        return {
+            "campaign_id": "codex-0_154_0-campaign",
+            "phase": "VC-2",
+            "batch_sequence": 2,
+            "staging_attempt": 1,
+            "prepared_marker_sha256": "3" * 64,
+            "owner_pid": 4242,
+            "owner_nonce": "7" * 64,
+            "commit_step": "commit-publish",
+            "error_type": "StagingCommitError",
+            "error_message": artifacts.staging_abort_error_message(message),
+            "error_signature": artifacts.staging_abort_error_signature(message),
+            "recorded_at_utc": "2026-09-28T01:00:00Z",
+        }
+
+    def test_staging_commit_failure_diagnostic_is_closed_self_digested_and_zero_request(self) -> None:
+        """修好接着跑第 51 项：提交步骤失败诊断（codex-upgrade-staging-commit-failure/v1）。
+
+        字段闭合、自摘要、零动作零请求；步骤只能是正式 COMMIT 前的五步（commit-activate 失败时 COMMIT 已写，走父启动
+        失败诊断）；原文与签名沿用第 32 项同一口径（签名按完整原文、原文截断到 2000）；schema 文件同步。
+        """
+
+        message = "正式产物已存在且内容不同，禁止覆盖：0002-vc-2.json"
+        built = artifacts.build_staging_commit_failure(**self._commit_failure_kwargs(message))
+        self.assertEqual(artifacts.validate_staging_commit_failure(built), built)
+        unsigned = {key: value for key, value in built.items() if key != "diagnostic_sha256"}
+        self.assertEqual(artifacts.digest(unsigned), built["diagnostic_sha256"])
+        self.assertEqual((built["action_started"], built["live_request_count"]), (False, 0))
+        self.assertEqual(built["error_signature"], artifacts.staging_abort_error_signature(message))
+        extra = dict(built, adopt=True)
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "不闭合"):
+            artifacts.validate_staging_commit_failure(extra)
+        self.assertEqual(
+            artifacts.STAGING_COMMIT_FAILURE_STEPS,
+            ("nonce-mismatch", "evaluator-digests", "commit-ledger", "commit-publish", "commit-mark"),
+        )
+        for patch, pattern in (
+            ({"commit_step": "commit-activate"}, "commit_step"),
+            ({"action_started": True}, "零动作"),
+            ({"live_request_count": 1}, "零动作"),
+            ({"error_signature": "es2-" + "0" * 16}, "error_signature"),
+            ({"error_message": "tail "}, "error_message"),
+            ({"error_type": ""}, "error_type"),
+            ({"owner_nonce": "short"}, "owner_nonce"),
+        ):
+            with self.subTest(patch=patch):
+                tampered = dict(built, **patch)
+                tampered["diagnostic_sha256"] = artifacts.digest({k: v for k, v in tampered.items() if k != "diagnostic_sha256"})
+                with self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
+                    artifacts.validate_staging_commit_failure(tampered)
+        drifted = dict(built, error_signature=artifacts.staging_abort_error_signature("另一条拒因"))
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "diagnostic_sha256|摘要"):
+            artifacts.validate_staging_commit_failure(drifted)
+        schema_path = Path(artifacts.__file__).resolve().parent / "codex_upgrade_staging_commit_failure.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(set(schema["required"]), set(built))
+        self.assertEqual(tuple(schema["properties"]["commit_step"]["enum"]), artifacts.STAGING_COMMIT_FAILURE_STEPS)
+        self.assertEqual(
+            schema["properties"]["error_signature"]["pattern"], artifacts.STAGING_ABORT_ERROR_SIGNATURE_RE.pattern
+        )
 
     def test_staging_artifacts_reject_semantic_tampering(self) -> None:
         built = self._staging_artifacts()

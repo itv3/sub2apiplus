@@ -99,7 +99,12 @@
     "staging.commit-failed": {
       "component": "orchestrator",
       "stable_dimensions": ["phase", "stage"],
-      "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。"
+      "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。第 51 项起带提交步骤失败诊断的父 run 改记 staging.commit-step-failed；本码只用于 run 目录没有 staging-commit-failure.json 的父 run（第 51 项之前的监督器封存的历史 run，或诊断写入失败），维度与旧 ID 不变。"
+    },
+    "staging.commit-step-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage", "error_type", "error_signature"],
+      "description": "修好接着跑第 51 项：prepared 父 run 的 staging 提交在写入正式 COMMIT 前的某一步（nonce 校验、evaluator 摘要、账本事件、发布正式文件、写 COMMIT 标记）因异常失败，正式序号未占用。监督器在封存 aborted_prepared（stop reason staging-commit-failed:<step>）前把异常类型、原文与归一化拒因签名写进 run 目录的 staging-commit-failure.json（codex-upgrade-staging-commit-failure/v1，绑定 Campaign、阶段、owner 与 staging 预约身份）。failed_step 与 stage 为失败步骤；error_type 为异常类名（非标识符记 unrecognized）；error_signature 与 staging.attempt-failed 同为 es1。同一步骤的不同拒因互不累计；同一拒因只在波动片段上不同仍得同一 ID，上限保护不削弱。"
     },
     "staging.attempt-failed": {
       "component": "orchestrator",

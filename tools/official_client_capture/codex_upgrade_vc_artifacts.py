@@ -101,6 +101,17 @@ VC_COMMIT_SCHEMA = "codex-upgrade-vc-commit/v1"
 STAGING_MARKER_SCHEMA = "codex-upgrade-vc-staging-prepared/v1"
 STAGING_ABORT_SCHEMA = "codex-upgrade-staging-abort/v1"
 PARENT_START_FAILURE_SCHEMA = "codex-upgrade-parent-start-failure/v1"
+# 修好接着跑第 51 项：prepared 父 run 的提交在正式 COMMIT 前某一步失败时，监督器在封存 aborted_prepared 前写进 run 目录的
+# 诊断（异常类型、原文与归一化拒因签名），对账据此把 staging.commit-step-failed 按拒因细分。
+STAGING_COMMIT_FAILURE_SCHEMA = "codex-upgrade-staging-commit-failure/v1"
+# 能在正式 COMMIT 前失败的提交步骤：监督器 STAGING_COMMIT_STEPS 去掉 commit-activate（它失败时 COMMIT 已写，走父启动失败诊断）。
+STAGING_COMMIT_FAILURE_STEPS = (
+    "nonce-mismatch",
+    "evaluator-digests",
+    "commit-ledger",
+    "commit-publish",
+    "commit-mark",
+)
 # Campaign 总计划的批次模型：legacy = 改造前直接写正式 batch；staging = 先 staging 再 COMMIT。
 # 历史 plan 没有该字段，按 legacy 解释，其 plan_sha256 不变。
 BATCH_MODELS = ("legacy", "staging")
@@ -1482,6 +1493,103 @@ def validate_parent_start_failure(value: Any) -> dict[str, Any]:
         raise VCArtifactError("父启动失败 error_type 非法")
     _timestamp(payload.get("recorded_at_utc"), "父启动失败 recorded_at_utc")
     _self_digest(payload, "diagnostic_sha256", "父启动失败诊断")
+    return payload
+
+
+def build_staging_commit_failure(
+    *,
+    campaign_id: str,
+    phase: str,
+    batch_sequence: int,
+    staging_attempt: int,
+    prepared_marker_sha256: str,
+    owner_pid: int,
+    owner_nonce: str,
+    commit_step: str,
+    error_type: str,
+    error_message: str,
+    error_signature: str,
+    recorded_at_utc: str,
+) -> dict[str, Any]:
+    """提交步骤失败诊断（修好接着跑第 51 项）：正式 COMMIT 前失败、零动作零请求，记录异常原文与归一化拒因签名。
+
+    ``error_message`` 与 ``error_signature`` 用 :func:`staging_abort_error_message`／:func:`staging_abort_error_signature`
+    从同一异常生成（签名按完整原文，原文截到 2000 字符）；诊断绑定父 run 的 owner 与 staging 预约身份。
+    """
+
+    payload = {
+        "schema_version": STAGING_COMMIT_FAILURE_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "phase": _batch_phase(phase, "phase"),
+        "batch_sequence": _positive_int(batch_sequence, "batch_sequence"),
+        "staging_attempt": _positive_int(staging_attempt, "staging_attempt"),
+        "prepared_marker_sha256": _sha256(prepared_marker_sha256, "prepared_marker_sha256"),
+        "owner_pid": _positive_int(owner_pid, "owner_pid"),
+        "owner_nonce": _sha256(owner_nonce, "owner_nonce"),
+        "commit_step": commit_step,
+        "action_started": False,
+        "live_request_count": 0,
+        "error_type": error_type,
+        "error_message": error_message,
+        "error_signature": error_signature,
+        "recorded_at_utc": _timestamp(recorded_at_utc, "recorded_at_utc"),
+    }
+    payload["diagnostic_sha256"] = digest(payload)
+    return validate_staging_commit_failure(payload)
+
+
+def validate_staging_commit_failure(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "phase",
+        "batch_sequence",
+        "staging_attempt",
+        "prepared_marker_sha256",
+        "owner_pid",
+        "owner_nonce",
+        "commit_step",
+        "action_started",
+        "live_request_count",
+        "error_type",
+        "error_message",
+        "error_signature",
+        "recorded_at_utc",
+        "diagnostic_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("提交步骤失败诊断字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != STAGING_COMMIT_FAILURE_SCHEMA:
+        raise VCArtifactError("提交步骤失败诊断 schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "提交步骤失败 campaign_id")
+    _batch_phase(payload.get("phase"), "提交步骤失败 phase")
+    _positive_int(payload.get("batch_sequence"), "提交步骤失败 batch_sequence")
+    _positive_int(payload.get("staging_attempt"), "提交步骤失败 staging_attempt")
+    _sha256(payload.get("prepared_marker_sha256"), "提交步骤失败 prepared_marker_sha256")
+    _positive_int(payload.get("owner_pid"), "提交步骤失败 owner_pid")
+    _sha256(payload.get("owner_nonce"), "提交步骤失败 owner_nonce")
+    if payload.get("commit_step") not in STAGING_COMMIT_FAILURE_STEPS:
+        raise VCArtifactError("提交步骤失败诊断 commit_step 非法（只能是正式 COMMIT 前的步骤）")
+    if payload.get("action_started") is not False or payload.get("live_request_count") != 0:
+        raise VCArtifactError("提交步骤失败诊断必须证明零动作、零请求")
+    error_type = payload.get("error_type")
+    if not isinstance(error_type, str) or not error_type or len(error_type) > 128:
+        raise VCArtifactError("提交步骤失败 error_type 非法")
+    message = payload.get("error_message")
+    if (
+        not isinstance(message, str)
+        or not message
+        or len(message) > STAGING_ABORT_ERROR_MESSAGE_MAX_CHARS
+        or _CONTROL_CHARS_RE.search(message) is not None
+        or message != message.strip()
+    ):
+        raise VCArtifactError("提交步骤失败 error_message 非法")
+    signature = payload.get("error_signature")
+    if not isinstance(signature, str) or STAGING_ABORT_ERROR_SIGNATURE_RE.fullmatch(signature) is None:
+        raise VCArtifactError("提交步骤失败 error_signature 非法")
+    _timestamp(payload.get("recorded_at_utc"), "提交步骤失败 recorded_at_utc")
+    _self_digest(payload, "diagnostic_sha256", "提交步骤失败诊断")
     return payload
 
 

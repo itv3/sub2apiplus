@@ -19365,9 +19365,12 @@ def _compile_and_run_vc_batch_staging(
             moved = _archive_uncommitted_formal_artifacts(
                 campaign_dir, sequence=sequence, phase=phase, attempt=attempt
             )
+            commit_failure = run["commit_failure"]
+            # 修好接着跑第 51 项：失败消息带监督器返回的异常原文（与第 29 项父 run 创建失败同口径，截 600 字）。
+            original = str(commit_failure.get("error_message") or "")[:600]
             summary = (
-                f"staging commit 在 {run['commit_failure']['commit_step']} 步失败"
-                f"（{run['commit_failure']['error_type']}），父 run {run_dir.name} 已封存 aborted_prepared，"
+                f"staging commit 在 {commit_failure['commit_step']} 步失败"
+                f"（{commit_failure['error_type']}{'：' + original if original else ''}），父 run {run_dir.name} 已封存 aborted_prepared，"
                 f"序号 {sequence:04d} 未占；对账根因 {outcome['root_cause_id']}"
             )
             if outcome["decision"] == "paused":

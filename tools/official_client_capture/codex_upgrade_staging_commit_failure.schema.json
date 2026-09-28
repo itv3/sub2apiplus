@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-staging-commit-failure-v1.json",
+  "title": "Codex 提交步骤失败诊断（prepared 父 run 在正式 COMMIT 前某一步失败；零动作零请求；记录异常原文与归一化拒因签名）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "phase", "batch_sequence", "staging_attempt", "prepared_marker_sha256",
+    "owner_pid", "owner_nonce", "commit_step", "action_started", "live_request_count",
+    "error_type", "error_message", "error_signature", "recorded_at_utc", "diagnostic_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-staging-commit-failure/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "batch_sequence": {"type": "integer", "minimum": 1},
+    "staging_attempt": {"type": "integer", "minimum": 1},
+    "prepared_marker_sha256": {"$ref": "#/$defs/sha256"},
+    "owner_pid": {"type": "integer", "minimum": 1},
+    "owner_nonce": {"$ref": "#/$defs/sha256"},
+    "commit_step": {"enum": ["nonce-mismatch", "evaluator-digests", "commit-ledger", "commit-publish", "commit-mark"]},
+    "action_started": {"const": false},
+    "live_request_count": {"const": 0},
+    "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "error_message": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "error_signature": {"type": "string", "pattern": "^es1-[0-9a-f]{16}$"},
+    "recorded_at_utc": {"type": "string", "format": "date-time"},
+    "diagnostic_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+  }
+}

@@ -405,15 +405,13 @@ class StagingDispatchTests(unittest.TestCase):
             self.assertEqual(supervisor._read_state(run_dir)["state"], "aborted_prepared")
             stop = self._read(run_dir / "stop-receipt.json")
             self.assertEqual(stop["reason"], "staging-commit-failed:commit-publish")
-            # ① 正式对账收据：parent-prepare-abandoned，根因 staging.commit-failed(stage=commit-publish)。
+            # ① 正式对账收据：parent-prepare-abandoned；第 51 项起根因为 staging.commit-step-failed(stage=commit-publish，
+            # 维度含监督器落盘的异常类型与归一化拒因签名)。
             receipt = self._read(campaign_dir / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json")
             self.assertEqual(receipt["failure_class"], "parent-prepare-abandoned")
-            expected_cause = root_cause.structured_root_cause(
-                component="orchestrator",
-                stable_error_code="staging.commit-failed",
-                failed_step="commit-publish",
-                stable_dimensions={"phase": "VC-2", "stage": "commit-publish"},
-            )
+            diagnostic = self._commit_failure_diagnostic(run_dir)
+            self.assertEqual(diagnostic["error_message"], "simulated publish failure")
+            expected_cause = self._commit_step_cause("VC-2", "commit-publish", diagnostic)
             self.assertEqual(receipt["root_cause"]["root_cause_id"], expected_cause)
             self.assertFalse(receipt["reservation_exists"])
             self.assertEqual(receipt["live_request_count"], 0)
@@ -479,6 +477,117 @@ class StagingDispatchTests(unittest.TestCase):
                 abort = artifacts.validate_staging_abort(self._read(self._staging_dir(fixture["campaign_dir"], 2, "VC-2") / f"attempt-{attempt}" / "ABORT"))
                 self.assertEqual(abort["stage"], "commit-publish")
                 self.assertIsNotNone(abort["reconciliation_receipt"])
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 51 项：提交步骤失败按异常类型与归一化拒因签名细分
+    # ------------------------------------------------------------------
+
+    def _inject_publish_failure(self, message: str):
+        """让第二次发布（run-manifest）以给定拒因失败：账本事件已写、batch 已发布、COMMIT 未写。"""
+
+        original = codex_upgrade._publish_staging_file
+        calls = {"count": 0}
+
+        def failing(source, target, campaign_dir):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise codex_upgrade.ConfigurationError(message)
+            return original(source, target, campaign_dir)
+
+        return mock.patch.object(codex_upgrade, "_publish_staging_file", side_effect=failing)
+
+    def _commit_step_cause(self, phase: str, stage: str, diagnostic: dict[str, object]) -> str:
+        return root_cause.structured_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.commit-step-failed",
+            failed_step=stage,
+            stable_dimensions={
+                "phase": phase,
+                "stage": stage,
+                "error_type": str(diagnostic["error_type"]),
+                "error_signature": str(diagnostic["error_signature"]),
+            },
+        )
+
+    def _commit_failure_diagnostic(self, run_dir: Path) -> dict[str, object]:
+        diagnostic = supervisor.read_staging_commit_failure(run_dir, supervisor._read_state(run_dir))
+        self.assertIsNotNone(diagnostic)
+        return diagnostic
+
+    def test_commit_step_failures_with_different_reasons_get_distinct_root_causes(self) -> None:
+        """修好接着跑第 51 项：同一序号的提交在同一步骤（commit-publish）因两个不同原因失败——修复前两次都记
+        staging.commit-failed(phase, commit-publish) 同一根因，第二次即达上限暂停、要登记修复证据才能放行；修复后监督器
+        把异常原文与签名落盘，对账按 staging.commit-step-failed 得到不同根因、各计 1，第二次不暂停，第三次派发成功。
+        失败消息里带原文。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            with self._inject_publish_failure("正式产物已存在且内容不同，禁止覆盖：0002-vc-2.json"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "commit-publish 步失败.*禁止覆盖") as first:
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-cs-a")
+            self.assertNotIsInstance(first.exception, codex_upgrade.StagingDeadlinePaused)
+            with self._inject_publish_failure("正式产物发布后与 staging 内容不一致：0002-vc-2.json"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "commit-publish 步失败.*发布后与 staging 内容不一致") as second:
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-cs-b")
+            self.assertNotIsInstance(second.exception, codex_upgrade.StagingDeadlinePaused)
+            runs = self._staging_runs(fixture)
+            self.assertEqual(len(runs), 2)
+            causes = []
+            for run_dir in runs:
+                receipt = self._read(fixture["campaign_dir"] / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json")
+                diagnostic = self._commit_failure_diagnostic(run_dir)
+                self.assertEqual(receipt["root_cause"]["stable_error_code"], "staging.commit-step-failed")
+                self.assertEqual(receipt["root_cause"]["root_cause_id"], self._commit_step_cause("VC-2", "commit-publish", diagnostic))
+                self.assertEqual(receipt["run"]["staging"]["staging_commit_failure"]["sha256"], diagnostic["diagnostic_sha256"])
+                causes.append(receipt["root_cause"]["root_cause_id"])
+            self.assertNotEqual(causes[0], causes[1])
+            self.assertNotIn("rc1-a484558473bf5300fd9b", causes)
+            head = self._head(fixture)
+            self.assertEqual({cause: head["root_cause_counts"][cause] for cause in causes}, {causes[0]: 1, causes[1]: 1})
+            self.assertEqual(head["root_causes_at_limit"], [])
+            result, returncode = self._dispatch(fixture, root, "VC-2", 2, tag="-cs-c")
+            self.assertEqual(returncode, 0, result)
+            self.assertEqual(result["staging_attempt"], 3)
+
+    def test_commit_step_same_reason_differing_only_in_volatile_fragments_still_hits_limit(self) -> None:
+        """修好接着跑第 51 项：上限保护不削弱——同一拒因只在路径与序号上不同，两次提交失败得同一根因，第二次暂停。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            with self._inject_publish_failure("正式产物路径不可信：/srv/a/control/vc/batches/0002-vc-2.json"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "可按同序号重新派发"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-cv-a")
+            with self._inject_publish_failure("正式产物路径不可信：/srv/b/control/vc/batches/0017-vc-2.json"):
+                with self.assertRaisesRegex(codex_upgrade.StagingDeadlinePaused, "登记根因修复证据"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-cv-b")
+            diagnostics = [self._commit_failure_diagnostic(run_dir) for run_dir in self._staging_runs(fixture)]
+            self.assertEqual(len({item["error_signature"] for item in diagnostics}), 1)
+            cause = self._commit_step_cause("VC-2", "commit-publish", diagnostics[0])
+            head = self._head(fixture)
+            self.assertEqual(head["root_cause_counts"][cause], 2)
+            self.assertIn(cause, head["root_causes_at_limit"])
+
+    def test_historical_commit_failed_run_without_diagnostic_keeps_historical_root_cause(self) -> None:
+        """修好接着跑第 51 项：历史照旧——第 51 项之前的监督器封存的 aborted_prepared 父 run 没有提交失败诊断，对账按
+        staging.commit-failed 旧维度复算，旧 ID rc1-a484558473bf5300fd9b（VC-2／commit-publish）逐字不变地入账。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            # 旧监督器不写诊断：在进程内让诊断写入成为空操作（create=True 使本用例在修复前后都可运行）。
+            with self._inject_publish_crash(), mock.patch.object(
+                supervisor, "write_staging_commit_failure", return_value=None, create=True
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "commit-publish 步失败"):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-hist")
+            run_dir = self._staging_runs(fixture)[0]
+            self.assertFalse((run_dir / "staging-commit-failure.json").exists())
+            receipt = self._read(fixture["campaign_dir"] / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json")
+            self.assertEqual(receipt["root_cause"]["stable_error_code"], "staging.commit-failed")
+            self.assertEqual(receipt["root_cause"]["root_cause_id"], "rc1-a484558473bf5300fd9b")
+            self.assertEqual(self._head(fixture)["root_cause_counts"]["rc1-a484558473bf5300fd9b"], 1)
 
     def test_sequence_gap_is_rejected_before_any_staging_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

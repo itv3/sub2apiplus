@@ -4014,8 +4014,9 @@ def _staging_run_facts(
 
     - ``aborted_prepared`` + ``prepared-abandoned`` → ``parent-prepare-abandoned``，根因
       ``staging.abandoned``（stage=parent-run）；
-    - ``aborted_prepared`` + ``staging-commit-failed:<step>`` → 同上分类，根因
-      ``staging.commit-failed``（stage=<step>）；
+    - ``aborted_prepared`` + ``staging-commit-failed:<step>`` → 同上分类；run 目录有提交步骤失败诊断（修好接着跑
+      第 51 项起监督器封存前写入）时根因 ``staging.commit-step-failed``（维度 phase、stage、error_type、error_signature），
+      没有诊断（第 51 项之前的监督器封存的历史 run，或诊断写入失败）时根因 ``staging.commit-failed``（stage=<step>，旧 ID 不变）；
     - ``failed`` + 有效 ``parent-start-failure.json`` → ``parent-start-failed``，根因
       ``parent-start.failed``（维度 phase）；
     - ``audit-incomplete`` + ``commit-integrity-mismatch`` → 同名分类，根因
@@ -4034,16 +4035,45 @@ def _staging_run_facts(
         "commit_classification": supervisor.classify_prepared_run(run_dir, state),
     }
     if run_state == "aborted_prepared":
+        dimensions: dict[str, str]
         if stop_reason == supervisor.PREPARED_ABANDONED_REASON:
             stage = "parent-run"
             code = "staging.abandoned"
+            dimensions = {"phase": str(state["phase"]), "stage": stage}
         elif isinstance(stop_reason, str) and stop_reason.startswith(
             supervisor.STAGING_COMMIT_FAILED_PREFIX
         ):
             stage = stop_reason[len(supervisor.STAGING_COMMIT_FAILED_PREFIX) :]
             if stage not in supervisor.STAGING_COMMIT_STEPS or stage == "commit-activate":
                 raise ReconcilerError(f"aborted_prepared 的 stop reason 步骤非法：{stop_reason!r}")
-            code = "staging.commit-failed"
+            try:
+                commit_failure = supervisor.read_staging_commit_failure(run_dir, state)
+            except supervisor.SupervisorError as error:
+                raise ReconcilerError(f"提交步骤失败诊断无法重放：{error}") from error
+            if commit_failure is None:
+                # 第 51 项之前的监督器封存的历史 run（或诊断写入失败）：按旧维度复算，旧 ID 逐字不变。
+                code = "staging.commit-failed"
+                dimensions = {"phase": str(state["phase"]), "stage": stage}
+            else:
+                if commit_failure["commit_step"] != stage:
+                    raise ReconcilerError(
+                        f"提交步骤失败诊断的步骤与 stop reason 不一致：{commit_failure['commit_step']!r} ≠ {stage!r}"
+                    )
+                code = "staging.commit-step-failed"
+                dimensions = {
+                    "phase": str(state["phase"]),
+                    "stage": stage,
+                    "error_type": staging_abort_error_type_dimension(str(commit_failure["error_type"])),
+                    "error_signature": str(commit_failure["error_signature"]),
+                }
+                facts["staging_commit_failure"] = {
+                    "schema_version": commit_failure["schema_version"],
+                    "path": supervisor.STAGING_COMMIT_FAILURE_FILENAME,
+                    "sha256": commit_failure["diagnostic_sha256"],
+                    "commit_step": commit_failure["commit_step"],
+                    "error_type": commit_failure["error_type"],
+                    "error_signature": commit_failure["error_signature"],
+                }
         else:
             raise ReconcilerError(f"aborted_prepared 父 run 的 stop reason 非法：{stop_reason!r}")
         if facts["commit_classification"] != "no_commit":
@@ -4054,7 +4084,7 @@ def _staging_run_facts(
                 "root_cause_component": "orchestrator",
                 "root_cause_code": code,
                 "failed_step": stage,
-                "stable_dimensions": {"phase": str(state["phase"]), "stage": stage},
+                "stable_dimensions": dimensions,
                 "next_action": NEXT_ACTION_SAME_SEQUENCE,
             }
         )

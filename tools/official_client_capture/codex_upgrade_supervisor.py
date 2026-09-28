@@ -167,6 +167,8 @@ STAGING_COMMIT_STEPS = (
     "commit-activate",
 )
 PARENT_START_FAILURE_FILENAME = "parent-start-failure.json"
+# 修好接着跑第 51 项：提交在正式 COMMIT 前某一步失败时，封存 aborted_prepared 前写进 run 目录的诊断（异常原文与签名）。
+STAGING_COMMIT_FAILURE_FILENAME = "staging-commit-failure.json"
 PARENT_START_ACTIVATE_RETRIES = 3
 # 只有子进程以默认 execution-failure 退出（handled-error／child-returncode）
 # 时才允许升级为 post-run-tooling；interrupted／unexpected-error 属于执行控制
@@ -3028,6 +3030,92 @@ def read_parent_start_failure(run_dir: Path, state: Mapping[str, Any]) -> dict[s
         or diagnostic["owner_nonce"] != state.get("owner_nonce")
     ):
         raise SupervisorError("父启动失败诊断与父 run 身份不一致。")
+    return diagnostic
+
+
+def _staging_commit_failure_path(run_dir: Path) -> Path:
+    return Path(run_dir) / STAGING_COMMIT_FAILURE_FILENAME
+
+
+def _staging_commit_failure_identity_problem(diagnostic: Mapping[str, Any], state: Mapping[str, Any]) -> bool:
+    """诊断是否不属于这个父 run：Campaign、阶段、owner 与 staging 预约（序号、attempt、PREPARED 摘要）逐项核对。"""
+
+    binding = state.get("staging_binding")
+    return (
+        not isinstance(binding, Mapping)
+        or diagnostic["campaign_id"] != state.get("campaign_id")
+        or diagnostic["phase"] != state.get("phase")
+        or diagnostic["owner_pid"] != state.get("owner_pid")
+        or diagnostic["owner_nonce"] != state.get("owner_nonce")
+        or diagnostic["batch_sequence"] != binding.get("sequence")
+        or diagnostic["staging_attempt"] != binding.get("staging_attempt")
+        or diagnostic["prepared_marker_sha256"] != binding.get("prepared_marker_sha256")
+    )
+
+
+def write_staging_commit_failure(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    commit_step: str,
+    failure: BaseException | None,
+    recorded_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """写提交步骤失败诊断（修好接着跑第 51 项，write-once）：异常类型、原文与归一化拒因签名落盘。
+
+    原文与签名用与 staging 中止收据同一口径（``vc_artifacts.staging_abort_error_message``／``staging_abort_error_signature``），
+    对账据此把 ``staging.commit-step-failed`` 按拒因细分；没有异常对象（回调返回却未取得执行权）时按类型名
+    ``CommitNotActivated`` 记。已存在时核对身份与事实（原文、签名、步骤、类型）后原样返回。
+    """
+
+    run_dir = Path(run_dir)
+    binding = state.get("staging_binding")
+    if not isinstance(binding, Mapping):
+        raise SupervisorError("提交步骤失败诊断要求 staging_binding。")
+    source: BaseException | str = failure if failure is not None else "CommitNotActivated"
+    error_type = (type(failure).__name__ if failure is not None else "CommitNotActivated")[:128]
+    try:
+        diagnostic = vc_artifacts.build_staging_commit_failure(
+            campaign_id=str(state["campaign_id"]),
+            phase=str(state["phase"]),
+            batch_sequence=int(binding["sequence"]),
+            staging_attempt=int(binding["staging_attempt"]),
+            prepared_marker_sha256=str(binding["prepared_marker_sha256"]),
+            owner_pid=int(state["owner_pid"]),
+            owner_nonce=str(state["owner_nonce"]),
+            commit_step=commit_step,
+            error_type=error_type,
+            error_message=vc_artifacts.staging_abort_error_message(source),
+            error_signature=vc_artifacts.staging_abort_error_signature(source),
+            recorded_at_utc=recorded_at_utc or _utc_now(),
+        )
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"提交步骤失败诊断构造失败：{error}") from error
+    path = _staging_commit_failure_path(run_dir)
+    if path.exists() or path.is_symlink():
+        existing = read_staging_commit_failure(run_dir, state)
+        facts = ("commit_step", "error_type", "error_message", "error_signature")
+        if existing is None or any(existing[field] != diagnostic[field] for field in facts):
+            raise SupervisorError("既有提交步骤失败诊断与本次失败事实不一致，拒绝覆盖。")
+        return existing
+    _write_json(path, diagnostic, replace=False)
+    return diagnostic
+
+
+def read_staging_commit_failure(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """读取并校验提交步骤失败诊断；不存在返回 ``None``（第 51 项之前的监督器不写），形态或身份异常即拒绝。"""
+
+    path = _staging_commit_failure_path(Path(run_dir))
+    if path.is_symlink():
+        raise SupervisorError("提交步骤失败诊断路径不可信。")
+    if not path.exists():
+        return None
+    try:
+        diagnostic = vc_artifacts.validate_staging_commit_failure(_read_json(path))
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"提交步骤失败诊断无法校验：{error}") from error
+    if _staging_commit_failure_identity_problem(diagnostic, state):
+        raise SupervisorError("提交步骤失败诊断与父 run 身份不一致。")
     return diagnostic
 
 
@@ -12184,16 +12272,30 @@ def _commit_prepared_run(
     error_type = type(failure).__name__ if failure is not None else "CommitNotActivated"
     if classification == "no_commit":
         reason = f"{STAGING_COMMIT_FAILED_PREFIX}{step}"
+        # 修好接着跑第 51 项：先把异常原文与归一化拒因签名写进 run 目录，再封存 aborted_prepared，对账据此按拒因细分根因。
+        # 诊断写不出（磁盘、权限、步骤非法等）只退回历史的粗粒度根因，绝不盖住原失败、不阻止封存。
+        diagnostic: dict[str, Any] | None = None
+        diagnostic_error: str | None = None
+        try:
+            diagnostic = write_staging_commit_failure(run_dir, state, commit_step=step, failure=failure)
+        except Exception as error:  # noqa: BLE001 - 诊断只是附注，任何写入异常都不能阻止封存
+            diagnostic_error = f"{type(error).__name__}：{vc_artifacts.staging_abort_error_message(error)[:300]}"
         client.stop(reason=reason, status="aborted_prepared")
         if isinstance(failure, (KeyboardInterrupt, SystemExit)):
             raise failure
-        return {
+        result: dict[str, Any] = {
             "status": "aborted_prepared",
             "reason": reason,
             "commit_step": step,
             "error_type": error_type,
+            "error_message": vc_artifacts.staging_abort_error_message(failure if failure is not None else error_type),
             "classification": classification,
         }
+        if diagnostic is not None:
+            result["diagnostic_sha256"] = diagnostic["diagnostic_sha256"]
+        if diagnostic_error is not None:
+            result["diagnostic_error"] = diagnostic_error
+        return result
     if classification == "committed":
         binding = state["staging_binding"]
         record = _read_vc_commit(Path(str(binding["commit_path"])))

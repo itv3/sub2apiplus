@@ -366,6 +366,114 @@ class StagingSupervisorTests(unittest.TestCase):
             )
             self.assertEqual(ordered, [])
 
+    def _failing_publish(self, message: str):
+        def failing(client: SupervisorClient) -> None:
+            client.begin_commit_step("nonce-mismatch")
+            client.begin_commit_step("commit-ledger")
+            client.begin_commit_step("commit-publish")
+            raise supervisor.StagingCommitError("commit-publish", message)
+
+        return failing
+
+    def test_commit_failure_persists_original_text_and_signature_before_sealing(self) -> None:
+        """修好接着跑第 51 项：提交步骤在正式 COMMIT 前失败时，监督器先把异常原文与归一化拒因签名写进 run 目录的
+        staging-commit-failure.json，再封存 aborted_prepared；返回的 commit_failure 带原文（入口的失败消息据此可见），
+        审计仍闭合。诊断绑定父 run 身份，篡改即拒绝重放。"""
+
+        message = "正式产物已存在且内容不同，禁止覆盖：/srv/data/control/vc/batches/0001-vc-2.json"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, plan = self._staging_campaign(root)
+            _returncode, run = self._run_locked(root, campaign_dir, plan, self._failing_publish(message))
+            self.assertEqual((run["status"], run["reason"]), ("aborted_prepared", "staging-commit-failed:commit-publish"))
+            self.assertEqual(run["commit_failure"]["error_message"], message)
+            run_dir = Path(str(run["run_dir"]))
+            state = supervisor._read_state(run_dir)
+            diagnostic = supervisor.read_staging_commit_failure(run_dir, state)
+            self.assertIsNotNone(diagnostic)
+            self.assertEqual(
+                (diagnostic["commit_step"], diagnostic["error_type"], diagnostic["error_message"]),
+                ("commit-publish", "StagingCommitError", message),
+            )
+            self.assertEqual(diagnostic["error_signature"], artifacts.staging_abort_error_signature(message))
+            self.assertEqual(diagnostic["owner_nonce"], state["owner_nonce"])
+            self.assertEqual(diagnostic["batch_sequence"], state["staging_binding"]["sequence"])
+            self.assertEqual(run["commit_failure"]["diagnostic_sha256"], diagnostic["diagnostic_sha256"])
+            report = supervisor._audit_command(run_dir)
+            self.assertFalse(report["audit_incomplete"], report["integrity_errors"])
+            # 重复写入同一事实幂等；绑定另一父 run 身份的诊断拒绝重放。
+            again = supervisor.write_staging_commit_failure(
+                run_dir, state, commit_step="commit-publish", failure=supervisor.StagingCommitError("commit-publish", message)
+            )
+            self.assertEqual(again, diagnostic)
+            path = run_dir / supervisor.STAGING_COMMIT_FAILURE_FILENAME
+            forged = dict(diagnostic, owner_nonce="b" * 64)
+            forged["diagnostic_sha256"] = artifacts.digest({k: v for k, v in forged.items() if k != "diagnostic_sha256"})
+            original = path.read_bytes()
+            path.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(SupervisorError, "身份不一致"):
+                supervisor.read_staging_commit_failure(run_dir, state)
+            path.write_bytes(original)
+
+    def test_commit_failure_diagnostic_write_error_never_masks_the_original_failure(self) -> None:
+        """修好接着跑第 51 项：诊断写不出（磁盘、权限等）时照常封存 aborted_prepared，原失败不被盖住；commit_failure 记下
+        诊断写入错误，对账退回历史的 staging.commit-failed（维度 phase、stage）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, plan = self._staging_campaign(root)
+            with mock.patch.object(supervisor, "write_staging_commit_failure", side_effect=OSError("磁盘已满")):
+                _returncode, run = self._run_locked(root, campaign_dir, plan, self._failing_publish("发布失败"))
+            self.assertEqual((run["status"], run["reason"]), ("aborted_prepared", "staging-commit-failed:commit-publish"))
+            self.assertIn("磁盘已满", run["commit_failure"]["diagnostic_error"])
+            self.assertEqual(run["commit_failure"]["error_message"], "发布失败")
+            run_dir = Path(str(run["run_dir"]))
+            state = supervisor._read_state(run_dir)
+            self.assertEqual(state["state"], "aborted_prepared")
+            self.assertIsNone(supervisor.read_staging_commit_failure(run_dir, state))
+            facts = reconciler._staging_run_facts(run_dir, state, "staging-commit-failed:commit-publish", None, campaign_dir=campaign_dir)
+            self.assertEqual(facts["root_cause_code"], "staging.commit-failed")
+            self.assertEqual(facts["stable_dimensions"], {"phase": "VC-2", "stage": "commit-publish"})
+            self.assertNotIn("staging_commit_failure", facts)
+
+    def test_reconciler_classifies_diagnosed_commit_failure_and_rejects_step_mismatch(self) -> None:
+        """修好接着跑第 51 项：对账按诊断把提交步骤失败编成 staging.commit-step-failed（维度含异常类型与签名），并在事实里
+        绑定诊断摘要；诊断步骤与 stop reason 不一致、诊断无法校验都失败关闭。"""
+
+        message = "账本 head 已被其它批次推进（expected 17，actual 18）"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, plan = self._staging_campaign(root)
+            _returncode, run = self._run_locked(root, campaign_dir, plan, self._failing_publish(message))
+            run_dir = Path(str(run["run_dir"]))
+            state = supervisor._read_state(run_dir)
+            diagnostic = supervisor.read_staging_commit_failure(run_dir, state)
+            facts = reconciler._staging_run_facts(run_dir, state, "staging-commit-failed:commit-publish", None, campaign_dir=campaign_dir)
+            self.assertEqual(facts["root_cause_code"], "staging.commit-step-failed")
+            self.assertEqual(
+                facts["stable_dimensions"],
+                {
+                    "phase": "VC-2",
+                    "stage": "commit-publish",
+                    "error_type": "StagingCommitError",
+                    "error_signature": diagnostic["error_signature"],
+                },
+            )
+            self.assertEqual(facts["staging_commit_failure"]["sha256"], diagnostic["diagnostic_sha256"])
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "步骤与 stop reason 不一致"):
+                reconciler._staging_run_facts(run_dir, state, "staging-commit-failed:commit-ledger", None, campaign_dir=campaign_dir)
+            path = run_dir / supervisor.STAGING_COMMIT_FAILURE_FILENAME
+            tampered = dict(diagnostic, error_signature=artifacts.staging_abort_error_signature("另一条拒因"))
+            path.write_text(json.dumps(tampered) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "提交步骤失败诊断无法重放"):
+                reconciler._staging_run_facts(run_dir, state, "staging-commit-failed:commit-publish", None, campaign_dir=campaign_dir)
+
+    def test_staging_commit_failure_steps_are_the_pre_commit_supervisor_steps(self) -> None:
+        self.assertEqual(
+            artifacts.STAGING_COMMIT_FAILURE_STEPS,
+            tuple(step for step in supervisor.STAGING_COMMIT_STEPS if step != "commit-activate"),
+        )
+
     def test_commit_failure_with_nonce_mismatch_is_rejected_before_any_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
