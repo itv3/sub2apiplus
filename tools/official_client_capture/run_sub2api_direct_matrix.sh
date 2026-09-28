@@ -123,6 +123,70 @@ stop_pair() {
   active_subject=""
 }
 
+# >>> sub2api-ingress-lifecycle
+# 修好接着跑第 61 项：Sub2API ingress 由抓包镜像内置的 /capture/scripts/start_ingress.sh、stop_ingress.sh 启停（环境脚本，
+# 不在受管工具树内）。2026-09-28 194249z VC-5 批次 24：start_ingress.sh 在后台拉起 mitmdump 后立即 chmod 日志，而日志要等
+# 子进程完成重定向才出现，竞态下报 No such file 非零退出，进程却已在运行；本脚本原先只在启动成功后置 ingress_started，
+# 清理区因此没停它，孤儿 ingress 占住 18081 与 PID 文件，后续作业以“已有 Sub2API ingress 进程运行”连带失败（core-mitm
+# 一处竞态连带 compact-direct 三次、compact-mitm 一次）。现在：
+# 1. 启动前先调 stop 脚本清掉残留：它自带命令行核对，只停本工具启动的 ingress，PID 文件缺失时为空操作；核对不过即拒绝启动；
+# 2. 先置 ingress_started 再启动：任一失败路径的清理区都会停掉可能已拉起的进程；
+# 3. 启动脚本报错时核对真实状态：PID 存活且命令行是本工具的 ingress、元数据属于本 run、18081 由该 PID 监听，才按已启动继续，
+#    否则失败，由清理区停掉。
+ingress_ready_script='
+set -u
+run_id=$1
+subject=$2
+pid_file=$3
+runs_root=$4
+[[ -f $pid_file ]] || exit 1
+pid=$(<"$pid_file")
+[[ $pid =~ ^[0-9]+$ ]] || exit 1
+kill -0 "$pid" 2>/dev/null || exit 1
+command=$(ps -p "$pid" -o args=) || exit 1
+[[ $command == *mitmdump* && $command == */capture/addons/dump_ingress.py* && $command == *reverse:http://sub2apiplus:8080* ]] || exit 1
+grep -qxF "run_id=$run_id" "$runs_root/$run_id/ingress/$subject/metadata.txt" 2>/dev/null || exit 1
+for _ in $(seq 1 50); do
+  listeners=$(ss -lntp 2>/dev/null) || listeners=""
+  while IFS= read -r line; do
+    [[ $line == *":18081 "* && $line == *"pid=$pid,"* ]] && exit 0
+  done <<<"$listeners"
+  sleep 0.1
+done
+exit 1
+'
+
+stop_stale_ingress() {
+  local output
+  if ! output=$(docker exec "$capture_container" /capture/scripts/stop_ingress.sh 2>&1); then
+    printf '%s\n' "$output" >&2
+    echo "清理残留 Sub2API ingress 失败，拒绝启动新的 ingress。" >&2
+    return 1
+  fi
+  if [[ $output == *"已停止"* ]]; then
+    echo "已清理上一作业残留的 Sub2API ingress。" >&2
+  fi
+}
+
+start_ingress_checked() {
+  local ingress_run_id=$1
+  local ingress_subject=$2
+  stop_stale_ingress || return 1
+  ingress_started=1
+  if docker exec "$capture_container" /capture/scripts/start_ingress.sh "$ingress_run_id" "$ingress_subject"; then
+    return 0
+  fi
+  if docker exec "$capture_container" bash -c "$ingress_ready_script" _ "$ingress_run_id" "$ingress_subject" \
+    /run/oauth-capture/sub2api-ingress.pid /capture/runs; then
+    printf 'Sub2API ingress 启动脚本报错但进程已就绪（日志 chmod 竞态），按已启动继续：run_id=%s subject=%s\n' \
+      "$ingress_run_id" "$ingress_subject" >&2
+    return 0
+  fi
+  printf 'Sub2API ingress 启动失败：run_id=%s subject=%s\n' "$ingress_run_id" "$ingress_subject" >&2
+  return 1
+}
+# <<< sub2api-ingress-lifecycle
+
 restore_environment() {
   local original_exit_code=$?
   trap - EXIT ERR INT TERM
@@ -205,9 +269,7 @@ run_case() {
   docker exec "$capture_container" "$capture_runtime_root/start_direct.sh" \
     "$run_id" "$case_id" "$service_container"
   direct_started=1
-  docker exec "$capture_container" /capture/scripts/start_ingress.sh \
-    "$run_id" "$case_id"
-  ingress_started=1
+  start_ingress_checked "$run_id" "$case_id"
 
   case "$subject" in
     claude-http)
