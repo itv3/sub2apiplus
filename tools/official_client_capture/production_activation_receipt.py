@@ -13,7 +13,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -23,6 +23,32 @@ from tools.official_client_capture import codex_upgrade_gate_receipt
 FACTS_SCHEMA = "codex-production-activation-facts/v2"
 RECEIPT_SCHEMA = "codex-production-activation-receipt/v2"
 PRODUCER_SCHEMA = "codex-production-activation-producer/v2"
+# 只读重放登记（修好接着跑第 42 项）：收据的生成器身份是本文件的 sha256。VC-6 的
+# production-activation 与 rollback-verification 两步先后重放同一份激活收据；两步之间或失败恢复时
+# 修好本文件，修改前已部署版本生成的收据仍要能重放，所以每次修改都必须把修改前已部署版本的摘要
+# 登记在它生成收据时的 producer schema 下。登记只服务 replay：build_receipt 不读取本登记，新收据
+# 始终写入当前路径与当前摘要；重放时也只承接摘要这一个字段，路径和其余字段仍须由当前实现从原始
+# 事实逐字重建。v1 收据格式已退役、不可重放。登记是否完整由
+# tests/test_producer_replay_registration_gate.py 按承接收据记录的部署边界检查。
+REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
+    PRODUCER_SCHEMA: frozenset(
+        {
+            # f292af9d：7d0d6c98f 起的 v2 版本。仓库内没有它生成的入库收据，登记为保守处理，
+            # 是否在 ARM64 生成过收据待现场核实。
+            "f292af9d4d81c8d839618cc0065fbe89ce23761365929490b5300a756ecf9ae5",
+            # 83ed0125：bd638c411 版本，生成过 0.147→0.149.1 的 R34 生产激活收据
+            # （docs/egress/maintenance/CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json）。
+            "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382",
+            # 1499de01：d691afcb6 起的 v2 版本。仓库内没有它生成的入库收据，登记为保守处理，
+            # 是否在 ARM64 生成过收据待现场核实。
+            "1499de0195c9a8f1522ee347ae9e39dc719cba7695274914c6ab6907d0a41f0f",
+            # 3b4ddbf8：ef262c618 起部署、第 42 项修改前的受管版本，生成过 0.151 与 0.154 的生产
+            # 激活收据（docs/egress/maintenance/CODEX_CLI_01491_TO_0151_／CODEX_CLI_0151_TO_0154_
+            # PRODUCTION_ACTIVATION_RECEIPT.json）；0.157 Campaign 若已进入 VC-6，其激活收据也由它生成。
+            "3b4ddbf874a9164654e8496fb6f2a88fbd50b22557f16b5285f0aa0aca7d1292",
+        }
+    ),
+}
 STAGE_ORDER = ("canary", "production_switch", "rollback", "target_restore")
 TARGET_STAGES = frozenset({"canary", "production_switch", "target_restore"})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -546,6 +572,37 @@ def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str,
     return receipt
 
 
+def _replay_producer_identity(producer: Mapping[str, Any]) -> tuple[str, str]:
+    """只读重放时承接收据中的生成器身份，返回写回重建收据的 ``(tool, tool_sha256)``。
+
+    * v2 收据：摘要等于当前生成器摘要时返回当前身份（与原先逐字比较完全一致，路径不同仍在
+      逐字比较处失败）；摘要不同时，必须已登记在 ``REGISTERED_REPLAY_PRODUCER_HASHES`` 的 v2
+      分组中，且 ``tool`` 仍须是当前受管生成器路径——只承接摘要这一个字段，不放宽路径。
+    * 其它 producer schema（v1 已退役）一律拒绝。
+
+    本函数只服务重放；``build_receipt`` 不经过这里，新收据始终写入当前路径与当前摘要。
+    """
+
+    schema = producer.get("schema_version")
+    if schema != PRODUCER_SCHEMA:
+        raise ProductionReceiptError("receipt.producer 不受支持")
+    tool = producer.get("tool")
+    tool_sha256 = producer.get("tool_sha256")
+    current_tool = Path(__file__).resolve()
+    current_sha256 = _sha256_file(current_tool)
+    if tool_sha256 == current_sha256:
+        return str(current_tool), current_sha256
+    registered = REGISTERED_REPLAY_PRODUCER_HASHES.get(schema, frozenset())
+    if not isinstance(tool_sha256, str) or tool_sha256 not in registered:
+        raise ProductionReceiptError(
+            "生产激活收据生成器身份漂移：producer.tool_sha256 既不是当前生成器摘要，"
+            "也未登记为只读重放身份（REGISTERED_REPLAY_PRODUCER_HASHES）"
+        )
+    if tool != str(current_tool):
+        raise ProductionReceiptError("历史收据的 producer.tool 不是当前受管生成器路径")
+    return tool, tool_sha256
+
+
 def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
     root = _require_private_root(root)
     receipt_path = _resolve_relative(root, receipt_relative)
@@ -560,6 +617,10 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         raise ProductionReceiptError("receipt.producer.facts 缺失")
     facts_path = _require_string(facts, "path", "receipt.producer.facts")
     expected = build_receipt(root, facts_path)
+    # 摘要已登记为只读重放身份时承接旧摘要；其余字段仍须由当前实现从原始事实逐字重建。
+    tool, tool_sha256 = _replay_producer_identity(producer)
+    expected["producer"]["tool"] = tool
+    expected["producer"]["tool_sha256"] = tool_sha256
     if _canonical(expected) != content:
         raise ProductionReceiptError("收据重放结果不一致")
     return receipt

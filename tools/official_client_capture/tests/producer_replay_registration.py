@@ -16,8 +16,9 @@
 
 二、盘点结论：哪些生成器以"文件摘要即身份"且需要按旧身份重放
 ============================================================
-下面四个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
-并且各自带有旧身份登记机制（``PRODUCERS``；第 4 个由修好接着跑第 40 项补上登记机制后纳入）：
+下面五个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
+并且各自带有旧身份登记机制（``PRODUCERS``；第 4、5 个分别由修好接着跑第 40、42 项补上登记机制后
+纳入）：
 
 1. ``codex_upgrade_arm64_environment_receipt.py``（ARM64 环境收据，P0／attempt 等 12 个 phase）：
    写入 ``producer.tool_sha256``；重放时 ``_validated_producer_version`` 要求等于当前摘要，否则必须
@@ -35,10 +36,16 @@
    重放）：写入 ``producer.tool_sha256``；重放时 ``_replay_producer_identity`` 对 v4 收据要求摘要等于
    当前摘要，否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[PRODUCER_SCHEMA]`` 中——**按 producer
    schema 分组的显式摘要集合**；v3 历史收据原样承接旧身份，v1／v2 收据格式已退役。
+5. ``production_activation_receipt.py``（生产激活收据，VC-6 的 production-activation 与
+   rollback-verification 两步先后重放同一份收据，重放时还会连带重放 post-promotion 门禁收据）：写入
+   ``producer.tool_sha256``；重放时 ``_replay_producer_identity`` 对 v2 收据要求摘要等于当前摘要，
+   否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[PRODUCER_SCHEMA]`` 中——同样**按 producer schema
+   分组**；v1 收据格式已退役。
 
-其余写入 producer 摘要的生成器不在本门禁范围，原因见测试模块文档与提交说明（严格等于当前、
-只记录不校验、Campaign 运行时授权链或 Claude 台账钉值等）。``tests`` 中另有自检：任何模块新增
-名字含 ``REPLAY_PRODUCER``／``PRODUCER_*SUCCESSOR`` 的登记常量，都必须先纳入 ``PRODUCERS``。
+覆盖自检有两道（见第五节）：任何模块新增名字含 ``REPLAY_PRODUCER``／``PRODUCER_*SUCCESSOR`` 的
+登记常量，都必须先纳入 ``PRODUCERS``；任何模块只要"计算自身文件摘要、且重放／校验路径上会重新计算
+它"（即要求摘要等于当前），就必须纳入 ``PRODUCERS``，或在 ``STRICT_SELF_DIGEST_WITHOUT_REGISTRY``
+写明不跨工具版本重放的依据。其余只写不校验的生成器（Claude 台账钉值、运行时授权链等）不在范围内。
 
 三、"部署边界"的定义
 ====================
@@ -71,13 +78,31 @@
 通道——即便某个变更集终点确实没部署过，把它登记为只读重放身份也无害（只读重放不允许生成
 新事实）。
 
-本模块只读：不写仓库、不改生成器、不生成收据、不访问网络。第 40 项起它同时覆盖门禁收据生成器
-（其登记机制由同一变更集加入 ``codex_upgrade_gate_receipt.py``），本模块自身仍不改变任何生成器。
+五、覆盖自检：静态发现"要求摘要严格等于当前"的生成器（第 42 项）
+============================================================
+第 36、40、42 项暴露的是同一类遗漏：生成器把自身文件摘要写进收据，重放时又用当前文件摘要重建
+收据逐字比较，却没有旧版本登记。``find_self_digest_producers`` 静态分析
+``tools/official_client_capture``（不含 tests／versions）：函数里对 ``Path(__file__)``（可带 resolve）
+或其本地别名求摘要，即为"计算自身摘要"；函数名含 replay／verify／validate／matches／reconstruct
+或以 check 开头的单词（不含 checkpoint），且能在模块内调用图上到达计算自身摘要的函数，即为"校验
+路径要求等于当前"。
+这类模块必须满足以下二者之一，否则覆盖自检失败：
+
+* 纳入 ``PRODUCERS``（有只读重放登记）；
+* 列入 ``STRICT_SELF_DIGEST_WITHOUT_REGISTRY``，并逐条写明它的收据为什么不会跨工具版本重放。
+
+这是保守的静态近似：静态调用图看不到运行时分支，会把"重放时放宽生成器身份"的模块也算进来，
+这类模块在分类表里说明即可；它也看不到跨模块钉值（例如 Claude 台账钉住别的工具的摘要），
+这类情形不属于本门禁范围。
+
+本模块只读：不写仓库、不改生成器、不生成收据、不访问网络。第 40、42 项起它同时覆盖门禁收据与
+生产激活收据生成器（登记机制由同一变更集分别加入两个生成器），本模块自身仍不改变任何生成器。
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -115,6 +140,7 @@ ENVIRONMENT_RECEIPT_PRODUCER = (
 RECEIPT_FINALIZER_PRODUCER = "tools/official_client_capture/codex_upgrade_receipt_finalizer.py"
 TIMING_LEDGER_PRODUCER = "tools/official_client_capture/codex_upgrade_timing_ledger.py"
 GATE_RECEIPT_PRODUCER = "tools/official_client_capture/codex_upgrade_gate_receipt.py"
+PRODUCTION_ACTIVATION_PRODUCER = "tools/official_client_capture/production_activation_receipt.py"
 
 
 @dataclass(frozen=True)
@@ -161,6 +187,12 @@ PRODUCERS: tuple[ProducerSpec, ...] = (
         registry="REGISTERED_REPLAY_PRODUCER_HASHES",
         judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_replay_producer_identity"),
     ),
+    ProducerSpec(
+        path=PRODUCTION_ACTIVATION_PRODUCER,
+        mechanism=MECHANISM_SCHEMA_KEYED_HASH_SET,
+        registry="REGISTERED_REPLAY_PRODUCER_HASHES",
+        judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_replay_producer_identity"),
+    ),
 )
 
 # 覆盖自检用的登记常量命名规则：模块级常量名命中即视为"带只读重放登记机制的生成器"，
@@ -187,6 +219,8 @@ GATE_BASELINE_CURRENT_SHA256: Mapping[str, str] = {
     TIMING_LEDGER_PRODUCER: "bb799f9e817bb3e30e41c1792ee1c4fe61fc51e96685abadc78605e0218ff564",
     # 第 40 项修改前的门禁收据生成器；第 40 项本身改了该文件，因此它必须登记为只读重放身份。
     GATE_RECEIPT_PRODUCER: "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4d76daf4b16b8e14020",
+    # 第 42 项修改前的生产激活收据生成器；第 42 项本身改了该文件，因此它必须登记为只读重放身份。
+    PRODUCTION_ACTIVATION_PRODUCER: "3b4ddbf874a9164654e8496fb6f2a88fbd50b22557f16b5285f0aa0aca7d1292",
 }
 
 HISTORICAL_EXEMPTIONS: Mapping[str, Mapping[str, str]] = {
@@ -231,6 +265,31 @@ HISTORICAL_EXEMPTIONS: Mapping[str, Mapping[str, str]] = {
             " 2026-09-28 在 ARM64 现场核实没有生成任何收据，因此该版本不可能生成过门禁收据"
         ),
     },
+    PRODUCTION_ACTIVATION_PRODUCER: {
+        # 来源：upstream-merge-framework-v2-source-transition.json 的前序等（51b81c577 版本）。
+        "09fdd6afeaa003ca4f35a7b5281392780ed60bd37e9fad732527c9adc4976202": (
+            "v1 生产激活收据格式（codex-production-activation-producer/v1）已退役：replay 只接受 v2 收据。"
+            "该版本生成的 0.145→0.147 K83 收据（CODEX_CLI_0145_TO_0147_K83_PRODUCTION_ACTIVATION_RECEIPT.json）"
+            "按设计不再重放，对应升级已收口"
+        ),
+    },
+}
+
+# 要求自身摘要等于当前、但有意不设只读重放登记的生成器（第 42 项覆盖自检的分类表）。每条都要写明
+# 它的收据为什么不会跨工具版本重放；新增这类生成器时，默认应加登记并纳入 PRODUCERS，而不是写进这里。
+STRICT_SELF_DIGEST_WITHOUT_REGISTRY: Mapping[str, str] = {
+    "tools/official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py": (
+        "原子演练收据按设计必须由当前工具树重做：pre-A3 认证（_bind_rehearsal_receipt）与发布认证"
+        "都要求其工具身份等于当前树，工具一变就重做演练，不承接旧版本"
+    ),
+    "tools/official_client_capture/codex_upgrade_job_rehearsal_receipt.py": (
+        "静态调用图的保守误报：replay 以 allow_collector_drift=True 调用 validate_facts，承接 facts 中"
+        "记录的生成器身份，不要求等于当前摘要"
+    ),
+    "tools/official_client_capture/codex_upgrade_official_asset_receipt.py": (
+        "官方 Release 下载前生成并立即离线重放，生成与重放在同一工具版本内完成；仓库内没有跨工具"
+        "版本重放它的调用方"
+    ),
 }
 
 
@@ -698,6 +757,170 @@ def _memoize_successor_edges(module: ModuleType) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 覆盖自检：静态发现"自身文件摘要即身份、且校验路径要求等于当前"的生成器（第 42 项）
+# ---------------------------------------------------------------------------
+
+# 校验入口的函数名特征；check 只认作单词开头（排除 checkpoint 之类的名词）。
+VERIFICATION_FUNCTION_RE = re.compile(
+    r"replay|verify|validate|matches|reconstruct|(?:^|_)check(?!point)", re.IGNORECASE
+)
+DIGEST_CALL_RE = re.compile(r"sha256|digest", re.IGNORECASE)
+TOOL_RELATIVE_ROOT = "tools/official_client_capture"
+
+
+@dataclass(frozen=True)
+class SelfDigestFinding:
+    """一个计算自身文件摘要的模块：哪些函数计算它，哪些校验入口会在调用图上到达这些函数。"""
+
+    digest_functions: tuple[str, ...]
+    verification_functions: tuple[str, ...]
+
+    @property
+    def strict(self) -> bool:
+        """校验路径上会重新计算自身摘要，即重放／校验要求摘要等于当前文件。"""
+
+        return bool(self.verification_functions)
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _is_self_path(node: ast.AST, aliases: set[str]) -> bool:
+    """``Path(__file__)``、``pathlib.Path(__file__)``、其 ``.resolve(...)``／``.absolute()``，或已知别名。
+
+    ``.with_name``／``.parent`` 等指向别的文件，不算本文件。
+    """
+
+    if isinstance(node, ast.Name):
+        return node.id in aliases
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr in {"resolve", "absolute"}:
+        return _is_self_path(func.value, aliases)
+    is_path_constructor = (isinstance(func, ast.Name) and func.id == "Path") or (
+        isinstance(func, ast.Attribute) and func.attr == "Path"
+    )
+    return (
+        is_path_constructor
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "__file__"
+    )
+
+
+def _digests_self(node: ast.AST, aliases: set[str]) -> bool:
+    """node 是否是对本文件求摘要的调用：摘要函数的参数是本文件路径，或本文件的 ``read_bytes()``。"""
+
+    if not isinstance(node, ast.Call) or not DIGEST_CALL_RE.search(_call_name(node)):
+        return False
+    for argument in node.args:
+        if _is_self_path(argument, aliases):
+            return True
+        if (
+            isinstance(argument, ast.Call)
+            and _call_name(argument) == "read_bytes"
+            and isinstance(argument.func, ast.Attribute)
+            and _is_self_path(argument.func.value, aliases)
+        ):
+            return True
+    return False
+
+
+def analyze_self_digest_source(source: bytes | str) -> SelfDigestFinding | None:
+    """静态分析一个模块的源码；不计算自身摘要时返回 None。"""
+
+    tree = ast.parse(source)
+    module_aliases = {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign) and _is_self_path(node.value, set())
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    digest_functions: set[str] = set()
+    calls: dict[str, set[str]] = {}
+    for name, function in functions.items():
+        aliases = set(module_aliases)
+        for node in ast.walk(function):
+            if isinstance(node, ast.Assign) and _is_self_path(node.value, aliases):
+                aliases.update(target.id for target in node.targets if isinstance(target, ast.Name))
+        if any(_digests_self(node, aliases) for node in ast.walk(function)):
+            digest_functions.add(name)
+        calls[name] = {
+            _call_name(node)
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+    if not digest_functions:
+        return None
+
+    def reaches_digest(start: str) -> bool:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in digest_functions:
+                return True
+            stack.extend(name for name in calls.get(current, ()) if name in functions)
+        return False
+
+    verification_functions = sorted(
+        name for name in functions if VERIFICATION_FUNCTION_RE.search(name) and reaches_digest(name)
+    )
+    return SelfDigestFinding(tuple(sorted(digest_functions)), tuple(verification_functions))
+
+
+def find_self_digest_producers(repository_root: Path) -> dict[str, SelfDigestFinding]:
+    """扫描 tools/official_client_capture（不含 tests／versions）中计算自身文件摘要的模块。"""
+
+    tool_root = Path(repository_root) / TOOL_RELATIVE_ROOT
+    findings: dict[str, SelfDigestFinding] = {}
+    for path in sorted(tool_root.rglob("*.py")):
+        relative = path.relative_to(tool_root)
+        if {"tests", "versions", "__pycache__"} & set(relative.parts):
+            continue
+        source = path.read_bytes()
+        if b"__file__" not in source:
+            continue
+        finding = analyze_self_digest_source(source)
+        if finding is not None:
+            findings[f"{TOOL_RELATIVE_ROOT}/{relative.as_posix()}"] = finding
+    return findings
+
+
+def unclassified_strict_producers(
+    findings: Mapping[str, SelfDigestFinding],
+    *,
+    producers: Sequence[ProducerSpec] | None = None,
+    allowed: Mapping[str, str] | None = None,
+) -> dict[str, SelfDigestFinding]:
+    """要求摘要等于当前、却既不在 PRODUCERS 也不在分类表里的生成器（覆盖自检的失败对象）。"""
+
+    covered = {spec.path for spec in (PRODUCERS if producers is None else producers)}
+    allowed = STRICT_SELF_DIGEST_WITHOUT_REGISTRY if allowed is None else allowed
+    return {
+        path: finding
+        for path, finding in findings.items()
+        if finding.strict and path not in covered and path not in allowed
+    }
+
+
+# ---------------------------------------------------------------------------
 # 门禁主流程
 # ---------------------------------------------------------------------------
 
@@ -854,7 +1077,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{Path(path).name}：当前 {report.current[path][:12]}…，部署边界 {len(boundaries)} 个")
     for commit, receipts in sorted(report.unreachable_commits.items()):
         print(f"信息：收据引用的提交 {commit[:12]} 不在本地对象库（只跳过其前后提交边界）：{'、'.join(receipts)}")
-    return 0 if report.passed else 1
+    unclassified = unclassified_strict_producers(find_self_digest_producers(arguments.tree_root))
+    for path, finding in sorted(unclassified.items()):
+        print(
+            f"覆盖自检失败：{path} 要求自身摘要等于当前（校验入口 {'、'.join(finding.verification_functions)}），"
+            "却既没有只读重放登记，也没有写明不跨工具版本重放的依据"
+        )
+    return 0 if report.passed and not unclassified else 1
 
 
 if __name__ == "__main__":

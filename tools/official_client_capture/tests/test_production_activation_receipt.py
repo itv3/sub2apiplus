@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import re
+import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -441,6 +445,153 @@ class ProductionActivationReceiptTests(unittest.TestCase):
         self._write("stages/canary.json", {"stage": "canary", "ok": False})
         with self.assertRaisesRegex(receipt.ProductionReceiptError, "摘要不一致"):
             receipt.replay(self.root, "receipt.json")
+
+    # ------------------------------------------------------------------
+    # 修好接着跑第 42 项：VC-6 的 production-activation 与 rollback-verification 两步先后重放同一份
+    # 激活收据。两步之间修好生成器后，修改前版本生成的收据按已登记的旧摘要只读重放。这些用例把
+    # 当前生成器逐字复制到临时受管坐标（证据根之外）生成收据，再真实改动副本字节后重放——生成器
+    # 身份就是文件摘要，必须真改文件。
+    # ------------------------------------------------------------------
+
+    GENERATOR_RELATIVE = "tools/official_client_capture/production_activation_receipt.py"
+
+    def _generator_copy(self) -> Path:
+        """把当前生成器逐字复制到一个新的临时受管坐标（证据根之外），返回副本路径。"""
+
+        holder = tempfile.TemporaryDirectory(prefix="activation-receipt-generator-")
+        self.addCleanup(holder.cleanup)
+        path = Path(holder.name) / self.GENERATOR_RELATIVE
+        path.parent.mkdir(parents=True)
+        path.write_bytes(Path(receipt.__file__).resolve().read_bytes())
+        return path
+
+    @staticmethod
+    def _load_generator(path: Path):
+        """以包内模块名加载副本，使其内部的包内导入照常解析；加载后从 sys.modules 移除。"""
+
+        name = f"tools.official_client_capture._activation_receipt_copy_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(name, None)
+        return module
+
+    @staticmethod
+    def _edit_generator(path: Path, *, register: str | None) -> str:
+        """改动副本字节；register 给出时把该摘要登记进 v2 只读重放分组。返回改后摘要。"""
+
+        text = path.read_text(encoding="utf-8")
+        if register is not None:
+            markers = list(re.finditer(r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", text))
+            assert len(markers) == 1, "生成器登记格式变化，测试夹具需要同步更新"
+            end = markers[0].end()
+            text = text[:end] + f'"{register}",\n            ' + text[end:]
+        text += "\n# 测试：修好生成器（字节变化）。\n"
+        path.write_text(text, encoding="utf-8")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _historical_receipt(self, generator: Path, output: str = "receipt.json") -> dict[str, object]:
+        """用修改前的副本生成一份 v2 生产激活收据（相当于 VC-6 production-activation 已登记的收据）。"""
+
+        before = self._load_generator(generator)
+        historical = before.finalize(self.root, "facts.json", output)
+        self.assertEqual(
+            historical["producer"]["tool_sha256"],
+            hashlib.sha256(generator.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(historical["producer"]["tool"], str(generator.resolve()))
+        self.assertEqual(before.replay(self.root, output), historical)
+        return historical
+
+    def test_registry_is_keyed_by_current_v2_producer_schema(self) -> None:
+        self.assertEqual(set(receipt.REGISTERED_REPLAY_PRODUCER_HASHES), {receipt.PRODUCER_SCHEMA})
+        for digest in receipt.REGISTERED_REPLAY_PRODUCER_HASHES[receipt.PRODUCER_SCHEMA]:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        current = hashlib.sha256(Path(receipt.__file__).resolve().read_bytes()).hexdigest()
+        self.assertNotIn(current, receipt.REGISTERED_REPLAY_PRODUCER_HASHES[receipt.PRODUCER_SCHEMA])
+
+    def test_edited_generator_replays_registered_historical_receipt(self) -> None:
+        # 相当于 rollback-verification：修好生成器并登记修改前摘要后，同一份激活收据照常重放。
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator)
+        old_digest = str(historical["producer"]["tool_sha256"])
+        new_digest = self._edit_generator(generator, register=old_digest)
+        self.assertNotEqual(new_digest, old_digest)
+        after = self._load_generator(generator)
+        self.assertEqual(after.replay(self.root, "receipt.json"), historical)
+
+    def test_edited_generator_without_registration_fails_closed(self) -> None:
+        generator = self._generator_copy()
+        self._historical_receipt(generator)
+        self._edit_generator(generator, register=None)
+        after = self._load_generator(generator)
+        with self.assertRaisesRegex(after.ProductionReceiptError, "未登记为只读重放身份"):
+            after.replay(self.root, "receipt.json")
+
+    def test_registered_digest_only_replays_and_never_generates(self) -> None:
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator, "old-receipt.json")
+        new_digest = self._edit_generator(
+            generator, register=str(historical["producer"]["tool_sha256"])
+        )
+        after = self._load_generator(generator)
+        fresh = after.finalize(self.root, "facts.json", "new-receipt.json")
+        # 新收据只写当前生成器的路径与摘要；除摘要外与修改前生成的收据逐字相同。
+        self.assertEqual(fresh["producer"]["tool_sha256"], new_digest)
+        self.assertEqual(fresh["producer"]["tool"], str(generator.resolve()))
+
+        def without_digest(value: dict[str, object]) -> dict[str, object]:
+            return {**value, "producer": {**value["producer"], "tool_sha256": None}}
+
+        self.assertEqual(without_digest(fresh), without_digest(historical))
+        self.assertEqual(after.replay(self.root, "new-receipt.json"), fresh)
+        self.assertEqual(after.replay(self.root, "old-receipt.json"), historical)
+
+    def test_current_digest_receipt_still_requires_same_generator_path(self) -> None:
+        # 既有行为不变：摘要等于当前生成器的收据，路径不同仍在逐字比较处失败。
+        generator = self._generator_copy()
+        self._historical_receipt(generator)
+        elsewhere = self._generator_copy()
+        relocated = self._load_generator(elsewhere)
+        with self.assertRaisesRegex(relocated.ProductionReceiptError, "收据重放结果不一致"):
+            relocated.replay(self.root, "receipt.json")
+
+    def test_registered_digest_does_not_relax_generator_path(self) -> None:
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator)
+        elsewhere = self._generator_copy()
+        self._edit_generator(elsewhere, register=str(historical["producer"]["tool_sha256"]))
+        relocated = self._load_generator(elsewhere)
+        with self.assertRaisesRegex(relocated.ProductionReceiptError, "不是当前受管生成器路径"):
+            relocated.replay(self.root, "receipt.json")
+
+    def test_registered_digest_still_requires_identical_rebuild(self) -> None:
+        # 登记只承接摘要：收据其余字段被改动时，仍在逐字比较处失败。
+        generator = self._generator_copy()
+        historical = self._historical_receipt(generator)
+        self._edit_generator(generator, register=str(historical["producer"]["tool_sha256"]))
+        tampered = json.loads((self.root / "receipt.json").read_text(encoding="utf-8"))
+        tampered["completed_at_utc"] = "2099-01-01T00:00:00Z"
+        (self.root / "receipt.json").write_bytes(receipt._canonical(tampered))
+        after = self._load_generator(generator)
+        with self.assertRaisesRegex(after.ProductionReceiptError, "收据重放结果不一致"):
+            after.replay(self.root, "receipt.json")
+
+    def test_retired_and_unknown_producer_schemas_are_rejected(self) -> None:
+        current = str(Path(receipt.__file__).resolve())
+        for schema in (
+            "codex-production-activation-producer/v1",
+            "codex-production-activation-producer/v3",
+        ):
+            with self.subTest(schema=schema):
+                with self.assertRaisesRegex(receipt.ProductionReceiptError, "不受支持"):
+                    receipt._replay_producer_identity(
+                        {"schema_version": schema, "tool": current, "tool_sha256": "a" * 64}
+                    )
 
 
 if __name__ == "__main__":

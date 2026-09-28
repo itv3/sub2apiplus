@@ -2,9 +2,13 @@
 
 门禁的定义与实现见 ``producer_replay_registration``（同目录只读辅助模块）。本模块验证四件事：
 
-1. 当前工作树：四个生成器（第 40 项起含门禁收据生成器）在全部部署边界处的旧摘要都已登记为
-   只读重放身份，或属于门禁基线前已审计的历史豁免；豁免表恰好等于"不带豁免时的违规集合"（没有
-   多余、没有遗漏）且全部来自基线前的收据；任何模块新增只读重放登记常量都必须先纳入覆盖清单。
+1. 当前工作树：五个生成器（第 40、42 项起含门禁收据与生产激活收据生成器）在全部部署边界处的旧
+   摘要都已登记为只读重放身份，或属于门禁基线前已审计的历史豁免；豁免表恰好等于"不带豁免时的违规
+   集合"（没有多余、没有遗漏）且全部来自基线前的收据；仓库内入库的门禁收据与生产激活收据，其生成器
+   摘要都能被当前生成器承接；任何模块新增只读重放登记常量都必须先纳入覆盖清单。
+1b. 覆盖自检（第 42 项）：静态发现"计算自身摘要、且校验路径要求等于当前"的生成器，每个都必须
+   纳入覆盖清单或在分类表写明不跨工具版本重放的依据；只按门禁引入时的覆盖清单判定，当前树恰好
+   报出第 40、42 项补登记的两个生成器。
 2. 事故形态（只读导出真实历史，不改历史）：4cf336fbf（第 36 项提交）与 3cf1a543f（第 36 项承接
    收据已登记）都必须失败，且恰好指出 9e10bd0f… 要登记到 ``REGISTERED_REPLAY_PRODUCER_HASHES["8"]``；
    补登记后的 f9727c765、b2c088d99 与事故前的 5d218b931 都必须通过（历史已处理的版本不误报）。
@@ -35,6 +39,8 @@ from pathlib import Path
 from typing import Iterable, Mapping
 from unittest import mock
 
+from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt_module
+from tools.official_client_capture import production_activation_receipt as activation_receipt
 from tools.official_client_capture.tests import producer_replay_registration as gate
 
 
@@ -62,6 +68,13 @@ GATE_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.GATE_RECEI
 GATE_RECEIPT_PRE_ITEM40_DIGEST = "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4d76daf4b16b8e14020"
 GATE_RECEIPT_0154_DIGEST = "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552"
 GATE_RECEIPT_V4_SCHEMA = "codex-upgrade-external-gate-producer/v4"
+ACTIVATION_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.PRODUCTION_ACTIVATION_PRODUCER)
+# 第 42 项修改前的生产激活收据生成器摘要（ef262c618 起部署），以及生成过 R34 收据的 0.149.1 期间版本。
+ACTIVATION_PRE_ITEM42_DIGEST = "3b4ddbf874a9164654e8496fb6f2a88fbd50b22557f16b5285f0aa0aca7d1292"
+ACTIVATION_R34_DIGEST = "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382"
+ACTIVATION_V2_SCHEMA = "codex-production-activation-producer/v2"
+# 本分支的起点提交（第 40、42 项之前），用于证明覆盖自检能发现当时缺登记的两个生成器。
+BRANCH_BASE_COMMIT = "b6a62b71418358d0eb992326732389063f369e20"
 
 # 合成临时仓库的写操作（init／commit／clone）专用的 git 隔离：不读用户全局／系统配置（签名、钩子、
 # 默认分支）。只读真实仓库时不隔离，以保留 CI 检出写入全局配置的 safe.directory 等设置。
@@ -297,6 +310,60 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
         self.assertIn(GATE_RECEIPT_PRE_ITEM40_DIGEST, schemas)
         self.assertIn(GATE_RECEIPT_0154_DIGEST, schemas)
 
+    def test_activation_receipt_boundaries_follow_producer_schema(self) -> None:
+        boundaries = self.report.boundaries[gate.PRODUCTION_ACTIVATION_PRODUCER]
+        current = self.report.current[gate.PRODUCTION_ACTIVATION_PRODUCER]
+        registered = activation_receipt.REGISTERED_REPLAY_PRODUCER_HASHES[activation_receipt.PRODUCER_SCHEMA]
+        unexempted = {item.boundary_sha256: item for item in self.unexempted.violations}
+        for digest, boundary in boundaries.items():
+            if digest == current:
+                continue
+            schema = gate.historical_producer_constants(boundary.content)[0]
+            with self.subTest(digest=digest[:12], schema=schema):
+                if schema == ACTIVATION_V2_SCHEMA:
+                    # v2 部署边界全部登记为只读重放身份（无需豁免）。
+                    self.assertIn(digest, registered)
+                    self.assertNotIn(digest, unexempted)
+                else:
+                    # v1 收据格式已退役：登记无效，只能靠门禁基线前的历史豁免。
+                    self.assertIn(digest, unexempted)
+                    self.assertFalse(unexempted[digest].registrable)
+                    self.assertIn(digest, gate.HISTORICAL_EXEMPTIONS[gate.PRODUCTION_ACTIVATION_PRODUCER])
+        self.assertIn(ACTIVATION_PRE_ITEM42_DIGEST, boundaries)
+        self.assertIn(ACTIVATION_R34_DIGEST, boundaries)
+
+    def test_committed_receipts_have_replayable_producer_identities(self) -> None:
+        # 仓库内入库的门禁收据与生产激活收据：生成它们的摘要都必须能被当前生成器按原格式承接。
+        expectations = {
+            "codex-upgrade-external-gate-receipt/v4": gate_receipt_module,
+            "codex-production-activation-receipt/v2": activation_receipt,
+        }
+        checked = []
+        for path in sorted((REPOSITORY_ROOT / gate.MAINTENANCE_RELATIVE).glob("*.json")):
+            payload = json.loads(path.read_bytes())
+            module = expectations.get(payload.get("schema_version")) if isinstance(payload, dict) else None
+            if module is None:
+                continue
+            producer = payload["producer"]
+            current = _sha256(Path(module.__file__).resolve().read_bytes())
+            registered = module.REGISTERED_REPLAY_PRODUCER_HASHES[module.PRODUCER_SCHEMA]
+            with self.subTest(receipt=path.name):
+                self.assertEqual(producer["schema_version"], module.PRODUCER_SCHEMA)
+                self.assertTrue(
+                    producer["tool_sha256"] == current or producer["tool_sha256"] in registered,
+                    f"{path.name} 的生成器摘要 {producer['tool_sha256']} 未登记为只读重放身份",
+                )
+            checked.append(path.name)
+        self.assertEqual(
+            sorted(checked),
+            [
+                "CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json",
+                "CODEX_CLI_01491_TO_0151_PRODUCTION_ACTIVATION_RECEIPT.json",
+                "CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json",
+                "CODEX_CLI_0151_TO_0154_PRODUCTION_ACTIVATION_RECEIPT.json",
+            ],
+        )
+
     def test_every_replay_registry_constant_is_covered(self) -> None:
         # 任何模块新增只读重放登记常量，都必须先纳入门禁覆盖清单。
         covered = {spec.path for spec in gate.PRODUCERS}
@@ -415,14 +482,16 @@ class Item36IncidentShapeTest(unittest.TestCase):
         self.assertEqual(report.current[gate.ENVIRONMENT_RECEIPT_PRODUCER], ITEM36_MISSING_DIGEST)
 
     def test_generators_without_registry_in_historical_shapes_are_skipped(self) -> None:
-        # 第 40 项之前门禁收据生成器还没有登记机制：历史形态上如实跳过，不影响其它生成器的判定。
+        # 第 40、42 项之前门禁收据与生产激活收据生成器还没有登记机制：历史形态上如实跳过，
+        # 不影响其它生成器的判定。
         for commit, report in self.reports.items():
             with self.subTest(commit=commit[:9]):
                 self.assertEqual(
                     [spec.path for spec, _ in report.skipped],
-                    [gate.GATE_RECEIPT_PRODUCER],
+                    [gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER],
                 )
-                self.assertIn("尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES", report.skipped[0][1])
+                for _, reason in report.skipped:
+                    self.assertIn("尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES", reason)
 
 
 # ---------------------------------------------------------------------------
@@ -655,15 +724,24 @@ class RegistrationMutationTest(unittest.TestCase):
 
     # --- 门禁收据（按 producer schema 分组的显式摘要集合，第 40 项纳入） ---
 
-    def _assert_single_gate_violation(self, report: gate.GateReport, digest: str) -> None:
-        self.assertEqual({(GATE_SPEC.path, digest)}, _violation_digests(report), gate.format_report(report))
+    def _assert_single_schema_keyed_violation(
+        self,
+        report: gate.GateReport,
+        spec: gate.ProducerSpec,
+        schema: str,
+        digest: str,
+    ) -> None:
+        self.assertEqual({(spec.path, digest)}, _violation_digests(report), gate.format_report(report))
         violation = report.violations[0]
-        self.assertEqual(violation.registry_key, GATE_RECEIPT_V4_SCHEMA)
+        self.assertEqual(violation.registry_key, schema)
         self.assertTrue(violation.registrable)
         self.assertIn("未登记为只读重放身份", violation.detail)
         message = gate.format_report(report)
-        self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{GATE_RECEIPT_V4_SCHEMA}"]', message)
-        self.assertIn("codex_upgrade_gate_receipt.py", message)
+        self.assertIn(f'REGISTERED_REPLAY_PRODUCER_HASHES["{schema}"]', message)
+        self.assertIn(Path(spec.path).name, message)
+
+    def _assert_single_gate_violation(self, report: gate.GateReport, digest: str) -> None:
+        self._assert_single_schema_keyed_violation(report, GATE_SPEC, GATE_RECEIPT_V4_SCHEMA, digest)
 
     def test_gate_receipt_item40_edit_without_registering_pre_edit_digest_fails(self) -> None:
         # 第 40 项自身的事故形态：改了门禁收据生成器，却没把修改前的 034331e5 登记为只读重放身份。
@@ -700,10 +778,154 @@ class RegistrationMutationTest(unittest.TestCase):
         report = self._check(GATE_SPEC)
         self.assertTrue(report.passed, gate.format_report(report))
 
+    # --- 生产激活收据（按 producer schema 分组的显式摘要集合，第 42 项纳入） ---
+
+    def _assert_single_activation_violation(self, report: gate.GateReport, digest: str) -> None:
+        self._assert_single_schema_keyed_violation(report, ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, digest)
+
+    def test_activation_item42_edit_without_registering_pre_edit_digest_fails(self) -> None:
+        # 第 42 项自身的事故形态：改了生产激活收据生成器，却没把修改前的 3b4ddbf8 登记为只读重放身份。
+        self._mutate(
+            ACTIVATION_SPEC, lambda text: _replace_once(text, f'"{ACTIVATION_PRE_ITEM42_DIGEST}",', "")
+        )
+        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), ACTIVATION_PRE_ITEM42_DIGEST)
+
+    def test_activation_dropping_r34_registration_fails(self) -> None:
+        self._mutate(ACTIVATION_SPEC, lambda text: _replace_once(text, f'"{ACTIVATION_R34_DIGEST}",', ""))
+        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), ACTIVATION_R34_DIGEST)
+
+    def test_activation_next_edit_must_register_current_digest(self) -> None:
+        # 模拟第 42 项的承接收据已生成（当前摘要成为部署边界）之后，再次修改生成器。
+        head = self.baseline.current[ACTIVATION_SPEC.path]
+        self._write_probe_receipt(ACTIVATION_PRE_ITEM42_DIGEST, head, ACTIVATION_SPEC.path)
+        self._mutate(ACTIVATION_SPEC, lambda text: text + "\n# 反证：再次修改生产激活收据生成器。\n")
+        self._assert_single_activation_violation(self._check(ACTIVATION_SPEC), head)
+        self._mutate(
+            ACTIVATION_SPEC,
+            lambda text: _insert_into_group(text, r"PRODUCER_SCHEMA: frozenset\(\s*\{\s*", head),
+        )
+        report = self._check(ACTIVATION_SPEC)
+        self.assertTrue(report.passed, gate.format_report(report))
+
 
 # ---------------------------------------------------------------------------
-# 4. 合成临时 git 仓库：部署边界定义的细节
+# 3b. 覆盖自检：静态发现"要求摘要严格等于当前、却没有登记常量"的生成器（第 42 项）
 # ---------------------------------------------------------------------------
+
+
+STRICT_WITH_REPLAY_SOURCE = '''
+import hashlib
+from pathlib import Path
+
+
+def _sha256_file(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_receipt(facts):
+    tool = Path(__file__).resolve()
+    return {"facts": facts, "producer": {"tool": str(tool), "tool_sha256": _sha256_file(tool)}}
+
+
+def replay(receipt):
+    if build_receipt(receipt["facts"]) != receipt:
+        raise ValueError("重放结果不一致")
+    return receipt
+'''
+
+WRITE_ONLY_SOURCE = '''
+import hashlib
+from pathlib import Path
+
+SELF = Path(__file__)
+
+
+def generate():
+    return {"sha256": hashlib.sha256(SELF.read_bytes()).hexdigest()}
+
+
+def checkpoint():
+    return generate()
+'''
+
+SIBLING_DIGEST_SOURCE = '''
+import hashlib
+from pathlib import Path
+
+
+def verify_sibling():
+    other = Path(__file__).resolve().with_name("other_tool.py")
+    return hashlib.sha256(other.read_bytes()).hexdigest()
+'''
+
+
+class SelfDigestCoverageTest(unittest.TestCase):
+    """覆盖自检必须能发现"计算自身摘要且校验路径要求等于当前"的生成器，并要求逐个归类。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.findings = gate.find_self_digest_producers(REPOSITORY_ROOT)
+
+    def test_every_strict_self_digest_producer_is_classified(self) -> None:
+        unclassified = gate.unclassified_strict_producers(self.findings)
+        self.assertEqual(
+            {},
+            unclassified,
+            "以下生成器要求自身摘要等于当前，却既没有只读重放登记，也没有写明不跨工具版本重放的依据："
+            + "；".join(
+                f"{path}（校验入口 {'、'.join(finding.verification_functions)}）"
+                for path, finding in sorted(unclassified.items())
+            )
+            + "。收据会跨工具版本重放时，加只读重放登记并纳入 PRODUCERS；否则写进 STRICT_SELF_DIGEST_WITHOUT_REGISTRY。",
+        )
+        strict = {path for path, finding in self.findings.items() if finding.strict}
+        covered = {spec.path for spec in gate.PRODUCERS}
+        allowed = set(gate.STRICT_SELF_DIGEST_WITHOUT_REGISTRY)
+        self.assertEqual(set(), covered & allowed, "同一生成器不能既登记又声明不跨版本重放")
+        self.assertEqual(set(), allowed - strict, "分类表中的条目已不再要求自身摘要等于当前，应删除")
+        self.assertEqual(set(), covered - strict, "覆盖清单中的生成器未被识别为要求自身摘要等于当前，检测规则需复核")
+        for path, reason in gate.STRICT_SELF_DIGEST_WITHOUT_REGISTRY.items():
+            self.assertTrue(reason.strip(), f"{path} 缺少不跨版本重放的依据")
+
+    def test_self_check_would_have_caught_items_40_and_42(self) -> None:
+        # 只按门禁引入时的覆盖清单（前三个生成器）判定，当前树中未归类的恰好是第 40、42 项补登记的两个。
+        original = [
+            spec
+            for spec in gate.PRODUCERS
+            if spec.path not in {gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER}
+        ]
+        self.assertEqual(
+            {gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER},
+            set(gate.unclassified_strict_producers(self.findings, producers=original)),
+        )
+
+    def test_pre_fix_generators_are_strict_without_registry(self) -> None:
+        # 分支起点（第 40、42 项之前）的两个生成器：要求自身摘要等于当前，且没有任何登记常量。
+        _require_full_history()
+        for path in (gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER):
+            with self.subTest(path=path):
+                source = _git(REPOSITORY_ROOT, "cat-file", "blob", f"{BRANCH_BASE_COMMIT}:{path}")
+                finding = gate.analyze_self_digest_source(source)
+                self.assertIsNotNone(finding)
+                self.assertTrue(finding.strict)
+                self.assertIn("replay", finding.verification_functions)
+                registry_constants = [
+                    name
+                    for name in MODULE_CONSTANT_RE.findall(source.decode("utf-8"))
+                    if gate.REGISTRY_CONSTANT_PATTERN.search(name)
+                ]
+                self.assertEqual([], registry_constants)
+
+    def test_detector_on_synthetic_sources(self) -> None:
+        strict = gate.analyze_self_digest_source(STRICT_WITH_REPLAY_SOURCE)
+        self.assertEqual(strict.digest_functions, ("build_receipt",))
+        self.assertEqual(strict.verification_functions, ("replay",))
+        # 只写不校验（checkpoint 不是校验入口）：计算自身摘要但不要求等于当前。
+        write_only = gate.analyze_self_digest_source(WRITE_ONLY_SOURCE)
+        self.assertEqual(write_only.digest_functions, ("generate",))
+        self.assertFalse(write_only.strict)
+        # 求的是同目录其它文件的摘要，不是自身摘要。
+        self.assertIsNone(gate.analyze_self_digest_source(SIBLING_DIGEST_SOURCE))
 
 SYNTHETIC_PRODUCER = f"{TOOL_RELATIVE}/synthetic_replay_producer.py"
 SYNTHETIC_SPEC = gate.ProducerSpec(
