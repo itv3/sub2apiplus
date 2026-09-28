@@ -3408,12 +3408,6 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
   启动前先调 stop 脚本清残留（命令行核对不过即拒绝启动），先置位再启动；启动脚本报错时核对真实状态（PID 存活、命令行、本 run
   元数据、18081 由该 PID 监听），全满足才继续，否则失败交清理区停掉。两个脚本属 wire_producer、只有候选作业依赖；修好后登记
   工具演进，按恢复预览重采受影响的候选作业。
-- **作业前失败带承接复用（第 65 项）**：恢复 attempt 开始时先把承接复用的作业写入结果与 checkpoint，随后在首个作业之前
-  失败（如 ARM64 before 收据的 TLS 就绪探针网络瞬态），原判定因结果非空不认作业前失败，改走完整环境绑定校验（缺 before
-  探针绑定），resume 与批准前复用复算都接不上，“before 探针都没取到的恢复错误照常续跑”的路径实际走不通；这不是环境污染，
-  `environment-isolate` 也会拒绝。现在只有承接复用、没有任何作业执行、心跳停在 `attempt:reserved` 或作业前的 `arm64:`
-  环境探针时，按作业前失败处理：承接记录逐项核对（结果、计划 reused、checkpoint、证据根），pending 与执行闭集都是全部冻结
-  作业（承接作业一并重跑、不复用）；不带承接时判定与环境边界摘要逐字不变。
 - **批准画像 selector 修正**：`evaluation-recover approval-revision --assertion-profile`（§4.5.5）开 approval-revision 基线
   零请求重评，候选 revision 不变。
 - **候选阶段零请求后处理动作失败**：进 `recovery_required`，修好工具后重派，不再进候选待审；批次中途评估器漂移
