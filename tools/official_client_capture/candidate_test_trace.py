@@ -93,8 +93,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # Executor 仍按原签名复制）；映射只重绑该源码快照，不改变测试、事实或规则语义。
 # TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅条件头按设计
 # 跳过，改动前后一致；candidate_test_trace 单测 13 项通过。
+# 2026-09-29（问题四 M1 第二项）：Finalizer 在正文索引上解码时无转义长字符串直接引用正文、索引与拼接编码共用，
+# 改动 `official_egress_openai_http.go`；映射只重绑该源码快照，不改变测试、事实或规则语义。
+# TestCandidateTraceCodex0145LiteAndPrefixFacts、TurnStateFacts、CompactionDecisions 已重跑通过；
+# GuardianReviewConditionalHeader 与 TurnMetadataSerialization 因 previous 槽位画像未声明对应行为按设计跳过，
+# 改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "409778dcc0c0af7914867295dc8af0ce00a45d3ce916f2eac9b6675784d99180"
+    "b74ec30603d75a689e54514778f9974461a5b0e46db2659cf2f8af711bd75f3c"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"unsafe"
 )
 
 // 本文件把 UseNumber 语义的 JSON 解码改为“索引直建对象树”（docs/bug.md 6.4 第 3 点）。
@@ -112,4 +113,67 @@ func decodeOfficialJSONValueUseNumber(body []byte) (any, error) {
 		return decodeOfficialJSONValueUseNumberSlow(body)
 	}
 	return index.decodeValue(index.root), nil
+}
+
+// ---------------------------------------------------------------------------
+// 引用正文字节的解码（问题四 M1 第二项）
+// ---------------------------------------------------------------------------
+//
+// 官方出站 Finalizer 每个 attempt 都要把终态修正前的正文整段解码成对象树，再按画像改写
+// 顶层字段并拼接编码。树里的长字符串（加密推理内容、工具输出、消息文本）绝大多数原样
+// 写回，却在解码时被从正文完整复制一遍，约等于再占一份正文。
+//
+// 这里仍在正文索引上按原结构新建对象与数组（Finalizer 会就地改写它们），但无转义且足够
+// 长的字符串不再复制，直接以只读视图引用正文字节。前提与 openai_json_rawview.go 的零拷贝
+// 视图相同：官方出站链上的请求正文一经产出即只读，视图只能在正文存活期间使用，不得保存到
+// 请求之外。短字符串（类型、角色、ID、模型名等可能被登记或缓存的小值）与含转义的字符串
+// 照常复制，因此不会出现一个小字符串把整段正文钉在内存里的情况。
+
+// officialJSONSharedStringMinBytes 是按视图引用正文的字符串最小字节数。
+const officialJSONSharedStringMinBytes = 1024
+
+// decodeOfficialJSONObjectSharingBody 与 decodeOfficialJSONObjectUseNumber 的结果逐项相等，
+// 并返回建好的完整正文索引供拼接编码复用；长字符串以只读视图引用 body，调用方只能在
+// body 存活且不被改写的期间使用返回的对象树，且不得把其中的值保存到本次请求之外。索引
+// 构建失败或顶层不是对象时走 encoding/json 路径，错误值与原实现一致，此时不返回索引。
+func decodeOfficialJSONObjectSharingBody(body []byte) (map[string]any, *officialJSONRawIndex, error) {
+	index, err := buildOfficialJSONRawIndex(body)
+	if err != nil || index.nodes[index.root].kind != officialJSONRawKindObject {
+		payload, slowErr := decodeOfficialJSONObjectUseNumberSlow(body)
+		return payload, nil, slowErr
+	}
+	object, ok := index.decodeValueSharingBody(index.root).(map[string]any)
+	if !ok {
+		object = map[string]any{}
+	}
+	return object, index, nil
+}
+
+// decodeValueSharingBody 构建与 decodeValue(node) 逐项相等的值，只把无转义的长字符串换成
+// 引用正文的只读视图。
+func (index *officialJSONRawIndex) decodeValueSharingBody(node int32) any {
+	n := &index.nodes[node]
+	switch n.kind {
+	case officialJSONRawKindObject:
+		object := make(map[string]any, len(n.members))
+		for _, member := range n.members {
+			// 成员按原始顺序写入：同名键自然取最后一次出现，与 decodeValue 一致。
+			object[member.key] = index.decodeValueSharingBody(member.node)
+		}
+		return object
+	case officialJSONRawKindArray:
+		items := make([]any, len(n.items))
+		for i, item := range n.items {
+			items[i] = index.decodeValueSharingBody(item)
+		}
+		return items
+	case officialJSONRawKindString:
+		// 快速路径的字符串无转义且是合法 UTF-8，decodeString 返回的正是这段原文的副本。
+		if length := n.end - n.start - 2; !n.slowPath && length >= officialJSONSharedStringMinBytes {
+			return unsafe.String(&index.body[n.start+1], length)
+		}
+		return index.decodeString(node)
+	default:
+		return index.decodeValue(node)
+	}
 }

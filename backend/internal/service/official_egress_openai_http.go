@@ -564,7 +564,10 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	)
 	// 派生工具呈现与 Finalizer 共用同一次解码（docs/bug.md 6.4 第 3 点）：工具呈现改写
 	// 后按需重编码得到新的 body，payload 与 body 始终指向同一内容，Finalizer 不再解码。
-	payload, decodeErr := decodeOfficialJSONObjectUseNumber(body)
+	// 解码在正文索引上进行，无转义的长字符串直接引用 body（问题四 M1 第二项）；payload 只在
+	// 本函数内使用，其中的值只会被比较或重新编码进新正文，不会保存到请求之外。同一索引随后
+	// 直接交给拼接编码器，不再为同一正文重复扫描。
+	payload, bodyIndex, decodeErr := decodeOfficialJSONObjectSharingBody(body)
 	if decodeErr != nil {
 		return nil, result, fmt.Errorf("decode OpenAI official egress body: %w", decodeErr)
 	}
@@ -579,15 +582,18 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			return nil, result, err
 		}
 		if toolPresentationModified {
-			body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(payload, body)
+			body, err = marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(payload, body, bodyIndex)
 			if err != nil {
 				return nil, result, fmt.Errorf("编码 Codex 派生工具呈现：%w", err)
 			}
+			// 正文已换成重编码结果，旧索引不再对应，拼接编码器按新正文现场建索引。
+			bodyIndex = nil
 		}
 	}
-	finalBody, bodyModified, err := finalizeOfficialOpenAIHTTPBodyPayload(
+	finalBody, bodyModified, err := finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 		payload,
 		body,
+		bodyIndex,
 		plan.OfficialEgressBodyContract,
 		identity,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
@@ -724,6 +730,22 @@ func finalizeOfficialOpenAIHTTPBody(
 func finalizeOfficialOpenAIHTTPBodyPayload(
 	payload map[string]any,
 	body []byte,
+	contract *officialOpenAIHTTPBodyContract,
+	identity officialOpenAIHTTPIdentity,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) ([]byte, bool, error) {
+	return finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
+		payload, body, nil, contract, identity, reasoningDefaults, options,
+	)
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadWithIndex 同 finalizeOfficialOpenAIHTTPBodyPayload；
+// bodyIndex 若非 nil 必须是 body 的完整索引，拼接编码直接复用它。
+func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
+	payload map[string]any,
+	body []byte,
+	bodyIndex *officialJSONRawIndex,
 	contract *officialOpenAIHTTPBodyContract,
 	identity officialOpenAIHTTPIdentity,
 	reasoningDefaults officialOpenAIReasoningDefaults,
@@ -878,8 +900,8 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 	if !modified {
 		return body, false, nil
 	}
-	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRaw(
-		options.ProfileMode, payload, isCompact, body,
+	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
+		options.ProfileMode, payload, isCompact, body, bodyIndex,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)

@@ -83,6 +83,19 @@ func marshalOfficialOpenAIHTTPJSONPreservingRaw(
 	compact bool,
 	original []byte,
 ) ([]byte, error) {
+	return marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(mode, payload, compact, original, nil)
+}
+
+// marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex 与 marshalOfficialOpenAIHTTPJSONPreservingRaw
+// 相同；index 若非 nil 必须是 original 的完整索引（buildOfficialJSONRawIndex），调用方已为解码
+// 建好时直接复用，不再为同一正文扫描第二遍。
+func marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
+	mode string,
+	payload map[string]any,
+	compact bool,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
 	endpointID := officialCodexEndpointResponsesHTTP
 	if compact {
 		endpointID = officialCodexEndpointResponsesCompact
@@ -93,7 +106,7 @@ func marshalOfficialOpenAIHTTPJSONPreservingRaw(
 	if err != nil {
 		return nil, err
 	}
-	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, original)
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, index)
 }
 
 func marshalOfficialOpenAIWSJSONPreservingRaw(
@@ -127,6 +140,15 @@ func marshalOfficialJSONObjectPreservingOrderAndRaw(
 	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, nil, original)
 }
 
+// marshalOfficialJSONObjectPreservingOrderAndRawWithIndex 同上，复用调用方已建好的 original 索引。
+func marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(
+	payload map[string]any,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, nil, original, index)
+}
+
 // marshalOfficialOrderedJSONObjectPreservingRaw 只固定官方结构体可观察的
 // 顶层字段顺序。未变化的嵌套值直接复用原始 JSON 字节；需要局部修改的对象和
 // 数组也会保留其余成员的原始字节与相对顺序，避免画像修正改写用户数据。
@@ -138,7 +160,21 @@ func marshalOfficialOrderedJSONObjectPreservingRaw(
 	order []string,
 	original []byte,
 ) ([]byte, error) {
-	index := officialJSONRawIndexForOriginal(original)
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, nil)
+}
+
+// marshalOfficialOrderedJSONObjectPreservingRawWithIndex 是带预建索引的入口：index 为 nil 时按
+// original 现场构建（非法或空正文得到 nil，即没有可复用的原始字节），否则必须是 original 的
+// 完整索引。两种入口输出逐字节相同。
+func marshalOfficialOrderedJSONObjectPreservingRawWithIndex(
+	payload map[string]any,
+	order []string,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
+	if index == nil {
+		index = officialJSONRawIndexForOriginal(original)
+	}
 	root := int32(-1)
 	var originalKeys []string
 	if index != nil {
