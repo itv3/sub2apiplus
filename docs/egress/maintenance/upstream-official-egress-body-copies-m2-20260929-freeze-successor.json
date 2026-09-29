@@ -1,0 +1,257 @@
+{
+  "base_commit": "04a22ed30569ab38f7005ffaae5b05a006982e0d",
+  "changed_path_count": 20,
+  "current_commit": "9a65fceaf82d7b52a4ccf6399f142e02d3c28a97",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4540,
+  "frozen_path_count": 1399,
+  "identity_sha256": "f5bc3517157d34b3e946610f32c11cfeffaf4ebcf34f6a87166a5e35e60e2687",
+  "issued_at_utc": "2026-09-29T14:45:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_157_0.json",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-official-egress-body-copies-m2-20260929-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler.go",
+      "predecessor_sha256s": [
+        "009d60a90d3a6ef7f16096b1999c177c1dfe9a28c76b7341016ee940df73b8a4"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/officialegress/compiler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/ci-repair-source-transition.json",
+        "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "92f69d506583f3ddcc1179e875365b8a56bd3fc1d14a763ecfb324a1451789b4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "d0db8fe78eca0583f68e9bc5440c7ac2fa8dfb3567e94b9a3d5a72ca6f625fc2"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_decode.go",
+      "predecessor_sha256s": [
+        "4858aff3793f7bde3330aeb3baf668271ad043fecbd39ce3eb1ac35e31ce4a47"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/official_egress_openai_json_decode.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "dfc8a1b244543329204e4589c8a780fccb1a72fb75b40b0da90bf42c5cb805b7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_index.go",
+      "predecessor_sha256s": [
+        "594099fc344e333d8503472be5ba5b6a9dda2c2d3f4f3d575385095f881fb095"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/official_egress_openai_json_index.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5dadf43fb06655e728defb29751064e1b30b3c45dbf6d33a3d7647c0e41a964e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compact_body_signal.go",
+      "predecessor_sha256s": [
+        "f498f9505bf3b7647e6523f3a997dddd2ff0c63c0c473d6d74158ec8e2a8ead8"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/openai_compact_body_signal.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "366b3ab8d5f71c80320649cbf809392656343ebd48720a4c4d1ea5677040d827"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "603c65e105af018dcb0a17f4a4e4a78bb1e719c2bb199affa102a21742ed5a51"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-legacy-compact-release-gate-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "790154e5cdd761ffa58acd861ca79f79851d3c87ce4515df9894eeafd2264b42"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "2b890ac87a1c5ccb2ff8efb0401c4673d009a0458856666682e300f590c4042c"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/openai_gateway_request_body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c69a347f319216626f709d563425262eea329e8401b799759713efe91eb568f7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_lite_tools.go",
+      "predecessor_sha256s": [
+        "69fac262645eecdad880d9afa65d4ec66a0d8435c441e7f1e8b97360fa6b70d0"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=backend/internal/service/openai_responses_lite_tools.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0450b6b2c96dafbdda3cc869e03c453411367af3e441b096c8a9e884e835850d"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "d95962fb487a6ed1d3d37d57e8db8a2b2e4b87fce9199ba2f0af9a743bec5603"
+      ],
+      "reason": "问题四 M2＋M3：继续降低大请求正文在官方出站 HTTP 转发链上的内存放大（请求视图短字段复制保存、推理内容回放判定不复制 input、同一版本正文索引一次转发只建一次并共享、官方出站主干在定型与上游 attempt 期间不持有对象树与整段正文、Lite 归一化对象树共享正文长字符串、索引节点表按预计数一次预留、zstd 输出缓冲按内容估计预留）及随后的 lint 与台账门禁修复，出站字节与错误文本逐字节不变，由差分与端到端测试锁定 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d66e726c42d0f6c8ac0e8fdb53674bedebedbde9d7569c11b8a6cbb520c4060b"
+    }
+  ],
+  "unregistered_path_count": 11,
+  "unregistered_paths": [
+    "backend/internal/officialegress/compiler_zstd_allocation_test.go",
+    "backend/internal/service/official_egress_forward_body.go",
+    "backend/internal/service/official_egress_forward_body_index_test.go",
+    "backend/internal/service/official_egress_forward_body_members_test.go",
+    "backend/internal/service/official_egress_forward_body_test.go",
+    "backend/internal/service/official_egress_openai_json_index_prealloc_test.go",
+    "backend/internal/service/official_egress_openai_memory_profile_test.go",
+    "backend/internal/service/openai_reasoning_content_replay_view_test.go",
+    "backend/internal/service/openai_request_view_detach_test.go",
+    "backend/internal/service/openai_responses_lite_requires_full_test.go",
+    "tools/official_client_capture/candidate_test_fact_map_0_157_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
