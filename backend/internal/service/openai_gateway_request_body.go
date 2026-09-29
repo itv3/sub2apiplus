@@ -829,12 +829,15 @@ func newOpenAIRequestView(body []byte) openAIRequestView {
 
 	view := openAIRequestView{body: body}
 	var seen uint8
-	// parseRawJSONView 无需复制即可读取请求体；视图会保持请求体有效，供提取出的字符串引用。
+	// parseRawJSONView 无需复制即可遍历请求体；但提取出的短字符串必须复制后再保存（问题四 M2）。
+	// 零拷贝子串会引用整段正文：Forward 把 Model、PromptCacheKey 等一路带到转发结果、gin 上下文和
+	// 出站 Header，正文在 Forward 中途被改写（Lite 归一化、字段补丁、重编码）后，几十字节的模型名
+	// 仍会把改写前的整段旧正文钉在内存里，直到请求结束。这些值只有几十到几百字节，复制代价可忽略。
 	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "model":
 			if seen&modelField == 0 {
-				view.Model = strings.TrimSpace(value.String())
+				view.Model = strings.Clone(strings.TrimSpace(value.String()))
 				seen |= modelField
 			}
 		case "stream":
@@ -844,22 +847,22 @@ func newOpenAIRequestView(body []byte) openAIRequestView {
 			}
 		case "prompt_cache_key":
 			if seen&promptCacheKeyField == 0 {
-				view.PromptCacheKey = strings.TrimSpace(value.String())
+				view.PromptCacheKey = strings.Clone(strings.TrimSpace(value.String()))
 				seen |= promptCacheKeyField
 			}
 		case "previous_response_id":
 			if seen&previousResponseIDField == 0 {
-				view.PreviousResponseID = strings.TrimSpace(value.String())
+				view.PreviousResponseID = strings.Clone(strings.TrimSpace(value.String()))
 				seen |= previousResponseIDField
 			}
 		case "service_tier":
 			if seen&serviceTierField == 0 {
-				view.ServiceTier = strings.TrimSpace(value.String())
+				view.ServiceTier = strings.Clone(strings.TrimSpace(value.String()))
 				seen |= serviceTierField
 			}
 		case "reasoning":
 			if seen&reasoningField == 0 {
-				view.ReasoningEffort = strings.TrimSpace(value.Get("effort").String())
+				view.ReasoningEffort = strings.Clone(strings.TrimSpace(value.Get("effort").String()))
 				seen |= reasoningField
 			}
 		}
