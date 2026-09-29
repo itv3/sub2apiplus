@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"reflect"
 	"strconv"
 	"testing"
@@ -239,7 +240,7 @@ func TestOfficialForwardHTTPBodyIndexCacheByBodyIdentity(t *testing.T) {
 	var nilBody *officialForwardHTTPBody
 	require.Nil(t, nilBody.indexFor([]byte(`{}`)), "nil 工作区不提供索引")
 
-	_, workspace := newOfficialForwardHTTPBody(context.Background())
+	_, workspace := newOfficialForwardHTTPBody(context.Background(), nil)
 	require.NotNil(t, workspace)
 	body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"message","content":"x"}]}`)
 	first := workspace.indexFor(body)
@@ -252,10 +253,10 @@ func TestOfficialForwardHTTPBodyIndexCacheByBodyIdentity(t *testing.T) {
 	require.Nil(t, workspace.indexFor([]byte(`{"broken":`)), "非法正文不缓存")
 	require.Nil(t, workspace.index, "非法正文要清空旧缓存，不再引用旧正文")
 
-	disabledCtx, disabled := newOfficialForwardHTTPBody(withOfficialForwardHTTPBodyDisabled(context.Background()))
+	disabledCtx, disabled := newOfficialForwardHTTPBody(withOfficialForwardHTTPBodyDisabled(context.Background()), nil)
 	require.Nil(t, disabled)
 	require.Nil(t, officialForwardHTTPBodyFromContext(disabledCtx))
-	enabledCtx, enabled := newOfficialForwardHTTPBody(context.Background())
+	enabledCtx, enabled := newOfficialForwardHTTPBody(context.Background(), nil)
 	require.Same(t, enabled, officialForwardHTTPBodyFromContext(enabledCtx))
 	require.Same(t, enabled, officialForwardHTTPBodyFromContext(context.WithoutCancel(enabledCtx)),
 		"上游 ctx 分离后仍能取回同一工作区")
@@ -292,34 +293,33 @@ func TestOfficialForwardHTTPBodyNilWorkspaceDelegatesToOriginals(t *testing.T) {
 
 		if wantMap != nil {
 			want, wantErr := marshalOfficialJSONObjectPreservingOrderAndRaw(wantMap, body)
-			got, gotErr := workspace.reencode(gotMap, body)
+			got := body
+			gotView := view
+			gotReqBody := gotMap
+			gotErr := workspace.reencodeRequestBody(gotMap, &got, &gotView, &gotReqBody)
 			require.Equal(t, fmt.Sprint(wantErr), fmt.Sprint(gotErr), name)
 			require.Equal(t, string(want), string(got), name)
+			require.Equal(t, view.body, gotView.body, "%s：nil 工作区不改动请求视图", name)
+			require.NotNil(t, gotReqBody, "%s：nil 工作区不放下对象树", name)
 		}
 	}
 }
 
-// TestOfficialForwardHTTPBodySharesIndexAcrossForward 用整链累计分配证明同一正文不再被重复扫描：
-// 同一请求在工作区开启时的累计分配比关闭时至少少三遍正文扫描。
-func TestOfficialForwardHTTPBodySharesIndexAcrossForward(t *testing.T) {
-	source := buildOfficialEgressMemoryProfileBody(t, 4<<20)
-	oneScan := testMeasureAllocatedBytes(t, func() {
-		_, err := buildOfficialJSONRawIndexForDecode(source)
-		require.NoError(t, err)
-	})
+// TestOfficialForwardHTTPBodyScansEachBodyVersionOnce 在完整 Forward 上验证同一版本正文只扫描一次：
+// 测量形态经 Lite 归一化后的正文 L 供契约捕获、对象树解码与保序重编码共用一次扫描，重编码结果 D 供
+// compaction 规整与 Finalizer 共用一次扫描（Lite 归一化自身对入站正文的一次扫描不经工作区）。
+func TestOfficialForwardHTTPBodyScansEachBodyVersionOnce(t *testing.T) {
+	source := buildOfficialEgressMemoryProfileBody(t, 1<<20)
+	var workspace *officialForwardHTTPBody
 	tc := officialForwardBodyCase{
-		name: "alloc", body: func(*testing.T) []byte { return source },
-		context: func(_ *testing.T, body []byte) *gin.Context { return newOfficialOpenAIHTTPTestContext(body, "/v1/responses") },
+		name: "scan_count", body: func(*testing.T) []byte { return source },
+		context: func(_ *testing.T, body []byte) *gin.Context {
+			return newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+		},
+		onBusiness: func(req *http.Request) { workspace = officialForwardHTTPBodyFromContext(req.Context()) },
 	}
-	measure := func(disabled bool) uint64 {
-		return testMeasureAllocatedBytes(t, func() {
-			outcome := officialForwardBodyRun(t, tc, source, disabled)
-			require.NoError(t, outcome.err)
-		})
-	}
-	legacy := measure(true)
-	current := measure(false)
-	t.Logf("正文 %.1f MiB：整链累计分配 %.1f → %.1f MiB（单次扫描约 %.1f MiB）",
-		float64(len(source))/(1<<20), float64(legacy)/(1<<20), float64(current)/(1<<20), float64(oneScan)/(1<<20))
-	require.Less(t, current+oneScan*3, legacy, "一次转发至少要少三遍正文扫描")
+	outcome := officialForwardBodyRun(t, tc, source, false)
+	require.NoError(t, outcome.err)
+	require.NotNil(t, workspace, "上游请求的 ctx 必须带着本次调用的工作区")
+	require.Equal(t, 2, workspace.scans, "L 与 D 两个正文版本各只扫描一次")
 }

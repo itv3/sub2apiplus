@@ -43,6 +43,9 @@ type officialForwardBodyRecorder struct {
 	calls     []officialForwardBodyWireCall
 	responses []func() *http.Response
 	fallback  func() *http.Response
+	// onBusiness 在读取业务请求正文之前调用（此时上游 attempt 的编译与压缩已完成、请求正在发送），
+	// 供测试观测这一时刻的内存与工作区状态。
+	onBusiness func(req *http.Request)
 }
 
 func (u *officialForwardBodyRecorder) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -56,6 +59,9 @@ func (u *officialForwardBodyRecorder) DoWithTLS(req *http.Request, _ string, _ i
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(codexModelsRecorderManifest)),
 		}, nil
+	}
+	if u.onBusiness != nil {
+		u.onBusiness(req)
 	}
 	call := officialForwardBodyWireCall{
 		method: req.Method, url: req.URL.String(), host: req.Host,
@@ -99,13 +105,17 @@ func officialForwardBodyJSON(status int, body string) func() *http.Response {
 
 // officialForwardBodyCase 描述一种请求形态；body 与 context 每次运行都重新构造（Forward 会改写 gin 上下文）。
 type officialForwardBodyCase struct {
-	name      string
-	body      func(t *testing.T) []byte
-	context   func(t *testing.T, body []byte) *gin.Context
-	account   func() *Account
+	name    string
+	body    func(t *testing.T) []byte
+	context func(t *testing.T, body []byte) *gin.Context
+	account func() *Account
+	// service 为空时使用官方出站测试服务（带 Lite 模型能力清单）。
+	service   func(upstream HTTPUpstream) *OpenAIGatewayService
 	prepare   func(t *testing.T, svc *OpenAIGatewayService)
 	responses []func() *http.Response
 	fallback  func() *http.Response
+	// onBusiness 见 officialForwardBodyRecorder.onBusiness。
+	onBusiness func(req *http.Request)
 }
 
 type officialForwardBodyOutcome struct {
@@ -122,22 +132,28 @@ func officialForwardBodyRun(t *testing.T, tc officialForwardBodyCase, source []b
 	// 固定 invocation，避免两次运行因随机 ID 产生与本改造无关的差异。
 	c.Set(officialEgressInvocationGinKey, "official-forward-body-"+tc.name)
 	recorder := &officialForwardBodyRecorder{
-		responses: append([]func() *http.Response(nil), tc.responses...),
-		fallback:  tc.fallback,
+		responses:  append([]func() *http.Response(nil), tc.responses...),
+		fallback:   tc.fallback,
+		onBusiness: tc.onBusiness,
 	}
 	if recorder.fallback == nil {
 		recorder.fallback = officialForwardBodySSE("resp_" + tc.name)
 	}
-	svc := &OpenAIGatewayService{
-		cfg: &config.Config{Security: config.SecurityConfig{
-			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
-		}},
-		httpUpstream: recorder,
+	var svc *OpenAIGatewayService
+	if tc.service != nil {
+		svc = tc.service(recorder)
+	} else {
+		svc = &OpenAIGatewayService{
+			cfg: &config.Config{Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			}},
+			httpUpstream: recorder,
+		}
+		svc.openaiModelCapabilities.replaceFromManifest(
+			94,
+			[]byte(`{"models":[{"slug":"gpt-5.6-luna","use_responses_lite":true}]}`),
+		)
 	}
-	svc.openaiModelCapabilities.replaceFromManifest(
-		94,
-		[]byte(`{"models":[{"slug":"gpt-5.6-luna","use_responses_lite":true}]}`),
-	)
 	if tc.prepare != nil {
 		tc.prepare(t, svc)
 	}
@@ -380,8 +396,81 @@ func officialForwardBodyCases(t *testing.T) []officialForwardBodyCase {
 			fallback: officialForwardBodyJSON(http.StatusBadRequest, `{"error":{"message":"bad request","type":"invalid_request_error"}}`),
 		},
 		{name: "invalid_json", body: func(*testing.T) []byte { return []byte(`{"model":"gpt-5.6-luna","input":[`) }, context: officialContext},
+		{
+			name: "third_party_curl_oauth",
+			body: func(*testing.T) []byte {
+				return []byte(`{"model":"gpt-5.5","stream":false,"instructions":"test","parallel_tool_calls":false,"reasoning":{"effort":"medium","summary":"auto"},"input":[{"type":"message","role":"user","namespace":"remove","content":[{"type":"input_text","text":"hello","namespace":"nested-keep"}]}]}`)
+			},
+			context: func(_ *testing.T, body []byte) *gin.Context { return newOpenAIRejectedFieldTestContext(body) },
+			account: newOpenAIOAuthNamespaceTestAccount,
+			fallback: officialForwardBodyJSON(http.StatusOK,
+				`{"id":"resp_curl_ok","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+		},
 	}
 	return cases
+}
+
+// TestOfficialForwardHTTPBodyNonOfficialPathsUnchanged 锁定非官方出站路径：API Key 与 OAuth 透传不创建
+// 正文工作区（上游请求的 ctx 里没有工作区），两种状态下发往上游的字节、Header 与结果完全一致。
+func TestOfficialForwardHTTPBodyNonOfficialPathsUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	apiKeyService := func(upstream HTTPUpstream) *OpenAIGatewayService {
+		return &OpenAIGatewayService{
+			cfg: &config.Config{Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			}},
+			httpUpstream: upstream,
+		}
+	}
+	apiKeyContext := func(_ *testing.T, body []byte) *gin.Context { return newOpenAIRejectedFieldTestContext(body) }
+	okJSON := officialForwardBodyJSON(http.StatusOK,
+		`{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`)
+	sawWorkspace := false
+	detect := func(req *http.Request) {
+		if officialForwardHTTPBodyFromContext(req.Context()) != nil {
+			sawWorkspace = true
+		}
+	}
+	cases := []officialForwardBodyCase{
+		{
+			name: "apikey_responses",
+			body: func(*testing.T) []byte {
+				return []byte(`{"model":"gpt-5.5","stream":false,"store":true,"input":[{"type":"message","role":"user","content":"one"},` +
+					`{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}","namespace":"drop"},{"type":"function_call_output","call_id":"call_1","output":"ok"},` +
+					`{"type":"reasoning","summary":[{"type":"summary_text","text":"keep"}],"content":[{"type":"reasoning_text","text":"remove"}]}]}`)
+			},
+			context: apiKeyContext, account: newOpenAIRejectedFieldTestAccount, service: apiKeyService, fallback: okJSON, onBusiness: detect,
+		},
+		{
+			name: "apikey_rejected_field_retry",
+			body: func(*testing.T) []byte {
+				return []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":4096,"input":[{"type":"message","role":"user","content":{"max_output_tokens":"keep"}}]}`)
+			},
+			context: apiKeyContext, account: newOpenAIRejectedFieldTestAccount, service: apiKeyService,
+			responses: []func() *http.Response{officialForwardBodyJSON(http.StatusBadRequest,
+				`{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: max_output_tokens","param":"max_output_tokens","type":"invalid_request_error"}}`)},
+			fallback: okJSON, onBusiness: detect,
+		},
+		{
+			name: "oauth_passthrough",
+			body: func(t *testing.T) []byte { return newOfficialOpenAIHTTPTestBody(t, false, false, true) },
+			context: func(_ *testing.T, body []byte) *gin.Context {
+				return newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+			},
+			account: func() *Account {
+				account := newOfficialOpenAIHTTPTestAccount(94)
+				account.Extra["openai_passthrough"] = true
+				return account
+			},
+			onBusiness: detect,
+		},
+	}
+	for _, tc := range cases {
+		outcome := officialForwardBodyCompare(t, tc)
+		require.NoError(t, outcome.err, tc.name)
+		require.NotEmpty(t, outcome.calls, tc.name)
+	}
+	require.False(t, sawWorkspace, "非官方出站路径不得创建正文工作区")
 }
 
 func TestOfficialForwardHTTPBodyMatchesLegacyOnWire(t *testing.T) {

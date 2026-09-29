@@ -113,8 +113,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # `official_egress_openai_http.go`；映射只重绑这两份源码快照，不改变测试、事实或规则语义。候选验收测试
 # 9 项通过；GuardianReviewConditionalHeader、TurnMetadataSerialization、TurnStateOwnerReset 因 previous 槽位
 # 画像未声明对应行为按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M2-a）：官方出站 HTTP 转发主干（不含透传）的对象树改为共享正文的索引直建，重编码按
+# 成员产出并回指调用方原始正文，Finalizer 成员按来源回指，上游 attempt 期间暂存整段正文、返回后按成员
+# 恢复，改动 `openai_gateway_forward.go` 与 `official_egress_openai_http.go`；映射只重绑这两份源码快照，
+# 不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "22a7b7a498fd337caf29bbf3ce873fa1a58845389c597c44fe28e9997a8b4d61"
+    "292e57973699a732c28e6d2f11af029a6fc2a8a638d5af26ab4b21fe2522e5e1"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

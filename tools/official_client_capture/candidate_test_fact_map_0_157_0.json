@@ -145,7 +145,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "1d65ee0e950be0101344a3186a26f156c722147e5d16df774c3efb20b73818ff"
+          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
@@ -193,7 +193,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "1d65ee0e950be0101344a3186a26f156c722147e5d16df774c3efb20b73818ff"
+          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
@@ -277,7 +277,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "ed8532c5b73a0a7ac4bf4a96b636eb59ab058ec98fc7990f851884241665d8b0"
+          "sha256": "db7103e4ea020306cb927793766672ab7b8f0e8b81d26cac1d4a9f43bcd0e4d3"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
@@ -409,7 +409,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "1d65ee0e950be0101344a3186a26f156c722147e5d16df774c3efb20b73818ff"
+          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -516,7 +516,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "1d65ee0e950be0101344a3186a26f156c722147e5d16df774c3efb20b73818ff"
+          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
@@ -552,7 +552,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "1d65ee0e950be0101344a3186a26f156c722147e5d16df774c3efb20b73818ff"
+          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",

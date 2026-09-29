@@ -673,8 +673,15 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 		return nil, result, err
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
+	// body 是官方出站 HTTP 转发主干工作区最近一次重编码物化的正文时，请求体按成员装配且成员值换成
+	// 其来源（调用方原始正文区间或小段副本，逐字节相同），不再引用这份整段正文，Forward 在上游
+	// attempt 期间即可放下它（问题四 M2-a）。其余情况与过去相同。
+	forwardBody := officialForwardHTTPBodyFromContext(req.Context())
 	if finalizeModified {
+		forwardBody.rebaseFinalMembers(body, finalMembers)
 		resetOfficialEgressRequestBodyMembers(req, finalMembers)
+	} else if members := forwardBody.membersFor(body); members != nil {
+		resetOfficialEgressRequestBodyMembers(req, members)
 	} else {
 		resetOfficialEgressRequestBody(req, body)
 	}

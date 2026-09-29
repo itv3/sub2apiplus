@@ -246,11 +246,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	originalBody := body
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
-	// 官方出站 HTTP 路径的正文工作区（问题四 M2，official_egress_forward_body.go）；其余路径为 nil，
-	// 其方法原样调用改造前的函数。
+	// 官方出站 HTTP 路径（不含透传）的正文工作区（问题四 M2，official_egress_forward_body.go）；其余
+	// 路径为 nil，其方法原样调用改造前的函数。
 	var officialForwardBody *officialForwardHTTPBody
 	if officialOpenAIHTTPEnabled {
-		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx)
+		if !passthroughEnabled {
+			ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, canonicalImageIntentBody)
+		}
 		officialEgressBodyContract, err = officialForwardBody.captureContract(c, originalBody)
 		if err != nil {
 			return nil, err
@@ -843,7 +845,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			var marshalErr error
 			// patch 失效后走整体重编码。必须以当前正文为原始字节基准，否则未被
 			// 改动的嵌套用户数据会被 Go map 编码按字典序重排。
-			body, marshalErr = officialForwardBody.reencode(decoded, body)
+			marshalErr = officialForwardBody.reencodeRequestBody(decoded, &body, &requestView, &reqBody)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
@@ -1424,6 +1426,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		turnStateScopePending = true
 	}
 	for {
+		// 官方出站 HTTP：定型与上游 attempt 前放下对象树（问题四 M2-a）。
+		officialForwardBody.releaseRequestMap(&reqBody, requestView, body)
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
@@ -1509,6 +1513,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamStart := time.Now()
 		var resp *http.Response
 		if officialForwardPlan != nil {
+			// 上游 attempt（编译、签名、zstd 压缩与发送）期间不持有整段正文（问题四 M2-a）。
+			restoreBody := officialForwardBody.park(&body, &requestView, &lineageEntryBody)
 			if officialHTTPFallbackPending {
 				resp, err = officialForwardPlan.TransitionHTTPFallback(
 					upstreamReq.Context(), upstreamReq, officialHTTPFallbackTarget,
@@ -1523,6 +1529,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					upstreamReq.Context(), upstreamReq, endpointID,
 				)
 			}
+			restoreBody()
 		} else {
 			resp, err = s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
 		}
