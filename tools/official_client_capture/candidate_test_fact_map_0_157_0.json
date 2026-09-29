@@ -145,7 +145,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
+          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
@@ -193,7 +193,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
+          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
@@ -409,7 +409,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
+          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -516,7 +516,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
+          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
@@ -552,7 +552,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "348775f3da5efd9598e309841389cec71f7859543f7f8c4077bb18b0d7fd0407"
+          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",

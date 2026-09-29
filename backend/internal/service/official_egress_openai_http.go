@@ -401,6 +401,14 @@ func captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(
 	return contract, nil
 }
 
+// captureContract 等价于 captureOfficialOpenAIHTTPBodyContractForRequest，复用官方出站 HTTP 转发主干正文
+// 工作区（official_egress_forward_body.go）为 body 建好的索引（问题四 M2-c）；nil 工作区的索引为 nil，
+// 即原样走改造前的入口。方法放在契约所在的本文件：工作区文件只管正文内存，不参与出站定型，不应因引用
+// 契约类型而被出站定型面扫描（tools/check_ledger_completeness.py）计为新的定型面。
+func (b *officialForwardHTTPBody) captureContract(c *gin.Context, body []byte) (*officialOpenAIHTTPBodyContract, error) {
+	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, b.indexFor(body))
+}
+
 // bindGeneratedOfficialOpenAIHTTPBodyContract 绑定 Chat Completions/Messages
 // 转换后的 Responses 语义字段。身份字段仍标记为非入口显式值，后续必须重新派生。
 func bindGeneratedOfficialOpenAIHTTPBodyContract(

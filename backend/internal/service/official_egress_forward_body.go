@@ -146,11 +146,6 @@ func (b *officialForwardHTTPBody) indexFor(body []byte) *officialJSONRawIndex {
 	return index
 }
 
-// captureContract 等价于 captureOfficialOpenAIHTTPBodyContractForRequest，复用 body 的索引。
-func (b *officialForwardHTTPBody) captureContract(c *gin.Context, body []byte) (*officialOpenAIHTTPBodyContract, error) {
-	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, b.indexFor(body))
-}
-
 // decodeRequestView 与 view.Decode(c)（getOpenAIRequestBodyMap）结果逐项相等（含全部错误），复用视图
 // 正文的索引。对象树在索引上直建，无转义的长字符串以只读视图引用视图正文（decodeValueSharingBody），
 // 不再复制整段正文；树只在本次 Forward 内被业务改写与重编码使用，上游 attempt 前由 park 放下。

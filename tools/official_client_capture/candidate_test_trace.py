@@ -126,8 +126,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-29（问题四 lint 修复）：官方出站 HTTP 重编码入口改为返回新正文，`openai_gateway_forward.go` 的调用恢复为
 # 改造前的 `body, marshalErr = ...` 两值赋值形式（消除 staticcheck S1021），行为与出站字节不变；映射只重绑该源码
 # 快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四台账门禁修复）：正文工作区的契约捕获方法 captureContract 从 official_egress_forward_body.go 移入
+# 契约所在的 `official_egress_openai_http.go`，工作区文件不再引用契约类型、不被出站定型面扫描计为新的定型面；方法体
+# 不变，映射只重绑该源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "2b6ddbbbeba690ddd3b9d277fcd98d009068557566ce00becd0d9633a316d721"
+    "dfba3e7d40abcebf5ff0890fe485e24b164e2913313879cbc76adf68d9a04bec"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
