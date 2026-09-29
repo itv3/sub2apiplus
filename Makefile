@@ -174,9 +174,9 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@# 防快照与生成文件陈旧：临时导出后比对。
 	@# 用 mktemp -d 而非固定 /tmp 路径，避免并行 CI 互相覆盖。
 	@# 比较不再是裸 diff：退休旧 Previous 时，被更早终态收据冻结为逐文件校验制品的画像
-	@# 必须原地保留，会成为运行目录里不在 dump 闭集内的文件。排除项只能来自当前 Active
-	@# 终态收据的 retained_runtime_profiles，并与其绑定的 RemovalReceipt 逐条交叉验证；
-	@# 排除之后其余文件仍必须与导出结果逐字节完全一致。
+	@# 必须原地保留，会成为运行目录里不在 dump 闭集内的文件。排除项只能来自终态收据的
+	@# retained_runtime_profiles，每份都与它自己绑定的 RemovalReceipt 逐条交叉验证（保留画像
+	@# 跨轮延续，由退休当轮的终态收据持续批准）；排除之后其余文件仍必须与导出结果逐字节完全一致。
 	@python3 tools/check_runtime_catalog_projection.py --self-test
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressruntimedump -output $$d/runtime >/dev/null || \

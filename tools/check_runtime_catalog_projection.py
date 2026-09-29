@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """校验运行投影闭集：`catalogdata/runtime` 必须等于 `egressruntimedump` 的导出，
-只允许经当前 Active 终态收据批准的“原地冻结历史制品”不参与比较。
+只允许经终态收据批准的“原地冻结历史制品”不参与比较。
 
 退休一个旧 Previous 时，它的运行画像会退出 Catalog、selector 与运行投影；但当该画像
 被更早的终态收据登记为逐文件校验制品时（例如 `0.147→0.149.1` 终态收据把
 `profiles/0.149.1/8c22d3b1….json` 冻结为 `runtime_catalog.active_profile`），字节必须
 原地保留，于是运行目录里会出现不在 dump 闭集内的文件。
 
-本脚本让门禁显式区分这两类文件，而不是按路径做可扩张白名单：排除项只能来自当前 Active
-终态收据的 `retained_runtime_profiles`，并与它绑定的 RemovalReceipt 逐条交叉验证；任何
-一项不满足都失败关闭，排除之后其余文件仍必须与 dump 结果逐字节完全一致。
+本脚本让门禁显式区分这两类文件，而不是按路径做可扩张白名单：排除项只能来自终态收据的
+`retained_runtime_profiles`，每份登记了保留画像的终态收据都与它自己绑定的 RemovalReceipt
+逐条交叉验证。保留画像跨轮延续：退休当轮的终态收据持续批准它，后续升级不重复登记（例如
+`0.151→0.154` 终态收据批准的 0.149.1 画像，在 0.157 成为 Active 后仍由它批准）。当前 Active
+必须恰好有一份终态收据；任何一项不满足都失败关闭，排除之后其余文件仍必须与 dump 结果逐字节
+完全一致。
 """
 
 from __future__ import annotations
@@ -108,16 +111,27 @@ def _catalog_references_version(root: Path, version: str) -> bool:
     return version in (runtime_root / "release-catalog.json").read_text(encoding="utf-8")
 
 
-def _terminal_receipt_for(root: Path, active_version: str) -> tuple[Path, dict[str, Any]]:
+def _terminal_receipts(root: Path) -> list[tuple[Path, str, dict[str, Any]]]:
+    """列出全部通用 schema 的终态收据：(路径, 目标版本, 内容)。"""
+
     maintenance = root / MAINTENANCE_RELATIVE
-    matched: list[tuple[Path, dict[str, Any]]] = []
+    receipts: list[tuple[Path, str, dict[str, Any]]] = []
     for path in sorted(maintenance.glob(TERMINAL_RECEIPT_GLOB)):
         receipt = _load_json(path, "终态收据")
         if not isinstance(receipt, dict):
             continue
         schema = TERMINAL_SCHEMA_RE.fullmatch(str(receipt.get("schema_version", "")))
-        if schema is not None and schema.group(1) == active_version:
-            matched.append((path, receipt))
+        if schema is not None:
+            receipts.append((path, schema.group(1), receipt))
+    return receipts
+
+
+def _terminal_receipt_for(root: Path, active_version: str) -> tuple[Path, dict[str, Any]]:
+    matched = [
+        (path, receipt)
+        for path, version, receipt in _terminal_receipts(root)
+        if version == active_version
+    ]
     if len(matched) != 1:
         raise ProjectionError(
             f"当前 Active {active_version} 的终态收据必须恰好一份，实得 {len(matched)} 份"
@@ -125,69 +139,105 @@ def _terminal_receipt_for(root: Path, active_version: str) -> tuple[Path, dict[s
     return matched[0]
 
 
-def approved_retained_files(root: Path, dump_relatives: set[str]) -> set[str]:
-    """返回允许不参与运行闭集比较的文件（相对 runtime 根）；无批准项时返回空集。
-
-    只有同时满足下列条件才批准：两份收据自摘要与绑定摘要一致、身份一致；路径严格位于
-    对应退休版本的 profiles 目录；普通文件、非符号链接、无路径穿越；两份收据的路径、
-    摘要与状态一一对应；文件当前摘要与收据一致；该文件既不在 dump 结果中，也不被当前
-    Catalog 引用。
-    """
-
-    active_version = _active_version(root)
-    receipt_path, receipt = _terminal_receipt_for(root, active_version)
+def _verify_terminal_identity(receipt_path: Path, receipt: dict[str, Any]) -> None:
     identity = str(receipt.get("identity_sha256", ""))
     if identity not in _terminal_identity(receipt):
         raise ProjectionError(f"终态收据自摘要不一致：{receipt_path}")
     if receipt.get("result") != "passed":
         raise ProjectionError(f"终态收据 result 非 passed：{receipt_path}")
 
+
+def approved_retained_files(root: Path, dump_relatives: set[str]) -> set[str]:
+    """返回允许不参与运行闭集比较的文件（相对 runtime 根）；无批准项时返回空集。
+
+    当前 Active 必须恰好有一份终态收据，且自摘要一致、result 为 passed。随后逐份处理登记了
+    `retained_runtime_profiles` 的终态收据（见 `_approved_by_receipt`）；同一文件不得被两份
+    终态收据重复批准。
+    """
+
+    active_version = _active_version(root)
+    current_path, current = _terminal_receipt_for(root, active_version)
+    _verify_terminal_identity(current_path, current)
+    approved: set[str] = set()
+    for receipt_path, receipt_version, receipt in _terminal_receipts(root):
+        retained = receipt.get("retained_runtime_profiles")
+        if retained is None or (isinstance(retained, list) and not retained):
+            continue
+        granted = _approved_by_receipt(
+            root, receipt_path, receipt_version, receipt, active_version, dump_relatives
+        )
+        duplicated = sorted(approved & granted)
+        if duplicated:
+            raise ProjectionError(f"同一冻结制品被多份终态收据重复批准：{duplicated}")
+        approved |= granted
+    return approved
+
+
+def _approved_by_receipt(
+    root: Path,
+    receipt_path: Path,
+    receipt_version: str,
+    receipt: dict[str, Any],
+    active_version: str,
+    dump_relatives: set[str],
+) -> set[str]:
+    """校验一份终态收据批准的原地冻结制品，返回相对 runtime 根的路径集合。
+
+    只有同时满足下列条件才批准：两份收据自摘要与绑定摘要一致、身份一致；RemovalReceipt 的
+    `active_version` 等于这份终态收据自己的目标版本（退休发生在它成为 Active 的那一轮），
+    被退休版本既不等于该目标版本也不等于当前 Active；路径严格位于对应退休版本的 profiles
+    目录；普通文件、非符号链接、无路径穿越；两份收据的路径、摘要与状态一一对应；文件当前
+    摘要与收据一致；该文件既不在 dump 结果中，也不被当前 Catalog 引用。
+    """
+
+    label = f"{receipt_version} 终态收据"
+    _verify_terminal_identity(receipt_path, receipt)
     retained = receipt.get("retained_runtime_profiles")
-    if retained is None or (isinstance(retained, list) and not retained):
-        return set()
     if not isinstance(retained, list):
-        raise ProjectionError("终态收据 retained_runtime_profiles 必须是数组")
+        raise ProjectionError(f"{label} retained_runtime_profiles 必须是数组")
 
     binding = receipt.get("runtime_profile_removal")
     if not isinstance(binding, dict) or not isinstance(binding.get("path"), str):
-        raise ProjectionError("终态收据缺少 runtime_profile_removal 坐标")
+        raise ProjectionError(f"{label}缺少 runtime_profile_removal 坐标")
     removal_relative = binding["path"]
     if not removal_relative.startswith(MAINTENANCE_RELATIVE + "/") or ".." in Path(removal_relative).parts:
-        raise ProjectionError(f"RemovalReceipt 坐标非法：{removal_relative}")
+        raise ProjectionError(f"{label}的 RemovalReceipt 坐标非法：{removal_relative}")
     removal_path = root / removal_relative
     if not SHA256_RE.fullmatch(str(binding.get("sha256", ""))) or _sha256_file(removal_path) != binding["sha256"]:
-        raise ProjectionError("RemovalReceipt 摘要与终态收据绑定不一致")
+        raise ProjectionError(f"RemovalReceipt 摘要与{label}绑定不一致")
     if binding.get("bytes") != removal_path.stat().st_size:
-        raise ProjectionError("RemovalReceipt 字节数与终态收据绑定不一致")
+        raise ProjectionError(f"RemovalReceipt 字节数与{label}绑定不一致")
 
     removal = _load_json(removal_path, "RemovalReceipt")
     if (
         removal.get("schema_version") != REMOVAL_SCHEMA
         or removal.get("status") != "complete"
-        or removal.get("active_version") != active_version
+        or removal.get("active_version") != receipt_version
         or not VERSION_RE.fullmatch(str(removal.get("removed_version", "")))
     ):
-        raise ProjectionError("RemovalReceipt 顶层身份与当前 Active 不一致")
+        raise ProjectionError(f"{label}绑定的 RemovalReceipt 顶层身份与该收据的目标版本不一致")
     removed_version = str(removal["removed_version"])
-    if removed_version == active_version:
-        raise ProjectionError("RemovalReceipt 的退休版本不得等于当前 Active")
+    if removed_version in (receipt_version, active_version):
+        raise ProjectionError(
+            f"{label}的退休版本不得等于该收据的目标版本或当前 Active：{removed_version}"
+        )
 
     chain = receipt.get("campaign_chain")
     if not isinstance(chain, list) or not chain:
-        raise ProjectionError("终态收据缺少 Campaign 承接链")
+        raise ProjectionError(f"{label}缺少 Campaign 承接链")
     last_campaign = str((chain[-1] or {}).get("campaign_id", ""))
     if not last_campaign or removal.get("campaign_id") != last_campaign:
-        raise ProjectionError("RemovalReceipt 与终态收据的末级 Campaign 身份不一致")
+        raise ProjectionError(f"RemovalReceipt 与{label}的末级 Campaign 身份不一致")
 
     retired = removal.get("retired_runtime_profiles")
     if not isinstance(retired, list) or len(retired) != len(retained):
-        raise ProjectionError("两份收据的退休画像清单条数不一致")
+        raise ProjectionError(f"{label}与 RemovalReceipt 的退休画像清单条数不一致")
 
-    def normalized(entries: list[Any], label: str) -> list[tuple[str, str, str]]:
+    def normalized(entries: list[Any], source: str) -> list[tuple[str, str, str]]:
         rows: list[tuple[str, str, str]] = []
         for entry in entries:
             if not isinstance(entry, dict):
-                raise ProjectionError(f"{label}条目必须是对象")
+                raise ProjectionError(f"{source}条目必须是对象")
             path_text = entry.get("path")
             digest = entry.get("sha256")
             state = entry.get("state")
@@ -196,16 +246,16 @@ def approved_retained_files(root: Path, dump_relatives: set[str]) -> set[str]:
                 or not SHA256_RE.fullmatch(str(digest))
                 or state != RETAINED_STATE
             ):
-                raise ProjectionError(f"{label}条目字段非法或状态不是 {RETAINED_STATE}")
+                raise ProjectionError(f"{source}条目字段非法或状态不是 {RETAINED_STATE}")
             rows.append((path_text, str(digest), str(state)))
         return sorted(rows)
 
-    if normalized(retained, "终态收据") != normalized(retired, "RemovalReceipt"):
-        raise ProjectionError("两份收据的路径、摘要或状态未一一对应")
+    if normalized(retained, label) != normalized(retired, "RemovalReceipt"):
+        raise ProjectionError(f"{label}与 RemovalReceipt 的路径、摘要或状态未一一对应")
 
     profiles_prefix = f"{RUNTIME_RELATIVE}/profiles/{removed_version}/"
     approved: set[str] = set()
-    for path_text, digest, _state in normalized(retained, "终态收据"):
+    for path_text, digest, _state in normalized(retained, label):
         parts = Path(path_text).parts
         if Path(path_text).is_absolute() or ".." in parts or "" in parts:
             raise ProjectionError(f"冻结制品路径不规范：{path_text}")
@@ -268,17 +318,91 @@ def verify(root: Path, dump_root: Path, repo_root: Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 自测：正例与六类负例都在门禁内执行，避免排除逻辑只在真实仓库上被验证。
+# 自测：正例与各类负例都在门禁内执行，避免排除逻辑只在真实仓库上被验证。
 # ---------------------------------------------------------------------------
 
 ACTIVE_VERSION = "1.0.0"
 RETIRED_VERSION = "0.9.0"
 CAMPAIGN_ID = "c-selftest-campaign"
+# 历史轮次：目标 0.9.5 成为 Active 的那一轮退休 0.8.0 并原地保留其画像（对应真实的 0.154 退休 0.149.1）。
+HISTORY_VERSION = "0.9.5"
+HISTORY_RETIRED_VERSION = "0.8.0"
+HISTORY_CAMPAIGN_ID = "c-selftest-history"
+HISTORY_RECEIPT = "CODEX_CLI_SELFTEST_HISTORY_TERMINAL_STATE_RECEIPT.json"
+HISTORY_REMOVAL = "CODEX_CLI_SELFTEST_HISTORY_RUNTIME_PROFILE_REMOVAL_RECEIPT.json"
 
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _seal(payload: dict[str, Any]) -> dict[str, Any]:
+    """按生成端口径重新计算终态收据自摘要（不带尾换行）。"""
+
+    document = {key: value for key, value in payload.items() if key != "identity_sha256"}
+    canonical = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {**document, "identity_sha256": _sha256_bytes(canonical.encode())}
+
+
+def _write_history(
+    root: Path,
+    runtime: Path,
+    *,
+    removed_version: str = HISTORY_RETIRED_VERSION,
+    files: list[Path] | None = None,
+) -> None:
+    """追加一份历史轮次的终态收据与 RemovalReceipt，登记该轮原地保留的画像。"""
+
+    if files is None:
+        retained = runtime / "profiles" / HISTORY_RETIRED_VERSION / ("f" * 64 + ".json")
+        _write_json(retained, {"Version": HISTORY_RETIRED_VERSION, "slot": 1})
+        files = [retained]
+    entries = [
+        {"path": str(path.relative_to(root)), "sha256": _sha256_file(path), "state": RETAINED_STATE}
+        for path in files
+    ]
+    removal_relative = f"{MAINTENANCE_RELATIVE}/{HISTORY_REMOVAL}"
+    _write_json(
+        root / removal_relative,
+        {
+            "schema_version": REMOVAL_SCHEMA,
+            "status": "complete",
+            "campaign_id": HISTORY_CAMPAIGN_ID,
+            "active_version": HISTORY_VERSION,
+            "rollback_version": "0.8.5",
+            "removed_version": removed_version,
+            "retired_runtime_profiles": entries,
+        },
+    )
+    removal_path = root / removal_relative
+    receipt = {
+        "schema_version": f"official-client-codex-{HISTORY_VERSION}-terminal-state/v1",
+        "result": "passed",
+        "target": {"version": HISTORY_VERSION},
+        "campaign_chain": [{"campaign_id": HISTORY_CAMPAIGN_ID}],
+        "runtime_profile_removal": {
+            "path": removal_relative,
+            "sha256": _sha256_file(removal_path),
+            "bytes": removal_path.stat().st_size,
+        },
+        "retained_runtime_profiles": entries,
+    }
+    _write_json(root / MAINTENANCE_RELATIVE / HISTORY_RECEIPT, _seal(receipt))
+
+
+def _rebind_history_removal(root: Path, mutate: Any) -> None:
+    """改写历史 RemovalReceipt，并让历史终态收据重新绑定其摘要、重新封印，只留下被测的那处不一致。"""
+
+    removal_path = root / MAINTENANCE_RELATIVE / HISTORY_REMOVAL
+    removal = json.loads(removal_path.read_text(encoding="utf-8"))
+    mutate(removal)
+    _write_json(removal_path, removal)
+    receipt_path = root / MAINTENANCE_RELATIVE / HISTORY_RECEIPT
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["runtime_profile_removal"]["sha256"] = _sha256_file(removal_path)
+    receipt["runtime_profile_removal"]["bytes"] = removal_path.stat().st_size
+    _write_json(receipt_path, _seal(receipt))
 
 
 def _build_fixture(base: Path) -> tuple[Path, Path, Path]:
@@ -457,7 +581,78 @@ def self_test() -> int:
         (dump / snapshot_relative).write_bytes(snapshot_path.read_bytes())
         _expect_failure("Catalog 仍引用退休版本", root, dump, runtime)
 
-    print("运行投影闭集门禁自测通过：正例 1 项、负例 8 项")
+        # 正例 2：历史轮次的终态收据继续批准它当轮原地保留的画像（跨轮延续，后续收据不重复登记）。
+        root, dump, runtime = _build_fixture(base / "history")
+        _write_history(root, runtime)
+        report = verify(root, dump, runtime)
+        history_file = f"profiles/{HISTORY_RETIRED_VERSION}/{'f' * 64}.json"
+        if len(report["approved_frozen_artifacts"]) != 3 or history_file not in report["approved_frozen_artifacts"]:
+            raise SystemExit(f"🔴 自测正例（历史保留）结果异常：{report}")
+
+        # 负例 9：历史保留画像内容漂移。
+        root, dump, runtime = _build_fixture(base / "history-drift")
+        _write_history(root, runtime)
+        _write_json(runtime / "profiles" / HISTORY_RETIRED_VERSION / ("f" * 64 + ".json"), {"drifted": True})
+        _expect_failure("历史保留画像摘要漂移", root, dump, runtime)
+
+        # 负例 10：历史 RemovalReceipt 的 active_version 冒用当前 Active（摘要已重新绑定、收据已重新封印）。
+        root, dump, runtime = _build_fixture(base / "history-active")
+        _write_history(root, runtime)
+        _rebind_history_removal(root, lambda removal: removal.update(active_version=ACTIVE_VERSION))
+        _expect_failure("历史 RemovalReceipt 冒用当前 Active", root, dump, runtime)
+
+        # 负例 11：历史终态收据自摘要不符。
+        root, dump, runtime = _build_fixture(base / "history-identity")
+        _write_history(root, runtime)
+        history_path = root / MAINTENANCE_RELATIVE / HISTORY_RECEIPT
+        forged = json.loads(history_path.read_text(encoding="utf-8"))
+        forged["identity_sha256"] = "0" * 64
+        _write_json(history_path, forged)
+        _expect_failure("历史终态收据自摘要不符", root, dump, runtime)
+
+        # 负例 12：当前 Catalog 仍引用历史退休版本。
+        root, dump, runtime = _build_fixture(base / "history-referenced")
+        _write_history(root, runtime)
+        selector = json.loads((runtime / "release-catalog.json").read_text(encoding="utf-8"))
+        snapshot_relative = selector["snapshot_catalog"]["path"].split("catalogdata/runtime/", 1)[1]
+        snapshot = json.loads((runtime / snapshot_relative).read_text(encoding="utf-8"))
+        snapshot["snapshots"].append({"version": HISTORY_RETIRED_VERSION, "file": "x"})
+        _write_json(runtime / snapshot_relative, snapshot)
+        (dump / snapshot_relative).write_bytes((runtime / snapshot_relative).read_bytes())
+        _expect_failure("Catalog 仍引用历史退休版本", root, dump, runtime)
+
+        # 负例 13：历史保留画像缺少批准它的终态收据，是未经批准的多余文件。
+        root, dump, runtime = _build_fixture(base / "history-missing")
+        _write_history(root, runtime)
+        (root / MAINTENANCE_RELATIVE / HISTORY_RECEIPT).unlink()
+        _expect_failure("历史保留画像缺少终态收据", root, dump, runtime)
+
+        # 负例 14：两份终态收据重复批准同一文件。
+        root, dump, runtime = _build_fixture(base / "history-duplicate")
+        _write_history(
+            root, runtime,
+            removed_version=RETIRED_VERSION,
+            files=[runtime / "profiles" / RETIRED_VERSION / ("b" * 64 + ".json")],
+        )
+        _expect_failure("两份终态收据重复批准同一文件", root, dump, runtime)
+
+        # 负例 15：历史收据声称退休当前 Active。
+        root, dump, runtime = _build_fixture(base / "history-retire-active")
+        _write_history(
+            root, runtime,
+            removed_version=ACTIVE_VERSION,
+            files=[runtime / "profiles" / ACTIVE_VERSION / ("a" * 64 + ".json")],
+        )
+        _expect_failure("历史收据退休当前 Active", root, dump, runtime)
+
+        # 负例 16：历史收据声称退休它自己的目标版本。
+        root, dump, runtime = _build_fixture(base / "history-retire-self")
+        own = runtime / "profiles" / HISTORY_VERSION / ("e" * 64 + ".json")
+        _write_json(own, {"Version": HISTORY_VERSION})
+        _write_history(root, runtime, removed_version=HISTORY_VERSION, files=[own])
+        _expect_failure("历史收据退休自身目标版本", root, dump, runtime)
+
+    print("运行投影闭集门禁自测通过：正例 2 项、负例 16 项")
     return 0
 
 
