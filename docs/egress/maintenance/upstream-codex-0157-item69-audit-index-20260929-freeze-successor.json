@@ -1,0 +1,65 @@
+{
+  "base_commit": "051ab5acbf247026400bd6cca4cec6baa3ed620c",
+  "changed_path_count": 2,
+  "current_commit": "0c70ee90878cd15c7c2613ab1d2cc957f60a6a31",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4383,
+  "frozen_path_count": 1399,
+  "identity_sha256": "f4ee33aafd7c5866d8411ee26cf125989c98c234cb527344861ccd3735583701",
+  "issued_at_utc": "2026-09-29T00:08:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-item69-audit-index-20260929-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "7cdcf56e49a3e25902835b2a17090085e8e51bede84f1503d7bcc661d10a397e"
+      ],
+      "reason": "收尾第 69 项：审计索引自测挂入 check-egress-spec-ci，只登记 Makefile 的精确后继摘要；不改变官方客户端画像、Persona、wire 或生产代码。 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1b72f4aa7faf37ec300fb8998c2059ed6eda83c104d30e3660f8ee65182d1c04"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/codex_audit_index.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
