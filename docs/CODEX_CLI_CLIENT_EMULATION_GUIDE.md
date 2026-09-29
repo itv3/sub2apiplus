@@ -582,7 +582,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **实测**：0.157.0 官方 A03（HTTP）与 A05（WS）默认路由样本均不带该头；候选断言 `assert-SPEC-HDR-009` 核对两类默认
   样本都不发送。`us`／`us_cr` 分支需要对应工作区账号，由官方源码闭环。
 - **实现**：网关首期只做发现与失败关闭，画像在 WorkspaceRouting 记录头名与接受值。
-- **状态**：🟡 源码充分；抓包只覆盖默认路由。
+- **状态**：🟡 源码充分；抓包有限，只覆盖默认路由。
 
 ### SPEC-HDR-010 guardian 审阅请求的 x-codex-guardian
 

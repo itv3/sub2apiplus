@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""生成 Codex CLI 0.145.0 规则与官方证据的双向索引。
+"""生成 Codex CLI 规则与官方证据的双向索引。
 
-索引只接受官方 Codex 客户端证据。Sub2API 出站验收可用于第三部分的实现比对，
-但不得进入官方规则证据表；一旦规则的实测段误引该来源，本脚本直接失败。
+索引只接受官方 Codex 客户端证据，来源有两类：0.145.0 本地官方采集（P/R/J/M，逐运行定位到本地文件），
+以及 Active 版本 Campaign 封存证据（C：官方取证与候选断言封存在 ARM64 私有归档，仓库内由 Active 终态收据的
+Campaign 链与审计索引绑定）。正文实测以 `assert-SPEC-*` 引用本条的候选断言时登记为 C。Sub2API 出站验收可用于
+第三部分的实现比对，但不得进入官方规则证据表；一旦规则的实测段误引该来源，本脚本直接失败。
 """
 
 from __future__ import annotations
@@ -44,6 +46,12 @@ H2_PROBE = (
     / "official-baseline-official-h2-20260727T131936Z.json"
 )
 WHAM_CONSUME = RAW / "audit-ep019-wham-consume-safe-20260730a"
+
+MAINTENANCE = ROOT / "docs" / "egress" / "maintenance"
+RUNTIME_CATALOG = (
+    ROOT / "backend" / "internal" / "officialegress" / "catalogdata" / "runtime" / "release-catalog.json"
+)
+ASSERT_RE = re.compile(r"`assert-(SPEC-[A-Z0-9]+-\d+)`")
 
 OFFICIAL_VERSION = "codex-cli 0.145.0"
 OFFICIAL_SHA256 = "a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14"
@@ -180,10 +188,6 @@ RULE_EVIDENCE_OVERRIDES: dict[str, tuple[EvidenceRef, ...]] = {
             "受控 HTTP 响应头下发 turn-state 后，官方客户端在同一 turn 的后续 /responses 原样回送",
         ),
         EvidenceRef(
-            "audit-ep014-turnstate-compact-20260730a",
-            "受控 HTTP 响应头下发 turn-state 后，官方客户端在同一 turn 的 legacy compact 原样回送",
-        ),
-        EvidenceRef(
             "audit-body004-ws-turnstate-20260730a",
             "受控 WS response.metadata 下发 turn-state 后，官方客户端后续 2 个 "
             "response.create 均在 client_metadata 中原样回送；3/3 连接双向完整",
@@ -227,9 +231,6 @@ RULE_EVIDENCE_OVERRIDES: dict[str, tuple[EvidenceRef, ...]] = {
     "SPEC-EP-006": (
         EvidenceRef("official-body2-20260728T000549Z", "仅证明 models URL 与方法"),
         EvidenceRef("audit-h1raw-20260730a", "R 类原始请求直接证明 models URL 与方法"),
-    ),
-    "SPEC-EP-007": (
-        EvidenceRef("clean-legacy-20260728T132509Z", "仅证明 legacy compact URL 与方法"),
     ),
     "SPEC-EP-008": (
         EvidenceRef("clean-search-20260728T132311Z", "仅证明 alpha-search URL 与方法"),
@@ -327,7 +328,6 @@ EXACT_RUN_BINDINGS = {
     "SPEC-H2-007": {"official-h2-20260727T131936Z", "relay-h2-20260728T032147Z"},
     "SPEC-BODY-004": {
         "audit-ep014-turnstate-echo-20260730a",
-        "audit-ep014-turnstate-compact-20260730a",
         "audit-body004-ws-turnstate-20260730a",
     },
     "SPEC-BODY-007": {
@@ -343,7 +343,6 @@ EXACT_RUN_BINDINGS = {
         "official-body2-20260728T000549Z",
         "audit-h1raw-20260730a",
     },
-    "SPEC-EP-007": {"clean-legacy-20260728T132509Z"},
     "SPEC-EP-008": {"clean-search-20260728T132311Z"},
     "SPEC-EP-009": {
         "webrtc-20260728T134028Z",
@@ -377,17 +376,17 @@ SOURCE_ONLY_REASONS = {
 
 # 2026-07-30 人工逐条语义复核。这里评的是“该证据能否独立支撑完整命题”，
 # 不是简单检查文件名是否存在。未列入下面集合的项默认是“充分”；集合之间必须互斥，
-# build_content() 会按文档里的 53 个编号项做 fail-closed 校验。
+# build_content() 会按文档里的全部编号项做 fail-closed 校验。
 SOURCE_AUDIT_PARTIAL = {
     "SPEC-TLS-002", "SPEC-HDR-006", "SPEC-EP-002", "SPEC-EP-019",
-    "SPEC-EP-022", "SPEC-EP-014", "SPEC-EP-015",
+    "SPEC-EP-022", "SPEC-EP-015",
 }
 SOURCE_AUDIT_NONE = {
     "SPEC-TLS-001", "SPEC-TLS-003", "SPEC-PROTO-001", "SPEC-WS-004",
     "SPEC-BODY-007",
 }
 CAPTURE_AUDIT_LIMITED = {
-    "SPEC-EP-012", "SPEC-EP-023",
+    "SPEC-EP-012", "SPEC-EP-023", "SPEC-HDR-009",
 }
 CAPTURE_AUDIT_NA = {"SPEC-HDR-001"}
 
@@ -414,8 +413,8 @@ AUDIT_NOTES = {
     "SPEC-EP-019": "两个 GET 是生产 R；consume 由无外网假 OAuth 环境中的官方生产 handler 生成。请求 wire 已充分，生产响应与账号副作用不属于本规则命题。",
     "SPEC-EP-022": "端点选择与结构体有源码；实际线序、键序和值由 R 确认。",
     "SPEC-EP-023": "四层内部分派只能由源码证明；四种 reason 的 R 只能旁证结果。",
+    "SPEC-HDR-009": "默认路由下不带该头由官方取证与候选断言封存（C）；us／us_cr 正例需要对应工作区账号，由 0.157.0 源码闭环。",
     "SPEC-EP-024": "洁净 TUI 正例与洁净 exec 负例交叉闭环；TUI 专属解析的全称边界由源码承担。",
-    "SPEC-EP-014": "header 集合可从源码读出，最终线序由默认／beta／turn-state 三组 R 补齐。",
     "SPEC-EP-015": "body/header 构造有源码，最终线序与 commands 阶段变化由同一洁净 R 补齐。",
 }
 
@@ -806,6 +805,79 @@ def extract_refs(
     return [], re.sub(r"\s+", " ", segment).strip()[:70]
 
 
+@dataclass(frozen=True)
+class CampaignEvidence:
+    """Active 版本的 Campaign 封存证据坐标，全部取自仓库内已入库的终态收据与审计索引。"""
+
+    version: str
+    receipt: str
+    official_campaigns: tuple[str, ...]
+    canonical_campaign: str
+    archive_path: str
+    archive_sha256: str
+    archive_bytes: int
+
+
+def active_campaign_evidence(text: str) -> CampaignEvidence:
+    """解析当前 Active 版本的终态收据；第二部分开头必须写明其 Campaign 链，否则失败关闭。"""
+
+    catalog = json.loads(RUNTIME_CATALOG.read_text(encoding="utf-8"))
+    graph_path = RUNTIME_CATALOG.parents[2] / catalog["release_graph"]["path"]
+    graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    versions = {
+        str((node.get("build") or {}).get("version", ""))
+        for node in graph.get("nodes", [])
+        if isinstance(node, dict) and node.get("mode") == "active"
+    }
+    if len(versions) != 1:
+        raise ValueError(f"Runtime Catalog active 版本不唯一：{sorted(versions)}")
+    version = versions.pop()
+    schema = f"official-client-codex-{version}-terminal-state/v1"
+    matched = [
+        (path, json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(MAINTENANCE.glob("CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json"))
+    ]
+    matched = [(path, receipt) for path, receipt in matched if receipt.get("schema_version") == schema]
+    if len(matched) != 1:
+        raise ValueError(f"Active {version} 的终态收据必须恰好一份，实得 {len(matched)} 份")
+    path, receipt = matched[0]
+    chain = receipt.get("campaign_chain") or []
+    official = tuple(
+        str(link["campaign_id"]) for link in chain if link.get("role") == "official_evidence_source"
+    )
+    canonical = str((chain[-1] if chain else {}).get("campaign_id", ""))
+    if not official or not canonical:
+        raise ValueError(f"Active {version} 终态收据缺少官方证据来源或末级 Campaign")
+    part = spec_status.second_part(text)
+    missing = [campaign for campaign in (*official, canonical) if campaign not in part]
+    if missing:
+        raise ValueError(f"第二部分未写明 Active 终态收据的 Campaign：{missing}")
+    audit = json.loads((ROOT / receipt["audit_index"]["path"]).read_text(encoding="utf-8"))
+    archive = audit.get("archive") or {}
+    if not archive.get("path") or not archive.get("sha256"):
+        raise ValueError(f"Active {version} 的审计索引缺少私有归档坐标")
+    return CampaignEvidence(
+        version=version,
+        receipt=path.relative_to(ROOT).as_posix(),
+        official_campaigns=official,
+        canonical_campaign=canonical,
+        archive_path=str(archive["path"]),
+        archive_sha256=str(archive["sha256"]),
+        archive_bytes=int(archive.get("bytes", 0)),
+    )
+
+
+def campaign_assertion(sid: str, body: str) -> bool:
+    """实测段引用本条候选断言即登记为 C；引用其他编号的断言视为证据归属漂移。"""
+
+    segment = body.split("**实测**", 1)[1] if "**实测**" in body else ""
+    cited = set(ASSERT_RE.findall(segment))
+    foreign = sorted(cited - {sid})
+    if foreign:
+        raise ValueError(f"{sid} 的实测段引用了其他编号项的候选断言：{foreign}")
+    return sid in cited
+
+
 def sid_sort_key(sid: str):
     parts = sid.split("-")
     return parts[1], int(parts[-1])
@@ -821,8 +893,8 @@ def validate_semantic_bindings(rule_refs: dict[str, list[EvidenceRef]]) -> None:
 
     body4_scopes = [ref.scope for ref in rule_refs.get("SPEC-BODY-004", [])]
     if (
-        len(body4_scopes) != 3
-        or sum("受控 HTTP 响应头下发" in scope and "原样回送" in scope for scope in body4_scopes) != 2
+        len(body4_scopes) != 2
+        or sum("受控 HTTP 响应头下发" in scope and "原样回送" in scope for scope in body4_scopes) != 1
         or not any(
             "受控 WS response.metadata 下发" in scope
             and "后续 2 个" in scope
@@ -831,7 +903,7 @@ def validate_semantic_bindings(rule_refs: dict[str, list[EvidenceRef]]) -> None:
         )
     ):
         raise ValueError(
-            "SPEC-BODY-004 必须绑定 HTTP responses／compact 与 WS response.metadata 三条 turn-state 正向回送证据"
+            "SPEC-BODY-004 必须绑定 HTTP responses 与 WS response.metadata 两条 turn-state 正向回送证据"
         )
 
     body7_scopes = [ref.scope for ref in rule_refs.get("SPEC-BODY-007", [])]
@@ -875,6 +947,7 @@ def build_content() -> tuple[str, int, int, int, int]:
             verify_label = status if kind == "W" else ("源码机制" if kind == "M" else "观测记录")
             item_meta[sid] = (kind_label, scope_label, verify_label)
             item_origin[sid] = origin
+    campaign = active_campaign_evidence(text)
     manifests = manifest_index()
     known_runs = known_run_ids(manifests)
     forbidden_runs = forbidden_run_ids()
@@ -883,8 +956,11 @@ def build_content() -> tuple[str, int, int, int, int]:
     no_run: list[tuple[str, str]] = []
     not_yet: list[str] = []
     source_only: list[str] = []
+    campaign_rules: set[str] = set()
 
     for sid, body in rule_bodies(text):
+        if campaign_assertion(sid, body):
+            campaign_rules.add(sid)
         refs, missing_reason = extract_refs(sid, body, known_runs, forbidden_runs)
         if refs:
             for ref in refs:
@@ -896,8 +972,10 @@ def build_content() -> tuple[str, int, int, int, int]:
                 run_rules.setdefault(ref.run, set()).add(sid)
         elif missing_reason == "not_yet":
             not_yet.append(sid)
-        elif missing_reason:
+        elif missing_reason and sid not in campaign_rules:
             no_run.append((sid, missing_reason))
+        elif missing_reason:
+            pass
         elif sid in SOURCE_ONLY_REASONS:
             source_only.append(sid)
         else:
@@ -939,20 +1017,26 @@ def build_content() -> tuple[str, int, int, int, int]:
             for ref in refs
             for path in locate(ref.run, manifests, ref.channels)
         }
-    raw_count = sum(bool(capture_kinds.get(sid, set()) & {"P", "R"}) for sid in all_ids)
-    if raw_count != len(all_ids) - len(CAPTURE_AUDIT_NA):
+    # C 表示 Campaign 封存的官方取证与候选断言；抓包不适用的内部机制即使有候选断言也不计入抓包证据。
+    for sid in campaign_rules - CAPTURE_AUDIT_NA:
+        capture_kinds.setdefault(sid, set()).add("C")
+    capturable = all_ids - CAPTURE_AUDIT_NA
+    raw_count = sum(bool(capture_kinds.get(sid, set()) & {"P", "R", "C"}) for sid in capturable)
+    if raw_count != len(capturable):
         missing_raw = sorted(
-            sid for sid in all_ids - CAPTURE_AUDIT_NA
-            if not capture_kinds.get(sid, set()) & {"P", "R"}
+            sid for sid in capturable
+            if not capture_kinds.get(sid, set()) & {"P", "R", "C"}
         )
-        raise ValueError(f"仍缺 P/R 原始证据的可抓包编号项：{missing_raw}")
+        raise ValueError(f"仍缺 P/R 原始证据或 Campaign 封存证据的可抓包编号项：{missing_raw}")
 
     lines = [
         "# 证据索引：编号项 ↔ 官方证据文件",
         "",
         "> 由 `tools/evidence_index.py` 生成，不要手改。",
         "",
-        "本索引只接收 **Codex CLI 0.145.0 官方客户端**证据。Sub2API 出站验收目录",
+        "本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**"
+        "（P/R/J/M，逐运行定位到本地文件）与 "
+        f"**Active {campaign.version} Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录",
         "`sub2api-egress` 被生成器硬禁止；它只能用于第三部分的实现差异比对。",
         "",
         "## 0. 证据类型与边界",
@@ -963,6 +1047,7 @@ def build_content() -> tuple[str, int, int, int, int]:
         "| **R** | 等长脱敏后的中继原始字节 `.bin` | HTTP/1.1 线序、完整 body、WS 帧；可重新解析 | 官方 relay；部分 `raw-scrubbed` 目录无逐运行 manifest／二进制哈希 |",
         "| **J** | JSON 解码摘要 | 摘要中保留的 header／body 形态 | 无原始字节时不能升级成逐字节证据 |",
         "| **M** | manifest 绑定的官方脱敏分析 | HTTP／WS 字段形态与取值 | 强校验版本、二进制 SHA、官方边界、artifact 哈希；不暴露 `raw_private` |",
+        "| **C** | Campaign 封存的官方取证与候选断言 | 目标版本官方原始字节、观测与逐条断言结论 | 原件在 ARM64 私有归档；仓库内由 Active 终态收据的 Campaign 链与审计索引的归档摘要绑定 |",
         "",
         "R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替换；header 名、",
         "大小写、偏移、`Content-Length` 与帧长度保持不变。M 类只链接 manifest 中",
@@ -973,14 +1058,14 @@ def build_content() -> tuple[str, int, int, int, int]:
         "（realtime 受控第二跳、H2 原始帧交叉核验）；"
         f"**{raw_standalone} 个是可独立重解析的 EP-019 请求文件**。",
         "",
-        "## 1. 53 项源码／抓包双证据复核",
+        f"## 1. {len(all_ids)} 项源码／抓包双证据复核",
         "",
         f"源码证据：**充分 {len(source_full)}、部分 {len(SOURCE_AUDIT_PARTIAL)}、"
         f"无／不适用 {len(SOURCE_AUDIT_NONE)}**。抓包证据："
         f"**充分 {len(capture_full)}、有限 {len(CAPTURE_AUDIT_LIMITED)}、"
         f"不适用 {len(CAPTURE_AUDIT_NA)}**。",
         "",
-        f"**{raw_count}/{len(all_ids)} 项已有可重新解析的 P/R 原始证据**；唯一例外 `SPEC-HDR-001` "
+        f"**{raw_count}/{len(all_ids)} 项已有 P/R 原始证据或 Campaign 封存证据（C）**；唯一例外 `SPEC-HDR-001` "
         "描述内部调用顺序，抓包在结构上不适用。J/M 仍可作交叉验证，但不再是任何"
         "编号项唯一的抓包载体。",
         "",
@@ -1001,11 +1086,13 @@ def build_content() -> tuple[str, int, int, int, int]:
             capture_label = "🟡 有限"
         else:
             capture_label = "✅ 充分"
-        kinds = "+".join(sorted(capture_kinds.get(sid, set()), key="PRJM".index)) or "—"
-        note = AUDIT_NOTES.get(
-            sid,
-            "源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。",
+        kinds = "+".join(sorted(capture_kinds.get(sid, set()), key="PRJMC".index)) or "—"
+        default_note = (
+            "源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。"
+            if capture_kinds.get(sid, set()) & {"P", "R", "J", "M"}
+            else "源码命题与 Campaign 封存的官方取证、候选断言语义一致；坐标见 §2.1。"
         )
+        note = AUDIT_NOTES.get(sid, default_note)
         lines.append(
             f"| {sid} | {item_meta[sid][0]} | {source_label} | {capture_label} | "
             f"{kinds} | {note} |"
@@ -1035,6 +1122,26 @@ def build_content() -> tuple[str, int, int, int, int]:
                 f"{scope if index == 0 else ''} | {status if index == 0 else ''} | "
                 f"`{ref.run}` | **{kinds}** | {ref.scope} | {rendered} |"
             )
+
+    lines += [
+        "",
+        f"## 2.1 Campaign 封存证据（Active {campaign.version}，{len(campaign_rules)} 项）",
+        "",
+        "正文实测以 `assert-SPEC-*` 引用本条候选断言的编号项登记为 C。官方取证与候选断言的原始字节、观测和",
+        "断言结论封存在 ARM64 私有归档，仓库内只登记坐标：",
+        "",
+        f"- 终态收据：`{campaign.receipt}`",
+        "- 官方证据 Campaign：" + "、".join(f"`{item}`" for item in campaign.official_campaigns)
+        + f"；canonical Campaign：`{campaign.canonical_campaign}`",
+        f"- 私有归档：`{campaign.archive_path}`（SHA-256 `{campaign.archive_sha256}`，{campaign.archive_bytes} 字节）",
+        "",
+        "| 编号项 | 分类 | 验证状态 | 候选断言 |",
+        "|---|---|---|---|",
+        *[
+            f"| {sid} | {item_meta[sid][0]} | {item_meta[sid][2]} | `assert-{sid}` |"
+            for sid in sorted(campaign_rules, key=sid_sort_key)
+        ],
+    ]
 
     physical = len({canon_run(run) for run in run_rules})
     lines += [
