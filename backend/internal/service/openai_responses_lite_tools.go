@@ -94,11 +94,15 @@ func openAIResponsesLiteRequiresFullResponses(body []byte) bool {
 	}
 	input := openAIBodyGet(body, "input")
 	if input.IsArray() {
-		for _, item := range input.Array() {
-			itemType := strings.TrimSpace(item.Get("type").String())
-			if isOpenAIResponsesLiteHostedToolCallType(itemType) {
-				return true
-			}
+		// 逐项遍历而不是 input.Array()：后者为全部 input 项分配结果切片，每次模型能力判定（一次转发多次）
+		// 都按历史长度分配（问题四 M2 清单外副本）。正文已通过 ValidBytes，二者遍历的元素与顺序相同。
+		hostedCall := false
+		input.ForEach(func(_, item gjson.Result) bool {
+			hostedCall = isOpenAIResponsesLiteHostedToolCallType(strings.TrimSpace(item.Get("type").String()))
+			return !hostedCall
+		})
+		if hostedCall {
+			return true
 		}
 	}
 	return false
