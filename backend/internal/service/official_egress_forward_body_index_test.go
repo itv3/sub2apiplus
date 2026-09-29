@@ -236,6 +236,24 @@ func TestNormalizeOpenAIResponsesLiteToolsPayloadScansOnce(t *testing.T) {
 	require.Less(t, current+oneScan*3/4, legacy, "改写路径必须少扫描一遍正文")
 }
 
+// TestNormalizeOpenAIResponsesLiteToolsPayloadTreeSharesBody 锁定 Lite 归一化改写路径的对象树不再复制长字符串：
+// 与两遍扫描的改造前实现相比，至少少分配约 0.8 倍正文（树中字符串的副本）。
+func TestNormalizeOpenAIResponsesLiteToolsPayloadTreeSharesBody(t *testing.T) {
+	body := buildOfficialEgressMemoryProfileBody(t, 8<<20)
+	current := testMeasureAllocatedBytes(t, func() {
+		_, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+		require.NoError(t, err)
+		require.True(t, changed)
+	})
+	legacy := testMeasureAllocatedBytes(t, func() {
+		_, _, err := legacyNormalizeOpenAIResponsesLiteToolsPayloadTwoScans(body)
+		require.NoError(t, err)
+	})
+	t.Logf("正文 %.1f MiB：Lite 归一化改写路径 %.1f → %.1f MiB", float64(len(body))/(1<<20),
+		float64(legacy)/(1<<20), float64(current)/(1<<20))
+	require.Less(t, current+uint64(len(body))*8/10, legacy, "对象树不得再复制长字符串")
+}
+
 func TestOfficialForwardHTTPBodyIndexCacheByBodyIdentity(t *testing.T) {
 	var nilBody *officialForwardHTTPBody
 	require.Nil(t, nilBody.indexFor([]byte(`{}`)), "nil 工作区不提供索引")

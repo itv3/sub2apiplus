@@ -346,7 +346,10 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 		if openAIResponsesLiteAlreadyNormalized(index) {
 			return body, false, nil
 		}
-		requestBody = index.decodeObject(index.root)
+		// 对象树只在本函数内按 Lite 契约改写并随即保序拼接编码，其中的值只会被比较或编码进新正文、
+		// 不会保存到函数之外；无转义的长字符串因此以只读视图引用 body，不再把整段正文复制进树
+		// （问题四 M2 清单外副本：官方出站 Lite 改写路径上约 1.2 倍正文的瞬时峰值）。
+		requestBody, _ = index.decodeValueSharingBody(index.root).(map[string]any)
 	} else {
 		index = nil
 		var err error
