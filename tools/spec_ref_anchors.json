@@ -370,13 +370,6 @@
       },
       {
         "path": "core/src/client.rs",
-        "start": 630,
-        "end": 635,
-        "context_sha256": "013a61aec77509ef4b7775ae70b866a4f15561c4e600748a5c027bb970c030b6",
-        "anchor": "if let Some(header_value) = self.build_routing_hint_header("
-      },
-      {
-        "path": "core/src/client.rs",
         "start": 989,
         "end": 1011,
         "context_sha256": "ab381321a5812cd0db1c47edd496324e68ed8c410b4f219045a7aa8b1b7b9ae5",
@@ -577,6 +570,8 @@
         "anchor": "id: Feature::RuntimeMetrics,"
       }
     ],
+    "SPEC-HDR-009": [],
+    "SPEC-HDR-010": [],
     "SPEC-BODY-001": [
       {
         "path": "codex-api/src/common.rs",
@@ -695,6 +690,8 @@
       }
     ],
     "SPEC-BODY-007": [],
+    "SPEC-BODY-008": [],
+    "SPEC-BODY-009": [],
     "SPEC-EP-001": [
       {
         "path": "core/src/tools/spec_plan.rs",
@@ -806,13 +803,6 @@
         "anchor": "pub async fn list_models("
       },
       {
-        "path": "codex-api/src/endpoint/compact.rs",
-        "start": 46,
-        "end": 56,
-        "context_sha256": "0cb1ec43d41d81ca64b471d05e3fd33e39843d398d9edf33641c1cecc93a1d0b",
-        "anchor": "let resp = self"
-      },
-      {
         "path": "codex-api/src/endpoint/search.rs",
         "start": 35,
         "end": 45,
@@ -833,15 +823,6 @@
         "start": 31,
         "end": 55,
         "context_sha256": "58d0b7e0914567098600f9422c3d14162d07ca27e58176015fe81d158d5428b4",
-        "anchor": "fn path() -> &'static str {"
-      }
-    ],
-    "SPEC-EP-007": [
-      {
-        "path": "codex-api/src/endpoint/compact.rs",
-        "start": 35,
-        "end": 50,
-        "context_sha256": "5038b4b14dab56aed87973faaf4760b98c0949042ac0efe348c6b7c240b4b295",
         "anchor": "fn path() -> &'static str {"
       }
     ],
@@ -944,29 +925,6 @@
         "anchor": "fn configure_realtime_call_request("
       }
     ],
-    "SPEC-EP-014": [
-      {
-        "path": "core/src/client.rs",
-        "start": 613,
-        "end": 638,
-        "context_sha256": "153bba85ca87d27e7de4c517df45047b284ee3206c92a3ca060db82a0b645916",
-        "anchor": "let mut extra_headers = ApiHeaderMap::new();"
-      },
-      {
-        "path": "core/src/client.rs",
-        "start": 1954,
-        "end": 1971,
-        "context_sha256": "0dabbc4abcf30bdcf39b68d514c58c415f57f0f21f81b680d244aa53241f320a",
-        "anchor": "fn build_responses_headers("
-      },
-      {
-        "path": "codex-api/src/endpoint/responses.rs",
-        "start": 89,
-        "end": 89,
-        "context_sha256": "862d1a27db55bb5160921c5e077648dbcce71234a4ee973b687ca958214ad3b4",
-        "anchor": "insert_header(&mut headers, \"x-client-request-id\", thread_id);"
-      }
-    ],
     "SPEC-EP-015": [
       {
         "path": "codex-api/src/search.rs",
@@ -1025,15 +983,6 @@
         "end": 646,
         "context_sha256": "7365fd55cb7aa60d365e9ab555f6aa93757e654e45e3b318b2cc1efe76be3165",
         "anchor": "fn user_settings_url(&self) -> String {"
-      }
-    ],
-    "SPEC-EP-020": [
-      {
-        "path": "codex-api/src/common.rs",
-        "start": 28,
-        "end": 43,
-        "context_sha256": "82cab4f333a78d32a438c279684938c47980554f54a3391170d40a5bdae97454",
-        "anchor": "pub struct CompactionInput<'a> {"
       }
     ],
     "SPEC-EP-021": [

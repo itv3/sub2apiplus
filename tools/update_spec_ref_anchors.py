@@ -40,8 +40,8 @@ def main() -> int:
 
     spec_text = args.spec.read_text(encoding="utf-8")
     rules = extract_rule_source_refs(spec_text)
-    if len(rules) != 53:
-        print(f"第二部分应有 53 条规则，实际为 {len(rules)}。", file=sys.stderr)
+    if len(rules) != 54:
+        print(f"第二部分应有 54 条规则，实际为 {len(rules)}。", file=sys.stderr)
         return 1
 
     index = build_index([args.source_root, ROOT / "backend", DEPENDENCY_SOURCE_ROOT])

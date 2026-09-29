@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验第二部分 53 个编号项的格式与分类。
+"""校验第二部分 54 个编号项的格式与分类。
 
 第一、第三部分属于独立内容，本脚本既不解析也不改写；每个编号项必须使用统一
 六字段模板。
@@ -36,13 +36,13 @@ VISIBLE_RULES = {
     "SPEC-H2-005", "SPEC-H2-006", "SPEC-H2-007",
     "SPEC-WS-001", "SPEC-WS-002", "SPEC-WS-003", "SPEC-WS-004", "SPEC-WS-005",
     "SPEC-HDR-002", "SPEC-HDR-004", "SPEC-HDR-005", "SPEC-HDR-006",
-    "SPEC-HDR-007", "SPEC-HDR-008",
+    "SPEC-HDR-007", "SPEC-HDR-008", "SPEC-HDR-009", "SPEC-HDR-010",
     "SPEC-BODY-001", "SPEC-BODY-002", "SPEC-BODY-003", "SPEC-BODY-005",
-    "SPEC-BODY-006",
+    "SPEC-BODY-006", "SPEC-BODY-008", "SPEC-BODY-009",
     "SPEC-EP-001", "SPEC-EP-002", "SPEC-EP-005", "SPEC-EP-006",
-    "SPEC-EP-007", "SPEC-EP-008", "SPEC-EP-009", "SPEC-EP-012",
-    "SPEC-EP-013", "SPEC-EP-014", "SPEC-EP-015", "SPEC-EP-019",
-    "SPEC-EP-020", "SPEC-EP-021", "SPEC-EP-022",
+    "SPEC-EP-008", "SPEC-EP-009", "SPEC-EP-012",
+    "SPEC-EP-013", "SPEC-EP-015", "SPEC-EP-019",
+    "SPEC-EP-021", "SPEC-EP-022",
 }
 MECHANISM_ITEMS = {"SPEC-HDR-001", "SPEC-BODY-004", "SPEC-EP-023"}
 EVIDENCE_RECORDS = {"SPEC-BODY-007", "SPEC-EP-024"}
@@ -245,7 +245,7 @@ def validate_format(text: str) -> list[str]:
     for match, body in sections:
         sid, end = match.group(1), match.group(2)
         if end:
-            errors.append(f"{sid} 仍使用范围标题；53 个编号必须逐项独立")
+            errors.append(f"{sid} 仍使用范围标题；54 个编号必须逐项独立")
         matches = list(FIELD_RE.finditer(body))
         labels = [field.group(1) for field in matches]
         duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
@@ -286,7 +286,7 @@ def main() -> int:
             print(f"❌ {error}", file=sys.stderr)
         return 1
 
-    print("✅ 第二部分：53 个编号、统一模板与分类一致")
+    print("✅ 第二部分：54 个编号、统一模板与分类一致")
     return 0
 
 
