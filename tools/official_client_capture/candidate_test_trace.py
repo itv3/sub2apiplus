@@ -117,8 +117,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 成员产出并回指调用方原始正文，Finalizer 成员按来源回指，上游 attempt 期间暂存整段正文、返回后按成员
 # 恢复，改动 `openai_gateway_forward.go` 与 `official_egress_openai_http.go`；映射只重绑这两份源码快照，
 # 不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M3-b）：编译器 zstd 输出缓冲改为按最坏长度的 81% 预留，按原样存储为主的内容（超长或
+# 背靠背的 base64）按原长计入，改动 `officialegress/compiler.go`（输出与改造前逐字节一致）；映射只重绑该
+# 源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "292e57973699a732c28e6d2f11af029a6fc2a8a638d5af26ab4b21fe2522e5e1"
+    "ec4514d9860a4a2eaf67fe0b8721ae5e626ab0427b48b95c647e6f350d7884be"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

@@ -1092,9 +1092,9 @@ func compileEndpointBody(
 // 两处分配与输出无关，按最小占用设置：
 //   - EncodeAll 每次调用只占用一个编码器，缺省并发度却会在初始化时按 GOMAXPROCS 预建同样数量
 //     的编码器状态（每个约 1 MiB 匹配表），这里固定为 1；并发度只决定编码器池大小。
-//   - 输出缓冲按 MaxEncodedSize 一次预留：缺省从小容量起按约 1.25 倍反复扩容，大正文累计分配约
-//     五倍压缩结果，且最后一次扩容瞬间新旧两块同时存活。EncodeAll 只向 dst 追加，预留容量
-//     不改变输出字节。
+//   - 输出缓冲按经验比例一次预留（zstdOutputReservation）：缺省从小容量起按约 1.25 倍反复扩容，
+//     大正文累计分配约五倍压缩结果；按最坏长度预留则让一份与正文等大的缓冲在压缩期间常驻。
+//     EncodeAll 只向 dst 追加，预留容量不改变输出字节。
 //
 // 输出与缺省参数的新建编码器逐字节一致，由差分测试锁定。
 func compressCompiledBodyZstd(level int, compiled []byte) ([]byte, error) {
@@ -1109,13 +1109,142 @@ func compressCompiledBodyZstd(level int, compiled []byte) ([]byte, error) {
 	var dst []byte
 	if len(compiled) > 0 {
 		// 空正文保持 nil 目标缓冲，与过去 EncodeAll(nil, nil) 的返回值完全相同。
-		dst = make([]byte, 0, encoder.MaxEncodedSize(len(compiled)))
+		dst = make([]byte, 0, zstdOutputReservation(
+			encoder.MaxEncodedSize(len(compiled)), len(compiled), zstdLikelyIncompressibleBytes(compiled),
+		))
 	}
 	out := encoder.EncodeAll(compiled, dst)
 	if err := encoder.Close(); err != nil {
 		return nil, fmt.Errorf("关闭 zstd 编码器: %w", err)
 	}
 	return out, nil
+}
+
+// zstdOutputReserveRatioPercent 是压缩输出缓冲按最坏长度（MaxEncodedSize）预留的基准百分比（问题四 M3-b）。
+//
+// 取舍：
+//   - 过去按最坏长度一次预留，压缩期间一份与正文等大的缓冲常驻；可压缩的正文实际只用到其中六到七成。
+//   - 不能改用流式编码按块输出（帧头、重复偏移保存与整块结尾的处理与 EncodeAll 不同，输出字节会变），
+//     也不能复用缓冲（压缩结果随后成为请求体，由执行器与 HTTP 传输持有到请求结束，归还时机无法保证），
+//     更不能先压缩一遍求出长度（两遍压缩）。只能在压缩前估计容量，估计只影响容量、不影响输出字节。
+//   - 基准取 81%：Go 对大切片扩容一次至少放大到约 1.25 倍，81% × 1.25 > 100%，因此无论估计如何，
+//     EncodeAll 追加过程中最多扩容一次（扩容瞬间新旧两块同时存活，比按最坏长度预留多约 0.8 倍正文）。
+//   - 该编码器（等级 3）的实测规律是两极的：base64 片段与足量可匹配的文本交错时，字面量被熵编码，
+//     整体压缩比约 0.6～0.75；一个块里几乎只有 base64（图片 data URL，或加密推理内容背靠背、之间几乎
+//     没有文本）时块按原样存储，压缩比约为 1。后一类若按 81% 预留必然扩容一次，所以先用
+//     zstdLikelyIncompressibleBytes 廉价识别这类内容，按原长计入预留，其余按 81%：可压缩正文预留少约
+//     两成且不扩容，按原样存储为主的正文预留接近最坏长度、与过去相同；识别不准时至多扩容一次。
+const zstdOutputReserveRatioPercent = 81
+
+const (
+	// zstdBase64StringMinBytes 以上、抽样几乎全是 base64 字符的 JSON 字符串内容视为 base64 长串。
+	zstdBase64StringMinBytes = 4 << 10
+	// zstdIncompressibleStringMinBytes 以上的 base64 长串无论周围内容如何都按原样存储计。
+	zstdIncompressibleStringMinBytes = 64 << 10
+	// zstdMatchableContentMinPercent：base64 长串之外的内容不足正文的这一比例时，视为块内没有可匹配的
+	// 内容，整段按原样存储计。实测每 13 KB base64 之间约有 500 字节文本（约 4%）时块已被熵编码。
+	zstdMatchableContentMinPercent = 2
+	// zstdRawBlockBytes 是编码器的块大小（等级 3 缺省 128 KiB），用作超长串两端边界块的余量。
+	zstdRawBlockBytes = 128 << 10
+)
+
+// zstdOutputReservation 返回压缩输出缓冲的预留容量：帧头与每块封装开销（最坏长度减输入长度）与
+// likelyIncompressible 字节按原长计入，其余输入按 81% 计入，不超过最坏长度。结果不低于最坏长度的 81%，
+// 因此最多扩容一次。极小正文至少预留 64 字节（不超过最坏长度），避免为几十字节的输出再扩容。
+func zstdOutputReservation(maxEncodedSize int, inputLen int, likelyIncompressible int) int {
+	inputLen = min(max(inputLen, 0), maxEncodedSize)
+	likelyIncompressible = min(max(likelyIncompressible, 0), inputLen)
+	rest := inputLen - likelyIncompressible
+	reservation := maxEncodedSize - inputLen + likelyIncompressible +
+		rest/100*zstdOutputReserveRatioPercent + rest%100*zstdOutputReserveRatioPercent/100
+	if reservation < 64 {
+		reservation = min(64, maxEncodedSize)
+	}
+	return min(reservation, maxEncodedSize)
+}
+
+// zstdLikelyIncompressibleBytes 粗估定型正文里会被按原样存储的字节数，只用于预留容量。原样存储以块
+// （128 KiB）为单位，块内的 JSON 结构也一并按原样存储：
+//   - base64 长串（不短于 zstdBase64StringMinBytes）之外的内容不足正文 zstdMatchableContentMinPercent% 时，
+//     几乎每个块都没有可匹配的内容，整段按原样计；
+//   - 否则每个超长 base64 串（不短于 zstdIncompressibleStringMinBytes）按原长计，另加两端各一个块的余量，
+//     覆盖边界块也被原样存储的情况；其余内容视为可压缩。
+//
+// 只用 bytes.IndexByte 在引号间跳跃（转义引号按前导反斜杠个数识别），对长串只做抽样检查，开销远小于
+// 压缩本身。
+func zstdLikelyIncompressibleBytes(compiled []byte) int {
+	long, longCount, medium := 0, 0, 0
+	for position := 0; position < len(compiled); {
+		opening := bytes.IndexByte(compiled[position:], '"')
+		if opening < 0 {
+			break
+		}
+		start := position + opening + 1
+		end := start
+		for {
+			closing := bytes.IndexByte(compiled[end:], '"')
+			if closing < 0 {
+				end = -1
+				break
+			}
+			end += closing
+			backslashes := 0
+			for i := end - 1; i >= start && compiled[i] == '\\'; i-- {
+				backslashes++
+			}
+			if backslashes%2 == 0 {
+				break
+			}
+			end++
+		}
+		if end < 0 {
+			break
+		}
+		if content := compiled[start:end]; len(content) >= zstdBase64StringMinBytes && zstdLooksBase64(content) {
+			if len(content) >= zstdIncompressibleStringMinBytes {
+				long += len(content)
+				longCount++
+			} else {
+				medium += len(content)
+			}
+		}
+		position = end + 1
+	}
+	if matchable := len(compiled) - long - medium; matchable*100 < len(compiled)*zstdMatchableContentMinPercent {
+		return len(compiled)
+	}
+	return min(len(compiled), long+longCount*2*zstdRawBlockBytes)
+}
+
+// zstdLooksBase64 抽样判断内容是否几乎全由 base64 字符（A-Z、a-z、0-9、+、/、=、-、_）组成：首尾各 256 字节
+// 与均匀分布的 16 段各 64 字节中，非 base64 字符不超过 1%。只用于容量估计。
+func zstdLooksBase64(content []byte) bool {
+	isBase64 := func(c byte) bool {
+		return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+			c == '+' || c == '/' || c == '=' || c == '-' || c == '_'
+	}
+	sampled, other := 0, 0
+	inspect := func(window []byte) {
+		for _, c := range window {
+			sampled++
+			if !isBase64(c) {
+				other++
+			}
+		}
+	}
+	const edge, segment, segments = 256, 64, 16
+	if len(content) <= 2*edge+segment*segments {
+		inspect(content)
+	} else {
+		inspect(content[:edge])
+		inspect(content[len(content)-edge:])
+		stride := (len(content) - 2*edge) / segments
+		for i := 0; i < segments; i++ {
+			offset := edge + i*stride
+			inspect(content[offset : offset+segment])
+		}
+	}
+	return other*100 <= sampled
 }
 
 // codexClientMetadataConstants 是 ClientMetadata 可选节在一次编译中的求值输入。
