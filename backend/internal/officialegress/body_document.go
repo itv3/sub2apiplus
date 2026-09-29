@@ -294,11 +294,75 @@ func PrepareOfficialCodexAttemptRequestBody(
 		}
 		return prepareOfficialCodexAttemptOwnedBody(endpointID, replayed)
 	}
+	if content := body.jsonObjectMembers(); content != nil {
+		return prepareOfficialCodexAttemptMembersBody(endpointID, content)
+	}
 	view, ok := body.replayableView()
 	if !ok {
 		return RequestBody{}, CompilerOwnedBodyFields{}, errors.New("Codex 语义 Body 必须是 replayable bytes")
 	}
 	return prepareOfficialCodexAttemptOwnedBody(endpointID, view)
+}
+
+// prepareOfficialCodexAttemptMembersBody 是按顶层成员装配的 Body 的语义准备：document 直接由
+// 成员建立，不物化整段正文。成员经过与扫描器相同的逐项校验（键的 JSON 编码可还原为 Name、
+// 值是前后无空白的完整 JSON 值、无重复键），因此得到的字段与扫描物化字节的结果逐项相同；任何
+// 一项无法证明时退回物化字节走原扫描路径，错误与行为与字节入口完全一致。
+func prepareOfficialCodexAttemptMembersBody(
+	endpointID string,
+	content *jsonObjectMembersContent,
+) (RequestBody, CompilerOwnedBodyFields, error) {
+	requestBody := RequestBody{state: &requestBodyState{
+		mode: RequestBodyReplayable, members: content, length: int64(content.length),
+	}}
+	fields := CompilerOwnedBodyFields{Metadata: make(map[string]string)}
+	// 顶层对象至少写成 "{}"，不可能为空白；不抽取 compiler-owned 字段的端点原样交给编译器。
+	if !endpointExtractsCompilerOwnedBody(endpointID) {
+		return requestBody, fields, nil
+	}
+	document, ok := orderedJSONDocumentFromMembers(content.members)
+	if !ok {
+		return prepareOfficialCodexAttemptOwnedBody(endpointID, content.materialize())
+	}
+	if err := extractCompilerOwnedBodyFields(endpointID, document, &fields); err != nil {
+		return RequestBody{}, CompilerOwnedBodyFields{}, err
+	}
+	requestBody.state.document = document
+	return requestBody, fields, nil
+}
+
+// orderedJSONDocumentFromMembers 在能证明与 scanOrderedJSONFields(AppendJSONObjectMembers(members))
+// 结果逐项相同时，直接由成员建立 document；否则返回 false。
+func orderedJSONDocumentFromMembers(members []JSONObjectMember) (*orderedJSONDocument, bool) {
+	fields := make([]orderedJSONField, 0, len(members))
+	fieldIndex := make(map[string]int, len(members))
+	for _, member := range members {
+		end, escaped, err := skipJSONString(member.QuotedName, 0)
+		if err != nil || end != len(member.QuotedName) {
+			return nil, false
+		}
+		name, err := decodeJSONFieldName(member.QuotedName, escaped)
+		if err != nil || name != member.Name {
+			return nil, false
+		}
+		if _, duplicate := fieldIndex[name]; duplicate {
+			// 扫描器会以“字段重复”失败关闭，交给物化字节产出同一错误。
+			return nil, false
+		}
+		if len(member.Value) == 0 || isJSONSpace(member.Value[0]) {
+			return nil, false
+		}
+		// 与 scanOrderedJSONFields 相同：顶层字段值位于第 2 层。
+		valueEnd, err := skipJSONValue(member.Value, 0, 2)
+		if err != nil || valueEnd != len(member.Value) {
+			return nil, false
+		}
+		fieldIndex[name] = len(fields)
+		fields = append(fields, orderedJSONField{name: name, value: json.RawMessage(member.Value)})
+	}
+	return &orderedJSONDocument{
+		fields: fields, fieldIndex: fieldIndex, duplicatesChecked: true,
+	}, true
 }
 
 // prepareOfficialCodexAttemptOwnedBody 只接收此后不再改写的字节（包内副本或调用方移交的

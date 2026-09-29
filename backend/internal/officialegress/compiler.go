@@ -1003,15 +1003,32 @@ func compileEndpointBody(
 		}
 		return nil, nil
 	}
-	raw, ok := body.replayableView()
-	if !ok {
-		return nil, errors.New("replayable Body 无法读取")
+	// 按顶层成员装配且已建好 document 的 Body（Finalizer 按成员交接的终态正文）不物化整段
+	// 正文：顶层对象至少写成 "{}"，一定非空白；JSON 端点直接按 document 定型，只有需要整段
+	// 字节的编码分支才物化。其余 Body 与过去一样先取整段只读视图。
+	membersDocument := body.jsonDocument() != nil && body.jsonObjectMembers() != nil
+	var raw []byte
+	blank := false
+	if !membersDocument {
+		view, ok := body.replayableView()
+		if !ok {
+			return nil, errors.New("replayable Body 无法读取")
+		}
+		raw = view
+		blank = len(bytes.TrimSpace(raw)) == 0
+	}
+	wholeBody := func() []byte {
+		if membersDocument {
+			view, _ := body.replayableView()
+			return view
+		}
+		return raw
 	}
 	compressed := headerHasToken(headers, "Content-Encoding", "zstd")
 	if compressed && endpoint.Compression != profilecontract.CompressionZstdWhenFeatureEnabled {
 		return nil, errors.New("端点画像不允许 zstd 请求体")
 	}
-	if endpoint.Upgrade != "" && len(bytes.TrimSpace(raw)) == 0 {
+	if endpoint.Upgrade != "" && blank {
 		return raw, nil
 	}
 	if endpoint.ID != "oauth_refresh" && authentication.RefreshToken != "" {
@@ -1021,10 +1038,10 @@ func compileEndpointBody(
 	var err error
 	switch endpoint.Body.Encoding {
 	case profilecontract.BodyNone, profilecontract.BodyRawBytes:
-		compiled = raw
+		compiled = wholeBody()
 	case profilecontract.BodyJson, profilecontract.BodyWebsocketJson,
 		profilecontract.BodyWebsocketDiscriminatedEvents:
-		if len(bytes.TrimSpace(raw)) == 0 {
+		if blank {
 			if len(endpoint.Body.Fields) == 0 {
 				compiled = raw
 				break
@@ -1052,7 +1069,7 @@ func compileEndpointBody(
 		)
 	case profilecontract.BodyFormUrlencoded:
 		compiled, err = orderFormBody(
-			raw, endpoint.Body, features, identityFacts.Conditions,
+			wholeBody(), endpoint.Body, features, identityFacts.Conditions,
 			bodyConditions, authentication,
 		)
 	default:

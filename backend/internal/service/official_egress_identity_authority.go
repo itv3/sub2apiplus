@@ -142,8 +142,19 @@ func projectOfficialCodexIdentityAccount(account *Account) officialCodexIdentity
 	}
 }
 
-// officialCodexSemanticAttemptBodyOwnership 声明语义 Body 字节的所有权。缺省（不传）为复制：
-// 语义 Body 持有 body 的独立副本，调用方此后可以任意处置自己的切片。
+// officialCodexSemanticAttemptOption 调整 prepareOfficialCodexSemanticAttempt 的语义 Body 来源与
+// 所有权。不传任何选项时语义 Body 复制 body，调用方此后可以任意处置自己的切片。
+type officialCodexSemanticAttemptOption interface {
+	applyOfficialCodexSemanticAttempt(*officialCodexSemanticAttemptSettings)
+}
+
+type officialCodexSemanticAttemptSettings struct {
+	shareBody    bool
+	preparedBody *officialegress.RequestBody
+	bodyBytes    func() []byte
+}
+
+// officialCodexSemanticAttemptBodyOwnership 声明语义 Body 字节的所有权。
 type officialCodexSemanticAttemptBodyOwnership uint8
 
 const (
@@ -154,8 +165,32 @@ const (
 	officialCodexSemanticAttemptSharedBody officialCodexSemanticAttemptBodyOwnership = iota + 1
 )
 
+func (o officialCodexSemanticAttemptBodyOwnership) applyOfficialCodexSemanticAttempt(
+	settings *officialCodexSemanticAttemptSettings,
+) {
+	if o == officialCodexSemanticAttemptSharedBody {
+		settings.shareBody = true
+	}
+}
+
+// officialCodexSemanticAttemptPreparedBody 表示语义 Body 直接由已构造的只读句柄准备（Finalizer
+// 按顶层成员交接的终态正文，见 officialegress.NewSharedReplayableJSONObjectRequestBody），不经过
+// 整段字节。bytes 只在兜底 turn metadata 需要读取正文字段时才调用，此时才物化整段正文。
+type officialCodexSemanticAttemptPreparedBody struct {
+	body  officialegress.RequestBody
+	bytes func() []byte
+}
+
+func (o officialCodexSemanticAttemptPreparedBody) applyOfficialCodexSemanticAttempt(
+	settings *officialCodexSemanticAttemptSettings,
+) {
+	body := o.body
+	settings.preparedBody = &body
+	settings.bodyBytes = o.bytes
+}
+
 // prepareOfficialCodexSemanticAttempt 把已完成业务语义构造的请求转换为 Executor 语义 attempt。
-// ownership 只影响语义 Body 是否复制 body，转换结果与字节内容无关；冻结的 Executor 入口按
+// options 只影响语义 Body 从哪里来、是否复制，转换结果与字节内容无关；冻结的 Executor 入口按
 // 原签名调用，行为不变。
 func prepareOfficialCodexSemanticAttempt(
 	request *http.Request,
@@ -163,22 +198,36 @@ func prepareOfficialCodexSemanticAttempt(
 	endpointID string,
 	identitySeed string,
 	account officialCodexIdentityAccountProjection,
-	ownership ...officialCodexSemanticAttemptBodyOwnership,
+	options ...officialCodexSemanticAttemptOption,
 ) (officialCodexSemanticAttempt, error) {
 	if request == nil || request.URL == nil || account.ID <= 0 {
 		return officialCodexSemanticAttempt{}, errors.New("Codex 语义 attempt 输入不完整")
 	}
-	shareBody := len(ownership) > 0 && ownership[0] == officialCodexSemanticAttemptSharedBody
+	settings := officialCodexSemanticAttemptSettings{}
+	for _, option := range options {
+		if option != nil {
+			option.applyOfficialCodexSemanticAttempt(&settings)
+		}
+	}
+	semanticBodyBytes := settings.bodyBytes
+	if semanticBodyBytes == nil {
+		semanticBodyBytes = func() []byte { return body }
+	}
 	materializeOfficialCodexCookieJar(request)
 	headers := request.Header.Clone()
 	var semanticBody officialegress.RequestBody
 	var ownedFields officialegress.CompilerOwnedBodyFields
 	var err error
-	if shareBody {
+	switch {
+	case settings.preparedBody != nil:
+		semanticBody, ownedFields, err = officialegress.PrepareOfficialCodexAttemptRequestBody(
+			endpointID, *settings.preparedBody,
+		)
+	case settings.shareBody:
 		semanticBody, ownedFields, err = officialegress.PrepareOfficialCodexAttemptRequestBody(
 			endpointID, officialegress.NewSharedReplayableRequestBody(body),
 		)
-	} else {
+	default:
 		semanticBody, ownedFields, err = officialegress.PrepareOfficialCodexAttemptBody(endpointID, body)
 	}
 	if err != nil {
@@ -217,7 +266,7 @@ func prepareOfficialCodexSemanticAttempt(
 			CompressionEligible: headerContainsToken(headers, "Content-Encoding", "zstd"),
 			LunaReservePresent:  strings.TrimSpace(headers.Get("x-openai-codex-luna-reserve")) != "",
 		},
-		body,
+		semanticBodyBytes,
 	)
 	if err != nil {
 		return officialCodexSemanticAttempt{}, err
@@ -273,7 +322,7 @@ func buildOfficialCodexIdentityFacts(
 	endpointID string,
 	identitySeed string,
 	attemptConditions officialCodexAttemptConditions,
-	semanticBody []byte,
+	semanticBody func() []byte,
 ) (officialegress.CodexIdentityFacts, error) {
 	facts := officialegress.CodexIdentityFacts{}
 	structuredIdentity := officialCodexInvocationIdentityFromContext(request.Context())
@@ -517,8 +566,10 @@ func buildOfficialCodexIdentityFacts(
 // 取值所需的输入。profileMode 为空（调用未冻结 release mode）时不读画像，保持旧逻辑，
 // 不默认退化为 active。
 type officialCodexFallbackTurnMetadataInput struct {
-	profileMode      string
-	semanticBody     []byte
+	profileMode string
+	// semanticBody 只在兜底生成 turn metadata、需要读取语义请求体的 model 与 reasoning.effort
+	// 时才调用；按顶层成员装配的正文此时才物化整段字节。
+	semanticBody     func() []byte
 	memoryGeneration bool
 }
 
@@ -598,7 +649,10 @@ func completeOfficialCodexGeneratedIdentityFacts(
 				"turn_id": facts.TurnID.Value, "window_id": facts.WindowID.Value,
 				"request_kind": "turn", "thread_source": "user", "sandbox": "seccomp",
 			}
-			body := fallbackTurnMetadata.semanticBody
+			var body []byte
+			if fallbackTurnMetadata.semanticBody != nil {
+				body = fallbackTurnMetadata.semanticBody()
+			}
 			if err := applyOfficialCodexTurnMetadataSection(values, section, officialCodexTurnMetadataExtension{
 				Model:           strings.TrimSpace(gjson.GetBytes(body, "model").String()),
 				ReasoningEffort: strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()),

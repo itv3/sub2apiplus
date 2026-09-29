@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/gin-gonic/gin"
@@ -590,12 +591,14 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			bodyIndex = nil
 		}
 	}
-	finalBody, bodyModified, err := finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
+	// 终态修正改写正文时不再拼成整段字节，而是产出按线序排列的顶层成员（问题四 M1 第三项）：
+	// 未改动的大字段直接引用 body 的区间，编译器按成员定型 wire JSON，整段语义正文只在确有
+	// 读取方（冻结 Executor、诊断等）读取请求体时才物化。未改写时照旧直接使用 body。
+	finalMembers, finalizeModified, err := finalizeOfficialOpenAIHTTPBodyPayloadMembers(
 		payload,
 		body,
 		bodyIndex,
 		plan.OfficialEgressBodyContract,
-		identity,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
 		officialOpenAIHTTPBodyOptions{
 			IsCompact:             plan.IsCompact,
@@ -608,7 +611,7 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	if err != nil {
 		return nil, result, err
 	}
-	bodyModified = bodyModified || toolPresentationModified
+	bodyModified := finalizeModified || toolPresentationModified
 	if bodyModified {
 		result.Modifications = append(result.Modifications,
 			OfficialEgressModification{Kind: "body", Field: "instructions"},
@@ -648,7 +651,11 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 		return nil, result, err
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
-	resetOfficialEgressRequestBody(req, finalBody)
+	if finalizeModified {
+		resetOfficialEgressRequestBodyMembers(req, finalMembers)
+	} else {
+		resetOfficialEgressRequestBody(req, body)
+	}
 	return req, result, nil
 }
 
@@ -751,11 +758,60 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 	reasoningDefaults officialOpenAIReasoningDefaults,
 	options officialOpenAIHTTPBodyOptions,
 ) ([]byte, bool, error) {
+	modified, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, reasoningDefaults, options)
+	if err != nil {
+		return nil, false, err
+	}
+	if !modified {
+		return body, false, nil
+	}
+	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
+		options.ProfileMode, payload, options.IsCompact, body, bodyIndex,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
+	}
+	return finalBody, true, nil
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadMembers 与 finalizeOfficialOpenAIHTTPBodyPayloadWithIndex
+// 的定型完全相同；改写时不拼成整段字节，而是产出按线序排列的顶层成员，依次写出即与
+// finalizeOfficialOpenAIHTTPBodyPayloadWithIndex 的结果逐字节相同。未改写时返回 (nil, false, nil)，
+// 调用方直接使用 body。
+func finalizeOfficialOpenAIHTTPBodyPayloadMembers(
+	payload map[string]any,
+	body []byte,
+	bodyIndex *officialJSONRawIndex,
+	contract *officialOpenAIHTTPBodyContract,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) ([]officialegress.JSONObjectMember, bool, error) {
+	modified, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, reasoningDefaults, options)
+	if err != nil || !modified {
+		return nil, false, err
+	}
+	members, err := marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex(
+		options.ProfileMode, payload, options.IsCompact, body, bodyIndex,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
+	}
+	return members, true, nil
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadInPlace 就地完成全部定型改写与 call_id 校验，返回正文是否
+// 被改写；编码由调用方按需要的形态（整段字节或顶层成员）完成。
+func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
+	payload map[string]any,
+	contract *officialOpenAIHTTPBodyContract,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) (bool, error) {
 	if contract == nil {
-		return nil, false, errors.New("OpenAI official egress body contract is nil")
+		return false, errors.New("OpenAI official egress body contract is nil")
 	}
 	if payload == nil {
-		return nil, false, errors.New("OpenAI official egress decoded body is nil")
+		return false, errors.New("OpenAI official egress decoded body is nil")
 	}
 	// 解构一次，保持下方定型逻辑的可读性与原实现一致。
 	isCompact := options.IsCompact
@@ -778,7 +834,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 				// Lite 画像没有顶层 instructions；入口显式值和兼容层生成的
 				// 非空系统指令都必须无损投影为 input developer 消息。
 				if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, currentInstructions); err != nil {
-					return nil, false, err
+					return false, err
 				}
 			} else {
 				// 当前字段不是入口契约，也不是兼容层生成的有效语义（例如
@@ -800,7 +856,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 		// 当前画像恢复一次，避免系统指令因中间层改写而丢失。
 		if useResponsesLite {
 			if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, contract.instructions); err != nil {
-				return nil, false, err
+				return false, err
 			}
 		} else {
 			payload["instructions"] = contract.instructions
@@ -811,7 +867,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 		// 时恢复，避免把任意旧链路残留重新带入官方请求。
 		if useResponsesLite {
 			if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, contract.generatedInstructions); err != nil {
-				return nil, false, err
+				return false, err
 			}
 		} else {
 			payload["instructions"] = contract.generatedInstructions
@@ -827,7 +883,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 		endpointID,
 	)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	if isCompact {
 		if removed := stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel); len(removed) > 0 {
@@ -841,7 +897,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 	if !isCompact && useResponsesLite {
 		reasoningModified, err := ensureOpenAIResponsesLiteReasoningContext(payload)
 		if err != nil {
-			return nil, false, err
+			return false, err
 		}
 		if reasoningModified {
 			modified = true
@@ -857,7 +913,7 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 			options.UserAgent,
 		)
 		if err != nil {
-			return nil, false, err
+			return false, err
 		}
 		if profileModified {
 			modified = true
@@ -894,19 +950,9 @@ func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
 		}
 	}
 	if !reflect.DeepEqual(contract.callIDs, collectOfficialOpenAICallIDs(payload)) {
-		return nil, false, errors.New("OpenAI official egress call_id was modified")
+		return false, errors.New("OpenAI official egress call_id was modified")
 	}
-
-	if !modified {
-		return body, false, nil
-	}
-	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
-		options.ProfileMode, payload, isCompact, body, bodyIndex,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
-	}
-	return finalBody, true, nil
+	return modified, nil
 }
 
 // normalizeDerivedOfficialOpenAIHTTPBody 把第三方 Responses 请求归一化为

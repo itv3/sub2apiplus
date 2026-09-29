@@ -585,11 +585,65 @@ type requestBodyState struct {
 	mu         sync.Mutex
 	mode       RequestBodyMode
 	replayable []byte
+	// members 非 nil 表示正文按顶层成员装配（NewSharedReplayableJSONObjectRequestBody），整段
+	// 字节只在确有读取方需要时才由 members 物化，replayable 此时不使用。
+	members    *jsonObjectMembersContent
 	document   *orderedJSONDocument
 	stream     io.ReadCloser
 	length     int64
 	capability [sha256.Size]byte
 	consumed   bool
+}
+
+// JSONObjectMember 是按线序排列的一个顶层对象成员。Name 为未转义的键，QuotedName 为该键在
+// 正文中的 JSON 编码（含引号），Value 为该成员值的 JSON 字节（前后不含空白）。
+type JSONObjectMember struct {
+	Name       string
+	QuotedName []byte
+	Value      []byte
+}
+
+// JSONObjectMembersLength 返回成员依次写成顶层对象（见 AppendJSONObjectMembers）后的字节数。
+func JSONObjectMembersLength(members []JSONObjectMember) int {
+	length := 2
+	for i, member := range members {
+		if i > 0 {
+			length++
+		}
+		length += len(member.QuotedName) + 1 + len(member.Value)
+	}
+	return length
+}
+
+// AppendJSONObjectMembers 把成员依次写成顶层对象追加到 dst：成员之间以逗号分隔，成员内为
+// QuotedName、冒号、Value，不插入任何空白。
+func AppendJSONObjectMembers(dst []byte, members []JSONObjectMember) []byte {
+	dst = append(dst, '{')
+	for i, member := range members {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, member.QuotedName...)
+		dst = append(dst, ':')
+		dst = append(dst, member.Value...)
+	}
+	return append(dst, '}')
+}
+
+// jsonObjectMembersContent 是按成员装配的只读正文：整段字节只在首次需要时物化一次，
+// 物化结果与 AppendJSONObjectMembers 逐字节相同，并发读取安全。
+type jsonObjectMembersContent struct {
+	members []JSONObjectMember
+	length  int
+	once    sync.Once
+	bytes   []byte
+}
+
+func (c *jsonObjectMembersContent) materialize() []byte {
+	c.once.Do(func() {
+		c.bytes = AppendJSONObjectMembers(make([]byte, 0, c.length), c.members)
+	})
+	return c.bytes
 }
 
 // RequestBody 是跨 RequestCompiler 传递的不可透明读取 Body 句柄。compiler 可以读取
@@ -614,6 +668,29 @@ func NewReplayableRequestBody(body []byte) RequestBody {
 // 长度之外的空闲区间，从而也不会与调用方自己的追加写入互相覆盖。
 func NewSharedReplayableRequestBody(body []byte) RequestBody {
 	return newOwnedReplayableRequestBody(body[:len(body):len(body)])
+}
+
+// NewSharedReplayableJSONObjectRequestBody 以按线序排列的顶层成员构造 replayable Body，读取语义
+// 与 NewSharedReplayableRequestBody(AppendJSONObjectMembers(nil, members)) 完全相同，但整段字节
+// 只在确有读取方需要时才物化一次。
+//
+// 官方出站 Finalizer 的定型结果只改写少数顶层字段，未改动的大字段（input 等）直接引用改写前
+// 的正文区间；编译器按顶层字段重新定型 wire JSON，本就不需要这份整段字节。按成员交接后，
+// Finalizer 与编译器之间不再多出一份整段正文。调用方与 NewSharedReplayableRequestBody 一样
+// 移交全部字节的只读所有权；这里只复制成员描述（不复制字节），并把各切片容量截到长度。
+func NewSharedReplayableJSONObjectRequestBody(members []JSONObjectMember) RequestBody {
+	owned := make([]JSONObjectMember, len(members))
+	for i, member := range members {
+		owned[i] = JSONObjectMember{
+			Name:       member.Name,
+			QuotedName: member.QuotedName[:len(member.QuotedName):len(member.QuotedName)],
+			Value:      member.Value[:len(member.Value):len(member.Value)],
+		}
+	}
+	content := &jsonObjectMembersContent{members: owned, length: JSONObjectMembersLength(owned)}
+	return RequestBody{state: &requestBodyState{
+		mode: RequestBodyReplayable, members: content, length: int64(content.length),
+	}}
 }
 
 // newOwnedReplayableRequestBody 只接收包内新产生、或调用方已移交所有权且此后不再改写的字节。
@@ -673,6 +750,9 @@ func (b RequestBody) replayableView() ([]byte, bool) {
 	if b.state.mode != RequestBodyReplayable {
 		return nil, false
 	}
+	if b.state.members != nil {
+		return b.state.members.materialize(), true
+	}
 	return b.state.replayable, true
 }
 
@@ -689,6 +769,7 @@ func (b RequestBody) clone() RequestBody {
 		return RequestBody{state: &requestBodyState{
 			mode:       RequestBodyReplayable,
 			replayable: b.state.replayable,
+			members:    b.state.members,
 			document:   b.state.document.clone(),
 			length:     b.state.length,
 		}}
@@ -701,6 +782,14 @@ func (b RequestBody) jsonDocument() *orderedJSONDocument {
 		return nil
 	}
 	return b.state.document
+}
+
+// jsonObjectMembers 返回按成员装配的正文内容；不是按成员装配时返回 nil。
+func (b RequestBody) jsonObjectMembers() *jsonObjectMembersContent {
+	if b.state == nil || b.state.mode != RequestBodyReplayable {
+		return nil
+	}
+	return b.state.members
 }
 
 // sameCapability 只在包内比较 single-use 私有能力。compiler 无法读取 capability，
