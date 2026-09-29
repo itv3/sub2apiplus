@@ -5,8 +5,10 @@
 ----
 一次 Codex CLI 画像升级会在采集机上留下四类账本：
 
-1. ``UpgradeTimingLedger``（``control/*/UpgradeTimingLedger`` 与 ``control/*/timing``）；
-2. 监督器逐命令 run（``campaigns/*/.supervisor/run-*``）；
+1. ``UpgradeTimingLedger``（``control/*/UpgradeTimingLedger``、``control/*/timing``，以及采集机
+   实际使用的 ``control/<升级 ID>-timing-ledger``）；
+2. 监督器逐命令 run（``campaigns/*/.supervisor/run-*``，以及采集机实际使用的
+   ``evidence/campaigns/*/.supervisor/run-*``）；
 3. ``campaign-run`` 父监督器 run（``control/*/run-*``，内含 ``campaign-run-manifest.json``）；
 4. ``campaign-run`` 清单草稿（``control/`` 顶层的 ``*manifest*.json``、``*.json.part``、``*inner*.json``）。
 
@@ -28,18 +30,22 @@ Campaign 受管工具身份。
 子命令
 ------
 ``generate``  遍历证据根，生成索引；
-``check``     重新计算索引中每个文件的 SHA-256 与索引自摘要，可选重新执行重放／审计。
+``check``     重新计算索引中每个文件的 SHA-256 与索引自摘要，可选重新执行重放／审计；
+``self-test`` 用临时证据根自测：两种目录布局下四类账本都被逐文件登记，复核能发现篡改。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +65,19 @@ SUPERVISOR_RUN_FILES = (
     "heartbeat.json",
 )
 SUBPROCESS_TIMEOUT_SECONDS = 300
+# 采集机实际布局：计时账本目录直接位于 control/ 下、名为 ``<升级 ID>-timing-ledger``，
+# 目录本身就是一份账本；监督器逐命令 run 位于 evidence/campaigns/<Campaign>/.supervisor/ 下。
+# 旧布局的查找路径保留在前，旧证据根生成的索引内容与顺序不变。
+TIMING_LEDGER_DIR_SUFFIX = "-timing-ledger"
+TIMING_LEDGER_GLOBS = (
+    "control/*/UpgradeTimingLedger",
+    "control/*/timing",
+    f"control/*{TIMING_LEDGER_DIR_SUFFIX}",
+)
+SUPERVISOR_RUN_GLOBS = (
+    "campaigns/*/.supervisor/run-*",
+    "evidence/campaigns/*/.supervisor/run-*",
+)
 
 
 class AuditIndexError(RuntimeError):
@@ -291,17 +310,24 @@ def _replay_ledger(
 
 def _index_timing_ledgers(root: Path, *, replay: bool) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    dirs = sorted(root.glob("control/*/UpgradeTimingLedger")) + sorted(root.glob("control/*/timing"))
+    dirs = [path for pattern in TIMING_LEDGER_GLOBS for path in sorted(root.glob(pattern))]
     for ledger_dir in dirs:
         if not ledger_dir.is_dir():
             continue
+        # control/<升级 ID>-timing-ledger 本身就是一份计时账本，编号取目录名；
+        # 旧布局的账本是 control/<升级 ID>/ 下的子目录，编号取上级目录名。
+        standalone = ledger_dir.name.endswith(TIMING_LEDGER_DIR_SUFFIX)
         plan = _try_load_json(ledger_dir / "ledger.json") or {}
         producer, receipt_path = _ledger_producer(ledger_dir)
         receipts_dir = ledger_dir / "receipts"
         entries.append(
             {
-                "kind": "upgrade_timing_ledger" if ledger_dir.name == "UpgradeTimingLedger" else "timing_dir",
-                "id": ledger_dir.parent.name,
+                "kind": (
+                    "upgrade_timing_ledger"
+                    if standalone or ledger_dir.name == "UpgradeTimingLedger"
+                    else "timing_dir"
+                ),
+                "id": ledger_dir.name if standalone else ledger_dir.parent.name,
                 "path": _relative(root, ledger_dir),
                 "plan": {
                     "schema_version": plan.get("schema_version"),
@@ -381,7 +407,8 @@ def _run_references(run_dir: Path) -> dict[str, Any]:
 
 def _index_supervisor_runs(root: Path, tool_root: Path | None, *, replay: bool) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for run_dir in sorted(root.glob("campaigns/*/.supervisor/run-*")):
+    run_dirs = sorted({path for pattern in SUPERVISOR_RUN_GLOBS for path in root.glob(pattern)})
+    for run_dir in run_dirs:
         if not run_dir.is_dir():
             continue
         entries.append(
@@ -584,6 +611,124 @@ def check(args: argparse.Namespace) -> int:
     return 0 if not problems else 1
 
 
+# ---------------------------------------------------------------------------
+# 自测：两种目录布局下四类账本都必须被逐文件登记，复核必须发现篡改。
+# ---------------------------------------------------------------------------
+
+SELF_TEST_LEDGER = "control/codex-a-to-b-r1-20260101t000000z-timing-ledger"
+SELF_TEST_STRAY = "control/stray-timing-ledger"
+
+
+def _self_test_fixture(root: Path) -> None:
+    """构造同时含旧布局与采集机实际布局的最小证据根，外加一个同名后缀的干扰文件。"""
+
+    def put(relative: str, payload: Any) -> None:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # 旧布局：control/<升级 ID>/UpgradeTimingLedger 与 campaigns/<Campaign>/.supervisor/run-*
+    put("control/legacy-upgrade/UpgradeTimingLedger/ledger.json", {"upgrade_id": "legacy-upgrade"})
+    put(
+        "control/legacy-upgrade/UpgradeTimingLedger/events/000001.json",
+        {"sequence": 1, "event_type": "phase_started", "phase": "VC-0"},
+    )
+    put("campaigns/c-legacy/.supervisor/run-legacy/state.json", {"campaign_id": "c-legacy", "phase": "VC-1"})
+    # 采集机实际布局：control/<升级 ID>-timing-ledger 与 evidence/campaigns/<Campaign>/.supervisor/run-*
+    put(f"{SELF_TEST_LEDGER}/ledger.json", {"upgrade_id": "codex-a-to-b-r1-20260101t000000z"})
+    put(f"{SELF_TEST_LEDGER}/events/000001.json", {"sequence": 1, "event_type": "phase_started", "phase": "VC-0"})
+    put(f"{SELF_TEST_LEDGER}/events/000002.json", {"sequence": 2, "event_type": "stop_the_line", "phase": "VC-1"})
+    put(
+        f"{SELF_TEST_LEDGER}/receipts/vc0-input.json",
+        {"producer": {"tool": "/opt/copy/tools/official_client_capture/codex_upgrade_timing_ledger.py"}},
+    )
+    put(
+        "evidence/campaigns/c-current/.supervisor/run-current/state.json",
+        {"campaign_id": "c-current", "phase": "VC-1"},
+    )
+    put(
+        "evidence/campaigns/c-current/.supervisor/run-current/stop-receipt.json",
+        {"campaign_id": "c-current", "reason": "completed"},
+    )
+    put(
+        "control/c-current-supervisor/run-parent/campaign-run-manifest.json",
+        {"schema_version": "fixture", "manifest": {"campaign_id": "c-current", "phase": "VC-1", "actions": [1, 2]}},
+    )
+    put("control/c-current-manifest.json", {"draft": True})
+    # 干扰项：名字以 -timing-ledger 结尾的普通文件不是账本目录，不得登记。
+    put(SELF_TEST_STRAY, {"not": "a ledger"})
+
+
+def self_test(_args: argparse.Namespace) -> int:
+    passed: list[str] = []
+
+    def expect(condition: bool, label: str) -> None:
+        if not condition:
+            raise AuditIndexError(f"自测失败：{label}")
+        passed.append(label)
+
+    def quiet(command: list[str]) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            args = build_parser().parse_args(command)
+            code = generate(args) if args.command == "generate" else check(args)
+        return code, buffer.getvalue()
+
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp) / "evidence-root"
+        _self_test_fixture(root)
+        output = Path(temp) / "index.json"
+        generate_command = [
+            "generate", "--evidence-root", str(root), "--target-version", "1.0.0",
+            "--baseline-version", "0.9.0", "--campaign-id", "c-current", "--no-replay", "--output", str(output),
+        ]
+        quiet(generate_command)
+        payload = _load_json(output)
+        expect(
+            payload["totals"]["ledgers_by_kind"]
+            == {"campaign_run": 1, "campaign_run_draft": 1, "supervisor_run": 2, "upgrade_timing_ledger": 2},
+            "两种布局下四类账本都被登记",
+        )
+        ledgers = {entry["path"]: entry for entry in payload["ledgers"]}
+        current = ledgers.get(SELF_TEST_LEDGER) or {}
+        expect(current.get("id") == Path(SELF_TEST_LEDGER).name, "实际布局的计时账本编号取账本目录名")
+        head = current.get("event_head") or {}
+        expect(head.get("event_count") == 2 and head.get("stop_the_line_events") == 1, "实际布局计时账本的事件头与停线计数")
+        expect(
+            str((current.get("producer") or {}).get("tool", "")).endswith("codex_upgrade_timing_ledger.py"),
+            "实际布局计时账本登记生产者工具",
+        )
+        legacy = ledgers.get("control/legacy-upgrade/UpgradeTimingLedger") or {}
+        expect(legacy.get("id") == "legacy-upgrade", "旧布局计时账本编号仍取上级目录名")
+        expect("evidence/campaigns/c-current/.supervisor/run-current" in ledgers, "实际布局的监督器 run 被登记")
+        expect(payload["totals"]["timing_ledger_stop_the_line_events"] == 1, "停线事件计入总量")
+        fixture_files = sorted(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path.is_file() and path.relative_to(root).as_posix() != SELF_TEST_STRAY
+        )
+        indexed_files = sorted(item["path"] for entry in payload["ledgers"] for item in entry["files"])
+        expect(indexed_files == fixture_files, "除干扰文件外夹具每个文件恰好登记一次")
+
+        code, _ = quiet(["check", "--index", str(output), "--evidence-root", str(root)])
+        expect(code == 0, "未改动的证据根复核通过")
+        (root / SELF_TEST_LEDGER / "events" / "000002.json").write_text("{}\n", encoding="utf-8")
+        code, text = quiet(["check", "--index", str(output), "--evidence-root", str(root)])
+        report = json.loads(text.strip().splitlines()[-1])
+        expect(
+            code == 1 and any("文件摘要漂移" in problem and "000002.json" in problem for problem in report["problems"]),
+            "篡改计时账本事件后复核报摘要漂移",
+        )
+        try:
+            quiet(generate_command)
+        except AuditIndexError:
+            passed.append("索引输出已存在时拒绝覆盖")
+        else:
+            raise AuditIndexError("自测失败：索引输出已存在时拒绝覆盖")
+    print(json.dumps({"status": "passed", "checks": passed}, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="生成或复核 Codex CLI 升级审计索引")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -602,6 +747,7 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--evidence-root", default=None, help="提供时逐文件复核摘要；省略时只复核自摘要")
     chk.add_argument("--replay", action="store_true", help="重新执行重放与审计并比对状态")
     chk.add_argument("--tool-root", default=None)
+    commands.add_parser("self-test", help="用临时证据根自测两种目录布局的登记与复核")
     return parser
 
 
@@ -610,6 +756,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "generate":
             return generate(args)
+        if args.command == "self-test":
+            return self_test(args)
         return check(args)
     except AuditIndexError as error:
         print(f"审计索引失败：{error}", file=sys.stderr)

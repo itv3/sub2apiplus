@@ -110,6 +110,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@python3 tools/fw_e_r_disposition_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
+	@python3 tools/codex_audit_index.py self-test
 	@python3 tools/check_ledger_completeness.py \
 		--upstream-merge-plan "$(UPSTREAM_MERGE_PLAN)"
 	@cd backend && go run ./cmd/egressscan -mode self-test
