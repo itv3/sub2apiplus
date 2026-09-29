@@ -54,6 +54,9 @@ func TestOpenAIOAuthCompactHTTPBuildersUsePreservedServiceTierInRoutingHint(t *t
 		},
 	}
 	svc := &OpenAIGatewayService{}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像。本用例只构造上游请求，不经过 Executor，只需指向画像配置。
+	withOfficialCodexLegacyCompactProfileConfig(t, svc)
 
 	tests := []struct {
 		name  string

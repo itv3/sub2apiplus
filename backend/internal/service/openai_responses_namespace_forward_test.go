@@ -111,7 +111,11 @@ func TestOpenAIGatewayService_OAuthCompactKeepsFlattening(t *testing.T) {
 	c := newOpenAIRejectedFieldTestContext(body)
 	c.Request.URL.Path = "/v1/responses/compact"
 
-	result, err := newOpenAINamespaceTestService(upstream).Forward(
+	svc := newOpenAINamespaceTestService(upstream)
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
+	result, err := svc.Forward(
 		context.Background(), c, newOpenAIOAuthNamespaceTestAccount(), body,
 	)
 

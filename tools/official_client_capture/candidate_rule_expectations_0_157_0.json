@@ -115,7 +115,7 @@
           }
         }
       ],
-      "description": "WS ClientHello 扩展集合相同但顺序不是固定常量",
+      "description": "WS ClientHello 扩展集合相同但顺序不是固定常量；0.156.1 起 signature_algorithms 在原 10 项后追加 ML-DSA-44/65/87（由传输画像承接）",
       "rule_id": "SPEC-TLS-003",
       "scenario_ids": [
         "A02"
@@ -435,13 +435,13 @@
               "version",
               "authorization",
               "chatgpt-account-id",
-              "accept",
               "originator",
               "user-agent",
+              "accept",
               "host"
             ]
           },
-          "description": "models 默认头线序与官方 0.157.0 原始字节一致",
+          "description": "models 默认头线序与官方 0.157.0 原始字节一致（0.157.0 起 accept 位于 originator、user-agent 之后）",
           "id": "models-order",
           "select": {
             "record_type": "http_request",
@@ -650,14 +650,12 @@
         },
         {
           "assertion": {
-            "operator": "all_equal",
-            "path": "data.remaining_header_names",
-            "value": [
+            "allowed": [
+              "cookie",
               "chatgpt-account-id",
               "authorization",
               "user-agent",
               "originator",
-              "openai-beta",
               "version",
               "x-codex-beta-features",
               "x-client-request-id",
@@ -666,10 +664,29 @@
               "x-codex-window-id",
               "x-codex-turn-metadata",
               "x-codex-routing-hint",
+              "openai-beta",
+              "sec-websocket-extensions"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.remaining_header_names",
+            "required": [
+              "chatgpt-account-id",
+              "authorization",
+              "user-agent",
+              "originator",
+              "version",
+              "x-codex-beta-features",
+              "x-client-request-id",
+              "session-id",
+              "thread-id",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "x-codex-routing-hint",
+              "openai-beta",
               "sec-websocket-extensions"
             ]
           },
-          "description": "默认完整握手的剩余线序与官方样本一致",
+          "description": "默认完整握手的剩余线序与官方样本一致（0.156.1 起）：cookie jar 非空时 cookie 紧跟前五项，openai-beta 位于 x-codex-routing-hint 之后",
           "id": "default-swap-remove-order",
           "select": {
             "record_type": "http_request",
@@ -689,10 +706,11 @@
         },
         {
           "assertion": {
-            "operator": "count_at_least",
-            "value": 1
+            "operator": "all_contains",
+            "path": "data.remaining_header_names",
+            "value": "x-codex-beta-features"
           },
-          "description": "至少保留一个缺少可选头后的独立扰动样本",
+          "description": "保留关闭 remote_compaction_v2 的独立握手样本（0.156.1 起该开关被忽略，样本改标 v2_config_disabled）并核对 x-codex-beta-features 仍在：可选头缺失扰动在目标版本已不存在",
           "id": "optional-missing-covered",
           "select": {
             "record_type": "http_request",
@@ -705,7 +723,7 @@
               {
                 "operator": "equal",
                 "path": "labels.variant",
-                "value": "optional_missing"
+                "value": "v2_config_disabled"
               }
             ]
           }
@@ -920,12 +938,35 @@
           "select": {
             "record_type": "header_assembly"
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.routing_hint_present",
+            "value": false
+          },
+          "description": "guardian 审阅请求不生成 x-codex-routing-hint",
+          "id": "guardian-review-no-routing-hint",
+          "select": {
+            "record_type": "conditional_header",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-codex-guardian"
+              }
+            ]
+          }
         }
       ],
-      "description": "provider、端点、configure、prepared 与 retry auth 的内部组装顺序",
+      "description": "provider、端点、configure、prepared 与 retry auth 的内部组装顺序；guardian 审阅请求不生成 routing hint",
       "rule_id": "SPEC-HDR-001",
       "scenario_ids": [
         "A03",
+        "A04",
         "A08"
       ]
     },
@@ -937,7 +978,7 @@
             "path": "data.header_names_in_order",
             "value": "originator"
           },
-          "description": "普通内置请求均含 originator 与 user-agent",
+          "description": "普通内置请求均含 originator 与 user-agent（wham/accounts/check 与 settings/user 同为 backend-client 形态，不在默认头范围）",
           "id": "default-identity-headers",
           "select": {
             "record_type": "http_request",
@@ -960,6 +1001,11 @@
                 "operator": "not_equal",
                 "path": "data.path",
                 "value": "/backend-api/wham/settings/user"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/accounts/check"
               }
             ]
           }
@@ -991,7 +1037,7 @@
               "us"
             ]
           },
-          "description": "受管理 residency=us 时发送精确值",
+          "description": "受管理 residency=us 时发送精确值（wham/accounts/check 与 settings/user 同为 backend-client 形态，不在默认头范围）",
           "id": "residency-positive",
           "select": {
             "record_type": "http_request",
@@ -1012,6 +1058,11 @@
                 "operator": "not_equal",
                 "path": "data.path",
                 "value": "/backend-api/wham/settings/user"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/accounts/check"
               }
             ]
           }
@@ -1038,7 +1089,7 @@
           }
         }
       ],
-      "description": "Client 默认头为 originator、user-agent 和条件 residency",
+      "description": "Client 默认头为 originator、user-agent 和条件 residency；0.157.0 起由 Codex 传输层在 reqwest 补默认 accept 之前合并，无显式 accept 的端点 accept 位于默认头之后",
       "rule_id": "SPEC-HDR-002",
       "scenario_ids": [
         "A04",
@@ -1315,28 +1366,20 @@
             "path": "data.header_names_in_order",
             "value": "session-id"
           },
-          "description": "Responses 和 compact 均包含 session-id",
+          "description": "普通 Responses 包含 session-id（0.156.1 起不再按 session_header_scope 标签选取，按方法与路径覆盖全部普通 Responses）",
           "id": "responses-session-id",
           "select": {
             "record_type": "http_request",
             "where": [
               {
                 "operator": "equal",
-                "path": "labels.session_header_scope",
-                "value": "responses_or_compact"
-              },
-              {
-                "operator": "equal",
                 "path": "data.method",
                 "value": "POST"
               },
               {
-                "operator": "in",
+                "operator": "equal",
                 "path": "data.path",
-                "value": [
-                  "/backend-api/codex/responses",
-                  "/backend-api/codex/responses/compact"
-                ]
+                "value": "/backend-api/codex/responses"
               }
             ]
           }
@@ -1347,28 +1390,20 @@
             "path": "data.header_names_in_order",
             "value": "thread-id"
           },
-          "description": "Responses 和 compact 均包含 thread-id",
+          "description": "普通 Responses 包含 thread-id（0.156.1 起不再按 session_header_scope 标签选取，按方法与路径覆盖全部普通 Responses）",
           "id": "responses-thread-id",
           "select": {
             "record_type": "http_request",
             "where": [
               {
                 "operator": "equal",
-                "path": "labels.session_header_scope",
-                "value": "responses_or_compact"
-              },
-              {
-                "operator": "equal",
                 "path": "data.method",
                 "value": "POST"
               },
               {
-                "operator": "in",
+                "operator": "equal",
                 "path": "data.path",
-                "value": [
-                  "/backend-api/codex/responses",
-                  "/backend-api/codex/responses/compact"
-                ]
+                "value": "/backend-api/codex/responses"
               }
             ]
           }
@@ -1434,7 +1469,7 @@
           }
         }
       ],
-      "description": "普通 responses/compact 使用连字符会话头，realtime 使用独立 x-session-id",
+      "description": "普通 Responses 使用连字符会话头（session-id 取 prompt_cache_key），realtime 使用独立 x-session-id",
       "rule_id": "SPEC-HDR-007",
       "scenario_ids": [
         "A03",
@@ -1524,6 +1559,140 @@
       "description": "四类条件 header 只在对应来源或 feature 成立时出现",
       "rule_id": "SPEC-HDR-008",
       "scenario_ids": [
+        "A04",
+        "A05"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.x-openai-account-routing-override"
+          },
+          "description": "默认 HTTP Responses 不发送 x-openai-account-routing-override",
+          "id": "http-override-absent",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.x-openai-account-routing-override"
+          },
+          "description": "默认 WS 握手不发送 x-openai-account-routing-override",
+          "id": "ws-override-absent",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "x-openai-account-routing-override 只在 accounts/check 给出非默认路由 override 时出现；默认工作区路由（NO_CONSTRAINT）下 Responses 请求不携带",
+      "rule_id": "SPEC-HDR-009",
+      "scenario_ids": [
+        "A03",
+        "A05"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.value",
+            "value": "reviewer"
+          },
+          "description": "guardian 审阅请求发送 x-codex-guardian: reviewer",
+          "id": "guardian-reviewer-value",
+          "select": {
+            "record_type": "conditional_header",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-codex-guardian"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.x-codex-guardian"
+          },
+          "description": "普通 HTTP Responses 不发送 x-codex-guardian",
+          "id": "http-guardian-absent",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.x-codex-guardian"
+          },
+          "description": "普通 WS 握手不发送 x-codex-guardian",
+          "id": "ws-guardian-absent",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "guardian 审阅请求携带 x-codex-guardian: reviewer 且不带 x-codex-routing-hint；普通 Responses 请求不携带 x-codex-guardian",
+      "rule_id": "SPEC-HDR-010",
+      "scenario_ids": [
+        "A03",
         "A04",
         "A05"
       ]
@@ -1730,35 +1899,13 @@
               }
             ]
           }
-        },
-        {
-          "assertion": {
-            "operator": "all_absent",
-            "path": "data.header_values.content-encoding"
-          },
-          "description": "legacy compact 始终不发送 content-encoding",
-          "id": "compact-plain",
-          "select": {
-            "record_type": "http_request",
-            "scenario_ids": [
-              "A09"
-            ],
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              }
-            ]
-          }
         }
       ],
-      "description": "Responses 尊重压缩开关，legacy compact 始终明文",
+      "description": "Responses 尊重压缩开关（0.156.1 起 legacy compact 已删除）",
       "rule_id": "SPEC-BODY-002",
       "scenario_ids": [
         "A03",
-        "A04",
-        "A09"
+        "A04"
       ]
     },
     {
@@ -1818,7 +1965,13 @@
           "description": "读取值哈希与后续回送值哈希相同",
           "id": "turn-state-value-preserved",
           "select": {
-            "record_type": "turn_state_chain"
+            "record_type": "turn_state_chain",
+            "where": [
+              {
+                "operator": "absent",
+                "path": "data.reset_reason"
+              }
+            ]
           }
         },
         {
@@ -1827,23 +1980,46 @@
             "path": "data.return_channel",
             "value": [
               "http_header",
-              "websocket_client_metadata",
-              "legacy_compact_header"
+              "websocket_client_metadata"
             ]
           },
-          "description": "HTTP、WS 与 compact 三条回送通道全部有闭环",
+          "description": "HTTP 与 WS 两条回送通道全部有闭环（legacy compact 通道随端点删除）",
           "id": "turn-state-channels",
           "select": {
-            "record_type": "turn_state_chain"
+            "record_type": "turn_state_chain",
+            "where": [
+              {
+                "operator": "absent",
+                "path": "data.reset_reason"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.return_channel",
+            "value": "none"
+          },
+          "description": "账号 owner 变化后清空已保存的 turn-state，下一请求不回送",
+          "id": "turn-state-owner-reset",
+          "select": {
+            "record_type": "turn_state_chain",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.reset_reason",
+                "value": "account_owner_changed"
+              }
+            ]
           }
         }
       ],
-      "description": "turn-state 从响应读取、保存并按下一请求传输形态回送",
+      "description": "turn-state 从响应读取、保存并按下一请求传输形态回送；账号 owner 变化时清空",
       "rule_id": "SPEC-BODY-004",
       "scenario_ids": [
         "A03",
-        "A05",
-        "A09"
+        "A05"
       ]
     },
     {
@@ -2081,12 +2257,48 @@
             "operator": "all_subset",
             "path": "data.body.shape.reasoning",
             "value": {
-              "effort": "str:medium",
               "context": "str:all_turns"
             }
           },
-          "description": "Lite 请求 reasoning 按模型清单默认定型：effort=medium、context=all_turns",
+          "description": "Lite 请求 reasoning 定型 context=all_turns；effort 取客户端配置或模型清单默认（本轮采集客户端配置为 low），由 lite-reasoning-effort-present 核对",
           "id": "lite-reasoning-manifest-defaults",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.reasoning.effort",
+            "value": "^str:(minimal|low|medium|high|xhigh|max|ultra)$"
+          },
+          "description": "Lite 请求 reasoning.effort 存在且为模型清单支持的档位",
+          "id": "lite-reasoning-effort-present",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [
@@ -2194,6 +2406,212 @@
       "rule_id": "SPEC-BODY-006",
       "scenario_ids": [
         "A03",
+        "A04"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.client_metadata.guardian_credits_requested",
+            "value": "str:true"
+          },
+          "description": "HTTP Responses body 的 client_metadata.guardian_credits_requested 为字符串 true",
+          "id": "http-guardian-credits",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.client_metadata.guardian_credits_requested",
+            "value": "str:true"
+          },
+          "description": "WS response.create 的 client_metadata.guardian_credits_requested 为字符串 true",
+          "id": "ws-guardian-credits",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.client_metadata.mcp_attribution",
+            "value": "str:{\"status\":\"none\"}"
+          },
+          "description": "HTTP Responses body 的 client_metadata.mcp_attribution 为常量 {\"status\":\"none\"}",
+          "id": "http-mcp-attribution",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.client_metadata.mcp_attribution",
+            "value": "str:{\"status\":\"none\"}"
+          },
+          "description": "WS response.create 的 client_metadata.mcp_attribution 为常量 {\"status\":\"none\"}",
+          "id": "ws-mcp-attribution",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；0.157.0 起另带常量 mcp_attribution（guardian 审阅请求同样写入）",
+      "rule_id": "SPEC-BODY-008",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "allowed": [
+              "agent_name",
+              "analytics_enabled",
+              "auto_review_enabled",
+              "context_window_id",
+              "installation_id",
+              "model",
+              "node_repl_auto_review_required",
+              "node_repl_disabled",
+              "reasoning_effort",
+              "request_kind",
+              "root_turn_id",
+              "sandbox",
+              "sandbox_mode",
+              "session_id",
+              "thread_id",
+              "thread_source",
+              "turn_id",
+              "turn_started_at_unix_ms",
+              "turn_trigger",
+              "window_id",
+              "window_number"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.keys",
+            "required": [
+              "analytics_enabled",
+              "installation_id",
+              "model",
+              "reasoning_effort",
+              "request_kind",
+              "sandbox",
+              "session_id",
+              "thread_id",
+              "thread_source",
+              "turn_id",
+              "turn_started_at_unix_ms",
+              "turn_trigger",
+              "window_id"
+            ]
+          },
+          "description": "turn metadata 序列化键是画像 21 键的有序子集，且含网关可信生成的 13 键（含四个新增键；官方另 8 键网关无可信取值、不仿真）",
+          "id": "turn-metadata-keys",
+          "select": {
+            "record_type": "serialization_boundary",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.boundary",
+                "value": "turn_metadata"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.analytics_enabled",
+            "value": true
+          },
+          "description": "默认配置下 analytics_enabled 为 true",
+          "id": "turn-metadata-analytics-default",
+          "select": {
+            "record_type": "serialization_boundary",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.boundary",
+                "value": "turn_metadata"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "x-codex-turn-metadata 的键为画像 TurnMetadata.Keys（21 键）的有序子集，必含 0.156.1 起新增的 analytics_enabled、model、reasoning_effort、turn_trigger 及网关既有键，默认配置 analytics_enabled=true",
+      "rule_id": "SPEC-BODY-009",
+      "scenario_ids": [
         "A04"
       ]
     },
@@ -2483,7 +2901,7 @@
             "operator": "all_absent",
             "path": "data.header_values.content-encoding"
           },
-          "description": "models、compact、search 与 images 均无 content-encoding",
+          "description": "models、search 与 images 均无 content-encoding",
           "id": "auxiliary-no-compression",
           "select": {
             "record_type": "http_request",
@@ -2540,38 +2958,6 @@
       ],
       "description": "models 使用 GET 和唯一 client_version query",
       "rule_id": "SPEC-EP-006",
-      "scenario_ids": [
-        "A09"
-      ]
-    },
-    {
-      "checks": [
-        {
-          "assertion": {
-            "operator": "all_subset",
-            "path": "data",
-            "value": {
-              "method": "POST",
-              "path": "/backend-api/codex/responses/compact",
-              "query_pairs": []
-            }
-          },
-          "description": "legacy compact 方法和路径精确匹配",
-          "id": "legacy-compact-endpoint",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              }
-            ]
-          }
-        }
-      ],
-      "description": "显式 legacy compact 使用 POST /responses/compact",
-      "rule_id": "SPEC-EP-007",
       "scenario_ids": [
         "A09"
       ]
@@ -2779,200 +3165,6 @@
       "checks": [
         {
           "assertion": {
-            "allowed": [
-              "version",
-              "x-codex-installation-id",
-              "x-codex-window-id",
-              "x-codex-turn-metadata",
-              "session-id",
-              "thread-id",
-              "x-codex-routing-hint",
-              "x-openai-internal-codex-responses-lite",
-              "authorization",
-              "chatgpt-account-id",
-              "content-type",
-              "accept",
-              "originator",
-              "user-agent",
-              "cookie",
-              "host",
-              "content-length"
-            ],
-            "operator": "all_ordered_subset_of",
-            "path": "data.header_names_in_order",
-            "required": [
-              "version",
-              "x-codex-installation-id",
-              "x-codex-window-id",
-              "x-codex-turn-metadata",
-              "session-id",
-              "thread-id",
-              "x-codex-routing-hint",
-              "x-openai-internal-codex-responses-lite",
-              "authorization",
-              "chatgpt-account-id",
-              "content-type",
-              "accept",
-              "originator",
-              "user-agent",
-              "host",
-              "content-length"
-            ]
-          },
-          "description": "默认 legacy compact header 线序精确匹配",
-          "id": "legacy-default-headers",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "default"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.track",
-                "value": "lite"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_list_prefix",
-            "path": "data.header_names_in_order",
-            "value": [
-              "version",
-              "x-codex-installation-id",
-              "x-codex-beta-features",
-              "x-codex-window-id"
-            ]
-          },
-          "description": "beta 条件头占 installation-id 后的第三槽",
-          "id": "legacy-beta-slot",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "beta"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_list_prefix",
-            "path": "data.header_names_in_order",
-            "value": [
-              "version",
-              "x-codex-installation-id",
-              "x-codex-turn-state",
-              "x-codex-window-id"
-            ]
-          },
-          "description": "turn-state 条件头占 installation-id 后的第三槽",
-          "id": "legacy-turn-state-slot",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "turn_state"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_equal",
-            "path": "data.header_values.x-openai-internal-codex-responses-lite",
-            "value": [
-              "true"
-            ]
-          },
-          "description": "默认 legacy compact 的 x-openai-internal-codex-responses-lite 值为 true",
-          "id": "legacy-default-lite-header-value",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "default"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.track",
-                "value": "lite"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_equal",
-            "path": "data.header_values.x-codex-routing-hint",
-            "value": [
-              "model=gpt-6-astra"
-            ]
-          },
-          "description": "默认 legacy compact 的 x-codex-routing-hint 携带入站 Lite 轨模型（不得改写为全局 compact 模型）",
-          "id": "legacy-default-routing-hint-value",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "default"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.track",
-                "value": "lite"
-              }
-            ]
-          }
-        }
-      ],
-      "description": "legacy compact 默认与两个条件插槽具有精确线序",
-      "rule_id": "SPEC-EP-014",
-      "scenario_ids": [
-        "A09"
-      ]
-    },
-    {
-      "checks": [
-        {
-          "assertion": {
             "operator": "all_equal",
             "path": "data.header_names_in_order",
             "value": [
@@ -2981,15 +3173,15 @@
               "authorization",
               "chatgpt-account-id",
               "content-type",
-              "accept",
               "originator",
               "user-agent",
+              "accept",
               "cookie",
               "host",
               "content-length"
             ]
           },
-          "description": "两次 alpha-search 使用相同精确 Header 线序",
+          "description": "两次 alpha-search 使用相同精确 Header 线序（0.157.0 起 accept 位于 originator、user-agent 之后）",
           "id": "search-header-order",
           "select": {
             "record_type": "http_request",
@@ -3053,12 +3245,13 @@
             "operator": "distinct_values_equal",
             "path": "data.path",
             "value": [
+              "/backend-api/wham/accounts/check",
               "/backend-api/wham/usage",
               "/backend-api/wham/rate-limit-reset-credits",
               "/backend-api/wham/settings/user"
             ]
           },
-          "description": "三个 GET 路径均出现且无额外 WHAM GET",
+          "description": "A12 的 WHAM GET 路径全集与官方 0.157.0 一致（含 accounts/check）且无额外 WHAM GET",
           "id": "wham-get-paths",
           "select": {
             "record_type": "http_request",
@@ -3082,8 +3275,48 @@
         },
         {
           "assertion": {
+            "allowed": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "cookie",
+              "host"
+            ],
             "operator": "all_ordered_subset_of",
             "path": "data.header_names_in_order",
+            "required": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "host"
+            ]
+          },
+          "description": "accounts/check GET 使用 backend-client 线序，不携带 Luna Reserve 头",
+          "id": "wham-accounts-check-headers",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "GET"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/accounts/check"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
             "allowed": [
               "user-agent",
               "authorization",
@@ -3093,6 +3326,8 @@
               "cookie",
               "host"
             ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.header_names_in_order",
             "required": [
               "user-agent",
               "authorization",
@@ -3166,9 +3401,17 @@
         },
         {
           "assertion": {
-            "operator": "all_equal",
+            "allowed": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "cookie",
+              "host"
+            ],
+            "operator": "all_ordered_subset_of",
             "path": "data.header_names_in_order",
-            "value": [
+            "required": [
               "user-agent",
               "authorization",
               "chatgpt-account-id",
@@ -3176,7 +3419,7 @@
               "host"
             ]
           },
-          "description": "rate-limit-reset-credits GET 使用 backend-client 精确线序且不携带 Luna Reserve 头",
+          "description": "rate-limit-reset-credits GET 使用 backend-client 线序且不携带 Luna Reserve 头；jar 建立后 cookie 位于 accept 与 host 之间",
           "id": "wham-credits-headers",
           "select": {
             "record_type": "http_request",
@@ -3255,7 +3498,7 @@
           }
         }
       ],
-      "description": "WHAM 三个 GET 与安全 consume 使用独立 backend-client 形态；usage 在 ChatGPT 认证且非 FedRAMP 时携带 Luna Reserve 头",
+      "description": "WHAM accounts/check、usage、reset credits 与安全 consume 使用独立 backend-client 形态；0.156.1 起 accounts/check 是 backend client 首个请求，usage 在 ChatGPT 认证且非 FedRAMP 时携带 Luna Reserve 头",
       "rule_id": "SPEC-EP-019",
       "scenario_ids": [
         "A12"
@@ -3265,119 +3508,10 @@
       "checks": [
         {
           "assertion": {
-            "allowed": [
-              "model",
-              "input",
-              "instructions",
-              "tools",
-              "parallel_tool_calls",
-              "reasoning",
-              "service_tier",
-              "prompt_cache_key",
-              "text"
-            ],
-            "operator": "all_ordered_subset_of",
-            "path": "data.body.top_level_fields_in_order",
-            "required": [
-              "model",
-              "input",
-              "parallel_tool_calls"
-            ]
+            "operator": "count_at_least",
+            "value": 1
           },
-          "description": "legacy body 只从 CompactRequest 槽位按顺序出现",
-          "id": "legacy-body-slots",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_equal",
-            "path": "data.body.top_level_fields_in_order",
-            "value": [
-              "model",
-              "input",
-              "parallel_tool_calls",
-              "reasoning",
-              "prompt_cache_key",
-              "text"
-            ]
-          },
-          "description": "默认样本字段与官方 0.157.0 wire 子集一致",
-          "id": "legacy-observed-subset",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "default"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.track",
-                "value": "lite"
-              }
-            ]
-          }
-        },
-        {
-          "assertion": {
-            "operator": "all_equal",
-            "path": "data.body.shape.model",
-            "value": "str:gpt-6-astra"
-          },
-          "description": "默认 legacy compact 的 body.model 保留入站 Lite 轨模型 gpt-6-astra",
-          "id": "legacy-body-model-is-requested-model",
-          "select": {
-            "record_type": "http_request",
-            "where": [
-              {
-                "operator": "equal",
-                "path": "data.path",
-                "value": "/backend-api/codex/responses/compact"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.variant",
-                "value": "default"
-              },
-              {
-                "operator": "equal",
-                "path": "labels.track",
-                "value": "lite"
-              }
-            ]
-          }
-        }
-      ],
-      "description": "legacy compact 使用独立封闭 body 结构",
-      "rule_id": "SPEC-EP-020",
-      "scenario_ids": [
-        "A09"
-      ]
-    },
-    {
-      "checks": [
-        {
-          "assertion": {
-            "operator": "all_contains",
-            "path": "data.body.shape.input._types",
-            "value": "compaction_trigger"
-          },
-          "description": "manual 与 auto 的普通 Responses input 均含 compaction_trigger",
+          "description": "manual／auto 压缩以普通 Responses 的 compaction_trigger 输入项触发（V2）；0.157.0 起 TUI 压缩走 WS，HTTP 侧按含触发项的 POST 存在性核对",
           "id": "v2-compaction-trigger",
           "select": {
             "record_type": "http_request",
@@ -3397,6 +3531,16 @@
                   "manual",
                   "auto"
                 ]
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "contains",
+                "path": "data.body.shape.input._types",
+                "value": "compaction_trigger"
               }
             ]
           }
@@ -3425,30 +3569,64 @@
         {
           "assertion": {
             "operator": "all_equal",
-            "path": "data.remote_compaction_v2",
-            "value": "disabled_explicitly"
+            "path": "data.header_values.x-codex-beta-features",
+            "value": [
+              "remote_compaction_v2"
+            ]
           },
-          "description": "A09 legacy 请求由显式关闭 V2 的 trace 证明",
-          "id": "explicit-legacy-only",
+          "description": "HTTP Responses 恒发送 x-codex-beta-features: remote_compaction_v2",
+          "id": "beta-header-always-http",
           "select": {
-            "record_type": "compaction_decision",
+            "record_type": "http_request",
             "scenario_ids": [
-              "A09"
+              "A03"
             ],
             "where": [
               {
                 "operator": "equal",
-                "path": "data.implementation",
-                "value": "legacy"
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-codex-beta-features",
+            "value": [
+              "remote_compaction_v2"
+            ]
+          },
+          "description": "WS 握手恒发送 x-codex-beta-features: remote_compaction_v2",
+          "id": "beta-header-always-ws",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
               }
             ]
           }
         }
       ],
-      "description": "默认 manual/auto compaction 使用 Responses V2，仅显式关闭才走 legacy",
+      "description": "默认 manual/auto compaction 使用 Responses V2；0.156.1 起 legacy 分支删除，x-codex-beta-features 恒含 remote_compaction_v2",
       "rule_id": "SPEC-EP-021",
       "scenario_ids": [
-        "A09",
+        "A03",
+        "A05",
+        "A06",
         "A10"
       ]
     },
@@ -3463,15 +3641,15 @@
               "authorization",
               "chatgpt-account-id",
               "content-type",
-              "accept",
               "originator",
               "user-agent",
+              "accept",
               "cookie",
               "host",
               "content-length"
             ]
           },
-          "description": "generation 与 edit 的 Header 线序一致且精确",
+          "description": "generation 与 edit 的 Header 线序一致且精确（0.157.0 起 accept 位于 originator、user-agent 之后）",
           "id": "image-header-order",
           "select": {
             "record_type": "http_request",
@@ -3653,6 +3831,24 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "count_equal",
+            "value": 0
+          },
+          "description": "压缩决策不再出现 legacy 实现",
+          "id": "no-legacy-implementation",
+          "select": {
+            "record_type": "compaction_decision",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.implementation",
+                "value": "legacy"
+              }
+            ]
+          }
         }
       ],
       "description": "压缩选择、四种 reason、TokenBudget 零出站与去重语义",
@@ -3775,10 +3971,9 @@
       "trigger": "分别执行跨上层调用、keepalive 500 重试和受控断连重试"
     },
     {
-      "description": "models、legacy compact、alpha-search 与 images 辅助链",
+      "description": "models、alpha-search 与 images 辅助链（0.156.1 起 legacy compact 已删除）",
       "preconditions": [
         "各端点使用独立调用",
-        "legacy 分支显式关闭 remote_compaction_v2",
         "字节中继开启"
       ],
       "required_artifact_kinds": [
@@ -3786,7 +3981,7 @@
         "process_trace"
       ],
       "scenario_id": "A09",
-      "trigger": "分别触发 models、显式 legacy compact、两阶段搜索、图像生成与编辑"
+      "trigger": "分别触发 models、两阶段搜索、图像生成与编辑"
     },
     {
       "description": "Remote Compaction V2 与四种 reason",

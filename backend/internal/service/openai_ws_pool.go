@@ -967,11 +967,11 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 		if !egressContext.frozen || egressContext.connectionPoolID == "" {
 			return nil, errors.New("official egress WebSocket context is not ready for pooling")
 		}
-		clonedRequest.TransportKey = egressContext.connectionPoolID +
-			"|proxy_state=" + officialEgressProxyStateKey(stringsTrim(clonedRequest.ProxyURL))
-		if identityKey := officialEgressWebSocketIdentityKey(egressContext); identityKey != "" {
-			clonedRequest.TransportKey += "|identity=" + identityKey
-		}
+		// 画像声明 WS 续接按认证代次失效时，键中另含握手凭据摘要（token 刷新后不复用旧连接）；
+		// 未声明时与原组合逐字节相同。
+		clonedRequest.TransportKey = officialEgressWebSocketPoolTransportKey(
+			egressContext, clonedRequest.ProxyURL, clonedRequest.Headers,
+		)
 		clonedRequest.OfficialEgressContext = egressContext
 	}
 	if clonedRequest.SinkID != "" {

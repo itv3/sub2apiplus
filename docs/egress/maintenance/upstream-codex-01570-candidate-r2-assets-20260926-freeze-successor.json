@@ -1,0 +1,65 @@
+{
+  "base_commit": "1172fe880f03aeb1c7b5b6fc43cb8c3df113ac14",
+  "changed_path_count": 18,
+  "current_commit": "926616b21cf9eb83317d1e230f3f3780158e7d15",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4289,
+  "frozen_path_count": 1399,
+  "identity_sha256": "70bf40148de31204fa664f51b1d1154bb7033a618d71a5b7b6ad7e0bb4c0bca3",
+  "issued_at_utc": "2026-09-26T11:12:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r2-assets-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "predecessor_sha256s": [
+        "8f96ce766ed40264f079ef4c5a27cb9be02281cfdce380fc45e7ea31b9da6236"
+      ],
+      "reason": "承接候选 A 段（VC-3 目录资产与测试快照索引）改动的冻结路径；链脚本的 D 段收据只承接 A→C 指针。 path=backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "8430c02fa55565d32bb653ddb252a554a1bc99990ecd6647949f70e34d1079df"
+    }
+  ],
+  "unregistered_path_count": 17,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+    "backend/internal/officialegress/catalogdata/runtime/release-graphs/c97a273bb2d2817f3ed9857b4d376828a7e4b918e7350549cf07d7b7998b16b9.json",
+    "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/cd8e263a073ea55394937a2e383a0cd6eba13d023cfeccf8e35026bfcaddb94c.json",
+    "backend/internal/officialegress/profilecontract/testdata/snapshots/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalog-stage-receipt.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/profiles/0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/profiles/0.154.0/31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/profiles/0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/profiles/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/release-catalog.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/release-graphs/c97a273bb2d2817f3ed9857b4d376828a7e4b918e7350549cf07d7b7998b16b9.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/catalogdata/runtime/snapshot-catalogs/cd8e263a073ea55394937a2e383a0cd6eba13d023cfeccf8e35026bfcaddb94c.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/profilecontract/testdata/snapshot-catalog.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/profilecontract/testdata/snapshots/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+    "docs/egress/lifecycle/codex-01570-candidate/catalog-stage/releasecontract/testdata/release-graph.json",
+    "docs/egress/lifecycle/codex-01570-candidate/gate-mapping.json",
+    "docs/egress/lifecycle/codex-01570-candidate/gate-plan.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

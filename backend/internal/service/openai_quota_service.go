@@ -35,6 +35,28 @@ const (
 	openaiQuotaResetCreditsKey   = "codex_reset_credit_snapshot"
 )
 
+// officialCodexQuotaBaseAttemptBudget 是 WHAM 配额 invocation 的基础尝试预算，画像未声明
+// WorkspaceRouting 节时原样使用，旧画像下的 ReleaseBundle 因此保持不变。
+const officialCodexQuotaBaseAttemptBudget = 3
+
+// officialCodexQuotaAttemptBudget 返回 WHAM 配额 invocation（Sink codex.quota.wham）的尝试预算。
+//
+// Executor 在编译之前就预留尝试序号，同一 invocation 内的每个请求（包括编译失败的请求）
+// 都占用一次尝试。画像声明 WorkspaceRouting 节时，完整配额查询 QueryUsage 会在同一
+// invocation 内先发出工作区路由发现请求，因此预算加一；否则末尾补查
+// rate-limit-reset-credits 会因预算耗尽被 Executor 拒绝。
+//
+// 周期入口 QueryUsageOnly 与重置入口 ResetCredit 不发发现请求，但仍取同一预算：预算进入
+// ReleaseBundle 摘要，而账号级 backend client 长连接池的摘要又包含 BundleDigest，三个入口
+// 只有使用同一预算才会解析出同一 Bundle、继续复用同一条长连接。
+func officialCodexQuotaAttemptBudget(mode string) int {
+	budget := officialCodexQuotaBaseAttemptBudget
+	if officialCodexOptionalSectionsForMode(mode).WorkspaceRouting != nil {
+		budget++
+	}
+	return budget
+}
+
 // OpenAIRateLimitWindow describes a single rate-limit window returned by
 // /wham/usage. The upstream returns an explicit `null` window when the slot
 // is unused, so consumers should treat a nil pointer as "no data".
@@ -207,7 +229,7 @@ func (s *OpenAIQuotaService) queryUsage(
 	callCtx = context.WithValue(
 		callCtx,
 		officialCodexBundleHolderContextKey{},
-		&officialCodexBundleHolder{httpAttemptBudget: 3},
+		&officialCodexBundleHolder{httpAttemptBudget: officialCodexQuotaAttemptBudget(mode)},
 	)
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
 
@@ -221,12 +243,22 @@ func (s *OpenAIQuotaService) queryUsage(
 		mode, codexEndpointID(officialCodexEndpointWhamSettingsUser),
 	)
 	settingsSupported := settingsProfileErr == nil
+	routingDiscovered := false
 	for recovered := false; ; {
 		quotaHeaders, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(
 			callCtx, mode, accountID, accessToken, chatGPTAccountID,
 		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
+		}
+		if includeResetCreditDetails && !routingDiscovered {
+			// 画像声明 WorkspaceRouting 节时，工作区路由发现是 backend client 的首个请求
+			// （官方启动窗口的线序）。判定只影响受路由端点，发现失败不影响配额查询本身；
+			// 周期入口 QueryUsageOnly 不发出发现请求，保持“只产生一次官方请求”的约束。
+			routingDiscovered = true
+			_, _, _ = s.discoverOfficialCodexWorkspaceRouting(
+				callCtx, mode, accountID, chatGPTAccountID, proxyURL, quotaHeaders,
+			)
 		}
 		if includeResetCreditDetails && settingsSupported && !settingsQueried {
 			// 官方 WHAM 客户端在配额链路前先读一次用户设置（0.147 受控出站面实测
@@ -451,7 +483,7 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 	callCtx = context.WithValue(
 		callCtx,
 		officialCodexBundleHolderContextKey{},
-		&officialCodexBundleHolder{httpAttemptBudget: 3},
+		&officialCodexBundleHolder{httpAttemptBudget: officialCodexQuotaAttemptBudget(mode)},
 	)
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
 	requestBody := map[string]string{"redeem_request_id": redeemRequestID}

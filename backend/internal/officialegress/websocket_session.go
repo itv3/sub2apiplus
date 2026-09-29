@@ -162,6 +162,7 @@ func (s *ExecutorWebSocketSession) PrepareFrame(
 		payload, eventType, err = compileWebSocketFrame(
 			s.endpoint, body, plan.EventType, facts, plan.BodyConditions,
 			s.bundle.release.ExecutableProfile().Features(),
+			s.bundle.release.ExecutableProfile().Optional(),
 		)
 		if err != nil {
 			return PreparedWebSocketFrame{}, err
@@ -211,6 +212,9 @@ func validateWebSocketFrameIdentity(base, current CodexIdentityFacts) error {
 		{"conversation", base.ConversationID, current.ConversationID},
 		{"thread", base.ThreadID, current.ThreadID},
 		{"window", base.WindowID, current.WindowID},
+		// prompt cache 亲和键决定 session-id 头（画像声明该来源时）与请求体
+		// prompt_cache_key，同一连接内的帧不得改写。
+		{"prompt-cache-key", base.PromptCacheKey, current.PromptCacheKey},
 	}
 	for _, field := range stable {
 		if field.base != field.now {
@@ -230,6 +234,7 @@ func compileWebSocketFrame(
 	facts CodexIdentityFacts,
 	bodyConditions BodyRuntimeConditions,
 	features profilecontract.FeatureDefaults,
+	optional profilecontract.OptionalSections,
 ) ([]byte, string, error) {
 	profile := endpoint.template.endpoint
 	if profile.Body.Encoding != profilecontract.BodyWebsocketJson &&
@@ -270,8 +275,11 @@ func compileWebSocketFrame(
 			return nil, "", errors.New("WebSocket 帧不匹配 Endpoint discriminator")
 		}
 	}
+	// response.create 帧与 HTTP 请求体共用同一注入逻辑：prompt_cache_key、由身份事实
+	// 重建的 client_metadata，以及画像 ClientMetadata 节按条件追加的常量。
 	if err := injectCompilerOwnedBodyFields(
 		profile, document, AttemptAuthenticationInput{}, facts,
+		codexClientMetadataConstants{section: optional.ClientMetadata, features: features},
 	); err != nil {
 		return nil, "", err
 	}

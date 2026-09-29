@@ -59,14 +59,26 @@ func staticClosureBundle(t *testing.T, mode ReleaseMode, sinkID SinkID) ReleaseB
 }
 
 // staticClosurePlanForEndpoint 在真实 catalog 中找到承载指定静态 endpoint 的
-// Bundle 与 plan。
+// Bundle 与 plan。版本删除的端点允许在不含它的单个 Release 中零匹配，因此跳过在该
+// mode 画像中没有任何 route 的 Sink，使本 helper 对 Active/Previous 任一 mode 都可用。
 func staticClosurePlanForEndpoint(
 	t *testing.T,
 	mode ReleaseMode,
 	endpointID string,
 ) (ReleaseBundle, ResolvedEndpointPlan) {
 	t.Helper()
+	release, err := DefaultReleaseCatalog().Resolve(mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := NewPhysicalRouteCatalog(DefaultSinkCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, binding := range codexProfileSinkBindings(t) {
+		if !staticClosureProfileDeclaresAnyRoute(t, release.ExecutableProfile(), physical, binding) {
+			continue
+		}
 		bundle := staticClosureBundle(t, mode, binding.ID())
 		for _, plan := range bundle.EndpointPlans() {
 			if plan.EndpointID() == endpointID && !plan.DynamicTarget() {
@@ -492,10 +504,27 @@ func TestEndpointDynamicInputsCloneDetachesServerResponseQuery(t *testing.T) {
 // 动态 ReturnedURL 端点：ServerResponseQuery 可信通道互斥
 // ----------------------------------------------------------------------------
 
+// TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint 只需在 Active 中找到
+// 一个 ReturnedURL 动态端点。改动前逐个解析全部 Codex Sink 的 Active Bundle，默认每个 Sink
+// 都能在 Active 成包；晋升后 Active 的目标画像删除了 legacy compact 端点，只绑定该端点的
+// Sink 在 Active 下本就无法成包（版本 route 口径）。现按结构事实跳过 Active 画像未声明其任一
+// route 的 Sink，口径与 staticClosurePlanForEndpoint 相同；其余 Sink 解析失败仍直接报错，
+// 找不到动态端点仍失败，断言与改动前一致。
 func TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint(t *testing.T) {
+	release, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := NewPhysicalRouteCatalog(DefaultSinkCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var dynamicPlan ResolvedEndpointPlan
 	found := false
 	for _, binding := range codexProfileSinkBindings(t) {
+		if !staticClosureProfileDeclaresAnyRoute(t, release.ExecutableProfile(), physical, binding) {
+			continue
+		}
 		bundle := staticClosureBundle(t, ReleaseModeActive, binding.ID())
 		for _, plan := range bundle.EndpointPlans() {
 			if plan.DynamicTarget() {
@@ -536,28 +565,126 @@ func TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint(t *t
 // Compiler：Active/Previous 全部静态端点正例
 // ----------------------------------------------------------------------------
 
+// staticClosureProfileDeclaresAnyRoute 按结构事实判断画像是否声明了与 Sink 任一 route
+// 同 method、host、path 与协议的端点（匹配口径与 EndpointBinding 解析一致）。它直接读画像
+// 端点，不经过 EndpointBindingCatalog，避免用被测的 binding 解析结果反过来决定核验范围。
+func staticClosureProfileDeclaresAnyRoute(
+	t *testing.T,
+	profile profilecontract.ExecutableProfile,
+	physical PhysicalRouteCatalog,
+	binding SinkBinding,
+) bool {
+	t.Helper()
+	for _, route := range binding.Routes() {
+		if staticClosureProfileDeclaresRoute(t, profile, physical, binding.ID(), route) {
+			return true
+		}
+	}
+	return false
+}
+
+// staticClosureProfileDeclaresRoute 是 staticClosureProfileDeclaresAnyRoute 的单条 route 版本：
+// 画像是否声明了与该 route 同 method、host、path 与协议的端点。需要“Sink 的全部 route 都有
+// 端点”这类判定的调用方（例如合成回滚矩阵选底稿）逐条调用它。
+func staticClosureProfileDeclaresRoute(
+	t *testing.T,
+	profile profilecontract.ExecutableProfile,
+	physical PhysicalRouteCatalog,
+	sinkID SinkID,
+	route CatalogRoute,
+) bool {
+	t.Helper()
+	_, key, ok := physical.ResolveRoute(route)
+	if !ok {
+		t.Fatalf("Sink %s 的 route 缺少物理路由", sinkID)
+	}
+	for _, endpoint := range profile.Endpoints() {
+		protocol := WireProtocolHTTP
+		if strings.EqualFold(strings.TrimSpace(endpoint.Upgrade), "websocket") {
+			protocol = WireProtocolWebSocket
+		}
+		path := endpoint.Path
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		if endpoint.Method == key.Method && protocol == key.Protocol &&
+			normalizeRouteHost(endpoint.Host) == normalizeRouteHost(key.Host) && path == key.Path {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes 证明 Active/Previous 两个
+// mode 下，每个画像声明的静态端点都能以画像形状的合法 target 编译通过，且编译产物 URL
+// 与输入逐项一致。
+//
+// 版本删除或新增的端点允许在不含它的单个 Release 中零匹配（例如目标画像删掉某端点后，
+// 只绑定该端点的 Sink 在该 mode 下解析不出 Bundle；版本新增端点同理只在含它的 mode 下
+// 有 plan）。改动前本用例要求每个 Sink 在两个 mode 下都能解析，RuntimeCatalog 切换后
+// 这一前提不再成立。现按版本 route 口径核验：
+//   - 逐 mode 只核验该 mode 画像实际声明的端点：已验证端点集合必须恰好等于该 mode
+//     画像声明的静态端点集合，不能编译出画像未声明的端点；
+//   - 零匹配只在结构上成立时放行：该 Sink 的每条 route 在本 mode 画像中都没有同
+//     method/host/path/协议的端点，且 Resolver 报的正是“当前 Release 中没有
+//     EndpointBinding”，其余解析失败一律报错；
+//   - 并集覆盖：Compiler 端点集合等于 Active/Previous 画像声明的并集，且每条
+//     runtime-bindable route 在两个 mode 的并集中至少有一个 binding。
+//
+// 原用例的并集断言原样保留，逐 mode 断言比原先更严，判别力不因放行零匹配而下降。
 func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 	compiler := NewCompiler()
+	sinks := codexProfileSinkBindings(t)
+	physical, err := NewPhysicalRouteCatalog(DefaultSinkCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewBundleResolver(DefaultReleaseCatalog(), DefaultSinkCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
 	expectedEndpointIDs := map[string]bool{}
 	validatedEndpointIDs := map[string]bool{}
+	// boundRoutes 记录两个 mode 下实际解析出 plan 的 route（含动态端点），用于并集覆盖断言。
+	boundRoutes := map[string]bool{}
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
 		release, err := DefaultReleaseCatalog().Resolve(mode)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, endpoint := range release.ExecutableProfile().Endpoints() {
+		profile := release.ExecutableProfile()
+		declaredInMode := map[string]bool{}
+		for _, endpoint := range profile.Endpoints() {
 			if !endpoint.HostFromResponse {
+				declaredInMode[endpoint.ID] = true
 				expectedEndpointIDs[endpoint.ID] = true
 			}
 		}
-	}
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		for _, binding := range codexProfileSinkBindings(t) {
-			bundle := staticClosureBundle(t, mode, binding.ID())
+		validatedInMode := map[string]bool{}
+		for _, binding := range sinks {
+			request := changeset2BundleRequest(binding.ID())
+			request.Mode = mode
+			bundle, err := resolver.Resolve(request)
+			if err != nil {
+				if staticClosureProfileDeclaresAnyRoute(t, profile, physical, binding) ||
+					!strings.Contains(err.Error(), "在当前 Release 中没有 EndpointBinding") {
+					t.Fatalf("解析 %s/%s Bundle：%v", mode, binding.ID(), err)
+				}
+				continue
+			}
 			for _, plan := range bundle.EndpointPlans() {
+				boundRoutes[EndpointBindingKey{
+					SinkID: plan.SinkID(), Purpose: plan.Purpose(),
+					PhysicalRouteID: plan.PhysicalRouteID(), Protocol: plan.Protocol(),
+				}.identity()] = true
 				if plan.DynamicTarget() {
 					continue
 				}
+				if !declaredInMode[plan.EndpointID()] {
+					t.Fatalf("%s/%s 编译出该 mode 画像未声明的端点 %s",
+						mode, plan.SinkID(), plan.EndpointID())
+				}
+				validatedInMode[plan.EndpointID()] = true
 				validatedEndpointIDs[plan.EndpointID()] = true
 				target := staticClosureLegalTarget(plan.template)
 				invocationID := fmt.Sprintf(
@@ -582,7 +709,16 @@ func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 				}
 			}
 		}
+		// 逐 mode：该 mode 画像声明的每个静态端点都必须被实际编译验证过，零匹配放行
+		// 不能让某个 mode 自己声明的端点漏检。
+		if validated, declared := sortedStringSet(validatedInMode), sortedStringSet(declaredInMode); !slices.Equal(validated, declared) {
+			t.Fatalf(
+				"%s 已验证 endpoint ID 集合不等于该 mode 画像声明：validated=%v declared=%v",
+				mode, validated, declared,
+			)
+		}
 	}
+	// 并集覆盖一：Compiler 端点集合等于 Active/Previous 画像声明的并集。
 	validated := sortedStringSet(validatedEndpointIDs)
 	expected := sortedStringSet(expectedEndpointIDs)
 	if !slices.Equal(validated, expected) {
@@ -590,6 +726,23 @@ func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 			"已验证 endpoint ID 集合不等于 Active/Previous ReleaseCatalog 并集：validated=%v expected=%v",
 			validated, expected,
 		)
+	}
+	// 并集覆盖二：每条 runtime-bindable route 在两个 mode 的并集中至少有一个 binding，
+	// 零匹配只能出现在“另一 mode 已承载该 route”的单侧。
+	for _, binding := range sinks {
+		for _, route := range binding.Routes() {
+			physicalID, _, ok := physical.ResolveRoute(route)
+			if !ok {
+				t.Fatalf("Sink %s 的 route 缺少物理路由", binding.ID())
+			}
+			key := EndpointBindingKey{
+				SinkID: binding.ID(), Purpose: binding.Purpose(),
+				PhysicalRouteID: physicalID, Protocol: route.Protocol,
+			}
+			if !boundRoutes[key.identity()] {
+				t.Fatalf("Sink %s 的 route %s 在 Active/Previous 中均无 binding", binding.ID(), physicalID)
+			}
+		}
 	}
 }
 

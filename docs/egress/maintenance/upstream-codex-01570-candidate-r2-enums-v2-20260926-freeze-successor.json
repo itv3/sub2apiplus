@@ -1,0 +1,78 @@
+{
+  "base_commit": "b534651bed2a9aa122cefeac4e6b463ad0c26d47",
+  "changed_path_count": 3,
+  "current_commit": "e47bce949e6816571ba156c82a4dddc8df77d6ba",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4290,
+  "frozen_path_count": 1399,
+  "identity_sha256": "ed488a5dc8367f4da199eebfa1a19c35e4f1162c8838e7b7cd8ad2087fbce043",
+  "issued_at_utc": "2026-09-26T12:01:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r2-enums-v2-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "predecessor_sha256s": [
+        "0435585ba23e5e3e478611cdbd3a986702878dbbccbf281c1c8d7805bdfc8f31"
+      ],
+      "reason": "按最终候选提交登记冻结路径后继摘要：测试快照索引保留历史条目并追加 0.157.0 目标快照，enums_gen.go 由入库快照重生成，enumcatalog.go 删除已生成的临时常量。 path=backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-profile-optional-sections-20260925-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "536e90ec41ef6c87f85f43b6f735c6a48ac74258453bc362a55342fd3a516eb9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/enums_gen.go",
+      "predecessor_sha256s": [
+        "c007ba087899ca85122e7a96947c6723b191e581bb99dda5c8c935ba85e9491f"
+      ],
+      "reason": "按最终候选提交登记冻结路径后继摘要：测试快照索引保留历史条目并追加 0.157.0 目标快照，enums_gen.go 由入库快照重生成，enumcatalog.go 删除已生成的临时常量。 path=backend/internal/officialegress/profilecontract/enums_gen.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1d1d4d650d82e8d2ad83b9dd9fd5a7700663e191dc90b73de19bed4af0fed003"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "predecessor_sha256s": [
+        "8430c02fa55565d32bb653ddb252a554a1bc99990ecd6647949f70e34d1079df"
+      ],
+      "reason": "按最终候选提交登记冻结路径后继摘要：测试快照索引保留历史条目并追加 0.157.0 目标快照，enums_gen.go 由入库快照重生成，enumcatalog.go 删除已生成的临时常量。 path=backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r2-assets-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "82b51ea9509f77c4dd5bc2092ef8934bd22f982ff84cebed3980cc0f67697852"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

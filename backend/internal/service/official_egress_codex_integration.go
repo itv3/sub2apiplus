@@ -21,6 +21,16 @@ const (
 	officialCodexRuntimeMetricsAccountExtra = "official_codex_runtime_metrics"
 )
 
+const (
+	// officialCodexGuardianHeader 是 guardian 审阅请求的入站标记头。官方只在 guardian
+	// 同步审阅会话发出 reviewer，异步评分器发 classifier；网关只仿真前者。
+	officialCodexGuardianHeader        = "x-codex-guardian"
+	officialCodexGuardianReviewerValue = "reviewer"
+	// officialCodexGuardianSubagentValue 是 guardian 会话在 x-openai-subagent 上的取值；
+	// 审阅标记只有与该受信子代理身份同时成立才可信。
+	officialCodexGuardianSubagentValue = "guardian"
+)
+
 var officialCodexTrustedConditionalHeaders = map[string]string{
 	"x-openai-internal-codex-residency":     officialCodexConditionResidency,
 	"x-codex-beta-features":                 officialCodexConditionBetaFeatures,
@@ -28,6 +38,7 @@ var officialCodexTrustedConditionalHeaders = map[string]string{
 	"x-openai-memgen-request":               officialCodexConditionMemoryGeneration,
 	"x-codex-parent-thread-id":              officialCodexConditionParentThread,
 	"x-responsesapi-include-timing-metrics": officialCodexConditionRuntimeMetrics,
+	officialCodexGuardianHeader:             officialCodexConditionGuardianReview,
 }
 
 type officialCodexRuntimeStateContextKey struct{}
@@ -43,6 +54,9 @@ type officialCodexIngressRuntimeSnapshot struct {
 	ParentThreadID            string
 	TurnMetadata              string
 	BetaFeatures              string
+	// Guardian 是入站 x-codex-guardian 的原始取值。它只在运行态解析时与受信子代理
+	// 身份交叉校验，校验不通过按“条件不成立”处理，不会原样进入出站。
+	Guardian string
 }
 
 // WithOfficialCodexIngressRuntime 在路由入口保存原始进程身份与 feature。
@@ -78,6 +92,7 @@ func officialCodexIngressRuntimeSnapshotFromGin(c *gin.Context) officialCodexIng
 		ParentThreadID:            strings.TrimSpace(c.GetHeader("x-codex-parent-thread-id")),
 		TurnMetadata:              strings.TrimSpace(c.GetHeader("x-codex-turn-metadata")),
 		BetaFeatures:              strings.TrimSpace(c.GetHeader("x-codex-beta-features")),
+		Guardian:                  strings.TrimSpace(c.GetHeader(officialCodexGuardianHeader)),
 	}
 }
 
@@ -383,10 +398,45 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 			}
 		}
 	}
+	applyOfficialCodexGuardianReviewSnapshot(&state, snapshot.Guardian)
 	if err := validateOfficialCodexRuntimeState(state); err != nil {
 		return officialCodexRuntimeState{}, err
 	}
 	return state, nil
+}
+
+// applyOfficialCodexGuardianReviewSnapshot 把入站 x-codex-guardian 收敛为受信条件。
+//
+// 只接受 reviewer，且同一请求的 x-openai-subagent 已作为 guardian 通过画像校验；
+// 其他取值（包括官方异步评分器的 classifier，网关不仿真该连接池）或身份不一致时
+// 按“条件不成立”出站：不发 x-codex-guardian，请求保持普通请求的合法形态，而不是
+// 把未受信任的条件头带进 wire 或拒绝服务。是否真正发出仍由画像槽位决定，旧版本
+// 画像没有 guardian 条件，这里的结果不改变其任何出站字节。
+func applyOfficialCodexGuardianReviewSnapshot(state *officialCodexRuntimeState, guardian string) {
+	if state == nil {
+		return
+	}
+	guardian = strings.TrimSpace(guardian)
+	if guardian == "" {
+		return
+	}
+	switch {
+	case guardian != officialCodexGuardianReviewerValue:
+		logger.LegacyPrintf(
+			"service.official_egress_codex",
+			"[Codex] %s 取值 %q 不受信任，按条件不成立出站",
+			officialCodexGuardianHeader,
+			guardian,
+		)
+	case state.ConditionalHeaders["x-openai-subagent"] != officialCodexGuardianSubagentValue:
+		logger.LegacyPrintf(
+			"service.official_egress_codex",
+			"[Codex] %s 缺少受信的 guardian 子代理身份，按条件不成立出站",
+			officialCodexGuardianHeader,
+		)
+	default:
+		state.ConditionalHeaders[officialCodexGuardianHeader] = guardian
+	}
 }
 
 // applyOfficialCodexTrustedBuildRuntimeDefaults 把 ReleaseCatalog 已签入的 Build UA
@@ -541,7 +591,15 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 			if value != "present" {
 				return fmt.Errorf("Codex 条件头 %s 只允许存在性标记", name)
 			}
+		case officialCodexGuardianHeader:
+			if value != officialCodexGuardianReviewerValue {
+				return fmt.Errorf("Codex 条件头 %s 只允许 %s", name, officialCodexGuardianReviewerValue)
+			}
 		}
+	}
+	if _, hasGuardian := state.ConditionalHeaders[officialCodexGuardianHeader]; hasGuardian &&
+		state.ConditionalHeaders["x-openai-subagent"] != officialCodexGuardianSubagentValue {
+		return fmt.Errorf("Codex guardian 审阅标记必须同时声明 guardian 子代理")
 	}
 	_, hasSubagent := state.ConditionalHeaders["x-openai-subagent"]
 	if _, hasMemgen := state.ConditionalHeaders["x-openai-memgen-request"]; hasMemgen && !hasSubagent {
@@ -559,7 +617,12 @@ func officialCodexConditionsFromHeaders(headers http.Header) map[string]bool {
 	present := func(name string) bool {
 		return strings.TrimSpace(headers.Get(name)) != ""
 	}
+	guardianReview := strings.TrimSpace(headers.Get(officialCodexGuardianHeader)) == officialCodexGuardianReviewerValue
 	conditions := map[string]bool{
+		officialCodexConditionGuardianReview:    guardianReview,
+		officialCodexConditionNotGuardianReview: !guardianReview,
+		// 工作区路由 override 首期失败关闭，任何动态值都不能让它成立。
+		officialCodexConditionRoutingOverride:    false,
 		officialCodexConditionCookie:             present("cookie"),
 		officialCodexConditionBetaFeatures:       present("x-codex-beta-features"),
 		officialCodexConditionLunaReserve:        present("x-openai-codex-luna-reserve"),

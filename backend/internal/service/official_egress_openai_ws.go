@@ -121,6 +121,26 @@ func prepareOpenAIOfficialEgressWSContext(
 		identity.parentThreadID,
 		identity.memoryGenerate,
 	)
+	if section := officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata; section != nil {
+		// 握手 turn metadata 是 prewarm 形态：不属于某一轮，不写 turn_trigger；
+		// model 与 reasoning_effort 取首帧请求体（缺省 effort 按模型默认值补齐）。
+		firstFrame, decodeErr := decodeOfficialJSONObjectUseNumber(firstPayload)
+		if decodeErr != nil {
+			return fmt.Errorf("decode OpenAI official egress WebSocket first frame: %w", decodeErr)
+		}
+		identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
+			identity.turnMetadata, section,
+			officialCodexTurnMetadataExtension{
+				Model: officialOpenAIString(firstFrame, "model"),
+				ReasoningEffort: officialOpenAIEffectiveReasoningEffort(
+					firstFrame, officialOpenAIReasoningDefaultsFromContext(egressContext),
+				),
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
 	if identity.source == OfficialEgressFieldSourceDerived {
 		egressContext.openAIWSDerived = &officialOpenAIWSDerivedState{}
 	}
@@ -227,7 +247,10 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		)
 	}
 
-	if strings.TrimSpace(c.GetHeader("session-id")) != identity.sessionID ||
+	forkAllowed := officialOpenAIExplicitForkAllowed(c)
+	if !officialOpenAIIngressSessionHeaderMatches(
+		strings.TrimSpace(c.GetHeader("session-id")), identity.sessionID, identity.promptCacheKey, forkAllowed,
+	) ||
 		strings.TrimSpace(c.GetHeader("thread-id")) != identity.threadID ||
 		strings.TrimSpace(c.GetHeader("x-codex-window-id")) != identity.windowID ||
 		strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)) != identity.turnMetadata {
@@ -256,9 +279,10 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		metadata,
 		turnMetadata,
 		officialOpenAIIngressIdentityValues{
-			sessionID:      identity.sessionID,
-			threadID:       identity.threadID,
-			promptCacheKey: identity.promptCacheKey,
+			sessionID:                 identity.sessionID,
+			threadID:                  identity.threadID,
+			promptCacheKey:            identity.promptCacheKey,
+			forkPromptCacheKeyAllowed: forkAllowed,
 		},
 		false,
 	); err != nil {
@@ -1688,6 +1712,27 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	}
 	if !prewarm {
 		turnMetadata["turn_started_at_unix_ms"] = turnStartedAtMS
+	}
+	// 画像 TurnMetadata 节声明的新键：payload 已完成定型（reasoning 默认值已补齐）；
+	// prewarm 帧不属于某一轮，不写 turn_trigger。画像没有该节时不做任何改动。
+	extension := officialCodexTurnMetadataExtension{
+		Model:           officialOpenAIString(payload, "model"),
+		ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+	}
+	if !prewarm {
+		conditional := egressContext.codexRuntimeState.ConditionalHeaders
+		extension.TurnTrigger = officialCodexTurnTrigger(
+			egressContext.codexRuntimeState.SurfaceID,
+			conditional["x-openai-subagent"],
+			strings.EqualFold(conditional["x-openai-memgen-request"], "true"),
+		)
+	}
+	if err := applyOfficialCodexTurnMetadataSection(
+		turnMetadata,
+		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata,
+		extension,
+	); err != nil {
+		return nil, "", err
 	}
 	turnMetadataBytes, err := marshalOfficialOpenAITurnMetadata(turnMetadata)
 	if err != nil {

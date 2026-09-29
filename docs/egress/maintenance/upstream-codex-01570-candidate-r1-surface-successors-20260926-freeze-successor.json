@@ -1,0 +1,67 @@
+{
+  "base_commit": "e7c459f73baa8e583179da3d5b5d35b8d5165cdb",
+  "changed_path_count": 3,
+  "current_commit": "d53ccdd2a8dbedde7a7b3df8c43363ab4bff1bed",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4255,
+  "frozen_path_count": 1399,
+  "identity_sha256": "9c084a08719e5163d7c21e086656b496815cab5844b03da3bccc8e2031854ac7",
+  "issued_at_utc": "2026-09-26T03:27:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r1-surface-successors-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "2c8172bc0850d1ad5e9d90766d0d40cb28a8666e8fd3b00b34287b99cfc8f9d3"
+      ],
+      "reason": "台账完整性门禁新增候选出站面 successor 登记表（绑定封存 v0.1.177 overlay 台账摘要），承接 0.157.0 候选 VC-4 新增出站定型文件；封存台账与历史清单逐字保留 path=tools/check_ledger_completeness.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-terminal-gate-candidate-state-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e1c2a1a4e93308b6e870392aaa7615c3e9de45f380572500302dfb169dd2672b"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "4af36527078132c7d5696016a21b29714430fb27ee5387141832d9a160a6de48"
+      ],
+      "reason": "台账完整性门禁新增候选出站面 successor 登记表（绑定封存 v0.1.177 overlay 台账摘要），承接 0.157.0 候选 VC-4 新增出站定型文件；封存台账与历史清单逐字保留 path=tools/official_client_capture/tests/test_check_ledger_completeness.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-terminal-gate-candidate-state-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "38dfe52ab963f94de30f5cf1b4330ad7812951b5c2ba523074b01f72c46a3fc3"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/egress/validation/codex-egress-surface-successors.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

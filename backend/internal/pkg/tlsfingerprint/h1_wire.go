@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // h1WireConn 在 wire 层重写 HTTP/1.1 请求头，使其与官方 hyper 的输出形态一致。
@@ -30,6 +31,13 @@ import (
 // 只有历史非严格画像仍保留 passthrough 兼容行为。
 type h1WireConn struct {
 	net.Conn
+
+	// mu 串行化 Write，并让下面的改写状态在不同写入协程之间可见。WebSocket Upgrade 请求头由
+	// http.Transport 的 writeLoop 协程写出；对端可能在这次 Write 返回（置 passthrough）之前就回 101，
+	// 调用方随即从另一个协程写第一帧。没有互斥时后者可能读到旧的 passthrough=false，把帧当作下一个
+	// 请求头缓冲进 pending：Write 表面成功，帧却永远不会送出，直到读超时。持锁后第一帧必然等请求头
+	// 那次 Write 完整返回，再按透传写出；普通 HTTP 请求只有 writeLoop 一个写入方，不受影响。
+	mu sync.Mutex
 
 	// rules 按请求路径给出官方 header 次序；官方各端点的插入序不同，故不能共用一份。
 	rules []H1HeaderOrderRule
@@ -62,6 +70,8 @@ func newH1WireConnWithMode(
 }
 
 func (c *h1WireConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.passthrough {
 		return c.Conn.Write(p)
 	}

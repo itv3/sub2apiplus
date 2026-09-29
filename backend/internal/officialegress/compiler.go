@@ -199,6 +199,7 @@ func (c *Compiler) Compile(
 	body, err := compileEndpointBody(
 		endpointPlan.template.endpoint,
 		bundle.release.ExecutableProfile().Features(),
+		bundle.release.ExecutableProfile().Optional(),
 		headers,
 		plan.Body,
 		plan.BodyPolicy.Conditions,
@@ -792,6 +793,18 @@ func codexHeaderConditionEnabled(
 		return conditions.TurnStatePresent
 	case profilecontract.ConditionLunaReservePresent:
 		return conditions.LunaReservePresent
+	case profilecontract.ConditionGuardianReviewRequest:
+		// guardian 同步审阅请求：只由 service 边界已验证的请求条件决定，
+		// 与 feature 默认值和认证材料无关。
+		return conditions.GuardianReviewRequest
+	case profilecontract.ConditionNotGuardianReviewRequest:
+		// 与上一条严格互补：画像用它表达“仅普通请求才有”的槽位（routing hint、
+		// service_tier、guardian_credits_requested 等）。
+		return !conditions.GuardianReviewRequest
+	case profilecontract.ConditionAccountRoutingOverridePresent:
+		// 首期非默认工作区路由失败关闭，service 永不置位；这里只按事实求值，
+		// 不做任何推断。
+		return conditions.AccountRoutingOverridePresent
 	default:
 		return false
 	}
@@ -895,8 +908,56 @@ func codexHeaderValue(
 		}
 	case profilecontract.SourceModelManifest:
 		return "true", false, nil
+	case profilecontract.SourcePromptCacheKey:
+		switch name {
+		case "session-id", "x-session-id":
+			return codexResponsesSessionHeaderValue(facts), false, nil
+		}
 	}
 	return "", false, errors.New("结构化事实未覆盖 ProfileSpec Header source")
+}
+
+// codexResponsesSessionHeaderValue 是 session-id 头在 prompt_cache_key 来源下的取值：
+// 根会话取 prompt cache 亲和键（通常等于 SessionID，临时 fork 时为源会话键），
+// 子代理与内部会话（x-openai-subagent 存在）仍取本会话真实 SessionID，
+// 不能取带 guardian: 等前缀的 prompt cache 键。
+func codexResponsesSessionHeaderValue(facts CodexIdentityFacts) string {
+	if facts.Subagent.present() {
+		return facts.SessionID.Value
+	}
+	value, _ := codexPromptCacheKeyValue(facts, true)
+	return value
+}
+
+// codexPromptCacheKeyValue 返回 compiler 独占的 prompt_cache_key 取值。
+//
+// useFact 只在端点画像声明了 prompt_cache_key 来源时为 true：此时以 service 边界已
+// 验证的 PromptCacheKey 事实为准（支持临时 fork 的源会话键）；否则保持旧逻辑，
+// 按 SessionID 推导（guardian 子代理为 guardian:<parent>），旧画像出站字节不变。
+func codexPromptCacheKeyValue(facts CodexIdentityFacts, useFact bool) (string, bool) {
+	if useFact && facts.PromptCacheKey.present() {
+		return facts.PromptCacheKey.Value, true
+	}
+	if !facts.SessionID.present() {
+		return "", false
+	}
+	if facts.Subagent.Value == "guardian" && facts.ParentThreadID.present() {
+		return "guardian:" + facts.ParentThreadID.Value, true
+	}
+	return facts.SessionID.Value, true
+}
+
+// endpointDeclaresValueSource 判断端点画像是否有 Header 槽位使用指定取值来源。
+func endpointDeclaresValueSource(
+	endpoint profilecontract.ExecutableEndpointProfile,
+	source profilecontract.ValueSource,
+) bool {
+	for _, slot := range endpoint.Headers {
+		if slot.Source == source {
+			return true
+		}
+	}
+	return false
 }
 
 func endpointHasHeader(endpoint profilecontract.ExecutableEndpointProfile, want string) bool {
@@ -929,6 +990,7 @@ func IsProtectedCodexHeader(name string) bool { return protectedOfficialHeader(n
 func compileEndpointBody(
 	endpoint profilecontract.ExecutableEndpointProfile,
 	features profilecontract.FeatureDefaults,
+	optional profilecontract.OptionalSections,
 	headers http.Header,
 	body RequestBody,
 	bodyConditions BodyRuntimeConditions,
@@ -976,7 +1038,12 @@ func compileEndpointBody(
 				return nil, fmt.Errorf("解析 JSON Body: %w", err)
 			}
 		}
-		if err = injectCompilerOwnedBodyFields(endpoint, document, authentication, identityFacts); err != nil {
+		if err = injectCompilerOwnedBodyFields(
+			endpoint, document, authentication, identityFacts,
+			codexClientMetadataConstants{
+				section: optional.ClientMetadata, features: features, authentication: authentication,
+			},
+		); err != nil {
 			return nil, err
 		}
 		compiled, err = orderJSONDocumentWithPolicy(
@@ -1014,16 +1081,53 @@ func compileEndpointBody(
 	return out, nil
 }
 
+// codexClientMetadataConstants 是 ClientMetadata 可选节在一次编译中的求值输入。
+// section 为 nil 表示当前画像没有该节，client_metadata 只由身份事实重建（旧逻辑）。
+type codexClientMetadataConstants struct {
+	section        *profilecontract.ClientMetadataSection
+	features       profilecontract.FeatureDefaults
+	authentication AttemptAuthenticationInput
+}
+
+// apply 按画像条件把常量写入 client_metadata。常量键与身份事实键冲突属于画像错误，
+// 失败关闭；条件不成立的键不写入。
+func (c codexClientMetadataConstants) apply(
+	metadata map[string]string,
+	conditions CodexRequestConditions,
+) error {
+	if c.section == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(c.section.Constants))
+	for key := range c.section.Constants {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, exists := metadata[key]; exists {
+			return fmt.Errorf("ClientMetadata 常量键与身份事实冲突：%s", key)
+		}
+		if !codexHeaderConditionEnabled(
+			c.section.ConditionFor(key), c.features, conditions, c.authentication,
+		) {
+			continue
+		}
+		metadata[key] = c.section.Constants[key]
+	}
+	return nil
+}
+
 func injectCompilerOwnedBodyFields(
 	endpoint profilecontract.ExecutableEndpointProfile,
 	document *orderedJSONDocument,
 	authentication AttemptAuthenticationInput,
 	identityFacts CodexIdentityFacts,
+	constants codexClientMetadataConstants,
 ) error {
 	if endpoint.ID != "oauth_refresh" {
 		if endpoint.ID == "responses_http" || endpoint.ID == "responses_compact" ||
 			endpoint.ID == "responses_ws" {
-			return injectCodexResponsesOwnedBodyFields(endpoint.ID, document, identityFacts)
+			return injectCodexResponsesOwnedBodyFields(endpoint, document, identityFacts, constants)
 		}
 		return nil
 	}
@@ -1042,25 +1146,26 @@ func injectCompilerOwnedBodyFields(
 }
 
 func injectCodexResponsesOwnedBodyFields(
-	endpointID string,
+	endpoint profilecontract.ExecutableEndpointProfile,
 	document *orderedJSONDocument,
 	facts CodexIdentityFacts,
+	constants codexClientMetadataConstants,
 ) error {
 	if _, present := document.value("prompt_cache_key"); present {
 		return errors.New("Responses 语义 Body 禁止携带 compiler-owned prompt_cache_key")
 	}
-	if facts.SessionID.present() {
-		promptCacheValue := facts.SessionID.Value
-		if facts.Subagent.Value == "guardian" && facts.ParentThreadID.present() {
-			promptCacheValue = "guardian:" + facts.ParentThreadID.Value
-		}
+	// “先头后体”：session-id 头（prompt_cache_key 来源）与请求体 prompt_cache_key
+	// 共用同一取值函数，保证两处一致。
+	if promptCacheValue, ok := codexPromptCacheKeyValue(
+		facts, endpointDeclaresValueSource(endpoint, profilecontract.SourcePromptCacheKey),
+	); ok {
 		promptCacheKey, err := json.Marshal(promptCacheValue)
 		if err != nil {
 			return err
 		}
 		document.set("prompt_cache_key", promptCacheKey)
 	}
-	if endpointID == "responses_compact" {
+	if endpoint.ID == "responses_compact" {
 		return nil
 	}
 	if _, present := document.value("client_metadata"); present {
@@ -1087,6 +1192,11 @@ func injectCodexResponsesOwnedBodyFields(
 	}
 	if len(metadata) == 0 {
 		return errors.New("Responses compiler 缺少 client_metadata 身份事实")
+	}
+	// 画像 ClientMetadata 节声明的客户端固定常量（如 guardian_credits_requested、
+	// mcp_attribution）在身份事实之后按条件追加；画像没有该节时保持旧逻辑。
+	if err := constants.apply(metadata, facts.Conditions); err != nil {
+		return err
 	}
 	metadataRaw, err := json.Marshal(metadata)
 	if err != nil {
@@ -1171,6 +1281,10 @@ func orderJSONDocumentWithPolicy(
 		}
 		if !enabled {
 			if present {
+				if codexBodyConditionOmitsPresentField(field.Condition) {
+					document.omit(field.Name)
+					continue
+				}
 				return nil, fmt.Errorf("JSON Body 条件字段未启用: %s", field.Name)
 			}
 			continue
@@ -1220,6 +1334,22 @@ func orderJSONDocumentWithPolicy(
 	return document.encodeNames(ordered), nil
 }
 
+// codexBodyConditionOmitsPresentField 列出“条件不成立时省略语义体中已有字段”的条件。
+//
+// guardian 审阅与否是请求级事实：官方客户端在构造审阅请求时自行删除 service_tier
+// 等字段，而网关收到的语义体来自下游，可能照常携带这些字段。对这类条件，编译器按
+// 画像省略字段，而不是像其他条件那样把“字段存在但条件未启用”当成调用方错误拒绝。
+// 旧版本画像不引用这两个条件，其余条件仍保持失败关闭。
+func codexBodyConditionOmitsPresentField(condition profilecontract.ConditionKind) bool {
+	switch condition {
+	case profilecontract.ConditionGuardianReviewRequest,
+		profilecontract.ConditionNotGuardianReviewRequest:
+		return true
+	default:
+		return false
+	}
+}
+
 func codexBodyFieldConditionEnabled(
 	condition profilecontract.ConditionKind,
 	features profilecontract.FeatureDefaults,
@@ -1250,7 +1380,10 @@ func codexBodyFieldConditionEnabled(
 		profilecontract.ConditionSessionIdPresent,
 		profilecontract.ConditionSubagentPresent,
 		profilecontract.ConditionTurnStatePresent,
-		profilecontract.ConditionLunaReservePresent:
+		profilecontract.ConditionLunaReservePresent,
+		profilecontract.ConditionGuardianReviewRequest,
+		profilecontract.ConditionNotGuardianReviewRequest,
+		profilecontract.ConditionAccountRoutingOverridePresent:
 		return codexHeaderConditionEnabled(
 			condition, features, requestConditions, authentication,
 		), nil

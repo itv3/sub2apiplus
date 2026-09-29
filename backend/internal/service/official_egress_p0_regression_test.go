@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -157,6 +158,8 @@ func TestOfficialEgressEndpointAliasesCannotBypassProfiles(t *testing.T) {
 		ingressPath      string
 		upstreamURL      string
 		canonicalInbound string
+		// legacyCompact 标记 legacy compact 别名：该端点只在仍声明它的画像槽位上可用。
+		legacyCompact bool
 	}{
 		{
 			name:             "Anthropic Responses 前缀别名",
@@ -178,6 +181,7 @@ func TestOfficialEgressEndpointAliasesCannotBypassProfiles(t *testing.T) {
 			ingressPath:      "/openai/v1/responses/compact",
 			upstreamURL:      "https://chatgpt.com/backend-api/codex/responses/compact",
 			canonicalInbound: "/v1/responses/compact",
+			legacyCompact:    true,
 		},
 	}
 
@@ -188,7 +192,17 @@ func TestOfficialEgressEndpointAliasesCannotBypassProfiles(t *testing.T) {
 			ingressContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ingressContext.Request = httptest.NewRequest(http.MethodPost, tt.ingressPath, nil)
 
-			got, err := attachOfficialEgressHTTPContext(upstreamRequest, ingressContext, account, tt.platform)
+			var cfgs []*config.Config
+			if tt.legacyCompact {
+				// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是
+				// Previous 中的旧画像。别名归一与槽位无关，本用例只需让画像能解析该端点。
+				cfgs = append(cfgs, &config.Config{Gateway: config.GatewayConfig{
+					OfficialClientProfiles: config.GatewayOfficialClientProfilesConfig{
+						Mode: officialCodexLegacyCompactProfileMode(t),
+					},
+				}})
+			}
+			got, err := attachOfficialEgressHTTPContext(upstreamRequest, ingressContext, account, tt.platform, cfgs...)
 			require.NoError(t, err)
 			egressContext, exists := OfficialEgressContextFromContext(got.Context())
 			require.True(t, exists)

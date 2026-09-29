@@ -146,6 +146,11 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	}
 
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)
+	if resp != nil {
+		// 画像声明 WS 握手写回时，101 与被拒绝升级的 Set-Cookie 都写回账号级 jar；
+		// 上下文未声明写回（旧版本画像）时为空操作。
+		writeBackOfficialCodexWebSocketHandshakeCookies(ctx, targetURL, resp.Header)
+	}
 	if err != nil {
 		status := 0
 		respHeaders := http.Header(nil)

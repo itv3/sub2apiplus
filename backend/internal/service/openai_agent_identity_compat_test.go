@@ -45,6 +45,9 @@ func TestAccountTestServiceOpenAICompactAgentIdentityUsesFreshAssertion(t *testi
 		Body:       io.NopCloser(strings.NewReader(`{"id":"compact-agent","status":"completed","output":[{"type":"compaction","id":"cmp_agent_fresh","encrypted_content":"blob"}]}`)),
 	}}
 	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -94,6 +97,9 @@ func TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce(t *
 	}}
 	invalidator := &agentIdentityWSInvalidationRecorder{}
 	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, agentIdentityWS: invalidator}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/22/test", bytes.NewReader(nil))

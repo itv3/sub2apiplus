@@ -91,6 +91,9 @@ func TestOpenAIGatewayForwardKeepsRequestedModelOnInitialLegacyCompact(t *testin
 		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
 		httpUpstream: upstream,
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
@@ -123,6 +126,9 @@ func TestOpenAIGatewayForwardAppliesAccountCompactMappingOnInitialLegacyCompact(
 		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
 		httpUpstream: upstream,
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{
@@ -163,6 +169,9 @@ func TestOpenAIGatewayForwardLegacyCompactFallsBackOnceAfterModelUnavailable(t *
 		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
 		httpUpstream: upstream,
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := &Account{
 		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
@@ -196,6 +205,9 @@ func TestOpenAIPassthroughKeepsRequestedModelOnInitialLegacyCompact(t *testing.T
 		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
 		httpUpstream: upstream,
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account, _ := compactFallbackManagedProxyAccount()
 	bodyContract, contractErr := captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
 	require.NoError(t, contractErr)

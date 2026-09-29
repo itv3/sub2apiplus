@@ -1,0 +1,241 @@
+{
+  "base_commit": "12271df2c563e3ae2e732a0aa8ead10ab2d1cda7",
+  "changed_path_count": 30,
+  "current_commit": "1ddab2385b7effed40549910b5a3ff6a1b9ad5c7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4266,
+  "frozen_path_count": 1399,
+  "identity_sha256": "8075ba8b54ebdfd3aac8e3106ea78a457655559527289a396d68be9d2b0f4cc0",
+  "issued_at_utc": "2026-09-26T07:21:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/changeset2_synthetic_rollback_test.go",
+      "predecessor_sha256s": [
+        "b7c5d5c795e67e9d66fe516e66ce470a5c32e311ed99e72cfb2842ffa2cf3bdb"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/officialegress/changeset2_synthetic_rollback_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "542e7aa5fc4cc6d6686a3b7355debc80e38ca8d66325ff0d3196e4a1ff471634"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "predecessor_sha256s": [
+        "7200468509a3fe4cc1bea8a12238e00f8eb1c64570f4a4ad53c3f3fe0b914494"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "83499d5b0649514ccdff050043296d665eb8287c903f3a1db28b7922040c5045"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compositioncontract/composition_test.go",
+      "predecessor_sha256s": [
+        "30cb2a900f23a29a666572f99cc08e60d1648c172042016d1ab0ad7c2fcc7775"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/officialegress/compositioncontract/composition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "128538a67c59ab8cec68a15305947e255e7bcea51a16d620c4d4dd351082e089"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_openai_compact_test.go",
+      "predecessor_sha256s": [
+        "61b811e62cbf58676a4d685b22bcec013aa8f6509d66d755916c362b224e7d70"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/account_test_service_openai_compact_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8fcfc080e56f7d12d3a3ea835a15cd39ae8506ba22c9af7c32066d8dcb14b1ad"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_1b_receipt_artifacts_test.go",
+      "predecessor_sha256s": [
+        "51e0ab7208cb45e082ab9b3d75ca33bc18bc928e375d14b592b58b9c71fb600a"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/official_egress_1b_receipt_artifacts_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "58f0e94507f9921c32b5e3534f6e1e7f9657f5adf129d10659ca5582f46e0a70"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http_test.go",
+      "predecessor_sha256s": [
+        "61dd0992b86d535bdcffd4df51f4cf1a9458a13b7accac7d7b4d45679f8e416f"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/official_egress_openai_http_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a48afbb826cc0372835862beabda2e46977f8aef19270e9398b89751d5baa7f6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_p0_regression_test.go",
+      "predecessor_sha256s": [
+        "f15611ee934a7c4704d15dd24563d4c68f62487eadb16464244a4aa96cca3d75"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/official_egress_p0_regression_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3c7567e6e4a9264bdc403c8f8b9bbdfa7616ab657465e7d65bf2bd60d5b4c9d1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_agent_identity_compat_test.go",
+      "predecessor_sha256s": [
+        "1084161cd17e127b36359ab6f366f28233198f663ead241602b1917724c40d50"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_agent_identity_compat_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "241edb6f914f9a94046431a1b6ddc03ab58382278011ed8141899a078aa84a54"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compact_fallback_test.go",
+      "predecessor_sha256s": [
+        "80eddc56cb4466aac291a8c7597916ad210c138493aa9f375aa78f9662b8d31a"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_compact_fallback_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2e3f9b7d0aedf994942ce9c17c5db5e4d142f1b7cbd10b1fea391b56042422df"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gpt56_max_test.go",
+      "predecessor_sha256s": [
+        "0eaa16ee73eef86d1eda2233d3bd4be9bb607c41a6da6628d3eac755d41dc6c2"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_gpt56_max_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "23c85bfd86696305ca23d98c291b86179093ebcccbd5a23b30ab3451711b9fe8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_oauth_passthrough_test.go",
+      "predecessor_sha256s": [
+        "dc17f57bef1ac92a5e65d00ce20cf06fe7509f936ffa845ea2dc7f8812ffe45a"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_oauth_passthrough_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-flaky-test-repair-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e2f2314b447e0ab8dd592f6c56b9c1e4c5decd3fdb64098afa8b9cea7602b88a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_quota_spark_window_test.go",
+      "predecessor_sha256s": [
+        "3a5cb6de2dd99c1c83bd581eb582fdf98cd94dc3e3130d33840e8887eb2e7fd9"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_quota_spark_window_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-guide-identity-refresh-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5559fb0e7d5717e1943d72101b0fa1767b6fbc649a68c9483b3927b30c34a5bf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_namespace_forward_test.go",
+      "predecessor_sha256s": [
+        "dc8d6bf416faa8ecd2636d73d57525250a2225491aae66244cec53b1c3def2fa"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_responses_namespace_forward_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cdf20a418b8dae79112f8f59c662c7414d6397241e8334b11f394e8a7b5ff1cd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_rejected_field_retry_test.go",
+      "predecessor_sha256s": [
+        "9784d379eb59b7248372f1129b9652e6b527b063ae9467ba00098ef1dc3c6117"
+      ],
+      "reason": "VC-6 预适配：目标画像晋升为 Active 后写死槽位而失效的既有用例改按结构事实判定（晋升前后两种目录状态均通过） path=backend/internal/service/openai_responses_rejected_field_retry_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6cf3e9a9d7e5bfd02211c88d0373f41ef2961508820a31351b7b9dafff2d6d2e"
+    }
+  ],
+  "unregistered_path_count": 16,
+  "unregistered_paths": [
+    "backend/internal/officialegress/codex_client_metadata_constants_test.go",
+    "backend/internal/officialegress/codex_guardian_conditions_test.go",
+    "backend/internal/officialegress/codex_prompt_cache_key_source_test.go",
+    "backend/internal/officialegress/codex_synthetic_profile_helpers_test.go",
+    "backend/internal/officialegress/codex_transport_signature_algorithms_test.go",
+    "backend/internal/service/official_egress_codex_prompt_cache_key_test.go",
+    "backend/internal/service/official_egress_codex_synthetic_profile_test.go",
+    "backend/internal/service/official_egress_openai_json_test.go",
+    "backend/internal/service/official_egress_openai_turn_metadata_section_test.go",
+    "backend/internal/service/openai_codex_turn_state_owner_test.go",
+    "backend/internal/service/openai_compact_model_mapping_test.go",
+    "backend/internal/service/openai_compact_service_tier_test.go",
+    "backend/internal/service/openai_cookie_jar_profile_test.go",
+    "backend/internal/service/openai_workspace_routing_test.go",
+    "backend/internal/service/openai_ws_continuation_reset_test.go",
+    "backend/internal/service/openai_ws_retry_policy_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

@@ -122,18 +122,13 @@ func ValidateObservedSubset(observed, supported EnumCatalog) error {
 	return nil
 }
 
-// 0.156.1 目标画像引入、尚未进入快照生成器的枚举值（见 enums_gen.go 的生成规则）。
-// VC-4 把 0.156.1 目标快照纳入 testdata 并重新生成 enums_gen.go 后删除本段，
-// 由生成器提供同名常量；遗留会因重复定义编译失败。
+// 执行引擎已声明、但任何入库快照都未观测到的枚举值（生成器只为观测值生成常量，见 enums_gen.go）。
+// guardian 审阅两个条件与 prompt_cache_key 来源已随 0.157.0 目标快照纳入 testdata、由 enums_gen.go 生成，
+// 本段只剩首期失败关闭的工作区路由 override 条件：目标画像不引用它，将来某个快照观测到它时，
+// 重新生成 enums_gen.go 会产生同名常量，届时删除本段（遗留会因重复定义编译失败）。
 const (
-	// ConditionGuardianReviewRequest：guardian 审阅子会话发出的 /responses 请求。
-	ConditionGuardianReviewRequest ConditionKind = "guardian_review_request"
-	// ConditionNotGuardianReviewRequest：非 guardian 审阅请求（routing hint 等只在此时生成）。
-	ConditionNotGuardianReviewRequest ConditionKind = "not_guardian_review_request"
 	// ConditionAccountRoutingOverridePresent：工作区路由返回需要 override 的结果（首期失败关闭，不会成立）。
 	ConditionAccountRoutingOverridePresent ConditionKind = "account_routing_override_present"
-	// SourcePromptCacheKey：取请求体 prompt_cache_key（root 会话等于 session_id，临时 fork 为源会话）。
-	SourcePromptCacheKey ValueSource = "prompt_cache_key"
 )
 
 // EngineSupportedEnumValues 是执行引擎认可的显式闭集。

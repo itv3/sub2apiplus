@@ -24,6 +24,9 @@ import (
 // 历史 MigrationReceipt 保持逐字节不变；本清单只以 prior_receipt_digest 追加授权，
 // 不回写既有 canary/enforced 收据，也不声称旧画像具备不存在的 endpoint。
 //
+// 清单顺序即追加顺序：不同 Sink 按 SinkID 升序分组；同一 Sink 的多条收据按追加先后
+// 排列，后一条的 prior_receipt_digest 必须接上前一条应用后的收据摘要。
+//
 //go:embed catalogdata/version-route-migration-receipts.json catalogdata/version-route-migration-artifacts
 var versionRouteReceiptFS embed.FS
 
@@ -36,16 +39,20 @@ type versionRouteReceiptManifest struct {
 }
 
 type versionRouteReceiptDoc struct {
-	SinkID             string                      `json:"sink_id"`
-	PriorReceiptDigest string                      `json:"prior_receipt_digest"`
-	BindingDigest      string                      `json:"binding_digest"`
-	Route              receiptcontract.RouteProof  `json:"route"`
-	ProfileDigests     []string                    `json:"profile_digests"`
-	Source             amendmentSourceEvidence     `json:"source"`
-	CanaryAcceptance   receiptcontract.ArtifactRef `json:"canary_acceptance"`
-	ReviewedBy         string                      `json:"reviewed_by"`
-	ReviewRef          string                      `json:"review_ref"`
-	Rationale          string                      `json:"rationale"`
+	SinkID             string                     `json:"sink_id"`
+	PriorReceiptDigest string                     `json:"prior_receipt_digest"`
+	BindingDigest      string                     `json:"binding_digest"`
+	Route              receiptcontract.RouteProof `json:"route"`
+	ProfileDigests     []string                   `json:"profile_digests"`
+	Source             amendmentSourceEvidence    `json:"source"`
+	// CanaryAcceptance 是生产 canary 实测验收产物的引用。候选期收据只准备 wire fixture 与
+	// execution verification，本字段缺省（候选态）；生产 canary 必须逐项绑定本收据的
+	// sink_id、route、profile_digests、wire_fixture.sha256 与 execution_verification.sha256
+	// 实测后才能补齐，禁止用合成占位代替实测验收。字段存在时照旧严格校验。
+	CanaryAcceptance *receiptcontract.ArtifactRef `json:"canary_acceptance,omitempty"`
+	ReviewedBy       string                       `json:"reviewed_by"`
+	ReviewRef        string                       `json:"review_ref"`
+	Rationale        string                       `json:"rationale"`
 }
 
 type versionRouteExecutionVerification struct {
@@ -93,18 +100,36 @@ func loadVersionRouteReceiptManifest() (versionRouteReceiptManifest, error) {
 	if manifest.SchemaVersion != 1 || manifest.BootstrapCommit != BootstrapCommit {
 		return versionRouteReceiptManifest{}, errors.New("版本 route 收据 schema/bootstrap 非法")
 	}
-	previous := ""
+	if err := validateVersionRouteReceiptOrder(manifest.Receipts); err != nil {
+		return versionRouteReceiptManifest{}, err
+	}
 	for _, document := range manifest.Receipts {
-		identity := document.SinkID + "\x00" + document.Route.Route.Identity()
-		if previous >= identity {
-			return versionRouteReceiptManifest{}, errors.New("版本 route 收据必须按 SinkID/route 严格排序")
-		}
-		previous = identity
 		if err := validateVersionRouteReceiptShape(document); err != nil {
 			return versionRouteReceiptManifest{}, err
 		}
 	}
 	return manifest, nil
+}
+
+// validateVersionRouteReceiptOrder 只校验清单的分组与唯一性：SinkID 必须非递减（同一 Sink
+// 的收据连续出现），同一 Sink 不得重复登记同一 route。同一 Sink 内的先后就是追加顺序，
+// 不按 route 字典序排列——后追加的 route 可能字典序更小，其 prior_receipt_digest 链由
+// applyVersionRouteReceipts 逐条校验，顺序颠倒会在那里失败关闭。
+func validateVersionRouteReceiptOrder(receipts []versionRouteReceiptDoc) error {
+	previousSink := ""
+	seen := make(map[string]bool, len(receipts))
+	for _, document := range receipts {
+		if document.SinkID < previousSink {
+			return errors.New("版本 route 收据必须按 SinkID 分组升序排列")
+		}
+		previousSink = document.SinkID
+		identity := document.SinkID + "\x00" + document.Route.Route.Identity()
+		if seen[identity] {
+			return fmt.Errorf("版本 route 收据重复登记同一 route: %s", document.SinkID)
+		}
+		seen[identity] = true
+	}
+	return nil
 }
 
 func validateVersionRouteReceiptShape(document versionRouteReceiptDoc) error {
@@ -132,8 +157,10 @@ func validateVersionRouteReceiptShape(document versionRouteReceiptDoc) error {
 	if err := validateVersionRouteArtifactRef(document.Route.ExecutionVerification); err != nil {
 		return err
 	}
-	if err := validateVersionRouteArtifactRef(document.CanaryAcceptance); err != nil {
-		return err
+	if document.CanaryAcceptance != nil {
+		if err := validateVersionRouteArtifactRef(*document.CanaryAcceptance); err != nil {
+			return err
+		}
 	}
 	if !sortedUniqueSHA256(document.ProfileDigests) {
 		return fmt.Errorf("版本 route 收据 profile_digests 非法: %s", document.SinkID)
@@ -248,6 +275,11 @@ func applyVersionRouteReceipts(
 			document.Route.AdapterID != string(adapterForBackend(input.TargetBackend)) {
 			return nil, fmt.Errorf("版本 route 收据未绑定真实 EndpointBinding: %s", document.SinkID)
 		}
+		if document.CanaryAcceptance == nil {
+			if err := requireVersionRouteCandidateProfiles(document); err != nil {
+				return nil, err
+			}
+		}
 		if err := verifyVersionRouteReceiptArtifacts(
 			versionRouteReceiptFS, document,
 			input.migrationReceipt.authorityKind,
@@ -297,10 +329,41 @@ func versionRouteCatalogRoute(identity receiptcontract.RouteIdentity) CatalogRou
 	}, Protocol: WireProtocol(identity.Protocol)}
 }
 
+// requireVersionRouteCandidateProfiles 限定候选态收据（尚无生产 canary acceptance）只能
+// 绑定当前 Active／Previous 发布的画像。冻结历史画像只为已验收收据在旧画像退休后仍可
+// 自校验而保留；目标画像退出运行目录时若仍未补齐 canary acceptance 即失败关闭，避免
+// 候选态收据长期充当已验收收据。
+func requireVersionRouteCandidateProfiles(document versionRouteReceiptDoc) error {
+	runtimeProfiles := make(map[string]bool, 2)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			return err
+		}
+		runtimeProfiles[release.ProfileDigest()] = true
+	}
+	for _, profileDigest := range document.ProfileDigests {
+		if !runtimeProfiles[profileDigest] {
+			return fmt.Errorf(
+				"候选态版本 route 收据只能绑定当前 Active/Previous 画像: %s: %s",
+				document.SinkID, profileDigest,
+			)
+		}
+	}
+	return nil
+}
+
+// resolveVersionRouteBinding 供收据生成器使用：只收集实际包含该 route 的 Active／Previous
+// 画像。版本新增 route 允许在不含该端点的单个 Release 中零匹配（候选期目标画像只在
+// previous），但两侧都不含时失败关闭。
 func resolveVersionRouteBinding(
 	input SinkBindingInput,
 	route CatalogRoute,
 ) (EndpointBinding, []string, error) {
+	sinks, physical, sink, err := versionRouteTemporaryBinding(input, route)
+	if err != nil {
+		return EndpointBinding{}, nil, err
+	}
 	profiles := make([]string, 0, 2)
 	seenProfiles := make(map[string]bool)
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
@@ -312,10 +375,48 @@ func resolveVersionRouteBinding(
 			continue
 		}
 		seenProfiles[release.ProfileDigest()] = true
+		bindings, err := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
+		if err != nil {
+			return EndpointBinding{}, nil, err
+		}
+		if _, present := bindings.ResolveBindingRoute(sink, route, physical); !present {
+			continue
+		}
 		profiles = append(profiles, release.ProfileDigest())
+	}
+	if len(profiles) == 0 {
+		return EndpointBinding{}, nil, fmt.Errorf("版本 route 在 Active/Previous 中均无 EndpointBinding: %s", input.ID)
 	}
 	sort.Strings(profiles)
 	return resolveVersionRouteBindingForProfiles(input, route, profiles)
+}
+
+// versionRouteTemporaryBinding 构造只含目标 Sink 且已并入待追加 route 的临时
+// legacy_observe 视图。收据校验发生在状态提升之前，用临时视图解析 EndpointBinding，
+// 避免 EndpointBinding 与收据形成构造循环。
+func versionRouteTemporaryBinding(
+	input SinkBindingInput,
+	route CatalogRoute,
+) (SinkCatalog, PhysicalRouteCatalog, SinkBinding, error) {
+	temporary := input
+	temporary.Routes = append(append([]CatalogRoute(nil), input.Routes...), route)
+	temporary.EnforcementState = SinkStateLegacyObserve
+	temporary.migrationReceipt = nil
+	sinks, err := NewSinkCatalog([]SinkBindingInput{temporary})
+	if err != nil {
+		return SinkCatalog{}, PhysicalRouteCatalog{}, SinkBinding{}, err
+	}
+	physical, err := NewPhysicalRouteCatalog(sinks)
+	if err != nil {
+		return SinkCatalog{}, PhysicalRouteCatalog{}, SinkBinding{}, err
+	}
+	sink, ok := sinks.Resolve(input.ID)
+	if !ok {
+		return SinkCatalog{}, PhysicalRouteCatalog{}, SinkBinding{}, fmt.Errorf(
+			"版本 route 临时 SinkCatalog 缺少 %s", input.ID,
+		)
+	}
+	return sinks, physical, sink, nil
 }
 
 func resolveVersionRouteBindingForProfiles(
@@ -323,21 +424,9 @@ func resolveVersionRouteBindingForProfiles(
 	route CatalogRoute,
 	profileDigests []string,
 ) (EndpointBinding, []string, error) {
-	temporary := input
-	temporary.Routes = append(append([]CatalogRoute(nil), input.Routes...), route)
-	temporary.EnforcementState = SinkStateLegacyObserve
-	temporary.migrationReceipt = nil
-	sinks, err := NewSinkCatalog([]SinkBindingInput{temporary})
+	sinks, physical, sink, err := versionRouteTemporaryBinding(input, route)
 	if err != nil {
 		return EndpointBinding{}, nil, err
-	}
-	physical, err := NewPhysicalRouteCatalog(sinks)
-	if err != nil {
-		return EndpointBinding{}, nil, err
-	}
-	sink, ok := sinks.Resolve(input.ID)
-	if !ok {
-		return EndpointBinding{}, nil, fmt.Errorf("版本 route 临时 SinkCatalog 缺少 %s", input.ID)
 	}
 	var resolved EndpointBinding
 	resolvedProfiles := make([]string, 0, len(profileDigests))
@@ -462,10 +551,6 @@ func verifyVersionRouteReceiptArtifacts(
 	if err != nil {
 		return err
 	}
-	acceptanceRaw, err := readVersionRouteArtifact(files, document.CanaryAcceptance)
-	if err != nil {
-		return err
-	}
 	var execution versionRouteExecutionVerification
 	if err := decodeVersionRouteStrict(executionRaw, &execution); err != nil {
 		return err
@@ -483,6 +568,14 @@ func verifyVersionRouteReceiptArtifacts(
 		!slices.Equal(execution.ProfileDigests, document.ProfileDigests) ||
 		!execution.TerminalGuardAllow || execution.ExternalTraffic {
 		return fmt.Errorf("版本 route execution verification 与收据不一致: %s", document.SinkID)
+	}
+	if document.CanaryAcceptance == nil {
+		// 候选态收据：生产 canary acceptance 尚未实测，只核验 wire fixture 与执行产物。
+		return nil
+	}
+	acceptanceRaw, err := readVersionRouteArtifact(files, *document.CanaryAcceptance)
+	if err != nil {
+		return err
 	}
 	var acceptance versionRouteCanaryAcceptance
 	if err := decodeVersionRouteStrict(acceptanceRaw, &acceptance); err != nil {

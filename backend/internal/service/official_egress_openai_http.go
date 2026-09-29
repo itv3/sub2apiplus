@@ -103,6 +103,32 @@ type officialOpenAIIngressIdentityValues struct {
 	sessionID      string
 	threadID       string
 	promptCacheKey string
+	// forkPromptCacheKeyAllowed 只在当前 release 画像以 prompt_cache_key 为 session-id
+	// 来源时为 true：此时根会话的临时 fork 以源会话 ID（UUID）作为 prompt_cache_key，
+	// 与本会话 session_id 不同属于合法形态。
+	forkPromptCacheKeyAllowed bool
+}
+
+// officialOpenAIEphemeralForkSessionAnchor 识别根会话临时 fork 的入口形态：请求体
+// prompt_cache_key（源会话 ID）与 client_metadata.session_id（本会话 ID）同为 UUID
+// 且不相等。返回本会话 ID；不是 fork 时返回空串。第三方客户端的任意字符串不会被
+// 当成 fork。
+func officialOpenAIEphemeralForkSessionAnchor(contract *officialOpenAIHTTPBodyContract) string {
+	if contract == nil || !contract.promptCacheKeySet || !contract.clientMetadataSet {
+		return ""
+	}
+	source := strings.TrimSpace(contract.promptCacheKey)
+	own := officialOpenAIString(contract.clientMetadata, "session_id")
+	if source == "" || own == "" || source == own {
+		return ""
+	}
+	if _, err := uuid.Parse(source); err != nil {
+		return ""
+	}
+	if _, err := uuid.Parse(own); err != nil {
+		return ""
+	}
+	return own
 }
 
 // validateOfficialOpenAIIngressIdentityKind 按当前 Codex Release 的身份来源画像验证
@@ -197,10 +223,28 @@ func validateOfficialOpenAIIngressIdentityKind(
 	} else if identity.sessionID == identity.threadID {
 		return "", fmt.Errorf("%s child session/thread identity conflicts", scope)
 	}
-	if identity.promptCacheKey != expectedPromptCacheKey {
+	if identity.promptCacheKey != expectedPromptCacheKey &&
+		!officialOpenAIRootForkPromptCacheKeyAccepted(kind, identity) {
 		return "", fmt.Errorf("%s %s prompt_cache_key conflicts with identity", scope, kind)
 	}
 	return kind, nil
+}
+
+// officialOpenAIRootForkPromptCacheKeyAccepted 放开根会话临时 fork 的 prompt cache 判定：
+// 只在画像声明 prompt_cache_key 来源时生效，且源会话键必须是与本会话不同的 UUID。
+// 子代理、guardian 与内部会话不受 fork 缓存键影响，仍按原规则严格校验。
+func officialOpenAIRootForkPromptCacheKeyAccepted(
+	kind officialOpenAIIdentityKind,
+	identity officialOpenAIIngressIdentityValues,
+) bool {
+	if kind != officialOpenAIIdentityKindRoot || !identity.forkPromptCacheKeyAllowed {
+		return false
+	}
+	if identity.promptCacheKey == "" || identity.promptCacheKey == identity.sessionID {
+		return false
+	}
+	_, err := uuid.Parse(identity.promptCacheKey)
+	return err == nil
 }
 
 // officialOpenAICompactionMetadata 按官方 TurnMetadata 的声明顺序序列化。
@@ -563,6 +607,22 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 		result.Modifications = append(result.Modifications,
 			OfficialEgressModification{Kind: "body", Field: "instructions"},
 		)
+	}
+	// turn metadata 新键取自定型后的请求体（payload 已被就地改写为最终形态），保证
+	// model、reasoning_effort 与实际出站请求体一致；画像没有 TurnMetadata 节时原样保留。
+	identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
+		identity.turnMetadata,
+		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata,
+		officialCodexTurnMetadataExtension{
+			Model:           officialOpenAIString(payload, "model"),
+			ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+			TurnTrigger: officialCodexTurnTrigger(
+				egressContext.codexRuntimeState.SurfaceID, identity.subagent, identity.memoryGenerate,
+			),
+		},
+	)
+	if err != nil {
+		return nil, result, err
 	}
 
 	if err := registerOfficialOpenAIHTTPIdentity(egressContext, identity, plan.IsCompact); err != nil {
@@ -1449,7 +1509,10 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress window_id has invalid index")
 	}
 
-	if strings.TrimSpace(c.GetHeader("session-id")) != identity.sessionID ||
+	forkAllowed := !isCompact && officialOpenAIExplicitForkAllowed(c)
+	if !officialOpenAIIngressSessionHeaderMatches(
+		strings.TrimSpace(c.GetHeader("session-id")), identity.sessionID, identity.promptCacheKey, forkAllowed,
+	) ||
 		strings.TrimSpace(c.GetHeader("thread-id")) != identity.threadID ||
 		strings.TrimSpace(c.GetHeader("x-codex-window-id")) != identity.windowID ||
 		strings.TrimSpace(c.GetHeader("x-codex-turn-metadata")) != identity.turnMetadata {
@@ -1472,15 +1535,49 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		contract.clientMetadata,
 		turnMetadata,
 		officialOpenAIIngressIdentityValues{
-			sessionID:      identity.sessionID,
-			threadID:       identity.threadID,
-			promptCacheKey: identity.promptCacheKey,
+			sessionID:                 identity.sessionID,
+			threadID:                  identity.threadID,
+			promptCacheKey:            identity.promptCacheKey,
+			forkPromptCacheKeyAllowed: forkAllowed,
 		},
 		isCompact,
 	); err != nil {
 		return officialOpenAIHTTPIdentity{}, err
 	}
 	return identity, nil
+}
+
+// officialOpenAIExplicitForkAllowed 为离线样本校验确定是否放开临时 fork：只有请求
+// 上下文已冻结 release mode、且该 mode 的画像声明 prompt_cache_key 来源时才放开；
+// 没有冻结 mode 的样本按严格旧规则校验，不默认退化为 active。
+func officialOpenAIExplicitForkAllowed(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	egressContext, ok := OfficialEgressContextFromContext(c.Request.Context())
+	if !ok || egressContext == nil {
+		return false
+	}
+	return officialCodexProfileUsesPromptCacheKeySession(egressContext.ProfileMode())
+}
+
+// officialOpenAIIngressSessionHeaderMatches 校验入站 session-id 头：默认必须等于本会话
+// session_id；放开 fork 时也接受等于 prompt_cache_key 的源会话 UUID（根会话临时 fork
+// 的官方形态）。身份种类是否为根会话仍由 validateOfficialOpenAIIngressIdentityKind 裁定。
+func officialOpenAIIngressSessionHeaderMatches(
+	header string,
+	sessionID string,
+	promptCacheKey string,
+	forkAllowed bool,
+) bool {
+	if header == sessionID {
+		return true
+	}
+	if !forkAllowed || header == "" || header != promptCacheKey {
+		return false
+	}
+	_, err := uuid.Parse(header)
+	return err == nil
 }
 
 // deriveOfficialOpenAIHTTPIdentity 为普通第三方客户端生成当前 Codex Release
@@ -1520,6 +1617,10 @@ func deriveOfficialOpenAIHTTPIdentity(
 	// 分别记录 session/turn 的来源：兜底锚点只保证“同内容得到同 ID”，
 	// 不保证“同 ID 属于同一个会话”。
 	sessionAnchorExplicit := sessionAnchor != ""
+	// forkCacheAnchor 非空表示本请求是根会话的临时 fork（TUI /side、/btw 等）：
+	// 官方客户端以源会话 ID 作为 prompt_cache_key 与 session-id 头，本会话自己的
+	// session_id 只出现在 client_metadata 与 turn metadata 中。
+	forkCacheAnchor := ""
 	if sessionAnchor == "" && contract != nil {
 		sessionAnchor = strings.TrimSpace(contract.promptCacheKey)
 		if identityKind == officialOpenAIIdentityKindGuardian {
@@ -1531,6 +1632,17 @@ func deriveOfficialOpenAIHTTPIdentity(
 		// 首条消息兜底一样只保证“同内容同 ID”，若当成显式锚点，turn-state 会在
 		// 内容相同的独立会话间串用，P7 的隔离等于失效。
 		sessionAnchorExplicit = contract.promptCacheKeySet && sessionAnchor != ""
+		// 只有画像声明了 prompt_cache_key 来源（建模临时 fork 的源会话缓存键）才识别
+		// fork：本会话身份改由 client_metadata.session_id 锚定，prompt cache 键仍由
+		// 源会话锚点派生，因而与源会话派生出的 session ID 相同。旧画像不识别 fork，
+		// 派生结果与改动前逐字节相同。
+		if identityKind == officialOpenAIIdentityKindRoot && sessionAnchorExplicit &&
+			officialCodexProfileUsesPromptCacheKeySession(profileMode) {
+			if ownSession := officialOpenAIEphemeralForkSessionAnchor(contract); ownSession != "" {
+				forkCacheAnchor = sessionAnchor
+				sessionAnchor = ownSession
+			}
+		}
 	}
 	sessionSeed := newOfficialUUIDV7Seed(officialUUIDV7DomainSession).WriteString(clientScope)
 	if sessionAnchor != "" {
@@ -1610,6 +1722,17 @@ func deriveOfficialOpenAIHTTPIdentity(
 	promptCacheKey := sessionID
 	if identityKind == officialOpenAIIdentityKindGuardian {
 		promptCacheKey = "guardian:" + parentThreadID
+	}
+	if forkCacheAnchor != "" {
+		// 与源会话派生 session ID 使用同一种子：源会话以同一锚点得到的 session ID
+		// 就是 fork 的 prompt cache 键，上游缓存亲和因此与官方 fork 一致。
+		promptCacheKey = generateOfficialStableUUIDV7(
+			newOfficialUUIDV7Seed(officialUUIDV7DomainSession).
+				WriteString(clientScope).
+				WriteString("anchor").
+				WriteString(forkCacheAnchor).
+				Key(),
+		)
 	}
 	return officialOpenAIHTTPIdentity{
 		installationID:    installationID,
@@ -1713,6 +1836,11 @@ func normalizeOfficialCodexConditionalIdentity(
 	}
 	if strings.TrimSpace(parentThreadID) != "" {
 		egressContext.codexRuntimeState.ConditionalHeaders["x-codex-parent-thread-id"] = strings.TrimSpace(parentThreadID)
+	}
+	// guardian 审阅标记依附于 guardian 子代理身份：身份派生把请求降级为根线程或
+	// 其他子代理时，审阅标记同步失效，避免出现官方客户端不会产生的组合。
+	if strings.TrimSpace(subagent) != officialCodexGuardianSubagentValue {
+		delete(egressContext.codexRuntimeState.ConditionalHeaders, officialCodexGuardianHeader)
 	}
 }
 

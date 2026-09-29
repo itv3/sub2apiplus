@@ -1,0 +1,461 @@
+{
+  "affected_rule_ids": [
+    "SPEC-BODY-002",
+    "SPEC-BODY-004",
+    "SPEC-BODY-008",
+    "SPEC-BODY-009",
+    "SPEC-CONN-001",
+    "SPEC-EP-002",
+    "SPEC-EP-007",
+    "SPEC-EP-014",
+    "SPEC-EP-015",
+    "SPEC-EP-019",
+    "SPEC-EP-020",
+    "SPEC-EP-021",
+    "SPEC-EP-022",
+    "SPEC-EP-023",
+    "SPEC-H1-004",
+    "SPEC-HDR-001",
+    "SPEC-HDR-002",
+    "SPEC-HDR-006",
+    "SPEC-HDR-007",
+    "SPEC-HDR-009",
+    "SPEC-HDR-010",
+    "SPEC-PROTO-002",
+    "SPEC-TLS-003",
+    "SPEC-WS-002",
+    "SPEC-WS-005"
+  ],
+  "campaign_id": "c01570-formal-vc1-r2-20260926t194249z",
+  "gate_count": 29,
+  "gates": [
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexResponsesCompressionSwitchReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-body-002",
+      "requirement_sha256": "f27df723a86a366759ef101f35f08f70999c5f65fa126ecbec037e7cc5426ead",
+      "test_id": "TestCodexResponsesCompressionSwitchReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexTurnStateRoundTripReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-body-004",
+      "requirement_sha256": "bd4bd13b46eb662738bdc25ecd43c28cfd588fd23bac80c94bd1da3f6fb9e012",
+      "test_id": "TestCodexTurnStateRoundTripReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexClientMetadataConstantsReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-body-008",
+      "requirement_sha256": "94e22e681f9f188ebda4fbf23be38c20a305d72dc10b3810be1710fcb13ee984",
+      "test_id": "TestCodexClientMetadataConstantsReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexTurnMetadataKeysReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-body-009",
+      "requirement_sha256": "15a391b9058972cc38b67508342423a0a343da9dd4a11f91d9998384d517fa84",
+      "test_id": "TestCodexTurnMetadataKeysReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexConnectionReuseReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-conn-001",
+      "requirement_sha256": "7ea32f024df98d3f3aa41d8b0f6d55140c31d834e17d42642fa9fd28b9c4708c",
+      "test_id": "TestCodexConnectionReuseReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexEndpointHostOriginsReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-002",
+      "requirement_sha256": "8c1d0c7d2a177a9d6e7dd5dba3562e02397dcf43aee4abac8e4ea629d80292fa",
+      "test_id": "TestCodexEndpointHostOriginsReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexLegacyCompactRouteRemovalReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-007",
+      "requirement_sha256": "c46c9b89668e99848f42728bb79dbe0175c09cb550dbf9a7e5de98d0e12bac9b",
+      "test_id": "TestCodexLegacyCompactRouteRemovalReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexLegacyCompactHeaderRemovalReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-014",
+      "requirement_sha256": "33fa0a3a54b9286abbd68615c7503c6873c4d2a9a69f7b49b68a5634d06e3248",
+      "test_id": "TestCodexLegacyCompactHeaderRemovalReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexAlphaSearchWireReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-015",
+      "requirement_sha256": "50f7edd5473a546cfe8aef599aa1df53ba90d02f48f86397b09540b9c3c9f077",
+      "test_id": "TestCodexAlphaSearchWireReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexWhamBackendClientReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-019",
+      "requirement_sha256": "1f68e3438cca5601bdf9cf736b80ea0246c094ec41c959db4dc9ffcbf21b4045",
+      "test_id": "TestCodexWhamBackendClientReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexLegacyCompactBodyRemovalReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-020",
+      "requirement_sha256": "ce0ca4ed85b00bfcea38a21e76fa636f1259834e1a08028c6620fb1b580709db",
+      "test_id": "TestCodexLegacyCompactBodyRemovalReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexRemoteCompactionV2ReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-021",
+      "requirement_sha256": "2a8916adb9c07a157756651d182c0d062283d91bec2710a66d77ac3137ef0fb3",
+      "test_id": "TestCodexRemoteCompactionV2ReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexImagesWireReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-022",
+      "requirement_sha256": "7baa8fd2a754e82ee2821520024ad1fc2b5a9df9e9d6c01efc386bb9ca950e3a",
+      "test_id": "TestCodexImagesWireReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexCompactionSelectionReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-023",
+      "requirement_sha256": "b6dcc455f243401e8f25f839dfb71fb4eaf9088bee3969fb023a334a58991834",
+      "test_id": "TestCodexCompactionSelectionReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexHeaderMapFinalOrderReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-h1-004",
+      "requirement_sha256": "7233b9c2753f690802f744ab23e165a047ac25b7fe051a4e4892e153473d6095",
+      "test_id": "TestCodexHeaderMapFinalOrderReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexHeaderAssemblyReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-001",
+      "requirement_sha256": "68b212539a8a7141a96f6ead2f70b0e501f74d03671cde2f56cfb5106f37284a",
+      "test_id": "TestCodexHeaderAssemblyReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexClientDefaultHeadersReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-002",
+      "requirement_sha256": "6b0810b059c8be7fa806fea18f0d9cbb77719bbd3a86c558c782f42f536b32d9",
+      "test_id": "TestCodexClientDefaultHeadersReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexAcceptByTransportReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-006",
+      "requirement_sha256": "eb32b1601d1206b06b9a3f6a7fdca23270c96998f3ed307d107818265a5c2f6d",
+      "test_id": "TestCodexAcceptByTransportReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexSessionHeadersReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-007",
+      "requirement_sha256": "49cd4402b82faad4e972d5b81bf4d72ccadb80d9525f029a9238f1727ce55500",
+      "test_id": "TestCodexSessionHeadersReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexAccountRoutingOverrideReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-009",
+      "requirement_sha256": "e43915ed222aa1defc5be63a477dc34e0771cbbefe32c44c5752896db2fdf28b",
+      "test_id": "TestCodexAccountRoutingOverrideReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexGuardianReviewHeaderReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-hdr-010",
+      "requirement_sha256": "2737e30afd8b28a07651c3264a03dd2cca8f7fff0ee71cb3d54aa6bdd0236447",
+      "test_id": "TestCodexGuardianReviewHeaderReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexWebSocketFallbackReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-proto-002",
+      "requirement_sha256": "b043a7dff6fafd9dc687fb488156fdc174507ab83cc25557bc989d63efdd073f",
+      "test_id": "TestCodexWebSocketFallbackReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexWebSocketClientHelloReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-tls-003",
+      "requirement_sha256": "672891b9b54445514cf2623b49680860b2a425e3873748fb6440b25f93861987",
+      "test_id": "TestCodexWebSocketClientHelloReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexWebSocketHandshakeOrderReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ws-002",
+      "requirement_sha256": "1710713721ae2a4e8006bcc0fdb5a5d3f6253ee2409a259992e90233a834de8c",
+      "test_id": "TestCodexWebSocketHandshakeOrderReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexResponseCreateSlotsReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ws-005",
+      "requirement_sha256": "088824a1019d1787f6d366e334b17c1d57f0fd9396ab008524e361b646e0ca4a",
+      "test_id": "TestCodexResponseCreateSlotsReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialCodexProjectionUsesFormalReleaseCatalog$",
+        "-count=1"
+      ],
+      "gate_id": "catalog-projection",
+      "requirement_sha256": "41577142633685ff5175452aedc5832aa3bd96b902c46994ad10cd8c60c8423a",
+      "test_id": "TestOfficialCodexProjectionUsesFormalReleaseCatalog",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialEgressVersionLeakAST$",
+        "-count=1"
+      ],
+      "gate_id": "official-egress-version-leak-ast",
+      "requirement_sha256": "325097dc78b389372c2092d59812b08d115325f1e6a9bef5eadd43774bdf64eb",
+      "test_id": "TestOfficialEgressVersionLeakAST",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py"
+      ],
+      "gate_id": "version-leak",
+      "requirement_sha256": "d36e7f29fee03930a6e94b2932841e04ce2c79ddfff47caaf5d2e161843e1381",
+      "test_id": "check-version-leak",
+      "working_directory": "."
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py",
+        "--self-test"
+      ],
+      "gate_id": "version-leak-self-test",
+      "requirement_sha256": "d7031a19dabefe0d319da8493f73dcfcf4442a6a6676577bb781ab8766dd947c",
+      "test_id": "check-version-leak-self-test",
+      "working_directory": "."
+    }
+  ],
+  "inherited_rule_ids": [
+    "SPEC-BODY-001",
+    "SPEC-BODY-003",
+    "SPEC-BODY-005",
+    "SPEC-BODY-006",
+    "SPEC-EP-001",
+    "SPEC-EP-005",
+    "SPEC-EP-006",
+    "SPEC-EP-008",
+    "SPEC-EP-009",
+    "SPEC-EP-012",
+    "SPEC-EP-013",
+    "SPEC-H1-001",
+    "SPEC-H1-002",
+    "SPEC-H1-003",
+    "SPEC-HDR-004",
+    "SPEC-HDR-005",
+    "SPEC-HDR-008",
+    "SPEC-PROTO-001",
+    "SPEC-TLS-001",
+    "SPEC-WS-001",
+    "SPEC-WS-004"
+  ],
+  "joint_manifest_sha256": "5a30a5ca84b8b3b072fc31fe3ec07b4baca425e93a74ac8ef041b33dda0cc5bc",
+  "mapping_sha256": "18234469894e19de3e6824044b1130f8a3dcdcbb90018624f9d29e0e6579d0da",
+  "plan_sha256": "71165b7814fae9ee992ee39a8e5562547877829de41be12ee07ec89bb094bae3",
+  "requirements_sha256": "bc9307346f803007bec91366ccc0ef2be112de927a9e48a4c9f3fc436edfd654",
+  "schema_version": "codex-post-promotion-gate-plan/v1",
+  "target_version": "0.157.0"
+}

@@ -441,14 +441,22 @@ class CandidateTestTraceTest(unittest.TestCase):
             for test in tests
             for fact in test.facts
         }
-        self.assertEqual(len(tests), 12)
-        self.assertEqual(len(fact_ids), 31)
+        # 0.157.0：legacy compact 端点删除，去掉 a09 的 legacy compact 回送通道与 legacy
+        # 压缩决策两条事实；新增 guardian 审阅条件头、turn metadata 序列化键集与 turn-state
+        # 账号 owner 重置三条目标画像事实（各一个测试）。
+        self.assertEqual(len(tests), 15)
+        self.assertEqual(len(fact_ids), 32)
         self.assertIn("a07.oauth-fallback", fact_ids)
         self.assertIn("a08.connection-lifecycle", fact_ids)
         self.assertIn("a14.file-upload-url-chain", fact_ids)
         self.assertIn("a14.file-upload-c2pa-negative", fact_ids)
         self.assertIn("a14.file-upload-c2pa-positive", fact_ids)
         self.assertIn("a14.file-upload-c2pa-positive-retry", fact_ids)
+        self.assertIn("a04.conditional-guardian", fact_ids)
+        self.assertIn("a04.turn-metadata", fact_ids)
+        self.assertIn("a05.turn-state-owner-reset", fact_ids)
+        self.assertNotIn("a09.turn-state-compact", fact_ids)
+        self.assertNotIn("a09.explicit-legacy", fact_ids)
         record_types = {
             fact.record_type
             for test in tests

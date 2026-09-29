@@ -1,0 +1,60 @@
+{
+  "schema_version": "codex-egress-surface-successor/v1",
+  "base": {
+    "upstream_merge_ledger": {
+      "path": "docs/egress/maintenance/upstream-v0.1.177-egress-merge-ledger.json",
+      "sha256": "33c437ae007bb2cc212b3a2d218a65041705ed400aec3582924e29097d20b5e0"
+    }
+  },
+  "entries": [
+    {
+      "path": "backend/internal/service/official_egress_codex_profile_optional.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：service 读取当前 release 画像可选节／新条件／新来源的唯一入口，画像未声明时调用方保持旧逻辑，直接决定官方出站形态。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnMetadata 节追加 x-codex-turn-metadata 新键并校验压缩元数据闭集，参与官方出站头定型。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_turn_state_owner.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnState 节在账号 owner 变化时丢弃 turn-state，决定下一请求是否回送 x-codex-turn-state。"
+    },
+    {
+      "path": "backend/internal/service/openai_cookie_jar.go",
+      "file_type": "regular",
+      "kind": "scope_addition",
+      "scope": "strict_surface",
+      "reason": "Codex 0.157.0 候选（VC-4）：共享 Cookie jar 名单改读画像 CookieJar 节（officialCodexCookiePolicy），由合并缝新增命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准。"
+    },
+    {
+      "path": "backend/internal/service/openai_legacy_compact_release_gate.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-6 前置）：按调用冻结的发布画像判定 responses_compact 是否仍被声明，未声明时在模型能力刷新等任何出站之前以 404 本地拒绝 legacy /responses/compact 入站，决定该入站是否产生官方出站。"
+    },
+    {
+      "path": "backend/internal/service/openai_workspace_routing.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 WorkspaceRouting 节经 WHAM 出口发出 accounts/check 发现请求，非默认路由失败关闭。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_continuation_reset.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 WebSocketContinuation 节在 base_url、路由 override、认证代次、账号 owner 变化时让 WS 增量续接失效。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_retry_policy.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-4）：按画像 WebSocketRetry 节把 503 slow_down 计入 stream 重试预算，耗尽后降级 HTTP。"
+    }
+  ]
+}

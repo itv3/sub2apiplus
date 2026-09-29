@@ -92,23 +92,109 @@ func releasePurposeForTest(binding bindingcontract.ReleaseBindingDoc) string {
 	return c.CodexOAuthHTTPReleasePurpose
 }
 
+// releaseProfileForTest 取发布图中 purpose+mode 节点引用的不可变画像。
+func releaseProfileForTest(
+	t *testing.T,
+	releases releasecontract.ReleaseGraph,
+	snapshots profilecontract.SnapshotCatalog,
+	purpose string,
+	mode releasecontract.ReleaseMode,
+) profilecontract.ProfileSpec {
+	t.Helper()
+	release, ok := releases.Resolve(purpose, mode)
+	if !ok {
+		t.Fatalf("发布坐标不存在: purpose=%s mode=%s", purpose, mode)
+	}
+	profile, ok := snapshots.Resolve(profilecontract.SnapshotKey{
+		Version: release.Snapshot.Version, Digest: release.Snapshot.Digest,
+	})
+	if !ok {
+		t.Fatalf("发布节点引用的画像不在测试快照索引中: %s/%s", release.Snapshot.Version, release.Snapshot.Digest)
+	}
+	return profile
+}
+
+// profileDeclaresRouteForTest 是测试侧独立实现的结构判定：画像是否声明了与 route 同 method、
+// host、传输与 path 的端点（口径与 Composer 的端点匹配一致，含 server_returned_path 的证据
+// 表达差异）。它不调用被测的 Compose，只用来决定某个 Sink 在某个发布上“应当”能否成包。
+func profileDeclaresRouteForTest(profile profilecontract.ProfileSpec, route bindingcontract.RouteEvidenceDoc) bool {
+	routePath := route.Path
+	if routePath == "{server_returned_path}" {
+		routePath = "/{server_returned_path}"
+	}
+	for _, endpoint := range profile.Endpoints() {
+		transport := "http"
+		if endpoint.Upgrade == "websocket" {
+			transport = "websocket"
+		}
+		endpointPath := endpoint.Path
+		if endpointPath == "{server_returned_path}" {
+			endpointPath = "/{server_returned_path}"
+		}
+		if endpoint.Method == route.Method && endpoint.Host == route.Host &&
+			transport == route.Transport && endpointPath == routePath {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAllCodexBusinessBindingsJoinThreeEvidenceLayers 证明每个具备端点画像的 Codex 业务 Sink
+// 都能把 binding、发布与画像三层证据拼成 EvidenceBundle。
+//
+// 改动前只在 Active 组合并要求 23 个 Sink 全部成功。VC-6 晋升后 Active 的目标画像删除了
+// legacy compact 端点，只绑定该端点的 Sink 在 Active 下组合失败——这是版本 route 口径允许的
+// “版本删除的端点在不含它的单个发布中零匹配”。现按结构事实核验，判别力不低于改动前：
+//   - 逐 Sink 在 Active 组合：Active 画像声明了该 Sink 全部 route 时必须成功；否则必须恰以
+//     “匹配 0 个端点”失败（结构上确实缺失，其余任何失败都报错）；
+//   - Active 结构上缺失 route 的 Sink 必须在 Previous 组合成功（两槽位并集覆盖）；
+//   - 组合成功的 bundle 匹配数必须等于 route 数，成功组合的业务 Sink 总数仍须等于 23。
+//
+// 候选期 Active 声明全部 route，上面的分支与改动前逐条相同。
 func TestAllCodexBusinessBindingsJoinThreeEvidenceLayers(t *testing.T) {
 	bindings := loadBindings(t)
-	composer := c.NewComposer(bindings, loadReleases(t), loadSnapshots(t))
+	releases := loadReleases(t)
+	snapshots := loadSnapshots(t)
+	composer := c.NewComposer(bindings, releases, snapshots)
 	composed := 0
 	for _, binding := range bindings.Bindings() {
 		if binding.Persona != "codex-cli" || binding.Purpose == "facade" ||
 			binding.EndpointEvidence != "codex_profile" {
 			continue
 		}
+		purpose := releasePurposeForTest(binding)
+		activeProfile := releaseProfileForTest(t, releases, snapshots, purpose, releasecontract.ReleaseModeActive)
+		declaredInActive := true
+		for _, route := range binding.Routes {
+			if !profileDeclaresRouteForTest(activeProfile, route) {
+				declaredInActive = false
+			}
+		}
 		bundle, err := composer.Compose(c.CompositionRequest{
 			SinkID:         binding.SinkID,
-			ReleasePurpose: releasePurposeForTest(binding),
+			ReleasePurpose: purpose,
 			Mode:           releasecontract.ReleaseModeActive,
 		})
-		if err != nil {
-			t.Errorf("组合 %s: %v", binding.SinkID, err)
+		switch {
+		case declaredInActive:
+			if err != nil {
+				t.Errorf("组合 %s: %v", binding.SinkID, err)
+				continue
+			}
+		case err == nil || !strings.Contains(err.Error(), "匹配 0 个端点"):
+			t.Errorf("%s 的 route 在 Active 画像中结构上缺失，组合必须以“匹配 0 个端点”失败，实际错误=%v",
+				binding.SinkID, err)
 			continue
+		default:
+			bundle, err = composer.Compose(c.CompositionRequest{
+				SinkID:         binding.SinkID,
+				ReleasePurpose: purpose,
+				Mode:           releasecontract.ReleaseModePrevious,
+			})
+			if err != nil {
+				t.Errorf("%s 在 Active 画像中缺少端点，且无法在 Previous 组合（并集覆盖失败）：%v", binding.SinkID, err)
+				continue
+			}
 		}
 		if len(bundle.EndpointMatches()) != len(binding.Routes) {
 			t.Errorf("%s 的 route/endpoint 匹配数量不一致", binding.SinkID)
@@ -142,6 +228,16 @@ func TestOAuthExchangeCannotMasqueradeAsRefreshEndpoint(t *testing.T) {
 func TestPurposeAndModeRemainExplicitCoordinates(t *testing.T) {
 	// 该性质必须在同版本、同 Snapshot 下验证，避免混版本夹具让 Build/Wire
 	// 身份差异天然成立而失去检出能力。
+	//
+	// 夹具维护说明：Composer 要从测试快照索引（profilecontract/testdata/snapshot-catalog.json）
+	// 解析发布节点引用的画像，而该索引由目录暂存工具按运行目录重建，画像随版本退休后即从
+	// 索引消失。夹具因此只引用索引中仍存在的画像：active 取当前 Active 发布的真实节点，
+	// previous 与之同版本、同画像快照、同 transport，只把终端 token 换成 xterm-256color
+	// 并使用显式标注为夹具来源的 Build/Wire 身份。被测语义与改动前完全一致——版本号和
+	// 画像快照都相同，唯一的差异来自 purpose+mode 坐标下的 Build 身份。该画像退休时按同一
+	// 方式换到索引中仍存在的画像即可，不得改成两份不同画像（那会让 Bundle digest 天然不同）。
+	// releasecontract 的同名夹具只做发布图解析、不查快照索引，保留为升级前冻结的历史夹具，
+	// 两份夹具不必同步。
 	composer := mustSameVersionComposer(t)
 	active, err := composer.Compose(c.CompositionRequest{
 		SinkID:         "codex.responses.forward",
@@ -161,6 +257,11 @@ func TestPurposeAndModeRemainExplicitCoordinates(t *testing.T) {
 	}
 	if active.Release().Build.Version != previous.Release().Build.Version {
 		t.Fatal("测试前提改变：active/previous 应当版本号相同")
+	}
+	// 同画像快照同样是本用例的前提（见上方说明）：锁定它，避免夹具被换成两份不同画像后
+	// 下面的 Bundle digest 断言因画像差异而天然成立。
+	if active.Release().Snapshot != previous.Release().Snapshot {
+		t.Fatal("测试前提改变：active/previous 应当引用同一画像快照")
 	}
 	if active.Release().Build.ID == previous.Release().Build.ID {
 		t.Fatal("purpose+mode 被错误折叠成版本号：active/previous BuildID 相同")

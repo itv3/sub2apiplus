@@ -79,8 +79,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 与源码快照不变，VC-2／VC-4 定稿后按承接收据修订。
 # 2026-09-26：目标改为 0.157.0（放弃 0.156.1）；映射同样由 0.156.1 版逐字替换版本号得到，测试、
 # 事实宇宙与源码快照不变。
+# 2026-09-26（VC-4）：按 0.157.0 批准断言画像改造事实宇宙——新增 guardian 审阅条件头
+# （x-codex-guardian=reviewer、不生成 routing hint）、turn metadata 边界（21 键允许集、网关 13 键）与
+# turn_state_chain 账号 owner 变化重置三条事实，删除 legacy compact 回送通道与 legacy 压缩决策两条事实
+# （随 SPEC-EP-007/014/020 删除）；另把 openai_gateway_forward.go 源码快照重绑到加入 legacy compact
+# 发布判定后的版本（OAuth 回退事实覆盖的路径行为不变）。受影响候选验收测试已在叠加 VC-3 目录的集成树重跑。
 FROZEN_MAPPING_SHA256 = (
-    "4bb0de176895729c55ef1835576125dc7604b0666178aef2c317b0eaae92ebb7"
+    "572f49411e6cdf533a4aa21e592546dad0349bc1eb54a8ea1d8080202d4bb104"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -129,8 +134,17 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-09-26：断言画像升级为 0.157.0，由 0.156.1 版逐字替换版本号得到，另把 A15 两条启动 models
 # suffix 正则里逐字替换漏掉的转义版本号（0\.154\.0）改为 0\.157\.0；验收契约现算仍为
 # 7aa0c0fc…（dual_wire=25／candidate_profile=17）。新增 A17（daemon 路径）暂无判据，VC-2 修订。
+# 2026-09-26（VC-4）：原样承接 Formal c01570-formal-vc1-r2-20260926t084354z 的 VC-2 批准断言画像
+# （classification/approved/assertion-profile.json，联合摘要 7a3b8636…）：43 条规则（删 EP-007/014/020，
+# 增 HDR-009/HDR-010/BODY-008/BODY-009），批准前在封存官方断言包上逐条评估并按目标证据改写 7 个 check
+# （WS-002 optional-missing-covered、HDR-007 两条、HDR-002 两条、BODY-006、EP-021 v2-compaction-trigger）。
+# 验收契约载荷审核：rule_counts dual_wire=25／candidate_profile=18；validation_modes 变化 8 项（新增
+# BODY-008／HDR-009 为 dual_wire、BODY-009／HDR-010 为 candidate_profile，删除三条 legacy 规则，EP-021 因
+# 去掉非 wire 检查由 candidate_profile 转为 dual_wire）；expected_check_ids 14 条规则变化；side_coverage
+# 仅 official.A10 新增 process_trace／relay_binary（封存官方包已具备）；side_restricted_checks 不变；
+# 现算契约摘要 d6d211f0…。
 FROZEN_PROFILE_SHA256 = (
-    "ad691d79bb923949436690cce9ee90f56ff4c0d0b5d4a83717c9af97c31c0d76"
+    "34c49fb686f2523d7dec6530340db178f8cbb1da2811861306827a47669c4a25"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

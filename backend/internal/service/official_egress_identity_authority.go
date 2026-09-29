@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/tidwall/gjson"
 )
 
 // officialCodexSemanticAttempt 是 service 业务语义与 Executor 线协议权威之间的
@@ -189,6 +191,7 @@ func prepareOfficialCodexSemanticAttempt(
 			CompressionEligible: headerContainsToken(headers, "Content-Encoding", "zstd"),
 			LunaReservePresent:  strings.TrimSpace(headers.Get("x-openai-codex-luna-reserve")) != "",
 		},
+		body,
 	)
 	if err != nil {
 		return officialCodexSemanticAttempt{}, err
@@ -212,6 +215,9 @@ func prepareOfficialCodexSemanticAttempt(
 // 补 Cookie，该时点已经晚于 Executor 签名，terminal Guard 会将这种合法补充
 // 误判为 request_modified_after_finalize。提前固化后，Cookie 的名称、值与顺序
 // 都进入 Compiler 和最终请求摘要，Guard 仍保持 fail-close。
+//
+// Cookie 名单按请求冻结的 release mode 对应画像读取（CookieJar 节缺席时为旧名单）；
+// WS 握手 URL 映射为同站点的 HTTPS URL 查询 jar。
 func materializeOfficialCodexCookieJar(request *http.Request) {
 	if request == nil || request.URL == nil {
 		return
@@ -220,7 +226,14 @@ func materializeOfficialCodexCookieJar(request *http.Request) {
 	if jar == nil {
 		return
 	}
-	for _, cookie := range jar.Cookies(request.URL) {
+	target := officialCodexCookieJarURL(request.URL)
+	var cookies []*http.Cookie
+	if policyJar, ok := jar.(officialCodexPolicyCookieJar); ok {
+		cookies = policyJar.CookiesForPolicy(target, officialCodexCookiePolicyForRequest(request.Context()))
+	} else {
+		cookies = jar.Cookies(target)
+	}
+	for _, cookie := range cookies {
 		if cookie != nil {
 			request.AddCookie(cookie)
 		}
@@ -234,6 +247,7 @@ func buildOfficialCodexIdentityFacts(
 	endpointID string,
 	identitySeed string,
 	attemptConditions officialCodexAttemptConditions,
+	semanticBody []byte,
 ) (officialegress.CodexIdentityFacts, error) {
 	facts := officialegress.CodexIdentityFacts{}
 	structuredIdentity := officialCodexInvocationIdentityFromContext(request.Context())
@@ -408,8 +422,26 @@ func buildOfficialCodexIdentityFacts(
 	}
 	if err := completeOfficialCodexGeneratedIdentityFacts(
 		&facts, endpointID, identitySeed,
+		officialCodexFallbackTurnMetadataInput{
+			profileMode:      runtimeState.ProfileMode,
+			semanticBody:     semanticBody,
+			memoryGeneration: strings.EqualFold(conditionalField("x-openai-memgen-request"), "true"),
+		},
 	); err != nil {
 		return officialegress.CodexIdentityFacts{}, err
+	}
+	// prompt cache 亲和键只对 Responses 端点有意义，且只取本次调用已登记的派生值：
+	// 根会话等于 session_id，guardian 子代理为 guardian:<parent>，画像声明
+	// prompt_cache_key 来源时临时 fork 为源会话键。compiler 只在画像声明该来源的端点
+	// 上消费它，旧画像仍按 SessionID 推导。
+	if officialCodexEndpointUsesResponsesSession(endpointID) {
+		facts.PromptCacheKey, err = officialCodexIdentityValue(
+			registeredField(OfficialEgressFieldPromptCacheKey),
+			officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleSession,
+		)
+		if err != nil {
+			return officialegress.CodexIdentityFacts{}, err
+		}
 	}
 	compressionEligible := attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled
 	if ingress, captured := officialCodexIngressRuntimeSnapshotFromContext(request.Context()); captured {
@@ -436,6 +468,12 @@ func buildOfficialCodexIdentityFacts(
 		ModelSupportsLite:       hasEgressContext && egressContext.responsesLite,
 		BetaFeaturesPresent:     conditionalField("x-codex-beta-features") != "",
 		LunaReservePresent:      attemptConditions.LunaReservePresent,
+		// 运行态冻结时已要求 reviewer 与受信 guardian 子代理同时成立；这里再核对
+		// 本次身份事实里的子代理，避免后续身份归一化改写子代理后残留审阅标记。
+		GuardianReviewRequest: conditionalField(officialCodexGuardianHeader) == officialCodexGuardianReviewerValue &&
+			facts.Subagent.Value == officialCodexGuardianSubagentValue,
+		// 工作区路由首期对非默认结果失败关闭，请求不会带着 override 出站。
+		AccountRoutingOverridePresent: false,
 	}
 	managedRaw, _ := json.Marshal(struct {
 		Residency string
@@ -449,10 +487,27 @@ func buildOfficialCodexIdentityFacts(
 	return facts, nil
 }
 
+// officialCodexFallbackTurnMetadataInput 是兜底生成 turn metadata 时读取画像节与新键
+// 取值所需的输入。profileMode 为空（调用未冻结 release mode）时不读画像，保持旧逻辑，
+// 不默认退化为 active。
+type officialCodexFallbackTurnMetadataInput struct {
+	profileMode      string
+	semanticBody     []byte
+	memoryGeneration bool
+}
+
+func (in officialCodexFallbackTurnMetadataInput) section() *profilecontract.TurnMetadataSection {
+	if strings.TrimSpace(in.profileMode) == "" {
+		return nil
+	}
+	return officialCodexOptionalSectionsForMode(in.profileMode).TurnMetadata
+}
+
 func completeOfficialCodexGeneratedIdentityFacts(
 	facts *officialegress.CodexIdentityFacts,
 	endpointID string,
 	identitySeed string,
+	fallbackTurnMetadata officialCodexFallbackTurnMetadataInput,
 ) error {
 	if facts == nil {
 		return errors.New("Codex 身份事实为空")
@@ -461,9 +516,7 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	if identitySeed == "" {
 		return errors.New("Codex 身份事实缺少 invocation seed")
 	}
-	needsResponsesSession := endpointID == officialCodexEndpointResponsesHTTP ||
-		endpointID == officialCodexEndpointResponsesCompact ||
-		endpointID == officialCodexEndpointResponsesWS
+	needsResponsesSession := officialCodexEndpointUsesResponsesSession(endpointID)
 	needsTurnMetadata := needsResponsesSession || endpointID == officialCodexEndpointAlphaSearch
 	setGenerated := func(target *officialegress.CodexIdentityValue, suffix string, lifecycle officialegress.IdentityFactLifecycle) error {
 		if target.Value != "" {
@@ -510,6 +563,35 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		}
 	}
 	if needsTurnMetadata && facts.TurnMetadata.Value == "" {
+		if section := fallbackTurnMetadata.section(); section != nil {
+			// 画像声明 TurnMetadata 节：与旧结构同一组基础键，外加节中声明且有可信取值
+			// 的新键；model 与 reasoning_effort 取语义请求体。
+			values := map[string]any{
+				"installation_id": facts.InstallationID.Value,
+				"session_id":      facts.SessionID.Value, "thread_id": facts.ThreadID.Value,
+				"turn_id": facts.TurnID.Value, "window_id": facts.WindowID.Value,
+				"request_kind": "turn", "thread_source": "user", "sandbox": "seccomp",
+			}
+			body := fallbackTurnMetadata.semanticBody
+			if err := applyOfficialCodexTurnMetadataSection(values, section, officialCodexTurnMetadataExtension{
+				Model:           strings.TrimSpace(gjson.GetBytes(body, "model").String()),
+				ReasoningEffort: strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()),
+				TurnTrigger: officialCodexTurnTrigger(
+					facts.ProcessSurface.Value, facts.Subagent.Value, fallbackTurnMetadata.memoryGeneration,
+				),
+			}); err != nil {
+				return err
+			}
+			turnMetadata, err := marshalOfficialOpenAITurnMetadata(values)
+			if err != nil {
+				return err
+			}
+			facts.TurnMetadata, err = officialegress.NewCodexIdentityValue(
+				string(turnMetadata), officialegress.IdentitySourceTurn,
+				officialegress.IdentityLifecycleTurn,
+			)
+			return err
+		}
 		turnMetadata, err := json.Marshal(struct {
 			InstallationID string `json:"installation_id"`
 			SessionID      string `json:"session_id"`
@@ -537,6 +619,14 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		}
 	}
 	return nil
+}
+
+// officialCodexEndpointUsesResponsesSession 判断端点是否携带 Responses 会话身份
+// （session/thread/window/turn 与 prompt cache 亲和键）。
+func officialCodexEndpointUsesResponsesSession(endpointID string) bool {
+	return endpointID == officialCodexEndpointResponsesHTTP ||
+		endpointID == officialCodexEndpointResponsesCompact ||
+		endpointID == officialCodexEndpointResponsesWS
 }
 
 func officialCodexIdentityValue(

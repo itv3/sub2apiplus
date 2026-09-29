@@ -155,6 +155,19 @@ type CodexRequestConditions struct {
 	// 官方只在 account/rateLimits/read 以 supports_luna_reserve=true、ChatGPT 认证且
 	// 非 fedramp 时对 /wham/usage 追加该头，出站按画像槽位以常量值复刻。
 	LunaReservePresent bool
+	// GuardianReviewRequest 表示本次请求是 guardian 同步审阅请求：入站受信的
+	// x-codex-guardian 取值为 reviewer，且同一请求的受信子代理身份为 guardian。
+	// 画像以 guardian_review_request／not_guardian_review_request 两个条件消费它
+	// （审阅请求追加 x-codex-guardian、省略 service_tier 与 routing hint、不写
+	// guardian_credits_requested）；画像不引用这两个条件时它不影响任何出站字节。
+	//
+	// 新增字段一律 omitempty：取 false 时 JSON 形态与旧结构逐字节相同，旧版本画像
+	// 下的 CodexIdentityFacts 摘要（FinalizationToken 身份证明）保持不变。
+	GuardianReviewRequest bool `json:",omitempty"`
+	// AccountRoutingOverridePresent 表示工作区路由发现要求追加 account routing
+	// override。首期对非默认路由一律失败关闭（请求不出站），因此该条件恒为 false，
+	// 画像中以 account_routing_override_present 为条件的槽位不会进入 wire。
+	AccountRoutingOverridePresent bool `json:",omitempty"`
 }
 
 // CodexIdentityFacts 是 invocation 级不可变身份投影。它没有 map、service.Account、
@@ -181,6 +194,13 @@ type CodexIdentityFacts struct {
 	ManagedResidency           CodexIdentityValue
 	ManagedConfigurationDigest string
 	Conditions                 CodexRequestConditions
+	// PromptCacheKey 是本次 Responses 请求的 prompt cache 亲和键（请求体 prompt_cache_key
+	// 的权威取值）：根会话通常等于 SessionID，临时 fork 时为源会话键，guardian 子代理为
+	// guardian:<parent>。只有画像声明了 prompt_cache_key 来源的端点才消费它（session-id
+	// 头与请求体注入），其余端点保持按 SessionID 推导的旧逻辑。
+	//
+	// omitzero：未登记该事实的调用（非 Responses 端点等）序列化形态与旧结构逐字节相同。
+	PromptCacheKey CodexIdentityValue `json:",omitzero"`
 }
 
 func (f CodexIdentityFacts) Validate() error {
@@ -189,7 +209,7 @@ func (f CodexIdentityFacts) Validate() error {
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.InstallationID, f.SessionID,
 		f.ConversationID, f.ThreadID, f.WindowID, f.ClientRequestID,
 		f.TurnID, f.TurnMetadata, f.ParentThreadID, f.Subagent,
-		f.ManagedResidency,
+		f.ManagedResidency, f.PromptCacheKey,
 	}
 	for _, value := range values {
 		if err := value.validate(); err != nil {
@@ -247,12 +267,15 @@ func (f CodexIdentityFacts) invocationDigest() string {
 		ManagedResidency           CodexIdentityValue
 		ManagedConfigurationDigest string
 		FedRAMPAccount             bool
+		// prompt cache 亲和键与会话同生命周期，跨 attempt 必须稳定；omitzero 保证
+		// 未登记该事实时 invocation 摘要与旧结构相同。
+		PromptCacheKey CodexIdentityValue `json:",omitzero"`
 	}{
 		f.AccountIdentityProjection, f.ChatGPTAccountID, f.WorkspaceID,
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.UserAgentSuffixEnabled,
 		f.InstallationID, f.SessionID,
 		f.ConversationID, f.ThreadID, f.WindowID, f.ManagedResidency,
-		f.ManagedConfigurationDigest, f.Conditions.FedRAMPAccount,
+		f.ManagedConfigurationDigest, f.Conditions.FedRAMPAccount, f.PromptCacheKey,
 	})
 	if err != nil {
 		return ""

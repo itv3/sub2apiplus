@@ -204,6 +204,12 @@ func attachOfficialEgressHTTPContextWithMode(
 	if err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(targetPlatform, PlatformOpenAI) {
+		// 画像声明 WorkspaceRouting 节时，非默认工作区路由的受路由端点失败关闭。
+		if err := officialCodexWorkspaceRoutingGate(mode, account, egressContext.CodexEndpointProfileID()); err != nil {
+			return nil, err
+		}
+	}
 	if err := ValidateOfficialEgressFinalState(egressContext, profile); err != nil {
 		return nil, err
 	}
@@ -340,6 +346,12 @@ func attachOfficialEgressWebSocketContext(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(account.Platform, PlatformOpenAI) {
+		// 画像声明 WorkspaceRouting 节时，非默认工作区路由的受路由端点失败关闭。
+		if err := officialCodexWorkspaceRoutingGate(mode, account, egressContext.CodexEndpointProfileID()); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateOfficialEgressWebSocketTarget(parsedURL, egressContext); err != nil {
 		return nil, err

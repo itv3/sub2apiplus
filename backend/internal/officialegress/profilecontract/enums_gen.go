@@ -33,10 +33,12 @@ const (
 	ConditionCookiePresent             ConditionKind = "cookie_present"
 	ConditionCreditIdPresent           ConditionKind = "credit_id_present"
 	ConditionFedrampAccount            ConditionKind = "fedramp_account"
+	ConditionGuardianReviewRequest     ConditionKind = "guardian_review_request"
 	ConditionHostedFileUpload          ConditionKind = "hosted_file_upload"
 	ConditionLunaReservePresent        ConditionKind = "luna_reserve_present"
 	ConditionManagedResidencyPresent   ConditionKind = "managed_residency_present"
 	ConditionMemoryGeneration          ConditionKind = "memory_generation"
+	ConditionNotGuardianReviewRequest  ConditionKind = "not_guardian_review_request"
 	ConditionParentThreadPresent       ConditionKind = "parent_thread_present"
 	ConditionRemoteCompactionV2        ConditionKind = "remote_compaction_v2"
 	ConditionRequestCompressionEnabled ConditionKind = "request_compression_enabled"
@@ -83,6 +85,7 @@ const (
 	SourceManagedConfig  ValueSource = "managed_config"
 	SourceModelManifest  ValueSource = "model_manifest"
 	SourceProcess        ValueSource = "process"
+	SourcePromptCacheKey ValueSource = "prompt_cache_key"
 	SourceRequestBody    ValueSource = "request_body"
 	SourceServerResponse ValueSource = "server_response"
 	SourceSession        ValueSource = "session"
@@ -94,10 +97,10 @@ func ObservedEnumValues() EnumCatalog {
 	return mustEnumCatalog(map[EnumDomain][]string{
 		EnumDomainBodyEncoding:    {"form_urlencoded", "json", "none", "raw_bytes", "websocket_discriminated_events", "websocket_json"},
 		EnumDomainCompressionKind: {"none", "permessage_deflate_context_takeover", "zstd_when_feature_enabled"},
-		EnumDomainConditionKind:   {"", "always", "attestation_present", "auto", "beta_features_present", "cookie_present", "credit_id_present", "fedramp_account", "hosted_file_upload", "luna_reserve_present", "managed_residency_present", "memory_generation", "parent_thread_present", "remote_compaction_v2", "request_compression_enabled", "responses_lite", "runtime_metrics", "session_id_present", "subagent_present", "turn_state_present"},
+		EnumDomainConditionKind:   {"", "always", "attestation_present", "auto", "beta_features_present", "cookie_present", "credit_id_present", "fedramp_account", "guardian_review_request", "hosted_file_upload", "luna_reserve_present", "managed_residency_present", "memory_generation", "not_guardian_review_request", "parent_thread_present", "remote_compaction_v2", "request_compression_enabled", "responses_lite", "runtime_metrics", "session_id_present", "subagent_present", "turn_state_present"},
 		EnumDomainHeaderOrderKind: {"explicit_order", "h1_header_map_final_order", "ws_fixed_prefix_then_header_map_swap_remove"},
 		EnumDomainLifecycleKind:   {"backend_client_long_lived", "per_upper_api_call", "returned_upload_url_call", "websocket_connection"},
 		EnumDomainOmitCondition:   {"", "empty_string", "none", "none_or_unreusable_prefix"},
-		EnumDomainValueSource:     {"account", "authentication", "constant", "feature", "generated", "managed_config", "model_manifest", "process", "request_body", "server_response", "session", "turn"},
+		EnumDomainValueSource:     {"account", "authentication", "constant", "feature", "generated", "managed_config", "model_manifest", "process", "prompt_cache_key", "request_body", "server_response", "session", "turn"},
 	})
 }
