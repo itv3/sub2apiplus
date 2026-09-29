@@ -1327,8 +1327,8 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 
 - **输入**：当前 Active／Previous、目标版本及官方产物、账号与 API Key 身份、ARM64 环境、用途、预算和回退点。
 - **操作与工具**：按下方执行顺序完成离线准备和发布认证，再建 Formal Campaign：官方证据能复用就一律用 `reuse-official-evidence`，证据失效时才用 `codex_upgrade_vc0_closeout.py` 原子新建并立即派发 VC-1 首批。
-- **产物**：时间账本、ARM64 环境收据、Job 与 atomic-double 演练收据、发布认证、Campaign 总计划和首个 Formal 批次清单。
-- **完成标志**：工具阻断为零、网络与目录有效、live 请求为零、回退点可用。
+- **产物**：时间账本、ARM64 环境收据、Job 与 atomic-double 演练收据、目标平台门禁预跑记录（只作预检）、发布认证、Campaign 总计划和首个 Formal 批次清单。
+- **完成标志**：工具阻断为零、网络与目录有效、目标平台门禁预跑通过、live 请求为零、回退点可用。
 - **失败恢复**：哪一步失败修哪一步，修好后从该步接着做；已通过且绑定身份未变的收据不重做。
 
 VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标 wire、不改画像或实现、不创建 candidate，也不改
@@ -1338,7 +1338,7 @@ VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标
 计时，约 55 分钟的 pre-A3 放在其后必然超时；工具身份与策略未变即复用最近一次认证，跨部署复用以 `record-reuse` 登记
 复用收据并由发布认证绑定）；第 1～9 步由
 ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh`（收尾段 `stage1-finish.sh`）完成，stage1 建账本前核验本轮
-pre-A3 认证，缺失即拒绝；第 10～11 步的其余部分由 `stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
+pre-A3 认证，缺失即拒绝；第 9 步之后单独预跑一次目标平台门禁（见表后说明），通过才进入第 10 步；第 10～11 步的其余部分由 `stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
 `codex_upgrade_vc0_closeout` 重新取证，再进入 `vc23.sh`。参数全部来自每轮一份 `ARM64_VC_ENV`（见驱动链 README）。
 
 驱动要求明确的基线／目标版本、目标画像、官方 binary／package 摘要、主／Lite 模型、账号／API Key 与三份发布认证路径；
@@ -1361,6 +1361,22 @@ VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名�
 | 9 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
 | 10 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证（这三项由 `pre-a3.sh` 在 stage1 之前完成）→ `certify_release issue／verify` |
 | 11 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`，导入已封存证据后自动对齐账本；新目标或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
+
+**目标平台门禁预跑（第 9 步之后、第 10 步之前）。** 目标平台门禁（ARM64 上对候选测试树隔离执行 `make test`，约 40～60
+分钟）原本只在 VC-5 accept 前执行，门禁自身的问题要到那时才暴露（0.157 的第 67 项让 accept 前的门禁连续失败两次，连同
+修复耗掉 6.1 小时）。因此 stage1（含 `stage1-finish.sh`）通过之后、执行 `stage2.sh` 或 `codex_upgrade_vc0_closeout` 之前，
+用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁预跑一次：本机按候选提交链同一打法生成
+`git bundle create <文件> <BASE>..<分支>`（BASE 必须在 `$HISTORY_TEST_TREE` 的历史里，例如前序候选的 DC；部署受管工具时
+上传的 bundle 满足这一条件也可直接用），传到采集主机 `$RUNROOT/vc0-preflight/` 下，再执行
+`ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/vc0-gate-target.sh <bundle> <分支> <提交> > $RUNROOT/vc0-gate-target.out 2>&1 < /dev/null`
+（挂断检测用例要求 `setsid -f`，不能 `nohup`）。测试树与 VC-5 同一做法（`lib.sh` 的 `clone_test_tree`：完整历史、不含
+vendor；前端依赖取 `$HISTORY_TEST_TREE/frontend` 里 lockfile 相同的一份，lockfile 有变化时另装后作为第 4 个参数传入），
+门禁直接复用 `vc5-gate-target.sh`，主体标识 `vc0-preflight-<UTC 时间戳>`；环境收据、`logs/target-platform.*` 与预检摘要
+`preflight.json` 只写 `$RUNROOT/vc0-preflight/<主体标识>/`，不写候选门禁目录、时间账本与 Campaign，模型请求为零。预跑须
+单独运行，不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件）。退出 0 才进入第 10 步；退出 1（make test
+未通过，测试树保留供排查）或 3（准备失败，没有门禁结论）按 VC-0 普通失败处理：按输出里的日志位置排查，修好门禁、驱动、
+环境或源码后重跑同一命令（换新主体标识，旧结果留档）。预跑只是预检，不替代 VC-5 accept 前在候选门禁目录执行的正式
+目标平台门禁（§4.5.6），其结果也不能充当 accept 的门禁收据。
 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
 
@@ -3055,7 +3071,8 @@ Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑�
 
 各阶段预算按“顺利路径估算上限 × 1.5 + 30 分钟恢复余量”标定并向上取整到 15 分钟，首次取值 VC-0 60、VC-1 120、VC-2 210、
 VC-3 75、VC-4 165、VC-5 210、VC-6 165 分钟，写入驱动参数 `STAGE_BUDGETS`（`env.example.sh` 由测试按公式锁定），升级收口时按
-实测回写；对账等待仍计入阶段预算，真实缺陷导致的超出仍走 R8 延期并注明缺陷编号。
+实测回写；VC-0 接入目标平台门禁预跑（§4.0）后顺利路径上限由 15 分钟调为 60 分钟（0.157 实测其余步骤约 12 分钟、门禁
+通过的一次约 40 分钟），预算随之由 60 改为 120 分钟；对账等待仍计入阶段预算，真实缺陷导致的超出仍走 R8 延期并注明缺陷编号。
 
 **对账（reconciler）。** 中断只有两种入口，各自输出独立不可变收据，自身模型请求为零：
 `reconcile-supervisor-run --run-dir --campaign-dir` 处理派发前失败、父监督器 SIGKILL 或中断且尚无

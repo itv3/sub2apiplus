@@ -29,6 +29,7 @@
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
    closeout 编排必须先执行 `client_launch_probe.py verify --output-dir "$PROBE" --campaign-dir "$PRE"`（坐标取自
    `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
+   stage1（含收尾段）通过之后、stage2／closeout 之前，先按下文“VC-0 预跑目标平台门禁”预跑一次，通过才建 Formal Campaign。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
@@ -52,6 +53,29 @@
   其余 404。报告只记录请求的主机、方法、路径与头部名称，不记录任何头部取值。
 * 验收参数：`--test-mutation untrust:<目录>`／`unack_migration:<模型>` 只改覆盖层里的 config.toml 副本，
   `--only-scenario` 只探测指定场景；带这两类参数的报告一律不能作为放行依据。
+
+## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
+
+* 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～60 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
+  问题（修好接着跑第 67 项）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
+  问题在 VC-0 就修掉。结果只作预检，**不是** accept 的门禁收据；VC-5 accept 前 `vc5-accept.sh` 仍在候选门禁目录执行正式门禁。
+* 时机：stage1（含 `stage1-finish.sh`）通过之后、`stage2.sh`／`codex_upgrade_vc0_closeout` 之前单独运行；不与 stage1 各步或
+  VC-1 取证并行（与 accept 前正式门禁同一安静条件，资源争用会把计时用例拖红）。
+* 源码：本机 `git bundle create <文件> <BASE>..<分支>`（与候选提交链末尾同一打法；BASE 必须在 `$HISTORY_TEST_TREE` 的历史里，
+  例如前序候选的 DC；部署受管工具时上传的 bundle 满足这一条件也可直接用），传到采集主机 `$RUNROOT/vc0-preflight/` 下。
+* 命令（输出重定向到 `$RUNROOT/vc0-gate-target.out`；make test 里有挂断检测用例，必须 `setsid -f`，不能 `nohup`）：
+  `ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/vc0-gate-target.sh <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录>] > $RUNROOT/vc0-gate-target.out 2>&1 < /dev/null`。
+* 做法：测试树用 `lib.sh` 的 `clone_test_tree`（与 VC-5 的 `gates.sh prepare` 同一函数：从完整历史测试树克隆、从 bundle 取分支、
+  检出、断言提交数 >10000 且不含 vendor），放在 `$RUNROOT/vc0-preflight/test-tree`；前端 `node_modules` 默认取
+  `$HISTORY_TEST_TREE/frontend`，其 `pnpm-lock.yaml` 必须与本树逐字相同（本轮 lockfile 有变化时按 `frontend.sh` 同一方式在独立
+  目录装好依赖，作为第 4 个参数传入）。门禁直接调用 `vc5-gate-target.sh`：主体标识 `vc0-preflight-<UTC 时间戳>`，门禁根
+  `$RUNROOT/vc0-preflight/<主体标识>/`（环境收据、`logs/target-platform.*`、预检摘要 `preflight.json`），字节码缓存经第 4 个参数
+  放在 `$RUNROOT/vc0-preflight/pycache-target-platform`，与 VC-5 不共用任何目录。
+* 边界：不写候选门禁目录与候选目录，不写时间账本与 Campaign，零模型请求；同一轮只允许一个预跑（`$RUNROOT/vc0-preflight/.lock`）。
+* 退出码：0 通过（删掉测试树与缓存，末行 `VC0_GATE_TARGET_DONE`）；1 make test 未通过（打印日志位置、保留测试树，末行
+  `VC0_GATE_TARGET_FAILED`）；2 用法错误；3 准备或执行失败（`VC0_GATE_TARGET_ABORTED`，没有门禁结论）。未通过按普通 VC-0
+  失败处理：修门禁、驱动、环境或源码后重跑同一命令（新主体标识，旧结果留档）。
+
 3. 本机：候选提交链（A／C／D 三段，见 `driver/local/`）→ `git bundle` 推到 `$BUNDLE`。
 4. 采集主机：`setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`；本机执行
    `bash driver/local/local-vc4.sh <ROUND> <C> <DC> <RECEIPT> <输出根> $RUNROOT`：门禁一开始就向采集主机发上传心跳，

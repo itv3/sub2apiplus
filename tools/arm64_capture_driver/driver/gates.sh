@@ -9,10 +9,9 @@ MODE="$1"
 if [ "$MODE" = prepare ]; then
   DCX="$2"; NM=$RUNROOT/node_modules-cache
   [ -d "$T/frontend/node_modules" ] && { rm -rf "$NM"; mv "$T/frontend/node_modules" "$NM"; }
-  # 测试树必须带完整 Git 历史（上游合并/历史漂移冻结测试要读基准提交），从完整历史测试树 clone；
-  # 且不注入 vendor：版本泄漏 AST 门禁会扫描 backend/vendor，Go 依赖改走 GOMODCACHE（与 CI/本机一致）。
-  rm -rf "$T"; git clone -q --no-checkout "$HISTORY_TEST_TREE" "$T"; git -C "$T" fetch -q "$BUNDLE" "$BUNDLE_BRANCH"; git -C "$T" checkout -q --detach "$DCX"
-  test "$(git -C "$T" rev-list --count HEAD)" -gt 10000; test ! -e "$T/backend/vendor"
+  # 完整历史克隆、从 bundle 取分支、检出与“完整历史／不含 vendor”断言见 lib.sh 的 clone_test_tree
+  # （VC-0 预跑 vc0-gate-target.sh 用同一函数建自己的测试树）。
+  clone_test_tree "$T" "$BUNDLE" "$BUNDLE_BRANCH" "$DCX"
   if [ -d "$NM" ]; then mv "$NM" "$T/frontend/node_modules"; else cp -a "$B/frontend-build/frontend/node_modules" "$T/frontend/node_modules"; fi
   echo "test-tree HEAD=$(git -C $T rev-parse HEAD) status=[$(git -C $T status --porcelain --untracked-files=all)]"
   sha256sum "$T/frontend/node_modules/typescript/lib/typescript.js" | cut -c1-16

@@ -14,6 +14,8 @@
 * 修好接着跑第 67 项：目标平台门禁与 ARM64 全量回归门禁在 make test 前用 bytecode_cache.py 把标准库与测试树 tools
   预编译进树外缓存再只读使用（空前缀会让标准库 .pyc 也读不到、不设前缀要每次编译受管模块，子进程启动慢会把监督器
   计时用例拖红）；缓存建不成即停。
+* VC-0 预跑目标平台门禁（vc0-gate-target.sh）：复用 vc5-gate-target.sh 同一套执行方式，独立主体标识、门禁根与字节码
+  缓存都在 $RUNROOT/vc0-preflight 下，不写候选门禁目录；测试树与 VC-5 的 gates.sh prepare 共用 lib.sh 的 clone_test_tree。
 
 bash 用例只调用脚本本身，chmod／chown 经 PATH 注入的计数包装（记录调用后转调真实命令）。
 """
@@ -530,8 +532,8 @@ class EnvFileParserTests(unittest.TestCase):
         self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
         self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
         self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/codex-9.1.0-candidate-round1")
-        # R20：示例阶段预算按实测标定（VC-0 60 分钟起）；这里只验证带空格的值被原样加引号导出。
-        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=60 "))
+        # R20：示例阶段预算按实测标定（VC-0 接入目标平台门禁预跑后为 120 分钟起）；这里只验证带空格的值被原样加引号导出。
+        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=120 "))
         # 输出的每一行都是可安全 eval 的单一赋值
         for line in result.stdout.splitlines():
             self.assertRegex(line, r"^export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)$")
@@ -1067,7 +1069,12 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
     标准库与测试树 tools 预编译进重建的缓存目录，再只读使用（约 187 毫秒，15 次零失败）。
     """
 
-    GATE_SCRIPTS = {"vc5-gate-target.sh": "pycache-target-platform", "gates.sh": "pycache-full-regression"}
+    # 各门禁脚本给缓存目录赋值的那一行（逐字）：目标平台门禁默认 $RUNROOT/pycache-target-platform，VC-0 预跑经第 4 个
+    # 参数改放预跑目录（vc0-gate-target.sh），VC-5 调用只传三个参数，行为不变。
+    GATE_SCRIPTS = {
+        "vc5-gate-target.sh": 'PYC="${4:-$RUNROOT/pycache-target-platform}"',
+        "gates.sh": 'PYC="$RUNROOT/pycache-full-regression"',
+    }
     HELPER = SCRIPTS / "bytecode_cache.py"
 
     def _run_helper(self, *arguments: str) -> tuple[subprocess.CompletedProcess[str], dict]:
@@ -1142,10 +1149,10 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
                     if line.startswith("export ")]
         self.assertTrue(any("PYTHONDONTWRITEBYTECODE=1" in line.split() for line in lib_code),
                         "lib.sh 必须全局禁写字节码（门禁不写 __pycache__ 靠它）")
-        for name, cache_name in self.GATE_SCRIPTS.items():
+        for name, assignment in self.GATE_SCRIPTS.items():
             code = [line.strip() for line in (SCRIPTS / name).read_text(encoding="utf-8").splitlines()
                     if not line.lstrip().startswith("#")]
-            assign = [index for index, line in enumerate(code) if line == f'PYC="$RUNROOT/{cache_name}"']
+            assign = [index for index, line in enumerate(code) if line == assignment]
             prepare = [index for index, line in enumerate(code)
                        if line.startswith('env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" |')]
             export = [index for index, line in enumerate(code) if line == 'export PYTHONPYCACHEPREFIX="$PYC"']
@@ -1226,6 +1233,255 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertFalse(record.exists(), "缓存建不成时不得进入 make test")
             self.assertFalse((gate / "logs" / "target-platform.gate.json").exists())
             self.assertEqual(list(tree.rglob("__pycache__")), [])
+
+
+def _git(cwd: Path, *arguments: str) -> str:
+    """测试用 git：固定提交身份、关掉签名与钩子，不读开发机的个人配置差异。"""
+
+    result = subprocess.run(
+        ["git", "-c", "user.name=vc0-test", "-c", "user.email=vc0-test@example.invalid", "-c", "commit.gpgsign=false",
+         "-c", "core.hooksPath=/dev/null", *arguments],
+        cwd=str(cwd), capture_output=True, text=True)
+    if result.returncode != 0:
+        raise AssertionError(f"git {' '.join(arguments)} 失败：{result.stdout}{result.stderr}")
+    return result.stdout.strip()
+
+
+# 历史测试树第一个提交里的文件：前端 lockfile（VC-0 预跑按它核对 node_modules 来源）与缓存探针要导入的 tools 包。
+_HISTORY_FILES = {
+    ".gitignore": "node_modules/\n",
+    "README.md": "history\n",
+    "frontend/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "tools/probe_pkg/__init__.py": "",
+    "tools/probe_pkg/probe.py": "VALUE = 67\n",
+}
+
+
+def _history_repo(path: Path, *, commits: int) -> None:
+    """用 git fast-import 造一条 main 线性历史（门禁测试树要求完整历史，提交数 >10000），检出到最新提交。"""
+
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    chunks: list[bytes] = []
+    for index in range(1, commits + 1):
+        message = f"c{index}".encode()
+        chunks.append(b"commit refs/heads/main\n" + f"mark :{index}\n".encode()
+                      + f"committer vc0-test <vc0-test@example.invalid> {1700000000 + index} +0000\n".encode()
+                      + f"data {len(message)}\n".encode() + message + b"\n")
+        if index > 1:
+            chunks.append(f"from :{index - 1}\n".encode())
+        else:
+            for name, content in _HISTORY_FILES.items():
+                data = content.encode()
+                chunks.append(f"M 100644 inline {name}\ndata {len(data)}\n".encode() + data + b"\n")
+        chunks.append(b"\n")
+    subprocess.run(["git", "fast-import", "--quiet"], cwd=str(path), input=b"".join(chunks), check=True)
+    _git(path, "reset", "-q", "--hard", "main")
+
+
+class TestTreeAndVc0PreflightTests(unittest.TestCase):
+    """VC-0 预跑目标平台门禁（vc0-gate-target.sh）与 VC-5 测试树准备（gates.sh prepare）共用 lib.sh 的 clone_test_tree。
+
+    * 预跑复用 vc5-gate-target.sh 同一套执行方式：独立主体标识 vc0-preflight-<时间戳>、独立门禁根与字节码缓存都在
+      $RUNROOT/vc0-preflight 下，绝不写候选门禁目录、候选目录与 VC-5 的缓存；
+    * 测试树与 VC-5 同一做法（完整历史克隆 → bundle 取分支 → 检出 → 断言），前端依赖 lockfile 不同即拒绝、不进 make test；
+    * 退出码：通过 0（删测试树与缓存）、make test 未通过 1（保留测试树与日志位置）、用法 2、准备失败或并发 3；
+    * gates.sh prepare 改用共用函数后，VC-5 行为不变（node_modules 首次取本轮前端构建、重建时经缓存目录搬回）。
+
+    make test 用 unshare 垫片代替（在测试树里跑缓存探针并记下 HEAD），受管环境收据 CLI 用替身。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._template_root = tempfile.TemporaryDirectory()
+        cls.template = Path(cls._template_root.name).resolve() / "history"
+        _history_repo(cls.template, commits=10001)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._template_root.cleanup()
+
+    def _fixture(self, root: Path, *, make_rc: int = 0, history: Path | None = None):
+        fixture = _DriverFixture(root)
+        hist = fixture.data_root / "candidates" / "hist"
+        _git(root, "clone", "-q", str(history or self.template), str(hist))
+        node_modules = hist / "frontend" / "node_modules" / "typescript" / "lib"
+        node_modules.mkdir(parents=True)
+        (node_modules / "typescript.js").write_text("// 前序测试树的 TypeScript\n", encoding="utf-8")
+        work = root / "work"
+        _git(root, "clone", "-q", str(hist), str(work))
+        drv = root / "drv"
+        drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py"):
+            (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        package = fixture.data_root / "tools" / "official_client_capture"
+        (fixture.data_root / "tools" / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "codex_upgrade_arm64_environment_receipt.py").write_text(_ENVIRONMENT_RECEIPT_STUB, encoding="utf-8")
+        probe = root / "cache_probe.py"
+        probe.write_text(_CACHE_PROBE, encoding="utf-8")
+        record = root / "make-test-environment.json"
+        head_record = root / "make-test-head.txt"
+        bin_dir = root / "bin"
+        bin_dir.mkdir(mode=0o700)
+        shim = bin_dir / "unshare"
+        shim.write_text(f"#!/bin/bash\npython3 '{probe}' '{record}'\ngit rev-parse HEAD > '{head_record}'\n"
+                        f"echo make-test-stub-ok\nexit {make_rc}\n", encoding="utf-8")
+        shim.chmod(0o700)
+        env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+        return fixture, hist, work, drv, record, head_record, env
+
+    @staticmethod
+    def _bundle(work: Path, branch: str, target: Path, *, change_lockfile: bool = False) -> str:
+        _git(work, "checkout", "-q", "-B", branch, "main")
+        (work / "README.md").write_text("候选源码的改动\n", encoding="utf-8")
+        if change_lockfile:
+            (work / "frontend" / "pnpm-lock.yaml").write_text("lockfileVersion: '9.1'\n", encoding="utf-8")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "--no-verify", "-m", "candidate")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _git(work, "bundle", "create", "-q", str(target), f"main..{branch}")
+        return _git(work, "rev-parse", "HEAD")
+
+    def _untouched_vc5_locations(self, fixture: _DriverFixture) -> None:
+        self.assertFalse((fixture.data_root / "control" / f"{fixture.new}-candidate-gates").exists(), "预跑不得写候选门禁目录")
+        self.assertFalse((fixture.candidate_dir / "test-tree").exists(), "预跑不得写候选测试树")
+        self.assertFalse((fixture.runroot / "pycache-target-platform").exists(), "预跑不得用 VC-5 的字节码缓存")
+        self.assertFalse((fixture.runroot / "node_modules-cache").exists())
+
+    def test_preflight_passes_with_independent_subject_and_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
+            result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("VC0_GATE_TARGET_DONE rc=0", result.stdout)
+            pre = fixture.runroot / "vc0-preflight"
+            subjects = [path for path in pre.iterdir() if path.name.startswith("vc0-preflight-")]
+            self.assertEqual(len(subjects), 1, sorted(path.name for path in pre.iterdir()))
+            subject = subjects[0]
+            self.assertRegex(subject.name, r"^vc0-preflight-\d{8}t\d{6}z(-\d+)?$")
+            summary = json.loads((subject / "preflight.json").read_text(encoding="utf-8"))
+            self.assertEqual((summary["purpose"], summary["accept_gate_receipt"], summary["status"]), ("vc0-preflight", False, "passed"))
+            self.assertEqual((summary["subject_id"], summary["source"]["commit"], summary["source"]["tree_head"]), (subject.name, commit, commit))
+            self.assertEqual(summary["gate"]["exit_code"], 0)
+            self.assertTrue(summary["test_tree_removed"])
+            self.assertEqual(json.loads((subject / "logs" / "target-platform.gate.json").read_text(encoding="utf-8"))["exit_code"], 0)
+            self.assertEqual(sorted(path.name for path in (subject / "environment").iterdir()), sorted(
+                f"{subject.name}-{role}.json" for role in ("before-facts", "before", "after-facts", "after")))
+            # make test 在所要求的提交上执行，缓存是预跑目录里重建的那份（与 VC-5 分开）。
+            self.assertEqual(head_record.read_text(encoding="utf-8").strip(), commit)
+            seen = json.loads(record.read_text(encoding="utf-8"))
+            cache = str(pre / "pycache-target-platform")
+            self.assertEqual(seen["prefix"], cache)
+            self.assertTrue(seen["cached"].startswith(cache) and seen["cached_exists"], seen["cached"])
+            self._untouched_vc5_locations(fixture)
+            # 通过后删掉测试树与缓存、释放锁；数据根与历史测试树不留字节码。
+            self.assertFalse((pre / "test-tree").exists())
+            self.assertFalse((pre / "pycache-target-platform").exists())
+            self.assertFalse((pre / ".lock").exists())
+            self.assertEqual(list(fixture.data_root.rglob("__pycache__")), [])
+            self.assertEqual(stat.S_IMODE(pre.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(subject.stat().st_mode), 0o700)
+
+    def test_failed_make_test_exits_1_and_keeps_tree_and_log_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root, make_rc=2)
+            commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
+            result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("VC0_GATE_TARGET_FAILED rc=2", result.stdout)
+            self.assertIn("target-platform.stderr.log", result.stdout)
+            pre = fixture.runroot / "vc0-preflight"
+            subject = next(path for path in pre.iterdir() if path.name.startswith("vc0-preflight-"))
+            summary = json.loads((subject / "preflight.json").read_text(encoding="utf-8"))
+            self.assertEqual((summary["status"], summary["gate"]["exit_code"], summary["test_tree_removed"]), ("failed", 2, False))
+            self.assertEqual(_git(pre / "test-tree", "rev-parse", "HEAD"), commit, "未通过时保留测试树供排查")
+            self.assertFalse((pre / ".lock").exists())
+            self._untouched_vc5_locations(fixture)
+
+    def test_mismatched_lockfile_is_rejected_before_make_test(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle", change_lockfile=True)
+            result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("前端依赖不可用", result.stdout)
+            self.assertFalse(record.exists(), "前端依赖不可用时不得进入 make test")
+            self.assertEqual(list((fixture.runroot / "vc0-preflight").rglob("target-platform.gate.json")), [])
+            self.assertFalse((fixture.runroot / "vc0-preflight" / ".lock").exists())
+
+    def test_usage_errors_and_concurrent_run_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
+            bundle = str(root / "upload" / "vc0.bundle")
+            for label, arguments in {
+                "参数个数": (bundle, "codex/vc0-preflight"),
+                "提交不是 40 位": (bundle, "codex/vc0-preflight", commit[:12]),
+                "bundle 相对路径": ("upload/vc0.bundle", "codex/vc0-preflight", commit),
+                "分支名含空格": (bundle, "codex/vc0 preflight", commit),
+            }.items():
+                with self.subTest(label):
+                    result = _run(drv / "vc0-gate-target.sh", *arguments, env=env, cwd=root)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            lock = fixture.runroot / "vc0-preflight" / ".lock"
+            lock.mkdir(parents=True)
+            (lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+            result = _run(drv / "vc0-gate-target.sh", bundle, "codex/vc0-preflight", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("拒绝并发", result.stdout)
+            self.assertTrue(lock.is_dir(), "不得删除正在运行的另一次预跑的锁")
+            self.assertFalse(record.exists())
+
+    def test_vc5_prepare_keeps_behaviour_with_shared_clone_function(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            # 参数文件里的 VC-5 坐标：BUNDLE=$D/staging/x.bundle、BUNDLE_BRANCH=codex/x。
+            commit = self._bundle(work, "codex/x", fixture.data_root / "staging" / "x.bundle")
+            built = fixture.candidate_dir / "frontend-build" / "frontend" / "node_modules" / "typescript" / "lib"
+            built.mkdir(parents=True)
+            (built / "typescript.js").write_text("// 本轮前端构建的 TypeScript\n", encoding="utf-8")
+            result = _run(drv / "gates.sh", "prepare", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            tree = fixture.candidate_dir / "test-tree"
+            self.assertIn(f"test-tree HEAD={commit} status=[]", result.stdout)
+            self.assertEqual(_git(tree, "rev-list", "--count", "HEAD"), "10002")
+            self.assertEqual((tree / "frontend" / "node_modules" / "typescript" / "lib" / "typescript.js").read_text(encoding="utf-8"),
+                             "// 本轮前端构建的 TypeScript\n")
+            # 重建同一棵树：已有 node_modules 经缓存目录搬回，不再从前端构建复制。
+            marker = tree / "frontend" / "node_modules" / "marker.txt"
+            marker.write_text("搬回的依赖\n", encoding="utf-8")
+            again = _run(drv / "gates.sh", "prepare", commit, env=env, cwd=root)
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            self.assertTrue(marker.is_file())
+            self.assertFalse((fixture.runroot / "node_modules-cache").exists())
+            self.assertFalse((fixture.runroot / "vc0-preflight").exists())
+
+    def test_short_history_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            short = root / "short-history"
+            _history_repo(short, commits=3)
+            fixture, hist, work, drv, record, head_record, env = self._fixture(root, history=short)
+            commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
+            result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("测试树不是完整历史", result.stdout + result.stderr)
+            self.assertIn("VC0_GATE_TARGET_ABORTED", result.stdout)
+            self.assertFalse(record.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 58,
+  "file_count": 59,
   "files": [
     {
       "path": "README.md",
-      "sha256": "c5a102ca4fa711bbacb72b17d7a06154662a9ab236dce540fb98467c0b9c77f5",
+      "sha256": "7bd63fa0b6263754873b32a7fafe59add62edaab57bea4a0ee9d71974c734542",
       "mode": "0600",
-      "bytes": 16739
+      "bytes": 19826
     },
     {
       "path": "driver/build.sh",
@@ -58,9 +58,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "4e13ee36946fc5382bef5ac9f638eb34ff7da0fc37ca60271db25af1dbc47f49",
+      "sha256": "5e1f485b7f47a62dcaca40902ef1eeeb6abc72de9f9c7545b6a6edefd179ff21",
       "mode": "0700",
-      "bytes": 4229
+      "bytes": 4419
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "5dabf3f1ce9a2a8d7873773f95a184c2d807ba0ded33d71bbb091f8576afa95a",
+      "sha256": "901caa66646d666f766657680d7af10e52f00e1d3ab8ac0e03e0ad61ea1adaab",
       "mode": "0700",
-      "bytes": 3759
+      "bytes": 3512
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -130,9 +130,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "67334f14163dc9a6f5b247c6cea78c6e2aabbaa908ea2fd21c7eef0d8f7ef92f",
+      "sha256": "97724aedc0fd87972d801725393b6aec910c394e89b88288b5f8f6defe4dafe8",
       "mode": "0700",
-      "bytes": 6052
+      "bytes": 7439
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -225,6 +225,12 @@
       "bytes": 2636
     },
     {
+      "path": "driver/vc0-gate-target.sh",
+      "sha256": "a453a1bb71a97b075c944884c9de5042297553fabf14c63734428f853b340791",
+      "mode": "0700",
+      "bytes": 9871
+    },
+    {
       "path": "driver/vc23.sh",
       "sha256": "c7802034bc343e3c892cb85391c5b4571fe6b62b26f0e93f05629e948ae712f0",
       "mode": "0700",
@@ -286,9 +292,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "96b64ef7804046673051b36dd3f8859a6bbc2cb647a845d2dfb6419b4e878da4",
+      "sha256": "3ca784140a6fad2c4695b789e6e6c2ba98d1c6bb3faec634fc0f61345589abdd",
       "mode": "0700",
-      "bytes": 3755
+      "bytes": 4224
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -351,5 +357,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "b5a326243220e7c130d132fbac4bdb077340518ff6845e26c453bd49bd76a571"
+  "manifest_sha256": "f825472a1edad7d9fff2815ae3ef056b445429892a9e3c51d37df2745d67da17"
 }

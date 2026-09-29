@@ -1,6 +1,9 @@
 #!/bin/bash
 # 目标平台外部门禁（禁写字节码、只读使用预编译的树外字节码缓存）：gate_before 环境收据 → 在 DC 提交测试树上隔离 make test → gate_after 环境收据。
-# 用法：bash vc5-gate-target.sh <attempt_id> <gate_root> <test_tree>
+# 用法：bash vc5-gate-target.sh <attempt_id> <gate_root> <test_tree> [<字节码缓存目录>]
+#   VC-5 accept（vc5-accept.sh、gates.sh target）只传前三个参数，缓存目录用默认的 $RUNROOT/pycache-target-platform；
+#   VC-0 预跑（vc0-gate-target.sh）以同一套执行方式调用本脚本，主体标识与门禁根各自独立，并传第 4 个参数把缓存放在
+#   预跑目录里，与 VC-5 不共用任何目录（缓存每次清空重建，共用时两边同时跑会互相清掉对方的缓存）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT
@@ -12,7 +15,7 @@ python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt
 # 不设前缀也要每次从源码编译测试树模块（约 323 毫秒），心跳间隔用例只剩约 20 毫秒余量。make test 前把标准库与测试树
 # tools 预编译进本次重建的缓存目录（bytecode_cache.py，失败即停），make test 期间只读使用（约 187 毫秒），测试树不留
 # __pycache__。PYTHONPATH=. 会让当前目录里的同名文件遮住标准库，调用辅助脚本时去掉。
-PYC="$RUNROOT/pycache-target-platform"
+PYC="${4:-$RUNROOT/pycache-target-platform}"
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
 export PYTHONPYCACHEPREFIX="$PYC"
 export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"

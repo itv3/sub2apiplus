@@ -21,6 +21,21 @@ AS=$D/control/$NEW-assertions
 # 下一批次序号：按 control/vc/batches 中已 COMMIT 的最大序号 +1
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# 候选测试树（VC-5 目标平台门禁的 gates.sh prepare 与 VC-0 预跑 vc0-gate-target.sh 共用同一段实现）：
+#   从完整历史测试树 $HISTORY_TEST_TREE 克隆 → 从 bundle 取分支 → 分离 HEAD 检出指定提交 → 断言。
+#   测试树必须带完整 Git 历史（上游合并／历史漂移冻结测试要读基准提交），所以从完整历史测试树克隆，不能只 fetch bundle；
+#   且不注入 vendor（版本泄漏 AST 门禁会扫描 backend/vendor，Go 依赖改走 GOMODCACHE，与 CI／本机一致）。
+#   前端 node_modules 由调用方注入（VC-5 取本轮前端构建，VC-0 取前序测试树里 lockfile 相同的一份）。
+# 用法：clone_test_tree <树目录（先删后建）> <bundle> <分支> <提交>；任一步失败返回 1（调用方在 set -e 下即停）。
+clone_test_tree() {
+  local tree="$1" bundle="$2" branch="$3" commit="$4"
+  rm -rf "$tree" || return 1
+  git clone -q --no-checkout "$HISTORY_TEST_TREE" "$tree" || return 1
+  git -C "$tree" fetch -q "$bundle" "$branch" || return 1
+  git -C "$tree" checkout -q --detach "$commit" || return 1
+  test "$(git -C "$tree" rev-list --count HEAD)" -gt 10000 || { echo "测试树不是完整历史（提交数须 >10000）：$tree" >&2; return 1; }
+  test ! -e "$tree/backend/vendor" || { echo "测试树不得含 backend/vendor：$tree" >&2; return 1; }
+}
 # 管理 token 自动续签（修好接着跑第 33 项）：候选采集用的 admin JWT 由 JWT_EXPIRE_HOUR（默认 24 小时）控制，VC-5 预检要求
 # 剩余 ≥1800 秒，而 run／seal／accept／canonical 全程可能跨越十几个小时。剩余不足 ${ADMIN_TOKEN_MIN_SECONDS:-43200} 秒（12 小时）
 # 或传入 force 时，按 vc23.sh 同一方式在服务容器内重签（旧 token 改名留档、只输出剩余分钟、绝不输出 token 本身）。
