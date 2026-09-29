@@ -9,6 +9,8 @@
 #       > $RUNROOT/fix-and-continue-<轮次>.out 2>&1 < /dev/null
 #     bash .../fix-and-continue.sh <轮次参数文件> --list        # 只列本轮各步骤记录
 #   参数模板：driver/fix-and-continue.example.params（KEY=VALUE，经 parse_env.py 同一词法层安全解析，绝不 source）。
+#   部署前提（指南“修好接着跑”一节）：本轮修复在本机全量门禁通过后即可从 deploy 开始跑；推送后 CI 与续跑并行，本脚本
+#   没有等待 CI 的步骤。CI 失败时暂停续跑，按本轮部署收据的 rollback_backup 回滚已部署工具，修好后再走一轮。
 #
 # 步骤（按序；每步幂等，--from <步骤> 续跑时前序步骤在本轮必须有 passed／skipped 记录）：
 #   deploy            bundle 校验 → 取分支核对 HEAD → staging 干净检出 → 仓库文档 → 属主收口 → 后台受监督部署并等待；

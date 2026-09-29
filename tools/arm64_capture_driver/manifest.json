@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "7bd63fa0b6263754873b32a7fafe59add62edaab57bea4a0ee9d71974c734542",
+      "sha256": "15a2fe10648abcd63f7f542ddceb1f775c0a742c1f19f7496943318d80df10f8",
       "mode": "0600",
-      "bytes": 19826
+      "bytes": 20193
     },
     {
       "path": "driver/build.sh",
@@ -70,9 +70,9 @@
     },
     {
       "path": "driver/fix-and-continue.sh",
-      "sha256": "d1dd9fa22cb46311d814b17a73d77f590191e6e0e8ef9165c004ff88c04ba84e",
+      "sha256": "00c20abf1a357e65519979dbbcb3a03253b9fc902a01b4e460215902c1cc19df",
       "mode": "0700",
-      "bytes": 22616
+      "bytes": 22935
     },
     {
       "path": "driver/fix_and_continue.py",
@@ -357,5 +357,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "f825472a1edad7d9fff2815ae3ef056b445429892a9e3c51d37df2745d67da17"
+  "manifest_sha256": "a3e02396e0900235f7e1647a294e8c92945712e298f95615d226399bf39d632b"
 }

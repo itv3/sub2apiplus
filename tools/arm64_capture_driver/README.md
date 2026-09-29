@@ -145,6 +145,9 @@
   upload-rN／repair-rN 轮次脚本。每轮只换一份轮次参数文件（模板 `driver/fix-and-continue.example.params`，经
   `parse_env.py` 同一词法层安全解析、与 `$ARM64_VC_ENV` 交叉核对）＋本机生成的期望摘要 JSON（EXPECT：部署收据的整树／
   五摘要／监督器、数据根 wire 闭包、守护基线与差异）与入口断言 JSON（ENTRY_GREPS）。
+* 部署前提：本机全量门禁通过即可部署续跑，推送后 CI 与续跑并行、不等待（脚本里没有等 CI 的步骤）；CI 失败时暂停续跑，
+  按该轮部署收据的 `rollback_backup` 回滚已部署工具（同样走受监督部署），修好后再走一轮；发版前仍须 CI 全绿（见指南
+  “修好接着跑”一节）。
 * 用法（采集主机 root）：`setsid -f bash /root/arm64-capture-driver/driver/fix-and-continue.sh <参数文件> > <日志> 2>&1 < /dev/null`；
   `--from <步骤>` 续跑（前序步骤在本轮必须有 passed／skipped 记录），`--list` 查看本轮各步骤记录。
 * 步骤：deploy → postdeploy → item-tests → evolution → pre-extend → reconcile-runs → reconcile-attempt → repair → approve →
