@@ -143,8 +143,10 @@ FROZEN_MAPPING_SHA256 = (
 # 去掉非 wire 检查由 candidate_profile 转为 dual_wire）；expected_check_ids 14 条规则变化；side_coverage
 # 仅 official.A10 新增 process_trace／relay_binary（封存官方包已具备）；side_restricted_checks 不变；
 # 现算契约摘要 d6d211f0…。
+# 2026-09-29：随主手册第二部分摘要重绑（见 candidate_rule_assertion 同日注释）；0.157.0 断言画像的规则、场景
+# 与判据载荷逐字不变，漂移只来自 source_spec_sha256。
 FROZEN_PROFILE_SHA256 = (
-    "34c49fb686f2523d7dec6530340db178f8cbb1da2811861306827a47669c4a25"
+    "51d81fae521b813d27dca8c81d6e646eebe48dcce6de16a9cf1f5972f7ba6812"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
