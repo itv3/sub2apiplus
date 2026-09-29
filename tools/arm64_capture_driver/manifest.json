@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "15a2fe10648abcd63f7f542ddceb1f775c0a742c1f19f7496943318d80df10f8",
+      "sha256": "3e1529e911fe9cc19512650666b34ebf481e98c23245142d2914b37ee6dd62d0",
       "mode": "0600",
       "bytes": 20193
     },
@@ -58,9 +58,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "5e1f485b7f47a62dcaca40902ef1eeeb6abc72de9f9c7545b6a6edefd179ff21",
+      "sha256": "9ba05123263355d0b584ad556b4d69079ff2d8448929df660b85e00a719cdf04",
       "mode": "0700",
-      "bytes": 4419
+      "bytes": 4439
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -226,7 +226,7 @@
     },
     {
       "path": "driver/vc0-gate-target.sh",
-      "sha256": "a453a1bb71a97b075c944884c9de5042297553fabf14c63734428f853b340791",
+      "sha256": "f4ab78e7436f02e6071e6f068abb42c6f536d3fa813fada5b74b0bdd9202a723",
       "mode": "0700",
       "bytes": 9871
     },
@@ -357,5 +357,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "a3e02396e0900235f7e1647a294e8c92945712e298f95615d226399bf39d632b"
+  "manifest_sha256": "cd2c2a1df81b250fbc41e471f8d43af11b7862e8d483553302570a262269bda4"
 }

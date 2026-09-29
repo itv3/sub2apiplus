@@ -31,8 +31,8 @@ INPUT_RULE_MIGRATION=$D/control/$IN/rule-migration-approved.json
 INPUT_TARGET_SNAPSHOT=$D/control/$IN/target-snapshot-approved.json
 PROJECT_DEADLINE_UTC=REPLACE_APPROVED_DEADLINE_UTC
 # R20：阶段预算按“顺利路径估算上限×1.5+30 分钟、向上取整到 15 分钟”标定，只经本参数生效（绑定项目总账后各阶段上限是到截止的总分钟数）；按本轮实测再调。
-# VC-0 接入目标平台门禁预跑（vc0-gate-target.sh）后，顺利路径上限由 15 分钟调为 60 分钟（其余步骤约 12 分钟＋预跑约 40 分钟），预算 60→120。
-STAGE_BUDGETS="VC-0=120 VC-1=120 VC-2=210 VC-3=75 VC-4=165 VC-5=210 VC-6=165"
+# VC-0 接入目标平台门禁预跑（vc0-gate-target.sh）后，顺利路径上限由 15 分钟调为 90 分钟（其余步骤约 12 分钟＋2026-09-29 首次预跑实测 69 分钟），预算 60→165。
+STAGE_BUDGETS="VC-0=165 VC-1=120 VC-2=210 VC-3=75 VC-4=165 VC-5=210 VC-6=165"
 MIN_FREE_GIB=40
 FRONTEND_DEVIATION_APPROVED_BY="REPLACE_本轮批准人日期和ARM64隔离候选适用范围"
 PROFILE_ID=$TARGET_PROFILE_ID

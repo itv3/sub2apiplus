@@ -56,7 +56,7 @@
 
 ## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
 
-* 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～60 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
+* 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～70 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
   问题（修好接着跑第 67 项）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
   问题在 VC-0 就修掉。结果只作预检，**不是** accept 的门禁收据；VC-5 accept 前 `vc5-accept.sh` 仍在候选门禁目录执行正式门禁。
 * 时机：stage1（含 `stage1-finish.sh`）通过之后、`stage2.sh`／`codex_upgrade_vc0_closeout` 之前单独运行；不与 stage1 各步或

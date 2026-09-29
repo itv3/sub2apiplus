@@ -20,11 +20,11 @@ class DriverStageBudgetCalibrationTests(unittest.TestCase):
     账本生成器身份，已有账本都要登记后继边。
 
     VC-0 接入目标平台门禁预跑（驱动 vc0-gate-target.sh，stage1 通过后、建 Formal Campaign 前单独运行）后，
-    顺利路径上限由 15 分钟调为 60 分钟：0.157 实测 VC-0 其余步骤约 12 分钟，目标平台门禁通过的一次约 40 分钟，
-    合计约 52 分钟取 60；按公式 60×1.5+30=120，VC-0 预算 60→120。
+    顺利路径上限由 15 分钟调为 90 分钟：0.157 实测 VC-0 其余步骤约 12 分钟，2026-09-29 首次预跑实测 69 分钟，
+    合计约 81 分钟取 90；按公式 90×1.5+30=165，VC-0 预算 60→165。
     """
 
-    ESTIMATES = {"VC-0": 60, "VC-1": 60, "VC-2": 120, "VC-3": 30, "VC-4": 90, "VC-5": 120, "VC-6": 90}
+    ESTIMATES = {"VC-0": 90, "VC-1": 60, "VC-2": 120, "VC-3": 30, "VC-4": 90, "VC-5": 120, "VC-6": 90}
 
     def test_driver_example_follows_calibration_formula(self) -> None:
         example = (
