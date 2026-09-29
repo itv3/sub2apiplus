@@ -123,8 +123,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-29（问题四 M3-a）：官方出站 HTTP 上游 attempt 返回后不再无条件恢复整段正文，成功路径从工作区成员读
 # service_tier，错误处理与 compact 回退分支入口才恢复，改动 `openai_gateway_forward.go`；映射只重绑该源码快照，
 # 不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四 lint 修复）：官方出站 HTTP 重编码入口改为返回新正文，`openai_gateway_forward.go` 的调用恢复为
+# 改造前的 `body, marshalErr = ...` 两值赋值形式（消除 staticcheck S1021），行为与出站字节不变；映射只重绑该源码
+# 快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "514e9bec45c2cdfb739dc6d639d212946ec78c4e4ba6e8bce7ae732dd7473962"
+    "2b6ddbbbeba690ddd3b9d277fcd98d009068557566ce00becd0d9633a316d721"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

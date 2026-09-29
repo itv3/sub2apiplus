@@ -101,7 +101,7 @@ func officialEgressMemoryProfileText(length int, salt int) string {
 	var builder strings.Builder
 	builder.Grow(length + 8)
 	for i := 0; builder.Len() < length; i++ {
-		builder.WriteRune(runes[(i*7+salt)%len(runes)])
+		_, _ = builder.WriteRune(runes[(i*7+salt)%len(runes)])
 	}
 	return builder.String()
 }
@@ -141,8 +141,8 @@ func buildOfficialEgressMemoryProfileBody(t *testing.T, targetBytes int) []byte 
 			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + officialEgressMemoryProfileText(400, turn+4) + `"}]}`,
 		}
 		for _, item := range items {
-			history.WriteString(item)
-			history.WriteByte(',')
+			_, _ = history.WriteString(item)
+			_ = history.WriteByte(',')
 		}
 	}
 	body := make([]byte, 0, len(template)+history.Len())

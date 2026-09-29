@@ -121,21 +121,21 @@ func TestCompressCompiledBodyZstdDoesNotAmplifyLargeBody(t *testing.T) {
 // 字节可匹配的文本（重复的中英文字母表）；textBytes 为 0 时加密内容背靠背，之间只有少量 JSON 结构。
 func zstdReserveInterleavedBody(rng *rand.Rand, target int, textBytes int) []byte {
 	var b bytes.Buffer
-	b.WriteString(`{"model":"gpt-5.6-luna","input":[`)
+	_, _ = b.WriteString(`{"model":"gpt-5.6-luna","input":[`)
 	raw := make([]byte, 10000)
 	text := bytes.Repeat([]byte("abcdefghijklmnopqrstuvwxyz0123456789 执行测试检查输出结果并继续下一步 "), textBytes/60+1)[:textBytes]
 	for i := 0; b.Len() < target; i++ {
 		if i > 0 {
-			b.WriteByte(',')
+			_ = b.WriteByte(',')
 		}
 		_, _ = rng.Read(raw)
-		b.WriteString(`{"type":"reasoning","encrypted_content":"gAAAAAB`)
-		b.WriteString(base64.StdEncoding.EncodeToString(raw))
-		b.WriteString(`"},{"type":"message","content":"` + strconv.Itoa(i))
-		b.Write(text)
-		b.WriteString(`"}`)
+		_, _ = b.WriteString(`{"type":"reasoning","encrypted_content":"gAAAAAB`)
+		_, _ = b.WriteString(base64.StdEncoding.EncodeToString(raw))
+		_, _ = b.WriteString(`"},{"type":"message","content":"` + strconv.Itoa(i))
+		_, _ = b.Write(text)
+		_, _ = b.WriteString(`"}`)
 	}
-	b.WriteString(`]}`)
+	_, _ = b.WriteString(`]}`)
 	return b.Bytes()
 }
 
@@ -223,14 +223,14 @@ func TestZstdLikelyIncompressibleBytes(t *testing.T) {
 	medium := strings.Repeat("QUJD", zstdBase64StringMinBytes/4+100)
 	backToBack := func(separator string) string {
 		var b strings.Builder
-		b.WriteString(`[`)
+		_, _ = b.WriteString(`[`)
 		for i := 0; i < 40; i++ {
 			if i > 0 {
-				b.WriteString(`,`)
+				_, _ = b.WriteString(`,`)
 			}
-			b.WriteString(`{"e":"` + medium + `"` + separator + `}`)
+			_, _ = b.WriteString(`{"e":"` + medium + `"` + separator + `}`)
 		}
-		b.WriteString(`]`)
+		_, _ = b.WriteString(`]`)
 		return b.String()
 	}
 	tight := backToBack("")

@@ -95,14 +95,16 @@ func TestOfficialForwardHTTPBodyReencodeMatchesMarshal(t *testing.T) {
 		got := base
 		view := newOpenAIRequestView(base)
 		reqBody := payload
-		gotErr := workspace.reencodeRequestBody(membersHandoffCopy(t, payload), &got, &view, &reqBody)
+		returned, gotErr := workspace.reencodeRequestBody(membersHandoffCopy(t, payload), &got, &view, &reqBody)
 		if decodeSharingErrorParity(t, name, wantErr, gotErr) {
 			require.Equal(t, wantErr.Error(), gotErr.Error(), name)
 			require.Nil(t, got, "%s：出错时正文与改造前一样为 nil", name)
+			require.Nil(t, returned, "%s：出错时返回的正文同样为 nil", name)
 			continue
 		}
 		compared++
 		require.Equal(t, string(want), string(got), "%s：重编码字节必须一致", name)
+		require.True(t, officialForwardSameBody(returned, got), "%s：返回的正文就是写回 *body 的正文", name)
 		require.Equal(t, string(officialegress.AppendJSONObjectMembers(nil, workspace.members)), string(got), name)
 		require.True(t, officialForwardSameBody(got, workspace.rebuilt), name)
 		require.Nil(t, reqBody, "%s：物化前放下对象树", name)
@@ -146,7 +148,8 @@ func TestOfficialForwardHTTPBodyRebasesFinalizerMembers(t *testing.T) {
 		rebuilt := ingress
 		view := newOpenAIRequestView(ingress)
 		reqBody := payload
-		require.NoError(t, workspace.reencodeRequestBody(payload, &rebuilt, &view, &reqBody))
+		_, err = workspace.reencodeRequestBody(payload, &rebuilt, &view, &reqBody)
+		require.NoError(t, err)
 
 		// 模拟 Finalizer：在重编码正文上解码、按画像字段序定型并按成员产出。
 		finalPayload, index, err := decodeOfficialJSONObjectSharingBody(rebuilt)
@@ -195,7 +198,8 @@ func TestOfficialForwardHTTPBodyParkRestoresIdenticalBody(t *testing.T) {
 	body := ingress
 	view := newOpenAIRequestView(ingress)
 	reqBody := payload
-	require.NoError(t, workspace.reencodeRequestBody(payload, &body, &view, &reqBody))
+	_, err = workspace.reencodeRequestBody(payload, &body, &view, &reqBody)
+	require.NoError(t, err)
 	view = newOpenAIRequestView(body)
 	expected := string(body)
 	expectedView := view
@@ -248,7 +252,8 @@ func TestOfficialForwardHTTPBodyParkRestoresIdenticalBody(t *testing.T) {
 	delete(noTier, "service_tier")
 	_, tierless := newOfficialForwardHTTPBody(t.Context(), ingress)
 	tierBody, tierView, tierReq := ingress, newOpenAIRequestView(ingress), noTier
-	require.NoError(t, tierless.reencodeRequestBody(noTier, &tierBody, &tierView, &tierReq))
+	_, err = tierless.reencodeRequestBody(noTier, &tierBody, &tierView, &tierReq)
+	require.NoError(t, err)
 	tierLineage := tierBody
 	tierless.park(&tierBody, &tierView, &tierLineage)
 	require.True(t, tierless.parked)

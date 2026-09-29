@@ -166,8 +166,10 @@ func (b *officialForwardHTTPBody) decodeRequestView(c *gin.Context, view openAIR
 	return getOpenAIRequestBodyMap(c, view.body)
 }
 
-// reencodeRequestBody 用对象树 payload 整体重编码 *body 并写回 *body，结果与
-// `*body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(payload, *body)` 逐字节相同（含出错时 *body 为 nil）。
+// reencodeRequestBody 用对象树 payload 整体重编码 *body，返回新正文并同时写回 *body，结果与
+// `marshalOfficialJSONObjectPreservingOrderAndRaw(payload, *body)` 逐字节相同（出错时返回 nil，*body 也置为 nil）。
+// 调用方沿用改造前的写法 `body, err = w.reencodeRequestBody(payload, &body, ...)` 接收；传入正文的地址
+// 只是为了在物化新正文之前放下旧正文。
 //
 // 官方出站 HTTP 路径上按顶层成员重编码（复用旧正文的索引），成员值与调用方原始正文逐字节相同的大
 // 成员改为引用原始正文、其余引用旧正文的成员值复制成小段；随后在物化新正文之前先放下旧正文、请求
@@ -179,11 +181,11 @@ func (b *officialForwardHTTPBody) reencodeRequestBody(
 	body *[]byte,
 	view *openAIRequestView,
 	reqBody *map[string]any,
-) error {
+) ([]byte, error) {
 	if b == nil {
 		rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRaw(payload, *body)
 		*body = rebuilt
-		return err
+		return rebuilt, err
 	}
 	base := *body
 	index := b.indexFor(base)
@@ -192,7 +194,7 @@ func (b *officialForwardHTTPBody) reencodeRequestBody(
 	b.members, b.rebuilt, b.spans = nil, nil, nil
 	if err != nil {
 		*body = nil
-		return err
+		return nil, err
 	}
 	b.detachMembersFrom(members, base)
 	*reqBody = nil
@@ -202,7 +204,7 @@ func (b *officialForwardHTTPBody) reencodeRequestBody(
 	b.members = members
 	b.rebuilt, b.spans = officialForwardMaterializeMembers(members)
 	*body = b.rebuilt
-	return nil
+	return b.rebuilt, nil
 }
 
 // releaseRequestMap 在官方出站 HTTP 路径进入定型与上游 attempt 之前放下对象树（问题四 M2-a）。只在请求

@@ -314,9 +314,10 @@ func TestOfficialForwardHTTPBodyNilWorkspaceDelegatesToOriginals(t *testing.T) {
 			got := body
 			gotView := view
 			gotReqBody := gotMap
-			gotErr := workspace.reencodeRequestBody(gotMap, &got, &gotView, &gotReqBody)
+			returned, gotErr := workspace.reencodeRequestBody(gotMap, &got, &gotView, &gotReqBody)
 			require.Equal(t, fmt.Sprint(wantErr), fmt.Sprint(gotErr), name)
 			require.Equal(t, string(want), string(got), name)
+			require.Equal(t, string(want), string(returned), "%s：nil 工作区返回的正文与写回的正文相同", name)
 			require.Equal(t, view.body, gotView.body, "%s：nil 工作区不改动请求视图", name)
 			require.NotNil(t, gotReqBody, "%s：nil 工作区不放下对象树", name)
 		}

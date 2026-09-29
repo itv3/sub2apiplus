@@ -845,7 +845,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			var marshalErr error
 			// patch 失效后走整体重编码。必须以当前正文为原始字节基准，否则未被
 			// 改动的嵌套用户数据会被 Go map 编码按字典序重排。
-			marshalErr = officialForwardBody.reencodeRequestBody(decoded, &body, &requestView, &reqBody)
+			body, marshalErr = officialForwardBody.reencodeRequestBody(decoded, &body, &requestView, &reqBody)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}

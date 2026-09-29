@@ -277,7 +277,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "fee6d163431b4a8ba0cb67f21ae7ff300b707257db92e801b49508e9d7f135d8"
+          "sha256": "790154e5cdd761ffa58acd861ca79f79851d3c87ce4515df9894eeafd2264b42"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
