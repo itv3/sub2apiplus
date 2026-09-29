@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -232,10 +233,38 @@ func TestNormalizeOpenAIResponsesReasoningContentReplayJudgesWithoutCopyingInput
 	require.Greater(t, legacyAllocated, uint64(len(body))*9/10, "对照：改造前的判定复制整段 input")
 }
 
+// reasoningReplayMeasureAllocatedFromEmptyPools 与 testMeasureAllocatedBytes 一样取三次测量中最小的累计分配，
+// 区别是每次测量前连续两次 runtime.GC()：sync.Pool 的对象第一次 GC 时移入 victim 缓存、第二次 GC 才被丢弃，
+// 两次之后所有 sync.Pool 都是空的，每次测量都从同一个池状态开始。
+//
+// 改写路径最后由 marshalOpenAIUpstreamJSON 重新编码整棵树。Go 1.27 的 encoding/json 由 json/v2 实现，编码时
+// 从 jsontext 的编码器池取编码器并沿用它的内部缓冲：池里留有上次的大缓冲时只分配一份输出，池为空时缓冲从
+// 64 字节起逐级扩容，累计约多分配 5 倍输出。testMeasureAllocatedBytes 每次只 GC 一次，上一轮放回的编码器
+// 还在 victim 缓存里，但只有同一个 P 上的取用拿得到，测量中途再发生 GC 也会把它清掉，命中与否随调度与 GC
+// 时机变化；新旧两次测量若分处两种池状态，对照的差值就会忽大忽小。
+func reasoningReplayMeasureAllocatedFromEmptyPools(t *testing.T, run func()) uint64 {
+	t.Helper()
+	best := ^uint64(0)
+	for attempt := 0; attempt < 3; attempt++ {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		run()
+		runtime.ReadMemStats(&after)
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated < best {
+			best = allocated
+		}
+	}
+	return best
+}
+
 func TestNormalizeOpenAIResponsesReasoningContentReplayRewritesWithoutCopyingBodyIntoTree(t *testing.T) {
 	body := reasoningReplayLargeBody(t, true)
 	var out []byte
-	allocated := testMeasureAllocatedBytes(t, func() {
+	// 末尾对照要求新旧两次测量的共享编码部分分配相同，两次都用从空池开始的测量，见
+	// reasoningReplayMeasureAllocatedFromEmptyPools。
+	allocated := reasoningReplayMeasureAllocatedFromEmptyPools(t, func() {
 		var changed bool
 		var err error
 		out, changed, err = normalizeOpenAIResponsesReasoningContentReplay(body)
@@ -254,10 +283,14 @@ func TestNormalizeOpenAIResponsesReasoningContentReplayRewritesWithoutCopyingBod
 	})
 	require.Less(t, treeAllocated, uint64(len(body))/2,
 		"改写用的对象树分配 %d 字节，不得再把正文（%d 字节）复制进树", treeAllocated, len(body))
-	legacyAllocated := testMeasureAllocatedBytes(t, func() {
+	legacyAllocated := reasoningReplayMeasureAllocatedFromEmptyPools(t, func() {
 		_, _, err := legacyNormalizeOpenAIResponsesReasoningContentReplay(body)
 		require.NoError(t, err)
 	})
+	// 实测正文 8.86 MB：新写法 54.4 MB（对象树 1.2 MB + 空池编码 53.2 MB），旧写法 106.1 MB（判定副本 8.9 MB
+	// + encoding/json 解码 44.0 MB + 空池编码 53.2 MB），差值约 51.7 MB，是阈值（两倍正文 17.7 MB）的 2.9 倍。
+	// 两次测量若分处两种池状态，编码部分会相差约 44.4 MB：新写法未命中、旧写法命中时差值只剩约 7.3 MB。
 	require.Greater(t, legacyAllocated, allocated+uint64(len(body))*2,
-		"对照：改造前的改写路径多出判定副本与 encoding/json 解码（含字符串复制与读取缓冲倍增）")
+		"对照：改造前的改写路径多出判定副本与 encoding/json 解码（含字符串复制与读取缓冲倍增）：旧 %d 字节，新 %d 字节，正文 %d 字节",
+		legacyAllocated, allocated, len(body))
 }
