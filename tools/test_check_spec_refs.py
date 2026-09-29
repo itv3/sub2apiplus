@@ -19,6 +19,13 @@ DEPENDENCIES = ROOT / "tools" / "spec_source_deps"
 
 
 class SpecRefGateTests(unittest.TestCase):
+    """负例都在指南现行原文上做一次替换再跑门禁，替换目标必须逐字取自当前第二部分。
+
+    指南改写源码字段后要同步这里的目标文字，否则 replace_once 先失败，负例根本没有执行。
+    源码树默认取仓库内 local-analysis；隔离工作树可用与 Makefile 同名的环境变量
+    CODEX_0_149_1_SOURCE_ROOT 指向另一处只读 0.149.1 源码树。
+    """
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.spec_text = SPEC.read_text(encoding="utf-8")
@@ -45,6 +52,14 @@ class SpecRefGateTests(unittest.TestCase):
             ]
             if dependency_manifest is not None:
                 command.extend(["--dependency-manifest", str(dependency_manifest)])
+            source_root = os.environ.get("CODEX_0_149_1_SOURCE_ROOT")
+            if source_root:
+                command.extend([
+                    "--source-root",
+                    source_root,
+                    "--cargo-lock",
+                    str(pathlib.Path(source_root) / "codex-rs" / "Cargo.lock"),
+                ])
             environment = os.environ.copy()
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
             return subprocess.run(
@@ -71,29 +86,31 @@ class SpecRefGateTests(unittest.TestCase):
 
     def test_wrong_line_fails_rule_anchor(self) -> None:
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:923`。",
-            "- **源码**：[L1] `codex-api/src/common.rs:260`、`core/src/client.rs:923`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:929`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:260`、`core/src/client.rs:929`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "SPEC-BODY-005 的源码引用与锚点清单不一致")
 
     def test_bare_filename_ambiguity_fails(self) -> None:
+        # SPEC-PROTO-002 的源码字段；client.rs 在 0.149.1 源码树中有多个同名文件。
         mutated = self.replace_once(
-            "`core/src/client.rs:142`、`core/src/client.rs:1113`",
-            "`client.rs:142`、`core/src/client.rs:1113`",
+            "`core/src/client.rs:524`、`core/src/client.rs:955`",
+            "`client.rs:524`、`core/src/client.rs:955`",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "裸文件名有")
         self.assert_failed_with(result, "个候选")
 
     def test_cfg_test_reference_fails(self) -> None:
+        # 0.149.1 的 responses_websocket.rs 在第 908-1227 行是 #[cfg(test)] 模块，第 920 行落在其中。
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:923`。",
-            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:901`、`core/src/client.rs:923`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:929`。",
+            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:920`、`core/src/client.rs:929`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "测试代码引用")
-        self.assert_failed_with(result, "responses_websocket.rs:901")
+        self.assert_failed_with(result, "responses_websocket.rs:920")
 
     def test_l2_without_exact_line_fails(self) -> None:
         mutated = self.replace_once(
