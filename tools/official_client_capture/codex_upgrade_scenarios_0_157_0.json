@@ -10,8 +10,8 @@
   },
   "rule_manifest": {
     "path": "tools/official_client_capture/codex_upgrade_rules_0_157_0.json",
-    "sha256": "89f3a19936b1eb1f00f420c297529322f38afcd336029ed1cbbc83ea5eab4cd8",
-    "rule_count": 42
+    "sha256": "7716a8905de88a690f55d75a5abcbd4cf8993e4a7389490e830980909240b4b3",
+    "rule_count": 43
   },
   "variable_contract": [
     {
