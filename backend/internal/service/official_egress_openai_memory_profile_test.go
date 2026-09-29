@@ -10,11 +10,17 @@ package service
 // 可选环境变量：
 //   - SUB2API_OFFICIAL_EGRESS_MEMORY_BODY_MIB：单个请求体大小（MiB，默认 16.8）；
 //   - SUB2API_OFFICIAL_EGRESS_MEMORY_CONCURRENCY：同时转发的请求数（默认 1）；
-//   - SUB2API_OFFICIAL_EGRESS_MEMORY_ROUNDS：重复轮数（默认 1）。
+//   - SUB2API_OFFICIAL_EGRESS_MEMORY_ROUNDS：重复轮数（默认 1）；
+//   - SUB2API_OFFICIAL_EGRESS_MEMORY_REQUESTS_PER_SLOT：每个并发槽在测量窗口内依次转发的次数（默认 1，口径与
+//     过去相同）。默认口径测的是单个请求，而测量前的 runtime.GC 与 debug.FreeOSMemory 是两次 GC，sync.Pool
+//     里的空闲对象这时已被清空；大于 1 时同一进程里的请求一个接一个地到达，测跨请求复用的对象（例如编译器
+//     常驻复用的 zstd 编码器）与请求间留下的垃圾在持续负载下对峰值的影响，累计分配另按请求数平均输出。
 //
 // 测量口径：
-//   - 堆峰值：转发期间每 2 毫秒 runtime.ReadMemStats 采样 HeapInuse 取最大值，减去转发前（请求体已在内存、
-//     已 GC）的 HeapInuse，得到“原文之外的额外驻留”；含原文倍数 = 1 + 额外驻留 / 请求体总字节；
+//   - 堆峰值：转发期间每 2 毫秒 runtime.ReadMemStats 采样 HeapInuse，连同转发结束时的 HeapInuse 取最大值，
+//     减去转发前（请求体已在内存、已 GC）的 HeapInuse，得到“原文之外的额外驻留”；含原文倍数 = 1 + 额外驻留 /
+//     请求体总字节。转发结束时的值也要计入：小正文一次转发只有十毫秒上下、只采到几次，最后一次采样之后的
+//     分配（例如压缩时新建的编码器，转发返回后仍占着堆）会被漏掉；
 //   - 累计分配：TotalAlloc 差值；
 //   - cgroup：读取 /sys/fs/cgroup/memory.current 与 memory.peak（cgroup v2）。memory.peak 从容器创建起单调
 //     递增，所以每次只测一种并发、一轮，并放在全新容器里运行，才能把峰值归因到本次转发；
@@ -54,6 +60,7 @@ const (
 	officialEgressMemoryProfileBodyMiBEnv     = "SUB2API_OFFICIAL_EGRESS_MEMORY_BODY_MIB"
 	officialEgressMemoryProfileConcurrencyEnv = "SUB2API_OFFICIAL_EGRESS_MEMORY_CONCURRENCY"
 	officialEgressMemoryProfileRoundsEnv      = "SUB2API_OFFICIAL_EGRESS_MEMORY_ROUNDS"
+	officialEgressMemoryProfileRequestsEnv    = "SUB2API_OFFICIAL_EGRESS_MEMORY_REQUESTS_PER_SLOT"
 	officialEgressMemoryProfileHistoryMarker  = "__MEMORY_PROFILE_HISTORY__"
 )
 
@@ -210,6 +217,7 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 	bodyMiB := officialEgressMemoryProfileEnvFloat(officialEgressMemoryProfileBodyMiBEnv, 16.8)
 	concurrency := officialEgressMemoryProfileEnvInt(officialEgressMemoryProfileConcurrencyEnv, 1)
 	rounds := officialEgressMemoryProfileEnvInt(officialEgressMemoryProfileRoundsEnv, 1)
+	requestsPerSlot := officialEgressMemoryProfileEnvInt(officialEgressMemoryProfileRequestsEnv, 1)
 	targetBytes := int(bodyMiB * (1 << 20))
 
 	gcPercent := debug.SetGCPercent(-1)
@@ -282,11 +290,21 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 			wg.Add(1)
 			go func(index int) {
 				defer wg.Done()
-				result, err := service.Forward(t.Context(), contexts[index], account, bodies[index])
-				if err == nil && result == nil {
-					err = fmt.Errorf("Forward 返回空结果")
+				// 同一槽依次转发 requestsPerSlot 次（默认 1 次）；正文只读、各次共用，第二次起在窗口内新建上下文。
+				for request := 0; request < requestsPerSlot; request++ {
+					c := contexts[index]
+					if request > 0 {
+						c = newOfficialOpenAIHTTPTestContext(bodies[index], "/v1/responses")
+					}
+					result, err := service.Forward(t.Context(), c, account, bodies[index])
+					if err == nil && result == nil {
+						err = fmt.Errorf("Forward 返回空结果")
+					}
+					if err != nil {
+						errs[index] = err
+						return
+					}
 				}
-				errs[index] = err
 			}(i)
 		}
 		wg.Wait()
@@ -296,6 +314,10 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 
 		var after runtime.MemStats
 		runtime.ReadMemStats(&after)
+		// 采样协程已停止，这里直接把转发结束时的 HeapInuse 并入峰值（见文件头测量口径）。
+		if after.HeapInuse > peakHeapInuse.Load() {
+			peakHeapInuse.Store(after.HeapInuse)
+		}
 		cgroupPeak := readOfficialEgressMemoryProfileCgroup("memory.peak")
 		for i, err := range errs {
 			require.NoError(t, err, "第 %d 个请求转发失败", i+1)
@@ -305,22 +327,26 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		wireBytes := upstream.wireBytes
 		encodings := append([]string(nil), upstream.encodings...)
 		upstream.mu.Unlock()
-		require.Equal(t, concurrency, businessRequests, "上游收到的业务请求数与并发数不一致")
+		require.Equal(t, concurrency*requestsPerSlot, businessRequests, "上游收到的业务请求数与并发数乘每槽请求数不一致")
 
 		extraHeap := float64(peakHeapInuse.Load()) - float64(before.HeapInuse)
+		totalAlloc := float64(after.TotalAlloc - before.TotalAlloc)
 		result := map[string]any{
 			"round":                       round,
 			"concurrency":                 concurrency,
+			"requests_per_slot":           requestsPerSlot,
 			"body_mib_each":               officialEgressMemoryProfileMiB(float64(totalBodyBytes) / float64(concurrency)),
 			"body_mib_total":              officialEgressMemoryProfileMiB(float64(totalBodyBytes)),
 			"wire_mib_total":              officialEgressMemoryProfileMiB(float64(wireBytes)),
 			"wire_content_encodings":      encodings,
 			"heap_inuse_before_mib":       officialEgressMemoryProfileMiB(float64(before.HeapInuse)),
 			"heap_inuse_peak_mib":         officialEgressMemoryProfileMiB(float64(peakHeapInuse.Load())),
+			"heap_inuse_after_mib":        officialEgressMemoryProfileMiB(float64(after.HeapInuse)),
 			"heap_extra_peak_mib":         officialEgressMemoryProfileMiB(extraHeap),
 			"extra_multiple":              math.Round(extraHeap/float64(totalBodyBytes)*100) / 100,
 			"resident_multiple_with_body": math.Round((1+extraHeap/float64(totalBodyBytes))*100) / 100,
-			"total_alloc_mib":             officialEgressMemoryProfileMiB(float64(after.TotalAlloc - before.TotalAlloc)),
+			"total_alloc_mib":             officialEgressMemoryProfileMiB(totalAlloc),
+			"total_alloc_mib_per_request": officialEgressMemoryProfileMiB(totalAlloc / float64(concurrency*requestsPerSlot)),
 			"gc_cycles":                   after.NumGC - before.NumGC,
 			"elapsed_ms":                  elapsed.Milliseconds(),
 			"cgroup_current_before_mib":   officialEgressMemoryProfileCgroupMiB(cgroupBefore),
