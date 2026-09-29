@@ -89,7 +89,7 @@ func buildOfficialJSONRawIndex(body []byte) (*officialJSONRawIndex, error) {
 	}
 	index := &officialJSONRawIndex{
 		body:   body,
-		nodes:  make([]officialJSONRawNode, 0, 64),
+		nodes:  make([]officialJSONRawNode, 0, officialJSONRawCountValues(body)),
 		byHash: make(map[uint64][]int32),
 		seed:   officialJSONRawHashSeed,
 	}
@@ -105,6 +105,67 @@ func buildOfficialJSONRawIndex(body []byte) (*officialJSONRawIndex, error) {
 	index.root = root
 	index.registerComposites(root)
 	return index, nil
+}
+
+// officialJSONRawCountValues 预先数出正文中 JSON 值的个数，即扫描器将要登记的节点数（根值、每个对象成员的
+// 值、每个数组元素；对象键不登记），供节点表一次预留（问题四 M2 清单外副本）。节点表从 64 起按 Go 切片约
+// 1.25 倍反复扩容时，累计分配约为终值的五倍，16.8 MiB 测量形态每建一次索引多分配约 18 MiB。
+//
+// 只在引号外逐字节识别结构字符：对象成员按冒号计，数组元素按数组内逗号加首个元素计；字符串用
+// bytes.IndexByte 跳到结束引号（按前导反斜杠个数识别转义），不逐字节处理。正文合法时结果精确；非法正文
+// 的计数可能不准，只影响预留容量，扫描器照常按需扩容并报告同样的错误。
+func officialJSONRawCountValues(body []byte) int {
+	count := 1
+	inArray := make([]bool, 0, 64)
+	expectFirstItem := false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		if expectFirstItem {
+			expectFirstItem = false
+			if c != ']' {
+				count++
+			}
+		}
+		switch c {
+		case '"':
+			end := i + 1
+			for {
+				closing := bytes.IndexByte(body[end:], '"')
+				if closing < 0 {
+					return count
+				}
+				end += closing
+				backslashes := 0
+				for j := end - 1; j > i && body[j] == '\\'; j-- {
+					backslashes++
+				}
+				if backslashes%2 == 0 {
+					break
+				}
+				end++
+			}
+			i = end
+		case '{':
+			inArray = append(inArray, false)
+		case '[':
+			inArray = append(inArray, true)
+			expectFirstItem = true
+		case '}', ']':
+			if len(inArray) > 0 {
+				inArray = inArray[:len(inArray)-1]
+			}
+		case ':':
+			count++
+		case ',':
+			if len(inArray) > 0 && inArray[len(inArray)-1] {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // officialJSONValidateObject 用与索引扫描器同一套语法（与 encoding/json 对齐）严格校验

@@ -216,13 +216,15 @@ func (d *orderedJSONDocument) encodeSourceOrder() []byte {
 	return d.encodeNames(d.namesInSourceOrder())
 }
 
+// encodeNames 按给定字段名顺序写出顶层对象。
+//
+// 先按实际要写出的内容算出精确长度，再一次分配到位。定型正文通常比 source 多出编译器
+// 注入的身份字段（prompt_cache_key、client_metadata 等），过去按 source 长度预留容量，
+// 最后几次写入必然触发整段扩容：大正文会再分配约两倍正文的新缓冲并复制一遍，且扩容后
+// 的缓冲作为编译结果继续驻留。写出的字节与逐段写入完全相同，只是不再扩容。
 func (d *orderedJSONDocument) encodeNames(names []string) []byte {
-	capacity := 2
-	if d != nil {
-		capacity += len(d.source)
-	}
-	out := bytes.NewBuffer(make([]byte, 0, capacity))
-	_ = out.WriteByte('{')
+	var quoted []byte
+	size := 2
 	written := 0
 	for _, name := range names {
 		value, present := d.value(name)
@@ -230,16 +232,29 @@ func (d *orderedJSONDocument) encodeNames(names []string) []byte {
 			continue
 		}
 		if written > 0 {
-			_ = out.WriteByte(',')
+			size++
 		}
-		quotedName := strconv.AppendQuote(nil, name)
-		_, _ = out.Write(quotedName)
-		_ = out.WriteByte(':')
-		_, _ = out.Write(value)
+		quoted = strconv.AppendQuote(quoted[:0], name)
+		size += len(quoted) + 1 + len(value)
 		written++
 	}
-	_ = out.WriteByte('}')
-	return out.Bytes()
+	out := make([]byte, 0, size)
+	out = append(out, '{')
+	written = 0
+	for _, name := range names {
+		value, present := d.value(name)
+		if !present {
+			continue
+		}
+		if written > 0 {
+			out = append(out, ',')
+		}
+		out = strconv.AppendQuote(out, name)
+		out = append(out, ':')
+		out = append(out, value...)
+		written++
+	}
+	return append(out, '}')
 }
 
 // CompilerOwnedBodyFields 是 prepare 边界从调用方 Body 中抽出的 attempt-local
@@ -260,7 +275,102 @@ func PrepareOfficialCodexAttemptBody(
 	endpointID string,
 	body []byte,
 ) (RequestBody, CompilerOwnedBodyFields, error) {
-	owned := append([]byte(nil), body...)
+	return prepareOfficialCodexAttemptOwnedBody(endpointID, append([]byte(nil), body...))
+}
+
+// PrepareOfficialCodexAttemptRequestBody 与 PrepareOfficialCodexAttemptBody 语义相同，但输入
+// 已经是不可变的 replayable Body 句柄：直接复用句柄内的字节，不再为 attempt 复制整段正文。
+// compiler-owned 字段的删除与注入仍只写入 attempt-local 的 overlay（写时复制），原字节保持
+// 只读。已带 overlay 的句柄按其 ReplayableBytes 的定型字节处理，与“先取字节再调用
+// PrepareOfficialCodexAttemptBody”的结果一致。
+func PrepareOfficialCodexAttemptRequestBody(
+	endpointID string,
+	body RequestBody,
+) (RequestBody, CompilerOwnedBodyFields, error) {
+	if body.jsonDocument() != nil {
+		replayed, ok := body.ReplayableBytes()
+		if !ok {
+			return RequestBody{}, CompilerOwnedBodyFields{}, errors.New("Codex 语义 Body 必须是 replayable bytes")
+		}
+		return prepareOfficialCodexAttemptOwnedBody(endpointID, replayed)
+	}
+	if content := body.jsonObjectMembers(); content != nil {
+		return prepareOfficialCodexAttemptMembersBody(endpointID, content)
+	}
+	view, ok := body.replayableView()
+	if !ok {
+		return RequestBody{}, CompilerOwnedBodyFields{}, errors.New("Codex 语义 Body 必须是 replayable bytes")
+	}
+	return prepareOfficialCodexAttemptOwnedBody(endpointID, view)
+}
+
+// prepareOfficialCodexAttemptMembersBody 是按顶层成员装配的 Body 的语义准备：document 直接由
+// 成员建立，不物化整段正文。成员经过与扫描器相同的逐项校验（键的 JSON 编码可还原为 Name、
+// 值是前后无空白的完整 JSON 值、无重复键），因此得到的字段与扫描物化字节的结果逐项相同；任何
+// 一项无法证明时退回物化字节走原扫描路径，错误与行为与字节入口完全一致。
+func prepareOfficialCodexAttemptMembersBody(
+	endpointID string,
+	content *jsonObjectMembersContent,
+) (RequestBody, CompilerOwnedBodyFields, error) {
+	requestBody := RequestBody{state: &requestBodyState{
+		mode: RequestBodyReplayable, members: content, length: int64(content.length),
+	}}
+	fields := CompilerOwnedBodyFields{Metadata: make(map[string]string)}
+	// 顶层对象至少写成 "{}"，不可能为空白；不抽取 compiler-owned 字段的端点原样交给编译器。
+	if !endpointExtractsCompilerOwnedBody(endpointID) {
+		return requestBody, fields, nil
+	}
+	document, ok := orderedJSONDocumentFromMembers(content.members)
+	if !ok {
+		return prepareOfficialCodexAttemptOwnedBody(endpointID, content.materialize())
+	}
+	if err := extractCompilerOwnedBodyFields(endpointID, document, &fields); err != nil {
+		return RequestBody{}, CompilerOwnedBodyFields{}, err
+	}
+	requestBody.state.document = document
+	return requestBody, fields, nil
+}
+
+// orderedJSONDocumentFromMembers 在能证明与 scanOrderedJSONFields(AppendJSONObjectMembers(members))
+// 结果逐项相同时，直接由成员建立 document；否则返回 false。
+func orderedJSONDocumentFromMembers(members []JSONObjectMember) (*orderedJSONDocument, bool) {
+	fields := make([]orderedJSONField, 0, len(members))
+	fieldIndex := make(map[string]int, len(members))
+	for _, member := range members {
+		end, escaped, err := skipJSONString(member.QuotedName, 0)
+		if err != nil || end != len(member.QuotedName) {
+			return nil, false
+		}
+		name, err := decodeJSONFieldName(member.QuotedName, escaped)
+		if err != nil || name != member.Name {
+			return nil, false
+		}
+		if _, duplicate := fieldIndex[name]; duplicate {
+			// 扫描器会以“字段重复”失败关闭，交给物化字节产出同一错误。
+			return nil, false
+		}
+		if len(member.Value) == 0 || isJSONSpace(member.Value[0]) {
+			return nil, false
+		}
+		// 与 scanOrderedJSONFields 相同：顶层字段值位于第 2 层。
+		valueEnd, err := skipJSONValue(member.Value, 0, 2)
+		if err != nil || valueEnd != len(member.Value) {
+			return nil, false
+		}
+		fieldIndex[name] = len(fields)
+		fields = append(fields, orderedJSONField{name: name, value: json.RawMessage(member.Value)})
+	}
+	return &orderedJSONDocument{
+		fields: fields, fieldIndex: fieldIndex, duplicatesChecked: true,
+	}, true
+}
+
+// prepareOfficialCodexAttemptOwnedBody 只接收此后不再改写的字节（包内副本或调用方移交的
+// 只读字节），解析与抽取逻辑对两个入口完全相同。
+func prepareOfficialCodexAttemptOwnedBody(
+	endpointID string,
+	owned []byte,
+) (RequestBody, CompilerOwnedBodyFields, error) {
 	requestBody := newOwnedReplayableRequestBody(owned)
 	fields := CompilerOwnedBodyFields{Metadata: make(map[string]string)}
 	if len(bytes.TrimSpace(owned)) == 0 || !endpointExtractsCompilerOwnedBody(endpointID) {

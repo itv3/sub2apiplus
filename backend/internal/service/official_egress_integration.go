@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -68,15 +70,88 @@ func resetOfficialEgressRequestBody(req *http.Request, body []byte) {
 	}
 }
 
+// officialEgressJSONMembersContent 是按顶层成员装配的只读请求正文（问题四 M1 第三项）。
+// Finalizer 改写正文时只产出按线序排列的顶层成员，未改动的大字段直接引用改写前正文的区间；
+// 整段字节只在确有读取方读取请求体时才物化一次，物化结果与整段拼接编码逐字节相同。
+type officialEgressJSONMembersContent struct {
+	members []officialegress.JSONObjectMember
+	length  int64
+	once    sync.Once
+	bytes   []byte
+}
+
+func (c *officialEgressJSONMembersContent) materialize() []byte {
+	c.once.Do(func() {
+		c.bytes = officialegress.AppendJSONObjectMembers(make([]byte, 0, c.length), c.members)
+	})
+	return c.bytes
+}
+
+// officialEgressJSONMembersBody 是 officialEgressJSONMembersContent 的读取器：读取行为与对整段
+// 字节的 bytes.Reader 相同，首次 Read 时才物化；Forward HTTP attempt 直接取成员交给编译器，
+// 不经过这里的读取。
+type officialEgressJSONMembersBody struct {
+	content *officialEgressJSONMembersContent
+	reader  *bytes.Reader
+}
+
+func (b *officialEgressJSONMembersBody) Read(p []byte) (int, error) {
+	if b.reader == nil {
+		b.reader = bytes.NewReader(b.content.materialize())
+	}
+	return b.reader.Read(p)
+}
+
+func (b *officialEgressJSONMembersBody) Close() error { return nil }
+
+// resetOfficialEgressRequestBodyMembers 与 resetOfficialEgressRequestBody 相同地同步请求长度、Body
+// 与 GetBody，只是正文按顶层成员装配、延迟物化。成员引用的字节与 resetOfficialEgressRequestBody
+// 装配的字节一样视为只读。顶层对象至少写成 "{}"，不存在空正文分支。
+func resetOfficialEgressRequestBodyMembers(req *http.Request, members []officialegress.JSONObjectMember) {
+	content := &officialEgressJSONMembersContent{
+		members: members, length: int64(officialegress.JSONObjectMembersLength(members)),
+	}
+	req.ContentLength = content.length
+	req.Body = &officialEgressJSONMembersBody{content: content}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return &officialEgressJSONMembersBody{content: content}, nil
+	}
+}
+
+// officialEgressJSONMembersFromRequest 取回按成员装配的请求正文内容；不是按成员装配时返回 nil。
+func officialEgressJSONMembersFromRequest(request *http.Request) *officialEgressJSONMembersContent {
+	if request == nil {
+		return nil
+	}
+	if body, ok := request.Body.(*officialEgressJSONMembersBody); ok {
+		return body.content
+	}
+	if request.GetBody != nil {
+		body, err := request.GetBody()
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = body.Close() }()
+		if members, ok := body.(*officialEgressJSONMembersBody); ok {
+			return members.content
+		}
+	}
+	return nil
+}
+
 // readOfficialEgressRequestBodyBytes 取回 Forward HTTP attempt 请求的完整正文字节，语义与
 // readReplayableHTTPRequestBody 相同：用 officialEgressReplayableBody 装配的请求直接返回原
-// 字节（只读，不复制）；其余情况按已知长度预留空间读取，不再让 io.ReadAll 倍增扩容。
+// 字节（只读，不复制）；按成员装配的请求返回物化后的只读字节；其余情况按已知长度预留空间
+// 读取，不再让 io.ReadAll 倍增扩容。
 func readOfficialEgressRequestBodyBytes(request *http.Request) ([]byte, error) {
 	if request == nil || request.Body == nil || request.Body == http.NoBody {
 		return nil, nil
 	}
 	if replayable, ok := request.Body.(*officialEgressReplayableBody); ok {
 		return replayable.bytes, nil
+	}
+	if members, ok := request.Body.(*officialEgressJSONMembersBody); ok {
+		return members.content.materialize(), nil
 	}
 	if request.GetBody != nil {
 		body, err := request.GetBody()
@@ -86,6 +161,9 @@ func readOfficialEgressRequestBodyBytes(request *http.Request) ([]byte, error) {
 		defer func() { _ = body.Close() }()
 		if replayable, ok := body.(*officialEgressReplayableBody); ok {
 			return replayable.bytes, nil
+		}
+		if members, ok := body.(*officialEgressJSONMembersBody); ok {
+			return members.content.materialize(), nil
 		}
 		return readAllSized(body, request.ContentLength)
 	}

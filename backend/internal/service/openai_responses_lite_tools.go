@@ -94,11 +94,15 @@ func openAIResponsesLiteRequiresFullResponses(body []byte) bool {
 	}
 	input := openAIBodyGet(body, "input")
 	if input.IsArray() {
-		for _, item := range input.Array() {
-			itemType := strings.TrimSpace(item.Get("type").String())
-			if isOpenAIResponsesLiteHostedToolCallType(itemType) {
-				return true
-			}
+		// 逐项遍历而不是 input.Array()：后者为全部 input 项分配结果切片，每次模型能力判定（一次转发多次）
+		// 都按历史长度分配（问题四 M2 清单外副本）。正文已通过 ValidBytes，二者遍历的元素与顺序相同。
+		hostedCall := false
+		input.ForEach(func(_, item gjson.Result) bool {
+			hostedCall = isOpenAIResponsesLiteHostedToolCallType(strings.TrimSpace(item.Get("type").String()))
+			return !hostedCall
+		})
+		if hostedCall {
+			return true
 		}
 	}
 	return false
@@ -346,8 +350,12 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 		if openAIResponsesLiteAlreadyNormalized(index) {
 			return body, false, nil
 		}
-		requestBody = index.decodeObject(index.root)
+		// 对象树只在本函数内按 Lite 契约改写并随即保序拼接编码，其中的值只会被比较或编码进新正文、
+		// 不会保存到函数之外；无转义的长字符串因此以只读视图引用 body，不再把整段正文复制进树
+		// （问题四 M2 清单外副本：官方出站 Lite 改写路径上约 1.2 倍正文的瞬时峰值）。
+		requestBody, _ = index.decodeValueSharingBody(index.root).(map[string]any)
 	} else {
+		index = nil
 		var err error
 		if requestBody, err = decodeOfficialJSONObjectUseNumber(body); err != nil {
 			return body, false, fmt.Errorf("decode responses Lite request body: %w", err)
@@ -357,7 +365,11 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 	if err != nil || !changed {
 		return body, false, err
 	}
-	rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRaw(requestBody, body)
+	// 拼接编码复用同一份索引（问题四 M2-c）：补齐结构摘要后与按原文现场建立的完整索引逐项相同，
+	// 不再为同一正文扫描第二遍。index 为 nil（扫描未通过而 encoding/json 解码成功）时，拼接编码
+	// 与过去一样按原文现场建索引。
+	index.ensureDigests()
+	rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(requestBody, body, index)
 	if err != nil {
 		return body, false, fmt.Errorf("encode responses Lite request body: %w", err)
 	}

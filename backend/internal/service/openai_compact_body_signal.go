@@ -25,6 +25,12 @@ func MarkOpenAINativeCompactionV2(c *gin.Context) {
 // NormalizeCompactionTriggerInputOrder keeps a single compaction trigger as
 // the final Responses input item, as required by the upstream v2 wire format.
 func NormalizeCompactionTriggerInputOrder(body []byte) ([]byte, bool, error) {
+	return normalizeCompactionTriggerInputOrderWithIndex(body, nil)
+}
+
+// normalizeCompactionTriggerInputOrderWithIndex 同 NormalizeCompactionTriggerInputOrder；index 若非 nil 必须是
+// body 扫描成功得到的索引，直接复用，不再为同一正文扫描（问题四 M2-c）。
+func normalizeCompactionTriggerInputOrderWithIndex(body []byte, index *officialJSONRawIndex) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
@@ -32,7 +38,10 @@ func NormalizeCompactionTriggerInputOrder(body []byte) ([]byte, bool, error) {
 	// input 各项，不需要重排时不构建对象树；需要重排时直接在索引上建树，不再第二次
 	// 扫描。非法正文或顶层不是对象时仍走解码路径，让错误行为与原实现一致。
 	var payload map[string]any
-	index, indexErr := buildOfficialJSONRawIndexForDecode(body)
+	var indexErr error
+	if index == nil {
+		index, indexErr = buildOfficialJSONRawIndexForDecode(body)
+	}
 	if indexErr == nil && index.nodes[index.root].kind == officialJSONRawKindObject {
 		if !openAICompactionTriggerNeedsReorder(index) {
 			return body, false, nil

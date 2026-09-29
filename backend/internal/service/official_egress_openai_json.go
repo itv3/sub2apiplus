@@ -83,6 +83,19 @@ func marshalOfficialOpenAIHTTPJSONPreservingRaw(
 	compact bool,
 	original []byte,
 ) ([]byte, error) {
+	return marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(mode, payload, compact, original, nil)
+}
+
+// marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex 与 marshalOfficialOpenAIHTTPJSONPreservingRaw
+// 相同；index 若非 nil 必须是 original 的完整索引（buildOfficialJSONRawIndex），调用方已为解码
+// 建好时直接复用，不再为同一正文扫描第二遍。
+func marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
+	mode string,
+	payload map[string]any,
+	compact bool,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
 	endpointID := officialCodexEndpointResponsesHTTP
 	if compact {
 		endpointID = officialCodexEndpointResponsesCompact
@@ -93,7 +106,7 @@ func marshalOfficialOpenAIHTTPJSONPreservingRaw(
 	if err != nil {
 		return nil, err
 	}
-	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, original)
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, index)
 }
 
 func marshalOfficialOpenAIWSJSONPreservingRaw(
@@ -127,6 +140,15 @@ func marshalOfficialJSONObjectPreservingOrderAndRaw(
 	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, nil, original)
 }
 
+// marshalOfficialJSONObjectPreservingOrderAndRawWithIndex 同上，复用调用方已建好的 original 索引。
+func marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(
+	payload map[string]any,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, nil, original, index)
+}
+
 // marshalOfficialOrderedJSONObjectPreservingRaw 只固定官方结构体可观察的
 // 顶层字段顺序。未变化的嵌套值直接复用原始 JSON 字节；需要局部修改的对象和
 // 数组也会保留其余成员的原始字节与相对顺序，避免画像修正改写用户数据。
@@ -138,12 +160,139 @@ func marshalOfficialOrderedJSONObjectPreservingRaw(
 	order []string,
 	original []byte,
 ) ([]byte, error) {
-	index := officialJSONRawIndexForOriginal(original)
+	return marshalOfficialOrderedJSONObjectPreservingRawWithIndex(payload, order, original, nil)
+}
+
+// marshalOfficialOrderedJSONObjectPreservingRawWithIndex 是带预建索引的入口：index 为 nil 时按
+// original 现场构建（非法或空正文得到 nil，即没有可复用的原始字节），否则必须是 original 的
+// 完整索引。两种入口输出逐字节相同。
+func marshalOfficialOrderedJSONObjectPreservingRawWithIndex(
+	payload map[string]any,
+	order []string,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]byte, error) {
+	if index == nil {
+		index = officialJSONRawIndexForOriginal(original)
+	}
 	root := int32(-1)
-	var originalKeys []string
 	if index != nil {
 		root = index.root
-		originalKeys = index.uniqueKeys(root)
+	}
+	keys := officialJSONOrderedTopLevelKeys(payload, order, index)
+
+	out := make([]byte, 0, len(original)+256)
+	out = append(out, '{')
+	for index2, key := range keys {
+		if index2 > 0 {
+			out = append(out, ',')
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, encodedKey...)
+		out = append(out, ':')
+		child := int32(-1)
+		if index != nil {
+			child = index.memberNode(root, key)
+		}
+		out, err = officialJSONAppendValue(index, out, payload[key], child)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex 与 marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex
+// 采用同一画像字段序，但产出顶层成员而不拼成整段字节，见
+// marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex。
+func marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex(
+	mode string,
+	payload map[string]any,
+	compact bool,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]officialegress.JSONObjectMember, error) {
+	endpointID := officialCodexEndpointResponsesHTTP
+	if compact {
+		endpointID = officialCodexEndpointResponsesCompact
+	}
+	order, err := officialCodexBodyFieldOrderForMode(
+		mode, endpointID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex(payload, order, original, index)
+}
+
+// marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex 与
+// marshalOfficialOrderedJSONObjectPreservingRawWithIndex 采用同一键序与取值规则，但逐个产出顶层
+// 成员（问题四 M1 第三项）：值与原始区间相等时直接引用 original 的该区间（不复制），改动过的值
+// 才新编码。成员依次写出（officialegress.AppendJSONObjectMembers）与整段编码逐字节相同，由差分
+// 测试锁定；键与值的出错顺序也与整段编码一致。
+func marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex(
+	payload map[string]any,
+	order []string,
+	original []byte,
+	index *officialJSONRawIndex,
+) ([]officialegress.JSONObjectMember, error) {
+	if index == nil {
+		index = officialJSONRawIndexForOriginal(original)
+	}
+	root := int32(-1)
+	if index != nil {
+		root = index.root
+	}
+	keys := officialJSONOrderedTopLevelKeys(payload, order, index)
+	members := make([]officialegress.JSONObjectMember, 0, len(keys))
+	for _, key := range keys {
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		child := int32(-1)
+		if index != nil {
+			child = index.memberNode(root, key)
+		}
+		value, err := officialJSONValueBytes(index, payload[key], child)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, officialegress.JSONObjectMember{
+			Name: key, QuotedName: encodedKey, Value: value,
+		})
+	}
+	return members, nil
+}
+
+// officialJSONValueBytes 返回 officialJSONAppendValue 对同一参数会追加的字节：同位置或按内容命中
+// 原始区间时直接返回该区间（引用原文，不复制），否则新编码一份。
+func officialJSONValueBytes(index *officialJSONRawIndex, value any, node int32) ([]byte, error) {
+	if index != nil {
+		if node >= 0 && index.equals(node, value) {
+			return index.raw(node), nil
+		}
+		if pooled := index.lookupComposite(value); pooled >= 0 {
+			return index.raw(pooled), nil
+		}
+	}
+	return officialJSONAppendValue(index, nil, value, node)
+}
+
+// officialJSONOrderedTopLevelKeys 给出拼接编码的顶层键序：先按 order 中出现且 payload 存在的键，
+// 再按原文首次出现顺序补上 order 之外仍存在的键，最后按字典序追加其余新键。
+func officialJSONOrderedTopLevelKeys(
+	payload map[string]any,
+	order []string,
+	index *officialJSONRawIndex,
+) []string {
+	var originalKeys []string
+	if index != nil {
+		originalKeys = index.uniqueKeys(index.root)
 	}
 	known := make(map[string]struct{}, len(order))
 	keys := make([]string, 0, len(payload))
@@ -174,31 +323,7 @@ func marshalOfficialOrderedJSONObjectPreservingRaw(
 		}
 	}
 	sort.Strings(unknown)
-	keys = append(keys, unknown...)
-
-	out := make([]byte, 0, len(original)+256)
-	out = append(out, '{')
-	for index2, key := range keys {
-		if index2 > 0 {
-			out = append(out, ',')
-		}
-		encodedKey, err := json.Marshal(key)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, encodedKey...)
-		out = append(out, ':')
-		child := int32(-1)
-		if index != nil {
-			child = index.memberNode(root, key)
-		}
-		out, err = officialJSONAppendValue(index, out, payload[key], child)
-		if err != nil {
-			return nil, err
-		}
-	}
-	out = append(out, '}')
-	return out, nil
+	return append(keys, unknown...)
 }
 
 // decodeOfficialJSONObjectUseNumberSlow 是 encoding/json 路径的对象解码：保留 JSON 数字

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/gin-gonic/gin"
@@ -268,11 +269,20 @@ var officialOpenAICompactionReasons = map[string]struct{}{
 // 标准第三方请求可以没有 Codex 身份字段；真正的官方 Codex 请求仍由 Finalizer
 // 按入口 Header 严格校验完整身份。
 func captureOfficialOpenAIHTTPBodyContract(body []byte) (*officialOpenAIHTTPBodyContract, error) {
+	return captureOfficialOpenAIHTTPBodyContractWithIndex(body, nil)
+}
+
+// captureOfficialOpenAIHTTPBodyContractWithIndex 同 captureOfficialOpenAIHTTPBodyContract；index 若非 nil
+// 必须是 body 扫描成功得到的索引（只登记节点或完整均可），直接复用，不再为同一正文扫描（问题四 M2-c）。
+func captureOfficialOpenAIHTTPBodyContractWithIndex(body []byte, index *officialJSONRawIndex) (*officialOpenAIHTTPBodyContract, error) {
 	// 索引扫描代替整段解码（docs/bug.md 6.4 第 3 点）：一次只读扫描完成与解码器同一套
 	// 语法的严格校验并定位全部值区间，之后只把契约字段还原成 Go 值，得到与整段解码逐项
 	// 相同的结果；顶层与 item 内的同名键都取最后一次出现。扫描失败或顶层不是对象时用
 	// encoding/json 路径复核，错误值与整段解码完全一致。
-	index, err := buildOfficialJSONRawIndexForDecode(body)
+	var err error
+	if index == nil {
+		index, err = buildOfficialJSONRawIndexForDecode(body)
+	}
 	if err != nil || index.nodes[index.root].kind != officialJSONRawKindObject {
 		if _, slowErr := decodeOfficialJSONObjectUseNumberSlow(body); slowErr != nil {
 			err = slowErr
@@ -357,7 +367,17 @@ func captureOfficialOpenAIHTTPBodyContractForRequest(
 	c *gin.Context,
 	body []byte,
 ) (*officialOpenAIHTTPBodyContract, error) {
-	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, nil)
+}
+
+// captureOfficialOpenAIHTTPBodyContractForRequestWithIndex 同 captureOfficialOpenAIHTTPBodyContractForRequest，
+// index 的约定见 captureOfficialOpenAIHTTPBodyContractWithIndex。
+func captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(
+	c *gin.Context,
+	body []byte,
+	index *officialJSONRawIndex,
+) (*officialOpenAIHTTPBodyContract, error) {
+	contract, err := captureOfficialOpenAIHTTPBodyContractWithIndex(body, index)
 	if err != nil {
 		return nil, err
 	}
@@ -379,6 +399,14 @@ func captureOfficialOpenAIHTTPBodyContractForRequest(
 	contract.promptCacheKeySet = true
 	contract.promptCacheKey = seed
 	return contract, nil
+}
+
+// captureContract 等价于 captureOfficialOpenAIHTTPBodyContractForRequest，复用官方出站 HTTP 转发主干正文
+// 工作区（official_egress_forward_body.go）为 body 建好的索引（问题四 M2-c）；nil 工作区的索引为 nil，
+// 即原样走改造前的入口。方法放在契约所在的本文件：工作区文件只管正文内存，不参与出站定型，不应因引用
+// 契约类型而被出站定型面扫描（tools/check_ledger_completeness.py）计为新的定型面。
+func (b *officialForwardHTTPBody) captureContract(c *gin.Context, body []byte) (*officialOpenAIHTTPBodyContract, error) {
+	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, b.indexFor(body))
 }
 
 // bindGeneratedOfficialOpenAIHTTPBodyContract 绑定 Chat Completions/Messages
@@ -564,7 +592,13 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	)
 	// 派生工具呈现与 Finalizer 共用同一次解码（docs/bug.md 6.4 第 3 点）：工具呈现改写
 	// 后按需重编码得到新的 body，payload 与 body 始终指向同一内容，Finalizer 不再解码。
-	payload, decodeErr := decodeOfficialJSONObjectUseNumber(body)
+	// 解码在正文索引上进行，无转义的长字符串直接引用 body（问题四 M1 第二项）；payload 只在
+	// 本函数内使用，其中的值只会被比较或重新编码进新正文，不会保存到请求之外。同一索引随后
+	// 直接交给拼接编码器，不再为同一正文重复扫描。
+	// 官方出站 HTTP 转发主干的正文工作区已为这一版本的正文建过索引时直接复用（问题四 M2-c）。
+	payload, bodyIndex, decodeErr := decodeOfficialJSONObjectSharingBodyWithIndex(
+		body, officialForwardHTTPBodyFromContext(req.Context()).indexFor(body),
+	)
 	if decodeErr != nil {
 		return nil, result, fmt.Errorf("decode OpenAI official egress body: %w", decodeErr)
 	}
@@ -579,17 +613,22 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			return nil, result, err
 		}
 		if toolPresentationModified {
-			body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(payload, body)
+			body, err = marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(payload, body, bodyIndex)
 			if err != nil {
 				return nil, result, fmt.Errorf("编码 Codex 派生工具呈现：%w", err)
 			}
+			// 正文已换成重编码结果，旧索引不再对应，拼接编码器按新正文现场建索引。
+			bodyIndex = nil
 		}
 	}
-	finalBody, bodyModified, err := finalizeOfficialOpenAIHTTPBodyPayload(
+	// 终态修正改写正文时不再拼成整段字节，而是产出按线序排列的顶层成员（问题四 M1 第三项）：
+	// 未改动的大字段直接引用 body 的区间，编译器按成员定型 wire JSON，整段语义正文只在确有
+	// 读取方（冻结 Executor、诊断等）读取请求体时才物化。未改写时照旧直接使用 body。
+	finalMembers, finalizeModified, err := finalizeOfficialOpenAIHTTPBodyPayloadMembers(
 		payload,
 		body,
+		bodyIndex,
 		plan.OfficialEgressBodyContract,
-		identity,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
 		officialOpenAIHTTPBodyOptions{
 			IsCompact:             plan.IsCompact,
@@ -602,7 +641,7 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	if err != nil {
 		return nil, result, err
 	}
-	bodyModified = bodyModified || toolPresentationModified
+	bodyModified := finalizeModified || toolPresentationModified
 	if bodyModified {
 		result.Modifications = append(result.Modifications,
 			OfficialEgressModification{Kind: "body", Field: "instructions"},
@@ -642,7 +681,18 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 		return nil, result, err
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
-	resetOfficialEgressRequestBody(req, finalBody)
+	// body 是官方出站 HTTP 转发主干工作区最近一次重编码物化的正文时，请求体按成员装配且成员值换成
+	// 其来源（调用方原始正文区间或小段副本，逐字节相同），不再引用这份整段正文，Forward 在上游
+	// attempt 期间即可放下它（问题四 M2-a）。其余情况与过去相同。
+	forwardBody := officialForwardHTTPBodyFromContext(req.Context())
+	if finalizeModified {
+		forwardBody.rebaseFinalMembers(body, finalMembers)
+		resetOfficialEgressRequestBodyMembers(req, finalMembers)
+	} else if members := forwardBody.membersFor(body); members != nil {
+		resetOfficialEgressRequestBodyMembers(req, members)
+	} else {
+		resetOfficialEgressRequestBody(req, body)
+	}
 	return req, result, nil
 }
 
@@ -729,11 +779,76 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 	reasoningDefaults officialOpenAIReasoningDefaults,
 	options officialOpenAIHTTPBodyOptions,
 ) ([]byte, bool, error) {
+	return finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
+		payload, body, nil, contract, identity, reasoningDefaults, options,
+	)
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadWithIndex 同 finalizeOfficialOpenAIHTTPBodyPayload；
+// bodyIndex 若非 nil 必须是 body 的完整索引，拼接编码直接复用它。
+func finalizeOfficialOpenAIHTTPBodyPayloadWithIndex(
+	payload map[string]any,
+	body []byte,
+	bodyIndex *officialJSONRawIndex,
+	contract *officialOpenAIHTTPBodyContract,
+	identity officialOpenAIHTTPIdentity,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) ([]byte, bool, error) {
+	modified, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, reasoningDefaults, options)
+	if err != nil {
+		return nil, false, err
+	}
+	if !modified {
+		return body, false, nil
+	}
+	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRawWithIndex(
+		options.ProfileMode, payload, options.IsCompact, body, bodyIndex,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
+	}
+	return finalBody, true, nil
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadMembers 与 finalizeOfficialOpenAIHTTPBodyPayloadWithIndex
+// 的定型完全相同；改写时不拼成整段字节，而是产出按线序排列的顶层成员，依次写出即与
+// finalizeOfficialOpenAIHTTPBodyPayloadWithIndex 的结果逐字节相同。未改写时返回 (nil, false, nil)，
+// 调用方直接使用 body。
+func finalizeOfficialOpenAIHTTPBodyPayloadMembers(
+	payload map[string]any,
+	body []byte,
+	bodyIndex *officialJSONRawIndex,
+	contract *officialOpenAIHTTPBodyContract,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) ([]officialegress.JSONObjectMember, bool, error) {
+	modified, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, reasoningDefaults, options)
+	if err != nil || !modified {
+		return nil, false, err
+	}
+	members, err := marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex(
+		options.ProfileMode, payload, options.IsCompact, body, bodyIndex,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
+	}
+	return members, true, nil
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadInPlace 就地完成全部定型改写与 call_id 校验，返回正文是否
+// 被改写；编码由调用方按需要的形态（整段字节或顶层成员）完成。
+func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
+	payload map[string]any,
+	contract *officialOpenAIHTTPBodyContract,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) (bool, error) {
 	if contract == nil {
-		return nil, false, errors.New("OpenAI official egress body contract is nil")
+		return false, errors.New("OpenAI official egress body contract is nil")
 	}
 	if payload == nil {
-		return nil, false, errors.New("OpenAI official egress decoded body is nil")
+		return false, errors.New("OpenAI official egress decoded body is nil")
 	}
 	// 解构一次，保持下方定型逻辑的可读性与原实现一致。
 	isCompact := options.IsCompact
@@ -756,7 +871,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 				// Lite 画像没有顶层 instructions；入口显式值和兼容层生成的
 				// 非空系统指令都必须无损投影为 input developer 消息。
 				if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, currentInstructions); err != nil {
-					return nil, false, err
+					return false, err
 				}
 			} else {
 				// 当前字段不是入口契约，也不是兼容层生成的有效语义（例如
@@ -778,7 +893,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 		// 当前画像恢复一次，避免系统指令因中间层改写而丢失。
 		if useResponsesLite {
 			if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, contract.instructions); err != nil {
-				return nil, false, err
+				return false, err
 			}
 		} else {
 			payload["instructions"] = contract.instructions
@@ -789,7 +904,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 		// 时恢复，避免把任意旧链路残留重新带入官方请求。
 		if useResponsesLite {
 			if _, err := moveOfficialOpenAIHTTPInstructionsToInput(payload, contract.generatedInstructions); err != nil {
-				return nil, false, err
+				return false, err
 			}
 		} else {
 			payload["instructions"] = contract.generatedInstructions
@@ -805,7 +920,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 		endpointID,
 	)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	if isCompact {
 		if removed := stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel); len(removed) > 0 {
@@ -819,7 +934,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 	if !isCompact && useResponsesLite {
 		reasoningModified, err := ensureOpenAIResponsesLiteReasoningContext(payload)
 		if err != nil {
-			return nil, false, err
+			return false, err
 		}
 		if reasoningModified {
 			modified = true
@@ -835,7 +950,7 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 			options.UserAgent,
 		)
 		if err != nil {
-			return nil, false, err
+			return false, err
 		}
 		if profileModified {
 			modified = true
@@ -872,19 +987,9 @@ func finalizeOfficialOpenAIHTTPBodyPayload(
 		}
 	}
 	if !reflect.DeepEqual(contract.callIDs, collectOfficialOpenAICallIDs(payload)) {
-		return nil, false, errors.New("OpenAI official egress call_id was modified")
+		return false, errors.New("OpenAI official egress call_id was modified")
 	}
-
-	if !modified {
-		return body, false, nil
-	}
-	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRaw(
-		options.ProfileMode, payload, isCompact, body,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
-	}
-	return finalBody, true, nil
+	return modified, nil
 }
 
 // normalizeDerivedOfficialOpenAIHTTPBody 把第三方 Responses 请求归一化为

@@ -246,8 +246,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	originalBody := body
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
+	// 官方出站 HTTP 路径（不含透传）的正文工作区（问题四 M2，official_egress_forward_body.go）；其余
+	// 路径为 nil，其方法原样调用改造前的函数。
+	var officialForwardBody *officialForwardHTTPBody
 	if officialOpenAIHTTPEnabled {
-		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, originalBody)
+		if !passthroughEnabled {
+			ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, canonicalImageIntentBody)
+		}
+		officialEgressBodyContract, err = officialForwardBody.captureContract(c, originalBody)
 		if err != nil {
 			return nil, err
 		}
@@ -399,7 +405,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if reqBody != nil {
 			return reqBody, nil
 		}
-		decoded, decodeErr := requestView.Decode(c)
+		decoded, decodeErr := officialForwardBody.decodeRequestView(c, requestView)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -839,7 +845,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			var marshalErr error
 			// patch 失效后走整体重编码。必须以当前正文为原始字节基准，否则未被
 			// 改动的嵌套用户数据会被 Go map 编码按字典序重排。
-			body, marshalErr = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
+			body, marshalErr = officialForwardBody.reencodeRequestBody(decoded, &body, &requestView, &reqBody)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
@@ -848,7 +854,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	// 在孤立工具输出过滤与所有正文重建完成后再调整 compaction trigger，
 	// 避免触发项残留在仍需保留的历史项之前。
-	if normalizedBody, changed, normalizeErr := NormalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
+	if normalizedBody, changed, normalizeErr := officialForwardBody.normalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
 		return nil, fmt.Errorf("normalize compaction trigger order: %w", normalizeErr)
 	} else if changed {
 		body = normalizedBody
@@ -1420,6 +1426,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		turnStateScopePending = true
 	}
 	for {
+		// 官方出站 HTTP：定型与上游 attempt 前放下对象树（问题四 M2-a）。
+		officialForwardBody.releaseRequestMap(&reqBody, requestView, body)
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
@@ -1505,6 +1513,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamStart := time.Now()
 		var resp *http.Response
 		if officialForwardPlan != nil {
+			// 上游 attempt（编译、签名、zstd 压缩与发送）期间不持有整段正文（问题四 M2-a）；attempt 之后
+			// 成功路径不再物化正文，需要正文的分支入口先 restore（问题四 M3-a）。
+			officialForwardBody.park(&body, &requestView, &lineageEntryBody)
 			if officialHTTPFallbackPending {
 				resp, err = officialForwardPlan.TransitionHTTPFallback(
 					upstreamReq.Context(), upstreamReq, officialHTTPFallbackTarget,
@@ -1571,6 +1582,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
+			officialForwardBody.restore()
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -1689,7 +1701,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			resp.Body = newResponsesClientToolStreamBody(resp.Body, mapping, maxLineSize)
 		}
 
-		serviceTier := extractOpenAIServiceTierFromBody(body)
+		serviceTier := officialForwardBody.serviceTier(body)
 		// 上游接受后只保留计费需要的标量，避免响应处理期间继续保活完整 input/tools map。
 		reqBody = nil
 
@@ -1704,6 +1716,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
+					officialForwardBody.restore()
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
 					); retry {
@@ -1751,6 +1764,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
+					officialForwardBody.restore()
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
 					); retry {

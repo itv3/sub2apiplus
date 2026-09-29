@@ -88,8 +88,49 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 在工具输出轮次判定不可靠、但帧内工具调用完整覆盖全部输出时按新链放行）；映射只重绑该源码快照的两处引用，
 # 不改变测试、事实或规则语义。TestCandidateTraceCodex0145TurnStateFacts 已重跑通过；
 # TestCandidateTraceCodexTurnStateOwnerReset 因 previous 槽位画像未声明 owner 重置按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M1 第一项）：Forward HTTP attempt 的语义 Body 改为共享终态正文字节，改动
+# `official_egress_identity_authority.go`（prepareOfficialCodexSemanticAttempt 增加可选的共享所有权参数，冻结
+# Executor 仍按原签名复制）；映射只重绑该源码快照，不改变测试、事实或规则语义。
+# TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅条件头按设计
+# 跳过，改动前后一致；candidate_test_trace 单测 13 项通过。
+# 2026-09-29（问题四 M1 第二项）：Finalizer 在正文索引上解码时无转义长字符串直接引用正文、索引与拼接编码共用，
+# 改动 `official_egress_openai_http.go`；映射只重绑该源码快照，不改变测试、事实或规则语义。
+# TestCandidateTraceCodex0145LiteAndPrefixFacts、TurnStateFacts、CompactionDecisions 已重跑通过；
+# GuardianReviewConditionalHeader 与 TurnMetadataSerialization 因 previous 槽位画像未声明对应行为按设计跳过，
+# 改动前后一致。
+# 2026-09-29（问题四 M1 第三项）：Finalizer 的定型结果按顶层成员交接给编译器、不再拼成整段正文，改动
+# `official_egress_openai_http.go`、`official_egress_integration.go`、`official_egress_identity_authority.go` 与
+# `officialegress/compiler.go`；映射只重绑这四份源码快照，不改变测试、事实或规则语义。
+# TestCandidateTraceCodex0145LiteAndPrefixFacts、TurnStateFacts、OAuthFallbackSameInvocation、CompactionDecisions
+# 已重跑通过；GuardianReviewConditionalHeader 与 TurnMetadataSerialization 因 previous 槽位画像未声明对应行为
+# 按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M1 实测补充）：编译器 zstd 压缩改用单并发度编码器并按最坏长度一次预留输出，改动
+# `officialegress/compiler.go`（输出与缺省参数编码器逐字节一致）；映射只重绑该源码快照，不改变测试、事实或
+# 规则语义。TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅
+# 条件头按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M2-c）：官方出站 HTTP 转发主干引入正文工作区，同一版本正文的索引在契约捕获、对象树
+# 解码、保序重编码、compaction 规整与 Finalizer 之间共享，改动 `openai_gateway_forward.go` 与
+# `official_egress_openai_http.go`；映射只重绑这两份源码快照，不改变测试、事实或规则语义。候选验收测试
+# 9 项通过；GuardianReviewConditionalHeader、TurnMetadataSerialization、TurnStateOwnerReset 因 previous 槽位
+# 画像未声明对应行为按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M2-a）：官方出站 HTTP 转发主干（不含透传）的对象树改为共享正文的索引直建，重编码按
+# 成员产出并回指调用方原始正文，Finalizer 成员按来源回指，上游 attempt 期间暂存整段正文、返回后按成员
+# 恢复，改动 `openai_gateway_forward.go` 与 `official_egress_openai_http.go`；映射只重绑这两份源码快照，
+# 不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M3-b）：编译器 zstd 输出缓冲改为按最坏长度的 81% 预留，按原样存储为主的内容（超长或
+# 背靠背的 base64）按原长计入，改动 `officialegress/compiler.go`（输出与改造前逐字节一致）；映射只重绑该
+# 源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M3-a）：官方出站 HTTP 上游 attempt 返回后不再无条件恢复整段正文，成功路径从工作区成员读
+# service_tier，错误处理与 compact 回退分支入口才恢复，改动 `openai_gateway_forward.go`；映射只重绑该源码快照，
+# 不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四 lint 修复）：官方出站 HTTP 重编码入口改为返回新正文，`openai_gateway_forward.go` 的调用恢复为
+# 改造前的 `body, marshalErr = ...` 两值赋值形式（消除 staticcheck S1021），行为与出站字节不变；映射只重绑该源码
+# 快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-09-29（问题四台账门禁修复）：正文工作区的契约捕获方法 captureContract 从 official_egress_forward_body.go 移入
+# 契约所在的 `official_egress_openai_http.go`，工作区文件不再引用契约类型、不被出站定型面扫描计为新的定型面；方法体
+# 不变，映射只重绑该源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "5feea1575f9561e2f5808680e2fb51b22f9820d43f2aa4b3660ff6d41b72ce52"
+    "dfba3e7d40abcebf5ff0890fe485e24b164e2913313879cbc76adf68d9a04bec"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
