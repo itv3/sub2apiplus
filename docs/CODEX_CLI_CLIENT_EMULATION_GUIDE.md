@@ -178,7 +178,7 @@ images、alpha-search、realtime 和条件 Header 只在各自条件成立时产
 - **实现**：只有有效 CA bundle 才进入该分支；变量未设置、空值或证书无效不得按 h2 画像处理。
 - **状态**：✅ 源码部分；抓包充分。
 
-### SPEC-TLS-003 WS ClientHello 扩展顺序与 signature_algorithms
+### SPEC-TLS-003 WS ClientHello 扩展顺序不固定
 
 - **范围**：内置 OpenAI OAuth；WS（rustls）。
 - **规则**：WS ClientHello 的扩展集合为 `0, 5, 10, 11, 13, 23, 35, 43, 45, 51`，不携带 ALPN；扩展顺序每次随机，
