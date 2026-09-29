@@ -104,8 +104,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # TestCandidateTraceCodex0145LiteAndPrefixFacts、TurnStateFacts、OAuthFallbackSameInvocation、CompactionDecisions
 # 已重跑通过；GuardianReviewConditionalHeader 与 TurnMetadataSerialization 因 previous 槽位画像未声明对应行为
 # 按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M1 实测补充）：编译器 zstd 压缩改用单并发度编码器并按最坏长度一次预留输出，改动
+# `officialegress/compiler.go`（输出与缺省参数编码器逐字节一致）；映射只重绑该源码快照，不改变测试、事实或
+# 规则语义。TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅
+# 条件头按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "d1f916dc4751c67f1619aee7fb19df2643b06f9b4ede3422f2c9e2ab399c5f90"
+    "8ca2cd45c6059995e2f546ff6655c98e0acd97a7f597615fcfe17829562e650d"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

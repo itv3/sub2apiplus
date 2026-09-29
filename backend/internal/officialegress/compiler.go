@@ -1084,14 +1084,34 @@ func compileEndpointBody(
 	if !features.EnableRequestCompression {
 		return nil, errors.New("Bundle feature 禁止请求压缩")
 	}
+	return compressCompiledBodyZstd(features.RequestCompressionLevel, compiled)
+}
+
+// compressCompiledBodyZstd 用画像给定的等级把定型正文压成单个 zstd 帧。
+//
+// 两处分配与输出无关，按最小占用设置：
+//   - EncodeAll 每次调用只占用一个编码器，缺省并发度却会在初始化时按 GOMAXPROCS 预建同样数量
+//     的编码器状态（每个约 1 MiB 匹配表），这里固定为 1；并发度只决定编码器池大小。
+//   - 输出缓冲按 MaxEncodedSize 一次预留：缺省从小容量起按约 1.25 倍反复扩容，大正文累计分配约
+//     五倍压缩结果，且最后一次扩容瞬间新旧两块同时存活。EncodeAll 只向 dst 追加，预留容量
+//     不改变输出字节。
+//
+// 输出与缺省参数的新建编码器逐字节一致，由差分测试锁定。
+func compressCompiledBodyZstd(level int, compiled []byte) ([]byte, error) {
 	encoder, err := zstd.NewWriter(
 		nil,
-		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(features.RequestCompressionLevel)),
+		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)),
+		zstd.WithEncoderConcurrency(1),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建 zstd 编码器: %w", err)
 	}
-	out := encoder.EncodeAll(compiled, nil)
+	var dst []byte
+	if len(compiled) > 0 {
+		// 空正文保持 nil 目标缓冲，与过去 EncodeAll(nil, nil) 的返回值完全相同。
+		dst = make([]byte, 0, encoder.MaxEncodedSize(len(compiled)))
+	}
+	out := encoder.EncodeAll(compiled, dst)
 	if err := encoder.Close(); err != nil {
 		return nil, fmt.Errorf("关闭 zstd 编码器: %w", err)
 	}
