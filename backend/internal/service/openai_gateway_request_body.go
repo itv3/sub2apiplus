@@ -490,7 +490,10 @@ func openAIRequestBodyHasTools(body []byte) bool {
 // ids, and opaque extensions). Callers scope this normalization to OpenAI
 // destinations; compatible providers may still consume their own content.
 func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, error) {
-	input := gjson.GetBytes(body, "input")
+	// 判定在零拷贝视图上进行（问题四 M2）：gjson.GetBytes 会把命中的 input 整段复制一份，每个
+	// OpenAI 请求都要为这次只读判定多分配约一倍正文。openAIBodyGet 与 gjson.GetBytes 是同一个解析器、
+	// 同一套路径语义（重复键取第一次出现、宽松容错），只是结果直接引用正文；下面的判定逻辑逐条不变。
+	input := openAIBodyGet(body, "input")
 	if !input.IsArray() {
 		return body, false, nil
 	}
@@ -511,8 +514,8 @@ func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, 
 		return body, false, nil
 	}
 
-	var reqBody map[string]any
-	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
+	reqBody, err := decodeOpenAIReasoningContentReplayBody(body)
+	if err != nil {
 		return body, false, fmt.Errorf("normalize OpenAI reasoning content replay: %w", err)
 	}
 	items, ok := reqBody["input"].([]any)
@@ -540,6 +543,29 @@ func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, 
 		return body, false, fmt.Errorf("serialize normalized OpenAI reasoning content replay: %w", err)
 	}
 	return normalized, true, nil
+}
+
+// decodeOpenAIReasoningContentReplayBody 的结果与 decodeOpenAIJSONUseNumber(body, &map) 逐项相等，
+// 含顶层 null 得到 nil map、非对象报错以及全部错误文本（问题四 M2）。
+//
+// 改写路径只删掉 reasoning 项的 content，再把整棵树按 marshalOpenAIUpstreamJSON 重新编码；树里的
+// 长字符串（加密推理内容、工具输出等）只会被读出并编码进新正文。因此在正文索引上直建对象树，
+// 无转义的长字符串以只读视图引用 body（decodeValueSharingBody），不再把整段正文复制进 map。
+// 索引扫描器的语法只比 encoding/json 严、不比它宽：扫描成功且顶层是对象时 encoding/json 必然
+// 成功且结果逐项相等；其余情况（扫描失败、顶层不是对象）一律交给 decodeOpenAIJSONUseNumber，
+// 得到与原实现完全相同的结果或错误。返回的树只能在本次改写中使用。
+func decodeOpenAIReasoningContentReplayBody(body []byte) (map[string]any, error) {
+	if index, err := buildOfficialJSONRawIndexForDecode(body); err == nil &&
+		index.nodes[index.root].kind == officialJSONRawKindObject {
+		if object, ok := index.decodeValueSharingBody(index.root).(map[string]any); ok {
+			return object, nil
+		}
+	}
+	var reqBody map[string]any
+	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
+		return nil, err
+	}
+	return reqBody, nil
 }
 
 func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
