@@ -1,0 +1,122 @@
+{
+  "base_commit": "562ef0c9b49a75bf5fcd3b482091157e0353a9f8",
+  "changed_path_count": 4,
+  "current_commit": "c865a966fd99a4a14020a5f5f6d2b2931a6eb775",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4460,
+  "frozen_path_count": 1399,
+  "identity_sha256": "2dcfb4246353b1ddb1280652111c1127f7922a1961164885e7fc0335d8e89db7",
+  "issued_at_utc": "2026-09-29T00:27:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-vc6-catalog-promotion-retire-20260929-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "predecessor_sha256s": [
+        "2c7dbbc13027dc2158796d13763acd1742a062885bb9e2458ef75140abc7414c"
+      ],
+      "reason": "登记 VC-6 两个 Catalog 提交的冻结承接边：production tree 同步（提交 291714138，Catalog 晋升为 Active=0.157.0／Previous=0.154.0，ReleaseGraph 切到 c91fad90…）与 0.151.0 退休（提交 c865a966f，按 0.154 轮先例确定性裁剪 active snapshot catalog 为 e98dbb81…，selector 切换并记为本轮 Campaign 的 retirement）；两者已由 0.157 终态收据与晋升／激活／RemovalReceipt 阶段收据证明，历史 ReleaseGraph 与历史 SnapshotCatalog 逐字不变，0.151.0 画像字节按 §4.6.7 第 1 类原地保留 path=backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v10-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v11-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v12-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v13-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r3-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r4-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r5-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v3-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v4-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v5-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v6-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v7-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r3-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r5-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r6-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r7-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-v14r5-production-tree-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc6-retire-01491-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r2-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r3-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r4-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r5-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b2321a599f350eb41c515fd0c3026107f64ec468d163d403a803447c24d8e884"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "predecessor_sha256s": [
+        "ba931a1971237482a13ffc6474369516946dcb04413146eff2727529cf7a7063"
+      ],
+      "reason": "登记 VC-6 两个 Catalog 提交的冻结承接边：production tree 同步（提交 291714138，Catalog 晋升为 Active=0.157.0／Previous=0.154.0，ReleaseGraph 切到 c91fad90…）与 0.151.0 退休（提交 c865a966f，按 0.154 轮先例确定性裁剪 active snapshot catalog 为 e98dbb81…，selector 切换并记为本轮 Campaign 的 retirement）；两者已由 0.157 终态收据与晋升／激活／RemovalReceipt 阶段收据证明，历史 ReleaseGraph 与历史 SnapshotCatalog 逐字不变，0.151.0 画像字节按 §4.6.7 第 1 类原地保留 path=backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v10-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v11-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v12-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v13-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r3-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r4-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r5-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v3-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v4-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v5-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v6-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v7-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r3-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r5-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r6-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r7-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-v14r5-production-tree-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r2-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r3-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r4-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r5-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "c91fad9040eb975b0a6faa58da4f6325f1cc73c52ee21af73449b6ae54b05cf6"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalogdata/runtime/release-graphs/c91fad9040eb975b0a6faa58da4f6325f1cc73c52ee21af73449b6ae54b05cf6.json",
+    "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/e98dbb812e40ee0556b0fe7fc142c6db2c9c93f967b9a01ed6554ac3725bc099.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
