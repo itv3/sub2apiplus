@@ -204,13 +204,18 @@ func TestOfficialForwardHTTPBodyParkRestoresIdenticalBody(t *testing.T) {
 	require.NotEmpty(t, workspace.membersFor(body), "Finalizer 不改写时可按成员装配")
 	require.Nil(t, workspace.membersFor(append([]byte(nil), body...)), "不是同一份正文时不提供成员")
 
-	restore := workspace.park(&body, &view, &lineage)
+	require.Equal(t, "priority", *workspace.serviceTier(body), "未暂存时按正文读 service_tier")
+
+	workspace.park(&body, &view, &lineage)
 	require.Nil(t, body, "attempt 期间放下正文")
 	require.Nil(t, lineage, "attempt 期间放下 lineage 基准")
 	require.Nil(t, view.body, "attempt 期间放下请求视图")
 	require.Nil(t, workspace.index, "attempt 期间放下正文索引")
 	require.Nil(t, workspace.rebuilt)
-	restore()
+	require.Equal(t, "priority", *workspace.serviceTier(body), "暂存期间从成员读出与正文相同的 service_tier")
+	workspace.park(&body, &view, &lineage)
+	require.True(t, workspace.parked, "已暂存时重复暂存不生效")
+	workspace.restore()
 	require.Equal(t, expected, string(body), "恢复后正文逐字节相同")
 	require.True(t, officialForwardSameBody(body, lineage), "lineage 基准恢复为同一份正文")
 	require.True(t, officialForwardSameBody(body, view.body), "请求视图恢复为同一份正文")
@@ -218,18 +223,36 @@ func TestOfficialForwardHTTPBodyParkRestoresIdenticalBody(t *testing.T) {
 	require.Equal(t, expectedView.ServiceTier, view.ServiceTier)
 	require.Equal(t, expectedView.PromptCacheKey, view.PromptCacheKey)
 	require.True(t, officialForwardSameBody(body, workspace.rebuilt), "恢复后仍可按来源回指")
+	restored := body
+	workspace.restore()
+	require.True(t, officialForwardSameBody(restored, body), "重复恢复不再物化")
+	require.Nil(t, workspace.parkedBody, "恢复后不再持有 Forward 变量地址")
 
 	other := append([]byte(nil), body...)
 	otherView := newOpenAIRequestView(other)
 	otherLineage := body
-	noop := workspace.park(&other, &otherView, &otherLineage)
-	noop()
-	require.NotNil(t, other, "不是重编码正文时不放下")
+	workspace.park(&other, &otherView, &otherLineage)
+	require.False(t, workspace.parked, "不是重编码正文时不放下")
+	require.NotNil(t, other)
 	require.NotNil(t, otherLineage)
 
 	var nilWorkspace *officialForwardHTTPBody
-	nilWorkspace.park(&other, &otherView, &otherLineage)()
+	nilWorkspace.park(&other, &otherView, &otherLineage)
+	nilWorkspace.restore()
 	require.NotNil(t, other)
+	require.Nil(t, nilWorkspace.serviceTier([]byte(`{"a":1}`)))
+	require.Equal(t, "flex", *nilWorkspace.serviceTier([]byte(`{"service_tier":"flex"}`)))
+
+	noTier, err := decodeOfficialJSONObjectUseNumber(ingress)
+	require.NoError(t, err)
+	delete(noTier, "service_tier")
+	_, tierless := newOfficialForwardHTTPBody(t.Context(), ingress)
+	tierBody, tierView, tierReq := ingress, newOpenAIRequestView(ingress), noTier
+	require.NoError(t, tierless.reencodeRequestBody(noTier, &tierBody, &tierView, &tierReq))
+	tierLineage := tierBody
+	tierless.park(&tierBody, &tierView, &tierLineage)
+	require.True(t, tierless.parked)
+	require.Nil(t, tierless.serviceTier(tierBody), "没有 service_tier 时与按正文读一致为 nil")
 
 	mapped := map[string]any{"a": 1}
 	workspace.releaseRequestMap(&mapped, newOpenAIRequestView(other), body)

@@ -397,6 +397,46 @@ func officialForwardBodyCases(t *testing.T) []officialForwardBodyCase {
 		},
 		{name: "invalid_json", body: func(*testing.T) []byte { return []byte(`{"model":"gpt-5.6-luna","input":[`) }, context: officialContext},
 		{
+			// 原生 compaction v2：首个 attempt 返回 200 但 SSE 里 response.failed（上下文超限），按 compact
+			// 回退模型重试一次，覆盖非流式 compact 回退分支。
+			name: "compaction_v2_fallback_retry",
+			body: func(*testing.T) []byte {
+				return []byte(`{"model":"gpt-5.5","stream":false,"instructions":"compact-test","input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
+			},
+			context: func(_ *testing.T, body []byte) *gin.Context {
+				c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+				c.Request.Header = http.Header{"Content-Type": []string{"application/json"}}
+				MarkOpenAINativeCompactionV2(c)
+				// 直接走官方出站 HTTP（不先尝试 WS），覆盖正文工作区所在的路径。
+				setOfficialCodexForceHTTPFallback(c, true)
+				return c
+			},
+			account: newOpenAIOAuthNamespaceTestAccount,
+			service: func(upstream HTTPUpstream) *OpenAIGatewayService {
+				svc := &OpenAIGatewayService{
+					cfg: &config.Config{
+						Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}},
+						Gateway:  config.GatewayConfig{OpenAICompactModel: "gpt-5.4"},
+					},
+					httpUpstream: upstream,
+				}
+				// 预载模型清单：否则异步能力刷新可能在重试前后任意时刻完成，推理默认值是否已知随之
+				// 摇摆，两次运行的 turn metadata 会因时序而不同，与正文处理无关。
+				svc.openaiModelCapabilities.replaceFromManifest(5108, []byte(codexModelsRecorderManifest))
+				return svc
+			},
+			responses: []func() *http.Response{func() *http.Response {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_compact_1"}},
+					Body: io.NopCloser(strings.NewReader("event: response.failed\n" +
+						`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"context window exceeded"}}}` + "\n\n")),
+				}
+			}},
+			fallback: officialForwardBodyJSON(http.StatusOK,
+				`{"id":"resp_compact","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`),
+		},
+		{
 			name: "third_party_curl_oauth",
 			body: func(*testing.T) []byte {
 				return []byte(`{"model":"gpt-5.5","stream":false,"instructions":"test","parallel_tool_calls":false,"reasoning":{"effort":"medium","summary":"auto"},"input":[{"type":"message","role":"user","namespace":"remove","content":[{"type":"input_text","text":"hello","namespace":"nested-keep"}]}]}`)

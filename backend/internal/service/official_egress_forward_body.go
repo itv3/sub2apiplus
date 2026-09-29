@@ -51,6 +51,15 @@ type officialForwardHTTPBody struct {
 	members []officialegress.JSONObjectMember
 	rebuilt []byte
 	spans   []officialForwardBodySpan
+
+	// park 到 restore 之间的暂存状态：Forward 局部变量的地址、请求视图的其余字段，以及哪些变量被放下。
+	parked        bool
+	parkedBody    *[]byte
+	parkedView    *openAIRequestView
+	viewState     openAIRequestView
+	viewParked    bool
+	parkedLineage *[]byte
+	lineageParked bool
 }
 
 // officialForwardBodySpan 记录物化正文中一个成员值的区间 [start, end) 及其来源切片；来源与该区间
@@ -303,39 +312,67 @@ func (b *officialForwardHTTPBody) membersFor(body []byte) []officialegress.JSONO
 	return b.members
 }
 
-// park 在上游 attempt（编译、签名、zstd 压缩与发送）前放下 Forward 对整段正文的引用，返回的函数在
-// attempt 返回后恢复（问题四 M2-a）。只有当前正文正是最近一次重编码物化出的那份时才放下：此时请求体
-// 已按成员装配、成员值引用调用方原始正文或小段副本，不再引用它；正文、请求视图、lineage 基准与该
-// 正文的索引一并放下，恢复时按成员重新物化出逐字节相同的正文放回原处，供错误处理与重试使用。其余
-// 情况与 nil 工作区一样什么都不做。
-func (b *officialForwardHTTPBody) park(body *[]byte, view *openAIRequestView, lineage *[]byte) func() {
-	if b == nil || b.rebuilt == nil || !officialForwardSameBody(*body, b.rebuilt) {
-		return func() {}
+// park 在上游 attempt（编译、签名、zstd 压缩与发送）前放下 Forward 对整段正文的引用（问题四 M2-a）。只有
+// 当前正文正是最近一次重编码物化出的那份时才放下：此时请求体已按成员装配、成员值引用调用方原始正文或
+// 小段副本，不再引用它；正文、请求视图、lineage 基准与该正文的索引一并放下。nil 工作区、已暂存或其余
+// 情况什么都不做。
+//
+// attempt 返回后不再无条件恢复（问题四 M3-a）：成功路径只需要 service_tier（serviceTier 从成员读出），
+// 响应流式期间也不再保活整段正文；错误处理、compact 回退与重试这些需要正文的分支入口调用 restore。
+func (b *officialForwardHTTPBody) park(body *[]byte, view *openAIRequestView, lineage *[]byte) {
+	if b == nil || b.parked || b.rebuilt == nil || !officialForwardSameBody(*body, b.rebuilt) {
+		return
 	}
-	parkedView := *view
-	viewParked := officialForwardSameBody(parkedView.body, b.rebuilt)
-	lineageParked := officialForwardSameBody(*lineage, b.rebuilt)
-	parkedView.body = nil
+	b.parked = true
+	b.parkedBody, b.parkedView, b.parkedLineage = body, view, lineage
+	b.viewState = *view
+	b.viewParked = officialForwardSameBody(b.viewState.body, b.rebuilt)
+	b.lineageParked = officialForwardSameBody(*lineage, b.rebuilt)
+	b.viewState.body = nil
 	*body = nil
-	if viewParked {
+	if b.viewParked {
 		*view = openAIRequestView{}
 	}
-	if lineageParked {
+	if b.lineageParked {
 		*lineage = nil
 	}
 	b.rebuilt, b.spans = nil, nil
 	b.index, b.indexBody = nil, nil
-	return func() {
-		b.rebuilt, b.spans = officialForwardMaterializeMembers(b.members)
-		*body = b.rebuilt
-		if viewParked {
-			parkedView.body = b.rebuilt
-			*view = parkedView
-		}
-		if lineageParked {
-			*lineage = b.rebuilt
+}
+
+// restore 按成员重新物化出与暂存前逐字节相同的正文，放回 park 时放下的正文、请求视图与 lineage 基准，
+// 并恢复按来源回指的能力。可重复调用；nil 工作区或未暂存时什么都不做。
+func (b *officialForwardHTTPBody) restore() {
+	if b == nil || !b.parked {
+		return
+	}
+	b.parked = false
+	b.rebuilt, b.spans = officialForwardMaterializeMembers(b.members)
+	*b.parkedBody = b.rebuilt
+	if b.viewParked {
+		view := b.viewState
+		view.body = b.rebuilt
+		*b.parkedView = view
+	}
+	if b.lineageParked {
+		*b.parkedLineage = b.rebuilt
+	}
+	b.parkedBody, b.parkedView, b.parkedLineage = nil, nil, nil
+	b.viewState = openAIRequestView{}
+}
+
+// serviceTier 与 extractOpenAIServiceTierFromBody(body) 结果相同。正文已暂存时从产出它的顶层成员读出：
+// 成员名唯一，gjson 取顶层 service_tier 的第一次出现即该成员的值；读出的小值先复制，不引用正文。
+func (b *officialForwardHTTPBody) serviceTier(body []byte) *string {
+	if b == nil || !b.parked {
+		return extractOpenAIServiceTierFromBody(body)
+	}
+	for _, member := range b.members {
+		if member.Name == "service_tier" {
+			return normalizeOpenAIServiceTier(gjson.Parse(string(member.Value)).String())
 		}
 	}
+	return nil
 }
 
 // normalizeCompactionTriggerInputOrder 等价于 NormalizeCompactionTriggerInputOrder，复用 body 的索引。
