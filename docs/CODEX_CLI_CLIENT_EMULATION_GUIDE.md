@@ -2,7 +2,7 @@
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
 >
-> **当前版本**：Active 为 `codex-cli 0.154.0`，Previous 为 `codex-cli 0.151.0`；`0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2。
+> **当前版本**：Active 为 `codex-cli 0.157.0`，Previous 为 `codex-cli 0.154.0`；`0.151.0` 与 `0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2。第二部分的规则正文与现状描述仍是 0.154.0 基线：0.157.0 的 25 条受影响规则（change 9、condition_change 9、add 4、delete 3）以 [`0.157 终态收据`](egress/maintenance/CODEX_CLI_0154_TO_0157_TERMINAL_STATE_RECEIPT.json) 所绑定 Campaign 的已批准迁移清单为准，第二部分同步另行进行。
 >
 > **权威入口**：共享目标、证据生命周期、升级、发布与回滚以
 > [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 为准；依赖基线见
@@ -943,7 +943,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.154.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.157.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -987,37 +987,38 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.154.0 active 画像与发布执行契约
+## 3.2 Codex 0.157.0 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.154.0；`31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
-| previous | 0.151.0；`dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
+| active | 0.157.0；`3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d` | 16 个静态端点（含 `wham_settings_user`、新增 `wham_accounts_check`，legacy compact 已删除）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
+| previous | 0.154.0；`31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
 
-当前 Active 的官方目标身份为 tag `rust-v0.154.0`（commit
-`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`）、`aarch64-unknown-linux-musl` 包
-SHA-256 `97d93e11df72d3c26772db019e6ea8bb72c246500d46b98c760839f3240355e6` 和 ARM64 二进制
-SHA-256 `9b7c1c7abdc26fc3c4f47c77656a8e9121def5483dbae830ef1ee561758448a9`。原始证据源为 Campaign
-`c0154-formal-vc1-recapture-20260915t230327z` 的 attempt `20260915T231339Z-1e2ec44a775a2970`；
-29 个 Job 全部 complete，权限、秘密扫描、环境恢复及 ARM64 经 DMIT 的出口门禁均已封存。该 Campaign
-的官方证据由 `reuse-official-evidence` 只读导入，后续分类、验收、生产激活与 0.149.1 退休统一由
-`c0154-formal-vc5-v14r5-20260922t073614z` 的 canonical 链承接（候选 `c0154-candidate-v14r5`，
-attempt `20260922T081201Z-6b19d215a302dbd4`，42 条规则中 41 条 inherit、1 条 change）。
+当前 Active 的官方目标身份为 tag `rust-v0.157.0`（commit
+`00c972ed5d6ff6499317fd41b7f23605b8e6850d`）、`aarch64-unknown-linux-musl` 包
+SHA-256 `c1c36beab0b4f72779adf53ba9e9e494bf7cbfbe4f3506a08ff67a24f5f00d08` 和 ARM64 二进制
+SHA-256 `2e43362b5064a4d40e6a8f9fe00d6438c5447c20f41ed1659cc2e71258efd21f`。原始证据源为 Campaign
+`c01570-formal-vc1-r2-20260926t084354z` 的 attempt `20260926T094510Z-ce907a4fa1d25931`；
+32 个官方 Job 全部 complete（该 Campaign 此后在候选阶段因环境探针失败被标记为环境污染，与官方证据无关）。
+该 Campaign 的官方证据由 `reuse-official-evidence` 只读导入，后续分类、验收、生产激活与 0.151.0 退休统一由
+`c01570-formal-vc1-r2-20260926t194249z` 的 canonical 链承接（候选 `c01570-candidate-r5`，
+attempt `20260928T151502Z-d3d97fdb870367d3`；46 项迁移为 inherit 21、change 9、condition_change 9、add 4、
+delete 3，目标规则 43 条）。
 
-VC-6 切换演练在 ARM64 上完成：退休 0.149.1 运行投影后重建的切换镜像 ID 为
-`sha256:3429200a5cb9d75edcb4115c515132bd3af9c94d5f85d8ef1716842020b56cf1`，四阶段激活演练所用镜像为
-`sha256:d3da9a8a7ec7313e18dfae02675506d36198d8b60ca7f4a6961b1aa9dad49a90`，固定回滚镜像为
-`ghcr.io/itv3/sub2apiplus@sha256:298b5933740a379c1f18816adfb662e780c960e1641953e44c8b0ce4657b74ec`；
-canonical checkpoint 为 `00000008`，执行集合为空。VC-6 收口后发版 v0.2.4-7，BWG 与 ARM64 已于
-2026-09-22 按标准部署流程切到 `ghcr.io/itv3/sub2apiplus:0.2.4-7`（多架构 index
-`sha256:85f977225263905d5d9d1d684bb2cf505a20013b9960d6d1bdcdc821d47cfdf1`），这是当前生产镜像。机器事实分别见
-[`0.149.1 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
-和 [`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
-0.149.1 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，两份画像字节因被
-`0.147→0.149.1` 终态收据登记为逐文件校验制品而原地保留，不得据此认为文件已删除。
+VC-6 在 ARM64 上完成：四阶段激活（canary → 切换 → 回滚 → 恢复）所用镜像为
+`sha256:63979e45db6bfba1a7ca704bf7507592170381a9c3a83811e11afea00915549b`，退休 0.151.0 运行投影后重建的切换镜像
+ID 为 `sha256:a4869b79e32bd900dd51baf1b697dec2f848e952fa4d1f766264173c2b062e69`，固定回滚镜像为 v0.2.4-7
+`ghcr.io/itv3/sub2apiplus@sha256:85f977225263905d5d9d1d684bb2cf505a20013b9960d6d1bdcdc821d47cfdf1`（0.154.0）；
+canonical checkpoint 为 `00000032`，执行集合为空。ARM64 当前运行本地构建的切换镜像；0.157 尚未发版，最新发布
+镜像仍是 v0.2.4-7（0.154.0），发版与 BWG 等生产机更新按发布流程另行批准。机器事实分别见
+[`0.151.0 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0154_TO_0157_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
+和 [`0.157 终态收据`](egress/maintenance/CODEX_CLI_0154_TO_0157_TERMINAL_STATE_RECEIPT.json)。
+0.151.0 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，画像字节因被 `0.149.1→0.151` 终态收据
+登记为 `runtime_catalog.active_profile` 而原地保留；此前退休的 0.149.1 两份画像同样原地保留，仍由
+`0.151→0.154` 终态收据批准。不得据此认为这些文件已删除。
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
 
@@ -1134,7 +1135,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.151.0／0.154.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.154.0／0.157.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |
