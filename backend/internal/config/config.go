@@ -1312,6 +1312,10 @@ type GatewayOpenAIWSConfig struct {
 	AllowStoreRecovery bool `mapstructure:"allow_store_recovery"`
 	// IngressPreviousResponseRecoveryEnabled: ingress 模式收到 previous_response_not_found 时，是否允许自动去掉 previous_response_id 重试一次（默认 true）
 	IngressPreviousResponseRecoveryEnabled bool `mapstructure:"ingress_previous_response_recovery_enabled"`
+	// ToolContinuationFullHistoryFallbackEnabled: WS 入站遇到无法判定轮次归属的工具输出时，若帧内没有
+	// previous_response_id 且工具调用完整覆盖全部输出（断线后客户端重发的完整历史），按完整历史开新链
+	// 放行；关闭时恢复 1008 失败关闭（默认 true）
+	ToolContinuationFullHistoryFallbackEnabled bool `mapstructure:"tool_continuation_full_history_fallback_enabled"`
 	// StoreDisabledConnMode: store=false 且无可复用会话连接时的建连策略（strict/adaptive/off）
 	// - strict: 强制新建连接（隔离优先）
 	// - adaptive: 仅在高风险失败后强制新建连接（性能与隔离折中）
@@ -2477,6 +2481,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.force_http", false)
 	viper.SetDefault("gateway.openai_ws.allow_store_recovery", false)
 	viper.SetDefault("gateway.openai_ws.ingress_previous_response_recovery_enabled", true)
+	viper.SetDefault("gateway.openai_ws.tool_continuation_full_history_fallback_enabled", true)
 	viper.SetDefault("gateway.openai_ws.store_disabled_conn_mode", "strict")
 	viper.SetDefault("gateway.openai_ws.store_disabled_force_new_conn", true)
 	viper.SetDefault("gateway.openai_ws.prewarm_generate_enabled", false)

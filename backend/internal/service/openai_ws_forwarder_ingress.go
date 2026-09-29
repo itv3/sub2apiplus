@@ -61,6 +61,12 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
+// openAIWSToolContinuationFullHistoryFallbackEnabled 表示断线后客户端重发完整历史、工具输出
+// 轮次无法判定时，是否按完整历史开新链放行；关闭时保持 1008 失败关闭。
+func (s *OpenAIGatewayService) openAIWSToolContinuationFullHistoryFallbackEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ToolContinuationFullHistoryFallbackEnabled
+}
+
 type openAIWSLeaseRetirementAware interface {
 	ShouldRetire() bool
 }
@@ -1774,13 +1780,31 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					classifyErr,
 				)
 			}
+			// 断线重连是新会话，没有上一轮待回传 call_id 可用于消歧；客户端重发的完整历史
+			// 若自身完整（没有续链锚点、每个工具输出都有对应的工具调用），就不再区分本轮与
+			// 历史工具输出，原样按携带完整历史的普通轮次开新链。只在这种情况放行，其余照旧拒绝。
+			fullHistoryFallback := false
 			if !reliable {
-				return NewOpenAIWSClientCloseError(
-					coderws.StatusPolicyViolation,
-					"official egress websocket tool continuation turn is ambiguous",
-					errOpenAIOfficialEgressWSToolOutputTurnAmbiguous,
+				fullHistoryFallback = s.openAIWSToolContinuationFullHistoryFallbackEnabled() &&
+					currentPreviousResponseID == "" &&
+					AnalyzeToolCallOutputContextCoverageBytes(currentPayload).ConcreteContextCoversAllCallIDs
+				if !fullHistoryFallback {
+					egressContext.openAIWSDerived.setFullHistoryFallback(false)
+					return NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						"official egress websocket tool continuation turn is ambiguous",
+						errOpenAIOfficialEgressWSToolOutputTurnAmbiguous,
+					)
+				}
+				logOpenAIWSModeInfo(
+					"ingress_ws_tool_continuation_ambiguous_fallback account_id=%d turn=%d conn_id=%s reason=concrete_context_covers_all action=full_history_new_chain",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
 				)
+				hasCurrentToolOutput = false
 			}
+			egressContext.openAIWSDerived.setFullHistoryFallback(fullHistoryFallback)
 			toolSignals.HasFunctionCallOutput = hasCurrentToolOutput
 		}
 		if toolSignals.HasFunctionCallOutput {

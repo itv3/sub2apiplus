@@ -84,8 +84,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # turn_state_chain 账号 owner 变化重置三条事实，删除 legacy compact 回送通道与 legacy 压缩决策两条事实
 # （随 SPEC-EP-007/014/020 删除）；另把 openai_gateway_forward.go 源码快照重绑到加入 legacy compact
 # 发布判定后的版本（OAuth 回退事实覆盖的路径行为不变）。受影响候选验收测试已在叠加 VC-3 目录的集成树重跑。
+# 2026-09-29：WS 入站工具续接“完整历史兜底”修复改动 `official_egress_openai_ws.go`（断线重连后重发的完整历史
+# 在工具输出轮次判定不可靠、但帧内工具调用完整覆盖全部输出时按新链放行）；映射只重绑该源码快照的两处引用，
+# 不改变测试、事实或规则语义。TestCandidateTraceCodex0145TurnStateFacts 已重跑通过；
+# TestCandidateTraceCodexTurnStateOwnerReset 因 previous 槽位画像未声明 owner 重置按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "572f49411e6cdf533a4aa21e592546dad0349bc1eb54a8ea1d8080202d4bb104"
+    "5feea1575f9561e2f5808680e2fb51b22f9820d43f2aa4b3660ff6d41b72ce52"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

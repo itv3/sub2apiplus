@@ -375,6 +375,10 @@ gateway:
     allow_store_recovery: false
     # ingress 模式收到 previous_response_not_found 时，自动去掉 previous_response_id 重试一次（默认 true）
     ingress_previous_response_recovery_enabled: true
+    # 断线后客户端重发完整历史、工具输出轮次无法判定时，若帧内工具调用完整覆盖全部输出，
+    # 按完整历史开新链放行；关闭时恢复 1008 拒绝（默认 true）
+    # 环境变量：GATEWAY_OPENAI_WS_TOOL_CONTINUATION_FULL_HISTORY_FALLBACK_ENABLED=true
+    tool_continuation_full_history_fallback_enabled: true
     # store=false 且无可复用会话连接时的策略：
     # strict=强制新建连接（隔离优先），adaptive=仅在高风险失败后强制新建，off=尽量复用（性能优先）
     store_disabled_conn_mode: strict

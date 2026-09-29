@@ -680,6 +680,9 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds != 300 {
 		t.Fatalf("Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = %d, want 300", cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds)
 	}
+	if !cfg.Gateway.OpenAIWS.ToolContinuationFullHistoryFallbackEnabled {
+		t.Fatalf("Gateway.OpenAIWS.ToolContinuationFullHistoryFallbackEnabled = false, want true")
+	}
 	if cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey != 64 {
 		t.Fatalf("Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey = %d, want 64", cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey)
 	}

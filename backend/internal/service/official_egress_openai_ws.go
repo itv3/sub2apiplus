@@ -54,6 +54,48 @@ type officialOpenAIWSDerivedState struct {
 	// function_call/tool_call。客户端断线后重发完整历史时，逐项 turn_id
 	// 可能已经丢失；这些会话级 call_id 是仍然可信的消歧锚点。
 	pendingToolCallIDs map[string]struct{}
+	// fullHistoryFallback 只由 WS 入站在每轮判定时写入：工具输出的轮次归属无法可靠判定，
+	// 但帧内没有 previous_response_id，且每个工具输出都能在同一帧里找到对应的工具调用，
+	// 即断线后客户端重发的完整历史。此时本轮不做工具续接收敛，把全部工具输出视为历史，
+	// 按携带完整历史的普通轮次在新连接上开新链。其他入口从不写这个标记，保持失败关闭。
+	fullHistoryFallback bool
+}
+
+// setFullHistoryFallback 记录本轮是否按“断线后重发的完整历史”开新链。
+func (s *officialOpenAIWSDerivedState) setFullHistoryFallback(active bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.fullHistoryFallback = active
+	s.mu.Unlock()
+}
+
+func (s *officialOpenAIWSDerivedState) fullHistoryFallbackActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fullHistoryFallback
+}
+
+// applyOfficialOpenAIWSFullHistoryFallback 对入站已确认的“断线后重发完整历史”轮次改判：会话打了
+// 兜底标记且帧内没有 previous_response_id 时，全部工具输出按历史处理，本轮按普通轮次对待。
+// 帧整理会给每一项补上本轮的逐项轮次标记，之后再判定会变成“可靠且全是本轮输出”，所以这里不看
+// 原判定是否可靠，统一改判：预热照常发出，续接构帧也不会按旧连接上的上一轮响应 ID 收敛。
+// 未打标记或帧带续链锚点时原样返回，保持原有的失败关闭语义。
+func applyOfficialOpenAIWSFullHistoryFallback(
+	payload map[string]any,
+	state *officialOpenAIWSDerivedState,
+	hasCurrent bool,
+	reliable bool,
+) (bool, bool) {
+	if !state.fullHistoryFallbackActive() ||
+		strings.TrimSpace(officialOpenAIString(payload, "previous_response_id")) != "" {
+		return hasCurrent, reliable
+	}
+	return false, true
 }
 
 func (s *officialOpenAIWSDerivedState) setPendingToolCallIDs(items []json.RawMessage) {
@@ -607,6 +649,12 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	if toolOutputTurnErr != nil {
 		return nil, result, toolOutputTurnErr
 	}
+	hasCurrentToolOutput, toolOutputTurnReliable = applyOfficialOpenAIWSFullHistoryFallback(
+		payload,
+		egressContext.openAIWSDerived,
+		hasCurrentToolOutput,
+		toolOutputTurnReliable,
+	)
 	if !toolOutputTurnReliable {
 		return nil, result, fmt.Errorf(
 			"OpenAI official egress WebSocket %w",
@@ -903,6 +951,12 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	if classifyErr != nil {
 		return nil, false, classifyErr
 	}
+	hasCurrentToolOutput, reliable = applyOfficialOpenAIWSFullHistoryFallback(
+		payload,
+		egressContext.openAIWSDerived,
+		hasCurrentToolOutput,
+		reliable,
+	)
 	if !reliable {
 		return nil, false, fmt.Errorf(
 			"OpenAI official egress WebSocket %w",
@@ -1258,6 +1312,12 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	if classifyErr != nil {
 		return nil, false, classifyErr
 	}
+	hasCurrentToolOutput, reliable = applyOfficialOpenAIWSFullHistoryFallback(
+		payload,
+		egressContext.openAIWSDerived,
+		hasCurrentToolOutput,
+		reliable,
+	)
 	if !reliable {
 		return nil, false, fmt.Errorf(
 			"OpenAI official egress WebSocket %w",

@@ -197,7 +197,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "23fd82c1b5489ef7bf08a87ccb16e7694c6f350389c5681379fc2c6f89e87b47"
+          "sha256": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33"
         }
       ],
       "facts": [
@@ -592,7 +592,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "23fd82c1b5489ef7bf08a87ccb16e7694c6f350389c5681379fc2c6f89e87b47"
+          "sha256": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33"
         }
       ],
       "facts": [
