@@ -393,8 +393,11 @@ func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 		return officialegress.TransportResult{}, err
 	}
 	semanticRequest.Header = headers
+	// bodyBytes 要么是构造 attempt 时移交的只读字节，要么是上面 ReplayableBytes 返回的独立
+	// 副本，二者在编译期间都不会被改写，语义 Body 直接共享，不再复制整段正文。
 	semantic, err := prepareOfficialCodexSemanticAttempt(
 		semanticRequest, bodyBytes, attempt.endpointID, p.invocation.InvocationID(), p.identityAccount,
+		officialCodexSemanticAttemptSharedBody,
 	)
 	if err != nil {
 		return officialegress.TransportResult{}, err
@@ -482,12 +485,14 @@ func (p *OpenAIForwardInvocationPlan) executeHTTPRequest(
 	if nextOrdinal == 1 {
 		reason = officialegress.AttemptReasonInitial
 	}
+	// body 是终态修正器装配后的只读正文（readOfficialEgressRequestBodyBytes 直接取回装配时的
+	// 字节，或读出一份仅属本请求的新缓冲），RequestBody 直接共享它，不再复制整段正文。
 	input := openAIForwardAttemptInput{
 		Reason: reason, SinkID: currentSink, EndpointID: endpointID,
 		Protocol: officialegress.WireProtocolHTTP,
 		Method:   request.Method, URL: request.URL,
 		Headers: headers, Authentication: authentication,
-		Body: officialegress.NewReplayableRequestBody(body), BodyBytes: body,
+		Body: officialegress.NewSharedReplayableRequestBody(body), BodyBytes: body,
 	}
 	var attempt OpenAIForwardAttempt
 	if fallback != nil {

@@ -520,7 +520,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
-          "sha256": "528039901cddb1229ace74aca3c48fe129824983000942e6c94d7d3ba5e17979"
+          "sha256": "fa6401805f7369ccd13293b0a7043a3ea4e52601e4e3e9bdca1be007be06c55d"
         },
         {
           "path": "backend/internal/officialegress/compiler.go",

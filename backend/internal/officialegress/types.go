@@ -602,9 +602,24 @@ func NewReplayableRequestBody(body []byte) RequestBody {
 	return newOwnedReplayableRequestBody(append([]byte(nil), body...))
 }
 
-// newOwnedReplayableRequestBody 只接收包内新产生、此后不再改写的字节。
-// 对外构造函数仍复制一次；Plan、CompiledRequest 与 PreparedRequest 仅共享该
-// 不可变 backing，避免在一次 attempt 内重复复制整段 Body。
+// NewSharedReplayableRequestBody 以调用方移交的只读字节构造 replayable Body，不复制整段正文。
+//
+// 与 NewReplayableRequestBody 的区别只在所有权：后者做防御性复制，调用方此后可以随意改写
+// 自己的切片；本函数直接共享入参的 backing，调用方必须保证这段字节在 Body 存活期间不被
+// 任何路径原地改写。官方出站链上的请求正文一经终态修正器产出即视为只读（service 包的
+// officialEgressReplayableBody 与零拷贝正文视图都依赖这一约束），因此 Forward HTTP attempt
+// 可以把同一份字节交给 Executor，而不必再为每个 attempt 复制一份。
+//
+// 这里把容量截到长度：包内任何对该切片的 append 都会重新分配，不会写进调用方 backing 中
+// 长度之外的空闲区间，从而也不会与调用方自己的追加写入互相覆盖。
+func NewSharedReplayableRequestBody(body []byte) RequestBody {
+	return newOwnedReplayableRequestBody(body[:len(body):len(body)])
+}
+
+// newOwnedReplayableRequestBody 只接收包内新产生、或调用方已移交所有权且此后不再改写的字节。
+// NewReplayableRequestBody 仍复制一次；NewSharedReplayableRequestBody 按只读约束直接共享。
+// Plan、CompiledRequest 与 PreparedRequest 仅共享该不可变 backing，避免在一次 attempt 内
+// 重复复制整段 Body。
 func newOwnedReplayableRequestBody(body []byte) RequestBody {
 	return RequestBody{state: &requestBodyState{
 		mode: RequestBodyReplayable, replayable: body, length: int64(len(body)),

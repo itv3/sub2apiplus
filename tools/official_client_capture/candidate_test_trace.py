@@ -88,8 +88,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 在工具输出轮次判定不可靠、但帧内工具调用完整覆盖全部输出时按新链放行）；映射只重绑该源码快照的两处引用，
 # 不改变测试、事实或规则语义。TestCandidateTraceCodex0145TurnStateFacts 已重跑通过；
 # TestCandidateTraceCodexTurnStateOwnerReset 因 previous 槽位画像未声明 owner 重置按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M1 第一项）：Forward HTTP attempt 的语义 Body 改为共享终态正文字节，改动
+# `official_egress_identity_authority.go`（prepareOfficialCodexSemanticAttempt 增加可选的共享所有权参数，冻结
+# Executor 仍按原签名复制）；映射只重绑该源码快照，不改变测试、事实或规则语义。
+# TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅条件头按设计
+# 跳过，改动前后一致；candidate_test_trace 单测 13 项通过。
 FROZEN_MAPPING_SHA256 = (
-    "5feea1575f9561e2f5808680e2fb51b22f9820d43f2aa4b3660ff6d41b72ce52"
+    "409778dcc0c0af7914867295dc8af0ce00a45d3ce916f2eac9b6675784d99180"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

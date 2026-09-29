@@ -142,19 +142,45 @@ func projectOfficialCodexIdentityAccount(account *Account) officialCodexIdentity
 	}
 }
 
+// officialCodexSemanticAttemptBodyOwnership 声明语义 Body 字节的所有权。缺省（不传）为复制：
+// 语义 Body 持有 body 的独立副本，调用方此后可以任意处置自己的切片。
+type officialCodexSemanticAttemptBodyOwnership uint8
+
+const (
+	// officialCodexSemanticAttemptSharedBody 表示调用方保证 body 在 attempt 编译期间只读，
+	// 语义 Body 直接共享它而不复制。仅供 Forward HTTP attempt 使用：那里的 body 是终态修正器
+	// 装配后的只读正文（officialEgressReplayableBody 约束），编译器的删除与注入只写
+	// attempt-local overlay。
+	officialCodexSemanticAttemptSharedBody officialCodexSemanticAttemptBodyOwnership = iota + 1
+)
+
+// prepareOfficialCodexSemanticAttempt 把已完成业务语义构造的请求转换为 Executor 语义 attempt。
+// ownership 只影响语义 Body 是否复制 body，转换结果与字节内容无关；冻结的 Executor 入口按
+// 原签名调用，行为不变。
 func prepareOfficialCodexSemanticAttempt(
 	request *http.Request,
 	body []byte,
 	endpointID string,
 	identitySeed string,
 	account officialCodexIdentityAccountProjection,
+	ownership ...officialCodexSemanticAttemptBodyOwnership,
 ) (officialCodexSemanticAttempt, error) {
 	if request == nil || request.URL == nil || account.ID <= 0 {
 		return officialCodexSemanticAttempt{}, errors.New("Codex 语义 attempt 输入不完整")
 	}
+	shareBody := len(ownership) > 0 && ownership[0] == officialCodexSemanticAttemptSharedBody
 	materializeOfficialCodexCookieJar(request)
 	headers := request.Header.Clone()
-	semanticBody, ownedFields, err := officialegress.PrepareOfficialCodexAttemptBody(endpointID, body)
+	var semanticBody officialegress.RequestBody
+	var ownedFields officialegress.CompilerOwnedBodyFields
+	var err error
+	if shareBody {
+		semanticBody, ownedFields, err = officialegress.PrepareOfficialCodexAttemptRequestBody(
+			endpointID, officialegress.NewSharedReplayableRequestBody(body),
+		)
+	} else {
+		semanticBody, ownedFields, err = officialegress.PrepareOfficialCodexAttemptBody(endpointID, body)
+	}
 	if err != nil {
 		return officialCodexSemanticAttempt{}, err
 	}
