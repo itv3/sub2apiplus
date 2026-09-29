@@ -25,7 +25,7 @@ func buildOfficialJSONRawIndexForDecode(body []byte) (*officialJSONRawIndex, err
 	}
 	index := &officialJSONRawIndex{
 		body:       body,
-		nodes:      make([]officialJSONRawNode, 0, 64),
+		nodes:      make([]officialJSONRawNode, 0, officialJSONRawCountValues(body)),
 		skipDigest: true,
 	}
 	scanner := officialJSONRawScanner{index: index}
