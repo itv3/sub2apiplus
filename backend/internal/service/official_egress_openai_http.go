@@ -269,11 +269,20 @@ var officialOpenAICompactionReasons = map[string]struct{}{
 // 标准第三方请求可以没有 Codex 身份字段；真正的官方 Codex 请求仍由 Finalizer
 // 按入口 Header 严格校验完整身份。
 func captureOfficialOpenAIHTTPBodyContract(body []byte) (*officialOpenAIHTTPBodyContract, error) {
+	return captureOfficialOpenAIHTTPBodyContractWithIndex(body, nil)
+}
+
+// captureOfficialOpenAIHTTPBodyContractWithIndex 同 captureOfficialOpenAIHTTPBodyContract；index 若非 nil
+// 必须是 body 扫描成功得到的索引（只登记节点或完整均可），直接复用，不再为同一正文扫描（问题四 M2-c）。
+func captureOfficialOpenAIHTTPBodyContractWithIndex(body []byte, index *officialJSONRawIndex) (*officialOpenAIHTTPBodyContract, error) {
 	// 索引扫描代替整段解码（docs/bug.md 6.4 第 3 点）：一次只读扫描完成与解码器同一套
 	// 语法的严格校验并定位全部值区间，之后只把契约字段还原成 Go 值，得到与整段解码逐项
 	// 相同的结果；顶层与 item 内的同名键都取最后一次出现。扫描失败或顶层不是对象时用
 	// encoding/json 路径复核，错误值与整段解码完全一致。
-	index, err := buildOfficialJSONRawIndexForDecode(body)
+	var err error
+	if index == nil {
+		index, err = buildOfficialJSONRawIndexForDecode(body)
+	}
 	if err != nil || index.nodes[index.root].kind != officialJSONRawKindObject {
 		if _, slowErr := decodeOfficialJSONObjectUseNumberSlow(body); slowErr != nil {
 			err = slowErr
@@ -358,7 +367,17 @@ func captureOfficialOpenAIHTTPBodyContractForRequest(
 	c *gin.Context,
 	body []byte,
 ) (*officialOpenAIHTTPBodyContract, error) {
-	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, nil)
+}
+
+// captureOfficialOpenAIHTTPBodyContractForRequestWithIndex 同 captureOfficialOpenAIHTTPBodyContractForRequest，
+// index 的约定见 captureOfficialOpenAIHTTPBodyContractWithIndex。
+func captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(
+	c *gin.Context,
+	body []byte,
+	index *officialJSONRawIndex,
+) (*officialOpenAIHTTPBodyContract, error) {
+	contract, err := captureOfficialOpenAIHTTPBodyContractWithIndex(body, index)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +587,10 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	// 解码在正文索引上进行，无转义的长字符串直接引用 body（问题四 M1 第二项）；payload 只在
 	// 本函数内使用，其中的值只会被比较或重新编码进新正文，不会保存到请求之外。同一索引随后
 	// 直接交给拼接编码器，不再为同一正文重复扫描。
-	payload, bodyIndex, decodeErr := decodeOfficialJSONObjectSharingBody(body)
+	// 官方出站 HTTP 转发主干的正文工作区已为这一版本的正文建过索引时直接复用（问题四 M2-c）。
+	payload, bodyIndex, decodeErr := decodeOfficialJSONObjectSharingBodyWithIndex(
+		body, officialForwardHTTPBodyFromContext(req.Context()).indexFor(body),
+	)
 	if decodeErr != nil {
 		return nil, result, fmt.Errorf("decode OpenAI official egress body: %w", decodeErr)
 	}

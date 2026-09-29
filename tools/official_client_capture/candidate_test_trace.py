@@ -108,8 +108,13 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # `officialegress/compiler.go`（输出与缺省参数编码器逐字节一致）；映射只重绑该源码快照，不改变测试、事实或
 # 规则语义。TestCandidateTraceCodexGuardianReviewConditionalHeader 因 previous 槽位画像未声明 guardian 审阅
 # 条件头按设计跳过，改动前后一致。
+# 2026-09-29（问题四 M2-c）：官方出站 HTTP 转发主干引入正文工作区，同一版本正文的索引在契约捕获、对象树
+# 解码、保序重编码、compaction 规整与 Finalizer 之间共享，改动 `openai_gateway_forward.go` 与
+# `official_egress_openai_http.go`；映射只重绑这两份源码快照，不改变测试、事实或规则语义。候选验收测试
+# 9 项通过；GuardianReviewConditionalHeader、TurnMetadataSerialization、TurnStateOwnerReset 因 previous 槽位
+# 画像未声明对应行为按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "8ca2cd45c6059995e2f546ff6655c98e0acd97a7f597615fcfe17829562e650d"
+    "22a7b7a498fd337caf29bbf3ce873fa1a58845389c597c44fe28e9997a8b4d61"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

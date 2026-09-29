@@ -348,6 +348,7 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 		}
 		requestBody = index.decodeObject(index.root)
 	} else {
+		index = nil
 		var err error
 		if requestBody, err = decodeOfficialJSONObjectUseNumber(body); err != nil {
 			return body, false, fmt.Errorf("decode responses Lite request body: %w", err)
@@ -357,7 +358,11 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 	if err != nil || !changed {
 		return body, false, err
 	}
-	rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRaw(requestBody, body)
+	// 拼接编码复用同一份索引（问题四 M2-c）：补齐结构摘要后与按原文现场建立的完整索引逐项相同，
+	// 不再为同一正文扫描第二遍。index 为 nil（扫描未通过而 encoding/json 解码成功）时，拼接编码
+	// 与过去一样按原文现场建索引。
+	index.ensureDigests()
+	rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(requestBody, body, index)
 	if err != nil {
 		return body, false, fmt.Errorf("encode responses Lite request body: %w", err)
 	}

@@ -41,6 +41,46 @@ func buildOfficialJSONRawIndexForDecode(body []byte) (*officialJSONRawIndex, err
 	return index, nil
 }
 
+// ensureDigests 把只登记节点的索引（buildOfficialJSONRawIndexForDecode）就地补齐为完整索引，
+// 结果与对同一正文调用 buildOfficialJSONRawIndex 逐项相同（问题四 M2-c）。
+//
+// 同一版本的正文先后要被解码与拼接编码使用：解码只需要节点，拼接编码还需要结构摘要与复合值
+// 索引。过去两处各扫描一遍正文；这里不再重新扫描，只沿节点表补算摘要。节点在扫描时总是先登记
+// 子节点、后登记父节点，因此按下标顺序计算即可保证子节点摘要先于父节点就绪；字符串、数字与
+// 字面量的摘要规则与扫描器逐条相同，复合值随后按前序登记，顺序与扫描器一致。已是完整索引时直接返回。
+func (index *officialJSONRawIndex) ensureDigests() {
+	if index == nil || !index.skipDigest {
+		return
+	}
+	index.skipDigest = false
+	index.seed = officialJSONRawHashSeed
+	for i := range index.nodes {
+		n := &index.nodes[i]
+		switch n.kind {
+		case officialJSONRawKindString:
+			segment := index.body[n.start+1 : n.end-1]
+			if !n.slowPath {
+				n.hash = index.hashBytes('s', segment)
+				continue
+			}
+			// 扫描阶段已按同一规则反转义校验过这段字节，这里不会出错。
+			unescaped, _ := officialJSONUnescape(index.scratch[:0], segment)
+			index.scratch = unescaped[:0]
+			n.hash = index.hashBytes('s', unescaped)
+		case officialJSONRawKindNumber:
+			n.hash = index.hashBytes('n', index.body[n.start:n.end])
+		case officialJSONRawKindTrue, officialJSONRawKindFalse, officialJSONRawKindNull:
+			n.hash = index.hashBytes(officialJSONRawHashTag(n.kind), nil)
+		case officialJSONRawKindObject:
+			n.hash = index.hashObjectMembers(n.members)
+		case officialJSONRawKindArray:
+			n.hash = index.hashArrayItems(n.items)
+		}
+	}
+	index.byHash = make(map[uint64][]int32)
+	index.registerComposites(index.root)
+}
+
 // decodeValue 把索引节点还原为 encoding/json 解码到 any 时的 Go 值。
 func (index *officialJSONRawIndex) decodeValue(node int32) any {
 	n := &index.nodes[node]
@@ -137,7 +177,19 @@ const officialJSONSharedStringMinBytes = 1024
 // body 存活且不被改写的期间使用返回的对象树，且不得把其中的值保存到本次请求之外。索引
 // 构建失败或顶层不是对象时走 encoding/json 路径，错误值与原实现一致，此时不返回索引。
 func decodeOfficialJSONObjectSharingBody(body []byte) (map[string]any, *officialJSONRawIndex, error) {
-	index, err := buildOfficialJSONRawIndex(body)
+	return decodeOfficialJSONObjectSharingBodyWithIndex(body, nil)
+}
+
+// decodeOfficialJSONObjectSharingBodyWithIndex 同 decodeOfficialJSONObjectSharingBody；index 若非 nil 必须是
+// body 扫描成功得到的索引（只登记节点或完整均可），补齐结构摘要后直接复用，不再为同一正文扫描
+// （问题四 M2-c）。返回的索引与现场建立的完整索引逐项相同。
+func decodeOfficialJSONObjectSharingBodyWithIndex(body []byte, index *officialJSONRawIndex) (map[string]any, *officialJSONRawIndex, error) {
+	var err error
+	if index == nil {
+		index, err = buildOfficialJSONRawIndex(body)
+	} else {
+		index.ensureDigests()
+	}
 	if err != nil || index.nodes[index.root].kind != officialJSONRawKindObject {
 		payload, slowErr := decodeOfficialJSONObjectUseNumberSlow(body)
 		return payload, nil, slowErr

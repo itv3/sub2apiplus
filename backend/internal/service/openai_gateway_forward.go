@@ -246,8 +246,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	originalBody := body
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
+	// 官方出站 HTTP 路径的正文工作区（问题四 M2，official_egress_forward_body.go）；其余路径为 nil，
+	// 其方法原样调用改造前的函数。
+	var officialForwardBody *officialForwardHTTPBody
 	if officialOpenAIHTTPEnabled {
-		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, originalBody)
+		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx)
+		officialEgressBodyContract, err = officialForwardBody.captureContract(c, originalBody)
 		if err != nil {
 			return nil, err
 		}
@@ -399,7 +403,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if reqBody != nil {
 			return reqBody, nil
 		}
-		decoded, decodeErr := requestView.Decode(c)
+		decoded, decodeErr := officialForwardBody.decodeRequestView(c, requestView)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -839,7 +843,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			var marshalErr error
 			// patch 失效后走整体重编码。必须以当前正文为原始字节基准，否则未被
 			// 改动的嵌套用户数据会被 Go map 编码按字典序重排。
-			body, marshalErr = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
+			body, marshalErr = officialForwardBody.reencode(decoded, body)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
@@ -848,7 +852,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	// 在孤立工具输出过滤与所有正文重建完成后再调整 compaction trigger，
 	// 避免触发项残留在仍需保留的历史项之前。
-	if normalizedBody, changed, normalizeErr := NormalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
+	if normalizedBody, changed, normalizeErr := officialForwardBody.normalizeCompactionTriggerInputOrder(body); normalizeErr != nil {
 		return nil, fmt.Errorf("normalize compaction trigger order: %w", normalizeErr)
 	} else if changed {
 		body = normalizedBody
