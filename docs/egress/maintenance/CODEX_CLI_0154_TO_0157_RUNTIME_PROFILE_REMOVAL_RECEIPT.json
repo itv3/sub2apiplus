@@ -1,0 +1,49 @@
+{
+  "schema_version": "codex-runtime-profile-removal/v1",
+  "status": "complete",
+  "campaign_id": "c01570-formal-vc1-r2-20260926t194249z",
+  "completed_at_utc": "2026-09-28T23:44:37Z",
+  "active_version": "0.157.0",
+  "rollback_version": "0.154.0",
+  "removed_version": "0.151.0",
+  "production_activation_sha256": "cb676d8978a949983c8f4c0ca852c7989effd45b26cb3bcc14ebd0f6741bd20e",
+  "consumer_scan": {
+    "catalog_references": 0,
+    "selector_references": 0,
+    "unknown_references": 0
+  },
+  "consumer_scan_method": {
+    "catalog_references": "selector 指向的 active release graph c91fad90… 与 active snapshot catalog e98dbb81… 中 0.151.0 的条目数",
+    "selector_references": "catalogdata/runtime/release-catalog.json 中 0.151.0 的出现次数",
+    "unknown_references": "backend/ 与 frontend/ 的 .go/.ts/.vue/.yaml/.yml/.json 中对 catalogdata/runtime/profiles/0.151.0/ 路径或画像 blob 摘要（f99ffb49…）的引用数；历史 snapshot-catalog 归档除外，0.151 正式恢复承接收据的两份冻结断言测试除外（backend/internal/officialegress/codex_0151_formal_recovery_source_transition_test.go 与 backend/internal/service/ 下同名测试：逐字断言该承接收据的新增路径集合，只含路径字符串、不读取画像、不参与运行投影，属历史证据，单列于 historical_archive_references）",
+    "runtime_projection": "cmd/egressruntimedump 导出的运行 Catalog 闭集由 39 个文件降为 38 个，profiles 仅剩 0.154.0 与 0.157.0；0.151.0 不再出现在任何运行投影文件中（ARM64 退休构建树复算，证据 stages/retire_switch/runtime-projection-files.txt）"
+  },
+  "runtime_catalog_removed": true,
+  "historical_evidence_preserved": true,
+  "historical_archive_references": {
+    "historical_snapshot_catalogs": 6,
+    "historical_release_graphs": 17,
+    "historical_transition_test_references": 2,
+    "note": "历史 snapshot catalog 与 release graph 逐字保留，仍按内容寻址引用 0.151.0；0.151 正式恢复承接收据的两份冻结断言测试逐字保留历史新增路径；与 0.147、0.149.1 退休先例一致，不计入 consumer_scan"
+  },
+  "retired_runtime_profiles": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json",
+      "sha256": "f99ffb49b17f34b4c017280acb60618f4f8b12564c6fde9a846b8a4d0156313d",
+      "removed_from_runtime_projection_in_commit": "c865a966f",
+      "state": "retained_as_frozen_terminal_artifact"
+    }
+  ],
+  "runtime_catalog_after_removal": {
+    "catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source": "campaign:c01570-formal-vc1-r2-20260926t194249z/retirement:codex-legacy-profile"
+    },
+    "release_graph_sha256": "c91fad9040eb975b0a6faa58da4f6325f1cc73c52ee21af73449b6ae54b05cf6",
+    "snapshot_catalog_sha256": "e98dbb812e40ee0556b0fe7fc142c6db2c9c93f967b9a01ed6554ac3725bc099",
+    "promotion_intermediate_snapshot_catalog_sha256": "cd8e263a073ea55394937a2e383a0cd6eba13d023cfeccf8e35026bfcaddb94c"
+  },
+  "historical_route_profile_preserved": false,
+  "historical_route_receipt_references": 0,
+  "retained_bytes_rationale": "0.151.0 画像字节按原路径逐字保留：0.149.1→0.151 终态收据把 dbc65378… 冻结为 runtime_catalog.active_profile 并逐文件校验存在与摘要，0.151→0.154 终态收据又以 previous_profile_sha256 绑定它，属 §4.6.7 第 1 类，不得删除、改名或移动。退休因此按运行投影口径执行：Catalog、selector 与运行投影均不再引用 0.151.0，画像字节作为历史终态制品原地保留，与 0.149.1 退休同一处置。"
+}
