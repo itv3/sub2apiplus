@@ -1,0 +1,47 @@
+{
+  "base_commit": "7e06f0ab7afe16bc406b12c9b9e1ba5ee7bbfbec",
+  "changed_path_count": 1,
+  "current_commit": "329dc61cd786f9892235cbad7ca92acdaa490227",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5309,
+  "frozen_path_count": 1929,
+  "identity_sha256": "d4191948eb96fd5e301fd688c3e71e36175203892fe2d5d0ce279c8261d0e41c",
+  "issued_at_utc": "2026-09-30T23:49:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01592-flaky-keepalive-20261001-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat_test.go",
+      "predecessor_sha256s": [
+        "a980ca441ea4104baefefe11d693c22090ee957ace70ece4f0658d7f9051a61b"
+      ],
+      "reason": "ARM64 全量门禁中偶发失败的 Antigravity 心跳重复用例留足调度余量（只改测试等待时间），不改变官方客户端画像、Persona、wire 或出站 path=backend/internal/service/antigravity_gateway_compat_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "391b8b1f9317956afd8cff1f1dfb7d6b664e40f415ab986084eba831bd1853bb"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
