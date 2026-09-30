@@ -14,17 +14,20 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 上游合并 source-transition 节点的通用复算：维护目录下每一份上游合并节点都按同一规则逐项
-// 复算，取代按上游版本各手写一份测试的做法，新合并的节点无需再加测试。早期格式（v1、计划式
+// 复算，取代按上游版本各手写一份测试的做法，新合并的节点无需再加测试。节点格式有 v2（历史，无签发时间）
+// 与 v3（写明签发时间 issued_at_utc）两种，按同一规则复算并各自核对签发时间。早期格式（v1、计划式
 // v2、扫描器单跳收据）由各自的冻结测试负责，这里只确认它们仍可识别，避免新节点被误判为旧
 // 格式而漏检。
 const (
-	upstreamSourceTransitionGenericGlob   = "docs/egress/maintenance/upstream-v*-source-transition.json"
-	upstreamSourceTransitionGenericSchema = "official-egress-upstream-source-transition/v2"
-	upstreamSourceTransitionLegacySchema  = "official-egress-upstream-source-transition/v1"
-	upstreamScannerSuccessorSchemaSuffix  = "-scanner-successor-source-transition/v1"
+	upstreamSourceTransitionGenericGlob     = "docs/egress/maintenance/upstream-v*-source-transition.json"
+	upstreamSourceTransitionGenericSchema   = "official-egress-upstream-source-transition/v2"
+	upstreamSourceTransitionGenericSchemaV3 = "official-egress-upstream-source-transition/v3"
+	upstreamSourceTransitionLegacySchema    = "official-egress-upstream-source-transition/v1"
+	upstreamScannerSuccessorSchemaSuffix    = "-scanner-successor-source-transition/v1"
 )
 
 type upstreamSourceTransitionGenericEntry struct {
@@ -48,6 +51,7 @@ type upstreamSourceTransitionGenericNode struct {
 	EntryCount          int                                    `json:"entry_count"`
 	ReasonPolicy        string                                 `json:"reason_policy"`
 	Result              string                                 `json:"result"`
+	IssuedAtUTC         *string                                `json:"issued_at_utc"`
 	IdentitySHA256      string                                 `json:"identity_sha256"`
 }
 
@@ -75,7 +79,7 @@ func upstreamSourceTransitionGenericNodePaths(t *testing.T) []string {
 		_, hasEntries := probe["entries"]
 		_, hasPlanTransitions := probe["source_transitions"]
 		switch {
-		case schema == upstreamSourceTransitionGenericSchema && hasEntries:
+		case (schema == upstreamSourceTransitionGenericSchema || schema == upstreamSourceTransitionGenericSchemaV3) && hasEntries:
 			nodes = append(nodes, path)
 		case schema == upstreamSourceTransitionGenericSchema && hasPlanTransitions,
 			schema == upstreamSourceTransitionLegacySchema,
@@ -118,7 +122,10 @@ func readUpstreamSourceTransitionGenericNode(path string) (upstreamSourceTransit
 }
 
 func validateUpstreamSourceTransitionGenericNode(node upstreamSourceTransitionGenericNode) error {
-	if node.SchemaVersion != upstreamSourceTransitionGenericSchema ||
+	if err := upstreamSourceTransitionGenericIssuedAt(node.SchemaVersion, node.IssuedAtUTC, time.Now()); err != nil {
+		return err
+	}
+	if (node.SchemaVersion != upstreamSourceTransitionGenericSchema && node.SchemaVersion != upstreamSourceTransitionGenericSchemaV3) ||
 		!upstreamSourceTransitionGenericGitObject(node.BaseCommit) ||
 		!upstreamSourceTransitionGenericGitObject(node.CurrentCommit) ||
 		!upstreamSourceTransitionGenericGitObject(node.BaseTree) ||
@@ -203,6 +210,32 @@ func validateUpstreamSourceTransitionGenericEntry(entry upstreamSourceTransition
 	return nil
 }
 
+// upstreamSourceTransitionGenericIssuedAt 核对签发时间：v3 节点必须写明 UTC 秒级签发时间且不晚于校验时刻，
+// v2 历史节点没有签发时间，也不得补写。
+func upstreamSourceTransitionGenericIssuedAt(schema string, issuedAt *string, now time.Time) error {
+	switch schema {
+	case upstreamSourceTransitionGenericSchema:
+		if issuedAt != nil {
+			return errors.New("上游 source-transition v2 节点不得带签发时间")
+		}
+		return nil
+	case upstreamSourceTransitionGenericSchemaV3:
+		if issuedAt == nil {
+			return errors.New("上游 source-transition v3 节点缺少签发时间")
+		}
+		issued, err := time.Parse("2006-01-02T15:04:05Z", *issuedAt)
+		if err != nil {
+			return errors.New("上游 source-transition v3 节点签发时间格式非法：" + *issuedAt)
+		}
+		if issued.After(now) {
+			return errors.New("上游 source-transition v3 节点签发时间晚于当前时刻：" + *issuedAt)
+		}
+		return nil
+	default:
+		return errors.New("上游 source-transition 节点格式非法：" + schema)
+	}
+}
+
 func upstreamSourceTransitionGenericDigest(value *string) bool {
 	return value != nil && receiptSHA256(*value)
 }
@@ -255,6 +288,15 @@ func TestUpstreamSourceTransitionNodesRejectMutation(t *testing.T) {
 					}
 				}
 			},
+			"签发时间": func(n *upstreamSourceTransitionGenericNode) {
+				// v2 节点补写签发时间、v3 节点删去签发时间都必须被拒绝。
+				if n.IssuedAtUTC == nil {
+					value := "2026-10-01T00:00:00Z"
+					n.IssuedAtUTC = &value
+				} else {
+					n.IssuedAtUTC = nil
+				}
+			},
 			"当前提交": func(n *upstreamSourceTransitionGenericNode) { n.CurrentCommit = n.BaseCommit },
 		}
 		for name, mutate := range mutations {
@@ -264,6 +306,33 @@ func TestUpstreamSourceTransitionNodesRejectMutation(t *testing.T) {
 			if err := validateUpstreamSourceTransitionGenericNode(mutated); err == nil {
 				t.Fatalf("%s 的 %s 变异被错误接受", filepath.Base(path), name)
 			}
+		}
+	}
+}
+
+func TestUpstreamSourceTransitionIssuedAtContract(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	valid := "2026-10-01T11:59:00Z"
+	future := "2026-10-01T12:01:00Z"
+	malformed := "2026-10-01 11:59:00"
+	cases := []struct {
+		name     string
+		schema   string
+		issuedAt *string
+		accept   bool
+	}{
+		{"v2 无签发时间", upstreamSourceTransitionGenericSchema, nil, true},
+		{"v2 带签发时间", upstreamSourceTransitionGenericSchema, &valid, false},
+		{"v3 带签发时间", upstreamSourceTransitionGenericSchemaV3, &valid, true},
+		{"v3 缺签发时间", upstreamSourceTransitionGenericSchemaV3, nil, false},
+		{"v3 签发时间晚于当前", upstreamSourceTransitionGenericSchemaV3, &future, false},
+		{"v3 签发时间格式非法", upstreamSourceTransitionGenericSchemaV3, &malformed, false},
+		{"未知格式", "official-egress-upstream-source-transition/v4", &valid, false},
+	}
+	for _, testCase := range cases {
+		err := upstreamSourceTransitionGenericIssuedAt(testCase.schema, testCase.issuedAt, now)
+		if (err == nil) != testCase.accept {
+			t.Fatalf("%s：期望接受=%v，实际错误=%v", testCase.name, testCase.accept, err)
 		}
 	}
 }

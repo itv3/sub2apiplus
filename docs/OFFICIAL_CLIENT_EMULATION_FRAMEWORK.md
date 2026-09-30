@@ -590,7 +590,8 @@ U-4 的结果只有三种出口：
 
    `source-transition` 生成节点、`source-transition-validate` 校验链尾；路径、状态与两端摘要一律由
    Git 复算，删除和重命名保留前后路径，历史节点不改写，修复只追加 successor。前序链不连续时不要强接
-   `--predecessor-register`，本轮独立成节即可。
+   `--predecessor-register`，本轮独立成节即可。新节点为 schema v3，写明签发时间 `issued_at_utc`（校验
+   要求存在且不晚于校验时刻）；v2 历史节点没有签发时间，保持原样只读，校验与通用复算同时接受两者。
 3. 受管 tool bundle 的权威定义是 `tools/upstream_merge/gitops.py` 的 `_tool_source_paths`，覆盖
    `tools/upstream_merge/` 的 Python 源、三个 schema、`tools/check_ledger_completeness.py`、`Makefile`
    与 `backend/cmd/egressscan/` 的 Go 源；文档不复制文件清单，以该函数与 Plan 中的 `tool_bundle` 为准。

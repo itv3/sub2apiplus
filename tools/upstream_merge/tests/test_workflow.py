@@ -606,6 +606,43 @@ class UpstreamMergeWorkflowTests(unittest.TestCase):
         self.assertEqual(second["entries"][0]["status"], "D")
         self.assertEqual(validate_source_transition(repository, second_path)["result"], "valid")
 
+    def test_source_transition_v3_issued_at_and_v2_read_only(self) -> None:
+        # UM-17：新生成的收据是 v3 且写明签发时间；v2 历史收据不带签发时间，照常只读校验。
+        repository = self.temp_root / "transition-issued-repository"
+        repository.mkdir()
+        run(repository, "git", "init", "-b", "main")
+        run(repository, "git", "config", "user.name", "Transition Test")
+        run(repository, "git", "config", "user.email", "transition@example.invalid")
+        (repository / "value.txt").write_text("one\n", encoding="utf-8")
+        run(repository, "git", "add", "value.txt")
+        run(repository, "git", "commit", "-m", "base")
+        base = rev_parse(repository, "HEAD^{commit}")
+        (repository / "value.txt").write_text("two\n", encoding="utf-8")
+        run(repository, "git", "commit", "-am", "change")
+        changed = rev_parse(repository, "HEAD^{commit}")
+        generated = generate_source_transition(repository, base, changed)
+        self.assertEqual(generated["schema_version"], "official-egress-upstream-source-transition/v3")
+        self.assertRegex(generated["issued_at_utc"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:00Z$")
+
+        def write(name: str, document: dict) -> Path:
+            path = self.temp_root / name
+            body = {key: value for key, value in document.items() if key != "identity_sha256"}
+            path.write_text(json.dumps(bind_identity(body), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return path
+
+        self.assertEqual(validate_source_transition(repository, write("v3.json", generated))["result"], "valid")
+        missing = {key: value for key, value in generated.items() if key != "issued_at_utc"}
+        with self.assertRaisesRegex(UpstreamMergeError, "字段"):
+            validate_source_transition(repository, write("v3-missing.json", missing))
+        with self.assertRaisesRegex(UpstreamMergeError, "晚于当前时刻"):
+            validate_source_transition(repository, write("v3-future.json", {**generated, "issued_at_utc": "2999-01-01T00:00:00Z"}))
+        with self.assertRaisesRegex(UpstreamMergeError, "UTC 时间"):
+            validate_source_transition(repository, write("v3-format.json", {**generated, "issued_at_utc": "2026-10-01 00:00:00"}))
+        legacy = {**missing, "schema_version": "official-egress-upstream-source-transition/v2"}
+        self.assertEqual(validate_source_transition(repository, write("v2.json", legacy))["result"], "valid")
+        with self.assertRaisesRegex(UpstreamMergeError, "字段"):
+            validate_source_transition(repository, write("v2-issued.json", {**legacy, "issued_at_utc": generated["issued_at_utc"]}))
+
     def test_source_transition_rejects_symlink_and_impossible_status_sha(self) -> None:
         repository = self.temp_root / "transition-symlink-repository"
         repository.mkdir()

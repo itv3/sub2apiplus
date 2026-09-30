@@ -738,6 +738,10 @@
       }
     },
     "sourceTransition": {
+      "description": "v3 起写明签发时间 issued_at_utc；v2 历史收据没有签发时间，只读校验、不再生成",
+      "oneOf": [{"$ref": "#/$defs/sourceTransitionV2"}, {"$ref": "#/$defs/sourceTransitionV3"}]
+    },
+    "sourceTransitionV2": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -753,27 +757,48 @@
         "current_tree": {"$ref": "#/$defs/gitObject"},
         "chain_sequence": {"type": "integer", "minimum": 1},
         "predecessor_register": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
-        "entries": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["path", "old_path", "status", "predecessor_sha256", "current_sha256", "reason"],
-            "properties": {
-              "path": {"type": "string", "minLength": 1},
-              "old_path": {"type": "string"},
-              "status": {"enum": ["A", "M", "D", "R", "C", "T"]},
-              "predecessor_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
-              "current_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
-              "reason": {"type": "string", "minLength": 1}
-            }
-          }
-        },
+        "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sourceTransitionEntry"}},
         "entry_count": {"type": "integer", "minimum": 1},
         "reason_policy": {"type": "string", "minLength": 1},
         "result": {"const": "generated"},
         "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceTransitionV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "issued_at_utc", "base_commit", "current_commit", "base_tree", "current_tree",
+        "chain_sequence", "predecessor_register", "entries", "entry_count", "reason_policy",
+        "result", "identity_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-source-transition/v3"},
+        "issued_at_utc": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "base_commit": {"$ref": "#/$defs/gitObject"},
+        "current_commit": {"$ref": "#/$defs/gitObject"},
+        "base_tree": {"$ref": "#/$defs/gitObject"},
+        "current_tree": {"$ref": "#/$defs/gitObject"},
+        "chain_sequence": {"type": "integer", "minimum": 1},
+        "predecessor_register": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
+        "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sourceTransitionEntry"}},
+        "entry_count": {"type": "integer", "minimum": 1},
+        "reason_policy": {"type": "string", "minLength": 1},
+        "result": {"const": "generated"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceTransitionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "old_path", "status", "predecessor_sha256", "current_sha256", "reason"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "old_path": {"type": "string"},
+        "status": {"enum": ["A", "M", "D", "R", "C", "T"]},
+        "predecessor_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "current_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "reason": {"type": "string", "minLength": 1}
       }
     },
     "candidateDisposition": {

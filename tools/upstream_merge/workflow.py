@@ -12,6 +12,7 @@ import tempfile
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -111,7 +112,10 @@ CANDIDATE_DISPOSITION_INPUT_SCHEMA = "official-egress-upstream-candidate-disposi
 CANDIDATE_DISPOSITION_SCHEMA = "official-egress-upstream-candidate-disposition/v1"
 BRANCH_APPLY_SCHEMA = "official-egress-upstream-branch-apply/v1"
 UPSTREAM_RECEIPT_SCHEMA = "official-egress-upstream-merge-receipt/v1"
-SOURCE_TRANSITION_SCHEMA = "official-egress-upstream-source-transition/v2"
+# v3 起写明签发时间 issued_at_utc；v2 历史收据没有签发时间，保持原样只读校验，不再生成。
+SOURCE_TRANSITION_SCHEMA = "official-egress-upstream-source-transition/v3"
+SOURCE_TRANSITION_LEGACY_SCHEMA = "official-egress-upstream-source-transition/v2"
+ISSUED_AT_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 REVISION_STAGE_SCHEMAS = {
     "source_candidate": SOURCE_CANDIDATE_SCHEMA,
@@ -1237,10 +1241,15 @@ def _validate_transition_node(
         "result",
         "identity_sha256",
     }
-    expect_exact_fields(document, required, "SourceTransition")
-    if document["schema_version"] != SOURCE_TRANSITION_SCHEMA:
+    schema = document.get("schema_version")
+    if schema == SOURCE_TRANSITION_SCHEMA:
+        required = required | {"issued_at_utc"}
+    elif schema != SOURCE_TRANSITION_LEGACY_SCHEMA:
         raise UpstreamMergeError("SourceTransition schema_version 非法")
+    expect_exact_fields(document, required, "SourceTransition")
     validate_identity(document, "SourceTransition")
+    if schema == SOURCE_TRANSITION_SCHEMA:
+        _validate_transition_issued_at(document["issued_at_utc"])
     expect_git_object(document["base_commit"], "SourceTransition.base_commit")
     expect_git_object(document["current_commit"], "SourceTransition.current_commit")
     expect_git_object(document["base_tree"], "SourceTransition.base_tree")
@@ -1469,6 +1478,19 @@ def _assert_no_interval_bound_receipts(
                 )
 
 
+def _validate_transition_issued_at(value: Any) -> None:
+    """v3 收据的签发时间：UTC 秒级 Z 格式，且不晚于校验时刻（不能预签未来时间）。"""
+
+    if not isinstance(value, str) or not ISSUED_AT_RE.fullmatch(value):
+        raise UpstreamMergeError("SourceTransition.issued_at_utc 必须是 UTC 时间（YYYY-MM-DDTHH:MM:SSZ）")
+    try:
+        issued = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError as error:
+        raise UpstreamMergeError(f"SourceTransition.issued_at_utc 不是有效时间：{value}") from error
+    if issued > datetime.now(timezone.utc):
+        raise UpstreamMergeError(f"SourceTransition.issued_at_utc 晚于当前时刻：{value}")
+
+
 def generate_source_transition(
     repository_root: Path,
     before_commit: str,
@@ -1547,6 +1569,8 @@ def generate_source_transition(
     document = bind_identity(
         {
             "schema_version": SOURCE_TRANSITION_SCHEMA,
+            # 与冻结承接收据同一写法（取到分钟），保证不晚于生成时刻。
+            "issued_at_utc": time.strftime("%Y-%m-%dT%H:%M:00Z", time.gmtime()),
             "base_commit": before,
             "current_commit": after,
             "base_tree": base_tree,
