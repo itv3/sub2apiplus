@@ -30,8 +30,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from tools.official_client_capture.upstream_byte_relay import (
+    _OFFICIAL_IMAGE_EDIT_CALL_ID,
     Relay,
     _WsFrameActivity,
+    _decoded_request_json,
+    _image_edit_chain_decision,
     _official_image_response,
     _official_imagegen_call_events,
     _official_message_events,
@@ -223,6 +226,7 @@ class OfficialSyntheticEventsTest(unittest.TestCase):
         call_events = _official_imagegen_call_events("resp_c")
         call = call_events[1]["item"]
         self.assertEqual((call["type"], call["name"], call["namespace"]), ("function_call", "imagegen", "image_gen"))
+        self.assertEqual(call["call_id"], _OFFICIAL_IMAGE_EDIT_CALL_ID)
         arguments = json.loads(call["arguments"])
         self.assertEqual(arguments["num_last_images_to_include"], 1)
         self.assertTrue(arguments["prompt"])
@@ -265,6 +269,54 @@ class OfficialSyntheticEventsTest(unittest.TestCase):
         self.assertIn(f"sec-websocket-accept: {accept}\r\n".encode("ascii"), wire)
         self.assertIn(b"sec-websocket-extensions: permessage-deflate\r\n", wire)
         self.assertIsNone(_official_ws_handshake(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n"))
+
+
+class ImageEditChainDecisionTest(unittest.TestCase):
+    """file_id 编辑链按请求内容选择受控应答，不按到达序号猜测。"""
+
+    FILE_ID = "file-c01592imageeditprobe"
+
+    def user_turn(self) -> dict:
+        return {"model": "gpt-5.5", "input": [{"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "edit"}, {"type": "input_image", "file_id": self.FILE_ID}]}]}
+
+    def test_user_turn_with_file_image_gets_the_edit_call_once(self) -> None:
+        self.assertEqual(_image_edit_chain_decision(self.user_turn(), self.FILE_ID, False), "imagegen_edit_call")
+        self.assertEqual(_image_edit_chain_decision(self.user_turn(), self.FILE_ID, True), "other_completed")
+
+    def test_tool_output_for_the_controlled_call_gets_the_final_message(self) -> None:
+        payload = self.user_turn()
+        payload["input"] += [
+            {"type": "function_call", "call_id": _OFFICIAL_IMAGE_EDIT_CALL_ID, "name": "imagegen"},
+            {"type": "function_call_output", "call_id": _OFFICIAL_IMAGE_EDIT_CALL_ID, "output": "ok"},
+        ]
+        self.assertEqual(_image_edit_chain_decision(payload, self.FILE_ID, True), "final_message")
+        other = {"input": [{"type": "function_call_output", "call_id": "call_other", "output": "x"}]}
+        self.assertEqual(_image_edit_chain_decision(other, self.FILE_ID, True), "other_completed")
+
+    def test_requests_without_the_file_image_do_not_advance_the_chain(self) -> None:
+        payload = {"input": [{"type": "message", "role": "user", "content": "title please"}]}
+        self.assertEqual(_image_edit_chain_decision(payload, self.FILE_ID, False), "other_completed")
+        self.assertEqual(_image_edit_chain_decision(None, self.FILE_ID, False), "undecodable")
+
+    def test_request_body_decoding_follows_content_encoding(self) -> None:
+        payload = self.user_turn()
+        raw = json.dumps(payload).encode("utf-8")
+        plain = b"POST /backend-api/codex/responses HTTP/1.1\r\ncontent-type: application/json\r\n\r\n"
+        self.assertEqual(_decoded_request_json(plain, raw), payload)
+        gzip_head = b"POST /backend-api/codex/responses HTTP/1.1\r\ncontent-encoding: gzip\r\n\r\n"
+        self.assertIsNone(_decoded_request_json(gzip_head, raw))
+        self.assertIsNone(_decoded_request_json(plain, b"not json"))
+        zstd_head = b"POST /backend-api/codex/responses HTTP/1.1\r\nContent-Encoding: zstd\r\n\r\n"
+        try:
+            import zstandard
+        except ImportError:
+            # 采集容器装有 zstandard；缺失的宿主只能失败关闭为无法解码，由调用方按到达序号兜底。
+            self.assertIsNone(_decoded_request_json(zstd_head, raw))
+        else:
+            compressed = zstandard.ZstdCompressor().compress(raw)
+            self.assertEqual(_decoded_request_json(zstd_head, compressed), payload)
+            self.assertIsNone(_decoded_request_json(zstd_head, b"\x28\xb5\x2f\xfd broken"))
 
 
 class StreamFaultWebSocketTest(unittest.TestCase):

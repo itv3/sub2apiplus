@@ -48,6 +48,7 @@ import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 # ClientHello 的 ALPN 扩展编号（RFC 7301）。
@@ -1358,6 +1359,8 @@ _OFFICIAL_SYNTHETIC_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 _OFFICIAL_IMAGE_EDIT_PROMPT = "把参考图片改成蓝色调，保持构图不变。"
+# file_id 编辑链受控工具调用的 call_id：收尾请求带回同一 call_id 的 function_call_output，据此判定应答收尾消息。
+_OFFICIAL_IMAGE_EDIT_CALL_ID = "call_official_image_edit"
 _SAFE_FILE_ID_RE = re.compile(r"^file[-_][A-Za-z0-9_-]{8,64}$")
 
 
@@ -1445,13 +1448,69 @@ def _official_message_events(response_id: str, text: str) -> list[dict]:
     ]
 
 
+def _decoded_request_json(head: bytes, body: bytes) -> Any:
+    """按 content-encoding 解出客户端请求体的 JSON；无法解码返回 None（不猜测）。"""
+
+    encoding = _request_header_value(head, "content-encoding").strip().lower()
+    data = body
+    if encoding == "zstd":
+        try:
+            import zstandard
+        except ImportError:
+            return None
+        try:
+            data = zstandard.ZstdDecompressor().decompressobj().decompress(body)
+        except zstandard.ZstdError:
+            return None
+    elif encoding not in ("", "identity"):
+        return None
+    try:
+        return json.loads(data)
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _json_contains_string(value: Any, needle: str) -> bool:
+    if isinstance(value, str):
+        return value == needle
+    if isinstance(value, dict):
+        return any(_json_contains_string(item, needle) for item in value.values())
+    if isinstance(value, list):
+        return any(_json_contains_string(item, needle) for item in value)
+    return False
+
+
+def _image_edit_chain_decision(payload: Any, file_id: str, call_issued: bool) -> str:
+    """file_id 编辑链按请求内容选择受控应答，不按到达序号猜测。
+
+    - 请求 input 里带回受控调用（``_OFFICIAL_IMAGE_EDIT_CALL_ID``）的 function_call_output：收尾消息；
+    - 尚未发过受控调用、且请求里出现会话 file_id 图片：应答 imagegen 编辑调用（真实的用户轮次）；
+    - 其余 Responses（如客户端在正式轮次前后另发的请求）：普通完成消息，不推进编辑链。
+    请求体无法解码时返回 ``undecodable``，由调用方按到达序号兜底并在元数据里标明。
+    """
+
+    if payload is None:
+        return "undecodable"
+    items = payload.get("input") if isinstance(payload, dict) else None
+    if isinstance(items, list) and any(
+        isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("call_id") == _OFFICIAL_IMAGE_EDIT_CALL_ID
+        for item in items
+    ):
+        return "final_message"
+    if not call_issued and _json_contains_string(payload, file_id):
+        return "imagegen_edit_call"
+    return "other_completed"
+
+
 def _official_imagegen_call_events(response_id: str) -> list[dict]:
     """受控工具调用：让官方客户端对会话里最近一张图片执行 imagegen 编辑（num_last_images_to_include=1）。"""
 
     call = {
         "type": "function_call",
         "id": f"fc_{response_id}",
-        "call_id": f"call_{response_id}",
+        "call_id": _OFFICIAL_IMAGE_EDIT_CALL_ID,
         "name": "imagegen",
         "namespace": "image_gen",
         "arguments": json.dumps(
@@ -1768,6 +1827,7 @@ class Relay:
         # 空闲关闭只作用于首条 Responses WS。
         self._stream_fault_applied = False
         self._image_edit_responses = 0
+        self._image_edit_call_issued = False
         self._image_edit_lock = asyncio.Lock()
         self._idle_close_applied = False
         self._preconnected_upstream: PreconnectedUpstream | None = None
@@ -3289,16 +3349,30 @@ class Relay:
                     if edit_body:
                         rec.write("client_to_upstream", edit_body)
                     if request_line.startswith("POST /backend-api/codex/responses "):
+                        decision = _image_edit_chain_decision(
+                            _decoded_request_json(initial_head, edit_body or b""),
+                            self.args.synthesize_image_edit_file_id,
+                            self._image_edit_call_issued,
+                        )
                         async with self._image_edit_lock:
                             self._image_edit_responses += 1
                             ordinal = self._image_edit_responses
+                            if decision == "undecodable":
+                                # 请求体解不开时退回到达序号：首个 Responses 应答编辑调用，其余应答收尾消息。
+                                decision = (
+                                    "final_message" if self._image_edit_call_issued else "imagegen_edit_call"
+                                )
+                                meta["image_edit_decision_fallback"] = "arrival_order"
+                            if decision == "imagegen_edit_call":
+                                self._image_edit_call_issued = True
                         response_id = f"resp_official_image_edit_{ordinal:04d}"
-                        if ordinal == 1:
+                        if decision == "imagegen_edit_call":
                             events = _official_imagegen_call_events(response_id)
-                            action = "imagegen_edit_call"
-                        else:
+                        elif decision == "final_message":
                             events = _official_message_events(response_id, "EDIT-OK")
-                            action = "final_message"
+                        else:
+                            events = _official_message_events(response_id, "OK")
+                        action = decision
                         response = _official_sse_response(events)
                     else:
                         ordinal = None
@@ -3740,8 +3814,9 @@ def main() -> None:
     ap.add_argument(
         "--synthesize-image-edit-file-id",
         default="",
-        help=("官方定向样本：file_id 图像编辑链。Responses 首个请求受控应答 imagegen 编辑调用、"
-              "其后应答完成消息，images/edits 受控应答合成图片；值为会话里 file_id 图片的标识"),
+        help=("官方定向样本：file_id 图像编辑链。按请求内容受控应答：带会话 file_id 图片的用户轮次应答 imagegen "
+              "编辑调用、带回该调用输出的请求应答收尾消息、其余 Responses 应答普通完成，images/edits 受控应答合成图片；"
+              "值为会话里 file_id 图片的标识"),
     )
     ap.add_argument(
         "--close-idle-ws-after",
