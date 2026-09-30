@@ -18,19 +18,26 @@ type postBootstrapSinkTransition struct {
 // postBootstrapSinkAddition 描述上游合并后新增、但不进入官方 OAuth Catalog 的
 // 发送点。它不能用“按文件全部 out-of-scope”替代，必须精确到 ScanCandidateID，
 // 并冻结运行时身份为空、not_applicable 等安全边界。
+//
+// absentBeforeMerge 为真表示该发送点随尚未合入的上游版本新增：合并前主干不可能出现
+// 这些调用点，扫描器又属于合并期间冻结的工具闭集、不能在候选分支里补登记，因此只能
+// 在主干预先登记。同一 mergeGroup 的候选合并前必须全部缺失、合并后必须全部出现，
+// 只出现一部分即失败关闭；出现后照常按本条冻结的分类与后端边界逐字段校验。
 type postBootstrapSinkAddition struct {
-	name             string
-	candidateID      string
-	persona          string
-	runtimeSinkID    string
-	purpose          string
-	endpointEvidence string
-	sinkKind         string
-	backend          string
-	targetBackend    string
-	enforcementState string
-	evidenceRef      string
-	rationale        string
+	name              string
+	candidateID       string
+	persona           string
+	runtimeSinkID     string
+	purpose           string
+	endpointEvidence  string
+	sinkKind          string
+	backend           string
+	targetBackend     string
+	enforcementState  string
+	evidenceRef       string
+	rationale         string
+	absentBeforeMerge bool
+	mergeGroup        string
 }
 
 type postBootstrapAcceptance struct {
@@ -42,6 +49,9 @@ var upstreamScannerSuccessorEvidence = fmt.Sprintf(
 	"docs/egress/maintenance/upstream-v%d.%d.%d-scanner-successor-source-transition.json",
 	0, 2, 3,
 )
+
+// upstreamPendingAdditionsEvidence 是合并前在主干预先登记上游新增发送点的承接收据。
+var upstreamPendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0210-scanner-pending-additions-20260930-freeze-successor.json"
 
 var reviewedPostBootstrapSinkTransitions = []postBootstrapSinkTransition{
 	{
@@ -67,6 +77,70 @@ var reviewedPostBootstrapSinkAdditions = []postBootstrapSinkAddition{
 		enforcementState: "not_applicable",
 		evidenceRef:      upstreamScannerSuccessorEvidence,
 		rationale:        "本次上游版本新增图片 URL 到 b64_json 的兼容回填下载，不承载官方 OAuth 出站。",
+	},
+	{
+		name:              "upstream-typesafe-content-moderation",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/pkg/typesafe.Evaluate@backend/internal/pkg/typesafe/client.go#net_http_client_do#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "net_http_client_do",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamPendingAdditionsEvidence,
+		rationale:         "本次上游同步新增的 TypeSafe 内容审核请求，目标为管理员配置的第三方审核 API，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-typesafe-seedance-opencode-go-claude-reset",
+	},
+	{
+		name:              "upstream-seedance-video-forward",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardSeedance@backend/internal/service/seedance.go#facade_http_upstream_do#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "facade_http_upstream_do",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamPendingAdditionsEvidence,
+		rationale:         "本次上游同步新增的 Seedance 视频任务转发，目标为账号 base_url 配置的第三方上游，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-typesafe-seedance-opencode-go-claude-reset",
+	},
+	{
+		name:              "upstream-opencode-go-usage-refresh",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.*OpenCodeGoUsageService.refreshLoadedAccount@backend/internal/service/opencode_go_usage.go#facade_http_upstream_do#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "facade_http_upstream_do",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamPendingAdditionsEvidence,
+		rationale:         "本次上游同步新增的 OpenCode Go 用量查询，目标 opencode.ai，属于第三方 API Key 平台，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-typesafe-seedance-opencode-go-claude-reset",
+	},
+	{
+		name:              "upstream-claude-oauth-reset-credits",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.NewClaudeResetCreditService@backend/internal/service/claude_reset_credits.go#factory_httpclient_pool#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "factory_httpclient_pool",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamPendingAdditionsEvidence,
+		rationale:         "本次上游同步新增的 Claude OAuth 账号重置额度查询与兑换客户端（api.anthropic.com），与既有 Claude 用量查询同属管理端辅助请求，不承载 Claude Code persona 推理；Claude 出站 Inventory 登记为 non_persona_managed。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-typesafe-seedance-opencode-go-claude-reset",
 	},
 }
 
@@ -114,9 +188,12 @@ func validateReviewedPostBootstrapSinkAcceptance(
 		accepted.acceptedRemoved[transition.beforeID] = struct{}{}
 	}
 
+	// 合并前预先登记的上游新增发送点按 mergeGroup 统计出现条数，整组只能全缺或全在。
+	pendingTotal := make(map[string]int)
+	pendingPresent := make(map[string]int)
 	for _, addition := range reviewedPostBootstrapSinkAdditions {
 		if addition.name == "" || addition.candidateID == "" || addition.evidenceRef == "" ||
-			addition.rationale == "" {
+			addition.rationale == "" || (addition.absentBeforeMerge && addition.mergeGroup == "") {
 			problems = append(problems, "post-bootstrap sink addition 定义不完整")
 			continue
 		}
@@ -127,7 +204,17 @@ func validateReviewedPostBootstrapSinkAcceptance(
 			continue
 		}
 		current, exists := currentByID[addition.candidateID]
+		if addition.absentBeforeMerge {
+			pendingTotal[addition.mergeGroup]++
+			if exists {
+				pendingPresent[addition.mergeGroup]++
+			}
+		}
 		if !exists {
+			if addition.absentBeforeMerge {
+				// 上游新增发送点合并前尚未出现：合法状态，整组是否齐全在循环后统一判定。
+				continue
+			}
 			problems = append(problems, fmt.Sprintf(
 				"%s 新增 candidate 不在当前发送面中: %s", addition.name, addition.candidateID))
 			continue
@@ -137,6 +224,13 @@ func validateReviewedPostBootstrapSinkAcceptance(
 			continue
 		}
 		accepted.acceptedAdded[addition.candidateID] = struct{}{}
+	}
+	for group, total := range pendingTotal {
+		if present := pendingPresent[group]; present != 0 && present != total {
+			problems = append(problems, fmt.Sprintf(
+				"%s 上游新增发送点只出现 %d/%d 条：合并前必须全部缺失、合并后必须全部出现",
+				group, present, total))
+		}
 	}
 
 	return accepted, problems
