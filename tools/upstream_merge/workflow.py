@@ -49,9 +49,11 @@ from .contracts import (
     latest_stage_path,
     next_inventory_path,
     next_stage_path,
+    resolve_covered_tags,
     revision_number,
     stage_paths,
     stage_binding,
+    upstream_range_tags,
 )
 from .errors import UpstreamMergeError
 from .preflight_report import (
@@ -706,6 +708,51 @@ def _preflight_freeze_coverage(
         return {"status": "failed", "reason": str(error)}
 
 
+def _preflight_covered_tags(
+    repository_root: Path,
+    upstream: dict[str, Any],
+    merge_base_value: str,
+    blockers: list[str],
+) -> dict[str, Any]:
+    """列出 merge-base 之后到目标的全部上游 tag，及每个 tag 相对前一个的提交数与变化文件数。
+
+    与 plan-create 使用同一复算规则：区间内有多个 tag 时 request 必须逐个登记 covered_tags。
+    """
+
+    findings: list[str] = []
+    try:
+        ranged = upstream_range_tags(repository_root, merge_base_value, upstream["commit"])
+    except UpstreamMergeError as error:
+        blockers.append("覆盖区间无法复算：" + str(error))
+        return {"status": "failed", "tags": [], "findings": [str(error)]}
+    try:
+        resolve_covered_tags(
+            repository_root,
+            upstream,
+            merge_base_value,
+            label="UpstreamMergeRequest.upstream",
+            require_explicit=True,
+        )
+    except UpstreamMergeError as error:
+        findings.append(str(error))
+        blockers.append("覆盖区间检查失败：" + str(error))
+    rows: list[dict[str, Any]] = []
+    previous = merge_base_value
+    for item in ranged:
+        rows.append(
+            {
+                "tag": item["tag"],
+                "commit": item["commit"],
+                "commit_count": int(
+                    git_output(repository_root, "rev-list", "--count", f"{previous}..{item['commit']}")
+                ),
+                "changed_file_count": len(changed_paths(repository_root, previous, item["commit"])),
+            }
+        )
+        previous = item["commit"]
+    return {"status": "passed" if not findings else "failed", "tags": rows, "findings": findings}
+
+
 def run_preflight(
     request_path: Path,
     repository_root: Path,
@@ -758,6 +805,7 @@ def run_preflight(
     if tag_commit(root, upstream["tag"]) != upstream["commit"]:
         blockers.append("上游 tag 与请求 commit 不一致")
     merge_base_value = merge_base(root, fork_head, upstream["commit"])
+    covered_tags_report = _preflight_covered_tags(root, upstream, merge_base_value, blockers)
 
     # §5.2.2 的五项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖。
     # 前四项不依赖试合并结果，因冲突而 blocked 时仍然输出。
@@ -906,6 +954,7 @@ def run_preflight(
             },
             "merge_exit_code": merge_exit_code,
             "conflict_paths": conflict_paths,
+            "covered_tags": covered_tags_report,
             "checks": checks,
             "report": {
                 "conflict_closure": conflict_closure(conflict_paths, upstream_changed_path_count),

@@ -16,7 +16,8 @@
     "{previous_evidence}": "上一次成功 Plan 的 evidence 根目录，用于四份 Inventory 基线",
     "{baseline_acceptance}": "最近一次 baseline-seal 的收据绝对路径",
     "{runtime_state}": "当前 HEAD 运行态文件绝对路径",
-    "{recovery_point}": "当前 HEAD 回退点文件绝对路径"
+    "{recovery_point}": "当前 HEAD 回退点文件绝对路径",
+    "{covered_tags}": "同一 minor 内 merge-base 之后到目标 tag 的全部上游版本 tag，按祖先顺序逐项 {tag, commit}，最后一项就是目标 tag；用 git tag --list --merged <目标> --no-merged <merge-base> 列出后按提交深度排序。只合一个 tag 时写目标 tag 一项；plan-create 会用 Git 逐项复算，缺登记或不一致即拒绝"
   },
   "refresh_rules": [
     "Active/Rollback 路径必须从当前 release catalog 解析，不得复制上一轮 request",
@@ -30,7 +31,13 @@
       "remote": "upstream",
       "url": "https://github.com/Wei-Shaw/sub2api.git",
       "tag": "{upstream_tag}",
-      "commit": "{upstream_commit}"
+      "commit": "{upstream_commit}",
+      "covered_tags": [
+        {
+          "tag": "{upstream_tag}",
+          "commit": "{upstream_commit}"
+        }
+      ]
     },
     "repository": {
       "managed_ref": "refs/heads/main"

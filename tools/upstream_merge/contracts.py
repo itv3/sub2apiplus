@@ -392,6 +392,144 @@ def _validate_gates(value: Any, label: str = "gates") -> list[dict[str, Any]]:
     return normalized
 
 
+UPSTREAM_FIELDS = {"remote", "url", "tag", "commit"}
+COVERED_TAGS_FIELD = "covered_tags"
+_TAG_MINOR_RE = re.compile(r"^v([0-9]+)\.([0-9]+)\.")
+
+
+def _tag_minor(tag: str) -> tuple[int, int]:
+    match = _TAG_MINOR_RE.match(tag)
+    if match is None:
+        raise UpstreamMergeError(f"无法解析 tag 的 minor 版本：{tag}")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _expect_upstream_fields(upstream: dict[str, Any], label: str) -> None:
+    """upstream 固定四个字段，covered_tags 可选；其余字段一律拒绝。"""
+
+    actual = set(upstream)
+    allowed = UPSTREAM_FIELDS | {COVERED_TAGS_FIELD}
+    if UPSTREAM_FIELDS - actual or actual - allowed:
+        raise UpstreamMergeError(
+            f"{label} 字段不闭合：缺失={sorted(UPSTREAM_FIELDS - actual)}，"
+            f"多余={sorted(actual - allowed)}"
+        )
+
+
+def _validate_covered_tags_shape(upstream: dict[str, Any], label: str) -> list[dict[str, str]] | None:
+    """covered_tags 的结构校验，不访问 Git；缺省时返回 None。
+
+    covered_tags 按祖先顺序列出本次一次合入的全部上游版本 tag，每项冻结 tag 名与 commit，
+    最后一项必须就是目标 tag 与 commit；全部 tag 与目标同一 minor，跨 minor 的合并仍须分 Plan。
+    """
+
+    if COVERED_TAGS_FIELD not in upstream:
+        return None
+    raw = upstream[COVERED_TAGS_FIELD]
+    if not isinstance(raw, list) or not raw:
+        raise UpstreamMergeError(f"{label}.covered_tags 必须是非空数组")
+    target_minor = _tag_minor(expect_string(upstream.get("tag"), f"{label}.tag"))
+    entries: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, value in enumerate(raw):
+        item_label = f"{label}.covered_tags[{index}]"
+        item = expect_object(value, item_label)
+        expect_exact_fields(item, {"tag", "commit"}, item_label)
+        tag = expect_string(item.get("tag"), f"{item_label}.tag")
+        if not TAG_RE.fullmatch(tag):
+            raise UpstreamMergeError(f"{item_label}.tag 不是受支持的版本 tag")
+        if tag in seen:
+            raise UpstreamMergeError(f"{item_label}.tag 重复：{tag}")
+        if _tag_minor(tag) != target_minor:
+            raise UpstreamMergeError(f"{item_label}.tag 与目标 tag 不在同一 minor，跨 minor 必须分 Plan：{tag}")
+        seen.add(tag)
+        entries.append({"tag": tag, "commit": expect_git_object(item.get("commit"), f"{item_label}.commit")})
+    if entries[-1] != {"tag": upstream.get("tag"), "commit": upstream.get("commit")}:
+        raise UpstreamMergeError(f"{label}.covered_tags 最后一项必须是目标 tag 与 commit")
+    return entries
+
+
+def upstream_range_tags(repository_root: Path, base_commit: str, target_commit: str) -> list[dict[str, str]]:
+    """base_commit 之后（不含）到 target_commit（含）的全部版本 tag，按祖先顺序排列。
+
+    只统计符合版本格式的 tag；相邻两个 tag 必须在同一条祖先链上，否则区间不是线性的
+    上游历史，fail-close。
+    """
+
+    listed = run_git(
+        repository_root,
+        "tag",
+        "--list",
+        "--merged",
+        target_commit,
+        "--no-merged",
+        base_commit,
+    ).stdout.splitlines()
+    ranked: list[tuple[int, str, str]] = []
+    for tag in sorted({item.strip() for item in listed if item.strip()}):
+        if not TAG_RE.fullmatch(tag):
+            continue
+        commit = tag_commit(repository_root, tag)
+        depth = int(run_git(repository_root, "rev-list", "--count", commit).stdout.strip())
+        ranked.append((depth, tag, commit))
+    ranked.sort()
+    ordered = [{"tag": tag, "commit": commit} for _depth, tag, commit in ranked]
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous["commit"] == current["commit"]:
+            continue
+        ancestry = run_git(
+            repository_root,
+            "merge-base",
+            "--is-ancestor",
+            previous["commit"],
+            current["commit"],
+            check=False,
+        )
+        if ancestry.returncode != 0:
+            raise UpstreamMergeError(
+                f"区间内上游 tag 不在同一条祖先链上：{previous['tag']} → {current['tag']}"
+            )
+    return ordered
+
+
+def resolve_covered_tags(
+    repository_root: Path,
+    upstream: dict[str, Any],
+    base_commit: str,
+    *,
+    label: str,
+    require_explicit: bool,
+) -> list[dict[str, str]] | None:
+    """用 Git 复算 covered_tags：必须与 merge-base 之后到目标 commit 的全部版本 tag 逐项一致。
+
+    省略 covered_tags 时：区间内只有目标 tag，视为只合这一个 tag，返回 None；区间内有多个
+    tag 且 require_explicit 为真（新建 Plan），一律拒绝——一次合入多个 tag 必须显式登记。
+    """
+
+    declared = _validate_covered_tags_shape(upstream, label)
+    target = {"tag": upstream["tag"], "commit": upstream["commit"]}
+    actual = upstream_range_tags(repository_root, base_commit, str(upstream["commit"]))
+    if not actual or actual[-1] != target:
+        raise UpstreamMergeError(f"目标 tag 不是 merge-base 之后上游区间的末端：{upstream['tag']}")
+    target_minor = _tag_minor(str(upstream["tag"]))
+    crossed = [item["tag"] for item in actual if _tag_minor(item["tag"]) != target_minor]
+    if crossed:
+        raise UpstreamMergeError(f"merge-base 之后的上游区间跨 minor，必须分 Plan：{crossed}")
+    if declared is None:
+        if len(actual) > 1 and require_explicit:
+            raise UpstreamMergeError(
+                f"merge-base 之后到目标共有 {len(actual)} 个上游 tag，必须在 upstream.covered_tags 逐个登记："
+                + ", ".join(item["tag"] for item in actual)
+            )
+        return None
+    if declared != actual:
+        raise UpstreamMergeError(
+            f"{label}.covered_tags 与 Git 复算不一致："
+            f"登记={[item['tag'] for item in declared]} 实际={[item['tag'] for item in actual]}"
+        )
+    return declared
+
+
 def load_request(path: Path) -> dict[str, Any]:
     request = expect_object(load_json(path, "UpstreamMergeRequest"), "UpstreamMergeRequest")
     expect_exact_fields(
@@ -414,7 +552,7 @@ def load_request(path: Path) -> dict[str, Any]:
         raise UpstreamMergeError("UpstreamMergeRequest schema_version 非法")
     expect_safe_id(request.get("plan_id"), "UpstreamMergeRequest.plan_id")
     upstream = expect_object(request.get("upstream"), "UpstreamMergeRequest.upstream")
-    expect_exact_fields(upstream, {"remote", "url", "tag", "commit"}, "UpstreamMergeRequest.upstream")
+    _expect_upstream_fields(upstream, "UpstreamMergeRequest.upstream")
     expect_safe_id(upstream.get("remote"), "upstream.remote")
     url = expect_string(upstream.get("url"), "upstream.url")
     if not url.startswith("https://"):
@@ -423,6 +561,8 @@ def load_request(path: Path) -> dict[str, Any]:
     if not TAG_RE.fullmatch(tag):
         raise UpstreamMergeError("upstream.tag 不是受支持的版本 tag")
     expect_git_object(upstream.get("commit"), "upstream.commit")
+    # 只做结构校验；与 Git 历史的逐项复算在 plan-create 与 load_plan 中进行。
+    _validate_covered_tags_shape(upstream, "UpstreamMergeRequest.upstream")
     repository = expect_object(request.get("repository"), "UpstreamMergeRequest.repository")
     expect_exact_fields(repository, {"managed_ref"}, "UpstreamMergeRequest.repository")
     managed_ref = expect_string(repository.get("managed_ref"), "repository.managed_ref")
@@ -646,6 +786,19 @@ def create_plan(request_path: Path, repository_root: Path) -> LoadedPlan:
         raise UpstreamMergeError("目标 upstream commit 已包含在当前 fork HEAD 中")
     if already_merged.returncode not in {0, 1}:
         raise UpstreamMergeError("无法判断 upstream commit 与 fork HEAD 的祖先关系")
+    planned_merge_base = merge_base(root, fork_head, upstream["commit"])
+    covered_tags = resolve_covered_tags(
+        root,
+        upstream,
+        planned_merge_base,
+        label="UpstreamMergeRequest.upstream",
+        require_explicit=True,
+    )
+    # Plan 总是显式登记覆盖区间；只合一个 tag 时即目标 tag 本身。
+    plan_upstream = {
+        **upstream,
+        COVERED_TAGS_FIELD: covered_tags or [{"tag": upstream["tag"], "commit": upstream["commit"]}],
+    }
     worktree = _safe_absolute_path(request["workspace"]["worktree"], "workspace.worktree")
     evidence_requested = _safe_absolute_path(
         request["workspace"]["evidence_root"], "workspace.evidence_root"
@@ -709,12 +862,12 @@ def create_plan(request_path: Path, repository_root: Path) -> LoadedPlan:
         "schema_version": PLAN_SCHEMA,
         "plan_id": request["plan_id"],
         "purpose": PLAN_PURPOSE,
-        "upstream": upstream,
+        "upstream": plan_upstream,
         "repository": {
             "managed_ref": managed_ref,
             "fork_head": fork_head,
             "fork_tree": fork_tree,
-            "merge_base": merge_base(root, fork_head, upstream["commit"]),
+            "merge_base": planned_merge_base,
             "protected_objects": protected_objects(
                 root,
                 fork_head,
@@ -785,7 +938,7 @@ def load_plan(
     validate_identity(plan, "UpstreamMergePlan")
 
     upstream = expect_object(plan.get("upstream"), "upstream")
-    expect_exact_fields(upstream, {"remote", "url", "tag", "commit"}, "upstream")
+    _expect_upstream_fields(upstream, "upstream")
     remote = expect_safe_id(upstream.get("remote"), "upstream.remote")
     url = expect_string(upstream.get("url"), "upstream.url")
     if not url.startswith("https://") or remote_url(root, remote) != url:
@@ -813,6 +966,9 @@ def load_plan(
         raise UpstreamMergeError("repository.fork_tree 漂移")
     if merge_base(root, fork_head, commit) != planned_base:
         raise UpstreamMergeError("repository.merge_base 漂移")
+    # 早期 Plan 没有 covered_tags，按单 tag 合并解释；登记了就必须能由 Git 逐项复算。
+    if COVERED_TAGS_FIELD in upstream:
+        resolve_covered_tags(root, upstream, planned_base, label="upstream", require_explicit=False)
     validate_protected_objects(root, fork_head, repository.get("protected_objects"))
 
     workspace = expect_object(plan.get("workspace"), "workspace")

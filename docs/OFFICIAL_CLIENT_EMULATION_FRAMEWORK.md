@@ -562,8 +562,8 @@ U-4 的结果只有三种出口：
    `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（ARM64 受管工具
    摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时写入
    `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认。修改注册表不属于
-   工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点的 Go 冻结测试仍按上游版本各写
-   一份（两包），可从上一版本复制并只改常量。
+   工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点由 service、officialegress 两包
+   的通用冻结测试逐个复算（glob `upstream-v*-source-transition.json`），新合并的节点无需再写测试。
 
    `source-transition` 生成节点、`source-transition-validate` 校验链尾；路径、状态与两端摘要一律由
    Git 复算，删除和重命名保留前后路径，历史节点不改写，修复只追加 successor。前序链不连续时不要强接
@@ -575,12 +575,14 @@ U-4 的结果只有三种出口：
    与扫描器补分类这两类常见变化不靠拆分闭集回避，而是靠 §5.2.2 的闭集受扰清单提前处置、靠 §5.2.1 把
    分类缺口修在 `plan-create` 之前。闭集任一字节变化都会改变合并事实含义：进行中的 Plan 必须停线并
    新建 Plan；合并期间发现工具缺陷的唯一路径是停线、在主仓库修复并提交、重新封存基线与预检、新建 Plan。
-4. 按上游 tag 逐个合并，不跨越 minor 版本，即使两个 tag 间隔不足两周也分别合并。有效工作时间的参考
-   值：普通 tag 更新约 3～3.5 小时，跨 minor 或 60 个以上冲突文件约 8～9 小时，涉及官方 wire、Persona
-   或共享控制面再加 2～4 小时；冲突人工解决与契约适配随上游规模线性增长，只能靠逐 tag 合并摊薄。
-   时间账本显示工具本身几乎不占时间——除 `gates-run` 外的全部子命令合计不到 2 分钟，工期取决于冲突
-   解决与被工具拒绝后的往返，因此门禁应稳定在两轮：首轮暴露冻结摘要漂移，台账 revision 后次轮全绿。
-   预检报告的冲突文件数与变化文件数写入 Plan。废弃 Plan 的 worktree/evidence 只在完成留档和审计确认后
+4. 同一 minor 内一次合到最新 tag：request 与 Plan 的 `upstream.covered_tags` 按祖先顺序登记
+   merge-base 之后到目标的全部上游版本 tag，`plan-create` 与 `load_plan` 用 Git 逐项复算，缺登记、
+   不一致、非线性历史或跨 minor 一律拒绝；跨 minor 仍分 Plan。逐 tag 各走一遍只会重复基线、门禁与
+   台账等固定开销，冲突总量反而更多（v0.2.5～v0.2.10 逐 tag 累计 96 个文件次，一次合入 77 个）。
+   顺利路径的主要耗时是门禁：`gates-run` 以外的全部子命令合计不到 2 分钟；full-regression 一轮在
+   10 核 16 GiB 的本机约 30 分钟（go test 三组约 11 分钟、采集工具 4 片约 16 分钟），首轮通常暴露冻结
+   摘要漂移，台账 revision 后次轮全绿。覆盖区间随 Plan 进入 finalize 收据；预检报告的冲突文件数与
+   变化文件数写入 Plan。废弃 Plan 的 worktree/evidence 只在完成留档和审计确认后
    清理，不得用清理动作替代收据。
 5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`：命令、参数、起止时间、
    耗时、结果与错误。默认落点是 Plan 目录，其次是输出或收据所在目录；推断路径落在 Git 工作树内时
