@@ -1,0 +1,162 @@
+{
+  "base_commit": "fb81f0ac7f6dc7586350aa4981f5f1845911ed9b",
+  "changed_path_count": 8,
+  "current_commit": "5dd2f2bd1d66ef75cd083ea822544804284e0f05",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4568,
+  "frozen_path_count": 1399,
+  "identity_sha256": "4e6a1c75e962d3b5524685957e01af2229aac6a76cef97c5034e0994d76063b3",
+  "issued_at_utc": "2026-09-30T05:36:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-merge-ci-evidence-um7-20260930-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "6883553c3cb7ce27397e5398ebba0b02de43af2bb08f949f3197424560b1635c"
+      ],
+      "reason": "上游合并工具 UM-7①：本机无 Docker 时 integration 记为未执行，收据 awaiting_ci，由 gates-import-ci 绑定同一候选提交的 CI 证据补齐；新增 ci-push／ci-cleanup，CI 触发增加 upstream-merge/**；不改变官方客户端画像、Persona、wire 或生产代码。 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "69f1563c5ddd82fc6360210727b8f833233bfb4f73153b57615e84c53f239a3c"
+    },
+    {
+      "old_path": "",
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "predecessor_sha256s": [
+        "517f33394b20244e5a7253308741dc930660565437da6d66e73340590d2652b8"
+      ],
+      "reason": "上游合并工具 UM-7①：本机无 Docker 时 integration 记为未执行，收据 awaiting_ci，由 gates-import-ci 绑定同一候选提交的 CI 证据补齐；新增 ci-push／ci-cleanup，CI 触发增加 upstream-merge/**；不改变官方客户端画像、Persona、wire 或生产代码。 path=docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-stopped-ledger-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-system-proxy-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-sync-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-doc-revision-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "99e9bee4e542239fc7327e0438e900fe7c6eab5c3180ef870a3b9d27af34db08"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/__main__.py",
+      "predecessor_sha256s": [
+        "50e847fcd33c1a7817ad764fc7c134acf04ceab0db6fc28b9ffeaf08ef42c58a"
+      ],
+      "reason": "上游合并工具 UM-7①：本机无 Docker 时 integration 记为未执行，收据 awaiting_ci，由 gates-import-ci 绑定同一候选提交的 CI 证据补齐；新增 ci-push／ci-cleanup，CI 触发增加 upstream-merge/**；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge/__main__.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch2-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "35e09dd3ec80720b4a7ed8e77dcf5d428b3a6ae30ce10c0819aec4ef7989cdc7"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "d8ffba59a310f392c58c7a63e92930b96d2378135b5be3bb88e1aaa3f5ce3c7e"
+      ],
+      "reason": "上游合并工具 UM-7①：本机无 Docker 时 integration 记为未执行，收据 awaiting_ci，由 gates-import-ci 绑定同一候选提交的 CI 证据补齐；新增 ci-push／ci-cleanup，CI 触发增加 upstream-merge/**；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "46162f85177dd353065ca68a081e73132bb5c25ca8209a755156fe52e0fba737"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge_artifacts.schema.json",
+      "predecessor_sha256s": [
+        "3622f629067095da22570aaa29613e699875de220652817d51487a33cd74dcc5"
+      ],
+      "reason": "上游合并工具 UM-7①：本机无 Docker 时 integration 记为未执行，收据 awaiting_ci，由 gates-import-ci 绑定同一候选提交的 CI 证据补齐；新增 ci-push／ci-cleanup，CI 触发增加 upstream-merge/**；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge_artifacts.schema.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-schema-repair-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "7bde336ea603fc9050f769aa26bba8f04314ffa3d392eec8417b07c93869ec26"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/upstream_merge/gate_runner.py",
+    "tools/upstream_merge/tests/test_ci_evidence.py",
+    "tools/upstream_merge/tests/test_gate_runner.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
