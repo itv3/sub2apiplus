@@ -13,8 +13,12 @@ from typing import Any, Sequence
 from .canonical import bind_identity, canonical_bytes, expect_object, load_json, write_json_once
 from .baseline import seal_baseline_acceptance, validate_baseline_acceptance
 from .contracts import create_plan, load_plan
+from .disposition_draft import DISPOSITION_PURPOSES, draft_candidate_disposition, parse_campaigns
 from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
+from .plan_inputs import AWAITING_MANUAL_INPUT
+from .plan_replay import replay_trial_tree, seal_merge_with_replay
+from .revision_advance import advance_revision
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
     apply_candidate_to_managed_branch,
@@ -198,9 +202,27 @@ def build_parser() -> argparse.ArgumentParser:
     merge_start = commands.add_parser("merge-start", help="U-1 创建隔离 worktree 并开始合并")
     _add_plan(merge_start)
 
+    plan_replay = commands.add_parser(
+        "plan-replay",
+        help="U-1 把试验区定型树与主干新增提交合成本 Plan 合并候选（merge-start 之后、merge-seal 之前）",
+    )
+    _add_plan(plan_replay)
+    plan_replay.add_argument("--trial-tree", required=True, help="试验区定型树（tree 或 commit）")
+    plan_replay.add_argument("--trial-base", required=True, help="试验区合并时的 fork 基点提交")
+    plan_replay.add_argument(
+        "--previous-plan",
+        type=_absolute,
+        help="前序 Plan 的 evidence root；给出时输出与其合并候选树的差异清单",
+    )
+
     merge_seal = commands.add_parser("merge-seal", help="U-1 封存冲突台账和双父 merge commit")
     _add_plan(merge_seal)
     merge_seal.add_argument("--conflict-decisions", type=_absolute)
+    merge_seal.add_argument(
+        "--replay-from",
+        type=_absolute,
+        help="前序 Plan 的 evidence root：三方 stage 对象与解决结果一致的冲突复用其决定，其余交人工",
+    )
 
     source_seal = commands.add_parser("source-seal", help="U-2 生成 overlay 并封存 source candidate")
     _add_plan(source_seal)
@@ -236,6 +258,18 @@ def build_parser() -> argparse.ArgumentParser:
     impact_seal = commands.add_parser("impact-seal", help="U-3 封存逐文件与调用边处置")
     _add_plan(impact_seal)
     impact_seal.add_argument("--decision", required=True, type=_absolute)
+
+    revision_advance = commands.add_parser(
+        "revision-advance",
+        help="推进一个源码 revision：source-seal 到 revision-preflight 一条命令，停在人工输入时 --resume 续跑",
+    )
+    _add_plan(revision_advance)
+    revision_advance.add_argument(
+        "--source-changes",
+        type=_absolute,
+        help="本轮 SourceChangeInput；可只含 entries（路径与理由），机械字段由工具补齐",
+    )
+    revision_advance.add_argument("--resume", action="store_true", help="续跑最近一轮未封存完的 revision")
 
     revision_preflight = commands.add_parser(
         "revision-preflight",
@@ -284,6 +318,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_plan(ci_cleanup)
     ci_cleanup.add_argument("--remote", default="origin", help="远端；默认 origin")
+
+    disposition_draft = commands.add_parser(
+        "disposition-draft",
+        help="U-5 由验收收据派生原业务回归收据、共享合同草稿与处置输入",
+    )
+    _add_plan(disposition_draft)
+    disposition_draft.add_argument("--attempt-id", required=True, help="通过的 U-4 attempt")
+    disposition_draft.add_argument(
+        "--campaign",
+        action="append",
+        help="受影响客户端的 Campaign 收据：claude=绝对路径 或 codex=绝对路径，可重复",
+    )
+    disposition_draft.add_argument("--purpose", choices=DISPOSITION_PURPOSES, default="validation_only")
+    disposition_draft.add_argument("--dry-run", action="store_true", help="只打印三份文档，不写文件")
 
     disposition = commands.add_parser("disposition-seal", help="U-5 封存 candidate/Campaign 处置")
     _add_plan(disposition)
@@ -507,7 +555,16 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "merge-start":
         return start_merge(plan)
+    if command == "plan-replay":
+        return replay_trial_tree(
+            plan,
+            arguments.trial_tree,
+            arguments.trial_base,
+            arguments.previous_plan,
+        )
     if command == "merge-seal":
+        if arguments.replay_from is not None:
+            return seal_merge_with_replay(plan, arguments.replay_from, arguments.conflict_decisions)
         return seal_merge(plan, arguments.conflict_decisions)
     if command == "source-seal":
         return seal_source_candidate(plan, arguments.source_changes)
@@ -530,6 +587,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "impact-seal":
         return seal_change_decision(plan, arguments.decision)
+    if command == "revision-advance":
+        return advance_revision(plan, arguments.source_changes, resume=arguments.resume)
     if command == "revision-preflight":
         return preflight_revisions(plan, arguments.transition)
     if command == "gates-run":
@@ -558,6 +617,14 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "ci-cleanup":
         return delete_ci_branch(plan, remote=arguments.remote)
+    if command == "disposition-draft":
+        return draft_candidate_disposition(
+            plan,
+            arguments.attempt_id,
+            parse_campaigns(arguments.campaign),
+            purpose=arguments.purpose,
+            dry_run=arguments.dry_run,
+        )
     if command == "disposition-seal":
         return seal_candidate_disposition(
             plan,
@@ -584,6 +651,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     status, error_text, exit_code, result = "ok", None, 0, None
     try:
         result = execute(arguments)
+        if isinstance(result, dict) and result.get("result") == AWAITING_MANUAL_INPUT:
+            # 停在人工输入：已完成的步骤保留，结果照常输出，退出码 4 让脚本不会误以为已完成。
+            status, exit_code = "awaiting_input", 4
     except UpstreamMergeError as error:
         status, error_text, exit_code = "rejected", str(error), 2
         print(f"上游合并工具拒绝：{error}", file=sys.stderr)
@@ -606,7 +676,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"时间账本写入失败：{error}", file=sys.stderr)
             if exit_code == 0:
                 exit_code = 3
-    if exit_code == 0 and result is not None:
+    if exit_code in (0, 4) and result is not None:
         sys.stdout.buffer.write(canonical_bytes(result))
     return exit_code
 

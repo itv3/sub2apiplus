@@ -57,6 +57,11 @@ from .contracts import (
     upstream_range_tags,
 )
 from .ci_jobs import ci_job_coverage
+from .disposition_receipts import (
+    validate_campaign,
+    validate_original_business_receipt,
+    validate_shared_contract_receipt,
+)
 from .errors import UpstreamMergeError
 from .preflight_report import (
     candidate_sink_diff,
@@ -578,7 +583,13 @@ def _revision_metadata(plan: LoadedPlan, key: str, revision: int) -> dict[str, A
     return {"revision": revision, "predecessor": predecessor}
 
 
-def _validated_linked_worktree(plan: LoadedPlan, path: Path) -> Path:
+def _validated_linked_worktree(plan: LoadedPlan, path: Path, *, check_tool_bundle: bool = True) -> Path:
+    """确认 worktree 属于计划仓库；默认同时核对其中的工具闭集与计划冻结一致。
+
+    ``plan-replay`` 在合并进行中调用时关闭闭集核对：上游对闭集文件（如 Makefile）的改动要等试验区
+    定型树覆盖后才恢复，合成完成后再完整核对。
+    """
+
     root = assert_git_repository(path)
     common = Path(git_output(root, "rev-parse", "--git-common-dir"))
     if not common.is_absolute():
@@ -588,7 +599,8 @@ def _validated_linked_worktree(plan: LoadedPlan, path: Path) -> Path:
         main_common = (plan.repository_root / main_common).resolve()
     if common.resolve() != main_common.resolve():
         raise UpstreamMergeError("隔离 worktree 不属于计划仓库")
-    validate_tool_bundle(root, plan.document["tool_bundle"])
+    if check_tool_bundle:
+        validate_tool_bundle(root, plan.document["tool_bundle"])
     return root
 
 
@@ -3250,7 +3262,7 @@ def seal_change_decision(plan: LoadedPlan, decision_path: Path) -> dict[str, Any
         value = decision["auto_accepted_count"]
         if isinstance(value, bool) or not isinstance(value, int) or value != auto_count:
             raise UpstreamMergeError(
-            f"ChangeDecision.auto_accepted_count 不一致：应为 {auto_accepted_count}"
+            f"ChangeDecision.auto_accepted_count 不一致：应为 {auto_count}"
         )
     if "manual_required_count" in decision:
         value = decision["manual_required_count"]
@@ -5139,12 +5151,49 @@ def _nullable_json_path(value: Any, label: str) -> Path | None:
     return path.resolve(strict=True)
 
 
+def _bound_change_decision(impact: dict[str, Any]) -> dict[str, Any]:
+    """读取 ChangeDecisionReceipt 以绝对路径绑定的签名 ChangeDecision，并核对摘要未变。"""
+
+    binding = validate_file_binding(impact["change_decision"], "ChangeDecisionReceipt.change_decision")
+    path = Path(binding["path"])
+    if sha256_file(path) != binding["sha256"]:
+        raise UpstreamMergeError(f"ChangeDecisionReceipt 绑定的 ChangeDecision 已被改动：{path}")
+    return expect_object(load_json(path, "ChangeDecision"), "ChangeDecision")
+
+
+def shared_control_facts(plan: LoadedPlan) -> dict[str, tuple[str | None, int | None]]:
+    """最新 ChangeDecision 中共享控制面文件在最新源码候选提交里的 (sha256, bytes)；已删除记为 None。"""
+
+    source = _load_source_candidate(plan)
+    decision = _bound_change_decision(_load_impact_receipt(plan))
+    facts: dict[str, tuple[str | None, int | None]] = {}
+    for item in decision["files"]:
+        if "shared_control" not in item.get("categories", []):
+            continue
+        path = str(item["path"])
+        completed = subprocess.run(
+            ["git", "cat-file", "blob", f"{source['source_commit']}:{path}"],
+            cwd=plan.repository_root,
+            capture_output=True,
+            check=False,
+        )
+        facts[path] = (
+            (sha256_bytes(completed.stdout), len(completed.stdout)) if completed.returncode == 0 else (None, None)
+        )
+    return facts
+
+
 def seal_candidate_disposition(
     plan: LoadedPlan,
     input_path: Path,
     verification_receipt_path: Path,
 ) -> dict[str, Any]:
-    """按 U-3 影响强制绑定新 candidate、后继 Campaign 及原业务验收。"""
+    """按 U-3 影响强制绑定新 candidate、后继 Campaign 及原业务验收。
+
+    UM-9 起同时校验三类外部收据的内容：Campaign 须是该 Persona 已登记格式的生产收据（new_candidate
+    还须正是计划冻结的 Active 版本）；原业务回归收据须由本次验收收据派生；共享合同后继收据须逐个
+    登记最新 ChangeDecision 的共享控制面路径并绑定本次验收。
+    """
 
     verification = load_verification_receipt(
         plan,
@@ -5223,6 +5272,14 @@ def seal_candidate_disposition(
             missing = [field for field, path in paths.items() if path is None]
             if missing:
                 raise UpstreamMergeError(f"{client} {mode} 缺少绑定：{missing}")
+            official = plan.document["official_clients"][client]
+            validate_campaign(
+                expect_object(load_json(paths["campaign_path"], f"{client} campaign"), f"{client} campaign"),
+                client=client,
+                mode=mode,
+                persona=official["persona"],
+                target_version=official["target_version"],
+            )
             bindings = {
                 field.removesuffix("_path"): file_binding(path)
                 for field, path in paths.items()
@@ -5247,6 +5304,24 @@ def seal_candidate_disposition(
     )
     if original_business_path is None:
         raise UpstreamMergeError("每次上游合并都必须绑定原 Sub2API 业务回归收据")
+    validate_original_business_receipt(
+        expect_object(load_json(original_business_path, "原业务回归收据"), "原业务回归收据"),
+        plan_id=plan.plan_id,
+        plan_identity=plan.identity,
+        verification=verification,
+        source_binding=artifact_binding(plan.evidence_root, latest_stage_path(plan, "source_candidate")),
+    )
+    if shared_path is not None:
+        validate_shared_contract_receipt(
+            expect_object(load_json(shared_path, "共享合同后继收据"), "共享合同后继收据"),
+            plan_id=plan.plan_id,
+            plan_identity=plan.identity,
+            source=source,
+            shared_paths=shared_control_facts(plan),
+            verification=verification,
+            official_clients=plan.document["official_clients"],
+            identity_change_count=impact["official_client_identity_change_count"],
+        )
     receipt = _stage_document(
         plan,
         CANDIDATE_DISPOSITION_SCHEMA,

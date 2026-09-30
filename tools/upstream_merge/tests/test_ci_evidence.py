@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.upstream_merge.canonical import bind_identity, write_json_once
-from tools.upstream_merge.contracts import LoadedPlan
+from tools.upstream_merge.canonical import artifact_binding, bind_identity, write_json_once
+from tools.upstream_merge.contracts import LoadedPlan, latest_stage_path
+from tools.upstream_merge.disposition_receipts import build_original_business_receipt
 from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.tests.test_workflow import SyntheticRepository, build_verification_plan, run
 from tools.upstream_merge.workflow import (
@@ -223,7 +224,6 @@ class CiEvidenceTest(unittest.TestCase):
         plan = self.plan("awaiting")
         run_verification_gates(plan, "attempt-001")
         original_business = self.temp_root / "original-business-receipt.json"
-        write_json_once(original_business, {"schema_version": "synthetic-original-business/v1", "result": "passed"})
         disposition_input = self.temp_root / "candidate-disposition-input.json"
         write_json_once(
             disposition_input,
@@ -252,6 +252,24 @@ class CiEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(UpstreamMergeError, "gates-import-ci"):
             seal_candidate_disposition(plan, disposition_input, self.receipt_path("attempt-001"))
         import_ci_evidence(plan, "attempt-002", "attempt-001", repository_slug="itv3/sub2apiplus", api=self.api())
+        verification = load_verification_receipt(plan, self.receipt_path("attempt-002"), require_passed=True)
+        source_binding = artifact_binding(plan.evidence_root, latest_stage_path(plan, "source_candidate"))
+        # UM-9 起 U-5 校验原业务回归收据内容：必须由本次验收收据派生，旧的占位收据会被拒绝。
+        write_json_once(original_business, {"schema_version": "synthetic-original-business/v1", "result": "passed"})
+        with self.assertRaisesRegex(UpstreamMergeError, "原业务回归收据"):
+            seal_candidate_disposition(plan, disposition_input, self.receipt_path("attempt-002"))
+        original_business.unlink()
+        write_json_once(
+            original_business,
+            bind_identity(
+                build_original_business_receipt(
+                    plan_id=plan.plan_id,
+                    plan_identity=plan.identity,
+                    verification=verification,
+                    source_binding=source_binding,
+                )
+            ),
+        )
         sealed = seal_candidate_disposition(plan, disposition_input, self.receipt_path("attempt-002"))
         self.assertEqual(sealed["result"], "closed")
         self.assertEqual(sealed["verification_receipt"]["path"], "u4/attempts/attempt-002/receipt.json")

@@ -490,20 +490,31 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | 阶段 | 必要目的 | 执行合同 |
 |---|---|---|
 | U-0 | 冻结目标、计划、预算和证据目录 | 先通过 §5.2.1；`plan-create` 只创建一次权威 Plan，冻结 fork HEAD、上游 tag/commit、基线收据、工具闭集和受保护对象。 |
-| U-1 | 解决冲突并形成可重放的双父 merge commit | `merge-start`／`merge-seal` 在隔离 worktree 中完成；冲突台账和双父关系不可省略。 |
-| U-2 | 闭合 Codex／Claude 入口、出站发送面和 Inventory | 首轮 `source-seal` 生成 revision 001，源码修复后在同一 Plan 追加 revision，旧制品只读保留。 |
+| U-1 | 解决冲突并形成可重放的双父 merge commit | `merge-start`／`merge-seal` 在隔离 worktree 中完成；冲突台账和双父关系不可省略；试验区结果用 `plan-replay` 与 `merge-seal --replay-from` 机械重放。 |
+| U-2 | 闭合 Codex／Claude 入口、出站发送面和 Inventory | 首轮 `source-seal` 生成 revision 001，源码修复后在同一 Plan 用 `revision-advance` 追加 revision，旧制品只读保留。 |
 | U-3 | 按文件和调用边形成影响闭集 | `impact-generate` 与当前 revision 绑定；`impact-suggest` 只对已知低风险条目给出建议，`impact-seal` 对未决项 fail-close。 |
 | U-4 | 证明候选树满足全部必要门禁 | 每个收据固定 12 类逻辑门禁、3 个物理执行组，`skipped_gate_count` 为 0。 |
-| U-5 | 封存 candidate、Campaign 和回退处置 | `disposition-seal` 绑定验证收据、原业务回归和受影响 Persona 的后继动作。 |
+| U-5 | 封存 candidate、Campaign 和回退处置 | `disposition-draft` 由验收收据派生输入，`disposition-seal` 校验并绑定验证收据、原业务回归和受影响 Persona 的后继动作。 |
 | U-6 | 快进受维护分支并能独立重放 | U-4 通过后仅由 `apply` 执行 ff-only 快进，随后 `finalize`／`replay`；人工不得合并、推送或部署。 |
 
 补充约束：
 
 - U-1：上游对闭集外文件的改动按普通冲突处置；对闭集内文件的改动按预检既定决定恢复受保护版本并在
-  冲突台账登记。已审核的冲突决策可在后继 Plan 机械重放。
-- U-2：源码 revision 必须重新执行 `surface-scan`、Inventory 绑定和 `surface-seal`，只有发送面零差异时才
-  允许 `inventory-carry-forward`；台账 revision 只有最后一个（§5.2.4 第 2 条）。
-- U-3：同 diff 的文件复用本 Plan 或前序 Plan 已封存的决定。
+  冲突台账登记。已审核的冲突决策可在后继 Plan 机械重放：`merge-start` 之后用
+  `plan-replay --trial-tree <定型树> --trial-base <试验区 fork 基点>` 把试验区定型树与主干新增提交合成
+  候选，试验区基点与上游的 merge-base 须与本 Plan 相同，上游或试验区改动了主干新增路径都拒绝；
+  `--previous-plan` 输出与前序 Plan 合并候选树的差异清单。随后 `merge-seal --replay-from <前序 evidence
+  root>`：三方 stage 对象与解决结果都与前序冲突台账一致的条目复用前序理由并标注来源 Plan，其余交人工，
+  由 `--conflict-decisions` 只补这些路径（工具先写出机械字段已填的草稿）。
+- U-2：源码 revision 必须重新执行 `surface-scan`、Inventory 绑定和 `surface-seal`，由 `revision-advance
+  --source-changes <本轮输入>` 一条命令按序执行到 `revision-preflight`；本轮输入可只写 entries（路径与
+  理由），机械字段由工具补齐。发送面差异与上一轮完全相同时四份 Inventory 与 SurfaceDecision 按本轮
+  revision 原样续用，差异变化时停下交人工；单独的 `inventory-carry-forward` 仍只用于发送面零差异。
+  台账 revision 只有最后一个（§5.2.4 第 2 条）。
+- U-3：同 diff 的文件复用本 Plan 或前序 Plan 已封存的决定。`revision-advance` 自动复用上一轮决定
+  （diff_sha256 相同的文件、delta_id 相同的发送面差异，人工改判优先于自动建议）；本轮新增或 diff 变化
+  的条目（含工具新生成的收据）停下列出并写草稿，补完理由后 `--resume` 续跑，已完成的步骤不重做、不重复
+  编号。停在人工输入的命令照常输出结果并以退出码 4 返回。
 - U-4：同一 `execution_group` 的相同命令只执行一次；复用以 revision 为界，源码一变全部执行组重跑，因为
   冻结测试与业务测试都读取候选树；六类客户端门禁收据由工具生成；`full-regression` 组由根 Makefile 的
   `upstream-gate-full` 执行：go test、golangci-lint、前端、采集工具、出站规格五条检查线依次执行、遇错
@@ -513,6 +524,11 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   `awaiting_ci`，U-5 拒绝：先用 `ci-push` 把候选推到 `upstream-merge/<plan_id>` 跑 CI，再用
   `gates-import-ci` 导入同一候选提交、作业全部成功且日志证明 integration 真实执行的 CI 运行；导入
   只补齐未执行项，本机失败不能被 CI 覆盖。
+- U-5：`disposition-draft --attempt-id <通过的 attempt> --campaign <client>=<生产收据>` 由验收收据派生原业务
+  回归收据与处置输入，共享控制合同受影响时生成后继收据草稿（`purpose` 与每条 `change_kind`、`assessment`
+  人工填写后 `identity-seal`）；`--dry-run` 只读核对。`disposition-seal` 校验三类收据内容：Campaign 须是
+  该 Persona 已登记格式的生产批准／激活收据，new_candidate 还须正是计划冻结的 Active 版本；原业务回归
+  收据须由本次验收收据派生；共享合同后继收据须逐个登记最新 ChangeDecision 的共享控制面路径并绑定本次验收。
 - U-6：`finalize` 与 `replay` 收据是发版前置条件；U-4 未通过时禁止执行；`ci-cleanup` 删除临时 CI 分支。
 
 每个 U-2/U-3 revision 进入 U-4 前先做只读复核，再执行门禁；失败后保留原 attempt，默认只重跑上一轮
