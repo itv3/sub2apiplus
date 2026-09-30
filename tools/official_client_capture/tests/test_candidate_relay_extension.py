@@ -211,7 +211,10 @@ class CoreA05CookiePrimeScriptTest(unittest.TestCase):
 
         import tempfile
 
-        gate = next(line for line in self.source.splitlines() if line.startswith("target_ws_cookie_prime=$("))
+        gate = "\n".join(
+            next(line for line in self.source.splitlines() if line.startswith(prefix))
+            for prefix in ("target_ws_cookie_prime=$(", "target_numeric_reasoning_effort=$(")
+        )
         start = self.source.index("start_capture A05\n")
         end = self.source.index("stop_capture\n", self.source.index("start_capture A06\n")) + len("stop_capture\n")
         harness = r"""
@@ -232,7 +235,10 @@ stop_capture() { record stop_capture; }
 wait_action() { record wait_action "$@"; }
 restart_service() { record restart_service; }
 set_account_features() { record set_account_features "$@"; }
-write_request_body() { record write_request_body "$(basename "$1")" "$2" "$3" "$4" "${CANDIDATE_BODY_SESSION_ID:-default}"; }
+write_request_body() {
+  record write_request_body "$(basename "$1")" "$2" "$3" "$4" "${CANDIDATE_BODY_SESSION_ID:-default}"
+  if [[ -n ${CANDIDATE_BODY_REASONING_EFFORT_JSON:-} ]]; then record effort_override "$CANDIDATE_BODY_REASONING_EFFORT_JSON"; fi
+}
 run_response_request() { record run_response_request "$1" "$2" "$4" "$5" "session=$session_id"; }
 prepare_a06_bodies() { record prepare_a06_bodies; }
 run_response_ws_session() { record run_response_ws_session "session=$session_id"; }
@@ -277,6 +283,32 @@ extract_response_id() {
                 self.assertFalse([call for call in calls if call[0] in {"restart_service", "set_account_features"}])
                 self.assertIn(["run_response_ws_session", "session=11111111-1111-4111-8111-111111111111"], calls)
 
+    def test_numeric_reasoning_effort_turn_is_0159_and_later(self) -> None:
+        """0.159 起 A05 在两轮 WS 之后追加一轮整数入站的数字推理等级，同一入口与会话；更早的目标不发。"""
+
+        line = next(item for item in self.source.splitlines() if item.startswith("target_numeric_reasoning_effort=$("))
+        code = line[line.index("'") + 1:line.rindex("'")]
+        for version, expected in (("0.157.0", "0"), ("0.158.0", "0"), ("0.159.0", "1"), ("0.159.2", "1")):
+            with self.subTest(version=version):
+                result = subprocess.run([sys.executable, "-c", code, version], capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(), expected)
+        calls = self._run_a05_a06("0.159.2")
+        a05 = calls[:calls.index(["stop_capture"])]
+        numeric = a05.index(["write_request_body", "lite-numeric-effort.json", "lite-model", "lite", "a05-numeric-effort", "default"])
+        self.assertEqual(a05[numeric + 1], ["effort_override", "3"])
+        self.assertEqual(
+            a05[numeric + 2],
+            ["run_response_request", "A05", "numeric-effort", "driver-ua", "driver-originator",
+             "session=11111111-1111-4111-8111-111111111111"],
+        )
+        self.assertEqual(a05[-1], ["wait_action", "A05", "responses_ws_response_create", "3"])
+        self.assertEqual(sum(1 for call in calls if call[0] == "effort_override"), 1)
+        for version in ("0.157.0", "0.158.0"):
+            with self.subTest(version=version):
+                older = self._run_a05_a06(version)
+                self.assertFalse([call for call in older if call[0] == "effort_override"])
+                self.assertIn(["wait_action", "A05", "responses_ws_response_create", "2"], older)
+
     def test_older_targets_do_not_prime(self) -> None:
         for version in ("0.154.0", "0.156.1"):
             with self.subTest(version=version):
@@ -309,6 +341,9 @@ class A05LabelSequenceTest(unittest.TestCase):
     SEQUENCES = {
         "old": [("models", None), ("websocket", "default"), ("websocket", "default")],
         "new": [("models", None), ("prime", None), ("websocket", "default"), ("websocket", "default")],
+        # 0.159 起两轮 WS 之后追加一轮数字推理等级 WS（conn005）。
+        "numeric": [("models", None), ("prime", None), ("websocket", "default"), ("websocket", "default"),
+                    ("websocket", "reasoning_effort_numeric")],
     }
 
     def test_every_declaration_labels_a05_in_capture_order(self) -> None:
@@ -320,7 +355,9 @@ class A05LabelSequenceTest(unittest.TestCase):
                 rule for rule in entry["rules"]
                 if rule["glob"].startswith("scenarios/A05/relay/") and rule["glob"].endswith(".client_to_upstream.bin")
             ]
-            sequence = self.SEQUENCES["new" if version >= (0, 157, 0) else "old"]
+            sequence = self.SEQUENCES[
+                "numeric" if version >= (0, 159, 0) else "new" if version >= (0, 157, 0) else "old"
+            ]
             with self.subTest(declaration=path.name):
                 for index, (kind, variant) in enumerate(sequence, start=1):
                     name = f"scenarios/A05/relay/conn{index:03d}.client_to_upstream.bin"

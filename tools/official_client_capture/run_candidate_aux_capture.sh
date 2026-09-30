@@ -1160,7 +1160,8 @@ common_gateway_headers=(
 # 的 C2PA 条件序列同一做法；删除面的拒绝由晋升后门禁在目标制品上断言，本 job 不再发 legacy 请求。
 target_workspace_routing=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 156, 1) else 0)' "$codex_version")
 
-# A09：models、三种 legacy compact header 插槽（仅 0.156.1 之前的目标）、两阶段 alpha-search、images 两端点。
+# A09：models、三种 legacy compact header 插槽（仅 0.156.1 之前的目标）、两阶段 alpha-search、images 两端点
+# （0.158.0 起再加一次透明背景生成与一次 file_id 编辑）。
 start_capture A09
 trigger_root="$work_dir/scenarios/A09/trigger"
 code=$(request_with_token "$api_key" --output "$trigger_root/models.json" --write-out '%{http_code}' \
@@ -1306,6 +1307,26 @@ code=$(request_with_token "$api_key" --output "$trigger_root/image-edit.json" \
   -F "image=@$trigger_root/one-pixel.png;type=image/png" \
   "$service_base_url/v1/images/edits")
 assert_2xx A09-image-edit "$code"
+
+# 0.158.0 起生图 background 由客户端按 imagegen 的 transparent_background 决定（默认 opaque、要求透明时
+# transparent），编辑的 images 项可以是会话里 file-backed 图片的 {"file_id": …}（SPEC-EP-022）。目标 ≥0.158.0
+# 时在 images 两端点之后再发一次显式透明背景的生成与一次 file_id 编辑，依次落在 conn007、conn008；file_id 与官方
+# official-relay-image-edit-file-id 作业同一个受控标识，合成上游不校验其存在。
+target_image_file_id=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 158, 0) else 0)' "$codex_version")
+if (( target_image_file_id == 1 )); then
+  code=$(request_with_token "$api_key" --output "$trigger_root/image-generation-transparent.json" \
+    --write-out '%{http_code}' -X POST "${common_gateway_headers[@]}" \
+    -H 'Content-Type: application/json' \
+    --data-binary "{\"model\":\"$image_model\",\"prompt\":\"candidate auxiliary transparent probe\",\"background\":\"transparent\",\"quality\":\"high\",\"n\":1,\"size\":\"1024x1024\",\"response_format\":\"b64_json\"}" \
+    "$service_base_url/v1/images/generations")
+  assert_2xx A09-image-generation-transparent "$code"
+  code=$(request_with_token "$api_key" --output "$trigger_root/image-edit-file-id.json" \
+    --write-out '%{http_code}' -X POST "${common_gateway_headers[@]}" \
+    -H 'Content-Type: application/json' \
+    --data-binary "{\"model\":\"$image_model\",\"prompt\":\"candidate auxiliary file edit probe\",\"images\":[{\"file_id\":\"file-c01592imageeditprobe\"}],\"background\":\"auto\",\"quality\":\"high\",\"size\":\"1024x1024\"}" \
+    "$service_base_url/v1/images/edits")
+  assert_2xx A09-image-edit-file-id "$code"
+fi
 wait_action A09 alpha_search 2
 stop_capture
 
@@ -1405,6 +1426,8 @@ a14_modes = ["negative", "positive"] if tuple(map(int, codex_version.split("."))
 a14_count = len(a14_modes)
 # 与 A09／A12 触发段同一版本切换：0.156.1 起无 legacy compact、每次 QueryUsage 先发 accounts/check。
 workspace_routing = tuple(map(int, codex_version.split("."))) >= (0, 156, 1)
+# 与 A09 触发段同一版本切换：0.158.0 起多一次透明背景生成与一次 file_id 编辑。
+image_file_id = tuple(map(int, codex_version.split("."))) >= (0, 158, 0)
 expected = {
     "A09": {
         "models_manifest": 1,
@@ -1412,8 +1435,8 @@ expected = {
         # 第 55 项：同一版本切换下，原 prime compact 的 Cookie jar 前提改由一次 Responses 冷请求建立。
         **({"responses_cookie_prime": 1} if workspace_routing else {}),
         "alpha_search": 2,
-        "images_generation": 1,
-        "images_edit": 1,
+        "images_generation": 2 if image_file_id else 1,
+        "images_edit": 2 if image_file_id else 1,
     },
     "A11": {"realtime_first_hop": 1, "realtime_sideband": 1},
     # ResetQuota 消费额度后必然再查一次用量刷新显示缓存（openai_oauth_handler.go
@@ -1514,7 +1537,9 @@ if workspace_routing:
             b"post /backend-api/codex/images/edits http/1.1\r\n",
         ))
     ]
-    if len(replayed) != 4 or any(b"\r\ncookie: <secret>" not in data for _, data in replayed):
+    if len(replayed) != (6 if image_file_id else 4) or any(
+        b"\r\ncookie: <secret>" not in data for _, data in replayed
+    ):
         missing = [name for name, data in replayed if b"\r\ncookie: <secret>" not in data]
         raise SystemExit(f"A09 alpha-search／images 未全部回放预热建立的 Cookie：{len(replayed)} 个请求，缺失 {missing}")
     for path in a09_root.glob("*.bin"):

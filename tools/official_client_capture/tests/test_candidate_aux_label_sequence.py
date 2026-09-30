@@ -257,6 +257,18 @@ class A09TriggerSequenceTest(unittest.TestCase):
                  "images_generation", "images_edit"],
             )
 
+    def test_image_file_id_switch_appends_transparent_generation_and_file_edit(self) -> None:
+        """0.158.0 起在 images 两端点之后再发一次透明背景生成与一次 file_id 编辑（conn007、conn008）。"""
+
+        self.assertEqual(
+            [action for action, _ in a09_trigger_sequence("0.159.2")],
+            ["models_manifest", "responses_cookie_prime", "alpha_search", "alpha_search",
+             "images_generation", "images_edit", "images_generation", "images_edit"],
+        )
+        section = _a09_trigger_section()
+        self.assertIn('\\"background\\":\\"transparent\\"', section)
+        self.assertIn('\\"images\\":[{\\"file_id\\":\\"file-c01592imageeditprobe\\"}]', section)
+
     def test_trigger_sequence_matches_frozen_action_counts(self) -> None:
         """入口请求序列与收尾校验块的冻结动作计数逐版本一致（每条连接恰好一次动作）。"""
 

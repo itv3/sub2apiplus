@@ -325,7 +325,8 @@
         "SPEC-BODY-001",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
-        "SPEC-BODY-005"
+        "SPEC-BODY-005",
+        "SPEC-BODY-006"
       ]
     },
     {
@@ -1194,6 +1195,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -1427,6 +1429,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -1693,6 +1696,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -1929,6 +1933,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2167,6 +2172,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2407,6 +2413,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2514,6 +2521,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2583,6 +2591,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2656,6 +2665,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2720,6 +2730,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2787,6 +2798,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2861,6 +2873,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -2936,6 +2949,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3009,6 +3023,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3075,6 +3090,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3136,6 +3152,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3195,6 +3212,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3254,6 +3272,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3316,6 +3335,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3378,6 +3398,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3438,6 +3459,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3503,6 +3525,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3563,6 +3586,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3629,6 +3653,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3689,6 +3714,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3749,6 +3775,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3809,6 +3836,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3875,6 +3903,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -3941,6 +3970,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4002,6 +4032,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4128,6 +4159,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4193,6 +4225,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4255,6 +4288,588 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-conn-retry-after",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07",
+        "A08"
+      ],
+      "description": "官方复杂状态链：conn-retry 的 Retry-After 有值对照（0.159 起重试等待遵守 Retry-After）。与 official-relay-conn-retry 同一受控链（426 强制降级 HTTP、首个 Responses POST 回 keepalive 500），唯一差别是合成 500 附带 retry-after: 2；中继把合成 500 写完与同连接重试请求头到达的时刻记入 relay.json 的 retry_probe_timing（两个作业都记），据此核对有值时两次请求间隔不短于 2 秒、无值时仍按原退避",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-conn-retry-after",
+            "SCENARIO": "conn-retry",
+            "RELAY_FORCE_WS_FALLBACK_426": "1",
+            "RELAY_RETRY_PROBE": "keepalive-500",
+            "RELAY_RETRY_PROBE_TARGET": "responses",
+            "RELAY_RETRY_PROBE_RETRY_AFTER": "2"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-conn-retry-after"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-reasoning-numeric-http",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A04"
+      ],
+      "description": "SPEC-BODY-006 数字推理等级 HTTP 定向样本（0.159 起）：只走 HTTP 的 OAuth provider，以 -c model_reasoning_effort=\"3\" 配置自定义数字档位；0.159 起能按 u64 解析的 effort 以 JSON 整数发出（0.157.0 发字符串），采样请求直接取配置值、不与模型目录比对。上游是否接受该档位不影响样本，请求断言只要求 POST Responses 已发出",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-reasoning-numeric-http",
+            "SCENARIO": "reasoning-numeric-http",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-reasoning-numeric-http"
+      ],
+      "covers": [
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": [],
+      "track": "main",
+      "model_id": "{model}",
+      "expected_use_responses_lite": false,
+      "required_model_receipt": false,
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-reasoning-numeric-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A05"
+      ],
+      "description": "SPEC-BODY-006 数字推理等级 WS 定向样本（0.159 起）：Lite 专项 {lite_model} 经内置 provider 默认 WS，以 -c model_reasoning_effort=\"3\" 配置自定义数字档位；response.create 的 reasoning.effort 与 HTTP 同一结构体、同样按 JSON 整数发出。上游是否接受该档位不影响样本，请求断言只要求 Responses WS 握手已发出",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{lite_model}",
+            "RUN_ID": "{campaign_id}-official-reasoning-numeric-ws",
+            "SCENARIO": "reasoning-numeric-ws",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-reasoning-numeric-ws"
+      ],
+      "covers": [
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": false,
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-stream-flex-unavailable",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 流内故障定向样本（0.159 起）：默认 WS，首条 Responses WS由中继受控应答（不转发生产，production_forwarded=false 记入干预日志与 relay.json），流内 response.failed(error.code=flex_unavailable)：0.159 起不可重试、不降级（本轮结束、不再发 Responses、不改走 HTTP）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-stream-flex-unavailable",
+            "SCENARIO": "stream-fault",
+            "RELAY_STREAM_FAULT": "flex-unavailable",
+            "RELAY_STREAM_FAULT_TRANSPORT": "ws",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-stream-flex-unavailable"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-stream-interrupted-http",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 流内故障定向样本（0.159 起）：只走 HTTP 的 OAuth provider，首个 POST Responses由中继受控应答（不转发生产，production_forwarded=false 记入干预日志与 relay.json），流内 response.incomplete(incomplete_details.reason=interrupted)：0.159 起按完成处理且 end_turn=false（不结束回合、不重试），客户端随后续发下一次采样请求，续发照常转发生产",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-stream-interrupted-http",
+            "SCENARIO": "stream-fault",
+            "RELAY_STREAM_FAULT": "interrupted",
+            "RELAY_STREAM_FAULT_TRANSPORT": "http",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-stream-interrupted-http"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-stream-interrupted-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 流内故障定向样本（0.159 起）：默认 WS，首条 Responses WS由中继受控应答（不转发生产，production_forwarded=false 记入干预日志与 relay.json），同上，WS 与 HTTP 共用同一事件处理：首条 Responses WS 整条由中继本地合成，预热（generate=false）与故障之后同连接的续发都合成完成",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-stream-interrupted-ws",
+            "SCENARIO": "stream-fault",
+            "RELAY_STREAM_FAULT": "interrupted",
+            "RELAY_STREAM_FAULT_TRANSPORT": "ws",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-stream-interrupted-ws"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-ws-idle-close",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 空闲断连重建定向样本（0.159 起）：同一 PTY TUI 会话两轮提示词、间隔 120 秒；首条 Responses WS 在双向业务空闲 30 秒（ping／pong 不计）后由中继以服务端身份发 CLOSE(1000) 并关闭两侧，0.159 起客户端在下次请求前发现连接已关闭、直接新建 WS，不先写入死连接、不计重试。关闭时刻与帧计数记入 relay.json 的 ws_idle_close",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-ws-idle-close",
+            "SCENARIO": "ws-idle-close-tui",
+            "RELAY_CLOSE_IDLE_WS_AFTER": "30",
+            "TUI_HOLD": "120",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-ws-idle-close"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-image-transparent",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "SPEC-EP-022 生图透明背景定向样本（0.158 起）：提示词明确要求 imagegen 以 transparent_background=true 生成，images/generations 的 background 应为 transparent（省略或 false 时为默认 opaque，由 official-relay-image 承担）。请求照常转发生产，请求断言要求 images/generations 已发出",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-image-transparent",
+            "SCENARIO": "image-transparent",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/images/generations"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-image-transparent"
+      ],
+      "covers": [
+        "SPEC-EP-001",
+        "SPEC-EP-022"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-image-edit-file-id",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "SPEC-EP-022 file_id 图片编辑定向样本（0.158 起）：官方 app-server 以 {\"type\":\"image\",\"fileId\":…} 把 file-backed 图片放进会话（CLI 默认把本地图片内联为 data URL，走不到这条路径），模型侧的 imagegen 调用（num_last_images_to_include=1）、images/edits 结果与收尾消息由中继受控应答（file_id 只在本链内有效，不转发生产，production_forwarded=false），客户端据此发出 images: [{\"file_id\": …}] 的编辑请求；请求字节全部来自官方二进制，请求断言要求 images/edits 已发出",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-image-edit-file-id",
+            "SCENARIO": "image-edit-file-id",
+            "RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID": "file-c01592imageeditprobe",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/images/edits"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-image-edit-file-id"
+      ],
+      "covers": [
+        "SPEC-EP-001",
+        "SPEC-EP-022"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4461,6 +5076,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -4769,6 +5385,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",
@@ -5003,6 +5620,7 @@
         "drive_codex_auth_refresh.py",
         "drive_codex_compaction_reason.py",
         "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
         "drive_codex_memgen.py",
         "drive_codex_model_catalog.py",
         "drive_codex_realtime.py",

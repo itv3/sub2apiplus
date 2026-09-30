@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_157_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_159_2.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_157_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_159_2.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -129,8 +129,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-29（问题四台账门禁修复）：正文工作区的契约捕获方法 captureContract 从 official_egress_forward_body.go 移入
 # 契约所在的 `official_egress_openai_http.go`，工作区文件不再引用契约类型、不被出站定型面扫描计为新的定型面；方法体
 # 不变，映射只重绑该源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
+# 2026-10-01：目标升级到 0.159.2；映射按先例由 0.157.0 版逐字替换版本号得到（“0.157.0 起”这类行为起点表述
+# 保留），测试、事实宇宙与源码快照不变，VC-2／VC-4 定稿后按承接收据修订。
 FROZEN_MAPPING_SHA256 = (
-    "7b47334686048bffc4501a7a4cf8a4d5291a4878b8d39975e47b177b75cdc59a"
+    "2f0d0f18bcd12958a1f7ba22b71cf7b6e072dd292b6621d17c5caf78d57f6b17"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -190,8 +192,11 @@ FROZEN_MAPPING_SHA256 = (
 # 现算契约摘要 d6d211f0…。
 # 2026-09-29：随主手册第二部分摘要重绑（见 candidate_rule_assertion 同日注释）；0.157.0 断言画像的规则、场景
 # 与判据载荷逐字不变，漂移只来自 source_spec_sha256。
+# 2026-10-01：断言画像升级为 0.159.2，由 0.157.0 批准画像逐字替换版本号得到（“0.157.0 起”表述保留），规则、
+# 场景与判据载荷不变；验收契约现算仍为 d6d211f0…（dual_wire=25／candidate_profile=18）。第 0b 步新增的数字推理
+# 等级、生图透明背景与 file_id 编辑、流内故障、空闲断连与 Retry-After 定向样本只加证据标签，判据由 VC-2 修订。
 FROZEN_PROFILE_SHA256 = (
-    "0cf3656ad953105e11d59dcda8ee51c7925e02f74569d8fb4db59623d5052d58"
+    "799c32846aa399063644de37ab60acafc2a2804ae338d112d16f82ff5273b468"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

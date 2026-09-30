@@ -1275,6 +1275,251 @@
       ]
     },
     {
+      "job_id": "official-relay-conn-retry-after",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07",
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "non_lite",
+            "variant": "default",
+            "retry_after": "present",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "与 official-relay-conn-retry 成对：受控中继按冻结场景配置注入可重试失败（A07／A08 trigger），合成 500 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出；其余标签与无值样本逐项相同，保证两者只差这一个条件。间隔计时只在 relay.json 连接元数据里，不进入断言记录。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-reasoning-numeric-http",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "reasoning_effort_numeric",
+            "reasoning_effort_config": "numeric",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "作业固定主线 {model}（非 Lite，与 official-relay-ws-default 同样按作业模型参数标 track/mode）、只走 HTTP 的 provider 与数字档位配置，variant／reasoning_effort_config 由采集参数推出。不取模型条件收据：上游可能拒绝该档位，成功收据会误判样本不成立；不标 compression、residency，免得被压缩与 residency 判据误选。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-reasoning-numeric-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "reasoning_effort_numeric",
+            "reasoning_effort_config": "numeric",
+            "provider": "openai_oauth"
+          },
+          "rationale": "作业固定 Lite 专项 {lite_model}（Lite 标记由同一 Campaign 的 Lite 专项模型条件收据证明，本作业不取收据：上游可能拒绝该档位），默认 WS 与数字档位配置由采集参数决定；A05 是 WS Lite 场景，与候选侧 A05 的数字档位 WS 轮对应。不标 compression／body_length，variant 独立，不会被 default 与 turn_state 判据误选。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-stream-flex-unavailable",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "flex_unavailable",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "故障种类（flex-unavailable）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-stream-interrupted-http",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "interrupted",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "故障种类（interrupted）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-stream-interrupted-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "interrupted",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "故障种类（interrupted）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-ws-idle-close",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "ws_idle_close",
+            "provider": "openai_oauth"
+          },
+          "rationale": "PTY TUI 默认走 WS（DISABLE_FEATURES 沿用 plugins apps 的内嵌模式），空闲阈值由作业参数 RELAY_CLOSE_IDLE_WS_AFTER 决定，variant=ws_idle_close 由此推出；两轮的业务请求都照常转发生产，中继只补发 CLOSE 并关闭连接，不合成业务应答。第二轮是否新建连接是判定对象，只由原始字节与连接序号核对。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-image-transparent",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "mode": "non_lite",
+            "variant": "image_transparent",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "生图端点属 images 出站面，由作业目标端点决定；variant=image_transparent 来自采集提示词对 transparent_background 的明确要求。background 实际取值是 EP-022 的判定对象，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-image-edit-file-id",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "mode": "non_lite",
+            "variant": "image_edit_file_id",
+            "upstream_response": "relay_synthetic",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "图片编辑复用 images 出站面；图片来源为 file_id、Responses 与 images/edits 由中继合成应答，均由作业参数 RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID 决定，upstream_response=relay_synthetic 标明不得当作生产自然成功。编辑请求 images 项的实际形态是 EP-022 的判定对象，不反推进标签。"
+        }
+      ]
+    },
+    {
       "job_id": "candidate-core-direct",
       "side": "candidate",
       "rules": [
@@ -1775,6 +2020,56 @@
           "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与非 Lite body 判据。"
         },
         {
+          "glob": "scenarios/A04/relay/conn008.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "reasoning_effort_numeric",
+            "reasoning_effort_config": "numeric",
+            "reasoning_effort_inbound": "integer",
+            "residency": "unset",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "0.159 起 A04 在 parent-thread 轮之后追加数字推理等级请求：第 5 个 POST（conn008）的入站 reasoning.effort 是JSON 整数 3（0.159.2 客户端的形态），账号特性仍为 unset true（residency 未设置）、请求体明文；variant、reasoning_effort_config 与 reasoning_effort_inbound 由采集入站参数推出，与官方 official-relay-reasoning-numeric-http 对应。出站 effort 的实际形态是 BODY-006 的判定对象，不反推进标签。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn009.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "reasoning_effort_numeric",
+            "reasoning_effort_config": "numeric",
+            "reasoning_effort_inbound": "string",
+            "residency": "unset",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "0.159 起 A04 在 parent-thread 轮之后追加数字推理等级请求：第 6 个 POST（conn009）的入站 reasoning.effort 是数字字符串 \"3\"（0.157.0 客户端的形态），账号特性仍为 unset true（residency 未设置）、请求体明文；variant、reasoning_effort_config 与 reasoning_effort_inbound 由采集入站参数推出，与官方 official-relay-reasoning-numeric-http 对应。出站 effort 的实际形态是 BODY-006 的判定对象，不反推进标签。"
+        },
+        {
           "glob": "scenarios/A04/egress.pcap",
           "scenario_ids": [
             "A04"
@@ -1849,6 +2144,28 @@
             "provider": "openai_oauth"
           },
           "rationale": "A05 两轮 Lite WS 会话：驱动不注入条件头、不关闭任何 feature，握手为默认完整形态（variant=default 由驱动参数推出）；permessage-deflate 由握手自身协商，turn-state 由受控上游在 response.metadata 边界回送。 0.157.0 起两轮 WS 排在 Cookie 预热之后（conn003、conn004），握手回放预热建立的 Cookie。"
+        },
+        {
+          "glob": "scenarios/A05/relay/conn005.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "reasoning_effort_numeric",
+            "reasoning_effort_config": "numeric",
+            "reasoning_effort_inbound": "integer",
+            "provider": "openai_oauth"
+          },
+          "rationale": "0.159 起 A05 在两轮 Lite WS 之后追加一轮数字推理等级（conn005）：同一入口与会话亲和、入站 reasoning.effort 为 JSON 整数 3；variant、reasoning_effort_config、reasoning_effort_inbound 由采集入站参数推出，与官方 official-relay-reasoning-numeric-ws 的 Lite WS 样本对应，variant 独立、不被 default 握手判据选中。出站 response.create 的 effort 形态是 BODY-006 的判定对象。"
         },
         {
           "glob": "scenarios/A05/egress.pcap",
@@ -2254,7 +2571,47 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。0.156.1 起依次落在 conn005、conn006，并回放预热建立的 Cookie。"
+          "rationale": "两阶段 alpha-search 之后的两连接是图像生成与图像编辑（IMAGE_MODEL，入站 background=auto、编辑为 multipart 数据图片），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。0.156.1 起依次落在 conn005、conn006，并回放预热建立的 Cookie。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn007.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "image_background_request": "transparent"
+          },
+          "rationale": "0.158.0 起在 images 两端点之后再发一次入站 background=transparent 的图像生成（conn007），对应官方 official-relay-image-transparent（imagegen 的 transparent_background=true）；image_background_request 由采集入站参数推出，出站 background 的实际取值是 EP-022 的判定对象，不反推进标签。同属 images 出站面、回放预热 Cookie。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn008.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "image_edit_input": "file_id"
+          },
+          "rationale": "0.158.0 起最后一连接是入站 images: [{\"file_id\": …}] 的 JSON 图像编辑（conn008），file_id 与官方 official-relay-image-edit-file-id 同一受控标识；image_edit_input=file_id 由采集入站参数推出，出站 images 项形态是 EP-022 的判定对象。同属 images 出站面、回放预热 Cookie。"
         },
         {
           "glob": "scenarios/A09/egress.pcap",

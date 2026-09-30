@@ -514,10 +514,22 @@ class EnvironmentProbeDeclarationContractTest(unittest.TestCase):
             self.assertIn("sub2api-egress-guard", rule["rationale"])
 
     def test_historical_declarations_are_not_rewritten(self) -> None:
-        """只改目标版本 0.157.0；历史版本声明不追溯加排除，官方封存证据的编目口径不动。"""
+        """0.157.0 起的目标版本声明携带排除；更早的历史版本声明不追溯加排除，官方封存证据的编目口径不动。
+
+        0.159.2 声明由 0.157.0 版逐字替换版本号得到，三个候选 direct 作业的 sidecar pcap 排除集合随之承接。
+        """
 
         for path in sorted(TOOL_ROOT.glob("codex_upgrade_evidence_labels_*.json")):
-            if path == DECLARATION_0157:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            version = tuple(int(part) for part in document["codex_version"].split("."))
+            if version >= (0, 157, 0):
+                declared = {
+                    (entry["job_id"], rule["glob"])
+                    for entry in document["entries"]
+                    for rule in entry["rules"]
+                    if "environment_probe_sni" in rule
+                }
+                self.assertEqual(declared, EXPECTED_PROBE_RULES, path.name)
                 continue
             self.assertNotIn("environment_probe_sni", path.read_text(encoding="utf-8"), path.name)
 

@@ -73,6 +73,13 @@ TUI_SCENARIOS: dict[str, dict[str, Any]] = {
         "fixed": [],
         "variables": ("DISABLE_FEATURES",),
     },
+    # 同一 TUI 会话两轮，中间留空闲让中继以服务端身份关闭首条 WS（空闲阈值是中继参数，不进客户端命令行）。
+    "ws-idle-close-tui": {
+        "marker": "__WS_IDLE_CLOSE_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": [],
+        "variables": ("DISABLE_FEATURES",),
+    },
     "guardian-tui": {
         "marker": "__GUARDIAN_TUI__",
         "cwd": "/work",

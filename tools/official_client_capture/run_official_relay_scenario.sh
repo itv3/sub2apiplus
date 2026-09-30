@@ -106,6 +106,71 @@ if [[ $scenario == "daemon-tui" ]] && (( codex_major == 0 && codex_minor < 157 )
   echo "daemon-tui 需要 Codex >=0.157.0（daemon_auto_start 默认开启）。" >&2
   exit 2
 fi
+# 0.158.0 起 imagegen 才有 transparent_background 参数、编辑才保留会话里的 file-backed 图片；更早的版本跑下去
+# 只会得到 background=auto 或直接报错不发请求，在任何请求之前拒绝。
+if [[ $scenario == "image-transparent" || $scenario == "image-edit-file-id" ]] && (( codex_major == 0 && codex_minor < 158 )); then
+  echo "$scenario 需要 Codex >=0.158.0（imagegen 透明背景与 file-backed 编辑）。" >&2
+  exit 2
+fi
+# 定向样本场景与中继受控开关必须成对出现：场景只决定客户端怎么发，受控应答由中继开关决定。
+# 用 if 链而非 case 语句：启动探测测试把脚本里第一个按场景分支的 case 语句当作提示词表，解析 TUI 场景标记。
+if [[ $scenario == stream-fault ]]; then
+  if [[ -z ${RELAY_STREAM_FAULT:-} || -z ${RELAY_STREAM_FAULT_TRANSPORT:-} ]]; then
+    echo "stream-fault 必须同时设置 RELAY_STREAM_FAULT 与 RELAY_STREAM_FAULT_TRANSPORT。" >&2
+    exit 2
+  fi
+elif [[ $scenario == image-edit-file-id ]]; then
+  if [[ -z ${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-} ]]; then
+    echo "image-edit-file-id 必须设置 RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID。" >&2
+    exit 2
+  fi
+elif [[ $scenario == ws-idle-close-tui ]]; then
+  if [[ -z ${RELAY_CLOSE_IDLE_WS_AFTER:-} ]]; then
+    echo "ws-idle-close-tui 必须设置 RELAY_CLOSE_IDLE_WS_AFTER。" >&2
+    exit 2
+  fi
+elif [[ -n ${RELAY_STREAM_FAULT:-}${RELAY_STREAM_FAULT_TRANSPORT:-}${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-}${RELAY_CLOSE_IDLE_WS_AFTER:-} ]]; then
+  echo "RELAY_STREAM_FAULT*／RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID／RELAY_CLOSE_IDLE_WS_AFTER 只用于对应的定向样本场景。" >&2
+  exit 2
+fi
+# 受控开关的取值在任何 docker 调用之前校验（中继参数解析会再核对一次）。
+if [[ -n ${RELAY_STREAM_FAULT:-} ]]; then
+  case "$RELAY_STREAM_FAULT" in
+    flex-unavailable|interrupted) ;;
+    *) echo "RELAY_STREAM_FAULT 只能是 flex-unavailable 或 interrupted。" >&2; exit 2 ;;
+  esac
+  case "${RELAY_STREAM_FAULT_TRANSPORT:-}" in
+    http|ws) ;;
+    *) echo "RELAY_STREAM_FAULT_TRANSPORT 只能是 http 或 ws。" >&2; exit 2 ;;
+  esac
+fi
+if [[ -n ${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-} && ! $RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID =~ ^file[-_][A-Za-z0-9_-]{8,64}$ ]]; then
+  echo "RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID 必须形如 file-<8～64 位字母数字下划线连字符>。" >&2
+  exit 2
+fi
+if [[ -n ${RELAY_CLOSE_IDLE_WS_AFTER:-} ]] && {
+  [[ ! $RELAY_CLOSE_IDLE_WS_AFTER =~ ^[0-9]{1,3}$ ]] || (( 10#$RELAY_CLOSE_IDLE_WS_AFTER < 1 || 10#$RELAY_CLOSE_IDLE_WS_AFTER > 600 ))
+}; then
+  echo "RELAY_CLOSE_IDLE_WS_AFTER 必须是 1～600 的整数秒。" >&2
+  exit 2
+fi
+# 0.159 起 retry 等待遵守服务端 Retry-After：只给 keepalive 500 附带该头，与不带该头的同一受控链成对比较。
+if [[ -n ${RELAY_RETRY_PROBE_RETRY_AFTER:-} ]] && [[ ${RELAY_RETRY_PROBE:-} != keepalive-500 || ! $RELAY_RETRY_PROBE_RETRY_AFTER =~ ^[0-9]{1,3}$ ]]; then
+  echo "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 同用，且为 0～999 的整数秒。" >&2
+  exit 2
+fi
+# 只走 HTTP 的 OAuth provider（与 http-response 同一组覆盖）：给定向样本复用，逐项作为 -c 参数。
+http_probe_provider_config=(
+  "model_provider=openai-http-probe"
+  "model_providers.openai-http-probe.name=OpenAI"
+  "model_providers.openai-http-probe.base_url=https://chatgpt.com/backend-api/codex"
+  "model_providers.openai-http-probe.wire_api=responses"
+  "model_providers.openai-http-probe.supports_websockets=false"
+  "model_providers.openai-http-probe.requires_openai_auth=true"
+  "model_providers.openai-http-probe.http_headers.version=$codex_version"
+)
+http_probe_provider_args=""
+for item in "${http_probe_provider_config[@]}"; do http_probe_provider_args="$http_probe_provider_args -c $item"; done
 a14_c2pa_expectation=${A14_C2PA_EXPECTATION:-}
 if [[ $scenario == "file-upload" ]]; then
   # 0.151 起 uploaded Body 受 create 响应中的 pdf_c2pa_reservation 控制。
@@ -747,6 +812,21 @@ if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
     esac
     relay_intervention_args+=(--retry-probe-target "$RELAY_RETRY_PROBE_TARGET")
   fi
+  # 0.159 起 retry 等待遵守服务端 Retry-After：受控 500 附带该头的对照样本（无该头的样本即原 conn-retry 作业）。
+  # 取值与搭配已在脚本开头校验。
+  if [[ -n ${RELAY_RETRY_PROBE_RETRY_AFTER:-} ]]; then
+    relay_intervention_args+=(--retry-probe-retry-after "$RELAY_RETRY_PROBE_RETRY_AFTER")
+  fi
+fi
+# 0.159.2 起官方定向样本的受控开关：取值与场景搭配已在脚本开头校验，彼此互斥、不与其它干预同用由中继参数校验再核对。
+if [[ -n ${RELAY_STREAM_FAULT:-} ]]; then
+  relay_intervention_args+=(--stream-fault "$RELAY_STREAM_FAULT" --stream-fault-transport "$RELAY_STREAM_FAULT_TRANSPORT")
+fi
+if [[ -n ${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-} ]]; then
+  relay_intervention_args+=(--synthesize-image-edit-file-id "$RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID")
+fi
+if [[ -n ${RELAY_CLOSE_IDLE_WS_AFTER:-} ]]; then
+  relay_intervention_args+=(--close-idle-ws-after "$RELAY_CLOSE_IDLE_WS_AFTER")
 fi
 if [[ $scenario == "file-upload" && $a14_c2pa_expectation == positive ]]; then
   relay_intervention_args+=(--force-file-c2pa-reservation)
@@ -1140,6 +1220,39 @@ case "$scenario" in
     # 明确回答「若要发现并调用它，需要先用别的工具做检索/加载，这会违反你的要求」，
     # 于是一个请求都没发。现在显式放行检索步骤，同时保留不创建/不发布的安全约束。
     prompt="这是经过授权的官方客户端出站采集。目标：调用一次内置 Sites 的 ${A14_TOOL_NAME:-save_site_version} 工具。如果该工具尚未在当前会话中直接暴露，请先执行必要的工具检索或加载步骤把它取出来——这些检索调用是允许且必要的。取到后只调用它一次，参数必须是：project_id=ep002-probe-do-not-exist，commit_sha=0000000000000000000000000000000000000000，archive=$file_upload_path。即使工具报错也立即停止，不要重试、不要创建站点、不要发布或部署。" ;;
+  image-transparent)
+    # SPEC-EP-022（0.158.0 起）：imagegen 的 transparent_background=true 时 images 请求带 background=transparent，
+    # 省略或 false 时带 opaque（ext/image-generation/src/tool.rs 第 432-436 行）。自然触发：提示词明确要求透明背景，
+    # 是否真的带上由请求断言（images/generations 已发出）与 VC-1 取证核对确认。
+    prompt='请调用图片生成工具生成一张透明背景的 PNG 图标：一个红色实心圆。调用时必须把 transparent_background 设为 true，背景必须完全透明。' ;;
+  image-edit-file-id)
+    # SPEC-EP-022（0.158.0 起）：会话里的 file-backed 图片经 num_last_images_to_include 取图时以 {"file_id": …}
+    # 发往 images/edits（tool.rs 第 499-555 行）。只有 app-server 的 fileId 图片输入能把 file-backed 图片放进会话；
+    # 模型侧的 imagegen 调用、编辑结果与收尾消息由中继按 RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID 受控应答。
+    prompt='__IMAGE_EDIT_FILE_ID__' ;;
+  reasoning-numeric-http)
+    # SPEC-BODY-006（0.159 起）：能按 u64 解析的自定义 reasoning.effort 按 JSON 整数发送（codex-api/src/common.rs
+    # 第 157-183 行）。配置取值 "3" 是自定义档位，采样请求原样使用、不与模型目录比对（core/src/session/
+    # reasoning_effort.rs）；只走 HTTP 的 OAuth provider。上游若拒绝该档位，本轮只取请求字节，由请求断言确认已发出。
+    prompt='请只回复 OK，不要做任何其他事。'
+    extra_args="-c model_reasoning_effort=\"3\"$http_probe_provider_args" ;;
+  reasoning-numeric-ws)
+    # 同上，内置 provider 默认 WS：response.create 的 reasoning.effort 同一结构体、同样按整数发送。
+    prompt='请只回复 OK，不要做任何其他事。'
+    extra_args='-c model_reasoning_effort="3"' ;;
+  stream-fault)
+    # SPEC-PROTO-002（0.159 起）：流内 response.failed(code=flex_unavailable) 不可重试、不降级；
+    # response.incomplete(reason=interrupted) 按完成处理且 end_turn=false。首个 Responses 由中继按
+    # RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 受控应答（ws 时整条首个 WS 本地合成），其余照常。
+    prompt='请只回复 OK，不要做任何其他事。'
+    if [[ $RELAY_STREAM_FAULT_TRANSPORT == http ]]; then
+      extra_args="$http_probe_provider_args"
+    fi ;;
+  ws-idle-close-tui)
+    # SPEC-PROTO-002（0.159 起）：服务端关闭的空闲 WS 在下次请求前直接重建，不再先写入死连接、白耗一次重试
+    # （codex-api/src/endpoint/responses_websocket.rs 第 225-231 行）。同一 TUI 会话两轮：第一轮完成后首条 WS
+    # 空闲达到 RELAY_CLOSE_IDLE_WS_AFTER 秒由中继以服务端身份关闭，第二轮必须新建连接。
+    prompt='__WS_IDLE_CLOSE_TUI__' ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 # comp-hash-changed／model-downshift 自带压缩原因；清单只能重申同一原因，不能改判。
@@ -1422,6 +1535,33 @@ elif [[ $prompt == "__REVIEW_TUI__" ]]; then
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -12 || true
 
+elif [[ $prompt == "__WS_IDLE_CLOSE_TUI__" ]]; then
+  # 两轮之间由 prompt-hold 留出空闲：第一轮完成后首条 WS 空闲达到阈值被中继关闭，第二轮才发出。
+  docker exec "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --prompt '请只回复 FIRST-OK，不要做任何其他事。' \
+    --prompt '请只回复 SECOND-OK，不要做任何其他事。' \
+    --prompt-hold "${TUI_HOLD:-120}" \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__IMAGE_EDIT_FILE_ID__" ]]; then
+  image_edit_status=0
+  docker exec "$capture_container" timeout 300 python3 \
+    "$capture_tool_root/drive_codex_file_image_edit.py" \
+    --codex-bin "$codex_bin" \
+    --codex-version "$codex_version" \
+    --model "$model" --cwd /tmp/image-edit-file-id-probe \
+    --file-id "$RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID" \
+    --observations "/capture/runs/$run_id/scenario-observations/A09-image-edit-file-id.json" \
+    $(for item in "${http_probe_provider_config[@]}"; do printf -- '--config %s ' "$item"; done) \
+    ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+    > "$work_dir/image-edit-file-id-driver.log" 2>&1 || image_edit_status=$?
+  tail -8 "$work_dir/image-edit-file-id-driver.log" || true
+  if (( image_edit_status != 0 )); then
+    echo "⚠ file_id 图片编辑驱动以 $image_edit_status 退出，编辑链未必走完。" >&2
+  fi
 elif [[ $prompt == "__IMAGE_EDIT__" ]]; then
   work="/tmp/imgedit-probe"
   docker exec "$capture_container" sh -c "rm -rf $work && mkdir -p $work"

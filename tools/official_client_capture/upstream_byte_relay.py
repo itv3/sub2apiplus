@@ -1230,6 +1230,102 @@ def _encode_server_control_frame(opcode: int, payload: bytes = b"") -> bytes:
     return bytes((0x80 | opcode, len(payload))) + payload
 
 
+class _WsFrameActivity:
+    """按帧边界判断一个方向上的 WS 字节是否算业务活动，供空闲关闭计时。
+
+    ping／pong 只维持连接、不代表业务，不刷新空闲计时：0.159.2 客户端只回应服务端 ping、自己不发
+    （codex-api/src/endpoint/responses_websocket.rs 的 WsStream 泵），服务端若定时 ping，按字节计时就
+    永远到不了阈值。只解析帧头（opcode、掩码位、7/16/64 位长度、掩码键），不解压也不解码负载，帧头可以
+    跨 chunk；上游方向先跳过 101 响应头。任何解析异常都退化为“每个字节都算活动”——宁可不关，也不在业务帧
+    中途误关。
+    """
+
+    _HEAD_LIMIT = 65536
+
+    def __init__(self, *, http_head: bool) -> None:
+        self._head: bytearray | None = bytearray() if http_head else None
+        self._header = bytearray()
+        self._remaining = 0
+        self._keepalive_frame = False
+        self.broken = False
+        self.data_frames = 0
+        self.ping_pong_frames = 0
+
+    def _take_header(self) -> bool:
+        """帧头收齐时解析并清空缓存，返回 True；未收齐返回 False；帧头非法抛 ValueError。"""
+
+        header = self._header
+        if len(header) < 2:
+            return False
+        length7 = header[1] & 0x7F
+        extended = 2 if length7 == 126 else 8 if length7 == 127 else 0
+        need = 2 + extended + (4 if header[1] & 0x80 else 0)
+        if len(header) < need:
+            return False
+        opcode = header[0] & 0x0F
+        if opcode not in (0x0, 0x1, 0x2, 0x8, 0x9, 0xA):
+            raise ValueError(f"未知 WS opcode：{opcode}")
+        if extended == 2:
+            length = int.from_bytes(header[2:4], "big")
+        elif extended == 8:
+            length = int.from_bytes(header[2:10], "big")
+            if length >> 63:
+                raise ValueError("WS 64 位长度最高位非零")
+        else:
+            length = length7
+        if opcode >= 0x8 and (length > 125 or not header[0] & 0x80):
+            raise ValueError("WS 控制帧超长或被分片")
+        header.clear()
+        self._remaining = length
+        self._keepalive_frame = opcode in (0x9, 0xA)
+        if self._keepalive_frame:
+            self.ping_pong_frames += 1
+        else:
+            self.data_frames += 1
+        return True
+
+    def feed(self, chunk: bytes) -> bool:
+        """吃进一个 chunk，返回其中是否含业务活动（非 ping／pong 的帧头或负载，或无法解析的字节）。"""
+
+        if self.broken:
+            return bool(chunk)
+        active = False
+        if self._head is not None:
+            self._head += chunk
+            end = self._head.find(b"\r\n\r\n")
+            if end < 0:
+                if len(self._head) > self._HEAD_LIMIT:
+                    self.broken = True
+                return True
+            status_line = bytes(self._head[: self._head.find(b"\r\n")])
+            chunk = bytes(self._head[end + 4 :])
+            self._head = None
+            active = True
+            if not status_line.startswith(b"HTTP/1.1 101 "):
+                self.broken = True
+                return True
+        pos = 0
+        size = len(chunk)
+        while pos < size:
+            if self._remaining:
+                step = min(self._remaining, size - pos)
+                self._remaining -= step
+                pos += step
+                if not self._keepalive_frame:
+                    active = True
+                continue
+            self._header.append(chunk[pos])
+            pos += 1
+            try:
+                parsed = self._take_header()
+            except ValueError:
+                self.broken = True
+                return True
+            if parsed and not self._keepalive_frame:
+                active = True
+        return active
+
+
 async def _read_websocket_frame(reader: asyncio.StreamReader) -> bytes:
     """从字节流读取一条完整 WS 帧，不跨帧插入受控数据。"""
     head = await reader.readexactly(2)
@@ -1244,6 +1340,186 @@ async def _read_websocket_frame(reader: asyncio.StreamReader) -> bytes:
     mask = await reader.readexactly(4) if head[1] & 0x80 else b""
     payload = await reader.readexactly(length)
     return head + extended + mask + payload
+
+
+# ── 官方侧受控合成（0.159.2 起的定向样本）──────────────────────────────────────
+# 服务端条件（流内 flex_unavailable、response.incomplete(reason=interrupted)）与难以自然触发的 file_id
+# 图像编辑链只能由中继受控应答：客户端发出的请求字节仍是官方原样，被合成应答的请求不转发生产
+# （production_forwarded=false），逐次写进干预日志与 relay.json 的连接元数据，禁止写成自然成功。
+# 事件形状按 0.159.2 源码：response.failed 以 response.error.code 识别 flex_unavailable
+# （codex-api/src/error.rs parse_flex_unavailable）；response.incomplete 只有 incomplete_details.reason
+# 为 interrupted 才按完成处理且 end_turn=false（codex-api/src/sse/responses.rs）；完成事件要求 response.id，
+# usage 的 input_tokens／output_tokens／total_tokens 必填。
+_OFFICIAL_SYNTHETIC_MODEL = "gpt-5.5"
+_OFFICIAL_STREAM_FAULT_KINDS = ("flex-unavailable", "interrupted")
+_OFFICIAL_STREAM_FAULT_TRANSPORTS = ("http", "ws")
+# 1×1 透明 PNG：file_id 编辑链的 images/edits 合成结果，客户端只解码并按需落盘。
+_OFFICIAL_SYNTHETIC_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+_OFFICIAL_IMAGE_EDIT_PROMPT = "把参考图片改成蓝色调，保持构图不变。"
+_SAFE_FILE_ID_RE = re.compile(r"^file[-_][A-Za-z0-9_-]{8,64}$")
+
+
+def _official_usage(output_tokens: int = 1) -> dict:
+    return {
+        "input_tokens": 1,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": output_tokens,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 1 + output_tokens,
+    }
+
+
+def _official_response(response_id: str, status: str, **fields) -> dict:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": status,
+        "model": _OFFICIAL_SYNTHETIC_MODEL,
+        **fields,
+    }
+
+
+def _official_created_event(response_id: str) -> dict:
+    return {
+        "type": "response.created",
+        "response": _official_response(response_id, "in_progress", output=[]),
+    }
+
+
+def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
+    """受控流内故障：created 之后以 failed（flex_unavailable）或 incomplete（interrupted）结束。"""
+
+    if kind == "flex-unavailable":
+        terminal = {
+            "type": "response.failed",
+            "response": _official_response(
+                response_id,
+                "failed",
+                output=[],
+                error={
+                    "code": "flex_unavailable",
+                    "message": "Flex processing is temporarily unavailable. Please try again later.",
+                },
+                incomplete_details=None,
+                usage=None,
+            ),
+        }
+    elif kind == "interrupted":
+        terminal = {
+            "type": "response.incomplete",
+            "response": _official_response(
+                response_id,
+                "incomplete",
+                output=[],
+                incomplete_details={"reason": "interrupted"},
+                usage=_official_usage(0),
+            ),
+        }
+    else:
+        raise ValueError(f"未知流内故障：{kind}")
+    return [_official_created_event(response_id), terminal]
+
+
+def _official_message_events(response_id: str, text: str) -> list[dict]:
+    """受控正常完成：一条 assistant 消息加 completed。"""
+
+    message = {
+        "type": "message",
+        "id": f"msg_{response_id}",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+    return [
+        _official_created_event(response_id),
+        {"type": "response.output_item.done", "output_index": 0, "item": message},
+        {
+            "type": "response.completed",
+            "response": _official_response(
+                response_id, "completed", output=[message], usage=_official_usage()
+            ),
+        },
+    ]
+
+
+def _official_imagegen_call_events(response_id: str) -> list[dict]:
+    """受控工具调用：让官方客户端对会话里最近一张图片执行 imagegen 编辑（num_last_images_to_include=1）。"""
+
+    call = {
+        "type": "function_call",
+        "id": f"fc_{response_id}",
+        "call_id": f"call_{response_id}",
+        "name": "imagegen",
+        "namespace": "image_gen",
+        "arguments": json.dumps(
+            {"prompt": _OFFICIAL_IMAGE_EDIT_PROMPT, "num_last_images_to_include": 1},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "status": "completed",
+    }
+    return [
+        _official_created_event(response_id),
+        {"type": "response.output_item.done", "output_index": 0, "item": call},
+        {
+            "type": "response.completed",
+            "response": _official_response(
+                response_id, "completed", output=[call], usage=_official_usage()
+            ),
+        },
+    ]
+
+
+def _official_sse_response(events: list[dict]) -> bytes:
+    """按生产 SSE 形状（event 行 + data 行）组装受控 200 响应，响应后主动断连。"""
+
+    body = b"".join(
+        b"event: "
+        + event["type"].encode("ascii")
+        + b"\ndata: "
+        + json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        + b"\n\n"
+        for event in events
+    )
+    return _h1_response(200, "OK", body, content_type="text/event-stream")
+
+
+def _official_image_response() -> bytes:
+    body = json.dumps(
+        {
+            "created": int(time.time()),
+            "data": [{"b64_json": _OFFICIAL_SYNTHETIC_PNG_B64}],
+            "background": "opaque",
+            "quality": "auto",
+            "size": "1024x1024",
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+    return _h1_response(200, "OK", body)
+
+
+def _official_ws_handshake(head: bytes) -> bytes | None:
+    """受控 Responses WS 的 101：客户端提出 permessage-deflate 时按默认参数接受（上下文接管）。"""
+
+    key = _request_header_value(head, "sec-websocket-key")
+    extensions = _request_header_value(head, "sec-websocket-extensions")
+    if _request_header_value(head, "upgrade").lower() != "websocket" or not key:
+        return None
+    accept = base64.b64encode(
+        hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()
+    ).decode("ascii")
+    wire = (
+        b"HTTP/1.1 101 Switching Protocols\r\n"
+        b"upgrade: websocket\r\n"
+        b"connection: Upgrade\r\n"
+        + f"sec-websocket-accept: {accept}\r\n".encode("ascii")
+    )
+    if "permessage-deflate" in extensions.lower():
+        wire += b"sec-websocket-extensions: permessage-deflate\r\n"
+    return wire + b"\r\n"
 
 
 def parse_client_hello_alpn(data: bytes) -> list[str] | None:
@@ -1488,6 +1764,12 @@ class Relay:
         # 主动断开、attempt 2 落到新连接。锁用于避免两个并发连接抢到同一编号。
         self._retry_probe_attempts = 0
         self._retry_probe_lock = asyncio.Lock()
+        # 0.159.2 起官方定向样本：流内故障只注入一次；file_id 编辑链按 Responses 序号合成；
+        # 空闲关闭只作用于首条 Responses WS。
+        self._stream_fault_applied = False
+        self._image_edit_responses = 0
+        self._image_edit_lock = asyncio.Lock()
+        self._idle_close_applied = False
         self._preconnected_upstream: PreconnectedUpstream | None = None
         self._preconnected_upstream_lock = asyncio.Lock()
         self._preconnect_duration_ms: float | None = None
@@ -1671,6 +1953,222 @@ class Relay:
             "production_forwarded": False,
             **extra,
         })
+
+    async def _serve_official_stream_fault_websocket(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        rec: "ByteRecorder",
+        conn_id: int,
+        meta: dict,
+        head: bytes,
+    ) -> None:
+        """本地合成整条 Responses WS：首个生成请求回流内故障，预热与续发合成完成。
+
+        服务端帧不压缩、不掩码（permessage-deflate 允许逐消息不压缩），客户端帧按连接维持解压上下文。
+        客户端关闭、90 秒无帧或单连接 16 条消息后结束；任何无法解析的帧都记错并结束，不猜测。
+        """
+
+        kind = self.args.stream_fault
+        handshake = _official_ws_handshake(head)
+        if handshake is None:
+            meta["error"] = "受控流内故障需要合法的 Responses WS 升级请求"
+            meta["valid"] = False
+            return
+        rec.write("upstream_to_client", handshake)
+        writer.write(handshake)
+        await writer.drain()
+        meta["valid"] = True
+        meta["intervention"] = f"stream_fault:{kind}:ws"
+        meta["production_forwarded"] = False
+        decoder = _SyntheticCoreWebSocketDecoder()
+        faulted = False
+        ordinal = 0
+        actions: list[str] = []
+        while ordinal < 16:
+            try:
+                frame = await asyncio.wait_for(_read_websocket_frame(reader), timeout=90)
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError, ssl.SSLError, OSError):
+                break
+            rec.write("client_to_upstream", frame)
+            parsed = _decode_websocket_frame_payload(frame)
+            if parsed is None:
+                meta["error"] = "受控流内故障 WS 收到结构无效的帧"
+                break
+            opcode, _, _, payload = parsed
+            if opcode == 0x9:
+                pong = _encode_server_control_frame(0xA, payload)
+                rec.write("upstream_to_client", pong)
+                writer.write(pong)
+                await writer.drain()
+                continue
+            if opcode == 0xA:
+                continue
+            if opcode == 0x8:
+                close = _encode_server_control_frame(0x8, payload[:2])
+                rec.write("upstream_to_client", close)
+                writer.write(close)
+                await writer.drain()
+                break
+            try:
+                text = decoder.text(frame)
+            except ValueError as error:
+                meta["error"] = f"受控流内故障 WS 消息无法解码：{error}"
+                break
+            if text is None:
+                continue
+            try:
+                message = json.loads(text)
+            except json.JSONDecodeError:
+                meta["error"] = "受控流内故障 WS 业务消息不是 JSON"
+                break
+            if not isinstance(message, dict) or message.get("type") != "response.create":
+                meta["error"] = "受控流内故障 WS 只接受 response.create"
+                break
+            ordinal += 1
+            response_id = f"resp_official_fault_ws_{ordinal:04d}"
+            if message.get("generate") is False:
+                events = [
+                    _official_created_event(response_id),
+                    {
+                        "type": "response.completed",
+                        "response": _official_response(
+                            response_id, "completed", output=[], usage=_official_usage(0)
+                        ),
+                    },
+                ]
+                action = "warmup_completed"
+            elif not faulted:
+                faulted = True
+                events = _official_stream_fault_events(kind, response_id)
+                action = f"stream_fault_{kind}"
+            else:
+                events = _official_message_events(response_id, "OK")
+                action = "continuation_completed"
+            for event in events:
+                data = _encode_server_text_frame(
+                    json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                )
+                rec.write("upstream_to_client", data)
+                writer.write(data)
+            await writer.drain()
+            actions.append(action)
+            self._log_intervention({
+                "type": "stream_fault_ws_message",
+                "kind": kind,
+                "connection_id": conn_id,
+                "ordinal": ordinal,
+                "action": action,
+                "response_id": response_id,
+                "production_forwarded": False,
+            })
+        meta["stream_fault_ws_actions"] = actions
+
+    async def _pump_ws_with_idle_close(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        up_r: asyncio.StreamReader,
+        up_w: asyncio.StreamWriter,
+        rec: "ByteRecorder",
+        conn_id: int,
+        meta: dict,
+    ) -> None:
+        """转发首条 Responses WS；握手后已有客户端业务帧、且双向业务空闲达到阈值时，由中继以服务端身份关闭。
+
+        空闲按 _WsFrameActivity 的帧边界判定，ping／pong 不刷新计时。只在两个方向都停在帧边界时动作：
+        补一个未压缩的 CLOSE(1000) 控制帧给客户端，再关闭两侧连接，模拟服务端关闭空闲 WS。关闭前客户端
+        自己结束连接则照常收尾。
+        """
+
+        threshold = float(self.args.close_idle_ws_after)
+        state = {"last": time.monotonic()}
+        trackers = {
+            "client_to_upstream": _WsFrameActivity(http_head=False),
+            "upstream_to_client": _WsFrameActivity(http_head=True),
+        }
+
+        def at_frame_boundary(tracker: _WsFrameActivity) -> bool:
+            # 解析失败的方向无从判断边界；它的每个字节都已刷新计时，业务空闲达到阈值即视为静止。
+            return tracker.broken or (
+                tracker._head is None and not tracker._header and tracker._remaining == 0
+            )
+
+        async def forward(src: asyncio.StreamReader, dst: asyncio.StreamWriter, direction: str) -> None:
+            tracker = trackers[direction]
+            try:
+                while True:
+                    chunk = await src.read(65536)
+                    if not chunk:
+                        break
+                    if tracker.feed(chunk):
+                        state["last"] = time.monotonic()
+                    rec.write(direction, chunk)
+                    dst.write(chunk)
+                    await dst.drain()
+            except (ConnectionError, asyncio.IncompleteReadError, ssl.SSLError, OSError):
+                pass
+            finally:
+                try:
+                    if dst.can_write_eof():
+                        dst.write_eof()
+                except (OSError, ConnectionError, RuntimeError):
+                    pass
+
+        upward = asyncio.create_task(forward(reader, up_w, "client_to_upstream"))
+        downward = asyncio.create_task(forward(up_r, writer, "upstream_to_client"))
+        try:
+            while not (upward.done() or downward.done()):
+                await asyncio.sleep(0.2)
+                idle = time.monotonic() - state["last"]
+                if (
+                    trackers["client_to_upstream"].data_frames <= 0
+                    or idle < threshold
+                    or not all(at_frame_boundary(tracker) for tracker in trackers.values())
+                ):
+                    continue
+                close = _encode_server_control_frame(0x8, struct.pack(">H", 1000))
+                try:
+                    rec.write("upstream_to_client", close)
+                    writer.write(close)
+                    await writer.drain()
+                except (ConnectionError, ssl.SSLError, OSError, RuntimeError):
+                    pass
+                closed_at = round(time.time() * 1000)
+                meta["intervention"] = "ws_idle_close"
+                frame_counts = {
+                    direction: {
+                        "data_frames": tracker.data_frames,
+                        "ping_pong_frames": tracker.ping_pong_frames,
+                        "parse_failed": tracker.broken,
+                    }
+                    for direction, tracker in trackers.items()
+                }
+                meta["ws_idle_close"] = {
+                    "threshold_seconds": threshold,
+                    "idle_seconds": round(idle, 3),
+                    "closed_at_unix_ms": closed_at,
+                    "frames_before_close": frame_counts,
+                }
+                self._log_intervention({
+                    "type": "ws_idle_close",
+                    "connection_id": conn_id,
+                    "threshold_seconds": threshold,
+                    "idle_seconds": round(idle, 3),
+                    "frames_before_close": frame_counts,
+                })
+                for stream in (writer, up_w):
+                    try:
+                        stream.close()
+                    except (OSError, RuntimeError):
+                        pass
+                break
+            await asyncio.wait({upward, downward}, timeout=5)
+        finally:
+            for task in (upward, downward):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(upward, downward, return_exceptions=True)
 
     async def _serve_synthetic_core_websocket(
         self,
@@ -2282,6 +2780,9 @@ class Relay:
                 or self.args.force_file_c2pa_reservation
                 or self.args.retry_probe
                 or self.args.synthetic_profile
+                or self.args.stream_fault
+                or self.args.synthesize_image_edit_file_id
+                or self.args.close_idle_ws_after
             )
             if intervention_enabled:
                 if cli_alpn not in {None, "http/1.1"}:
@@ -2652,14 +3153,34 @@ class Relay:
                             meta["expected_upstream_only"] = True
                             return
 
+                        retry_after_header = b""
+                        if self.args.retry_probe_retry_after:
+                            retry_after_header = (
+                                b"retry-after: "
+                                + self.args.retry_probe_retry_after.encode("ascii")
+                                + b"\r\n"
+                            )
                         response = (
                             b"HTTP/1.1 500 Internal Server Error\r\n"
-                            b"content-length: 0\r\n"
+                            + retry_after_header
+                            + b"content-length: 0\r\n"
                             b"connection: keep-alive\r\n\r\n"
                         )
                         rec.write("upstream_to_client", response)
                         writer.write(response)
                         await writer.drain()
+                        # 两次 attempt 的精确间隔：500 写完的时刻与同连接 retry 头读到的时刻。
+                        # 有 retry-after 时客户端必须等满该秒数，无该头时按客户端自身退避。
+                        timing = {
+                            "retry_after_seconds": (
+                                int(self.args.retry_probe_retry_after)
+                                if self.args.retry_probe_retry_after
+                                else None
+                            ),
+                            "synthetic_500_sent_unix_ms": round(time.time() * 1000),
+                            "retry_head_received_unix_ms": None,
+                        }
+                        meta["retry_probe_timing"] = timing
 
                         # reqwest 已完整读完 500 且连接仍可用；若同一个 Client/连接池
                         # 承载内部 retry，第二个 GET 会从这条 TLS 连接继续到达。
@@ -2676,6 +3197,12 @@ class Relay:
                             meta["valid"] = False
                             return
 
+                        timing["retry_head_received_unix_ms"] = round(time.time() * 1000)
+                        self._log_intervention({
+                            "type": "conn_retry_probe_timing",
+                            "connection_id": conn_id,
+                            **timing,
+                        })
                         retry_request_line = retry_head.split(b"\r\n", 1)[0].decode(
                             "latin-1", "replace"
                         )
@@ -2709,6 +3236,90 @@ class Relay:
                     request_line == "GET /backend-api/codex/responses HTTP/1.1"
                     and b"\r\nupgrade: websocket\r\n" in initial_head.lower()
                 )
+                if (self.args.stream_fault and not self._stream_fault_applied
+                        and self.args.stream_fault_transport == "http"
+                        and request_line == "POST /backend-api/codex/responses HTTP/1.1"):
+                    # 首个 HTTP Responses 由中继受控应答流内故障，不转发生产；后续请求照常转发。
+                    self._stream_fault_applied = True
+                    rec.write("client_to_upstream", initial_head)
+                    initial_head_recorded = True
+                    fault_body = await self._read_h1_body(reader, initial_head)
+                    if fault_body:
+                        rec.write("client_to_upstream", fault_body)
+                    response_id = "resp_official_fault_http_0001"
+                    response = _official_sse_response(
+                        _official_stream_fault_events(self.args.stream_fault, response_id)
+                    )
+                    rec.write("upstream_to_client", response)
+                    writer.write(response)
+                    await writer.drain()
+                    meta["valid"] = True
+                    meta["intervention"] = f"stream_fault:{self.args.stream_fault}:http"
+                    meta["production_forwarded"] = False
+                    self._log_intervention({
+                        "type": "stream_fault",
+                        "kind": self.args.stream_fault,
+                        "transport": "http",
+                        "connection_id": conn_id,
+                        "request_line": request_line,
+                        "response_id": response_id,
+                        "production_forwarded": False,
+                    })
+                    return
+                if (self.args.stream_fault and not self._stream_fault_applied
+                        and self.args.stream_fault_transport == "ws" and is_responses_ws):
+                    # 首条 Responses WS 整条由中继本地合成（不连生产）：首个生成请求回流内故障，
+                    # 预热（generate=false）与故障之后的续发照常合成完成。
+                    self._stream_fault_applied = True
+                    rec.write("client_to_upstream", initial_head)
+                    initial_head_recorded = True
+                    await self._serve_official_stream_fault_websocket(
+                        reader, writer, rec, conn_id, meta, initial_head
+                    )
+                    return
+                if self.args.synthesize_image_edit_file_id and request_line in {
+                    "POST /backend-api/codex/responses HTTP/1.1",
+                    "POST /backend-api/codex/images/edits HTTP/1.1",
+                }:
+                    # file_id 编辑链：Responses 与 images/edits 全部受控应答（会话里的 file_id 只在
+                    # 本链内有效，不转发生产）；models 等其余请求照常转发。
+                    rec.write("client_to_upstream", initial_head)
+                    initial_head_recorded = True
+                    edit_body = await self._read_h1_body(reader, initial_head)
+                    if edit_body:
+                        rec.write("client_to_upstream", edit_body)
+                    if request_line.startswith("POST /backend-api/codex/responses "):
+                        async with self._image_edit_lock:
+                            self._image_edit_responses += 1
+                            ordinal = self._image_edit_responses
+                        response_id = f"resp_official_image_edit_{ordinal:04d}"
+                        if ordinal == 1:
+                            events = _official_imagegen_call_events(response_id)
+                            action = "imagegen_edit_call"
+                        else:
+                            events = _official_message_events(response_id, "EDIT-OK")
+                            action = "final_message"
+                        response = _official_sse_response(events)
+                    else:
+                        ordinal = None
+                        action = "image_edit_result"
+                        response = _official_image_response()
+                    rec.write("upstream_to_client", response)
+                    writer.write(response)
+                    await writer.drain()
+                    meta["valid"] = True
+                    meta["intervention"] = f"image_edit_file_id:{action}"
+                    meta["production_forwarded"] = False
+                    self._log_intervention({
+                        "type": "image_edit_file_id",
+                        "action": action,
+                        "responses_ordinal": ordinal,
+                        "file_id": self.args.synthesize_image_edit_file_id,
+                        "connection_id": conn_id,
+                        "request_line": request_line,
+                        "production_forwarded": False,
+                    })
+                    return
                 if (self.args.force_ws_fallback_426 and is_responses_ws
                         and not self._forced_ws_fallback):
                     self._forced_ws_fallback = True
@@ -2843,7 +3454,17 @@ class Relay:
                 and not self._ws_turn_state_injected
                 and is_responses_ws
             )
-            if force_this_file_c2pa:
+            idle_close_this_ws = bool(
+                self.args.close_idle_ws_after
+                and is_responses_ws
+                and not self._idle_close_applied
+            )
+            if idle_close_this_ws:
+                self._idle_close_applied = True
+                await self._pump_ws_with_idle_close(
+                    reader, writer, up_r, up_w, rec, conn_id, meta
+                )
+            elif force_this_file_c2pa:
                 await asyncio.gather(
                     pump(reader, up_w, rec, "client_to_upstream"),
                     self._pump_response_with_file_c2pa(
@@ -3097,8 +3718,66 @@ def main() -> None:
     )
     ap.add_argument("--retry-probe-wait", type=float, default=15.0,
                     help="keepalive-500 后等待同连接 retry 的秒数")
+    ap.add_argument(
+        "--retry-probe-retry-after",
+        default="",
+        help=("仅 keepalive-500：受控 500 附带 retry-after 头（非负整数秒）。0.159 起客户端 retry 以服务端"
+              " Retry-After 截止时间等待，两次 attempt 的间隔由 retry_probe_timing 精确记录"),
+    )
+    ap.add_argument(
+        "--stream-fault",
+        choices=_OFFICIAL_STREAM_FAULT_KINDS,
+        default="",
+        help=("官方定向样本：对首个 Responses 受控应答流内故障（flex-unavailable 为 response.failed，"
+              "interrupted 为 response.incomplete），必须同时给 --stream-fault-transport"),
+    )
+    ap.add_argument(
+        "--stream-fault-transport",
+        choices=_OFFICIAL_STREAM_FAULT_TRANSPORTS,
+        default="",
+        help="流内故障注入的传输：http 为首个 POST，ws 为首条 Responses WS（整条本地合成）",
+    )
+    ap.add_argument(
+        "--synthesize-image-edit-file-id",
+        default="",
+        help=("官方定向样本：file_id 图像编辑链。Responses 首个请求受控应答 imagegen 编辑调用、"
+              "其后应答完成消息，images/edits 受控应答合成图片；值为会话里 file_id 图片的标识"),
+    )
+    ap.add_argument(
+        "--close-idle-ws-after",
+        default="",
+        help="官方定向样本：首条转发中的 Responses WS 双向空闲达到该秒数（1～600）后由中继以服务端身份关闭",
+    )
     ap.add_argument("--timeout", type=int, default=180)
     args = ap.parse_args()
+    if args.retry_probe_retry_after and (
+        args.retry_probe != "keepalive-500"
+        or not re.fullmatch(r"[0-9]{1,3}", args.retry_probe_retry_after)
+    ):
+        ap.error("--retry-probe-retry-after 只能与 --retry-probe keepalive-500 同用，且为 0～999 的整数秒")
+    if bool(args.stream_fault) != bool(args.stream_fault_transport):
+        ap.error("--stream-fault 与 --stream-fault-transport 必须同时提供")
+    if args.synthesize_image_edit_file_id and not _SAFE_FILE_ID_RE.fullmatch(args.synthesize_image_edit_file_id):
+        ap.error("--synthesize-image-edit-file-id 必须形如 file-<8～64 位字母数字下划线连字符>")
+    if args.close_idle_ws_after and (
+        not re.fullmatch(r"[0-9]{1,3}", args.close_idle_ws_after)
+        or not 1 <= int(args.close_idle_ws_after) <= 600
+    ):
+        ap.error("--close-idle-ws-after 必须是 1～600 的整数秒")
+    official_directed = [
+        name for name, enabled in (
+            ("--stream-fault", bool(args.stream_fault)),
+            ("--synthesize-image-edit-file-id", bool(args.synthesize_image_edit_file_id)),
+            ("--close-idle-ws-after", bool(args.close_idle_ws_after)),
+        ) if enabled
+    ]
+    other_interventions = bool(
+        args.force_ws_fallback_426 or args.inject_turn_state or args.inject_ws_turn_state
+        or args.synthesize_realtime_call or args.synthesize_realtime_call_after is not None
+        or args.force_file_c2pa_reservation or args.retry_probe or args.synthetic_profile
+    )
+    if len(official_directed) > 1 or (official_directed and other_interventions):
+        ap.error("官方定向样本开关（" + "、".join(official_directed) + "）彼此互斥，也不得与其它干预或合成画像同用")
     if args.inject_turn_state and not re.fullmatch(r"[A-Za-z0-9._-]+", args.inject_turn_state):
         ap.error("--inject-turn-state 只能包含字母、数字、点、下划线和连字符")
     if args.inject_ws_turn_state and not re.fullmatch(

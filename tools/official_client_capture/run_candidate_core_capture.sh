@@ -988,6 +988,15 @@ elif mode == "non_lite":
     payload["reasoning"]["context"] = "all_turns"
 else:
     raise SystemExit(f"未知请求模式：{mode}")
+# 数字推理等级（SPEC-BODY-006，0.159 起能按 u64 解析的自定义 effort 以 JSON 整数发出）：只有调用方在子 shell 里
+# 显式导出 CANDIDATE_BODY_REASONING_EFFORT_JSON 时才覆盖 reasoning.effort，取值是入站形态的 JSON 字面量
+# （整数 3 或字符串 "3"），其余请求体逐字不变。
+effort_override = os.environ.get("CANDIDATE_BODY_REASONING_EFFORT_JSON")
+if effort_override is not None:
+    effort_value = json.loads(effort_override)
+    if isinstance(effort_value, bool) or not isinstance(effort_value, (int, str)):
+        raise SystemExit(f"CANDIDATE_BODY_REASONING_EFFORT_JSON 只能是整数或字符串：{effort_override}")
+    payload["reasoning"]["effort"] = effort_value
 if previous_response_id:
     payload["previous_response_id"] = previous_response_id
     payload["input"].append({
@@ -1113,6 +1122,9 @@ session_id=11111111-1111-4111-8111-111111111111
 # Set-Cookie。候选网关的 Cookie jar 只在进程内按账号保存，A04 调整账号特性会重启网关清空它，所以 A05 开头要先用
 # 一次官方入口的 HTTP 冷请求建立 jar（relay 扩展只对这一次下发 _cfuvid）；A05 与 A06 之间不重启，A06 沿用。
 target_ws_cookie_prime=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 157, 0) else 0)' "$codex_version")
+# 0.159 起能按 u64 解析的自定义 reasoning.effort 以 JSON 整数发出（SPEC-BODY-006）：A04 追加整数与数字字符串两种
+# 入站形态的 HTTP 请求、A05 追加一轮整数入站的 Lite WS 请求；更早的目标不发。
+target_numeric_reasoning_effort=$(python3 -c 'import sys; print(1 if tuple(map(int, sys.argv[1].split("."))) >= (0, 159, 0) else 0)' "$codex_version")
 cookie_prime_session_id=44444444-4444-4444-8444-444444444444
 parent_id=44444444-4444-4444-8444-444444444444
 
@@ -1223,8 +1235,24 @@ write_request_body "$trigger_root/parent-thread.json" "$main_model" non_lite a04
 run_response_request A04 parent-thread "$trigger_root/parent-thread.json" "$exec_ua" codex_exec \
   -H 'X-OpenAI-Subagent: collab_spawn' \
   -H "X-Codex-Parent-Thread-Id: $parent_id"
+a04_http_success=4
+if (( target_numeric_reasoning_effort == 1 )); then
+  # 0.159 起数字推理等级：入站 effort 分别是 JSON 整数 3 与数字字符串 "3"（0.159.2 客户端发前者、0.157.0 客户端
+  # 发后者），出站都应按官方形态发整数。与 A04 其余请求同一官方入口、同一账号特性，依次落在 conn008、conn009。
+  (
+    export CANDIDATE_BODY_REASONING_EFFORT_JSON=3
+    write_request_body "$trigger_root/numeric-effort-integer.json" "$main_model" non_lite a04-numeric-effort-integer
+  )
+  run_response_request A04 numeric-effort-integer "$trigger_root/numeric-effort-integer.json" "$exec_ua" codex_exec
+  (
+    export CANDIDATE_BODY_REASONING_EFFORT_JSON='"3"'
+    write_request_body "$trigger_root/numeric-effort-string.json" "$main_model" non_lite a04-numeric-effort-string
+  )
+  run_response_request A04 numeric-effort-string "$trigger_root/numeric-effort-string.json" "$exec_ua" codex_exec
+  a04_http_success=6
+fi
 restore_account_features
-wait_action A04 responses_http_success 4
+wait_action A04 responses_http_success "$a04_http_success"
 stop_capture
 
 # A05：普通 HTTP 入口让网关扮演 Campaign 目标 Codex 客户端并默认选择 WS；
@@ -1250,8 +1278,21 @@ for turn in 1 2; do
     "$gateway_driver_ua" "$gateway_driver_originator" \
     -H 'X-Session-Affinity: candidate-core-a05'
 done
+a05_ws_response_create=2
+if (( target_numeric_reasoning_effort == 1 )); then
+  # 0.159 起数字推理等级的 WS 轮：与前两轮同一入口、同一会话亲和，入站 effort 为 JSON 整数 3，网关出站的
+  # response.create 应按官方形态发整数（与官方 official-relay-reasoning-numeric-ws 的 Lite WS 样本对应）。
+  (
+    export CANDIDATE_BODY_REASONING_EFFORT_JSON=3
+    write_request_body "$trigger_root/lite-numeric-effort.json" "$lite_model" lite a05-numeric-effort
+  )
+  run_response_request A05 numeric-effort "$trigger_root/lite-numeric-effort.json" \
+    "$gateway_driver_ua" "$gateway_driver_originator" \
+    -H 'X-Session-Affinity: candidate-core-a05'
+  a05_ws_response_create=3
+fi
 wait_action A05 responses_ws_handshake_success
-wait_action A05 responses_ws_response_create 2
+wait_action A05 responses_ws_response_create "$a05_ws_response_create"
 stop_capture
 
 # A06：非 Lite WS；同一入站连接串行发送两轮，第二轮只在内存中注入上一轮
@@ -2506,6 +2547,10 @@ minimums = {
 ws_cookie_prime = tuple(map(int, codex_version.split("."))) >= (0, 157, 0)
 if ws_cookie_prime:
     minimums["A05"] = {**minimums["A05"], "responses_http_success": 1}
+# 与采集段同一版本切换：0.159 起 A04 多两次数字推理等级 HTTP、A05 多一轮数字推理等级 WS。
+if tuple(map(int, codex_version.split("."))) >= (0, 159, 0):
+    minimums["A04"] = {"responses_http_success": 6}
+    minimums["A05"] = {**minimums["A05"], "responses_ws_response_create": 3}
 for scenario, wanted in minimums.items():
     scenario_root = root / "scenarios" / scenario / "relay"
     manifest = json.loads((scenario_root / "relay.json").read_text(encoding="utf-8"))
