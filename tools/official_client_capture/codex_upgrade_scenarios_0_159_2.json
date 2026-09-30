@@ -1,16 +1,16 @@
 {
   "$schema": "./codex_upgrade_scenarios.schema.json",
   "schema_version": "codex-upgrade-scenarios/v1",
-  "codex_version": "0.157.0",
-  "profile_id": "codex-cli-0.157.0",
+  "codex_version": "0.159.2",
+  "profile_id": "codex-cli-0.159.2",
   "source_spec": {
     "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
     "fragment": "第二章",
     "sha256": "f0e7e13429c792376ff7ba7007370ca3997352b7281a73769c8fc8640c1fb8b9"
   },
   "rule_manifest": {
-    "path": "tools/official_client_capture/codex_upgrade_rules_0_157_0.json",
-    "sha256": "7716a8905de88a690f55d75a5abcbd4cf8993e4a7389490e830980909240b4b3",
+    "path": "tools/official_client_capture/codex_upgrade_rules_0_159_2.json",
+    "sha256": "e3c7bec6db80d043a139f7af58aa05e89e5c2af02a476f642feeedaf2cda2c7b",
     "rule_count": 43
   },
   "variable_contract": [
@@ -425,7 +425,7 @@
       "trigger": "分别触发 manual、context_limit、model_downshift、comp_hash_changed 和 TokenBudget 分支。",
       "preconditions": [
         "每个 reason 有独立 process trace",
-        "内置 OpenAI provider 下无条件选择 V2，remote_compaction_v2 配置被忽略（features/src/lib.rs:611-613、1816-1820）",
+        "内置 OpenAI provider 下无条件选择 V2，remote_compaction_v2 配置被忽略（features/src/lib.rs:608-610、1836-1841）",
         "显式关闭 remote_compaction_v2 的正场景样本与默认配置样本同时存在",
         "已有 trigger 的负向样本存在"
       ],
@@ -561,12 +561,12 @@
       ],
       "side_triggers": {
         "official": {
-          "trigger": "官方 0.157.0 CLI 通过两个独立 Apps 工具调用取得自然负向与受控／自然正向样本；两次均由 create 响应驱动区域 PUT 和 uploaded。",
+          "trigger": "官方 0.159.2 CLI 通过两个独立 Apps 工具调用取得自然负向与受控／自然正向样本；两次均由 create 响应驱动区域 PUT 和 uploaded。",
           "preconditions": [
             "两个 job 的命令、模型和网络条件一致，仅 A14_C2PA_EXPECTATION 不同",
             "区域主机由 create 响应派生，RELAY_HOSTS 不预列",
             "正向 relay 保留注入前生产响应，除 pdf_c2pa_reservation 外不改变 JSON 语义",
-            "uploaded Body 必须来自官方 0.157.0 二进制真实请求，禁止按 create 标志推断",
+            "uploaded Body 必须来自官方 0.159.2 二进制真实请求，禁止按 create 标志推断",
             "create、区域 ClientHello 与 uploaded 的原始时序全部闭合"
           ]
         },
@@ -3160,7 +3160,7 @@
       "scenario_ids": [
         "A06"
       ],
-      "description": "显式关闭 remote_compaction_v2 的 WS 默认握手样本：0.156.1 起忽略该特性键，x-codex-beta-features 必须仍然存在且值为 remote_compaction_v2（core/src/session/mod.rs:1189-1202）。0.154 用它制造的「可选头缺失」扰动自 0.156.1 起已不成立，样本不得再标 optional_missing",
+      "description": "显式关闭 remote_compaction_v2 的 WS 默认握手样本：0.156.1 起忽略该特性键，x-codex-beta-features 必须仍然存在且值为 remote_compaction_v2（core/src/session/mod.rs:1183-1196）。0.154 用它制造的「可选头缺失」扰动自 0.156.1 起已不成立，样本不得再标 optional_missing",
       "required": true,
       "steps": [
         {
@@ -3833,7 +3833,7 @@
       "scenario_ids": [
         "A14"
       ],
-      "description": "官方 0.157.0 Files 三跳：C2PA 负向 uploaded 空对象",
+      "description": "官方 0.159.2 Files 三跳：C2PA 负向 uploaded 空对象",
       "required": true,
       "steps": [
         {
@@ -3899,7 +3899,7 @@
       "scenario_ids": [
         "A14"
       ],
-      "description": "官方 0.157.0 Files 三跳：C2PA 正向回放 create 请求",
+      "description": "官方 0.159.2 Files 三跳：C2PA 正向回放 create 请求",
       "required": true,
       "steps": [
         {
