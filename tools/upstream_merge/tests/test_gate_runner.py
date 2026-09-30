@@ -204,6 +204,69 @@ class RunLanesTest(unittest.TestCase):
         self.assertIn("broken detail", output)
         self.assertNotIn("fine detail", output)
 
+    def test_docker_step_not_executed_without_docker_and_reported(self) -> None:
+        marker = self.root / "integration-ran"
+        lane = Lane(
+            "go-tests",
+            (
+                python_step("default", "pass"),
+                Step(
+                    "integration",
+                    (sys.executable, "-c", f"import pathlib; pathlib.Path({str(marker)!r}).write_text('ran')"),
+                    requires_docker=True,
+                ),
+            ),
+        )
+        status_file = self.root / "status.json"
+        results, _elapsed = run_lanes(
+            [lane],
+            jobs=1,
+            repository_root=self.root,
+            env=dict(os.environ),
+            stream=self.stream,
+            run_docker_steps=False,
+            docker_skip_reason="本机 Docker 不可用",
+            status_file=status_file,
+            mode="backend",
+        )
+        self.assertFalse(marker.exists())
+        self.assertEqual([(item.status, item.reason) for item in results], [("passed", None), ("not_executed", "本机 Docker 不可用")])
+        output = self.stream.getvalue().decode("utf-8")
+        self.assertIn("未执行 1 项，须以同一提交的 CI 证据补齐：go-tests/integration（本机 Docker 不可用）", output)
+        status = json.loads(status_file.read_text(encoding="utf-8"))
+        self.assertEqual(status["schema_version"], gate_runner.STATUS_SCHEMA)
+        self.assertEqual((status["result"], status["not_executed"], status["failed"]), ("awaiting_ci", ["go-tests/integration"], []))
+        # 状态文件只写一次，已存在即拒绝，避免覆盖上一轮证据。
+        with self.assertRaises(FileExistsError):
+            gate_runner.write_status_file(status_file, results, mode="backend", jobs=1, elapsed=0.0)
+
+    def test_failure_takes_priority_over_not_executed(self) -> None:
+        results = [
+            gate_runner.StepResult("a", "fails", "failed", 1, 0.1),
+            gate_runner.StepResult("a", "skipped", "not_executed", None, 0.0, "本机 Docker 不可用"),
+        ]
+        self.assertEqual(gate_runner.overall_result(results), "failed")
+        summary = gate_runner.render_summary(results, jobs=1, elapsed=0.1)
+        self.assertIn("结论：失败 1 项：a/fails", summary)
+
+
+class IntegrationPolicyTest(unittest.TestCase):
+    def test_only_integration_group_requires_docker_and_runs_with_ci_true(self) -> None:
+        steps = {step.name: step for step in build_lanes("full", Path("/src"))[0].steps}
+        self.assertTrue(steps["go-test-integration"].requires_docker)
+        self.assertEqual(steps["go-test-integration"].env, (("CI", "true"),))
+        for name in ("go-test-default", "go-test-unit"):
+            self.assertFalse(steps[name].requires_docker)
+            self.assertEqual(steps[name].env, ())
+
+    def test_resolve_integration_modes(self) -> None:
+        self.assertEqual(gate_runner.resolve_integration("run", detect=lambda: False), (True, None))
+        self.assertEqual(gate_runner.resolve_integration("skip", detect=lambda: True), (False, "UPSTREAM_GATE_INTEGRATION=skip"))
+        self.assertEqual(gate_runner.resolve_integration("auto", detect=lambda: True), (True, None))
+        self.assertEqual(gate_runner.resolve_integration("auto", detect=lambda: False), (False, "本机 Docker 不可用"))
+        with self.assertRaises(ValueError):
+            gate_runner.resolve_integration("maybe")
+
 
 class DefaultJobsTest(unittest.TestCase):
     def test_env_overrides_default_and_rejects_non_positive(self) -> None:

@@ -617,8 +617,39 @@
         "execution_group_count": {"type": "integer", "minimum": 0},
         "from_attempt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
         "selected_gate_ids": {"type": "array", "items": {"type": "string"}},
-        "result": {"enum": ["blocked", "passed"]},
+        "not_executed_checks": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "门禁编排脚本状态文件里本机未执行、须由同一候选提交的 CI 证据补齐的检查"
+        },
+        "ci_evidence": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/ciEvidence"}],
+          "description": "gates-import-ci 导入的 CI 证据；只能补齐 awaiting_ci 前序 attempt 的未执行项"
+        },
+        "result": {"enum": ["blocked", "awaiting_ci", "passed"]},
         "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ciEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository", "run_id", "run_attempt", "head_sha", "workflow_path", "event", "head_branch", "status", "conclusion", "jobs", "run_document", "jobs_document", "test_job_log", "covers"],
+      "properties": {
+        "provider": {"const": "github-actions"},
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "run_attempt": {"type": ["integer", "null"]},
+        "head_sha": {"$ref": "#/$defs/gitObject"},
+        "workflow_path": {"const": ".github/workflows/backend-ci.yml"},
+        "event": {"type": ["string", "null"]},
+        "head_branch": {"type": ["string", "null"]},
+        "status": {"const": "completed"},
+        "conclusion": {"const": "success"},
+        "jobs": {"type": "array", "minItems": 1},
+        "run_document": {"$ref": "#/$defs/binding"},
+        "jobs_document": {"$ref": "#/$defs/binding"},
+        "test_job_log": {"$ref": "#/$defs/binding"},
+        "covers": {"type": "array", "minItems": 1, "items": {"type": "string"}}
       }
     },
     "componentMapping": {

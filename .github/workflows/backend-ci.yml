@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      # 上游合并 U-4 的候选分支：本机没有 Docker 时，integration 证据由这里的 CI 按候选提交补齐。
+      - 'upstream-merge/**'
   pull_request:
 
 permissions:

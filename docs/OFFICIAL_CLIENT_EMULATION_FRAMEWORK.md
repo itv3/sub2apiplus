@@ -417,7 +417,8 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 2. 冻结摘要台账的 successor 只在最终 revision 由工具一次性生成（§5.2.4 第 2 条），中间 revision 禁止
    生成，也禁止逐套人工登记。
 3. U-4 的出口只有 §5.2.3 决策表里的三条；无论走哪条，候选分支上的提交、受维护分支的快进、远端推送
-   和生产部署都只能由受管工具按阶段执行，人工不得插手，CI 结果也不能代替任何一份收据。
+   和生产部署都只能由受管工具按阶段执行，人工不得插手。CI 结果不能代替 U-4 收据；本机没有 Docker
+   时，integration 证据由工具按候选提交 SHA 绑定作业清单完整的 CI 运行补齐（见下文 U-4）。
 
 ### 5.2.1 升级前基线验收（权威）
 
@@ -501,8 +502,11 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   `upstream-gate-full` 执行：go test、golangci-lint、前端、采集工具、出站规格五条检查线依次执行、遇错
   不停，采集工具 4 片并行；检查线之间默认不并行，满载时计时敏感用例会误判。go test 的默认、unit、
   integration 三组均跑 `./...` 并固定 `-count=1`（默认组是唯一按生产编译形态运行的一组，CI 没有它），
-  golangci-lint 覆盖同样三种标签。
-- U-6：`finalize` 与 `replay` 收据是发版前置条件；U-4 未通过时禁止执行。
+  golangci-lint 覆盖同样三种标签。本机没有 Docker 时 integration 组记为未执行，收据结果为
+  `awaiting_ci`，U-5 拒绝：先用 `ci-push` 把候选推到 `upstream-merge/<plan_id>` 跑 CI，再用
+  `gates-import-ci` 导入同一候选提交、作业全部成功且日志证明 integration 真实执行的 CI 运行；导入
+  只补齐未执行项，本机失败不能被 CI 覆盖。
+- U-6：`finalize` 与 `replay` 收据是发版前置条件；U-4 未通过时禁止执行；`ci-cleanup` 删除临时 CI 分支。
 
 每个 U-2/U-3 revision 进入 U-4 前先做只读复核，再执行门禁；失败后保留原 attempt，默认只重跑上一轮
 失败的执行组：

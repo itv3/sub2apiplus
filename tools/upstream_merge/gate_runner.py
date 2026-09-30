@@ -26,6 +26,12 @@
 与采集工具第 2 片的 4 条用例失败，单独重跑全部通过。门禁结论不能依赖机器负载，所以默认不让
 检查线之间并行；确认用例稳定后可以显式调大。
 
+integration 组依赖本机 Docker（repository 包的 TestMain 在缺 Docker 时直接退出 0，看起来通过、
+实际没跑）。``UPSTREAM_GATE_INTEGRATION`` 为 auto（默认）时按 ``docker info`` 决定：可用则带
+``CI=true`` 执行，缺 Docker 即失败而不是静默跳过；不可用则记为 not_executed，退出码不受影响，
+由 gates-run 把 U-4 收据标为 awaiting_ci，再用 ``gates-import-ci`` 绑定同一候选提交的 CI 证据补齐。
+``UPSTREAM_GATE_STATUS_FILE`` 指定时另写一份机器可读结果（逐步状态、failed、not_executed、result）。
+
 验收用：设置 ``UPSTREAM_GATE_GO_JSON_DIR`` 时，go test 以 ``-json`` 执行，事件流按标签写入
 该目录，便于按“标签、包、测试名”比对两次运行的测试集合；失败用例的输出摘进本线日志。
 """
@@ -53,6 +59,12 @@ DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "co
 BUILD_TAGS = ("", "unit", "integration")
 MODES = ("backend", "full")
 GO_JSON_DIR_ENV = "UPSTREAM_GATE_GO_JSON_DIR"
+# integration 组的执行方式：auto 按本机 Docker 是否可用决定，run 强制执行，skip 强制不执行。
+INTEGRATION_ENV = "UPSTREAM_GATE_INTEGRATION"
+INTEGRATION_MODES = ("auto", "run", "skip")
+# gates-run 指定的机器可读结果文件；未设置时只输出人读日志。
+STATUS_FILE_ENV = "UPSTREAM_GATE_STATUS_FILE"
+STATUS_SCHEMA = "official-egress-upstream-gate-runner-status/v1"
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,8 @@ class Step:
     go_json_name: str | None = None
     # 步骤结束后把该环境变量指向目录里的 *.log 附进本线日志（采集工具各分片的完整输出）。
     attach_log_dir_env: str | None = None
+    # 需要本机 Docker 的步骤；Docker 不可用时记为 not_executed，由同一提交的 CI 证据补齐。
+    requires_docker: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +98,11 @@ class StepResult:
     status: str
     exit_code: int | None
     duration_seconds: float
+    reason: str | None = None
+
+    @property
+    def key(self) -> str:
+        return f"{self.lane}/{self.step}"
 
 
 def _tag_label(tag: str) -> str:
@@ -95,11 +114,16 @@ def _go_test_step(tag: str) -> Step:
     if tag:
         argv.append(f"-tags={tag}")
     argv += ["-count=1", "./..."]
+    integration = tag == "integration"
     return Step(
         name=f"go-test-{_tag_label(tag)}",
         argv=tuple(argv),
         cwd="backend",
+        # repository 包的 integration 测试依赖 Docker：本机没有 Docker 时 TestMain 直接退出 0，
+        # 看起来通过、实际没跑。带 CI=true 让它在缺 Docker 时失败而不是静默跳过。
+        env=(("CI", "true"),) if integration else (),
         go_json_name=f"go-test-{_tag_label(tag)}.jsonl",
+        requires_docker=integration,
     )
 
 
@@ -166,14 +190,56 @@ def default_jobs() -> int:
     return 1
 
 
+def docker_available() -> bool:
+    """本机 Docker 守护进程可用才算可用；命令缺失、超时或报错都按不可用处理。"""
+
+    if shutil.which("docker") is None:
+        return False
+    try:
+        completed = subprocess.run(
+            ["docker", "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def resolve_integration(mode: str, *, detect=docker_available) -> tuple[bool, str | None]:
+    """返回 (是否执行需要 Docker 的步骤, 不执行的原因)。"""
+
+    if mode not in INTEGRATION_MODES:
+        raise ValueError(f"{INTEGRATION_ENV} 非法：{mode}，允许 {INTEGRATION_MODES}")
+    if mode == "run":
+        return True, None
+    if mode == "skip":
+        return False, f"{INTEGRATION_ENV}=skip"
+    if detect():
+        return True, None
+    return False, "本机 Docker 不可用"
+
+
 class _Runner:
     """执行检查线并记录每个步骤的结果；中断时终止全部子进程组。"""
 
-    def __init__(self, repository_root: Path, log_dir: Path, env: dict[str, str]) -> None:
+    def __init__(
+        self,
+        repository_root: Path,
+        log_dir: Path,
+        env: dict[str, str],
+        *,
+        run_docker_steps: bool = True,
+        docker_skip_reason: str | None = None,
+    ) -> None:
         self.repository_root = repository_root
         self.log_dir = log_dir
         self.env = env
         self.go_json_dir = env.get(GO_JSON_DIR_ENV) or None
+        self.run_docker_steps = run_docker_steps
+        self.docker_skip_reason = docker_skip_reason
         self._lock = threading.Lock()
         self._processes: set[subprocess.Popen[bytes]] = set()
         self._stopping = False
@@ -191,6 +257,12 @@ class _Runner:
     def _run_step(self, lane: Lane, step: Step, log) -> StepResult:
         header = f"--- [{lane.name}] {step.name}: {' '.join(step.argv)}（目录 {step.cwd}）\n"
         log.write(header.encode("utf-8"))
+        if step.requires_docker and not self.run_docker_steps:
+            # 不执行也不能记为通过：交给 gates-run 标记 awaiting_ci，由同一提交的 CI 证据补齐。
+            reason = self.docker_skip_reason or "本机 Docker 不可用"
+            log.write(f"--- [{lane.name}] {step.name}: 未执行（{reason}），须以同一提交的 CI 证据补齐\n".encode("utf-8"))
+            log.flush()
+            return StepResult(lane.name, step.name, "not_executed", None, 0.0, reason)
         log.flush()
         env = dict(self.env)
         env.update(dict(step.env))
@@ -303,8 +375,15 @@ def run_lanes(
     env: dict[str, str] | None = None,
     log_dir: Path | None = None,
     stream=None,
+    run_docker_steps: bool = True,
+    docker_skip_reason: str | None = None,
+    status_file: Path | None = None,
+    mode: str = "custom",
 ) -> tuple[list[StepResult], float]:
-    """并行执行检查线，全部结束后按线顺序把日志写到 stream，返回结果与总耗时。"""
+    """执行检查线，全部结束后按线顺序把日志写到 stream，返回结果与总耗时。
+
+    status_file 非空时另写一份机器可读结果，供 gates-run 判断是否有未执行、须由 CI 补齐的步骤。
+    """
 
     if jobs < 1:
         raise ValueError("jobs 必须是正整数")
@@ -315,7 +394,13 @@ def run_lanes(
     base_env["PYTHONDONTWRITEBYTECODE"] = "1"
     # 采集工具分片日志默认落在共享临时目录；每次运行单独一份，避免并行或重复运行互相覆盖。
     base_env.setdefault("CAPTURE_TEST_SHARD_LOG_DIR", str(log_dir / "capture-test-shards"))
-    runner = _Runner(repository_root, log_dir, base_env)
+    runner = _Runner(
+        repository_root,
+        log_dir,
+        base_env,
+        run_docker_steps=run_docker_steps,
+        docker_skip_reason=docker_skip_reason,
+    )
     started = time.monotonic()
     results: dict[str, list[StepResult]] = {}
     previous_handler = None
@@ -347,9 +432,53 @@ def run_lanes(
     ordered = [result for lane in lanes for result in results[lane.name]]
     stream.write(render_summary(ordered, jobs=jobs, elapsed=elapsed).encode("utf-8"))
     stream.flush()
+    if status_file is not None:
+        write_status_file(status_file, ordered, mode=mode, jobs=jobs, elapsed=elapsed)
     if owned_log_dir:
         shutil.rmtree(log_dir, ignore_errors=True)
     return ordered, elapsed
+
+
+def overall_result(results: Sequence[StepResult]) -> str:
+    """failed 优先；没有失败但有未执行步骤时为 awaiting_ci；否则 passed。"""
+
+    if any(item.status == "failed" for item in results):
+        return "failed"
+    if any(item.status == "not_executed" for item in results):
+        return "awaiting_ci"
+    return "passed"
+
+
+def status_document(results: Sequence[StepResult], *, mode: str, jobs: int, elapsed: float) -> dict:
+    return {
+        "schema_version": STATUS_SCHEMA,
+        "mode": mode,
+        "jobs": jobs,
+        "elapsed_seconds": elapsed,
+        "steps": [
+            {
+                "lane": item.lane,
+                "step": item.step,
+                "status": item.status,
+                "exit_code": item.exit_code,
+                "duration_seconds": item.duration_seconds,
+                "reason": item.reason,
+            }
+            for item in results
+        ],
+        "failed": [item.key for item in results if item.status == "failed"],
+        "not_executed": [item.key for item in results if item.status == "not_executed"],
+        "result": overall_result(results),
+    }
+
+
+def write_status_file(path: Path, results: Sequence[StepResult], *, mode: str, jobs: int, elapsed: float) -> None:
+    """写入机器可读结果；已存在即拒绝，避免覆盖上一轮证据。"""
+
+    document = status_document(results, mode=mode, jobs=jobs, elapsed=elapsed)
+    raw = (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    with open(path, "xb") as handle:
+        handle.write(raw)
 
 
 def render_summary(results: Sequence[StepResult], *, jobs: int, elapsed: float) -> str:
@@ -360,15 +489,22 @@ def render_summary(results: Sequence[StepResult], *, jobs: int, elapsed: float) 
     ]
     for result in results:
         lines.append(f"{result.lane:<16}{result.step:<30}{result.status:<10}{result.duration_seconds:>10}")
-    failed = [f"{item.lane}/{item.step}" for item in results if item.status != "passed"]
-    lines.append("结论：全部通过" if not failed else f"结论：失败 {len(failed)} 项：{', '.join(failed)}")
+    failed = [item.key for item in results if item.status == "failed"]
+    skipped = [item for item in results if item.status == "not_executed"]
+    if failed:
+        lines.append(f"结论：失败 {len(failed)} 项：{', '.join(failed)}")
+    elif skipped:
+        detail = "；".join(f"{item.key}（{item.reason}）" for item in skipped)
+        lines.append(f"结论：已执行的检查全部通过；未执行 {len(skipped)} 项，须以同一提交的 CI 证据补齐：{detail}")
+    else:
+        lines.append("结论：全部通过")
     return "\n".join(lines) + "\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m tools.upstream_merge.gate_runner",
-        description="上游合并 U-4 门禁的并行编排：检查线并行、线内遇错不停、结束后统一汇总",
+        description="上游合并 U-4 门禁的编排：检查线遇错不停、采集工具分片并行、结束后统一汇总",
     )
     parser.add_argument("mode", choices=MODES, help="backend 只跑 go test 与 lint；full 跑全部检查线")
     parser.add_argument("--jobs", type=int, help="同时运行的检查线数；默认取 UPSTREAM_GATE_JOBS，未设置时为 1")
@@ -385,9 +521,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"并发上限非法：{error}")
     if jobs < 1:
         parser.error("--jobs 必须是正整数")
+    try:
+        run_docker_steps, skip_reason = resolve_integration(os.environ.get(INTEGRATION_ENV, "auto").strip() or "auto")
+    except ValueError as error:
+        parser.error(str(error))
+    status_raw = os.environ.get(STATUS_FILE_ENV, "").strip()
     lanes = build_lanes(arguments.mode, arguments.codex_source_root)
-    results, _elapsed = run_lanes(lanes, jobs=jobs)
-    return 0 if all(item.status == "passed" for item in results) else 1
+    results, _elapsed = run_lanes(
+        lanes,
+        jobs=jobs,
+        run_docker_steps=run_docker_steps,
+        docker_skip_reason=skip_reason,
+        status_file=Path(status_raw) if status_raw else None,
+        mode=arguments.mode,
+    )
+    # 未执行不算失败：退出码只反映已执行步骤；是否须由 CI 补齐看状态文件与汇总结论。
+    return 1 if any(item.status == "failed" for item in results) else 0
 
 
 if __name__ == "__main__":

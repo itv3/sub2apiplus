@@ -3362,6 +3362,204 @@ CLIENT_GATE_CATEGORIES = frozenset(
 )
 CLIENT_GATE_RECEIPT_SCHEMA = "official-egress-upstream-client-gate-receipt/v2"
 
+# 门禁编排脚本（tools/upstream_merge/gate_runner.py）的机器可读结果。
+RUNNER_STATUS_SCHEMA = "official-egress-upstream-gate-runner-status/v1"
+RUNNER_STATUS_FIELDS = {"schema_version", "mode", "jobs", "elapsed_seconds", "steps", "failed", "not_executed", "result"}
+RUNNER_STEP_FIELDS = {"lane", "step", "status", "exit_code", "duration_seconds", "reason"}
+RUNNER_STEP_STATUSES = {"passed", "failed", "not_executed"}
+# 本机未执行、可由同一候选提交的 CI 证据补齐的检查闭集；其余未执行一律拒绝。
+CI_COVERABLE_CHECKS = frozenset({"go-tests/go-test-integration"})
+CI_WORKFLOW_PATH = ".github/workflows/backend-ci.yml"
+CI_REQUIRED_JOBS = (
+    "capture-tools (1)",
+    "capture-tools (2)",
+    "capture-tools (3)",
+    "capture-tools (4)",
+    "egress-spec-gates",
+    "frontend",
+    "golangci-lint",
+    "shell",
+    "test",
+)
+CI_EVIDENCE_FIELDS = {
+    "provider",
+    "repository",
+    "run_id",
+    "run_attempt",
+    "head_sha",
+    "workflow_path",
+    "event",
+    "head_branch",
+    "status",
+    "conclusion",
+    "jobs",
+    "run_document",
+    "jobs_document",
+    "test_job_log",
+    "covers",
+}
+CI_BRANCH_PREFIX = "upstream-merge/"
+# CI test 作业先跑 make test-unit、再跑 make test-integration；integration 真实执行的判据是
+# 该命令之后出现 repository 包的 ok 行（缺 Docker 时 CI=true 让它失败）。日志行可带时间戳前缀。
+CI_INTEGRATION_COMMAND = "go test -tags=integration ./..."
+CI_INTEGRATION_OK_RE = re.compile(r"(?:^|\s)ok\s+github\.com/Wei-Shaw/sub2api/internal/repository\s")
+GITHUB_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _load_runner_status(
+    plan: LoadedPlan,
+    binding: Any,
+    label: str,
+    *,
+    exit_code: int,
+) -> dict[str, Any]:
+    """校验编排脚本的状态文件：字段闭合、逐步状态与汇总一致、与退出码一致。"""
+
+    validate_artifact_binding(plan.evidence_root, binding, label)
+    path = resolve_within(plan.evidence_root, binding["path"], label)
+    document = expect_object(load_json(path, label), label)
+    expect_exact_fields(document, RUNNER_STATUS_FIELDS, label)
+    if document.get("schema_version") != RUNNER_STATUS_SCHEMA:
+        raise UpstreamMergeError(f"{label} schema_version 非法")
+    steps = document.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise UpstreamMergeError(f"{label}.steps 必须是非空数组")
+    failed: list[str] = []
+    not_executed: list[str] = []
+    for index, raw in enumerate(steps):
+        step = expect_object(raw, f"{label}.steps[{index}]")
+        expect_exact_fields(step, RUNNER_STEP_FIELDS, f"{label}.steps[{index}]")
+        status = validate_string_enum(step.get("status"), RUNNER_STEP_STATUSES, f"{label}.steps[{index}].status")
+        key = f"{expect_string(step.get('lane'), 'lane')}/{expect_string(step.get('step'), 'step')}"
+        if status == "failed":
+            failed.append(key)
+        elif status == "not_executed":
+            if step.get("exit_code") is not None:
+                raise UpstreamMergeError(f"{label}.steps[{index}] 未执行却带退出码")
+            not_executed.append(key)
+        elif step.get("exit_code") != 0:
+            raise UpstreamMergeError(f"{label}.steps[{index}] 通过但退出码非 0")
+    if document.get("failed") != failed or document.get("not_executed") != not_executed:
+        raise UpstreamMergeError(f"{label} failed／not_executed 与逐步状态不一致")
+    expected = "failed" if failed else ("awaiting_ci" if not_executed else "passed")
+    if document.get("result") != expected:
+        raise UpstreamMergeError(f"{label}.result 与逐步状态不一致")
+    if (expected == "failed") != (exit_code != 0):
+        raise UpstreamMergeError(f"{label} 与门禁退出码矛盾")
+    uncovered = sorted(set(not_executed) - CI_COVERABLE_CHECKS)
+    if uncovered:
+        raise UpstreamMergeError(f"{label} 存在 CI 无法补齐的未执行项：{uncovered}")
+    return document
+
+
+def _not_executed_checks(plan: LoadedPlan, gates: Sequence[dict[str, Any]]) -> list[str]:
+    """汇总各执行组状态文件里的未执行项（同组成员共享同一份状态文件）。"""
+
+    collected: set[str] = set()
+    seen: set[str] = set()
+    for gate in gates:
+        binding = gate.get("runner_status")
+        if binding is None or binding["path"] in seen:
+            continue
+        seen.add(binding["path"])
+        document = _load_runner_status(plan, binding, f"runner_status {gate['id']}", exit_code=gate["exit_code"])
+        collected.update(document["not_executed"])
+    return sorted(collected)
+
+
+def _ci_integration_executed(log_text: str) -> bool:
+    """test 作业日志里，integration 命令之后必须出现 repository 包的 ok 行。"""
+
+    lines = log_text.splitlines()
+    for index, line in enumerate(lines):
+        if CI_INTEGRATION_COMMAND in line:
+            return any(CI_INTEGRATION_OK_RE.search(later) for later in lines[index + 1 :])
+    return False
+
+
+def _check_ci_facts(
+    run: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    log_text: str,
+    *,
+    run_id: int,
+    head_sha: str,
+) -> None:
+    """同一候选提交、指定工作流、全部作业成功、integration 真实执行；任一不满足即拒绝。"""
+
+    if run.get("id") != run_id:
+        raise UpstreamMergeError("CI run id 与请求不一致")
+    if run.get("head_sha") != head_sha:
+        raise UpstreamMergeError(f"CI run 的 head_sha 不是候选提交：{run.get('head_sha')} != {head_sha}")
+    if run.get("path") != CI_WORKFLOW_PATH:
+        raise UpstreamMergeError(f"CI run 不是 {CI_WORKFLOW_PATH}：{run.get('path')}")
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise UpstreamMergeError(f"CI run 未成功完成：status={run.get('status')} conclusion={run.get('conclusion')}")
+    names = [job.get("name") for job in jobs]
+    missing = sorted(set(CI_REQUIRED_JOBS) - set(names))
+    if missing:
+        raise UpstreamMergeError(f"CI run 缺少必需作业：{missing}")
+    unsuccessful = sorted(str(job.get("name")) for job in jobs if job.get("conclusion") != "success")
+    if unsuccessful:
+        raise UpstreamMergeError(f"CI run 存在未成功的作业：{unsuccessful}")
+    if not _ci_integration_executed(log_text):
+        raise UpstreamMergeError("CI test 作业日志里没有 integration 真实执行的证据")
+
+
+def _validate_ci_evidence(
+    plan: LoadedPlan,
+    value: Any,
+    *,
+    head_sha: str,
+    not_executed: list[str],
+) -> dict[str, Any]:
+    """重新读取收据绑定的 CI 原始记录复核全部事实，使导入后的收据可离线重放。"""
+
+    evidence = expect_object(value, "VerificationReceipt.ci_evidence")
+    expect_exact_fields(evidence, CI_EVIDENCE_FIELDS, "VerificationReceipt.ci_evidence")
+    if evidence.get("provider") != "github-actions":
+        raise UpstreamMergeError("ci_evidence.provider 非法")
+    repository = expect_string(evidence.get("repository"), "ci_evidence.repository")
+    if not GITHUB_SLUG_RE.fullmatch(repository):
+        raise UpstreamMergeError("ci_evidence.repository 非法")
+    run_id = evidence.get("run_id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        raise UpstreamMergeError("ci_evidence.run_id 非法")
+    documents: dict[str, Path] = {}
+    for field in ("run_document", "jobs_document", "test_job_log"):
+        validate_artifact_binding(plan.evidence_root, evidence.get(field), f"ci_evidence.{field}")
+        documents[field] = resolve_within(plan.evidence_root, evidence[field]["path"], f"ci_evidence.{field}")
+    run = expect_object(load_json(documents["run_document"], "ci run"), "ci run")
+    jobs_document = expect_object(load_json(documents["jobs_document"], "ci jobs"), "ci jobs")
+    jobs = jobs_document.get("jobs")
+    if not isinstance(jobs, list):
+        raise UpstreamMergeError("ci jobs 文档缺少 jobs 数组")
+    log_text = documents["test_job_log"].read_text(encoding="utf-8", errors="replace")
+    _check_ci_facts(run, jobs, log_text, run_id=run_id, head_sha=head_sha)
+    summary = {
+        "run_attempt": run.get("run_attempt"),
+        "head_sha": run.get("head_sha"),
+        "workflow_path": run.get("path"),
+        "event": run.get("event"),
+        "head_branch": run.get("head_branch"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "jobs": _ci_job_summary(jobs),
+    }
+    for field, expected in summary.items():
+        if evidence.get(field) != expected:
+            raise UpstreamMergeError(f"ci_evidence.{field} 与绑定的原始记录不一致")
+    if evidence.get("covers") != not_executed or not not_executed:
+        raise UpstreamMergeError("ci_evidence.covers 必须恰好等于本机未执行项")
+    return evidence
+
+
+def _ci_job_summary(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        ({"name": job.get("name"), "id": job.get("id"), "conclusion": job.get("conclusion")} for job in jobs),
+        key=lambda item: (str(item["name"]), str(item["id"])),
+    )
+
 
 def _gate_group(gate: dict[str, Any]) -> str:
     return str(gate.get("execution_group") or gate["id"])
@@ -3658,6 +3856,8 @@ def _run_verification_gates_in_worktree(
         ]
         cwd = _gate_cwd(worktree, leader["cwd"])
         executable = executable_identity(argv[0], cwd)
+        # 编排脚本把逐步结果写到这里；本机未执行的检查据此标为 awaiting_ci，而不是算作通过。
+        status_path = attempt_root / f"{leader['id']}.runner-status.json"
         started = time.monotonic()
         completed = run_process(
             argv,
@@ -3667,9 +3867,21 @@ def _run_verification_gates_in_worktree(
                 **os.environ,
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "UPSTREAM_MERGE_PLAN": str(plan.path),
+                "UPSTREAM_GATE_STATUS_FILE": str(status_path),
             },
         )
         duration_ms = int((time.monotonic() - started) * 1000)
+        runner_status: dict[str, Any] | None = None
+        if status_path.is_symlink() or (status_path.exists() and not status_path.is_file()):
+            raise UpstreamMergeError(f"门禁状态文件不可信：{status_path}")
+        if status_path.is_file():
+            runner_status = artifact_binding(plan.evidence_root, status_path)
+            _load_runner_status(
+                plan,
+                runner_status,
+                f"门禁 {leader['id']} 状态文件",
+                exit_code=completed.returncode,
+            )
         stdout_path = attempt_root / f"{leader['id']}.stdout.txt"
         stderr_path = attempt_root / f"{leader['id']}.stderr.txt"
         write_once(stdout_path, completed.stdout.encode("utf-8"))
@@ -3697,6 +3909,7 @@ def _run_verification_gates_in_worktree(
                 "execution_leader_id": leader["id"],
                 "execution_status": "executed" if gate["id"] == leader["id"] else "group_reused",
                 "reused_from": None,
+                "runner_status": runner_status,
             }
 
     results = [results_by_id[gate["id"]] for gate in plan.document["gates"]]
@@ -3715,7 +3928,14 @@ def _run_verification_gates_in_worktree(
 
     dirty_paths = status_paths(worktree)
     failed = sorted(item["id"] for item in results if item["status"] != "passed")
-    result = "passed" if not failed and not dirty_paths else "blocked"
+    not_executed = _not_executed_checks(plan, results)
+    if failed or dirty_paths:
+        result = "blocked"
+    elif not_executed:
+        # 本机没执行的检查不能算通过：等 gates-import-ci 绑定同一候选提交的 CI 证据。
+        result = "awaiting_ci"
+    else:
+        result = "passed"
     document = _stage_document(
         plan,
         VERIFICATION_RECEIPT_SCHEMA,
@@ -3744,11 +3964,242 @@ def _run_verification_gates_in_worktree(
             if previous_path
             else None,
             "selected_gate_ids": sorted(expanded_selected),
+            "not_executed_checks": not_executed,
+            "ci_evidence": None,
             "result": result,
         },
     )
     receipt_path = attempt_root / "receipt.json"
     write_json_once(receipt_path, document)
+    return document
+
+
+class GitHubActionsApi:
+    """用 gh CLI 只读访问 GitHub Actions；测试以假实现替换。"""
+
+    def __init__(self, repository_root: Path) -> None:
+        self.repository_root = repository_root
+
+    def _get(self, endpoint: str) -> bytes:
+        completed = subprocess.run(
+            ["gh", "api", endpoint],
+            cwd=self.repository_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise UpstreamMergeError(f"gh api {endpoint} 失败：{detail}")
+        return completed.stdout
+
+    def run(self, repository: str, run_id: int) -> dict[str, Any]:
+        return expect_object(json.loads(self._get(f"repos/{repository}/actions/runs/{run_id}")), "CI run")
+
+    def jobs(self, repository: str, run_id: int) -> list[dict[str, Any]]:
+        document = expect_object(
+            json.loads(self._get(f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100")),
+            "CI jobs",
+        )
+        jobs = document.get("jobs")
+        if not isinstance(jobs, list) or document.get("total_count") != len(jobs):
+            raise UpstreamMergeError("CI jobs 列表不完整")
+        return jobs
+
+    def job_log(self, repository: str, job_id: int) -> str:
+        return self._get(f"repos/{repository}/actions/jobs/{job_id}/logs").decode("utf-8", errors="replace")
+
+    def find_run(self, repository: str, head_sha: str) -> int | None:
+        document = expect_object(
+            json.loads(self._get(f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=50")),
+            "CI runs",
+        )
+        runs = [
+            item
+            for item in document.get("workflow_runs", [])
+            if isinstance(item, dict) and item.get("path") == CI_WORKFLOW_PATH and item.get("head_sha") == head_sha
+        ]
+        if not runs:
+            return None
+        runs.sort(key=lambda item: (item.get("status") == "completed", str(item.get("created_at"))))
+        return int(runs[-1]["id"])
+
+
+def _origin_slug(repository_root: Path, remote: str = "origin") -> str:
+    url = remote_url(repository_root, remote)
+    match = re.search(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$", url)
+    if match is None:
+        raise UpstreamMergeError(f"{remote} 不是 GitHub 仓库地址：{url}")
+    return match.group(1)
+
+
+def _ci_branch(plan: LoadedPlan) -> str:
+    return f"{CI_BRANCH_PREFIX}{plan.plan_id}"
+
+
+def push_candidate_for_ci(plan: LoadedPlan, *, remote: str = "origin") -> dict[str, Any]:
+    """U-4：把封存的候选提交推到 upstream-merge/<plan_id>，让 CI 在同一提交上执行。
+
+    只推这个临时分支，不推送受维护分支；CI 结论由 gates-import-ci 按提交 SHA 绑定。
+    """
+
+    expect_safe_id(remote, "remote")
+    source = _load_source_candidate(plan)
+    branch = _ci_branch(plan)
+    run_git(plan.repository_root, "push", remote, f"{source['source_commit']}:refs/heads/{branch}")
+    return {"result": "pushed", "remote": remote, "branch": branch, "commit": source["source_commit"]}
+
+
+def delete_ci_branch(plan: LoadedPlan, *, remote: str = "origin") -> dict[str, Any]:
+    """U-6 之后删除临时 CI 分支；分支已不存在时如实返回 absent。"""
+
+    expect_safe_id(remote, "remote")
+    branch = _ci_branch(plan)
+    # 先确认分支存在：不同传输方式下删除不存在的分支，git 的退出码并不一致。
+    listed = run_git(plan.repository_root, "ls-remote", "--exit-code", remote, f"refs/heads/{branch}", check=False)
+    if listed.returncode == 2:
+        return {"result": "absent", "remote": remote, "branch": branch}
+    if listed.returncode != 0:
+        raise UpstreamMergeError(f"无法查询临时 CI 分支：{listed.stderr.strip()}")
+    run_git(plan.repository_root, "push", remote, "--delete", f"refs/heads/{branch}")
+    return {"result": "deleted", "remote": remote, "branch": branch}
+
+
+def import_ci_evidence(
+    plan: LoadedPlan,
+    attempt_id: str,
+    from_attempt: str | Path,
+    *,
+    run_id: int | None = None,
+    repository_slug: str | None = None,
+    api: Any | None = None,
+) -> dict[str, Any]:
+    """U-4：把同一候选提交的 CI 证据导入为新 attempt，只补齐本机未执行的检查。
+
+    前序 attempt 必须是 awaiting_ci：有本机失败或工作树污染（blocked）时一律拒绝，CI 全绿也
+    不能覆盖本机结论。全部校验在写任何文件之前完成；新 attempt 原样复用前序门禁结果，另绑定
+    CI run、作业清单与 test 作业日志的原始记录，保证收据可离线复算。
+    """
+
+    attempt = expect_safe_id(attempt_id, "attempt_id")
+    attempt_root = resolve_within(
+        plan.evidence_root,
+        f"{plan.output_relative('gate_attempts_root')}/{attempt}",
+        "gate attempt",
+    )
+    if attempt_root.exists():
+        raise UpstreamMergeError(f"门禁 attempt 已存在，禁止覆盖：{attempt}")
+    previous_path = _resolve_attempt_receipt(plan, from_attempt)
+    if previous_path.parent.name == attempt:
+        raise UpstreamMergeError("新 attempt 不得引用自身收据")
+    previous = load_verification_receipt(plan, previous_path, require_passed=False)
+    if previous["result"] == "blocked":
+        raise UpstreamMergeError(
+            "上一 attempt 有本机失败或执行后污染工作树；CI 证据只补齐本机未执行的检查，不能覆盖本机失败"
+        )
+    if previous["result"] != "awaiting_ci":
+        raise UpstreamMergeError("上一 attempt 已通过，无需导入 CI 证据")
+    not_executed = list(previous["not_executed_checks"])
+    head_sha = _load_source_candidate(plan)["source_commit"]
+    slug = repository_slug or _origin_slug(plan.repository_root)
+    if not GITHUB_SLUG_RE.fullmatch(slug):
+        raise UpstreamMergeError(f"GitHub 仓库标识非法：{slug}")
+    api = api if api is not None else GitHubActionsApi(plan.repository_root)
+    if run_id is None:
+        run_id = api.find_run(slug, head_sha)
+        if run_id is None:
+            raise UpstreamMergeError(
+                f"找不到候选提交 {head_sha} 的 {CI_WORKFLOW_PATH} 运行；先用 ci-push 推送候选并等 CI 结束"
+            )
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        raise UpstreamMergeError("CI run id 非法")
+    run = api.run(slug, run_id)
+    jobs = api.jobs(slug, run_id)
+    test_job = next((job for job in jobs if job.get("name") == "test"), None)
+    if test_job is None:
+        raise UpstreamMergeError("CI run 缺少 test 作业")
+    log_text = api.job_log(slug, test_job["id"])
+    _check_ci_facts(run, jobs, log_text, run_id=run_id, head_sha=head_sha)
+
+    attempt_root.mkdir(parents=True, mode=0o700)
+    attempt_root.chmod(0o700)
+    ci_root = attempt_root / "ci"
+    ci_root.mkdir(mode=0o700)
+    run_path = ci_root / "run.json"
+    jobs_path = ci_root / "jobs.json"
+    log_path = ci_root / "test-job.log"
+    write_json_once(run_path, run)
+    write_json_once(jobs_path, {"jobs": jobs})
+    write_once(log_path, log_text.encode("utf-8"))
+    evidence = {
+        "provider": "github-actions",
+        "repository": slug,
+        "run_id": run_id,
+        "run_attempt": run.get("run_attempt"),
+        "head_sha": run.get("head_sha"),
+        "workflow_path": run.get("path"),
+        "event": run.get("event"),
+        "head_branch": run.get("head_branch"),
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "jobs": _ci_job_summary(jobs),
+        "run_document": artifact_binding(plan.evidence_root, run_path),
+        "jobs_document": artifact_binding(plan.evidence_root, jobs_path),
+        "test_job_log": artifact_binding(plan.evidence_root, log_path),
+        "covers": not_executed,
+    }
+    previous_binding = artifact_binding(plan.evidence_root, previous_path)
+    previous_by_id = {item["id"]: item for item in previous["gates"]}
+    results_by_id: dict[str, dict[str, Any]] = {}
+    for group_name, group in _gate_groups(plan).items():
+        for gate in group:
+            prior = previous_by_id[gate["id"]]
+            copied = dict(prior)
+            copied["execution_group"] = group_name
+            copied["execution_leader_id"] = prior.get("execution_leader_id", gate["id"])
+            copied["execution_status"] = "attempt_reused"
+            copied["reused_from"] = previous_binding
+            results_by_id[gate["id"]] = copied
+    results = [results_by_id[gate["id"]] for gate in plan.document["gates"]]
+    client_receipts: dict[str, dict[str, Any]] = {}
+    for gate in plan.document["gates"]:
+        if gate["category"] not in CLIENT_GATE_CATEGORIES:
+            continue
+        _, client_path = _client_receipt_document(plan, attempt, gate, results_by_id[gate["id"]], attempt_root)
+        client_receipts[gate["category"]] = artifact_binding(plan.evidence_root, client_path)
+    document = _stage_document(
+        plan,
+        VERIFICATION_RECEIPT_SCHEMA,
+        {
+            "attempt_id": attempt,
+            **(
+                {"baseline_acceptance": plan.baseline_acceptance}
+                if plan.baseline_acceptance is not None
+                else {}
+            ),
+            "source_candidate": stage_binding(plan, "source_candidate"),
+            "impact_receipt": stage_binding(plan, "impact_receipt"),
+            "required_categories": list(REQUIRED_GATE_CATEGORIES),
+            "gate_count": len(results),
+            "failed_gate_ids": [],
+            "skipped_gate_count": 0,
+            "worktree_status_paths": previous["worktree_status_paths"],
+            "gates": results,
+            "client_receipts": client_receipts,
+            "executed_gate_count": 0,
+            "reused_gate_count": len(results),
+            "execution_group_count": 0,
+            "from_attempt": previous_binding,
+            "selected_gate_ids": [],
+            "not_executed_checks": not_executed,
+            "ci_evidence": evidence,
+            "result": "passed",
+        },
+    )
+    receipt_path = attempt_root / "receipt.json"
+    write_json_once(receipt_path, document)
+    # 自检：新收据必须能被 U-5 使用的同一套标准校验接受。
+    load_verification_receipt(plan, receipt_path, require_passed=True)
     return document
 
 
@@ -3963,6 +4414,8 @@ def load_verification_receipt(
         "execution_group_count",
         "from_attempt",
         "selected_gate_ids",
+        "not_executed_checks",
+        "ci_evidence",
     }
     actual_fields = set(document)
     if actual_fields - (required_fields | optional_fields) or required_fields - actual_fields:
@@ -4034,6 +4487,7 @@ def load_verification_receipt(
         if from_attempt_path.parent.name == str(document["attempt_id"]):
             raise UpstreamMergeError("VerificationReceipt.from_attempt 不得指向自身")
     previous_by_id: dict[str, dict[str, Any]] = {}
+    previous_document: dict[str, Any] | None = None
     if from_attempt_path is not None:
         previous_document = load_verification_receipt(
             plan,
@@ -4070,6 +4524,7 @@ def load_verification_receipt(
             "execution_leader_id",
             "execution_status",
             "reused_from",
+            "runner_status",
         }
         if set(actual) - (base_fields | optional_gate_fields) or base_fields - set(actual):
             raise UpstreamMergeError(f"VerificationReceipt 门禁字段不闭合：{planned['id']}")
@@ -4180,6 +4635,7 @@ def load_verification_receipt(
                 "stdout",
                 "stderr",
                 "status",
+                "runner_status",
             ):
                 if actual.get(field) != prior.get(field):
                     raise UpstreamMergeError(
@@ -4206,6 +4662,7 @@ def load_verification_receipt(
             "stdout",
             "stderr",
             "status",
+            "runner_status",
         )
         for field in common_fields:
             if len(
@@ -4302,7 +4759,35 @@ def load_verification_receipt(
     ]
     if normalized_dirty != sorted(set(normalized_dirty)):
         raise UpstreamMergeError("VerificationReceipt worktree_status_paths 必须排序且不重复")
-    expected_result = "passed" if not failed and not normalized_dirty else "blocked"
+    not_executed = _not_executed_checks(plan, gates)
+    if "not_executed_checks" in document:
+        if document["not_executed_checks"] != not_executed:
+            raise UpstreamMergeError("VerificationReceipt.not_executed_checks 与门禁状态文件不一致")
+    elif not_executed:
+        raise UpstreamMergeError("VerificationReceipt 缺少 not_executed_checks")
+    ci_evidence = document.get("ci_evidence")
+    if ci_evidence is not None:
+        # 导入收据只补齐未执行项：全部门禁原样复用自一个 awaiting_ci 的前序 attempt。
+        if from_attempt_path is None or previous_document is None or any(
+            item.get("execution_status") != "attempt_reused" for item in gates
+        ):
+            raise UpstreamMergeError("带 CI 证据的 VerificationReceipt 必须全部复用前序 attempt")
+        if previous_document.get("result") != "awaiting_ci" or previous_document.get(
+            "not_executed_checks"
+        ) != not_executed:
+            raise UpstreamMergeError("CI 证据只能补齐 awaiting_ci 前序 attempt 的同一组未执行项")
+        _validate_ci_evidence(
+            plan,
+            ci_evidence,
+            head_sha=source["source_commit"],
+            not_executed=not_executed,
+        )
+    if failed or normalized_dirty:
+        expected_result = "blocked"
+    elif not_executed and ci_evidence is None:
+        expected_result = "awaiting_ci"
+    else:
+        expected_result = "passed"
     if document.get("result") != expected_result:
         raise UpstreamMergeError("VerificationReceipt result 与门禁／工作树结果矛盾")
 
@@ -4373,6 +4858,12 @@ def load_verification_receipt(
         )
         if document["execution_group_count"] != expected_groups:
             raise UpstreamMergeError("VerificationReceipt.execution_group_count 不一致")
+    if require_passed and document.get("result") == "awaiting_ci":
+        raise UpstreamMergeError(
+            "U-4 本机未执行 "
+            + "、".join(not_executed)
+            + "：先用 ci-push 推送候选跑 CI，再用 gates-import-ci 导入同一提交的 CI 证据"
+        )
     if require_passed and (
         document.get("result") != "passed"
         or failed

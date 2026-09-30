@@ -18,9 +18,12 @@ from .freeze import generate_freeze_successor
 from .workflow import (
     apply_candidate_to_managed_branch,
     carry_forward_inventory,
+    delete_ci_branch,
     finalize_upstream_merge,
     generate_change_decision_suggestion,
     generate_impact_matrix,
+    import_ci_evidence,
+    push_candidate_for_ci,
     replay_upstream_merge,
     preflight_revisions,
     run_verification_gates,
@@ -236,6 +239,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--from-attempt",
         help="上一 attempt 的安全标识、目录或 evidence root 内的 receipt.json",
     )
+
+    ci_push = commands.add_parser(
+        "ci-push",
+        help="U-4 把封存的候选提交推到 upstream-merge/<plan_id> 跑 CI；不推送受维护分支",
+    )
+    _add_plan(ci_push)
+    ci_push.add_argument("--remote", default="origin", help="推送的远端；默认 origin")
+
+    import_ci = commands.add_parser(
+        "gates-import-ci",
+        help="U-4 导入同一候选提交的 CI 证据，只补齐本机未执行的检查（前序须为 awaiting_ci）",
+    )
+    _add_plan(import_ci)
+    import_ci.add_argument("--attempt-id", required=True, help="新 attempt 标识")
+    import_ci.add_argument("--from-attempt", required=True, help="awaiting_ci 的前序 attempt")
+    import_ci.add_argument("--run", type=int, help="CI run id；省略时按候选提交 SHA 查找")
+    import_ci.add_argument("--repository-slug", help="GitHub owner/repo；默认从 origin 解析")
+
+    ci_cleanup = commands.add_parser(
+        "ci-cleanup",
+        help="U-6 之后删除临时 CI 分支 upstream-merge/<plan_id>",
+    )
+    _add_plan(ci_cleanup)
+    ci_cleanup.add_argument("--remote", default="origin", help="远端；默认 origin")
 
     disposition = commands.add_parser("disposition-seal", help="U-5 封存 candidate/Campaign 处置")
     _add_plan(disposition)
@@ -482,6 +509,25 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             only=arguments.only,
             from_attempt=arguments.from_attempt,
         )
+    if command == "ci-push":
+        return push_candidate_for_ci(plan, remote=arguments.remote)
+    if command == "gates-import-ci":
+        receipt = import_ci_evidence(
+            plan,
+            arguments.attempt_id,
+            arguments.from_attempt,
+            run_id=arguments.run,
+            repository_slug=arguments.repository_slug,
+        )
+        return {
+            "result": receipt["result"],
+            "attempt_id": receipt["attempt_id"],
+            "ci_run_id": receipt["ci_evidence"]["run_id"],
+            "covers": receipt["ci_evidence"]["covers"],
+            "identity_sha256": receipt["identity_sha256"],
+        }
+    if command == "ci-cleanup":
+        return delete_ci_branch(plan, remote=arguments.remote)
     if command == "disposition-seal":
         return seal_candidate_disposition(
             plan,
