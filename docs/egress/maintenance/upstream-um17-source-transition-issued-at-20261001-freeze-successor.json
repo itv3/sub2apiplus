@@ -1,0 +1,158 @@
+{
+  "base_commit": "232e7640a40831804a1a226960245c553192d448",
+  "changed_path_count": 6,
+  "current_commit": "d0dd22dd2f968960d3c1cc7d58234386c2bf5e71",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5287,
+  "frozen_path_count": 1929,
+  "identity_sha256": "d436f4c819b527d511656db90b9ccb2c4c7dcfd39194b72a3a833bafaec6a6f4",
+  "issued_at_utc": "2026-09-30T17:31:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-um17-source-transition-issued-at-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "predecessor_sha256s": [
+        "957ad74c9580b1b8321691397d8682508aa467d21e4f127adec52eeace56a996"
+      ],
+      "reason": "UM-17 source-transition 收据升为 v3 并写明签发时间：生成与校验、制品 schema、Go 通用复算测试与框架 §5.2.4 同步，v2 历史收据只读；不改变官方客户端画像、Persona、wire 或出站 path=docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-stopped-ledger-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-system-proxy-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-sync-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-doc-revision-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "76a0aaf74181878d00ea969d220421fe4fa4be0ee414a56dd67acbe478e1e625"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/tests/test_workflow.py",
+      "predecessor_sha256s": [
+        "f3080c96a494acd3a620fddc97c9b2d9035d3a5d4e2867e126ada5ef1c6f7603"
+      ],
+      "reason": "UM-17 source-transition 收据升为 v3 并写明签发时间：生成与校验、制品 schema、Go 通用复算测试与框架 §5.2.4 同步，v2 历史收据只读；不改变官方客户端画像、Persona、wire 或出站 path=tools/upstream_merge/tests/test_workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-egress-snapshot-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-route-scope-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1f0c7e1f717be6c5fd2e899199dd2b74a846cea320db65cd11fc95192aa2a18f"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "d582defb4700d61239ba3950254b73472dbbb57a80e627c60ac9b05050bd5fcf"
+      ],
+      "reason": "UM-17 source-transition 收据升为 v3 并写明签发时间：生成与校验、制品 schema、Go 通用复算测试与框架 §5.2.4 同步，v2 历史收据只读；不改变官方客户端画像、Persona、wire 或出站 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "8caf48844df0743b4fe153c74075a28321135f062c4dfb133f53f83b00a8ed4f"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge_artifacts.schema.json",
+      "predecessor_sha256s": [
+        "b5aecff39be181bec85081f9a2a642e1672b9c08195510d2eebc3a96b36020c5"
+      ],
+      "reason": "UM-17 source-transition 收据升为 v3 并写明签发时间：生成与校验、制品 schema、Go 通用复算测试与框架 §5.2.4 同步，v2 历史收据只读；不改变官方客户端画像、Persona、wire 或出站 path=tools/upstream_merge_artifacts.schema.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-schema-repair-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6f9cc4be876ffaa38bf264cbf6f63ecfc593d3c1ab346b7d7ed2a9bd0b23060c"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/internal/officialegress/upstream_source_transition_generic_test.go",
+    "backend/internal/service/upstream_source_transition_generic_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
