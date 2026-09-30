@@ -19,8 +19,9 @@
    不写死与仓库承接收据数量相关的精确集合；另一组用例追加一份模拟的"今后新增承接收据"后重跑，
    证明新增边界不会让这些用例误红。
 4. 合成临时 git 仓库：变更集内部的中间提交不要求登记；不在 git 历史里的显式节点必须登记；浅克隆
-   失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免；缺失提交只跳过前后提交边界；新增
-   文件的空内容前序不计边界；尚无只读重放判定的生成器如实跳过并报告。
+   失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免，不带签发时间的收据（上游合并工具的
+   源码迁移收据）也不能为豁免背书；缺失提交只跳过前后提交边界；新增文件的空内容前序不计边界；
+   尚无只读重放判定的生成器如实跳过并报告。
 
 真实形态与反证需要完整 git 历史（CI 的 capture-tools job 以 fetch-depth: 0 检出）；不是 git 工作树时
 跳过，浅克隆时门禁本身失败关闭。全程只读真实仓库：历史形态用 ``git ls-tree``／``git cat-file``
@@ -1279,6 +1280,33 @@ class SyntheticRepositoryBoundaryTest(unittest.TestCase):
         report = self.repository.check(exemptions=exemptions, baseline="2026-12-31T00:00:00Z")
         self.assertTrue(report.passed, gate.format_report(report))
         self.assertEqual([(SYNTHETIC_SPEC, digest_a)], [(spec, digest) for spec, digest, _ in report.exempted])
+
+    def test_undated_receipt_cannot_back_an_exemption(self) -> None:
+        # 上游合并工具生成的源码迁移收据不带签发时间，其 base_commit／current_commit 同样把前后提交处的
+        # 摘要记成部署边界。不带签发时间证明不了早于门禁基线：即使把基线推到很晚，也不得为豁免背书。
+        repository = self.repository
+        digest_a = repository.write_producer(_synthetic_producer("a"))
+        merged = repository.commit("合并时的版本 a")
+        repository.write_receipt(
+            "upstream-vX-source-transition.json",
+            {
+                "schema_version": "official-egress-upstream-source-transition/v2",
+                "base_commit": merged,
+                "current_commit": merged,
+                "entries": [],
+            },
+        )
+        repository.commit("登记不带签发时间的源码迁移收据")
+        repository.write_producer(_synthetic_producer("b"))
+        exemptions = {SYNTHETIC_PRODUCER: {digest_a: "合成：声称从未部署"}}
+        report = repository.check(exemptions=exemptions, baseline="2026-12-31T00:00:00Z")
+        self.assertEqual({(SYNTHETIC_PRODUCER, digest_a)}, _violation_digests(report))
+        self.assertIn("不得豁免", report.violations[0].detail)
+        self.assertEqual([], report.exempted)
+        # 按处置提示登记后放行：修复只关掉豁免通道，不影响正常登记。
+        repository.write_producer(_synthetic_producer("b", {"1": [digest_a]}))
+        report = repository.check(exemptions=exemptions, baseline="2026-12-31T00:00:00Z")
+        self.assertTrue(report.passed, gate.format_report(report))
 
     def test_shallow_clone_fails_closed(self) -> None:
         self._change_set()

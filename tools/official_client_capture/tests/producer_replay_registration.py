@@ -73,7 +73,7 @@
 逻辑**接受（直接调用生成器模块里的判定函数或登记常量，不另写一套判定）。不接受即违规。
 
 门禁引入前已经人工处理过的历史边界——确认从未生成需重放收据，或其收据格式早已按设计退役——
-登记在 ``HISTORICAL_EXEMPTIONS``（逐条写明依据）。豁免只允许覆盖 ``GATE_BASELINE_ISSUED_AT_UTC`` 之前签发的收据引入的边界，且
+登记在 ``HISTORICAL_EXEMPTIONS``（逐条写明依据）。豁免只允许覆盖 ``GATE_BASELINE_ISSUED_AT_UTC`` 之前签发的收据引入的边界（以收据自己写明的 ``issued_at_utc`` 为准，不带签发时间的收据不算），且
 永远不覆盖基线时已部署的版本 ``GATE_BASELINE_CURRENT_SHA256``；此后出现的新边界不提供豁免
 通道——即便某个变更集终点确实没部署过，把它登记为只读重放身份也无害（只读重放不允许生成
 新事实）。
@@ -935,12 +935,21 @@ def _parse_utc(value: str | None) -> datetime | None:
 
 
 def is_pre_baseline(boundary: Boundary, baseline: str | None = None) -> bool:
-    """边界是否至少有一处出处来自门禁基线之前签发（或无签发时间的旧格式）收据。"""
+    """边界是否至少有一处出处来自门禁基线之前签发的收据。
+
+    只认收据自己写明、且不晚于基线的 ``issued_at_utc``。不带签发时间（或无法解析）的收据无法证明
+    签发早于基线，一律不算基线前出处：上游合并工具至今仍生成不带签发时间的源码迁移收据
+    （official-egress-upstream-source-transition/v2），其 base_commit／current_commit 会把合并时的
+    当前摘要记成部署边界；若仍按"旧格式"放行，把当前摘要塞进豁免表就能绕过登记。门禁引入时一次性
+    审计的每条历史豁免都另有带签发时间的基线前出处，由第 1 组用例逐条保证。
+    """
 
     limit = _parse_utc(GATE_BASELINE_ISSUED_AT_UTC if baseline is None else baseline)
+    if limit is None:
+        return False
     for source in boundary.sources:
         issued = _parse_utc(source.issued_at_utc)
-        if issued is None or (limit is not None and issued <= limit):
+        if issued is not None and issued <= limit:
             return True
     return False
 
