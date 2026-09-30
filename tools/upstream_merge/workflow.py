@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -57,9 +58,11 @@ from .contracts import (
 )
 from .errors import UpstreamMergeError
 from .preflight_report import (
+    candidate_sink_diff,
     conflict_closure,
     freeze_coverage,
     load_request_template,
+    parse_scanner_check_output,
     scanner_coverage,
     template_validity,
     tool_bundle_disturbance,
@@ -753,6 +756,141 @@ def _preflight_covered_tags(
     return {"status": "passed" if not findings else "failed", "tags": rows, "findings": findings}
 
 
+PREFLIGHT_GIT_IDENTITY = (
+    "-c",
+    "user.name=Sub2API Upstream Preflight",
+    "-c",
+    "user.email=upstream-preflight@sub2apiplus.invalid",
+)
+# 试扫描树专用：给第一轮扫描报"未匹配任何分类规则"的上游新增发送点临时补 out-of-scope 分类，
+# 让扫描器能走到基线比较、一次列全"[新增]"。只写进一次性试扫描树，永不提交。
+SCAN_ONLY_RULES_RELATIVE = "backend/cmd/egressscan/zz_preflight_scan_only_rules.go"
+SCANNER_SOURCE_RELATIVE = "backend/cmd/egressscan"
+SCANNER_SUCCESSOR_RELATIVE = "docs/egress/maintenance/scanner-algorithm-successor.json"
+SCANNER_LOCK_RELATIVE = "docs/egress/maintenance/bootstrap-inventory-lock.json"
+SCANNER_SUCCESSOR_SCHEMA = "official-egress-scanner-algorithm-successor/v1"
+
+
+def _scanner_algorithm_digest(directory: Path) -> str:
+    """与 egressscan 的 scannerAlgorithmDigest 同一算法：非测试 .go 按文件名排序，逐个累加"名\\0内容\\0"。"""
+
+    digest = hashlib.sha256()
+    names = sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.is_file() and path.name.endswith(".go") and not path.name.endswith("_test.go")
+    )
+    for name in names:
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((directory / name).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _write_scan_only_rules(scan_tree: Path, identifiers: list[str]) -> None:
+    """在试扫描树写入按完整 ID 精确匹配的临时分类，并让扫描器算法后继指向新摘要。"""
+
+    entries = "".join(
+        "\t\tclassifyRule{\n"
+        f"\t\t\tcandidateExact: {json.dumps(identifier)},\n"
+        '\t\t\tpersona: "out-of-scope", backend: "-", state: "not_applicable", owner: "-", changeset: "-",\n'
+        '\t\t\trationale: "上游合并预检试扫描临时分类：上游新增、尚未在主干分类与登记",\n'
+        "\t\t},\n"
+        for identifier in identifiers
+    )
+    source = (
+        "// 上游合并预检试扫描临时文件：只存在于一次性试扫描树，永不提交。\n"
+        "package main\n\n"
+        "func init() {\n"
+        "\tclassifyRules = append(classifyRules,\n"
+        f"{entries}"
+        "\t)\n"
+        "}\n"
+    )
+    (scan_tree / SCAN_ONLY_RULES_RELATIVE).write_text(source, encoding="utf-8")
+    successor_path = scan_tree / SCANNER_SUCCESSOR_RELATIVE
+    if successor_path.is_file():
+        successor = expect_object(load_json(successor_path, "scanner algorithm successor"), "scanner algorithm successor")
+    else:
+        lock = expect_object(load_json(scan_tree / SCANNER_LOCK_RELATIVE, "bootstrap inventory lock"), "bootstrap inventory lock")
+        successor = {
+            "schema_version": SCANNER_SUCCESSOR_SCHEMA,
+            "from_sha256": lock.get("scanner_algorithm_sha256"),
+            "source_transition": "upstream-merge-preflight-scan-only",
+            "reviewed_by": "upstream-merge-preflight",
+            "reason": "试扫描树临时分类，永不提交",
+        }
+    successor["to_sha256"] = _scanner_algorithm_digest(scan_tree / SCANNER_SOURCE_RELATIVE)
+    successor_path.write_text(json.dumps(successor, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _preflight_upstream_sink_scan(
+    root: Path,
+    fork_head: str,
+    upstream_commit: str,
+    temporary_root: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    """UM-13：不依赖试合并结果，列出尚未在主干预先登记的上游新增发送点。
+
+    在临时 detached worktree 里以 ``-X ours`` 合入目标提交：非冲突区完整带入上游改动（上游新增的
+    文件与函数都在），冲突块一律取 fork 侧，保证 fork 的扫描器、分类规则与登记清单原样可用；
+    ``-X ours`` 解决不了的修改／删除等冲突按 fork 侧处理（fork 有则保留，fork 删了则删除）。
+    这棵树只供扫描，不提交、不进入任何收据；随后运行 ``make egress-scanner-check``，由调用方
+    把"未匹配任何分类规则"与"[新增]"列为待预先登记的发送点。
+    """
+
+    scan_tree = temporary_root / "upstream-sink-scan"
+    run_git(root, "worktree", "add", "--detach", str(scan_tree), fork_head)
+    try:
+        run_git(
+            scan_tree,
+            *PREFLIGHT_GIT_IDENTITY,
+            "merge",
+            "--no-ff",
+            "--no-commit",
+            "-X",
+            "ours",
+            upstream_commit,
+            check=False,
+        )
+        stages: dict[str, set[int]] = {}
+        for entry in unmerged_entries(scan_tree):
+            stages.setdefault(entry["path"], set()).add(entry["stage"])
+        for path, present in sorted(stages.items()):
+            if 2 in present:
+                run_git(scan_tree, "checkout", "--ours", "--", path)
+                run_git(scan_tree, "add", "--", path)
+            else:
+                run_git(scan_tree, "rm", "--quiet", "--cached", "--ignore-unmatch", "--", path)
+                target = scan_tree / path
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+        def check() -> dict[str, Any]:
+            completed = run_process(
+                ("make", "--no-print-directory", "egress-scanner-check"),
+                cwd=scan_tree,
+                check=False,
+                env=env,
+            )
+            return parse_scanner_check_output(completed.stdout, completed.stderr, completed.returncode)
+
+        parsed = check()
+        unclassified = parsed["unclassified"]
+        if parsed["outcome"] == "scan_failed" and unclassified and (scan_tree / SCANNER_SOURCE_RELATIVE).is_dir():
+            # 第一轮因缺分类规则在基线比较前失败：临时补分类后第二轮一次列全"[新增]"，
+            # 缺分类规则的名单保留第一轮的结果。
+            _write_scan_only_rules(scan_tree, [item["scan_candidate_id"] for item in unclassified])
+            parsed = check()
+            parsed["unclassified"] = unclassified
+            parsed["temporarily_classified"] = [item["scan_candidate_id"] for item in unclassified]
+        parsed["unresolved_conflict_count"] = len(stages)
+        return parsed
+    finally:
+        run_git(root, "worktree", "remove", "--force", str(scan_tree), check=False)
+
+
 def run_preflight(
     request_path: Path,
     repository_root: Path,
@@ -808,7 +946,7 @@ def run_preflight(
     covered_tags_report = _preflight_covered_tags(root, upstream, merge_base_value, blockers)
 
     # §5.2.2 的五项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖。
-    # 前四项不依赖试合并结果，因冲突而 blocked 时仍然输出。
+    # 五项都不依赖试合并结果，因冲突而 blocked 时仍然输出；扫描器覆盖另建 -X ours 试扫描树（UM-13）。
     report: dict[str, Any] = {}
     try:
         template = load_request_template(root)
@@ -829,7 +967,14 @@ def run_preflight(
     scanner_snapshot: dict[str, Any] | None = None
     conflict_paths: list[str] = []
     merge_exit_code: int | None = None
+    upstream_scan: dict[str, Any] | None = None
     try:
+        try:
+            upstream_scan = _preflight_upstream_sink_scan(
+                root, fork_head, upstream["commit"], temporary_root, offline_env
+            )
+        except (OSError, UpstreamMergeError) as error:
+            checks.append({"id": "upstream-sink-scan", "status": "failed", "error": str(error)})
         run_git(root, "worktree", "add", "--detach", str(worktree), fork_head)
         completed = run_git(
             worktree,
@@ -939,6 +1084,17 @@ def run_preflight(
         run_git(root, "worktree", "prune", check=False)
         shutil.rmtree(temporary_root, ignore_errors=True)
 
+    coverage = scanner_coverage(
+        upstream_scan,
+        candidate_sink_diff(fork_snapshot, scanner_snapshot, deferred_reason=scanner_deferred_reason),
+    )
+    if coverage["status"] == "blocked":
+        blockers.append(
+            f"上游新增 {coverage['unregistered_added_count']} 个发送点尚未在主干预先登记"
+            f"（其中缺分类规则 {len(coverage['unclassified_sinks'])} 个），须在 plan-create 前登记并重封基线"
+        )
+    elif coverage["status"] == "failed":
+        blockers.append("上游发送点试扫描未得出结论：" + str(coverage.get("error") or coverage.get("reason") or "分类不完整"))
     result = _stage_document(
         # preflight 没有 LoadedPlan，使用显式输入摘要构造独立 envelope。
         # 该摘要不参与任何正式 U-0 身份绑定。
@@ -963,11 +1119,7 @@ def run_preflight(
                 "freeze_coverage": _preflight_freeze_coverage(
                     root, merge_base_value, upstream["commit"], conflict_paths, blockers
                 ),
-                "scanner_coverage": scanner_coverage(
-                    fork_snapshot,
-                    scanner_snapshot,
-                    deferred_reason=scanner_deferred_reason,
-                ),
+                "scanner_coverage": coverage,
             },
             "scanner_snapshot": (
                 {

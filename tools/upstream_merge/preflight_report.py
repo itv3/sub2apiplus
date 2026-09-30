@@ -3,11 +3,17 @@
 预检在试合并之外还必须回答四个问题：request 模板是否过期、上游是否改动了工具闭集、
 上游改动命中了多少冻结台账路径、上游是否新增了扫描器要分类的发送点。v0.2.3 合并
 时这四个问题都是到 U-1／U-4 才暴露的，每次都作废一个 Plan。这里把它们做成纯函数，
-由 ``run_preflight`` 组装进报告；因冲突而 blocked 时前四项仍然输出。
+由 ``run_preflight`` 组装进报告；因冲突而 blocked 时五项都照常输出。
+
+第五项（扫描器覆盖）不依赖试合并结果（UM-13）：v0.2.10 试合并有 77 个冲突，旧实现只标
+deferred，上游新增的 4 个发送点直到 Plan 003 门禁才暴露。现在预检另建一棵 ``-X ours``
+试扫描树（冲突块取 fork 侧，仅供扫描），在其上运行 ``make egress-scanner-check``，把
+"未匹配任何分类规则"与"[新增]"两类列为尚未在主干预先登记的上游新增发送点。
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -240,13 +246,13 @@ def _sink_detail(sink: dict[str, Any]) -> dict[str, Any]:
     return {field: sink.get(field) for field in SINK_DETAIL_FIELDS}
 
 
-def scanner_coverage(
+def candidate_sink_diff(
     fork_snapshot: dict[str, Any] | None,
     candidate_snapshot: dict[str, Any] | None,
     *,
     deferred_reason: str | None = None,
 ) -> dict[str, Any]:
-    """候选树相对 fork 新增／移除的发送点；新增项是 §5.2.1 分类修复的输入。"""
+    """试合并无冲突时，候选树相对 fork 新增／移除的发送点（有冲突时标 deferred）。"""
 
     if deferred_reason is not None:
         return {"status": "deferred", "reason": deferred_reason}
@@ -273,6 +279,151 @@ def scanner_coverage(
         "added_sinks": [_sink_detail(candidate_sinks[item]) for item in added],
         "removed_sinks": [_sink_detail(fork_sinks[item]) for item in removed],
     }
+
+
+# egressscan -mode check 的输出格式（backend/cmd/egressscan/main.go 与 classify.go 的 unclassifiedError）：
+#   漂移："  [新增] <ID>  (<callee> @ <file>:<line>)"、"  [变更] <ID>  <说明>"、"  [消失] <ID>  (<callee>)"
+#   扫描失败："N 条 sink 未匹配任何分类规则：" 下的 "  - <ID>  (...)"；"N 条分类结果不完整：" 下的 "  - <ID>：<问题>"
+DRIFT_LINE_RE = re.compile(r"^\s+\[(新增|变更|消失)\]\s+(\S+)")
+LIST_LINE_RE = re.compile(r"^\s+-\s+([^\s：]+)")
+DRIFT_KEYS = {"新增": "added", "变更": "changed", "消失": "removed"}
+UPSTREAM_SCAN_METHOD = (
+    "受维护分支 HEAD 与目标 tag 以 -X ours 试合并（冲突块取 fork 侧，仅供扫描），在试扫描树上运行 "
+    "make egress-scanner-check；冲突块内的上游新增发送点看不到，由试验区完整门禁兜底"
+)
+REGISTRATION_HINT = (
+    "在主干 backend/cmd/egressscan/post_bootstrap_acceptance.go 的 reviewedPostBootstrapSinkAdditions "
+    "按候选树实际分类预先登记（absentBeforeMerge＋同一 mergeGroup）；缺分类规则的先在 classify.go 补规则；"
+    "登记后重封基线，再 plan-create；决定不接通的（如邀请好友按 B 方案），在试验区删除该调用、由 U-2 surface-scan "
+    "确认即可，不必登记"
+)
+
+
+def parse_scanner_check_output(stdout: str, stderr: str, exit_code: int) -> dict[str, Any]:
+    """解析扫描器基线检查的输出，按漂移与扫描失败两类归并发送点 ID。"""
+
+    parsed: dict[str, Any] = {
+        "exit_code": exit_code,
+        "added": [],
+        "changed": [],
+        "removed": [],
+        "unclassified": [],
+        "classification_problems": [],
+        "metadata_changes": [],
+    }
+    section: str | None = None
+    for line in f"{stdout}\n{stderr}".splitlines():
+        drift = DRIFT_LINE_RE.match(line)
+        if drift:
+            if drift.group(2).startswith("["):
+                # "[变更] [基线元数据] …" 是扫描器对基线元数据（如加载包数）的比较，不是发送点。
+                parsed["metadata_changes"].append(line.strip())
+            else:
+                parsed[DRIFT_KEYS[drift.group(1)]].append({"scan_candidate_id": drift.group(2), "line": line.strip()})
+            continue
+        if "条 sink 未匹配任何分类规则" in line:
+            section = "unclassified"
+            continue
+        if "条分类结果不完整" in line:
+            section = "classification_problems"
+            continue
+        listed = LIST_LINE_RE.match(line)
+        if listed and section is not None:
+            parsed[section].append({"scan_candidate_id": listed.group(1), "line": line.strip()})
+        elif line.strip() and not line.startswith(" "):
+            section = None
+    for key in ("added", "changed", "removed", "unclassified", "classification_problems"):
+        parsed[key] = sorted(
+            {item["scan_candidate_id"]: item for item in parsed[key]}.values(),
+            key=lambda item: item["scan_candidate_id"],
+        )
+    if exit_code == 0:
+        parsed["outcome"] = "passed"
+    elif parsed["unclassified"] or parsed["classification_problems"]:
+        parsed["outcome"] = "scan_failed"
+    elif parsed["added"] or parsed["changed"] or parsed["removed"] or parsed["metadata_changes"]:
+        parsed["outcome"] = "drift"
+    else:
+        parsed["outcome"] = "error"
+        parsed["error"] = (stderr.strip() or stdout.strip())[-2000:]
+    return parsed
+
+
+def _rename_candidates(removed: list[dict[str, Any]], added: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """按"同文件同发送类型、函数改名"或"同函数同发送类型、换文件"配对消失与新增的发送点。"""
+
+    def split(identifier: str) -> tuple[str, str, str] | None:
+        if "@" not in identifier or "#" not in identifier:
+            return None
+        function, location = identifier.split("@", 1)
+        file_part, _, kind = location.partition("#")
+        return function, file_part, kind
+
+    pairs: list[dict[str, str]] = []
+    used: set[str] = set()
+    for old in removed:
+        old_parts = split(old["scan_candidate_id"])
+        if old_parts is None:
+            continue
+        for new in added:
+            identifier = new["scan_candidate_id"]
+            new_parts = split(identifier)
+            if identifier in used or new_parts is None or old_parts[2] != new_parts[2]:
+                continue
+            if old_parts[1] == new_parts[1] or old_parts[0] == new_parts[0]:
+                pairs.append({"before": old["scan_candidate_id"], "after": identifier})
+                used.add(identifier)
+                break
+    return pairs
+
+
+def scanner_coverage(upstream_scan: dict[str, Any] | None, candidate_merge: dict[str, Any]) -> dict[str, Any]:
+    """第五项：上游新增发送点是否已在主干预先登记（UM-13），另附试合并无冲突时的 fork→候选差异。"""
+
+    if not isinstance(upstream_scan, dict):
+        return {
+            "status": "failed",
+            "method": UPSTREAM_SCAN_METHOD,
+            "reason": "试扫描没有产出结果",
+            "candidate_merge": candidate_merge,
+        }
+    # 同一发送点可能既缺分类规则（第一轮）又在补临时分类后报"[新增]"（第二轮），按 ID 合并。
+    missing_classification = {item["scan_candidate_id"] for item in upstream_scan["unclassified"]}
+    merged = {item["scan_candidate_id"]: item for item in upstream_scan["unclassified"] + upstream_scan["added"]}
+    unregistered = [
+        {**merged[identifier], "missing_classification": identifier in missing_classification}
+        for identifier in sorted(merged)
+    ]
+    if upstream_scan["outcome"] == "error":
+        status = "failed"
+    elif unregistered:
+        status = "blocked"
+    elif upstream_scan["outcome"] == "scan_failed":
+        # 只有分类不完整、没有未分类项时，扫描器不会进入基线比较，看不到[新增]，不能判为通过。
+        status = "failed"
+    else:
+        status = "passed"
+    report: dict[str, Any] = {
+        "status": status,
+        "method": UPSTREAM_SCAN_METHOD,
+        "scan_exit_code": upstream_scan["exit_code"],
+        "unregistered_added_count": len(unregistered),
+        "unregistered_added_sinks": unregistered,
+        "unclassified_sinks": upstream_scan["unclassified"],
+        "temporarily_classified": upstream_scan.get("temporarily_classified", []),
+        "classification_problems": upstream_scan["classification_problems"],
+        "changed_sinks": upstream_scan["changed"],
+        "metadata_changes": upstream_scan.get("metadata_changes", []),
+        "removed_sinks": upstream_scan["removed"],
+        "rename_candidates": _rename_candidates(upstream_scan["removed"], upstream_scan["added"]),
+        "unresolved_conflict_count": upstream_scan.get("unresolved_conflict_count", 0),
+        "candidate_merge": candidate_merge,
+    }
+    if unregistered:
+        report["registration_hint"] = REGISTRATION_HINT
+    if upstream_scan["outcome"] == "error":
+        report["error"] = upstream_scan.get("error", "")
+    return report
 
 
 def conflict_closure(conflict_paths: list[str], upstream_changed_path_count: int) -> dict[str, Any]:

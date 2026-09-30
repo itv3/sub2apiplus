@@ -1,4 +1,4 @@
-.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci egress-scanner-check check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -88,6 +88,18 @@ check-egress-spec-local-source:
 		--dependency-manifest tools/spec_source_deps/manifest.json \
 		--symbol --cfg-test
 
+# 发送面扫描器基线检查：check-egress-spec-ci 的一部分；上游合并预检也在 -X ours 试扫描树上单独调用它，
+# 在建 Plan 前列出尚未在主干预先登记的上游新增发送点（UM-13）。
+egress-scanner-check:
+	@cd backend && go run ./cmd/egressscan -mode check \
+		-baseline ../docs/egress/foundation/sink-baseline.json \
+		-supplements ../docs/egress/lifecycle/pre-bootstrap-supplements.json \
+		-removals "$(EGRESS_REMOVAL_RECEIPTS)" \
+		-migration-receipts "$(EGRESS_MIGRATION_RECEIPTS)" \
+		-catalog-amendments ../docs/egress/lifecycle/catalog-amendments.json \
+		-inventory-lock "$(EGRESS_BOOTSTRAP_INVENTORY_LOCK)" \
+		-scanner-source-root ./cmd/egressscan
+
 check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control test-upstream-merge-tools
 	@python3 tools/check_version_leak.py --self-test
 	@python3 tools/check_version_leak.py
@@ -114,14 +126,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@python3 tools/check_ledger_completeness.py \
 		--upstream-merge-plan "$(UPSTREAM_MERGE_PLAN)"
 	@cd backend && go run ./cmd/egressscan -mode self-test
-	@cd backend && go run ./cmd/egressscan -mode check \
-		-baseline ../docs/egress/foundation/sink-baseline.json \
-		-supplements ../docs/egress/lifecycle/pre-bootstrap-supplements.json \
-		-removals "$(EGRESS_REMOVAL_RECEIPTS)" \
-		-migration-receipts "$(EGRESS_MIGRATION_RECEIPTS)" \
-		-catalog-amendments ../docs/egress/lifecycle/catalog-amendments.json \
-		-inventory-lock "$(EGRESS_BOOTSTRAP_INVENTORY_LOCK)" \
-		-scanner-source-root ./cmd/egressscan
+	@$(MAKE) --no-print-directory egress-scanner-check
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressscan -mode stats \
 			-baseline ../docs/egress/foundation/sink-baseline.json -out $$d/sink-stats.md && \

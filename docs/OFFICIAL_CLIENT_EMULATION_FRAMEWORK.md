@@ -462,11 +462,15 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   在候选 worktree 中存在。
 - 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖；缺失时前端与采集工具
   检查线失败，门禁不能通过。
+- 冲突解决与源码适配先在试验 worktree 完成、再由正式 Plan 机械重放时，试验 worktree 定型后、`plan-create`
+  前先在其中执行一次与 U-4 相同的 `make upstream-gate-full`（本机没有 Docker 时 integration 组照常记未执行），
+  全绿才建正式 Plan；台账类待办先用 `freeze-successor-generate --dry-run` 查看。
 
 `preflight` 的报告写到仓库之外。预检只在临时隔离 worktree 中试合并，依次执行 `egressscan -mode snapshot`、`go build ./...`、
-`go vet ./...` 和官方 egress 目标包测试；不写入主仓库、不 fetch、不 push、不产生权威阶段制品，报告中
+`go vet ./...` 和官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描）运行
+`make egress-scanner-check`。预检不写入主仓库、不 fetch、不 push、不产生权威阶段制品，报告中
 `non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含五项，任何一项被跳过或失败都标为阻断；
-因冲突而 blocked 时其余四项仍必须输出：
+五项都不依赖试合并结果，因冲突而 blocked 时照常输出：
 
 | 项 | 内容 |
 |---|---|
@@ -474,7 +478,7 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | 模板有效性 | 与标准模板比对 schema 版本、门禁定义、执行组模式、Persona，以及 Active/Rollback 在当前 release catalog 中的绑定 |
 | 闭集受扰清单 | 上游对 §5.2.4 第 3 条闭集文件的改动，U-1 前决定处置 |
 | 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作 |
-| 扫描器覆盖 | fork 与候选树发送点集合的差异；因冲突 blocked 时标记 deferred，由 U-2 `surface-scan` 承担 |
+| 扫描器覆盖 | 在 `-X ours` 试扫描树上列出尚未在主干预先登记的上游新增发送点（含缺分类规则的），有冲突也照常输出；须在 `plan-create` 前按 `reviewedPostBootstrapSinkAdditions` 预先登记并重封基线，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树发送点集合的差异 |
 
 预检通过后仍必须重新执行 U-0，不能把预检报告当作 U-0 收据。
 
