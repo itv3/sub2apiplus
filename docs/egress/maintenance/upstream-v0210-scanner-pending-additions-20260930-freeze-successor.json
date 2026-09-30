@@ -1,0 +1,50 @@
+{
+  "base_commit": "fabeeccc316ad0e67e0d1b7186e620c556e4be9b",
+  "changed_path_count": 5,
+  "current_commit": "42c86f0b7667c51cfa6143a74bbc76c44f1d714f",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4582,
+  "frozen_path_count": 1399,
+  "identity_sha256": "0af28b6db8d25c9bb35216c375bdd06d73addb2545dd2f6bffead32edf4c0757",
+  "issued_at_utc": "2026-09-30T13:24:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。",
+      "path": "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0210-scanner-pending-additions-freeze-successor",
+  "transitions": [],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+    "backend/cmd/egressscan/post_bootstrap_acceptance_test.go",
+    "docs/egress/maintenance/scanner-algorithm-successor.json",
+    "tools/official_client_capture/tests/producer_replay_registration.py",
+    "tools/official_client_capture/tests/test_producer_replay_registration_gate.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "cd backend && go run ./cmd/egressscan -mode self-test"
+  ]
+}
