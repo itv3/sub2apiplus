@@ -1,0 +1,153 @@
+{
+  "base_commit": "78ec88d61d68bc7ec4b2e2c66bafaa150de8b5ce",
+  "changed_path_count": 9,
+  "current_commit": "e9269f04d17cb80505b1df7dd80ea653e0e49ec8",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4574,
+  "frozen_path_count": 1399,
+  "identity_sha256": "deac0e17a89867e3fcd57702307cf29d42b1eadcedc6a83dd80062e2e31a2f88",
+  "issued_at_utc": "2026-09-30T06:01:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-merge-covered-tags-um2-20260930-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "predecessor_sha256s": [
+        "99e9bee4e542239fc7327e0438e900fe7c6eab5c3180ef870a3b9d27af34db08"
+      ],
+      "reason": "上游合并工具 UM-2：一个 Plan 同一 minor 内直接合到最新 tag，covered_tags 登记并由 Git 逐项复算覆盖区间；两包新增通用 source-transition 冻结测试；不改变官方客户端画像、Persona、wire 或生产代码。 path=docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-stopped-ledger-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-system-proxy-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-sync-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-doc-revision-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9ee972c230a076729cfc3d3f20777b6ce285af4f3c66787d9c17e85a77134691"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/contracts.py",
+      "predecessor_sha256s": [
+        "55eebf5eea4d184bf761c984e7f09bac7795a21d3e13f5c014edd7761206b142"
+      ],
+      "reason": "上游合并工具 UM-2：一个 Plan 同一 minor 内直接合到最新 tag，covered_tags 登记并由 Git 逐项复算覆盖区间；两包新增通用 source-transition 冻结测试；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge/contracts.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b03b75d3eda0894184f7f51b4a11f5d7c9224b03844e220d0edcf151df690236"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "46162f85177dd353065ca68a081e73132bb5c25ca8209a755156fe52e0fba737"
+      ],
+      "reason": "上游合并工具 UM-2：一个 Plan 同一 minor 内直接合到最新 tag，covered_tags 登记并由 Git 逐项复算覆盖区间；两包新增通用 source-transition 冻结测试；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5e6db75aef4fb1c3693b637635bb985583808b24152c28c448f8886042692763"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge_plan.schema.json",
+      "predecessor_sha256s": [
+        "30c80f6524ac69a895a247f25f23259b320be923db32d533a8d60c8bc67f47d2"
+      ],
+      "reason": "上游合并工具 UM-2：一个 Plan 同一 minor 内直接合到最新 tag，covered_tags 登记并由 Git 逐项复算覆盖区间；两包新增通用 source-transition 冻结测试；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge_plan.schema.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3de98cb96039980e009213654f55dcc6f688ebddf7ef4516ca344ae93617adaf"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge_request.schema.json",
+      "predecessor_sha256s": [
+        "58c4a6d74f123c26d34563a9fe74ea378213e4f1de943d9cd7a88b8397f408ab"
+      ],
+      "reason": "上游合并工具 UM-2：一个 Plan 同一 minor 内直接合到最新 tag，covered_tags 登记并由 Git 逐项复算覆盖区间；两包新增通用 source-transition 冻结测试；不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/upstream_merge_request.schema.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3505473b8443ea3eca51661e67b664b04cc690136a9779ac0082015a2b5988c1"
+    }
+  ],
+  "unregistered_path_count": 4,
+  "unregistered_paths": [
+    "backend/internal/officialegress/upstream_source_transition_generic_test.go",
+    "backend/internal/service/upstream_source_transition_generic_test.go",
+    "tools/upstream_merge/request_template_v2.json",
+    "tools/upstream_merge/tests/test_covered_tags.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
