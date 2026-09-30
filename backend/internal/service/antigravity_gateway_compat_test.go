@@ -898,7 +898,8 @@ func TestAntigravityCompatHandlerRepeatsPreContentKeepalive(t *testing.T) {
 		)
 		done <- err
 	}()
-	time.Sleep(55 * time.Millisecond)
+	// 15ms 心跳下只需至少 3 次，等待留足调度余量：4 核机器在全量并行负载下，55ms 内偶发只打出 2 次心跳。
+	time.Sleep(200 * time.Millisecond)
 	require.NoError(t, pipeWriter.Close())
 	require.Error(t, <-done)
 	require.GreaterOrEqual(t, strings.Count(recorder.Body.String(), ": ping\n\n"), 3)
