@@ -216,3 +216,26 @@ capture、classify、profile、compare、accept、resume 及 canonical 写命令
 历史直接来源：Campaign `c0154-formal-vc5-recovery-20260916t122646z`、候选 `c0154-candidate-v7`；
 `c0154-formal-vc5-failed-job-recovery-20260917t0527z` 是它生成的后继／control epoch。该入口只用于读懂这组历史
 收据，不得用于新 Campaign；新 Campaign 的临时环境故障一律走指南 §4.5.8 的恢复段。
+
+<a id="codex-part4-moved-history"></a>
+## 8. 第四部分正文移出的沿革（只读，2026-10-01 自指南移入）
+
+2026-10-01 按“第四部分按现状写”重组指南第四部分时移出的历史说明，只用于读懂更早的收据、提交与讨论，不是新
+Campaign 的执行条件；对应的现行规则仍在指南正文。
+
+- **已封存证据 ctime 漂移事故（v14r4）**：封存后驱动脚本又 chmod 了已封存证据，16 个条目 ctime 漂移；当时 ctime 无法
+  回写、EvidenceManifest 只写一次，该 attempt 只能停线、修复后重建 Campaign。此后（2026-09-27）边界漂移先分类：只有
+  mtime／ctime／inode 漂移且内容逐文件复算一致的，按 `evidence-metadata-drift` 可恢复，以
+  `harden-evidence-permissions rebind-boundary` 写 rebind 收据后继续；现行规则见指南 §4.7“候选级 revision”一段中的证据完整性说明。
+- **VC-0 阶段预算沿革**：各阶段预算首次取值时 VC-0 为 60 分钟；VC-0 接入目标平台门禁预跑后，顺利路径上限由 15 分钟调为
+  90 分钟（0.157 实测其余步骤约 12 分钟、2026-09-29 首次预跑实测 69 分钟），预算随之由 60 改为 165 分钟。指南正文只列现值。
+- **修复条目编号与内部改造编号**：指南原“修好接着跑”一节按修复时间排列 52 条，其中 20 条以 0.157 修复轮内部清单的
+  “第 31～62 项”命名，正文另有“第 57、67 项”；仓库内没有该清单的索引（第 65 项已撤回），正文已按故障类别重组为失败矩阵
+  与分类说明并删去编号。R8（预算暂停与批准延期）、R2（崩溃矩阵的 owner 丢失情形）、R17（`resume --rerun-failed` 复用判定的只读复算）、
+  R18（VC-4 阶段幂等重派证明）、B3-9（根因上限只暂停）、B4-1（后继协议失败判定）、草表 D-10（VC-1 官方 seal 链审核类
+  失败）、O1／R2-b（评估输出绑定缺失）、第三批 R3（证据边界漂移先分类）等改造编号同样只在旧提交与讨论中出现，正文改用
+  机制名称。
+- **按日期或版本起效的措辞**：候选 revision 字节校验（2026-09-19 起新建的 Campaign）、崩溃矩阵的 attempt-recovery 变体
+  （2026-09-21）、已封存 EvidenceManifest 的 stat 边界漂移计入完整性异常（2026-09-22 起）、正式命令须由 `campaign-run`
+  派发与终态机器判定（0.151 起）、项目总账与原子入口、staging 批次模型、Cloud Config Bundle 前置条件（0.154 起），对新
+  Campaign 都是现行规则，正文已改为当前态陈述；更早的 Campaign 按各自冻结的合同只读回放（§5）。
