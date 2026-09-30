@@ -56,6 +56,7 @@ from .contracts import (
     stage_binding,
     upstream_range_tags,
 )
+from .ci_jobs import ci_job_coverage
 from .errors import UpstreamMergeError
 from .preflight_report import (
     candidate_sink_diff,
@@ -945,8 +946,9 @@ def run_preflight(
     merge_base_value = merge_base(root, fork_head, upstream["commit"])
     covered_tags_report = _preflight_covered_tags(root, upstream, merge_base_value, blockers)
 
-    # §5.2.2 的五项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖。
-    # 五项都不依赖试合并结果，因冲突而 blocked 时仍然输出；扫描器覆盖另建 -X ours 试扫描树（UM-13）。
+    # §5.2.2 的六项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖、CI 作业覆盖。
+    # 六项都不依赖试合并结果，因冲突而 blocked 时仍然输出；扫描器覆盖另建 -X ours 试扫描树（UM-13），
+    # CI 作业覆盖比对上游两棵树的工作流与 ci_job_coverage.json 登记表（UM-14）。
     report: dict[str, Any] = {}
     try:
         template = load_request_template(root)
@@ -1095,6 +1097,13 @@ def run_preflight(
         )
     elif coverage["status"] == "failed":
         blockers.append("上游发送点试扫描未得出结论：" + str(coverage.get("error") or coverage.get("reason") or "分类不完整"))
+    # UM-14：上游新增或改动的 CI 作业必须在登记表里有本机覆盖方式，否则建 Plan 前先处置。
+    ci_jobs_report = ci_job_coverage(root, merge_base_value, upstream["commit"], fork_head)
+    if ci_jobs_report["status"] == "blocked":
+        listed = "、".join(ci_jobs_report["unregistered_jobs"] + ci_jobs_report["fork_unregistered_jobs"])
+        blockers.append(f"CI 作业未登记本机覆盖方式（纳入本机门禁或登记为只在 CI 跑）：{listed}")
+    elif ci_jobs_report["status"] == "failed":
+        blockers.append("上游 CI 作业差异未得出结论：" + ci_jobs_report.get("error", ""))
     result = _stage_document(
         # preflight 没有 LoadedPlan，使用显式输入摘要构造独立 envelope。
         # 该摘要不参与任何正式 U-0 身份绑定。
@@ -1120,6 +1129,7 @@ def run_preflight(
                     root, merge_base_value, upstream["commit"], conflict_paths, blockers
                 ),
                 "scanner_coverage": coverage,
+                "ci_job_coverage": ci_jobs_report,
             },
             "scanner_snapshot": (
                 {

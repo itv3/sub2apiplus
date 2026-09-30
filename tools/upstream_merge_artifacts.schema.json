@@ -730,7 +730,7 @@
         "conflict_paths": {"type": "array", "items": {"type": "string"}},
         "checks": {"type": "array", "items": {"type": "object"}},
         "scanner_snapshot": {"oneOf": [{"type": "object"}, {"type": "null"}]},
-        "report": {"type": "object", "additionalProperties": false, "required": ["conflict_closure", "template_validity", "tool_bundle_disturbance", "freeze_coverage", "scanner_coverage"], "properties": {"conflict_closure": {"type": "object"}, "template_validity": {"type": "object"}, "tool_bundle_disturbance": {"type": "object"}, "freeze_coverage": {"type": "object"}, "scanner_coverage": {"type": "object"}}},
+        "report": {"type": "object", "additionalProperties": false, "required": ["conflict_closure", "template_validity", "tool_bundle_disturbance", "freeze_coverage", "scanner_coverage", "ci_job_coverage"], "properties": {"conflict_closure": {"type": "object"}, "template_validity": {"type": "object"}, "tool_bundle_disturbance": {"type": "object"}, "freeze_coverage": {"type": "object"}, "scanner_coverage": {"type": "object"}, "ci_job_coverage": {"type": "object"}}},
         "blockers": {"type": "array", "items": {"type": "string"}},
         "non_authoritative": {"const": true},
         "result": {"enum": ["ready", "blocked"]},

@@ -469,8 +469,8 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 `preflight` 的报告写到仓库之外。预检只在临时隔离 worktree 中试合并，依次执行 `egressscan -mode snapshot`、`go build ./...`、
 `go vet ./...` 和官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描）运行
 `make egress-scanner-check`。预检不写入主仓库、不 fetch、不 push、不产生权威阶段制品，报告中
-`non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含五项，任何一项被跳过或失败都标为阻断；
-五项都不依赖试合并结果，因冲突而 blocked 时照常输出：
+`non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含六项，任何一项被跳过或失败都标为阻断；
+六项都不依赖试合并结果，因冲突而 blocked 时照常输出：
 
 | 项 | 内容 |
 |---|---|
@@ -479,6 +479,7 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | 闭集受扰清单 | 上游对 §5.2.4 第 3 条闭集文件的改动，U-1 前决定处置 |
 | 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作 |
 | 扫描器覆盖 | 在 `-X ours` 试扫描树上列出尚未在主干预先登记的上游新增发送点（含缺分类规则的），有冲突也照常输出；须在 `plan-create` 前按 `reviewedPostBootstrapSinkAdditions` 预先登记并重封基线，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树发送点集合的差异 |
+| CI 作业覆盖 | 上游在 merge-base 与目标 tag 之间新增、删除或改动的 CI 作业及其命令，逐个对照 `tools/upstream_merge/ci_job_coverage.json` 登记的本机检查线或只在 CI 跑；候选 CI 会运行却未登记的作业（含 fork 自身未登记的）阻断，须在 `plan-create` 前决定纳入本机门禁或登记为只在 CI 跑；只在 CI 跑的作业在试验 worktree 先执行一次其命令 |
 
 预检通过后仍必须重新执行 U-0，不能把预检报告当作 U-0 收据。
 

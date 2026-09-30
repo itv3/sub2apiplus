@@ -1,0 +1,45 @@
+{
+  "schema_version": "official-egress-upstream-ci-job-coverage/v1",
+  "description": "候选 CI 会运行的每个作业在本机 U-4 门禁中的覆盖方式：local 列出对应的 upstream-gate-full 检查线，ci_only 写明为什么只在 CI 跑。上游合并预检读取主干当前版本，据此判定上游新增的 CI 作业是否已有处置；fork 自身新增 CI 作业也须同步登记（有测试守护）。",
+  "workflows": {
+    ".github/workflows/backend-ci.yml": {
+      "candidate_ci": true,
+      "jobs": {
+        "capture-tools": {"coverage": "local", "lanes": ["capture-tools"]},
+        "egress-spec-gates": {"coverage": "local", "lanes": ["egress-spec"]},
+        "frontend": {"coverage": "local", "lanes": ["frontend"]},
+        "golangci-lint": {"coverage": "local", "lanes": ["lint"]},
+        "release-helpers": {
+          "coverage": "ci_only",
+          "reason": "上游发布矩阵测试（.github/release-tools），依赖 PyYAML，本机门禁环境不装；U-4 由 gates-import-ci 要求同一候选提交的 CI 作业全部成功覆盖，合并前在试验 worktree 先执行一次其命令"
+        },
+        "shell": {
+          "coverage": "ci_only",
+          "reason": "部署脚本测试在 macOS runner 上执行，不属于 upstream-gate-full；U-4 由 gates-import-ci 要求同一候选提交的 CI 作业全部成功覆盖"
+        },
+        "test": {"coverage": "local", "lanes": ["go-tests"]}
+      }
+    },
+    ".github/workflows/security-scan.yml": {
+      "candidate_ci": true,
+      "jobs": {
+        "backend-security": {
+          "coverage": "ci_only",
+          "reason": "govulncheck 需要联网拉取漏洞库，本机离线门禁不执行"
+        },
+        "frontend-security": {
+          "coverage": "ci_only",
+          "reason": "pnpm audit 需要联网查询漏洞库，本机离线门禁不执行"
+        }
+      }
+    },
+    ".github/workflows/release.yml": {
+      "candidate_ci": false,
+      "reason": "只在推送 v* tag 或手动触发时运行，不在候选分支 CI；改动在 U-3 按仓库支撑文件审阅"
+    },
+    ".github/workflows/cla.yml": {
+      "candidate_ci": false,
+      "reason": "只在 PR 与评论事件运行，不在候选分支 CI"
+    }
+  }
+}
