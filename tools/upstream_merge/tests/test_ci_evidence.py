@@ -8,17 +8,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.upstream_merge.canonical import bind_identity, write_json_once
 from tools.upstream_merge.contracts import LoadedPlan
 from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.tests.test_workflow import SyntheticRepository, build_verification_plan, run
 from tools.upstream_merge.workflow import (
+    CANDIDATE_DISPOSITION_INPUT_SCHEMA,
     CI_REQUIRED_JOBS,
     CI_WORKFLOW_PATH,
+    _load_candidate_disposition,
     delete_ci_branch,
     import_ci_evidence,
     load_verification_receipt,
     push_candidate_for_ci,
     run_verification_gates,
+    seal_candidate_disposition,
 )
 
 INTEGRATION = "go-tests/go-test-integration"
@@ -212,6 +216,46 @@ class CiEvidenceTest(unittest.TestCase):
     def test_status_file_contradicting_exit_code_is_rejected(self) -> None:
         with self.assertRaisesRegex(UpstreamMergeError, "退出码矛盾"):
             run_verification_gates(self.plan("contradiction"), "attempt-001")
+
+    def test_u4_awaiting_ci_import_then_u5_disposition_chain(self) -> None:
+        """合成链：U-4 本机未执行 → U-5 拒绝 → 导入同一提交的 CI 证据 → U-5 封存成功。"""
+
+        plan = self.plan("awaiting")
+        run_verification_gates(plan, "attempt-001")
+        original_business = self.temp_root / "original-business-receipt.json"
+        write_json_once(original_business, {"schema_version": "synthetic-original-business/v1", "result": "passed"})
+        disposition_input = self.temp_root / "candidate-disposition-input.json"
+        write_json_once(
+            disposition_input,
+            bind_identity(
+                {
+                    "schema_version": CANDIDATE_DISPOSITION_INPUT_SCHEMA,
+                    "plan_id": plan.plan_id,
+                    "plan_identity_sha256": plan.identity,
+                    "source_tree": run(self.fixture.root, "git", "rev-parse", f"{self.fixture.fork}^{{tree}}"),
+                    "purpose": "validation_only",
+                    "clients": {
+                        client: {
+                            "mode": "none",
+                            "campaign_path": None,
+                            "candidate_path": None,
+                            "approval_path": None,
+                            "acceptance_path": None,
+                        }
+                        for client in ("claude", "codex")
+                    },
+                    "shared_contract_receipt_path": None,
+                    "original_business_receipt_path": str(original_business),
+                }
+            ),
+        )
+        with self.assertRaisesRegex(UpstreamMergeError, "gates-import-ci"):
+            seal_candidate_disposition(plan, disposition_input, self.receipt_path("attempt-001"))
+        import_ci_evidence(plan, "attempt-002", "attempt-001", repository_slug="itv3/sub2apiplus", api=self.api())
+        sealed = seal_candidate_disposition(plan, disposition_input, self.receipt_path("attempt-002"))
+        self.assertEqual(sealed["result"], "closed")
+        self.assertEqual(sealed["verification_receipt"]["path"], "u4/attempts/attempt-002/receipt.json")
+        self.assertEqual(_load_candidate_disposition(plan)["result"], "closed")
 
     def test_ci_branch_push_and_cleanup_use_plan_scoped_branch(self) -> None:
         remote = self.temp_root / "origin.git"
