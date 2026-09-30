@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -38,6 +39,10 @@ const (
 	SectionWebSocketRetry = "WebSocketRetry"
 	// SectionWebSocketContinuation：WS 增量续接（previous_response_id）的失效条件（SPEC-WS-005）。
 	SectionWebSocketContinuation = "WebSocketContinuation"
+	// SectionReasoningEffort：reasoning.effort 的出站序列化（SPEC-BODY-006）。
+	SectionReasoningEffort = "ReasoningEffort"
+	// SectionImageGeneration：imagegen 出站的 background 取值与编辑图片引用形态（SPEC-EP-022）。
+	SectionImageGeneration = "ImageGeneration"
 )
 
 // OptionalSectionNames 按快照字段顺序列出全部可选节；顺序也是数据，不排序。
@@ -49,6 +54,8 @@ var OptionalSectionNames = []string{
 	SectionTurnState,
 	SectionWebSocketRetry,
 	SectionWebSocketContinuation,
+	SectionReasoningEffort,
+	SectionImageGeneration,
 }
 
 // CookieJarSection 声明共享 Cookie jar 接受的 Cookie 名与 WS 握手回写。
@@ -135,11 +142,40 @@ type WebSocketContinuationSection struct {
 	ResetOn []string `json:"ResetOn"`
 }
 
+// ReasoningEffortSection 声明 reasoning.effort 的出站序列化。
+//
+// 官方客户端对模型清单之外的自定义档位（ReasoningEffortConfig::Custom）做 u64 解析，解析成功时发 JSON 整数，
+// 已知档位与解析不成功的自定义值照旧发字符串；HTTP 与 WS response.create 共用同一结构体。节缺省表示该版本
+// 画像一律发字符串（旧版本行为）。
+type ReasoningEffortSection struct {
+	// CustomNumericSerialization：自定义档位能按 u64 解析时的出站形态，目前只支持 u64_integer。
+	CustomNumericSerialization string `json:"CustomNumericSerialization"`
+}
+
+// ImageGenerationSection 声明 imagegen 出站的 background 取值与编辑请求的图片引用形态。
+//
+// 较新版本的 imagegen 按工具参数 transparent_background 决定 background：要求透明时发 TransparentBackground，
+// 否则发 DefaultBackground（不再固定 auto）；编辑请求 images 项除 {"image_url": …} 外，会话里 file-backed 图片以
+// {"file_id": …} 发出。节缺省表示旧逻辑：background 原样透传、编辑只收 image_url。
+type ImageGenerationSection struct {
+	// DefaultBackground：未要求透明背景时发出的 background（取值 auto 或 opaque）。
+	DefaultBackground string `json:"DefaultBackground"`
+	// TransparentBackground：要求透明背景时发出的 background，目前只支持 transparent。
+	TransparentBackground string `json:"TransparentBackground"`
+	// EditImageReferences：编辑请求 images 项允许的引用形态（排序去重，取值 file_id、image_url，必须含 image_url）。
+	EditImageReferences []string `json:"EditImageReferences"`
+}
+
 var (
 	sectionTokenPattern   = regexp.MustCompile(`^[a-z0-9_]+$`)
 	cookieNamePattern     = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	headerNamePattern     = regexp.MustCompile(`^[a-z0-9-]+$`)
 	errOptionalSectionNil = errors.New("可选节不得显式为 null")
+
+	imageReferenceKinds = map[string]bool{
+		"file_id":   true,
+		"image_url": true,
+	}
 
 	continuationResetKinds = map[string]bool{
 		"account_owner":             true,
@@ -172,8 +208,21 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		target = &WebSocketRetrySection{}
 	case SectionWebSocketContinuation:
 		target = &WebSocketContinuationSection{}
+	case SectionReasoningEffort:
+		target = &ReasoningEffortSection{}
+	case SectionImageGeneration:
+		target = &ImageGenerationSection{}
 	default:
 		return nil, fmt.Errorf("未知可选节: %s", name)
+	}
+	// 节内字段同样不得显式为 null：null 会被解码成缺省值，却让规范化 JSON 与摘要多出一种表示。
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err == nil {
+		for key, value := range fields {
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return nil, fmt.Errorf("可选节 %s 的字段 %s 不得显式为 null", name, key)
+			}
+		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
@@ -275,6 +324,30 @@ func validateOptionalSection(name string, value any) error {
 			if !continuationResetKinds[kind] {
 				return fmt.Errorf("ResetOn 含未知条件: %s", kind)
 			}
+		}
+		return nil
+	case *ReasoningEffortSection:
+		if section.CustomNumericSerialization != "u64_integer" {
+			return fmt.Errorf("CustomNumericSerialization 只支持 u64_integer，实际 %q", section.CustomNumericSerialization)
+		}
+		return nil
+	case *ImageGenerationSection:
+		if section.DefaultBackground != "auto" && section.DefaultBackground != "opaque" {
+			return fmt.Errorf("DefaultBackground 只支持 auto 或 opaque，实际 %q", section.DefaultBackground)
+		}
+		if section.TransparentBackground != "transparent" {
+			return fmt.Errorf("TransparentBackground 只支持 transparent，实际 %q", section.TransparentBackground)
+		}
+		if err := requireSortedUnique("EditImageReferences", section.EditImageReferences, sectionTokenPattern); err != nil {
+			return err
+		}
+		for _, kind := range section.EditImageReferences {
+			if !imageReferenceKinds[kind] {
+				return fmt.Errorf("EditImageReferences 含未知形态: %s", kind)
+			}
+		}
+		if !slices.Contains(section.EditImageReferences, "image_url") {
+			return errors.New("EditImageReferences 必须包含 image_url")
 		}
 		return nil
 	default:

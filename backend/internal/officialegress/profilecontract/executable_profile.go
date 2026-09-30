@@ -213,6 +213,8 @@ type OptionalSections struct {
 	TurnState             *TurnStateSection             `json:",omitempty"`
 	WebSocketRetry        *WebSocketRetrySection        `json:",omitempty"`
 	WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
+	ReasoningEffort       *ReasoningEffortSection       `json:",omitempty"`
+	ImageGeneration       *ImageGenerationSection       `json:",omitempty"`
 }
 
 // Optional 返回可选节投影的副本。
@@ -518,6 +520,10 @@ func compileCrossSections(profile ProfileSpec, compiled *ExecutableProfile) erro
 				compiled.optional.WebSocketRetry = value
 			case *WebSocketContinuationSection:
 				compiled.optional.WebSocketContinuation = value
+			case *ReasoningEffortSection:
+				compiled.optional.ReasoningEffort = value
+			case *ImageGenerationSection:
+				compiled.optional.ImageGeneration = value
 			}
 		}
 	}
@@ -669,6 +675,8 @@ func executableProfileDigest(profile ExecutableProfile) (string, error) {
 		TurnState             *TurnStateSection             `json:",omitempty"`
 		WebSocketRetry        *WebSocketRetrySection        `json:",omitempty"`
 		WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
+		ReasoningEffort       *ReasoningEffortSection       `json:",omitempty"`
+		ImageGeneration       *ImageGenerationSection       `json:",omitempty"`
 	}{
 		Version: profile.version, Endpoints: profile.endpoints, Transports: profile.transports,
 		Features: profile.features, Surfaces: profile.surfaces,
@@ -680,6 +688,8 @@ func executableProfileDigest(profile ExecutableProfile) (string, error) {
 		TurnState:             profile.optional.TurnState,
 		WebSocketRetry:        profile.optional.WebSocketRetry,
 		WebSocketContinuation: profile.optional.WebSocketContinuation,
+		ReasoningEffort:       profile.optional.ReasoningEffort,
+		ImageGeneration:       profile.optional.ImageGeneration,
 	}
 	raw, err := json.Marshal(projection)
 	if err != nil {
