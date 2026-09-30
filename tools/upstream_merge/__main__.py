@@ -15,6 +15,7 @@ from .baseline import seal_baseline_acceptance, validate_baseline_acceptance
 from .contracts import create_plan, load_plan
 from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
+from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
     apply_candidate_to_managed_branch,
     carry_forward_inventory,
@@ -157,6 +158,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="承接被删除 Python 模块历史读取的仓库相对模块路径；删除 .py 时至少一个，可重复",
+    )
+
+    version_sync = commands.add_parser(
+        "release-version-sync",
+        help="发版后回写 VERSION 并生成冻结承接收据，两个提交一次推送（release 工作流调用）",
+    )
+    _add_repository(version_sync)
+    version_sync.add_argument("--version", required=True, help="发版版本号，不带 v 前缀")
+    version_sync.add_argument("--remote", default="origin", help="推送的远端；默认 origin")
+    version_sync.add_argument("--branch", default="main", help="受维护分支；默认 main")
+    version_sync.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help=f"推送因主干前进被拒时的最多尝试次数；默认 {DEFAULT_MAX_ATTEMPTS}",
+    )
+    version_sync.add_argument(
+        "--no-push",
+        action="store_true",
+        help="只在本地生成回写与承接两个提交，不推送（演练用）",
     )
     freeze.add_argument(
         "--dry-run",
@@ -456,6 +477,15 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             extra_worktree_paths=arguments.extra_worktree_path,
             deletion_reason=arguments.deletion_reason,
             historical_readers=arguments.historical_reader,
+        )
+    if command == "release-version-sync":
+        return sync_released_version(
+            arguments.repository,
+            arguments.version,
+            remote=arguments.remote,
+            branch=arguments.branch,
+            max_attempts=arguments.max_attempts,
+            push=not arguments.no_push,
         )
     if command == "identity-seal":
         draft = expect_object(load_json(arguments.input, "identity draft"), "identity draft")

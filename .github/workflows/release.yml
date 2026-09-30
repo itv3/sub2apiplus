@@ -236,31 +236,56 @@ jobs:
     needs: [release]
     if: ${{ needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    # 回写要推送主干；GITHUB_TOKEN 的推送不会触发 push 工作流，另需 actions: write 显式调起 main 的 CI。
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.repository.default_branch }}
+          # 冻结承接要读取回写前 HEAD 的历史摘要，必须全量检出
+          fetch-depth: 0
 
-      - name: Sync VERSION file to released tag
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Sync VERSION file and register freeze successor
+        id: sync
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=${{ github.event.inputs.tag }}
-            VERSION=${VERSION#v}
+            VERSION=${DISPATCH_TAG#v}
           else
             VERSION=${GITHUB_REF#refs/tags/v}
           fi
 
-          CURRENT_VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION || true)
-          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
-            echo "VERSION file already matches $VERSION"
-            exit 0
-          fi
-
-          echo "$VERSION" > backend/cmd/server/VERSION
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backend/cmd/server/VERSION
-          git commit -m "chore: sync VERSION to ${VERSION} [skip ci]"
-          git push origin HEAD:${{ github.event.repository.default_branch }}
+
+          # 以回写前的实际主干 HEAD 为前序：VERSION 回写与冻结承接收据两个提交一次推送，
+          # 推送因主干前进被拒时从新 HEAD 重做，首次推送之外最多重试 3 次；版本号已一致时不产生提交。
+          PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge release-version-sync \
+            --repository "$GITHUB_WORKSPACE" \
+            --version "$VERSION" \
+            --remote origin \
+            --branch "$DEFAULT_BRANCH" \
+            --max-attempts 4 > "$RUNNER_TEMP/version-sync.json"
+          cat "$RUNNER_TEMP/version-sync.json"
+          echo
+          RESULT=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["result"])' "$RUNNER_TEMP/version-sync.json")
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Run CI on the synced default branch
+        # GITHUB_TOKEN 的推送不会触发 push 工作流：回写成功后显式调起一次 main 的 CI，
+        # 让回写与承接两个提交同样有 CI 结论。
+        if: ${{ steps.sync.outputs.result == 'synced' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run backend-ci.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"

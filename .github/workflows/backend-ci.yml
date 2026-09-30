@@ -7,6 +7,8 @@ on:
       # 上游合并 U-4 的候选分支：本机没有 Docker 时，integration 证据由这里的 CI 按候选提交补齐。
       - 'upstream-merge/**'
   pull_request:
+  # 发版回写 VERSION 由 GITHUB_TOKEN 推送，不会触发 push；release 工作流回写成功后以此显式调起一次 CI。
+  workflow_dispatch:
 
 permissions:
   contents: read
