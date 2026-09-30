@@ -50,6 +50,21 @@ def textwrap_dedent(source: str) -> str:
 
     return textwrap.dedent(source)
 
+
+def _campaign_process_alive(pid: object) -> bool:
+    """state.json 里记录的 owner／monitor 进程是否仍存在；缺失或非法的进程号视为已退出。"""
+
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class SupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         # 本类只构造离线父动作与账本；实时出口的拒绝、竞态及清理在独立测试类验证。
@@ -177,7 +192,9 @@ class SupervisorTests(unittest.TestCase):
         self.fail(f"文件未在预算内出现：{path}")
 
     def _wait_campaign_monitor_exit(self, run_dir: Path, *, timeout: float = 5) -> None:
-        """等父监督器常驻进程退出：终态之后它还会收尾写入，tempfile 清理前不等会偶发 Directory not empty（第 34 项）。"""
+        """等父监督器的常驻 owner 与 monitor 进程都退出：终态之后它们还会收尾写入，tempfile 清理前不等会偶发
+        Directory not empty（第 34 项）。2026-09-28 CI 在“重复失败停线”用例上又撞到一次，因此改为 owner 与
+        monitor 都等，并用于所有走到终态、又没有经 campaign-stop 结束的常驻用例（campaign-stop 本身会等两者退出）。"""
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -185,15 +202,8 @@ class SupervisorTests(unittest.TestCase):
                 state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 state = {}
-            pid = state.get("monitor_pid")
-            if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            if not any(_campaign_process_alive(state.get(key)) for key in ("owner_pid", "monitor_pid")):
                 return
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return
-            except PermissionError:
-                pass
             time.sleep(0.05)
         self.fail("父监督器进程未在预算内退出")
 
@@ -327,6 +337,7 @@ class SupervisorTests(unittest.TestCase):
         *,
         actions: list[dict[str, object]],
         no_op: bool = False,
+        watchdog_timeout_seconds: float = 0.5,
     ) -> subprocess.CompletedProcess[str]:
         script = Path(__file__).parents[1] / "codex_upgrade_supervisor.py"
         manifest = self._write_campaign_run_manifest(
@@ -346,7 +357,7 @@ class SupervisorTests(unittest.TestCase):
                 "--heartbeat-seconds",
                 "0.05",
                 "--watchdog-timeout-seconds",
-                "0.5",
+                str(watchdog_timeout_seconds),
                 "--ledger-interval-seconds",
                 "0.05",
             ],
@@ -804,8 +815,12 @@ class SupervisorTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            # 看门狗时限放宽到 5 秒：本用例测的是动作 0.5 秒超时后父监督器兜底写诊断。看门狗也取 0.5 秒时两者同时
+            # 到期，CI 机器繁忙、心跳稍一延迟，父监督器就会先被看门狗判为失联并终止，诊断文件来不及写出
+            # （2026-09-29 CI 实测 0 != 1）。放宽看门狗不改变被测的超时与兜底诊断路径。
             result = self._campaign_run(
                 root,
+                watchdog_timeout_seconds=5,
                 actions=[
                     {
                         "action_id": "slow",
@@ -2673,14 +2688,8 @@ raise SystemExit(9)
             self.assertIn('"reason":"orchestrator-dispatch-timeout-1s"', events)
             # 终态写入与两个监督进程退出之间存在极短排空窗口；等待它们
             # 完全退出后再让临时目录清理，避免残留心跳文件造成竞态。
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                status = self._campaign_command(
-                    "status", "--state-dir", str(run_dir)
-                )
-                if not status["owner_alive"] and not status["monitor_alive"]:
-                    break
-                time.sleep(0.02)
+            # 原先最多等 2 秒、到时不报错继续往下走，改用统一的有界等待，到时明确失败。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_exec_allows_one_diagnosis_then_stops_repeated_failure(self) -> None:
         """同一操作首次失败进入诊断，第二次失败必须立即停线。"""
@@ -2727,6 +2736,9 @@ raise SystemExit(9)
             events = (run_dir / "events.ndjson").read_text(encoding="utf-8")
             self.assertIn('"reason":"returncode=3"', events)
             self.assertIn('"reason":"repeated-returncode=3"', events)
+            # 2026-09-28 CI 实测：不等就会在 tempfile 清理时撞到 Directory not empty。
+            # 终态之后父监督器 owner 与 monitor 仍会收尾写入，等它们退出再让 tempfile 清理目录。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_resume_inherits_deadline_and_records_gap(self) -> None:
         """父监督器重启只能续接原 deadline，未监管间隔必须显式暴露。"""
@@ -2814,6 +2826,8 @@ raise SystemExit(9)
             self.assertEqual(
                 report["continuity"]["gap_classification"], "audit-incomplete"
             )
+            # 续跑这一轮经 campaign-stop 结束（已等其进程退出）；前一轮只走到失败终态，也要等它的进程退出。
+            self._wait_campaign_monitor_exit(predecessor)
 
     def test_campaign_exec_accepts_explicit_negative_result(self) -> None:
         """只有逐个声明的诊断退出码可以按通过收口。"""
@@ -2893,7 +2907,10 @@ raise SystemExit(9)
         """执行包装器被 SIGKILL 后必须在 watchdog 窗口内停线。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            payload = self._campaign_start(Path(directory))
+            # 开场时限只放宽上限、不放慢正常路径：两层 Python 进程启动在繁忙机器上可能超过 2 秒，
+            # 首个派发窗口 2 秒、截止 5 秒、等“执行中”2 秒都会先到期（2026-09-30 本机低优先级挤占实测撞到
+            # “未在预算内进入 active”）；与重复失败停线用例同样放到 6／20／10 秒，被测的即时检测断言不变。
+            payload = self._campaign_start(Path(directory), initial_timeout=6, deadline_seconds=20)
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
@@ -2904,6 +2921,7 @@ raise SystemExit(9)
                 run_dir,
                 classification="active",
                 require_command_pid=True,
+                timeout=10,
             )
             started = time.monotonic()
             os.kill(process.pid, signal.SIGKILL)
@@ -2923,7 +2941,10 @@ raise SystemExit(9)
         """会话断开使包装器收到 SIGHUP 时，不得留下假 active。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            payload = self._campaign_start(Path(directory))
+            # 开场时限只放宽上限、不放慢正常路径：两层 Python 进程启动在繁忙机器上可能超过 2 秒，
+            # 首个派发窗口 2 秒、截止 5 秒、等“执行中”2 秒都会先到期（2026-09-30 本机低优先级挤占实测撞到
+            # “未在预算内进入 active”）；与重复失败停线用例同样放到 6／20／10 秒，被测的即时检测断言不变。
+            payload = self._campaign_start(Path(directory), initial_timeout=6, deadline_seconds=20)
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
@@ -2934,6 +2955,7 @@ raise SystemExit(9)
                 run_dir,
                 classification="active",
                 require_command_pid=True,
+                timeout=10,
             )
             started = time.monotonic()
             os.kill(process.pid, signal.SIGHUP)
@@ -2967,6 +2989,8 @@ raise SystemExit(9)
             self.assertFalse(report["audit_incomplete"])
             self.assertGreaterEqual(report["classification_counts"].get("planning", 0), 1)
             self.assertGreaterEqual(report["classification_counts"].get("failed", 0), 1)
+            # 终态之后父监督器 owner 与 monitor 仍会收尾写入，等它们退出再让 tempfile 清理目录。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_mark_rejects_new_orchestrator_idle(self) -> None:
         """新流程不能重新写入历史兼容用的 orchestrator-idle。"""
@@ -3020,6 +3044,8 @@ raise SystemExit(9)
             report = _audit_command(run_dir)
             self.assertTrue(report["audit_incomplete"])
             self.assertTrue((run_dir / "stop-receipt.json").is_file())
+            # 终态之后父监督器 owner 与 monitor 仍会收尾写入，等它们退出再让 tempfile 清理目录。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def test_campaign_mark_short_dispatch_timeout_never_reports_unconfirmed_switch(
         self,
@@ -3054,6 +3080,8 @@ raise SystemExit(9)
             )
             report = _audit_command(run_dir)
             self.assertFalse(report["audit_incomplete"])
+            # 终态之后父监督器 owner 与 monitor 仍会收尾写入，等它们退出再让 tempfile 清理目录。
+            self._wait_campaign_monitor_exit(run_dir)
 
     def _timing_closeout_fixture(
         self,
