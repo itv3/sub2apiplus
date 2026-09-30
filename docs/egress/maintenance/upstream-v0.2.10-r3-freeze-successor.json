@@ -1,0 +1,45 @@
+{
+  "base_commit": "5653d72b146f595ef92ecfb2563b22faa408200c",
+  "changed_path_count": 1,
+  "current_commit": "dbde0af39955383f1e119864a930390da5f65d4a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5270,
+  "frozen_path_count": 1929,
+  "identity_sha256": "11a1f117b2ce791dfa0aff52bd20a9d0f36e85779840899737c30f8b2e7fde82",
+  "issued_at_utc": "2026-09-30T14:28:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0.2.10-r3-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/release-tools/test_release_matrix.py",
+      "predecessor_sha256s": [
+        "f3170a953d034c4d9ed7c76858a1dcf0c25f9fe99985e0f32bd68025271d9bf1"
+      ],
+      "reason": "登记 U-4 候选 CI 修复 r3 对发布矩阵测试 .github/release-tools/test_release_matrix.py 的精确后继摘要：页脚断言改为按原样保留，适配本分支不带 release.footer 的发布配置。只追加后继边，不改写 v0.2.10 source-transition 与冻结后继收据，不改变官方客户端画像或 Persona 选择。 path=.github/release-tools/test_release_matrix.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dada6cc77b667edb170a0a29a3d69accb116522cab118a770388206486c90105"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
