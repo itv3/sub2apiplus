@@ -1,8 +1,8 @@
 {
   "schema_version": "official-egress-scanner-algorithm-successor/v1",
   "from_sha256": "cde48d629935dae1d3add70cdb76aeeac6a2a127b041476b8e279869bdf26767",
-  "to_sha256": "ce81e14d2867572fc656ba9597105231653aa9d2466be8f399b4682907f55a73",
-  "source_transition": "docs/egress/maintenance/upstream-v0.2.3-scanner-successor-source-transition.json",
-  "reviewed_by": "sub2api-v0.2.3-post-bootstrap-acceptance",
-  "reason": "登记精确的 post-bootstrap upstream transition/acceptance 及版本中性化修复后的最终扫描器摘要；不改写 bootstrap inventory，仅允许已审阅的 v0.2.3 successor。"
+  "to_sha256": "dac20ea0fa515a647eac215cd787683d949be389202bb07cc0a8044144d898d3",
+  "source_transition": "docs/egress/maintenance/upstream-v0210-scanner-classify-20260930-freeze-successor.json",
+  "reviewed_by": "sub2api-v0.2.10-merge-scanner-classification",
+  "reason": "上游 v0.2.10 合并前在主干登记 4 个新增发送点为 out-of-scope：TypeSafe 内容审核、Seedance 视频、OpenCode Go 用量查询、Claude OAuth 重置额度（Anthropic 体系）；ChatGPT 邀请好友发送点本次不接通、不登记。仅追加 out-of-scope 规则，不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要。"
 }
