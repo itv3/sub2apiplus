@@ -1,0 +1,67 @@
+{
+  "base_commit": "8b266747068ee181d9cf3214f321d40f9c2b61b0",
+  "changed_path_count": 2,
+  "current_commit": "2e2f28b4de569ea3ba142603265323b817a63c9f",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4580,
+  "frozen_path_count": 1399,
+  "identity_sha256": "6acc755b52f18c3668bf16320fdc61a9d902b958c7ed22122c0cd79ebeda1d09",
+  "issued_at_utc": "2026-09-30T11:22:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0210-ledger-registry-scope-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "e1c2a1a4e93308b6e870392aaa7615c3e9de45f380572500302dfb169dd2672b"
+      ],
+      "reason": "上游 v0.2.10 合并前修复候选出站面登记表与新上游合并计划互斥：登记表只在其绑定计划的 overlay 复算中剔除，条目始终计入出站面清单，新计划的 overlay 从当前源码重算并并入这些出站面。按规则登记冻结后继摘要。 path=tools/check_ledger_completeness.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-terminal-gate-candidate-state-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-surface-successors-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fb99290ac548a30064067c2b0d734cf4ddc824ab4a9e109ff160cb0597da54aa"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "38dfe52ab963f94de30f5cf1b4330ad7812951b5c2ba523074b01f72c46a3fc3"
+      ],
+      "reason": "上游 v0.2.10 合并前修复候选出站面登记表与新上游合并计划互斥：登记表只在其绑定计划的 overlay 复算中剔除，条目始终计入出站面清单，新计划的 overlay 从当前源码重算并并入这些出站面。按规则登记冻结后继摘要。 path=tools/official_client_capture/tests/test_check_ledger_completeness.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-terminal-gate-candidate-state-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-surface-successors-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "554b4189e103b347d221a42e021445848eb1dd52d0c864a560a6b9b5278c05c0"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
