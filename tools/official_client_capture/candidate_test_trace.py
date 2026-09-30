@@ -130,7 +130,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 契约所在的 `official_egress_openai_http.go`，工作区文件不再引用契约类型、不被出站定型面扫描计为新的定型面；方法体
 # 不变，映射只重绑该源码快照，不改变测试、事实或规则语义。候选验收测试 9 项通过，3 项按设计跳过，改动前后一致。
 FROZEN_MAPPING_SHA256 = (
-    "dfba3e7d40abcebf5ff0890fe485e24b164e2913313879cbc76adf68d9a04bec"
+    "7b47334686048bffc4501a7a4cf8a4d5291a4878b8d39975e47b177b75cdc59a"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

@@ -149,7 +149,7 @@
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
-          "sha256": "9efae6cb124186e47aa0534048248fcab540638009d2c055053e1994d5fa723f"
+          "sha256": "2edd45ae5a333a91bafbb24a3f62a059fe4f54de54bbed9824784da7f09b7dae"
         }
       ],
       "facts": [
@@ -239,7 +239,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_ws_client.go",
-          "sha256": "aaec5b3efa8a6c3da1b9a9e8dba06e484c506be1dab285e256220406c7202010"
+          "sha256": "483cd96dcf5b089d16b42c9de465a4ae4c009a305570799027878052a0b96579"
         }
       ],
       "facts": [
@@ -277,7 +277,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "790154e5cdd761ffa58acd861ca79f79851d3c87ce4515df9894eeafd2264b42"
+          "sha256": "c2c7ce29b977d1d362b9006493f4d3195fbc7148c21be8b82dbd7309dc84877a"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
@@ -340,7 +340,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_alpha_search.go",
-          "sha256": "a11cf388e3fa0f0757b81c9955b3416158c4d2c34183cad487754ece2e49defc"
+          "sha256": "859cd631d01dc5a2540f83b867ffce4e29a1f2cac6c7291d70883d012f0abf99"
         }
       ],
       "facts": [
@@ -707,7 +707,7 @@
       "source_files": [
         {
           "path": "backend/internal/repository/http_upstream.go",
-          "sha256": "e0879d39944c573fdc2c18beba59a32f7a74990d5610b9dc10d7e6f5f5f8679d"
+          "sha256": "b4f3d03acb915512b6a9c38f4214f1ed9bb61a69c1c19d2a9f8a77e15a73ed2d"
         }
       ],
       "facts": [
