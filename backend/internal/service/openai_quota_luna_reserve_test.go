@@ -87,7 +87,7 @@ func TestCodexWhamUsageLunaReserveDoesNotLeakWithoutProfileSlot(t *testing.T) {
 			defer server.Close()
 
 			upstream := newQuotaRedirectingUpstream(server)
-			service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+			service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 			// 配额链路的画像由发布指针（runtime.CodexReleaseMode）解析，不读入站 ProfileMode；
 			// 两个槽位各自构造 runtime，保证请求真正跑在该槽位的画像上。
 			guard, guardErr := officialegress.NewGuard(
@@ -267,7 +267,7 @@ func TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease(t *tes
 		guard, upstream, officialCodexExecutorID, officialegress.ReleaseMode(mode),
 	)
 	require.NoError(t, err)
-	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 	service.officialEgress = egressRuntime
 
 	runtimeState := defaultOfficialCodexRuntimeState()

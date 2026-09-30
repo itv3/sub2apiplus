@@ -91,7 +91,7 @@ func TestGeminiV1BetaListModels_FiltersFallbackByAllowlist(t *testing.T) {
 	repo := &geminiAllowlistAccountRepoStub{gatewayModelsAccountRepoStub: gatewayModelsAccountRepoStub{
 		byGroup: map[int64][]service.Account{
 			// 只有 antigravity 账号：Gemini 选号失败后回落静态模型列表。
-			41: {{ID: 2, Platform: service.PlatformAntigravity, Status: service.StatusActive, Schedulable: true}},
+			41: {{ID: 2, Platform: service.PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": true}, Status: service.StatusActive, Schedulable: true}},
 		},
 	}}
 	h := &GatewayHandler{

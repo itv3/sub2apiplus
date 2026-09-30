@@ -227,7 +227,7 @@ func TestOpenAIQuotaQueryUsageDiscoversWorkspaceRoutingFirst(t *testing.T) {
 	}))
 	defer server.Close()
 	upstream := newQuotaRedirectingUpstream(server)
-	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 	calls := stubOfficialCodexWorkspaceRoutingDiscovery(t, upstream,
 		`{"accounts":[{"id":"acct-routing","workspace_backend_origin":"https://us.chatgpt.com","account_routing_override":"us"}]}`,
 		http.StatusOK)
@@ -310,7 +310,7 @@ func TestOpenAIQuotaAttemptBudgetCoversWorkspaceRoutingDiscovery(t *testing.T) {
 		guard, upstream, officialCodexExecutorID, officialegress.ReleaseMode(discoveryMode),
 	)
 	require.NoError(t, err)
-	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 	service.officialEgress = egressRuntime
 	runtimeState := defaultOfficialCodexRuntimeState()
 	runtimeState.ProfileMode = discoveryMode

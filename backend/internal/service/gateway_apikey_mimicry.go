@@ -290,7 +290,6 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 
 	model := gjson.GetBytes(body, "model").String()
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
-	systemRewritten := false
 	if !strings.Contains(strings.ToLower(model), "haiku") {
 		// API Key 官方客户端画像的三段 system 是固定身份契约，不能受 OAuth 系统提示词
 		// 注入开关影响。过滤真实 CLI 已带的固定身份块，只把 CWD 等项目上下文移入消息。
@@ -300,7 +299,6 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 		}
 		customSystem := filterAnthropicAPIKeyMimicCustomSystem(rawJSONValue(body, "system"))
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, customSystem, systemPrompt, systemPromptBlocks)
-		systemRewritten = true
 	}
 
 	metadataUserID := buildAPIKeyMimicMetadataUserID(account, body, safeClientHeaders(c), safeClientIP(c), getAPIKeyIDFromContext(c), profile.Build.Version)
@@ -315,7 +313,6 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 		}
 	}
 	body, _ = normalizeClaudeOAuthRequestBody(body, model, claudeOAuthNormalizeOptions{
-		stripSystemCacheControl:    !systemRewritten,
 		injectMetadata:             metadataUserID != "",
 		metadataUserID:             metadataUserID,
 		preserveMissingTemperature: true,

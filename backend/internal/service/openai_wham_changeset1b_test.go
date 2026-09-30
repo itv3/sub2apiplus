@@ -163,7 +163,7 @@ func TestOpenAIQuotaQueryUsageOnlyMakesExactlyOneRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	service := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(server))
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(server), nil)
 	usage, err := service.QueryUsageOnly(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Equal(t, "pro", usage.PlanType)
@@ -195,7 +195,7 @@ func TestRefreshOpenAICodexSnapshotUsesWHAMFirstForVerifiedPro(t *testing.T) {
 	}))
 	defer server.Close()
 	upstream := newQuotaRedirectingUpstream(server)
-	quota := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	quota := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 	service := &AccountUsageService{accountRepo: repo, openAIQuotaService: quota}
 
 	updates, err := service.refreshOpenAICodexSnapshotWHAMFirst(context.Background(), account, time.Now())
@@ -247,7 +247,7 @@ func TestRefreshOpenAICodexSnapshotFallsBackInSameCallThroughExecutor(t *testing
 	}))
 	defer server.Close()
 	upstream := newQuotaRedirectingUpstream(server)
-	quota := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	quota := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream, nil)
 	service := &AccountUsageService{accountRepo: repo, openAIQuotaService: quota}
 
 	updates, err := service.refreshOpenAICodexSnapshotWHAMFirst(context.Background(), account, time.Now())

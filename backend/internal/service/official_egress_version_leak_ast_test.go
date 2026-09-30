@@ -56,6 +56,14 @@ var (
 		"localhost":   true,
 	}
 
+	// 驼峰分词会拆开的多词品牌，按相邻两词拼接后精确匹配。单独成集而不并入
+	// otherVendorTokens：拼接只对这里的品牌生效，已有条目（如 localhost）的判据不因此放宽。
+	//   - opencode：OpenCode 第三方 API Key 上游（本次上游合并接入），不属于 §1.1 的
+	//     Codex／Claude Persona；openCodeUpstreamUserAgent 这类标识符会被拆成 open、code。
+	multiWordVendorTokens = map[string]bool{
+		"opencode": true,
+	}
+
 	// xAI 品牌缩写单独识别，不依赖通用 camelCase 分词——连续大写缩写相邻时分词会把
 	// XAIHTTPClient、XAISSOClient、XAI2Client 粘连，得不到独立的 xai 词。
 	//
@@ -401,8 +409,12 @@ func hasOtherVendorToken(owner string) bool {
 	if xaiBrandRE.MatchString(owner) {
 		return true
 	}
-	for _, token := range identifierTokens(owner) {
-		if otherVendorTokens[token] {
+	tokens := identifierTokens(owner)
+	for index, token := range tokens {
+		if otherVendorTokens[token] || multiWordVendorTokens[token] {
+			return true
+		}
+		if index+1 < len(tokens) && multiWordVendorTokens[token+tokens[index+1]] {
 			return true
 		}
 	}
@@ -902,6 +914,21 @@ func TestOfficialEgressVersionLeakASTOwnership(t *testing.T) {
 		src  string
 		want int
 	}{
+		{
+			name: "多词品牌 OpenCode 归属",
+			src:  "package p\nconst openCodeUpstreamUserAgent = \"opencode/1.0.0\"\n",
+			want: 0,
+		},
+		{
+			name: "OpenCode 与 Codex 证据并存时 Codex 胜出",
+			src:  "package p\nconst openCodeCodexVersion = \"0.146.0\"\n",
+			want: 1,
+		},
+		{
+			name: "多词品牌只拼接相邻词",
+			src:  "package p\nconst openRouterCodeVersion = \"0.146.0\"\n",
+			want: 1,
+		},
 		{
 			name: "多名称 const 各自归属",
 			src:  "package p\nconst anthropicVersion, activeVersion = \"2.1.220\", \"0.146.0\"\n",

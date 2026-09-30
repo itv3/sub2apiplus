@@ -117,7 +117,7 @@ func codexCanonicalUserAgent() string {
 	resolver := codexCanonicalUAResolver
 	codexCanonicalUAMu.RUnlock()
 	if resolver != nil {
-		if ua := strings.TrimSpace(resolver()); ua != "" {
+		if ua := resolver(); strings.TrimSpace(ua) != "" {
 			return ua
 		}
 	}
@@ -141,8 +141,11 @@ type codexOutboundIdentity struct {
 // 42 项回归和显式激活，才允许改变 strict wire 身份。
 func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 	canonical := codexCanonicalUserAgent()
-	ua := strings.TrimSpace(candidateUA)
-	if ua == "" {
+	if _, _, ok := openai.PairCodexClientIdentity(canonical); !ok {
+		canonical = codexCLIUserAgent
+	}
+	ua := candidateUA
+	if strings.TrimSpace(ua) == "" {
 		ua = canonical
 	}
 	originator, pairedUA, ok := openai.PairCodexClientIdentity(ua)

@@ -20,14 +20,17 @@ const (
 	BetaFastMode                 = "fast-mode-2026-02-01"
 	BetaThinkingTokenCount       = "thinking-token-count-2026-05-13"
 	BetaMidConversationSystem    = "mid-conversation-system-2026-04-07"
+	// 旧版结构化输出兼容标记；仅在客户端显式请求时透传。
+	BetaStructuredOutputs = "structured-outputs-2025-11-13"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
-	BetaPromptCachingScope      = "prompt-caching-scope-2026-01-05"
-	BetaEffort                  = "effort-2025-11-24"
-	BetaRedactThinking          = "redact-thinking-2026-02-12"
-	BetaContextManagement       = "context-management-2025-06-27"
-	BetaThinkingBindingControls = "thinking-binding-controls-2026-08-01"
-	BetaExtendedCacheTTL        = "extended-cache-ttl-2025-04-11"
+	BetaPromptCachingScope          = "prompt-caching-scope-2026-01-05"
+	BetaEffort                      = "effort-2025-11-24"
+	BetaRedactThinking              = "redact-thinking-2026-02-12"
+	BetaContextManagement           = "context-management-2025-06-27"
+	BetaThinkingBindingControls     = "thinking-binding-controls-2026-08-01"
+	BetaMidConversationOutputConfig = "mid-conversation-output-config-2026-07-01"
+	BetaExtendedCacheTTL            = "extended-cache-ttl-2025-04-11"
 
 	// server-side refusal fallback beta 字段族（beta Messages API 专有）。
 	// 客户端（Claude Code / SDK / OpenCode 等）会默认透传 body.fallbacks /
@@ -103,24 +106,30 @@ func FullClaudeCodeMimicryBetas() []string {
 		BetaEffort,
 		BetaContextManagement,
 		BetaThinkingBindingControls,
+		BetaMidConversationOutputConfig,
 		BetaExtendedCacheTTL,
 	}
 }
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
-var DefaultHeaders = map[string]string{
-	// 与 2.1.220 Linux x64 官方客户端业务流量保持一致。
-	"User-Agent":                                "claude-cli/" + CLIVersion() + " (external, cli)",
-	"X-Stainless-Lang":                          "js",
-	"X-Stainless-Package-Version":               "0.94.0",
-	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "x64",
-	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v26.3.0",
-	"X-Stainless-Retry-Count":                   "0",
-	"X-Stainless-Timeout":                       "600",
-	"X-App":                                     "cli",
-	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+// DefaultHeaders 每次调用现构造，User-Agent 统一经 DefaultUserAgent() 取得，保证出站头与
+// billing attribution 的版本号同源。本分支未注入运行期版本解析器（见 service/wire.go），
+// 版本号在进程生命周期内恒定（环境变量覆盖 → 内置基线）。
+func DefaultHeaders() map[string]string {
+	return map[string]string{
+		// 与 2.1.220 Linux x64 官方客户端业务流量保持一致。
+		"User-Agent":                                DefaultUserAgent(),
+		"X-Stainless-Lang":                          "js",
+		"X-Stainless-Package-Version":               "0.94.0",
+		"X-Stainless-OS":                            "Linux",
+		"X-Stainless-Arch":                          "x64",
+		"X-Stainless-Runtime":                       "node",
+		"X-Stainless-Runtime-Version":               "v26.3.0",
+		"X-Stainless-Retry-Count":                   "0",
+		"X-Stainless-Timeout":                       "600",
+		"X-App":                                     "cli",
+		"Anthropic-Dangerous-Direct-Browser-Access": "true",
+	}
 }
 
 // Model 表示一个 Claude 模型
@@ -170,10 +179,22 @@ var DefaultModels = []Model{
 		CreatedAt:   "2026-05-29T00:00:00Z",
 	},
 	{
+		ID:          "claude-opus-5-5",
+		Type:        "model",
+		DisplayName: "Claude Opus 5.5",
+		CreatedAt:   "2026-09-22T00:00:00Z",
+	},
+	{
 		ID:          "claude-opus-5",
 		Type:        "model",
 		DisplayName: "Claude Opus 5",
 		CreatedAt:   "2026-07-25T00:00:00Z",
+	},
+	{
+		ID:          "claude-sonnet-5-5",
+		Type:        "model",
+		DisplayName: "Claude Sonnet 5.5",
+		CreatedAt:   "2026-09-28T00:00:00Z",
 	},
 	{
 		ID:          "claude-sonnet-5",

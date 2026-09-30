@@ -375,6 +375,63 @@ func setPreviousResponseIDToRawPayload(payload []byte, previousResponseID string
 	return rebuilt, nil
 }
 
+type openAIWSContextWindowBoundary struct {
+	WindowID                  string
+	Changed                   bool
+	PreviousResponseIDRemoved bool
+}
+
+func openAIWSPayloadCodexWindowID(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if windowID := strings.TrimSpace(gjson.GetBytes(payload, "client_metadata.x-codex-window-id").String()); windowID != "" {
+		return windowID
+	}
+	turnMetadata := strings.TrimSpace(gjson.GetBytes(payload, "client_metadata.x-codex-turn-metadata").String())
+	if turnMetadata == "" {
+		return ""
+	}
+	return strings.TrimSpace(gjson.Get(turnMetadata, "window_id").String())
+}
+
+// applyOpenAIWSContextWindowBoundary 只在非官方出站路径上执行窗口切换断链。
+// 官方出站路径保持客户端帧保真：出站帧的 previous_response_id 必须与客户端原始帧一致
+// （官方出站 WS 帧准备环节校验），删掉它会让该帧被判为篡改并关闭连接；
+// 这里只记录窗口编号，续接锚点照常按上一轮响应推导，与合并前行为一致。
+func applyOpenAIWSContextWindowBoundary(
+	payload []byte,
+	previousWindowID string,
+	officialEgress bool,
+) ([]byte, openAIWSContextWindowBoundary, error) {
+	if officialEgress {
+		return payload, openAIWSContextWindowBoundary{WindowID: openAIWSPayloadCodexWindowID(payload)}, nil
+	}
+	return normalizeOpenAIWSContextWindowBoundary(payload, previousWindowID)
+}
+
+// normalizeOpenAIWSContextWindowBoundary breaks a Responses continuation chain
+// when Codex moves to a new local context window. WebSocket response.create can
+// still carry the previous window's previous_response_id after new_context,
+// while HTTP starts the new window without that continuation anchor.
+func normalizeOpenAIWSContextWindowBoundary(
+	payload []byte,
+	previousWindowID string,
+) ([]byte, openAIWSContextWindowBoundary, error) {
+	currentWindowID := openAIWSPayloadCodexWindowID(payload)
+	boundary := openAIWSContextWindowBoundary{WindowID: currentWindowID}
+	if previousWindowID == "" || currentWindowID == "" || currentWindowID == previousWindowID {
+		return payload, boundary, nil
+	}
+	boundary.Changed = true
+	updated, removed, err := dropPreviousResponseIDFromRawPayload(payload)
+	if err != nil {
+		return payload, boundary, err
+	}
+	boundary.PreviousResponseIDRemoved = removed
+	return updated, boundary, nil
+}
+
 func shouldInferIngressFunctionCallOutputPreviousResponseID(
 	storeDisabled bool,
 	turn int,

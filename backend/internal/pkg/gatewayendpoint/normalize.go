@@ -21,6 +21,7 @@ const (
 	VideosEdits          = "/v1/videos/edits"
 	VideosExtensions     = "/v1/videos/extensions"
 	Videos               = "/v1/videos"
+	SeedanceTasks        = "/api/v3/contents/generations/tasks"
 	GeminiModels         = "/v1beta/models"
 )
 
@@ -29,6 +30,9 @@ const (
 func NormalizeInboundEndpoint(path string) string {
 	path = strings.TrimSpace(path)
 	switch {
+	// Seedance 视频任务端点（本次上游合并新增）；该路径片段唯一，放在最前不会误伤其他端点。
+	case strings.Contains(path, "/contents/generations/tasks"):
+		return SeedanceTasks
 	case strings.Contains(path, Embeddings):
 		return Embeddings
 	case strings.Contains(path, AlphaSearch) || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/alpha/search") || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/backend-api/codex/alpha/search"):

@@ -199,6 +199,13 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+// ProvidePluginManager 装配插件管理器，并在重新生成 Wire 时保留账号目录注入。
+func ProvidePluginManager(repo PluginRepository, encryptor SecretEncryptor, cfg *config.Config, hostInfo PluginHostInfo, kvStore PluginKVStore, gateway *OpenAIGatewayService) *PluginManager {
+	manager := NewPluginManager(repo, encryptor, cfg, hostInfo, kvStore)
+	manager.SetAccountDirectory(gateway)
+	return manager
+}
+
 // ProvideOpenAIQuotaService 注入 OpenAI 配额查询与重置服务。
 // wham 使用 Codex backend-client 画像，因此必须走可抓包的统一 HTTPUpstream。
 func ProvideOpenAIQuotaService(
@@ -209,7 +216,10 @@ func ProvideOpenAIQuotaService(
 	openAIGatewayService *OpenAIGatewayService,
 	officialEgress *OfficialEgressTransitionRuntime,
 ) *OpenAIQuotaService {
-	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
+	// 本分支暂不接通 ChatGPT 邀请好友（referral）的对外请求：它携带账号 OAuth 凭据访问
+	// chatgpt.com，尚未纳入官方出站登记。邀请客户端传 nil，服务层统一返回
+	// OPENAI_REFERRAL_NOT_CONFIGURED，后台提示本站未启用邀请功能。
+	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream, nil)
 	service.agentIdentityWS = openAIGatewayService
 	service.officialEgress = officialEgress
 	return service
@@ -463,8 +473,9 @@ func ProvideGrokTokenProvider(
 }
 
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
-func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config) *DashboardAggregationService {
+func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config, settingRepo SettingRepository) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
+	svc.settingRepo = settingRepo
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
@@ -492,6 +503,18 @@ func ProvideOpenAICodexVersionSyncService(
 	githubClient GitHubReleaseClient,
 ) *OpenAICodexVersionSyncService {
 	svc := NewOpenAICodexVersionSyncService(settingRepo, settingService, githubClient, openAICodexVersionSyncInterval)
+	svc.Start()
+	return svc
+}
+
+// ProvideClaudeCodeVersionSyncService creates and starts ClaudeCodeVersionSyncService.
+// 出站 Claude Code 身份的版本号靠它跟随官方发布，无需为了跟版本而发新版本；面板可关闭。
+func ProvideClaudeCodeVersionSyncService(
+	settingRepo SettingRepository,
+	settingService *SettingService,
+	githubClient GitHubReleaseClient,
+) *ClaudeCodeVersionSyncService {
+	svc := NewClaudeCodeVersionSyncService(settingRepo, settingService, githubClient, claudeCodeVersionSyncInterval)
 	svc.Start()
 	return svc
 }
@@ -576,6 +599,7 @@ func ProvideRateLimitService(
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
+	ollamaCloudUsage *OllamaCloudUsageService,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
@@ -585,6 +609,7 @@ func ProvideRateLimitService(
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	svc.SetOllamaCloudUsageProbeScheduler(ollamaCloudUsage)
 	return svc
 }
 
@@ -871,6 +896,8 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	// 复用上游无参身份解析器，但数据源只允许是已验收的 active ReleaseBundle。
 	// SettingService 的 GitHub 同步值保留为发现信息，不能绕过证据与 42 项验收自动激活。
 	SetCodexCanonicalUserAgentResolver(resolveVerifiedCodexCanonicalUserAgent)
+	// Claude CLI 伪装版本号同理：不注入 SettingService 的面板覆写值与自动同步值，出站 UA
+	// 仍取 claude.CLIVersion()（环境变量覆盖 → 内置基线），面板与同步值只作发现信息。
 	return svc
 }
 
@@ -940,6 +967,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBatchImageWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
+	NewClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
 	ProvideGrokOAuthService,
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
@@ -967,6 +995,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountTestService,
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
+	ProvideOpenCodeGoUsageService,
 	ProvideSettingService,
 	NewDataManagementService,
 	ProvideBackupService,
@@ -998,6 +1027,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
+	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
@@ -1011,7 +1041,7 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewTLSFingerprintProfileService,
-	NewPluginManager,
+	ProvidePluginManager,
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,

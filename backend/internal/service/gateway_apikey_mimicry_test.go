@@ -333,7 +333,7 @@ func TestGatewayServiceAnthropicAPIKeyMimicSessionStableAcrossAppendedMessages(t
 
 func TestApplyClaudeCodeMimicHeadersSharedPathStillAddsLegacyHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
-	applyClaudeCodeMimicHeaders(req, true)
+	applyClaudeCodeMimicHeaders(req, true, claude.DefaultUserAgent())
 
 	require.Equal(t, "stream", getHeaderRaw(req.Header, "x-stainless-helper-method"))
 	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))

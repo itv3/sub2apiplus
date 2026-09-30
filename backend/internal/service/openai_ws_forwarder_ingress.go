@@ -146,7 +146,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	// handler 通常会跨账号重试统一登记会话；直接调用者也必须获得同一套
 	// session 级抢占语义，避免旧连接继续占用上游资源。
-	if preemptCtx, cleanupPreempt, armed := s.BeginOpenAIWSIngressSessionPreemption(ctx, c, account, firstClientMessage); armed {
+	if preemptCtx, cleanupPreempt, armed := s.BeginOpenAIWSIngressSessionPreemptionWithClient(ctx, c, account, firstClientMessage, clientConn); armed {
 		ctx = preemptCtx
 		defer cleanupPreempt()
 		defer func() {
@@ -667,12 +667,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
+	apiKeyID := getAPIKeyIDFromContext(c)
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
 	sessionHash := ""
 	preferredConnID := ""
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
+		// 会话级状态按执行作用域隔离：codex 多智能体共用 session-id，只有线程标识能把
+		// 父线程与子智能体区分开；没有声明身份时沿用原会话哈希。账号粘性仍由 handler 决定。
 		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
+		if scope, _ := resolveOpenAIWSExecutionScope(c, payload.rawForHash, apiKeyID); scope != "" {
+			sessionHash = scope
+		}
 		preferredConnID = ""
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(payload.payloadRaw, account)
 		if useHTTPBridge {
@@ -721,7 +727,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		bridgeAccountFailoverState := openAIWSReplayInputState{}
 		for turn := 1; ; turn++ {
 			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
-				if err := hooks.BeforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel); err != nil {
+				if err := hooks.BeforeRequest(turn, currentBridgePayload.rawForHash, currentBridgePayload.originalModel); err != nil {
 					return err
 				}
 			}
@@ -1171,12 +1177,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.noteOpenAICodexTurnStateProvenance(c, account)
 			}
 		}
+		leaseIdleBefore, leaseAgeBefore, leaseUpstreamPings := openAIWSLeaseDiagnosticsOf(lease)
 		logOpenAIWSModeInfo(
-			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
+			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_idle_ms=%d conn_age_ms=%d upstream_pings=%d conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
 			account.ID,
 			turn,
 			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
 			lease.Reused(),
+			leaseIdleBefore.Milliseconds(),
+			leaseAgeBefore.Milliseconds(),
+			leaseUpstreamPings,
 			lease.ConnPickDuration().Milliseconds(),
 			lease.QueueWaitDuration().Milliseconds(),
 			truncateOpenAIWSLogValue(preferred, openAIWSIDValueMaxLen),
@@ -1525,6 +1535,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	currentPayload := firstPayload.payloadRaw
+	// 客户端原始载荷：官方出站 WS 帧收口以它为语义基准；准入 hooks 也必须在上游模型映射
+	// 之前看到客户端模型候选（上游 13fcfc0f3 的 currentClientPayload 与此同值，统一用本变量）。
 	currentOriginalPayload := firstPayload.rawForHash
 	currentOriginalModel := firstPayload.originalModel
 	currentImageBillingModel := firstPayload.imageBillingModel
@@ -1595,6 +1607,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	derivedUserTurnPrepared := 0
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
+	lastTurnWindowID := ""
 	lastTurnPayload := []byte(nil)
 	var lastTurnStrictState *openAIWSIngressPreviousTurnStrictState
 	replayLimits := s.openAIWSReplayInputLimits()
@@ -1726,7 +1739,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	for {
 		if turn > 1 && !skipBeforeTurn && hooks != nil && hooks.BeforeRequest != nil {
-			if err := hooks.BeforeRequest(turn, currentPayload, currentOriginalModel); err != nil {
+			if err := hooks.BeforeRequest(turn, currentOriginalPayload, currentOriginalModel); err != nil {
 				return err
 			}
 		}
@@ -1753,8 +1766,34 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 		}
+		boundaryPayload, contextWindowBoundary, boundaryErr := applyOpenAIWSContextWindowBoundary(
+			currentPayload,
+			lastTurnWindowID,
+			officialEgressEnabled,
+		)
+		if boundaryErr != nil {
+			return fmt.Errorf("normalize Codex websocket context-window boundary: %w", boundaryErr)
+		}
+		if contextWindowBoundary.Changed {
+			currentPayload = boundaryPayload
+			currentPayloadBytes = len(boundaryPayload)
+			logOpenAIWSModeInfo(
+				"ingress_ws_context_window_changed account_id=%d turn=%d conn_id=%s action=break_previous_response_chain previous_window_id=%s current_window_id=%s previous_response_id_removed=%v",
+				account.ID,
+				turn,
+				truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(lastTurnWindowID, openAIWSIDValueMaxLen),
+				truncateOpenAIWSLogValue(contextWindowBoundary.WindowID, openAIWSIDValueMaxLen),
+				contextWindowBoundary.PreviousResponseIDRemoved,
+			)
+		}
 		currentPreviousResponseID := openAIWSPayloadStringFromRaw(currentPayload, "previous_response_id")
 		expectedPrev := strings.TrimSpace(lastTurnResponseID)
+		if contextWindowBoundary.Changed {
+			// A context-window rollover is a new Responses root. Do not infer a
+			// continuation anchor from the response produced in the old window.
+			expectedPrev = ""
+		}
 		toolSignals := ToolContinuationSignals{
 			HasFunctionCallOutput: openAIWSRawPayloadHasToolCallOutput(currentPayload),
 		}
@@ -2016,7 +2055,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
 			)
 		} else if shouldPreflightPing {
-			preflightErr = sessionLease.PingWithTimeout(openAIWSConnHealthCheckTO)
+			preflightErr = sessionLease.PingWithTimeout(openAIWSProbePingTO)
 			preflightTrigger = "ping_failed"
 			if preflightErr != nil {
 				logOpenAIWSModeInfo(
@@ -2353,6 +2392,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		responseID := strings.TrimSpace(result.RequestID)
 		lastTurnResponseID = responseID
 		lastTurnReplayState = currentTurnReplayState
+		if contextWindowBoundary.WindowID != "" {
+			lastTurnWindowID = contextWindowBoundary.WindowID
+		}
 		if result.wsReplayInputExists {
 			var appendErr error
 			lastTurnReplayState, appendErr = appendOpenAIWSReplayInputState(

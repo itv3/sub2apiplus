@@ -89,6 +89,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 ) (*OpenAIForwardResult, error) {
 	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, getAPIKeyIDFromContext(c), s.cfg, c)
 	accountMimicCodexCLI := mimicProfile.Enabled
+	rememberOpenCodeInboundBody(c, account, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -131,10 +132,44 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 
+	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
+	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
+	if account.IsOpenCodeGo() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
+		proto := openCodeGoNativeProtocol(account, mapped)
+		if proto != APIProtocolResponses {
+			if isResponsesShape {
+				if proto == APIProtocolAnthropic {
+					return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
+				}
+				var responsesReq apicompat.ResponsesRequest
+				if err := json.Unmarshal(body, &responsesReq); err != nil {
+					return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
+				}
+				chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
+					&responsesReq,
+					&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
+				)
+				if err != nil {
+					return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
+				}
+				chatBody, err := json.Marshal(chatReq)
+				if err != nil {
+					return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
+				}
+				return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
+			}
+			if proto == APIProtocolAnthropic {
+				return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
+			}
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+	}
+
 	// 自适应账号的标准 Chat Completions 入站使用供应商原生 CC 端点。
 	// Responses 形状下，DeepSeek / Kimi 继续走下方原生 Responses 链；GLM
 	// 没有 Responses 端点，先转换成 Chat Completions 再直转。
-	if account.IsAdaptiveAPIProtocol() {
+	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() {
 		if !isResponsesShape {
 			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 		}
@@ -173,6 +208,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if !mimicProfile.Enabled && shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
+	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 
 	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
 	if err != nil {
@@ -268,9 +304,15 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	} else {
 		// Normal path: convert Chat Completions → Responses.
 		// ChatCompletionsToResponses always sets Stream=true (upstream always streams).
+		chatReq.Model = upstreamModel
 		responsesReq, err = apicompat.ChatCompletionsToResponses(&chatReq)
 		if err != nil {
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
+		}
+		if account.UsesOpenAICodexProtocol() || accountMimicCodexCLI {
+			if err := restoreCodexShorthandConvertedMessages(responsesReq); err != nil {
+				return nil, fmt.Errorf("restore converted chat messages: %w", err)
+			}
 		}
 		responsesReq.Model = upstreamModel
 		normalizeResponsesRequestServiceTier(responsesReq)
@@ -357,6 +399,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 
 	// 4b. Apply OpenAI fast policy (may filter service_tier or block the request).
+	responsesBody, _, err = normalizeGPT6ResponsesSampling(responsesBody, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, responsesBody)
 	if policyErr != nil {
 		var blocked *OpenAIFastBlockedError
@@ -466,6 +512,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 		if account.Type == AccountTypeAPIKey &&
 			!accountMimicCodexCLI &&
+			!account.IsOpenCodeGo() &&
 			mimicProfile.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
 			logger.L().Info("openai chat_completions: /responses unsupported, falling back to raw chat completions",
@@ -499,6 +546,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	} else {
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
+	stampOpenAIResponsesUpstreamEndpoint(c, result)
 
 	// cyber_policy：标记已设、error 已按 Chat Completions 格式发给客户端。丢弃 result、
 	// 返回哨兵，使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），不计费、不 failover。
@@ -1271,4 +1319,36 @@ func buildChatStreamErrorSSE(code, message string) string {
 		return "data: {\"error\":{\"type\":\"invalid_request_error\",\"code\":\"" + code + "\",\"message\":\"upstream error\"}}\n\n"
 	}
 	return "data: " + string(payload) + "\n\n"
+}
+
+// restoreCodexShorthandConvertedMessages 把 chat→responses 转换产出的字符串 content 消息
+// 还原为不带 type 的简写形态。上游自本次合并起让转换结果显式带 type=message，而本分支的
+// Codex 规范化（OAuth 转换与 API Key mimic）按“无 type 即简写”识别需要按角色包装的消息，
+// 并各自决定是否包装（例如 OAuth 的 json_object 格式保留简写）。还原后两条支路与合并前
+// 行为一致；数组形态的 content 与其他类型的项不受影响。
+func restoreCodexShorthandConvertedMessages(req *apicompat.ResponsesRequest) error {
+	if req == nil || len(req.Input) == 0 || req.Input[0] != '[' {
+		return nil
+	}
+	var items []apicompat.ResponsesInputItem
+	if err := json.Unmarshal(req.Input, &items); err != nil {
+		return err
+	}
+	changed := false
+	for i := range items {
+		if items[i].Type != "message" || len(items[i].Content) == 0 || items[i].Content[0] != '"' {
+			continue
+		}
+		items[i].Type = ""
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	input, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	req.Input = input
+	return nil
 }

@@ -212,8 +212,7 @@ func (s *GatewayService) finishClaudeStrictOpenAIResponse(
 		case officialegress.IngressProtocolOpenAIChatCompletions:
 			if canonical.Stream {
 				forwardResult, handleErr = s.handleCCStreamingFromAnthropic(
-					resp, c, canonical.Model, result.Model, reasoningEffortPtr,
-					startTime, canonical.IncludeUsage,
+					resp, c, canonical.Model, result.Model, reasoningEffortPtr, startTime,
 				)
 			} else {
 				forwardResult, handleErr = s.handleCCBufferedFromAnthropic(

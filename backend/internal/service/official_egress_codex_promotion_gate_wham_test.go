@@ -89,7 +89,7 @@ func TestCodexWhamBackendClientReplaysApprovedSemanticsOnTargetRelease(t *testin
 	upstream := newCodexGateWireUpstream(t, server)
 	runtimeState := newCodexGateRuntime(t, upstream, mode)
 	upstream.guard = runtimeState.Guard
-	quota := NewOpenAIQuotaService(repo, nil, tokens, upstream)
+	quota := NewOpenAIQuotaService(repo, nil, tokens, upstream, nil)
 	quota.officialEgress = runtimeState
 
 	state := defaultOfficialCodexRuntimeState()

@@ -42,9 +42,8 @@ func (s *GatewayService) replaceModelInBody(body []byte, newModel string) []byte
 }
 
 type claudeOAuthNormalizeOptions struct {
-	injectMetadata          bool
-	metadataUserID          string
-	stripSystemCacheControl bool
+	injectMetadata bool
+	metadataUserID string
 	// preserveSystem 表示 system 及其缓存字段由后置 Finalizer 独占处理。
 	// 开启后本层只做协议与语义兼容，不能提前改写客户端 system。
 	preserveSystem bool
@@ -150,7 +149,14 @@ func deleteJSONPathBytes(body []byte, path string) ([]byte, bool) {
 	return next, true
 }
 
-func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOptions) ([]byte, bool) {
+// normalizeClaudeOAuthSystemBody 只做 system 文本的规范化，**不动 cache_control**。
+//
+// 这里曾经按 opts 剥离客户端打在 system 上的断点。那个动作是「system 必然被整个
+// 重写」时代的配套：内容都搬进 messages 了，残留断点指着空气。system 注入变成
+// 可配置之后前提就没了——注入开启时留在 system 上的断点是我们自己拼的稳定锚点，
+// 注入关闭时它是客户端的缓存意图，两种情形都没有删它的理由。
+// 4 块上限属于上游硬约束，由 enforceCacheControlLimit 在各条出口兜底。
+func normalizeClaudeOAuthSystemBody(body []byte) ([]byte, bool) {
 	sys := gjson.GetBytes(body, "system")
 	if !sys.Exists() {
 		return body, false
@@ -182,13 +188,6 @@ func normalizeClaudeOAuthSystemBody(body []byte, opts claudeOAuthNormalizeOption
 							modified = true
 						}
 					}
-				}
-			}
-
-			if opts.stripSystemCacheControl && item.Get("cache_control").Exists() {
-				if next, ok := deleteJSONPathBytes(out, fmt.Sprintf("system.%d.cache_control", index)); ok {
-					out = next
-					modified = true
 				}
 			}
 
@@ -239,7 +238,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	modified := false
 
 	if !opts.preserveSystem {
-		if next, changed := normalizeClaudeOAuthSystemBody(out, opts); changed {
+		if next, changed := normalizeClaudeOAuthSystemBody(out); changed {
 			out = next
 			modified = true
 		}
@@ -275,7 +274,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// temperature：真实 Claude Code CLI 总是发送 temperature（默认 1，客户端可覆盖）。
 	// 之前的实现直接 delete 会导致 payload 缺字段，与真实 CLI 字节级不一致。
 	// 策略：客户端传了什么就透传；没传则补默认 1。
-	if !opts.preserveMissingTemperature && !gjson.GetBytes(out, "temperature").Exists() {
+	if !opts.preserveMissingTemperature && !gjson.GetBytes(out, "temperature").Exists() && !claude.IsOpus55(modelID) {
 		if next, ok := setJSONValueBytes(out, "temperature", 1); ok {
 			out = next
 			modified = true
@@ -316,7 +315,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// - 其他形态（auto/any/none）原样透传
 	// 如果 body 里完全没有 tools（空数组），tool_choice 没意义时才删除
 	if !gjson.GetBytes(out, "tools").IsArray() || len(gjson.GetBytes(out, "tools").Array()) == 0 {
-		if gjson.GetBytes(out, "tool_choice").Exists() {
+		if !isClaude55SignedThinkingModel(modelID) && gjson.GetBytes(out, "tool_choice").Exists() {
 			if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
 				out = next
 				modified = true
@@ -386,7 +385,6 @@ func (s *GatewayService) applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 		return body, model
 	}
 
-	systemRewritten := false
 	normalizeOpts := claudeOAuthNormalizeOptions{
 		preserveSystem: officialEgressOwnsProfile,
 	}
@@ -401,9 +399,7 @@ func (s *GatewayService) applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 				systemPrompt,
 				systemPromptBlocks,
 			)
-			systemRewritten = true
 		}
-		normalizeOpts.stripSystemCacheControl = !systemRewritten
 
 		if s.identityService != nil && c != nil && c.Request != nil {
 			if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header); err == nil && fp != nil {
@@ -776,14 +772,17 @@ func expandClaudeOAuthSystemPromptTextTemplate(body []byte, text string, expansi
 		return "", nil
 	}
 	expansionPrompt = defaultClaudeOAuthExpansionPrompt(expansionPrompt)
-	billingText, err := buildBillingAttributionText(body, claude.CLIVersion())
+	// 同一次展开内只取一次版本号，billing attribution / 指纹 / 占位符三处共用，
+	// 避免运行期版本翻转瞬间取到不同值。
+	cliVersion := claude.EffectiveCLIVersion()
+	billingText, err := buildBillingAttributionText(body, cliVersion)
 	if err != nil {
 		return "", err
 	}
-	fp := computeClaudeCodeFingerprint(body, claude.CLIVersion())
+	fp := computeClaudeCodeFingerprint(body, cliVersion)
 	replacer := strings.NewReplacer(
 		"{billing_header}", billingText,
-		"{cc_version}", claude.CLIVersion(),
+		"{cc_version}", cliVersion,
 		"{fp}", fp,
 		"{claude_code_system_prompt}", claudeCodeSystemPrompt,
 		"{claude_code_expansion_prompt}", expansionPrompt,

@@ -6,7 +6,7 @@ Sub2API Plus 可以通过 Apple 的 `container` CLI 运行原生三服务栈。�
 
 Apple `container` 主要用于 Mac 本地开发，以及由管理员主动维护的部署。生产环境仍推荐使用 Docker Compose。
 
-Apple `container` 1.1 不提供重启策略、开机自动启动、持续健康调度、Docker API Socket 或完整的 Compose 编排。`apple-container.sh` 会在每次调用时按顺序启动服务并检查就绪状态，但它不是持续运行的进程监督器。
+Apple `container` 1.1 不提供重启策略、开机自动启动、持续健康调度、Docker API Socket 或完整的 Compose 编排。`apple-container.sh` 会在每次调用时按顺序启动服务并检查就绪状态。应用容器内有一个小型监督进程，会在 Web UI 请求重启后重新拉起 Sub2API Plus 进程；它不会重启已停止的容器，也不会重启整个服务栈。
 
 ## 环境要求
 
@@ -138,7 +138,7 @@ APPLE_CONTAINER_NETWORK_SUBNET=
 | 网络 | `sub2api-apple` |
 | 命名卷 | `sub2api-apple-data`、`sub2api-apple-postgres-data`、`sub2api-apple-redis-data` |
 
-PostgreSQL 卷挂载到 `/var/lib/postgresql`，保留 PostgreSQL 18 默认的子数据目录。Sub2API Plus 和 Redis 也将数据写入 Apple 命名卷挂载点下的子目录。这样处理是因为 Apple 命名卷没有 Docker 的 copy-up 和挂载点所有权行为。
+PostgreSQL 卷挂载到 `/var/lib/postgresql`，保留 PostgreSQL 18 默认的子数据目录。Sub2API Plus 的数据与可更新的运行时二进制分别存放在 `sub2api-apple-data` 下的不同子目录；Redis 也将数据写入其 Apple 命名卷挂载点下的子目录。这样处理是因为 Apple 命名卷没有 Docker 的 copy-up 和挂载点所有权行为。
 
 ## 网络
 
@@ -149,6 +149,16 @@ Apple `container` 1.1 不提供 Compose 风格的网络内服务别名。Postgre
 每次执行 `up` 或 `restart` 都会重建应用容器，因为依赖服务的轻量虚拟机停止后，内部地址可能变化。应用数据仍保留在 `sub2api-apple-data` 中。
 
 脚本在报告成功前，会从 macOS 检查已发布的 `/health` 接口。首次启动时需要允许本地网络访问。如果内部探测成功，但宿主机端口探测因连接重置失败，请为 `container-runtime-linux` 开启本地网络权限，依次执行 `container system stop`、`container system start`，然后再次执行 `up`。升级运行时后可能再次出现权限提示。
+
+## Web UI 更新
+
+Web UI 与 Docker 部署使用同一套更新流程：通过 GitHub 下载发布包、原子替换当前可执行文件，再请求应用重启。Compose 部署由 Docker 提供重启策略；`apple-container.sh` 则在 Apple 应用容器内提供等效的进程监督。
+
+> 注意：本分支 Web UI 的在线更新目前仍从上游 `Wei-Shaw/sub2api` 下载发布包，执行后会被替换为上游程序、丢失本分支的官方客户端仿真等功能。升级本分支请改用镜像升级（见下文 `APPLE_CONTAINER_SUB2API_IMAGE`），不要在 Web UI 中执行更新。
+
+当前可执行文件存放在 `sub2api-apple-data` 中，因此之后的 `up`、`restart` 或 `up --recreate` 不会丢弃从 Web UI 下载的更新。脚本会在旁边记录所配置基础镜像的 ID；当 `APPLE_CONTAINER_SUB2API_IMAGE` 解析到不同的镜像 ID 时，该镜像中的 `/app/sub2api` 会成为新的当前可执行文件。这样既保证显式的镜像升级始终生效，又能在日常重建应用容器时保留原地更新。
+
+如果无法直接访问 GitHub，可将 `UPDATE_PROXY_URL` 设为 Apple 容器虚拟机可访问的代理地址。只监听 Mac `127.0.0.1` 的代理在虚拟机内无法通过 `127.0.0.1` 访问，请改用经过适当访问限制的宿主网关监听地址。
 
 ## 备份与升级
 

@@ -172,6 +172,66 @@ func TestDropPreviousResponseIDFromRawPayload(t *testing.T) {
 	})
 }
 
+func TestNormalizeOpenAIWSContextWindowBoundary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("same_window_keeps_previous_response_id", func(t *testing.T) {
+		payload := []byte("{\"type\":\"response.create\",\"previous_response_id\":\"resp_old\",\"client_metadata\":{\"x-codex-window-id\":\"window-a\"}}")
+		updated, boundary, err := normalizeOpenAIWSContextWindowBoundary(payload, "window-a")
+		require.NoError(t, err)
+		require.False(t, boundary.Changed)
+		require.False(t, boundary.PreviousResponseIDRemoved)
+		require.Equal(t, "window-a", boundary.WindowID)
+		require.Equal(t, "resp_old", gjson.GetBytes(updated, "previous_response_id").String())
+	})
+
+	t.Run("new_window_drops_previous_response_id", func(t *testing.T) {
+		payload := []byte("{\"type\":\"response.create\",\"previous_response_id\":\"resp_old\",\"client_metadata\":{\"x-codex-window-id\":\"window-b\"}}")
+		updated, boundary, err := normalizeOpenAIWSContextWindowBoundary(payload, "window-a")
+		require.NoError(t, err)
+		require.True(t, boundary.Changed)
+		require.True(t, boundary.PreviousResponseIDRemoved)
+		require.Equal(t, "window-b", boundary.WindowID)
+		require.False(t, gjson.GetBytes(updated, "previous_response_id").Exists())
+	})
+
+	t.Run("new_window_without_previous_response_id_still_marks_boundary", func(t *testing.T) {
+		payload := []byte("{\"type\":\"response.create\",\"client_metadata\":{\"x-codex-window-id\":\"window-b\"}}")
+		updated, boundary, err := normalizeOpenAIWSContextWindowBoundary(payload, "window-a")
+		require.NoError(t, err)
+		require.True(t, boundary.Changed)
+		require.False(t, boundary.PreviousResponseIDRemoved)
+		require.Equal(t, string(payload), string(updated))
+	})
+
+	t.Run("embedded_turn_metadata_is_fallback", func(t *testing.T) {
+		payload := []byte("{\"type\":\"response.create\",\"previous_response_id\":\"resp_old\",\"client_metadata\":{\"x-codex-turn-metadata\":\"{\\\"window_id\\\":\\\"window-b\\\"}\"}}")
+		updated, boundary, err := normalizeOpenAIWSContextWindowBoundary(payload, "window-a")
+		require.NoError(t, err)
+		require.True(t, boundary.Changed)
+		require.True(t, boundary.PreviousResponseIDRemoved)
+		require.Equal(t, "window-b", boundary.WindowID)
+		require.False(t, gjson.GetBytes(updated, "previous_response_id").Exists())
+	})
+}
+
+func TestApplyOpenAIWSContextWindowBoundarySkipsOfficialEgress(t *testing.T) {
+	payload := []byte("{\"type\":\"response.create\",\"previous_response_id\":\"resp_old\",\"client_metadata\":{\"x-codex-window-id\":\"window-b\"}}")
+
+	// 官方出站路径保持客户端帧保真：不断链，只记录窗口编号
+	updated, boundary, err := applyOpenAIWSContextWindowBoundary(payload, "window-a", true)
+	require.NoError(t, err)
+	require.False(t, boundary.Changed)
+	require.Equal(t, "window-b", boundary.WindowID)
+	require.Equal(t, string(payload), string(updated))
+
+	// 非官方路径沿用上游的窗口切换断链
+	updated, boundary, err = applyOpenAIWSContextWindowBoundary(payload, "window-a", false)
+	require.NoError(t, err)
+	require.True(t, boundary.Changed)
+	require.False(t, gjson.GetBytes(updated, "previous_response_id").Exists())
+}
+
 func TestStripCodexSparkImageGenerationToolFromRawPayload(t *testing.T) {
 	t.Run("strips_image_generation_for_spark", func(t *testing.T) {
 		payload := []byte(`{"type":"response.create","model":"gpt-5.3-codex-spark","tools":[{"type":"function","name":"shell"},{"type":"image_generation","output_format":"png"}]}`)

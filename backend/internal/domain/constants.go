@@ -26,11 +26,14 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
 	// 国产 OpenAI 兼容供应商（经 OpenAI 网关转发，按 Chat Completions 协议）。
-	PlatformKimi      = "kimi"     // Kimi (月之暗面 / Moonshot)
-	PlatformZhipu     = "zhipu"    // 智谱 GLM (bigmodel)
-	PlatformDeepseek  = "deepseek" // DeepSeek
-	PlatformMiniMax   = "minimax"  // MiniMax (M 系列)
-	PlatformComposite = "composite"
+	PlatformKimi     = "kimi"     // Kimi (月之暗面 / Moonshot)
+	PlatformZhipu    = "zhipu"    // 智谱 GLM (bigmodel)
+	PlatformDeepseek = "deepseek" // DeepSeek
+	PlatformMiniMax  = "minimax"  // MiniMax (M 系列)
+	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
+	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
+	PlatformOpenCodeGo = "opencode_go"
+	PlatformComposite  = "composite"
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。
@@ -38,6 +41,8 @@ const (
 const (
 	AccountModePayG   = "payg"   // 按量付费：消耗余额，做余额检测冷却
 	AccountModeCoding = "coding" // Coding Plan：滚动用量窗口冷却（5h / weekly）
+	AccountModeZen    = "zen"    // OpenCode Zen：按量付费，https://opencode.ai/zen/v1
+	AccountModeGo     = "go"     // OpenCode Go：订阅额度窗口，https://opencode.ai/zen/go/v1
 )
 
 // API protocol constants 国产供应商的上游 API 协议维度。存储于
@@ -137,6 +142,16 @@ var AntigravityCompatibilityModelMapping = map[string]string{
 	"gemini-3.6-flash-low":           "gemini-3.6-flash-low",
 	"gemini-3.6-flash-medium":        "gemini-3.6-flash-medium",
 	"gemini-3.6-flash-tiered":        "gemini-3.6-flash-tiered",
+	"gemini-3.7-flash":               "gemini-3.7-flash",
+	"gemini-3.7-flash-high":          "gemini-3.7-flash-high",
+	"gemini-3.7-flash-low":           "gemini-3.7-flash-low",
+	"gemini-3.7-flash-medium":        "gemini-3.7-flash-medium",
+	"gemini-3.7-flash-tiered":        "gemini-3.7-flash-tiered",
+	"gemini-3.8-flash":               "gemini-3.8-flash",
+	"gemini-3.8-flash-high":          "gemini-3.8-flash-high",
+	"gemini-3.8-flash-low":           "gemini-3.8-flash-low",
+	"gemini-3.8-flash-medium":        "gemini-3.8-flash-medium",
+	"gemini-3.8-flash-tiered":        "gemini-3.8-flash-tiered",
 	"gpt-oss-120b-medium":            "gpt-oss-120b-medium",
 	"tab_flash_lite_preview":         "gemini-3.5-flash-extra-low",
 }
@@ -160,6 +175,8 @@ var DefaultBedrockModelMapping = map[string]string{
 	"claude-opus-4-1":          "us.anthropic.claude-opus-4-1-20250805-v1:0",
 	"claude-opus-4-20250514":   "us.anthropic.claude-opus-4-20250514-v1:0",
 	// Claude Sonnet
+	// Sonnet 5.5 is available on bedrock-runtime through Global inference only.
+	"claude-sonnet-5-5":          "global.anthropic.claude-sonnet-5-5",
 	"claude-sonnet-5":            "us.anthropic.claude-sonnet-5-v1",
 	"claude-sonnet-4-6-thinking": "us.anthropic.claude-sonnet-4-6",
 	"claude-sonnet-4-6":          "us.anthropic.claude-sonnet-4-6",

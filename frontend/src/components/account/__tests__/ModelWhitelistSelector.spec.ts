@@ -26,7 +26,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => (key === 'common.copy' ? '复制' : key)
+      t: (key: string, params?: Record<string, string>) => key === 'common.copy' ? '复制' : key === 'admin.accounts.modelMappingConflict' ? `Model mapping conflict: ${params?.from} → ${params?.to}` : key
     })
   }
 })
@@ -125,6 +125,37 @@ describe('ModelWhitelistSelector', () => {
     await flushPromises()
 
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toEqual(['gemini-pro-agent', 'claude-sonnet-4-6'])
+  })
+
+  it('自定义白名单模型已映射到其他目标时拒绝添加', async () => {
+    const wrapper = mountSelector({ modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }] })
+    await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue(' gpt-latest ')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
+
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('gpt-latest → deepseek-chat'))
+  })
+
+  it('检查映射前仍先给出重复模型提示', async () => {
+    const wrapper = mountSelector({ modelValue: ['gpt-latest'], modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }] })
+    await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('gpt-latest')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
+    expect(showInfo).toHaveBeenCalledWith('admin.accounts.modelExists')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('映射到自身的模型允许加入白名单', async () => {
+    const wrapper = mountSelector({ modelMappings: [{ from: 'gpt-latest', to: 'gpt-latest' }] })
+    await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('gpt-latest')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['gpt-latest']]])
+  })
+
+  it('未传映射属性时仍允许自定义模型', async () => {
+    const wrapper = mountSelector()
+    await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('custom-model')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['custom-model']]])
   })
 
   it('复制模型 ID 时不改变选择状态', async () => {
@@ -253,5 +284,23 @@ describe('ModelWhitelistSelector', () => {
     expect(syncUpstreamModelsPreview).toHaveBeenCalledOnce()
     expect(wrapper.emitted('upstream-synced')).toEqual([[]])
     expect(wrapper.emitted('update:modelValue')).toEqual([[['x-preview-f-free']]])
+  })
+
+  it('shows the upstream sync button for OpenCode Go create-account credentials', () => {
+    const wrapper = mountSelector({
+      platform: 'opencode_go',
+      syncCredentials: {
+        platform: 'opencode_go',
+        type: 'apikey',
+        base_url: 'https://opencode.ai/zen/go/v1',
+        api_key: 'sk-test',
+      },
+    })
+    const syncButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
+
+    expect(syncButton).toBeDefined()
+    expect(syncButton?.exists()).toBe(true)
   })
 })

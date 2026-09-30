@@ -39,11 +39,12 @@ export type SchedulingThresholdPlatformType =
   | "kimi"
   | "zhipu"
   | "minimax"
+  | "opencode_go"
 
 export type AccountSchedulingThresholdsMap = Record<SchedulingThresholdPlatformType, number>
 
 // 与后端 AllowedSchedulingThresholdPlatforms 保持一致（deepseek 为余额型，
-// 走余额检测而非用量阈值；minimax Coding/Token Plan 有 5h/weekly 窗口）。
+// 走余额检测而非用量阈值；minimax Coding/Token Plan 与 OpenCode GO 有滚动窗口）。
 export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] = [
   "openai",
   "anthropic",
@@ -51,6 +52,7 @@ export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] =
   "kimi",
   "zhipu",
   "minimax",
+  "opencode_go",
 ]
 
 export function normalizeAccountSchedulingThresholdsMap(
@@ -638,6 +640,9 @@ export interface SystemSettings {
   openai_codex_client_version_synced: string;
   openai_codex_verified_client_version: string;
   openai_codex_version_auto_sync_enabled: boolean;
+  claude_code_client_version: string;
+  claude_code_client_version_synced: string;
+  claude_code_version_auto_sync_enabled: boolean;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -652,6 +657,7 @@ export interface SystemSettings {
   risk_control_enabled: boolean;
 
   // Cyber session block
+  cyber_policy_user_allowlist: string;
   cyber_session_block_enabled: boolean;
   cyber_session_block_ttl_seconds: number;
 
@@ -682,7 +688,8 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_low_upstream_rate_priority_enabled?: boolean;
-  openai_oauth_scheduling_rate_multiplier?: number;
+  /** null means OAuth accounts use their individual account rates. */
+  openai_oauth_scheduling_rate_multiplier?: number | null;
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
@@ -727,6 +734,9 @@ export interface SystemSettings {
 
   // Available Channels feature switch
   available_channels_enabled: boolean;
+
+  // Subscription feature switch (user sidebar "My Subscriptions" entry)
+  subscription_enabled: boolean;
 
   // Model Plaza feature switches + description
   model_plaza_enabled: boolean;
@@ -954,6 +964,8 @@ export interface UpdateSettingsRequest {
   openai_codex_user_agent?: string;
   openai_codex_client_version?: string;
   openai_codex_version_auto_sync_enabled?: boolean;
+  claude_code_client_version?: string;
+  claude_code_version_auto_sync_enabled?: boolean;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;
@@ -966,6 +978,7 @@ export interface UpdateSettingsRequest {
   risk_control_enabled?: boolean;
 
   // Cyber session block
+  cyber_policy_user_allowlist?: string;
   cyber_session_block_enabled?: boolean;
   cyber_session_block_ttl_seconds?: number;
 
@@ -996,7 +1009,8 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_low_upstream_rate_priority_enabled?: boolean;
-  openai_oauth_scheduling_rate_multiplier?: number;
+  /** Omit to preserve the override; null clears it; zero is an explicit rate. */
+  openai_oauth_scheduling_rate_multiplier?: number | null;
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
@@ -1029,6 +1043,9 @@ export interface UpdateSettingsRequest {
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+
+  // Subscription feature switch
+  subscription_enabled?: boolean;
 
   // Model Plaza feature switches + description
   model_plaza_enabled?: boolean;
@@ -1434,7 +1451,7 @@ export async function updateRectifierSettings(
  * Matches backend dto.OpenAIFastPolicyRule.
  */
 export interface OpenAIFastPolicyRule {
-  service_tier: "all" | "priority" | "flex" | "ultrafast";
+  service_tier: "all" | "priority" | "flex" | "ultrafast" | "missing";
   action: "pass" | "filter" | "block" | "force_priority";
   scope: "all" | "oauth" | "apikey" | "bedrock";
   user_ids?: number[];

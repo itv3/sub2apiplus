@@ -165,11 +165,14 @@ docs/egress/**/.DS_Store
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md
 !docs/KNOWN_FLAKY_TESTS.md
+!docs/codex-credits.md
 !docs/legal/
 !docs/legal/*.md
 !docs/screenshots/
 docs/screenshots/*
 !docs/screenshots/mobile-account-actions-menu.png
+!docs/screenshots/codex-referral-dialog.png
+!docs/screenshots/codex-referral-success.png
 .serena/
 .codex/
 frontend/coverage/
@@ -201,6 +204,7 @@ tools/official_client_capture/**/*.flow
 /local-analysis/
 output/
 .codegraph/
+issues/
 
 # egressscan 构建产物（go build ./cmd/egressscan 的默认输出）
 /backend/egressscan
