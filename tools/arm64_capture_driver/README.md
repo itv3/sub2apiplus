@@ -76,12 +76,33 @@
   `VC0_GATE_TARGET_FAILED`）；2 用法错误；3 准备或执行失败（`VC0_GATE_TARGET_ABORTED`，没有门禁结论）。未通过按普通 VC-0
   失败处理：修门禁、驱动、环境或源码后重跑同一命令（新主体标识，旧结果留档）。
 
-3. 本机：候选提交链（A／C／D 三段，见 `driver/local/`）→ `git bundle` 推到 `$BUNDLE`。
-4. 采集主机：`setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`；本机执行
-   `bash driver/local/local-vc4.sh <ROUND> <C> <DC> <RECEIPT> <输出根> $RUNROOT`：门禁一开始就向采集主机发上传心跳，
-   `local-gate.sh`（check-egress-spec）与 `local-full-regression.sh`（make test）都完成后由 `local-upload.sh` 上传到
-   `$RUNROOT/`。此前心跳要到上传才开始，本机门禁一旦超过 300 秒，vc4-all.sh 就因"上传心跳一直缺失"退出。
+3. 本机：候选提交链（A／C／D 三段，见 `driver/local/local-candidate-chain.sh`）→ `git bundle` 推到 `$BUNDLE`。本机只做
+   提交与打包，不跑测试。
+4. 采集主机：先 `setsid -f bash driver/arm64-vc4-gates.sh > $RUNROOT/arm64-vc4-gates.out 2>&1 < /dev/null`（ARM64 版本地门禁，
+   见下文“ARM64 全量门禁与 ARM64 版 VC-4 门禁”），末行 `ARM64_VC4_GATES_DONE` 后再
+   `setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`：READY 已在，上传等待立即通过，两者不并行。
+   `driver/local/local-vc4.sh` 是改为 ARM64 门禁之前的本机做法，只为解释旧轮次记录保留，新轮次不用。
 5. 采集主机：`setsid -f bash driver/vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null`。
+
+## ARM64 全量门禁与 ARM64 版 VC-4 门禁（测试一律在采集主机执行）
+
+* 两个入口都用 `lib.sh` 的 `clone_test_tree` 建测试树（完整历史、不含 vendor，前端依赖取 lockfile 相同的一份），每项门禁都经
+  `lib.sh` 的 `isolated_run` 执行：隔离方式与 `vc5-gate-target.sh` 的目标平台门禁逐字相同（私有挂载命名空间里只读 tmpfs 遮住
+  `/root/oauth-capture` 别名，树外只读字节码缓存）。make test 里有挂断检测用例，一律 `setsid -f` 启动；不与目标平台门禁、
+  VC-1／VC-5 采集并行（采集主机只有 4 核，资源争用会把计时用例拖红）。
+* `driver/arm64-full-gates.sh <bundle> <分支> <40 位提交> [<前端依赖目录>]`：受管工具每轮修复的部署前提、版本登记变更集与
+  升级收尾的验证。与 CI 逐项对齐，依次全部执行后再下结论：`make test`、backend 的 `make test-unit`／`make test-integration`
+  （采集主机有 Docker，集成测试真实执行）、`golangci-lint run --timeout=30m --build-tags=unit`／`integration`、CI 里的部署
+  脚本测试（从测试树的 `backend-ci.yml` 逐行取出）。结论只写 `$RUNROOT/full-gates/<主体标识>/`（summary.json 与各项
+  stdout／stderr／gate.json），不是 Campaign 收据。退出码：0 全部通过；1 有门禁未通过（其余照跑，测试树保留）；2 用法错误；
+  3 准备失败（没有门禁结论）。
+* `driver/arm64-vc4-gates.sh [<前端依赖目录>]`：替代本机 `local-vc4.sh`，C、DC、RECEIPT、BUNDLE、BUNDLE_BRANCH 取自本轮参数
+  文件。门禁分工沿用本机合同：DC 上 `make check-egress-spec` 与 `make test` 必须通过；C 上只跑 `make check-egress-spec-ci`
+  交叉核对，只允许缺冻结承接收据导致的预期失败（由操作员按日志确认）。DC 必须恰好是 C 加承接收据一个文件，否则不交付。
+  产物直接写入 `$RUNROOT/local-gates`（六件套）与 `$RUNROOT/impl-logs`（旧目录先整体归档），文件名、gate.json 字段与日志
+  格式都与本机上传逐字段相同，随后生成上传清单并写 READY——`vc4-all.sh`、`vc5-all.sh`、`build_gate_facts.py` 都不用改（门禁
+  收据只要求 target-platform 一项的架构等于候选架构）。门禁结论（rc 非零）照常交付并写 READY、退出 1；准备失败不交付、
+  不写 READY、退出 3。
 
 ## 每轮身份与批准集合
 

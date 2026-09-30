@@ -1,12 +1,24 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 59,
+  "file_count": 61,
   "files": [
     {
       "path": "README.md",
-      "sha256": "3e1529e911fe9cc19512650666b34ebf481e98c23245142d2914b37ee6dd62d0",
+      "sha256": "772893398ac285ab2ef0a2565eaa3694f1a171c9fecd6109b7c5e7d0ff1e939c",
       "mode": "0600",
-      "bytes": 20193
+      "bytes": 22715
+    },
+    {
+      "path": "driver/arm64-full-gates.sh",
+      "sha256": "b9c764bef993a6fb8b59ec091a9130081a562c2ca2ef7cb25ecb10a711664b63",
+      "mode": "0700",
+      "bytes": 10064
+    },
+    {
+      "path": "driver/arm64-vc4-gates.sh",
+      "sha256": "daa28ebab3e9732fe3f2d69e00b56168cb5f090cee35f704ce2b2efc4a8a7018",
+      "mode": "0700",
+      "bytes": 12831
     },
     {
       "path": "driver/build.sh",
@@ -130,9 +142,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "97724aedc0fd87972d801725393b6aec910c394e89b88288b5f8f6defe4dafe8",
+      "sha256": "a5bb21874af0ccbe5fd98d816992bd55adf416fd293ffeb3bb9487199e37b9ef",
       "mode": "0700",
-      "bytes": 7439
+      "bytes": 10089
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -357,5 +369,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "cd2c2a1df81b250fbc41e471f8d43af11b7862e8d483553302570a262269bda4"
+  "manifest_sha256": "7a26a1c37c0d2ab30fc1cc29af813f06406ccfa52fec526e5d813b2a4f371f96"
 }

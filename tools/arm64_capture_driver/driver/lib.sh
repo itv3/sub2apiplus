@@ -36,6 +36,39 @@ clone_test_tree() {
   test "$(git -C "$tree" rev-list --count HEAD)" -gt 10000 || { echo "测试树不是完整历史（提交数须 >10000）：$tree" >&2; return 1; }
   test ! -e "$tree/backend/vendor" || { echo "测试树不得含 backend/vendor：$tree" >&2; return 1; }
 }
+# 隔离执行门禁命令（ARM64 全量门禁 arm64-full-gates.sh 与 ARM64 版 VC-4 门禁 arm64-vc4-gates.sh 共用）：
+#   隔离方式与 vc5-gate-target.sh 的目标平台门禁逐字相同——在私有挂载命名空间里用只读空 tmpfs 遮住 /root/oauth-capture
+#   （采集主机上受管工具树的 bind 别名，候选测试树会把它当执行副本比对），树外只读字节码缓存由调用方先用
+#   bytecode_cache.py 重建后传入；历史门禁源码与 TypeScript 解析器路径同目标平台门禁。
+#   标准输出、标准错误分别写入两个文件；返回命令退出码（调用方用 `|| RC=$?` 承接，不受 set -e 影响）。
+# 用法：isolated_run <测试树> <树内相对工作目录> <字节码缓存目录> <标准输出文件> <标准错误文件> <命令…>
+isolated_run() {
+  local tree="$1" workdir="$2" pyc="$3" out="$4" err="$5" rc=0
+  shift 5
+  ( cd "$tree/$workdir" && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
+      CAPTURE_TYPESCRIPT_MODULE="$tree/frontend/node_modules/typescript/lib/typescript.js" \
+      && unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"' isolated-gate "$@" ) \
+    > "$out" 2> "$err" || rc=$?
+  return "$rc"
+}
+# 门禁记录（gate.json）：字段与本机 local-gate.sh／local-full-regression.sh 逐字段相同（build_gate_facts.py 只读
+# command、working_directory、host、architecture、起止时间与退出码），另记测试树、树头提交与隔离方式。
+# 用法：write_gate_json <输出文件> <门禁 ID> <起始 UTC> <结束 UTC> <退出码> <测试树> <工作目录> <命令…>
+write_gate_json() {
+  local out="$1" gate_id="$2" start="$3" end="$4" rc="$5" tree="$6" workdir="$7"
+  shift 7
+  python3 - "$out" "$gate_id" "$start" "$end" "$rc" "$tree" "$workdir" "$(git -C "$tree" rev-parse HEAD)" "$@" <<'PY'
+import json, platform, socket, sys
+out, gate_id, start, end, rc, tree, workdir, head, *command = sys.argv[1:]
+payload = {"gate_id": gate_id, "command": command, "working_directory": workdir,
+           "host": socket.gethostname().split(".")[0], "architecture": f"{platform.system().lower()}/{platform.machine()}",
+           "started_at_utc": start, "completed_at_utc": end, "exit_code": int(rc), "tree": tree, "tree_head": head,
+           "isolation": "unshare -m --propagation private; tmpfs(ro) over /root/oauth-capture (host managed-tool alias hidden)"}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+PY
+  chmod 600 "$out"
+}
 # 管理 token 自动续签（修好接着跑第 33 项）：候选采集用的 admin JWT 由 JWT_EXPIRE_HOUR（默认 24 小时）控制，VC-5 预检要求
 # 剩余 ≥1800 秒，而 run／seal／accept／canonical 全程可能跨越十几个小时。剩余不足 ${ADMIN_TOKEN_MIN_SECONDS:-43200} 秒（12 小时）
 # 或传入 force 时，按 vc23.sh 同一方式在服务容器内重签（旧 token 改名留档、只输出剩余分钟、绝不输出 token 本身）。

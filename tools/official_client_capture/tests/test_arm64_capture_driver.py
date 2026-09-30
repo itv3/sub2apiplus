@@ -16,6 +16,8 @@
   计时用例拖红）；缓存建不成即停。
 * VC-0 预跑目标平台门禁（vc0-gate-target.sh）：复用 vc5-gate-target.sh 同一套执行方式，独立主体标识、门禁根与字节码
   缓存都在 $RUNROOT/vc0-preflight 下，不写候选门禁目录；测试树与 VC-5 的 gates.sh prepare 共用 lib.sh 的 clone_test_tree。
+* 测试一律在采集主机执行：ARM64 全量门禁（arm64-full-gates.sh）与 ARM64 版 VC-4 门禁（arm64-vc4-gates.sh，替代本机
+  local-vc4.sh）经 lib.sh 的 isolated_run 执行，隔离方式与目标平台门禁逐字相同；VC-4 门禁的交付物与本机上传逐字段同格式。
 
 bash 用例只调用脚本本身，chmod／chown 经 PATH 注入的计数包装（记录调用后转调真实命令）。
 """
@@ -1481,6 +1483,303 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             self.assertIn("测试树不是完整历史", result.stdout + result.stderr)
             self.assertIn("VC0_GATE_TARGET_ABORTED", result.stdout)
             self.assertFalse(record.exists())
+
+
+# unshare 垫片：isolated_run 调用形如 unshare -m --propagation private bash -c '<遮挡脚本>' isolated-gate <命令…>，
+# 垫片跳过前 7 个参数，把实际命令、工作目录与隔离环境变量逐行记成 JSON；命令里含 SHIM_FAIL_PATTERN 时以 SHIM_FAIL_RC 退出。
+_ISOLATION_SHIM = """#!/bin/bash
+shift 7
+python3 - "$SHIM_RECORD" "$@" <<'PY'
+import json, os, sys
+record, *command = sys.argv[1:]
+with open(record, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"cwd": os.getcwd(), "command": command,
+                             "pycache": os.environ.get("PYTHONPYCACHEPREFIX"),
+                             "source_root": os.environ.get("CODEX_0_149_1_SOURCE_ROOT"),
+                             "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE")}, ensure_ascii=False) + "\\n")
+PY
+echo "gate-stub-stdout $*"
+echo "gate-stub-stderr" >&2
+if [ -n "${SHIM_FAIL_PATTERN:-}" ] && [[ "$*" == *"$SHIM_FAIL_PATTERN"* ]]; then exit "${SHIM_FAIL_RC:-2}"; fi
+exit 0
+"""
+
+# 候选提交里的 CI 定义：部署脚本测试行（ARM64 全量门禁从这里逐行取出，不在脚本里写死）。
+_CI_WORKFLOW = """jobs:
+  shell:
+    steps:
+      - name: Check deploy scripts
+        run: |
+          /bin/bash -n deploy/apple-container.sh
+          /bin/sh deploy/tests/docker-compose-security-test.sh
+  test:
+    steps:
+      - name: Check Docker Compose simple mode environment
+        run: /bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh
+"""
+
+
+class Arm64GateScriptTests(unittest.TestCase):
+    """ARM64 全量门禁（arm64-full-gates.sh）与 ARM64 版 VC-4 门禁（arm64-vc4-gates.sh）：测试一律在采集主机执行。
+
+    * 全量门禁：make test、backend test-unit／test-integration、golangci-lint unit／integration 与 CI 里的部署脚本测试依次全部执行，
+      都经 isolated_run（与目标平台门禁同一隔离方式）；任一未通过退出 1 且其余照跑；结论只写 $RUNROOT/full-gates；
+    * VC-4 门禁：DC 上 check-egress-spec 与 make test、C 上只跑 check-egress-spec-ci；产物与本机上传逐字段同格式，
+      上传清单可被 vc4-all.sh 同一核验通过，READY 写在最后；DC 必须恰好是 C 加承接收据，否则不交付；
+    * 用法错误退出 2，准备失败与并发退出 3。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._template_root = tempfile.TemporaryDirectory()
+        cls.template = Path(cls._template_root.name).resolve() / "history"
+        _history_repo(cls.template, commits=10001)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._template_root.cleanup()
+
+    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2):
+        fixture = _DriverFixture(root)
+        hist = fixture.data_root / "candidates" / "hist"
+        _git(root, "clone", "-q", str(self.template), str(hist))
+        typescript = hist / "frontend" / "node_modules" / "typescript" / "lib"
+        typescript.mkdir(parents=True)
+        (typescript / "typescript.js").write_text("// 前序测试树的 TypeScript\n", encoding="utf-8")
+        work = root / "work"
+        _git(root, "clone", "-q", str(hist), str(work))
+        drv = root / "drv"
+        drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py"):
+            (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        bin_dir = root / "bin"
+        bin_dir.mkdir(mode=0o700)
+        shim = bin_dir / "unshare"
+        shim.write_text(_ISOLATION_SHIM, encoding="utf-8")
+        shim.chmod(0o700)
+        record = root / "gate-commands.jsonl"
+        env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
+               "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
+        return fixture, work, drv, record, env
+
+    @staticmethod
+    def _commands(record: Path) -> list[dict]:
+        if not record.exists():
+            return []
+        return [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _candidate(work: Path, branch: str, *, with_ci: bool = True) -> str:
+        _git(work, "checkout", "-q", "-B", branch, "main")
+        (work / "backend").mkdir(exist_ok=True)
+        (work / "backend" / "Makefile").write_text("test-unit:\n\ttrue\n", encoding="utf-8")
+        if with_ci:
+            workflow = work / ".github" / "workflows" / "backend-ci.yml"
+            workflow.parent.mkdir(parents=True, exist_ok=True)
+            workflow.write_text(_CI_WORKFLOW, encoding="utf-8")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "--no-verify", "-m", "candidate")
+        return _git(work, "rev-parse", "HEAD")
+
+    @staticmethod
+    def _set_env(fixture: _DriverFixture, **overrides: str) -> None:
+        lines = []
+        for line in fixture.env_file.read_text(encoding="utf-8").splitlines():
+            key = line.split("=", 1)[0]
+            lines.append(f"{key}=\"{overrides[key]}\"" if key in overrides else line)
+        fixture.env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # ---- ARM64 全量门禁 ----
+
+    def test_full_gates_run_every_ci_gate_isolated_and_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            commit = self._candidate(work, "codex/full-gates")
+            bundle = root / "upload" / "full.bundle"
+            bundle.parent.mkdir()
+            _git(work, "bundle", "create", "-q", str(bundle), "main..codex/full-gates")
+            result = _run(drv / "arm64-full-gates.sh", str(bundle), "codex/full-gates", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("FULL_GATES_DONE rc=0", result.stdout)
+            fg = fixture.runroot / "full-gates"
+            subject = next(path for path in fg.iterdir() if path.name.startswith("full-gates-"))
+            summary = json.loads((subject / "summary.json").read_text(encoding="utf-8"))
+            expected = ["full-regression", "backend-unit", "backend-integration", "lint-unit", "lint-integration", "deploy-scripts"]
+            self.assertEqual([gate["gate_id"] for gate in summary["gates"]], expected)
+            self.assertEqual((summary["status"], summary["campaign_receipt"], summary["source"]["tree_head"]), ("passed", False, commit))
+            commands = self._commands(record)
+            tree = str(fg / "test-tree")
+            self.assertEqual([(entry["cwd"], entry["command"][:2]) for entry in commands[:5]], [
+                (tree, ["make", "test"]), (f"{tree}/backend", ["make", "test-unit"]), (f"{tree}/backend", ["make", "test-integration"]),
+                (f"{tree}/backend", ["golangci-lint", "run"]), (f"{tree}/backend", ["golangci-lint", "run"])])
+            self.assertEqual([entry["command"][-1] for entry in commands[3:5]], ["--build-tags=unit", "--build-tags=integration"])
+            deploy = commands[5]["command"]
+            self.assertEqual(deploy[:2], ["bash", "-c"])
+            # 多行 run 块里的两行与 `run:` 同一行的单行写法都要取到，按 CI 定义的顺序逐行执行。
+            executed = [line for line in deploy[2].splitlines() if line.startswith("/bin/")]
+            self.assertEqual(executed, ["/bin/bash -n deploy/apple-container.sh", "/bin/sh deploy/tests/docker-compose-security-test.sh",
+                                        "/bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh"])
+            for entry in commands:
+                self.assertEqual(entry["pycache"], str(fg / "pycache"))
+                self.assertEqual(entry["typescript"], f"{tree}/frontend/node_modules/typescript/lib/typescript.js")
+            gate = json.loads((subject / "logs" / "backend-unit.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual((gate["gate_id"], gate["command"], gate["working_directory"], gate["exit_code"], gate["tree_head"]),
+                             ("backend-unit", ["make", "test-unit"], "backend", 0, commit))
+            self.assertFalse((fg / "test-tree").exists())
+            self.assertFalse((fg / "pycache").exists())
+            self.assertFalse((fg / ".lock").exists())
+            self.assertEqual(list(fixture.data_root.rglob("__pycache__")), [])
+            self.assertFalse((fixture.runroot / "local-gates").exists(), "全量门禁不得写 VC-4 交付目录")
+
+    def test_full_gates_report_failure_but_run_every_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root, fail_pattern="test-integration", fail_rc=2)
+            commit = self._candidate(work, "codex/full-gates")
+            bundle = root / "upload" / "full.bundle"
+            bundle.parent.mkdir()
+            _git(work, "bundle", "create", "-q", str(bundle), "main..codex/full-gates")
+            result = _run(drv / "arm64-full-gates.sh", str(bundle), "codex/full-gates", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FULL_GATES_FAILED", result.stdout)
+            self.assertIn("failed=backend-integration", result.stdout)
+            self.assertEqual(len(self._commands(record)), 6, "未通过的一项不能打断其余门禁")
+            fg = fixture.runroot / "full-gates"
+            subject = next(path for path in fg.iterdir() if path.name.startswith("full-gates-"))
+            summary = json.loads((subject / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "failed")
+            self.assertEqual({gate["gate_id"]: gate["exit_code"] for gate in summary["gates"]}["backend-integration"], 2)
+            self.assertEqual(_git(fg / "test-tree", "rev-parse", "HEAD"), commit, "未通过时保留测试树供排查")
+
+    def test_full_gates_reject_missing_ci_deploy_tests_usage_and_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            commit = self._candidate(work, "codex/full-gates", with_ci=False)
+            bundle = root / "upload" / "full.bundle"
+            bundle.parent.mkdir()
+            _git(work, "bundle", "create", "-q", str(bundle), "main..codex/full-gates")
+            result = _run(drv / "arm64-full-gates.sh", str(bundle), "codex/full-gates", commit, env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("FULL_GATES_ABORTED", result.stdout)
+            self.assertEqual(self._commands(record), [], "取不到部署脚本测试时不得开跑任何门禁")
+            for label, arguments in {"参数个数": (str(bundle), "codex/full-gates"), "提交不是 40 位": (str(bundle), "codex/full-gates", commit[:12]),
+                                     "bundle 相对路径": ("upload/full.bundle", "codex/full-gates", commit)}.items():
+                with self.subTest(label):
+                    self.assertEqual(_run(drv / "arm64-full-gates.sh", *arguments, env=env, cwd=root).returncode, 2)
+            lock = fixture.runroot / "full-gates" / ".lock"
+            lock.mkdir(parents=True, exist_ok=True)
+            (lock / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+            again = _run(drv / "arm64-full-gates.sh", str(bundle), "codex/full-gates", commit, env=env, cwd=root)
+            self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
+            self.assertIn("拒绝并发", again.stdout)
+            self.assertTrue(lock.is_dir())
+
+    # ---- ARM64 版 VC-4 门禁 ----
+
+    def _vc4_chain(self, fixture: _DriverFixture, work: Path, *, extra_in_dc: bool = False) -> tuple[str, str, str]:
+        c = self._candidate(work, "codex/x")
+        receipt = "docs/egress/maintenance/upstream-codex-test-candidate-freeze-successor.json"
+        (work / receipt).parent.mkdir(parents=True, exist_ok=True)
+        (work / receipt).write_text("{}\n", encoding="utf-8")
+        if extra_in_dc:
+            (work / "README.md").write_text("承接提交夹带的改动\n", encoding="utf-8")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-q", "--no-verify", "-m", "freeze successor")
+        dc = _git(work, "rev-parse", "HEAD")
+        bundle = fixture.data_root / "staging" / "x.bundle"
+        _git(work, "bundle", "create", "-q", str(bundle), "main..codex/x")
+        self._set_env(fixture, C=c, DC=dc, RECEIPT=receipt, BUNDLE=str(bundle), BUNDLE_BRANCH="codex/x")
+        return c, dc, receipt
+
+    def test_vc4_gates_deliver_local_gate_contract_for_vc4_all(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            c, dc, receipt = self._vc4_chain(fixture, work)
+            stale = fixture.runroot / "impl-logs"
+            stale.mkdir(mode=0o700)
+            (stale / "READY").write_text("", encoding="utf-8")
+            (stale / "stale.log").write_text("上一轮残留\n", encoding="utf-8")
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ARM64_VC4_GATES_DONE rc=0", result.stdout)
+            work_root = fixture.runroot / "arm64-vc4-gates"
+            commands = self._commands(record)
+            self.assertEqual([(Path(entry["cwd"]).name, entry["command"]) for entry in commands], [
+                ("wt-D", ["make", "check-egress-spec"]), ("wt-C", ["make", "check-egress-spec-ci"]), ("wt-D", ["make", "test"])])
+            gates = fixture.runroot / "local-gates"
+            self.assertEqual(sorted(path.name for path in gates.iterdir()), sorted(
+                f"{gate}.{kind}" for gate in ("check-egress-spec", "full-regression") for kind in ("gate.json", "stdout.log", "stderr.log")))
+            for gate_id, command in (("check-egress-spec", ["make", "check-egress-spec"]), ("full-regression", ["make", "test"])):
+                meta = json.loads((gates / f"{gate_id}.gate.json").read_text(encoding="utf-8"))
+                self.assertEqual((meta["gate_id"], meta["command"], meta["working_directory"], meta["exit_code"], meta["tree_head"]),
+                                 (gate_id, command, ".", 0, dc))
+                for field in ("host", "architecture", "started_at_utc", "completed_at_utc"):
+                    self.assertTrue(meta[field], field)
+            impl = fixture.runroot / "impl-logs"
+            spec = (impl / "check-egress-spec.log").read_text(encoding="utf-8")
+            self.assertIn(f"candidate_commit={c}（", spec)
+            self.assertIn(f"executed_on_commit={dc}（", spec)
+            # implementation_gates.py 与 vc4-all.sh 的读法：标题之后恰好一行 exit_code=0。
+            self.assertEqual(re.findall(r"^exit_code=(-?\d+)$", spec.split("## make check-egress-spec", 1)[1], re.M), ["0"])
+            cross = (impl / "cross-check" / "check-egress-spec.C-only.local.log").read_text(encoding="utf-8")
+            self.assertIn(f"commit={c}\n", cross)
+            self.assertTrue((impl / "READY").is_file())
+            verify = subprocess.run([sys.executable, str(drv / "upload_manifest.py"), "verify", str(fixture.runroot)],
+                                    capture_output=True, text=True, env={**os.environ, "C": c, "DC": dc})
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            subject = next(path for path in work_root.iterdir() if path.name.startswith("arm64-vc4-gates-"))
+            self.assertEqual((subject / "superseded" / "impl-logs" / "stale.log").read_text(encoding="utf-8"), "上一轮残留\n")
+            self.assertFalse((impl / "stale.log").exists(), "旧产物必须整体归档，不能混进本次交付")
+            summary = json.loads((subject / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual((summary["status"], summary["candidate_commit"], summary["executed_on_commit"]), ("passed", c, dc))
+            for path in (gates, impl):
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            self.assertFalse((work_root / "wt-D").exists())
+            self.assertFalse((work_root / ".lock").exists())
+
+    def test_vc4_gates_deliver_failed_conclusion_with_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root, fail_pattern="make test", fail_rc=2)
+            c, dc, receipt = self._vc4_chain(fixture, work)
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("ARM64_VC4_GATES_FAILED", result.stdout)
+            meta = json.loads((fixture.runroot / "local-gates" / "full-regression.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["exit_code"], 2)
+            self.assertTrue((fixture.runroot / "impl-logs" / "READY").is_file(), "门禁结论照常交付，由 VC-4／VC-5 判定")
+            self.assertEqual(_git(fixture.runroot / "arm64-vc4-gates" / "wt-D", "rev-parse", "HEAD"), dc)
+
+    def test_vc4_gates_refuse_chain_drift_and_placeholder_commits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, work, drv, record, env = self._fixture(root)
+            self._vc4_chain(fixture, work, extra_in_dc=True)
+            result = _run(drv / "arm64-vc4-gates.sh", env=env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("C..DC 的改动必须只有", result.stdout)
+            self.assertFalse((fixture.runroot / "impl-logs" / "READY").exists(), "准备失败不得写 READY")
+            self.assertEqual(self._commands(record), [])
+            self._set_env(fixture, C="0" * 40)
+            self.assertEqual(_run(drv / "arm64-vc4-gates.sh", env=env, cwd=root).returncode, 2)
+
+    def test_isolation_matches_target_platform_gate(self) -> None:
+        """isolated_run 的遮挡命令必须与 vc5-gate-target.sh 目标平台门禁逐字相同，避免两套隔离方式漂移。"""
+
+        mount = "mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture"
+        self.assertIn(f"unshare -m --propagation private bash -c '{mount} && exec make test'",
+                      (SCRIPTS / "vc5-gate-target.sh").read_text(encoding="utf-8"))
+        self.assertIn(f"unshare -m --propagation private bash -c '{mount} && exec \"$@\"' isolated-gate",
+                      (SCRIPTS / "lib.sh").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
