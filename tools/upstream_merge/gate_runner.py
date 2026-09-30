@@ -1,0 +1,394 @@
+"""上游合并 U-4 全量门禁的编排：检查线遇错不停，采集工具分片并行。
+
+旧的 full-regression 命令用 ``&&`` 串起 test-gate、前端、采集工具与出站规格检查：第一个
+失败之后其余全部不执行，一轮只能暴露一处问题；采集工具 2879 条用例单进程串行，占去全程
+七成时间。本模块把检查拆成互不依赖的“检查线”：每条线内部按原有顺序依次执行，但前一步
+失败不影响后一步；全部结束后按线顺序输出完整日志和汇总表，任一步骤失败即整体失败。
+
+检查线：
+
+- ``go-tests``：默认、unit、integration 三组 ``go test -count=1 ./...`` 依次执行。三组不能
+  合并——unit 标签会把替代实现编译进生产代码，默认组是唯一按生产编译形态运行的一组。
+  三组之间保持串行：每组内部已按 GOMAXPROCS 并行，同时跑三组只会互相争抢 CPU。
+- ``lint``：golangci-lint 默认、unit、integration 三种标签依次执行，与 CI 的覆盖一致。
+- ``frontend``：lint:check、typecheck、关键 vitest 依次执行。
+- ``capture-tools``：采集工具测试的 4 片并行版本，分片并集等于全量由分片自检保证；各片
+  完整日志在步骤结束后附进本线日志。
+- ``egress-spec``：``make -k check-egress-spec``，已含 test-official-client-control 与
+  test-upstream-merge-tools；``-k`` 让互不依赖的子目标在前一个失败后继续执行。
+
+``backend`` 模式只跑前两条线，供 ``backend/Makefile`` 的 test-gate 使用；``full`` 模式跑
+全部五条，供根 Makefile 的 upstream-gate-full 使用。
+
+同时运行的检查线数由 ``--jobs`` 或环境变量 ``UPSTREAM_GATE_JOBS`` 控制，默认 1：检查线
+依次执行，只有采集工具在线内 4 片并行。实测五条线全部并行时（10 核、16 GiB）总耗时 1129
+秒，但满载下计时敏感用例会误判——``TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime``
+与采集工具第 2 片的 4 条用例失败，单独重跑全部通过。门禁结论不能依赖机器负载，所以默认不让
+检查线之间并行；确认用例稳定后可以显式调大。
+
+验收用：设置 ``UPSTREAM_GATE_GO_JSON_DIR`` 时，go test 以 ``-json`` 执行，事件流按标签写入
+该目录，便于按“标签、包、测试名”比对两次运行的测试集合；失败用例的输出摘进本线日志。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Sequence
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "codex-cli-0.149.1"
+# go test 与 golangci-lint 共用的三组构建标签；空字符串表示默认标签。
+BUILD_TAGS = ("", "unit", "integration")
+MODES = ("backend", "full")
+GO_JSON_DIR_ENV = "UPSTREAM_GATE_GO_JSON_DIR"
+
+
+@dataclass(frozen=True)
+class Step:
+    """检查线里的一个步骤：命令、相对仓库根的工作目录与额外环境变量。"""
+
+    name: str
+    argv: tuple[str, ...]
+    cwd: str = "."
+    env: tuple[tuple[str, str], ...] = ()
+    # go test 的 JSON 事件流输出文件名；只在设置 UPSTREAM_GATE_GO_JSON_DIR 时生效。
+    go_json_name: str | None = None
+    # 步骤结束后把该环境变量指向目录里的 *.log 附进本线日志（采集工具各分片的完整输出）。
+    attach_log_dir_env: str | None = None
+
+
+@dataclass(frozen=True)
+class Lane:
+    """一条检查线：步骤依次执行、遇错不停；不同检查线之间可以并行。"""
+
+    name: str
+    steps: tuple[Step, ...]
+
+
+@dataclass(frozen=True)
+class StepResult:
+    lane: str
+    step: str
+    status: str
+    exit_code: int | None
+    duration_seconds: float
+
+
+def _tag_label(tag: str) -> str:
+    return tag or "default"
+
+
+def _go_test_step(tag: str) -> Step:
+    argv = ["go", "test"]
+    if tag:
+        argv.append(f"-tags={tag}")
+    argv += ["-count=1", "./..."]
+    return Step(
+        name=f"go-test-{_tag_label(tag)}",
+        argv=tuple(argv),
+        cwd="backend",
+        go_json_name=f"go-test-{_tag_label(tag)}.jsonl",
+    )
+
+
+def _lint_step(tag: str) -> Step:
+    argv = ["golangci-lint", "run"]
+    if tag:
+        argv.append(f"--build-tags={tag}")
+    argv.append("./...")
+    return Step(name=f"golangci-lint-{_tag_label(tag)}", argv=tuple(argv), cwd="backend")
+
+
+def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
+    """按模式给出检查线；顺序即日志输出顺序。"""
+
+    if mode not in MODES:
+        raise ValueError(f"未知模式：{mode}")
+    lanes = [
+        Lane("go-tests", tuple(_go_test_step(tag) for tag in BUILD_TAGS)),
+        Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS)),
+    ]
+    if mode == "backend":
+        return lanes
+    lanes += [
+        Lane(
+            "frontend",
+            (
+                Step("frontend-lint", ("pnpm", "--dir", "frontend", "run", "lint:check")),
+                Step("frontend-typecheck", ("pnpm", "--dir", "frontend", "run", "typecheck")),
+                Step("frontend-critical-vitest", ("make", "test-frontend-critical")),
+            ),
+        ),
+        Lane(
+            "capture-tools",
+            (
+                Step(
+                    "capture-tools-parallel",
+                    ("make", "test-capture-tools-parallel"),
+                    attach_log_dir_env="CAPTURE_TEST_SHARD_LOG_DIR",
+                ),
+            ),
+        ),
+        Lane(
+            "egress-spec",
+            (
+                Step(
+                    "check-egress-spec",
+                    ("make", "-k", f"CODEX_0_149_1_SOURCE_ROOT={codex_source_root}", "check-egress-spec"),
+                ),
+            ),
+        ),
+    ]
+    return lanes
+
+
+def default_jobs() -> int:
+    """同时运行的检查线数：默认 1，理由见模块说明。"""
+
+    raw = os.environ.get("UPSTREAM_GATE_JOBS", "").strip()
+    if raw:
+        value = int(raw)
+        if value < 1:
+            raise ValueError("UPSTREAM_GATE_JOBS 必须是正整数")
+        return value
+    return 1
+
+
+class _Runner:
+    """执行检查线并记录每个步骤的结果；中断时终止全部子进程组。"""
+
+    def __init__(self, repository_root: Path, log_dir: Path, env: dict[str, str]) -> None:
+        self.repository_root = repository_root
+        self.log_dir = log_dir
+        self.env = env
+        self.go_json_dir = env.get(GO_JSON_DIR_ENV) or None
+        self._lock = threading.Lock()
+        self._processes: set[subprocess.Popen[bytes]] = set()
+        self._stopping = False
+
+    def log_path(self, lane: Lane) -> Path:
+        return self.log_dir / f"{lane.name}.log"
+
+    def run_lane(self, lane: Lane) -> list[StepResult]:
+        results: list[StepResult] = []
+        with self.log_path(lane).open("ab") as log:
+            for step in lane.steps:
+                results.append(self._run_step(lane, step, log))
+        return results
+
+    def _run_step(self, lane: Lane, step: Step, log) -> StepResult:
+        header = f"--- [{lane.name}] {step.name}: {' '.join(step.argv)}（目录 {step.cwd}）\n"
+        log.write(header.encode("utf-8"))
+        log.flush()
+        env = dict(self.env)
+        env.update(dict(step.env))
+        argv = list(step.argv)
+        json_output = None
+        if self.go_json_dir and step.go_json_name:
+            # go test 的 -json 必须放在包参数之前。
+            argv.insert(2, "-json")
+            json_output = Path(self.go_json_dir) / step.go_json_name
+            log.write(f"go test 事件流写入 {json_output}\n".encode("utf-8"))
+            log.flush()
+        started = time.monotonic()
+        stdout = json_output.open("wb") if json_output is not None else log
+        try:
+            with self._lock:
+                if self._stopping:
+                    log.write("已中止：未启动\n".encode("utf-8"))
+                    log.flush()
+                    return StepResult(lane.name, step.name, "failed", None, 0.0)
+                try:
+                    process = subprocess.Popen(
+                        argv,
+                        cwd=self.repository_root / step.cwd,
+                        stdout=stdout,
+                        stderr=log,
+                        env=env,
+                        start_new_session=True,
+                    )
+                except OSError as error:
+                    log.write(f"无法启动：{error}\n".encode("utf-8"))
+                    log.flush()
+                    return StepResult(lane.name, step.name, "failed", None, 0.0)
+                self._processes.add(process)
+            try:
+                exit_code = process.wait()
+            finally:
+                with self._lock:
+                    self._processes.discard(process)
+        finally:
+            if json_output is not None:
+                stdout.close()
+        duration = time.monotonic() - started
+        status = "passed" if exit_code == 0 else "failed"
+        if step.attach_log_dir_env:
+            _attach_logs(env.get(step.attach_log_dir_env), log)
+        if json_output is not None:
+            _append_go_json_failures(json_output, log)
+        log.write(f"--- [{lane.name}] {step.name}: 退出码 {exit_code}，{duration:.1f} 秒\n".encode("utf-8"))
+        log.flush()
+        return StepResult(lane.name, step.name, status, exit_code, round(duration, 1))
+
+    def stop_all(self) -> None:
+        with self._lock:
+            self._stopping = True
+            processes = list(self._processes)
+        for process in processes:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+
+
+def _attach_logs(directory: str | None, log) -> None:
+    """把目录里的 *.log 按文件名顺序附进检查线日志；目录缺失时记一行说明。"""
+
+    if not directory or not Path(directory).is_dir():
+        log.write(f"附加日志目录不存在：{directory}\n".encode("utf-8"))
+        return
+    for path in sorted(Path(directory).glob("*.log")):
+        log.write(f"--- 附：{path.name} ---\n".encode("utf-8"))
+        with path.open("rb") as handle:
+            shutil.copyfileobj(handle, log)
+    log.flush()
+
+
+def _append_go_json_failures(path: Path, log) -> None:
+    """-json 模式下 go test 的输出在事件流里；把失败用例与失败包的输出摘进检查线日志。"""
+
+    outputs: dict[tuple[str, str], list[str]] = {}
+    failed: list[tuple[str, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        log.write(f"无法读取 go test 事件流：{error}\n".encode("utf-8"))
+        return
+    for line in lines:
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        key = (str(event.get("Package") or ""), str(event.get("Test") or ""))
+        if event.get("Action") == "output":
+            outputs.setdefault(key, []).append(str(event.get("Output") or ""))
+        elif event.get("Action") == "fail":
+            failed.append(key)
+    for package, test in failed:
+        label = f"{package} {test}".strip()
+        log.write(f"--- go test 失败：{label} ---\n".encode("utf-8"))
+        log.write("".join(outputs.get((package, test), [])[-200:]).encode("utf-8"))
+    log.flush()
+
+
+def run_lanes(
+    lanes: Sequence[Lane],
+    *,
+    jobs: int,
+    repository_root: Path = REPOSITORY_ROOT,
+    env: dict[str, str] | None = None,
+    log_dir: Path | None = None,
+    stream=None,
+) -> tuple[list[StepResult], float]:
+    """并行执行检查线，全部结束后按线顺序把日志写到 stream，返回结果与总耗时。"""
+
+    if jobs < 1:
+        raise ValueError("jobs 必须是正整数")
+    stream = stream if stream is not None else sys.stdout.buffer
+    owned_log_dir = log_dir is None
+    log_dir = Path(tempfile.mkdtemp(prefix="upstream-gate-")) if log_dir is None else log_dir
+    base_env = dict(os.environ if env is None else env)
+    base_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # 采集工具分片日志默认落在共享临时目录；每次运行单独一份，避免并行或重复运行互相覆盖。
+    base_env.setdefault("CAPTURE_TEST_SHARD_LOG_DIR", str(log_dir / "capture-test-shards"))
+    runner = _Runner(repository_root, log_dir, base_env)
+    started = time.monotonic()
+    results: dict[str, list[StepResult]] = {}
+    previous_handler = None
+    if threading.current_thread() is threading.main_thread():
+        def _terminate(_signum, _frame):
+            # gates-run 或操作员终止编排时，按 Ctrl-C 同样的路径收掉全部子进程组。
+            raise KeyboardInterrupt
+
+        previous_handler = signal.signal(signal.SIGTERM, _terminate)
+    try:
+        with ThreadPoolExecutor(max_workers=min(jobs, max(len(lanes), 1))) as pool:
+            futures = {lane.name: pool.submit(runner.run_lane, lane) for lane in lanes}
+            try:
+                for name, future in futures.items():
+                    results[name] = future.result()
+            except BaseException:
+                runner.stop_all()
+                raise
+    finally:
+        if previous_handler is not None:
+            signal.signal(signal.SIGTERM, previous_handler)
+    elapsed = round(time.monotonic() - started, 1)
+    for lane in lanes:
+        stream.write(f"\n===== 检查线 {lane.name} =====\n".encode("utf-8"))
+        path = runner.log_path(lane)
+        if path.is_file():
+            with path.open("rb") as handle:
+                shutil.copyfileobj(handle, stream)
+    ordered = [result for lane in lanes for result in results[lane.name]]
+    stream.write(render_summary(ordered, jobs=jobs, elapsed=elapsed).encode("utf-8"))
+    stream.flush()
+    if owned_log_dir:
+        shutil.rmtree(log_dir, ignore_errors=True)
+    return ordered, elapsed
+
+
+def render_summary(results: Sequence[StepResult], *, jobs: int, elapsed: float) -> str:
+    lines = [
+        "",
+        f"===== 上游合并门禁汇总（并发上限 {jobs}，总耗时 {elapsed} 秒）=====",
+        f"{'检查线':<16}{'步骤':<30}{'结果':<10}{'耗时(秒)':>10}",
+    ]
+    for result in results:
+        lines.append(f"{result.lane:<16}{result.step:<30}{result.status:<10}{result.duration_seconds:>10}")
+    failed = [f"{item.lane}/{item.step}" for item in results if item.status != "passed"]
+    lines.append("结论：全部通过" if not failed else f"结论：失败 {len(failed)} 项：{', '.join(failed)}")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python3 -m tools.upstream_merge.gate_runner",
+        description="上游合并 U-4 门禁的并行编排：检查线并行、线内遇错不停、结束后统一汇总",
+    )
+    parser.add_argument("mode", choices=MODES, help="backend 只跑 go test 与 lint；full 跑全部检查线")
+    parser.add_argument("--jobs", type=int, help="同时运行的检查线数；默认取 UPSTREAM_GATE_JOBS，未设置时为 1")
+    parser.add_argument(
+        "--codex-source-root",
+        type=Path,
+        default=DEFAULT_CODEX_SOURCE_ROOT,
+        help="check-egress-spec-local-source 使用的只读 Codex 源码根",
+    )
+    arguments = parser.parse_args(argv)
+    try:
+        jobs = arguments.jobs if arguments.jobs is not None else default_jobs()
+    except ValueError as error:
+        parser.error(f"并发上限非法：{error}")
+    if jobs < 1:
+        parser.error("--jobs 必须是正整数")
+    lanes = build_lanes(arguments.mode, arguments.codex_source_root)
+    results, _elapsed = run_lanes(lanes, jobs=jobs)
+    return 0 if all(item.status == "passed" for item in results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,6 @@
 {
   "schema_version": "official-egress-upstream-merge-request-template/v1",
-  "purpose": "标准 request/v2 骨架：12 类逻辑门禁映射到 5 个物理执行组，full-regression 组覆盖 CI test job 的 unit 与 integration 标签并固定 -count=1。preflight 的模板有效性检查以此为准；生成正式 request 时只替换占位符，不得改动门禁定义。",
+  "purpose": "标准 request/v2 骨架：12 类逻辑门禁映射到 3 个物理执行组。full-regression 组由根 Makefile 的 upstream-gate-full 执行：go test（默认、unit、integration 三组均跑 ./...，固定 -count=1）、golangci-lint 三种标签、前端、采集工具四片、出站规格五条检查线依次执行、遇错不停，采集工具分片并行；官方出站与 service 包的门禁并入该组，不再单独重复执行。preflight 的模板有效性检查以此为准；生成正式 request 时只替换占位符，不得改动门禁定义。",
   "placeholders": {
     "{plan_root}": "本次 Plan 的私有目录（仓库外），例如 ~/Developer/.sub2apiplus-upstream/<tag>-<date>-<seq>",
     "{repository}": "fork 仓库绝对路径；门禁 argv 中的占位符由工具在执行时渲染",
@@ -89,91 +89,84 @@
         "id": "01-claude-active-wire",
         "category": "claude_active_wire",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "official-egress-wire",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/officialegress/...",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "02-claude-ingress-matrix",
         "category": "claude_ingress_matrix",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "service-persona-matrix",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/service",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "03-claude-rollback-wire",
         "category": "claude_rollback_wire",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "official-egress-wire",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/officialegress/...",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "04-codex-active-wire",
         "category": "codex_active_wire",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "official-egress-wire",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/officialegress/...",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "05-codex-ingress-matrix",
         "category": "codex_ingress_matrix",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "service-persona-matrix",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/service",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "06-codex-rollback-wire",
         "category": "codex_rollback_wire",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "official-egress-wire",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/officialegress/...",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
         "id": "07-cross-persona",
         "category": "cross_persona",
         "mode": "command",
-        "cwd": "backend",
-        "execution_group": "service-persona-matrix",
+        "cwd": ".",
+        "execution_group": "full-regression",
         "argv": [
-          "go",
-          "test",
-          "./internal/service",
-          "-count=1"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
@@ -196,9 +189,9 @@
         "cwd": ".",
         "execution_group": "full-regression",
         "argv": [
-          "sh",
-          "-c",
-          "make -C backend test-gate && make CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1 test-frontend test-capture-tools test-official-client-control check-egress-spec"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
@@ -221,9 +214,9 @@
         "cwd": ".",
         "execution_group": "full-regression",
         "argv": [
-          "sh",
-          "-c",
-          "make -C backend test-gate && make CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1 test-frontend test-capture-tools test-official-client-control check-egress-spec"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       },
       {
@@ -233,9 +226,9 @@
         "cwd": ".",
         "execution_group": "full-regression",
         "argv": [
-          "sh",
-          "-c",
-          "make -C backend test-gate && make CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1 test-frontend test-capture-tools test-official-client-control check-egress-spec"
+          "make",
+          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "upstream-gate-full"
         ]
       }
     ]

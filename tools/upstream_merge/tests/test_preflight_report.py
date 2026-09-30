@@ -97,7 +97,7 @@ class TemplateValidityTest(unittest.TestCase):
         report = template_validity(self.root, self.request, self.template)
         self.assertEqual(report["findings"], [])
         self.assertEqual(report["status"], "passed")
-        self.assertEqual(report["execution_group_count"], 5)
+        self.assertEqual(report["execution_group_count"], 3)
         self.assertEqual(report["gate_count"], 12)
 
     def test_rendered_repository_placeholder_matches(self) -> None:

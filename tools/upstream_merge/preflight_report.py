@@ -18,7 +18,7 @@ from .gitops import _tool_source_paths, changed_paths
 
 REQUEST_TEMPLATE_RELATIVE = "tools/upstream_merge/request_template_v2.json"
 REQUEST_TEMPLATE_SCHEMA = "official-egress-upstream-merge-request-template/v1"
-EXPECTED_EXECUTION_GROUP_COUNT = 5
+EXPECTED_EXECUTION_GROUP_COUNT = 3
 GATE_COMPARE_FIELDS = ("id", "category", "mode", "cwd", "execution_group", "argv")
 OFFICIAL_EGRESS_ROOT = "backend/internal/officialegress"
 CLAUDE_RELEASE_CATALOG = f"{OFFICIAL_EGRESS_ROOT}/catalogdata/claude/release-catalog.json"

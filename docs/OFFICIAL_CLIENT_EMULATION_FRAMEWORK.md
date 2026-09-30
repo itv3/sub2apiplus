@@ -456,11 +456,11 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 - request 从 `tools/upstream_merge/request_template_v2.json` 渲染占位符生成，Active/Rollback 路径与目标
   版本从当前 release catalog 解析，不复制上一轮请求；生成后立即做 JSON 解析和 schema 校验。
 - 计划目录只创建 `inputs/` 与 `evidence/`，权限 0700；worktree 目录由 `plan-create` 自行创建。
-- 门禁必须是执行组模式（12 类逻辑门禁映射到 5 个物理执行组），不得沿用 `receipt_replay` 类型。
+- 门禁必须是执行组模式（12 类逻辑门禁映射到 3 个物理执行组），不得沿用 `receipt_replay` 类型。
 - 门禁命令显式绑定本地只读源码根（如 `CODEX_0_149_1_SOURCE_ROOT`），不依赖被 `.gitignore` 排除的路径
   在候选 worktree 中存在。
-- 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖；缺失时完整回归组会在
-  前端步骤静默中断，其后的检查根本不执行，门禁"通过"没有意义。
+- 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖；缺失时前端与采集工具
+  检查线失败，门禁不能通过。
 
 `preflight` 的报告写到仓库之外。预检只在临时隔离 worktree 中试合并，依次执行 `egressscan -mode snapshot`、`go build ./...`、
 `go vet ./...` 和官方 egress 目标包测试；不写入主仓库、不 fetch、不 push、不产生权威阶段制品，报告中
@@ -485,7 +485,7 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | U-1 | 解决冲突并形成可重放的双父 merge commit | `merge-start`／`merge-seal` 在隔离 worktree 中完成；冲突台账和双父关系不可省略。 |
 | U-2 | 闭合 Codex／Claude 入口、出站发送面和 Inventory | 首轮 `source-seal` 生成 revision 001，源码修复后在同一 Plan 追加 revision，旧制品只读保留。 |
 | U-3 | 按文件和调用边形成影响闭集 | `impact-generate` 与当前 revision 绑定；`impact-suggest` 只对已知低风险条目给出建议，`impact-seal` 对未决项 fail-close。 |
-| U-4 | 证明候选树满足全部必要门禁 | 每个收据固定 12 类逻辑门禁、5 个物理执行组，`skipped_gate_count` 为 0。 |
+| U-4 | 证明候选树满足全部必要门禁 | 每个收据固定 12 类逻辑门禁、3 个物理执行组，`skipped_gate_count` 为 0。 |
 | U-5 | 封存 candidate、Campaign 和回退处置 | `disposition-seal` 绑定验证收据、原业务回归和受影响 Persona 的后继动作。 |
 | U-6 | 快进受维护分支并能独立重放 | U-4 通过后仅由 `apply` 执行 ff-only 快进，随后 `finalize`／`replay`；人工不得合并、推送或部署。 |
 
@@ -497,8 +497,11 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   允许 `inventory-carry-forward`；台账 revision 只有最后一个（§5.2.4 第 2 条）。
 - U-3：同 diff 的文件复用本 Plan 或前序 Plan 已封存的决定。
 - U-4：同一 `execution_group` 的相同命令只执行一次；复用以 revision 为界，源码一变全部执行组重跑，因为
-  冻结测试与业务测试都读取候选树；六类客户端门禁收据由工具生成；`full-regression` 组通过
-  `backend/Makefile` 的 `test-gate` 覆盖 CI 的默认、unit 与 integration 三组测试并固定 `-count=1`。
+  冻结测试与业务测试都读取候选树；六类客户端门禁收据由工具生成；`full-regression` 组由根 Makefile 的
+  `upstream-gate-full` 执行：go test、golangci-lint、前端、采集工具、出站规格五条检查线依次执行、遇错
+  不停，采集工具 4 片并行；检查线之间默认不并行，满载时计时敏感用例会误判。go test 的默认、unit、
+  integration 三组均跑 `./...` 并固定 `-count=1`（默认组是唯一按生产编译形态运行的一组，CI 没有它），
+  golangci-lint 覆盖同样三种标签。
 - U-6：`finalize` 与 `replay` 收据是发版前置条件；U-4 未通过时禁止执行。
 
 每个 U-2/U-3 revision 进入 U-4 前先做只读复核，再执行门禁；失败后保留原 attempt，默认只重跑上一轮
@@ -523,9 +526,9 @@ U-4 的结果只有三种出口：
 | 同一根因连续失败两次，或台账 revision 后仍不闭合 | 停线复盘，把缺项回流到注册表与本节 |
 
 冻结摘要类指 transition／successor 冻结测试、受管工具树摘要和 `check-egress-spec-ci` 中的摘要门禁，
-一律不得逐套人工登记。走第二条出口时，先把待生成收据的仓库相对路径写进注册表指定的门禁显式列表，
-再执行 `freeze-successor-generate`：`--extra-worktree-path` 读取工作区当前状态，必须覆盖登记之后的
-门禁文件，顺序颠倒会让收据摘要对不上，只能删掉重来。Plan 作废超过一次同样要停线复盘。
+一律不得逐套人工登记。走第二条出口时直接执行 `freeze-successor-generate`：门禁按 schema 读取
+`docs/egress/maintenance` 下全部 freeze successor 收据，新收据不必登记进门禁文件。Plan 作废超过一次
+同样要停线复盘。
 
 #### 受维护分支在合并期间被第三方推进
 
@@ -550,11 +553,11 @@ U-4 的结果只有三种出口：
 
    `freeze-successor-generate` 按与 Go 门禁相同的规则从 `docs/egress/maintenance/*.json` 抽取已登记的摘要边，对区间内命中冻结
    覆盖的路径生成“已登记摘要 → 当前摘要”的边；前序摘要未登记即链断裂，fail-close。收据的自摘要采用
-   Python 工作区门禁的算法，改到 Codex CLI 0.151 worktree successor 覆盖的路径时用 `--after` 指向源码
-   提交、用 `--extra-worktree-path` 追加引用该收据的门禁文件，再把收据加进门禁的显式列表与之同提交。
-   `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（worktree successor
-   显式列表、ARM64 受管工具摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时
-   写入 `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认。修改注册表不属于
+   Python 工作区门禁的算法，`--after` 指向源码提交；Codex CLI 0.151 worktree successor 门禁按 schema
+   读取全部 freeze successor 收据，不必再登记显式列表，也不必用 `--extra-worktree-path` 追加门禁文件。
+   `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（ARM64 受管工具
+   摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时写入
+   `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认。修改注册表不属于
    工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点的 Go 冻结测试仍按上游版本各写
    一份（两包），可从上一版本复制并只改常量。
 

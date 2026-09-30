@@ -1,4 +1,4 @@
-.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -314,6 +314,13 @@ test-official-client-control:
 test-upstream-merge-tools:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/upstream_merge/tests -p 'test_*.py'
+
+# 上游合并 U-4 full-regression 组：go test、lint、前端、采集工具、出站规格五条检查线依次执行，
+# 遇错不停，采集工具 4 片并行，全部结束后统一输出日志与汇总（见 tools/upstream_merge/gate_runner.py）。
+# UPSTREAM_GATE_JOBS 可让检查线之间并行，默认 1：满载并行时计时敏感用例会误判。
+upstream-gate-full:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner full \
+		--codex-source-root "$(CODEX_0_149_1_SOURCE_ROOT)"
 
 # 上游合并正式 plan-create 前的离线预检；输出报告必须放在主仓库之外，避免把
 # 非权威报告误当成提交内容。所有参数均由调用方显式提供，不覆盖既有报告。
