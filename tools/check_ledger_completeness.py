@@ -1062,20 +1062,30 @@ def codex_01491_terminal_surface_additions() -> list[dict[str, str]]:
 
 @dataclass(frozen=True)
 class CodexSurfaceSuccessors:
-    """0.149.1 之后 Codex 候选新增出站定型面的独立 successor 登记（已校验）。"""
+    """0.149.1 之后 Codex 候选新增出站定型面的独立 successor 登记（已校验）。
+
+    登记表只绑定一份封存台账。出站面清单完整性与计划无关，条目始终计入；overlay 复算的
+    剔除只对登记表绑定的那份台账生效（``applies_to_plan_overlay``）——新的上游合并计划从
+    当前源码重算自己的 overlay，这些出站面随之并入新台账，不再剔除。
+    """
 
     entries: tuple[dict[str, str], ...] = ()
+    applies_to_plan_overlay: bool = True
 
     @property
     def addition_paths(self) -> set[str]:
-        """新增的出站定型文件：从封存 overlay 复算中整体剔除。"""
+        """新增的出站定型文件：从绑定台账的 overlay 复算中整体剔除；其他计划不剔除。"""
 
+        if not self.applies_to_plan_overlay:
+            return set()
         return {item["path"] for item in self.entries if item["kind"] == "surface_addition"}
 
     @property
     def scope_additions(self) -> dict[str, str]:
-        """台账已有文件在合并后新命中的范围：复算时只剔除该范围。"""
+        """台账已有文件在合并后新命中的范围：绑定台账复算时只剔除该范围；其他计划不剔除。"""
 
+        if not self.applies_to_plan_overlay:
+            return {}
         return {item["path"]: item["scope"] for item in self.entries if item["kind"] == "scope_addition"}
 
     def inventory_additions(self) -> list[dict[str, str]]:
@@ -1096,9 +1106,12 @@ def load_codex_surface_successors(
 ) -> CodexSurfaceSuccessors:
     """读取并失败关闭地校验候选出站面 successor 登记表；登记表不存在时为空。
 
-    登记表必须绑定当前计划封存台账的路径与摘要（台账换代时须先并入再移除本表）；
-    每条登记是命中生产扫描的普通文件：``surface_addition`` 不得已在封存台账中，
-    ``scope_addition`` 只允许给封存台账已有文件追加 ``strict_surface``。
+    登记表绑定一份封存台账（``base`` 的路径与摘要必须与库内文件一致；该台账不存在即失败
+    关闭，台账换代时须先并入再移除本表）。每条登记是命中生产扫描的普通文件：
+    ``surface_addition`` 不得已在绑定台账中，``scope_addition`` 只允许给绑定台账已有文件
+    追加 ``strict_surface``。``sealed_ledger_path`` 是当前计划的台账：它就是绑定台账时条目
+    从 overlay 复算中剔除；不是（新的上游合并计划，其台账可能尚未生成）时条目只计入出站面
+    清单，overlay 从当前源码重算并把这些出站面并入新台账。
     """
 
     if not path.exists() and not path.is_symlink():
@@ -1113,16 +1126,30 @@ def load_codex_surface_successors(
         raise RuntimeError("候选出站面 successor 登记表字段不闭合")
     if document["schema_version"] != CODEX_SURFACE_SUCCESSOR_SCHEMA:
         raise RuntimeError("候选出站面 successor 登记表 schema 非法")
-    if sealed_ledger_path.is_symlink() or not sealed_ledger_path.is_file():
+    base = document["base"]
+    bound = None
+    if isinstance(base, dict) and set(base) == {"upstream_merge_ledger"}:
+        bound = base["upstream_merge_ledger"]
+    if (
+        not isinstance(bound, dict)
+        or set(bound) != {"path", "sha256"}
+        or not all(isinstance(value, str) for value in bound.values())
+    ):
+        raise RuntimeError("候选出站面 successor 登记表 base 字段不闭合")
+    bound_relative = bound["path"]
+    bound_pure = PurePosixPath(bound_relative)
+    if (
+        not bound_relative
+        or bound_pure.is_absolute()
+        or ".." in bound_pure.parts
+        or bound_pure.as_posix() != bound_relative
+    ):
+        raise RuntimeError("候选出站面 successor 登记表绑定的封存台账路径非法")
+    bound_path = root / bound_relative
+    if bound_path.is_symlink() or not bound_path.is_file():
         raise RuntimeError("候选出站面 successor 登记表绑定的封存台账不存在；台账换代时须先并入再移除本表")
-    sealed_raw = sealed_ledger_path.read_bytes()
-    expected_base = {
-        "upstream_merge_ledger": {
-            "path": sealed_ledger_path.relative_to(root).as_posix(),
-            "sha256": sha256(sealed_raw),
-        }
-    }
-    if document["base"] != expected_base:
+    sealed_raw = bound_path.read_bytes()
+    if bound["sha256"] != sha256(sealed_raw):
         raise RuntimeError("候选出站面 successor 登记表绑定的封存台账路径或摘要不一致")
     sealed = json.loads(sealed_raw, object_pairs_hook=_unique_json_object)
     overlays = sealed.get("overlays") if isinstance(sealed, dict) else None
@@ -1176,7 +1203,12 @@ def load_codex_surface_successors(
     paths = [item["path"] for item in validated]
     if paths != sorted(paths) or len(paths) != len(set(paths)):
         raise RuntimeError("候选出站面登记路径未排序或重复")
-    return CodexSurfaceSuccessors(tuple(validated))
+    # 当前计划就是登记表绑定的计划时才从 overlay 复算中剔除；新计划的台账可能尚未生成。
+    applies = (
+        not sealed_ledger_path.is_symlink()
+        and sealed_ledger_path.resolve() == bound_path.resolve()
+    )
+    return CodexSurfaceSuccessors(tuple(validated), applies_to_plan_overlay=applies)
 
 
 def maintenance_removals(frozen_paths: set[str]) -> list[str]:

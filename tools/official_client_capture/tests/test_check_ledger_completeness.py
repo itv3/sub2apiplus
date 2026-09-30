@@ -424,7 +424,7 @@ class CodexSurfaceSuccessorTests(unittest.TestCase):
              "reason": "候选新增出站定型文件"},
         ]
 
-    def _load(self, entries=None, base=None, surface=None) -> ledger.CodexSurfaceSuccessors:
+    def _load(self, entries=None, base=None, surface=None, plan_ledger=None) -> ledger.CodexSurfaceSuccessors:
         document = {
             "schema_version": ledger.CODEX_SURFACE_SUCCESSOR_SCHEMA,
             "base": self._base() if base is None else base,
@@ -433,7 +433,7 @@ class CodexSurfaceSuccessorTests(unittest.TestCase):
         self.registry.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
         return ledger.load_codex_surface_successors(
             self.registry,
-            sealed_ledger_path=self.sealed,
+            sealed_ledger_path=self.sealed if plan_ledger is None else plan_ledger,
             surface=self.surface if surface is None else surface,
             root=self.root,
         )
@@ -448,6 +448,7 @@ class CodexSurfaceSuccessorTests(unittest.TestCase):
 
     def test_loads_surface_and_scope_additions(self) -> None:
         loaded = self._load()
+        self.assertTrue(loaded.applies_to_plan_overlay)
         self.assertEqual(loaded.addition_paths, {"backend/new.go"})
         self.assertEqual(loaded.scope_additions, {"backend/kept.go": "strict_surface"})
         self.assertEqual(
@@ -460,9 +461,44 @@ class CodexSurfaceSuccessorTests(unittest.TestCase):
         base["upstream_merge_ledger"]["sha256"] = "0" * 64
         with self.assertRaisesRegex(RuntimeError, "封存台账路径或摘要不一致"):
             self._load(base=base)
+        with self.assertRaisesRegex(RuntimeError, "base 字段不闭合"):
+            self._load(base={})
+        escaped = self._base()
+        escaped["upstream_merge_ledger"]["path"] = "../ledger.json"
+        with self.assertRaisesRegex(RuntimeError, "封存台账路径非法"):
+            self._load(base=escaped)
+        bound = self._base()
         self.sealed.unlink()
         with self.assertRaisesRegex(RuntimeError, "先并入再移除本表"):
-            self._load(base={})
+            self._load(base=bound)
+
+    def test_other_plan_counts_inventory_without_overlay_exclusion(self) -> None:
+        # 新的上游合并计划：当前计划台账不是登记表绑定的台账（写入时尚未生成，校验时已生成）。
+        # 条目仍计入出站面清单，但不从该计划的 overlay 复算中剔除，出站面随重算并入新台账。
+        other = self.root / "docs/egress/maintenance/next-plan-ledger.json"
+        for exists in (False, True):
+            with self.subTest(plan_ledger_exists=exists):
+                if exists:
+                    other.write_text(json.dumps({"overlays": []}) + "\n", encoding="utf-8")
+                loaded = self._load(plan_ledger=other)
+                self.assertFalse(loaded.applies_to_plan_overlay)
+                self.assertEqual(loaded.addition_paths, set())
+                self.assertEqual(loaded.scope_additions, {})
+                self.assertEqual(
+                    [item["path"] for item in loaded.inventory_additions()],
+                    ["backend/kept.go", "backend/new.go"],
+                )
+        # 绑定台账本身仍按原合同失败关闭，不因当前计划不同而放过。
+        base = self._base()
+        base["upstream_merge_ledger"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(RuntimeError, "封存台账路径或摘要不一致"):
+            self._load(base=base, plan_ledger=other)
+        with self.assertRaisesRegex(RuntimeError, "应登记为 scope_addition"):
+            self._load(
+                entries=[{"path": "backend/kept.go", "file_type": "regular",
+                          "kind": "surface_addition", "reason": "误登"}],
+                plan_ledger=other,
+            )
 
     def test_rejects_path_outside_production_scan(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "未命中生产扫描"):
