@@ -1,0 +1,76 @@
+{
+  "base_commit": "48e192a05552f874e8367385a80f5b4575d172e6",
+  "changed_path_count": 5,
+  "current_commit": "c68d0a51eea70b131e62b0f8cb0ef9ec83f6f3f5",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5271,
+  "frozen_path_count": 1929,
+  "identity_sha256": "c17b388e8cdf12bbc5073b17771abb04be56ec53d3200754f86128ce6dd1246a",
+  "issued_at_utc": "2026-09-30T15:49:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-um8-release-version-sync-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "831acabae2c00adc9b3a1f79519d6db5df8040e638087653c48f8eeeaa499171"
+      ],
+      "reason": "UM-8 发版回写 VERSION 自动承接：新增 release-version-sync 命令，release 工作流回写后自动生成冻结承接收据并以 workflow_dispatch 调起 main 的 CI（backend-ci.yml 增加该触发）；不改变官方客户端画像、Persona、wire 或出站 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9688dc12805bd98f9a8faba94b88764b591f77a0367e54b7d285f02f504209a0"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/__main__.py",
+      "predecessor_sha256s": [
+        "35e09dd3ec80720b4a7ed8e77dcf5d428b3a6ae30ce10c0819aec4ef7989cdc7"
+      ],
+      "reason": "UM-8 发版回写 VERSION 自动承接：新增 release-version-sync 命令，release 工作流回写后自动生成冻结承接收据并以 workflow_dispatch 调起 main 的 CI（backend-ci.yml 增加该触发）；不改变官方客户端画像、Persona、wire 或出站 path=tools/upstream_merge/__main__.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch2-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3cb26a5d6e169887314c20229f6ca403039d0cd5679f7d6e9d60ea230f00709b"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    ".github/workflows/release.yml",
+    "tools/upstream_merge/tests/test_version_sync.py",
+    "tools/upstream_merge/version_sync.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
