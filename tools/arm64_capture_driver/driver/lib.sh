@@ -55,9 +55,11 @@ isolated_run() {
 # command、working_directory、host、architecture、起止时间与退出码），另记测试树、树头提交与隔离方式。
 # 用法：write_gate_json <输出文件> <门禁 ID> <起始 UTC> <结束 UTC> <退出码> <测试树> <工作目录> <命令…>
 write_gate_json() {
-  local out="$1" gate_id="$2" start="$3" end="$4" rc="$5" tree="$6" workdir="$7"
+  local out="$1" gate_id="$2" start="$3" end="$4" rc="$5" tree="$6" workdir="$7" head
   shift 7
-  python3 - "$out" "$gate_id" "$start" "$end" "$rc" "$tree" "$workdir" "$(git -C "$tree" rev-parse HEAD)" "$@" <<'PY'
+  # 单独赋值而不是写进参数里的命令替换：set -E 下失败要走调用方的 ERR 陷阱，不能把陷阱输出当成树头提交写进记录。
+  head=$(git -C "$tree" rev-parse HEAD)
+  python3 - "$out" "$gate_id" "$start" "$end" "$rc" "$tree" "$workdir" "$head" "$@" <<'PY'
 import json, platform, socket, sys
 out, gate_id, start, end, rc, tree, workdir, head, *command = sys.argv[1:]
 payload = {"gate_id": gate_id, "command": command, "working_directory": workdir,

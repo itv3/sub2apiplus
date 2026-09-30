@@ -10,9 +10,9 @@
     },
     {
       "path": "driver/arm64-full-gates.sh",
-      "sha256": "b9c764bef993a6fb8b59ec091a9130081a562c2ca2ef7cb25ecb10a711664b63",
+      "sha256": "a1a729d6954492cecf4809ec5b4b52e09d0069a4db647f370fb13cee389567e0",
       "mode": "0700",
-      "bytes": 10064
+      "bytes": 10562
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
@@ -142,9 +142,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "a5bb21874af0ccbe5fd98d816992bd55adf416fd293ffeb3bb9487199e37b9ef",
+      "sha256": "7e407421e5c3ba71ecb1389a1588b8910489d34388253b59f4e7ac778de28f8c",
       "mode": "0700",
-      "bytes": 10089
+      "bytes": 10268
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -369,5 +369,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "7a26a1c37c0d2ab30fc1cc29af813f06406ccfa52fec526e5d813b2a4f371f96"
+  "manifest_sha256": "b9cccdb51ebbdfd31c896c1e90792158b3bf91ab2a361215c78feccd3c5a1280"
 }

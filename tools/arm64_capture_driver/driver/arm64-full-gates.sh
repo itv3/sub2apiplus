@@ -70,8 +70,13 @@ tree_status() { git -C "$TREE" status --porcelain --untracked-files=all 2>&1 | h
 echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 # 部署脚本测试从测试树自己的 CI 定义逐行取出（shell 作业与 test 作业里以 /bin/sh 或 /bin/bash 执行 deploy/ 下脚本的行，
 # 含与 `run:` 写在同一行的单行写法）。
-mapfile -t DEPLOY_TESTS < <(grep -oE '^[[:space:]]*(run:[[:space:]]*)?/bin/(ba)?sh( -n)? deploy/[A-Za-z0-9._/-]+' "$TREE/.github/workflows/backend-ci.yml" | sed -E 's/^[[:space:]]*(run:[[:space:]]*)?//')
+# 进程替换里的 grep 必须以 `|| true` 收住：set -E 会把 ERR 陷阱带进进程替换，文件缺失时陷阱输出的中止信息会被当成
+# 命令读进数组；读到的每一行再按同一正则逐条校验，校验不过即准备失败，绝不把非预期内容当命令执行。
+mapfile -t DEPLOY_TESTS < <({ grep -oE '^[[:space:]]*(run:[[:space:]]*)?/bin/(ba)?sh( -n)? deploy/[A-Za-z0-9._/-]+' "$TREE/.github/workflows/backend-ci.yml" 2>/dev/null || true; } | sed -E 's/^[[:space:]]*(run:[[:space:]]*)?//')
 [ "${#DEPLOY_TESTS[@]}" -gt 0 ] || { echo "backend-ci.yml 里没有取到部署脚本测试"; false; }
+for cmd in "${DEPLOY_TESTS[@]}"; do
+  [[ "$cmd" =~ ^/bin/(ba)?sh(\ -n)?\ deploy/[A-Za-z0-9._/-]+$ ]] || { echo "部署脚本测试命令不合法：${cmd}"; false; }
+done
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
 RESULTS=()
