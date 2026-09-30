@@ -54,6 +54,7 @@ from tools.upstream_merge.workflow import (
     _apply_client_impact,
     _component_ownership,
     _infer_conflict_resolution,
+    _install_frontend_dependencies_offline,
     _suggest_categories,
     _gate_groups,
     _load_surface_delta,
@@ -91,7 +92,7 @@ def run(repository: Path, *argv: str) -> str:
 class SyntheticRepository:
     """只在临时目录构造双分支 Git 图，不接触真实仓库。"""
 
-    def __init__(self, root: Path, *, conflict: bool) -> None:
+    def __init__(self, root: Path, *, conflict: bool, extra_fork_files: dict[str, str] | None = None) -> None:
         self.root = root / "repository"
         self.evidence = root / "evidence"
         self.worktree = root / "isolated-worktree"
@@ -123,6 +124,10 @@ class SyntheticRepository:
             (self.root / "conflict.txt").write_text("fork\n", encoding="utf-8")
         else:
             (self.root / "fork.txt").write_text("fork\n", encoding="utf-8")
+        for relative, content in (extra_fork_files or {}).items():
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
         run(self.root, "git", "add", "--all")
         run(self.root, "git", "commit", "-m", "fork")
         self.fork = rev_parse(self.root, "HEAD^{commit}")
@@ -344,6 +349,57 @@ class UpstreamMergeWorkflowTests(unittest.TestCase):
             require_passed=True,
         )
         self.assertEqual(loaded["result"], "passed")
+
+    def test_gates_require_frontend_dependencies_matching_lockfile(self) -> None:
+        # UM-16：候选树带前端锁文件时，依赖缺失或与锁文件不一致都在开跑前拒绝，不留 attempt 目录。
+        lockfile = "lockfileVersion: '9.0'\n"
+        self.fixture = SyntheticRepository(
+            self.temp_root,
+            conflict=False,
+            extra_fork_files={"frontend/pnpm-lock.yaml": lockfile, "frontend/.gitignore": "node_modules/\n"},
+        )
+        marker = self.temp_root / "gate-failure.marker"
+        marker.write_text("fail\n", encoding="utf-8")
+        plan = build_verification_plan(self.fixture, marker)
+        attempt = self.fixture.evidence / "u4/attempts/attempt-001"
+
+        with self.assertRaisesRegex(UpstreamMergeError, "未安装前端依赖"):
+            run_verification_gates(plan, "attempt-001")
+        self.assertFalse(attempt.exists())
+
+        current = self.fixture.root / "frontend/node_modules/.pnpm/lock.yaml"
+        current.parent.mkdir(parents=True)
+        current.write_text("lockfileVersion: '8.0'\n", encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "不一致"):
+            run_verification_gates(plan, "attempt-001")
+        self.assertFalse(attempt.exists())
+
+        current.write_text(lockfile, encoding="utf-8")
+        receipt = run_verification_gates(plan, "attempt-001")
+        self.assertEqual(receipt["failed_gate_ids"], ["gate-00", "gate-01"])
+        self.assertTrue((attempt / "receipt.json").is_file())
+
+    def test_rerun_worktree_installs_frontend_dependencies_offline(self) -> None:
+        # replay --rerun-gates 的临时执行树：有锁文件才离线安装，失败时给出原因，不联网。
+        tree = self.temp_root / "rerun-tree"
+        tree.mkdir()
+        with mock.patch("tools.upstream_merge.workflow.run_process") as process:
+            _install_frontend_dependencies_offline(tree)
+            process.assert_not_called()
+        (tree / "frontend").mkdir()
+        (tree / "frontend/pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+        with mock.patch("tools.upstream_merge.workflow.run_process") as process:
+            process.return_value = subprocess.CompletedProcess([], 0, "", "")
+            _install_frontend_dependencies_offline(tree)
+            argv = process.call_args.args[0]
+            self.assertEqual(argv[-3:], ("install", "--frozen-lockfile", "--offline"))
+        with mock.patch("tools.upstream_merge.workflow.run_process") as process:
+            process.return_value = subprocess.CompletedProcess([], 1, "", "ERR_PNPM_NO_OFFLINE_TARBALL")
+            with self.assertRaisesRegex(UpstreamMergeError, "离线安装前端依赖"):
+                _install_frontend_dependencies_offline(tree)
+        with mock.patch("tools.upstream_merge.workflow.run_process", side_effect=FileNotFoundError("pnpm")):
+            with self.assertRaisesRegex(UpstreamMergeError, "离线安装前端依赖"):
+                _install_frontend_dependencies_offline(tree)
 
     def test_gates_reject_incomplete_retry_without_leaving_attempt_directory(self) -> None:
         self.fixture = SyntheticRepository(self.temp_root, conflict=False)

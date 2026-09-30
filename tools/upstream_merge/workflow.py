@@ -3955,6 +3955,49 @@ def _client_receipt_document(
     return document, output
 
 
+FRONTEND_LOCKFILE_RELATIVE = "frontend/pnpm-lock.yaml"
+# pnpm 安装后把实际使用的锁文件存在这里；与 frontend/pnpm-lock.yaml 字节一致即说明依赖按当前锁文件装好。
+FRONTEND_CURRENT_LOCKFILE_RELATIVE = "frontend/node_modules/.pnpm/lock.yaml"
+
+
+def _assert_frontend_dependencies(worktree: Path) -> None:
+    """UM-16：门禁执行树的前端依赖缺失或与锁文件不一致时拒绝开跑，不生成 attempt。
+
+    v0.2.10 合并时 Plan 003 的工作树没装依赖，前端三条检查线与采集工具检查线开跑 2 秒内即失败，
+    这一轮的这些检查线白跑。候选树没有 ``frontend/pnpm-lock.yaml`` 时不适用。
+    """
+
+    wanted = worktree / FRONTEND_LOCKFILE_RELATIVE
+    if not wanted.is_file():
+        return
+    current = worktree / FRONTEND_CURRENT_LOCKFILE_RELATIVE
+    hint = f"先执行 pnpm --dir {worktree / 'frontend'} install --frozen-lockfile 再开跑"
+    if not current.is_file():
+        raise UpstreamMergeError(
+            f"门禁执行树未安装前端依赖（缺 {FRONTEND_CURRENT_LOCKFILE_RELATIVE}），前端与采集工具检查线必然失败；{hint}"
+        )
+    if current.read_bytes() != wanted.read_bytes():
+        raise UpstreamMergeError(f"门禁执行树的前端依赖与 {FRONTEND_LOCKFILE_RELATIVE} 不一致；{hint}")
+
+
+def _install_frontend_dependencies_offline(worktree: Path) -> None:
+    """replay --rerun-gates 的临时执行树由工具创建，人来不及装依赖：用本机 pnpm 存储离线安装，不联网。"""
+
+    if not (worktree / FRONTEND_LOCKFILE_RELATIVE).is_file():
+        return
+    try:
+        completed = run_process(
+            ("pnpm", "--dir", str(worktree / "frontend"), "install", "--frozen-lockfile", "--offline"),
+            cwd=worktree,
+            check=False,
+        )
+    except OSError as error:
+        raise UpstreamMergeError(f"重跑门禁的临时执行树无法离线安装前端依赖：{error}") from error
+    if completed.returncode != 0:
+        detail = (completed.stderr.strip() or completed.stdout.strip())[-800:]
+        raise UpstreamMergeError(f"重跑门禁的临时执行树无法离线安装前端依赖：{detail}")
+
+
 def _run_verification_gates_in_worktree(
     plan: LoadedPlan,
     attempt_id: str,
@@ -3972,6 +4015,7 @@ def _run_verification_gates_in_worktree(
     if rev_parse(worktree, "HEAD^{commit}") != source["source_commit"]:
         raise UpstreamMergeError("U-4 门禁执行树与 SourceCandidate 不一致")
     assert_clean(worktree, "U-4 门禁执行树")
+    _assert_frontend_dependencies(worktree)
     attempt_root_relative = f"{plan.output_relative('gate_attempts_root')}/{attempt}"
     attempt_root = resolve_within(plan.evidence_root, attempt_root_relative, "gate attempt")
     if attempt_root.exists():
@@ -5469,6 +5513,7 @@ def replay_upstream_merge(
     if rerun_gate_attempt is not None:
         source_commit = expected["repository"]["final_commit"]
         with _temporary_detached_worktree(plan, source_commit) as worktree:
+            _install_frontend_dependencies_offline(worktree)
             rerun_receipt = _run_verification_gates_in_worktree(
                 plan,
                 rerun_gate_attempt,

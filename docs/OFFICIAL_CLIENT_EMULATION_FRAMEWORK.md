@@ -460,8 +460,10 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 - 门禁必须是执行组模式（12 类逻辑门禁映射到 3 个物理执行组），不得沿用 `receipt_replay` 类型。
 - 门禁命令显式绑定本地只读源码根（如 `CODEX_0_149_1_SOURCE_ROOT`），不依赖被 `.gitignore` 排除的路径
   在候选 worktree 中存在。
-- 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖；缺失时前端与采集工具
-  检查线失败，门禁不能通过。
+- 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖（`pnpm --dir <worktree>/frontend
+  install --frozen-lockfile`）。`gates-run` 开跑前核对 `frontend/node_modules/.pnpm/lock.yaml` 与
+  `frontend/pnpm-lock.yaml` 字节一致，缺失或不一致即拒绝开跑、不生成 attempt；`replay --rerun-gates` 的临时执行树
+  由工具用本机 pnpm 存储离线安装（`--offline`），装不上即停。
 - 冲突解决与源码适配先在试验 worktree 完成、再由正式 Plan 机械重放时，试验 worktree 定型后、`plan-create`
   前先在其中执行一次与 U-4 相同的 `make upstream-gate-full`（本机没有 Docker 时 integration 组照常记未执行），
   全绿才建正式 Plan；台账类待办先用 `freeze-successor-generate --dry-run` 查看。
