@@ -1,0 +1,63 @@
+{
+  "base_commit": "ee6d7eac5f494a4412a26d58fb3bc8cb28ac7f4e",
+  "changed_path_count": 2,
+  "current_commit": "c2baacd67427b77a0db2b8255a7f899bc26d6010",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5308,
+  "frozen_path_count": 1929,
+  "identity_sha256": "8b9d29052017744c1940a50d7c9737d89affda25f780367fef59b2784786ae7c",
+  "issued_at_utc": "2026-09-30T23:40:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01592-image-edit-chain-20261001-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "predecessor_sha256s": [
+        "4c21e9fc35eead773cc7b1d8cf9948c83a12d03d41b2344975a3be84ac823de6"
+      ],
+      "reason": "Codex 0.159.2 官方定向样本 file_id 编辑链改为按请求内容选择受控应答（中继与测试），不改变生产官方客户端画像、Persona、wire 或出站 path=tools/official_client_capture/upstream_byte_relay.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-aux-workspace-routing-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-relay-task-retention-egress-horizon-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "22bc3c03f6e2014d92f03f3d611d8044676b409eb370e928ecbf2c6602aa8025"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_official_directed_samples.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
