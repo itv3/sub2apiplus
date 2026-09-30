@@ -79,7 +79,8 @@ class ReleaseMatrixTest(unittest.TestCase):
                 self.assertFalse(data['archives'])
                 self.assertFalse(data['dockers'])
                 self.assertEqual(data['release']['header'], original['release']['header'])
-                self.assertEqual(data['release']['footer'], original['release']['footer'])
+                # 本分支发布配置不带 footer：只要求发布配置原样保留页脚（有则相等、无则都缺省）。
+                self.assertEqual(data['release'].get('footer'), original['release'].get('footer'))
                 if simple:
                     self.assertTrue(data['checksum']['disable'])
                     self.assertTrue(data['release']['skip_upload'])
