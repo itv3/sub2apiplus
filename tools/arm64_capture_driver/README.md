@@ -82,6 +82,9 @@
 * 隔离：测试树单元在私有挂载命名空间里遮住 `/root/oauth-capture`（与 `isolated_run` 同一做法），树外只读字节码缓存；pre-A3
   场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。Linux 上不执行
   macOS 专用的 Apple container 部署脚本测试（BSD `stat`，写进门禁记录的 `not_executed`，CI 在 macos-15 上照常执行）。
+* 测试树与字节码缓存默认放在数据根之外、跨轮次固定的 `$(dirname $D)/entry-gates-work`（Go 不加 `-trimpath` 时按包所在目录
+  做构建缓存的键，路径每轮都变的话后端测试与 lint 每轮第一次都要冷编译整个 backend），通过即删；同一台机器同一时间只跑
+  一次入口门禁（该目录下的 `.entry-gates.lock`）。
 * 产物（主体目录 `--out`，默认 `$RUNROOT/entry-gates/entry-gates-<UTC 时间戳>`）：
   * `entry-gates.json`：总摘要（各门禁项结论、复合记录、P0 证据与 pre-A3 子汇总的位置）；
   * `logs/<门禁项>.gate.json`：与 `write_gate_json` 同一组字段，另带成员单元、失败单元与不在本平台执行的项；

@@ -34,7 +34,8 @@
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
 若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
 ``acquire``／``release``（采集批次申请与归还整机资源）。
-**不嵌套**：调度单元里（环境变量 ``UNIT_EXECUTOR_UNIT`` 在）再用同一个状态目录启动调度器会卡在同一把锁上，直接报错。
+**不嵌套**：调度单元里再用外层调度器的状态目录（环境变量 ``UNIT_EXECUTOR_PARENT_STATE_DIR``）启动调度器会卡在同一把
+锁上，直接报错；另给状态目录的（如测试）照常运行。
 运行时与原 make 目标一样设置 ``CLAUDE_AST_TYPESCRIPT_MODULE``，从仓库根目录执行；调度进程与单元子进程一律不写字节码。
 换了起点或模式（只跑一部分模块）时，调度配置里本次集合之外的登记项不参与规划；全量运行时登记项必须全部命中。
 """
@@ -907,6 +908,8 @@ class Scheduler:
             **dict(unit.env),
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
+            # 本调度器的状态目录：单元里再启动调度器时，用的若正是这个目录就是嵌套（会卡在同一把锁上），直接拒绝。
+            "UNIT_EXECUTOR_PARENT_STATE_DIR": str(self.state_dir.resolve()),
             # 与 make 目标一致禁写字节码：绕过 make 直接运行（如只重跑一部分模块）时，测试也不会在树里留下 __pycache__
             # ——驱动清单等检查遇到它会报错。
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -1047,10 +1050,13 @@ class Scheduler:
 def hold_scheduler_lock(state_dir: Path, *, wait_seconds: float) -> int:
     """同一台机器同一时间只运行一个调度器：取得状态目录里的 flock；已被占用时等待，超时报错。"""
 
-    if os.environ.get("UNIT_EXECUTOR_UNIT") and _state_dir(state_dir).resolve() == _state_dir(default_state_dir()).resolve():
+    # 嵌套：调度单元里又用外层调度器的状态目录启动调度器，会一直等外层释放锁（外层又在等这个单元）。只比外层调度器
+    # 下发的状态目录：单元里的测试另给状态目录（参数或 UNIT_EXECUTOR_STATE_DIR）照常可用。
+    parent = os.environ.get("UNIT_EXECUTOR_PARENT_STATE_DIR")
+    if parent and Path(parent).resolve() == _state_dir(state_dir).resolve():
         raise ExecutorError(
-            f"在调度单元（{os.environ['UNIT_EXECUTOR_UNIT']}）里又用同一状态目录启动调度器：嵌套调度会卡在同一把锁上，"
-            "改为在外层清单里展开这些单元（或测试里另给 --state-dir）"
+            f"在调度单元（{os.environ.get('UNIT_EXECUTOR_UNIT', '未知')}）里又用外层调度器的状态目录启动调度器：嵌套调度会卡在"
+            "同一把锁上，改为在外层清单里展开这些单元（或另给状态目录）"
         )
     path = _state_dir(state_dir) / "scheduler.lock"
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)

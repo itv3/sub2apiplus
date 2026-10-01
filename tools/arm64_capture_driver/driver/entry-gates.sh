@@ -13,6 +13,7 @@
 #   缓存；pre-A3 场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。
 # Linux 上不执行 macOS 专用的部署脚本测试（写进门禁记录的 not_executed；CI 在 macos-15 上照常执行）。
 #
+# 测试树与字节码缓存（--work，默认数据根之外跨轮次固定的 $(dirname $D)/entry-gates-work，见下方说明）通过即删。
 # 产物（主体目录 --out，默认 $RUNROOT/entry-gates/entry-gates-<UTC 时间戳>）：entry-gates.json（总摘要）、logs/<门禁项>.gate.json
 #   与 logs/full-regression.gate.json（make test 的组成全部通过与否）、p0/{check-egress-spec,test-capture-tools}.json（P0 证据）、
 #   preflight.json（VC-0 预跑记录）、full-gates-summary.json（全量门禁记录，full-gates／entry）、pre-a3-executor-summary.json、
@@ -27,7 +28,9 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <目录>] [--work <目录>] [--pycache <目录>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
-PROFILE=entry; OUT=""; WORK="$RUNROOT/entry-gates"; PYC=""
+# 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
+# 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;

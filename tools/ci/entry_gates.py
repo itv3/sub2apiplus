@@ -67,15 +67,22 @@ LIGHT_CHECKS = frozenset({
     "egress-spec-maintenance-conflict",
     "egress-spec-runtime-catalog-self-test",
 })
-HEAVY_GO_CHECKS = frozenset({"egress-spec-go-build", "egress-spec-go-vet", "egress-spec-service-guard"})
-# 预计秒数只决定并行段的派发顺序（从长到短），不影响结论；没登记的按类别取默认值。
+# 单进程内存峰值超过 3 GB 的 Go 子检查（ARM64 实测 3.7～4.3 GB）额度 5 GB，其余 Go 类 3 GB。
+HEAVY_GO_CHECKS = frozenset({"egress-spec-go-test", "egress-spec-egressscan-self-test", "egress-scanner-check"})
+# 预计秒数只决定并行段的派发顺序（从长到短），不影响结论：取 ARM64 实测（E2-04，10-01，入口门禁一次运行），
+# 没登记的按类别取默认值（Python 类实测 1～3 秒，Go 类 2～20 秒）。
 CHECK_SECONDS: dict[str, float] = {
-    "test-upstream-merge-tools": 120.0,
-    "test-official-client-control": 60.0,
-    "egress-spec-ledger-completeness": 60.0,
-    "egress-spec-go-build": 120.0,
-    "egress-spec-service-guard": 120.0,
-    "egress-spec-go-test": 90.0,
+    "egress-spec-go-test": 112.0,
+    "egress-spec-egressscan-self-test": 57.0,
+    "test-upstream-merge-tools": 43.0,
+    "egress-scanner-check": 33.0,
+    "check-egress-bootstrap-replay": 31.0,
+    "egress-spec-go-build": 20.0,
+    "test-official-client-control": 17.0,
+    "egress-spec-wire-diff": 15.0,
+    "egress-spec-changeset5-symbols": 11.0,
+    "egress-spec-service-guard": 7.0,
+    "egress-spec-repository-guard": 5.0,
 }
 
 
@@ -88,9 +95,9 @@ def egress_spec_unit(target: str, *, cwd: str) -> dict[str, Any]:
         "argv": ["make", "--no-print-directory", target],
         "cwd": cwd,
         "cores": 1 if light else 2,
-        "memory_mb": 1024 if light else (4096 if target in HEAVY_GO_CHECKS else 3072),
+        "memory_mb": 1024 if light else (5120 if target in HEAVY_GO_CHECKS else 3072),
         "timeout_seconds": 1800,
-        "weight": CHECK_SECONDS.get(target, 10.0 if light else 60.0),
+        "weight": CHECK_SECONDS.get(target, 2.0 if light else 10.0),
     }
 
 
@@ -181,9 +188,21 @@ GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
     "deploy-scripts": (["deploy-scripts"], "."),
     "pre-a3": (["python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario"], "."),
 }
-# Go 与 lint 单元：编译与类型检查都按 GOMAXPROCS（随额度下发）并行；内存按 ent 包编译峰值与测试二进制并行估计。
-GO_QUOTA = {"cores": 2, "memory_mb": 6144, "timeout_seconds": 3600}
-FRONTEND_QUOTA = {"cores": 2, "memory_mb": 3072, "timeout_seconds": 1800}
+# 额度按 ARM64 实测的 CPU／墙钟比与单进程内存峰值（E2-04，10-01，入口门禁一次运行）：
+# * 后端 go test 三组各 10～11.5 分钟，CPU 只用约 1.1 核（编译之外大半时间在等待），单进程峰值 4～4.5 GB——原来按 2 核申请，
+#   两组就占满 4 核额度、其它单元干等；改按 1.1 核（GOMAXPROCS 随额度向上取整为 2，编译仍可两路并行）、5 GB；
+# * golangci-lint 三组各约 10 秒（结果缓存命中，冷缓存会更久），峰值约 250 MB；
+# * 前端 lint、typecheck 约 1.1～1.2 核（typecheck 峰值约 2 GB），vitest 约 1.9 核。
+GO_QUOTA = {"cores": 1.1, "memory_mb": 5120, "timeout_seconds": 3600}
+LINT_QUOTA = {"cores": 1, "memory_mb": 3072, "timeout_seconds": 3600}
+FRONTEND_QUOTA = {"cores": 1.2, "memory_mb": 3072, "timeout_seconds": 1800}
+VITEST_QUOTA = {"cores": 2, "memory_mb": 2048, "timeout_seconds": 1800}
+# 各单元的预计秒数（同样取实测，决定派发顺序）。
+GATE_SECONDS: dict[str, float] = {
+    "backend-go-test": 680.0, "backend-unit": 626.0, "backend-integration": 693.0,
+    "backend-lint": 11.0, "lint-unit": 9.0, "lint-integration": 8.0,
+    "frontend-lint": 53.0, "frontend-typecheck": 73.0, "frontend-critical": 23.0,
+}
 # 部署脚本测试从测试树的 CI 定义逐行取出（shell 作业与 test 作业里以 /bin/sh 或 /bin/bash 执行 deploy/ 下脚本的行）。
 DEPLOY_TEST_LINE = re.compile(r"^[ \t]*(?:run:[ \t]*)?(/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+)[ \t]*$", re.M)
 DEPLOY_TEST_SHAPE = re.compile(r"^/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+$")
@@ -292,23 +311,25 @@ def plan_gates(
             argv, _cwd = GATE_COMMANDS[gate_id]
             # integration 带 CI=true：没有 Docker 时失败而不是静默跳过（integration_harness_test.go）。
             env = {"CI": "true"} if gate_id == "backend-integration" else None
-            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id.removeprefix('backend-')}", argv, backend, GO_QUOTA, 600.0, env)]})
+            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id.removeprefix('backend-')}", argv, backend, GO_QUOTA,
+                                                                GATE_SECONDS[gate_id], env)]})
         elif gate_id in ("backend-lint", "lint-unit", "lint-integration"):
             argv, _cwd = GATE_COMMANDS[gate_id]
-            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id}", argv, backend, GO_QUOTA, 300.0)]})
+            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id}", argv, backend, LINT_QUOTA, GATE_SECONDS[gate_id])]})
         elif gate_id in ("frontend-lint", "frontend-typecheck"):
             argv, _cwd = GATE_COMMANDS[gate_id]
-            gates.append({"gate_id": gate_id, "units": [command(f"frontend:{gate_id.removeprefix('frontend-')}", argv, workdir, FRONTEND_QUOTA, 120.0)]})
+            gates.append({"gate_id": gate_id, "units": [command(f"frontend:{gate_id.removeprefix('frontend-')}", argv, workdir, FRONTEND_QUOTA,
+                                                                GATE_SECONDS[gate_id])]})
         elif gate_id == "frontend-critical":
             gates.append({"gate_id": gate_id, "units": [command("frontend:critical", ["make", "--no-print-directory", "test-frontend-critical"],
-                                                                workdir, FRONTEND_QUOTA, 120.0)]})
+                                                                workdir, VITEST_QUOTA, GATE_SECONDS[gate_id])]})
         elif gate_id == "deploy-scripts":
             members, skipped = [], []
             for line in deploy_tests(tree):
                 if line in MACOS_ONLY_DEPLOY_TESTS and platform != "darwin":
                     skipped.append({"command": line.split(), "reason": MACOS_ONLY_DEPLOY_TESTS[line]})
                     continue
-                members.append(command(_deploy_unit_id(line), line.split(), workdir, {"cores": 1, "memory_mb": 512, "timeout_seconds": 600}, 10.0))
+                members.append(command(_deploy_unit_id(line), line.split(), workdir, {"cores": 1, "memory_mb": 512, "timeout_seconds": 600}, 2.0))
             if not members:
                 raise ValueError("部署脚本测试在本平台一项都不执行")
             gates.append({"gate_id": gate_id, "units": members, "not_executed": skipped})

@@ -589,16 +589,50 @@ class UnitExecutorGatesTests(unittest.TestCase):
             self.assertEqual(completed.stderr.strip().splitlines()[-1], "FAILED (gates=1)")
             self.assertIn("门禁 spec：未通过", completed.stderr)
 
-    def test_nested_scheduler_on_the_same_state_dir_is_refused(self) -> None:
+    def test_nested_scheduler_on_the_parent_state_dir_is_refused(self) -> None:
+        """只有用外层调度器下发的状态目录才算嵌套；单元里的测试经 UNIT_EXECUTOR_STATE_DIR 另指目录照常可用（ARM64 上
+        test_ci_entry_gates 在执行器单元里就是这样运行的，之前按“默认目录”比较会误判）。"""
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            shared, other = root / "shared", root / "other"
-            environment = {**os.environ, "UNIT_EXECUTOR_UNIT": "outer:unit", "UNIT_EXECUTOR_STATE_DIR": str(shared)}
+            parent, other = root / "parent", root / "other"
+            environment = {key: value for key, value in os.environ.items() if key != "UNIT_EXECUTOR_STATE_DIR"}
+            environment.update(UNIT_EXECUTOR_UNIT="outer:unit", UNIT_EXECUTOR_PARENT_STATE_DIR=str(ue._state_dir(parent).resolve()))
             with unittest.mock.patch.dict(os.environ, environment, clear=True):
                 with self.assertRaisesRegex(ue.ExecutorError, "嵌套"):
-                    ue.hold_scheduler_lock(shared, wait_seconds=0)
-                descriptor = ue.hold_scheduler_lock(other, wait_seconds=0)  # 测试另给状态目录照常可用
+                    ue.hold_scheduler_lock(parent, wait_seconds=0)
+                os.environ["UNIT_EXECUTOR_STATE_DIR"] = str(other)
+                descriptor = ue.hold_scheduler_lock(ue.default_state_dir(), wait_seconds=0)
                 os.close(descriptor)
+
+    def test_real_nested_runs_use_their_own_state_dir_or_fail_fast(self) -> None:
+        """外层执行器的单元里再启动执行器：另给状态目录的正常跑完；用外层目录的立即退出 2，不卡在锁上。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            inner = root / "inner.json"
+            inner.write_text(json.dumps({"schema_version": ue.COMMANDS_SCHEMA, "units": [{"unit_id": "inner:ok", "argv": ["true"], "cwd": str(root)}]}),
+                             encoding="utf-8")
+            outer_state = root / "outer-state"
+            base = [sys.executable, str(EXECUTOR), "run-commands", "--manifest", str(inner), "--shared-caches", "off"]
+            own = " ".join([f"UNIT_EXECUTOR_STATE_DIR='{root / 'inner-state'}'", *(f"'{part}'" for part in base), "--out-dir", f"'{root / 'inner-own'}'"])
+            units = [
+                {"unit_id": "nested:own-dir", "argv": ["sh", "-c", own], "cwd": str(root), "timeout_seconds": 120},
+                {"unit_id": "nested:parent-dir", "argv": [*base, "--state-dir", str(outer_state), "--out-dir", str(root / "inner-parent")],
+                 "cwd": str(root), "timeout_seconds": 120},
+            ]
+            outer = root / "outer.json"
+            outer.write_text(json.dumps({"schema_version": ue.COMMANDS_SCHEMA, "units": units}), encoding="utf-8")
+            started = time.monotonic()
+            completed = subprocess.run([sys.executable, str(EXECUTOR), "run-commands", "--manifest", str(outer), "--config", str(_config(root)),
+                                        "--parallel", "2", "--cores", "2", "--state-dir", str(outer_state), "--out-dir", str(root / "outer"),
+                                        "--shared-caches", "off"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+                                       env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertLess(time.monotonic() - started, 100, "嵌套不能卡到单元超时")
+            summary = json.loads((root / "outer" / "summary.json").read_text(encoding="utf-8"))
+            rows = {row["unit_id"]: row for row in summary["units"]}
+            self.assertEqual((rows["nested:own-dir"]["passed"], rows["nested:parent-dir"]["exit_code"]), (True, 2), completed.stderr[-2000:])
+            self.assertIn("嵌套", Path(rows["nested:parent-dir"]["log"]).read_text(encoding="utf-8"))
 
 
 class UnitExecutorDriverCopyTests(unittest.TestCase):
