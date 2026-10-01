@@ -38,6 +38,12 @@ from typing import Any, Iterable, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# 作为主程序运行（-m 或脚本方式）时，让包名也指向正在运行的这一份：之后延迟导入 reconciler、vc0_closeout 等模块时，
+# 它们 ``from tools.official_client_capture import codex_upgrade`` 拿到的就是本模块，不再编译执行第二份 6.3 万行的
+# 编排器（ARM64 约 1 秒），两份里的同名类、异常与模块级状态也不会各成一套（E2-02）。这几个模块都只在函数里延迟
+# 导入，届时本模块已经执行完。
+if __name__ == "__main__":
+    sys.modules.setdefault("tools.official_client_capture.codex_upgrade", sys.modules[__name__])
 
 from tools.official_client_capture.capturelib.model import (
     ConfigurationError,

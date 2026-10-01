@@ -47,7 +47,8 @@ else
   AT="$AT_BASE"
   if [ -e "$D/staging/$AT" ]; then AT="$AT_BASE-r$(date -u +%H%M%S)"; fi
   mkdir -m 0700 "$D/staging/$AT"
-  docker exec --env PYTHONPATH=/capture --workdir /capture capture-cli python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect --evidence-root "/capture/staging/$AT" --output receipt.json | cut -c1-160
+  # 容器里的 /capture 就是生产数据根：禁写字节码，受管树里不留 __pycache__（E2-02）。
+  docker exec --env PYTHONPATH=/capture --env PYTHONDONTWRITEBYTECODE=1 --workdir /capture capture-cli python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect --evidence-root "/capture/staging/$AT" --output receipt.json | cut -c1-160
 fi
 cat > "$RUNROOT/stage1.env" <<STAGE1ENV
 DEPLOY=$DEPLOY

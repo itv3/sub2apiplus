@@ -1120,6 +1120,38 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertEqual(sorted(str(path) for path in prefix.rglob("*")), before)
             self.assertEqual(list((root / "tree").rglob("__pycache__")), [])
 
+    def test_helper_compiles_sources_by_content_hash_so_same_second_edits_run_new_code(self) -> None:
+        """E2-02：源码目录按内容摘要失效（PEP 552 checked-hash，头部标志位 3），标准库仍按时间戳（标志位 0）；
+        同一秒内对源码做长度不变的修改，禁写的子进程从源码编译、执行新代码（按时间戳校验会执行旧字节码）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "tree" / "tools"
+            (source / "pkg").mkdir(parents=True)
+            (source / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            module = source / "pkg" / "mod.py"
+            module.write_text('VALUE = "AAAA"\n', encoding="utf-8")
+            prefix = root / "pycache-hash"
+            result, summary = self._run_helper(str(prefix), str(source))
+            self.assertEqual((result.returncode, summary["status"]), (0, "ready"), result.stdout + result.stderr)
+
+            def flags(path: Path) -> int:
+                return int.from_bytes(path.read_bytes()[4:8], "little")
+
+            cached = prefix / module.parent.relative_to(module.anchor) / f"mod.{sys.implementation.cache_tag}.pyc"
+            self.assertEqual(flags(cached), 3, "源码目录必须按内容摘要编译并在加载时核对")
+            stdlib_json = Path(json.__file__)
+            stdlib_cached = prefix / stdlib_json.parent.relative_to(stdlib_json.anchor) / f"__init__.{sys.implementation.cache_tag}.pyc"
+            self.assertEqual(flags(stdlib_cached), 0, "标准库仍按时间戳校验")
+            module.write_text(module.read_text(encoding="utf-8").replace("AAAA", "BBBB"), encoding="utf-8")
+            probe = subprocess.run(
+                [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import pkg.mod as m; print(m.VALUE)", str(source)],
+                capture_output=True, text=True,
+                env={**{k: v for k, v in os.environ.items() if k != "PYTHONPATH"}, "PYTHONPYCACHEPREFIX": str(prefix),
+                     "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual((probe.returncode, probe.stdout.strip()), (0, "BBBB"), probe.stderr)
+            self.assertEqual(flags(cached), 3, "禁写：缓存保持原样，不被改写")
+
     def test_helper_refuses_unsafe_prefix_without_deleting_anything(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -1145,6 +1177,14 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertTrue((inner_source / "keep.py").is_file(), "拒绝时不得清空包含源码树的目录")
             self.assertFalse((source / "pycache-inside").exists())
             self.assertFalse((root / "cache-dir").exists())
+
+    def test_isolated_gate_run_unsets_the_production_identity_memo(self) -> None:
+        """E2-02：门禁跑测试树，身份记忆化交给统一调度执行器在记录目录里新建，不混用生产缓存。"""
+
+        lib = (SCRIPTS / "lib.sh").read_text(encoding="utf-8")
+        body = lib[lib.index("isolated_run() {"):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("unset CODEX_UPGRADE_IDENTITY_MEMO", body)
 
     def test_gate_scripts_prepare_cache_then_export_before_make_test(self) -> None:
         lib_code = [line for line in (SCRIPTS / "lib.sh").read_text(encoding="utf-8").splitlines()
@@ -1279,6 +1319,105 @@ def _history_repo(path: Path, *, commits: int) -> None:
         chunks.append(b"\n")
     subprocess.run(["git", "fast-import", "--quiet"], cwd=str(path), input=b"".join(chunks), check=True)
     _git(path, "reset", "-q", "--hard", "main")
+
+
+# 字节码预编译工具的替身：记录调用与它收到的前缀环境，按开关成功（清空重建前缀）或失败。
+_FAKE_BYTECODE_HELPER = """import json, os, shutil, sys
+from pathlib import Path
+prefix = Path(sys.argv[1])
+with open(os.environ["FAKE_BYTECODE_CALLS"], "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"argv": sys.argv[1:], "prefix_env": os.environ.get("PYTHONPYCACHEPREFIX")}) + "\\n")
+if os.environ.get("FAKE_BYTECODE_FAIL"):
+    print(json.dumps({"status": "failed", "error": "替身：预编译失败"}))
+    sys.exit(1)
+if prefix.exists():
+    shutil.rmtree(prefix)
+prefix.mkdir(parents=True)
+print(json.dumps({"status": "ready", "prefix": str(prefix)}))
+"""
+
+
+class ManagedSharedCacheTests(unittest.TestCase):
+    """E2-02：lib.sh 为入口各子命令导出共享缓存；prepare_managed_bytecode 按数据根受管树内容沿用或重建。"""
+
+    PROBE = 'echo "PREFIX=${PYTHONPYCACHEPREFIX:-}"; echo "MEMO=${CODEX_UPGRADE_IDENTITY_MEMO:-}"'
+
+    def _driver(self, root: Path) -> tuple[_DriverFixture, Path]:
+        fixture = _DriverFixture(root)
+        drv = root / "drv"
+        drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py"):
+            (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        (drv / "bytecode_cache.py").write_text(_FAKE_BYTECODE_HELPER, encoding="utf-8")
+        (fixture.data_root / "tools" / "official_client_capture" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+        return fixture, drv
+
+    def _bash(self, fixture: _DriverFixture, drv: Path, script: str, **extra: str) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
+        calls = fixture.root / "bytecode-calls.jsonl"
+        environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"}}
+        environment.update({**fixture.env, "FAKE_BYTECODE_CALLS": str(calls), **extra})
+        # lib.sh 只能被脚本 source（它检查 BASH_SOURCE[1]），所以把探针写成驱动目录里的脚本再运行。
+        probe = drv / "probe.sh"
+        probe.write_text(f'#!/bin/bash\nset -Eeuo pipefail\nsource "$(dirname "${{BASH_SOURCE[0]}}")/lib.sh"\n{script}\n', encoding="utf-8")
+        completed = subprocess.run(["bash", str(probe)], capture_output=True, text=True, env=environment, timeout=120)
+        lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+        return completed, [json.loads(line) for line in lines]
+
+    def test_prepare_rebuilds_only_when_the_managed_tree_changes_and_exports_the_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, drv = self._driver(root)
+            prefix, memo = root / "pycache-managed", root / "identity-memo"
+            completed, calls = self._bash(fixture, drv, self.PROBE)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("PREFIX=\n", completed.stdout, "缓存还没建时不导出前缀")
+            self.assertIn(f"MEMO={memo}\n", completed.stdout, "身份记忆化目录在数据根之外，总是导出")
+            completed, calls = self._bash(fixture, drv, f"prepare_managed_bytecode; {self.PROBE}")
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual([call["argv"] for call in calls], [[str(prefix), str(fixture.data_root / "tools")]])
+            self.assertIsNone(calls[0]["prefix_env"], "预编译进程自己不带旧前缀")
+            self.assertIn(f"PREFIX={prefix}\n", completed.stdout)
+            self.assertTrue((prefix / ".tools-digest").is_file())
+            completed, calls = self._bash(fixture, drv, f"prepare_managed_bytecode; {self.PROBE}")
+            self.assertEqual(len(calls), 1, "数据根受管树没变：沿用，不重建")
+            self.assertIn("沿用", completed.stdout)
+            self.assertIn(f"PREFIX={prefix}\n", completed.stdout)
+            completed, _calls = self._bash(fixture, drv, self.PROBE)
+            self.assertIn(f"PREFIX={prefix}\n", completed.stdout, "建好之后 source lib.sh 的脚本直接导出前缀")
+            (fixture.data_root / "tools" / "official_client_capture" / "mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+            completed, calls = self._bash(fixture, drv, f"prepare_managed_bytecode; {self.PROBE}")
+            self.assertEqual(len(calls), 2, "数据根受管树变了：重建")
+            self.assertEqual(sorted(str(path) for path in fixture.data_root.rglob("__pycache__")), [], "缓存在数据根之外")
+
+    def test_prepare_failure_warns_and_leaves_no_prefix_without_stopping_the_caller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, drv = self._driver(root)
+            completed, calls = self._bash(fixture, drv, f"prepare_managed_bytecode; {self.PROBE}; echo 接着跑", FAKE_BYTECODE_FAIL="1")
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("PREFIX=\n", completed.stdout)
+            self.assertIn("接着跑", completed.stdout)
+            self.assertIn("字节码共享层重建失败", completed.stderr)
+
+    def test_entry_preflight_prepares_the_shared_layer_first_outside_any_pipeline(self) -> None:
+        code = [line.strip() for line in (SCRIPTS / "entry-preflight.sh").read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+        prepare = [index for index, line in enumerate(code) if line.startswith("prepare_managed_bytecode")]
+        checks = [index for index, line in enumerate(code) if line.startswith("check ")]
+        self.assertEqual(len(prepare), 1)
+        self.assertNotIn("|", code[prepare[0]], "要在本 shell 里导出前缀，不能放进管道")
+        self.assertTrue(checks and prepare[0] < min(checks), "字节码共享层在各检查项之前准备")
+
+    def test_entry_scripts_reuse_the_shared_layer_right_after_the_cheap_checks(self) -> None:
+        """便宜检查在子进程里准备共享层，pre-A3（认证进程内跑真实链）与 stage1 紧接着在自己的 shell 里导出前缀。"""
+
+        for name in ("pre-a3.sh", "stage1.sh"):
+            code = [line.strip() for line in (SCRIPTS / name).read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+            preflight = [index for index, line in enumerate(code) if line == 'bash "$DRV/entry-preflight.sh"']
+            self.assertEqual(len(preflight), 1, name)
+            self.assertTrue(code[preflight[0] + 1].startswith("use_managed_bytecode"), name)
 
 
 class TestTreeAndVc0PreflightTests(unittest.TestCase):

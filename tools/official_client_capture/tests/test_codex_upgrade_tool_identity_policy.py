@@ -6,6 +6,8 @@ import ast
 import contextlib
 import hashlib
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +18,18 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
+
+# 本文件的用例核对身份的计算过程（解析次数、缓存释放），一律关掉跨进程记忆化（统一调度执行器会给单元设上它）；
+# IdentityMemoTest 自己在临时目录里打开。
+_MEMO_OFF = mock.patch.dict(os.environ, {tip.IDENTITY_MEMO_ENV: ""})
+
+
+def setUpModule() -> None:
+    _MEMO_OFF.start()
+
+
+def tearDownModule() -> None:
+    _MEMO_OFF.stop()
 
 
 def _sha256(source: str) -> str:
@@ -223,6 +237,107 @@ class ToolIdentityPolicyTests(unittest.TestCase):
         tip._cached_symbol_closure.cache_clear()
         tip.compute_identity_v2(policy, TOOL_ROOT, entries)
         self.assertEqual(tip._parsed_orchestrator.cache_info().currsize, 0, "算完两组根后应释放语法树")
+
+
+class IdentityMemoTest(unittest.TestCase):
+    """E2-02：跨进程记忆化按完整输入做键——命中与重算逐字节相同、受管文件一变必然重算、缓存坏了照常计算。"""
+
+    def setUp(self) -> None:
+        from tools.official_client_capture.tests import managed_tree_copy
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.memo = self.root / "memo"
+        patcher = mock.patch.dict(os.environ, {tip.IDENTITY_MEMO_ENV: str(self.memo)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # 在副本树上算：用例要改文件验证键会变，不能动原树。
+        with mock.patch.object(sys, "pycache_prefix", None):
+            self.tree = managed_tree_copy.tool_root(managed_tree_copy.copy_managed_tree(self.root / "copy", include_tests=False))
+        self.policy = tip.load_policy(self.tree / tip.POLICY_FILENAME)
+
+    def _identity(self) -> dict:
+        return tip.compute_identity_v2(self.policy, self.tree, codex_upgrade._tool_tree_entries(self.tree))
+
+    @staticmethod
+    def _dump(value: dict) -> str:
+        # 不排序：键顺序也必须与重算一致（调用方按插入顺序写收据）。
+        return json.dumps(value, ensure_ascii=False)
+
+    def test_hits_are_byte_identical_to_recomputation_and_skip_the_ast_work(self) -> None:
+        identity = self._identity()
+        evaluator = tip.evaluator_dependency_digests(self.tree)
+        self.assertEqual(len(list(self.memo.glob("identity-v2-*.json"))), 1)
+        self.assertEqual(len(list(self.memo.glob("evaluator-*.json"))), 1)
+        with mock.patch.object(tip, "_compute_identity_v2", side_effect=AssertionError("命中时不得重算")), \
+                mock.patch.object(tip, "evaluator_reader_closure", side_effect=AssertionError("命中时不得重算")):
+            self.assertEqual(self._dump(self._identity()), self._dump(identity))
+            self.assertEqual(self._dump(tip.evaluator_dependency_digests(self.tree)), self._dump(evaluator))
+        with mock.patch.dict(os.environ, {tip.IDENTITY_MEMO_ENV: ""}):
+            self.assertEqual(self._dump(self._identity()), self._dump(identity))
+            self.assertEqual(self._dump(tip.evaluator_dependency_digests(self.tree)), self._dump(evaluator))
+
+    def test_any_managed_file_change_forces_recomputation(self) -> None:
+        identity = self._identity()
+        evaluator = tip.evaluator_dependency_digests(self.tree)
+        # 改一个与两类闭包都无关的 control 层文件：键里是整树摘要，照样必须重算。
+        target = self.tree / "codex_upgrade_timing_ledger.py"
+        target.write_text(target.read_text(encoding="utf-8") + "\n# E2-02 记忆化键随文件变化\n", encoding="utf-8")
+        identity_calls: list[int] = []
+        reader_calls: list[int] = []
+        real_identity, real_reader = tip._compute_identity_v2, tip.evaluator_reader_closure
+        with mock.patch.object(tip, "_compute_identity_v2", side_effect=lambda *a: identity_calls.append(1) or real_identity(*a)), \
+                mock.patch.object(tip, "evaluator_reader_closure", side_effect=lambda *a: reader_calls.append(1) or real_reader(*a)):
+            changed = self._identity()
+            changed_evaluator = tip.evaluator_dependency_digests(self.tree)
+        self.assertEqual((len(identity_calls), len(reader_calls)), (1, 2), "受管文件变了必须重算")
+        self.assertNotEqual(changed["control_sha256"], identity["control_sha256"])
+        self.assertEqual(changed["wire_producer_sha256"], identity["wire_producer_sha256"])
+        self.assertEqual(changed_evaluator, evaluator, "这个文件不在评估器读侧闭包里，重算结果不变")
+        self.assertEqual(len(list(self.memo.glob("identity-v2-*.json"))), 2)
+
+    def test_source_change_recomputes_even_with_a_stale_file_list(self) -> None:
+        """调用方传进来的清单没跟上源码（只算过一次清单）：键里还有按实际文件重算的整树摘要，必须重算。"""
+
+        from tools.official_client_capture.tests import managed_tree_copy
+
+        entries = codex_upgrade._tool_tree_entries(self.tree)
+        identity = tip.compute_identity_v2(self.policy, self.tree, entries)
+        root = self.policy["orchestrator"]["wire_roots"][0]
+        managed_tree_copy._inject_after_docstring(self.tree.parents[1], f"def {root}(", "_e202_marker = 1")
+        recomputed = tip.compute_identity_v2(self.policy, self.tree, entries)
+        self.assertNotEqual(recomputed["wire_producer_sha256"], identity["wire_producer_sha256"])
+
+    def test_entries_and_policy_are_part_of_the_key(self) -> None:
+        entries = codex_upgrade._tool_tree_entries(self.tree)
+        identity = tip.compute_identity_v2(self.policy, self.tree, entries)
+        mutated = [dict(item, sha256="0" * 64) if item["path"] == "run_official_relay_scenario.sh" else dict(item) for item in entries]
+        wire = tip.compute_identity_v2(self.policy, self.tree, mutated)
+        self.assertNotEqual(wire["wire_producer_sha256"], identity["wire_producer_sha256"], "清单不同不得命中原条目")
+        other_policy = dict(self.policy, policy_sha256="e" * 64)
+        self.assertEqual(tip.compute_identity_v2(other_policy, self.tree, entries)["policy_sha256"], "e" * 64, "策略不同不得命中原条目")
+        self.assertEqual(len(list(self.memo.glob("identity-v2-*.json"))), 3)
+
+    def test_corrupt_or_mismatched_entries_are_misses(self) -> None:
+        identity = self._identity()
+        path = next(self.memo.glob("identity-v2-*.json"))
+        path.write_text("{坏", encoding="utf-8")
+        self.assertEqual(self._dump(self._identity()), self._dump(identity), "坏条目当作未命中，照常计算并重写")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["key"]["tree"] = "0" * 64
+        payload["value"]["control_sha256"] = "f" * 64
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self._identity()["control_sha256"], identity["control_sha256"], "键原文对不上的条目不得采用")
+
+    def test_disabled_without_an_absolute_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as cwd:
+            for value in ("", "relative-memo"):
+                with self.subTest(value), mock.patch.dict(os.environ, {tip.IDENTITY_MEMO_ENV: value}), contextlib.chdir(cwd):
+                    self._identity()
+                    tip.evaluator_dependency_digests(self.tree)
+                    self.assertFalse((Path(cwd) / "relative-memo").exists())
+        self.assertFalse(self.memo.exists(), "未启用时不写任何缓存")
 
 
 if __name__ == "__main__":

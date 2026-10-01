@@ -12,6 +12,48 @@ ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "�
 eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
 [ -d "$RUNROOT" ] || mkdir -p "$RUNROOT"; [ "$(python3 -c "import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))" "$RUNROOT")" = 0o700 ] || chmod 700 "$RUNROOT"
 export D PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 PATH=/usr/local/go/bin:/opt/node-v20/bin:$PATH
+# 共享缓存（E2-02）：数据根受管树与标准库的字节码预编译在数据根之外（源码按内容摘要失效，见 bytecode_cache.py），
+# 身份五摘要与评估器四项按整树摘要做键跨进程复用（codex_upgrade_tool_identity_policy）；入口各子命令只读使用，不再
+# 每个进程都从源码重编 6.3 万行的编排器、重算一遍身份。两者都在数据根之外，容器看不到。字节码缓存还没建（新机器、
+# 刚清理）时不导出前缀，行为与原来相同；由入口便宜检查（entry-preflight.sh）重建。
+PYC_MANAGED=$(dirname "$D")/pycache-managed
+export CODEX_UPGRADE_IDENTITY_MEMO
+CODEX_UPGRADE_IDENTITY_MEMO=$(dirname "$D")/identity-memo
+# 共享层存在时在调用方的 shell 里导出前缀：source 本文件时调一次；入口脚本跑完便宜检查（子进程里刚准备好共享层）再调一次。
+use_managed_bytecode() { if [ -d "$PYC_MANAGED" ]; then export PYTHONPYCACHEPREFIX="$PYC_MANAGED"; fi; }
+use_managed_bytecode
+# 重建字节码共享层：数据根受管树的内容摘要与上次预编译时相同就沿用，否则清空重建（此时不应有别的进程在用它）。
+# 失败只告警、不中断：缓存缺失时各子命令回落为从源码编译，正确性不受影响。
+prepare_managed_bytecode() {
+  local digest summary rc=0
+  # 身份记忆化条目只增不改：入口时清掉 7 天前的（键随受管树变化，旧条目不会再命中）。
+  if [ -d "$CODEX_UPGRADE_IDENTITY_MEMO" ]; then find "$CODEX_UPGRADE_IDENTITY_MEMO" -type f -mtime +7 -delete 2>/dev/null || true; fi
+  digest=$(python3 -B - "$D/tools" <<'PY'
+import hashlib, sys
+from pathlib import Path
+root, total = Path(sys.argv[1]), hashlib.sha256()
+for path in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in {".py", ".json", ".sh"} and "__pycache__" not in p.parts):
+    total.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+print(total.hexdigest())
+PY
+) || digest=""
+  if [ -n "$digest" ] && [ -d "$PYC_MANAGED" ] && [ "$(cat "$PYC_MANAGED/.tools-digest" 2>/dev/null || true)" = "$digest" ]; then
+    export PYTHONPYCACHEPREFIX="$PYC_MANAGED"
+    echo "字节码共享层沿用（数据根受管树未变）：$PYC_MANAGED"
+    return 0
+  fi
+  # 不经管道取退出码：调用方没开 pipefail 时，管道的退出码是 tail 的。
+  summary=$(env -u PYTHONPATH -u PYTHONPYCACHEPREFIX python3 "$DRV/bytecode_cache.py" "$PYC_MANAGED" "$D/tools") || rc=$?
+  summary=$(printf '%s\n' "$summary" | tail -n 1)
+  if [ "$rc" -ne 0 ]; then
+    unset PYTHONPYCACHEPREFIX
+    echo "字节码共享层重建失败（各子命令回落为从源码编译）：${summary:0:300}" >&2
+    return 0
+  fi
+  printf '%s\n' "$digest" > "$PYC_MANAGED/.tools-digest"
+  export PYTHONPYCACHEPREFIX="$PYC_MANAGED"
+  echo "字节码共享层已重建：${summary:0:200}"
+}
 NEWDIR=$D/evidence/campaigns/$NEW
 W=$D/control/$IN
 TOOLS=$D/tools/official_client_capture
@@ -45,7 +87,8 @@ clone_test_tree() {
 isolated_run() {
   local tree="$1" workdir="$2" pyc="$3" out="$4" err="$5" rc=0
   shift 5
-  ( cd "$tree/$workdir" && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
+  # 门禁跑的是测试树：字节码用调用方给的测试树前缀；身份记忆化不混用生产缓存，交给统一调度执行器在本次记录目录里新建。
+  ( cd "$tree/$workdir" && unset CODEX_UPGRADE_IDENTITY_MEMO && export PYTHONPYCACHEPREFIX="$pyc" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
       CAPTURE_TYPESCRIPT_MODULE="$tree/frontend/node_modules/typescript/lib/typescript.js" \
       && unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"' isolated-gate "$@" ) \
     > "$out" 2> "$err" || rc=$?

@@ -154,8 +154,9 @@ def replay_atomic_double_in_container(
         raise ReleaseCertificationError("capture 容器名非法")
     receipt_relative = _relative_inside(evidence_root, receipt, "atomic-double 收据")
     container_root = PurePosixPath("/capture/staging", *relative_root.parts)
+    # 容器里的 /capture 就是生产数据根：禁写字节码，受管树里不留 __pycache__（E2-02）。
     command = [
-        "docker", "exec", "--env", "PYTHONPATH=/capture", "--workdir", "/capture", container,
+        "docker", "exec", "--env", "PYTHONPATH=/capture", "--env", "PYTHONDONTWRITEBYTECODE=1", "--workdir", "/capture", container,
         "python3", "-m", "tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt",
         "atomic-double-replay", "--evidence-root", str(container_root), "--receipt", receipt_relative,
     ]

@@ -40,9 +40,9 @@
     },
     {
       "path": "driver/bytecode_cache.py",
-      "sha256": "c2c1a8fb8f4e3682b4978d1147791dd6aeeb30649f2a5379880713511452382f",
+      "sha256": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
       "mode": "0700",
-      "bytes": 7105
+      "bytes": 7602
     },
     {
       "path": "driver/catalog_chain.py",
@@ -70,9 +70,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "870c724626ef77ccbd13f148f00050340dc60cd15494251dc006f45618ec19c5",
+      "sha256": "9d878f5032b7bbd3e25be51f0a05bd01074331dfa038f6704a56252e4735dfab",
       "mode": "0700",
-      "bytes": 7549
+      "bytes": 7938
     },
     {
       "path": "driver/env.example.sh",
@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/fix-and-continue.sh",
-      "sha256": "00c20abf1a357e65519979dbbcb3a03253b9fc902a01b4e460215902c1cc19df",
+      "sha256": "82475e13609744d8db491c91602bc8a4846318cb3675372cb77730734ff4db05",
       "mode": "0700",
-      "bytes": 22935
+      "bytes": 23516
     },
     {
       "path": "driver/fix_and_continue.py",
@@ -148,9 +148,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "7e407421e5c3ba71ecb1389a1588b8910489d34388253b59f4e7ac778de28f8c",
+      "sha256": "3100178d11bf8a67ab8888e5433b4d63c58d16b0cba3124f738fa4ee26311087",
       "mode": "0700",
-      "bytes": 10268
+      "bytes": 13427
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -190,9 +190,9 @@
     },
     {
       "path": "driver/pre-a3.sh",
-      "sha256": "74ce1b8ccbeabf9d6649ef89d237d0a619c20edc7ae0f94d04eb190127f51f0c",
+      "sha256": "1e70fcbda688f298eb02ab673105c6f0b0b14e8771133f50e79803959adb528d",
       "mode": "0700",
-      "bytes": 3417
+      "bytes": 3550
     },
     {
       "path": "driver/pre-all.sh",
@@ -202,15 +202,15 @@
     },
     {
       "path": "driver/stage1-finish.sh",
-      "sha256": "acc6512eb6e7612fb5abc0f75010f4fdd290028e88136d3255ab62e135846248",
+      "sha256": "4b1e91848d4c3a9afaa06683ac730faa8ceff68360cbccb35dc144289961628e",
       "mode": "0700",
-      "bytes": 3295
+      "bytes": 3440
     },
     {
       "path": "driver/stage1.sh",
-      "sha256": "cbeaddc7ae42b47818fc13b0d5052c80a2ccd8cf351585b842392d612a8ba3b0",
+      "sha256": "b7af78df10f60cf33227cc28d88189a4a7be500fcafeee5ff512c66c76a496ac",
       "mode": "0700",
-      "bytes": 6832
+      "bytes": 6965
     },
     {
       "path": "driver/stage2.sh",
@@ -375,5 +375,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "eb833aa7412ea6ecc9a7f92e901d9e4eda4917d8e9fde2b1fd0088fe3ca3f0f2"
+  "manifest_sha256": "d237cd6157eb997977545609c7778c7e97fd1837786be2e09c49b2a8d24c57df"
 }

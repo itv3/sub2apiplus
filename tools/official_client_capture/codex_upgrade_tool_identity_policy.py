@@ -25,6 +25,8 @@ import ast
 import functools
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -42,6 +44,65 @@ class ToolIdentityPolicyError(ValueError):
 def _fingerprint(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# 跨进程记忆化（E2-02）
+# ---------------------------------------------------------------------------
+# compute_identity_v2 与 evaluator_dependency_digests 每个进程第一次都要 ast.parse 6.3 万行的编排器、遍历闭包
+# （ARM64 约 1.3 秒与 2.4 秒），入口一轮里几十个进程、每个批次与动作前各算一遍。环境变量
+# CODEX_UPGRADE_IDENTITY_MEMO 指向一个绝对路径目录时，按「被计算的受管树逐文件摘要＋策略内容＋本模块源码摘要＋
+# 解释器版本」做键缓存结果：任何一个受管文件、策略或算法变了，键就不同、必然重算；结果是纯函数的输出，命中时与
+# 重算逐字节相同（缓存保留原来的键顺序）。条目里保存键的原文，读取时整段比对；目录不可读、条目不符或写入失败都
+# 当作未命中、照常计算。不设环境变量时行为与原来完全相同。
+IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
+IDENTITY_MEMO_SCHEMA = "codex-upgrade-identity-memo/v1"
+
+
+@functools.lru_cache(maxsize=1)
+def _algorithm_sha256() -> str:
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def _memo_entry(kind: str, key: Mapping[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    configured = os.environ.get(IDENTITY_MEMO_ENV, "")
+    if not configured or not os.path.isabs(configured):
+        return None
+    material = {
+        "schema": IDENTITY_MEMO_SCHEMA,
+        "kind": kind,
+        "algorithm_sha256": _algorithm_sha256(),
+        "python": ".".join(str(part) for part in sys.version_info[:3]),
+        **key,
+    }
+    return Path(configured) / f"{kind}-{_fingerprint(material)}.json", material
+
+
+def _memo_load(entry: tuple[Path, dict[str, Any]] | None) -> dict[str, Any] | None:
+    if entry is None:
+        return None
+    path, material = entry
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("key") != material or not isinstance(payload.get("value"), dict):
+        return None
+    return payload["value"]
+
+
+def _memo_save(entry: tuple[Path, dict[str, Any]] | None, value: Mapping[str, Any]) -> None:
+    if entry is None:
+        return
+    path, material = entry
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        # 不排序键：命中时返回的字典与重算的字典键顺序一致，调用方按插入顺序写出的收据逐字节不变。
+        temporary.write_text(json.dumps({"key": material, "value": value}, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def load_policy(path: Path | None = None) -> dict[str, Any]:
@@ -340,8 +401,31 @@ def compute_identity_v2(
     tool_root: Path,
     entries: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """按策略计算 wire／evidence／control 三层摘要与策略摘要。"""
+    """按策略计算 wire／evidence／control 三层摘要与策略摘要（设置了跨进程记忆化时先查缓存）。"""
 
+    entry = None
+    if os.environ.get(IDENTITY_MEMO_ENV):
+        try:
+            entry = _memo_entry("identity-v2", {
+                "policy": _fingerprint(dict(policy)),
+                "entries": _fingerprint([dict(item) for item in entries]),
+                "tree": _fingerprint(_managed_tree_digests(Path(tool_root))),
+            })
+        except (OSError, TypeError, ValueError):
+            entry = None
+        cached = _memo_load(entry)
+        if cached is not None:
+            return cached
+    result = _compute_identity_v2(policy, tool_root, entries)
+    _memo_save(entry, result)
+    return result
+
+
+def _compute_identity_v2(
+    policy: Mapping[str, Any],
+    tool_root: Path,
+    entries: list[Mapping[str, Any]],
+) -> dict[str, Any]:
     grouped = layer_entries(policy, entries)
     digests = {str(e["path"]): str(e["sha256"]) for e in entries}
     wire_closure = orchestrator_closure(policy, tool_root, list(policy["orchestrator"]["wire_roots"]), digests, layer="wire_producer")
@@ -443,18 +527,29 @@ def evaluator_dependency_digests(
     for relative in (EVALUATOR_CHECKER_RELATIVE, EVALUATOR_BUILDER_RELATIVE):
         if relative not in digests:
             raise ToolIdentityPolicyError(f"evaluator 直接依赖不在工具树内：{relative}")
+    entry = None
+    if os.environ.get(IDENTITY_MEMO_ENV):
+        try:
+            entry = _memo_entry("evaluator", {"policy": _fingerprint(active_policy), "tree": _fingerprint(digests)})
+        except (TypeError, ValueError):
+            entry = None
+        cached = _memo_load(entry)
+        if cached is not None:
+            return cached
     compare_closure = evaluator_reader_closure(
         active_policy, root, list(EVALUATOR_COMPARE_READER_ROOTS), digests
     )
     accept_closure = evaluator_reader_closure(
         active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests
     )
-    return {
+    result = {
         "checker_sha256": digests[EVALUATOR_CHECKER_RELATIVE],
         "builder_sha256": digests[EVALUATOR_BUILDER_RELATIVE],
         "compare_reader_sha256": compare_closure["closure_sha256"],
         "accept_reader_sha256": accept_closure["closure_sha256"],
     }
+    _memo_save(entry, result)
+    return result
 
 
 # ---------------------------------------------------------------------------

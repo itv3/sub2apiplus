@@ -32,9 +32,6 @@ from tools.official_client_capture.tests import test_codex_upgrade
 from tools.official_client_capture.tests.test_codex_upgrade_candidate_revision import R1, _read
 from tools.official_client_capture.tests import test_codex_upgrade_evaluation_recovery as recovery_tests
 
-# 不把测试类名引入模块全局，避免 unittest 重复收集 recovery 集成用例。
-_RECOVERY_TESTS = recovery_tests.EvaluationRecoveryIntegrationTests
-
 
 def _job_steps(_job_id: str, root: str) -> tuple[dict, ...]:
     """合成候选 Job 的唯一步骤：把证据写进 argv 末尾给出的证据根（段重定位会把该根名改写为新根）。"""
@@ -58,10 +55,12 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
         self.helper.setUp()
         self.addCleanup(self.helper.doCleanups)
 
-    # 复用 recovery 集成测试的夹具链、只读替身与参数构造（同一夹具族）。
-    _ready_vc4 = _RECOVERY_TESTS._ready_vc4
-    _stage_patches = _RECOVERY_TESTS._stage_patches
-    _recover_arguments = staticmethod(_RECOVERY_TESTS._recover_arguments)
+    # 复用 recovery 集成测试的夹具链、只读替身与参数构造（同一夹具族）。一律经模块属性取用，本模块全局里不放
+    # 那个测试类：unittest 收集时不看名字前缀，模块级别名（原先的 _RECOVERY_TESTS）会让它的 8 个集成用例在这里
+    # 再执行一遍，ARM64 上每次全量多花约 2 分钟（E2-02）。
+    _ready_vc4 = recovery_tests.EvaluationRecoveryIntegrationTests._ready_vc4
+    _stage_patches = recovery_tests.EvaluationRecoveryIntegrationTests._stage_patches
+    _recover_arguments = staticmethod(recovery_tests.EvaluationRecoveryIntegrationTests._recover_arguments)
 
     def _failed_b0_and_reconciled(self, root: Path) -> tuple[dict, dict]:
         fixture, context = self._ready_vc4(root)

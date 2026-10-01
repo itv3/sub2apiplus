@@ -10,6 +10,7 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 bash "$DRV/entry-preflight.sh"
+use_managed_bytecode   # 便宜检查刚按受管树内容准备好字节码共享层，本脚本后续的子命令沿用（E2-02）
 DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path

@@ -16,6 +16,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 OUT="$RUNROOT/entry-preflight/$(date -u +%Y%m%dt%H%M%Sz)"
 install -d -m 700 "$RUNROOT/entry-preflight" "$OUT"
 FAILED=()
+# 字节码共享层（E2-02）：入口第一步，数据根受管树变了才重建；之后本脚本的检查项、pre-A3、建账本等子命令只读使用。
+# 不放进管道里调用：它要在本 shell 里导出 PYTHONPYCACHEPREFIX。
+echo "== bytecode-cache $(utc_now)"
+prepare_managed_bytecode > "$OUT/bytecode-cache.log" 2>&1
+tail -n 2 "$OUT/bytecode-cache.log" | cut -c1-300
 check() { # <名称> <函数>：各项互不依赖，一项失败不中断其余
   local name=$1 rc=0 start
   start=$(date +%s)

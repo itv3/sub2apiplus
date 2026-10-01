@@ -87,6 +87,12 @@ if [ "$(id -u)" != 0 ]; then echo "必须以 root 执行（部署、属主收口
 EXPORTS=$(python3 "$FCPY" load-params "$PARAMS_ARG" < /dev/null) || exit 2
 eval "$EXPORTS"
 unset EXPORTS
+# 共享缓存（E2-02，与 lib.sh 同一约定）：身份记忆化目录与字节码共享层都在数据根之外。共享层由入口便宜检查按数据根
+# 受管树内容重建，这里只在它存在时导出。部署换了受管树之后，按内容摘要失效的字节码与以整树摘要为键的身份缓存都会
+# 自动重算，不会用到旧结果。
+export CODEX_UPGRADE_IDENTITY_MEMO
+CODEX_UPGRADE_IDENTITY_MEMO=$(dirname "$D")/identity-memo
+if [ -d "$(dirname "$D")/pycache-managed" ]; then export PYTHONPYCACHEPREFIX="$(dirname "$D")/pycache-managed"; fi
 PARAMS="$PARAMS_PATH"
 ST="$STAGING_TREE"
 STEPS_LIST=$(python3 "$FCPY" steps < /dev/null)

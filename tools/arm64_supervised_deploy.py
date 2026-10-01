@@ -471,6 +471,9 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0157-batch3-deploy-manifest-r12-20260927-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
+# 生产监督器的编译检查只编译、不落盘（E2-02）：py_compile 会无视 PYTHONDONTWRITEBYTECODE 显式写 .pyc，生产受管树原先
+# 因此每次部署都多一个 __pycache__。内置 compile() 与 py_compile 是同一个编译器，语法与编码声明错误同样失败。
+COMPILE_CHECK_COMMAND = ("python3", "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec', dont_inherit=True)")
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_159_2.json"
 SOURCE_SPEC_HEADINGS = {
     "第二章": "# 第二部分 Codex CLI 客户端规则画像",
@@ -2538,6 +2541,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
+    # 部署进程与它起的子进程一律不写字节码（E2-02）：本进程会按文件导入 staging 树里的受管模块，子进程还会运行
+    # 生产树里的监督器；不写就不会有 __pycache__ 跟着 staging 树复制进生产树，也不依赖调用方的 shell 有没有设禁写。
+    sys.dont_write_bytecode = True
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     selected = list(sys.argv[1:] if argv is None else argv)
     if selected and selected[0].startswith("egress-"):
         return egress_main(selected)
@@ -2957,7 +2964,8 @@ def _preflight(
 def _copy_candidate(source: Path, destination: Path) -> Mapping[str, Any]:
     if destination.exists() or destination.is_symlink():
         raise DeploymentError("候选目录已存在，拒绝覆盖。")
-    shutil.copytree(source, destination, symlinks=True)
+    # 字节码缓存不进生产树（E2-02）：staging 树若被别的进程导入过、留下了 __pycache__，也不跟着复制过去。
+    shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     return {"candidate": destination.name}
 
 
@@ -3314,7 +3322,7 @@ def _post_switch_verify(
     run_checked(
         client,
         "enable:compile-production-supervisor",
-        ["python3", "-m", "py_compile", str(supervisor_path)],
+        [*COMPILE_CHECK_COMMAND, str(supervisor_path)],
     )
     run_checked(
         client,

@@ -56,10 +56,12 @@ def _weights(root: Path, weights: dict[str, float]) -> Path:
 
 def _run(root: Path, tests: Path, *, parallel: int, cores: int, config: Path, weights: Path | None = None,
          out: str = "out") -> tuple[subprocess.CompletedProcess[str], dict, list[dict]]:
+    # 调度类用例不准备字节码共享层（单元按原环境运行）；共享层由 UnitExecutorBytecodeTests 专门验证。
     command = [
         sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(config),
         "--weights", str(weights or root / "no-weights.json"), "--durations", str(root / "no-durations.json"),
         "--parallel", str(parallel), "--cores", str(cores), "--state-dir", str(root / "state"), "--out-dir", str(root / out),
+        "--shared-caches", "off",
     ]
     completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
                                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
@@ -73,6 +75,26 @@ import time, unittest
 class SleepTests(unittest.TestCase):
     def test_sleep(self):
         time.sleep({seconds})
+"""
+
+# 字节码共享层用例的替身预编译工具：成功的只建空前缀，失败的直接退出 1（真实工具由 UnitExecutorBytecodeTests 单独跑一次）。
+OK_HELPER = (
+    "import json, sys\nfrom pathlib import Path\n"
+    "Path(sys.argv[1]).mkdir(parents=True, exist_ok=True)\n"
+    "print(json.dumps({'status': 'ready', 'stdlib_pyc': 0, 'sources_pyc': {}}))\n"
+)
+FAIL_HELPER = "import json, sys\nprint(json.dumps({'status': 'failed', 'error': '示例：预编译失败'}))\nsys.exit(1)\n"
+
+# 单元里的探针：记录本单元进程看到的字节码前缀、禁写开关，以及本模块的 .pyc 是否命中前缀里的预编译产物。
+PREFIX_PROBE = """
+import json, os, sys, unittest
+class PrefixTests(unittest.TestCase):
+    def test_prefix(self):
+        module = sys.modules[__name__]
+        with open(os.environ["E202_PROBE_OUT"], "w", encoding="utf-8") as handle:
+            json.dump({"prefix": sys.pycache_prefix, "env": os.environ.get("PYTHONPYCACHEPREFIX"), "dont_write": sys.dont_write_bytecode,
+                       "memo": os.environ.get("CODEX_UPGRADE_IDENTITY_MEMO"),
+                       "cached": module.__cached__, "cached_exists": os.path.isfile(module.__cached__)}, handle)
 """
 
 
@@ -242,7 +264,7 @@ class UnitExecutorRunTests(unittest.TestCase):
             command = [
                 sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(_config(root)),
                 "--weights", str(weights), "--durations", str(root / "none.json"), "--parallel", "1", "--cores", "1",
-                "--state-dir", str(root / "state"), "--out-dir", str(root / "out"),
+                "--state-dir", str(root / "state"), "--out-dir", str(root / "out"), "--shared-caches", "off",
             ]
             process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
@@ -277,15 +299,17 @@ class UnitExecutorRunTests(unittest.TestCase):
                 "        self.assertTrue(sys.dont_write_bytecode)\n"
                 "        self.assertEqual(os.environ.get('PYTHONDONTWRITEBYTECODE'), '1')\n"
             )})
+            (root / "helper-ok.py").write_text(OK_HELPER, encoding="utf-8")
             command = [
                 sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(_config(root)),
                 "--weights", str(root / "none.json"), "--durations", str(root / "none.json"), "--parallel", "1", "--cores", "1",
-                "--state-dir", str(root / "state"), "--out-dir", str(root / "out"),
+                "--state-dir", str(root / "state"), "--out-dir", str(root / "out"), "--bytecode-helper", str(root / "helper-ok.py"),
             ]
-            environment = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
+            environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"}}
             completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=120, env=environment)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(sorted(str(path) for path in tests.rglob("__pycache__")), [], "调度进程与单元子进程都不得写字节码")
+            self.assertEqual(sorted(str(path) for path in (root / "out" / "pycache-shared").rglob("*.pyc")), [], "单元只读使用共享层")
 
     def test_subset_run_with_repository_config_is_planned_without_stale_entry_errors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -294,6 +318,89 @@ class UnitExecutorRunTests(unittest.TestCase):
             completed, summary, _events = _run(root, tests, parallel=2, cores=2, config=REPO_ROOT / ue.DEFAULT_CONFIG)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual((summary["status"], summary["scope"]), ("passed", "subset"))
+
+
+class UnitExecutorBytecodeTests(unittest.TestCase):
+    """E2-02 共享缓存：字节码共享层没有前缀时先预编译、单元只读使用，已有前缀就沿用，预编译失败不拖住其余单元但结论
+    判失败；身份记忆化目录没有就在记录目录里新建、有就沿用，全部单元共用；``--shared-caches off`` 两样都不准备。"""
+
+    def _run_probe(self, root: Path, *extra: str, inherited: Path | None = None,
+                   memo: Path | None = None) -> tuple[subprocess.CompletedProcess[str], dict, dict, list[str]]:
+        tests = _write_modules(root, {"test_probe": PREFIX_PROBE})
+        command = [
+            sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(_config(root)),
+            "--weights", str(root / "none.json"), "--durations", str(root / "none.json"), "--parallel", "2", "--cores", "2",
+            "--state-dir", str(root / "state"), "--out-dir", str(root / "out"), *extra,
+        ]
+        environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPYCACHEPREFIX", ue.IDENTITY_MEMO_ENV}}
+        environment.update({"PYTHONDONTWRITEBYTECODE": "1", "E202_PROBE_OUT": str(root / "probe.json")})
+        if inherited is not None:
+            environment["PYTHONPYCACHEPREFIX"] = str(inherited)
+        if memo is not None:
+            environment[ue.IDENTITY_MEMO_ENV] = str(memo)
+        completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, env=environment)
+        summary = json.loads((root / "out" / "summary.json").read_text(encoding="utf-8"))
+        probe = json.loads((root / "probe.json").read_text(encoding="utf-8"))
+        names = [json.loads(line)["event"] for line in (root / "out" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sorted(str(path) for path in tests.rglob("__pycache__")), [])
+        return completed, summary, probe, names
+
+    def test_shared_layer_is_precompiled_before_any_unit_and_units_hit_it_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tests = root / "tests"
+            # 真实预编译工具（驱动 bytecode_cache.py）：标准库按时间戳、源码目录按内容摘要。
+            completed, summary, probe, names = self._run_probe(root, "--bytecode-source", str(tests))
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            prefix = str((root / "out" / "pycache-shared").resolve())
+            self.assertEqual((summary["bytecode_cache"]["status"], summary["bytecode_cache"]["prefix"]), ("ready", prefix))
+            self.assertEqual((probe["prefix"], probe["env"], probe["dont_write"]), (prefix, prefix, True))
+            self.assertTrue(probe["cached"].startswith(prefix) and probe["cached_exists"], probe)
+            self.assertLess(names.index("bytecode-exit"), names.index("start"), "预编译在任何单元之前完成")
+            self.assertIn("字节码共享层：预编译", completed.stderr)
+            memo = str((root / "out" / "identity-memo").resolve())
+            self.assertEqual((summary["identity_memo"], probe["memo"]), (memo, memo), "身份记忆化目录建在记录目录里、交给单元")
+
+    def test_inherited_prefix_is_used_without_precompiling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            inherited = root / "pycache-inherited"
+            inherited.mkdir()
+            (root / "helper-fail.py").write_text(FAIL_HELPER, encoding="utf-8")
+            memo = root / "memo-inherited"
+            completed, summary, probe, names = self._run_probe(root, "--bytecode-helper", str(root / "helper-fail.py"), inherited=inherited, memo=memo)
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            self.assertEqual((summary["bytecode_cache"]["status"], summary["bytecode_cache"]["prefix"]), ("inherited", str(inherited)))
+            self.assertNotIn("bytecode-start", names, "已有前缀时不得再预编译")
+            self.assertEqual(probe["prefix"], str(inherited))
+            self.assertEqual((summary["identity_memo"], probe["memo"]), (str(memo), str(memo)), "环境里已有的记忆化目录照样沿用")
+
+    def test_shared_caches_off_prepares_neither(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "helper-fail.py").write_text(FAIL_HELPER, encoding="utf-8")
+            completed, summary, probe, names = self._run_probe(root, "--shared-caches", "off", "--bytecode-helper", str(root / "helper-fail.py"))
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            self.assertEqual((summary["bytecode_cache"]["status"], summary["identity_memo"]), ("off", None))
+            self.assertNotIn("bytecode-start", names)
+            self.assertEqual((probe["prefix"], probe["memo"]), (None, None))
+
+    def test_identity_memo_variable_matches_the_managed_module(self) -> None:
+        from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
+
+        self.assertEqual(ue.IDENTITY_MEMO_ENV, tip.IDENTITY_MEMO_ENV)
+
+    def test_precompile_failure_fails_the_run_while_units_still_run_without_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "helper-fail.py").write_text(FAIL_HELPER, encoding="utf-8")
+            completed, summary, probe, _names = self._run_probe(root, "--bytecode-helper", str(root / "helper-fail.py"))
+            self.assertEqual(completed.returncode, 1)
+            self.assertEqual((summary["status"], summary["bytecode_cache"]["status"]), ("failed", "failed"))
+            self.assertEqual(summary["failed_units"], [], "单元照跑且通过，失败只来自共享层")
+            self.assertIsNone(probe["prefix"], "预编译失败时不设前缀")
+            self.assertIn("字节码共享层预编译失败", completed.stderr)
+            self.assertTrue(completed.stderr.strip().splitlines()[-1].startswith("FAILED (failures=0, errors=1"), completed.stderr[-500:])
 
 
 class UnitExecutorRepositoryConfigTests(unittest.TestCase):

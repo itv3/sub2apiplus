@@ -11,10 +11,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -59,7 +61,96 @@ def copy_managed_tree(destination: Path, *, include_tests: bool = True) -> Path:
         source = REPO_ROOT / "docs" / name
         if source.is_file():
             shutil.copy2(source, docs / name)
+    prepare_copy_pycache(destination)
     return destination
+
+
+# ---------------------------------------------------------------------------
+# 副本层字节码缓存（E2-02）
+# ---------------------------------------------------------------------------
+# 门禁与执行器给测试进程设好只读的「共享层」字节码前缀（sys.pycache_prefix）：标准库按时间戳、原树源码按内容摘要
+# （checked-hash）预编译一次，所有测试进程共用。副本树路径各不相同，原来给副本子进程的前缀永远是空的，每个子进程
+# 都要从源码重编标准库和 6.3 万行编排器（ARM64 约 1.7 秒）。现在每棵副本树建好就准备自己的「副本层」：
+# * 标准库镜像目录符号链接到共享层（只读共用）；
+# * 副本树里的模块，共享层有原树同路径、按内容摘要编译的 .pyc 时硬链接过来（跨文件系统时复制）。解释器加载时核对
+#   源文件摘要：测试随后改了副本源码（故障注入，哪怕同一秒内、长度不变），摘要对不上就回落为从源码编译，执行的
+#   一定是新代码；
+# * 只增不删：多棵副本树共用一个前缀根时各自只往自己的镜像路径里加文件，并行准备和运行互不清对方的缓存。
+# 没有共享层（本机直接跑单个测试）时副本层只是一个空目录，行为与原来相同。
+
+
+def copy_pycache_prefix(tree_root: Path) -> Path:
+    """副本子进程的字节码前缀：副本仓库根所在目录下的 ``.pycache-prefix``（在副本树之外，副本树内不出现 __pycache__）。"""
+
+    return Path(tree_root).parent / ".pycache-prefix"
+
+
+def _cached_path(prefix: Path, source: Path) -> Path:
+    """与 ``importlib.util.cache_from_source`` 在设置了前缀时的规则相同：前缀＋源文件目录的绝对路径（去掉根）＋缓存文件名。"""
+
+    return prefix / source.parent.relative_to(source.anchor) / f"{source.stem}.{sys.implementation.cache_tag}.pyc"
+
+
+def _checked_hash_pyc(path: Path) -> bool:
+    """PEP 552：.pyc 头部第 4～8 字节是标志位，值 3（按摘要＋加载时核对源文件）才允许跨路径复用。"""
+
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return False
+    return len(header) == 8 and int.from_bytes(header[4:8], "little") == 3
+
+
+def _stdlib_dirs() -> list[Path]:
+    """与驱动 bytecode_cache.py 同一口径：解释器实际导入标准库的路径写法，sysconfig 报告的写法不同时两份都算。"""
+
+    stdlib = Path(json.__file__).parents[1]
+    reported = Path(sysconfig.get_paths()["stdlib"])
+    return [stdlib] if reported == stdlib else [stdlib, reported]
+
+
+def _link_or_copy(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, target)
+    except FileExistsError:
+        return
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def prepare_copy_pycache(tree_root: Path, shared: Path | None = None) -> dict[str, int]:
+    """准备副本树的副本层字节码前缀，返回链接的标准库目录数与模块数（共享层默认取本进程的 ``sys.pycache_prefix``）。"""
+
+    prefix = copy_pycache_prefix(tree_root)
+    prefix.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if shared is None and sys.pycache_prefix:
+        shared = Path(sys.pycache_prefix)
+    if shared is None or not shared.is_dir():
+        return {"stdlib_dirs": 0, "modules": 0}
+    stdlib_links = 0
+    for stdlib in _stdlib_dirs():
+        source_mirror = shared / stdlib.relative_to(stdlib.anchor)
+        target = prefix / stdlib.relative_to(stdlib.anchor)
+        if not source_mirror.is_dir():
+            continue
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                target.symlink_to(source_mirror, target_is_directory=True)
+            except FileExistsError:
+                pass
+        stdlib_links += 1
+    modules = 0
+    # 子进程按 PYTHONPATH 的写法或 cwd 的物理路径拼模块路径，两种写法不同时都准备。
+    for tree in dict.fromkeys([Path(tree_root), Path(tree_root).resolve()]):
+        for source in (tree / PACKAGE_RELATIVE).rglob("*.py"):
+            cached = _cached_path(shared, REPO_ROOT / source.relative_to(tree))
+            if _checked_hash_pyc(cached):
+                _link_or_copy(cached, _cached_path(prefix, source))
+                modules += 1
+    return {"stdlib_dirs": stdlib_links, "modules": modules}
 
 
 def tool_root(tree_root: Path) -> Path:
@@ -157,9 +248,13 @@ def subprocess_env(tree_root: Path, extra: Mapping[str, str] | None = None) -> d
 
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONPATH"] = str(Path(tree_root))
-    # 字节码缓存写到副本树之外（按源文件绝对路径镜像，各副本树互不串用）：副本树内不出现 __pycache__，
-    # 又免去每个受管子进程重新编译 codex_upgrade.py 的开销（ARM64 上每步约 20 秒）。
-    env["PYTHONPYCACHEPREFIX"] = str(Path(tree_root).parent / ".pycache-prefix")
+    # 字节码缓存在副本树之外（按源文件绝对路径镜像，各副本树互不串用）：副本树内不出现 __pycache__；
+    # copy_managed_tree 已按共享层准备好副本层（见 prepare_copy_pycache），子进程只读使用。直接对原仓库根起子进程时，
+    # 原树本来就在共享层里，用共享层本身。
+    if Path(tree_root).resolve() == REPO_ROOT and sys.pycache_prefix:
+        env["PYTHONPYCACHEPREFIX"] = sys.pycache_prefix
+    else:
+        env["PYTHONPYCACHEPREFIX"] = str(copy_pycache_prefix(tree_root))
     if shutil.which("go") is None and (GO_TOOLCHAIN_BIN / "go").is_file():
         env["PATH"] = f"{GO_TOOLCHAIN_BIN}:{env.get('PATH', '')}"
     if extra:

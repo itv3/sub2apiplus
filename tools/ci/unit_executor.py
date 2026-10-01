@@ -22,6 +22,13 @@
   单元结果与汇总。
 * **采集申请整机资源**：采集批次开始前执行 ``acquire``，调度器停止派发新单元，等在跑单元结束、残留进程清理完再
   批准；采集结束 ``release``，调度器接着派发。同一台机器同一时间只运行一个调度器（状态目录里的 flock）。
+* **字节码共享层**（E2-02）：环境里已有可用的 ``PYTHONPYCACHEPREFIX``（ARM64 门禁已用驱动 ``bytecode_cache.py``
+  预编译）就直接沿用；没有时执行器先把标准库与原树预编译到记录目录下的 ``pycache-shared``（标准库按时间戳、原树按
+  内容摘要），独占整机、并发数取整机核数，耗时计入总时长，所有单元只读使用。预编译失败时其余单元照跑（回落为各自
+  从源码编译），结论判失败。
+* **身份记忆化**（E2-02）：环境里没有 ``CODEX_UPGRADE_IDENTITY_MEMO`` 时设为记录目录下的 ``identity-memo``，全部单元
+  共用——同一棵受管树的身份五摘要与评估器四项只算一次，键是整树逐文件摘要，测试改了副本树自然重算。
+  ``--shared-caches off`` 时两样都不准备，单元按原环境运行（诊断用）。
 
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、``acquire``／``release``（采集批次申请与归还整机资源）。
@@ -39,6 +46,7 @@ import json
 import math
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -52,6 +60,10 @@ DEFAULT_PATTERN = "test_*.py"
 DEFAULT_CONFIG = Path("tools/ci/unit_executor.json")
 DEFAULT_WEIGHTS = Path("tools/ci/capture_test_weights.json")
 DEFAULT_DURATIONS = Path("tools/ci/capture_test_durations.json")
+DEFAULT_BYTECODE_HELPER = Path("tools/arm64_capture_driver/driver/bytecode_cache.py")
+DEFAULT_BYTECODE_SOURCES = (Path("tools"),)
+# 受管工具身份的跨进程记忆化目录（与 codex_upgrade_tool_identity_policy.IDENTITY_MEMO_ENV 同名；执行器不导入受管模块）。
+IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
 CONFIG_SCHEMA = "unit-executor-config/v1"
 WEIGHTS_SCHEMA = "capture-test-shard-weights/v1"
 DURATIONS_SCHEMA = "capture-test-durations/v1"
@@ -846,6 +858,39 @@ def hold_scheduler_lock(state_dir: Path, *, wait_seconds: float) -> int:
             time.sleep(1.0)
 
 
+def prepare_shared_bytecode(out_dir: Path, scheduler: Scheduler, *, helper: Path, sources: list[Path], timeout_seconds: float = 1800.0) -> dict[str, Any]:
+    """字节码共享层（E2-02）：沿用环境里已有的前缀，或者预编译一份到记录目录，返回状态、前缀与耗时。
+
+    预编译在任何测试单元之前、独占整机运行（并发数经 ``UNIT_EXECUTOR_CORES`` 取整机核数）；成功后把前缀写进本进程
+    环境，之后派发的单元都继承它、只读使用（单元一律禁写字节码）。
+    """
+
+    inherited = os.environ.get("PYTHONPYCACHEPREFIX", "")
+    if inherited and Path(inherited).is_dir():
+        return {"status": "inherited", "prefix": inherited, "seconds": 0.0}
+    prefix = (Path(out_dir) / "pycache-shared").resolve()
+    command = [sys.executable, str(helper), str(prefix), *(str(Path(source).resolve()) for source in sources)]
+    environment = {**os.environ, "UNIT_EXECUTOR_CORES": str(scheduler.machine_cores), "PYTHONDONTWRITEBYTECODE": "1"}
+    environment.pop("PYTHONPYCACHEPREFIX", None)
+    scheduler.event("bytecode-start", prefix=str(prefix), cores=scheduler.machine_cores)
+    started = time.monotonic()
+    detail: dict[str, Any] = {}
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=timeout_seconds, stdin=subprocess.DEVNULL)
+        lines = completed.stdout.strip().splitlines()
+        detail = json.loads(lines[-1]) if lines else {"stderr": completed.stderr[-2000:]}
+        passed = completed.returncode == 0 and detail.get("status") == "ready"
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        passed, detail = False, {"error": str(error)}
+    seconds = round(time.monotonic() - started, 3)
+    scheduler.event("bytecode-exit", prefix=str(prefix), passed=passed, seconds=seconds)
+    if passed:
+        os.environ["PYTHONPYCACHEPREFIX"] = str(prefix)
+        return {"status": "ready", "prefix": str(prefix), "seconds": seconds,
+                "stdlib_pyc": detail.get("stdlib_pyc"), "sources_pyc": detail.get("sources_pyc")}
+    return {"status": "failed", "prefix": None, "seconds": seconds, "detail": detail}
+
+
 # ---------------------------------------------------------------------------
 # 汇总与全集核对
 # ---------------------------------------------------------------------------
@@ -919,6 +964,9 @@ def _print_summary(summary: dict[str, Any]) -> None:
     for key, label in (("missing", "缺报"), ("duplicated", "重复上报"), ("unexpected", "全集之外"), ("units_not_run", "未执行的单元")):
         if full_set[key]:
             print(f"全集核对失败：{label} {len(full_set[key])} 个，前几个：{full_set[key][:5]}", file=sys.stderr)
+    bytecode_failed = (summary.get("bytecode_cache") or {}).get("status") == "failed"
+    if bytecode_failed:
+        print(f"字节码共享层预编译失败（其余单元已照跑、各自从源码编译）：{summary['bytecode_cache'].get('detail')}", file=sys.stderr)
     print("-" * 70, file=sys.stderr)
     print(f"Ran {summary['reported_tests']} tests in {summary['elapsed_seconds']:.3f}s", file=sys.stderr)
     print("", file=sys.stderr)
@@ -928,6 +976,7 @@ def _print_summary(summary: dict[str, Any]) -> None:
         # errors 另计执行层问题：没写结果、被信号终止、超时的单元，以及全集核对的每一类问题。
         infrastructure = sum(1 for row in summary["units"] if not row["has_result"] or row["signal"] or row["timed_out"])
         infrastructure += sum(1 for key in ("missing", "duplicated", "unexpected", "units_not_run") if full_set[key])
+        infrastructure += 1 if bytecode_failed else 0
         details = [f"failures={counts['failed']}", f"errors={counts['error'] + infrastructure}"]
         if counts["skipped"]:
             details.append(f"skipped={counts['skipped']}")
@@ -954,6 +1003,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--state-dir", type=Path, default=None)
         p.add_argument("--out-dir", type=Path, default=None)
         p.add_argument("--wait-seconds", type=float, default=7200.0, help="本机已有调度器在跑时最多等待多久")
+        if name == "run":
+            p.add_argument("--shared-caches", choices=("auto", "off"), default="auto",
+                           help="字节码共享层与身份记忆化：auto 沿用环境里已有的、没有就在记录目录里新建；off 都不准备（单元按原环境运行，诊断用）")
+            p.add_argument("--bytecode-helper", type=Path, default=DEFAULT_BYTECODE_HELPER, help="字节码共享层的预编译工具（测试与诊断用）")
+            p.add_argument("--bytecode-source", type=Path, action="append", default=None, help="预编译进共享层的源码目录，可重复；默认 tools")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     unit.add_argument("--tests-file", type=Path, required=True)
@@ -1020,6 +1074,21 @@ def main(argv: list[str] | None = None) -> int:
                                                 "units": [{"unit_id": u.unit_id, "tests": list(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive} for u in units]})
             print(f"调度：{'全量' if scope == 'full' else '部分模块'} {len(units)} 个单元（{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，"
                   f"整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}", file=sys.stderr, flush=True)
+            # 字节码共享层在任何测试单元之前准备，耗时计入总时长。
+            if args.shared_caches == "off":
+                bytecode = {"status": "off", "prefix": os.environ.get("PYTHONPYCACHEPREFIX") or None, "seconds": 0.0}
+            else:
+                bytecode = prepare_shared_bytecode(out_dir, scheduler, helper=args.bytecode_helper,
+                                                   sources=list(args.bytecode_source or DEFAULT_BYTECODE_SOURCES))
+            bytecode_note = {"inherited": "沿用环境里的前缀", "ready": f"预编译 {bytecode['seconds']:.1f} 秒", "failed": "预编译失败",
+                             "off": "未准备（--shared-caches off）"}[bytecode["status"]]
+            print(f"字节码共享层：{bytecode_note}（{bytecode['prefix'] or '不设前缀'}）", file=sys.stderr, flush=True)
+            # 身份记忆化（E2-02）：本次运行的全部单元共用一个缓存目录，同一棵树的身份五摘要与评估器四项只算一次；
+            # 键是整树逐文件摘要，测试改副本树后自然重算（见 codex_upgrade_tool_identity_policy）。
+            identity_memo = os.environ.get(IDENTITY_MEMO_ENV) or None
+            if args.shared_caches != "off" and not identity_memo:
+                identity_memo = str((out_dir / "identity-memo").resolve())
+                os.environ[IDENTITY_MEMO_ENV] = identity_memo
             formal = scheduler.run_parallel([u for u in units if not u.exclusive], "formal")
             formal += scheduler.run_alone([u for u in units if u.exclusive], "formal")
             diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
@@ -1029,6 +1098,10 @@ def main(argv: list[str] | None = None) -> int:
             summary["machine_cores"] = cores
             summary["parallelism"] = parallelism
             summary["scope"] = scope
+            summary["bytecode_cache"] = bytecode
+            summary["identity_memo"] = identity_memo
+            if bytecode["status"] == "failed":
+                summary["status"] = "failed"
             _write_json(out_dir / "summary.json", summary)
             _print_summary(summary)
             return 0 if summary["status"] == "passed" else 1

@@ -30,6 +30,52 @@ class ManagedRuntimeDocumentsTest(unittest.TestCase):
         self.assertEqual([name for name in deploy.MANAGED_RUNTIME_DOCUMENTS if not (repository / name).is_file()], [])
 
 
+class DeployBytecodeTest(unittest.TestCase):
+    """E2-02：部署不在生产受管树里留 __pycache__——编译检查不落盘，部署进程与子进程一律禁写。"""
+
+    def test_compile_check_rejects_syntax_errors_without_writing_bytecode(self) -> None:
+        import subprocess
+
+        self.assertNotIn('"py_compile"', Path(deploy.__file__).read_text(encoding="utf-8"), "部署脚本不得再以 python3 -m py_compile 做编译检查")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good = root / "good.py"
+            good.write_text("VALUE = 1\n", encoding="utf-8")
+            bad = root / "bad.py"
+            bad.write_text("def broken(:\n", encoding="utf-8")
+            environment = {key: value for key, value in __import__("os").environ.items() if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"}}
+            command = [sys.executable, *deploy.COMPILE_CHECK_COMMAND[1:]]
+            self.assertEqual(subprocess.run([*command, str(good)], env=environment, capture_output=True).returncode, 0)
+            failed = subprocess.run([*command, str(bad)], env=environment, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("SyntaxError", failed.stderr)
+            self.assertEqual(sorted(str(path) for path in root.rglob("*.pyc")), [], "编译检查不得写 .pyc")
+
+    def test_candidate_copy_leaves_bytecode_caches_behind(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "staging"
+            (source / "pkg" / "__pycache__").mkdir(parents=True)
+            (source / "pkg" / "mod.py").write_text("X = 1\n", encoding="utf-8")
+            (source / "pkg" / "__pycache__" / "mod.cpython-312.pyc").write_bytes(b"stale")
+            (source / "stray.pyc").write_bytes(b"stale")
+            deploy._copy_candidate(source, root / "candidate")
+            self.assertTrue((root / "candidate" / "pkg" / "mod.py").is_file())
+            leaked = sorted(str(path) for path in (root / "candidate").rglob("*") if "__pycache__" in path.parts or path.suffix == ".pyc")
+            self.assertEqual(leaked, [], "staging 树里的字节码缓存不得复制进生产树")
+
+    def test_main_disables_bytecode_for_itself_and_children(self) -> None:
+        import os
+
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(sys, "dont_write_bytecode", False):
+            os.environ.pop("PYTHONDONTWRITEBYTECODE", None)
+            with mock.patch.object(deploy, "egress_main", return_value=0) as egress:
+                self.assertEqual(deploy.main(["egress-status"]), 0)
+            egress.assert_called_once()
+            self.assertTrue(sys.dont_write_bytecode)
+            self.assertEqual(os.environ.get("PYTHONDONTWRITEBYTECODE"), "1")
+
+
 class Arm64SupervisedDeployTest(unittest.TestCase):
     @staticmethod
     def _write_documents(root: Path, prefix: str) -> None:

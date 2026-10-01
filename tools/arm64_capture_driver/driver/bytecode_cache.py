@@ -19,6 +19,9 @@
 * 标准库按解释器实际导入时的路径写法编译（sysconfig 报告的写法不同时两份都编译），跳过其中的 site-packages／
   dist-packages 与自带测试集；个别文件编译失败只会让该文件回落为源码编译，不影响语义，只记入输出；
 * 源码目录必须全部编译成功、且不得出现 __pycache__，否则退出 1（失败关闭，调用方不得带着残缺缓存继续）；
+* 源码目录按内容摘要失效（PEP 552 checked-hash，E2-02）：解释器加载时核对源文件摘要，测试在同一秒内对源码做
+  长度不变的修改（故障注入）也会回落为从源码编译，不会执行旧字节码；副本受管树也按内容复用这些 .pyc
+  （tests/managed_tree_copy.py）。标准库不会被改，仍按时间戳校验，启动时不必读源码算摘要；
 * 最后一行输出 JSON 摘要（status／prefix／标准库与各源码目录的 .pyc 数）。
 """
 
@@ -27,6 +30,7 @@ from __future__ import annotations
 import compileall
 import json
 import os
+import py_compile
 import re
 import shutil
 import sys
@@ -96,7 +100,7 @@ def prepare(prefix: Path, sources: list[Path]) -> dict[str, object]:
     source_counts: dict[str, int] = {}
     failed: list[str] = []
     for source in physical_sources:
-        if not compileall.compile_dir(str(source), quiet=1, workers=workers):
+        if not compileall.compile_dir(str(source), quiet=1, workers=workers, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH):
             failed.append(str(source))
         source_counts[str(source)] = _count_pyc(prefix, source)
         if source_counts[str(source)] == 0:
