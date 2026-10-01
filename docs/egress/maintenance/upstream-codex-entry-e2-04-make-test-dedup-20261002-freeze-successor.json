@@ -1,0 +1,80 @@
+{
+  "base_commit": "70fbf0edd898976546c78244d7d0c270d4f1e959",
+  "changed_path_count": 11,
+  "current_commit": "c881ad00cbf40ca7d3963dc091e77e25247af5e7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5319,
+  "frozen_path_count": 1929,
+  "identity_sha256": "8c38cab6e047f40aacb2dc5500df4ade6d2e5b306a2d5e1ac605f195221df385",
+  "issued_at_utc": "2026-10-01T23:23:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-entry-e2-04-make-test-dedup-20261002-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "35696c75c4777001945e04684e857851d75ae4b74b7ffdccf6d2746a2185af9c"
+      ],
+      "reason": "E2-04 收尾：test 目标不再单列 test-official-client-control（它已是 check-egress-spec 的子检查，跑在执行器另起的 make 进程里，不和先决目标去重，单列会让 make test 执行两次） path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b4e82e8ba2436669c3f54a77eb08c0e2778a338106af26cd9f78e9212d424633"
+    }
+  ],
+  "unregistered_path_count": 10,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/entry_gates.py",
+    "tools/arm64_capture_driver/driver/gates.sh",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/driver/vc5-gate-target.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/entry_gates.py",
+    "tools/ci/unit_executor.py",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/official_client_capture/tests/test_ci_entry_gates.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
