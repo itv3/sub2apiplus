@@ -377,8 +377,11 @@ def install_orchestrator_patches(codex_upgrade: Any, state: Mapping[str, Any]) -
         original_run_job = codex_upgrade.run_job
 
         def run_job(job: Any, *args: Any, **kwargs: Any) -> Any:
+            # 首批作业串行执行：记下第一个作业开始与阻塞开始的时刻，测试据此算出其余作业实际用了多久、首批超时还剩多少余量。
+            first_marker = state.get("first_job_marker")
+            if first_marker and not Path(first_marker).exists():
+                Path(first_marker).write_text(f"{time.time():.3f}\n", encoding="utf-8")
             if getattr(job, "job_id", None) == stall_job:
-                # 记下开始阻塞的时刻（作业串行执行，此时首批其余作业已跑完）：测试据此报告首批超时里有多少是空等。
                 marker = state.get("stall_marker")
                 if marker:
                     Path(marker).write_text(f"{time.time():.3f}\n", encoding="utf-8")

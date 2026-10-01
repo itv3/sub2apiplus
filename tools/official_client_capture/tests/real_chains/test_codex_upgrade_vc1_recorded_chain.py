@@ -117,6 +117,9 @@ PREVIEW_DEFECT_ANCHOR = '''    """按控制／环境／数据三层输出恢复�
 '''
 PREVIEW_DEFECT_INJECTION = PREVIEW_DEFECT_ANCHOR + '    raise ConfigurationError("R18 恢复链注入：恢复预览批次失败")\n'
 GUARDIAN = "official-relay-guardian-review"
+# D1 首批动作超时：只为制造「首批超时」，其余 30 个作业必须在超时前跑完。原来写死 150 秒；E2-02 之后 ARM64 上 30 个
+# 作业只要一分钟左右，150 秒里大半是空等，压在全链最长的这一步上。按实测留出余量，并在下面核对余量（夹具可调）。
+FIRST_BATCH_TIMEOUT_SECONDS = 90
 
 
 class VC1RecordedRecoveryChainTests(unittest.TestCase):
@@ -146,12 +149,19 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             harness = _RecordedChainHarness(self, staging)
             trees.replace_once(harness.tree, "codex_upgrade.py", PREVIEW_DEFECT_ANCHOR, PREVIEW_DEFECT_INJECTION)
             stall_marker = staging / "first-batch-stall-started"
+            first_job_marker = staging / "first-batch-first-job-started"
             replay.update_state(harness.state, stall_job=GUARDIAN, job_retry_delay_seconds=1,
-                                guardian_plan=["fail", "fail", "fail", "success"], stall_marker=str(stall_marker))
+                                guardian_plan=["fail", "fail", "fail", "success"], stall_marker=str(stall_marker),
+                                first_job_marker=str(first_job_marker))
             # D1：首批动作超时（guardian 在进入步骤前阻塞），子进程自行封口，closeout 按失败收口。
-            init_started = time.time()
-            initialized = step("closeout-first-batch-timeout", harness.run("init", "--first-batch-timeout", "150"))
-            stall_started_after = round(float(stall_marker.read_text(encoding="utf-8")) - init_started, 3) if stall_marker.exists() else None
+            initialized = step("closeout-first-batch-timeout",
+                               harness.run("init", "--first-batch-timeout", str(FIRST_BATCH_TIMEOUT_SECONDS)))
+            # 夹具余量核对：作业变慢时给出明确原因，而不是让后面「complete 少于 30」的断言莫名失败。
+            self.assertTrue(stall_marker.exists() and first_job_marker.exists(),
+                            f"首批其余作业没在 {FIRST_BATCH_TIMEOUT_SECONDS} 秒超时前跑完（没走到阻塞点）：调大 FIRST_BATCH_TIMEOUT_SECONDS")
+            first_batch_jobs_seconds = round(float(stall_marker.read_text(encoding="utf-8")) - float(first_job_marker.read_text(encoding="utf-8")), 3)
+            self.assertLess(first_batch_jobs_seconds, FIRST_BATCH_TIMEOUT_SECONDS * 0.75,
+                            f"首批 30 个作业用了 {first_batch_jobs_seconds} 秒，{FIRST_BATCH_TIMEOUT_SECONDS} 秒超时余量不到四分之一：调大 FIRST_BATCH_TIMEOUT_SECONDS")
             self.assertEqual(initialized["status"], "failed", initialized)
             first = initialized["attempts"]
             self.assertEqual([(row["status"], row["complete"]) for row in first], [("failed", 30)], first)
@@ -223,7 +233,8 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             self.assertEqual(duplicates, [0] * 6)
             seconds = round(time.monotonic() - started, 3)
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0, "seconds": seconds,
-                                       "steps": steps, "first_batch_stall_started_after_seconds": stall_started_after,
+                                       "steps": steps, "first_batch_jobs_seconds": first_batch_jobs_seconds,
+                                       "first_batch_timeout_seconds": FIRST_BATCH_TIMEOUT_SECONDS,
                                        "batches": classified["batches"],
                                        "duplicate_dispatch_requests": sum(duplicates),
                                        "duplicate_dispatch_checks": len(duplicates)}
