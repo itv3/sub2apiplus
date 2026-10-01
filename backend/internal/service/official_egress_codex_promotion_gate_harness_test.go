@@ -56,22 +56,11 @@ import (
 // 扩展顺序都取自真实字节，而不是由测试按规则推导。整个过程不产生外部流量。
 // ============================================================================
 
-// codexGateTargetReleaseMode 在 previous/active 中找出唯一具备 feature 结构事实的
-// 发布槽位，并返回该槽位名（"previous" 或 "active"）。
-//
-// 两种情形都必须失败而不是退回任一槽位：
-//   - 两个槽位都不具备：目标制品没有入库，门禁无从重放；
-//   - 两个槽位都具备：该事实已不能区分目标制品，门禁失去判别力（例如下一轮升级把
-//     目标画像挤到 previous 后，本轮门禁应由新一轮门禁接替）。
+// codexGateReleaseModesHolding 返回 previous/active 中具备 holds 结构事实的槽位（按 previous、active 顺序）。
 //
 // 直接读 officialegress 的正式 ReleaseCatalog，不经过 service 的包级画像入口，
 // 避免被其他测试注入的合成画像影响。
-func codexGateTargetReleaseMode(
-	t *testing.T,
-	feature string,
-	holds func(profilecontract.ExecutableProfile) bool,
-) string {
-	t.Helper()
+func codexGateReleaseModesHolding(holds func(profilecontract.ExecutableProfile) bool) []string {
 	var matched []string
 	for _, mode := range []string{officialClientProfileModePrevious, officialClientProfileModeActive} {
 		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
@@ -82,6 +71,24 @@ func codexGateTargetReleaseMode(
 			matched = append(matched, mode)
 		}
 	}
+	return matched
+}
+
+// codexGateDiscriminatingReleaseMode 在 previous/active 中找出唯一具备 feature 结构事实的
+// 发布槽位，并返回该槽位名（"previous" 或 "active"）。本轮受影响规则的晋升后门禁（门禁映射
+// 逐条绑定的用例）必须用它。
+//
+// 两种情形都必须失败而不是退回任一槽位：
+//   - 两个槽位都不具备：目标制品没有入库，门禁无从重放；
+//   - 两个槽位都具备：该事实已不能区分目标制品，门禁失去判别力。
+func codexGateDiscriminatingReleaseMode(
+	t *testing.T,
+	feature string,
+	holds func(profilecontract.ExecutableProfile) bool,
+) string {
+	t.Helper()
+	codexGateFeatureHolds.Store(t.Name(), holds)
+	matched := codexGateReleaseModesHolding(holds)
 	switch len(matched) {
 	case 1:
 		return matched[0]
@@ -91,6 +98,72 @@ func codexGateTargetReleaseMode(
 		t.Fatalf("previous 与 active 同时具备结构事实「%s」：无法区分目标制品，门禁失去判别力", feature)
 	}
 	return ""
+}
+
+// codexGateTargetReleaseMode 是上一轮晋升后门禁的槽位定位：恰好一个槽位具备 feature 结构事实时
+// 返回该槽位；两个槽位都不具备时失败（目标制品没有入库）。
+//
+// 两个槽位都具备说明该事实已是上一轮晋升引入、本轮目标版本继承的特征（下一轮升级把目标画像放进
+// previous 后的常态）。此时这些用例不再承担本轮的判别职责——本轮受影响规则另有以
+// codexGateDiscriminatingReleaseMode 定位的门禁接替——而是在版本较旧的槽位、也就是当初批准这些语义的
+// 发布上继续重放，作为既有批准语义的回归；本轮目标版本对同一规则的新语义由本轮门禁覆盖，不用旧断言约束。
+// “另一槽位不具备该事实”的对照随之不成立，由 codexGateControlReleaseMode 跳过。
+func codexGateTargetReleaseMode(
+	t *testing.T,
+	feature string,
+	holds func(profilecontract.ExecutableProfile) bool,
+) string {
+	t.Helper()
+	codexGateFeatureHolds.Store(t.Name(), holds)
+	matched := codexGateReleaseModesHolding(holds)
+	switch len(matched) {
+	case 1:
+		return matched[0]
+	case 0:
+		t.Fatalf("ReleaseCatalog 的 previous/active 都不具备结构事实「%s」：目标制品未入库", feature)
+	}
+	older := codexGateOlderReleaseMode(t)
+	t.Logf("previous 与 active 同时具备结构事实「%s」：按继承特征在较旧槽位 %s 上重放", feature, older)
+	return older
+}
+
+// codexGateFeatureHolds 记录每个用例定位目标槽位时使用的结构事实，供 codexGateControlReleaseMode 复用。
+var codexGateFeatureHolds sync.Map
+
+// codexGateOlderReleaseMode 返回 previous/active 中画像版本较旧的槽位；版本相同时取 active。
+func codexGateOlderReleaseMode(t *testing.T) string {
+	t.Helper()
+	versionOf := func(mode string) []int {
+		profile := codexGateExecutableProfile(t, mode)
+		parts := strings.Split(profile.Version(), ".")
+		out := make([]int, 0, len(parts))
+		for _, part := range parts {
+			value, err := strconv.Atoi(part)
+			require.NoError(t, err, "%s 槽位画像版本非法：%s", mode, profile.Version())
+			out = append(out, value)
+		}
+		return out
+	}
+	if slices.Compare(versionOf(officialClientProfileModePrevious), versionOf(officialClientProfileModeActive)) < 0 {
+		return officialClientProfileModePrevious
+	}
+	return officialClientProfileModeActive
+}
+
+// codexGateControlReleaseMode 返回可做“另一槽位不具备该事实”对照的槽位：只有另一槽位确实不具备本用例
+// 定位目标槽位时使用的结构事实才返回 ok=true；两个槽位都具备（本轮继承）时跳过对照。
+func codexGateControlReleaseMode(t *testing.T, mode string) (string, bool) {
+	t.Helper()
+	value, found := codexGateFeatureHolds.Load(t.Name())
+	require.True(t, found, "对照前必须先定位目标槽位")
+	holds, ok := value.(func(profilecontract.ExecutableProfile) bool)
+	require.True(t, ok)
+	other := codexGateOtherReleaseMode(mode)
+	if slices.Contains(codexGateReleaseModesHolding(holds), other) {
+		t.Logf("对照跳过：%s 槽位同样具备该结构事实（本轮继承）", other)
+		return "", false
+	}
+	return other, true
 }
 
 // codexGateOtherReleaseMode 返回另一个发布槽位，用于“另一槽位不具备该事实”的对照。

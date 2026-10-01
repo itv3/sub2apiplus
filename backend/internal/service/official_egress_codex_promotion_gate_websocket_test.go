@@ -298,9 +298,11 @@ func TestCodexWebSocketFallbackReplaysApprovedSemanticsOnTargetRelease(t *testin
 	require.Equal(t, string(officialegress.AttemptReasonFallback), httpAttempts[0].AttemptReason)
 
 	// 对照：另一槽位没有该节，slow_down 不按画像预算降级。
-	_, controlDialer, controlServer, _ := runSlowDown(codexGateOtherReleaseMode(mode))
-	require.Less(t, len(controlDialer.snapshot()), section.RetryBudget+1, "对照槽位不按画像预算重连")
-	require.Empty(t, controlServer.httpRequestsForPath(codexGateResponsesPath), "对照槽位的 slow_down 不降级 HTTP")
+	if other, ok := codexGateControlReleaseMode(t, mode); ok {
+		_, controlDialer, controlServer, _ := runSlowDown(other)
+		require.Less(t, len(controlDialer.snapshot()), section.RetryBudget+1, "对照槽位不按画像预算重连")
+		require.Empty(t, controlServer.httpRequestsForPath(codexGateResponsesPath), "对照槽位的 slow_down 不降级 HTTP")
+	}
 }
 
 // codexGateIngressFrame 构造官方客户端 WS 模式的一帧 response.create。
@@ -461,11 +463,13 @@ func TestCodexResponseCreateSlotsReplaysApprovedSemanticsOnTargetRelease(t *test
 		officialEgressWebSocketPoolTransportKey(target, "", bearer("token-a")),
 		officialEgressWebSocketPoolTransportKey(otherAccount, "", bearer("token-a")),
 		"账号 owner 变化必须让连接池键变化")
-	control := attach(codexGateOtherReleaseMode(mode), newOfficialOpenAIHTTPTestAccount(codexGateForwardAccountID))
-	require.Equal(t,
-		officialEgressWebSocketPoolTransportKey(control, "", bearer("token-a")),
-		officialEgressWebSocketPoolTransportKey(control, "", bearer("token-b")),
-		"对照：另一槽位没有该节，认证代次不进入连接池键")
+	if other, ok := codexGateControlReleaseMode(t, mode); ok {
+		control := attach(other, newOfficialOpenAIHTTPTestAccount(codexGateForwardAccountID))
+		require.Equal(t,
+			officialEgressWebSocketPoolTransportKey(control, "", bearer("token-a")),
+			officialEgressWebSocketPoolTransportKey(control, "", bearer("token-b")),
+			"对照：另一槽位没有该节，认证代次不进入连接池键")
+	}
 }
 
 // SPEC-BODY-004（condition_change）：turn-state 从响应读取、保存并按下一请求传输形态回送；
@@ -495,7 +499,9 @@ func TestCodexTurnStateRoundTripReplaysApprovedSemanticsOnTargetRelease(t *testi
 	_, wsHeader := codexGateHeaderSlot(codexGateMustEndpoint(t, profile, officialCodexEndpointResponsesWS), "x-codex-turn-state")
 	require.False(t, wsHeader, "WS 握手不声明 turn-state 头")
 	require.True(t, officialCodexTurnStateOwnerIsolation(mode))
-	require.False(t, officialCodexTurnStateOwnerIsolation(codexGateOtherReleaseMode(mode)))
+	if other, ok := codexGateControlReleaseMode(t, mode); ok {
+		require.False(t, officialCodexTurnStateOwnerIsolation(other))
+	}
 	digest := func(value string) [32]byte { return sha256.Sum256([]byte(value)) }
 
 	// HTTP 通道。
