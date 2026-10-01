@@ -1,0 +1,83 @@
+{
+  "base_commit": "19b3f8257521ecb620c9e7e7bfc6aa9ad3c37772",
+  "changed_path_count": 15,
+  "current_commit": "dabe5b51d1fa31a6f5bf29da4f5516ffeeda7328",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5317,
+  "frozen_path_count": 1929,
+  "identity_sha256": "64d98af5e5c5901c850442f225aa6c90c006006e20d1f482c17cd4b3bcb3adac",
+  "issued_at_utc": "2026-10-01T19:30:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "be29d7e82a10e4edefec1dd8ef5bbbbd3634cd13acaffb6a46bbe015c6568a6e"
+      ],
+      "reason": "E2-04 入口门禁一次运行：check-egress-spec 拆成一组互不依赖的子检查目标（EGRESS_SPEC_CHECKS），由统一调度执行器并行执行、全部跑完再汇总，字面命令不变；test-capture-tools 的前置检查拆成独立目标 test-capture-tools-prerequisites path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "35696c75c4777001945e04684e857851d75ae4b74b7ffdccf6d2746a2185af9c"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/arm64-full-gates.sh",
+    "tools/arm64_capture_driver/driver/arm64-vc4-gates.sh",
+    "tools/arm64_capture_driver/driver/entry-gates.sh",
+    "tools/arm64_capture_driver/driver/entry_gates.py",
+    "tools/arm64_capture_driver/driver/env.example.sh",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/driver/vc0-gate-target.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/entry_gates.py",
+    "tools/ci/unit_executor.py",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/official_client_capture/tests/test_ci_entry_gates.py",
+    "tools/official_client_capture/tests/test_ci_unit_executor.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
