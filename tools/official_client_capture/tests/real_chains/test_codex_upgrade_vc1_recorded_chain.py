@@ -130,9 +130,14 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             self.skipTest("录制回放链必须在具备 0.156.1 录制数据、root 与 unshare 的 Linux ARM64 上运行")
         started = time.monotonic()
         steps: list[dict] = []
+        last_step = [started]
 
         def step(name: str, result: dict) -> dict:
-            steps.append({"step": name, "status": result.get("status"), "seconds": result.get("seconds")})
+            # 每步墙钟取相邻两步之间（驱动结果里的 seconds 只有部分阶段有），用于剖析最长链的耗时构成（E2-02）。
+            now = time.monotonic()
+            steps.append({"step": name, "status": result.get("status"), "seconds": result.get("seconds"),
+                          "wall_seconds": round(now - last_step[0], 3)})
+            last_step[0] = now
             return result
 
         with tempfile.TemporaryDirectory(prefix="codex-vc1-recovery-", dir=replay.scratch_root()) as directory:
@@ -140,10 +145,13 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             staging.mkdir(mode=0o700)
             harness = _RecordedChainHarness(self, staging)
             trees.replace_once(harness.tree, "codex_upgrade.py", PREVIEW_DEFECT_ANCHOR, PREVIEW_DEFECT_INJECTION)
+            stall_marker = staging / "first-batch-stall-started"
             replay.update_state(harness.state, stall_job=GUARDIAN, job_retry_delay_seconds=1,
-                                guardian_plan=["fail", "fail", "fail", "success"])
+                                guardian_plan=["fail", "fail", "fail", "success"], stall_marker=str(stall_marker))
             # D1：首批动作超时（guardian 在进入步骤前阻塞），子进程自行封口，closeout 按失败收口。
+            init_started = time.time()
             initialized = step("closeout-first-batch-timeout", harness.run("init", "--first-batch-timeout", "150"))
+            stall_started_after = round(float(stall_marker.read_text(encoding="utf-8")) - init_started, 3) if stall_marker.exists() else None
             self.assertEqual(initialized["status"], "failed", initialized)
             first = initialized["attempts"]
             self.assertEqual([(row["status"], row["complete"]) for row in first], [("failed", 30)], first)
@@ -215,7 +223,8 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             self.assertEqual(duplicates, [0] * 6)
             seconds = round(time.monotonic() - started, 3)
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0, "seconds": seconds,
-                                       "steps": steps, "batches": classified["batches"],
+                                       "steps": steps, "first_batch_stall_started_after_seconds": stall_started_after,
+                                       "batches": classified["batches"],
                                        "duplicate_dispatch_requests": sum(duplicates),
                                        "duplicate_dispatch_checks": len(duplicates)}
             print(json.dumps({"chain": "vc-chain.vc1-recovery-chain", **self.real_chain_metrics}, ensure_ascii=False), file=sys.stderr)
