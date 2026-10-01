@@ -25,7 +25,8 @@
 
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、``acquire``／``release``（采集批次申请与归还整机资源）。
-运行时与原 make 目标一样设置 ``CLAUDE_AST_TYPESCRIPT_MODULE`` 与 ``PYTHONDONTWRITEBYTECODE=1``，从仓库根目录执行。
+运行时与原 make 目标一样设置 ``CLAUDE_AST_TYPESCRIPT_MODULE``，从仓库根目录执行；调度进程与单元子进程一律不写字节码。
+换了起点或模式（只跑一部分模块）时，调度配置里本次集合之外的登记项不参与规划；全量运行时登记项必须全部命中。
 """
 
 from __future__ import annotations
@@ -269,13 +270,24 @@ def plan_units(
     durations: dict[str, float],
     *,
     machine_cores: int,
+    full_set: bool = True,
 ) -> list[Unit]:
-    """把全集拆成单元：独占测试单独成单元；登记拆块的模块按最长优先法均衡拆块；其余一个模块一个单元。"""
+    """把全集拆成单元：独占测试单独成单元；登记拆块的模块按最长优先法均衡拆块；其余一个模块一个单元。
 
-    stale = sorted({prefix.split(".")[0] for prefix, _reason in config.exclusive} - set(grouped))
-    stale += sorted(set(config.splits) - set(grouped))
-    if stale:
-        raise ExecutorError("调度配置登记了不存在的模块：" + "、".join(sorted(set(stale))))
+    ``full_set`` 为真（默认起点与模式的全量运行）时同时校验调度配置：登记了拆块或独占的模块必须存在，独占名单的
+    每个条目至少命中一个测试——测试改名或删除后名单不会静默失效。只跑一部分模块（换了起点或模式，如只重跑失败项）
+    时，本次集合之外的登记项不参与规划，也不报错。
+    """
+
+    if full_set:
+        stale = sorted({prefix.split(".")[0] for prefix, _reason in config.exclusive} - set(grouped))
+        stale += sorted(set(config.splits) - set(grouped))
+        if stale:
+            raise ExecutorError("调度配置登记了不存在的模块：" + "、".join(sorted(set(stale))))
+        every_id = [t for ids in grouped.values() for t in ids]
+        unmatched = sorted({prefix for prefix, _reason in config.exclusive if not any(_matches(t, prefix) for t in every_id)})
+        if unmatched:
+            raise ExecutorError("独占名单里的条目没有命中任何测试（测试改名或删除后要同步名单）：" + "、".join(unmatched))
     units: list[Unit] = []
     for module, test_ids in grouped.items():
         quota = config.quotas.get(module, config.default_quota)
@@ -624,7 +636,7 @@ class Scheduler:
         self.events_path = self.out_dir / "events.jsonl"
         self.reservation = Reservation(self.state_dir)
         self.running: dict[int, Running] = {}
-        self.max_cores_in_use = 0
+        self.max_cores_in_use = 0.0
 
     # -- 事件与预约 -----------------------------------------------------------
     def event(self, name: str, **payload: Any) -> None:
@@ -643,7 +655,7 @@ class Scheduler:
                 os.waitpid(pid, 0)
             self.running.pop(pid, None)
 
-    def cores_in_use(self) -> int:
+    def cores_in_use(self) -> float:
         return sum(item.unit.quota.cores for item in self.running.values())
 
     def memory_in_use(self) -> int:
@@ -684,6 +696,9 @@ class Scheduler:
             **os.environ,
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
+            # 与 make 目标一致禁写字节码：绕过 make 直接运行（如只重跑一部分模块）时，测试也不会在树里留下 __pycache__
+            # ——驱动清单等检查遇到它会报错。
+            "PYTHONDONTWRITEBYTECODE": "1",
             # 单元内部并行度：按额度向上取整（至少 1）。
             "UNIT_EXECUTOR_CORES": str(max(1, math.ceil(unit.quota.cores))),
             "GOMAXPROCS": str(max(1, math.ceil(unit.quota.cores))),
@@ -953,18 +968,23 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _prepare(args: argparse.Namespace) -> tuple[ExecutorConfig, dict[str, float], dict[str, float], int, int, dict[str, list[str]], list[Unit], str]:
+def _prepare(args: argparse.Namespace) -> tuple[ExecutorConfig, dict[str, float], dict[str, float], int, int, dict[str, list[str]], list[Unit], str, str]:
     config = load_config(args.config)
     weights = load_weights(args.weights)
     durations = load_durations(args.durations)
     parallelism = args.parallel or config.default_parallelism
     cores = args.cores or os.cpu_count() or 1
+    # 范围：默认起点与模式是全量（make test-capture-tools），此时校验调度配置；换了起点或模式只跑一部分模块。
+    full_set = Path(args.start).resolve() == DEFAULT_START.resolve() and args.pattern == DEFAULT_PATTERN
     grouped = discover_test_ids(args.start, args.pattern)
-    units = plan_units(grouped, config, weights, durations, machine_cores=cores)
-    return config, weights, durations, parallelism, cores, grouped, units, policy_digest(config, weights, durations, parallelism)
+    units = plan_units(grouped, config, weights, durations, machine_cores=cores, full_set=full_set)
+    scope = "full" if full_set else "subset"
+    return config, weights, durations, parallelism, cores, grouped, units, policy_digest(config, weights, durations, parallelism), scope
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 调度进程 discover 时会导入全部测试模块，同样不能在树里写字节码（单元子进程经环境变量禁写）。
+    sys.dont_write_bytecode = True
     args = _parse(sys.argv[1:] if argv is None else argv)
     try:
         if args.command == "run-unit":
@@ -976,10 +996,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "release":
             print(json.dumps({"released": release(args.state_dir or default_state_dir(), args.owner)}, ensure_ascii=False))
             return 0
-        config, weights, durations, parallelism, cores, grouped, units, policy = _prepare(args)
+        config, weights, durations, parallelism, cores, grouped, units, policy, scope = _prepare(args)
         if args.command == "plan":
             print(json.dumps({
-                "policy_sha256": policy, "parallelism": parallelism, "machine_cores": cores,
+                "policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
                 "modules": len(grouped), "tests": sum(len(v) for v in grouped.values()),
                 "units": [{"unit_id": u.unit_id, "tests": len(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive, "weight": round(u.weight, 1)} for u in sorted(units, key=lambda u: -u.weight)],
             }, ensure_ascii=False, indent=1))
@@ -996,9 +1016,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         try:
             started = time.monotonic()
-            _write_json(out_dir / "plan.json", {"policy_sha256": policy, "parallelism": parallelism, "machine_cores": cores,
+            _write_json(out_dir / "plan.json", {"policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
                                                 "units": [{"unit_id": u.unit_id, "tests": list(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive} for u in units]})
-            print(f"调度：{len(units)} 个单元（{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}", file=sys.stderr, flush=True)
+            print(f"调度：{'全量' if scope == 'full' else '部分模块'} {len(units)} 个单元（{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，"
+                  f"整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}", file=sys.stderr, flush=True)
             formal = scheduler.run_parallel([u for u in units if not u.exclusive], "formal")
             formal += scheduler.run_alone([u for u in units if u.exclusive], "formal")
             diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
@@ -1007,6 +1028,7 @@ def main(argv: list[str] | None = None) -> int:
             summary["max_cores_in_use"] = scheduler.max_cores_in_use
             summary["machine_cores"] = cores
             summary["parallelism"] = parallelism
+            summary["scope"] = scope
             _write_json(out_dir / "summary.json", summary)
             _print_summary(summary)
             return 0 if summary["status"] == "passed" else 1

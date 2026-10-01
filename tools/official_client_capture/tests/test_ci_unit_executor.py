@@ -110,6 +110,23 @@ class UnitExecutorPlanTests(unittest.TestCase):
             with self.assertRaisesRegex(ue.ExecutorError, "不存在的模块"):
                 ue.plan_units({"test_a": ["test_a.A.test_x"]}, config, {}, {}, machine_cores=2)
 
+    def test_full_run_rejects_stale_entries_while_subset_run_ignores_entries_outside_it(self) -> None:
+        config = ue.ExecutorConfig(
+            default_parallelism=2, default_quota=ue.Quota(1, 128), quotas={}, splits={"test_heavy": 2},
+            exclusive=(("test_timing.TimingTests.test_watchdog", "亚秒级看门狗"),), unit_timeout_seconds=60, orphan_grace_seconds=1, raw={},
+        )
+        subset = {"test_light": ["test_light.LightTests.test_a"]}
+        self.assertEqual([u.unit_id for u in ue.plan_units(subset, config, {}, {}, machine_cores=2, full_set=False)], ["test_light"])
+        with self.assertRaisesRegex(ue.ExecutorError, "不存在的模块"):
+            ue.plan_units(subset, config, {}, {}, machine_cores=2)
+        # 独占条目对应的测试改了名：全量运行报错（名单不能静默失效），只跑部分模块时照常规划。
+        renamed = {**subset, "test_heavy": ["test_heavy.H.test_1", "test_heavy.H.test_2"],
+                   "test_timing": ["test_timing.TimingTests.test_watchdog_renamed"]}
+        with self.assertRaisesRegex(ue.ExecutorError, "没有命中任何测试"):
+            ue.plan_units(renamed, config, {}, {}, machine_cores=2)
+        units = ue.plan_units(renamed, config, {}, {}, machine_cores=2, full_set=False)
+        self.assertEqual(sorted(u.unit_id for u in units), ["test_heavy#1", "test_heavy#2", "test_light", "test_timing"])
+
     def test_full_set_check_rejects_missing_duplicated_and_unexpected_results(self) -> None:
         quota = ue.Quota(1, 128)
         unit_a = ue.Unit("test_a", "test_a", ("test_a.A.test_1", "test_a.A.test_2"), quota, False, 1.0)
@@ -250,6 +267,51 @@ class UnitExecutorRunTests(unittest.TestCase):
             summary = json.loads((root / "out" / "summary.json").read_text())
             self.assertEqual(summary["status"], "passed")
             self.assertEqual(len(summary["units"]), 4)
+
+    def test_run_started_outside_make_never_writes_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = _write_modules(root, {"test_flag": (
+                "import os, sys, unittest\nclass FlagTests(unittest.TestCase):\n"
+                "    def test_flag(self):\n"
+                "        self.assertTrue(sys.dont_write_bytecode)\n"
+                "        self.assertEqual(os.environ.get('PYTHONDONTWRITEBYTECODE'), '1')\n"
+            )})
+            command = [
+                sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(_config(root)),
+                "--weights", str(root / "none.json"), "--durations", str(root / "none.json"), "--parallel", "1", "--cores", "1",
+                "--state-dir", str(root / "state"), "--out-dir", str(root / "out"),
+            ]
+            environment = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
+            completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=120, env=environment)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(sorted(str(path) for path in tests.rglob("__pycache__")), [], "调度进程与单元子进程都不得写字节码")
+
+    def test_subset_run_with_repository_config_is_planned_without_stale_entry_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = _write_modules(root, {"test_m0": SLEEPER.format(seconds=0)})
+            completed, summary, _events = _run(root, tests, parallel=2, cores=2, config=REPO_ROOT / ue.DEFAULT_CONFIG)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual((summary["status"], summary["scope"]), ("passed", "subset"))
+
+
+class UnitExecutorRepositoryConfigTests(unittest.TestCase):
+    def test_repository_config_plans_the_real_full_set(self) -> None:
+        """仓库里的调度配置对真实全集规划：登记的拆块与独占都命中现有测试、规划闭合；测试改名或删除后这里先变红。"""
+
+        completed = subprocess.run([sys.executable, str(EXECUTOR), "plan"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=600,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+        plan = json.loads(completed.stdout)
+        self.assertEqual(plan["scope"], "full")
+        config = ue.load_config(REPO_ROOT / ue.DEFAULT_CONFIG)
+        unit_ids = {unit["unit_id"] for unit in plan["units"]}
+        for module, chunks in config.splits.items():
+            self.assertEqual({f"{module}#{i}" for i in range(1, chunks + 1)} & unit_ids, {f"{module}#{i}" for i in range(1, chunks + 1)})
+        exclusive_modules = {prefix.split(".")[0] for prefix, _reason in config.exclusive}
+        self.assertEqual({unit_id for unit_id in unit_ids if unit_id.endswith("!exclusive")}, {f"{m}!exclusive" for m in exclusive_modules})
+        self.assertEqual(sum(unit["tests"] for unit in plan["units"]), plan["tests"])
 
 
 if __name__ == "__main__":

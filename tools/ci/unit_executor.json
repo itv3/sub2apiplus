@@ -1,7 +1,7 @@
 {
  "schema_version": "unit-executor-config/v1",
- "source": "ARM64 实测（E2-01，2026-10-01，提交 517ef4304，3 路并行逐模块测量 CPU／墙钟比与内存峰值）",
- "default_parallelism": 6,
+ "source": "ARM64 实测（E2-01，2026-10-01）：额度与拆块按提交 517ef4304 上 3 路并行逐模块测量的 CPU／墙钟比与内存峰值；默认并行度按提交 88202e274 上 4／6／8 路全量实测（16.3／15.5／14.5 分钟）；独占名单按 6、8 路全量与负载实验定位",
+ "default_parallelism": 8,
  "default_quota": {
   "cores": 1,
   "memory_mb": 768
@@ -98,6 +98,60 @@
     "test_codex_upgrade_supervisor.SupervisorTests.test_run_can_persist_private_offline_gate_output"
    ],
    "reason": "测试本身或其调用的辅助方法用亚秒级看门狗或动作超时验证看门狗、超时与终态的竞争，并行负载会让判定提前触发（0.157 轮 CI 有过同类偶发红）"
+  },
+  {
+   "tests": [
+    "test_codex_upgrade_evaluation_baseline.PreActionIdentityCheckTests",
+    "test_codex_upgrade_predispatch_stop.PredispatchStopTests.test_existing_parent_run_is_rejected",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_activation_failure_after_commit_retries_then_parent_start_failed",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_activation_retry_succeeds_when_second_attempt_writes_state",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_commit_failure_before_commit_is_aborted_prepared_with_step",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_commit_failure_diagnostic_write_error_never_masks_the_original_failure",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_commit_failure_persists_original_text_and_signature_before_sealing",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_commit_failure_with_nonce_mismatch_is_rejected_before_any_step",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_commit_with_foreign_nonce_is_integrity_mismatch",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_reconciler_classifies_diagnosed_commit_failure_and_rejects_step_mismatch"
+   ],
+   "reason": "在单元进程里直接以 owner 身份跑监督器 campaign run（_campaign_run_locked／_campaign_run_command，心跳 0.05 秒、看门狗 1 秒，默认终止 owner）；心跳只在写事件和等子进程时同步写入，负载高时动作前的同步计算（如算评估器摘要）超过 1 秒，看门狗把 owner——也就是单元进程本身——判为失联并 SIGTERM，整个单元被终止。10-01 ARM64 实测：6、8 路全量各一次、6 个忙循环负载下单独运行 3 次，都在 PreActionIdentityCheckTests 的第二个测试被 SIGTERM，单独重跑通过；同一调用方式的其余测试一并登记"
+  },
+  {
+   "tests": [
+    "test_certify_release.CertifyReleaseTests.test_issue_binds_inputs_and_verify_fails_closed_on_drift",
+    "test_certify_release.CertifyReleaseTests.test_issue_binds_reuse_receipt_for_redeployed_pre_a3",
+    "test_certify_release.CertifyReleaseTests.test_issue_can_delegate_atomic_replay_to_capture_container",
+    "test_certify_release.CertifyReleaseTests.test_issue_rejects_stale_deployment_and_mismatched_pre_a3",
+    "test_codex_upgrade_campaign_run_rehearsal_receipt.CampaignRunRehearsalReceiptTests.test_atomic_double_replay_rejects_extra_file",
+    "test_codex_upgrade_campaign_run_rehearsal_receipt.CampaignRunRehearsalReceiptTests.test_atomic_double_replay_rejects_permission_regression",
+    "test_codex_upgrade_campaign_run_rehearsal_receipt.CampaignRunRehearsalReceiptTests.test_atomic_double_run_uses_clean_independent_vc0_vc1_roots",
+    "test_codex_upgrade_campaign_run_rehearsal_receipt.CampaignRunRehearsalReceiptTests.test_atomic_replay_rejects_rehashed_instance_and_inventory_tampering"
+   ],
+   "reason": "collect_atomic_double 在单元进程里派发故意失败的父 run（_atomic_failing_parent：心跳 0.05 秒、看门狗 0.5 秒，owner 为单元进程），看门狗误判会 SIGTERM 整个单元；亚秒级看门狗，按首批标准补登记（10-01 审计）"
+  },
+  {
+   "tests": [
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_classify_treats_only_same_subject_other_attempt_commit_as_no_commit",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_finalize_prepared_run_is_idempotent_and_refuses_live_owner",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_monitor_finalizes_committed_but_unstarted_as_parent_start_failed",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_monitor_finalizes_integrity_mismatch_as_audit_incomplete",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_monitor_finalizes_prepared_without_commit_as_aborted_prepared",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_prepared_start_persists_binding_and_attach_is_rejected",
+    "test_codex_upgrade_staging_supervisor.StagingSupervisorTests.test_read_state_rejects_prepared_without_binding_and_bad_binding",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_action_diagnostic_preserves_enumerated_failure_observations",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_archive_failure_diagnostic_preserves_redacted_errno",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_audit_reports_event_digest_tampering",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_child_attaches_without_nested_supervisor",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_child_error_diagnostic_is_v4_signed_from_complete_text",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_child_failure_diagnostic_is_bounded_and_redacted",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_empty_queue_is_immediate_noop",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_executes_declared_queue_under_one_supervisor",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_records_codex_upgrade_handled_failure",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_rejects_reusing_campaign_id",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_campaign_run_stops_on_first_failed_action",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_monitor_crash_is_not_released_as_normal_stop",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_normal_stop_is_idempotent_and_preserves_terminal_state",
+    "test_codex_upgrade_supervisor.SupervisorTests.test_observed_owner_failure_is_failed_not_audit_incomplete"
+   ],
+   "reason": "监督器客户端或 campaign-run 子进程用 0.5～1 秒看门狗（terminate_owner=False 的客户端、测试起的 owner 子进程、子进程 campaign-run），负载高时误判会把 run 封存成 watchdog-aborted 或终止 campaign-run 子进程，本测试断言失败；亚秒级与 1 秒看门狗，按首批标准补登记（10-01 审计）"
   }
  ],
  "unit_timeout_seconds": 3600,
