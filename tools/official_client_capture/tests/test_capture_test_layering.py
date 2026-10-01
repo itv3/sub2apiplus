@@ -87,9 +87,16 @@ class CaptureTestLayeringTests(unittest.TestCase):
 
     def test_default_target_unchanged_and_independent(self) -> None:
         recipe = _makefile_recipe("test-capture-tools")
-        self.assertIn("python3 -m unittest discover", recipe)
-        self.assertIn("-s tools/official_client_capture/tests -p 'test_*.py'", recipe)
+        # E2-01：默认目标改由统一调度执行器执行，加载语义与原单进程 discover 相同（同一起点与模式，真实链目录不是包）。
+        self.assertIn("python3 tools/ci/unit_executor.py run", recipe)
+        self.assertIn("--start tools/official_client_capture/tests --pattern 'test_*.py'", recipe)
         self.assertNotIn("real_chains", recipe)
+        executor = importlib.util.spec_from_file_location("unit_executor_layering", REPO_ROOT / "tools" / "ci" / "unit_executor.py")
+        self.assertIsNotNone(executor)
+        source = (REPO_ROOT / "tools" / "ci" / "unit_executor.py").read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_START = Path("tools/official_client_capture/tests")', source)
+        self.assertIn('DEFAULT_PATTERN = "test_*.py"', source)
+        self.assertIn("unittest.defaultTestLoader.discover(start_dir=str(start), pattern=pattern)", source)
         test_line = re.search(r"^test:\s*(.*)$", _makefile_text(), re.M)
         self.assertIsNotNone(test_line)
         assert test_line is not None

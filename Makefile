@@ -277,13 +277,18 @@ test-capture-tools-parallel: test-capture-tools-shard-check
 	done; \
 	exit $$rc
 
+# 采集工具测试全量（E2-01）：统一调度执行器 tools/ci/unit_executor.py 与原单进程 discover 同一加载语义
+# （起点 tools/official_client_capture/tests、模式 test_*.py），改为每个测试模块（重模块按方法拆块）一个独立进程，
+# 在整机核数与内存额度内并行，跑完再一次汇总；最后两段输出与 unittest 相同，P0 收据照原样解析。
+# CAPTURE_TEST_PARALLELISM=0 取 tools/ci/unit_executor.json 的默认并行度，设为 1 即逐个单元执行。
+CAPTURE_TEST_PARALLELISM ?= 0
 test-capture-tools:
 	@python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and p.is_file()) or sys.exit("🔴 TypeScript AST 解析器必须是绝对路径下的普通文件（允许 pnpm 父目录符号链接）"); actual = hashlib.sha256(p.read_bytes()).hexdigest(); actual == expected or sys.exit(f"🔴 TypeScript AST 解析器摘要不一致：{actual}")' \
 		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"
 	@node --version >/dev/null
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
-		PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-		-s tools/official_client_capture/tests -p 'test_*.py'
+		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/unit_executor.py run \
+		--start tools/official_client_capture/tests --pattern 'test_*.py' --parallel $(CAPTURE_TEST_PARALLELISM)
 
 # 升级控制工具的真实评估链（副本受管树 + 正式监督器子进程，每条链在 ARM64 上约 10 分钟）
 # 属于工具发布／部署验证，不属于候选门禁的默认 `make test`：2026-09-21 v14r2 实测它们让

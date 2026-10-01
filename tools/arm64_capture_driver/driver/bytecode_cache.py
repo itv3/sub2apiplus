@@ -43,6 +43,16 @@ def _mirror(prefix: Path, source: Path) -> Path:
     return prefix / source.relative_to(source.anchor)
 
 
+def _workers() -> int:
+    """预编译并发数：统一调度执行器下发的单元核数（``UNIT_EXECUTOR_CORES``），没有或非法时取 4。"""
+
+    try:
+        value = int(os.environ.get("UNIT_EXECUTOR_CORES", "4"))
+    except ValueError:
+        return 4
+    return value if value >= 1 else 4
+
+
 def _count_pyc(prefix: Path, source: Path) -> int:
     mirror = _mirror(prefix, source)
     return sum(1 for _ in mirror.rglob("*.pyc")) if mirror.is_dir() else 0
@@ -80,11 +90,13 @@ def prepare(prefix: Path, sources: list[Path]) -> dict[str, object]:
     # forkserver／spawn 解释器执行，只能从环境变量拿到前缀，两处同时设置。禁写字节码不影响 compileall 的显式写入。
     sys.pycache_prefix = str(prefix)
     os.environ["PYTHONPYCACHEPREFIX"] = str(prefix)
-    stdlib_ok = all([compileall.compile_dir(str(item), quiet=1, workers=4, rx=STDLIB_SKIP) for item in stdlib_dirs])
+    # 并发数由统一调度执行器按单元额度下发（E2-01，环境变量 UNIT_EXECUTOR_CORES）；单独运行时沿用原来的 4。
+    workers = _workers()
+    stdlib_ok = all([compileall.compile_dir(str(item), quiet=1, workers=workers, rx=STDLIB_SKIP) for item in stdlib_dirs])
     source_counts: dict[str, int] = {}
     failed: list[str] = []
     for source in physical_sources:
-        if not compileall.compile_dir(str(source), quiet=1, workers=4):
+        if not compileall.compile_dir(str(source), quiet=1, workers=workers):
             failed.append(str(source))
         source_counts[str(source)] = _count_pyc(prefix, source)
         if source_counts[str(source)] == 0:
