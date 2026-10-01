@@ -237,6 +237,29 @@ def orchestrator_closure(
     return {**closure, "closure_sha256": _fingerprint(closure)}
 
 
+@functools.lru_cache(maxsize=1)
+def _parsed_orchestrator(
+    source_sha256: str, source: str
+) -> tuple[dict[str, ast.AST], dict[str, ast.AST], dict[str, str], tuple[bytes, ...] | None]:
+    """编排器源码的解析结果：wire 与 evidence 两组根函数共用同一次 ``ast.parse``（E1-01）。
+
+    同时把源码预先按行切成 UTF-8 字节，供 ``_reader_source_segment`` 按字节偏移取函数与常量的源码段。
+    ``ast.get_source_segment`` 每取一段都把整份源码重新分行，6.3 万行的编排器上取 700 多段，ARM64 上
+    要 27 秒；预切一次之后不到 1 秒，取出的源码段逐字节相同。源码含 ``\\r`` 时不预切，退回标准实现。
+    语法树常驻约 100 MB，``compute_identity_v2`` 算完两组根即释放。
+    """
+
+    del source_sha256  # 只作缓存键：内容变化即重新解析
+    functions, constants, imports = _module_symbols(ast.parse(source))
+    lines: tuple[bytes, ...] | None = None
+    if "\r" not in source:
+        parts = source.split("\n")
+        lines = tuple(
+            [(part + "\n").encode("utf-8") for part in parts[:-1]] + ([parts[-1].encode("utf-8")] if parts[-1] else [])
+        )
+    return functions, constants, imports, lines
+
+
 @functools.lru_cache(maxsize=16)
 def _cached_symbol_closure(
     source_sha256: str,
@@ -244,11 +267,10 @@ def _cached_symbol_closure(
     roots: tuple[str, ...],
     dynamic_call_names: tuple[str, ...],
 ) -> tuple[tuple[dict[str, str], ...], tuple[dict[str, str], ...], tuple[str, ...]]:
-    """按源码摘要缓存函数／常量闭包；同一进程内反复校验不重复解析 4 万行。"""
+    """按源码摘要缓存函数／常量闭包；同一进程内反复校验不重复解析编排器。"""
 
     policy = {"orchestrator": {"dynamic_call_names": list(dynamic_call_names)}}
-    tree = ast.parse(source)
-    functions, constants, imports = _module_symbols(tree)
+    functions, constants, imports, lines = _parsed_orchestrator(source_sha256, source)
     roots = list(roots)
     missing = [name for name in roots if name not in functions]
     if missing:
@@ -301,12 +323,13 @@ def _cached_symbol_closure(
                         seen_constants.add(child.id)
                     elif child.id in imports:
                         seen_modules.add(imports[child.id])
+    # 源码段与 ast.get_source_segment 逐字节相同（见 _parsed_orchestrator），闭包摘要不随本次提速变化。
     function_records = tuple(
-        {"name": name, "sha256": hashlib.sha256((ast.get_source_segment(source, functions[name]) or "").encode("utf-8")).hexdigest()}
+        {"name": name, "sha256": hashlib.sha256(_reader_source_segment(source, lines, functions[name]).encode("utf-8")).hexdigest()}
         for name in sorted(seen_functions)
     )
     constant_records = tuple(
-        {"name": name, "sha256": hashlib.sha256((ast.get_source_segment(source, constants[name]) or "").encode("utf-8")).hexdigest()}
+        {"name": name, "sha256": hashlib.sha256(_reader_source_segment(source, lines, constants[name]).encode("utf-8")).hexdigest()}
         for name in sorted(seen_constants)
     )
     return function_records, constant_records, tuple(sorted(seen_modules))
@@ -323,6 +346,8 @@ def compute_identity_v2(
     digests = {str(e["path"]): str(e["sha256"]) for e in entries}
     wire_closure = orchestrator_closure(policy, tool_root, list(policy["orchestrator"]["wire_roots"]), digests, layer="wire_producer")
     evidence_closure = orchestrator_closure(policy, tool_root, list(policy["orchestrator"]["evidence_roots"]), digests, layer="evidence_semantics")
+    # 两组根已算完：释放编排器语法树。闭包结果另有缓存，源码不变时同一进程不再解析。
+    _parsed_orchestrator.cache_clear()
     wire = {"entries": grouped["wire_producer"], "orchestrator_closure_sha256": wire_closure["closure_sha256"]}
     evidence = {"entries": grouped["evidence_semantics"], "orchestrator_closure_sha256": evidence_closure["closure_sha256"]}
     control = {"entries": grouped["control"]}

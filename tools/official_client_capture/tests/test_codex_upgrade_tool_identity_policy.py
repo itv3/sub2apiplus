@@ -2,15 +2,48 @@
 
 from __future__ import annotations
 
+import ast
+import contextlib
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Iterator
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _sha256(source: str) -> str:
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+@contextlib.contextmanager
+def _standard_segments_split_once() -> Iterator[None]:
+    """让标准 ``ast.get_source_segment`` 对同一份源码只分一次行。
+
+    只缓存它内部的分行结果，取段的切片规则与分行规则仍是标准实现；不这样做，对 6.3 万行的编排器逐个取
+    1000 多段，标准实现本身就要跑几十秒。解释器内部实现改名时不打补丁（结果仍正确，只是慢）。
+    """
+
+    original = getattr(ast, "_splitlines_no_ff", None)
+    if original is None:
+        yield
+        return
+    split: dict[str, list[str]] = {}
+
+    def split_once(source: str, maxlines: int | None = None) -> list[str]:
+        # 标准实现只读取节点首行到末行，返回全部行与按 maxlines 截断时读到的内容相同。
+        if source not in split:
+            split[source] = original(source)
+        return split[source]
+
+    with mock.patch.object(ast, "_splitlines_no_ff", split_once):
+        yield
 
 
 class ToolIdentityPolicyTests(unittest.TestCase):
@@ -119,6 +152,77 @@ class ToolIdentityPolicyTests(unittest.TestCase):
         self.assertEqual(identity["policy_version"], 7)
         # 旧字段保留，files_sha256 仍是整树
         self.assertEqual(identity["files_sha256"], codex_upgrade._fingerprint({"entries": identity["entries"]}))
+
+    def test_fast_segments_match_standard_for_every_orchestrator_symbol(self) -> None:
+        """E1-01：预切行取出的源码段与 ``ast.get_source_segment`` 对编排器全部函数与常量逐字节相同。"""
+
+        source = (TOOL_ROOT / "codex_upgrade.py").read_text(encoding="utf-8")
+        tip._parsed_orchestrator.cache_clear()
+        functions, constants, _imports, lines = tip._parsed_orchestrator(_sha256(source), source)
+        self.assertIsNotNone(lines, "编排器不含回车符，应走预切行路径")
+        nodes = [("函数", name, node) for name, node in functions.items()]
+        nodes += [("常量", name, node) for name, node in constants.items()]
+        self.assertGreater(len(nodes), 1000)
+        with _standard_segments_split_once():
+            mismatched = [
+                f"{kind} {name}"
+                for kind, name, node in nodes
+                if tip._reader_source_segment(source, lines, node) != (ast.get_source_segment(source, node) or "")
+            ]
+        self.assertEqual(mismatched, [])
+        tip._parsed_orchestrator.cache_clear()
+
+    def test_carriage_return_source_falls_back_to_standard_segments(self) -> None:
+        """E1-01：源码含回车符时不预切行，源码段与闭包记录仍按标准实现取得。"""
+
+        source = (
+            "LIMIT = 1\r\n\r\n"
+            "def root(job):\r\n    return helper(job) + LIMIT\r\n\r\n"
+            "def helper(job):\r\n    return len(job)  # 中文注释\r\n"
+        )
+        digest = _sha256(source)
+        tip._parsed_orchestrator.cache_clear()
+        functions, constants, _imports, lines = tip._parsed_orchestrator(digest, source)
+        self.assertIsNone(lines)
+        for node in [*functions.values(), *constants.values()]:
+            self.assertEqual(tip._reader_source_segment(source, lines, node), ast.get_source_segment(source, node) or "")
+
+        def standard(node: ast.AST) -> str:
+            return hashlib.sha256((ast.get_source_segment(source, node) or "").encode("utf-8")).hexdigest()
+
+        records, constant_records, modules = tip._cached_symbol_closure.__wrapped__(digest, source, ("root",), ("eval",))
+        self.assertEqual(list(records), [{"name": name, "sha256": standard(functions[name])} for name in ("helper", "root")])
+        self.assertEqual(list(constant_records), [{"name": "LIMIT", "sha256": standard(constants["LIMIT"])}])
+        self.assertEqual(modules, ())
+        tip._parsed_orchestrator.cache_clear()
+
+    def test_both_root_sets_share_one_parse_and_match_standard_closures(self) -> None:
+        """E1-01：wire 与 evidence 两组根共用一次解析、算完即释放；两个闭包与按标准实现取段算出的逐项相同。"""
+
+        policy = tip.load_policy()
+        entries = codex_upgrade._tool_tree_entries(TOOL_ROOT)
+        digests = {str(e["path"]): str(e["sha256"]) for e in entries}
+        root_sets = (("wire_producer", "wire_roots"), ("evidence_semantics", "evidence_roots"))
+        tip._cached_symbol_closure.cache_clear()
+        tip._parsed_orchestrator.cache_clear()
+        fast = {
+            layer: tip.orchestrator_closure(policy, TOOL_ROOT, list(policy["orchestrator"][key]), digests, layer=layer)
+            for layer, key in root_sets
+        }
+        info = tip._parsed_orchestrator.cache_info()
+        self.assertEqual((info.misses, info.hits), (1, 1), "两组根应共用同一次解析")
+
+        def standard(source: str, lines: tuple[bytes, ...] | None, node: ast.AST) -> str:
+            return ast.get_source_segment(source, node) or ""
+
+        tip._cached_symbol_closure.cache_clear()
+        with _standard_segments_split_once(), mock.patch.object(tip, "_reader_source_segment", standard):
+            for layer, key in root_sets:
+                expected = tip.orchestrator_closure(policy, TOOL_ROOT, list(policy["orchestrator"][key]), digests, layer=layer)
+                self.assertEqual(fast[layer], expected, layer)
+        tip._cached_symbol_closure.cache_clear()
+        tip.compute_identity_v2(policy, TOOL_ROOT, entries)
+        self.assertEqual(tip._parsed_orchestrator.cache_info().currsize, 0, "算完两组根后应释放语法树")
 
 
 if __name__ == "__main__":
