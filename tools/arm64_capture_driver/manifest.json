@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "9d0e45302dba0a25a00fa7a5f90fe0dc7aaecc59bb3e2e3ed4d0498a5714a6c9",
+      "sha256": "c5602fb2bdb0ef1398694befb9e44f63ef79dd66e159f2e778a61018dd0068b8",
       "mode": "0700",
-      "bytes": 37445
+      "bytes": 37737
     },
     {
       "path": "driver/env.example.sh",
@@ -399,5 +399,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "bd994a427b389c4e45f065a8e06e2ca836d4b9fd1909c3b6d3c2a4c38e9fc7dd"
+  "manifest_sha256": "fdbd0f41b69fcf92cce4e9d56ca528e0af66ee07898e79077722666b0d94c572"
 }

@@ -177,21 +177,22 @@ GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
     "check-egress-spec": (["make", "check-egress-spec"], "."),
     "test-official-client-control": (["make", "test-official-client-control"], "."),
     "backend-go-test": (["go", "test", "./...", "-count=1"], "backend"),
-    "backend-lint": (["golangci-lint", "run", "--timeout=30m", "./..."], "backend"),
+    "backend-lint": (["golangci-lint", "run", "--timeout=30m", "--allow-serial-runners", "./..."], "backend"),
     "frontend-lint": (["pnpm", "--dir", "frontend", "run", "lint:check"], "."),
     "frontend-typecheck": (["pnpm", "--dir", "frontend", "run", "typecheck"], "."),
     "frontend-critical": (["make", "test-frontend-critical"], "."),
     "backend-unit": (["go", "test", "-tags=unit", "./...", "-count=1"], "backend"),
     "backend-integration": (["go", "test", "-tags=integration", "./...", "-count=1"], "backend"),
-    "lint-unit": (["golangci-lint", "run", "--timeout=30m", "--build-tags=unit"], "backend"),
-    "lint-integration": (["golangci-lint", "run", "--timeout=30m", "--build-tags=integration"], "backend"),
+    "lint-unit": (["golangci-lint", "run", "--timeout=30m", "--allow-serial-runners", "--build-tags=unit"], "backend"),
+    "lint-integration": (["golangci-lint", "run", "--timeout=30m", "--allow-serial-runners", "--build-tags=integration"], "backend"),
     "deploy-scripts": (["deploy-scripts"], "."),
     "pre-a3": (["python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario"], "."),
 }
 # 额度按 ARM64 实测的 CPU／墙钟比与单进程内存峰值（E2-04，10-01，入口门禁一次运行）：
 # * 后端 go test 三组各 10～11.5 分钟，CPU 只用约 1.1 核（编译之外大半时间在等待），单进程峰值 4～4.5 GB——原来按 2 核申请，
 #   两组就占满 4 核额度、其它单元干等；改按 1.1 核（GOMAXPROCS 随额度向上取整为 2，编译仍可两路并行）、5 GB；
-# * golangci-lint 三组各约 10 秒（结果缓存命中，冷缓存会更久），峰值约 250 MB；
+# * golangci-lint 三组各约 10 秒（结果缓存命中，冷缓存会更久），峰值约 250 MB。golangci-lint 默认只许一个实例运行，第二个
+#   实例直接报「parallel golangci-lint is running」退出（ARM64 第二次验收实测），所以三组都带 --allow-serial-runners 排队等锁；
 # * 前端 lint、typecheck 约 1.1～1.2 核（typecheck 峰值约 2 GB），vitest 约 1.9 核。
 GO_QUOTA = {"cores": 1.1, "memory_mb": 5120, "timeout_seconds": 3600}
 LINT_QUOTA = {"cores": 1, "memory_mb": 3072, "timeout_seconds": 3600}
