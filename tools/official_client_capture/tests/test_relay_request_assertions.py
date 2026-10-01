@@ -512,8 +512,33 @@ class Scenario0157ManifestParameterTest(unittest.TestCase):
         for job_id, previous in self.previous_jobs.items():
             with self.subTest(job_id=job_id):
                 current = self.jobs[job_id]
-                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
+                # covers 不属于 official 执行契约：0.157 VC-2 批准后按批准场景清单承接（删 EP-007／014／020、补四条新增
+                # 规则），由 test_covers_属于批准规则清单且闭合 校验，不再要求与 0.156.1 逐字相同。
+                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots"):
                     self.assertEqual(current[field], previous[field], field)
+
+    def test_covers_属于批准规则清单且闭合(self) -> None:
+        # 0.157.0 与 0.159.2 都以 0.157 VC-2 批准的 43 条规则为准：作业 covers 不引用清单外编号、全部规则都有作业覆盖、
+        # 作业 covers 被其绑定的证据场景证明（plan 的升级审计按同一口径拒绝）。
+        for version in ("0_157_0", "0_159_2"):
+            rules = json.loads(
+                (TOOL_ROOT / f"codex_upgrade_rules_{version}.json").read_text(encoding="utf-8")
+            )["required_rules"]
+            manifest = json.loads(
+                (TOOL_ROOT / f"codex_upgrade_scenarios_{version}.json").read_text(encoding="utf-8")
+            )
+            scenarios = {item["scenario_id"]: set(item["covers"]) for item in manifest["evidence_scenarios"]}
+            covered: set[str] = set()
+            for job in manifest["capture_jobs"]:
+                with self.subTest(version=version, job_id=job["id"]):
+                    self.assertLessEqual(set(job["covers"]), set(rules))
+                    if job["covers"]:
+                        proven = set().union(*(scenarios[item] for item in job["scenario_ids"]))
+                        self.assertLessEqual(set(job["covers"]), proven)
+                covered.update(job["covers"])
+            for covers in scenarios.values():
+                self.assertLessEqual(covers, set(rules), version)
+            self.assertEqual(covered, set(rules), version)
 
     def test_daemon_作业用默认功能开关并以启动期_models_为目标请求(self) -> None:
         job = self.jobs["official-relay-tui-daemon"]
