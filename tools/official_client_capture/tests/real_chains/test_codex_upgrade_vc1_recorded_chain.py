@@ -117,9 +117,11 @@ PREVIEW_DEFECT_ANCHOR = '''    """按控制／环境／数据三层输出恢复�
 '''
 PREVIEW_DEFECT_INJECTION = PREVIEW_DEFECT_ANCHOR + '    raise ConfigurationError("R18 恢复链注入：恢复预览批次失败")\n'
 GUARDIAN = "official-relay-guardian-review"
-# D1 首批动作超时：只为制造「首批超时」，其余 30 个作业必须在超时前跑完。原来写死 150 秒；E2-02 之后 ARM64 上 30 个
-# 作业只要一分钟左右，150 秒里大半是空等，压在全链最长的这一步上。按实测留出余量，并在下面核对余量（夹具可调）。
-FIRST_BATCH_TIMEOUT_SECONDS = 90
+# D1 首批动作超时：只为制造「首批超时」，其余 30 个作业必须在超时前跑完。原来写死 150 秒；ARM64 实测（E2-02 后）
+# 30 个回放作业只要约 4 秒（init 里另有约 70 秒是首批派发前的收口准备，不计在超时里），150 秒几乎全是空等，压在
+# 全链最长的这一步上。取编排器允许的最小首批超时 60 秒（_first_official_batch_timeout_seconds 的下限），并在下面
+# 核对余量（夹具可调）。
+FIRST_BATCH_TIMEOUT_SECONDS = 60
 
 
 class VC1RecordedRecoveryChainTests(unittest.TestCase):
