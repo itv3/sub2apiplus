@@ -21,8 +21,9 @@ export PYTHONPYCACHEPREFIX="$PYC"
 export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"
 export CAPTURE_TYPESCRIPT_MODULE="$T/frontend/node_modules/typescript/lib/typescript.js"
 # 采集主机上 /root/oauth-capture 是受管工具树的 bind 别名，候选测试树会把它当执行副本比对；
-# 私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机环境一致。
-cd "$T"; START=$(utc_now); set +e; unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
+# 私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机环境一致。门禁跑的是测试树：身份记忆化不用 lib.sh 导出的生产
+# 目录（与 isolated_run 相同），交给 make test 里的统一调度执行器在各自的记录目录里新建。
+cd "$T"; START=$(utc_now); set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
 echo "make test rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
 cd "$D"; python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-after-facts.json" --output "environment/$ATT-after.json" | cut -c1-160

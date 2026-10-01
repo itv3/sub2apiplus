@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "41efb916ed658143fc578af7ae49a02950cea6b1278dccc7dff96b135895b933",
+      "sha256": "d710a1cd4689510588621d7c3c00c045909ed4c675075daada51c5d7b58443cd",
       "mode": "0600",
-      "bytes": 30507
+      "bytes": 30686
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "86a57099737fd767df9705add3fda3b96414fd3b4a657fd4f2b89af676688501",
+      "sha256": "502b151c6c7dab2a039b3090e387a47f29e0c201aa3f22d70598a038214dfa7f",
       "mode": "0700",
-      "bytes": 40069
+      "bytes": 40215
     },
     {
       "path": "driver/env.example.sh",
@@ -118,9 +118,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "901caa66646d666f766657680d7af10e52f00e1d3ab8ac0e03e0ad61ea1adaab",
+      "sha256": "6fb27cac53a09b4d719dfd3020c932edd65f6d60f5681331555e56d36e2566e0",
       "mode": "0700",
-      "bytes": 3512
+      "bytes": 3654
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -244,9 +244,9 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "b5d2a16f51827ae36ba5cdbf0a2271512ba0cf52caa776de1732369d1373359e",
+      "sha256": "97dd8fb4a1e597ba5734156295307c34b5059e94b7214308806a6a07097972f9",
       "mode": "0700",
-      "bytes": 89671
+      "bytes": 89665
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -334,9 +334,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "3ca784140a6fad2c4695b789e6e6c2ba98d1c6bb3faec634fc0f61345589abdd",
+      "sha256": "2c7060d68c5b9c6f9a95f617f06c30deaa7beacab1d5c96ad0da31e7ce330d11",
       "mode": "0700",
-      "bytes": 4224
+      "bytes": 4451
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -399,5 +399,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "70c880a2630b573af23caef06fbb0baa2560d2cf787bf183db8863974af3d73a"
+  "manifest_sha256": "266657ae47c0c561c81a44eeb8da58e29d02dc5f1c6fe51d196f3d4db698bf1c"
 }

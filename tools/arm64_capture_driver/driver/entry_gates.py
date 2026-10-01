@@ -190,7 +190,8 @@ def pre_a3_quota(name: str) -> tuple[float, float | None]:
         return max(0.25, math.ceil(ratio * 4) / 4), seconds
     return 0.5, None
 
-# make test 的组成（与 Makefile 的 test 目标一一对应：test-backend 拆成 go test 与 lint 两项、test-frontend 拆成三项）。
+# make test 的组成（与 Makefile 的 test 目标对应：test-backend 拆成 go test 与 lint 两项、test-frontend 拆成三项）。
+# test-official-client-control 在 make test 里是 check-egress-spec 的子检查，这里单列一个门禁项，用的就是那个子检查单元。
 MAKE_TEST_GATES = (
     "backend-go-test", "backend-lint", "frontend-lint", "frontend-typecheck", "frontend-critical",
     "test-capture-tools", "test-official-client-control", "check-egress-spec",
@@ -320,7 +321,7 @@ def plan_gates(
         return unit_id
 
     groups: list[dict[str, Any]] = []
-    # check-egress-spec 的子检查先展开：make test 的 test-official-client-control 排在它前面，却与它共用同一个单元。
+    # check-egress-spec 的子检查先展开：门禁项 test-official-client-control 在清单里排在它前面，用的却是它的子检查单元。
     egress_units: list[str] = []
     if "check-egress-spec" in gates_wanted:
         for target in egress_spec_checks(tree):
@@ -340,7 +341,7 @@ def plan_gates(
         elif gate_id == "test-official-client-control":
             shared = f"{EGRESS_SPEC_UNIT_PREFIX}test-official-client-control"
             if shared not in egress_units:
-                raise ValueError("子检查清单里没有 test-official-client-control（make test 的一项与 check-egress-spec 共用这个单元）")
+                raise ValueError("子检查清单里没有 test-official-client-control（同名门禁项用的就是这个子检查单元）")
             gates.append({"gate_id": gate_id, "units": [shared]})
         elif gate_id in ("backend-go-test", "backend-unit", "backend-integration"):
             argv, _cwd = GATE_COMMANDS[gate_id]

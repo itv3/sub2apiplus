@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -82,6 +83,16 @@ class EntryGatesMakeChecksTests(unittest.TestCase):
 
     def test_duplicate_targets_are_rejected(self) -> None:
         self.assertEqual(eg.make_checks("demo", ["a", "a"]), 2)
+
+    def test_make_test_does_not_list_a_check_that_check_egress_spec_already_runs(self) -> None:
+        """子检查跑在执行器另起的 make 进程里，不和 make test 的先决目标去重：test 目标再单列哪一项，那一项就执行两次。"""
+
+        test_line = re.search(r"^test:\s*(.*)$", (REPO_ROOT / "Makefile").read_text(encoding="utf-8"), re.M)
+        self.assertIsNotNone(test_line)
+        assert test_line is not None
+        prerequisites = test_line.group(1).split()
+        self.assertIn("check-egress-spec", prerequisites)
+        self.assertEqual(sorted(set(prerequisites) & set(eg.egress_spec_checks(REPO_ROOT))), [])
 
 
 class EntryGatesPlanTests(unittest.TestCase):

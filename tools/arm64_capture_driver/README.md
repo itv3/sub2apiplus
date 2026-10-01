@@ -74,8 +74,8 @@
   `EGRESS_SPEC_CHECKS`，每项一个单元）、后端 go test 三组（不带标签、`-tags=unit`、`-tags=integration`，都带 `-count=1`，
   integration 带 `CI=true`，没有 Docker 时失败而不是静默跳过）、golangci-lint 三组、前端三项、CI 里的部署脚本测试（每条
   一个单元）与 pre-A3 的 44 个场景。全部交给驱动随附的统一调度执行器（`unit_executor.py run-gates`）在整机额度内并行，
-  一项失败其余照跑，全部跑完再按门禁项汇总；`test-official-client-control` 既是 make test 的一项、也是 check-egress-spec
-  的先决，只执行一次。
+  一项失败其余照跑，全部跑完再按门禁项汇总；`test-official-client-control` 单列一个门禁项，和 check-egress-spec 的同名
+  子检查共用一个单元，只执行一次（Makefile 的 test 目标也不再单列它：子检查跑在执行器另起的 make 进程里，不和先决去重）。
 * 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 用）、`preflight`
   （只含 make test 的组成，`vc0-gate-target.sh` 用）。`entry` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的
   受管树，否则退出 3）；本轮 pre-A3 认证已有且有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
@@ -155,7 +155,7 @@
 
 * 两个入口都用 `lib.sh` 的 `clone_test_tree` 建测试树（完整历史、不含 vendor，前端依赖取 lockfile 相同的一份），隔离方式与
   `vc5-gate-target.sh` 的目标平台门禁相同（私有挂载命名空间里只读 tmpfs 遮住 `/root/oauth-capture` 别名，树外只读字节码
-  缓存）。make test 里有挂断检测用例，一律 `setsid -f` 启动；不与目标平台门禁、VC-1／VC-5 采集并行（采集主机只有 4 核，
+  缓存，不用生产的身份记忆化目录）。make test 里有挂断检测用例，一律 `setsid -f` 启动；不与目标平台门禁、VC-1／VC-5 采集并行（采集主机只有 4 核，
   资源争用会把计时用例拖红）。
 * `driver/arm64-full-gates.sh <bundle> <分支> <40 位提交> [<前端依赖目录>]`：受管工具每轮修复的部署前提、版本登记变更集与
   升级收尾的验证。E2-04 起是入口门禁的一次运行（`entry-gates.sh --profile full-gates`），与 CI 逐项对齐、全部单元并行，

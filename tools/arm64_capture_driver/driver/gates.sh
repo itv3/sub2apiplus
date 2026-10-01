@@ -29,8 +29,9 @@ if [ "$MODE" = full-regression-isolated ]; then
   PYC="$RUNROOT/pycache-full-regression"
   env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
   export PYTHONPYCACHEPREFIX="$PYC"
+  # 身份记忆化不用 lib.sh 导出的生产目录（与 isolated_run、目标平台门禁相同）。
   cd "$T"; START=$(utc_now); set +e
-  unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$G/local/full-regression.stdout.log" 2> "$G/local/full-regression.stderr.log"; RC=$?; set -e; END=$(utc_now)
+  env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$G/local/full-regression.stdout.log" 2> "$G/local/full-regression.stderr.log"; RC=$?; set -e; END=$(utc_now)
   python3 - "$G/local/full-regression.gate.json" "$START" "$END" "$RC" "$T" "$(git -C $T rev-parse HEAD)" <<'PY'
 import json, sys, socket
 out, start, end, rc, tree, head = sys.argv[1:]

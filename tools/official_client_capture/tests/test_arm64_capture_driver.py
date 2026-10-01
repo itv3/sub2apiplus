@@ -1200,6 +1200,11 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
         body = lib[lib.index("isolated_run() {"):]
         body = body[:body.index("\n}\n")]
         self.assertIn("unset CODEX_UPGRADE_IDENTITY_MEMO", body)
+        # 自己调 make test 的两个门禁（目标平台门禁、gates.sh 的全量回归）同样不能带着 lib.sh 导出的生产目录进去。
+        for name in ("vc5-gate-target.sh", "gates.sh"):
+            make = [line for line in (SCRIPTS / name).read_text(encoding="utf-8").splitlines() if "exec make test" in line]
+            self.assertEqual(len(make), 1, name)
+            self.assertIn("env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m", make[0], name)
 
     def test_gate_scripts_prepare_cache_then_export_before_make_test(self) -> None:
         lib_code = [line for line in (SCRIPTS / "lib.sh").read_text(encoding="utf-8").splitlines()
@@ -1243,12 +1248,13 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
         shim.write_text(f"#!/bin/bash\npython3 '{probe}' '{record}'\necho make-test-stub-ok\n", encoding="utf-8")
         shim.chmod(0o700)
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
-               "PYTHONPYCACHEPREFIX": str(root / "inherited-pycache-prefix")}
+               "PYTHONPYCACHEPREFIX": str(root / "inherited-pycache-prefix"),
+               "CODEX_UPGRADE_IDENTITY_MEMO": str(root / "inherited-identity-memo")}
         return fixture, drv, tree, record, env
 
     def test_target_gate_make_test_reads_prebuilt_cache_readonly(self) -> None:
         """脚本级：调用方带着别的前缀进入目标平台门禁；make test 看到的前缀是本次预编译的缓存，测试树模块与标准库
-        的 .pyc 都已在缓存里，禁写照旧，测试树与数据根不留 __pycache__。"""
+        的 .pyc 都已在缓存里，禁写照旧，测试树与数据根不留 __pycache__；生产的身份记忆化目录不带进 make test。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -1262,6 +1268,7 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             cache = str(fixture.runroot / "pycache-target-platform")
             seen = json.loads(record.read_text(encoding="utf-8"))
             self.assertEqual(seen["env"].get("PYTHONPYCACHEPREFIX"), cache)
+            self.assertNotIn("CODEX_UPGRADE_IDENTITY_MEMO", seen["env"])
             self.assertEqual(seen["prefix"], cache)
             self.assertEqual(seen["env"].get("PYTHONDONTWRITEBYTECODE"), "1")
             self.assertTrue(seen["cached"].startswith(cache) and seen["cached_exists"], seen["cached"])

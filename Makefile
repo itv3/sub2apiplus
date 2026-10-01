@@ -61,8 +61,10 @@ build-backend:
 build-frontend:
 	@pnpm --dir frontend run build
 
-# 运行测试（后端 + 前端）
-test: test-backend test-frontend test-capture-tools test-official-client-control check-egress-spec
+# 运行测试（后端 + 前端）。test-official-client-control 是 check-egress-spec 的子检查之一（EGRESS_SPEC_CI_CHECKS），
+# 由那里交给统一调度执行器执行；子检查跑在执行器另起的 make 进程里，不会和这里的先决目标去重，所以这里不再单列，
+# 否则 make test 会把它执行两次。
+test: test-backend test-frontend test-capture-tools check-egress-spec
 
 # Codex 客户端仿真门禁，见 docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md §3.5 与 §5.1。
 # 这些检查此前只能手工执行，因而无法阻止回归；--self-test 先校验判据本身是否

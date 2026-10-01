@@ -393,8 +393,8 @@ def load_gates_manifest(path: Path, *, machine_cores: int) -> tuple[list[Discove
     """读门禁清单（``unit-executor-gates/v1``）：至多一个测试组、若干命令单元、若干门禁项。
 
     闭合要求：门禁项引用的单元与测试组都必须在清单里；清单里的每个单元、每个测试组至少属于一个门禁项（没有游离
-    单元）；一个单元可以同时属于几个门禁项（如 ``test-official-client-control`` 既是 ``make test`` 的一项，也是
-    ``check-egress-spec`` 的先决），只执行一次。测试组至多一个：测试单元 ID 沿用 ``run`` 的模块名，调度配置里的
+    单元）；一个单元可以同时属于几个门禁项（如 ``test-official-client-control`` 既单列为门禁项，又是
+    ``check-egress-spec`` 的子检查），只执行一次。测试组至多一个：测试单元 ID 沿用 ``run`` 的模块名，调度配置里的
     额度、拆块与独占名单按模块名登记。
     """
 
