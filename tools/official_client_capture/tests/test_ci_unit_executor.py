@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from tools.ci import unit_executor as ue
@@ -491,6 +492,113 @@ class UnitExecutorCommandTests(unittest.TestCase):
             self.assertEqual(starts, ["w5", "w3", "w1", "alone"], "并行段按预计秒数从长到短，独占段在最后")
             index = next(i for i, event in enumerate(events) if event["event"] == "start" and event["unit"] == "alone")
             self.assertEqual(events[index]["running"], ["alone"])
+
+
+class UnitExecutorGatesTests(unittest.TestCase):
+    """门禁清单（E2-04）：一个测试组与若干命令单元同一次运行，结论按门禁项聚合，一个门禁项失败不影响别的照跑。"""
+
+    def _manifest(self, root: Path, payload: dict) -> Path:
+        path = root / "gates.json"
+        path.write_text(json.dumps({"schema_version": ue.GATES_SCHEMA, **payload}, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def test_manifest_closure_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unit = {"unit_id": "spec:a", "argv": ["true"], "cwd": str(root)}
+            group = {"group_id": "tests", "start": "tests", "pattern": "test_*.py"}
+            cases = {
+                "游离单元": {"units": [unit, dict(unit, unit_id="spec:b")], "gates": [{"gate_id": "g", "units": ["spec:a"]}]},
+                "游离测试组": {"test_groups": [group], "units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a"]}]},
+                "引用不存在的单元": {"units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a", "spec:x"]}]},
+                "引用不存在的测试组": {"units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a"], "test_groups": ["nope"]}]},
+                "门禁项重名": {"units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a"]}, {"gate_id": "g", "units": ["spec:a"]}]},
+                "空门禁项": {"units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a"]}, {"gate_id": "h"}]},
+                "两个测试组": {"test_groups": [group, dict(group, group_id="other")], "gates": [{"gate_id": "g", "test_groups": ["tests", "other"]}]},
+                "测试组起点是绝对路径": {"test_groups": [dict(group, start=str(root))], "gates": [{"gate_id": "g", "test_groups": ["tests"]}]},
+                "不执行项没写原因": {"units": [unit], "gates": [{"gate_id": "g", "units": ["spec:a"], "not_executed": [{"command": ["x"]}]}]},
+                "没有门禁项": {"units": [unit], "gates": []},
+            }
+            for label, payload in cases.items():
+                with self.subTest(label), self.assertRaises(ue.ExecutorError):
+                    ue.load_gates_manifest(self._manifest(root, payload), machine_cores=2)
+            groups, units, gates, _payload = ue.load_gates_manifest(self._manifest(root, {
+                "test_groups": [dict(group, env={"K": "v"}, launcher=["env", "X=1"])], "units": [unit],
+                "gates": [{"gate_id": "g", "units": ["spec:a"], "test_groups": ["tests"]}, {"gate_id": "h", "units": ["spec:a"]}],
+            }), machine_cores=2)
+            self.assertEqual((groups[0].env, groups[0].launcher, [u.unit_id for u in units], [g.gate_id for g in gates]),
+                             ((("K", "v"),), ("env", "X=1"), ["spec:a"], ["g", "h"]))
+
+    def test_test_group_and_commands_run_once_together_and_gates_aggregate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _write_modules(root, {
+                "test_alpha": (
+                    "import unittest\nclass AlphaTests(unittest.TestCase):\n"
+                    "    def test_a(self): pass\n"
+                    "    @unittest.skip('示例：本平台不跑')\n    def test_skipped(self): pass\n"
+                ),
+                "test_beta": (
+                    "import os, unittest\nclass BetaTests(unittest.TestCase):\n"
+                    "    def test_env(self):\n"
+                    "        self.assertEqual((os.environ.get('GROUP_MARK'), os.environ.get('LAUNCHED')), ('g', '1'))\n"
+                ),
+            })
+            manifest = self._manifest(root, {
+                "test_groups": [{"group_id": "tests", "start": "tests", "pattern": "test_*.py", "env": {"GROUP_MARK": "g"},
+                                 "launcher": ["env", "LAUNCHED=1"]}],
+                "units": [
+                    {"unit_id": "spec:ok", "argv": ["true"], "cwd": str(root)},
+                    {"unit_id": "spec:fail", "argv": ["sh", "-c", "exit 4"], "cwd": str(root)},
+                    {"unit_id": "shared:control", "argv": ["sh", "-c", "echo run >> count.txt"], "cwd": str(root)},
+                ],
+                "gates": [
+                    {"gate_id": "capture", "test_groups": ["tests"], "units": ["shared:control"]},
+                    {"gate_id": "spec", "units": ["spec:ok", "spec:fail", "shared:control"]},
+                    {"gate_id": "platform", "units": ["spec:ok"],
+                     "not_executed": [{"command": ["/bin/bash", "deploy/x.sh"], "reason": "macOS 专用"}]},
+                ],
+            })
+            command = [
+                sys.executable, str(EXECUTOR), "run-gates", "--manifest", str(manifest), "--config", str(_config(root)),
+                "--weights", str(root / "no-weights.json"), "--durations", str(root / "no-durations.json"), "--parallel", "3",
+                "--cores", "2", "--state-dir", str(root / "state"), "--out-dir", str(root / "out"), "--shared-caches", "off",
+            ]
+            completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=300,
+                                       env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT)})
+            self.assertEqual(completed.returncode, 1, completed.stderr[-2000:])
+            summary = json.loads((root / "out" / "summary.json").read_text(encoding="utf-8"))
+            events = [json.loads(line) for line in (root / "out" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual((summary["schema_version"], summary["status"]), (ue.GATES_SUMMARY_SCHEMA, "failed"))
+            gates = {gate["gate_id"]: gate for gate in summary["gates"]}
+            self.assertEqual({gate_id: gate["status"] for gate_id, gate in gates.items()},
+                             {"capture": "passed", "spec": "failed", "platform": "passed"}, "一个门禁项失败不影响别的")
+            self.assertEqual(gates["spec"]["failed_units"], ["spec:fail"])
+            self.assertEqual(gates["platform"]["not_executed"], [{"command": ["/bin/bash", "deploy/x.sh"], "reason": "macOS 专用"}])
+            self.assertTrue(all(gate["started_at_utc"] and gate["completed_at_utc"] for gate in gates.values()))
+            self.assertEqual((root / "count.txt").read_text(encoding="utf-8"), "run\n", "两个门禁项共用的单元只执行一次")
+            formal_starts = [event["unit"] for event in events if event["event"] == "start" and event["kind"] == "formal"]
+            self.assertEqual(len(formal_starts), len(set(formal_starts)))
+            group = summary["test_groups"]["tests"]
+            self.assertEqual((group["status"], group["expected_tests"], group["reported_tests"], group["counts"]["skipped"]), ("passed", 3, 3, 1))
+            self.assertEqual(group["skipped"], [{"test_id": "test_alpha.AlphaTests.test_skipped", "reason": "示例：本平台不跑"}])
+            rows = {row["unit_id"]: row for row in summary["units"]}
+            self.assertEqual({rows["test_alpha"]["type"], rows["spec:ok"]["type"]}, {"test", "command"})
+            self.assertTrue(all(row["started_at_utc"] and row["completed_at_utc"] for row in rows.values()))
+            self.assertEqual([item["unit_id"] for item in summary["diagnostic"]], ["spec:fail"], "只诊断失败单元")
+            self.assertEqual(completed.stderr.strip().splitlines()[-1], "FAILED (gates=1)")
+            self.assertIn("门禁 spec：未通过", completed.stderr)
+
+    def test_nested_scheduler_on_the_same_state_dir_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shared, other = root / "shared", root / "other"
+            environment = {**os.environ, "UNIT_EXECUTOR_UNIT": "outer:unit", "UNIT_EXECUTOR_STATE_DIR": str(shared)}
+            with unittest.mock.patch.dict(os.environ, environment, clear=True):
+                with self.assertRaisesRegex(ue.ExecutorError, "嵌套"):
+                    ue.hold_scheduler_lock(shared, wait_seconds=0)
+                descriptor = ue.hold_scheduler_lock(other, wait_seconds=0)  # 测试另给状态目录照常可用
+                os.close(descriptor)
 
 
 class UnitExecutorDriverCopyTests(unittest.TestCase):

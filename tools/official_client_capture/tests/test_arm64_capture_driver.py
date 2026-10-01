@@ -1441,13 +1441,15 @@ class ManagedSharedCacheTests(unittest.TestCase):
 class TestTreeAndVc0PreflightTests(unittest.TestCase):
     """VC-0 预跑目标平台门禁（vc0-gate-target.sh）与 VC-5 测试树准备（gates.sh prepare）共用 lib.sh 的 clone_test_tree。
 
-    * 预跑复用 vc5-gate-target.sh 同一套执行方式：独立主体标识 vc0-preflight-<时间戳>、独立门禁根与字节码缓存都在
-      $RUNROOT/vc0-preflight 下，绝不写候选门禁目录、候选目录与 VC-5 的缓存；
-    * 测试树与 VC-5 同一做法（完整历史克隆 → bundle 取分支 → 检出 → 断言），前端依赖 lockfile 不同即拒绝、不进 make test；
-    * 退出码：通过 0（删测试树与缓存）、make test 未通过 1（保留测试树与日志位置）、用法 2、准备失败或并发 3；
+    * E2-04 起预跑是入口门禁 entry-gates.sh（组合 preflight＝make test 的组成）的一次运行，前后照旧采集 gate_before／
+      gate_after 环境收据；独立主体标识 vc0-preflight-<时间戳>、独立门禁根与字节码缓存都在 $RUNROOT/vc0-preflight 下，
+      绝不写候选门禁目录、候选目录与 VC-5 的缓存；
+    * 测试树与 VC-5 同一做法（完整历史克隆 → bundle 取分支 → 检出 → 断言），前端依赖 lockfile 不同即拒绝、不开跑；
+    * 退出码：通过 0（删测试树与缓存）、门禁未通过 1（保留测试树与记录位置）、用法 2、准备失败或并发 3；
     * gates.sh prepare 改用共用函数后，VC-5 行为不变（node_modules 首次取本轮前端构建、重建时经缓存目录搬回）。
 
-    make test 用 unshare 垫片代替（在测试树里跑缓存探针并记下 HEAD），受管环境收据 CLI 用替身。
+    执行器用替身（驱动随附的 unit_executor.py 换成 _EXECUTOR_STUB：在测试树里导入探针模块核对字节码缓存、记下 HEAD 与
+    清单，按清单合成结果），受管环境收据 CLI 用替身。
     """
 
     @classmethod
@@ -1460,7 +1462,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._template_root.cleanup()
 
-    def _fixture(self, root: Path, *, make_rc: int = 0, history: Path | None = None):
+    def _fixture(self, root: Path, *, fail_units: str = "", history: Path | None = None):
         fixture = _DriverFixture(root)
         hist = fixture.data_root / "candidates" / "hist"
         _git(root, "clone", "-q", str(history or self.template), str(hist))
@@ -1471,29 +1473,23 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         _git(root, "clone", "-q", str(hist), str(work))
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py"):
+        for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py",
+                     "entry-gates.sh", "entry_gates.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
         package = fixture.data_root / "tools" / "official_client_capture"
         (fixture.data_root / "tools" / "__init__.py").write_text("", encoding="utf-8")
         (package / "__init__.py").write_text("", encoding="utf-8")
         (package / "codex_upgrade_arm64_environment_receipt.py").write_text(_ENVIRONMENT_RECEIPT_STUB, encoding="utf-8")
-        probe = root / "cache_probe.py"
-        probe.write_text(_CACHE_PROBE, encoding="utf-8")
-        record = root / "make-test-environment.json"
-        head_record = root / "make-test-head.txt"
-        bin_dir = root / "bin"
-        bin_dir.mkdir(mode=0o700)
-        shim = bin_dir / "unshare"
-        shim.write_text(f"#!/bin/bash\npython3 '{probe}' '{record}'\ngit rev-parse HEAD > '{head_record}'\n"
-                        f"echo make-test-stub-ok\nexit {make_rc}\n", encoding="utf-8")
-        shim.chmod(0o700)
-        env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
-        return fixture, hist, work, drv, record, head_record, env
+        record = root / "executor-calls.jsonl"
+        env = {**fixture.env, "SHIM_RECORD": str(record), "STUB_FAIL_UNITS": fail_units}
+        return fixture, hist, work, drv, record, env
 
     @staticmethod
     def _bundle(work: Path, branch: str, target: Path, *, change_lockfile: bool = False) -> str:
         _git(work, "checkout", "-q", "-B", branch, "main")
         (work / "README.md").write_text("候选源码的改动\n", encoding="utf-8")
+        (work / "Makefile").write_text(_CANDIDATE_MAKEFILE, encoding="utf-8")
         if change_lockfile:
             (work / "frontend" / "pnpm-lock.yaml").write_text("lockfileVersion: '9.1'\n", encoding="utf-8")
         _git(work, "add", "-A")
@@ -1501,6 +1497,10 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         _git(work, "bundle", "create", "-q", str(target), f"main..{branch}")
         return _git(work, "rev-parse", "HEAD")
+
+    @staticmethod
+    def _calls(record: Path) -> list[dict]:
+        return [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()] if record.exists() else []
 
     def _untouched_vc5_locations(self, fixture: _DriverFixture) -> None:
         self.assertFalse((fixture.data_root / "control" / f"{fixture.new}-candidate-gates").exists(), "预跑不得写候选门禁目录")
@@ -1512,7 +1512,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            fixture, hist, work, drv, record, env = self._fixture(root)
             commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
             result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1525,54 +1525,65 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             summary = json.loads((subject / "preflight.json").read_text(encoding="utf-8"))
             self.assertEqual((summary["purpose"], summary["accept_gate_receipt"], summary["status"]), ("vc0-preflight", False, "passed"))
             self.assertEqual((summary["subject_id"], summary["source"]["commit"], summary["source"]["tree_head"]), (subject.name, commit, commit))
-            self.assertEqual(summary["gate"]["exit_code"], 0)
+            self.assertEqual((summary["gate"]["exit_code"], summary["gate"]["gate_json"]), (0, "logs/target-platform.gate.json"))
             self.assertTrue(summary["test_tree_removed"])
-            self.assertEqual(json.loads((subject / "logs" / "target-platform.gate.json").read_text(encoding="utf-8"))["exit_code"], 0)
+            gate = json.loads((subject / "logs" / "target-platform.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual((gate["gate_id"], gate["command"], gate["exit_code"], gate["composed_of"]),
+                             ("target-platform", ["make", "test"], 0, ["backend-go-test", "backend-lint", "frontend-lint", "frontend-typecheck",
+                                                                       "frontend-critical", "test-capture-tools", "test-official-client-control",
+                                                                       "check-egress-spec"]))
             self.assertEqual(sorted(path.name for path in (subject / "environment").iterdir()), sorted(
                 f"{subject.name}-{role}.json" for role in ("before-facts", "before", "after-facts", "after")))
-            # make test 在所要求的提交上执行，缓存是预跑目录里重建的那份（与 VC-5 分开）。
-            self.assertEqual(head_record.read_text(encoding="utf-8").strip(), commit)
-            seen = json.loads(record.read_text(encoding="utf-8"))
+            # 一次运行：make test 的全部组成在所要求的提交上执行，缓存是预跑目录里重建的那份（与 VC-5 分开）。
+            (call,) = self._calls(record)
+            self.assertEqual((call["head"], call["manifest"]["profile"]), (commit, "preflight"))
+            self.assertEqual([gate["gate_id"] for gate in call["manifest"]["gates"]],
+                             ["backend-go-test", "backend-lint", "frontend-lint", "frontend-typecheck", "frontend-critical",
+                              "test-capture-tools", "test-official-client-control", "check-egress-spec"])
             cache = str(pre / "pycache-target-platform")
-            self.assertEqual(seen["prefix"], cache)
-            self.assertTrue(seen["cached"].startswith(cache) and seen["cached_exists"], seen["cached"])
+            self.assertEqual(call["pycache"], cache)
+            self.assertTrue(call["cached"].startswith(cache) and call["cached_exists"], call["cached"])
+            self.assertIsNone(call["identity_memo"], "测试树门禁不用生产的身份记忆化目录")
             self._untouched_vc5_locations(fixture)
             # 通过后删掉测试树与缓存、释放锁；数据根与历史测试树不留字节码。
             self.assertFalse((pre / "test-tree").exists())
             self.assertFalse((pre / "pycache-target-platform").exists())
             self.assertFalse((pre / ".lock").exists())
+            self.assertFalse((pre / ".entry-gates.lock").exists())
             self.assertEqual(list(fixture.data_root.rglob("__pycache__")), [])
             self.assertEqual(stat.S_IMODE(pre.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(subject.stat().st_mode), 0o700)
 
-    def test_failed_make_test_exits_1_and_keeps_tree_and_log_locations(self) -> None:
+    def test_failed_gate_exits_1_and_keeps_tree_and_record_locations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root, make_rc=2)
+            fixture, hist, work, drv, record, env = self._fixture(root, fail_units="egress-spec:egress-spec-a")
             commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
             result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("VC0_GATE_TARGET_FAILED rc=2", result.stdout)
-            self.assertIn("target-platform.stderr.log", result.stdout)
+            self.assertIn("VC0_GATE_TARGET_FAILED rc=1", result.stdout)
+            self.assertIn("executor.log", result.stdout)
             pre = fixture.runroot / "vc0-preflight"
             subject = next(path for path in pre.iterdir() if path.name.startswith("vc0-preflight-"))
             summary = json.loads((subject / "preflight.json").read_text(encoding="utf-8"))
-            self.assertEqual((summary["status"], summary["gate"]["exit_code"], summary["test_tree_removed"]), ("failed", 2, False))
+            self.assertEqual((summary["status"], summary["gate"]["exit_code"], summary["test_tree_removed"]), ("failed", 1, False))
+            regression = json.loads((subject / "logs" / "full-regression.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual(regression["failed_gates"], ["check-egress-spec"])
             self.assertEqual(_git(pre / "test-tree", "rev-parse", "HEAD"), commit, "未通过时保留测试树供排查")
             self.assertFalse((pre / ".lock").exists())
             self._untouched_vc5_locations(fixture)
 
-    def test_mismatched_lockfile_is_rejected_before_make_test(self) -> None:
+    def test_mismatched_lockfile_is_rejected_before_any_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            fixture, hist, work, drv, record, env = self._fixture(root)
             commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle", change_lockfile=True)
             result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
             self.assertIn("前端依赖不可用", result.stdout)
-            self.assertFalse(record.exists(), "前端依赖不可用时不得进入 make test")
+            self.assertEqual(self._calls(record), [], "前端依赖不可用时不得开跑任何门禁")
             self.assertEqual(list((fixture.runroot / "vc0-preflight").rglob("target-platform.gate.json")), [])
             self.assertFalse((fixture.runroot / "vc0-preflight" / ".lock").exists())
 
@@ -1580,7 +1591,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            fixture, hist, work, drv, record, env = self._fixture(root)
             commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
             bundle = str(root / "upload" / "vc0.bundle")
             for label, arguments in {
@@ -1599,13 +1610,13 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
             self.assertIn("拒绝并发", result.stdout)
             self.assertTrue(lock.is_dir(), "不得删除正在运行的另一次预跑的锁")
-            self.assertFalse(record.exists())
+            self.assertEqual(self._calls(record), [])
 
     def test_vc5_prepare_keeps_behaviour_with_shared_clone_function(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root)
+            fixture, hist, work, drv, record, env = self._fixture(root)
             # 参数文件里的 VC-5 坐标：BUNDLE=$D/staging/x.bundle、BUNDLE_BRANCH=codex/x。
             commit = self._bundle(work, "codex/x", fixture.data_root / "staging" / "x.bundle")
             built = fixture.candidate_dir / "frontend-build" / "frontend" / "node_modules" / "typescript" / "lib"
@@ -1633,13 +1644,13 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             root.chmod(0o700)
             short = root / "short-history"
             _history_repo(short, commits=3)
-            fixture, hist, work, drv, record, head_record, env = self._fixture(root, history=short)
+            fixture, hist, work, drv, record, env = self._fixture(root, history=short)
             commit = self._bundle(work, "codex/vc0-preflight", root / "upload" / "vc0.bundle")
             result = _run(drv / "vc0-gate-target.sh", str(root / "upload" / "vc0.bundle"), "codex/vc0-preflight", commit, env=env, cwd=root)
             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
             self.assertIn("测试树不是完整历史", result.stdout + result.stderr)
             self.assertIn("VC0_GATE_TARGET_ABORTED", result.stdout)
-            self.assertFalse(record.exists())
+            self.assertEqual(self._calls(record), [])
 
 
 # unshare 垫片：isolated_run 调用形如 unshare -m --propagation private bash -c '<遮挡脚本>' isolated-gate <命令…>，
@@ -1668,11 +1679,62 @@ _CI_WORKFLOW = """jobs:
       - name: Check deploy scripts
         run: |
           /bin/bash -n deploy/apple-container.sh
+          /bin/bash deploy/tests/apple-container-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
   test:
     steps:
       - name: Check Docker Compose simple mode environment
         run: /bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh
+"""
+
+
+# 候选提交里的最小 Makefile：入口门禁按 print-egress-spec-checks 读 check-egress-spec 的子检查清单（与真实 Makefile 同一入口）。
+_CANDIDATE_MAKEFILE = "print-egress-spec-checks:\n\t@echo check-egress-spec-local-source test-official-client-control egress-spec-a\n"
+
+# 执行器替身（驱动随附的 unit_executor.py 换成它）：只支持 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
+# 树外缓存），把工作目录、HEAD、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；STUB_FAIL_UNITS（逗号分隔）里的
+# 单元判失败。执行器自身的调度、额度与汇总由 test_ci_unit_executor 实测。
+_EXECUTOR_STUB = """import json, os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert args[0] == "run-gates", args
+manifest = json.loads(Path(args[args.index("--manifest") + 1]).read_text(encoding="utf-8"))
+out = Path(args[args.index("--out-dir") + 1])
+sys.path.insert(0, os.path.join(os.getcwd(), "tools"))
+try:
+    import probe_pkg.probe as probe
+    cached = probe.__cached__
+except ImportError:
+    cached = None
+with open(os.environ["SHIM_RECORD"], "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"cwd": os.getcwd(), "head": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
+                             "pycache": os.environ.get("PYTHONPYCACHEPREFIX"), "cached": cached, "cached_exists": bool(cached) and os.path.isfile(cached),
+                             "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE"), "source_root": os.environ.get("CODEX_0_149_1_SOURCE_ROOT"),
+                             "identity_memo": os.environ.get("CODEX_UPGRADE_IDENTITY_MEMO"), "manifest": manifest}, ensure_ascii=False) + "\\n")
+failing = {item for item in os.environ.get("STUB_FAIL_UNITS", "").split(",") if item}
+stamp = ("2026-10-01T10:00:00Z", "2026-10-01T10:05:00Z")
+rows = [{"type": "command", "unit_id": unit["unit_id"], "kind": "formal", "passed": unit["unit_id"] not in failing,
+         "exit_code": 1 if unit["unit_id"] in failing else 0, "signal": None, "timed_out": False, "seconds": 1.0, "cpu_seconds": 1.0,
+         "max_rss_mb": 10.0, "orphans": 0, "log": str(out / "logs" / (unit["unit_id"].replace(":", "-") + ".log")), "argv": unit["argv"],
+         "cwd": unit["cwd"], "started_at_utc": stamp[0], "completed_at_utc": stamp[1]} for unit in manifest["units"]]
+by_id = {row["unit_id"]: row for row in rows}
+groups = {group["group_id"]: {"status": "passed", "start": group["start"], "pattern": group["pattern"], "expected_tests": 3, "reported_tests": 3,
+          "counts": {"passed": 2, "failed": 0, "error": 0, "skipped": 1, "expected_failure": 0, "unexpected_success": 0},
+          "full_set": {"missing": [], "duplicated": [], "unexpected": [], "units_not_run": []}, "failed_units": [], "units": ["test_probe"],
+          "skipped": [{"test_id": "test_probe.T.test_linux_only", "reason": "需要 Linux root"}]} for group in manifest["test_groups"]}
+gates = []
+for gate in manifest["gates"]:
+    failed = [unit for unit in gate["units"] if not by_id[unit]["passed"]]
+    gates.append({"gate_id": gate["gate_id"], "status": "failed" if failed else "passed", "units": gate["units"],
+                  "test_groups": gate.get("test_groups", []), "failed_units": failed, "not_executed": gate.get("not_executed", []),
+                  "started_at_utc": stamp[0], "completed_at_utc": stamp[1], "unit_seconds": float(len(gate["units"]))})
+status = "failed" if any(gate["status"] != "passed" for gate in gates) else "passed"
+out.mkdir(parents=True, exist_ok=True)
+(out / "summary.json").write_text(json.dumps({"schema_version": "unit-executor-gates-summary/v1", "status": status, "policy_sha256": "0" * 64,
+    "elapsed_seconds": 300.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [], "failed_units": sorted(failing),
+    "diagnostic": [], "max_cores_in_use": 4.0}, ensure_ascii=False), encoding="utf-8")
+print("OK" if status == "passed" else "FAILED (gates=1)", file=sys.stderr)
+sys.exit(0 if status == "passed" else 1)
 """
 
 
@@ -1696,7 +1758,7 @@ class Arm64GateScriptTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._template_root.cleanup()
 
-    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2):
+    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = ""):
         fixture = _DriverFixture(root)
         hist = fixture.data_root / "candidates" / "hist"
         _git(root, "clone", "-q", str(self.template), str(hist))
@@ -1707,8 +1769,11 @@ class Arm64GateScriptTests(unittest.TestCase):
         _git(root, "clone", "-q", str(hist), str(work))
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py"):
+        for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
+                     "entry-gates.sh", "entry_gates.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
+        (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
         bin_dir = root / "bin"
         bin_dir.mkdir(mode=0o700)
         shim = bin_dir / "unshare"
@@ -1716,7 +1781,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         shim.chmod(0o700)
         record = root / "gate-commands.jsonl"
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
-               "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
+               "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc), "STUB_FAIL_UNITS": fail_units}
         return fixture, work, drv, record, env
 
     @staticmethod
@@ -1730,6 +1795,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         _git(work, "checkout", "-q", "-B", branch, "main")
         (work / "backend").mkdir(exist_ok=True)
         (work / "backend" / "Makefile").write_text("test-unit:\n\ttrue\n", encoding="utf-8")
+        (work / "Makefile").write_text(_CANDIDATE_MAKEFILE, encoding="utf-8")
         if with_ci:
             workflow = work / ".github" / "workflows" / "backend-ci.yml"
             workflow.parent.mkdir(parents=True, exist_ok=True)
@@ -1748,7 +1814,7 @@ class Arm64GateScriptTests(unittest.TestCase):
 
     # ---- ARM64 全量门禁 ----
 
-    def test_full_gates_run_every_ci_gate_isolated_and_pass(self) -> None:
+    def test_full_gates_run_every_ci_gate_once_and_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
@@ -1765,25 +1831,38 @@ class Arm64GateScriptTests(unittest.TestCase):
             summary = json.loads((subject / "summary.json").read_text(encoding="utf-8"))
             expected = ["full-regression", "backend-unit", "backend-integration", "lint-unit", "lint-integration", "deploy-scripts"]
             self.assertEqual([gate["gate_id"] for gate in summary["gates"]], expected)
-            self.assertEqual((summary["status"], summary["campaign_receipt"], summary["source"]["tree_head"]), ("passed", False, commit))
-            commands = self._commands(record)
+            self.assertEqual((summary["status"], summary["campaign_receipt"], summary["source"]["tree_head"], summary["test_tree_removed"]),
+                             ("passed", False, commit, True))
+            # 一次运行：全部门禁项的单元在同一份清单里交给执行器，测试树单元都套隔离前缀，环境与目标平台门禁相同。
+            (call,) = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
             tree = str(fg / "test-tree")
-            self.assertEqual([(entry["cwd"], entry["command"][:2]) for entry in commands[:5]], [
-                (tree, ["make", "test"]), (f"{tree}/backend", ["make", "test-unit"]), (f"{tree}/backend", ["make", "test-integration"]),
-                (f"{tree}/backend", ["golangci-lint", "run"]), (f"{tree}/backend", ["golangci-lint", "run"])])
-            self.assertEqual([entry["command"][-1] for entry in commands[3:5]], ["--build-tags=unit", "--build-tags=integration"])
-            deploy = commands[5]["command"]
-            self.assertEqual(deploy[:2], ["bash", "-c"])
-            # 多行 run 块里的两行与 `run:` 同一行的单行写法都要取到，按 CI 定义的顺序逐行执行。
-            executed = [line for line in deploy[2].splitlines() if line.startswith("/bin/")]
-            self.assertEqual(executed, ["/bin/bash -n deploy/apple-container.sh", "/bin/sh deploy/tests/docker-compose-security-test.sh",
-                                        "/bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh"])
-            for entry in commands:
-                self.assertEqual(entry["pycache"], str(fg / "pycache"))
-                self.assertEqual(entry["typescript"], f"{tree}/frontend/node_modules/typescript/lib/typescript.js")
+            self.assertEqual((call["cwd"], call["head"], call["pycache"], call["typescript"], call["identity_memo"]),
+                             (tree, commit, str(fg / "pycache"), f"{tree}/frontend/node_modules/typescript/lib/typescript.js", None))
+            self.assertTrue(call["cached_exists"], "执行器在预编译好的树外缓存上运行")
+            manifest = call["manifest"]
+            self.assertEqual(manifest["profile"], "full-gates")
+            units = {unit["unit_id"]: unit for unit in manifest["units"]}
+            launcher = ["unshare", "-m", "--propagation", "private", "bash", "-c"]
+            self.assertTrue(all(unit["argv"][:6] == launcher for unit in units.values()), "测试树单元都在私有挂载命名空间里遮住生产别名")
+            self.assertEqual((units["backend:unit"]["argv"][-5:], units["backend:unit"]["cwd"]), (["go", "test", "-tags=unit", "./...", "-count=1"], f"{tree}/backend"))
+            self.assertEqual(units["backend:integration"]["env"], {"CI": "true"})
+            self.assertEqual([units[key]["argv"][-1] for key in ("backend:lint-unit", "backend:lint-integration")], ["--build-tags=unit", "--build-tags=integration"])
+            # 多行 run 块与 `run:` 同一行的单行写法都要取到，每条单独一个单元；macOS 专用的那条在 Linux（ARM64、CI）上写明不在
+            # 本平台执行，在 macOS 上照常执行。
+            macos_only = "/bin/bash deploy/tests/apple-container-test.sh"
+            on_macos = sys.platform == "darwin"
+            deploy = next(gate for gate in manifest["gates"] if gate["gate_id"] == "deploy-scripts")
+            self.assertEqual([" ".join(units[unit]["argv"][8:]) for unit in deploy["units"]],
+                             ["/bin/bash -n deploy/apple-container.sh", *([macos_only] if on_macos else []),
+                              "/bin/sh deploy/tests/docker-compose-security-test.sh", "/bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh"])
+            self.assertEqual([" ".join(item["command"]) for item in deploy["not_executed"]], [] if on_macos else [macos_only])
             gate = json.loads((subject / "logs" / "backend-unit.gate.json").read_text(encoding="utf-8"))
             self.assertEqual((gate["gate_id"], gate["command"], gate["working_directory"], gate["exit_code"], gate["tree_head"]),
-                             ("backend-unit", ["make", "test-unit"], "backend", 0, commit))
+                             ("backend-unit", ["go", "test", "-tags=unit", "./...", "-count=1"], "backend", 0, commit))
+            self.assertEqual(len(json.loads((subject / "logs" / "deploy-scripts.gate.json").read_text(encoding="utf-8"))["not_executed"]),
+                             0 if on_macos else 1, "不在本平台执行的项写进门禁记录")
+            for name in ("check-egress-spec", "test-capture-tools"):
+                self.assertEqual(json.loads((subject / "p0" / f"{name}.json").read_text(encoding="utf-8"))["status"], "passed")
             self.assertFalse((fg / "test-tree").exists())
             self.assertFalse((fg / "pycache").exists())
             self.assertFalse((fg / ".lock").exists())
@@ -1794,7 +1873,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             root.chmod(0o700)
-            fixture, work, drv, record, env = self._fixture(root, fail_pattern="test-integration", fail_rc=2)
+            fixture, work, drv, record, env = self._fixture(root, fail_units="backend:integration")
             commit = self._candidate(work, "codex/full-gates")
             bundle = root / "upload" / "full.bundle"
             bundle.parent.mkdir()
@@ -1803,13 +1882,15 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("FULL_GATES_FAILED", result.stdout)
             self.assertIn("failed=backend-integration", result.stdout)
-            self.assertEqual(len(self._commands(record)), 6, "未通过的一项不能打断其余门禁")
             fg = fixture.runroot / "full-gates"
             subject = next(path for path in fg.iterdir() if path.name.startswith("full-gates-"))
             summary = json.loads((subject / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["status"], "failed")
-            self.assertEqual({gate["gate_id"]: gate["exit_code"] for gate in summary["gates"]}["backend-integration"], 2)
+            self.assertEqual({gate["gate_id"]: gate["exit_code"] for gate in summary["gates"]},
+                             {"full-regression": 0, "backend-unit": 0, "backend-integration": 1, "lint-unit": 0, "lint-integration": 0, "deploy-scripts": 0},
+                             "未通过的一项不影响其余门禁的结论")
             self.assertEqual(_git(fg / "test-tree", "rev-parse", "HEAD"), commit, "未通过时保留测试树供排查")
+            self.assertFalse(summary["test_tree_removed"])
 
     def test_full_gates_reject_missing_ci_deploy_tests_usage_and_concurrency(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1823,7 +1904,7 @@ class Arm64GateScriptTests(unittest.TestCase):
             result = _run(drv / "arm64-full-gates.sh", str(bundle), "codex/full-gates", commit, env=env, cwd=root)
             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
             self.assertIn("FULL_GATES_ABORTED", result.stdout)
-            self.assertEqual(self._commands(record), [], "取不到部署脚本测试时不得开跑任何门禁")
+            self.assertFalse(record.exists(), "取不到部署脚本测试时不得开跑任何门禁")
             for label, arguments in {"参数个数": (str(bundle), "codex/full-gates"), "提交不是 40 位": (str(bundle), "codex/full-gates", commit[:12]),
                                      "bundle 相对路径": ("upload/full.bundle", "codex/full-gates", commit)}.items():
                 with self.subTest(label):

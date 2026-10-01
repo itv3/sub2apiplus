@@ -10,11 +10,13 @@
 #   1. 测试树：lib.sh 的 clone_test_tree（与 gates.sh prepare 同一函数：从 $HISTORY_TEST_TREE 克隆完整历史 → 从 bundle
 #      取分支 → 检出提交 → 断言完整历史、不含 vendor），树放在 $RUNROOT/vc0-preflight/test-tree；前端 node_modules
 #      取前序候选测试树里的一份（或第 4 个参数给出的前端依赖目录），其 pnpm-lock.yaml 必须与本树逐字相同，否则拒绝；
-#   2. 门禁：直接调用 vc5-gate-target.sh（gate_before 环境收据 → 树外只读字节码缓存 → 私有挂载命名空间里 make test
-#      → gate_after 环境收据 → gate.json）；主体标识 vc0-preflight-<UTC 时间戳>，门禁根 $RUNROOT/vc0-preflight/<主体标识>，
-#      字节码缓存 $RUNROOT/vc0-preflight/pycache-target-platform（第 4 个参数，与 VC-5 的缓存分开）；
-#   3. 结论：门禁根下写预检摘要 preflight.json（用途、源码坐标、退出码与日志位置）。通过即删掉测试树与缓存（数 GB），
-#      未通过保留测试树供排查（下次预跑会重建）。
+#   2. 门禁（E2-04 起）：gate_before 环境收据 → 入口门禁 entry-gates.sh（组合 preflight＝make test 的组成，统一调度执行器
+#      一次运行、全部单元并行，隔离方式与目标平台门禁相同）→ gate_after 环境收据；主体标识 vc0-preflight-<UTC 时间戳>，
+#      门禁根 $RUNROOT/vc0-preflight/<主体标识>，字节码缓存 $RUNROOT/vc0-preflight/pycache-target-platform（与 VC-5 的缓存分开）。
+#      入口门禁（组合 entry）的一次运行已经产出同形状的预跑记录（preflight.json），升级入口不必在建账本之后再跑本命令；
+#      本命令留作单独预跑的入口；
+#   3. 结论：门禁根下写预检摘要 preflight.json（用途、源码坐标、退出码与记录位置）与 logs/target-platform.gate.json
+#      （make test 的组成全部通过与否）。通过即删掉测试树与缓存（数 GB），未通过保留测试树供排查（下次预跑会重建）。
 #
 # 边界：绝不写候选门禁目录（<campaign>-candidate-gates）与候选目录，不写时间账本与 Campaign，不发模型请求。
 # build_gate_facts.py／vc5-accept.sh 只读候选门禁目录里按 attempt ID 命名的产物，本入口的结果不会被当成 accept 的
@@ -60,81 +62,52 @@ trap 'rm -rf "$LOCK"' EXIT
 SUBJECT="vc0-preflight-$(date -u +%Y%m%dt%H%M%Sz)"
 if [ -e "$PRE/$SUBJECT" ]; then SUBJECT="$SUBJECT-$$"; fi
 OUT="$PRE/$SUBJECT"
-mkdir -m 0700 "$OUT"
-echo "=== VC-0 预跑目标平台门禁 ${SUBJECT}（只作预检，不是 accept 门禁收据）$(utc_now)"
+mkdir -m 0700 "$OUT" "$OUT/environment"
+echo "=== VC-0 预跑目标平台门禁 ${SUBJECT}（只作预检，不是 accept 门禁收据；入口门禁一次运行）$(utc_now)"
 echo "bundle=${PBUNDLE} 分支=${PBRANCH} 提交=${PCOMMIT} 前端依赖=${NM_DIR}"
-echo "=== 测试树（clone_test_tree，与 VC-5 的 gates.sh prepare 同一实现，umask 022 同 VC-5）$(utc_now)"
-umask 022
-clone_test_tree "$TREE" "$PBUNDLE" "$PBRANCH" "$PCOMMIT"
-# 前端依赖：lockfile 不同的 node_modules 会让前端检查与 TypeScript 解析器摘要核对误报，直接拒绝，不带着错配的依赖跑一个小时。
-if [ ! -d "$NM_DIR/node_modules" ] || ! cmp -s "$NM_DIR/pnpm-lock.yaml" "$TREE/frontend/pnpm-lock.yaml"; then
-  echo "前端依赖不可用：${NM_DIR}/node_modules 不存在，或 ${NM_DIR}/pnpm-lock.yaml 与本树 frontend/pnpm-lock.yaml 不同"
-  echo "本轮 lockfile 有变化时，先按 frontend.sh 同一方式（node:20 容器内 pnpm install --frozen-lockfile）在独立目录装好依赖，再把该目录作为第 4 个参数传入"
-  echo "VC0_GATE_TARGET_ABORTED：前端依赖不可用，没有门禁结论；主体目录 ${OUT}"
+environment_receipt() {  # <gate_before|gate_after> <文件名前缀>
+  python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$OUT" --output "environment/$SUBJECT-$2-facts.json" --phase "$1" --subject-id "$SUBJECT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
+  python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$OUT" --facts "environment/$SUBJECT-$2-facts.json" --output "environment/$SUBJECT-$2.json" | cut -c1-160
+}
+environment_receipt gate_before before
+trap - ERR
+RC=0
+bash "$DRV/entry-gates.sh" --profile preflight --out "$OUT" --work "$PRE" --pycache "$PYC" "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$NM_DIR" || RC=$?
+if [ "$RC" != 0 ] && [ "$RC" != 1 ]; then
+  echo "VC0_GATE_TARGET_ABORTED：入口门禁没有给出结论（rc=${RC}），原因见上方输出；主体目录 ${OUT}"
   exit 3
 fi
-cp -a "$NM_DIR/node_modules" "$TREE/frontend/node_modules"
-umask 077
-TREE_HEAD=$(git -C "$TREE" rev-parse HEAD)
-echo "test-tree HEAD=${TREE_HEAD} status=[$(git -C "$TREE" status --porcelain --untracked-files=all)]"
-echo "=== 目标平台门禁（vc5-gate-target.sh 同一套执行方式；门禁根 ${OUT}，字节码缓存 ${PYC}）$(utc_now)"
-bash "$DRV/vc5-gate-target.sh" "$SUBJECT" "$OUT" "$TREE" "$PYC"
+trap 'on_error $LINENO' ERR
+cd "$D"; environment_receipt gate_after after
 GATE_JSON="$OUT/logs/target-platform.gate.json"
-RC=$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1], encoding='utf-8'))['exit_code']))" "$GATE_JSON")
-if [ "$RC" = 0 ]; then REMOVED=true; else REMOVED=false; fi
-python3 - "$OUT/preflight.json" "$SUBJECT" "$ROUND" "$TARGET_VERSION" "$PBUNDLE" "$PBRANCH" "$PCOMMIT" "$TREE_HEAD" "$TREE" "$HISTORY_TEST_TREE" "$NM_DIR" "$PYC" "$GATE_JSON" "$REMOVED" <<'PY'
+# 预跑记录沿用原形状与位置：门禁记录 target-platform（make test 的组成）、测试树是否已删、执行器日志位置。
+python3 - "$OUT" "$RC" "$([ -d "$TREE" ] && echo false || echo true)" <<'PY'
 import json, sys
+from pathlib import Path
 
-out, subject, round_id, target, bundle, branch, commit, head, tree, history, nm_dir, pyc, gate_json, removed = sys.argv[1:]
-gate = json.load(open(gate_json, encoding="utf-8"))
-exit_code = int(gate["exit_code"])
-payload = {
-    "schema_version": "arm64-vc0-target-gate-preflight/v1",
-    "purpose": "vc0-preflight",
-    "accept_gate_receipt": False,
-    "statement": "只作 VC-0 预检，不是 VC-5 accept 的门禁收据；accept 前仍须在候选门禁目录执行正式目标平台门禁",
-    "subject_id": subject,
-    "round": round_id,
-    "target_version": target,
-    "status": "passed" if exit_code == 0 else "failed",
-    "source": {
-        "bundle": bundle,
-        "branch": branch,
-        "commit": commit,
-        "tree_head": head,
-        "history_test_tree": history,
-        "node_modules_source": nm_dir + "/node_modules",
-    },
-    "gate": {
-        "exit_code": exit_code,
-        "started_at_utc": gate["started_at_utc"],
-        "completed_at_utc": gate["completed_at_utc"],
-        "gate_json": "logs/target-platform.gate.json",
-        "stdout_log": "logs/target-platform.stdout.log",
-        "stderr_log": "logs/target-platform.stderr.log",
-        "test_tree": tree,
-        "bytecode_cache": pyc,
-    },
-    "test_tree_removed": removed == "true",
-}
-with open(out, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, ensure_ascii=False, indent=2)
-    handle.write("\n")
+out, rc, removed = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3] == "true"
+regression = json.loads((out / "logs" / "full-regression.gate.json").read_text(encoding="utf-8"))
+target = {**regression, "gate_id": "target-platform", "exit_code": regression["exit_code"] if rc == 0 else max(1, regression["exit_code"])}
+(out / "logs" / "target-platform.gate.json").write_text(json.dumps(target, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+preflight = json.loads((out / "preflight.json").read_text(encoding="utf-8"))
+preflight["status"] = "passed" if rc == 0 else "failed"
+preflight["gate"].update(exit_code=target["exit_code"], gate_json="logs/target-platform.gate.json",
+                         stdout_log="executor.log", stderr_log="executor.log", entry_gates_summary="entry-gates.json")
+preflight["test_tree_removed"] = removed
+(out / "preflight.json").write_text(json.dumps(preflight, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
-chmod 600 "$OUT/preflight.json"
+chmod 600 "$OUT/preflight.json" "$GATE_JSON" "$OUT"/environment/*
 trap - ERR
 if [ "$RC" = 0 ]; then
-  rm -rf "$TREE" "$PYC"
   echo "VC-0 预跑通过：门禁记录 ${GATE_JSON}，预检摘要 ${OUT}/preflight.json；测试树与字节码缓存已删除"
   echo "VC0_GATE_TARGET_DONE rc=0 subject=${SUBJECT} out=${OUT}"
   exit 0
 fi
-echo "VC-0 预跑未通过（make test rc=${RC}）：按普通 VC-0 失败处理，修好后重跑本命令（新主体标识，本次结果留档）"
-echo "  门禁记录 ${GATE_JSON}"
-echo "  标准输出 ${OUT}/logs/target-platform.stdout.log"
-echo "  标准错误 ${OUT}/logs/target-platform.stderr.log"
+echo "VC-0 预跑未通过（入口门禁 rc=${RC}）：按普通 VC-0 失败处理，修好后重跑本命令（新主体标识，本次结果留档）"
+echo "  门禁记录 ${GATE_JSON}（各门禁项 ${OUT}/logs/）"
+echo "  执行器日志 ${OUT}/executor.log"
 echo "  预检摘要 ${OUT}/preflight.json"
 echo "  测试树保留在 ${TREE}（排查用，下次预跑会重建）"
-grep -hE "^(FAIL|ERROR)[: ]|^--- FAIL|^FAIL[[:space:]]|make: \*\*\*" "$OUT/logs/target-platform.stderr.log" "$OUT/logs/target-platform.stdout.log" 2>/dev/null | head -n 10 | cut -c1-240 || true
+grep -E "^(单元未通过|测试组 .*全集核对失败)" "$OUT/executor.log" 2>/dev/null | head -n 10 | cut -c1-240 || true
 echo "VC0_GATE_TARGET_FAILED rc=${RC} subject=${SUBJECT} out=${OUT}"
 exit 1

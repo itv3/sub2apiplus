@@ -1,24 +1,24 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 64,
+  "file_count": 66,
   "files": [
     {
       "path": "README.md",
-      "sha256": "7644e56d438b7fe4767112bf696eb14f1f6c3cf7272b6d78c7a16d8521df871e",
+      "sha256": "280c569d66222aaa2badb4ba23f98be7b5f8f037b4fa56121eae2a5cacee220a",
       "mode": "0600",
-      "bytes": 26086
+      "bytes": 30115
     },
     {
       "path": "driver/arm64-full-gates.sh",
-      "sha256": "a1a729d6954492cecf4809ec5b4b52e09d0069a4db647f370fb13cee389567e0",
+      "sha256": "c18676f2bccadaca978756fd361b1008606529174def92b26621ac63f6a248b0",
       "mode": "0700",
-      "bytes": 10562
+      "bytes": 7000
     },
     {
       "path": "driver/arm64-vc4-gates.sh",
-      "sha256": "daa28ebab3e9732fe3f2d69e00b56168cb5f090cee35f704ce2b2efc4a8a7018",
+      "sha256": "d409e511d2c97e1eff7bb9cd34d7e279801bf5f3f2abcaa0546fe8ae5bd4a96b",
       "mode": "0700",
-      "bytes": 12831
+      "bytes": 12966
     },
     {
       "path": "driver/build.sh",
@@ -69,16 +69,28 @@
       "bytes": 925
     },
     {
+      "path": "driver/entry-gates.sh",
+      "sha256": "5735ddecd4fbb36ac06d6b83ff682b23eecd25f9af3e3dbac030b20d7c7ec70c",
+      "mode": "0700",
+      "bytes": 15571
+    },
+    {
       "path": "driver/entry-preflight.sh",
       "sha256": "47225892b246a16903690d91c8c7c9028f08be855b4ea60508d2589dd89174a3",
       "mode": "0700",
       "bytes": 7949
     },
     {
-      "path": "driver/env.example.sh",
-      "sha256": "9ba05123263355d0b584ad556b4d69079ff2d8448929df660b85e00a719cdf04",
+      "path": "driver/entry_gates.py",
+      "sha256": "0a4b0dea0cb67485f029608cd448c48cf50a24156c824d3dd46eecdde5c2eeb9",
       "mode": "0700",
-      "bytes": 4439
+      "bytes": 35839
+    },
+    {
+      "path": "driver/env.example.sh",
+      "sha256": "0dfbf982f78def6ad498db02a98a3826a5c84dfadc8ba373f955a939f5f1aaaf",
+      "mode": "0700",
+      "bytes": 4634
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -232,9 +244,9 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "53cea5c2b275d951f1719c49cc550628707eb9af8901d0be6ae80970eba3f73e",
+      "sha256": "0a5844f07048d2be62c467c7f998c0ade6dc47a50488d9a54a4d322bb4d239f9",
       "mode": "0700",
-      "bytes": 68579
+      "bytes": 88797
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -256,9 +268,9 @@
     },
     {
       "path": "driver/vc0-gate-target.sh",
-      "sha256": "f4ab78e7436f02e6071e6f068abb42c6f536d3fa813fada5b74b0bdd9202a723",
+      "sha256": "e13a6b0838c6bcc769ea26d71364366cdc2090ea18a625af185729481970378c",
       "mode": "0700",
-      "bytes": 9871
+      "bytes": 9235
     },
     {
       "path": "driver/vc23.sh",
@@ -387,5 +399,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "0c124b8bac2ad92e9ff217c81eb83cef1b218f3faaea84a85d62733eabc66dc0"
+  "manifest_sha256": "891a58515112786a5dafdbe7c11fdc651ff07687f9c8183b43a20c2970a78f89"
 }

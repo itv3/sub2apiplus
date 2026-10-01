@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""入口门禁（E2-04）：把一组 make 子检查或整份入口门禁交给统一调度执行器（``tools/ci/unit_executor.py``）一次运行。
+
+子命令：
+
+* ``make-checks``：``make check-egress-spec``／``check-egress-spec-ci`` 的实际执行方式。Makefile 把这两个目标拆成一组
+  互不依赖的子检查目标（``EGRESS_SPEC_CHECKS``），这里把每个子检查展开成一个命令单元（``make --no-print-directory
+  <子检查>``），在整机额度内并行执行：一项失败其余照跑，全部跑完再汇总，失败项逐个列出并附日志尾部。
+  退出码与执行器相同：0 全部通过、1 有子检查失败、2 用法或配置错误。
+
+执行记录目录：环境变量 ``UNIT_EXECUTOR_OUT_DIR`` 给出时放在它下面的 ``<名称>`` 子目录（与同一 make 进程里的采集工具
+测试记录分开），否则放在临时目录。子检查按原环境运行（不准备字节码共享层与身份记忆化：调用方环境里已有的前缀照常
+继承），与原来串行的 make 先决目标同一环境。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+EXECUTOR = HERE / "unit_executor.py"
+COMMANDS_SCHEMA = "unit-executor-commands/v1"
+EGRESS_SPEC_UNIT_PREFIX = "egress-spec:"
+
+# check-egress-spec 子检查的额度与预计秒数。只做 Python 静态检查的子检查占 1 核、1 GB；其余要编译 Go（go run／test／
+# vet／build、扫描器）的占 2 核、3～4 GB（GOMAXPROCS 随额度下发，编译并行度跟着它）。没登记的子检查按 Go 类保守估计。
+LIGHT_CHECKS = frozenset({
+    "check-egress-spec-local-source",
+    "test-official-client-control",
+    "test-upstream-merge-tools",
+    "egress-spec-version-leak-self-test",
+    "egress-spec-version-leak",
+    "egress-spec-changeset5-symbols-self-test",
+    "egress-spec-changeset5-symbols",
+    "egress-spec-changeset6-transition-self-test",
+    "egress-spec-changeset6-transition",
+    "egress-spec-maintenance-transition-self-test",
+    "egress-spec-maintenance-transition",
+    "egress-spec-multi-persona-transition-self-test",
+    "egress-spec-multi-persona-transition",
+    "egress-spec-fw-d-transition-self-test",
+    "egress-spec-fw-e-workspace-self-test",
+    "egress-spec-fw-e-workspace",
+    "egress-spec-fw-e-completeness-self-test",
+    "egress-spec-fw-e-completeness",
+    "egress-spec-fw-e-runtime-evidence-self-test",
+    "egress-spec-fw-e-runtime-evidence",
+    "egress-spec-fw-e-r-disposition-self-test",
+    "egress-spec-fw-e-r-disposition",
+    "egress-spec-changeset6-benchmark-self-test",
+    "egress-spec-changeset6-benchmark",
+    "egress-spec-audit-index-self-test",
+    "egress-spec-ledger-completeness",
+    "egress-spec-gofmt",
+    "egress-spec-changeset6-conflict-self-test",
+    "egress-spec-changeset6-conflict",
+    "egress-spec-maintenance-conflict-self-test",
+    "egress-spec-maintenance-conflict",
+    "egress-spec-runtime-catalog-self-test",
+})
+HEAVY_GO_CHECKS = frozenset({"egress-spec-go-build", "egress-spec-go-vet", "egress-spec-service-guard"})
+# 预计秒数只决定并行段的派发顺序（从长到短），不影响结论；没登记的按类别取默认值。
+CHECK_SECONDS: dict[str, float] = {
+    "test-upstream-merge-tools": 120.0,
+    "test-official-client-control": 60.0,
+    "egress-spec-ledger-completeness": 60.0,
+    "egress-spec-go-build": 120.0,
+    "egress-spec-service-guard": 120.0,
+    "egress-spec-go-test": 90.0,
+}
+
+
+def egress_spec_unit(target: str, *, cwd: str) -> dict[str, Any]:
+    """一个子检查目标对应的命令单元（入口门禁与 ``make-checks`` 同一份定义）。"""
+
+    light = target in LIGHT_CHECKS
+    return {
+        "unit_id": f"{EGRESS_SPEC_UNIT_PREFIX}{target}",
+        "argv": ["make", "--no-print-directory", target],
+        "cwd": cwd,
+        "cores": 1 if light else 2,
+        "memory_mb": 1024 if light else (4096 if target in HEAVY_GO_CHECKS else 3072),
+        "timeout_seconds": 1800,
+        "weight": CHECK_SECONDS.get(target, 10.0 if light else 60.0),
+    }
+
+
+def _out_dir(name: str) -> Path:
+    stamp = time.strftime("%Y%m%dt%H%M%Sz", time.gmtime())
+    base = os.environ.get("UNIT_EXECUTOR_OUT_DIR")
+    path = Path(base) / name if base else Path(tempfile.gettempdir()) / "egress-spec-checks" / f"{name}-{stamp}-{os.getpid()}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _tail(path: str, lines: int = 30) -> list[str]:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except OSError:
+        return ["（日志不可读）"]
+
+
+def make_checks(name: str, targets: list[str], *, cwd: Path | None = None) -> int:
+    """把 make 子检查展开成命令单元并行执行，全部跑完再汇总；失败项附日志尾部（CI 里只能看到这份输出）。"""
+
+    if not targets or len(set(targets)) != len(targets):
+        print(f"{name}：子检查清单为空或有重复", file=sys.stderr)
+        return 2
+    workdir = str(Path(cwd or os.getcwd()).resolve())
+    out_dir = _out_dir(name)
+    manifest = out_dir / "manifest.json"
+    manifest.write_text(json.dumps({"schema_version": COMMANDS_SCHEMA, "units": [egress_spec_unit(t, cwd=workdir) for t in targets]},
+                                   ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"{name}：{len(targets)} 项子检查交给统一调度执行器并行执行，全部跑完再汇总（记录 {out_dir}）", file=sys.stderr, flush=True)
+    completed = subprocess.run([sys.executable, str(EXECUTOR), "run-commands", "--manifest", str(manifest), "--out-dir", str(out_dir),
+                                "--shared-caches", "off"], stdin=subprocess.DEVNULL)
+    summary_path = out_dir / "summary.json"
+    if completed.returncode != 0 and summary_path.is_file():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        failed = [row for row in summary.get("units", []) if not row.get("passed")]
+        for row in failed:
+            target = str(row["unit_id"]).removeprefix(EGRESS_SPEC_UNIT_PREFIX)
+            reason = f"信号 {row['signal']}" if row.get("signal") else "超时" if row.get("timed_out") else f"退出码 {row.get('exit_code')}"
+            print(f"===== 子检查未通过：make {target}（{reason}）日志末尾：", file=sys.stderr)
+            for line in _tail(row["log"]):
+                print(f"  {line}", file=sys.stderr)
+        if failed:
+            print(f"{name} 未通过：{', '.join(str(r['unit_id']).removeprefix(EGRESS_SPEC_UNIT_PREFIX) for r in failed)}", file=sys.stderr)
+    return completed.returncode
+
+
+# ---------------------------------------------------------------------------
+# 入口门禁清单（plan）：一次运行的全部门禁项
+# ---------------------------------------------------------------------------
+
+GATES_SCHEMA = "unit-executor-gates/v1"
+GATES_SUMMARY_SCHEMA = "unit-executor-gates-summary/v1"
+ENTRY_SUMMARY_SCHEMA = "arm64-entry-gates/v1"
+P0_EVIDENCE_SCHEMA = "codex-p0-offline-gate-evidence/v1"
+FULL_GATES_SCHEMA = "arm64-full-gates/v1"
+PREFLIGHT_SCHEMA = "arm64-vc0-target-gate-preflight/v1"
+COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
+CAPTURE_GROUP = "capture-tools"
+PRE_A3_PREFIX = "pre-a3:"
+
+# make test 的组成（与 Makefile 的 test 目标一一对应：test-backend 拆成 go test 与 lint 两项、test-frontend 拆成三项）。
+MAKE_TEST_GATES = (
+    "backend-go-test", "backend-lint", "frontend-lint", "frontend-typecheck", "frontend-critical",
+    "test-capture-tools", "test-official-client-control", "check-egress-spec",
+)
+# 部署前全量门禁在 make test 之外的五项（与 CI 的 test、golangci-lint、shell 作业对齐）。
+FULL_GATES_EXTRA = ("backend-unit", "backend-integration", "lint-unit", "lint-integration", "deploy-scripts")
+PROFILES: dict[str, tuple[str, ...]] = {
+    "preflight": MAKE_TEST_GATES,
+    "full-gates": MAKE_TEST_GATES + FULL_GATES_EXTRA,
+    "entry": MAKE_TEST_GATES + FULL_GATES_EXTRA + ("pre-a3",),
+}
+# 门禁项的字面命令（门禁记录、P0 证据里写的就是它；实际执行方式见各单元）。
+GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
+    "test-capture-tools": (["make", "test-capture-tools"], "."),
+    "check-egress-spec": (["make", "check-egress-spec"], "."),
+    "test-official-client-control": (["make", "test-official-client-control"], "."),
+    "backend-go-test": (["go", "test", "./...", "-count=1"], "backend"),
+    "backend-lint": (["golangci-lint", "run", "--timeout=30m", "./..."], "backend"),
+    "frontend-lint": (["pnpm", "--dir", "frontend", "run", "lint:check"], "."),
+    "frontend-typecheck": (["pnpm", "--dir", "frontend", "run", "typecheck"], "."),
+    "frontend-critical": (["make", "test-frontend-critical"], "."),
+    "backend-unit": (["go", "test", "-tags=unit", "./...", "-count=1"], "backend"),
+    "backend-integration": (["go", "test", "-tags=integration", "./...", "-count=1"], "backend"),
+    "lint-unit": (["golangci-lint", "run", "--timeout=30m", "--build-tags=unit"], "backend"),
+    "lint-integration": (["golangci-lint", "run", "--timeout=30m", "--build-tags=integration"], "backend"),
+    "deploy-scripts": (["deploy-scripts"], "."),
+    "pre-a3": (["python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario"], "."),
+}
+# Go 与 lint 单元：编译与类型检查都按 GOMAXPROCS（随额度下发）并行；内存按 ent 包编译峰值与测试二进制并行估计。
+GO_QUOTA = {"cores": 2, "memory_mb": 6144, "timeout_seconds": 3600}
+FRONTEND_QUOTA = {"cores": 2, "memory_mb": 3072, "timeout_seconds": 1800}
+# 部署脚本测试从测试树的 CI 定义逐行取出（shell 作业与 test 作业里以 /bin/sh 或 /bin/bash 执行 deploy/ 下脚本的行）。
+DEPLOY_TEST_LINE = re.compile(r"^[ \t]*(?:run:[ \t]*)?(/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+)[ \t]*$", re.M)
+DEPLOY_TEST_SHAPE = re.compile(r"^/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+$")
+# 只能在 macOS 上执行的部署脚本测试：Linux 上记为「不在本平台执行」（CI 在 macos-15 上照常执行）。
+MACOS_ONLY_DEPLOY_TESTS: dict[str, str] = {
+    "/bin/bash deploy/tests/apple-container-test.sh":
+        "Apple container 部署脚本测试用 BSD stat（stat -f '%Lp'），GNU stat 的 -f 是文件系统状态、语义不同，"
+        "在 Linux 上必然失败；CI 的 shell 作业在 macos-15 上执行它",
+}
+
+
+def egress_spec_checks(tree: Path) -> list[str]:
+    """从测试树的 Makefile 读子检查清单（``make print-egress-spec-checks``，与 ``make check-egress-spec`` 同一份）。"""
+
+    completed = subprocess.run(["make", "-s", "--no-print-directory", "print-egress-spec-checks"], cwd=tree,
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    targets = completed.stdout.split()
+    if completed.returncode != 0 or not targets or len(set(targets)) != len(targets):
+        raise ValueError(f"读不到测试树的子检查清单（make print-egress-spec-checks）：{completed.stderr.strip()[-300:]}")
+    return targets
+
+
+def deploy_tests(tree: Path) -> list[str]:
+    """从测试树的 CI 定义逐行取出部署脚本测试；取到的每一行都要符合安全形状，否则拒绝（绝不执行非预期内容）。"""
+
+    workflow = tree / ".github" / "workflows" / "backend-ci.yml"
+    try:
+        text = workflow.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"读不到 CI 定义：{workflow}（{error}）") from error
+    commands = [match.group(1) for match in DEPLOY_TEST_LINE.finditer(text)]
+    if not commands:
+        raise ValueError("CI 定义里没有取到部署脚本测试")
+    for command in commands:
+        if not DEPLOY_TEST_SHAPE.fullmatch(command):
+            raise ValueError(f"部署脚本测试命令不合法：{command}")
+    if len(set(commands)) != len(commands):
+        raise ValueError("CI 定义里的部署脚本测试有重复")
+    return commands
+
+
+def _deploy_unit_id(command: str) -> str:
+    parts = command.split()
+    name = parts[-1].removeprefix("deploy/").replace("/", "-")
+    return f"deploy:{name}{'-syntax' if '-n' in parts else ''}"
+
+
+def plan_gates(
+    tree: Path,
+    *,
+    profile: str,
+    launcher: list[str],
+    typescript_module: str | None = None,
+    pre_a3_units: Path | None = None,
+    pre_a3_env: dict[str, str] | None = None,
+    platform: str | None = None,
+) -> dict[str, Any]:
+    """生成入口门禁清单（``unit-executor-gates/v1``）。
+
+    测试树里的单元（测试组与命令单元）都套 ``launcher``（ARM64 上是私有挂载命名空间里遮住生产别名，与 isolated_run
+    同一做法）；pre-A3 场景在数据根的生产布局里运行，不套隔离（受管树经生产别名访问的分支也要覆盖到），环境另给。
+    """
+
+    if profile not in PROFILES:
+        raise ValueError(f"未知的门禁组合：{profile}")
+    gates_wanted = PROFILES[profile]
+    if ("pre-a3" in gates_wanted) != (pre_a3_units is not None):
+        raise ValueError("入口门禁（entry）必须给出 pre-A3 场景清单，其余组合不得给出")
+    tree = Path(tree).resolve()
+    workdir, backend = str(tree), str(tree / "backend")
+    platform = platform or sys.platform
+    units: list[dict[str, Any]] = []
+    gates: list[dict[str, Any]] = []
+
+    def command(unit_id: str, argv: list[str], cwd: str, quota: dict[str, Any], weight: float, env: dict[str, str] | None = None) -> str:
+        unit = {"unit_id": unit_id, "argv": [*launcher, *argv], "cwd": cwd, **quota, "weight": weight}
+        if env:
+            unit["env"] = env
+        units.append(unit)
+        return unit_id
+
+    groups: list[dict[str, Any]] = []
+    # check-egress-spec 的子检查先展开：make test 的 test-official-client-control 排在它前面，却与它共用同一个单元。
+    egress_units: list[str] = []
+    if "check-egress-spec" in gates_wanted:
+        for target in egress_spec_checks(tree):
+            unit = egress_spec_unit(target, cwd=workdir)
+            egress_units.append(command(unit["unit_id"], unit["argv"], workdir,
+                                        {key: unit[key] for key in ("cores", "memory_mb", "timeout_seconds")}, unit["weight"]))
+    for gate_id in gates_wanted:
+        if gate_id == "test-capture-tools":
+            groups.append({"group_id": CAPTURE_GROUP, "start": "tools/official_client_capture/tests", "pattern": "test_*.py",
+                           "env": {"CLAUDE_AST_TYPESCRIPT_MODULE": typescript_module} if typescript_module else {},
+                           "launcher": list(launcher)})
+            prerequisites = command("capture:prerequisites", ["make", "--no-print-directory", "test-capture-tools-prerequisites"], workdir,
+                                    {"cores": 1, "memory_mb": 256, "timeout_seconds": 120}, 1.0)
+            gates.append({"gate_id": gate_id, "units": [prerequisites], "test_groups": [CAPTURE_GROUP]})
+        elif gate_id == "check-egress-spec":
+            gates.append({"gate_id": gate_id, "units": list(egress_units)})
+        elif gate_id == "test-official-client-control":
+            shared = f"{EGRESS_SPEC_UNIT_PREFIX}test-official-client-control"
+            if shared not in egress_units:
+                raise ValueError("子检查清单里没有 test-official-client-control（make test 的一项与 check-egress-spec 共用这个单元）")
+            gates.append({"gate_id": gate_id, "units": [shared]})
+        elif gate_id in ("backend-go-test", "backend-unit", "backend-integration"):
+            argv, _cwd = GATE_COMMANDS[gate_id]
+            # integration 带 CI=true：没有 Docker 时失败而不是静默跳过（integration_harness_test.go）。
+            env = {"CI": "true"} if gate_id == "backend-integration" else None
+            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id.removeprefix('backend-')}", argv, backend, GO_QUOTA, 600.0, env)]})
+        elif gate_id in ("backend-lint", "lint-unit", "lint-integration"):
+            argv, _cwd = GATE_COMMANDS[gate_id]
+            gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id}", argv, backend, GO_QUOTA, 300.0)]})
+        elif gate_id in ("frontend-lint", "frontend-typecheck"):
+            argv, _cwd = GATE_COMMANDS[gate_id]
+            gates.append({"gate_id": gate_id, "units": [command(f"frontend:{gate_id.removeprefix('frontend-')}", argv, workdir, FRONTEND_QUOTA, 120.0)]})
+        elif gate_id == "frontend-critical":
+            gates.append({"gate_id": gate_id, "units": [command("frontend:critical", ["make", "--no-print-directory", "test-frontend-critical"],
+                                                                workdir, FRONTEND_QUOTA, 120.0)]})
+        elif gate_id == "deploy-scripts":
+            members, skipped = [], []
+            for line in deploy_tests(tree):
+                if line in MACOS_ONLY_DEPLOY_TESTS and platform != "darwin":
+                    skipped.append({"command": line.split(), "reason": MACOS_ONLY_DEPLOY_TESTS[line]})
+                    continue
+                members.append(command(_deploy_unit_id(line), line.split(), workdir, {"cores": 1, "memory_mb": 512, "timeout_seconds": 600}, 10.0))
+            if not members:
+                raise ValueError("部署脚本测试在本平台一项都不执行")
+            gates.append({"gate_id": gate_id, "units": members, "not_executed": skipped})
+        elif gate_id == "pre-a3":
+            assert pre_a3_units is not None
+            payload = json.loads(Path(pre_a3_units).read_text(encoding="utf-8"))
+            if payload.get("schema_version") != COMMANDS_SCHEMA or not isinstance(payload.get("units"), list) or not payload["units"]:
+                raise ValueError(f"pre-A3 场景清单格式非法：{pre_a3_units}")
+            members = []
+            for unit in payload["units"]:
+                if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
+                    raise ValueError(f"pre-A3 场景清单里有非 pre-A3 单元：{unit.get('unit_id')}")
+                merged = dict(unit)
+                if pre_a3_env:
+                    merged["env"] = {**(unit.get("env") or {}), **pre_a3_env}
+                units.append(merged)
+                members.append(unit["unit_id"])
+            gates.append({"gate_id": gate_id, "units": members})
+    return {"schema_version": GATES_SCHEMA, "profile": profile, "test_groups": groups, "units": units, "gates": gates}
+
+
+# ---------------------------------------------------------------------------
+# 导出（export）：门禁记录、P0 证据、预跑记录、全量门禁摘要、pre-A3 子汇总
+# ---------------------------------------------------------------------------
+
+
+def _seconds_between(start: str | None, end: str | None) -> float | None:
+    if not start or not end:
+        return None
+    parse = lambda value: time.mktime(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))  # noqa: E731
+    return float(parse(end) - parse(start))
+
+
+def _write(path: Path, payload: Any) -> str:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
+
+
+def export_records(
+    manifest_path: Path,
+    summary_path: Path,
+    out: Path,
+    *,
+    source: dict[str, str],
+    subject: str,
+    round_id: str,
+    tree: str,
+    isolation: str,
+    host: str,
+    architecture: str,
+    target_version: str | None = None,
+    bytecode_cache: str | None = None,
+) -> dict[str, Any]:
+    """从一次运行的执行器汇总导出全部记录（写到 ``out``），返回入口门禁总摘要（同时写成 ``out/entry-gates.json``）。
+
+    * 门禁记录 ``logs/<门禁项>.gate.json``：与 lib.sh 的 write_gate_json 同一组字段，另带成员单元、失败单元与不在本平台
+      执行的项；``logs/full-regression.gate.json`` 是 make test 的组成全部通过与否（预跑与全量门禁都引用它）；
+    * P0 证据 ``p0/{check-egress-spec,test-capture-tools}.json``：手写 P0 脚本的同一形状（P0 收据的 facts 照原样从它们
+      取数），test-capture-tools 另列逐条跳过清单，check-egress-spec 另列逐个子检查；
+    * pre-A3 子汇总 ``pre-a3-executor-summary.json``：只含 ``pre-a3:`` 单元的命令单元汇总，供认证 issue 核对；
+    * ``full-gates-summary.json``、``preflight.json``：全量门禁与 VC-0 预跑的原形状记录（组合里有对应门禁项时才写）。
+    """
+
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    summary = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != GATES_SCHEMA or summary.get("schema_version") != GATES_SUMMARY_SCHEMA:
+        raise ValueError("门禁清单或执行器汇总的格式不对")
+    out = Path(out)
+    rows = {row["unit_id"]: row for row in summary["units"]}
+    gate_rows = {row["gate_id"]: row for row in summary["gates"]}
+    wanted = [gate["gate_id"] for gate in manifest["gates"]]
+    if sorted(gate_rows) != sorted(wanted):
+        raise ValueError("执行器汇总的门禁项与清单不一致")
+    profile = manifest.get("profile")
+    records: dict[str, dict[str, Any]] = {}
+
+    def gate_record(gate_id: str, exit_code: int, started: str | None, completed: str | None, extra: dict[str, Any]) -> dict[str, Any]:
+        argv, workdir = GATE_COMMANDS.get(gate_id, (["make", "test"], "."))
+        return {
+            "gate_id": gate_id, "command": argv, "working_directory": workdir, "host": host, "architecture": architecture,
+            "started_at_utc": started, "completed_at_utc": completed, "exit_code": exit_code, "tree": tree,
+            "tree_head": source.get("tree_head"), "isolation": isolation, **extra,
+        }
+
+    for gate_id in wanted:
+        row = gate_rows[gate_id]
+        failed = list(row["failed_units"])
+        record = gate_record(gate_id, 0 if row["status"] == "passed" else 1, row["started_at_utc"], row["completed_at_utc"], {
+            "status": row["status"], "units": row["units"], "test_groups": row["test_groups"], "failed_units": failed,
+            "not_executed": row["not_executed"], "unit_seconds": row["unit_seconds"],
+            "failed_logs": [rows[unit_id]["log"] for unit_id in failed if unit_id in rows],
+            "executor_summary": str(summary_path),
+        })
+        _write(out / "logs" / f"{gate_id}.gate.json", record)
+        records[gate_id] = record
+    composites: dict[str, Any] = {}
+    if all(gate_id in records for gate_id in MAKE_TEST_GATES):
+        members = [records[gate_id] for gate_id in MAKE_TEST_GATES]
+        failed_gates = [record["gate_id"] for record in members if record["exit_code"] != 0]
+        regression = gate_record("full-regression", 0 if not failed_gates else 1,
+                                 min((r["started_at_utc"] for r in members if r["started_at_utc"]), default=None),
+                                 max((r["completed_at_utc"] for r in members if r["completed_at_utc"]), default=None),
+                                 {"status": "passed" if not failed_gates else "failed", "composed_of": list(MAKE_TEST_GATES),
+                                  "failed_gates": failed_gates, "executor_summary": str(summary_path)})
+        composites["full-regression"] = {"exit_code": regression["exit_code"], "gate_json": _write(out / "logs" / "full-regression.gate.json", regression)}
+    p0: dict[str, str] = {}
+    if "test-capture-tools" in records:
+        group = summary["test_groups"][CAPTURE_GROUP]
+        counts = group["counts"]
+        record = records["test-capture-tools"]
+        full_set_problems = sum(len(group["full_set"][key]) for key in ("missing", "duplicated", "unexpected", "units_not_run"))
+        # 门禁项没通过时 failed 至少记 1：前置检查失败、单元崩溃没写结果等不体现在用例计数里。
+        failed = counts["failed"] + counts["error"] + counts["unexpected_success"] + full_set_problems
+        failed = max(1, failed) if record["exit_code"] else 0
+        p0["test-capture-tools"] = _write(out / "p0" / "test-capture-tools.json", {
+            "schema_version": P0_EVIDENCE_SCHEMA, "gate_id": "test-capture-tools", "command": ["make", "test-capture-tools"],
+            "working_directory": tree, "git_commit": source.get("commit"), "status": record["status"], "exit_code": record["exit_code"],
+            "passed": counts["passed"] + counts["expected_failure"], "failed": failed,
+            "approved_skip": counts["skipped"], "unexpected_skip": 0,
+            "elapsed_seconds": _seconds_between(record["started_at_utc"], record["completed_at_utc"]),
+            "raw_errors": record["failed_units"] + [f"{key}: {group['full_set'][key][:5]}" for key in ("missing", "duplicated", "unexpected", "units_not_run") if group["full_set"][key]],
+            "temporary_asset_inventory": [],
+            "executed_as": "入口门禁一次运行：统一调度执行器按模块（重模块拆块、独占名单单独）在整机额度内并行执行测试组全集",
+            "expected_tests": group["expected_tests"], "reported_tests": group["reported_tests"],
+            "skipped": group["skipped"], "executor_summary": str(summary_path),
+        })
+    if "check-egress-spec" in records:
+        record = records["check-egress-spec"]
+        checks = [{"target": unit_id.removeprefix(EGRESS_SPEC_UNIT_PREFIX), "passed": rows[unit_id]["passed"] if unit_id in rows else False,
+                   "exit_code": rows[unit_id]["exit_code"] if unit_id in rows else None,
+                   "seconds": rows[unit_id]["seconds"] if unit_id in rows else None, "log": rows[unit_id]["log"] if unit_id in rows else None}
+                  for unit_id in record["units"]]
+        passed_checks = sum(1 for item in checks if item["passed"])
+        p0["check-egress-spec"] = _write(out / "p0" / "check-egress-spec.json", {
+            "schema_version": P0_EVIDENCE_SCHEMA, "gate_id": "check-egress-spec", "command": ["make", "check-egress-spec"],
+            "working_directory": tree, "git_commit": source.get("commit"), "status": record["status"], "exit_code": record["exit_code"],
+            "passed": passed_checks, "failed": len(checks) - passed_checks, "approved_skip": 0, "unexpected_skip": 0,
+            "elapsed_seconds": _seconds_between(record["started_at_utc"], record["completed_at_utc"]),
+            "raw_errors": record["failed_units"], "temporary_asset_inventory": [],
+            "executed_as": "入口门禁一次运行：Makefile 的 EGRESS_SPEC_CHECKS 子检查各一个单元并行执行（与 make check-egress-spec 同一份清单）",
+            "checks": checks, "executor_summary": str(summary_path),
+        })
+    pre_a3_summary = None
+    if "pre-a3" in records:
+        pre_rows = [{**row, "kind": "formal"} for row in summary["units"] if str(row["unit_id"]).startswith(PRE_A3_PREFIX)]
+        pre_failed = [row["unit_id"] for row in pre_rows if not row["passed"]]
+        pre_a3_summary = _write(out / "pre-a3-executor-summary.json", {
+            "schema_version": COMMANDS_SUMMARY_SCHEMA, "status": "passed" if not pre_failed else "failed",
+            "policy_sha256": summary["policy_sha256"], "elapsed_seconds": summary["elapsed_seconds"], "unit_count": len(pre_rows),
+            "failed_units": pre_failed, "units_not_run": [u for u in summary["units_not_run"] if u.startswith(PRE_A3_PREFIX)], "units": pre_rows,
+            "diagnostic": [item for item in summary["diagnostic"] if str(item["unit_id"]).startswith(PRE_A3_PREFIX)],
+            "exported_from": str(summary_path),
+        })
+    status = "passed" if summary["status"] == "passed" else "failed"
+    entry = {
+        "schema_version": ENTRY_SUMMARY_SCHEMA,
+        "statement": "入口门禁一次运行的记录：P0 证据、VC-0 预跑记录、部署前全量门禁与 pre-A3 场景都取自这一次运行",
+        "subject_id": subject, "round": round_id, "profile": profile, "status": status, "source": source,
+        "gates": [{"gate_id": gate_id, "status": records[gate_id]["status"], "exit_code": records[gate_id]["exit_code"],
+                   "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in wanted],
+        "composites": composites, "p0_evidence": p0, "pre_a3_executor_summary": pre_a3_summary,
+        "executor_summary": str(summary_path), "elapsed_seconds": summary["elapsed_seconds"],
+        "max_cores_in_use": summary.get("max_cores_in_use"), "test_tree": tree, "bytecode_cache": bytecode_cache,
+    }
+    if all(gate_id in records for gate_id in MAKE_TEST_GATES + FULL_GATES_EXTRA):
+        order = ("full-regression",) + FULL_GATES_EXTRA
+        entry["full_gates_summary"] = _write(out / "full-gates-summary.json", {
+            "schema_version": FULL_GATES_SCHEMA, "purpose": "deploy-precondition-and-verification", "campaign_receipt": False,
+            "statement": "部署前提与验证记录，不是 Campaign 收据；门禁全部在 ARM64 隔离测试树执行（入口门禁一次运行）",
+            "subject_id": subject, "round": round_id, "status": "passed" if all(
+                (composites["full-regression"]["exit_code"] if gate_id == "full-regression" else records[gate_id]["exit_code"]) == 0 for gate_id in order) else "failed",
+            "source": source,
+            "gates": [{"gate_id": gate_id, "exit_code": composites["full-regression"]["exit_code"] if gate_id == "full-regression" else records[gate_id]["exit_code"],
+                       "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in order],
+            "test_tree": tree, "bytecode_cache": bytecode_cache, "entry_gates_summary": "entry-gates.json",
+        })
+    if "full-regression" in composites:
+        regression = json.loads(Path(composites["full-regression"]["gate_json"]).read_text(encoding="utf-8"))
+        entry["preflight"] = _write(out / "preflight.json", {
+            "schema_version": PREFLIGHT_SCHEMA, "purpose": "vc0-preflight", "accept_gate_receipt": False,
+            "statement": "只作 VC-0 预检，不是 VC-5 accept 的门禁收据；accept 前仍须在候选门禁目录执行正式目标平台门禁",
+            "subject_id": subject, "round": round_id, "target_version": target_version,
+            "status": "passed" if regression["exit_code"] == 0 else "failed", "source": source,
+            "gate": {"exit_code": regression["exit_code"], "started_at_utc": regression["started_at_utc"],
+                     "completed_at_utc": regression["completed_at_utc"], "gate_json": "logs/full-regression.gate.json",
+                     "executor_summary": str(summary_path), "test_tree": tree, "bytecode_cache": bytecode_cache},
+        })
+    _write(out / "entry-gates.json", entry)
+    return entry
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    checks = sub.add_parser("make-checks", help="把 make 子检查展开成命令单元并行执行（make check-egress-spec 用）")
+    checks.add_argument("--name", required=True, help="这组子检查的名称（日志与记录目录用）")
+    checks.add_argument("targets", nargs="+", help="子检查的 make 目标")
+    plan = sub.add_parser("plan", help="生成入口门禁清单（unit-executor-gates/v1）")
+    plan.add_argument("--tree", type=Path, required=True, help="测试树（执行器在这里运行）")
+    plan.add_argument("--profile", choices=sorted(PROFILES), required=True)
+    plan.add_argument("--launcher-json", default="[]", help="测试树单元的启动前缀（JSON 字符串列表）")
+    plan.add_argument("--typescript-module", default=None)
+    plan.add_argument("--pre-a3-units", type=Path, default=None, help="pre-A3 场景清单（认证模块 plan 生成）")
+    plan.add_argument("--pre-a3-env", action="append", default=[], help="pre-A3 场景的环境变量 KEY=VALUE，可重复")
+    plan.add_argument("--output", type=Path, required=True)
+    export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
+    export.add_argument("--manifest", type=Path, required=True)
+    export.add_argument("--summary", type=Path, required=True)
+    export.add_argument("--out", type=Path, required=True)
+    export.add_argument("--subject", required=True)
+    export.add_argument("--round", default="")
+    export.add_argument("--target-version", default=None)
+    export.add_argument("--tree", required=True)
+    export.add_argument("--isolation", required=True)
+    export.add_argument("--host", required=True)
+    export.add_argument("--architecture", required=True)
+    export.add_argument("--bytecode-cache", default=None)
+    export.add_argument("--source", action="append", default=[], help="来源坐标 KEY=VALUE（bundle、branch、commit、tree_head 等），可重复")
+    return parser.parse_args(argv)
+
+
+def _pairs(items: list[str], label: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"{label} 必须是 KEY=VALUE：{item}")
+        result[key] = value
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    sys.dont_write_bytecode = True
+    args = _parse(sys.argv[1:] if argv is None else argv)
+    try:
+        if args.command == "make-checks":
+            return make_checks(args.name, list(args.targets))
+        if args.command == "plan":
+            launcher = json.loads(args.launcher_json)
+            if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
+                raise ValueError("--launcher-json 必须是非空字符串组成的列表")
+            manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
+                                  pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None)
+            _write(args.output, manifest)
+            print(json.dumps({"profile": args.profile, "gates": [g["gate_id"] for g in manifest["gates"]], "units": len(manifest["units"]),
+                              "test_groups": [g["group_id"] for g in manifest["test_groups"]],
+                              "not_executed": [n for g in manifest["gates"] for n in g.get("not_executed", [])]}, ensure_ascii=False))
+            return 0
+        if args.command == "export":
+            entry = export_records(args.manifest, args.summary, args.out, source=_pairs(args.source, "--source"), subject=args.subject,
+                                   round_id=args.round, tree=args.tree, isolation=args.isolation, host=args.host,
+                                   architecture=args.architecture, target_version=args.target_version, bytecode_cache=args.bytecode_cache)
+            print(json.dumps({"status": entry["status"], "gates": {g["gate_id"]: g["status"] for g in entry["gates"]},
+                              "composites": entry["composites"], "p0_evidence": entry["p0_evidence"]}, ensure_ascii=False))
+            return 0
+    except (OSError, ValueError, KeyError) as error:
+        print(f"入口门禁：{error}", file=sys.stderr)
+        return 2
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

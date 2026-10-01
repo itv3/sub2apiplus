@@ -84,6 +84,8 @@ for tree in "$TD" "$TC"; do
   cp -a "$NM_DIR/node_modules" "$tree/frontend/node_modules"
 done
 umask 077
+# 洁净度检查先于第一次使用定义（10-01 的版本在定义之前调用，开头两行只打印出 command not found）。
+tree_status() { git -C "$1" status --porcelain --untracked-files=all 2>&1 | head -n "${2:-1000000}" || true; }
 echo "wt-D HEAD=$(git -C "$TD" rev-parse HEAD) status=[$(tree_status "$TD")]"
 echo "wt-C HEAD=$(git -C "$TC" rev-parse HEAD) status=[$(tree_status "$TC")]"
 echo "=== 树外字节码缓存 $(utc_now)"
@@ -91,7 +93,6 @@ env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYCD" "$TD/tools" | tail -n
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYCC" "$TC/tools" | tail -n 1 | cut -c1-300
 # 命令替换里一律 `|| true`：set -E 会把 ERR 陷阱带进命令替换，工具缺失或 head 截断触发的 SIGPIPE 不能把中止信息混进日志。
 host_line() { echo "host=$(uname -srm)"; echo "go: $(go version 2>&1 || true)"; echo "python: $(python3 --version 2>&1 || true)"; echo "node: $(node --version 2>&1 || true)"; }
-tree_status() { git -C "$1" status --porcelain --untracked-files=all 2>&1 | head -n "${2:-1000000}" || true; }
 ISOLATION="采集主机隔离测试树（私有挂载命名空间里只读 tmpfs 遮住 /root/oauth-capture，树外只读字节码缓存）"
 
 echo "=== DC：make check-egress-spec $(utc_now)"

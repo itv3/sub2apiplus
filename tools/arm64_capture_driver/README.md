@@ -22,14 +22,16 @@
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
-2. 采集主机：先 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/pre-a3.sh`（策略兼容／激活认证与 pre-A3 路径认证；工具身份
-   （五摘要）与策略未变时复用最近一次认证——重新部署也不重跑 pre-A3，跨部署复用登记复用收据），再
-   `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
-   （账本一建 VC-0 即开始计时，pre-A3 放在其后必然超时）。新目标首次取证按指南
+2. 采集主机：先跑入口门禁 `ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/entry-gates.sh <bundle> <分支> <40 位提交>`
+   （E2-04，见下文“入口门禁一次运行”：全部门禁、pre-A3 认证、P0 证据与 VC-0 预跑记录都取自这一次运行；只签 pre-A3 认证时
+   仍可单独用 `pre-a3.sh`，工具身份（五摘要）与策略未变时复用最近一次认证——重新部署也不重跑 pre-A3，跨部署复用登记复用
+   收据），再 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
+   （账本一建 VC-0 即开始计时，长检查一律放在建账本之前）。新目标首次取证按指南
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
    closeout 编排必须先执行 `client_launch_probe.py verify --output-dir "$PROBE" --campaign-dir "$PRE"`（坐标取自
    `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
-   stage1（含收尾段）通过之后、stage2／closeout 之前，先按下文“VC-0 预跑目标平台门禁”预跑一次，通过才建 Formal Campaign。
+   VC-0 预跑记录取自入口门禁的那次运行（主体目录下的 `preflight.json`），建账本之后不再单独预跑；入口门禁之后改了源码时，
+   按下文“VC-0 预跑目标平台门禁”单独补跑一次，通过才建 Formal Campaign。
 
 ## 入口便宜检查（E1-02）
 
@@ -66,6 +68,32 @@
 * 耗时（ARM64 4 核、机器上无其他任务，10-01 实测）：整份认证 478 秒，几乎全是最长的 `vc-chain.vc1-recovery-chain`
   （477 秒）；其余 43 个场景在它运行期间由其余 3 核跑完。
 
+## 入口门禁一次运行（E2-04，`driver/entry-gates.sh`）
+
+* 一次运行跑完入口要的全部门禁：采集工具测试（测试组，按模块拆单元）、`check-egress-spec` 的全部子检查（Makefile 的
+  `EGRESS_SPEC_CHECKS`，每项一个单元）、后端 go test 三组（不带标签、`-tags=unit`、`-tags=integration`，都带 `-count=1`，
+  integration 带 `CI=true`，没有 Docker 时失败而不是静默跳过）、golangci-lint 三组、前端三项、CI 里的部署脚本测试（每条
+  一个单元）与 pre-A3 的 44 个场景。全部交给驱动随附的统一调度执行器（`unit_executor.py run-gates`）在整机额度内并行，
+  一项失败其余照跑，全部跑完再按门禁项汇总；`test-official-client-control` 既是 make test 的一项、也是 check-egress-spec
+  的先决，只执行一次。
+* 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 用）、`preflight`
+  （只含 make test 的组成，`vc0-gate-target.sh` 用）。`entry` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的
+  受管树，否则退出 3）；本轮 pre-A3 认证已有且有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
+* 隔离：测试树单元在私有挂载命名空间里遮住 `/root/oauth-capture`（与 `isolated_run` 同一做法），树外只读字节码缓存；pre-A3
+  场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。Linux 上不执行
+  macOS 专用的 Apple container 部署脚本测试（BSD `stat`，写进门禁记录的 `not_executed`，CI 在 macos-15 上照常执行）。
+* 产物（主体目录 `--out`，默认 `$RUNROOT/entry-gates/entry-gates-<UTC 时间戳>`）：
+  * `entry-gates.json`：总摘要（各门禁项结论、复合记录、P0 证据与 pre-A3 子汇总的位置）；
+  * `logs/<门禁项>.gate.json`：与 `write_gate_json` 同一组字段，另带成员单元、失败单元与不在本平台执行的项；
+    `logs/full-regression.gate.json` 是 make test 的组成全部通过与否；
+  * `p0/check-egress-spec.json`、`p0/test-capture-tools.json`：P0 证据（`codex-p0-offline-gate-evidence/v1`，与原手写 P0
+    脚本同一形状，收口前照原样组装 P0 收据的 facts），check-egress-spec 另列逐个子检查，test-capture-tools 另列逐条跳过
+    与原因；
+  * `preflight.json`：VC-0 预跑记录；`full-gates-summary.json`：部署前全量门禁记录；`pre-a3-executor-summary.json`：
+    pre-A3 认证 issue 用的子汇总；`executor/`、`executor.log`：执行器记录与逐单元日志。
+* 退出码：0 全部门禁通过（`entry` 还要 pre-A3 认证签发或沿用成功）；1 有门禁未通过（测试树保留供排查）；2 用法错误；
+  3 准备或执行失败（没有门禁结论）。`make check-egress-spec` 在测试树、本机与 CI 上也按同一份子检查清单并行执行。
+
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
 * `stage1.sh` 建好账本与预检 Campaign 后写 `$RUNROOT/stage1.partial.env`，再调用 `stage1-finish.sh`：
@@ -94,8 +122,8 @@
 * 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～70 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
   问题（修好接着跑第 67 项）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
   问题在 VC-0 就修掉。结果只作预检，**不是** accept 的门禁收据；VC-5 accept 前 `vc5-accept.sh` 仍在候选门禁目录执行正式门禁。
-* 时机：stage1（含 `stage1-finish.sh`）通过之后、`stage2.sh`／`codex_upgrade_vc0_closeout` 之前单独运行；不与 stage1 各步或
-  VC-1 取证并行（与 accept 前正式门禁同一安静条件，资源争用会把计时用例拖红）。
+* 时机：E2-04 起预跑记录取自建账本之前的入口门禁（同一次运行的 `preflight.json`），本命令只在入口门禁之后又改了源码、需要
+  单独补跑时使用；单独运行时不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件，资源争用会把计时用例拖红）。
 * 源码：本机 `git bundle create <文件> <BASE>..<分支>`（与候选提交链末尾同一打法；BASE 必须在 `$HISTORY_TEST_TREE` 的历史里，
   例如前序候选的 DC；部署受管工具时上传的 bundle 满足这一条件也可直接用），传到采集主机 `$RUNROOT/vc0-preflight/` 下。
 * 命令（输出重定向到 `$RUNROOT/vc0-gate-target.out`；make test 里有挂断检测用例，必须 `setsid -f`，不能 `nohup`）：
@@ -103,11 +131,12 @@
 * 做法：测试树用 `lib.sh` 的 `clone_test_tree`（与 VC-5 的 `gates.sh prepare` 同一函数：从完整历史测试树克隆、从 bundle 取分支、
   检出、断言提交数 >10000 且不含 vendor），放在 `$RUNROOT/vc0-preflight/test-tree`；前端 `node_modules` 默认取
   `$HISTORY_TEST_TREE/frontend`，其 `pnpm-lock.yaml` 必须与本树逐字相同（本轮 lockfile 有变化时按 `frontend.sh` 同一方式在独立
-  目录装好依赖，作为第 4 个参数传入）。门禁直接调用 `vc5-gate-target.sh`：主体标识 `vc0-preflight-<UTC 时间戳>`，门禁根
-  `$RUNROOT/vc0-preflight/<主体标识>/`（环境收据、`logs/target-platform.*`、预检摘要 `preflight.json`），字节码缓存经第 4 个参数
-  放在 `$RUNROOT/vc0-preflight/pycache-target-platform`，与 VC-5 不共用任何目录。
+  目录装好依赖，作为第 4 个参数传入）。门禁是入口门禁的一次运行（`entry-gates.sh --profile preflight`：make test 的组成全部
+  并行，前后采集 gate_before／gate_after 环境收据）：主体标识 `vc0-preflight-<UTC 时间戳>`，门禁根
+  `$RUNROOT/vc0-preflight/<主体标识>/`（环境收据、`logs/target-platform.gate.json` 与各门禁项记录、预检摘要 `preflight.json`、
+  执行器日志），字节码缓存放在 `$RUNROOT/vc0-preflight/pycache-target-platform`，与 VC-5 不共用任何目录。
 * 边界：不写候选门禁目录与候选目录，不写时间账本与 Campaign，零模型请求；同一轮只允许一个预跑（`$RUNROOT/vc0-preflight/.lock`）。
-* 退出码：0 通过（删掉测试树与缓存，末行 `VC0_GATE_TARGET_DONE`）；1 make test 未通过（打印日志位置、保留测试树，末行
+* 退出码：0 通过（删掉测试树与缓存，末行 `VC0_GATE_TARGET_DONE`）；1 门禁未通过（打印记录位置、保留测试树，末行
   `VC0_GATE_TARGET_FAILED`）；2 用法错误；3 准备或执行失败（`VC0_GATE_TARGET_ABORTED`，没有门禁结论）。未通过按普通 VC-0
   失败处理：修门禁、驱动、环境或源码后重跑同一命令（新主体标识，旧结果留档）。
 
@@ -121,16 +150,19 @@
 
 ## ARM64 全量门禁与 ARM64 版 VC-4 门禁（测试一律在采集主机执行）
 
-* 两个入口都用 `lib.sh` 的 `clone_test_tree` 建测试树（完整历史、不含 vendor，前端依赖取 lockfile 相同的一份），每项门禁都经
-  `lib.sh` 的 `isolated_run` 执行：隔离方式与 `vc5-gate-target.sh` 的目标平台门禁逐字相同（私有挂载命名空间里只读 tmpfs 遮住
-  `/root/oauth-capture` 别名，树外只读字节码缓存）。make test 里有挂断检测用例，一律 `setsid -f` 启动；不与目标平台门禁、
-  VC-1／VC-5 采集并行（采集主机只有 4 核，资源争用会把计时用例拖红）。
+* 两个入口都用 `lib.sh` 的 `clone_test_tree` 建测试树（完整历史、不含 vendor，前端依赖取 lockfile 相同的一份），隔离方式与
+  `vc5-gate-target.sh` 的目标平台门禁相同（私有挂载命名空间里只读 tmpfs 遮住 `/root/oauth-capture` 别名，树外只读字节码
+  缓存）。make test 里有挂断检测用例，一律 `setsid -f` 启动；不与目标平台门禁、VC-1／VC-5 采集并行（采集主机只有 4 核，
+  资源争用会把计时用例拖红）。
 * `driver/arm64-full-gates.sh <bundle> <分支> <40 位提交> [<前端依赖目录>]`：受管工具每轮修复的部署前提、版本登记变更集与
-  升级收尾的验证。与 CI 逐项对齐，依次全部执行后再下结论：`make test`、backend 的 `make test-unit`／`make test-integration`
-  （采集主机有 Docker，集成测试真实执行）、`golangci-lint run --timeout=30m --build-tags=unit`／`integration`、CI 里的部署
-  脚本测试（从测试树的 `backend-ci.yml` 逐行取出）。结论只写 `$RUNROOT/full-gates/<主体标识>/`（summary.json 与各项
-  stdout／stderr／gate.json），不是 Campaign 收据。退出码：0 全部通过；1 有门禁未通过（其余照跑，测试树保留）；2 用法错误；
-  3 准备失败（没有门禁结论）。
+  升级收尾的验证。E2-04 起是入口门禁的一次运行（`entry-gates.sh --profile full-gates`），与 CI 逐项对齐、全部单元并行，
+  全部跑完再下结论：make test 的组成、`go test -tags=unit／integration ./... -count=1`（采集主机有 Docker，集成测试真实执行）、
+  `golangci-lint run --timeout=30m --build-tags=unit`／`integration`、CI 里的部署脚本测试（从测试树的 `backend-ci.yml` 逐行
+  取出，每条单独执行，macOS 专用的那条在 Linux 上记为不执行）。结论只写 `$RUNROOT/full-gates/<主体标识>/`（summary.json、
+  entry-gates.json、各门禁项 gate.json 与执行器记录），不是 Campaign 收据。退出码：0 全部通过；1 有门禁未通过（其余照跑，
+  测试树保留）；2 用法错误；3 准备失败（没有门禁结论）。
+* `arm64-vc4-gates.sh` 仍按 VC-4 本地门禁合同逐项经 `isolated_run` 执行 `make check-egress-spec`、`make test` 与
+  `make check-egress-spec-ci`（其中 check-egress-spec 的子检查在 make 目标内部并行）。
 * `driver/arm64-vc4-gates.sh [<前端依赖目录>]`：替代本机 `local-vc4.sh`，C、DC、RECEIPT、BUNDLE、BUNDLE_BRANCH 取自本轮参数
   文件。门禁分工沿用本机合同：DC 上 `make check-egress-spec` 与 `make test` 必须通过；C 上只跑 `make check-egress-spec-ci`
   交叉核对，只允许缺冻结承接收据导致的预期失败（由操作员按日志确认）。DC 必须恰好是 C 加承接收据一个文件，否则不交付。

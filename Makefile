@@ -1,4 +1,4 @@
-.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci egress-scanner-check check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-tools-prerequisites test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-gate-full upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci egress-scanner-check check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -75,8 +75,6 @@ check-egress-seal:
 		-baseline "$(EGRESS_LEGACY_BASELINE)" \
 		-protected-base-ref "$(EGRESS_SEAL_BASE_REF)"
 
-check-egress-spec: check-egress-spec-local-source check-egress-spec-ci
-
 # 本地完整门禁额外校验被 .gitignore 排除的 Codex CLI 源码引用；CI checkout
 # 不包含 local-analysis，因此只执行下面的可复现提交态闭集。
 check-egress-spec-local-source:
@@ -100,38 +98,155 @@ egress-scanner-check:
 		-inventory-lock "$(EGRESS_BOOTSTRAP_INVENTORY_LOCK)" \
 		-scanner-source-root ./cmd/egressscan
 
-check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control test-upstream-merge-tools
+# check-egress-spec 由一组互不依赖的子检查组成（E2-04）：每项一个独立目标（下面的 egress-spec-* 与原有的
+# check-egress-bootstrap-replay、egress-scanner-check 等），临时产物都在各自的 mktemp 目录里生成、比对、删除，彼此没有
+# 数据依赖。两个目标交给统一调度执行器（tools/ci/entry_gates.py make-checks → tools/ci/unit_executor.py run-commands）
+# 在整机额度内并行执行：一项失败其余照跑，全部跑完再汇总，失败项逐个列出并附日志尾部。入口门禁（驱动
+# entry-gates.sh）按 print-egress-spec-checks 读同一份清单展开这些子检查，所以 P0 收据里的字面命令
+# make check-egress-spec 与实际执行的子检查集合相同。CI checkout 不含 local-analysis（没有 0.149.1 源码树），只跑 _CI 那一份。
+EGRESS_SPEC_CI_CHECKS := \
+	check-egress-bootstrap-replay \
+	check-egress-seal \
+	test-official-client-control \
+	test-upstream-merge-tools \
+	egress-spec-version-leak-self-test \
+	egress-spec-version-leak \
+	egress-spec-changeset5-symbols-self-test \
+	egress-spec-changeset5-symbols \
+	egress-spec-changeset6-transition-self-test \
+	egress-spec-changeset6-transition \
+	egress-spec-maintenance-transition-self-test \
+	egress-spec-maintenance-transition \
+	egress-spec-multi-persona-transition-self-test \
+	egress-spec-multi-persona-transition \
+	egress-spec-fw-d-transition-self-test \
+	egress-spec-fw-e-workspace-self-test \
+	egress-spec-fw-e-workspace \
+	egress-spec-fw-e-completeness-self-test \
+	egress-spec-fw-e-completeness \
+	egress-spec-fw-e-runtime-evidence-self-test \
+	egress-spec-fw-e-runtime-evidence \
+	egress-spec-fw-e-r-disposition-self-test \
+	egress-spec-fw-e-r-disposition \
+	egress-spec-changeset6-benchmark-self-test \
+	egress-spec-changeset6-benchmark \
+	egress-spec-audit-index-self-test \
+	egress-spec-ledger-completeness \
+	egress-spec-egressscan-self-test \
+	egress-scanner-check \
+	egress-spec-sink-stats \
+	egress-spec-gofmt \
+	egress-spec-go-vet \
+	egress-spec-go-test \
+	egress-spec-changeset6-conflict-self-test \
+	egress-spec-changeset6-conflict \
+	egress-spec-maintenance-conflict-self-test \
+	egress-spec-maintenance-conflict \
+	egress-spec-wire-diff \
+	egress-spec-repository-guard \
+	egress-spec-service-guard \
+	egress-spec-httpclient-guard \
+	egress-spec-runtime-catalog-self-test \
+	egress-spec-runtime-catalog \
+	egress-spec-profile-snapshot \
+	egress-spec-profile-enums \
+	egress-spec-release-graph \
+	egress-spec-release-bindings \
+	egress-spec-go-build
+EGRESS_SPEC_CHECKS := check-egress-spec-local-source $(EGRESS_SPEC_CI_CHECKS)
+.PHONY: print-egress-spec-checks $(EGRESS_SPEC_CHECKS)
+
+check-egress-spec:
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/entry_gates.py make-checks --name check-egress-spec $(EGRESS_SPEC_CHECKS)
+
+check-egress-spec-ci:
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/entry_gates.py make-checks --name check-egress-spec-ci $(EGRESS_SPEC_CI_CHECKS)
+
+# 入口门禁读取子检查清单（与上面两个目标同一份）。
+print-egress-spec-checks:
+	@echo $(EGRESS_SPEC_CHECKS)
+
+egress-spec-version-leak-self-test:
 	@python3 tools/check_version_leak.py --self-test
+
+egress-spec-version-leak:
 	@python3 tools/check_version_leak.py
+
+egress-spec-changeset5-symbols-self-test:
 	@python3 tools/check_changeset5_0145_symbols.py --self-test
+
+egress-spec-changeset5-symbols:
 	@python3 tools/check_changeset5_0145_symbols.py
+
+egress-spec-changeset6-transition-self-test:
 	@python3 tools/changeset6_workspace_transition.py --self-test
+
+egress-spec-changeset6-transition:
 	@python3 tools/changeset6_workspace_transition.py --frozen-only
+
+egress-spec-maintenance-transition-self-test:
 	@python3 tools/maintenance_workspace_transition.py --self-test
+
+egress-spec-maintenance-transition:
 	@python3 tools/maintenance_workspace_transition.py --frozen-only
+
+egress-spec-multi-persona-transition-self-test:
 	@python3 tools/multi_persona_control_workspace_transition.py --self-test
+
+egress-spec-multi-persona-transition:
 	@python3 tools/multi_persona_control_workspace_transition.py --frozen-only
+
+egress-spec-fw-d-transition-self-test:
 	@python3 tools/fw_d_control_workspace_transition.py --self-test
+
+egress-spec-fw-e-workspace-self-test:
 	@python3 tools/fw_e_workspace_transition.py --self-test
+
+egress-spec-fw-e-workspace:
 	@python3 tools/fw_e_workspace_transition.py
+
+egress-spec-fw-e-completeness-self-test:
 	@python3 tools/fw_e_completeness_transition.py --self-test
+
+egress-spec-fw-e-completeness:
 	@python3 tools/fw_e_completeness_transition.py
+
+egress-spec-fw-e-runtime-evidence-self-test:
 	@python3 tools/fw_e_runtime_evidence_transition.py --self-test
+
+egress-spec-fw-e-runtime-evidence:
 	@python3 tools/fw_e_runtime_evidence_transition.py
+
+egress-spec-fw-e-r-disposition-self-test:
 	@python3 tools/fw_e_r_disposition_transition.py --self-test
+
+egress-spec-fw-e-r-disposition:
 	@python3 tools/fw_e_r_disposition_transition.py
+
+egress-spec-changeset6-benchmark-self-test:
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
+
+egress-spec-changeset6-benchmark:
 	@python3 tools/changeset6_benchmark_evidence.py
+
+egress-spec-audit-index-self-test:
 	@python3 tools/codex_audit_index.py self-test
+
+egress-spec-ledger-completeness:
 	@python3 tools/check_ledger_completeness.py \
 		--upstream-merge-plan "$(UPSTREAM_MERGE_PLAN)"
+
+egress-spec-egressscan-self-test:
 	@cd backend && go run ./cmd/egressscan -mode self-test
-	@$(MAKE) --no-print-directory egress-scanner-check
+
+egress-spec-sink-stats:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressscan -mode stats \
 			-baseline ../docs/egress/foundation/sink-baseline.json -out $$d/sink-stats.md && \
 		cmp -s $$d/sink-stats.md ../docs/egress/foundation/sink-stats.md || \
 		{ echo "🔴 发送面统计已与基线漂移，请重新生成 sink-stats.md"; exit 1; }
+
+egress-spec-gofmt:
 	@cd backend && test -z "$$(gofmt -l \
 		./internal/officialegress/ \
 		./cmd/egressruntimedump/ \
@@ -142,6 +257,8 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 		./cmd/egressconflictinventory/ \
 		./cmd/egressseal/ \
 		./cmd/egressscan/)"
+
+egress-spec-go-vet:
 	@cd backend && go vet \
 		./internal/officialegress/... \
 		./cmd/egressruntimedump/ \
@@ -152,6 +269,8 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 		./cmd/egressconflictinventory/ \
 		./cmd/egressseal/ \
 		./cmd/egressscan/
+
+egress-spec-go-test:
 	@cd backend && go test \
 		./internal/officialegress/... \
 		./cmd/egressruntimedump/ \
@@ -162,53 +281,83 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 		./cmd/egressconflictinventory/ \
 		./cmd/egressseal/ \
 		./cmd/egressscan/ -count=1
+
+# 36 文件冲突 inventory 是旧基线下的历史收缩证据，由下面四个 conflict transition 检查固定原文与摘要。
+# 当前源码闭集改由 §3.5 的 v0.1.177 路径复算覆盖，禁止再用旧基线重建并改写历史快照。
+egress-spec-changeset6-conflict-self-test:
 	@python3 tools/changeset6_conflict_transition.py --self-test
+
+egress-spec-changeset6-conflict:
 	@python3 tools/changeset6_conflict_transition.py
+
+egress-spec-maintenance-conflict-self-test:
 	@python3 tools/maintenance_conflict_transition.py --self-test
+
+egress-spec-maintenance-conflict:
 	@python3 tools/maintenance_conflict_transition.py
-	@# 36 文件冲突 inventory 是旧基线下的历史收缩证据，由上述 transition 固定原文与摘要。
-	@# 当前源码闭集改由 §3.5 的 v0.1.177 路径复算覆盖，禁止再用旧基线重建并改写历史快照。
+
+egress-spec-wire-diff:
 	@cd backend && go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server
-	@# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
+
+# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
+egress-spec-repository-guard:
 	@cd backend && go test ./internal/repository \
 		-run '^(TestChromePersona|TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult|TestReqProfileGuardPreservesOutOfScopeWireAndResult)' -count=1
+
+egress-spec-service-guard:
 	@cd backend && go test ./internal/service \
 		-run '^(TestPrivacyProductionFunctionsBuildAllThreeBrowserRequests|TestWebSocketHandshakeGuardPreservesWireAndResult|TestChangeset3RuntimeSinksEnterExecutorWithoutLegacyFinalizers|TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct|TestChangeset5LegacyExtinctionGateRejectsDefinitionsAndWrappedCalls|TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders|TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen|TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition|TestChangeset5CurrentFinalWireMatchesFrozenWireFields|TestChangeset5CurrentFinalWireComparatorRejectsWireDrift|TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval|TestChangeset5PostRefactorFinalWireIsFrozenAndMatchesPre)$$' -count=1
+
+egress-spec-httpclient-guard:
 	@cd backend && go test ./internal/pkg/httpclient \
 		-run '^(TestBuildTransportWithCustomDialKeepsHTTP2Disabled|TestSharedPoolGuardPreservesOutOfScopeWireAndResult)$$' -count=1
-	@# 防快照与生成文件陈旧：临时导出后比对。
-	@# 用 mktemp -d 而非固定 /tmp 路径，避免并行 CI 互相覆盖。
-	@# 比较不再是裸 diff：退休旧 Previous 时，被更早终态收据冻结为逐文件校验制品的画像
-	@# 必须原地保留，会成为运行目录里不在 dump 闭集内的文件。排除项只能来自终态收据的
-	@# retained_runtime_profiles，每份都与它自己绑定的 RemovalReceipt 逐条交叉验证（保留画像
-	@# 跨轮延续，由退休当轮的终态收据持续批准）；排除之后其余文件仍必须与导出结果逐字节完全一致。
+
+# 防快照与生成文件陈旧：临时导出后比对。
+# 用 mktemp -d 而非固定 /tmp 路径，避免并行 CI 互相覆盖。
+# 比较不再是裸 diff：退休旧 Previous 时，被更早终态收据冻结为逐文件校验制品的画像
+# 必须原地保留，会成为运行目录里不在 dump 闭集内的文件。排除项只能来自终态收据的
+# retained_runtime_profiles，每份都与它自己绑定的 RemovalReceipt 逐条交叉验证（保留画像
+# 跨轮延续，由退休当轮的终态收据持续批准）；排除之后其余文件仍必须与导出结果逐字节完全一致。
+egress-spec-runtime-catalog-self-test:
 	@python3 tools/check_runtime_catalog_projection.py --self-test
+
+egress-spec-runtime-catalog:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressruntimedump -output $$d/runtime >/dev/null || \
 		{ echo "🔴 正式版本数据导出失败，请检查 cmd/egressruntimedump"; exit 1; }; \
 		python3 ../tools/check_runtime_catalog_projection.py \
 			--root .. --dump $$d/runtime --repo internal/officialegress/catalogdata/runtime >/dev/null
+
+egress-spec-profile-snapshot:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressprofiledump $$d/snap.json >/dev/null && \
 		key=$$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["Version"] + "/" + d["Digest"])' $$d/snap.json) && \
 		test -n "$$key" && \
 		cmp -s $$d/snap.json internal/officialegress/profilecontract/testdata/snapshots/$$key.json || \
 		{ echo "🔴 画像快照已变更，请重跑 cmd/egressprofiledump 更新 testdata"; exit 1; }
+
+egress-spec-profile-enums:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressprofiledump -enums \
 			internal/officialegress/profilecontract/testdata/snapshot-catalog.json $$d/enums.go >/dev/null && \
 		gofmt $$d/enums.go > $$d/fmt.go && \
 		cmp -s $$d/fmt.go internal/officialegress/profilecontract/enums_gen.go || \
 		{ echo "🔴 枚举生成结果已变更，请重跑 -enums 更新 enums_gen.go"; exit 1; }
+
+egress-spec-release-graph:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressreleasegraphdump $$d/release-graph.json >/dev/null && \
 		cmp -s $$d/release-graph.json internal/officialegress/releasecontract/testdata/release-graph.json || \
 		{ echo "🔴 official-client 发布图已变更，请更新 release-graph.json"; exit 1; }
+
+egress-spec-release-bindings:
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressbindingdump \
 			../docs/egress/foundation/sink-baseline.json $$d/release-bindings.json >/dev/null && \
 		cmp -s $$d/release-bindings.json internal/officialegress/bindingcontract/testdata/release-bindings.json || \
 		{ echo "🔴 ReleaseBinding 已与 sink 基线漂移，请更新 release-bindings.json"; exit 1; }
+
+egress-spec-go-build:
 	@cd backend && go build ./... >/dev/null
 
 # 用当前受审扫描器回放 bootstrap commit 的干净源码归档。当前工作区即使有未提交
@@ -282,10 +431,13 @@ test-capture-tools-parallel: test-capture-tools-shard-check
 # 在整机核数与内存额度内并行，跑完再一次汇总；最后两段输出与 unittest 相同，P0 收据照原样解析。
 # CAPTURE_TEST_PARALLELISM=0 取 tools/ci/unit_executor.json 的默认并行度，设为 1 即逐个单元执行。
 CAPTURE_TEST_PARALLELISM ?= 0
-test-capture-tools:
+# 前置检查单独成目标（E2-04）：入口门禁把它与采集工具测试组放在同一个门禁项里，make test-capture-tools 照旧先跑它。
+test-capture-tools-prerequisites:
 	@python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and p.is_file()) or sys.exit("🔴 TypeScript AST 解析器必须是绝对路径下的普通文件（允许 pnpm 父目录符号链接）"); actual = hashlib.sha256(p.read_bytes()).hexdigest(); actual == expected or sys.exit(f"🔴 TypeScript AST 解析器摘要不一致：{actual}")' \
 		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"
 	@node --version >/dev/null
+
+test-capture-tools: test-capture-tools-prerequisites
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/unit_executor.py run \
 		--start tools/official_client_capture/tests --pattern 'test_*.py' --parallel $(CAPTURE_TEST_PARALLELISM)

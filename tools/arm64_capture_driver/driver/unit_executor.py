@@ -31,7 +31,10 @@
   ``--shared-caches off`` 时两样都不准备，单元按原环境运行（诊断用）。
 
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
-``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、``acquire``／``release``（采集批次申请与归还整机资源）。
+``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
+若干命令单元同一次运行、同一套调度，结论按门禁项聚合）、``run-unit``（内部：在当前进程跑给定测试 ID、写结果文件）、
+``acquire``／``release``（采集批次申请与归还整机资源）。
+**不嵌套**：调度单元里（环境变量 ``UNIT_EXECUTOR_UNIT`` 在）再用同一个状态目录启动调度器会卡在同一把锁上，直接报错。
 运行时与原 make 目标一样设置 ``CLAUDE_AST_TYPESCRIPT_MODULE``，从仓库根目录执行；调度进程与单元子进程一律不写字节码。
 换了起点或模式（只跑一部分模块）时，调度配置里本次集合之外的登记项不参与规划；全量运行时登记项必须全部命中。
 """
@@ -45,13 +48,14 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -286,6 +290,9 @@ class Unit:
     cwd: str | None = None
     env: tuple[tuple[str, str], ...] = ()
     timeout_seconds: float | None = None
+    # 测试单元的启动前缀（E2-04 门禁清单的测试组）：例如在私有挂载命名空间里遮住生产别名再 exec 单元进程；命令单元
+    # 需要时直接把前缀写进自己的 argv。
+    launcher: tuple[str, ...] = ()
 
 
 COMMANDS_SCHEMA = "unit-executor-commands/v1"
@@ -293,9 +300,55 @@ COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 _COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight"}
 
 
+def _string_env(value: Any, label: str) -> dict[str, str]:
+    env = value or {}
+    if not isinstance(env, dict) or not all(isinstance(key, str) and key and isinstance(item, str) for key, item in env.items()):
+        raise ExecutorError(f"{label}的环境变量非法")
+    return env
+
+
+def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
+    """解析一个命令单元（命令单元清单与门禁清单共用）：单元 ID 唯一、不含 ``/``（用作记录文件名），工作目录必须是
+    绝对路径；额度、独占、超时与预计秒数（并行段按它从长到短派发）都可选。"""
+
+    if not isinstance(item, dict) or set(item) - _COMMAND_FIELDS or "unit_id" not in item or "argv" not in item:
+        raise ExecutorError(f"命令单元字段非法：{item!r}")
+    unit_id = item["unit_id"]
+    if not isinstance(unit_id, str) or not unit_id or "/" in unit_id or unit_id in seen:
+        raise ExecutorError(f"命令单元 ID 非法或重复：{unit_id!r}")
+    seen.add(unit_id)
+    argv = item["argv"]
+    if not isinstance(argv, list) or not argv or not all(isinstance(part, str) and part for part in argv):
+        raise ExecutorError(f"命令单元的命令非法：{unit_id}")
+    cwd = item.get("cwd")
+    if cwd is not None and (not isinstance(cwd, str) or not os.path.isabs(cwd)):
+        raise ExecutorError(f"命令单元的工作目录必须是绝对路径：{unit_id}")
+    env = _string_env(item.get("env"), f"命令单元 {unit_id} ")
+    cores = item.get("cores", 1)
+    memory = item.get("memory_mb", 768)
+    if not isinstance(cores, (int, float)) or isinstance(cores, bool) or cores < 0.1:
+        raise ExecutorError(f"命令单元额度核数非法：{unit_id}")
+    if not isinstance(memory, int) or isinstance(memory, bool) or memory < 64:
+        raise ExecutorError(f"命令单元额度内存非法：{unit_id}")
+    exclusive = item.get("exclusive", False)
+    timeout = item.get("timeout_seconds")
+    weight = item.get("weight", 0)
+    if not isinstance(exclusive, bool):
+        raise ExecutorError(f"命令单元的独占标记非法：{unit_id}")
+    if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
+        raise ExecutorError(f"命令单元的超时非法：{unit_id}")
+    if not isinstance(weight, (int, float)) or isinstance(weight, bool) or weight < 0:
+        raise ExecutorError(f"命令单元的预计秒数非法：{unit_id}")
+    return Unit(
+        unit_id=unit_id, module=unit_id, test_ids=(), quota=Quota(min(float(cores), float(max(1, machine_cores))), memory),
+        exclusive=exclusive, weight=float(weight), command=tuple(argv), cwd=cwd, env=tuple(sorted(env.items())),
+        timeout_seconds=float(timeout) if timeout is not None else None,
+    )
+
+
 def load_command_manifest(path: Path, *, machine_cores: int) -> tuple[list[Unit], dict[str, Any]]:
     """读命令单元清单（``unit-executor-commands/v1``）：每个单元一条命令、工作目录、额外环境变量、额度、独占、超时与
-    预计秒数（并行段按它从长到短派发）。单元 ID 唯一、不含 ``/``（用作记录文件名），工作目录必须是绝对路径。"""
+    预计秒数。"""
 
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_version") != COMMANDS_SCHEMA:
@@ -303,45 +356,111 @@ def load_command_manifest(path: Path, *, machine_cores: int) -> tuple[list[Unit]
     items = payload.get("units")
     if not isinstance(items, list) or not items:
         raise ExecutorError(f"命令单元清单没有单元：{path}")
-    units: list[Unit] = []
     seen: set[str] = set()
-    for item in items:
-        if not isinstance(item, dict) or set(item) - _COMMAND_FIELDS or "unit_id" not in item or "argv" not in item:
-            raise ExecutorError(f"命令单元字段非法：{item!r}")
-        unit_id = item["unit_id"]
-        if not isinstance(unit_id, str) or not unit_id or "/" in unit_id or unit_id in seen:
-            raise ExecutorError(f"命令单元 ID 非法或重复：{unit_id!r}")
-        seen.add(unit_id)
-        argv = item["argv"]
-        if not isinstance(argv, list) or not argv or not all(isinstance(part, str) and part for part in argv):
-            raise ExecutorError(f"命令单元的命令非法：{unit_id}")
-        cwd = item.get("cwd")
-        if cwd is not None and (not isinstance(cwd, str) or not os.path.isabs(cwd)):
-            raise ExecutorError(f"命令单元的工作目录必须是绝对路径：{unit_id}")
-        env = item.get("env") or {}
-        if not isinstance(env, dict) or not all(isinstance(key, str) and key and isinstance(value, str) for key, value in env.items()):
-            raise ExecutorError(f"命令单元的环境变量非法：{unit_id}")
-        cores = item.get("cores", 1)
-        memory = item.get("memory_mb", 768)
-        if not isinstance(cores, (int, float)) or isinstance(cores, bool) or cores < 0.1:
-            raise ExecutorError(f"命令单元额度核数非法：{unit_id}")
-        if not isinstance(memory, int) or isinstance(memory, bool) or memory < 64:
-            raise ExecutorError(f"命令单元额度内存非法：{unit_id}")
-        exclusive = item.get("exclusive", False)
-        timeout = item.get("timeout_seconds")
-        weight = item.get("weight", 0)
-        if not isinstance(exclusive, bool):
-            raise ExecutorError(f"命令单元的独占标记非法：{unit_id}")
-        if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
-            raise ExecutorError(f"命令单元的超时非法：{unit_id}")
-        if not isinstance(weight, (int, float)) or isinstance(weight, bool) or weight < 0:
-            raise ExecutorError(f"命令单元的预计秒数非法：{unit_id}")
-        units.append(Unit(
-            unit_id=unit_id, module=unit_id, test_ids=(), quota=Quota(min(float(cores), float(max(1, machine_cores))), memory),
-            exclusive=exclusive, weight=float(weight), command=tuple(argv), cwd=cwd, env=tuple(sorted(env.items())),
-            timeout_seconds=float(timeout) if timeout is not None else None,
-        ))
-    return units, payload
+    return [_command_unit(item, machine_cores=machine_cores, seen=seen) for item in items], payload
+
+
+GATES_SCHEMA = "unit-executor-gates/v1"
+GATES_SUMMARY_SCHEMA = "unit-executor-gates-summary/v1"
+_TEST_GROUP_FIELDS = {"group_id", "start", "pattern", "env", "launcher"}
+_GATE_FIELDS = {"gate_id", "units", "test_groups", "not_executed"}
+
+
+@dataclass(frozen=True)
+class DiscoverGroup:
+    """门禁清单里的测试组：按起点与模式 discover，照 ``run`` 的规则拆单元（额度、拆块、独占名单都沿用调度配置）。"""
+
+    group_id: str
+    start: Path
+    pattern: str
+    env: tuple[tuple[str, str], ...]
+    launcher: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Gate:
+    """门禁项：由若干命令单元与测试组组成，全部正式执行且通过（测试组还要全集核对通过）才算通过。``not_executed``
+    是清单里写明不在本平台执行的项（如 macOS 专用的部署脚本测试），原样写进汇总，不执行、不算失败。"""
+
+    gate_id: str
+    units: tuple[str, ...]
+    test_groups: tuple[str, ...]
+    not_executed: tuple[dict[str, Any], ...]
+
+
+def load_gates_manifest(path: Path, *, machine_cores: int) -> tuple[list[DiscoverGroup], list[Unit], list[Gate], dict[str, Any]]:
+    """读门禁清单（``unit-executor-gates/v1``）：至多一个测试组、若干命令单元、若干门禁项。
+
+    闭合要求：门禁项引用的单元与测试组都必须在清单里；清单里的每个单元、每个测试组至少属于一个门禁项（没有游离
+    单元）；一个单元可以同时属于几个门禁项（如 ``test-official-client-control`` 既是 ``make test`` 的一项，也是
+    ``check-egress-spec`` 的先决），只执行一次。测试组至多一个：测试单元 ID 沿用 ``run`` 的模块名，调度配置里的
+    额度、拆块与独占名单按模块名登记。
+    """
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != GATES_SCHEMA:
+        raise ExecutorError(f"门禁清单格式非法：{path}")
+    raw_groups = payload.get("test_groups") or []
+    if not isinstance(raw_groups, list) or len(raw_groups) > 1:
+        raise ExecutorError("门禁清单的测试组至多一个")
+    groups: list[DiscoverGroup] = []
+    for item in raw_groups:
+        if not isinstance(item, dict) or set(item) - _TEST_GROUP_FIELDS or not {"group_id", "start", "pattern"} <= set(item):
+            raise ExecutorError(f"测试组字段非法：{item!r}")
+        group_id = item["group_id"]
+        if not isinstance(group_id, str) or not group_id or "/" in group_id:
+            raise ExecutorError(f"测试组 ID 非法：{group_id!r}")
+        if not isinstance(item["start"], str) or not item["start"] or os.path.isabs(item["start"]):
+            raise ExecutorError(f"测试组起点必须是相对执行器工作目录的路径：{group_id}")
+        if not isinstance(item["pattern"], str) or not item["pattern"]:
+            raise ExecutorError(f"测试组模式非法：{group_id}")
+        launcher = item.get("launcher") or []
+        if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
+            raise ExecutorError(f"测试组的启动前缀非法：{group_id}")
+        groups.append(DiscoverGroup(group_id, Path(item["start"]), item["pattern"],
+                                tuple(sorted(_string_env(item.get("env"), f"测试组 {group_id} ").items())), tuple(launcher)))
+    items = payload.get("units") or []
+    if not isinstance(items, list):
+        raise ExecutorError("门禁清单的 units 必须是列表")
+    seen: set[str] = set()
+    units = [_command_unit(item, machine_cores=machine_cores, seen=seen) for item in items]
+    raw_gates = payload.get("gates")
+    if not isinstance(raw_gates, list) or not raw_gates:
+        raise ExecutorError("门禁清单没有门禁项")
+    gates: list[Gate] = []
+    gate_ids: set[str] = set()
+    group_ids = {group.group_id for group in groups}
+    referenced_units: set[str] = set()
+    referenced_groups: set[str] = set()
+    for item in raw_gates:
+        if not isinstance(item, dict) or set(item) - _GATE_FIELDS or "gate_id" not in item:
+            raise ExecutorError(f"门禁项字段非法：{item!r}")
+        gate_id = item["gate_id"]
+        if not isinstance(gate_id, str) or not gate_id or "/" in gate_id or gate_id in gate_ids:
+            raise ExecutorError(f"门禁项 ID 非法或重复：{gate_id!r}")
+        gate_ids.add(gate_id)
+        member_units = item.get("units") or []
+        member_groups = item.get("test_groups") or []
+        not_executed = item.get("not_executed") or []
+        if not isinstance(member_units, list) or not all(isinstance(u, str) for u in member_units) or len(set(member_units)) != len(member_units):
+            raise ExecutorError(f"门禁项 {gate_id} 的单元列表非法")
+        if not isinstance(member_groups, list) or not all(isinstance(g, str) for g in member_groups):
+            raise ExecutorError(f"门禁项 {gate_id} 的测试组列表非法")
+        if not isinstance(not_executed, list) or not all(
+                isinstance(entry, dict) and isinstance(entry.get("reason"), str) and entry["reason"].strip() for entry in not_executed):
+            raise ExecutorError(f"门禁项 {gate_id} 的不执行项必须逐条写明原因")
+        if not member_units and not member_groups:
+            raise ExecutorError(f"门禁项 {gate_id} 没有任何单元")
+        unknown = sorted(set(member_units) - seen) + sorted(set(member_groups) - group_ids)
+        if unknown:
+            raise ExecutorError(f"门禁项 {gate_id} 引用了清单里没有的单元或测试组：{unknown}")
+        referenced_units.update(member_units)
+        referenced_groups.update(member_groups)
+        gates.append(Gate(gate_id, tuple(member_units), tuple(member_groups), tuple(dict(entry) for entry in not_executed)))
+    orphans = sorted(seen - referenced_units) + sorted(group_ids - referenced_groups)
+    if orphans:
+        raise ExecutorError(f"清单里有不属于任何门禁项的单元或测试组：{orphans}")
+    return groups, units, gates, payload
 
 
 def _matches(test_id: str, prefix: str) -> bool:
@@ -424,7 +543,7 @@ class _RecordingResult(unittest.TextTestResult):
         self._started[test.id()] = time.monotonic()
         super().startTest(test)
 
-    def _record(self, test: Any, outcome: str) -> None:
+    def _record(self, test: Any, outcome: str, reason: str | None = None) -> None:
         test_id = test.id() if hasattr(test, "id") else str(test)
         started = self._started.get(test_id)
         previous = self.records.get(test_id)
@@ -434,6 +553,8 @@ class _RecordingResult(unittest.TextTestResult):
             "outcome": outcome,
             "seconds": round(time.monotonic() - started, 3) if started is not None else None,
         }
+        if reason is not None:
+            self.records[test_id]["reason"] = reason  # 跳过原因（E2-04：P0 证据的跳过清单逐条带原因）
 
     def addSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
         super().addSuccess(test)
@@ -449,7 +570,7 @@ class _RecordingResult(unittest.TextTestResult):
 
     def addSkip(self, test: unittest.TestCase, reason: str) -> None:  # noqa: N802
         super().addSkip(test, reason)
-        self._record(test, "skipped")
+        self._record(test, "skipped", str(reason))
 
     def addExpectedFailure(self, test: unittest.TestCase, err: Any) -> None:  # noqa: N802
         super().addExpectedFailure(test, err)
@@ -667,6 +788,7 @@ class Running:
     record_path: Path
     kind: str
     timed_out: bool = False
+    started_at_utc: str = ""
 
 
 @dataclass
@@ -683,6 +805,8 @@ class Outcome:
     log_path: Path
     result: dict[str, Any] | None
     extra: dict[str, Any] = field(default_factory=dict)
+    started_at_utc: str = ""
+    completed_at_utc: str = ""
 
     @property
     def passed(self) -> bool:
@@ -777,7 +901,7 @@ class Scheduler:
         else:
             _write_json(tests_path, {"unit_id": unit.unit_id, "test_ids": list(unit.test_ids)})
             argv = self.unit_argv or [sys.executable, str(Path(__file__).resolve()), "run-unit"]
-            argv = [*argv, "--start", str(self.start), "--tests-file", str(tests_path), "--result", str(result_path)]
+            argv = [*unit.launcher, *argv, "--start", str(self.start), "--tests-file", str(tests_path), "--result", str(result_path)]
         env = {
             **os.environ,
             **dict(unit.env),
@@ -795,8 +919,10 @@ class Scheduler:
             (os.POSIX_SPAWN_OPEN, 1, str(log_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
             (os.POSIX_SPAWN_DUP2, 1, 2),
         ]
-        pid = os.posix_spawn(argv[0], argv, env, file_actions=actions, setsid=True)
-        self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind)
+        # 启动前缀可能是 unshare 之类的裸命令名：按 PATH 解析（posix_spawn 不查 PATH）。
+        executable = argv[0] if os.sep in argv[0] else (shutil.which(argv[0], path=env.get("PATH")) or argv[0])
+        pid = os.posix_spawn(executable, argv, env, file_actions=actions, setsid=True)
+        self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind, started_at_utc=_utc_now())
         self.max_cores_in_use = max(self.max_cores_in_use, self.cores_in_use())
         self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores)
 
@@ -850,6 +976,8 @@ class Scheduler:
                     orphans=orphans,
                     log_path=item.log_path,
                     result=_read_json_file(item.result_path),
+                    started_at_utc=item.started_at_utc,
+                    completed_at_utc=_utc_now(),
                 )
                 # 单元执行记录：正式／诊断、调度策略版本、测试 ID 与逐个结论、退出原因与资源用量（E3-01 的承接以此为准）。
                 _write_json(item.record_path, {
@@ -869,6 +997,8 @@ class Scheduler:
                     "cores": item.unit.quota.cores,
                     "orphans": orphans,
                     "log": str(item.log_path),
+                    "started_at_utc": outcome.started_at_utc,
+                    "completed_at_utc": outcome.completed_at_utc,
                 })
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
@@ -917,6 +1047,11 @@ class Scheduler:
 def hold_scheduler_lock(state_dir: Path, *, wait_seconds: float) -> int:
     """同一台机器同一时间只运行一个调度器：取得状态目录里的 flock；已被占用时等待，超时报错。"""
 
+    if os.environ.get("UNIT_EXECUTOR_UNIT") and _state_dir(state_dir).resolve() == _state_dir(default_state_dir()).resolve():
+        raise ExecutorError(
+            f"在调度单元（{os.environ['UNIT_EXECUTOR_UNIT']}）里又用同一状态目录启动调度器：嵌套调度会卡在同一把锁上，"
+            "改为在外层清单里展开这些单元（或测试里另给 --state-dir）"
+        )
     path = _state_dir(state_dir) / "scheduler.lock"
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     deadline = time.monotonic() + wait_seconds
@@ -1068,13 +1203,16 @@ def _print_summary(summary: dict[str, Any]) -> None:
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("plan", "run", "run-commands"):
+    for name in ("plan", "run", "run-commands", "run-gates"):
         p = sub.add_parser(name)
         if name == "run-commands":
             p.add_argument("--manifest", type=Path, required=True, help="命令单元清单（unit-executor-commands/v1）")
+        elif name == "run-gates":
+            p.add_argument("--manifest", type=Path, required=True, help="门禁清单（unit-executor-gates/v1）")
         else:
             p.add_argument("--start", type=Path, default=DEFAULT_START)
             p.add_argument("--pattern", default=DEFAULT_PATTERN)
+        if name != "run-commands":
             p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
             p.add_argument("--durations", type=Path, default=DEFAULT_DURATIONS)
         p.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -1083,7 +1221,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--state-dir", type=Path, default=None)
         p.add_argument("--out-dir", type=Path, default=None)
         p.add_argument("--wait-seconds", type=float, default=7200.0, help="本机已有调度器在跑时最多等待多久")
-        if name in ("run", "run-commands"):
+        if name in ("run", "run-commands", "run-gates"):
             p.add_argument("--shared-caches", choices=("auto", "off"), default="auto",
                            help="字节码共享层与身份记忆化：auto 沿用环境里已有的、没有就在记录目录里新建；off 都不准备（单元按原环境运行，诊断用）")
             p.add_argument("--bytecode-helper", type=Path, default=DEFAULT_BYTECODE_HELPER, help="字节码共享层的预编译工具（测试与诊断用）")
@@ -1231,6 +1369,186 @@ def _run_commands(args: argparse.Namespace) -> int:
         os.close(lock)
 
 
+def summarize_gates(
+    groups: list[DiscoverGroup],
+    group_units: dict[str, list[Unit]],
+    expected: dict[str, set[str]],
+    command_units: list[Unit],
+    gates: list[Gate],
+    formal: list[Outcome],
+    diagnostic: list[Outcome],
+    elapsed: float,
+    policy: str,
+) -> dict[str, Any]:
+    """门禁清单的汇总（E2-04）：测试组照 ``run`` 做全集核对，命令单元只认退出码、信号与超时，结论按门禁项聚合。
+
+    门禁项通过＝它的每个命令单元都正式执行且通过、每个测试组的全集核对通过；起止时间取成员单元的最早开始与最晚
+    结束。测试组另列逐条跳过清单（测试 ID 与原因），供 P0 证据登记。诊断执行另列，不改结论。
+    """
+
+    by_unit = {outcome.unit.unit_id: outcome for outcome in formal}
+    rows: list[dict[str, Any]] = []
+    group_rows: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        members = group_units[group.group_id]
+        ids = {unit.unit_id for unit in members}
+        summary = summarize(members, [o for o in formal if o.unit.unit_id in ids], [o for o in diagnostic if o.unit.unit_id in ids],
+                            expected[group.group_id], elapsed, policy)
+        skipped = sorted(
+            ({"test_id": test_id, "reason": str(record.get("reason", ""))}
+             for outcome in formal if outcome.unit.unit_id in ids
+             for test_id, record in ((outcome.result or {}).get("tests") or {}).items()
+             if record.get("outcome") == "skipped" and test_id in expected[group.group_id]),
+            key=lambda item: item["test_id"],
+        )
+        group_rows[group.group_id] = {
+            "status": summary["status"], "start": str(group.start), "pattern": group.pattern,
+            "expected_tests": summary["expected_tests"], "reported_tests": summary["reported_tests"], "counts": summary["counts"],
+            "full_set": summary["full_set"], "failed_units": summary["failed_units"], "units": sorted(ids), "skipped": skipped,
+        }
+        for row in summary["units"]:
+            outcome = by_unit[row["unit_id"]]
+            rows.append({"type": "test", "group_id": group.group_id, **row,
+                         "started_at_utc": outcome.started_at_utc, "completed_at_utc": outcome.completed_at_utc})
+    for unit in command_units:
+        outcome = by_unit.get(unit.unit_id)
+        if outcome is None:
+            continue
+        rows.append({
+            "type": "command", "unit_id": unit.unit_id, "kind": outcome.kind, "policy_sha256": policy, "exclusive": unit.exclusive,
+            "cores": unit.quota.cores, "passed": outcome.passed, "exit_code": outcome.exit_code, "signal": outcome.signal,
+            "timed_out": outcome.timed_out, "seconds": outcome.seconds, "cpu_seconds": outcome.cpu_seconds,
+            "max_rss_mb": outcome.max_rss_mb, "orphans": len(outcome.orphans), "log": str(outcome.log_path),
+            "argv": list(unit.command), "cwd": unit.cwd, "started_at_utc": outcome.started_at_utc,
+            "completed_at_utc": outcome.completed_at_utc,
+        })
+    gate_rows: list[dict[str, Any]] = []
+    for gate in gates:
+        members = list(gate.units) + [unit_id for group_id in gate.test_groups for unit_id in group_rows[group_id]["units"]]
+        failed = [unit_id for unit_id in members if unit_id not in by_unit or not by_unit[unit_id].passed]
+        groups_passed = all(group_rows[group_id]["status"] == "passed" for group_id in gate.test_groups)
+        executed = [by_unit[unit_id] for unit_id in members if unit_id in by_unit]
+        gate_rows.append({
+            "gate_id": gate.gate_id,
+            "status": "passed" if not failed and groups_passed else "failed",
+            "units": list(gate.units),
+            "test_groups": list(gate.test_groups),
+            "failed_units": failed,
+            "not_executed": list(gate.not_executed),
+            "started_at_utc": min((o.started_at_utc for o in executed), default=None),
+            "completed_at_utc": max((o.completed_at_utc for o in executed), default=None),
+            "unit_seconds": round(sum(o.seconds for o in executed), 3),
+        })
+    command_not_run = sorted({unit.unit_id for unit in command_units} - set(by_unit))
+    return {
+        "schema_version": GATES_SUMMARY_SCHEMA,
+        "status": "passed" if all(row["status"] == "passed" for row in gate_rows) and not command_not_run else "failed",
+        "policy_sha256": policy,
+        "elapsed_seconds": round(elapsed, 3),
+        "gates": gate_rows,
+        "test_groups": group_rows,
+        "units": rows,
+        "units_not_run": command_not_run,
+        "failed_units": [row["unit_id"] for row in rows if not row["passed"]],
+        "diagnostic": [
+            {"unit_id": o.unit.unit_id, "kind": o.kind, "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal,
+             "timed_out": o.timed_out, "seconds": o.seconds, "log": str(o.log_path)}
+            for o in diagnostic
+        ],
+    }
+
+
+def _print_gates_summary(summary: dict[str, Any]) -> None:
+    for row in summary["units"]:
+        if not row["passed"]:
+            reason = f"信号 {row['signal']}" if row["signal"] else "超时" if row["timed_out"] else f"退出码 {row['exit_code']}"
+            print(f"单元未通过：{row['unit_id']}（{reason}，日志 {row['log']}）", file=sys.stderr)
+    for item in summary["diagnostic"]:
+        verdict = "单独重跑通过" if item["passed"] else "单独重跑仍失败"
+        print(f"诊断重跑（不改结论）：{item['unit_id']} {verdict}（日志 {item['log']}）", file=sys.stderr)
+    for group_id, group in summary["test_groups"].items():
+        for key, label in (("missing", "缺报"), ("duplicated", "重复上报"), ("unexpected", "全集之外"), ("units_not_run", "未执行的单元")):
+            if group["full_set"][key]:
+                print(f"测试组 {group_id} 全集核对失败：{label} {len(group['full_set'][key])} 个，前几个：{group['full_set'][key][:5]}", file=sys.stderr)
+        counts = group["counts"]
+        print(f"测试组 {group_id}：{group['reported_tests']}／{group['expected_tests']} 个测试，通过 {counts['passed']}、"
+              f"失败 {counts['failed']}、错误 {counts['error']}、跳过 {counts['skipped']}", file=sys.stderr)
+    if summary["units_not_run"]:
+        print(f"未执行的命令单元 {len(summary['units_not_run'])} 个：{summary['units_not_run'][:5]}", file=sys.stderr)
+    if (summary.get("bytecode_cache") or {}).get("status") == "failed":
+        print(f"字节码共享层预编译失败（其余单元已照跑、各自从源码编译）：{summary['bytecode_cache'].get('detail')}", file=sys.stderr)
+    print("-" * 70, file=sys.stderr)
+    for gate in summary["gates"]:
+        verdict = "通过" if gate["status"] == "passed" else f"未通过（失败单元 {len(gate['failed_units'])} 个：{gate['failed_units'][:5]}）"
+        skipped = f"；不在本平台执行 {len(gate['not_executed'])} 项" if gate["not_executed"] else ""
+        print(f"门禁 {gate['gate_id']}：{verdict}{skipped}", file=sys.stderr)
+    passed = sum(1 for gate in summary["gates"] if gate["status"] == "passed")
+    print(f"门禁 {len(summary['gates'])} 项，通过 {passed} 项，用时 {summary['elapsed_seconds']:.3f}s", file=sys.stderr)
+    print("OK" if summary["status"] == "passed" else f"FAILED (gates={len(summary['gates']) - passed})", file=sys.stderr)
+
+
+def _run_gates(args: argparse.Namespace) -> int:
+    """``run-gates``（E2-04）：一个测试组与若干命令单元同一次运行、同一套调度（额度、独占、预约、诊断、会话清理），
+    全部跑完再按门禁项汇总——一个门禁项失败不影响别的门禁项照跑。测试组在执行器的工作目录下 discover。"""
+
+    config = load_config(args.config)
+    weights = load_weights(args.weights)
+    durations = load_durations(args.durations)
+    cores = args.cores or os.cpu_count() or 1
+    groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
+    parallelism = args.parallel or config.default_parallelism
+    group_units: dict[str, list[Unit]] = {}
+    expected: dict[str, set[str]] = {}
+    for group in groups:
+        full_set = group.start.resolve() == DEFAULT_START.resolve() and group.pattern == DEFAULT_PATTERN
+        grouped = discover_test_ids(group.start, group.pattern)
+        planned = plan_units(grouped, config, weights, durations, machine_cores=cores, full_set=full_set)
+        group_units[group.group_id] = [replace(unit, env=group.env, launcher=group.launcher) for unit in planned]
+        expected[group.group_id] = {test_id for ids in grouped.values() for test_id in ids}
+    test_units = [unit for units in group_units.values() for unit in units]
+    clash = sorted({unit.unit_id for unit in test_units} & {unit.unit_id for unit in command_units})
+    if clash:
+        raise ExecutorError(f"命令单元与测试单元重名：{clash}")
+    units = test_units + command_units
+    policy = _sha256({"gates": manifest, "config": config.raw, "weights": weights, "durations": durations, "parallelism": parallelism})
+    out_dir = _out_dir(args)
+    state_dir = args.state_dir or default_state_dir()
+    lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
+    scheduler = Scheduler(
+        out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
+        machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."),
+    )
+    try:
+        started = time.monotonic()
+        _write_json(out_dir / "plan.json", {
+            "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores,
+            "gates": [{"gate_id": g.gate_id, "units": list(g.units), "test_groups": list(g.test_groups), "not_executed": list(g.not_executed)} for g in gates],
+            "units": [{"unit_id": u.unit_id, "type": "command" if u.command else "test", "tests": list(u.test_ids), "argv": list(u.command),
+                       "cwd": u.cwd, "cores": u.quota.cores, "memory_mb": u.quota.memory_mb, "exclusive": u.exclusive,
+                       "timeout_seconds": u.timeout_seconds} for u in units],
+        })
+        print(f"调度：门禁 {len(gates)} 项，单元 {len(units)} 个（测试 {len(test_units)}、命令 {len(command_units)}；"
+              f"{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}",
+              file=sys.stderr, flush=True)
+        bytecode, identity_memo = _prepare_shared_caches(args, out_dir, scheduler)
+        formal = scheduler.run_parallel([u for u in units if not u.exclusive], "formal")
+        formal += scheduler.run_alone([u for u in units if u.exclusive], "formal")
+        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
+        summary = summarize_gates(groups, group_units, expected, command_units, gates, formal, diagnostic, time.monotonic() - started, policy)
+        summary.update({"max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
+                        "bytecode_cache": bytecode, "identity_memo": identity_memo})
+        if bytecode["status"] == "failed":
+            summary["status"] = "failed"
+        _write_json(out_dir / "summary.json", summary)
+        _print_gates_summary(summary)
+        return 0 if summary["status"] == "passed" else 1
+    except BaseException:
+        scheduler.abort()
+        raise
+    finally:
+        os.close(lock)
+
+
 def main(argv: list[str] | None = None) -> int:
     # 调度进程 discover 时会导入全部测试模块，同样不能在树里写字节码（单元子进程经环境变量禁写）。
     sys.dont_write_bytecode = True
@@ -1247,6 +1565,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run-commands":
             return _run_commands(args)
+        if args.command == "run-gates":
+            return _run_gates(args)
         config, weights, durations, parallelism, cores, grouped, units, policy, scope = _prepare(args)
         if args.command == "plan":
             print(json.dumps({
