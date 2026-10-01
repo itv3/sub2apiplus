@@ -412,6 +412,18 @@ def stage_classify(arguments: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def _install_reconciler_probe_replay() -> None:
+    """对账在本驱动进程内调用，不是受管编排器脚本入口，sitecustomize 不会装编排器内部替身。
+
+    第 22 项（B3-12，2026-09-27 起）：零请求恢复预览在对账进程内新采一次环境连续性探针，与被承接 attempt 的 after
+    探针比较。这里装上与首批同一套回放替身，否则探针采到的是本机真实环境、与录制回放的 after 探针必然不一致。
+    """
+
+    from tools.official_client_capture import codex_upgrade
+
+    replay.install_orchestrator_patches(codex_upgrade, _read(Path(os.environ[replay.REPLAY_STATE_ENV])))
+
+
 def _official_attempts(campaign: Path, status: str) -> list[str]:
     return [row["attempt_id"] for row in _attempt_summaries(campaign) if row["status"] == status]
 
@@ -425,6 +437,7 @@ def stage_reconcile_attempt(arguments: argparse.Namespace) -> dict[str, Any]:
     tree = Path(arguments.tree).resolve()
     replay.assert_namespace(tree)
     replay.assert_network_isolated()
+    _install_reconciler_probe_replay()
     campaign, _manifest = _formal(tree)
     attempt_id = arguments.attempt or (_official_attempts(campaign, "failed") or [None])[-1]
     if attempt_id is None:
@@ -456,6 +469,7 @@ def stage_reconcile_run(arguments: argparse.Namespace) -> dict[str, Any]:
     tree = Path(arguments.tree).resolve()
     replay.assert_namespace(tree)
     replay.assert_network_isolated()
+    _install_reconciler_probe_replay()
     campaign, _manifest = _formal(tree)
     reconciled = reconciler.reconcile_supervisor_run(Path(arguments.run_dir), campaign)
     result = {"status": "passed", "reconcile_status": reconciled.get("status"),
@@ -564,10 +578,29 @@ def stage_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def stage_evolve(arguments: argparse.Namespace) -> dict[str, Any]:
+    """副本树上模拟的修复部署之后登记工具演进（2026-09-27 起修好接着跑的顺序：先登记、再对账续跑）。"""
+
+    from tools.official_client_capture.tests import evaluation_chain_driver as chain
+
+    tree = Path(arguments.tree).resolve()
+    replay.assert_namespace(tree)
+    replay.assert_network_isolated()
+    campaign, _manifest = _formal(tree)
+    evolution = chain.register_fix_evolution(
+        campaign, tree / "control", name=str(arguments.evolve_name), reason=str(arguments.evolve_reason),
+        approved_by="vc1-recovery-fixture",
+    )
+    result = {**evolution, "evolution_status": evolution["status"],
+              "status": "passed" if evolution["status"] in {"evolution_applied", "registered"} else "failed"}
+    _write(_chain_dir(tree) / f"evolve-{arguments.evolve_name}.json", result)
+    return result
+
+
 STAGES = {
     "init": stage_init, "seal": stage_seal, "account": stage_account, "classify": stage_classify,
     "reconcile-attempt": stage_reconcile_attempt, "reconcile-run": stage_reconcile_run,
-    "preview": stage_preview, "rerun": stage_rerun, "epoch": stage_epoch,
+    "preview": stage_preview, "rerun": stage_rerun, "epoch": stage_epoch, "evolve": stage_evolve,
 }
 
 
@@ -581,6 +614,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--attempt")
     parser.add_argument("--run-dir")
     parser.add_argument("--preview")
+    parser.add_argument("--evolve-name", default="fix")
+    parser.add_argument("--evolve-reason", default="R18 恢复链：修复部署后登记工具演进")
     parser.add_argument("stage", choices=sorted(STAGES))
     return parser
 

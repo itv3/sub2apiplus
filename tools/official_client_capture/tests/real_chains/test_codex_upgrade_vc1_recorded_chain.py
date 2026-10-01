@@ -122,7 +122,8 @@ GUARDIAN = "official-relay-guardian-review"
 class VC1RecordedRecoveryChainTests(unittest.TestCase):
     """按 0.156.1 真实恢复顺序连续复演 D1～D7：首批超时 → 对账批准预览 → 预览批次失败（注入）→ 修复、对账、
     N+1 逐字重派 → 补跑失败（guardian 三连败）→ 控制面修复部署后对账、新预览 → 补跑成功（承接链）→ 证据语义修复
-    与 evaluation epoch → 封存 → 入账 → 分类，全程无外网。"""
+    与 evaluation epoch → 封存 → 入账 → 分类，全程无外网。2026-09-27 起每次修复部署之后都先登记工具演进
+    （evolution-01～03，影响为空）再对账续跑；对账进程内的恢复预览连续性探针与首批同一回放替身。"""
 
     def test_vc1_recovery_chain_from_recorded_evidence(self):
         if not replay.available():
@@ -158,6 +159,11 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             self.assertEqual(failed_preview["status"], "failed", failed_preview)
             self.assertTrue(any("R18 恢复链注入" in str(item) for item in failed_preview["diagnostics"]), failed_preview)
             trees.replace_once(harness.tree, "codex_upgrade.py", PREVIEW_DEFECT_INJECTION, PREVIEW_DEFECT_ANCHOR)
+            # 2026-09-27 起：修复部署后先登记工具演进（撤回注入是 control 层变化，影响为空），再对账续跑。
+            evolved = step("evolve-preview-fix", harness.run(
+                "evolve", "--evolve-name", "preview-fix", "--evolve-reason", "R18 恢复链：撤回预览注入（control 修复）后登记工具演进"))
+            self.assertEqual((evolved["status"], evolved["evolution_status"], evolved["index"]), ("passed", "evolution_applied", 1), evolved)
+            self.assertEqual(evolved["impact"]["official"]["affected_job_ids"], [], evolved)
             run_reconciled = step("reconcile-run-preview", harness.run("reconcile-run", "--run-dir", failed_preview["run_dir"]))
             self.assertEqual((run_reconciled["reconcile_status"], run_reconciled["decision"]),
                              ("stage_review_required", "review_required"), run_reconciled)
@@ -172,6 +178,10 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             self.assertEqual((second["status"], second["complete"], second["failed"]), ("failed", 30, [GUARDIAN]), rerun_failed["attempts"])
             # D3／D7：控制面修复部署（编排器 control 层变化）后，二次承接的结果沿承接链回溯原始执行仍可复用。
             trees.append_comment(harness.tree, "codex_upgrade.py", "R18 恢复链：控制面修复部署")
+            evolved = step("evolve-control-fix", harness.run(
+                "evolve", "--evolve-name", "control-fix", "--evolve-reason", "R18 恢复链：控制面修复部署后登记工具演进"))
+            self.assertEqual((evolved["status"], evolved["evolution_status"], evolved["index"]), ("passed", "evolution_applied", 2), evolved)
+            self.assertEqual(evolved["impact"]["official"]["affected_job_ids"], [], evolved)
             third_reconciled = step("reconcile-attempt-3", harness.run("reconcile-attempt", "--attempt", second["attempt_id"]))
             self.assertEqual(third_reconciled["status"], "passed", third_reconciled)
             self.assertEqual(len(third_reconciled["reuse_job_ids"]), 30, third_reconciled)
@@ -185,6 +195,10 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
                              ("awaiting_receipts", 31, 1, 30), rerun["attempts"])
             # D5：封存前证据语义修复部署（evidence 层变化）→ evaluation epoch → 封存 → 入账 → 分类（按 epoch 链判定）。
             trees.append_comment(harness.tree, "build_evidence_catalog.py", "R18 恢复链：证据语义修复部署")
+            evolved = step("evolve-evidence-fix", harness.run(
+                "evolve", "--evolve-name", "evidence-fix", "--evolve-reason", "R18 恢复链：证据语义修复部署后登记工具演进"))
+            self.assertEqual((evolved["status"], evolved["evolution_status"], evolved["index"]), ("passed", "evolution_applied", 3), evolved)
+            self.assertEqual(evolved["impact"]["official"]["affected_job_ids"], [], evolved)
             epoch = step("evaluation-epoch", harness.run("epoch"))
             self.assertEqual(epoch["status"], "passed", epoch)
             sealed = step("seal", harness.run("seal"))
@@ -205,7 +219,9 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
                                        "duplicate_dispatch_requests": sum(duplicates),
                                        "duplicate_dispatch_checks": len(duplicates)}
             print(json.dumps({"chain": "vc-chain.vc1-recovery-chain", **self.real_chain_metrics}, ensure_ascii=False), file=sys.stderr)
-            self.assertLess(seconds, 900, "ARM64 VC-1 恢复链超过 15 分钟验收上限")
+            # 2026-10-01 ARM64 实测 1207 秒（09-26 为 773 秒）：09-27 起每批派发前复算工具身份与演进链、恢复预览先采连续性
+            # 探针，单批耗时约为原来的两倍，链上另加三次工具演进登记；验收上限由 15 分钟调为 30 分钟。
+            self.assertLess(seconds, 1800, "ARM64 VC-1 恢复链超过 30 分钟验收上限")
 
 
 if __name__ == "__main__":

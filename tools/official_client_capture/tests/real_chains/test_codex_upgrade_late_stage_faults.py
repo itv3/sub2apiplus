@@ -3,9 +3,10 @@
 在 R13-1 连续链上，同一 Campaign 内依次注入三次父批次失败，每次都走正式对账与恢复，最后交付到 VC-6：
 
 * VC-2：副本树 ``classify`` 在分类草案已写后非零退出（与 R4 同一注入点）→ 父批次失败 →
-  撤回注入（修复 control 函数）→ ``reconcile-supervisor-run`` 给出同批重派 → N+1 逐字重派成功，草案字节不变；
+  撤回注入（修复 control 函数）→ 登记工具演进（2026-09-27 起部署修复后必须先登记，影响为空）→
+  ``reconcile-supervisor-run`` 给出同批重派 → N+1 逐字重派成功，草案字节不变；
 * VC-4：与生产 vc4.sh 同形，经 VC-4 批次派发 ``record-candidate-build``；副本树在构建收据已写、
-  VC-4 checkpoint 未写时非零退出 → 候选审核 → 撤回注入、对账证明动作可幂等 → 同一 revision 重开 VC-4 并
+  VC-4 checkpoint 未写时非零退出 → 候选审核 → 撤回注入、登记工具演进、对账证明动作可幂等 → 同一 revision 重开 VC-4 并
   N+1 逐字重派，构建收据与 revision seal 字节不变（R18 补上的“工具缺陷修好接着跑”合同）；
 * VC-5：``[assert, accept]`` 批次的 accept 动作在 AcceptanceFact 封存后、VC-5 completion 写出前崩溃（C1）→
   对账 recoverable → 同一批次逐字重派（开关文件已删）→ 只补 completion，AcceptanceFact 字节不变。
@@ -81,10 +82,12 @@ class LateStageFaultChainTests(unittest.TestCase):
             self.addCleanup(cif.cleanup_identity, initialized["candidate_identity"])
             source = (trees.tool_root(tree) / "codex_upgrade.py").read_text(encoding="utf-8")
             self.assertNotIn("R18 后段注入", source, "两处注入都应已在恢复中撤回")
-            for tag in FAULTS:
+            for evolution_index, tag in enumerate(FAULTS, 1):
                 record = driver._read(harness.root / f"fault-{tag}.json")
                 with self.subTest(tag=tag):
                     self.assertEqual(record["failed_reason"], f"action-failed:{tag}")
+                    # 每次撤回注入都是一次 control 修复部署，依次登记 evolution-01、evolution-02。
+                    self.assertEqual(record["evolution_index"], evolution_index)
                     self.assertTrue(any("R18 后段注入" in str(message) for message in record["failed_diagnostics"]), record)
                     self.assertEqual(record["ledger_status_after_failure"], EXPECTED_REVIEW[tag])
                     self.assertEqual((record["reconcile_status"], record["next_action"]), ("recoverable", "redispatch-same-batch"))

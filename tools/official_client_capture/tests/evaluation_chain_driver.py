@@ -1605,6 +1605,89 @@ def stage_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def write_fixture_deploy_receipt(control_root: Path, name: str) -> Path:
+    """按本进程副本树现算的受管身份写“修复已部署”的受监督部署收据夹具（非受管输入）。
+
+    文件名命中部署收据通配 ``codex-*-supervisor-enable-*.json``，工具演进预览据此取部署绑定；创建时间取当前时刻，
+    同一 Campaign 上依次登记的演进各自绑定更晚的部署。与评估真实链父进程生成的夹具同形。
+    """
+
+    from tools.official_client_capture import codex_upgrade
+
+    identity = codex_upgrade._tool_identity(include_git=False)
+    receipt = control_root / f"codex-fixture-supervisor-enable-{name}.json"
+    _write(receipt, {
+        "schema_version": "codex-upgrade-arm64-supervised-deploy-receipt/v1",
+        "status": "passed",
+        "campaign_id": f"codex-fixture-fix-{name}",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "architecture": "aarch64",
+        "production_tool_root": "/root/docker/capture-cli/data/tools/official_client_capture",
+        "production_doc_root": "/root/docker/capture-cli/data/docs",
+        "tool_files_sha256": identity["files_sha256"],
+        "policy_version": identity["policy_version"],
+        "policy_sha256": identity["policy_sha256"],
+        "wire_producer_sha256": identity["wire_producer_sha256"],
+        "evidence_semantics_sha256": identity["evidence_semantics_sha256"],
+        "control_sha256": identity["control_sha256"],
+        "supervisor_sha256": "1" * 64,
+        "assertion_preparer_sha256": "2" * 64,
+        "rollback_backup": None,
+    })
+    return receipt
+
+
+def register_fix_evolution(
+    campaign_dir: Path,
+    control_root: Path,
+    *,
+    name: str,
+    reason: str,
+    approved_by: str,
+    fix_commit: str = "a" * 40,
+) -> dict[str, Any]:
+    """副本树上模拟的修复部署之后，按修好接着跑的正式顺序登记工具演进（2026-09-27 起）。
+
+    不变式：Campaign 继续执行时当前受管树必须恰是有效工具身份的树，wire／evidence／control 任一层变化未登记前，
+    对账续跑与派发入口都零写入拒绝（ToolEvolutionRequired）。先只读查 ``tool-evolution-status``：当前树已是有效身份
+    就原样返回 ``registered``、不写任何文件；否则写部署收据夹具，做一次预览，再以预览摘要批准，落盘
+    ``control/tool-evolution/evolution-NN.json``。返回预览的变化与影响，由调用方断言影响范围。
+    """
+
+    from tools.official_client_capture import codex_upgrade
+
+    status = codex_upgrade._tool_evolution_status_command(argparse.Namespace(campaign_dir=campaign_dir))
+    if status["status"] == "registered":
+        return {"status": "registered", "effective_index": status["effective_index"], "unregistered_drift": []}
+    write_fixture_deploy_receipt(control_root, name)
+    namespace = argparse.Namespace(
+        campaign_dir=campaign_dir,
+        fix_commit=fix_commit,
+        reason=reason,
+        control_root=control_root,
+        approve_sha256=None,
+        approved_by=None,
+        policy_compatibility_receipt=None,
+        policy_activation_certification=None,
+    )
+    preview = codex_upgrade._tool_evolution_command(namespace)
+    if preview.get("status") != "approval_required":
+        raise RuntimeError(f"工具演进预览状态异常：{preview.get('status')}")
+    namespace.approve_sha256 = preview["review_sha256"]
+    namespace.approved_by = approved_by
+    applied = codex_upgrade._tool_evolution_command(namespace)
+    return {
+        "status": applied["status"],
+        "index": applied["index"],
+        "unregistered_drift": status["unregistered_drift"],
+        "review_sha256": preview["review_sha256"],
+        "receipt_sha256": applied["receipt_sha256"],
+        "path": applied["path"],
+        "changes": applied["changes"],
+        "impact": applied["impact"],
+    }
+
+
 def stage_evolve(arguments: argparse.Namespace) -> dict[str, Any]:
     """修复副本部署后，按修好接着跑的正式顺序登记工具演进：tool-evolution 预览→以预览摘要批准。
 

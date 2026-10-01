@@ -197,6 +197,20 @@ def recover_stage_fault(case, root, fixture, state_dir, phase, sequence, tag, pl
     if source.count(fault["injection"]) != 1:
         raise RuntimeError(f"{tag} 的注入不在副本树中，无法撤回")
     target.write_text(source.replace(fault["injection"], fault["anchor"]), encoding="utf-8")
+    # 修好接着跑（2026-09-27 起）：撤回注入即一次 control 层修复部署。进行中的 Campaign 部署新工具后先登记工具演进，
+    # 未登记时派发入口零写入拒绝（ToolEvolutionRequired）；注入只在 control 层函数，登记的影响必须为空。
+    evolution = driver.register_fix_evolution(
+        campaign, Path(fixture["control"]), name=f"late-{tag}",
+        reason=f"R18 后段注入 {tag}：撤回注入（修复 control 函数）后登记工具演进", approved_by="late-stage-fixture",
+    )
+    if (
+        evolution["status"] != "evolution_applied"
+        or evolution["changes"]["impact_paths"]
+        or evolution["changes"]["wire_closure_changed"]
+        or evolution["impact"]["official"]["affected_job_ids"]
+        or any(part["affected_job_ids"] for part in evolution["impact"]["candidates"].values())
+    ):
+        raise RuntimeError(f"{tag} 撤回注入后的工具演进登记不符合 control 修复：{evolution}")
     reconciled = reconciler.reconcile_supervisor_run(run_dir, campaign)
     replay = reconciled.get("stage_replay") or {}
     if (
@@ -218,6 +232,7 @@ def recover_stage_fault(case, root, fixture, state_dir, phase, sequence, tag, pl
         "preserved_files": sorted(preserved),
         "tag": tag, "phase": phase, "failed_sequence": sequence, "failed_reason": failed["campaign_run"]["reason"],
         "failed_diagnostics": diagnostics, "ledger_status_after_failure": failed_status,
+        "evolution_index": evolution["index"],
         "reconcile_status": reconciled["status"], "next_action": replay["next_action"],
         "recovered_sequence": sequence + 1, "ledger_status_after_recovery": timing.inspect_ledger(ledger)["status"],
     })
