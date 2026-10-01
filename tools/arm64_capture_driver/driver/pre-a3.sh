@@ -5,8 +5,11 @@
 # 本轮坐标），重新部署（部署收据、激活认证换新）也不重跑；跨部署复用登记复用收据 pre-a3-reuse-*.json
 # （write-once、按绑定内容幂等），stage2 的发布认证据此把复用来的认证绑定到本次部署收据。
 # 产物：$POLICY_COMPAT_RECEIPT、$POLICY_ACTIVATION、$PRE_A3_CERTIFICATION（及复用收据）；stage2 发现已存在即跳过。
+# E1-02：第一步先跑入口便宜检查（entry-preflight.sh）——参数、守卫、部署绑定、目标客户端、官方包、plan 审计、
+# 环境探针试采，几分钟内把这些错误一次报全；未通过即停，不进入约 1 小时的 pre-A3。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+bash "$DRV/entry-preflight.sh"
 DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path

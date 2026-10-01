@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Iterable, Sequence
 
 if __package__ in {None, ""}:
@@ -8689,9 +8689,36 @@ def _validate_existing_campaign_path(path: Path) -> None:
         raise ConfigurationError(f"Campaign 目录不存在：{path}")
 
 
+# plan 建 Campaign 时必需、只审计（--audit-only，建计时账本之前运行）时不需要的账本与环境参数（E1-02）。
+PLAN_LEDGER_ARGUMENTS = (
+    ("timing_ledger_dir", "--timing-ledger-dir"),
+    ("timing_receipt", "--timing-receipt"),
+    ("arm64_environment_root", "--arm64-environment-root"),
+    ("arm64_environment_receipt", "--arm64-environment-receipt"),
+)
+
+
+class _UpgradeArgumentParser(argparse.ArgumentParser):
+    """顶层解析器（E1-02）：plan 只在不带 ``--audit-only`` 时要求账本与环境参数。
+
+    这四个参数在 argparse 层改为可选，缺失时由这里在解析阶段报错，报错方式与 argparse 必填参数相同
+    （plan 子命令的用法提示、``the following arguments are required``、退出码 2），正式建 Campaign 的行为不变。
+    """
+
+    plan_parser: argparse.ArgumentParser | None = None
+
+    def parse_args(self, args: Sequence[str] | None = None, namespace: argparse.Namespace | None = None) -> argparse.Namespace:  # type: ignore[override]
+        arguments = super().parse_args(args, namespace)
+        if getattr(arguments, "command", None) == "plan" and not getattr(arguments, "audit_only", False):
+            missing = [flag for field, flag in PLAN_LEDGER_ARGUMENTS if getattr(arguments, field, None) is None]
+            if missing:
+                (self.plan_parser or self).error("the following arguments are required: " + ", ".join(missing))
+        return arguments
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = _UpgradeArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True, parser_class=argparse.ArgumentParser)
 
     def add_campaign_reference(target: argparse.ArgumentParser) -> None:
         target.add_argument(
@@ -8772,6 +8799,16 @@ def _build_parser() -> argparse.ArgumentParser:
         add_heartbeat_option(target)
 
     plan = subparsers.add_parser("plan", help="预检并创建不可变 Campaign")
+    parser.plan_parser = plan
+    plan.add_argument(
+        "--audit-only",
+        action="store_true",
+        help=(
+            "E1-02：只做计划输入审计——参数与官方包、基线与目标源码、规则与场景清单、作业 covers 与覆盖计划、"
+            "基线证据、执行副本、工具身份，逐项报全；不读计时账本与环境收据、不建 Campaign、不写任何文件，"
+            "供建账本之前的入口便宜检查使用。"
+        ),
+    )
     plan.add_argument(
         "--campaign-dir",
         "--output",
@@ -8795,28 +8832,25 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="冻结本 Campaign 的升级用途，后续 candidate 不得改变。",
     )
+    # 下面四个账本与环境参数建 Campaign 时必需（_UpgradeArgumentParser 在解析阶段校验），--audit-only 时不需要。
     plan.add_argument(
         "--timing-ledger-dir",
         type=Path,
-        required=True,
         help="已从 DOC-PRE 首项开始计时的 UpgradeTimingLedger 绝对目录。",
     )
     plan.add_argument(
         "--timing-receipt",
         type=Path,
-        required=True,
         help="位于 timing ledger 内、可独立重放的 active checkpoint。",
     )
     plan.add_argument(
         "--arm64-environment-root",
         type=Path,
-        required=True,
         help="P0 ARM64 网络与磁盘收据所在的 0700 绝对目录。",
     )
     plan.add_argument(
         "--arm64-environment-receipt",
         type=Path,
-        required=True,
         help="P0 生成并重放通过的 ARM64 环境收据。",
     )
     plan.add_argument(
@@ -23002,6 +23036,101 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
                 deadline_at_utc=_campaign_plan_deadline(campaign_dir),
             )
     return manifest
+
+
+PLAN_AUDIT_SCHEMA = "codex-upgrade-plan-audit/v1"
+# plan --audit-only 不校验的项：它们在建计时账本之后才存在，由建 Campaign 时的 plan 照旧校验。
+PLAN_AUDIT_UNCHECKED = (
+    "timing-ledger-and-checkpoint",
+    "arm64-environment-receipt",
+    "p0-environment-producer",
+    "vc-control-artifacts",
+)
+
+
+def _plan_manifest_audit(arguments: argparse.Namespace) -> dict[str, Any]:
+    """清单层审计（E1-02）：规则清单、两份场景清单、作业生成与 covers、阶段覆盖、覆盖计划。
+
+    逐字调用 plan 建 Campaign 时的同一组函数（``load_rule_manifest``、``_load_plan_jobs``、``_safe_plan``），只计算、
+    不写文件。入口在建账本之前跑它，CI 对每个登记升级对跑它：清单类错误（例如场景 covers 引用规则清单外编号）
+    几秒内就能暴露，不必等到建账本之后的预检 plan。调用方须先按 ``_validate_arguments`` 的规则设好作业坐标
+    （``output``、``campaign_id``）。
+    """
+
+    rules = load_rule_manifest(arguments.rule_manifest, arguments.baseline_version)
+    jobs, _baseline_manifest, _target_manifest = _load_plan_jobs(arguments, rules)
+    plan = _safe_plan(arguments, jobs, rules)
+    return {"rule_count": len(rules), "job_count": len(jobs), "planned_job_count": len(plan["jobs"])}
+
+
+def _plan_audit(arguments: argparse.Namespace) -> dict[str, Any]:
+    """``plan --audit-only``（E1-02）：建计时账本之前把 plan 能查的输入一次查全，不读账本、不写任何文件。
+
+    各项互相独立，一项失败其余照查；清单层不依赖参数校验成败（作业坐标按 ``_validate_arguments`` 的同一规则补齐）；
+    依赖失败项的标为被阻塞。计时账本、checkpoint、ARM64 环境收据与 VC 控制制品在建账本之后才存在，列入
+    ``unchecked``，由建 Campaign 时的 plan 照旧校验。
+    """
+
+    checks: list[dict[str, Any]] = []
+    sources: dict[str, dict[str, Any]] = {}
+
+    def run(name: str, action: Callable[[], Any], *, requires: tuple[str, ...] = ()) -> None:
+        blocked = [item["name"] for item in checks if item["name"] in requires and item["status"] != "passed"]
+        if blocked:
+            checks.append({"name": name, "status": "blocked", "blocked_by": blocked})
+            return
+        try:
+            detail = action()
+        except Exception as error:  # noqa: BLE001 - 审计要如实报出每一项的失败，一项异常不能中断其余各项
+            checks.append({"name": name, "status": "failed", "error": f"{type(error).__name__}: {error}"})
+            return
+        checks.append({"name": name, "status": "passed", "detail": detail})
+
+    def source(label: str, root: Path, version: str) -> dict[str, Any]:
+        identity, inventory = _source_identity(root, version)
+        sources[label] = inventory
+        return {"source_tree_sha256": identity["source_tree_sha256"], "entry_count": len(inventory.get("entries", []))}
+
+    def counts(payload: Mapping[str, Any]) -> dict[str, int]:
+        return {key: len(value) for key, value in payload.items() if isinstance(value, list)}
+
+    def tool_identity() -> dict[str, Any]:
+        identity = _tool_identity(include_git=False)
+        return {
+            key: identity[key]
+            for key in ("policy_version", "files_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")
+        }
+
+    run("arguments", lambda: _validate_arguments(arguments))
+    # 参数校验中途失败时作业坐标可能尚未设定：按 _validate_arguments 的同一规则补齐，清单层照查。
+    if getattr(arguments, "output", None) is None:
+        arguments.output = arguments.campaign_dir
+    if not getattr(arguments, "campaign_id", ""):
+        arguments.campaign_id = f"codex-{arguments.target_version.replace('.', '_')}-plan-audit"
+    run("manifests", lambda: _plan_manifest_audit(arguments))
+    run("baseline-source", lambda: source("baseline", arguments.baseline_source, arguments.baseline_version))
+    run("target-source", lambda: source("target", arguments.target_source, arguments.target_version))
+    run(
+        "source-diff",
+        lambda: counts(compare_inventory(sources["baseline"], sources["target"])),
+        requires=("baseline-source", "target-source"),
+    )
+    run("baseline-evidence", lambda: counts(scan_evidence([arguments.baseline_evidence], "baseline-official")))
+    run("execution-tree", lambda: _verify_execution_tree(getattr(arguments, "capture_root", None)))
+    run("tool-identity", tool_identity)
+    failed = [item["name"] for item in checks if item["status"] != "passed"]
+    return {
+        "schema_version": PLAN_AUDIT_SCHEMA,
+        "status": "passed" if not failed else "failed",
+        "baseline_version": arguments.baseline_version,
+        "target_version": arguments.target_version,
+        "campaign_mode": arguments.campaign_mode,
+        "checks": checks,
+        "failed_checks": failed,
+        "unchecked": list(PLAN_AUDIT_UNCHECKED),
+        "files_written": 0,
+        "live_request_count": 0,
+    }
 
 
 def _require_current_p0_environment(arguments: argparse.Namespace) -> None:
@@ -62886,7 +63015,11 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         _reject_campaign_run_legacy_write(arguments, command)
         _reject_unparented_formal_write(arguments, command)
         _assert_project_ledger_consumer(command, arguments)
-        if command == "plan":
+        if command == "plan" and getattr(arguments, "audit_only", False):
+            # E1-02：只审计，逐项报全，不建 Campaign、不写任何文件；有任一项未通过即返回 1。
+            result = _plan_audit(arguments)
+            return_code = 0 if result["status"] == "passed" else 1
+        elif command == "plan":
             manifest = create_campaign(arguments)
             preflight_invalidation = (
                 _preflight_plan_invalidation_summary(manifest)

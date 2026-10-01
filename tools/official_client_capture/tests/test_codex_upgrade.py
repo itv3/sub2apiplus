@@ -190,10 +190,15 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertTrue(actions["lite_model"].required)
         self.assertTrue(actions["campaign_mode"].required)
         self.assertTrue(actions["campaign_purpose"].required)
-        self.assertTrue(actions["timing_ledger_dir"].required)
-        self.assertTrue(actions["timing_receipt"].required)
-        self.assertTrue(actions["arm64_environment_root"].required)
-        self.assertTrue(actions["arm64_environment_receipt"].required)
+        # E1-02：账本与环境四个参数只在建 Campaign 时必需（--audit-only 不需要），由顶层解析器在解析阶段统一校验；
+        # 缺失时的报错见 test_codex_upgrade_plan_audit.test_plan_without_audit_still_requires_ledger_arguments。
+        self.assertEqual(
+            [field for field, _flag in codex_upgrade.PLAN_LEDGER_ARGUMENTS],
+            ["timing_ledger_dir", "timing_receipt", "arm64_environment_root", "arm64_environment_receipt"],
+        )
+        for field, flag in codex_upgrade.PLAN_LEDGER_ARGUMENTS:
+            self.assertIn(flag, actions[field].option_strings)
+            self.assertFalse(actions[field].required, field)
         self.assertFalse(actions["job_rehearsal_root"].required)
         self.assertFalse(actions["job_rehearsal_receipt"].required)
         self.assertIsNone(actions["model"].default)

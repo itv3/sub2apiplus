@@ -1,5 +1,5 @@
 #!/bin/bash
-# 前阶段 1（先跑 pre-a3.sh）：派发前检查（pre-plan）→ 本轮 pre-A3 认证核验 → 零请求 smoke → 新账本（总预算按项目总账绝对截止设上限，留 5 分钟余量）
+# 前阶段 1（先跑 pre-a3.sh）：入口便宜检查（entry-preflight.sh，含 pre-plan 守卫）→ 本轮 pre-A3 认证核验 → 零请求 smoke → 新账本（总预算按项目总账绝对截止设上限，留 5 分钟余量）
 #   → ARM64 环境收据（p0）→ 账本 checkpoint → preflight plan → 写 stage1.partial.env
 #   → stage1-finish.sh（Job 演练收据 → 客户端启动探测 → atomic-double 收据 → 写 stage1.env）。
 # 全部参数来自 $ARM64_VC_ENV；产物坐标写入 $RUNROOT/stage1.env 供 stage2 使用。
@@ -11,7 +11,10 @@ echo "ROUND=$ROUND STAMP=$STAMP"
 for old in stage1.env stage1.partial.env; do
   if [ -f "$RUNROOT/$old" ]; then mv "$RUNROOT/$old" "$RUNROOT/$old.superseded-$(date -u +%Y%m%dt%H%M%Sz)"; fi
 done
-bash "$DRV/guard.sh" pre-plan
+# E1-02：建账本之前的必填参数与入口便宜检查（含 pre-plan 守卫与 plan 审计）；原先排在建账本之后才检查。
+: "${TARGET_CODE_MODE_HOST_SHA256:?需填写目标 code-mode-host 的审核摘要}"
+: "${CAPTURE_RUNTIME_IMAGE:?需填写固定 digest 的采集镜像}"
+bash "$DRV/entry-preflight.sh"
 DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path
@@ -46,8 +49,6 @@ python3 -m tools.official_client_capture.codex_upgrade_timing_ledger checkpoint 
 HEADSHA=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"tool_files_sha256\"][:9])" "$DEPLOY")
 PRECID="${CAMPAIGN_PREFIX}-preflight-vc5-$ROUND-$HEADSHA-$STAMP"
 PRE="$D/evidence/campaigns/$PRECID"
-: "${TARGET_CODE_MODE_HOST_SHA256:?需填写目标 code-mode-host 的审核摘要}"
-: "${CAPTURE_RUNTIME_IMAGE:?需填写固定 digest 的采集镜像}"
 python3 -m tools.official_client_capture.codex_upgrade plan \
   --campaign-dir "$PRE" --campaign-id "$PRECID" --baseline-version "$BASELINE_VERSION" --target-version "$TARGET_VERSION" \
   --campaign-mode preflight_only --campaign-purpose production_replacement --timing-ledger-dir "$L" \

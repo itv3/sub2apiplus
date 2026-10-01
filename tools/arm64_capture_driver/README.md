@@ -31,6 +31,21 @@
    `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
    stage1（含收尾段）通过之后、stage2／closeout 之前，先按下文“VC-0 预跑目标平台门禁”预跑一次，通过才建 Formal Campaign。
 
+## 入口便宜检查（E1-02）
+
+`pre-a3.sh` 与 `stage1.sh` 的第一步都是 `entry-preflight.sh`：在约 1 小时的 pre-A3 与建计时账本之前，把几分钟内
+就能查出的错误一次查全，未通过即停。也可以单独运行：`ARM64_VC_ENV=$RUNROOT/env.sh bash driver/entry-preflight.sh`。
+
+* 七项互相独立，一项失败其余照查，最后汇总（`ENTRY_PREFLIGHT_PASSED`／`ENTRY_PREFLIGHT_FAILED <未通过项>`）；
+  逐项日志在 `$RUNROOT/entry-preflight/<时间>/`。
+* `required-parameters`：后续阶段要用、参数文件里可缺省的身份参数已填写；`guard-pre-plan`：同 `guard.sh pre-plan`；
+  `deployment-identity`：最新部署收据的策略与五摘要等于当前受管树；`target-client`：宿主机与采集容器内的目标
+  客户端摘要、版本等于登记值；`official-package`：官方包摘要与两份源码树；`plan-audit`：`codex_upgrade plan
+  --audit-only`（参数与官方包、源码、规则与场景清单、作业 covers 与覆盖计划、基线证据、执行副本、工具身份；
+  不读账本、不写文件）；`environment-probe`：ARM64 环境收据在临时目录试采并封存，结束即删除。
+* 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
+  由 stage1 建预检 Campaign 时的 plan 照旧校验。
+
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
 * `stage1.sh` 建好账本与预检 Campaign 后写 `$RUNROOT/stage1.partial.env`，再调用 `stage1-finish.sh`：
