@@ -264,12 +264,15 @@
         "SPEC-HDR-004",
         "SPEC-HDR-006",
         "SPEC-HDR-007",
+        "SPEC-HDR-009",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-002",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
         "SPEC-BODY-005",
         "SPEC-BODY-006",
+        "SPEC-BODY-008",
         "SPEC-EP-001",
         "SPEC-EP-005",
         "SPEC-EP-013"
@@ -293,10 +296,13 @@
         "SPEC-H1-003",
         "SPEC-HDR-002",
         "SPEC-HDR-008",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-002",
         "SPEC-BODY-005",
         "SPEC-BODY-006",
+        "SPEC-BODY-008",
+        "SPEC-BODY-009",
         "SPEC-EP-001"
       ]
     },
@@ -322,11 +328,14 @@
         "SPEC-HDR-004",
         "SPEC-HDR-006",
         "SPEC-HDR-008",
+        "SPEC-HDR-009",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
         "SPEC-BODY-005",
-        "SPEC-BODY-006"
+        "SPEC-BODY-006",
+        "SPEC-BODY-008"
       ]
     },
     {
@@ -347,7 +356,8 @@
         "SPEC-WS-002",
         "SPEC-WS-005",
         "SPEC-BODY-001",
-        "SPEC-BODY-005"
+        "SPEC-BODY-005",
+        "SPEC-BODY-008"
       ]
     },
     {
@@ -411,11 +421,8 @@
         "SPEC-EP-001",
         "SPEC-EP-005",
         "SPEC-EP-006",
-        "SPEC-EP-007",
         "SPEC-EP-008",
-        "SPEC-EP-014",
         "SPEC-EP-015",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-022"
       ]
@@ -498,8 +505,8 @@
       "covers": [
         "SPEC-H1-001",
         "SPEC-H1-003",
-        "SPEC-EP-019",
-        "SPEC-EP-002"
+        "SPEC-EP-002",
+        "SPEC-EP-019"
       ]
     },
     {
@@ -619,6 +626,7 @@
         "SPEC-HDR-004",
         "SPEC-HDR-007",
         "SPEC-HDR-008",
+        "SPEC-HDR-010",
         "SPEC-BODY-006"
       ]
     },
@@ -730,12 +738,15 @@
         "SPEC-HDR-006",
         "SPEC-HDR-007",
         "SPEC-HDR-008",
+        "SPEC-HDR-009",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-002",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
         "SPEC-BODY-005",
         "SPEC-BODY-006",
+        "SPEC-BODY-008",
         "SPEC-EP-005",
         "SPEC-EP-006",
         "SPEC-EP-009",
@@ -915,9 +926,6 @@
         "{capture_root}/runs/{campaign_id}-official-compact"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -1041,12 +1049,15 @@
         "SPEC-HDR-006",
         "SPEC-HDR-007",
         "SPEC-HDR-008",
+        "SPEC-HDR-009",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-002",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
         "SPEC-BODY-005",
         "SPEC-BODY-006",
+        "SPEC-BODY-008",
         "SPEC-EP-005",
         "SPEC-EP-006",
         "SPEC-EP-009",
@@ -2023,9 +2034,6 @@
         "{capture_root}/runs/{campaign_id}-candidate-direct-compact"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -2264,9 +2272,6 @@
         "{capture_root}/runs/{campaign_id}-candidate-mitm-compact-*-run"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -2506,7 +2511,9 @@
         "SPEC-PROTO-001",
         "SPEC-H1-001",
         "SPEC-H1-003",
-        "SPEC-BODY-006"
+        "SPEC-BODY-006",
+        "SPEC-BODY-008",
+        "SPEC-BODY-009"
       ],
       "required_scenario_receipts": [],
       "track": "main",
@@ -2576,7 +2583,8 @@
         "{capture_root}/runs/{campaign_id}-official-http-response-plain"
       ],
       "covers": [
-        "SPEC-BODY-002"
+        "SPEC-BODY-002",
+        "SPEC-BODY-009"
       ],
       "required_scenario_receipts": [],
       "track": "main",
@@ -2650,7 +2658,9 @@
         "SPEC-H1-002",
         "SPEC-H1-003",
         "SPEC-H1-004",
-        "SPEC-BODY-006"
+        "SPEC-HDR-009",
+        "SPEC-BODY-006",
+        "SPEC-BODY-008"
       ],
       "required_scenario_receipts": [],
       "track": "lite",
@@ -2718,8 +2728,8 @@
         "{capture_root}/runs/{campaign_id}-official-conn-retry"
       ],
       "covers": [
-        "SPEC-CONN-001",
-        "SPEC-PROTO-002"
+        "SPEC-PROTO-002",
+        "SPEC-CONN-001"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -2783,9 +2793,6 @@
         "{capture_root}/runs/{campaign_id}-official-turnstate-compact"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -2854,9 +2861,6 @@
         "{capture_root}/runs/{campaign_id}-official-legacy-compact-default"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -2930,9 +2934,6 @@
         "{capture_root}/runs/{campaign_id}-lite-legacy-compact-default"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -3008,6 +3009,7 @@
         "SPEC-WS-002",
         "SPEC-HDR-004",
         "SPEC-HDR-006",
+        "SPEC-HDR-009",
         "SPEC-BODY-005"
       ],
       "required_scenario_receipts": [],
@@ -3075,9 +3077,6 @@
         "{capture_root}/runs/{campaign_id}-official-legacy-compact-beta"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -3141,7 +3140,8 @@
         "{capture_root}/runs/{campaign_id}-official-ws-default"
       ],
       "covers": [
-        "SPEC-WS-002"
+        "SPEC-WS-002",
+        "SPEC-BODY-008"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -3322,9 +3322,9 @@
         "{capture_root}/runs/{campaign_id}-official-image"
       ],
       "covers": [
+        "SPEC-BODY-006",
         "SPEC-EP-001",
-        "SPEC-EP-022",
-        "SPEC-BODY-006"
+        "SPEC-EP-022"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -3385,9 +3385,9 @@
         "{capture_root}/runs/{campaign_id}-official-image-edit"
       ],
       "covers": [
+        "SPEC-BODY-006",
         "SPEC-EP-001",
-        "SPEC-EP-022",
-        "SPEC-BODY-006"
+        "SPEC-EP-022"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -3638,9 +3638,9 @@
         "{capture_root}/runs/{campaign_id}-official-oauth-refresh"
       ],
       "covers": [
-        "SPEC-EP-002",
         "SPEC-H1-001",
-        "SPEC-H1-003"
+        "SPEC-H1-003",
+        "SPEC-EP-002"
       ],
       "required_scenario_receipts": [
         "A13"
@@ -4144,9 +4144,6 @@
         "{capture_root}/runs/{campaign_id}-official-compact-tui-v2-disabled"
       ],
       "covers": [
-        "SPEC-EP-007",
-        "SPEC-EP-014",
-        "SPEC-EP-020",
         "SPEC-EP-021",
         "SPEC-EP-023"
       ],
@@ -4214,6 +4211,7 @@
         "SPEC-HDR-004",
         "SPEC-HDR-007",
         "SPEC-HDR-008",
+        "SPEC-HDR-010",
         "SPEC-BODY-006"
       ],
       "required_scenario_receipts": [],
@@ -4930,8 +4928,8 @@
         "{capture_root}/runs/{campaign_id}-candidate-frozen-core"
       ],
       "covers": [
-        "SPEC-CONN-001",
-        "SPEC-PROTO-002"
+        "SPEC-PROTO-002",
+        "SPEC-CONN-001"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -5166,22 +5164,24 @@
         "{capture_root}/runs/{campaign_id}-candidate-trace-test"
       ],
       "covers": [
+        "SPEC-PROTO-002",
+        "SPEC-CONN-001",
+        "SPEC-WS-004",
+        "SPEC-WS-005",
+        "SPEC-HDR-001",
+        "SPEC-HDR-008",
+        "SPEC-HDR-010",
         "SPEC-BODY-001",
         "SPEC-BODY-003",
         "SPEC-BODY-004",
-        "SPEC-CONN-001",
+        "SPEC-BODY-009",
         "SPEC-EP-001",
         "SPEC-EP-002",
         "SPEC-EP-012",
         "SPEC-EP-015",
         "SPEC-EP-021",
         "SPEC-EP-022",
-        "SPEC-EP-023",
-        "SPEC-HDR-001",
-        "SPEC-HDR-008",
-        "SPEC-PROTO-002",
-        "SPEC-WS-004",
-        "SPEC-WS-005"
+        "SPEC-EP-023"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
@@ -5473,9 +5473,9 @@
         "{capture_root}/runs/{campaign_id}-candidate-images"
       ],
       "covers": [
+        "SPEC-BODY-006",
         "SPEC-EP-001",
-        "SPEC-EP-022",
-        "SPEC-BODY-006"
+        "SPEC-EP-022"
       ],
       "required_scenario_receipts": [],
       "tool_dependencies": [
