@@ -1328,7 +1328,9 @@ prefix = Path(sys.argv[1])
 with open(os.environ["FAKE_BYTECODE_CALLS"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps({"argv": sys.argv[1:], "prefix_env": os.environ.get("PYTHONPYCACHEPREFIX")}) + "\\n")
 if os.environ.get("FAKE_BYTECODE_FAIL"):
-    print(json.dumps({"status": "failed", "error": "替身：预编译失败"}))
+    # 失败原因放在一长串路径之后：调用方截断输出就看不到它。
+    print(json.dumps({"status": "failed", "leaked_pycache": ["/data/tools/" + "x" * 400 + "/__pycache__"],
+                      "error": "替身：预编译失败"}, ensure_ascii=False))
     sys.exit(1)
 if prefix.exists():
     shutil.rmtree(prefix)
@@ -1399,6 +1401,7 @@ class ManagedSharedCacheTests(unittest.TestCase):
             self.assertIn("PREFIX=\n", completed.stdout)
             self.assertIn("接着跑", completed.stdout)
             self.assertIn("字节码共享层重建失败", completed.stderr)
+            self.assertIn("替身：预编译失败", completed.stderr, "失败原因原样输出、不截断")
 
     def test_entry_preflight_prepares_the_shared_layer_first_outside_any_pipeline(self) -> None:
         code = [line.strip() for line in (SCRIPTS / "entry-preflight.sh").read_text(encoding="utf-8").splitlines()

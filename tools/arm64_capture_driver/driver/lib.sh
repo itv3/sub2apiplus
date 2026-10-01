@@ -47,7 +47,8 @@ PY
   summary=$(printf '%s\n' "$summary" | tail -n 1)
   if [ "$rc" -ne 0 ]; then
     unset PYTHONPYCACHEPREFIX
-    echo "字节码共享层重建失败（各子命令回落为从源码编译）：${summary:0:300}" >&2
+    # 不截断：失败原因在摘要的 failed_sources／leaked_pycache 里（10-01 数据根有两个旧 __pycache__，截断后看不到）。
+    echo "字节码共享层重建失败（各子命令回落为从源码编译）：${summary}" >&2
     return 0
   fi
   printf '%s\n' "$digest" > "$PYC_MANAGED/.tools-digest"

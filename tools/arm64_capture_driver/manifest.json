@@ -148,9 +148,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "3100178d11bf8a67ab8888e5433b4d63c58d16b0cba3124f738fa4ee26311087",
+      "sha256": "d1b11581e6c969d5b0c7040d7f46517d96b0b00106770cd36d6e71ae4fd35102",
       "mode": "0700",
-      "bytes": 13427
+      "bytes": 13569
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -375,5 +375,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "d237cd6157eb997977545609c7778c7e97fd1837786be2e09c49b2a8d24c57df"
+  "manifest_sha256": "8d9a92fbff723d114213dbd31044ad6e931e7961ac2c8a0cc0be39b9140ebe63"
 }
