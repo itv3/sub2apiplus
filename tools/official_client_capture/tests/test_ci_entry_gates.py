@@ -124,7 +124,9 @@ class EntryGatesPlanTests(unittest.TestCase):
             self.assertEqual([item["command"] for item in deploy["not_executed"]], [["/bin/bash", "deploy/tests/apple-container-test.sh"]])
             self.assertIn("BSD stat", deploy["not_executed"][0]["reason"])
             integration = next(unit for unit in full["units"] if unit["unit_id"] == "backend:integration")
-            self.assertEqual(integration["env"], {"CI": "true"}, "没有 Docker 时失败而不是静默跳过")
+            self.assertEqual(integration["env"], {"GOMAXPROCS": "2", "CI": "true"}, "没有 Docker 时失败而不是静默跳过")
+            go_test = next(unit for unit in full["units"] if unit["unit_id"] == "backend:go-test")
+            self.assertEqual((go_test["cores"], go_test["env"]), (0.7, {"GOMAXPROCS": "2"}), "按实测 CPU 占比排程，内部并行度另给")
             on_mac = eg.plan_gates(tree, profile="full-gates", launcher=[], platform="darwin")
             self.assertEqual(next(g for g in on_mac["gates"] if g["gate_id"] == "deploy-scripts")["not_executed"], [])
 
@@ -134,6 +136,7 @@ class EntryGatesPlanTests(unittest.TestCase):
             self.assertEqual(entry["gates"][-1], {"gate_id": "pre-a3", "units": ["pre-a3:alpha", "pre-a3:beta"]})
             alpha = next(unit for unit in entry["units"] if unit["unit_id"] == "pre-a3:alpha")
             self.assertEqual(alpha["argv"][0], "python3", "pre-A3 在数据根的生产布局里运行，不套隔离")
+            self.assertEqual((alpha["cores"], alpha["memory_mb"], alpha["weight"]), (0.5, 768, 30.0), "没有实测的场景按 0.5 核、沿用认证模块的预计秒数")
             self.assertEqual((alpha["cwd"], alpha["env"]), (str(data_root), {"OWN": "1", "PYTHONPYCACHEPREFIX": "/prod-pyc"}))
             for manifest in (preflight, full, entry):
                 path = root / f"{manifest['profile']}.json"
@@ -185,6 +188,15 @@ def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped:
     return {"schema_version": eg.GATES_SUMMARY_SCHEMA, "status": "failed" if fail_units else "passed", "policy_sha256": "p" * 64,
             "elapsed_seconds": 1200.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [],
             "failed_units": sorted(fail_units), "diagnostic": [], "max_cores_in_use": 4.0}
+
+
+class EntryGatesPreA3QuotaTests(unittest.TestCase):
+    def test_measured_scenarios_get_quota_from_cpu_share_and_the_critical_chain_keeps_a_core(self) -> None:
+        self.assertEqual(eg.pre_a3_quota("vc-chain.vc1-recovery-chain"), (1.0, 548.0))
+        self.assertEqual(eg.pre_a3_quota("deadline-extension.sigkill-resume"), (0.25, 185.0), "占比 0.03 按最低 0.25 核")
+        self.assertEqual(eg.pre_a3_quota("segment-recovery.completed-job-reuse"), (0.75, 204.0), "占比 0.54 向上取到 0.75")
+        self.assertEqual(eg.pre_a3_quota("vc-chain.vc1-capture"), (1.0, 212.0))
+        self.assertEqual(eg.pre_a3_quota("unknown.scenario"), (0.5, None))
 
 
 class EntryGatesExportTests(unittest.TestCase):

@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "c5602fb2bdb0ef1398694befb9e44f63ef79dd66e159f2e778a61018dd0068b8",
+      "sha256": "86a57099737fd767df9705add3fda3b96414fd3b4a657fd4f2b89af676688501",
       "mode": "0700",
-      "bytes": 37737
+      "bytes": 40069
     },
     {
       "path": "driver/env.example.sh",
@@ -238,15 +238,15 @@
     },
     {
       "path": "driver/unit_executor.json",
-      "sha256": "1e3b924f2c0df939b480ffec84d04e16ff614099c2f642776f5ea639e45b6225",
+      "sha256": "4d7607a2225ccada76bb7a367dbece3ca14e10f10d50b19b88ef8d16d81057c8",
       "mode": "0600",
-      "bytes": 11930
+      "bytes": 11931
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "18c17f1d8fde80f1b62fb2b34baaed41e025939c04f23cbf9597bd3b56d1730f",
+      "sha256": "b5d2a16f51827ae36ba5cdbf0a2271512ba0cf52caa776de1732369d1373359e",
       "mode": "0700",
-      "bytes": 89428
+      "bytes": 89671
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -399,5 +399,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "fdbd0f41b69fcf92cce4e9d56ca528e0af66ee07898e79077722666b0d94c572"
+  "manifest_sha256": "70c880a2630b573af23caef06fbb0baa2560d2cf787bf183db8863974af3d73a"
 }

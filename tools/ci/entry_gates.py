@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -90,15 +91,19 @@ def egress_spec_unit(target: str, *, cwd: str) -> dict[str, Any]:
     """一个子检查目标对应的命令单元（入口门禁与 ``make-checks`` 同一份定义）。"""
 
     light = target in LIGHT_CHECKS
-    return {
+    unit = {
         "unit_id": f"{EGRESS_SPEC_UNIT_PREFIX}{target}",
         "argv": ["make", "--no-print-directory", target],
         "cwd": cwd,
-        "cores": 1 if light else 2,
+        # Go 类实测 CPU 约 1.5 核（GOMAXPROCS=2）：按 1.5 核排程，内部并行度显式保持 2。
+        "cores": 1 if light else 1.5,
         "memory_mb": 1024 if light else (5120 if target in HEAVY_GO_CHECKS else 3072),
         "timeout_seconds": 1800,
         "weight": CHECK_SECONDS.get(target, 2.0 if light else 10.0),
     }
+    if not light:
+        unit["env"] = {"GOMAXPROCS": "2"}
+    return unit
 
 
 def _out_dir(name: str) -> Path:
@@ -158,6 +163,32 @@ PREFLIGHT_SCHEMA = "arm64-vc0-target-gate-preflight/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 CAPTURE_GROUP = "capture-tools"
 PRE_A3_PREFIX = "pre-a3:"
+# pre-A3 场景的调度额度与预计秒数（E2-04 第三次验收的 ARM64 实测：秒数、CPU 占比）。认证模块 plan 给的是统一的 1 核，而 44 个
+# 场景一半以上 CPU 占比不到 0.5（等子进程、等超时为主），按 1 核排程会让 4 核额度用不满。额度＝实测占比向上取到 0.25 的
+# 倍数、最低 0.25；最长的 vc1-recovery 链在关键路径上，保底 1 核。没登记的场景按 0.5 核。内存峰值实测不超过 0.5 GB。
+PRE_A3_MEASURED: dict[str, tuple[float, float]] = {
+    "vc-chain.vc1-recovery-chain": (548.0, 0.75),
+    "vc-chain.vc1-capture": (212.0, 0.91),
+    "segment-recovery.completed-job-reuse": (204.0, 0.54),
+    "deadline-extension.sigkill-resume": (185.0, 0.03),
+    "vc-chain.late-stage-faults": (91.0, 0.70),
+    "vc-chain.full-validation-only": (50.4, 0.66),
+    "stage-recovery.committed-classify": (27.2, 0.77),
+    "runtime-egress.kernel-faults": (26.0, 0.15),
+    "runtime-egress.guard-recovery": (16.0, 0.38),
+}
+PRE_A3_CRITICAL = frozenset({"vc-chain.vc1-recovery-chain"})
+
+
+def pre_a3_quota(name: str) -> tuple[float, float | None]:
+    """pre-A3 场景的调度额度（核）与预计秒数（没有实测时为 None，沿用认证模块给的值）。"""
+
+    if name in PRE_A3_CRITICAL:
+        return 1.0, PRE_A3_MEASURED[name][0]
+    if name in PRE_A3_MEASURED:
+        seconds, ratio = PRE_A3_MEASURED[name]
+        return max(0.25, math.ceil(ratio * 4) / 4), seconds
+    return 0.5, None
 
 # make test 的组成（与 Makefile 的 test 目标一一对应：test-backend 拆成 go test 与 lint 两项、test-frontend 拆成三项）。
 MAKE_TEST_GATES = (
@@ -194,13 +225,16 @@ GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
 # * golangci-lint 三组各约 10 秒（结果缓存命中，冷缓存会更久），峰值约 250 MB。golangci-lint 默认只许一个实例运行，第二个
 #   实例直接报「parallel golangci-lint is running」退出（ARM64 第二次验收实测），所以三组都带 --allow-serial-runners 排队等锁；
 # * 前端 lint、typecheck 约 1.1～1.2 核（typecheck 峰值约 2 GB），vitest 约 1.9 核。
-GO_QUOTA = {"cores": 1.1, "memory_mb": 5120, "timeout_seconds": 3600}
+# 第三次验收（Go 构建缓存热）实测后端三组 CPU 只用 0.66～0.69 核：按 0.7 核排程，内部并行度另行显式给 GOMAXPROCS=2（不随额度
+# 降成 1，否则 go test 的包并行度也变 1）。首次冷编译时 CPU 约 1.1 核，三组同时会短时超订，只在每台机器第一次出现。
+GO_QUOTA = {"cores": 0.7, "memory_mb": 5120, "timeout_seconds": 3600}
+GO_ENV = {"GOMAXPROCS": "2"}
 LINT_QUOTA = {"cores": 1, "memory_mb": 3072, "timeout_seconds": 3600}
 FRONTEND_QUOTA = {"cores": 1.2, "memory_mb": 3072, "timeout_seconds": 1800}
 VITEST_QUOTA = {"cores": 2, "memory_mb": 2048, "timeout_seconds": 1800}
 # 各单元的预计秒数（同样取实测，决定派发顺序）。
 GATE_SECONDS: dict[str, float] = {
-    "backend-go-test": 680.0, "backend-unit": 626.0, "backend-integration": 693.0,
+    "backend-go-test": 525.0, "backend-unit": 584.0, "backend-integration": 546.0,
     "backend-lint": 11.0, "lint-unit": 9.0, "lint-integration": 8.0,
     "frontend-lint": 53.0, "frontend-typecheck": 73.0, "frontend-critical": 23.0,
 }
@@ -292,7 +326,7 @@ def plan_gates(
         for target in egress_spec_checks(tree):
             unit = egress_spec_unit(target, cwd=workdir)
             egress_units.append(command(unit["unit_id"], unit["argv"], workdir,
-                                        {key: unit[key] for key in ("cores", "memory_mb", "timeout_seconds")}, unit["weight"]))
+                                        {key: unit[key] for key in ("cores", "memory_mb", "timeout_seconds")}, unit["weight"], unit.get("env")))
     for gate_id in gates_wanted:
         if gate_id == "test-capture-tools":
             groups.append({"group_id": CAPTURE_GROUP, "start": "tools/official_client_capture/tests", "pattern": "test_*.py",
@@ -311,7 +345,7 @@ def plan_gates(
         elif gate_id in ("backend-go-test", "backend-unit", "backend-integration"):
             argv, _cwd = GATE_COMMANDS[gate_id]
             # integration 带 CI=true：没有 Docker 时失败而不是静默跳过（integration_harness_test.go）。
-            env = {"CI": "true"} if gate_id == "backend-integration" else None
+            env = {**GO_ENV, "CI": "true"} if gate_id == "backend-integration" else dict(GO_ENV)
             gates.append({"gate_id": gate_id, "units": [command(f"backend:{gate_id.removeprefix('backend-')}", argv, backend, GO_QUOTA,
                                                                 GATE_SECONDS[gate_id], env)]})
         elif gate_id in ("backend-lint", "lint-unit", "lint-integration"):
@@ -344,6 +378,10 @@ def plan_gates(
                 if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
                     raise ValueError(f"pre-A3 场景清单里有非 pre-A3 单元：{unit.get('unit_id')}")
                 merged = dict(unit)
+                cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))
+                merged.update(cores=cores, memory_mb=768)
+                if seconds is not None:
+                    merged["weight"] = seconds
                 if pre_a3_env:
                     merged["env"] = {**(unit.get("env") or {}), **pre_a3_env}
                 units.append(merged)

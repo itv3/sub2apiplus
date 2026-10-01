@@ -461,6 +461,22 @@ class UnitExecutorCommandTests(unittest.TestCase):
             self.assertLessEqual(max(event["cores_in_use"] for event in events), 2, "在跑额度不超过整机")
             self.assertEqual(completed.stderr.strip().splitlines()[-1], "OK")
 
+    def test_unit_given_parallelism_is_not_overridden_by_its_quota(self) -> None:
+        """调度额度管整机分配，单元显式给出的内部并行度（GOMAXPROCS）优先；没给时按额度向上取整。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            units = [
+                {"unit_id": "given", "argv": ["sh", "-c", 'printf "%s %s" "$GOMAXPROCS" "$UNIT_EXECUTOR_CORES" > given.txt'], "cwd": str(root),
+                 "cores": 0.7, "env": {"GOMAXPROCS": "2"}},
+                {"unit_id": "default", "argv": ["sh", "-c", 'printf "%s %s" "$GOMAXPROCS" "$UNIT_EXECUTOR_CORES" > default.txt'], "cwd": str(root),
+                 "cores": 0.7},
+            ]
+            completed, _summary, _events = self._run_commands(root, units, parallel=2, cores=2)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual((root / "given.txt").read_text(encoding="utf-8"), "2 1")
+            self.assertEqual((root / "default.txt").read_text(encoding="utf-8"), "1 1")
+
     def test_failures_timeouts_and_signals_are_isolated_and_only_diagnosed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

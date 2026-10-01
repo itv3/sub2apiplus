@@ -1845,7 +1845,7 @@ class Arm64GateScriptTests(unittest.TestCase):
             launcher = ["unshare", "-m", "--propagation", "private", "bash", "-c"]
             self.assertTrue(all(unit["argv"][:6] == launcher for unit in units.values()), "测试树单元都在私有挂载命名空间里遮住生产别名")
             self.assertEqual((units["backend:unit"]["argv"][-5:], units["backend:unit"]["cwd"]), (["go", "test", "-tags=unit", "./...", "-count=1"], f"{tree}/backend"))
-            self.assertEqual(units["backend:integration"]["env"], {"CI": "true"})
+            self.assertEqual(units["backend:integration"]["env"], {"GOMAXPROCS": "2", "CI": "true"})
             self.assertEqual([units[key]["argv"][-1] for key in ("backend:lint-unit", "backend:lint-integration")], ["--build-tags=unit", "--build-tags=integration"])
             # 多行 run 块与 `run:` 同一行的单行写法都要取到，每条单独一个单元；macOS 专用的那条在 Linux（ARM64、CI）上写明不在
             # 本平台执行，在 macOS 上照常执行。

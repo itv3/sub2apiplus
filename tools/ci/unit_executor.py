@@ -905,6 +905,10 @@ class Scheduler:
             argv = [*unit.launcher, *argv, "--start", str(self.start), "--tests-file", str(tests_path), "--result", str(result_path)]
         env = {
             **os.environ,
+            # 单元内部并行度：默认按额度向上取整（至少 1）。单元自己显式给出的（如后端 Go 测试按 0.7 核排程、内部仍要
+            # 两路并行编译与跑测试包）优先——调度额度管整机分配，内部并行度管单元自己怎么跑，两者可以不同。
+            "UNIT_EXECUTOR_CORES": str(max(1, math.ceil(unit.quota.cores))),
+            "GOMAXPROCS": str(max(1, math.ceil(unit.quota.cores))),
             **dict(unit.env),
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
@@ -913,9 +917,6 @@ class Scheduler:
             # 与 make 目标一致禁写字节码：绕过 make 直接运行（如只重跑一部分模块）时，测试也不会在树里留下 __pycache__
             # ——驱动清单等检查遇到它会报错。
             "PYTHONDONTWRITEBYTECODE": "1",
-            # 单元内部并行度：按额度向上取整（至少 1）。
-            "UNIT_EXECUTOR_CORES": str(max(1, math.ceil(unit.quota.cores))),
-            "GOMAXPROCS": str(max(1, math.ceil(unit.quota.cores))),
         }
         actions = [
             (os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDONLY, 0),

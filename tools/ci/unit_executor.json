@@ -20,7 +20,7 @@
    "memory_mb": 768
   },
   "test_codex_upgrade_evaluation_attempt_recovery": {
-   "cores": 0.5,
+   "cores": 0.25,
    "memory_mb": 768
   },
   "test_codex_upgrade_evaluation_builder": {
