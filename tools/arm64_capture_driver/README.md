@@ -23,7 +23,7 @@
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
 2. 采集主机：先 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/pre-a3.sh`（策略兼容／激活认证与 pre-A3 路径认证；工具身份
-   （五摘要）与策略未变时复用最近一次认证——重新部署也不重跑约 55 分钟的 pre-A3，跨部署复用登记复用收据），再
+   （五摘要）与策略未变时复用最近一次认证——重新部署也不重跑 pre-A3，跨部署复用登记复用收据），再
    `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
    （账本一建 VC-0 即开始计时，pre-A3 放在其后必然超时）。新目标首次取证按指南
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
@@ -33,7 +33,7 @@
 
 ## 入口便宜检查（E1-02）
 
-`pre-a3.sh` 与 `stage1.sh` 的第一步都是 `entry-preflight.sh`：在约 1 小时的 pre-A3 与建计时账本之前，把几分钟内
+`pre-a3.sh` 与 `stage1.sh` 的第一步都是 `entry-preflight.sh`：在 pre-A3（ARM64 4 核约 8 分钟）与建计时账本之前，把几分钟内
 就能查出的错误一次查全，未通过即停。也可以单独运行：`ARM64_VC_ENV=$RUNROOT/env.sh bash driver/entry-preflight.sh`。
 
 * 七项互相独立，一项失败其余照查，最后汇总（`ENTRY_PREFLIGHT_PASSED`／`ENTRY_PREFLIGHT_FAILED <未通过项>`）；
@@ -63,6 +63,8 @@
 * 收据形状不变，复用与发布认证照旧。没通过的认证写旁路文件 `<正式文件名>.failed-<时间>.json`，正式路径保持不存在：
   修好后用同一 STAMP 直接重跑 `pre-a3.sh`，不用手工归档。
 * 串行入口 `run`（一个进程依次跑全部场景，同一收据形状）保留作对照与回退。
+* 耗时（ARM64 4 核、机器上无其他任务，10-01 实测）：整份认证 478 秒，几乎全是最长的 `vc-chain.vc1-recovery-chain`
+  （477 秒）；其余 43 个场景在它运行期间由其余 3 核跑完。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
