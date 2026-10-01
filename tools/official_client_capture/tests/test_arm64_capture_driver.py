@@ -1008,7 +1008,22 @@ class PreA3OrderingTests(unittest.TestCase):
         self.assertIn("find-reusable --certification", pre_a3)
         self.assertNotIn("codex_upgrade_timing_ledger", pre_a3)
         # 复用或新跑之后按 stage1 同一口径复核本轮坐标。
-        self.assertLess(pre_a3.index("pre_a3_certification run"), pre_a3.rindex("find-reusable --certification"))
+        # E2-03：新跑交给 lib.sh 的 issue_pre_a3_certification（plan → 驱动随附执行器 run-commands → issue），签发在复核之前；
+        # stage2 兜底用同一个函数，两处都不再在一个进程里串行跑全部场景。
+        self.assertLess(pre_a3.index("issue_pre_a3_certification"), pre_a3.rindex("find-reusable --certification"))
+        lib = (SCRIPTS / "lib.sh").read_text(encoding="utf-8")
+        body = lib[lib.index("issue_pre_a3_certification() {"):]
+        body = body[: body.index("\n}\n")]
+        plan = body.index("pre_a3_certification plan --staging-root \"$D/staging/pre-a3-certification-$STAMP\"")
+        execute = body.index('python3 "$DRV/unit_executor.py" run-commands --manifest "$units" --out-dir "$root/executor"')
+        issue = body.index('pre_a3_certification issue --staging-root "$root" --executor-summary "$root/executor/summary.json"')
+        self.assertTrue(plan < execute < issue)
+        self.assertIn('--output "$PRE_A3_CERTIFICATION"', body[issue:])
+        stage2 = (SCRIPTS / "stage2.sh").read_text(encoding="utf-8")
+        self.assertIn('[ -f "$PRE_A3_CERTIFICATION" ] || issue_pre_a3_certification', stage2)
+        self.assertLess(stage2.index("issue_pre_a3_certification"), stage2.index("codex_upgrade_pre_a3_certification record-reuse"))
+        for script in ("pre-a3.sh", "stage2.sh", "lib.sh"):
+            self.assertNotIn("pre_a3_certification run ", (SCRIPTS / script).read_text(encoding="utf-8"), script)
 
     def test_reuse_receipt_recorded_before_ledger_and_bound_by_release_certification(self) -> None:
         """修好接着跑第 19 项：跨部署复用的复用收据在 pre-a3.sh 复核后登记、stage1 建账本前补齐，stage2 发布认证绑定它。"""

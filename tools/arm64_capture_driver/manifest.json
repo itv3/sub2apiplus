@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 62,
+  "file_count": 64,
   "files": [
     {
       "path": "README.md",
-      "sha256": "0ce18fd967ede0be81a503ea14a017110502f7c50fa631851f6c2fd25ae80d0e",
+      "sha256": "87c8f2e563595dd85909903664edc1f03bd8d037ed2623f9264c2214a21ff3e9",
       "mode": "0600",
-      "bytes": 24139
+      "bytes": 25864
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -148,9 +148,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "d1b11581e6c969d5b0c7040d7f46517d96b0b00106770cd36d6e71ae4fd35102",
+      "sha256": "6573bb87a32aa1ee18c0fc7f65d00433996f7656c17c60e671442a3a67ae4982",
       "mode": "0700",
-      "bytes": 13569
+      "bytes": 15205
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -190,9 +190,9 @@
     },
     {
       "path": "driver/pre-a3.sh",
-      "sha256": "1e70fcbda688f298eb02ab673105c6f0b0b14e8771133f50e79803959adb528d",
+      "sha256": "81d0e3e14a3c90b7314cd2ff8ef74875e0c1aadba20020712ae95b0608e4befb",
       "mode": "0700",
-      "bytes": 3550
+      "bytes": 3438
     },
     {
       "path": "driver/pre-all.sh",
@@ -214,15 +214,27 @@
     },
     {
       "path": "driver/stage2.sh",
-      "sha256": "ab7b84ad565303fe3be5d458c38a638b5a0d3da682c33a4d0658200e4f95e8ee",
+      "sha256": "11b7924c20f0884d56ed7d7e66c12b4b67a5e48d0f27430a752f97196bee1124",
       "mode": "0700",
-      "bytes": 4865
+      "bytes": 4715
     },
     {
       "path": "driver/trees.sh",
       "sha256": "f290673e807899a777e87c068b71cf864190d63923ce8f77eb10da917f00255f",
       "mode": "0700",
       "bytes": 2172
+    },
+    {
+      "path": "driver/unit_executor.json",
+      "sha256": "1e3b924f2c0df939b480ffec84d04e16ff614099c2f642776f5ea639e45b6225",
+      "mode": "0600",
+      "bytes": 11930
+    },
+    {
+      "path": "driver/unit_executor.py",
+      "sha256": "53cea5c2b275d951f1719c49cc550628707eb9af8901d0be6ae80970eba3f73e",
+      "mode": "0700",
+      "bytes": 68579
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -375,5 +387,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "8d9a92fbff723d114213dbd31044ad6e931e7961ac2c8a0cc0be39b9140ebe63"
+  "manifest_sha256": "b9785a2dd4db0c1a66cb8a8208cb2f909c34fa3d517e9ed68496da52bccd00e0"
 }

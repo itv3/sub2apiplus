@@ -6,6 +6,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -151,6 +153,202 @@ class PreA3CertificationTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(certification.CertificationError, "staging 目录树内"):
                 certification.run_certification(root / "outside", deployment_receipt=deployment, policy_activation=activation, scenarios=())
+
+
+EXECUTOR = Path(__file__).resolve().parents[3] / "tools" / "ci" / "unit_executor.py"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FAKE_SCENARIOS = (
+    ("fake.alpha", "替身场景一", "tools.fake", "FakeTests", "test_alpha"),
+    ("fake.beta", "替身场景二", "tools.fake", "FakeTests", "test_beta"),
+)
+
+
+class PreA3ParallelCertificationTests(unittest.TestCase):
+    """E2-03：场景交给执行器按单元并行，issue 核对全集与网络计数后按同一形状签发；没通过只写旁路文件。"""
+
+    def _bindings(self, root: Path) -> tuple[Path, Path]:
+        return PreA3CertificationTests._bindings(self, root)  # type: ignore[arg-type]
+
+    def _issue(self, root: Path, staging: Path, summary: dict) -> dict:
+        deployment, activation = self._bindings(root)
+        summary_path = root / f"summary-{len(list(root.glob('summary-*.json')))}.json"
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+        return certification.issue_certification(staging, executor_summary=summary_path, deployment_receipt=deployment, policy_activation=activation)
+
+    @staticmethod
+    def _synthetic(staging: Path, names: list[str], *, network: dict[str, int] | None = None) -> dict:
+        """合成每个场景一份通过的结果与一份执行器汇总（退出码与结论自洽），供变异用。"""
+
+        results = staging / certification.RESULTS_DIR_NAME
+        results.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for name in names:
+            count = (network or {}).get(name, 0)
+            payload = {"schema_version": certification.SCENARIO_RESULT_SCHEMA, "name": name, "network_attempts": count,
+                       "scenario": {"name": name, "description": "替身", "test": "tools.fake:FakeTests.x", "status": "passed", "seconds": 0.1},
+                       "finished_at_utc": "2026-10-01T00:00:00.000Z"}
+            (results / f"{name}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            rows.append({"unit_id": f"{certification.SCENARIO_UNIT_PREFIX}{name}", "kind": "formal", "exit_code": 0 if count == 0 else 1,
+                         "signal": None, "timed_out": False, "seconds": 0.1, "passed": count == 0})
+        return {"schema_version": certification.EXECUTOR_SUMMARY_SCHEMA, "status": "passed", "units": rows, "diagnostic": []}
+
+    def test_issue_refuses_missing_duplicate_killed_timed_out_stray_and_networked_scenarios(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS):
+            root = Path(directory).resolve()
+            names = certification.scenario_names()
+            self.assertEqual(names, ["fake.alpha", "fake.beta", certification.ACCOUNTING_SCENARIO_NAME])
+
+            def case(label: str) -> tuple[Path, dict]:
+                staging = root / "data" / "staging" / label
+                return staging, self._synthetic(staging, names)
+
+            staging, summary = case("baseline")
+            receipt = self._issue(root, staging, summary)
+            self.assertEqual((receipt["status"], receipt["failed_scenarios"], receipt["network_attempts"], receipt["scenario_count"]), ("passed", [], 0, 3))
+
+            mutations = {}
+            staging, summary = case("missing")
+            (staging / "results" / "fake.beta.json").unlink()
+            summary["units"] = [row for row in summary["units"] if not row["unit_id"].endswith("fake.beta")]
+            mutations["少报一个场景"] = (staging, summary, "fake.beta", "缺报")
+            staging, summary = case("duplicated")
+            summary["units"].append(dict(summary["units"][0]))
+            mutations["重复报一个"] = (staging, summary, "fake.alpha", "多次")
+            staging, summary = case("killed")
+            (staging / "results" / "fake.alpha.json").unlink()
+            summary["units"][0].update(exit_code=None, signal=9, passed=False)
+            mutations["杀掉一个场景的子进程"] = (staging, summary, "fake.alpha", "信号 9")
+            staging, summary = case("timed-out")
+            summary["units"][1].update(exit_code=None, signal=15, timed_out=True, passed=False)
+            mutations["一个场景超时"] = (staging, summary, "fake.beta", "超时（执行器以信号 15 终止）")
+            staging, summary = case("mismatch")
+            summary["units"][0].update(exit_code=1, passed=False)
+            mutations["退出码与结论不符"] = (staging, summary, "fake.alpha", "退出码 1 与场景结论不符")
+            for label, (staging, summary, scenario, reason) in mutations.items():
+                with self.subTest(label):
+                    receipt = self._issue(root, staging, summary)
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertIn(scenario, receipt["failed_scenarios"])
+                    row = next(item for item in receipt["scenarios"] if item["name"] == scenario)
+                    self.assertIn(reason, row["error"])
+            # 某个子进程上报网络计数 1：场景本身通过，但总和不为 0，不签发。
+            staging = root / "data" / "staging" / "network"
+            receipt = self._issue(root, staging, self._synthetic(staging, names, network={"fake.alpha": 1}))
+            self.assertEqual((receipt["status"], receipt["network_attempts"]), ("failed", 1))
+            # 结果里没有网络计数、或有全集之外的结果文件，都不签发。
+            staging, summary = case("no-count")
+            payload = json.loads((staging / "results" / "fake.alpha.json").read_text(encoding="utf-8"))
+            payload.pop("network_attempts")
+            (staging / "results" / "fake.alpha.json").write_text(json.dumps(payload), encoding="utf-8")
+            self.assertIn("fake.alpha", self._issue(root, staging, summary)["failed_scenarios"])
+            staging, summary = case("stray")
+            stray = json.loads((staging / "results" / "fake.alpha.json").read_text(encoding="utf-8"))
+            (staging / "results" / "fake.gamma.json").write_text(json.dumps({**stray, "name": "fake.gamma"}), encoding="utf-8")
+            receipt = self._issue(root, staging, summary)
+            self.assertEqual(receipt["status"], "failed")
+            self.assertIn("全集之外的结果：fake.gamma.json", receipt["failed_scenarios"])
+            # 同一场景换个编号又派发了一次（汇总里多出全集之外的单元）：即使结果只有一份也不签发。
+            staging, summary = case("redispatched")
+            summary["units"].append({**summary["units"][0], "unit_id": "pre-a3:fake.alpha#2"})
+            receipt = self._issue(root, staging, summary)
+            self.assertEqual(receipt["status"], "failed")
+            self.assertIn("全集之外的执行单元：pre-a3:fake.alpha#2", receipt["failed_scenarios"])
+            # 汇总的 units 混入非正式执行的行：汇总本身非法，直接拒绝。
+            staging, summary = case("bad-row")
+            summary["units"].append({**summary["units"][0], "kind": "diagnostic"})
+            with self.assertRaisesRegex(certification.CertificationError, "单元行非法"):
+                self._issue(root, staging, summary)
+            # 诊断执行的结果不参与签发。
+            staging, summary = case("diagnostic")
+            (staging / "results" / "fake.alpha.diagnostic.json").write_text("{坏", encoding="utf-8")
+            self.assertEqual(self._issue(root, staging, summary)["status"], "passed")
+
+    def test_scenario_result_is_published_once(self) -> None:
+        """同一场景第二次上报（例如被重复派发）直接失败，第一次的结果原样保留；诊断重跑另写 .diagnostic.json。"""
+
+        record = {"name": "fake.alpha", "description": "替身", "test": "tools.fake:FakeTests.x", "status": "passed", "seconds": 0.1}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS), \
+                mock.patch.object(certification, "run_scenario", return_value=record), mock.patch.dict(os.environ, {}, clear=False):
+            root = Path(directory).resolve()
+            result = root / "data" / "staging" / "cert" / "results" / "fake.alpha.json"
+            argv = ["run-scenario", "--name", "fake.alpha", "--staging-root", str(root / "data" / "staging" / "cert" / "scenarios" / "fake.alpha"),
+                    "--result", str(result)]
+            os.environ.pop("UNIT_EXECUTOR_KIND", None)
+            previous_tempdir = tempfile.tempdir
+            try:
+                with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                    self.assertEqual(certification.main(argv), 0)
+                    first = result.read_bytes()
+                    self.assertEqual(certification.main(argv), 2, "第二次上报必须失败")
+                self.assertEqual(result.read_bytes(), first)
+                self.assertEqual(sorted(path.name for path in result.parent.iterdir()), ["fake.alpha.json"], "不留临时文件")
+                os.environ["UNIT_EXECUTOR_KIND"] = "diagnostic"
+                with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                    self.assertEqual(certification.main(argv), 0)
+                self.assertTrue(result.with_name("fake.alpha.diagnostic.json").is_file())
+                self.assertEqual(result.read_bytes(), first)
+            finally:
+                tempfile.tempdir = previous_tempdir
+                os.environ.pop(certification.FIXTURE_ONLY_ENV, None)
+
+    def test_failed_certification_goes_to_a_side_file_and_staging_roots_are_fresh(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "control" / "pre-a3-certification-x.json"
+            output.parent.mkdir()
+            failed = {"schema_version": certification.SCHEMA_VERSION, "status": "failed", "receipt_sha256": "0" * 64}
+            first = certification.write_certification(output, failed)
+            second = certification.write_certification(output, failed)
+            self.assertFalse(output.exists(), "没通过的认证不得写正式路径")
+            self.assertNotEqual(first, second)
+            self.assertTrue(all(path.name.startswith("pre-a3-certification-x.failed-") for path in (first, second)))
+            passed = {**failed, "status": "passed"}
+            self.assertEqual(certification.write_certification(output, passed), output)
+            staging = root / "data" / "staging" / "pre-a3"
+            (staging / "old").mkdir(parents=True)
+            fresh = certification._fresh_staging_root(staging)
+            self.assertNotEqual(fresh, staging)
+            self.assertTrue(fresh.name.startswith("pre-a3-"))
+            self.assertEqual(certification._fresh_staging_root(root / "data" / "staging" / "empty"), root / "data" / "staging" / "empty")
+
+    def test_parallel_issue_matches_serial_run_and_verifies(self) -> None:
+        """真跑几个快速场景：plan → 执行器 run-commands 并行 → issue，与串行 run 逐场景结论一致，签发的认证能通过核验。
+        诊断重跑写到 .diagnostic.json，不覆盖正式结果。"""
+
+        quick = tuple(scenario for scenario in certification.SCENARIOS if scenario[0] in {
+            "harden-evidence-permissions.two-step", "batch.uncommitted-not-pushed", "vc-chain.ledger-events-derivation"})
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", quick):
+            root = Path(directory).resolve()
+            deployment, activation = self._bindings(root)
+            manifest = certification.plan_scenario_units(root / "data" / "staging" / "parallel", cwd=REPO_ROOT)
+            staging = Path(manifest["staging_root"])
+            self.assertEqual([unit["unit_id"] for unit in manifest["units"]], [f"pre-a3:{name}" for name in certification.scenario_names()])
+            manifest_path = root / "units.json"
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(EXECUTOR), "run-commands", "--manifest", str(manifest_path), "--parallel", "3",
+                 "--state-dir", str(root / "state"), "--out-dir", str(staging / "executor"), "--shared-caches", "off"],
+                cwd=REPO_ROOT, capture_output=True, text=True, timeout=900, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            receipt = certification.issue_certification(staging, executor_summary=staging / "executor" / "summary.json",
+                                                        deployment_receipt=deployment, policy_activation=activation)
+            self.assertEqual((receipt["status"], receipt["network_attempts"]), ("passed", 0), receipt["failed_scenarios"])
+            serial = certification.run_certification(root / "data" / "staging" / "serial", deployment_receipt=deployment,
+                                                     policy_activation=activation, scenarios=quick)
+            self.assertEqual([(row["name"], row["status"]) for row in receipt["scenarios"]],
+                             [(row["name"], row["status"]) for row in serial["scenarios"]], "并行与串行逐场景结论一致")
+            self.assertEqual(set(receipt) ^ set(serial), set(), "收据形状不变")
+            output = certification.write_certification(root / "pre-a3.json", receipt)
+            self.assertEqual(certification.verify_certification(output)["scenario_count"], len(quick) + 1)
+            # 执行器的诊断重跑用同一条命令：结果与临时目录另放，不覆盖正式执行。
+            unit = next(item for item in manifest["units"] if item["unit_id"].endswith("batch.uncommitted-not-pushed"))
+            formal = Path(unit["argv"][unit["argv"].index("--result") + 1])
+            before = formal.read_bytes()
+            rerun = subprocess.run(unit["argv"], cwd=unit["cwd"], capture_output=True, text=True, timeout=600,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_KIND": "diagnostic"})
+            self.assertEqual(rerun.returncode, 0, rerun.stderr[-2000:])
+            self.assertEqual(formal.read_bytes(), before)
+            self.assertTrue(formal.with_name(formal.stem + ".diagnostic.json").is_file())
 
 
 class PreA3CertificationReuseTests(unittest.TestCase):

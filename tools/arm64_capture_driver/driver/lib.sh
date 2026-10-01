@@ -55,6 +55,20 @@ PY
   export PYTHONPYCACHEPREFIX="$PYC_MANAGED"
   echo "字节码共享层已重建：${summary:0:200}"
 }
+# 新签本轮 pre-A3 路径认证（E2-03；pre-a3.sh 新跑与 stage2.sh 兜底共用）：plan 在认证根下自动新建本次子目录并写出
+# 44 条命令单元（每个场景一个子进程），驱动随附的统一调度执行器在整机额度内并行跑完，issue 再核对场景全集、
+# 各子进程的退出情况与上报的网络计数后签发。没通过只写带时间后缀的旁路文件、正式路径只在通过时写，修好后同一
+# STAMP 直接重跑，不必先归档。执行器自身的退出码只作记录：结论以 issue 为准（没签发时 issue 退出码非 0，调用方
+# 的 set -e 停线）。用到调用方已定义的 DEPLOY、POLICY_ACTIVATION、PRE_A3_CERTIFICATION。
+issue_pre_a3_certification() {
+  local units root rc=0
+  units="$RUNROOT/pre-a3-units-$(date -u +%Y%m%dt%H%M%Sz).json"
+  root=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-root "$D/staging/pre-a3-certification-$STAMP" --output "$units" \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_root"])')
+  python3 "$DRV/unit_executor.py" run-commands --manifest "$units" --out-dir "$root/executor" > "$root/executor.log" 2>&1 || rc=$?
+  echo "pre-A3 场景执行 rc=${rc}（明细 $root/executor.log）：$(tail -n 2 "$root/executor.log" | tr '\n' ' ' | cut -c1-200)"
+  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$root" --executor-summary "$root/executor/summary.json" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300
+}
 NEWDIR=$D/evidence/campaigns/$NEW
 W=$D/control/$IN
 TOOLS=$D/tools/official_client_capture

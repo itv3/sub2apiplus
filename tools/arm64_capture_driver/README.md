@@ -46,6 +46,24 @@
 * 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
   由 stage1 建预检 Campaign 时的 plan 照旧校验。
 
+## pre-A3 路径认证按场景并行（E2-03）
+
+* 新跑由 `lib.sh` 的 `issue_pre_a3_certification` 完成（`pre-a3.sh` 新跑与 `stage2.sh` 兜底共用一个实现）：
+  1. `codex_upgrade_pre_a3_certification plan`：在 `$D/staging/pre-a3-certification-$STAMP` 建本次认证根（已存在且
+     非空时自动改用带时间后缀的新目录），写出命令单元清单 `$RUNROOT/pre-a3-units-<时间>.json`——44 个场景各一条
+     `run-scenario`；
+  2. 驱动随附的统一调度执行器 `driver/unit_executor.py run-commands`（`tools/ci` 原件的逐字节副本，配置是同目录的
+     `unit_executor.json`）在整机额度内并行跑完，执行记录与各子进程日志在 `<认证根>/executor/`，标准输出与错误在
+     `<认证根>/executor.log`；
+  3. `issue` 核对后签发：44 个场景各恰好一份结果；没有缺报、重复上报、被信号终止、超时或异常退出；每个子进程都
+     上报了网络计数，总和为 0。任何一条不满足都不签发。
+* 每个场景是一个独立子进程，各自装网络拦截、用自己的临时目录（`<认证根>/scenarios/<场景>/`），结果写到
+  `<认证根>/results/<场景>.json`（只能写一次）。执行器会把失败单元单独重跑一次做诊断，诊断结果写 `.diagnostic.json`，
+  不参与签发、不改结论。
+* 收据形状不变，复用与发布认证照旧。没通过的认证写旁路文件 `<正式文件名>.failed-<时间>.json`，正式路径保持不存在：
+  修好后用同一 STAMP 直接重跑 `pre-a3.sh`，不用手工归档。
+* 串行入口 `run`（一个进程依次跑全部场景，同一收据形状）保留作对照与回退。
+
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
 * `stage1.sh` 建好账本与预检 Campaign 后写 `$RUNROOT/stage1.partial.env`，再调用 `stage1-finish.sh`：

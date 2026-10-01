@@ -403,6 +403,108 @@ class UnitExecutorBytecodeTests(unittest.TestCase):
             self.assertTrue(completed.stderr.strip().splitlines()[-1].startswith("FAILED (failures=0, errors=1"), completed.stderr[-500:])
 
 
+class UnitExecutorCommandTests(unittest.TestCase):
+    """命令单元（E2-03 起 pre-A3 场景等）：清单校验、工作目录与环境、额度、独占、失败／超时／信号隔离与诊断。"""
+
+    def _run_commands(self, root: Path, units: list[dict], *, parallel: int, cores: int) -> tuple[subprocess.CompletedProcess[str], dict, list[dict]]:
+        manifest = root / "units.json"
+        manifest.write_text(json.dumps({"schema_version": ue.COMMANDS_SCHEMA, "units": units}, ensure_ascii=False), encoding="utf-8")
+        command = [
+            sys.executable, str(EXECUTOR), "run-commands", "--manifest", str(manifest), "--config", str(_config(root)),
+            "--parallel", str(parallel), "--cores", str(cores), "--state-dir", str(root / "state"), "--out-dir", str(root / "out"),
+            "--shared-caches", "off",
+        ]
+        completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        summary = json.loads((root / "out" / "summary.json").read_text(encoding="utf-8"))
+        events = [json.loads(line) for line in (root / "out" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        return completed, summary, events
+
+    def test_manifest_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good = {"unit_id": "a", "argv": ["true"], "cwd": str(root)}
+            cases = {
+                "重复 ID": [good, dict(good)],
+                "ID 含斜杠": [dict(good, unit_id="a/b")],
+                "相对工作目录": [dict(good, cwd="relative")],
+                "空命令": [dict(good, argv=[])],
+                "未知字段": [dict(good, shell=True)],
+                "超时非正": [dict(good, timeout_seconds=0)],
+                "环境变量非字符串": [dict(good, env={"K": 1})],
+            }
+            for label, units in cases.items():
+                with self.subTest(label):
+                    path = root / "units.json"
+                    path.write_text(json.dumps({"schema_version": ue.COMMANDS_SCHEMA, "units": units}), encoding="utf-8")
+                    with self.assertRaises(ue.ExecutorError):
+                        ue.load_command_manifest(path, machine_cores=2)
+            path = root / "units.json"
+            path.write_text(json.dumps({"schema_version": ue.COMMANDS_SCHEMA, "units": [dict(good, cores=8, env={"K": "v"}, weight=3)]}), encoding="utf-8")
+            (unit,), _manifest = ue.load_command_manifest(path, machine_cores=2)
+            self.assertEqual((unit.command, unit.cwd, unit.env, unit.quota.cores, unit.weight), (("true",), str(root), (("K", "v"),), 2.0, 3.0))
+
+    def test_commands_run_in_their_own_directory_and_environment_within_quota(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            units = []
+            for name in ("a", "b", "c"):
+                (root / name).mkdir()
+                units.append({"unit_id": f"cmd:{name}", "argv": ["sh", "-c", 'printf "%s %s" "$MARK" "$UNIT_EXECUTOR_UNIT" > marker.txt; sleep 0.3'],
+                              "cwd": str(root / name), "env": {"MARK": name.upper()}, "cores": 1, "weight": 1})
+            completed, summary, events = self._run_commands(root, units, parallel=3, cores=2)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual((summary["schema_version"], summary["status"], summary["unit_count"]), (ue.COMMANDS_SUMMARY_SCHEMA, "passed", 3))
+            for name in ("a", "b", "c"):
+                self.assertEqual((root / name / "marker.txt").read_text(encoding="utf-8"), f"{name.upper()} cmd:{name}")
+            self.assertLessEqual(max(event["cores_in_use"] for event in events), 2, "在跑额度不超过整机")
+            self.assertEqual(completed.stderr.strip().splitlines()[-1], "OK")
+
+    def test_failures_timeouts_and_signals_are_isolated_and_only_diagnosed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            units = [
+                {"unit_id": "ok", "argv": ["true"], "cwd": str(root)},
+                {"unit_id": "exit-3", "argv": ["sh", "-c", "exit 3"], "cwd": str(root)},
+                {"unit_id": "too-slow", "argv": ["sleep", "30"], "cwd": str(root), "timeout_seconds": 1},
+                {"unit_id": "killed", "argv": ["sh", "-c", "kill -9 $$"], "cwd": str(root)},
+            ]
+            completed, summary, _events = self._run_commands(root, units, parallel=4, cores=4)
+            self.assertEqual(completed.returncode, 1)
+            rows = {row["unit_id"]: row for row in summary["units"]}
+            self.assertTrue(rows["ok"]["passed"])
+            self.assertEqual(rows["exit-3"]["exit_code"], 3)
+            self.assertTrue(rows["too-slow"]["timed_out"])
+            self.assertEqual(rows["killed"]["signal"], 9)
+            self.assertEqual(sorted(summary["failed_units"]), ["exit-3", "killed", "too-slow"])
+            self.assertEqual(sorted(item["unit_id"] for item in summary["diagnostic"]), ["exit-3", "killed", "too-slow"])
+            self.assertTrue(completed.stderr.strip().splitlines()[-1].startswith("FAILED (units=3"), completed.stderr[-400:])
+
+    def test_exclusive_command_runs_alone_and_heavier_commands_start_first(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            units = [{"unit_id": f"w{weight}", "argv": ["sleep", "0.2"], "cwd": str(root), "weight": weight} for weight in (1, 5, 3)]
+            units.append({"unit_id": "alone", "argv": ["sleep", "0.3"], "cwd": str(root), "exclusive": True})
+            completed, summary, events = self._run_commands(root, units, parallel=1, cores=2)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            starts = [event["unit"] for event in events if event["event"] == "start"]
+            self.assertEqual(starts, ["w5", "w3", "w1", "alone"], "并行段按预计秒数从长到短，独占段在最后")
+            index = next(i for i, event in enumerate(events) if event["event"] == "start" and event["unit"] == "alone")
+            self.assertEqual(events[index]["running"], ["alone"])
+
+
+class UnitExecutorDriverCopyTests(unittest.TestCase):
+    def test_driver_carries_an_identical_copy(self) -> None:
+        """ARM64 驱动随附一份执行器与调度配置（pre-A3 认证在数据根按场景并行、采集批次申请整机都要用；数据根没有
+        tools/ci），必须与 tools/ci 里的原件逐字节相同：改执行器时两处一起改（cp 过去再重建驱动清单）。"""
+
+        driver = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
+        for name in ("unit_executor.py", "unit_executor.json"):
+            with self.subTest(name):
+                self.assertEqual((driver / name).read_bytes(), (REPO_ROOT / "tools" / "ci" / name).read_bytes(),
+                                 f"驱动里的 {name} 与 tools/ci 原件不一致")
+
+
 class UnitExecutorRepositoryConfigTests(unittest.TestCase):
     def test_repository_config_plans_the_real_full_set(self) -> None:
         """仓库里的调度配置对真实全集规划：登记的拆块与独占都命中现有测试、规划闭合；测试改名或删除后这里先变红。"""

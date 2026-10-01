@@ -532,6 +532,79 @@ def _bind_rehearsal_receipt(path: Path | None, identity: Mapping[str, Any]) -> d
     }
 
 
+def _fresh_staging_root(staging_root: Path) -> Path:
+    """认证根每次用新目录（E2-03）：指定目录已存在且非空时改用带 UTC 时间后缀的新目录，同一秒再冲突加序号；
+    同一 STAMP 重跑不必先手工归档上一次的认证根。"""
+
+    root = Path(staging_root).resolve(strict=False)
+    if project_ledger.STAGING_DIR_NAME not in root.parts:
+        raise CertificationError("认证根必须位于 staging 目录树内")
+    if not root.exists() or not any(root.iterdir()):
+        return root
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
+    candidate = root.with_name(f"{root.name}-{stamp}")
+    index = 1
+    while candidate.exists():
+        index += 1
+        candidate = root.with_name(f"{root.name}-{stamp}-{index}")
+    return candidate
+
+
+def _certification_bindings(
+    deployment_receipt: Path, policy_activation: Path, campaign_run_rehearsal_receipt: Path | None,
+) -> dict[str, Any]:
+    """签发前的绑定：当前工具身份、部署收据与激活认证（五摘要都等于当前身份），以及可选的原子演练收据。"""
+
+    identity = policy_certification.current_identity()
+    deployment_path = Path(deployment_receipt).resolve(strict=True)
+    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity)
+    activation_path = Path(policy_activation).resolve(strict=True)
+    activation = policy_certification.verify_activation_certification(activation_path, expected_identity=identity)
+    return {
+        "identity": identity, "deployment_path": deployment_path, "deployment": deployment,
+        "activation_path": activation_path, "activation": activation,
+        "rehearsal": _bind_rehearsal_receipt(campaign_run_rehearsal_receipt, identity),
+    }
+
+
+def _build_receipt(
+    staging_root: Path, bindings: Mapping[str, Any], report: list[dict[str, Any]], failed: list[str], network_attempts: int,
+    observed_at_utc: str | None,
+) -> dict[str, Any]:
+    """串行（run）与按场景并行（issue）共用的收据形状。"""
+
+    identity = bindings["identity"]
+    receipt = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "passed" if not failed and not network_attempts else "failed",
+        "certified_at_utc": observed_at_utc or _utc_now(),
+        "staging_root": str(staging_root),
+        "fixture_only": True,
+        "identity": {name: identity[name] for name in policy_certification.IDENTITY_FIELDS},
+        "policy_version": identity["policy_version"],
+        "deployment_receipt": {
+            "path": str(bindings["deployment_path"]),
+            "sha256": codex_upgrade.file_sha256(bindings["deployment_path"]),
+            "created_at_utc": bindings["deployment"].get("created_at_utc"),
+        },
+        "policy_activation": {
+            "path": str(bindings["activation_path"]),
+            "sha256": codex_upgrade.file_sha256(bindings["activation_path"]),
+            "policy_sha256": bindings["activation"].get("policy_sha256"),
+        },
+        "campaign_run_rehearsal_receipt": bindings["rehearsal"],
+        "real_chain_registration": real_chain_registration(),
+        "scenarios": report,
+        "scenario_count": len(report),
+        "failed_scenarios": failed,
+        "network_attempts": network_attempts,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+    receipt["receipt_sha256"] = _fingerprint(receipt)
+    return receipt
+
+
 def run_certification(
     staging_root: Path,
     *,
@@ -541,19 +614,12 @@ def run_certification(
     scenarios: tuple[tuple[str, str, str, str, str], ...] = SCENARIOS,
     observed_at_utc: str | None = None,
 ) -> dict[str, Any]:
-    staging_root = Path(staging_root).resolve(strict=False)
-    if project_ledger.STAGING_DIR_NAME not in staging_root.parts:
-        raise CertificationError("认证根必须位于 staging 目录树内")
-    if staging_root.exists() and any(staging_root.iterdir()):
-        raise CertificationError("认证根必须是空目录")
+    """串行认证：一个进程里依次跑全部场景（与按场景并行的 issue 同一收据形状，用于对照与回退）。"""
+
+    staging_root = _fresh_staging_root(staging_root)
     staging_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging_root.chmod(0o700)
-    identity = policy_certification.current_identity()
-    deployment_path = Path(deployment_receipt).resolve(strict=True)
-    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity)
-    activation_path = Path(policy_activation).resolve(strict=True)
-    activation = policy_certification.verify_activation_certification(activation_path, expected_identity=identity)
-    rehearsal_binding = _bind_rehearsal_receipt(campaign_run_rehearsal_receipt, identity)
+    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt)
     temp_root = staging_root / "tmp"
     temp_root.mkdir(mode=0o700)
     previous_tempdir = tempfile.tempdir
@@ -574,35 +640,222 @@ def run_certification(
         else:
             os.environ[FIXTURE_ONLY_ENV] = previous_env
     failed = [item["name"] for item in report if item["status"] != "passed"]
-    receipt = {
-        "schema_version": SCHEMA_VERSION,
-        "status": "passed" if not failed and not attempts else "failed",
-        "certified_at_utc": observed_at_utc or _utc_now(),
-        "staging_root": str(staging_root),
-        "fixture_only": True,
-        "identity": {name: identity[name] for name in policy_certification.IDENTITY_FIELDS},
-        "policy_version": identity["policy_version"],
-        "deployment_receipt": {
-            "path": str(deployment_path),
-            "sha256": codex_upgrade.file_sha256(deployment_path),
-            "created_at_utc": deployment.get("created_at_utc"),
-        },
-        "policy_activation": {
-            "path": str(activation_path),
-            "sha256": codex_upgrade.file_sha256(activation_path),
-            "policy_sha256": activation.get("policy_sha256"),
-        },
-        "campaign_run_rehearsal_receipt": rehearsal_binding,
-        "real_chain_registration": real_chain_registration(),
-        "scenarios": report,
-        "scenario_count": len(report),
-        "failed_scenarios": failed,
-        "network_attempts": len(attempts),
-        "live_request_count": 0,
-        "scanned_bytes": 0,
+    return _build_receipt(staging_root, bindings, report, failed, len(attempts), observed_at_utc)
+
+
+# ---------------------------------------------------------------------------
+# E2-03：按场景并行——单场景入口、执行器清单、汇总签发
+# ---------------------------------------------------------------------------
+# 场景作为单元交给统一调度执行器（tools/ci/unit_executor.py run-commands）：每个场景一个子进程，各自装网络守卫、
+# 各自的临时目录，结果写成一份单场景结果；全部跑完后 issue 核对场景全集与网络计数，按串行认证的同一形状签发。
+# 认证模块自己不带调度器，也不导入执行器（它不是受管代码），清单与汇总的 schema 字面量与执行器保持一致。
+SCENARIO_RESULT_SCHEMA = "pre-a3-scenario-result/v1"
+ACCOUNTING_SCENARIO_NAME = "accounting.resolved-unblocks"
+SCENARIO_UNIT_PREFIX = "pre-a3:"
+EXECUTOR_COMMANDS_SCHEMA = "unit-executor-commands/v1"
+EXECUTOR_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
+RESULTS_DIR_NAME = "results"
+SCENARIO_ROOTS_DIR_NAME = "scenarios"
+# 执行器从长到短派发用的预计秒数：ARM64 实测（E2-02 部署后，七条重链 3 路并行）；没列的按 30 秒。
+SCENARIO_SECONDS: dict[str, float] = {
+    "vc-chain.vc1-recovery-chain": 456.0,
+    "vc-chain.vc1-capture": 211.0,
+    "deadline-extension.sigkill-resume": 183.0,
+    "segment-recovery.completed-job-reuse": 168.0,
+    "vc-chain.late-stage-faults": 63.0,
+    "vc-chain.full-validation-only": 38.0,
+    "stage-recovery.committed-classify": 19.0,
+}
+# 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
+REAL_CHAIN_TIMEOUT_SECONDS = 2400
+SCENARIO_TIMEOUT_SECONDS = 900
+
+
+def scenario_names() -> list[str]:
+    """认证场景全集：登记的受管测试场景加上进程内的补账场景，顺序即认证里的顺序。"""
+
+    return [scenario[0] for scenario in SCENARIOS] + [ACCOUNTING_SCENARIO_NAME]
+
+
+def _scenario_file_name(name: str) -> str:
+    return name.replace("/", "_")
+
+
+def run_single_scenario(name: str, staging_root: Path) -> dict[str, Any]:
+    """在当前进程（执行器派发的单元子进程）跑一个场景：自己的临时目录、只用夹具总账、装网络守卫，返回单场景结果
+    （场景记录与本进程的网络连接尝试次数）。进程级设置只在这个子进程里改，跑完进程就退出。"""
+
+    if name not in scenario_names():
+        raise CertificationError(f"未登记的认证场景：{name}")
+    root = Path(staging_root).resolve(strict=False)
+    if project_ledger.STAGING_DIR_NAME not in root.parts:
+        raise CertificationError("场景根必须位于 staging 目录树内")
+    temp_root = root / "tmp"
+    temp_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tempfile.tempdir = str(temp_root)
+    os.environ[FIXTURE_ONLY_ENV] = "1"
+    with smoke._NetworkGuard() as guard:
+        if name == ACCOUNTING_SCENARIO_NAME:
+            record = _accounting_resolved_scenario(temp_root)
+        else:
+            record = run_scenario(next(scenario for scenario in SCENARIOS if scenario[0] == name))
+    return {
+        "schema_version": SCENARIO_RESULT_SCHEMA,
+        "name": name,
+        "scenario": record,
+        "network_attempts": len(guard.attempts),
+        "finished_at_utc": _utc_now(),
     }
-    receipt["receipt_sha256"] = _fingerprint(receipt)
-    return receipt
+
+
+def plan_scenario_units(staging_root: Path, *, python: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+    """生成执行器命令单元清单：每个场景一条 ``run-scenario`` 命令，结果写到 ``<认证根>/results/<场景>.json``，
+    临时目录在 ``<认证根>/scenarios/<场景>/``。认证根每次用新目录，实际路径写在清单的 ``staging_root``。"""
+
+    root = _fresh_staging_root(staging_root)
+    for directory in (root, root / RESULTS_DIR_NAME, root / SCENARIO_ROOTS_DIR_NAME):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory.chmod(0o700)
+    real_chains = {scenario[0] for scenario in SCENARIOS if ".real_chains." in scenario[2]}
+    workdir = str(Path(cwd or os.getcwd()).resolve())
+    units = []
+    for name in scenario_names():
+        file_name = _scenario_file_name(name)
+        units.append({
+            "unit_id": f"{SCENARIO_UNIT_PREFIX}{name}",
+            "argv": [
+                python or sys.executable, "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario",
+                "--name", name, "--staging-root", str(root / SCENARIO_ROOTS_DIR_NAME / file_name),
+                "--result", str(root / RESULTS_DIR_NAME / f"{file_name}.json"),
+            ],
+            "cwd": workdir,
+            "cores": 1,
+            "memory_mb": 1024,
+            "timeout_seconds": REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS,
+            "weight": SCENARIO_SECONDS.get(name, 30.0),
+        })
+    return {"schema_version": EXECUTOR_COMMANDS_SCHEMA, "staging_root": str(root), "units": units}
+
+
+def _placeholder_record(name: str, problems: list[str], seconds: Any) -> dict[str, Any]:
+    scenario = next((item for item in SCENARIOS if item[0] == name), None)
+    return {
+        "name": name,
+        "description": scenario[1] if scenario else "账务无法核清只暂停；补回证据后 accounting-resolve 按当前证据精确补账，解除 blocked 后同一对象续跑",
+        "test": f"{scenario[2]}:{scenario[3]}.{scenario[4]}" if scenario else "inline:codex_upgrade_pre_a3_certification._accounting_resolved_scenario",
+        "status": "failed",
+        "error": "；".join(problems),
+        "seconds": seconds,
+    }
+
+
+def issue_certification(
+    staging_root: Path,
+    *,
+    executor_summary: Path,
+    deployment_receipt: Path,
+    policy_activation: Path,
+    campaign_run_rehearsal_receipt: Path | None = None,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """汇总签发：核对场景全集与各子进程上报的网络计数，按串行认证的同一形状出具认证（消费端照旧）。
+
+    下面任何一种都记为该场景失败、认证不通过（调用方只写旁路文件，正式路径不写）：执行器没有正式执行该场景单元
+    （缺报）、单元被信号终止、超时或退出码不是 0／1（崩溃）；没有结果文件或结果非法、场景名不符、结果里没有网络
+    计数；同一场景出现两份结果（重复上报）。结果目录里全集之外的结果、执行器汇总里全集之外的单元也让认证不通过
+    （记在 ``failed_scenarios``）。
+    子进程退出码 0 必须对应「场景通过且本进程零网络」，1 对应其余情况；对不上同样判失败。诊断执行的结果不参与签发。
+    """
+
+    root = Path(staging_root).resolve(strict=True)
+    if project_ledger.STAGING_DIR_NAME not in root.parts:
+        raise CertificationError("认证根必须位于 staging 目录树内")
+    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt)
+    summary = policy_certification._read_json(Path(executor_summary), "执行器汇总")
+    if summary.get("schema_version") != EXECUTOR_SUMMARY_SCHEMA or not isinstance(summary.get("units"), list):
+        raise CertificationError("执行器汇总 schema 非法")
+    rows: dict[str, list[Mapping[str, Any]]] = {}
+    for row in summary["units"]:
+        if not isinstance(row, Mapping) or row.get("kind") != "formal":
+            raise CertificationError("执行器汇总的单元行非法（units 只应列正式执行）")
+        rows.setdefault(str(row.get("unit_id")), []).append(row)
+    names = scenario_names()
+    # 汇总里全集之外的单元（例如同一场景换个编号又派发了一次）同样不签发：它可能抢先写了某个场景的结果。
+    stray_units = sorted(set(rows) - {f"{SCENARIO_UNIT_PREFIX}{name}" for name in names})
+    results: dict[str, list[dict[str, Any]]] = {}
+    stray: list[str] = []
+    for path in sorted((root / RESULTS_DIR_NAME).glob("*.json")):
+        if path.name.endswith(".diagnostic.json"):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = None
+        name = payload.get("name") if isinstance(payload, dict) and payload.get("schema_version") == SCENARIO_RESULT_SCHEMA else None
+        if name not in names or path.name != f"{_scenario_file_name(str(name))}.json":
+            stray.append(path.name)
+            continue
+        results.setdefault(str(name), []).append(payload)
+    report: list[dict[str, Any]] = []
+    attempts = 0
+    for name in names:
+        problems: list[str] = []
+        unit_rows = rows.get(f"{SCENARIO_UNIT_PREFIX}{name}", [])
+        row = unit_rows[0] if len(unit_rows) == 1 else None
+        if not unit_rows:
+            problems.append("执行器没有正式执行该场景（缺报）")
+        elif len(unit_rows) > 1:
+            problems.append("执行器汇总里该场景出现多次")
+        elif row.get("timed_out"):
+            problems.append(f"场景子进程超时（执行器以信号 {row.get('signal')} 终止）")
+        elif row.get("signal"):
+            problems.append(f"场景子进程被信号 {row['signal']} 终止")
+        elif row.get("exit_code") not in (0, 1):
+            problems.append(f"场景子进程异常退出（退出码 {row.get('exit_code')}）")
+        found = results.get(name, [])
+        if len(found) > 1:
+            problems.append("同一场景出现多份结果（重复上报）")
+        elif not found:
+            problems.append("没有场景结果（缺报）")
+        result = found[0] if len(found) == 1 else None
+        if result is not None:
+            count = result.get("network_attempts")
+            record = result.get("scenario")
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                problems.append("场景结果里没有网络计数")
+            elif not isinstance(record, dict) or record.get("name") != name:
+                problems.append("场景结果里的记录与场景名不符")
+            else:
+                attempts += count
+                clean = record.get("status") == "passed" and count == 0
+                if row is not None and row.get("exit_code") in (0, 1) and (row["exit_code"] == 0) != clean:
+                    problems.append(f"子进程退出码 {row['exit_code']} 与场景结论不符")
+        if problems or result is None:
+            report.append(_placeholder_record(name, problems, row.get("seconds") if row else None))
+        else:
+            report.append(dict(result["scenario"]))
+    failed = [item["name"] for item in report if item["status"] != "passed"]
+    failed += [f"全集之外的结果：{name}" for name in stray]
+    failed += [f"全集之外的执行单元：{unit_id}" for unit_id in stray_units]
+    return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc)
+
+
+def write_certification(output: Path, receipt: Mapping[str, Any]) -> Path:
+    """通过的认证写正式路径（write-once）；没通过的写带 UTC 时间后缀的旁路文件，正式路径保持不存在，修好后同一坐标
+    直接重跑（原来失败的认证也写正式路径，重跑被「文件已存在」挡住，驱动还会把它当成已有认证）。"""
+
+    output = Path(output).resolve(strict=False)
+    if receipt.get("status") == "passed":
+        target = output
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
+        target = output.with_name(f"{output.stem}.failed-{stamp}{output.suffix}")
+        index = 1
+        while target.exists():
+            index += 1
+            target = output.with_name(f"{output.stem}.failed-{stamp}-{index}{output.suffix}")
+    policy_certification._write_once(target, dict(receipt))
+    return target
 
 
 def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -874,12 +1127,26 @@ def record_reuse(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="A2.5：pre-A3 路径认证。")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    run = subparsers.add_parser("run", help="在 staging 内跑通全部路径场景并出具收据")
-    run.add_argument("--staging-root", type=Path, required=True, help="staging 目录树内的空目录")
+    run = subparsers.add_parser("run", help="在 staging 内串行跑通全部路径场景并出具收据（没通过只写旁路文件）")
+    run.add_argument("--staging-root", type=Path, required=True, help="staging 目录树内的认证根；已存在且非空时自动改用带时间后缀的新目录")
     run.add_argument("--deployment-receipt", type=Path, required=True)
     run.add_argument("--policy-activation", type=Path, required=True)
     run.add_argument("--campaign-run-rehearsal-receipt", type=Path)
     run.add_argument("--output", type=Path, required=True)
+    plan = subparsers.add_parser("plan", help="E2-03：生成统一调度执行器的命令单元清单（每个场景一条 run-scenario）")
+    plan.add_argument("--staging-root", type=Path, required=True, help="staging 目录树内的认证根；已存在且非空时自动改用带时间后缀的新目录")
+    plan.add_argument("--output", type=Path, required=True, help="清单写到这里（执行器 run-commands --manifest）")
+    single = subparsers.add_parser("run-scenario", help="E2-03：在本进程跑一个场景（执行器派发），写单场景结果")
+    single.add_argument("--name", required=True)
+    single.add_argument("--staging-root", type=Path, required=True)
+    single.add_argument("--result", type=Path, required=True)
+    issue = subparsers.add_parser("issue", help="E2-03：核对场景全集与网络计数后签发（没通过只写旁路文件）")
+    issue.add_argument("--staging-root", type=Path, required=True, help="plan 打印的实际认证根")
+    issue.add_argument("--executor-summary", type=Path, required=True, help="执行器 run-commands 的 summary.json")
+    issue.add_argument("--deployment-receipt", type=Path, required=True)
+    issue.add_argument("--policy-activation", type=Path, required=True)
+    issue.add_argument("--campaign-run-rehearsal-receipt", type=Path)
+    issue.add_argument("--output", type=Path, required=True)
     verify = subparsers.add_parser("verify", help="只读校验收据对当前工具是否有效")
     verify.add_argument("--certification", type=Path, required=True)
     reusable = subparsers.add_parser(
@@ -905,23 +1172,59 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        if arguments.action == "run":
-            receipt = run_certification(
-                arguments.staging_root,
-                deployment_receipt=arguments.deployment_receipt,
-                policy_activation=arguments.policy_activation,
-                campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
-            )
-            policy_certification._write_once(arguments.output.resolve(strict=False), receipt)
+        if arguments.action in ("run", "issue"):
+            if arguments.action == "run":
+                receipt = run_certification(
+                    arguments.staging_root,
+                    deployment_receipt=arguments.deployment_receipt,
+                    policy_activation=arguments.policy_activation,
+                    campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                )
+            else:
+                receipt = issue_certification(
+                    arguments.staging_root,
+                    executor_summary=arguments.executor_summary,
+                    deployment_receipt=arguments.deployment_receipt,
+                    policy_activation=arguments.policy_activation,
+                    campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                )
+            target = write_certification(arguments.output, receipt)
             summary = {
                 "status": receipt["status"],
                 "scenario_count": receipt["scenario_count"],
                 "failed_scenarios": receipt["failed_scenarios"],
                 "network_attempts": receipt["network_attempts"],
-                "output": str(arguments.output),
+                "staging_root": receipt["staging_root"],
+                "output": str(target),
             }
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
             return 0 if receipt["status"] == "passed" else 2
+        if arguments.action == "plan":
+            manifest = plan_scenario_units(arguments.staging_root)
+            policy_certification._write_once(arguments.output.resolve(strict=False), manifest)
+            print(json.dumps({"staging_root": manifest["staging_root"], "units": len(manifest["units"]),
+                              "manifest": str(arguments.output)}, ensure_ascii=False, sort_keys=True))
+            return 0
+        if arguments.action == "run-scenario":
+            # 执行器的诊断重跑（UNIT_EXECUTOR_KIND=diagnostic）用同一条命令：结果与临时目录另放，不覆盖正式执行。
+            diagnostic = os.environ.get("UNIT_EXECUTOR_KIND") == "diagnostic"
+            staging = Path(f"{arguments.staging_root}.diagnostic") if diagnostic else arguments.staging_root
+            result_path = arguments.result.with_name(arguments.result.stem + ".diagnostic.json") if diagnostic else arguments.result
+            result = run_single_scenario(arguments.name, staging)
+            result_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            temporary = result_path.with_name(f".{result_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(result, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            temporary.chmod(0o600)
+            try:
+                # 硬链接发布：读者看不到半写文件，且同一场景第二次上报直接失败（FileExistsError → 退出码 2，issue
+                # 判该场景异常退出），不会悄悄覆盖第一次的结果。
+                os.link(temporary, result_path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            record = result["scenario"]
+            print(json.dumps({"name": arguments.name, "status": record.get("status"), "network_attempts": result["network_attempts"],
+                              "seconds": record.get("seconds")}, ensure_ascii=False, sort_keys=True))
+            return 0 if record.get("status") == "passed" and result["network_attempts"] == 0 else 1
         if arguments.action == "find-reusable":
             found = find_reusable_certification(
                 deployment_receipt=arguments.deployment_receipt,
