@@ -69,6 +69,12 @@ type OpenAIImagesUpload struct {
 	Height      int
 }
 
+// OpenAIImageInputRef 是编辑请求 images[] 中的一项引用，ImageURL 与 FileID 恰好一项非空。
+type OpenAIImageInputRef struct {
+	ImageURL string
+	FileID   string
+}
+
 type OpenAIImagesRequest struct {
 	Endpoint           string
 	ContentType        string
@@ -94,11 +100,17 @@ type OpenAIImagesRequest struct {
 	HasNativeOptions   bool
 	RequiredCapability OpenAIImagesCapability
 	InputImageURLs     []string
-	MaskImageURL       string
-	Uploads            []OpenAIImagesUpload
-	MaskUpload         *OpenAIImagesUpload
-	Body               []byte
-	bodyHash           string
+	// InputImageFileIDs：images[] 中以 {"file_id": …} 引用的会话文件（较新官方客户端的 file-backed 图片）。
+	// 解析层只做语法校验，转发时只有 Codex 官方出口且当前 release 画像的 ImageGeneration 节允许才出站，其余路径
+	// 按原文案拒绝。图片内容不在网关，审核正文（ModerationBody）只含 image_url 与上传图片。
+	InputImageFileIDs []string
+	// InputImageRefs：images[] 的原始先后（含 image_url 与 file_id 两种引用），出站按原序还原混合引用。
+	InputImageRefs []OpenAIImageInputRef
+	MaskImageURL   string
+	Uploads        []OpenAIImagesUpload
+	MaskUpload     *OpenAIImagesUpload
+	Body           []byte
+	bodyHash       string
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -300,10 +312,16 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 			for _, item := range images.Array() {
 				if imageURL := strings.TrimSpace(item.Get("image_url").String()); imageURL != "" {
 					req.InputImageURLs = append(req.InputImageURLs, imageURL)
+					req.InputImageRefs = append(req.InputImageRefs, OpenAIImageInputRef{ImageURL: imageURL})
 					continue
 				}
-				if item.Get("file_id").Exists() {
-					return fmt.Errorf("images[].file_id is not supported (use images[].image_url instead)")
+				if fileID := item.Get("file_id"); fileID.Exists() {
+					value := strings.TrimSpace(fileID.String())
+					if fileID.Type != gjson.String || value == "" {
+						return fmt.Errorf("images[].file_id must be a non-empty string")
+					}
+					req.InputImageFileIDs = append(req.InputImageFileIDs, value)
+					req.InputImageRefs = append(req.InputImageRefs, OpenAIImageInputRef{FileID: value})
 				}
 			}
 		}
@@ -314,7 +332,7 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		if gjson.GetBytes(body, "mask.file_id").Exists() {
 			return fmt.Errorf("mask.file_id is not supported (use mask.image_url instead)")
 		}
-		if len(req.InputImageURLs) == 0 {
+		if len(req.InputImageURLs) == 0 && len(req.InputImageFileIDs) == 0 {
 			return fmt.Errorf("images[].image_url is required")
 		}
 	}
@@ -604,6 +622,11 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	// SPEC-EP-022：编辑 images[] 的 file_id 引用只在 Codex 官方出口、且当前 release 画像允许时出站，
+	// 由 forwardOpenAIImagesOAuth 按画像判定；API Key 透传等其余路径保持旧行为。
+	if len(parsed.InputImageFileIDs) > 0 && account.Type != AccountTypeOAuth && account.Type != AccountTypeSetupToken {
+		return nil, rejectOpenAIImagesFileIDReferences(c)
+	}
 	switch account.Type {
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
@@ -612,6 +635,21 @@ func (s *OpenAIGatewayService) ForwardImages(
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
 	}
+}
+
+// openAIImagesFileIDUnsupportedMessage 是不接受 file_id 引用的路径对客户端的拒绝文案（沿用原解析期文案）。
+const openAIImagesFileIDUnsupportedMessage = "images[].file_id is not supported (use images[].image_url instead)"
+
+// rejectOpenAIImagesFileIDReferences 以原解析期的 400 形态拒绝 file_id 引用：写出 invalid_request_error，并返回同一
+// 错误，处理器据此按用户错误收尾（不记作账号失败、不切号）。
+func rejectOpenAIImagesFileIDReferences(c *gin.Context) error {
+	rejection := &OpenAIImagesUpstreamError{
+		StatusCode: http.StatusBadRequest,
+		ErrorType:  "invalid_request_error",
+		Message:    openAIImagesFileIDUnsupportedMessage,
+	}
+	writeOpenAIImagesUpstreamErrorResponse(c, rejection)
+	return rejection
 }
 
 func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(

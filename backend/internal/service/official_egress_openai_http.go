@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"sort"
@@ -1019,6 +1020,9 @@ type officialOpenAIReasoningDefaults struct {
 	Summary         string
 	SupportsSummary bool
 	Known           bool
+	// NumericEffortAsInteger：当前 release 画像声明 ReasoningEffort 节（CustomNumericSerialization=u64_integer）时为
+	// true，能按 u64 解析的自定义档位以 JSON 整数发出；为 false 时一律发字符串（节缺省的旧版本行为）。
+	NumericEffortAsInteger bool
 }
 
 func officialOpenAIReasoningDefaultsFromContext(
@@ -1027,12 +1031,84 @@ func officialOpenAIReasoningDefaultsFromContext(
 	if egressContext == nil {
 		return officialOpenAIReasoningDefaults{}
 	}
+	section := officialCodexOptionalSectionsForMode(egressContext.profileMode).ReasoningEffort
 	return officialOpenAIReasoningDefaults{
-		Effort:          egressContext.defaultReasoningLevel,
-		Summary:         egressContext.defaultReasoningSummary,
-		SupportsSummary: egressContext.supportsReasoningSummary,
-		Known:           egressContext.reasoningDefaultsKnown,
+		Effort:                 egressContext.defaultReasoningLevel,
+		Summary:                egressContext.defaultReasoningSummary,
+		SupportsSummary:        egressContext.supportsReasoningSummary,
+		Known:                  egressContext.reasoningDefaultsKnown,
+		NumericEffortAsInteger: section != nil && section.CustomNumericSerialization == "u64_integer",
 	}
+}
+
+// normalizeOfficialOpenAIExplicitReasoningEffort 定型请求体显式给出的 reasoning.effort，返回出站取值与是否改动。
+//
+// 官方客户端的 reasoning.effort 来自配置档位：已知档位发字符串；模型清单之外的自定义档位
+// （ReasoningEffortConfig::Custom）在较新版本里按 u64 解析，成功时发 JSON 整数，失败时仍发字符串。入站可能是
+// 字符串（含数字字符串）或 JSON 整数（较新客户端的出站形态），两者按当前 release 画像统一定型：
+//   - integerMode（画像声明 ReasoningEffort 节）：能按 u64 解析的字符串与非负整数都发 JSON 整数；
+//   - 否则（旧版本画像）：整数按十进制字符串发出，与旧客户端对同一配置的形态一致。
+//
+// 负数、小数、超出 u64 的 JSON 数都不是官方客户端能产生的形态，失败关闭；空白字符串同样拒绝。
+// ultra 只用于本地配置，对 Responses wire 映射为 max（两种模式相同）。
+func normalizeOfficialOpenAIExplicitReasoningEffort(raw any, integerMode bool) (any, bool, error) {
+	invalid := errors.New("OpenAI official egress reasoning.effort must be a non-empty string or a non-negative integer")
+	switch value := raw.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil, false, invalid
+		}
+		if strings.EqualFold(strings.TrimSpace(value), "ultra") {
+			return "max", value != "max", nil
+		}
+		if integerMode {
+			if parsed, ok := parseOfficialCodexU64Effort(value); ok {
+				return json.Number(strconv.FormatUint(parsed, 10)), true, nil
+			}
+		}
+		return value, false, nil
+	case json.Number:
+		parsed, err := strconv.ParseUint(string(value), 10, 64)
+		if err != nil {
+			return nil, false, invalid
+		}
+		if integerMode {
+			canonical := json.Number(strconv.FormatUint(parsed, 10))
+			return canonical, canonical != value, nil
+		}
+		return strconv.FormatUint(parsed, 10), true, nil
+	case float64:
+		// 未启用 UseNumber 的解码路径：只接受可精确表示的非负整数。
+		if value < 0 || value != math.Trunc(value) || value > (1<<53) {
+			return nil, false, invalid
+		}
+		parsed := uint64(value)
+		if integerMode {
+			return json.Number(strconv.FormatUint(parsed, 10)), true, nil
+		}
+		return strconv.FormatUint(parsed, 10), true, nil
+	default:
+		return nil, false, invalid
+	}
+}
+
+// parseOfficialCodexU64Effort 按官方客户端 `str::parse::<u64>` 的语义解析自定义档位：可带一个前导 `+`，其后至少
+// 一位 ASCII 数字，允许前导零，拒绝空白、负号、小数与溢出。
+func parseOfficialCodexU64Effort(value string) (uint64, bool) {
+	digits := strings.TrimPrefix(value, "+")
+	if digits == "" {
+		return 0, false
+	}
+	for index := 0; index < len(digits); index++ {
+		if digits[index] < '0' || digits[index] > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func newOfficialOpenAITopLevelAllowSet(fields []string) map[string]struct{} {
@@ -1300,13 +1376,12 @@ func normalizeDerivedOfficialOpenAIReasoning(
 	}
 
 	if rawEffort, exists := reasoning["effort"]; exists {
-		effort, ok := rawEffort.(string)
-		if !ok || strings.TrimSpace(effort) == "" {
-			return false, errors.New("OpenAI official egress reasoning.effort must be a non-empty string")
+		effort, changed, err := normalizeOfficialOpenAIExplicitReasoningEffort(rawEffort, defaults.NumericEffortAsInteger)
+		if err != nil {
+			return false, err
 		}
-		// 当前 Release 的 Ultra 只用于本地配置，对 Responses wire 映射为 Max。
-		if strings.EqualFold(strings.TrimSpace(effort), "ultra") && effort != "max" {
-			reasoning["effort"] = "max"
+		if changed {
+			reasoning["effort"] = effort
 			modified = true
 		}
 	} else if effort := strings.TrimSpace(defaults.Effort); effort != "" {
