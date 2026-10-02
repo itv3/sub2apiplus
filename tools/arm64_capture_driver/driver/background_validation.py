@@ -63,6 +63,8 @@ HERE = Path(__file__).resolve().parent
 NICENESS = 10
 # 停下后台验证时给入口门禁与执行器的清理时间（执行器收到 SIGTERM 终止全部单元会话），超时再 SIGKILL 整组。
 STOP_GRACE_SECONDS = 60.0
+# 前台入口门禁（定向回归等）在跑时排队等测试树目录的锁，最多等这么久。
+WAIT_LOCK_SECONDS = 7200
 
 
 class ValidationError(RuntimeError):
@@ -232,8 +234,9 @@ def run(result: Path) -> int:
     payload = _read(path)
     if payload is None:
         raise ValidationError(f"后台验证结论文件不可读：{path}")
+    # 与前台入口门禁同一个测试树目录（单元规格与环境指纹里有测试树路径，目录不同记录就互相承接不了），前台在跑时排队等锁。
     argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "full-set-pass", "--require-deployed",
-            "--out", payload["out"]]
+            "--wait-lock", str(WAIT_LOCK_SECONDS), "--out", payload["out"]]
     for flag, key in (("--record-store", "record_store"), ("--work", "work")):
         if payload.get(key):
             argv += [flag, payload[key]]
@@ -311,7 +314,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--commit", required=True)
     p_start.add_argument("--profile", default=DEFAULT_PROFILE)
     p_start.add_argument("--record-store", type=Path, default=None)
-    p_start.add_argument("--work", type=Path, default=None, help="入口门禁的测试树与缓存目录（与前台入口门禁分开，避免并发锁）")
+    p_start.add_argument("--work", type=Path, default=None, help="入口门禁的测试树与缓存目录（缺省与前台入口门禁同一个，记录才能互相承接）")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")

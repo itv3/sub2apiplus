@@ -30,7 +30,7 @@ OUT=""; ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
-    --profile|--mode|--record-store|--work) shift 2 ;;
+    --profile|--mode|--record-store|--work|--wait-lock) shift 2 ;;
     --require-deployed) echo "require-deployed" >> "$FAKE_GATES_CALLS"; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac

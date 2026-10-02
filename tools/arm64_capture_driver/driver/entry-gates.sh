@@ -15,6 +15,7 @@
 # --with-gates（E4-01）：给任一组合补门禁项（pre-A3 除外），逗号分隔。
 # --require-deployed（E4-01）：任一组合都先核对数据根部署的就是本提交（含 pre-A3 的组合本来就核对）；后台验证用它把结论
 #   绑定到这次部署。
+# --wait-lock <秒>（E4-01）：同一工作目录已有入口门禁在跑时排队等，最多等这么久（缺省 0：直接拒绝并发）；后台验证用。
 # pre-A3（E3-02）：场景单元的命令只带场景名与固定的场景父目录 $D/staging/pre-a3-scenarios，可以承接；认证从本次运行的
 #   清单 executor/unit-manifest.json 与记录库组装（pre-a3-path-certification/v2），每个场景引用一条正式执行记录。
 # 隔离：测试树里的单元在私有挂载命名空间里遮住 /root/oauth-capture（与 lib.sh 的 isolated_run 同一做法），树外只读字节码
@@ -56,7 +57,7 @@ usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflig
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
 PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=full-set-pass; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
-WITH_GATES=""; REQUIRE_DEPLOYED=false
+WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -65,6 +66,7 @@ while [ "$#" -gt 0 ]; do
     --audit-reads) AUDIT_READS=true; shift ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
+    --wait-lock) WAIT_LOCK="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --policy-activation) POLICY_ACTIVATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-certification) PRE_A3_CERTIFICATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-mode) PRE_A3_SOURCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -80,6 +82,7 @@ if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 2; fi
 PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/frontend}"
 case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gates 是逗号分隔的门禁项：$WITH_GATES" >&2; exit 2; fi
+if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
@@ -101,13 +104,19 @@ on_error() {
 }
 trap 'on_error $LINENO' ERR
 mkdir -p "$WORK"; chmod 700 "$WORK"
-# 同一工作目录只允许一次入口门禁（共用测试树与缓存）：mkdir 原子锁，持有者已不在时回收陈旧锁。
+# 同一工作目录只允许一次入口门禁（共用测试树与缓存）：mkdir 原子锁，持有者已不在时回收陈旧锁。--wait-lock <秒>：持有者
+# 还活着时排队等（后台验证用，E4-01：它与前台入口门禁共用同一个测试树目录，单元规格与环境指纹才一致、记录才能互相承接）。
 LOCK="$WORK/.entry-gates.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
+LOCK_WAITED=0
+while ! mkdir "$LOCK" 2>/dev/null; do
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then echo "ENTRY_GATES_ABORTED：已有入口门禁在运行（PID ${HOLDER}），拒绝并发"; exit 3; fi
-  rm -rf "$LOCK"; mkdir "$LOCK"
-fi
+  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
+    if [ "$LOCK_WAITED" -lt "$WAIT_LOCK" ]; then sleep 10; LOCK_WAITED=$((LOCK_WAITED + 10)); continue; fi
+    echo "ENTRY_GATES_ABORTED：已有入口门禁在运行（PID ${HOLDER}），拒绝并发"; exit 3
+  fi
+  rm -rf "$LOCK"
+done
+if [ "$LOCK_WAITED" -gt 0 ]; then echo "等入口门禁工作目录的锁 ${LOCK_WAITED} 秒"; fi
 printf '%s\n' "$$" > "$LOCK/pid"
 trap 'rm -rf "$LOCK"' EXIT
 if [ -z "$OUT" ]; then
@@ -220,8 +229,12 @@ TS="$TREE/frontend/node_modules/typescript/lib/typescript.js"
 # 白名单环境（E3-01）：门禁清单生成与执行器只看见这份环境，单元继承的就是它，执行器把它整份算进环境指纹（只除去
 # 决定缓存位置的字节码前缀）。本轮参数文件导出的键不放行：测试树单元本就不该读它们（也就碰不到生产数据根坐标），
 # 放进来的话每换一次认证坐标环境指纹就变、什么都承接不了。
-EXEC_ENV=(env -i)
-for name in PATH HOME USER LOGNAME SHELL LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TZ TMPDIR \
+# 与调用方无关（E4-01 验收实测）：PATH 与语言用固定值，USER、LOGNAME、SHELL、LANGUAGE、LC_* 不放行。操作员 shell、修好接着跑、
+# 后台验证、入口空跑（env -i）几种入口的这些变量各不相同，lib.sh 每被 source 一次还会把 go 与 node 目录再往 PATH 前面加一遍；
+# 原来照搬调用方的值，同一棵测试树在不同入口下跑出的记录互相承接不了。
+EXEC_PATH=/usr/local/go/bin:/opt/node-v20/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EXEC_ENV=(env -i "PATH=$EXEC_PATH" LANG=C.UTF-8)
+for name in HOME TZ TMPDIR \
     http_proxy https_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
   if [ -n "${!name+x}" ]; then EXEC_ENV+=("$name=${!name}"); fi
 done
