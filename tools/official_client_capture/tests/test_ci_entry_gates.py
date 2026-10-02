@@ -291,6 +291,39 @@ def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped:
     return summary
 
 
+class EntryGatesPreA3InputsTests(unittest.TestCase):
+    def test_runner_module_level_test_imports_are_declared_for_every_scenario(self) -> None:
+        """场景运行器（pre-A3 认证模块）模块级导入的测试目录模块每个场景都会读（E3-04 读集审计实测），必须都在
+        PRE_A3_RUNNER_FIXTURES 里；运行器以后新增这类导入而忘了登记时这里失败。"""
+
+        import ast
+
+        runner = REPO_ROOT / "tools" / "official_client_capture" / "codex_upgrade_pre_a3_certification.py"
+        tree = ast.parse(runner.read_text(encoding="utf-8"))
+        imported = set()
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module == "tools.official_client_capture.tests":
+                imported.update(f"tools/official_client_capture/tests/{alias.name}.py" for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tools.official_client_capture.tests."):
+                imported.add(node.module.replace(".", "/") + ".py")
+        self.assertTrue(imported, "运行器应当在模块级导入了测试夹具（否则这条核对就没有意义了）")
+        self.assertEqual(imported, set(eg.PRE_A3_RUNNER_FIXTURES))
+        declared = eg.pre_a3_inputs("tools/official_client_capture/tests/test_x.py", [])
+        self.assertTrue(set(eg.PRE_A3_RUNNER_FIXTURES) <= {item["path"] for item in declared["files"]})
+
+    def test_data_root_probe_locations_are_resolved_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory).resolve()
+            entries = eg.pre_a3_data_root_inputs(data)
+            probe = [entry for entry in entries if (entry.get("detail") or {}).get("path") == str(data / "staging" / "upgrade-project-ledger")]
+            self.assertEqual(len(probe), 1, "项目总账的探测位置声明为数据根输入")
+            self.assertEqual(probe[0]["sha256"], "missing", "现在不存在：记为 missing，一旦出现输入摘要就变")
+            (data / "staging" / "upgrade-project-ledger").mkdir(parents=True)
+            (data / "staging" / "upgrade-project-ledger" / "plan.json").write_text("{}", encoding="utf-8")
+            again = [entry for entry in eg.pre_a3_data_root_inputs(data) if entry["name"] == probe[0]["name"]]
+            self.assertNotEqual(again[0]["sha256"], "missing")
+
+
 class EntryGatesPreA3QuotaTests(unittest.TestCase):
     def test_measured_scenarios_get_quota_from_cpu_share_and_the_critical_chain_keeps_a_core(self) -> None:
         self.assertEqual(eg.pre_a3_quota("vc-chain.vc1-recovery-chain"), (1.0, 548.0))

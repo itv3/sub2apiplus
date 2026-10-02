@@ -74,6 +74,21 @@ class CopyClosureTest(unittest.TestCase):
             self.assertTrue((tree / "tools" / "official_client_capture" / "codex_upgrade.py").is_file(), "受管树照常整份复制")
         with self.assertRaises(managed_tree_copy.ManagedTreeCopyError):
             managed_tree_copy.copy_managed_tree(Path(tempfile.gettempdir()) / "never-created", include_tests="closure")
+
+    def test_data_root_without_tools_ci_uses_the_executor_given_module(self) -> None:
+        """pre-A3 场景在数据根运行，没有 tools/ci：按执行器给的 UNIT_EXECUTOR_RECORDS_MODULE 加载同一份算法；没给就拒绝。"""
+
+        records = Path(managed_tree_copy.REPO_ROOT) / "tools" / "ci" / "unit_records.py"
+        module = managed_tree_copy.TOOL_ROOT / "tests" / "real_chains" / "test_codex_upgrade_stage_recovery.py"
+        with mock.patch.dict(sys.modules, {"tools.ci": None, "unit_records_for_tree_copy": None}):
+            sys.modules.pop("unit_records_for_tree_copy")
+            with mock.patch.dict(os.environ, {managed_tree_copy.RECORDS_MODULE_ENV: str(records)}):
+                files = managed_tree_copy._closure_files(module)
+            self.assertIn((managed_tree_copy.TOOL_ROOT / "tests" / "test_codex_upgrade.py").resolve(), files)
+            sys.modules.pop("unit_records_for_tree_copy", None)
+            with mock.patch.dict(os.environ, {managed_tree_copy.RECORDS_MODULE_ENV: ""}):
+                with self.assertRaisesRegex(managed_tree_copy.ManagedTreeCopyError, "UNIT_EXECUTOR_RECORDS_MODULE"):
+                    managed_tree_copy._closure_files(module)
         with self.assertRaises(managed_tree_copy.ManagedTreeCopyError):
             managed_tree_copy.copy_managed_tree(Path(tempfile.gettempdir()) / "never-created", include_tests="helpers")
 

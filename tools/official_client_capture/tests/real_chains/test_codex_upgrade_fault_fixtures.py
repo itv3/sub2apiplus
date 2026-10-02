@@ -595,8 +595,7 @@ class RuntimeEgressKernelTests(unittest.TestCase):
         self.assertFalse(self.request("app"), "首包没有租期必须被拒绝")
         self.worker = threading.Thread(target=self.renew_loop, daemon=True)
         self.worker.start()
-        time.sleep(0.6)
-        if not self.request("app"):
+        if not self.eventually(lambda: self.request("app")):
             diagnostics = {"errors": self.errors}
             for role in ("origin", "exit"):
                 tables = json.loads(self.inside(role, "nft", "-j", "list", "ruleset"))["nftables"]
@@ -683,6 +682,18 @@ for line in sys.stdin:
         self.processes.append(process)
         return process
 
+    def eventually(self, predicate, timeout=15.0):
+        """轮询到期望状态或超时。续租循环 0.15 秒一轮、每轮在命名空间里起 nft 子进程：读集审计（strace）或慢机器上
+        起子进程慢得多，原来的固定等待（0.35 秒、0.6 秒）不够（E3-04 ARM64 审计运行实测在第一处就超了）。"""
+
+        deadline = time.monotonic() + timeout
+        while True:
+            if predicate():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
     def line(self, process):
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
@@ -743,13 +754,11 @@ for line in sys.stdin:
         held = self.launch("app", [sys.executable, "-u", str(self.client_script)], self.group / "app")
         self.assertTrue(self.request("app", held=held))
         self.states["sub2apiplus"] = "blocked"
-        time.sleep(.35)
-        self.assertFalse(self.request("app", held=held))
+        self.assertTrue(self.eventually(lambda: not self.request("app", held=held)), "单容器阻断后已建立的连接应停止")
         self.assertFalse(self.request("app"))
         self.assertTrue(self.request("capture"))
         self.states["sub2apiplus"] = "compliant"
-        time.sleep(.35)
-        self.assertTrue(self.request("app"))
+        self.assertTrue(self.eventually(lambda: self.request("app")), "恢复合规后应重新放行")
         # 附加网卡、别名地址与 IPv6 都没有隐含放行。
         self.edge("app", "eth1", "172.31.200.22/24", "origin", "v_extra", "br0")
         self.inside("app", "ip", "addr", "add", "172.31.200.23/24", "dev", "eth0")
@@ -779,20 +788,19 @@ for line in sys.stdin:
         self.assertNotEqual(invalid.returncode, 0)
         self.assertTrue(self.request("app"))
         self.renew_exit = False
+        # 租期 3 秒：至少等满，再给正在进行的那一轮续租留余量（它可能在置位后才写完，租期从那时起算）。
         time.sleep(3.2)
-        self.assertFalse(self.request("app"))
+        self.assertTrue(self.eventually(lambda: not self.request("app")), "出口端停止续租后租期应自行闭锁")
         self.assertFalse(self.request("capture"))
         self.renew_exit = True
-        time.sleep(.35)
-        self.assertTrue(self.request("app"))
+        self.assertTrue(self.eventually(lambda: self.request("app")), "出口端恢复续租后应重新放行")
         self.renew_origin = False
         time.sleep(3.2)
-        self.assertFalse(self.request("app"))
+        self.assertTrue(self.eventually(lambda: not self.request("app")), "源端停止续租后租期应自行闭锁")
         self.assertFalse(self.request("capture"))
         self.assertTrue(self.request("proxy", "172.31.200.4", 5432), "公共守护停止不应解除保护或切断已登记的无关容器")
         self.renew_origin = True
-        time.sleep(.35)
-        self.assertTrue(self.request("capture"))
+        self.assertTrue(self.eventually(lambda: self.request("capture")), "源端恢复续租后应重新放行")
         # 新 cgroup 模拟容器重建：在重新登记前，新进程第一包即被拒绝。
         recreated = self.group / "recreated"
         recreated.mkdir()

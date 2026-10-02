@@ -209,16 +209,20 @@
 * 用途：承接（E3-01）与步骤失效判定（E2-05）都靠声明的输入范围，漏声明会把该重跑的判成可以承接。审计让每个单元真跑一遍，
   核对实际读取都在声明里。只在重新执行全集时带：`entry-gates.sh --mode re-execute --audit-reads`，或编排器
   `--reexecute-gates --audit-reads`（升级开工的入口空跑、E4-03 验收各一次）。要求采集主机有 strace（ARM64 是 6.8）。
-* 做法：执行器把每个正式执行的单元包在 `strace -f -qq --seccomp-bpf -y -e trace=%file,%process,getdents64` 下（诊断执行
-  不包），轨迹经 `-o '|…'` 管道交给 `read_audit.py filter`，只留测试树与数据根下的路径，写 `executor/audit/<单元>.trace.json`；
-  单元结束后按它本次的输入明细核对。不改单元规格、不改执行记录：审计跑出来的记录照常可承接。
-* 核对口径：范围项、闭包文件、声明的单个文件、HEAD（读 `.git`）、已算明细里的绝对路径（冻结台账目录、录制数据的全部
-  根目录）都算覆盖；声明内容的上级目录只看元数据；列举目录只记数（导入系统会列举 sys.path 上的目录，真正依赖目录内容
-  的代码都会接着读文件）；字节码缓存不算。测试树单元读到数据根一律报出；pre-A3 场景在数据根运行，与仓库同布局的部分
-  按仓库相对路径核对，场景自己的临时根 `staging/pre-a3-scenarios/` 豁免（`DATA_ROOT_EXEMPT`，新增要写原因）。只读 HEAD
-  提交号的模块（`HEAD_ID_ONLY_READERS`）读 `.git` 只许 HEAD、refs、配置一类，读到对象库照样报出。
+* 做法：执行器把每个正式执行的单元包在 `strace -f -qq --seccomp-bpf -y -e verbose=none -e signal=none
+  -e trace=%file,clone,clone3,fork,vfork` 下（诊断执行不包），输出先经 `grep -E` 预筛（只留测试树、数据根下的路径与
+  派生、execve、chdir 行），再交给 `read_audit.py filter`，写 `executor/audit/<单元>.trace.json`；单元结束后按它本次的
+  输入明细核对。声明了整个仓库的单元（后端、前端、lint、egress 子检查、部署脚本）不包 strace：它们对仓库不可能有
+  未声明读取。不改单元规格、不改执行记录：审计跑出来的记录照常可承接。
+* 核对口径：只判读内容、执行、写和探测不存在的路径；stat 成功、打开或列举目录只算元数据、不判（工具身份计算一类遍历会
+  stat 树里每个文件再按名字排除）；导入系统试探的 `.so` 扩展模块变体与字节码缓存不看。覆盖＝范围项、闭包文件（含
+  `unit_records.EXTRA_TEST_READS` 补登的）、声明的单个文件、HEAD（读 `.git`）、已算明细里的绝对路径（冻结台账目录、
+  录制数据全部根目录、项目总账的探测位置）；只读 HEAD 提交号的模块（`HEAD_ID_ONLY_READERS`）读 `.git` 只许 HEAD、refs、
+  配置一类。测试树单元读到数据根一律报出；pre-A3 场景在数据根运行，与仓库同布局的部分按仓库相对路径核对，其余按
+  豁免表 `DATA_ROOT_EXEMPT`／`DATA_ROOT_EXEMPT_PATTERNS`（场景临时根、git 仓库发现、命名空间包标记、编译器与 unittest
+  的试探，每条写明原因）。
 * 结论：有未声明读取的单元写进汇总与 `executor/audit/read-audit.json`（仓库或数据根相对路径、读取方式、样例系统调用、
-  补声明的建议），整次运行判失败；门禁项结论不变。已知局限：只列目录、不读文件的依赖看不到。
+  补声明的建议），整次运行判失败；门禁项结论不变。已知局限：只看元数据、不读内容的依赖（只列目录或只 stat）看不到。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 

@@ -963,7 +963,15 @@ class ReadAuditor:
         safe = unit.unit_id.replace("#", "-").replace("!", "-").replace("/", "-").replace(":", "-")
         return self.dir / f"{safe}.trace.json"
 
+    def skipped(self, unit: Unit) -> bool:
+        """声明了整个仓库的单元不审计（见 read_audit.declares_whole_repo）。"""
+
+        current = self.currents.get(unit.unit_id)
+        return current is not None and self.module.declares_whole_repo(current.inputs)
+
     def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
+        if self.skipped(unit):
+            return argv
         roots = [self.repo_root] + ([self.data_root] if self.data_root else [])
         trace = self.trace_path(unit)
         with contextlib.suppress(FileNotFoundError):
@@ -973,6 +981,10 @@ class ReadAuditor:
     def collect(self, unit: Unit) -> dict[str, Any]:
         current = self.currents.get(unit.unit_id)
         inputs = current.inputs if current is not None else None
+        if self.skipped(unit):
+            result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": []}
+            self.results[unit.unit_id] = result
+            return result
         try:
             document = self.module.load_trace(self.trace_path(unit))
         except self.module.AuditError as error:
@@ -997,12 +1009,14 @@ class ReadAuditor:
 
         flagged = sorted(unit_id for unit_id, result in self.results.items() if result.get("undeclared_count"))
         total = sum(int(result.get("undeclared_count") or 0) for result in self.results.values())
+        skipped = sorted(unit_id for unit_id, result in self.results.items() if result.get("skipped"))
         path = self.dir / "read-audit.json"
         _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
-                           "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT), "units": self.results,
-                           "units_with_findings": flagged, "undeclared_total": total})
-        return {"enabled": True, "report": str(path), "units": len(self.results), "units_with_findings": flagged[:50],
-                "undeclared_total": total, "status": "passed" if not total else "failed"}
+                           "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
+                           "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
+                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped})
+        return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
+                "units_with_findings": flagged[:50], "undeclared_total": total, "status": "passed" if not total else "failed"}
 
 
 def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
@@ -1118,6 +1132,9 @@ class Scheduler:
             **dict(unit.env),
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
+            # 同目录的 unit_records.py：按闭包复制受管树的测试辅助（managed_tree_copy）在数据根里没有 tools/ci，靠它找到与
+            # 输入声明同一份的闭包算法（E3-04）。UNIT_EXECUTOR_ 开头的变量不进环境指纹，也不在单元规格里。
+            "UNIT_EXECUTOR_RECORDS_MODULE": str(Path(__file__).resolve().parent / "unit_records.py"),
             # 本调度器的状态目录：单元里再启动调度器时，用的若正是这个目录就是嵌套（会卡在同一把锁上），直接拒绝。
             "UNIT_EXECUTOR_PARENT_STATE_DIR": str(self.state_dir.resolve()),
             # 与 make 目标一致禁写字节码：绕过 make 直接运行（如只重跑一部分模块）时，测试也不会在树里留下 __pycache__
@@ -1715,7 +1732,8 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
     audit = summary.get("read_audit") or {}
     if audit:
         verdict = "通过" if audit["status"] == "passed" else f"不通过：{len(audit['units_with_findings'])} 个单元有未声明读取 {audit['undeclared_total']} 处"
-        print(f"读集审计（{audit['units']} 个单元）：{verdict}；明细 {audit['report']}", file=sys.stderr)
+        print(f"读集审计（{audit['units']} 个单元，声明整个仓库不审计的 {audit.get('skipped_whole_repo', 0)} 个）：{verdict}；明细 {audit['report']}",
+              file=sys.stderr)
         for unit_id in audit["units_with_findings"][:10]:
             print(f"  未声明读取：{unit_id}", file=sys.stderr)
     passed = sum(1 for gate in summary["gates"] if gate["status"] == "passed")

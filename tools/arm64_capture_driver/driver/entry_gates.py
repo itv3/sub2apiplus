@@ -200,6 +200,13 @@ PRE_A3_MEMORY_MB = 768
 PRE_A3_NOT_INHERITABLE = "pre-A3 场景清单是 E2-03 的旧形式（命令带每次新建的认证根）：承接不了，改用认证模块 plan --staging-parent（E3-02）"
 # pre-A3 场景读的部署脚本副本（测试树与数据根的这一份由入口门禁的部署一致性核对保证相同）。
 PRE_A3_DEPLOY_SCRIPT = "tools/arm64_supervised_deploy.py"
+# 场景运行器（pre-A3 认证模块 run-scenario）在模块级导入的测试目录夹具：每个场景都会读，不一定在场景测试模块的闭包里
+# （E3-04 读集审计实测；测试核对运行器的模块级测试导入都在这里）。
+PRE_A3_RUNNER_FIXTURES = ("tools/official_client_capture/tests/project_ledger_fixture.py",)
+# 数据根里场景会探测的位置：项目总账按 Campaign 目录往上最多六层找 upgrade-project-ledger，场景的临时根在
+# staging/pre-a3-scenarios 下，会探到 staging/upgrade-project-ledger。那里有总账时场景行为会变，所以声明为输入（现在
+# 不存在，记为 missing；一旦出现，输入摘要就变、场景重跑）。E3-04 读集审计实测。
+PRE_A3_DATA_ROOT_PROBES = ("{D}/staging/upgrade-project-ledger",)
 
 
 def pre_a3_quota(name: str) -> tuple[float, float | None]:
@@ -377,24 +384,27 @@ def historical_source_input(root: str | None) -> dict[str, Any]:
 
 def pre_a3_data_root_inputs(data_root: Path) -> list[dict[str, Any]]:
     """pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容（E2-05 的 pre-A3 输入里的三项）：冻结台账目录、
-    录制回放数据、alpine 镜像。门禁清单生成时在数据根算好，作为已算明细（``resolved``）带给每个场景单元。"""
+    录制回放数据、alpine 镜像；另加场景会探测的数据根位置（``PRE_A3_DATA_ROOT_PROBES``，E3-04）。门禁清单生成时在数据根
+    算好，作为已算明细（``resolved``）带给每个场景单元。"""
 
     steps = _entry_steps_module()
     ctx = steps.Context(params={"D": str(Path(data_root).resolve())}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
-    items = (steps.MAINTENANCE, steps.Input("environment", "recorded"), steps.Input("environment", "image_ref", "alpine:3.21"))
+    items = (steps.MAINTENANCE, steps.Input("environment", "recorded"), steps.Input("environment", "image_ref", "alpine:3.21"),
+             *(steps.Input("environment", "tree", probe, "pycache") for probe in PRE_A3_DATA_ROOT_PROBES))
     return [steps.resolve(item, ctx) for item in items]
 
 
 def pre_a3_inputs(test_file: str, data_root_inputs: list[dict[str, Any]] | None) -> dict[str, Any]:
     """pre-A3 场景单元的输入声明（E3-02）：按 E2-05 的 pre-A3 输入范围，测试按场景收窄。
 
-    受管树（不含测试）、夹具、文档（两份指南在 docs/ 下）、部署脚本副本、场景测试模块的静态依赖闭包（执行器展开），
-    加数据根算好的三项。前几样按测试树内容算：入口门禁跑 pre-A3 之前已核对数据根部署的受管树、指南与部署脚本就是
+    受管树（不含测试）、夹具、文档（两份指南在 docs/ 下）、部署脚本副本、场景运行器模块级导入的测试夹具
+    （``PRE_A3_RUNNER_FIXTURES``）、场景测试模块的静态依赖闭包（执行器展开），加数据根算好的几项。前几样按测试树内容算：入口门禁跑 pre-A3 之前已核对数据根部署的受管树、指南与部署脚本就是
     测试树这一份。不含 HEAD 与仓库其余部分：场景在数据根运行，读不到 git，也没有后端、前端。"""
 
     ranges = _unit_records_module().standard_ranges(MANAGED_TREE)
     return {"ranges": [ranges["managed"], ranges["tests-fixtures"], ranges["docs"]],
-            "files": [{"category": "managed", "path": PRE_A3_DEPLOY_SCRIPT}],
+            "files": [{"category": "managed", "path": PRE_A3_DEPLOY_SCRIPT},
+                      *({"category": "tests", "path": fixture} for fixture in PRE_A3_RUNNER_FIXTURES)],
             "test_modules": [test_file], "resolved": list(data_root_inputs or [])}
 
 

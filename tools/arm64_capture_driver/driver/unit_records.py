@@ -278,6 +278,18 @@ GIT_READERS: dict[str, str] = {
     "test_claude_fw_g_acceptance": "经 claude_fw_g_acceptance 对真实仓库 ls-tree 历史提交",
     "test_codex_01491_terminal_state": "经 tools/check_ledger_completeness 对真实仓库 git log、git show",
 }
+# 读集审计（E3-04）实测、静态闭包漏掉的测试目录读取：模块名 → {测试目录相对路径: 原因}。来源都是受管模块之间的函数内
+# 导入（静态闭包按设计不追，见 TestDependencies 的说明）：被测代码运行时延迟导入别的受管模块，后者在模块级导入测试目录
+# 里的夹具。只登记审计实测读到的，以后再漏的由每次升级开工的入口空跑（带审计）报出来再补。
+EXTRA_TEST_READS: dict[str, dict[str, str]] = {
+    "test_codex_upgrade_campaign_run_rehearsal_receipt": {
+        "project_ledger_fixture.py": "被测模块在函数内导入 codex_upgrade_vc0_closeout，其模块级导入链经 pre-A3 认证模块到这个夹具"
+                                     "（10-02 读集审计实测读到）",
+    },
+    "test_codex_upgrade_main_module": {
+        "project_ledger_fixture.py": "子进程以主程序运行编排器，延迟导入 vc0_closeout 等模块，导入链同上（10-02 读集审计实测读到）",
+    },
+}
 # 只读 HEAD 提交号、结论不随提交变的模块（10-02 老板定：按实跑核查的证据收窄）：它们只经
 # codex_upgrade._tool_identity()（默认 include_git）执行 git rev-parse HEAD，提交号只写进同一次运行里生成、比对的工具
 # 身份与收据；测试夹具里的提交号全是合成值，没有断言真实 HEAD。所以不加 HEAD 输入——否则每次提交这批最重的模块
@@ -441,12 +453,15 @@ class TestDependencies:
 
 
 def _closure_entries(repo: RepoIndex, deps: TestDependencies, module_file: Path, *, git: bool) -> list[dict[str, Any]]:
-    """测试模块的闭包输入：闭包里的测试文件与 ``tests/__init__.py``；碰到真实链另加整个 helper 与真实链目录；整目录
-    读取的另加整个测试目录；``git`` 为真时读 git 历史的另加 HEAD。"""
+    """测试模块的闭包输入：闭包里的测试文件、读集审计实测补登的文件（``EXTRA_TEST_READS``）与 ``tests/__init__.py``；
+    碰到真实链另加整个 helper 与真实链目录；整目录读取的另加整个测试目录；``git`` 为真时读 git 历史的另加 HEAD。"""
 
     ranges = standard_ranges(repo.relative(deps.occ))
     entries: list[dict[str, Any]] = []
     tests = deps.closure(module_file)
+    # 读集审计实测、静态闭包漏掉的读取（EXTRA_TEST_READS）。
+    tests.extend(deps.tests_dir / relative for relative in EXTRA_TEST_READS.get(Path(module_file).stem, {})
+                 if (deps.tests_dir / relative).is_file())
     init = deps.tests_dir / "__init__.py"
     if init.exists():
         tests.append(init)

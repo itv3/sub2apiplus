@@ -64,11 +64,11 @@ class ReadAuditParserTests(unittest.TestCase):
         document = ra.filter_stream(PROBE_LINES.splitlines(True), [R])
         accesses = {path.replace(R, "R"): kinds for path, kinds in document["accesses"]}
         self.assertEqual(accesses, {
-            "R/pkg": ["probe"],                  # chdir("pkg")：按进程最近的工作目录还原
+            "R/pkg": ["dir"],                    # chdir("pkg")：按进程最近的工作目录还原，只算目录元数据
             "R/pkg/a.json": ["write"], "R/pkg/a.tmp": ["write"],  # renameat2 两个路径都记
-            "R/pkg/nope.txt": ["probe"],         # ENOENT 探测照样记
+            "R/pkg/nope.txt": ["missing"],       # ENOENT：探测不存在的路径
             "R/pkg/out/中.txt": ["write"],       # 八进制转义还原成中文
-            "R/pkg/sub": ["list", "probe"],      # stat 与 getdents64
+            "R/pkg/sub": ["list", "stat"],       # stat 成功与 getdents64：元数据
             "R/pkg/sub/mod.py": ["read"],        # 绝对路径、chdir 后的相对路径、子进程的读取合并
         })
         self.assertNotIn("R/pkg/sub/__pycache__/mod.cpython-312.pyc", accesses, "字节码缓存不是输入")
@@ -80,7 +80,10 @@ class ReadAuditParserTests(unittest.TestCase):
         self.assertEqual(ra.unescape('a\\"b\\\\c\\n\\x41\\101'), 'a"b\\c\nAA')
         parser = ra.TraceParser()
         parser.feed('7 openat(AT_FDCWD</r>, "x) = 3", O_RDONLY) = -1 ENOENT (No such file or directory)\n')
-        self.assertEqual(parser.accesses, {"/r/x) = 3": {"probe"}}, "参数里像返回值的字样不影响判定")
+        self.assertEqual(parser.accesses, {"/r/x) = 3": {"missing"}}, "参数里像返回值的字样不影响判定")
+        parser.feed('7 openat(AT_FDCWD</r>, "d", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</r/d>\n')
+        parser.feed('7 newfstatat(AT_FDCWD</r>, "s", 0xffff, 0) = -1 EACCES (Permission denied)\n')
+        self.assertEqual((parser.accesses["/r/d"], parser.accesses["/r/s"]), ({"dir"}, {"stat"}), "打开目录与无权限只算元数据")
 
     def test_driver_carries_an_identical_copy(self) -> None:
         """驱动随附一份（执行器在 ARM64 上从驱动目录运行，按路径加载同目录的 read_audit.py）。"""
@@ -93,11 +96,44 @@ class ReadAuditParserTests(unittest.TestCase):
         argv = ra.strace_argv(["python3", "-c", "pass"], output=Path("/out/u.trace.json"), roots=["/repo", "/data"], python="/usr/bin/python3")
         self.assertEqual(argv[:len(ra.STRACE_OPTIONS) + 1], ["strace", *ra.STRACE_OPTIONS])
         pipe = argv[argv.index("-o") + 1]
-        self.assertTrue(pipe.startswith("|/usr/bin/python3 -B "))
+        self.assertTrue(pipe.startswith("|grep --line-buffered -E '"), "先经 grep 预筛")
+        self.assertIn("' | /usr/bin/python3 -B ", pipe)
         self.assertIn("filter --output /out/u.trace.json --root /repo --root /data", pipe)
         self.assertEqual(argv[argv.index("--") + 1:], ["python3", "-c", "pass"])
         with self.assertRaisesRegex(ra.AuditError, "空白"):
             ra.strace_argv(["true"], output=Path("/out dir/u.json"), roots=["/repo"])
+
+
+class ReadAuditPrefilterTests(unittest.TestCase):
+    def test_prefilter_keeps_root_paths_relative_paths_and_process_lines_only(self) -> None:
+        pattern = ra.prefilter_pattern(["/repo", "/data"])
+        lines = {
+            '1 openat(AT_FDCWD</repo>, "/usr/lib/python3.12/json/__init__.py", O_RDONLY) = 3</usr/lib/x>': False,
+            '1 openat(AT_FDCWD</repo>, "/repo/tools/a.py", O_RDONLY) = 3</repo/tools/a.py>': True,
+            '1 openat(AT_FDCWD</repo>, "tools/b.py", O_RDONLY <unfinished ...>': True,
+            '1 openat(AT_FDCWD</tmp>, "c.py", O_RDONLY) = 3</tmp/c.py>': False,
+            '1 newfstatat(AT_FDCWD</repo>, "/repoX/y", 0x1, 0) = -1 ENOENT (No such file or directory)': False,
+            '1 newfstatat(AT_FDCWD</repo>, "/repo", 0x1, 0) = 0': True,
+            '1 openat(AT_FDCWD</>, "/data/control/x", O_RDONLY) = 3</data/control/x>': True,
+            '1 execve("/usr/bin/git", ["git"], 0x1 /* 3 vars */) = 0': True,
+            '1 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|SIGCHLD) = 7': True,
+            '1 <... clone resumed>) = 7': True,
+            '1 chdir("pkg") = 0': True,
+        }
+        grep = shutil.which("grep")
+        if grep is None:
+            self.skipTest("没有 grep")
+        kept = set(subprocess.run([grep, "-E", pattern], input="\n".join(lines) + "\n", capture_output=True, text=True).stdout.splitlines())
+        self.assertEqual({line for line in lines if line in kept}, {line for line, keep in lines.items() if keep})
+
+    def test_whole_repo_declarations_are_not_audited(self) -> None:
+        occ = "tools/official_client_capture/"
+        standard = [_range("repo:managed", [occ], [occ + "tests/"]), _range("repo:tests", [occ + "tests/"]), _range("repo:docs", ["docs/"]),
+                    _range("repo:rest", [""], [occ, "docs/"])]
+        self.assertTrue(ra.declares_whole_repo(standard))
+        self.assertTrue(ra.declares_whole_repo([_range("repo:all", [""])]))
+        self.assertFalse(ra.declares_whole_repo(standard[:3]))
+        self.assertFalse(ra.declares_whole_repo([_range("repo:rest", [""], ["tools/"])]))
 
 
 class ReadAuditCoverageTests(unittest.TestCase):
@@ -133,17 +169,23 @@ class ReadAuditCoverageTests(unittest.TestCase):
             ["/repo/tools/official_client_capture/tests/test_alpha.py", ["read"]],
             ["/repo/tools/official_client_capture/tests/test_beta.py", ["read"]],
             ["/repo/tools/official_client_capture/tests", ["list"]],
-            ["/repo/backend/main.go", ["probe", "read"]],
+            ["/repo/tools/official_client_capture/tests/test_gamma.py", ["stat"]],
+            ["/repo/tools/official_client_capture/tests/__init__.abi3.so", ["missing"]],
+            ["/repo/tools/official_client_capture/tests/fixtures/new.json", ["missing"]],
+            ["/repo/tools/official_client_capture/tests/test_delta.py", ["missing"]],
+            ["/repo/backend/main.go", ["read", "stat"]],
             ["/data/control/deploy.json", ["read"]],
             ["/data/docs/egress/maintenance/a.json", ["read"]],
         ]}
         result = ra.audit_reads(document, self.INPUTS, repo_root="/repo", data_root="/data")
         self.assertEqual([(item["root"], item["path"], item["kinds"]) for item in result["undeclared"]], [
             ("data", "control/deploy.json", ["read"]),
-            ("repo", "backend/main.go", ["probe", "read"]),
+            ("repo", "backend/main.go", ["read"]),
             ("repo", "tools/official_client_capture/tests/test_beta.py", ["read"]),
-        ])
-        self.assertEqual((result["undeclared_count"], result["listed"], result["repo_paths"], result["data_paths"]), (3, 1, 3, 2))
+            ("repo", "tools/official_client_capture/tests/test_delta.py", ["missing"]),
+        ], "只 stat 的 test_gamma 不报；夹具目录里探测不存在的文件已声明；.so 变体是导入系统的试探")
+        self.assertEqual((result["undeclared_count"], result["metadata_only"], result["import_probes"], result["repo_paths"], result["data_paths"]),
+                         (4, 2, 1, 5, 2))
         self.assertIn("WHOLE_TESTS_READERS", result["undeclared"][2]["suggestion"])
         self.assertEqual(result["undeclared"][1]["sample"], "openat(...main.go...)")
 
@@ -156,6 +198,15 @@ class ReadAuditCoverageTests(unittest.TestCase):
         ]}
         inside = ra.audit_reads(document, self.INPUTS, repo_root="/repo", data_root="/data", in_data_root=True)
         self.assertEqual([item["path"] for item in inside["undeclared"]], ["staging/other/x.json"])
+        noise = {"schema_version": ra.TRACE_SCHEMA, "lines": 6, "samples": {}, "accesses": [
+            ["/data/.git", ["missing"]], ["/data/HEAD", ["missing"]], ["/data/staging/.git/HEAD", ["missing"]], ["/data/-lbpf", ["missing"]],
+            ["/data/tools/__init__.py", ["missing"]],
+            ["/data/tools.official_client_capture.tests.real_chains.test_x.Chain._exercise", ["missing"]],
+            ["/data/control/receipt.json", ["missing"]],
+        ]}
+        flagged = ra.audit_reads(noise, self.INPUTS, repo_root="/repo", data_root="/data", in_data_root=True)
+        self.assertEqual([item["path"] for item in flagged["undeclared"]], ["control/receipt.json"],
+                         "git 仓库发现、命名空间包标记、编译器试探与 unittest 试探豁免；探测生产控制目录照样报出")
         outside = ra.audit_reads(document, self.INPUTS, repo_root="/repo", data_root="/data", in_data_root=False)
         self.assertEqual(outside["undeclared_count"], 4, "测试树单元读到数据根一律报出")
 
@@ -232,21 +283,23 @@ class ReadAuditExecutorTests(unittest.TestCase):
             repo = self._repo(root)
             tests = repo / "tools" / "official_client_capture" / "tests"
             reads = {
-                "cmd:a": [str(repo / "data" / "a.txt"), str(repo / "data" / "b.txt")],
-                "cmd:all": [str(repo / "data" / "b.txt"), str(root / "data-root" / "control" / "x.json")],
+                "cmd:a": [str(repo / "data" / "a.txt"), str(repo / "data" / "b.txt"), str(root / "data-root" / "control" / "x.json")],
+                "cmd:all": [str(repo / "data" / "b.txt"), str(root / "data-root" / "control" / "y.json")],
                 "test_alpha": [str(tests / "test_alpha.py"), str(tests / "helper_unused.py"), str(repo / "data" / "a.txt")],
             }
             code, summary, stderr = self._run(root, repo, reads)
             self.assertEqual(code, 1, stderr[-2000:])
             audit = summary["read_audit"]
-            self.assertEqual((audit["status"], audit["units"], audit["units_with_findings"]), ("failed", 3, ["cmd:a", "cmd:all", "test_alpha"]))
+            self.assertEqual((audit["status"], audit["units"], audit["skipped_whole_repo"], audit["units_with_findings"]),
+                             ("failed", 2, 1, ["cmd:a", "test_alpha"]), "声明整个仓库的 cmd:all 不审计")
             report = json.loads(Path(audit["report"]).read_text(encoding="utf-8"))
             paths = {unit_id: [(item["root"], item["path"]) for item in result["undeclared"]] for unit_id, result in report["units"].items()}
-            self.assertEqual(paths["cmd:a"], [("repo", "data/b.txt")], "只声明了 a.txt")
-            self.assertEqual(paths["cmd:all"], [("data", "control/x.json")], "整个仓库都声明了，但数据根一律报出")
+            self.assertEqual(paths["cmd:a"], [("data", "control/x.json"), ("repo", "data/b.txt")], "只声明了 a.txt；读到数据根一律报出")
+            self.assertEqual(report["units"]["cmd:all"]["skipped"], "输入声明了整个仓库，不审计")
+            self.assertEqual(report["skipped_whole_repo"], ["cmd:all"])
             self.assertEqual(paths["test_alpha"], [("repo", "tools/official_client_capture/tests/helper_unused.py")],
                              "测试单元的闭包只有自己；data/a.txt 在其余部分范围里")
-            self.assertIn("读集审计（3 个单元）：不通过", stderr)
+            self.assertIn("读集审计（2 个单元，声明整个仓库不审计的 1 个）：不通过", stderr)
             self.assertTrue(all(gate["status"] == "passed" for gate in summary["gates"]), "审计不改门禁项结论")
             self.assertEqual(summary["unit_manifest"]["self_check"], "passed", "审计不改执行记录，清单自检照常")
 
@@ -291,7 +344,7 @@ class ReadAuditRealStraceTests(unittest.TestCase):
             subprocess.run(argv, cwd=root, check=True, timeout=120)
             accesses = dict((path, kinds) for path, kinds in ra.load_trace(output)["accesses"])
             self.assertIn("read", accesses[str(root / "pkg" / "mod.py")])
-            self.assertEqual(accesses[str(root / "pkg" / "nope.txt")], ["probe"])
+            self.assertEqual(accesses[str(root / "pkg" / "nope.txt")], ["missing"])
 
 
 if __name__ == "__main__":

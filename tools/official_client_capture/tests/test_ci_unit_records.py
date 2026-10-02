@@ -165,6 +165,9 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
                                     "file:pkg/tests/__init__.py"})
             with unittest.mock.patch.dict(ur.GIT_READERS, {"test_leaf": "示例：读真实仓库的提交历史"}):
                 self.assertIn("head", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")})
+            with unittest.mock.patch.dict(ur.EXTRA_TEST_READS, {"test_leaf": {"helper_fixture.py": "示例：受管模块延迟导入链读到"}}):
+                self.assertIn("file:pkg/tests/helper_fixture.py", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")},
+                              "读集审计实测、静态闭包漏掉的读取补登进输入（E3-04）")
             with unittest.mock.patch.dict(ur.HEAD_ID_ONLY_READERS, {"test_leaf": "示例：只读 HEAD 提交号"}):
                 self.assertNotIn("head", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")},
                                  "只读 HEAD 提交号、结论不随提交变的不加 HEAD 输入（10-02 按实跑证据收窄）")

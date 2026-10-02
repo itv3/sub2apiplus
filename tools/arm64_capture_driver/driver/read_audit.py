@@ -9,12 +9,14 @@ strace 下，单元结束后按它的输入明细核对，超出声明的读取�
   ``filter`` 子命令：它只留测试树与数据根下的路径，进程结束时写一份紧凑 JSON（Go 编译、node 读 GOROOT 与依赖目录的
   海量行不落盘）。``-y`` 把每个 dirfd（含 ``AT_FDCWD``）标成当时的目录，相对路径据此还原，不用自己跟踪工作目录；
   只有不带 dirfd 的调用（execve、chdir 等）按同一进程最近一次标注的目录还原，子进程继承父进程的。
-* 归类：``openat`` 等按标志分读、写、探测（打开失败）；stat、access、readlink 一类是探测；execve 是执行；getdents64
-  是列举目录。字节码缓存（``__pycache__``、``.pyc``）不是输入（源码摘要已覆盖），不看。
+* 归类：``openat`` 等按标志分读、写、打开目录；stat、access、readlink 一类成功是元数据；execve 是执行；任何调用因
+  路径不存在（ENOENT、ENOTDIR）失败都记为「探测不存在的路径」。只判读、执行、写与探测不存在的路径（改动后出现的文件
+  会改变行为）；元数据（stat 成功、打开或列举目录）只计数不判——工具身份计算、整树比对一类遍历会 stat 树里每个文件再
+  按名字排除，按「stat 了就算输入」会把每个单元都报成读了整个测试目录。导入系统试探的扩展模块变体（``.so``）与字节码
+  缓存（``__pycache__``、``.pyc``）不看。
 * 覆盖（以执行记录里的输入明细为准）：范围项（include／exclude 前缀）、文件项（闭包文件、声明的单个文件）、HEAD（读
-  ``.git``）、已算明细里登记的绝对路径（数据根的冻结台账目录、录制数据等）；声明内容的上级目录只看元数据，算覆盖。
-  列举目录只记数、不判：导入系统为找模块会列举 sys.path 上的每个目录，真正依赖目录内容的代码（discover、整树复制）
-  都会接着读里面的文件，读文件会被核对到（只列目录、不读文件的依赖审计看不到，这是已知的局限）。
+  ``.git``）、已算明细里登记的绝对路径（数据根的冻结台账目录、录制数据等）；声明内容的上级目录算覆盖。只看元数据、
+  不读内容的依赖（只列目录或只 stat 已存在的文件）审计看不到，这是已知的局限。
 * 两个根：测试树单元读到数据根一律报出（测试不该碰生产数据）；pre-A3 场景在数据根运行（工作目录在数据根里），数据根
   与仓库同布局的部分（受管树、docs、部署脚本副本）按仓库相对路径核对，其余按已算明细与豁免表（``DATA_ROOT_EXEMPT``）。
 * 只读 HEAD 提交号的模块（unit_records.HEAD_ID_ONLY_READERS）没声明 HEAD：它们读 ``.git`` 只许 HEAD、refs、配置一类，
@@ -35,21 +37,35 @@ from typing import Any, Iterable, Mapping, Sequence
 
 TRACE_SCHEMA = "read-audit-trace/v1"
 REPORT_SCHEMA = "read-audit-report/v1"
-STRACE_OPTIONS = ("-f", "-qq", "--seccomp-bpf", "-y", "-e", "trace=%file,%process,getdents64")
+# strace 选项：只跟踪文件类调用与进程派生（子进程继承工作目录要用）；不解码 stat 等结构、不打印信号（省 strace 自己的
+# 格式化开销）。10-02 ARM64 第一轮实测：原来带 getdents64、全部进程类调用并解码结构时，被测进程只拿到约 30% 的核。
+STRACE_OPTIONS = ("-f", "-qq", "--seccomp-bpf", "-y", "-e", "verbose=none", "-e", "signal=none", "-e", "trace=%file,clone,clone3,fork,vfork")
 HERE = Path(__file__).resolve()
 # 每个单元报出的未声明读取最多列多少条（总数照记）。
 MAX_FINDINGS = 200
 # 样例行截断长度。
 SAMPLE_CHARS = 300
 
-# 数据根里不算输入的路径（数据根相对前缀 → 原因）。pre-A3 场景在自己的临时根里建 Campaign、账本与证据，读回自己写的
-# 东西不是输入；新增条目要写明为什么不影响结论。
+# 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
+# 依据 10-02 ARM64 第一轮审计（pre-A3 全部 44 个场景）。
 DATA_ROOT_EXEMPT: dict[str, str] = {
     "staging/pre-a3-scenarios/": "pre-A3 场景本次自己建的临时根（场景的输出，读回的是本次写下的内容）",
+    ".git/": "git 在数据根里做仓库发现（数据根不是 git 仓库；用法同 HEAD_ID_ONLY_READERS，提交号只用在同一次运行里）",
+    "HEAD": "git 仓库发现时按裸仓库检查 HEAD（同上）",
+    "staging/.git/": "git 从 staging 下的临时目录往上做仓库发现（同上）",
+    "staging/HEAD": "git 仓库发现时按裸仓库检查 HEAD（同上）",
+    "tools/__init__.py": "数据根的 tools 是命名空间包（部署不放包标记，布局由受监督部署固定），导入系统每次都探测这个标记",
+    "libgcc_s.so.1": "内核故障场景在数据根编译 eBPF 辅助程序，动态链接器在工作目录里找 libgcc_s（不存在、也不会放进数据根）",
+}
+# 同上，按正则整串匹配的（数据根相对路径）。
+DATA_ROOT_EXEMPT_PATTERNS: dict[str, str] = {
+    r"-l[A-Za-z0-9_+-]+": "内核故障场景在数据根编译 eBPF 辅助程序，编译器把链接参数（-lbpf、-lelf 等）当文件名在工作目录里试探",
+    r"tools\.official_client_capture\.[A-Za-z0-9_.]+": "unittest 把命令行里的测试名（点分模块路径）当文件路径在工作目录里试探",
 }
 
 # 只读 HEAD 提交号的模块读 .git 时允许的部分：HEAD、引用、配置与仓库结构探测；对象库（历史内容）不许。
-_GIT_META_ALLOWED = (".git", ".git/HEAD", ".git/config", ".git/packed-refs", ".git/commondir", ".git/shallow", ".git/objects")
+_GIT_META_ALLOWED = (".git", ".git/HEAD", ".git/config", ".git/packed-refs", ".git/commondir", ".git/shallow", ".git/objects",
+                     ".git/refs", ".git/info", ".git/worktrees", ".git/objects/info")
 _GIT_META_PREFIXES = (".git/refs/", ".git/info/", ".git/objects/info/", ".git/worktrees/")
 
 # 系统调用分类。带 dirfd 的：路径按前面的 dirfd 标注还原。
@@ -68,6 +84,12 @@ _PLAIN_EXEC = frozenset({"execve"})
 _TWO_PATHS = frozenset({"rename", "link", "renameat", "renameat2", "linkat"})
 _SPAWN = frozenset({"clone", "clone3", "fork", "vfork"})
 _WRITE_FLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b")
+_MISSING_ERRNOS = frozenset({"ENOENT", "ENOTDIR"})
+# 读取方式：判的（读内容、执行、写、探测不存在的路径）与只算元数据的（stat 成功、打开或列举目录）。元数据不判：工具身份
+# 计算、整树比对这类遍历会 stat 树里每个文件再按名字排除，按「stat 了就算输入」会把每个测试单元都报成读了整个测试目录
+# （10-02 ARM64 第一轮实测 6621 处全是这一类）；真正依赖文件内容的都会读，读会被核对到。
+JUDGED_KINDS = frozenset({"read", "exec", "write", "missing"})
+METADATA_KINDS = frozenset({"stat", "dir", "list"})
 
 _LINE = re.compile(r"^(\d+)\s+(.*)$")
 _CALL = re.compile(r"^([a-z_][a-z0-9_]*)\((.*)$", re.S)
@@ -186,14 +208,16 @@ class TraceParser:
             pairs = [(unescape(directory), unescape(path)) for directory, path in _PAIR.findall(body)]
             if name not in _TWO_PATHS:
                 pairs = pairs[:1]
+            missing = errno in _MISSING_ERRNOS
             if name in _DIRFD_READ:
-                kind = "write" if _WRITE_FLAGS.search(body) else "probe" if failed else "read"
+                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in body else "read")
             elif name in _DIRFD_WRITE:
                 kind = "write"
             elif name in _DIRFD_EXEC:
-                kind = "probe" if failed else "exec"
+                kind = "missing" if missing else "stat" if failed else "exec"
             else:
-                kind = "probe"
+                kind = "missing" if missing else "stat"
             for directory, path in pairs:
                 if path == "":
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
@@ -207,14 +231,18 @@ class TraceParser:
                 strings = strings[:2]
             else:
                 strings = strings[:1]
+            missing = errno in _MISSING_ERRNOS
             if name in _PLAIN_READ:
-                kind = "write" if _WRITE_FLAGS.search(body) else "probe" if failed else "read"
+                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in body else "read")
             elif name in _PLAIN_WRITE:
                 kind = "write"
             elif name in _PLAIN_EXEC:
-                kind = "probe" if failed else "exec"
+                kind = "missing" if missing else "stat" if failed else "exec"
+            elif name == "chdir":
+                kind = "missing" if missing else "dir"
             else:
-                kind = "probe"
+                kind = "missing" if missing else "stat"
             for path in strings:
                 self._add(_join(self.cwd.get(pid), path), kind, line)
             if name == "chdir" and not failed and strings:
@@ -251,8 +279,22 @@ def filter_stream(stream: Iterable[str], roots: Sequence[str]) -> dict[str, Any]
     return trace_document(parser, roots)
 
 
+_ERE_SPECIAL = set(".[]()*+?{}|^$\\")
+
+
+def prefilter_pattern(roots: Sequence[str]) -> str:
+    """grep -E 预筛：只留路径参数落在某个根之下（绝对路径以根开头，或相对路径而 dirfd 标注在根之下）的行，以及派生、
+    execve、chdir 行（还原工作目录要用）。Python 解释器读标准库、Go 与 node 读工具链的海量行在这里丢掉，过滤器只解析剩下
+    的（10-02 ARM64 第一轮实测：不预筛时 Python 过滤器吃掉约四分之一个核）。"""
+
+    escaped = ["".join("\\" + ch if ch in _ERE_SPECIAL else ch for ch in os.path.normpath(str(root))) for root in roots]
+    alternation = "|".join(escaped)
+    return ("\"(" + alternation + ")(/|\")" + "|<(" + alternation + ")[^>]*>, \"[^/\"]"
+            + "|^[0-9]+ (execve|execveat|chdir|clone|clone3|fork|vfork)\\(|<[.][.][.] (clone|clone3|fork|vfork) resumed>")
+
+
 def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], python: str | None = None) -> list[str]:
-    """把一个单元的命令包在 strace 下：输出经管道交给本模块 ``filter``，只留各个根之下的路径。"""
+    """把一个单元的命令包在 strace 下：输出先经 grep 预筛，再交给本模块 ``filter``，只留各个根之下的路径。"""
 
     command = [python or sys.executable, "-B", str(HERE), "filter", "--output", str(output)]
     for root in roots:
@@ -260,7 +302,11 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
     for part in command:
         if any(ch.isspace() or ch in "'\"\\$`|;&<>" for ch in part):
             raise AuditError(f"审计输出命令里的路径带空白或 shell 特殊字符，不能交给 strace 的管道：{part}")
-    return ["strace", *STRACE_OPTIONS, "-o", "|" + " ".join(command), "--", *argv]
+    pattern = prefilter_pattern(roots)
+    if "'" in pattern:
+        raise AuditError("预筛表达式里有单引号，不能交给 shell")
+    pipe = f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
+    return ["strace", *STRACE_OPTIONS, "-o", "|" + pipe, "--", *argv]
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +370,32 @@ class Declared:
         return any(_under(path, root) for root in self.absolute)
 
 
-def _exempt(relative: str) -> bool:
-    """数据根相对路径落在豁免表的某个前缀下（含前缀目录本身）。"""
+# 声明了整个仓库的输入（unit_records.COMMAND_RANGES 四段：受管工具树、测试目录、docs、其余部分）。
+WHOLE_REPO_RANGES = frozenset({"repo:managed", "repo:tests", "repo:docs", "repo:rest"})
 
-    return any((relative.rstrip("/") + "/").startswith(prefix) if prefix.endswith("/") else relative == prefix for prefix in DATA_ROOT_EXEMPT)
+
+def declares_whole_repo(inputs: Sequence[Mapping[str, Any]] | None) -> bool:
+    """单元的输入是否已经覆盖整个仓库（四段标准范围齐全，或有一段 include 空串且没有 exclude）。这样的单元对仓库不可能
+    有未声明读取，审计不包 strace（命令单元：后端、前端、lint、egress 子检查、部署脚本；ARM64 实测后端 go test 在 strace
+    下 663 秒对 467 秒，白付开销）；它们在测试树里运行、生产别名已遮住，读数据根的可能性也只有这一层保护。"""
+
+    names = set()
+    for entry in inputs or []:
+        if not isinstance(entry, Mapping):
+            continue
+        names.add(str(entry.get("name")))
+        detail = entry.get("detail") if isinstance(entry.get("detail"), Mapping) else {}
+        if isinstance(detail.get("include"), list) and "" in detail["include"] and not detail.get("exclude"):
+            return True
+    return WHOLE_REPO_RANGES <= names
+
+
+def _exempt(relative: str) -> bool:
+    """数据根相对路径在豁免表里：落在某个前缀下（含前缀目录本身）、精确相等，或整串匹配某个正则。"""
+
+    if any((relative.rstrip("/") + "/").startswith(prefix) if prefix.endswith("/") else relative == prefix for prefix in DATA_ROOT_EXEMPT):
+        return True
+    return any(re.fullmatch(pattern, relative) for pattern in DATA_ROOT_EXEMPT_PATTERNS)
 
 
 def _suggestion(relative: str, root: str) -> str:
@@ -350,14 +418,18 @@ def audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]]
     repo_root = os.path.normpath(repo_root)
     data = os.path.normpath(data_root) if data_root else None
     findings: list[dict[str, Any]] = []
-    counts = {"repo_paths": 0, "data_paths": 0, "listed": 0}
+    counts = {"repo_paths": 0, "data_paths": 0, "metadata_only": 0, "import_probes": 0}
     samples = document.get("samples") if isinstance(document.get("samples"), Mapping) else {}
     for path, kinds in document.get("accesses") or []:
-        kinds = [str(kind) for kind in kinds]
-        if set(kinds) == {"list"}:
-            counts["listed"] += 1
+        judged = sorted({str(kind) for kind in kinds} & JUDGED_KINDS)
+        if not judged:
+            counts["metadata_only"] += 1
             continue
         if _bytecode(path):
+            continue
+        if judged == ["missing"] and path.endswith(".so"):
+            # 导入系统按扩展名逐个试探（__init__.abi3.so、.cpython-312-…so、.so），仓库里没有编译扩展，不算输入。
+            counts["import_probes"] += 1
             continue
         if _under(path, repo_root):
             counts["repo_paths"] += 1
@@ -377,7 +449,7 @@ def audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]]
             root, shown = "data", relative
         else:
             continue
-        findings.append({"root": root, "path": shown, "kinds": sorted(set(kinds) - {"list"}), "sample": samples.get(path, ""),
+        findings.append({"root": root, "path": shown, "kinds": judged, "sample": samples.get(path, ""),
                          "suggestion": _suggestion(shown, root)})
     findings.sort(key=lambda item: (item["root"], item["path"]))
     return {"undeclared_count": len(findings), "undeclared": findings[:MAX_FINDINGS], **counts}

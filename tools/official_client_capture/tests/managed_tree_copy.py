@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -50,11 +51,38 @@ class ManagedTreeCopyError(RuntimeError):
 CLOSURE_DIRECTORIES = ("fixtures", "real_chains")
 
 
+# 统一调度执行器给每个单元的环境变量：它自己同目录的 unit_records.py（仓库里是 tools/ci，ARM64 上是驱动目录）。pre-A3
+# 场景在数据根运行，数据根里没有 tools/ci，按闭包复制靠它找到同一份算法。
+RECORDS_MODULE_ENV = "UNIT_EXECUTOR_RECORDS_MODULE"
+
+
+def _unit_records() -> Any:
+    """静态依赖闭包的算法（tools/ci/unit_records.py，与单元输入声明同一份）：仓库里直接导入；数据根里没有 tools/ci，
+    按执行器给的路径加载。都没有就拒绝——按闭包复制不能换一套算法，否则复制的范围和声明的输入会对不上。"""
+
+    try:
+        from tools.ci import unit_records
+        return unit_records
+    except ImportError:
+        location = os.environ.get(RECORDS_MODULE_ENV)
+    if not location or not Path(location).is_file():
+        raise ManagedTreeCopyError(f"按闭包复制要用 unit_records.py（与输入声明同一算法）：仓库里直接导入 tools.ci，"
+                                   f"数据根里由统一调度执行器经 {RECORDS_MODULE_ENV} 给出位置；现在两样都没有")
+    name = "unit_records_for_tree_copy"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, location)
+        if spec is None or spec.loader is None:
+            raise ManagedTreeCopyError(f"加载不了 {location}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
 def _closure_files(module_file: Path) -> set[Path]:
     """``module_file`` 的静态依赖闭包里的测试目录文件，加辅助模块、真实链目录与包标记（与单元输入声明同一算法）。"""
 
-    from tools.ci import unit_records  # 只在仓库里调用（副本里没有 tools/ci，也不会再复制）
-
+    unit_records = _unit_records()
     tests = (TOOL_ROOT / "tests").resolve()
     keep = set(unit_records.TestDependencies(TOOL_ROOT).closure(Path(module_file).resolve()))
     keep.update(path.resolve() for path in tests.glob("*.py") if not path.name.startswith("test_"))
