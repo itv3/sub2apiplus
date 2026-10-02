@@ -464,7 +464,7 @@ def export_records(
     profile = manifest.get("profile")
     records: dict[str, dict[str, Any]] = {}
     steps = _entry_steps_module()
-    inputs_ctx = steps.Context(params={**os.environ, "ENTRY_SOURCE_COMMIT": str(source.get("tree_head") or source.get("commit") or "")},
+    inputs_ctx = steps.Context(params={**os.environ, "ENTRY_COMMIT": str(source.get("tree_head") or source.get("commit") or "")},
                                driver_dir=HERE, steps_dir=out)
 
     def gate_record(gate_id: str, exit_code: int, started: str | None, completed: str | None, extra: dict[str, Any]) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 {
   "schema_version": "capture-test-shard-weights/v1",
-  "source": "ARM64 逐模块测量（E2-01，2026-10-01，提交 517ef4304）；test_ci_unit_executor、test_ci_entry_gates、test_codex_upgrade_main_module 取 E2-04 入口门禁一次运行的 ARM64 实测（10-01）；test_ci_entry_steps 按本机 0.7 秒的约 3 倍估（E2-05，10-02）",
+  "source": "ARM64 逐模块测量（E2-01，2026-10-01，提交 517ef4304）；test_ci_unit_executor、test_ci_entry_gates、test_codex_upgrade_main_module 取 E2-04 入口门禁一次运行的 ARM64 实测（10-01）；test_ci_entry_steps 按本机 0.7 秒的约 3 倍估（E2-05，10-02）；test_ci_entry_orchestrator 按本机 0.3 秒的约 5 倍估（E2-06，10-02）",
   "weights": {
     "test_acceptance_contract": 0.1,
     "test_acceptance_end_to_end": 2.0,
@@ -38,6 +38,7 @@
     "test_certify_release": 30.5,
     "test_check_ledger_completeness": 0.2,
     "test_ci_entry_gates": 5.0,
+    "test_ci_entry_orchestrator": 1.5,
     "test_ci_entry_steps": 2.0,
     "test_ci_unit_executor": 26.2,
     "test_claude_21220_campaign_gate": 0.2,

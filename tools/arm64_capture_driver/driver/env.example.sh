@@ -69,4 +69,10 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # GATE_MAPPING_INPUT=/absolute/local/path/gate-mapping.json
 # RETIRE_VERSION=8.0.0
 # HISTORICAL_SOURCE_ROOT=/absolute/path/to/historical/gate/source
+# 入口编排器 entry.sh（E2-06）：入口门禁的源码坐标（部署到数据根的那一份工具提交）；产物根缺省是数据根，只在验收演练时
+# 设成数据根 staging 下的独立目录（配演练总账，生产项目总账与正式坐标不写）。
+# ENTRY_BUNDLE=$RUNROOT/bundles/REPLACE_TOOL_BUNDLE.bundle
+# ENTRY_BRANCH=codex/REPLACE_TOOL_BRANCH
+# ENTRY_COMMIT=REPLACE_TOOL_COMMIT_40_HEX
+# ENTRY_ROOT=$D/staging/REPLACE_REHEARSAL_ROOT
 # JWTGEN_BIN=$D/private-tools/jwtgen

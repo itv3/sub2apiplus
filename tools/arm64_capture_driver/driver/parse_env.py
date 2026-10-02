@@ -35,6 +35,9 @@ OPTIONAL_KEYS = (
     "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "TARGET_PACKAGE", "TARGET_CODE_MODE_HOST_SHA256",
     "CAPTURE_RUNTIME_IMAGE", "PREVIOUS_POLICY", "PRE_A3_CERTIFICATION", "GATE_MAPPING_INPUT",
     "RETIRE_VERSION", "HISTORICAL_SOURCE_ROOT", "JWTGEN_BIN", "EVIDENCE_DECISION",
+    # 入口编排器（E2-06）：入口门禁的源码坐标（部署到数据根的那一份工具提交），以及建账本之后各产物（计时账本、环境
+    # 收据、预检 Campaign、Job 演练、启动探测）所在的根，默认就是数据根；验收演练放在数据根 staging 下的独立目录里。
+    "ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT", "ENTRY_ROOT",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -122,6 +125,17 @@ def parse(text: str) -> dict[str, str]:
         raise EnvFileError("RETIRE_VERSION 必须是明确的三段版本号")
     if values.get("EVIDENCE_DECISION", "recapture") not in {"reuse", "recapture"}:
         raise EnvFileError("EVIDENCE_DECISION 只能是 reuse 或 recapture")
+    if "ENTRY_COMMIT" in values and not re.fullmatch(r"[0-9a-f]{40}", values["ENTRY_COMMIT"]):
+        raise EnvFileError("ENTRY_COMMIT 必须是完整 40 位小写 sha1")
+    if "ENTRY_BRANCH" in values and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", values["ENTRY_BRANCH"]):
+        raise EnvFileError("ENTRY_BRANCH 只允许字母、数字与 ._/-")
+    if "ENTRY_BUNDLE" in values and not values["ENTRY_BUNDLE"].startswith("/"):
+        raise EnvFileError("ENTRY_BUNDLE 必须是绝对路径")
+    if "ENTRY_ROOT" in values:
+        # 容器经 /capture 只看得到数据根；演练根只能放在数据根 staging 下（atomic-double 与发布认证的容器内重放要求）。
+        root, data = values["ENTRY_ROOT"].rstrip("/"), values["D"].rstrip("/")
+        if root != data and not (root.startswith(f"{data}/staging/") and ".." not in root.split("/")):
+            raise EnvFileError("ENTRY_ROOT 只能是数据根 D，或数据根 staging 下的演练目录")
     return values
 
 
@@ -150,6 +164,7 @@ def derive(values: dict[str, str]) -> dict[str, str]:
         "HISTORICAL_SOURCE_ROOT": f"{data}/official/historical-gate-source",
         "JWTGEN_BIN": f"{data}/private-tools/jwtgen",
         "EVIDENCE_DECISION": "recapture",
+        "ENTRY_ROOT": data,
     }
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
     return result

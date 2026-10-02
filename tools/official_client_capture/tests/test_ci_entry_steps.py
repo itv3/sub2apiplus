@@ -89,7 +89,7 @@ class Fixture:
             "POLICY_ACTIVATION": str(_write(products / "activation.json", json.dumps({"policy_sha256": "p" * 64}))),
             "PRE_A3_CERTIFICATION": str(_write(products / "pre-a3.json", "{}\n")),
             "RELEASE_CERTIFICATION": str(_write(products / "release.json", "{}\n")),
-            "ENTRY_SOURCE_COMMIT": "a" * 40, "HISTORY_TEST_TREE": str(root / "histtree"),
+            "ENTRY_COMMIT": "a" * 40, "HISTORY_TEST_TREE": str(root / "histtree"),
             "HISTORICAL_SOURCE_ROOT": str(root / "hist"), "SCENARIOS_JSON": str(self.scenarios),
             "BASELINE_SOURCE": str(root / "src-base"), "TARGET_SOURCE": str(root / "src-target"),
             "ACTIVE_PROFILE": str(root / "active.json"), "CODEX_BIN": str(root / "codex-bin"), "CODEX_BIN_SHA256": "b" * 64,
@@ -201,12 +201,12 @@ class EntryStepsAcceptanceTests(EntryStepsTestCase):
     def test_changing_a_test_file(self) -> None:
         test_file = self.fx.data / "tools" / "official_client_capture" / "tests" / "test_x.py"
         test_file.write_text("# 测试（改了）\n", encoding="utf-8")
-        self.fx.params["ENTRY_SOURCE_COMMIT"] = "b" * 40
+        self.fx.params["ENTRY_COMMIT"] = "b" * 40
         result = self.assertReruns({"entry-gates", "pre-a3", "zero-request-smoke", "release-certification", "p0-receipt",
                                     "vc0-closeout"})
         name = f"tree:{es.OCC}/tests#pycache"
         self.assertIn(f"输入变了：测试与夹具 {name}", _step(result, "pre-a3")["reasons"])
-        self.assertIn("输入变了：测试与夹具 source_commit:ENTRY_SOURCE_COMMIT", _step(result, "entry-gates")["reasons"])
+        self.assertIn("输入变了：测试与夹具 source_commit:ENTRY_COMMIT", _step(result, "entry-gates")["reasons"])
 
     def test_changing_a_guide_line_outside_and_inside_part_two(self) -> None:
         self.fx.guide.write_text(self.fx.guide.read_text(encoding="utf-8").replace("第一部分正文", "第一部分正文（改）"),
@@ -354,6 +354,8 @@ class EntryStepsRuleTests(EntryStepsTestCase):
             es.finish(step, ctx, status="passed", products={"other": "/nonexistent"})
         failed = es.finish(step, ctx, status="failed", products={"receipt": str(self.fx.root / "absent.json")})
         self.assertEqual(failed["products"][0]["sha256"], es.MISSING)
+        es.begin(step, ctx)
+        self.assertEqual(es.finish(step, ctx, status="failed", products={})["products"], [], "记失败时拿不到坐标的产物就不记")
 
 
 class EntryStepsTableAndCliTests(unittest.TestCase):

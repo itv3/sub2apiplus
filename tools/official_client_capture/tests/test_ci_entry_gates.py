@@ -236,7 +236,7 @@ class EntryGatesExportTests(unittest.TestCase):
             self.assertEqual((record["command"], record["working_directory"]), (["go", "test", "-tags=unit", "./...", "-count=1"], "backend"))
             # E2-05：每个门禁项带输入明细与摘要；源码提交取测试树的提交，后端测试另列 Go 工具链。
             inputs = {item["name"]: item for item in record["inputs"]}
-            self.assertEqual(inputs["source_commit:ENTRY_SOURCE_COMMIT"]["detail"]["value"], "c" * 40)
+            self.assertEqual(inputs["source_commit:ENTRY_COMMIT"]["detail"]["value"], "c" * 40)
             self.assertIn("env:go", inputs)
             self.assertEqual(record["inputs_sha256"], es.inputs_sha256(record["inputs"]))
             frontend = json.loads((out / "logs" / "frontend-lint.gate.json").read_text(encoding="utf-8"))

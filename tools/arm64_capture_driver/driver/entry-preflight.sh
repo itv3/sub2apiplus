@@ -10,10 +10,12 @@
 #   official-package     官方包摘要等于登记值，基线与目标源码树就位；
 #   plan-audit           plan --audit-only：参数、官方包、源码、规则与场景清单、作业 covers、覆盖计划、基线证据、执行副本；
 #   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）。
-# 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh 与 stage1.sh 开头调用，也可单独运行）
+# 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh、stage1.sh 与入口编排器 entry.sh 开头调用，也可单独运行）
+# 输出目录默认 $RUNROOT/entry-preflight/<UTC>，环境变量 ENTRY_PREFLIGHT_OUT 可指定（编排器用）；结束时写 summary.json（逐项状态，
+# 编排器据此判断哪些步骤被阻塞，例如部署绑定没过时依赖它的认证与门禁）。
 set -Euo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-OUT="$RUNROOT/entry-preflight/$(date -u +%Y%m%dt%H%M%Sz)"
+OUT="${ENTRY_PREFLIGHT_OUT:-$RUNROOT/entry-preflight/$(date -u +%Y%m%dt%H%M%Sz)}"
 install -d -m 700 "$RUNROOT/entry-preflight" "$OUT"
 FAILED=()
 # 字节码共享层（E2-02）：入口第一步，数据根受管树变了才重建；之后本脚本的检查项、pre-A3、建账本等子命令只读使用。
@@ -27,6 +29,7 @@ check() { # <名称> <函数>：各项互不依赖，一项失败不中断其余
   echo "== ${name} $(utc_now)"
   "$2" > "$OUT/$name.log" 2>&1 || rc=$?
   tail -n 6 "$OUT/$name.log" | cut -c1-300
+  printf '%s %s\n' "$name" "$([ "$rc" = 0 ] && echo passed || echo failed)" >> "$OUT/results.txt"
   if [ "$rc" = 0 ]; then
     echo "通过 ${name}（$(( $(date +%s) - start )) 秒）"
   else
@@ -132,6 +135,16 @@ check target-client target_client
 check official-package official_package
 check plan-audit plan_audit
 check environment-probe environment_probe
+python3 -B - "$OUT/results.txt" "$OUT/summary.json" <<'PY'
+import json, sys
+checks = dict(line.split() for line in open(sys.argv[1], encoding="utf-8") if line.strip())
+failed = [name for name, status in checks.items() if status != "passed"]
+summary = {"schema_version": "entry-preflight-summary/v1", "status": "failed" if failed else "passed",
+           "checks": checks, "failed": failed}
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, ensure_ascii=False, indent=2)
+PY
+chmod 600 "$OUT/summary.json"
 if [ "${#FAILED[@]}" = 0 ]; then
   echo "ENTRY_PREFLIGHT_PASSED $(utc_now)"
   exit 0

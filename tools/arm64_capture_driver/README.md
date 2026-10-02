@@ -106,7 +106,7 @@
 * 步骤记录在 `$RUNROOT/entry-steps/`：`<步骤>.json` 是当前记录，`history/` 留每一次的不可变副本，记录带自摘要。执行前
   `begin`，执行后 `finish --status passed|failed [--product 名称=路径]`（两步合一用 `record`）；`evaluate` 逐步重算输入，
   给出沿用／重做／冻结／阻塞／实时和全部原因，`--json` 另存机读结果。参数取自 `source lib.sh` 后的环境变量，入口门禁的
-  源码提交取 `ENTRY_SOURCE_COMMIT`。
+  源码提交取参数 `ENTRY_COMMIT`。
 * 判定规则：实时类（便宜检查、启动探测）每次执行；Formal Campaign 建成后创建链冻结；没有记录、记录被改、上次没通过、
   输入声明变了、产物缺失或被改、Job 演练收据不是通过、任一输入变了、上游要重做都判重做；账本已建就绝不重建，输入变了
   判阻塞。快照记录（`snapshot`，只供验收建立基准）默认不接受，要加 `--accept-snapshot`。
@@ -116,6 +116,28 @@
 * 入口门禁 `entry` 组合在跑之前用 `entry_steps.py deploy-consistency` 核对数据根部署的就是测试树这一份：受管整树（含
   测试，不计字节码）、两份指南、部署脚本副本逐项比内容。整树身份不含测试目录，只比它会放过「测试改了、还没重新部署」；
   不一致退出 3。
+
+## 入口编排器（E2-06，`driver/entry.sh`）
+
+* 一条命令：`ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/entry.sh [--plan] [--from <步骤>] [--to <步骤>] > $RUNROOT/entry.out 2>&1 < /dev/null`。
+  * 建账本之前一次报全：便宜检查、策略兼容与激活认证、入口门禁与 pre-A3、零请求 smoke、atomic-double。依赖失败步骤的标为被阻塞，
+    便宜检查的部署绑定一项没过时，激活认证、入口门禁与 pre-A3 都被阻塞。全部通过才建账本。
+  * 建账本之后按顺序执行，失败即停：建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证。P0 收据与收口由 E2-07 接上。
+* 续跑就是重新执行同一条命令：
+  * 每一步按 E2-05 的步骤记录判定沿用还是重做，没有记录的旧产物一律不沿用；
+  * 只写一次的坐标被占用时换 `-r2`、`-r3`……，实际坐标写进步骤记录，下游从记录取；
+  * 账本已建就沿用，绝不重建；
+  * Job 演练上一次失败且留下了收据时，新的一次带上它，只重跑失败的作业。
+* 参数：
+  * `ENTRY_BUNDLE`、`ENTRY_BRANCH`、`ENTRY_COMMIT`：入口门禁的源码坐标，即部署到数据根的那一份工具提交。
+  * `ENTRY_ROOT`：产物根，缺省是数据根。建账本之后的产物（计时账本、项目总账、环境收据、预检 Campaign、Job 演练、启动探测）都在它下面。
+    验收演练设成数据根 `staging` 下的独立目录，配一本演练总账（项目总账模块的 fixture_only），这样生产项目总账与正式坐标都不写。
+* 日志与记录：每次运行的日志与汇总在 `$RUNROOT/entry-runs/<UTC>/`（`run.json`），步骤记录在 `$RUNROOT/entry-steps/`，运行锁在 `$RUNROOT/.entry.lock`。
+  `--plan` 只判定不执行；`--inject-mask <步骤>=<目录>` 只供验收（执行这一步时用只读空 tmpfs 遮住目录，制造一次真实的失败）。
+* 相关脚本的变化：
+  * `pre-a3.sh`、`stage1.sh`、`stage1-finish.sh`、`stage2.sh` 保留，供单独补跑某一段或对照旧轮次；入口一律用 `entry.sh`。
+  * 入口门禁 `entry-gates.sh` 新增 `--policy-activation`、`--pre-a3-certification`、`--pre-a3-mode auto|present|run`，由编排器替它定 pre-A3 沿用还是新跑。
+  * 便宜检查结束时写 `summary.json`（逐项状态）。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 

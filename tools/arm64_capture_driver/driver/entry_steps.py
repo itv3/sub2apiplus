@@ -37,7 +37,7 @@
   （含测试，不计字节码）、两份指南、部署脚本副本逐项比内容摘要（整树身份不含测试目录，只比它会放过「测试改了、还没
   重新部署」）；一致退出 0，不一致退出 1 并列出不一致的项。
 
-参数取自环境变量（驱动 ``source lib.sh`` 后由 ``parse_env.py`` 导出）；入口门禁的源码提交取 ``ENTRY_SOURCE_COMMIT``。
+参数取自环境变量（驱动 ``source lib.sh`` 后由 ``parse_env.py`` 导出）；入口门禁的源码提交取参数 ``ENTRY_COMMIT``。
 退出码：0 全部沿用或冻结（实时类不计）；1 有步骤要重做；2 用法或配置错误；3 有步骤被阻塞。
 """
 
@@ -208,7 +208,7 @@ STEPS: tuple[Step, ...] = (
     # 入口门禁（测试树部分）：源码提交确定测试树的全部内容（源码、测试、文档、Makefile、CI 定义、权重表与耗时表）；
     # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。
     Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
-        Input("tests", "source_commit", "ENTRY_SOURCE_COMMIT"),
+        Input("tests", "source_commit", "ENTRY_COMMIT"),
         *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
         *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py"),
         *COMMON_DRIVER,
@@ -243,7 +243,7 @@ STEPS: tuple[Step, ...] = (
     # 由账本自己的承接收据处理）。
     Step("ledger", "计时账本", "post_ledger", ledger=True, inputs=(
         *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),
-    ), products=(Product("ledger", "{D}/control/{UP}-timing-ledger/ledger.json"),)),
+    ), products=(Product("ledger", "{ENTRY_ROOT}/control/{UP}-timing-ledger/ledger.json"),)),
     # 环境收据：采集器与增量恢复两个受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。
     Step("environment-p0", "ARM64 环境收据（p0）", "post_ledger", inputs=(
         *_params("UP", "TARGET_VERSION"),
@@ -300,7 +300,7 @@ STEP_BY_ID: dict[str, Step] = {step.step_id: step for step in STEPS}
 # 入口门禁每个门禁项的输入清单（方案 E2-05「每个门禁项都登记一份输入清单」；E3-01 的单元承接按它判断）。测试树里的门禁项
 # 共用：源码提交（测试树的全部内容）、驱动里的入口门禁脚本与执行器、内核；再按门禁项加工具链与前端依赖。pre-A3 同上面的
 # 步骤。范围从宽，由读集审计（E3-04）收窄。
-_GATE_COMMON = (Input("tests", "source_commit", "ENTRY_SOURCE_COMMIT"),
+_GATE_COMMON = (Input("tests", "source_commit", "ENTRY_COMMIT"),
                 *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json"), *_env("kernel"))
 _FRONTEND = (*_env("node"), Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/pnpm-lock.yaml"))
 _TYPESCRIPT = Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js")
@@ -416,6 +416,9 @@ class Context:
 
     def __post_init__(self) -> None:
         self.cache: dict[Any, Any] = {}
+        if not self.params.get("ENTRY_ROOT") and self.params.get("D"):
+            # 产物根缺省是数据根（与 parse_env.py 的派生规则一致；参数里没导出这个键时也按它算）。
+            self.params = {**self.params, "ENTRY_ROOT": self.params["D"]}
 
     @property
     def data_root(self) -> Path:
@@ -765,7 +768,9 @@ def _write_history(steps_dir: Path, payload: Mapping[str, Any]) -> Path:
     raise EntryStepsError("历史记录序号用尽")
 
 
-def _product_paths(step: Step, ctx: Context, overrides: Mapping[str, str]) -> dict[str, str]:
+def _product_paths(step: Step, ctx: Context, overrides: Mapping[str, str], *, strict: bool = True) -> dict[str, str]:
+    """产物坐标：调用方给的优先，其次默认模板。记通过时（strict）每份必需产物都要有坐标；记失败时拿不到坐标的就不记。"""
+
     unknown = sorted(set(overrides) - {product.name for product in step.products})
     if unknown:
         raise EntryStepsError(f"步骤 {step.step_id} 没有这些产物：{unknown}")
@@ -777,8 +782,9 @@ def _product_paths(step: Step, ctx: Context, overrides: Mapping[str, str]) -> di
             try:
                 paths[product.name] = ctx.expand(product.path)
             except MissingParameter as error:
-                raise EntryStepsError(f"产物 {product.name} 的默认坐标要用参数 {error}，参数里没有") from error
-        elif not product.optional:
+                if strict:
+                    raise EntryStepsError(f"产物 {product.name} 的默认坐标要用参数 {error}，参数里没有") from error
+        elif not product.optional and strict:
             raise EntryStepsError(f"产物 {product.name} 没有默认坐标，用 --product {product.name}=路径 给出")
     return paths
 
@@ -821,7 +827,7 @@ def finish(step: Step, ctx: Context, *, status: str, products: Mapping[str, str]
         raise EntryStepsError(f"步骤 {step.step_id} 没有执行前的输入记录（先 begin）：{pending_file}") from error
     if not seal_ok(pending) or pending.get("spec_sha256") != step.spec_sha256():
         raise EntryStepsError(f"步骤 {step.step_id} 的执行前输入记录被改动或与当前步骤声明不符：{pending_file}")
-    measured = _measure_products(step, _product_paths(step, ctx, products))
+    measured = _measure_products(step, _product_paths(step, ctx, products, strict=status == "passed"))
     if status == "passed":
         for product in step.products:
             entry = next((item for item in measured if item["name"] == product.name), None)
@@ -848,10 +854,11 @@ def finish(step: Step, ctx: Context, *, status: str, products: Mapping[str, str]
 # ---------------------------------------------------------------- 判定
 
 def formal_built(ctx: Context) -> bool:
-    """Formal Campaign 已建：本轮 Formal 目录里有 campaign.json（收口建成后写入；E2-07 再细化半成品的判定）。"""
+    """Formal Campaign 已建：本轮 Formal 目录（产物根 ENTRY_ROOT 下）里有 campaign.json（收口建成后写入；E2-07 再细化半成品的判定）。"""
 
     new = ctx.params.get("NEW")
-    return bool(new) and (ctx.data_root / "evidence" / "campaigns" / new / "campaign.json").is_file()
+    root = Path(ctx.params.get("ENTRY_ROOT") or ctx.data_root)
+    return bool(new) and (root / "evidence" / "campaigns" / new / "campaign.json").is_file()
 
 
 def _label(entry: Mapping[str, Any]) -> str:
