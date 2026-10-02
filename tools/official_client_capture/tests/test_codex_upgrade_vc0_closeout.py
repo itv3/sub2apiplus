@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import json
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1821,6 +1822,112 @@ class VC0CloseoutContinuationTests(unittest.TestCase):
             self.assertEqual(blocked.exception.kind, "inconsistent")
             self.assertTrue(marker.is_file())
             self.assertEqual(timing.inspect_ledger(env.ledger)["head_sequence"], 1)
+
+    FIRST_MANIFEST = {
+        "campaign_id": "formal-0154",
+        "actions": [{"action_id": "capture-official", "timeout_seconds": 900,
+                     "command": ["/usr/bin/python3", "/tool/codex_upgrade.py", "capture-official", "run"]}],
+    }
+
+    def _sealed_first_run(self, env: _ContinuationEnv, *, reason: str) -> Path:
+        """伪造一个已封口的首批父 run（监督器状态、终态收据、队列清单＝首批清单）。"""
+
+        supervisor = closeout.codex_upgrade_supervisor
+        run_dir = env.root / "control" / "vc1-supervisor" / "run-e207test"
+        run_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        run_dir.mkdir(mode=0o700)
+        now = time.time()
+        supervisor._write_json(run_dir / "state.json", {
+            "schema_version": supervisor.STATE_SCHEMA, "campaign_id": "formal-0154", "phase": "VC-1",
+            "owner_pid": 999999, "owner_nonce": "e207test", "started_at_epoch": now - 30, "deadline_at_epoch": now + 3600,
+            "started_monotonic_ns": 1, "deadline_monotonic_ns": 2, "state": "stopped",
+        }, replace=False)
+        supervisor._stop_receipt(run_dir, event_type="stop", reason=reason, detected_at_epoch=now, owner_pid=999999,
+                                 owner_nonce="e207test", campaign_id="formal-0154", phase="VC-1")
+        supervisor._write_json(run_dir / "campaign-run-manifest.json",
+                               {"manifest": dict(self.FIRST_MANIFEST), "manifest_sha256": "0" * 64}, replace=False)
+        return run_dir
+
+    def _first_manifest_patch(self) -> object:
+        return mock.patch.object(closeout, "_first_run_manifest",
+                                 side_effect=lambda formal, _manifest: (formal / "control" / "vc" / "run-manifests" / "0001-vc-1.json",
+                                                                        dict(self.FIRST_MANIFEST)))
+
+    def test_dispatched_first_batch_finished_only_writes_the_receipt(self) -> None:
+        """首批已派发并正常结束、收口收据没写上就被杀：续作不再派发，只补写收口收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            env.kill(mock.patch.object(closeout, "_dispatch_first_batch", side_effect=_Killed()))
+            self._sealed_first_run(env, reason="queue-complete")
+            receipt = env.run(self._first_manifest_patch())
+            self.assertEqual((receipt["status"], receipt["campaign_run_call_count"]), ("passed", 0))
+            self.assertEqual(receipt["continuation"]["site"], "dispatched")
+            self.assertEqual(env.run_calls, 0, "已派发：不再派发首批")
+
+    def test_dispatched_first_batch_failed_is_reconciled_then_only_unfinished_jobs_rerun(self) -> None:
+        """首批派发后失败（已发布预约）：续作先对账、等批准恢复预览；批准后零请求预览批次 → 按预览补跑批次。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            env.kill(mock.patch.object(closeout, "_dispatch_first_batch", side_effect=_Killed()))
+            self._sealed_first_run(env, reason="action-failed:capture-official")
+            attempt = env.formal / "official" / "attempts" / "a1"
+            env.case._write(attempt / "reservation.json", {"reserved": True})
+            env.case._write(attempt / "attempt.json", {"status": "failed"})
+            preview = env.case._write(env.root / "control" / "recovery-preview.json",
+                                      {"execute_job_ids": ["guardian"], "reuse_job_ids": ["job-1", "job-2"]})
+            review = "r" * 64
+            reconciled = {"status": "recoverable", "recovery_preview_path": str(preview),
+                          "recovery_preview": {"review_sha256": review}, "next_command": "批准恢复预览"}
+            calls: dict[str, list] = {"reconcile": [], "authorize": [], "batches": []}
+
+            def reconcile(campaign: Path, attempt_id: str, **kwargs: object) -> dict:
+                calls["reconcile"].append((attempt_id, kwargs.get("approve_recovery_sha256")))
+                return dict(reconciled)
+
+            def authorize(campaign: Path, attempt_id: str, path: Path) -> dict:
+                calls["authorize"].append((attempt_id, str(path)))
+                return {"status": "authorized"}
+
+            def batch(namespace: argparse.Namespace) -> tuple[dict, int]:
+                plan = json.loads(Path(namespace.action_plan).read_text(encoding="utf-8"))
+                calls["batches"].append((namespace.sequence, plan))
+                if len(calls["batches"]) == 2:
+                    env.case._write(env.formal / "official" / "attempts" / "a2" / "reservation.json", {"reserved": True})
+                    env.case._write(env.formal / "official" / "attempts" / "a2" / "attempt.json", {"status": "awaiting_receipts"})
+                return {"campaign_run": {"status": "stopped", "reason": "queue-complete", "run_dir": "x"}}, 0
+
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            patches = (
+                self._first_manifest_patch(),
+                mock.patch.object(reconciler, "reconcile_attempt", side_effect=reconcile),
+                mock.patch.object(reconciler, "authorize_recovery_preview", side_effect=authorize),
+                mock.patch.object(closeout.codex_upgrade, "compile_and_run_vc_batch", side_effect=batch),
+                mock.patch.object(closeout.codex_upgrade, "_committed_vc_sequences",
+                                  side_effect=lambda *_args: [item[0] for item in calls["batches"]]),
+            )
+            with self.assertRaises(closeout.CloseoutBlocked) as blocked:
+                env.run(*patches)
+            self.assertEqual((blocked.exception.kind, blocked.exception.details["reconcile"]["review_sha256"]),
+                             ("approval-required", review))
+            self.assertEqual((calls["reconcile"], calls["batches"]), ([("a1", None)], []), "批准之前只对账，不派发")
+            receipt = env.run(*patches, approve_sha256=review, approved_by="测试批准人")
+            self.assertEqual(receipt["status"], "passed")
+            self.assertEqual(env.run_calls, 0, "首批不再派发")
+            self.assertEqual(calls["reconcile"][-1], ("a1", review))
+            self.assertEqual(calls["authorize"], [("a1", str(preview))])
+            (first_sequence, preview_plan), (second_sequence, run_plan) = calls["batches"]
+            self.assertEqual((first_sequence, second_sequence), (1, 2))
+            self.assertEqual(preview_plan["actions"][0]["command"][-1], "--preview-recovery")
+            self.assertEqual(preview_plan["actions"][0]["command"][:3],
+                             ["/usr/bin/python3", "/tool/codex_upgrade.py", "resume"], "命令前缀取首批 capture-official 动作的")
+            self.assertEqual(run_plan["actions"][0]["command"][-3:], ["--recovery-preview", str(preview), "--acknowledge-live-requests"])
+            self.assertEqual((run_plan["execute_item_ids"], run_plan["reuse_item_ids"]), (["guardian"], ["job-1", "job-2"]))
+            self.assertEqual(receipt["vc1_recovery"]["final_attempt"]["status"], "awaiting_receipts")
+            handovers = sorted((env.ledger / "receipts" / "vc0-closeout" / "formal-0154" / "vc1-handover").glob("*.json"))
+            self.assertEqual([path.name for path in handovers], ["0001.json", "0002.json"], "每次对账留一份恢复记录")
 
     def test_attempt_failure_keeps_vc0_open_and_counts_root_cause(self) -> None:
         """attempt 内的失败记 attempt 失败与根因，VC-0 保持打开（不再一失败就登记阶段放弃），修好后同一账本续作。"""
