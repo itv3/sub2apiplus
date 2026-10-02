@@ -23,6 +23,7 @@ import unittest
 from pathlib import Path
 
 from tools.ci import entry_gates as eg
+from tools.ci import entry_steps as es
 from tools.ci import unit_executor as ue
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
 
@@ -233,6 +234,15 @@ class EntryGatesExportTests(unittest.TestCase):
                         "exit_code", "tree", "tree_head", "isolation"):
                 self.assertIn(key, record, "与 lib.sh 的 write_gate_json 同一组字段")
             self.assertEqual((record["command"], record["working_directory"]), (["go", "test", "-tags=unit", "./...", "-count=1"], "backend"))
+            # E2-05：每个门禁项带输入明细与摘要；源码提交取测试树的提交，后端测试另列 Go 工具链。
+            inputs = {item["name"]: item for item in record["inputs"]}
+            self.assertEqual(inputs["source_commit:ENTRY_SOURCE_COMMIT"]["detail"]["value"], "c" * 40)
+            self.assertIn("env:go", inputs)
+            self.assertEqual(record["inputs_sha256"], es.inputs_sha256(record["inputs"]))
+            frontend = json.loads((out / "logs" / "frontend-lint.gate.json").read_text(encoding="utf-8"))
+            self.assertIn("env:node", {item["name"] for item in frontend["inputs"]})
+            self.assertNotIn("env:go", {item["name"] for item in frontend["inputs"]})
+            self.assertEqual({gate["gate_id"]: gate["inputs_sha256"] for gate in entry["gates"]}["backend-unit"], record["inputs_sha256"])
             regression = json.loads((out / "logs" / "full-regression.gate.json").read_text(encoding="utf-8"))
             self.assertEqual((regression["command"], regression["exit_code"], regression["composed_of"]), (["make", "test"], 0, list(eg.MAKE_TEST_GATES)))
             full = json.loads((out / "full-gates-summary.json").read_text(encoding="utf-8"))

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -403,6 +404,20 @@ def _seconds_between(start: str | None, end: str | None) -> float | None:
     return float(parse(end) - parse(start))
 
 
+def _entry_steps_module() -> Any:
+    """同目录的 entry_steps.py（仓库 tools/ci 与驱动副本里都和本文件同目录）：按路径加载，不受当前目录与 PYTHONPATH 影响。"""
+
+    name = "entry_steps_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "entry_steps.py")
+        if spec is None or spec.loader is None:
+            raise ValueError(f"找不到同目录的 entry_steps.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
 def _write(path: Path, payload: Any) -> str:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -427,8 +442,9 @@ def export_records(
 ) -> dict[str, Any]:
     """从一次运行的执行器汇总导出全部记录（写到 ``out``），返回入口门禁总摘要（同时写成 ``out/entry-gates.json``）。
 
-    * 门禁记录 ``logs/<门禁项>.gate.json``：与 lib.sh 的 write_gate_json 同一组字段，另带成员单元、失败单元与不在本平台
-      执行的项；``logs/full-regression.gate.json`` 是 make test 的组成全部通过与否（预跑与全量门禁都引用它）；
+    * 门禁记录 ``logs/<门禁项>.gate.json``：与 lib.sh 的 write_gate_json 同一组字段，另带成员单元、失败单元、不在本平台
+      执行的项，以及这个门禁项的输入明细与输入摘要（E2-05，清单见 entry_steps.GATE_INPUTS；源码提交取测试树的提交）；
+      ``logs/full-regression.gate.json`` 是 make test 的组成全部通过与否（预跑与全量门禁都引用它）；
     * P0 证据 ``p0/{check-egress-spec,test-capture-tools}.json``：手写 P0 脚本的同一形状（P0 收据的 facts 照原样从它们
       取数），test-capture-tools 另列逐条跳过清单，check-egress-spec 另列逐个子检查；
     * pre-A3 子汇总 ``pre-a3-executor-summary.json``：只含 ``pre-a3:`` 单元的命令单元汇总，供认证 issue 核对；
@@ -447,6 +463,9 @@ def export_records(
         raise ValueError("执行器汇总的门禁项与清单不一致")
     profile = manifest.get("profile")
     records: dict[str, dict[str, Any]] = {}
+    steps = _entry_steps_module()
+    inputs_ctx = steps.Context(params={**os.environ, "ENTRY_SOURCE_COMMIT": str(source.get("tree_head") or source.get("commit") or "")},
+                               driver_dir=HERE, steps_dir=out)
 
     def gate_record(gate_id: str, exit_code: int, started: str | None, completed: str | None, extra: dict[str, Any]) -> dict[str, Any]:
         argv, workdir = GATE_COMMANDS.get(gate_id, (["make", "test"], "."))
@@ -459,11 +478,12 @@ def export_records(
     for gate_id in wanted:
         row = gate_rows[gate_id]
         failed = list(row["failed_units"])
+        inputs = steps.gate_inputs(gate_id, inputs_ctx)
         record = gate_record(gate_id, 0 if row["status"] == "passed" else 1, row["started_at_utc"], row["completed_at_utc"], {
             "status": row["status"], "units": row["units"], "test_groups": row["test_groups"], "failed_units": failed,
             "not_executed": row["not_executed"], "unit_seconds": row["unit_seconds"],
             "failed_logs": [rows[unit_id]["log"] for unit_id in failed if unit_id in rows],
-            "executor_summary": str(summary_path),
+            "executor_summary": str(summary_path), "inputs": inputs, "inputs_sha256": steps.inputs_sha256(inputs),
         })
         _write(out / "logs" / f"{gate_id}.gate.json", record)
         records[gate_id] = record
@@ -531,7 +551,7 @@ def export_records(
         "statement": "入口门禁一次运行的记录：P0 证据、VC-0 预跑记录、部署前全量门禁与 pre-A3 场景都取自这一次运行",
         "subject_id": subject, "round": round_id, "profile": profile, "status": status, "source": source,
         "gates": [{"gate_id": gate_id, "status": records[gate_id]["status"], "exit_code": records[gate_id]["exit_code"],
-                   "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in wanted],
+                   "inputs_sha256": records[gate_id]["inputs_sha256"], "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in wanted],
         "composites": composites, "p0_evidence": p0, "pre_a3_executor_summary": pre_a3_summary,
         "executor_summary": str(summary_path), "elapsed_seconds": summary["elapsed_seconds"],
         "max_cores_in_use": summary.get("max_cores_in_use"), "test_tree": tree, "bytecode_cache": bytecode_cache,

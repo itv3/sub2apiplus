@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 66,
+  "file_count": 67,
   "files": [
     {
       "path": "README.md",
-      "sha256": "d710a1cd4689510588621d7c3c00c045909ed4c675075daada51c5d7b58443cd",
+      "sha256": "439e5fe53b18354f7b67424cbbffe43e734d79e495d45cd8ea552ec69739e961",
       "mode": "0600",
-      "bytes": 30686
+      "bytes": 33087
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -70,9 +70,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "cf4ee98a44c066ad7db818255fe293492258e7751dcc1fdeb0af6e0b819a20ef",
+      "sha256": "3e724ff9c42891447ab36e0ac1c67cdd5f6d95e4aa9e843e0474847476f3ec62",
       "mode": "0700",
-      "bytes": 16057
+      "bytes": 16892
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -82,9 +82,15 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "502b151c6c7dab2a039b3090e387a47f29e0c201aa3f22d70598a038214dfa7f",
+      "sha256": "99089a151f6f4e59b17f281a3246b037f1449afcfe8c8bc7712476fb0a3863ac",
       "mode": "0700",
-      "bytes": 40215
+      "bytes": 41425
+    },
+    {
+      "path": "driver/entry_steps.py",
+      "sha256": "bf524e537d7f5981acefe5645c8b5768322491aafd95cd5e21e536ceccc58f41",
+      "mode": "0700",
+      "bytes": 60512
     },
     {
       "path": "driver/env.example.sh",
@@ -399,5 +405,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "266657ae47c0c561c81a44eeb8da58e29d02dc5f1c6fe51d196f3d4db698bf1c"
+  "manifest_sha256": "806bd51c6a67323c82a1c1d886d81dee4143606556d8db66515afa3d59eacd38"
 }

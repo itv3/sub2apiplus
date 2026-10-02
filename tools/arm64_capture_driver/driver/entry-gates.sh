@@ -118,6 +118,14 @@ PYDEPLOY
     echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
     exit 3
   fi
+  # E2-05：整树摘要不含测试目录，也不含指南与部署脚本副本，只比它会放过「测试改了、还没重新部署」（10-02 实测数据根
+  # 的测试比测试树旧两个文件，整树摘要却相等）。入口门禁在测试树验过的，必须就是 pre-A3 在数据根实际跑的那一份：受管
+  # 整树（含测试，不计字节码）、两份指南、部署脚本副本逐项比内容摘要。
+  if ! MISMATCH=$(python3 -B "$DRV/entry_steps.py" deploy-consistency --tree "$TREE" --data-root "$D"); then
+    echo "数据根与本提交不一致：${MISMATCH}（整树摘要相同也不行）：先受监督部署本提交并同步部署脚本副本，再跑入口门禁"
+    echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
+    exit 3
+  fi
   [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
   [ -f "$POLICY_ACTIVATION" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
   if [ -f "$PRE_A3_CERTIFICATION" ]; then

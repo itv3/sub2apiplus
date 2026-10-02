@@ -1481,7 +1481,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py",
-                     "entry-gates.sh", "entry_gates.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
         package = fixture.data_root / "tools" / "official_client_capture"
@@ -1777,7 +1777,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
-                     "entry-gates.sh", "entry_gates.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
