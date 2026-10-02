@@ -528,6 +528,9 @@ class Orchestrator:
         """VC-0 收口（E2-07）：Formal 未建时先复核启动探测报告，收口模块自己做其余三份输入与工具身份的只读预检；
         然后由它按现场判定新建、续作或交给 VC-1 对账恢复链。参数全部来自本轮参数文件与前序步骤记录。"""
 
+        if self.root.resolve() != self.data.resolve():
+            # 演练根（数据根 staging 下）不做 VC-0 收口：首批是真实官方取证，会发正式请求；收口的续作由录制回放链验收。
+            raise OrchestratorError("产物根是验收演练目录（ENTRY_ROOT 不是数据根），不做 VC-0 收口：首批会发正式请求；用 --to p0-receipt")
         paths = self.closeout_paths()
         preflight = self.record_product("preflight-plan", "campaign").parent
         if not ES.formal_built(self.ctx):

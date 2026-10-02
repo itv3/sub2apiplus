@@ -340,6 +340,19 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
                          {step for step in before if eo.ES.STEP_BY_ID[step].live}, "批准后只续作收口，前面的步骤沿用")
         self.assertEqual(self.commands.count("create"), 1)
 
+    def test_rehearsal_root_never_runs_the_closeout(self) -> None:
+        """验收演练根（ENTRY_ROOT 在数据根 staging 下）不做 VC-0 收口：首批是真实官方取证，会发正式请求。"""
+
+        rehearsal = self.fx.data / "staging" / "e2-07-rehearsal"
+        rehearsal.mkdir(parents=True)
+        self.fx.params["ENTRY_ROOT"] = str(rehearsal)
+        result = self.orchestrate()
+        closeout = next(step for step in result["steps"] if step["step_id"] == "vc0-closeout")
+        self.assertEqual((result["exit_code"], closeout["action"], closeout["status"]), (1, "执行", "failed"))
+        self.assertIn("不做 VC-0 收口", "；".join(closeout["reasons"]))
+        self.assertEqual(self.actions(result)["p0-receipt"], "执行／passed", "P0 收据不发请求，演练根照样签")
+        self.assertFalse(any(eo.CLOSEOUT_MODULE in " ".join(call) for call in self.commands.calls))
+
     def test_after_formal_is_built_only_the_closeout_continues(self) -> None:
         self.commands.closeout_results = [(1, {"status": "failed"})]
         first = self.orchestrate()
