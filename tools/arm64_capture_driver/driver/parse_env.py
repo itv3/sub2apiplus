@@ -182,8 +182,14 @@ def main(argv: list[str]) -> int:
     except (OSError, UnicodeDecodeError, EnvFileError) as error:
         print(f"参数文件拒绝加载：{error}", file=sys.stderr)
         return 2
-    for key, value in {**values, **derive(values)}.items():
+    exported = {**values, **derive(values)}
+    for key, value in exported.items():
         sys.stdout.write(f"export {key}={shlex.quote(value)}\n")
+    # 参数文件里没有、也没有派生默认值的可选键：清掉调用方环境里残留的旧值。同一个 shell 先加载过别的参数文件时，上一轮的
+    # 认证坐标、源码提交、身份参数会被悄悄带进本轮（10-02 E2-06 验收时，删掉的必填身份参数就是这样从外层环境继承回来的）。
+    for key in OPTIONAL_KEYS:
+        if key not in exported:
+            sys.stdout.write(f"unset {key}\n")
     return 0
 
 

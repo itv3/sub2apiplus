@@ -528,17 +528,22 @@ class EnvFileParserTests(unittest.TestCase):
     def test_template_parses_and_expands_references(self) -> None:
         result = self._parse(self._template())
         self.assertEqual(result.returncode, 0, result.stderr)
-        exported = dict(line[len("export "):].split("=", 1) for line in result.stdout.splitlines())
+        lines = result.stdout.splitlines()
+        exported = dict(line[len("export "):].split("=", 1) for line in lines if line.startswith("export "))
         parser = load_script("parse_env")
         values = parser.parse(self._template())
         self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
+        # 参数文件里没有、也没有派生默认值的可选键一律 unset：清掉外层环境残留的旧值（E2-06 验收时发现会被继承回来）。
+        unset = {line[len("unset "):] for line in lines if line.startswith("unset ")}
+        self.assertEqual(unset, set(parser.OPTIONAL_KEYS) - set(exported))
+        self.assertIn("ENTRY_COMMIT", unset)
         self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
         self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/codex-9.1.0-candidate-round1")
         # R20：示例阶段预算按实测标定（VC-0 接入目标平台门禁预跑后为 165 分钟起）；这里只验证带空格的值被原样加引号导出。
         self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=165 "))
-        # 输出的每一行都是可安全 eval 的单一赋值
-        for line in result.stdout.splitlines():
-            self.assertRegex(line, r"^export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)$")
+        # 输出的每一行都是可安全 eval 的单一赋值或单一 unset
+        for line in lines:
+            self.assertRegex(line, r"^(export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)|unset [A-Z_][A-Z0-9_]*)$")
 
     def test_rejects_command_forms_without_executing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -588,6 +593,14 @@ class EnvFileParserTests(unittest.TestCase):
             ok = _run(probe, env=fixture2.env, cwd=root)
             self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
             self.assertIn("PROBE_OK ROUND=vtest", ok.stdout)
+            # 外层环境里残留的可选参数（上一份参数文件导出的）不会被带进本轮：参数文件里没有的一律清掉。
+            stale = drv / "stale.sh"
+            stale.write_text("#!/bin/bash\nset -Eeuo pipefail\nsource \"$(dirname \"${BASH_SOURCE[0]}\")/lib.sh\"\n"
+                             "echo \"STALE=[${TARGET_CODE_MODE_HOST_SHA256-清掉了}] [${ENTRY_COMMIT-清掉了}]\"\n", encoding="utf-8")
+            inherited = {**fixture2.env, "TARGET_CODE_MODE_HOST_SHA256": "0" * 64, "ENTRY_COMMIT": "1" * 40}
+            cleared = _run(stale, env=inherited, cwd=root)
+            self.assertEqual(cleared.returncode, 0, cleared.stdout + cleared.stderr)
+            self.assertIn("STALE=[清掉了] [清掉了]", cleared.stdout)
 
 
 def load_script(name):

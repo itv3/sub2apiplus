@@ -21,14 +21,18 @@ JR=""
 for candidate in "$JR_BASE" "$JR_BASE"-r*; do
   if [ -f "$candidate/receipt.json" ]; then JR="$candidate"; fi
 done
-if [ -n "$JR" ]; then
+# 产物存在不等于可用（E2-06）：有作业失败时工具照样写收据并退出 0，沿用前必须核对状态是通过，不是就换新目录重做。
+receipt_status() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("status"))' "$1/receipt.json" 2>/dev/null || true; }
+if [ -n "$JR" ] && [ "$(receipt_status "$JR")" = passed ]; then
   echo "Job 演练收据已存在，沿用：$JR"
 else
+  if [ -n "$JR" ]; then echo "Job 演练收据不是通过（status=$(receipt_status "$JR")），不沿用，换新目录重做：$JR"; fi
   JR="$JR_BASE"
   if [ -e "$JR" ]; then JR="$JR_BASE-r$(date -u +%H%M%S)"; fi
   mkdir -m 0700 "$JR"
   python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt collect --campaign-dir "$PRE" --evidence-root "$JR" --output facts.json | cut -c1-160
   python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt finalize --evidence-root "$JR" --facts facts.json --output receipt.json | cut -c1-160
+  if [ "$(receipt_status "$JR")" != passed ]; then echo "Job 演练收据不是通过（status=$(receipt_status "$JR")）：修好后重跑本脚本（会换新目录）"; exit 1; fi
 fi
 
 # R19：取证前用目标客户端按各 TUI 作业的真实参数启动一次（私有命名空间、本地替身、零真实请求）。

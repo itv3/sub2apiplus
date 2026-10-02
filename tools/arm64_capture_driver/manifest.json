@@ -214,9 +214,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "c740cbe49571f3661bf1941caac4bd4b582505aa16f7c443e3590010f6e96b3c",
+      "sha256": "152b48bbdb242d3c858b8c2694dfef85a4c80d9cbdf364dc049e686f58ecd621",
       "mode": "0700",
-      "bytes": 11039
+      "bytes": 11523
     },
     {
       "path": "driver/pre-a3.sh",
@@ -232,9 +232,9 @@
     },
     {
       "path": "driver/stage1-finish.sh",
-      "sha256": "4b1e91848d4c3a9afaa06683ac730faa8ceff68360cbccb35dc144289961628e",
+      "sha256": "fac517435c4ae93a5bc919a892915b54764b9e2b691f06f3f6ba01fd32ee4d7c",
       "mode": "0700",
-      "bytes": 3440
+      "bytes": 4111
     },
     {
       "path": "driver/stage1.sh",
@@ -417,5 +417,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "e2b1adb94409544b04e0f7abe377b954779d9d345ece3b6ee8010275d8eafc4e"
+  "manifest_sha256": "6939b14aceb22841250f52ec542c727e06d29cede58601bd25aff82f8eca91a9"
 }

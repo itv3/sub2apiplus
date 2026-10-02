@@ -693,7 +693,9 @@ root = Path(args[args.index("--evidence-root") + 1])
 output = args[args.index("--output") + 1]
 if args[0] == "finalize" and os.environ.get("STUB_JR_FAIL"):
     sys.exit(1)
-(root / output).write_text("{}", encoding="utf-8")
+# 收据带状态（有作业失败时真实工具照样写收据并退出 0）：STUB_JR_STATUS 指定，默认通过。
+payload = {"status": os.environ.get("STUB_JR_STATUS", "passed")} if args[0] == "finalize" else {}
+(root / output).write_text(json.dumps(payload), encoding="utf-8")
 '''
 STUB_DOCKER = r'''#!/bin/bash
 echo "docker $*" >> "$STUB_LOG"
@@ -799,6 +801,27 @@ class Stage1FinishResumeTests(unittest.TestCase):
             self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
             self.assertEqual([line.split()[0] for line in log.read_text(encoding="utf-8").splitlines()], ["probe", "probe"], "第三次只重跑探测")
             self.assertIn("atomic-double 收据已存在，沿用", again.stdout)
+
+    def test_failed_rehearsal_receipt_is_not_reused(self) -> None:
+        """E2-06：有作业失败的 Job 演练收据（工具照样写收据并退出 0）不沿用；本次又是失败就停下，不写 stage1.env。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture, drv, env, log = self._fixture(root)
+            failed = self._finish(drv, env, root, STUB_JR_STATUS="failed")
+            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+            self.assertIn("Job 演练收据不是通过（status=failed）", failed.stdout)
+            self.assertFalse((fixture.runroot / "stage1.env").exists())
+            log.write_text("", encoding="utf-8")
+            done = self._finish(drv, env, root)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("不沿用，换新目录重做", done.stdout)
+            self.assertNotIn("Job 演练收据已存在，沿用", done.stdout)
+            self.assertEqual([line.split()[:2] for line in log.read_text(encoding="utf-8").splitlines()][:2],
+                             [["job-rehearsal", "collect"], ["job-rehearsal", "finalize"]])
+            values = self._env_file(fixture.runroot / "stage1.env")
+            self.assertRegex(values["JR"], r"-job-rehearsal-vc5-.*-r\d{6}$", "新目录带时间后缀，失败的旧收据原样保留")
 
     def test_interrupted_rehearsal_directory_is_kept_and_redone_under_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
