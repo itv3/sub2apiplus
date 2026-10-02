@@ -268,9 +268,9 @@
     },
     {
       "path": "driver/unit_records.py",
-      "sha256": "0a707c005f2ef2849ba1b161351e3d8c18270412a6b51d2a99c7776bb315d267",
+      "sha256": "9ff15bbe5dbaf350d7d21c4d9187cc73e3c41e1d365addca3bb228b871172e64",
       "mode": "0700",
-      "bytes": 50332
+      "bytes": 50519
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -423,5 +423,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "a4b0ad35dae272c94d87531178ae8b54e931be9f52a646fca1a938e91923ce17"
+  "manifest_sha256": "3fe17dfd3d02366341324cbe0b7d12ea3d3d8586d1502e4c5ca3d5ba4167e6f9"
 }

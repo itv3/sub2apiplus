@@ -146,6 +146,12 @@ def new_run_id() -> str:
     return f"{time.strftime('%Y%m%dt%H%M%Sz', time.gmtime())}-{os.getpid()}-{secrets.token_hex(3)}"
 
 
+def _span(hours: float) -> str:
+    """时长的可读写法：两小时以内按分钟，否则按小时。"""
+
+    return f"{hours * 60:.1f} 分钟" if hours < 2 else f"{hours:.1f} 小时"
+
+
 def _diff_names(left: Sequence[Mapping[str, Any]] | None, right: Sequence[Mapping[str, Any]] | None) -> list[str]:
     """两份明细里摘要不同（或只在一边出现）的项名。"""
 
@@ -753,7 +759,7 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
     else:
         age_hours = (facts.now - completed) / 3600
         if age_hours > facts.max_age_hours:
-            problems.append(f"超过承接期限（{age_hours:.1f} 小时前完成，期限 {facts.max_age_hours:g} 小时）")
+            problems.append(f"超过承接期限（{_span(age_hours)}前完成，期限 {_span(facts.max_age_hours)}）")
         elif age_hours < -0.1:
             problems.append("完成时间在未来")
     if problems and not thorough:
