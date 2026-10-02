@@ -1,0 +1,74 @@
+{
+  "base_commit": "6cdae9a445d96880d493e564bd40986a04859e0d",
+  "changed_path_count": 23,
+  "current_commit": "dcd04fd3c187e2ce58cc92bd0a00bb494805605c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5322,
+  "frozen_path_count": 1929,
+  "identity_sha256": "f83dcf5693c746bcc54a4219cb8c6eb89e981e0200f703b749034e17bbbb782f",
+  "issued_at_utc": "2026-10-02T15:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upstream-codex-entry-e3-04-read-audit-20261002-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_job_rehearsal_receipt.py",
+      "predecessor_sha256s": [
+        "cedd547dea73f7ddde43397a9a14cf84c0135601c7809bf935242ec247d0a70c"
+      ],
+      "reason": "E3-04：读集审计与真实链按闭包复制测试目录；job_rehearsal_receipt 测试一处正则改原始字符串（值不变，消除 SyntaxWarning） path=tools/official_client_capture/tests/test_codex_upgrade_job_rehearsal_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-evidence-label-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-label-coverage-compat-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a397d8c1820dd18686637775193e9bf70d0ff99c6b3b41387b9e2a95bda4061d"
+    }
+  ],
+  "unregistered_path_count": 22,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/entry-gates.sh",
+    "tools/arm64_capture_driver/driver/entry_gates.py",
+    "tools/arm64_capture_driver/driver/entry_orchestrator.py",
+    "tools/arm64_capture_driver/driver/entry_steps.py",
+    "tools/arm64_capture_driver/driver/read_audit.py",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/driver/unit_records.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/entry_gates.py",
+    "tools/ci/entry_orchestrator.py",
+    "tools/ci/entry_steps.py",
+    "tools/ci/read_audit.py",
+    "tools/ci/unit_executor.py",
+    "tools/ci/unit_records.py",
+    "tools/official_client_capture/tests/managed_tree_copy.py",
+    "tools/official_client_capture/tests/real_chains/test_codex_upgrade_evaluation_real_chain.py",
+    "tools/official_client_capture/tests/real_chains/test_codex_upgrade_stage_recovery.py",
+    "tools/official_client_capture/tests/real_chains/test_codex_upgrade_vc1_recorded_chain.py",
+    "tools/official_client_capture/tests/test_ci_read_audit.py",
+    "tools/official_client_capture/tests/test_ci_unit_records.py",
+    "tools/official_client_capture/tests/test_managed_tree_copy_binding.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
