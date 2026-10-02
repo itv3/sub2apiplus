@@ -27,7 +27,8 @@ check() { # <名称> <函数>：各项互不依赖，一项失败不中断其余
   local name=$1 rc=0 start
   start=$(date +%s)
   echo "== ${name} $(utc_now)"
-  "$2" > "$OUT/$name.log" 2>&1 || rc=$?
+  # 放进子 shell：某一项引用了参数文件里缺的变量（set -u）或中途 exit，只算这一项失败，其余照查、汇总照写（E2-06 验收发现）。
+  ( "$2" ) > "$OUT/$name.log" 2>&1 || rc=$?
   tail -n 6 "$OUT/$name.log" | cut -c1-300
   printf '%s %s\n' "$name" "$([ "$rc" = 0 ] && echo passed || echo failed)" >> "$OUT/results.txt"
   if [ "$rc" = 0 ]; then
@@ -93,13 +94,14 @@ official_package() {
 
 plan_audit() {
   # 拟定路径只作作业坐标与输出路径校验，不会被创建；审计不读账本与环境收据（建账本之后才有）。
+  # 参数文件可缺省的两个身份参数缺了时传空值：审计的参数项报出来，清单、源码等其余各项照查（不能因缺参数跳过 covers 等）。
   python3 -m tools.official_client_capture.codex_upgrade plan --audit-only \
     --campaign-dir "$D/staging/entry-preflight-$(date -u +%Y%m%dt%H%M%Sz)/campaign" --campaign-id "${CAMPAIGN_PREFIX}-plan-audit" \
     --baseline-version "$BASELINE_VERSION" --target-version "$TARGET_VERSION" \
     --campaign-mode preflight_only --campaign-purpose production_replacement \
     --baseline-source "$BASELINE_SOURCE" --target-source "$TARGET_SOURCE" --baseline-evidence "$ACTIVE_PROFILE" \
     --target-sha256 "$CODEX_BIN_SHA256" --target-package "$TARGET_PACKAGE" --target-package-sha256 "$OFFICIAL_ASSET_SHA256" \
-    --target-code-mode-host-sha256 "$TARGET_CODE_MODE_HOST_SHA256" --runtime-image "$CAPTURE_RUNTIME_IMAGE" \
+    --target-code-mode-host-sha256 "${TARGET_CODE_MODE_HOST_SHA256:-}" --runtime-image "${CAPTURE_RUNTIME_IMAGE:-}" \
     --rule-manifest "$BASELINE_RULES_JSON" --scenario-manifest "$BASELINE_SCENARIOS_JSON" --target-scenario-manifest "$SCENARIOS_JSON" \
     --capture-codex-bin "$CODEX_BIN" --relay-codex-bin "$CODEX_BIN" --suite full --model "$MAIN_MODEL" --lite-model "$LITE_MODEL" \
     --codex-account-id "$CODEX_ACCOUNT_ID" --api-key-id "$API_KEY_ID" --live-attestation-compose-dir "$COMPOSE_DIR" \

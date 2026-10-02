@@ -1447,6 +1447,28 @@ class ManagedSharedCacheTests(unittest.TestCase):
         self.assertNotIn("|", code[prepare[0]], "要在本 shell 里导出前缀，不能放进管道")
         self.assertTrue(checks and prepare[0] < min(checks), "字节码共享层在各检查项之前准备")
 
+    def test_entry_preflight_one_check_aborting_does_not_stop_the_rest(self) -> None:
+        """E2-06 验收发现：缺必填参数时，后面某一项引用这个变量（set -u）会让整个脚本中途退出，汇总没写、其余项没查。
+        检查项放进子 shell 后，一项中断只算这一项失败，其余照查。plan 审计对两个可缺省的身份参数传空值，照查清单。"""
+
+        text = (SCRIPTS / "entry-preflight.sh").read_text(encoding="utf-8")
+        body = re.search(r"^check\(\) \{.*?^\}\n", text, re.S | re.M)
+        assert body is not None
+        script = (
+            "set -Euo pipefail\nOUT=$1; FAILED=()\nutc_now() { date -u +%FT%TZ; }\n" + body.group(0)
+            + 'first() { echo "引用参数文件里缺的变量 $NOT_IN_ENV_FILE"; }\nsecond() { echo 第二项照查; exit 0; }\n'
+            + "check first first\ncheck second second\ncat \"$OUT/results.txt\"\necho \"FAILED=${FAILED[*]}\"\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(["bash", "-c", script, "entry-preflight-test", directory], capture_output=True, text=True,
+                                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("first failed\nsecond passed\n", completed.stdout)
+        self.assertIn("FAILED=first", completed.stdout)
+        audit = text[text.index("plan_audit() {"):text.index("environment_probe() {")]
+        self.assertIn('"${TARGET_CODE_MODE_HOST_SHA256:-}"', audit)
+        self.assertIn('"${CAPTURE_RUNTIME_IMAGE:-}"', audit)
+
     def test_entry_scripts_reuse_the_shared_layer_right_after_the_cheap_checks(self) -> None:
         """便宜检查在子进程里准备共享层，pre-A3（认证进程内跑真实链）与 stage1 紧接着在自己的 shell 里导出前缀。"""
 

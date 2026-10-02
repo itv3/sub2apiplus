@@ -76,9 +76,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "af895068c7c1b9a707dfaf57ef514863bec0fe0a160a1f7b1a2a84de82bb8247",
+      "sha256": "c831e6a00092650592dba65b2236b1d211fe570c47ec05bde4c1d081e98bafd4",
       "mode": "0700",
-      "bytes": 8908
+      "bytes": 9273
     },
     {
       "path": "driver/entry.sh",
@@ -417,5 +417,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "e9da3974d30dfeb6dd6aefe5d39b5b61cd640c9e97d0098e95e627244a5084f9"
+  "manifest_sha256": "87137a1095687160dc34135e8a2b7d6e21dc2b888b670c235d24321e7ae1000c"
 }
