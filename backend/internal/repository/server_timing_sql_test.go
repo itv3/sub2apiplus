@@ -192,7 +192,10 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 	if strings.Contains(header, "sensitive") {
 		t.Fatalf("SQL text leaked into header: %q", header)
 	}
-	if app, db := metricDuration(t, header, "app"), metricDuration(t, header, "db"); app <= db {
+	// 两次读取之间睡了 30ms，这段间隔必须记进应用耗时（app＝总耗时减去全部驱动调用区间的并集）。不拿 app 与 db 比
+	// 大小：机器繁忙时假驱动调用本身也会被调度拖长（ARM64 四核满载并行门禁实测 db=41.3ms、app=30.3ms），比大小会误报；
+	// 间隔若被错算进数据库区间，app 会远小于 30ms，下面的下限照样能抓到。
+	if app, db := metricDuration(t, header, "app"), metricDuration(t, header, "db"); app < 29 {
 		t.Fatalf("row processing gap was counted as DB time: app=%.1fms db=%.1fms header=%q", app, db, header)
 	}
 }
