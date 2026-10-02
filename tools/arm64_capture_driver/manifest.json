@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "22ce8026872e426bb2456d47277c26071589679ac4cea1299c19ec09e0783e3e",
+      "sha256": "2d76b0d7ed7e895bcc3d897d823d08fdfe68271bbce5dbe70b0b226cc46bbd1c",
       "mode": "0600",
-      "bytes": 43253
+      "bytes": 44551
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -70,9 +70,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "aee452dc988de270c7de7ee3d28fce77d9093d497b4a726958c65ae8a3c74a1d",
+      "sha256": "92e8dfc040431193ec839802eaf50e5d45d7ef41b4e4802bf961e8100da9bd90",
       "mode": "0700",
-      "bytes": 23016
+      "bytes": 23140
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -88,21 +88,21 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "9fc138fe1417f3262c9482c209aea65cbdbfb990e1868db5c32a137fd3c0d0e6",
+      "sha256": "120a4d0d361889a1b7e61f2a644beae241399932c94f980936dd7024cb642681",
       "mode": "0700",
-      "bytes": 52469
+      "bytes": 58899
     },
     {
       "path": "driver/entry_orchestrator.py",
-      "sha256": "cde38dd3d8a5373478d8af673cfc716ce2326e27f677714466ee3e5529b9aeb9",
+      "sha256": "0c3ba3a70d669b161ad67d7bb91ab2772c3b6d5a06f457c280193af668309701",
       "mode": "0700",
-      "bytes": 53777
+      "bytes": 54004
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "185e74b7c64debf2685f648365354ae3303c19fefffd7f148cafd6c693b31894",
+      "sha256": "e62d088cd5b4fe5810370fbf6895cb3c66798f7bfbb34d0e07824508e3771751",
       "mode": "0700",
-      "bytes": 63937
+      "bytes": 64161
     },
     {
       "path": "driver/env.example.sh",
@@ -423,5 +423,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "90d32b063c2d2ace8b85a71c977249652da206d09a6065a050c672bafed66606"
+  "manifest_sha256": "5e580a51e00c7c18988be8f20baf830a6ee829218f646c02999550039ea222b8"
 }

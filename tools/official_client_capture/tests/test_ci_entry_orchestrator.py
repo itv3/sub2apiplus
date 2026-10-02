@@ -45,7 +45,8 @@ class Commands:
         self.closeout_results: list[tuple[int, dict]] = []
         # 入口门禁导出的 P0 证据里标成没通过的门禁项（防御性核对：门禁记录与 P0 证据不一致时不签 P0）。
         self.p0_evidence_failed: set[str] = set()
-        # E3-01：全集通过模式承接了单元时扣下的旧形状 P0 证据；每次调用入口门禁时传入的模式。
+        # 入口门禁扣下的 P0 证据（E3-03：承接了单元却写不出 v2——记录库里没有已发布的清单、五摘要算不出来）；每次调用
+        # 入口门禁时传入的模式。
         self.p0_evidence_withheld: set[str] = set()
         self.gates_modes: list[str] = []
 
@@ -70,7 +71,7 @@ class Commands:
             out = Path(_option(argv, "--out"))
             self.gates_modes.append(_option(argv, "--mode"))
             _write_json(out / "entry-gates.json", {"status": self.gates_status, "p0_evidence_withheld": {
-                gate_id: "示例：本次运行承接了单元，旧形状 P0 证据扣下；新形状由 E3-03 接上" for gate_id in sorted(self.p0_evidence_withheld)}})
+                gate_id: "示例：本次运行承接了单元，要写 v2 P0 证据，但运行清单没有发布进记录库" for gate_id in sorted(self.p0_evidence_withheld)}})
             for gate_id in ("test-capture-tools", "check-egress-spec"):
                 if gate_id in self.p0_evidence_withheld:
                     continue
@@ -366,15 +367,16 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertFalse(any("run-commands" in call for call in self.commands.calls), "不再走 run-commands")
 
     def test_withheld_p0_evidence_fails_the_p0_step_with_the_reason(self) -> None:
-        """入口门禁承接了单元、扣下旧形状 P0 证据时：入口门禁这一步照样通过（两份 P0 证据是可选产物），P0 收据这一步失败并
-        写明原因与出路（--reexecute-gates）。"""
+        """入口门禁承接了单元却写不出 v2 P0 证据、扣下证据时（E3-03）：入口门禁这一步照样通过（两份 P0 证据是可选产物），
+        P0 收据这一步失败并写明原因与出路（--reexecute-gates）。"""
 
         self.commands.p0_evidence_withheld = {"test-capture-tools"}
         result = self.orchestrate()
         actions = self.actions(result)
         self.assertEqual((actions["entry-gates"], actions["p0-receipt"]), ("执行／passed", "执行／failed"))
         reasons = "；".join(next(step for step in result["steps"] if step["step_id"] == "p0-receipt")["reasons"])
-        self.assertIn("test-capture-tools 没有旧形状 P0 证据", reasons)
+        self.assertIn("test-capture-tools 没有可签 P0 收据的证据", reasons)
+        self.assertIn("运行清单没有发布进记录库", reasons)
         self.assertIn("--reexecute-gates", reasons)
         self.assertFalse(any("codex_upgrade_vc_receipt" in " ".join(call) for call in self.commands.calls), "不签 P0 收据")
 

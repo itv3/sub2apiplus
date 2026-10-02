@@ -17,8 +17,9 @@
 # Linux 上不执行 macOS 专用的部署脚本测试（写进门禁记录的 not_executed；CI 在 macos-15 上照常执行）。
 # 模式（--mode，E3-01，方案 D12）：full-set-pass（默认，全集通过）先在单元执行记录库里给每个单元找可承接的记录，只执行
 #   其余单元；re-execute（重新执行全集）不承接。两种模式的单元执行记录都入库（--record-store，默认数据根之外跨轮次固定的
-#   $(dirname $D)/unit-records），执行器另写清单 executor/unit-manifest.json 并自检。门禁项里有承接的单元时不导出旧形状
-#   P0 证据（它声明的是 make 命令的一次运行；新形状由 E3-03 接上），总摘要的 p0_evidence_withheld 写明原因。
+#   $(dirname $D)/unit-records），执行器另写清单 executor/unit-manifest.json 并自检。门禁项里有承接的单元时两份 P0 证据
+#   写 v2（E3-03：以运行清单为证据，另登记记录库与测试树五摘要，签发与 VC-0 收口按记录库逐条重验）；记录库里没有已发布
+#   的清单、五摘要算不出来时不写，总摘要的 p0_evidence_withheld 写明原因。
 # 环境（E3-01）：门禁清单生成与执行器都在白名单环境里运行（env -i 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、
 #   Go／Docker／Node／pnpm 的变量，再显式给字节码、历史源码与 TypeScript 的设置）：单元能看到的环境就是环境指纹里的那一份，
 #   本轮参数文件导出的键（D、STAMP、各认证坐标……）不再进入单元环境。

@@ -207,7 +207,8 @@ STEPS: tuple[Step, ...] = (
     ), products=(Product("activation", "{POLICY_ACTIVATION}"),)),
     # 入口门禁（测试树部分）：源码提交确定测试树的全部内容（源码、测试、文档、Makefile、CI 定义、权重表与耗时表）；
     # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。两份 P0 证据
-    # 可以没有：全集通过模式承接了单元时不写旧形状 P0 证据（E3-01，新形状由 E3-03 接上），P0 收据步骤据总摘要报原因。
+    # 可以没有：全集通过模式承接了单元时写 v2（E3-03），记录库里没有已发布的清单、测试树五摘要算不出来时不写，P0 收据
+    # 步骤据总摘要报原因。
     Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
         Input("tests", "source_commit", "ENTRY_COMMIT"),
         *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
@@ -284,7 +285,8 @@ STEPS: tuple[Step, ...] = (
         *_params("RELEASE_CERTIFICATION"), *IDENTITY, TESTS_TREE, DEPLOY_RECEIPT,
         *_drivers("stage2.sh"), *COMMON_DRIVER, *_env("arch", "go", "docker"),
     ), products=(Product("certification", "{RELEASE_CERTIFICATION}"),)),
-    # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证、回退依据与账本的升级 ID。
+    # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证、回退依据与账本的升级 ID。入口门禁承接了
+    # 单元时证据是 v2（E3-03），签发时按证据登记的记录库逐条重验——记录库是入口门禁步骤的产物，随上游一起失效。
     Step("p0-receipt", "P0 收据", "post_ledger", upstream=("entry-gates", "release-certification", "ledger"), inputs=(
         *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "P0_ROLLBACK_EVIDENCE"), *_managed_files("codex_upgrade_vc_receipt.py"),
         Input("upstream", "file", "{P0_ROLLBACK_EVIDENCE}"), *_drivers("entry_orchestrator.py"),

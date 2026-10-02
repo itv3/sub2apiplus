@@ -656,8 +656,378 @@ def _write_once(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# E3-03：P0 离线门禁证据的新形状（以执行器的运行清单为证据）
+# ---------------------------------------------------------------------------
+#
+# 入口门禁在全集通过模式下会承接以往运行的正式执行记录（E3-01）：门禁项的单元一部分本次执行、一部分承接，
+# 不再是「make 命令的一次运行」。这种运行的两份离线门禁证据写成 v2：登记执行器的运行清单（run_id、自摘要、
+# 模式）、记录库位置、门禁项的命令单元与测试组、本次执行／承接的单元数，以及测试树的工具五摘要。签发
+# （finalize）与 VC-0 收口按下面的规则逐条重验，任何一条不符即拒绝：
+#   · 清单已发布进记录库、自摘要与证据登记的相符；两份证据引用同一份清单、同一记录库、同一工具五摘要；
+#   · 闭合：check-egress-spec 的单元等于清单规划的全部 egress-spec: 子检查单元；test-capture-tools 的成员是
+#     前置检查单元加测试组的全部单元，测试 ID 并集等于清单冻结的测试组全集，没有缺报、重复或全集之外的 ID；
+#   · 逐条记录：在库、自摘要与文件名相符、是该单元的正式执行、规格与输入摘要等于清单、调度策略／环境指纹／
+#     执行器与清单相同、按原始字段判通过（测试单元逐个测试结论在通过集合内）、日志在库且摘要相符；本次执行的
+#     记录来自本次运行；承接的记录来自别的运行、原运行清单把它列为正式执行、完成时间在本次清单的承接期限内；
+#   · 计数按记录重算（通过、跳过、本次执行、承接），与证据和收据断言一致；
+#   · 工具五摘要等于发布认证登记的身份。
+# v1（make 命令的一次运行）与更早的手写证据不读内容，照旧只按字节绑定（两条字面 make 命令的现行形状继续可用）。
+# 重放（replay）只核对字节绑定、不读记录库：历史收据，以及记录库清理之后的收据，都照常可重放。
+# 本节只依赖标准库；执行记录与清单的摘要算法、路径规则与 tools/ci/unit_records.py 相同（那边改了这里要跟着改）。
+P0_GATE_EVIDENCE_V2_SCHEMA = "codex-p0-offline-gate-evidence/v2"
+# 证据角色 → 门禁项
+P0_GATE_EVIDENCE_ROLES = {"check_egress_spec": "check-egress-spec", "test_capture_tools": "test-capture-tools"}
+P0_V2_COMMON_FIELDS = frozenset({
+    "schema_version", "gate_id", "command", "working_directory", "git_commit", "status", "exit_code", "passed", "failed",
+    "approved_skip", "unexpected_skip", "elapsed_seconds", "raw_errors", "temporary_asset_inventory", "executed_as",
+    "executor_summary", "unit_manifest", "record_store", "units", "test_group", "unit_counts", "tool_identity",
+})
+P0_V2_GATE_FIELDS = {
+    "check-egress-spec": frozenset({"checks"}),
+    "test-capture-tools": frozenset({"expected_tests", "reported_tests", "skipped"}),
+}
+P0_IDENTITY_FIELDS = ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "tool_files_sha256")
+EGRESS_SPEC_UNIT_PREFIX = "egress-spec:"
+CAPTURE_TEST_GROUP = "capture-tools"
+# test-capture-tools 门禁项的命令单元：Makefile 里 test-capture-tools 的前置检查（入口门禁 plan 的同名单元）。
+CAPTURE_COMMAND_UNITS = ("capture:prerequisites",)
+UNIT_RECORD_SCHEMA = "unit-execution-record/v1"
+UNIT_MANIFEST_SCHEMA = "unit-execution-manifest/v1"
+UNIT_FULL_SET_PASS = "full-set-pass"
+UNIT_MODES = frozenset({UNIT_FULL_SET_PASS, "re-execute"})
+UNIT_MAX_AGE_HOURS = 168.0
+UNIT_PASSING_OUTCOMES = frozenset({"passed", "skipped", "expected_failure"})
+UNIT_RUN_ID_RE = re.compile(r"^[0-9A-Za-z._-]{1,128}$")
+# 承接记录的完成时间允许比清单的判定时间晚这么多秒（与 unit_records.check_record 的 0.1 小时相同）。
+UNIT_CLOCK_SKEW_SECONDS = 360
+
+
+def _unit_sha256(value: Any) -> str:
+    """执行记录与运行清单的摘要算法：与 unit_records.canonical 相同（紧凑分隔、排序键、不转义、不加换行）。"""
+
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _unit_sealed(payload: Mapping[str, Any], key: str) -> bool:
+    body = {name: value for name, value in payload.items() if name != key}
+    return payload.get(key) == _unit_sha256(body)
+
+
+def _unit_utc(value: Any) -> float | None:
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _optional_json(path: Path) -> dict[str, Any] | None:
+    """读一份证据文件；不是 JSON 对象（例如手写 P0 的日志证据）时返回 None，由调用方当作旧形状。"""
+
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_EVIDENCE_BYTES:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+class _UnitRecordStore:
+    """记录库的只读访问：路径规则与 unit_records.RecordStore 相同（记录按单元 ID 摘要前 16 位分桶，日志与运行清单
+    按名字存放）。读出的文件拒绝符号链接与超限大小；运行清单只增不改，同一次重验里按 run_id 缓存。"""
+
+    def __init__(self, root: Any) -> None:
+        if not isinstance(root, str) or not root or not Path(root).is_absolute():
+            raise VCReceiptError("P0 v2 证据登记的记录库不是绝对路径")
+        path = Path(root)
+        if path.is_symlink() or not path.is_dir():
+            raise VCReceiptError(f"P0 v2 证据登记的记录库不存在或不可信：{root}")
+        self.root = path.resolve(strict=True)
+        self._manifests: dict[str, dict[str, Any] | None] = {}
+        self.verified_logs: set[str] = set()
+
+    def record(self, unit_id: str, record_sha256: Any) -> dict[str, Any] | None:
+        if not isinstance(record_sha256, str) or not SHA256_RE.fullmatch(record_sha256):
+            return None
+        bucket = hashlib.sha256(unit_id.encode("utf-8")).hexdigest()[:16]
+        return _optional_json(self.root / "records" / bucket / f"{record_sha256}.json")
+
+    def manifest(self, run_id: Any) -> dict[str, Any] | None:
+        if not isinstance(run_id, str) or not UNIT_RUN_ID_RE.fullmatch(run_id):
+            return None
+        if run_id not in self._manifests:
+            self._manifests[run_id] = _optional_json(self.root / "runs" / f"{run_id}.json")
+        return self._manifests[run_id]
+
+    def log_ok(self, digest: Any) -> bool:
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+            return False
+        if digest not in self.verified_logs:
+            path = self.root / "logs" / f"{digest}.log"
+            if path.is_symlink() or not path.is_file() or file_sha256(path) != digest:
+                return False
+            self.verified_logs.add(digest)
+        return True
+
+
+def _unit_record_passes(record: Mapping[str, Any]) -> tuple[bool, str]:
+    """按执行记录的原始字段重判结论，与 unit_records.derived_pass 同一规则（不只看 passed 字段）。"""
+
+    if record.get("exit_code") != 0 or record.get("signal") is not None or record.get("timed_out") is not False:
+        return False, "退出状态不是成功"
+    if record.get("unit_type") == "test":
+        tests, ids = record.get("tests"), record.get("test_ids")
+        if (not isinstance(tests, dict) or not isinstance(ids, list) or not ids
+                or not all(isinstance(test_id, str) for test_id in ids) or len(ids) != len(set(ids)) or set(tests) != set(ids)):
+            return False, "测试结果与测试 ID 集合不符"
+        if any(not isinstance(item, Mapping) or item.get("outcome") not in UNIT_PASSING_OUTCOMES for item in tests.values()):
+            return False, "有测试没通过"
+    elif record.get("unit_type") != "command":
+        return False, "单元类型不认识"
+    if record.get("passed") is not True:
+        return False, "记录结论不是通过"
+    return True, ""
+
+
+def _p0_v2_manifest(store: _UnitRecordStore, reference: Any) -> dict[str, Any]:
+    """证据登记的运行清单：已发布进记录库、自摘要与模式相符，规划单元与单元项一一对应、不重复。"""
+
+    reference = _expect(reference, {"run_id", "manifest_sha256", "mode"}, "P0 v2 证据 unit_manifest")
+    manifest = store.manifest(reference["run_id"])
+    if (manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _unit_sealed(manifest, "manifest_sha256")
+            or manifest.get("run_id") != reference["run_id"]):
+        raise VCReceiptError("P0 v2 证据引用的运行清单没有发布到记录库，或自摘要不符（清单自检没通过的运行不能签 P0）")
+    if manifest.get("manifest_sha256") != reference["manifest_sha256"] or manifest.get("mode") != reference["mode"]:
+        raise VCReceiptError("P0 v2 证据登记的清单摘要或模式与记录库里的运行清单不符")
+    if manifest.get("mode") not in UNIT_MODES:
+        raise VCReceiptError(f"运行清单的模式不认识：{manifest.get('mode')!r}")
+    planned, entries = manifest.get("planned_units"), manifest.get("units")
+    if (not isinstance(planned, list) or not isinstance(entries, list) or not all(isinstance(item, str) for item in planned)
+            or not all(isinstance(item, Mapping) for item in entries)):
+        raise VCReceiptError("运行清单缺少规划单元或单元项")
+    ids = [str(entry.get("unit_id")) for entry in entries]
+    if len(set(planned)) != len(planned) or len(set(ids)) != len(ids) or set(ids) != set(planned):
+        raise VCReceiptError("运行清单的单元项与规划单元不是一一对应（有缺、有多或有重复）")
+    return manifest
+
+
+def _p0_v2_record(store: _UnitRecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    """核验运行清单里的一个单元项，返回（执行记录，问题）。问题非空即拒绝签发。"""
+
+    unit_id = str(entry.get("unit_id"))
+    disposition = entry.get("disposition")
+    if disposition not in ("executed", "inherited"):
+        return None, [f"{unit_id}：处置不是本次执行或承接（{disposition!r}）"]
+    if disposition == "inherited" and manifest.get("mode") != UNIT_FULL_SET_PASS:
+        return None, [f"{unit_id}：重新执行全集的运行清单不得有承接项"]
+    digest = entry.get("record_sha256")
+    record = store.record(unit_id, digest)
+    if record is None:
+        return None, [f"{unit_id}：执行记录不在记录库里"]
+    if record.get("schema_version") != UNIT_RECORD_SCHEMA or not _unit_sealed(record, "record_sha256") or record.get("record_sha256") != digest:
+        return None, [f"{unit_id}：执行记录自摘要不符（被改过）"]
+    if record.get("unit_id") != unit_id or record.get("kind") != "formal" or record.get("unit_type") != entry.get("unit_type"):
+        return None, [f"{unit_id}：执行记录不是该单元的正式执行"]
+    problems: list[str] = []
+    if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):
+        problems.append(f"{unit_id}：执行记录的单元规格或输入摘要与运行清单不符")
+    executor = record.get("executor") if isinstance(record.get("executor"), Mapping) else {}
+    current_executor = manifest.get("executor") if isinstance(manifest.get("executor"), Mapping) else {}
+    if (record.get("policy_sha256") != manifest.get("policy_sha256") or record.get("environment_sha256") != manifest.get("environment_sha256")
+            or not executor.get("sha256") or executor.get("sha256") != current_executor.get("sha256")):
+        problems.append(f"{unit_id}：执行记录的调度策略、环境指纹或执行器与运行清单不同")
+    passed, why = _unit_record_passes(record)
+    if not passed:
+        problems.append(f"{unit_id}：执行记录不是通过（{why}）")
+    run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
+    run_id = run.get("run_id")
+    if disposition == "executed":
+        if run_id != manifest.get("run_id"):
+            problems.append(f"{unit_id}：登记为本次执行，记录却来自别的运行")
+    else:
+        if run_id == manifest.get("run_id"):
+            problems.append(f"{unit_id}：承接项的记录来自本次运行")
+        origin = store.manifest(run_id)
+        if (origin is None or origin.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _unit_sealed(origin, "manifest_sha256")
+                or origin.get("run_id") != run_id):
+            problems.append(f"{unit_id}：原运行的清单缺失或自摘要不符")
+        elif not any(isinstance(item, Mapping) and item.get("unit_id") == unit_id and item.get("disposition") == "executed"
+                     and item.get("record_sha256") == digest for item in origin.get("units") or []):
+            problems.append(f"{unit_id}：原运行的清单没有把这条记录列为该单元的正式执行")
+        basis = entry.get("basis") if isinstance(entry.get("basis"), Mapping) else {}
+        if basis.get("run_id") != run_id or basis.get("completed_at_utc") != record.get("completed_at_utc"):
+            problems.append(f"{unit_id}：运行清单登记的承接依据与执行记录不符")
+        completed, decided = _unit_utc(record.get("completed_at_utc")), _unit_utc(manifest.get("decided_at_utc"))
+        try:
+            limit = min(float(manifest.get("inheritance_max_age_hours")), UNIT_MAX_AGE_HOURS)
+        except (TypeError, ValueError):
+            limit = 0.0
+        if completed is None or decided is None or not -UNIT_CLOCK_SKEW_SECONDS <= decided - completed <= limit * 3600:
+            problems.append(f"{unit_id}：承接的记录超过运行清单的承接期限，或时间不可读")
+    log = record.get("log") if isinstance(record.get("log"), Mapping) else {}
+    if not store.log_ok(log.get("sha256")):
+        problems.append(f"{unit_id}：日志不在记录库里或摘要不符")
+    return record, problems
+
+
+def _count(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise VCReceiptError(f"{label}不是非负整数")
+    return value
+
+
+def _verify_p0_gate_v2(
+    store: _UnitRecordStore,
+    manifest: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    gate_id: str,
+    release_identity: Mapping[str, str],
+) -> dict[str, Any]:
+    """一份 v2 门禁证据的逐条重验（规则见本节说明），返回按记录重算的结果。"""
+
+    evidence = _expect(payload, set(P0_V2_COMMON_FIELDS | P0_V2_GATE_FIELDS[gate_id]), f"P0 {gate_id} v2 证据")
+    if evidence["gate_id"] != gate_id or evidence["command"] != ["make", gate_id]:
+        raise VCReceiptError(f"P0 {gate_id} v2 证据的门禁项或字面命令不对")
+    if (evidence["status"] != "passed" or evidence["exit_code"] != 0 or evidence["failed"] != 0
+            or evidence["unexpected_skip"] != 0):
+        raise VCReceiptError(f"P0 {gate_id} v2 证据不是通过")
+    identity = _expect(evidence["tool_identity"], set(P0_IDENTITY_FIELDS), f"P0 {gate_id} v2 证据 tool_identity")
+    if identity != dict(release_identity):
+        raise VCReceiptError(f"P0 {gate_id} v2 证据的工具五摘要与发布认证登记的身份不一致")
+    units = evidence["units"]
+    if not isinstance(units, list) or not all(isinstance(item, str) for item in units) or len(set(units)) != len(units):
+        raise VCReceiptError(f"P0 {gate_id} v2 证据的 units 非法")
+    members = [entry for entry in manifest["units"] if isinstance(entry.get("gates"), list) and gate_id in entry["gates"]]
+    if not members:
+        raise VCReceiptError(f"运行清单里没有门禁项 {gate_id} 的单元")
+    if gate_id == "check-egress-spec":
+        planned = sorted(unit for unit in manifest["planned_units"] if unit.startswith(EGRESS_SPEC_UNIT_PREFIX))
+        checks = evidence["checks"]
+        if not isinstance(checks, list) or not all(isinstance(item, Mapping) for item in checks):
+            raise VCReceiptError("P0 check-egress-spec v2 证据的 checks 非法")
+        targets = sorted(f"{EGRESS_SPEC_UNIT_PREFIX}{item.get('target')}" for item in checks)
+        if (not planned or sorted(str(entry["unit_id"]) for entry in members) != planned or sorted(units) != planned
+                or targets != planned or evidence["test_group"] is not None):
+            raise VCReceiptError("check-egress-spec 的单元与运行清单规划的 egress-spec 子检查不闭合")
+        if any(item.get("passed") is not True or item.get("exit_code") != 0 for item in checks):
+            raise VCReceiptError("P0 check-egress-spec v2 证据里有子检查不是通过")
+    else:
+        if evidence["test_group"] != CAPTURE_TEST_GROUP or sorted(units) != sorted(CAPTURE_COMMAND_UNITS):
+            raise VCReceiptError("P0 test-capture-tools v2 证据的测试组或命令单元不对")
+        group_ids = sorted(str(entry["unit_id"]) for entry in manifest["units"] if entry.get("test_group") == CAPTURE_TEST_GROUP)
+        member_tests = sorted(str(entry["unit_id"]) for entry in members if entry.get("unit_type") == "test")
+        member_commands = sorted(str(entry["unit_id"]) for entry in members if entry.get("unit_type") != "test")
+        if not group_ids or member_tests != group_ids or member_commands != sorted(CAPTURE_COMMAND_UNITS):
+            raise VCReceiptError("test-capture-tools 在运行清单里的成员与前置检查加测试组全部单元不闭合")
+    records: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for entry in members:
+        record, found = _p0_v2_record(store, manifest, entry)
+        problems.extend(found)
+        if record is not None:
+            records.append(record)
+    if problems:
+        more = f"（另有 {len(problems) - 5} 条）" if len(problems) > 5 else ""
+        raise VCReceiptError(f"P0 {gate_id} v2 证据的执行记录重验不通过：{'；'.join(problems[:5])}{more}")
+    counts = {
+        "executed": sum(1 for entry in members if entry.get("disposition") == "executed"),
+        "inherited": sum(1 for entry in members if entry.get("disposition") == "inherited"),
+    }
+    if evidence["unit_counts"] != counts:
+        raise VCReceiptError(f"P0 {gate_id} v2 证据登记的本次执行／承接单元数与运行清单重算的不一致")
+    if gate_id == "check-egress-spec":
+        passed, skipped = len(members), 0
+    else:
+        expected = (manifest.get("test_groups") or {}).get(CAPTURE_TEST_GROUP)
+        if not isinstance(expected, list) or not expected or len(set(expected)) != len(expected):
+            raise VCReceiptError("运行清单没有冻结测试组 capture-tools 的测试 ID 全集")
+        reported = [test_id for record in records if record.get("unit_type") == "test" for test_id in record["tests"]]
+        missing, extra = set(expected) - set(reported), set(reported) - set(expected)
+        if missing or extra or len(reported) != len(set(reported)):
+            raise VCReceiptError(f"测试组 capture-tools 记录里的测试 ID 并集与全集不符（缺 {len(missing)}、多 {len(extra)}、"
+                                 f"重复 {len(reported) - len(set(reported))}）")
+        outcomes = [item for record in records if record.get("unit_type") == "test" for item in record["tests"].values()]
+        passed = sum(1 for item in outcomes if item.get("outcome") in {"passed", "expected_failure"})
+        skipped = sum(1 for item in outcomes if item.get("outcome") == "skipped")
+        skipped_rows = sorted(
+            ({"test_id": test_id, "reason": str(item.get("reason", ""))}
+             for record in records if record.get("unit_type") == "test"
+             for test_id, item in record["tests"].items() if item.get("outcome") == "skipped"),
+            key=lambda row: row["test_id"],
+        )
+        if (_count(evidence["expected_tests"], "expected_tests") != len(expected)
+                or _count(evidence["reported_tests"], "reported_tests") != len(reported) or evidence["skipped"] != skipped_rows):
+            raise VCReceiptError("P0 test-capture-tools v2 证据的测试数或跳过清单与执行记录重算的不一致")
+    if _count(evidence["passed"], "passed") != passed or _count(evidence["approved_skip"], "approved_skip") != skipped:
+        raise VCReceiptError(f"P0 {gate_id} v2 证据的通过数或跳过数与执行记录重算的不一致")
+    return {"gate_id": gate_id, "units": len(members), **counts, "passed": passed, "approved_skip": skipped}
+
+
+def verify_p0_manifest_evidence(root: Path, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """P0 两份离线门禁证据的形状判定与 v2 重验（E3-03）。
+
+    ``payload`` 是已校验的 P0 facts 或收据（只用 ``evidence`` 的角色与路径、``assertions`` 的离线门禁），``root``
+    是证据根。两份证据都不是 v2 时返回 None（v1 与手写证据照旧只按字节绑定）；一份是 v2 另一份不是时拒绝；都是
+    v2 时按本节规则逐条重验，并核对收据断言里两项门禁的通过数与跳过数等于按记录重算的，返回重验摘要。"""
+
+    if payload.get("kind") != "p0_gate":
+        raise VCReceiptError("只有 P0 收据有离线门禁证据")
+    evidence_root = _private_root(root)
+    paths = {
+        str(item["role"]): _inside(evidence_root, item["path"], f"evidence.{item['role']}")
+        for item in payload.get("evidence") or []
+        if isinstance(item, Mapping)
+    }
+    if not set(P0_GATE_EVIDENCE_ROLES) <= set(paths):
+        return None  # 历史形状（角色集合不同）由 validate_receipt 管，这里不读内容
+    shapes = {}
+    for role in P0_GATE_EVIDENCE_ROLES:
+        document = _optional_json(paths[role])
+        shapes[role] = document if document is not None and document.get("schema_version") == P0_GATE_EVIDENCE_V2_SCHEMA else None
+    if all(document is None for document in shapes.values()):
+        return None
+    if any(document is None for document in shapes.values()):
+        raise VCReceiptError("P0 两份离线门禁证据必须同一形状：一份是 v2（运行清单）另一份不是")
+    egress, capture = shapes["check_egress_spec"], shapes["test_capture_tools"]
+    if any(egress.get(key) != capture.get(key) for key in ("unit_manifest", "record_store", "tool_identity")):
+        raise VCReceiptError("P0 两份 v2 证据引用的运行清单、记录库或工具五摘要不同（必须来自入口门禁同一次运行）")
+    release = _optional_json(paths["release_certification"]) if "release_certification" in paths else None
+    identity = release.get("identity") if release is not None else None
+    if not isinstance(identity, Mapping) or any(
+        not isinstance(identity.get(name), str) or not SHA256_RE.fullmatch(identity[name]) for name in P0_IDENTITY_FIELDS
+    ):
+        raise VCReceiptError("发布认证没有登记工具五摘要，无法核对 P0 v2 证据的工具身份")
+    release_identity = {name: identity[name] for name in P0_IDENTITY_FIELDS}
+    store = _UnitRecordStore(egress.get("record_store"))
+    manifest = _p0_v2_manifest(store, egress.get("unit_manifest"))
+    results = {
+        gate_id: _verify_p0_gate_v2(store, manifest, shapes[role], gate_id, release_identity)
+        for role, gate_id in P0_GATE_EVIDENCE_ROLES.items()
+    }
+    assertions = payload.get("assertions") if isinstance(payload.get("assertions"), Mapping) else {}
+    declared = {
+        str(item.get("gate_id")): item for item in assertions.get("offline_gates") or [] if isinstance(item, Mapping)
+    }
+    for gate_id, result in results.items():
+        gate = declared.get(gate_id)
+        if gate is None or gate.get("passed") != result["passed"] or gate.get("approved_skip") != result["approved_skip"]:
+            raise VCReceiptError(f"P0 断言里 {gate_id} 的通过数或跳过数与 v2 证据按记录重算的不一致")
+    return {
+        "schema_version": P0_GATE_EVIDENCE_V2_SCHEMA,
+        "run_id": manifest["run_id"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "mode": manifest["mode"],
+        "record_store": str(store.root),
+        "gates": results,
+    }
+
+
 def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str, Any]:
-    """绑定 facts 声明的全部小型证明文件并生成收据。"""
+    """绑定 facts 声明的全部小型证明文件并生成收据。P0 的两份离线门禁证据是 v2（运行清单）时，签发前按记录库
+    逐条重验（E3-03，见 ``verify_p0_manifest_evidence``）。"""
 
     evidence_root = _private_root(root)
     facts_path = _inside(evidence_root, facts_relative, "facts")
@@ -678,6 +1048,8 @@ def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str,
                 "bytes": size,
             }
         )
+    if facts["kind"] == "p0_gate":
+        verify_p0_manifest_evidence(evidence_root, facts)
     receipt = build_receipt(facts, bindings)
     output = evidence_root / _relative_path(output_relative, "output")
     try:

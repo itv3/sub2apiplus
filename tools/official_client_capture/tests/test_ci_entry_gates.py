@@ -4,7 +4,8 @@
 * ``plan``：三种组合（preflight＝make test、full-gates、entry）的门禁项构成，测试树单元套隔离前缀、pre-A3 不套，
   macOS 专用的部署脚本测试在 Linux 上记为不执行，生成的清单能被执行器的闭合校验接受；
 * ``export``：门禁记录与 write_gate_json 同一组字段，P0 证据与手写 P0 脚本同一形状并能照 0.159.2 轮的组装方式
-  签出 P0 收据（finalize＋replay），预跑与全量门禁记录保持原形状。
+  签出 P0 收据（finalize＋replay），承接了单元时两份 P0 证据写 v2（E3-03，重验见 test_codex_upgrade_p0_manifest_evidence），
+  预跑与全量门禁记录保持原形状。
 
 全部在临时目录里用小 Makefile、合成 CI 定义与合成执行器汇总驱动，不跑真实门禁。
 """
@@ -243,16 +244,25 @@ class EntryGatesPlanTests(unittest.TestCase):
             ue.load_gates_manifest(path, machine_cores=4)
 
 
+RUN_ID = "20261001t100000z-1-abcdef"
+
+
 def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped: int = 2,
-                 inherited: frozenset[str] = frozenset(), mode: str | None = None) -> dict:
-    """照执行器 summarize_gates 的形状合成一次运行的汇总。"""
+                 inherited: frozenset[str] = frozenset(), mode: str | None = None, store: str = "/store") -> dict:
+    """照执行器 summarize_gates 的形状合成一次运行的汇总（测试组只有一个单元 test_x）。"""
 
     stamp = "2026-10-01T10:00:00Z", "2026-10-01T10:20:00Z"
     rows = [{"type": "command", "unit_id": unit["unit_id"], "kind": "formal", "passed": unit["unit_id"] not in fail_units,
              "exit_code": 1 if unit["unit_id"] in fail_units else 0, "signal": None, "timed_out": False, "seconds": 5.0,
              "cpu_seconds": 4.0, "max_rss_mb": 50.0, "orphans": 0, "log": f"/logs/{unit['unit_id']}.log", "argv": unit["argv"],
-             "cwd": unit["cwd"], "started_at_utc": stamp[0], "completed_at_utc": stamp[1]} for unit in manifest["units"]]
+             "cwd": unit["cwd"], "started_at_utc": stamp[0], "completed_at_utc": stamp[1],
+             "disposition": "inherited" if unit["unit_id"] in inherited else "executed"} for unit in manifest["units"]]
     by_id = {row["unit_id"]: row for row in rows}
+    for group in manifest["test_groups"]:
+        rows.append({"type": "test", "group_id": group["group_id"], "unit_id": "test_x", "kind": "formal", "passed": True, "exit_code": 0,
+                     "signal": None, "timed_out": False, "seconds": 5.0, "log": "/logs/test_x.log", "tests": 10,
+                     "started_at_utc": stamp[0], "completed_at_utc": stamp[1],
+                     "disposition": "inherited" if "test_x" in inherited else "executed"})
     groups = {}
     for group in manifest["test_groups"]:
         groups[group["group_id"]] = {
@@ -273,9 +283,11 @@ def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped:
                "elapsed_seconds": 1200.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [],
                "failed_units": sorted(fail_units), "diagnostic": [], "max_cores_in_use": 4.0}
     if mode is not None:
-        summary.update(mode=mode, inheritance={"mode_label": "全集通过", "executed": len(rows), "inherited": len(inherited), "inherited_tests": 3},
-                       unit_manifest={"path": "/out/executor/unit-manifest.json", "self_check": "passed", "problems": []},
-                       record_store="/store")
+        summary.update(mode=mode, run_id=RUN_ID,
+                       inheritance={"mode_label": "全集通过", "executed": len(rows), "inherited": len(inherited), "inherited_tests": 3},
+                       unit_manifest={"path": "/out/executor/unit-manifest.json", "manifest_sha256": "m" * 64, "self_check": "passed",
+                                      "problems": []},
+                       record_store=store)
     return summary
 
 
@@ -290,16 +302,23 @@ class EntryGatesPreA3QuotaTests(unittest.TestCase):
 
 class EntryGatesExportTests(unittest.TestCase):
     def _export(self, root: Path, profile: str, *, fail_units: set[str] = frozenset(), pre_a3: Path | None = None,
-                inherited: frozenset[str] = frozenset(), mode: str | None = None) -> tuple[dict, Path]:
+                inherited: frozenset[str] = frozenset(), mode: str | None = None, store: Path | None = None,
+                tool_identity: object = None, label: str = "") -> tuple[dict, Path]:
+        """``store`` 给出时把本次运行的清单（只含汇总登记的摘要）发布进这个记录库。"""
+
         tree = root / "tree" if (root / "tree").exists() else _tree(root, EntryGatesPlanTests.CHECKS)
         manifest = eg.plan_gates(tree, profile=profile, launcher=[], pre_a3_units=pre_a3, platform="linux")
         manifest_path, summary_path = root / f"{profile}-manifest.json", root / f"{profile}-summary.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        summary_path.write_text(json.dumps(_summary_for(manifest, fail_units=fail_units, inherited=inherited, mode=mode)), encoding="utf-8")
-        out = root / f"out-{profile}-{len(fail_units)}-{len(inherited)}"
+        summary = _summary_for(manifest, fail_units=fail_units, inherited=inherited, mode=mode, store=str(store or "/store"))
+        summary_path.write_text(json.dumps(summary), encoding="utf-8")
+        if store is not None:
+            (store / "runs").mkdir(parents=True, exist_ok=True)
+            (store / "runs" / f"{RUN_ID}.json").write_text(json.dumps({"run_id": RUN_ID, "manifest_sha256": "m" * 64}), encoding="utf-8")
+        out = root / f"out-{profile}-{len(fail_units)}-{len(inherited)}{label}"
         entry = eg.export_records(manifest_path, summary_path, out, source={"commit": "c" * 40, "tree_head": "c" * 40, "bundle": "/b"},
                                   subject="entry-gates-x", round_id="r1", tree=str(tree), isolation="unshare -m", host="arm64",
-                                  architecture="linux/aarch64", target_version="0.159.3", bytecode_cache="/pyc")
+                                  architecture="linux/aarch64", target_version="0.159.3", bytecode_cache="/pyc", tool_identity=tool_identity)
         return entry, out
 
     def test_records_keep_gate_json_fields_and_composites(self) -> None:
@@ -387,23 +406,64 @@ class EntryGatesExportTests(unittest.TestCase):
             replayed = vc_receipt.replay(p0, "p0-receipt.json")
             self.assertEqual(replayed["kind"], "p0_gate")
 
-    def test_inherited_units_withhold_the_single_run_p0_evidence(self) -> None:
-        """E3-01：门禁项里有承接的单元时不写旧形状 P0 证据（它声明的是 make 命令的一次运行），总摘要写明原因；没有承接的
-        门禁项照常导出；门禁记录与总摘要带运行模式、承接单元与清单位置。"""
+    def test_inherited_units_switch_both_p0_evidence_files_to_v2_or_withhold_both(self) -> None:
+        """E3-03：任一门禁项承接了单元（E3-01 全集通过模式）时两份 P0 证据都写 v2——在 v1 字段之外登记运行清单、记录库、
+        命令单元与测试组、本次执行／承接的单元数和测试树五摘要；记录库里没有已发布的清单、五摘要算不出来时两份都不写，
+        总摘要写明原因。没有承接时照旧写 v1。门禁记录与总摘要带运行模式、承接单元与清单位置。"""
 
+        identity = {name: "a" * 64 for name in eg.IDENTITY_FIELDS}
+        inherited = frozenset({"test_x"})
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            entry, out = self._export(root, "preflight", inherited=frozenset({"test_x"}), mode="full-set-pass")
-            self.assertFalse((out / "p0" / "test-capture-tools.json").exists())
-            self.assertTrue((out / "p0" / "check-egress-spec.json").exists(), "没有承接的门禁项照常导出")
-            self.assertEqual(sorted(entry["p0_evidence_withheld"]), ["test-capture-tools"])
-            self.assertIn("E3-03", entry["p0_evidence_withheld"]["test-capture-tools"])
-            self.assertEqual(sorted(entry["p0_evidence"]), ["check-egress-spec"])
+            entry, out = self._export(root, "preflight", inherited=inherited, mode="full-set-pass", tool_identity=lambda tree: identity)
+            self.assertEqual((entry["p0_evidence"], sorted(entry["p0_evidence_withheld"]), entry["p0_evidence_schema"]),
+                             ({}, ["check-egress-spec", "test-capture-tools"], None), "一项承接，两份同一形状：记录库里没有清单就都不写")
+            self.assertIn("运行清单没有发布进记录库", entry["p0_evidence_withheld"]["check-egress-spec"])
+            self.assertFalse((out / "p0").exists())
             record = json.loads((out / "logs" / "test-capture-tools.gate.json").read_text(encoding="utf-8"))
             self.assertEqual((record["mode"], record["inherited_units"]), ("full-set-pass", ["test_x"]))
             self.assertEqual((entry["mode"], entry["unit_manifest"]["self_check"], entry["record_store"]), ("full-set-pass", "passed", "/store"))
+
+            store = root / "store"
+            entry, out = self._export(root, "preflight", inherited=inherited, mode="full-set-pass", store=store,
+                                      tool_identity=lambda tree: identity, label="-v2")
+            self.assertEqual((sorted(entry["p0_evidence"]), entry["p0_evidence_withheld"], entry["p0_evidence_schema"]),
+                             (["check-egress-spec", "test-capture-tools"], {}, eg.P0_EVIDENCE_SCHEMA_V2))
+            capture = json.loads((out / "p0" / "test-capture-tools.json").read_text(encoding="utf-8"))
+            spec = json.loads((out / "p0" / "check-egress-spec.json").read_text(encoding="utf-8"))
+            reference = {"run_id": RUN_ID, "manifest_sha256": "m" * 64, "mode": "full-set-pass"}
+            self.assertEqual((capture["schema_version"], capture["unit_manifest"], capture["record_store"], capture["tool_identity"],
+                              capture["units"], capture["test_group"], capture["unit_counts"], capture["passed"], capture["approved_skip"]),
+                             (eg.P0_EVIDENCE_SCHEMA_V2, reference, str(store), identity, ["capture:prerequisites"], eg.CAPTURE_GROUP,
+                              {"executed": 1, "inherited": 1}, 8, 2))
+            checks = EntryGatesPlanTests.CHECKS
+            self.assertEqual((spec["schema_version"], spec["test_group"], spec["unit_counts"], spec["units"], spec["unit_manifest"]),
+                             (eg.P0_EVIDENCE_SCHEMA_V2, None, {"executed": len(checks), "inherited": 0},
+                              [f"{eg.EGRESS_SPEC_UNIT_PREFIX}{check}" for check in checks], reference))
+            # 字段与收据模块重验的闭合字段集合一致（v1 字段加 v2 登记项）。
+            self.assertEqual(set(capture), set(vc_receipt.P0_V2_COMMON_FIELDS | vc_receipt.P0_V2_GATE_FIELDS["test-capture-tools"]))
+            self.assertEqual(set(spec), set(vc_receipt.P0_V2_COMMON_FIELDS | vc_receipt.P0_V2_GATE_FIELDS["check-egress-spec"]))
+
+            def unavailable(tree: str) -> dict:
+                raise ValueError("模拟：测试树导入失败")
+
+            entry, out = self._export(root, "preflight", inherited=inherited, mode="full-set-pass", store=store,
+                                      tool_identity=unavailable, label="-no-identity")
+            self.assertEqual((entry["p0_evidence"], sorted(entry["p0_evidence_withheld"])), ({}, ["check-egress-spec", "test-capture-tools"]))
+            self.assertIn("工具五摘要算不出来", entry["p0_evidence_withheld"]["test-capture-tools"])
+
             entry, out = self._export(root, "preflight", mode="re-execute")
-            self.assertEqual((sorted(entry["p0_evidence"]), entry["p0_evidence_withheld"]), (["check-egress-spec", "test-capture-tools"], {}))
+            self.assertEqual((sorted(entry["p0_evidence"]), entry["p0_evidence_withheld"], entry["p0_evidence_schema"]),
+                             (["check-egress-spec", "test-capture-tools"], {}, eg.P0_EVIDENCE_SCHEMA))
+
+    def test_tree_identity_uses_the_certification_function(self) -> None:
+        """测试树五摘要（v2 P0 证据绑定）与发布认证同一个函数：在本仓库起子进程算的结果等于进程内直接算的。"""
+
+        from tools.official_client_capture import codex_upgrade_policy_certification as certification
+
+        self.assertEqual(eg.IDENTITY_FIELDS, certification.IDENTITY_FIELDS)
+        identity = certification.current_identity()
+        self.assertEqual(eg.tree_tool_identity(str(REPO_ROOT)), {name: identity[name] for name in certification.IDENTITY_FIELDS})
 
     def test_pre_a3_sub_summary_holds_only_pre_a3_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

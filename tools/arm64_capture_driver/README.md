@@ -97,9 +97,9 @@
   * `entry-gates.json`：总摘要（各门禁项结论、复合记录、P0 证据与 pre-A3 子汇总的位置）；
   * `logs/<门禁项>.gate.json`：与 `write_gate_json` 同一组字段，另带成员单元、失败单元与不在本平台执行的项；
     `logs/full-regression.gate.json` 是 make test 的组成全部通过与否；
-  * `p0/check-egress-spec.json`、`p0/test-capture-tools.json`：P0 证据（`codex-p0-offline-gate-evidence/v1`，与原手写 P0
-    脚本同一形状，收口前照原样组装 P0 收据的 facts），check-egress-spec 另列逐个子检查，test-capture-tools 另列逐条跳过
-    与原因；
+  * `p0/check-egress-spec.json`、`p0/test-capture-tools.json`：P0 证据，check-egress-spec 另列逐个子检查，test-capture-tools
+    另列逐条跳过与原因。两项门禁都没有承接单元时是 `codex-p0-offline-gate-evidence/v1`（与原手写 P0 脚本同一形状，收口前
+    照原样组装 P0 收据的 facts）；任一项承接了单元时两份都是 v2（E3-03，见下文「单元执行记录与承接」的 P0 一条）；
   * `preflight.json`：VC-0 预跑记录；`full-gates-summary.json`：部署前全量门禁记录；`pre-a3-executor-summary.json`：
     pre-A3 场景的子汇总（E2-03 旧签发路径用；E3-02 起签发读 `executor/unit-manifest.json` 与记录库）；`executor/`、
     `executor.log`：执行器记录与逐单元日志。
@@ -193,9 +193,16 @@
   自检——执行＋承接＝全集、重新执行全集不得有承接项、每条承接都追到原始的正式执行记录并逐项重验、测试组记录的测试 ID 并集
   等于全集。自检不通过，门禁结论判失败；自检通过的清单才存进记录库（`runs/`），之后的运行才能承接这次的记录。单独重验：
   `python3 driver/unit_records.py verify --manifest <清单>`。
-* P0：门禁项里有承接的单元时，入口门禁不导出旧形状 P0 证据（它声明的是 make 命令的一次运行），总摘要
-  `p0_evidence_withheld` 写明原因，编排器的 P0 收据步骤照此报失败；以清单为证据的新形状由 E3-03 接上，在那之前要签 P0
-  收据用 `--reexecute-gates`。
+* P0（E3-03）：门禁项里有承接的单元时，入口门禁把两份 P0 证据写成 `codex-p0-offline-gate-evidence/v2`——v1 字段之外
+  登记本次运行清单（run_id、自摘要、模式）、记录库、门禁项的命令单元与测试组、本次执行／承接的单元数，以及测试树的
+  工具五摘要（导出时在测试树里起子进程算，与发布认证同一个函数）。P0 收据的形状不变（两条字面 make 命令、四个证据
+  角色）；签发（`codex_upgrade_vc_receipt finalize`）与 VC-0 收口按记录库逐条重验：清单已发布、两份证据引用同一份清单；
+  check-egress-spec 的单元等于清单规划的全部子检查，test-capture-tools 的测试 ID 并集等于清单冻结的全集、没有缺报和
+  重复；每条记录在库、自摘要相符、是正式执行、规格与输入摘要等于清单、调度策略／环境指纹／执行器与清单相同、判通过、
+  日志在库，承接的追到原运行清单且在承接期限内；计数按记录重算等于证据与收据断言；工具五摘要等于发布认证登记的身份。
+  重放不读记录库。记录库里没有已发布的清单、五摘要算不出来时两份都不写，总摘要 `p0_evidence_withheld` 写明原因，
+  编排器的 P0 收据步骤照此报失败（出路：修好后重跑，或 `--reexecute-gates` 重新执行全集得到 v1）。v2 收据的收口要求
+  记录库还在原位。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 

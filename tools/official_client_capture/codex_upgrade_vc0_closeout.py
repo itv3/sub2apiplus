@@ -994,6 +994,12 @@ def _validate_p0_gate(
         raise VC0CloseoutError("P0 gate evidence 角色不闭合")
     if by_role["release_certification"].get("sha256") != _sha256_file(release_certification):
         raise VC0CloseoutError("P0 gate evidence 未绑定发布认证字节")
+    # E3-03：两份离线门禁证据是 v2（入口门禁全集通过模式的运行清单）时，按证据登记的记录库逐条重验——清单闭合、
+    # 测试 ID 全集、计数、工具五摘要与发布认证一致；v1（make 命令的一次运行）照旧只按字节绑定。
+    try:
+        codex_upgrade_vc_receipt.verify_p0_manifest_evidence(evidence_root, receipt)
+    except (OSError, codex_upgrade_vc_receipt.VCReceiptError) as error:
+        raise VC0CloseoutError(f"P0 gate 离线门禁证据重验失败：{error}") from error
     return (
         evidence_root,
         path,

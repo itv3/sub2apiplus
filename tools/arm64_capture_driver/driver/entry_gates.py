@@ -169,6 +169,10 @@ GATES_SCHEMA = "unit-executor-gates/v1"
 GATES_SUMMARY_SCHEMA = "unit-executor-gates-summary/v1"
 ENTRY_SUMMARY_SCHEMA = "arm64-entry-gates/v1"
 P0_EVIDENCE_SCHEMA = "codex-p0-offline-gate-evidence/v1"
+# E3-03：门禁项承接了单元（全集通过模式）时的 P0 证据形状：以执行器的运行清单为证据，签发与 VC-0 收口按记录库逐条
+# 重验（codex_upgrade_vc_receipt.verify_p0_manifest_evidence）。
+P0_EVIDENCE_SCHEMA_V2 = "codex-p0-offline-gate-evidence/v2"
+P0_GATES = ("test-capture-tools", "check-egress-spec")
 FULL_GATES_SCHEMA = "arm64-full-gates/v1"
 PREFLIGHT_SCHEMA = "arm64-vc0-target-gate-preflight/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
@@ -551,6 +555,59 @@ def _write(path: Path, payload: Any) -> str:
     return str(path)
 
 
+# 测试树受管工具的五摘要：与发布认证、pre-A3 认证用同一个函数（codex_upgrade_policy_certification.current_identity）。
+IDENTITY_FIELDS = ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "tool_files_sha256")
+_TREE_IDENTITY_SNIPPET = (
+    "import json\n"
+    "from tools.official_client_capture import codex_upgrade_policy_certification as certification\n"
+    "identity = certification.current_identity()\n"
+    "print(json.dumps({name: identity[name] for name in certification.IDENTITY_FIELDS}))\n"
+)
+TREE_IDENTITY_TIMEOUT_SECONDS = 900
+
+
+def tree_tool_identity(tree: str) -> dict[str, str]:
+    """测试树受管工具的五摘要（v2 P0 证据绑定，E3-03）：在测试树里起子进程算，不写字节码。签发时与发布认证登记的
+    身份比对——入口门禁跑之前已核对数据根部署的受管树就是测试树这一份，两边应当相等。"""
+
+    completed = subprocess.run([sys.executable, "-B", "-c", _TREE_IDENTITY_SNIPPET], cwd=tree, capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                               timeout=TREE_IDENTITY_TIMEOUT_SECONDS)
+    lines = completed.stdout.strip().splitlines()
+    if completed.returncode != 0 or not lines:
+        raise ValueError(f"测试树的工具五摘要算不出来（退出码 {completed.returncode}）：{completed.stderr.strip()[-300:]}")
+    identity = json.loads(lines[-1])
+    if (not isinstance(identity, dict) or sorted(identity) != sorted(IDENTITY_FIELDS)
+            or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in identity.values())):
+        raise ValueError(f"测试树的工具五摘要格式不对：{lines[-1][:300]}")
+    return identity
+
+
+def _p0_v2_context(summary: dict[str, Any], tree: str, tool_identity: Any) -> tuple[dict[str, Any] | None, str]:
+    """v2 P0 证据的共同部分（运行清单引用、记录库、测试树五摘要）；条件不满足时返回（None, 原因）。
+
+    条件：执行器给了记录库、清单自检通过且已发布进记录库（发布的那一份摘要等于汇总登记的）、测试树五摘要算得出。"""
+
+    manifest = summary.get("unit_manifest") or {}
+    store = summary.get("record_store")
+    run_id = str(summary.get("run_id") or "")
+    if not store or manifest.get("self_check") != "passed" or not re.fullmatch(r"[0-9A-Za-z._-]+", run_id):
+        return None, "执行器没有记录库，或运行清单自检没通过（清单不发布进记录库），没有可重验的执行记录"
+    published = Path(str(store)) / "runs" / f"{run_id}.json"
+    try:
+        payload = json.loads(published.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if not isinstance(payload, dict) or payload.get("manifest_sha256") != manifest.get("manifest_sha256"):
+        return None, f"运行清单没有发布进记录库，或发布的不是本次运行的那一份：{published}"
+    try:
+        identity = (tool_identity or tree_tool_identity)(tree)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return None, f"测试树的工具五摘要算不出来：{error}"
+    return {"unit_manifest": {"run_id": run_id, "manifest_sha256": manifest["manifest_sha256"], "mode": summary.get("mode")},
+            "record_store": str(Path(str(store)).resolve()), "tool_identity": identity}, ""
+
+
 def export_records(
     manifest_path: Path,
     summary_path: Path,
@@ -565,16 +622,19 @@ def export_records(
     architecture: str,
     target_version: str | None = None,
     bytecode_cache: str | None = None,
+    tool_identity: Any = None,
 ) -> dict[str, Any]:
     """从一次运行的执行器汇总导出全部记录（写到 ``out``），返回入口门禁总摘要（同时写成 ``out/entry-gates.json``）。
 
     * 门禁记录 ``logs/<门禁项>.gate.json``：与 lib.sh 的 write_gate_json 同一组字段，另带成员单元、失败单元、不在本平台
       执行的项，以及这个门禁项的输入明细与输入摘要（E2-05，清单见 entry_steps.GATE_INPUTS；源码提交取测试树的提交）；
       ``logs/full-regression.gate.json`` 是 make test 的组成全部通过与否（预跑与全量门禁都引用它）；
-    * P0 证据 ``p0/{check-egress-spec,test-capture-tools}.json``：手写 P0 脚本的同一形状（P0 收据的 facts 照原样从它们
-      取数），test-capture-tools 另列逐条跳过清单，check-egress-spec 另列逐个子检查。这一形状声明的是「make 命令的
-      一次运行」：门禁项里有承接的单元（E3-01 全集通过模式）时不写，总摘要的 ``p0_evidence_withheld`` 写明原因——
-      以执行记录清单为证据的新形状由 E3-03 接上；
+    * P0 证据 ``p0/{check-egress-spec,test-capture-tools}.json``：两项门禁都没有承接单元时是 v1——手写 P0 脚本的同一
+      形状，声明「make 命令的一次运行」（P0 收据的 facts 照原样从它们取数），test-capture-tools 另列逐条跳过清单，
+      check-egress-spec 另列逐个子检查。任一项承接了单元（E3-01 全集通过模式）时两份都写 v2（E3-03）：在 v1 字段
+      之外登记运行清单（run_id、自摘要、模式）、记录库、门禁项的命令单元与测试组、本次执行／承接的单元数和测试树的
+      工具五摘要（``tool_identity`` 可注入，默认在测试树里起子进程算），签发与 VC-0 收口按记录库逐条重验。记录库或
+      已发布的清单缺失、五摘要算不出来时不写，总摘要的 ``p0_evidence_withheld`` 写明原因；
     * pre-A3 子汇总 ``pre-a3-executor-summary.json``：只含 ``pre-a3:`` 单元的命令单元汇总，供认证 issue 核对；
     * ``full-gates-summary.json``、``preflight.json``：全量门禁与 VC-0 预跑的原形状记录（组合里有对应门禁项时才写）。
     """
@@ -630,11 +690,28 @@ def export_records(
         composites["full-regression"] = {"exit_code": regression["exit_code"], "gate_json": _write(out / "logs" / "full-regression.gate.json", regression)}
     p0: dict[str, str] = {}
     withheld: dict[str, str] = {}
-    for gate_id in ("test-capture-tools", "check-egress-spec"):
-        if gate_id in records and records[gate_id]["inherited_units"]:
-            withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（全集通过模式）：旧形状 P0 证据声明的是"
-                                 f"「make 命令的一次运行」，不能用多次运行的记录拼成；以执行记录清单为证据的新形状由 E3-03 接上，"
-                                 f"现在要签 P0 收据请用重新执行全集（--mode re-execute）")
+    p0_gates = [gate_id for gate_id in P0_GATES if gate_id in records]
+    inherited_any = any(records[gate_id]["inherited_units"] for gate_id in p0_gates)
+    v2: dict[str, Any] | None = None
+    if inherited_any:
+        v2, why = _p0_v2_context(summary, tree, tool_identity)
+        if v2 is None:
+            for gate_id in p0_gates:
+                withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（全集通过模式），要写以运行清单为证据的"
+                                     f" v2 P0 证据，但{why}；要签 P0 收据请修好后重跑，或用重新执行全集（--mode re-execute）")
+
+    def gate_members(gate_id: str) -> list[str]:
+        record = records[gate_id]
+        return list(record["units"]) + [unit_id for group_id in record["test_groups"] for unit_id in summary["test_groups"][group_id]["units"]]
+
+    def v2_fields(gate_id: str, test_group: str | None) -> dict[str, Any]:
+        """v2 证据在 v1 字段之外的部分：运行清单引用、记录库、门禁项的命令单元与测试组、本次执行／承接的单元数、五摘要。"""
+
+        assert v2 is not None
+        dispositions = [rows[unit_id].get("disposition", "executed") if unit_id in rows else "not_run" for unit_id in gate_members(gate_id)]
+        return {**v2, "units": list(records[gate_id]["units"]), "test_group": test_group,
+                "unit_counts": {"executed": dispositions.count("executed"), "inherited": dispositions.count("inherited")}}
+
     if "test-capture-tools" in records and "test-capture-tools" not in withheld:
         group = summary["test_groups"][CAPTURE_GROUP]
         counts = group["counts"]
@@ -643,7 +720,7 @@ def export_records(
         # 门禁项没通过时 failed 至少记 1：前置检查失败、单元崩溃没写结果等不体现在用例计数里。
         failed = counts["failed"] + counts["error"] + counts["unexpected_success"] + full_set_problems
         failed = max(1, failed) if record["exit_code"] else 0
-        p0["test-capture-tools"] = _write(out / "p0" / "test-capture-tools.json", {
+        evidence = {
             "schema_version": P0_EVIDENCE_SCHEMA, "gate_id": "test-capture-tools", "command": ["make", "test-capture-tools"],
             "working_directory": tree, "git_commit": source.get("commit"), "status": record["status"], "exit_code": record["exit_code"],
             "passed": counts["passed"] + counts["expected_failure"], "failed": failed,
@@ -654,7 +731,12 @@ def export_records(
             "executed_as": "入口门禁一次运行：统一调度执行器按模块（重模块拆块、独占名单单独）在整机额度内并行执行测试组全集",
             "expected_tests": group["expected_tests"], "reported_tests": group["reported_tests"],
             "skipped": group["skipped"], "executor_summary": str(summary_path),
-        })
+        }
+        if v2 is not None:
+            evidence.update(schema_version=P0_EVIDENCE_SCHEMA_V2, **v2_fields("test-capture-tools", CAPTURE_GROUP),
+                            executed_as="入口门禁一次运行（全集通过模式）：测试组全集由本次执行的单元与承接以往运行正式执行记录的单元"
+                                        "合成，逐单元引用运行清单里的执行记录")
+        p0["test-capture-tools"] = _write(out / "p0" / "test-capture-tools.json", evidence)
     if "check-egress-spec" in records and "check-egress-spec" not in withheld:
         record = records["check-egress-spec"]
         checks = [{"target": unit_id.removeprefix(EGRESS_SPEC_UNIT_PREFIX), "passed": rows[unit_id]["passed"] if unit_id in rows else False,
@@ -662,7 +744,7 @@ def export_records(
                    "seconds": rows[unit_id]["seconds"] if unit_id in rows else None, "log": rows[unit_id]["log"] if unit_id in rows else None}
                   for unit_id in record["units"]]
         passed_checks = sum(1 for item in checks if item["passed"])
-        p0["check-egress-spec"] = _write(out / "p0" / "check-egress-spec.json", {
+        evidence = {
             "schema_version": P0_EVIDENCE_SCHEMA, "gate_id": "check-egress-spec", "command": ["make", "check-egress-spec"],
             "working_directory": tree, "git_commit": source.get("commit"), "status": record["status"], "exit_code": record["exit_code"],
             "passed": passed_checks, "failed": len(checks) - passed_checks, "approved_skip": 0, "unexpected_skip": 0,
@@ -670,7 +752,12 @@ def export_records(
             "raw_errors": record["failed_units"], "temporary_asset_inventory": [],
             "executed_as": "入口门禁一次运行：Makefile 的 EGRESS_SPEC_CHECKS 子检查各一个单元并行执行（与 make check-egress-spec 同一份清单）",
             "checks": checks, "executor_summary": str(summary_path),
-        })
+        }
+        if v2 is not None:
+            evidence.update(schema_version=P0_EVIDENCE_SCHEMA_V2, **v2_fields("check-egress-spec", None),
+                            executed_as="入口门禁一次运行（全集通过模式）：EGRESS_SPEC_CHECKS 子检查各一个单元，本次执行的与承接以往运行"
+                                        "正式执行记录的合成全集，逐单元引用运行清单里的执行记录")
+        p0["check-egress-spec"] = _write(out / "p0" / "check-egress-spec.json", evidence)
     pre_a3_summary = None
     if "pre-a3" in records:
         pre_rows = [{**row, "kind": "formal"} for row in summary["units"] if str(row["unit_id"]).startswith(PRE_A3_PREFIX)]
@@ -689,7 +776,9 @@ def export_records(
         "subject_id": subject, "round": round_id, "profile": profile, "status": status, "source": source,
         "gates": [{"gate_id": gate_id, "status": records[gate_id]["status"], "exit_code": records[gate_id]["exit_code"],
                    "inputs_sha256": records[gate_id]["inputs_sha256"], "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in wanted],
-        "composites": composites, "p0_evidence": p0, "p0_evidence_withheld": withheld, "pre_a3_executor_summary": pre_a3_summary,
+        "composites": composites, "p0_evidence": p0, "p0_evidence_withheld": withheld,
+        "p0_evidence_schema": (P0_EVIDENCE_SCHEMA_V2 if v2 is not None else P0_EVIDENCE_SCHEMA) if p0 else None,
+        "pre_a3_executor_summary": pre_a3_summary,
         "executor_summary": str(summary_path), "elapsed_seconds": summary["elapsed_seconds"],
         "max_cores_in_use": summary.get("max_cores_in_use"), "test_tree": tree, "bytecode_cache": bytecode_cache,
         # E3-01：运行模式、承接计数、执行记录清单与记录库。
@@ -792,7 +881,9 @@ def main(argv: list[str] | None = None) -> int:
                                    round_id=args.round, tree=args.tree, isolation=args.isolation, host=args.host,
                                    architecture=args.architecture, target_version=args.target_version, bytecode_cache=args.bytecode_cache)
             print(json.dumps({"status": entry["status"], "gates": {g["gate_id"]: g["status"] for g in entry["gates"]},
-                              "composites": entry["composites"], "p0_evidence": entry["p0_evidence"]}, ensure_ascii=False))
+                              "composites": entry["composites"], "p0_evidence": entry["p0_evidence"],
+                              "p0_evidence_schema": entry["p0_evidence_schema"], "p0_evidence_withheld": entry["p0_evidence_withheld"]},
+                             ensure_ascii=False))
             return 0
     except (OSError, ValueError, KeyError) as error:
         print(f"入口门禁：{error}", file=sys.stderr)

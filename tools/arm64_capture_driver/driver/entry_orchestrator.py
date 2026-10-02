@@ -461,12 +461,14 @@ class Orchestrator:
         """P0 门禁收据（E2-07 固定步骤，原来每轮手写）：两份离线门禁证据取自入口门禁那一次运行，加发布认证与回退依据；
         subject 取计时账本计划（升级 ID、用途、两个版本），签发后立即重放。"""
 
-        # 入口门禁在全集通过模式下承接了单元时不写旧形状 P0 证据（E3-01，它声明的是 make 命令的一次运行）：照总摘要报原因。
+        # 入口门禁在全集通过模式下承接了单元时，两份证据是以运行清单为证据的 v2（E3-03），签发时收据模块按记录库逐条
+        # 重验；记录库或已发布的清单缺失、测试树五摘要算不出来时入口门禁不写证据：照总摘要报原因。
         entry = json.loads(self.record_product("entry-gates", "summary").read_text(encoding="utf-8"))
         withheld = entry.get("p0_evidence_withheld") or {}
         if withheld:
             for gate_id, why in sorted(withheld.items()):
-                self.outcomes["p0-receipt"].reasons.append(f"入口门禁的 {gate_id} 没有旧形状 P0 证据：{why}（编排器带 --reexecute-gates）")
+                self.outcomes["p0-receipt"].reasons.append(f"入口门禁的 {gate_id} 没有可签 P0 收据的证据：{why}"
+                                                           f"（编排器带 --reexecute-gates 即重新执行全集）")
             return False, {}
         evidence_sources = {
             "test-capture-tools.json": self.record_product("entry-gates", "p0-test-capture-tools"),
