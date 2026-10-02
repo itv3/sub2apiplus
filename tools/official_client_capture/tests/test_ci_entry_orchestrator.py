@@ -45,6 +45,9 @@ class Commands:
         self.closeout_results: list[tuple[int, dict]] = []
         # 入口门禁导出的 P0 证据里标成没通过的门禁项（防御性核对：门禁记录与 P0 证据不一致时不签 P0）。
         self.p0_evidence_failed: set[str] = set()
+        # E3-01：全集通过模式承接了单元时扣下的旧形状 P0 证据；每次调用入口门禁时传入的模式。
+        self.p0_evidence_withheld: set[str] = set()
+        self.gates_modes: list[str] = []
 
     def count(self, needle: str) -> int:
         return sum(1 for call in self.calls if needle in call)
@@ -65,8 +68,12 @@ class Commands:
             return 1 if self.preflight_failed else 0
         if argv[0] == "bash" and argv[1].endswith("entry-gates.sh"):
             out = Path(_option(argv, "--out"))
-            _write_json(out / "entry-gates.json", {"status": self.gates_status})
+            self.gates_modes.append(_option(argv, "--mode"))
+            _write_json(out / "entry-gates.json", {"status": self.gates_status, "p0_evidence_withheld": {
+                gate_id: "示例：本次运行承接了单元，旧形状 P0 证据扣下；新形状由 E3-03 接上" for gate_id in sorted(self.p0_evidence_withheld)}})
             for gate_id in ("test-capture-tools", "check-egress-spec"):
+                if gate_id in self.p0_evidence_withheld:
+                    continue
                 passed = self.gates_status == "passed" and gate_id not in self.p0_evidence_failed
                 _write_json(out / "p0" / f"{gate_id}.json", {
                     "gate_id": gate_id, "status": "passed" if passed else "failed", "exit_code": 0 if passed else 1,
@@ -171,9 +178,10 @@ class OrchestratorTestCase(unittest.TestCase):
         self.runs += 1
         masks = kwargs.pop("masks", None)
         approval = kwargs.pop("approval", None)
+        reexecute_gates = kwargs.pop("reexecute_gates", False)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
-                                       approval=approval)
+                                       approval=approval, reexecute_gates=reexecute_gates)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -321,6 +329,35 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertIn("test-capture-tools 证据不是通过", "；".join(next(s for s in result["steps"] if s["step_id"] == "p0-receipt")["reasons"]))
         self.assertEqual(self.commands.count(eo.VC_RECEIPT_MODULE), 0, "证据没通过就不签 P0")
         self.assertEqual(self.actions(result)["vc0-closeout"], "未到达")
+
+    def test_entry_gates_default_to_full_set_pass_and_reexecute_forces_the_step(self) -> None:
+        """E3-01（方案 D12）：入口门禁缺省用全集通过模式；带 --reexecute-gates 时这一步不沿用记录、强制重做并让门禁重新执行
+        全集，下游（P0 收据、收口）随之重做。"""
+
+        first = self.orchestrate()
+        self.assertEqual(first["exit_code"], 0, self.actions(first))
+        self.assertEqual(self.commands.gates_modes, ["full-set-pass"])
+        second = self.orchestrate(reexecute_gates=True)
+        self.assertEqual(second["exit_code"], 0, self.actions(second))
+        actions = self.actions(second)
+        self.assertEqual((actions["entry-gates"], actions["p0-receipt"], actions["vc0-closeout"]), ("执行／passed",) * 3)
+        self.assertEqual(actions["ledger"], "沿用")
+        self.assertEqual(self.commands.gates_modes, ["full-set-pass", "re-execute"])
+        reasons = next(step for step in second["steps"] if step["step_id"] == "entry-gates")["reasons"]
+        self.assertIn("重新执行全集", "；".join(reasons))
+
+    def test_withheld_p0_evidence_fails_the_p0_step_with_the_reason(self) -> None:
+        """入口门禁承接了单元、扣下旧形状 P0 证据时：入口门禁这一步照样通过（两份 P0 证据是可选产物），P0 收据这一步失败并
+        写明原因与出路（--reexecute-gates）。"""
+
+        self.commands.p0_evidence_withheld = {"test-capture-tools"}
+        result = self.orchestrate()
+        actions = self.actions(result)
+        self.assertEqual((actions["entry-gates"], actions["p0-receipt"]), ("执行／passed", "执行／failed"))
+        reasons = "；".join(next(step for step in result["steps"] if step["step_id"] == "p0-receipt")["reasons"])
+        self.assertIn("test-capture-tools 没有旧形状 P0 证据", reasons)
+        self.assertIn("--reexecute-gates", reasons)
+        self.assertFalse(any("codex_upgrade_vc_receipt" in " ".join(call) for call in self.commands.calls), "不签 P0 收据")
 
     def test_closeout_needing_approval_blocks_then_the_approval_is_passed_through(self) -> None:
         self.commands.closeout_results = [(3, {"status": "blocked", "kind": "approval-required", "message": "等待批准",

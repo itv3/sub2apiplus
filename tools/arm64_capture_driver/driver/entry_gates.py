@@ -88,22 +88,32 @@ CHECK_SECONDS: dict[str, float] = {
 }
 
 
+# 子检查的额度：Python 类 1 核、1 GB；Go 类实测 CPU 约 1.5 核（GOMAXPROCS=2），按 1.5 核排程、内部并行度显式保持 2，内存 3 GB，
+# 峰值超过 3 GB 的三项 5 GB；单项超时 30 分钟；没登记秒数的按类别取默认值。
+EGRESS_LIGHT_QUOTA = {"cores": 1, "memory_mb": 1024}
+EGRESS_GO_QUOTA = {"cores": 1.5, "memory_mb": 3072}
+EGRESS_HEAVY_GO_MEMORY_MB = 5120
+EGRESS_GO_ENV = {"GOMAXPROCS": "2"}
+EGRESS_TIMEOUT_SECONDS = 1800
+EGRESS_DEFAULT_SECONDS = {"light": 2.0, "go": 10.0}
+
+
 def egress_spec_unit(target: str, *, cwd: str) -> dict[str, Any]:
     """一个子检查目标对应的命令单元（入口门禁与 ``make-checks`` 同一份定义）。"""
 
     light = target in LIGHT_CHECKS
+    quota = EGRESS_LIGHT_QUOTA if light else EGRESS_GO_QUOTA
     unit = {
         "unit_id": f"{EGRESS_SPEC_UNIT_PREFIX}{target}",
         "argv": ["make", "--no-print-directory", target],
         "cwd": cwd,
-        # Go 类实测 CPU 约 1.5 核（GOMAXPROCS=2）：按 1.5 核排程，内部并行度显式保持 2。
-        "cores": 1 if light else 1.5,
-        "memory_mb": 1024 if light else (5120 if target in HEAVY_GO_CHECKS else 3072),
-        "timeout_seconds": 1800,
-        "weight": CHECK_SECONDS.get(target, 2.0 if light else 10.0),
+        "cores": quota["cores"],
+        "memory_mb": EGRESS_HEAVY_GO_MEMORY_MB if target in HEAVY_GO_CHECKS else quota["memory_mb"],
+        "timeout_seconds": EGRESS_TIMEOUT_SECONDS,
+        "weight": CHECK_SECONDS.get(target, EGRESS_DEFAULT_SECONDS["light" if light else "go"]),
     }
     if not light:
-        unit["env"] = {"GOMAXPROCS": "2"}
+        unit["env"] = dict(EGRESS_GO_ENV)
     return unit
 
 
@@ -179,6 +189,11 @@ PRE_A3_MEASURED: dict[str, tuple[float, float]] = {
     "runtime-egress.guard-recovery": (16.0, 0.38),
 }
 PRE_A3_CRITICAL = frozenset({"vc-chain.vc1-recovery-chain"})
+PRE_A3_DEFAULT_CORES = 0.5
+PRE_A3_MEMORY_MB = 768
+# pre-A3 场景在 E3-01 不承接：认证要求场景结果写在本次新建的认证根下、单元命令带着这个路径，承接要等 E3-02 把认证改成
+# 从单元执行记录组装。执行记录照写。
+PRE_A3_NOT_INHERITABLE = "pre-A3 场景暂不承接：认证要求场景结果写在本次新建的认证根下，承接由 E3-02（认证改为从单元执行记录组装）接入"
 
 
 def pre_a3_quota(name: str) -> tuple[float, float | None]:
@@ -189,7 +204,7 @@ def pre_a3_quota(name: str) -> tuple[float, float | None]:
     if name in PRE_A3_MEASURED:
         seconds, ratio = PRE_A3_MEASURED[name]
         return max(0.25, math.ceil(ratio * 4) / 4), seconds
-    return 0.5, None
+    return PRE_A3_DEFAULT_CORES, None
 
 # make test 的组成（与 Makefile 的 test 目标对应：test-backend 拆成 go test 与 lint 两项、test-frontend 拆成三项）。
 # test-official-client-control 在 make test 里是 check-egress-spec 的子检查，这里单列一个门禁项，用的就是那个子检查单元。
@@ -234,12 +249,30 @@ GO_ENV = {"GOMAXPROCS": "2"}
 LINT_QUOTA = {"cores": 1, "memory_mb": 3072, "timeout_seconds": 3600}
 FRONTEND_QUOTA = {"cores": 1.2, "memory_mb": 3072, "timeout_seconds": 1800}
 VITEST_QUOTA = {"cores": 2, "memory_mb": 2048, "timeout_seconds": 1800}
+PREREQUISITES_QUOTA = {"cores": 1, "memory_mb": 256, "timeout_seconds": 120}
+DEPLOY_QUOTA = {"cores": 1, "memory_mb": 512, "timeout_seconds": 600}
 # 各单元的预计秒数（同样取实测，决定派发顺序）。
 GATE_SECONDS: dict[str, float] = {
     "backend-go-test": 525.0, "backend-unit": 584.0, "backend-integration": 546.0,
     "backend-lint": 11.0, "lint-unit": 9.0, "lint-integration": 8.0,
     "frontend-lint": 53.0, "frontend-typecheck": 73.0, "frontend-critical": 23.0,
+    "capture:prerequisites": 1.0, "deploy-scripts": 2.0,
 }
+
+
+def scheduling_table() -> dict[str, Any]:
+    """命令单元的额度表与预计秒数（E3-01）：门禁清单原样带上，执行器算进调度策略版本——改了其中任何一项（额度、
+    内部并行度、超时、派发顺序用的秒数），全部单元不承接（方案「调度策略变了全部重跑」）。与组合无关。"""
+
+    return {
+        "egress_spec": {"light_checks": sorted(LIGHT_CHECKS), "heavy_go_checks": sorted(HEAVY_GO_CHECKS), "light_quota": EGRESS_LIGHT_QUOTA,
+                        "go_quota": EGRESS_GO_QUOTA, "heavy_go_memory_mb": EGRESS_HEAVY_GO_MEMORY_MB, "go_env": EGRESS_GO_ENV,
+                        "timeout_seconds": EGRESS_TIMEOUT_SECONDS, "default_seconds": EGRESS_DEFAULT_SECONDS, "seconds": CHECK_SECONDS},
+        "pre_a3": {"measured": {name: list(value) for name, value in PRE_A3_MEASURED.items()}, "critical": sorted(PRE_A3_CRITICAL),
+                   "default_cores": PRE_A3_DEFAULT_CORES, "memory_mb": PRE_A3_MEMORY_MB},
+        "go_quota": GO_QUOTA, "go_env": GO_ENV, "lint_quota": LINT_QUOTA, "frontend_quota": FRONTEND_QUOTA, "vitest_quota": VITEST_QUOTA,
+        "prerequisites_quota": PREREQUISITES_QUOTA, "deploy_quota": DEPLOY_QUOTA, "gate_seconds": GATE_SECONDS,
+    }
 # 部署脚本测试从测试树的 CI 定义逐行取出（shell 作业与 test 作业里以 /bin/sh 或 /bin/bash 执行 deploy/ 下脚本的行）。
 DEPLOY_TEST_LINE = re.compile(r"^[ \t]*(?:run:[ \t]*)?(/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+)[ \t]*$", re.M)
 DEPLOY_TEST_SHAPE = re.compile(r"^/bin/(?:ba)?sh(?: -n)? deploy/[A-Za-z0-9._/-]+$")
@@ -287,6 +320,53 @@ def _deploy_unit_id(command: str) -> str:
     return f"deploy:{name}{'-syntax' if '-n' in parts else ''}"
 
 
+def _unit_records_module() -> Any:
+    """同目录的 unit_records.py（E3-01 输入范围的标准定义）：按路径加载，与执行器用的是同一份。"""
+
+    name = "unit_records_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "unit_records.py")
+        if spec is None or spec.loader is None:
+            raise ValueError(f"找不到同目录的 unit_records.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+# 受管工具树（仓库相对路径）：命令单元的输入范围按它划分受管工具、测试目录、docs 与其余部分。
+MANAGED_TREE = "tools/official_client_capture"
+
+
+def command_inputs(extra: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """命令单元的输入声明（E3-01，按 E2-05 从宽）：整个仓库（受管工具树、测试目录、docs、其余部分四段）＋ HEAD 提交，
+    再加门禁项另列的输入（已算好的明细）。执行器在测试树里按跟踪文件算各段摘要；读集审计（E3-04）落地后再收窄。"""
+
+    records = _unit_records_module()
+    ranges = records.standard_ranges(MANAGED_TREE)
+    return {"ranges": [ranges[key] for key in records.COMMAND_RANGES], "head": True, "resolved": list(extra or [])}
+
+
+def environment_facts(tree: Path, typescript_module: str | None) -> list[dict[str, Any]]:
+    """门禁清单带给执行器的环境事实（E3-01 环境指纹的一部分，执行器自己再加系统、Python、软件包与环境变量）：
+    工具链版本与测试树前端依赖的摘要。在执行器同一份环境里算（驱动 entry-gates.sh 用同一份白名单环境跑 plan）。"""
+
+    steps = _entry_steps_module()
+    ctx = steps.Context(params={}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
+    items = [steps.Input("environment", "env", fact) for fact in ("go", "node", "pnpm", "golangci_lint", "docker", "bash")]
+    for path in ([typescript_module] if typescript_module else []) + [str(Path(tree) / "frontend" / "node_modules" / ".modules.yaml")]:
+        items.append(steps.Input("environment", "file", path))
+    return sorted((steps.resolve(item, ctx) for item in items), key=lambda entry: entry["name"])
+
+
+def historical_source_input(root: str | None) -> dict[str, Any]:
+    """check-egress-spec 子检查另列的输入：历史源码树（0.149.1，CODEX_0_149_1_SOURCE_ROOT）的目录摘要（E2-05 同）。"""
+
+    steps = _entry_steps_module()
+    ctx = steps.Context(params={}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
+    return steps.resolve(steps.Input("environment", "tree", root or "/nonexistent-historical-source-root", "pycache"), ctx)
+
+
 def plan_gates(
     tree: Path,
     *,
@@ -296,11 +376,16 @@ def plan_gates(
     pre_a3_units: Path | None = None,
     pre_a3_env: dict[str, str] | None = None,
     platform: str | None = None,
+    environment: list[dict[str, Any]] | None = None,
+    egress_extra_inputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
     测试树里的单元（测试组与命令单元）都套 ``launcher``（ARM64 上是私有挂载命名空间里遮住生产别名，与 isolated_run
     同一做法）；pre-A3 场景在数据根的生产布局里运行，不套隔离（受管树经生产别名访问的分支也要覆盖到），环境另给。
+
+    E3-01：清单另带命令单元额度表（``scheduling``，算进调度策略版本）、环境事实（``environment``，算进环境指纹，
+    由命令行入口在执行器同一份环境里算好传入）、每个命令单元的输入声明（``inputs``）；pre-A3 场景标为不可承接。
     """
 
     if profile not in PROFILES:
@@ -314,8 +399,9 @@ def plan_gates(
     units: list[dict[str, Any]] = []
     gates: list[dict[str, Any]] = []
 
-    def command(unit_id: str, argv: list[str], cwd: str, quota: dict[str, Any], weight: float, env: dict[str, str] | None = None) -> str:
-        unit = {"unit_id": unit_id, "argv": [*launcher, *argv], "cwd": cwd, **quota, "weight": weight}
+    def command(unit_id: str, argv: list[str], cwd: str, quota: dict[str, Any], weight: float, env: dict[str, str] | None = None,
+                extra_inputs: list[dict[str, Any]] | None = None) -> str:
+        unit = {"unit_id": unit_id, "argv": [*launcher, *argv], "cwd": cwd, **quota, "weight": weight, "inputs": command_inputs(extra_inputs)}
         if env:
             unit["env"] = env
         units.append(unit)
@@ -328,14 +414,15 @@ def plan_gates(
         for target in egress_spec_checks(tree):
             unit = egress_spec_unit(target, cwd=workdir)
             egress_units.append(command(unit["unit_id"], unit["argv"], workdir,
-                                        {key: unit[key] for key in ("cores", "memory_mb", "timeout_seconds")}, unit["weight"], unit.get("env")))
+                                        {key: unit[key] for key in ("cores", "memory_mb", "timeout_seconds")}, unit["weight"], unit.get("env"),
+                                        extra_inputs=egress_extra_inputs))
     for gate_id in gates_wanted:
         if gate_id == "test-capture-tools":
             groups.append({"group_id": CAPTURE_GROUP, "start": "tools/official_client_capture/tests", "pattern": "test_*.py",
                            "env": {"CLAUDE_AST_TYPESCRIPT_MODULE": typescript_module} if typescript_module else {},
                            "launcher": list(launcher)})
             prerequisites = command("capture:prerequisites", ["make", "--no-print-directory", "test-capture-tools-prerequisites"], workdir,
-                                    {"cores": 1, "memory_mb": 256, "timeout_seconds": 120}, 1.0)
+                                    PREREQUISITES_QUOTA, GATE_SECONDS["capture:prerequisites"])
             gates.append({"gate_id": gate_id, "units": [prerequisites], "test_groups": [CAPTURE_GROUP]})
         elif gate_id == "check-egress-spec":
             gates.append({"gate_id": gate_id, "units": list(egress_units)})
@@ -366,7 +453,7 @@ def plan_gates(
                 if line in MACOS_ONLY_DEPLOY_TESTS and platform != "darwin":
                     skipped.append({"command": line.split(), "reason": MACOS_ONLY_DEPLOY_TESTS[line]})
                     continue
-                members.append(command(_deploy_unit_id(line), line.split(), workdir, {"cores": 1, "memory_mb": 512, "timeout_seconds": 600}, 2.0))
+                members.append(command(_deploy_unit_id(line), line.split(), workdir, DEPLOY_QUOTA, GATE_SECONDS["deploy-scripts"]))
             if not members:
                 raise ValueError("部署脚本测试在本平台一项都不执行")
             gates.append({"gate_id": gate_id, "units": members, "not_executed": skipped})
@@ -381,7 +468,7 @@ def plan_gates(
                     raise ValueError(f"pre-A3 场景清单里有非 pre-A3 单元：{unit.get('unit_id')}")
                 merged = dict(unit)
                 cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))
-                merged.update(cores=cores, memory_mb=768)
+                merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB, inheritable=False, not_inheritable_reason=PRE_A3_NOT_INHERITABLE)
                 if seconds is not None:
                     merged["weight"] = seconds
                 if pre_a3_env:
@@ -389,7 +476,11 @@ def plan_gates(
                 units.append(merged)
                 members.append(unit["unit_id"])
             gates.append({"gate_id": gate_id, "units": members})
-    return {"schema_version": GATES_SCHEMA, "profile": profile, "test_groups": groups, "units": units, "gates": gates}
+    manifest = {"schema_version": GATES_SCHEMA, "profile": profile, "test_groups": groups, "units": units, "gates": gates,
+                "scheduling": scheduling_table()}
+    if environment is not None:
+        manifest["environment"] = environment
+    return manifest
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +537,9 @@ def export_records(
       执行的项，以及这个门禁项的输入明细与输入摘要（E2-05，清单见 entry_steps.GATE_INPUTS；源码提交取测试树的提交）；
       ``logs/full-regression.gate.json`` 是 make test 的组成全部通过与否（预跑与全量门禁都引用它）；
     * P0 证据 ``p0/{check-egress-spec,test-capture-tools}.json``：手写 P0 脚本的同一形状（P0 收据的 facts 照原样从它们
-      取数），test-capture-tools 另列逐条跳过清单，check-egress-spec 另列逐个子检查；
+      取数），test-capture-tools 另列逐条跳过清单，check-egress-spec 另列逐个子检查。这一形状声明的是「make 命令的
+      一次运行」：门禁项里有承接的单元（E3-01 全集通过模式）时不写，总摘要的 ``p0_evidence_withheld`` 写明原因——
+      以执行记录清单为证据的新形状由 E3-03 接上；
     * pre-A3 子汇总 ``pre-a3-executor-summary.json``：只含 ``pre-a3:`` 单元的命令单元汇总，供认证 issue 核对；
     * ``full-gates-summary.json``、``preflight.json``：全量门禁与 VC-0 预跑的原形状记录（组合里有对应门禁项时才写）。
     """
@@ -475,6 +568,7 @@ def export_records(
             "tree_head": source.get("tree_head"), "isolation": isolation, **extra,
         }
 
+    mode = summary.get("mode")
     for gate_id in wanted:
         row = gate_rows[gate_id]
         failed = list(row["failed_units"])
@@ -484,6 +578,8 @@ def export_records(
             "not_executed": row["not_executed"], "unit_seconds": row["unit_seconds"],
             "failed_logs": [rows[unit_id]["log"] for unit_id in failed if unit_id in rows],
             "executor_summary": str(summary_path), "inputs": inputs, "inputs_sha256": steps.inputs_sha256(inputs),
+            # E3-01：本门禁项承接的单元（起止时间只算本次执行的单元）与运行模式。
+            "mode": mode, "inherited_units": list(row.get("inherited_units") or []),
         })
         _write(out / "logs" / f"{gate_id}.gate.json", record)
         records[gate_id] = record
@@ -498,7 +594,13 @@ def export_records(
                                   "failed_gates": failed_gates, "executor_summary": str(summary_path)})
         composites["full-regression"] = {"exit_code": regression["exit_code"], "gate_json": _write(out / "logs" / "full-regression.gate.json", regression)}
     p0: dict[str, str] = {}
-    if "test-capture-tools" in records:
+    withheld: dict[str, str] = {}
+    for gate_id in ("test-capture-tools", "check-egress-spec"):
+        if gate_id in records and records[gate_id]["inherited_units"]:
+            withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（全集通过模式）：旧形状 P0 证据声明的是"
+                                 f"「make 命令的一次运行」，不能用多次运行的记录拼成；以执行记录清单为证据的新形状由 E3-03 接上，"
+                                 f"现在要签 P0 收据请用重新执行全集（--mode re-execute）")
+    if "test-capture-tools" in records and "test-capture-tools" not in withheld:
         group = summary["test_groups"][CAPTURE_GROUP]
         counts = group["counts"]
         record = records["test-capture-tools"]
@@ -518,7 +620,7 @@ def export_records(
             "expected_tests": group["expected_tests"], "reported_tests": group["reported_tests"],
             "skipped": group["skipped"], "executor_summary": str(summary_path),
         })
-    if "check-egress-spec" in records:
+    if "check-egress-spec" in records and "check-egress-spec" not in withheld:
         record = records["check-egress-spec"]
         checks = [{"target": unit_id.removeprefix(EGRESS_SPEC_UNIT_PREFIX), "passed": rows[unit_id]["passed"] if unit_id in rows else False,
                    "exit_code": rows[unit_id]["exit_code"] if unit_id in rows else None,
@@ -552,9 +654,12 @@ def export_records(
         "subject_id": subject, "round": round_id, "profile": profile, "status": status, "source": source,
         "gates": [{"gate_id": gate_id, "status": records[gate_id]["status"], "exit_code": records[gate_id]["exit_code"],
                    "inputs_sha256": records[gate_id]["inputs_sha256"], "gate_json": f"logs/{gate_id}.gate.json"} for gate_id in wanted],
-        "composites": composites, "p0_evidence": p0, "pre_a3_executor_summary": pre_a3_summary,
+        "composites": composites, "p0_evidence": p0, "p0_evidence_withheld": withheld, "pre_a3_executor_summary": pre_a3_summary,
         "executor_summary": str(summary_path), "elapsed_seconds": summary["elapsed_seconds"],
         "max_cores_in_use": summary.get("max_cores_in_use"), "test_tree": tree, "bytecode_cache": bytecode_cache,
+        # E3-01：运行模式、承接计数、执行记录清单与记录库。
+        "mode": mode, "inheritance": summary.get("inheritance"), "unit_manifest": summary.get("unit_manifest"),
+        "record_store": summary.get("record_store"),
     }
     if all(gate_id in records for gate_id in MAKE_TEST_GATES + FULL_GATES_EXTRA):
         order = ("full-regression",) + FULL_GATES_EXTRA
@@ -596,6 +701,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--typescript-module", default=None)
     plan.add_argument("--pre-a3-units", type=Path, default=None, help="pre-A3 场景清单（认证模块 plan 生成）")
     plan.add_argument("--pre-a3-env", action="append", default=[], help="pre-A3 场景的环境变量 KEY=VALUE，可重复")
+    plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
     export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
     export.add_argument("--manifest", type=Path, required=True)
@@ -634,7 +740,9 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
-                                  pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None)
+                                  pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
+                                  environment=environment_facts(args.tree, args.typescript_module),
+                                  egress_extra_inputs=[historical_source_input(args.historical_source_root)])
             _write(args.output, manifest)
             print(json.dumps({"profile": args.profile, "gates": [g["gate_id"] for g in manifest["gates"]], "units": len(manifest["units"]),
                               "test_groups": [g["group_id"] for g in manifest["test_groups"]],

@@ -355,6 +355,26 @@ class EntryStepsRuleTests(EntryStepsTestCase):
         changed = _step(result, "policy-activation")["changed_inputs"]
         self.assertTrue(all(entry["after"] == es.MISSING for entry in changed if entry["name"].startswith("identity:")))
 
+    def test_forced_rerun_propagates_downstream_but_never_touches_the_ledger_or_a_built_formal(self) -> None:
+        """E3-01：编排器带 --reexecute-gates 时入口门禁强制重做（方案 D12），下游随之重做；账本不能强制重建；Formal 建成后
+        创建链照样冻结。"""
+
+        force = {"entry-gates": "要求入口门禁重新执行全集", "ledger": "示例：不得因此重建账本"}
+        result = es.evaluate(self.fx.ctx(), is_formal_built=False, force=force)
+        self.assertEqual(_by(result, "run"), {"entry-gates", "p0-receipt", "vc0-closeout"})
+        self.assertEqual(_step(result, "entry-gates")["reasons"], ["要求入口门禁重新执行全集"])
+        self.assertIn("上游要重做：entry-gates", _step(result, "p0-receipt")["reasons"])
+        self.assertEqual(_step(result, "ledger")["decision"], "reuse")
+        frozen = es.evaluate(self.fx.ctx(), is_formal_built=True, force=force)
+        self.assertEqual(_step(frozen, "entry-gates")["decision"], "frozen")
+
+    def test_entry_gates_p0_evidence_is_an_optional_product(self) -> None:
+        """全集通过模式承接了单元时入口门禁不写旧形状 P0 证据（E3-01）：没有这两份产物也能记为通过。"""
+
+        step = es.STEP_BY_ID["entry-gates"]
+        self.assertEqual({product.name: product.optional for product in step.products},
+                         {"summary": False, "p0-test-capture-tools": True, "p0-check-egress-spec": True})
+
     def test_changed_step_declaration(self) -> None:
         path = es.record_path(self.fx.steps_dir, "zero-request-smoke")
         payload = json.loads(path.read_text(encoding="utf-8"))

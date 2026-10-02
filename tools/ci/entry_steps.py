@@ -206,7 +206,8 @@ STEPS: tuple[Step, ...] = (
         *COMMON_DRIVER, Input("command", "command", "codex_upgrade_policy_certification activation"),
     ), products=(Product("activation", "{POLICY_ACTIVATION}"),)),
     # 入口门禁（测试树部分）：源码提交确定测试树的全部内容（源码、测试、文档、Makefile、CI 定义、权重表与耗时表）；
-    # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。
+    # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。两份 P0 证据
+    # 可以没有：全集通过模式承接了单元时不写旧形状 P0 证据（E3-01，新形状由 E3-03 接上），P0 收据步骤据总摘要报原因。
     Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
         Input("tests", "source_commit", "ENTRY_COMMIT"),
         *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
@@ -216,7 +217,7 @@ STEPS: tuple[Step, ...] = (
         Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache"),
         Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/pnpm-lock.yaml"),
         Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js"),
-    ), products=(Product("summary"), Product("p0-test-capture-tools"), Product("p0-check-egress-spec"))),
+    ), products=(Product("summary"), Product("p0-test-capture-tools", optional=True), Product("p0-check-egress-spec", optional=True))),
     # pre-A3：场景在数据根生产布局里跑，读受管整树（含测试、指纹代理、运行时镜像定义）、部署脚本副本、两份指南（真实链
     # 副本树复制它们）、冻结台账目录（计时账本场景）、录制数据。部署收据不取文件摘要、激活认证只取策略摘要字段
     # （第 19 项：工具五摘要与策略没变时跨部署复用）。
@@ -594,6 +595,7 @@ ENV_FACTS: dict[str, Callable[[Context], str]] = {
     "hostname": lambda ctx: socket.gethostname(),
     "go": lambda ctx: _command_value(ctx, ["go", "version"]),
     "node": lambda ctx: _command_value(ctx, ["node", "--version"]),
+    "pnpm": lambda ctx: _command_value(ctx, ["pnpm", "--version"]),
     "golangci_lint": lambda ctx: _command_value(ctx, ["golangci-lint", "--version"]),
     "docker": lambda ctx: _command_value(ctx, ["docker", "info", "--format", "{{.ServerVersion}}"]),
     "bash": lambda ctx: _command_value(ctx, ["bash", "--version"]),
@@ -942,7 +944,7 @@ def _product_occupied(step: Step, ctx: Context) -> list[str]:
 
 
 def evaluate_step(step: Step, ctx: Context, decisions: Mapping[str, Mapping[str, Any]], *, is_formal_built: bool,
-                  accept_snapshot: bool) -> dict[str, Any]:
+                  accept_snapshot: bool, force: Mapping[str, str] | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {"step_id": step.step_id, "title": step.title, "segment": step.segment,
                               "reasons": [], "changed_inputs": [], "upstream_rerun": []}
 
@@ -956,6 +958,10 @@ def evaluate_step(step: Step, ctx: Context, decisions: Mapping[str, Mapping[str,
     if is_formal_built and step.creation_chain:
         result["reasons"].append("Formal Campaign 已建，创建链冻结（D13），之后的修复走工具演进与恢复路径")
         return done("frozen")
+    if force and step.step_id in force and not step.ledger:
+        # 调用方要求这一步重做（如入口门禁重新执行全集，D12）：不看记录，下游照常按上游重做传播。
+        result["reasons"].append(force[step.step_id])
+        return done("run")
     record = read_record(ctx.steps_dir, step.step_id)
     if record is None:
         occupied = _product_occupied(step, ctx)
@@ -999,11 +1005,14 @@ def evaluate_step(step: Step, ctx: Context, decisions: Mapping[str, Mapping[str,
     return done("run")
 
 
-def evaluate(ctx: Context, *, is_formal_built: bool, accept_snapshot: bool = False) -> dict[str, Any]:
+def evaluate(ctx: Context, *, is_formal_built: bool, accept_snapshot: bool = False,
+             force: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """全部步骤的判定。``force``：步骤 → 原因，要求这些步骤重做（账本步骤不受影响；Formal 建成后创建链照样冻结）。"""
+
     decisions: dict[str, dict[str, Any]] = {}
     for step in STEPS:
         decisions[step.step_id] = evaluate_step(step, ctx, decisions, is_formal_built=is_formal_built,
-                                                accept_snapshot=accept_snapshot)
+                                                accept_snapshot=accept_snapshot, force=force)
     counts: dict[str, int] = {}
     for decision in decisions.values():
         counts[decision["decision"]] = counts.get(decision["decision"], 0) + 1

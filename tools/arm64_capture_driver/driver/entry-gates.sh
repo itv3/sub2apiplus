@@ -12,6 +12,13 @@
 # 隔离：测试树里的单元在私有挂载命名空间里遮住 /root/oauth-capture（与 lib.sh 的 isolated_run 同一做法），树外只读字节码
 #   缓存；pre-A3 场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。
 # Linux 上不执行 macOS 专用的部署脚本测试（写进门禁记录的 not_executed；CI 在 macos-15 上照常执行）。
+# 模式（--mode，E3-01，方案 D12）：full-set-pass（默认，全集通过）先在单元执行记录库里给每个单元找可承接的记录，只执行
+#   其余单元；re-execute（重新执行全集）不承接。两种模式的单元执行记录都入库（--record-store，默认数据根之外跨轮次固定的
+#   $(dirname $D)/unit-records），执行器另写清单 executor/unit-manifest.json 并自检。门禁项里有承接的单元时不导出旧形状
+#   P0 证据（它声明的是 make 命令的一次运行；新形状由 E3-03 接上），总摘要的 p0_evidence_withheld 写明原因。
+# 环境（E3-01）：门禁清单生成与执行器都在白名单环境里运行（env -i 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、
+#   Go／Docker／Node／pnpm 的变量，再显式给字节码、历史源码与 TypeScript 的设置）：单元能看到的环境就是环境指纹里的那一份，
+#   本轮参数文件导出的键（D、STAMP、各认证坐标……）不再进入单元环境。
 #
 # 测试树与字节码缓存（--work，默认数据根之外跨轮次固定的 $(dirname $D)/entry-gates-work，见下方说明）通过即删。
 # 产物（主体目录 --out，默认 $RUNROOT/entry-gates/entry-gates-<UTC 时间戳>）：entry-gates.json（总摘要）、logs/<门禁项>.gate.json
@@ -22,7 +29,8 @@
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
 #   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
-#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
+#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] \
+#     [--record-store <单元执行记录库>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
 #     > $RUNROOT/entry-gates.out 2>&1 < /dev/null
 #   后三个选项供入口编排器（entry.sh，E2-06）用：激活认证与 pre-A3 认证坐标覆盖参数文件里的值（重做时编排器给新坐标）；
 #   pre-A3 来源由编排器按步骤记录判定后指定——present 只复核并沿用已有认证，run 一定新跑（不按「工具五摘要与策略未变」
@@ -31,13 +39,16 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto
+# 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=full-set-pass; STORE="$(dirname "$D")/unit-records"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --mode) MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --record-store) STORE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --policy-activation) POLICY_ACTIVATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-certification) PRE_A3_CERTIFICATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-mode) PRE_A3_SOURCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -53,13 +64,14 @@ if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 2; fi
 PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/frontend}"
 case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
+case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
   if [[ "$file" != /* ]]; then echo "认证坐标必须是绝对路径：$file" >&2; exit 2; fi
 done
 if [[ "$PBUNDLE" != /* ]] || [ -L "$PBUNDLE" ] || [ ! -f "$PBUNDLE" ]; then echo "bundle 必须是已存在的普通文件（绝对路径）：$PBUNDLE" >&2; exit 2; fi
 if ! [[ "$PBRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then echo "分支名只允许字母、数字与 ._/-：$PBRANCH" >&2; exit 2; fi
 if ! [[ "$PCOMMIT" =~ ^[0-9a-f]{40}$ ]]; then echo "提交必须是完整 40 位小写 sha1：$PCOMMIT" >&2; exit 2; fi
-for dir in "$NM_DIR" "$WORK" ${OUT:+"$OUT"} ${PYC:+"$PYC"}; do
+for dir in "$NM_DIR" "$WORK" "$STORE" ${OUT:+"$OUT"} ${PYC:+"$PYC"}; do
   if [[ "$dir" != /* ]]; then echo "目录必须是绝对路径：$dir" >&2; exit 2; fi
 done
 TREE="$WORK/test-tree"; PYC="${PYC:-$WORK/pycache}"
@@ -172,14 +184,27 @@ if [ "$PROFILE" = entry ] && [ "$PRE_A3_MODE" != run ]; then PLAN_PROFILE=full-g
 LAUNCHER='["unshare","-m","--propagation","private","bash","-c","mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec \"$@\"","entry-gates"]'
 ISOLATION="测试树单元：unshare -m --propagation private，只读 tmpfs 遮住 /root/oauth-capture（生产别名），树外只读字节码缓存；pre-A3 场景：数据根生产布局"
 TS="$TREE/frontend/node_modules/typescript/lib/typescript.js"
+# 白名单环境（E3-01）：门禁清单生成与执行器只看见这份环境，单元继承的就是它，执行器把它整份算进环境指纹（只除去
+# 决定缓存位置的字节码前缀）。本轮参数文件导出的键不放行：测试树单元本就不该读它们（也就碰不到生产数据根坐标），
+# 放进来的话每换一次认证坐标环境指纹就变、什么都承接不了。
+EXEC_ENV=(env -i)
+for name in PATH HOME USER LOGNAME SHELL LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TZ TMPDIR \
+    http_proxy https_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
+  if [ -n "${!name+x}" ]; then EXEC_ENV+=("$name=${!name}"); fi
+done
+for name in $(compgen -e); do
+  case "$name" in GO*|CGO_*|DOCKER_*|NODE_*|PNPM_*|npm_config_*|COREPACK_*) EXEC_ENV+=("$name=${!name}") ;; esac
+done
+EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
+mkdir -p "$STORE"; chmod 700 "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
-python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" --typescript-module "$TS" \
-  ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} --output "$OUT/gates-manifest.json" | cut -c1-400
-echo "=== 一次运行：统一调度执行器 run-gates（记录 ${OUT}/executor）$(utc_now)"
+( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
+    --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
+    --output "$OUT/gates-manifest.json" ) | cut -c1-400
+echo "=== 一次运行：统一调度执行器 run-gates（模式 ${MODE}，记录库 ${STORE}，记录 ${OUT}/executor）$(utc_now)"
 EXEC_RC=0
-( cd "$TREE" && env -u CODEX_UPGRADE_IDENTITY_MEMO PYTHONPATH=. PYTHONPYCACHEPREFIX="$PYC" CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT" \
-    CAPTURE_TYPESCRIPT_MODULE="$TS" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" ) \
-  > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
+( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
+    --mode "$MODE" --record-store "$STORE" ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240
 if [ "$EXEC_RC" -gt 1 ] || [ ! -f "$OUT/executor/summary.json" ]; then
   echo "ENTRY_GATES_ABORTED：执行器出错（rc=${EXEC_RC}），没有门禁结论；日志 ${OUT}/executor.log"

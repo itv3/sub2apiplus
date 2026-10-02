@@ -1516,7 +1516,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py",
-                     "entry-gates.sh", "entry_gates.py", "entry_steps.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
         package = fixture.data_root / "tools" / "official_client_capture"
@@ -1524,7 +1524,8 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         (package / "__init__.py").write_text("", encoding="utf-8")
         (package / "codex_upgrade_arm64_environment_receipt.py").write_text(_ENVIRONMENT_RECEIPT_STUB, encoding="utf-8")
         record = root / "executor-calls.jsonl"
-        env = {**fixture.env, "SHIM_RECORD": str(record), "STUB_FAIL_UNITS": fail_units}
+        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units}), encoding="utf-8")
+        env = {**fixture.env, "SHIM_RECORD": str(record)}
         return fixture, hist, work, drv, record, env
 
     @staticmethod
@@ -1586,6 +1587,11 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             self.assertEqual(call["pycache"], cache)
             self.assertTrue(call["cached"].startswith(cache) and call["cached_exists"], call["cached"])
             self.assertIsNone(call["identity_memo"], "测试树门禁不用生产的身份记忆化目录")
+            # E3-01：执行器在白名单环境里运行，看不到本轮参数（数据根坐标、认证坐标等）；缺省全集通过、记录库在数据根之外。
+            self.assertFalse({"D", "STAMP", "RUNROOT", "ARM64_VC_ENV", "SHIM_RECORD"} & set(call["env_keys"]), call["env_keys"])
+            self.assertTrue({"PATH", "HOME", "PYTHONPATH", "PYTHONPYCACHEPREFIX", "CAPTURE_TYPESCRIPT_MODULE"} <= set(call["env_keys"]))
+            self.assertEqual(call["args"][call["args"].index("--mode") + 1], "full-set-pass")
+            self.assertEqual(call["args"][call["args"].index("--record-store") + 1], str(fixture.data_root.parent / "unit-records"))
             self._untouched_vc5_locations(fixture)
             # 通过后删掉测试树与缓存、释放锁；数据根与历史测试树不留字节码。
             self.assertFalse((pre / "test-tree").exists())
@@ -1734,10 +1740,12 @@ _CI_WORKFLOW = """jobs:
 _CANDIDATE_MAKEFILE = "print-egress-spec-checks:\n\t@echo check-egress-spec-local-source test-official-client-control egress-spec-a\n"
 
 # 执行器替身（驱动随附的 unit_executor.py 换成它）：只支持 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
-# 树外缓存），把工作目录、HEAD、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；STUB_FAIL_UNITS（逗号分隔）里的
-# 单元判失败。执行器自身的调度、额度与汇总由 test_ci_unit_executor 实测。
+# 树外缓存），把工作目录、HEAD、参数、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；配置里 fail_units 列出的单元
+# 判失败。执行器在白名单环境里运行（E3-01，看不到测试经环境变量给的东西），配置写在替身旁边的 stub-config.json。执行器
+# 自身的调度、额度、汇总与承接由 test_ci_unit_executor、test_ci_unit_records 实测。
 _EXECUTOR_STUB = """import json, os, subprocess, sys
 from pathlib import Path
+config = json.loads((Path(__file__).resolve().parent / "stub-config.json").read_text(encoding="utf-8"))
 args = sys.argv[1:]
 assert args[0] == "run-gates", args
 manifest = json.loads(Path(args[args.index("--manifest") + 1]).read_text(encoding="utf-8"))
@@ -1748,12 +1756,13 @@ try:
     cached = probe.__cached__
 except ImportError:
     cached = None
-with open(os.environ["SHIM_RECORD"], "a", encoding="utf-8") as handle:
+with open(config["record"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps({"cwd": os.getcwd(), "head": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
                              "pycache": os.environ.get("PYTHONPYCACHEPREFIX"), "cached": cached, "cached_exists": bool(cached) and os.path.isfile(cached),
                              "typescript": os.environ.get("CAPTURE_TYPESCRIPT_MODULE"), "source_root": os.environ.get("CODEX_0_149_1_SOURCE_ROOT"),
-                             "identity_memo": os.environ.get("CODEX_UPGRADE_IDENTITY_MEMO"), "manifest": manifest}, ensure_ascii=False) + "\\n")
-failing = {item for item in os.environ.get("STUB_FAIL_UNITS", "").split(",") if item}
+                             "identity_memo": os.environ.get("CODEX_UPGRADE_IDENTITY_MEMO"), "env_keys": sorted(os.environ), "args": args,
+                             "manifest": manifest}, ensure_ascii=False) + "\\n")
+failing = {item for item in config.get("fail_units", "").split(",") if item}
 stamp = ("2026-10-01T10:00:00Z", "2026-10-01T10:05:00Z")
 rows = [{"type": "command", "unit_id": unit["unit_id"], "kind": "formal", "passed": unit["unit_id"] not in failing,
          "exit_code": 1 if unit["unit_id"] in failing else 0, "signal": None, "timed_out": False, "seconds": 1.0, "cpu_seconds": 1.0,
@@ -1812,7 +1821,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
-                     "entry-gates.sh", "entry_gates.py", "entry_steps.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
@@ -1822,8 +1831,9 @@ class Arm64GateScriptTests(unittest.TestCase):
         shim.write_text(_ISOLATION_SHIM, encoding="utf-8")
         shim.chmod(0o700)
         record = root / "gate-commands.jsonl"
+        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units}), encoding="utf-8")
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
-               "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc), "STUB_FAIL_UNITS": fail_units}
+               "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
         return fixture, work, drv, record, env
 
     @staticmethod
@@ -1881,8 +1891,11 @@ class Arm64GateScriptTests(unittest.TestCase):
             self.assertEqual((call["cwd"], call["head"], call["pycache"], call["typescript"], call["identity_memo"]),
                              (tree, commit, str(fg / "pycache"), f"{tree}/frontend/node_modules/typescript/lib/typescript.js", None))
             self.assertTrue(call["cached_exists"], "执行器在预编译好的树外缓存上运行")
+            self.assertFalse({"D", "STAMP", "SHIM_RECORD"} & set(call["env_keys"]), "执行器只看见白名单环境")
             manifest = call["manifest"]
             self.assertEqual(manifest["profile"], "full-gates")
+            self.assertIn("scheduling", manifest)
+            self.assertTrue(all("inputs" in unit for unit in manifest["units"]), "命令单元都声明了输入")
             units = {unit["unit_id"]: unit for unit in manifest["units"]}
             launcher = ["unshare", "-m", "--propagation", "private", "bash", "-c"]
             self.assertTrue(all(unit["argv"][:6] == launcher for unit in units.values()), "测试树单元都在私有挂载命名空间里遮住生产别名")

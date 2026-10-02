@@ -29,6 +29,12 @@
 * **身份记忆化**（E2-02）：环境里没有 ``CODEX_UPGRADE_IDENTITY_MEMO`` 时设为记录目录下的 ``identity-memo``，全部单元
   共用——同一棵受管树的身份五摘要与评估器四项只算一次，键是整树逐文件摘要，测试改了副本树自然重算。
   ``--shared-caches off`` 时两样都不准备，单元按原环境运行（诊断用）。
+* **执行记录与承接**（E3-01，记录格式、输入与判定见同目录 ``unit_records.py``）：每个单元每次执行（正式、诊断）回收
+  时写一条不可变记录。``run-gates`` 给了记录库（``--record-store``）时记录同时入库；模式为全集通过
+  （``--mode full-set-pass``）时，先在记录库里给每个单元找可承接的记录，只执行找不到的，承接的单元按原记录参加
+  全集核对与门禁聚合。每次 ``run-gates`` 运行写一份清单（``unit-manifest.json``：逐单元本次执行还是承接、依据或
+  不承接的原因）并自检，自检不通过结论判失败。``run``／``run-commands``（``make test-capture-tools``、
+  ``make check-egress-spec``、pre-A3 单独签发）一律全部执行、不入库。
 
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
@@ -46,6 +52,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -111,6 +118,20 @@ def _write_json(path: Path, payload: Any) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _records_module() -> Any:
+    """同目录的 unit_records.py（仓库 tools/ci 与驱动副本里都和本文件同目录）：按路径加载，不受当前目录与 PYTHONPATH 影响。"""
+
+    name = "unit_records_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "unit_records.py")
+        if spec is None or spec.loader is None:
+            raise ExecutorError("找不到同目录的 unit_records.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +238,16 @@ def policy_digest(config: ExecutorConfig, weights: dict[str, float], durations: 
     return _sha256({"config": config.raw, "weights": weights, "durations": durations, "parallelism": parallelism})
 
 
+def gates_policy_digest(config: ExecutorConfig, weights: dict[str, float], durations: dict[str, float], parallelism: int,
+                        scheduling: Any) -> str:
+    """门禁清单模式的调度策略版本（E3-01）：调度配置（并行度、额度、拆块、独占名单、超时）、权重、逐测试耗时、本次并行度，
+    加门禁清单给出的命令单元额度表（``scheduling``，与组合无关）。每次运行新建的认证根路径、组合名、各单元的命令不进
+    策略版本——命令随单元规格比对；原来把整份门禁清单算进来，带 pre-A3 时每次都不同，承接永远不会命中。"""
+
+    return _sha256({"config": config.raw, "weights": weights, "durations": durations, "parallelism": parallelism,
+                    "scheduling": scheduling if scheduling is not None else {}})
+
+
 # ---------------------------------------------------------------------------
 # 发现与单元规划
 # ---------------------------------------------------------------------------
@@ -298,7 +329,9 @@ class Unit:
 
 COMMANDS_SCHEMA = "unit-executor-commands/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
-_COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight"}
+# inputs／inheritable／not_inheritable_reason 是门禁清单给 E3-01 承接用的声明（输入范围、是否可承接与原因），不影响执行。
+_COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight",
+                   "inputs", "inheritable", "not_inheritable_reason"}
 
 
 def _string_env(value: Any, label: str) -> dict[str, str]:
@@ -336,6 +369,9 @@ def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
     weight = item.get("weight", 0)
     if not isinstance(exclusive, bool):
         raise ExecutorError(f"命令单元的独占标记非法：{unit_id}")
+    if not isinstance(item.get("inheritable", True), bool) or not isinstance(item.get("not_inheritable_reason", ""), str) \
+            or not isinstance(item.get("inputs", {}), dict):
+        raise ExecutorError(f"命令单元的承接声明非法：{unit_id}")
     if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
         raise ExecutorError(f"命令单元的超时非法：{unit_id}")
     if not isinstance(weight, (int, float)) or isinstance(weight, bool) or weight < 0:
@@ -817,6 +853,90 @@ class Outcome:
         return bool(self.unit.command) or (self.result is not None and bool(self.result.get("successful")))
 
 
+def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_seconds: float) -> dict[str, Any]:
+    """单元规格（E3-01 承接比对的一项）：决定「这个单元执行的是什么」的全部字段；预计秒数只影响派发顺序，不算。"""
+
+    common = {"unit_id": unit.unit_id, "env": dict(unit.env), "cores": unit.quota.cores, "memory_mb": unit.quota.memory_mb,
+              "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds}
+    if unit.command:
+        return {"type": "command", "argv": list(unit.command), "cwd": unit.cwd, **common}
+    return {"type": "test", "start": str(start) if start is not None else None, "pattern": pattern, "test_ids": list(unit.test_ids),
+            "launcher": list(unit.launcher), **common}
+
+
+class Recorder:
+    """单元执行记录（E3-01）：每个单元每次执行（正式、诊断）回收时写一条，运行目录一份；给了记录库再入库一份、日志
+    按内容摘要入库。记录格式与各字段的含义见 ``unit_records.py``。``currents`` 是本次运行里每个单元的当前事实（规格、
+    输入、能否承接）；``environment`` 为 None 的模式（``run``／``run-commands``）不算环境与输入。"""
+
+    def __init__(self, *, out_dir: Path, mode: str, run_id: str, policy: str, executor: dict[str, Any],
+                 environment: list[dict[str, Any]] | None, currents: dict[str, Any], store: Any = None) -> None:
+        self.records = _records_module()
+        self.out_dir = Path(out_dir)
+        self.mode = mode
+        self.run_id = run_id
+        self.policy = policy
+        self.executor = executor
+        self.environment = environment
+        self.environment_sha256 = self.records.entries_sha256(environment) if environment is not None else None
+        self.currents = currents
+        self.store = store
+
+    def write(self, item: "Running", outcome: Outcome) -> dict[str, Any]:
+        current = self.currents[item.unit.unit_id]
+        log_digest = self.records.path_digest(item.log_path) if item.log_path.exists() else None
+        log = {"path": str(item.log_path), "sha256": log_digest, "bytes": item.log_path.stat().st_size if log_digest else None}
+        if self.store is not None and log_digest:
+            log["stored"] = str(self.store.put_log(item.log_path, log_digest))
+        body = {
+            "unit_id": item.unit.unit_id,
+            "unit_type": "command" if item.unit.command else "test",
+            "kind": item.kind,
+            "run": {"run_id": self.run_id, "mode": self.mode, "out_dir": str(self.out_dir)},
+            "executor": self.executor,
+            "policy_sha256": self.policy,
+            "environment": self.environment,
+            "environment_sha256": self.environment_sha256,
+            "spec": current.spec,
+            "spec_sha256": current.spec_sha256,
+            "inputs": current.inputs,
+            "inputs_sha256": current.inputs_sha256,
+            "inheritable": current.inheritable,
+            "not_inheritable_reason": current.reason or None,
+            "test_ids": list(item.unit.test_ids),
+            "tests": (outcome.result or {}).get("tests") if not item.unit.command else None,
+            "passed": outcome.passed,
+            "exit_code": outcome.exit_code,
+            "signal": outcome.signal,
+            "timed_out": outcome.timed_out,
+            "seconds": outcome.seconds,
+            "cpu_seconds": outcome.cpu_seconds,
+            "max_rss_mb": outcome.max_rss_mb,
+            "cores": item.unit.quota.cores,
+            "memory_mb": item.unit.quota.memory_mb,
+            "orphans": outcome.orphans,
+            "log": log,
+            "started_at_utc": outcome.started_at_utc,
+            "completed_at_utc": outcome.completed_at_utc,
+        }
+        record = self.records.seal_record(body)
+        _write_json(item.record_path, record)
+        path = self.store.put_record(record) if self.store is not None else item.record_path
+        outcome.extra.update(disposition="executed", record_sha256=record["record_sha256"], record_path=str(path))
+        return record
+
+
+def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
+    """不承接的模式（run／run-commands）下各单元的当前事实：只有规格，不算输入。"""
+
+    currents = {}
+    for unit in units:
+        spec = unit_spec(unit, start=start, pattern=pattern, timeout_seconds=timeout)
+        currents[unit.unit_id] = records.Current(unit_id=unit.unit_id, unit_type="command" if unit.command else "test", spec=spec,
+                                                 spec_sha256=_sha256(spec), inputs=None, inputs_sha256=None, inheritable=False, reason=reason)
+    return currents
+
+
 class Scheduler:
     def __init__(
         self,
@@ -829,6 +949,7 @@ class Scheduler:
         config: ExecutorConfig,
         policy: str,
         start: Path,
+        recorder: Recorder,
         unit_argv: list[str] | None = None,
     ) -> None:
         self.out_dir = Path(out_dir)
@@ -839,6 +960,7 @@ class Scheduler:
         self.config = config
         self.policy = policy
         self.start = Path(start)
+        self.recorder = recorder
         self.unit_argv = unit_argv
         self.events_path = self.out_dir / "events.jsonl"
         self.reservation = Reservation(self.state_dir)
@@ -983,27 +1105,8 @@ class Scheduler:
                     started_at_utc=item.started_at_utc,
                     completed_at_utc=_utc_now(),
                 )
-                # 单元执行记录：正式／诊断、调度策略版本、测试 ID 与逐个结论、退出原因与资源用量（E3-01 的承接以此为准）。
-                _write_json(item.record_path, {
-                    "schema_version": UNIT_RESULT_SCHEMA,
-                    "unit_id": item.unit.unit_id,
-                    "kind": item.kind,
-                    "policy_sha256": self.policy,
-                    "test_ids": list(item.unit.test_ids),
-                    "tests": (outcome.result or {}).get("tests"),
-                    "passed": outcome.passed,
-                    "exit_code": outcome.exit_code,
-                    "signal": outcome.signal,
-                    "timed_out": outcome.timed_out,
-                    "seconds": outcome.seconds,
-                    "cpu_seconds": outcome.cpu_seconds,
-                    "max_rss_mb": outcome.max_rss_mb,
-                    "cores": item.unit.quota.cores,
-                    "orphans": orphans,
-                    "log": str(item.log_path),
-                    "started_at_utc": outcome.started_at_utc,
-                    "completed_at_utc": outcome.completed_at_utc,
-                })
+                # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
+                self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
                 finished.append(outcome)
@@ -1115,11 +1218,26 @@ def prepare_shared_bytecode(out_dir: Path, scheduler: Scheduler, *, helper: Path
 # ---------------------------------------------------------------------------
 
 
+def _disposition(outcome: Outcome) -> dict[str, Any]:
+    """汇总行里的处置（E3-01）：本次执行还是承接，记录摘要；承接的另带原运行。"""
+
+    row = {"disposition": outcome.extra.get("disposition", "executed"), "record_sha256": outcome.extra.get("record_sha256")}
+    if outcome.extra.get("inherited_from"):
+        row["inherited_from"] = outcome.extra["inherited_from"]
+    return row
+
+
+def _diagnostic_rows(diagnostic: list[Outcome]) -> list[dict[str, Any]]:
+    return [{"unit_id": o.unit.unit_id, "kind": o.kind, "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal,
+             "timed_out": o.timed_out, "seconds": o.seconds, "log": str(o.log_path), "record_sha256": o.extra.get("record_sha256")}
+            for o in diagnostic]
+
+
 def summarize(units: list[Unit], formal: list[Outcome], diagnostic: list[Outcome], expected: set[str], elapsed: float, policy: str) -> dict[str, Any]:
-    """全集核对与汇总：只看正式执行；诊断执行另列，不改结论。
+    """全集核对与汇总：只看正式执行（含承接的正式执行记录，E3-01）；诊断执行另列，不改结论。
 
     * 全集：各正式单元上报的测试 ID 并集必须等于 discover 全集——缺报、重复上报、全集之外的 ID（如 setUpClass
-      失败的占位记录）、规划了却没执行的单元，任何一种都判失败；
+      失败的占位记录）、规划了却没执行也没承接的单元，任何一种都判失败；
     * 单元：退出码非 0、被信号终止、超时、没写结果文件，都判单元失败（即便它上报的测试都通过）。
     """
 
@@ -1143,6 +1261,7 @@ def summarize(units: list[Unit], formal: list[Outcome], diagnostic: list[Outcome
             "timed_out": outcome.timed_out, "seconds": outcome.seconds, "cpu_seconds": outcome.cpu_seconds,
             "max_rss_mb": outcome.max_rss_mb, "orphans": len(outcome.orphans), "log": str(outcome.log_path),
             "missing": sorted(assigned - set(tests)), "tests": len(tests), "has_result": outcome.result is not None,
+            **_disposition(outcome),
         })
     missing = sorted(expected - set(reported))
     duplicated = sorted(t for t, owners in reported.items() if len(owners) > 1)
@@ -1160,11 +1279,7 @@ def summarize(units: list[Unit], formal: list[Outcome], diagnostic: list[Outcome
         "full_set": {"missing": missing, "duplicated": duplicated, "unexpected": unexpected, "units_not_run": not_run},
         "failed_units": failed_units,
         "units": unit_rows,
-        "diagnostic": [
-            {"unit_id": o.unit.unit_id, "kind": o.kind, "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal,
-             "timed_out": o.timed_out, "seconds": o.seconds, "log": str(o.log_path)}
-            for o in diagnostic
-        ],
+        "diagnostic": _diagnostic_rows(diagnostic),
     }
 
 
@@ -1233,6 +1348,14 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                            help="字节码共享层与身份记忆化：auto 沿用环境里已有的、没有就在记录目录里新建；off 都不准备（单元按原环境运行，诊断用）")
             p.add_argument("--bytecode-helper", type=Path, default=DEFAULT_BYTECODE_HELPER, help="字节码共享层的预编译工具（测试与诊断用）")
             p.add_argument("--bytecode-source", type=Path, action="append", default=None, help="预编译进共享层的源码目录，可重复；默认 tools")
+        if name == "run-gates":
+            # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；入口门禁（驱动 entry-gates.sh）缺省全集通过。
+            p.add_argument("--record-store", type=Path, default=None, help="单元执行记录库：记录与日志入库，全集通过模式从这里找可承接的记录")
+            p.add_argument("--mode", choices=("re-execute", "full-set-pass"), default="re-execute",
+                           help="re-execute：重新执行全集，不承接；full-set-pass：全集通过，承接有效记录、只执行其余单元（要给记录库）")
+            p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
+            p.add_argument("--decide-only", action="store_true",
+                           help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     unit.add_argument("--tests-file", type=Path, required=True)
@@ -1297,6 +1420,7 @@ def summarize_commands(units: list[Unit], formal: list[Outcome], diagnostic: lis
         "unit_id": o.unit.unit_id, "kind": o.kind, "policy_sha256": policy, "exclusive": o.unit.exclusive, "cores": o.unit.quota.cores,
         "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal, "timed_out": o.timed_out, "seconds": o.seconds,
         "cpu_seconds": o.cpu_seconds, "max_rss_mb": o.max_rss_mb, "orphans": len(o.orphans), "log": str(o.log_path),
+        **_disposition(o),
     } for o in formal]
     failed = [row["unit_id"] for row in rows if not row["passed"]]
     not_run = sorted({u.unit_id for u in units} - {o.unit.unit_id for o in formal})
@@ -1309,11 +1433,7 @@ def summarize_commands(units: list[Unit], formal: list[Outcome], diagnostic: lis
         "failed_units": failed,
         "units_not_run": not_run,
         "units": rows,
-        "diagnostic": [
-            {"unit_id": o.unit.unit_id, "kind": o.kind, "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal,
-             "timed_out": o.timed_out, "seconds": o.seconds, "log": str(o.log_path)}
-            for o in diagnostic
-        ],
+        "diagnostic": _diagnostic_rows(diagnostic),
     }
 
 
@@ -1345,10 +1465,15 @@ def _run_commands(args: argparse.Namespace) -> int:
     policy = _sha256({"commands": manifest, "parallelism": parallelism, "config": config.raw})
     out_dir = _out_dir(args)
     state_dir = args.state_dir or default_state_dir()
+    records = _records_module()
+    recorder = Recorder(out_dir=out_dir, mode=records.RE_EXECUTE, run_id=records.new_run_id(), policy=policy,
+                        executor=records.executor_version([args.bytecode_helper]), environment=None,
+                        currents=_plain_currents(records, units, start=None, pattern=None, timeout=config.unit_timeout_seconds,
+                                                 reason="命令单元清单模式（run-commands）不承接"))
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
-        machine_memory=machine_memory_mb(), config=config, policy=policy, start=Path("."),
+        machine_memory=machine_memory_mb(), config=config, policy=policy, start=Path("."), recorder=recorder,
     )
     try:
         started = time.monotonic()
@@ -1389,8 +1514,9 @@ def summarize_gates(
 ) -> dict[str, Any]:
     """门禁清单的汇总（E2-04）：测试组照 ``run`` 做全集核对，命令单元只认退出码、信号与超时，结论按门禁项聚合。
 
-    门禁项通过＝它的每个命令单元都正式执行且通过、每个测试组的全集核对通过；起止时间取成员单元的最早开始与最晚
-    结束。测试组另列逐条跳过清单（测试 ID 与原因），供 P0 证据登记。诊断执行另列，不改结论。
+    门禁项通过＝它的每个命令单元都正式执行（或承接了正式执行记录，E3-01）且通过、每个测试组的全集核对通过；起止
+    时间取本次执行的成员单元的最早开始与最晚结束（承接的单元另列 ``inherited_units``，不拉长时间窗）。测试组另列
+    逐条跳过清单（测试 ID 与原因），供 P0 证据登记。诊断执行另列，不改结论。
     """
 
     by_unit = {outcome.unit.unit_id: outcome for outcome in formal}
@@ -1427,14 +1553,15 @@ def summarize_gates(
             "timed_out": outcome.timed_out, "seconds": outcome.seconds, "cpu_seconds": outcome.cpu_seconds,
             "max_rss_mb": outcome.max_rss_mb, "orphans": len(outcome.orphans), "log": str(outcome.log_path),
             "argv": list(unit.command), "cwd": unit.cwd, "started_at_utc": outcome.started_at_utc,
-            "completed_at_utc": outcome.completed_at_utc,
+            "completed_at_utc": outcome.completed_at_utc, **_disposition(outcome),
         })
     gate_rows: list[dict[str, Any]] = []
     for gate in gates:
         members = list(gate.units) + [unit_id for group_id in gate.test_groups for unit_id in group_rows[group_id]["units"]]
         failed = [unit_id for unit_id in members if unit_id not in by_unit or not by_unit[unit_id].passed]
         groups_passed = all(group_rows[group_id]["status"] == "passed" for group_id in gate.test_groups)
-        executed = [by_unit[unit_id] for unit_id in members if unit_id in by_unit]
+        present = [by_unit[unit_id] for unit_id in members if unit_id in by_unit]
+        executed = [o for o in present if o.extra.get("disposition", "executed") == "executed"]
         gate_rows.append({
             "gate_id": gate.gate_id,
             "status": "passed" if not failed and groups_passed else "failed",
@@ -1442,6 +1569,7 @@ def summarize_gates(
             "test_groups": list(gate.test_groups),
             "failed_units": failed,
             "not_executed": list(gate.not_executed),
+            "inherited_units": sorted(o.unit.unit_id for o in present if o.extra.get("disposition") == "inherited"),
             "started_at_utc": min((o.started_at_utc for o in executed), default=None),
             "completed_at_utc": max((o.completed_at_utc for o in executed), default=None),
             "unit_seconds": round(sum(o.seconds for o in executed), 3),
@@ -1457,11 +1585,7 @@ def summarize_gates(
         "units": rows,
         "units_not_run": command_not_run,
         "failed_units": [row["unit_id"] for row in rows if not row["passed"]],
-        "diagnostic": [
-            {"unit_id": o.unit.unit_id, "kind": o.kind, "passed": o.passed, "exit_code": o.exit_code, "signal": o.signal,
-             "timed_out": o.timed_out, "seconds": o.seconds, "log": str(o.log_path)}
-            for o in diagnostic
-        ],
+        "diagnostic": _diagnostic_rows(diagnostic),
     }
 
 
@@ -1484,6 +1608,13 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
         print(f"未执行的命令单元 {len(summary['units_not_run'])} 个：{summary['units_not_run'][:5]}", file=sys.stderr)
     if (summary.get("bytecode_cache") or {}).get("status") == "failed":
         print(f"字节码共享层预编译失败（其余单元已照跑、各自从源码编译）：{summary['bytecode_cache'].get('detail')}", file=sys.stderr)
+    inheritance, manifest = summary.get("inheritance") or {}, summary.get("unit_manifest") or {}
+    if inheritance:
+        print(f"承接（{inheritance.get('mode_label')}）：本次执行 {inheritance['executed']} 个单元，承接 {inheritance['inherited']} 个"
+              f"（{inheritance['inherited_tests']} 个测试）；清单 {manifest.get('path')}，自检{'通过' if manifest.get('self_check') == 'passed' else '不通过'}",
+              file=sys.stderr)
+        for problem in (manifest.get("problems") or [])[:10]:
+            print(f"清单自检不通过：{problem}", file=sys.stderr)
     print("-" * 70, file=sys.stderr)
     for gate in summary["gates"]:
         verdict = "通过" if gate["status"] == "passed" else f"未通过（失败单元 {len(gate['failed_units'])} 个：{gate['failed_units'][:5]}）"
@@ -1494,16 +1625,154 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
     print("OK" if summary["status"] == "passed" else f"FAILED (gates={len(summary['gates']) - passed})", file=sys.stderr)
 
 
+def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: dict[str, list[Unit]], command_units: list[Unit],
+                   manifest: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """``run-gates`` 各单元的当前事实（E3-01）：单元规格、输入明细与摘要、能否承接（不能时写明原因）。
+
+    采集工具测试单元的输入由执行器按静态依赖闭包算（同一模块的拆块与独占单元共用一份）；命令单元的输入由门禁清单
+    声明（``inputs``），清单标了 ``inheritable: false`` 的（如 pre-A3 场景）照写记录、不承接。工作目录不是干净的 git
+    检出时输入不完整（未跟踪文件不在范围里），本次一律不承接。"""
+
+    items = {item["unit_id"]: item for item in manifest.get("units") or [] if isinstance(item, dict)}
+    repo, problem = None, ""
+    try:
+        repo = records.RepoIndex.load(Path.cwd())
+        if not repo.clean:
+            problem = f"测试树不干净（{len(repo.dirty)} 项未提交或未跟踪的改动，例如 {repo.dirty[:3]}）：输入不完整，本次不承接"
+    except records.RecordsError as error:
+        problem = f"执行器的工作目录不是可用的 git 检出（{error}）：算不出输入，本次不承接"
+    currents: dict[str, Any] = {}
+
+    def current(unit: Unit, spec: dict[str, Any], inputs: list[dict[str, Any]] | None, reason: str) -> Any:
+        return records.Current(unit_id=unit.unit_id, unit_type="command" if unit.command else "test", spec=spec, spec_sha256=_sha256(spec),
+                               inputs=inputs, inputs_sha256=records.entries_sha256(inputs) if inputs is not None else None,
+                               inheritable=inputs is not None and not reason, reason=reason)
+
+    for group in groups:
+        deps = records.TestDependencies(group.start.resolve().parent) if not problem else None
+        cache: dict[str, Any] = {}
+        for unit in group_units[group.group_id]:
+            spec = unit_spec(unit, start=group.start, pattern=group.pattern, timeout_seconds=timeout)
+            module = unit.module.split("+", 1)[0]
+            inputs, reason = None, problem
+            if not reason:
+                module_file = (group.start / f"{module}.py").resolve()
+                if not module_file.is_file():
+                    reason = f"找不到测试模块文件：{module_file}"
+                else:
+                    try:
+                        if module not in cache:
+                            cache[module] = records.test_unit_inputs(repo, deps, module_file)
+                        inputs = cache[module]
+                    except (records.RecordsError, OSError, ValueError) as error:
+                        reason = f"输入算不出来：{error}"
+            currents[unit.unit_id] = current(unit, spec, inputs, reason)
+    for unit in command_units:
+        spec = unit_spec(unit, start=None, pattern=None, timeout_seconds=timeout)
+        item = items.get(unit.unit_id, {})
+        inputs, reason = None, ""
+        if not item.get("inheritable", True):
+            reason = str(item.get("not_inheritable_reason") or "门禁清单标为不可承接")
+        elif "inputs" not in item:
+            reason = "门禁清单没有声明这个单元的输入"
+        elif problem:
+            reason = problem
+        else:
+            try:
+                inputs = records.declared_inputs(repo, item["inputs"])
+            except (records.RecordsError, OSError, ValueError) as error:
+                reason = f"输入算不出来：{error}"
+        currents[unit.unit_id] = current(unit, spec, inputs, reason)
+    return currents
+
+
+def _inherited_outcome(unit: Unit, decision: Any, store: Any) -> Outcome:
+    """承接的单元按原记录参加全集核对与门禁聚合（结论、测试结果、用量与起止时间都是原记录的）。"""
+
+    record = decision.record
+    return Outcome(
+        unit=unit, kind="formal", exit_code=record["exit_code"], signal=None, timed_out=False,
+        seconds=float(record.get("seconds") or 0.0), cpu_seconds=float(record.get("cpu_seconds") or 0.0),
+        max_rss_mb=float(record.get("max_rss_mb") or 0.0), orphans=[], log_path=store.log_path(str(record["log"]["sha256"])),
+        result=None if unit.command else {"tests": record["tests"], "tests_run": len(record["tests"]), "successful": True},
+        extra={"disposition": "inherited", "record_sha256": record["record_sha256"], "record_path": str(decision.record_path),
+               "inherited_from": {"run_id": record["run"]["run_id"], "completed_at_utc": record["completed_at_utc"]}},
+        started_at_utc=record["started_at_utc"], completed_at_utc=record["completed_at_utc"],
+    )
+
+
+def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, store: Any, out_dir: Path, decided_at: str, policy: str,
+                   environment: list[dict[str, Any]], executor: dict[str, Any], units: list[Unit], gates: list[Gate],
+                   group_units: dict[str, list[Unit]], expected: dict[str, set[str]], currents: dict[str, Any],
+                   decisions: dict[str, Any], outcomes: list[Outcome], diagnostic: list[Outcome]) -> dict[str, Any]:
+    """本次运行的清单（E3-01）：逐单元写明本次执行还是承接——承接写原运行与记录摘要，执行写不承接的原因。"""
+
+    gate_of: dict[str, list[str]] = {}
+    for gate in gates:
+        for unit_id in gate.units:
+            gate_of.setdefault(unit_id, []).append(gate.gate_id)
+        for group_id in gate.test_groups:
+            for unit in group_units[group_id]:
+                gate_of.setdefault(unit.unit_id, []).append(gate.gate_id)
+    group_of = {unit.unit_id: group_id for group_id, members in group_units.items() for unit in members}
+    by_unit = {outcome.unit.unit_id: outcome for outcome in outcomes}
+    entries = []
+    for unit in units:
+        outcome, now = by_unit.get(unit.unit_id), currents[unit.unit_id]
+        entry = {
+            "unit_id": unit.unit_id, "unit_type": now.unit_type, "gates": sorted(gate_of.get(unit.unit_id, [])),
+            "test_group": group_of.get(unit.unit_id),
+            "disposition": outcome.extra.get("disposition", "executed") if outcome else "not_run",
+            "record_sha256": outcome.extra.get("record_sha256") if outcome else None,
+            "record_path": outcome.extra.get("record_path") if outcome else None,
+            "passed": outcome.passed if outcome else False,
+            "spec_sha256": now.spec_sha256, "inputs_sha256": now.inputs_sha256, "inheritable": now.inheritable,
+        }
+        if outcome is not None and outcome.extra.get("disposition") == "inherited":
+            entry["basis"] = outcome.extra["inherited_from"]
+        else:
+            entry["reasons"] = list(decisions[unit.unit_id].reasons)
+        entries.append(entry)
+    inherited = [outcome for outcome in outcomes if outcome.extra.get("disposition") == "inherited"]
+    return records.build_manifest(
+        run_id=run_id, mode=mode, inheritance_max_age_hours=max_age, record_store=str(store.root) if store is not None else None,
+        out_dir=str(out_dir), decided_at_utc=decided_at, completed_at_utc=records.utc_now(), policy_sha256=policy,
+        environment=environment, environment_sha256=records.entries_sha256(environment), executor=executor,
+        planned_units=[unit.unit_id for unit in units], units=entries,
+        diagnostic=[{"unit_id": o.unit.unit_id, "record_sha256": o.extra.get("record_sha256"), "record_path": o.extra.get("record_path"),
+                     "passed": o.passed} for o in diagnostic],
+        test_groups={group_id: sorted(ids) for group_id, ids in expected.items()},
+        counts={"planned": len(units), "executed": sum(1 for entry in entries if entry["disposition"] == "executed"),
+                "inherited": len(inherited), "inherited_tests": sum(len((o.result or {}).get("tests") or {}) for o in inherited)},
+    )
+
+
 def _run_gates(args: argparse.Namespace) -> int:
     """``run-gates``（E2-04）：一个测试组与若干命令单元同一次运行、同一套调度（额度、独占、预约、诊断、会话清理），
-    全部跑完再按门禁项汇总——一个门禁项失败不影响别的门禁项照跑。测试组在执行器的工作目录下 discover。"""
+    全部跑完再按门禁项汇总——一个门禁项失败不影响别的门禁项照跑。测试组在执行器的工作目录下 discover。
 
+    E3-01：全集通过模式先在记录库里给每个单元找可承接的记录，只执行找不到的；重新执行全集模式全部执行。两种模式
+    的记录都入库（给了记录库时），运行结束写清单并自检。"""
+
+    records = _records_module()
+    if args.mode == records.FULL_SET_PASS and args.record_store is None:
+        raise ExecutorError("全集通过模式（承接）要给记录库：--record-store")
+    max_age = float(args.inheritance_max_age_hours)
+    if not 0 < max_age <= records.MAX_AGE_HOURS:
+        raise ExecutorError(f"承接期限只能在 0～{records.MAX_AGE_HOURS:g} 小时之间（只能调小）")
     config = load_config(args.config)
     weights = load_weights(args.weights)
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
     groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
     parallelism = args.parallel or config.default_parallelism
+    # 环境指纹要在准备共享缓存之前算：准备缓存会往本进程环境里写缓存位置。
+    try:
+        environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+    except records.RecordsError as error:
+        raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
+    executor = records.executor_version([args.bytecode_helper])
+    store = records.RecordStore(args.record_store) if args.record_store is not None else None
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
     for group in groups:
@@ -1517,34 +1786,78 @@ def _run_gates(args: argparse.Namespace) -> int:
     if clash:
         raise ExecutorError(f"命令单元与测试单元重名：{clash}")
     units = test_units + command_units
-    policy = _sha256({"gates": manifest, "config": config.raw, "weights": weights, "durations": durations, "parallelism": parallelism})
+    policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
+    currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
+                              timeout=config.unit_timeout_seconds)
+    run_id, decided_at = records.new_run_id(), records.utc_now()
+    facts = records.RunFacts(policy_sha256=policy, environment=environment, environment_sha256=records.entries_sha256(environment),
+                             executor=executor, max_age_hours=max_age, now=time.time())
+    decisions = {unit.unit_id: records.evaluate(store, currents[unit.unit_id], facts) if args.mode == records.FULL_SET_PASS
+                 else records.Decision(reasons=["重新执行全集：不承接"]) for unit in units}
+    to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
     out_dir = _out_dir(args)
+    if args.decide_only:
+        # 只判定：每个单元承接还是执行、依据或原因；不执行、不写记录、不占调度锁。
+        payload = {"mode": args.mode, "decided_at_utc": decided_at, "policy_sha256": policy, "environment_sha256": facts.environment_sha256,
+                   "executor_sha256": executor["sha256"], "record_store": str(store.root) if store is not None else None,
+                   "inherit": len(units) - len(to_run), "execute": len(to_run),
+                   "units": {unit.unit_id: {"inherit": decisions[unit.unit_id].inherit, "reasons": decisions[unit.unit_id].reasons,
+                                            "record_sha256": (decisions[unit.unit_id].record or {}).get("record_sha256")} for unit in units}}
+        _write_json(out_dir / "decisions.json", payload)
+        print(f"只判定（{records.MODE_LABELS[args.mode]}）：承接 {payload['inherit']} 个、执行 {payload['execute']} 个；明细 {out_dir / 'decisions.json'}",
+              file=sys.stderr)
+        return 0
     state_dir = args.state_dir or default_state_dir()
+    recorder = Recorder(out_dir=out_dir, mode=args.mode, run_id=run_id, policy=policy, executor=executor, environment=environment,
+                        currents=currents, store=store)
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
-        machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."),
+        machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."), recorder=recorder,
     )
     try:
         started = time.monotonic()
         _write_json(out_dir / "plan.json", {
-            "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores,
+            "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores, "mode": args.mode, "run_id": run_id,
+            "record_store": str(store.root) if store is not None else None,
             "gates": [{"gate_id": g.gate_id, "units": list(g.units), "test_groups": list(g.test_groups), "not_executed": list(g.not_executed)} for g in gates],
             "units": [{"unit_id": u.unit_id, "type": "command" if u.command else "test", "tests": list(u.test_ids), "argv": list(u.command),
                        "cwd": u.cwd, "cores": u.quota.cores, "memory_mb": u.quota.memory_mb, "exclusive": u.exclusive,
-                       "timeout_seconds": u.timeout_seconds} for u in units],
+                       "timeout_seconds": u.timeout_seconds, "inherit": decisions[u.unit_id].inherit,
+                       "reasons": decisions[u.unit_id].reasons} for u in units],
         })
         print(f"调度：门禁 {len(gates)} 项，单元 {len(units)} 个（测试 {len(test_units)}、命令 {len(command_units)}；"
-              f"{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}",
-              file=sys.stderr, flush=True)
-        bytecode, identity_memo = _prepare_shared_caches(args, out_dir, scheduler)
-        formal = scheduler.run_parallel([u for u in units if not u.exclusive], "formal")
-        formal += scheduler.run_alone([u for u in units if u.exclusive], "formal")
+              f"{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}；"
+              f"{records.MODE_LABELS[args.mode]}：承接 {len(units) - len(to_run)} 个、执行 {len(to_run)} 个", file=sys.stderr, flush=True)
+        if to_run:
+            bytecode, identity_memo = _prepare_shared_caches(args, out_dir, scheduler)
+        else:
+            bytecode, identity_memo = {"status": "off", "prefix": None, "seconds": 0.0, "note": "全部承接，没有要执行的单元"}, None
+        formal = scheduler.run_parallel([u for u in to_run if not u.exclusive], "formal")
+        formal += scheduler.run_alone([u for u in to_run if u.exclusive], "formal")
         diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
-        summary = summarize_gates(groups, group_units, expected, command_units, gates, formal, diagnostic, time.monotonic() - started, policy)
-        summary.update({"max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
-                        "bytecode_cache": bytecode, "identity_memo": identity_memo})
-        if bytecode["status"] == "failed":
+        inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store) for unit in units if decisions[unit.unit_id].inherit]
+        outcomes = formal + inherited
+        summary = summarize_gates(groups, group_units, expected, command_units, gates, outcomes, diagnostic, time.monotonic() - started, policy)
+        unit_manifest = _unit_manifest(records, run_id=run_id, mode=args.mode, max_age=max_age, store=store, out_dir=out_dir,
+                                       decided_at=decided_at, policy=policy, environment=environment, executor=executor, units=units,
+                                       gates=gates, group_units=group_units, expected=expected, currents=currents, decisions=decisions,
+                                       outcomes=outcomes, diagnostic=diagnostic)
+        problems = records.verify_manifest(unit_manifest, store=store)
+        manifest_path = out_dir / "unit-manifest.json"
+        _write_json(manifest_path, unit_manifest)
+        # 自检通过才把清单存进记录库：承接要求原运行的清单把记录列为正式执行，没正常结束或自检不过的运行，它的记录不可承接。
+        if store is not None and not problems:
+            store.put_manifest(unit_manifest)
+        summary.update({
+            "max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
+            "bytecode_cache": bytecode, "identity_memo": identity_memo, "mode": args.mode, "run_id": run_id,
+            "record_store": str(store.root) if store is not None else None,
+            "inheritance": {"mode_label": records.MODE_LABELS[args.mode], **{key: unit_manifest["counts"][key] for key in ("executed", "inherited", "inherited_tests")}},
+            "unit_manifest": {"path": str(manifest_path), "manifest_sha256": unit_manifest["manifest_sha256"],
+                              "self_check": "passed" if not problems else "failed", "problems": problems[:50]},
+        })
+        if bytecode["status"] == "failed" or problems:
             summary["status"] = "failed"
         _write_json(out_dir / "summary.json", summary)
         _print_gates_summary(summary)
@@ -1584,10 +1897,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         out_dir = _out_dir(args)
         state_dir = args.state_dir or default_state_dir()
+        records = _records_module()
+        recorder = Recorder(out_dir=out_dir, mode=records.RE_EXECUTE, run_id=records.new_run_id(), policy=policy,
+                            executor=records.executor_version([args.bytecode_helper]), environment=None,
+                            currents=_plain_currents(records, units, start=args.start, pattern=args.pattern,
+                                                     timeout=config.unit_timeout_seconds, reason="测试模式（run）不承接"))
         lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
         scheduler = Scheduler(
             out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
-            machine_memory=machine_memory_mb(), config=config, policy=policy, start=args.start,
+            machine_memory=machine_memory_mb(), config=config, policy=policy, start=args.start, recorder=recorder,
         )
         try:
             started = time.monotonic()

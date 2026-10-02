@@ -173,8 +173,46 @@ class EntryGatesPlanTests(unittest.TestCase):
         self.assertEqual([match.group(1) for match in eg.DEPLOY_TEST_LINE.finditer(CI_WORKFLOW)][-1],
                          "/bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh", "一行里混了别的命令的不取")
 
+    def test_plan_declares_inputs_scheduling_environment_and_pre_a3_not_inheritable(self) -> None:
+        """E3-01：命令单元按 E2-05 从宽声明输入（整个仓库四段＋HEAD），子检查另加历史源码树；清单带额度表与环境事实；
+        pre-A3 场景标为不可承接；额度表与组合无关（组合不同不改调度策略版本）。"""
 
-def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped: int = 2) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tree = _tree(root, self.CHECKS)
+            environment = [{"category": "environment", "name": "env:go", "sha256": "a" * 64, "detail": {"value": "go1.27.1"}}]
+            historical = {"category": "environment", "name": "tree:/hist#pycache", "sha256": "b" * 64, "detail": {}}
+            full = eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux", environment=environment,
+                                 egress_extra_inputs=[historical])
+            self.assertEqual((full["scheduling"], full["environment"]), (eg.scheduling_table(), environment))
+            for unit in full["units"]:
+                inputs = unit["inputs"]
+                self.assertEqual(([item["name"] for item in inputs["ranges"]], inputs["head"]),
+                                 (["repo:managed", "repo:tests", "repo:docs", "repo:rest"], True), unit["unit_id"])
+                expected = [historical] if unit["unit_id"].startswith(eg.EGRESS_SPEC_UNIT_PREFIX) else []
+                self.assertEqual(inputs["resolved"], expected, unit["unit_id"])
+            managed = full["units"][0]["inputs"]["ranges"][0]
+            self.assertEqual((managed["include"], managed["exclude"]),
+                             (["tools/official_client_capture/"], ["tools/official_client_capture/tests/"]))
+            entry = eg.plan_gates(tree, profile="entry", launcher=LAUNCHER, pre_a3_units=self._pre_a3_units(root, root / "data"),
+                                  platform="linux")
+            alpha = next(unit for unit in entry["units"] if unit["unit_id"] == "pre-a3:alpha")
+            self.assertEqual((alpha["inheritable"], "inputs" in alpha), (False, False))
+            self.assertIn("E3-02", alpha["not_inheritable_reason"])
+            self.assertEqual(entry["scheduling"], full["scheduling"], "额度表与组合无关")
+            config = ue.load_config(REPO_ROOT / ue.DEFAULT_CONFIG)
+            self.assertEqual(ue.gates_policy_digest(config, {}, {}, 8, full["scheduling"]), ue.gates_policy_digest(config, {}, {}, 8, entry["scheduling"]))
+            changed = json.loads(json.dumps(full["scheduling"]))
+            changed["go_quota"]["cores"] = 1.0
+            self.assertNotEqual(ue.gates_policy_digest(config, {}, {}, 8, changed), ue.gates_policy_digest(config, {}, {}, 8, full["scheduling"]),
+                                "改额度表：调度策略版本变（全部不承接）")
+            path = root / "entry.json"
+            path.write_text(json.dumps(entry), encoding="utf-8")
+            ue.load_gates_manifest(path, machine_cores=4)
+
+
+def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped: int = 2,
+                 inherited: frozenset[str] = frozenset(), mode: str | None = None) -> dict:
     """照执行器 summarize_gates 的形状合成一次运行的汇总。"""
 
     stamp = "2026-10-01T10:00:00Z", "2026-10-01T10:20:00Z"
@@ -194,12 +232,19 @@ def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped:
     gates = []
     for gate in manifest["gates"]:
         failed = [unit for unit in gate["units"] if not by_id[unit]["passed"]]
+        members = list(gate["units"]) + (["test_x"] if gate.get("test_groups") else [])
         gates.append({"gate_id": gate["gate_id"], "status": "failed" if failed else "passed", "units": gate["units"],
                       "test_groups": gate.get("test_groups", []), "failed_units": failed, "not_executed": gate.get("not_executed", []),
+                      "inherited_units": sorted(set(members) & set(inherited)),
                       "started_at_utc": stamp[0], "completed_at_utc": stamp[1], "unit_seconds": 5.0 * len(gate["units"])})
-    return {"schema_version": eg.GATES_SUMMARY_SCHEMA, "status": "failed" if fail_units else "passed", "policy_sha256": "p" * 64,
-            "elapsed_seconds": 1200.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [],
-            "failed_units": sorted(fail_units), "diagnostic": [], "max_cores_in_use": 4.0}
+    summary = {"schema_version": eg.GATES_SUMMARY_SCHEMA, "status": "failed" if fail_units else "passed", "policy_sha256": "p" * 64,
+               "elapsed_seconds": 1200.0, "gates": gates, "test_groups": groups, "units": rows, "units_not_run": [],
+               "failed_units": sorted(fail_units), "diagnostic": [], "max_cores_in_use": 4.0}
+    if mode is not None:
+        summary.update(mode=mode, inheritance={"mode_label": "全集通过", "executed": len(rows), "inherited": len(inherited), "inherited_tests": 3},
+                       unit_manifest={"path": "/out/executor/unit-manifest.json", "self_check": "passed", "problems": []},
+                       record_store="/store")
+    return summary
 
 
 class EntryGatesPreA3QuotaTests(unittest.TestCase):
@@ -212,13 +257,14 @@ class EntryGatesPreA3QuotaTests(unittest.TestCase):
 
 
 class EntryGatesExportTests(unittest.TestCase):
-    def _export(self, root: Path, profile: str, *, fail_units: set[str] = frozenset(), pre_a3: Path | None = None) -> tuple[dict, Path]:
+    def _export(self, root: Path, profile: str, *, fail_units: set[str] = frozenset(), pre_a3: Path | None = None,
+                inherited: frozenset[str] = frozenset(), mode: str | None = None) -> tuple[dict, Path]:
         tree = root / "tree" if (root / "tree").exists() else _tree(root, EntryGatesPlanTests.CHECKS)
         manifest = eg.plan_gates(tree, profile=profile, launcher=[], pre_a3_units=pre_a3, platform="linux")
         manifest_path, summary_path = root / f"{profile}-manifest.json", root / f"{profile}-summary.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        summary_path.write_text(json.dumps(_summary_for(manifest, fail_units=fail_units)), encoding="utf-8")
-        out = root / f"out-{profile}-{len(fail_units)}"
+        summary_path.write_text(json.dumps(_summary_for(manifest, fail_units=fail_units, inherited=inherited, mode=mode)), encoding="utf-8")
+        out = root / f"out-{profile}-{len(fail_units)}-{len(inherited)}"
         entry = eg.export_records(manifest_path, summary_path, out, source={"commit": "c" * 40, "tree_head": "c" * 40, "bundle": "/b"},
                                   subject="entry-gates-x", round_id="r1", tree=str(tree), isolation="unshare -m", host="arm64",
                                   architecture="linux/aarch64", target_version="0.159.3", bytecode_cache="/pyc")
@@ -308,6 +354,24 @@ class EntryGatesExportTests(unittest.TestCase):
             vc_receipt.finalize(p0, "p0-facts.json", "p0-receipt.json")
             replayed = vc_receipt.replay(p0, "p0-receipt.json")
             self.assertEqual(replayed["kind"], "p0_gate")
+
+    def test_inherited_units_withhold_the_single_run_p0_evidence(self) -> None:
+        """E3-01：门禁项里有承接的单元时不写旧形状 P0 证据（它声明的是 make 命令的一次运行），总摘要写明原因；没有承接的
+        门禁项照常导出；门禁记录与总摘要带运行模式、承接单元与清单位置。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            entry, out = self._export(root, "preflight", inherited=frozenset({"test_x"}), mode="full-set-pass")
+            self.assertFalse((out / "p0" / "test-capture-tools.json").exists())
+            self.assertTrue((out / "p0" / "check-egress-spec.json").exists(), "没有承接的门禁项照常导出")
+            self.assertEqual(sorted(entry["p0_evidence_withheld"]), ["test-capture-tools"])
+            self.assertIn("E3-03", entry["p0_evidence_withheld"]["test-capture-tools"])
+            self.assertEqual(sorted(entry["p0_evidence"]), ["check-egress-spec"])
+            record = json.loads((out / "logs" / "test-capture-tools.gate.json").read_text(encoding="utf-8"))
+            self.assertEqual((record["mode"], record["inherited_units"]), ("full-set-pass", ["test_x"]))
+            self.assertEqual((entry["mode"], entry["unit_manifest"]["self_check"], entry["record_store"]), ("full-set-pass", "passed", "/store"))
+            entry, out = self._export(root, "preflight", mode="re-execute")
+            self.assertEqual((sorted(entry["p0_evidence"]), entry["p0_evidence_withheld"]), (["check-egress-spec", "test-capture-tools"], {}))
 
     def test_pre_a3_sub_summary_holds_only_pre_a3_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

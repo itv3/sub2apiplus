@@ -27,7 +27,9 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 
 选项：``--plan`` 只判定不执行；``--from``／``--to`` 指定起止步骤（起点之前有要重做的步骤时拒绝）；``--inject-mask
 步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败；
-``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）。
+``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）；
+``--reexecute-gates``：入口门禁重新执行全集（方案 D12：升级开工的入口空跑、一致性验收、收尾合入前用），这一步不沿用
+记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
@@ -152,10 +154,12 @@ class Outcome:
 class Orchestrator:
     def __init__(self, params: Mapping[str, str], *, driver_dir: Path, run_dir: Path, steps_dir: Path,
                  runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None,
-                 approval: Mapping[str, str] | None = None) -> None:
+                 approval: Mapping[str, str] | None = None, reexecute_gates: bool = False) -> None:
         self.params = dict(params)
         self.driver_dir, self.run_dir, self.steps_dir = driver_dir, run_dir, steps_dir
         self.runner, self.masks = runner, dict(masks or {})
+        # 入口门禁的模式（D12）：重新执行全集时这一步强制重做、单元一个都不承接。
+        self.reexecute_gates = reexecute_gates
         # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
         self.approval = {key: value for key, value in (approval or {}).items() if value}
         context_args = {"params": self.params, "driver_dir": driver_dir, "steps_dir": steps_dir}
@@ -272,7 +276,8 @@ class Orchestrator:
             out = self.run_dir / "entry-gates"
             rc = self.run("entry-gates", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "entry", "--out", str(out),
                                           "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
-                                          "--pre-a3-mode", "run" if pre_a3_run else "present", *source])
+                                          "--pre-a3-mode", "run" if pre_a3_run else "present",
+                                          "--mode", "re-execute" if self.reexecute_gates else "full-set-pass", *source])
             summary = out / "entry-gates.json"
             try:
                 status = json.loads(summary.read_text(encoding="utf-8")).get("status")
@@ -464,6 +469,13 @@ class Orchestrator:
         """P0 门禁收据（E2-07 固定步骤，原来每轮手写）：两份离线门禁证据取自入口门禁那一次运行，加发布认证与回退依据；
         subject 取计时账本计划（升级 ID、用途、两个版本），签发后立即重放。"""
 
+        # 入口门禁在全集通过模式下承接了单元时不写旧形状 P0 证据（E3-01，它声明的是 make 命令的一次运行）：照总摘要报原因。
+        entry = json.loads(self.record_product("entry-gates", "summary").read_text(encoding="utf-8"))
+        withheld = entry.get("p0_evidence_withheld") or {}
+        if withheld:
+            for gate_id, why in sorted(withheld.items()):
+                self.outcomes["p0-receipt"].reasons.append(f"入口门禁的 {gate_id} 没有旧形状 P0 证据：{why}（编排器带 --reexecute-gates）")
+            return False, {}
         evidence_sources = {
             "test-capture-tools.json": self.record_product("entry-gates", "p0-test-capture-tools"),
             "check-egress-spec.json": self.record_product("entry-gates", "p0-check-egress-spec"),
@@ -612,7 +624,8 @@ class Orchestrator:
     def orchestrate(self, *, plan_only: bool = False, from_step: str | None = None, to_step: str | None = None,
                     formal: bool | None = None) -> dict[str, Any]:
         is_formal = ES.formal_built(self.ctx) if formal is None else formal
-        evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal)
+        force = {"entry-gates": "要求入口门禁重新执行全集（--reexecute-gates，方案 D12）"} if self.reexecute_gates else None
+        evaluation = ES.evaluate(self.ctx, is_formal_built=is_formal, force=force)
         decisions = {step["step_id"]: step for step in evaluation["steps"]}
         start = ORDER.index(from_step) if from_step else 0
         stop = ORDER.index(to_step) if to_step else len(ORDER) - 1
@@ -769,6 +782,8 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--approve-sha256", help="只交给 VC-0 收口：批准当前现场待批准事项的 review_sha256")
     parser.add_argument("--approved-by", help="只交给 VC-0 收口：批准人")
     parser.add_argument("--reason", help="只交给 VC-0 收口：上限后的恢复里，失败原因已如何消除")
+    parser.add_argument("--reexecute-gates", action="store_true",
+                        help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")
     return parser.parse_args(argv)
 
 
@@ -799,7 +814,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     steps_dir = Path(args.steps_dir or params.get("ENTRY_STEPS_DIR") or runroot / "entry-steps")
     orchestrator = Orchestrator(params, driver_dir=Path(params.get("DRV") or HERE), run_dir=run_dir, steps_dir=steps_dir,
                                 masks=masks, approval={"approve_sha256": args.approve_sha256 or "",
-                                                       "approved_by": args.approved_by or "", "reason": args.reason or ""})
+                                                       "approved_by": args.approved_by or "", "reason": args.reason or ""},
+                                reexecute_gates=args.reexecute_gates)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:
