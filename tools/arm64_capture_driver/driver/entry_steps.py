@@ -169,6 +169,17 @@ TESTS_TREE = Input("tests", "tree", f"{OCC}/tests", "pycache")
 GUIDES = (Input("docs", "file", "{D}/docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"),
           Input("docs", "file", "{D}/docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md"))
 MAINTENANCE = Input("docs", "tree", "{D}/docs/egress/maintenance", "pycache")
+# pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容：冻结台账目录、录制数据（含录制配置引用的源码树、画像与
+# 安装包）、alpine 镜像（E2-05 的三项）；断言打包脚本（vc1 录制回放链按生产布局调用数据根这一份）与项目总账的两处探测
+# 位置（场景从临时根往上最多六层找 upgrade-project-ledger，会探到 staging 与数据根顶层；那里出现总账时场景行为会变，现在
+# 都不存在，记为 missing）——后两类是 E3-04 读集审计实测补的。pre-A3 步骤与入口门禁的场景单元
+# （entry_gates.pre_a3_data_root_inputs）用同一份。
+PRE_A3_DATA_ROOT = (
+    MAINTENANCE, Input("environment", "recorded"), Input("environment", "image_ref", "alpine:3.21"),
+    Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"),
+    Input("environment", "tree", "{D}/staging/upgrade-project-ledger", "pycache"),
+    Input("environment", "tree", "{D}/upgrade-project-ledger", "pycache"),
+)
 # Codex 指南第二部分：预检 plan、Job 演练与收口只读这一节（按目标场景清单 source_spec 的锚点、受管模块同一算法算摘要）。
 GUIDE_PART2 = Input("docs", "section", "{SCENARIOS_JSON}")
 DEPLOY_RECEIPT = Input("upstream", "deploy_file")
@@ -220,14 +231,14 @@ STEPS: tuple[Step, ...] = (
         Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js"),
     ), products=(Product("summary"), Product("p0-test-capture-tools", optional=True), Product("p0-check-egress-spec", optional=True))),
     # pre-A3：场景在数据根生产布局里跑，读受管整树（含测试、指纹代理、运行时镜像定义）、部署脚本副本、两份指南（真实链
-    # 副本树复制它们）、冻结台账目录（计时账本场景）、录制数据。部署收据不取文件摘要、激活认证只取策略摘要字段
-    # （第 19 项：工具五摘要与策略没变时跨部署复用）。
+    # 副本树复制它们），以及 PRE_A3_DATA_ROOT 那几项（冻结台账目录、录制数据、断言打包脚本、项目总账探测位置等）。部署收据
+    # 不取文件摘要、激活认证只取策略摘要字段（第 19 项：工具五摘要与策略没变时跨部署复用）。
     Step("pre-a3", "pre-A3 路径认证", "pre_ledger", inputs=(
         *_params("PRE_A3_CERTIFICATION"), *IDENTITY, MANAGED_TREE, TESTS_TREE,
-        Input("managed", "file", "{D}/tools/arm64_supervised_deploy.py"), *GUIDES, MAINTENANCE,
+        Input("managed", "file", "{D}/tools/arm64_supervised_deploy.py"), *GUIDES, *PRE_A3_DATA_ROOT,
         Input("upstream", "json_field", "{POLICY_ACTIVATION}", "policy_sha256"),
         *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "pre-a3.sh"), *COMMON_DRIVER,
-        *_env("kernel", "python"), Input("environment", "recorded"), Input("environment", "image_ref", "alpine:3.21"),
+        *_env("kernel", "python"),
     ), products=(Product("certification", "{PRE_A3_CERTIFICATION}"), Product("reuse-receipt", optional=True))),
     # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。
     Step("zero-request-smoke", "零请求 smoke", "pre_ledger", inputs=(
@@ -374,7 +385,8 @@ def default_runner(argv: Sequence[str], env: Mapping[str, str] | None = None, cw
 
 # 受管事实在数据根里算（PYTHONPATH=.，用受管模块自己的算法）：五摘要、指南章节摘要，以及录制回放链实际读的录制数据
 # 根目录（录制 Campaign 目录、最后一次 attempt 各作业的证据根、guardian 的失败归档，规则同 vc1_recorded_replay 的
-# build_snapshot；录制 Campaign 的编号与位置也由它给出，驱动里不写死）。
+# build_snapshot；录制 Campaign 的编号与位置也由它给出，驱动里不写死），另给录制配置里 ``recorded_fields`` 各项的值
+# （回放链 plan 步骤按录制配置读的数据根内容，见 ``RECORDED_SOURCE_FIELDS``）。
 _MANAGED_FACTS = r"""
 import json, sys
 from pathlib import Path, PurePosixPath
@@ -400,8 +412,16 @@ if request.get("recorded"):
     for relative in guardian:
         relatives.update(path.name for path in runs.glob(PurePosixPath(relative).name + ".failed-attempt*") if path.is_dir())
     out["recorded"] = [str(campaign), *sorted(str(runs / relative) for relative in relatives)]
+    configuration = json.loads((campaign / "campaign.json").read_text(encoding="utf-8")).get("configuration") or {}
+    out["recorded_external"] = {field: configuration.get(field) for field in request.get("recorded_fields") or []}
 print(json.dumps(out, ensure_ascii=False))
 """
+# 录制回放链 plan 步骤按录制配置读的数据根内容（E3-04 读集审计实测，原来没算进录制数据）：基线与目标两棵官方源码树
+# （plan 记源码身份：目录摘要、出站清单与 git 提交号）、基线画像、目标安装包。源码树按 source 口径算目录摘要（不含版本库与
+# 构建产物，覆盖 plan 自己跳过的那几类之外的全部内容），另加 ``git rev-parse HEAD`` 的值；明细登记源码树与它的 git 目录，
+# 读集审计据此核对 git 仓库发现读到的引用与配置。
+RECORDED_SOURCE_FIELDS = ("baseline_source", "target_source")
+RECORDED_FILE_FIELDS = ("baseline_evidence", "target_package")
 
 
 class MissingParameter(LookupError):
@@ -464,10 +484,20 @@ class Context:
             self.cache["identity"] = self.managed_facts({"identity": True})["identity"]
         return self.cache["identity"]
 
-    def recorded_roots(self) -> list[str]:
+    def recorded_facts(self) -> dict[str, Any]:
         if "recorded" not in self.cache:
-            self.cache["recorded"] = list(self.managed_facts({"recorded": True})["recorded"])
+            self.cache["recorded"] = self.managed_facts({"recorded": True,
+                                                         "recorded_fields": [*RECORDED_SOURCE_FIELDS, *RECORDED_FILE_FIELDS]})
         return self.cache["recorded"]
+
+    def recorded_roots(self) -> list[str]:
+        return list(self.recorded_facts()["recorded"])
+
+    def recorded_external(self) -> dict[str, Any]:
+        external = self.recorded_facts().get("recorded_external")
+        if not isinstance(external, dict):
+            raise FactUnavailable("受管事实没有给出录制配置（recorded_external）")
+        return dict(external)
 
     def section(self, guide: Path, fragment: str) -> str:
         key = ("section", str(guide), fragment)
@@ -639,9 +669,30 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
             digest, count = ctx.tree(path, "pycache")
             total.update(f"{root}\0{digest}\n".encode("utf-8"))
             files += count
-        # 明细列出全部根目录（读集审计按绝对路径核对数据根读取，E3-04）；摘要只由内容决定，明细变化不影响失效判定。
+        paths, external = list(roots), ctx.recorded_external()
+        for field in (*RECORDED_SOURCE_FIELDS, *RECORDED_FILE_FIELDS):
+            value = external.get(field)
+            if not isinstance(value, str) or not value.startswith("/"):
+                return _missing(item, field=field)
+            path = Path(value)
+            if field in RECORDED_SOURCE_FIELDS:
+                if path.is_symlink() or not path.is_dir():
+                    return _missing(item, path=value)
+                digest, count = ctx.tree(path, "source")
+                commit = _command_value(ctx, ["git", "-C", value, "rev-parse", "HEAD"])
+                git_dir = _command_value(ctx, ["git", "-C", value, "rev-parse", "--absolute-git-dir"])
+                total.update(f"{field}\0{value}\0{digest}\0{commit}\n".encode("utf-8"))
+                files += count
+                paths += [value, *([git_dir] if git_dir.startswith("/") else [])]
+            else:
+                if path.is_symlink() or not path.is_file():
+                    return _missing(item, path=value)
+                total.update(f"{field}\0{value}\0{file_sha256(path)}\n".encode("utf-8"))
+                files += 1
+                paths.append(value)
+        # 明细列出全部根目录与文件（读集审计按绝对路径核对数据根读取，E3-04）；摘要只由内容决定，明细变化不影响失效判定。
         return {"category": item.category, "name": item.name, "sha256": total.hexdigest(),
-                "detail": {"roots": len(roots), "campaign": roots[0] if roots else None, "files": files, "paths": list(roots)}}
+                "detail": {"roots": len(roots), "campaign": roots[0] if roots else None, "files": files, "paths": paths}}
     if kind == "section":
         manifest = Path(ctx.expand(item.arg))
         try:

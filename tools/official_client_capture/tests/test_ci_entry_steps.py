@@ -59,6 +59,14 @@ class Fixture:
         _write(data / "docs" / "egress" / "maintenance" / "a.json", "{}\n")
         self.recorded = [str(_write(data / "evidence" / "campaigns" / "recorded-campaign" / "campaign.json", "{}\n").parent),
                          str(_write(data / "runs" / "job-a" / "result.json", "{}\n").parent)]
+        # 录制配置引用的数据根内容（回放链 plan 读）：两棵源码树（git 提交号由替身给出）、基线画像、目标安装包。
+        self.recorded_external = {
+            "baseline_source": str(_write(data / "official" / "codex-0.154.0" / "source" / "codex-rs" / "a.rs", "fn a() {}\n").parent),
+            "target_source": str(_write(data / "official" / "codex-0.156.1" / "source" / "codex-rs" / "a.rs", "fn b() {}\n").parent),
+            "baseline_evidence": str(_write(data / "control" / "recorded-inputs" / "baseline-profile.json", "{}\n")),
+            "target_package": str(_write(data / "official" / "codex-0.156.1" / "assets" / "package.tar.gz", "pkg\n")),
+        }
+        self.git_heads: dict[str, str] = {}
         self.identity = {"policy_version": 7, "policy_sha256": "p" * 64, "wire_producer_sha256": "w" * 64,
                          "evidence_semantics_sha256": "e" * 64, "control_sha256": "c" * 64, "tool_files_sha256": "f" * 64}
         self.deploy(stamp="20261001t000000z")
@@ -133,7 +141,12 @@ class Fixture:
                 out["sections"] = [_section_sha256(Path(path)) for path, _fragment in request["sections"]]
             if request.get("recorded"):
                 out["recorded"] = list(self.recorded)
+                out["recorded_external"] = {field: self.recorded_external.get(field) for field in request.get("recorded_fields") or []}
             return 0, json.dumps(out) + "\n"
+        if argv[:2] == ["git", "-C"] and argv[3:] == ["rev-parse", "HEAD"]:
+            return 0, self.git_heads.get(argv[2], "1" * 40) + "\n"
+        if argv[:2] == ["git", "-C"] and argv[3:] == ["rev-parse", "--absolute-git-dir"]:
+            return 0, str(Path(argv[2]).parent / ".git") + "\n"
         if argv[:4] == [sys.executable, "-B", "-m", "tools.official_client_capture.codex_upgrade_vc0_closeout"]:
             self.inspect_calls = getattr(self, "inspect_calls", 0) + 1
             return 0, "日志行\n" + json.dumps(self.formal_site) + "\n"
@@ -265,6 +278,51 @@ class EntryStepsRuleTests(EntryStepsTestCase):
         result = self.fx.evaluate()
         self.assertIn("输入变了：环境 recorded:", _step(result, "pre-a3")["reasons"])
         self.assertEqual(_by(result, "run"), {"pre-a3", "release-certification", "p0-receipt", "vc0-closeout"})
+
+    def test_recorded_configuration_inputs_are_part_of_recorded_data(self) -> None:
+        """录制配置引用的数据根内容（回放链 plan 读：两棵源码树含提交号、基线画像、安装包）算进录制数据（E3-04 读集审计
+        实测）：各改一处 pre-A3 都要重做；源码树里的构建产物不算；明细登记源码树、git 目录与文件，供读集审计核对。"""
+
+        external = self.fx.recorded_external
+        changes = {
+            "源码树内容": lambda: _write(Path(external["baseline_source"]) / "b.rs", "fn c() {}\n"),
+            "提交号": lambda: self.fx.git_heads.__setitem__(external["target_source"], "2" * 40),
+            "基线画像": lambda: _write(Path(external["baseline_evidence"]), '{"changed": true}\n'),
+            "安装包": lambda: _write(Path(external["target_package"]), "pkg2\n"),
+        }
+        for label, change in changes.items():
+            with self.subTest(label):
+                change()
+                result = self.fx.evaluate()
+                self.assertIn("输入变了：环境 recorded:", _step(result, "pre-a3")["reasons"])
+                self.fx.record_all()
+        _write(Path(external["baseline_source"]) / "target" / "debug" / "a.o", "obj\n")
+        self.assertReruns(set())
+        entry = es.resolve(es.Input("environment", "recorded"), self.fx.ctx())
+        self.assertEqual(entry["detail"]["paths"], [
+            *self.fx.recorded,
+            external["baseline_source"], str(Path(external["baseline_source"]).parent / ".git"),
+            external["target_source"], str(Path(external["target_source"]).parent / ".git"),
+            external["baseline_evidence"], external["target_package"]])
+
+    def test_recorded_configuration_without_a_field_is_missing(self) -> None:
+        self.fx.recorded_external["target_package"] = None
+        entry = es.resolve(es.Input("environment", "recorded"), self.fx.ctx())
+        self.assertEqual((entry["sha256"], entry["detail"]), (es.MISSING, {"field": "target_package"}))
+
+    def test_assertion_preparer_and_project_ledger_probes_are_inputs_of_pre_a3(self) -> None:
+        """vc1 录制回放链调数据根的断言打包脚本；场景往上找项目总账会探到 staging 与数据根顶层（E3-04 读集审计实测）。"""
+
+        (self.fx.data / "tools" / "prepare_assertion_bundle.sh").write_text("#!/bin/bash\n# 改了\n", encoding="utf-8")
+        result = self.assertReruns({"pre-a3", "release-certification", "p0-receipt", "vc0-closeout"})
+        self.assertIn("输入变了：受管工具 file:{D}/tools/prepare_assertion_bundle.sh", _step(result, "pre-a3")["reasons"])
+        self.fx.record_all()
+        for probe in ("staging/upgrade-project-ledger", "upgrade-project-ledger"):
+            with self.subTest(probe):
+                _write(self.fx.data / probe / "plan.json", "{}\n")
+                result = self.assertReruns({"pre-a3", "release-certification", "p0-receipt", "vc0-closeout"})
+                self.assertIn(f"输入变了：环境 tree:{{D}}/{probe}#pycache", _step(result, "pre-a3")["reasons"])
+                self.fx.record_all()
 
     def test_tampered_record_is_not_reused(self) -> None:
         path = es.record_path(self.fx.steps_dir, "policy-compatibility")

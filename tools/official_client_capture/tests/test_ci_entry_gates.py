@@ -314,16 +314,28 @@ class EntryGatesPreA3InputsTests(unittest.TestCase):
         self.assertTrue(set(eg.PRE_A3_RUNNER_FIXTURES) <= {item["path"] for item in declared["files"]})
 
     def test_data_root_probe_locations_are_resolved_inputs(self) -> None:
+        """场景单元的数据根输入与 E2-05 的 pre-A3 步骤同一份（entry_steps.PRE_A3_DATA_ROOT）：项目总账的两处探测位置
+        （staging 与数据根顶层）、断言打包脚本都在里面，现在不存在的记 missing，一旦出现输入摘要就变。"""
+
+        steps = eg._entry_steps_module()
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory).resolve()
             entries = eg.pre_a3_data_root_inputs(data)
-            probe = [entry for entry in entries if (entry.get("detail") or {}).get("path") == str(data / "staging" / "upgrade-project-ledger")]
-            self.assertEqual(len(probe), 1, "项目总账的探测位置声明为数据根输入")
-            self.assertEqual(probe[0]["sha256"], "missing", "现在不存在：记为 missing，一旦出现输入摘要就变")
-            (data / "staging" / "upgrade-project-ledger").mkdir(parents=True)
-            (data / "staging" / "upgrade-project-ledger" / "plan.json").write_text("{}", encoding="utf-8")
-            again = [entry for entry in eg.pre_a3_data_root_inputs(data) if entry["name"] == probe[0]["name"]]
-            self.assertNotEqual(again[0]["sha256"], "missing")
+            self.assertEqual([entry["name"] for entry in entries], [item.name for item in steps.PRE_A3_DATA_ROOT])
+            by_path = {(entry.get("detail") or {}).get("path"): entry for entry in entries}
+            for relative in ("staging/upgrade-project-ledger", "upgrade-project-ledger", "tools/prepare_assertion_bundle.sh"):
+                with self.subTest(relative):
+                    entry = by_path.get(str(data / relative))
+                    self.assertIsNotNone(entry, "声明为数据根输入，明细带绝对路径（读集审计据此核对）")
+                    self.assertEqual(entry["sha256"], "missing", "现在不存在：记为 missing")
+                    if relative.endswith(".sh"):
+                        (data / relative).parent.mkdir(parents=True, exist_ok=True)
+                        (data / relative).write_text("#!/bin/bash\n", encoding="utf-8")
+                    else:
+                        (data / relative).mkdir(parents=True)
+                        (data / relative / "plan.json").write_text("{}", encoding="utf-8")
+                    again = [item for item in eg.pre_a3_data_root_inputs(data) if item["name"] == entry["name"]]
+                    self.assertNotEqual(again[0]["sha256"], "missing", "出现之后输入摘要就变")
 
 
 class EntryGatesPreA3QuotaTests(unittest.TestCase):

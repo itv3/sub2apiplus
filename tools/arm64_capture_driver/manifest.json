@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "3aaee80dfaa58af804c52a989d5a7f4b8a8aaeea1ca6e03ec04a7cae72b5ace4",
+      "sha256": "1c555e443de571d1c1e4bb9d18cbce5e5d4fcbfb7e9ec764a54fee3c6fc36ee1",
       "mode": "0700",
-      "bytes": 60265
+      "bytes": 59581
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -100,9 +100,9 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "9d204de735ef64497b55b9103cca26edd98dce89e8fba3ede9d6fba47c136216",
+      "sha256": "966e5332e850f2fa85fd26ccc4ce014fccb6792f4f906b4b3093793c6396171e",
       "mode": "0700",
-      "bytes": 64349
+      "bytes": 68196
     },
     {
       "path": "driver/env.example.sh",
@@ -232,9 +232,9 @@
     },
     {
       "path": "driver/read_audit.py",
-      "sha256": "71a760dde55923fda0d1a4adee8b6acc3e151a4c6460a0728b1c5eab96ce0dcd",
+      "sha256": "eb8886a758a1eb2c323077bd5f0a67963180d4118c7c71fb1ddbf11019598b24",
       "mode": "0700",
-      "bytes": 27245
+      "bytes": 27839
     },
     {
       "path": "driver/stage1-finish.sh",
@@ -429,5 +429,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "3c46eb6a872262c0080524b553d101a5136dded0c1b10a3c73160e0a03bddd75"
+  "manifest_sha256": "5a33b4354e62b004955a12d753e664eaa5e67754b887e94769ee43a3647694b5"
 }

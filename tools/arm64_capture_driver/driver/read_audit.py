@@ -5,7 +5,7 @@
 承接。审计要真跑才有读集，所以只在重新执行全集时带（入口门禁 ``--audit-reads``）：执行器把每个正式执行的单元包在
 strace 下，单元结束后按它的输入明细核对，超出声明的读取逐条报出，整次运行判失败。
 
-* 记录：``strace -f -qq --seccomp-bpf -y -e trace=%file,%process,getdents64``，输出用 ``-o '|…'`` 直接交给本模块的
+* 记录：``strace`` 按 ``STRACE_OPTIONS`` 只跟踪文件类调用与进程派生，输出用 ``-o '|…'`` 先经 grep 预筛、再交给本模块的
   ``filter`` 子命令：它只留测试树与数据根下的路径，进程结束时写一份紧凑 JSON（Go 编译、node 读 GOROOT 与依赖目录的
   海量行不落盘）。``-y`` 把每个 dirfd（含 ``AT_FDCWD``）标成当时的目录，相对路径据此还原，不用自己跟踪工作目录；
   只有不带 dirfd 的调用（execve、chdir 等）按同一进程最近一次标注的目录还原，子进程继承父进程的。
@@ -47,7 +47,7 @@ MAX_FINDINGS = 200
 SAMPLE_CHARS = 300
 
 # 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
-# 依据 10-02 ARM64 第一轮审计（pre-A3 全部 44 个场景）。
+# 依据 10-02 ARM64 两轮审计（pre-A3 全部 44 个场景）。
 DATA_ROOT_EXEMPT: dict[str, str] = {
     "staging/pre-a3-scenarios/": "pre-A3 场景本次自己建的临时根（场景的输出，读回的是本次写下的内容）",
     ".git/": "git 在数据根里做仓库发现（数据根不是 git 仓库；用法同 HEAD_ID_ONLY_READERS，提交号只用在同一次运行里）",
@@ -61,6 +61,11 @@ DATA_ROOT_EXEMPT: dict[str, str] = {
 DATA_ROOT_EXEMPT_PATTERNS: dict[str, str] = {
     r"-l[A-Za-z0-9_+-]+": "内核故障场景在数据根编译 eBPF 辅助程序，编译器把链接参数（-lbpf、-lelf 等）当文件名在工作目录里试探",
     r"tools\.official_client_capture\.[A-Za-z0-9_.]+": "unittest 把命令行里的测试名（点分模块路径）当文件路径在工作目录里试探",
+    r"(?:staging/)?(?:go\.mod|go\.work|\.hg|\.svn|\.fslckout|_FOSSIL_)":
+        "Go 工具链在场景临时根里编译候选源码：从工作目录往上找 go.mod、go.work，并为 -buildvcs 找版本控制目录（.git 见上），"
+        "一路探到 staging 与数据根顶层（都不存在；数据根不放 Go 模块与版本控制目录）",
+    r"\.r18-namespace-probe-[0-9]+":
+        "R18 录制回放链的命名空间自检：在宿主数据根试写探测文件，预期只读失败（EROFS）；写成功时场景自己判失败、删掉探测文件",
 }
 
 # 只读 HEAD 提交号的模块读 .git 时允许的部分：HEAD、引用、配置与仓库结构探测；对象库（历史内容）不许。

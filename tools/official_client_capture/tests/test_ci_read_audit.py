@@ -202,11 +202,16 @@ class ReadAuditCoverageTests(unittest.TestCase):
             ["/data/.git", ["missing"]], ["/data/HEAD", ["missing"]], ["/data/staging/.git/HEAD", ["missing"]], ["/data/-lbpf", ["missing"]],
             ["/data/tools/__init__.py", ["missing"]],
             ["/data/tools.official_client_capture.tests.real_chains.test_x.Chain._exercise", ["missing"]],
-            ["/data/control/receipt.json", ["missing"]],
+            ["/data/go.mod", ["missing"]], ["/data/staging/go.work", ["missing"]], ["/data/.hg", ["missing"]],
+            ["/data/staging/_FOSSIL_", ["missing"]], ["/data/.r18-namespace-probe-1606558", ["write"]],
+            ["/data/control/receipt.json", ["missing"]], ["/data/control/go.mod", ["missing"]],
+            ["/data/.r18-namespace-probe-x", ["write"]],
         ]}
         flagged = ra.audit_reads(noise, self.INPUTS, repo_root="/repo", data_root="/data", in_data_root=True)
-        self.assertEqual([item["path"] for item in flagged["undeclared"]], ["control/receipt.json"],
-                         "git 仓库发现、命名空间包标记、编译器试探与 unittest 试探豁免；探测生产控制目录照样报出")
+        self.assertEqual([item["path"] for item in flagged["undeclared"]],
+                         [".r18-namespace-probe-x", "control/go.mod", "control/receipt.json"],
+                         "git 仓库发现、命名空间包标记、编译器与 unittest 试探、Go 往上找模块与版本控制目录、R18 命名空间写探测"
+                         "豁免；同名文件在别的位置、不合格式的探测文件、探测生产控制目录照样报出")
         outside = ra.audit_reads(document, self.INPUTS, repo_root="/repo", data_root="/data", in_data_root=False)
         self.assertEqual(outside["undeclared_count"], 4, "测试树单元读到数据根一律报出")
 
