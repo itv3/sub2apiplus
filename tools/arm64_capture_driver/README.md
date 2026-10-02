@@ -416,7 +416,8 @@
   结论旁的 `<结论名>.housekeeping.json`。单独做一遍：`bash entry-dryrun.sh housekeeping [--dry-run]`（退出码 5＝越过停线）。
 * 停：`bash entry-dryrun.sh stop`。空跑与前台入口门禁共用调度器和入口门禁工作目录，修复轮跑定向回归之前要停下——
   `background-validate.sh stop`（修好接着跑的 regression 步骤会执行）连空跑一起停。
-* 结论：`$RUNROOT/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening].json`（`entry-dryrun/v1`），状态 running／passed／
+* 结论：`$RUNROOT/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute][-to-<终点>].json`（`entry-dryrun/v1`；终点不是
+  这种空跑的默认终点时才带，后台验证接着的那次是 `-to-pre-a3`），状态 running／passed／
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置；同一提交＋同一部署（同一种空跑）
   已有在跑或已有结论就不重复跑。`status` 列出全部。演练根与空跑产物只留最近 5 次（日常维护自动清）。
 

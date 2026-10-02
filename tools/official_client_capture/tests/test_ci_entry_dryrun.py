@@ -270,7 +270,15 @@ class EntryDryRunTests(unittest.TestCase):
             time.sleep(0.05)
         validation = bv._read(result)
         self.assertEqual((validation["status"], validation["dryrun"]["action"], validation["dryrun"]["to"]), ("passed", "started", "pre-a3"))
-        self.assertTrue(Path(validation["dryrun"]["result"]).is_file())
+        chained = Path(validation["dryrun"]["result"])
+        self.assertTrue(chained.is_file())
+        self.assertTrue(chained.name.endswith("-to-pre-a3.json"), chained.name)
+        self.wait(str(chained))
+        explicit = json.loads(self.start("--to", "p0-receipt").stdout.strip().splitlines()[-1])
+        self.assertEqual(explicit["action"], "started", "后台验证接着的空跑（到 pre-A3）不顶替明确执行的空跑")
+        self.assertTrue(explicit["result"].endswith("-to-p0-receipt.json"))
+        self.assertEqual(self.wait(explicit["result"])["status"], "passed")
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "p0-receipt"])
         bv.stop(self.runroot, "测试收尾")
 
     def test_driver_carries_an_identical_copy(self) -> None:

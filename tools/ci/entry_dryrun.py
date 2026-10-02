@@ -20,7 +20,8 @@
   结论 failed、没通过的一步记 ``disk``。维护报告摘要写进结论的 ``housekeeping``，全文在结论旁的 ``<结论名>.housekeeping.json``。
   环境变量 ``ENTRY_DRYRUN_HOUSEKEEPING=off`` 跳过维护（只给测试的替身环境用：不能碰开发机的 Go 缓存、不能看开发机的磁盘；
   驱动不设）。
-* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute].json``，状态 running／passed／
+* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute][-to-<终点>].json``
+  （终点不是这种空跑的默认终点时才带，例如后台验证接着的那次是 ``-to-pre-a3``），状态 running／passed／
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置。同一提交＋同一部署（同一种
   空跑）已有在跑或已有结论就不重复跑。
 
@@ -44,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -131,9 +133,15 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
     return f"有采集在跑：整机预约属于 {reservation.get('owner')}（进程 {reservation.get('owner_pid')}）"
 
 
-def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False) -> Path:
-    suffix = "-opening" if opening else "-reexecute" if reexecute else ""
-    return Path(runroot) / DIRECTORY / f"{commit[:12]}-{str(deployment['sha256'])[:12]}{suffix}.json"
+def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False,
+                to: str | None = None) -> Path:
+    """结论文件：提交＋部署收据＋空跑种类（开工、冷跑计时）＋终点。终点不是这种空跑的默认终点时才写进名字：后台验证接着的
+    那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。"""
+
+    kind = "-opening" if opening else "-reexecute" if reexecute else ""
+    default = OPENING_TO if opening else DEFAULT_TO
+    stop = f"-to-{to}" if to and to != default else ""
+    return Path(runroot) / DIRECTORY / f"{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
 
 
 def results(runroot: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -197,13 +205,13 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     deployment = bv.latest_deployment(args.data_root)
     if args.opening and args.reexecute:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
-    path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute)
-    existing = _read(path)
-    if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
-        return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
     to = args.to or (OPENING_TO if args.opening else DEFAULT_TO)
     if to not in ALLOWED_TO:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
+    path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to)
+    existing = _read(path)
+    if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
+        return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
     payload: dict[str, Any] = {
         "schema_version": SCHEMA, "commit": args.commit, "branch": args.branch, "bundle": str(args.bundle),
         "deployment": deployment, "opening": bool(args.opening), "reexecute": bool(args.reexecute), "to": to, "vc_env": str(args.vc_env),
@@ -231,11 +239,21 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     """建演练根、fixture_only 演练总账与演练参数文件，返回（演练根，空跑 RUNROOT，演练参数文件）。"""
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
     data_root = Path(payload["data_root"])
-    root = data_root / "staging" / f"entry-dryrun-{stamp}"
+    (data_root / "staging").mkdir(mode=0o700, parents=True, exist_ok=True)
+    # 演练根按秒取名、独占创建：同一秒里起了两次空跑（后台验证接着的与明确执行的）时，后起的那个等到下一秒再取名。
+    for _attempt in range(30):
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
+        root = data_root / "staging" / f"entry-dryrun-{stamp}"
+        try:
+            root.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            time.sleep(0.2)
+    else:
+        raise DryRunError("演练根取不到不重名的时间戳")
     runroot = Path(payload["runroot"]) / DIRECTORY / f"run-{stamp}"
-    for directory in (root, root / "evidence" / "campaigns", root / "control" / "policy-certification", runroot):
+    for directory in (root / "evidence" / "campaigns", root / "control" / "policy-certification", runroot):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     deadline = (datetime.now(timezone.utc) + timedelta(hours=30)).strftime("%Y-%m-%dT%H:00:00Z")
     completed = subprocess.run(
