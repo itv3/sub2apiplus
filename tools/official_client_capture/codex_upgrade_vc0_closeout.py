@@ -4152,7 +4152,8 @@ def _continue_dispatched(
             "首批已派发、对账可恢复：批准恢复预览后只补跑没完成的作业",
             kind="approval-required",
             next_command=f"同一命令加 --approve-sha256 {review} --approved-by <批准人>",
-            details={"reconcile": reconcile_view},
+            # 待批准的摘要与其它「需要批准」一样放在明细顶层（编排器与验收按同一个键取）。
+            details={"review_sha256": review, "reconcile": reconcile_view},
         )
     progress.step = "vc1-recovery-approve"
     preview_payload, _raw = _load_json(_trusted_file(Path(str(preview_path)), "恢复预览"), "恢复预览")

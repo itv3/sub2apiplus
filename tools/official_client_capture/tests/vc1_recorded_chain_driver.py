@@ -185,6 +185,9 @@ CLOSEOUT_BOUNDARIES = {
     "after-vc0-completed": ("closeout", "_append_once"),
     "after-vc1-started": ("closeout", "_dispatch_first_batch"),
     "before-closeout-receipt": ("closeout", "_closeout_receipt"),
+    # 只供 --fail-at：复制 Formal 控制产物的过程中失败（步骤名已由收口记为 copy-formal-control-artifacts）。在函数入口注入
+    # 会早于收口记步骤名，Formal 未建与已建两条路记下的根因就不一样，验收不出「同一根因连续两次」。
+    "formal-control-copy": ("closeout", "_copy_once"),
 }
 
 
@@ -217,6 +220,11 @@ def _closeout_hooks(arguments: argparse.Namespace) -> list[Any]:
                 if str(kwargs.get("event_id", "")).endswith("-vc1-started"):
                     _act()
                 return _original(*args, **kwargs)
+        elif boundary == "formal-control-copy":
+            def wrapper(source: Any, destination: Any, _original: Any = original, _act: Any = act) -> Any:
+                if Path(destination).name == "formal-campaign-plan.json":
+                    _act()
+                return _original(source, destination)
         else:
             def wrapper(*args: Any, _original: Any = original, _act: Any = act, **kwargs: Any) -> Any:
                 _act()

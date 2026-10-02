@@ -1910,8 +1910,9 @@ class VC0CloseoutContinuationTests(unittest.TestCase):
             )
             with self.assertRaises(closeout.CloseoutBlocked) as blocked:
                 env.run(*patches)
-            self.assertEqual((blocked.exception.kind, blocked.exception.details["reconcile"]["review_sha256"]),
-                             ("approval-required", review))
+            self.assertEqual((blocked.exception.kind, blocked.exception.details["review_sha256"],
+                              blocked.exception.details["reconcile"]["review_sha256"]),
+                             ("approval-required", review, review))
             self.assertEqual((calls["reconcile"], calls["batches"]), ([("a1", None)], []), "批准之前只对账，不派发")
             receipt = env.run(*patches, approve_sha256=review, approved_by="测试批准人")
             self.assertEqual(receipt["status"], "passed")
