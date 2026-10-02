@@ -26,7 +26,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 HERE = Path(__file__).resolve().parent
 EXECUTOR = HERE / "unit_executor.py"
@@ -229,7 +229,25 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "entry": MAKE_TEST_GATES + FULL_GATES_EXTRA + ("pre-a3",),
     # 单独签 pre-A3（驱动 lib.sh 与编排器的单独路径，E3-02）：只有场景单元，同样写记录、可承接。
     "pre-a3": ("pre-a3",),
+    # 定向回归（E4-01，修复轮部署前提）：只含采集工具测试组。全集通过下执行器只执行静态依赖闭包里有改动文件的测试单元，
+    # 其余承接记录库里的有效记录——这就是「按改动文件选出」。改动落在闭包选不出的地方（后端、前端、文档、出站规格）时
+    # 用 --with-gates 人工补门禁项；全量门禁由后台验证（full-gates 组合）跑。
+    "regression": ("test-capture-tools",),
 }
+# --with-gates 能补的门禁项：除 pre-A3 外的全部（pre-A3 要场景清单与认证坐标，走 entry／pre-a3 组合）。
+EXTRA_GATE_CHOICES = tuple(gate for gate in MAKE_TEST_GATES + FULL_GATES_EXTRA)
+
+
+def profile_gates(profile: str, with_gates: Sequence[str] = ()) -> tuple[str, ...]:
+    """组合的门禁项加上人工补的（按 make test、全量门禁的固定顺序，去重）。"""
+
+    if profile not in PROFILES:
+        raise ValueError(f"未知的门禁组合：{profile}")
+    unknown = sorted(set(with_gates) - set(EXTRA_GATE_CHOICES))
+    if unknown:
+        raise ValueError(f"--with-gates 只能补这些门禁项：{', '.join(EXTRA_GATE_CHOICES)}；不认识 {unknown}")
+    wanted = set(PROFILES[profile]) | set(with_gates)
+    return tuple(gate for gate in (*MAKE_TEST_GATES, *FULL_GATES_EXTRA, "pre-a3") if gate in wanted)
 # 门禁项的字面命令（门禁记录、P0 证据里写的就是它；实际执行方式见各单元）。
 GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
     "test-capture-tools": (["make", "test-capture-tools"], "."),
@@ -415,6 +433,7 @@ def plan_gates(
     platform: str | None = None,
     environment: list[dict[str, Any]] | None = None,
     egress_extra_inputs: list[dict[str, Any]] | None = None,
+    with_gates: Sequence[str] = (),
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -425,11 +444,10 @@ def plan_gates(
     由命令行入口在执行器同一份环境里算好传入）、每个命令单元的输入声明（``inputs``）。
     E3-02：pre-A3 场景清单是新形式（单元带 ``scenario_test_file``）时按 ``pre_a3_inputs`` 声明输入、可以承接；
     旧形式仍标不可承接。
+    E4-01：``with_gates`` 是人工补的门禁项（定向回归选不出时），并进组合的门禁项（``profile_gates``）。
     """
 
-    if profile not in PROFILES:
-        raise ValueError(f"未知的门禁组合：{profile}")
-    gates_wanted = PROFILES[profile]
+    gates_wanted = profile_gates(profile, with_gates)
     if ("pre-a3" in gates_wanted) != (pre_a3_units is not None):
         raise ValueError("含 pre-A3 的门禁组合（entry、pre-a3）必须给出 pre-A3 场景清单，其余组合不得给出")
     tree = Path(tree).resolve()
@@ -828,6 +846,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan = sub.add_parser("plan", help="生成入口门禁清单（unit-executor-gates/v1）")
     plan.add_argument("--tree", type=Path, required=True, help="测试树（执行器在这里运行）")
     plan.add_argument("--profile", choices=sorted(PROFILES), required=True)
+    plan.add_argument("--with-gates", default="", help="人工补的门禁项（逗号分隔；定向回归选不出时用，E4-01）")
     plan.add_argument("--launcher-json", default="[]", help="测试树单元的启动前缀（JSON 字符串列表）")
     plan.add_argument("--typescript-module", default=None)
     plan.add_argument("--pre-a3-units", type=Path, default=None, help="pre-A3 场景清单（认证模块 plan 生成）")
@@ -873,7 +892,9 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
             data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root) if args.pre_a3_data_root is not None else None
+            with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
+                                  with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
                                   pre_a3_data_inputs=data_inputs,
                                   environment=environment_facts(args.tree, args.typescript_module),

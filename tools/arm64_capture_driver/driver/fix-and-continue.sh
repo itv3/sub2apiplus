@@ -17,8 +17,12 @@
 #                     staging 已是同 HEAD 干净检出且最新部署收据 passed、摘要与 EXPECT 一致则跳过
 #   postdeploy        部署收据与期望摘要（整树／五摘要／监督器）、数据根监督器文件与 wire 闭包 → 同步数据根部署脚本副本
 #                     → 出口守护代码与状态核对（守护逻辑变了只停下，不重装守护）→ 驱动重装与复验 → 入口断言
-#   item-tests        部署用 staging 树上实测（setsid 启动、SIGHUP 复位、禁写字节码并只读使用预编译缓存），日志 exit=0 且
-#                     staging-clean=yes、各段 OK 才继续；本轮已通过则跳过
+#   regression        定向回归（E4-01）：先停下上一轮还在跑的后台验证，再跑入口门禁 regression 组合（全集通过，只执行静态依赖
+#                     闭包里有改动文件的测试单元；REGRESSION_GATES 人工补门禁项）；通过才继续；本提交已通过则跳过
+#   item-tests        人工指定的实测（给了 ITEM_TESTS 才跑，否则跳过）：部署用 staging 树上实测（setsid 启动、SIGHUP 复位、
+#                     禁写字节码并只读使用预编译缓存），日志 exit=0 且 staging-clean=yes、各段 OK 才继续；本轮已通过则跳过
+#   background-validate 起后台验证（E4-01）：全量门禁 full-gates 组合的全集通过，结论绑定本提交与本次部署（批次边界与 VC-5
+#                     验收读它）；本提交已起则跳过，本提交在当前部署上已验证失败即停
 #   evolution         tool-evolution-status 无未登记漂移则跳过；否则预览（wire 闭包变化等与 EXPECT 不符即停）→ 按预览
 #                     review_sha256 与批准人登记 → 复核无漂移
 #   pre-extend        给了 EXTEND_DEADLINE 且当前阶段就是 EXTEND_PHASE、阶段截止早于它：对账前先延期（阶段截止在对账前
@@ -243,6 +247,32 @@ step_item_tests() {
   wait_marker "$LOG" "$ITEM_TESTS_MAX_SECONDS" "$PIDF" \
     || fail_step "等待实测结束失败（超时或进程已退出）：$LOG" "查看 $LOG 后 --from item-tests"
   decide tests-verdict --log "$LOG"
+}
+
+# 定向回归（E4-01，修复轮规则）：先停下上一轮还在跑的后台验证（同一时间只能有一个调度器，上一轮的提交也已作废），再跑
+# 入口门禁 regression 组合——全集通过，只执行静态依赖闭包里有改动文件的测试单元；REGRESSION_GATES 人工补门禁项。
+step_regression() {
+  local rc=0
+  decide regression-state
+  if skipped; then return 0; fi
+  ARM64_VC_ENV="$VC_ENV" bash "$BACKGROUND" stop --reason "修复轮 ${ROUND} 跑定向回归前停下" > "$OUT/raw/$TS-regression-stop.out" 2>&1 < /dev/null || true
+  ARM64_VC_ENV="$VC_ENV" bash "$ENTRY_GATES" --profile regression --mode full-set-pass --with-gates "$REG_GATES" --out "$REG_OUT" \
+    "$BUNDLE" "$BUNDLE_BRANCH" "$HEAD_COMMIT" > "$REG_OUT.log" 2>&1 < /dev/null || rc=$?
+  echo "  [regression] 入口门禁 regression 组合 rc=${rc}（$REG_OUT.log）"
+  decide regression-verdict --out "$REG_OUT" --rc "$rc"
+}
+
+# 后台验证（E4-01）：部署、定向回归之后起全量门禁的后台验证（full-gates 全集通过，nice 降优先级），结论绑定本提交与
+# 本次部署；vc-batch.sh 在每个批次边界读它（失败即拒绝派发），vc5-accept.sh 要求它已通过。
+step_background_validate() {
+  local rc=0
+  decide background-state
+  if skipped; then return 0; fi
+  RAW="$OUT/raw/$TS-background-validate"
+  ARM64_VC_ENV="$VC_ENV" bash "$BACKGROUND" start "$BUNDLE" "$BUNDLE_BRANCH" "$HEAD_COMMIT" > "$RAW.out" 2> "$RAW.err" < /dev/null || rc=$?
+  printf '%s\n' "$rc" > "$RAW.rc"
+  echo "  [background-validate] 起后台验证 rc=${rc}（$RAW.out）"
+  decide background-verdict --raw "$RAW"
 }
 
 step_evolution() {

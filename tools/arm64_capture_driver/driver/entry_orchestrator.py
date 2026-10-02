@@ -58,6 +58,8 @@ RUN_SCHEMA = "entry-orchestrator-run/v1"
 PRE_A3_MODULE = "tools.official_client_capture.codex_upgrade_pre_a3_certification"
 POLICY_MODULE = "tools.official_client_capture.codex_upgrade_policy_certification"
 CLOSEOUT_MODULE = "tools.official_client_capture.codex_upgrade_vc0_closeout"
+# VC-0 收口派发 VC-1 首批前申请整机，等调度器批准的上限（秒；后台验证在跑的重单元要先结束）。
+MACHINE_ACQUIRE_TIMEOUT_SECONDS = 3600
 VC_RECEIPT_MODULE = "tools.official_client_capture.codex_upgrade_vc_receipt"
 P0_FACTS_SCHEMA = "codex-upgrade-vc-receipt-facts/v1"
 # 收口模块的退出码 3：需要批准或人工处置（不是失败），这一步标「阻塞」。
@@ -570,7 +572,19 @@ class Orchestrator:
         for key, option in (("approve_sha256", "--approve-sha256"), ("approved_by", "--approved-by"), ("reason", "--reason")):
             if self.approval.get(key):
                 arguments += [option, self.approval[key]]
-        rc, result = self.run_json("vc0-closeout", "closeout", self.py(CLOSEOUT_MODULE, *arguments))
+        # 收口模块同步派发 VC-1 首批（真实采集）：开始前向统一调度执行器申请整机（后台验证停派、等在跑单元结束才批准），
+        # 收口返回后归还（E4-01，与 vc-batch.sh 同一做法）。
+        owner = f"vc0-closeout-{self.p('NEW')}"
+        executor = [sys.executable, "-B", str(self.driver_dir / "unit_executor.py")]
+        rc, grant = self.run_json("vc0-closeout", "acquire", [*executor, "acquire", "--owner", owner, "--owner-pid", str(os.getpid()),
+                                                              "--timeout", str(MACHINE_ACQUIRE_TIMEOUT_SECONDS)])
+        if rc != 0 or not grant.get("granted_at_utc"):
+            self.outcomes["vc0-closeout"].reasons.append("向统一调度执行器申请整机没有批准（超时或已有其它采集占用），没有收口")
+            return False, {}
+        try:
+            rc, result = self.run_json("vc0-closeout", "closeout", self.py(CLOSEOUT_MODULE, *arguments))
+        finally:
+            self.run_json("vc0-closeout", "release", [*executor, "release", "--owner", owner])
         receipt = audit / "receipt.json"
         if rc == CLOSEOUT_NEEDS_OPERATOR:
             message = str(result.get("message") or "收口需要人工处理，见日志")

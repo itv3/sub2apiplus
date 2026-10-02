@@ -1,12 +1,16 @@
 #!/bin/bash
 # VC-5 compare 之后到 accept：断言配置 → 批次 assert-rules（改造 5：builder 必须由父监督器派发并冻结 b0/evaluator 摘要）
 #   → 目标平台门禁（gate_before/make test/gate_after；失败自动归档后重跑，不进入 seal 链）→ 门禁 facts/收据 → 批次 accept。
-# 用法：bash vc5-accept.sh <attempt_id>（要求本机门禁六件套已注入 $G/local）
+# 用法：bash vc5-accept.sh <attempt_id>（要求本机门禁六件套已注入 $G/local；当前部署的后台验证已通过）
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 ensure_admin_token
 ATT="$1"
+# 修复轮规则（E4-01，指南「修好接着跑」）：验收前当前部署的后台验证必须已有通过的结论（全集通过）。
+if ! python3 -B "$DRV/background_validation.py" require-passed --runroot "$RUNROOT" --data-root "$D"; then
+  echo "VC-5 验收前要求当前部署的后台验证已通过：等它跑完，或修好、部署后重新起（background-validate.sh start）"; exit 3
+fi
 batch() { local seq="$1" plan="$2"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$seq" VC-4 "$plan" | grep -v "^$"; python3 - "$W/batch-$seq.out" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); run = d.get("campaign_run") or {}

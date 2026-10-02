@@ -291,6 +291,45 @@ class UnitExecutorRunTests(unittest.TestCase):
             self.assertEqual(summary["status"], "passed")
             self.assertEqual(len(summary["units"]), 4)
 
+    def test_sigterm_terminates_running_units_like_an_interrupt(self) -> None:
+        """SIGTERM 与 Ctrl-C 一样走中断清理：在跑单元（各自成会话）一并终止、不再派发，退出码 143。修复轮停下上一轮的
+        后台验证（E4-01）靠这一条；原来 SIGTERM 直接结束调度进程，单元会留在后台继续占核。"""
+
+        def alive(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = _write_modules(root, {"test_slow": SLEEPER.format(seconds=60), "test_later": SLEEPER.format(seconds=0)})
+            command = [
+                sys.executable, str(EXECUTOR), "run", "--start", str(tests), "--config", str(_config(root)),
+                "--weights", str(_weights(root, {"test_slow": 100.0})), "--durations", str(root / "none.json"),
+                "--parallel", "1", "--cores", "1", "--state-dir", str(root / "state"), "--out-dir", str(root / "out"),
+                "--shared-caches", "off",
+            ]
+            process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                       env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            events_path = root / "out" / "events.jsonl"
+            deadline = time.monotonic() + 30
+            while not (events_path.exists() and '"unit": "test_slow"' in events_path.read_text()):
+                self.assertLess(time.monotonic(), deadline, "慢单元没有启动")
+                time.sleep(0.05)
+            unit_pid = next(event["pid"] for event in map(json.loads, events_path.read_text().splitlines())
+                            if event["event"] == "start" and event.get("unit") == "test_slow")
+            process.terminate()
+            _stdout, stderr = process.communicate(timeout=60)
+            self.assertEqual(process.returncode, 143, stderr)
+            deadline = time.monotonic() + 10
+            while alive(unit_pid) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertFalse(alive(unit_pid), "在跑单元的会话必须一并终止")
+            started = [event.get("unit") for event in map(json.loads, events_path.read_text().splitlines()) if event["event"] == "start"]
+            self.assertEqual(started, ["test_slow"], "收到 SIGTERM 之后不再派发")
+
     def test_run_started_outside_make_never_writes_bytecode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

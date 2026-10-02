@@ -26,6 +26,7 @@ import sys
 sys.dont_write_bytecode = True  # 驱动目录与数据根都不得出现 __pycache__（清单闭合、工具身份）。
 
 import argparse  # noqa: E402
+import contextlib  # noqa: E402
 import difflib  # noqa: E402
 import hashlib  # noqa: E402
 import importlib  # noqa: E402
@@ -56,7 +57,9 @@ import parse_env  # noqa: E402  —— 与驱动参数文件同一安全解析�
 STEPS = (
     "deploy",
     "postdeploy",
+    "regression",
     "item-tests",
+    "background-validate",
     "evolution",
     "pre-extend",
     "reconcile-runs",
@@ -86,11 +89,12 @@ REQUIRED_KEYS = (
     "FIX_COMMIT",  # 工具演进登记的修复提交
     "EXPECT",  # 部署后期望摘要 JSON（arm64-fix-and-continue-expect/v1）
     "ENTRY_GREPS",  # 入口断言列表 JSON（arm64-fix-and-continue-entry-assertions/v1）
-    "ITEM_TESTS",  # 实测：staging 树上整跑的 unittest 目标（空格分隔）
     "EVOLUTION_REASON",  # 工具演进理由
     "APPROVER",  # 批准人（如实记录）
 )
 OPTIONAL_KEYS = (
+    "REGRESSION_GATES",  # 定向回归人工补的门禁项（逗号分隔，入口门禁 --with-gates；改动在测试闭包选不出的地方时给）
+    "ITEM_TESTS",  # 人工指定的实测：staging 树上整跑的 unittest 目标（空格分隔）；不给则 item-tests 跳过
     "ITEM_TESTS_K",  # 实测第二段：-k 模式（空格分隔），与 ITEM_TESTS_K_MODULES 同时给
     "ITEM_TESTS_K_MODULES",
     "ITEM_TESTS_MAX_SECONDS",
@@ -238,8 +242,12 @@ def load_params(path: Path) -> dict[str, str]:
     for key in ("ITEM_TESTS", "ITEM_TESTS_K_MODULES"):
         if key in values and not all(MODULE_RE.fullmatch(token) for token in values[key].split()):
             raise parse_env.EnvFileError(f"{key} 只能是空格分隔的 unittest 目标（点分标识）")
-    if not values["ITEM_TESTS"].split():
-        raise parse_env.EnvFileError("ITEM_TESTS 不能为空")
+    if "ITEM_TESTS" in values and not values["ITEM_TESTS"].split():
+        raise parse_env.EnvFileError("给了 ITEM_TESTS 就不能为空")
+    if "ITEM_TESTS_K" in values and "ITEM_TESTS" not in values:
+        raise parse_env.EnvFileError("给了 ITEM_TESTS_K 必须同时给 ITEM_TESTS")
+    if "REGRESSION_GATES" in values and not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", values["REGRESSION_GATES"]):
+        raise parse_env.EnvFileError("REGRESSION_GATES 是逗号分隔的门禁项（如 backend-go-test,check-egress-spec）")
     if ("ITEM_TESTS_K" in values) != ("ITEM_TESTS_K_MODULES" in values):
         raise parse_env.EnvFileError("ITEM_TESTS_K 与 ITEM_TESTS_K_MODULES 必须同时给出")
     if "ITEM_TESTS_K" in values and not all(K_PATTERN_RE.fullmatch(token) for token in values["ITEM_TESTS_K"].split()):
@@ -266,6 +274,8 @@ def load_params(path: Path) -> dict[str, str]:
             raise parse_env.EnvFileError("给了 REPAIR_ROOT_CAUSES 必须同时给 REPAIR_NOTE")
     if "REGRESSION_DRAFT" in values and "REGRESSION_RECEIPT" not in values:
         raise parse_env.EnvFileError("给了 REGRESSION_DRAFT 必须同时给 REGRESSION_RECEIPT（收据写入位置）")
+    if "REGRESSION_DRAFT" in values and "ITEM_TESTS" not in values:
+        raise parse_env.EnvFileError("给了 REGRESSION_DRAFT 必须同时给 ITEM_TESTS（回归收据引用本轮实测日志）")
     # 与驱动参数文件交叉核对：vc5-recover.sh 读的是它，两者对不上就会续跑到别的 Campaign／候选。
     env_path = Path(values["VC_ENV"])
     if env_path.is_symlink() or not env_path.is_file():
@@ -1374,9 +1384,10 @@ def _postdeploy_final(params: dict[str, str], args: argparse.Namespace) -> tuple
     installed = (Path(params["DRIVER_TARGET"]) / "driver").resolve()
     passed(params, step, run_stamp=stamp)
     if DRV == installed and args.self_sha and self_digest() != args.self_sha:
+        resume = STEPS[STEPS.index(step) + 1]   # postdeploy 之后的第一步
         print("==== 驱动已被本轮重装更新（本脚本自身变化）：请用新驱动续跑\n"
-              f"续跑：bash {_script()} {params['PARAMS_PATH']} --from item-tests\n"
-              "FIX_AND_CONTINUE_RESTART resume_from=item-tests", file=sys.stderr)
+              f"续跑：bash {_script()} {params['PARAMS_PATH']} --from {resume}\n"
+              f"FIX_AND_CONTINUE_RESTART resume_from={resume}", file=sys.stderr)
         return EXIT_RESTART, {}
     return _ok()
 
@@ -1384,6 +1395,8 @@ def _postdeploy_final(params: dict[str, str], args: argparse.Namespace) -> tuple
 @decider("tests-state")
 def _tests_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
     step, stamp = "item-tests", args.run_stamp
+    if "ITEM_TESTS" not in params:
+        return skip(params, step, "没有人工指定实测（ITEM_TESTS）：定向回归由 regression 步骤按改动文件选出", run_stamp=stamp), {}
     head, clean = staging_state(params)
     if head != params["HEAD_COMMIT"] or not clean:
         return stop(params, step, "failed", f"staging 树 HEAD={head} clean={clean}，不是部署 HEAD 的干净检出",
@@ -1422,6 +1435,87 @@ def _tests_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[in
                     run_stamp=stamp), {}
     return passed(params, step, run_stamp=stamp, summary={"log": str(log), "sha256": _sha256_file(log),
                                                            "ran": parse_test_log(text)["ran"]}), {}
+
+
+# ---------------------------------------------------------------------------
+# 定向回归与后台验证（E4-01，修复轮规则：定向回归通过即接着走，全量门禁在后台由同一个调度器跑）
+# ---------------------------------------------------------------------------
+
+
+def _driver_script(params: Mapping[str, str], name: str) -> Path:
+    """本轮部署后重装的驱动里的脚本（与 vc5-recover.sh 同一来源：驱动安装目标）。"""
+
+    return Path(params["DRIVER_TARGET"]) / "driver" / name
+
+
+@decider("regression-state")
+def _regression_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    step, stamp = "regression", args.run_stamp
+    gates = params.get("REGRESSION_GATES", "")
+    record = read_step(params, step)
+    summary = (record or {}).get("summary") or {}
+    if record and record.get("status") == "passed" and summary.get("head") == params["HEAD_COMMIT"] and summary.get("with_gates") == gates:
+        return skip(params, step, f"本轮定向回归已通过（{summary.get('out')}）", run_stamp=stamp, summary=summary), {}
+    return _ok(ACTION="run", REG_OUT=_out(params) / f"regression-{stamp}", REG_GATES=gates,
+               ENTRY_GATES=_driver_script(params, "entry-gates.sh"), BACKGROUND=_driver_script(params, "background-validate.sh"))
+
+
+@decider("regression-verdict")
+def _regression_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    step, stamp = "regression", args.run_stamp
+    out = Path(args.out)
+    gates = params.get("REGRESSION_GATES", "")
+    try:
+        entry = json.loads((out / "entry-gates.json").read_text(encoding="utf-8"))
+        manifest = json.loads((out / "executor" / "unit-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entry, manifest = {}, {}
+    commit = (entry.get("source") or {}).get("commit")
+    failed = [str(gate.get("gate_id")) for gate in entry.get("gates") or [] if gate.get("status") != "passed"]
+    executed = sorted(str(unit.get("unit_id")) for unit in manifest.get("units") or [] if unit.get("disposition") == "executed")
+    summary = {"head": params["HEAD_COMMIT"], "with_gates": gates, "out": str(out), "log": f"{out}.log", "rc": args.rc,
+               "executed": executed[:40], "executed_count": len(executed),
+               "inherited_count": (manifest.get("counts") or {}).get("inherited")}
+    if args.rc != 0 or entry.get("status") != "passed" or commit != params["HEAD_COMMIT"] or failed:
+        reason = (f"定向回归没通过（入口门禁 rc={args.rc}，状态 {entry.get('status') or '没有结论'}，没通过的门禁项 {failed}，"
+                  f"提交 {commit}）；日志 {out}.log")
+        return stop(params, step, "failed", reason,
+                    f"查看 {out}.log 与 {out}/executor.log：工具缺陷则修复后开新一轮；环境偶发则 --from regression 重跑",
+                    run_stamp=stamp, summary=summary), {}
+    return passed(params, step, run_stamp=stamp, summary=summary), {}
+
+
+@decider("background-state")
+def _background_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    step, stamp = "background-validate", args.run_stamp
+    record = read_step(params, step)
+    summary = (record or {}).get("summary") or {}
+    if record and record.get("status") == "passed" and summary.get("head") == params["HEAD_COMMIT"]:
+        return skip(params, step, f"本轮后台验证已起（结论文件 {summary.get('result')}）", run_stamp=stamp, summary=summary), {}
+    return _ok(ACTION="start", BACKGROUND=_driver_script(params, "background-validate.sh"))
+
+
+@decider("background-verdict")
+def _background_verdict(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
+    step, stamp = "background-validate", args.run_stamp
+    raw = Path(args.raw)
+    text = raw.with_suffix(".out").read_text(encoding="utf-8", errors="replace") if raw.with_suffix(".out").is_file() else ""
+    result: dict[str, Any] = {}
+    for line in reversed(text.splitlines()):
+        if line.strip().startswith("{"):
+            with contextlib.suppress(ValueError):
+                result = json.loads(line)
+            break
+    summary = {"head": params["HEAD_COMMIT"], "result": result.get("result"), "action": result.get("action"),
+               "status": result.get("status"), "superseded": result.get("superseded")}
+    if result.get("action") not in ("started", "exists"):
+        errors = raw.with_suffix(".err").read_text(encoding="utf-8", errors="replace")[-600:] if raw.with_suffix(".err").is_file() else ""
+        return stop(params, step, "failed", f"后台验证没起来：{errors or text[-600:] or '没有输出'}",
+                    f"查看 {raw}.out／.err 后 --from background-validate", run_stamp=stamp, summary=summary), {}
+    if result.get("status") == "failed":
+        return stop(params, step, "failed", f"本提交在当前部署上的后台验证已经失败（{result.get('result')}）",
+                    "修好后开新一轮（定向回归 → 部署 → 后台验证）", run_stamp=stamp, summary=summary), {}
+    return passed(params, step, run_stamp=stamp, summary=summary), {}
 
 
 @decider("evolution-status")
@@ -2156,6 +2250,8 @@ def main(argv: list[str] | None = None) -> int:
     dec.add_argument("--self-sha")
     dec.add_argument("--verify-rc", type=int, default=0)
     dec.add_argument("--install-rc", type=int, default=0)
+    dec.add_argument("--out", help="定向回归的入口门禁主体目录（E4-01）")
+    dec.add_argument("--rc", type=int, default=0, help="定向回归入口门禁的退出码（E4-01）")
     dec.add_argument("--exclude-run", action="append", default=[])
     args = parser.parse_args(argv)
     if args.command == "steps":

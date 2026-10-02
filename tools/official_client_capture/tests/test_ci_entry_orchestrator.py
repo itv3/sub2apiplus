@@ -9,6 +9,7 @@ pre-A3、smoke、atomic-double、建账本、环境收据、checkpoint、预检 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -49,6 +50,9 @@ class Commands:
         # 入口门禁时传入的模式。
         self.p0_evidence_withheld: set[str] = set()
         self.gates_modes: list[str] = []
+        # VC-0 收口前后的整机预约（E4-01）：依次记下 acquire／closeout／release；acquire_granted 为假时调度器不批准。
+        self.machine: list[str] = []
+        self.acquire_granted = True
 
     def count(self, needle: str) -> int:
         return sum(1 for call in self.calls if needle in call)
@@ -90,6 +94,17 @@ class Commands:
             root.mkdir(parents=True, exist_ok=True)
             with log.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"staging_root": str(root)}) + "\n")
+            return 0
+        if "unit_executor.py" in joined and "acquire" in argv:
+            self.machine.append("acquire")
+            if not self.acquire_granted:
+                return 2
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"owner": _option(argv, "--owner"), "granted_at_utc": "2026-10-03T00:00:00Z",
+                                         "granted_by": "no-scheduler"}) + "\n")
+            return 0
+        if "unit_executor.py" in joined and "release" in argv:
+            self.machine.append("release")
             return 0
         if "unit_executor.py" in joined:
             return 0
@@ -150,6 +165,7 @@ class Commands:
                 _write_json(root / _option(argv, "--output"), {"kind": "p0_gate", "status": "passed"})
             return 0
         if "codex_upgrade_vc0_closeout" in joined:
+            self.machine.append("closeout")
             self.closeout_argv = argv
             rc, payload = self.closeout_results.pop(0) if self.closeout_results else (0, {"status": "passed"})
             if rc == 0:
@@ -397,6 +413,25 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual({step for step in before if self.actions(approved)[step] != "沿用"},
                          {step for step in before if eo.ES.STEP_BY_ID[step].live}, "批准后只续作收口，前面的步骤沿用")
         self.assertEqual(self.commands.count("create"), 1)
+
+    def test_closeout_holds_the_machine_reservation_around_the_first_batch(self) -> None:
+        """收口同步派发 VC-1 首批（真实采集）：开始前向统一调度执行器申请整机、收口返回后归还（失败也归还）；调度器不批准
+        时不收口（E4-01）。"""
+
+        self.commands.closeout_results = [(1, {"status": "failed"})]
+        failed = self.orchestrate()
+        self.assertEqual(self.actions(failed)["vc0-closeout"], "执行／failed")
+        self.assertEqual(self.commands.machine, ["acquire", "closeout", "release"], "收口失败也归还整机")
+        acquire = next(call for call in self.commands.calls if "unit_executor.py" in " ".join(call) and "acquire" in call)
+        self.assertEqual((_option(acquire, "--owner"), _option(acquire, "--owner-pid")),
+                         (f"vc0-closeout-{self.fx.params['NEW']}", str(os.getpid())))
+        self.commands.machine.clear()
+        self.commands.acquire_granted = False
+        refused = self.orchestrate()
+        closeout = next(step for step in refused["steps"] if step["step_id"] == "vc0-closeout")
+        self.assertEqual((refused["exit_code"], closeout["status"]), (1, "failed"))
+        self.assertIn("申请整机没有批准", "；".join(closeout["reasons"]))
+        self.assertEqual(self.commands.machine, ["acquire"], "没批准就不收口、也不用归还")
 
     def test_rehearsal_root_never_runs_the_closeout(self) -> None:
         """验收演练根（ENTRY_ROOT 在数据根 staging 下）不做 VC-0 收口：首批是真实官方取证，会发正式请求。"""

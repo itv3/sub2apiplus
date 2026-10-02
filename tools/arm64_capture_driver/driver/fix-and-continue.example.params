@@ -27,8 +27,12 @@ ENTRY_GREPS=$RUNROOT/upload-$ROUND/entry-assertions.json
 # UPLOAD_SHA256=$RUNROOT/upload-$ROUND/upload.sha256
 # DEPLOY_MAX_SECONDS=1800
 
-# ---- 实测（部署用 staging 树）----
-ITEM_TESTS="tools.official_client_capture.tests.REPLACE_MODULE"
+# ---- 定向回归（regression 步骤：入口门禁 regression 组合，按改动文件选出受影响的测试单元）----
+# 改动落在测试闭包选不出的地方（后端、前端、文档、出站规格）时，人工补门禁项（逗号分隔，入口门禁 --with-gates）：
+# REGRESSION_GATES=backend-go-test,check-egress-spec
+
+# ---- 人工指定的实测（可选，部署用 staging 树；给了才跑；根因修复的回归收据由草稿生成时必须给）----
+# ITEM_TESTS="tools.official_client_capture.tests.REPLACE_MODULE"
 # ITEM_TESTS_K="REPLACE_PATTERN_A REPLACE_PATTERN_B"
 # ITEM_TESTS_K_MODULES="tools.official_client_capture.tests.REPLACE_MODULE"
 # ITEM_TESTS_MAX_SECONDS=7200

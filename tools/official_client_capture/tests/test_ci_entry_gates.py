@@ -156,6 +156,29 @@ class EntryGatesPlanTests(unittest.TestCase):
                 path.write_text(json.dumps(manifest), encoding="utf-8")
                 ue.load_gates_manifest(path, machine_cores=4)  # 执行器的闭合校验接受
 
+    def test_regression_profile_is_the_capture_test_group_plus_manual_gates(self) -> None:
+        """定向回归（E4-01）：regression 组合只含采集工具测试组（全集通过下按静态闭包选出受改动影响的测试单元）；
+        --with-gates 人工补的门禁项并进来、按固定顺序排；pre-A3 与不认识的门禁项拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tree = _tree(root, self.CHECKS)
+            regression = eg.plan_gates(tree, profile="regression", launcher=LAUNCHER, platform="linux")
+            self.assertEqual([gate["gate_id"] for gate in regression["gates"]], ["test-capture-tools"])
+            self.assertEqual([unit["unit_id"] for unit in regression["units"]], ["capture:prerequisites"])
+            widened = eg.plan_gates(tree, profile="regression", launcher=LAUNCHER, platform="linux",
+                                    with_gates=["check-egress-spec", "backend-go-test"])
+            self.assertEqual([gate["gate_id"] for gate in widened["gates"]], ["backend-go-test", "test-capture-tools", "check-egress-spec"])
+            self.assertEqual(eg.profile_gates("full-gates"), eg.MAKE_TEST_GATES + eg.FULL_GATES_EXTRA, "原有组合的门禁项与顺序不变")
+            self.assertEqual(eg.profile_gates("full-gates", ["backend-go-test"]), eg.MAKE_TEST_GATES + eg.FULL_GATES_EXTRA, "补已有的不重复")
+            for bad in (["pre-a3"], ["no-such-gate"]):
+                with self.assertRaisesRegex(ValueError, "--with-gates"):
+                    eg.plan_gates(tree, profile="regression", launcher=[], with_gates=bad)
+            for manifest in (regression, widened):
+                path = root / f"regression-{len(manifest['gates'])}.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                ue.load_gates_manifest(path, machine_cores=4)  # 执行器的闭合校验接受
+
     def test_plan_rejects_inconsistent_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

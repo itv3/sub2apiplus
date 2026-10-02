@@ -581,6 +581,45 @@ python3 -c 'import json,os,sys; open(os.environ["FC_TEST_STUB_DIR"] + "/calls.js
 echo "VC5_RECOVER_STUB $*"
 '''
 
+_STUB_ENTRY_GATES = '''#!/bin/bash
+# 测试替身：入口门禁（定向回归），记录调用、写总摘要与运行清单；FC_REGRESSION_FAIL=1 时判没通过
+python3 - "$@" <<'PY'
+import json, os, sys
+from pathlib import Path
+argv = sys.argv[1:]
+stub = Path(os.environ["FC_TEST_STUB_DIR"])
+with (stub / "calls.jsonl").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"module": "entry-gates.sh", "argv": argv, "ARM64_VC_ENV": os.environ.get("ARM64_VC_ENV")}) + "\\n")
+out = Path(argv[argv.index("--out") + 1])
+status = "failed" if os.environ.get("FC_REGRESSION_FAIL") == "1" else "passed"
+(out / "executor").mkdir(parents=True, exist_ok=True)
+(out / "entry-gates.json").write_text(json.dumps({"status": status, "gates": [{"gate_id": "test-capture-tools", "status": status}],
+                                                  "source": {"commit": argv[-1]}}))
+(out / "executor" / "unit-manifest.json").write_text(json.dumps({"units": [
+    {"unit_id": "capture:test_fc_item", "disposition": "executed"}, {"unit_id": "capture:test_other", "disposition": "inherited"}],
+    "counts": {"inherited": 1}}))
+sys.exit(0 if status == "passed" else 1)
+PY
+'''
+
+_STUB_BACKGROUND_VALIDATE = '''#!/bin/bash
+# 测试替身：后台验证（E4-01），记录调用；start 按 FC_BACKGROUND_STATUS 给出现有结论或「已起」
+python3 - "$@" <<'PY'
+import json, os, sys
+from pathlib import Path
+argv = sys.argv[1:]
+stub = Path(os.environ["FC_TEST_STUB_DIR"])
+with (stub / "calls.jsonl").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"module": "background-validate.sh", "argv": argv, "ARM64_VC_ENV": os.environ.get("ARM64_VC_ENV")}) + "\\n")
+if argv[0] == "start":
+    status = os.environ.get("FC_BACKGROUND_STATUS", "running")
+    action = "exists" if status in ("passed", "failed") else "started"
+    print(json.dumps({"action": action, "result": str(stub / "background.json"), "status": status, "superseded": []}))
+elif argv[0] == "stop":
+    print(json.dumps({"stopped": []}))
+PY
+'''
+
 _ITEM_TEST_MODULE = '''import json
 import os
 import sys
@@ -679,6 +718,8 @@ class _Round:
             "tools/arm64_capture_driver/install.py": _STUB_INSTALL,
             "tools/arm64_capture_driver/manifest.json": json.dumps({"manifest_sha256": "9" * 64}) + "\n",
             "tools/arm64_capture_driver/driver/vc5-recover.sh": _STUB_VC5_RECOVER,
+            "tools/arm64_capture_driver/driver/entry-gates.sh": _STUB_ENTRY_GATES,
+            "tools/arm64_capture_driver/driver/background-validate.sh": _STUB_BACKGROUND_VALIDATE,
         }
         for relative, text in files.items():
             _write(repo / relative, text, 0o755 if relative.endswith((".py", ".sh")) else 0o644)
@@ -833,6 +874,10 @@ class _Round:
                 keys.append(argv[0])
             elif module == "install.py":
                 keys.append(f"install.py:{argv[0]}")
+            elif module == "entry-gates.sh":
+                keys.append(f"entry-gates.sh:{argv[argv.index('--profile') + 1]}")
+            elif module == "background-validate.sh":
+                keys.append(f"background-validate.sh:{argv[0]}")
             else:
                 keys.append(module if module != "codex_upgrade_reconciler" else "load_approved_recovery_preview")
         return keys
@@ -904,6 +949,9 @@ FULL_ORDER = [
     "install.py:verify",
     "install.py:install",
     "install.py:verify",
+    "background-validate.sh:stop",
+    "entry-gates.sh:regression",
+    "background-validate.sh:start",
     "tool-evolution-status",
     "tool-evolution:preview",
     "tool-evolution:apply",
@@ -934,8 +982,8 @@ class DriverManifestFixAndContinueTests(unittest.TestCase):
                                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         self.assertEqual(steps.returncode, 0, steps.stderr)
         self.assertEqual(steps.stdout.split(), [
-            "deploy", "postdeploy", "item-tests", "evolution", "pre-extend", "reconcile-runs", "reconcile-attempt",
-            "repair", "approve", "authorize", "extend", "accepted", "recover",
+            "deploy", "postdeploy", "regression", "item-tests", "background-validate", "evolution", "pre-extend", "reconcile-runs",
+            "reconcile-attempt", "repair", "approve", "authorize", "extend", "accepted", "recover",
         ])
 
 
@@ -1000,6 +1048,9 @@ class RoundParamsTests(unittest.TestCase):
                 "延期缺理由": template + 'EXTEND_DEADLINE="2099-01-01T00:00:00Z"\n',
                 "只给 K": template.replace('ITEM_TESTS_K_MODULES="tools.official_client_capture.tests.test_fc_item"\n', ""),
                 "根因缺说明": template + 'REPAIR_ROOT_CAUSES="rc1-a"\n',
+                "非法补门禁项": template + 'REGRESSION_GATES="backend go test"\n',
+                "草稿缺实测": re.sub(r'^ITEM_TESTS(_K|_K_MODULES)?=.*\n', "", template, flags=re.M)
+                + f'REGRESSION_DRAFT="{root}/draft.json"\nREGRESSION_RECEIPT="{root}/receipt.json"\n',
             }
             for name, text in cases.items():
                 path = _write(root / "cases" / f"{len(name)}-{abs(hash(name))}.env", text)
@@ -1178,10 +1229,11 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self._assert_ok(result)
         self.assertEqual(fixture.call_keys(), FULL_ORDER)
         statuses = {name: fixture.step(name)["status"] for name in (
-            "deploy", "postdeploy", "item-tests", "evolution", "pre-extend", "reconcile-runs", "reconcile-attempt",
-            "repair", "approve", "authorize", "extend", "accepted", "recover")}
+            "deploy", "postdeploy", "regression", "item-tests", "background-validate", "evolution", "pre-extend", "reconcile-runs",
+            "reconcile-attempt", "repair", "approve", "authorize", "extend", "accepted", "recover")}
         self.assertEqual(statuses, {
-            "deploy": "passed", "postdeploy": "passed", "item-tests": "passed", "evolution": "passed",
+            "deploy": "passed", "postdeploy": "passed", "regression": "passed", "item-tests": "passed",
+            "background-validate": "passed", "evolution": "passed",
             "pre-extend": "skipped", "reconcile-runs": "passed", "reconcile-attempt": "passed", "repair": "skipped",
             "approve": "passed", "authorize": "passed", "extend": "skipped", "accepted": "passed", "recover": "passed",
         })
@@ -1233,7 +1285,7 @@ class FixAndContinueScriptTests(unittest.TestCase):
             f"reconcile-attempt:authorize:{ATTEMPT}",
             "load_approved_recovery_preview",
         ])
-        for name in ("deploy", "item-tests", "evolution", "reconcile-runs", "recover"):
+        for name in ("deploy", "regression", "item-tests", "background-validate", "evolution", "reconcile-runs", "recover"):
             self.assertEqual(fixture.step(name)["status"], "skipped", name)
         self.assertEqual(sorted(p.name for p in fixture.out.glob("item-tests.log*")), ["item-tests.log"])
 
@@ -1252,6 +1304,46 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertEqual(len(list(fixture.out.glob("item-tests.log.failed-*"))), 1)
         self.assertEqual(fixture.call_keys().count("arm64_supervised_deploy"), 1)
         self.assertEqual(fixture.call_keys()[-1], "vc5-recover.sh")
+
+    def test_regression_failure_stops_before_item_tests_and_from_resumes(self) -> None:
+        """定向回归（E4-01）没通过即停：不跑人工实测、不起后台验证、不登记演进；--from regression 续跑。跑定向回归前先停下
+        上一轮还在跑的后台验证；人工补的门禁项原样交给入口门禁 --with-gates。"""
+
+        fixture = _Round(self.root, params={"REGRESSION_GATES": "backend-go-test,check-egress-spec"})
+        failed = fixture.run(env={"FC_REGRESSION_FAIL": "1"})
+        self.assertEqual(failed.returncode, EXIT_FAILED, failed.stdout + failed.stderr)
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=regression", failed.stdout + failed.stderr)
+        self.assertIn("--from regression", failed.stdout + failed.stderr)
+        keys = fixture.call_keys()
+        self.assertEqual(keys[-2:], ["background-validate.sh:stop", "entry-gates.sh:regression"])
+        gates = [call for call in fixture.calls() if call["module"] == "entry-gates.sh"][0]
+        self.assertEqual(gates["argv"][gates["argv"].index("--with-gates") + 1], "backend-go-test,check-egress-spec")
+        self.assertEqual(gates["argv"][-3:], [str(fixture.bundle), BRANCH, fixture.head])
+        self.assertEqual(gates["ARM64_VC_ENV"], str(fixture.runroot / "env.sh"))
+        self.assertEqual(fixture.step("regression")["status"], "failed")
+        self.assertFalse((fixture.out / "item-tests.json").exists())
+        resumed = fixture.run("--from", "regression")
+        self._assert_ok(resumed)
+        self.assertEqual(fixture.step("regression")["summary"]["executed"], ["capture:test_fc_item"])
+        self.assertEqual(fixture.call_keys().count("arm64_supervised_deploy"), 1, "部署不重做")
+
+    def test_without_item_tests_the_round_relies_on_the_regression_selection(self) -> None:
+        fixture = _Round(self.root, params={"ITEM_TESTS": None, "ITEM_TESTS_K": None, "ITEM_TESTS_K_MODULES": None})
+        self._assert_ok(fixture.run())
+        self.assertEqual(fixture.step("item-tests")["status"], "skipped")
+        self.assertIn("regression 步骤按改动文件选出", fixture.step("item-tests")["reason"])
+        self.assertEqual(fixture.step("regression")["status"], "passed")
+        self.assertFalse((fixture.out / "item-tests.log").exists())
+
+    def test_background_validation_already_failed_for_this_commit_stops(self) -> None:
+        fixture = _Round(self.root)
+        failed = fixture.run(env={"FC_BACKGROUND_STATUS": "failed"})
+        self.assertEqual(failed.returncode, EXIT_FAILED, failed.stdout + failed.stderr)
+        self.assertIn("FIX_AND_CONTINUE_STOPPED step=background-validate", failed.stdout + failed.stderr)
+        self.assertIn("后台验证已经失败", failed.stdout + failed.stderr)
+        self.assertNotIn("tool-evolution-status", fixture.call_keys())
+        start = [call for call in fixture.calls() if call["module"] == "background-validate.sh" and call["argv"][0] == "start"][0]
+        self.assertEqual(start["argv"][1:], [str(fixture.bundle), BRANCH, fixture.head])
 
     def test_item_test_dirtying_staging_stops(self) -> None:
         """实测用例全绿但往 staging 树里写了文件：staging-clean=no 即停，不进入演进登记。"""
@@ -1761,8 +1853,8 @@ class ReconcileRunsRootCauseRepairTests(_ResumableRoundCase):
         self.assertEqual(listing.returncode, 0, listing.stderr)
         lines = listing.stdout.splitlines()
         self.assertEqual([line.split()[0] for line in lines], [
-            "deploy", "postdeploy", "item-tests", "evolution", "pre-extend", "reconcile-runs", "reconcile-attempt",
-            "repair", "approve", "authorize", "extend", "accepted", "recover",
+            "deploy", "postdeploy", "regression", "item-tests", "background-validate", "evolution", "pre-extend", "reconcile-runs",
+            "reconcile-attempt", "repair", "approve", "authorize", "extend", "accepted", "recover",
         ])
         for line in lines:
             self.assertRegex(line, r"^[a-z-]+ +(passed|skipped)  \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")

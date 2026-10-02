@@ -83,10 +83,13 @@
   一个单元）与 pre-A3 的 44 个场景。全部交给驱动随附的统一调度执行器（`unit_executor.py run-gates`）在整机额度内并行，
   一项失败其余照跑，全部跑完再按门禁项汇总；`test-official-client-control` 单列一个门禁项，和 check-egress-spec 的同名
   子检查共用一个单元，只执行一次（Makefile 的 test 目标也不再单列它：子检查跑在执行器另起的 make 进程里，不和先决去重）。
-* 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 用）、`preflight`
-  （只含 make test 的组成，`vc0-gate-target.sh` 用）、`pre-a3`（只含 pre-A3 场景，单独签 pre-A3 用，E3-02）。`entry` 与
+* 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 与后台验证用）、
+  `preflight`（只含 make test 的组成，`vc0-gate-target.sh` 用）、`pre-a3`（只含 pre-A3 场景，单独签 pre-A3 用，E3-02）、
+  `regression`（定向回归，E4-01：只含采集工具测试组，全集通过下只执行静态依赖闭包里有改动文件的测试单元）。`--with-gates
+  <门禁项,…>` 给任一组合人工补门禁项（pre-A3 除外；定向回归选不出时用，比如改了后端、前端、文档或出站规格）。`entry` 与
   `pre-a3` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的受管树，受管整树、两份指南与部署脚本副本逐项一致，
-  否则退出 3）；本轮 pre-A3 认证已有且有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
+  否则退出 3），其余组合带 `--require-deployed` 时同样核对（后台验证用它把结论绑定到这次部署）；本轮 pre-A3 认证已有且
+  有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
 * 隔离：测试树单元在私有挂载命名空间里遮住 `/root/oauth-capture`（与 `isolated_run` 同一做法），树外只读字节码缓存；pre-A3
   场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。Linux 上不执行
   macOS 专用的 Apple container 部署脚本测试（BSD `stat`，写进门禁记录的 `not_executed`，CI 在 macos-15 上照常执行）。
@@ -358,23 +361,51 @@
   产物缺一即失败关闭（退出 3，需人工裁定），只允许读侧复核与批准 + compare。
 * attempt 根外或未纳入 manifest 的控制制品（门禁目录、断言目录）仍按各自合同 write-once，不因此禁止写入。
 
+## 修复轮的后台验证与批次边界（E4-01，`driver/background-validate.sh`）
+
+* 规则（指南“修好接着跑”一节）：定向回归通过即部署接着跑；全量门禁挪到后台，由同一个统一调度执行器跑，结论按修复提交与
+  部署收据绑定，每个批次边界检查；采集批次开始前向调度器申请整机。
+* 起：`bash background-validate.sh start <bundle> <分支> <40 位提交>`（fix-and-continue 的 background-validate 步骤自动执行）。
+  绑定数据根最新部署收据，`nice` 降优先级跑 `entry-gates.sh --profile full-gates --mode full-set-pass --require-deployed`
+  （门禁前核对数据根部署的就是这个提交；承接记录库里输入没变的单元，只执行受修复影响的），测试树与缓存在
+  `$(dirname $D)/background-validation-work`，和前台入口门禁分开。同一提交＋同一部署已有在跑或已有结论就不重复起；在跑的
+  其它后台验证先停下（superseded）。
+* 结论：`$RUNROOT/background-validation/<提交前 12 位>-<部署收据摘要前 12 位>.json`（`background-validation/v1`）：running
+  （后台进程活着才算）、passed／failed（入口门禁的结论，带没通过的门禁项）、aborted（没有门禁结论：被信号终止、准备失败、
+  部署与提交不一致、部署在验证途中换了）、superseded（被新一轮停下）。`status` 列出全部。
+* 停：`bash background-validate.sh stop [--reason …]`。修复轮跑定向回归之前用（fix-and-continue 的 regression 步骤自动执行）：
+  同一台机器同一时间只能有一个调度器，上一轮的提交也已作废。执行器收到 SIGTERM 会终止全部在跑单元的会话、不留后台进程。
+  注意：被停下的运行没有发布运行清单，它执行过的单元记录不能被承接（E3-01 承接要追到原运行清单），下一次验证会重新执行它们。
+* 批次边界：`vc-batch.sh`（VC-2～VC-6 的全部批次都经它）派发前执行 `check-boundary`：当前部署绑定的结论是 failed／aborted
+  就拒绝派发、退出 3；passed、running 照常；没有结论（没起、被停下或进程已不在）照常派发并提示先 start。随后
+  `unit_executor.py acquire --owner vc-batch-<Campaign>-<序号> --owner-pid $$`：后台验证停派、等在跑单元结束才批准（上限
+  `VC_ACQUIRE_TIMEOUT` 秒，默认 3600），批次结束（含失败退出）`release`，后台接着跑。VC-0 收口同步派发 VC-1 首批，编排器在
+  调收口模块前后同样申请与归还整机。
+* VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
+* 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
+  空跑与收尾合入前用重新执行全集）。
+
 ## 修好接着跑一条命令（第 35 项，`driver/fix-and-continue.sh`）
 
 * 用途：候选采集（VC-5）续跑的一轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"由一条命令编排，取代按 sed 复制改写的
   upload-rN／repair-rN 轮次脚本。每轮只换一份轮次参数文件（模板 `driver/fix-and-continue.example.params`，经
   `parse_env.py` 同一词法层安全解析、与 `$ARM64_VC_ENV` 交叉核对）＋本机生成的期望摘要 JSON（EXPECT：部署收据的整树／
   五摘要／监督器、数据根 wire 闭包、守护基线与差异）与入口断言 JSON（ENTRY_GREPS）。
-* 部署前提：本机全量门禁通过即可部署续跑，推送后 CI 与续跑并行、不等待（脚本里没有等 CI 的步骤）；CI 失败时暂停续跑，
-  按该轮部署收据的 `rollback_backup` 回滚已部署工具（同样走受监督部署），修好后再走一轮；发版前仍须 CI 全绿（见指南
-  “修好接着跑”一节）。
+* 修复轮规则（E4-01，见指南“修好接着跑”一节与下文「修复轮的后台验证与批次边界」）：部署之后先跑定向回归（regression 步骤），
+  通过即接着走；全量门禁由后台验证跑（background-validate 步骤起），批次边界读它的结论。推送后 CI 与续跑并行、不等待（脚本
+  里没有等 CI 的步骤）；后台验证或 CI 失败时暂停续跑，按该轮部署收据的 `rollback_backup` 回滚已部署工具（同样走受监督部署），
+  修好后再走一轮；发版前仍须 CI 全绿。
 * 用法（采集主机 root）：`setsid -f bash /root/arm64-capture-driver/driver/fix-and-continue.sh <参数文件> > <日志> 2>&1 < /dev/null`；
   `--from <步骤>` 续跑（前序步骤在本轮必须有 passed／skipped 记录），`--list` 查看本轮各步骤记录。
-* 步骤：deploy → postdeploy → item-tests → evolution → pre-extend → reconcile-runs → reconcile-attempt → repair → approve →
-  authorize → extend → accepted → recover；每步幂等（同 HEAD 且收据一致则不重部署、实测已过不重跑、无漂移不登记、
+* 步骤：deploy → postdeploy → regression → item-tests → background-validate → evolution → pre-extend → reconcile-runs →
+  reconcile-attempt → repair → approve → authorize → extend → accepted → recover。regression 先停下上一轮还在跑的后台验证
+  （同一时间只能有一个调度器），再跑入口门禁 regression 组合（参数 REGRESSION_GATES 人工补门禁项）；item-tests 是人工指定的
+  实测，给了 ITEM_TESTS 才跑（根因修复的回归收据由草稿生成时要它）；background-validate 起后台验证，本提交在当前部署上已验证
+  失败即停。每步幂等（同 HEAD 且收据一致则不重部署、定向回归与实测已过不重跑、后台验证已起不重起、无漂移不登记、
   链尾父 run 已对账不重复、同一修复提交已登记不重复、本轮已启动 vc5-recover 不重复派发），输出写
   `$RUNROOT/fix-and-continue/<轮次>/<步骤>.json`，受管命令原始输出在同目录 `raw/`。
 * 停下即退出并打印"下一步"与 `--from` 续跑命令：失败 1，需要人工 4（账务暂停、环境污染、永久停线、需审核、请求预算、
-  需要人给出估计上界或证据文件、wire 闭包变化、守护代码变化），驱动被本轮重装更新 5（用新驱动 `--from item-tests`）。
+  需要人给出估计上界或证据文件、wire 闭包变化、守护代码变化），驱动被本轮重装更新 5（用新驱动 `--from regression`）。
   本脚本从不调用 accounting-resolve／environment-isolate／campaign-resume／request-budget-extend，从不传 `--force`，不重装守护。
 * 阶段延期在对账前（pre-extend）与授权后（extend）各判一次：对账前阶段截止已过时计时账本是 deadline_paused、对账判预算
   暂停且拒绝批准；延期写入又会推进 Campaign 账本 head，放在批准与授权之间会让授权拒绝"账本 head 已推进"。

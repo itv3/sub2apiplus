@@ -61,9 +61,10 @@ MAX_AGE_HOURS = 168.0
 PASSING_OUTCOMES = frozenset({"passed", "skipped", "expected_failure"})
 MISSING = "missing"
 HERE = Path(__file__).resolve().parent
-# 执行器版本：执行器目录里参与调度、判定、输入解析、门禁编排与读集审计（E3-04）的文件（存在的才算；字节码预编译工具
-# 另由执行器传入）。
-EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh", "read_audit.py")
+# 执行器版本：执行器目录里参与调度、判定、输入解析与门禁编排的文件（存在的才算；字节码预编译工具另由执行器传入）。
+# 读集审计（read_audit.py）不算：它只决定这次运行要不要判失败，不改变单元怎么执行、结论如何（包 strace 只影响耗时），
+# 审计口径的调整不该让全部记录失效（E3-04 第二轮补两条豁免后，下一次全集通过的 253 个单元因此全部重跑）。
+EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
 # 只决定缓存放在哪里的环境变量（内容按源码摘要校验或按整树摘要做键），不进环境指纹；执行器自己的控制变量也不进。
 ENV_CACHE_ONLY = frozenset({"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"})
 ENV_EXECUTOR_PREFIX = "UNIT_EXECUTOR_"

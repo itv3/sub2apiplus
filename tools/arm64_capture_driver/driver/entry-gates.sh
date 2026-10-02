@@ -9,7 +9,12 @@
 #     pre-A3 认证已有、或有工具身份与策略未变的可复用认证时沿用它，pre-A3 场景不纳入本次运行；
 #   full-gates：不含 pre-A3（部署前全量门禁，arm64-full-gates.sh 调用）；
 #   preflight：只含 make test 的组成（VC-0 预跑，vc0-gate-target.sh 调用）；
-#   pre-a3：只含 pre-A3 场景（入口门禁沿用、只有 pre-A3 要重做时编排器调用，E3-02）。测试树、部署绑定与一致性核对同 entry。
+#   pre-a3：只含 pre-A3 场景（入口门禁沿用、只有 pre-A3 要重做时编排器调用，E3-02）。测试树、部署绑定与一致性核对同 entry；
+#   regression：定向回归（E4-01，修复轮的部署前提）：只含采集工具测试组，全集通过下只执行静态依赖闭包里有改动文件的测试
+#     单元；改动落在闭包选不出的地方（后端、前端、文档、出站规格）时用 --with-gates <门禁项,…> 人工补门禁项。
+# --with-gates（E4-01）：给任一组合补门禁项（pre-A3 除外），逗号分隔。
+# --require-deployed（E4-01）：任一组合都先核对数据根部署的就是本提交（含 pre-A3 的组合本来就核对）；后台验证用它把结论
+#   绑定到这次部署。
 # pre-A3（E3-02）：场景单元的命令只带场景名与固定的场景父目录 $D/staging/pre-a3-scenarios，可以承接；认证从本次运行的
 #   清单 executor/unit-manifest.json 与记录库组装（pre-a3-path-certification/v2），每个场景引用一条正式执行记录。
 # 隔离：测试树里的单元在私有挂载命名空间里遮住 /root/oauth-capture（与 lib.sh 的 isolated_run 同一做法），树外只读字节码
@@ -31,7 +36,8 @@
 #   executor/（执行器记录与逐单元日志）、executor.log。不写候选门禁目录、候选目录、时间账本与 Campaign，零模型请求。
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
-#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3] [--out <主体目录>] \
+#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
+#     [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] \
 #     [--record-store <单元执行记录库>] [--audit-reads] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
@@ -45,17 +51,20 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] [--audit-reads] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] [--audit-reads] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
 PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=full-set-pass; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
+WITH_GATES=""; REQUIRE_DEPLOYED=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --mode) MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --record-store) STORE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --audit-reads) AUDIT_READS=true; shift ;;
+    --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
     --policy-activation) POLICY_ACTIVATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-certification) PRE_A3_CERTIFICATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-mode) PRE_A3_SOURCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -69,7 +78,8 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 2; fi
 PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/frontend}"
-case "$PROFILE" in entry|full-gates|preflight|pre-a3) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
+case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
+if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gates 是逗号分隔的门禁项：$WITH_GATES" >&2; exit 2; fi
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
@@ -129,9 +139,9 @@ echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
 
-PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""
-if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
-  echo "=== pre-A3 认证：部署绑定与沿用判断 $(utc_now)"
+# 部署绑定：数据根部署的必须就是本提交。含 pre-A3 的组合必做（入口门禁验的是测试树，pre-A3 跑的是数据根的受管树）；
+# 其余组合带 --require-deployed 时也做（后台验证据此把结论绑定到这次部署，E4-01）。设置 DEPLOY（最新部署收据）。
+check_deployed() {
   DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path
@@ -140,7 +150,7 @@ module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])
 PYDEPLOY
 )
-  # 入口门禁验的是测试树，pre-A3 跑的是数据根的受管树：两者必须是同一提交（部署收据的整树摘要等于测试树受管树）。
+  # 部署收据的整树摘要等于测试树受管树。
   TREE_FILES=$(cd "$TREE" && env -u CODEX_UPGRADE_IDENTITY_MEMO PYTHONPATH=. PYTHONPYCACHEPREFIX="$PYC" python3 -c \
     "from tools.official_client_capture import codex_upgrade_policy_certification as pc; print(pc.current_identity()['tool_files_sha256'])")
   DEPLOY_FILES=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['tool_files_sha256'])" "$DEPLOY")
@@ -150,13 +160,23 @@ PYDEPLOY
     exit 3
   fi
   # E2-05：整树摘要不含测试目录，也不含指南与部署脚本副本，只比它会放过「测试改了、还没重新部署」（10-02 实测数据根
-  # 的测试比测试树旧两个文件，整树摘要却相等）。入口门禁在测试树验过的，必须就是 pre-A3 在数据根实际跑的那一份：受管
+  # 的测试比测试树旧两个文件，整树摘要却相等）。入口门禁在测试树验过的，必须就是数据根实际部署的那一份：受管
   # 整树（含测试，不计字节码）、两份指南、部署脚本副本逐项比内容摘要。
   if ! MISMATCH=$(python3 -B "$DRV/entry_steps.py" deploy-consistency --tree "$TREE" --data-root "$D"); then
     echo "数据根与本提交不一致：${MISMATCH}（整树摘要相同也不行）：先受监督部署本提交并同步部署脚本副本，再跑入口门禁"
     echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
     exit 3
   fi
+}
+PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""; DEPLOY=""
+if [ "$PROFILE" != entry ] && [ "$PROFILE" != pre-a3 ] && [ "$REQUIRE_DEPLOYED" = true ]; then
+  echo "=== 部署绑定 $(utc_now)"
+  check_deployed
+  echo "数据根部署的就是本提交：部署收据 ${DEPLOY}"
+fi
+if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
+  echo "=== pre-A3 认证：部署绑定与沿用判断 $(utc_now)"
+  check_deployed
   # 激活认证缺失时才签（先补兼容收据）；编排器传入现成的激活认证时这里什么都不写。
   if [ ! -f "$POLICY_ACTIVATION" ]; then
     [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
@@ -215,7 +235,7 @@ mkdir -p "$STORE"; chmod 700 "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
-    --output "$OUT/gates-manifest.json" ) | cut -c1-400
+    --with-gates "$WITH_GATES" --output "$OUT/gates-manifest.json" ) | cut -c1-400
 echo "=== 一次运行：统一调度执行器 run-gates（模式 ${MODE}，记录库 ${STORE}，记录 ${OUT}/executor）$(utc_now)"
 EXEC_RC=0
 AUDIT_ARGS=()
@@ -232,8 +252,23 @@ python3 -B "$DRV/entry_gates.py" export --manifest "$OUT/gates-manifest.json" --
   --subject "$SUBJECT" --round "$ROUND" --target-version "${TARGET_VERSION:-}" --tree "$TREE" --isolation "$ISOLATION" \
   --host "$(hostname -s)" --architecture "$(python3 -c 'import platform; print(platform.system().lower() + "/" + platform.machine())')" \
   --bytecode-cache "$PYC" --source "bundle=$PBUNDLE" --source "branch=$PBRANCH" --source "commit=$PCOMMIT" --source "tree_head=$TREE_HEAD" \
-  --source "history_test_tree=$HISTORY_TEST_TREE" --source "node_modules_source=$NM_DIR/node_modules" --source "pre_a3=$PRE_A3_MODE" | cut -c1-600
+  --source "history_test_tree=$HISTORY_TEST_TREE" --source "node_modules_source=$NM_DIR/node_modules" --source "pre_a3=$PRE_A3_MODE" \
+  --source "deploy_receipt=$DEPLOY" | cut -c1-600
 GATES_STATUS=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$OUT/entry-gates.json")
+if [ "$PROFILE" = regression ]; then
+  # 定向回归选出了哪些测试单元；一个都没选出时提示人工补门禁项（改动不在任何测试单元的静态依赖闭包里）。
+  python3 -B - "$OUT/executor/unit-manifest.json" "$WITH_GATES" <<'PYREG'
+import json, sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+executed = [unit["unit_id"] for unit in manifest["units"] if unit["disposition"] == "executed" and unit["unit_id"].startswith("capture:")
+            and unit["unit_id"] != "capture:prerequisites"]
+print(f"定向回归：执行 {len(executed)} 个测试单元（静态依赖闭包里有改动文件的）{executed[:8]}，承接 {manifest['counts']['inherited']} 个；"
+      f"人工补的门禁项：{sys.argv[2] or '无'}")
+if not executed and not sys.argv[2]:
+    print("提示：这次改动没有落在任何测试单元的静态依赖闭包里。改动若在后端、前端、文档或出站规格，用 --with-gates 人工补门禁项"
+          "（如 backend-go-test、frontend-critical、check-egress-spec）；全量门禁由后台验证跑")
+PYREG
+fi
 else
   echo "=== 本次没有要执行的单元（pre-A3 认证 ${PRE_A3_MODE}）$(utc_now)"
 fi

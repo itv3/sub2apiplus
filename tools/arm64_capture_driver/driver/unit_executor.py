@@ -2000,10 +2000,23 @@ def _run_gates(args: argparse.Namespace) -> int:
         os.close(lock)
 
 
+def _terminate_like_interrupt() -> None:
+    """SIGTERM 与 Ctrl-C 一样走中断清理：调度器 ``abort`` 终止全部在跑单元（整个会话）、不留后台进程，退出码 143。
+    单元各自成会话，原来 SIGTERM 直接结束调度进程、单元会留在后台继续占核；修复轮停下上一轮的后台验证（E4-01）靠这一条。"""
+
+    def handler(signum: int, _frame: Any) -> None:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)   # 清理期间不再被打断
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+
+
 def main(argv: list[str] | None = None) -> int:
     # 调度进程 discover 时会导入全部测试模块，同样不能在树里写字节码（单元子进程经环境变量禁写）。
     sys.dont_write_bytecode = True
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if args.command in ("run", "run-commands", "run-gates"):
+        _terminate_like_interrupt()
     try:
         if args.command == "run-unit":
             return run_unit(args.start, args.tests_file, args.result)
