@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -91,7 +92,9 @@ class EntryDryRunTests(unittest.TestCase):
         self.entry.write_text(FAKE_ENTRY, encoding="utf-8")
         self.configure()
         self.state = self.root / "executor-state"
-        self.environ = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_STATE_DIR": str(self.state)}
+        # 开跑前的日常维护会清 Go 编译缓存、看根盘：替身环境里关掉（不碰开发机的缓存与磁盘），专门的用例另开。
+        self.environ = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_STATE_DIR": str(self.state),
+                        "ENTRY_DRYRUN_HOUSEKEEPING": "off"}
 
     def configure(self, **config: object) -> None:
         (self.entry_dir / "fake-entry.json").write_text(json.dumps({"passed": ["entry-preflight", "entry-gates", "pre-a3"], **config}),
@@ -203,6 +206,44 @@ class EntryDryRunTests(unittest.TestCase):
         self.assertFalse(bv._pid_alive(entry_pid), "编排器整组终止")
         time.sleep(1)
         self.assertEqual(dr._read(Path(result))["status"], "superseded", "后台 run 收尾时不改写")
+
+    def test_housekeeping_runs_first_and_a_disk_over_the_line_stops_the_dry_run(self) -> None:
+        """开跑前先做日常维护（Go 编译缓存旧条目、记录库、空跑留存），根盘越过停线就不跑：结论 failed、没通过的一步记 disk，
+        不建演练根、编排器不启动。「越过停线」用参数文件的 MIN_FREE_GIB 抬高门槛造出来；Go 缓存指向临时目录。"""
+
+        gocache = self.root / "gocache"
+        (gocache / "ab").mkdir(parents=True)
+        old, fresh = gocache / "ab" / "old-a", gocache / "ab" / "fresh-d"
+        for path in (old, fresh):
+            path.write_bytes(b"x")
+        stale = time.time() - 7 * 3600
+        os.utime(old, (stale, stale))
+        for day in range(1, 7):
+            (self.data / "staging" / f"entry-dryrun-202610{day:02d}t000000z").mkdir(parents=True)
+        env_file = self.root / "env-high-floor.sh"
+        env_file.write_text(re.sub(r"^MIN_FREE_GIB=.*$", 'MIN_FREE_GIB="99999999"', self.fixture.env_file.read_text(encoding="utf-8"),
+                                   flags=re.M), encoding="utf-8")
+        environ = {key: value for key, value in self.environ.items() if key != "ENTRY_DRYRUN_HOUSEKEEPING"}
+        started = subprocess.run([sys.executable, "-B", str(MODULE), "start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                                  "--vc-env", str(env_file), "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test",
+                                  "--commit", COMMIT, "--entry", str(self.entry)],
+                                 capture_output=True, text=True, timeout=120, env={**environ, "GOCACHE": str(gocache)})
+        self.assertEqual(started.returncode, 0, started.stderr)
+        result = Path(json.loads(started.stdout.strip().splitlines()[-1])["result"])
+        payload = self.wait(str(result))
+        self.assertEqual((payload["status"], payload["failed_steps"]), ("failed", ["disk"]), payload)
+        self.assertIn("根盘越过停线", payload["reason"])
+        self.assertIsNone(payload["rehearsal_root"])
+        self.assertEqual(self.calls(), [], "越过停线不启动编排器")
+        self.assertFalse(old.exists(), "6 小时以上没用过的 Go 缓存条目删掉")
+        self.assertTrue(fresh.exists())
+        summary = payload["housekeeping"]
+        self.assertEqual((summary["go_cache"]["removed_files"], summary["record_store"]["status"], summary["dryruns"]["removed"]),
+                         (1, "absent", 1), summary)
+        self.assertFalse((self.data / "staging" / "entry-dryrun-20261001t000000z").exists(), "空跑只留最近 5 次")
+        report = json.loads(result.with_name(f"{result.stem}.housekeeping.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["disk"]["ok"])
+        self.assertEqual(report["disk"]["min_free_gib"], 99999999)
 
     def test_never_reaches_the_vc0_closeout(self) -> None:
         refused = self.start("--to", "vc0-closeout")

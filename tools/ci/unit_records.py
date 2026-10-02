@@ -12,7 +12,8 @@
   输入明细与摘要（类别同 E2-05）、测试 ID 与逐个结论、退出状态、是否被信号终止、是否超时、用量、日志摘要、起止
   时间、自摘要。
 * **记录库**（``--record-store``）：``records/<单元 ID 摘要前 16 位>/<记录自摘要>.json`` 按内容寻址、只增不改；日志按
-  内容摘要存 ``logs/<sha256>.log``；每次运行的清单存 ``runs/<run_id>.json``（自检通过才存）。
+  内容摘要存 ``logs/<sha256>.log``；每次运行的清单存 ``runs/<run_id>.json``（自检通过才存）。清理由入口日常维护
+  （``entry_housekeeping.py``，E4-02）做：保留期内写入的与仍被 v2 认证、P0 v2 证据引用的运行连同其记录与日志都留着。
 * **承接**（只在 ``run-gates``、给了记录库、模式为全集通过时）：见 ``check_record``——逐条核对上面每一项，另外要求
   该记录所在运行的清单把它列为这个单元的正式执行、日志在库且摘要相符；拿不准就执行。
 * **输入**：仓库内容按 ``git ls-files`` 的跟踪文件逐个算 sha256（承接模式要求测试树干净）。采集工具测试单元＝受管
@@ -649,12 +650,19 @@ def _bucket(unit_id: str) -> str:
 
 
 def _publish(directory: Path, name: str, data: bytes) -> Path:
-    """按内容寻址发布：先写临时文件再 link 成正式名（已存在即同名同内容，读的一方核对摘要），只增不改。"""
+    """按内容寻址发布：先写临时文件再 link 成正式名（已存在即同名同内容，读的一方核对摘要），内容只增不改。
+
+    已有同名文件时刷新它的修改时间（续期）：同样的日志会被新记录再次引用，记录库清理（``entry_housekeeping``，E4-02）按
+    修改时间判断新旧，移走后会复查修改时间，期间被续期的放回原处。恰好已被移走就照常重新写入。"""
 
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     final = directory / name
     if final.exists():
-        return final
+        try:
+            os.utime(final)
+            return final
+        except FileNotFoundError:
+            pass
     temporary = directory / f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:

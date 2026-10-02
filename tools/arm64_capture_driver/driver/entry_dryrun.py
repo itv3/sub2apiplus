@@ -15,6 +15,11 @@
   ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库：刚由后台验证（E4-01）验过的单元输入没变就承接，不重复劳动。
 * 让路：有采集在跑（统一调度执行器的整机预约有存活的申请方）就不起，记 ``yielded``；空跑不申请整机，不能挡采集——门禁单元
   本来就会被采集预约停派。
+* 开跑前的日常维护（``entry_housekeeping.py``）：清 Go 编译缓存里 6 小时以上没用过的条目、清理单元执行记录库（保留期内与仍被
+  v2 认证、P0 v2 证据引用的都留着）、只留最近 5 次空跑的演练根与产物，再查根盘余量；越过停线（与派发前守卫同一条）就不跑，
+  结论 failed、没通过的一步记 ``disk``。维护报告摘要写进结论的 ``housekeeping``，全文在结论旁的 ``<结论名>.housekeeping.json``。
+  环境变量 ``ENTRY_DRYRUN_HOUSEKEEPING=off`` 跳过维护（只给测试的替身环境用：不能碰开发机的 Go 缓存、不能看开发机的磁盘；
+  驱动不设）。
 * 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute].json``，状态 running／passed／
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置。同一提交＋同一部署（同一种
   空跑）已有在跑或已有结论就不重复跑。
@@ -251,6 +256,45 @@ def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     return root, runroot, env_file
 
 
+def _housekeeping(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """开跑前的日常维护（见模块说明），返回报告；全文另写到结论旁。根盘停线的操作员阈值取本轮参数文件的 MIN_FREE_GIB。"""
+
+    keeper = _sibling("entry_housekeeping")
+    minimum = keeper.MIN_FREE_GIB
+    with contextlib.suppress(OSError, ValueError, TypeError, DryRunError):
+        minimum = float(_parse_env().parse(Path(payload["vc_env"]).read_text(encoding="utf-8")).get("MIN_FREE_GIB") or minimum)
+    busy = set()
+    for _other, current in results(Path(payload["runroot"])):
+        if effective_status(current) == "running":
+            for key in ("rehearsal_root", "dryrun_runroot"):
+                matched = re.search(r"(\d{8}t\d{6}z)$", str(current.get(key) or ""))
+                if matched:
+                    busy.add(matched.group(1))
+    report = keeper.run(data_root=Path(payload["data_root"]), runroot=Path(payload["runroot"]), min_free_gib=minimum, busy_dryruns=busy)
+    _write_plain(path.with_name(f"{path.stem}.housekeeping.json"), report)
+    return report
+
+
+def _housekeeping_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    go, store, dryruns = (report.get(key) or {} for key in ("go_cache", "record_store", "dryruns"))
+    counts = store.get("counts") or {}
+    return {
+        "go_cache": {key: go.get(key) for key in ("status", "removed_files", "removed_bytes", "error") if key in go},
+        "record_store": {"status": store.get("status"), "error": store.get("error"), "referenced_runs": store.get("referenced_runs"),
+                         "removed": {kind: row.get("removed") for kind, row in counts.items()},
+                         "removed_bytes": sum(int(row.get("removed_bytes") or 0) for row in counts.values())},
+        "dryruns": {"status": dryruns.get("status"), "removed": len(dryruns.get("removed") or []), "error": dryruns.get("error")},
+        "disk": report.get("disk"),
+    }
+
+
+def _write_plain(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 def _orchestrator_run(runroot: Path) -> dict[str, Any] | None:
     runs = sorted((runroot / "entry-runs").glob("*/run.json"))
     if not runs:
@@ -260,18 +304,45 @@ def _orchestrator_run(runroot: Path) -> dict[str, Any] | None:
     return None
 
 
+def _update(path: Path, **fields: Any) -> dict[str, Any] | None:
+    """结论还是 running 才写入（被 stop 标为 superseded 的不再改写），返回写入后的结论；不是 running 返回 None。"""
+
+    current = _read(path)
+    if current is None or current.get("status") != "running":
+        return None
+    updated = {**current, **fields}
+    _write(path, updated)
+    return updated
+
+
 def run(result: Path) -> int:
     path = Path(result)
     payload = _read(path)
     if payload is None:
         raise DryRunError(f"空跑结论文件不可读：{path}")
+    if os.environ.get("ENTRY_DRYRUN_HOUSEKEEPING") == "off":
+        report: dict[str, Any] = {"status": "skipped", "reason": "ENTRY_DRYRUN_HOUSEKEEPING=off"}
+    else:
+        try:
+            report = _housekeeping(path, payload)
+        except Exception as error:   # 维护本身出错不挡空跑，记下来
+            report = {"status": "error", "error": f"{type(error).__name__}: {error}"}
+    disk = report.get("disk") or {}
+    payload = _update(path, housekeeping=_housekeeping_summary(report) if disk else report)
+    if payload is None:
+        return 0   # 已被 stop 标为 superseded
+    if disk and not disk.get("ok"):
+        _update(path, status="failed", completed_at_utc=_utc_now(), failed_steps=["disk"],
+                reason=_sibling("entry_housekeeping").disk_reason(disk))
+        return 0
     try:
         root, runroot, env_file = _prepare(payload)
     except (DryRunError, OSError, subprocess.SubprocessError) as error:
-        _write(path, {**payload, "status": "failed", "completed_at_utc": _utc_now(), "reason": f"演练根没准备好：{error}"})
+        _update(path, status="failed", completed_at_utc=_utc_now(), reason=f"演练根没准备好：{error}")
         return 0
-    payload = {**payload, "rehearsal_root": str(root), "dryrun_runroot": str(runroot), "env_file": str(env_file)}
-    _write(path, payload)
+    payload = _update(path, rehearsal_root=str(root), dryrun_runroot=str(runroot), env_file=str(env_file))
+    if payload is None:
+        return 0
     argv = ["env", "-i", "HOME=/root", "LANG=C.UTF-8", f"PATH={CLEAN_PATH}", f"ARM64_VC_ENV={env_file}",
             "bash", str(payload["entry"]), "--to", payload["to"]]
     if payload.get("opening"):
@@ -287,11 +358,8 @@ def run(result: Path) -> int:
     failed = [step for step in steps if step["status"] == "failed" or step["action"] in ("阻塞", "被阻塞")]
     status = "passed" if returncode == 0 and not failed and summary else "failed"
     reason = None if status == "passed" else (summary.get("stopped_because") or f"入口编排器退出码 {returncode}，日志 {log}")
-    current = _read(path) or payload
-    if current.get("status") != "running":
-        return 0   # 已被 stop 标为 superseded
-    _write(path, {**current, "status": status, "completed_at_utc": _utc_now(), "exit_code": returncode, "log": str(log),
-                  "steps": steps, "failed_steps": [step["step_id"] for step in failed], "reason": reason})
+    _update(path, status=status, completed_at_utc=_utc_now(), exit_code=returncode, log=str(log), steps=steps,
+            failed_steps=[step["step_id"] for step in failed], reason=reason)
     return 0
 
 
