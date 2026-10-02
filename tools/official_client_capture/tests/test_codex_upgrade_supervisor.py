@@ -40,6 +40,11 @@ from tools.official_client_capture.codex_upgrade_supervisor import (
 # worker 丢失／会话挂断必须在心跳失联判定（DEFAULT_HEARTBEAT_SECONDS × 1.25 = 6.25 秒）之前被检测到。
 # 2 秒既能证明走的是即时检测路径，又给 CI runner 的进程调度留出余量；0.5 秒曾在 CI 上以 2.6 毫秒之差误判。
 IMMEDIATE_DETECTION_SECONDS = 2.0
+# 测试进程里直接跑 campaign-run（_campaign_run_locked）时，被测代码建的监督器客户端允许看门狗终止 owner，而 owner 就是
+# 测试进程本身：看门狗时限 0.5 秒时，CI runner 卡顿半秒就把整个测试进程 SIGTERM（2026-10-02 CI run 36996599305 分片 4
+# 第 1 次：被杀时在跑 test_parent_uses_action_diagnostic_failure_class_for_pause，这一片约 900 个用例的结果全丢）。心跳
+# 0.05 秒，5 秒只是失联判定的上限，正常路径不变慢；这些用例的断言都与看门狗无关。
+IN_PROCESS_WATCHDOG_SECONDS = 5
 
 
 
@@ -337,7 +342,10 @@ class SupervisorTests(unittest.TestCase):
         *,
         actions: list[dict[str, object]],
         no_op: bool = False,
-        watchdog_timeout_seconds: float = 0.5,
+        # 默认 5 秒（原 0.5 秒）：campaign-run 子进程的看门狗把它自己判失联、终止后什么都不打印，用例读标准输出就撞上
+        # 空 JSON（2026-10-02 CI run 36996599305 分片 4 第 2 次：test_action_diagnostic_preserves_enumerated_failure_observations）。
+        # 心跳 0.05 秒，时限只是上限；要测短时限的用例显式传入。
+        watchdog_timeout_seconds: float = 5,
     ) -> subprocess.CompletedProcess[str]:
         script = Path(__file__).parents[1] / "codex_upgrade_supervisor.py"
         manifest = self._write_campaign_run_manifest(
@@ -2407,7 +2415,7 @@ raise SystemExit(9)
             )
             args = argparse.Namespace(
                 heartbeat_seconds=0.05,
-                watchdog_timeout_seconds=0.5,
+                watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
                 ledger_interval_seconds=0.05,
             )
             first_returncode, first_payload = supervisor._campaign_run_locked(
@@ -2697,12 +2705,12 @@ raise SystemExit(9)
         with tempfile.TemporaryDirectory() as directory:
             # 修好接着跑第 34 项扩展：默认 deadline 5 秒在 ARM64 慢机上会在两次 exec 之间耗尽，
             # 第二次 exec 被“剩余预算不足以容纳动作和终态排空窗口”拒绝（返回 1 而不是 3）。
-            # 预算放大到 20 秒只改时间量级，不改“同一操作第二次失败必须停线”的被测条件；
-            # 初始 planning 窗口 2 秒同样是第一次 exec 启动的紧约束，一并放到 6 秒。
+            # 预算放大只改时间量级，不改“同一操作第二次失败必须停线”的被测条件；初始 planning 窗口同样是第一次
+            # exec 启动的紧约束。2026-10-02 CI 慢机上同类用例 6／20 秒仍不够（run 36996599305），统一放到 15／40 秒。
             payload = self._campaign_start(
                 Path(directory),
-                initial_timeout=6,
-                deadline_seconds=20,
+                initial_timeout=15,
+                deadline_seconds=40,
             )
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
@@ -2711,12 +2719,12 @@ raise SystemExit(9)
                 returncode=3,
             )
             # 两层 Python 进程启动在慢机上可能接近 3 秒；以下都只是上限，不放慢正常路径。
-            process.communicate(timeout=10)
+            process.communicate(timeout=30)
             self.assertEqual(process.returncode, 3)
             activity = self._wait_campaign_activity(
                 run_dir,
                 classification="planning",
-                timeout=5,
+                timeout=15,
             )
             self.assertEqual(activity["operation"], "failure-diagnosis")
             state = json.loads(
@@ -2729,9 +2737,9 @@ raise SystemExit(9)
                 operation="nonzero-exit",
                 returncode=3,
             )
-            repeated.communicate(timeout=10)
+            repeated.communicate(timeout=30)
             self.assertEqual(repeated.returncode, 3)
-            state = self._wait_campaign_state(run_dir, {"failed"}, timeout=5)
+            state = self._wait_campaign_state(run_dir, {"failed"}, timeout=15)
             self.assertEqual(state["state"], "failed")
             events = (run_dir / "events.ndjson").read_text(encoding="utf-8")
             self.assertIn('"reason":"returncode=3"', events)
@@ -2909,19 +2917,20 @@ raise SystemExit(9)
         with tempfile.TemporaryDirectory() as directory:
             # 开场时限只放宽上限、不放慢正常路径：两层 Python 进程启动在繁忙机器上可能超过 2 秒，
             # 首个派发窗口 2 秒、截止 5 秒、等“执行中”2 秒都会先到期（2026-09-30 本机低优先级挤占实测撞到
-            # “未在预算内进入 active”）；与重复失败停线用例同样放到 6／20／10 秒，被测的即时检测断言不变。
-            payload = self._campaign_start(Path(directory), initial_timeout=6, deadline_seconds=20)
+            # “未在预算内进入 active”）；与重复失败停线用例同样放宽，被测的即时检测断言不变。2026-10-02 CI 慢机上
+            # 6／20／10 秒仍不够（run 36996599305 分片 4 第 2 次：SIGKILL 用例未在预算内进入 active），放到 15／40／30 秒。
+            payload = self._campaign_start(Path(directory), initial_timeout=15, deadline_seconds=40)
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
                 operation="sigkill-exit",
-                sleep_seconds=10,
+                sleep_seconds=30,
             )
             activity = self._wait_campaign_activity(
                 run_dir,
                 classification="active",
                 require_command_pid=True,
-                timeout=10,
+                timeout=30,
             )
             started = time.monotonic()
             os.kill(process.pid, signal.SIGKILL)
@@ -2943,19 +2952,20 @@ raise SystemExit(9)
         with tempfile.TemporaryDirectory() as directory:
             # 开场时限只放宽上限、不放慢正常路径：两层 Python 进程启动在繁忙机器上可能超过 2 秒，
             # 首个派发窗口 2 秒、截止 5 秒、等“执行中”2 秒都会先到期（2026-09-30 本机低优先级挤占实测撞到
-            # “未在预算内进入 active”）；与重复失败停线用例同样放到 6／20／10 秒，被测的即时检测断言不变。
-            payload = self._campaign_start(Path(directory), initial_timeout=6, deadline_seconds=20)
+            # “未在预算内进入 active”）；与重复失败停线用例同样放宽，被测的即时检测断言不变。2026-10-02 CI 慢机上
+            # 6／20／10 秒仍不够（run 36996599305 分片 4 第 2 次：SIGKILL 用例未在预算内进入 active），放到 15／40／30 秒。
+            payload = self._campaign_start(Path(directory), initial_timeout=15, deadline_seconds=40)
             run_dir = Path(str(payload["run_dir"]))
             process = self._campaign_exec_process(
                 run_dir,
                 operation="session-hangup",
-                sleep_seconds=10,
+                sleep_seconds=30,
             )
             self._wait_campaign_activity(
                 run_dir,
                 classification="active",
                 require_command_pid=True,
-                timeout=10,
+                timeout=30,
             )
             started = time.monotonic()
             os.kill(process.pid, signal.SIGHUP)
@@ -3279,7 +3289,7 @@ raise SystemExit(9)
             returncode, payload = supervisor._campaign_run_locked(
                 argparse.Namespace(
                     heartbeat_seconds=0.05,
-                    watchdog_timeout_seconds=0.5,
+                    watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
                     ledger_interval_seconds=0.05,
                 ),
                 manifest=manifest,
@@ -3465,7 +3475,7 @@ raise SystemExit(9)
         returncode, payload = supervisor._campaign_run_locked(
             argparse.Namespace(
                 heartbeat_seconds=0.05,
-                watchdog_timeout_seconds=0.5,
+                watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
                 ledger_interval_seconds=0.05,
             ),
             manifest=manifest,
@@ -3939,7 +3949,7 @@ raise SystemExit(9)
             returncode, payload = supervisor._campaign_run_locked(
                 argparse.Namespace(
                     heartbeat_seconds=0.05,
-                    watchdog_timeout_seconds=0.5,
+                    watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
                     ledger_interval_seconds=0.05,
                 ),
                 manifest=manifest,
@@ -4292,7 +4302,7 @@ raise SystemExit(9)
                 returncode, payload = supervisor._campaign_run_locked(
                     argparse.Namespace(
                         heartbeat_seconds=0.05,
-                        watchdog_timeout_seconds=0.5,
+                        watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
                         ledger_interval_seconds=0.05,
                     ),
                     manifest=manifest,
