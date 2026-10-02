@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "039647d58f4e2a18c831dc00219e3c8ffbab38b9f09c1dd350ad17a7a24c5dea",
+      "sha256": "3f5da061c61d4fc490b50cd866bcc0a3dc7ec6c8e3282a04cdf3cb0a66cd7034",
       "mode": "0700",
-      "bytes": 26619
+      "bytes": 26553
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -441,5 +441,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "9b569203eab939c7973f99949caae1f5cd8c49100b2f63991d4524aee9284e16"
+  "manifest_sha256": "11f6164ba89905ec321a6bcbc9ba8e5a70a0fcd07653456f5ab84a5c97379648"
 }

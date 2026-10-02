@@ -260,8 +260,7 @@ if [ "$PROFILE" = regression ]; then
   python3 -B - "$OUT/executor/unit-manifest.json" "$WITH_GATES" <<'PYREG'
 import json, sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-executed = [unit["unit_id"] for unit in manifest["units"] if unit["disposition"] == "executed" and unit["unit_id"].startswith("capture:")
-            and unit["unit_id"] != "capture:prerequisites"]
+executed = [unit["unit_id"] for unit in manifest["units"] if unit["disposition"] == "executed" and unit.get("unit_type") == "test"]
 print(f"定向回归：执行 {len(executed)} 个测试单元（静态依赖闭包里有改动文件的）{executed[:8]}，承接 {manifest['counts']['inherited']} 个；"
       f"人工补的门禁项：{sys.argv[2] or '无'}")
 if not executed and not sys.argv[2]:

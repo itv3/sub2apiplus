@@ -596,8 +596,8 @@ status = "failed" if os.environ.get("FC_REGRESSION_FAIL") == "1" else "passed"
 (out / "entry-gates.json").write_text(json.dumps({"status": status, "gates": [{"gate_id": "test-capture-tools", "status": status}],
                                                   "source": {"commit": argv[-1]}}))
 (out / "executor" / "unit-manifest.json").write_text(json.dumps({"units": [
-    {"unit_id": "capture:test_fc_item", "disposition": "executed"}, {"unit_id": "capture:test_other", "disposition": "inherited"}],
-    "counts": {"inherited": 1}}))
+    {"unit_id": "test_fc_item", "unit_type": "test", "disposition": "executed"},
+    {"unit_id": "test_other", "unit_type": "test", "disposition": "inherited"}], "counts": {"inherited": 1}}))
 sys.exit(0 if status == "passed" else 1)
 PY
 '''
@@ -1324,7 +1324,7 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertFalse((fixture.out / "item-tests.json").exists())
         resumed = fixture.run("--from", "regression")
         self._assert_ok(resumed)
-        self.assertEqual(fixture.step("regression")["summary"]["executed"], ["capture:test_fc_item"])
+        self.assertEqual(fixture.step("regression")["summary"]["executed"], ["test_fc_item"])
         self.assertEqual(fixture.call_keys().count("arm64_supervised_deploy"), 1, "部署不重做")
 
     def test_without_item_tests_the_round_relies_on_the_regression_selection(self) -> None:
