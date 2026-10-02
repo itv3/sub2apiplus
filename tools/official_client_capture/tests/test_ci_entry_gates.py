@@ -197,7 +197,9 @@ class EntryGatesPlanTests(unittest.TestCase):
             self.assertTrue(alpha.get("inheritable", True))
             inputs = alpha["inputs"]
             self.assertEqual([item["name"] for item in inputs["ranges"]], ["repo:managed", "repo:tests-fixtures", "repo:docs"])
-            self.assertEqual(inputs["files"], [{"category": "managed", "path": "tools/arm64_supervised_deploy.py"}])
+            self.assertEqual(inputs["files"], [{"category": "managed", "path": "tools/arm64_supervised_deploy.py"},
+                                               *({"category": "tests", "path": fixture} for fixture in eg.PRE_A3_RUNNER_FIXTURES)],
+                             "部署脚本副本与场景运行器模块级导入的夹具（E3-04）")
             self.assertEqual((inputs["test_modules"], inputs["resolved"]), (["tools/official_client_capture/tests/test_alpha.py"], resolved))
             self.assertNotIn("head", inputs, "场景在数据根运行，读不到 git")
             old = eg.plan_gates(tree, profile="pre-a3", launcher=LAUNCHER, pre_a3_units=self._pre_a3_units(root, data_root), platform="linux")
