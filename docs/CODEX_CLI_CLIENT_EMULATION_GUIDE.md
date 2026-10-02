@@ -1301,7 +1301,7 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 
 | 阶段 | 步骤 | 唯一详细章节 | 首跑入口 | 续跑入口 |
 |---|---|---|---|---|
-| VC-0 | 冻结升级输入 | [§4.0](#codex-vc-0) | `pre-a3.sh` → `stage1.sh` → `vc0-gate-target.sh` 预跑 → 同目标复用 `stage2.sh`，新目标 `codex_upgrade_vc0_closeout` | 哪一步失败修哪一步、从该步重跑；stage1 收尾段失败只跑 `stage1-finish.sh` |
+| VC-0 | 冻结升级输入 | [§4.0](#codex-vc-0) | 入口编排器 `entry.sh`（新目标，最后一步 VC-0 收口派发 VC-1 首批）；同目标复用走 `pre-a3.sh` → `stage1.sh` → `stage2.sh` | 重新执行同一条 `entry.sh`：按步骤记录沿用或重做，账本已建绝不重建；旧链 stage1 收尾段失败只跑 `stage1-finish.sh` |
 | VC-1 | 收集目标证据 | [§4.1](#codex-vc-1) | VC-0 收口派发首批；同目标复用 `reuse-official-evidence` | 有未收口采集预约：`reconcile-attempt` → 批准 → `resume`；否则 `reconcile-supervisor-run` 后重派 |
 | VC-2 | 逐规则判定差异 | [§4.2](#codex-vc-2) | `vc23.sh`（或同目标复用时 `pre-all.sh`） | `reconcile-supervisor-run` → `compile-and-run-vc-batch` 按批次身份重派 |
 | VC-3 | 生成目标画像 | [§4.3](#codex-vc-3) | 同 VC-2 | 同 VC-2 |
@@ -1352,18 +1352,20 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 - **失败恢复**：
   - 失败层：环境、工具或目标平台门禁预跑（尚无 Formal Campaign）。
   - 对账入口：无；按失败步骤输出的日志位置定位。
-  - 续跑入口：哪一步失败修哪一步、从该步重跑，已通过且绑定身份未变的收据不重做；stage1 收尾段失败只跑
-    `stage1-finish.sh`，不能重跑 `stage1.sh`。
+  - 续跑入口：修好后重新执行同一条 `entry.sh`，每一步按步骤记录判定沿用还是重做（输入变了、上游要重做、记录缺失或
+    被改都重做），账本已建就沿用、绝不重建；同目标复用的旧链里 stage1 收尾段失败只跑 `stage1-finish.sh`，不能重跑 `stage1.sh`。
 
 VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标 wire、不改画像或实现、不创建 candidate，也不改
 生产 selector。
 
-执行顺序如下。第 10 步中的策略兼容／激活认证与 pre-A3 路径认证由 `pre-a3.sh` 在 stage1 之前完成（账本一建 VC-0 即开始
-计时，约 55 分钟的 pre-A3 放在其后必然超时；工具身份与策略未变即复用最近一次认证，跨部署复用以 `record-reuse` 登记
-复用收据并由发布认证绑定）；第 1～9 步由
-ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh`（收尾段 `stage1-finish.sh`）完成，stage1 建账本前核验本轮
-pre-A3 认证，缺失即拒绝；第 9 步之后单独预跑一次目标平台门禁（见表后说明），通过才进入第 10 步；第 10～11 步的其余部分由 `stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
-`codex_upgrade_vc0_closeout` 重新取证，再进入 `vc23.sh`。参数全部来自每轮一份 `ARM64_VC_ENV`（见驱动链 README）。
+执行顺序如下，由 ARM64 驱动链 `tools/arm64_capture_driver` 的入口编排器 `entry.sh` 一条命令完成（参数全部来自每轮一份
+`ARM64_VC_ENV`，见驱动链 README）。账本一建 VC-0 即开始计时，所以耗时长、与账本无关的第 1～6 步放在建账本之前：它们
+一次报全（依赖失败步骤的标为阻塞），全部通过才建账本；第 7～15 步按顺序执行、失败即停。入口门禁与 pre-A3 场景在同一次
+运行里由统一调度执行器在整机额度内并行（默认全集通过：承接输入没变的单元），P0 离线门禁证据、目标平台门禁预跑记录与
+部署前全量门禁记录都取自这一次运行。续跑就是重新执行同一条命令：每一步按步骤记录判定沿用还是重做，只写一次的坐标被
+占用时换新坐标，账本已建就沿用、绝不重建；Formal 建成之后创建链冻结，只剩收口这一步。新目标首次 VC-1 由最后一步 VC-0
+收口取证，再进入 `vc23.sh`；同目标官方证据复用（`EVIDENCE_DECISION=reuse`）不经编排器，仍走 `pre-a3.sh` → `stage1.sh`
+（收尾段 `stage1-finish.sh`）→ `stage2.sh`（或 `pre-all.sh` 连同 `vc23.sh` 一次跑完）。
 
 驱动要求明确的基线／目标版本、目标画像、官方 binary／package 摘要、主／Lite 模型、账号／API Key 与三份发布认证路径；
 缺任一新身份键就拒绝，不沿用旧升级的版本、摘要、账号或认证。规则／场景／补丁路径、候选镜像仓库和 lifecycle 目录
@@ -1371,25 +1373,28 @@ pre-A3 认证，缺失即拒绝；第 9 步之后单独预跑一次目标平台�
 VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名。`GATE_MAPPING_INPUT`、目标 code-mode-host 摘要、
 固定采集镜像和 `RETIRE_VERSION` 等不可推导输入必须在对应阶段提供。
 
-| 步骤 | 做什么 | 命令或脚本 |
+| 步骤 | 做什么 | 编排器步骤与命令 |
 |---:|---|---|
-| 0 | 受管工具已受监督部署到 ARM64，驱动链已按当前部署收据安装 | `tools/arm64_supervised_deploy.py`、`tools/arm64_capture_driver/install.py install` |
-| 1 | 派发前检查：驱动安装复验、磁盘水位、项目总账；本轮 pre-A3 认证按工具身份与策略对当前部署有效（跨部署复用须已登记复用收据） | `guard.sh pre-plan`、`codex_upgrade_pre_a3_certification find-reusable --certification`／`record-reuse` |
-| 2 | 零请求 smoke | `codex_upgrade_zero_request_smoke` |
-| 3 | 建时间账本，总预算不超过项目总账截止时间 | `codex_upgrade_timing_ledger create` |
-| 4 | ARM64 环境收据（§4.0.3） | `codex_upgrade_arm64_environment_receipt collect／finalize --phase p0` |
-| 5 | 时间账本 checkpoint | `codex_upgrade_timing_ledger checkpoint` |
-| 6 | 预检 Campaign | `codex_upgrade plan --campaign-mode preflight_only` |
-| 7 | 完整 Job 演练（§4.0.3） | `codex_upgrade_job_rehearsal_receipt collect／finalize` |
-| 8 | 客户端启动探测：按目标场景清单里每类 TUI 作业的工作目录、启动参数与运行模式（含 0.157.0 起的 daemon 路径），在采集容器私有命名空间内启动目标客户端，上游指向本地替身（零真实请求），限时内发出含口令的首个 turn 请求即通过（daemon 场景另须判定为 daemon 模式）；出现交互确认（信任目录、迁移提示、登录等）或首帧超时即失败，失败阻断建 Formal Campaign | `client_launch_probe.py run／verify`（`stage1-finish.sh` 调用，`stage2.sh` 派发前复验） |
-| 9 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
-| 10 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证（这三项由 `pre-a3.sh` 在 stage1 之前完成）→ `certify_release issue／verify` |
-| 11 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`（驱动 `stage2.sh`，或 `pre-all.sh` 连同 `vc23.sh` 一次跑完；两者只收 `EVIDENCE_DECISION=reuse`），导入已封存证据后自动对齐账本；新目标首次取证或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据，之后进入 `vc23.sh` |
+| 0 | 受管工具已受监督部署到 ARM64，驱动链已按当前部署收据安装；入口门禁的源码坐标（`ENTRY_BUNDLE`、`ENTRY_BRANCH`、`ENTRY_COMMIT`）就是部署的这一份提交 | `tools/arm64_supervised_deploy.py`、`tools/arm64_capture_driver/install.py install` |
+| 1 | 便宜检查：参数与身份键、驱动安装复验、部署绑定、磁盘水位、项目总账、目标客户端与镜像等，逐项一次报全 | `entry-preflight`（`entry-preflight.sh`） |
+| 2 | 策略兼容收据与策略激活认证 | `policy-compatibility`、`policy-activation`（`codex_upgrade_policy_certification`） |
+| 3 | 入口门禁与 pre-A3 路径认证：采集工具测试、`check-egress-spec` 全部子检查、后端三组测试、三组 lint、前端检查、部署脚本测试与 pre-A3 场景同一次运行；pre-A3 认证从单元执行记录签发，工具身份与策略未变即跨部署复用（`record-reuse` 登记复用收据，由发布认证绑定） | `entry-gates`、`pre-a3`（`entry-gates.sh`） |
+| 4 | 零请求 smoke | `zero-request-smoke`（`codex_upgrade_zero_request_smoke`） |
+| 5 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | `atomic-double`（`capture-cli` 容器内 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect`） |
+| 6 | 建时间账本，总预算不超过项目总账截止时间（VC-0 自此计时） | `ledger`（`codex_upgrade_timing_ledger create`） |
+| 7 | ARM64 环境收据（§4.0.3） | `environment-p0`（`codex_upgrade_arm64_environment_receipt collect／finalize --phase p0`） |
+| 8 | 时间账本 checkpoint | `ledger-checkpoint`（`codex_upgrade_timing_ledger checkpoint`） |
+| 9 | 预检 Campaign | `preflight-plan`（`codex_upgrade plan --campaign-mode preflight_only`） |
+| 10 | 完整 Job 演练（§4.0.3）；上一次失败且留下收据时只重跑失败的作业 | `job-rehearsal`（`codex_upgrade_job_rehearsal_receipt collect／finalize`） |
+| 11 | 客户端启动探测：按目标场景清单里每类 TUI 作业的工作目录、启动参数与运行模式（含 0.157.0 起的 daemon 路径），在采集容器私有命名空间内启动目标客户端，上游指向本地替身（零真实请求），限时内发出含口令的首个 turn 请求即通过（daemon 场景另须判定为 daemon 模式）；出现交互确认（信任目录、迁移提示、登录等）或首帧超时即失败，失败阻断建 Formal Campaign | `client-launch-probe`（`client_launch_probe.py run／verify`，收口前复验） |
+| 12 | 签发发布认证（§4.0.5） | `release-certification`（`certify_release issue／verify`） |
+| 13 | P0 门禁收据（§4.0.1）：两份离线门禁证据取自第 3 步那一次运行，签发后立即重放 | `p0-receipt`（`codex_upgrade_vc_receipt finalize／replay`） |
+| 14 | 建 Formal Campaign 并派发 VC-1 首批（§4.0.4）：派发前向统一调度执行器申请整机，收口返回后归还 | `vc0-closeout`（`codex_upgrade_vc0_closeout`）；同目标恢复用 `reuse-official-evidence`（驱动 `stage2.sh`，或 `pre-all.sh` 连同 `vc23.sh`；两者只收 `EVIDENCE_DECISION=reuse`），导入已封存证据后自动对齐账本 |
 
-**目标平台门禁预跑（第 9 步之后、第 10 步之前）。** 目标平台门禁（ARM64 上对候选测试树隔离执行 `make test`，约 40～70
-分钟）原本只在 VC-5 accept 前执行，门禁自身的问题要到那时才暴露（0.157 升级时 accept 前的门禁因此连续失败两次，连同
-修复耗掉 6.1 小时）。因此 stage1（含 `stage1-finish.sh`）通过之后、执行 `stage2.sh` 或 `codex_upgrade_vc0_closeout` 之前，
-用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁预跑一次：本机按候选提交链同一打法生成
+**目标平台门禁预跑。** 目标平台门禁（ARM64 上对候选测试树隔离执行 `make test`）原本只在 VC-5 accept 前执行，门禁自身的
+问题要到那时才暴露（0.157 升级时 accept 前的门禁因此连续失败两次，连同修复耗掉 6.1 小时），所以 VC-0 用本轮受管工具部署
+所在的提交预跑一次。入口编排器第 3 步那一次运行同时导出预跑记录 `preflight.json`（make test 的组成全部通过与否），不另跑。
+同目标复用的旧链在 stage1（含 `stage1-finish.sh`）通过之后、执行 `stage2.sh` 之前单独预跑：本机按候选提交链同一打法生成
 `git bundle create <文件> <BASE>..<分支>`（BASE 必须在 `$HISTORY_TEST_TREE` 的历史里，例如前序候选的 DC；部署受管工具时
 上传的 bundle 满足这一条件也可直接用），传到采集主机 `$RUNROOT/vc0-preflight/` 下，再执行
 `ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/vc0-gate-target.sh <bundle> <分支> <提交> > $RUNROOT/vc0-gate-target.out 2>&1 < /dev/null`
@@ -1397,7 +1402,7 @@ VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名�
 vendor；前端依赖取 `$HISTORY_TEST_TREE/frontend` 里 lockfile 相同的一份，lockfile 有变化时另装后作为第 4 个参数传入），
 门禁直接复用 `vc5-gate-target.sh`，主体标识 `vc0-preflight-<UTC 时间戳>`；环境收据、`logs/target-platform.*` 与预检摘要
 `preflight.json` 只写 `$RUNROOT/vc0-preflight/<主体标识>/`，不写候选门禁目录、时间账本与 Campaign，模型请求为零。预跑须
-单独运行，不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件）。退出 0 才进入第 10 步；退出 1（make test
+单独运行，不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件）。退出 0 才进入发布认证；退出 1（make test
 未通过，测试树保留供排查）或 3（准备失败，没有门禁结论）按 VC-0 普通失败处理：按输出里的日志位置排查，修好门禁、驱动、
 环境或源码后重跑同一命令（换新主体标识，旧结果留档）。预跑只是预检，不替代 VC-5 accept 前在候选门禁目录执行的正式
 目标平台门禁（§4.5.6），其结果也不能充当 accept 的门禁收据。
@@ -1457,9 +1462,10 @@ BWG 事实检查当前 DMIT 策略，未知 producer、篡改和缺失事实仍�
 
 完整 Job 演练会零请求地真实走一遍 `campaign-run → 父 CampaignLease → Job 失败加两次重试`，收据带
 `failure_lifecycle_probe_sha256`；campaign-run 分批演练是可选项。任一演练失败或环境漂移时，禁止建 Formal Campaign。
-客户端启动探测失败只阻断 VC-0，不产生副作用。stage1 收尾段（Job 演练收据、客户端启动探测、atomic-double 收据）任一步
-失败，修复环境后单独执行 `stage1-finish.sh` 续跑，不能重跑 `stage1.sh`（会新建账本）；已有收据的 Job 演练与 atomic-double
-直接沿用，半途中断的目录原样保留、换带时间后缀的新目录重做，启动探测每次都重跑。
+客户端启动探测失败只阻断 VC-0，不产生副作用。建账本之后的步骤（环境收据、checkpoint、预检 plan、Job 演练、启动探测）
+任一步失败，修复后重新执行 `entry.sh` 续跑：账本已建就沿用、绝不重建，已有收据的 Job 演练与 atomic-double 直接沿用，半途
+中断的坐标原样保留、换带 `-r2`、`-r3` 后缀的新坐标重做，启动探测每次都重跑。同目标复用的旧链里 stage1 收尾段失败单独
+执行 `stage1-finish.sh`，不能重跑 `stage1.sh`（会新建账本）。
 
 目标客户端要装两处：宿主机 `/opt/codex-<目标版本>` 实体目录（Job 演练在宿主机核验 relay_codex_bin：路径无符号链接、各级
 父目录 o+x、`--version` 与摘要等于目标）与 `capture-cli` 只读挂载的同名目录（compose 备份后加挂载并重建容器，核对固定 IP
@@ -1524,7 +1530,8 @@ python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
 
 它会重放环境、P0、部署收据和发布认证，要求时间账本仍是 active VC-0 且剩余不少于 300 秒，然后在同一进程内
 建 Campaign 并启动 VC-1 首批，会发送已批准的正式请求；禁止用人工 SSH 多命令或直接 `plan --campaign-mode formal`
-替代。失败时保留诊断、不自动重试、不延长 deadline，按诊断从最后合法 checkpoint 恢复。
+替代。入口编排器的最后一步就是它：参数取自参数文件与前序步骤记录，调用前向统一调度执行器申请整机（后台验证停派、等在跑
+单元结束才批准），返回后归还。失败时保留诊断、不自动重试、不延长 deadline，按诊断从最后合法 checkpoint 恢复。
 
 ### 4.0.5 受管工具发布认证
 
@@ -2090,7 +2097,7 @@ Campaign 与 candidate ID 会和场景后缀、主体及时间窗口拼成运行
 失败从哪里接着跑，按候选证据是否已封存分界。**封存前**（reservation 之后、`capture-candidate seal` 之前）
 的 Job 失败或中断：
 
-- 优先入口：`driver/fix-and-continue.sh`，一条命令完成部署、登记、对账、批准、授权与重派（§4.7“编排与驱动入口”）；
+- 优先入口：`driver/fix-and-continue.sh`，一条命令完成部署、定向回归、起后台验证、登记、对账、批准、授权与重派（§4.7“编排与驱动入口”）；
   `recover` 步只启动补跑，`vc5-run-batch.out` 出现 `RUN_BATCH_DONE` 后再接 `vc5-all.sh`。
 - 适用条件：只覆盖候选采集的非恢复段 attempt；恢复段 ar<k>、封存后评估失败等脚本不覆盖的分支走下面的受管恢复协议。
 - 受管恢复协议：先 `reconcile-attempt --campaign-dir … --attempt-id <id>` 对账并以
@@ -3464,15 +3471,21 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 policy 摘要变化、Campaign 账本已停线或已完成、官方已封存证据的官方侧受污染，以及操作员显式放弃；身份边界见
 第四部分开头[第 5 条前提](#codex-part4-premises)。进行中的 Campaign 部署新工具后先登记工具演进，再对账续跑。
 
-**修复轮的部署前提：本机全量门禁通过即部署，CI 并行。** 每一轮修复（修复 → 部署 → 登记 → 对账 → 批准 → 重派）以
-本机全量门禁通过为部署前提。本机全量门禁按仓库实际是：`make test`（后端 `go test ./...` 与不带标签的 golangci-lint、
-前端 lint／typecheck／关键 vitest、采集工具全量 `test-capture-tools`、`test-official-client-control`、含本机源码引用的
-`check-egress-spec`），加 CI test job 的后端标签测试 `make -C backend test-unit test-integration`（本机没有 Docker 时
-repository 集成测试会被跳过，这部分以 CI 为准），以及与 CI 同版本（v2.13）golangci-lint 的 `--build-tags=unit`、
-`--build-tags=integration` 两遍；改到 `deploy/` 时再加 CI shell job 的部署脚本测试。本机全部通过即推送并部署到 ARM64
-续跑，推送触发的 CI 与续跑并行，不等待 CI 结果。CI 失败时立即暂停续跑（不再批准、授权或重派；已在跑的批次先按原协议
-收口），按该轮部署收据的 `rollback_backup`（部署前受管工具树的备份）把已部署工具回滚到部署前版本，修好后再走一轮
-（本机全量门禁 → 部署 → 登记工具演进 → 对账续跑）。回滚同样走受监督部署：重新部署上一轮部署的提交并按该提交重装驱动，
+**修复轮：定向回归通过即部署接着跑，全量门禁在后台验证。** 每一轮修复（修复 → 定向回归 → 部署 → 起后台验证 → 登记 →
+对账 → 批准 → 重派）以定向回归通过为部署前提：ARM64 上入口门禁的 `regression` 组合按全集通过执行
+（`entry-gates.sh --profile regression --mode full-set-pass`），执行器只重跑静态依赖闭包里含改动文件的测试单元，其余承接
+记录库里的有效记录；改动落在闭包选不出的地方（后端、前端、文档、出站规格）时用 `--with-gates` 人工补门禁项。通过即推送并
+受监督部署，部署后立即起后台验证（`background-validate.sh start`）：同一个统一调度执行器以低优先级跑全量门禁（`full-gates`
+组合：`make test` 的全部组成、后端 `-tags=unit`／`-tags=integration` 测试、两遍带标签的 golangci-lint、部署脚本测试）的
+全集通过，门禁前核对数据根部署的就是这个提交，结论按修复提交与部署收据落在 `$RUNROOT/background-validation/`。采集批次
+开始前，`vc-batch.sh` 与 VC-0 收口先向调度器申请整机：调度器停止派发、等在跑的单元结束才批准，批次结束归还后后台接着跑，
+不和采集抢核。`vc-batch.sh` 在每个批次边界读结论：已经失败（或没有结论地中止）就拒绝派发下一批；还在跑或还没起照常派发；
+VC-5 验收（`vc5-accept.sh`）前必须已有通过的结论。下一轮修复跑定向回归之前先停下上一轮还在跑的后台验证（同一时间只能有
+一个调度器，上一轮的提交也已作废；被停下的运行执行过的单元不能被承接，下一次验证重新执行它们）。`fix-and-continue.sh` 的
+`regression` 与 `background-validate` 两步按上述顺序自动执行。推送触发的 CI 与续跑并行，不等待 CI 结果。后台验证或 CI 失败
+时立即暂停续跑（不再批准、授权或重派；已在跑的批次先按原协议收口），按该轮部署收据的 `rollback_backup`（部署前受管工具树
+的备份）把已部署工具回滚到部署前版本，修好后再走一轮（定向回归 → 部署 → 后台验证 → 登记工具演进 → 对账续跑）。收尾合入
+前重新执行全集（`entry-gates.sh --profile full-gates --mode re-execute`）。回滚同样走受监督部署：重新部署上一轮部署的提交并按该提交重装驱动，
 核对新部署收据的 `tool_files_sha256` 与上一轮部署收据相同（即 `rollback_backup` 备份的那棵树）；不要手工把备份目录换回
 生产根，否则最新部署收据与生产树不符，驱动安装复验和工具身份核对都会失败关闭。发版前仍须 CI 全绿（§4.6.4），这一条不变。
 
@@ -3740,11 +3753,12 @@ repository 集成测试会被跳过，这部分以 CI 为准），以及与 CI �
 #### 编排与驱动入口
 
 - **一条命令续跑**：`driver/fix-and-continue.sh <轮次参数文件> [--from <步骤>]` 只覆盖 VC-5 候选采集的非恢复段续跑
-  （`gen_vc5_recovery_plans.py` 拒绝 `recovery_revision` 非空的预览），按部署、部署后核对、实测、工具演进、对账前延期、
+  （`gen_vc5_recovery_plans.py` 拒绝 `recovery_revision` 非空的预览），按部署、部署后核对、定向回归、人工指定的实测（给了
+  `ITEM_TESTS` 才跑）、起后台验证、工具演进、对账前延期、
   链尾父 run 对账、目标 attempt 对账、根因修复登记、批准、授权、授权后延期、接受检查、重派的顺序执行，每步幂等、失败即停
   并给出下一步；账务暂停、环境污染、永久停线、请求预算与需审核一律停下交人，绝不补账、隔离、放弃或强制。`recover` 步只
   启动补跑（`vc5-recover.sh`），要等 `$RUNROOT/vc5-run-batch.out` 出现 `RUN_BATCH_DONE` 再接 `vc5-all.sh`。脚本里没有等待
-  CI 的步骤，部署前提与 CI 失败时的回滚见本节开头。VC-1、VC-2～VC-4 与 VC-6 不在脚本范围内，使用下表的受管入口。
+  CI 的步骤，修复轮规则与后台验证或 CI 失败时的回滚见本节开头。VC-1、VC-2～VC-4 与 VC-6 不在脚本范围内，使用下表的受管入口。
 - **编排的对账暂停登记与续跑**：受管对账器先写收据、入总账再判定暂停，暂停对象的收据核验照样通过，原先
   续跑扫描会把它当已对账跳过，暂停判定被悄悄丢掉。现在 reconcile-runs 里凡对账判暂停而停下的对象都记入续跑记忆，续跑时即使
   收据已写也重新对账；项目总账根因达上限且参数给了登记材料时，reconcile-runs 与 repair 步骤走同一登记路径（同一判据、同一
@@ -3756,21 +3770,23 @@ repository 集成测试会被跳过，这部分以 CI 为准），以及与 CI �
 
 | 阶段 | 首跑入口 | 续跑入口 |
 |---|---|---|
-| VC-0 | `pre-a3.sh`（stage1 建账本之前完成 pre-A3，工具身份与策略未变即复用最近一次认证）→ `stage1.sh` → `vc0-gate-target.sh` 预跑 | 收尾段失败单独跑 `stage1-finish.sh`；预跑失败修好后以新主体标识重跑 `vc0-gate-target.sh` |
-| VC-1～VC-3 | 同目标复用：`pre-all.sh`（`stage2.sh`＋`vc23.sh`）；新目标：`codex_upgrade_vc0_closeout` 后 `vc23.sh` | 按失败矩阵对账后重派 |
+| VC-0 | 入口编排器 `entry.sh`（建账本之前一次报全，之后按顺序执行，最后一步 VC-0 收口）；同目标复用走旧链 `pre-a3.sh` → `stage1.sh` → `vc0-gate-target.sh` 预跑 | 重新执行同一条 `entry.sh`；旧链收尾段失败单独跑 `stage1-finish.sh`，预跑失败修好后以新主体标识重跑 `vc0-gate-target.sh` |
+| VC-1～VC-3 | 同目标复用：`pre-all.sh`（`stage2.sh`＋`vc23.sh`）；新目标：`entry.sh` 的 VC-0 收口派发 VC-1 首批后 `vc23.sh` | 按失败矩阵对账后重派 |
 | VC-4 | `vc4-all.sh`＋本机 `local-vc4.sh` | `vc4-all.sh --resume-from <步骤>`（上传中断用 `upload-wait`） |
 | VC-5 | `vc5-all.sh` | `fix-and-continue.sh`＋`vc5-recover.sh`（非恢复段）；恢复段与封存后评估按受管协议 |
 
 | 入口 | 边界 |
 |---|---|
 | `pre-all.sh` | 只用于同目标官方证据复用（`stage2.sh` 只收 `EVIDENCE_DECISION=reuse`）；新目标首次取证走 `codex_upgrade_vc0_closeout`，再进 `vc23.sh` |
-| `stage1-finish.sh` | 只做 `stage1.sh` 已建账本之后的收尾续跑，此时不能重跑 `stage1.sh`（会新建账本） |
+| `stage1-finish.sh` | 同目标复用的旧链里只做 `stage1.sh` 已建账本之后的收尾续跑，此时不能重跑 `stage1.sh`（会新建账本） |
+| `background-validate.sh` | 修复提交部署之后起后台验证（`fix-and-continue.sh` 自动执行），结论绑定提交与部署收据；`vc-batch.sh` 每个批次边界读它（失败或中止即拒绝派发），`vc5-accept.sh` 要求它已通过；下一轮跑定向回归前 `stop` |
 | `fix-and-continue.sh` | 只覆盖 VC-5 候选采集的非恢复段模式；`recover` 步只启动补跑，要等 `vc5-run-batch.out` 出现 `RUN_BATCH_DONE` 再接 `vc5-all.sh` |
 | VC-1 恢复 | 按本父 run 期间是否发布了尚未完整收口的采集预约分流：有则只走 `reconcile-attempt` → 批准 → `resume`，无则走 `reconcile-supervisor-run` 后重派；已有 attempt 但采集已收口的 seal 链批次失败属后者；放行条件同失败矩阵表前说明 |
 | VC-6 恢复 | `production_replacement` 从最新合法 canonical checkpoint 按受管批次重派；`validation_only` 的 AcceptanceFact 重放失败返回 VC-5 定位；放行条件同失败矩阵表前说明 |
 
-pre-A3 跨部署复用由 `record-reuse` 登记 `pre-a3-reuse-receipt/v1`，`stage2.sh` 以 `certify_release issue --pre-a3-reuse-receipt`
-绑定进发布认证（同一部署下签发的认证不加该字段）；stage1 建账本前核验本轮认证并登记复用收据。本机 VC-4 门禁
+pre-A3 跨部署复用由 `record-reuse` 登记 `pre-a3-reuse-receipt/v1`，入口编排器的发布认证步骤（旧链里是 `stage2.sh`）以
+`certify_release issue --pre-a3-reuse-receipt` 绑定进发布认证（同一部署下签发的认证不加该字段）；入口门禁沿用已有认证前按
+同一口径复核并登记复用收据。本机 VC-4 门禁
 `driver/local/local-vc4.sh` 一开始就向采集主机发上传心跳，门禁与全量回归都完成后才上传。
 
 
