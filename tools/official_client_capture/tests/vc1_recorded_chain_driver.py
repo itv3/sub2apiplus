@@ -126,7 +126,183 @@ def plan_arguments(
 
 
 def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
-    """VC-0 收口 + VC-1 首批（Formal Campaign 沿用录制 campaign_id）。"""
+    """VC-0 收口 + VC-1 首批（Formal Campaign 沿用录制 campaign_id）。``--prepare-only`` 只建输入现场不收口。"""
+
+    from tools.official_client_capture import codex_upgrade
+
+    tree = Path(arguments.tree).resolve()
+    replay.assert_namespace(tree)
+    replay.assert_network_isolated()
+    state = _read(Path(os.environ[replay.REPLAY_STATE_ENV]))
+    replay.install_orchestrator_patches(codex_upgrade, state)
+    validated = _create_closeout_inputs(tree)
+    if arguments.prepare_only:
+        result = {"status": "passed", "prepared": True, "timing_ledger": str(validated.timing_ledger_dir)}
+        _write(_chain_dir(tree) / "init.json", result)
+        return result
+    return _run_closeout(arguments, tree, validated, run_number=1)
+
+
+def stage_closeout(arguments: argparse.Namespace) -> dict[str, Any]:
+    """E2-07：同一 Formal ID、同一账本重跑收口（续作），沿用 init 建好的输入现场；``--closeout-run`` 给审计目录编号。"""
+
+    from tools.official_client_capture import codex_upgrade
+
+    tree = Path(arguments.tree).resolve()
+    replay.assert_namespace(tree)
+    replay.assert_network_isolated()
+    state = _read(Path(os.environ[replay.REPLAY_STATE_ENV]))
+    replay.install_orchestrator_patches(codex_upgrade, state)
+    return _run_closeout(arguments, tree, _load_closeout_inputs(tree), run_number=int(arguments.closeout_run))
+
+
+def stage_mark_deployed(arguments: argparse.Namespace) -> dict[str, Any]:
+    """E2-07：副本树上模拟一次受监督部署——按当前受管身份写一份通过的部署收据（时间取现在）与离线回归收据，
+    供上限后的恢复（ledger-resume／campaign-resume）绑定修复证据。"""
+
+    import time
+
+    from tools.official_client_capture.tests import evaluation_chain_driver as chain
+
+    tree = Path(arguments.tree).resolve()
+    replay.assert_namespace(tree)
+    stamp = time.strftime("%Y%m%dt%H%M%Sz", time.gmtime())
+    # 与工具演进登记用的同一个部署收据夹具（按本进程副本树现算的受管身份，创建时间取现在）。
+    receipt = chain.write_fixture_deploy_receipt(tree / "control", f"e207-{stamp}")
+    regression = _write(tree / "control" / f"e207-regression-{stamp}.json", {"status": "passed", "stamp": stamp})
+    result = {"status": "passed", "deployment_receipt": str(receipt), "regression_receipt": str(regression)}
+    _write(_chain_dir(tree) / f"mark-deployed-{stamp}.json", result)
+    return result
+
+
+# E2-07 验收：收口的写入边界（硬杀或注入失败的位置）。值为（模块名，函数名）；在函数入口处动手，即「上一步写完、这一步还没写」。
+CLOSEOUT_BOUNDARIES = {
+    "after-receipt-copies": ("closeout", "_ensure_receipt_event"),
+    "after-receipt-event": ("closeout", "_ensure_checkpoint"),
+    "after-checkpoint": ("closeout", "recover_formal_plan_arguments"),
+    "mid-formal-creation": ("codex_upgrade", "_create_initial_vc_control_artifacts"),
+    "after-formal-creation": ("closeout", "_ensure_formal_control_artifacts"),
+    "after-vc0-completed": ("closeout", "_append_once"),
+    "after-vc1-started": ("closeout", "_dispatch_first_batch"),
+    "before-closeout-receipt": ("closeout", "_closeout_receipt"),
+}
+
+
+def _closeout_hooks(arguments: argparse.Namespace) -> list[Any]:
+    """``--kill-at`` 在边界处以 SIGKILL 结束本进程（真的硬杀：不跑任何清理、锁由内核释放）；``--fail-at`` 在边界处抛
+    受管异常（模拟同一根因的失败，供上限后恢复的验收）。"""
+
+    import signal
+
+    from tools.official_client_capture import codex_upgrade
+    from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+
+    modules = {"closeout": closeout, "codex_upgrade": codex_upgrade}
+    patches = []
+    for boundary, mode in ((arguments.kill_at, "kill"), (arguments.fail_at, "fail")):
+        if not boundary:
+            continue
+        module_name, name = CLOSEOUT_BOUNDARIES[boundary]
+        module = modules[module_name]
+        original = getattr(module, name)
+
+        def act(boundary: str = boundary, mode: str = mode) -> None:
+            if mode == "kill":
+                _write(_chain_dir(Path(arguments.tree).resolve()) / f"killed-at-{boundary}.json", {"boundary": boundary})
+                os.kill(os.getpid(), signal.SIGKILL)
+            raise codex_upgrade.ConfigurationError(f"E2-07 验收注入失败：{boundary}")
+
+        if boundary == "after-vc0-completed":
+            def wrapper(*args: Any, _original: Any = original, _act: Any = act, **kwargs: Any) -> Any:
+                if str(kwargs.get("event_id", "")).endswith("-vc1-started"):
+                    _act()
+                return _original(*args, **kwargs)
+        else:
+            def wrapper(*args: Any, _original: Any = original, _act: Any = act, **kwargs: Any) -> Any:
+                _act()
+                return _original(*args, **kwargs)
+        patches.append(mock.patch.object(module, name, wrapper))
+    return patches
+
+
+def _closeout_inputs_path(tree: Path) -> Path:
+    return _chain_dir(tree) / "closeout-inputs.json"
+
+
+def _load_closeout_inputs(tree: Path) -> Any:
+    """续作：读回 init 记下的同一批输入坐标，重新组成 ValidatedInputs（账本摘要按当前状态）。"""
+
+    from tools.official_client_capture import codex_upgrade
+    from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+    from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+
+    paths = {key: Path(value) for key, value in _read(_closeout_inputs_path(tree)).items()}
+    return closeout.ValidatedInputs(
+        preflight_dir=paths["preflight_dir"], preflight_manifest=codex_upgrade.load_campaign_manifest(paths["preflight_dir"]),
+        timing_ledger_dir=paths["timing_root"], arm64_root=paths["arm_root"], arm64_receipt=paths["arm_receipt"],
+        job_rehearsal_root=paths["rehearsal_root"], job_rehearsal_receipt=paths["rehearsal_receipt"],
+        p0_gate_root=paths["p0_root"], p0_gate_receipt=paths["p0_receipt"], release_certification=paths["release"],
+        receipts=tuple(closeout._binding_source(role, paths[key]) for role, key in (
+            ("arm64_environment", "arm_receipt"), ("managed_tool_deploy", "deploy"), ("p0_gate", "p0_receipt"),
+            ("release_certification", "release"))),
+        timing_summary=timing.inspect_ledger(paths["timing_root"]),
+    )
+
+
+def _run_closeout(arguments: argparse.Namespace, tree: Path, validated: Any, *, run_number: int) -> dict[str, Any]:
+    import contextlib
+
+    from tools.official_client_capture import codex_upgrade
+    from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+
+    control = tree / "control"
+    formal_dir = tree / "evidence" / "campaigns" / replay.RECORDED_CAMPAIGN_ID
+    if arguments.first_batch_timeout:
+        # ③ 首批超时（D1）：只缩短首批动作超时（在 closeout 进程内按作业数估算前替换两个常量），其余合同不变。
+        codex_upgrade.FIRST_OFFICIAL_BATCH_MIN_TIMEOUT_SECONDS = int(arguments.first_batch_timeout)
+        codex_upgrade.FIRST_OFFICIAL_BATCH_SECONDS_PER_JOB = 0
+    state_dir = Path(arguments.state_dir) if arguments.state_dir else tree / "supervisor" / "vc1"
+    closeout_arguments = argparse.Namespace(
+        preflight_campaign_dir=validated.preflight_dir, formal_campaign_dir=formal_dir,
+        formal_campaign_id=replay.RECORDED_CAMPAIGN_ID, p0_gate_root=validated.p0_gate_root,
+        p0_gate_receipt=validated.p0_gate_receipt,
+        managed_tool_deploy_receipt=next(item.path for item in validated.receipts if item.role == "managed_tool_deploy"),
+        release_certification=validated.release_certification,
+        supervisor_state_dir=state_dir,
+        audit_dir=control / ("closeout-audit" if run_number == 1 else f"closeout-audit-{run_number}"),
+        heartbeat_seconds=float(arguments.heartbeat_seconds), watchdog_timeout_seconds=float(arguments.watchdog_seconds),
+        ledger_interval_seconds=float(arguments.ledger_interval_seconds),
+        fix_commit=arguments.fix_commit, regression_receipt=Path(arguments.regression_receipt) if arguments.regression_receipt else None,
+        reason=arguments.reason, approve_sha256=arguments.approve_sha256, approved_by=arguments.approved_by,
+        control_root=None,
+    )
+    error: str | None = None
+    blocked: dict[str, Any] | None = None
+    receipt = None
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(closeout, "validate_inputs", return_value=validated))
+        for patch in _closeout_hooks(arguments):
+            stack.enter_context(patch)
+        try:
+            receipt = closeout.closeout(closeout_arguments)
+        except closeout.CloseoutBlocked as failure:
+            error = str(failure)
+            blocked = {"kind": failure.kind, "next_command": failure.next_command,
+                       "review_sha256": failure.details.get("review_sha256")}
+        except closeout.VC0CloseoutError as failure:
+            error = str(failure)
+    result = {
+        "status": "passed" if error is None else ("blocked" if blocked else "failed"), "error": error, "blocked": blocked,
+        "closeout_receipt": receipt, "campaign_dir": str(formal_dir), "timing_ledger": str(validated.timing_ledger_dir),
+        "supervisor_state_dir": str(state_dir), "attempts": _attempt_summaries(formal_dir),
+        "audit_dir": str(closeout_arguments.audit_dir),
+    }
+    _write(_chain_dir(tree) / ("init.json" if run_number == 1 else f"closeout-{run_number}.json"), result)
+    return result
+
+
+def _create_closeout_inputs(tree: Path) -> Any:
+    """首次：真实创建 preflight 与合成控制收据（计时账本、ARM64 P0、Job 演练、发布认证、P0 门禁、部署收据）。"""
 
     from tools.official_client_capture import codex_upgrade
     from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
@@ -135,11 +311,6 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
     from tools.official_client_capture.tests import control_receipt_fixtures as crf
     from tools.official_client_capture.tests import project_ledger_fixture
 
-    tree = Path(arguments.tree).resolve()
-    replay.assert_namespace(tree)
-    replay.assert_network_isolated()
-    state = _read(Path(os.environ[replay.REPLAY_STATE_ENV]))
-    replay.install_orchestrator_patches(codex_upgrade, state)
     recorded = _recorded_manifest()
     campaigns = tree / "evidence" / "campaigns"
     control = tree / "control"
@@ -191,7 +362,12 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
             key: identity.get(key) for key in ("files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256",
                                                "evidence_semantics_sha256", "control_sha256")},
     })
-    validated = closeout.ValidatedInputs(
+    _write(_closeout_inputs_path(tree), {
+        "preflight_dir": str(preflight_dir.resolve()), "timing_root": str(timing_root), "arm_root": str(arm_root),
+        "arm_receipt": str(arm_receipt), "rehearsal_root": str(rehearsal_root), "rehearsal_receipt": str(rehearsal_receipt),
+        "release": str(release), "p0_root": str(p0_root), "p0_receipt": str(p0_receipt), "deploy": str(deploy),
+    })
+    return closeout.ValidatedInputs(
         preflight_dir=preflight_dir.resolve(), preflight_manifest=preflight_manifest, timing_ledger_dir=timing_root,
         arm64_root=arm_root, arm64_receipt=arm_receipt, job_rehearsal_root=rehearsal_root,
         job_rehearsal_receipt=rehearsal_receipt, p0_gate_root=p0_root, p0_gate_receipt=p0_receipt,
@@ -201,32 +377,6 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
             ("release_certification", release))),
         timing_summary=timing.inspect_ledger(timing_root),
     )
-    formal_dir = campaigns / replay.RECORDED_CAMPAIGN_ID
-    if arguments.first_batch_timeout:
-        # ③ 首批超时（D1）：只缩短首批动作超时（在 closeout 进程内按作业数估算前替换两个常量），其余合同不变。
-        codex_upgrade.FIRST_OFFICIAL_BATCH_MIN_TIMEOUT_SECONDS = int(arguments.first_batch_timeout)
-        codex_upgrade.FIRST_OFFICIAL_BATCH_SECONDS_PER_JOB = 0
-    closeout_arguments = argparse.Namespace(
-        preflight_campaign_dir=preflight_dir, formal_campaign_dir=formal_dir,
-        formal_campaign_id=replay.RECORDED_CAMPAIGN_ID, p0_gate_root=p0_root, p0_gate_receipt=p0_receipt,
-        managed_tool_deploy_receipt=deploy, release_certification=release,
-        supervisor_state_dir=tree / "supervisor" / "vc1", audit_dir=control / "closeout-audit",
-        heartbeat_seconds=float(arguments.heartbeat_seconds), watchdog_timeout_seconds=float(arguments.watchdog_seconds),
-        ledger_interval_seconds=float(arguments.ledger_interval_seconds),
-    )
-    error: str | None = None
-    with mock.patch.object(closeout, "validate_inputs", return_value=validated):
-        try:
-            receipt = closeout.closeout(closeout_arguments)
-        except closeout.VC0CloseoutError as failure:
-            receipt, error = None, str(failure)
-    result = {
-        "status": "passed" if error is None else "failed", "error": error, "closeout_receipt": receipt,
-        "campaign_dir": str(formal_dir), "timing_ledger": str(timing_root), "supervisor_state_dir": str(tree / "supervisor"),
-        "attempts": _attempt_summaries(formal_dir),
-    }
-    _write(_chain_dir(tree) / "init.json", result)
-    return result
 
 
 def _attempt_summaries(campaign_dir: Path) -> list[dict[str, Any]]:
@@ -601,6 +751,8 @@ STAGES = {
     "init": stage_init, "seal": stage_seal, "account": stage_account, "classify": stage_classify,
     "reconcile-attempt": stage_reconcile_attempt, "reconcile-run": stage_reconcile_run,
     "preview": stage_preview, "rerun": stage_rerun, "epoch": stage_epoch, "evolve": stage_evolve,
+    # E2-07 验收：收口续作与模拟部署。
+    "closeout": stage_closeout, "mark-deployed": stage_mark_deployed,
 }
 
 
@@ -616,6 +768,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview")
     parser.add_argument("--evolve-name", default="fix")
     parser.add_argument("--evolve-reason", default="R18 恢复链：修复部署后登记工具演进")
+    # E2-07 验收：收口的硬杀／注入失败位置、续作编号、监督器状态目录与上限后恢复的修复证据和批准。
+    parser.add_argument("--prepare-only", action="store_true", help="init 只建输入现场，不收口")
+    parser.add_argument("--kill-at", choices=sorted(CLOSEOUT_BOUNDARIES))
+    parser.add_argument("--fail-at", choices=sorted(CLOSEOUT_BOUNDARIES))
+    parser.add_argument("--closeout-run", type=int, default=2)
+    parser.add_argument("--state-dir")
+    parser.add_argument("--fix-commit")
+    parser.add_argument("--regression-receipt")
+    parser.add_argument("--reason")
+    parser.add_argument("--approve-sha256")
+    parser.add_argument("--approved-by")
     parser.add_argument("stage", choices=sorted(STAGES))
     return parser
 
