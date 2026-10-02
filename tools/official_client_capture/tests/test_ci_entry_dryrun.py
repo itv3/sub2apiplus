@@ -150,6 +150,14 @@ class EntryDryRunTests(unittest.TestCase):
         self.assertEqual(self.wait(outcome["result"])["status"], "passed")
         self.assertEqual(self.calls()[-1]["argv"], ["--to", "p0-receipt", "--reexecute-gates", "--audit-reads"])
 
+    def test_reexecute_without_audit_for_cold_timing(self) -> None:
+        outcome = json.loads(self.start("--reexecute").stdout.strip().splitlines()[-1])
+        self.assertTrue(outcome["result"].endswith("-reexecute.json"))
+        self.assertEqual(self.wait(outcome["result"])["status"], "passed")
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "atomic-double", "--reexecute-gates"])
+        both = self.start("--opening", "--reexecute")
+        self.assertEqual(both.returncode, 2)
+
     def test_failures_are_reported_all_at_once(self) -> None:
         self.configure(passed=["policy-compatibility"], failed=["entry-preflight", "entry-gates", "pre-a3"], blocked=["zero-request-smoke"],
                        rc=1)

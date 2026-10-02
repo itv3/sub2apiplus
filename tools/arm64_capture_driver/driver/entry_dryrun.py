@@ -12,16 +12,16 @@
   （首批是真实官方取证），空跑最远到 ``p0-receipt``。
 * 跑：``env -i`` 干净环境里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连
   建账本之后一起）；升级开工的空跑 ``--opening``：重新执行全集并带读集审计（``--reexecute-gates --audit-reads``），默认到
-  ``p0-receipt``。入口门禁与 pre-A3 用同一份单元执行记录库：刚由后台验证（E4-01）验过的单元输入没变就承接，不重复劳动。
+  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库：刚由后台验证（E4-01）验过的单元输入没变就承接，不重复劳动。
 * 让路：有采集在跑（统一调度执行器的整机预约有存活的申请方）就不起，记 ``yielded``；空跑不申请整机，不能挡采集——门禁单元
   本来就会被采集预约停派。
-* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening].json``，状态 running／passed／
+* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute].json``，状态 running／passed／
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置。同一提交＋同一部署（同一种
   空跑）已有在跑或已有结论就不重复跑。
 
 子命令：
 
-* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening] [--to <步骤>] [--entry <entry.sh>]``：起一次空跑
+* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening|--reexecute] [--to <步骤>] [--entry <entry.sh>]``：起一次空跑
   （新会话、后台）；退出码 0 已起或已有结论，4 让路，2 用法或环境错误。
 * ``run --result``（内部）：建演练根与演练总账、写演练参数文件、跑编排器、写结论。
 * ``stop --runroot [--reason]``：停下在跑的空跑（先标 superseded 再整组终止，执行器收到 SIGTERM 会终止全部单元会话）。空跑与
@@ -126,8 +126,8 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
     return f"有采集在跑：整机预约属于 {reservation.get('owner')}（进程 {reservation.get('owner_pid')}）"
 
 
-def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool) -> Path:
-    suffix = "-opening" if opening else ""
+def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False) -> Path:
+    suffix = "-opening" if opening else "-reexecute" if reexecute else ""
     return Path(runroot) / DIRECTORY / f"{commit[:12]}-{str(deployment['sha256'])[:12]}{suffix}.json"
 
 
@@ -190,7 +190,9 @@ def _env_text(values: Mapping[str, str]) -> str:
 def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     bv = _bv()
     deployment = bv.latest_deployment(args.data_root)
-    path = result_path(args.runroot, args.commit, deployment, opening=args.opening)
+    if args.opening and args.reexecute:
+        raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
+    path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute)
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -199,7 +201,7 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
     payload: dict[str, Any] = {
         "schema_version": SCHEMA, "commit": args.commit, "branch": args.branch, "bundle": str(args.bundle),
-        "deployment": deployment, "opening": bool(args.opening), "to": to, "vc_env": str(args.vc_env),
+        "deployment": deployment, "opening": bool(args.opening), "reexecute": bool(args.reexecute), "to": to, "vc_env": str(args.vc_env),
         "data_root": str(args.data_root), "runroot": str(args.runroot), "entry": str(args.entry),
         "status": "running", "pid": None, "started_at_utc": _utc_now(), "completed_at_utc": None,
         "rehearsal_root": None, "log": None, "exit_code": None, "steps": [], "failed_steps": [], "reason": None,
@@ -274,6 +276,8 @@ def run(result: Path) -> int:
             "bash", str(payload["entry"]), "--to", payload["to"]]
     if payload.get("opening"):
         argv += ["--reexecute-gates", "--audit-reads"]
+    elif payload.get("reexecute"):
+        argv += ["--reexecute-gates"]
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -302,6 +306,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--branch", required=True)
     p_start.add_argument("--commit", required=True)
     p_start.add_argument("--opening", action="store_true", help="升级开工的空跑：重新执行全集并带读集审计，默认到 p0-receipt")
+    p_start.add_argument("--reexecute", action="store_true", help="只重新执行全集、不带审计（冷跑计时用）")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")
     p_start.add_argument("--entry", type=Path, default=HERE / "entry.sh")
     p_run = sub.add_parser("run", help="（内部）建演练根、跑编排器、写结论")
