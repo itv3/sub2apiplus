@@ -18,8 +18,8 @@
 * **输入**：仓库内容按 ``git ls-files`` 的跟踪文件逐个算 sha256（承接模式要求测试树干净）。采集工具测试单元＝受管
   工具树（测试组起点上一级、不含测试目录）、本模块静态依赖闭包里的测试目录文件、夹具目录、docs、仓库其余部分，
   整目录读取测试的模块另加整个测试目录，闭包里有真实链的另加全部辅助模块与真实链目录（方案原文），读真实仓库
-  git 的另加 HEAD；命令单元的输入由门禁清单声明（E2-05 从宽：整个仓库＋HEAD＋门禁项另列的输入）。输入范围拿不准
-  的一律从宽（方案 D3），读集审计（E3-04）兜底漏声明。
+  git 历史的另加 HEAD；命令单元的输入由门禁清单声明（E2-05 从宽：整个仓库＋HEAD＋门禁项另列的输入）。输入范围拿不准
+  的一律从宽（方案 D3），按读集核查的证据收窄（10-02 逐模块实跑追踪），读集审计（E3-04）兜底漏声明。
 * **环境指纹**：系统、架构、内核、Python 版本与构建、已装 Python 分发包、系统软件包（dpkg）、有效用户、主机名、整机
   核数、执行器进程能看到的全部环境变量（只排除决定缓存位置的两个与执行器自己的 ``UNIT_EXECUTOR_*``），再加门禁
   清单给出的工具链版本与前端依赖摘要。任何一项变了，全部单元不承接（方案「环境指纹变了全部重跑」）。
@@ -261,24 +261,27 @@ WHOLE_TESTS_READERS: dict[str, str] = {
     "test_codex_upgrade_pre_a3_certification": "按 pre-A3 认证模块的场景表在运行时导入并执行测试模块",
     "test_claude_fw_e_complete_campaign": "本地忽略区有证据数据时 freeze_campaign 整树复制受管工具树（含测试目录）；没有数据时整类跳过，拿不准，从宽",
 }
-# 人工核查确认的「读真实仓库 git」的模块：模块名 → 原因（同一次核查；git 走 PATH 包装记录真实仓库上的调用）。不做自动
-# 识别：测试里的 git 命令绝大多数作用在测试自建的临时仓库上，按命令字符串识别会把它们都算进来（每次提交都重跑）。
-# 经 codex_upgrade._tool_identity() 的那批只读 HEAD 提交号（默认 include_git，写进工具身份的 git_commit），按方案 D3
-# 从宽同样算读 git；能否收窄由读集审计（E3-04）按实际读到的 .git 内容判定。
-_VIA_TOOL_IDENTITY = "经 codex_upgrade._tool_identity()（默认 include_git）读真实仓库的 HEAD 提交号"
+# 人工核查确认的「读真实仓库 git 历史」的模块：模块名 → 原因（同一次核查；git 走 PATH 包装记录真实仓库上的调用）。
+# 这些模块读历史提交、对象或祖先关系，结论可能随提交变，加 HEAD 输入。不做自动识别：测试里的 git 命令绝大多数作用在
+# 测试自建的临时仓库上，按命令字符串识别会把它们都算进来。
 GIT_READERS: dict[str, str] = {
     "test_codex_0151_worktree_successor": "对真实仓库 rev-parse、show、ls-tree、merge-base（读 HEAD、历史 blob 与祖先关系）",
     "test_producer_replay_registration_gate": "对真实仓库 ls-tree、cat-file、rev-parse（读历史对象）",
     "test_codex_upgrade_rollback_readback": "git archive 导出真实仓库历史提交的 tools 树",
     "test_claude_fw_g_acceptance": "经 claude_fw_g_acceptance 对真实仓库 ls-tree 历史提交",
     "test_codex_01491_terminal_state": "经 tools/check_ledger_completeness 对真实仓库 git log、git show",
-    **{name: _VIA_TOOL_IDENTITY for name in (
-        "test_codex_upgrade", "test_certify_release", "test_codex_upgrade_job_rehearsal_receipt", "test_codex_upgrade_vc0_closeout",
-        "test_codex_upgrade_pre_a3_certification", "test_codex_upgrade_campaign_resume", "test_codex_upgrade_candidate_revision",
-        "test_codex_upgrade_candidate_stage_replay", "test_codex_upgrade_evaluation_baseline", "test_codex_upgrade_evaluation_recovery",
-        "test_codex_upgrade_evaluation_attempt_recovery", "test_codex_upgrade_evidence_integrity", "test_codex_upgrade_stage_recovery",
-        "test_codex_upgrade_stage_replay_binding", "test_codex_upgrade_staging_dispatch")},
 }
+# 只读 HEAD 提交号、结论不随提交变的模块（10-02 老板定：按实跑核查的证据收窄）：它们只经
+# codex_upgrade._tool_identity()（默认 include_git）执行 git rev-parse HEAD，提交号只写进同一次运行里生成、比对的工具
+# 身份与收据；测试夹具里的提交号全是合成值，没有断言真实 HEAD。所以不加 HEAD 输入——否则每次提交这批最重的模块
+# （test_codex_upgrade 4 块、attempt_recovery 6 块等）都要重跑，修测试后的补跑与全量差不多。登记在这里留作依据：
+# 读集审计（E3-04）看到它们读 .git 时按这张表核对「只读 HEAD 与引用、不读对象」。
+HEAD_ID_ONLY_READERS: dict[str, str] = {name: "经 codex_upgrade._tool_identity()（默认 include_git）只读 HEAD 提交号" for name in (
+    "test_codex_upgrade", "test_certify_release", "test_codex_upgrade_job_rehearsal_receipt", "test_codex_upgrade_vc0_closeout",
+    "test_codex_upgrade_pre_a3_certification", "test_codex_upgrade_campaign_resume", "test_codex_upgrade_candidate_revision",
+    "test_codex_upgrade_candidate_stage_replay", "test_codex_upgrade_evaluation_baseline", "test_codex_upgrade_evaluation_recovery",
+    "test_codex_upgrade_evaluation_attempt_recovery", "test_codex_upgrade_evidence_integrity", "test_codex_upgrade_stage_recovery",
+    "test_codex_upgrade_stage_replay_binding", "test_codex_upgrade_staging_dispatch")}
 
 
 @dataclass
@@ -308,7 +311,9 @@ class TestDependencies:
       测试）。受管模块之间的函数内导入不追：编排器只在函数里才碰到 pre-A3 认证模块，追进去几乎每个测试都会连到
       test_codex_upgrade，任何测试文件一改全体重跑；这类间接读取靠人工核查名单与读集审计（E3-04）兜底。
 
-    闭包里只有测试目录文件作输入（受管工具树整体另是一项输入）；整目录读取的自动识别也只看闭包里的测试目录文件。"""
+    闭包里只有测试目录文件作输入（受管工具树整体另是一项输入）。整目录读取的自动识别只看模块自身与闭包里的辅助模块
+    （测试目录里不以 test_ 开头的模块）：闭包里的别的测试模块、真实链只是被引用（导入里面的类或函数），它们自己的
+    测试会不会复制整棵树与本模块无关——10-02 实跑核查里，闭包含真实链的 4 个评估类模块都没有读整个测试目录。"""
 
     def __init__(self, occ: Path) -> None:
         self.occ = Path(occ).resolve()
@@ -407,10 +412,13 @@ class TestDependencies:
         return self._auto[path]
 
     def module_flags(self, module_file: Path) -> Flags:
-        """模块的整目录读取与读 git 标记：闭包里的测试目录文件自动识别到的，加上人工核查名单。"""
+        """模块的整目录读取与读 git 标记：模块自身与闭包里的辅助模块自动识别到的，加上人工核查名单。"""
 
         merged = Flags()
+        module_file = Path(module_file).resolve()
         for path in self.closure(module_file):
+            if path != module_file and path.name.startswith("test_"):
+                continue
             flags = self.auto_flags(path)
             merged.whole_tests.extend(flags.whole_tests)
             merged.git.extend(flags.git)

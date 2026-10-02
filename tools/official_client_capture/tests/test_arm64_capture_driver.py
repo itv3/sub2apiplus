@@ -1742,7 +1742,7 @@ _CANDIDATE_MAKEFILE = "print-egress-spec-checks:\n\t@echo check-egress-spec-loca
 # 执行器替身（驱动随附的 unit_executor.py 换成它）：只支持 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
 # 树外缓存），把工作目录、HEAD、参数、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；配置里 fail_units 列出的单元
 # 判失败。执行器在白名单环境里运行（E3-01，看不到测试经环境变量给的东西），配置写在替身旁边的 stub-config.json。执行器
-# 自身的调度、额度、汇总与承接由 test_ci_unit_executor、test_ci_unit_records 实测。
+# 自身的调度、额度、汇总与承接由执行器与承接各自的测试模块实测。
 _EXECUTOR_STUB = """import json, os, subprocess, sys
 from pathlib import Path
 config = json.loads((Path(__file__).resolve().parent / "stub-config.json").read_text(encoding="utf-8"))

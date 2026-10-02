@@ -133,6 +133,8 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
                 "pkg/tests/managed_tree_copy.py": "def copy_managed_tree(src, dst, include_tests=True): pass\n",
                 "pkg/tests/test_copies_without_tests.py": "from managed_tree_copy import copy_managed_tree\ncopy_managed_tree('a', 'b', include_tests=False)\n" + PASS,
                 "pkg/tests/test_discovers.py": "import unittest\nunittest.defaultTestLoader.discover('.')\n" + PASS,
+                "pkg/tests/tree_helper.py": "from managed_tree_copy import copy_managed_tree\n\ndef full_copy():\n    copy_managed_tree('a', 'b')\n",
+                "pkg/tests/test_uses_tree_helper.py": "import unittest\nimport tree_helper\n" + PASS,
             })
             deps = ur.TestDependencies(root / "pkg")
             tests = root / "pkg" / "tests"
@@ -141,19 +143,28 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
             self.assertEqual(closure("test_uses_helper.py"), ["helper_fixture.py", "test_uses_helper.py"])
             self.assertEqual(closure("test_subprocess.py"), ["helper_fixture.py", "test_subprocess.py"], "字符串里的子进程脚本也算")
             self.assertEqual(closure("test_chain_user.py"), ["managed_tree_copy.py", "test_chain_user.py", "test_some_chain.py"])
-            self.assertTrue(deps.module_flags(tests / "test_chain_user.py").whole_tests, "真实链按默认参数复制受管树（含测试目录）")
+            # 整目录读取的自动识别只看模块自身与辅助模块：真实链自己按默认参数复制受管树，不算到只引用它的模块头上
+            # （10-02 实跑核查：闭包含真实链的评估类模块都不读整个测试目录）；辅助模块里这样复制的，用到它的模块算。
+            self.assertFalse(deps.module_flags(tests / "test_chain_user.py").whole_tests)
+            self.assertTrue(deps.module_flags(tests / "test_uses_tree_helper.py").whole_tests, "辅助模块按默认参数复制受管树（含测试目录）")
+            self.assertTrue(deps.module_flags(tests / "real_chains" / "test_some_chain.py").whole_tests, "模块自身的调用照样识别")
             self.assertFalse(deps.module_flags(tests / "test_copies_without_tests.py").whole_tests)
             self.assertTrue(deps.module_flags(tests / "test_discovers.py").whole_tests)
             repo = ur.RepoIndex.load(root)
             names = {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_chain_user.py")}
             self.assertIn("repo:tests-real-chains", names, "闭包里有真实链：另加真实链目录")
             self.assertIn("file:pkg/tests/helper_fixture.py", names, "闭包里有真实链：另加全部辅助模块")
-            self.assertIn("repo:tests", names, "整目录读取：另加整个测试目录")
+            self.assertNotIn("repo:tests", names)
+            self.assertIn("repo:tests", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_uses_tree_helper.py")},
+                          "整目录读取：另加整个测试目录")
             leaf = {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")}
             self.assertEqual(leaf, {"repo:managed", "repo:tests-fixtures", "repo:docs", "repo:rest", "file:pkg/tests/test_leaf.py",
                                     "file:pkg/tests/__init__.py"})
             with unittest.mock.patch.dict(ur.GIT_READERS, {"test_leaf": "示例：读真实仓库的提交历史"}):
                 self.assertIn("head", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")})
+            with unittest.mock.patch.dict(ur.HEAD_ID_ONLY_READERS, {"test_leaf": "示例：只读 HEAD 提交号"}):
+                self.assertNotIn("head", {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_leaf.py")},
+                                 "只读 HEAD 提交号、结论不随提交变的不加 HEAD 输入（10-02 按实跑证据收窄）")
 
     def test_managed_import_statements_join_the_closure_but_managed_function_level_chains_do_not(self) -> None:
         """受管模块按 import 语句连边：模块级导入的测试辅助模块、函数内按名字导入的测试模块都算进用到它的测试的闭包；受管
@@ -176,11 +187,12 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
 
     def test_manual_lists_name_existing_modules_with_reasons(self) -> None:
         tests = REPO_ROOT / "tools" / "official_client_capture" / "tests"
-        for table in (ur.WHOLE_TESTS_READERS, ur.GIT_READERS):
+        for table in (ur.WHOLE_TESTS_READERS, ur.GIT_READERS, ur.HEAD_ID_ONLY_READERS):
             for module, reason in table.items():
                 with self.subTest(module):
                     self.assertTrue((tests / f"{module}.py").is_file(), "名单里的模块必须存在（改名或删除后同步名单）")
                     self.assertTrue(reason.strip())
+        self.assertEqual(set(ur.GIT_READERS) & set(ur.HEAD_ID_ONLY_READERS), set(), "读 git 历史与只读 HEAD 提交号两张表不重叠")
 
     def test_environment_excludes_cache_locations_and_hides_values(self) -> None:
         base = {"PATH": "/usr/bin", "HTTPS_PROXY": "http://user:secret@proxy:1"}
