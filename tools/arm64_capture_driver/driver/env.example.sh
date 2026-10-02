@@ -76,5 +76,6 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # ENTRY_COMMIT=REPLACE_TOOL_COMMIT_40_HEX
 # ENTRY_ROOT=$D/staging/REPLACE_REHEARSAL_ROOT
 # P0 收据（entry.sh 的固定步骤，E2-07）的回退依据：上一版本可回退点的收据文件，例如前序 Campaign 的画像目录晋升收据。
+# 走入口（entry.sh、入口空跑）时必填：入口便宜检查的 required-parameters 一项核对它是已有的普通文件。
 # P0_ROLLBACK_EVIDENCE=$RUNROOT/REPLACE_ROLLBACK_RECEIPT.json
 # JWTGEN_BIN=$D/private-tools/jwtgen

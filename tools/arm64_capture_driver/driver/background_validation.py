@@ -114,6 +114,20 @@ def _pid_alive(pid: Any) -> bool:
     return True
 
 
+def _group_alive(pgid: Any) -> bool:
+    """进程组里还有进程（含组长已退出、组员还在清理的情形）。"""
+
+    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def latest_deployment(data_root: Path) -> dict[str, Any]:
     """数据根最新的受管工具部署收据：文件名、sha256、工具身份。"""
 
@@ -165,15 +179,18 @@ def for_deployment(runroot: Path, deployment: Mapping[str, Any]) -> tuple[Path, 
 # ---------------------------------------------------------------- 启动、停止与后台运行
 
 def _terminate(payload: Mapping[str, Any]) -> None:
-    """终止后台运行的整个进程组：先 SIGTERM（``run`` 转给入口门禁，执行器终止全部单元会话），宽限后 SIGKILL。"""
+    """终止后台运行的整个进程组：先 SIGTERM（执行器收到后终止全部单元会话），等整组退出、超过宽限再 SIGKILL。
+
+    要等整组而不是只等组长：组长（``run`` 进程）收到 SIGTERM 立即退出，原来据此马上对整组发 SIGKILL，执行器正在逐个
+    终止单元会话就被杀掉，排在后面的单元（各自成会话、不在本组里）留在后台继续跑（E4-02 验收实测）。"""
 
     pid = payload.get("pid")
-    if not _pid_alive(pid):
+    if not _group_alive(pid):
         return
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(int(pid), signal.SIGTERM)
     deadline = time.monotonic() + STOP_GRACE_SECONDS
-    while _pid_alive(pid) and time.monotonic() < deadline:
+    while _group_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.2)
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(int(pid), signal.SIGKILL)

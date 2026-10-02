@@ -3,7 +3,8 @@
 #   各项互相独立，一项失败其余照查，最后汇总；全部通过退出 0，任一失败退出 1。
 #   零请求：不建账本、不建 Campaign、不签收据；环境探针只在临时目录试采，结束即删除，不落正式收据。
 # 检查项：
-#   required-parameters  后续阶段要用、参数文件里可缺省的身份参数已填写（不是空值或 REPLACE_ 占位）；
+#   required-parameters  后续阶段要用、参数文件里可缺省的身份参数已填写（不是空值或 REPLACE_ 占位）；回退依据
+#                        P0_ROLLBACK_EVIDENCE 还要是已有的普通文件（P0 收据一步读它）；
 #   guard-pre-plan       驱动安装复验、指定出口实时准入、磁盘余量（与 stage1 建账本前同一守卫）；
 #   deployment-identity  最新受监督部署收据的策略与五摘要等于当前受管工具树；
 #   target-client        目标客户端两处安装：宿主机与采集容器内同一路径，摘要与版本等于本轮登记值；
@@ -43,10 +44,16 @@ required_parameters() {
   local key missing=()
   for key in TARGET_CODE_MODE_HOST_SHA256 CAPTURE_RUNTIME_IMAGE CODEX_BIN CODEX_BIN_SHA256 OFFICIAL_ASSET_SHA256 \
              TARGET_PACKAGE TARGET_SOURCE BASELINE_SOURCE ACTIVE_PROFILE MAIN_MODEL LITE_MODEL CODEX_ACCOUNT_ID API_KEY_ID \
-             COMPOSE_DIR PROJECT_DEADLINE_UTC STAGE_BUDGETS POLICY_COMPAT_RECEIPT POLICY_ACTIVATION PRE_A3_CERTIFICATION; do
+             COMPOSE_DIR PROJECT_DEADLINE_UTC STAGE_BUDGETS POLICY_COMPAT_RECEIPT POLICY_ACTIVATION PRE_A3_CERTIFICATION \
+             P0_ROLLBACK_EVIDENCE; do
     if [ -z "${!key:-}" ] || [[ ${!key} == REPLACE_* ]] || [[ ${!key} == */REPLACE_* ]]; then missing+=("$key"); fi
   done
   if [ "${#missing[@]}" != 0 ]; then echo "参数文件缺少或仍是占位：${missing[*]}"; return 1; fi
+  # 回退依据是 P0 收据一步要读的现成文件（上一版本可回退点的收据），不是后面才产出的坐标：缺了要在这里报，
+  # 不能等到建账本之后的第 15 步才发现（E4-02 验收实测）。
+  if [ ! -f "$P0_ROLLBACK_EVIDENCE" ] || [ -L "$P0_ROLLBACK_EVIDENCE" ]; then
+    echo "回退依据（P0_ROLLBACK_EVIDENCE）不是已有的普通文件：$P0_ROLLBACK_EVIDENCE"; return 1
+  fi
   echo "后续阶段要用的身份参数均已填写"
 }
 

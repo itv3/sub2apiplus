@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -165,6 +167,23 @@ class BackgroundValidationTests(unittest.TestCase):
         self.assertIn("被停下", message)
         restarted = self.start(COMMIT_A)
         self.assertEqual(restarted["action"], "started", "被停下的可以重新起")
+
+    def test_stop_waits_for_the_whole_group_to_finish_cleaning_up(self) -> None:
+        """组长收到 SIGTERM 立即退出（Linux 上随即被回收），组员还在清理：要等整组退出才补发 SIGKILL。原来只等组长，
+        执行器终止单元会话做到一半就被杀，排在后面的单元留在后台继续跑（E4-02 验收实测）。这里直接造一个进程组：组长
+        ``sleep``，组员是收到 SIGTERM 后花 2 秒「清理」再写标记的 bash；测试进程立即回收组长，模拟 Linux 上的 init。"""
+
+        marker = self.root / "cleaned"
+        member = f"trap 'sleep 2; echo cleaned > {marker}; exit 0' TERM; sleep 60 & wait"
+        leader = subprocess.Popen(["bash", "-c", f"bash -c {shlex.quote(member)} & exec sleep 60"], start_new_session=True)
+        reaper = threading.Thread(target=leader.wait, daemon=True)
+        reaper.start()
+        time.sleep(0.5)   # 等组员装好 trap
+        began = time.monotonic()
+        bv._terminate({"pid": leader.pid})
+        self.assertTrue(marker.is_file(), "清理做完才补发 SIGKILL")
+        self.assertGreaterEqual(time.monotonic() - began, 1.5)
+        self.assertFalse(bv._group_alive(leader.pid), "整组都已退出")
 
     def test_deployment_changed_during_the_run_is_aborted(self) -> None:
         other = self.deploy("20261002t230000z", files="d")   # 门禁核对到的是另一份收据

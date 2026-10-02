@@ -156,7 +156,8 @@
 ## P0 收据与 VC-0 收口（E2-07，`entry.sh` 的最后两步）
 
 * P0 收据（原来每轮手写）：两份离线门禁证据取自入口门禁那一次运行（`p0/test-capture-tools.json`、`p0/check-egress-spec.json`），
-  加发布认证与回退依据 `P0_ROLLBACK_EVIDENCE`（参数文件新键，上一版本可回退点的收据，例如前序 Campaign 的画像目录晋升收据）；
+  加发布认证与回退依据 `P0_ROLLBACK_EVIDENCE`（参数文件新键，上一版本可回退点的收据，例如前序 Campaign 的画像目录晋升收据；
+  入口便宜检查的必填参数一项就核对它是已有的普通文件，缺了在第一步报出）；
   subject 取计时账本计划；证据根 `$ENTRY_ROOT/control/<前缀>-p0-gate-<轮次>-<STAMP>`，签发后立即重放。
 * VC-0 收口调用 `codex_upgrade_vc0_closeout`，参数全部来自参数文件与前序步骤记录：Formal `$ENTRY_ROOT/evidence/campaigns/$NEW`、
   监督器状态目录 `$ENTRY_ROOT/control/$NEW-supervisor`（控制根下一层，VC-1 对账才找得到首批父 run）、审计目录
