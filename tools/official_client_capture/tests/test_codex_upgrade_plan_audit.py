@@ -87,7 +87,7 @@ class PlanAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             broken = Path(directory) / source.name
             broken.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            arguments = _manifest_arguments("0.157.0", "0.159.2", scenario_manifest=broken)
+            arguments = _manifest_arguments("0.157.0", "0.160.0", scenario_manifest=broken)
             with self.assertRaisesRegex(cu.ConfigurationError, "任务引用规则清单外编号：\\['SPEC-EP-007'\\]"):
                 cu._plan_manifest_audit(arguments)
 
@@ -99,7 +99,7 @@ class PlanAuditTests(unittest.TestCase):
             before = sorted(str(path) for path in root.rglob("*"))
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                code = cu.main(_plan_argv("0.157.0", "0.159.2", campaign_dir=root / "campaign"))
+                code = cu.main(_plan_argv("0.157.0", "0.160.0", campaign_dir=root / "campaign"))
             self.assertEqual(code, 1)
             result = json.loads(output.getvalue())
             self.assertEqual(result["schema_version"], cu.PLAN_AUDIT_SCHEMA)
@@ -114,7 +114,7 @@ class PlanAuditTests(unittest.TestCase):
     def test_plan_without_audit_still_requires_ledger_arguments(self) -> None:
         """正式建 Campaign 的 plan 仍在解析阶段要求账本与环境参数，报错方式与原先相同。"""
 
-        argv = [item for item in _plan_argv("0.157.0", "0.159.2", campaign_dir=Path("/nonexistent/campaign")) if item != "--audit-only"]
+        argv = [item for item in _plan_argv("0.157.0", "0.160.0", campaign_dir=Path("/nonexistent/campaign")) if item != "--audit-only"]
         errors = io.StringIO()
         with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as raised:
             cu._build_parser().parse_args(argv)

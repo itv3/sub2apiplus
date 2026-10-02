@@ -868,8 +868,8 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertEqual(result["affected_rule_ids"], [])
             self.assertEqual(result["live_request_count"], 0)
 
-    def test_0159_patch_manifest_binds_real_active_profile(self) -> None:
-        """0.159.2 补丁清单绑定当前 active 的 0.157.0 画像文件摘要，补丁为空（VC-2 定稿后承接）。"""
+    def test_0160_patch_manifest_binds_real_active_profile(self) -> None:
+        """0.160.0 补丁清单绑定当前 active 的 0.157.0 画像文件摘要，补丁为空（VC-2 定稿后承接）。"""
 
         active_profile = (
             ROOT
@@ -877,11 +877,11 @@ class CanonicalImportTests(unittest.TestCase):
             / "3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json"
         )
         patch_manifest = (
-            ROOT / "tools/official_client_capture/profile_rule_patches_0_159_2.json"
+            ROOT / "tools/official_client_capture/profile_rule_patches_0_160_0.json"
         )
         patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
         self.assertEqual(patch_payload["baseline_version"], "0.157.0")
-        self.assertEqual(patch_payload["target_version"], "0.159.2")
+        self.assertEqual(patch_payload["target_version"], "0.160.0")
         self.assertEqual(
             patch_payload["active_profile_sha256"],
             codex_upgrade.file_sha256(active_profile),
@@ -894,14 +894,14 @@ class CanonicalImportTests(unittest.TestCase):
             target_payload, _ = codex_upgrade._replace_json_string_literal(
                 active_payload,
                 "0.157.0",
-                "0.159.2",
+                "0.160.0",
             )
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
             self._write(
                 target_profile,
-                {"codex_version": "0.159.2", "profile_payload": target_payload},
+                {"codex_version": "0.160.0", "profile_payload": target_payload},
             )
             self._write(
                 migration,

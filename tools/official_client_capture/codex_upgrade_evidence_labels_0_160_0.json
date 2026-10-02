@@ -1,8 +1,8 @@
 {
   "$schema": "./codex_upgrade_evidence_labels.schema.json",
   "schema_version": "codex-upgrade-evidence-labels/v1",
-  "codex_version": "0.159.2",
-  "description": "把 Codex CLI 0.159.2 每个 capture job 的证据子路径映射到冻结场景、artifact kind、parser 与实验条件标签。标签描述的是采集时就已确定的实验条件；模型目录与 Responses 请求通过模型条件成功收据的明确角色选择，不依赖并发连接号。",
+  "codex_version": "0.160.0",
+  "description": "把 Codex CLI 0.160.0 每个 capture job 的证据子路径映射到冻结场景、artifact kind、parser 与实验条件标签。标签描述的是采集时就已确定的实验条件；模型目录与 Responses 请求通过模型条件成功收据的明确角色选择，不依赖并发连接号。",
   "authority": [
     "labels 必须能由 job 的采集参数与场景 precondition 推出，不得由被该标签选中的判据所验证的属性反推——否则判据退化为同义反复。",
     "同一原始文件在 manifest 中只能二选一：以原生 parser 直接解析，或以 opaque_bound_source 登记并由 ACC-02b 派生器产出结构化观测。",
@@ -676,7 +676,7 @@
             "provider": "openai_oauth",
             "remote_compaction_v2": "disabled_explicitly"
           },
-          "rationale": "采集脚本以 --disable remote_compaction_v2 启动；0.156.1 起忽略该键（features/src/lib.rs:608-610），x-codex-beta-features 仍无条件存在（core/src/session/mod.rs:1183-1196），因此本样本不再是「可选头缺失」扰动，variant 改为 v2_config_disabled，避免 SPEC-WS-002 optional-missing-covered 按旧标签选中一份实际带该头的样本而虚假通过。变体由采集配置固定，非观测结论。"
+          "rationale": "采集脚本以 --disable remote_compaction_v2 启动；0.156.1 起忽略该键（features/src/lib.rs:612-614），x-codex-beta-features 仍无条件存在（core/src/session/mod.rs:1188-1201），因此本样本不再是「可选头缺失」扰动，variant 改为 v2_config_disabled，避免 SPEC-WS-002 optional-missing-covered 按旧标签选中一份实际带该头的样本而虚假通过。变体由采集配置固定，非观测结论。"
         }
       ]
     },
@@ -2042,7 +2042,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "0.159 起 A04 在 parent-thread 轮之后追加数字推理等级请求：第 5 个 POST（conn008）的入站 reasoning.effort 是JSON 整数 3（0.159.2 客户端的形态），账号特性仍为 unset true（residency 未设置）、请求体明文；variant、reasoning_effort_config 与 reasoning_effort_inbound 由采集入站参数推出，与官方 official-relay-reasoning-numeric-http 对应。出站 effort 的实际形态是 BODY-006 的判定对象，不反推进标签。"
+          "rationale": "0.159 起 A04 在 parent-thread 轮之后追加数字推理等级请求：第 5 个 POST（conn008）的入站 reasoning.effort 是JSON 整数 3（0.160.0 客户端的形态），账号特性仍为 unset true（residency 未设置）、请求体明文；variant、reasoning_effort_config 与 reasoning_effort_inbound 由采集入站参数推出，与官方 official-relay-reasoning-numeric-http 对应。出站 effort 的实际形态是 BODY-006 的判定对象，不反推进标签。"
         },
         {
           "glob": "scenarios/A04/relay/conn009.client_to_upstream.bin",

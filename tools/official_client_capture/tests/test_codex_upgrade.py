@@ -4688,7 +4688,7 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_current_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
-        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.159.2"):
+        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0"):
             suffix = version.replace(".", "_")
             scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
             scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -4736,7 +4736,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
-            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.159.2"}:
+            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0", "0.160.0"}:
                 auxiliary = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -4754,7 +4754,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 wham_command = wham_job["steps"][1]["argv"][2]
                 self.assertIn("--entrypoint python3", wham_command)
                 self.assertNotIn("{runtime_image} python3 ", wham_command)
-                if version in {"0.154.0", "0.156.1", "0.157.0", "0.159.2"}:
+                if version in {"0.154.0", "0.156.1", "0.157.0", "0.160.0"}:
                     self.assertIn(
                         "run_root={repo_root}/runs/{campaign_id}-official-wham-safe",
                         wham_command,
@@ -15378,25 +15378,25 @@ class CodexUpgradeTest(unittest.TestCase):
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
 
-    def test_0159_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
-        """0.159.2 沿用 gpt-5.5 主线与 Astra Lite 轨（不换成新默认模型 gpt-6.1-sol）；升级对只登记自 0.157.0 起跳。"""
+    def test_0160_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.160.0（内置目录与 0.159.2 相同）沿用 gpt-5.5 主线与 Astra Lite 轨（不换成默认模型 gpt-6.1-sol）；升级对只登记自 0.157.0 起跳。"""
 
         codex_upgrade._validate_upgrade_pair_models(
             baseline_version="0.157.0",
-            target_version="0.159.2",
+            target_version="0.160.0",
             model="gpt-5.5",
             lite_model="gpt-6-astra",
         )
 
         mutations = (
             ({"baseline_version": "0.154.0"}, "不支持的 Codex 升级对"),
-            ({"target_version": "0.159.1"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.159.2"}, "不支持的 Codex 升级对"),
             ({"model": "gpt-6.1-sol"}, "主升级线只能使用 gpt-5.5"),
             ({"lite_model": "gpt-6.1-sol"}, "Lite 专项只能使用 gpt-6-astra"),
         )
         baseline = {
             "baseline_version": "0.157.0",
-            "target_version": "0.159.2",
+            "target_version": "0.160.0",
             "model": "gpt-5.5",
             "lite_model": "gpt-6-astra",
         }

@@ -41,6 +41,8 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 0.159.2 的内置目录新增 gpt-6.1-sol（true，0.159.1 起为默认模型）、移除 gpt-5.4，gpt-5.5（false）与
 # gpt-6-astra（true）除排序外逐字段不变；沿用这两个模型（所有作业显式注入 {model}，不依赖默认模型），
 # 由 VC-1 目录证据复核。
+# 0.160.0 的内置目录（models-manager/models.json 与 model_presets.rs）与 0.159.2 逐字节相同，同样沿用这两个模型，
+# 由 VC-1 目录证据复核。
 #
 # 主线只收录已在本升级中实际采过或即将采的两个，而不是所有 non-lite 模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
@@ -72,6 +74,10 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "lite": ("gpt-6-astra",),
     },
     "0.159.2": {
+        "main": ("gpt-5.5",),
+        "lite": ("gpt-6-astra",),
+    },
+    "0.160.0": {
         "main": ("gpt-5.5",),
         "lite": ("gpt-6-astra",),
     },

@@ -1,4 +1,4 @@
-"""0.159.2 官方定向样本的无网络测试：中继受控合成、空闲关闭、参数校验、采集脚本接线与场景清单。
+"""0.159.2 起的官方定向样本（现为 0.160.0 目标清单）的无网络测试：中继受控合成、空闲关闭、参数校验、采集脚本接线与场景清单。
 
 第 0b 步为 VC-2 需要实测确认的四类新条件补了官方定向样本：流内 flex_unavailable／interrupted（中继受控
 应答）、空闲 WS 被服务端关闭后直接重建（中继补 CLOSE）、Retry-After 有值对照（受控 500 附带该头）、
@@ -9,7 +9,7 @@
 - WS 受控服务按预热／首个生成请求／续发三类应答，服务端帧不掩码；
 - 空闲关闭只看业务帧，ping／pong 不刷新计时，且只在两个方向都停在帧边界时补 CLOSE；
 - 中继与采集脚本都在任何请求之前拒绝非法取值与错误搭配；
-- 0.159.2 场景清单沿用作业的执行参数与 0.157.0 逐字相同，新增作业的环境能通过脚本校验。
+- 0.160.0 场景清单（由 0.159.2 版改名）沿用作业的执行参数与 0.157.0 逐字相同，新增作业的环境能通过脚本校验。
 """
 
 from __future__ import annotations
@@ -514,7 +514,7 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "RUN_ID": "unit-directed-samples",
             "SCENARIO": scenario,
-            "CODEX_VERSION": "0.159.2",
+            "CODEX_VERSION": "0.160.0",
             "CAPTURE_HOST_DATA_ROOT": "/nonexistent-capture-root",
             **environment,
         }
@@ -589,15 +589,15 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
 
 
 class Scenario0159ManifestParameterTest(unittest.TestCase):
-    """0.159.2 清单：沿用 0.157.0 的全部作业执行参数，新增 9 个官方定向样本作业。"""
+    """0.160.0 清单（由 0.159.2 版改名）：沿用 0.157.0 的全部作业执行参数，新增 9 个官方定向样本作业。"""
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.manifest = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_159_2.json").read_text(encoding="utf-8"))
+        cls.manifest = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
         previous = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_157_0.json").read_text(encoding="utf-8"))
         cls.previous_jobs = {job["id"]: job for job in previous["capture_jobs"]}
         cls.jobs = {job["id"]: job for job in cls.manifest["capture_jobs"]}
-        labels = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_159_2.json").read_text(encoding="utf-8"))
+        labels = json.loads((TOOL_ROOT / "codex_upgrade_evidence_labels_0_160_0.json").read_text(encoding="utf-8"))
         cls.labels = {entry["job_id"]: entry for entry in labels["entries"]}
 
     def test_carried_jobs_keep_0157_execution_parameters(self) -> None:
@@ -613,11 +613,11 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
         substitutions = {
             "{capture_container}": "capture-cli",
             "{capture_root}": "/root/oauth-capture",
-            "{target_version}": "0.159.2",
+            "{target_version}": "0.160.0",
             "{relay_codex_bin}": "/opt/codex/bin/codex",
             "{model}": "gpt-5.5",
             "{lite_model}": "gpt-6-astra",
-            "{campaign_id}": "c01592-unit",
+            "{campaign_id}": "c01600-unit",
         }
         for job_id in sorted(NEW_OFFICIAL_JOBS):
             with self.subTest(job_id=job_id):

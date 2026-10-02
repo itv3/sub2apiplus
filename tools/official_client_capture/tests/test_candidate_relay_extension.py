@@ -288,7 +288,7 @@ extract_response_id() {
 
         line = next(item for item in self.source.splitlines() if item.startswith("target_numeric_reasoning_effort=$("))
         code = line[line.index("'") + 1:line.rindex("'")]
-        for version, expected in (("0.157.0", "0"), ("0.158.0", "0"), ("0.159.0", "1"), ("0.159.2", "1")):
+        for version, expected in (("0.157.0", "0"), ("0.158.0", "0"), ("0.159.0", "1"), ("0.159.2", "1"), ("0.160.0", "1")):
             with self.subTest(version=version):
                 result = subprocess.run([sys.executable, "-c", code, version], capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), expected)

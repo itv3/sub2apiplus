@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-candidate-test-fact-map/v1",
-  "codex_version": "0.159.2",
+  "codex_version": "0.160.0",
   "fact_prefix": "CANDIDATE_TRACE_FACT ",
   "forbidden_record_types": [
     "http_request",

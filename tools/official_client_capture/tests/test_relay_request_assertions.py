@@ -518,9 +518,9 @@ class Scenario0157ManifestParameterTest(unittest.TestCase):
                     self.assertEqual(current[field], previous[field], field)
 
     def test_covers_属于批准规则清单且闭合(self) -> None:
-        # 0.157.0 与 0.159.2 都以 0.157 VC-2 批准的 43 条规则为准：作业 covers 不引用清单外编号、全部规则都有作业覆盖、
+        # 0.157.0 与 0.160.0（由 0.159.2 版改名）都以 0.157 VC-2 批准的 43 条规则为准：作业 covers 不引用清单外编号、全部规则都有作业覆盖、
         # 作业 covers 被其绑定的证据场景证明（plan 的升级审计按同一口径拒绝）。
-        for version in ("0_157_0", "0_159_2"):
+        for version in ("0_157_0", "0_160_0"):
             rules = json.loads(
                 (TOOL_ROOT / f"codex_upgrade_rules_{version}.json").read_text(encoding="utf-8")
             )["required_rules"]

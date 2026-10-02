@@ -1,6 +1,6 @@
 {
   "schema_version": "codex-egress-rule-manifest/v1",
-  "codex_version": "0.159.2",
+  "codex_version": "0.160.0",
   "required_rules": [
     "SPEC-TLS-001",
     "SPEC-TLS-003",
