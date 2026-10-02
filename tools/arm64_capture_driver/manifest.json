@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 73,
+  "file_count": 75,
   "files": [
     {
       "path": "README.md",
-      "sha256": "82deef6ad2705d513fba342b74b5bd47743ce8ade240cd46ab5f8c1ecdc099f6",
+      "sha256": "e14bd4e769ec242a03e83fe15df93d75fe4076aa582ae04896c17432fdaa4397",
       "mode": "0600",
-      "bytes": 51893
+      "bytes": 54712
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -22,15 +22,15 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "32d0c32a0e668c420c79a08c09bb005b2c457020e0e0a4d0aa88fbab8beae644",
+      "sha256": "fe15dd1d7eeb2d4a67978f68f5b45aaebe84cbbfcc463680006fc04aff7fc899",
       "mode": "0700",
-      "bytes": 2170
+      "bytes": 2580
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "75536a79638e3081d28431e7122b5108343318dbf24a62a01fc52172fd1f9bfe",
+      "sha256": "7c927a3b5a83d35a0b4ce3696ecd46ee162fc278bc5710f77cec7cc599b4abb0",
       "mode": "0700",
-      "bytes": 19634
+      "bytes": 22816
     },
     {
       "path": "driver/build.sh",
@@ -81,6 +81,12 @@
       "bytes": 925
     },
     {
+      "path": "driver/entry-dryrun.sh",
+      "sha256": "f7565396be95df58dc9cb6d7fbdf45e95c078d57a75603ec5ebf1623a9305e29",
+      "mode": "0700",
+      "bytes": 1953
+    },
+    {
       "path": "driver/entry-gates.sh",
       "sha256": "3972d837b9743ad1f6746e4357342d1b9b8fdcb1820b55d6560f059fd0e57efb",
       "mode": "0700",
@@ -97,6 +103,12 @@
       "sha256": "a91efe3754397e53a528a9db34c8b9babec5a6f6fe06badceaec76905fd6a432",
       "mode": "0700",
       "bytes": 1741
+    },
+    {
+      "path": "driver/entry_dryrun.py",
+      "sha256": "45516b4e3b47529f9732b101e26f671111238c843fd79caef1197c8f562dad9c",
+      "mode": "0700",
+      "bytes": 19368
     },
     {
       "path": "driver/entry_gates.py",
@@ -441,5 +453,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "3d7e705d87bf80b732e950efadea2b66efb1b6c52c34270c19b8bcb258d366c2"
+  "manifest_sha256": "f6fbefa7ff8743276808b010f67720c99cc14d220b9696693034144c5d7e8596"
 }

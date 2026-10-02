@@ -85,7 +85,8 @@
   子检查共用一个单元，只执行一次（Makefile 的 test 目标也不再单列它：子检查跑在执行器另起的 make 进程里，不和先决去重）。
 * 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 与后台验证用）、
   `preflight`（只含 make test 的组成，`vc0-gate-target.sh` 用）、`pre-a3`（只含 pre-A3 场景，单独签 pre-A3 用，E3-02）、
-  `regression`（定向回归，E4-01：只含采集工具测试组，全集通过下只执行静态依赖闭包里有改动文件的测试单元）。`--with-gates
+  `regression`（定向回归，E4-01：只含采集工具测试组；全集通过下只改了测试或夹具时只执行静态依赖闭包里有改动文件的测试单元，
+  改了受管工具或仓库其余部分时全部测试单元都要重跑——测试单元都声明了这两段范围）。`--with-gates
   <门禁项,…>` 给任一组合人工补门禁项（pre-A3 除外；定向回归选不出时用，比如改了后端、前端、文档或出站规格）。`entry` 与
   `pre-a3` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的受管树，受管整树、两份指南与部署脚本副本逐项一致，
   否则退出 3），其余组合带 `--require-deployed` 时同样核对（后台验证用它把结论绑定到这次部署）；本轮 pre-A3 认证已有且
@@ -386,6 +387,27 @@
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
+* 通过之后默认接着空跑入口到 pre-A3（见下一节；`start --no-dryrun` 不接），结果记在后台验证结论的 `dryrun` 字段。
+
+## 入口空跑（E4-02，`driver/entry-dryrun.sh`）
+
+* 用途：入口平时不跑（CI 不跑真实链），遗留缺陷会攒到下次升级过入口时才一个一个冒出来。每次受管工具部署后空跑一次、一次报全；
+  升级开工的第一步固定是空跑。
+* 起：`bash entry-dryrun.sh start <bundle> <分支> <40 位提交> [--opening] [--to <步骤>]`，后台执行、`nice` 降优先级。在数据根
+  `staging/entry-dryrun-<UTC>/` 演练根里（入口编排器的 `ENTRY_ROOT`，配一本 fixture_only 演练总账）用 `entry.sh` 跑一遍入口，零请求，
+  生产项目总账、正式计时账本与正式认证坐标都不写；演练参数文件按本轮参数文件只改产物坐标（RUNROOT、STAMP、项目截止、三份认证
+  与 pre-A3 认证、ENTRY_*），编排器在 `env -i` 干净环境里启动。默认到 `atomic-double`（建账本之前那一段）；`--to p0-receipt`
+  连建账本之后一起（VC-0 收口会发正式请求，演练根里一律不做）。`--opening`：升级开工的空跑，重新执行全集并带读集审计
+  （`--reexecute-gates --audit-reads`），默认到 `p0-receipt`。
+* 每次部署后：后台验证（上一节）通过之后自动接着空跑到 `pre-a3`——便宜检查、策略认证、入口门禁与 pre-A3 场景都受统一调度，
+  同一份记录库里刚验过的门禁单元全部承接，真正执行的只有 pre-A3 场景（输入变了的）与便宜检查；零请求 smoke、atomic-double 与
+  建账本之后的步骤要用采集容器，只在明确执行的空跑里跑。
+* 让路：有采集在跑（执行器整机预约的申请方还活着）就不起，结论记 `yielded`、退出 4；空跑不申请整机，不挡采集。
+* 停：`bash entry-dryrun.sh stop`。空跑与前台入口门禁共用调度器和入口门禁工作目录，修复轮跑定向回归之前要停下——
+  `background-validate.sh stop`（修好接着跑的 regression 步骤会执行）连空跑一起停。
+* 结论：`$RUNROOT/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening].json`（`entry-dryrun/v1`），状态 running／passed／
+  failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置；同一提交＋同一部署（同一种空跑）
+  已有在跑或已有结论就不重复跑。`status` 列出全部。演练根留在数据根 staging 下供排查，按数据根清理规则人工清。
 
 ## 修好接着跑一条命令（第 35 项，`driver/fix-and-continue.sh`）
 

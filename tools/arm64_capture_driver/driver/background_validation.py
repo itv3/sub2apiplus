@@ -22,9 +22,11 @@
 
 子命令：
 
-* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env]``：绑定数据根
-  最新部署收据；同一提交＋同一部署已有在跑或已有 passed／failed 结论就不重复起，打印现有结论；在跑的其它后台验证先
-  停下、标 superseded；然后在新会话里起 ``run``。
+* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：
+  绑定数据根最新部署收据；同一提交＋同一部署已有在跑或已有 passed／failed 结论就不重复起，打印现有结论；在跑的其它后台
+  验证先停下、标 superseded；然后在新会话里起 ``run``。``--then-dryrun``（E4-02 日常化）：通过之后接着起入口空跑
+  （``entry_dryrun.py start --to pre-a3``，同一份记录库：刚验过的门禁单元全部承接，真正执行的只有 pre-A3 场景与便宜检查；
+  有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
   一个调度器，上一轮的验证也已作废。
@@ -41,6 +43,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -176,10 +179,19 @@ def _terminate(payload: Mapping[str, Any]) -> None:
         os.killpg(int(pid), signal.SIGKILL)
 
 
-def stop(runroot: Path, reason: str, *, keep: Path | None = None) -> list[str]:
-    """停下在跑的后台验证（``keep`` 除外），标 superseded。"""
+def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: bool = True) -> list[str]:
+    """停下在跑的后台验证（``keep`` 除外），标 superseded；``with_dryruns`` 时连后台验证接上的入口空跑一起停（E4-02：空跑与
+    前台入口门禁共用调度器和入口门禁工作目录，不停会挡住修复轮的定向回归）。"""
 
     stopped = []
+    if with_dryruns and (HERE / "entry_dryrun.py").is_file():
+        spec = importlib.util.spec_from_file_location("entry_dryrun_sibling", HERE / "entry_dryrun.py")
+        if spec is not None and spec.loader is not None:
+            module = sys.modules.get("entry_dryrun_sibling") or importlib.util.module_from_spec(spec)
+            if "entry_dryrun_sibling" not in sys.modules:
+                sys.modules["entry_dryrun_sibling"] = module
+                spec.loader.exec_module(module)
+            stopped += [f"entry-dryrun/{name}" for name in module.stop(runroot, reason)]
     for path, _payload in results(runroot):
         current = _read(path)   # 紧挨着写之前再读一次：刚写完结论的不再改
         if path == keep or current is None or current.get("status") != "running":
@@ -205,7 +217,8 @@ def start(args: argparse.Namespace) -> dict[str, Any]:
         "started_at_utc": _utc_now(), "completed_at_utc": None, "out": str(out), "log": f"{out}.log",
         "record_store": str(args.record_store) if args.record_store else None, "work": str(args.work) if args.work else None,
         "vc_env": str(args.vc_env) if args.vc_env else None, "entry_gates": str(args.entry_gates),
-        "failed_gates": [], "reason": None, "returncode": None,
+        "data_root": str(args.data_root), "runroot": str(args.runroot), "then_dryrun": bool(args.then_dryrun),
+        "failed_gates": [], "reason": None, "returncode": None, "dryrun": None,
     }
     _write(path, payload)
     argv = ["nice", "-n", str(NICENESS), sys.executable, "-B", str(Path(__file__).resolve()), "run", "--result", str(path)]
@@ -273,7 +286,31 @@ def run(result: Path) -> int:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
     _write(path, {**current, "status": status, "completed_at_utc": _utc_now(), "reason": reason, "returncode": returncode,
                   "failed_gates": failed})
+    if status == "passed" and current.get("then_dryrun"):
+        dryrun = _chain_dryrun(current)
+        _write(path, {**(_read(path) or current), "dryrun": dryrun})
     return 0
+
+
+# 通过之后接着空跑入口（E4-02）只到 pre-A3：便宜检查、策略认证、入口门禁与 pre-A3 场景都受统一调度（采集预约会让它停派）；
+# 零请求 smoke、atomic-double 与建账本之后的步骤要用采集容器，只在明确的空跑（entry-dryrun.sh）与升级开工的空跑里跑。
+CHAINED_DRYRUN_TO = "pre-a3"
+
+
+def _chain_dryrun(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not payload.get("vc_env") or not payload.get("data_root") or not payload.get("runroot"):
+        return {"action": "skipped", "reason": "缺少驱动参数文件、数据根或 RUNROOT，没有接着空跑"}
+    argv = [sys.executable, "-B", str(HERE / "entry_dryrun.py"), "start", "--runroot", str(payload["runroot"]),
+            "--data-root", str(payload["data_root"]), "--vc-env", str(payload["vc_env"]), "--bundle", str(payload["bundle"]),
+            "--branch", str(payload["branch"]), "--commit", str(payload["commit"]), "--to", CHAINED_DRYRUN_TO]
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True, timeout=600, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"action": "error", "reason": str(error)[:300]}
+    lines = [line for line in completed.stdout.splitlines() if line.strip().startswith("{")]
+    with contextlib.suppress(ValueError, IndexError):
+        return {**json.loads(lines[-1]), "returncode": completed.returncode}
+    return {"action": "error", "returncode": completed.returncode, "reason": (completed.stderr or completed.stdout)[-300:]}
 
 
 # ---------------------------------------------------------------- 批次边界与 VC-5 前核对
@@ -317,6 +354,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--work", type=Path, default=None, help="入口门禁的测试树与缓存目录（缺省与前台入口门禁同一个，记录才能互相承接）")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
+    p_start.add_argument("--then-dryrun", action="store_true", help="通过之后接着空跑入口到 pre-A3（E4-02）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")
