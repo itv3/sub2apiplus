@@ -255,7 +255,8 @@ class Orchestrator:
 
     def entry_gates_and_pre_a3(self, gates_run: bool, pre_a3_run: bool) -> None:
         """入口门禁与 pre-A3 同一次运行（E2-04）：pre-A3 要做就纳入，否则复核并沿用记录里的认证；入口门禁沿用、只有
-        pre-A3 要做时，照 lib.sh 的 issue_pre_a3_certification 同一顺序单独签（plan → 执行器按场景并行 → issue）。"""
+        pre-A3 要做时，用入口门禁的 pre-a3 组合单独签（E3-02：同一测试树、同一部署一致性核对、同一记录库，场景可承接，
+        认证从单元执行记录组装）。"""
 
         steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run)) if needed]
         for step in steps:
@@ -264,9 +265,8 @@ class Orchestrator:
             activation = self.record_product("policy-activation", "activation")
             certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if pre_a3_run
                              else self.record_product("pre-a3", "certification"))
-            if gates_run:
-                source = (self.p("ENTRY_BUNDLE"), self.p("ENTRY_BRANCH"), self.p("ENTRY_COMMIT"))
-            deploy = self.latest_deploy()
+            source = (self.p("ENTRY_BUNDLE"), self.p("ENTRY_BRANCH"), self.p("ENTRY_COMMIT"))
+            self.latest_deploy()
         except (OrchestratorError, OSError) as error:
             for step in steps:
                 self.outcomes[step].reasons.append(f"执行前准备失败：{error}")
@@ -292,18 +292,10 @@ class Orchestrator:
                 "summary": str(summary), "p0-test-capture-tools": str(out / "p0" / "test-capture-tools.json"),
                 "p0-check-egress-spec": str(out / "p0" / "check-egress-spec.json")})
         else:
-            units = self.run_dir / "pre-a3-units.json"
-            rc, planned = self.run_json("pre-a3", "plan", self.py(PRE_A3_MODULE, "plan", "--staging-root",
-                                                                  str(self.data / "staging" / f"pre-a3-certification-{self.p('STAMP')}"),
-                                                                  "--output", str(units)))
-            root = Path(str(planned.get("staging_root") or ""))
-            if rc == 0 and root.is_dir():
-                self.run("pre-a3", [sys.executable, "-B", str(self.driver_dir / "unit_executor.py"), "run-commands",
-                                    "--manifest", str(units), "--out-dir", str(root / "executor")])
-                self.run("pre-a3", self.py(PRE_A3_MODULE, "issue", "--staging-root", str(root),
-                                           "--executor-summary", str(root / "executor" / "summary.json"),
-                                           "--deployment-receipt", str(deploy), "--policy-activation", str(activation),
-                                           "--output", str(certification)))
+            out = self.run_dir / "pre-a3-gates"
+            self.run("pre-a3", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "pre-a3", "--out", str(out),
+                                "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
+                                "--pre-a3-mode", "run", "--mode", "re-execute" if self.reexecute_gates else "full-set-pass", *source])
         if pre_a3_run:
             if not certification.is_file():
                 self.outcomes["pre-a3"].reasons.append(

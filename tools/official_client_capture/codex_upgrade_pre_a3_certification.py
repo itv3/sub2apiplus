@@ -10,13 +10,20 @@ epoch、策略 v2 的 seal 分支、``reuse-official-evidence`` 从 ``awaiting_r
 收据绑定当前 ARM64 部署收据（五摘要必须等于当前工具身份）、A2.6 策略激活认证，以及可选的
 真实 v2 Formal 结构原子演练收据（29 个 Job 零网络合成动作）。整个过程 ``network_attempts=0``、
 ``live_request_count=0``；任何场景失败即认证失败关闭。
+
+E3-02 起签发新形状 ``pre-a3-path-certification/v2``：场景作为入口门禁的可承接单元执行，认证从单元执行记录
+组装（每个场景引用一条正式执行记录的摘要，并标明本次执行或承接），核验时逐条重验记录。v1 的全部字段原样保留，
+消费端照读；v1 历史认证照旧只读重放。
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
+import shutil
 import sys
 import tempfile
 import time
@@ -33,6 +40,9 @@ from tools.official_client_capture import codex_upgrade_zero_request_smoke as sm
 from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
+# E3-02：从单元执行记录组装的新形状（v1 字段全部保留，另带逐场景的执行记录引用与运行清单引用）。
+SCHEMA_VERSION_V2 = "pre-a3-path-certification/v2"
+CERTIFICATION_SCHEMAS = (SCHEMA_VERSION, SCHEMA_VERSION_V2)
 # 修好接着跑第 19 项：跨部署复用既有 pre-A3 认证时登记的复用收据（write-once、按绑定内容幂等）。
 REUSE_SCHEMA_VERSION = "pre-a3-reuse-receipt/v1"
 REUSE_RECEIPT_PREFIX = "pre-a3-reuse-"
@@ -569,13 +579,16 @@ def _certification_bindings(
 
 def _build_receipt(
     staging_root: Path, bindings: Mapping[str, Any], report: list[dict[str, Any]], failed: list[str], network_attempts: int,
-    observed_at_utc: str | None,
+    observed_at_utc: str | None, *, records: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """串行（run）与按场景并行（issue）共用的收据形状。"""
+    """串行（run）、按场景并行（issue）与从单元执行记录签发（E3-02）共用的收据形状。
+
+    ``records`` 给出时签 v2：另带运行清单引用（``unit_manifest``）与记录库路径（``record_store``），逐场景的执行记录
+    引用（``unit_record``）已由调用方放进 ``report``。v1 的字段一个不少，消费端照读。"""
 
     identity = bindings["identity"]
     receipt = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": SCHEMA_VERSION_V2 if records is not None else SCHEMA_VERSION,
         "status": "passed" if not failed and not network_attempts else "failed",
         "certified_at_utc": observed_at_utc or _utc_now(),
         "staging_root": str(staging_root),
@@ -601,6 +614,9 @@ def _build_receipt(
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if records is not None:
+        receipt["unit_manifest"] = dict(records["unit_manifest"])
+        receipt["record_store"] = str(records["record_store"])
     receipt["receipt_sha256"] = _fingerprint(receipt)
     return receipt
 
@@ -840,6 +856,351 @@ def issue_certification(
     return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc)
 
 
+# ---------------------------------------------------------------------------
+# E3-02：场景单元可承接——稳定命令、结果行、从单元执行记录签发
+# ---------------------------------------------------------------------------
+# 场景单元的命令只带稳定内容（场景名与场景父目录），单元规格不随运行变，入口门禁才能承接已经通过的场景；场景的临时根
+# 每次在父目录下新建，通过后删除、失败保留供排查。结论不再写结果文件，而是单元标准输出里恰好一行
+# ``PRE_A3_SCENARIO_RESULT <JSON>``：执行器把日志按内容摘要存进记录库，签发从记录库里的日志取这一行。
+# 执行记录（unit-execution-record/v1）与运行清单（unit-execution-manifest/v1）的格式由 tools/ci/unit_records.py 定义。
+# 认证在数据根运行，那里没有 tools/ci，所以核验算法（规范 JSON 的 sha256、记录库的路径规则、按原始字段判通过）在这里
+# 照写一份，测试与 unit_records 交叉核对。
+SCENARIO_RESULT_V2_SCHEMA = "pre-a3-scenario-result/v2"
+SCENARIO_RESULT_PREFIX = "PRE_A3_SCENARIO_RESULT "
+UNIT_RECORD_SCHEMA = "unit-execution-record/v1"
+UNIT_MANIFEST_SCHEMA = "unit-execution-manifest/v1"
+UNIT_MODES = ("full-set-pass", "re-execute")
+UNIT_MAX_AGE_HOURS = 168.0
+# 补账场景在本模块里实现，用的是 test_codex_upgrade 的 B0 夹具。
+ACCOUNTING_TEST_MODULE = "tools.official_client_capture.tests.test_codex_upgrade"
+_SHA256_TEXT = re.compile(r"[0-9a-f]{64}")
+_RUN_ID_TEXT = re.compile(r"[0-9A-Za-z._-]+")
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _sealed(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
+    body = {name: value for name, value in payload.items() if name != key}
+    return {**body, key: _sha256_json(body)}
+
+
+def _seal_matches(payload: Mapping[str, Any], key: str) -> bool:
+    body = {name: value for name, value in payload.items() if name != key}
+    return payload.get(key) == _sha256_json(body)
+
+
+def _parse_utc(text: Any) -> float | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.timestamp() if parsed.tzinfo is not None else None
+
+
+def scenario_test_module(name: str) -> str:
+    """场景用到的测试模块（点分名）：登记场景取场景表，补账场景是 test_codex_upgrade。"""
+
+    if name == ACCOUNTING_SCENARIO_NAME:
+        return ACCOUNTING_TEST_MODULE
+    for scenario in SCENARIOS:
+        if scenario[0] == name:
+            return scenario[2]
+    raise CertificationError(f"未登记的认证场景：{name}")
+
+
+def run_scenario_unit(name: str, staging_parent: Path, *, diagnostic: bool = False) -> dict[str, Any]:
+    """E3-02 的单场景入口：在 ``staging_parent`` 下新建本次的临时根跑一个场景，返回带自摘要的单场景结果
+    （``pre-a3-scenario-result/v2``）。通过且零网络时删掉临时根，否则保留供排查。诊断执行（执行器下发
+    ``UNIT_EXECUTOR_KIND=diagnostic``）的临时根另带前缀、结果标 ``kind=diagnostic``，不参与签发。"""
+
+    if name not in scenario_names():
+        raise CertificationError(f"未登记的认证场景：{name}")
+    parent = Path(staging_parent).resolve(strict=False)
+    if project_ledger.STAGING_DIR_NAME not in parent.parts:
+        raise CertificationError("场景父目录必须位于 staging 目录树内")
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    prefix = ("diagnostic-" if diagnostic else "") + _scenario_file_name(name) + "-"
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    result = run_single_scenario(name, root)
+    payload = _sealed({
+        "schema_version": SCENARIO_RESULT_V2_SCHEMA,
+        "name": name,
+        "kind": "diagnostic" if diagnostic else "formal",
+        "scenario": result["scenario"],
+        "network_attempts": result["network_attempts"],
+        "finished_at_utc": result["finished_at_utc"],
+        "staging_root": str(root),
+    }, "result_sha256")
+    if result["scenario"].get("status") == "passed" and result["network_attempts"] == 0:
+        shutil.rmtree(root, ignore_errors=True)
+    return payload
+
+
+def _emit_result_line(result: Mapping[str, Any]) -> None:
+    """把场景结果作为单独一行写到标准输出。前面先换行，免得接在场景自己没换行的输出后面；拿得到文件描述符时绕过
+    缓冲、直接写满整行，不和别的输出交错。"""
+
+    line = ("\n" + SCENARIO_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        descriptor = sys.stdout.fileno()
+    except (OSError, ValueError, AttributeError):
+        sys.stdout.write(line.decode("utf-8"))
+        sys.stdout.flush()
+        return
+    while line:
+        line = line[os.write(descriptor, line):]
+
+
+def plan_scenario_commands(staging_parent: Path, *, python: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+    """E3-02 的场景命令单元清单：每个场景一条 ``run-scenario --name X --staging-parent <父目录>``，命令只带稳定内容。
+    每个单元另给场景的测试模块文件（``scenario_test_file``，仓库相对路径），入口门禁据此按静态依赖闭包声明单元输入。"""
+
+    parent = Path(staging_parent).resolve(strict=False)
+    if project_ledger.STAGING_DIR_NAME not in parent.parts:
+        raise CertificationError("场景父目录必须位于 staging 目录树内")
+    real_chains = {scenario[0] for scenario in SCENARIOS if ".real_chains." in scenario[2]}
+    workdir = str(Path(cwd or os.getcwd()).resolve())
+    units = []
+    for name in scenario_names():
+        units.append({
+            "unit_id": f"{SCENARIO_UNIT_PREFIX}{name}",
+            "argv": [python or sys.executable, "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario",
+                     "--name", name, "--staging-parent", str(parent)],
+            "cwd": workdir,
+            "cores": 1,
+            "memory_mb": 1024,
+            "timeout_seconds": REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS,
+            "weight": SCENARIO_SECONDS.get(name, 30.0),
+            "scenario_test_file": scenario_test_module(name).replace(".", "/") + ".py",
+        })
+    return {"schema_version": EXECUTOR_COMMANDS_SCHEMA, "staging_parent": str(parent), "units": units}
+
+
+class _RecordStore:
+    """记录库的只读访问，路径规则与 tools/ci/unit_records.RecordStore 相同：记录按单元 ID 摘要的前 16 位分桶，日志与
+    运行清单按名字存放。"""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root).resolve(strict=True)
+
+    def record_path(self, unit_id: str, record_sha256: str) -> Path:
+        return self.root / "records" / hashlib.sha256(unit_id.encode("utf-8")).hexdigest()[:16] / f"{record_sha256}.json"
+
+    def log_path(self, digest: str) -> Path:
+        return self.root / "logs" / f"{digest}.log"
+
+    def manifest_path(self, run_id: str) -> Path:
+        return self.root / "runs" / f"{run_id}.json"
+
+    @staticmethod
+    def read(path: Path) -> dict[str, Any] | None:
+        try:
+            if Path(path).is_symlink():
+                return None
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+
+def _record_passes(record: Mapping[str, Any]) -> tuple[bool, str]:
+    """按执行记录的原始字段重判结论，与 unit_records.derived_pass 的命令单元分支同一规则（不只看 passed 字段）。"""
+
+    if record.get("exit_code") != 0 or record.get("signal") is not None or record.get("timed_out") is not False:
+        return False, "退出状态不是成功"
+    if record.get("unit_type") != "command":
+        return False, "不是命令单元"
+    if record.get("passed") is not True:
+        return False, "记录结论不是通过"
+    return True, ""
+
+
+def _published_manifest(store: _RecordStore, path: Path) -> dict[str, Any]:
+    """本次运行清单，并核对它就是记录库里已发布的那一份（执行器只在清单自检通过后发布）。"""
+
+    manifest = store.read(Path(path))
+    if manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(manifest, "manifest_sha256"):
+        raise CertificationError("运行清单缺失、格式不对或自摘要不符")
+    if manifest.get("mode") not in UNIT_MODES:
+        raise CertificationError(f"运行清单的模式不认识：{manifest.get('mode')!r}")
+    run_id = str(manifest.get("run_id") or "")
+    published = store.read(store.manifest_path(run_id)) if _RUN_ID_TEXT.fullmatch(run_id) else None
+    if published is None or not _seal_matches(published, "manifest_sha256") or published.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise CertificationError("运行清单没有发布到记录库（清单自检没通过的运行不能签发）")
+    return published
+
+
+def _scenario_from_records(store: _RecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any],
+                           name: str) -> tuple[dict[str, Any] | None, int, list[str]]:
+    """核验运行清单里一个场景的那一项，返回（带执行记录引用的场景记录、网络计数、问题）。问题非空即该场景失败。
+
+    核对：处置是本次执行或承接（重新执行全集不得承接）；记录在库、文件名＝自摘要、是该场景的正式执行、规格与输入
+    摘要等于清单、按原始字段判通过；本次执行的记录来自本次运行，承接的记录来自别的运行、原运行清单把它列为正式执行、
+    没超过清单的承接期限；日志在库且摘要相符，日志里恰好一行场景结果、自摘要相符、场景名对、是正式执行、网络计数为 0、
+    场景通过。"""
+
+    unit_id = f"{SCENARIO_UNIT_PREFIX}{name}"
+    disposition = entry.get("disposition")
+    if disposition not in ("executed", "inherited"):
+        return None, 0, [f"运行清单里的处置不是本次执行或承接：{disposition!r}"]
+    if disposition == "inherited" and manifest.get("mode") != "full-set-pass":
+        return None, 0, ["重新执行全集的运行清单不得有承接项"]
+    digest = str(entry.get("record_sha256") or "")
+    record = store.read(store.record_path(unit_id, digest)) if _SHA256_TEXT.fullmatch(digest) else None
+    if record is None:
+        return None, 0, ["执行记录不在记录库里"]
+    if record.get("schema_version") != UNIT_RECORD_SCHEMA or not _seal_matches(record, "record_sha256") or record.get("record_sha256") != digest:
+        return None, 0, ["执行记录自摘要不符（被改过）"]
+    if record.get("unit_id") != unit_id or record.get("kind") != "formal":
+        return None, 0, ["执行记录不是该场景的正式执行"]
+    problems: list[str] = []
+    if record.get("spec_sha256") != entry.get("spec_sha256") or record.get("inputs_sha256") != entry.get("inputs_sha256"):
+        problems.append("执行记录的单元规格或输入摘要与运行清单不符")
+    passed, why = _record_passes(record)
+    if not passed:
+        problems.append(f"执行记录不是通过（{why}）")
+    run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
+    run_id = str(run.get("run_id") or "")
+    if disposition == "executed":
+        if run_id != manifest.get("run_id"):
+            problems.append("登记为本次执行，记录却来自别的运行")
+    else:
+        if run_id == manifest.get("run_id"):
+            problems.append("承接项的记录来自本次运行")
+        origin = store.read(store.manifest_path(run_id)) if _RUN_ID_TEXT.fullmatch(run_id) else None
+        if origin is None or origin.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(origin, "manifest_sha256"):
+            problems.append("原运行的清单缺失或自摘要不符")
+        elif not any(isinstance(item, Mapping) and item.get("unit_id") == unit_id and item.get("disposition") == "executed"
+                     and item.get("record_sha256") == digest for item in origin.get("units") or []):
+            problems.append("原运行的清单没有把这条记录列为该场景的正式执行")
+        completed, decided = _parse_utc(record.get("completed_at_utc")), _parse_utc(manifest.get("decided_at_utc"))
+        try:
+            limit = min(float(manifest.get("inheritance_max_age_hours") or 0), UNIT_MAX_AGE_HOURS)
+        except (TypeError, ValueError):
+            limit = 0.0
+        if completed is None or decided is None or not -360 <= decided - completed <= limit * 3600:
+            problems.append("承接的记录超过运行清单的承接期限，或时间不可读")
+    log = record.get("log") if isinstance(record.get("log"), Mapping) else {}
+    log_digest = str(log.get("sha256") or "")
+    log_path = store.log_path(log_digest) if _SHA256_TEXT.fullmatch(log_digest) else None
+    data = log_path.read_bytes() if log_path is not None and log_path.is_file() and not log_path.is_symlink() else None
+    if data is None or hashlib.sha256(data).hexdigest() != log_digest:
+        return None, 0, problems + ["日志不在记录库里或摘要不符"]
+    lines = [line for line in data.decode("utf-8", "replace").splitlines() if line.startswith(SCENARIO_RESULT_PREFIX)]
+    if len(lines) != 1:
+        return None, 0, problems + [f"日志里的场景结果行不是恰好一行（{len(lines)} 行）"]
+    try:
+        result = json.loads(lines[0][len(SCENARIO_RESULT_PREFIX):])
+    except ValueError:
+        result = None
+    if not isinstance(result, dict) or result.get("schema_version") != SCENARIO_RESULT_V2_SCHEMA or not _seal_matches(result, "result_sha256"):
+        return None, 0, problems + ["场景结果行非法或自摘要不符"]
+    scenario, count = result.get("scenario"), result.get("network_attempts")
+    if result.get("name") != name or result.get("kind") != "formal" or not isinstance(scenario, dict) or scenario.get("name") != name:
+        return None, 0, problems + ["场景结果与场景名不符，或不是正式执行的结果"]
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        return None, 0, problems + ["场景结果里没有网络计数"]
+    if scenario.get("status") != "passed" or count != 0:
+        problems.append(f"场景没通过（{scenario.get('status')}，网络连接尝试 {count} 次）")
+    reference = {
+        "record_sha256": digest, "run_id": run_id, "disposition": disposition, "log_sha256": log_digest,
+        "result_sha256": result["result_sha256"], "completed_at_utc": record.get("completed_at_utc"),
+    }
+    return {**scenario, "unit_record": reference}, count, problems
+
+
+def _scenarios_from_records(store: _RecordStore, manifest: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[str], int]:
+    """按场景全集逐个核验运行清单，返回（逐场景报告、失败项、网络计数合计）。清单里全集之外的 pre-A3 单元同样让认证
+    不通过（记在失败项）。"""
+
+    names = scenario_names()
+    entries: dict[str, list[Mapping[str, Any]]] = {}
+    for item in manifest.get("units") or []:
+        if isinstance(item, Mapping) and str(item.get("unit_id", "")).startswith(SCENARIO_UNIT_PREFIX):
+            entries.setdefault(str(item["unit_id"]), []).append(item)
+    stray = sorted(set(entries) - {f"{SCENARIO_UNIT_PREFIX}{name}" for name in names})
+    report: list[dict[str, Any]] = []
+    attempts = 0
+    for name in names:
+        found = entries.get(f"{SCENARIO_UNIT_PREFIX}{name}", [])
+        if len(found) != 1:
+            report.append(_placeholder_record(name, ["运行清单里没有该场景（缺报）" if not found else "运行清单里该场景出现多次"], None))
+            continue
+        row, count, problems = _scenario_from_records(store, manifest, found[0], name)
+        attempts += count
+        if problems or row is None:
+            report.append(_placeholder_record(name, problems or ["场景执行记录核验不通过"], (row or {}).get("seconds")))
+        else:
+            report.append(row)
+    failed = [item["name"] for item in report if item["status"] != "passed"]
+    failed += [f"全集之外的执行单元：{unit_id}" for unit_id in stray]
+    return report, failed, attempts
+
+
+def issue_certification_from_records(
+    staging_root: Path,
+    *,
+    unit_manifest: Path,
+    record_store: Path,
+    deployment_receipt: Path,
+    policy_activation: Path,
+    campaign_run_rehearsal_receipt: Path | None = None,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """E3-02 签发 v2：从入口门禁 ``run-gates`` 的运行清单与记录库组装认证。
+
+    签发条件：全部场景在清单里各恰好一项、每项都是一条通过的正式执行记录（本次执行或承接）、输入摘要等于清单（清单
+    由执行器按当前测试树算出，入口门禁跑之前已核对数据根部署的就是这棵树）、网络计数为 0；清单本身已经发布到记录库。
+    ``staging_root`` 是场景父目录（写进收据的 ``staging_root``，v1 字段含义不变：认证用的 staging 位置）。"""
+
+    root = Path(staging_root).resolve(strict=False)
+    if project_ledger.STAGING_DIR_NAME not in root.parts:
+        raise CertificationError("场景父目录必须位于 staging 目录树内")
+    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt)
+    try:
+        store = _RecordStore(Path(record_store))
+    except OSError as error:
+        raise CertificationError(f"记录库不可读：{error}") from error
+    manifest = _published_manifest(store, Path(unit_manifest))
+    report, failed, attempts = _scenarios_from_records(store, manifest)
+    records = {
+        "unit_manifest": {"path": str(store.manifest_path(str(manifest["run_id"]))), "manifest_sha256": manifest["manifest_sha256"],
+                          "run_id": manifest["run_id"], "mode": manifest["mode"]},
+        "record_store": str(store.root),
+    }
+    return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc, records=records)
+
+
+def _verify_records_v2(payload: Mapping[str, Any]) -> None:
+    """v2 认证的逐条重验：按收据登记的记录库与运行清单重新核验每个场景，逐场景报告必须与收据完全一致。"""
+
+    reference = payload.get("unit_manifest") if isinstance(payload.get("unit_manifest"), Mapping) else {}
+    try:
+        store = _RecordStore(Path(str(payload.get("record_store") or "")))
+    except OSError as error:
+        raise CertificationError(f"v2 认证登记的记录库不可读：{error}") from error
+    run_id = str(reference.get("run_id") or "")
+    manifest = store.read(store.manifest_path(run_id)) if _RUN_ID_TEXT.fullmatch(run_id) else None
+    if (manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(manifest, "manifest_sha256")
+            or manifest.get("manifest_sha256") != reference.get("manifest_sha256") or manifest.get("mode") != reference.get("mode")):
+        raise CertificationError("v2 认证引用的运行清单在记录库里缺失，或与收据登记的不符")
+    report, failed, attempts = _scenarios_from_records(store, manifest)
+    if failed or attempts:
+        raise CertificationError(f"v2 认证的执行记录重验不通过：{failed[:3]}")
+    if payload.get("scenarios") != report:
+        raise CertificationError("v2 认证的逐场景结果与记录库重验结果不一致")
+
+
 def write_certification(output: Path, receipt: Mapping[str, Any]) -> Path:
     """通过的认证写正式路径（write-once）；没通过的写带 UTC 时间后缀的旁路文件，正式路径保持不存在，修好后同一坐标
     直接重跑（原来失败的认证也写正式路径，重跑被「文件已存在」挡住，驱动还会把它当成已有认证）。"""
@@ -859,8 +1220,10 @@ def write_certification(output: Path, receipt: Mapping[str, Any]) -> Path:
 
 
 def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """只读校验认证对当前工具是否有效：v1、v2 都认；v2 另按登记的记录库与运行清单逐条重验执行记录（E3-02）。"""
+
     payload = policy_certification._read_json(Path(path), "pre-A3 路径认证收据")
-    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("status") != "passed":
+    if payload.get("schema_version") not in CERTIFICATION_SCHEMAS or payload.get("status") != "passed":
         raise CertificationError("路径认证收据 schema 非法或未通过")
     unsigned = {k: v for k, v in payload.items() if k != "receipt_sha256"}
     if _fingerprint(unsigned) != payload.get("receipt_sha256"):
@@ -872,6 +1235,8 @@ def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | N
         raise CertificationError("路径认证收据五摘要与当前工具身份不一致")
     if payload.get("network_attempts") != 0 or payload.get("live_request_count") != 0:
         raise CertificationError("路径认证收据零请求边界不满足")
+    if payload["schema_version"] == SCHEMA_VERSION_V2:
+        _verify_records_v2(payload)
     return payload
 
 
@@ -1133,16 +1498,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--policy-activation", type=Path, required=True)
     run.add_argument("--campaign-run-rehearsal-receipt", type=Path)
     run.add_argument("--output", type=Path, required=True)
-    plan = subparsers.add_parser("plan", help="E2-03：生成统一调度执行器的命令单元清单（每个场景一条 run-scenario）")
-    plan.add_argument("--staging-root", type=Path, required=True, help="staging 目录树内的认证根；已存在且非空时自动改用带时间后缀的新目录")
-    plan.add_argument("--output", type=Path, required=True, help="清单写到这里（执行器 run-commands --manifest）")
-    single = subparsers.add_parser("run-scenario", help="E2-03：在本进程跑一个场景（执行器派发），写单场景结果")
+    plan = subparsers.add_parser("plan", help="生成统一调度执行器的场景命令单元清单（每个场景一条 run-scenario）")
+    plan_root = plan.add_mutually_exclusive_group(required=True)
+    plan_root.add_argument("--staging-root", type=Path,
+                           help="E2-03：staging 目录树内的认证根；已存在且非空时自动改用带时间后缀的新目录")
+    plan_root.add_argument("--staging-parent", type=Path,
+                           help="E3-02：staging 目录树内的场景父目录（固定位置）；命令只带稳定内容，入口门禁可承接")
+    plan.add_argument("--output", type=Path, required=True, help="清单写到这里（执行器 run-commands --manifest，或入口门禁 --pre-a3-units）")
+    single = subparsers.add_parser("run-scenario", help="在本进程跑一个场景（执行器派发）")
     single.add_argument("--name", required=True)
-    single.add_argument("--staging-root", type=Path, required=True)
-    single.add_argument("--result", type=Path, required=True)
-    issue = subparsers.add_parser("issue", help="E2-03：核对场景全集与网络计数后签发（没通过只写旁路文件）")
-    issue.add_argument("--staging-root", type=Path, required=True, help="plan 打印的实际认证根")
-    issue.add_argument("--executor-summary", type=Path, required=True, help="执行器 run-commands 的 summary.json")
+    single.add_argument("--staging-parent", type=Path,
+                        help="E3-02：场景父目录；本次临时根在其下新建，结果作为标准输出里的一行 PRE_A3_SCENARIO_RESULT")
+    single.add_argument("--staging-root", type=Path, help="E2-03：场景临时根（与 --result 同用）")
+    single.add_argument("--result", type=Path, help="E2-03：单场景结果文件")
+    issue = subparsers.add_parser("issue", help="核对场景全集与网络计数后签发（没通过只写旁路文件）")
+    issue.add_argument("--staging-root", type=Path, required=True, help="E2-03：plan 打印的实际认证根；E3-02：场景父目录")
+    issue_source = issue.add_mutually_exclusive_group(required=True)
+    issue_source.add_argument("--executor-summary", type=Path, help="E2-03：执行器 run-commands 的 summary.json，签 v1")
+    issue_source.add_argument("--unit-manifest", type=Path,
+                              help="E3-02：执行器 run-gates 的 unit-manifest.json，签 v2（另给 --record-store）")
+    issue.add_argument("--record-store", type=Path, help="E3-02：记录库目录（与 --unit-manifest 同用）")
     issue.add_argument("--deployment-receipt", type=Path, required=True)
     issue.add_argument("--policy-activation", type=Path, required=True)
     issue.add_argument("--campaign-run-rehearsal-receipt", type=Path)
@@ -1180,7 +1555,20 @@ def main(argv: list[str] | None = None) -> int:
                     policy_activation=arguments.policy_activation,
                     campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
                 )
+            elif arguments.unit_manifest is not None:
+                if arguments.record_store is None:
+                    raise CertificationError("--unit-manifest 需要同时给 --record-store")
+                receipt = issue_certification_from_records(
+                    arguments.staging_root,
+                    unit_manifest=arguments.unit_manifest,
+                    record_store=arguments.record_store,
+                    deployment_receipt=arguments.deployment_receipt,
+                    policy_activation=arguments.policy_activation,
+                    campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                )
             else:
+                if arguments.record_store is not None:
+                    raise CertificationError("--record-store 只与 --unit-manifest 同用")
                 receipt = issue_certification(
                     arguments.staging_root,
                     executor_summary=arguments.executor_summary,
@@ -1190,6 +1578,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             target = write_certification(arguments.output, receipt)
             summary = {
+                "schema_version": receipt["schema_version"],
                 "status": receipt["status"],
                 "scenario_count": receipt["scenario_count"],
                 "failed_scenarios": receipt["failed_scenarios"],
@@ -1200,14 +1589,30 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
             return 0 if receipt["status"] == "passed" else 2
         if arguments.action == "plan":
-            manifest = plan_scenario_units(arguments.staging_root)
+            if arguments.staging_parent is not None:
+                manifest = plan_scenario_commands(arguments.staging_parent)
+                where = {"staging_parent": manifest["staging_parent"]}
+            else:
+                manifest = plan_scenario_units(arguments.staging_root)
+                where = {"staging_root": manifest["staging_root"]}
             policy_certification._write_once(arguments.output.resolve(strict=False), manifest)
-            print(json.dumps({"staging_root": manifest["staging_root"], "units": len(manifest["units"]),
-                              "manifest": str(arguments.output)}, ensure_ascii=False, sort_keys=True))
+            print(json.dumps({**where, "units": len(manifest["units"]), "manifest": str(arguments.output)}, ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.action == "run-scenario":
-            # 执行器的诊断重跑（UNIT_EXECUTOR_KIND=diagnostic）用同一条命令：结果与临时目录另放，不覆盖正式执行。
+            # 执行器的诊断重跑（UNIT_EXECUTOR_KIND=diagnostic）用同一条命令：临时目录另放、结果标诊断，不顶替正式执行。
             diagnostic = os.environ.get("UNIT_EXECUTOR_KIND") == "diagnostic"
+            if arguments.staging_parent is not None:
+                if arguments.staging_root is not None or arguments.result is not None:
+                    raise CertificationError("--staging-parent 不能与 --staging-root、--result 同用")
+                result = run_scenario_unit(arguments.name, arguments.staging_parent, diagnostic=diagnostic)
+                record = result["scenario"]
+                print(json.dumps({"name": arguments.name, "status": record.get("status"), "network_attempts": result["network_attempts"],
+                                  "seconds": record.get("seconds"), "staging_root": result["staging_root"]}, ensure_ascii=False, sort_keys=True),
+                      flush=True)
+                _emit_result_line(result)
+                return 0 if record.get("status") == "passed" and result["network_attempts"] == 0 else 1
+            if arguments.staging_root is None or arguments.result is None:
+                raise CertificationError("run-scenario 需要 --staging-parent，或者同时给 --staging-root 与 --result")
             staging = Path(f"{arguments.staging_root}.diagnostic") if diagnostic else arguments.staging_root
             result_path = arguments.result.with_name(arguments.result.stem + ".diagnostic.json") if diagnostic else arguments.result
             result = run_single_scenario(arguments.name, staging)

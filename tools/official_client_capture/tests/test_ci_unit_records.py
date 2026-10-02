@@ -205,6 +205,41 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
         self.assertNotEqual(ur.entries_sha256(entries), ur.entries_sha256(changed))
         self.assertEqual(ur.entries_sha256(ur.executor_environment({**base, "PYTHONPYCACHEPREFIX": "/elsewhere"})), ur.entries_sha256(entries))
 
+    def test_declared_files_and_test_modules_expand_like_test_units_but_without_head(self) -> None:
+        """E3-02：命令单元可以声明仓库里的单个文件与测试模块；测试模块按与采集测试单元相同的闭包展开（闭包里的测试文件、
+        tests/__init__.py），但不加 HEAD——pre-A3 场景在数据根运行，读不到 git。路径非法、模块不在 tests 目录下都拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = _repo(Path(directory) / "repo", {"pkg/tests/test_codex_0151_worktree_successor.py": PASS})
+            repo = ur.RepoIndex.load(root)
+            cache: dict = {}
+            declared = ur.declared_inputs(repo, {"files": [{"category": "managed", "path": "Makefile"}], "test_modules": [
+                "pkg/tests/test_uses_helper.py", "pkg/tests/test_codex_0151_worktree_successor.py"]}, cache)
+            names = {entry["name"] for entry in declared}
+            self.assertLessEqual({"file:Makefile", "file:pkg/tests/test_uses_helper.py", "file:pkg/tests/helper_fixture.py",
+                                  "file:pkg/tests/__init__.py", "file:pkg/tests/test_codex_0151_worktree_successor.py"}, names)
+            self.assertNotIn("head", names, "人工名单里读 git 历史的模块，作为场景声明时也不加 HEAD")
+            self.assertEqual(len(cache), 1, "同一受管树的依赖分析只建一次")
+            deps = next(iter(cache.values()))
+            as_test_unit = {entry["name"] for entry in ur.test_unit_inputs(repo, deps, root / "pkg/tests/test_codex_0151_worktree_successor.py")}
+            self.assertIn("head", as_test_unit, "同一模块作采集测试单元时照旧加 HEAD")
+            for bad in ({"test_modules": ["/abs/test_x.py"]}, {"test_modules": ["pkg/../pkg/tests/test_leaf.py"]},
+                        {"test_modules": ["pkg/mod.py"]}, {"test_modules": ["pkg/tests/test_missing.py"]},
+                        {"files": [{"path": "Makefile"}]}, {"files": [{"category": "managed", "path": "../x"}]}):
+                with self.subTest(bad), self.assertRaises(ur.RecordsError):
+                    ur.declared_inputs(repo, bad, cache)
+
+    def test_unit_spec_ignores_cache_location_variables(self) -> None:
+        """E3-02：只决定缓存位置的环境变量（字节码前缀、身份记忆目录）不进单元规格，与环境指纹同一口径；别的环境变量照算。"""
+
+        def spec(env: dict[str, str]) -> dict:
+            unit = ue.Unit("pre-a3:x", "pre-a3:x", (), ue.Quota(1, 128), False, 1.0, command=("true",), cwd="/d", env=tuple(sorted(env.items())))
+            return ue.unit_spec(unit, start=None, pattern=None, timeout_seconds=60)
+
+        base = spec({"PYTHONPATH": "."})
+        self.assertEqual(spec({"PYTHONPATH": ".", "PYTHONPYCACHEPREFIX": "/pyc", "CODEX_UPGRADE_IDENTITY_MEMO": "/memo"}), base)
+        self.assertNotEqual(spec({"PYTHONPATH": "/other"}), base)
+
 
 class InheritanceDecisionTests(unittest.TestCase):
     """承接判定逐条拒绝理由：在临时记录库里放一条合格记录，再一项一项改。"""

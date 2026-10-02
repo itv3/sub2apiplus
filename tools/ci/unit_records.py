@@ -436,11 +436,12 @@ class TestDependencies:
         return merged
 
 
-def test_unit_inputs(repo: RepoIndex, deps: TestDependencies, module_file: Path) -> list[dict[str, Any]]:
-    """采集工具测试单元的输入明细（见模块说明）。"""
+def _closure_entries(repo: RepoIndex, deps: TestDependencies, module_file: Path, *, git: bool) -> list[dict[str, Any]]:
+    """测试模块的闭包输入：闭包里的测试文件与 ``tests/__init__.py``；碰到真实链另加整个 helper 与真实链目录；整目录
+    读取的另加整个测试目录；``git`` 为真时读 git 历史的另加 HEAD。"""
 
     ranges = standard_ranges(repo.relative(deps.occ))
-    entries = [repo.range_entry(ranges[key]) for key in ("managed", "tests-fixtures", "docs", "rest")]
+    entries: list[dict[str, Any]] = []
     tests = deps.closure(module_file)
     init = deps.tests_dir / "__init__.py"
     if init.exists():
@@ -456,19 +457,56 @@ def test_unit_inputs(repo: RepoIndex, deps: TestDependencies, module_file: Path)
         entry = repo.range_entry(ranges["tests"])
         entry["detail"]["reasons"] = sorted(set(flags.whole_tests))[:20]
         entries.append(entry)
-    if flags.git:
+    if git and flags.git:
         entry = repo.head_entry()
         entry["detail"]["reasons"] = sorted(set(flags.git))[:20]
         entries.append(entry)
+    return entries
+
+
+def test_unit_inputs(repo: RepoIndex, deps: TestDependencies, module_file: Path) -> list[dict[str, Any]]:
+    """采集工具测试单元的输入明细（见模块说明）。"""
+
+    ranges = standard_ranges(repo.relative(deps.occ))
+    entries = [repo.range_entry(ranges[key]) for key in ("managed", "tests-fixtures", "docs", "rest")]
+    entries.extend(_closure_entries(repo, deps, module_file, git=True))
     return _unique(entries)
 
 
-def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """门禁清单为命令单元声明的输入：``ranges``（仓库范围）、``head``、``resolved``（清单生成时已算好的明细）。"""
+def _repo_file(repo: RepoIndex, relative: Any) -> Path:
+    if (not isinstance(relative, str) or not relative or relative.startswith("/") or "\\" in relative
+            or any(part in ("", ".", "..") for part in relative.split("/"))):
+        raise RecordsError(f"仓库相对路径非法：{relative!r}")
+    return repo.root / relative
 
-    if not isinstance(declaration, Mapping) or set(declaration) - {"ranges", "head", "resolved"}:
+
+def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
+                    deps_cache: dict[Path, TestDependencies] | None = None) -> list[dict[str, Any]]:
+    """门禁清单为命令单元声明的输入：
+
+    * ``ranges``：仓库范围；``files``：仓库里的单个文件（``{category, path}``）；``head``：HEAD 提交；
+    * ``test_modules``：测试模块文件（仓库相对路径），按与采集测试单元相同的静态依赖闭包展开（E3-02 的 pre-A3 场景
+      单元用），不加 HEAD——场景在数据根运行，读不到 git；受管工具树由模块所在的 ``tests`` 目录的上一级确定，
+      同一受管树的依赖分析经 ``deps_cache`` 共用；
+    * ``resolved``：清单生成时已算好的明细（例如数据根才有的内容）。"""
+
+    allowed = {"ranges", "files", "test_modules", "head", "resolved"}
+    if not isinstance(declaration, Mapping) or set(declaration) - allowed:
         raise RecordsError(f"输入声明非法：{declaration!r}")
     entries = [repo.range_entry(spec) for spec in declaration.get("ranges") or []]
+    for item in declaration.get("files") or []:
+        if not isinstance(item, Mapping) or not isinstance(item.get("category"), str) or set(item) != {"category", "path"}:
+            raise RecordsError(f"文件输入声明非法：{item!r}")
+        entries.append(repo.file_entry(item["category"], _repo_file(repo, item["path"])))
+    cache = deps_cache if deps_cache is not None else {}
+    for relative in declaration.get("test_modules") or []:
+        module_file = _repo_file(repo, relative).resolve()
+        occ = next((parent.parent for parent in module_file.parents if parent.name == "tests"), None)
+        if occ is None or not module_file.is_file():
+            raise RecordsError(f"测试模块不存在或不在 tests 目录下：{relative}")
+        if occ not in cache:
+            cache[occ] = TestDependencies(occ)
+        entries.extend(_closure_entries(repo, cache[occ], module_file, git=False))
     if declaration.get("head"):
         entries.append(repo.head_entry())
     for entry in declaration.get("resolved") or []:

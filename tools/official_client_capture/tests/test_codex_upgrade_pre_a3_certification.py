@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -697,6 +699,358 @@ class PreA3CertificationReuseTests(unittest.TestCase):
                 certification.find_reuse_receipt(store, first["binding_sha256"]), Path(first["reuse_receipt"])
             )
             self.assertIsNone(certification.find_reuse_receipt(store, "0" * 64))
+
+
+# ---------------------------------------------------------------------------
+# E3-02：场景单元可承接，认证从单元执行记录组装（v2）
+# ---------------------------------------------------------------------------
+
+
+def _ci_module(name: str):
+    """tools/ci 下的模块（不是受管代码）按路径加载：测试用它造记录库、跑执行器，并交叉核对认证模块照写的核验算法。"""
+
+    spec = importlib.util.spec_from_file_location(f"{name}_for_pre_a3_tests", REPO_ROOT / "tools" / "ci" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+V1_FIELDS = {
+    "schema_version", "status", "certified_at_utc", "staging_root", "fixture_only", "identity", "policy_version", "deployment_receipt",
+    "policy_activation", "campaign_run_rehearsal_receipt", "real_chain_registration", "scenarios", "scenario_count", "failed_scenarios",
+    "network_attempts", "live_request_count", "scanned_bytes", "receipt_sha256",
+}
+
+
+class _SyntheticStore:
+    """合成记录库：每个场景一条通过的正式执行记录、日志里一行场景结果，运行清单发布进库；变异由调用方指定。"""
+
+    def __init__(self, root: Path) -> None:
+        self.ur = _ci_module("unit_records")
+        self.root = root
+        self.store = self.ur.RecordStore(root / "store")
+        self.logs = 0
+
+    def result(self, name: str, *, network: int = 0, status: str = "passed", kind: str = "formal") -> dict:
+        return certification._sealed({
+            "schema_version": certification.SCENARIO_RESULT_V2_SCHEMA, "name": name, "kind": kind,
+            "scenario": {"name": name, "description": "替身", "test": "tools.fake:FakeTests.x", "status": status, "seconds": 0.1},
+            "network_attempts": network, "finished_at_utc": "2026-10-02T00:00:00.000Z", "staging_root": "/staging/x",
+        }, "result_sha256")
+
+    @staticmethod
+    def log_text(result: dict | None, *, copies: int = 1) -> str:
+        lines = ["场景自己的输出，没有换行结尾"]
+        lines += [certification.SCENARIO_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, sort_keys=True)] * (copies if result else 0)
+        return "\n".join(lines) + "\n"
+
+    def record(self, name: str, run_id: str, *, log_text: str | None = None, completed: str = "2026-10-02T00:00:00Z",
+               **overrides: object) -> dict:
+        self.logs += 1
+        log = self.root / f"log-{self.logs}.log"
+        log.write_text(self.log_text(self.result(name)) if log_text is None else log_text, encoding="utf-8")
+        digest = self.ur.file_sha256(log)
+        self.store.put_log(log, digest)
+        body = {
+            "unit_id": f"{certification.SCENARIO_UNIT_PREFIX}{name}", "unit_type": "command", "kind": "formal",
+            "run": {"run_id": run_id, "mode": "full-set-pass", "out_dir": "/out"}, "executor": {"sha256": "e"}, "policy_sha256": "p",
+            "environment": [], "environment_sha256": self.ur.entries_sha256([]), "spec": {}, "spec_sha256": f"spec-{name}",
+            "inputs": [], "inputs_sha256": f"inputs-{name}", "inheritable": True, "not_inheritable_reason": None, "test_ids": [],
+            "tests": None, "passed": True, "exit_code": 0, "signal": None, "timed_out": False, "seconds": 0.1,
+            "log": {"path": str(log), "sha256": digest}, "started_at_utc": completed, "completed_at_utc": completed, **overrides,
+        }
+        record = self.ur.seal_record(body)
+        self.store.put_record(record)
+        return record
+
+    @staticmethod
+    def entry(record: dict, disposition: str = "executed") -> dict:
+        return {"unit_id": record["unit_id"], "disposition": disposition, "record_sha256": record["record_sha256"],
+                "record_path": "/不用这个路径", "spec_sha256": record["spec_sha256"], "inputs_sha256": record["inputs_sha256"]}
+
+    def manifest(self, run_id: str, entries: list[dict], *, mode: str = "full-set-pass", decided: str = "2026-10-02T01:00:00Z",
+                 publish: bool = True) -> Path:
+        manifest = self.ur.build_manifest(
+            run_id=run_id, mode=mode, planned_units=[entry["unit_id"] for entry in entries], units=entries, decided_at_utc=decided,
+            inheritance_max_age_hours=168.0, policy_sha256="p", environment=[], environment_sha256=self.ur.entries_sha256([]),
+            executor={"sha256": "e"}, test_groups={}, diagnostic=[])
+        if publish:
+            self.store.put_manifest(manifest)
+        path = self.root / f"unit-manifest-{run_id}.json"
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def run(self, run_id: str, names: list[str]) -> tuple[Path, list[dict]]:
+        records = [self.record(name, run_id) for name in names]
+        return self.manifest(run_id, [self.entry(record) for record in records]), records
+
+
+class PreA3RecordCertificationTests(unittest.TestCase):
+    """E3-02：场景单元命令稳定、结果写成日志里的一行；签发从运行清单与记录库组装 v2，核验逐条重验记录。"""
+
+    def _bindings(self, root: Path) -> tuple[Path, Path]:
+        return PreA3CertificationTests._bindings(self, root)  # type: ignore[arg-type]
+
+    def _issue(self, store: _SyntheticStore, manifest: Path, deployment: Path, activation: Path) -> dict:
+        return certification.issue_certification_from_records(
+            store.root / "data" / "staging" / "pre-a3-scenarios", unit_manifest=manifest, record_store=store.store.root,
+            deployment_receipt=deployment, policy_activation=activation)
+
+    def test_verification_algorithm_matches_unit_records(self) -> None:
+        ur = _ci_module("unit_records")
+        value = {"b": [1, "中文"], "a": {"x": None, "y": 1.5}}
+        self.assertEqual(certification._sha256_json(value), ur.sha256_json(value))
+        self.assertEqual(certification._sealed(value, "k"), ur.seal(value, "k"))
+        self.assertTrue(certification._seal_matches(ur.seal(value, "k"), "k"))
+        with tempfile.TemporaryDirectory() as directory:
+            store = ur.RecordStore(Path(directory))
+            ours = certification._RecordStore(Path(directory))
+            self.assertEqual(ours.record_path("pre-a3:x", "a" * 64), store.record_path("pre-a3:x", "a" * 64))
+            self.assertEqual(ours.log_path("b" * 64), store.log_path("b" * 64))
+            self.assertEqual(ours.manifest_path("run-1"), store.manifest_path("run-1"))
+        good = {"unit_type": "command", "exit_code": 0, "signal": None, "timed_out": False, "passed": True}
+        for record in (good, {**good, "exit_code": 1}, {**good, "signal": 9}, {**good, "timed_out": True}, {**good, "passed": False}):
+            self.assertEqual(certification._record_passes(record)[0], ur.derived_pass(record)[0], record)
+
+    def test_issue_from_records_signs_v2_and_verify_rechecks_every_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS):
+            root = Path(directory).resolve()
+            deployment, activation = self._bindings(root)
+            store = _SyntheticStore(root)
+            manifest, records = store.run("run-1", certification.scenario_names())
+            receipt = self._issue(store, manifest, deployment, activation)
+            self.assertEqual((receipt["schema_version"], receipt["status"], receipt["failed_scenarios"], receipt["network_attempts"]),
+                             (certification.SCHEMA_VERSION_V2, "passed", [], 0))
+            self.assertEqual(set(receipt), V1_FIELDS | {"unit_manifest", "record_store"}, "v1 字段一个不少，只多两项引用")
+            self.assertEqual([row["unit_record"]["record_sha256"] for row in receipt["scenarios"]], [record["record_sha256"] for record in records])
+            self.assertEqual({row["unit_record"]["disposition"] for row in receipt["scenarios"]}, {"executed"})
+            self.assertEqual((receipt["unit_manifest"]["run_id"], receipt["unit_manifest"]["mode"]), ("run-1", "full-set-pass"))
+            output = certification.write_certification(root / "pre-a3.json", receipt)
+            self.assertEqual(certification.verify_certification(output)["schema_version"], certification.SCHEMA_VERSION_V2)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(certification.main(["verify", "--certification", str(output)]), 0)
+            # 签发之后改了记录库里的一份日志：核验逐条重验，认证不再有效；改回来又有效。
+            log = store.store.log_path(records[0]["log"]["sha256"])
+            original = log.read_bytes()
+            log.write_bytes(original + b"x")
+            with self.assertRaisesRegex(certification.CertificationError, "重验不通过"):
+                certification.verify_certification(output)
+            log.write_bytes(original)
+            certification.verify_certification(output)
+            # 收据里的逐场景结果被改：与重验结果不一致。
+            forged = dict(receipt, scenarios=[{**receipt["scenarios"][0], "seconds": 9.9}, *receipt["scenarios"][1:]])
+            forged["receipt_sha256"] = certification._fingerprint({k: v for k, v in forged.items() if k != "receipt_sha256"})
+            forged_path = certification.write_certification(root / "forged.json", forged)
+            with self.assertRaisesRegex(certification.CertificationError, "不一致"):
+                certification.verify_certification(forged_path)
+            # 运行清单从记录库里删掉：核验不通过。
+            store.store.manifest_path("run-1").unlink()
+            with self.assertRaisesRegex(certification.CertificationError, "运行清单"):
+                certification.verify_certification(output)
+
+    def test_issue_from_records_refuses_bad_or_incomplete_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS):
+            root = Path(directory).resolve()
+            deployment, activation = self._bindings(root)
+            names = certification.scenario_names()
+
+            def build(label: str, mutate: str) -> tuple[_SyntheticStore, Path]:
+                base = root / label
+                base.mkdir()
+                store = _SyntheticStore(base)
+                records = []
+                for name in names:
+                    if name == "fake.alpha" and mutate == "not-passed":
+                        records.append(store.record(name, "run-1", exit_code=1, passed=False))
+                    elif name == "fake.alpha" and mutate in ("network", "duplicate-line", "no-line", "diagnostic", "scenario-failed"):
+                        result = {"network": store.result(name, network=1), "diagnostic": store.result(name, kind="diagnostic"),
+                                  "scenario-failed": store.result(name, status="failed")}.get(mutate, store.result(name))
+                        text = store.log_text(None if mutate == "no-line" else result, copies=2 if mutate == "duplicate-line" else 1)
+                        records.append(store.record(name, "run-1", log_text=text))
+                    elif name == "fake.alpha" and mutate == "other-run":
+                        records.append(store.record(name, "run-0"))
+                    else:
+                        records.append(store.record(name, "run-1"))
+                entries = [store.entry(record) for record in records]
+                if mutate == "missing":
+                    entries = [entry for entry in entries if not entry["unit_id"].endswith("fake.beta")]
+                if mutate == "stray":
+                    entries.append(store.entry(store.record("fake.gamma", "run-1")))
+                if mutate == "spec":
+                    entries[0]["spec_sha256"] = "另一份规格"
+                if mutate == "tampered":
+                    path = store.store.record_path(records[0]["unit_id"], records[0]["record_sha256"])
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    path.write_text(json.dumps({**payload, "seconds": 0.2}), encoding="utf-8")
+                return store, store.manifest("run-1", entries)
+
+            cases = {
+                "运行清单里少一个场景": ("missing", "fake.beta", "缺报"),
+                "执行记录被改": ("tampered", "fake.alpha", "自摘要不符"),
+                "执行没通过": ("not-passed", "fake.alpha", "执行记录不是通过"),
+                "网络计数不为 0": ("network", "fake.alpha", "网络连接尝试 1 次"),
+                "日志里有两行结果": ("duplicate-line", "fake.alpha", "不是恰好一行（2 行）"),
+                "日志里没有结果行": ("no-line", "fake.alpha", "不是恰好一行（0 行）"),
+                "结果来自诊断执行": ("diagnostic", "fake.alpha", "不是正式执行的结果"),
+                "场景本身没通过": ("scenario-failed", "fake.alpha", "场景没通过"),
+                "登记为本次执行却来自别的运行": ("other-run", "fake.alpha", "来自别的运行"),
+                "规格与清单不符": ("spec", "fake.alpha", "规格或输入摘要"),
+            }
+            for label, (mutate, scenario, reason) in cases.items():
+                with self.subTest(label):
+                    store, manifest = build(mutate, mutate)
+                    receipt = self._issue(store, manifest, deployment, activation)
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertIn(scenario, receipt["failed_scenarios"])
+                    row = next(item for item in receipt["scenarios"] if item["name"] == scenario)
+                    self.assertIn(reason, row["error"])
+                    self.assertNotIn("unit_record", row)
+            store, manifest = build("stray", "stray")
+            self.assertIn("全集之外的执行单元：pre-a3:fake.gamma", self._issue(store, manifest, deployment, activation)["failed_scenarios"])
+            # 清单没发布进记录库（执行器的清单自检没过时不发布）、或被改过：直接拒绝签发。
+            store = _SyntheticStore(root / "unpublished")
+            store.root.mkdir()
+            records = [store.record(name, "run-1") for name in names]
+            unpublished = store.manifest("run-1", [store.entry(record) for record in records], publish=False)
+            with self.assertRaisesRegex(certification.CertificationError, "没有发布到记录库"):
+                self._issue(store, unpublished, deployment, activation)
+            store, manifest = build("edited", "none")
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            manifest.write_text(json.dumps({**payload, "mode": "re-execute"}), encoding="utf-8")
+            with self.assertRaisesRegex(certification.CertificationError, "自摘要不符"):
+                self._issue(store, manifest, deployment, activation)
+
+    def test_inherited_scenarios_must_trace_to_a_formal_execution_within_the_age_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS):
+            root = Path(directory).resolve()
+            deployment, activation = self._bindings(root)
+            names = certification.scenario_names()
+            store = _SyntheticStore(root)
+            _first, records = store.run("run-1", names)
+            inherited = [store.entry(record, "inherited") for record in records]
+            receipt = self._issue(store, store.manifest("run-2", inherited, decided="2026-10-02T05:00:00Z"), deployment, activation)
+            self.assertEqual(receipt["status"], "passed", receipt["failed_scenarios"])
+            self.assertEqual({(row["unit_record"]["disposition"], row["unit_record"]["run_id"]) for row in receipt["scenarios"]},
+                             {("inherited", "run-1")})
+            certification.verify_certification(certification.write_certification(root / "inherited.json", receipt))
+            cases = {
+                "超过承接期限": (store.manifest("run-3", inherited, decided="2026-10-09T01:00:01Z"), "承接期限"),
+                "重新执行全集的清单里有承接项": (store.manifest("run-4", inherited, mode="re-execute"), "不得有承接项"),
+            }
+            orphan = store.record("fake.alpha", "run-never-published")
+            cases["原运行清单不存在"] = (store.manifest("run-5", [store.entry(orphan, "inherited"), *inherited[1:]]), "原运行的清单缺失")
+            unlisted = store.record("fake.alpha", "run-6")
+            store.manifest("run-6", [store.entry(records[0]), *[store.entry(record) for record in records[1:]]])
+            cases["原运行清单没把它列为正式执行"] = (store.manifest("run-7", [store.entry(unlisted, "inherited"), *inherited[1:]]),
+                                                    "没有把这条记录列为该场景的正式执行")
+            for label, (manifest, reason) in cases.items():
+                with self.subTest(label):
+                    receipt = self._issue(store, manifest, deployment, activation)
+                    self.assertEqual(receipt["status"], "failed")
+                    row = next(item for item in receipt["scenarios"] if item["name"] == "fake.alpha")
+                    self.assertIn(reason, row["error"])
+
+    def test_run_scenario_unit_has_a_stable_command_and_prints_one_sealed_result_line(self) -> None:
+        passed = {"name": "fake.alpha", "description": "替身", "test": "tools.fake:FakeTests.test_alpha", "status": "passed", "seconds": 0.1}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", FAKE_SCENARIOS):
+            root = Path(directory).resolve()
+            parent = root / "data" / "staging" / "pre-a3-scenarios"
+            first = certification.plan_scenario_commands(parent, python="/usr/bin/python3", cwd=REPO_ROOT)
+            self.assertEqual(first, certification.plan_scenario_commands(parent, python="/usr/bin/python3", cwd=REPO_ROOT),
+                             "两次规划的单元逐字相同（命令稳定，入口门禁才能承接）")
+            self.assertEqual(first["units"][0]["argv"][-4:], ["--name", "fake.alpha", "--staging-parent", str(parent)])
+            self.assertEqual([unit["scenario_test_file"] for unit in first["units"]],
+                             ["tools/fake.py", "tools/fake.py", "tools/official_client_capture/tests/test_codex_upgrade.py"])
+            with self.assertRaisesRegex(certification.CertificationError, "staging"):
+                certification.plan_scenario_commands(root / "outside")
+            previous_tempdir = tempfile.tempdir
+            try:
+                for label, record, kind, expected_code in (("通过", passed, None, 0), ("失败", {**passed, "status": "failed"}, None, 1),
+                                                           ("诊断", passed, "diagnostic", 0)):
+                    with self.subTest(label), mock.patch.object(certification, "run_scenario", return_value=record), \
+                            mock.patch.dict(os.environ, {}, clear=False):
+                        os.environ.pop("UNIT_EXECUTOR_KIND", None)
+                        if kind:
+                            os.environ["UNIT_EXECUTOR_KIND"] = kind
+                        out = io.StringIO()
+                        with contextlib.redirect_stdout(out), mock.patch("sys.stderr"):
+                            code = certification.main(["run-scenario", "--name", "fake.alpha", "--staging-parent", str(parent)])
+                        self.assertEqual(code, expected_code)
+                        lines = [line for line in out.getvalue().splitlines() if line.startswith(certification.SCENARIO_RESULT_PREFIX)]
+                        self.assertEqual(len(lines), 1, out.getvalue())
+                        result = json.loads(lines[0][len(certification.SCENARIO_RESULT_PREFIX):])
+                        self.assertTrue(certification._seal_matches(result, "result_sha256"))
+                        self.assertEqual((result["schema_version"], result["name"], result["kind"], result["network_attempts"]),
+                                         (certification.SCENARIO_RESULT_V2_SCHEMA, "fake.alpha", kind or "formal", 0))
+                        staging_root = Path(result["staging_root"])
+                        self.assertEqual(staging_root.parent, parent)
+                        self.assertEqual(staging_root.exists(), record["status"] != "passed", "通过的临时根删掉，失败的保留供排查")
+                        self.assertEqual(staging_root.name.startswith("diagnostic-"), bool(kind))
+            finally:
+                tempfile.tempdir = previous_tempdir
+                os.environ.pop(certification.FIXTURE_ONLY_ENV, None)
+            with mock.patch("sys.stderr"):
+                self.assertEqual(certification.main(["run-scenario", "--name", "fake.alpha", "--staging-parent", str(parent),
+                                                     "--result", str(root / "r.json")]), 2)
+                self.assertEqual(certification.main(["run-scenario", "--name", "fake.alpha", "--result", str(root / "r.json")]), 2)
+
+    def test_scenarios_run_as_gate_units_are_inherited_and_signed_end_to_end(self) -> None:
+        """真跑：认证 plan → 入口门禁清单（pre-a3 组合）→ 执行器 run-gates（带记录库，全集通过）→ 签 v2；同一棵树再跑一轮，
+        场景全部承接、一个不执行，照样签发并通过核验。执行器在临时 git 仓库里算输入，场景命令在本仓库里跑。"""
+
+        quick = tuple(scenario for scenario in certification.SCENARIOS if scenario[0] in {
+            "harden-evidence-permissions.two-step", "vc-chain.ledger-events-derivation"})
+        entry_gates = _ci_module("entry_gates")
+        executor = _ci_module("unit_executor")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(certification, "SCENARIOS", quick):
+            base = Path(directory).resolve()
+            deployment, activation = self._bindings(base)
+            repo = base / "repo"
+            repo.mkdir()
+            modules = {certification.scenario_test_module(name).replace(".", "/") + ".py" for name in certification.scenario_names()}
+            for relative in sorted(modules | {"tools/official_client_capture/tests/__init__.py"}):
+                (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(REPO_ROOT / relative, repo / relative)
+            git = ["git", "-C", str(repo), "-c", "user.name=e3", "-c", "user.email=e3@example.invalid", "-c", "commit.gpgsign=false"]
+            subprocess.run([*git, "init", "-q"], check=True)
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-q", "-m", "场景测试模块"], check=True)
+            parent = base / "data" / "staging" / "pre-a3-scenarios"
+            units = base / "pre-a3-units.json"
+            units.write_text(json.dumps(certification.plan_scenario_commands(parent, cwd=REPO_ROOT), ensure_ascii=False), encoding="utf-8")
+            manifest = entry_gates.plan_gates(repo, profile="pre-a3", launcher=[], pre_a3_units=units,
+                                              pre_a3_data_inputs=[{"category": "docs", "name": "tree:maintenance", "sha256": "0" * 64, "detail": {}}])
+            self.assertTrue(all(unit.get("inheritable", True) and "inputs" in unit for unit in manifest["units"]))
+            gates = base / "gates.json"
+            gates.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            config = base / "config.json"
+            config.write_text(json.dumps({"schema_version": executor.CONFIG_SCHEMA, "default_parallelism": 3,
+                                          "default_quota": {"cores": 1, "memory_mb": 1024}, "quotas": {}, "splits": {}, "exclusive": [],
+                                          "unit_timeout_seconds": 900, "orphan_grace_seconds": 1}), encoding="utf-8")
+            store = base / "store"
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("UNIT_EXECUTOR_")}
+            environment.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT)})
+            receipts = []
+            for run in (1, 2):
+                out = base / f"out-{run}"
+                completed = subprocess.run(
+                    [sys.executable, str(EXECUTOR), "run-gates", "--manifest", str(gates), "--config", str(config),
+                     "--weights", str(base / "none.json"), "--durations", str(base / "none.json"), "--parallel", "3", "--cores", "4",
+                     "--state-dir", str(base / "state"), "--out-dir", str(out), "--shared-caches", "off", "--record-store", str(store),
+                     "--mode", "full-set-pass"], cwd=repo, capture_output=True, text=True, timeout=900, env=environment)
+                self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+                counts = json.loads((out / "unit-manifest.json").read_text(encoding="utf-8"))["counts"]
+                self.assertEqual((counts["executed"], counts["inherited"]), (len(quick) + 1, 0) if run == 1 else (0, len(quick) + 1))
+                receipt = certification.issue_certification_from_records(
+                    parent, unit_manifest=out / "unit-manifest.json", record_store=store, deployment_receipt=deployment,
+                    policy_activation=activation)
+                self.assertEqual((receipt["status"], receipt["network_attempts"]), ("passed", 0), receipt["failed_scenarios"])
+                self.assertEqual({row["unit_record"]["disposition"] for row in receipt["scenarios"]}, {"executed" if run == 1 else "inherited"})
+                receipts.append(certification.write_certification(base / f"pre-a3-{run}.json", receipt))
+            for path in receipts:
+                self.assertEqual(certification.verify_certification(path)["scenario_count"], len(quick) + 1)
+            self.assertEqual(list(parent.iterdir()), [], "通过的场景不留临时根")
 
 
 if __name__ == "__main__":

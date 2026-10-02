@@ -1021,17 +1021,23 @@ class PreA3OrderingTests(unittest.TestCase):
         self.assertIn("find-reusable --certification", pre_a3)
         self.assertNotIn("codex_upgrade_timing_ledger", pre_a3)
         # 复用或新跑之后按 stage1 同一口径复核本轮坐标。
-        # E2-03：新跑交给 lib.sh 的 issue_pre_a3_certification（plan → 驱动随附执行器 run-commands → issue），签发在复核之前；
-        # stage2 兜底用同一个函数，两处都不再在一个进程里串行跑全部场景。
+        # E3-02：新跑交给 lib.sh 的 issue_pre_a3_certification，它调入口门禁的 pre-a3 组合（测试树取自参数文件的
+        # ENTRY_BUNDLE／ENTRY_BRANCH／ENTRY_COMMIT，场景可承接、认证从单元执行记录组装），签发在复核之前；stage2 兜底用
+        # 同一个函数。入口门禁里场景用固定父目录，签发读本次运行清单与记录库，不再读执行器汇总。
         self.assertLess(pre_a3.index("issue_pre_a3_certification"), pre_a3.rindex("find-reusable --certification"))
         lib = (SCRIPTS / "lib.sh").read_text(encoding="utf-8")
         body = lib[lib.index("issue_pre_a3_certification() {"):]
         body = body[: body.index("\n}\n")]
-        plan = body.index("pre_a3_certification plan --staging-root \"$D/staging/pre-a3-certification-$STAMP\"")
-        execute = body.index('python3 "$DRV/unit_executor.py" run-commands --manifest "$units" --out-dir "$root/executor"')
-        issue = body.index('pre_a3_certification issue --staging-root "$root" --executor-summary "$root/executor/summary.json"')
-        self.assertTrue(plan < execute < issue)
-        self.assertIn('--output "$PRE_A3_CERTIFICATION"', body[issue:])
+        for name in ("ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT"):
+            self.assertIn(name, body[: body.index("entry-gates.sh")], f"缺 {name} 先停")
+        call = body[body.index('bash "$DRV/entry-gates.sh" --profile pre-a3'):]
+        self.assertIn('--pre-a3-certification "$PRE_A3_CERTIFICATION"', call)
+        self.assertIn('--pre-a3-mode run "$ENTRY_BUNDLE" "$ENTRY_BRANCH" "$ENTRY_COMMIT"', call)
+        self.assertNotIn("run-commands", body)
+        gates = (SCRIPTS / "entry-gates.sh").read_text(encoding="utf-8")
+        self.assertIn('plan --staging-parent "$D/staging/pre-a3-scenarios"', gates)
+        self.assertIn('--unit-manifest "$OUT/executor/unit-manifest.json" --record-store "$STORE"', gates)
+        self.assertNotIn("--executor-summary", gates)
         stage2 = (SCRIPTS / "stage2.sh").read_text(encoding="utf-8")
         self.assertIn('[ -f "$PRE_A3_CERTIFICATION" ] || issue_pre_a3_certification', stage2)
         self.assertLess(stage2.index("issue_pre_a3_certification"), stage2.index("codex_upgrade_pre_a3_certification record-reuse"))

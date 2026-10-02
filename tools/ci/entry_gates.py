@@ -191,9 +191,11 @@ PRE_A3_MEASURED: dict[str, tuple[float, float]] = {
 PRE_A3_CRITICAL = frozenset({"vc-chain.vc1-recovery-chain"})
 PRE_A3_DEFAULT_CORES = 0.5
 PRE_A3_MEMORY_MB = 768
-# pre-A3 场景在 E3-01 不承接：认证要求场景结果写在本次新建的认证根下、单元命令带着这个路径，承接要等 E3-02 把认证改成
-# 从单元执行记录组装。执行记录照写。
-PRE_A3_NOT_INHERITABLE = "pre-A3 场景暂不承接：认证要求场景结果写在本次新建的认证根下，承接由 E3-02（认证改为从单元执行记录组装）接入"
+# pre-A3 场景（E3-02）：认证模块 plan --staging-parent 给的单元命令只带稳定内容，入口门禁按场景测试模块声明输入，可以
+# 承接，认证从单元执行记录组装。E2-03 的旧清单（plan --staging-root）命令带每次新建的认证根，承接不了，仍标不可承接。
+PRE_A3_NOT_INHERITABLE = "pre-A3 场景清单是 E2-03 的旧形式（命令带每次新建的认证根）：承接不了，改用认证模块 plan --staging-parent（E3-02）"
+# pre-A3 场景读的部署脚本副本（测试树与数据根的这一份由入口门禁的部署一致性核对保证相同）。
+PRE_A3_DEPLOY_SCRIPT = "tools/arm64_supervised_deploy.py"
 
 
 def pre_a3_quota(name: str) -> tuple[float, float | None]:
@@ -218,6 +220,8 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "preflight": MAKE_TEST_GATES,
     "full-gates": MAKE_TEST_GATES + FULL_GATES_EXTRA,
     "entry": MAKE_TEST_GATES + FULL_GATES_EXTRA + ("pre-a3",),
+    # 单独签 pre-A3（驱动 lib.sh 与编排器的单独路径，E3-02）：只有场景单元，同样写记录、可承接。
+    "pre-a3": ("pre-a3",),
 }
 # 门禁项的字面命令（门禁记录、P0 证据里写的就是它；实际执行方式见各单元）。
 GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
@@ -367,6 +371,29 @@ def historical_source_input(root: str | None) -> dict[str, Any]:
     return steps.resolve(steps.Input("environment", "tree", root or "/nonexistent-historical-source-root", "pycache"), ctx)
 
 
+def pre_a3_data_root_inputs(data_root: Path) -> list[dict[str, Any]]:
+    """pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容（E2-05 的 pre-A3 输入里的三项）：冻结台账目录、
+    录制回放数据、alpine 镜像。门禁清单生成时在数据根算好，作为已算明细（``resolved``）带给每个场景单元。"""
+
+    steps = _entry_steps_module()
+    ctx = steps.Context(params={"D": str(Path(data_root).resolve())}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
+    items = (steps.MAINTENANCE, steps.Input("environment", "recorded"), steps.Input("environment", "image_ref", "alpine:3.21"))
+    return [steps.resolve(item, ctx) for item in items]
+
+
+def pre_a3_inputs(test_file: str, data_root_inputs: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """pre-A3 场景单元的输入声明（E3-02）：按 E2-05 的 pre-A3 输入范围，测试按场景收窄。
+
+    受管树（不含测试）、夹具、文档（两份指南在 docs/ 下）、部署脚本副本、场景测试模块的静态依赖闭包（执行器展开），
+    加数据根算好的三项。前几样按测试树内容算：入口门禁跑 pre-A3 之前已核对数据根部署的受管树、指南与部署脚本就是
+    测试树这一份。不含 HEAD 与仓库其余部分：场景在数据根运行，读不到 git，也没有后端、前端。"""
+
+    ranges = _unit_records_module().standard_ranges(MANAGED_TREE)
+    return {"ranges": [ranges["managed"], ranges["tests-fixtures"], ranges["docs"]],
+            "files": [{"category": "managed", "path": PRE_A3_DEPLOY_SCRIPT}],
+            "test_modules": [test_file], "resolved": list(data_root_inputs or [])}
+
+
 def plan_gates(
     tree: Path,
     *,
@@ -375,6 +402,7 @@ def plan_gates(
     typescript_module: str | None = None,
     pre_a3_units: Path | None = None,
     pre_a3_env: dict[str, str] | None = None,
+    pre_a3_data_inputs: list[dict[str, Any]] | None = None,
     platform: str | None = None,
     environment: list[dict[str, Any]] | None = None,
     egress_extra_inputs: list[dict[str, Any]] | None = None,
@@ -385,14 +413,16 @@ def plan_gates(
     同一做法）；pre-A3 场景在数据根的生产布局里运行，不套隔离（受管树经生产别名访问的分支也要覆盖到），环境另给。
 
     E3-01：清单另带命令单元额度表（``scheduling``，算进调度策略版本）、环境事实（``environment``，算进环境指纹，
-    由命令行入口在执行器同一份环境里算好传入）、每个命令单元的输入声明（``inputs``）；pre-A3 场景标为不可承接。
+    由命令行入口在执行器同一份环境里算好传入）、每个命令单元的输入声明（``inputs``）。
+    E3-02：pre-A3 场景清单是新形式（单元带 ``scenario_test_file``）时按 ``pre_a3_inputs`` 声明输入、可以承接；
+    旧形式仍标不可承接。
     """
 
     if profile not in PROFILES:
         raise ValueError(f"未知的门禁组合：{profile}")
     gates_wanted = PROFILES[profile]
     if ("pre-a3" in gates_wanted) != (pre_a3_units is not None):
-        raise ValueError("入口门禁（entry）必须给出 pre-A3 场景清单，其余组合不得给出")
+        raise ValueError("含 pre-A3 的门禁组合（entry、pre-a3）必须给出 pre-A3 场景清单，其余组合不得给出")
     tree = Path(tree).resolve()
     workdir, backend = str(tree), str(tree / "backend")
     platform = platform or sys.platform
@@ -466,9 +496,14 @@ def plan_gates(
             for unit in payload["units"]:
                 if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
                     raise ValueError(f"pre-A3 场景清单里有非 pre-A3 单元：{unit.get('unit_id')}")
-                merged = dict(unit)
+                merged = {key: value for key, value in unit.items() if key != "scenario_test_file"}
                 cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))
-                merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB, inheritable=False, not_inheritable_reason=PRE_A3_NOT_INHERITABLE)
+                merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB)
+                test_file = unit.get("scenario_test_file")
+                if isinstance(test_file, str) and test_file:
+                    merged["inputs"] = pre_a3_inputs(test_file, pre_a3_data_inputs)
+                else:
+                    merged.update(inheritable=False, not_inheritable_reason=PRE_A3_NOT_INHERITABLE)
                 if seconds is not None:
                     merged["weight"] = seconds
                 if pre_a3_env:
@@ -701,6 +736,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--typescript-module", default=None)
     plan.add_argument("--pre-a3-units", type=Path, default=None, help="pre-A3 场景清单（认证模块 plan 生成）")
     plan.add_argument("--pre-a3-env", action="append", default=[], help="pre-A3 场景的环境变量 KEY=VALUE，可重复")
+    plan.add_argument("--pre-a3-data-root", type=Path, default=None,
+                      help="数据根：在这里算 pre-A3 场景单元的数据根输入（冻结台账、录制数据、alpine 镜像，E3-02）")
     plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
     export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
@@ -739,8 +776,10 @@ def main(argv: list[str] | None = None) -> int:
             launcher = json.loads(args.launcher_json)
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
+            data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root) if args.pre_a3_data_root is not None else None
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
+                                  pre_a3_data_inputs=data_inputs,
                                   environment=environment_facts(args.tree, args.typescript_module),
                                   egress_extra_inputs=[historical_source_input(args.historical_source_root)])
             _write(args.output, manifest)

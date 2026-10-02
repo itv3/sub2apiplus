@@ -8,7 +8,10 @@
 #   entry（默认）：全部门禁项＋pre-A3 场景。要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的受管树）；本轮
 #     pre-A3 认证已有、或有工具身份与策略未变的可复用认证时沿用它，pre-A3 场景不纳入本次运行；
 #   full-gates：不含 pre-A3（部署前全量门禁，arm64-full-gates.sh 调用）；
-#   preflight：只含 make test 的组成（VC-0 预跑，vc0-gate-target.sh 调用）。
+#   preflight：只含 make test 的组成（VC-0 预跑，vc0-gate-target.sh 调用）；
+#   pre-a3：只含 pre-A3 场景（入口门禁沿用、只有 pre-A3 要重做时编排器调用，E3-02）。测试树、部署绑定与一致性核对同 entry。
+# pre-A3（E3-02）：场景单元的命令只带场景名与固定的场景父目录 $D/staging/pre-a3-scenarios，可以承接；认证从本次运行的
+#   清单 executor/unit-manifest.json 与记录库组装（pre-a3-path-certification/v2），每个场景引用一条正式执行记录。
 # 隔离：测试树里的单元在私有挂载命名空间里遮住 /root/oauth-capture（与 lib.sh 的 isolated_run 同一做法），树外只读字节码
 #   缓存；pre-A3 场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。
 # Linux 上不执行 macOS 专用的部署脚本测试（写进门禁记录的 not_executed；CI 在 macos-15 上照常执行）。
@@ -27,7 +30,7 @@
 #   executor/（执行器记录与逐单元日志）、executor.log。不写候选门禁目录、候选目录、时间账本与 Campaign，零模型请求。
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
-#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <主体目录>] \
+#   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] \
 #     [--record-store <单元执行记录库>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
@@ -39,7 +42,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -62,7 +65,7 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then usage; exit 2; fi
 PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/frontend}"
-case "$PROFILE" in entry|full-gates|preflight) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
+case "$PROFILE" in entry|full-gates|preflight|pre-a3) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
@@ -121,8 +124,8 @@ echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
 env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
 
-PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_ROOT=""
-if [ "$PROFILE" = entry ]; then
+PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""
+if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   echo "=== pre-A3 认证：部署绑定与沿用判断 $(utc_now)"
   DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
@@ -154,14 +157,16 @@ PYDEPLOY
     [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
     python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
   fi
+  # E3-02：场景父目录固定，单元命令只带稳定内容（入口门禁据此承接已通过的场景），本次各场景的临时根在父目录下新建；
+  # 数据根才有、或不保证与测试树一致的输入（冻结台账、录制数据、alpine 镜像）由门禁清单生成时在数据根算好。
   plan_pre_a3_run() {
     PRE_A3_MODE=run
     UNITS="$OUT/pre-a3-units.json"
-    PA3_ROOT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-root "$D/staging/pre-a3-certification-$STAMP" --output "$UNITS" \
-      | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_root"])')
-    PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
+    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" \
+      | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_parent"])')
+    PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-data-root "$D" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
     if [ -d "$PYC_MANAGED" ]; then PRE_A3_ARGS+=(--pre-a3-env "PYTHONPYCACHEPREFIX=$PYC_MANAGED"); fi
-    echo "pre-A3 场景纳入本次运行：认证根 ${PA3_ROOT}"
+    echo "pre-A3 场景纳入本次运行：场景父目录 ${PA3_PARENT}"
   }
   if [ "$PRE_A3_SOURCE" = run ]; then
     if [ -e "$PRE_A3_CERTIFICATION" ]; then echo "ENTRY_GATES_ABORTED：--pre-a3-mode run 要求认证坐标空着（重做换新坐标）：${PRE_A3_CERTIFICATION}"; exit 3; fi
@@ -181,6 +186,9 @@ PYDEPLOY
 fi
 PLAN_PROFILE="$PROFILE"
 if [ "$PROFILE" = entry ] && [ "$PRE_A3_MODE" != run ]; then PLAN_PROFILE=full-gates; fi
+# pre-a3 组合在沿用已有认证时没有要执行的单元：不生成门禁清单、不跑执行器，直接到下面的复核与复用登记。
+RUN_GATES=true
+if [ "$PROFILE" = pre-a3 ] && [ "$PRE_A3_MODE" != run ]; then RUN_GATES=false; fi
 LAUNCHER='["unshare","-m","--propagation","private","bash","-c","mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec \"$@\"","entry-gates"]'
 ISOLATION="测试树单元：unshare -m --propagation private，只读 tmpfs 遮住 /root/oauth-capture（生产别名），树外只读字节码缓存；pre-A3 场景：数据根生产布局"
 TS="$TREE/frontend/node_modules/typescript/lib/typescript.js"
@@ -196,6 +204,8 @@ for name in $(compgen -e); do
   case "$name" in GO*|CGO_*|DOCKER_*|NODE_*|PNPM_*|npm_config_*|COREPACK_*) EXEC_ENV+=("$name=${!name}") ;; esac
 done
 EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
+GATES_STATUS=passed
+if [ "$RUN_GATES" = true ]; then
 mkdir -p "$STORE"; chmod 700 "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
@@ -217,10 +227,16 @@ python3 -B "$DRV/entry_gates.py" export --manifest "$OUT/gates-manifest.json" --
   --bytecode-cache "$PYC" --source "bundle=$PBUNDLE" --source "branch=$PBRANCH" --source "commit=$PCOMMIT" --source "tree_head=$TREE_HEAD" \
   --source "history_test_tree=$HISTORY_TEST_TREE" --source "node_modules_source=$NM_DIR/node_modules" --source "pre_a3=$PRE_A3_MODE" | cut -c1-600
 GATES_STATUS=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$OUT/entry-gates.json")
+else
+  echo "=== 本次没有要执行的单元（pre-A3 认证 ${PRE_A3_MODE}）$(utc_now)"
+fi
 PRE_A3_OK=true
 if [ "$PRE_A3_MODE" = run ]; then
-  echo "=== pre-A3 认证签发（核对场景全集与网络计数）$(utc_now)"
-  if ! python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$PA3_ROOT" --executor-summary "$OUT/pre-a3-executor-summary.json" \
+  # E3-02：从本次运行的清单与记录库组装 v2 认证（每个场景恰好一条通过的正式执行记录，本次执行或承接；网络计数为 0）。
+  # 清单只在执行器自检通过后才发布进记录库，没发布的运行签不出认证。
+  echo "=== pre-A3 认证签发（从单元执行记录组装，核对场景全集与网络计数）$(utc_now)"
+  if ! python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$PA3_PARENT" \
+      --unit-manifest "$OUT/executor/unit-manifest.json" --record-store "$STORE" \
       --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300; then
     PRE_A3_OK=false
   fi

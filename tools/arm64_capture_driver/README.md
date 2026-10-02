@@ -48,25 +48,32 @@
 * 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
   由 stage1 建预检 Campaign 时的 plan 照旧校验。
 
-## pre-A3 路径认证按场景并行（E2-03）
+## pre-A3 路径认证：按场景并行（E2-03），从单元执行记录签发（E3-02）
 
-* 新跑由 `lib.sh` 的 `issue_pre_a3_certification` 完成（`pre-a3.sh` 新跑与 `stage2.sh` 兜底共用一个实现）：
-  1. `codex_upgrade_pre_a3_certification plan`：在 `$D/staging/pre-a3-certification-$STAMP` 建本次认证根（已存在且
-     非空时自动改用带时间后缀的新目录），写出命令单元清单 `$RUNROOT/pre-a3-units-<时间>.json`——44 个场景各一条
-     `run-scenario`；
-  2. 驱动随附的统一调度执行器 `driver/unit_executor.py run-commands`（`tools/ci` 原件的逐字节副本，配置是同目录的
-     `unit_executor.json`）在整机额度内并行跑完，执行记录与各子进程日志在 `<认证根>/executor/`，标准输出与错误在
-     `<认证根>/executor.log`；
-  3. `issue` 核对后签发：44 个场景各恰好一份结果；没有缺报、重复上报、被信号终止、超时或异常退出；每个子进程都
-     上报了网络计数，总和为 0。任何一条不满足都不签发。
-* 每个场景是一个独立子进程，各自装网络拦截、用自己的临时目录（`<认证根>/scenarios/<场景>/`），结果写到
-  `<认证根>/results/<场景>.json`（只能写一次）。执行器会把失败单元单独重跑一次做诊断，诊断结果写 `.diagnostic.json`，
-  不参与签发、不改结论。
-* 收据形状不变，复用与发布认证照旧。没通过的认证写旁路文件 `<正式文件名>.failed-<时间>.json`，正式路径保持不存在：
-  修好后用同一 STAMP 直接重跑 `pre-a3.sh`，不用手工归档。
-* 串行入口 `run`（一个进程依次跑全部场景，同一收据形状）保留作对照与回退。
-* 耗时（ARM64 4 核、机器上无其他任务，10-01 实测）：整份认证 478 秒，几乎全是最长的 `vc-chain.vc1-recovery-chain`
-  （477 秒）；其余 43 个场景在它运行期间由其余 3 核跑完。
+* 场景作为入口门禁的单元执行（`entry-gates.sh` 的 `entry` 或 `pre-a3` 组合）：
+  1. `codex_upgrade_pre_a3_certification plan --staging-parent $D/staging/pre-a3-scenarios`：44 个场景各一条
+     `run-scenario --name <场景> --staging-parent <父目录>`，命令只带稳定内容，另给每个场景用到的测试模块文件；
+  2. `entry_gates.py plan` 按场景声明输入：受管树（不含测试）、夹具、文档、部署脚本副本、场景测试模块的静态依赖闭包，
+     加 `--pre-a3-data-root` 在数据根算好的冻结台账、录制数据与 alpine 镜像；场景单元可以承接；
+  3. 驱动随附的统一调度执行器 `run-gates` 跑场景，执行记录入库（记录库 `$(dirname $D)/unit-records`）；已通过、且输入、
+     规格、环境与调度策略都没变的场景承接，不再执行；
+  4. `issue --unit-manifest <本次运行清单> --record-store <记录库>` 从记录组装 `pre-a3-path-certification/v2`：44 个场景在
+     清单里各恰好一项，每项一条通过的正式执行记录（本次执行或承接；承接项另追到原运行的正式执行、没超期限），日志里
+     恰好一行结果、网络计数为 0；清单须已发布进记录库（执行器自检通过才发布）。任何一条不满足都不签发。
+* 每个场景是一个独立子进程，各自装网络拦截；本次的临时根在父目录下新建（`<场景>-<随机>`），通过后删除、失败保留供
+  排查。结论是标准输出里的一行 `PRE_A3_SCENARIO_RESULT <JSON>`（带自摘要），执行器把日志按内容摘要存进记录库。执行器
+  对失败单元的诊断重跑结果标 `kind=diagnostic`，不参与签发、不改结论。
+* v2 保留 v1 的全部字段，另带每个场景的执行记录引用（`unit_record`）与运行清单引用（`unit_manifest`、`record_store`）。
+  核验（`verify`、复用查找、发布认证）逐条重验记录，记录库须在原位；v1 历史认证照旧只读重放。`reuse-official-evidence`
+  的 `--path-certification` 两种形状都认。
+* 单独签（`pre-a3.sh` 新跑、`stage2.sh` 兜底，`lib.sh` 的 `issue_pre_a3_certification`）调 `entry-gates.sh --profile pre-a3`，
+  测试树取自参数文件的 `ENTRY_BUNDLE`、`ENTRY_BRANCH`、`ENTRY_COMMIT`，缺一个即停（没有测试树算不出输入）；入口编排器
+  入口门禁沿用、只重做 pre-A3 时同样走它。
+* 没通过的认证写旁路文件 `<正式文件名>.failed-<时间>.json`，正式路径保持不存在：修好后用同一 STAMP 直接重跑。
+* E2-03 的旧路径（`plan --staging-root` → `run-commands` → `issue --executor-summary`，签 v1）与串行入口 `run` 保留作对照与
+  回退，旧形式的场景单元在入口门禁里仍标不可承接。
+* 耗时（ARM64 4 核、机器上无其他任务，10-01 实测，全部执行时）：整份认证 478 秒，几乎全是最长的
+  `vc-chain.vc1-recovery-chain`（477 秒）；其余 43 个场景在它运行期间由其余 3 核跑完。
 
 ## 入口门禁一次运行（E2-04，`driver/entry-gates.sh`）
 
@@ -77,8 +84,9 @@
   一项失败其余照跑，全部跑完再按门禁项汇总；`test-official-client-control` 单列一个门禁项，和 check-egress-spec 的同名
   子检查共用一个单元，只执行一次（Makefile 的 test 目标也不再单列它：子检查跑在执行器另起的 make 进程里，不和先决去重）。
 * 组合 `--profile`：`entry`（默认，全部门禁项＋pre-A3）、`full-gates`（不含 pre-A3，`arm64-full-gates.sh` 用）、`preflight`
-  （只含 make test 的组成，`vc0-gate-target.sh` 用）。`entry` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的
-  受管树，否则退出 3）；本轮 pre-A3 认证已有且有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
+  （只含 make test 的组成，`vc0-gate-target.sh` 用）、`pre-a3`（只含 pre-A3 场景，单独签 pre-A3 用，E3-02）。`entry` 与
+  `pre-a3` 要求数据根已部署本提交（最新部署收据的整树摘要等于测试树的受管树，受管整树、两份指南与部署脚本副本逐项一致，
+  否则退出 3）；本轮 pre-A3 认证已有且有效、或有可复用认证时沿用，pre-A3 场景不纳入本次运行。
 * 隔离：测试树单元在私有挂载命名空间里遮住 `/root/oauth-capture`（与 `isolated_run` 同一做法），树外只读字节码缓存；pre-A3
   场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。Linux 上不执行
   macOS 专用的 Apple container 部署脚本测试（BSD `stat`，写进门禁记录的 `not_executed`，CI 在 macos-15 上照常执行）。
@@ -93,7 +101,8 @@
     脚本同一形状，收口前照原样组装 P0 收据的 facts），check-egress-spec 另列逐个子检查，test-capture-tools 另列逐条跳过
     与原因；
   * `preflight.json`：VC-0 预跑记录；`full-gates-summary.json`：部署前全量门禁记录；`pre-a3-executor-summary.json`：
-    pre-A3 认证 issue 用的子汇总；`executor/`、`executor.log`：执行器记录与逐单元日志。
+    pre-A3 场景的子汇总（E2-03 旧签发路径用；E3-02 起签发读 `executor/unit-manifest.json` 与记录库）；`executor/`、
+    `executor.log`：执行器记录与逐单元日志。
 * 退出码：0 全部门禁通过（`entry` 还要 pre-A3 认证签发或沿用成功）；1 有门禁未通过（测试树保留供排查）；2 用法错误；
   3 准备或执行失败（没有门禁结论）。`make check-egress-spec` 在测试树、本机与 CI 上也按同一份子检查清单并行执行。
 
@@ -174,7 +183,8 @@
   * `re-execute`（重新执行全集）：一个都不承接。升级开工的入口空跑、一致性验收、收尾合入前用；编排器带 `--reexecute-gates`。
 * 输入：采集工具测试单元＝受管工具树（不含测试目录）、本模块静态依赖闭包里的测试文件、夹具目录、docs、仓库其余部分，整目录
   读取测试的另加整个测试目录、闭包里有真实链的另加全部辅助模块与真实链目录、读真实仓库 git 的另加 HEAD；命令单元（子检查、
-  后端、lint、前端、部署脚本）按 E2-05 从宽：整个仓库＋HEAD，子检查另加历史源码树。pre-A3 场景暂不承接（E3-02 接入）。
+  后端、lint、前端、部署脚本）按 E2-05 从宽：整个仓库＋HEAD，子检查另加历史源码树。pre-A3 场景按场景声明输入、可以承接
+  （E3-02，见上文「pre-A3 路径认证」）；只决定缓存位置的环境变量（字节码前缀、身份记忆目录）不算进单元规格。
   承接模式要求测试树干净，否则本次一律不承接。
 * 环境指纹：门禁清单生成与执行器都在白名单环境里运行（`env -i` 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、Go／
   Docker／Node／pnpm 的变量），执行器把这份环境整份算进指纹（字节码前缀除外），再加系统、内核、Python 与已装包、dpkg 软件包、

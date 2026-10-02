@@ -28,7 +28,7 @@ elif REUSE=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certi
   cp -p "$REUSE" "$PRE_A3_CERTIFICATION"; chmod 600 "$PRE_A3_CERTIFICATION"
   echo "PRE_A3_REUSED $REUSE"
 else
-  issue_pre_a3_certification   # E2-03：按场景并行跑完再核对签发（lib.sh），没通过即停、修好后同一 STAMP 直接重跑
+  issue_pre_a3_certification   # E3-02：入口门禁 pre-a3 组合跑场景、从单元执行记录签发（lib.sh），没通过即停、修好后同一 STAMP 直接重跑
 fi
 # 与 stage1 建账本前同一口径复核本轮坐标（复用与新跑都要通过）。
 python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null

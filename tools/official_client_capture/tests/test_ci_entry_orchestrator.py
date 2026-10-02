@@ -346,6 +346,25 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         reasons = next(step for step in second["steps"] if step["step_id"] == "entry-gates")["reasons"]
         self.assertIn("重新执行全集", "；".join(reasons))
 
+    def test_only_pre_a3_redone_uses_the_pre_a3_gate_profile(self) -> None:
+        """入口门禁沿用、只有 pre-A3 要重做（认证文件没了）：编排器用入口门禁的 pre-a3 组合单独签（E3-02：同一测试树、
+        同一部署一致性核对与记录库，场景可承接，认证从单元执行记录组装），不再走不写记录库的 run-commands。"""
+
+        first = self.orchestrate()
+        self.assertEqual(first["exit_code"], 0, self.actions(first))
+        products = {step["step_id"]: step["products"] for step in first["steps"]}
+        Path(products["pre-a3"]["certification"]).unlink()
+        before = len(self.commands.calls)
+        second = self.orchestrate()
+        actions = self.actions(second)
+        self.assertEqual((actions["entry-gates"], actions["pre-a3"]), ("沿用", "执行／passed"), actions)
+        gates = [call for call in self.commands.calls[before:] if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+        self.assertEqual(len(gates), 1, gates)
+        self.assertEqual((_option(gates[0], "--profile"), _option(gates[0], "--pre-a3-mode"), _option(gates[0], "--mode")),
+                         ("pre-a3", "run", "full-set-pass"))
+        self.assertEqual(gates[0][-3:], [self.fx.params[key] for key in ("ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT")])
+        self.assertFalse(any("run-commands" in call for call in self.commands.calls), "不再走 run-commands")
+
     def test_withheld_p0_evidence_fails_the_p0_step_with_the_reason(self) -> None:
         """入口门禁承接了单元、扣下旧形状 P0 证据时：入口门禁这一步照样通过（两份 P0 证据是可选产物），P0 收据这一步失败并
         写明原因与出路（--reexecute-gates）。"""

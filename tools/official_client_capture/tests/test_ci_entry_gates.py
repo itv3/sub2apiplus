@@ -173,6 +173,38 @@ class EntryGatesPlanTests(unittest.TestCase):
         self.assertEqual([match.group(1) for match in eg.DEPLOY_TEST_LINE.finditer(CI_WORKFLOW)][-1],
                          "/bin/sh deploy/tests/docker-compose-simple-mode-env-test.sh", "一行里混了别的命令的不取")
 
+    def test_new_form_pre_a3_units_declare_scenario_inputs_and_are_inheritable(self) -> None:
+        """E3-02：认证模块 plan --staging-parent 给的新形式场景单元（带 scenario_test_file）按场景声明输入、可以承接：受管树
+        （不含测试）、夹具、文档、部署脚本副本、场景测试模块（执行器展开闭包）与数据根算好的明细，不加 HEAD。pre-a3 组合
+        只有场景单元。旧形式（不带 scenario_test_file）仍不可承接。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tree = _tree(root, self.CHECKS)
+            data_root = root / "data"
+            path = root / "pre-a3-v2.json"
+            path.write_text(json.dumps({"schema_version": eg.COMMANDS_SCHEMA, "staging_parent": str(data_root / "staging" / "pre-a3-scenarios"),
+                                        "units": [{"unit_id": f"pre-a3:{name}", "argv": ["python3", "-m", "tools.x", "run-scenario", "--name", name],
+                                                   "cwd": str(data_root), "cores": 1, "memory_mb": 1024, "timeout_seconds": 900, "weight": 30.0,
+                                                   "scenario_test_file": f"tools/official_client_capture/tests/test_{name}.py"}
+                                                  for name in ("alpha", "beta")]}), encoding="utf-8")
+            resolved = [{"category": "docs", "name": "tree:{D}/docs/egress/maintenance#pycache", "sha256": "c" * 64, "detail": {}}]
+            manifest = eg.plan_gates(tree, profile="pre-a3", launcher=LAUNCHER, pre_a3_units=path, pre_a3_data_inputs=resolved, platform="linux")
+            self.assertEqual(([gate["gate_id"] for gate in manifest["gates"]], manifest["test_groups"]), (["pre-a3"], []))
+            alpha = next(unit for unit in manifest["units"] if unit["unit_id"] == "pre-a3:alpha")
+            self.assertNotIn("scenario_test_file", alpha, "清单字段原样交给执行器，不带执行器不认识的字段")
+            self.assertTrue(alpha.get("inheritable", True))
+            inputs = alpha["inputs"]
+            self.assertEqual([item["name"] for item in inputs["ranges"]], ["repo:managed", "repo:tests-fixtures", "repo:docs"])
+            self.assertEqual(inputs["files"], [{"category": "managed", "path": "tools/arm64_supervised_deploy.py"}])
+            self.assertEqual((inputs["test_modules"], inputs["resolved"]), (["tools/official_client_capture/tests/test_alpha.py"], resolved))
+            self.assertNotIn("head", inputs, "场景在数据根运行，读不到 git")
+            old = eg.plan_gates(tree, profile="pre-a3", launcher=LAUNCHER, pre_a3_units=self._pre_a3_units(root, data_root), platform="linux")
+            self.assertEqual({unit.get("inheritable") for unit in old["units"]}, {False}, "旧形式命令带每次新建的认证根，承接不了")
+            saved = root / "pre-a3-manifest.json"
+            saved.write_text(json.dumps(manifest), encoding="utf-8")
+            ue.load_gates_manifest(saved, machine_cores=4)  # 执行器的闭合校验接受
+
     def test_plan_declares_inputs_scheduling_environment_and_pre_a3_not_inheritable(self) -> None:
         """E3-01：命令单元按 E2-05 从宽声明输入（整个仓库四段＋HEAD），子检查另加历史源码树；清单带额度表与环境事实；
         pre-A3 场景标为不可承接；额度表与组合无关（组合不同不改调度策略版本）。"""

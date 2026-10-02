@@ -854,9 +854,13 @@ class Outcome:
 
 
 def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_seconds: float) -> dict[str, Any]:
-    """单元规格（E3-01 承接比对的一项）：决定「这个单元执行的是什么」的全部字段；预计秒数只影响派发顺序，不算。"""
+    """单元规格（E3-01 承接比对的一项）：决定「这个单元执行的是什么」的全部字段；预计秒数只影响派发顺序，不算。
+    只决定缓存位置的环境变量（字节码前缀、身份记忆目录）也不算：它们不影响结果，环境指纹同样不计（E3-02，pre-A3 场景
+    单元带着这两个变量，生产字节码共享层在与不在不能让场景承接不了）。"""
 
-    common = {"unit_id": unit.unit_id, "env": dict(unit.env), "cores": unit.quota.cores, "memory_mb": unit.quota.memory_mb,
+    cache_only = _records_module().ENV_CACHE_ONLY
+    env = {key: value for key, value in dict(unit.env).items() if key not in cache_only}
+    common = {"unit_id": unit.unit_id, "env": env, "cores": unit.quota.cores, "memory_mb": unit.quota.memory_mb,
               "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds}
     if unit.command:
         return {"type": "command", "argv": list(unit.command), "cwd": unit.cwd, **common}
@@ -1630,8 +1634,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     """``run-gates`` 各单元的当前事实（E3-01）：单元规格、输入明细与摘要、能否承接（不能时写明原因）。
 
     采集工具测试单元的输入由执行器按静态依赖闭包算（同一模块的拆块与独占单元共用一份）；命令单元的输入由门禁清单
-    声明（``inputs``），清单标了 ``inheritable: false`` 的（如 pre-A3 场景）照写记录、不承接。工作目录不是干净的 git
-    检出时输入不完整（未跟踪文件不在范围里），本次一律不承接。"""
+    声明（``inputs``，pre-A3 场景单元另声明场景测试模块，同样按静态依赖闭包展开），清单标了 ``inheritable: false``
+    的照写记录、不承接。工作目录不是干净的 git 检出时输入不完整（未跟踪文件不在范围里），本次一律不承接。"""
 
     items = {item["unit_id"]: item for item in manifest.get("units") or [] if isinstance(item, dict)}
     repo, problem = None, ""
@@ -1642,6 +1646,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     except records.RecordsError as error:
         problem = f"执行器的工作目录不是可用的 git 检出（{error}）：算不出输入，本次不承接"
     currents: dict[str, Any] = {}
+    # 同一棵受管树的静态依赖分析只建一次：采集工具测试组与声明了测试模块的命令单元（pre-A3 场景，E3-02）共用。
+    deps_cache: dict[Path, Any] = {}
 
     def current(unit: Unit, spec: dict[str, Any], inputs: list[dict[str, Any]] | None, reason: str) -> Any:
         return records.Current(unit_id=unit.unit_id, unit_type="command" if unit.command else "test", spec=spec, spec_sha256=_sha256(spec),
@@ -1650,6 +1656,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
 
     for group in groups:
         deps = records.TestDependencies(group.start.resolve().parent) if not problem else None
+        if deps is not None:
+            deps_cache.setdefault(deps.occ, deps)
         cache: dict[str, Any] = {}
         for unit in group_units[group.group_id]:
             spec = unit_spec(unit, start=group.start, pattern=group.pattern, timeout_seconds=timeout)
@@ -1679,7 +1687,7 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
             reason = problem
         else:
             try:
-                inputs = records.declared_inputs(repo, item["inputs"])
+                inputs = records.declared_inputs(repo, item["inputs"], deps_cache)
             except (records.RecordsError, OSError, ValueError) as error:
                 reason = f"输入算不出来：{error}"
         currents[unit.unit_id] = current(unit, spec, inputs, reason)

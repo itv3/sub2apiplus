@@ -218,6 +218,8 @@ PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA = (
 )
 OFFICIAL_ATTEMPT_IMPORT_MODE = "official_attempt_reuse"
 PRE_A3_PATH_CERTIFICATION_SCHEMA = "pre-a3-path-certification/v1"
+# E3-02：pre-A3 认证新形状 v2（从单元执行记录组装，v1 字段全部保留）；reuse-official-evidence 的导入两种都认。
+PRE_A3_PATH_CERTIFICATION_SCHEMAS = (PRE_A3_PATH_CERTIFICATION_SCHEMA, "pre-a3-path-certification/v2")
 POLICY_ACTIVATION_CERTIFICATION_SCHEMA = "policy-activation-certification/v1"
 ARM64_SUPERVISED_DEPLOY_RECEIPT_SCHEMA = "codex-arm64-supervisor-enable/v1"
 OFFICIAL_ATTEMPT_IMPORT_ARGUMENT_NAMES = (
@@ -29537,20 +29539,21 @@ def _read_import_receipt_file(
 def _verify_certification_receipt(
     payload: Mapping[str, Any],
     *,
-    schema_version: str,
+    schema_version: str | tuple[str, ...],
     expected_status: str,
     expected_identity: Mapping[str, str],
     deployment_receipt_sha256: str,
     label: str,
 ) -> None:
-    """校验 A2.5／A2.6 认证收据：schema、状态、五摘要、部署收据绑定与自摘要。"""
+    """校验 A2.5／A2.6 认证收据：schema（可给一组认可的 schema）、状态、五摘要、部署收据绑定与自摘要。"""
 
+    allowed = (schema_version,) if isinstance(schema_version, str) else tuple(schema_version)
     unsigned = dict(payload)
     digest = unsigned.pop("receipt_sha256", None)
     identity = payload.get("identity")
     deployment = payload.get("deployment_receipt")
     if (
-        payload.get("schema_version") != schema_version
+        payload.get("schema_version") not in allowed
         or payload.get("status") != expected_status
         or not isinstance(identity, Mapping)
         or {name: identity.get(name) for name in OFFICIAL_ATTEMPT_IMPORT_IDENTITY_FIELDS}
@@ -29798,7 +29801,7 @@ def _official_attempt_import_context(
     )
     _verify_certification_receipt(
         certification,
-        schema_version=PRE_A3_PATH_CERTIFICATION_SCHEMA,
+        schema_version=PRE_A3_PATH_CERTIFICATION_SCHEMAS,
         expected_status="passed",
         expected_identity=expected_identity,
         deployment_receipt_sha256=deploy_sha256,

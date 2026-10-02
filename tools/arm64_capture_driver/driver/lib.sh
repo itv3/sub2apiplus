@@ -55,19 +55,19 @@ PY
   export PYTHONPYCACHEPREFIX="$PYC_MANAGED"
   echo "字节码共享层已重建：${summary:0:200}"
 }
-# 新签本轮 pre-A3 路径认证（E2-03；pre-a3.sh 新跑与 stage2.sh 兜底共用）：plan 在认证根下自动新建本次子目录并写出
-# 44 条命令单元（每个场景一个子进程），驱动随附的统一调度执行器在整机额度内并行跑完，issue 再核对场景全集、
-# 各子进程的退出情况与上报的网络计数后签发。没通过只写带时间后缀的旁路文件、正式路径只在通过时写，修好后同一
-# STAMP 直接重跑，不必先归档。执行器自身的退出码只作记录：结论以 issue 为准（没签发时 issue 退出码非 0，调用方
-# 的 set -e 停线）。用到调用方已定义的 DEPLOY、POLICY_ACTIVATION、PRE_A3_CERTIFICATION。
+# 新签本轮 pre-A3 路径认证（pre-a3.sh 新跑与 stage2.sh 兜底共用）。E3-02 起交给入口门禁的 pre-a3 组合：在本提交的测试树
+# 里算每个场景的输入、核对数据根部署的就是这棵树，统一调度执行器并行跑场景、单元执行记录入库（已通过且输入没变的场景
+# 承接），再从本次运行清单与记录库组装 v2 认证（每个场景恰好一条通过的正式执行记录、网络计数为 0）。测试树取自参数文件
+# 的 ENTRY_BUNDLE、ENTRY_BRANCH、ENTRY_COMMIT（入口编排器同一组参数），缺任何一个即停：没有测试树就算不出输入，签不出
+# 「输入对得上当前树」的认证。没通过只写带时间后缀的旁路文件、正式路径只在通过时写，修好后同一 STAMP 直接重跑；
+# entry-gates.sh 的退出码非 0 时调用方的 set -e 停线。用到调用方已定义的 POLICY_ACTIVATION、PRE_A3_CERTIFICATION。
 issue_pre_a3_certification() {
-  local units root rc=0
-  units="$RUNROOT/pre-a3-units-$(date -u +%Y%m%dt%H%M%Sz).json"
-  root=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-root "$D/staging/pre-a3-certification-$STAMP" --output "$units" \
-    | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_root"])')
-  python3 "$DRV/unit_executor.py" run-commands --manifest "$units" --out-dir "$root/executor" > "$root/executor.log" 2>&1 || rc=$?
-  echo "pre-A3 场景执行 rc=${rc}（明细 $root/executor.log）：$(tail -n 2 "$root/executor.log" | tr '\n' ' ' | cut -c1-200)"
-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$root" --executor-summary "$root/executor/summary.json" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300
+  local name
+  for name in ENTRY_BUNDLE ENTRY_BRANCH ENTRY_COMMIT; do
+    if [ -z "${!name:-}" ]; then echo "单独签 pre-A3 需要参数文件里的 ${name}（入口门禁的测试树来源）" >&2; return 2; fi
+  done
+  bash "$DRV/entry-gates.sh" --profile pre-a3 --policy-activation "$POLICY_ACTIVATION" --pre-a3-certification "$PRE_A3_CERTIFICATION" \
+    --pre-a3-mode run "$ENTRY_BUNDLE" "$ENTRY_BRANCH" "$ENTRY_COMMIT" < /dev/null
 }
 NEWDIR=$D/evidence/campaigns/$NEW
 W=$D/control/$IN
