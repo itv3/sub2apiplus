@@ -132,6 +132,8 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
                 "pkg/tests/real_chains/test_some_chain.py": "from managed_tree_copy import copy_managed_tree\ncopy_managed_tree('a', 'b')\n",
                 "pkg/tests/managed_tree_copy.py": "def copy_managed_tree(src, dst, include_tests=True): pass\n",
                 "pkg/tests/test_copies_without_tests.py": "from managed_tree_copy import copy_managed_tree\ncopy_managed_tree('a', 'b', include_tests=False)\n" + PASS,
+                "pkg/tests/test_copies_closure.py": ("from managed_tree_copy import copy_managed_tree\n"
+                                                     "copy_managed_tree('a', include_tests='closure', closure_of=__file__)\n" + PASS),
                 "pkg/tests/test_discovers.py": "import unittest\nunittest.defaultTestLoader.discover('.')\n" + PASS,
                 "pkg/tests/tree_helper.py": "from managed_tree_copy import copy_managed_tree\n\ndef full_copy():\n    copy_managed_tree('a', 'b')\n",
                 "pkg/tests/test_uses_tree_helper.py": "import unittest\nimport tree_helper\n" + PASS,
@@ -149,6 +151,7 @@ class RepoIndexAndDependencyTests(unittest.TestCase):
             self.assertTrue(deps.module_flags(tests / "test_uses_tree_helper.py").whole_tests, "辅助模块按默认参数复制受管树（含测试目录）")
             self.assertTrue(deps.module_flags(tests / "real_chains" / "test_some_chain.py").whole_tests, "模块自身的调用照样识别")
             self.assertFalse(deps.module_flags(tests / "test_copies_without_tests.py").whole_tests)
+            self.assertFalse(deps.module_flags(tests / "test_copies_closure.py").whole_tests, "按闭包复制只带已声明的那部分（E3-04）")
             self.assertTrue(deps.module_flags(tests / "test_discovers.py").whole_tests)
             repo = ur.RepoIndex.load(root)
             names = {entry["name"] for entry in ur.test_unit_inputs(repo, deps, tests / "test_chain_user.py")}

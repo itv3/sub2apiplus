@@ -639,8 +639,9 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
             digest, count = ctx.tree(path, "pycache")
             total.update(f"{root}\0{digest}\n".encode("utf-8"))
             files += count
+        # 明细列出全部根目录（读集审计按绝对路径核对数据根读取，E3-04）；摘要只由内容决定，明细变化不影响失效判定。
         return {"category": item.category, "name": item.name, "sha256": total.hexdigest(),
-                "detail": {"roots": len(roots), "campaign": roots[0] if roots else None, "files": files}}
+                "detail": {"roots": len(roots), "campaign": roots[0] if roots else None, "files": files, "paths": list(roots)}}
     if kind == "section":
         manifest = Path(ctx.expand(item.arg))
         try:

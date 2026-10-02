@@ -31,7 +31,7 @@ class _RecordedChainHarness:
     def __init__(self, case: unittest.TestCase, staging: Path) -> None:
         self.case = case
         self.staging = staging
-        self.tree = trees.copy_managed_tree(staging / "tree")
+        self.tree = trees.copy_managed_tree(staging / "tree", include_tests="closure", closure_of=Path(__file__))
         shutil.copy2(REPO_ROOT / "tools" / "prepare_assertion_bundle.sh", self.tree / "tools" / "prepare_assertion_bundle.sh")
         (self.tree / "runs").mkdir(mode=0o700)
         replay.install_sitecustomize(self.tree)

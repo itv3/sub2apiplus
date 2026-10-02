@@ -61,8 +61,9 @@ MAX_AGE_HOURS = 168.0
 PASSING_OUTCOMES = frozenset({"passed", "skipped", "expected_failure"})
 MISSING = "missing"
 HERE = Path(__file__).resolve().parent
-# 执行器版本：执行器目录里参与调度、判定、输入解析与门禁编排的文件（存在的才算；字节码预编译工具另由执行器传入）。
-EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
+# 执行器版本：执行器目录里参与调度、判定、输入解析、门禁编排与读集审计（E3-04）的文件（存在的才算；字节码预编译工具
+# 另由执行器传入）。
+EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh", "read_audit.py")
 # 只决定缓存放在哪里的环境变量（内容按源码摘要校验或按整树摘要做键），不进环境指纹；执行器自己的控制变量也不进。
 ENV_CACHE_ONLY = frozenset({"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"})
 ENV_EXECUTOR_PREFIX = "UNIT_EXECUTOR_"
@@ -411,9 +412,12 @@ class TestDependencies:
                 if name == "discover":
                     flags.whole_tests.append(f"{path.name}:{node.lineno} 调用 discover")
                 elif name == "copy_managed_tree" and not any(
-                        keyword.arg == "include_tests" and isinstance(keyword.value, ast.Constant) and keyword.value.value is False
+                        keyword.arg == "include_tests" and isinstance(keyword.value, ast.Constant) and keyword.value.value in (False, "closure")
                         for keyword in node.keywords):
-                    flags.whole_tests.append(f"{path.name}:{node.lineno} copy_managed_tree 没显式传 include_tests=False（默认连测试目录一起复制）")
+                    # include_tests="closure" 只复制调用方模块的静态依赖闭包、辅助模块、夹具与真实链目录（E3-04）：闭包里有真实链
+                    # 的单元本就声明了这些。
+                    flags.whole_tests.append(f"{path.name}:{node.lineno} copy_managed_tree 没显式传 include_tests=False 或 \"closure\""
+                                             "（默认连测试目录一起复制）")
             self._auto[path] = flags
         return self._auto[path]
 

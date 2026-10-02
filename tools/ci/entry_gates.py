@@ -784,6 +784,8 @@ def export_records(
         # E3-01：运行模式、承接计数、执行记录清单与记录库。
         "mode": mode, "inheritance": summary.get("inheritance"), "unit_manifest": summary.get("unit_manifest"),
         "record_store": summary.get("record_store"),
+        # E3-04：读集审计（带 --audit-reads 时才有）：结论、有未声明读取的单元与明细位置。
+        "read_audit": summary.get("read_audit"),
     }
     if all(gate_id in records for gate_id in MAKE_TEST_GATES + FULL_GATES_EXTRA):
         order = ("full-regression",) + FULL_GATES_EXTRA

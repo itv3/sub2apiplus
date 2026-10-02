@@ -134,6 +134,20 @@ def _records_module() -> Any:
     return sys.modules[name]
 
 
+def _audit_module() -> Any:
+    """同目录的 read_audit.py（读集审计，E3-04）：同样按路径加载。"""
+
+    name = "read_audit_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "read_audit.py")
+        if spec is None or spec.loader is None:
+            raise ExecutorError("找不到同目录的 read_audit.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
 # ---------------------------------------------------------------------------
 # 调度配置
 # ---------------------------------------------------------------------------
@@ -930,6 +944,67 @@ class Recorder:
         return record
 
 
+class ReadAuditor:
+    """读集审计（E3-04，规则见 ``read_audit.py``）：正式执行的单元包在 strace 下，轨迹经管道交给过滤器，只留测试树与
+    数据根下的路径；单元结束后按它本次的输入明细核对。诊断执行不审计。不改单元规格、不改执行记录——审计跑出来的记录
+    与平常一样可以承接。"""
+
+    def __init__(self, *, out_dir: Path, repo_root: Path, data_root: Path | None, currents: dict[str, Any]) -> None:
+        self.module = _audit_module()
+        self.records = _records_module()
+        self.dir = Path(out_dir) / "audit"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.repo_root = str(Path(repo_root).resolve())
+        self.data_root = str(Path(data_root).resolve()) if data_root is not None else None
+        self.currents = currents
+        self.results: dict[str, dict[str, Any]] = {}
+
+    def trace_path(self, unit: Unit) -> Path:
+        safe = unit.unit_id.replace("#", "-").replace("!", "-").replace("/", "-").replace(":", "-")
+        return self.dir / f"{safe}.trace.json"
+
+    def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
+        roots = [self.repo_root] + ([self.data_root] if self.data_root else [])
+        trace = self.trace_path(unit)
+        with contextlib.suppress(FileNotFoundError):
+            trace.unlink()
+        return self.module.strace_argv(argv, output=trace, roots=roots)
+
+    def collect(self, unit: Unit) -> dict[str, Any]:
+        current = self.currents.get(unit.unit_id)
+        inputs = current.inputs if current is not None else None
+        try:
+            document = self.module.load_trace(self.trace_path(unit))
+        except self.module.AuditError as error:
+            result = {"undeclared_count": 1, "undeclared": [{"root": "audit", "path": "", "kinds": [], "sample": "",
+                                                              "suggestion": f"没有审计轨迹（strace 或过滤器没跑起来）：{error}"}]}
+        else:
+            if inputs is None:
+                result = {"undeclared_count": 1, "undeclared": [{"root": "audit", "path": "", "kinds": [], "sample": "",
+                                                                  "suggestion": f"单元没有输入明细（{getattr(current, 'reason', '') or '不可承接'}），审计无从核对"}]}
+            else:
+                cwd = str(Path(unit.cwd).resolve()) if unit.command and unit.cwd else self.repo_root
+                in_data_root = bool(self.data_root) and (cwd == self.data_root or cwd.startswith(self.data_root + "/"))
+                head_id_only = not unit.command and unit.module.split("+", 1)[0] in self.records.HEAD_ID_ONLY_READERS
+                result = self.module.audit_reads(document, inputs, repo_root=self.repo_root, data_root=self.data_root,
+                                                 in_data_root=in_data_root, head_id_only=head_id_only)
+                result["trace_lines"] = document.get("lines")
+        self.results[unit.unit_id] = result
+        return result
+
+    def report(self) -> dict[str, Any]:
+        """写 ``audit/read-audit.json`` 并返回汇总里的那一段。"""
+
+        flagged = sorted(unit_id for unit_id, result in self.results.items() if result.get("undeclared_count"))
+        total = sum(int(result.get("undeclared_count") or 0) for result in self.results.values())
+        path = self.dir / "read-audit.json"
+        _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
+                           "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT), "units": self.results,
+                           "units_with_findings": flagged, "undeclared_total": total})
+        return {"enabled": True, "report": str(path), "units": len(self.results), "units_with_findings": flagged[:50],
+                "undeclared_total": total, "status": "passed" if not total else "failed"}
+
+
 def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
     """不承接的模式（run／run-commands）下各单元的当前事实：只有规格，不算输入。"""
 
@@ -955,6 +1030,7 @@ class Scheduler:
         start: Path,
         recorder: Recorder,
         unit_argv: list[str] | None = None,
+        auditor: ReadAuditor | None = None,
     ) -> None:
         self.out_dir = Path(out_dir)
         self.state_dir = _state_dir(state_dir)
@@ -966,6 +1042,7 @@ class Scheduler:
         self.start = Path(start)
         self.recorder = recorder
         self.unit_argv = unit_argv
+        self.auditor = auditor
         self.events_path = self.out_dir / "events.jsonl"
         self.reservation = Reservation(self.state_dir)
         self.running: dict[int, Running] = {}
@@ -1029,6 +1106,9 @@ class Scheduler:
             _write_json(tests_path, {"unit_id": unit.unit_id, "test_ids": list(unit.test_ids)})
             argv = self.unit_argv or [sys.executable, str(Path(__file__).resolve()), "run-unit"]
             argv = [*unit.launcher, *argv, "--start", str(self.start), "--tests-file", str(tests_path), "--result", str(result_path)]
+        if self.auditor is not None and kind == "formal":
+            # 读集审计（E3-04）：strace 在最外层（启动前缀、切目录的 shell 都在它下面），轨迹经管道交给过滤器。
+            argv = self.auditor.wrap(unit, argv)
         env = {
             **os.environ,
             # 单元内部并行度：默认按额度向上取整（至少 1）。单元自己显式给出的（如后端 Go 测试按 0.7 核排程、内部仍要
@@ -1111,6 +1191,9 @@ class Scheduler:
                 )
                 # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
                 self.recorder.write(item, outcome)
+                if self.auditor is not None and item.kind == "formal":
+                    audit = self.auditor.collect(item.unit)
+                    outcome.extra["read_audit"] = {"undeclared_count": audit.get("undeclared_count", 0)}
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
                 finished.append(outcome)
@@ -1360,6 +1443,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
             p.add_argument("--decide-only", action="store_true",
                            help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
+            # E3-04：读集审计。真跑才有读集，只许与 --mode re-execute 同用；要求 PATH 里有 strace（Linux）。
+            p.add_argument("--audit-reads", action="store_true",
+                           help="读集审计：正式执行的单元包在 strace 下，核对实际读取都在声明的输入范围里，超出即判失败（只许 re-execute）")
+            p.add_argument("--audit-data-root", type=Path, default=None,
+                           help="数据根：测试树单元读到这里一律报出；工作目录在这里的单元（pre-A3 场景）按与仓库同布局核对")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     unit.add_argument("--tests-file", type=Path, required=True)
@@ -1624,6 +1712,12 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
         verdict = "通过" if gate["status"] == "passed" else f"未通过（失败单元 {len(gate['failed_units'])} 个：{gate['failed_units'][:5]}）"
         skipped = f"；不在本平台执行 {len(gate['not_executed'])} 项" if gate["not_executed"] else ""
         print(f"门禁 {gate['gate_id']}：{verdict}{skipped}", file=sys.stderr)
+    audit = summary.get("read_audit") or {}
+    if audit:
+        verdict = "通过" if audit["status"] == "passed" else f"不通过：{len(audit['units_with_findings'])} 个单元有未声明读取 {audit['undeclared_total']} 处"
+        print(f"读集审计（{audit['units']} 个单元）：{verdict}；明细 {audit['report']}", file=sys.stderr)
+        for unit_id in audit["units_with_findings"][:10]:
+            print(f"  未声明读取：{unit_id}", file=sys.stderr)
     passed = sum(1 for gate in summary["gates"] if gate["status"] == "passed")
     print(f"门禁 {len(summary['gates'])} 项，通过 {passed} 项，用时 {summary['elapsed_seconds']:.3f}s", file=sys.stderr)
     print("OK" if summary["status"] == "passed" else f"FAILED (gates={len(summary['gates']) - passed})", file=sys.stderr)
@@ -1797,6 +1891,11 @@ def _run_gates(args: argparse.Namespace) -> int:
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
+    if args.audit_reads:
+        if args.mode != records.RE_EXECUTE:
+            raise ExecutorError("读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用")
+        if shutil.which("strace") is None:
+            raise ExecutorError("读集审计要用 strace：PATH 里找不到（只在 Linux 上可用）")
     run_id, decided_at = records.new_run_id(), records.utc_now()
     facts = records.RunFacts(policy_sha256=policy, environment=environment, environment_sha256=records.entries_sha256(environment),
                              executor=executor, max_age_hours=max_age, now=time.time())
@@ -1818,10 +1917,12 @@ def _run_gates(args: argparse.Namespace) -> int:
     state_dir = args.state_dir or default_state_dir()
     recorder = Recorder(out_dir=out_dir, mode=args.mode, run_id=run_id, policy=policy, executor=executor, environment=environment,
                         currents=currents, store=store)
+    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents) if args.audit_reads else None
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
         machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."), recorder=recorder,
+        auditor=auditor,
     )
     try:
         started = time.monotonic()
@@ -1867,6 +1968,10 @@ def _run_gates(args: argparse.Namespace) -> int:
         })
         if bytecode["status"] == "failed" or problems:
             summary["status"] = "failed"
+        if auditor is not None:
+            summary["read_audit"] = auditor.report()
+            if summary["read_audit"]["status"] != "passed":
+                summary["status"] = "failed"
         _write_json(out_dir / "summary.json", summary)
         _print_gates_summary(summary)
         return 0 if summary["status"] == "passed" else 1

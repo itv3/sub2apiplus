@@ -52,6 +52,32 @@ PROBE = (
 )
 
 
+class CopyClosureTest(unittest.TestCase):
+    """按闭包复制（E3-04）：测试目录里只带调用方模块的静态依赖闭包、辅助模块、夹具与真实链目录，与单元的输入声明一致。"""
+
+    def test_closure_copy_holds_exactly_the_declared_part_of_the_tests_directory(self) -> None:
+        from tools.ci import unit_records
+
+        module = managed_tree_copy.TOOL_ROOT / "tests" / "real_chains" / "test_codex_upgrade_stage_recovery.py"
+        with tempfile.TemporaryDirectory() as directory:
+            tree = managed_tree_copy.copy_managed_tree(Path(directory) / "copy", include_tests="closure", closure_of=module)
+            copied_tests = tree / "tools" / "official_client_capture" / "tests"
+            copied = {path.relative_to(copied_tests).as_posix() for path in copied_tests.rglob("*") if path.is_file()}
+            original = managed_tree_copy.TOOL_ROOT / "tests"
+            closure = {path.relative_to(original).as_posix() for path in unit_records.TestDependencies(managed_tree_copy.TOOL_ROOT).closure(module)}
+            helpers = {path.name for path in original.glob("*.py") if not path.name.startswith("test_")}
+            whole = {path.relative_to(original).as_posix() for directory_name in managed_tree_copy.CLOSURE_DIRECTORIES
+                     for path in (original / directory_name).rglob("*") if path.is_file() and "__pycache__" not in path.parts}
+            self.assertEqual(copied, closure | helpers | whole)
+            self.assertIn("test_codex_upgrade.py", copied, "辅助驱动导入的顶层测试模块在闭包里")
+            self.assertNotIn("test_ci_unit_records.py", copied, "闭包之外的测试模块不复制")
+            self.assertTrue((tree / "tools" / "official_client_capture" / "codex_upgrade.py").is_file(), "受管树照常整份复制")
+        with self.assertRaises(managed_tree_copy.ManagedTreeCopyError):
+            managed_tree_copy.copy_managed_tree(Path(tempfile.gettempdir()) / "never-created", include_tests="closure")
+        with self.assertRaises(managed_tree_copy.ManagedTreeCopyError):
+            managed_tree_copy.copy_managed_tree(Path(tempfile.gettempdir()) / "never-created", include_tests="helpers")
+
+
 class CopyPycacheTest(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()

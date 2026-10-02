@@ -43,17 +43,62 @@ class ManagedTreeCopyError(RuntimeError):
     pass
 
 
-def copy_managed_tree(destination: Path, *, include_tests: bool = True) -> Path:
-    """把受管树复制到 ``destination/tools/official_client_capture``，返回 ``destination``（仓库根副本）。"""
+# 按闭包复制测试目录（include_tests="closure"，E3-04）：真实链在副本里运行的是它自己的模块与它的静态依赖（驱动、录制
+# 回放、夹具工厂，以及它们导入的 test_codex_upgrade 等），用不到别的测试模块。整目录复制会让这些单元的输入带上整个
+# 测试目录（207 个文件），任何测试文件一改就要重跑；按闭包复制后输入正好是单元已声明的那部分（unit_records 的
+# _closure_entries：闭包里的测试文件、全部辅助模块与真实链目录，加上每个单元都有的夹具目录），读集审计核对得上。
+CLOSURE_DIRECTORIES = ("fixtures", "real_chains")
 
+
+def _closure_files(module_file: Path) -> set[Path]:
+    """``module_file`` 的静态依赖闭包里的测试目录文件，加辅助模块、真实链目录与包标记（与单元输入声明同一算法）。"""
+
+    from tools.ci import unit_records  # 只在仓库里调用（副本里没有 tools/ci，也不会再复制）
+
+    tests = (TOOL_ROOT / "tests").resolve()
+    keep = set(unit_records.TestDependencies(TOOL_ROOT).closure(Path(module_file).resolve()))
+    keep.update(path.resolve() for path in tests.glob("*.py") if not path.name.startswith("test_"))
+    keep.update(path.resolve() for path in (tests / "real_chains").rglob("*.py") if "__pycache__" not in path.parts)
+    return keep
+
+
+def _closure_ignore(keep: set[Path]):
+    tests = (TOOL_ROOT / "tests").resolve()
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        here = Path(directory).resolve()
+        if here != tests:
+            return set()  # 测试目录之外照常；夹具、真实链两个目录整个复制
+        return {name for name in names
+                if name not in CLOSURE_DIRECTORIES and not (name.endswith(".py") and (here / name).resolve() in keep)}
+
+    return ignore
+
+
+def copy_managed_tree(destination: Path, *, include_tests: bool | str = True, closure_of: Path | None = None) -> Path:
+    """把受管树复制到 ``destination/tools/official_client_capture``，返回 ``destination``（仓库根副本）。
+
+    ``include_tests``：True 连整个测试目录；False 不要测试目录；``"closure"`` 只带 ``closure_of`` 这个测试模块的静态
+    依赖闭包（外加辅助模块、夹具与真实链目录，见 ``_closure_files``）。"""
+
+    if include_tests not in (True, False, "closure"):
+        raise ManagedTreeCopyError(f"include_tests 只能是 True、False 或 \"closure\"：{include_tests!r}")
+    if (include_tests == "closure") != (closure_of is not None):
+        raise ManagedTreeCopyError("按闭包复制要给 closure_of（调用方测试模块的路径），其余方式不给")
     destination = Path(destination)
     target = destination / PACKAGE_RELATIVE
     if target.exists():
         raise ManagedTreeCopyError(f"副本目标已存在：{target}")
     ignore = ["__pycache__", "versions", "*.pyc"]
-    if not include_tests:
+    if include_tests is False:
         ignore.append("tests")
-    shutil.copytree(TOOL_ROOT, target, ignore=shutil.ignore_patterns(*ignore))
+    patterns = shutil.ignore_patterns(*ignore)
+    if include_tests == "closure":
+        assert closure_of is not None
+        by_closure = _closure_ignore(_closure_files(closure_of))
+        shutil.copytree(TOOL_ROOT, target, ignore=lambda directory, names: patterns(directory, names) | by_closure(directory, names))
+    else:
+        shutil.copytree(TOOL_ROOT, target, ignore=patterns)
     # 夹具按仓库相对路径读取两份指南文档（source_spec 摘要、场景清单绑定）；文档不进受管身份。
     docs = destination / "docs"
     docs.mkdir(mode=0o700, exist_ok=True)

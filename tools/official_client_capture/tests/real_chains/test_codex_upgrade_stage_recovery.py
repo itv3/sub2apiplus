@@ -30,7 +30,7 @@ INJECTION = '        draft = _write_classification_draft(campaign_dir, manifest,
 class StageRecoveryChainTests(unittest.TestCase):
     def test_classify_commit_failure_reconciles_and_redispatches(self):
         with tempfile.TemporaryDirectory(prefix="codex-r4-staging-") as directory:
-            tree = trees.copy_managed_tree(Path(directory) / "tree")
+            tree = trees.copy_managed_tree(Path(directory) / "tree", include_tests="closure", closure_of=Path(__file__))
             trees.replace_once(tree, "codex_upgrade.py", ANCHOR, INJECTION)
             result = trees.run_python(tree, ["-m", "unittest", "-v", __name__ + ".StageRecoveryChainTests._exercise"],
                                       extra_env={project_ledger_fixture.FIXTURE_ONLY_ENV: "1"}, timeout=240)

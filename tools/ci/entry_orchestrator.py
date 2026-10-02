@@ -29,7 +29,8 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败；
 ``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）；
 ``--reexecute-gates``：入口门禁重新执行全集（方案 D12：升级开工的入口空跑、一致性验收、收尾合入前用），这一步不沿用
-记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。
+记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。``--audit-reads``（要和
+``--reexecute-gates`` 一起带）：入口门禁带读集审计（E3-04），每个单元的实际读取都要落在声明的输入范围里。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
@@ -154,12 +155,14 @@ class Outcome:
 class Orchestrator:
     def __init__(self, params: Mapping[str, str], *, driver_dir: Path, run_dir: Path, steps_dir: Path,
                  runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None,
-                 approval: Mapping[str, str] | None = None, reexecute_gates: bool = False) -> None:
+                 approval: Mapping[str, str] | None = None, reexecute_gates: bool = False, audit_reads: bool = False) -> None:
         self.params = dict(params)
         self.driver_dir, self.run_dir, self.steps_dir = driver_dir, run_dir, steps_dir
         self.runner, self.masks = runner, dict(masks or {})
         # 入口门禁的模式（D12）：重新执行全集时这一步强制重做、单元一个都不承接。
         self.reexecute_gates = reexecute_gates
+        # 读集审计（E3-04）：只随重新执行全集一起带（真跑才有读集）。
+        self.audit_reads = audit_reads
         # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
         self.approval = {key: value for key, value in (approval or {}).items() if value}
         context_args = {"params": self.params, "driver_dir": driver_dir, "steps_dir": steps_dir}
@@ -277,7 +280,8 @@ class Orchestrator:
             rc = self.run("entry-gates", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "entry", "--out", str(out),
                                           "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
                                           "--pre-a3-mode", "run" if pre_a3_run else "present",
-                                          "--mode", "re-execute" if self.reexecute_gates else "full-set-pass", *source])
+                                          "--mode", "re-execute" if self.reexecute_gates else "full-set-pass",
+                                          *(["--audit-reads"] if self.audit_reads else []), *source])
             summary = out / "entry-gates.json"
             try:
                 status = json.loads(summary.read_text(encoding="utf-8")).get("status")
@@ -295,7 +299,8 @@ class Orchestrator:
             out = self.run_dir / "pre-a3-gates"
             self.run("pre-a3", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "pre-a3", "--out", str(out),
                                 "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
-                                "--pre-a3-mode", "run", "--mode", "re-execute" if self.reexecute_gates else "full-set-pass", *source])
+                                "--pre-a3-mode", "run", "--mode", "re-execute" if self.reexecute_gates else "full-set-pass",
+                                *(["--audit-reads"] if self.audit_reads else []), *source])
         if pre_a3_run:
             if not certification.is_file():
                 self.outcomes["pre-a3"].reasons.append(
@@ -778,11 +783,16 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--reason", help="只交给 VC-0 收口：上限后的恢复里，失败原因已如何消除")
     parser.add_argument("--reexecute-gates", action="store_true",
                         help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")
+    parser.add_argument("--audit-reads", action="store_true",
+                        help="入口门禁带读集审计（E3-04，要和 --reexecute-gates 一起带）：实际读取超出声明的输入范围即判失败")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if args.audit_reads and not args.reexecute_gates:
+        print("入口编排：读集审计要真跑才有读集，--audit-reads 要和 --reexecute-gates 一起带", file=sys.stderr)
+        return 2
     params = dict(os.environ)
     if not params.get("D") or not params.get("RUNROOT"):
         print("入口编排：参数里没有 D 或 RUNROOT（由 entry.sh 先 source 驱动 lib.sh 加载本轮参数文件）", file=sys.stderr)
@@ -809,7 +819,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     orchestrator = Orchestrator(params, driver_dir=Path(params.get("DRV") or HERE), run_dir=run_dir, steps_dir=steps_dir,
                                 masks=masks, approval={"approve_sha256": args.approve_sha256 or "",
                                                        "approved_by": args.approved_by or "", "reason": args.reason or ""},
-                                reexecute_gates=args.reexecute_gates)
+                                reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

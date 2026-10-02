@@ -886,7 +886,7 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             self._rewrite(path, drifted)
             with self.assertRaisesRegex(
                 receipt.JobRehearsalReceiptError,
-                "phase_mismatch=\['candidate-frozen-core'\]",
+                r"phase_mismatch=\['candidate-frozen-core'\]",
             ):
                 receipt._target_evidence_label_declaration_sha256(
                     "0.154.0",

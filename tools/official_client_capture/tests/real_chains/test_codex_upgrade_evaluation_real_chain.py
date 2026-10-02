@@ -101,7 +101,7 @@ class _RealChainHarness:
     def tree(self, name: str, *, mutate=None) -> Path:
         if name in self.trees:
             return self.trees[name]
-        tree_root = mtc.copy_managed_tree(self.work / f"tree-{name}")
+        tree_root = mtc.copy_managed_tree(self.work / f"tree-{name}", include_tests="closure", closure_of=Path(__file__))
         if mutate is not None:
             mutate(tree_root)
         mtc.assert_tree_binding(tree_root)
