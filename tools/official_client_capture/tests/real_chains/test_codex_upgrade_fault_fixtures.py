@@ -806,11 +806,16 @@ for line in sys.stdin:
         recreated.mkdir()
         process = self.launch("app", [sys.executable, "-u", str(self.client_script)], recreated)
         self.assertFalse(self.request("app", held=process))
-        # 隧道端点错误和断隧道不能退回物理直连。
+        # 隧道端点错误和断隧道不能退回物理直连。两端都配了 1 秒保活：出口端的保活一到，源端就按收到的认证包把端点漫游回
+        # 正确地址（WireGuard 的正常行为，流量仍走隧道），strace 下或慢机器上保活常赶在请求之前到。所以验证期间先停出口端
+        # 保活，端点才会一直是错的；验完恢复。（10-02 ARM64 读集审计下实测：这一条曾因此误判。）
         peer = self.policy["nodes"]["exit"]["public_key"]
+        origin_peer = self.policy["nodes"]["origin"]["public_key"]
+        self.inside("exit", "wg", "set", "wg-test", "peer", origin_peer, "persistent-keepalive", "0")
         self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", "69.63.195.103:51832")
         self.assertFalse(self.request("app"))
         self.inside("origin", "wg", "set", "wg-test", "peer", peer, "endpoint", "69.63.195.102:51832")
+        self.inside("exit", "wg", "set", "wg-test", "peer", origin_peer, "persistent-keepalive", "1")
         # 错公钥没有可用握手，也不得通过原有连接回退到直连。
         wrong_private = self.command("wg", "genkey")
         wrong_peer = self.command("wg", "pubkey", input_text=wrong_private + "\n")
