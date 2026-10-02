@@ -122,7 +122,8 @@
 * 一条命令：`ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/entry.sh [--plan] [--from <步骤>] [--to <步骤>] > $RUNROOT/entry.out 2>&1 < /dev/null`。
   * 建账本之前一次报全：便宜检查、策略兼容与激活认证、入口门禁与 pre-A3、零请求 smoke、atomic-double。依赖失败步骤的标为被阻塞，
     便宜检查的部署绑定一项没过时，激活认证、入口门禁与 pre-A3 都被阻塞。全部通过才建账本。
-  * 建账本之后按顺序执行，失败即停：建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证。P0 收据与收口由 E2-07 接上。
+  * 建账本之后按顺序执行，失败即停：建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证、P0 收据、VC-0 收口
+    （后两步见下一节 E2-07）。
 * 续跑就是重新执行同一条命令：
   * 每一步按 E2-05 的步骤记录判定沿用还是重做，没有记录的旧产物一律不沿用；
   * 只写一次的坐标被占用时换 `-r2`、`-r3`……，实际坐标写进步骤记录，下游从记录取；
@@ -138,6 +139,28 @@
   * `pre-a3.sh`、`stage1.sh`、`stage1-finish.sh`、`stage2.sh` 保留，供单独补跑某一段或对照旧轮次；入口一律用 `entry.sh`。
   * 入口门禁 `entry-gates.sh` 新增 `--policy-activation`、`--pre-a3-certification`、`--pre-a3-mode auto|present|run`，由编排器替它定 pre-A3 沿用还是新跑。
   * 便宜检查结束时写 `summary.json`（逐项状态）。
+
+## P0 收据与 VC-0 收口（E2-07，`entry.sh` 的最后两步）
+
+* P0 收据（原来每轮手写）：两份离线门禁证据取自入口门禁那一次运行（`p0/test-capture-tools.json`、`p0/check-egress-spec.json`），
+  加发布认证与回退依据 `P0_ROLLBACK_EVIDENCE`（参数文件新键，上一版本可回退点的收据，例如前序 Campaign 的画像目录晋升收据）；
+  subject 取计时账本计划；证据根 `$ENTRY_ROOT/control/<前缀>-p0-gate-<轮次>-<STAMP>`，签发后立即重放。
+* VC-0 收口调用 `codex_upgrade_vc0_closeout`，参数全部来自参数文件与前序步骤记录：Formal `$ENTRY_ROOT/evidence/campaigns/$NEW`、
+  监督器状态目录 `$ENTRY_ROOT/control/$NEW-supervisor`（控制根下一层，VC-1 对账才找得到首批父 run）、审计目录
+  `$ENTRY_ROOT/audit/<前缀>-vc0-closeout-<轮次>-<STAMP>[-r<n>]`。Formal 未建时先复核启动探测报告；收口模块自己做发布认证、P0、
+  Job 演练、部署收据与「当前工具身份＝预检冻结身份」的只读预检，任何一项不过都在写账本之前拒绝。
+* 收口可重入：同一 Formal ID、同一账本，重新执行 `entry.sh` 即续作。收口模块每次先做只读现场判定：
+  * Formal 未建：收据副本 → 建 Formal → 控制产物副本包在账本的收口 attempt 里；失败记 attempt 失败与根因，VC-0 保持打开；
+    被硬杀留下的进行中 attempt 记为「收口进程中断」失败后开新 attempt；半成品 Formal 改名归档到账本的收口命名空间（不删）后重建。
+  * Formal 已建、未派发：补控制产物副本、总账注册推送、「VC-0 完成」「VC-1 开始」，再派发首批。建成之后修工具不重签：受监督部署
+    并在 Formal 上登记工具演进（`codex_upgrade tool-evolution`）后再执行 `entry.sh`。
+  * 已派发：不再派发、不重跑收口；首批（或其恢复）已跑完就补写收口收据，否则按指南对账，给出恢复预览摘要。
+  * Formal 建成之后，创建链各步冻结，`entry.sh` 只剩收口这一步；收口完成后再执行就全部沿用。
+* 需要批准时收口这一步标「阻塞」（退出码 3），打印摘要与下一条命令；批准后带
+  `--approve-sha256 <review_sha256> --approved-by <批准人>` 重新执行 `entry.sh`：
+  * 同一根因连败两次（账本拒绝第三次）：修复并受监督部署后先不带批准执行一次得到预览（Formal 未建走收口模块的上限后恢复，
+    已建走 `campaign-resume`；修复提交取 `ENTRY_COMMIT`、离线回归收据取入口门禁汇总，另须 `--reason <失败原因已如何消除>`）；
+  * 首批已派发、对账可恢复：批准恢复预览后，只补跑没完成的作业（零请求预览批次 → 按预览补跑批次）。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 

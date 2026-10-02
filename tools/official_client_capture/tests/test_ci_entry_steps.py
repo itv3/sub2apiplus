@@ -97,7 +97,10 @@ class Fixture:
             "TARGET_CODE_MODE_HOST_SHA256": "h" * 64, "CAPTURE_RUNTIME_IMAGE": "ghcr.io/x/runtime@sha256:aa",
             "MAIN_MODEL": "gpt-5.6", "LITE_MODEL": "gpt-5.6-mini", "CODEX_ACCOUNT_ID": "90", "API_KEY_ID": "7",
             "COMPOSE_DIR": str(root / "compose"), "CAMPAIGN_PREFIX": "c0160",
+            "P0_ROLLBACK_EVIDENCE": str(_write(root / "rollback-receipt.json", json.dumps({"rollback": True}))),
         }
+        # 收口模块只读现场判定（E2-07 的 Formal 已建判定）返回的现场种类；replayable 供「判定不了」时参考。
+        self.formal_site = {"site": "formal-built", "formal": {"replayable": True}}
         _write(data / "control" / "u01600-r1-timing-ledger" / "ledger.json", "{}\n")
         _write(data / "audit" / "zero-request-smoke-20261002t000000z.json", "{}\n")
         self.products = {
@@ -131,6 +134,9 @@ class Fixture:
             if request.get("recorded"):
                 out["recorded"] = list(self.recorded)
             return 0, json.dumps(out) + "\n"
+        if argv[:4] == [sys.executable, "-B", "-m", "tools.official_client_capture.codex_upgrade_vc0_closeout"]:
+            self.inspect_calls = getattr(self, "inspect_calls", 0) + 1
+            return 0, "日志行\n" + json.dumps(self.formal_site) + "\n"
         if argv[:4] == ["docker", "inspect", "--format", "{{.Image}}"]:
             return 0, self.images[argv[4]] + "\n"
         if argv[:5] == ["docker", "image", "inspect", "--format", "{{.Id}}"]:
@@ -306,8 +312,25 @@ class EntryStepsRuleTests(EntryStepsTestCase):
         ctx = self.fx.ctx()
         self.assertTrue(es.formal_built(ctx))
         result = es.evaluate(ctx, is_formal_built=es.formal_built(ctx))
-        self.assertEqual(_by(result, "frozen"), NON_LIVE)
+        # E2-07：收口这一步不随创建链冻结（建成之后由它续作）；记录通过、输入没变时沿用。
+        self.assertEqual(_by(result, "frozen"), NON_LIVE - {"vc0-closeout"})
+        self.assertEqual(_step(result, "vc0-closeout")["decision"], "reuse")
         self.assertEqual(es.exit_code(result), 0)
+
+    def test_formal_built_is_judged_by_the_closeout_site_not_by_campaign_json_alone(self) -> None:
+        """E2-07：Formal 目录里有 campaign.json 不等于已建——注册批次没提交的半成品（现场 pre-formal）不冻结创建链；
+        判定不了但 Formal 可重放时按已建算；没有 campaign.json 时不调用判定。"""
+
+        ctx = self.fx.ctx()
+        self.assertFalse(es.formal_built(ctx))
+        self.assertEqual(getattr(self.fx, "inspect_calls", 0), 0)
+        _write(self.fx.data / "evidence" / "campaigns" / self.fx.params["NEW"] / "campaign.json", "{}\n")
+        for site, replayable, expected in (("pre-formal", False, False), ("dispatched", True, True),
+                                           ("inconsistent", True, True), ("inconsistent", False, False),
+                                           ("formal-built", True, True)):
+            with self.subTest(site=site, replayable=replayable):
+                self.fx.formal_site = {"site": site, "formal": {"replayable": replayable}}
+                self.assertEqual(es.formal_built(self.fx.ctx()), expected)
 
     def test_ledger_is_never_rebuilt(self) -> None:
         self.fx.params["STAGE_BUDGETS"] = "VC-0=200"

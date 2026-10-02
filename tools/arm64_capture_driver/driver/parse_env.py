@@ -38,6 +38,8 @@ OPTIONAL_KEYS = (
     # 入口编排器（E2-06）：入口门禁的源码坐标（部署到数据根的那一份工具提交），以及建账本之后各产物（计时账本、环境
     # 收据、预检 Campaign、Job 演练、启动探测）所在的根，默认就是数据根；验收演练放在数据根 staging 下的独立目录里。
     "ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT", "ENTRY_ROOT",
+    # P0 收据（E2-07 固定步骤）的回退依据：上一版本可回退点的收据文件（如前序 Campaign 的画像目录晋升收据）。
+    "P0_ROLLBACK_EVIDENCE",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -136,6 +138,10 @@ def parse(text: str) -> dict[str, str]:
         root, data = values["ENTRY_ROOT"].rstrip("/"), values["D"].rstrip("/")
         if root != data and not (root.startswith(f"{data}/staging/") and ".." not in root.split("/")):
             raise EnvFileError("ENTRY_ROOT 只能是数据根 D，或数据根 staging 下的演练目录")
+    if "P0_ROLLBACK_EVIDENCE" in values and (
+        not values["P0_ROLLBACK_EVIDENCE"].startswith("/") or ".." in values["P0_ROLLBACK_EVIDENCE"].split("/")
+    ):
+        raise EnvFileError("P0_ROLLBACK_EVIDENCE 必须是不含 .. 的绝对路径")
     return values
 
 

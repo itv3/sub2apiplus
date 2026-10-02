@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import tempfile
 import unittest
@@ -21,6 +22,14 @@ from tools.official_client_capture.tests.control_receipt_fixtures import (
 
 
 class VC0CloseoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # E2-07：Formal 建成之前，收口前预检要求当前受管工具身份等于预检冻结身份；合成预检清单冻结的就是当前身份。
+        identity = codex_upgrade._tool_identity(include_git=False)
+        cls.frozen_identity = {
+            field: identity[field] for field in closeout.IDENTITY_COMPARE_FIELDS if field in identity
+        }
+
     def _write(self, path: Path, value: object) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.parent.chmod(0o700)
@@ -86,6 +95,9 @@ class VC0CloseoutTests(unittest.TestCase):
                 }
             },
             "configuration": configuration,
+            # E2-07：续作先从 preflight 清单读计时账本目录做只读现场判定。
+            "control_receipts": {"upgrade_timing": {"ledger_dir": str(root / "timing")}},
+            "tool_identity": dict(self.frozen_identity),
             "inputs": {
                 "baseline_rules": {
                     "path": "inputs/baseline-rules.json",
@@ -1403,14 +1415,15 @@ class VC0CloseoutTests(unittest.TestCase):
                 self.assertFalse(diagnostic["deadline_extended"])
                 self.assertFalse(diagnostic["cleanup_performed"])
                 self.assertTrue(diagnostic["formal_campaign_path_exists"])
+                # E2-07：首批派发之后的失败归 VC-1（监督器失败收口与对账恢复链），收口不再追加 live 审计与阶段放弃。
                 self.assertEqual(
                     diagnostic["timing_failure_closure"]["status"],
-                    "stage-abandoned-recorded",
+                    "vc1-owned",
                 )
-                self.assertEqual(
-                    timing.inspect_ledger(root / "timing")["active_phase"],
-                    None,
-                )
+                summary = timing.inspect_ledger(root / "timing")
+                self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+                event_types = [event["event_type"] for event, _raw in timing._load_events(root / "timing")]
+                self.assertNotIn("stage_abandoned", event_types)
 
     def test_success_calls_create_and_campaign_run_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1440,7 +1453,22 @@ class VC0CloseoutTests(unittest.TestCase):
             self.assertFalse((Path(arguments.audit_dir) / "failure.json").exists())
             summary = timing.inspect_ledger(validated.timing_ledger_dir)
             self.assertEqual(summary["active_phase"], "VC-1")
-            self.assertEqual(summary["head_sequence"], 4)
+            # E2-07：收据副本 → 建 Formal → 控制产物副本包在收口 attempt 里，attempt 关闭之后才写「VC-0 完成」。
+            self.assertEqual(summary["head_sequence"], 6)
+            events = [
+                (event["event_id"], event["event_type"])
+                for event, _raw in timing._load_events(validated.timing_ledger_dir)
+            ][1:]
+            self.assertEqual(
+                events,
+                [
+                    ("formal-0154-closeout-a1-started", "attempt_started"),
+                    ("formal-0154-p0-receipts-passed", "receipt_passed"),
+                    ("formal-0154-closeout-a1-completed", "attempt_completed"),
+                    ("formal-0154-vc0-completed", "stage_completed"),
+                    ("formal-0154-vc1-started", "stage_started"),
+                ],
+            )
             copied = (
                 validated.timing_ledger_dir
                 / "receipts"
@@ -1502,6 +1530,317 @@ class VC0CloseoutTests(unittest.TestCase):
                 closeout.VC0CloseoutError, "大小、属主或权限非法"
             ):
                 closeout._read_stable_file(empty_json, "收据", maximum=1024)
+
+
+class _Killed(BaseException):
+    """模拟收口进程在写入边界被硬杀：不走 attempt 失败登记（见 ``_ContinuationEnv.kill``）。"""
+
+
+class _ContinuationEnv:
+    """E2-07 续作测试现场：合成输入 + 有状态的建 Campaign／重放／派发替身；每次执行用新的审计目录。"""
+
+    def __init__(self, case: "VC0CloseoutTests", root: Path) -> None:
+        self.case = case
+        self.root = root
+        self.validated = case._synthetic_validated(root)
+        case._prepare_output_parents(root)
+        self.formal = root / "campaigns" / "formal-0154"
+        self.ledger = self.validated.timing_ledger_dir
+        self.create_calls = 0
+        self.run_calls = 0
+        self.runs = 0
+        self.identity = codex_upgrade._tool_identity(include_git=False)
+
+    def arguments(self, **extra: object) -> argparse.Namespace:
+        self.runs += 1
+        arguments = self.case._arguments(self.root)
+        arguments.audit_dir = self.root / "audit" / f"closeout-0154-{self.runs}"
+        for key, value in extra.items():
+            setattr(arguments, key, value)
+        return arguments
+
+    def create(self, plan_arguments: argparse.Namespace) -> dict[str, object]:
+        """建一个可重放、注册批次已 COMMIT 的合成 Formal，控制收据绑定账本里最后一组副本与 checkpoint。"""
+
+        self.create_calls += 1
+        campaign_dir = plan_arguments.campaign_dir
+        campaign_dir.mkdir(mode=0o700)
+        manifest = self.case._fake_formal_manifest(campaign_dir, plan_arguments.campaign_id)
+        ledger_root = self.ledger.resolve()
+        checkpoint = Path(plan_arguments.timing_receipt).resolve()
+        sets = closeout._receipt_sets(
+            self.ledger,
+            plan_arguments.campaign_id,
+            closeout._closeout_ledger_facts(self.ledger, plan_arguments.campaign_id)["receipt_events"],
+        )
+        latest = [item for item in sets if Path(item["directory"]) == checkpoint.parent][0]
+        manifest["control_receipts"] = {
+            "upgrade_timing": {
+                "ledger_dir": str(self.ledger),
+                "receipt": {"path": checkpoint.relative_to(ledger_root).as_posix(),
+                            "sha256": closeout._sha256_file(checkpoint)},
+            },
+            "arm64_environment": {"receipt": {"sha256": latest["files"]["arm64_environment"]}},
+            "p0_gate": {"receipt": {"sha256": latest["files"]["p0_gate"]}},
+            "release_certification": {"sha256": latest["files"]["release_certification"]},
+        }
+        manifest["tool_identity"] = dict(self.identity)
+        self.case._write(campaign_dir / "campaign.json", manifest)
+        digest_path = campaign_dir / "campaign.sha256"
+        digest_path.write_text(closeout._sha256_file(campaign_dir / "campaign.json") + "\n", encoding="ascii")
+        ledger_dir = campaign_dir / "ledger"
+        ledger_dir.mkdir(mode=0o700)
+        closeout.codex_upgrade_project_ledger.write_batch(
+            ledger_dir,
+            operation_id=f"register:{plan_arguments.campaign_id}",
+            event_type="campaign_registered",
+            payload={"campaign_id": plan_arguments.campaign_id},
+            source={"kind": "test", "sha256": "0" * 64},
+        )
+        return manifest
+
+    def load(self, path: Path) -> dict[str, object]:
+        manifest_path = Path(path) / "campaign.json"
+        if not manifest_path.is_file():
+            raise codex_upgrade.ConfigurationError("Formal Campaign 不可重放（合成半成品）")
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    def run_command(self, _arguments: argparse.Namespace) -> tuple[int, dict[str, object]]:
+        self.run_calls += 1
+        return 0, {"status": "stopped", "reason": "queue-complete", "run_dir": str(self.root / "control" / "run-x"), "actions": []}
+
+    def patches(self, *extra: object) -> list[object]:
+        return [
+            mock.patch.object(closeout, "validate_inputs", return_value=self.validated),
+            mock.patch.object(closeout.codex_upgrade, "create_campaign", side_effect=self.create),
+            mock.patch.object(closeout.codex_upgrade, "load_campaign_manifest", side_effect=self.load),
+            mock.patch.object(closeout.codex_upgrade_supervisor, "_campaign_run_command", side_effect=self.run_command),
+            *extra,
+        ]
+
+    def run(self, *extra: object, **arguments: object) -> dict[str, object]:
+        with contextlib.ExitStack() as stack:
+            for patch in self.patches(*extra):
+                stack.enter_context(patch)
+            return closeout.closeout(self.arguments(**arguments))
+
+    def kill(self, *extra: object) -> None:
+        """在某个写入边界「硬杀」：抛 _Killed，且不登记 attempt 失败（真被杀时进程来不及写）。"""
+
+        with self.case.assertRaises(closeout.VC0CloseoutError):
+            self.run(mock.patch.object(closeout, "_fail_attempt", lambda *_a, **_k: None), *extra)
+
+    def events(self) -> list[tuple[str, str, str | None]]:
+        return [
+            (event["event_id"], event["event_type"], event.get("root_cause_id"))
+            for event, _raw in timing._load_events(self.ledger)
+        ]
+
+    def event_bytes(self) -> list[bytes]:
+        return [path.read_bytes() for path in sorted((self.ledger / "events").glob("*.json"))]
+
+
+class VC0CloseoutContinuationTests(unittest.TestCase):
+    """E2-07：每个写入边界硬杀一次，用续作入口恢复，核对四条不变量；上限后的恢复；收口前预检；现场判定不了时拒绝。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        VC0CloseoutTests.setUpClass()
+        cls.helper_class = VC0CloseoutTests
+
+    def _env(self, directory: str) -> _ContinuationEnv:
+        helper = self.helper_class(methodName="test_zero_byte_formal_job_log_is_collected_but_proves_nothing")
+        root = Path(directory).resolve()
+        return _ContinuationEnv(helper, root)
+
+    def _assert_invariants(self, env: _ContinuationEnv, before: list[bytes], plan_before: bytes) -> None:
+        # ① 账本不重建、② 已写的事件不改：账本计划与续作前的全部事件文件逐字节不变。
+        self.assertEqual((env.ledger / "ledger.json").read_bytes(), plan_before)
+        self.assertEqual(env.event_bytes()[: len(before)], before)
+        # ③ Formal ID 不换：只有一个 Formal，就是原来的 ID。
+        self.assertEqual(sorted(path.name for path in (env.root / "campaigns").iterdir()), ["formal-0154"])
+        # ④ 已经成功的请求不重发：首批只派发一次。
+        self.assertEqual(env.run_calls, 1)
+        events = env.events()
+        ids = [event_id for event_id, _type, _cause in events]
+        completed = ids.index("formal-0154-vc0-completed")
+        # 「VC-0 完成」写入时没有进行中的收口 attempt：之前开过的 attempt 都已失败或完成。
+        started = {event_id[: -len("-started")] for event_id, event_type, _ in events[:completed] if event_type == "attempt_started"}
+        closed = {event_id.rsplit("-", 1)[0] for event_id, event_type, _ in events[:completed]
+                  if event_type in {"attempt_failed", "attempt_completed"}}
+        self.assertEqual(started, closed)
+        summary = timing.inspect_ledger(env.ledger)
+        self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+
+    def _kill_then_resume(self, name: str, *kill_patches: object, expect_interrupted: bool = True) -> _ContinuationEnv:
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            plan_before = (env.ledger / "ledger.json").read_bytes()
+            env.kill(*kill_patches)
+            before = env.event_bytes()
+            receipt = env.run()
+            self.assertEqual(receipt["status"], "passed", name)
+            self._assert_invariants(env, before, plan_before)
+            interrupted = closeout._closeout_root_cause(closeout.INTERRUPTED_STEP)
+            failed = [event for event in env.events() if event[1] == "attempt_failed"]
+            if expect_interrupted:
+                self.assertEqual([event[2] for event in failed], [interrupted], name)
+            else:
+                self.assertEqual(failed, [], name)
+            self.assertEqual(env.create_calls, 1, name)
+            return env
+
+    def test_kill_after_receipt_copies(self) -> None:
+        self._kill_then_resume(
+            "收据副本之后",
+            mock.patch.object(closeout, "_ensure_receipt_event", side_effect=_Killed()),
+        )
+
+    def test_kill_after_receipt_passed_event(self) -> None:
+        self._kill_then_resume(
+            "「P0 收据通过」之后",
+            mock.patch.object(closeout, "_ensure_checkpoint", side_effect=_Killed()),
+        )
+
+    def test_kill_after_checkpoint(self) -> None:
+        self._kill_then_resume(
+            "checkpoint 之后",
+            mock.patch.object(closeout, "recover_formal_plan_arguments", side_effect=_Killed()),
+        )
+
+    def test_kill_in_the_middle_of_formal_creation_archives_half_built(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            plan_before = (env.ledger / "ledger.json").read_bytes()
+
+            def half_built(plan_arguments: argparse.Namespace) -> None:
+                plan_arguments.campaign_dir.mkdir(mode=0o700)
+                env.case._write(plan_arguments.campaign_dir / "inputs" / "partial.json", {"partial": True})
+                raise _Killed()
+
+            env.kill(mock.patch.object(closeout.codex_upgrade, "create_campaign", side_effect=half_built))
+            self.assertTrue(env.formal.is_dir())
+            before = env.event_bytes()
+            receipt = env.run()
+            self.assertEqual(receipt["status"], "passed")
+            self._assert_invariants(env, before, plan_before)
+            archived = receipt["continuation"]["archived_half_built_formal"]
+            self.assertEqual(len(archived), 1)
+            self.assertTrue((Path(archived[0]) / "inputs" / "partial.json").is_file(), "半成品归档不删")
+            self.assertTrue(Path(archived[0]).is_relative_to(env.ledger.resolve() / "receipts" / "vc0-closeout" / "formal-0154"))
+
+    def test_kill_after_formal_created(self) -> None:
+        env = self._kill_then_resume(
+            "建完 Formal 之后",
+            mock.patch.object(closeout, "_ensure_formal_control_artifacts", side_effect=_Killed()),
+        )
+        self.assertIsNotNone(env)
+
+    def test_kill_after_vc0_completed(self) -> None:
+        original = closeout._append_once
+
+        def append(timing_root: Path, event_ids: set[str], *, event_id: str, **fields: object) -> bool:
+            if event_id.endswith("-vc1-started"):
+                raise _Killed()
+            return original(timing_root, event_ids, event_id=event_id, **fields)
+
+        self._kill_then_resume(
+            "「VC-0 完成」之后",
+            mock.patch.object(closeout, "_append_once", side_effect=append),
+            expect_interrupted=False,
+        )
+
+    def test_kill_after_vc1_started(self) -> None:
+        self._kill_then_resume(
+            "「VC-1 开始」之后",
+            mock.patch.object(closeout, "_dispatch_first_batch", side_effect=_Killed()),
+            expect_interrupted=False,
+        )
+
+    def test_same_root_cause_twice_then_ledger_resume_with_fix_evidence(self) -> None:
+        """Formal 未建：同一步骤连败两次 → 账本拒绝第三次 → 凭修复证据预览、批准后在原账本上继续。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            failing = mock.patch.object(
+                closeout.codex_upgrade, "create_campaign", side_effect=codex_upgrade.ConfigurationError("合成失败")
+            )
+            for _ in range(2):
+                with self.assertRaises(closeout.VC0CloseoutError):
+                    env.run(failing)
+            cause = closeout._closeout_root_cause("create-formal-campaign")
+            self.assertEqual(timing.inspect_ledger(env.ledger)["same_root_cause_failures"], {cause: 2})
+            with self.assertRaises(closeout.CloseoutBlocked) as blocked:
+                env.run()
+            self.assertEqual(blocked.exception.kind, "ledger-resume-required")
+            # 修复后受监督部署（部署收据晚于最后一次失败），带修复证据先预览、再批准。
+            control = env.root / "control"
+            deploy = env.case._write(control / "codex-01540-supervisor-enable-20991231t000000z.json", {
+                "status": "passed", "created_at_utc": "2099-12-31T00:00:00Z",
+                "tool_files_sha256": env.identity["files_sha256"], "policy_sha256": env.identity.get("policy_sha256"),
+                "wire_producer_sha256": env.identity.get("wire_producer_sha256"),
+                "evidence_semantics_sha256": env.identity.get("evidence_semantics_sha256"),
+                "control_sha256": env.identity.get("control_sha256"),
+            })
+            regression = env.case._write(env.root / "regression.json", {"passed": True})
+            evidence = {"fix_commit": "a" * 40, "regression_receipt": regression, "reason": "合成失败已修复",
+                        "control_root": control}
+            with self.assertRaises(closeout.CloseoutBlocked) as preview:
+                env.run(**evidence)
+            self.assertEqual(preview.exception.kind, "approval-required")
+            review = preview.exception.details["review_sha256"]
+            receipt = env.run(**evidence, approve_sha256=review, approved_by="测试批准人")
+            self.assertEqual(receipt["status"], "passed")
+            self.assertEqual(receipt["continuation"]["resumed_at_limit"]["kind"], "ledger-resume")
+            event_types = [event[1] for event in env.events()]
+            self.assertIn("recovery_verified", event_types)
+            summary = timing.inspect_ledger(env.ledger)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-1"))
+            self.assertEqual(env.create_calls, 1)
+            self.assertTrue(deploy.is_file())
+
+    def test_identity_drift_after_preflight_is_rejected_before_any_write(self) -> None:
+        """预检 Campaign 建好后、Formal 建成之前改了受管工具：收口前预检拦下，账本与收据目录零写入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            drifted = {**env.identity, "control_sha256": "f" * 64}
+            with self.assertRaisesRegex(closeout.VC0CloseoutError, "预检 Campaign 冻结身份不一致"):
+                env.run(mock.patch.object(closeout.codex_upgrade, "_tool_identity", return_value=drifted))
+            self.assertEqual(timing.inspect_ledger(env.ledger)["head_sequence"], 1)
+            self.assertFalse((env.ledger / "receipts" / "vc0-closeout").exists())
+            self.assertEqual(env.create_calls, 0)
+
+    def test_foreign_formal_directory_is_refused_without_touching_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            env.formal.mkdir(mode=0o700)
+            marker = env.case._write(env.formal / "foreign.json", {"foreign": True})
+            with self.assertRaises(closeout.CloseoutBlocked) as blocked:
+                env.run()
+            self.assertEqual(blocked.exception.kind, "inconsistent")
+            self.assertTrue(marker.is_file())
+            self.assertEqual(timing.inspect_ledger(env.ledger)["head_sequence"], 1)
+
+    def test_attempt_failure_keeps_vc0_open_and_counts_root_cause(self) -> None:
+        """attempt 内的失败记 attempt 失败与根因，VC-0 保持打开（不再一失败就登记阶段放弃），修好后同一账本续作。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            env = self._env(directory)
+            with self.assertRaises(closeout.VC0CloseoutError):
+                env.run(mock.patch.object(
+                    closeout.codex_upgrade, "create_campaign", side_effect=codex_upgrade.ConfigurationError("合成失败")
+                ))
+            summary = timing.inspect_ledger(env.ledger)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("active", "VC-0"))
+            failure = json.loads((env.root / "audit" / "closeout-0154-1" / "failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["timing_failure_closure"]["status"], "attempt-failed-recorded")
+            self.assertEqual(failure["failed_step"], "create-formal-campaign")
+            receipt = env.run()
+            self.assertEqual(receipt["status"], "passed")
+            types = [event[1] for event in env.events()]
+            self.assertNotIn("stage_abandoned", types)
+            self.assertEqual(types.count("receipt_passed"), 1, "输入没变：第二次 attempt 沿用第一组副本与事件")
 
 
 if __name__ == "__main__":

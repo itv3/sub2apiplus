@@ -41,6 +41,10 @@ class Commands:
         self.gates_status = "passed"
         self.pre_a3_fail = False
         self.job_statuses: list[str] = []
+        # 收口模块的结果（E2-07）：依次取用，空了就是通过；元素是（退出码，标准输出最后一行 JSON）。
+        self.closeout_results: list[tuple[int, dict]] = []
+        # 入口门禁导出的 P0 证据里标成没通过的门禁项（防御性核对：门禁记录与 P0 证据不一致时不签 P0）。
+        self.p0_evidence_failed: set[str] = set()
 
     def count(self, needle: str) -> int:
         return sum(1 for call in self.calls if needle in call)
@@ -62,8 +66,11 @@ class Commands:
         if argv[0] == "bash" and argv[1].endswith("entry-gates.sh"):
             out = Path(_option(argv, "--out"))
             _write_json(out / "entry-gates.json", {"status": self.gates_status})
-            _write_json(out / "p0" / "test-capture-tools.json", {"status": self.gates_status})
-            _write_json(out / "p0" / "check-egress-spec.json", {"status": self.gates_status})
+            for gate_id in ("test-capture-tools", "check-egress-spec"):
+                passed = self.gates_status == "passed" and gate_id not in self.p0_evidence_failed
+                _write_json(out / "p0" / f"{gate_id}.json", {
+                    "gate_id": gate_id, "status": "passed" if passed else "failed", "exit_code": 0 if passed else 1,
+                    "passed": 10, "failed": 0 if passed else 1, "approved_skip": 2, "unexpected_skip": 0})
             if _option(argv, "--pre-a3-mode") == "run" and not self.pre_a3_fail:
                 _write_json(Path(_option(argv, "--pre-a3-certification")), {"status": "passed"})
             return 0 if self.gates_status == "passed" and not self.pre_a3_fail else 1
@@ -96,7 +103,9 @@ class Commands:
         if "codex_upgrade_timing_ledger" in joined and "create" in argv:
             ledger = Path(_option(argv, "--ledger-dir"))
             ledger.mkdir()
-            _write_json(ledger / "ledger.json", {"upgrade_id": _option(argv, "--upgrade-id")})
+            _write_json(ledger / "ledger.json", {
+                "upgrade_id": _option(argv, "--upgrade-id"), "campaign_purpose": _option(argv, "--campaign-purpose"),
+                "baseline_version": _option(argv, "--baseline-version"), "target_version": _option(argv, "--target-version")})
             return 0
         if "codex_upgrade_timing_ledger" in joined and "checkpoint" in argv:
             _write_json(Path(_option(argv, "--ledger-dir")) / _option(argv, "--output"), {"checkpoint": True})
@@ -119,11 +128,27 @@ class Commands:
                 _write_json(root / "receipt.json", {"status": status})
             return 0
         if "client_launch_probe.py" in joined:
+            if "run" in argv:
+                _write_json(Path(_option(argv, "--output-dir")) / "report.json", {"status": "passed"})
             return 0
         if "certify_release" in joined:
             if "issue" in argv:
                 _write_json(Path(_option(argv, "--output")), {"status": "passed"})
             return 0
+        if "codex_upgrade_vc_receipt" in joined:
+            root = Path(_option(argv, "--evidence-root"))
+            if "finalize" in argv:
+                self.p0_facts = json.loads((root / _option(argv, "--facts")).read_text(encoding="utf-8"))
+                _write_json(root / _option(argv, "--output"), {"kind": "p0_gate", "status": "passed"})
+            return 0
+        if "codex_upgrade_vc0_closeout" in joined:
+            self.closeout_argv = argv
+            rc, payload = self.closeout_results.pop(0) if self.closeout_results else (0, {"status": "passed"})
+            if rc == 0:
+                _write_json(Path(_option(argv, "--audit-dir")) / "receipt.json", payload)
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            return rc
         raise AssertionError(f"替身没有覆盖这条命令：{argv}")
 
 
@@ -145,8 +170,10 @@ class OrchestratorTestCase(unittest.TestCase):
     def orchestrate(self, **kwargs: Any) -> dict:
         self.runs += 1
         masks = kwargs.pop("masks", None)
+        approval = kwargs.pop("approval", None)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
-                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks)
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
+                                       approval=approval)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -252,10 +279,84 @@ class OrchestratorFlowTests(OrchestratorTestCase):
         actions = self.actions(partial)
         self.assertEqual(actions["ledger"], "执行／passed")
         self.assertEqual(actions["environment-p0"], "范围外")
+        # E2-07：Formal 建成后（收口模块判定），创建链冻结，只剩收口这一步续作；收口完成后再执行就全部沿用／冻结。
         _write_json(self.fx.data / "evidence" / "campaigns" / self.fx.params["NEW"] / "campaign.json", {})
+        self.fx.params["P0_ROLLBACK_EVIDENCE"] = self.fx.params["P0_ROLLBACK_EVIDENCE"]
         frozen = self.orchestrate()
-        self.assertEqual(set(self.actions(frozen).values()), {"冻结"})
-        self.assertIn("Formal Campaign 已建", frozen["stopped_because"])
+        actions = self.actions(frozen)
+        self.assertEqual({step for step, action in actions.items() if action != "冻结"}, {"vc0-closeout"})
+        self.assertEqual(frozen["exit_code"], 1, "前序步骤从没执行过：收口取不到预检 Campaign 记录，失败而不是越过")
+        self.assertIn("preflight-plan", "；".join(next(s for s in frozen["steps"] if s["step_id"] == "vc0-closeout")["reasons"]))
+
+
+class OrchestratorCloseoutTests(OrchestratorTestCase):
+    """E2-07：P0 收据与 VC-0 收口两个固定步骤，以及 Formal 建成之后只剩收口续作。"""
+
+    def test_p0_receipt_is_assembled_from_the_entry_gates_run_and_the_ledger_plan(self) -> None:
+        result = self.orchestrate()
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        products = {step["step_id"]: step["products"] for step in result["steps"]}
+        root = Path(products["p0-receipt"]["receipt"]).parent
+        self.assertEqual(sorted(path.name for path in (root / "evidence").iterdir()),
+                         ["check-egress-spec.json", "release-certification.json", "rollback-rollback-receipt.json",
+                          "test-capture-tools.json"])
+        facts = self.commands.p0_facts
+        self.assertEqual(facts["subject"]["upgrade_id"], self.fx.params["UP"])
+        self.assertEqual((facts["subject"]["baseline_version"], facts["subject"]["target_version"]), ("0.157.0", "0.160.0"))
+        self.assertEqual([gate["gate_id"] for gate in facts["assertions"]["offline_gates"]], ["check-egress-spec", "test-capture-tools"])
+        self.assertEqual({item["role"] for item in facts["evidence"]},
+                         {"check_egress_spec", "release_certification", "rollback", "test_capture_tools"})
+        closeout = self.commands.closeout_argv
+        self.assertEqual(_option(closeout, "--p0-gate-receipt"), "p0-receipt.json")
+        self.assertEqual(_option(closeout, "--supervisor-state-dir"),
+                         str(self.fx.data / "control" / f"{self.fx.params['NEW']}-supervisor"), "状态目录在控制根下一层")
+        self.assertEqual(_option(closeout, "--fix-commit"), self.fx.params["ENTRY_COMMIT"])
+        self.assertEqual(_option(closeout, "--regression-receipt"), products["entry-gates"]["summary"])
+        self.assertNotIn("--approve-sha256", closeout)
+
+    def test_failed_gate_evidence_refuses_to_sign_p0(self) -> None:
+        self.commands.p0_evidence_failed = {"test-capture-tools"}
+        result = self.orchestrate()
+        self.assertEqual(self.actions(result)["p0-receipt"], "执行／failed")
+        self.assertIn("test-capture-tools 证据不是通过", "；".join(next(s for s in result["steps"] if s["step_id"] == "p0-receipt")["reasons"]))
+        self.assertEqual(self.commands.count(eo.VC_RECEIPT_MODULE), 0, "证据没通过就不签 P0")
+        self.assertEqual(self.actions(result)["vc0-closeout"], "未到达")
+
+    def test_closeout_needing_approval_blocks_then_the_approval_is_passed_through(self) -> None:
+        self.commands.closeout_results = [(3, {"status": "blocked", "kind": "approval-required", "message": "等待批准",
+                                               "next_command": "同一命令加 --approve-sha256 abc --approved-by <批准人>"})]
+        blocked = self.orchestrate()
+        self.assertEqual(blocked["exit_code"], 3)
+        self.assertEqual(self.actions(blocked)["vc0-closeout"], "阻塞")
+        self.assertIn("approval-required", blocked["stopped_because"])
+        self.assertIn("--approve-sha256 abc", blocked["stopped_because"])
+        approved = self.orchestrate(approval={"approve_sha256": "abc", "approved_by": "测试批准人", "reason": "已修复"})
+        self.assertEqual(approved["exit_code"], 0, self.actions(approved))
+        closeout = self.commands.closeout_argv
+        self.assertEqual((_option(closeout, "--approve-sha256"), _option(closeout, "--approved-by"), _option(closeout, "--reason")),
+                         ("abc", "测试批准人", "已修复"))
+        before = eo.ORDER[:eo.ORDER.index("vc0-closeout")]
+        self.assertEqual({step for step in before if self.actions(approved)[step] != "沿用"},
+                         {step for step in before if eo.ES.STEP_BY_ID[step].live}, "批准后只续作收口，前面的步骤沿用")
+        self.assertEqual(self.commands.count("create"), 1)
+
+    def test_after_formal_is_built_only_the_closeout_continues(self) -> None:
+        self.commands.closeout_results = [(1, {"status": "failed"})]
+        first = self.orchestrate()
+        self.assertEqual((first["exit_code"], self.actions(first)["vc0-closeout"]), (1, "执行／failed"))
+        # 收口建成了 Formal 之后失败（例如派发首批前预算暂停）：再执行时创建链冻结，只续作收口。
+        _write_json(self.fx.data / "evidence" / "campaigns" / self.fx.params["NEW"] / "campaign.json", {})
+        resumed = self.orchestrate()
+        actions = self.actions(resumed)
+        self.assertEqual(resumed["exit_code"], 0, actions)
+        self.assertEqual({step for step, action in actions.items() if action != "冻结"}, {"vc0-closeout"})
+        self.assertEqual(actions["vc0-closeout"], "执行／passed")
+        probe_verifies = [call for call in self.commands.calls
+                          if any(item.endswith("client_launch_probe.py") for item in call) and "verify" in call]
+        self.assertEqual(len(probe_verifies), 2, "Formal 已建后不再复核启动探测（只有前一次执行里步骤本身与收口前预检两次）")
+        again = self.orchestrate()
+        self.assertEqual(self.actions(again)["vc0-closeout"], "沿用")
+        self.assertIn("收口已完成", again["stopped_because"])
 
 
 class OrchestratorPieceTests(unittest.TestCase):

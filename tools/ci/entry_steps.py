@@ -272,27 +272,29 @@ STEPS: tuple[Step, ...] = (
         *_containers(*JOB_CONTAINERS), Input("environment", "file", "{CODEX_BIN}"),
         Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
     ), products=(Product("receipt", content="status_passed"),)),
-    # 启动探测按指南每次重跑（反映修复后的最新环境）。
+    # 启动探测按指南每次重跑（反映修复后的最新环境）；报告登记进记录，收口前预检按它再核验一次（E2-07）。
     Step("client-launch-probe", "客户端启动探测", "post_ledger", live=True, creation_chain=False, upstream=("preflight-plan",), inputs=(
         *IDENTITY, *_drivers("client_launch_probe.py", "client_launch_probe_runner.py", "stage1-finish.sh"), *COMMON_DRIVER,
         *_containers("capture-cli"),
-    )),
+    ), products=(Product("report"),)),
     # 发布认证：导入期经 pre-A3 认证模块读测试夹具，测试目录从宽整体列入；绑定部署收据、pre-A3、激活认证、Job 演练、atomic。
     Step("release-certification", "发布认证", "post_ledger",
          upstream=("pre-a3", "policy-activation", "job-rehearsal", "atomic-double"), inputs=(
         *_params("RELEASE_CERTIFICATION"), *IDENTITY, TESTS_TREE, DEPLOY_RECEIPT,
         *_drivers("stage2.sh"), *COMMON_DRIVER, *_env("arch", "go", "docker"),
     ), products=(Product("certification", "{RELEASE_CERTIFICATION}"),)),
-    # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证与账本的升级 ID。
+    # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证、回退依据与账本的升级 ID。
     Step("p0-receipt", "P0 收据", "post_ledger", upstream=("entry-gates", "release-certification", "ledger"), inputs=(
-        *_params("UP", "BASELINE_VERSION", "TARGET_VERSION"), *_managed_files("codex_upgrade_vc_receipt.py"),
+        *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "P0_ROLLBACK_EVIDENCE"), *_managed_files("codex_upgrade_vc_receipt.py"),
+        Input("upstream", "file", "{P0_ROLLBACK_EVIDENCE}"), *_drivers("entry_orchestrator.py"),
     ), products=(Product("receipt"),)),
-    # VC-0 收口建 Formal Campaign；建成之后由 E2-07 的续作入口接手，这里随创建链一起冻结。
-    Step("vc0-closeout", "VC-0 收口", "post_ledger",
+    # VC-0 收口（E2-07）：Formal 建成前后都要执行（建成后是续作：补阶段事件派发首批，或交给 VC-1 对账恢复链），所以不随
+    # 创建链冻结；收口完成（记录通过）且输入没变就沿用。建成之后修工具登记演进，工具身份一变这一步就重做（续作）。
+    Step("vc0-closeout", "VC-0 收口", "post_ledger", creation_chain=False,
          upstream=("preflight-plan", "ledger", "ledger-checkpoint", "environment-p0", "release-certification",
                    "job-rehearsal", "p0-receipt"), inputs=(
         *_params("NEW", "RELEASE_CERTIFICATION"), *IDENTITY, TESTS_TREE, GUIDE_PART2, *GUIDES, DEPLOY_RECEIPT,
-        Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"), *_env("arch"),
+        Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"), *_drivers("entry_orchestrator.py"), *_env("arch"),
     ), products=(Product("receipt"),)),
 )
 STEP_BY_ID: dict[str, Step] = {step.step_id: step for step in STEPS}
@@ -854,11 +856,35 @@ def finish(step: Step, ctx: Context, *, status: str, products: Mapping[str, str]
 # ---------------------------------------------------------------- 判定
 
 def formal_built(ctx: Context) -> bool:
-    """Formal Campaign 已建：本轮 Formal 目录（产物根 ENTRY_ROOT 下）里有 campaign.json（收口建成后写入；E2-07 再细化半成品的判定）。"""
+    """Formal Campaign 已建（E2-07）：由收口模块的只读现场判定给出——Formal 可重放且总账注册批次已提交；只有目录或
+    注册写了一半的半成品不算（收口续作会把它归档后重建）。判定不了但 Formal 可重放时按已建算（创建链冻结，由收口这一步
+    报出不一致）；判定命令本身失败时同样按已建算，宁可冻结也不在 Formal 可能已建时重做创建链。"""
 
     new = ctx.params.get("NEW")
     root = Path(ctx.params.get("ENTRY_ROOT") or ctx.data_root)
-    return bool(new) and (root / "evidence" / "campaigns" / new / "campaign.json").is_file()
+    formal = root / "evidence" / "campaigns" / str(new)
+    if not new or not (formal / "campaign.json").is_file():
+        return False
+    key = ("formal-built", str(formal))
+    if key not in ctx.cache:
+        argv = [sys.executable, "-B", "-m", "tools.official_client_capture.codex_upgrade_vc0_closeout", "inspect",
+                "--timing-ledger-dir", str(root / "control" / f"{ctx.params.get('UP')}-timing-ledger"),
+                "--formal-campaign-dir", str(formal), "--formal-campaign-id", str(new),
+                "--supervisor-state-dir", str(root / "control" / f"{new}-supervisor")]
+        environment = {**os.environ, "PYTHONPATH": ".", "PYTHONDONTWRITEBYTECODE": "1"}
+        rc, out = ctx.run(argv, cwd=ctx.data_root, env=environment)
+        built = True
+        if rc == 0:
+            try:
+                site = json.loads(out.strip().splitlines()[-1])
+                kind = site.get("site")
+                built = kind in {"formal-built", "dispatched"} or (
+                    kind == "inconsistent" and bool((site.get("formal") or {}).get("replayable"))
+                )
+            except (ValueError, IndexError, AttributeError):
+                built = True
+        ctx.cache[key] = built
+    return bool(ctx.cache[key])
 
 
 def _label(entry: Mapping[str, Any]) -> str:

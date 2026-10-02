@@ -9,12 +9,16 @@
 * 建账本之前（便宜检查、策略兼容与激活认证、入口门禁与 pre-A3、零请求 smoke、atomic-double）**一次报全**：一个失败
   不影响与它无关的步骤继续跑，依赖失败步骤的标为「被阻塞」（便宜检查的部署绑定一项没过时，激活认证、入口门禁与
   pre-A3 都被阻塞），最后一起汇总。只有这一段全部通过才建账本。
-* 建账本之后（建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证；P0 收据与收口由 E2-07 接上）
+* 建账本之后（建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证、P0 收据、VC-0 收口）
   按顺序执行，失败即停。重新执行同一条命令：判定为沿用的跳过，从失败的那一步接着做；账本已建就沿用，绝不重建。
 * 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、
   或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。
 * Job 演练上一次失败且留下了收据时，新的一次带上它只重跑失败的作业（工具已有的 ``--rerun-failed``）。
-* Formal Campaign 建成后，创建链上的步骤一律冻结，这里不再执行（之后由 E2-07 的续作入口接手）。
+* VC-0 收口（E2-07）调用收口模块：它先做只读现场判定，再新建、续作或交给 VC-1 的对账恢复链；同一 Formal ID、同一账本，
+  重新执行同一条命令即续作。需要批准（上限后的恢复、首批恢复预览）时这一步标「阻塞」并打印下一条命令，批准后带
+  ``--approve-sha256``／``--approved-by``（上限后的恢复另带 ``--reason``）重新执行同一条命令。
+* Formal Campaign 建成后（收口模块判定：可重放且总账注册已提交，半成品不算），创建链上的步骤一律冻结，只剩收口这一步
+  按判定续作。
 
 产物坐标：建账本之后的产物都在产物根 ``ENTRY_ROOT``（默认数据根）下——计时账本、项目总账（``evidence/campaigns/
 upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启动探测；atomic-double 与零请求 smoke 照旧在数据根
@@ -22,19 +26,23 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 配一本演练总账，生产项目总账与正式坐标一律不写。
 
 选项：``--plan`` 只判定不执行；``--from``／``--to`` 指定起止步骤（起点之前有要重做的步骤时拒绝）；``--inject-mask
-步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败。
+步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败；
+``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
-退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致等）或已有编排在运行。
+退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
+编排在运行。
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -46,6 +54,11 @@ HERE = Path(__file__).resolve().parent
 RUN_SCHEMA = "entry-orchestrator-run/v1"
 PRE_A3_MODULE = "tools.official_client_capture.codex_upgrade_pre_a3_certification"
 POLICY_MODULE = "tools.official_client_capture.codex_upgrade_policy_certification"
+CLOSEOUT_MODULE = "tools.official_client_capture.codex_upgrade_vc0_closeout"
+VC_RECEIPT_MODULE = "tools.official_client_capture.codex_upgrade_vc_receipt"
+P0_FACTS_SCHEMA = "codex-upgrade-vc-receipt-facts/v1"
+# 收口模块的退出码 3：需要批准或人工处置（不是失败），这一步标「阻塞」。
+CLOSEOUT_NEEDS_OPERATOR = 3
 
 
 def _entry_steps_module() -> Any:
@@ -64,10 +77,10 @@ def _entry_steps_module() -> Any:
 
 ES = _entry_steps_module()
 
-# E2-06 的执行顺序（步骤表里 P0 收据与收口由 E2-07 接上）。
+# E2-06 的执行顺序，末尾两步（P0 收据、VC-0 收口）由 E2-07 接上。
 ORDER = ("entry-preflight", "policy-compatibility", "policy-activation", "entry-gates", "pre-a3", "zero-request-smoke",
          "atomic-double", "ledger", "environment-p0", "ledger-checkpoint", "preflight-plan", "job-rehearsal",
-         "client-launch-probe", "release-certification")
+         "client-launch-probe", "release-certification", "p0-receipt", "vc0-closeout")
 PRE_LEDGER = frozenset(step for step in ORDER if ES.STEP_BY_ID[step].segment in {"cheap", "pre_ledger"})
 # 执行上的依赖（步骤表的上游之外）：入口门禁与 pre-A3 都要用激活认证。
 EXEC_DEPS: dict[str, tuple[str, ...]] = {"entry-gates": ("policy-activation",), "pre-a3": ("policy-activation",)}
@@ -138,14 +151,18 @@ class Outcome:
 
 class Orchestrator:
     def __init__(self, params: Mapping[str, str], *, driver_dir: Path, run_dir: Path, steps_dir: Path,
-                 runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None) -> None:
+                 runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None,
+                 approval: Mapping[str, str] | None = None) -> None:
         self.params = dict(params)
         self.driver_dir, self.run_dir, self.steps_dir = driver_dir, run_dir, steps_dir
         self.runner, self.masks = runner, dict(masks or {})
+        # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
+        self.approval = {key: value for key, value in (approval or {}).items() if value}
         context_args = {"params": self.params, "driver_dir": driver_dir, "steps_dir": steps_dir}
         self.ctx = ES.Context(**context_args, runner=es_runner) if es_runner else ES.Context(**context_args)
         self.outcomes: dict[str, Outcome] = {}
         self.preflight_failed: list[str] = []
+        self.operator_needed: dict[str, str] = {}
 
     # ---------------------------------------------------------------- 坐标
     def p(self, key: str) -> str:
@@ -415,7 +432,8 @@ class Orchestrator:
         if rc == 0:
             rc = self.run("client-launch-probe", [sys.executable, "-B", str(script), "verify", "--output-dir", str(probe),
                                                   "--campaign-dir", str(campaign)])
-        return rc == 0, {}
+        # 报告登记进步骤记录（E2-07）：收口前预检按记录里的这份报告再核验一次。
+        return rc == 0, {"report": str(probe / "report.json")}
 
     def step_release_certification(self) -> tuple[bool, dict[str, str]]:
         deploy, activation = self.latest_deploy(), self.record_product("policy-activation", "activation")
@@ -441,6 +459,115 @@ class Orchestrator:
             rc = self.run("release-certification", self.py("tools.official_client_capture.certify_release", "verify",
                                                            "--certification", str(out)))
         return rc == 0 and out.is_file(), {"certification": str(out)}
+
+    def step_p0_receipt(self) -> tuple[bool, dict[str, str]]:
+        """P0 门禁收据（E2-07 固定步骤，原来每轮手写）：两份离线门禁证据取自入口门禁那一次运行，加发布认证与回退依据；
+        subject 取计时账本计划（升级 ID、用途、两个版本），签发后立即重放。"""
+
+        evidence_sources = {
+            "test-capture-tools.json": self.record_product("entry-gates", "p0-test-capture-tools"),
+            "check-egress-spec.json": self.record_product("entry-gates", "p0-check-egress-spec"),
+            "release-certification.json": self.record_product("release-certification", "certification"),
+        }
+        rollback = Path(self.p("P0_ROLLBACK_EVIDENCE"))
+        if not rollback.is_file() or rollback.is_symlink():
+            raise OrchestratorError(f"回退依据（P0_ROLLBACK_EVIDENCE）不是普通文件：{rollback}")
+        evidence_sources[f"rollback-{rollback.name}"] = rollback
+        plan = json.loads(self.record_product("ledger", "ledger").read_text(encoding="utf-8"))
+        root = fresh(self.root / "control" / f"{self.p('CAMPAIGN_PREFIX')}-p0-gate-{self.p('ROUND')}-{self.p('STAMP')}")
+        (root / "evidence").mkdir(parents=True, mode=0o700)
+        root.chmod(0o700)
+        for name, source in evidence_sources.items():
+            target = root / "evidence" / name
+            shutil.copyfile(source, target)
+            target.chmod(0o600)
+        gates: dict[str, dict[str, Any]] = {}
+        for gate_id in ("check-egress-spec", "test-capture-tools"):
+            evidence = json.loads((root / "evidence" / f"{gate_id}.json").read_text(encoding="utf-8"))
+            if (evidence.get("gate_id") != gate_id or evidence.get("status") != "passed" or evidence.get("exit_code") != 0
+                    or evidence.get("failed") != 0 or evidence.get("unexpected_skip") != 0):
+                self.outcomes["p0-receipt"].reasons.append(f"入口门禁的 {gate_id} 证据不是通过，不能签 P0 收据")
+                return False, {}
+            gates[gate_id] = {"gate_id": gate_id, "kind": "public", "command": ["make", gate_id], "exit_code": 0,
+                              "passed": evidence["passed"], "failed": 0, "approved_skip": evidence["approved_skip"],
+                              "unexpected_skip": 0}
+        release_sha256 = hashlib.sha256((root / "evidence" / "release-certification.json").read_bytes()).hexdigest()
+        facts = {
+            "schema_version": P0_FACTS_SCHEMA,
+            "kind": "p0_gate",
+            "subject": {"upgrade_id": plan["upgrade_id"], "campaign_id": None, "campaign_purpose": plan["campaign_purpose"],
+                        "baseline_version": plan["baseline_version"], "target_version": plan["target_version"],
+                        "candidate_id": None, "attempt_id": None},
+            "assertions": {"offline_gates": [gates["check-egress-spec"], gates["test-capture-tools"]], "tool_blockers": [],
+                           "rollback_ready": True, "release_certification_sha256": release_sha256},
+            "evidence": [
+                {"path": "evidence/check-egress-spec.json", "role": "check_egress_spec"},
+                {"path": "evidence/release-certification.json", "role": "release_certification"},
+                {"path": f"evidence/rollback-{rollback.name}", "role": "rollback"},
+                {"path": "evidence/test-capture-tools.json", "role": "test_capture_tools"},
+            ],
+        }
+        facts_path = root / "p0-facts.json"
+        facts_path.write_text(json.dumps(facts, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        facts_path.chmod(0o600)
+        rc = self.run("p0-receipt", self.py(VC_RECEIPT_MODULE, "finalize", "--evidence-root", str(root), "--facts", "p0-facts.json",
+                                            "--output", "p0-receipt.json"))
+        if rc == 0:
+            rc = self.run("p0-receipt", self.py(VC_RECEIPT_MODULE, "replay", "--evidence-root", str(root),
+                                                "--receipt", "p0-receipt.json"))
+        receipt = root / "p0-receipt.json"
+        return rc == 0 and receipt.is_file(), {"receipt": str(receipt)}
+
+    def closeout_paths(self) -> dict[str, Path]:
+        """收口的固定坐标：Formal 与监督器状态目录在产物根下（状态目录放在控制根下一层，VC-1 对账才找得到首批父 run）。"""
+
+        new = self.p("NEW")
+        return {"formal": self.root / "evidence" / "campaigns" / new, "state": self.root / "control" / f"{new}-supervisor"}
+
+    def step_vc0_closeout(self) -> tuple[bool, dict[str, str]]:
+        """VC-0 收口（E2-07）：Formal 未建时先复核启动探测报告，收口模块自己做其余三份输入与工具身份的只读预检；
+        然后由它按现场判定新建、续作或交给 VC-1 对账恢复链。参数全部来自本轮参数文件与前序步骤记录。"""
+
+        paths = self.closeout_paths()
+        preflight = self.record_product("preflight-plan", "campaign").parent
+        if not ES.formal_built(self.ctx):
+            report = self.record_product("client-launch-probe", "report")
+            rc = self.run("vc0-closeout", [sys.executable, "-B", str(self.driver_dir / "client_launch_probe.py"), "verify",
+                                           "--output-dir", str(report.parent), "--campaign-dir", str(preflight)])
+            if rc != 0:
+                self.outcomes["vc0-closeout"].reasons.append("收口前预检：启动探测报告复核没过")
+                return False, {}
+        p0 = self.record_product("p0-receipt", "receipt")
+        audit_root = self.root / "audit"
+        audit_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        audit = fresh(audit_root / f"{self.p('CAMPAIGN_PREFIX')}-vc0-closeout-{self.p('ROUND')}-{self.p('STAMP')}")
+        paths["formal"].parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        arguments = [
+            "--preflight-campaign-dir", str(preflight), "--formal-campaign-dir", str(paths["formal"]),
+            "--formal-campaign-id", self.p("NEW"), "--p0-gate-root", str(p0.parent), "--p0-gate-receipt", p0.name,
+            "--managed-tool-deploy-receipt", str(self.latest_deploy()),
+            "--release-certification", str(self.record_product("release-certification", "certification")),
+            "--supervisor-state-dir", str(paths["state"]), "--audit-dir", str(audit),
+            "--control-root", str(self.data / "control"),
+            # 上限后的恢复用的修复证据：修复提交是本轮部署的源码提交，离线回归收据是本次部署下入口门禁那一次运行的汇总。
+            "--fix-commit", self.p("ENTRY_COMMIT"),
+            "--regression-receipt", str(self.record_product("entry-gates", "summary")),
+        ]
+        for key, option in (("approve_sha256", "--approve-sha256"), ("approved_by", "--approved-by"), ("reason", "--reason")):
+            if self.approval.get(key):
+                arguments += [option, self.approval[key]]
+        rc, result = self.run_json("vc0-closeout", "closeout", self.py(CLOSEOUT_MODULE, *arguments))
+        receipt = audit / "receipt.json"
+        if rc == CLOSEOUT_NEEDS_OPERATOR:
+            message = str(result.get("message") or "收口需要人工处理，见日志")
+            self.outcomes["vc0-closeout"].reasons.append(message)
+            if result.get("next_command"):
+                self.outcomes["vc0-closeout"].reasons.append(f"下一步：{result['next_command']}")
+            self.operator_needed["vc0-closeout"] = str(result.get("kind") or "operator")
+            return False, {}
+        if rc != 0:
+            self.outcomes["vc0-closeout"].reasons.append(f"收口失败，诊断见 {audit}/failure.json")
+        return rc == 0 and receipt.is_file(), {"receipt": str(receipt)}
 
     # ---------------------------------------------------------------- 编排
     def _finish(self, step_id: str, passed: bool, products: Mapping[str, str]) -> None:
@@ -500,11 +627,18 @@ class Orchestrator:
                 outcome.action = "只判定"
             return self._summary(result, 0)
         if is_formal:
-            # Formal 建成后入口已经结束：创建链冻结，实时检查也不再做，后续由 E2-07 的续作入口接手。
-            for outcome in self.outcomes.values():
-                outcome.action = "冻结"
-            result["stopped_because"] = "Formal Campaign 已建，入口创建链冻结；后续用收口续作入口（E2-07）"
-            return self._summary(result, 0)
+            # Formal 建成后：创建链冻结，实时检查也不再做；只剩 VC-0 收口按判定续作（E2-07：补阶段事件后派发首批，
+            # 或首批已派发时交给 VC-1 对账恢复链），收口已完成就沿用。
+            for step_id, outcome in self.outcomes.items():
+                if step_id != "vc0-closeout":
+                    outcome.action = "冻结"
+            closing = self.outcomes["vc0-closeout"]
+            if closing.decision == "reuse":
+                closing.action = "沿用"
+                result["stopped_because"] = "Formal Campaign 已建，收口已完成；入口结束"
+                return self._summary(result, 0)
+            self.execute("vc0-closeout")
+            return self._after_closeout(result)
         in_range = set(ORDER[start:stop + 1])
         for step_id in ORDER:
             if step_id not in in_range:
@@ -548,10 +682,27 @@ class Orchestrator:
                 result["stopped_because"] = f"{step_id} 被阻塞：{'；'.join(outcome.reasons)}"
                 return self._summary(result, 3)
             self.execute(step_id)
+            if step_id == "vc0-closeout":
+                return self._after_closeout(result)
             if outcome.status == "failed":
                 self._mark_rest(position)
                 result["stopped_because"] = f"{step_id} 没通过；修好后重新执行同一条命令，从这一步续跑"
                 return self._summary(result, 1)
+        return self._summary(result, 0)
+
+    def _after_closeout(self, result: dict[str, Any]) -> dict[str, Any]:
+        """收口这一步之后：需要批准或人工处置时标「阻塞」（退出码 3），失败为 1，通过为 0。"""
+
+        outcome = self.outcomes["vc0-closeout"]
+        if "vc0-closeout" in self.operator_needed:
+            # 步骤记录里记成没通过（下次执行这一步要重做）；汇总里显示「阻塞」，不是失败。
+            outcome.action, outcome.status = "阻塞", ""
+            result["stopped_because"] = (f"VC-0 收口需要处理（{self.operator_needed['vc0-closeout']}）："
+                                         + "；".join(outcome.reasons))
+            return self._summary(result, 3)
+        if outcome.status == "failed":
+            result["stopped_because"] = "VC-0 收口没通过；修好后重新执行同一条命令续作（同一 Formal ID、同一账本）"
+            return self._summary(result, 1)
         return self._summary(result, 0)
 
     def _entry_pair(self, in_range: set[str]) -> None:
@@ -612,6 +763,9 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--inject-mask", action="append", default=[], metavar="步骤=目录",
                         help="只供验收：执行这一步的命令时用只读空 tmpfs 遮住目录，制造一次真实的失败")
     parser.add_argument("--steps-dir", help="步骤记录目录（默认 $RUNROOT/entry-steps）")
+    parser.add_argument("--approve-sha256", help="只交给 VC-0 收口：批准当前现场待批准事项的 review_sha256")
+    parser.add_argument("--approved-by", help="只交给 VC-0 收口：批准人")
+    parser.add_argument("--reason", help="只交给 VC-0 收口：上限后的恢复里，失败原因已如何消除")
     return parser.parse_args(argv)
 
 
@@ -641,7 +795,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_dir = run_dir.with_name(f"{run_dir.name}-{os.getpid()}")
     steps_dir = Path(args.steps_dir or params.get("ENTRY_STEPS_DIR") or runroot / "entry-steps")
     orchestrator = Orchestrator(params, driver_dir=Path(params.get("DRV") or HERE), run_dir=run_dir, steps_dir=steps_dir,
-                                masks=masks)
+                                masks=masks, approval={"approve_sha256": args.approve_sha256 or "",
+                                                       "approved_by": args.approved_by or "", "reason": args.reason or ""})
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:
