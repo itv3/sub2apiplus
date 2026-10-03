@@ -502,6 +502,113 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
                 check(dict(successor, evaluation_baseline=3, baseline_commit_sha256=applied["commit_sha256"]))
             self.assertTrue(check(successor))
 
+    def test_failed_evaluation_batch_successor_bridged_by_non_failure_baselines(self) -> None:
+        """修好接着跑（E5 VC-5 批次 26 实测）：b0 评估批次失败并对账后，按指南 §4.5.8 先 reevaluate 开 tool-evolution
+        基线 b1、再 approval-revision 开 b2；评估基线后继协议沿 previous_baseline 链放行 b2（或只开到 b1 时的 b1）
+        批次——此前 b1 已 COMMIT 被当成跳号、b2 没有失败诊断，两处都失败关闭。负例：链上制品或触发记录被篡改、
+        承接基线在失败对账之前已激活、账本缺失败对账事件各拒。失败类基线的原路径见
+        test_successor_protocol_rejects_forged_baseline_bindings（本修复不改它）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._ready_vc4(root)
+            campaign_dir = context["campaign_dir"]
+            plan_b0 = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="b0")
+            result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
+            self.assertEqual(returncode, 1, result)
+            run_b0 = Path(str(result["campaign_run"]["run_dir"]))
+            self.assertEqual(reconciler.reconcile_supervisor_run(run_b0, campaign_dir)["status"], "recoverable")
+            for patcher in self._stage_patches(context, context["candidate"]):
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            # 修订画像只改一条 check 的 description（第一类判据）。
+            document = _read(context["profile_path"])
+            document["rules"][0]["checks"][0]["description"] = "方法为 POST（批准修订描述）"
+            revised = root / "profile-revised.json"
+            revised.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+            revised.chmod(0o600)
+            # 工具演进：评估器摘要变化（以 patch 摘要模拟）→ reevaluate 开 b1；修订基线要求口径等于 b1 授权，同一 patch 下开 b2。
+            fixed = dict(policy_module.evaluator_dependency_digests(), checker_sha256="f6" * 32)
+            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed):
+                preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "reevaluate"))
+                b1 = codex_upgrade.evaluation_recover(self._recover_arguments(
+                    fixture, "reevaluate", approve_sha256=preview["review_sha256"], fix_commit="a" * 40,
+                    deployment_receipt=Path(str(fixture["deployment"])),
+                ))
+                preview2 = codex_upgrade.evaluation_recover(
+                    self._recover_arguments(fixture, "approval-revision", assertion_profile=revised)
+                )
+                b2 = codex_upgrade.evaluation_recover(self._recover_arguments(
+                    fixture, "approval-revision", assertion_profile=revised, approve_sha256=preview2["review_sha256"]
+                ))
+            self.assertEqual(
+                (b1["kind"], b1["evaluation_baseline"], b2["kind"], b2["evaluation_baseline"]),
+                ("tool-evolution", 1, "approval-revision", 2),
+            )
+            commit_b1 = codex_upgrade._read_evaluation_baseline_commit(campaign_dir, R1, 1)["commit_sha256"]
+            commit_b2 = codex_upgrade._read_evaluation_baseline_commit(campaign_dir, R1, 2)["commit_sha256"]
+            prior_state = supervisor._read_state(run_b0)
+            prior_manifest = _read(run_b0 / "campaign-run-manifest.json")["manifest"]
+            successor = dict(
+                prior_manifest, batch_sequence=6, batch_id="vc-5-0006", evaluation_baseline=2, baseline_commit_sha256=commit_b2,
+            )
+
+            def check(manifest: dict) -> bool:
+                return supervisor._validate_evaluation_baseline_successor(
+                    prior_state, prior_manifest, run_b0, manifest, campaign_dir=campaign_dir
+                )
+
+            self.assertTrue(check(successor))
+            # 只开到 b1 就派发（直接接 tool-evolution 基线）同样放行。
+            self.assertTrue(check(dict(successor, evaluation_baseline=1, baseline_commit_sha256=commit_b1)))
+            # 链上制品与触发记录篡改各拒：后继 b2 自身与回溯经过的 b1 各取几份，改一个非自摘要的 *_sha256 字段后复原。
+            self_digests = {
+                "COMMIT": {"commit_sha256"},
+                "AUTHORIZATION": {"authorization_sha256"},
+                "recovery.json": {"recovery_sha256"},
+                "approval-revision.json": {"receipt_sha256", "review_sha256"},
+                "reevaluation.json": {"receipt_sha256", "review_sha256"},
+            }
+            for number, name in (
+                (2, "COMMIT"), (2, "AUTHORIZATION"), (2, "approval-revision.json"),
+                (1, "COMMIT"), (1, "recovery.json"), (1, "reevaluation.json"),
+            ):
+                path = campaign_dir / "candidates" / R1 / "revisions" / f"b{number}" / name
+                original_bytes = path.read_bytes()
+                payload = json.loads(original_bytes)
+                key = next(k for k in sorted(payload) if k.endswith("_sha256") and k not in self_digests[name])
+                payload[key] = "0" * 64
+                path.chmod(0o600)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(supervisor.SupervisorError, "无法重放|摘要链|不一致", msg=f"b{number}/{name}:{key}"):
+                        check(successor)
+                finally:
+                    path.write_bytes(original_bytes)
+            self.assertTrue(check(successor))
+            # 时间顺序与对账事件：直接以重排／删减后的账本事件重放承接链。
+            ledger_dir = Path(str(fixture["timing_ledger"])).resolve()
+            raw = timing_ledger._load_events(ledger_dir)
+            passed_id = f"reconcile-run-passed-{run_b0.name}"
+            passed = [item for item in raw if item[0].get("event_id") == passed_id]
+            self.assertEqual(len(passed), 1)
+            others = [item for item in raw if item[0].get("event_id") != passed_id]
+
+            def bridge(events: list) -> bool:
+                return supervisor._validate_non_failure_baseline_bridge(
+                    run_b0, prior_manifest, campaign_dir=campaign_dir.resolve(), campaign_id=str(prior_manifest["campaign_id"]),
+                    candidate_id=R1, revision=prior_manifest["candidate_revision"], prior_baseline=0, successor_baseline=2,
+                    raw_events=events, label="评估基线后继",
+                )
+
+            self.assertTrue(bridge(raw))
+            # 承接基线在失败父 run 对账之前已激活（对账事件挪到最后）：不是对本次失败的承接。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "对账之前已激活"):
+                bridge(others + passed)
+            # 账本没有失败父 run 的 receipt_passed 事件：拒绝。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "receipt_passed 事件不存在或不唯一"):
+                bridge(others)
+
     def test_same_baseline_reentry_reproduces_failure_with_zero_checker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

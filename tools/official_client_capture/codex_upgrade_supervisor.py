@@ -10290,10 +10290,24 @@ def _evaluation_action_kind(command: Sequence[str]) -> str | None:
     return None
 
 
-def _evaluation_baseline_chain(campaign_dir: Path, candidate_id: str, prior: int, successor: int, *, label: str) -> None:
-    """前序与后继基线之间的每个编号必须是完整的 PREPARED＋ABANDON 链（跳号只能来自显式作废）。"""
+def _evaluation_baseline_chain(
+    campaign_dir: Path,
+    candidate_id: str,
+    prior: int,
+    successor: int,
+    *,
+    label: str,
+    bridged: Sequence[int] = (),
+) -> None:
+    """前序与后继基线之间的每个编号必须是完整的 PREPARED＋ABANDON 链（跳号只能来自显式作废）。
+
+    ``bridged`` 是非失败承接链（``_validate_non_failure_baseline_bridge``）上已逐项重放过的已 COMMIT 编号，
+    这里跳过；失败类基线的原路径不传，行为不变。
+    """
 
     for number in range(prior + 1, successor):
+        if number in bridged:
+            continue
         baseline_dir = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{number}"
         prepared = baseline_dir / "PREPARED"
         abandon = baseline_dir / "ABANDON"
@@ -10307,6 +10321,144 @@ def _evaluation_baseline_chain(campaign_dir: Path, candidate_id: str, prior: int
             raise SupervisorError(f"{label}：b{number} 的 PREPARED／ABANDON 非法：{error}") from error
         if marker["recovery_sha256"] != abandoned["recovery_sha256"] or marker["candidate_id"] != candidate_id:
             raise SupervisorError(f"{label}：b{number} 的 ABANDON 未绑定其 PREPARED。")
+
+
+def _evaluation_baseline_recovery_kind(campaign_dir: Path, candidate_id: str, number: int) -> str | None:
+    """只读取 ``b<K>/recovery.json`` 的基线种类；读不到或不合法返回 None。
+
+    评估基线后继协议据此分流：非失败基线走 ``_validate_non_failure_baseline_bridge``；None 与失败类基线一律走
+    原路径，由原路径按原文案失败关闭（被篡改的 recovery.json 不会因为分流换成另一种拒因）。
+    """
+
+    path = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{number}" / "recovery.json"
+    try:
+        recovery = vc_artifacts.validate_evaluation_recovery(_read_json(path))
+    except (SupervisorError, vc_artifacts.VCArtifactError):
+        return None
+    return str(recovery["kind"])
+
+
+def _validate_non_failure_baseline_bridge(
+    prior_dir: Path,
+    prior_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    candidate_id: str,
+    revision: Any,
+    prior_baseline: int,
+    successor_baseline: int,
+    raw_events: Sequence[tuple[Mapping[str, Any], Any]],
+    label: str,
+) -> bool:
+    """评估基线后继协议的非失败承接分支：失败评估批次由 reevaluate／approval-revision 开的基线链接住。
+
+    ``evaluation-recover reevaluate``（tool-evolution）与 ``approval-revision`` 不依赖失败父 run；指南 §4.5.8
+    规定评估批次失败、对账之后，用它们承接"评估器／证据层修好并登记演进"与"批准画像 selector 修正"。两者的
+    recovery.json 不带失败诊断，previous_baseline 指向开基线时的当前基线，而且可以连开多级（例如 b0 批次失败
+    → reevaluate 开 b1 → approval-revision 开 b2）。原路径要求跳号编号只能是 PREPARED＋ABANDON、后继诊断绑定
+    失败父 run，这类后继因此一律被拒（E5 VC-5 批次 26 实测：b1 已 COMMIT 被当成跳号）。
+
+    本分支失败关闭地重放：② 失败父 run 的 reconcile-supervisor-run 收据与总账绑定，时间账本有唯一的
+    ``reconcile-run-passed-<run>`` receipt_passed 事件；从后继基线沿 recovery.previous_baseline 回溯到前序基线，
+    链上每个基线都必须是已 COMMIT 的非失败基线——COMMIT／AUTHORIZATION／recovery／触发记录（本基线目录的
+    reevaluation.json 或 approval-revision.json）摘要链闭合，触发记录按种类通过 schema 校验并绑定同候选、同
+    revision、同一前序基线，AUTHORIZATION 引用的总账事件与 recovery.json 一致，stage_sources 的 reused 引用
+    完好，账本有引用其 COMMIT 的 evaluation_baseline 事件、且该基线第一次激活排在失败父 run 对账事件之后
+    （保证是对本次失败的承接，而不是失败前就存在的基线）；回溯链之外的跳号编号仍须是完整 PREPARED＋ABANDON
+    链。链上出现失败类基线即拒：失败类基线只能由原路径以失败诊断直接承接前序。
+    """
+
+    # ② 失败父 run 已对账入账（评估批次属 post-run-tooling，只认 reconcile-supervisor-run）。
+    verify_supervisor_run_reconciliation_binding(
+        campaign_dir,
+        campaign_id=campaign_id,
+        run_id=prior_dir.name,
+        phase="VC-5",
+        batch_sequence=prior_manifest.get("batch_sequence"),
+        batch_sha256=prior_manifest.get("batch_sha256"),
+        label=label,
+    )
+    passed_event_id = f"reconcile-run-passed-{prior_dir.name}"
+    passed = [position for position, (event, _raw) in enumerate(raw_events) if event.get("event_id") == passed_event_id]
+    if len(passed) != 1 or raw_events[passed[0]][0].get("event_type") != "receipt_passed":
+        raise SupervisorError(f"{label}：失败父 run {prior_dir.name} 的 receipt_passed 事件不存在或不唯一。")
+    reconciled_position = passed[0]
+    # 非失败基线种类 → 本基线目录里的触发记录文件名与 schema 校验（与 codex_upgrade 落盘的文件一一对应）。
+    triggers = {
+        "tool-evolution": ("reevaluation.json", vc_artifacts.validate_evaluation_reevaluation),
+        "approval-revision": ("approval-revision.json", vc_artifacts.validate_approval_revision),
+    }
+    bridged: list[int] = []
+    number = successor_baseline
+    while number != prior_baseline:
+        if number < prior_baseline or number in bridged:
+            raise SupervisorError(
+                f"{label}：b{successor_baseline} 的 previous_baseline 链没有回到前序基线 b{prior_baseline}。"
+            )
+        baseline_dir = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{number}"
+        try:
+            commit = vc_artifacts.validate_evaluation_baseline_commit(_read_json(baseline_dir / "COMMIT"))
+            authorization = vc_artifacts.validate_evaluation_baseline_authorization(_read_json(baseline_dir / "AUTHORIZATION"))
+            recovery = vc_artifacts.validate_evaluation_recovery(_read_json(baseline_dir / "recovery.json"))
+        except (SupervisorError, vc_artifacts.VCArtifactError) as error:
+            raise SupervisorError(f"{label}：b{number} 的基线制品无法重放：{error}") from error
+        kind = str(recovery["kind"])
+        if kind not in triggers:
+            raise SupervisorError(f"{label}：b{number} 是失败类基线（{kind}），不能出现在非失败承接链上。")
+        trigger_name, validate_trigger = triggers[kind]
+        trigger_path = baseline_dir / trigger_name
+        try:
+            trigger = validate_trigger(_read_json(trigger_path))
+        except (SupervisorError, vc_artifacts.VCArtifactError) as error:
+            raise SupervisorError(f"{label}：b{number} 的触发记录无法重放：{error}") from error
+        recovery_bytes = (baseline_dir / "recovery.json").read_bytes()
+        if (
+            commit["candidate_id"] != candidate_id
+            or commit["candidate_revision"] != revision
+            or commit["recovery_sha256"] != recovery["recovery_sha256"]
+            or commit["authorization_sha256"] != authorization["authorization_sha256"]
+            or authorization["recovery_sha256"] != recovery["recovery_sha256"]
+            or recovery["candidate_id"] != candidate_id
+            or recovery["candidate_revision"] != revision
+            or recovery["evaluation_baseline"] != number
+            or recovery["diagnosis"]["path"] != trigger_path.relative_to(campaign_dir).as_posix()
+            or recovery["diagnosis"]["sha256"] != _sha256(trigger_path.read_bytes())
+            or trigger["candidate_id"] != candidate_id
+            or trigger["candidate_revision"] != revision
+            or trigger["from_baseline"] != recovery["previous_baseline"]
+        ):
+            raise SupervisorError(f"{label}：b{number} 的 COMMIT／AUTHORIZATION／recovery／触发记录摘要链不一致。")
+        authorization_payload = _project_ledger_operation_payload(
+            campaign_dir, str(authorization["ledger_operation_id"]), label=label
+        )
+        if (
+            authorization_payload.get("subject_kind") != "evaluation_baseline"
+            or authorization_payload.get("subject_id") != f"{candidate_id}:r{revision}:b{number}"
+            or authorization_payload.get("reconciliation_receipt_sha256") != _sha256(recovery_bytes)
+        ):
+            raise SupervisorError(f"{label}：b{number} 的 AUTHORIZATION 引用的总账事件与 recovery.json 不一致。")
+        for stage, source in commit["stage_sources"].items():
+            if source["source"] != "reused":
+                continue
+            target = campaign_dir / str(source["path"])
+            if target.is_symlink() or not target.is_file() or _sha256(target.read_bytes()) != source["sha256"]:
+                raise SupervisorError(f"{label}：b{number} 的 stage_sources.{stage} 引用的前序文件缺失或摘要漂移。")
+        activations = [
+            position
+            for position, (event, _raw) in enumerate(raw_events)
+            if event.get("event_type") == "evaluation_baseline"
+            and event.get("candidate_id") == candidate_id
+            and event.get("evaluation_baseline") == number
+        ]
+        if not activations or raw_events[activations[-1]][0].get("baseline_commit_sha256") != commit["commit_sha256"]:
+            raise SupervisorError(f"{label}：账本没有引用 b{number} COMMIT 的 evaluation_baseline 事件。")
+        if activations[0] < reconciled_position:
+            raise SupervisorError(f"{label}：b{number} 在失败父 run 对账之前已激活，不是对本次失败的承接。")
+        bridged.append(number)
+        number = int(recovery["previous_baseline"])
+    _evaluation_baseline_chain(campaign_dir, candidate_id, prior_baseline, successor_baseline, label=label, bridged=bridged)
+    return True
 
 
 def _validate_evaluation_baseline_successor(
@@ -10326,6 +10478,9 @@ def _validate_evaluation_baseline_successor(
     ABANDON 链；② 失败父 run 的 ``reconcile-supervisor-run`` 收据与总账绑定；③ 诊断收据；
     ④ ``b<K>/COMMIT`` 摘要 == 后继清单 ``baseline_commit_sha256`` 且 AUTHORIZATION 引用的总账事件存在；
     ⑤ 候选 revision 记录（同候选同 revision）；⑥ 账本事件引用该 COMMIT；⑦ ``stage_sources`` 规范性。
+
+    后继基线是非失败基线（reevaluate 的 tool-evolution、approval-revision）时，① 之后改走
+    ``_validate_non_failure_baseline_bridge``：沿 previous_baseline 链逐项重放到前序基线，不要求失败诊断。
     """
 
     # B4-1 改法 2：已对账的看门狗中止与 failed 同等对待（看门狗中止在下方先过 0-W）。
@@ -10415,6 +10570,21 @@ def _validate_evaluation_baseline_successor(
     ]
     if not activated or activated[-1].get("baseline_commit_sha256") != successor_manifest.get("baseline_commit_sha256"):
         raise SupervisorError(f"{label}：后继基线 b{successor_baseline} 未由账本以同一 COMMIT 摘要激活。")
+    # 后继基线是 reevaluate／approval-revision 开的非失败基线：失败评估批次由非失败承接链接住（不经失败诊断），
+    # 见 _validate_non_failure_baseline_bridge；失败类基线与读不到种类的仍走下方原路径。
+    if _evaluation_baseline_recovery_kind(campaign_dir, candidate_id, successor_baseline) in vc_artifacts.NON_FAILURE_BASELINE_KINDS:
+        return _validate_non_failure_baseline_bridge(
+            prior_dir,
+            prior_manifest,
+            campaign_dir=campaign_dir,
+            campaign_id=campaign_id,
+            candidate_id=candidate_id,
+            revision=revision,
+            prior_baseline=prior_baseline,
+            successor_baseline=successor_baseline,
+            raw_events=raw_events,
+            label=label,
+        )
     _evaluation_baseline_chain(campaign_dir, candidate_id, prior_baseline, successor_baseline, label=label)
 
     # ② 失败父 run 的对账收据与总账绑定（评估批次属 post-run-tooling，只认 reconcile-supervisor-run）。
