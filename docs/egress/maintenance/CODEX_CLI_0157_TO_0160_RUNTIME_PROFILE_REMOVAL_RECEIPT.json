@@ -1,0 +1,56 @@
+{
+  "schema_version": "codex-runtime-profile-removal/v1",
+  "status": "complete",
+  "campaign_id": "c01600-formal-vc1-r1-20261003t084239z",
+  "completed_at_utc": "2026-10-03T22:09:55Z",
+  "active_version": "0.160.0",
+  "rollback_version": "0.157.0",
+  "removed_version": "0.154.0",
+  "production_activation_sha256": "78215bc463760f306f78917918f1b4af945cdacb7ecd226734d1ab838e40ede3",
+  "consumer_scan": {
+    "catalog_references": 0,
+    "selector_references": 0,
+    "unknown_references": 0
+  },
+  "consumer_scan_method": {
+    "catalog_references": "selector 指向的 active release graph 73fa724f… 与 active snapshot catalog 65433526… 中 0.154.0 的条目数",
+    "selector_references": "catalogdata/runtime/release-catalog.json 中 0.154.0 的出现次数",
+    "unknown_references": "backend/ 与 frontend/ 的 .go/.ts/.vue/.yaml/.yml/.json 中对 catalogdata/runtime/profiles/0.154.0/ 路径或两个画像 blob 摘要（53a94693…、84fcb371…）的引用数；历史 snapshot-catalog 与 release graph 归档除外；测试中对该路径的引用同样为 0",
+    "runtime_projection": "cmd/egressruntimedump 导出的运行 Catalog 闭集由 42 个文件降为 41 个，profiles 仅剩 0.157.0 与 0.160.0；0.154.0 不再出现在任何运行投影文件中（ARM64 退休构建树复算，证据 stages/retire_switch/runtime-projection-files.txt）",
+    "historical_route_references": "catalogdata/release-route-retirements.json（发布退役 route 覆盖层，go:embed）唯一一条 route POST /backend-api/codex/responses/compact（responses_compact）以 0.154.0 画像 31d8654f… 为最后声明画像，覆盖层按冻结合同读取原地保留的画像字节校验端点；它不生成 Active／Previous 运行投影，属历史 route 证据，计入 historical_route_receipt_references，不计入 consumer_scan"
+  },
+  "runtime_catalog_removed": true,
+  "historical_evidence_preserved": true,
+  "historical_archive_references": {
+    "historical_snapshot_catalogs": 6,
+    "historical_release_graphs": 18,
+    "historical_transition_test_references": 0,
+    "note": "历史 snapshot catalog 与 release graph 逐字保留，仍按内容寻址引用 0.154.0；与 0.149.1、0.151.0 退休先例一致，不计入 consumer_scan"
+  },
+  "retired_runtime_profiles": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0/31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json",
+      "sha256": "53a946932759a183296c2848106ebd4c881d14a98dc96fb85054060e0e53b66b",
+      "removed_from_runtime_projection_in_commit": "5deb4066b",
+      "state": "retained_as_frozen_terminal_artifact"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json",
+      "sha256": "84fcb371ac392a0828e2a76bd601b69e70b7d50a3639403eca075164a6521f3f",
+      "removed_from_runtime_projection_in_commit": "5deb4066b",
+      "state": "retained_as_frozen_terminal_artifact"
+    }
+  ],
+  "runtime_catalog_after_removal": {
+    "catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source": "campaign:c01600-formal-vc1-r1-20261003t084239z/retirement:codex-legacy-profile"
+    },
+    "release_graph_sha256": "73fa724f1ce7525bf07a1648bdacd94b2998d7dd6c7e298fbb7fcdb946f53b90",
+    "snapshot_catalog_sha256": "65433526054bb687acdc45cc9816a76a5cd1936f8bfce8777f9f7d0e66b711da",
+    "promotion_intermediate_snapshot_catalog_sha256": "65831431fdfe235da0989217748cd85026c9899aa0a9ea4a1cfac1fba92ccaf6"
+  },
+  "historical_route_profile_preserved": true,
+  "historical_route_receipt_references": 1,
+  "retained_bytes_rationale": "0.154.0 两个画像字节按原路径逐字保留：31d8654f…（0.154.0 期 Active）被 0.151→0.154 生产激活收据与 0.154→0.157终态链逐文件登记，并且是发布退役覆盖层 legacy compact route 的最后声明画像（覆盖层按冻结合同读取其字节）；33a537a3…（0.154.0 早期候选）被 0.151→0.154 与 0.154→0.157 两份 Catalog 晋升收据清单逐文件登记。二者均属 §4.6.7第 1 类，不得删除、改名或移动。退休因此按运行投影口径执行：Catalog、selector 与运行投影均不再引用 0.154.0，画像字节作为历史终态制品原地保留，与 0.149.1（同为两个画像）、0.151.0 退休同一处置。"
+}
