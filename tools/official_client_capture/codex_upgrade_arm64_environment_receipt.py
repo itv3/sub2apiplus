@@ -230,6 +230,10 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 EGRESS_POLICY_SCHEMA = "codex-runtime-egress-policy/v1"
 EGRESS_STATUS_SCHEMA = "codex-runtime-egress-status/v1"
 EGRESS_EQUIVALENCE_SCHEMA = "codex-arm64-environment-equivalence/v2"
+# 出口守护（tools/arm64_supervised_deploy.py 的逐容器身份核验）读容器进程的 cgroup、resolv.conf 或依赖时遇到竞争
+# （OSError／ValueError／KeyError／StopIteration）发布的通用原因；cgroup、DNS、依赖地址等真实配置错误各有自己的原因
+# 原文，不会落到这一条。两边逐字一致由测试核对。
+EGRESS_GUARD_IDENTITY_RACE_REASON = "容器或必要依赖身份不可验证"
 # 运行时出口的三个读取位置。读取函数在调用时才解析这些模块常量（而不是在定义时绑定为默认参数），
 # 离线测试因此可以统一把它们重定向到私有临时目录，确保任何测试都不会读到开发机或 ARM64 上的真实配置；
 # 生产调用不传参数，始终读取这里的固定位置，没有环境变量或命令行开关可以改写。
@@ -515,7 +519,16 @@ def validate_egress_status(
                 # 发布 blocked＋invalid、container_id 保留、绑定与观测为空、不发租期。没有任何绑定与观测即没有可放行的出口
                 # 路径，与缺失态等价，维护等待继续；仍带绑定或观测的 invalid 才是重建后的真实配置故障（cgroup／DNS／依赖），
                 # 照旧中止。普通准入与事实采集不传此参数，invalid 仍按"尚未完成准入"拒绝。
-                if (not CONTAINER_ID_RE.fullmatch(str(service["container_id"])) or service["network_bindings"]
+                # 修好接着跑（E5 VC-5 批次 19）：docker restart 拉起新进程的瞬间，守护已能 inspect 到新进程与新网卡，读其
+                # cgroup／resolv.conf／依赖却遇到竞争，于是发布 blocked＋invalid、container_id 与新绑定保留、观测为空、原因
+                # 是通用竞争原因；不到一秒即转为缺失、探测、合规。没有观测即没有放行过的出口，原因又不是具体配置错误，
+                # 同样继续等待（等待受维护声明 60 秒 deadline 约束，维护命令返回前仍须通过普通准入）；带具体配置错误原因
+                # 或已有观测的 invalid 照旧中止。
+                identity_race = (
+                    service["reason"] == EGRESS_GUARD_IDENTITY_RACE_REASON and not service["observations"]
+                )
+                if (not CONTAINER_ID_RE.fullmatch(str(service["container_id"]))
+                        or (service["network_bindings"] and not identity_race)
                         or service["observations"]):
                     raise Arm64EnvironmentReceiptError("受控重建期间容器身份不可验证且仍带出口绑定或观测，必须中止维护等待")
                 continue

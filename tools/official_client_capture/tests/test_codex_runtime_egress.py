@@ -958,6 +958,40 @@ class EgressSupervisorTests(unittest.TestCase):
                 with self.assertRaises(arm.Arm64EnvironmentReceiptError):
                     arm.validate_egress_status(snapshot["policy"], changed, now_epoch=time.time(), **kwargs)
 
+    def test_transition_scope_waits_through_identity_race_of_starting_container(self):
+        # 修好接着跑（E5 VC-5 批次 19）：受控重启拉起新进程的瞬间，守护已 inspect 到新进程与新网卡，读其 cgroup／resolv.conf
+        # 时竞争失败，发布 blocked＋invalid、container_id 与新绑定保留、观测为空、通用竞争原因；不到一秒即转为缺失、探测、
+        # 合规。维护等待应继续；带观测、具体配置错误原因、普通口径或维护中的是另一容器照旧拒绝。
+        snapshot = runtime_fixture()
+        status = copy.deepcopy(snapshot["runtime"])
+        status["services"]["sub2apiplus"].update(status="blocked", admission_state="invalid", observations=[],
+                                                 reason=arm.EGRESS_GUARD_IDENTITY_RACE_REASON, blocked_at_epoch=time.time())
+        self.assertTrue(status["services"]["sub2apiplus"]["network_bindings"])
+        arm.validate_egress_status(snapshot["policy"], status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+        original = snapshot["runtime"]["services"]["sub2apiplus"]
+        for fault in ("observations", "configuration-reason", "ordinary", "other-container"):
+            with self.subTest(fault=fault):
+                changed = copy.deepcopy(status)
+                target = changed["services"]["sub2apiplus"]
+                kwargs = {"_transitioning_service": "sub2apiplus"}
+                if fault == "observations":
+                    target["observations"] = copy.deepcopy(original["observations"])
+                elif fault == "configuration-reason":
+                    target["reason"] = "容器 DNS 未直接绑定策略服务器，不能使用宿主转发解析"
+                elif fault == "ordinary":
+                    kwargs = {}
+                else:
+                    kwargs = {"_transitioning_service": "capture-cli"}
+                with self.assertRaises(arm.Arm64EnvironmentReceiptError):
+                    arm.validate_egress_status(snapshot["policy"], changed, now_epoch=time.time(), **kwargs)
+
+    def test_identity_race_reason_matches_guard_literal(self):
+        # 排除依据是守护发布的通用竞争原因原文：守护改了措辞而这里没跟上时，维护等待会静默回到"一律中止"。
+        guard = Path(__file__).resolve().parents[2] / "arm64_supervised_deploy.py"
+        if not guard.is_file():
+            self.skipTest("出口守护源码不在此检出中")
+        self.assertIn(f'"{arm.EGRESS_GUARD_IDENTITY_RACE_REASON}"', guard.read_text(encoding="utf-8"))
+
     def test_maintenance_wait_survives_guard_snapshot_of_stopping_container(self):
         # 第 36 项端到端：有效维护声明期间守护发布上述瞬态，monitor 与 owner（command_pid）视角的门禁都继续等待、不写暂停；
         # 同一形态若仍带绑定则照旧判声明失效并暂停。
