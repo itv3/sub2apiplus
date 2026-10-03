@@ -2,7 +2,7 @@
 
 > 由 `tools/evidence_index.py` 生成，不要手改。
 
-本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.157.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
+本索引只接收官方 Codex 客户端证据，来源有两类：**Codex CLI 0.145.0 本地官方采集**（P/R/J/M，逐运行定位到本地文件）与 **Active 0.160.0 Campaign 封存证据**（C，见 §2.1）。Sub2API 出站验收目录
 `sub2api-egress` 被生成器硬禁止；它只能用于第三部分的实现差异比对。
 
 ## 0. 证据类型与边界
@@ -34,7 +34,7 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-BODY-003 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-BODY-004 | ④ 内部机制 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | HTTP 响应头与 WS response.metadata 两条输入路径均已完成输入→保存→后续出站回送闭环。 |
 | SPEC-BODY-005 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
-| SPEC-BODY-006 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
+| SPEC-BODY-006 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | R+C | 源码命题与对应官方 P/R 证据语义一致；精确运行号和证明范围见下一节。 |
 | SPEC-BODY-007 | ⑤ 采集记录 | — 无／不适用（只能实测（L3）） | ✅ 充分 | R | L3 观测记录；洁净固定十轮场景可完整复算，但计数不外推为协议封闭集合。 |
 | SPEC-BODY-008 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | C | 源码命题与 Campaign 封存的官方取证、候选断言语义一致；坐标见 §2.1。 |
 | SPEC-BODY-009 | ① OAuth 可见规则 | ✅ 充分（源码读出（L1/L2）） | ✅ 充分 | C | 源码命题与 Campaign 封存的官方取证、候选断言语义一致；坐标见 §2.1。 |
@@ -199,19 +199,20 @@ R 类已对 `Authorization`、`Cookie`、账号 ID 与游标等值做等长替�
 | SPEC-WS-005 | ① OAuth 可见规则 | 内置 OpenAI OAuth | ✅ 验过 | `clean-tool-20260728T132346Z` | **R** | Lite WS 原始帧与键序 | `raw-scrubbed/clean-tool-20260728T132346Z/` （4 个 .bin） |
 |  |  |  |  | `audit-ws005-nonlite-20260730a` | **R** | 非 Lite WS 原始帧：warmup／增量键序及 instructions／tools 正向形态 | `raw-scrubbed/audit-ws005-nonlite-20260730a/` （4 个 .bin） |
 
-## 2.1 Campaign 封存证据（Active 0.157.0，22 项）
+## 2.1 Campaign 封存证据（Active 0.160.0，23 项）
 
 正文实测以 `assert-SPEC-*` 引用本条候选断言的编号项登记为 C。官方取证与候选断言的原始字节、观测和
 断言结论封存在 ARM64 私有归档，仓库内只登记坐标：
 
-- 终态收据：`docs/egress/maintenance/CODEX_CLI_0154_TO_0157_TERMINAL_STATE_RECEIPT.json`
-- 官方证据 Campaign：`c01570-formal-vc1-r2-20260926t084354z`；canonical Campaign：`c01570-formal-vc1-r2-20260926t194249z`
-- 私有归档：`/root/private-archives/codex-0.157.0-c01570-formal-vc1-r2-20260926t194249z-20260928t234835z.tar.gz`（SHA-256 `218a0180678fc3215e839c2925e97a382a37cdabb30d684fddb5fe970c34e667`，14568786 字节）
+- 终态收据：`docs/egress/maintenance/CODEX_CLI_0157_TO_0160_TERMINAL_STATE_RECEIPT.json`
+- 官方证据 Campaign：`c01600-formal-vc1-r1-20261003t084239z`；canonical Campaign：`c01600-formal-vc1-r1-20261003t084239z`
+- 私有归档：`/root/private-archives/codex-0.160.0-c01600-formal-vc1-r1-20261003t084239z-20261003t221441z.tar.gz`（SHA-256 `c419d5e234877871398b0e419b9ddf259ff8e6cc07bc4e7e36bbcf918e057191`，79274922 字节）
 
 | 编号项 | 分类 | 验证状态 | 候选断言 |
 |---|---|---|---|
 | SPEC-BODY-002 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-002` |
 | SPEC-BODY-004 | ④ 内部机制 | 源码机制 | `assert-SPEC-BODY-004` |
+| SPEC-BODY-006 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-006` |
 | SPEC-BODY-008 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-008` |
 | SPEC-BODY-009 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-BODY-009` |
 | SPEC-CONN-001 | ① OAuth 可见规则 | ✅ 验过 | `assert-SPEC-CONN-001` |
