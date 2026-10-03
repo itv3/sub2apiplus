@@ -73,7 +73,8 @@ func legacyCompactGateReleaseSlots(t *testing.T) (removed string, declared strin
 			removed = mode
 		}
 	}
-	if removed == "" || declared == "" {
+	// legacy compact 已按发布退役清单正式退役时两个槽位都删除该端点，declared 为空，由调用方改做两槽位失败关闭。
+	if removed == "" || (declared == "" && !officialLegacyCompactReleaseRetired(t)) {
 		t.Fatalf("正式目录需要同时具备删除与声明 legacy compact 的发布槽位：removed=%q declared=%q", removed, declared)
 	}
 	return removed, declared
@@ -240,9 +241,9 @@ func requireLegacyCompactRemovedResponse(t *testing.T, rec *httptest.ResponseRec
 func TestOpenAILegacyCompactIngressFailsClosedWhenReleaseRemovesEndpoint(t *testing.T) {
 	removed, declared := legacyCompactGateReleaseSlots(t)
 	for _, tc := range legacyCompactGateCases() {
-		t.Run(tc.name+"/删除槽位失败关闭", func(t *testing.T) {
+		requireRemoved := func(t *testing.T, mode string) {
 			upstream := &legacyCompactGateUpstream{}
-			svc := newLegacyCompactGateService(t, removed, upstream)
+			svc := newLegacyCompactGateService(t, mode, upstream)
 			c, rec, body := tc.ingress(t)
 
 			result, err := svc.Forward(context.Background(), c, tc.account(), body)
@@ -254,7 +255,19 @@ func TestOpenAILegacyCompactIngressFailsClosedWhenReleaseRemovesEndpoint(t *test
 			require.Empty(t, upstream.snapshot(), "② 失败关闭必须发生在任何出站（含模型能力清单刷新）之前")
 			require.True(t, HasOpsClientBusinessLimited(c), "③ ops 错误日志必须标为本地拒绝，不计入上游错误")
 			require.Equal(t, OpsClientBusinessLimitedReasonLocalFeatureGate, OpsClientBusinessLimitedReason(c))
-		})
+		}
+		t.Run(tc.name+"/删除槽位失败关闭", func(t *testing.T) { requireRemoved(t, removed) })
+		if declared == "" {
+			// legacy compact 已正式发布退役：没有仍声明它的槽位，对照组改为另一槽位同样失败关闭。
+			for _, mode := range officialCodexFormalModes {
+				if mode == removed {
+					continue
+				}
+				mode := mode
+				t.Run(tc.name+"/退役后"+mode+"槽位同样失败关闭", func(t *testing.T) { requireRemoved(t, mode) })
+			}
+			continue
+		}
 		t.Run(tc.name+"/声明槽位对照", func(t *testing.T) {
 			upstream := &legacyCompactGateUpstream{}
 			svc := newLegacyCompactGateService(t, declared, upstream)

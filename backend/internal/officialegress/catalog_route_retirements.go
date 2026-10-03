@@ -19,7 +19,7 @@ import (
 // release-route-retirements.json 是“发布退役 route”的追加式覆盖层。
 //
 // 目标版本删除某个端点之后，只要 Active／Previous 里还有画像声明它，相关 route 照常发布；最后一个声明它的画像离开
-// Active／Previous 时（legacy compact 在 0.154.0 离开之后即此情形），bootstrap binding、Catalog 补充与历史
+// Active／Previous 时（legacy compact 在最后一份声明它的画像离开之后即此情形），bootstrap binding、Catalog 补充与历史
 // MigrationReceipt 里的这条 route 就再也连接不到任何 ProfileSpec endpoint。这些历史事实不可改写——binding digest
 // 与收据都绑定完整 route 集合——所以 route 原样留在静态 binding 里，只由本清单显式登记为发布退役：运行时不生成
 // EndpointBinding、ReleaseSelection 与路由条目，请求在执行器解析端点时失败关闭。
