@@ -1,0 +1,46 @@
+{
+  "base_commit": "1599c876d39d1718055ec7e3ab58d85118b1861c",
+  "changed_path_count": 2,
+  "current_commit": "75a6a1e4469b06ec362d6483392483477fdeceaa",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5342,
+  "frozen_path_count": 1929,
+  "identity_sha256": "b2501728c1817f0601da8e6b3b25319e929743a1d41dcc25372aad5aab1e4ef3",
+  "issued_at_utc": "2026-10-03T15:31:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_environment_probe.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-vc5-credits-snapshot-probe-20261003-freeze-successor",
+  "transitions": [],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_environment_probe.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_environment_probe.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
