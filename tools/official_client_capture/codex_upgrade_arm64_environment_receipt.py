@@ -93,9 +93,13 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
     # 1b62 为第 36 项补登记（f9727c765）之后、修好接着跑第 64 项（TLS 就绪探针网络瞬态有界重试）修改前的受管版本，
     # 即生成器重放登记门禁基线时已部署的版本；0.157 194249z 在此期间的 attempt 环境收据由它生成。第 64 项只改采集
     # 时的重试行为，facts／收据字段、contract_sha256 与 PRODUCER_VERSION 均不变，它同样只允许按原合同只读重放。
+    # 030f 为第 64 项之后、修好接着跑（E5 VC-5 批次 19，维护等待放行新容器进程启动瞬间的身份核验竞争）修改前的受管版本，
+    # 0.160.0 一轮 c01600 的 P0、attempt 与环境复核收据由它生成；本次只改维护等待口径，facts／收据字段、contract_sha256
+    # 与 PRODUCER_VERSION 均不变，同样只允许按原合同只读重放。
     # 9e10 保持在最后且不带尾随逗号：生成器重放登记门禁的反证用例会原地删掉该字面量，删后仍须是合法语法。
     "8": frozenset(
         {
+            "030f443beddfb07265c31ada69cadfab756283f646d8e105ad500b6a1c17dfdd",
             "1b62b096cc543350d0060c0eea5f97e2f833e47a95b22c346fdffaa27fe66968",
             "9e10bd0f91b588ee6aefd0ab06ac845c248faaa45b75c906bd5df91933845f98"
         }
