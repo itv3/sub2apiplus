@@ -1,0 +1,49 @@
+{
+  "base_commit": "37bee68fd2d5c907ce2e4cdd0a57d04438b2bba1",
+  "changed_path_count": 2,
+  "current_commit": "e4ec98ca9aba63eb8b77f64acbdef04ab4fa910c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5374,
+  "frozen_path_count": 1929,
+  "identity_sha256": "a577171358568728f440b8147497386df6296c4b7cce5631198352f0ecd72cf0",
+  "issued_at_utc": "2026-10-03T22:58:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-closeout-image-tests-20261003-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_test.go",
+      "predecessor_sha256s": [
+        "89ec8ec51c4e613b5c7e9b0e3974104bab4f8561763cd0d997dbc23b17057dcc"
+      ],
+      "reason": "E5 收尾：晋升后生图用例按 Active 画像结构事实断言 background（e4ec98ca9） path=backend/internal/service/openai_images_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1d519f96fe89ffd5b78bc397600d762e0a5b7a39d3281ec38cbca32475ee9ec5"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "backend/internal/service/account_test_service_openai_image_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
