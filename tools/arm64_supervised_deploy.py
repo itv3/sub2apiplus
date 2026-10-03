@@ -302,8 +302,11 @@ from urllib.parse import urlsplit
 # 2026-10-03（E5 VC-5）：环境探针把服务端写回的 codex_credits_snapshot 列为托管键（control 层评估侧，监督器不变）；
 # 监督器"父 run 期间预约"窗口只在回头核验历史后继链时，以该段后继 run 的开始时刻封顶（_historical_window_end），
 # 后继 run 自己的预约不再算回失败前序；链尾一段与单独调用的对账入口保持原判定。control 层变化，监督器摘要随之变化。
+# 2026-10-03（E5 VC-5 评估基线）：评估基线后继协议加非失败承接分支（_validate_non_failure_baseline_bridge）——失败评估批次
+# 之后由 reevaluate／approval-revision 开的基线沿 previous_baseline 链承接，不再被当成跳号或缺失败诊断而拒绝；失败类基线
+# 原路径不变。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "10a30fbcde2d1509d155825de1aba7258814930e41ceb5f548858dbcd4782cff"
+    "f52b47839f93e65da6a08577f0a1e010c67c8e3afa9f5890e8e1ed1ae444a5a1"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
