@@ -299,8 +299,11 @@ from urllib.parse import urlsplit
 # 流内 flex_unavailable／interrupted、空闲断连与 Retry-After 定向样本。wire 层变化；受管工具树随之变化。
 # 2026-10-03（E5-01，0.160.0 版本登记）：0.159.2 从未生效，六份目标版本清单改名为 0.160.0 并替换版本号与三处源码锚点，
 # 升级对改为 0.157.0→0.160.0，目标场景清单切到 0.160.0，部署命名改为 01600。wire 层变化；受管工具树随之变化。
+# 2026-10-03（E5 VC-5）：环境探针把服务端写回的 codex_credits_snapshot 列为托管键（control 层评估侧，监督器不变）；
+# 监督器"父 run 期间预约"窗口截止到父 run 终态时刻（_prior_run_terminal_epoch），回头核验历史后继链时后继 run 自己的
+# 预约不再算回失败前序。control 层变化，监督器摘要随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c8db8176dbe6dfe9c88572a2ad20ede05d7cd2a682127b8129c8799720c92855"
+    "4a1a3209db6b3d9e17f1b67aea17e5c68ed7e16d188405859a5b289fed9d12eb"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
