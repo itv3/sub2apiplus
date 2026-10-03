@@ -373,6 +373,10 @@ func NewBundleResolver(releases ReleaseCatalog, sinks SinkCatalog) (*BundleResol
 		bindingsByProfile: make(map[string]EndpointBindingCatalog),
 	}
 	coveredRoutes := make(map[string]bool)
+	retirements, err := releaseRouteRetirementsFor(releases)
+	if err != nil {
+		return nil, err
+	}
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
 		coordinate, err := personaReleases.ResolveCodexMode(PersonaCodexCLI, mode)
 		if err != nil {
@@ -411,7 +415,7 @@ func NewBundleResolver(releases ReleaseCatalog, sinks SinkCatalog) (*BundleResol
 				SinkID: sink.ID(), Purpose: sink.Purpose(), PhysicalRouteID: physicalID,
 				Protocol: route.Protocol,
 			}
-			if !coveredRoutes[key.identity()] {
+			if !coveredRoutes[key.identity()] && !retirements.retires(route) {
 				return nil, fmt.Errorf("Sink %s 的 route 在 Active/Previous 画像中均无 EndpointBinding", sink.ID())
 			}
 		}

@@ -1,9 +1,11 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
@@ -75,6 +77,13 @@ func officialOpenAIEffectiveReasoningEffort(
 				return "max"
 			}
 			return effort
+		}
+		// 自定义数字档位在请求体里可能是 JSON 整数，turn metadata 仍按档位的字符串形态记录
+		// （官方 ExecutionMetadata 写 reasoning_effort.to_string()），与请求体取同一个值。
+		if effort, ok := reasoning["effort"].(json.Number); ok {
+			if parsed, err := strconv.ParseUint(string(effort), 10, 64); err == nil {
+				return strconv.FormatUint(parsed, 10)
+			}
 		}
 	}
 	effort := strings.TrimSpace(defaults.Effort)

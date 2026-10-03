@@ -129,10 +129,12 @@ func TestCodexEndpointHostOriginsReplaysApprovedSemanticsOnTargetRelease(t *test
 	blob := codexGateMustEndpoint(t, profile, officialCodexEndpointFilesBlobUpload)
 	require.Equal(t, "*.oaiusercontent.com", blob.Host)
 	require.True(t, blob.HostFromResponse, "文件 PUT 的主机必须取自服务端响应")
-	require.NoError(t, officialCodexWorkspaceRoutingGate(
-		codexGateOtherReleaseMode(mode), newOfficialOpenAIHTTPTestAccount(codexGateForwardAccountID),
-		officialCodexEndpointResponsesHTTP,
-	), "对照：另一槽位没有 WorkspaceRouting 节，闸门恒放行")
+	if other, ok := codexGateControlReleaseMode(t, mode); ok {
+		require.NoError(t, officialCodexWorkspaceRoutingGate(
+			other, newOfficialOpenAIHTTPTestAccount(codexGateForwardAccountID),
+			officialCodexEndpointResponsesHTTP,
+		), "对照：另一槽位没有 WorkspaceRouting 节，闸门恒放行")
+	}
 	resetOfficialCodexWorkspaceRoutingResults(t)
 
 	files := &codexGateFileResponder{

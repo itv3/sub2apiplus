@@ -389,6 +389,13 @@ func LoadEmbeddedSinkCatalog() (SinkCatalog, error) {
 	if err != nil {
 		return SinkCatalog{}, err
 	}
+	retirements, err := defaultReleaseRouteRetirements()
+	if err != nil {
+		return SinkCatalog{}, err
+	}
+	if err := validateReleaseRouteRetirementsUsed(retirements, inputs); err != nil {
+		return SinkCatalog{}, err
+	}
 	return NewSinkCatalog(inputs)
 }
 

@@ -2,6 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -181,7 +184,9 @@ func withOfficialCodexLegacySyntheticProfile(
 // 在端点解析处失败关闭（由晋升后门禁覆盖）。既有 legacy compact 用例验证的是“画像声明
 // compact 端点时”的转发、探针与改写行为，改为在仍声明该端点的槽位上运行：候选期是
 // Active（与改动前相同），晋升后是 Previous 中的旧画像（回滚目标）。两个槽位都不再声明时
-// 直接失败：legacy compact 代码路径与这些用例应一并退役，不能静默跳过。
+// 不能静默跳过：只有 officialegress 发布退役清单正式登记了该 route（见
+// officialLegacyCompactReleaseRetired），这些成功路径用例才随退役跳过，失败关闭由发布判定与
+// 路由退役用例覆盖；没有退役登记时直接失败。
 func officialCodexLegacyCompactProfileMode(t *testing.T) string {
 	t.Helper()
 	for _, mode := range officialCodexFormalModes {
@@ -191,8 +196,46 @@ func officialCodexLegacyCompactProfileMode(t *testing.T) string {
 			}
 		}
 	}
+	if officialLegacyCompactReleaseRetired(t) {
+		t.Skip("legacy compact 已按 officialegress 发布退役清单退役：正式目录的 Active/Previous 都不再声明该端点，" +
+			"官方出站 compact 成功路径不可达；入站失败关闭由发布判定用例覆盖，路由退役由 officialegress 用例覆盖")
+	}
 	t.Fatal("正式目录的 Active/Previous 都不再声明 legacy compact 端点：legacy compact 相关用例应随该端点的代码路径一并退役")
 	return ""
+}
+
+// officialLegacyCompactReleaseRetired 判断 legacy compact 是否已正式发布退役：officialegress 的
+// catalogdata/release-route-retirements.json 登记了 POST chatgpt.com /backend-api/codex/responses/compact
+// （端点 responses_compact），且正式目录的 Active/Previous 都不再声明该端点。测试侧独立读取清单，不调用被测包。
+func officialLegacyCompactReleaseRetired(t *testing.T) bool {
+	t.Helper()
+	for _, mode := range officialCodexFormalModes {
+		for _, endpoint := range officialCodexFormalExecutableProfile(t, mode).Endpoints() {
+			if endpoint.ID == officialCodexEndpointResponsesCompact {
+				return false
+			}
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "officialegress", "catalogdata", "release-route-retirements.json"))
+	require.NoError(t, err)
+	var manifest struct {
+		Routes []struct {
+			Method     string `json:"method"`
+			Host       string `json:"host"`
+			Path       string `json:"path"`
+			Protocol   string `json:"protocol"`
+			EndpointID string `json:"endpoint_id"`
+		} `json:"routes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &manifest))
+	for _, route := range manifest.Routes {
+		if route.Method == http.MethodPost && route.Host == "chatgpt.com" &&
+			route.Path == "/backend-api/codex/responses/compact" && route.Protocol == "http" &&
+			route.EndpointID == officialCodexEndpointResponsesCompact {
+			return true
+		}
+	}
+	return false
 }
 
 // newOfficialEgressTestRuntimeForMode 与测试 runtime 工厂的构造相同（正式 Guard 配置、生产

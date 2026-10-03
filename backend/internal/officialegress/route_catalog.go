@@ -71,6 +71,10 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 	if err != nil {
 		return OfficialRouteCatalog{}, err
 	}
+	retirements, err := defaultReleaseRouteRetirements()
+	if err != nil {
+		return OfficialRouteCatalog{}, err
+	}
 	endpointBindings := make([]EndpointBindingCatalog, 0, 2)
 	var claudeProfile claudeFWGProfile
 	if sinkCatalogHasClaudeProfile(sinks) {
@@ -151,6 +155,10 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 					}
 					binding = candidate
 					found = true
+				}
+				if !found && retirements.retires(route) {
+					// 发布退役 route：不登记运行条目，执行器解析端点时失败关闭。
+					continue
 				}
 				if !found {
 					return OfficialRouteCatalog{}, fmt.Errorf(

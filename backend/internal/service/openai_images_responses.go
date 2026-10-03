@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -367,6 +368,9 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 		return nil, fmt.Errorf("prompt is required")
 	}
 
+	if len(parsed.InputImageFileIDs) > 0 {
+		return nil, fmt.Errorf("images[].file_id is not supported by the Responses image tool path")
+	}
 	inputImages := make([]string, 0, len(parsed.InputImageURLs)+len(parsed.Uploads))
 	for _, imageURL := range parsed.InputImageURLs {
 		if trimmed := strings.TrimSpace(imageURL); trimmed != "" {
@@ -496,9 +500,26 @@ func buildOpenAICodexImagesRequestBody(
 		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)
 	}
 
-	inputImages := make([]string, 0, len(parsed.InputImageURLs)+len(parsed.Uploads))
-	for _, imageURL := range parsed.InputImageURLs {
-		trimmed := strings.TrimSpace(imageURL)
+	// 画像 ImageGeneration 节（较新版本）：background 按是否要求透明取两值之一，编辑可引用会话 file-backed
+	// 图片；节缺省即旧逻辑——background 原样透传、编辑只收 image_url。
+	imageSection := officialCodexOptionalSectionsForMode(mode).ImageGeneration
+	if len(parsed.InputImageFileIDs) > 0 && !openAICodexImagesAllowFileID(mode) {
+		return nil, errors.New(openAIImagesFileIDUnsupportedMessage)
+	}
+	refs := parsed.InputImageRefs
+	if len(refs) == 0 {
+		// 未经 JSON 解析构造的请求（multipart、探针与测试）只有 InputImageURLs。
+		for _, imageURL := range parsed.InputImageURLs {
+			refs = append(refs, OpenAIImageInputRef{ImageURL: imageURL})
+		}
+	}
+	images := make([]map[string]any, 0, len(refs)+len(parsed.Uploads))
+	for _, ref := range refs {
+		if fileID := strings.TrimSpace(ref.FileID); fileID != "" {
+			images = append(images, map[string]any{"file_id": fileID})
+			continue
+		}
+		trimmed := strings.TrimSpace(ref.ImageURL)
 		if trimmed == "" {
 			continue
 		}
@@ -507,16 +528,16 @@ func buildOpenAICodexImagesRequestBody(
 		if !strings.HasPrefix(strings.ToLower(trimmed), "data:") {
 			return nil, fmt.Errorf("Codex image edit only accepts data URL inputs")
 		}
-		inputImages = append(inputImages, trimmed)
+		images = append(images, map[string]any{"image_url": trimmed})
 	}
 	for _, upload := range parsed.Uploads {
 		dataURL, err := openAIImageUploadToDataURL(upload)
 		if err != nil {
 			return nil, err
 		}
-		inputImages = append(inputImages, dataURL)
+		images = append(images, map[string]any{"image_url": dataURL})
 	}
-	if parsed.IsEdits() && len(inputImages) == 0 {
+	if parsed.IsEdits() && len(images) == 0 {
 		return nil, fmt.Errorf("image input is required")
 	}
 
@@ -525,17 +546,21 @@ func buildOpenAICodexImagesRequestBody(
 		"model":  model,
 	}
 	if parsed.IsEdits() {
-		images := make([]map[string]any, 0, len(inputImages))
-		for _, imageURL := range inputImages {
-			images = append(images, map[string]any{"image_url": imageURL})
-		}
 		payload["images"] = images
+	}
+	background := strings.TrimSpace(parsed.Background)
+	if imageSection != nil {
+		if strings.EqualFold(background, imageSection.TransparentBackground) {
+			background = imageSection.TransparentBackground
+		} else {
+			background = imageSection.DefaultBackground
+		}
 	}
 	for _, field := range []struct {
 		name  string
 		value string
 	}{
-		{name: "background", value: parsed.Background},
+		{name: "background", value: background},
 		{name: "quality", value: parsed.Quality},
 		{name: "size", value: parsed.Size},
 	} {
@@ -550,6 +575,12 @@ func buildOpenAICodexImagesRequestBody(
 		nil,
 		nil,
 	)
+}
+
+// openAICodexImagesAllowFileID 判定 mode 对应 release 画像是否允许编辑 images[] 引用会话 file_id。
+func openAICodexImagesAllowFileID(mode string) bool {
+	section := officialCodexOptionalSectionsForMode(mode).ImageGeneration
+	return section != nil && slices.Contains(section.EditImageReferences, "file_id")
 }
 
 // buildOpenAICodexImagesRequest 直接执行端点画像：URL、方法、Host、header 闭包和
@@ -2091,6 +2122,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		account.Type,
 		len(parsed.Uploads),
 	)
+	if len(parsed.InputImageFileIDs) > 0 && !openAICodexImagesAllowFileID(releaseMode) {
+		return nil, rejectOpenAIImagesFileIDReferences(c)
+	}
 	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed, releaseMode)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)

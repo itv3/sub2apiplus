@@ -728,7 +728,11 @@ func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 		)
 	}
 	// 并集覆盖二：每条 runtime-bindable route 在两个 mode 的并集中至少有一个 binding，
-	// 零匹配只能出现在“另一 mode 已承载该 route”的单侧。
+	// 零匹配只能出现在“另一 mode 已承载该 route”的单侧；发布退役 route 两个 mode 都不得有 binding。
+	retirements, retireErr := defaultReleaseRouteRetirements()
+	if retireErr != nil {
+		t.Fatal(retireErr)
+	}
 	for _, binding := range sinks {
 		for _, route := range binding.Routes() {
 			physicalID, _, ok := physical.ResolveRoute(route)
@@ -738,6 +742,12 @@ func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 			key := EndpointBindingKey{
 				SinkID: binding.ID(), Purpose: binding.Purpose(),
 				PhysicalRouteID: physicalID, Protocol: route.Protocol,
+			}
+			if retirements.retires(route) {
+				if boundRoutes[key.identity()] {
+					t.Fatalf("发布退役的 Sink %s route %s 仍在 Active/Previous 中生成 binding", binding.ID(), physicalID)
+				}
+				continue
 			}
 			if !boundRoutes[key.identity()] {
 				t.Fatalf("Sink %s 的 route %s 在 Active/Previous 中均无 binding", binding.ID(), physicalID)

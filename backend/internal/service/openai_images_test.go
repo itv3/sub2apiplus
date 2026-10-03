@@ -1957,6 +1957,9 @@ func TestBuildOpenAIImagesResponsesRequest_DoesNotPassNForDallE3(t *testing.T) {
 }
 
 func TestBuildOpenAICodexImagesRequestBody_GenerationOmitsAbsentOptionalFields(t *testing.T) {
+	// 未声明 ImageGeneration 节的画像不补 background；声明该节时的取值见
+	// TestBuildOpenAICodexImagesRequestBodyFollowsImageGenerationSection。
+	withOfficialCodexLegacyImageGenerationProfile(t)
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,
 		Model:    "dall-e-3",
@@ -1971,6 +1974,7 @@ func TestBuildOpenAICodexImagesRequestBody_GenerationOmitsAbsentOptionalFields(t
 }
 
 func TestBuildOpenAICodexImagesRequestBody_EditStartsWithDataURLImages(t *testing.T) {
+	withOfficialCodexLegacyImageGenerationProfile(t)
 	parsed := &OpenAIImagesRequest{
 		Endpoint:      openAIImagesEditsEndpoint,
 		Model:         "gpt-image-2",

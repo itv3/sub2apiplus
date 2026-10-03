@@ -109,6 +109,10 @@ func TestChangeset1BReceiptArtifactsReplayProductionExecutor(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(string(testCase.sinkID), func(t *testing.T) {
+			if testCase.endpointID == officialCodexEndpointResponsesCompact && officialLegacyCompactReleaseRetired(t) {
+				t.Skip("legacy compact 已按 officialegress 发布退役清单退役：当前发布都不声明 responses_compact，" +
+					"后台 compact 测试的历史收据不再用当前发布重放；收据与制品仍由 officialegress 的 MigrationReceipt 校验复核")
+			}
 			wireRaw, verificationRaw := replayChangeset1BReceiptArtifact(
 				t,
 				runtimeForEndpoint(t, testCase.endpointID),

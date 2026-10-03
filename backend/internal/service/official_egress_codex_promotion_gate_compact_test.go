@@ -56,7 +56,10 @@ func codexGateRequireLegacyCompactForwardFailsClosed(t *testing.T, mode string) 
 		"目标槽位下显式 legacy compact 请求不得产生任何出站（不得回退到 /responses 或其他端点）")
 	require.Empty(t, targetServer.clientHellos(), "失败关闭发生在建立上游连接之前")
 
-	other := codexGateOtherReleaseMode(mode)
+	other, ok := codexGateControlReleaseMode(t, mode)
+	if !ok {
+		return
+	}
 	controlServer := startCodexGateWireServer(t, codexGateCompactResponse)
 	_, _, _ = codexGateForwardResponses(
 		t, other, controlServer,

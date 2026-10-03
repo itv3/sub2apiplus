@@ -1,0 +1,50 @@
+{
+  "base_commit": "1b710a67559516f35350c6f5eec527cdc0d17be3",
+  "changed_path_count": 4,
+  "current_commit": "0300f5b58c0ee0a53381fadedd629cd918b5dad6",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5359,
+  "frozen_path_count": 1929,
+  "identity_sha256": "b0d40104a67b9a4016bfaf87ca88cb6bdf3036dfaeb17c8c57f36ef2931534dd",
+  "issued_at_utc": "2026-10-03T13:18:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-candidate-compact-retirement-tests-r1-20261003-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_1b_receipt_artifacts_test.go",
+      "predecessor_sha256s": [
+        "58f0e94507f9921c32b5e3534f6e1e7f9657f5adf129d10659ca5582f46e0a70"
+      ],
+      "reason": "0.160.0 VC-4 候选：legacy compact 正式发布退役后官方出站 compact 成功路径用例随退役跳过、失败关闭两槽位核对 path=backend/internal/service/official_egress_1b_receipt_artifacts_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6e8fd86a784eae05b2937429ab42ad67e589b66eb4bed75374a904f617df3066"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalog_route_retirements.go",
+    "backend/internal/service/official_egress_codex_synthetic_profile_test.go",
+    "backend/internal/service/openai_legacy_compact_release_gate_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

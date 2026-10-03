@@ -347,6 +347,10 @@ func TestResponsesCatalogOnlyContainsReviewedExactSubpaths(t *testing.T) {
 	if !ok {
 		t.Fatal("缺少 Responses forward SinkBinding")
 	}
+	retirements, err := defaultReleaseRouteRetirements()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{
 		"/backend-api/codex/responses",
 		"/backend-api/codex/responses/compact",
@@ -355,6 +359,17 @@ func TestResponsesCatalogOnlyContainsReviewedExactSubpaths(t *testing.T) {
 		resolved, ok := DefaultOfficialRouteCatalog().ResolveBinding(
 			http.MethodPost, target, WireProtocolHTTP, binding,
 		)
+		retired := retirements.retires(CatalogRoute{
+			Key:      RouteKey{Method: http.MethodPost, Host: "chatgpt.com", Path: path, Purpose: binding.Purpose()},
+			Protocol: WireProtocolHTTP,
+		})
+		if retired {
+			// 发布退役（Active/Previous 都不声明该端点）：受审子路径仍留在静态 binding，但不得解析出任何端点。
+			if ok {
+				t.Fatalf("发布退役的 Responses route 仍可解析：path=%s route=%+v", path, resolved)
+			}
+			continue
+		}
 		if !ok || resolved.EndpointID == "" {
 			t.Fatalf("受审 Responses route 未解析：path=%s route=%+v", path, resolved)
 		}

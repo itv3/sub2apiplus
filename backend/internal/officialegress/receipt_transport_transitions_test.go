@@ -89,6 +89,10 @@ func TestEveryCodexMigrationClaimHasReleaseScopedTransport(t *testing.T) {
 		}
 		releases[release.ReleaseDigest()] = release
 	}
+	retirements, err := defaultReleaseRouteRetirements()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, binding := range DefaultSinkCatalog().Bindings() {
 		if binding.Persona() != PersonaCodexCLI || binding.migrationReceipt == nil {
 			continue
@@ -101,6 +105,13 @@ func TestEveryCodexMigrationClaimHasReleaseScopedTransport(t *testing.T) {
 						expected[releaseDigest] = endpoint.TransportID
 					}
 				}
+			}
+			if len(expected) == 0 && retirements.retires(claim.route) {
+				// 发布退役 route 不进入任何 Bundle，历史收据声明不得绑定 transport。
+				if len(claim.transportIDsByRelease) != 0 {
+					t.Fatalf("发布退役 route 的 MigrationReceipt 仍绑定 transport：%s/%s", binding.ID(), claim.evidenceID)
+				}
+				continue
 			}
 			if len(expected) == 0 || len(claim.transportIDsByRelease) != len(expected) {
 				t.Fatalf(

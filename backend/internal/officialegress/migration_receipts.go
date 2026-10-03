@@ -147,6 +147,10 @@ func bindMigrationReceiptTransports(
 		}
 		releases = append(releases, release)
 	}
+	retirements, err := releaseRouteRetirementsFor(releaseCatalog)
+	if err != nil {
+		return nil, err
+	}
 	for inputIndex := range inputs {
 		input := &inputs[inputIndex]
 		if input.Persona != PersonaCodexCLI || input.migrationReceipt == nil {
@@ -175,6 +179,10 @@ func bindMigrationReceiptTransports(
 					)
 				}
 				transportIDs[release.ReleaseDigest()] = transportID
+			}
+			if len(transportIDs) == 0 && retirements.retires(claim.route) {
+				// 发布退役 route 不进入任何 Bundle；不登记 transport，Guard 因找不到 token 所属发布的 transport 而失败关闭。
+				continue
 			}
 			if len(transportIDs) == 0 {
 				return nil, fmt.Errorf(
@@ -329,6 +337,17 @@ func validateMigrationRouteEvidence(
 ) error {
 	switch input.Persona {
 	case PersonaCodexCLI:
+		retirements, err := defaultReleaseRouteRetirements()
+		if err != nil {
+			return err
+		}
+		if retiredEndpointID, retired := retirements.retiredEndpointID(route); retired {
+			// 发布退役 route：当前 Active/Previous 已无该端点，只核对历史收据证明的就是登记的端点。
+			if proof.EvidenceKind != "codex_endpoint" || proof.EvidenceID != retiredEndpointID {
+				return fmt.Errorf("发布退役 route 的历史证据与登记端点不一致: %s", route.Key)
+			}
+			return nil
+		}
 		binding, ok := resolveReceiptEndpointBinding(input, route)
 		if !ok || proof.EvidenceKind != "codex_endpoint" || proof.EvidenceID != binding.EndpointID() {
 			return fmt.Errorf("Codex route 缺少匹配的 ProfileSpec endpoint: %s", route.Key)

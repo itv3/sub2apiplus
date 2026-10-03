@@ -36,6 +36,8 @@ func withAllOptionalSections(t *testing.T) (SnapshotDoc, SnapshotDoc) {
 	extended.TurnState = json.RawMessage(`{"ResetOnAccountOwnerChange":true}`)
 	extended.WebSocketRetry = json.RawMessage(`{"RetryableErrorCodes":["slow_down"],"RetryBudget":5,"FallbackTransport":"http"}`)
 	extended.WebSocketContinuation = json.RawMessage(`{"ResetOn":["account_owner","auth_revision"]}`)
+	extended.ReasoningEffort = json.RawMessage(`{"CustomNumericSerialization":"u64_integer"}`)
+	extended.ImageGeneration = json.RawMessage(`{"DefaultBackground":"opaque","TransparentBackground":"transparent","EditImageReferences":["file_id","image_url"]}`)
 	return base, extended
 }
 
