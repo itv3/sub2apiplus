@@ -138,7 +138,9 @@ func TestNormalizeDerivedOfficialOpenAIReasoningSerializesNumericEffort(t *testi
 		payload := map[string]any{"reasoning": map[string]any{"effort": effort}}
 		_, err := normalizeDerivedOfficialOpenAIReasoning(payload, officialOpenAIReasoningDefaults{NumericEffortAsInteger: integer})
 		require.NoError(t, err)
-		return payload["reasoning"].(map[string]any)["effort"]
+		reasoning, ok := payload["reasoning"].(map[string]any)
+		require.True(t, ok, "reasoning 必须保持对象形态")
+		return reasoning["effort"]
 	}
 	require.Equal(t, json.Number("3"), derive("3", true))
 	require.Equal(t, json.Number("3"), derive(json.Number("3"), true))

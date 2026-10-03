@@ -131,7 +131,9 @@ func TestReleaseRouteRetirementManifestRejectsInvalidDocuments(t *testing.T) {
 		}
 	}
 	route := func(document map[string]any) map[string]any {
-		return document["routes"].([]any)[0].(map[string]any)
+		routes, _ := document["routes"].([]any)
+		first, _ := routes[0].(map[string]any)
+		return first
 	}
 	encode := func(t *testing.T, document map[string]any) []byte {
 		t.Helper()
