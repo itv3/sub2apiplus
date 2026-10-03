@@ -8343,7 +8343,11 @@ def _reconciled_watchdog_abort(
     action_failure = _watchdog_action_failure(
         prior_state, prior_dir, campaign_dir, prior_manifest=prior_manifest, label=label
     )
-    reservations = _reservations_in_run_window(campaign_dir, float(prior_state.get("started_at_epoch", 0.0)))
+    reservations = _reservations_in_run_window(
+        campaign_dir,
+        float(prior_state.get("started_at_epoch", 0.0)),
+        _prior_run_terminal_epoch(prior_state),
+    )
     if reservations:
         campaign_id = str(prior_state.get("campaign_id", ""))
         attempts = [
@@ -8599,7 +8603,11 @@ def _require_failed_parent_reconciled(
     if campaign_dir is None:
         raise SupervisorError(f"{label}：核验父 run {prior_dir.name} 的对账收据需要 Campaign 目录。")
     resolved_campaign = Path(campaign_dir).resolve(strict=True)
-    reservations = _reservations_in_run_window(resolved_campaign, float(prior_state.get("started_at_epoch", 0.0)))
+    reservations = _reservations_in_run_window(
+        resolved_campaign,
+        float(prior_state.get("started_at_epoch", 0.0)),
+        _prior_run_terminal_epoch(prior_state),
+    )
     if reservations:
         for reserved_candidate_id, _subject, attempt_root in reservations:
             verify_attempt_reconciliation_binding(
@@ -9619,12 +9627,15 @@ def _validate_batched_environment_redispatch_successor(
             return _protocol_reject(f"有效失败类 {effective_class} 不可逐字重派")
         # B4-1 改法 8（草表 D-03）：reservation 之后的失败属 attempt 中断——reconcile-supervisor-run 拒绝这类 run，
         # 本协议（"reservation 前"）让位给恢复链协议（按 attempt 对账收据承接），不再形态相符即失败关闭；没有
-        # Campaign 目录时无法判断预约，保持原判定。
+        # Campaign 目录时无法判断预约，保持原判定。窗口在前序 run 终态时刻截止：后继重派自己产生的预约
+        # 不属于前序 run，不能回头把已承接的逐字重派改判为 attempt 中断。
         if (
             campaign_dir is not None
             and Path(campaign_dir).is_dir()
             and _reservations_in_run_window(
-                Path(campaign_dir).resolve(strict=True), float(prior_state.get("started_at_epoch", 0.0))
+                Path(campaign_dir).resolve(strict=True),
+                float(prior_state.get("started_at_epoch", 0.0)),
+                _prior_run_terminal_epoch(prior_state),
             )
         ):
             return _protocol_reject("reservation 之后的失败属 attempt 中断，交给恢复链协议")
@@ -9859,9 +9870,22 @@ def _capture_summary_settled(summary_path: Path) -> bool:
     return payload.get("status") == "awaiting_receipts" and not _capture_results_have_failure(payload.get("results"))
 
 
+def _prior_run_terminal_epoch(prior_state: Mapping[str, Any]) -> float | None:
+    """父 run 进入终态的时刻（``state.json`` 的 ``terminal_at_epoch``）；缺失或非法时返回 None。
+
+    回头核验历史后继链时，用它给"父 run 期间"的预约窗口封顶；拿不到时调用方退回只按开始时刻判定。
+    """
+
+    value = prior_state.get("terminal_at_epoch")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return None
+    return float(value)
+
+
 def _reservations_in_run_window(
     campaign_dir: Path,
     started_at_epoch: float,
+    terminal_at_epoch: float | None = None,
 ) -> list[tuple[str | None, str, Path]]:
     """父 run 期间发布、且未完整收口的全部 reservation（B4-1 改法 3；只读，与 reconciler 父 run 对账同判据）。
 
@@ -9869,9 +9893,18 @@ def _reservations_in_run_window(
     ``recovery/ar<k>`` 的段预约：``started_at_utc`` 不早于父 run 开始时刻即在窗口内；采集已完整收口
     （等待封存且无失败 Job）的 attempt／段不算中断，不计入。返回 ``(candidate_id, subject, root)``，
     官方侧 candidate_id 为 None，恢复段 subject 为 ``<id>:ar<k>``。
+
+    给出 ``terminal_at_epoch`` 时窗口在父 run 终态时刻截止：之后发布的预约属于后继 run。回头核验较早的
+    后继链时必须封顶，否则失败批次 N 的逐字重派 N+1 一旦自己产生预约，就会被算回 N 的 run 期间，把当时已按
+    "无预约"对账通过的 N→N+1 改判为 attempt 中断（E5 VC-5 批次 14→15→16 实证：16 因此无法派发）。
     """
 
     started = datetime.fromtimestamp(float(started_at_epoch), tz=timezone.utc)
+    terminal = (
+        datetime.fromtimestamp(float(terminal_at_epoch), tz=timezone.utc)
+        if terminal_at_epoch is not None
+        else None
+    )
     campaign_dir = Path(campaign_dir)
 
     def begun_in_window(reservation_path: Path) -> bool:
@@ -9884,7 +9917,7 @@ def _reservations_in_run_window(
             begun = datetime.fromisoformat(begun_raw.replace("Z", "+00:00"))
         except ValueError:
             return False
-        return begun.tzinfo is not None and begun >= started
+        return begun.tzinfo is not None and begun >= started and (terminal is None or begun <= terminal)
 
     scopes: list[tuple[str | None, Path]] = [(None, campaign_dir / "official" / "attempts")]
     candidates_root = campaign_dir / "candidates"
