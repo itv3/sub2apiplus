@@ -28,6 +28,23 @@ type failingOpenAIImageWriter struct {
 	writes    int
 }
 
+// activeCodexImageBackgroundFieldForTest 返回 OAuth 生图请求体里 background 字段的期望片段（带尾逗号，不发时为空串）。
+// 期望按 Active 画像的结构事实推导，不写死版本：画像声明 ImageGeneration 节时，未要求透明背景的请求一律定型为
+// 该节的 DefaultBackground；未声明时原样透传入站值、为空则不发。候选态（Active 未声明该节）与晋升后（Active 声明）
+// 两种状态下用例原意不变；透明背景分支由晋升门禁的判别式用例覆盖，这里只接受非透明入站值。
+func activeCodexImageBackgroundFieldForTest(t *testing.T, inbound string) string {
+	t.Helper()
+	background := strings.TrimSpace(inbound)
+	if section := officialCodexOptionalSectionsForMode(officialClientProfileModeActive).ImageGeneration; section != nil {
+		require.False(t, strings.EqualFold(background, section.TransparentBackground), "本辅助函数只覆盖非透明背景入站")
+		background = section.DefaultBackground
+	}
+	if background == "" {
+		return ""
+	}
+	return `"background":"` + background + `",`
+}
+
 func requireOpenAIImageH1Rule(
 	t *testing.T,
 	profile *tlsfingerprint.Profile,
@@ -840,7 +857,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesActiveCodexGenerationsContra
 		"Version", "Authorization", "Chatgpt-Account-Id", "Content-Type", "Accept", "Originator", "User-Agent",
 	}, headerNames)
 
-	require.Equal(t, `{"prompt":"draw a cat","background":"auto","model":"gpt-image-2","quality":"high","size":"1024x1024"}`, string(upstream.lastBody))
+	require.Equal(t, `{"prompt":"draw a cat",`+activeCodexImageBackgroundFieldForTest(t, "auto")+`"model":"gpt-image-2","quality":"high","size":"1024x1024"}`, string(upstream.lastBody))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "n").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
 	imageRule := requireOpenAIImageH1Rule(
@@ -1825,7 +1842,8 @@ func TestOpenAIGatewayServiceForwardImages_OAuthEditsMultipartUsesCodexJSONEndpo
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	require.Empty(t, upstream.lastReq.Header.Get("Content-Encoding"))
 	require.Equal(t,
-		`{"images":[{"image_url":"data:image/png;base64,cG5nLWltYWdlLWNvbnRlbnQ="}],"prompt":"replace background with aurora","model":"gpt-image-2","quality":"high"}`,
+		`{"images":[{"image_url":"data:image/png;base64,cG5nLWltYWdlLWNvbnRlbnQ="}],"prompt":"replace background with aurora",`+
+			activeCodexImageBackgroundFieldForTest(t, "")+`"model":"gpt-image-2","quality":"high"}`,
 		string(upstream.lastBody),
 	)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "n").Exists())

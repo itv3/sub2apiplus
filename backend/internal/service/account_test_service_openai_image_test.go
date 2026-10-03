@@ -47,7 +47,7 @@ func TestAccountTestService_OpenAIImageOAuthUsesActiveCodexNativeEndpoint(t *tes
 	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", upstream.lastReq.URL.String())
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
-	require.Equal(t, `{"prompt":"draw a cat","model":"gpt-image-2"}`, string(upstream.lastBody))
+	require.Equal(t, `{"prompt":"draw a cat",`+activeCodexImageBackgroundFieldForTest(t, "")+`"model":"gpt-image-2"}`, string(upstream.lastBody))
 	require.NotNil(t, upstream.lastTLSProfile)
 	require.Contains(t, rec.Body.String(), "Calling Codex /images/generations")
 	require.Contains(t, rec.Body.String(), "data:image/png;base64,aGVsbG8=")
