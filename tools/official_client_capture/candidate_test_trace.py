@@ -133,8 +133,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 保留），测试、事实宇宙与源码快照不变，VC-2／VC-4 定稿后按承接收据修订。
 # 2026-10-03（E5-01）：目标版本改为 0.160.0，映射文件由 0.159.2 版改名并逐字替换版本号（唯一变化是 codex_version），
 # 测试、事实宇宙与源码快照不变。
+# 2026-10-03（0.160.0 VC-4 候选实现）：候选按画像 ReasoningEffort 节定型数字推理档位，改动已登记的
+# `official_egress_openai_http.go` 与 `official_egress_openai_turn_metadata_section.go`；映射只重绑这两份源码快照，
+# 不改变测试、事实宇宙或规则语义（PROTO-002、EP-002、EP-019 按网关口径 inherit，不新增事实）。
 FROZEN_MAPPING_SHA256 = (
-    "43b0c4bdbd4eea0d6feec493e2a59e0ecb666ce81b24430da1f01c0fb04c4f4f"
+    "3ad0a8d6e0271c320feabf0186439264333f4ef1be7868a494c18bbcbed4b66f"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -200,8 +203,11 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-10-03（E5-01）：目标版本改为 0.160.0，断言画像由 0.159.2 版改名并逐字替换版本号（codex_version、官方原始字节
 # 描述、UA 前后缀、client_version、正则转义版本号与 A12／A15 描述共 13 处；“0.157.0 起”表述保留），规则、场景与判据
 # 载荷不变。
+# 2026-10-03（0.160.0 VC-4 候选实现）：断言画像换成本轮 VC-2 批准件（Formal Campaign 的
+# classification/approved/assertion-profile.json 逐字节）：追加 BODY-006 数字档位两条、EP-022 生图背景与 file_id
+# 编辑四条判据，EP-019 的 A12 路径判据改为官方五条允许集合，去掉“0.157.0 起”表述。
 FROZEN_PROFILE_SHA256 = (
-    "c31b647cf025fe23de311d3634f0577f04fe0f0c684beae20b1b2837921578c7"
+    "709e48f0efc39bc527ad8ced855f134fb37bf35be5457f9f5a1781bdad32cf6b"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

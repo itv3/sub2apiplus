@@ -145,7 +145,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+          "sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
@@ -193,7 +193,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+          "sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
@@ -409,7 +409,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+          "sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -516,7 +516,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+          "sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
@@ -552,11 +552,11 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+          "sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
-          "sha256": "1001e5271add33f384822c72e4ea707e2bcba51a3c95297c6d84943fa4a912d1"
+          "sha256": "09d4c36eef91e534fdc48b5db4dce3d4c69e96daa20765b7943c6cf038ae4d6c"
         }
       ],
       "facts": [

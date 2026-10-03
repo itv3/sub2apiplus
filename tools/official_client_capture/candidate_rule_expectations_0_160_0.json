@@ -441,7 +441,7 @@
               "host"
             ]
           },
-          "description": "models 默认头线序与官方 0.160.0 原始字节一致（0.157.0 起 accept 位于 originator、user-agent 之后）",
+          "description": "models 默认头线序与官方 0.160.0 原始字节一致（accept 位于 originator、user-agent 之后）",
           "id": "models-order",
           "select": {
             "record_type": "http_request",
@@ -1089,7 +1089,7 @@
           }
         }
       ],
-      "description": "Client 默认头为 originator、user-agent 和条件 residency；0.157.0 起由 Codex 传输层在 reqwest 补默认 accept 之前合并，无显式 accept 的端点 accept 位于默认头之后",
+      "description": "Client 默认头为 originator、user-agent 和条件 residency；由 Codex 传输层在 reqwest 补默认 accept 之前合并，无显式 accept 的端点 accept 位于默认头之后",
       "rule_id": "SPEC-HDR-002",
       "scenario_ids": [
         "A04",
@@ -2400,13 +2400,73 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.reasoning.effort",
+            "value": "num:3"
+          },
+          "description": "0.159 起可按 u64 解析的自定义 reasoning.effort 以 JSON 整数发出（HTTP Responses）",
+          "id": "numeric-effort-http-integer",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.reasoning_effort_config",
+                "value": "numeric"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.reasoning.effort",
+            "value": "num:3"
+          },
+          "description": "WS response.create 与 HTTP 同一结构体，数字推理等级同样以 JSON 整数发出",
+          "id": "numeric-effort-ws-integer",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.reasoning_effort_config",
+                "value": "numeric"
+              },
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
         }
       ],
       "description": "HTTP Responses 的 Lite/非 Lite 字段与 Option 省略规则",
       "rule_id": "SPEC-BODY-006",
       "scenario_ids": [
         "A03",
-        "A04"
+        "A04",
+        "A05"
       ]
     },
     {
@@ -2522,7 +2582,7 @@
           }
         }
       ],
-      "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；0.157.0 起另带常量 mcp_attribution（guardian 审阅请求同样写入）",
+      "description": "普通会话每个 Responses 请求的 client_metadata 携带 guardian_credits_requested=\"true\"；另带常量 mcp_attribution（guardian 审阅请求同样写入）",
       "rule_id": "SPEC-BODY-008",
       "scenario_ids": [
         "A03",
@@ -3181,7 +3241,7 @@
               "content-length"
             ]
           },
-          "description": "两次 alpha-search 使用相同精确 Header 线序（0.157.0 起 accept 位于 originator、user-agent 之后）",
+          "description": "两次 alpha-search 使用相同精确 Header 线序（accept 位于 originator、user-agent 之后）",
           "id": "search-header-order",
           "select": {
             "record_type": "http_request",
@@ -3242,16 +3302,11 @@
       "checks": [
         {
           "assertion": {
-            "operator": "distinct_values_equal",
+            "operator": "all_match",
             "path": "data.path",
-            "value": [
-              "/backend-api/wham/accounts/check",
-              "/backend-api/wham/usage",
-              "/backend-api/wham/rate-limit-reset-credits",
-              "/backend-api/wham/settings/user"
-            ]
+            "value": "^/backend-api/wham/(?:accounts/check|usage|rate-limit-reset-credits|settings/user|security-setup)$"
           },
-          "description": "A12 的 WHAM GET 路径全集与官方 0.160.0 一致（含 accounts/check）且无额外 WHAM GET",
+          "description": "A12 的 WHAM GET 只出现官方路径集合内的五条（accounts/check、usage、rate-limit-reset-credits、settings/user，以及 TUI 启动与重连时本地预取的 security-setup），无额外 WHAM GET；三条核心路径的出现由各自头序判据核对",
           "id": "wham-get-paths",
           "select": {
             "record_type": "http_request",
@@ -3511,7 +3566,7 @@
             "operator": "count_at_least",
             "value": 1
           },
-          "description": "manual／auto 压缩以普通 Responses 的 compaction_trigger 输入项触发（V2）；0.157.0 起 TUI 压缩走 WS，HTTP 侧按含触发项的 POST 存在性核对",
+          "description": "manual／auto 压缩以普通 Responses 的 compaction_trigger 输入项触发（V2）；TUI 压缩走 WS，HTTP 侧按含触发项的 POST 存在性核对",
           "id": "v2-compaction-trigger",
           "select": {
             "record_type": "http_request",
@@ -3649,7 +3704,7 @@
               "content-length"
             ]
           },
-          "description": "generation 与 edit 的 Header 线序一致且精确（0.157.0 起 accept 位于 originator、user-agent 之后）",
+          "description": "generation 与 edit 的 Header 线序一致且精确（accept 位于 originator、user-agent 之后）",
           "id": "image-header-order",
           "select": {
             "record_type": "http_request",
@@ -3735,6 +3790,104 @@
           "id": "edit-json-data-url",
           "select": {
             "record_type": "image_edit_encoding"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.background",
+            "value": "str:opaque"
+          },
+          "description": "0.158 起生图默认 background=opaque（不再固定 auto）",
+          "id": "generation-background-default-opaque",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/generations"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.image_background_request"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.background",
+            "value": "str:transparent"
+          },
+          "description": "要求透明背景时 background=transparent",
+          "id": "generation-background-transparent",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/generations"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.image_background_request",
+                "value": "transparent"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.body.shape.images._first.file_id",
+            "value": "^str:"
+          },
+          "description": "0.158 起编辑的 images 项可以是会话里 file-backed 图片的 {\"file_id\": …}",
+          "id": "edit-file-id-reference",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/edits"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.image_edit_input",
+                "value": "file_id"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.body.shape.images._first.image_url"
+          },
+          "description": "file_id 编辑项不再附带 image_url",
+          "id": "edit-file-id-without-url",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/edits"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.image_edit_input",
+                "value": "file_id"
+              }
+            ]
           }
         }
       ],
