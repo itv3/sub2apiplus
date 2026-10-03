@@ -1640,8 +1640,9 @@ chmod／chown，即便模式不变，ctime 也会漂移（同 §4.5.3）：只�
 内容不一致仍判 `evidence-integrity`。任何身份或执行合同漂移都不得 seal。
 
 官方 seal 预检遇到两类零命中不当场失败，而是登记为延后项写入门禁收据，交 VC-2 裁决：目标版本整体删除的端点（check 以
-`data.path` 钉死、全部官方观测零出现）；以及按标签选择的取值全部属于弃用集合（基线版本官方侧标签声明有、目标版本官方侧
-已删的取值）的 check。取值未弃用却零命中的仍当场失败，防止掩盖漏标签、漏样本或拼写错误；候选侧不适用延后。
+`data.path` 钉死、全部官方观测零出现）；以及按标签选择的取值全部属于弃用集合（冻结画像所属版本〔画像 `codex_version`〕
+官方侧标签声明有、目标版本官方侧已删的取值；冻结画像按那一版的取值选择，参照不取 Campaign 基线）的 check。取值未弃用
+却零命中的仍当场失败，防止掩盖漏标签、漏样本或拼写错误；候选侧不适用延后。
 
 0.157.0 起 `daemon_auto_start` 默认开启：不带白名单外 CLI 覆盖（`--disable`、`--enable`、`-c`、`--search` 等；白名单只有少数
 `features.*` 与 `tui.fullscreen_transcript`）的 PTY TUI 会拉起常驻 `codex app-server --managed-daemon`，模型请求改由 daemon 发出，

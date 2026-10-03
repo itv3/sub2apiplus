@@ -42583,8 +42583,9 @@ def _retired_official_label_values(
     baseline_version: str,
     target_version: str,
 ) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
-    """基线版本官方侧声明有、目标版本官方侧声明已删的标签取值，以及两份声明摘要（R21）。
+    """参照版本官方侧声明有、目标版本官方侧声明已删的标签取值，以及两份声明摘要（R21）。
 
+    官方 seal 传入的参照版本是冻结画像所属版本（画像 ``codex_version``），见 ``_run_seal_assertion_gate``。
     0.156.1 相对 0.154.0：variant 删去 optional_missing（改为 v2_config_disabled），
     session_header_scope 等只描述 legacy 请求的标签整键删除。
     """
@@ -42607,7 +42608,6 @@ def _run_seal_assertion_gate(
     target_version: str,
     campaign_dir: Path | None = None,
     classification: dict[str, Any] | None = None,
-    baseline_version: str | None = None,
 ) -> dict[str, Any]:
     """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。
 
@@ -42616,7 +42616,8 @@ def _run_seal_assertion_gate(
     - 官方 seal 在 classify 之前，没有批准画像，只能用仓库冻结画像并证明其契约未漂移；
       目标版本整体删除的端点、以及目标版本标签声明弃用的标签取值（R21）在官方证据上
       结构性不可达，按 ``assertion_gate._verify_selector_reachability`` 的条件登记为
-      延后项，由 VC-2 批准画像裁决。
+      延后项，由 VC-2 批准画像裁决。弃用取值以冻结画像所属版本（画像 ``codex_version``）
+      的官方侧标签声明为参照：冻结画像按那一版的取值写选择条件，与 Campaign 基线无关。
     - 候选 seal 在 classify 之后，与 compare／accept 同一权威：本 Campaign 批准并摘要
       绑定的断言画像。继续用仓库冻结画像会把目标版本已删除或改判的基线 check
       （如 legacy compact）强加给候选，候选按目标行为实现后必然无法封存。
@@ -42632,10 +42633,14 @@ def _run_seal_assertion_gate(
         if phase == "official":
             profile = load_acceptance_profile(acceptance_profile_path())
             contract = verify_frozen_contract(profile)
-            if not baseline_version:
-                raise ConfigurationError("官方 seal 断言门禁必须提供 Campaign 基线版本。")
+            # 原先拿 Campaign 基线的声明作参照：基线停在 0.154.0 时与冻结画像（0.145.0）的取值碰巧一致；基线升到
+            # 0.157.0（声明早已删掉 variant=optional_missing）后，冻结画像 SPEC-WS-002 optional-missing-covered
+            # 的选择取值不再算弃用，零命中当场失败（0.160.0 VC-1 seal 预览实测）。
+            profile_version = profile.get("codex_version")
+            if not isinstance(profile_version, str) or not profile_version:
+                raise ConfigurationError("冻结断言画像缺少 codex_version，无法确定弃用标签的参照声明。")
             retired_label_values, label_declaration_sha256 = (
-                _retired_official_label_values(baseline_version, target_version)
+                _retired_official_label_values(profile_version, target_version)
             )
         else:
             if campaign_dir is None or classification is None:
@@ -52023,7 +52028,6 @@ def _seal_capture_attempt(
         target_version=manifest["target_version"],
         campaign_dir=campaign_dir,
         classification=classification,
-        baseline_version=str(manifest.get("baseline_version") or "") or None,
     )
     client_bindings: list[dict[str, Any]] = []
     observed_profile: dict[str, str] | None = None

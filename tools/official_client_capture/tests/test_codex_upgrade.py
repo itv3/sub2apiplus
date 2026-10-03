@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 from unittest import mock
 
+from tools.official_client_capture import assertion_gate
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture.tests import project_ledger_fixture
@@ -15422,6 +15423,44 @@ class CodexUpgradeTest(unittest.TestCase):
         retired_0157, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.157.0")
         retired_0156, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.156.1")
         self.assertEqual(retired_0157, retired_0156)
+
+    def test_official_seal_retired_labels_follow_frozen_profile_version(self) -> None:
+        """官方 seal 的弃用标签以冻结画像所属版本的声明为参照，与 Campaign 基线无关。
+
+        冻结画像仍按 variant=optional_missing 选择 SPEC-WS-002 optional-missing-covered，0.157.0 的声明早已删掉该取值。
+        以 Campaign 基线 0.157.0 作参照时它不算弃用，0.160.0 官方 seal 预览零命中当场失败（修复前的取法）；以冻结画像
+        版本作参照时算弃用，与 0.157.0 一轮（基线 0.154.0）延后的三个 check 一致。
+        """
+
+        profile = codex_upgrade.load_acceptance_profile(codex_upgrade.acceptance_profile_path())
+        reference = profile["codex_version"]
+        self.assertEqual(reference, "0.145.0")
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        stale, _ = codex_upgrade._retired_official_label_values("0.157.0", "0.160.0")
+        self.assertNotIn("optional_missing", stale.get("variant", frozenset()))
+        retired, digests = codex_upgrade._retired_official_label_values(reference, "0.160.0")
+        self.assertIn("optional_missing", retired["variant"])
+        self.assertEqual(retired["session_header_scope"], frozenset({"responses_or_compact"}))
+        self.assertEqual(
+            digests,
+            {
+                "baseline": codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_145_0.json"),
+                "target": codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_160_0.json"),
+            },
+        )
+        pinned = {
+            (rule["rule_id"], check["id"]): assertion_gate._retired_label_pins(check["select"], retired)
+            for rule in profile["rules"]
+            for check in rule["checks"]
+        }
+        self.assertEqual(
+            sorted(key for key, pins in pinned.items() if pins),
+            [
+                ("SPEC-HDR-007", "responses-session-id"),
+                ("SPEC-HDR-007", "responses-thread-id"),
+                ("SPEC-WS-002", "optional-missing-covered"),
+            ],
+        )
 
     def test_plan_rejects_package_helper_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
