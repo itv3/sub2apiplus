@@ -67,6 +67,14 @@ ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS = (
     # 该键仍从 `{"available_count": 0}` 变为含 credits 明细，导致 extra_digest 漂移、
     # 整个 Campaign 被判 environment_contaminated——只要账号被用过就必然复现。
     "codex_reset_credit_snapshot",
+    # 同一配额服务的可用 credits 余额展示快照：重置配额成功后由
+    # `OpenAIQuotaService.CachePostResetSnapshot` 与上面几项一并写回（管理端刷新走
+    # `CacheCreditsSnapshot`），仓库层把它与 `codex_usage_updated_at`、`codex_reset_credit_*`
+    # 同列为调度无关的展示快照（`repository/account_repo.go` 的 `schedulerNeutralExtraKeys`）。
+    # 候选 A12 场景按设计调用重置配额，服务端开始写这个键之后，候选采集每次都会因它判
+    # environment_contaminated（首次实证：十个候选作业全部完成，after 探针只有它漂移）。
+    # 只按服务端常量逐字排除，不用 `codex_*` 之类通配符放宽。
+    "codex_credits_snapshot",
     "privacy_mode",
     "privacy_retry_after",
     "privacy_browser_persona",
@@ -600,6 +608,7 @@ SELECT json_build_object(
                 OR extra_entry.key LIKE 'codex_7d_%'
                 OR extra_entry.key = 'codex_usage_updated_at'
                 OR extra_entry.key = 'codex_reset_credit_snapshot'
+                OR extra_entry.key = 'codex_credits_snapshot'
                 OR extra_entry.key = 'privacy_mode'
                 OR extra_entry.key = 'privacy_retry_after'
                 OR extra_entry.key = 'privacy_browser_persona'

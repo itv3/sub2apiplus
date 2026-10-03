@@ -303,6 +303,40 @@ class EnvironmentProbeTest(unittest.TestCase):
             "privacy 键不得用通配符排除",
         )
 
+    def test_credits_快照键逐字对齐服务端声明(self) -> None:
+        """配额服务写回的 credits 余额展示快照必须按服务端常量逐字排除。
+
+        重置配额成功后服务端把可用 credits 余额快照与其它配额观测一并写回 extra，候选
+        A12 场景按设计触发重置配额；不排除则候选采集必然判污染。键名从服务端源码读取，
+        服务端改名时这里立即失败，而不是让排除清单按旧名静默失效；同时核对仓库层仍把它
+        列为调度无关的展示快照——这是它可以被排除的依据。
+        """
+
+        service_file = (
+            Path(__file__).resolve().parents[3]
+            / "backend/internal/service/openai_quota_service.go"
+        )
+        if not service_file.is_file():
+            self.skipTest("服务端源码不在此检出中")
+        match = re.search(
+            r'openaiQuotaCreditsKey\s*=\s*"([^"]+)"',
+            service_file.read_text(encoding="utf-8"),
+        )
+        self.assertIsNotNone(match, "未能解析服务端 credits 快照键常量")
+        key = match.group(1)
+        self.assertIn(key, probe.ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS)
+        repository_text = (
+            service_file.parents[1] / "repository/account_repo.go"
+        ).read_text(encoding="utf-8")
+        neutral_block = repository_text.split(
+            "schedulerNeutralExtraKeys = map[string]struct{}{", 1
+        )[1].split("}\n", 1)[0]
+        self.assertIn(
+            f'"{key}"',
+            neutral_block,
+            "仓库层不再把该键列为调度无关的展示快照，排除依据失效",
+        )
+
     def test_probe_does_not_persist_environment_or_secret_values(self) -> None:
         fixture = DockerFixture()
         with tempfile.TemporaryDirectory() as temporary:
