@@ -1,0 +1,199 @@
+{
+  "base_commit": "1599c876d39d1718055ec7e3ab58d85118b1861c",
+  "changed_path_count": 19,
+  "current_commit": "d8123fb7587ff9f76921b16b000a389e7f713366",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5342,
+  "frozen_path_count": 1929,
+  "identity_sha256": "762e09d4ea6d1481bf3d5d45671f05d132f2691b2505c5f957f731eec861bfa0",
+  "issued_at_utc": "2026-10-03T12:13:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_160_0.json",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-candidate-impl-r1-20261003-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "0622886b1b5929087e6c803f61578f622904f261b8ffc50d9a27c9cc5949709f"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：画像契约可选节、按画像定型数字推理档位与生图背景、晋升门禁判别式用例、候选期望画像与事实映射重绑 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images.go",
+      "predecessor_sha256s": [
+        "272bd473eefc17a514ba6a958b2c5749d20a54b7f0c732c5633c26a48e7dda2a"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：画像契约可选节、按画像定型数字推理档位与生图背景、晋升门禁判别式用例、候选期望画像与事实映射重绑 path=backend/internal/service/openai_images.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ed879e4ff4005dba5176f5be53610021bb25987918af7d9db7341836f39b883b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_responses.go",
+      "predecessor_sha256s": [
+        "af3c7adbb8afdd85d3849ef54fa19d548661af74b3750931bed15fa69b14832f"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：画像契约可选节、按画像定型数字推理档位与生图背景、晋升门禁判别式用例、候选期望画像与事实映射重绑 path=backend/internal/service/openai_images_responses.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "07d5889dca6fff592394affaa3a86c72717cc90320d08132e15c3df47639e531"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_test.go",
+      "predecessor_sha256s": [
+        "b573fd6993d68747b430e8ab89eac0e7a2d5cf855208a9f2328a8afc5c4ab051"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：画像契约可选节、按画像定型数字推理档位与生图背景、晋升门禁判别式用例、候选期望画像与事实映射重绑 path=backend/internal/service/openai_images_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "89ec8ec51c4e613b5c7e9b0e3974104bab4f8561763cd0d997dbc23b17057dcc"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "3751a4ad3141b5c42c4b0b78bcd0dc9510d4a1ff631f023fb60250c4cb4140d3"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：画像契约可选节、按画像定型数字推理档位与生图背景、晋升门禁判别式用例、候选期望画像与事实映射重绑 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b6f08eb8814ae8b159bce8e579e9a0eb7aafc59ec10972b7b2c8b6ef7e760ee8"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "backend/internal/officialegress/profilecontract/executable_profile.go",
+    "backend/internal/officialegress/profilecontract/optional_sections.go",
+    "backend/internal/officialegress/profilecontract/optional_sections_0159_test.go",
+    "backend/internal/officialegress/profilecontract/optional_sections_test.go",
+    "backend/internal/officialegress/profilecontract/snapshotdoc.go",
+    "backend/internal/service/official_egress_codex_newer_sections_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_compact_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_harness_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_origins_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_serialization_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_websocket_test.go",
+    "backend/internal/service/official_egress_openai_turn_metadata_section.go",
+    "tools/official_client_capture/candidate_rule_expectations_0_160_0.json",
+    "tools/official_client_capture/candidate_test_fact_map_0_160_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
