@@ -75,8 +75,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # HDR-009／010 与 BODY-008／009；同日 SPEC-HDR-009 状态按证据审计口径补“抓包有限”）后，第二部分摘要变为
 # f0e7e134…，十份场景／预期清单的 source_spec 摘要随之重绑；0.149.1 基线的规则、场景、selector 与验收
 # 判据载荷逐字不变（diff 仅该一行）。
+# 2026-10-04 主手册第二部分按当前 active 0.160.0 改写（BODY-006 数字档位、EP-019 官方 WHAM 允许集合、EP-022
+# 生图背景与 file_id 编辑三条规则重写）后，第二部分摘要变为 30013e8c…，十二份场景／预期清单的 source_spec 摘要
+# 随之重绑；0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "8b8627aed5209e9df11b7a9dc762d5735c73c6a18895c6e7648d3e54013579ab"
+    "5b3cfd720b4882dc08cd07847e67df27b80c2b3e9c8a248df867a6e5c2b2c605"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

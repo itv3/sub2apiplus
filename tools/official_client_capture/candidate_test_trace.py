@@ -206,8 +206,12 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-10-03（0.160.0 VC-4 候选实现）：断言画像换成本轮 VC-2 批准件（Formal Campaign 的
 # classification/approved/assertion-profile.json 逐字节）：追加 BODY-006 数字档位两条、EP-022 生图背景与 file_id
 # 编辑四条判据，EP-019 的 A12 路径判据改为官方五条允许集合，去掉“0.157.0 起”表述。
+# 2026-10-04（0.160.0 收尾）：断言画像对齐 VC-5 批准修订 b2（修订画像 1f9917a5…）：EP-022 检查 edit-file-id-reference
+# 的 all_match 判据由 ^str: 改为整串写法 ^str:.+$；同时随主手册第二部分摘要重绑 source_spec_sha256（见
+# candidate_rule_assertion 同日注释）。与修订画像逐字节比对只差 source_spec_sha256 一行，规则、场景、检查 ID 与
+# 其余判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "709e48f0efc39bc527ad8ced855f134fb37bf35be5457f9f5a1781bdad32cf6b"
+    "124835be48e57ca3ff251f18ad26f3cca7c5e31ce06f2b9f3a822694931e75d1"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
