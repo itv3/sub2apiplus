@@ -44236,7 +44236,10 @@ def _prior_complete_results(
                     "恢复闭集不得承接任何作业。"
                 )
             return []
-        if payload.get("status") not in allowed_statuses:
+        # 带污染窗口的隔离作废源状态是 environment_contaminated（或 awaiting_receipts），不在调用方的状态白名单里，但它正是
+        # 续跑来源：要照常进入下面的逐结果过滤（只承接污染前完成的作业）。原来在这里被跳过，带窗口隔离后 resume 永远报
+        # 「找不到同身份失败 attempt」、批准恢复预览被拒（10-03 E5 VC-1 首批实测）。
+        if payload.get("status") not in allowed_statuses and not isolated_source:
             continue
         if _fingerprint(payload.get("identity")) != _fingerprint(identity):
             raise ConfigurationError(

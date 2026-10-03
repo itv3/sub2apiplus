@@ -22629,6 +22629,54 @@ class CodexUpgradeTest(unittest.TestCase):
             second = self._b0_contaminated_attempt(fixture)
             self.assertEqual(codex_upgrade._campaign_contamination_records(campaign_dir), [f"official:{second}:attempt"])
 
+    def test_b0_windowed_isolation_resume_finds_isolated_source(self) -> None:
+        """E5（10-03 VC-1 首批）实测：修复收据带污染发生时刻（第三批 B3-14 的窗口）隔离之后，resume 的续跑来源查找
+        因状态白名单只认 failed，把 environment_contaminated 的隔离作废源跳过，报「找不到同身份失败 attempt」，批准恢复
+        预览被拒（恢复预览与 resume 复用判定不一致）。窗口路径的隔离作废源要照常进入逐结果过滤（只承接污染前完成的作业）。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            attempt_id = self._b0_contaminated_attempt(fixture)
+            official_attempt = campaign_dir / codex_upgrade._capture_attempt_relative("official", None) / "attempts" / attempt_id
+            reservation_started = codex_upgrade._rfc3339_datetime(
+                json.loads((official_attempt / "reservation.json").read_text(encoding="utf-8"))["started_at_utc"], "预约"
+            )
+            window = (reservation_started + timedelta(milliseconds=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            repair = root / "repair-window.json"
+            repair.write_text(json.dumps({"summary": "线路抖动后自行恢复", "contamination_started_at_utc": window}), encoding="utf-8")
+            clean = root / "clean.json"
+            clean.write_text(json.dumps({"phase": "before", "observed_at_utc": codex_upgrade._utc_now()}), encoding="utf-8")
+            arguments = argparse.Namespace(
+                campaign_dir=campaign_dir, environment_repair_receipt=repair, clean_environment_receipt=clean,
+                reason="修复后重新取证，环境洁净", approve_sha256=None, approved_by=None,
+            )
+            preview = codex_upgrade._environment_isolate_command(arguments)
+            arguments.approve_sha256, arguments.approved_by = preview["review_sha256"], "老板"
+            self.assertEqual(codex_upgrade._environment_isolate_command(arguments)["status"], "isolated")
+            self.assertEqual(codex_upgrade._environment_isolations(campaign_dir)[0]["contamination_started_at_utc"], window)
+            again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(again["status"], "recoverable", again.get("decision"))
+            job_id = fixture["jobs"][0].job_id
+            # 作业在窗口之后完成：不承接，全部重跑；批准时 resume 复用判定与预览一致。
+            self.assertEqual((again["recovery_preview"]["reuse_job_ids"], again["recovery_preview"]["execute_job_ids"]), ([], [job_id]))
+            approved = reconciler.reconcile_attempt(
+                campaign_dir, attempt_id, approve_recovery_sha256=again["recovery_preview"]["review_sha256"]
+            )
+            captured: dict[str, object] = {}
+
+            def fake_run(run_arguments: argparse.Namespace, phase: str) -> dict[str, object]:
+                captured["preview"] = getattr(run_arguments, "recovery_preview_payload", None)
+                return {"status": "awaiting_receipts"}
+
+            with mock.patch.object(codex_upgrade, "_run_capture_attempt", side_effect=fake_run):
+                resumed = self._b0_resume(campaign_dir, Path(approved["recovery_preview_path"]))
+            self.assertEqual(resumed["status"], "awaiting_receipts")
+            self.assertEqual((captured["preview"]["execute_job_ids"], captured["preview"]["reuse_job_ids"]), ([job_id], []))
+
     def test_b0_environment_decision_official_sealed_is_terminal_and_isolation_refused(self) -> None:
         """修好接着跑第 13 项：官方已封存且官方侧存在未隔离污染时 Campaign 内无法重采，判定终态、隔离拒绝；
         before 探针都没取到的恢复错误不是污染，不再停线。"""
