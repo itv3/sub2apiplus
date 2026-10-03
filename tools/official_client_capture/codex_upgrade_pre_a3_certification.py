@@ -19,6 +19,7 @@ E3-02 起签发新形状 ``pre-a3-path-certification/v2``：场景作为入口�
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -30,7 +31,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_campaign_run_rehearsal_receipt as rehearsal
@@ -621,6 +622,50 @@ def _build_receipt(
     return receipt
 
 
+# E4-03：真实链场景按闭包复制受管树（tests/managed_tree_copy.py），闭包算法用 tools/ci/unit_records.py（与单元输入声明
+# 同一份）：仓库里直接导入；数据根里没有 tools/ci，由统一调度执行器经这个环境变量给场景单元指出位置（与 managed_tree_copy
+# 的 RECORDS_MODULE_ENV 同名，测试核对）。串行认证不经执行器，在数据根里运行要显式给出（run --records-module，驱动安装
+# 目录的 driver/unit_records.py）。
+RECORDS_MODULE_ENV = "UNIT_EXECUTOR_RECORDS_MODULE"
+
+
+def _check_tree_copy_records() -> None:
+    """串行认证跑任何场景之前先核对：真实链按闭包复制受管树拿得到 unit_records.py。拿不到就拒绝——不让真实链逐个在复制
+    受管树时失败、全部跑完才报（E4-03 在数据根上串行签发时 6 条真实链都这样失败）。"""
+
+    # 只在串行认证里用到，函数内导入：运行器的模块级测试导入是每个场景单元都会读的输入（入口门禁 PRE_A3_RUNNER_FIXTURES），
+    # 放在模块级会让 44 个场景单元的输入声明都多一个文件。
+    from tools.official_client_capture.tests import managed_tree_copy
+
+    try:
+        managed_tree_copy._unit_records()
+    except managed_tree_copy.ManagedTreeCopyError as error:
+        raise CertificationError(
+            f"串行认证跑不了真实链场景：{error}。数据根里串行运行要给 --records-module（驱动安装目录的 driver/unit_records.py）"
+        ) from error
+
+
+@contextlib.contextmanager
+def _records_module_environment(records_module: Path | None) -> Iterator[None]:
+    """``run --records-module``：运行期间把位置放进执行器给场景单元的同一个环境变量，结束后恢复原值；不给就不动环境。"""
+
+    if records_module is None:
+        yield
+        return
+    location = Path(records_module).resolve()
+    if not location.is_file():
+        raise CertificationError(f"--records-module 不是已有的普通文件：{location}")
+    previous = os.environ.get(RECORDS_MODULE_ENV)
+    os.environ[RECORDS_MODULE_ENV] = str(location)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(RECORDS_MODULE_ENV, None)
+        else:
+            os.environ[RECORDS_MODULE_ENV] = previous
+
+
 def run_certification(
     staging_root: Path,
     *,
@@ -632,6 +677,7 @@ def run_certification(
 ) -> dict[str, Any]:
     """串行认证：一个进程里依次跑全部场景（与按场景并行的 issue 同一收据形状，用于对照与回退）。"""
 
+    _check_tree_copy_records()
     staging_root = _fresh_staging_root(staging_root)
     staging_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging_root.chmod(0o700)
@@ -1498,6 +1544,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--policy-activation", type=Path, required=True)
     run.add_argument("--campaign-run-rehearsal-receipt", type=Path)
     run.add_argument("--output", type=Path, required=True)
+    run.add_argument("--records-module", type=Path,
+                     help="E4-03：unit_records.py 的位置。真实链按闭包复制受管树要用它；数据根里没有 tools/ci，串行运行要给"
+                          "（驱动安装目录的 driver/unit_records.py），仓库里能直接导入、不用给")
     plan = subparsers.add_parser("plan", help="生成统一调度执行器的场景命令单元清单（每个场景一条 run-scenario）")
     plan_root = plan.add_mutually_exclusive_group(required=True)
     plan_root.add_argument("--staging-root", type=Path,
@@ -1549,12 +1598,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.action in ("run", "issue"):
             if arguments.action == "run":
-                receipt = run_certification(
-                    arguments.staging_root,
-                    deployment_receipt=arguments.deployment_receipt,
-                    policy_activation=arguments.policy_activation,
-                    campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
-                )
+                with _records_module_environment(arguments.records_module):
+                    receipt = run_certification(
+                        arguments.staging_root,
+                        deployment_receipt=arguments.deployment_receipt,
+                        policy_activation=arguments.policy_activation,
+                        campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                    )
             elif arguments.unit_manifest is not None:
                 if arguments.record_store is None:
                     raise CertificationError("--unit-manifest 需要同时给 --record-store")

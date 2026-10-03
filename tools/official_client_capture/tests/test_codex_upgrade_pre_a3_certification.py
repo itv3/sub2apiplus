@@ -19,6 +19,7 @@ from unittest import mock
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+from tools.official_client_capture.tests import managed_tree_copy
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_codex_upgrade_policy_certification as policy_tests
 
@@ -155,6 +156,65 @@ class PreA3CertificationTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(certification.CertificationError, "staging 目录树内"):
                 certification.run_certification(root / "outside", deployment_receipt=deployment, policy_activation=activation, scenarios=())
+
+    def test_serial_run_refuses_before_any_scenario_where_tools_ci_is_missing(self) -> None:
+        """E4-03：数据根里没有 tools/ci，串行认证又不经执行器，真实链曾逐个在复制受管树时失败、全部跑完才报。现在跑任何
+        场景之前就拒绝并指明 --records-module；给了位置（同一份 unit_records.py）就照常往下跑。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            deployment, activation = self._bindings(root)
+            staging = root / "data" / "staging" / "pre-a3"
+            self.assertEqual(certification.RECORDS_MODULE_ENV, managed_tree_copy.RECORDS_MODULE_ENV)
+            # 模拟数据根布局：tools.ci 导入不到、执行器也没给位置——真实走 managed_tree_copy 的回退分支，不替换它。
+            environment = {key: value for key, value in os.environ.items() if key != certification.RECORDS_MODULE_ENV}
+            hidden = {"tools.ci": None, "tools.ci.unit_records": None}
+            with mock.patch.dict(os.environ, environment, clear=True), mock.patch.dict(sys.modules, hidden), \
+                    mock.patch.object(certification, "run_scenario") as run_scenario:
+                sys.modules.pop("unit_records_for_tree_copy", None)
+                with self.assertRaisesRegex(certification.CertificationError, "--records-module"):
+                    certification.run_certification(staging, deployment_receipt=deployment, policy_activation=activation,
+                                                     scenarios=QUICK_SCENARIOS)
+                run_scenario.assert_not_called()
+                self.assertFalse(staging.exists())
+                run_scenario.side_effect = lambda scenario: {"name": scenario[0], "description": scenario[1], "test": "替身",
+                                                             "status": "passed", "seconds": 0.0}
+                with certification._records_module_environment(REPO_ROOT / "tools" / "ci" / "unit_records.py"):
+                    receipt = certification.run_certification(staging, deployment_receipt=deployment,
+                                                               policy_activation=activation, scenarios=QUICK_SCENARIOS)
+                self.assertEqual(run_scenario.call_count, len(QUICK_SCENARIOS))
+                self.assertNotIn(certification.RECORDS_MODULE_ENV, os.environ)
+            self.assertEqual(receipt["status"], "passed", receipt["failed_scenarios"])
+
+    def test_serial_run_cli_records_module_reaches_scenarios_and_is_validated(self) -> None:
+        """E4-03：run --records-module 在运行期间放进执行器给场景单元的同一个环境变量、结束后恢复；文件不存在直接拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            records = root / "driver" / "unit_records.py"
+            records.parent.mkdir()
+            records.write_text("# 替身\n", encoding="utf-8")
+            seen: dict[str, str | None] = {}
+
+            def fake_run(staging_root: Path, **_: object) -> dict[str, object]:
+                seen["value"] = os.environ.get(certification.RECORDS_MODULE_ENV)
+                return {"schema_version": certification.SCHEMA_VERSION, "status": "passed", "scenario_count": 0,
+                        "failed_scenarios": [], "network_attempts": 0, "staging_root": str(staging_root)}
+
+            arguments = ["run", "--staging-root", str(root / "staging"), "--deployment-receipt", str(root / "deploy.json"),
+                         "--policy-activation", str(root / "activation.json"), "--output", str(root / "out.json")]
+            environment = {key: value for key, value in os.environ.items() if key != certification.RECORDS_MODULE_ENV}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(certification, "run_certification", side_effect=fake_run), \
+                    mock.patch.object(certification, "write_certification", side_effect=lambda output, receipt: output), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(certification.main([*arguments, "--records-module", str(records)]), 0)
+                self.assertEqual(seen["value"], str(records))
+                self.assertNotIn(certification.RECORDS_MODULE_ENV, os.environ)
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(certification.main([*arguments, "--records-module", str(root / "missing.py")]), 2)
+                self.assertIn("--records-module 不是已有的普通文件", stderr.getvalue())
 
 
 EXECUTOR = Path(__file__).resolve().parents[3] / "tools" / "ci" / "unit_executor.py"
