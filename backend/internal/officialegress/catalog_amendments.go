@@ -118,6 +118,10 @@ func applyCatalogAmendments(
 	if err != nil {
 		return nil, err
 	}
+	retirements, err := defaultReleaseRouteRetirements()
+	if err != nil {
+		return nil, err
+	}
 	indexBySink := make(map[string]int, len(inputs))
 	for index := range inputs {
 		indexBySink[string(inputs[index].ID)] = index
@@ -167,7 +171,9 @@ func applyCatalogAmendments(
 					matched = true
 				}
 			}
-			if !matched {
+			// 发布退役 route（见 catalog_route_retirements.go）在 Active/Previous 中本就没有端点：仍并入静态 binding，
+			// 供 binding digest 与历史 MigrationReceipt 复核；运行时由端点绑定、路由目录与 Bundle 解析统一跳过。
+			if !matched && !retirements.retires(route) {
 				return nil, fmt.Errorf("Catalog route 补充在 Active/Previous 中均没有 ProfileSpec endpoint: %s", amendment.SinkID)
 			}
 			duplicate := false

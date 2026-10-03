@@ -22,66 +22,71 @@ const (
 	syntheticHigherVersionUnderscore = "0_149_0"
 )
 
-// syntheticChangeset2RollbackSourceMode 按结构事实为合成回滚矩阵选择底稿发布：按 Active、
-// Previous 的顺序取第一个声明了回滚矩阵各 Sink 全部 route 的发布。
+// syntheticChangeset2RollbackSource 按结构事实为合成回滚矩阵选择底稿画像：按 Active、Previous 的顺序取第一个
+// 声明了回滚矩阵各 Sink 全部 route 的正式发布；两者都不完整声明时，退回按冻结合同原地保留的 0.154.0 画像。
 //
-// 合成目录的 active 与 previous 都派生自同一份底稿画像，版本 route 的“两槽位并集覆盖”在
-// 合成目录里不存在；底稿缺少任一 route（例如晋升后 Active 的目标画像删掉了
-// codex.responses.forward 仍登记的 legacy compact route），BundleResolver 就会以“route 在
-// Active/Previous 画像中均无 EndpointBinding”拒绝构造。候选期 Active 即满足条件，选择结果
-// 与改动前固定取 Active 完全相同；晋升后取 Previous 中的同一份旧画像。
-func syntheticChangeset2RollbackSourceMode(t *testing.T, bindings []SinkBinding) ReleaseMode {
+// 合成目录的 active 与 previous 都派生自同一份底稿画像，版本 route 的“两槽位并集覆盖”在合成目录里不存在；
+// 底稿缺少任一 route（例如晋升后 Active 的目标画像删掉了 codex.responses.forward 仍登记的 legacy compact
+// route），BundleResolver 就会以“route 在 Active/Previous 画像中均无 EndpointBinding”拒绝构造。候选期 Active
+// 即满足条件，选择结果与改动前固定取 Active 完全相同；0.157.0 晋升后取 Previous 中的 0.154.0；legacy compact
+// 发布退役之后（0.154.0 离开 Active／Previous）两个正式发布都不声明它，本矩阵冻结的正是 legacy compact 仍在时的
+// 发布事实，底稿取运行画像目录里保留的同一份 0.154.0 画像（不经快照目录，VC-6 退休裁剪快照目录后照样可读）。
+func syntheticChangeset2RollbackSource(t *testing.T, bindings []SinkBinding) profilecontract.SnapshotCatalogEntry {
 	t.Helper()
 	physical, err := NewPhysicalRouteCatalog(DefaultSinkCatalog())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		release, resolveErr := DefaultReleaseCatalog().Resolve(mode)
-		if resolveErr != nil {
-			t.Fatal(resolveErr)
-		}
-		declaresAll := true
+	declaresAll := func(profile profilecontract.ExecutableProfile) bool {
 		for _, binding := range bindings {
 			for _, route := range binding.Routes() {
-				if !staticClosureProfileDeclaresRoute(t, release.ExecutableProfile(), physical, binding.ID(), route) {
-					declaresAll = false
+				if !staticClosureProfileDeclaresRoute(t, profile, physical, binding.ID(), route) {
+					return false
 				}
 			}
 		}
-		if declaresAll {
-			return mode
-		}
+		return true
 	}
-	t.Fatal("正式目录的 Active/Previous 都未完整声明回滚矩阵各 Sink 的 route：合成回滚矩阵缺少底稿")
-	return ""
+	base := DefaultReleaseCatalog()
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, resolveErr := base.Resolve(mode)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if !declaresAll(release.ExecutableProfile()) {
+			continue
+		}
+		for _, entry := range base.snapshots.ToDoc().Snapshots {
+			if entry.Version == release.Version() && entry.Digest == release.ProfileDigest() {
+				return entry
+			}
+		}
+		t.Fatalf("正式 %s snapshot entry 缺失", mode)
+	}
+	retained, err := loadReleaseRouteRetirementProfile(releaseCatalogFS, releaseRouteRetirementProfile{
+		Version: legacyCompactProfileVersion, Digest: legacyCompactProfileDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !declaresAll(retained) {
+		t.Fatal("正式 Active/Previous 与保留的 0.154.0 画像都未完整声明回滚矩阵各 Sink 的 route：合成回滚矩阵缺少底稿")
+	}
+	return profilecontract.SnapshotCatalogEntry{
+		Version: legacyCompactProfileVersion,
+		Digest:  legacyCompactProfileDigest,
+		File:    "profiles/" + legacyCompactProfileVersion + "/" + legacyCompactProfileDigest + ".json",
+	}
 }
 
-// syntheticChangeset2ReleaseCatalog 以 sourceMode 发布的真实画像为底稿构造同版本合成回滚目录：
+// syntheticChangeset2ReleaseCatalog 以 sourceEntry 指向的真实画像为底稿构造同版本合成回滚目录：
 // active 节点引用底稿原样，previous 节点引用底稿的变体（字段序、TLS、feature 与 header 事实
-// 均被改动），两个节点的发布坐标都对齐到底稿版本。sourceMode 由
-// syntheticChangeset2RollbackSourceMode 按结构事实给出。
-func syntheticChangeset2ReleaseCatalog(t *testing.T, sourceMode ReleaseMode) ReleaseCatalog {
+// 均被改动），两个节点的发布坐标都对齐到底稿版本。sourceEntry 由
+// syntheticChangeset2RollbackSource 按结构事实给出。
+func syntheticChangeset2ReleaseCatalog(t *testing.T, sourceEntry profilecontract.SnapshotCatalogEntry) ReleaseCatalog {
 	t.Helper()
 	base := DefaultReleaseCatalog()
 	graphDoc := base.graph.ToDoc()
-	sourceNode, ok := base.graph.Resolve(
-		RegistryPurposeOpenAIOAuthHTTP,
-		releasecontract.ReleaseMode(sourceMode),
-	)
-	if !ok {
-		t.Fatalf("正式 %s HTTP release 缺失", sourceMode)
-	}
-	var sourceEntry profilecontract.SnapshotCatalogEntry
-	for _, entry := range base.snapshots.ToDoc().Snapshots {
-		if entry.Version == sourceNode.Snapshot.Version && entry.Digest == sourceNode.Snapshot.Digest {
-			sourceEntry = entry
-			break
-		}
-	}
-	if sourceEntry.File == "" {
-		t.Fatalf("正式 %s snapshot entry 缺失", sourceMode)
-	}
 	activeRaw, err := releaseCatalogFS.ReadFile("catalogdata/runtime/" + sourceEntry.File)
 	if err != nil {
 		t.Fatal(err)
@@ -535,9 +540,10 @@ func TestChangeset2SyntheticProfileRollbackMatrixHasNoMixedFacts(t *testing.T) {
 		rollbackBindings = append(rollbackBindings, binding)
 	}
 	// 同理，底稿画像也不伪造、不删减任何 route：按结构事实选出完整声明这四个 Sink 全部
-	// route 的真实发布作为底稿（改动前固定取 Active；晋升后 Active 的目标画像删掉了
-	// codex.responses.forward 仍登记的 legacy compact route，底稿改取 Previous 中的旧画像）。
-	catalog := syntheticChangeset2ReleaseCatalog(t, syntheticChangeset2RollbackSourceMode(t, rollbackBindings))
+	// route 的真实画像作为底稿（改动前固定取 Active；晋升后 Active 的目标画像删掉了
+	// codex.responses.forward 仍登记的 legacy compact route，底稿改取 Previous 中的旧画像；
+	// legacy compact 发布退役后两个发布都不声明它，底稿取运行画像目录里保留的 0.154.0 画像）。
+	catalog := syntheticChangeset2ReleaseCatalog(t, syntheticChangeset2RollbackSource(t, rollbackBindings))
 	rollbackSinks, err := NewSinkCatalog(rollbackInputs)
 	if err != nil {
 		t.Fatal(err)

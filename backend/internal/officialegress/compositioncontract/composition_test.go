@@ -1,6 +1,7 @@
 package compositioncontract_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,32 @@ func profileDeclaresRouteForTest(profile profilecontract.ProfileSpec, route bind
 	return false
 }
 
+// releaseRetiredRoutesForTest 读取运行时“发布退役 route”清单（catalogdata/release-route-retirements.json），
+// 返回 method、host、path、transport 四元组集合；测试侧独立读取，不调用被测包的退役判定。
+func releaseRetiredRoutesForTest(t *testing.T) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile("../catalogdata/release-route-retirements.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Routes []struct {
+			Method   string `json:"method"`
+			Host     string `json:"host"`
+			Path     string `json:"path"`
+			Protocol string `json:"protocol"`
+		} `json:"routes"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	retired := make(map[string]bool, len(manifest.Routes))
+	for _, route := range manifest.Routes {
+		retired[strings.Join([]string{route.Method, route.Host, route.Path, route.Protocol}, " ")] = true
+	}
+	return retired
+}
+
 // TestAllCodexBusinessBindingsJoinThreeEvidenceLayers 证明每个具备端点画像的 Codex 业务 Sink
 // 都能把 binding、发布与画像三层证据拼成 EvidenceBundle。
 //
@@ -151,12 +178,16 @@ func profileDeclaresRouteForTest(profile profilecontract.ProfileSpec, route bind
 //   - 组合成功的 bundle 匹配数必须等于 route 数，成功组合的业务 Sink 总数仍须等于 23。
 //
 // 候选期 Active 声明全部 route，上面的分支与改动前逐条相同。
+//
+// 最后一个声明某端点的画像离开 Active／Previous 后（legacy compact 在 0.154.0 离开之后），只绑定该端点、
+// 且登记在发布退役清单里的 Sink 两种 mode 都必须恰以“匹配 0 个端点”失败，单独计数；成功组合数与退役数之和仍须等于 23。
 func TestAllCodexBusinessBindingsJoinThreeEvidenceLayers(t *testing.T) {
 	bindings := loadBindings(t)
 	releases := loadReleases(t)
 	snapshots := loadSnapshots(t)
 	composer := c.NewComposer(bindings, releases, snapshots)
-	composed := 0
+	retiredRoutes := releaseRetiredRoutesForTest(t)
+	composed, retired := 0, 0
 	for _, binding := range bindings.Bindings() {
 		if binding.Persona != "codex-cli" || binding.Purpose == "facade" ||
 			binding.EndpointEvidence != "codex_profile" {
@@ -164,6 +195,24 @@ func TestAllCodexBusinessBindingsJoinThreeEvidenceLayers(t *testing.T) {
 		}
 		purpose := releasePurposeForTest(binding)
 		activeProfile := releaseProfileForTest(t, releases, snapshots, purpose, releasecontract.ReleaseModeActive)
+		previousProfile := releaseProfileForTest(t, releases, snapshots, purpose, releasecontract.ReleaseModePrevious)
+		allRetired := len(binding.Routes) > 0
+		for _, route := range binding.Routes {
+			if !retiredRoutes[strings.Join([]string{route.Method, route.Host, route.Path, route.Transport}, " ")] ||
+				profileDeclaresRouteForTest(activeProfile, route) || profileDeclaresRouteForTest(previousProfile, route) {
+				allRetired = false
+			}
+		}
+		if allRetired {
+			for _, mode := range []releasecontract.ReleaseMode{releasecontract.ReleaseModeActive, releasecontract.ReleaseModePrevious} {
+				_, err := composer.Compose(c.CompositionRequest{SinkID: binding.SinkID, ReleasePurpose: purpose, Mode: mode})
+				if err == nil || !strings.Contains(err.Error(), "匹配 0 个端点") {
+					t.Errorf("%s 的 route 已发布退役，%s 组合必须以“匹配 0 个端点”失败，实际错误=%v", binding.SinkID, mode, err)
+				}
+			}
+			retired++
+			continue
+		}
 		declaredInActive := true
 		for _, route := range binding.Routes {
 			if !profileDeclaresRouteForTest(activeProfile, route) {
@@ -201,8 +250,8 @@ func TestAllCodexBusinessBindingsJoinThreeEvidenceLayers(t *testing.T) {
 		}
 		composed++
 	}
-	if composed != 23 {
-		t.Fatalf("成功组合具备端点画像的 Codex 业务 Sink=%d，期望 23", composed)
+	if composed+retired != 23 {
+		t.Fatalf("成功组合具备端点画像的 Codex 业务 Sink=%d、发布退役=%d，合计期望 23", composed, retired)
 	}
 }
 

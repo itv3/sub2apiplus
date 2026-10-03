@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "routes": [
+    {
+      "method": "POST",
+      "host": "chatgpt.com",
+      "path": "/backend-api/codex/responses/compact",
+      "protocol": "http",
+      "endpoint_id": "responses_compact",
+      "last_profile": {
+        "version": "0.154.0",
+        "digest": "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3"
+      },
+      "reviewed_by": "codex_upgrade_operator",
+      "review_ref": "codex-0160-vc4-r1:legacy-compact-route-retirement",
+      "rationale": "legacy compact（POST /backend-api/codex/responses/compact）自 0.156.1 起被官方删除，SPEC-EP-007／014／020 已在 0.157.0 一轮删除；0.154.0 离开 Active／Previous 之后不再有运行画像声明该端点。route 继续留在 bootstrap binding、Catalog 补充与历史 MigrationReceipt 里供复核，运行时不再生成 EndpointBinding、ReleaseSelection 与路由条目：入站 legacy compact 由发布判定在出站前以 404 失败关闭，后台 compact 账号测试在执行器解析端点时失败关闭。"
+    }
+  ]
+}
