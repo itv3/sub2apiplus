@@ -1,0 +1,169 @@
+{
+  "base_commit": "653668c9ea9dfdec36a6e3c996c2da11106f8152",
+  "changed_path_count": 13,
+  "current_commit": "97f4df056f35b3b85dc87143161bfeda977f6090",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5349,
+  "frozen_path_count": 1929,
+  "identity_sha256": "bf3908b90b962ec75a2b147d54b15685f4e956692ddbe4b13dda0da41ed7beba",
+  "issued_at_utc": "2026-10-03T13:04:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-candidate-route-retirement-r1-20261003-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/bundle.go",
+      "predecessor_sha256s": [
+        "fb452a58c12f051ce2e8fd1b41fce2628bc72c8a59950e75103b2b4ae68a2868"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/bundle.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3d49e7f60a0e9b6bd43064f9fa3651b1b12835bc2d041cc52895163bde51e3fd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalog.go",
+      "predecessor_sha256s": [
+        "d89df8806f8625c5fdae2720f6fb968c008eb3b541e574677d8d3966c0eb1a8e"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/catalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a4e6b30da0145e0d5d4c060120c5fa046c5edb1ac6677ad277efc283f6ed99b9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalog_amendments.go",
+      "predecessor_sha256s": [
+        "e4ed4c853c37f9a97ce4282b9ceec760808dce990855ac6bd6a3768369e59eb9"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/catalog_amendments.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "36a3ea10a3fa2792787d9ce70e2eff6a93d751fea7a762497a39b2f60827b1f4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/changeset2_synthetic_rollback_test.go",
+      "predecessor_sha256s": [
+        "542e7aa5fc4cc6d6686a3b7355debc80e38ca8d66325ff0d3196e4a1ff471634"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/changeset2_synthetic_rollback_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "577b12da0b1b92bfbc13a41e036df08185246c1bbe8af8dfa4bb66ee510330d4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "predecessor_sha256s": [
+        "83499d5b0649514ccdff050043296d665eb8287c903f3a1db28b7922040c5045"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "78eead45908936ffdaacfb473f8053e5ec9f98b283be4aaef352d0a8b626d16c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compositioncontract/composition_test.go",
+      "predecessor_sha256s": [
+        "128538a67c59ab8cec68a15305947e255e7bcea51a16d620c4d4dd351082e089"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/compositioncontract/composition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "f8a3a964ee9978966a75bf48d498edb43669700f3884b4ed7b1fa2243585cb9d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/migration_receipts.go",
+      "predecessor_sha256s": [
+        "0847820ff1d63d342484494aba9efe9f365ceaf9906bd085cf4eff20c0f74bee"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/migration_receipts.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "04714cf0d1a3dbae03ff13820a4b910baa1fe5af6a698163a902b13ff5002caa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "predecessor_sha256s": [
+        "10b5015bbb0a0fcf4568c238937663f5b3e14e81d500697ab72eeca242afa877"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/officialegress_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition-v2.json"
+      ],
+      "status": "M",
+      "to_sha256": "7a2a70c9a9f98d458211c0ea88c6349da971e19cd5de2ce648b1a67ec021e0df"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "predecessor_sha256s": [
+        "a893e3bb05b2ffd003a6910ff530388e5583083fee1f37b6dc80b91f380fac07"
+      ],
+      "reason": "0.160.0 VC-4 候选实现：legacy compact 随 0.154.0 离开 Active／Previous 按清单发布退役（路由级退役覆盖层） path=backend/internal/officialegress/route_catalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "2eb3bcb8b10e7d7009ee61ad9967c03574362e2108ddcce5b6e2622e90239797"
+    }
+  ],
+  "unregistered_path_count": 4,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalog_route_retirements.go",
+    "backend/internal/officialegress/catalog_route_retirements_test.go",
+    "backend/internal/officialegress/catalogdata/release-route-retirements.json",
+    "backend/internal/officialegress/receipt_transport_transitions_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
