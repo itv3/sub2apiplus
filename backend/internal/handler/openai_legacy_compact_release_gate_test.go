@@ -5,9 +5,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -35,8 +38,9 @@ import (
 //   ③ 无账号副作用：注入真实 RateLimitService 后账号仓库零写入（错误、冷却、临时不可调度、
 //      限流），ops 错误日志经中间件同一分类函数归为业务受限、归属客户端、P3；
 //   ④ 用量任务零提交。
-// 对照：同一请求在仍声明 legacy compact 的槽位上照常出站、200、提交一次用量。两种目录状态
-// 下都按结构事实选槽位（候选期删除槽位是 previous，晋升后是 active）。
+// 对照：同一请求在仍声明 legacy compact 的槽位上照常出站、200、提交一次用量。各目录状态
+// 下都按结构事实选槽位（候选期删除槽位是 previous，晋升后是 active）；legacy compact 按
+// 发布退役覆盖层正式退役后两个槽位都删除该端点，对照组改为另一槽位同样失败关闭。
 // ============================================================================
 
 // legacyCompactGateHandlerProbeModel 是内置能力表未收录的探针模型：账号未加载模型能力清单时，
@@ -44,10 +48,15 @@ import (
 // “失败关闭晚于模型能力刷新”的实现。测试上游的清单收录它，供对照组通过能力检查。
 const legacyCompactGateHandlerProbeModel = "gpt-legacy-compact-gate"
 
+// legacyCompactGateHandlerModes 是正式目录的两个发布槽位。
+var legacyCompactGateHandlerModes = []string{"active", "previous"}
+
 // legacyCompactGateHandlerSlots 按结构事实返回删除与仍声明 legacy compact 端点的发布槽位。
+// legacy compact 已按发布退役覆盖层正式退役时两个槽位都删除该端点，declared 为空，由调用方改做
+// 两槽位失败关闭；未退役却缺任一侧时失败（两槽位都声明说明目标画像未入库）。
 func legacyCompactGateHandlerSlots(t *testing.T) (removed string, declared string) {
 	t.Helper()
-	for _, mode := range []string{"active", "previous"} {
+	for _, mode := range legacyCompactGateHandlerModes {
 		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
 		require.NoError(t, err)
 		declares := false
@@ -63,10 +72,36 @@ func legacyCompactGateHandlerSlots(t *testing.T) (removed string, declared strin
 			removed = mode
 		}
 	}
-	if removed == "" || declared == "" {
+	if removed == "" || (declared == "" && !legacyCompactGateHandlerReleaseRetired(t)) {
 		t.Fatalf("正式目录需要同时具备删除与声明 legacy compact 的发布槽位：removed=%q declared=%q", removed, declared)
 	}
 	return removed, declared
+}
+
+// legacyCompactGateHandlerReleaseRetired 判定发布退役覆盖层是否登记了 legacy compact 的 route
+// （与 service 包同名判据一致）；只在两个槽位都已删除该端点时调用。
+func legacyCompactGateHandlerReleaseRetired(t *testing.T) bool {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "officialegress", "catalogdata", "release-route-retirements.json"))
+	require.NoError(t, err)
+	var manifest struct {
+		Routes []struct {
+			Method     string `json:"method"`
+			Host       string `json:"host"`
+			Path       string `json:"path"`
+			Protocol   string `json:"protocol"`
+			EndpointID string `json:"endpoint_id"`
+		} `json:"routes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &manifest))
+	for _, route := range manifest.Routes {
+		if route.Method == http.MethodPost && route.Host == "chatgpt.com" &&
+			route.Path == "/backend-api/codex/responses/compact" && route.Protocol == "http" &&
+			route.EndpointID == "responses_compact" {
+			return true
+		}
+	}
+	return false
 }
 
 // legacyCompactGateRepo 在只读夹具之上记录全部账号状态写入。
@@ -296,37 +331,53 @@ func TestOpenAIGatewayHandlerResponsesLegacyCompactRemovedByReleaseFailsClosedWi
 		"/backend-api/codex/responses/compact",
 		"/openai/v1/responses/compact",
 	}
+	// requireFailsClosed 在 mode 槽位上断言四项失败关闭口径。
+	requireFailsClosed := func(t *testing.T, mode string, extra map[string]any, path string) {
+		fixture := newLegacyCompactGateFixture(t, mode, extra)
+		c, rec := newLegacyCompactGateContext(path)
+
+		fixture.handler.Responses(c)
+
+		// ② 不出站、不换号：只选中首个账号，任何上游都收不到请求（先于状态码断言，
+		// 使“轮询账号池”类回归直接以出站／换号的形式报出）。
+		require.Empty(t, fixture.upstream.snapshot(), "失败关闭前不得有任何出站，也不得换号到池中其他账号")
+		selected, ok := c.Get(opsAccountIDKey)
+		require.True(t, ok)
+		require.Equal(t, int64(1), selected, "只尝试首个账号，不轮询账号池")
+		// ① 明确的客户端错误与可读原因。
+		require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+		errType := gjson.GetBytes(rec.Body.Bytes(), "error.type").String()
+		message := gjson.GetBytes(rec.Body.Bytes(), "error.message").String()
+		require.Equal(t, "not_found_error", errType, rec.Body.String())
+		require.Contains(t, message, "remote compaction v2")
+		require.Contains(t, message, "upgrade")
+		// ③ 无账号副作用，ops 错误日志归为本地业务受限。
+		require.Empty(t, fixture.repo.snapshot(), "不得写入账号错误、冷却、临时不可调度或限流状态")
+		phase, businessLimited, owner, _ := classifyOpsErrorLog(c, errType, message, "", rec.Code)
+		require.True(t, businessLimited, "ops 错误日志必须归为业务受限，不计入 SLA 与错误率")
+		require.NotEqual(t, "upstream", phase)
+		require.Equal(t, "client", owner)
+		require.Equal(t, "P3", classifyOpsSeverity(errType, rec.Code))
+		// ④ 不提交用量任务。
+		require.Zero(t, waitLegacyCompactGateUsage(t, fixture.usage), "失败关闭不得产生用量与计费记录")
+	}
 	for _, accountMode := range accountModes {
 		for _, path := range paths {
 			t.Run(accountMode.name+path+"/删除槽位失败关闭", func(t *testing.T) {
-				fixture := newLegacyCompactGateFixture(t, removed, accountMode.extra)
-				c, rec := newLegacyCompactGateContext(path)
-
-				fixture.handler.Responses(c)
-
-				// ② 不出站、不换号：只选中首个账号，任何上游都收不到请求（先于状态码断言，
-				// 使“轮询账号池”类回归直接以出站／换号的形式报出）。
-				require.Empty(t, fixture.upstream.snapshot(), "失败关闭前不得有任何出站，也不得换号到池中其他账号")
-				selected, ok := c.Get(opsAccountIDKey)
-				require.True(t, ok)
-				require.Equal(t, int64(1), selected, "只尝试首个账号，不轮询账号池")
-				// ① 明确的客户端错误与可读原因。
-				require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-				errType := gjson.GetBytes(rec.Body.Bytes(), "error.type").String()
-				message := gjson.GetBytes(rec.Body.Bytes(), "error.message").String()
-				require.Equal(t, "not_found_error", errType, rec.Body.String())
-				require.Contains(t, message, "remote compaction v2")
-				require.Contains(t, message, "upgrade")
-				// ③ 无账号副作用，ops 错误日志归为本地业务受限。
-				require.Empty(t, fixture.repo.snapshot(), "不得写入账号错误、冷却、临时不可调度或限流状态")
-				phase, businessLimited, owner, _ := classifyOpsErrorLog(c, errType, message, "", rec.Code)
-				require.True(t, businessLimited, "ops 错误日志必须归为业务受限，不计入 SLA 与错误率")
-				require.NotEqual(t, "upstream", phase)
-				require.Equal(t, "client", owner)
-				require.Equal(t, "P3", classifyOpsSeverity(errType, rec.Code))
-				// ④ 不提交用量任务。
-				require.Zero(t, waitLegacyCompactGateUsage(t, fixture.usage), "失败关闭不得产生用量与计费记录")
+				requireFailsClosed(t, removed, accountMode.extra, path)
 			})
+			if declared == "" {
+				// legacy compact 已正式发布退役：没有仍声明它的槽位，对照组改为另一槽位同样失败关闭。
+				for _, mode := range legacyCompactGateHandlerModes {
+					if mode == removed {
+						continue
+					}
+					t.Run(accountMode.name+path+"/退役后"+mode+"槽位同样失败关闭", func(t *testing.T) {
+						requireFailsClosed(t, mode, accountMode.extra, path)
+					})
+				}
+				continue
+			}
 			t.Run(accountMode.name+path+"/声明槽位对照", func(t *testing.T) {
 				fixture := newLegacyCompactGateFixture(t, declared, accountMode.extra)
 				c, rec := newLegacyCompactGateContext(path)
