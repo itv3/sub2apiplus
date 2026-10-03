@@ -4656,37 +4656,39 @@ raise SystemExit(9)
             # 没有任何 attempt 目录的 Campaign：空。
             self.assertEqual(supervisor._reservations_in_run_window(root / "empty", started), [])
 
-    def test_reservations_in_run_window_stop_at_prior_terminal(self) -> None:
-        """给出父 run 终态时刻时窗口在该时刻截止：之后发布的预约属于后继 run，不计入；终态时刻缺失或非法时
-        退回只按开始时刻判定。"""
+    def test_reservations_in_run_window_stop_at_window_end(self) -> None:
+        """给出窗口终点（该段后继 run 的开始时刻）时，终点及之后发布的预约属于后继 run，不计入；终点只在历史链
+        核验的上下文里按前序 run 目录名取得，上下文外、链尾与非法取值都取不到。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             candidate = root / "campaign" / "candidates" / "cand-1" / "attempts"
             started = 1_790_553_600.0  # 2026-09-28T00:00:00Z
-            terminal = started + 1200.0  # 2026-09-28T00:20:00Z
             self._write_json(candidate / "att-in" / "reservation.json", {"started_at_utc": "2026-09-28T00:10:00.000Z"})
             self._write_json(candidate / "att-after" / "reservation.json", {"started_at_utc": "2026-09-28T00:30:00.000Z"})
             unbounded = supervisor._reservations_in_run_window(root / "campaign", started)
             self.assertEqual([subject for _cid, subject, _root in unbounded], ["att-after", "att-in"])
-            bounded = supervisor._reservations_in_run_window(root / "campaign", started, terminal)
+            bounded = supervisor._reservations_in_run_window(root / "campaign", started, started + 1200.0)
             self.assertEqual([subject for _cid, subject, _root in bounded], ["att-in"])
-            self.assertEqual(supervisor._prior_run_terminal_epoch({"terminal_at_epoch": terminal}), terminal)
-            for bad in ({}, {"terminal_at_epoch": True}, {"terminal_at_epoch": "1"}, {"terminal_at_epoch": 0}, {"terminal_at_epoch": -5.0}):
-                self.assertIsNone(supervisor._prior_run_terminal_epoch(bad))
+            self.assertIsNone(supervisor._historical_window_end(root / "run-a"))
+            token = supervisor._HISTORICAL_SUCCESSOR_STARTS.set({"run-a": 1500.0, "run-b": True, "run-c": -1.0})
+            try:
+                self.assertEqual(supervisor._historical_window_end(root / "run-a"), 1500.0)
+                for name in ("run-b", "run-c", "run-z"):
+                    self.assertIsNone(supervisor._historical_window_end(root / name))
+            finally:
+                supervisor._HISTORICAL_SUCCESSOR_STARTS.reset(token)
 
     def test_environment_redispatch_link_survives_successor_own_reservation(self) -> None:
-        """失败批次 N（reservation 前环境失败、已按无预约对账）的逐字重派 N+1 开跑后自己发布了预约；之后派发 N+2
-        回头核验 N→N+1 时，窗口在 N 的终态时刻截止，N+1 的预约不得算回 N 的 run 期间（E5 VC-5 批次 14→15→16
-        实证：否则环境重派协议让位、其它协议都不承接，N+2 无法派发）。父 run 没有终态时刻的旧数据保持原判定。"""
+        """失败批次 N（reservation 前环境失败、已按无预约对账）的逐字重派 N+1 开跑后自己发布了预约；派发 N+2 回头
+        核验 N→N+1 时窗口在 N+1 的开始时刻截止，N+1 的预约不算回 N（E5 VC-5 批次 14→15→16 实证：否则环境重派协议
+        让位、其它协议都不承接，N+2 无法派发）。不在历史链核验上下文里（链尾一段、单独调用）保持原判定。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
                 self._environment_redispatch_fixture(root)
             )
-            prior_state = {**prior_state, "started_at_epoch": 1000.0, "terminal_at_epoch": 1005.0}
-            self._write_json(prior_dir / "state.json", prior_state)
             later = campaign_dir / "candidates" / "cand-1" / "attempts" / "att-later"
             self._write_json(
                 later / "reservation.json",
@@ -4696,21 +4698,50 @@ raise SystemExit(9)
                 later / "attempt.json",
                 {"status": "environment_contaminated", "results": [{"id": "j", "status": "complete"}]},
             )
-            ordered = supervisor._validate_batched_campaign_history(
-                successor,
-                [(prior_state, prior_manifest, prior_dir)],
-                campaign_dir=campaign_dir,
-            )
-            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
 
-            legacy = {key: value for key, value in prior_state.items() if key != "terminal_at_epoch"}
-            self._write_json(prior_dir / "state.json", legacy)
-            with self.assertRaisesRegex(SupervisorError, "没有被任何后继协议承接|唯一直接 v3 恢复后继"):
-                supervisor._validate_batched_campaign_history(
-                    successor,
-                    [(legacy, prior_manifest, prior_dir)],
-                    campaign_dir=campaign_dir,
+            def redispatch() -> bool:
+                return supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state, prior_manifest, prior_dir, successor, campaign_dir=campaign_dir
                 )
+
+            self.assertFalse(redispatch())
+            token = supervisor._HISTORICAL_SUCCESSOR_STARTS.set({prior_dir.name: 1500.0})
+            try:
+                self.assertTrue(redispatch())
+            finally:
+                supervisor._HISTORICAL_SUCCESSOR_STARTS.reset(token)
+
+    def test_history_validation_bounds_only_earlier_links_by_successor_start(self) -> None:
+        """历史链核验只给"后继已是历史 run"的较早一段设窗口终点（取后继 run 的开始时刻），链尾一段不设；
+        核验结束后上下文复位。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, prior_state, prior_manifest, prior_dir, successor, _receipt = (
+                self._environment_redispatch_fixture(root)
+            )
+            second_dir = root / "run-second"
+            second_dir.mkdir(mode=0o700)
+            second_state = {**prior_state, "started_at_epoch": 1500.0}
+            third = copy.deepcopy(successor)
+            third["batch_id"] = "vc-1-0003"
+            third["batch_sequence"] = 3
+            third["batch_sha256"] = "7" * 64
+            seen: list[tuple[str, float | None]] = []
+
+            def recorder(state, link_manifest, link_dir, successor_manifest, *, campaign_dir=None) -> bool:
+                seen.append((Path(link_dir).name, supervisor._historical_window_end(link_dir)))
+                return True
+
+            with mock.patch.object(supervisor, "_SUCCESSOR_PROTOCOLS", (("recorder", recorder),)):
+                supervisor._validate_batched_campaign_history(
+                    third,
+                    [(prior_state, prior_manifest, prior_dir), (second_state, successor, second_dir)],
+                    campaign_dir=campaign_dir,
+                    staging_model=False,
+                )
+            self.assertEqual(seen, [(prior_dir.name, 1500.0), ("run-second", None)])
+            self.assertIsNone(supervisor._HISTORICAL_SUCCESSOR_STARTS.get())
 
     def _b4_bind_supervisor_run_reconciliation(
         self,

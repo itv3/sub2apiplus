@@ -8346,7 +8346,7 @@ def _reconciled_watchdog_abort(
     reservations = _reservations_in_run_window(
         campaign_dir,
         float(prior_state.get("started_at_epoch", 0.0)),
-        _prior_run_terminal_epoch(prior_state),
+        _historical_window_end(prior_dir),
     )
     if reservations:
         campaign_id = str(prior_state.get("campaign_id", ""))
@@ -8606,7 +8606,7 @@ def _require_failed_parent_reconciled(
     reservations = _reservations_in_run_window(
         resolved_campaign,
         float(prior_state.get("started_at_epoch", 0.0)),
-        _prior_run_terminal_epoch(prior_state),
+        _historical_window_end(prior_dir),
     )
     if reservations:
         for reserved_candidate_id, _subject, attempt_root in reservations:
@@ -9627,15 +9627,15 @@ def _validate_batched_environment_redispatch_successor(
             return _protocol_reject(f"有效失败类 {effective_class} 不可逐字重派")
         # B4-1 改法 8（草表 D-03）：reservation 之后的失败属 attempt 中断——reconcile-supervisor-run 拒绝这类 run，
         # 本协议（"reservation 前"）让位给恢复链协议（按 attempt 对账收据承接），不再形态相符即失败关闭；没有
-        # Campaign 目录时无法判断预约，保持原判定。窗口在前序 run 终态时刻截止：后继重派自己产生的预约
-        # 不属于前序 run，不能回头把已承接的逐字重派改判为 attempt 中断。
+        # Campaign 目录时无法判断预约，保持原判定。回头核验较早一段时窗口在该段后继 run 开始时刻截止：后继重派
+        # 自己产生的预约不属于前序 run，不能回头把已承接的逐字重派改判为 attempt 中断。
         if (
             campaign_dir is not None
             and Path(campaign_dir).is_dir()
             and _reservations_in_run_window(
                 Path(campaign_dir).resolve(strict=True),
                 float(prior_state.get("started_at_epoch", 0.0)),
-                _prior_run_terminal_epoch(prior_state),
+                _historical_window_end(prior_dir),
             )
         ):
             return _protocol_reject("reservation 之后的失败属 attempt 中断，交给恢复链协议")
@@ -9870,13 +9870,21 @@ def _capture_summary_settled(summary_path: Path) -> bool:
     return payload.get("status") == "awaiting_receipts" and not _capture_results_have_failure(payload.get("results"))
 
 
-def _prior_run_terminal_epoch(prior_state: Mapping[str, Any]) -> float | None:
-    """父 run 进入终态的时刻（``state.json`` 的 ``terminal_at_epoch``）；缺失或非法时返回 None。
+# 回头核验历史后继链时，按"前序 run 目录名 → 该段后继 run 的开始时刻"封顶"父 run 期间预约"窗口：后继 run
+# 开跑之后发布的预约属于后继或更晚的 run。只有 _validate_batched_campaign_history 在核验较早一段时设置；链尾一段
+# （后继还是待派发清单）与单独调用的对账入口都取不到封顶，保持原判定。
+_HISTORICAL_SUCCESSOR_STARTS: contextvars.ContextVar[Mapping[str, float] | None] = contextvars.ContextVar(
+    "codex_upgrade_supervisor_historical_successor_starts", default=None
+)
 
-    回头核验历史后继链时，用它给"父 run 期间"的预约窗口封顶；拿不到时调用方退回只按开始时刻判定。
-    """
 
-    value = prior_state.get("terminal_at_epoch")
+def _historical_window_end(prior_dir: Path) -> float | None:
+    """当前历史链段的后继 run 开始时刻（窗口终点）；不在历史链核验中、前序是链尾或取值非法时返回 None。"""
+
+    starts = _HISTORICAL_SUCCESSOR_STARTS.get()
+    if not starts:
+        return None
+    value = starts.get(Path(prior_dir).name)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
     return float(value)
@@ -9885,7 +9893,7 @@ def _prior_run_terminal_epoch(prior_state: Mapping[str, Any]) -> float | None:
 def _reservations_in_run_window(
     campaign_dir: Path,
     started_at_epoch: float,
-    terminal_at_epoch: float | None = None,
+    window_end_epoch: float | None = None,
 ) -> list[tuple[str | None, str, Path]]:
     """父 run 期间发布、且未完整收口的全部 reservation（B4-1 改法 3；只读，与 reconciler 父 run 对账同判据）。
 
@@ -9894,15 +9902,15 @@ def _reservations_in_run_window(
     （等待封存且无失败 Job）的 attempt／段不算中断，不计入。返回 ``(candidate_id, subject, root)``，
     官方侧 candidate_id 为 None，恢复段 subject 为 ``<id>:ar<k>``。
 
-    给出 ``terminal_at_epoch`` 时窗口在父 run 终态时刻截止：之后发布的预约属于后继 run。回头核验较早的
-    后继链时必须封顶，否则失败批次 N 的逐字重派 N+1 一旦自己产生预约，就会被算回 N 的 run 期间，把当时已按
-    "无预约"对账通过的 N→N+1 改判为 attempt 中断（E5 VC-5 批次 14→15→16 实证：16 因此无法派发）。
+    给出 ``window_end_epoch``（该段后继 run 的开始时刻）时窗口在此截止：之后发布的预约属于后继或更晚的 run。
+    回头核验较早的后继链时必须封顶，否则失败批次 N 的逐字重派 N+1 一旦自己产生预约，就会被算回 N 的 run 期间，
+    把当时已按"无预约"对账通过的 N→N+1 改判为 attempt 中断（E5 VC-5 批次 14→15→16 实证：16 因此无法派发）。
     """
 
     started = datetime.fromtimestamp(float(started_at_epoch), tz=timezone.utc)
-    terminal = (
-        datetime.fromtimestamp(float(terminal_at_epoch), tz=timezone.utc)
-        if terminal_at_epoch is not None
+    window_end = (
+        datetime.fromtimestamp(float(window_end_epoch), tz=timezone.utc)
+        if window_end_epoch is not None
         else None
     )
     campaign_dir = Path(campaign_dir)
@@ -9917,7 +9925,7 @@ def _reservations_in_run_window(
             begun = datetime.fromisoformat(begun_raw.replace("Z", "+00:00"))
         except ValueError:
             return False
-        return begun.tzinfo is not None and begun >= started and (terminal is None or begun <= terminal)
+        return begun.tzinfo is not None and begun >= started and (window_end is None or begun < window_end)
 
     scopes: list[tuple[str | None, Path]] = [(None, campaign_dir / "official" / "attempts")]
     candidates_root = campaign_dir / "candidates"
@@ -11660,55 +11668,66 @@ def _validate_batched_campaign_history(
     # 已封存失败只能由链中的下一项消费。完整失败 attempt 可由普通 v2
     # 零请求预览承接；KeyboardInterrupt 孤儿仍由 v3 承接。v3 失败或其他
     # 终态一律停线，由 reconciler 对账，不再开放 sequence 专用恢复清单。
-    for index, (state, prior_manifest, _run_dir) in enumerate(ordered):
-        terminal_state = state.get("state")
-        if terminal_state == "stopped":
-            continue
-        if terminal_state == "watchdog-aborted":
-            # 第三批 B3-15（第 26 项）：被看门狗中止的父 run（无动作诊断）经 reconcile-supervisor-run 对账
-            # （legacy-interruption、无 reservation、零请求）后是可信终态，按失败终态走下方后继协议；
-            # 未对账仍失败关闭，但明确指向对账入口，不再是"没有可信终态"的死路。
-            # 草表 D-07：留有动作失败诊断的看门狗中止按诊断有效类对账后同样是可信终态，下方各协议按与 failed
-            # 相同的判定承接（诊断不可信、清单外、绑定漂移、永久失败类在 0-W 内即失败关闭）。
-            if campaign_dir is None:
-                raise SupervisorError("前序 Campaign 批次被看门狗中止：核验其对账收据需要 Campaign 目录。")
-            _reconciled_watchdog_abort(
-                Path(campaign_dir), _run_dir, state, label="看门狗中止的前序批次", prior_manifest=prior_manifest
+    # 回头核验较早一段时，该段后继已是历史 run：以它的开始时刻封顶前序"父 run 期间预约"窗口（链尾一段不封顶）。
+    successor_starts: dict[str, float] = {}
+    for index, (_state, _prior_manifest, prior_dir) in enumerate(ordered):
+        successor_state = combined[index + 1][0]
+        successor_started = None if successor_state is None else successor_state.get("started_at_epoch")
+        if isinstance(successor_started, (int, float)) and not isinstance(successor_started, bool) and successor_started > 0:
+            successor_starts[Path(prior_dir).name] = float(successor_started)
+    window_token = _HISTORICAL_SUCCESSOR_STARTS.set(successor_starts)
+    try:
+        for index, (state, prior_manifest, _run_dir) in enumerate(ordered):
+            terminal_state = state.get("state")
+            if terminal_state == "stopped":
+                continue
+            if terminal_state == "watchdog-aborted":
+                # 第三批 B3-15（第 26 项）：被看门狗中止的父 run（无动作诊断）经 reconcile-supervisor-run 对账
+                # （legacy-interruption、无 reservation、零请求）后是可信终态，按失败终态走下方后继协议；
+                # 未对账仍失败关闭，但明确指向对账入口，不再是"没有可信终态"的死路。
+                # 草表 D-07：留有动作失败诊断的看门狗中止按诊断有效类对账后同样是可信终态，下方各协议按与 failed
+                # 相同的判定承接（诊断不可信、清单外、绑定漂移、永久失败类在 0-W 内即失败关闭）。
+                if campaign_dir is None:
+                    raise SupervisorError("前序 Campaign 批次被看门狗中止：核验其对账收据需要 Campaign 目录。")
+                _reconciled_watchdog_abort(
+                    Path(campaign_dir), _run_dir, state, label="看门狗中止的前序批次", prior_manifest=prior_manifest
+                )
+            elif terminal_state != "failed":
+                raise SupervisorError("前序 Campaign 批次没有可信终态。")
+            successor_manifest = combined[index + 1][1]
+            prior_schema = prior_manifest.get("schema_version")
+            successor_schema = successor_manifest.get("schema_version")
+            if (
+                prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+                and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
+            ):
+                continue
+            # B4-1 改法 9：15 条后继协议按 _SUCCESSOR_PROTOCOLS 的固定顺序逐条尝试（顺序即原有的 if 链：工具演进作废
+            # 续跑预览必须先于环境／post-run-tooling 逐字重派——后者一旦认出可恢复的 seal 链失败就只接受逐字重派，而
+            # attempt 作业已被工具演进作废时逐字重派必然再败；seal 链非逐字续派先于逐字重派协议…），任一返回 True 即
+            # 通过；每条协议返回 False 时登记的拒因收进兜底文案。
+            rejections: list[str] = []
+            accepted = False
+            if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
+                for name, protocol in _SUCCESSOR_PROTOCOLS:
+                    token = _PROTOCOL_REJECTIONS.set([])
+                    try:
+                        accepted = bool(
+                            protocol(state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir)
+                        )
+                        reasons = list(_PROTOCOL_REJECTIONS.get() or [])
+                    finally:
+                        _PROTOCOL_REJECTIONS.reset(token)
+                    if accepted:
+                        break
+                    rejections.append(f"{name}：{'；'.join(reasons) if reasons else '形态不符'}")
+            if accepted:
+                continue
+            raise SupervisorError(
+                _unclaimed_failed_batch_message(state, prior_manifest, _run_dir, successor_manifest, rejections=rejections)
             )
-        elif terminal_state != "failed":
-            raise SupervisorError("前序 Campaign 批次没有可信终态。")
-        successor_manifest = combined[index + 1][1]
-        prior_schema = prior_manifest.get("schema_version")
-        successor_schema = successor_manifest.get("schema_version")
-        if (
-            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
-            and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
-        ):
-            continue
-        # B4-1 改法 9：15 条后继协议按 _SUCCESSOR_PROTOCOLS 的固定顺序逐条尝试（顺序即原有的 if 链：工具演进作废
-        # 续跑预览必须先于环境／post-run-tooling 逐字重派——后者一旦认出可恢复的 seal 链失败就只接受逐字重派，而
-        # attempt 作业已被工具演进作废时逐字重派必然再败；seal 链非逐字续派先于逐字重派协议…），任一返回 True 即
-        # 通过；每条协议返回 False 时登记的拒因收进兜底文案。
-        rejections: list[str] = []
-        accepted = False
-        if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
-            for name, protocol in _SUCCESSOR_PROTOCOLS:
-                token = _PROTOCOL_REJECTIONS.set([])
-                try:
-                    accepted = bool(
-                        protocol(state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir)
-                    )
-                    reasons = list(_PROTOCOL_REJECTIONS.get() or [])
-                finally:
-                    _PROTOCOL_REJECTIONS.reset(token)
-                if accepted:
-                    break
-                rejections.append(f"{name}：{'；'.join(reasons) if reasons else '形态不符'}")
-        if accepted:
-            continue
-        raise SupervisorError(
-            _unclaimed_failed_batch_message(state, prior_manifest, _run_dir, successor_manifest, rejections=rejections)
-        )
+    finally:
+        _HISTORICAL_SUCCESSOR_STARTS.reset(window_token)
 
     seen_batch_ids = {
         str(prior_manifest.get("batch_id"))
