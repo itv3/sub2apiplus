@@ -1,6 +1,6 @@
 """入口日常维护（E4-02，``tools/ci/entry_housekeeping.py``）：记录库清理（保留期、被 v2 认证与 P0 v2 证据引用的运行整份保留、
 保留记录的日志与原运行清单、与发布并发时放回、中断后放回、不并发、只算不删）、发布方续期、Go 编译缓存只删久未用的条目、
-空跑只留最近几次、根盘停线与 guard.sh 同一条。
+空跑只留最近几次、部署留下的旧暂存树每组只留最近两份（E4-03）、根盘停线与 guard.sh 同一条。
 
 记录库用 ``unit_records`` 的真实写入接口在临时目录里造，文件新旧用修改时间摆出来；清理时刻按参数给定，不依赖墙钟。
 """
@@ -283,6 +283,39 @@ class GoCacheAndDryRunRetentionTests(unittest.TestCase):
         with self.assertRaises(hk.HousekeepingError):
             hk.prune_dryruns(data, runroot, keep=0)
 
+    def test_superseded_staging_trees_keep_the_newest_two_per_tree(self) -> None:
+        """E4-03：部署留下的旧暂存树按名字分组、每组只留最近两份；当前暂存树不在的那组、名字对不上的、符号链接都不动。"""
+
+        data = self.base / "data"
+        staging = data / "staging"
+        for name in ("codex-entry-refactor-managed-tools", "codex-0.160.0-managed-tools"):
+            (staging / name).mkdir(parents=True)
+        entry = [f"codex-entry-refactor-managed-tools.superseded-2026100{day}t000000z" for day in (1, 2, 3)]
+        entry.append("codex-entry-refactor-managed-tools.superseded-20261003t000000z-4242")   # 同一时刻、名字带进程号
+        target = ["codex-0.160.0-managed-tools.superseded-20261004t000000z"]
+        orphan = [f"codex-0.157.0-managed-tools.superseded-2026092{day}t000000z" for day in (5, 6, 7)]
+        for name in (*entry, *target, *orphan):
+            (staging / name).mkdir()
+            (staging / name / "f").write_bytes(b"123")
+        (staging / "codex-entry-refactor-managed-tools.superseded-notes").mkdir()
+        link = staging / "codex-entry-refactor-managed-tools.superseded-20250101t000000z"
+        link.symlink_to(staging / entry[2], target_is_directory=True)
+        dry = hk.prune_superseded_staging(data, dry_run=True)
+        self.assertEqual(dry["removed"], entry[:2])
+        self.assertTrue(all((staging / name).is_dir() for name in entry), "只算不删")
+        report = hk.prune_superseded_staging(data)
+        self.assertEqual((report["removed"], report["removed_bytes"]), (entry[:2], 6))
+        self.assertEqual(report["groups"], {"codex-0.157.0-managed-tools": {"total": 3, "kept": 3, "removed": 0},
+                                            "codex-0.160.0-managed-tools": {"total": 1, "kept": 1, "removed": 0},
+                                            "codex-entry-refactor-managed-tools": {"total": 4, "kept": 2, "removed": 2}})
+        self.assertEqual(report["skipped_without_current_tree"], ["codex-0.157.0-managed-tools"])
+        self.assertEqual({path.name for path in staging.iterdir()},
+                         {"codex-entry-refactor-managed-tools", "codex-0.160.0-managed-tools", *entry[2:], *target, *orphan,
+                          "codex-entry-refactor-managed-tools.superseded-notes", link.name})
+        self.assertTrue(link.is_symlink())
+        with self.assertRaises(hk.HousekeepingError):
+            hk.prune_superseded_staging(data, keep=-1)
+
 
 class DiskLineTests(unittest.TestCase):
     def usage(self, used_percent: float, free_gib: float) -> object:
@@ -305,8 +338,8 @@ class DiskLineTests(unittest.TestCase):
             base = Path(directory).resolve()
             report = hk.run(data_root=base / "data", runroot=base / "run", go_cache="off")
         self.assertEqual(report["schema_version"], hk.SCHEMA)
-        self.assertEqual((report["go_cache"]["status"], report["record_store"]["status"], report["dryruns"]["status"]),
-                         ("absent", "absent", "done"))
+        self.assertEqual((report["go_cache"]["status"], report["record_store"]["status"], report["dryruns"]["status"],
+                          report["superseded_staging"]["status"]), ("absent", "absent", "done", "absent"))
         self.assertTrue(report["disk"]["ok"])
 
 

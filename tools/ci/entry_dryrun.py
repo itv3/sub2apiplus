@@ -16,7 +16,8 @@
 * 让路：有采集在跑（统一调度执行器的整机预约有存活的申请方）就不起，记 ``yielded``；空跑不申请整机，不能挡采集——门禁单元
   本来就会被采集预约停派。
 * 开跑前的日常维护（``entry_housekeeping.py``）：清 Go 编译缓存里 6 小时以上没用过的条目、清理单元执行记录库（保留期内与仍被
-  v2 认证、P0 v2 证据引用的都留着）、只留最近 5 次空跑的演练根与产物，再查根盘余量；越过停线（与派发前守卫同一条）就不跑，
+  v2 认证、P0 v2 证据引用的都留着）、只留最近 5 次空跑的演练根与产物、部署留下的旧暂存树每组只留最近 2 份（E4-03），再查
+  根盘余量；越过停线（与派发前守卫同一条）就不跑，
   结论 failed、没通过的一步记 ``disk``。维护报告摘要写进结论的 ``housekeeping``，全文在结论旁的 ``<结论名>.housekeeping.json``。
   环境变量 ``ENTRY_DRYRUN_HOUSEKEEPING=off`` 跳过维护（只给测试的替身环境用：不能碰开发机的 Go 缓存、不能看开发机的磁盘；
   驱动不设）。
@@ -294,7 +295,7 @@ def _housekeeping(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _housekeeping_summary(report: Mapping[str, Any]) -> dict[str, Any]:
-    go, store, dryruns = (report.get(key) or {} for key in ("go_cache", "record_store", "dryruns"))
+    go, store, dryruns, superseded = (report.get(key) or {} for key in ("go_cache", "record_store", "dryruns", "superseded_staging"))
     counts = store.get("counts") or {}
     return {
         "go_cache": {key: go.get(key) for key in ("status", "removed_files", "removed_bytes", "error") if key in go},
@@ -302,6 +303,8 @@ def _housekeeping_summary(report: Mapping[str, Any]) -> dict[str, Any]:
                          "removed": {kind: row.get("removed") for kind, row in counts.items()},
                          "removed_bytes": sum(int(row.get("removed_bytes") or 0) for row in counts.values())},
         "dryruns": {"status": dryruns.get("status"), "removed": len(dryruns.get("removed") or []), "error": dryruns.get("error")},
+        "superseded_staging": {"status": superseded.get("status"), "removed": len(superseded.get("removed") or []),
+                               "removed_bytes": superseded.get("removed_bytes"), "error": superseded.get("error")},
         "disk": report.get("disk"),
     }
 

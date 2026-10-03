@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""入口日常维护（E4-02）：入口空跑（每次部署后接在后台验证后面的那次、升级开工的那次）开跑之前先做四件事——清 Go 编译
-缓存里 6 小时以上没用过的条目、清理单元执行记录库、只留最近几次空跑的演练根与产物、查根盘余量。根盘越过停线（与派发前
+"""入口日常维护（E4-02）：入口空跑（每次部署后接在后台验证后面的那次、升级开工的那次）开跑之前先做五件事——清 Go 编译
+缓存里 6 小时以上没用过的条目、清理单元执行记录库、只留最近几次空跑的演练根与产物、部署留下的旧暂存树每组只留最近两份
+（E4-03）、查根盘余量。根盘越过停线（与派发前
 守卫 ``guard.sh`` 同一条：已用超过 69%，或可用少于 40 GiB 与参数文件 ``MIN_FREE_GIB`` 中较大的那个）时空跑不起，结论写明原因。
 
 为什么（方案第 8 节「ARM64 磁盘越过停线」、E3-01 发现的问题第 2 条）：
@@ -27,9 +28,14 @@
 
 空跑留存（``prune_dryruns``）：按 UTC 时间戳只留最近 5 次的演练根与空跑产物，在跑的空跑不动。
 
+旧暂存树（``prune_superseded_staging``，E4-03）：部署脚本每次部署前把上一份暂存树（数据根 ``staging/<名>-managed-tools``）改名为
+``<名>.superseded-<UTC>[-<进程号>]`` 留下，攒到 10-03 共 97 份、11.8 GiB。部署只用最新那份，部署收据只绑定数据根受管树的
+摘要，收据、账本与驱动安装记录都不引用旧副本（10-03 只读核实），内容可从部署源仓库按提交重新检出。按名字分组、按时间戳
+每组只留最近 2 份（对比最近两次部署用）；同名的当前暂存树不在时整组不动（布局异常，留给人看）。
+
 子命令：``run --data-root --runroot [--record-store] [--reference-root …] [--retention-days] [--keep-dryruns]
-[--go-cache auto|off|<目录>] [--min-free-gib] [--dry-run]``：做一遍并打印报告（JSON）；退出码 0 根盘在停线以内，5 越过停线，
-2 用法错误。
+[--keep-superseded] [--go-cache auto|off|<目录>] [--min-free-gib] [--dry-run]``：做一遍并打印报告（JSON）；退出码 0 根盘在停线
+以内，5 越过停线，2 用法错误。
 """
 
 from __future__ import annotations
@@ -56,6 +62,7 @@ GO_UNUSED_HOURS = 6.0
 DEFAULT_RETENTION_DAYS = 30.0
 GRACE_HOURS = 24.0
 KEEP_DRYRUNS = 5
+KEEP_SUPERSEDED = 2
 TEMP_MAX_AGE_SECONDS = 86400.0
 # 根盘停线：与 guard.sh 的派发前检查同一组数（已用 ≤69%、可用 ≥30 GiB、可用 ≥ 操作员阈值且不低于 40 GiB）。
 MAX_USED_PERCENT = 69.0
@@ -69,6 +76,7 @@ RUN_ID = re.compile(r"[0-9A-Za-z._-]+")
 GO_ENTRY_DIR = re.compile(r"[0-9a-f]{2}")
 DRYRUN_ROOT = re.compile(r"entry-dryrun-(\d{8}t\d{6}z)")
 DRYRUN_OUTPUT = re.compile(r"run-(\d{8}t\d{6}z)")
+SUPERSEDED_STAGING = re.compile(r"(?P<base>.+-managed-tools)\.superseded-(?P<stamp>\d{8}t\d{6}z)(?:-\d+)?")
 GO_CANDIDATES = ("/usr/local/go/bin/go",)
 # 扫引用文档时不进的目录：部署留下的受管工具树副本与字节码缓存（只有仓库文件，没有认证与收据）、版本库与前端依赖。
 SKIP_DIR_NAMES = frozenset({".git", "node_modules", "__pycache__"})
@@ -442,6 +450,43 @@ def prune_dryruns(data_root: Path, runroot: Path, *, keep: int = KEEP_DRYRUNS, b
             "kept": [stamp for stamp in stamps if stamp not in doomed], "removed": removed, "removed_bytes": removed_bytes}
 
 
+# ---------------------------------------------------------------- 部署留下的旧暂存树
+
+def prune_superseded_staging(data_root: Path, *, keep: int = KEEP_SUPERSEDED, dry_run: bool = False) -> dict[str, Any]:
+    """部署留下的旧暂存树按名字分组、按时间戳每组只留最近 ``keep`` 份（见模块说明）。同名的当前暂存树不在时整组不动；
+    符号链接、普通文件与名字对不上的都不动。"""
+
+    if keep < 0:
+        raise HousekeepingError("旧暂存树的留存份数不能是负数")
+    staging = Path(data_root) / "staging"
+    if not staging.is_dir():
+        return {"status": "absent", "keep": keep, "dry_run": dry_run, "groups": {}, "skipped_without_current_tree": [],
+                "removed": [], "removed_bytes": 0}
+    groups: dict[str, list[tuple[str, Path]]] = {}
+    for path in staging.iterdir():
+        matched = SUPERSEDED_STAGING.fullmatch(path.name)
+        if matched and path.is_dir() and not path.is_symlink():
+            groups.setdefault(matched.group("base"), []).append((matched.group("stamp"), path))
+    summary: dict[str, dict[str, int]] = {}
+    skipped: list[str] = []
+    removed: list[str] = []
+    removed_bytes = 0
+    for base, items in sorted(groups.items()):
+        items.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+        current = (staging / base).is_dir()
+        if not current:
+            skipped.append(base)
+        doomed = items[keep:] if current else []
+        for _stamp, path in doomed:
+            removed_bytes += _tree_bytes(path)
+            if not dry_run:
+                shutil.rmtree(path)
+            removed.append(path.name)
+        summary[base] = {"total": len(items), "kept": len(items) - len(doomed), "removed": len(doomed)}
+    return {"status": "done", "keep": keep, "dry_run": dry_run, "groups": summary, "skipped_without_current_tree": skipped,
+            "removed": sorted(removed), "removed_bytes": removed_bytes}
+
+
 # ---------------------------------------------------------------- 根盘
 
 def disk_status(path: Path = Path("/"), *, min_free_gib: float = MIN_FREE_GIB) -> dict[str, Any]:
@@ -458,14 +503,14 @@ def disk_status(path: Path = Path("/"), *, min_free_gib: float = MIN_FREE_GIB) -
 
 def disk_reason(disk: Mapping[str, Any]) -> str:
     return (f"根盘越过停线：已用 {disk['used_percent']}%（上限 {disk['max_used_percent']:g}%），可用 {disk['free_gib']} GiB"
-            f"（下限 {disk['min_free_gib']:g} GiB）；先腾空间（日常维护已清过 Go 编译缓存旧条目、记录库与旧空跑）")
+            f"（下限 {disk['min_free_gib']:g} GiB）；先腾空间（日常维护已清过 Go 编译缓存旧条目、记录库、旧空跑与部署留下的旧暂存树）")
 
 
 def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, reference_roots: Iterable[Path] | None = None,
-        retention_days: float = DEFAULT_RETENTION_DAYS, keep_dryruns: int = KEEP_DRYRUNS, go_cache: str = "auto",
-        min_free_gib: float = MIN_FREE_GIB, busy_dryruns: Iterable[str] = (), dry_run: bool = False,
+        retention_days: float = DEFAULT_RETENTION_DAYS, keep_dryruns: int = KEEP_DRYRUNS, keep_superseded: int = KEEP_SUPERSEDED,
+        go_cache: str = "auto", min_free_gib: float = MIN_FREE_GIB, busy_dryruns: Iterable[str] = (), dry_run: bool = False,
         disk_path: Path = Path("/"), store_now: float | None = None) -> dict[str, Any]:
-    """按顺序做一遍日常维护：Go 编译缓存 → 记录库 → 空跑留存 → 根盘。某一项出错只记在报告里，不挡后面几项。
+    """按顺序做一遍日常维护：Go 编译缓存 → 记录库 → 空跑留存 → 旧暂存树 → 根盘。某一项出错只记在报告里，不挡后面几项。
     ``store_now`` 只给记录库清理换一个判断新旧的时刻（验收与演练用），Go 编译缓存始终按墙钟。"""
 
     data_root, runroot = Path(data_root), Path(runroot)
@@ -478,6 +523,7 @@ def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, ref
         ("record_store", lambda: gc_record_store(store, reference_roots=roots, retention_hours=retention_days * 24, now=store_now,
                                                  dry_run=dry_run)),
         ("dryruns", lambda: prune_dryruns(data_root, runroot, keep=keep_dryruns, busy=busy_dryruns, dry_run=dry_run)),
+        ("superseded_staging", lambda: prune_superseded_staging(data_root, keep=keep_superseded, dry_run=dry_run)),
     )
     for name, action in steps:
         began = time.monotonic()
@@ -501,6 +547,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                        help="找引用文档的目录，可重复（默认数据根的 control、evidence、staging）")
     p_run.add_argument("--retention-days", type=float, default=DEFAULT_RETENTION_DAYS)
     p_run.add_argument("--keep-dryruns", type=int, default=KEEP_DRYRUNS)
+    p_run.add_argument("--keep-superseded", type=int, default=KEEP_SUPERSEDED, help="部署留下的旧暂存树每组留几份（默认 2）")
     p_run.add_argument("--go-cache", default="auto", help="auto（go env GOCACHE）、off 或缓存目录")
     p_run.add_argument("--min-free-gib", type=float, default=MIN_FREE_GIB)
     p_run.add_argument("--dry-run", action="store_true", help="只算不删")
@@ -524,7 +571,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"日常维护：--store-now-utc 要 YYYY-MM-DDTHH:MM:SSZ：{args.store_now_utc}", file=sys.stderr)
             return 2
     report = run(data_root=args.data_root, runroot=args.runroot, record_store=args.record_store, reference_roots=args.reference_root,
-                 retention_days=args.retention_days, keep_dryruns=args.keep_dryruns, go_cache=args.go_cache,
+                 retention_days=args.retention_days, keep_dryruns=args.keep_dryruns, keep_superseded=args.keep_superseded,
+                 go_cache=args.go_cache,
                  min_free_gib=args.min_free_gib, dry_run=args.dry_run, store_now=store_now)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["disk"]["ok"] else 5
