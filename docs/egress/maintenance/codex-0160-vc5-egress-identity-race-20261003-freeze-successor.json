@@ -1,0 +1,70 @@
+{
+  "base_commit": "5af71d9b0e3f37c8593a58e73ef77ed1a7df6fc9",
+  "changed_path_count": 2,
+  "current_commit": "0ce663c2338167f189719f1f6e320281b62ea5a7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5346,
+  "frozen_path_count": 1929,
+  "identity_sha256": "f0746f6fff06416ec7cf9d503733b03d526e9502a7a19a1b3cfde6e4170252fe",
+  "issued_at_utc": "2026-10-03T17:22:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0160-vc5-egress-identity-race-20261003-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "predecessor_sha256s": [
+        "030f443beddfb07265c31ada69cadfab756283f646d8e105ad500b6a1c17dfdd"
+      ],
+      "reason": "E5 VC-5 批次 19：维护等待放行守护在新容器进程启动瞬间的身份核验竞争，登记修复前生成器摘要 030f443b 为只读重放身份 path=tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-coordinate-decoupling-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item36-maintenance-wait-invalid-transient-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item36b-producer-replay-registration-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item63-64-merge-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6f8329206fa52a2d907124ec7403b5ea2da903b0667ecf0a204208c0025a793b"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_codex_runtime_egress.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
