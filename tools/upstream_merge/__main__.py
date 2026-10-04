@@ -17,12 +17,15 @@ from .disposition_draft import DISPOSITION_PURPOSES, draft_candidate_disposition
 from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
 from .plan_inputs import AWAITING_MANUAL_INPUT
-from .plan_replay import replay_trial_tree, seal_merge_with_replay
+from .conflict_rationale import conflict_input_from_rationale, draft_conflict_rationale
+from .plan_replay import conflict_replay, replay_trial_tree, seal_merge_with_replay
 from .request_render import PLAN_ROOT_NAME, render_request
 from .sink_registration import write_sink_registration
+from .surface_suggestions import write_surface_suggestions
 from .revision_advance import advance_revision
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
+    _load_merge_start,
     apply_candidate_to_managed_branch,
     carry_forward_inventory,
     delete_ci_branch,
@@ -254,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
     merge_seal = commands.add_parser("merge-seal", help="U-1 封存冲突台账和双父 merge commit")
     _add_plan(merge_seal)
     merge_seal.add_argument("--conflict-decisions", type=_absolute)
+    merge_seal.add_argument(
+        "--conflict-rationale",
+        type=_absolute,
+        help="“冲突路径 → 取舍理由”的 JSON；处置类型按 index 事实推断，签名后的决策写入 inputs/（UM-22）",
+    )
     merge_seal.add_argument(
         "--replay-from",
         type=_absolute,
@@ -646,13 +654,35 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             arguments.previous_plan,
         )
     if command == "merge-seal":
+        decisions = arguments.conflict_decisions
+        if arguments.conflict_rationale is not None:
+            if decisions is not None:
+                raise UpstreamMergeError("--conflict-rationale 与 --conflict-decisions 只能给一个")
+            if arguments.replay_from is not None:
+                paths = [item["path"] for item in conflict_replay(plan, arguments.replay_from)["remaining"]]
+            else:
+                paths = list(_load_merge_start(plan)["conflict_paths"])
+            decisions = conflict_input_from_rationale(
+                plan, arguments.conflict_rationale, paths, remaining=arguments.replay_from is not None
+            )
         if arguments.replay_from is not None:
-            return seal_merge_with_replay(plan, arguments.replay_from, arguments.conflict_decisions)
-        return seal_merge(plan, arguments.conflict_decisions)
+            return seal_merge_with_replay(plan, arguments.replay_from, decisions)
+        if decisions is None:
+            # 有冲突却没给决策：写理由草稿、列出推断的处置类型后停下（UM-22）；无冲突照常封存。
+            draft = draft_conflict_rationale(plan)
+            if draft is not None:
+                return draft
+        return seal_merge(plan, decisions)
     if command == "source-seal":
         return seal_source_candidate(plan, arguments.source_changes)
     if command == "surface-scan":
-        return scan_surfaces(plan)
+        document = scan_surfaces(plan)
+        # 新增路由的 Inventory 条目建议（UM-22）：非权威、写在 inputs/，起草失败只记原因，不影响扫描结果。
+        try:
+            suggestions = write_surface_suggestions(plan, document)
+        except UpstreamMergeError as error:
+            suggestions = f"未生成：{error}"
+        return {**document, "inventory_suggestions": suggestions}
     if command == "inventory-carry-forward":
         return carry_forward_inventory(plan, arguments.client, arguments.kind)
     if command == "surface-seal":
@@ -665,6 +695,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             "result": suggestion["result"],
             "output": str(arguments.output),
             "auto_accepted_count": suggestion["auto_accepted_count"],
+            "mechanical_count": sum(1 for item in suggestion["files"] if item["decision_source"] == "mechanical"),
             "manual_required_count": suggestion["manual_required_count"],
             "unresolved_paths": suggestion["unresolved_paths"],
         }

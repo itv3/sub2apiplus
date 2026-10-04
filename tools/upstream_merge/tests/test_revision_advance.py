@@ -323,7 +323,7 @@ class RevisionAdvanceTests(unittest.TestCase):
         ]
         done = ra.advance_revision(self.plan, self.source_changes(), resume=False)
         self.assertEqual(done["result"], "advanced")
-        self.assertEqual(done["reuse"]["change_decision"], {"auto": 1, "reused": 2, "pending": 0})
+        self.assertEqual(done["reuse"]["change_decision"], {"auto": 1, "mechanical": 0, "reused": 2, "pending": 0})
         self.assertEqual(latest_revision(self.plan, "impact_receipt"), 2)
 
     def test_changed_diff_and_surface_change_stop(self) -> None:
@@ -391,8 +391,40 @@ class RevisionAdvanceTests(unittest.TestCase):
         draft, pending, counts = ra._fill_change_decision(suggestion, previous_matrix, previous_matrix, previous_decision)
         self.assertEqual(pending, [])
         self.assertEqual(draft["files"][0]["rationale"], "人工改判：虽可自动但涉及共享控制面")
-        self.assertEqual(counts, {"auto": 0, "reused": 1, "pending": 0})
+        self.assertEqual(counts, {"auto": 0, "mechanical": 0, "reused": 1, "pending": 0})
         self.assertEqual(draft["auto_accepted_count"], 0)
+
+    def test_mechanical_decision_is_regenerated_and_human_override_wins(self) -> None:
+        # UM-22：机械决定每轮按 Git 事实重新生成、不进待人工；同 diff 下人工改判过的条目仍优先沿用。
+        matrix = {
+            "file_changes": [
+                {"path": name, "diff_sha256": "d", "old_path": "", "status": "M", "component_ownership": LOW}
+                for name in ("m.go", "o.go")
+            ]
+        }
+        base = {"categories": ["protocol_adapter"], "required_actions": ["y"], "official_client_identity_changed": False, "evidence_semantics_changed": False, "component_ownership": LOW}
+        suggestion = {
+            "files": [
+                {"path": "m.go", "rationale": "上游单侧改动，自动合入未做修改（机械）", "decision_source": "mechanical", **base},
+                {"path": "o.go", "rationale": "上游单侧改动，自动合入未做修改（机械）", "decision_source": "mechanical", **base},
+            ],
+            "surface_deltas": [],
+        }
+        previous_decision = {
+            "files": [
+                {"path": "m.go", "rationale": "上一轮的机械决定", "decision_source": "mechanical", **base},
+                {"path": "o.go", "rationale": "人工改判：上游改动涉及计费", "decision_source": "manual", **base},
+            ],
+            "surface_deltas": [],
+        }
+        draft, pending, counts = ra._fill_change_decision(suggestion, matrix, matrix, previous_decision)
+        self.assertEqual(pending, [])
+        self.assertEqual(counts, {"auto": 0, "mechanical": 1, "reused": 1, "pending": 0})
+        by_path = {item["path"]: item for item in draft["files"]}
+        self.assertEqual(by_path["m.go"]["rationale"], "上游单侧改动，自动合入未做修改（机械）")
+        self.assertEqual(by_path["o.go"]["decision_source"], "manual")
+        self.assertEqual(draft["manual_required_count"], 0)
+        self.assertEqual(draft["result"], "ready_to_seal")
 
     def test_preconditions_and_source_change_draft_checks(self) -> None:
         with self.assertRaisesRegex(UpstreamMergeError, "需要 --source-changes"):

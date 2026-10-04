@@ -2888,14 +2888,114 @@ def _suggested_change_decision_item(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 机械决定（UM-22）：按 Git 事实可以直接定性的变化文件，由工具写好理由，人工可改判为 manual。
+MECHANICAL_DECISION_ACTIONS = ("保留现有官方客户端合同", "运行公共终态门禁")
+MECHANICAL_FACTS = {
+    "upstream_only": "上游单侧改动，自动合入未做修改（Git 事实：merge-base 以来我方未改此文件，候选与上游逐字节相同）",
+    "both_auto_merged": (
+        "两侧均有改动且无冲突，自动合入结果同时保留我方改动与上游改动，未做额外修改"
+        "（Git 事实：候选与 Git 自动合并结果逐字节相同）"
+    ),
+}
+
+
+def _tree_objects(repository: Path, revision: str) -> dict[str, str]:
+    """一次列出某提交或树的全部文件：路径 → “模式:对象 ID”。"""
+
+    output = run_git(repository, "ls-tree", "-r", "-z", "--full-tree", revision).stdout
+    objects: dict[str, str] = {}
+    for record in output.split("\0"):
+        if not record:
+            continue
+        meta, path = record.split("\t", 1)
+        mode, _kind, object_id = meta.split(" ")
+        objects[path] = f"{mode}:{object_id}"
+    return objects
+
+
+def _auto_merge_tree(repository: Path, fork: str, upstream: str) -> str:
+    """Git 对 fork 与上游的自动合并结果树（与 merge-start 同为默认策略）；冲突文件带冲突标记，不参与机械判定。
+
+    合并候选可能由 plan-replay 用试验区定型树合成，非冲突文件也可能混入试验区的适配，所以“自动合并结果”
+    不取合并提交，而是现算。
+    """
+
+    completed = run_git(repository, "merge-tree", "--write-tree", fork, upstream, check=False)
+    if completed.returncode not in (0, 1) or not completed.stdout.strip():
+        raise UpstreamMergeError(f"git merge-tree 失败：{completed.stderr.strip()}")
+    return expect_git_object(completed.stdout.splitlines()[0].strip(), "自动合并结果树")
+
+
+def mechanical_merge_facts(
+    plan: LoadedPlan,
+    file_changes: Sequence[dict[str, Any]],
+    source_commit: str,
+) -> dict[str, str]:
+    """按 Git 事实找出可以机械决定的变化文件（UM-22），返回 路径 → 事实类型：
+
+    * ``upstream_only``：merge-base 以来我方没改，上游改了，且候选与上游逐字节相同；
+    * ``both_auto_merged``：两侧都改、合并无冲突，且候选与 Git 自动合并结果逐字节相同（合并后没再改）。
+
+    冲突文件、合并后又改过的文件、只有我方改动（即本次适配）的文件不在结果里，留给人工。v0.2.13 合并时
+    214 条待人工的 ChangeDecision 里有 199 条属于这两类，全靠临时脚本按同一口径填理由。改名按新旧两个路径
+    一起比较。
+    """
+
+    start = _load_merge_start(plan)
+    repository = plan.repository_root
+    fork, upstream = start["fork_head"], start["upstream_commit"]
+    trees = {
+        "base": _tree_objects(repository, start["merge_base"]),
+        "fork": _tree_objects(repository, fork),
+        "upstream": _tree_objects(repository, upstream),
+        "auto": _tree_objects(repository, _auto_merge_tree(repository, fork, upstream)),
+        "source": _tree_objects(repository, source_commit),
+    }
+    conflicts = set(start["conflict_paths"])
+    facts: dict[str, str] = {}
+    for change in file_changes:
+        paths = sorted({change["path"], change.get("old_path") or change["path"]})
+        if conflicts & set(paths):
+            continue
+        state = {name: tuple(tree.get(path) for path in paths) for name, tree in trees.items()}
+        fork_changed = state["base"] != state["fork"]
+        upstream_changed = state["base"] != state["upstream"]
+        if upstream_changed and not fork_changed and state["source"] == state["upstream"]:
+            facts[change["path"]] = "upstream_only"
+        elif upstream_changed and fork_changed and state["source"] == state["auto"]:
+            facts[change["path"]] = "both_auto_merged"
+    return facts
+
+
+def _mechanical_decision(item: dict[str, Any], entry: dict[str, Any], kind: str) -> dict[str, Any]:
+    components = "、".join(entry["component_ownership"].get("component_ids") or []) or "未登记组件"
+    return {
+        **item,
+        "decision_source": "mechanical",
+        "rationale": (
+            f"{MECHANICAL_FACTS[kind]}；所属组件：{components}。机械决定（工具按 Git 事实生成，可人工改判为 manual）："
+            "受保护对象（Claude/Codex 发布目录、画像与 Persona 选择器）由 U-1 校验，不改变官方客户端身份与证据语义，"
+            "实际行为以 U-4 门禁为准。"
+        ),
+        "required_actions": sorted(MECHANICAL_DECISION_ACTIONS),
+        "official_client_identity_changed": False,
+        "evidence_semantics_changed": False,
+    }
+
+
 def generate_change_decision_suggestion(
     plan: LoadedPlan,
     output_path: Path | None = None,
 ) -> dict[str, Any]:
-    """生成带安全分级的 ChangeDecision 草稿；高风险条目保持待人工状态。"""
+    """生成带安全分级的 ChangeDecision 草稿；按 Git 事实可定性的写成机械决定，其余高风险条目保持待人工状态。"""
 
     matrix = _load_impact_matrix(plan)
-    files = [_suggested_change_decision_item(entry) for entry in matrix["file_changes"]]
+    facts = mechanical_merge_facts(plan, matrix["file_changes"], _load_source_candidate(plan)["source_commit"])
+    files: list[dict[str, Any]] = []
+    for entry in matrix["file_changes"]:
+        item = _suggested_change_decision_item(entry)
+        kind = facts.get(entry["path"])
+        files.append(_mechanical_decision(item, entry, kind) if item["decision_source"] == "manual_required" and kind else item)
     surface_deltas = [
         {
             "delta_id": item["delta_id"],
@@ -2905,7 +3005,7 @@ def generate_change_decision_suggestion(
         }
         for item in matrix["surface_deltas"]
     ]
-    unresolved = [item["path"] for item in files if item["decision_source"] != "auto"]
+    unresolved = [item["path"] for item in files if item["decision_source"] == "manual_required"]
     document = _stage_document(
         plan,
         CHANGE_DECISION_INPUT_SCHEMA,
@@ -2917,7 +3017,7 @@ def generate_change_decision_suggestion(
             "mapping_schema": COMPONENT_OWNERSHIP_SCHEMA,
             "mapping_version": COMPONENT_OWNERSHIP_VERSION,
             "mapping_sha256": COMPONENT_OWNERSHIP_SHA256,
-            "auto_accepted_count": len(files) - len(unresolved),
+            "auto_accepted_count": sum(1 for item in files if item["decision_source"] == "auto"),
             "manual_required_count": len(unresolved) + len(surface_deltas),
             "unresolved_paths": sorted(unresolved),
             "result": "ready_for_review" if unresolved or surface_deltas else "ready_to_seal",
@@ -3130,6 +3230,7 @@ def seal_change_decision(plan: LoadedPlan, decision_path: Path) -> dict[str, Any
     if not isinstance(raw_files, list) or not raw_files:
         raise UpstreamMergeError("ChangeDecision.files 必须是非空数组")
     seen_files: set[str] = set()
+    mechanical_facts: dict[str, str] | None = None
     client_impacts = {"claude": False, "codex": False}
     client_campaigns = {"claude": False, "codex": False}
     shared_contract_required = False
@@ -3193,7 +3294,7 @@ def seal_change_decision(plan: LoadedPlan, decision_path: Path) -> dict[str, Any
                 f"{relative} 改变官方客户端身份；必须停止 §5.2 并拆分为 §5.3 Campaign"
             )
         decision_source = item.get("decision_source", "manual")
-        if decision_source not in {"manual", "auto", "manual_required"}:
+        if decision_source not in {"manual", "auto", "manual_required", "mechanical"}:
             raise UpstreamMergeError(f"{label}.decision_source 非法")
         expected_ownership = expected_entry.get(
             "component_ownership",
@@ -3214,6 +3315,14 @@ def seal_change_decision(plan: LoadedPlan, decision_path: Path) -> dict[str, Any
                 raise UpstreamMergeError(f"{relative} 自动分类未采用受管建议类别")
             if expected_ownership.get("status") != "known" or expected_ownership.get("unknown_dependency_ids"):
                 raise UpstreamMergeError(f"{relative} 组件所有权或依赖未知，禁止自动分类")
+        if decision_source == "mechanical":
+            # 机械决定只认 Git 事实：封存时现算一次，声明为机械但事实不成立（冲突、合并后又改、我方单侧改动）即拒绝。
+            if mechanical_facts is None:
+                mechanical_facts = mechanical_merge_facts(plan, matrix["file_changes"], source["source_commit"])
+            if relative not in mechanical_facts:
+                raise UpstreamMergeError(f"{relative} 不满足机械决定条件（冲突、合并后改动或我方单侧改动须人工决定）")
+            if identity_changed or semantics_changed:
+                raise UpstreamMergeError(f"{relative} 机械决定不得改变官方身份或证据语义")
         if expected_ownership.get("risk_levels") and "high" in expected_ownership["risk_levels"]:
             required_from_ownership = set(expected_ownership.get("suggested_categories", []))
             if not required_from_ownership.issubset(set(normalized_categories)):

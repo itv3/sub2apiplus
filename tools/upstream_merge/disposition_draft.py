@@ -6,8 +6,10 @@ v0.2.10 合并时 U-5 的三份输入由 gen_u5_inputs.py、gen_shared_contract.
 - 原业务回归收据：取验收收据中通过的 original_business 类门禁，绑定最新 SourceCandidate，签名后写入
   ``evidence/u5/original-business-receipt.json``；
 - 共享合同后继收据草稿（U-3 判定共享控制合同受影响时）：逐个列出最新 ChangeDecision 的
-  ``shared_control`` 路径及其在最新源码候选中的摘要，``purpose`` 与每条 ``change_kind``、``assessment``
-  留空由人工逐条填写，填好后 ``identity-seal`` 到 ``evidence/u5/shared-contract-successor.json``；
+  ``shared_control`` 路径及其在最新源码候选中的摘要，``purpose`` 由人工填写；每条的 ``change_kind`` 按路径预填
+  （前端、台账、单测、依赖、数据访问、第三方协议等，见 ``CHANGE_KIND_RULES``，UM-22），单测、前端、台账等
+  纯机械类同时预填评估，其余评估与没命中的类型留空由人工逐条填写，填好后 ``identity-seal`` 到
+  ``evidence/u5/shared-contract-successor.json``；
 - 处置输入：各客户端的 mode 按 U-3 判定，candidate／approval／acceptance 自动填本 Plan 制品，
   ``campaign_path`` 由人工用 ``--campaign client=路径`` 指定并按已登记的生产收据格式校验。
 
@@ -47,6 +49,31 @@ from .workflow import (
 )
 
 DISPOSITION_PURPOSES = ("validation_only", "production_replacement")
+# 共享合同后继草稿的 change_kind 预填（UM-22）：按历次合并（v0.2.4、v0.2.10、v0.2.13）人工填写的口径，
+# 只覆盖按路径就能判断的几类；有歧义的（如 http_upstream.go 既可能是传输参数也可能是第三方出站）留空给人工。
+# 前一项命中即用，(前缀, 后缀, change_kind, 评估模板)；评估模板为空表示只预填类型、评估仍由人工写。
+CHANGE_KIND_RULES: tuple[tuple[str, str, str, str], ...] = (
+    ("frontend/", "", "ui_only", "前端界面或其测试，只在浏览器侧运行，不参与后端出站与官方 Persona 共享合同。"),
+    ("docs/egress/maintenance/", ".json", "ledger_append", "本次合并追加的台账或承接收据，只追加记录，不改变运行时行为。"),
+    ("", "_test.go", "test_only", "单元测试，只在测试中运行，不参与运行时出站。"),
+    ("backend/go.mod", "", "dependency_bump", ""),
+    ("backend/go.sum", "", "dependency_bump", ""),
+    ("backend/internal/repository/http_upstream", "", "", ""),
+    ("backend/internal/repository/", ".go", "data_access", ""),
+    ("backend/internal/pkg/", ".go", "third_party_protocol_adapter", ""),
+    ("docs/", ".md", "documentation", "文档改动，不参与运行时。"),
+    ("deploy/", ".example.yaml", "config_example", "部署示例配置，不参与运行时出站。"),
+    (".github/", "", "repository_support", ""),
+)
+
+
+def suggest_change_kind(path: str) -> tuple[str, str]:
+    """按路径预填 change_kind 与评估模板；不命中任何一类时返回空串，由人工填写。"""
+
+    for prefix, suffix, kind, assessment in CHANGE_KIND_RULES:
+        if path.startswith(prefix) and path.endswith(suffix):
+            return kind, assessment
+    return "", ""
 ORIGINAL_BUSINESS_NAME = "original-business-receipt.json"
 SHARED_CONTRACT_NAME = "shared-contract-successor.json"
 SHARED_CONTRACT_DRAFT_NAME = "shared-contract-successor-draft.json"
@@ -113,7 +140,13 @@ def draft_candidate_disposition(
             "scope": f"sub2api-{plan.document['upstream']['tag']}-upstream-merge",
             "purpose": "",
             "affected_paths": [
-                {"path": path, "sha256": sha256, "bytes": size, "change_kind": "", "assessment": ""}
+                {
+                    "path": path,
+                    "sha256": sha256,
+                    "bytes": size,
+                    "change_kind": suggest_change_kind(path)[0],
+                    "assessment": suggest_change_kind(path)[1],
+                }
                 for path, (sha256, size) in sorted(facts.items())
             ],
             "fail_close_behavior": SHARED_CONTRACT_FAIL_CLOSE,

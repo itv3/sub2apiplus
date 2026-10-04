@@ -148,6 +148,27 @@ class ReceiptValidationTests(unittest.TestCase):
             validate_campaign(revoked, client="claude", mode="new_candidate", persona=OFFICIAL_CLIENTS["claude"]["persona"], target_version="2.1.226")
 
 
+class ChangeKindSuggestionTests(unittest.TestCase):
+    def test_path_rules_follow_previous_merges(self) -> None:
+        cases = {
+            "frontend/src/views/user/KeysView.vue": "ui_only",
+            "frontend/src/views/user/__tests__/KeysView.spec.ts": "ui_only",
+            "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json": "ledger_append",
+            "backend/internal/pkg/xai/billing_test.go": "test_only",
+            "backend/go.sum": "dependency_bump",
+            "backend/internal/repository/api_key_repo.go": "data_access",
+            "backend/internal/pkg/typesafe/systemone.go": "third_party_protocol_adapter",
+            "backend/internal/repository/http_upstream.go": "",
+            "backend/internal/officialegress/guard.go": "",
+        }
+        for path, kind in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(dd.suggest_change_kind(path)[0], kind)
+        # 依赖升级只预填类型，评估仍须人工写。
+        self.assertEqual(dd.suggest_change_kind("backend/go.mod"), ("dependency_bump", ""))
+        self.assertTrue(dd.suggest_change_kind("backend/internal/pkg/xai/billing_test.go")[1])
+
+
 class DispositionDraftTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -190,7 +211,14 @@ class DispositionDraftTests(unittest.TestCase):
         validate_identity(result["original_business_receipt"], "原业务回归收据")
         draft = result["shared_contract_draft"]
         self.assertEqual([item["path"] for item in draft["affected_paths"]], sorted(SHARED))
-        self.assertTrue(all(item["assessment"] == "" for item in draft["affected_paths"]))
+        # UM-22：按路径预填 change_kind；http_upstream.go 有歧义留空，部署示例配置连评估一起预填。
+        by_path = {item["path"]: item for item in draft["affected_paths"]}
+        self.assertEqual(
+            (by_path["backend/internal/repository/http_upstream.go"]["change_kind"], by_path["backend/internal/repository/http_upstream.go"]["assessment"]),
+            ("", ""),
+        )
+        self.assertEqual(by_path["deploy/config.example.yaml"]["change_kind"], "config_example")
+        self.assertTrue(by_path["deploy/config.example.yaml"]["assessment"])
         self.assertEqual(draft["scope"], "sub2api-v1.0.1-upstream-merge")
         clients = result["disposition_input"]["clients"]
         self.assertEqual(clients["claude"]["mode"], "new_candidate")

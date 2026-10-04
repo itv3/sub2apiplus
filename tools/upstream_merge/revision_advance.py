@@ -254,7 +254,7 @@ def _fill_change_decision(
     previous_deltas = {item["delta_id"]: item for item in previous_decision["surface_deltas"]}
     files: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
-    counts = {"auto": 0, "reused": 0, "pending": 0}
+    counts = {"auto": 0, "mechanical": 0, "reused": 0, "pending": 0}
     for item in suggestion["files"]:
         path = item["path"]
         current = current_entries[path]
@@ -272,9 +272,10 @@ def _fill_change_decision(
             files.append({"path": path, **{field: decided[field] for field in DECISION_FILE_FIELDS if field in decided}})
             counts["reused"] += 1
             continue
-        if item["decision_source"] == "auto":
+        if item["decision_source"] in {"auto", "mechanical"}:
+            # 自动分类与机械决定（UM-22）都由本轮建议按当前事实重新生成，不沿用上一轮。
             files.append(item)
-            counts["auto"] += 1
+            counts[item["decision_source"]] += 1
             continue
         if reusable:
             reason = "组件映射与上一轮不同"
