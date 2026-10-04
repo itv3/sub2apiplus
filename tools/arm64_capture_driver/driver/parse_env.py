@@ -40,6 +40,8 @@ OPTIONAL_KEYS = (
     "ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT", "ENTRY_ROOT",
     # P0 收据（E2-07 固定步骤）的回退依据：上一版本可回退点的收据文件（如前序 Campaign 的画像目录晋升收据）。
     "P0_ROLLBACK_EVIDENCE",
+    # VC-5 补齐批准和 token 的最低剩余有效期；不继承外层残留批准。
+    "VC5_ADMISSION_APPROVAL", "VC5_ADMIN_TOKEN_MIN_SECONDS",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -142,6 +144,14 @@ def parse(text: str) -> dict[str, str]:
         not values["P0_ROLLBACK_EVIDENCE"].startswith("/") or ".." in values["P0_ROLLBACK_EVIDENCE"].split("/")
     ):
         raise EnvFileError("P0_ROLLBACK_EVIDENCE 必须是不含 .. 的绝对路径")
+    if "VC5_ADMISSION_APPROVAL" in values and (
+        not values["VC5_ADMISSION_APPROVAL"].startswith("/") or ".." in values["VC5_ADMISSION_APPROVAL"].split("/")
+    ):
+        raise EnvFileError("VC5_ADMISSION_APPROVAL 必须是不含 .. 的绝对路径")
+    if "VC5_ADMIN_TOKEN_MIN_SECONDS" in values and (
+        not values["VC5_ADMIN_TOKEN_MIN_SECONDS"].isdigit() or int(values["VC5_ADMIN_TOKEN_MIN_SECONDS"]) < 1800
+    ):
+        raise EnvFileError("VC5_ADMIN_TOKEN_MIN_SECONDS 必须是至少 1800 的整数")
     return values
 
 

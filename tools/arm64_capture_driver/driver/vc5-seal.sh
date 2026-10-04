@@ -8,7 +8,7 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
-ensure_admin_token
+vc5_require_admission
 ATT="$1"; A="$NEWDIR/candidates/$CAND/attempts/$ATT"; EV="$A/evidence"; test -f "$A/attempt.json"
 IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
 BUILD_ID=$(python3 -c "import json; print(json.load(open('$NEWDIR/candidates/$CAND/build-receipt.json'))['build']['build_id'])")

@@ -9,13 +9,12 @@
 # 原 vc5-run-batch.out 若没有 RUN_BATCH_DONE（失败批次的日志）先改名留档；已有完成标记时不重复派发。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+vc5_dispatch_lock
+vc5_require_admission
 PREVIEW="$1"; test -f "$PREVIEW"
-export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
-ensure_admin_token
 OUT="$RUNROOT/vc5-run-batch.out"
 if [ -f "$OUT" ] && grep -q '^RUN_BATCH_DONE ' "$OUT"; then echo "VC5_RECOVER_SKIP: $OUT 已有 RUN_BATCH_DONE"; exit 0; fi
 if [ -f "$OUT" ]; then mv "$OUT" "$OUT.failed-$(date -u +%Y%m%dt%H%M%Sz)"; fi
-echo $$ > "$RUNROOT/vc5-run-batch.pid"
 mkdir -p "$W"; chmod 700 "$W"
 python3 "$DRV/gen_vc5_recovery_plans.py" "$W" "$NEWDIR" "$PREVIEW" | cut -c1-400
 # 与 vc5-start 同一套派发前检查与候选网关切换：补跑复用的旧结果要求本轮 before 探针与来源 attempt 的 after 探针
@@ -31,6 +30,7 @@ print(cu._directory_tree_digest(Path('$B/source')))")
 echo "IMAGE_ID=$IMAGE_ID BUILD_ID=$BUILD_ID TAG=$TAG TREE=$TREE"
 echo "=== 切换候选网关"; bash "$DRV/vc5-switch.sh" candidate "$TAG" "$IMAGE_ID" "$TREE" "$BUILD_ID" 2>&1 | tail -n 3
 echo "=== 预检"; bash "$DRV/vc5-precheck.sh" "$IMAGE_ID" "$BUILD_ID" 2>&1 | tail -n 6 | cut -c1-240
+echo $$ > "$RUNROOT/vc5-run-batch.pid"
 batch() {
   local seq="$1" plan="$2"
   bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$seq" VC-4 "$plan" | grep -v "^$" || true

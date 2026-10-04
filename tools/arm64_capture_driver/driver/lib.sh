@@ -78,6 +78,47 @@ AS=$D/control/$NEW-assertions
 # 下一批次序号：按 control/vc/batches 中已 COMMIT 的最大序号 +1
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# VC-5 入口只消费已批准准入；不再在只读预检、收尾或重跑入口隐式续签。
+vc5_require_admission() {
+  local parameters
+  parameters=$(bash "$DRV/vc5-precheck.sh" --consume --export-parameters) || return 3
+  eval "$parameters"
+  export ADMIN_BEARER_TOKEN_FILE="$D/state/$UP/admin-token"
+}
+# start/recover 共享同一文件描述符锁；后台批次继承描述符，直到批次退出才释放。
+# 锁文件已有权限或属主不合同时拒绝，绝不通过 chmod 修正陌生锁。
+vc5_dispatch_lock() {
+  local lock="$RUNROOT/vc5-dispatch.lock"
+  python3 -B - "$lock" <<'PY' || return 3
+import os, stat, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.is_absolute() or ".." in p.parts or any(q.is_symlink() for q in (p, *p.parents)):
+    sys.exit("VC-5 派发锁路径不可信")
+try:
+    fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+except FileExistsError:
+    info = p.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+        sys.exit("VC-5 派发锁属主、模式或类型不合合同")
+else:
+    os.close(fd)
+PY
+  exec 9< "$lock" || return 3
+  python3 -B - "$lock" <<'PY' || return 3
+import fcntl, os, stat, sys
+from pathlib import Path
+p = Path(sys.argv[1]); info = os.fstat(9); actual = p.lstat()
+if (any(q.is_symlink() for q in (p, *p.parents)) or not stat.S_ISREG(info.st_mode)
+        or (info.st_dev, info.st_ino) != (actual.st_dev, actual.st_ino)
+        or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600):
+    sys.exit("VC-5 派发锁发生路径、属主或模式漂移")
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit("已有 VC-5 派发或恢复批次持锁，禁止抢派")
+PY
+}
 # 候选测试树（VC-5 目标平台门禁的 gates.sh prepare 与 VC-0 预跑 vc0-gate-target.sh 共用同一段实现）：
 #   从完整历史测试树 $HISTORY_TEST_TREE 克隆 → 从 bundle 取分支 → 分离 HEAD 检出指定提交 → 断言。
 #   测试树必须带完整 Git 历史（上游合并／历史漂移冻结测试要读基准提交），所以从完整历史测试树克隆，不能只 fetch bundle；

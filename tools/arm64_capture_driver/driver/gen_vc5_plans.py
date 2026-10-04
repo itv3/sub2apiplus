@@ -7,8 +7,17 @@ import json, os, pathlib, sys
 sys.dont_write_bytecode = True
 from driver_config import load_config, candidate_job_ids
 CONFIG = load_config()
+from vc5_admission import Admission, ManagedFacts
+try:
+    ADMISSION = Admission(CONFIG, ManagedFacts(CONFIG)).consume()
+except Exception:
+    raise SystemExit("VC-5 准入收据复核失败，禁止生成计划")
+CONFIG.update(ADMISSION["effective_parameters"])
+os.environ.update(ADMISSION["effective_parameters"])
 
 out = pathlib.Path(sys.argv[1]); cid = sys.argv[2]; cand = sys.argv[3]; image_id = sys.argv[4]; build_id = sys.argv[5]
+if (cid, cand, image_id, build_id) != tuple(ADMISSION["bindings"][key] for key in ("campaign", "candidate", "image_id", "build_id")):
+    raise SystemExit("VC-5 计划参数未绑定当前准入收据")
 attempt = sys.argv[6] if len(sys.argv) > 6 else None
 seal_sha = sys.argv[7] if len(sys.argv) > 7 else None
 D = os.environ["D"]; NEW = f"{D}/evidence/campaigns/{cid}"; TOOLS = f"{D}/tools/official_client_capture"

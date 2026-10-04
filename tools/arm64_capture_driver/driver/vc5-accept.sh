@@ -5,7 +5,7 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
-ensure_admin_token
+vc5_require_admission
 ATT="$1"
 # 修复轮规则（E4-01，指南「修好接着跑」）：验收前当前部署的后台验证必须已有通过的结论（全集通过）。
 if ! python3 -B "$DRV/background_validation.py" require-passed --runroot "$RUNROOT" --data-root "$D"; then

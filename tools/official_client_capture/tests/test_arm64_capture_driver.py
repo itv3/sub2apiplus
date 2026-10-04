@@ -30,6 +30,7 @@ import json
 import os
 import pwd
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -427,7 +428,7 @@ class _DriverFixture:
 class Vc5AllResumeTests(unittest.TestCase):
     """vc5-all.sh 以 stub 子脚本运行：只验证阶段续跑分支，不触碰任何受管工具。"""
 
-    STUBS = ("vc5-start.sh", "vc5-seal.sh", "vc5-accept.sh", "vc5-canonical2.sh", "gates.sh", "guard.sh")
+    STUBS = ("vc5-precheck.sh", "vc5-start.sh", "vc5-seal.sh", "vc5-accept.sh", "vc5-canonical2.sh", "gates.sh", "guard.sh")
 
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
@@ -442,7 +443,9 @@ class Vc5AllResumeTests(unittest.TestCase):
                 body += f"mkdir -p '{fixture.newdir}/acceptance/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/acceptance/{fixture.cand}/result.json'\n"
             if name == "vc5-canonical2.sh":
                 body += f"mkdir -p '{fixture.newdir}/control/vc/receipts/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/control/vc/receipts/{fixture.cand}/vc5-completion.json'\n"
-            body += "echo CANONICAL2_DONE STUB_OK\n"
+            # 准入的标准输出是安全 export；空输出表示本夹具无需替换任何参数，不能把旧 banner 交给 eval。
+            if name != "vc5-precheck.sh":
+                body += "echo CANONICAL2_DONE STUB_OK\n"
             (drv / name).write_text(body, encoding="utf-8")
             (drv / name).chmod(0o700)
         return drv, calls
@@ -470,7 +473,7 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-canonical2.sh"], "compare／acceptance 结果存在时只允许进入 canonical 交接")
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-canonical2.sh"], "先消费准入，再进入 canonical 交接")
             self.assertIn("seal 链已完成", result.stdout)
             self.assertIn("accept 已完成", result.stdout)
             self.assertIn("VC5_ALL_DONE", result.stdout)
@@ -487,7 +490,7 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-accept.sh", "vc5-canonical2.sh"])
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-accept.sh", "vc5-canonical2.sh"])
             self.assertNotIn("vc5-seal.sh", called)
             self.assertNotIn("vc5-start.sh", called)
 
@@ -637,6 +640,7 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
         for name in (*self.WRITE_STUBS, "vc5-seal-receipts.sh"):
             (drv / name).write_text(f"#!/bin/bash\necho \"{name} $*\" >> '{calls}'\necho STUB_OK\n", encoding="utf-8")
             (drv / name).chmod(0o700)
+        (drv / "vc5-precheck.sh").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
         (drv / "gen_vc5_plans.py").write_text(
             "import os, sys\n"
             f"open('{calls}', 'a').write('gen_vc5_plans.py ' + ' '.join(sys.argv[1:]) + '\\n')\n"
@@ -768,11 +772,21 @@ class DriverParameterizationTests(unittest.TestCase):
             commands = [
                 ['gen_vc2_plans.py', str(output), fixture.new, fixture.inputs, 'b' * 64],
                 ['gen_vc4_record_plan.py', image_id, 'build-test', str(root / 'evidence'), str(output / 'vc4.json'), fixture.new, fixture.cand, str(fixture.candidate_dir)],
-                ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test'],
             ]
             for name, *args in commands:
                 result = subprocess.run([sys.executable, str(SCRIPTS / name), *args], env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # VC-5 参数生成现在要求先消费准入；注入隔离收据测试参数转换，不提供产品测试旁路。
+            receipt = {"bindings": {"campaign": fixture.new, "candidate": fixture.cand, "image_id": image_id, "build_id": "build-test"},
+                       "effective_parameters": {"PROFILE_ID": "codex-0.156.1-official", "PROFILE_DIGEST": "3" * 64,
+                                                "OFFICIAL_CAMPAIGN": str(fixture.newdir)}}
+            fake_admission = mock.Mock()
+            fake_admission.Admission.return_value.consume.return_value = receipt
+            with mock.patch.dict(os.environ, environment), mock.patch.dict(sys.modules, {"vc5_admission": fake_admission}), \
+                    mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]), \
+                    mock.patch.object(sys, "argv", ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test']), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(str(SCRIPTS / 'gen_vc5_plans.py'), run_name='__main__')
             vc2 = json.loads((output / 'action-plan-vc2-approve.json').read_text())['actions'][0]['command']
             self.assertEqual(vc2[vc2.index('--profile-patch-manifest') + 1], str(fixture.data_root / 'tools/official_client_capture/profile_rule_patches_0_156_1.json'))
             for name in ('vc4.json', 'action-plan-vc5-run.json'):

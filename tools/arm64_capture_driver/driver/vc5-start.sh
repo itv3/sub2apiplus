@@ -3,6 +3,8 @@
 # 用法：ARM64_VC_ENV=… bash vc5-start.sh（批次日志 $RUNROOT/vc5-run-batch.out）
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+vc5_dispatch_lock
+vc5_require_admission
 if [ -f "$RUNROOT/vc5-run-batch.out" ]; then echo "VC5_START_SKIP: $RUNROOT/vc5-run-batch.out 已存在（run 批次已派发过，不重复）"; exit 0; fi
 echo "=== 派发前检查（驱动/磁盘/总账/账本/VC-4 checkpoint）"; bash "$DRV/guard.sh" pre-vc5 "$NEWDIR" 2>&1 | tee -a "$RUNROOT/guard-pre-vc5.out"
 IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
