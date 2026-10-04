@@ -1,0 +1,1904 @@
+{
+  "base_commit": "8ee08499e216346c266ccfe8ed8cc34cf6051652",
+  "base_tree": "45aab51eac80fa4d6c0c95fd94c390ccb803a505",
+  "chain_sequence": 1,
+  "current_commit": "bfd0249f0a2efbb7f87b21a46ebf2c3a8eb5f0dc",
+  "current_tree": "361676d192762acef8a7757a7a808b42ee641f01",
+  "entries": [
+    {
+      "current_sha256": "160aee5d84742735c2d8e1affa57e2823ca672aabf9d07ee89fa19f3ffddc952",
+      "old_path": "",
+      "path": ".github/SECURITY.md",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=.github/SECURITY.md",
+      "status": "A"
+    },
+    {
+      "current_sha256": "dd413860b3a3af5570390525a598b46a6dcaea1d8c31f4b5f00f0d77b13f868b",
+      "old_path": "",
+      "path": "README_CN.md",
+      "predecessor_sha256": "7094d2ad2cdc2ab878d8e573d46a2ca0f26c3459a7bf4bb7890f7d2ef2e24bc0",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=README_CN.md",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a2360447b0685602375f211322ff397b0eb8be1d291f4c95173fccb189d19175",
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256": "a39ee67c48e8d69394f08c0a70af839f1b263a38a5977a41af0af97de8f27bc8",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/cmd/server/VERSION",
+      "status": "M"
+    },
+    {
+      "current_sha256": "47b478102b2db30e43e6664b925935fcb05952ad3d5bb6d639ec80eabd8106fd",
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256": "45e72d205a3ef0f372a9729aae7143ecbde27422aed3838a2e268df5eb4215b7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/cmd/server/wire_gen.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5819dbaaf3adb4cec9d72ff9223a41b67a660b1a462465d8e3c73cbeb69d8fdd",
+      "old_path": "",
+      "path": "backend/ent/migrate/schema.go",
+      "predecessor_sha256": "4236ce13d9b2a456b26eec8e83d9a60184a2d7e7d75fdfc15a80107807edb48a",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/migrate/schema.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5bb4899bf5051dda7f2cc7272f2614aec6e3637da5e4481df0e12a654a47c62f",
+      "old_path": "",
+      "path": "backend/ent/mutation.go",
+      "predecessor_sha256": "0f9907b817337c2c34364cf9ab2d1e12c4383955205c8eee06591ccf4eed1295",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/mutation.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "47f81b091afb1e9b5557425cffcc6d3617a1a03292a9348ce5fe6ca53c22f6f9",
+      "old_path": "",
+      "path": "backend/ent/paymentorder.go",
+      "predecessor_sha256": "b360500c56556fa151ab77b700ec10654ecc76747d557c0666b49cf53248f570",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/paymentorder.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "89ea10fb3eb4fe998e1630b2aa7801312682f66b507d134654bbfd56db923197",
+      "old_path": "",
+      "path": "backend/ent/paymentorder/paymentorder.go",
+      "predecessor_sha256": "d32a4271bfe5a37aa1cdcd037e8cf5a8f48e366b1575ceda20912b466bda9bcf",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/paymentorder/paymentorder.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0a4c6f5ceb20081b477d635192be6d51c91fbc53c9a2ba630e0dd26e8b95185b",
+      "old_path": "",
+      "path": "backend/ent/paymentorder/where.go",
+      "predecessor_sha256": "60b5d384f003817efb7879a86e12e6c46ce73a8f5d10490b33dc86dade2e31a2",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/paymentorder/where.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e7ef978bbd59ee8ffb358e5b551e07f60e6b87dfd723be44df1db553cf4a7a00",
+      "old_path": "",
+      "path": "backend/ent/paymentorder_create.go",
+      "predecessor_sha256": "b5771a86ae9528aea2a6c9679bf696a48de68ebb47d6f8aa9ff7ef1d5e5a6841",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/paymentorder_create.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8f68eddcc4a16d27a71b4333970ac8a4d7b485a66e8df5b926c16bf235eb7b3c",
+      "old_path": "",
+      "path": "backend/ent/paymentorder_update.go",
+      "predecessor_sha256": "ac76b35cfe860804ba347f847b088f590f25170ecfe5c8d11236ab5ceb05f1e7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/paymentorder_update.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0d18af00bc39f9df3e12599a0133a19f0a917a6c06854132b0b0908d45664bda",
+      "old_path": "",
+      "path": "backend/ent/runtime/runtime.go",
+      "predecessor_sha256": "6b8951413731bd3713a3d28a9c7ea2e6632649e8fad1643a945795bc39fc271d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/runtime/runtime.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e63b934ef42662202936e85cf700a6fe76527407d06f7b5b82533eb48447b4dd",
+      "old_path": "",
+      "path": "backend/ent/schema/payment_order.go",
+      "predecessor_sha256": "3bd061fdf838c0264ba8f2c756671d87326b4d32a50a6f1be2a9d3291e155456",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/schema/payment_order.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3178eca825e51fff07a51ae07be1d34e1371007c8c8390e75f19943216df5df6",
+      "old_path": "",
+      "path": "backend/ent/schema/user_platform_quota.go",
+      "predecessor_sha256": "13635fba2004dc54a58427566ba4535b9ab8cc87a4fc4837fb1063b4ac9e083f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/ent/schema/user_platform_quota.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "34cd6ee8e65a40a1cbd97b43994d96aefc3a91e485c64fd1908d7a6800808ae9",
+      "old_path": "",
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256": "2e97923b8faa0a17859ead9bc8f078071759ac7b071c1549658497c6a4c9896d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/config/config.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a050a3571a232a5a86d43edb6a8116b49883ab07def751ae9bb324d307e04729",
+      "old_path": "",
+      "path": "backend/internal/domain/constants.go",
+      "predecessor_sha256": "c7de08ca8843956b04011365f1075612eb5835f9073dd116a2a542135e2d9326",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/domain/constants.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "892587e51062d406d74b118d3693cc40f88d5bca09bde0ac441d08132affccec",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256": "538f886ba02b57c343a2edb8f009833260223ce0aa02bccc616da39574d754a9",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/account_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "22c723e0e50a3e85d2d8aedb384a9ca0d6baa9ea281eac52f87c38e8d4a09491",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler_available_models_test.go",
+      "predecessor_sha256": "4e5d6a972ceafe2a7990f73efc137dc5d9dc1aa950ec3d329ae83e8fc8d043ab",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/account_handler_available_models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "31e589fa4ac7cfde66b7ecff207a9def78dbb5264f0720d5abc85ac476715489",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/channel_handler.go",
+      "predecessor_sha256": "16141eee295c349cf4f8c6c06a6a1e22832a45597b4f3727e38b83aeed7d5085",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/channel_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b6b76877b57160847dc5d74be1b514ed58b2f156cbcb3fb3f01cf512d0694b64",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/channel_handler_test.go",
+      "predecessor_sha256": "45bda0d937c9a3b7e285d919eae97350f2bfd0a060f62192e48b2e4391a9312c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/channel_handler_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c3bc131b4dde50e6d148fbde997d745a4f127950b24ed1076ad279f883120450",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/claude_reset_handler.go",
+      "predecessor_sha256": "fe4ad027c8301bf01ef6040986b5ae6289d7ae6cb682ffeb3a16bbf76c1e178b",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/claude_reset_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a2d10337aefa5230de47f22ec8a185f8855eb451eceac58d2f974ca083285dca",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/claude_reset_handler_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/claude_reset_handler_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "9169f6e6c529c8f389408750fdcefb9b88dc975a9bdf7d1e4520c569d102ff69",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/group_handler.go",
+      "predecessor_sha256": "ba335460cd3d6398d85be400eb12490522f32d0c9aeb42dca06e51f4428bb6e7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/group_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ce6c3e2e93489cab185485ce2826149f6654af6ac414d96b2fdf5db30238c7d9",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/group_handler_platform_test.go",
+      "predecessor_sha256": "668dc33c033e413f6511b97aa001fbb079b271ede477f7fa620c4e80f8812485",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/group_handler_platform_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8dbeb9a295595db97a0c4bddc6ae8dc6b903257a985ee6341512ce7b89536cdd",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/payment_handler.go",
+      "predecessor_sha256": "ffbba895fb850c84d47fc45a7101dca715ef4d090fb38694425417d4eb821d3c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/payment_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "01731335a79e5a7015677aab66e54e4ded80f447844c081226af66c416f4a3ae",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/setting_handler.go",
+      "predecessor_sha256": "4b07c54c6dd403540f34da051aa268ec45ac32b536d8933ed40a2caa3b62eb0c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/setting_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c356c91e4c7f5e9145f594174800b11059d2fd7d4c15f51c65a8fbc411765f49",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/setting_handler_recharge_bonus.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/setting_handler_recharge_bonus.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e0b756b3916970578eb06835167b8d12b219b68cdc3483841273ba10b848f48f",
+      "old_path": "",
+      "path": "backend/internal/handler/admin/setting_handler_update.go",
+      "predecessor_sha256": "d0e8f297412432fd81a5bb9e9677146f9e3b0c1d627f0f2eb724b8a74e291db1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/admin/setting_handler_update.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ec57237896cd0066884711c399934fe914db143d206b552a6eedb9ed01eac2f6",
+      "old_path": "",
+      "path": "backend/internal/handler/auth_oauth_pending_flow_test.go",
+      "predecessor_sha256": "12b436824e53c34d46e7507733775643b2dfb929ff9f06fe14dd47c002b65566",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/auth_oauth_pending_flow_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a59352116e18f7ec3e247d9aaee36b603045a1e5952b8c83270010b92fd7cdbb",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/recharge_bonus_tiers.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/dto/recharge_bonus_tiers.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "20d165d5dee8f000c1468643e642645a10fc8c6234a8781a82891b523544a07f",
+      "old_path": "",
+      "path": "backend/internal/handler/dto/settings.go",
+      "predecessor_sha256": "483c6e5cf4525110af901bf4ce48067d3fa91d80df0c12a88ff846542ee97314",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/dto/settings.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7c9c7743e7ed9cf29aac81b72cb293df165c24d845001d060962e92c31c8cbf8",
+      "old_path": "",
+      "path": "backend/internal/handler/endpoint.go",
+      "predecessor_sha256": "eacecbb7b7e8207c93588cca60df59e83a01ce83f076fd0c5d11b66ccc786cb3",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/endpoint.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a0a506dce1609047308053a0d5c32949aa12184e7a18c0c5d311b3add2202562",
+      "old_path": "",
+      "path": "backend/internal/handler/endpoint_test.go",
+      "predecessor_sha256": "1b54c2a34e9b59d367d4ef5ac5640417f5b4a9ab7f7fb156ae5b9ad907a903f1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/endpoint_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "30379b8ecdab336aa85ad93fe3cb6d3453743a126083e093a59da8b09f775cf6",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256": "a4ae1f3fb9306cb20765df1db64d84c118745a34f8cb1d8bd5bfc2b5a683dee0",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b74566c8ed0fcd83de448d09001d6d1621aa6911c5ddb9f59fa5734e814c8d30",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_chat_completions.go",
+      "predecessor_sha256": "7d4ebf86e718cc1ad52e962440853a0c21ea164f55f441e3b0ca6d8d6bb501c1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_handler_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3fdd8ee8fb1ccc5dcf5c03f641f239d99b26416501120cec65f4a81eebd1ede5",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_claude_code_fallback_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_handler_claude_code_fallback_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d04a40f992637efd67e1ad94cd3554524da3624a43e44aa22cc992cdbdb35069",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler_responses.go",
+      "predecessor_sha256": "777c5168e219a2b27c89cb5526632085db0ef2763cdacb3c4adf9f8f9f31e1e8",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_handler_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8806be8156a09d3e8dbeb1618888344cc839d3b11f8ebadb836896abb13924f5",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_inflight_reservation.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_inflight_reservation.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5188c0c6dd5dfeebdb96758345ecdfce63cce2eaa2956956dbeaf455398db9c9",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_inflight_reservation_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_inflight_reservation_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "34118613ecdc3eca31ccb139b207a04a7b84e4b4c306e453abb166f7cc04d048",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_models_retrieve_test.go",
+      "predecessor_sha256": "3ec9ad78ab38ca79d860341fcbf49bd3735c1453236e4456fa0931cab681fc0f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_models_retrieve_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6eeabb929af9121ef8944fcac9c27e22a2d37da8787a9596d331a814b9daa75b",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_models_test.go",
+      "predecessor_sha256": "5125e2cae14dc00d148c4e8939f36b8e694b048ae47b11d8b29200baad5c4838",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_models_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4af6a96b01ef2c510bffc713b2d4135e4f67eb6a40c5b65512b7d9acdbf6ecb2",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_systemone.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_systemone.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "e5681c8af86d5c498801cda9cd11387ba5ba9ad0e133aa5b941dab1849c1f4c4",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_systemone_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_systemone_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "5c0b66a9e7bd168e640d6240bd63edd9604dd94949dd6d95afd69bd6e57757a4",
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_web_search.go",
+      "predecessor_sha256": "e25c65e78b6ec9e4ba67ec035e0a93f9d8774c525966dad0bbc10d2ac91b209f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gateway_web_search.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5145ac8348243be22ebcec5814ee302656a71e6cdf15bd5658a955f32f6b0841",
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256": "81be3400eedd1274b7128efcb56fb73fd31b0c343374a4197b49675f45f94573",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0b9da4aec2a969f03f015137a15996ca340f9fa3aca522a66d80ee8098a37c35",
+      "old_path": "",
+      "path": "backend/internal/handler/grok_audio.go",
+      "predecessor_sha256": "f4904abaf8e9761487c6dba06fe5af1cd9ee0789092c066d6836620318b40ba3",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/grok_audio.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9597fcda6228151e105e244802eac6f2e1d9aafc14c76c31c596aaf6378bd9ec",
+      "old_path": "",
+      "path": "backend/internal/handler/grok_media.go",
+      "predecessor_sha256": "bb11f1dd053b44739a0f8b85a733192389a0b1eaabc6145842f6a43f455a3e58",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/grok_media.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dc0b33abf0f59b0fdd96ef16848ba7c6704612d6343e0c983bae19c5623a4eb6",
+      "old_path": "",
+      "path": "backend/internal/handler/openai_alpha_search.go",
+      "predecessor_sha256": "cf37044144f8571324634cae71eaf5f9760afa2bb76d1639495afa749880f747",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/openai_alpha_search.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b15d892764bebeeee1f9613a1d5cc81f8ca6422be800a999a97f4f74944aa709",
+      "old_path": "",
+      "path": "backend/internal/handler/openai_chat_completions.go",
+      "predecessor_sha256": "fccbc95a6827d1ef22343b1ab7ca99a1fd06882739683a899f4597f9c6d8e658",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/openai_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ee84da3c32e4eb716f23fbaf317560e18fbc5abf129b90fc90980209ce9a9687",
+      "old_path": "",
+      "path": "backend/internal/handler/openai_embeddings.go",
+      "predecessor_sha256": "42c5b81fd5fe9325a600dd70773d5600f9fa20ecbc4d6d5bd5529c85ff41fae1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/openai_embeddings.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "57708be344eb51937b803ffa3d327188a061a5de94dc68eaaca54bd2af765893",
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256": "c06e7c8cb14cab7eb207ec02fce74d1c5a7fb2c98081aa3f31e4c2c8c3d212b3",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/openai_gateway_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a1747e2a4f5da8e63c7447b2da2a0c56a14d43ab81b3610e291cb0e1697dca3d",
+      "old_path": "",
+      "path": "backend/internal/handler/openai_images.go",
+      "predecessor_sha256": "c1e38df53f918d0a2600ab082047797868dbe08bd6ba6e219d8a777650994af6",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/openai_images.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4965b01dd17b7df33ea783a2f57d6002728972623535ee1ab6c83a32ae107fe5",
+      "old_path": "",
+      "path": "backend/internal/handler/payment_handler.go",
+      "predecessor_sha256": "1a6e64b783b2fa61d8d7952a0bb5c7fbae86b27c9d6206b7de3e95fc8098612f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/payment_handler.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "27e6bbefe1aba6653f85a20d4b6206c74b9a9fb9707be039c616547dd6683b0a",
+      "old_path": "",
+      "path": "backend/internal/handler/user_handler_test.go",
+      "predecessor_sha256": "b8165c492a5787811019c8a6574d63d1120b5c204a0269dc58ab54ddbc1876a4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/handler/user_handler_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8f6f3edbee1f974e9725ba659d47750fef9448220a2fa9b38511030fc752ea56",
+      "old_path": "",
+      "path": "backend/internal/model/error_passthrough_rule.go",
+      "predecessor_sha256": "922cb712302490504f5f36eb65b73e62b211a0a54d5c627bbae4b48d43f81764",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/model/error_passthrough_rule.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5223f04a01166a8fef550f5378bb5dcc06779257af1632171600c601f1e223ef",
+      "old_path": "",
+      "path": "backend/internal/model/error_passthrough_rule_test.go",
+      "predecessor_sha256": "4407a56d230fbfb8f992837cfde8bfc1f4632a6a6566539b84a44a4ac3ad8132",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/model/error_passthrough_rule_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e2a0e467eadc3c826df6462e16ee2941a722ce7cf975b584b60adab0367a195e",
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/anthropic_responses_test.go",
+      "predecessor_sha256": "0807e91d5fc14e406116d855f5a59d2c4770d72753919cf5c72ddefb96e42a8b",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/apicompat/anthropic_responses_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "167dde29672d1f1ca55cbcf32fd38c710ef77b722082efb4da9655caa6d39740",
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "predecessor_sha256": "07a0cda7abb104dc01f16a1b7f4fa66bc170fccd6b2af7331e38134f00c3f46b",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/apicompat/anthropic_to_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1395520f453d407cea577a33df5821ad5d160db1b67fa59a384dabf81053efed",
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/chatcompletions_to_responses.go",
+      "predecessor_sha256": "fdc7f3240e698173ff1385960962da76015541c6e62b9137ffb3d804bd450485",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/apicompat/chatcompletions_to_responses.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ed83ae4009333280b0312da7fc805df4af4850519d4230f6947ed8f81b75f105",
+      "old_path": "",
+      "path": "backend/internal/pkg/gatewayendpoint/normalize.go",
+      "predecessor_sha256": "88b7d756b302cde31c3429a073eb38e25d7d84a7520085848cf0fbc6782d2955",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/gatewayendpoint/normalize.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7aeb4ed98fc9a4db530c0c92d0cbe2370b767a0554dcced995f44363b6ad2bab",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/codex_gpt61_sol.json",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/openai/codex_gpt61_sol.json",
+      "status": "A"
+    },
+    {
+      "current_sha256": "420ea6f3185e2c13867ae4b4a7b61d14f436038bdc0a51b3b45f37ca1575a5c5",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/constants.go",
+      "predecessor_sha256": "48e4aae0f3008ac7ca25ebd8a3e5a78996bdd2f8ac68c31aa217cc278889ba35",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/openai/constants.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2cec1c703fa659a864f5b356bb5f099612954fc345fdd4165b4e690c743d587c",
+      "old_path": "",
+      "path": "backend/internal/pkg/openai/constants_test.go",
+      "predecessor_sha256": "c67e5a39d0a6abf10b00e271c9b8d248f9fb3f770bf53e91e0dfd8fa33d2d65f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/openai/constants_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "738c3efafc5e7c2ac63eb80f643c8e2d760fe8c4618ed8f8f61498b439c1ae2b",
+      "old_path": "",
+      "path": "backend/internal/pkg/typesafe/client.go",
+      "predecessor_sha256": "e0a8192061eef40158651c733bbea00c1bfe67c73ce5e5ad8ea1176a5e234b09",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/typesafe/client.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "81315b00acf0255635ca61d5b91e97486eacdb56a54716d002112954c87bf56a",
+      "old_path": "",
+      "path": "backend/internal/pkg/typesafe/systemone.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/typesafe/systemone.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c5bbb952cda4ed66f41247aa79d460087437efa0f72e5747d643ec27fda376aa",
+      "old_path": "",
+      "path": "backend/internal/pkg/typesafe/systemone_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/typesafe/systemone_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "72240363e0bee19bf82f5b5eca9806c92570b953ee142744a22696dac10c50f9",
+      "old_path": "",
+      "path": "backend/internal/pkg/xai/billing.go",
+      "predecessor_sha256": "c68a1b27799aab930d19be83fdcc3726911483863b24b1c2bc53a6115e167c4d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/xai/billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "35ff6a9772dc048c4897e96ff629e2bd166e138cea150653e2861a0d9908a79d",
+      "old_path": "",
+      "path": "backend/internal/pkg/xai/billing_test.go",
+      "predecessor_sha256": "f3b72891cd16f8f6926fa09a7ef9a69cda2f91b36661eea6e1028addb0347910",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/xai/billing_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "34cd69814708edeea902f25182a804e402071e0ee881a2b6415b0c5df02864d3",
+      "old_path": "",
+      "path": "backend/internal/pkg/xai/cli_identity.go",
+      "predecessor_sha256": "fc2768cfcca65763adbfe26ccbdb2b75880a802ec7d896ab389588417a428e9f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/xai/cli_identity.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8102dd3bf731cf9aa8234679e0f29e56177742f5c133c183ba0cf4a734f05e54",
+      "old_path": "",
+      "path": "backend/internal/pkg/xai/cli_identity_test.go",
+      "predecessor_sha256": "e7f3f57d986e6e9bac6368c4074c7109e3cc3fb080e7aebb112fe28ec6cbe691",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/pkg/xai/cli_identity_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "01858120a6d1b62162032a7e100c49ec457be00341ff1345116d14d34827fee6",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_cache.go",
+      "predecessor_sha256": "b3d25373b09ebb47e416cccc5312656629fd1c325442fad869087255695fa603",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/api_key_cache.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "eade9e13bcc23144314254a120edf49e4f45ce10bdcbb70ab245627ab5773fbf",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_cache_integration_test.go",
+      "predecessor_sha256": "b701cdf56acb0badd40021e7207113b3e40aad3c96957e02dbdf3ee2b57adea8",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/api_key_cache_integration_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ab9a81f5dd74cc7edebdbf67b95da0e56b08470053a135663005380f28e8429b",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_create_count_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/api_key_create_count_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "a8a5c2674e960c00ecc6262ddd5deaf4af220748e0007f04e67f4f0c4056f1d0",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_repo.go",
+      "predecessor_sha256": "209942c19fceceb4ece758af5e9117c9d7b094f019a639c02fc2e4e57e17b55f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/api_key_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c5cda02a5a7a082984606749c1030d052efb32e6fdc4ccc01a56b4af07c4f74c",
+      "old_path": "",
+      "path": "backend/internal/repository/api_key_repo_sort_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/api_key_repo_sort_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d2db7a3202a22a5b7dcde4e9da7de94c8c69b884d5cc47c92f8dfd56dd15ddf5",
+      "old_path": "",
+      "path": "backend/internal/repository/billing_inflight_cache.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/billing_inflight_cache.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3253224abe46ba0b2142598424d77c6a2085f122d85ad254bd916f92240662bc",
+      "old_path": "",
+      "path": "backend/internal/repository/billing_inflight_cache_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/billing_inflight_cache_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "33b45e0cef5df4c1f4fe8f7c2244c0fc7b62f68e8e779e9b1a09e100aa58d036",
+      "old_path": "",
+      "path": "backend/internal/repository/email_cache.go",
+      "predecessor_sha256": "6bebc8c37e18edb4feaf9f9c846192089e0d80ddd4271921668329ad8d1e1a75",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/email_cache.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "db18245f77e5901f8a43f8f33d7c9d66977a357169eb453f7ddc5745d3633548",
+      "old_path": "",
+      "path": "backend/internal/repository/email_cache_atomic_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/email_cache_atomic_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ab6adfe407d437a126ac756abe99e7e6f881c96eb39f99423b96e925685b0fca",
+      "old_path": "",
+      "path": "backend/internal/repository/http_upstream.go",
+      "predecessor_sha256": "b4f3d03acb915512b6a9c38f4214f1ed9bb61a69c1c19d2a9f8a77e15a73ed2d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/http_upstream.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7d1bc2b28fc2d3c418ce3e9c29e5c168860609383ff0676d6688e179bf928011",
+      "old_path": "",
+      "path": "backend/internal/repository/http_upstream_test.go",
+      "predecessor_sha256": "e00b7cd2c7f84240f3fb1ae8129d7e7fae40a5b9d793fdb6e6dff777749ffb7e",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/http_upstream_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dd4ac4c31b86da0e358593cfbde1e705e71374ff4b03eb2a1845d4824e36a9de",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo.go",
+      "predecessor_sha256": "0ab1ae66cf4d70e6de51605574a7ecf988e514a1b965df39859456796f93a71d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/usage_billing_repo.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "10d7e85c182fbc7d7216572352877737a32bb3fe9f1006b32ab89a0c4c462b79",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_integration_test.go",
+      "predecessor_sha256": "2bb60fe119a928ae95c678856d73c78306e0e901ecefaca308c27e83f71e6014",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/usage_billing_repo_integration_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dce8ab02c06943844416cea6f1d62d1818167cb1a5bbbe021bfcb7d157e76248",
+      "old_path": "",
+      "path": "backend/internal/repository/usage_billing_repo_unit_test.go",
+      "predecessor_sha256": "8568a5e0d51904cea0706b2621f860a3979636cc7a801713723254a70a45dab4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/repository/usage_billing_repo_unit_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "637774f3b3f42878b42a078640a88eaf6d379d35f18ea8ee45d0f757b6671196",
+      "old_path": "",
+      "path": "backend/internal/securityaudit/prompt_snapshot.go",
+      "predecessor_sha256": "f9935be5d6a0730ff6605a7d707d511ebe1b16776720d73ffa4a142758a599e3",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/securityaudit/prompt_snapshot.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d4d7b54b5d4f9df9332c7e601d630b54951ffa47a6518fc856a608f769a7d743",
+      "old_path": "",
+      "path": "backend/internal/securityaudit/prompt_snapshot_test.go",
+      "predecessor_sha256": "3ef1343079008466dbc23b7a16c9ab59198088899a0b9c7ef837ddd00dd59fb4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/securityaudit/prompt_snapshot_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7b950cbb9f299f0078ffd96649106fc2f8d0c63bb388ca8cd70e19c90010608c",
+      "old_path": "",
+      "path": "backend/internal/server/api_contract_test.go",
+      "predecessor_sha256": "3bf86e5627d20e940bcc9aca85736a993c36df59c2d7eedc8905d3be9de0d321",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/api_contract_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f7680726a976e67f6af44e6f500ff67769bd9019fa6d1b7e63eee9c1723babc7",
+      "old_path": "",
+      "path": "backend/internal/server/router.go",
+      "predecessor_sha256": "d31e7af6071c82c001685b29c8c35f6305c92b442d5b8889dbd97379d4477555",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/router.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "5a5f348aaa5476181240836d8bec34615eb2a494cfa906ba044861cc0fa2bb17",
+      "old_path": "",
+      "path": "backend/internal/server/routes/admin.go",
+      "predecessor_sha256": "a785384fbb2bb42949ad6e2ee1a5fdab6e49beaeaea8d13c1e35d98518fa4aed",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/admin.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8d78b6d2b4b9cd3f3a618098a0e358f926c5772b283130e709f20c8aef48f144",
+      "old_path": "",
+      "path": "backend/internal/server/routes/claude_reset_redeem_routes_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/claude_reset_redeem_routes_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "2ba84000a4f4cdb4b63b2981f7632da6517d19b7904d854c003fd3a724015408",
+      "old_path": "",
+      "path": "backend/internal/server/routes/gateway.go",
+      "predecessor_sha256": "89e650c4a6853f0f42c24981aba99f3d571046d780668a5df119792cce5c6dda",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/gateway.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "133457272c1d2a0170146a1ca64d8b5b16e1cb1a3789ab0a7c4180b8a07f0e21",
+      "old_path": "",
+      "path": "backend/internal/server/routes/gateway_model_allowlist_test.go",
+      "predecessor_sha256": "af99bbc6d6f399db2107b1d82005820e56524129c7215f9b13d7c126c42fc807",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/gateway_model_allowlist_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ce85c91909d8e2c59eb292e0d88d7fed330038435f3ea200c5f144ab63edd2f2",
+      "old_path": "",
+      "path": "backend/internal/server/routes/payment.go",
+      "predecessor_sha256": "2a9d69148ffbee198bf790547046acf271ceb6f582894d49b3bc16736f5420c0",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/payment.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "54690905f532bb4ec07e57bd924e2a7ecbaae66c0cf371b4be99904ea3e3f92a",
+      "old_path": "",
+      "path": "backend/internal/server/routes/payment_public_rate_limit_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/payment_public_rate_limit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "a58a43e14e033c1cc407cd34b6b3f77438904ed870fc6289f30d458e840bfe36",
+      "old_path": "",
+      "path": "backend/internal/server/routes/prompt_audit_route_coverage_test.go",
+      "predecessor_sha256": "47fce01dc69c8d75ecbf442281e81978bc2bf078b96bf10ee47f776fa79c5da9",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/server/routes/prompt_audit_route_coverage_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8f2913be10c4eb1a2c16b5b2c0205b2c4fe448a0d136d679b33f3941bb0992b0",
+      "old_path": "",
+      "path": "backend/internal/service/account.go",
+      "predecessor_sha256": "c8675d216aaec568d8c1a8f1656bda6c4904f40d7480b878fd783492aa707dbe",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/account.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "43d7cb4ddb079eb9547817f1bb12abb990fdeb01685152a79c1b369b3f0c02d7",
+      "old_path": "",
+      "path": "backend/internal/service/account_service.go",
+      "predecessor_sha256": "810ea670a3b3246bc4faba54f31dee5791e550b47fb5197b10b2ca19edd0d653",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/account_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7b3e11c291cd49b0428d762ebcc340e612cc2735fece527611c98c0913f8f1fe",
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256": "91c17c97bd2f741884baefc396361ccb2df531ea30fb9d0f83a6bbf8028e1938",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/account_test_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4908b2d7620500b31c57c9d165beae942630cc76631915e34d31e3cae11742bd",
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_typesafe.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/account_test_service_typesafe.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "60320d830efc3aae37bd1f4ca4924633cf7506c227d500e56f83a207bb16ac4c",
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_typesafe_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/account_test_service_typesafe_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "258f9da79ca68f0c7a84e6ccc848a31ce4e0bdf8eb193cdf34b7103278028908",
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256": "9e008600cd28e9921808de9e702ff296d5a2fa3432fe988e081f5d0a97565ab8",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/admin_account.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8d47e91202c0a5f96c01a68a2a00d480db4f51c692bc026ca5ede51be2157c15",
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256": "c45a6b9d47785e8ec406803ed8f1fe522e3b5cc0116b7b8d4cf76594a6837408",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/admin_group.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "df065756e984da2804434ae811617f937bcbb7b7ed3d7356fac1a416a6c58d17",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256": "550f1eb6b84597083232de1d3ae7a3fb40ac0ec59c012e7ab30bf0581b6a8a7c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6125bd692e20bdb9e013bd4295bcbb5b200285afa5d2f85446d0e3d73cb3d231",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_upstream_error_sanitize.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/antigravity_upstream_error_sanitize.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "eb68b88f588f465597aa339b153ce352d05fd1436eeb70552e40e55a176d2cb4",
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_upstream_error_sanitize_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/antigravity_upstream_error_sanitize_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "4bc98211879f64e03e0525ab712ace4358805234e00cf03ee3f7a2bead23056b",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service.go",
+      "predecessor_sha256": "65adea4f6f85db0b208d453e0dcb17a495d4e93e402b9b5ede29bf6945a662e8",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/api_key_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ea29ae3ac3575ac4d90350eb87fc28c7b063d08dc7cf7631436bb9090bb259c7",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service_cache_test.go",
+      "predecessor_sha256": "b7b3795485b56c78c914687f8c5ef188a171551ecb0c65aeb8d1ee6f0257f5bc",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/api_key_service_cache_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "64acdc3574121701ddf27ef18b13fef985ae344643c2a8dce56e529d09c141f3",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service_create_limit_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/api_key_service_create_limit_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "7d6d5167358c342ac85794ab78853fbff50f84ffd2f5bad7700df3409aa92c7d",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service_delete_test.go",
+      "predecessor_sha256": "a6f77345649b9e36f66c72f0d7fb2f1cad2d97c544f233bffd86a930a82d285a",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/api_key_service_delete_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "451d8b431afc3b2deb279955f7e12ca823d0f2620274e69d9a00092f19642d8b",
+      "old_path": "",
+      "path": "backend/internal/service/api_key_service_quota_test.go",
+      "predecessor_sha256": "0920067c9fd41b09090710fcc68abb72c6121284cb874683db205db18a394ae5",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/api_key_service_quota_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3e7e677d3f540dc7434e4a88b5618f707c7c6bf94af91c2c46ecbc940386b4db",
+      "old_path": "",
+      "path": "backend/internal/service/auth_cache_invalidation_outbox_test.go",
+      "predecessor_sha256": "345286783bd9636b69b406c470aea41f0b95aba4f289f55d8cae127eaf1c3aa4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/auth_cache_invalidation_outbox_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b41e7515f120b1ad3998130e98bb6cb650c428022e9fcbd758a6a92254341816",
+      "old_path": "",
+      "path": "backend/internal/service/auth_service_email_bind_test.go",
+      "predecessor_sha256": "a220bfcdaeeb8887ad05435fe0c93aa981469dc61b4b55f96850bfab00cc6dcb",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/auth_service_email_bind_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "74f44dfa8cc4717a78c66ea1fec05e3f74338e444d1f4de99a43f2fc47f21501",
+      "old_path": "",
+      "path": "backend/internal/service/auth_service_register_test.go",
+      "predecessor_sha256": "f7d29662f2430d19ea24585ea809fde9c12c202720e4909faae45bf34261aaef",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/auth_service_register_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1388a30510c50e081a15bd45b48eb03f688b330ecd50e9c99cb70dac66386e19",
+      "old_path": "",
+      "path": "backend/internal/service/billing_inflight_reservation.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/billing_inflight_reservation.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "efadb92c67a9abd9ab3e37310caafc25ef85542d7c3ec0df301292e529f482d5",
+      "old_path": "",
+      "path": "backend/internal/service/billing_inflight_reservation_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/billing_inflight_reservation_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "cf2665e1b905acfcbc522b11aec7dab369048f3fab5e58b1307dda5cfa2a193b",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256": "debf7f271ec45a141657eafb46d723b57276014609bafb62f84559163617a06d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/billing_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e3575ad3d855d42c240de2734bebb35ac49257656cae49d5a99f2992b422c21d",
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256": "2bff55295f6eb56369bdd519e6a0fecbca73a387110fb30320e0ef530f6302cf",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/billing_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "906c654a5e3d2486b7a818dc1b88cd7a03d337a01259c3a95a098643b6bdd17e",
+      "old_path": "",
+      "path": "backend/internal/service/channel_service.go",
+      "predecessor_sha256": "d6d20aa60576a05153e56926347eafbd02609357adc4c56c56776cd6186e959b",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/channel_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "47540ac74a3f656232cf762f065a8a118326bcce131d6285f26aabfd23be180c",
+      "old_path": "",
+      "path": "backend/internal/service/channel_service_test.go",
+      "predecessor_sha256": "528eac5cf33d5ecdb777e803e351d6a8e300ac37fc961193e709785b9ff12407",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/channel_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a8e70dca927a360e7cf6644ab121cfa86c9a2ac93045672f0cf1672a2fd30afe",
+      "old_path": "",
+      "path": "backend/internal/service/claude_reset_credits.go",
+      "predecessor_sha256": "62c12bd804375d2eeed2a220d3130cf92bb602e5d6c62959e02aef9028d67f06",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/claude_reset_credits.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e16aa8fab52bee25700053492ee04004667c774d26922b48a3b21e66e2da5d66",
+      "old_path": "",
+      "path": "backend/internal/service/claude_reset_redeem.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/claude_reset_redeem.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "112443566e522ba173d426e86ae6463690dd2e34c4a97b81059322577753fda2",
+      "old_path": "",
+      "path": "backend/internal/service/claude_reset_redeem_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/claude_reset_redeem_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "9a75f3fa3acc39a404bd01c143bcaee9989ab52583e62b445bb74e1c8dd873af",
+      "old_path": "",
+      "path": "backend/internal/service/composite_platform.go",
+      "predecessor_sha256": "dc180c25cc22f037949e64e3a9f4a4b3e5d7c6d1a022e651348c613f3943f855",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/composite_platform.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dbd128f28db240e91e6ab662e99c993110e4b87c19c5d77ec081f2aa2a0da7a3",
+      "old_path": "",
+      "path": "backend/internal/service/composite_platform_test.go",
+      "predecessor_sha256": "00602cdcf0cdde11abe39e77212e7975323204c7bfc01f2b17b90d51c606b725",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/composite_platform_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d84800a91941e11311a6a76abfece0f18658066f7bf7c8340da07e0772170d20",
+      "old_path": "",
+      "path": "backend/internal/service/content_moderation.go",
+      "predecessor_sha256": "32bfeb9d5a80e86629afb5ddf37e4299df455e6ba70065fef12d269f97da9aeb",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/content_moderation.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "fef682772a0dd97218e9537a0eb42c972e34aea458f0f72eaced04dd65b7deb7",
+      "old_path": "",
+      "path": "backend/internal/service/content_moderation_input.go",
+      "predecessor_sha256": "bbaa0c2d9a2199774b3ed1501d39fca30afaabf0c04be607b914a4065daad1f7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/content_moderation_input.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c27956f9f128172e2be6bcd4778f7e3ec15051f244646de8fcc1cce74a6f3c89",
+      "old_path": "",
+      "path": "backend/internal/service/content_moderation_systemone_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/content_moderation_systemone_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "722ec7979d34af70d29e6efbd97a425980afbb59b476cce374fc1d94de1e3709",
+      "old_path": "",
+      "path": "backend/internal/service/domain_constants.go",
+      "predecessor_sha256": "41b7fe69f4d861dad9b5ee118b727ebe1c76072fa9cde29053f86c5addf5a152",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/domain_constants.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "99a416cdbb64319b46c3b88030d98377fe2e0d4ef71c6609f72c4b2ac6a15a23",
+      "old_path": "",
+      "path": "backend/internal/service/email_service.go",
+      "predecessor_sha256": "455dd2c81e89cd1b6da1dacc0dbc72c1202836a8515e0ad2961b00f7339a86e2",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/email_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d530c3ae6fd87f73d1880ee5dadb351343d484109cd2dd10f789cdb4ba521846",
+      "old_path": "",
+      "path": "backend/internal/service/email_service_reset_token_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/email_service_reset_token_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "800152b3b02eae3c922d44024498f4c01db238ab90c957039544f1a6f621f7ff",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_systemone.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/gateway_systemone.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "04cc1974a8dcf5055ea8b2f58354e3c9dda533aaff8155cf8e29422b3fd664f5",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_systemone_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/gateway_systemone_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f7e9be9cf4ea6bbbf116b7f46229380bf13c4e47a982369b275af723bf2506a2",
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256": "a906f713dcf63f1095662baa9715c2ae30f52057d00765497bf3f6c35a4008f6",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/gateway_usage_billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3e9d8847a4469af69e255b78d5126a32dd20f7dac5bf4c714b41d6eff4c5efbd",
+      "old_path": "",
+      "path": "backend/internal/service/grok_upstream_headers.go",
+      "predecessor_sha256": "bd4ac72da2ffe76fe5afef4361afe57a9a493513ff39a395851f626cd2ad1e05",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/grok_upstream_headers.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "07d3e570d01954ce80b8b5e127d17a0da1e1f8a103404225938828c222b8a283",
+      "old_path": "",
+      "path": "backend/internal/service/grok_upstream_headers_test.go",
+      "predecessor_sha256": "31a2bcb694d06b8a0ae1a697ceac26700184a30abb8a9909e18d901039329923",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/grok_upstream_headers_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f45ae1fd364648dd763b4a5a4cc521ce0c018c27ccaba46fdfba2adebbd03022",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_model_metadata.go",
+      "predecessor_sha256": "66a319de4d442c02c5d6ee91d528cf7b1f9bda8c6acdd1b8dcc9486d3b043899",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_codex_model_metadata.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "33bfe4baaa4d2ab28be20db39a09cb41e0d3c2348b2dc69f654672062b1a119f",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256": "37bc81c720961c3013079f0e46b2378dd2b67d97c78e14d208d7ace03bcba157",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_codex_models_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "27ca45aa7fdb34542b9c89ae045ce1155cec786ff8c9da6b99d8e3221867e6eb",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "predecessor_sha256": "89be10d940c2afc4a55232334e181d31e96dab250c4e1d7301ad8faf4a8782b1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_codex_models_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b28591b51f09b68194fa312ccdaef3ee9759f759bf82aa89c8b85f95cb399c7c",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_pat_service_test.go",
+      "predecessor_sha256": "b75748811969eaa16de4e2bb5ecfe5163d0922e75a5ae6053274d7f93f47aa13",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_codex_pat_service_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "91427b3245897babeafa20db992e5f918f7e4ba62a0026c7b357ad2ce9ee8dcf",
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "predecessor_sha256": "f1e81268f9ab57aaac325f514323b389a32ff21848f5d754bd1b2884392b0350",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_codex_transform.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3abd0206f1f53a18729e7704788e8451e80c38db2fd2daea88cc26f61d69f04f",
+      "old_path": "",
+      "path": "backend/internal/service/openai_compat_model.go",
+      "predecessor_sha256": "a619a8d110a5c927f407587c6920d872490b9f678a14f09b2792ddab6092bb89",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_compat_model.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f7ef48041f9e9b82b23b6de794bba564fb0964f01147fe8340a28d1efd706d85",
+      "old_path": "",
+      "path": "backend/internal/service/openai_compat_prompt_cache_key.go",
+      "predecessor_sha256": "0277e8683a1108acdbc6e2b251c2b737e8567a71081b91f3b0cbcbdacd7ca04d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_compat_prompt_cache_key.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "82b948cf7c40333889c6a815c2ff7fd2936183fd9730e21c3cbfeb34094aff5e",
+      "old_path": "",
+      "path": "backend/internal/service/openai_compat_prompt_cache_key_test.go",
+      "predecessor_sha256": "9c8efc0a9792ba4df934f9011ce1f457af4aa0d589830381bd91b4ff982ebf68",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_compat_prompt_cache_key_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2a165f1997d4caf09d985f20e777b00ab30e8b696455578f93089125c4dc9702",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "predecessor_sha256": "b6de9670f5e367fd4960404a98a2a57a0d5c9422f7a0e8860d9c0a053e3a508e",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_chat_completions.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8f4d780b01e7d22aaab50b140d5f4fcb1ab419c46890dfdd5e25a6e6f0fe381b",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "predecessor_sha256": "40f281df258831124e131d8193301334c07fc642040b0921a913ec08de4d0523",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_chat_completions_raw.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "47ab419aebc6a2bc051e0f7e5e19c4d91839ad901d07cd90591f84a5def6e74e",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_test.go",
+      "predecessor_sha256": "f06225cf1ca31e2683cff6c1f0b111b033a2b0472a02fe58c1eba234c35c1acf",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_chat_completions_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "770e8a67a944e972ea629425708e9e366d55ccd2cf835810d133a5eff8c02bb0",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_grok.go",
+      "predecessor_sha256": "51faf7ef5c9d36d3089834bc5bbf668dbed60f31f78b898f3d7d727a383d7cfb",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_grok.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9d6d0d53543fb409c2d0263e52c895e4722c34bdb8e3a05dbf9356e77221affa",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "predecessor_sha256": "12309e8438590c8239f8371534d308843f50f783580a563bd8ca57ec980ddc34",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_messages.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2a3f63edd3e6211c3a6abb577c3ba0f88f0cc74befa6adb3caaa8f16bf4e159a",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "predecessor_sha256": "acfb44d9faaf34c1a21789533de4ebb198ec2b5e0afc93a2d19cab92bca94b5c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_messages_chat_fallback.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9cbc1954cd031f90fef6a35d25a41d250d3f923d3771d1ad20490b672542cca4",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256": "d9a63658b0800954fd69820484a2068f4a37663ab8c4ae994cd3dc22ca9bf63f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_request_body.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a66bfe1d6300a67d0af6edbd208d3332835ca3ea4f2172405dc064c2d75c4f88",
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "predecessor_sha256": "a4a6bf731b5fad7f512e6e271d65227ab2e855acb5a23c6733a9628159a40134",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_gateway_responses_chat_fallback.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "142aa4bdb9f2cc947867e06830001fc18bc85ab63a2371a40e26229a5b10655e",
+      "old_path": "",
+      "path": "backend/internal/service/openai_model_alias.go",
+      "predecessor_sha256": "d06074d5d315c066dfef2a9fbf4adc27c3f5262648380bddb6a5a74e2a08fe50",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/openai_model_alias.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4f73776bdb308d73b75ce1f41cf79dd1a541ebf94a1437a084e7ca23b351e0c4",
+      "old_path": "",
+      "path": "backend/internal/service/payment_config_service.go",
+      "predecessor_sha256": "58430e942595363a2610312a8af79cb656376a7981b95c82c11e71505ffe2553",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_config_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "df4d686ac6149d21deeb74137e0c4c62fd619604558fe4c709f8594c8795157f",
+      "old_path": "",
+      "path": "backend/internal/service/payment_fulfillment.go",
+      "predecessor_sha256": "4e9d8058c08f94dceadb18c146d3d0d723b516a1d98503ffc5a542cb32f15bf0",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_fulfillment.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "68d8517c5d4944293beff91785375d41e0051219378361e16634eab7b102d86c",
+      "old_path": "",
+      "path": "backend/internal/service/payment_order.go",
+      "predecessor_sha256": "f42d12e6d11278aca8d1cbb602709cf1d98231bc14cc6dc5eb9c3ef75dde7820",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_order.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "de5eb93957914ca2b621a88ef5c5783e3c4d9299f7b86e04836aa3d000b88d4c",
+      "old_path": "",
+      "path": "backend/internal/service/payment_order_provider_snapshot_test.go",
+      "predecessor_sha256": "c07578a68f3092450f2275bd7246dd7813727d768fce9ce48b41986c5312e202",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_order_provider_snapshot_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "89083ab4cc23cda63ba9947775d9c50cd8b612a3e11bd8fc67dd181b1ab1d508",
+      "old_path": "",
+      "path": "backend/internal/service/payment_recharge_bonus.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_recharge_bonus.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "cd2277eeb1eda2aecc8a060586455cd2ab7aa6fb940d4c5bfb7564de3c0d95f4",
+      "old_path": "",
+      "path": "backend/internal/service/payment_recharge_bonus_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_recharge_bonus_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "c136d3bef91be85c335e2835ea59377d24ec455c0612ff1f927c92fd37fb6f0f",
+      "old_path": "",
+      "path": "backend/internal/service/payment_service.go",
+      "predecessor_sha256": "c1f56f3478603e470a94668c6ea50ecf07d8acd664203ddf3345c7c9ee7520ff",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/payment_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8e77d9960b537dcb0c30295c870445f3c468b8ace86dcfc0fc97ff5181d17a57",
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service.go",
+      "predecessor_sha256": "250311b490247f8ea035e3ddc2723045c42ac08d6116cc4d3dbd0ad6bd750572",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/pricing_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "7fea6ab10603041d97aa08383025f72a8d2a7d54e6089582d9400f559b957813",
+      "old_path": "",
+      "path": "backend/internal/service/scheduler_snapshot_service.go",
+      "predecessor_sha256": "9f386e413ccf8074a2f8a158b513d1f437198af719c1ed1699031510ddb76996",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/scheduler_snapshot_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "bc395dc855d98635228f5d19b19a03904096201d99f94475dc5d1d1292bfe9fc",
+      "old_path": "",
+      "path": "backend/internal/service/service_tier_billing.go",
+      "predecessor_sha256": "6bdd39e3245371d5af931aeae2ae633a5ee8f957181360801a4d51227464b34f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/service_tier_billing.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f5b26cf7fd41a774b83d8de36c18db7925b6aec9b330d73f2e051569edebbe1c",
+      "old_path": "",
+      "path": "backend/internal/service/service_tier_billing_test.go",
+      "predecessor_sha256": "19074360385d43b4e214fba8d01a93663a04d7dbf1ef8bd7d162be193187feeb",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/service_tier_billing_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3fc3719d635d85535a9fbd77b067d32392da842d7d41bcf3dbc81ded69143ce4",
+      "old_path": "",
+      "path": "backend/internal/service/upstream_billing_probe.go",
+      "predecessor_sha256": "f8381b0e4710f8b1266418bdcef58b4db2306a2b4792d5e05618ed3438b715bc",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/upstream_billing_probe.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "cc9043c4397c03afa6bbbc5f06545f1eee457faee69d84f77a27960396c4e135",
+      "old_path": "",
+      "path": "backend/internal/service/upstream_billing_probe_multiplatform_test.go",
+      "predecessor_sha256": "5d1345e9ac40ccd4edae2ef53f1df2322914b158941f592a32ab4a0a2c40f649",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/upstream_billing_probe_multiplatform_test.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6f1990f11f6c50c3045036554922cb3e8bd6cff0c9eb23541cd551108e591828",
+      "old_path": "",
+      "path": "backend/internal/service/user_service.go",
+      "predecessor_sha256": "b7fc81fa8127ae3d16d30696e3c9bb308766454f51c0b36884187a731f7b862c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/user_service.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ba4eeade2734c607615e0cce08f7ac411c8cc33a6887729ee213a868145c5fce",
+      "old_path": "",
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256": "f15c1bdfca65bceff824a7a108538ea9a7e3cd7bb940d01bda7f2f370d095f88",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/internal/service/wire.go",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ddd45f14154ea6d6b5b612bee7eb49436e1f2a1665f9a71eb8304e48475ed12d",
+      "old_path": "",
+      "path": "backend/migrations/241_add_payment_order_bonus_amount.sql",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/migrations/241_add_payment_order_bonus_amount.sql",
+      "status": "A"
+    },
+    {
+      "current_sha256": "419fceaa3e6f1bd089a454fda30b9d343a83fff75ad3b6dffdc44287bf99d171",
+      "old_path": "",
+      "path": "backend/migrations/241_add_typesafe_platform.sql",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/migrations/241_add_typesafe_platform.sql",
+      "status": "A"
+    },
+    {
+      "current_sha256": "d83510541af09649a2a4c42f03a0a5c07d1dd9f38a069aea48a24b2bcae528b0",
+      "old_path": "",
+      "path": "backend/migrations/typesafe_platform_migration_test.go",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/migrations/typesafe_platform_migration_test.go",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f639a87612461ee40be3bda865f39ea76693d4f7f71aacc257096f24188269ee",
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256": "2d8fbfe62764a197e914044c204f6d0a052e00a4a66fcef04a0f308b9f7c0ad7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "status": "M"
+    },
+    {
+      "current_sha256": "12601ddbf116aef10e986d49ffc384bc223d47e71f5eb7f69667981b1424e59c",
+      "old_path": "",
+      "path": "deploy/config.example.yaml",
+      "predecessor_sha256": "16b8b181fe8e11e8993d304337457931df4a8b318852d24e724c5ee364a3c644",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=deploy/config.example.yaml",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d0c484f74490a70ce650da2fc647a0f0ade6ec678ed0900eae371a1902627641",
+      "old_path": "",
+      "path": "docs/egress/maintenance/upstream-v0.2.13-egress-merge-ledger.json",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=docs/egress/maintenance/upstream-v0.2.13-egress-merge-ledger.json",
+      "status": "A"
+    },
+    {
+      "current_sha256": "81f0441fddaf6b1afea5d9bcc23be87d95b81626785542bab2ebf3733d8f10f7",
+      "old_path": "",
+      "path": "frontend/package.json",
+      "predecessor_sha256": "1967a0fb5109c458fb086f24f30706ca498a15e4422fa84130ac3bbf80f41f9a",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/package.json",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9382acbd57d046c0bc6163f4af7c6969f7d18e2ed92a00d347c4640a7aa6788a",
+      "old_path": "",
+      "path": "frontend/pnpm-lock.yaml",
+      "predecessor_sha256": "8dbd1876020e41b644d971414d29100c9f428f39ede953c03d0442b834f6f3af",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/pnpm-lock.yaml",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ed33b755a675413be997a32fe07d27c53fd562b59a8521e4fc5bd2d4e46c3fcf",
+      "old_path": "",
+      "path": "frontend/src/api/__tests__/codex.spec.ts",
+      "predecessor_sha256": "21d46b9a15fe82cd79972ebb208f26d4dddaafc09d950633610c21fc83b761b7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/api/__tests__/codex.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "72f4e204453ac97bba3840e127d96816be76e275844c7a63651d3105c4e86dd3",
+      "old_path": "",
+      "path": "frontend/src/api/admin/claudeResetCredits.ts",
+      "predecessor_sha256": "e4e8ea9707b5830baebe31eb244dd832132914290d157e3c4f6803b0bef530d4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/api/admin/claudeResetCredits.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c67a2dcc9ac6607082362750edec42706f5b55e04b212752e976f0c92e52b61e",
+      "old_path": "",
+      "path": "frontend/src/api/admin/settings.ts",
+      "predecessor_sha256": "7ad8c87569cbf0843cf6004799152ca709bbdd92c22278f23e5ed2231106514c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/api/admin/settings.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ca336c7ba657a7406b45be22f86a7198a476ecbe7ed628cab29af27b04a68f4c",
+      "old_path": "",
+      "path": "frontend/src/api/admin/users.ts",
+      "predecessor_sha256": "561bd1cf2a452e714ecf93bf1ca33f77178836d212f4ec0235d414bb83495f53",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/api/admin/users.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ce0086d64a7bf71570106bbfb67fb83791dada0cdf6272f0e2958f79a3e3d7df",
+      "old_path": "",
+      "path": "frontend/src/api/codex.ts",
+      "predecessor_sha256": "28284175a09b3046924a7abe90513c4a8c50578ac72ac7969b410a5f726661a1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/api/codex.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b81db51f7ed914859f41e971360a32c5afb9082889dd6c7a7a9c77533e2efa62",
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountPriorityCell.vue",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/AccountPriorityCell.vue",
+      "status": "A"
+    },
+    {
+      "current_sha256": "f3defe2892205d2f7e31ec8407987062b4566786d6ec2cbd0910e92282a815ba",
+      "old_path": "",
+      "path": "frontend/src/components/account/AccountUsageCell.vue",
+      "predecessor_sha256": "ef334a108c7ef7a6c0fa78fe0f29ce3310507ead264cbdba6dc96dd06a0a9939",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/AccountUsageCell.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ac1a1b7d5fef60817508469b9af81952afc5c96e2c4d8c9ff7f7fe3a7d1804fd",
+      "old_path": "",
+      "path": "frontend/src/components/account/ClaudeResetCreditsCell.vue",
+      "predecessor_sha256": "e339658d4871b69b691fbdb12dc6de9d0b06704377d190fa5761bfb38d7cb3cb",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/ClaudeResetCreditsCell.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "24848768b6e4ab6e20eac4a153b7b78c8f1262ea942347fc676358db5aae206e",
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256": "dea2c2e60a44826f25149e8afa76a2360e73dfdfc90c180f98b3c9d4b5e80e00",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/CreateAccountModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "af4c4c3a42f0370484d27f159c6e3ae190f03225562fd3d63c0ab96ecb4b1703",
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256": "a3d72c453a36357182cab1bfe3c4f2e20543a3fb3a23b75727bc84b07a271eb4",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/EditAccountModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "8880673d1723aa6df76df76e7b815d7a4a163c777d301b9c5fe20d5c44ea1f16",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/AccountPriorityCell.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/__tests__/AccountPriorityCell.spec.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3bd19035e599439949ceb6ca39ef9842dec97f6254bd7ab58ae7ddb1e88d600b",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/ClaudeResetCreditsCell.spec.ts",
+      "predecessor_sha256": "b35507f2dfde89edc9430f24bfa896366255064d70f249b641f236dfcb2b0ca1",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/__tests__/ClaudeResetCreditsCell.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "03dfe7341a2daaeb81f23d544d6b4a9aba9a52c1c7c892cf2517b6cd870d90e2",
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/credentialsBuilder.spec.ts",
+      "predecessor_sha256": "94d0452992b041baad3eb95b17f909b4fda2a5a59db5f466b3d4654163d2d0b0",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/__tests__/credentialsBuilder.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b41eecbb8a0c3f28c3322e921e3872cab8436f697ae9aca22fd262e485250f3c",
+      "old_path": "",
+      "path": "frontend/src/components/account/credentialsBuilder.ts",
+      "predecessor_sha256": "3e07afcef3bce73b1f55dac0bc3c3a858df7e3918431d780d33fc719b52921b7",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/account/credentialsBuilder.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4169a7cb3217a6b54142c1b3ea6ef91543f9e0f9838a2a5fb3d5e2b2196d0861",
+      "old_path": "",
+      "path": "frontend/src/components/admin/payment/AdminOrderDetail.vue",
+      "predecessor_sha256": "d69569639a22a58705dc54fe398da74d82f5134ca652b8dac17c8c71bc61be01",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/admin/payment/AdminOrderDetail.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "da1a24ee02f5358b56e7f2aa996ddda0ce8fce2aa2e7dab91a77606929237de8",
+      "old_path": "",
+      "path": "frontend/src/components/admin/payment/AdminOrderTable.vue",
+      "predecessor_sha256": "d9251b61856eaba632c8b018804c17f7a404a97dc28af8b13c5516786538d1b5",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/admin/payment/AdminOrderTable.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "271e68c7e6140d4e784470b08a4cbe4c221306e3d790bee2a3c6f02665732e3f",
+      "old_path": "",
+      "path": "frontend/src/components/admin/settings/RechargeBonusTierEditor.vue",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/admin/settings/RechargeBonusTierEditor.vue",
+      "status": "A"
+    },
+    {
+      "current_sha256": "3c7ca4bec5a604c6edf463a4fac2bbe5faa68a0e2e3faaf73e76c110f6048e89",
+      "old_path": "",
+      "path": "frontend/src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts",
+      "predecessor_sha256": "e324db23d31998ddd7ec1a599ce874f943923ba27b31d84e554b3401439af5ea",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ada51a0b8003acaba99931f54f9f699e50323bbfad0d549a232c8941566f68a2",
+      "old_path": "",
+      "path": "frontend/src/components/common/PlatformTypeBadge.vue",
+      "predecessor_sha256": "e14553d788ff9d18b16a68fc9082c913410897e0cf62dc68a465e74573b88b93",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/common/PlatformTypeBadge.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "66e1df54b38c0cf2e1bebf0f3217a3dfbeeccbcbe6416c193561a3ddca9e4a6b",
+      "old_path": "",
+      "path": "frontend/src/components/common/__tests__/PlatformTypeBadge.openaiPlans.spec.ts",
+      "predecessor_sha256": "90ce925ff9c9ca385feccbf4e258764e579fcddb2c0352606b96c780ae23cc05",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/common/__tests__/PlatformTypeBadge.openaiPlans.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "4f64268bc4e49de665cf68152d6869c7f895eb394bc7a46684ccab866bb67bc0",
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256": "760c2c307edeeca81cd02a61eb611fddb770fda2f24636b75ebab760c3b412c2",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/keys/UseKeyModal.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "53418b28940e9a3d980b97cfff90f6b2ba590c6d149953b3dc29cff19adc2ea5",
+      "old_path": "",
+      "path": "frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "predecessor_sha256": "36f4103733e754e3326a256ddea4402305be7ab13e838db1c2363a57b42d0106",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "cedefb1234b91f078f6115283ade9cd7a2022742a304a61897726401a3b56ca9",
+      "old_path": "",
+      "path": "frontend/src/components/payment/AmountInput.vue",
+      "predecessor_sha256": "27a067a9b24eaaa37cd0f5f72bf059cc312ad8e5cc6bf2bc37f5d03cb3dbd09a",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/payment/AmountInput.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "30d7eb2f2f934778ef56a403076e8c917180e6022d2c900a516dd5a33ec6c711",
+      "old_path": "",
+      "path": "frontend/src/components/payment/OrderTable.vue",
+      "predecessor_sha256": "3ccc6489b2fff589e21fabbf6239223969368b4d30ed6ad26cf45bad38fb490d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/payment/OrderTable.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "71eade97b9188ff1f74df1ce5d1fd1885f92ddac74c66f4d911936bdc33cf7b3",
+      "old_path": "",
+      "path": "frontend/src/components/payment/PaymentStatusPanel.vue",
+      "predecessor_sha256": "21661eeb1f5d67cfd53e814da4575084583a44ca0a9c967a25f9b1184ad48d6c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/payment/PaymentStatusPanel.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "27c014d7d4fac5b301d844d6c4abb9f3756c8e9f2e9e4811ab58308572a6baa3",
+      "old_path": "",
+      "path": "frontend/src/components/payment/__tests__/AmountInput.spec.ts",
+      "predecessor_sha256": "d34e2299245f1f0e204ba961be72aab0f09e00e697f8450a0cb0a649898884da",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/payment/__tests__/AmountInput.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b2df3683fcadacfd9e076f133c019b04c7beccdcb02d53fb582d578887cee4b2",
+      "old_path": "",
+      "path": "frontend/src/components/user/UserPlatformQuotaCell.vue",
+      "predecessor_sha256": "6161021997150bae0e3258bf768ccb1cc38003d194c7294b55e2bcc2a30ded43",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/user/UserPlatformQuotaCell.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "95092d02b59c0c6efcd59cd7ec331a753c26c7d4ac5afd07615cf2893553ec5b",
+      "old_path": "",
+      "path": "frontend/src/components/user/__tests__/UserPlatformQuotaCell.spec.ts",
+      "predecessor_sha256": "bb1e83d96473deaeff6b7eddf2ab7718a7548503f1994521d0de7457216f7831",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/user/__tests__/UserPlatformQuotaCell.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6e108881b3ed95131ea377731cc7dd0178faf788a74e27fc8bb3f399a71f096d",
+      "old_path": "",
+      "path": "frontend/src/components/user/dashboard/UserDashboardStats.vue",
+      "predecessor_sha256": "dfe4ddba96624435878504a685876ebc392d9b1d3c79f93c6002b2a1ee77451b",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/user/dashboard/UserDashboardStats.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "55d5499d2526f088f244d69dbcac3a31982aae1b78e91618cc8d19be37566d2d",
+      "old_path": "",
+      "path": "frontend/src/components/user/dashboard/__tests__/UserDashboardStats.spec.ts",
+      "predecessor_sha256": "75d3b5c23c34a8119fc3af73260540525bd05fb0a8551e7a6f43428a95e68842",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/components/user/dashboard/__tests__/UserDashboardStats.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "0b941a53d4d9c6cc5e6c2379ce956a5fc578f80459f1fc3df35fe1f6de0f1c6d",
+      "old_path": "",
+      "path": "frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "predecessor_sha256": "f2c6798ca9eb094047c1e5057b450c93a339a9cf2da5cb5023d7bcaa062bd855",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a0670b2954a2fe7913a61f1af55ba899c85c9c6c532d4a0a49dd3013c66f360b",
+      "old_path": "",
+      "path": "frontend/src/composables/useModelWhitelist.ts",
+      "predecessor_sha256": "ff69e67c57d61eb363cb046a53b56e096dbdc4891ee3312dcc950393bb9c9a97",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/composables/useModelWhitelist.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "104692739217b2abf0cee7692cae7e03f526832cdebab943dc83fe9860763d84",
+      "old_path": "",
+      "path": "frontend/src/constants/__tests__/platforms.spec.ts",
+      "predecessor_sha256": "2c33da0a92000148a3cd2d4abd4248170639f2b2f761113d16a90e9fac8341bd",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/constants/__tests__/platforms.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f0ac48a198248c0fbdddfa6986ed738736d493e57d1ceb5456548999b008aed1",
+      "old_path": "",
+      "path": "frontend/src/constants/platforms.ts",
+      "predecessor_sha256": "04ed15b49e93fb40a77e5f7922a9d9de9d1a8017d7e1813d50e0385aa98dac16",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/constants/platforms.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "97b76fd995179eae437671a5de8e646bccd49cc0eff5871652001e31270e22fd",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256": "7e346a2f94600c9a00a2ce84d7acd29680eed1cfb0e1efb7b0a1f0b9521b2a86",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "3db6f1edbe0966085e4e86cbd55eb417a4d641384e8bfb130d98ed109b6e9da6",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/overview.ts",
+      "predecessor_sha256": "6d9e35a245bd079ebba92cccffc2fe61e188737dd81ce5d39dde156cf34b9eb9",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/en/admin/overview.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "dedfb45cd0d5635f1df7634a4656104e716535669224c97a01aee32648290886",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/settings.ts",
+      "predecessor_sha256": "7321b6a30c2bfcf06263c34faf37fff8bf75eeae94ce0157ff0fd71fd0337890",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/en/admin/settings.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "2d63a676bdf4f577ae17cf8c1fed07e3be1256474c61aa7c4de2daedbab8585a",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/dashboard.ts",
+      "predecessor_sha256": "10329b8ec11f22fcd39e9f971f30360fe7c72e06e2ddeff74a9d40cf4d826e55",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/en/dashboard.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "d7736d7e97ea322c89d12ccb8256badae4f0f67cd13868314e282c58f9d011c5",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/misc.ts",
+      "predecessor_sha256": "754b68fb7ac694c113bd5245a0ee09f3c9f31957f602874c317fcc22bebbc741",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/en/misc.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "649a3a372e23e24aeb54a1c497f6503b787b136684a6fcfa16fd6173e2bde116",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256": "55589014a7e1d731d3105de658b17c79e75c3231b67dd4bedf185d69a22b931c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "b4f8ad24ec83d27177779e39c3f1257d176082c2f4bda447f0cb88f78782c49c",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/overview.ts",
+      "predecessor_sha256": "b78715447fb58b1651d218829c916dee37979bf56a7d406190dcd86bad59c1c6",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/zh/admin/overview.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e91e4f5da5d4aed5a02afbf9bc4cbdd94f8a390eb1e0d1ca6660bec248f1613d",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/settings.ts",
+      "predecessor_sha256": "d750f805fc58708609ef303a3ebeadb6150f2b4a06523298fd4a6c7881aac578",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/zh/admin/settings.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "1b1a28acc56f69e7f11e409ca036f591bf91e284dab6a940286244178111825c",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/dashboard.ts",
+      "predecessor_sha256": "089179074f3f203f3800b056f727e954b4dc90ebe73949852a8a59ef98133c99",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/zh/dashboard.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c963a0f41f7eeb29ad123517fe3cca8d5984241021c191cc822f2f6fde863945",
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/misc.ts",
+      "predecessor_sha256": "0e6c80e6394b6c40f2fbd052a0bb91480d1f52a50606f72d2be86c2605eccc6c",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/i18n/locales/zh/misc.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "ce90a83e9a353cfb80677b175e7f578fbaa8e23b9177b408633a8928af07bc58",
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256": "15e0c363500038f1707712f80bc6b61455d4abdcf49d6a4bedf35b7d89b1bb41",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/types/index.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e8d181d8e23faf7b6bc41b011f39858afad3b481f56d3296ff46217101d4cb47",
+      "old_path": "",
+      "path": "frontend/src/types/payment.ts",
+      "predecessor_sha256": "21622776813b81b571fba9041093b4a6504b54aa29355f6e833d4823c1594684",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/types/payment.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "9444d8e22c5456effe3185b6d5cf608be8fe6b368df2d717731474a00f680521",
+      "old_path": "",
+      "path": "frontend/src/utils/__tests__/rechargeBonus.spec.ts",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/utils/__tests__/rechargeBonus.spec.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "985e533298d36cd33450a0cc05224cf9f8555c340eef0dc46085841bda96d700",
+      "old_path": "",
+      "path": "frontend/src/utils/keyGroupProviders.ts",
+      "predecessor_sha256": "79d469cb99fd015c22f24f65e352fa5041b3188daaf940e68381aafcffe1d534",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/utils/keyGroupProviders.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "67fda0ead80ccc26844bfd6ded1e8de620d607327c962a616fab5348539cb1a9",
+      "old_path": "",
+      "path": "frontend/src/utils/planType.ts",
+      "predecessor_sha256": "248f3b03c5e8e77b478a710a23f062c238a556a81fb8bfed7a5b5478acd17717",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/utils/planType.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "17cef95aa0ba7ce32c60e731163ca62177a4e7cacad0e9b55ae05287ae712d55",
+      "old_path": "",
+      "path": "frontend/src/utils/platformColors.ts",
+      "predecessor_sha256": "270d26e19716a0e5392232024f495e1e90411a736850cf02bb4a7a09e688f6cc",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/utils/platformColors.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "c29544817b3f220ced44a0a33180d2f8206683edf83b44cdda8c8f4927230673",
+      "old_path": "",
+      "path": "frontend/src/utils/rechargeBonus.ts",
+      "predecessor_sha256": null,
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/utils/rechargeBonus.ts",
+      "status": "A"
+    },
+    {
+      "current_sha256": "ad80be87464237b94bb28deb12bf1e90d55fe3792990d9edb4e370521aeeca32",
+      "old_path": "",
+      "path": "frontend/src/views/admin/AccountsView.vue",
+      "predecessor_sha256": "27ff2d6390b0aa034dd7e462bee33c15bf74fdba2cd692d47d8133be7a1c9c2f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/admin/AccountsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "a5b9a914f9ba005bfa5a32bd4153c2989ac8f82fdfba7c510f1374ae950c9869",
+      "old_path": "",
+      "path": "frontend/src/views/admin/ChannelsView.vue",
+      "predecessor_sha256": "94d3bb825f346aee6a5851f8bc129014e866ffee29f94c54edad9d7ef9201df2",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/admin/ChannelsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f68365ed96accd02d4dfc479d32f1071b7c785f169c1033c9d5221702f52279b",
+      "old_path": "",
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "predecessor_sha256": "29cb178f348f208594d2d6e5cb391318cf5a04e8cf8a87fa2e86f21b8a6cbf89",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/admin/SettingsView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "6144135325edfd9cf4b2b3974f4295c21af77435bf5b32ac4962b394cb5a144e",
+      "old_path": "",
+      "path": "frontend/src/views/admin/__tests__/SettingsView.spec.ts",
+      "predecessor_sha256": "295b4bdadd8f0c345fb1a4ce4c3d5eb1a950d6fd712db0f13372b6f54a1cd347",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/admin/__tests__/SettingsView.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e61162e7dd9acf99746284a1f15ae840c17389449e371e4e181db5ce2dd8afc8",
+      "old_path": "",
+      "path": "frontend/src/views/user/KeysView.vue",
+      "predecessor_sha256": "961875e2f41c1e142552741b2228ed51ca7e00287f200bbb569655dd1d8c5c71",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/user/KeysView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "12b00d327041107423ac48e6dfb08f88a8c947d11732543d9b6e66bd523c10dd",
+      "old_path": "",
+      "path": "frontend/src/views/user/PaymentResultView.vue",
+      "predecessor_sha256": "2689a01175bc775c6de02999d3b8dcce20fb10f6b7b4a185491d9c899b4b0c19",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/user/PaymentResultView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "608b72491149389d73687002434fba43cf3e5ca771a96b616c04a86dedf7c412",
+      "old_path": "",
+      "path": "frontend/src/views/user/PaymentView.vue",
+      "predecessor_sha256": "671bb04c638556a22150497bf443b528b211bca63ed99b52a2db542bfb36d262",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/user/PaymentView.vue",
+      "status": "M"
+    },
+    {
+      "current_sha256": "f65c5c2e93702940bef2a97b1a2b78db5f2d55b2fa7b425a54a669493feb7108",
+      "old_path": "",
+      "path": "frontend/src/views/user/__tests__/KeysView.spec.ts",
+      "predecessor_sha256": "fb238abaa511f5c0ab2becf17f8386786054a40f41a71344604237a779fa248d",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=frontend/src/views/user/__tests__/KeysView.spec.ts",
+      "status": "M"
+    },
+    {
+      "current_sha256": "e6ecc2b0c9149334700baab5cb1b5ecb97acffaef96dbd0500629d219c781ed3",
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "predecessor_sha256": "3ad0a8d6e0271c320feabf0186439264333f4ef1be7868a494c18bbcbed4b66f",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "status": "M"
+    },
+    {
+      "current_sha256": "913c34490112159066e4dc0d7cb48da7b9f807ae3dff2f00ceb9046396980435",
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256": "fc0526119b6ebd3cc7ca4de6f0cf30d8990669e722f024f7af631c8cd0dcc1fa",
+      "reason": "上游 v0.2.11～v0.2.13 合并：TypeSafe／Jev 原生 System One 网关与账号测试、Claude OAuth 重置额度手动兑换、gpt-6.1-sol 模型支持、套餐标签与 Codex 远程模型目录配置等新功能及一批修复（含 axios 升到 1.20.0）；含我方冲突处置、System One 端点移入 gatewayendpoint、TypeSafe 可用模型返回值适配、组合分组 TypeSafe 列表用例按协议分目录改写与 0.160 fact map 快照重绑。 path=tools/official_client_capture/candidate_test_trace.py",
+      "status": "M"
+    }
+  ],
+  "entry_count": 236,
+  "identity_sha256": "4accc9008bc898e06e6a28cd58406af811e121647960ce6812048ea00d42a5df",
+  "issued_at_utc": "2026-10-04T03:25:00Z",
+  "predecessor_register": null,
+  "reason_policy": "每个路径由 Git 差异确定；predecessor/current 摘要不可手填。reason 可统一提供，但官方 Persona、wire、selector 和共享控制面仍需人工补充。",
+  "result": "generated",
+  "schema_version": "official-egress-upstream-source-transition/v3"
+}
