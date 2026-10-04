@@ -1,8 +1,8 @@
 {
   "schema_version": "official-egress-scanner-algorithm-successor/v1",
   "from_sha256": "cde48d629935dae1d3add70cdb76aeeac6a2a127b041476b8e279869bdf26767",
-  "to_sha256": "7e16078361c47a151650b8eee2c633560c12f45dcfb65cf3d810080e78e33120",
-  "source_transition": "docs/egress/maintenance/upstream-v0210-scanner-pending-additions-20260930-freeze-successor.json",
-  "reviewed_by": "sub2api-v0.2.10-merge-scanner-pending-additions",
-  "reason": "上游 v0.2.10 合并前在主干预先登记纯新增发送点：上游新增发送点清单（post_bootstrap_acceptance.go）增加“合并前整组缺失、合并后整组齐全”标记，登记 TypeSafe 内容审核、Seedance 视频、OpenCode Go 用量查询、Claude OAuth 重置额度 4 个范围外发送点并冻结其分类与后端边界；此前只追加 out-of-scope 分类规则不足以通过发送面基线检查。main.go 被 v0.2.3 post-bootstrap 承接收据逐字节钉住，本次不改。ChatGPT 邀请好友发送点本次不接通、不登记。不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要。"
+  "to_sha256": "0d1790c1236177928506fb5eda3c3eb9202038b34da2acee4ef88215532c6dd0",
+  "source_transition": "docs/egress/maintenance/upstream-v0213-scanner-pending-additions-20261004-freeze-successor.json",
+  "reviewed_by": "sub2api-v0.2.13-merge-scanner-pending-additions",
+  "reason": "上游 v0.2.13 合并前在主干预先登记纯新增发送点：TypeSafe 账号连通性测试（account_test_service_typesafe.go）与 System One 网关转发（gateway_systemone.go）两个范围外发送点按新 mergeGroup（upstream-v0213-typesafe-systemone）登记“合并前整组缺失、合并后整组齐全”，并补两条 out-of-scope 分类规则；Claude 重置额度兑换沿用 v0.2.10 已登记的客户端工厂发送点，不新增。main.go 被 v0.2.3 post-bootstrap 承接收据逐字节钉住，本次不改；不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要。"
 }

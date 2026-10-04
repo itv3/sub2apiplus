@@ -622,6 +622,8 @@ var classifyRules = []classifyRule{
 	oos("service/ollama_cloud_usage.go", "Ollama Cloud"),
 	oos("service/opencode_go_usage.go", "OpenCode Go 用量查询，目标 opencode.ai"),
 	oos("service/seedance.go", "Seedance 视频任务，目标为账号 base_url 配置的第三方上游"),
+	oos("service/account_test_service_typesafe.go", "TypeSafe 账号连通性测试，向账号 base_url 发最小 System One 请求，第三方 API Key 平台"),
+	oos("service/gateway_systemone.go", "System One 网关转发，TypeSafe 账号经账号 base_url 转发，第三方 API Key 平台"),
 	oos("service/admin_proxy.go", "代理质量检测"),
 	oos("service/vertex_service_account.go", "Vertex token 交换"),
 	oos("service/setting_oauth.go", "OIDC metadata 发现"),

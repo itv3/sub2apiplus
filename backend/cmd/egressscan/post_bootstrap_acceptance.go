@@ -53,6 +53,9 @@ var upstreamScannerSuccessorEvidence = fmt.Sprintf(
 // upstreamPendingAdditionsEvidence 是合并前在主干预先登记上游新增发送点的承接收据。
 var upstreamPendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0210-scanner-pending-additions-20260930-freeze-successor.json"
 
+// upstreamV0213PendingAdditionsEvidence 是合并 v0213 批次前在主干预先登记新增发送点的承接收据。
+var upstreamV0213PendingAdditionsEvidence = "docs/egress/maintenance/upstream-v0213-scanner-pending-additions-20261004-freeze-successor.json"
+
 var reviewedPostBootstrapSinkTransitions = []postBootstrapSinkTransition{
 	{
 		name:        "upstream-chat-completions-facade-successor",
@@ -141,6 +144,38 @@ var reviewedPostBootstrapSinkAdditions = []postBootstrapSinkAddition{
 		rationale:         "本次上游同步新增的 Claude OAuth 账号重置额度查询与兑换客户端（api.anthropic.com），与既有 Claude 用量查询同属管理端辅助请求，不承载 Claude Code persona 推理；Claude 出站 Inventory 登记为 non_persona_managed。",
 		absentBeforeMerge: true,
 		mergeGroup:        "upstream-typesafe-seedance-opencode-go-claude-reset",
+	},
+	{
+		name:              "upstream-typesafe-account-test",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testTypeSafeAccountConnection@backend/internal/service/account_test_service_typesafe.go#facade_http_upstream_do#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "facade_http_upstream_do",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamV0213PendingAdditionsEvidence,
+		rationale:         "v0213 批次上游新增的 TypeSafe 账号连通性测试，向账号 base_url 发最小 System One 请求，属于第三方 API Key 平台，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-v0213-typesafe-systemone",
+	},
+	{
+		name:              "upstream-systemone-gateway-forward",
+		candidateID:       "github.com/Wei-Shaw/sub2api/internal/service.*GatewayService.ForwardSystemOne@backend/internal/service/gateway_systemone.go#facade_http_upstream_do#1",
+		persona:           "out-of-scope",
+		runtimeSinkID:     "",
+		purpose:           "",
+		endpointEvidence:  "not_applicable",
+		sinkKind:          "facade_http_upstream_do",
+		backend:           "-",
+		targetBackend:     "-",
+		enforcementState:  "not_applicable",
+		evidenceRef:       upstreamV0213PendingAdditionsEvidence,
+		rationale:         "v0213 批次上游新增的 System One 网关转发，TypeSafe 账号经账号 base_url 转发请求，属于第三方 API Key 平台，不承载官方 OAuth 出站。",
+		absentBeforeMerge: true,
+		mergeGroup:        "upstream-v0213-typesafe-systemone",
 	},
 }
 

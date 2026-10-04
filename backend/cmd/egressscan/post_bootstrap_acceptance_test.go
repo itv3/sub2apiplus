@@ -117,22 +117,20 @@ func TestReviewedPostBootstrapSinkAdditionIsOutOfScopeAndFailClosed(t *testing.T
 	}
 }
 
-// pendingAdditionRecords 按登记内容构造合并后应出现的发送点记录（分类字段与审核收据逐字一致）。
-func pendingAdditionRecords(t *testing.T) (string, []SinkRecord) {
+// pendingAdditionRecords 按登记内容构造合并后应出现的发送点记录（分类字段与审核收据逐字一致），
+// 按 mergeGroup 分组、组的顺序与登记顺序一致；每组各自独立地“整组缺失或整组齐全”。
+func pendingAdditionRecords(t *testing.T) ([]string, map[string][]SinkRecord) {
 	t.Helper()
-	group := ""
-	var records []SinkRecord
+	var groups []string
+	byGroup := make(map[string][]SinkRecord)
 	for _, addition := range reviewedPostBootstrapSinkAdditions {
 		if !addition.absentBeforeMerge {
 			continue
 		}
-		if group == "" {
-			group = addition.mergeGroup
+		if _, seen := byGroup[addition.mergeGroup]; !seen {
+			groups = append(groups, addition.mergeGroup)
 		}
-		if addition.mergeGroup != group {
-			t.Fatalf("本用例只覆盖单个 mergeGroup，出现第二组：%s", addition.mergeGroup)
-		}
-		records = append(records, SinkRecord{
+		byGroup[addition.mergeGroup] = append(byGroup[addition.mergeGroup], SinkRecord{
 			ScanCandidateID:  addition.candidateID,
 			Persona:          addition.persona,
 			RuntimeSinkID:    addition.runtimeSinkID,
@@ -145,49 +143,73 @@ func pendingAdditionRecords(t *testing.T) (string, []SinkRecord) {
 			Rationale:        addition.rationale,
 		})
 	}
-	if len(records) < 2 {
-		t.Fatalf("合并前预先登记的上游新增发送点不足两条：%d", len(records))
+	for _, group := range groups {
+		if len(byGroup[group]) < 2 {
+			t.Fatalf("mergeGroup %s 预先登记的上游新增发送点不足两条，无法验证“只出现一部分即失败”：%d",
+				group, len(byGroup[group]))
+		}
 	}
-	return group, records
+	return groups, byGroup
 }
 
 // 合并前整组缺失、合并后整组齐全都合法；只出现一部分、或出现后分类漂移都必须失败。
+// 多个 mergeGroup 各自独立判定：一组齐全时，其余组仍可整组缺失。
 func TestReviewedPostBootstrapSinkAdditionPendingGroupIsAllOrNothing(t *testing.T) {
-	_, records := pendingAdditionRecords(t)
+	groups, byGroup := pendingAdditionRecords(t)
+	if len(groups) == 0 {
+		t.Fatal("没有合并前预先登记的上游新增发送点")
+	}
 
 	oldByID, currentByID := postBootstrapAcceptanceFixture()
 	accepted, problems := validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID)
 	if len(problems) != 0 {
-		t.Fatalf("合并前整组缺失不应失败：%v", problems)
+		t.Fatalf("合并前各组整组缺失不应失败：%v", problems)
 	}
-	for _, record := range records {
-		if _, ok := accepted.acceptedAdded[record.ScanCandidateID]; ok {
-			t.Fatalf("尚未出现的候选不应被接受：%s", record.ScanCandidateID)
+	for _, group := range groups {
+		for _, record := range byGroup[group] {
+			if _, ok := accepted.acceptedAdded[record.ScanCandidateID]; ok {
+				t.Fatalf("尚未出现的候选不应被接受：%s", record.ScanCandidateID)
+			}
 		}
 	}
 
-	for _, record := range records {
-		currentByID[record.ScanCandidateID] = record
-	}
-	accepted, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID)
-	if len(problems) != 0 {
-		t.Fatalf("合并后整组齐全不应失败：%v", problems)
-	}
-	for _, record := range records {
-		if _, ok := accepted.acceptedAdded[record.ScanCandidateID]; !ok {
-			t.Fatalf("合并后出现的候选未被接受：%s", record.ScanCandidateID)
+	for _, group := range groups {
+		records := byGroup[group]
+		oldByID, currentByID := postBootstrapAcceptanceFixture()
+		for _, record := range records {
+			currentByID[record.ScanCandidateID] = record
+		}
+		accepted, problems := validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID)
+		if len(problems) != 0 {
+			t.Fatalf("%s 合并后整组齐全（其余组缺失）不应失败：%v", group, problems)
+		}
+		for _, record := range records {
+			if _, ok := accepted.acceptedAdded[record.ScanCandidateID]; !ok {
+				t.Fatalf("%s 合并后出现的候选未被接受：%s", group, record.ScanCandidateID)
+			}
+		}
+
+		delete(currentByID, records[0].ScanCandidateID)
+		if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
+			t.Fatalf("%s 整组只出现一部分未被拒绝", group)
+		}
+
+		drifted := records[0]
+		drifted.RuntimeSinkID = "unexpected.runtime"
+		currentByID[drifted.ScanCandidateID] = drifted
+		if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
+			t.Fatalf("%s 出现后进入运行时身份未被拒绝", group)
 		}
 	}
 
-	delete(currentByID, records[0].ScanCandidateID)
-	if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
-		t.Fatal("整组只出现一部分未被拒绝")
+	// 全部组同时齐全（连续两次合并都已完成）同样合法。
+	oldByID, currentByID = postBootstrapAcceptanceFixture()
+	for _, group := range groups {
+		for _, record := range byGroup[group] {
+			currentByID[record.ScanCandidateID] = record
+		}
 	}
-
-	drifted := records[0]
-	drifted.RuntimeSinkID = "unexpected.runtime"
-	currentByID[drifted.ScanCandidateID] = drifted
-	if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
-		t.Fatal("出现后进入运行时身份未被拒绝")
+	if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) != 0 {
+		t.Fatalf("各组都已齐全不应失败：%v", problems)
 	}
 }
