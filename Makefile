@@ -401,9 +401,10 @@ test-frontend-critical:
 # 依赖 local-analysis 的原始证据复算仅在本机证据存在时执行。Claude bundle AST 用
 # frontend lockfile 中的 TypeScript 解析器，禁止临时下载或浮动版本。
 # 分片并行（2026-09-28 老板拍板：保持全量门禁、把 test-capture-tools 拆成 N 片并行）。分片与全量共用同一 discover 语义，
-# 分片器先做闭合自检（并集＝全量、互不相交、权重表无陈旧条目），任一片失败即失败。CI 按 matrix 逐片跑，本机门禁跑 parallel。
+# 分片器先做闭合自检（并集＝全量、互不相交、权重表无陈旧条目），任一片失败即失败。CI 按 matrix 逐片跑；本机门禁
+# （upstream-gate-full）只跑闭合自检，全量交给统一调度执行器 make test-capture-tools（UM-20：静态 4 片片间不均，
+# v0.2.13 合并时最慢一片 887 秒，执行器同机约 350 秒），原来的本机 4 片并行目标随之删除。
 CAPTURE_TEST_SHARDS ?= 4
-CAPTURE_TEST_SHARD_LOG_DIR ?= $(or $(RUNNER_TEMP),$(TMPDIR),/tmp)/capture-test-shards
 define CAPTURE_TS_MODULE_CHECK
 	python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and hashlib.sha256(p.read_bytes()).hexdigest() == expected) or sys.exit("CAPTURE_TYPESCRIPT_MODULE 非法或摘要不符")' \
 		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"
@@ -419,22 +420,6 @@ test-capture-tools-shard:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_test_shards.py run \
 		--count $(CAPTURE_TEST_SHARDS) --index $(SHARD_INDEX)
-
-# 本机并行：N 片同时跑，日志各写一份，全部通过才成功。
-test-capture-tools-parallel: test-capture-tools-shard-check
-	@$(CAPTURE_TS_MODULE_CHECK)
-	@mkdir -p "$(CAPTURE_TEST_SHARD_LOG_DIR)"; rc=0; pids=""; \
-	for i in $$(seq 1 $(CAPTURE_TEST_SHARDS)); do \
-		( CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" PYTHONDONTWRITEBYTECODE=1 \
-		  python3 tools/ci/capture_test_shards.py run --count $(CAPTURE_TEST_SHARDS) --index $$i \
-		  > "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" 2>&1; echo "exit=$$?" >> "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" ) & pids="$$pids $$!"; \
-	done; \
-	for p in $$pids; do wait $$p || rc=1; done; \
-	for i in $$(seq 1 $(CAPTURE_TEST_SHARDS)); do \
-		printf 'shard %s: %s | %s\n' "$$i" "$$(grep -E '^Ran ' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" | tail -1)" "$$(grep -E '^(OK|FAILED)' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" | tail -1)"; \
-		grep -q '^exit=0$$' "$(CAPTURE_TEST_SHARD_LOG_DIR)/shard-$$i.log" || rc=1; \
-	done; \
-	exit $$rc
 
 # 采集工具测试全量（E2-01）：统一调度执行器 tools/ci/unit_executor.py 与原单进程 discover 同一加载语义
 # （起点 tools/official_client_capture/tests、模式 test_*.py），改为每个测试模块（重模块按方法拆块）一个独立进程，
@@ -488,7 +473,8 @@ test-upstream-merge-tools:
 		-s tools/upstream_merge/tests -p 'test_*.py'
 
 # 上游合并 U-4 full-regression 组：go test、lint、前端、采集工具、出站规格五条检查线依次执行，
-# 遇错不停，采集工具 4 片并行，全部结束后统一输出日志与汇总（见 tools/upstream_merge/gate_runner.py）。
+# 遇错不停，采集工具先做分片闭合自检、再走统一调度执行器（make test-capture-tools），全部结束后统一输出
+# 日志与汇总（见 tools/upstream_merge/gate_runner.py）。
 # UPSTREAM_GATE_JOBS 可让检查线之间并行，默认 1：满载并行时计时敏感用例会误判。
 upstream-gate-full:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner full \

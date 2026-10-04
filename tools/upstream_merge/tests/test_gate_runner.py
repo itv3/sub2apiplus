@@ -52,7 +52,13 @@ class BuildLanesTest(unittest.TestCase):
                 ("make", "test-frontend-critical"),
             ],
         )
-        self.assertEqual(by_name["capture-tools"].steps[0].argv, ("make", "test-capture-tools-parallel"))
+        # 采集工具线：分片闭合自检（与 CI 的 4 片作业同一份权重表）＋统一调度执行器全量（UM-20）。
+        capture_steps = by_name["capture-tools"].steps
+        self.assertEqual(
+            [step.argv for step in capture_steps],
+            [("make", "test-capture-tools-shard-check"), ("make", "test-capture-tools")],
+        )
+        self.assertEqual([step.unit_executor for step in capture_steps], [False, True])
         self.assertEqual(
             by_name["egress-spec"].steps[0].argv,
             ("make", "-k", "CODEX_0_149_1_SOURCE_ROOT=/src/codex", "check-egress-spec"),
@@ -131,18 +137,27 @@ class RunLanesTest(unittest.TestCase):
         self.assertIn("无法启动", output)
         self.assertIn("after-missing", output)
 
-    def test_children_get_bytecode_guard_and_private_shard_log_dir(self) -> None:
-        probe = self.root / "env.txt"
-        code = (
-            "import os, pathlib; "
-            f"pathlib.Path({str(probe)!r}).write_text("
-            "os.environ.get('PYTHONDONTWRITEBYTECODE', '') + '|' + os.environ.get('CAPTURE_TEST_SHARD_LOG_DIR', ''))"
-        )
-        env = {key: value for key, value in os.environ.items() if key not in {"PYTHONDONTWRITEBYTECODE", "CAPTURE_TEST_SHARD_LOG_DIR"}}
-        self.run_lanes([Lane("a", (python_step("probe", code),))], jobs=1, env=env)
-        guard, shard_dir = probe.read_text().split("|")
+    def test_children_get_bytecode_guard_and_only_executor_steps_get_private_out_dir(self) -> None:
+        probes = {name: self.root / f"{name}.txt" for name in ("plain", "executor")}
+
+        def probe_step(name: str, *, unit_executor: bool) -> Step:
+            code = (
+                "import os, pathlib; "
+                f"pathlib.Path({str(probes[name])!r}).write_text("
+                "os.environ.get('PYTHONDONTWRITEBYTECODE', '') + '|' + os.environ.get('UNIT_EXECUTOR_OUT_DIR', ''))"
+            )
+            return Step(name, (sys.executable, "-c", code), unit_executor=unit_executor)
+
+        env = {key: value for key, value in os.environ.items() if key not in {"PYTHONDONTWRITEBYTECODE", "UNIT_EXECUTOR_OUT_DIR"}}
+        log_dir = self.root / "gate-logs"
+        log_dir.mkdir()
+        lane = Lane("capture-tools", (probe_step("plain", unit_executor=False), probe_step("executor", unit_executor=True)))
+        run_lanes([lane], jobs=1, repository_root=self.root, env=env, stream=self.stream, log_dir=log_dir)
+        self.assertEqual(probes["plain"].read_text(), "1|")
+        guard, out_dir = probes["executor"].read_text().split("|")
         self.assertEqual(guard, "1")
-        self.assertTrue(shard_dir.endswith("capture-test-shards"))
+        # 记录目录在本次门禁日志目录下、每个步骤一份；不放进公共环境，出站规格线自己的执行器记录不受影响。
+        self.assertEqual(Path(out_dir), log_dir / "capture-tools-executor-units")
 
     def test_go_json_dir_redirects_go_test_stdout(self) -> None:
         # 用一个假的 go 命令记录收到的参数，确认 -json 插在包参数之前、stdout 写进事件流文件。
@@ -163,18 +178,37 @@ class RunLanesTest(unittest.TestCase):
         recorded = (json_dir / "go-test-unit.jsonl").read_text(encoding="utf-8").strip()
         self.assertEqual(recorded, "test -json -tags=unit -count=1 ./...")
 
-    def test_attached_log_dir_is_copied_into_lane_log(self) -> None:
-        shard_dir = self.root / "shards"
-        shard_dir.mkdir()
-        (shard_dir / "shard-1.log").write_text("ERROR: test_something\n", encoding="utf-8")
-        (shard_dir / "shard-2.log").write_text("OK\n", encoding="utf-8")
-        env = dict(os.environ)
-        env["PROBE_LOG_DIR"] = str(shard_dir)
-        step = Step("shards", (sys.executable, "-c", "pass"), attach_log_dir_env="PROBE_LOG_DIR")
-        self.run_lanes([Lane("capture-tools", (step,))], jobs=1, env=env)
+    def test_unit_executor_failed_and_diagnostic_logs_are_attached(self) -> None:
+        # 假执行器：按 unit_executor.py 的汇总格式写一个通过单元、一个失败单元及其诊断重跑，退出码 1。
+        code = (
+            "import json, os, pathlib, sys\n"
+            "out = pathlib.Path(os.environ['UNIT_EXECUTOR_OUT_DIR']); (out / 'logs').mkdir(parents=True)\n"
+            "rows = []\n"
+            "for unit, kind, passed, body in (('test_ok', 'formal', True, 'PASSED-LOG'), ('test_bad', 'formal', False, 'FAILED-LOG'), ('test_bad', 'diagnostic', False, 'DIAG-LOG')):\n"
+            "    log = out / 'logs' / f'{unit}-{kind}.log'; log.write_text(body + '\\n')\n"
+            "    rows.append({'unit_id': unit, 'kind': kind, 'passed': passed, 'log': str(log)})\n"
+            "(out / 'summary.json').write_text(json.dumps({'units': rows[:2], 'diagnostic': rows[2:]}))\n"
+            "print('单元未通过：test_bad', file=sys.stderr); sys.exit(1)\n"
+        )
+        # 写成脚本文件执行：步骤头会打印完整命令行，用 -c 的话标记字符串会先在命令行里出现。
+        script = self.root / "fake_unit_executor.py"
+        script.write_text(code, encoding="utf-8")
+        step = Step("capture-tools", (sys.executable, str(script)), unit_executor=True)
+        results, _elapsed = self.run_lanes([Lane("capture-tools", (step,))], jobs=1)
+        self.assertEqual([(item.status, item.exit_code) for item in results], [("failed", 1)])
         output = self.stream.getvalue().decode("utf-8")
-        self.assertLess(output.index("--- 附：shard-1.log ---"), output.index("ERROR: test_something"))
-        self.assertLess(output.index("ERROR: test_something"), output.index("--- 附：shard-2.log ---"))
+        self.assertLess(output.index("单元未通过：test_bad"), output.index("--- 附：未通过单元 test_bad ---"))
+        self.assertLess(output.index("--- 附：未通过单元 test_bad ---"), output.index("FAILED-LOG"))
+        self.assertLess(output.index("FAILED-LOG"), output.index("--- 附：诊断重跑 test_bad ---"))
+        self.assertLess(output.index("--- 附：诊断重跑 test_bad ---"), output.index("DIAG-LOG"))
+        self.assertNotIn("PASSED-LOG", output)
+
+    def test_unit_executor_without_summary_is_noted(self) -> None:
+        # 前置检查失败或执行器崩溃时没有汇总：照常记失败，并说明汇总不可用。
+        step = Step("capture-tools", (sys.executable, "-c", "import sys; sys.exit(2)"), unit_executor=True)
+        results, _elapsed = self.run_lanes([Lane("capture-tools", (step,))], jobs=1)
+        self.assertEqual(results[0].status, "failed")
+        self.assertIn("统一调度执行器汇总不可用", self.stream.getvalue().decode("utf-8"))
 
     def test_go_json_failures_are_extracted_into_lane_log(self) -> None:
         # 假 go 命令输出 test2json 事件：一个失败用例及其输出、一个通过用例。

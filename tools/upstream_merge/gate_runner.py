@@ -1,4 +1,4 @@
-"""上游合并 U-4 全量门禁的编排：检查线遇错不停，采集工具分片并行。
+"""上游合并 U-4 全量门禁的编排：检查线遇错不停，采集工具走统一调度执行器。
 
 旧的 full-regression 命令用 ``&&`` 串起 test-gate、前端、采集工具与出站规格检查：第一个
 失败之后其余全部不执行，一轮只能暴露一处问题；采集工具 2879 条用例单进程串行，占去全程
@@ -12,8 +12,11 @@
   三组之间保持串行：每组内部已按 GOMAXPROCS 并行，同时跑三组只会互相争抢 CPU。
 - ``lint``：golangci-lint 默认、unit、integration 三种标签依次执行，与 CI 的覆盖一致。
 - ``frontend``：lint:check、typecheck、关键 vitest 依次执行。
-- ``capture-tools``：采集工具测试的 4 片并行版本，分片并集等于全量由分片自检保证；各片
-  完整日志在步骤结束后附进本线日志。
+- ``capture-tools``：先跑分片闭合自检（``make test-capture-tools-shard-check``，与 CI 的 4 片作业
+  同一份权重表，陈旧条目在本机就暴露），再跑全量（``make test-capture-tools``）：统一调度执行器
+  按单元并行，各单元上报的测试 ID 必须与 discover 全集逐个相等（全集核对）。执行器的记录目录指到
+  本次门禁的日志目录下，步骤结束后把未通过单元与诊断重跑的日志附进本线日志（UM-20）。原来的静态
+  4 片片间不均，v0.2.13 合并三轮最慢一片都是 887 秒；执行器同一机器上全量约 350 秒。
 - ``egress-spec``：``make -k check-egress-spec``，已含 test-official-client-control 与
   test-upstream-merge-tools；``-k`` 让互不依赖的子目标在前一个失败后继续执行。
 
@@ -21,7 +24,7 @@
 全部五条，供根 Makefile 的 upstream-gate-full 使用。
 
 同时运行的检查线数由 ``--jobs`` 或环境变量 ``UPSTREAM_GATE_JOBS`` 控制，默认 1：检查线
-依次执行，只有采集工具在线内 4 片并行。实测五条线全部并行时（10 核、16 GiB）总耗时 1129
+依次执行，只有采集工具在线内按单元并行。实测五条线全部并行时（10 核、16 GiB）总耗时 1129
 秒，但满载下计时敏感用例会误判——``TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime``
 与采集工具第 2 片的 4 条用例失败，单独重跑全部通过。门禁结论不能依赖机器负载，所以默认不让
 检查线之间并行；确认用例稳定后可以显式调大。
@@ -65,6 +68,8 @@ INTEGRATION_MODES = ("auto", "run", "skip")
 # gates-run 指定的机器可读结果文件；未设置时只输出人读日志。
 STATUS_FILE_ENV = "UPSTREAM_GATE_STATUS_FILE"
 STATUS_SCHEMA = "official-egress-upstream-gate-runner-status/v1"
+# 统一调度执行器的记录目录（tools/ci/unit_executor.py 的 _out_dir 读取）。
+UNIT_EXECUTOR_OUT_DIR_ENV = "UNIT_EXECUTOR_OUT_DIR"
 
 
 @dataclass(frozen=True)
@@ -77,8 +82,9 @@ class Step:
     env: tuple[tuple[str, str], ...] = ()
     # go test 的 JSON 事件流输出文件名；只在设置 UPSTREAM_GATE_GO_JSON_DIR 时生效。
     go_json_name: str | None = None
-    # 步骤结束后把该环境变量指向目录里的 *.log 附进本线日志（采集工具各分片的完整输出）。
-    attach_log_dir_env: str | None = None
+    # 统一调度执行器步骤：执行器记录目录经 UNIT_EXECUTOR_OUT_DIR 指到本次门禁日志目录下，步骤结束后把未通过
+    # 单元与诊断重跑的日志附进本线日志（全量约 200 个单元，通过的不附）。
+    unit_executor: bool = False
     # 需要本机 Docker 的步骤；Docker 不可用时记为 not_executed，由同一提交的 CI 证据补齐。
     requires_docker: bool = False
 
@@ -158,11 +164,8 @@ def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
         Lane(
             "capture-tools",
             (
-                Step(
-                    "capture-tools-parallel",
-                    ("make", "test-capture-tools-parallel"),
-                    attach_log_dir_env="CAPTURE_TEST_SHARD_LOG_DIR",
-                ),
+                Step("capture-tools-shard-check", ("make", "test-capture-tools-shard-check")),
+                Step("capture-tools", ("make", "test-capture-tools"), unit_executor=True),
             ),
         ),
         Lane(
@@ -266,6 +269,9 @@ class _Runner:
         log.flush()
         env = dict(self.env)
         env.update(dict(step.env))
+        unit_out_dir = self.log_dir / f"{lane.name}-{step.name}-units" if step.unit_executor else None
+        if unit_out_dir is not None:
+            env[UNIT_EXECUTOR_OUT_DIR_ENV] = str(unit_out_dir)
         argv = list(step.argv)
         json_output = None
         if self.go_json_dir and step.go_json_name:
@@ -306,8 +312,8 @@ class _Runner:
                 stdout.close()
         duration = time.monotonic() - started
         status = "passed" if exit_code == 0 else "failed"
-        if step.attach_log_dir_env:
-            _attach_logs(env.get(step.attach_log_dir_env), log)
+        if unit_out_dir is not None:
+            _attach_unit_executor_failures(unit_out_dir, log)
         if json_output is not None:
             _append_go_json_failures(json_output, log)
         log.write(f"--- [{lane.name}] {step.name}: 退出码 {exit_code}，{duration:.1f} 秒\n".encode("utf-8"))
@@ -325,16 +331,30 @@ class _Runner:
                 continue
 
 
-def _attach_logs(directory: str | None, log) -> None:
-    """把目录里的 *.log 按文件名顺序附进检查线日志；目录缺失时记一行说明。"""
+def _attach_unit_executor_failures(directory: Path, log) -> None:
+    """把统一调度执行器未通过单元与诊断重跑的日志附进检查线日志。
 
-    if not directory or not Path(directory).is_dir():
-        log.write(f"附加日志目录不存在：{directory}\n".encode("utf-8"))
+    执行器的标准错误（逐个未通过单元、全集核对结论与最后的 Ran／OK／FAILED）已在本线日志里，但其中的日志路径
+    在门禁临时目录里，门禁结束即删除，所以失败单元的日志要在这里整份附上。汇总缺失或不可读（前置检查失败、
+    执行器自身崩溃）时记一行说明。
+    """
+
+    summary_path = directory / "summary.json"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        rows = [row for row in summary["units"] if not row["passed"]] + list(summary["diagnostic"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        log.write(f"统一调度执行器汇总不可用：{summary_path}（{error}）\n".encode("utf-8"))
+        log.flush()
         return
-    for path in sorted(Path(directory).glob("*.log")):
-        log.write(f"--- 附：{path.name} ---\n".encode("utf-8"))
-        with path.open("rb") as handle:
-            shutil.copyfileobj(handle, log)
+    for row in rows:
+        label = "诊断重跑" if row.get("kind") == "diagnostic" else "未通过单元"
+        log.write(f"--- 附：{label} {row.get('unit_id')} ---\n".encode("utf-8"))
+        try:
+            with open(row["log"], "rb") as handle:
+                shutil.copyfileobj(handle, log)
+        except (OSError, KeyError, TypeError) as error:
+            log.write(f"单元日志不可读：{error}\n".encode("utf-8"))
     log.flush()
 
 
@@ -392,8 +412,6 @@ def run_lanes(
     log_dir = Path(tempfile.mkdtemp(prefix="upstream-gate-")) if log_dir is None else log_dir
     base_env = dict(os.environ if env is None else env)
     base_env["PYTHONDONTWRITEBYTECODE"] = "1"
-    # 采集工具分片日志默认落在共享临时目录；每次运行单独一份，避免并行或重复运行互相覆盖。
-    base_env.setdefault("CAPTURE_TEST_SHARD_LOG_DIR", str(log_dir / "capture-test-shards"))
     runner = _Runner(
         repository_root,
         log_dir,
@@ -504,7 +522,7 @@ def render_summary(results: Sequence[StepResult], *, jobs: int, elapsed: float) 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m tools.upstream_merge.gate_runner",
-        description="上游合并 U-4 门禁的编排：检查线遇错不停、采集工具分片并行、结束后统一汇总",
+        description="上游合并 U-4 门禁的编排：检查线遇错不停、采集工具走统一调度执行器、结束后统一汇总",
     )
     parser.add_argument("mode", choices=MODES, help="backend 只跑 go test 与 lint；full 跑全部检查线")
     parser.add_argument("--jobs", type=int, help="同时运行的检查线数；默认取 UPSTREAM_GATE_JOBS，未设置时为 1")

@@ -521,9 +521,11 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 - U-4：同一 `execution_group` 的相同命令只执行一次；复用以 revision 为界，源码一变全部执行组重跑，因为
   冻结测试与业务测试都读取候选树；六类客户端门禁收据由工具生成；`full-regression` 组由根 Makefile 的
   `upstream-gate-full` 执行：go test、golangci-lint、前端、采集工具、出站规格五条检查线依次执行、遇错
-  不停，采集工具 4 片并行；检查线之间默认不并行，满载时计时敏感用例会误判。go test 的默认、unit、
-  integration 三组均跑 `./...` 并固定 `-count=1`（默认组是唯一按生产编译形态运行的一组，CI 没有它），
-  golangci-lint 覆盖同样三种标签。本机没有 Docker 时 integration 组记为未执行，收据结果为
+  不停；采集工具线先做分片闭合自检（与 CI 的 4 片作业同一份权重表），再由统一调度执行器按单元并行跑
+  全量并做全集核对，失败单元的日志附进门禁日志；检查线之间默认不并行，满载时计时敏感用例会误判。
+  go test 的默认、unit、integration 三组均跑 `./...` 并固定 `-count=1`（默认组是唯一按生产编译形态
+  运行的一组，CI 没有它），golangci-lint 覆盖同样三种标签。本机没有 Docker 时 integration 组记为
+  未执行，收据结果为
   `awaiting_ci`，U-5 拒绝：先用 `ci-push` 把候选推到 `upstream-merge/<plan_id>` 跑 CI，再用
   `gates-import-ci` 导入同一候选提交、作业全部成功且日志证明 integration 真实执行的 CI 运行；导入
   只补齐未执行项，本机失败不能被 CI 覆盖。
@@ -607,8 +609,9 @@ U-4 的结果只有三种出口：
    不一致、非线性历史或跨 minor 一律拒绝；跨 minor 仍分 Plan。逐 tag 各走一遍只会重复基线、门禁与
    台账等固定开销，冲突总量反而更多（v0.2.5～v0.2.10 逐 tag 累计 96 个文件次，一次合入 77 个）。
    顺利路径的主要耗时是门禁：`gates-run` 以外的全部子命令合计不到 2 分钟；full-regression 一轮在
-   10 核 16 GiB 的本机约 30 分钟（go test 三组约 11 分钟、采集工具 4 片约 16 分钟），首轮通常暴露冻结
-   摘要漂移，台账 revision 后次轮全绿。覆盖区间随 Plan 进入 finalize 收据；预检报告的冲突文件数与
+   10 核 16 GiB 的本机约 16 分钟（go test 默认与 unit 两组约 8.5 分钟，本机没有 Docker 时 integration
+   组交 CI；采集工具约 6 分钟），首轮通常暴露冻结摘要漂移，台账 revision 后次轮全绿。覆盖区间随
+   Plan 进入 finalize 收据；预检报告的冲突文件数与
    变化文件数写入 Plan。废弃 Plan 的 worktree/evidence 只在完成留档和审计确认后
    清理，不得用清理动作替代收据。
 5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`：命令、参数、起止时间、
