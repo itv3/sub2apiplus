@@ -21,8 +21,10 @@ from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_candidate_build as build
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
+sys.path.insert(0, str(Path(__file__).parent))
+import vc4_contract
 
-SCHEMA = "arm64-vc4-resume/v1"
+SCHEMA = "arm64-vc4-resume/v2"
 TREES = ("source", "gate-tree", "build-tree", "plan-source")
 
 
@@ -145,8 +147,10 @@ def inputs(*, prepare: bool = False) -> dict:
                          "vendor_sha256": build.scan_tree_inventory(base / "build-tree/backend/vendor")["inventory_sha256"]},
         "toolchain": {"go_version": go_version, "node_version": node}, "base_images": images,
         "driver_build_sha256": {name: binding(Path(__file__).parent / name)["sha256"]
-                                for name in ("trees.sh", "frontend.sh", "vc4-gates.sh", "implementation_gates.py", "build.sh", "vc4-facts.sh")},
+                                for name in ("lib.sh", "vc4_contract.py", "trees.sh", "frontend.sh", "vc4-gates.sh", "implementation_gates.py", "build.sh", "vc4-facts.sh")},
         "frontend_deviation_approved_by": os.environ["FRONTEND_DEVIATION_APPROVED_BY"],
+        "tree_preparation": vc4_contract.verify_trees(base, dict(os.environ)),
+        "build_network": vc4_contract.network_inputs(dict(os.environ)),
     }
 
 
@@ -185,7 +189,8 @@ def outputs(evidence: Path, current: dict) -> dict:
             "implementation_log": None if reuse_all else binding(log), "binary": binding(binary),
             "build_inventory_sha256": artifacts.digest(inventory), "frontend_provenance_sha256": artifacts.digest(frontend),
             "source_transition": binding(base / "artifacts/source-transition.json"),
-            "built_at_utc": binding(base / "artifacts/built-at-utc.txt")}
+            "built_at_utc": binding(base / "artifacts/built-at-utc.txt"),
+            "build_network_receipt": vc4_contract.verify_network(base, dict(os.environ), evidence / "pre-build.json", actual_image["image_id"])}
 
 
 def open_revision() -> None:

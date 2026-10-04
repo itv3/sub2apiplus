@@ -79,3 +79,6 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # 走入口（entry.sh、入口空跑）时必填：入口便宜检查的 required-parameters 一项核对它是已有的普通文件。
 # P0_ROLLBACK_EVIDENCE=$RUNROOT/REPLACE_ROLLBACK_RECEIPT.json
 # JWTGEN_BIN=$D/private-tools/jwtgen
+# VC-4 默认使用 Docker 默认网络；R15 阻断时先获取绑定本轮 bundle／提交／主机／驱动的专项批准，再明确选择 host。
+# VC4_BUILD_NETWORK=host
+# VC4_BUILD_NETWORK_APPROVAL=$RUNROOT/REPLACE_BUILD_NETWORK_APPROVAL.json

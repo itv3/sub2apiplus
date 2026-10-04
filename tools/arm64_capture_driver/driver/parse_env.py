@@ -42,6 +42,8 @@ OPTIONAL_KEYS = (
     "P0_ROLLBACK_EVIDENCE",
     # VC-5 补齐批准和 token 的最低剩余有效期；不继承外层残留批准。
     "VC5_ADMISSION_APPROVAL", "VC5_ADMIN_TOKEN_MIN_SECONDS",
+    # VC-4 只接受本轮显式网络模式和专项批准，不承接外层残留的 host 网络开关。
+    "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -152,6 +154,12 @@ def parse(text: str) -> dict[str, str]:
         not values["VC5_ADMIN_TOKEN_MIN_SECONDS"].isdigit() or int(values["VC5_ADMIN_TOKEN_MIN_SECONDS"]) < 1800
     ):
         raise EnvFileError("VC5_ADMIN_TOKEN_MIN_SECONDS 必须是至少 1800 的整数")
+    if values.get("VC4_BUILD_NETWORK", "default") not in {"default", "none", "host"}:
+        raise EnvFileError("VC4_BUILD_NETWORK 只能是 default、none 或 host")
+    if "VC4_BUILD_NETWORK_APPROVAL" in values and (
+        not values["VC4_BUILD_NETWORK_APPROVAL"].startswith("/") or ".." in values["VC4_BUILD_NETWORK_APPROVAL"].split("/")
+    ):
+        raise EnvFileError("VC4_BUILD_NETWORK_APPROVAL 必须是不含 .. 的绝对路径")
     return values
 
 
@@ -181,6 +189,7 @@ def derive(values: dict[str, str]) -> dict[str, str]:
         "JWTGEN_BIN": f"{data}/private-tools/jwtgen",
         "EVIDENCE_DECISION": "recapture",
         "ENTRY_ROOT": data,
+        "VC4_BUILD_NETWORK": "default",
     }
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
     return result

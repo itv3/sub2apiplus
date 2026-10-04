@@ -6,6 +6,8 @@
 set -Eeuo pipefail; umask 022
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 test "$1" = "$C"; C9=${C:0:9}
+E=$(cat "$RUNROOT/E.txt")
+python3 "$DRV/vc4_contract.py" network-check --pre-build "$E/pre-build.json" > /dev/null
 TAG=$CANDIDATE_IMAGE_REPOSITORY:$ROUND-$C9; VERSION_LABEL="$(cat $B/source/backend/cmd/server/VERSION)-$CAND"
 mkdir -p "$B/artifacts"; chmod 700 "$B/artifacts"
 test "$(git -C $B/build-tree rev-parse HEAD)" = "$C"
@@ -33,8 +35,17 @@ for name in ALPINE_IMAGE POSTGRES_IMAGE; do
   digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"][sys.argv[2]]["repo_digests"][0])' "$E/pre-build.json" "$name")
   BASE_ARGS+=(--build-arg "$name=$digest")
 done
-docker build --platform linux/arm64 "${BASE_ARGS[@]}" --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
-IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG")
+NETWORK_ARGS=()
+if [ "$VC4_BUILD_NETWORK" != default ]; then NETWORK_ARGS+=("--network=$VC4_BUILD_NETWORK"); fi
+BUILD_COMMAND=(docker build --platform linux/arm64 "${NETWORK_ARGS[@]}" "${BASE_ARGS[@]}" --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX")
+# 在执行 Docker 之前再次消费专项批准；不在失败后悄悄扩大网络范围或重复构建。
+python3 "$DRV/vc4_contract.py" network-check --pre-build "$E/pre-build.json" > /dev/null
+BUILD_STARTED=$(utc_now); BUILD_RC=0; IMAGE_ID=""
+"${BUILD_COMMAND[@]}" > "$B/artifacts/docker-build.log" 2>&1 || BUILD_RC=$?
+if [ "$BUILD_RC" = 0 ]; then IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG"); fi
+python3 "$DRV/vc4_contract.py" record-network --pre-build "$E/pre-build.json" --exit-code "$BUILD_RC" \
+  --image-id "$IMAGE_ID" --started-at "$BUILD_STARTED" --command "${BUILD_COMMAND[@]}" > /dev/null
+test "$BUILD_RC" = 0 || { echo "Docker 构建失败（已记录网络模式和失败日志）：$BUILD_RC"; exit "$BUILD_RC"; }
 docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "$CANDIDATE_IMAGE_REPOSITORY@$IMAGE_ID"
 NODE_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/node-version.txt"); PNPM_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/pnpm-version.txt")
 NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")

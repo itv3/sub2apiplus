@@ -125,14 +125,24 @@ PY
 #   且不注入 vendor（版本泄漏 AST 门禁会扫描 backend/vendor，Go 依赖改走 GOMODCACHE，与 CI／本机一致）。
 #   前端 node_modules 由调用方注入（VC-5 取本轮前端构建，VC-0 取前序测试树里 lockfile 相同的一份）。
 # 用法：clone_test_tree <树目录（先删后建）> <bundle> <分支> <提交>；任一步失败返回 1（调用方在 set -e 下即停）。
+verify_history_tree() {
+  local tree="$1" commit="${2:-}"
+  test "$(git -C "$tree" rev-parse --is-shallow-repository)" = false || { echo "拒绝浅克隆：$tree" >&2; return 1; }
+  test "$(git -C "$tree" rev-list --count HEAD)" -gt 10000 || { echo "测试树不是完整历史（提交数须 >10000）：$tree" >&2; return 1; }
+  if [ -n "$commit" ]; then
+    test "$(git -C "$tree" rev-parse HEAD)" = "$commit" || { echo "树头与指定提交不一致：$tree" >&2; return 1; }
+  fi
+  test ! -e "$tree/backend/vendor" && test ! -L "$tree/backend/vendor" || { echo "测试树不得含 backend/vendor：$tree" >&2; return 1; }
+}
 clone_test_tree() {
   local tree="$1" bundle="$2" branch="$3" commit="$4"
+  # 先拒绝有问题的历史来源，避免检查失败时删掉原测试树。
+  verify_history_tree "$HISTORY_TEST_TREE" || return 1
   rm -rf "$tree" || return 1
   git clone -q --no-checkout "$HISTORY_TEST_TREE" "$tree" || return 1
   git -C "$tree" fetch -q "$bundle" "$branch" || return 1
   git -C "$tree" checkout -q --detach "$commit" || return 1
-  test "$(git -C "$tree" rev-list --count HEAD)" -gt 10000 || { echo "测试树不是完整历史（提交数须 >10000）：$tree" >&2; return 1; }
-  test ! -e "$tree/backend/vendor" || { echo "测试树不得含 backend/vendor：$tree" >&2; return 1; }
+  verify_history_tree "$tree" "$commit" || return 1
 }
 # 隔离执行门禁命令（ARM64 全量门禁 arm64-full-gates.sh 与 ARM64 版 VC-4 门禁 arm64-vc4-gates.sh 共用）：
 #   隔离方式与 vc5-gate-target.sh 的目标平台门禁逐字相同——在私有挂载命名空间里用只读空 tmpfs 遮住 /root/oauth-capture

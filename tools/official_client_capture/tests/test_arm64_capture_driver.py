@@ -933,11 +933,20 @@ class DynamicDriverGateTests(unittest.TestCase):
         source = self.root / 'catalog'
         source.mkdir()
         blob = 'catalogdata/runtime/profiles/0.156.1/' + 'a' * 64 + '.json'
-        paths = sorted(catalog.MUTABLE | {blob})
+        testdata = REPO_ROOT / 'backend/internal/officialegress/profilecontract/testdata'
+        snapshot = json.loads((testdata / 'snapshot-catalog.json').read_text())['snapshots'][0]
+        snapshot_blob = 'profilecontract/testdata/' + snapshot['file']
+        paths = sorted(catalog.MUTABLE | {blob, snapshot_blob})
         rows = []
         for relative in paths:
             path = source / relative
-            _write_json(path, {'path':relative})
+            if relative == catalog.SNAPSHOT_INDEX:
+                _write_json(path, {'schema_version':1, 'snapshots':[snapshot]})
+            elif relative == snapshot_blob:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(testdata / snapshot['file'], path)
+            else:
+                _write_json(path, {'path':relative})
             rows.append({'path':relative, 'size':path.stat().st_size, 'sha256':self.gates.upgrade.file_sha256(path)})
         receipt = {'inventory':rows, 'inventory_sha256':self.gates.upgrade._fingerprint(rows), 'campaign_id':'fixture', 'target_version':'0.156.1',
                    'post_promotion_gate_requirements_sha256':self.requirements['requirements_sha256']}
@@ -946,9 +955,13 @@ class DynamicDriverGateTests(unittest.TestCase):
         _write_json(requirements, self.requirements)
         mapping = self.base / 'source' / self.lifecycle / 'gate-mapping.json'
         repository = self.root / 'repository'
-        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        validate = catalog.validate_snapshot_contract
+        # 装配目标是隔离夹具；摘要和可执行画像仍由真实仓库的 Go 合同核验。
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+            catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         before = {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths}
-        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+            catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         self.assertEqual(before, {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths})
         (repository / 'backend/internal/officialegress' / blob).write_text('非法覆盖')
         with self.assertRaisesRegex(ValueError, '不可变 Catalog blob'):
