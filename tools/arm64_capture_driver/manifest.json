@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 79,
+  "file_count": 81,
   "files": [
     {
       "path": "README.md",
@@ -339,10 +339,22 @@
       "bytes": 9235
     },
     {
-      "path": "driver/vc23.sh",
-      "sha256": "c7802034bc343e3c892cb85391c5b4571fe6b62b26f0e93f05629e948ae712f0",
+      "path": "driver/vc2-approve-and-stage.sh",
+      "sha256": "be24485217c8d80af8db278f1b857e617f0584e26800e9ec4e371eccb6532695",
       "mode": "0700",
-      "bytes": 5091
+      "bytes": 1253
+    },
+    {
+      "path": "driver/vc23.sh",
+      "sha256": "a53d89c7e3a114ff7855deb45aae4c27b4a89392d63d5e798951b0cb83ab0849",
+      "mode": "0700",
+      "bytes": 4644
+    },
+    {
+      "path": "driver/vc2_assertion_preflight.py",
+      "sha256": "b1c26d76e4ad5dc132027ee90722327377234cf41f955b9250fa6fbff4b6efae",
+      "mode": "0700",
+      "bytes": 15664
     },
     {
       "path": "driver/vc4-all.sh",
@@ -477,5 +489,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "4e7b170f109498da71fb4a6ad70932ead3f89034bb20cd38204e3b9f36db87c9"
+  "manifest_sha256": "40e221c4827e1c040600f9ca0ea74ad23ff3d0e19751547d39e104d7d6a73e5f"
 }

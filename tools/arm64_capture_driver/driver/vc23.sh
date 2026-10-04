@@ -54,11 +54,7 @@ print("VC-3 计划 ->", out)
 PY
 chmod 600 "$W"/*.json
 echo "=== 批次 3：classify 草案"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-2 3 VC-1 action-plan-vc2-draft.json | grep -v "^$"
-echo "=== 批次 4：批准预览"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-2 4 VC-1 action-plan-vc2-preview.json | grep -v "^$"
-echo "=== 批次 5：批准"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-2 5 VC-1 action-plan-vc2-approve.json | grep -v "^$"
-test -f "$NEWDIR/control/vc/vc-2-checkpoint.json"
-echo "=== 批次 6：VC-3 stage-profile"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-3 6 VC-2 action-plan-vc3-stage-profile.json | grep -v "^$"
-test -f "$NEWDIR/control/vc/vc-3-checkpoint.json"
+bash "$DRV/vc2-approve-and-stage.sh" "$JOINT"
 python3 -c "
 import json; r=json.load(open(\"$CATALOG/catalog-stage-receipt.json\")); print({k:(r.get(k)[:16] if isinstance(r.get(k),str) else r.get(k)) for k in (\"campaign_id\",\"classification_sha256\",\"target_profile_digest\",\"candidate_release_digest\",\"inventory_sha256\",\"post_promotion_gate_requirements_sha256\")})"
 python3 -m tools.official_client_capture.codex_upgrade_timing_ledger status --ledger-dir "$L" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(\"账本:\", {k:d.get(k) for k in (\"status\",\"active_phase\",\"head_sequence\")})"
