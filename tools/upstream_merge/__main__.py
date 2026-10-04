@@ -18,6 +18,7 @@ from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
 from .plan_inputs import AWAITING_MANUAL_INPUT
 from .plan_replay import replay_trial_tree, seal_merge_with_replay
+from .request_render import render_request
 from .revision_advance import advance_revision
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
@@ -95,6 +96,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=_absolute,
         help="可选的非权威预检报告路径；不会覆盖既有文件",
+    )
+
+    render = commands.add_parser(
+        "request-render",
+        help="按标准模板生成正式 request 与当前 HEAD 的运行态、回退点（plan-create 之前可重渲染）",
+    )
+    _add_repository(render)
+    render.add_argument(
+        "--plan-root",
+        required=True,
+        type=_absolute,
+        help="Plan 私有目录，命名为 <上游 tag>-<yyyymmdd>-<序号>；不存在时创建（0700）",
+    )
+    render.add_argument("--upstream-tag", required=True, help="目标上游 tag，例如 v0.2.13")
+    render.add_argument(
+        "--baseline-acceptance",
+        required=True,
+        type=_absolute,
+        help="最近一次 baseline-seal 的收据绝对路径",
+    )
+    render.add_argument(
+        "--previous-evidence",
+        type=_absolute,
+        help="上一次走完 U-6 的 Plan evidence 根（四份 Inventory 基线）；默认在 Plan 目录同级里找最近一次",
     )
 
     baseline = commands.add_parser(
@@ -400,6 +425,12 @@ def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str 
     explicit = getattr(arguments, "timing_ledger", None)
     if isinstance(explicit, Path):
         return explicit, None
+    plan_root = getattr(arguments, "plan_root", None)
+    if isinstance(plan_root, Path):
+        # request-render 的锚点是 Plan 目录本身，账本就写在它下面；命令失败且目录未建时不写。
+        if plan_root.is_dir() and not plan_root.is_symlink():
+            return plan_root / TIMING_LEDGER_NAME, None
+        return None, "Plan 目录尚未创建"
     for attribute in TIMING_LEDGER_ANCHORS:
         anchor = getattr(arguments, attribute, None)
         if isinstance(anchor, list) and anchor and isinstance(anchor[0], Path):
@@ -478,6 +509,14 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             "report": str(arguments.output) if arguments.output else None,
             "blockers": report["blockers"],
         }
+    if command == "request-render":
+        return render_request(
+            arguments.repository,
+            plan_root=arguments.plan_root,
+            upstream_tag=arguments.upstream_tag,
+            baseline_acceptance=arguments.baseline_acceptance,
+            previous_evidence=arguments.previous_evidence,
+        )
     if command == "baseline-seal":
         receipt = seal_baseline_acceptance(
             arguments.repository,

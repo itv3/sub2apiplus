@@ -454,12 +454,15 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 正式 `plan-create` 前先运行一次离线预检。推荐顺序是“基线验证 → 输入准备 → 预检 → U-0”。输入准备
 清单：
 
-- request 从 `tools/upstream_merge/request_template_v2.json` 渲染占位符生成，Active/Rollback 路径与目标
-  版本从当前 release catalog 解析，不复制上一轮请求；生成后立即做 JSON 解析和 schema 校验。
+- request 一律由 `request-render` 从 `tools/upstream_merge/request_template_v2.json` 生成：Active/Rollback
+  路径与目标版本从当前 release catalog 解析（Codex 以发布图的 active／previous 节点为准），covered_tags 由
+  Git 复算，同时在 `inputs/` 写出绑定当前 HEAD 的运行态与回退点；不复制上一轮请求，`plan-create` 之后不得
+  重渲染。
 - 计划目录只创建 `inputs/` 与 `evidence/`，权限 0700；worktree 目录由 `plan-create` 自行创建。
 - 门禁必须是执行组模式（12 类逻辑门禁映射到 3 个物理执行组），不得沿用 `receipt_replay` 类型。
-- 门禁命令显式绑定本地只读源码根（如 `CODEX_0_149_1_SOURCE_ROOT`），不依赖被 `.gitignore` 排除的路径
-  在候选 worktree 中存在。
+- 门禁命令显式绑定本地只读源码根（如 `CODEX_0_149_1_SOURCE_ROOT`）：模板写作 `{source_repository}/…`，由
+  `request-render` 渲染为主仓库路径；门禁里的 `{repository}` 在执行时渲染为候选 worktree，只用于检查候选本身
+  （如 secret-scan），不能用来指被 `.gitignore` 排除、只在主仓库存在的资源。预检核对源码根目录存在。
 - 前端包管理器必须可用且版本与 CI 一致，候选 worktree 的 `frontend/` 先装好依赖（`pnpm --dir <worktree>/frontend
   install --frozen-lockfile`）。`gates-run` 开跑前核对 `frontend/node_modules/.pnpm/lock.yaml` 与
   `frontend/pnpm-lock.yaml` 字节一致，缺失或不一致即拒绝开跑、不生成 attempt；`replay --rerun-gates` 的临时执行树

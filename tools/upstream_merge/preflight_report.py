@@ -30,6 +30,10 @@ OFFICIAL_EGRESS_ROOT = "backend/internal/officialegress"
 CLAUDE_RELEASE_CATALOG = f"{OFFICIAL_EGRESS_ROOT}/catalogdata/claude/release-catalog.json"
 RUNTIME_RELEASE_CATALOG = f"{OFFICIAL_EGRESS_ROOT}/catalogdata/runtime/release-catalog.json"
 SINK_DETAIL_FIELDS = ("scan_candidate_id", "file", "func", "package", "sink_kind", "protocol", "sink_type")
+# 门禁 argv 里的只读源码根（如 CODEX_0_149_1_SOURCE_ROOT=...）。它指向被 git 忽略、只在主仓库存在的
+# 本地资源，必须由 request-render 用 {source_repository} 渲染成主仓库路径（UM-18）。
+SOURCE_ROOT_ARGUMENT = re.compile(r"([A-Z][A-Z0-9_]*_SOURCE_ROOT)=(.+)")
+SOURCE_REPOSITORY_PLACEHOLDER = "{source_repository}"
 
 
 def load_request_template(repository_root: Path) -> dict[str, Any]:
@@ -49,11 +53,45 @@ def load_request_template(repository_root: Path) -> dict[str, Any]:
 
 
 def _render_repository(value: Any, repository_root: Path) -> Any:
+    """模板比对时把 {repository} 与 {source_repository} 都渲染成主仓库路径，两种写法都能逐字比对。"""
+
     if isinstance(value, str):
-        return value.replace("{repository}", str(repository_root))
+        return value.replace("{repository}", str(repository_root)).replace(
+            SOURCE_REPOSITORY_PLACEHOLDER, str(repository_root)
+        )
     if isinstance(value, list):
         return [_render_repository(item, repository_root) for item in value]
     return value
+
+
+def _source_root_findings(request_gates: dict[Any, dict[str, Any]]) -> list[str]:
+    """核对门禁里的只读源码根：必须已渲染、不得用执行时的 {repository}、目录必须存在。
+
+    {repository} 在 gates-run 时渲染成候选工作树，被 git 忽略的源码树不在那里；v0.2.13 合并因此让
+    check-egress-spec-local-source 连红两轮。同一问题在多个门禁重复出现时只报一次。
+    """
+
+    findings: list[str] = []
+    for gate_id in sorted(request_gates, key=str):
+        for item in request_gates[gate_id].get("argv") or []:
+            if not isinstance(item, str):
+                continue
+            if SOURCE_REPOSITORY_PLACEHOLDER in item:
+                message = f"门禁 argv 里的 {SOURCE_REPOSITORY_PLACEHOLDER} 未渲染：request 须由 request-render 生成"
+            else:
+                match = SOURCE_ROOT_ARGUMENT.fullmatch(item)
+                if match is None:
+                    continue
+                variable, value = match.groups()
+                if "{repository}" in value:
+                    message = f"{variable} 用了执行时的 {{repository}}，会被渲染成候选工作树（那里没有被忽略的源码树）"
+                elif not Path(value).is_dir():
+                    message = f"{variable} 指向的源码根不存在：{value}"
+                else:
+                    continue
+            if message not in findings:
+                findings.append(message)
+    return findings
 
 
 def _relative_to_root(repository_root: Path, absolute: Any) -> str | None:
@@ -159,6 +197,7 @@ def template_validity(repository_root: Path, request: dict[str, Any], template: 
             expected = _render_repository(template_gates[gate_id].get(field), repository_root)
             if actual != expected:
                 findings.append(f"门禁 {gate_id} 的 {field} 与模板不一致")
+    findings.extend(_source_root_findings(request_gates))
     groups = {gate.get("execution_group") for gate in request_gates.values()}
     if any(gate.get("mode") != "command" for gate in request_gates.values()):
         findings.append("存在非 command 模式的门禁，receipt_replay 类型已退休")

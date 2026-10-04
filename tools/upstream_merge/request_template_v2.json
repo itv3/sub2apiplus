@@ -3,16 +3,17 @@
   "purpose": "标准 request/v2 骨架：12 类逻辑门禁映射到 3 个物理执行组。full-regression 组由根 Makefile 的 upstream-gate-full 执行：go test（默认、unit、integration 三组均跑 ./...，固定 -count=1）、golangci-lint 三种标签、前端、采集工具四片、出站规格五条检查线依次执行、遇错不停，采集工具分片并行；官方出站与 service 包的门禁并入该组，不再单独重复执行。preflight 的模板有效性检查以此为准；生成正式 request 时只替换占位符，不得改动门禁定义。",
   "placeholders": {
     "{plan_root}": "本次 Plan 的私有目录（仓库外），例如 ~/Developer/.sub2apiplus-upstream/<tag>-<date>-<seq>",
-    "{repository}": "fork 仓库绝对路径；门禁 argv 中的占位符由工具在执行时渲染",
+    "{repository}": "official_clients 等路径字段里由 request-render 渲染为 fork 主仓库绝对路径；门禁 argv 里原样保留，由工具在执行时渲染为本 Plan 的候选工作树（只用于检查候选本身，如 secret-scan）",
+    "{source_repository}": "门禁 argv 里被 git 忽略的只读本地资源（如 local-analysis 下的官方源码树）所在的 fork 主仓库；由 request-render 生成请求时渲染为主仓库绝对路径，不得写成 {repository}（执行时会变成候选工作树，那里没有这些资源）",
     "{upstream_tag}": "上游 tag，例如 v0.2.4",
     "{upstream_commit}": "上游 tag 对应的完整 commit SHA-1",
     "{plan_id}": "sub2api-<upstream_tag>-merge-<yyyymmdd>-<seq>",
     "{claude_target_version}": "当前 Claude Persona 目标版本，来自 catalogdata/claude/release-catalog.json 的 production_active 所指 release",
     "{claude_active_profile}": "上述 release 的 profile.path",
     "{claude_rollback_receipt}": "selectors.production_rollback.deployment.receipt.path",
-    "{codex_target_version}": "当前 Codex 目标版本，来自 catalogdata/runtime 的 snapshot-catalog",
-    "{codex_active_profile}": "catalogdata/runtime/<snapshot.file>，即当前 Active profile",
-    "{codex_rollback_profile}": "catalogdata/runtime/<上一 snapshot.file>",
+    "{codex_target_version}": "当前 Codex 目标版本：runtime 发布图 mode=active 节点的快照版本",
+    "{codex_active_profile}": "发布图 active 节点快照在 snapshot catalog 中的 file（相对 catalogdata/runtime），即当前 Active profile",
+    "{codex_rollback_profile}": "发布图 previous 节点快照在 snapshot catalog 中的 file（相对 catalogdata/runtime）",
     "{previous_evidence}": "上一次成功 Plan 的 evidence 根目录，用于四份 Inventory 基线",
     "{baseline_acceptance}": "最近一次 baseline-seal 的收据绝对路径",
     "{runtime_state}": "当前 HEAD 运行态文件绝对路径",
@@ -20,9 +21,9 @@
     "{covered_tags}": "同一 minor 内 merge-base 之后到目标 tag 的全部上游版本 tag，按祖先顺序逐项 {tag, commit}，最后一项就是目标 tag；用 git tag --list --merged <目标> --no-merged <merge-base> 列出后按提交深度排序。只合一个 tag 时写目标 tag 一项；plan-create 会用 Git 逐项复算，缺登记或不一致即拒绝"
   },
   "refresh_rules": [
-    "Active/Rollback 路径必须从当前 release catalog 解析，不得复制上一轮 request",
+    "正式 request 一律由 python3 -m tools.upstream_merge request-render 生成：Active/Rollback 从当前 release catalog 解析（Codex 以发布图 active／previous 节点为准），covered_tags 由 Git 列出，并写出绑定当前 HEAD 的运行态与回退点；不得复制上一轮 request，plan-create 之后不得重渲染",
     "生成后立即做 JSON 解析与 schema 校验，再进入 preflight",
-    "门禁定义与本模板逐字一致（渲染 {repository} 后比对）；需要改动门禁时先改模板并走工具闭集流程"
+    "门禁定义与本模板逐字一致（渲染 {repository}、{source_repository} 后比对）；需要改动门禁时先改模板并走工具闭集流程；preflight 核对门禁里的 *_SOURCE_ROOT 目录存在"
   ],
   "request": {
     "schema_version": "official-egress-upstream-merge-request/v2",
@@ -100,7 +101,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -112,7 +113,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -124,7 +125,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -136,7 +137,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -148,7 +149,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -160,7 +161,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -172,7 +173,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -197,7 +198,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -222,7 +223,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       },
@@ -234,7 +235,7 @@
         "execution_group": "full-regression",
         "argv": [
           "make",
-          "CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1",
+          "CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1",
           "upstream-gate-full"
         ]
       }

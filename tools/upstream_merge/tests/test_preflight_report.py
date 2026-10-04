@@ -98,6 +98,11 @@ class TemplateValidityTest(unittest.TestCase):
         clients["codex"]["target_version"] = "1.2.3"
         clients["codex"]["active_path"] = str(egress / "catalogdata/runtime" / active_file)
         clients["codex"]["rollback_path"] = str(egress / "catalogdata/runtime" / rollback_file)
+        # request-render 把只读源码根渲染成主仓库路径（UM-18），源码树只在主仓库存在。
+        self.source_tree = self.root / "local-analysis/sources/codex-cli-0.149.1"
+        self.source_tree.mkdir(parents=True)
+        for gate in self.request["gates"]:
+            gate["argv"] = [item.replace("{source_repository}", str(self.root)) for item in gate["argv"]]
 
     @staticmethod
     def _ensure(path: Path) -> Path:
@@ -131,6 +136,27 @@ class TemplateValidityTest(unittest.TestCase):
         self.assertIn("Claude target_version", joined)
         self.assertIn("Codex active profile 不在当前 snapshot catalog", joined)
         self.assertIn("codex persona 与模板不一致", joined)
+
+    def test_source_root_must_be_rendered_into_main_repository(self) -> None:
+        """v0.2.13 合并的缺陷：源码根写成执行期的 {repository} 会被渲染到候选工作树，每个问题只报一次。"""
+
+        def findings_for(value: str) -> list[str]:
+            request = json.loads(json.dumps(self.request))
+            for gate in request["gates"]:
+                gate["argv"] = [
+                    value if item.startswith("CODEX_0_149_1_SOURCE_ROOT=") else item for item in gate["argv"]
+                ]
+            report = template_validity(self.root, request, self.template)
+            self.assertEqual(report["status"], "failed")
+            return report["findings"]
+
+        unrendered = findings_for("CODEX_0_149_1_SOURCE_ROOT={source_repository}/local-analysis/sources/codex-cli-0.149.1")
+        self.assertEqual(sum("{source_repository} 未渲染" in item for item in unrendered), 1)
+        worktree = findings_for("CODEX_0_149_1_SOURCE_ROOT={repository}/local-analysis/sources/codex-cli-0.149.1")
+        self.assertEqual(sum("执行时的 {repository}" in item for item in worktree), 1)
+        self.source_tree.rmdir()
+        missing = template_validity(self.root, self.request, self.template)["findings"]
+        self.assertEqual(sum("源码根不存在" in item for item in missing), 1)
 
     def test_missing_template_fails_closed(self) -> None:
         (self.root / REQUEST_TEMPLATE_RELATIVE).unlink()
