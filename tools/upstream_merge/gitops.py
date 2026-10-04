@@ -87,6 +87,25 @@ def run_process(
     return completed
 
 
+def run_process_to(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None,
+    stdout: Any,
+    stderr: Any,
+) -> int:
+    """禁用 shell 执行命令，stdout/stderr 直接写进调用方打开的文件，返回退出码。
+
+    长门禁用（UM-19）：输出边跑边落盘，运行中可直接查看，进程中途被终止时已写出的部分仍在；
+    按原始字节写入，不做文本解码与换行转换。
+    """
+
+    if not argv or not all(isinstance(item, str) and item for item in argv):
+        raise UpstreamMergeError("命令 argv 必须是非空字符串数组")
+    return subprocess.run(list(argv), cwd=cwd, stdout=stdout, stderr=stderr, check=False, env=env).returncode
+
+
 def run_git(
     repository_root: Path,
     *args: str,

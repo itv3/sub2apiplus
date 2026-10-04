@@ -1,6 +1,6 @@
 {
   "schema_version": "official-egress-upstream-merge-request-template/v1",
-  "purpose": "标准 request/v2 骨架：12 类逻辑门禁映射到 3 个物理执行组。full-regression 组由根 Makefile 的 upstream-gate-full 执行：go test（默认、unit、integration 三组均跑 ./...，固定 -count=1）、golangci-lint 三种标签、前端、采集工具（分片闭合自检＋统一调度执行器全量）、出站规格五条检查线依次执行、遇错不停；官方出站与 service 包的门禁并入该组，不再单独重复执行。preflight 的模板有效性检查以此为准；生成正式 request 时只替换占位符，不得改动门禁定义。",
+  "purpose": "标准 request/v2 骨架：12 类逻辑门禁映射到 3 个物理执行组。full-regression 组由根 Makefile 的 upstream-gate-full 执行：出站规格、golangci-lint 三种标签、前端、采集工具（分片闭合自检＋统一调度执行器全量）、go test（默认、unit、integration 三组均跑 ./...，固定 -count=1）五条检查线按预计耗时从短到长依次执行、遇错不停，每条线结束即输出日志；官方出站与 service 包的门禁并入该组，不再单独重复执行。preflight 的模板有效性检查以此为准；生成正式 request 时只替换占位符，不得改动门禁定义。",
   "placeholders": {
     "{plan_root}": "本次 Plan 的私有目录（仓库外），例如 ~/Developer/.sub2apiplus-upstream/<tag>-<date>-<seq>",
     "{repository}": "official_clients 等路径字段里由 request-render 渲染为 fork 主仓库绝对路径；门禁 argv 里原样保留，由工具在执行时渲染为本 Plan 的候选工作树（只用于检查候选本身，如 secret-scan）",

@@ -7,8 +7,10 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, BinaryIO, Iterable
 
 from .errors import UpstreamMergeError
 
@@ -240,8 +242,8 @@ def ensure_private_directory(path: Path, *, create: bool) -> Path:
     return resolved
 
 
-def write_once(path: Path, raw: bytes, *, mode: int = 0o600) -> None:
-    """使用 O_EXCL 创建不可变文件，并拒绝不可信父目录。"""
+def _create_once(path: Path, mode: int) -> int:
+    """使用 O_EXCL 新建文件并返回描述符；拒绝已存在的路径与不可信父目录。"""
 
     if path.exists() or path.is_symlink():
         raise UpstreamMergeError(f"禁止覆盖已存在的不可变文件：{path}")
@@ -256,9 +258,30 @@ def write_once(path: Path, raw: bytes, *, mode: int = 0o600) -> None:
         parent.chmod(0o700)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
-        descriptor = os.open(path, flags, mode)
+        return os.open(path, flags, mode)
     except FileExistsError as error:
         raise UpstreamMergeError(f"禁止覆盖已存在的不可变文件：{path}") from error
+
+
+@contextmanager
+def open_once(path: Path, *, mode: int = 0o600) -> Iterator[BinaryIO]:
+    """与 write_once 同样用 O_EXCL 新建并检查父目录，但交出可持续写入的句柄（UM-19 门禁输出实时落盘）。
+
+    与 write_once 的区别：异常时保留已写出的内容——中途被终止的门禁要留下已完成部分供排查；正常结束时
+    flush 并 fsync。
+    """
+
+    with os.fdopen(_create_once(path, mode), "wb") as stream:
+        yield stream
+        stream.flush()
+        os.fsync(stream.fileno())
+    path.chmod(mode)
+
+
+def write_once(path: Path, raw: bytes, *, mode: int = 0o600) -> None:
+    """使用 O_EXCL 创建不可变文件，并拒绝不可信父目录。"""
+
+    descriptor = _create_once(path, mode)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(raw)

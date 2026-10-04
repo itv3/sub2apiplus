@@ -24,7 +24,8 @@ class BuildLanesTest(unittest.TestCase):
 
     def test_full_mode_covers_old_full_regression(self) -> None:
         lanes = build_lanes("full", Path("/src/codex"))
-        self.assertEqual([lane.name for lane in lanes], ["go-tests", "lint", "frontend", "capture-tools", "egress-spec"])
+        # 按预计耗时从短到长（UM-19）：出站规格最常报红放最前，go test 最慢放最后。
+        self.assertEqual([lane.name for lane in lanes], ["egress-spec", "lint", "frontend", "capture-tools", "go-tests"])
         by_name = {lane.name: lane for lane in lanes}
         go_steps = by_name["go-tests"].steps
         self.assertEqual(
@@ -65,7 +66,7 @@ class BuildLanesTest(unittest.TestCase):
         )
 
     def test_backend_mode_runs_only_go_tests_and_lint(self) -> None:
-        self.assertEqual([lane.name for lane in build_lanes("backend", Path("/src"))], ["go-tests", "lint"])
+        self.assertEqual([lane.name for lane in build_lanes("backend", Path("/src"))], ["lint", "go-tests"])
 
     def test_unknown_mode_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -108,19 +109,74 @@ class RunLanesTest(unittest.TestCase):
         self.assertLess(parallel, 1.1)
         self.assertGreaterEqual(serial, 1.2)
 
-    def test_output_is_grouped_by_lane_in_declared_order(self) -> None:
+    def test_lane_is_emitted_as_one_block_when_it_finishes(self) -> None:
         lanes = [
             Lane("first", (python_step("slow", "import time; time.sleep(0.3); print('from-first')"),)),
             Lane("second", (python_step("fast", "print('from-second')"),)),
         ]
         results, _elapsed = self.run_lanes(lanes, jobs=2)
         output = self.stream.getvalue().decode("utf-8")
-        # 第二条线先结束，但输出仍按声明顺序整段排列，不会交错。
-        self.assertLess(output.index("===== 检查线 first ====="), output.index("from-first"))
-        self.assertLess(output.index("from-first"), output.index("===== 检查线 second ====="))
+        # 第二条线先结束先写出（UM-19）；每条线整段写出、带一行进度，不会交错。
         self.assertLess(output.index("===== 检查线 second ====="), output.index("from-second"))
+        self.assertLess(output.index("from-second"), output.index("[进度] 检查线 second 结束：全部通过"))
+        self.assertLess(output.index("[进度] 检查线 second 结束：全部通过"), output.index("===== 检查线 first ====="))
+        self.assertLess(output.index("===== 检查线 first ====="), output.index("from-first"))
+        self.assertLess(output.index("from-first"), output.index("[进度] 检查线 first 结束：全部通过"))
+        self.assertIn("已结束 2/2 条", output)
+        # 汇总表仍按检查线顺序。
+        summary = output[output.index("===== 上游合并门禁汇总"):]
+        self.assertLess(summary.index("first"), summary.index("second"))
         self.assertIn("结论：全部通过", output)
         self.assertTrue(all(item.status == "passed" for item in results))
+
+    def test_finished_lane_is_written_before_next_lane_starts(self) -> None:
+        # 串行时前一条线的整段日志在下一条线启动之前已经写出：中途查看或被终止都能看到已结束的线。
+        started_at = self.root / "second-started"
+        writes: list[tuple[float, bytes]] = []
+
+        class TimedStream(io.BytesIO):
+            def write(self, data) -> int:
+                writes.append((time.time(), bytes(data)))
+                return super().write(data)
+
+        lanes = [
+            Lane("first", (python_step("quick", "print('from-first')"),)),
+            Lane("second", (python_step("stamp", f"import pathlib, time; pathlib.Path({str(started_at)!r}).write_text(repr(time.time()))"),)),
+        ]
+        self.stream = TimedStream()
+        self.run_lanes(lanes, jobs=1)
+        first_block = next(stamp for stamp, data in writes if "===== 检查线 first =====".encode("utf-8") in data)
+        self.assertLess(first_block, float(started_at.read_text()))
+
+    def test_interrupted_run_keeps_finished_lanes(self) -> None:
+        # 第二条线向本进程发 SIGTERM（相当于 gates-run 或操作员中途终止）：第一条线的日志已经写出，
+        # 第三条线不再启动；不写汇总表与状态文件。
+        log_dir = self.root / "gate-logs"
+        log_dir.mkdir()
+        status = self.root / "status.json"
+        lanes = [
+            Lane("first", (python_step("quick", "print('from-first')"),)),
+            Lane("second", (python_step("interrupt", "import os, signal; os.kill(os.getppid(), signal.SIGTERM)"),)),
+            Lane("third", (python_step("never", "print('from-third')"),)),
+        ]
+        with self.assertRaises(KeyboardInterrupt):
+            run_lanes(lanes, jobs=1, repository_root=self.root, env=dict(os.environ), stream=self.stream,
+                      log_dir=log_dir, status_file=status)
+        output = self.stream.getvalue().decode("utf-8")
+        self.assertLess(output.index("from-first"), output.index("[进度] 检查线 first 结束：全部通过"))
+        # 步骤头会打印命令行，所以按输出行判断第三条线没有执行。
+        self.assertNotIn("\nfrom-third\n", output)
+        self.assertIn("已中止：未启动", output[output.index("===== 检查线 third ====="):])
+        self.assertNotIn("===== 上游合并门禁汇总", output)
+        self.assertFalse(status.exists())
+
+    def test_header_lists_lane_order_and_log_dir(self) -> None:
+        log_dir = self.root / "gate-logs"
+        log_dir.mkdir()
+        lanes = [Lane(name, (python_step("ok", "pass"),)) for name in ("a", "b")]
+        run_lanes(lanes, jobs=1, repository_root=self.root, env=dict(os.environ), stream=self.stream, log_dir=log_dir)
+        first_line = self.stream.getvalue().decode("utf-8").splitlines()[0]
+        self.assertEqual(first_line, f"[进度] 2 条检查线按此顺序执行：a → b（并发上限 1）；各线日志实时写在 {log_dir}")
 
     def test_missing_executable_fails_step_and_continues(self) -> None:
         lane = Lane(
@@ -286,7 +342,8 @@ class RunLanesTest(unittest.TestCase):
 
 class IntegrationPolicyTest(unittest.TestCase):
     def test_only_integration_group_requires_docker_and_runs_with_ci_true(self) -> None:
-        steps = {step.name: step for step in build_lanes("full", Path("/src"))[0].steps}
+        lanes = {lane.name: lane for lane in build_lanes("full", Path("/src"))}
+        steps = {step.name: step for step in lanes["go-tests"].steps}
         self.assertTrue(steps["go-test-integration"].requires_docker)
         self.assertEqual(steps["go-test-integration"].env, (("CI", "true"),))
         for name in ("go-test-default", "go-test-unit"):

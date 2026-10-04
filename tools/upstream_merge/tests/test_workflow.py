@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from tools.upstream_merge.canonical import (
     artifact_binding,
     bind_identity,
     file_binding,
+    open_once,
     resolve_within,
     sha256_file,
     write_json_once,
@@ -209,8 +211,9 @@ def build_verification_plan(
     marker: Path,
     *,
     grouped: bool = True,
+    first_gate_argv: list[str] | None = None,
 ) -> LoadedPlan:
-    """为 U-4 测试构造最小但可完整复核的计划和前置制品。"""
+    """为 U-4 测试构造最小但可完整复核的计划和前置制品；first_gate_argv 替换首个执行组的命令。"""
 
     evidence = fixture.evidence
     overlay = evidence / "u2" / "overlay.json"
@@ -256,7 +259,7 @@ def build_verification_plan(
     )
     write_json_once(evidence / "u3" / "change-decision-receipt.json", impact_document)
 
-    failing_argv = [
+    failing_argv = first_gate_argv or [
         "python3",
         "-c",
         f"import pathlib,sys; sys.exit(1 if pathlib.Path({str(marker)!r}).exists() else 0)",
@@ -323,6 +326,43 @@ class UpstreamMergeWorkflowTests(unittest.TestCase):
             require_passed=False,
         )
         self.assertEqual(loaded["result"], "blocked")
+
+    def test_gate_output_is_written_to_attempt_files_while_running(self) -> None:
+        # UM-19：门禁输出边跑边写进 attempt 目录。首个执行组先打印一行，再从 attempt 目录读自己的 stdout 文件，
+        # 读得到才以 0 退出——证明运行中文件里已有已写出的内容。
+        self.fixture = SyntheticRepository(self.temp_root, conflict=False)
+        code = (
+            "import os, pathlib, sys\n"
+            "print('early-line', flush=True)\n"
+            "status = pathlib.Path(os.environ['UPSTREAM_GATE_STATUS_FILE'])\n"
+            "live = status.with_name(status.name.replace('.runner-status.json', '.stdout.txt'))\n"
+            "sys.exit(0 if 'early-line' in live.read_text(encoding='utf-8') else 3)\n"
+        )
+        plan = build_verification_plan(
+            self.fixture,
+            self.temp_root / "absent.marker",
+            first_gate_argv=["python3", "-c", code],
+        )
+
+        receipt = run_verification_gates(plan, "attempt-001")
+
+        self.assertEqual(receipt["result"], "passed")
+        attempt_root = self.fixture.evidence / "u4/attempts/attempt-001"
+        self.assertEqual((attempt_root / "gate-00.stdout.txt").read_text(encoding="utf-8"), "early-line\n")
+        self.assertEqual(stat.S_IMODE((attempt_root / "gate-00.stdout.txt").stat().st_mode), 0o600)
+        self.assertEqual(receipt["gates"][0]["stdout"]["path"], "u4/attempts/attempt-001/gate-00.stdout.txt")
+
+    def test_open_once_refuses_existing_file_and_keeps_partial_output(self) -> None:
+        target = self.temp_root / "out" / "gate.stdout.txt"
+        with self.assertRaises(RuntimeError):
+            with open_once(target) as handle:
+                handle.write(b"finished-lane\n")
+                raise RuntimeError("中途被终止")
+        # 与 write_once 不同：异常时保留已写出的部分，供排查中途被终止的门禁。
+        self.assertEqual(target.read_bytes(), b"finished-lane\n")
+        with self.assertRaisesRegex(UpstreamMergeError, "禁止覆盖"):
+            with open_once(target):
+                pass
 
     def test_gates_retry_only_failed_group_and_reuses_passed_receipts(self) -> None:
         self.fixture = SyntheticRepository(self.temp_root, conflict=False)

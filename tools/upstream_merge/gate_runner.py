@@ -3,13 +3,17 @@
 旧的 full-regression 命令用 ``&&`` 串起 test-gate、前端、采集工具与出站规格检查：第一个
 失败之后其余全部不执行，一轮只能暴露一处问题；采集工具 2879 条用例单进程串行，占去全程
 七成时间。本模块把检查拆成互不依赖的“检查线”：每条线内部按原有顺序依次执行，但前一步
-失败不影响后一步；全部结束后按线顺序输出完整日志和汇总表，任一步骤失败即整体失败。
+失败不影响后一步；任一步骤失败即整体失败。
 
-检查线：
+检查线按预计耗时从短到长执行（UM-19），每条线结束即把该线完整日志和一行进度写到标准输出，全部
+结束后再输出汇总表：出站规格最常报红（合并后的冻结摘要漂移），放最前约 1.5 分钟出结论；v0.2.13
+合并时它排最后、只在全部结束后输出，两轮失败都到第 25 分钟才看到。中途被终止时，已结束检查线的
+日志已经写出；开头一行进度给出各线日志目录，运行中可逐线查看。
 
-- ``go-tests``：默认、unit、integration 三组 ``go test -count=1 ./...`` 依次执行。三组不能
-  合并——unit 标签会把替代实现编译进生产代码，默认组是唯一按生产编译形态运行的一组。
-  三组之间保持串行：每组内部已按 GOMAXPROCS 并行，同时跑三组只会互相争抢 CPU。
+检查线（按执行顺序）：
+
+- ``egress-spec``：``make -k check-egress-spec``，已含 test-official-client-control 与
+  test-upstream-merge-tools；``-k`` 让互不依赖的子目标在前一个失败后继续执行。约 1.5 分钟。
 - ``lint``：golangci-lint 默认、unit、integration 三种标签依次执行，与 CI 的覆盖一致。
 - ``frontend``：lint:check、typecheck、关键 vitest 依次执行。
 - ``capture-tools``：先跑分片闭合自检（``make test-capture-tools-shard-check``，与 CI 的 4 片作业
@@ -17,11 +21,13 @@
   按单元并行，各单元上报的测试 ID 必须与 discover 全集逐个相等（全集核对）。执行器的记录目录指到
   本次门禁的日志目录下，步骤结束后把未通过单元与诊断重跑的日志附进本线日志（UM-20）。原来的静态
   4 片片间不均，v0.2.13 合并三轮最慢一片都是 887 秒；执行器同一机器上全量约 350 秒。
-- ``egress-spec``：``make -k check-egress-spec``，已含 test-official-client-control 与
-  test-upstream-merge-tools；``-k`` 让互不依赖的子目标在前一个失败后继续执行。
+- ``go-tests``：默认、unit、integration 三组 ``go test -count=1 ./...`` 依次执行，最慢（默认与
+  unit 两组约 8.5 分钟）。三组不能合并——unit 标签会把替代实现编译进生产代码，默认组是唯一按
+  生产编译形态运行的一组。三组之间保持串行：每组内部已按 GOMAXPROCS 并行，同时跑三组只会互相
+  争抢 CPU。
 
-``backend`` 模式只跑前两条线，供 ``backend/Makefile`` 的 test-gate 使用；``full`` 模式跑
-全部五条，供根 Makefile 的 upstream-gate-full 使用。
+``backend`` 模式只跑 lint 与 go-tests 两条线，供 ``backend/Makefile`` 的 test-gate 使用；``full``
+模式跑全部五条，供根 Makefile 的 upstream-gate-full 使用。
 
 同时运行的检查线数由 ``--jobs`` 或环境变量 ``UPSTREAM_GATE_JOBS`` 控制，默认 1：检查线
 依次执行，只有采集工具在线内按单元并行。实测五条线全部并行时（10 核、16 GiB）总耗时 1129
@@ -142,17 +148,25 @@ def _lint_step(tag: str) -> Step:
 
 
 def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
-    """按模式给出检查线；顺序即日志输出顺序。"""
+    """按模式给出检查线；顺序即执行顺序：按预计耗时从短到长（UM-19，见模块说明）。"""
 
     if mode not in MODES:
         raise ValueError(f"未知模式：{mode}")
-    lanes = [
-        Lane("go-tests", tuple(_go_test_step(tag) for tag in BUILD_TAGS)),
-        Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS)),
-    ]
+    lint = Lane("lint", tuple(_lint_step(tag) for tag in BUILD_TAGS))
+    go_tests = Lane("go-tests", tuple(_go_test_step(tag) for tag in BUILD_TAGS))
     if mode == "backend":
-        return lanes
-    lanes += [
+        return [lint, go_tests]
+    return [
+        Lane(
+            "egress-spec",
+            (
+                Step(
+                    "check-egress-spec",
+                    ("make", "-k", f"CODEX_0_149_1_SOURCE_ROOT={codex_source_root}", "check-egress-spec"),
+                ),
+            ),
+        ),
+        lint,
         Lane(
             "frontend",
             (
@@ -168,17 +182,8 @@ def build_lanes(mode: str, codex_source_root: Path) -> list[Lane]:
                 Step("capture-tools", ("make", "test-capture-tools"), unit_executor=True),
             ),
         ),
-        Lane(
-            "egress-spec",
-            (
-                Step(
-                    "check-egress-spec",
-                    ("make", "-k", f"CODEX_0_149_1_SOURCE_ROOT={codex_source_root}", "check-egress-spec"),
-                ),
-            ),
-        ),
+        go_tests,
     ]
-    return lanes
 
 
 def default_jobs() -> int:
@@ -400,9 +405,12 @@ def run_lanes(
     status_file: Path | None = None,
     mode: str = "custom",
 ) -> tuple[list[StepResult], float]:
-    """执行检查线，全部结束后按线顺序把日志写到 stream，返回结果与总耗时。
+    """执行检查线，返回结果与总耗时。
 
-    status_file 非空时另写一份机器可读结果，供 gates-run 判断是否有未执行、须由 CI 补齐的步骤。
+    开头写一行进度（检查线顺序、日志目录）；每条线结束即把该线完整日志与一行进度写到 stream（UM-19），
+    并发时按结束先后整段写出、互不交错；全部结束后写汇总表（按检查线顺序）。中途被终止时已结束检查线
+    的日志已经写出。status_file 非空时另写一份机器可读结果，只在全部结束后写一次，供 gates-run 判断
+    是否有未执行、须由 CI 补齐的步骤。
     """
 
     if jobs < 1:
@@ -421,6 +429,25 @@ def run_lanes(
     )
     started = time.monotonic()
     results: dict[str, list[StepResult]] = {}
+    emit_lock = threading.Lock()
+    finished: list[str] = []
+    stream.write(_progress_header(lanes, jobs=jobs, log_dir=log_dir, owned=owned_log_dir).encode("utf-8"))
+    stream.flush()
+
+    def run_and_emit(lane: Lane) -> list[StepResult]:
+        lane_results = runner.run_lane(lane)
+        with emit_lock:
+            finished.append(lane.name)
+            stream.write(f"\n===== 检查线 {lane.name} =====\n".encode("utf-8"))
+            path = runner.log_path(lane)
+            if path.is_file():
+                with path.open("rb") as handle:
+                    shutil.copyfileobj(handle, stream)
+            line = _progress_line(lane, lane_results, done=len(finished), total=len(lanes), elapsed=time.monotonic() - started)
+            stream.write(line.encode("utf-8"))
+            stream.flush()
+        return lane_results
+
     previous_handler = None
     if threading.current_thread() is threading.main_thread():
         def _terminate(_signum, _frame):
@@ -430,7 +457,7 @@ def run_lanes(
         previous_handler = signal.signal(signal.SIGTERM, _terminate)
     try:
         with ThreadPoolExecutor(max_workers=min(jobs, max(len(lanes), 1))) as pool:
-            futures = {lane.name: pool.submit(runner.run_lane, lane) for lane in lanes}
+            futures = {lane.name: pool.submit(run_and_emit, lane) for lane in lanes}
             try:
                 for name, future in futures.items():
                     results[name] = future.result()
@@ -441,12 +468,6 @@ def run_lanes(
         if previous_handler is not None:
             signal.signal(signal.SIGTERM, previous_handler)
     elapsed = round(time.monotonic() - started, 1)
-    for lane in lanes:
-        stream.write(f"\n===== 检查线 {lane.name} =====\n".encode("utf-8"))
-        path = runner.log_path(lane)
-        if path.is_file():
-            with path.open("rb") as handle:
-                shutil.copyfileobj(handle, stream)
     ordered = [result for lane in lanes for result in results[lane.name]]
     stream.write(render_summary(ordered, jobs=jobs, elapsed=elapsed).encode("utf-8"))
     stream.flush()
@@ -455,6 +476,29 @@ def run_lanes(
     if owned_log_dir:
         shutil.rmtree(log_dir, ignore_errors=True)
     return ordered, elapsed
+
+
+def _progress_header(lanes: Sequence[Lane], *, jobs: int, log_dir: Path, owned: bool) -> str:
+    """开头一行进度：检查线顺序与各线日志目录（运行中各线日志实时写在那里）。"""
+
+    order = " → ".join(lane.name for lane in lanes)
+    cleanup = "，结束后删除" if owned else ""
+    return f"[进度] {len(lanes)} 条检查线按此顺序执行：{order}（并发上限 {jobs}）；各线日志实时写在 {log_dir}{cleanup}\n"
+
+
+def _progress_line(lane: Lane, results: Sequence[StepResult], *, done: int, total: int, elapsed: float) -> str:
+    """一条检查线结束时的进度行：本线结论、本线用时、已结束几条、累计用时。"""
+
+    failed = [item.step for item in results if item.status == "failed"]
+    skipped = [item.step for item in results if item.status == "not_executed"]
+    if failed:
+        verdict = f"失败 {len(failed)} 项（{'、'.join(failed)}）"
+    elif skipped:
+        verdict = f"已执行的通过，未执行 {len(skipped)} 项须 CI 补齐（{'、'.join(skipped)}）"
+    else:
+        verdict = "全部通过"
+    duration = sum(item.duration_seconds for item in results)
+    return f"[进度] 检查线 {lane.name} 结束：{verdict}，本线 {duration:.1f} 秒；已结束 {done}/{total} 条，累计 {elapsed:.0f} 秒\n"
 
 
 def overall_result(results: Sequence[StepResult]) -> str:

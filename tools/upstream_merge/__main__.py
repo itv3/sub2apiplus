@@ -631,6 +631,9 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
     if command == "revision-preflight":
         return preflight_revisions(plan, arguments.transition)
     if command == "gates-run":
+        # 门禁输出边跑边写进 attempt 目录（UM-19）；全量门禁约 16 分钟，运行中据此查看进度。
+        attempt_root = plan.evidence_root / plan.output_relative("gate_attempts_root") / arguments.attempt_id
+        print(f"门禁输出实时写入 {attempt_root}/<执行组>.stdout.txt，运行中可用 tail -f 查看", file=sys.stderr, flush=True)
         return run_verification_gates(
             plan,
             arguments.attempt_id,

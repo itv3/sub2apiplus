@@ -472,9 +472,9 @@ test-upstream-merge-tools:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/upstream_merge/tests -p 'test_*.py'
 
-# 上游合并 U-4 full-regression 组：go test、lint、前端、采集工具、出站规格五条检查线依次执行，
-# 遇错不停，采集工具先做分片闭合自检、再走统一调度执行器（make test-capture-tools），全部结束后统一输出
-# 日志与汇总（见 tools/upstream_merge/gate_runner.py）。
+# 上游合并 U-4 full-regression 组：出站规格、lint、前端、采集工具、go test 五条检查线按预计耗时从短到长
+# 依次执行、遇错不停，每条线结束即输出该线日志与进度，全部结束后输出汇总；采集工具先做分片闭合自检、
+# 再走统一调度执行器（make test-capture-tools）（见 tools/upstream_merge/gate_runner.py）。
 # UPSTREAM_GATE_JOBS 可让检查线之间并行，默认 1：满载并行时计时敏感用例会误判。
 upstream-gate-full:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner full \

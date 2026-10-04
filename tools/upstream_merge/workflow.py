@@ -28,6 +28,7 @@ from .canonical import (
     expect_string,
     file_binding,
     load_json,
+    open_once,
     resolve_within,
     safe_relative_path,
     sha256_bytes,
@@ -89,6 +90,7 @@ from .gitops import (
     run_egress_snapshot,
     run_git,
     run_process,
+    run_process_to,
     status_paths,
     tag_commit,
     unmerged_entries,
@@ -4149,18 +4151,24 @@ def _run_verification_gates_in_worktree(
         executable = executable_identity(argv[0], cwd)
         # 编排脚本把逐步结果写到这里；本机未执行的检查据此标为 awaiting_ci，而不是算作通过。
         status_path = attempt_root / f"{leader['id']}.runner-status.json"
+        stdout_path = attempt_root / f"{leader['id']}.stdout.txt"
+        stderr_path = attempt_root / f"{leader['id']}.stderr.txt"
         started = time.monotonic()
-        completed = run_process(
-            argv,
-            cwd=cwd,
-            check=False,
-            env={
-                **os.environ,
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "UPSTREAM_MERGE_PLAN": str(plan.path),
-                "UPSTREAM_GATE_STATUS_FILE": str(status_path),
-            },
-        )
+        # 门禁输出边跑边写进 attempt 目录（UM-19）：编排脚本每条检查线结束即写出该线完整日志，运行中可直接
+        # 查看；中途被终止时已写出的部分保留（attempt 目录已建，重跑须换新 attempt）。
+        with open_once(stdout_path) as stdout, open_once(stderr_path) as stderr:
+            returncode = run_process_to(
+                argv,
+                cwd=cwd,
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "UPSTREAM_MERGE_PLAN": str(plan.path),
+                    "UPSTREAM_GATE_STATUS_FILE": str(status_path),
+                },
+                stdout=stdout,
+                stderr=stderr,
+            )
         duration_ms = int((time.monotonic() - started) * 1000)
         runner_status: dict[str, Any] | None = None
         if status_path.is_symlink() or (status_path.exists() and not status_path.is_file()):
@@ -4171,15 +4179,11 @@ def _run_verification_gates_in_worktree(
                 plan,
                 runner_status,
                 f"门禁 {leader['id']} 状态文件",
-                exit_code=completed.returncode,
+                exit_code=returncode,
             )
-        stdout_path = attempt_root / f"{leader['id']}.stdout.txt"
-        stderr_path = attempt_root / f"{leader['id']}.stderr.txt"
-        write_once(stdout_path, completed.stdout.encode("utf-8"))
-        write_once(stderr_path, completed.stderr.encode("utf-8"))
         stdout_binding = artifact_binding(plan.evidence_root, stdout_path)
         stderr_binding = artifact_binding(plan.evidence_root, stderr_path)
-        status = "passed" if completed.returncode == 0 else "failed"
+        status = "passed" if returncode == 0 else "failed"
         executed_groups += 1
         for gate in group:
             results_by_id[gate["id"]] = {
@@ -4191,7 +4195,7 @@ def _run_verification_gates_in_worktree(
                 "expanded_argv_sha256": sha256_bytes(canonical_bytes(argv)),
                 "executable": executable,
                 "source_receipt": receipt_binding,
-                "exit_code": completed.returncode,
+                "exit_code": returncode,
                 "duration_ms": duration_ms if gate["id"] == leader["id"] else 0,
                 "stdout": stdout_binding,
                 "stderr": stderr_binding,

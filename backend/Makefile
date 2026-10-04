@@ -14,9 +14,9 @@ test:
 	go test ./...
 	golangci-lint run ./...
 
-# 上游合并门禁的后端部分：默认、unit、integration 三组 go test 依次执行（默认组是唯一按
-# 生产编译形态运行的一组，CI 没有它），再跑 golangci-lint 默认、unit、integration 三种标签；
-# 固定 -count=1，遇错不停，全部结束后汇总（见 tools/upstream_merge/gate_runner.py）。
+# 上游合并门禁的后端部分：先跑 golangci-lint 默认、unit、integration 三种标签（快线在前），再跑默认、
+# unit、integration 三组 go test（默认组是唯一按生产编译形态运行的一组，CI 没有它）；固定 -count=1，
+# 遇错不停，每条线结束即输出，全部结束后汇总（见 tools/upstream_merge/gate_runner.py）。
 test-gate:
 	@cd .. && PYTHONDONTWRITEBYTECODE=1 python3 -m tools.upstream_merge.gate_runner backend
 
