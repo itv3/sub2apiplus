@@ -1,0 +1,81 @@
+{
+  "base_commit": "aa5140d5803cfd2bb569c0a1bba21932ed2926c4",
+  "changed_path_count": 4,
+  "current_commit": "5e0c8a715583a571feb45d7e4e87d5f767bc70a4",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5393,
+  "frozen_path_count": 1929,
+  "identity_sha256": "e920ed85b8719993e041cb38656a6823a4746558b9d04c7c40168a0d73b73e04",
+  "issued_at_utc": "2026-10-04T01:58:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。",
+      "path": "backend/cmd/egressscan/classify.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    },
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。",
+      "path": "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0213-scanner-pending-additions-20261004-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/cmd/egressscan/classify.go",
+      "predecessor_sha256s": [
+        "eb18721c200c913440cc9f505f7e6fbef1380e0ccad4e50943491daa3419fb8b"
+      ],
+      "reason": "合并上游 v0.2.13 前在主干预先登记 TypeSafe 账号连通性测试与 System One 网关转发两个范围外新增发送点（新 mergeGroup，合并前整组缺失、合并后整组齐全），并承接扫描器算法单跳后继；不改变官方客户端画像、Persona、wire 或生产代码 path=backend/cmd/egressscan/classify.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-egress-prerequisite-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-scanner-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-v0210-scanner-classify-20260930-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "253f70e198fe407e44a60186792d994c9efd00de838376f00d0c7c66250b8049"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/cmd/egressscan/post_bootstrap_acceptance.go",
+    "backend/cmd/egressscan/post_bootstrap_acceptance_test.go",
+    "docs/egress/maintenance/scanner-algorithm-successor.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "cd backend && go run ./cmd/egressscan -mode self-test"
+  ]
+}
