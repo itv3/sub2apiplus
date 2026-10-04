@@ -22,6 +22,25 @@ def write_json(path, value):
 
 
 class GuideTests(unittest.TestCase):
+    def test_material_reader_rejects_non_managed_layout(self):
+        with self.assertRaisesRegex(closeout.CloseoutError, "受管根"):
+            closeout.collect_guide_material(Path.cwd() / "arbitrary-campaign", "candidate-a")
+
+    def test_material_reader_uses_fresh_process_and_binds_reader_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tool = root / "tools/official_client_capture/codex_upgrade.py"
+            tool.parent.mkdir(parents=True)
+            tool.write_text("# 受管读侧占位，实际读取在独立进程合同测试与 ARM64 只读重放覆盖。\n")
+            campaign = root / "evidence/campaigns/c-test"
+            with mock.patch.object(closeout.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps({"reader_root": str(root)}), "")) as worker:
+                closeout.collect_guide_material(campaign, "candidate-a")
+            self.assertEqual(worker.call_args.kwargs["cwd"], root)
+            self.assertIn("read-material", worker.call_args.args[0])
+            with mock.patch.object(closeout.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps({"reader_root": "/wrong"}), "")):
+                with self.assertRaisesRegex(closeout.CloseoutError, "绑定受管数据根"):
+                    closeout.collect_guide_material(campaign, "candidate-a")
+
     def test_real_source_cascade_preserves_historical_profiles(self):
         root = Path(closeout.__file__).resolve().parents[1]
         before = (root / closeout.GUIDE).read_text()

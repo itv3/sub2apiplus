@@ -149,10 +149,38 @@ def source_updates(repo, guide_text):
 
 
 def collect_guide_material(campaign, candidate):
+    """在独立解释器中使用 Campaign 的受管读侧，避免把源码副本误当成证据数据根。"""
+    campaign = safety.plain(campaign)
+    if campaign.parent.name != "campaigns" or campaign.parent.parent.name != "evidence":
+        raise CloseoutError("Campaign 必须位于受管根的 evidence/campaigns 下")
+    reader_root = campaign.parents[2]
+    safety.file_binding(reader_root / "tools/official_client_capture/codex_upgrade.py")
+    result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "read-material",
+                             "--campaign", str(campaign), "--candidate", candidate],
+                            cwd=reader_root, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise CloseoutError("受管读侧材料重放失败：" + result.stderr.strip()[-1600:])
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict) or value.get("reader_root") != str(reader_root):
+        raise CloseoutError("材料读侧没有绑定受管数据根")
+    return value
+
+
+def read_guide_material(campaign, candidate):
     """使用正式封存读侧取得 VC-2、VC-5 批准修订和 VC-1 原始观测；不发请求。"""
+    campaign = safety.plain(campaign)
+    if campaign.parent.name != "campaigns" or campaign.parent.parent.name != "evidence":
+        raise CloseoutError("Campaign 路径不是受管布局")
+    reader_root = campaign.parents[2]
+    sys.path.insert(0, str(reader_root))
     from tools.official_client_capture import codex_upgrade as upgrade
     from tools.official_client_capture import candidate_rule_assertion as checker
-    campaign = safety.plain(campaign)
+    if Path(upgrade.__file__).resolve().parents[2] != reader_root or Path(checker.__file__).resolve().parents[2] != reader_root:
+        raise CloseoutError("材料重放须使用独立解释器，不能混入其他源码根的模块")
+    reader_files = {str(path): safety.file_binding(path)["sha256"]
+                    for path in sorted((reader_root / "tools/official_client_capture").rglob("*"))
+                    if path.is_file() and path.suffix in {".py", ".json", ".sh"} and "__pycache__" not in path.parts}
     manifest = upgrade.load_campaign_manifest(campaign)
     classified = upgrade._load_stage_result(campaign, "classify")
     if classified.get("status") != "complete":
@@ -178,7 +206,10 @@ def collect_guide_material(campaign, candidate):
     for rule in profile["rules"]:
         counts[rule["rule_id"]] = {check["id"]: len(checker._select_observations(observations, check["select"], rule["scenario_ids"]))
                                     for check in rule["checks"]}
-    return {"campaign_path": str(campaign), "campaign_id": manifest["campaign_id"], "candidate_id": candidate, "target_version": manifest["target_version"],
+    if any(safety.file_binding(path)["sha256"] != expected for path, expected in reader_files.items()):
+        raise CloseoutError("受管读侧在重放期间变化")
+    return {"reader_root": str(reader_root), "reader_files": reader_files,
+            "campaign_path": str(campaign), "campaign_id": manifest["campaign_id"], "candidate_id": candidate, "target_version": manifest["target_version"],
             "classification_sha256": digest(classified), "effective_classification_sha256": digest(effective),
             "official_stage_sha256": digest(official), "capture_manifest": safety.file_binding(capture),
             "references": references, "migration": documents["migration_manifest"], "profile": profile,
@@ -788,6 +819,9 @@ def publish(plan_path, approvals):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    reader = sub.add_parser("read-material", help="独立进程按受管数据根重放正式材料")
+    reader.add_argument("--campaign", required=True)
+    reader.add_argument("--candidate", required=True)
     draft = sub.add_parser("draft", help="从正式封存链生成指南材料和草稿，不签发批准")
     for name in ("campaign", "candidate", "guide", "baseline-profile", "output"):
         draft.add_argument("--" + name, required=True)
@@ -803,7 +837,9 @@ def main(argv=None):
     release.add_argument("--cleanup-approval")
     args = parser.parse_args(argv)
     try:
-        if args.command == "draft":
+        if args.command == "read-material":
+            result = read_guide_material(args.campaign, args.candidate)
+        elif args.command == "draft":
             material = collect_guide_material(args.campaign, args.candidate)
             generated = guide_draft(safety.plain(args.guide).read_text(), material, safety.read(args.baseline_profile))
             output = safety.plain(args.output)
