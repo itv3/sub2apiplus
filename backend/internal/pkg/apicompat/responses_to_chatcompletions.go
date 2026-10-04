@@ -17,13 +17,8 @@ import (
 // Completions response. Text output items are concatenated into
 // choices[0].message.content; function_call items become tool_calls.
 func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatCompletionsResponse {
-	id := resp.ID
-	if id == "" {
-		id = generateChatCmplID()
-	}
-
 	out := &ChatCompletionsResponse{
-		ID:          id,
+		ID:          normalizeChatCompletionID(resp.ID),
 		Object:      "chat.completion",
 		Created:     time.Now().Unix(),
 		Model:       model,
@@ -129,6 +124,7 @@ type ResponsesEventToChatState struct {
 	OutputIndexToArguments map[int]string
 	IncludeUsage           bool
 	Usage                  *ChatUsage
+	sentChunk              bool // 首个分片输出后固定响应 ID，避免迟到或重复的创建事件改变它。
 }
 
 // NewResponsesEventToChatState returns an initialised stream state.
@@ -219,8 +215,8 @@ func ChatChunkToSSE(chunk ChatCompletionsChunk) (string, error) {
 
 func resToChatHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
 	if evt.Response != nil {
-		if evt.Response.ID != "" {
-			state.ID = evt.Response.ID
+		if evt.Response.ID != "" && !state.sentChunk {
+			state.ID = normalizeChatCompletionID(evt.Response.ID)
 		}
 		if state.Model == "" && evt.Response.Model != "" {
 			state.Model = evt.Response.Model
@@ -442,6 +438,7 @@ func completionDetailsFromResponses(src *ResponsesOutputTokensDetails) *ChatToke
 }
 
 func makeChatDeltaChunk(state *ResponsesEventToChatState, delta ChatDelta) ChatCompletionsChunk {
+	state.sentChunk = true
 	return ChatCompletionsChunk{
 		ID:          state.ID,
 		Object:      "chat.completion.chunk",
@@ -457,6 +454,7 @@ func makeChatDeltaChunk(state *ResponsesEventToChatState, delta ChatDelta) ChatC
 }
 
 func makeChatFinishChunk(state *ResponsesEventToChatState, finishReason string) ChatCompletionsChunk {
+	state.sentChunk = true
 	empty := ""
 	return ChatCompletionsChunk{
 		ID:          state.ID,
@@ -472,7 +470,22 @@ func makeChatFinishChunk(state *ResponsesEventToChatState, finishReason string) 
 	}
 }
 
-// generateChatCmplID returns a "chatcmpl-" prefixed random hex ID.
+// normalizeChatCompletionID 只规范化下游 Chat Completions 的响应 ID，保留上游
+// 标识的主体以便排查，且不修改原始 Responses 对象。避免 resp_ 前缀让客户端把
+// 已转换的 choices / usage 当作 Responses 协议解析；工具调用的 call_id 不受影响。
+func normalizeChatCompletionID(responseID string) string {
+	responseID = strings.TrimSpace(responseID)
+	if strings.HasPrefix(responseID, "chatcmpl-") && len(responseID) > len("chatcmpl-") {
+		return responseID
+	}
+	suffix := strings.TrimPrefix(responseID, "resp_")
+	if suffix == "" || responseID == "chatcmpl-" {
+		return generateChatCmplID()
+	}
+	return "chatcmpl-" + suffix
+}
+
+// generateChatCmplID 生成带有 chatcmpl- 前缀的随机响应 ID。
 func generateChatCmplID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)

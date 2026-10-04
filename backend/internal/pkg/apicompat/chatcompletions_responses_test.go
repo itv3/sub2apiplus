@@ -1612,7 +1612,7 @@ func TestChatCompletionsStreamRoundTrip(t *testing.T) {
 
 	// All chunks share the same ID
 	for _, c := range allChunks {
-		assert.Equal(t, "resp_rt", c.ID)
+		assert.Equal(t, "chatcmpl-rt", c.ID)
 	}
 }
 
