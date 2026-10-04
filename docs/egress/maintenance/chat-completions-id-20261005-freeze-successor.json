@@ -1,0 +1,97 @@
+{
+  "base_commit": "4e9389bfbe73ad8d87f12dad15e04fd97d94b34f",
+  "changed_path_count": 4,
+  "current_commit": "bd4e40071dceef56323880b8210e5823a227fa29",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5617,
+  "frozen_path_count": 2015,
+  "identity_sha256": "3cc1ce3a8a2187df3d472b31dfd81b7fc12888453407d7e9904c78aeb2aaa099",
+  "issued_at_utc": "2026-10-04T21:12:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-chat-completions-id-20261005-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "a9e415d458f1953764674dd7a58cc66d2391da8417ceb8357b0d165189503ec9"
+      ],
+      "reason": "登记 Chat Completions 下游响应 ID 前缀规范化、流内 ID 稳定性及 v0.2.13-2 版本文件的冻结承接；保留上游追踪和工具调用标识，不改变官方客户端出站画像或 Persona path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0c0fefd280fac8555a88ba016e7366bf5ec4cf3019e312d8a54c52a477d921e9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/chatcompletions_responses_test.go",
+      "predecessor_sha256s": [
+        "45f94ca766abf79667a50150c120cf1b6e140f7a9619ee8502f003fd26a0ea21"
+      ],
+      "reason": "登记 Chat Completions 下游响应 ID 前缀规范化、流内 ID 稳定性及 v0.2.13-2 版本文件的冻结承接；保留上游追踪和工具调用标识，不改变官方客户端出站画像或 Persona path=backend/internal/pkg/apicompat/chatcompletions_responses_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2d6ebf257e71c04dba76dd6178e442d1a7a3fed551abea34791956dacdca9afa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/apicompat/responses_to_chatcompletions.go",
+      "predecessor_sha256s": [
+        "93cdb4b48dd64463c9fedb0e57b1160c30b50e9f93cc79cdcacf5bc0d2a02a84"
+      ],
+      "reason": "登记 Chat Completions 下游响应 ID 前缀规范化、流内 ID 稳定性及 v0.2.13-2 版本文件的冻结承接；保留上游追踪和工具调用标识，不改变官方客户端出站画像或 Persona path=backend/internal/pkg/apicompat/responses_to_chatcompletions.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "26b1ba6beed18335254a63bcdefded6d7ef2aea665f3d94e8e213c46917136d7"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "backend/internal/pkg/apicompat/responses_to_chatcompletions_id_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
