@@ -1,0 +1,64 @@
+{
+  "base_commit": "d8701ca2e88fef37584fe2b231b876d3792c2d71",
+  "changed_path_count": 1,
+  "current_commit": "9a9bba7677ab3204b8fc68522ccacec9f6084db3",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5594,
+  "frozen_path_count": 2015,
+  "identity_sha256": "0a70bc22f9fa08fbefc2da5176a3d1ab5690ca40166f91084513bb2dee9178e6",
+  "issued_at_utc": "2026-10-04T05:39:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-release-v0.2.13-1-version-sync-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "a2360447b0685602375f211322ff397b0eb8be1d291f4c95173fccb189d19175"
+      ],
+      "reason": "登记发版 v0.2.13-1 后发版 bot 回写 backend/cmd/server/VERSION 至 0.2.13-1（9a9bba767）的冻结承接边；前序为回写前主干 HEAD d8701ca2e；不改画像、Persona、wire 或出站 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a9e415d458f1953764674dd7a58cc66d2391da8417ceb8357b0d165189503ec9"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
