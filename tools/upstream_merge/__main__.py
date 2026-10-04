@@ -18,7 +18,8 @@ from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
 from .plan_inputs import AWAITING_MANUAL_INPUT
 from .plan_replay import replay_trial_tree, seal_merge_with_replay
-from .request_render import render_request
+from .request_render import PLAN_ROOT_NAME, render_request
+from .sink_registration import write_sink_registration
 from .revision_advance import advance_revision
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
@@ -95,8 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument(
         "--output",
         type=_absolute,
-        help="可选的非权威预检报告路径；不会覆盖既有文件",
+        help="可选的非权威预检报告路径；不会覆盖既有文件。有未登记的上游新增发送点时，另在旁边写出登记补丁与 notes",
     )
+
+    sink_draft = commands.add_parser(
+        "sink-registration-draft",
+        help="按预检报告为未登记的上游新增发送点生成可 git apply 的登记补丁（UM-25）",
+    )
+    _add_repository(sink_draft)
+    sink_draft.add_argument("--preflight", required=True, type=_absolute, help="preflight 写出的报告")
+    sink_draft.add_argument("--output", required=True, type=_absolute, help="补丁路径（主仓库之外），不覆盖既有文件")
+    sink_draft.add_argument("--notes", type=_absolute, help="改写过说明的 notes；省略时按函数与文件起草并另写 notes 模板")
+    sink_draft.add_argument("--date", help="本批次承接收据的日期 YYYYMMDD，默认今天（UTC）")
 
     render = commands.add_parser(
         "request-render",
@@ -415,11 +426,23 @@ def _inside_git_worktree(path: Path) -> bool:
     return probe.returncode == 0 and probe.stdout.strip() == "true"
 
 
+def _enclosing_plan_root(anchor: Path) -> Path | None:
+    """锚点所在的 Plan 目录：从锚点的父目录往上找第一个按 Plan 命名、真实存在的目录。"""
+
+    for directory in anchor.parents:
+        if PLAN_ROOT_NAME.fullmatch(directory.name) and directory.is_dir() and not directory.is_symlink():
+            return directory
+    return None
+
+
 def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str | None]:
     """推断本次命令的时间账本路径。
 
-    返回 (路径, 跳过原因)。显式 --timing-ledger 始终生效；推断路径位于 Git 工作树内
-    （例如把收据写进 docs/egress/maintenance）或没有任何输出锚点时返回 None。
+    返回 (路径, 跳过原因)。显式 --timing-ledger 始终生效。锚点（输出、计划、请求等路径）位于某个 Plan
+    目录（名如 v0.2.13-20261004-001）之下时，一律写该 Plan 根的账本（UM-25）：v0.2.13 合并时账本按锚点
+    所在目录推断，分散在 Plan 根、evidence、inputs 三处，写进 Plan 工作树的收据还漏记。不在任何 Plan
+    之下时写锚点所在目录；该目录位于 Git 工作树内（例如把收据写进主仓库 docs/egress/maintenance）或
+    没有任何输出锚点时返回 None。
     """
 
     explicit = getattr(arguments, "timing_ledger", None)
@@ -436,6 +459,9 @@ def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str 
         if isinstance(anchor, list) and anchor and isinstance(anchor[0], Path):
             anchor = anchor[0]
         if isinstance(anchor, Path):
+            plan_directory = _enclosing_plan_root(anchor)
+            if plan_directory is not None:
+                return plan_directory / TIMING_LEDGER_NAME, None
             inferred = anchor.parent / TIMING_LEDGER_NAME
             if inferred.parent.is_dir() and _inside_git_worktree(inferred.parent):
                 return None, f"推断路径位于 Git 工作树内：{inferred}"
@@ -502,13 +528,31 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         }
     if command == "preflight":
         report = run_preflight(arguments.request, arguments.repository, arguments.output)
-        return {
+        summary: dict[str, Any] = {
             "result": report["result"],
             "plan_id": report["plan_id"],
             "identity_sha256": report["identity_sha256"],
             "report": str(arguments.output) if arguments.output else None,
             "blockers": report["blockers"],
         }
+        coverage = (report.get("report") or {}).get("scanner_coverage") or {}
+        if arguments.output is not None and coverage.get("unregistered_added_sinks"):
+            # 未登记的上游新增发送点直接附上登记补丁（UM-25）；起草失败只记原因，不影响预检结论。
+            patch = arguments.output.with_name(f"{arguments.output.stem}.sink-registration.patch")
+            try:
+                summary["sink_registration"] = write_sink_registration(arguments.repository, report, patch)
+            except UpstreamMergeError as error:
+                summary["sink_registration"] = {"result": "not_drafted", "reason": str(error)}
+        return summary
+    if command == "sink-registration-draft":
+        report = expect_object(load_json(arguments.preflight, "preflight report"), "preflight report")
+        return write_sink_registration(
+            arguments.repository,
+            report,
+            arguments.output,
+            notes_path=arguments.notes,
+            date=arguments.date,
+        )
     if command == "request-render":
         return render_request(
             arguments.repository,

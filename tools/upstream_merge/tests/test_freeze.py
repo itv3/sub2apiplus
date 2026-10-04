@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -311,6 +312,46 @@ class FreezeSuccessorTest(unittest.TestCase):
         self.assertEqual(summary["result"], "manual_actions_required")
         self.assertEqual(summary["transition_count"], 0)
 
+    def test_fact_map_rule_follows_mapping_constant(self) -> None:
+        # UM-25：规则登记“哪个模块的哪个常量指向当前 fact map”，路径随常量跟随，不再写死某一版的清单。
+        module = self.root / "tools/cap/trace.py"
+        module.parent.mkdir(parents=True)
+        for name, sources in (("old", ["backend/a.go"]), ("new", ["backend/b.go", "backend/c.go"])):
+            write_json(
+                self.root / f"tools/cap/fact_map_{name}.json",
+                {"tests": [{"test_file": f"backend/{name}_test.go", "source_files": [{"path": item} for item in sources]}]},
+            )
+
+        def point_to(name: str) -> None:
+            module.write_text(f'DEFAULT_MAPPING_RELATIVE_PATH = (\n    "tools/cap/fact_map_{name}.json"\n)\n', encoding="utf-8")
+
+        point_to("new")
+        rule = {
+            "id": "campaign-fact-map",
+            "match": {"fact_map_of": {"module": "tools/cap/trace.py", "constant": "DEFAULT_MAPPING_RELATIVE_PATH"}},
+            "action": {"kind": "manual_required", "file": "tools/cap/trace.py", "instruction": "须老板确认"},
+            "verification": ["python3 -m unittest x"],
+        }
+        write_json(self.root / Path(*FREEZE_REGISTRY_RELATIVE.split("/")), registry_document([rule]))
+        base = self._commit("fact map rule")
+        resolved = load_freeze_registry(self.root)["rules"][0]["match"]["paths"]
+        self.assertEqual(resolved, ["backend/b.go", "backend/c.go", "backend/new_test.go"])
+        for relative in ("backend/a.go", "backend/b.go"):
+            (self.root / relative).write_text("package changed\n", encoding="utf-8")
+        actions = plan_freeze_successor(self.root, base)["required_manual_actions"]
+        self.assertEqual([(item["rule_id"], item["path"]) for item in actions], [("campaign-fact-map", "backend/b.go")])
+        # 常量换到另一份 fact map，规则随之换路径。
+        point_to("old")
+        actions = plan_freeze_successor(self.root, base)["required_manual_actions"]
+        self.assertEqual([item["path"] for item in actions], ["backend/a.go"])
+        # 常量缺失或 fact map 不存在都 fail-close。
+        module.write_text("OTHER = 1\n", encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "找不到字符串常量"):
+            load_freeze_registry(self.root)
+        module.write_text('DEFAULT_MAPPING_RELATIVE_PATH = "tools/cap/missing.json"\n', encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "fact map 不存在"):
+            load_freeze_registry(self.root)
+
     def test_broken_chain_fails_closed(self) -> None:
         # 先把 a.go 改到一个未登记的摘要并提交，再从该提交出发生成：前序摘要不在登记集合中。
         (self.root / "backend/a.go").write_text("package a // unregistered\n", encoding="utf-8")
@@ -547,7 +588,24 @@ class FreezeSuccessorTest(unittest.TestCase):
         registry = load_freeze_registry(SOURCE_ROOT)
         # B1 起 Python 门禁按 schema glob freeze successor，python_receipt_list 规则已退役。
         self.assertGreaterEqual(len(registry["rules"]), 3)
-        self.assertNotIn("codex-0151-worktree-successor", {rule["id"] for rule in registry["rules"]})
+        rules = {rule["id"]: rule for rule in registry["rules"]}
+        self.assertNotIn("codex-0151-worktree-successor", rules)
+        # UM-25：fact map 规则跟随 candidate_test_trace 指向的当前 fact map，覆盖其全部测试文件与源码文件。
+        self.assertNotIn("codex-0151-campaign-fact-map", rules)
+        trace_text = (SOURCE_ROOT / "tools/official_client_capture/candidate_test_trace.py").read_text(encoding="utf-8")
+        current = json.loads(
+            (SOURCE_ROOT / re.search(r'DEFAULT_MAPPING_RELATIVE_PATH = \(\s*"([^"]+)"', trace_text).group(1)).read_text(encoding="utf-8")
+        )
+        expected = {test["test_file"] for test in current["tests"]} | {
+            source["path"] for test in current["tests"] for source in test["source_files"]
+        }
+        self.assertEqual(set(rules["codex-campaign-fact-map"]["match"]["paths"]), expected)
+        # ARM64 摘要常量只剩两个文件摘要；其余受管工具改动不再报待办。
+        self.assertEqual(
+            rules["arm64-managed-tool-digests"]["match"]["paths"],
+            ["tools/official_client_capture/codex_upgrade_supervisor.py", "tools/prepare_assertion_bundle.sh"],
+        )
+        self.assertNotIn("DEFAULT_TOOL_DIGEST", rules["arm64-managed-tool-digests"]["action"]["instruction"])
 
 
 if __name__ == "__main__":

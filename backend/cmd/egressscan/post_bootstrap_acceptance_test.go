@@ -143,12 +143,6 @@ func pendingAdditionRecords(t *testing.T) ([]string, map[string][]SinkRecord) {
 			Rationale:        addition.rationale,
 		})
 	}
-	for _, group := range groups {
-		if len(byGroup[group]) < 2 {
-			t.Fatalf("mergeGroup %s 预先登记的上游新增发送点不足两条，无法验证“只出现一部分即失败”：%d",
-				group, len(byGroup[group]))
-		}
-	}
 	return groups, byGroup
 }
 
@@ -189,9 +183,13 @@ func TestReviewedPostBootstrapSinkAdditionPendingGroupIsAllOrNothing(t *testing.
 			}
 		}
 
-		delete(currentByID, records[0].ScanCandidateID)
-		if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
-			t.Fatalf("%s 整组只出现一部分未被拒绝", group)
+		// 只有一条的组没有“只出现一部分”的情形（删掉唯一一条就是整组缺失，合法）；sink-registration-draft
+		// 按批次起草，上游一个版本只新增一个发送点时就是这种组（UM-25）。
+		if len(records) >= 2 {
+			delete(currentByID, records[0].ScanCandidateID)
+			if _, problems = validateReviewedPostBootstrapSinkAcceptance(oldByID, currentByID); len(problems) == 0 {
+				t.Fatalf("%s 整组只出现一部分未被拒绝", group)
+			}
 		}
 
 		drifted := records[0]

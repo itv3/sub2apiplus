@@ -113,6 +113,31 @@ class TimingLedgerTest(unittest.TestCase):
         )
         self.assertEqual(timing_ledger_path(dry_run_args)[0], None, "只读 dry-run 没有输出锚点时不写账本")
 
+    def test_anchors_inside_a_plan_all_use_the_plan_root_ledger(self) -> None:
+        # UM-25：同一 Plan 的命令无论锚点在 evidence、inputs 还是 Plan 工作树里，都写 Plan 根的账本。
+        plan_root = self.root / "v0.2.13-20261004-001"
+        worktree = plan_root / "worktree"
+        worktree.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=worktree, check=True)
+        parser = build_parser()
+        expected = (plan_root / TIMING_LEDGER_NAME, None)
+        plan_args = parser.parse_args(["plan-validate", "--plan", str(plan_root / "evidence" / "plan.json")])
+        self.assertEqual(timing_ledger_path(plan_args), expected)
+        request_args = parser.parse_args(
+            ["preflight", "--request", str(plan_root / "inputs" / "request.json"), "--repository", str(self.root)]
+        )
+        self.assertEqual(timing_ledger_path(request_args), expected)
+        output = worktree / "docs" / "egress" / "maintenance" / "receipt.json"
+        output.parent.mkdir(parents=True)
+        code, stderr = _run_main(["identity-seal", "--input", str(self.draft), "--output", str(output)])
+        self.assertEqual(code, 0, stderr)
+        # 收据写进 Plan 工作树时，账本落在 Plan 根（工作树之外），不再漏记。
+        self.assertEqual([row["command"] for row in _ledger_rows(plan_root / TIMING_LEDGER_NAME)], ["identity-seal"])
+        self.assertFalse((output.parent / TIMING_LEDGER_NAME).exists())
+        # 只是名字像 Plan、并不存在的目录不算。
+        ghost = parser.parse_args(["plan-validate", "--plan", "/nonexistent/v0.2.13-20261004-002/evidence/plan.json"])
+        self.assertEqual(timing_ledger_path(ghost)[0], Path("/nonexistent/v0.2.13-20261004-002/evidence") / TIMING_LEDGER_NAME)
+
     def test_inferred_ledger_inside_git_worktree_is_skipped(self) -> None:
         repository = self.root / "repository"
         repository.mkdir()

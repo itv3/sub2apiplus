@@ -483,7 +483,7 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | 模板有效性 | 与标准模板比对 schema 版本、门禁定义、执行组模式、Persona，以及 Active/Rollback 在当前 release catalog 中的绑定 |
 | 闭集受扰清单 | 上游对 §5.2.4 第 3 条闭集文件的改动，U-1 前决定处置 |
 | 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作 |
-| 扫描器覆盖 | 在 `-X ours` 试扫描树上列出尚未在主干预先登记的上游新增发送点（含缺分类规则的），有冲突也照常输出；须在 `plan-create` 前按 `reviewedPostBootstrapSinkAdditions` 预先登记并重封基线，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树发送点集合的差异 |
+| 扫描器覆盖 | 在 `-X ours` 试扫描树上列出尚未在主干预先登记的上游新增发送点（含缺分类规则的），有冲突也照常输出；须在 `plan-create` 前按 `reviewedPostBootstrapSinkAdditions` 预先登记并重封基线：报告旁同时写出可 `git apply` 的登记补丁（分类规则、登记条目、承接收据变量与扫描器算法后继）与 notes，改说明文字只改 notes 再用 `sink-registration-draft --notes` 重新生成；范围内发送点须人工登记，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树发送点集合的差异 |
 | CI 作业覆盖 | 上游在 merge-base 与目标 tag 之间新增、删除或改动的 CI 作业及其命令，逐个对照 `tools/upstream_merge/ci_job_coverage.json` 登记的本机检查线或只在 CI 跑；候选 CI 会运行却未登记的作业（含 fork 自身未登记的）阻断，须在 `plan-create` 前决定纳入本机门禁或登记为只在 CI 跑；只在 CI 跑的作业在试验 worktree 先执行一次其命令 |
 
 预检通过后仍必须重新执行 U-0，不能把预检报告当作 U-0 收据。
@@ -590,11 +590,13 @@ U-4 的结果只有三种出口：
    覆盖的路径生成“已登记摘要 → 当前摘要”的边；前序摘要未登记即链断裂，fail-close。收据的自摘要采用
    Python 工作区门禁的算法，`--after` 指向源码提交；Codex CLI 0.151 worktree successor 门禁按 schema
    读取全部 freeze successor 收据，不必再登记显式列表，也不必用 `--extra-worktree-path` 追加门禁文件。
-   `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（ARM64 受管工具
-   摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时写入
-   `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认。修改注册表不属于
-   工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点由 service、officialegress 两包
-   的通用冻结测试逐个复算（glob `upstream-v*-source-transition.json`），新合并的节点无需再写测试。
+   `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（ARM64 受监督部署
+   脚本的两个文件摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时写入
+   `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认，其路径由
+   `candidate_test_trace.DEFAULT_MAPPING_RELATIVE_PATH` 指向的当前 fact map 动态解析，随换版自动跟随。
+   修改注册表不属于工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点由 service、
+   officialegress 两包的通用冻结测试逐个复算（glob `upstream-v*-source-transition.json`），新合并的
+   节点无需再写测试。
 
    `source-transition` 生成节点、`source-transition-validate` 校验链尾；路径、状态与两端摘要一律由
    Git 复算，删除和重命名保留前后路径，历史节点不改写，修复只追加 successor。前序链不连续时不要强接
@@ -618,8 +620,9 @@ U-4 的结果只有三种出口：
    变化文件数写入 Plan。废弃 Plan 的 worktree/evidence 只在完成留档和审计确认后
    清理，不得用清理动作替代收据。
 5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`：命令、参数、起止时间、
-   耗时、结果与错误。默认落点是 Plan 目录，其次是输出或收据所在目录；推断路径落在 Git 工作树内时
-   不写并提示，用 `--timing-ledger` 指定 Plan 目录即可；账本写入失败时成功的命令也按系统错误返回。
+   耗时、结果与错误。输出、计划、请求等路径位于某个 Plan 目录（含其 evidence、inputs 与 Plan 工作树）
+   之下时一律写该 Plan 根的账本；不在 Plan 之下时写输出或收据所在目录，落在 Git 工作树内时不写并提示，
+   用 `--timing-ledger` 指定即可；账本写入失败时成功的命令也按系统错误返回。
    账本无缺口是发版前置条件之一，不得在合并结束后补写。
 
 ## 5.3 官方客户端升级

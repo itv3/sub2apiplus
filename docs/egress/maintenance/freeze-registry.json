@@ -1,6 +1,6 @@
 {
-  "identity_sha256": "0db09d7c39ae5bf8e6c2a3474e85aea1caebe2ba6021451597eb2d389630432e",
-  "issued_at_utc": "2026-09-10T10:00:00Z",
+  "identity_sha256": "db485dce18db5a07db8884006c525e0a73cb0b377ef279f713c94db585f5f422",
+  "issued_at_utc": "2026-10-04T07:49:01Z",
   "policy": {
     "chain_policy": "只承接已登记摘要到当前摘要的精确边；前序摘要不在已登记集合中即链断裂，工具 fail-close，不得凭空补边。",
     "generic_graph": "docs/egress/maintenance/*.json 中 schema_version 含 successor、transition、ledger 或 receipt 的收据参与抽边；任何带非空 path 与 reason 的对象按 predecessor_sha256s、predecessor_sha256、from_sha256、before.sha256 到 to_sha256、current_sha256、head_sha256、after.sha256 抽取显式边；after 含 existence 的收据视为已封存快照，该路径全部已登记摘要都可承接到快照。",
@@ -12,26 +12,14 @@
     {
       "action": {
         "file": "tools/arm64_supervised_deploy.py",
-        "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+        "instruction": "用 tools/arm64_supervised_deploy.py 的 file_sha256() 重算 DEFAULT_SUPERVISOR_DIGEST（codex_upgrade_supervisor.py）与 DEFAULT_ASSERTION_PREPARER_DIGEST（prepare_assertion_bundle.sh）并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
         "kind": "script_constant"
       },
-      "description": "ARM64 受监督部署脚本内置 official_client_capture 工具树摘要，只覆盖 .py/.sh/.json 且排除 tests、versions 与 __pycache__。",
+      "description": "ARM64 受监督部署脚本内置的两个文件摘要常量：DEFAULT_SUPERVISOR_DIGEST（codex_upgrade_supervisor.py）与 DEFAULT_ASSERTION_PREPARER_DIGEST（prepare_assertion_bundle.sh）。整树摘要自 A2-3 起由暂存树自算，不再有 DEFAULT_TOOL_DIGEST，其余受管工具改动不需要改常量（UM-25 收窄）。",
       "id": "arm64-managed-tool-digests",
       "match": {
-        "exclude_prefixes": [
-          "tools/official_client_capture/tests/",
-          "tools/official_client_capture/versions/"
-        ],
-        "exclude_suffixes": [
-          ".md",
-          ".txt",
-          ".mjs",
-          ".yaml",
-          ".yml",
-          ".toml"
-        ],
-        "prefixes": [
-          "tools/official_client_capture/",
+        "paths": [
+          "tools/official_client_capture/codex_upgrade_supervisor.py",
           "tools/prepare_assertion_bundle.sh"
         ]
       },
@@ -42,7 +30,7 @@
     {
       "action": {
         "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
-        "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。",
+        "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。合并前预先登记上游新增发送点时，预检写出的登记补丁（sink-registration-draft）已含这一跳。",
         "kind": "single_hop_file"
       },
       "description": "egressscan -mode check 只认单跳的 scanner-algorithm-successor.json 承接扫描器算法摘要。",
@@ -62,28 +50,17 @@
     },
     {
       "action": {
-        "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+        "file": "tools/official_client_capture/candidate_test_trace.py",
         "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
         "kind": "manual_required"
       },
-      "description": "candidate_test_fact_map_0_151_0.json 与 candidate_test_trace.py 冻结的 13 个源码快照属于 Codex CLI 0.151 Campaign 工具身份。",
-      "id": "codex-0151-campaign-fact-map",
+      "description": "当前 Campaign 目标版本 fact map 冻结的测试文件与源码快照属于 Codex Campaign 工具身份；路径由 candidate_test_trace.DEFAULT_MAPPING_RELATIVE_PATH 指向的 fact map 动态解析，随 Codex 换版自动跟随（原规则写死 0.151 的 13 个源码路径，UM-25 改为跟随）。",
+      "id": "codex-campaign-fact-map",
       "match": {
-        "paths": [
-          "backend/internal/repository/http_upstream.go",
-          "backend/internal/service/official_egress_codex_0145_profile.go",
-          "backend/internal/service/official_egress_codex_engine.go",
-          "backend/internal/service/official_egress_codex_files.go",
-          "backend/internal/service/official_egress_codex_integration.go",
-          "backend/internal/service/official_egress_integration.go",
-          "backend/internal/service/official_egress_openai_http.go",
-          "backend/internal/service/official_egress_openai_ws.go",
-          "backend/internal/service/openai_alpha_search.go",
-          "backend/internal/service/openai_gateway_forward.go",
-          "backend/internal/service/openai_live.go",
-          "backend/internal/service/openai_ws_client.go",
-          "backend/internal/service/openai_ws_forwarder_payload.go"
-        ]
+        "fact_map_of": {
+          "constant": "DEFAULT_MAPPING_RELATIVE_PATH",
+          "module": "tools/official_client_capture/candidate_test_trace.py"
+        }
       },
       "verification": [
         "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"

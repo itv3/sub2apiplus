@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Sequence
@@ -303,6 +304,43 @@ def _worktree_digest(repository_root: Path, relative: str) -> str | None:
     return sha256_file(path)
 
 
+def _fact_map_paths(root: Path, spec: Any, label: str) -> list[str]:
+    """按“模块里的路径常量 → fact map”解析当前 fact map 覆盖的测试文件与源码文件。
+
+    Campaign fact map 随 Codex 换版换文件，写死路径清单的旧规则停在 0.151 没人改（v0.2.13 合并时才发现）。
+    改为登记“哪个模块的哪个常量指向当前 fact map”，规则随常量自动跟随；常量或 fact map 读不到即 fail-close。
+    """
+
+    spec = expect_object(spec, label)
+    module, constant = spec.get("module"), spec.get("constant")
+    if not isinstance(module, str) or not isinstance(constant, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", constant):
+        raise UpstreamMergeError(f"{label} 必须给出 module 与大写常量名")
+    module_path = root / Path(*safe_relative_path(module, f"{label}.module").split("/"))
+    if module_path.is_symlink() or not module_path.is_file():
+        raise UpstreamMergeError(f"{label} 模块不存在：{module}")
+    found = re.search(rf'^{constant}\s*=\s*\(?\s*"([^"\n]+)"', module_path.read_text(encoding="utf-8"), re.MULTILINE)
+    if found is None:
+        raise UpstreamMergeError(f"{label} 在 {module} 中找不到字符串常量 {constant}")
+    mapping_relative = safe_relative_path(found.group(1), f"{label} 指向的 fact map")
+    mapping_path = root / Path(*mapping_relative.split("/"))
+    if mapping_path.is_symlink() or not mapping_path.is_file():
+        raise UpstreamMergeError(f"{label} 指向的 fact map 不存在：{mapping_relative}")
+    mapping = expect_object(load_json(mapping_path, "fact map"), "fact map")
+    tests = mapping.get("tests")
+    if not isinstance(tests, list) or not tests:
+        raise UpstreamMergeError(f"fact map tests 必须是非空数组：{mapping_relative}")
+    paths: set[str] = set()
+    for test_index, raw in enumerate(tests):
+        test = expect_object(raw, f"fact map tests[{test_index}]")
+        sources = test.get("source_files")
+        if not isinstance(sources, list) or not sources:
+            raise UpstreamMergeError(f"fact map tests[{test_index}].source_files 必须是非空数组")
+        candidates = [test.get("test_file")] + [expect_object(item, "fact map source").get("path") for item in sources]
+        for candidate in candidates:
+            paths.add(safe_relative_path(candidate, f"fact map tests[{test_index}] 路径"))
+    return sorted(paths)
+
+
 def load_freeze_registry(repository_root: Path) -> dict[str, Any]:
     """读取并校验冻结台账注册表；缺失或身份漂移都 fail-close。"""
 
@@ -325,6 +363,11 @@ def load_freeze_registry(repository_root: Path) -> dict[str, Any]:
             raise UpstreamMergeError(f"FreezeRegistry.rules[{index}].id 非法或重复")
         seen.add(rule_id)
         match = expect_object(rule.get("match"), f"FreezeRegistry.rules[{index}].match")
+        if "fact_map_of" in match:
+            # 路径随当前 fact map 自动跟随（UM-25）：解析结果并进 paths，只用于本次匹配，不回写注册表。
+            resolved = _fact_map_paths(root, match["fact_map_of"], f"FreezeRegistry.rules[{index}].match.fact_map_of")
+            match = {**match, "paths": sorted(set(match.get("paths") or []) | set(resolved))}
+            rule["match"] = match
         if not any(isinstance(match.get(key), list) and match[key] for key in ("prefixes", "paths", "receipt_paths")):
             raise UpstreamMergeError(f"FreezeRegistry.rules[{index}].match 没有任何匹配条件")
         action = expect_object(rule.get("action"), f"FreezeRegistry.rules[{index}].action")
