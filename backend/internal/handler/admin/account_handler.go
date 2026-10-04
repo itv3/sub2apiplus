@@ -27,6 +27,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/typesafe"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -3026,6 +3027,11 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 			})
 		}
 		return models
+	}
+
+	// TypeSafe 账号只服务 System One 原生模型（上游合并新增；我方此处是返回模型列表的辅助函数）。
+	if account.IsTypeSafe() {
+		return []claude.Model{{ID: typesafe.JevLatestModel, Type: "model", DisplayName: typesafe.JevLatestModel}}
 	}
 
 	// Handle Claude/Anthropic accounts

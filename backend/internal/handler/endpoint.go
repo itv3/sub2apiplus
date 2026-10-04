@@ -17,6 +17,7 @@ import (
 
 const (
 	EndpointMessages             = gatewayendpoint.Messages
+	EndpointSystemOne            = gatewayendpoint.SystemOne
 	EndpointChatCompletions      = gatewayendpoint.ChatCompletions
 	EndpointEmbeddings           = gatewayendpoint.Embeddings
 	EndpointAlphaSearch          = gatewayendpoint.AlphaSearch
@@ -125,6 +126,9 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 
 	case service.PlatformAnthropic:
 		return EndpointMessages
+
+	case service.PlatformTypeSafe:
+		return EndpointSystemOne
 
 	case service.PlatformGemini:
 		return EndpointGeminiModels

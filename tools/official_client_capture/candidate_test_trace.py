@@ -136,8 +136,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-03（0.160.0 VC-4 候选实现）：候选按画像 ReasoningEffort 节定型数字推理档位，改动已登记的
 # `official_egress_openai_http.go` 与 `official_egress_openai_turn_metadata_section.go`；映射只重绑这两份源码快照，
 # 不改变测试、事实宇宙或规则语义（PROTO-002、EP-002、EP-019 按网关口径 inherit，不新增事实）。
+# 2026-10-04（合并上游 v0.2.13）：上游在 `repository/http_upstream.go` 的 Grok CLI 代理头里加 x-grok-client-mode 与
+# x-authenticateresponse 两个请求头（共 4 行，只作用于 Grok 请求）；映射只重绑该源码快照，不改变测试、事实或规则语义。
 FROZEN_MAPPING_SHA256 = (
-    "3ad0a8d6e0271c320feabf0186439264333f4ef1be7868a494c18bbcbed4b66f"
+    "e6ecc2b0c9149334700baab5cb1b5ecb97acffaef96dbd0500629d219c781ed3"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

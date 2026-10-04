@@ -1109,6 +1109,10 @@ func TestDefaultCodexModelIDsForPlatform_DeepSeekUsesDeepSeekModels(t *testing.T
 	require.Equal(t, defaultModelIDsForPlatform(service.PlatformAnthropic), defaultCodexModelIDsForPlatform(service.PlatformAnthropic))
 }
 
+func TestDefaultModelIDsForPlatform_TypeSafeUsesJev(t *testing.T) {
+	require.Equal(t, []string{"jev-latest"}, defaultModelIDsForPlatform(service.PlatformTypeSafe))
+}
+
 func TestGatewayCodexModels_DeepSeekWithoutMappingUsesDeepSeekDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const groupID int64 = 130
@@ -1679,9 +1683,9 @@ func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t
 		restricted bool
 		want       []string
 	}{
-		{"selected and ordered", []string{"gpt-6-luna", "gpt-6-sol"}, false, []string{"gpt-6-luna", "gpt-6-sol"}},
+		{"selected and ordered", []string{"gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol"}, false, []string{"gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol"}},
 		{"group excludes new models", []string{"gpt-5.6-sol"}, false, []string{"gpt-5.6-sol"}},
-		{"account restricts new models", []string{"gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"}, true, []string{"gpt-5.6-sol"}},
+		{"account restricts new models", []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"}, true, []string{"gpt-5.6-sol"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			groupID := int64(25)
@@ -1701,4 +1705,73 @@ func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t
 			require.Equal(t, tc.want, modelIDsForTest(got.Data))
 		})
 	}
+}
+
+// 场景：jev-latest 只能经 /v1/systemone 使用。我方组合分组按账号实际协议分目录列模型
+// （见 TestGatewayModels_CompositeFiltersModelsByActualAccountProtocol）：通用（OpenAI 兼容）目录
+// 在有可调度 TypeSafe 账号时按上游语义列出 jev-latest；Anthropic 协议目录（Claude 客户端）与
+// Codex 清单都不列；Anthropic 账号只进入 Anthropic 目录。
+func TestGatewayModels_CompositeTypeSafeListingScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(66)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+		byGroup: map[int64][]service.Account{
+			groupID: {
+				{ID: 1, Platform: service.PlatformAnthropic},
+				{ID: 2, Platform: service.PlatformTypeSafe, Type: service.AccountTypeAPIKey},
+				{
+					ID:          3,
+					Platform:    service.PlatformOpenAI,
+					Type:        service.AccountTypeAPIKey,
+					Credentials: map[string]any{"model_mapping": map[string]any{"gpt-native": "gpt-native"}},
+				},
+			},
+		},
+	})
+	newContext := func(path string, anthropic bool) (*gin.Context, *httptest.ResponseRecorder) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		if anthropic {
+			c.Request.Header.Set("Anthropic-Version", "2023-06-01")
+		}
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+			Group: &service.Group{ID: groupID, Platform: service.PlatformComposite},
+		})
+		return c, rec
+	}
+	listModels := func(anthropic bool) []string {
+		c, rec := newContext("/v1/models", anthropic)
+		h.Models(c)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var models gatewayModelsResponseForTest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &models))
+		return modelIDsForTest(models.Data)
+	}
+
+	openAIModels := listModels(false)
+	require.Contains(t, openAIModels, "jev-latest")
+	require.Contains(t, openAIModels, "gpt-native")
+	require.NotContains(t, openAIModels, "claude-opus-4-6")
+
+	anthropicModels := listModels(true)
+	require.Contains(t, anthropicModels, "claude-opus-4-6")
+	require.NotContains(t, anthropicModels, "jev-latest")
+	require.NotContains(t, anthropicModels, "gpt-native")
+
+	c, rec := newContext("/models?client_version=0.147.0", false)
+	h.CodexModels(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var manifest codexModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &manifest))
+	slugs := codexModelSlugsForTest(manifest.Models)
+	require.Contains(t, slugs, "gpt-native")
+	require.NotContains(t, slugs, "jev-latest")
+	require.NotContains(t, slugs, "claude-opus-4-6")
+}
+
+func TestDefaultModelIDsForPlatform_CompositeFallbackExcludesTypeSafe(t *testing.T) {
+	require.NotContains(t, defaultModelIDsForPlatform(service.PlatformComposite), "jev-latest")
+	require.NotContains(t, defaultCodexModelIDsForPlatform(service.PlatformComposite), "jev-latest")
 }

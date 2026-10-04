@@ -8,6 +8,7 @@ import "strings"
 const (
 	Messages             = "/v1/messages"
 	MessagesCountTokens  = "/v1/messages/count_tokens"
+	SystemOne            = "/v1/systemone"
 	ChatCompletions      = "/v1/chat/completions"
 	Embeddings           = "/v1/embeddings"
 	AlphaSearch          = "/v1/alpha/search"
@@ -43,6 +44,9 @@ func NormalizeInboundEndpoint(path string) string {
 		return MessagesCountTokens
 	case strings.Contains(path, Messages):
 		return Messages
+	// TypeSafe／Jev 的 System One 原生端点（上游合并新增），与上游 handler 同序放在 Messages 之后。
+	case strings.Contains(path, SystemOne):
+		return SystemOne
 	case strings.Contains(path, ImagesGenerations) || strings.Contains(path, "/images/generations"):
 		return ImagesGenerations
 	case strings.Contains(path, ImagesEdits) || strings.Contains(path, "/images/edits"):
