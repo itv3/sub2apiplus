@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -304,6 +305,13 @@ class UploadHeartbeatTests(unittest.TestCase):
 class ResumeInputTests(unittest.TestCase):
     """只替换 Campaign 读取与镜像工具查询；真实摘要、严格装配和统一收据 producer 不打桩。"""
 
+    @classmethod
+    def setUpClass(cls):
+        cls.history_temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.history_temporary.cleanup)
+        cls.history = Path(cls.history_temporary.name).resolve() / "history"
+        driver_tests._history_repo(cls.history, commits=10001)
+
     def setUp(self):
         previous_umask = os.umask(0o022)
         self.addCleanup(os.umask, previous_umask)
@@ -311,7 +319,17 @@ class ResumeInputTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         self.case = case
-        root = case.root.resolve()
+        # A-02 合同按数据根／Candidate 定位，并要求真实完整历史；新收据仍经过正式校验。
+        original_root = case.root
+        data_root = original_root.resolve() / "managed-data"
+        root = data_root / "candidates" / build_tests.CANDIDATE_ID
+        root.mkdir(parents=True)
+        for path in original_root.iterdir():
+            if path.resolve() != data_root:
+                path.rename(root / path.name)
+        for name, path in list(vars(case).items()):
+            if isinstance(path, Path) and path.is_relative_to(original_root):
+                setattr(case, name, root / path.relative_to(original_root))
         self.root = root
         (root / "artifacts").mkdir()
         case.context.rename(root / "artifacts/ctx")
@@ -330,8 +348,8 @@ class ResumeInputTests(unittest.TestCase):
         (source / "Dockerfile.goreleaser").write_text("ARG ALPINE_IMAGE=alpine:3.21\nARG POSTGRES_IMAGE=postgres:18-alpine\nFROM ${ALPINE_IMAGE}\n")
         for path in source.rglob("*"):
             path.chmod(0o755 if path.is_dir() or path.suffix == ".sh" else 0o644)
-        self.git("init", "-q", cwd=source)
-        self.git("-c", "user.name=测试", "-c", "user.email=test@example.invalid", "add", ".", cwd=source)
+        shutil.copytree(self.history / ".git", source / ".git")
+        self.git("-c", "user.name=测试", "-c", "user.email=test@example.invalid", "add", "-A", cwd=source)
         self.git("-c", "user.name=测试", "-c", "user.email=test@example.invalid", "commit", "-qm", "夹具源码", cwd=source)
         self.commit = self.git("rev-parse", "HEAD", cwd=source)
         for name in ("build-tree", "gate-tree", "plan-source"):
@@ -345,7 +363,11 @@ class ResumeInputTests(unittest.TestCase):
         shutil.copytree(case.dist_source, root / "build-tree/backend/internal/web/dist")
         case._copy_file(source / "Dockerfile.goreleaser", case.context / "Dockerfile")
         case._copy_file(source / "backend/resources/models.json", case.context / "backend/resources/models.json")
-        self.env = {"B": str(root), "C": self.commit, "CAND": build_tests.CANDIDATE_ID, "UP": "fixture-upgrade",
+        bundle = root / "source.bundle"
+        self.git("bundle", "create", str(bundle), "--all", cwd=source)
+        self.env = {"D": str(data_root), "NEW": "fixture-campaign", "BUNDLE": str(bundle),
+                    "VC4_BUILD_NETWORK": "default", "VC4_BUILD_NETWORK_APPROVAL": "",
+                    "B": str(root), "C": self.commit, "CAND": build_tests.CANDIDATE_ID, "UP": "fixture-upgrade",
                     "FRONTEND_DEVIATION_APPROVED_BY": "测试授权"}
         env_patch = mock.patch.dict(os.environ, self.env)
         env_patch.start()
@@ -387,7 +409,14 @@ class ResumeInputTests(unittest.TestCase):
         self.evidence = root / "evidence"
         self.evidence.mkdir(mode=0o700)
         (self.evidence / "logs").mkdir()
+        resume.vc4_contract.record_trees(root, self.env, "regenerated_missing")
         self.current = resume.inputs()
+        before = self.evidence / "pre-build.json"
+        resume.write_once(before, {"schema_version": resume.SCHEMA, "stage": "pre-build", "inputs": self.current})
+        (root / "artifacts/docker-build.log").write_text("隔离构建夹具：exit_code=0\n")
+        resume.vc4_contract.record_network(root, self.env, before, exit_code=0, image_id=build_tests.IMAGE_ID,
+            started_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            command=["docker", "build", str(root / "artifacts/ctx")])
         tree = self.current["tree_sha256"]["source"]
         (self.evidence / "logs/implementation.log").write_text(
             f"commit={self.commit}\ngate_tree_sha256={tree}\n" + "exit_code=0\n"*5 +
@@ -501,6 +530,20 @@ class ResumeInputTests(unittest.TestCase):
         checkpoint.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, "摘要"):
             resume.verify(self.evidence, "upload-wait")
+
+    def test_preparation_and_network_receipts_are_required_during_resume(self):
+        """夹具补齐后仍逐项验证新增收据不可缺失，防止回归用例绕过 A-02 前置合同。"""
+        self.checkpoint()
+        for path in (self.root / "tree-preparation.json", self.root / "artifacts/build-network-receipt.json",
+                     self.evidence / "pre-build.json", self.root / "artifacts/docker-build.log"):
+            with self.subTest(path=path.name):
+                held = path.with_name(path.name + ".held")
+                path.rename(held)
+                try:
+                    with self.assertRaises((ValueError, OSError)):
+                        resume.verify(self.evidence, "upload-wait")
+                finally:
+                    held.rename(path)
 
 
 if __name__ == "__main__":
