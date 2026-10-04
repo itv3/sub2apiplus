@@ -263,6 +263,24 @@ class BackgroundValidationTests(unittest.TestCase):
         self.wait(results[0]["result"])
         self.assertEqual(self.calls.read_text().splitlines().count(COMMIT_A), 1)
 
+    def test_explicit_work_must_bind_current_commit_and_deployment(self):
+        sha = bv.latest_deployment(self.data)["sha256"]
+        parent = self.runroot / "background-validation/work"
+        for work in (parent / "shared", parent / f"{COMMIT_B}-{sha}", parent / f"{COMMIT_A}-{'0'*64}"):
+            result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
+                "--work", str(work), "--entry-gates", str(self.gates))
+            self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.calls.exists())
+        work = parent / f"{COMMIT_A}-{sha}" / "approved-isolation"
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+            "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
+            "--work", str(work), "--entry-gates", str(self.gates))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.wait(json.loads(result.stdout)["result"])
+        self.assertEqual(payload["status"], "passed")
+        self.assertEqual(payload["work"], str(work))
+
 
 if __name__ == "__main__":
     unittest.main()

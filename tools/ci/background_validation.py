@@ -241,11 +241,12 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
     path = result_path(args.runroot, args.commit, deployment)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
     isolated_root = Path(args.runroot) / DIRECTORY / "work"
-    work = args.work or isolated_root / f"{args.commit}-{deployment['sha256']}"
+    bound_root = isolated_root / f"{args.commit}-{deployment['sha256']}"
+    work = args.work or bound_root
     work = Path(work)
-    if (not work.is_absolute() or ".." in work.parts or not work.is_relative_to(isolated_root)
-            or work == isolated_root or any(item.is_symlink() for item in (work, *work.parents))):
-        raise ValidationError("后台工作目录必须在本轮 background-validation/work 的独立子目录中")
+    if (not work.is_absolute() or ".." in work.parts or not work.is_relative_to(bound_root)
+            or any(item.is_symlink() for item in (work, *work.parents))):
+        raise ValidationError("后台工作目录必须绑定本轮完整提交和部署摘要，不得共用其它轮次目录")
     if Path(args.bundle).is_symlink() or not Path(args.bundle).is_file():
         raise ValidationError("后台验证 bundle 必须是普通文件")
     inputs = {"bundle_sha256": _sha256_file(args.bundle), "branch": args.branch, "profile": args.profile,
@@ -321,15 +322,16 @@ def run(result: Path) -> int:
     expected_caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"), "GOTMPDIR": str(work / "go-tmp")}
     try:
         isolated_root = Path(payload["runroot"]) / DIRECTORY / "work"
+        bound_root = isolated_root / f"{payload['commit']}-{payload['deployment']['sha256']}"
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
-                or not work.is_relative_to(isolated_root) or work == isolated_root or ".." in work.parts):
+                or not work.is_relative_to(bound_root) or ".." in work.parts):
             raise ValidationError("后台缓存合同缺失或发生漂移")
         for value in expected_caches.values():
             directory = Path(value)
             if any(item.is_symlink() for item in (directory, *directory.parents)):
                 raise ValidationError("后台缓存目录不得含符号链接")
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except (OSError, ValidationError) as error:
+    except (OSError, ValidationError, KeyError, TypeError) as error:
         _write(path, {**payload, "status": "aborted", "completed_at_utc": _utc_now(), "reason": str(error), "returncode": 3})
         return 3
     environment.update(expected_caches)
@@ -428,7 +430,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--commit", required=True)
     p_start.add_argument("--profile", default=DEFAULT_PROFILE)
     p_start.add_argument("--record-store", type=Path, default=None)
-    p_start.add_argument("--work", type=Path, default=None, help="本轮 background-validation/work 下的独立目录；缺省按提交及部署摘要派生")
+    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_start.add_argument("--then-dryrun", action="store_true", help="通过之后接着空跑入口到 pre-A3（E4-02）")
