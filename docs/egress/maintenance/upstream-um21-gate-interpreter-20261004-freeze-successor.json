@@ -1,0 +1,60 @@
+{
+  "base_commit": "c4503da412066fcc57af43d122b3bdbd54fa4be0",
+  "changed_path_count": 4,
+  "current_commit": "e294da8da9baacf0720805632663bfbf367a6f72",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5598,
+  "frozen_path_count": 2015,
+  "identity_sha256": "d665222d1c9b928363f490f317d52d65bb2b7c1f0d1962c389676fcd0ef6c769",
+  "issued_at_utc": "2026-10-04T07:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-um21-gate-interpreter-20261004-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "8caf48844df0743b4fe153c74075a28321135f062c4dfb133f53f83b00a8ed4f"
+      ],
+      "reason": "上游合并提速 UM-21：门禁 PATH 命令的可执行文件身份改按收据记录的解析路径复核（文件仍在、摘要与大小不变），不再随调用者 PATH 重新解析；ARM64 驱动树外字节码预编译与执行器同用固定 PATH 下的解释器。只改上游合并工具与抓包驱动脚本，不改变官方客户端画像、Persona、wire 或生产代码 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um17-source-transition-issued-at-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "92d080bb232c1c323137e471a97c630ec6c97a37e173e766a1eb705475c18579"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/entry-gates.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/upstream_merge/tests/test_gate_executable.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
