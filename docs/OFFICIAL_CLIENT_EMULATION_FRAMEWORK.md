@@ -420,6 +420,10 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
    和生产部署都只能由受管工具按阶段执行，人工不得插手。CI 结果不能代替 U-4 收据；本机没有 Docker
    时，integration 证据由工具按候选提交 SHA 绑定作业清单完整的 CI 运行补齐（见下文 U-4）。
 
+合并节奏：官方客户端升级在 VC-6（§5.3.2）收口后先清上游积压；积压达到 2 个上游版本 tag，或最早未合并的
+tag 发布已超过 14 天时，下一次官方客户端升级的 VC-0 之前必须先完成合并。紧急客户端修复不受此限。积压
+越久冲突越多：v0.2.5～v0.2.10 期间主干与各 tag 一次合并的冲突文件数随积压从 37 升到 77。
+
 ### 5.2.1 升级前基线验收（权威）
 
 基线验收回答“升级前这棵树的功能事实和证据事实分别是什么”。它在主仓库干净工作树上执行，收据写入
@@ -482,7 +486,7 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | 冲突闭集 | 冲突文件数与路径、上游变化文件总数，写入 Plan |
 | 模板有效性 | 与标准模板比对 schema 版本、门禁定义、执行组模式、Persona，以及 Active/Rollback 在当前 release catalog 中的绑定 |
 | 闭集受扰清单 | 上游对 §5.2.4 第 3 条闭集文件的改动，U-1 前决定处置 |
-| 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作 |
+| 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作；命中 Campaign fact map 规则的文件，在 `plan-create` 前把它们的上游 diff 一次汇总给老板确认，确认后按注册表规则处理 fact map 与 trace 快照，不等到台账阶段才停下 |
 | 扫描器覆盖 | 在 `-X ours` 试扫描树上列出尚未在主干预先登记的上游新增发送点（含缺分类规则的），有冲突也照常输出；须在 `plan-create` 前按 `reviewedPostBootstrapSinkAdditions` 预先登记并重封基线：报告旁同时写出可 `git apply` 的登记补丁（分类规则、登记条目、承接收据变量与扫描器算法后继）与 notes，改说明文字只改 notes 再用 `sink-registration-draft --notes` 重新生成；范围内发送点须人工登记，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树发送点集合的差异 |
 | CI 作业覆盖 | 上游在 merge-base 与目标 tag 之间新增、删除或改动的 CI 作业及其命令，逐个对照 `tools/upstream_merge/ci_job_coverage.json` 登记的本机检查线或只在 CI 跑；候选 CI 会运行却未登记的作业（含 fork 自身未登记的）阻断，须在 `plan-create` 前决定纳入本机门禁或登记为只在 CI 跑；只在 CI 跑的作业在试验 worktree 先执行一次其命令 |
 
@@ -586,7 +590,9 @@ U-4 的结果只有三种出口：
    以此验证重放准确；
 4. 冲突决策可沿用上一 Plan 的理由并追加重放说明，但处置类型必须按新 index 对象重新判定。
 
-预防：开工前确认最近一次发版的 VERSION 同步已完成；U-4 通过后尽快执行 U-6，不要跨夜留置。
+预防：开工前确认最近一次发版的 VERSION 同步已完成；`plan-create` 到 U-6 期间不打发版 tag，其他非紧急
+操作也不推进受维护分支。紧急客户端修复例外：先把当前 Plan 推进到 U-6 再发修复，来不及时停线，修复落
+主干后按上面第 3 步新建 Plan 重放。U-4 通过后尽快执行 U-6，不要跨夜留置。
 
 ### 5.2.4 revision、工具闭集和长期台账
 
@@ -602,7 +608,8 @@ U-4 的结果只有三种出口：
    读取全部 freeze successor 收据，不必再登记显式列表，也不必用 `--extra-worktree-path` 追加门禁文件。
    `docs/egress/maintenance/freeze-registry.json` 只登记通用图之外仍需额外动作的台账（ARM64 受监督部署
    脚本的两个文件摘要常量、scanner-algorithm-successor 单跳文件、Campaign fact map），命中时写入
-   `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认，其路径由
+   `required_manual_actions`；Campaign fact map 固定 `manual_required`，须老板确认（§5.2.2 预检在
+   `plan-create` 前列出命中，集中确认一次），其路径由
    `candidate_test_trace.DEFAULT_MAPPING_RELATIVE_PATH` 指向的当前 fact map 动态解析，随换版自动跟随。
    修改注册表不属于工具闭集变化，但必须重新 `identity-seal`。`source-transition` 节点由 service、
    officialegress 两包的通用冻结测试逐个复算（glob `upstream-v*-source-transition.json`），新合并的
