@@ -62,6 +62,7 @@ class BackgroundValidationTests(unittest.TestCase):
         self.runroot.mkdir()
         self.gates = self.root / "entry-gates.sh"
         self.gates.write_text(FAKE_ENTRY_GATES, encoding="utf-8")
+        (self.root / "x.bundle").write_bytes(b"isolated-bundle")
         self.calls = self.root / "calls.log"
         self.receipt = self.deploy("20261003t000000z")
         self.environ = {"FAKE_GATES_CALLS": str(self.calls), "FAKE_GATES_RECEIPT": str(self.receipt)}
@@ -192,6 +193,13 @@ class BackgroundValidationTests(unittest.TestCase):
         self.assertIn("部署在验证途中换了", payload["reason"])
         self.assertEqual(self.boundary()[0], 3)
 
+    def test_deployment_evidence_removed_during_run_records_aborted(self):
+        started = self.start(COMMIT_A, FAKE_GATES_SLEEP="0.3")
+        self.receipt.unlink()
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "aborted", payload)
+        self.assertIn("部署在验证途中换了", payload["reason"])
+
     def test_vanished_runner_counts_as_no_result_and_can_be_restarted(self) -> None:
         deployment = bv.latest_deployment(self.data)
         path = bv.result_path(self.runroot, COMMIT_A, deployment)
@@ -212,6 +220,48 @@ class BackgroundValidationTests(unittest.TestCase):
 
     def test_driver_carries_an_identical_copy(self) -> None:
         self.assertEqual(DRIVER_COPY.read_bytes(), MODULE.read_bytes())
+
+    def test_background_uses_independent_go_caches_despite_inherited_environment(self):
+        # 真实后台子进程写出实际环境；前台清理只删除继承的旧缓存，后台仍完整通过。
+        self.gates.write_text(FAKE_ENTRY_GATES.replace('sleep "${FAKE_GATES_SLEEP:-0}"',
+            'mkdir -p "$GOCACHE" "$GOMODCACHE" "$GOTMPDIR"\n'
+            'printf "%s\\n" "$GOCACHE" "$GOMODCACHE" "$GOTMPDIR" > "$FAKE_CACHE_RECORD"\n'
+            'sleep "${FAKE_GATES_SLEEP:-0}"'))
+        shared = self.root / "foreground-cache"
+        shared.mkdir()
+        cache_record = self.root / "cache-paths.txt"
+        started = self.start(COMMIT_A, GOCACHE=str(shared), GOMODCACHE=str(shared), GOTMPDIR=str(shared),
+                             FAKE_CACHE_RECORD=str(cache_record), FAKE_GATES_SLEEP="0.3")
+        shared.rmdir()
+        result = self.wait(started["result"])
+        self.assertEqual(result["status"], "passed")
+        roots = cache_record.read_text().splitlines()
+        self.assertEqual(roots, [result["cache_roots"][key] for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")])
+        self.assertTrue(all(Path(path).is_relative_to(self.runroot / "background-validation/work") for path in roots))
+        self.assertEqual(len(set(roots)), 3)
+
+    def test_background_refuses_foreground_work_and_changed_bundle(self):
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+            "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
+            "--work", str(self.root / "entry-gates-work"), "--entry-gates", str(self.gates))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        first = self.start(COMMIT_A)
+        self.wait(first["result"])
+        (self.root / "x.bundle").write_bytes(b"changed-bundle")
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+            "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A, "--entry-gates", str(self.gates))
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_concurrent_start_only_launches_one_runner(self):
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(self.start(COMMIT_A, FAKE_GATES_SLEEP="0.5"))) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(result["action"] for result in results), ["exists", "started"])
+        self.wait(results[0]["result"])
+        self.assertEqual(self.calls.read_text().splitlines().count(COMMIT_A), 1)
 
 
 if __name__ == "__main__":

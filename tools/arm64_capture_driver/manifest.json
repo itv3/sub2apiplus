@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 81,
+  "file_count": 82,
   "files": [
     {
       "path": "README.md",
@@ -22,15 +22,15 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "fe15dd1d7eeb2d4a67978f68f5b45aaebe84cbbfcc463680006fc04aff7fc899",
+      "sha256": "6fb6614b4bfbd9825f24fbaf12bf8f3054955a43d8c582d22fedfd4a46dd1c8e",
       "mode": "0700",
-      "bytes": 2580
+      "bytes": 2555
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "ed94ac899f563d26f9ae42e563d0d2c6bccacb5476b58890d16f5bac78c4afbf",
+      "sha256": "495ed90a533058e8c05a716b267ef8d1486fe0e072cd6e29cd8b99eb6b5fc4aa",
       "mode": "0700",
-      "bytes": 23508
+      "bytes": 27545
     },
     {
       "path": "driver/build.sh",
@@ -142,21 +142,27 @@
     },
     {
       "path": "driver/fix-and-continue.example.params",
-      "sha256": "f5311e3481525b4c0d53ba710451e588547539ab191424746307ef1851a31d07",
+      "sha256": "dbbe8a1348a8afa792a42df83c3a9212596151d2b8e387264252db5a13f5ec65",
       "mode": "0600",
-      "bytes": 3597
+      "bytes": 4195
     },
     {
       "path": "driver/fix-and-continue.sh",
-      "sha256": "b381f6be6b1f323bf3e89e6016dd0128f8208a67e0ea9f87de396154122f8817",
+      "sha256": "ef736d08b1182b69f39909c66507a02324b65537883caef98b7f18a99468178a",
       "mode": "0700",
-      "bytes": 25845
+      "bytes": 26302
     },
     {
       "path": "driver/fix_and_continue.py",
-      "sha256": "a9e63b657c51f36fa105480e2fb9a40ccb6796db9c6b2dfaafb4aa47d1373bdc",
+      "sha256": "fe648a6b57e6d1f78c1628c29b322dc2402e6ed838416e63eb08cc06a07a138d",
       "mode": "0700",
-      "bytes": 132722
+      "bytes": 136228
+    },
+    {
+      "path": "driver/fix_safety.py",
+      "sha256": "6343230d0b45c2de7c87c02c7bfde985612c777e641bc6337fcc2c84263ae863",
+      "mode": "0700",
+      "bytes": 9415
     },
     {
       "path": "driver/frontend.sh",
@@ -489,5 +495,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "40e221c4827e1c040600f9ca0ea74ad23ff3d0e19751547d39e104d7d6a73e5f"
+  "manifest_sha256": "6e37045576978a27b56619ce0e97a2b4e8a49630c4369910aedefb64c106a2c6"
 }

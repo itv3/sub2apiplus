@@ -4,8 +4,8 @@
 #   start <bundle 绝对路径> <分支> <40 位提交> [--profile full-gates] [--record-store <目录>] [--no-dryrun]
 #       修复提交部署之后起后台验证：绑定数据根最新部署收据，nice 降优先级跑入口门禁 full-gates 组合的全集通过（承接
 #       记录库里输入没变的单元，只执行受修复影响的），门禁前核对数据根部署的就是这个提交。同一提交＋同一部署已有在跑或
-#       已有结论就不重复起；在跑的其它后台验证先停下（superseded）。测试树与缓存和前台入口门禁同一个目录（单元规格与
-#       环境指纹一致，记录才能互相承接），前台在跑时排队等锁。结论在 $RUNROOT/background-validation/。通过之后默认接着
+#       已有结论就不重复起；在跑的其它后台验证先停下（superseded）。测试树、运行目录与 Go 缓存独立放在
+#       本轮 background-validation/work 下，准入清理不再触碰后台缓存。结论在 $RUNROOT/background-validation/。通过之后默认接着
 #       空跑入口到 pre-A3（E4-02 日常化，entry-dryrun.sh；有采集在跑就让路），--no-dryrun 不接。
 #   stop [--reason <原因>]   停下在跑的后台验证（修复轮跑定向回归之前）
 #   check-boundary            批次边界：当前部署的结论 failed／aborted 退出 3（拒绝派发下一批），其余退出 0

@@ -41,6 +41,12 @@ ENTRY_GREPS=$RUNROOT/upload-$ROUND/entry-assertions.json
 FIX_COMMIT=0000000000000000000000000000000000000000
 EVOLUTION_REASON="REPLACE：修了什么（全角括号）；提交范围；受管树哪一层变化"
 APPROVER="REPLACE：批准人与授权原话"
+# 各操作须有独立人工批准文件，不能只填 APPROVER 就自动批准。
+# APPROVALS_DIR=$RUNROOT/fix-and-continue-approvals/$ROUND
+# 默认先 --dry-run；缺批准时，当前步骤会输出 approval-intents/<摘要>.json。
+# 批准文件 schema=arm64-fix-operation-approval/v1，包含 status=approved、原样 binding／review_sha256、
+# approved_by（与 APPROVER 相同）、approved_at_utc／expires_at_utc（UTC，Z 结尾）及 proof_ref（真实批准来源）。
+# 文件由运行账号拥有、权限 0600；程序只校验和消费，禁止把意向自动转成批准。
 
 # ---- 可选：阶段延期（给了才延期；对账前与授权后各判一次，已延期即跳过）----
 # 对账判预算截止（deadline）暂停停下时：填这三项后按停下提示 --from pre-extend 续跑（先延期，再重新对账暂停过的对象）。

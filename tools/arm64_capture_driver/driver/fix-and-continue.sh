@@ -64,13 +64,14 @@ export PYTHONDONTWRITEBYTECODE=1
 unset PYTHONPATH
 
 usage() {
-  echo "用法：bash $0 <轮次参数文件> [--from <步骤>] [--list]" >&2
+  echo "用法：bash $0 <轮次参数文件> [--from <步骤>] [--list|--dry-run]" >&2
   echo "步骤：$(python3 "$FCPY" steps < /dev/null | tr '\n' ' ')" >&2
 }
 
 PARAMS_ARG=""
 FROM=""
 LIST=0
+DRY_RUN=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --from)
@@ -78,6 +79,7 @@ while [ "$#" -gt 0 ]; do
       FROM="$2"; shift 2 ;;
     --from=*) FROM="${1#--from=}"; shift ;;
     --list) LIST=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "未知选项：$1" >&2; usage; exit 2 ;;
     *)
@@ -86,6 +88,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$PARAMS_ARG" ]; then usage; exit 2; fi
+if [ "$DRY_RUN" = 1 ]; then exec python3 -B "$FCPY" dry-run --params "$PARAMS_ARG"; fi
 if [ "$(id -u)" != 0 ]; then echo "必须以 root 执行（部署、属主收口与受管工具都要求 root）" >&2; exit 2; fi
 
 EXPORTS=$(python3 "$FCPY" load-params "$PARAMS_ARG" < /dev/null) || exit 2
@@ -113,19 +116,11 @@ if [ "$VALID" != 1 ]; then echo "未知步骤：${FROM}（可选：$(echo $STEPS
 
 mkdir -p "$OUT/raw"
 chmod 700 "$OUT" "$OUT/raw"
-# 同一轮次只允许一个实例：mkdir 原子锁；持有者已不在时回收陈旧锁。
-LOCK="$OUT/.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
-    echo "本轮已有 fix-and-continue 在运行（PID ${HOLDER}），拒绝并发" >&2
-    exit 3
-  fi
-  rm -rf "$LOCK"
-  mkdir "$LOCK"
-fi
-printf '%s\n' "$$" > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+# 同一轮次只允许一个实例。子进程对继承的同一打开描述符加锁，父 shell 持有到退出；
+# 不删除锁文件，不通过空 PID 猜测陈旧锁；脱离当前会话的后台作业显式关闭描述符。
+LOCK="$OUT/.round.lock"
+exec 9>>"$LOCK"
+python3 -B "$DRV/fix_safety.py" 9 "$LOCK" "$OUT/.lock" || exit $?
 
 if [ "$FROM" != deploy ]; then
   python3 "$FCPY" check-from --params "$PARAMS" --step "$FROM" < /dev/null || exit 2
@@ -175,9 +170,11 @@ wait_marker() {
 }
 
 step_deploy() {
+  decide package
   decide deploy-state
   if skipped; then return 0; fi
   if [ "$ACTION" = deploy ]; then
+    decide human-approval --mode deploy --subject "$HEAD_COMMIT"
     git -C "$SRC" bundle verify "$BUNDLE" > "$OUT/raw/$TS-deploy-bundle-verify.log" 2>&1 < /dev/null \
       || fail_step "bundle 校验失败：$BUNDLE" "重新上传 bundle 并核对 sha256 清单后 --from deploy"
     local ref="refs/heads/deploy-$ROUND-$TS" got
@@ -201,7 +198,7 @@ step_deploy() {
     { chown -R root:root "$ST" && chmod -R go-w "$ST"; } || fail_step "staging 属主／权限收口失败" "人工核对 $ST"
     decide deploy-launch --log "$LOG" --pid-file "$PIDF"
     setsid -f bash -c 'echo "$$" > "$2"; cd "$0" && python3 tools/arm64_supervised_deploy.py --staging-root "$0" --production-root "$3/tools/official_client_capture" --production-doc-root "$3/docs" --control-root "$3/control" > "$1" 2>&1; echo "exit=$?" >> "$1"' \
-      "$ST" "$LOG" "$PIDF" "$D" < /dev/null > /dev/null 2>&1
+      "$ST" "$LOG" "$PIDF" "$D" < /dev/null > /dev/null 2>&1 9>&-
     echo "  [deploy] 受监督部署已在后台启动：$LOG"
   fi
   if [ "$ACTION" != verify ]; then
@@ -241,7 +238,7 @@ step_item_tests() {
   decide tests-state
   if skipped; then return 0; fi
   if [ "$ACTION" = run ]; then
-    setsid -f python3 "$FCPY" run-tests --params "$PARAMS" --log "$LOG" --pid-file "$PIDF" < /dev/null > /dev/null 2>&1
+    setsid -f python3 "$FCPY" run-tests --params "$PARAMS" --log "$LOG" --pid-file "$PIDF" < /dev/null > /dev/null 2>&1 9>&-
     echo "  [item-tests] 实测已在后台启动：$LOG"
   fi
   wait_marker "$LOG" "$ITEM_TESTS_MAX_SECONDS" "$PIDF" \
@@ -281,6 +278,7 @@ step_evolution() {
   if skipped; then return 0; fi
   managed codex_upgrade evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"
   decide evolution-preview --raw "$RAW"
+  decide human-approval --mode evolution --subject "$REVIEW_SHA256"
   managed codex_upgrade evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \
     --approve-sha256 "$REVIEW_SHA256" --approved-by "$APPROVER"
   decide evolution-apply --raw "$RAW"
@@ -296,6 +294,7 @@ extend_round() {
   managed codex_upgrade extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \
     --new-deadline-at-utc "$EXTEND_DEADLINE" --reason "$EXTEND_REASON"
   decide extend-preview --raw "$RAW" --mode "$mode"
+  decide human-approval --mode deadline-extension --subject "$EXT_SHA256"
   managed codex_upgrade extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \
     --approve-sha256 "$EXT_SHA256" --approved-by "$APPROVER"
   decide extend-apply --raw "$RAW" --mode "$mode"
@@ -393,12 +392,14 @@ step_approve() {
   # 批准摘要只取同一次运行刚生成的恢复预览输出（预览幂等：内容不变时返回同一份），从不复用旧文件里的摘要。
   managed codex_upgrade approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
   decide attempt-verdict --raw "$RAW" --mode approve-preview
+  decide human-approval --mode recovery-approve --subject "$REVIEW_SHA256"
   managed codex_upgrade approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"
   decide approve-verdict --raw "$RAW" --subject "$REVIEW_SHA256" --preview "$PREVIEW_PATH"
 }
 
 step_authorize() {
   decide need-preview
+  decide human-approval --mode recovery-authorize --subject "$REVIEW_SHA256"
   managed codex_upgrade authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"
   decide authorize-verdict --raw "$RAW" --preview "$PREVIEW" --subject "$REVIEW_SHA256"
 }
@@ -413,10 +414,11 @@ step_recover() {
   decide need-preview
   decide recover-state --preview "$PREVIEW"
   if skipped; then return 0; fi
+  decide recover-launch --preview "$PREVIEW"
   for f in vc5-recover.out vc5-run-batch.out; do
     if [ -e "$RUNROOT/$f" ]; then mv "$RUNROOT/$f" "$RUNROOT/$f.pre-$ROUND-$TS"; fi
   done
-  ARM64_VC_ENV="$VC_ENV" VC_STATE_DIR="$VC_STATE_DIR" setsid -f bash "$RECOVER_SCRIPT" "$PREVIEW" > "$RECOVER_LOG" 2>&1 < /dev/null
+  ARM64_VC_ENV="$VC_ENV" VC_STATE_DIR="$VC_STATE_DIR" setsid -f bash "$RECOVER_SCRIPT" "$PREVIEW" > "$RECOVER_LOG" 2>&1 < /dev/null 9>&-
   decide recover-started --preview "$PREVIEW" --log "$RECOVER_LOG"
   echo "VC5_RECOVER_STARTED $RECOVER_LOG"
 }
