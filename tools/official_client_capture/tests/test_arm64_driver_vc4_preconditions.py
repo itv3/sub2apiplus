@@ -98,6 +98,25 @@ class BuildNetworkContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "只能是"):
             self.parser.parse(self.fixture.env_file.read_text() + "VC4_BUILD_NETWORK=bridge\n")
 
+    def test_installed_standalone_intent_loads_tools_from_round_file_without_inherited_D(self):
+        # 驱动安装目录位于仓库之外，不能用 __file__ 的父目录猜测受管工具坐标。
+        copied = self.root / "installed/driver"
+        copied.mkdir(parents=True)
+        for name in ("vc4_contract.py", "driver_config.py", "parse_env.py", "build.sh"):
+            shutil.copy2(SCRIPTS / name, copied / name)
+        shutil.rmtree(self.fixture.data_root / "tools")
+        (self.fixture.data_root / "tools").symlink_to(REPO_ROOT / "tools", target_is_directory=True)
+        environment = dict(os.environ, ARM64_VC_ENV=str(self.fixture.env_file), PYTHONDONTWRITEBYTECODE="1")
+        for name in ("D", "PYTHONPATH", "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL"):
+            environment.pop(name, None)
+        result = subprocess.run(["python3", "-B", str(copied / "vc4_contract.py"), "network-intent"],
+            env=environment, cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        intent = json.loads(result.stdout)
+        self.assertEqual(intent["status"], "requires_manual_approval")
+        self.assertEqual(intent["binding"]["data_root"], str(self.fixture.data_root))
+        self.assertEqual(intent["binding"]["network_mode"], "default")
+
     def prepare_receipt(self):
         base = Path(self.config["B"])
         (base / "artifacts/ctx").mkdir(parents=True, exist_ok=True)

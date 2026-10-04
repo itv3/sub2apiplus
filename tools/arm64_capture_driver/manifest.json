@@ -376,9 +376,9 @@
     },
     {
       "path": "driver/vc4_contract.py",
-      "sha256": "b5ecb0b86630cabb86f8f9f65822c1cb6b4d6c0c3773b866d7c2d63bb538cac1",
+      "sha256": "8f671450a0fe7cce7b13b2af962965563f5e4ef99f36bf2ad884ddd37f2d3853",
       "mode": "0700",
-      "bytes": 14590
+      "bytes": 15122
     },
     {
       "path": "driver/vc4_resume.py",
@@ -477,5 +477,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "1336892cb635deec66b2f57abaa22fbf618629179bcb3b641876ab6a6578f06c"
+  "manifest_sha256": "4e7b170f109498da71fb4a6ad70932ead3f89034bb20cd38204e3b9f36db87c9"
 }

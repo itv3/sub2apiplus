@@ -20,6 +20,16 @@ import subprocess
 import sys
 
 sys.dont_write_bytecode = True
+# 独立命令仅要求 ARM64_VC_ENV；先安全解析本轮 D，再导入该数据根的受管工具。
+# 被续跑模块导入时沿用调用方已加载的本轮 D，不在模块导入期间改变参数。
+CLI_CONFIG = None
+if __name__ == "__main__":
+    from driver_config import load_config
+    try:
+        CLI_CONFIG = load_config()
+    except (KeyError, ValueError, OSError) as error:
+        print(f"VC-4 参数拒绝加载：{error}", file=sys.stderr)
+        raise SystemExit(3)
 sys.path.insert(0, os.environ.get("D", str(Path(__file__).resolve().parents[3])))
 from tools.official_client_capture import codex_upgrade_candidate_build as build
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
@@ -243,7 +253,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         from driver_config import load_config
-        config = load_config()
+        config = CLI_CONFIG if CLI_CONFIG is not None else load_config()
         base = args.base or Path(config["B"])
         if args.action == "network-intent":
             value = {"schema_version": APPROVAL_SCHEMA, "status": "requires_manual_approval", "binding": network_binding(config)}
