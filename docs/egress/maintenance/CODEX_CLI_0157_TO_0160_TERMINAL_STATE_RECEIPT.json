@@ -63,7 +63,7 @@
   "evidence_host": "ARM64",
   "evidence_root": "/root/docker/capture-cli/data",
   "identity_algorithm": "sha256(json.dumps(payload_without_identity_sha256, ensure_ascii=False, sort_keys=True, separators=(',', ':')))",
-  "identity_sha256": "af0f05bdde21c470a577c6d46d2e1cedc98ae5fbd46d3d522d93552bd604f692",
+  "identity_sha256": "ce60cd130be9125905ad906aac19613e78e572bcb7ee2d8ce4ca18d3367a1bf5",
   "post_promotion_gate": {
     "bytes": 8151,
     "path": "docs/egress/maintenance/CODEX_CLI_0157_TO_0160_POST_PROMOTION_GATE_RECEIPT.json",
@@ -93,9 +93,9 @@
     "sha256": "65831431fdfe235da0989217748cd85026c9899aa0a9ea4a1cfac1fba92ccaf6"
   },
   "remote_cleanup": {
-    "decision": "deferred",
-    "note": "§4.6.8 清理只读解析候选删除目标与必须保留项后登记 deferred（b98ae547…）：9 个构建树／构建产物／归档复验副本约 4.2 GiB 与 1 个不再被任何容器使用的候选镜像（354 MB）等待老板批准删除；私有归档已完成异地解包与关键收据重放，当前生产镜像、固定回滚镜像、Campaign 证据与私有归档均在保留清单内",
-    "receipt_digest": "b98ae547e4b6c73df3e7421db009fa55c97ddefa57bf7920fd3deed2bb88093e"
+    "decision": "executed",
+    "note": "§4.6.8 清理先登记 deferred（b98ae547…），2026-10-04 经老板确认执行（执行收据 78151dd0…）：删除 9 个构建树／构建产物／归档复验副本（约 4.2 GiB）与 1 个候选镜像（354 MB）；VC-6 金丝雀堆栈已停止，其容器、网络与含生产库克隆的卷待另行批准删除；删后复验生产容器健康、运行镜像仍是最终镜像、固定回滚镜像与激活镜像仍在、Campaign 证据与私有归档完好",
+    "receipt_digest": "78151dd0f04eeb979079348a0982adad3a886b025f787245de5f96e1009fa0df"
   },
   "result": "passed",
   "retained_runtime_profiles": [
