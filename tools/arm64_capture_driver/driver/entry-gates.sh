@@ -146,7 +146,11 @@ TREE_HEAD=$(git -C "$TREE" rev-parse HEAD)
 tree_status() { git -C "$TREE" status --porcelain --untracked-files=all 2>&1 | head -n "${1:-1000000}" || true; }
 echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
-env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
+# 执行器的固定 PATH（用途见下方执行环境一段）。预编译必须与执行器是同一个解释器：.pyc 文件名带解释器版本标签，
+# 按调用方 PATH 预编译、执行器再按固定 PATH 解析出另一个 python3 时（如本机 Homebrew 3.14 与 /usr/local/bin 的 3.13），
+# 执行器找不到缓存（UM-21）；只有一个 Python 的 ARM64 与 CI 碰不到。
+EXEC_PATH=/usr/local/go/bin:/opt/node-v20/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+env -u PYTHONPATH PATH="$EXEC_PATH" python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
 
 # 部署绑定：数据根部署的必须就是本提交。含 pre-A3 的组合必做（入口门禁验的是测试树，pre-A3 跑的是数据根的受管树）；
 # 其余组合带 --require-deployed 时也做（后台验证据此把结论绑定到这次部署，E4-01）。设置 DEPLOY（最新部署收据）。
@@ -231,8 +235,7 @@ TS="$TREE/frontend/node_modules/typescript/lib/typescript.js"
 # 放进来的话每换一次认证坐标环境指纹就变、什么都承接不了。
 # 与调用方无关（E4-01 验收实测）：PATH 与语言用固定值，USER、LOGNAME、SHELL、LANGUAGE、LC_* 不放行。操作员 shell、修好接着跑、
 # 后台验证、入口空跑（env -i）几种入口的这些变量各不相同，lib.sh 每被 source 一次还会把 go 与 node 目录再往 PATH 前面加一遍；
-# 原来照搬调用方的值，同一棵测试树在不同入口下跑出的记录互相承接不了。
-EXEC_PATH=/usr/local/go/bin:/opt/node-v20/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# 原来照搬调用方的值，同一棵测试树在不同入口下跑出的记录互相承接不了。EXEC_PATH 在上面预编译前已定义。
 EXEC_ENV=(env -i "PATH=$EXEC_PATH" LANG=C.UTF-8)
 for name in HOME TZ TMPDIR \
     http_proxy https_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY SSL_CERT_FILE SSL_CERT_DIR; do

@@ -4624,10 +4624,17 @@ def _expected_gate_executable(
     if "/" in command and not Path(command).is_absolute():
         if not plan.worktree.exists() or not plan.worktree.is_dir():
             raise UpstreamMergeError(f"{label} 无法复算相对可执行文件：执行树不存在")
-        cwd = _gate_cwd(plan.worktree, planned["cwd"])
+        expected = executable_identity(command, _gate_cwd(plan.worktree, planned["cwd"]))
+    elif "/" in command:
+        expected = executable_identity(command, plan.worktree if plan.worktree.is_dir() else plan.repository_root)
     else:
-        cwd = plan.worktree if plan.worktree.is_dir() else plan.repository_root
-    expected = executable_identity(command, cwd)
+        # PATH 命令（如 python3、make）按收据记录的解析路径复核：该文件仍在、摘要与大小不变即可，不再按本次调用者的
+        # PATH 重新解析（UM-21）。v0.2.13 合并时门禁在 PATH 前置 3.13 下执行，导入 CI 证据时调用者 PATH 里先是 3.14，
+        # 同一份收据就被判“解析路径漂移”；执行时用的是哪个文件、它有没有变，才是收据要证明的事实。
+        resolved = Path(str(executable.get("resolved_path")))
+        if not resolved.is_absolute():
+            raise UpstreamMergeError(f"{label} resolved_path 必须是绝对路径")
+        expected = {**executable_identity(str(resolved), resolved.parent), "command": command}
     if executable != expected:
         raise UpstreamMergeError(f"{label} 摘要或解析路径漂移")
     return expected
