@@ -1,0 +1,70 @@
+{
+  "base_commit": "2f965e783819a737d8c5aea38f17842d8cac79dc",
+  "changed_path_count": 1,
+  "current_commit": "c159fe429c666a3adf5d5dfd6bf526a21c54cd2b",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5391,
+  "frozen_path_count": 1929,
+  "identity_sha256": "feee30321b5e991b974681db697edaf4dfd6a47e5dc8576e31060c9e54899ca5",
+  "issued_at_utc": "2026-10-04T01:53:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0213-prep-frontend-critical-20261004-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "b4e82e8ba2436669c3f54a77eb08c0e2778a338106af26cd9f78e9212d424633"
+      ],
+      "reason": "合并上游 v0.2.13 前补齐根 Makefile 前端关键用例清单（与上游逐行一致），只改测试清单，不改变官方客户端画像、Persona、wire 或生产代码 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-make-test-dedup-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1819b3816d0cc1663a3ed364461a6343adb5e06d66a778d5d9984d8182ddc63d"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
