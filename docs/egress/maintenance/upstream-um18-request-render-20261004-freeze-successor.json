@@ -1,0 +1,122 @@
+{
+  "base_commit": "f544e64d40ed5262703a6fd89ce97618e57d1caa",
+  "changed_path_count": 7,
+  "current_commit": "055f006e83b22e8435af6a1fda3625db1f7e5f7e",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5596,
+  "frozen_path_count": 2015,
+  "identity_sha256": "16fb561ae4375ec815c7b27c44d7992bd5cd974b3cdb793742896debae3d9080",
+  "issued_at_utc": "2026-10-04T06:40:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-um18-request-render-20261004-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "predecessor_sha256s": [
+        "3b374bc8a5239d0f753319a1e45d87176f80856f006202f9acdde4e76d03aac6"
+      ],
+      "reason": "上游合并提速 UM-18：请求模板的只读源码根改用 {source_repository} 并由新增的 request-render 子命令渲染为主仓库路径，预检核对源码根；同步框架 §5.2.2 两条。只改上游合并工具与文档，不改变官方客户端画像、Persona、wire 或生产代码 path=docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-environment-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-stopped-ledger-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-system-proxy-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-guide-part4-restructure-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-sync-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260910-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-doc-revision-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um17-source-transition-issued-at-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "c2cb15758ab85d841e404646c3a3c95356c94b2b01e64ce466283e8201c1707b"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/__main__.py",
+      "predecessor_sha256s": [
+        "4cd4b55d10ab05d957f82d17af22df09cfb259ee19bae897e1a37e7081b1823b"
+      ],
+      "reason": "上游合并提速 UM-18：请求模板的只读源码根改用 {source_repository} 并由新增的 request-render 子命令渲染为主仓库路径，预检核对源码根；同步框架 §5.2.2 两条。只改上游合并工具与文档，不改变官方客户端画像、Persona、wire 或生产代码 path=tools/upstream_merge/__main__.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "da2127b72c7a6258f47bd131352dbf4bbd01bdff4e7d0d0dc13e64082a9aac9a"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "tools/upstream_merge/preflight_report.py",
+    "tools/upstream_merge/request_render.py",
+    "tools/upstream_merge/request_template_v2.json",
+    "tools/upstream_merge/tests/test_preflight_report.py",
+    "tools/upstream_merge/tests/test_request_render.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
