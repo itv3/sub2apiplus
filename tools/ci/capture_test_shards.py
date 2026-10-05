@@ -3,7 +3,7 @@
 
 与 ``make test-capture-tools`` 完全相同的加载语义：``unittest`` 以 ``tools/official_client_capture/tests``
 为起点 discover ``test_*.py``（sys.path 与模块名都和单进程全量一致），再按模块名把用例分到 N 片。
-分片确定性来自权重表 ``tools/ci/capture_test_weights.json``（模块 → 顺序单跑秒数，缺省 1.0）：
+分片确定性来自权重表 ``tools/ci/capture_test_weights.json``（模块 → 测量权重，缺省 1.0；测量口径与收据见表内元数据）：
 模块按权重降序、同权重按名字排序，贪心放入当前总权重最小的片（LPT），所以同一棵树上任何机器算出的
 分片都一样。
 
