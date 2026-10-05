@@ -17,6 +17,7 @@ import unittest
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tools import arm64_supervised_deploy as deploy
@@ -47,6 +48,11 @@ def runtime_fixture():
 
 # 准入序列占位：在被读取的那一刻生成守护新发布的就绪状态（观测起点晚于维护命令结束）。
 FRESH = object()
+
+# 同一个原期限到达时，外层等待和内层维护检查可能先后竞态；仅接受这两条完整原因。
+STALE_READY_TIMEOUT_RE = (
+    r"^(?:维护后重新准入超过原有界等待期限|受控容器维护已失效，升级必须暂停并对账)$"
+)
 
 
 class AdmissionSequence:
@@ -1209,13 +1215,63 @@ class EgressSupervisorTests(unittest.TestCase):
         arguments.timeout_seconds = 1
         readiness = [stale, stale] + [copy.deepcopy(stale) for _ in range(40)]
         with self._transition_context(readiness), mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
-            with self.assertRaisesRegex(supervisor.RuntimeEgressPaused, "超过原有界等待期限"):
+            with self.assertRaisesRegex(supervisor.RuntimeEgressPaused, STALE_READY_TIMEOUT_RE):
                 supervisor._egress_transition_command(arguments)
         finishes = [json.loads(path.read_bytes()) for path in (self.root / "egress-transitions").glob("*.finish.json")]
         self.assertEqual(len(finishes), 1)
         self.assertEqual((finishes[0]["status"], finishes[0]["after_sha256"]), ("failed", None))
         self.assertTrue((self.root / "egress-pause.json").exists())
         self.assertFalse((self.root / "egress-transition.json").exists())
+
+    def _deadline_race_fixture(self, first):
+        """只推进监督器的单调时钟，确定性触发原期限两侧的检查；不放宽生产行为。"""
+
+        stale = runtime_fixture()
+        now = [time.monotonic_ns()]
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        arguments = self._restart_arguments()
+        arguments.timeout_seconds = 1
+        check = supervisor._check_runtime_egress
+        def admission(*args, **kwargs):
+            if first == "guard" and kwargs.get("command_pid") is not None:
+                transition = supervisor._read_json(self.root / "egress-transition.json")
+                now[0] = transition["deadline_monotonic_ns"]
+            return check(*args, **kwargs)
+        def advance(_seconds):
+            now[0] += 10**9
+        clock = SimpleNamespace(monotonic_ns=lambda: now[0], time=time.time, sleep=advance)
+        after = copy.deepcopy(stale)
+        if first == "policy":
+            after["policy_sha256"] = "f" * 64
+            after["runtime"]["observed_at_monotonic_ns"] = now[0] + 1
+        with self._transition_context([stale, stale, after]), \
+             mock.patch.object(supervisor, "time", clock), \
+             mock.patch.object(supervisor, "_check_runtime_egress", side_effect=admission), \
+             mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
+            with self.assertRaises(supervisor.RuntimeEgressPaused) as caught:
+                supervisor._egress_transition_command(arguments)
+        finishes = [json.loads(path.read_bytes()) for path in (self.root / "egress-transitions").glob("*.finish.json")]
+        self.assertEqual(len(finishes), 1)
+        self.assertEqual((finishes[0]["status"], finishes[0]["after_sha256"]), ("failed", None))
+        self.assertTrue((self.root / "egress-pause.json").exists())
+        self.assertFalse((self.root / "egress-transition.json").exists())
+        return str(caught.exception)
+
+    def test_stale_ready_deadline_outer_check_wins(self):
+        reason = self._deadline_race_fixture("timer")
+        self.assertEqual(reason, "维护后重新准入超过原有界等待期限")
+        self.assertRegex(reason, STALE_READY_TIMEOUT_RE)
+
+    def test_stale_ready_deadline_inner_guard_wins(self):
+        reason = self._deadline_race_fixture("guard")
+        self.assertEqual(reason, "受控容器维护已失效，升级必须暂停并对账")
+        self.assertRegex(reason, STALE_READY_TIMEOUT_RE)
+
+    def test_stale_ready_policy_drift_is_not_an_equivalent_timeout(self):
+        reason = self._deadline_race_fixture("policy")
+        self.assertEqual(reason, "容器维护期间指定出口策略发生变化")
+        self.assertNotRegex(reason, STALE_READY_TIMEOUT_RE)
 
     def test_unverifiable_job_egress_binding_fails_closed_with_explicit_reason(self):
         binding = {"schema_version": "codex-upgrade-job-egress/v1", "run_dir": str(self.root / "missing-parent-run"),
