@@ -1,9 +1,14 @@
 package service
 
 import (
+	"context"
 	"math/rand"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -127,6 +132,27 @@ func TestOpenAIResponsesLiteRequiresFullResponsesMatchesLegacy(t *testing.T) {
 }
 
 func TestOpenAIResponsesLiteRequiresFullResponsesDoesNotAllocatePerInputItem(t *testing.T) {
+	// TotalAlloc 是整个进程的累计值。同包其他测试留下的后台协程会在测量窗口内分配内存，
+	// 因而把这条性能判据放入独立测试进程；仍使用原来的正文、测量函数和上下界，不放宽阈值。
+	const isolatedEnv = "SUB2API_LITE_ALLOCATION_TEST_CHILD"
+	if os.Getenv(isolatedEnv) != "1" {
+		executable, err := os.Executable()
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		command := exec.CommandContext(ctx, executable, "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, isolatedEnv+"=") {
+				command.Env = append(command.Env, entry)
+			}
+		}
+		command.Env = append(command.Env, isolatedEnv+"=1")
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "隔离分配量验收失败：%s", output)
+		t.Logf("隔离分配量验收：\n%s", output)
+		return
+	}
+
 	body := buildOfficialEgressMemoryProfileBody(t, 8<<20)
 	allocated := testMeasureAllocatedBytes(t, func() {
 		require.False(t, openAIResponsesLiteRequiresFullResponses(body))
