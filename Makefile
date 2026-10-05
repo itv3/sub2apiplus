@@ -407,6 +407,8 @@ test-frontend-critical:
 CAPTURE_TEST_SHARDS ?= 4
 # CI 默认接入统一执行器；显式 legacy 恢复原单进程分片，失败不自动回退。
 CAPTURE_TEST_EXECUTOR ?= unified
+# 各 CI 作业内共享只读字节码；显式 off 恢复无共享缓存，身份记忆化独立推进。
+CAPTURE_TEST_BYTECODE_CACHE ?= auto
 CAPTURE_TEST_OUT_DIR ?=
 define CAPTURE_TS_MODULE_CHECK
 	python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and hashlib.sha256(p.read_bytes()).hexdigest() == expected) or sys.exit("CAPTURE_TYPESCRIPT_MODULE 非法或摘要不符")' \
@@ -423,6 +425,7 @@ test-capture-tools-shard:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_ci.py \
 		--count $(CAPTURE_TEST_SHARDS) --index $(SHARD_INDEX) --executor "$(CAPTURE_TEST_EXECUTOR)" \
+		--bytecode-cache "$(CAPTURE_TEST_BYTECODE_CACHE)" \
 		--parallel $(CAPTURE_TEST_PARALLELISM) $(if $(CAPTURE_TEST_OUT_DIR),--out-dir "$(CAPTURE_TEST_OUT_DIR)",)
 
 # 采集工具测试全量（E2-01）：统一调度执行器 tools/ci/unit_executor.py 与原单进程 discover 同一加载语义

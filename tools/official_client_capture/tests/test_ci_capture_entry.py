@@ -90,11 +90,13 @@ class CaptureEntryTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
         self.environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    def run_entry(self, name, mode="unified", index=1, count=2, extra_env=None):
+    def run_entry(self, name, mode="unified", index=1, count=2, extra_env=None, bytecode_cache="off"):
         output = self.root / name
         argv = [sys.executable, "-B", str(ROOT / "tools/ci/capture_ci.py"), "--count", str(count), "--index", str(index),
                 "--executor", mode, "--start", str(self.tests), "--weights", str(self.weights), "--config", str(self.config),
                 "--durations", str(self.root / "no-durations.json"), "--out-dir", str(output), "--parallel", "2", "--cores", "2"]
+        if bytecode_cache is not None:
+            argv.extend(["--bytecode-cache", bytecode_cache])
         result = subprocess.run(argv, cwd=ROOT, env={**self.environment, **(extra_env or {})}, capture_output=True, text=True, timeout=180)
         receipt = json.loads((output / "receipt.json").read_text()) if (output / "receipt.json").is_file() else None
         if result.returncode:
@@ -136,6 +138,66 @@ class CaptureEntryTests(unittest.TestCase):
             self.assertEqual(receipt["counts"], {"failed": 1})
             self.assertFalse(receipt["automatic_fallback"])
             self.assertTrue((output / "execution.log").is_file())
+
+    def test_default_bytecode_is_shared_read_only_without_external_caches_or_memo(self):
+        """两个并行单元都必须真正加载预编译字节码，禁止源码回编及外部身份缓存泄漏。"""
+        self.tests.joinpath("cache_probe_payload.py").write_text("VALUE = 7\n")
+        for name in ("alpha", "beta"):
+            target = self.root / (name + "-probe.json")
+            self.tests.joinpath("test_" + name + ".py").write_text(
+                "import hashlib, importlib.machinery, json, os, sys, unittest\n"
+                "from pathlib import Path\nfrom unittest import mock\n"
+                "class C(unittest.TestCase):\n def test_cache(self):\n"
+                "  with mock.patch.object(importlib.machinery.SourceFileLoader, 'source_to_code', side_effect=AssertionError('缓存未命中')):\n"
+                "   import cache_probe_payload as payload\n"
+                "  self.assertEqual(payload.VALUE, 7)\n"
+                "  cached = Path(payload.__cached__)\n"
+                "  self.assertEqual(int.from_bytes(cached.read_bytes()[4:8], 'little'), 3)\n"
+                f"  Path({str(target)!r}).write_text(json.dumps({{'prefix': sys.pycache_prefix, 'cached': str(cached), "
+                "'dont_write': sys.dont_write_bytecode, 'memo': os.environ.get('CODEX_UPGRADE_IDENTITY_MEMO'), "
+                "'sha256': hashlib.sha256(cached.read_bytes()).hexdigest()}))\n")
+        foreign = self.root / "foreign-pycache"
+        foreign.mkdir()
+        result, receipt, output = self.run_entry("cached", count=1, bytecode_cache=None,
+            extra_env={"PYTHONPYCACHEPREFIX": str(foreign), "CODEX_UPGRADE_IDENTITY_MEMO": str(self.root / "foreign-memo")})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = str(output / "executor/pycache-shared")
+        self.assertEqual(receipt["bytecode_cache_mode"], "auto")
+        self.assertEqual(receipt["detail"]["bytecode_cache"]["status"], "ready")
+        self.assertIsNone(receipt["detail"]["identity_memo"])
+        for name in ("alpha", "beta"):
+            probe = json.loads((self.root / (name + "-probe.json")).read_text())
+            self.assertEqual(probe["prefix"], prefix)
+            self.assertTrue(probe["cached"].startswith(prefix + "/") and probe["dont_write"])
+            self.assertIsNone(probe["memo"])
+            self.assertEqual(ci.file_digest(Path(probe["cached"])), probe["sha256"])
+        self.assertEqual(list(foreign.iterdir()), [])
+        self.assertFalse((output / "executor/identity-memo").exists())
+        self.assertEqual(list(self.tests.rglob("__pycache__")), [])
+
+    def test_bytecode_off_preserves_outcomes_and_clears_external_prefix(self):
+        cached, cached_receipt, _ = self.run_entry("cached", count=1, bytecode_cache="auto")
+        cold, cold_receipt, output = self.run_entry("cold", count=1, bytecode_cache="off",
+            extra_env={"PYTHONPYCACHEPREFIX": str(self.root / "foreign"), "CODEX_UPGRADE_IDENTITY_MEMO": str(self.root / "memo")})
+        for result in (cached, cold):
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(cached_receipt["outcomes_sha256"], cold_receipt["outcomes_sha256"])
+        self.assertEqual(cached_receipt["source"], cold_receipt["source"])
+        self.assertEqual(cold_receipt["detail"]["bytecode_cache"]["status"], "off")
+        self.assertIsNone(cold_receipt["detail"]["bytecode_cache"]["prefix"])
+        self.assertIsNone(cold_receipt["detail"]["identity_memo"])
+        self.assertFalse((output / "executor/pycache-shared").exists())
+
+    def test_precompile_failure_keeps_ci_failed_when_formal_tests_pass(self):
+        self.tests.joinpath("cache_bad_payload.py").write_text("if :\n")
+        result, receipt, output = self.run_entry("broken-cache", count=1, bytecode_cache="auto")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["detail"]["bytecode_cache"]["status"], "failed")
+        summary = json.loads((output / "executor/summary.json").read_text())
+        self.assertEqual(summary["failed_units"], [])
+        self.assertTrue(receipt["coverage_closed"])
+        self.assertFalse(receipt["automatic_fallback"])
 
     def test_changed_test_source_is_rejected_after_execution(self):
         self.tests.joinpath("test_alpha.py").write_text(

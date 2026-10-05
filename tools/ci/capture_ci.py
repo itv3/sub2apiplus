@@ -51,7 +51,8 @@ def source_identity(args):
     if os.environ.get("GITHUB_ACTIONS") == "true" and (status or declared != commit):
         raise shards.ShardError("CI 提交身份不匹配或源码工作树不干净")
     paths = [Path(__file__), ROOT / "tools/ci/capture_test_shards.py", ROOT / "tools/ci/unit_executor.py",
-             ROOT / "tools/ci/unit_records.py", args.weights, args.config, args.durations]
+             ROOT / "tools/ci/unit_records.py", ROOT / "tools/arm64_capture_driver/driver/bytecode_cache.py",
+             args.weights, args.config, args.durations]
     paths += sorted(args.start.rglob("*.py"))
     parser = os.environ.get("CLAUDE_AST_TYPESCRIPT_MODULE")
     if parser:
@@ -140,7 +141,7 @@ def run_legacy(selected, out):
 
 
 def run_unified(args, plan, out):
-    """执行器先检查全集，再按旧分片选完整单元；A-07.1 暂不准备共享缓存。"""
+    """先核对全集与分片；每片共享独立字节码层，身份记忆化仍关闭。"""
     selection = out / "selection.json"
     write_once(selection, {"schema_version": "unit-executor-selection/v1",
                            "full_test_ids_sha256": plan["full_test_ids_sha256"], "test_ids": plan["test_ids"]})
@@ -149,7 +150,11 @@ def run_unified(args, plan, out):
     argv = [sys.executable, "-B", str(ROOT / "tools/ci/unit_executor.py"), "run", "--start", str(args.start),
             "--pattern", args.pattern, "--weights", str(args.weights), "--config", str(args.config),
             "--durations", str(args.durations), "--selection-file", str(selection), "--parallel", str(args.parallel),
-            "--cores", str(args.cores), "--state-dir", str(out / "state"), "--out-dir", str(work), "--shared-caches", "off"]
+            "--cores", str(args.cores), "--state-dir", str(out / "state"), "--out-dir", str(work),
+            "--shared-caches", "bytecode" if args.bytecode_cache == "auto" else "off",
+            "--bytecode-source", str(ROOT / "tools")]
+    if not args.start.resolve().is_relative_to((ROOT / "tools").resolve()):
+        argv.extend(["--bytecode-source", str(args.start.resolve())])
     environment = {key: value for key, value in os.environ.items()
                    if key not in {"CODEX_UPGRADE_IDENTITY_MEMO", "PYTHONPYCACHEPREFIX"}}
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -195,7 +200,8 @@ def run_unified(args, plan, out):
             or any(not unit["passed"] or unit.get("orphans") or unit.get("timed_out") for unit in summary["units"])):
         code = code or 1
     return code, records, seen, {"command": argv, "summary_sha256": file_digest(summary_path),
-                                "policy_sha256": summary["policy_sha256"], "diagnostic": summary.get("diagnostic", [])}
+                                "policy_sha256": summary["policy_sha256"], "diagnostic": summary.get("diagnostic", []),
+                                "bytecode_cache": summary["bytecode_cache"], "identity_memo": summary["identity_memo"]}
 
 
 def main(argv=None):
@@ -203,6 +209,8 @@ def main(argv=None):
     parser.add_argument("--count", type=int, required=True)
     parser.add_argument("--index", type=int, required=True)
     parser.add_argument("--executor", choices=("unified", "legacy"), default="unified")
+    parser.add_argument("--bytecode-cache", choices=("auto", "off"), default="auto",
+                        help="统一执行器的作业内只读字节码共享；off 显式关闭，旧执行器不预编译")
     parser.add_argument("--start", type=Path, default=ROOT / shards.DEFAULT_START)
     parser.add_argument("--pattern", default=shards.DEFAULT_PATTERN)
     parser.add_argument("--weights", type=Path, default=ROOT / shards.DEFAULT_WEIGHTS)
@@ -224,6 +232,7 @@ def main(argv=None):
         print(f"CI 入口错误：{error}", file=sys.stderr)
         return 2
     receipt = {"schema_version": SCHEMA, "executor": args.executor, "started_at_utc": started,
+               "bytecode_cache_mode": args.bytecode_cache if args.executor == "unified" else "off",
                "shard_count": args.count, "shard_index": args.index, "automatic_fallback": False}
     code = 2
     interrupted_by = None

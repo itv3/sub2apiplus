@@ -430,6 +430,22 @@ class UnitExecutorBytecodeTests(unittest.TestCase):
 
         self.assertEqual(ue.IDENTITY_MEMO_ENV, tip.IDENTITY_MEMO_ENV)
 
+    def test_bytecode_only_mode_hits_cache_and_clears_inherited_identity_memo(self) -> None:
+        """CI 字节码优化独立验收，不得顺带创建或继承身份记忆化目录。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            completed, summary, probe, names = self._run_probe(
+                root, "--shared-caches", "bytecode", "--bytecode-source", str(root / "tests"),
+                memo=root / "foreign-memo")
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            self.assertEqual(summary["bytecode_cache"]["status"], "ready")
+            self.assertTrue(probe["cached_exists"] and probe["dont_write"])
+            self.assertIsNone(summary["identity_memo"])
+            self.assertIsNone(probe["memo"])
+            self.assertFalse((root / "foreign-memo").exists())
+            self.assertFalse((root / "out/identity-memo").exists())
+            self.assertLess(names.index("bytecode-exit"), names.index("start"))
+
     def test_precompile_failure_fails_the_run_while_units_still_run_without_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

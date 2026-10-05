@@ -15,6 +15,11 @@ on:
         type: choice
         default: unified
         options: [unified, legacy]
+      capture_bytecode_cache:
+        description: 'CI 作业内字节码共享；off 用于显式回退'
+        type: choice
+        default: auto
+        options: [auto, off]
 
 permissions:
   contents: read
@@ -26,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CAPTURE_TEST_EXECUTOR: ${{ inputs.capture_executor || vars.CAPTURE_TEST_EXECUTOR || 'unified' }}
+      CAPTURE_TEST_BYTECODE_CACHE: ${{ inputs.capture_bytecode_cache || vars.CAPTURE_TEST_BYTECODE_CACHE || 'auto' }}
     strategy:
       fail-fast: false
       matrix:
