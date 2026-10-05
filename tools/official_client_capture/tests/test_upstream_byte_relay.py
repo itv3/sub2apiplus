@@ -53,6 +53,13 @@ from tools.official_client_capture.upstream_byte_relay import (
 )
 
 
+def _isolated_output(case: unittest.TestCase) -> str:
+    """负例 CLI 也可能先建输出目录；每次调用使用独立临时根并由测试框架可靠回收。"""
+    temporary = tempfile.TemporaryDirectory(prefix="relay-cli-")
+    case.addCleanup(temporary.cleanup)
+    return str(Path(temporary.name) / "output")
+
+
 def _masked_client_frame(
     payload: bytes,
     *,
@@ -173,7 +180,7 @@ class UpstreamByteRelayFileC2paTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--codex-version",
                 "0.149.1",
                 "--force-file-c2pa-reservation",
@@ -841,7 +848,7 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--synthetic-profile",
                 "candidate-aux-v1",
             ],
@@ -862,7 +869,7 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
             "--key",
             "missing.key",
             "--output",
-            "missing-output",
+            _isolated_output(self),
             "--synthetic-profile",
             "candidate-aux-v1",
             "--allow-synthetic-responses",
@@ -895,7 +902,7 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
             "--key",
             "missing.key",
             "--output",
-            "missing-output",
+            _isolated_output(self),
             "--synthetic-profile",
             "candidate-aux-v1",
             "--allow-synthetic-responses",
@@ -930,7 +937,7 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--synthetic-profile",
                 "candidate-aux-v1",
                 "--allow-synthetic-responses",
@@ -1130,7 +1137,7 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
             "--key",
             "missing.key",
             "--output",
-            "missing-output",
+            _isolated_output(self),
             "--synthetic-profile",
             "claude-fw-f-v3",
             "--allow-synthetic-responses",
@@ -1163,7 +1170,7 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--synthetic-profile",
                 "claude-fw-f-v4",
                 "--allow-synthetic-responses",
@@ -1351,7 +1358,7 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--synthetic-profile",
                 "candidate-core-v1",
                 "--allow-synthetic-responses",
@@ -1374,7 +1381,7 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
                 "--key",
                 "missing.key",
                 "--output",
-                "missing-output",
+                _isolated_output(self),
                 "--synthetic-profile",
                 "candidate-core-v1",
                 "--allow-synthetic-responses",
