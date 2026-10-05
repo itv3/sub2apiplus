@@ -861,14 +861,16 @@ def _traced() -> bool:
 @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("strace") and not _traced(),
                      "要 Linux 上的 strace，且本进程没被跟踪（入口门禁带审计跑全集时本测试已在 strace 下）")
 class ReadAuditRealStraceTests(unittest.TestCase):
-    def test_real_truncated_path_is_not_recorded_as_complete(self) -> None:
+    def test_real_truncated_argv_is_not_recorded_as_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             source = root / "c06-unique-long-input-filename"
             source.write_text("隔离输入")
             trace = root / "raw.trace"
-            command = ["strace", *ra.STRACE_OPTIONS, "-s", "8", "-o", str(trace), "--", "/usr/bin/cat", str(source)]
-            subprocess.run(command, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120)
+            # strace 对文件路径保持完整；打开 execve 参数解码后，用真实截断 argv 检验非路径边界。
+            command = ["strace", *ra.STRACE_OPTIONS, "-s", "8", "-e", "verbose=execve", "-o", str(trace), "--", "/usr/bin/cat", str(source)]
+            subprocess.run(command, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120,
+                           env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
             lines = trace.read_text().splitlines(True)
             self.assertTrue(any('"' + str(source)[:8] + '"...' in line for line in lines))
             for strict in (False, True):
