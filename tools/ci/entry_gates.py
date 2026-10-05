@@ -512,7 +512,11 @@ def plan_gates(
                 if line in MACOS_ONLY_DEPLOY_TESTS and platform != "darwin":
                     skipped.append({"command": line.split(), "reason": MACOS_ONLY_DEPLOY_TESTS[line]})
                     continue
-                members.append(command(_deploy_unit_id(line), line.split(), workdir, DEPLOY_QUOTA, GATE_SECONDS["deploy-scripts"]))
+                argv = line.split()
+                # 语法检查已固定 Bash；显式绑定 SHELL，避免白名单环境缺值时无关的用户数据库／NSS 查询。
+                # 环境值进入单元规格摘要；其它实际脚本执行仍保留原环境。
+                syntax_env = {"SHELL": "/bin/bash"} if argv[:2] == ["/bin/bash", "-n"] else None
+                members.append(command(_deploy_unit_id(line), argv, workdir, DEPLOY_QUOTA, GATE_SECONDS["deploy-scripts"], syntax_env))
             if not members:
                 raise ValueError("部署脚本测试在本平台一项都不执行")
             gates.append({"gate_id": gate_id, "units": members, "not_executed": skipped})
