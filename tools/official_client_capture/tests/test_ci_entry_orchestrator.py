@@ -197,9 +197,10 @@ class OrchestratorTestCase(unittest.TestCase):
         approval = kwargs.pop("approval", None)
         reexecute_gates = kwargs.pop("reexecute_gates", False)
         full_set_request = kwargs.pop("full_set_request", None)
+        full_set_work = kwargs.pop("full_set_work", None)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
-                                       approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request)
+                                       approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request, full_set_work=full_set_work)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -365,10 +366,11 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
 
     def test_full_set_request_reaches_the_gate_and_force_reexecute_is_preserved(self) -> None:
         request = self.fx.root / "request.json"
-        self.orchestrate(full_set_request=request)
+        self.orchestrate(full_set_request=request, full_set_work=self.fx.root / "background-work")
         self.assertEqual(self.commands.gates_modes[-1], "full-set-pass")
         gate = next(call for call in self.commands.calls if "--full-set-request" in call)
         self.assertEqual(_option(gate, "--full-set-request"), str(request))
+        self.assertEqual(_option(gate, "--work"), str(self.fx.root / "background-work"))
         self.orchestrate(full_set_request=request, reexecute_gates=True)
         self.assertEqual(self.commands.gates_modes[-1], "re-execute")
 

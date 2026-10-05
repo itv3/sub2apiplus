@@ -487,7 +487,7 @@
 输出不可覆盖。签发时刻取原全集最后单元完成 UTC，期限至多 86400 秒；`--predecessor` 关联失效旧收据，
 同一旧运行不得作为替代重跑，重复签发不续期。
 
-开工 `entry.sh --full-set-request <JSON>` 或独立 `entry-gates.sh --full-set-request <JSON>` 消费请求。
+开工 `entry.sh --full-set-request <JSON> --full-set-work <来源后台的 work 目录>` 或独立 `entry-gates.sh --full-set-request <JSON>` 消费请求。
 缺少请求、任一条件失效或开关关闭均重新执行全集。请求使用 `full-set-request/v1`，含 `reuse_enabled`、
 `receipt`、`context`、`consumer_clock`、`revocation`、`approvals`；文件索引均为规范绝对路径和完整 SHA-256。
 两类批准分别登记三方审核与变更批准的角色、账号、UTC、有效期、合同与绑定摘要，工具不代签。
@@ -509,3 +509,6 @@
 B-09 后台结论到期时自动新建执行；收到撤销或错绑后用 `background-validate.sh start … --rerun-full-set`，
 旧终态按内容摘要归档并关联旧收据，仍在运行时拒绝重复派发。校时采样允许由已登记的校时来源更新；
 部署、画像与数据等静态上下文在运行期间改变则拒签，不能把新上下文套到旧执行上。
+
+来源与消费工作区及缓存必须保持一致；`--full-set-work` 显式传递已登记的后台独立目录，
+工作区重建或路径不同会使严格输入失效并重跑，不能为了承接而忽略路径差异。
