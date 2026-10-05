@@ -10,6 +10,13 @@ export DRV=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${ARM64_VC_ENV:?ARM64_VC_ENV 未设置（指向本轮 env.sh，见 env.example.sh）}"
 ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }
 eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
+# 阶段入口先只读解析；错误必须先于目录、预约或网络副作用。
+phase_require() {
+  local exports
+  exports=$(python3 -B "$DRV/phase_context.py" --env "$ARM64_VC_ENV" --shell "$@") || return 3
+  eval "$exports"
+}
+if declare -p PHASE_CONTEXT_ARGS >/dev/null 2>&1; then phase_require "${PHASE_CONTEXT_ARGS[@]}" || exit 3; fi
 [ -d "$RUNROOT" ] || mkdir -p "$RUNROOT"; [ "$(python3 -c "import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))" "$RUNROOT")" = 0o700 ] || chmod 700 "$RUNROOT"
 export D PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 PATH=/usr/local/go/bin:/opt/node-v20/bin:$PATH
 # 共享缓存（E2-02）：数据根受管树与标准库的字节码预编译在数据根之外（源码按内容摘要失效，见 bytecode_cache.py），

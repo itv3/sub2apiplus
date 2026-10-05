@@ -6,12 +6,12 @@
 #   → 校验 vc5-completion.json 与 vc-5-checkpoint.json。
 # 用法：bash vc5-canonical2.sh <attempt_id>
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 vc5_require_admission
-ATT="$1"; EV="$NEWDIR/candidates/$CAND/attempts/$ATT/evidence"
-test -f "$NEWDIR/acceptance/$CAND/result.json"
-if [ -f "$NEWDIR/control/vc/receipts/$CAND/vc5-completion.json" ]; then echo "CANONICAL2_SKIP: vc5-completion.json 已存在"; echo "CANONICAL2_DONE"; exit 0; fi
+test "$ACCEPT_READY" = 1
+if [ "$VC5_COMPLETE" = 1 ]; then echo "CANONICAL2_SKIP: 当前 VC-5 完成收据已重放"; echo "CANONICAL2_DONE"; exit 0; fi
 ACTIVE=$ACTIVE_PROFILE
 PATCH=$PROFILE_PATCH_JSON
 echo "=== 离线预览 A（内部函数，零副作用，无父 run）$(utc_now)"
@@ -83,9 +83,7 @@ SEQ=$(next_seq)
 echo "=== 批次 ${SEQ}：canonical seal → compare → accept（从 import 之后的 step 续跑，Candidate Job 零执行）$(utc_now)"
 bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$SEQ" VC-4 action-plan-vc5-canonical-b.json | grep -v "^$" | cut -c1-400
 ls "$NEWDIR/canonical/checkpoints"; ls "$NEWDIR/control/vc/" | tr "\n" " "; echo
-test -f "$NEWDIR/control/vc/vc-5-checkpoint.json" && python3 -c "
-import json; c=json.load(open('$NEWDIR/control/vc/vc-5-checkpoint.json')); print('VC-5 checkpoint:', {k:c.get(k) for k in ('phase','status','completed_at_utc')})
-r=json.load(open('$NEWDIR/control/vc/receipts/$CAND/vc5-completion.json')); print('vc5-completion:', {k:(str(r.get(k))[:80]) for k in ('status','receipt_digest')})
-cp=json.load(open(sorted(__import__('glob').glob('$NEWDIR/canonical/checkpoints/*.json'))[-1])); print('canonical latest:', cp['phase'], 'execute:', cp['plan']['execute_item_ids'], 'metrics:', cp['metrics'])"
+phase_require --mode attempt --attempt-id "$ATT" --require-completion VC-5
+echo "VC-5 checkpoint: $VC5_CHECKPOINT receipt: $VC5_RECEIPT"
 python3 -m tools.official_client_capture.codex_upgrade_timing_ledger status --ledger-dir "$L" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('账本:', {k:d.get(k) for k in ('status','active_phase','head_sequence','next_action')})" | cut -c1-300
 echo "CANONICAL2_DONE"

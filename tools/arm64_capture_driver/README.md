@@ -25,6 +25,12 @@
   `--mode init` 只允许尚未创建的 Campaign，返回初始化坐标，不能代替正式准入。VC-5 准入已消费严格候选解析。
   `CAND` 是预期断言，实际候选来自账本；不按最新目录或最大 revision 选择。正式收据的重放、批准和派发合同保持独立。
 
+* `phase_context.py --env "$ARM64_VC_ENV" --mode paths|build|attempt` 只读解析 VC-5／VC-6 的当前评估基线、
+  阶段读来源与可写目标。`--mode attempt [--attempt-id ...]` 核对唯一有效 attempt 及完成收据；显式 ATT 只作断言。
+  重开后的 checkpoint 使用原生 reopen 路径，reused 阶段不生成写计划；断言配置和门禁目录按候选／基线隔离。
+  `build` 必须完整重放构建实物；已封存结果的只读查询可核对历史构建收据绑定，报告明确为 `sealed_receipt_binding`，
+  不能用作新采集准入。`vc-batch.sh` 在预约前重放直接前序与计划参数，VC-6 另核对步骤收据与当前 acceptance。
+
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。

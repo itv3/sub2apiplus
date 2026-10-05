@@ -479,6 +479,8 @@ class EntryOrderingTests(unittest.TestCase):
             drv.mkdir()
             for name in ("lib.sh", "parse_env.py", "driver_config.py", "vc5_admission.py", "vc5-start.sh"):
                 shutil.copy(SCRIPTS / name, drv / name)
+            from tools.official_client_capture.tests.test_arm64_capture_driver import _stub_phase_context
+            _stub_phase_context(drv)
             compose = root / "compose"
             compose.mkdir()
             admission.atomic_write(compose / ".env", 'JWT_SECRET="隔离验收签名密钥"\nADMIN_EMAIL=admin@fixture.invalid\nPOSTGRES_USER=fixture\nPOSTGRES_PASSWORD=fixture\nPOSTGRES_DB=fixture\n'.encode())
@@ -508,7 +510,12 @@ facts.catalog=lambda: {{**original(),"profile_id":config["PROFILE_ID"]}}
 with mock.patch.object(module,"ManagedFacts",return_value=facts):
     if sys.argv[1]=="--generate":
         sys.argv=["gen_vc5_plans.py",*sys.argv[2:]]
-        runpy.run_path({str(SCRIPTS / "gen_vc5_plans.py")!r},run_name="__main__")
+        phase=mock.Mock()
+        phase.resolve.return_value={{"parameters":{{"IMAGE_ID":facts.catalog()["image_id"],"BUILD_ID":"fixture-build",
+            "BUILD_RECEIPT":str(Path(config["NEWDIR"])/"candidates"/config["CAND"]/"build-receipt.json"),
+            "PROFILE_ID":config["PROFILE_ID"],"PROFILE_DIGEST":"d"*64,"CAPTURE_WRITE":"current-result"}}}}
+        with mock.patch.dict(sys.modules,{{"phase_context":phase}}):
+            runpy.run_path({str(SCRIPTS / "gen_vc5_plans.py")!r},run_name="__main__")
     else:
         raise SystemExit(module.main(sys.argv[1:]))
 ''')
@@ -597,8 +604,12 @@ with mock.patch.object(module,"ManagedFacts",return_value=facts):
             fake_admission = mock.Mock()
             fake_admission.Admission.return_value.consume.return_value = receipt
             fake_config = mock.Mock(load_config=lambda: dict(config))
-            modules = {"vc5_admission": fake_admission, "driver_config": fake_config}
-            output = root / "plans"
+            fake_phase = mock.Mock()
+            fake_phase.resolve.return_value = {"parameters": {"IMAGE_ID": image, "BUILD_ID": "build",
+                "BUILD_RECEIPT": str(fixture.newdir / "candidates" / fixture.cand / "build-receipt.json"),
+                "PROFILE_ID": config["PROFILE_ID"], "PROFILE_DIGEST": "d" * 64, "CAPTURE_WRITE": "current-result"}}
+            modules = {"vc5_admission": fake_admission, "driver_config": fake_config, "phase_context": fake_phase}
+            output = Path(config["W"])
             args = ["gen_vc5_plans.py", str(output), fixture.new, fixture.cand, image, "build"]
             environment = {**config, "CANDIDATE_DIR": str(fixture.candidate_dir)}
             with mock.patch.dict(sys.modules, modules), mock.patch.dict(os.environ, environment), \
@@ -639,6 +650,8 @@ with mock.patch.object(module,"ManagedFacts",return_value=facts):
                 drv.mkdir()
                 for file in ("lib.sh", "parse_env.py", name):
                     shutil.copy(SCRIPTS / file, drv / file)
+                from tools.official_client_capture.tests.test_arm64_capture_driver import _stub_phase_context
+                _stub_phase_context(drv)
                 calls = root / "calls"
                 (drv / "vc5-precheck.sh").write_text(f"#!/bin/bash\necho admission >> '{calls}'\nexit 3\n")
                 for file in ("guard.sh", "vc5-switch.sh", "gen_vc5_plans.py", "gen_vc5_recovery_plans.py", "vc-batch.sh"):

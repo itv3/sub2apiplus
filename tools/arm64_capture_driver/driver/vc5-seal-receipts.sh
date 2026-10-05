@@ -4,16 +4,10 @@
 # 幂等边界（2026-09-22 v14r4 教训）：attempt 的 evidence-manifest.json 已存在时进入只核对模式——不 mkdir、不 chmod、
 # 不生成任何文件，只断言全部收据已存在；manifest 绑定的证据根从此不可触碰。
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1" --client-checkpoint-at-utc "$2")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-ATT="$1"; CKPT="$2"
-A="$NEWDIR/candidates/$CAND/attempts/$ATT"; EV="$A/evidence"
-eval "$(python3 - "$A/attempt.json" <<'PY'
-import json, sys, shlex
-d = json.load(open(sys.argv[1])); i = d["identity"]
-for k, v in {"CID": d["campaign_id"], "RUN_NONCE": d["run_nonce"], "STARTED": d["started_at_utc"], "IMAGE_ID": i["image_id"], "IMAGE_REF": i["image_reference"], "TREE": i["source_tree_sha256"], "BUILD_ID": i["build_id"], "DEPLOYED": i["deployed_version"], "PROFILE_ID": i["profile_id"], "PROFILE_DIGEST": i["profile_digest"], "SOURCE_ROOT": i["source_root"]}.items():
-    print(f"{k}={shlex.quote(str(v))}")
-PY
-)"
+CKPT="$2"
+
 echo "attempt=$ATT nonce=${RUN_NONCE:0:12} started=$STARTED ckpt=$CKPT"
 RECEIPTS=("$EV/client/raw/profile-activation-fact.json" "$EV/client/generated/observed-profile-runtime-audit.json" "$EV/client/receipts/observed-profile-receipt.json" "$EV/client/generated/kilo/kilo-installation.json" "$EV/client/receipts/kilo-compatible-receipt.json" "$EV/client/receipts/kilo-responses-receipt.json")
 if [ -e "$A/evidence-manifest.json" ] || [ -L "$A/evidence-manifest.json" ]; then

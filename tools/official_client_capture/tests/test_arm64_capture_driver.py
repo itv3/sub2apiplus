@@ -365,7 +365,12 @@ class PermissionCloseoutTests(unittest.TestCase):
             _write_json(attempt / "evidence-manifest.json", manifest)
             bound_before = self._stat_rows(attempt / "evidence")
             env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CLOSEOUT_OWNER": pwd.getpwuid(os.getuid()).pw_name}
-            result = _run(SCRIPTS / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
+            driver = root / "driver"
+            driver.mkdir()
+            for name in ("lib.sh", "parse_env.py", "vc5-seal-receipts.sh", "vc5-permission-closeout.sh"):
+                (driver / name).write_bytes((SCRIPTS / name).read_bytes())
+            _stub_phase_context(driver)
+            result = _run(driver / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("SEAL_RECEIPTS_VERIFIED", result.stdout)
             self.assertEqual(log.read_text(encoding="utf-8"), "", "manifest 存在时 seal-receipts 不得调用 chmod/chown")
@@ -373,10 +378,58 @@ class PermissionCloseoutTests(unittest.TestCase):
             self.assertEqual(evidence_manifest.verify_manifest_boundary(manifest, [attempt / "evidence"])["status"], "passed")
             # 收据缺失：不可补写，退出 3
             (client / "receipts" / "kilo-responses-receipt.json").unlink()
-            missing = _run(SCRIPTS / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
+            missing = _run(driver / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
             self.assertEqual(missing.returncode, 3, missing.stdout + missing.stderr)
             self.assertIn("收据缺失", missing.stdout)
             self.assertEqual(log.read_text(encoding="utf-8"), "")
+
+
+def _stub_phase_context(driver: Path) -> None:
+    """只给编排边界用例替换阶段解析器；真实解析与拒绝边界由独立合同用例覆盖。"""
+
+    (driver / "phase_context.py").write_text('''import json, os, shlex, sys
+from pathlib import Path
+from parse_env import parse, derive
+args = sys.argv[1:]
+config = parse(Path(args[args.index("--env") + 1]).read_text())
+config.update(derive(config))
+c = Path(config["NEWDIR"]); candidate = config["CAND"]
+attempts = c / "candidates" / candidate / "attempts"
+selected = args[args.index("--attempt-id") + 1] if "--attempt-id" in args else next(iter(sorted(p.name for p in attempts.iterdir())), "") if attempts.exists() else ""
+a = attempts / selected
+d = json.loads((a / "attempt.json").read_text()) if (a / "attempt.json").is_file() else {}
+identity = d.get("identity", {})
+params = {"ATT": selected, "A": str(a), "EV": str(a / "evidence"), "ATT_STATUS": d.get("status", "awaiting_receipts"),
+          "RUN_NONCE": d.get("run_nonce", "nonce"), "STARTED": d.get("started_at_utc", "now"), "CID": config["NEW"],
+          "IMAGE_ID": identity.get("image_id", "sha256:" + "0" * 64), "IMAGE_REF": identity.get("image_reference", "repo@sha256:" + "0" * 64),
+          "BUILD_ID": identity.get("build_id", "b1"), "TREE": identity.get("source_tree_sha256", "t" * 64),
+          "SOURCE_ROOT": identity.get("source_root", "/src"), "DEPLOYED": identity.get("deployed_version", config["TARGET_VERSION"]),
+          "PROFILE_ID": identity.get("profile_id", config["PROFILE_ID"]), "PROFILE_DIGEST": identity.get("profile_digest", config["PROFILE_DIGEST"]),
+          "BUILD_RECEIPT": str(c / "candidates" / candidate / "build-receipt.json"), "EVALUATION_BASELINE": "0",
+          "GATE_ROOT": config["G"], "ASSERTION_CONFIG_DIR": config["AS"]}
+if not d:
+    build = Path(params["BUILD_RECEIPT"])
+    artifact = Path(config["B"]) / "artifacts/build-parameters.json"
+    if build.is_file(): params["BUILD_ID"] = json.loads(build.read_text())["build"]["build_id"]
+    if artifact.is_file(): params["IMAGE_ID"] = json.loads(artifact.read_text())["docker_build"]["image_id"]
+for name, root in (("CAPTURE", "candidates"), ("COMPARE", "comparisons"), ("ACCEPT", "acceptance"), ("ASSERTIONS", "assertions")):
+    path = c / root / candidate / ("results.json" if name == "ASSERTIONS" else "result.json")
+    params[name + "_RESULT"] = str(path)
+    params[name + "_WRITE"] = str(path.parent if name == "ASSERTIONS" else path)
+    params[name + "_READY"] = "1" if path.is_file() else "0"
+params["EVALUATION_RUN"] = str(c / "assertions" / candidate / "evaluation-run.json")
+for phase in ("VC5", "VC6"):
+    receipt = c / "control/vc/receipts" / candidate / (phase.lower() + "-completion.json")
+    params[phase + "_RECEIPT"] = str(receipt)
+    params[phase + "_COMPLETE"] = "1" if receipt.is_file() else "0"
+    params[phase + "_CHECKPOINT"] = str(c / "control/vc" / (phase.lower().replace("vc", "vc-") + "-checkpoint.json"))
+if "--predecessor" in args:
+    params["PRED_CKPT"] = str(c / "control/vc" / (args[args.index("--predecessor") + 1].lower() + "-checkpoint.json"))
+if "--shell" in args:
+    for key, value in params.items(): print("export " + key + "=" + shlex.quote(str(value)))
+else:
+    print(json.dumps({"parameters": params}))
+''', encoding="utf-8")
 
 
 class _DriverFixture:
@@ -435,6 +488,7 @@ class Vc5AllResumeTests(unittest.TestCase):
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "wait_state.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        _stub_phase_context(drv)
         calls = root / "stub-calls.log"
         calls.touch()
         for name in self.STUBS:
@@ -635,6 +689,7 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "vc5-seal.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        _stub_phase_context(drv)
         calls = root / "stub-calls.log"
         calls.touch()
         for name in (*self.WRITE_STUBS, "vc5-seal-receipts.sh"):
@@ -694,7 +749,7 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([name for name in called if name in self.WRITE_STUBS], [], "manifest 存在后不得派发 seal checkpoint／assertion／preview／Kilo")
-            self.assertIn("vc5-seal-receipts.sh", called)
+            self.assertNotIn("vc5-seal-receipts.sh", called, "采集和比较已重放完成时直接返回，既有证据保持只读")
             self.assertIn("SEAL_DONE", result.stdout)
             self.assertIn("SEALED=1", result.stdout)
 
@@ -765,8 +820,8 @@ class DriverParameterizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = _DriverFixture(root)
-            output = root / 'plans'
-            output.mkdir()
+            output = fixture.data_root / 'control' / fixture.inputs
+            output.mkdir(parents=True)
             environment = {**os.environ, **fixture.env, 'CANDIDATE_DIR': str(fixture.candidate_dir), 'PYTHONDONTWRITEBYTECODE': '1'}
             image_id = 'sha256:' + 'a' * 64
             commands = [
@@ -782,7 +837,11 @@ class DriverParameterizationTests(unittest.TestCase):
                                                 "OFFICIAL_CAMPAIGN": str(fixture.newdir)}}
             fake_admission = mock.Mock()
             fake_admission.Admission.return_value.consume.return_value = receipt
-            with mock.patch.dict(os.environ, environment), mock.patch.dict(sys.modules, {"vc5_admission": fake_admission}), \
+            fake_phase = mock.Mock()
+            fake_phase.resolve.return_value = {"parameters": {"IMAGE_ID": image_id, "BUILD_ID": "build-test",
+                "BUILD_RECEIPT": str(fixture.newdir / 'candidates' / fixture.cand / 'build-receipt.json'),
+                "PROFILE_ID": "codex-0.156.1-official", "PROFILE_DIGEST": "3" * 64, "CAPTURE_WRITE": "current-result"}}
+            with mock.patch.dict(os.environ, environment), mock.patch.dict(sys.modules, {"vc5_admission": fake_admission, "phase_context": fake_phase}), \
                     mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]), \
                     mock.patch.object(sys, "argv", ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test']), \
                     contextlib.redirect_stdout(io.StringIO()):

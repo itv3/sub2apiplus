@@ -51,6 +51,7 @@ class VcBatchBoundaryTests(unittest.TestCase):
         for name in ("lib.sh", "parse_env.py", "vc-batch.sh", "background_validation.py", "unit_executor.py", "unit_records.py",
                      "read_audit.py", "unit_executor.json"):
             (self.drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        driver_tests._stub_phase_context(self.drv)
         for relative, text in {"tools/__init__.py": "", "tools/official_client_capture/__init__.py": "",
                                "tools/official_client_capture/codex_upgrade.py": STUB_ORCHESTRATOR}.items():
             path = self.data / relative
@@ -109,9 +110,8 @@ class VcBatchBoundaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(self.calls()), 2)
 
-    def test_candidate_stage_without_revisions_falls_back_to_campaign_checkpoint(self) -> None:
-        """VC-4～VC-6 的前序 checkpoint：没有任何 revision 目录时回落 Campaign 级路径（原来 ls 无匹配在 pipefail 下让整个
-        脚本中止，回落分支走不到）。"""
+    def test_candidate_stage_consumes_resolved_predecessor_checkpoint(self) -> None:
+        """编排器消费阶段解析器返回的路径；r1/r2 选择与真实拒绝由阶段解析用例覆盖。"""
 
         self.validation("passed")
         result = self.batch("VC-5", "VC-4")

@@ -2,9 +2,9 @@
 # Kilo 双入口：在候选 attempt 完成后、seal 第一步前发送恰好两条真实请求，并从服务端记录组装 kilo-facts.json。
 # 用法：bash vc5-kilo.sh <attempt_id>
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-ATT="$1"
-A="$NEWDIR/candidates/$CAND/attempts/$ATT"; EV="$A/evidence"; RAW="$EV/client/raw"; LOG="$D/control/$NEW-kilo-logs/run$(date -u +%Y%m%dt%H%M%Sz)"
+RAW="$EV/client/raw"; LOG="$D/control/$NEW-kilo-logs/run$(date -u +%Y%m%dt%H%M%Sz)"
 # 已封存 attempt 不得再进入 Kilo（manifest 绑定 evidence/**）；kilo-facts 已存在也不得重发请求
 if [ -e "$A/evidence-manifest.json" ]; then echo "KILO_ABORT: evidence-manifest.json 已存在，禁止再写 evidence/client"; exit 3; fi
 if [ -f "$RAW/kilo-facts.json" ]; then echo "KILO_SKIP: kilo-facts.json 已存在"; exit 0; fi
@@ -16,13 +16,7 @@ ACTUAL_VER=$(timeout 20 "$K" --version 2>/dev/null | tail -n 1 | tr -d "[:space:
 echo "KILO_FAILFAST_PASS path=$K version=$ACTUAL_VER sha256=${ACTUAL_SHA:0:16}"
 mkdir -p "$RAW" "$LOG"; chmod 700 "$LOG"
 bash "$DRV/vc5-permission-closeout.sh" "$A" > /dev/null
-eval "$(python3 - "$A/attempt.json" <<'PY'
-import json, sys, shlex
-d = json.load(open(sys.argv[1])); i = d["identity"]
-for k, v in {"CID": d["campaign_id"], "RUN_NONCE": d["run_nonce"], "IMAGE_ID": i["image_id"], "TREE": i["source_tree_sha256"], "BUILD_ID": i["build_id"], "DEPLOYED": i["deployed_version"], "PROFILE_ID": i["profile_id"], "PROFILE_DIGEST": i["profile_digest"]}.items():
-    print(f"{k}={shlex.quote(str(v))}")
-PY
-)"
+
 cd "$COMPOSE_DIR" && set -a && . ./.env && set +a; cd /tmp
 dbq() { docker exec sub2apiplus-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAtc "$1"; }
 API_KEY=$(dbq "select key from api_keys where id = $API_KEY_ID and status = 'active' and deleted_at is null"); test -n "$API_KEY"

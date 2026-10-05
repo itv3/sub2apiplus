@@ -6,15 +6,23 @@
 #   Kilo／seal checkpoint／assertion bundle／seal 预览这四个写动作一律不再派发；任何前置产物缺失即失败关闭（退出 3），
 #   只允许读侧复核（seal-receipts 只核对模式）与批准 + compare。manifest 不存在时按产物存在与否逐步续跑。
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 vc5_require_admission
-ATT="$1"; A="$NEWDIR/candidates/$CAND/attempts/$ATT"; EV="$A/evidence"; test -f "$A/attempt.json"
-IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
-BUILD_ID=$(python3 -c "import json; print(json.load(open('$NEWDIR/candidates/$CAND/build-receipt.json'))['build']['build_id'])")
-# v14r3 教训（2026-09-22）：attempt 非 awaiting_receipts（如 environment_contaminated）时不得进入 Kilo（会白发真实请求）
-ATT_STATUS=$(python3 -c "import json; print(json.load(open('$A/attempt.json'))['status'])"); echo "ATT=$ATT status=$ATT_STATUS"
-[ "$ATT_STATUS" = awaiting_receipts ] || { echo "SEAL_ABORT: attempt 状态 $ATT_STATUS 不是 awaiting_receipts，停止"; exit 1; }
+echo "ATT=$ATT status=$ATT_STATUS"
+# 已封存采集可来自前序基线；仅对当前 local 比较目标补跑，禁止重写承接证据。
+if [ "$CAPTURE_READY" = 1 ]; then
+  if [ "$COMPARE_READY" != 1 ]; then
+    test -n "$COMPARE_WRITE" || { echo "比较来源只读，不能派发"; exit 3; }
+    python3 -B "$DRV/gen_vc5_plans.py" "$W" "$NEW" "$CAND" "$IMAGE_ID" "$BUILD_ID" "$ATT"
+    bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$(next_seq)" VC-4 action-plan-vc5-compare.json
+  fi
+  phase_require --mode attempt --attempt-id "$ATT"
+  test "$COMPARE_READY" = 1
+  echo "SEAL_DONE ATT=$ATT SEALED=1"; exit 0
+fi
+test -n "$CAPTURE_WRITE" || { echo "采集来源只读，不能派发封存"; exit 3; }
 MANIFEST="$A/evidence-manifest.json"; SEALED=0
 if [ -e "$MANIFEST" ] || [ -L "$MANIFEST" ]; then
   SEALED=1; echo "=== evidence-manifest.json 已存在：证据根只读，只做读侧复核与批准 + compare"
@@ -57,11 +65,12 @@ if [ "$SEALED" = 0 ] && [ ! -f "$A/seal-preview.json" ]; then
 fi
 SEAL_SHA=$(python3 -c "import json; print(json.load(open('$A/seal-preview.json'))['review_sha256'])"); echo "SEAL_SHA=$SEAL_SHA"
 CANDIDATE_DIR=$B PROFILE_ID=$PROFILE_ID PROFILE_DIGEST=$PROFILE_DIGEST python3 "$DRV/gen_vc5_plans.py" "$W" "$NEW" "$CAND" "$IMAGE_ID" "$BUILD_ID" "$ATT" "$SEAL_SHA" | cut -c1-120; chmod 600 "$W"/*.json
-if [ ! -f "$NEWDIR/candidates/$CAND/result.json" ]; then
+if [ ! -f "$CAPTURE_RESULT" ]; then
   echo "=== 预演批次 ${SEQ}（seal 批准 + compare）"; rehearse action-plan-vc5-seal-approve-compare.json
   echo "=== 批次 ${SEQ}：seal 批准 + compare"; batch "$SEQ" action-plan-vc5-seal-approve-compare.json; SEQ=$((SEQ+1))
 fi
-python3 -c "import json; d=json.load(open('$NEWDIR/candidates/$CAND/result.json')); print('candidate result:', {k:(str(d.get(k))[:40]) for k in ('status','package_digest','attempt_id','candidate_id')})"
-python3 -c "import json; d=json.load(open('$NEWDIR/comparisons/$CAND/result.json')); print('compare:', {k:(str(d.get(k))[:60]) for k in ('status','package_digest','official_package_digest','candidate_package_digest','summary')})"
+phase_require --mode attempt --attempt-id "$ATT"
+python3 -c "import json; d=json.load(open('$CAPTURE_RESULT')); print('candidate result:', {k:(str(d.get(k))[:40]) for k in ('status','package_digest','attempt_id','candidate_id')})"
+python3 -c "import json; d=json.load(open('$COMPARE_RESULT')); print('compare:', {k:(str(d.get(k))[:60]) for k in ('status','package_digest','official_package_digest','candidate_package_digest','summary')})"
 python3 -m tools.official_client_capture.codex_upgrade_timing_ledger status --ledger-dir "$L" 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('账本:', {k:d.get(k) for k in ('status','active_phase','head_sequence')})" || echo "账本状态读取失败（不影响 seal 产物）"
 echo "SEAL_DONE ATT=$ATT SEAL_SHA=$SEAL_SHA NEXT_SEQ=$SEQ SEALED=$SEALED"

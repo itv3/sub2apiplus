@@ -3,15 +3,26 @@
 用法：build_assertion_config.py <campaign_dir> <candidate_id> <official_campaign_dir> <输出 config.json>
 official_campaign_dir 是官方证据所在（reuse 导入的原始）Campaign 目录。"""
 import json, sys, pathlib
+sys.dont_write_bytecode = True
+from driver_config import load_config
+from phase_context import resolve
+CONFIG = load_config()
+CONTEXT = resolve(CONFIG, mode="attempt")
 from tools.official_client_capture import codex_upgrade as cu
 campaign_dir, cand, official_dir, out = sys.argv[1:]
 C = pathlib.Path(campaign_dir); O = pathlib.Path(official_dir)
-classification = json.load(open(C / "classification" / "result.json"))
+if (str(C), cand) != (CONFIG["NEWDIR"], CONFIG["CAND"]):
+    raise SystemExit("断言配置的 Campaign 或 Candidate 与本轮不一致")
+if pathlib.Path(out) != pathlib.Path(CONTEXT["parameters"]["ASSERTION_CONFIG_DIR"]) / "config.json":
+    raise SystemExit("断言配置必须写入当前评估基线的控制目录")
+if not CONTEXT["parameters"]["ASSERTIONS_WRITE"]:
+    raise SystemExit("当前断言来源只读，禁止写入新配置")
+classification = cu._load_stage_result(C, "classify")
 # 第三批 R5：按当前评估基线生效的批准画像投影（approval-revision 基线下取修订画像，其余批准包身份不变）。
 classification = cu._effective_classification_view(C, cand, classification)
-candidate = json.load(open(C / "candidates" / cand / "result.json"))
-comparison = json.load(open(C / "comparisons" / cand / "result.json"))
-official = json.load(open(O / "official" / "result.json"))
+candidate = cu._load_stage_result(C, "capture-candidate", cand)
+comparison = cu._load_stage_result(C, "compare", cand)
+official = cu._load_stage_result(O, "capture-official")
 approved = C / "classification" / "approved"
 _tr = json.load(open(approved / "target-rules.json")); rules = _tr.get("rules") or _tr.get("required_rules")
 rule_ids = [row["rule"] if isinstance(row, dict) and "rule" in row else (row["id"] if isinstance(row, dict) else row) for row in rules]

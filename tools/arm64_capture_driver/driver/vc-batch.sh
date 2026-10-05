@@ -7,18 +7,12 @@
 # 后台验证停派、等在跑单元结束才批准，批次结束（含失败退出）归还，后台接着跑。等批准的上限 VC_ACQUIRE_TIMEOUT 秒
 # （默认 3600），超时不派发、退出 3。
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode batch --campaign-id "$1" --inputs "$2" --phase "$3" --predecessor "$5" --plan-name "$6")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 CID="$1"; INPUTS="$2"; PHASE="$3"; SEQ="$4"; PRED="$5"; PLAN="$6"
-CDIR="$D/evidence/campaigns/$CID"; WDIR="$D/control/$INPUTS"; STATE="${VC_STATE_DIR:-$D/control/$CID-supervisor}"
+CDIR="$NEWDIR"; WDIR="$W"; STATE="${VC_STATE_DIR:-$D/control/$NEW-supervisor}"
 if [ -n "${VC_STATE_DIR:-}" ]; then test -d "$STATE" || { echo "VC_STATE_DIR 不存在：${STATE}"; exit 2; }; else [ -d "$STATE" ] || mkdir -m 0700 "$STATE"; fi
-PRED_LOWER=$(echo "$PRED" | tr "A-Z" "a-z")
-# 改造 2：候选级阶段（VC-4～VC-6）r≥2 的 checkpoint 落在 control/vc/revisions/r<N>/；有则取最大 revision 的，否则回落 Campaign 级路径
-PRED_CKPT="$CDIR/control/vc/$PRED_LOWER-checkpoint.json"
-case "$PRED" in VC-4|VC-5|VC-6)
-  # 没有任何 revision 目录时 ls 失败，pipefail 下整条赋值失败会让 set -e 直接中止，回落分支走不到：|| true 兜住。
-  LATEST=$(ls -d "$CDIR"/control/vc/revisions/r*/ 2>/dev/null | sed "s#.*/r\([0-9]*\)/#\1#" | sort -n | tail -n 1 || true)
-  if [ -n "$LATEST" ] && [ "$LATEST" -ge 2 ] && [ -f "$CDIR/control/vc/revisions/r$LATEST/$PRED_LOWER-checkpoint.json" ]; then PRED_CKPT="$CDIR/control/vc/revisions/r$LATEST/$PRED_LOWER-checkpoint.json"; fi;;
-esac
+# PRED_CKPT 由账本、revision 与原生 checkpoint 重放确定。
 echo "predecessor checkpoint: $PRED_CKPT"
 if ! python3 -B "$DRV/background_validation.py" check-boundary --runroot "$RUNROOT" --data-root "$D"; then
   echo "批次边界：后台验证不放行，不派发批次 ${SEQ}（修好、定向回归、部署后重新起后台验证）"; exit 3
