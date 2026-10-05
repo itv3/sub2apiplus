@@ -268,7 +268,8 @@ print("isolated-report.json")
             data = Path(values["D"])
             data.mkdir(parents=True, exist_ok=True)
             shutil.rmtree(data / "tools")
-            (data / "tools").symlink_to(REPO_ROOT / "tools", target_is_directory=True)
+            # 与正式安装一致：工具根必须是普通目录，不能靠链接绕过根校验。
+            shutil.copytree(REPO_ROOT / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__"))
             env = {k: v for k, v in os.environ.items() if k not in {"D", "PYTHONPATH"}}
             env.update(ARM64_VC_ENV=str(fixture.env_file), PYTHONDONTWRITEBYTECODE="1")
             result = subprocess.run(["python3", "-B", str(installed / "vc2_assertion_preflight.py"), "--help"],

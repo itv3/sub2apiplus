@@ -105,7 +105,8 @@ class BuildNetworkContractTests(unittest.TestCase):
         for name in ("vc4_contract.py", "driver_config.py", "parse_env.py", "build.sh"):
             shutil.copy2(SCRIPTS / name, copied / name)
         shutil.rmtree(self.fixture.data_root / "tools")
-        (self.fixture.data_root / "tools").symlink_to(REPO_ROOT / "tools", target_is_directory=True)
+        # A-08.1 要求受管根无符号链接；安装夹具使用独立普通目录。
+        shutil.copytree(REPO_ROOT / "tools", self.fixture.data_root / "tools", ignore=shutil.ignore_patterns("__pycache__"))
         environment = dict(os.environ, ARM64_VC_ENV=str(self.fixture.env_file), PYTHONDONTWRITEBYTECODE="1")
         for name in ("D", "PYTHONPATH", "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL"):
             environment.pop(name, None)
@@ -250,7 +251,7 @@ class TreePreparationTests(unittest.TestCase):
         shutil.copytree(hist / "backend", previous)
         # 子进程读取真实工具合同；所有落盘路径均在本用例的独立数据根中。
         shutil.rmtree(fixture.data_root / "tools")
-        (fixture.data_root / "tools").symlink_to(REPO_ROOT / "tools", target_is_directory=True)
+        shutil.copytree(REPO_ROOT / "tools", fixture.data_root / "tools", ignore=shutil.ignore_patterns("__pycache__"))
         drv = root / "driver"
         drv.mkdir()
         for name in ("lib.sh", "parse_env.py", "driver_config.py", "vc4_contract.py", "trees.sh", "build.sh"):
