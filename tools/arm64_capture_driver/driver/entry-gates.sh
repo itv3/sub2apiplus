@@ -38,7 +38,7 @@
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
 #   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
-#     [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
+#     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] \
 #     [--record-store <单元执行记录库>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
@@ -52,16 +52,17 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
 PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
 AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
-FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=()
+FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --full-set-request) FULL_SET_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --mode) MODE_EXPLICIT=true; MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -90,6 +91,7 @@ PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/fronte
 case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gates 是逗号分隔的门禁项：$WITH_GATES" >&2; exit 2; fi
 if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
+case "$GO_WARMUP" in auto|off) ;; *) echo "未知的 Go 预热模式：$GO_WARMUP" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 # B-09：入口的逐单元旧承接模式不能绕过全集准入。无请求时始终重新执行。
@@ -286,6 +288,12 @@ for name in $(compgen -e); do
   case "$name" in GO*|CGO_*|DOCKER_*|NODE_*|PNPM_*|npm_config_*|COREPACK_*) EXEC_ENV+=("$name=${!name}") ;; esac
 done
 EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
+# C-02：三组后端测试共用一次生产包预编译；每个工作根独立缓存，承接入口不改动来源缓存。
+GO_WARMUP_ACTIVE=false
+if [ "$GO_WARMUP" = auto ] && [ -z "$FULL_SET_REQUEST" ] && { [ "$PLAN_PROFILE" = entry ] || [ "$PLAN_PROFILE" = full-gates ]; }; then
+  GO_WARMUP_ACTIVE=true
+  EXEC_ENV+=("GOCACHE=${GOCACHE:-$WORK/go-build-cache}" "GOMODCACHE=${GOMODCACHE:-$WORK/go-mod-cache}" "GOTMPDIR=${GOTMPDIR:-$WORK/go-tmp}")
+fi
 GATES_STATUS=passed
 if [ "$RUN_GATES" = true ]; then
 mkdir -p "$STORE"; chmod 700 "$STORE"
@@ -293,6 +301,16 @@ echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
     --with-gates "$WITH_GATES" ${INPUT_SCOPE_ARGS[@]+"${INPUT_SCOPE_ARGS[@]}"} ${AUDIT_POLICY_ARGS[@]+"${AUDIT_POLICY_ARGS[@]}"} --output "$OUT/gates-manifest.json" ) | cut -c1-400
+if [ "$GO_WARMUP_ACTIVE" = true ]; then
+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/go_compile_warmup.py" --tree "$TREE" --work "$WORK" \
+      --manifest "$OUT/gates-manifest.json" --output "$OUT/go-compile-warmup.json" \
+      --plan-output "$OUT/go-compile-warmup-plan.json" --launcher-json "$LAUNCHER" )
+  # 独立准备记录纳入本轮总耗时；调度器处理整机预约和子进程，不把编译写成门禁通过。
+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/unit_executor.py" run-commands \
+      --manifest "$OUT/go-compile-warmup-plan.json" --out-dir "$OUT/go-compile-warmup-executor" \
+      --shared-caches off ) > "$OUT/go-compile-warmup-executor.log" 2>&1 < /dev/null \
+      || { echo "ENTRY_GATES_ABORTED：Go 预热失败，正式门禁尚未派发；日志 $OUT/go-compile-warmup-executor.log"; exit 3; }
+fi
 echo "=== 一次运行：统一调度执行器 run-gates（模式 ${MODE}，记录库 ${STORE}，记录 ${OUT}/executor）$(utc_now)"
 EXEC_RC=0
 AUDIT_ARGS=()

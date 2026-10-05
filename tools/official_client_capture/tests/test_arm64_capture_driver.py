@@ -1855,7 +1855,7 @@ _CI_WORKFLOW = """jobs:
 # 候选提交里的最小 Makefile：入口门禁按 print-egress-spec-checks 读 check-egress-spec 的子检查清单（与真实 Makefile 同一入口）。
 _CANDIDATE_MAKEFILE = "print-egress-spec-checks:\n\t@echo check-egress-spec-local-source test-official-client-control egress-spec-a\n"
 
-# 执行器替身（驱动随附的 unit_executor.py 换成它）：只支持 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
+# 执行器替身（驱动随附的 unit_executor.py 换成它）：支持准备单元与 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
 # 树外缓存），把工作目录、HEAD、参数、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；配置里 fail_units 列出的单元
 # 判失败。执行器在白名单环境里运行（E3-01，看不到测试经环境变量给的东西），配置写在替身旁边的 stub-config.json。执行器
 # 自身的调度、额度、汇总与承接由执行器与承接各自的测试模块实测。
@@ -1863,6 +1863,13 @@ _EXECUTOR_STUB = """import json, os, subprocess, sys
 from pathlib import Path
 config = json.loads((Path(__file__).resolve().parent / "stub-config.json").read_text(encoding="utf-8"))
 args = sys.argv[1:]
+if args[0] == "run-commands":
+    preparation = json.loads(Path(args[args.index("--manifest") + 1]).read_text())
+    assert len(preparation["units"]) == 1 and preparation["units"][0]["unit_id"] == "prepare:go-compile"
+    assert preparation["units"][0]["exclusive"] is True
+    Path(config["record"] + ".preparation").write_text(json.dumps({"manifest": preparation,
+        "cache_roots": {key: os.environ.get(key) for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")}}))
+    sys.exit(1 if config.get("fail_warmup") else 0)
 assert args[0] == "run-gates", args
 manifest = json.loads(Path(args[args.index("--manifest") + 1]).read_text(encoding="utf-8"))
 out = Path(args[args.index("--out-dir") + 1])
@@ -1925,7 +1932,7 @@ class Arm64GateScriptTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._template_root.cleanup()
 
-    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = ""):
+    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = "", fail_warmup: bool = False):
         fixture = _DriverFixture(root)
         hist = fixture.data_root / "candidates" / "hist"
         _git(root, "clone", "-q", str(self.template), str(hist))
@@ -1937,7 +1944,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
-                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py", "go_compile_warmup.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
@@ -1947,7 +1954,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         shim.write_text(_ISOLATION_SHIM, encoding="utf-8")
         shim.chmod(0o700)
         record = root / "gate-commands.jsonl"
-        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units}), encoding="utf-8")
+        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units, "fail_warmup": fail_warmup}), encoding="utf-8")
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
                "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
         return fixture, work, drv, record, env
@@ -1981,6 +1988,23 @@ class Arm64GateScriptTests(unittest.TestCase):
         fixture.env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # ---- ARM64 全量门禁 ----
+
+    def test_go_warmup_failure_blocks_formal_gates_and_off_restores_original_path(self) -> None:
+        for disabled in (False, True):
+            with self.subTest(disabled=disabled), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, work, drv, record, env = self._fixture(root, fail_warmup=True)
+                commit = self._candidate(work, "codex/warmup")
+                bundle = root / "warmup.bundle"
+                _git(work, "bundle", "create", "-q", str(bundle), "main..codex/warmup")
+                arguments = ["--profile", "full-gates", "--work", str(fixture.runroot / "warmup-work")]
+                if disabled:
+                    arguments += ["--go-warmup", "off"]
+                result = _run(drv / "entry-gates.sh", *arguments, str(bundle), "codex/warmup", commit, env=env, cwd=root)
+                self.assertEqual(result.returncode, 0 if disabled else 3, result.stdout + result.stderr)
+                self.assertEqual(record.exists(), disabled, "预热失败时不能派发正式测试")
+                self.assertEqual(Path(str(record) + ".preparation").exists(), not disabled)
 
     def test_full_gates_run_every_ci_gate_once_and_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

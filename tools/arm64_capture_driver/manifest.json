@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 88,
+  "file_count": 89,
   "files": [
     {
       "path": "README.md",
-      "sha256": "5ce825cdcc48de5b0c70922df19daefd07a19481dadc68a3dd5326ac4615be47",
+      "sha256": "9caddd82fb8c018c2cfe199902f9d092b203454a0aed6129a5f72e08a85d5dc4",
       "mode": "0600",
-      "bytes": 67279
+      "bytes": 68520
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -94,9 +94,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "887fff961de3b907cd0f8a9cabcbc2fce5040da0f598638e399e69c3cc4ff4f0",
+      "sha256": "3402d8ddacab9be293b1ff07b9d68c4f28db519fa0a432f3366ac1fdf0be80b3",
       "mode": "0700",
-      "bytes": 31733
+      "bytes": 33271
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -211,6 +211,12 @@
       "sha256": "7f751edc8d432b201c6f7b856957b96f06db81e96506a7a27a499697f432f014",
       "mode": "0700",
       "bytes": 6730
+    },
+    {
+      "path": "driver/go_compile_warmup.py",
+      "sha256": "6658396fec786bacfb4dd10379da6b49d2967088f998c3808970743b8be61c34",
+      "mode": "0700",
+      "bytes": 9186
     },
     {
       "path": "driver/guard.sh",
@@ -531,5 +537,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "e74abd8e4313d5bd967c7a4fe2a061490e17c5bacceb4653970c7afbb62af82b"
+  "manifest_sha256": "99e915e8c4ccb81295b7a91f51e957d102d46a31a8c1e7bb8a7d4430d23a74c8"
 }
