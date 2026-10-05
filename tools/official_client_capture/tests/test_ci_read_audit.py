@@ -461,6 +461,17 @@ class StrictReadAuditTests(unittest.TestCase):
             entry["detail"]["schema_version"] = "read-audit-host-snapshot/v1"
             self.assertFalse(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
 
+    def test_historical_host_replay_verifies_saved_snapshot_without_refreshing_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input"; path.write_text("封存输入")
+            entry = ra.host_snapshot(str(path))
+            trace = ra.filter_stream([f'1 open("{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            path.write_text("后来变化")
+            self.assertTrue(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None, historical=True)["coverage_complete"])
+            self.assertFalse(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None)["coverage_complete"])
+            entry["detail"]["snapshot"]["content_sha256"] = "0" * 64
+            self.assertFalse(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None, historical=True)["coverage_complete"])
+
     def test_scoped_or_empty_trace_never_proves_complete_coverage(self):
         scoped = ra.filter_stream([], ["/repo"])
         self.assertFalse(ra.audit_reads(scoped, [], repo_root="/repo")["coverage_complete"])

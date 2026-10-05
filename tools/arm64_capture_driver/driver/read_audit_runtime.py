@@ -167,7 +167,7 @@ class OutputTracker:
         return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
 
 
-def validate_context(context: Any, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: bool = False) -> dict[str, Any]:
     if not isinstance(context, dict) or context.get("schema_version") != CONTEXT_SCHEMA:
         raise RuntimeContractError("隔离环境凭证缺失")
     entries = [entry for entry in inputs if entry.get("name") == "runtime-contract"]
@@ -175,7 +175,13 @@ def validate_context(context: Any, inputs: list[dict[str, Any]]) -> dict[str, An
         raise RuntimeContractError("隔离合同未与输入摘要绑定")
     entry = entries[0]
     contract = validate_contract(entry.get("detail", {}).get("contract"))
-    if entry != contract_entry(contract) or context.get("contract_entry") != entry:
+    if historical:
+        detail = entry.get("detail") or {}
+        expected = {"category": "environment", "name": "runtime-contract",
+                    "sha256": digest({key: value for key, value in detail.items() if key != "schema_version"}), "detail": detail}
+    else:
+        expected = contract_entry(contract)
+    if entry != expected or context.get("contract_entry") != entry:
         raise RuntimeContractError("隔离合同、平台、设备或环境输入漂移")
     if entry["detail"]["terminal"]["state"] != "absent-ENXIO":
         raise RuntimeContractError("隔离执行必须无控制终端")
@@ -219,10 +225,10 @@ def validate_context(context: Any, inputs: list[dict[str, Any]]) -> dict[str, An
     return contract
 
 
-def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]]) -> set[str]:
+def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, historical: bool = False) -> set[str]:
     """重放输出生成顺序、隔离身份和结束凭证；只返回确已证明的路径，不能按目录整段放行。"""
     runtime = document.get("runtime") or {}
-    contract = validate_context(runtime.get("context"), inputs)
+    contract = validate_context(runtime.get("context"), inputs, historical=historical)
     completion = runtime.get("completion") or {}
     if any(completion.get(key) is not True for key in
            ("host_inputs_unchanged", "environment_unchanged", "namespace_unchanged", "command_finished")):

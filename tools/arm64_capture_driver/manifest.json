@@ -178,9 +178,9 @@
     },
     {
       "path": "driver/full_set_receipt.py",
-      "sha256": "16a8df2e4ac5fac0c49ebb6e81d8a44dcc61300107c0805711b806368f8c5b93",
+      "sha256": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
       "mode": "0700",
-      "bytes": 21998
+      "bytes": 22195
     },
     {
       "path": "driver/gates.sh",
@@ -286,15 +286,15 @@
     },
     {
       "path": "driver/read_audit.py",
-      "sha256": "baa7b175fdd7ae1394c2bea60ae74e3ad2ace384ba5d84223d30f8cd07d6883d",
+      "sha256": "658c5834f3f40a90549a68b790c46fc90de172f9eeb8c50d799e592956949e97",
       "mode": "0700",
-      "bytes": 51009
+      "bytes": 51499
     },
     {
       "path": "driver/read_audit_runtime.py",
-      "sha256": "b628f3b014330047b4266bc2513a79b74d8abc1a8474c8b39862a67cffeff2ff",
+      "sha256": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e",
       "mode": "0700",
-      "bytes": 24510
+      "bytes": 24896
     },
     {
       "path": "driver/round_context.py",
@@ -328,9 +328,9 @@
     },
     {
       "path": "driver/target_platform_gate.py",
-      "sha256": "331fa972ee0d702b02954a301e08a1c555935ea15fd8d43867b42a10fa4d4de9",
+      "sha256": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
       "mode": "0700",
-      "bytes": 23047
+      "bytes": 23490
     },
     {
       "path": "driver/trees.sh",
@@ -352,9 +352,9 @@
     },
     {
       "path": "driver/unit_records.py",
-      "sha256": "ca66fb5fb31c5818edf57aae3eb44740301fc5127a90d7917ef5c1e3d1c26443",
+      "sha256": "f65b258a7a17f4d28da7e685fe79289e31e33280ce0202563a3b9b55c493bc6c",
       "mode": "0700",
-      "bytes": 60536
+      "bytes": 60696
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -531,5 +531,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "c66dda657c4ccbe741e77de56dae74dd4081a203bf1fb1878a43f74ad694bf52"
+  "manifest_sha256": "e74abd8e4313d5bd967c7a4fe2a061490e17c5bacceb4653970c7afbb62af82b"
 }

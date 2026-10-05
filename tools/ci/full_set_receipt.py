@@ -209,7 +209,7 @@ def normalized_result(summary: Mapping[str, Any]) -> dict[str, Any]:
                             for key, value in summary.get("test_groups", {}).items()}}
 
 
-def source_check(source: Mapping[str, Any], binding: Mapping[str, Any]) -> tuple[dict, dict, Any]:
+def source_check(source: Mapping[str, Any], binding: Mapping[str, Any], *, historical: bool = False) -> tuple[dict, dict, Any]:
     records = records_module()
     entry, summary, manifest = (replay_ref(source[k]) for k in ("entry", "summary", "manifest"))
     store = records.RecordStore(Path(source["store"]))
@@ -228,7 +228,7 @@ def source_check(source: Mapping[str, Any], binding: Mapping[str, Any]) -> tuple
     if (manifest.get("environment_sha256") != binding["environment_fingerprint"]
             or manifest.get("executor", {}).get("sha256") != binding["tool_package_digest"]):
         raise ContractError("来源环境或执行工具摘要与绑定不同")
-    problems = records.verify_manifest(manifest, store=store)
+    problems = records.verify_manifest(manifest, store=store, historical=historical)
     published = store.manifest(manifest["run_id"])
     ids = manifest.get("planned_units", [])
     if (problems or not ids or published != manifest or summary.get("failed_units") or summary.get("units_not_run")
@@ -244,7 +244,8 @@ def source_check(source: Mapping[str, Any], binding: Mapping[str, Any]) -> tuple
         current = records.Current(row["unit_id"], record["unit_type"], record["spec"], row["spec_sha256"],
                                   record["inputs"], row["inputs_sha256"], True)
         facts = records.RunFacts(manifest["policy_sha256"], manifest["environment"], manifest["environment_sha256"],
-                                 manifest["executor"], 24, utc(record["completed_at_utc"]), require_read_audit=True)
+                                 manifest["executor"], 24, utc(record["completed_at_utc"]), require_read_audit=True,
+                                 historical_read_audit=historical)
         reasons = records.check_record(store, Path(row["record_path"]), record, current, facts)
         if row.get("disposition") != "executed" or reasons:
             raise ContractError(f"来源单元 {row['unit_id']} 非正式完整读集记录：{'；'.join(reasons)}")
@@ -269,7 +270,7 @@ def issue(source: Mapping[str, Any], context: Mapping[str, Any], clock: Mapping[
 
 
 def authorize(request: Mapping[str, Any], *, now: float, request_schema: str = "full-set-request/v1",
-              approval_scope: str = CONTRACT) -> tuple[dict, dict, dict, dict, Any]:
+              approval_scope: str = CONTRACT, historical: bool = False) -> tuple[dict, dict, dict, dict, Any]:
     """B-09／B-10 共用来源、身份、时钟、撤销与批准校验；不替调用方选择目标单元。"""
     if request.get("schema_version") != request_schema or type(request.get("reuse_enabled")) is not bool:
         raise ContractError("全集承接请求格式错误")
@@ -298,7 +299,7 @@ def authorize(request: Mapping[str, Any], *, now: float, request_schema: str = "
                 or approval.get("scope") != approval_scope or approval.get("binding_sha256") != digest(binding)
                 or not utc(approval["approved_at_utc"]) <= now < utc(approval["expires_at_utc"])):
             raise ContractError("专项批准缺失、错绑、已撤回或过期")
-    manifest, summary, store = source_check(receipt["source"], binding)
+    manifest, summary, store = source_check(receipt["source"], binding, historical=historical)
     if (receipt["run_id"] != manifest["run_id"] or receipt["result_digest"] != digest(normalized_result(summary))
             or issued != max(utc(row["completed_at_utc"]) for row in summary["units"])):
         raise ContractError("来源时间或语义结果不同")
@@ -319,7 +320,7 @@ def assess(request: Mapping[str, Any], currents: Mapping[str, Any], facts: Any, 
         if (sorted(currents) != sorted(manifest["planned_units"])
                 or sorted(gate_ids) != sorted(row["gate_id"] for row in summary["gates"])):
             raise ContractError("当前门禁全集不同")
-        facts = replace(facts, require_read_audit=True, max_age_hours=24, now=now)
+        facts = replace(facts, require_read_audit=True, max_age_hours=24, now=now, historical_read_audit=False)
         for row in manifest["units"]:
             unit_id = row["unit_id"]
             record = read(row["record_path"])

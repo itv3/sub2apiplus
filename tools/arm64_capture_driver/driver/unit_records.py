@@ -820,6 +820,7 @@ class RunFacts:
     max_age_hours: float
     now: float
     require_read_audit: bool = False
+    historical_read_audit: bool = False
 
 
 @dataclass
@@ -888,7 +889,8 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
                 if stored_trace is None or not stored_trace.is_file() or file_sha256(stored_trace) != digest:
                     raise RecordsError("完整读集轨迹缺失或摘要漂移")
                 replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,
-                    repo_root=str(audit.get("repo_root") or "/unbound-repo"), data_root=audit.get("data_root"))
+                    repo_root=str(audit.get("repo_root") or "/unbound-repo"), data_root=audit.get("data_root"),
+                    historical=facts.historical_read_audit)
                 if not replay["coverage_complete"]:
                     raise RecordsError("完整读集轨迹不能按当前输入重放")
             except (OSError, ValueError, RuntimeError) as error:
@@ -950,7 +952,7 @@ def build_manifest(**fields: Any) -> dict[str, Any]:
     return seal({"schema_version": MANIFEST_SCHEMA, **fields}, "manifest_sha256")
 
 
-def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None) -> list[str]:
+def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, historical: bool = False) -> list[str]:
     """清单自检（见模块说明）：返回问题列表，空＝通过。"""
 
     problems: list[str] = []
@@ -976,7 +978,7 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None) -
     facts = RunFacts(policy_sha256=str(manifest.get("policy_sha256")), environment=list(manifest.get("environment") or []),
                      environment_sha256=str(manifest.get("environment_sha256")), executor=dict(manifest.get("executor") or {}),
                      max_age_hours=float(manifest.get("inheritance_max_age_hours") or 0),
-                     now=parse_utc(manifest.get("decided_at_utc")) or 0.0)
+                     now=parse_utc(manifest.get("decided_at_utc")) or 0.0, historical_read_audit=historical)
     if facts.environment_sha256 != entries_sha256(facts.environment):
         problems.append("清单的环境指纹与明细不符")
     if facts.max_age_hours > MAX_AGE_HOURS:

@@ -189,6 +189,19 @@ class TargetPlatformGateTests(unittest.TestCase):
             target.verify_evidence(proof, current_request=path, deployment=self.root / "unused", now=self.now)
         self.assertEqual(target.verify_evidence(proof)["inherited"], 2)
 
+    def test_host_change_keeps_historical_replay_but_never_authorizes_new_inheritance(self):
+        proof = self.target_evidence()
+        (self.root / "input.txt").write_text("历史阶段完成之后的宿主变化")
+        self.assertEqual(target.verify_evidence(proof)["inherited"], 2)
+        with self.assertRaises(ValueError):
+            target.verify_evidence(proof, now=self.now)
+        self.facts.historical_read_audit = True
+        self.assert_refused()
+
+    def test_changed_target_requires_new_specific_approvals(self):
+        self.request["target"]["candidate_image_id"] = "sha256:" + "e" * 64
+        self.assert_refused()
+
     def test_cached_pass_without_unit_proof_is_never_a_new_command(self):
         logs = self.root / "logs"; logs.mkdir()
         self.write("logs/target-platform.gate.json", {"exit_code": 0, "command": target.COMMAND})

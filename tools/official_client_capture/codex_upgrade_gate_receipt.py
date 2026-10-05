@@ -54,11 +54,11 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
 # B-10 验证器由固定源码目录或已安装驱动提供；受管树部署不包含 tools/ci。
 # 只加载下列钉住摘要的实现，不从外部收据中的路径加载代码。
 TARGET_VERIFIER_SHA256S: dict[str, str] = {
-    "target_platform_gate.py": "331fa972ee0d702b02954a301e08a1c555935ea15fd8d43867b42a10fa4d4de9",
-    "full_set_receipt.py": "16a8df2e4ac5fac0c49ebb6e81d8a44dcc61300107c0805711b806368f8c5b93",
-    "unit_records.py": "ca66fb5fb31c5818edf57aae3eb44740301fc5127a90d7917ef5c1e3d1c26443",
-    "read_audit.py": "baa7b175fdd7ae1394c2bea60ae74e3ad2ace384ba5d84223d30f8cd07d6883d",
-    "read_audit_runtime.py": "b628f3b014330047b4266bc2513a79b74d8abc1a8474c8b39862a67cffeff2ff"
+    "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+    "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+    "unit_records.py": "f65b258a7a17f4d28da7e685fe79289e31e33280ce0202563a3b9b55c493bc6c",
+    "read_audit.py": "658c5834f3f40a90549a68b790c46fc90de172f9eeb8c50d799e592956949e97",
+    "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e"
 }
 
 

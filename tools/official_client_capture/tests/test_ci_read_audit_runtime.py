@@ -6,6 +6,7 @@ import copy
 import hashlib
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.ci import read_audit as ra
@@ -55,6 +56,17 @@ class RuntimeReadAuditTests(unittest.TestCase):
         tampered = copy.deepcopy(document)
         tampered["runtime"]["output_events"] = []
         self.assertFalse(self.audit(tampered)["coverage_complete"])
+
+    def test_historical_runtime_does_not_read_current_devices_but_verifies_saved_digest(self):
+        document = self.document(self.generated_lines())
+        with mock.patch.object(ra._runtime_module(), "contract_entry", side_effect=RuntimeError("现场环境已变化")):
+            self.assertTrue(ra.strict_audit_reads(document, [self.entry], repo_root="/repo", data_root=None,
+                                                historical=True)["coverage_complete"])
+            self.assertFalse(self.audit(document)["coverage_complete"])
+        changed = copy.deepcopy(self.entry)
+        changed["detail"]["platform"]["kernel"] = "篡改"
+        with self.assertRaises(runtime.RuntimeContractError):
+            runtime.validate_context({**self.context, "contract_entry": changed}, [changed], historical=True)
 
     def test_existing_file_and_read_before_write_never_become_generated_output(self):
         read = f'1 openat(AT_FDCWD</repo>, "{self.root}/old", O_RDONLY) = 3<{self.root}/old>'

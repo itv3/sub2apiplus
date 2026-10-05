@@ -64,7 +64,7 @@ def target_check(request, binding):
     return subject
 
 
-def assess(request, currents, facts, *, gate_ids, now):
+def _assess(request, currents, facts, *, gate_ids, now, historical=False):
     """来源或共享条件失败全拒；仅规格／输入不同及新增单元作为差异重跑。"""
     records = fs.records_module()
     verdict = {"schema_version": "target-platform-decision/v1", "decided_at_utc": fs.timestamp(now),
@@ -75,7 +75,7 @@ def assess(request, currents, facts, *, gate_ids, now):
         if set(gate_ids) != GATE_IDS or len(gate_ids) != len(GATE_IDS) or not currents:
             raise fs.ContractError("目标门禁必须完整覆盖 make test 的八类检查")
         receipt, binding, manifest, _summary, store = fs.authorize(
-            request, now=now, request_schema=REQUEST_SCHEMA, approval_scope=CONTRACT)
+            request, now=now, request_schema=REQUEST_SCHEMA, approval_scope=CONTRACT, historical=historical)
         subject = target_check(request, binding)
         verdict.update(source_run_id=receipt["run_id"], expires_at_utc=receipt["expires_at_utc"], binding=binding,
                        target=subject, revocation=request["revocation"], platform_compatibility=request.get("platform_compatibility"))
@@ -89,13 +89,13 @@ def assess(request, currents, facts, *, gate_ids, now):
                 or facts.executor.get("sha256") != binding["tool_package_digest"]):
             raise fs.ContractError("当前调度策略、环境或执行工具已变化")
         sources = {row["unit_id"]: row for row in manifest["units"]}
-        facts = replace(facts, require_read_audit=True, max_age_hours=24, now=now)
+        facts = replace(facts, require_read_audit=True, max_age_hours=24, now=now, historical_read_audit=historical)
         decisions = {}
         for unit_id, current in currents.items():
             row = sources.get(unit_id)
             # 沿用已重放来源的宿主路径登记，但每次重新快照；不缩小当前仓库声明，
             # 也不拿来源摘要冒充现场事实。来源更窄时仍作为差异执行。
-            if row is not None and current.inheritable:
+            if row is not None and current.inheritable and not historical:
                 old_inputs = fs.read(row["record_path"])["inputs"]
                 names = {entry["name"] for entry in current.inputs or []}
                 additions = []
@@ -140,6 +140,11 @@ def assess(request, currents, facts, *, gate_ids, now):
         return verdict, {key: records.Decision(reasons=["B-10 全集重跑：" + str(error)]) for key in currents}
 
 
+def assess(request, currents, facts, *, gate_ids, now):
+    """执行器唯一准入入口：不允许历史重放模式用作新的承接授权。"""
+    return _assess(request, currents, facts, gate_ids=gate_ids, now=now, historical=False)
+
+
 def write_new(path, value):
     with Path(path).open("x", encoding="utf-8") as handle:
         os.chmod(path, 0o600)
@@ -161,11 +166,12 @@ def snapshot_request(path, directory):
 def verify_evidence(evidence, *, subject=None, current_request=None, deployment=None, now=None):
     """历史重放使用封存时间；新消费另给当前请求，再核对现场与即时撤销状态。"""
     records = fs.records_module()
+    historical = now is None and current_request is None
     if evidence.get("schema_version") != EVIDENCE_SCHEMA or evidence.get("contract") != CONTRACT:
         raise fs.ContractError("目标单元证据合同不匹配")
     plan, summary, manifest = (fs.replay_ref(evidence[key]) for key in ("plan", "summary", "manifest"))
     store = records.RecordStore(Path(manifest["record_store"]))
-    problems = records.verify_manifest(manifest, store=store)
+    problems = records.verify_manifest(manifest, store=store, historical=historical)
     rows = manifest["units"]
     ids = [row["unit_id"] for row in rows]
     if (problems or not ids or len(ids) != len(set(ids)) or sorted(ids) != sorted(manifest["planned_units"])
@@ -220,7 +226,7 @@ def verify_evidence(evidence, *, subject=None, current_request=None, deployment=
             row["spec_sha256"], record["inputs"], row["inputs_sha256"], True)
     facts = records.RunFacts(manifest["policy_sha256"], manifest["environment"], manifest["environment_sha256"],
                              manifest["executor"], 24, reference_time)
-    verdict, decisions = assess(request, currents, facts, gate_ids=sorted(GATE_IDS), now=reference_time)
+    verdict, decisions = _assess(request, currents, facts, gate_ids=sorted(GATE_IDS), now=reference_time, historical=historical)
     inherited_ids = {row["unit_id"] for row in rows if row["disposition"] == "inherited"}
     if (verdict["action"] != "inherit-matching-units"
             or evidence["expires_at_utc"] != verdict["expires_at_utc"]

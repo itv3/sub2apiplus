@@ -557,7 +557,7 @@ def host_snapshot(raw: str) -> dict[str, Any]:
 
 
 def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]] | None,
-                       *, repo_root: str, data_root: str | None) -> dict[str, Any]:
+                       *, repo_root: str, data_root: str | None, historical: bool = False) -> dict[str, Any]:
     """完整观察与可承接分开判断：所有实际路径必须有事前绑定且运行后未变的精确快照。"""
     findings = []
     snapshots = {}
@@ -569,7 +569,7 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
     runtime_paths: set[str] = set()
     if document.get("schema_version") == RUNTIME_TRACE_SCHEMA:
         try:
-            runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []))
+            runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []), historical=historical)
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
             findings.append({"root": "runtime", "path": "", "kinds": [], "sample": "", "suggestion": str(error)})
     for entry in inputs or []:
@@ -578,7 +578,13 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
             continue
         path = detail.get("path")
         try:
-            current = host_snapshot(path)
+            if historical:
+                # 历史重放校验封存快照自身；当前承接仍须重读宿主实物。
+                encoded = json.dumps(detail["snapshot"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                current = {"category": "environment", "name": "host:" + path, "sha256": hashlib.sha256(encoded).hexdigest(),
+                           "detail": detail}
+            else:
+                current = host_snapshot(path)
             if current != entry:
                 raise AuditError("宿主输入快照漂移")
         except (OSError, ValueError, TypeError, AuditError) as error:
