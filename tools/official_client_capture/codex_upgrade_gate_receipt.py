@@ -42,6 +42,10 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
         {
             # B-10 修改前的已部署 v4 生成器，仅用于旧收据只读重放。
             "6cea115be2c892dd8bd61b81e6521adfc617988f845579afaf7afc20478f9232",
+            # B-10 两轮隔离验收生成器；虽未生产部署，已作为冻结承接图的显式边界登记。
+            # 其验收收据只读重放，新收据仍绑定当前生成器摘要。
+            "302c9a5d5f5f77299fb1be18e7acba954eef84d8ac962144552731a1766cfb8f",
+            "d3d128c234c7d540332f6b649c125faf3b4da99af626c0b457d4a0f65fb1f459",
             # 931ae5b3：bb39c94b6 起部署的受管版本，0.154 期间的外部门禁收据由它生成（入库的
             # docs/egress/maintenance/CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json 即是）。
             "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552",

@@ -1,0 +1,55 @@
+{
+  "base_commit": "3090492c39a9dd9ecffcda6a40cbe7ed3d969edc",
+  "changed_path_count": 1,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5636,
+  "frozen_path_count": 2015,
+  "identity_sha256": "528bc08259b5a07d618119dc0caaeb1f2d500c67a6217afffc463f302043b33a",
+  "issued_at_utc": "2026-10-05T15:01:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-b10-replay-20261005-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "d3d128c234c7d540332f6b649c125faf3b4da99af626c0b457d4a0f65fb1f459"
+      ],
+      "reason": "B-10 补齐隔离验收生成器的冻结图边界只读重放登记 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-history-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1d1239a3a70a98a758cfa642c546a6f4bad310cbb1ffe31d4563e16fc794f398"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
