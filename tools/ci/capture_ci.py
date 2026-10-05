@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""CI 四分片执行入口：沿用原分片，显式选择执行器，保存身份、覆盖、结果与耗时。"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import contextlib
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools.ci import capture_test_shards as shards
+
+SCHEMA = "capture-ci-shard/v1"
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def file_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def write_once(path, value):
+    with path.open("x", encoding="utf-8") as stream:
+        os.chmod(path, 0o600)
+        stream.write(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+
+
+def source_identity(args):
+    """只记录公开 CI 坐标和内容摘要，不导出环境变量或认证凭据。"""
+    def git(*argv):
+        return subprocess.check_output(["git", "-C", str(ROOT), *argv], text=True).strip()
+    commit = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=all")
+    declared = os.environ.get("GITHUB_SHA")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and (status or declared != commit):
+        raise shards.ShardError("CI 提交身份不匹配或源码工作树不干净")
+    paths = [Path(__file__), ROOT / "tools/ci/capture_test_shards.py", ROOT / "tools/ci/unit_executor.py",
+             ROOT / "tools/ci/unit_records.py", args.weights, args.config, args.durations]
+    paths += sorted(args.start.rglob("*.py"))
+    parser = os.environ.get("CLAUDE_AST_TYPESCRIPT_MODULE")
+    if parser:
+        paths.append(Path(parser))
+    inputs = {str(path.resolve()): file_digest(path) for path in paths if path.is_file()}
+    return {"commit": commit, "tree": git("rev-parse", "HEAD^{tree}"), "working_tree_clean": not status,
+            "working_diff_sha256": digest([status, git("diff", "--no-ext-diff", "HEAD")]), "inputs": inputs,
+            "python": platform.python_version(), "platform": platform.platform(), "architecture": platform.machine(),
+            "ci": {name: os.environ.get(name) for name in ("GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID",
+                                                           "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")}}
+
+
+def prepare(args):
+    """保持旧分片器的模块归组；别名导入的完整 ID 也保留在其原分片。"""
+    grouped = shards.discover_cases(args.start, args.pattern)
+    weights = shards.load_weights(args.weights)
+    partitions = shards.check(grouped, weights, args.count)
+    if not 1 <= args.index <= args.count:
+        raise shards.ShardError("分片编号必须在 1..count 之间")
+    all_ids = sorted(case.id() for cases in grouped.values() for case in cases)
+    if len(all_ids) != len(set(all_ids)):
+        raise shards.ShardError("discover 全集中出现重复测试 ID")
+    modules = partitions[args.index - 1]
+    selected = [case for module in modules for case in grouped[module]]
+    if not selected:
+        raise shards.ShardError("空分片不能作为通过凭证")
+    ids = sorted(case.id() for case in selected)
+    return selected, {"schema_version": SCHEMA, "source": source_identity(args),
+                      "shard_count": args.count, "shard_index": args.index, "modules": modules,
+                      "partition_sha256": digest(partitions), "full_test_ids_sha256": digest(all_ids),
+                      "full_test_count": len(all_ids), "test_ids": ids, "selected_test_ids_sha256": digest(ids)}
+
+
+class ObservedResult(unittest.TextTestResult):
+    """旧 unittest 执行流程只增加观测；正式失败不会被后续成功或重试覆盖。"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.records, self.started, self.seen = {}, {}, []
+
+    def startTest(self, test):
+        self.seen.append(test.id())
+        self.started[test.id()] = time.monotonic()
+        super().startTest(test)
+
+    def record(self, test, outcome):
+        if self.records.get(test.id(), {}).get("outcome") not in {"failed", "error"}:
+            self.records[test.id()] = {"outcome": outcome}
+
+    def stopTest(self, test):
+        self.records.setdefault(test.id(), {"outcome": "passed"})["seconds"] = time.monotonic() - self.started[test.id()]
+        super().stopTest(test)
+
+    def addFailure(self, test, err):
+        self.record(test, "failed")
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self.record(test, "error")
+        super().addError(test, err)
+
+    def addSkip(self, test, reason):
+        self.record(test, "skipped")
+        super().addSkip(test, reason)
+
+    def addExpectedFailure(self, test, err):
+        self.record(test, "expected_failure")
+        super().addExpectedFailure(test, err)
+
+    def addUnexpectedSuccess(self, test):
+        self.record(test, "unexpected_success")
+        super().addUnexpectedSuccess(test)
+
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            self.record(test, "failed" if issubclass(err[0], test.failureException) else "error")
+        super().addSubTest(test, subtest, err)
+
+
+def run_legacy(selected, out):
+    """保留原单进程 TestSuite／TextTestRunner，可显式回退；不调用新调度器。"""
+    with (out / "execution.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+        result = unittest.TextTestRunner(stream=log, verbosity=1, resultclass=ObservedResult).run(unittest.TestSuite(selected))
+    write_once(out / "legacy-results.json", {"tests": result.records, "executed_test_ids": result.seen,
+                                             "tests_run": result.testsRun, "successful": result.wasSuccessful()})
+    return 0 if result.wasSuccessful() else 1, result.records, result.seen, None
+
+
+def run_unified(args, plan, out):
+    """执行器先检查全集，再按旧分片选完整单元；A-07.1 暂不准备共享缓存。"""
+    selection = out / "selection.json"
+    write_once(selection, {"schema_version": "unit-executor-selection/v1",
+                           "full_test_ids_sha256": plan["full_test_ids_sha256"], "test_ids": plan["test_ids"]})
+    selection_sha = file_digest(selection)
+    work = out / "executor"
+    argv = [sys.executable, "-B", str(ROOT / "tools/ci/unit_executor.py"), "run", "--start", str(args.start),
+            "--pattern", args.pattern, "--weights", str(args.weights), "--config", str(args.config),
+            "--durations", str(args.durations), "--selection-file", str(selection), "--parallel", str(args.parallel),
+            "--cores", str(args.cores), "--state-dir", str(out / "state"), "--out-dir", str(work), "--shared-caches", "off"]
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in {"CODEX_UPGRADE_IDENTITY_MEMO", "PYTHONPYCACHEPREFIX"}}
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    with (out / "execution.log").open("x") as log:
+        process = subprocess.Popen(argv, cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            code = process.wait()
+        except BaseException:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise
+    summary_path = work / "summary.json"
+    if not summary_path.is_file():
+        raise shards.ShardError("执行器未留下完整结果，失败日志已保留")
+    summary = json.loads(summary_path.read_text())
+    binding = summary.get("selection") or {}
+    if (file_digest(selection) != selection_sha or binding.get("sha256") != selection_sha
+            or binding.get("full_test_ids_sha256") != plan["full_test_ids_sha256"]
+            or binding.get("selected_test_ids_sha256") != plan["selected_test_ids_sha256"]):
+        raise shards.ShardError("执行器的分片身份或选择件发生漂移")
+    records, seen = {}, []
+    for unit in summary["units"]:
+        if unit.get("kind") != "formal":
+            raise shards.ShardError("诊断结果不能替代正式结果")
+        safe = unit["unit_id"].replace("#", "-").replace("!", "-")
+        path = work / "units" / (safe + ".result.json")
+        if not path.is_file():
+            continue
+        result = json.loads(path.read_text())
+        if result["unit_id"] != unit["unit_id"]:
+            raise shards.ShardError("单元结果身份不匹配")
+        seen.extend(result["tests"])
+        records.update(result["tests"])
+    if (summary.get("status") != "passed" or summary.get("expected_tests") != len(plan["test_ids"])
+            or any(summary.get("full_set", {}).values()) or summary.get("failed_units")
+            or any(not unit["passed"] or unit.get("orphans") or unit.get("timed_out") for unit in summary["units"])):
+        code = code or 1
+    return code, records, seen, {"command": argv, "summary_sha256": file_digest(summary_path),
+                                "policy_sha256": summary["policy_sha256"], "diagnostic": summary.get("diagnostic", [])}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("--index", type=int, required=True)
+    parser.add_argument("--executor", choices=("unified", "legacy"), default="unified")
+    parser.add_argument("--start", type=Path, default=ROOT / shards.DEFAULT_START)
+    parser.add_argument("--pattern", default=shards.DEFAULT_PATTERN)
+    parser.add_argument("--weights", type=Path, default=ROOT / shards.DEFAULT_WEIGHTS)
+    parser.add_argument("--config", type=Path, default=ROOT / "tools/ci/unit_executor.json")
+    parser.add_argument("--durations", type=Path, default=ROOT / "tools/ci/capture_test_durations.json")
+    parser.add_argument("--parallel", type=int, default=0)
+    parser.add_argument("--cores", type=int, default=0)
+    parser.add_argument("--out-dir", type=Path)
+    args = parser.parse_args(argv)
+    sys.dont_write_bytecode = True
+    began, started = time.monotonic(), datetime.now(timezone.utc).isoformat()
+    out = args.out_dir.absolute() if args.out_dir else Path(tempfile.mkdtemp(prefix="capture-ci-")).resolve()
+    try:
+        if any(path.is_symlink() for path in (out, *out.parents)):
+            raise shards.ShardError("CI 证据目录不得含符号链接")
+        if args.out_dir:
+            out.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except (OSError, shards.ShardError) as error:
+        print(f"CI 入口错误：{error}", file=sys.stderr)
+        return 2
+    receipt = {"schema_version": SCHEMA, "executor": args.executor, "started_at_utc": started,
+               "shard_count": args.count, "shard_index": args.index, "automatic_fallback": False}
+    code = 2
+    interrupted_by = None
+
+    def terminate(signum, _frame):
+        nonlocal interrupted_by
+        interrupted_by = signum
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+
+    previous_handler = signal.signal(signal.SIGTERM, terminate)
+    try:
+        selected, plan = prepare(args)
+        write_once(out / "plan.json", plan)
+        receipt["plan_sha256"] = file_digest(out / "plan.json")
+        receipt["source"] = plan["source"]
+        code, records, seen, detail = run_unified(args, plan, out) if args.executor == "unified" else run_legacy(selected, out)
+        closed = sorted(seen) == plan["test_ids"] and len(seen) == len(set(seen)) and set(records) == set(plan["test_ids"])
+        source_unchanged = source_identity(args) == plan["source"]
+        outcomes = {test_id: row["outcome"] for test_id, row in sorted(records.items())}
+        failed = any(value in {"failed", "error", "unexpected_success"} for value in outcomes.values())
+        code = code or (1 if not closed or not source_unchanged or failed else 0)
+        receipt.update(status="passed" if code == 0 else "failed", coverage_closed=closed,
+                       source_unchanged=source_unchanged, expected_tests=len(plan["test_ids"]), reported_tests=len(seen),
+                       counts=dict(Counter(outcomes.values())), outcomes_sha256=digest(outcomes), detail=detail)
+        write_once(out / "results.json", records)
+    except KeyboardInterrupt:
+        receipt.update(status="aborted", reason="CI 执行被中断，原日志保留")
+        code = 143 if interrupted_by == signal.SIGTERM else 130
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, shards.ShardError) as error:
+        receipt.update(status="failed", reason=str(error))
+        code = 2
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+    receipt.update(exit_code=code, completed_at_utc=datetime.now(timezone.utc).isoformat(), elapsed_seconds=time.monotonic() - began)
+    receipt["files"] = {str(path.relative_to(out)): file_digest(path) for path in sorted(out.rglob("*"))
+                        if path.is_file() and not path.is_relative_to(out / "state")}
+    write_once(out / "receipt.json", receipt)
+    print(json.dumps({"status": receipt["status"], "executor": args.executor, "receipt": str(out / "receipt.json"),
+                      "sha256": file_digest(out / "receipt.json"), "elapsed_seconds": receipt["elapsed_seconds"]}, ensure_ascii=False))
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

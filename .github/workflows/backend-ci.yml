@@ -9,6 +9,12 @@ on:
   pull_request:
   # 发版回写 VERSION 由 GITHUB_TOKEN 推送，不会触发 push；release 工作流回写成功后以此显式调起一次 CI。
   workflow_dispatch:
+    inputs:
+      capture_executor:
+        description: '采集测试执行器；legacy 用于显式回退'
+        type: choice
+        default: unified
+        options: [unified, legacy]
 
 permissions:
   contents: read
@@ -18,6 +24,8 @@ jobs:
   # 每片先做闭合自检：并集＝全量、互不相交、权重表无陈旧条目）。
   capture-tools:
     runs-on: ubuntu-latest
+    env:
+      CAPTURE_TEST_EXECUTOR: ${{ inputs.capture_executor || vars.CAPTURE_TEST_EXECUTOR || 'unified' }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +53,16 @@ jobs:
       - name: Capture test shard closure check
         run: make test-capture-tools-shard-check CAPTURE_TEST_SHARDS=4
       - name: Official client capture tool tests (shard ${{ matrix.shard }}/4)
+        env:
+          CAPTURE_TEST_OUT_DIR: ${{ runner.temp }}/capture-shard-${{ matrix.shard }}
         run: make test-capture-tools-shard CAPTURE_TEST_SHARDS=4 SHARD_INDEX=${{ matrix.shard }}
+      - name: 保存分片身份、覆盖、结果与计时证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capture-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/capture-shard-${{ matrix.shard }}
+          if-no-files-found: error
 
   egress-spec-gates:
     runs-on: ubuntu-latest

@@ -1438,6 +1438,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         else:
             p.add_argument("--start", type=Path, default=DEFAULT_START)
             p.add_argument("--pattern", default=DEFAULT_PATTERN)
+            p.add_argument("--selection-file", type=Path, default=None,
+                           help="CI 分片的测试 ID 选择件；先校验全量身份与调度配置，只允许选择完整执行单元")
         if name != "run-commands":
             p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
             p.add_argument("--durations", type=Path, default=DEFAULT_DURATIONS)
@@ -1490,6 +1492,36 @@ def _prepare(args: argparse.Namespace) -> tuple[ExecutorConfig, dict[str, float]
     grouped = discover_test_ids(args.start, args.pattern)
     units = plan_units(grouped, config, weights, durations, machine_cores=cores, full_set=full_set)
     scope = "full" if full_set else "subset"
+    selection_path = getattr(args, "selection_file", None)
+    args.selection_binding = None
+    if selection_path is not None:
+        if selection_path.is_symlink() or not selection_path.is_file():
+            raise ExecutorError("分片选择件必须是普通文件")
+        raw = selection_path.read_bytes()
+        try:
+            selection = json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise ExecutorError("分片选择件不是合法 JSON") from error
+        expected = sorted(test_id for ids in grouped.values() for test_id in ids)
+        if (not isinstance(selection, dict)
+                or set(selection) != {"schema_version", "full_test_ids_sha256", "test_ids"}
+                or selection["schema_version"] != "unit-executor-selection/v1"
+                or selection["full_test_ids_sha256"] != _sha256(expected)):
+            raise ExecutorError("分片选择件的全量测试身份不匹配")
+        selected = selection["test_ids"]
+        if (not isinstance(selected, list) or not selected or not all(isinstance(item, str) for item in selected)
+                or len(selected) != len(set(selected)) or not set(selected) <= set(expected)):
+            raise ExecutorError("分片测试 ID 缺失、重复或超出全集")
+        selected = set(selected)
+        if any(selected.intersection(unit.test_ids) and not set(unit.test_ids) <= selected for unit in units):
+            raise ExecutorError("分片选择件不能截断已规划的执行单元")
+        units = [unit for unit in units if set(unit.test_ids) <= selected]
+        grouped = {module: [test_id for test_id in ids if test_id in selected]
+                   for module, ids in grouped.items() if selected.intersection(ids)}
+        scope = "shard"
+        args.selection_binding = {"path": str(selection_path.resolve()), "sha256": hashlib.sha256(raw).hexdigest(),
+                                  "full_test_ids_sha256": selection["full_test_ids_sha256"],
+                                  "selected_test_ids_sha256": _sha256(sorted(selected))}
     return config, weights, durations, parallelism, cores, grouped, units, policy_digest(config, weights, durations, parallelism), scope
 
 
@@ -2035,6 +2067,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             print(json.dumps({
                 "policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
+                "selection": args.selection_binding,
                 "modules": len(grouped), "tests": sum(len(v) for v in grouped.values()),
                 "units": [{"unit_id": u.unit_id, "tests": len(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive, "weight": round(u.weight, 1)} for u in sorted(units, key=lambda u: -u.weight)],
             }, ensure_ascii=False, indent=1))
@@ -2054,6 +2087,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             started = time.monotonic()
             _write_json(out_dir / "plan.json", {"policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
+                                                "selection": args.selection_binding,
                                                 "units": [{"unit_id": u.unit_id, "tests": list(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive} for u in units]})
             print(f"调度：{'全量' if scope == 'full' else '部分模块'} {len(units)} 个单元（{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，"
                   f"整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}", file=sys.stderr, flush=True)
@@ -2067,6 +2101,7 @@ def main(argv: list[str] | None = None) -> int:
             summary["machine_cores"] = cores
             summary["parallelism"] = parallelism
             summary["scope"] = scope
+            summary["selection"] = args.selection_binding
             summary["bytecode_cache"] = bytecode
             summary["identity_memo"] = identity_memo
             if bytecode["status"] == "failed":

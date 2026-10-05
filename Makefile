@@ -405,6 +405,9 @@ test-frontend-critical:
 # （upstream-gate-full）只跑闭合自检，全量交给统一调度执行器 make test-capture-tools（UM-20：静态 4 片片间不均，
 # v0.2.13 合并时最慢一片 887 秒，执行器同机约 350 秒），原来的本机 4 片并行目标随之删除。
 CAPTURE_TEST_SHARDS ?= 4
+# CI 默认接入统一执行器；显式 legacy 恢复原单进程分片，失败不自动回退。
+CAPTURE_TEST_EXECUTOR ?= unified
+CAPTURE_TEST_OUT_DIR ?=
 define CAPTURE_TS_MODULE_CHECK
 	python3 -c 'import hashlib, pathlib, sys; raw = pathlib.Path(sys.argv[1]); expected = sys.argv[2]; p = raw.resolve(strict=True); (raw.is_absolute() and raw.is_file() and not raw.is_symlink() and hashlib.sha256(p.read_bytes()).hexdigest() == expected) or sys.exit("CAPTURE_TYPESCRIPT_MODULE 非法或摘要不符")' \
 		"$(CAPTURE_TYPESCRIPT_MODULE)" "$(CAPTURE_TYPESCRIPT_SHA256)"
@@ -418,8 +421,9 @@ test-capture-tools-shard-check:
 test-capture-tools-shard:
 	@$(CAPTURE_TS_MODULE_CHECK)
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
-		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_test_shards.py run \
-		--count $(CAPTURE_TEST_SHARDS) --index $(SHARD_INDEX)
+		PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/capture_ci.py \
+		--count $(CAPTURE_TEST_SHARDS) --index $(SHARD_INDEX) --executor "$(CAPTURE_TEST_EXECUTOR)" \
+		--parallel $(CAPTURE_TEST_PARALLELISM) $(if $(CAPTURE_TEST_OUT_DIR),--out-dir "$(CAPTURE_TEST_OUT_DIR)",)
 
 # 采集工具测试全量（E2-01）：统一调度执行器 tools/ci/unit_executor.py 与原单进程 discover 同一加载语义
 # （起点 tools/official_client_capture/tests、模式 test_*.py），改为每个测试模块（重模块按方法拆块）一个独立进程，
