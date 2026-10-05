@@ -15,9 +15,10 @@ manifest 也能封存，缺陷拖到 accept 才暴露。本门禁在 seal 时按
    字节流严禁既被直接解析又被派生解析，防止计数类判据双计数；
 6. **selector 命中预检**：本侧应执行的每条规则的每个 check，其 select 必须
    至少命中一条观测——标签语义错位（k34 的 ``transport: direct``）、证据缺失
-   都在此暴露，不再等到 accept 的 ``actual=[]``。唯一例外是官方侧 seal 遇到
+   都在此暴露，不再等到 accept 的 ``actual=[]``。官方侧 seal 有两类延后例外：
    目标版本整体删除的端点（select 以 ``data.path`` 钉死、该路径在全部官方观测中
-   零出现）：这类 check 登记为延后项写入收据，由 VC-2 批准画像裁决。
+   零出现），以及相对冻结画像所属版本已弃用的标签取值（见下文的完整条件）。
+   这两类 check 登记为延后项写入收据，由 VC-2 批准画像裁决。
 
 门禁只做存在性与一致性预检，不评估 assertion 判据——通过与否仍由 accept 的
 离线重放决定。
@@ -259,9 +260,10 @@ def _retired_label_pins(
 ) -> list[dict[str, str]]:
     """select 限定的标签取值中，已被目标版本弃用的部分（R21）。
 
-    ``retired_label_values`` 是“基线版本官方侧声明有、目标版本官方侧声明已删”的取值。
+    ``retired_label_values`` 是“冻结画像所属版本官方侧声明有、目标版本官方侧声明已删”的取值。
+    参照版本来自冻结画像的 ``codex_version``，与 Campaign 基线无关。
     select 在某个键上限定的全部取值都属于弃用集合时才算；仍有一个取值未弃用、或取值
-    从未在基线声明过（含拼写错误），都不算，返回空列表。
+    从未在冻结画像参照声明中出现过（含拼写错误），都不算，返回空列表。
     """
 
     retired: set[tuple[str, str]] = set()
@@ -285,7 +287,7 @@ def _verify_selector_reachability(
     """逐 check 预检 select 至少命中一条观测，返回（规则数、check 数、延后项）。
 
     ``defer_absent_endpoints`` 只供官方侧 seal 使用：官方 seal 在 classify 之前执行，
-    只能拿仓库冻结画像（基线行为）做预检。目标版本整体删除某个端点时（0.156.1 删除
+    只能拿仓库冻结画像（其 ``codex_version`` 所属版本的行为）做预检。目标版本整体删除某个端点时（0.156.1 删除
     legacy compact：``/backend-api/codex/responses/compact``），冻结画像里钉死该路径的
     check 在官方证据上结构性不可达，强制命中会让 VC-1 永远无法封存。这类未命中同时满足
     下列条件时才延后裁决，逐条写入延后项：
@@ -294,13 +296,15 @@ def _verify_selector_reachability(
     2. 这些路径在**全部**官方观测（不分场景、记录类型与标签）中零出现——端点在目标
        版本官方流量里整体缺席，不可能是标签语义错位或单个场景漏采。
 
-    ``retired_label_values``（R21，同样只供官方侧 seal）是“基线版本官方侧证据标签声明
+    ``retired_label_values``（R21，同样只供官方侧 seal）是“冻结画像所属版本官方侧证据标签声明
     有、目标版本官方侧声明已删”的标签取值。0.156.1 的声明有意把 WS“可选头缺失”样本的
     variant 从 optional_missing 改为 v2_config_disabled（新版忽略关闭开关、样本实际带该头），
     并删除了只描述 legacy 请求的 session_header_scope 等标签；冻结画像仍按旧取值选择，
     必然零命中。未命中的 check 若以 ``labels.<键>`` 限定的全部取值都属于弃用集合，就登记
-    为延后项（附基线与目标两份声明摘要），同样交 VC-2 裁决。取值未弃用却零命中的，属于
-    漏标签或漏样本，仍当场失败。
+    为延后项（附冻结画像参照版本与目标版本两份声明摘要），同样交 VC-2 裁决。
+    ``label_declaration_sha256["baseline"]`` 及收据字段 ``baseline_label_declaration_sha256``
+    沿用历史字段名，实际绑定冻结画像 ``codex_version`` 的声明，不绑定 Campaign 基线。
+    取值未弃用却零命中的，属于漏标签或漏样本，仍当场失败。
 
     其余未命中（标签错位、场景漏采、端点只在部分场景缺失）仍当场失败。延后项计入已
     核对的 check 数，但由 VC-2 批准画像裁决：批准画像若仍保留该 check，compare／accept
@@ -320,7 +324,7 @@ def _verify_selector_reachability(
                 for value in label_declaration_sha256.values()
             )
         ):
-            raise AssertionGateError("弃用标签值的延后裁决必须绑定基线与目标两份标签声明摘要")
+            raise AssertionGateError("弃用标签值的延后裁决必须绑定冻结画像参照版本与目标版本两份标签声明摘要")
     observed_paths = (
         {
             item.data.get("path")
@@ -415,7 +419,7 @@ def run_assertion_gate(
 ) -> dict[str, Any]:
     """执行全部门禁并返回可封存的 gate 收据；任何一步失败即抛错。
 
-    ``defer_absent_endpoints`` 与 ``retired_label_values``（附基线、目标两份声明摘要
+    ``defer_absent_endpoints`` 与 ``retired_label_values``（附冻结画像参照版本、目标版本两份声明摘要
     ``label_declaration_sha256``）只供官方侧 seal 传入，语义见
     ``_verify_selector_reachability``；延后项非空时写入收据的
     ``deferred_unreachable_checks``，为空时收据形状与旧版逐字一致。
