@@ -114,6 +114,16 @@ class RuntimeReadAuditTests(unittest.TestCase):
         lines.append(f'1 openat(AT_FDCWD</repo>, "{runtime.MASK_ROOT}/old/token", O_RDONLY) = 3<{runtime.MASK_ROOT}/old/token>')
         self.assertFalse(self.audit(self.document(lines))["coverage_complete"])
 
+    def test_only_proven_failed_terminal_probe_is_covered(self):
+        document = self.document(['1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR|O_NONBLOCK) = -1 ENXIO (No such device or address)'])
+        self.assertTrue(self.audit(document)["coverage_complete"])
+        document["runtime"]["terminal_events"] = []
+        self.assertFalse(self.audit(document)["coverage_complete"])
+        for line in ['1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR) = 3</dev/tty>',
+                     '1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR) = -1 EACCES (Permission denied)',
+                     '1 chmod("/dev/tty", 0600) = 0']:
+            self.assertFalse(self.audit(self.document([line]))["coverage_complete"])
+
     def test_runtime_contract_cannot_disable_required_audit(self):
         inputs = records.declared_inputs(None, {"runtime_contract": self.contract, "require_read_audit": False})
         self.assertIn("runtime-contract", {entry["name"] for entry in inputs})

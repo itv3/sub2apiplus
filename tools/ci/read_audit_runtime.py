@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib.util
 import json
@@ -81,14 +82,29 @@ def environment_snapshot(path: str) -> dict[str, Any]:
 
 def contract_entry(value: Any) -> dict[str, Any]:
     contract = validate_contract(value)
-    device = os.stat("/dev/null")
+    device = os.lstat("/dev/null")
     if not stat.S_ISCHR(device.st_mode):
         raise RuntimeContractError("/dev/null 不是标准字符设备")
     if sys.platform.startswith("linux") and (os.major(device.st_rdev), os.minor(device.st_rdev)) != (1, 3):
         raise RuntimeContractError("/dev/null 设备身份不符")
+    terminal = os.lstat("/dev/tty")
+    if not stat.S_ISCHR(terminal.st_mode) or (sys.platform.startswith("linux")
+            and (os.major(terminal.st_rdev), os.minor(terminal.st_rdev)) != (5, 0)):
+        raise RuntimeContractError("/dev/tty 设备身份不符")
+    try:
+        descriptor = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno != errno.ENXIO:
+            raise RuntimeContractError("控制终端探测不符合无终端合同") from error
+        terminal_state = "absent-ENXIO"
+    else:
+        os.close(descriptor)
+        terminal_state = "present"
     payload = {"contract": contract, "platform": {"system": platform.system(), "arch": platform.machine(),
                "kernel": platform.release()}, "environment": [environment_snapshot(path) for path in contract["environment_paths"]],
-               "null_device": {"mode": device.st_mode, "uid": device.st_uid, "gid": device.st_gid, "rdev": device.st_rdev}}
+               "null_device": {"mode": device.st_mode, "uid": device.st_uid, "gid": device.st_gid, "rdev": device.st_rdev},
+               "terminal": {"state": terminal_state, "mode": terminal.st_mode, "uid": terminal.st_uid,
+                            "gid": terminal.st_gid, "rdev": terminal.st_rdev}}
     return {"category": "environment", "name": "runtime-contract", "sha256": digest(payload),
             "detail": {"schema_version": SCHEMA, **payload}}
 
@@ -161,6 +177,8 @@ def validate_context(context: Any, inputs: list[dict[str, Any]]) -> dict[str, An
     contract = validate_contract(entry.get("detail", {}).get("contract"))
     if entry != contract_entry(contract) or context.get("contract_entry") != entry:
         raise RuntimeContractError("隔离合同、平台、设备或环境输入漂移")
+    if entry["detail"]["terminal"]["state"] != "absent-ENXIO":
+        raise RuntimeContractError("隔离执行必须无控制终端")
     parent, child = context.get("parent_namespace"), context.get("namespace")
     if not all(isinstance(value, str) and re.fullmatch(r"mnt:\[\d+\]", value) for value in (parent, child)) or parent == child:
         raise RuntimeContractError("未证明新的挂载命名空间")
@@ -234,6 +252,21 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]]) -> se
     if seen != expected:
         raise RuntimeContractError("输出归属与完整路径集合不闭合")
     covered = set(seen)
+    terminal_events = runtime.get("terminal_events", [])
+    terminal_kinds = set()
+    for event in terminal_events:
+        if not isinstance(event, dict) or set(event) != {"name", "kind", "errno", "succeeded"}:
+            raise RuntimeContractError("控制终端观察格式错误")
+        terminal_kinds.add(event["kind"])
+        if event["name"] in {"open", "openat"} and event["errno"] == "ENXIO" and event["succeeded"] is False:
+            continue
+        if event["name"] in {"stat", "lstat", "newfstatat", "statx", "access", "faccessat", "faccessat2"} and event["kind"] == "stat" and event["succeeded"] is True:
+            continue
+        raise RuntimeContractError("实际控制终端访问超出无终端探测合同")
+    if terminal_kinds != set(paths.get("/dev/tty", [])):
+        raise RuntimeContractError("控制终端轨迹与访问集合不一致")
+    if terminal_kinds:
+        covered.add("/dev/tty")
     environment = {entry["path"]: entry for entry in runtime["context"]["contract_entry"]["detail"]["environment"]}
     for path, kinds in paths.items():
         if path == "/dev/null" and set(kinds) <= {"read", "write", "stat"}:

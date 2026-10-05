@@ -381,6 +381,29 @@ class StrictReadAuditTests(unittest.TestCase):
                   "read_audit": {"status": "failed", "undeclared_count": 1}}
         self.assertFalse(ur.derived_pass(record)[0])
 
+    def test_reexecute_policy_report_rejects_missing_unbound_or_relabelled_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry = ur.value_entry("policy", "reexecute-only-policy", "策略摘要")
+            current = mock.Mock(inputs=[entry], inheritable=False, reason="合同未闭合")
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=Path(directory), data_root=None,
+                                     currents={"covered": mock.Mock(), "rerun": current}, strict=True)
+            auditor.results["covered"] = {"status": "passed", "coverage_complete": True, "undeclared_count": 0}
+            self.assertEqual(auditor.report()["status"], "failed")
+            current.inputs_sha256 = ur.entries_sha256(current.inputs)
+            unit = mock.Mock(unit_id="rerun")
+            self.assertEqual(auditor.wrap(unit, ["true"]), ["true"])
+            auditor.collect(unit)
+            report = auditor.report()
+            self.assertEqual(report["status"], "passed")
+            self.assertFalse(report["coverage_complete"])
+            self.assertTrue(report["reuse_boundary_enforced"])
+            for changed in ({"coverage_complete": True}, {"reexecute_policy_sha256": "wrong"}):
+                auditor.results["rerun"].update(changed)
+                self.assertEqual(auditor.report()["status"], "failed")
+                auditor.collect(unit)
+            current.inheritable = True
+            self.assertEqual(auditor.report()["status"], "failed")
+
 
 class ReadAuditExecutorTests(unittest.TestCase):
     """真跑执行器 run-gates：测试组一个模块、命令单元两个（声明不同的输入），假 strace 按单元写合成读取。"""
@@ -402,7 +425,7 @@ class ReadAuditExecutorTests(unittest.TestCase):
 
     def _run(self, root: Path, repo: Path, reads: dict[str, list[str]], *, mode: str = "re-execute", label: str = "out",
              strict: bool = False, host_paths: dict | None = None, scopes: tuple = (),
-             environment: list | None = None) -> tuple[int, dict, str]:
+             environment: list | None = None, audit_policy: dict | None = None) -> tuple[int, dict, str]:
         bin_dir = root / "bin"
         bin_dir.mkdir(exist_ok=True)
         fake = bin_dir / "strace"
@@ -418,11 +441,13 @@ class ReadAuditExecutorTests(unittest.TestCase):
                       unit("cmd:all", {"ranges": [{"category": "tests", "name": "repo:all", "include": [""], "exclude": []}]})],
             "gates": [{"gate_id": "capture", "test_groups": ["capture-tools"], "units": ["cmd:a"]}, {"gate_id": "spec", "units": ["cmd:all"]}],
         }), encoding="utf-8")
-        if scopes or environment is not None:
+        if scopes or environment is not None or audit_policy is not None:
             document = json.loads(manifest.read_text())
             eg.apply_input_scopes(document, scopes)
             if environment is not None:
                 document["environment"] = environment
+            if audit_policy is not None:
+                document["audit_policy"] = audit_policy
             manifest.write_text(json.dumps(document))
         config = root / "config.json"
         config.write_text(json.dumps({"schema_version": ue.CONFIG_SCHEMA, "default_parallelism": 2, "default_quota": {"cores": 1, "memory_mb": 128},
@@ -467,7 +492,7 @@ class ReadAuditExecutorTests(unittest.TestCase):
             self.assertEqual(report["skipped_whole_repo"], ["cmd:all"])
             self.assertEqual(paths["test_alpha"], [("repo", "tools/official_client_capture/tests/helper_unused.py")],
                              "测试单元的闭包只有自己；data/a.txt 在其余部分范围里")
-            self.assertIn("读集审计（2 个单元，声明整个仓库不审计的 1 个）：不通过", stderr)
+            self.assertIn("读集检查（2 个单元，强制重跑 0 个", stderr)
             self.assertTrue(any(gate["status"] == "failed" for gate in summary["gates"]), "审计失败必须同步到门禁结论")
             self.assertEqual(summary["unit_manifest"]["self_check"], "passed", "失败记录仍须完整可审计，清单结构自检照常")
             records = [json.loads(path.read_text()) for path in (root / "store/records").rglob("*.json")]
@@ -480,6 +505,32 @@ class ReadAuditExecutorTests(unittest.TestCase):
                      "test_alpha": [str(tests / "test_alpha.py"), str(tests / "__pycache__" / "x.pyc")]}
             code, summary, stderr = self._run(root, repo, clean, label="out-clean")
             self.assertEqual((code, summary["read_audit"]["status"], summary["read_audit"]["undeclared_total"]), (0, "passed", 0), stderr[-2000:])
+
+    def test_reexecute_policy_runs_every_unit_but_records_cannot_be_inherited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}}
+            code, summary, stderr = self._run(root, repo, {}, strict=True, audit_policy=policy)
+            self.assertEqual(code, 0, stderr[-3000:])
+            self.assertFalse(summary["read_audit"]["coverage_complete"])
+            self.assertTrue(summary["read_audit"]["reuse_boundary_enforced"])
+            self.assertEqual(summary["inheritance"]["executed"], 3)
+            self.assertEqual(summary["unit_manifest"]["self_check"], "passed")
+            self.assertIn("全集读集未覆盖", stderr)
+            store = ur.RecordStore(root / "store")
+            for unit_id in ("cmd:a", "cmd:all", "test_alpha"):
+                path, record = store.candidates(unit_id)[0]
+                self.assertTrue(ur.derived_pass(record)[0])
+                self.assertFalse(record["inheritable"])
+                self.assertFalse(record["read_audit"]["coverage_complete"])
+                current = ur.Current(unit_id, record["unit_type"], record["spec"], record["spec_sha256"], record["inputs"], record["inputs_sha256"], True)
+                facts = ur.RunFacts(record["policy_sha256"], record["environment"], record["environment_sha256"], record["executor"],
+                                    1.0, ur.parse_utc(record["completed_at_utc"]))
+                self.assertIn("来源记录明确不可承接", ur.check_record(store, path, record, current, facts))
+                self.assertFalse(ur.derived_pass({**record, "inheritable": True})[0])
+                self.assertFalse(ur.derived_pass({**record, "inputs": []})[0])
+            code, _, stderr = self._run(root, repo, {}, audit_policy=policy, label="without-strict")
+            self.assertEqual(code, 2, stderr)
 
     def test_strict_host_coverage_replays_and_missing_trace_or_input_drift_refuses_reuse(self):
         with tempfile.TemporaryDirectory() as directory:

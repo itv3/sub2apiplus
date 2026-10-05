@@ -277,7 +277,7 @@ class InheritanceDecisionTests(unittest.TestCase):
                 "policy_sha256": "p", "environment": self.environment, "environment_sha256": self.facts.environment_sha256,
                 "spec_sha256": "s", "inputs": self.inputs, "inputs_sha256": self.current.inputs_sha256, "test_ids": ["test_a.T.test_ok"],
                 "tests": {"test_a.T.test_ok": {"outcome": "passed"}}, "passed": True, "exit_code": 0, "signal": None, "timed_out": False,
-                "log": {"sha256": self.log_digest}, "started_at_utc": ur.utc_now(), "completed_at_utc": ur.utc_now()}
+                "log": {"sha256": self.log_digest}, "started_at_utc": ur.utc_now(), "completed_at_utc": ur.utc_now(), "inheritable": True}
         body.update(overrides)
         record = ur.seal_record(body)
         self.store.put_record(record)
@@ -304,6 +304,7 @@ class InheritanceDecisionTests(unittest.TestCase):
             "执行器": ({"executor": {"files": {"unit_executor.py": "old"}, "sha256": "old"}}, "执行器变了：unit_executor.py"),
             "过期": ({"completed_at_utc": "2026-01-01T00:00:00Z"}, "超过承接期限"),
             "日志": ({"log": {"sha256": "f" * 64}}, "日志不在记录库里"),
+            "来源禁用": ({"inheritable": False}, "来源记录明确不可承接"),
         }
         for index, (label, (overrides, expected)) in enumerate(cases.items()):
             with self.subTest(label):

@@ -563,6 +563,27 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
     return _unique(entries)
 
 
+def validate_audit_policy(policy: Any, command_ids: set[str]) -> dict[str, Any]:
+    """登记已建合同的命令；所有未登记单元只能重跑，配置不能静默放开新增单元。"""
+    if (not isinstance(policy, dict) or set(policy) != {"schema_version", "default", "units"}
+            or policy.get("schema_version") != "unit-audit-policy/v1" or policy.get("default") != "reexecute-only"
+            or not isinstance(policy.get("units"), dict) or set(policy["units"]) - command_ids):
+        raise RecordsError("读集策略须默认重跑，且只能登记当前真实命令单元")
+    for unit_id, declaration in policy["units"].items():
+        if (not isinstance(declaration, dict) or set(declaration) != {"host_paths", "require_read_audit", "runtime_contract"}
+                or declaration["require_read_audit"] is not True):
+            raise RecordsError(f"单元 {unit_id} 必须登记精确输入、隔离合同并要求完整审计")
+        paths = declaration["host_paths"]
+        if (not isinstance(paths, list) or not all(isinstance(path, str) and path.startswith("/")
+                and str(Path(path)) == path and ".." not in Path(path).parts for path in paths) or len(paths) != len(set(paths))):
+            raise RecordsError("登记的宿主输入不是唯一的规范绝对路径")
+        try:
+            _audit_module()._runtime_module().validate_contract(declaration["runtime_contract"])
+        except RuntimeError as error:
+            raise RecordsError(str(error)) from error
+    return policy
+
+
 def _unique(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_name: dict[str, dict[str, Any]] = {}
     for entry in entries:
@@ -656,7 +677,11 @@ def derived_pass(record: Mapping[str, Any]) -> tuple[bool, str]:
     if record.get("exit_code") != 0 or record.get("signal") is not None or record.get("timed_out") is not False:
         return False, "退出状态不是成功"
     audit = record.get("read_audit")
-    if audit is not None and (not isinstance(audit, Mapping) or audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
+    reexecute_only = (isinstance(audit, Mapping) and audit.get("status") == "reexecute_required"
+                      and record.get("inheritable") is False and audit.get("coverage_complete") is False
+                      and any(entry.get("name") == "reexecute-only-policy" and entry.get("sha256") == audit.get("reexecute_policy_sha256")
+                              for entry in record.get("inputs") or []))
+    if audit is not None and not reexecute_only and (not isinstance(audit, Mapping) or audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
         return False, "读集审计未通过"
     if record.get("unit_type") == "test":
         tests, ids = record.get("tests"), record.get("test_ids")
@@ -827,6 +852,8 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
         problems.append("记录自摘要不符（被改过）")
     if record.get("kind") != "formal":
         problems.append("诊断执行的记录永不承接")
+    if record.get("inheritable") is not True:
+        problems.append("来源记录明确不可承接")
     if record.get("unit_id") != current.unit_id or record.get("unit_type") != current.unit_type:
         problems.append("单元 ID 或类型不符")
     passed, why = derived_pass(record)

@@ -203,6 +203,7 @@ class TraceParser:
         self.runtime_context = runtime_context
         self.output_tracker = None
         self.output_events: list[dict[str, Any]] = []
+        self.terminal_events: list[dict[str, Any]] = []
         self.event: tuple[str, str, bool] = ("", "", False)
         if runtime_context is not None:
             if not strict:
@@ -223,6 +224,11 @@ class TraceParser:
             return
         self.accesses.setdefault(path, set()).add(kind)
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
+        if self.output_tracker is not None and path == "/dev/tty":
+            name, body, succeeded = self.event
+            result = _RESULT.search(body)
+            self.terminal_events.append({"name": name, "kind": kind, "errno": result.group(2) if result else None,
+                                         "succeeded": succeeded})
         if self.output_tracker is not None and _under(path, self.output_tracker.root):
             name, body, succeeded = self.event
             descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
@@ -423,7 +429,7 @@ def trace_document(parser: TraceParser, roots: Sequence[str]) -> dict[str, Any]:
     if parser.output_tracker is not None:
         value["schema_version"] = RUNTIME_TRACE_SCHEMA
         value["runtime"] = {"context": parser.runtime_context, "output_events": parser.output_events,
-                            "outputs": parser.output_tracker.report()}
+                            "outputs": parser.output_tracker.report(), "terminal_events": parser.terminal_events}
     return value
 
 

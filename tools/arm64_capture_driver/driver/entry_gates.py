@@ -435,6 +435,7 @@ def plan_gates(
     egress_extra_inputs: list[dict[str, Any]] | None = None,
     with_gates: Sequence[str] = (),
     input_scopes: Sequence[dict[str, Any]] = (),
+    audit_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -543,6 +544,12 @@ def plan_gates(
                 "scheduling": scheduling_table()}
     if environment is not None:
         manifest["environment"] = environment
+    if audit_policy is not None:
+        _unit_records_module().validate_audit_policy(audit_policy, {unit["unit_id"] for unit in units})
+        manifest["audit_policy"] = audit_policy
+        for unit in units:
+            if unit["unit_id"] in audit_policy["units"]:
+                unit["inputs"] = audit_policy["units"][unit["unit_id"]]
     apply_input_scopes(manifest, input_scopes)
     return manifest
 
@@ -919,6 +926,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
     plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令单元的输入收窄提案，可重复指定；必须重新执行严格审计")
+    plan.add_argument("--audit-policy", type=Path, help="明确登记可验收输入合同；未登记单元一律重跑，不宣称覆盖完整")
     workspace = sub.add_parser("verify-scope-workspace", help="只读核对收窄复验沿用的测试树、缓存和 bundle")
     workspace.add_argument("--tree", type=Path, required=True)
     workspace.add_argument("--bytecode-cache", type=Path, required=True)
@@ -969,6 +977,7 @@ def main(argv: list[str] | None = None) -> int:
             with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
                                   input_scopes=[json.loads(path.read_text()) for path in args.input_scope],
+                                  audit_policy=json.loads(args.audit_policy.read_text()) if args.audit_policy else None,
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
                                   pre_a3_data_inputs=data_inputs,

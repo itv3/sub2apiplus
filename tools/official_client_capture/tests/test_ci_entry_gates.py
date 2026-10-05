@@ -101,6 +101,26 @@ class EntryGatesMakeChecksTests(unittest.TestCase):
 class EntryGatesPlanTests(unittest.TestCase):
     CHECKS = ["check-egress-spec-local-source", "test-official-client-control", "egress-spec-go-test", "egress-spec-version-leak"]
 
+    def test_audit_policy_preserves_gate_set_and_rejects_unknown_or_relaxed_declarations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); tree = _tree(root, self.CHECKS)
+            original = eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux")
+            unit_id = original["units"][0]["unit_id"]
+            declaration = {"host_paths": [str(tree / "Makefile")], "require_read_audit": True,
+                           "runtime_contract": {"schema_version": "unit-runtime-contract/v1",
+                           "temporary_root": str(root / "private" / "output"), "mask_roots": ["/root/oauth-capture"], "environment_paths": []}}
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {unit_id: declaration}}
+            manifest = eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux", audit_policy=policy)
+            self.assertEqual(manifest["gates"], original["gates"])
+            self.assertEqual(manifest["test_groups"], original["test_groups"])
+            self.assertEqual([unit["unit_id"] for unit in manifest["units"]], [unit["unit_id"] for unit in original["units"]])
+            self.assertEqual(manifest["units"][0]["inputs"], declaration)
+            for invalid in ({**policy, "default": "inherit"}, {**policy, "units": {"unknown": declaration}},
+                            {**policy, "units": {unit_id: {**declaration, "require_read_audit": False}}},
+                            {**policy, "units": {unit_id: {**declaration, "host_paths": ["/root/../input"]}}}):
+                with self.assertRaises(RuntimeError):
+                    eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux", audit_policy=invalid)
+
     def _pre_a3_units(self, root: Path, data_root: Path) -> Path:
         path = root / "pre-a3-units.json"
         path.write_text(json.dumps({"schema_version": eg.COMMANDS_SCHEMA, "staging_root": str(data_root / "staging" / "x"), "units": [

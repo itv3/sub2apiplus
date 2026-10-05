@@ -871,6 +871,8 @@ class Outcome:
         if not self.execution_passed:
             return False
         audit = self.extra.get("read_audit")
+        if audit is not None and audit.get("status") == "reexecute_required" and self.extra.get("reexecute_only") is True:
+            return True
         if audit is not None and (audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
             return False
         return True
@@ -987,6 +989,9 @@ class ReadAuditor:
         return not self.strict and current is not None and self.module.declares_whole_repo(current.inputs)
 
     def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
+        current = self.currents.get(unit.unit_id)
+        if current and any(entry.get("name") == "reexecute-only-policy" for entry in current.inputs or []):
+            return argv
         if self.skipped(unit):
             return argv
         roots = [self.repo_root] + ([self.data_root] if self.data_root else [])
@@ -1018,6 +1023,15 @@ class ReadAuditor:
     def collect(self, unit: Unit) -> dict[str, Any]:
         current = self.currents.get(unit.unit_id)
         inputs = current.inputs if current is not None else None
+        policy = next((entry for entry in inputs or [] if entry.get("name") == "reexecute-only-policy"), None)
+        if policy is not None:
+            if current.inheritable:
+                raise ExecutorError("强制重跑策略与可承接状态矛盾")
+            result = {"status": "reexecute_required", "coverage_complete": False, "coverage_scope": "not-observed",
+                      "reexecute_policy_sha256": policy["sha256"], "undeclared_count": 0, "undeclared": [],
+                      "reason": current.reason, "inputs_sha256": current.inputs_sha256}
+            self.results[unit.unit_id] = result
+            return result
         if self.skipped(unit):
             result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": [],
                       "status": "passed", "coverage_complete": False, "coverage_scope": "not-observed"}
@@ -1055,17 +1069,29 @@ class ReadAuditor:
         skipped = sorted(unit_id for unit_id, result in self.results.items() if result.get("skipped"))
         missing = sorted(set(self.currents) - set(self.results))
         complete = (self.strict and bool(self.currents) and set(self.results) == set(self.currents)
-                    and all(result.get("coverage_complete") is True for result in self.results.values()))
+                    and all(result.get("coverage_complete") is True and result.get("status") == "passed"
+                            for result in self.results.values()))
+        reexecute = sorted(unit_id for unit_id, result in self.results.items() if result.get("status") == "reexecute_required")
+        enforced = (self.strict and bool(self.currents) and not missing and set(self.results) == set(self.currents)
+                    and all((result.get("coverage_complete") is True and result.get("status") == "passed") or
+                            (unit_id in reexecute and result.get("coverage_complete") is False
+                             and self.currents[unit_id].inheritable is False
+                             and any(entry.get("name") == "reexecute-only-policy"
+                                     and entry.get("sha256") == result.get("reexecute_policy_sha256")
+                                     for entry in self.currents[unit_id].inputs or []))
+                            for unit_id, result in self.results.items()))
         path = self.dir / "read-audit.json"
         _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
                            "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
                            "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
                            "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped,
-                           "coverage_complete": complete, "strict": self.strict, "missing_units": missing})
+                           "coverage_complete": complete, "strict": self.strict, "missing_units": missing,
+                           "reexecute_required_units": reexecute, "reuse_boundary_enforced": enforced})
         return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
                 "units_with_findings": flagged[:50], "undeclared_total": total,
-                "status": "failed" if total or (self.strict and not complete) else "passed",
-                "coverage_complete": complete, "missing_units": missing}
+                "status": "failed" if total or (self.strict and not (complete or enforced)) else "passed",
+                "coverage_complete": complete, "missing_units": missing, "reexecute_required_units": reexecute,
+                "reuse_boundary_enforced": enforced}
 
 
 def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
@@ -1259,6 +1285,7 @@ class Scheduler:
                 if self.auditor is not None and item.kind == "formal":
                     audit = self.auditor.collect(item.unit)
                     outcome.extra["read_audit"] = audit
+                    outcome.extra["reexecute_only"] = audit.get("status") == "reexecute_required"
                 self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
@@ -1819,8 +1846,9 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
         print(f"门禁 {gate['gate_id']}：{verdict}{skipped}", file=sys.stderr)
     audit = summary.get("read_audit") or {}
     if audit:
-        verdict = "通过" if audit["status"] == "passed" else f"不通过：{len(audit['units_with_findings'])} 个单元有未声明读取 {audit['undeclared_total']} 处"
-        print(f"读集审计（{audit['units']} 个单元，声明整个仓库不审计的 {audit.get('skipped_whole_repo', 0)} 个）：{verdict}；明细 {audit['report']}",
+        verdict = "全集覆盖通过" if audit.get("coverage_complete") else "承接边界通过，全集读集未覆盖" if audit["status"] == "passed" else "不通过"
+        print(f"读集检查（{audit['units']} 个单元，强制重跑 {len(audit.get('reexecute_required_units', []))} 个，"
+              f"未声明读取 {audit['undeclared_total']} 处）：{verdict}；明细 {audit['report']}",
               file=sys.stderr)
         for unit_id in audit["units_with_findings"][:10]:
             print(f"  未声明读取：{unit_id}", file=sys.stderr)
@@ -2012,9 +2040,28 @@ def _run_gates(args: argparse.Namespace) -> int:
     if clash:
         raise ExecutorError(f"命令单元与测试单元重名：{clash}")
     units = test_units + command_units
+    audit_policy = manifest.get("audit_policy")
+    if audit_policy is not None:
+        try:
+            records.validate_audit_policy(audit_policy, {unit.unit_id for unit in command_units})
+        except records.RecordsError as error:
+            raise ExecutorError(str(error)) from error
+        if not args.decide_only and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict):
+            raise ExecutorError("读集合同登记须重新执行严格审计；当前只能只读预览承接集合")
+        for item in manifest["units"]:
+            if item["unit_id"] in audit_policy["units"] and item.get("inputs") != audit_policy["units"][item["unit_id"]]:
+                raise ExecutorError("单元输入与已登记读集合同不一致")
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
+    if audit_policy is not None:
+        entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))
+        for unit_id, current in currents.items():
+            if unit_id not in audit_policy["units"]:
+                current.inputs = records._unique([*(current.inputs or []), entry])
+                current.inputs_sha256 = records.entries_sha256(current.inputs)
+                current.inheritable = False
+                current.reason = "输入合同未闭合：只验证本次执行结果，禁止承接"
     if args.audit_strict and not args.audit_reads:
         raise ExecutorError("严格读集审计必须同时启用 --audit-reads")
     if args.audit_host_inputs:
