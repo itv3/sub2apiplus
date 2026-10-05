@@ -256,9 +256,9 @@
     },
     {
       "path": "driver/phase_context.py",
-      "sha256": "20b54782870170229a740eba8228bb4138eee6a69a78b9f2ded70e5f662d5ac1",
+      "sha256": "3e674d828c7c0f4650d5a8aac98c716d5e7b671749f8f770828f18c484b62478",
       "mode": "0700",
-      "bytes": 23794
+      "bytes": 23760
     },
     {
       "path": "driver/pre-a3.sh",
@@ -507,5 +507,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "c1a9711da20fd85a4a0d6af4013a42206fde0212704350ffa5ec017cc4361b65"
+  "manifest_sha256": "869cac49c8f89c42f25275e3e373fd114b99bea0a5965677cbc36274100a48f2"
 }

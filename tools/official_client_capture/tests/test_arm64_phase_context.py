@@ -329,6 +329,20 @@ class PhaseContextTests(unittest.TestCase):
         self.cu._canonical_production_step.assert_not_called()
         self.assertEqual(before, self.base.snapshot())
 
+    def test_completed_vc6_replay_preserves_native_byte_count_binding(self):
+        context = self.vc6_context(); plan = self.vc6_plan(context)
+        checkpoint = self.cu._canonical_latest_checkpoint.return_value
+        for action in plan["actions"]:
+            item = native.codex_upgrade_vc_artifacts.canonical_action_binding(action)
+            path = Path(item["step_receipt"])
+            # 直接用原生绑定生成器，避免夹具遗漏 bytes 后掩盖真实协议差异。
+            source = native._canonical_file_binding(self.campaign, path, "已完成步骤收据")
+            checkpoint["items"].append({"item_id": item["item_id"], "source": source})
+        phase_context._vc6_receipts(context, plan)
+        checkpoint["items"][-1]["source"]["bytes"] += 1
+        with self.assertRaisesRegex(ValueError, "已完成步骤"):
+            phase_context._vc6_receipts(context, plan)
+
     def test_vc6_wrong_attempt_and_activation_replay_failure_are_rejected(self):
         context = self.vc6_context(); plan = self.vc6_plan(context)
         wrong = copy.deepcopy(plan)

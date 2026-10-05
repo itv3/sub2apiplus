@@ -249,10 +249,11 @@ def _vc6_receipts(context, plan):
                 or any(scan.values()) or receipt.get("runtime_catalog_removed") is not True
                 or receipt.get("historical_evidence_preserved") is not True):
                 raise ValueError("VC-6 退役收据未绑定当前激活、版本或零消费者合同")
-        if item["item_id"] in index and index[item["item_id"]]["source"] != {"path": str(path.relative_to(campaign)), "sha256": bound["sha256"]}:
+        source = {**bound, "path": str(path.relative_to(campaign))}
+        if item["item_id"] in index and index[item["item_id"]]["source"] != source:
             raise ValueError("VC-6 已完成步骤与传入收据不一致")
         # 同一纯 canonical 批次允许连续三步；这里只构造只读校验视图，不修改 checkpoint。
-        index[item["item_id"]] = {"source": {"path": str(path), "sha256": bound["sha256"]}}
+        index[item["item_id"]] = {"source": source}
 
 
 def _vc5_plan(context, plan):
