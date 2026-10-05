@@ -1307,7 +1307,7 @@ def _current_bindings(deployment_receipt: Path, policy_activation: Path) -> dict
 
 
 def verify_reusable_certification(path: Path, *, bindings: Mapping[str, Any]) -> dict[str, Any]:
-    """按工具身份判定一份 pre-A3 认证对本次部署是否可复用（修好接着跑第 19 项）。
+    """按工具身份及认证合同判定一份 pre-A3 认证对本次部署是否可复用。
 
     可复用当且仅当：收据通过 ``verify_certification``（自摘要、五摘要等于当前工具身份、零请求）、策略版本
     等于当前策略、收据绑定的激活策略摘要等于本次激活认证的策略摘要、真实链登记集合等于当前发布包。
@@ -1333,12 +1333,12 @@ def find_reusable_certification(
     search_root: Path | None = None,
     certification: Path | None = None,
 ) -> Path | None:
-    """可复用的 pre-A3 认证（修好接着跑第 19 项）。
+    """查找能通过当前工具身份、策略和认证合同复核的 pre-A3 认证。
 
-    每次重建 Campaign 都重跑约 55 分钟的 pre-A3，而工具身份没变——只是重新部署一次（部署收据 sha 变了）
-    也一样。判定只看工具身份：本次部署收据与激活认证先各自通过校验（``_current_bindings``），候选认证再按
-    ``verify_reusable_certification`` 核验，不要求部署收据／激活认证的 sha 逐字相等。``certification`` 给出时
-    只核验该份（stage1 建账本前的门禁，修好接着跑第 18 项）；否则在 ``search_root`` 下取认证时间最近的一份。
+    本次部署收据与激活认证先经 ``_current_bindings`` 校验，候选认证再经
+    ``verify_reusable_certification`` 核验；不要求前后部署收据或激活认证的摘要逐字相等。
+    ``certification`` 给出时只核验该份（stage1 建账本前的门禁）；否则在 ``search_root``
+    下取通过复核且认证时间最近的一份。是否重跑由合同判定，耗时以对应运行记录为准。
     """
 
     bindings = _current_bindings(deployment_receipt, policy_activation)
