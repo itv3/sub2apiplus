@@ -1,0 +1,79 @@
+{
+  "base_commit": "86dbec73f70a069ee702ae0ec7856514e5ab92f7",
+  "changed_path_count": 2,
+  "current_commit": "3e3a333dbf36236b54828444d09a9c75cd82c17c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5672,
+  "frozen_path_count": 2015,
+  "identity_sha256": "164a50ff70d48fe5090a76a8678513a3fc8059450226e97a7c82198d32009a54",
+  "issued_at_utc": "2026-10-05T22:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-merge-verifier-permissions-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "72f9f82356d54dd3a940ce3121c8f4582b18018b5b51a05ee95a6478c910eaa2"
+      ],
+      "reason": "普通 CI 用户无法访问固定验证器路径时统一受控拒绝，保留精确摘要和历史重放，并增加元数据及读取权限回归 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-history-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-replay-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c06-verifier-binding-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ce9e3b7916a8075d3563abcd3382a289f2ef833cd7913dd607f92007af300981"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "00824c12608f1af16ca8994b2ddad87e3c19488128d0944f502be28aac493056"
+      ],
+      "reason": "普通 CI 用户无法访问固定验证器路径时统一受控拒绝，保留精确摘要和历史重放，并增加元数据及读取权限回归 path=tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c98cb726d70662640234eb82ed4dcac196080261a6dd4e0f5435abc325ada63c"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
