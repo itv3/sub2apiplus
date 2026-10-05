@@ -280,7 +280,7 @@
 ## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
 
 * 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～70 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
-  问题（修好接着跑第 67 项）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
+  问题（字节码缓存前缀导致计时用例失败）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
   问题在 VC-0 就修掉。结果只作预检，**不是** accept 的门禁收据；VC-5 accept 前 `vc5-accept.sh` 仍在候选门禁目录执行正式门禁。
 * 时机：E2-04 起预跑记录取自建账本之前的入口门禁（同一次运行的 `preflight.json`），本命令只在入口门禁之后又改了源码、需要
   单独补跑时使用；单独运行时不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件，资源争用会把计时用例拖红）。
@@ -428,7 +428,7 @@
   同一份记录库里刚验过的门禁单元全部承接，真正执行的只有 pre-A3 场景（输入变了的）与便宜检查；零请求 smoke、atomic-double 与
   建账本之后的步骤要用采集容器，只在明确执行的空跑里跑。
 * 让路：有采集在跑（执行器整机预约的申请方还活着）就不起，结论记 `yielded`、退出 4；空跑不申请整机，不挡采集。
-* 日常维护（方案第 8 节：日常化空跑和升级开工前先查磁盘余量）：每次空跑开跑前先清 Go 编译缓存里 6 小时以上没用过的条目
+* 日常维护（空跑和升级开工前先查磁盘余量）：每次空跑开跑前先清 Go 编译缓存里 6 小时以上没用过的条目
   （`go env GOCACHE`，Go 用到一个条目会把它的修改时间刷新到一小时以内）、清理单元执行记录库（见上文「单元执行记录与承接」）、
   只留最近 5 次空跑的演练根与空跑产物（在跑的不动）、部署留下的旧暂存树（数据根 `staging/<名>-managed-tools.superseded-<UTC>`，
   没有收据或账本引用）每组只留最近 2 份（E4-03），再查根盘：越过停线（与 `guard.sh` 同一条：已用超过 69%，或可用少于
@@ -441,7 +441,7 @@
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置；同一提交＋同一部署（同一种空跑）
   已有在跑或已有结论就不重复跑。`status` 列出全部。演练根与空跑产物只留最近 5 次（日常维护自动清）。
 
-## 修好接着跑一条命令（第 35 项，`driver/fix-and-continue.sh`）
+## 修好接着跑一条命令（`driver/fix-and-continue.sh`）
 
 * 用途：候选采集（VC-5）续跑的一轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"由一条命令编排，取代按 sed 复制改写的
   upload-rN／repair-rN 轮次脚本。每轮只换一份轮次参数文件（模板 `driver/fix-and-continue.example.params`，经
@@ -465,13 +465,13 @@
   本脚本从不调用 accounting-resolve／environment-isolate／campaign-resume／request-budget-extend，从不传 `--force`，不重装守护。
 * 阶段延期在对账前（pre-extend）与授权后（extend）各判一次：对账前阶段截止已过时计时账本是 deadline_paused、对账判预算
   暂停且拒绝批准；延期写入又会推进 Campaign 账本 head，放在批准与授权之间会让授权拒绝"账本 head 已推进"。
-* 根因修复登记（第 59 项）：reconcile-runs 与 reconcile-attempt 对账遇"项目总账根因达上限"暂停，走同一条登记路径——
+* 根因修复登记：reconcile-runs 与 reconcile-attempt 对账遇"项目总账根因达上限"暂停，走同一条登记路径——
   shell 函数 `root_cause_repair`（同一判定 repair-plan、同一命令 record-root-cause-repair、同一核对 repair-verdict）。
   reconcile-attempt 照旧记 passed（needs_repair）交 repair 步骤登记、approve 重新对账；reconcile-runs 在 repair 之前，
   参数给了材料就在本步骤内登记、对该对象重新对账一次（仍暂停即停下），没给材料停下时提示 `--from reconcile-runs`。
   受管对账器先写对账收据、入总账再判定，暂停对象的收据按监督器判据核验是通过的：停下记录带 `revisit`，续跑扫描时
   重新对账这些对象，不当作已对账跳过。Campaign 账本 stop_required 不走此路径，只停下等人工 campaign-resume。
-* 续跑重新对账（第 62 项）：`revisit` 覆盖 reconcile-runs 里任何暂停种类（deadline、accounting、environment、request_budget、
+* 续跑重新对账：`revisit` 覆盖 reconcile-runs 里任何暂停种类（deadline、accounting、environment、request_budget、
   root_cause_repair 与受管将来新增的种类），重新对账判可恢复即记 done、仍暂停按原提示停下。暂停提示末尾恰好一个
   `--from`，与停下记录的续跑步骤相同：含 deadline 时是 `pre-extend`（在参数文件填 EXTEND_DEADLINE／EXTEND_REASON，
   pre-extend 先于对账执行阶段延期），其余种类按受管提示处理后从停下的步骤续跑。reconcile-attempt／approve 每次都对

@@ -16,7 +16,7 @@ fi
 mkdir -p "$GATE/environment" "$GATE/logs"; chmod 700 "$GATE" "$GATE/environment" "$GATE/logs"
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
-# 树外只读字节码缓存（修好接着跑第 67 项）：lib.sh 全局禁写字节码。缓存前缀若是空目录，解释器改到前缀下找全部 .pyc
+# 树外只读字节码缓存：lib.sh 全局禁写字节码。缓存前缀若是空目录，解释器改到前缀下找全部 .pyc
 # （含标准库自带的）而全部落空，每个子进程都从源码重编，ARM64 监督器 CLI 启动 584 毫秒，候选树监督器计时用例确定性失败；
 # 不设前缀也要每次从源码编译测试树模块（约 323 毫秒），心跳间隔用例只剩约 20 毫秒余量。make test 前把标准库与测试树
 # tools 预编译进本次重建的缓存目录（bytecode_cache.py，失败即停），make test 期间只读使用（约 187 毫秒），测试树不留

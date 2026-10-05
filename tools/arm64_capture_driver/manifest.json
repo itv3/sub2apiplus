@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "9712b8ed76bef422d546d01d9841297687a46e6fdca7be645d872ec93d9fac49",
+      "sha256": "a41555f43085e4dc3dd516eecc84f8472225fc4ca4e5952d482d6ba6c96829a0",
       "mode": "0600",
-      "bytes": 69679
+      "bytes": 69627
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -154,9 +154,9 @@
     },
     {
       "path": "driver/fix-and-continue.sh",
-      "sha256": "ef736d08b1182b69f39909c66507a02324b65537883caef98b7f18a99468178a",
+      "sha256": "4ae38a92b093bf1fcb5d96ea365d51e2ac6c33f1f4fff4015f24f409a3313087",
       "mode": "0700",
-      "bytes": 26302
+      "bytes": 26155
     },
     {
       "path": "driver/fix_and_continue.py",
@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/gates.sh",
-      "sha256": "6fb27cac53a09b4d719dfd3020c932edd65f6d60f5681331555e56d36e2566e0",
+      "sha256": "e7589c52309ee89a792077ba4d80bf0a238d4780736b7be557a076c05abab6db",
       "mode": "0700",
-      "bytes": 3654
+      "bytes": 3641
     },
     {
       "path": "driver/gen_vc2_plans.py",
@@ -220,9 +220,9 @@
     },
     {
       "path": "driver/guard.sh",
-      "sha256": "652c0931e64c393e522714d568b80d6d4716fb44a8a44e20189b265f8be750ed",
+      "sha256": "e18945537af2cddc86df35418b9a4c79a85eab9134deee1390c549ce33935c3e",
       "mode": "0700",
-      "bytes": 5969
+      "bytes": 5858
     },
     {
       "path": "driver/implementation_gates.py",
@@ -232,9 +232,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "3eb73385322fa79f7bc0dd1c0f33a0f92c606d8204450e17b4daf930387fba00",
+      "sha256": "f1c6400f693d8b8b37f7704067fb24a93babc59aa6f85a02748d0dbb2af14fc9",
       "mode": "0700",
-      "bytes": 17730
+      "bytes": 17699
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -262,9 +262,9 @@
     },
     {
       "path": "driver/local/local-vc4.sh",
-      "sha256": "417a37fd24e323630f11fd729bee303038d9b711580af8f1e8518008f9828ad7",
+      "sha256": "83e1c59530a45c5ffec799786e1e0b299de48cbbf047517b8a13a84b1cfef0a4",
       "mode": "0700",
-      "bytes": 3951
+      "bytes": 3920
     },
     {
       "path": "driver/parse_env.py",
@@ -280,9 +280,9 @@
     },
     {
       "path": "driver/pre-a3.sh",
-      "sha256": "197d6c78ea7c56ff51926e365f94a85d83f28b40ac10c968faa83e5645626a73",
+      "sha256": "08fe7c0a9286db16ae0387edc0cd8b1be3f0d69f87fcf6f848a822ea308f1961",
       "mode": "0700",
-      "bytes": 3511
+      "bytes": 3510
     },
     {
       "path": "driver/pre-all.sh",
@@ -322,15 +322,15 @@
     },
     {
       "path": "driver/stage1.sh",
-      "sha256": "dc5c51a13edd3586885e793af3f0e57ec1a1ed836f82763b95b6d28749f8fea2",
+      "sha256": "5ac41c8eb5d3dd0a12737b41237f2394ac111dfd3d65dea7b3eb4541bbc0791a",
       "mode": "0700",
-      "bytes": 6951
+      "bytes": 6940
     },
     {
       "path": "driver/stage2.sh",
-      "sha256": "6d8a6ebdc13b59dca20ca413ffeb4386b276c05cc57cfda22166feba9a969c4a",
+      "sha256": "cd215827dc6c9c3eeb9c401f4cb8cab22d0443e5b364c08997cfaf0ce34b0654",
       "mode": "0700",
-      "bytes": 4715
+      "bytes": 4709
     },
     {
       "path": "driver/target_platform_gate.py",
@@ -382,9 +382,9 @@
     },
     {
       "path": "driver/vc0-gate-target.sh",
-      "sha256": "e13a6b0838c6bcc769ea26d71364366cdc2090ea18a625af185729481970378c",
+      "sha256": "ccf36faa25ddb2cfd8e1f81fa1d75d09d1acc2135f08d3a0613402615f61476a",
       "mode": "0700",
-      "bytes": 9235
+      "bytes": 9207
     },
     {
       "path": "driver/vc2-approve-and-stage.sh",
@@ -466,9 +466,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "a8940c9d2d05f089647ea500671a5d90065b1f69815c6721af44d71250b70632",
+      "sha256": "78b26daebe617e8c4fab53682f356e7f574c7987c38d3baba78c65112cb84dda",
       "mode": "0700",
-      "bytes": 6101
+      "bytes": 6070
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -537,5 +537,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "89da13413816c7d14115118366cf36536c456e51c1b9cf4331d98219486cf5b4"
+  "manifest_sha256": "0dfa0a39ecb4640a300ab167a8889080a933d19d851a571cf84b4ca286ee37c3"
 }
