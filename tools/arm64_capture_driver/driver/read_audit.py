@@ -582,7 +582,9 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
         if binding is not None:
             kind = binding["kind"]
             if ((kind == "file" and set(kinds) <= {"read", "exec", "stat"})
-                    or (kind == "directory" and set(kinds) <= METADATA_KINDS)
+                    # libc 也会不带 O_DIRECTORY 只读打开目录；快照已证明该精确路径是目录，直接目录项已绑定。
+                    # 子文件仍须单独快照，不能因为打开了父目录就获得递归覆盖。
+                    or (kind == "directory" and set(kinds) <= METADATA_KINDS | {"read"})
                     or (kind == "missing" and set(kinds) <= {"missing"})):
                 continue
         findings.append({"root": root, "path": path, "kinds": kinds, "sample": path,

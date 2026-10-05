@@ -337,6 +337,10 @@ class StrictReadAuditTests(unittest.TestCase):
     def test_directory_and_whole_repo_cannot_cover_unbound_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve(); path = root / "child"; path.write_text("输入")
+            opened = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{root}", O_RDONLY|O_CLOEXEC) = 3<{root}>'], ["/"], strict=True)
+            self.assertTrue(ra.strict_audit_reads(opened, [ra.host_snapshot(str(root))], repo_root="/repo", data_root=None)["coverage_complete"])
+            written = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{root}", O_RDWR) = 3<{root}>'], ["/"], strict=True)
+            self.assertFalse(ra.strict_audit_reads(written, [ra.host_snapshot(str(root))], repo_root="/repo", data_root=None)["coverage_complete"])
             trace = ra.filter_stream([f'1 openat(AT_FDCWD<{root}>, "{path}", O_RDONLY) = 3<{path}>\n'], ["/"], strict=True)
             inputs = [ra.host_snapshot(str(root)), _range("repo:all", [""])]
             result = ra.audit_reads(trace, inputs, repo_root=str(root), strict=True)
