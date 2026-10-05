@@ -84,7 +84,7 @@ Campaign，兼容边界见[历史审计 §2](CODEX_CLI_CLIENT_EMULATION_HISTORY_
 
 证据基线与运行角色相互独立：经 VC-2 判定 `inherit` 的规则可以继续引用旧版本 L1／L2／P／R，但这不
 表示旧版本仍是 Active。运行时 Active／Previous 的机器事实只读取 Release Catalog，§3.2 负责其人类可读
-摘要；历史版本身份与原始 run 见附录 A。
+摘要；历史版本身份与原始 run 见[历史审计 §1 版本证据沿革](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#1-01491-与-01470-版本证据沿革)。
 
 ### 2.1.2 规则准入与观测边界
 
@@ -1889,8 +1889,15 @@ VC-5 等待的是后台 `vc5-run-batch.sh` 写出的实际 PID，且本次监督
 8. 实现测试及受影响闭集测试通过；继承规则只重放既有收据，不借机扩大为全量改造。
 
 版本新增 route 可在确实不含该端点的单个 Release 中零匹配，但 Compiler 端点集合必须等于
-Active／Previous 并集，且每条 runtime-bindable route 在并集中至少有一个 binding。只有现有
+Active／Previous 并集，且每条未发布退役的 runtime-bindable route 在并集中至少有一个 binding。只有现有
 Snapshot、Plan、Bundle 或 Executor 无法表达新机制时，才最小修改共享层并专项复验两个 mode。
+
+**发布退役 route 的例外**以 [`release-route-retirements.json`](../backend/internal/officialegress/catalogdata/release-route-retirements.json)
+及其[加载合同](../backend/internal/officialegress/catalog_route_retirements.go)为准：逐条登记物理 route、端点 ID、最后声明它的
+画像版本／官方摘要和审核信息；最后画像字节保留并能重放唯一匹配端点。只有 Active／Previous 都不再声明该端点、且登记项
+仍被静态 Codex binding 引用时退役才生效：保留历史 binding 和 MigrationReceipt，运行时不生成 EndpointBinding、
+ReleaseSelection 或路由条目，请求失败关闭。未登记、证明缺失或悬空登记不能作为缺端点例外；回滚后任一 Release 再次声明
+该端点时，退役覆盖层不生效，按该 Release 的原合同发布。
 
 先用映射生成同源门禁执行计划，再把映射、计划、Catalog、实现和测试一并提交：
 

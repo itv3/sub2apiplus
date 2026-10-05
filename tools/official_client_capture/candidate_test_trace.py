@@ -213,7 +213,7 @@ FROZEN_MAPPING_SHA256 = (
 # candidate_rule_assertion 同日注释）。与修订画像逐字节比对只差 source_spec_sha256 一行，规则、场景、检查 ID 与
 # 其余判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "124835be48e57ca3ff251f18ad26f3cca7c5e31ce06f2b9f3a822694931e75d1"
+    "6565e95dbb2e3049725fcc572ee87766d718a9b84331387eadf8fddc54722029"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
