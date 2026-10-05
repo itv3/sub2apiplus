@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -63,9 +64,8 @@ PASSING_OUTCOMES = frozenset({"passed", "skipped", "expected_failure"})
 MISSING = "missing"
 HERE = Path(__file__).resolve().parent
 # 执行器版本：执行器目录里参与调度、判定、输入解析与门禁编排的文件（存在的才算；字节码预编译工具另由执行器传入）。
-# 读集审计（read_audit.py）不算：它只决定这次运行要不要判失败，不改变单元怎么执行、结论如何（包 strace 只影响耗时），
-# 审计口径的调整不该让全部记录失效（E3-04 第二轮补两条豁免后，下一次全集通过的 253 个单元因此全部重跑）。
-EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
+# 审计结论影响记录是否通过及覆盖是否闭合，审计合同必须进入执行器身份。
+EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
 # 只决定缓存放在哪里的环境变量（内容按源码摘要校验或按整树摘要做键），不进环境指纹；执行器自己的控制变量也不进。
 ENV_CACHE_ONLY = frozenset({"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"})
 ENV_EXECUTOR_PREFIX = "UNIT_EXECUTOR_"
@@ -75,6 +75,16 @@ COMMAND_RANGES = ("managed", "tests", "docs", "rest")
 
 class RecordsError(RuntimeError):
     """记录库、清单或输入解析错误。"""
+
+
+def _audit_module():
+    name = "unit_records_read_audit"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "read_audit.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
 
 
 # ---------------------------------------------------------------------------
@@ -511,10 +521,18 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
       同一受管树的依赖分析经 ``deps_cache`` 共用；
     * ``resolved``：清单生成时已算好的明细（例如数据根才有的内容）。"""
 
-    allowed = {"ranges", "files", "test_modules", "head", "resolved"}
+    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit"}
     if not isinstance(declaration, Mapping) or set(declaration) - allowed:
         raise RecordsError(f"输入声明非法：{declaration!r}")
+    paths = declaration.get("host_paths", [])
+    if (not isinstance(paths, list) or not all(isinstance(path, str) for path in paths)
+            or len(paths) != len(set(paths)) or not isinstance(declaration.get("require_read_audit", False), bool)):
+        raise RecordsError("宿主路径须为无重复的数组，完整审计要求须为布尔值")
     entries = [repo.range_entry(spec) for spec in declaration.get("ranges") or []]
+    for path in paths:
+        entries.append(_audit_module().host_snapshot(path))
+    if paths or declaration.get("require_read_audit"):
+        entries.append(value_entry("policy", "require-read-audit", "all-file-paths/v1"))
     for item in declaration.get("files") or []:
         if not isinstance(item, Mapping) or not isinstance(item.get("category"), str) or set(item) != {"category", "path"}:
             raise RecordsError(f"文件输入声明非法：{item!r}")
@@ -631,6 +649,9 @@ def derived_pass(record: Mapping[str, Any]) -> tuple[bool, str]:
 
     if record.get("exit_code") != 0 or record.get("signal") is not None or record.get("timed_out") is not False:
         return False, "退出状态不是成功"
+    audit = record.get("read_audit")
+    if audit is not None and (not isinstance(audit, Mapping) or audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
+        return False, "读集审计未通过"
     if record.get("unit_type") == "test":
         tests, ids = record.get("tests"), record.get("test_ids")
         if not isinstance(tests, dict) or not isinstance(ids, list) or len(ids) != len(set(ids)) or set(tests) != set(ids) or not ids:
@@ -767,6 +788,7 @@ class RunFacts:
     executor: dict[str, Any]
     max_age_hours: float
     now: float
+    require_read_audit: bool = False
 
 
 @dataclass
@@ -819,6 +841,25 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
         old, new = executor.get("files") or {}, facts.executor.get("files") or {}
         changed = sorted(name for name in set(old) | set(new) if old.get(name) != new.get(name))
         problems.append(f"执行器变了：{'、'.join(changed) or '（版本不同）'}")
+    required_audit = facts.require_read_audit or any(entry.get("name") == "require-read-audit" for entry in current.inputs or [])
+    if required_audit:
+        audit = record.get("read_audit") or {}
+        if (audit.get("coverage_complete") is not True or audit.get("coverage_scope") != "all-file-paths/v1"
+                or audit.get("inputs_sha256") != record.get("inputs_sha256")):
+            problems.append("读集覆盖未闭合，不能承接")
+        else:
+            trace = audit.get("trace") or {}
+            digest = str(trace.get("sha256") or "")
+            stored_trace = store.log_path(digest) if re.fullmatch(r"[0-9a-f]{64}", digest) else None
+            try:
+                if stored_trace is None or not stored_trace.is_file() or file_sha256(stored_trace) != digest:
+                    raise RecordsError("完整读集轨迹缺失或摘要漂移")
+                replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,
+                    repo_root=str(audit.get("repo_root") or "/unbound-repo"), data_root=audit.get("data_root"))
+                if not replay["coverage_complete"]:
+                    raise RecordsError("完整读集轨迹不能按当前输入重放")
+            except (OSError, ValueError, RuntimeError) as error:
+                problems.append(str(error))
     completed = parse_utc(record.get("completed_at_utc"))
     if completed is None:
         problems.append("完成时间不可读")

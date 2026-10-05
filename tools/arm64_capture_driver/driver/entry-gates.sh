@@ -41,7 +41,7 @@
 #     [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] \
-#     [--record-store <单元执行记录库>] [--audit-reads] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
+#     [--record-store <单元执行记录库>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--input-scope <提案>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
 #     > $RUNROOT/entry-gates.out 2>&1 < /dev/null
 #   后三个选项供入口编排器（entry.sh，E2-06）用：激活认证与 pre-A3 认证坐标覆盖参数文件里的值（重做时编排器给新坐标）；
 #   pre-A3 来源由编排器按步骤记录判定后指定——present 只复核并沿用已有认证，run 一定新跑（不按「工具五摘要与策略未变」
@@ -52,11 +52,12 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] [--audit-reads] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
 PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=full-set-pass; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
+AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -64,6 +65,9 @@ while [ "$#" -gt 0 ]; do
     --mode) MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --record-store) STORE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --audit-reads) AUDIT_READS=true; shift ;;
+    --audit-strict) AUDIT_STRICT=true; shift ;;
+    --audit-host-inputs) AUDIT_HOST_INPUTS="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
     --wait-lock) WAIT_LOCK="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -86,6 +90,9 @@ if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LO
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
+if { [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ]; } && { [ "$AUDIT_READS" != true ] || [ "$AUDIT_STRICT" != true ] || [ "$MODE" != re-execute ]; }; then
+  echo "宿主输入与收窄提案必须使用 --audit-reads --audit-strict --mode re-execute" >&2; exit 2
+fi
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
   if [[ "$file" != /* ]]; then echo "认证坐标必须是绝对路径：$file" >&2; exit 2; fi
 done
@@ -251,11 +258,13 @@ mkdir -p "$STORE"; chmod 700 "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
-    --with-gates "$WITH_GATES" --output "$OUT/gates-manifest.json" ) | cut -c1-400
+    --with-gates "$WITH_GATES" ${INPUT_SCOPE_ARGS[@]+"${INPUT_SCOPE_ARGS[@]}"} --output "$OUT/gates-manifest.json" ) | cut -c1-400
 echo "=== 一次运行：统一调度执行器 run-gates（模式 ${MODE}，记录库 ${STORE}，记录 ${OUT}/executor）$(utc_now)"
 EXEC_RC=0
 AUDIT_ARGS=()
 if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS=(--audit-reads --audit-data-root "$D"); echo "读集审计：正式执行的单元包在 strace 下（数据根 ${D}）"; fi
+if [ "$AUDIT_STRICT" = true ]; then AUDIT_ARGS+=(--audit-strict); fi
+if [ -n "$AUDIT_HOST_INPUTS" ]; then AUDIT_ARGS+=(--audit-host-inputs "$AUDIT_HOST_INPUTS"); fi
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
     --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240

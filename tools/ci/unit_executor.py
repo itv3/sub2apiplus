@@ -345,7 +345,7 @@ COMMANDS_SCHEMA = "unit-executor-commands/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 # inputs／inheritable／not_inheritable_reason 是门禁清单给 E3-01 承接用的声明（输入范围、是否可承接与原因），不影响执行。
 _COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight",
-                   "inputs", "inheritable", "not_inheritable_reason"}
+                   "inputs", "inheritable", "not_inheritable_reason", "input_scope"}
 
 
 def _string_env(value: Any, label: str) -> dict[str, str]:
@@ -860,11 +860,19 @@ class Outcome:
     completed_at_utc: str = ""
 
     @property
-    def passed(self) -> bool:
+    def execution_passed(self) -> bool:
         if self.exit_code != 0 or self.signal is not None or self.timed_out:
             return False
-        # 命令单元只认退出码、信号与超时（结果文件由命令自己写、调用方核对）；测试单元还要有一份成功的结果文件。
         return bool(self.unit.command) or (self.result is not None and bool(self.result.get("successful")))
+
+    @property
+    def passed(self) -> bool:
+        if not self.execution_passed:
+            return False
+        audit = self.extra.get("read_audit")
+        if audit is not None and (audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
+            return False
+        return True
 
 
 def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_seconds: float) -> dict[str, Any]:
@@ -937,6 +945,12 @@ class Recorder:
             "started_at_utc": outcome.started_at_utc,
             "completed_at_utc": outcome.completed_at_utc,
         }
+        if "read_audit" in outcome.extra:
+            audit = json.loads(json.dumps(outcome.extra["read_audit"]))
+            if self.store is not None and audit.get("trace"):
+                trace = audit["trace"]
+                trace["stored"] = str(self.store.put_log(Path(trace["path"]), trace["sha256"]))
+            body["read_audit"] = audit
         record = self.records.seal_record(body)
         _write_json(item.record_path, record)
         path = self.store.put_record(record) if self.store is not None else item.record_path
@@ -945,11 +959,10 @@ class Recorder:
 
 
 class ReadAuditor:
-    """读集审计（E3-04，规则见 ``read_audit.py``）：正式执行的单元包在 strace 下，轨迹经管道交给过滤器，只留测试树与
-    数据根下的路径；单元结束后按它本次的输入明细核对。诊断执行不审计。不改单元规格、不改执行记录——审计跑出来的记录
-    与平常一样可以承接。"""
+    """正式单元执行后、记录入库前核对读集。严格模式覆盖全根且不跳过整仓声明；
+    旧范围审计仅用于诊断覆盖，不能标记为宿主输入已闭合。"""
 
-    def __init__(self, *, out_dir: Path, repo_root: Path, data_root: Path | None, currents: dict[str, Any]) -> None:
+    def __init__(self, *, out_dir: Path, repo_root: Path, data_root: Path | None, currents: dict[str, Any], strict: bool = False) -> None:
         self.module = _audit_module()
         self.records = _records_module()
         self.dir = Path(out_dir) / "audit"
@@ -958,6 +971,7 @@ class ReadAuditor:
         self.data_root = str(Path(data_root).resolve()) if data_root is not None else None
         self.currents = currents
         self.results: dict[str, dict[str, Any]] = {}
+        self.strict = strict
 
     def trace_path(self, unit: Unit) -> Path:
         safe = unit.unit_id.replace("#", "-").replace("!", "-").replace("/", "-").replace(":", "-")
@@ -967,7 +981,7 @@ class ReadAuditor:
         """声明了整个仓库的单元不审计（见 read_audit.declares_whole_repo）。"""
 
         current = self.currents.get(unit.unit_id)
-        return current is not None and self.module.declares_whole_repo(current.inputs)
+        return not self.strict and current is not None and self.module.declares_whole_repo(current.inputs)
 
     def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
         if self.skipped(unit):
@@ -976,13 +990,14 @@ class ReadAuditor:
         trace = self.trace_path(unit)
         with contextlib.suppress(FileNotFoundError):
             trace.unlink()
-        return self.module.strace_argv(argv, output=trace, roots=roots)
+        return self.module.strace_argv(argv, output=trace, roots=roots, strict=self.strict)
 
     def collect(self, unit: Unit) -> dict[str, Any]:
         current = self.currents.get(unit.unit_id)
         inputs = current.inputs if current is not None else None
         if self.skipped(unit):
-            result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": []}
+            result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": [],
+                      "status": "passed", "coverage_complete": False, "coverage_scope": "not-observed"}
             self.results[unit.unit_id] = result
             return result
         try:
@@ -999,8 +1014,13 @@ class ReadAuditor:
                 in_data_root = bool(self.data_root) and (cwd == self.data_root or cwd.startswith(self.data_root + "/"))
                 head_id_only = not unit.command and unit.module.split("+", 1)[0] in self.records.HEAD_ID_ONLY_READERS
                 result = self.module.audit_reads(document, inputs, repo_root=self.repo_root, data_root=self.data_root,
-                                                 in_data_root=in_data_root, head_id_only=head_id_only)
+                                                 in_data_root=in_data_root, head_id_only=head_id_only, strict=self.strict)
                 result["trace_lines"] = document.get("lines")
+                trace = self.trace_path(unit)
+                result["trace"] = {"path": str(trace), "sha256": self.records.file_sha256(trace)}
+        result.setdefault("status", "failed" if result.get("undeclared_count") else "passed")
+        result.setdefault("coverage_complete", False)
+        result.update(inputs_sha256=current.inputs_sha256 if current else None, repo_root=self.repo_root, data_root=self.data_root)
         self.results[unit.unit_id] = result
         return result
 
@@ -1010,13 +1030,19 @@ class ReadAuditor:
         flagged = sorted(unit_id for unit_id, result in self.results.items() if result.get("undeclared_count"))
         total = sum(int(result.get("undeclared_count") or 0) for result in self.results.values())
         skipped = sorted(unit_id for unit_id, result in self.results.items() if result.get("skipped"))
+        missing = sorted(set(self.currents) - set(self.results))
+        complete = (self.strict and bool(self.currents) and set(self.results) == set(self.currents)
+                    and all(result.get("coverage_complete") is True for result in self.results.values()))
         path = self.dir / "read-audit.json"
         _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
                            "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
                            "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
-                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped})
+                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped,
+                           "coverage_complete": complete, "strict": self.strict, "missing_units": missing})
         return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
-                "units_with_findings": flagged[:50], "undeclared_total": total, "status": "passed" if not total else "failed"}
+                "units_with_findings": flagged[:50], "undeclared_total": total,
+                "status": "failed" if total or (self.strict and not complete) else "passed",
+                "coverage_complete": complete, "missing_units": missing}
 
 
 def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
@@ -1207,10 +1233,10 @@ class Scheduler:
                     completed_at_utc=_utc_now(),
                 )
                 # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
-                self.recorder.write(item, outcome)
                 if self.auditor is not None and item.kind == "formal":
                     audit = self.auditor.collect(item.unit)
-                    outcome.extra["read_audit"] = {"undeclared_count": audit.get("undeclared_count", 0)}
+                    outcome.extra["read_audit"] = audit
+                self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
                 finished.append(outcome)
@@ -1469,6 +1495,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                            help="读集审计：正式执行的单元包在 strace 下，核对实际读取都在声明的输入范围里，超出即判失败（只许 re-execute）")
             p.add_argument("--audit-data-root", type=Path, default=None,
                            help="数据根：测试树单元读到这里一律报出；工作目录在这里的单元（pre-A3 场景）按与仓库同布局核对")
+            p.add_argument("--audit-strict", action="store_true", help="全路径严格审计；宿主输入未绑定或解析不完整时拒绝通过")
+            p.add_argument("--audit-host-inputs", type=Path, help="逐单元精确宿主输入清单，运行前生成快照并要求完整读集重放")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     unit.add_argument("--tests-file", type=Path, required=True)
@@ -1930,6 +1958,24 @@ def _run_gates(args: argparse.Namespace) -> int:
         raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
     executor = records.executor_version([args.bytecode_helper])
     store = records.RecordStore(args.record_store) if args.record_store is not None else None
+    scopes = [item["input_scope"] for item in manifest.get("units", []) if "input_scope" in item]
+    if scopes:
+        if args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict:
+            raise ExecutorError("收窄提案必须重新执行严格审计，不能直接承接来源记录")
+        # 清单只是运输载体：执行前再次重放提案，防止绕过 plan 或篡改 inputs。
+        scope_spec = importlib.util.spec_from_file_location("_unit_executor_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
+        scope_module = importlib.util.module_from_spec(scope_spec)
+        scope_spec.loader.exec_module(scope_module)
+        expected_inputs = {item["unit_id"]: item.get("inputs") for item in manifest["units"] if "input_scope" in item}
+        scope_module.apply_input_scopes(manifest, scopes)
+        for item in manifest["units"]:
+            if "input_scope" not in item:
+                continue
+            scope = item["input_scope"]
+            if (item["inputs"] != expected_inputs[item["unit_id"]]
+                    or scope["environment_sha256"] != records.entries_sha256(environment)
+                    or scope["executor_sha256"] != executor["sha256"]):
+                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
     for group in groups:
@@ -1946,6 +1992,23 @@ def _run_gates(args: argparse.Namespace) -> int:
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
+    if args.audit_strict and not args.audit_reads:
+        raise ExecutorError("严格读集审计必须同时启用 --audit-reads")
+    if args.audit_host_inputs:
+        if not args.audit_reads or not args.audit_strict or args.mode != records.RE_EXECUTE:
+            raise ExecutorError("宿主输入登记必须重新执行严格读集审计")
+        host_inputs = _read_json_file(args.audit_host_inputs)
+        if (not isinstance(host_inputs, dict) or set(host_inputs) != {"schema_version", "units"}
+                or host_inputs["schema_version"] != "unit-host-inputs/v1" or not isinstance(host_inputs["units"], dict)
+                or set(host_inputs["units"]) - set(currents)):
+            raise ExecutorError("宿主输入清单格式错误或含未执行单元")
+        for unit_id, paths in host_inputs["units"].items():
+            if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
+                raise ExecutorError("每个单元的宿主输入须为无重复的精确路径数组")
+            current = currents[unit_id]
+            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],
+                                              records.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
+            current.inputs_sha256 = records.entries_sha256(current.inputs)
     if args.audit_reads:
         if args.mode != records.RE_EXECUTE:
             raise ExecutorError("读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用")
@@ -1972,7 +2035,8 @@ def _run_gates(args: argparse.Namespace) -> int:
     state_dir = args.state_dir or default_state_dir()
     recorder = Recorder(out_dir=out_dir, mode=args.mode, run_id=run_id, policy=policy, executor=executor, environment=environment,
                         currents=currents, store=store)
-    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents) if args.audit_reads else None
+    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents,
+                          strict=args.audit_strict) if args.audit_reads else None
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
@@ -1999,7 +2063,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             bytecode, identity_memo = {"status": "off", "prefix": None, "seconds": 0.0, "note": "全部承接，没有要执行的单元"}, None
         formal = scheduler.run_parallel([u for u in to_run if not u.exclusive], "formal")
         formal += scheduler.run_alone([u for u in to_run if u.exclusive], "formal")
-        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
+        # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
+        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")
         inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store) for unit in units if decisions[unit.unit_id].inherit]
         outcomes = formal + inherited
         summary = summarize_gates(groups, group_units, expected, command_units, gates, outcomes, diagnostic, time.monotonic() - started, policy)

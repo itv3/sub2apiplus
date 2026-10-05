@@ -434,6 +434,7 @@ def plan_gates(
     environment: list[dict[str, Any]] | None = None,
     egress_extra_inputs: list[dict[str, Any]] | None = None,
     with_gates: Sequence[str] = (),
+    input_scopes: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -542,7 +543,42 @@ def plan_gates(
                 "scheduling": scheduling_table()}
     if environment is not None:
         manifest["environment"] = environment
+    apply_input_scopes(manifest, input_scopes)
     return manifest
+
+
+def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]]) -> None:
+    """收窄提案只用于新一轮验证；重放来源并逐项核对当前命令，保留原门禁集合。"""
+    if not scopes:
+        return
+    records = _unit_records_module()
+    audit = records._audit_module()
+    units = {unit["unit_id"]: unit for unit in manifest["units"]}
+    seen = set()
+    for scope in scopes:
+        unit_id = scope.get("unit_id")
+        if unit_id in seen or unit_id not in units:
+            raise ValueError("收窄提案重复或不属于当前命令单元")
+        seen.add(unit_id)
+        for key in ("source_record", "source_trace"):
+            binding = scope.get(key) or {}
+            path = Path(binding.get("path", ""))
+            if (not path.is_absolute() or any(item.is_symlink() for item in (path, *path.parents))
+                    or records.file_sha256(path) != binding.get("sha256")):
+                raise ValueError("收窄来源证据缺失或摘要漂移")
+        replay = audit.narrow_input_scope(Path(scope["source_record"]["path"]), Path(scope["source_trace"]["path"]))
+        if replay != scope:
+            raise ValueError("收窄提案无法重放，不能自填路径或改成已启用")
+        unit = units[unit_id]
+        spec = scope["spec"]
+        for key, value in (("type", "command"), ("unit_id", unit_id), ("argv", unit["argv"]), ("cwd", unit["cwd"]),
+                           ("env", {k: v for k, v in unit.get("env", {}).items() if k not in records.ENV_CACHE_ONLY}),
+                           ("cores", unit["cores"]), ("memory_mb", unit["memory_mb"]),
+                           ("exclusive", bool(unit.get("exclusive", False))), ("timeout_seconds", unit["timeout_seconds"])):
+            if spec.get(key) != value:
+                raise ValueError("收窄提案的命令、环境或额度与当前单元不同：" + key)
+        unit["inputs"] = scope["inputs"]
+        unit["input_scope"] = scope
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +891,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                       help="数据根：在这里算 pre-A3 场景单元的数据根输入（冻结台账、录制数据、alpine 镜像，E3-02）")
     plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
+    plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令单元的输入收窄提案，可重复指定；必须重新执行严格审计")
     export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
     export.add_argument("--manifest", type=Path, required=True)
     export.add_argument("--summary", type=Path, required=True)
@@ -894,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
             data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root) if args.pre_a3_data_root is not None else None
             with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
+                                  input_scopes=[json.loads(path.read_text()) for path in args.input_scope],
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
                                   pre_a3_data_inputs=data_inputs,
