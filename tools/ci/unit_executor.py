@@ -1533,7 +1533,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                            help="独立控制身份记忆化；省略时沿用 shared-caches 模式，off 清除外部身份目录")
             p.add_argument("--bytecode-source", type=Path, action="append", default=None, help="预编译进共享层的源码目录，可重复；默认 tools")
         if name == "run-gates":
-            # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；入口门禁（驱动 entry-gates.sh）缺省全集通过。
+            # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；B-09 入口只有完整承接请求通过后才承接。
             p.add_argument("--record-store", type=Path, default=None, help="单元执行记录库：记录与日志入库，全集通过模式从这里找可承接的记录")
             p.add_argument("--mode", choices=("re-execute", "full-set-pass"), default="re-execute",
                            help="re-execute：重新执行全集，不承接；full-set-pass：全集通过，承接有效记录、只执行其余单元（要给记录库）")

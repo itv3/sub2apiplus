@@ -221,6 +221,35 @@ class BackgroundValidationTests(unittest.TestCase):
     def test_driver_carries_an_identical_copy(self) -> None:
         self.assertEqual(DRIVER_COPY.read_bytes(), MODULE.read_bytes())
 
+    def test_explicit_full_rerun_preserves_old_passed_history(self) -> None:
+        first = self.wait(self.start(COMMIT_A)["result"])
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                          "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test", "--commit", COMMIT_A,
+                          "--entry-gates", str(self.gates), "--rerun-full-set")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        started = json.loads(result.stdout)
+        self.assertEqual(started["action"], "started")
+        second = self.wait(started["result"])
+        self.assertEqual(second["mode"], "re-execute")
+        self.assertNotEqual(first["out"], second["out"])
+        history = list((self.runroot / "background-validation" / "history").glob("*.json"))
+        self.assertTrue(any(json.loads(p.read_text())["out"] == first["out"] for p in history))
+        self.assertEqual(self.calls.read_text().split().count(COMMIT_A), 2)
+
+    def test_expired_full_set_receipt_automatically_starts_new_full_execution(self) -> None:
+        first = self.start(COMMIT_A)
+        payload = self.wait(first["result"])
+        expired = self.root / "expired.json"
+        expired.write_text(json.dumps({"expires_at_utc": "2026-01-01T00:00:00Z", "run_id": "old-full-run"}))
+        payload["full_set_receipt"] = {"status": "issued", "receipt": {"path": str(expired), "sha256": bv._sha256_file(expired)}}
+        bv._write(Path(first["result"]), payload)
+        rerun = self.start(COMMIT_A)
+        self.assertEqual(rerun["action"], "started")
+        current = self.wait(rerun["result"])
+        self.assertEqual(current["full_set_predecessor"], str(expired))
+        self.assertNotEqual(payload["out"], current["out"])
+        self.assertEqual(json.loads(expired.read_text())["run_id"], "old-full-run")
+
     def test_background_uses_independent_go_caches_despite_inherited_environment(self):
         # 真实后台子进程写出实际环境；前台清理只删除继承的旧缓存，后台仍完整通过。
         self.gates.write_text(FAKE_ENTRY_GATES.replace('sleep "${FAKE_GATES_SLEEP:-0}"',

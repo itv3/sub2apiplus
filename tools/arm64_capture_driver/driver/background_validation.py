@@ -3,8 +3,8 @@
 修复提交与当时的部署收据落盘；批次驱动在每个批次边界读这份结论。
 
 为什么：修复轮原先以全量门禁通过为部署前提（串行约 95 分钟），而工具本来只认修复提交、定向回归与部署收据。现在改为
-定向回归（入口门禁 ``regression`` 组合）通过即部署接着跑，全量门禁挪到后台：入口门禁 ``full-gates`` 组合、全集通过
-模式（承接记录库里输入没变的单元，只执行受修复影响的）、``nice`` 降优先级、``--require-deployed``（门禁前核对数据根
+定向回归（入口门禁 ``regression`` 组合）通过即部署接着跑，全量门禁挪到后台：入口门禁 ``full-gates`` 组合、重新执行
+全集模式（B-09 来源必须是同一次真实完整执行）、``nice`` 降优先级、``--require-deployed``（门禁前核对数据根
 部署的就是这个提交）。采集批次开始前向调度器申请整机（``unit_executor.py acquire``）：调度器停派、等在跑单元结束才
 批准，批次结束归还后接着跑，不和采集抢核。
 
@@ -21,12 +21,14 @@
 同一提交＋同一部署只有一份当前状态；重开前保存旧终态。A-04 起工作树与全部 Go 缓存位于
 本轮 background-validation/work 的独立目录，输入合同变化不能继续复用旧结论，启动以文件锁去重。
 
+B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全集收据；到期自动重跑，撤销后可用 ``--rerun-full-set``。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：
   绑定数据根最新部署收据；同一提交＋同一部署已有在跑或已有 passed／failed 结论就不重复起，打印现有结论；在跑的其它后台
   验证先停下、标 superseded；然后在新会话里起 ``run``。``--then-dryrun``（E4-02 日常化）：通过之后接着起入口空跑
-  （``entry_dryrun.py start --to pre-a3``，同一份记录库：刚验过的门禁单元全部承接，真正执行的只有 pre-A3 场景与便宜检查；
+  （``entry_dryrun.py start --to pre-a3``，同一份记录库；门禁结论仍须满足 B-09 完整合同，缺失时重新执行；
   有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
@@ -259,7 +261,22 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationError("B-09 签发须同时提供当前上下文和校时凭证")
     inputs["full_set_files"] = {key: _sha256_file(Path(value)) if value else None for key, value in full_set_paths.items()}
     existing = _read(path)
-    if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
+    rerun = bool(getattr(args, "rerun_full_set", False))
+    if existing is not None and existing.get("full_set_receipt", {}).get("status") == "issued":
+        # 到期后必须新执行，不能被“同部署已有 passed”去重挡住；坏来源也先重跑。
+        try:
+            old_ref = existing["full_set_receipt"]["receipt"]
+            old_receipt = json.loads(Path(old_ref["path"]).read_text())
+            expires = datetime.fromisoformat(old_receipt["expires_at_utc"].replace("Z", "+00:00")).timestamp()
+            rerun = rerun or _sha256_file(Path(old_ref["path"])) != old_ref["sha256"] or time.time() >= expires
+            if rerun and not full_set_paths["full_set_predecessor"]:
+                full_set_paths["full_set_predecessor"] = old_ref["path"]
+                inputs["full_set_files"]["full_set_predecessor"] = _sha256_file(Path(old_ref["path"]))
+        except (OSError, ValueError, TypeError, KeyError):
+            rerun = True
+    if existing is not None and effective_status(existing) == "running" and rerun:
+        raise ValidationError("当前全集仍在运行，禁止另起重复执行")
+    if existing is not None and not rerun and effective_status(existing) in ("running", "passed", "failed"):
         if existing.get("input_contract") != inputs or existing.get("commit") != args.commit or existing.get("deployment") != deployment:
             raise ValidationError("后台验证已有记录的输入或缓存隔离合同不同，须先显式停止并重新验证")
         return {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -388,6 +405,9 @@ def _issue_full_set(payload: Mapping[str, Any]) -> dict[str, Any]:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:
+        for key in ("full_set_context", "full_set_predecessor", "audit_policy"):
+            if payload.get(key) and _sha256_file(Path(payload[key])) != payload["input_contract"]["full_set_files"][key]:
+                raise ValidationError("B-09 签发的静态上下文在后台运行期间变化")
         out = Path(payload["out"])
         summary = _entry_summary(out)
         source = {"entry": module.reference(out / "entry-gates.json"), "summary": module.reference(summary["executor_summary"]),
@@ -400,7 +420,7 @@ def _issue_full_set(payload: Mapping[str, Any]) -> dict[str, Any]:
             os.chmod(output, 0o600)
             handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         return {"status": "issued", "receipt": module.reference(output), "reuse_enabled": False}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ValidationError) as error:
         return {"status": "refused", "reason": str(error), "reuse_enabled": False}
 
 
@@ -471,6 +491,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--full-set-clock", type=Path, help="全集结束时仍有效的校时凭证；不自动补造")
     p_start.add_argument("--full-set-predecessor", type=Path, help="失效的旧收据，只读关联")
     p_start.add_argument("--audit-policy", type=Path, help="B-11 已登记的严格读集策略")
+    p_start.add_argument("--rerun-full-set", action="store_true", help="撤销或错绑后显式重跑全集，保留旧终态并关联旧收据")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")

@@ -2,8 +2,8 @@
 # 修复轮后台验证（E4-01，指南「修好接着跑」）的驱动入口：D、RUNROOT 取自 $ARM64_VC_ENV，其余交给 background_validation.py。
 #
 #   start <bundle 绝对路径> <分支> <40 位提交> [--profile full-gates] [--record-store <目录>] [--no-dryrun]
-#       修复提交部署之后起后台验证：绑定数据根最新部署收据，nice 降优先级跑入口门禁 full-gates 组合的全集通过（承接
-#       记录库里输入没变的单元，只执行受修复影响的），门禁前核对数据根部署的就是这个提交。同一提交＋同一部署已有在跑或
+#       修复提交部署之后起后台验证：绑定数据根最新部署收据，nice 降优先级跑入口门禁 full-gates 组合的重新执行全集
+#       （B-09 的来源必须同次真实执行），门禁前核对数据根部署的就是这个提交。同一提交＋同一部署已有在跑或
 #       已有结论就不重复起；在跑的其它后台验证先停下（superseded）。测试树、运行目录与 Go 缓存独立放在
 #       本轮 background-validation/work 下，准入清理不再触碰后台缓存。结论在 $RUNROOT/background-validation/。通过之后默认接着
 #       空跑入口到 pre-A3（E4-02 日常化，entry-dryrun.sh；有采集在跑就让路），--no-dryrun 不接。

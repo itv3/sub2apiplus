@@ -11,6 +11,7 @@ from pathlib import Path
 from tools.ci import full_set_receipt as fs
 from tools.ci import read_audit as ra
 from tools.ci import unit_records as ur
+from tools.ci import background_validation as bv
 
 
 class FullSetReceiptTests(unittest.TestCase):
@@ -81,7 +82,8 @@ class FullSetReceiptTests(unittest.TestCase):
                        "store": str(self.store.root)}
         self.source["entry"] = self.write("entry.json", {"status": "passed", "profile": "full-gates",
             "source": {"commit": self.binding["commit"], "deploy_receipt": evidence["deployment"]["path"]},
-            "executor_summary": self.source["summary"]["path"], "unit_manifest": {"path": self.source["manifest"]["path"]}})
+            "executor_summary": self.source["summary"]["path"], "unit_manifest": {"path": self.source["manifest"]["path"]},
+            "record_store": str(self.store.root)})
         self.receipt = fs.issue(self.source, self.context, self.clock)
         self.receipt_ref = self.write("receipt.json", self.receipt)
         self.request = {"schema_version": "full-set-request/v1", "reuse_enabled": False, "receipt": self.receipt_ref,
@@ -203,6 +205,16 @@ class FullSetReceiptTests(unittest.TestCase):
         self.assertEqual(self.request["receipt"]["sha256"], old)
         self.assertFalse(self.assess()[0]["eligible"])
 
+    def test_utc_requires_full_datetime_and_fifo_evidence_never_blocks(self):
+        for value in ("2026-10-05Z", "2026-10-05+00:00", "2026-10-05T12:00:00", "2026-10-05T12:00:00+08:00"):
+            with self.subTest(value=value), self.assertRaises(fs.ContractError):
+                fs.utc(value)
+        import os
+        fifo = self.root / "fifo"
+        os.mkfifo(fifo)
+        with self.assertRaises(fs.ContractError):
+            fs.file_bytes(fifo)
+
     def test_semantic_digest_excludes_dynamic_fields_but_preserves_results(self):
         changed = copy.deepcopy(self.summary)
         changed["run_id"] = "new-run"
@@ -238,12 +250,35 @@ class FullSetReceiptTests(unittest.TestCase):
             self.request["consumer_clock"] = self.write("age-clock.json", {"status": "synchronized", "source": "隔离时钟",
                 "offset_seconds": 0, "sampled_at_utc": fs.timestamp(self.now - age)})
             self.assertEqual(self.assess()[0]["eligible"], allowed)
+
         self.refresh_dynamic(self.now)
         value = fs.replay_ref(self.request["revocation"])
         for age, allowed in ((60, True), (61, False)):
             value["queried_at_utc"] = fs.timestamp(self.now - age)
             self.request["revocation"] = self.write("revocation.json", value)
             self.assertEqual(self.assess()[0]["eligible"], allowed)
+
+    def background_payload(self):
+        (self.root / "entry-gates.json").write_bytes(Path(self.source["entry"]["path"]).read_bytes())
+        return {"out": str(self.root), "full_set_context": self.context_ref["path"], "full_set_clock": self.clock["path"],
+                "input_contract": {"full_set_files": {"full_set_context": self.context_ref["sha256"]}}}
+
+    def test_background_issues_once_and_does_not_overwrite_old_receipt(self):
+        payload = self.background_payload()
+        issued = bv._issue_full_set(payload)
+        self.assertEqual(issued["status"], "issued", issued)
+        before = fs.file_digest(self.root / "full-set-receipt.json")
+        self.assertEqual(bv._issue_full_set(payload)["status"], "refused")
+        self.assertEqual(fs.file_digest(self.root / "full-set-receipt.json"), before)
+
+    def test_background_static_context_change_is_refused(self):
+        payload = self.background_payload()
+        self.write("context.json", {**self.context, "unexpected": True})
+        refused = bv._issue_full_set(payload)
+        self.assertEqual(refused["status"], "refused")
+        self.assertIn("静态上下文", refused["reason"])
+        self.assertFalse((self.root / "full-set-receipt.json").exists())
+
 
 
 if __name__ == "__main__":

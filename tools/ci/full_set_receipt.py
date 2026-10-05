@@ -15,6 +15,7 @@ import math
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -58,19 +59,29 @@ def digest(value: Any) -> str:
                                      allow_nan=False).encode()).hexdigest()
 
 
-def file_digest(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as handle:
-        for data in iter(lambda: handle.read(1 << 20), b""):
-            h.update(data)
-    return h.hexdigest()
-
-
-def read(path: Path | str) -> dict[str, Any]:
+def file_bytes(path: Path | str) -> bytes:
+    """同一次打开读取证据并核对文件未在读取期间变化，解析与摘要消费同一批字节。"""
     path = Path(path)
     if not path.is_absolute() or ".." in path.parts or any(p.is_symlink() for p in (path, *path.parents)):
         raise ContractError("证据路径须为无符号链接的规范绝对路径")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ContractError("证据必须是普通文件")
+        raw = handle.read()
+        after = os.fstat(handle.fileno())
+        if any(getattr(before, k) != getattr(after, k) for k in ("st_size", "st_mtime_ns", "st_ctime_ns")):
+            raise ContractError("证据在读取期间发生变化")
+        return raw
+
+
+def file_digest(path: Path) -> str:
+    return hashlib.sha256(file_bytes(path)).hexdigest()
+
+
+def read(path: Path | str) -> dict[str, Any]:
+    value = json.loads(file_bytes(path))
     if not isinstance(value, dict):
         raise ContractError("证据必须是 JSON 对象")
     return value
@@ -78,21 +89,26 @@ def read(path: Path | str) -> dict[str, Any]:
 
 def reference(path: Path | str) -> dict[str, str]:
     path = Path(path)
-    read(path)
-    return {"path": str(path), "sha256": file_digest(path)}
+    raw = file_bytes(path)
+    if not isinstance(json.loads(raw), dict):
+        raise ContractError("证据必须是 JSON 对象")
+    return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def replay_ref(ref: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(ref, dict) or set(ref) != {"path", "sha256"}:
         raise ContractError("证据索引须含路径和完整摘要")
-    value = read(ref["path"])
-    if file_digest(Path(ref["path"])) != ref["sha256"]:
+    raw = file_bytes(ref["path"])
+    if hashlib.sha256(raw).hexdigest() != ref["sha256"]:
         raise ContractError("证据文件摘要发生变化")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ContractError("证据必须是 JSON 对象")
     return value
 
 
 def utc(value: str) -> float:
-    if not isinstance(value, str) or not (value.endswith("Z") or value.endswith("+00:00")):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)", value):
         raise ContractError("时间必须使用明确的 UTC")
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
@@ -257,6 +273,7 @@ def assess(request: Mapping[str, Any], currents: Mapping[str, Any], facts: Any, 
     records = records_module()
     verdict = {"schema_version": "full-set-decision/v1", "decided_at_utc": timestamp(now), "eligible": False,
                "reuse_enabled": request.get("reuse_enabled") is True, "action": "reexecute-all", "reasons": [],
+               "actor": {"effective_uid": os.geteuid(), "host": platform.node()},
                "source_receipt": request.get("receipt"), "source_run_id": None, "expires_at_utc": None}
     decisions: dict[str, Any] = {}
     try:
