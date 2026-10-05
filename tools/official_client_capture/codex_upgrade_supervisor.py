@@ -2174,8 +2174,10 @@ def _write_minute_record(
         "schema_version": MINUTE_SCHEMA,
         "bucket_start_utc": _epoch_to_utc(bucket_start),
         "bucket_end_utc": _epoch_to_utc(bucket_end),
-        "bucket_start_epoch": round(float(bucket_start), 6),
-        "bucket_end_epoch": round(float(bucket_end), 6),
+        # 审计按 epoch 比较严格正区间；亚微秒首桶不能因小数取整而塌缩。
+        # JSON 数字保留原浮点精度，UTC 与展示时长仍沿用原有格式。
+        "bucket_start_epoch": float(bucket_start),
+        "bucket_end_epoch": float(bucket_end),
         "duration_seconds": round(max(0.0, bucket_end - bucket_start), 3),
         "recorded_at_utc": _utc_now(),
         "classification": classification,

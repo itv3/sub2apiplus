@@ -8,6 +8,7 @@ import copy
 import hashlib
 import io
 import json
+import math
 import os
 import signal
 import subprocess
@@ -389,6 +390,71 @@ class SupervisorTests(unittest.TestCase):
             report = _audit_command(client.run_dir)
             self.assertFalse(report["audit_incomplete"])
             self.assertGreaterEqual(report["event_count"], 4)
+
+    def _minute_ledger_fixture(self, root: Path, start: float, end: float) -> None:
+        """构造已终止的短运行，只检验账本写入与真实审计之间的精度合同。"""
+
+        self._write_json(root / "state.json", {
+            "schema_version": supervisor.STATE_SCHEMA,
+            "supervisor_schema_version": supervisor.SCHEMA_VERSION,
+            "campaign_id": "minute-precision",
+            "phase": "official",
+            "owner_pid": os.getpid(),
+            "owner_nonce": "a" * 64,
+            "started_at_utc": supervisor._epoch_to_utc(start),
+            "started_at_epoch": start,
+            "started_monotonic_ns": 1,
+            "deadline_at_epoch": start + 5,
+            "deadline_monotonic_ns": 5_000_000_001,
+            "heartbeat_seconds": 0.05,
+            "watchdog_timeout_seconds": 0.5,
+            "ledger_interval_seconds": 0.05,
+            "state": "failed",
+            "terminate_owner": False,
+            "terminal_at_epoch": end,
+            "terminal_at_utc": supervisor._epoch_to_utc(end),
+        })
+        (root / "events.ndjson").touch(mode=0o600)
+
+    def test_submicrosecond_first_bucket_keeps_positive_auditable_interval(self) -> None:
+        """首个不完整桶只有一个浮点间隔时，落盘和重放仍保留连续的正区间。"""
+
+        boundary = 1791173280.0
+        start = math.nextafter(boundary, -math.inf)
+        end = boundary + 0.01
+        self.assertEqual(supervisor._bucket_start(start, 0.05) + 0.05, boundary)
+        self.assertEqual(round(start, 6), round(boundary, 6))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self._minute_ledger_fixture(root, start, end)
+            for lower, upper in ((start, boundary), (boundary, end)):
+                supervisor._write_minute_record(
+                    root, bucket_start=lower, bucket_end=upper, heartbeat=None,
+                    owner_alive=True, heartbeat_age=None, classification="failed",
+                )
+            report = _audit_command(root)
+            self.assertFalse(report["audit_incomplete"], report["integrity_errors"])
+            self.assertEqual(report["coverage_start_epoch"], start)
+            self.assertEqual(report["coverage_end_epoch"], end)
+            records = [json.loads(line) for line in (root / "minute-ledger.ndjson").read_text().splitlines()]
+            self.assertGreater(records[0]["bucket_end_epoch"], records[0]["bucket_start_epoch"])
+            self.assertEqual(records[0]["bucket_end_epoch"], records[1]["bucket_start_epoch"])
+
+    def test_minute_audit_still_rejects_zero_and_reversed_intervals(self) -> None:
+        """提高落盘精度不能放宽审计对真实零长度或倒置区间的拒绝。"""
+
+        start = 1791173280.0
+        for invalid_end in (start, start - 0.001):
+            with self.subTest(end=invalid_end), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                self._minute_ledger_fixture(root, start, start + 0.01)
+                supervisor._write_minute_record(
+                    root, bucket_start=start, bucket_end=invalid_end, heartbeat=None,
+                    owner_alive=True, heartbeat_age=None, classification="failed",
+                )
+                report = _audit_command(root)
+                self.assertTrue(report["audit_incomplete"])
+                self.assertIn("分钟账本第 1 行区间非法", report["integrity_errors"])
 
     def test_campaign_run_executes_declared_queue_under_one_supervisor(self) -> None:
         """canonical 队列不需要外部逐项派发，也不产生 dispatch gap。"""
