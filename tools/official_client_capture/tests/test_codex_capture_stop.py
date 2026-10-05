@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -195,6 +196,45 @@ class CaptureStopTests(unittest.TestCase):
                 run.assert_not_called()
         finally:
             supervisor._CAPTURE_CONTROL_DEADLINE.reset(token)
+
+    def test_dispatch_pins_container_id_in_shell_environment_and_docker_target(self):
+        for command in (["docker", "exec", "capture-cli", "true"],
+                        ["docker", "exec", "-i", "--env", "EXAMPLE=fixture", "capture-cli", "sh"]):
+            pinned, environment = supervisor._capture_pin_command(list(command), {"CAPTURE_CONTAINER": "capture-cli"}, self.container["id"])
+            self.assertNotIn("capture-cli", pinned)
+            self.assertEqual(environment["CAPTURE_CONTAINER"], self.container["id"])
+        command = ["bash", "/fixture/managed-capture.sh"]
+        pinned, environment = supervisor._capture_pin_command(command, {}, self.container["id"])
+        self.assertEqual(command, pinned)
+        self.assertEqual(environment["CAPTURE_CONTAINER"], self.container["id"])
+        with self.assertRaises(supervisor.SupervisorError):
+            supervisor._capture_pin_command(["docker", "exec", "sub2apiplus", "true"], {}, self.container["id"])
+        with self.assertRaises(supervisor.SupervisorError):
+            supervisor._capture_pin_command(["docker", "exec", "--unknown", "capture-cli", "true"], {}, self.container["id"])
+
+    def test_monitor_waits_for_complete_binding_before_cleanup(self):
+        completed = threading.Event()
+        threads = []
+        original = supervisor._write_json
+        def monitor():
+            supervisor._capture_stop_active(self.root, self.state)
+            completed.set()
+        def write(path, payload, **kwargs):
+            if path.name == "binding.json":
+                self.pause()
+                thread = threading.Thread(target=monitor)
+                threads.append(thread)
+                thread.start()
+                self.assertFalse(completed.wait(.05))
+            return original(path, payload, **kwargs)
+        try:
+            with mock.patch.object(supervisor, "_write_json", side_effect=write):
+                scope = self.begin()
+                self.assertTrue(completed.wait(3))
+            self.assertEqual(supervisor._read_json(scope / "stop-receipt.json")["status"], "stopped")
+        finally:
+            for thread in threads:
+                thread.join(timeout=3)
 
     def client(self):
         client = supervisor.SupervisorClient(self.root, campaign_id=self.state["campaign_id"], phase="official",

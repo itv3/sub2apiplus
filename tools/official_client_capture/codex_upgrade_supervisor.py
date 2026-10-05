@@ -579,6 +579,31 @@ def _capture_read_binding(scope: Path, state: Mapping[str, Any]) -> dict[str, An
     return record
 
 
+def _capture_pin_command(command: list[str], environment: Mapping[str, str] | None,
+                         container_id: str) -> tuple[list[str], dict[str, str]]:
+    """冻结实际派发目标，防止容器名称在准入与 docker exec 之间被重新绑定。"""
+
+    effective = dict(environment) if environment is not None else os.environ.copy()
+    effective["CAPTURE_CONTAINER"] = container_id
+    pinned = list(command)
+    if len(pinned) > 1 and Path(pinned[0]).name == "docker" and pinned[1] == "exec":
+        index = 2
+        value_options = {"-e", "--env", "--env-file", "-u", "--user", "-w", "--workdir", "--detach-keys"}
+        flags = {"-i", "--interactive", "-t", "--tty", "-d", "--detach", "--privileged", "-it", "-ti"}
+        while index < len(pinned) and pinned[index].startswith("-"):
+            argument = pinned[index]
+            if argument in value_options:
+                index += 2
+            elif argument in flags or ("=" in argument and argument.split("=", 1)[0] in value_options):
+                index += 1
+            else:
+                raise SupervisorError("采集 docker exec 选项无法确定容器边界")
+        if index >= len(pinned) - 1 or pinned[index] not in {CAPTURE_STOP_SERVICE, container_id}:
+            raise SupervisorError("采集 docker exec 目标与停止绑定不一致")
+        pinned[index] = container_id
+    return pinned, effective
+
+
 def _capture_stop_one(before: Mapping[str, Any]) -> dict[str, Any]:
     current = _capture_container_state(str(before["id"]))
     identity = ("id", "image", "started_at")
@@ -660,7 +685,10 @@ def _capture_stop_active(run_dir: Path, state: Mapping[str, Any]) -> None:
     if not root.exists():
         return
     _validate_state_dir(root, create=False)
-    for scope in sorted(root.iterdir()):
+    # 与登记端共享根锁，不能把尚未写完 binding 的新目录误记成清理失败。
+    with _state_lock(root):
+        scopes = sorted(root.iterdir())
+    for scope in scopes:
         if scope.is_dir():
             _validate_state_dir(scope, create=False)
             try:
@@ -4731,6 +4759,10 @@ class SupervisorClient:
         try:
             capture_scope = _capture_begin(run_dir, runtime_state, operation=operation,
                                            job_id=job_id, environment=process_environment)
+            if capture_scope is not None:
+                binding = _capture_read_binding(capture_scope, runtime_state)
+                command, process_environment = _capture_pin_command(command, process_environment,
+                                                                     binding["container"]["id"])
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
