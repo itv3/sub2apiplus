@@ -926,6 +926,15 @@ class PinnedVerifierIntegrationTests(unittest.TestCase):
         verifier = codex_upgrade_gate_receipt._target_gate_verifier()
         self.assertEqual(Path(verifier.__file__).resolve(), REPO_ROOT / "tools/ci/target_platform_gate.py")
 
+    def test_each_verifier_dependency_digest_drift_refuses_loading(self) -> None:
+        from tools.official_client_capture import codex_upgrade_gate_receipt
+
+        for name in codex_upgrade_gate_receipt.TARGET_VERIFIER_SHA256S:
+            with self.subTest(dependency=name), mock.patch.dict(
+                codex_upgrade_gate_receipt.TARGET_VERIFIER_SHA256S, {name: "0" * 64}
+            ), self.assertRaises(codex_upgrade_gate_receipt.GateReceiptError):
+                codex_upgrade_gate_receipt._target_gate_verifier()
+
 
 if __name__ == "__main__":
     unittest.main()
