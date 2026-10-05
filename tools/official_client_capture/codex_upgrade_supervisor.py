@@ -4757,12 +4757,20 @@ class SupervisorClient:
             )
         capture_scope = None
         try:
-            capture_scope = _capture_begin(run_dir, runtime_state, operation=operation,
-                                           job_id=job_id, environment=process_environment)
-            if capture_scope is not None:
-                binding = _capture_read_binding(capture_scope, runtime_state)
-                command, process_environment = _capture_pin_command(command, process_environment,
-                                                                     binding["container"]["id"])
+            admission_deadline = min(self._deadline_monotonic_ns / 1e9,
+                                     budget_deadline_monotonic) - cleanup_grace - terminal_drain
+            control_token = _CAPTURE_CONTROL_DEADLINE.set(min(time.monotonic() + 12, admission_deadline))
+            try:
+                capture_scope = _capture_begin(run_dir, runtime_state, operation=operation,
+                                               job_id=job_id, environment=process_environment)
+                if capture_scope is not None:
+                    binding = _capture_read_binding(capture_scope, runtime_state)
+                    command, process_environment = _capture_pin_command(command, process_environment,
+                                                                         binding["container"]["id"])
+            finally:
+                _CAPTURE_CONTROL_DEADLINE.reset(control_token)
+            if time.monotonic() >= min(admission_deadline, self._deadline_monotonic_ns / 1e9):
+                raise SupervisorTimeout("采集准入结束时执行预算已耗尽，禁止派发")
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,

@@ -274,6 +274,20 @@ class CaptureStopTests(unittest.TestCase):
         self.assertEqual(client.event_end.call_count, 1)
         self.assertEqual(client.event_fail.call_count, 1)
 
+    def test_admission_consuming_remaining_budget_never_launches_command(self):
+        client = self.client()
+        def expire(*args, **kwargs):
+            client._deadline_monotonic_ns = time.monotonic_ns() - 1
+            return None
+        with mock.patch.object(supervisor, "_capture_begin", side_effect=expire), \
+             mock.patch.object(subprocess, "Popen") as launch:
+            with self.assertRaises(supervisor.SupervisorTimeout):
+                client.run_command([sys.executable, "-B", "-c", "pass"], operation="job:fixture:step-1",
+                                   job_id="fixture", timeout_seconds=5)
+            launch.assert_not_called()
+        client.event_end.assert_not_called()
+        client.event_fail.assert_called_once()
+
     def test_docker_control_is_bounded_and_does_not_echo_errors(self):
         # 直接读取被替身替换前的函数，验证真实有界命令入口。
         with mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("docker", 8)):
