@@ -1,0 +1,159 @@
+{
+  "base_commit": "38c979cf31013500c64dc06b73c95900c1772cb8",
+  "changed_path_count": 5,
+  "current_commit": "3722eab6704ededb502c232745c790ce05e18365",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5660,
+  "frozen_path_count": 2015,
+  "identity_sha256": "40dc7938d626e63b2baec42fc1531f2bb8ae26d7ce9edd26232243e9f7bb9b9a",
+  "issued_at_utc": "2026-10-05T19:16:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-c095-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "predecessor_sha256s": [
+        "26619bdc0e1702c4b1c9f32a4f83f4038b89c48f4bad868c31988c74d62dc63c"
+      ],
+      "reason": "C-09.5 将无生产调用的旧 Header 定型器移至已绑定的测试文件，候选事实映射仅重绑源码及测试摘要；正式出站行为不变 path=backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b9bda6f185e5dc780a1f09b417f70916f237f07cb81514d576c58b74645a091c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "9ca86fa2f5f98d2896010edba158f7f9453958a57e8b9b16a76024b9d20860a8"
+      ],
+      "reason": "C-09.5 将无生产调用的旧 Header 定型器移至已绑定的测试文件，候选事实映射仅重绑源码及测试摘要；正式出站行为不变 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "ecbac127472cf896806fec99da0f2b0b11a553a29b100be7a1dfbe7526a1ed5d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http_test.go",
+      "predecessor_sha256s": [
+        "a48afbb826cc0372835862beabda2e46977f8aef19270e9398b89751d5baa7f6"
+      ],
+      "reason": "C-09.5 将无生产调用的旧 Header 定型器移至已绑定的测试文件，候选事实映射仅重绑源码及测试摘要；正式出站行为不变 path=backend/internal/service/official_egress_openai_http_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-promotion-tests-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "39be1bf1cee9e9a0c2b4a317c1c94fa39ace2c52f351a63d5ed023f699166962"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "predecessor_sha256s": [
+        "e6ecc2b0c9149334700baab5cb1b5ecb97acffaef96dbd0500629d219c781ed3"
+      ],
+      "reason": "C-09.5 将无生产调用的旧 Header 定型器移至已绑定的测试文件，候选事实映射仅重绑源码及测试摘要；正式出站行为不变 path=tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "76ef6064368472f9b366fe89d49968c314ec5f9116d1ad838f25e9ae2559012e"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "d8c7fb712d0e01a35ea512c5ca650385a4fd1c9dbd85f9dae0c1d07f453a7e73"
+      ],
+      "reason": "C-09.5 将无生产调用的旧 Header 定型器移至已绑定的测试文件，候选事实映射仅重绑源码及测试摘要；正式出站行为不变 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ab3fefbb630adfb6d5d372e20c6bf3aeb3bbed6fea48b8144a9d56ef0790fb6c"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
