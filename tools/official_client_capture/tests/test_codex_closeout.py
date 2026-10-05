@@ -422,6 +422,13 @@ class CloseoutTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(backup.read_text(), "隔离数据")
         self.assertEqual(first, closeout.publish(self.plan_path, {}))
+        # 完成后的只读复核也须追溯实际参数文件和批准原始凭证，不能只相信结果中的摘要文本。
+        for path in (self.work / "cleanup-context.json", self.root / "decision.json"):
+            before = path.read_bytes()
+            path.write_bytes(before + b" ")
+            with self.subTest(path=path.name), self.assertRaisesRegex(ValueError, "摘要漂移"):
+                closeout.check_action_result(self.plan, "cleanup")
+            path.write_bytes(before)
 
     def cleanup_fixture(self):
         """动态参数演练固定备份及恢复证明，仅指向临时根。"""

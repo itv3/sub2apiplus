@@ -811,6 +811,10 @@ def check_action_result(plan, name):
                 or not started or result.get("approval") != started.get("approval")):
             raise CloseoutError("清理结果未绑定当前上下文或实际消费的批准")
         verify_binding(result["approval"])
+        verify_binding(safety.read(result["approval"]["path"]).get("proof"))
+        context_path = verify_binding(started.get("context"))
+        if safety.read(context_path) != plan["basis"]["cleanup_context"]:
+            raise CloseoutError("动作实际消费的清理上下文与审核内容不一致")
         verification = safety.read(result["deletion_verification"]["path"])
         if (verification.get("operation_key") != operation_key(plan, name) or verification.get("targets") != action["targets"]
                 or verification.get("cleanup_context_sha256") != result["cleanup_context_sha256"]
