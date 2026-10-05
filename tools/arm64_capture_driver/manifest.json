@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "3c0d504541d3b1bba2f9e4c1ca4f8273514cc0d37cef816c23fb967b94675af3",
+      "sha256": "55d8b4df6fc14f4d8c7991e23bc4775d53327618575dea7a3c1c46ccc827b23b",
       "mode": "0600",
-      "bytes": 60991
+      "bytes": 61429
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -280,15 +280,15 @@
     },
     {
       "path": "driver/read_audit.py",
-      "sha256": "a4ff6a533b1b63e723345045597927486a66150098d5f38dbe363061e10d3f55",
+      "sha256": "baa7b175fdd7ae1394c2bea60ae74e3ad2ace384ba5d84223d30f8cd07d6883d",
       "mode": "0700",
-      "bytes": 50152
+      "bytes": 51009
     },
     {
       "path": "driver/read_audit_runtime.py",
-      "sha256": "9fbbff4c69c614ef85a578d5d89e6fc7fb8c5371a369cd9358397577e8b1ffeb",
+      "sha256": "b628f3b014330047b4266bc2513a79b74d8abc1a8474c8b39862a67cffeff2ff",
       "mode": "0700",
-      "bytes": 24458
+      "bytes": 24510
     },
     {
       "path": "driver/round_context.py",
@@ -519,5 +519,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "2264b0ed19da4f718164de3117a4eaf68ed2105a0ec10437752a3d1928ad422c"
+  "manifest_sha256": "1bfa02a3af017a7503e1957d5f5ba4d65496c42afbc7c5bff3dd6a034f9bbfb4"
 }

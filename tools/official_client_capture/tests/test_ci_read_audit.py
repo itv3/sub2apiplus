@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -361,6 +362,104 @@ class StrictReadAuditTests(unittest.TestCase):
             first = ra.host_snapshot(str(link))
             link.unlink(); link.symlink_to(root / "b")
             self.assertNotEqual(first, ra.host_snapshot(str(link)))
+
+    def test_symlink_access_time_only_does_not_invalidate_path_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "input"; target.write_text("输入")
+            link = root / "link"; link.symlink_to(target)
+            before = ra.host_snapshot(str(link))
+            original = Path.lstat
+
+            def changed(path, *args, **kwargs):
+                info = original(path, *args, **kwargs)
+                if path == link:
+                    values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                    # 只模拟内核刷新访问时间，utime 还会改 ctime，不能用于这个反例。
+                    values["st_atime_ns"] += 86400 * 10**9
+                    return types.SimpleNamespace(**values)
+                return info
+
+            with mock.patch.object(Path, "lstat", changed):
+                self.assertEqual(before, ra.host_snapshot(str(link)))
+            self.assertNotIn("atime_ns", before["detail"]["snapshot"]["links"][0])
+
+    def test_symlink_identity_permissions_and_mutation_times_remain_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "input"; target.write_text("输入")
+            link = root / "link"; link.symlink_to(target)
+            before = ra.host_snapshot(str(link))
+            original = Path.lstat
+            for field in ("st_mode", "st_uid", "st_gid", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                def changed(path, *args, **kwargs):
+                    info = original(path, *args, **kwargs)
+                    if path == link:
+                        values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                        values[field] += 1
+                        return types.SimpleNamespace(**values)
+                    return info
+                with self.subTest(field=field), mock.patch.object(Path, "lstat", changed):
+                    self.assertNotEqual(before, ra.host_snapshot(str(link)))
+
+    def test_regular_file_and_directory_access_times_remain_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            file = root / "input"; file.write_text("输入")
+            original = Path.stat
+            for target in (file, root):
+                before = ra.host_snapshot(str(target))
+                def changed(path, *args, **kwargs):
+                    info = original(path, *args, **kwargs)
+                    if path == target:
+                        values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                        values["st_atime_ns"] += 1
+                        return types.SimpleNamespace(**values)
+                    return info
+                with self.subTest(target=target.name), mock.patch.object(Path, "stat", changed):
+                    self.assertNotEqual(before, ra.host_snapshot(str(target)))
+
+    def test_explicit_symlink_metadata_and_path_descriptors_refuse_reuse(self):
+        calls = [
+            'lstat("/repo/link", 0x1) = 0',
+            'lstat64("/repo/link", 0x1) = 0',
+            'newfstatat(AT_FDCWD</repo>, "link", 0x1, AT_SYMLINK_NOFOLLOW) = 0',
+            'fstatat64(AT_FDCWD</repo>, "link", 0x1, AT_SYMLINK_NOFOLLOW) = 0',
+            'statx(AT_FDCWD</repo>, "link", AT_SYMLINK_NOFOLLOW|AT_STATX_SYNC_AS_STAT, STATX_ALL, 0x1) = 0',
+            'open("/repo/link", O_PATH|O_NOFOLLOW) = 3</repo/link>',
+            'openat(AT_FDCWD</repo>, "link", O_NOFOLLOW|O_PATH|O_CLOEXEC) = 3</repo/link>',
+            'openat2(AT_FDCWD</repo>, "link", {flags=O_PATH|O_NOFOLLOW, resolve=0}, 24) = 3</repo/link>',
+        ]
+        for call in calls:
+            with self.subTest(call=call.split("(")[0]):
+                trace = ra.filter_stream(["1 " + call], ["/"], strict=True)
+                self.assertEqual(trace["coverage"]["unresolved_reasons"],
+                                 {"symlink-metadata-not-bound:" + call.split("(")[0]: 1})
+                self.assertFalse(ra.audit_reads(trace, [], repo_root="/repo", strict=True)["coverage_complete"])
+
+    def test_missing_link_probe_and_flags_in_paths_are_not_metadata_reads(self):
+        calls = [
+            'lstat("/repo/absent", 0x1) = -1 ENOENT (No such file or directory)',
+            'newfstatat(AT_FDCWD</repo>, "absent", 0x1, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)',
+            'openat(AT_FDCWD</repo>, "absent", O_PATH|O_NOFOLLOW) = -1 ENOENT (No such file or directory)',
+            'newfstatat(AT_FDCWD</repo/AT_SYMLINK_NOFOLLOW>, "AT_SYMLINK_NOFOLLOW", 0x1, 0) = 0',
+            'openat(AT_FDCWD</repo/O_PATH>, "O_NOFOLLOW", O_RDONLY) = 3</repo/O_PATH/O_NOFOLLOW>',
+            'readlink("/repo/link", "target", 4096) = 6',
+        ]
+        for call in calls:
+            with self.subTest(call=call):
+                trace = ra.filter_stream(["1 " + call], ["/"], strict=True)
+                self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_old_host_snapshot_schema_cannot_prove_current_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input"; path.write_text("输入")
+            entry = ra.host_snapshot(str(path))
+            trace = ra.filter_stream([f'1 open("{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            self.assertEqual(entry["detail"]["schema_version"], "read-audit-host-snapshot/v2")
+            self.assertTrue(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
+            entry["detail"]["schema_version"] = "read-audit-host-snapshot/v1"
+            self.assertFalse(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
 
     def test_scoped_or_empty_trace_never_proves_complete_coverage(self):
         scoped = ra.filter_stream([], ["/repo"])

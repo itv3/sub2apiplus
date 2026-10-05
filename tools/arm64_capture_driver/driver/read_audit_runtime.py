@@ -227,7 +227,8 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]]) -> se
     if any(completion.get(key) is not True for key in
            ("host_inputs_unchanged", "environment_unchanged", "namespace_unchanged", "command_finished")):
         raise RuntimeContractError("隔离执行未结束或输入／环境在执行期间变化")
-    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == "read-audit-host-snapshot/v1"]
+    host_schema = _read_audit().HOST_SCHEMA
+    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == host_schema]
     if completion.get("host_entries_sha256") != digest(entries):
         raise RuntimeContractError("实际命名空间中的输入快照未绑定执行记录")
     tracker = OutputTracker(contract)
@@ -400,7 +401,8 @@ def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if any(root.iterdir()) or stat.S_IMODE(root.stat().st_mode) != 0o700 or root.stat().st_uid != os.geteuid():
         raise RuntimeContractError("宿主挂载点必须为空、归运行账号所有且权限为 0700")
-    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == "read-audit-host-snapshot/v1"]
+    host_schema = _read_audit().HOST_SCHEMA
+    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == host_schema]
     request = {"contract_entry": contract_entry(contract), "parent_namespace": os.readlink("/proc/self/ns/mnt"),
                "output": str(output), "argv": argv, "cwd": cwd, "host_entries": entries,
                "host_paths": [entry["detail"]["path"] for entry in entries]}

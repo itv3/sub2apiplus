@@ -45,7 +45,7 @@ from typing import Any, Iterable, Mapping, Sequence
 TRACE_SCHEMA = "read-audit-trace/v1"
 STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
 RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
-HOST_SCHEMA = "read-audit-host-snapshot/v1"
+HOST_SCHEMA = "read-audit-host-snapshot/v2"
 REPORT_SCHEMA = "read-audit-report/v1"
 # strace 选项：只跟踪文件类调用与进程派生（子进程继承工作目录要用）；不解码 stat 等结构、不打印信号（省 strace 自己的
 # 格式化开销）。10-02 ARM64 第一轮实测：原来带 getdents64、全部进程类调用并解码结构时，被测进程只拿到约 30% 的核。
@@ -118,11 +118,16 @@ _QUOTED = re.compile(r'"(' + _ESC + r')"')
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
 
 
-def _operation_flags(body: str) -> set[str]:
-    """标志只取字符串和描述符路径之外的字段，文件名包含 O_CREAT 不能冒充创建动作。"""
+def _argument_flags(body: str) -> set[str]:
+    """标志只取字符串和描述符路径之外的字段，文件名不能冒充打开或元数据标志。"""
     arguments = _QUOTED.sub('""', body)
     arguments = re.sub(r"<" + _ANN + r">", "", arguments)
-    return set(re.findall(r"\bO_[A-Z0-9_]+\b", arguments))
+    return set(re.findall(r"\b(?:O|AT)_[A-Z0-9_]+\b", arguments))
+
+
+def _operation_flags(body: str) -> set[str]:
+    """输出归属只消费打开标志，保持原事件格式。"""
+    return {flag for flag in _argument_flags(body) if flag.startswith("O_")}
 
 
 class AuditError(RuntimeError):
@@ -286,6 +291,14 @@ class TraceParser:
             self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
         self.event = (name, body, result is not None and errno is None and result.group(1) != "-1")
+        if self.strict and result and result.group(1).isdigit() and errno is None:
+            flags = _argument_flags(body)
+            # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
+            # 显式读链接元数据或取得链接本身的描述符尚无完整合同，必须拒绝承接。
+            if (name in {"lstat", "lstat64"}
+                    or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags)
+                    or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
+                self._unresolved("symlink-metadata-not-bound:" + name)
         for annotation in _ANNOTATION.finditer(body):
             if annotation.group(1) == "AT_FDCWD":
                 directory = unescape(annotation.group(2))
@@ -498,7 +511,7 @@ def host_snapshot(raw: str) -> dict[str, Any]:
             info = item.lstat()
             links.append({"path": str(item), "target": link_target, "mode": info.st_mode,
                           "uid": info.st_uid, "gid": info.st_gid, "device": info.st_dev, "inode": info.st_ino,
-                          "size": info.st_size, "atime_ns": info.st_atime_ns,
+                          "size": info.st_size,
                           "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns})
     target = path.resolve()
     if any(_under(str(target), root) for root in ("/proc", "/sys", "/dev")):
