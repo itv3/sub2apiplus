@@ -139,6 +139,93 @@ class ReadAuditPrefilterTests(unittest.TestCase):
         self.assertFalse(ra.declares_whole_repo([_range("repo:rest", [""], ["tools/"])]))
 
 
+class TruncatedPathParserTests(unittest.TestCase):
+    """截断项保留原参数位置，不能把 argv、输出缓冲区或扩展属性伪装成路径。"""
+
+    def test_truncated_path_does_not_promote_later_argument(self):
+        lines = [
+            '1 execve("/repo/prefix"..., ["/repo/argv"], 0x1) = -1 ENOENT (No such file or directory)',
+            '1 execveat(AT_FDCWD</repo>, "prefix"..., ["AT_FDCWD</fake>", "/repo/argv"], 0x1, 0) = -1 ENOENT (No such file or directory)',
+            '1 getxattr("/repo/prefix"..., "user.name", "/repo/value", 64) = 11',
+            '1 openat(AT_FDCWD</repo>, "prefix"..., O_RDONLY) = -1 ENOENT (No such file or directory)',
+        ]
+        for strict in (False, True):
+            for line in lines:
+                with self.subTest(strict=strict, line=line):
+                    trace = ra.filter_stream([line], ["/"], strict=strict)
+                    self.assertEqual(trace["accesses"], [])
+                    if strict:
+                        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_non_path_strings_cannot_replace_pointer_arguments(self):
+        for tail in ('"/repo/output"...', '"/repo/output"'):
+            for strict in (False, True):
+                with self.subTest(tail=tail, strict=strict):
+                    trace = ra.filter_stream([f'1 readlink(0x1, {tail}, 128) = -1 EFAULT (Bad address)'], ["/"], strict=strict)
+                    self.assertEqual(trace["accesses"], [])
+                    if strict:
+                        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_truncated_non_path_keeps_real_path_and_conservative_coverage(self):
+        for strict in (False, True):
+            trace = ra.filter_stream(['1 readlink("/repo/link", "/repo/result"..., 8) = 8',
+                                      '1 execve("/repo/check", ["/repo/fake"...], 0x1) = 0'], ["/"], strict=strict)
+            self.assertEqual(dict(trace["accesses"]), {"/repo/check": ["exec"], "/repo/link": ["stat"]})
+            if strict:
+                self.assertGreater(trace["coverage"]["unresolved"], 0, "C-06 不放宽 B-11 的不完整轨迹合同")
+
+    def test_two_path_positions_and_symlink_target_are_not_shifted(self):
+        lines = ['1 rename("/repo/old"..., "/repo/new") = 0',
+                 '1 linkat(AT_FDCWD</repo>, "source"..., AT_FDCWD</repo>, "link", 0) = 0',
+                 '1 symlink("/repo/target"..., "/repo/symbolic") = 0',
+                 '1 symlinkat("/repo/target"..., AT_FDCWD</repo>, "symbolic-at") = 0']
+        for strict in (False, True):
+            trace = ra.filter_stream(lines, ["/"], strict=strict)
+            self.assertEqual(dict(trace["accesses"]), {"/repo/new": ["write"], "/repo/link": ["write"],
+                                                      "/repo/symbolic": ["write"], "/repo/symbolic-at": ["write"]})
+            if strict:
+                self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_quoted_punctuation_and_multiline_filename_stay_complete(self):
+        path = '/repo/a,[]<x>"\\\n...'
+        encoded = json.dumps(path)
+        for strict in (False, True):
+            trace = ra.filter_stream([f'1 access({encoded}, F_OK) = 0'], ["/"], strict=strict)
+            self.assertEqual(trace["accesses"], [[path, ["stat"]]])
+            if strict:
+                self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_interleaved_resumes_do_not_mix_paths_or_arguments(self):
+        lines = ['1 execve("/repo/first"..., ["/repo/argv"] <unfinished ...>',
+                 '2 access("/host/second\\nline", F_OK <unfinished ...>',
+                 '1 <... execve resumed>, 0x1) = -1 ENOENT (No such file or directory)',
+                 '2 <... access resumed>) = 0']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(trace["accesses"], [["/host/second\nline", ["stat"]]])
+        self.assertEqual(trace["coverage"]["unfinished_calls"], 0)
+        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_nested_argument_annotation_cannot_change_working_directory(self):
+        lines = ['1 getcwd("/repo", 4096) = 6',
+                 '1 execve("./check", ["AT_FDCWD</fake>", ["x,y"]], 0x1) = 0',
+                 '1 inotify_add_watch(3<anon_inode:inotify>, "file", IN_MODIFY) = 1']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(dict(trace["accesses"]), {"/repo": ["dir"], "/repo/check": ["exec"], "/repo/file": ["stat"]})
+        self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_real_out_of_scope_read_still_fails_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "真实越界输入"
+            path.write_text("不得遗漏")
+            trace = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            report = ra.strict_audit_reads(trace, [], repo_root="/repo", data_root=None)
+            self.assertFalse(report["coverage_complete"])
+            self.assertEqual(report["undeclared_count"], 1)
+            truncated = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "prefix"..., O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            self.assertEqual(dict(truncated["accesses"])[str(path)], ["read"])
+            self.assertFalse(ra.strict_audit_reads(truncated, [ra.host_snapshot(str(path))], repo_root="/repo", data_root=None)["coverage_complete"])
+
+
 class ReadAuditCoverageTests(unittest.TestCase):
     INPUTS = [
         _range("repo:managed", ["tools/official_client_capture/"], ["tools/official_client_capture/tests/"]),
@@ -774,6 +861,23 @@ def _traced() -> bool:
 @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("strace") and not _traced(),
                      "要 Linux 上的 strace，且本进程没被跟踪（入口门禁带审计跑全集时本测试已在 strace 下）")
 class ReadAuditRealStraceTests(unittest.TestCase):
+    def test_real_truncated_path_is_not_recorded_as_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "c06-unique-long-input-filename"
+            source.write_text("隔离输入")
+            trace = root / "raw.trace"
+            command = ["strace", *ra.STRACE_OPTIONS, "-s", "8", "-o", str(trace), "--", "/usr/bin/cat", str(source)]
+            subprocess.run(command, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120)
+            lines = trace.read_text().splitlines(True)
+            self.assertTrue(any('"' + str(source)[:8] + '"...' in line for line in lines))
+            for strict in (False, True):
+                parsed = ra.filter_stream(lines, ["/"], strict=strict)
+                self.assertNotIn(str(source)[:8], dict(parsed["accesses"]), "路径前缀不能充当完整路径")
+                if strict:
+                    self.assertEqual(dict(parsed["accesses"])[str(source)], ["read"])
+                    self.assertGreater(parsed["coverage"]["unresolved"], 0)
+
     def test_real_host_paths_snapshot_and_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

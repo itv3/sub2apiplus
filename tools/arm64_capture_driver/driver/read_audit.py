@@ -111,11 +111,49 @@ _CALL = re.compile(r"^([a-z_][a-z0-9_]*)\((.*)$", re.S)
 _RESUMED = re.compile(r"^<\.\.\. ([a-z_][a-z0-9_]*) resumed>")
 _ESC = r'(?:[^"\\]|\\.)*'
 _ANN = r"(?:[^>\\]|\\.)*"
-_PAIR = re.compile(r'(?:AT_FDCWD|-?\d+)<(' + _ANN + r')>,\s*"(' + _ESC + r')"')
 _ANNOTATION = re.compile(r"(AT_FDCWD|-?\d+)<(" + _ANN + r")>")
+_ANNOTATED_VALUE = re.compile(r"<" + _ANN + r">")
 _QUOTED = re.compile(r'"(' + _ESC + r')"')
 # 返回值在行尾：「) = 值[<解析路径>][ 错误码 (说明)]」；从行尾匹配，参数里出现类似字样也不会误判。
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
+
+
+def _call_arguments(body: str, result: re.Match | None) -> list[str]:
+    """保留系统调用参数位置；字符串、描述符、数组及结构里的逗号不分割。
+
+    不从全行捞取引号内容：路径缺失或截断时，后面的 argv、链接结果和扩展属性值不能补位。
+    旧范围模式仍可读取 unfinished 前已完整打印的参数；严格模式先按 PID 拼好调用再进入这里。
+    """
+    text = body[:result.start()] if result is not None else body.removesuffix("<unfinished ...>").rstrip()
+    arguments, stack = [], []
+    start = index = 0
+    while index < len(text):
+        char = text[index]
+        if char in {'"', '<'}:
+            token = (_QUOTED if char == '"' else _ANNOTATED_VALUE).match(text, index)
+            if token is None:
+                return []
+            index = token.end()
+            continue
+        if char in "([{":
+            stack.append({"(": ")", "[": "]", "{": "}"}[char])
+        elif char in ")]}":
+            if not stack or stack.pop() != char:
+                return []
+        elif char == "," and not stack:
+            arguments.append(text[start:index].strip())
+            start = index + 1
+        index += 1
+    if stack:
+        return []
+    arguments.append(text[start:].strip())
+    return arguments
+
+
+def _path_argument(arguments: Sequence[str], index: int) -> str | None:
+    """只接受路径位置上的完整字符串；右引号之后的省略号表示截断，不能当作真实路径。"""
+    value = _QUOTED.fullmatch(arguments[index]) if index < len(arguments) else None
+    return unescape(value[1]) if value is not None else None
 
 
 def _argument_flags(body: str) -> set[str]:
@@ -291,6 +329,7 @@ class TraceParser:
             self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
         self.event = (name, body, result is not None and errno is None and result.group(1) != "-1")
+        arguments = _call_arguments(body, result)
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
@@ -299,7 +338,10 @@ class TraceParser:
                     or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags)
                     or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
                 self._unresolved("symlink-metadata-not-bound:" + name)
-        for annotation in _ANNOTATION.finditer(body):
+        for argument in arguments:
+            annotation = _ANNOTATION.fullmatch(argument)
+            if annotation is None:
+                continue
             if annotation.group(1) == "AT_FDCWD":
                 directory = unescape(annotation.group(2))
                 if directory.startswith("/"):
@@ -318,7 +360,7 @@ class TraceParser:
                     self.lines -= 1
             return
         if name == "fchdir":
-            annotation = _ANNOTATION.search(body)
+            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
             if annotation and unescape(annotation[2]).startswith("/") and errno is None:
                 directory = unescape(annotation[2])
                 self.cwd[pid] = directory
@@ -327,7 +369,7 @@ class TraceParser:
                 self._unresolved("directory-fd-not-resolved:fchdir")
             return
         if name == "getdents64":
-            annotation = _ANNOTATION.search(body)
+            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
             if annotation:
                 path = unescape(annotation.group(2))
                 if path.startswith("/"):
@@ -339,9 +381,13 @@ class TraceParser:
             return
         failed = errno is not None
         if name in _DIRFD_READ or name in _DIRFD_PROBE or name in _DIRFD_WRITE or name in _DIRFD_EXEC:
-            pairs = [(unescape(directory), unescape(path)) for directory, path in _PAIR.findall(body)]
-            if name not in _TWO_PATHS:
-                pairs = pairs[:1]
+            positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
+            pairs = []
+            for position in positions:
+                directory = _ANNOTATION.fullmatch(arguments[position]) if position < len(arguments) else None
+                path = _path_argument(arguments, position + 1)
+                if directory is not None and path is not None:
+                    pairs.append((unescape(directory[2]), path))
             missing = errno in _MISSING_ERRNOS
             if name in _DIRFD_READ:
                 flags = _operation_flags(body)
@@ -360,7 +406,7 @@ class TraceParser:
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
                 self._add(_join(directory, path), kind, line)
             if self.strict:
-                if not pairs:
+                if len(pairs) != len(positions):
                     self._unresolved("dirfd-path-not-resolved:" + name)
                 # 返回描述符展示解引用后的真实路径，防止用树内链接掩盖宿主机读取。
                 target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
@@ -370,13 +416,8 @@ class TraceParser:
                     self._unresolved("opened-fd-not-resolved:" + name)
             return
         if name in _PLAIN_READ or name in _PLAIN_PROBE or name in _PLAIN_WRITE or name in _PLAIN_EXEC:
-            strings = [unescape(item) for item in _QUOTED.findall(body.split("<unfinished ...>")[0])]
-            if name == "symlink":
-                strings = strings[1:2]  # 只有链接本身被创建；目标字符串不是被访问的路径
-            elif name in _TWO_PATHS:
-                strings = strings[:2]
-            else:
-                strings = strings[:1]
+            positions = (1,) if name in {"symlink", "inotify_add_watch"} else (0, 1) if name in _TWO_PATHS else (0,)
+            strings = [path for position in positions if (path := _path_argument(arguments, position)) is not None]
             if self.strict and pid not in self.cwd and any(path and not path.startswith("/") for path in strings):
                 self._defer(pid, line)
                 return
@@ -396,7 +437,7 @@ class TraceParser:
             for path in strings:
                 self._add(_join(self.cwd.get(pid), path), kind, line)
             if self.strict:
-                if not strings:
+                if len(strings) != len(positions):
                     self._unresolved("plain-path-not-resolved:" + name)
                 target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
                 if target and name in _PLAIN_READ:
