@@ -40,6 +40,8 @@ PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
     PRODUCER_SCHEMA: frozenset(
         {
+            # 固定验证器目录权限错误归一化前的生成器，仅供已封存收据只读重放。
+            "72f9f82356d54dd3a940ce3121c8f4582b18018b5b51a05ee95a6478c910eaa2",
             # C-06 补齐读集验证器摘要前的生成器；仅承接旧收据的生成器身份，
             # 其余事实仍由当前验证器重建，不能据此恢复旧读集判据或签发新收据。
             "1d1239a3a70a98a758cfa642c546a6f4bad310cbb1ffe31d4563e16fc794f398",
@@ -72,10 +74,15 @@ TARGET_VERIFIER_SHA256S: dict[str, str] = {
 def _target_gate_verifier():
     roots = (Path(__file__).resolve().parents[1] / "ci", Path("/root/arm64-capture-driver/driver"))
     for root in roots:
-        if not root.is_dir() or not TARGET_VERIFIER_SHA256S:
-            continue
-        if any((root / name).is_symlink() or not (root / name).is_file()
-               or _sha256_file(root / name) != digest for name, digest in TARGET_VERIFIER_SHA256S.items()):
+        try:
+            if not root.is_dir() or not TARGET_VERIFIER_SHA256S:
+                continue
+            if any((root / name).is_symlink() or not (root / name).is_file()
+                   or _sha256_file(root / name) != digest for name, digest in TARGET_VERIFIER_SHA256S.items()):
+                continue
+        except OSError:
+            # 不可访问或读取途中失效的固定目录不可承接；仍须完整核验其他固定来源。
+            # 所有来源均不可用时，由下方统一抛出受管错误，不加载未核验的代码。
             continue
         spec = importlib.util.spec_from_file_location("_managed_target_gate_verifier", root / "target_platform_gate.py")
         module = importlib.util.module_from_spec(spec)

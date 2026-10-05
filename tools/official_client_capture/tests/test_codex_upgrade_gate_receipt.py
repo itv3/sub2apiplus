@@ -328,6 +328,25 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
             with self.assertRaises(receipt.GateReceiptError):
                 receipt._target_gate_verifier()
 
+    def test_target_verifier_inaccessible_paths_fail_closed(self):
+        # 普通 CI 用户可能无权读取固定的安装目录；各版本 pathlib 的异常行为不同。
+        # 无法检查的路径必须按不可用处理，不能泄漏原始异常或加载未核验的代码。
+        for operation in ("is_dir", "is_symlink", "is_file"):
+            with self.subTest(operation=operation):
+                with mock.patch.object(Path, operation, side_effect=PermissionError("受限路径")), \
+                        mock.patch.object(receipt.importlib.util, "spec_from_file_location") as load:
+                    with self.assertRaises(receipt.GateReceiptError):
+                        receipt._target_gate_verifier()
+                    load.assert_not_called()
+
+    def test_target_verifier_unreadable_dependency_fails_closed(self):
+        # 元数据检查成功后，读取摘要仍可能被撤权；同样不得加载依赖或放宽摘要合同。
+        with mock.patch.object(receipt, "_sha256_file", side_effect=PermissionError("依赖不可读")), \
+                mock.patch.object(receipt.importlib.util, "spec_from_file_location") as load:
+            with self.assertRaises(receipt.GateReceiptError):
+                receipt._target_gate_verifier()
+            load.assert_not_called()
+
     def test_post_promotion_binds_acceptance_and_promotion(self) -> None:
         self._write("post-facts.json", self._facts(receipt.POST_PROMOTION_PHASE))
         finalized = receipt.finalize(self.root, "post-facts.json", "post-receipt.json")
