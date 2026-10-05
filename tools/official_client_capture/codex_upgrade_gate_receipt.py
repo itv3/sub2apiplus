@@ -40,6 +40,9 @@ PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
     PRODUCER_SCHEMA: frozenset(
         {
+            # C-06 补齐读集验证器摘要前的生成器；仅承接旧收据的生成器身份，
+            # 其余事实仍由当前验证器重建，不能据此恢复旧读集判据或签发新收据。
+            "1d1239a3a70a98a758cfa642c546a6f4bad310cbb1ffe31d4563e16fc794f398",
             # B-10 修改前的已部署 v4 生成器，仅用于旧收据只读重放。
             "6cea115be2c892dd8bd61b81e6521adfc617988f845579afaf7afc20478f9232",
             # B-10 两轮隔离验收生成器；虽未生产部署，已作为冻结承接图的显式边界登记。
@@ -61,7 +64,7 @@ TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
     "unit_records.py": "f65b258a7a17f4d28da7e685fe79289e31e33280ce0202563a3b9b55c493bc6c",
-    "read_audit.py": "658c5834f3f40a90549a68b790c46fc90de172f9eeb8c50d799e592956949e97",
+    "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
     "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e"
 }
 

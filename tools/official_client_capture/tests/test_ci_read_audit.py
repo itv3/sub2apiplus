@@ -918,5 +918,14 @@ class ReadAuditRealStraceTests(unittest.TestCase):
             self.assertEqual(accesses[str(root / "pkg" / "nope.txt")], ["missing"])
 
 
+class PinnedVerifierIntegrationTests(unittest.TestCase):
+    def test_receipt_loads_current_repository_verifier_after_audit_change(self) -> None:
+        # 读集实现更新时必须同时验证实际消费者；不能让主机上旧驱动的回退副本掩盖仓库绑定遗漏。
+        from tools.official_client_capture import codex_upgrade_gate_receipt
+
+        verifier = codex_upgrade_gate_receipt._target_gate_verifier()
+        self.assertEqual(Path(verifier.__file__).resolve(), REPO_ROOT / "tools/ci/target_platform_gate.py")
+
+
 if __name__ == "__main__":
     unittest.main()
