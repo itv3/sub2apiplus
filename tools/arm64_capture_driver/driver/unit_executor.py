@@ -56,6 +56,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -974,8 +975,10 @@ class ReadAuditor:
         self.strict = strict
 
     def trace_path(self, unit: Unit) -> Path:
-        safe = unit.unit_id.replace("#", "-").replace("!", "-").replace("/", "-").replace(":", "-")
-        return self.dir / f"{safe}.trace.json"
+        # 可读前缀不能保证唯一；完整单元 ID 摘要防止标点替换和长名称截断造成轨迹串用。
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "-", unit.unit_id)[:80].strip(".") or "unit"
+        identity = hashlib.sha256(unit.unit_id.encode("utf-8")).hexdigest()
+        return self.dir / f"{safe}-{identity}.trace.json"
 
     def skipped(self, unit: Unit) -> bool:
         """声明了整个仓库的单元不审计（见 read_audit.declares_whole_repo）。"""
@@ -990,6 +993,26 @@ class ReadAuditor:
         trace = self.trace_path(unit)
         with contextlib.suppress(FileNotFoundError):
             trace.unlink()
+        current = self.currents.get(unit.unit_id)
+        runtime_entries = [entry for entry in (current.inputs or []) if entry.get("name") == "runtime-contract"] if current else []
+        if runtime_entries:
+            if not self.strict or len(runtime_entries) != 1:
+                raise ExecutorError("隔离输出合同必须具有唯一输入绑定并启用严格审计")
+            runtime = self.module._runtime_module()
+            contract = runtime_entries[0]["detail"]["contract"]
+            if unit.command:
+                command = list(unit.command)
+            else:
+                # 测试单元仍保留原执行器参数；启动器单独按固定合同替换。
+                command = argv
+            if command[:len(runtime.LAUNCHER)] == runtime.LAUNCHER:
+                if contract["mask_roots"] != [runtime.MASK_ROOT]:
+                    raise ExecutorError("原启动器的生产别名遮挡不能被取消")
+                command = command[len(runtime.LAUNCHER):]
+            elif contract["mask_roots"]:
+                raise ExecutorError("未识别的启动器不能使用既有遮挡合同")
+            return runtime.prepare(contract, output=trace, argv=command, cwd=unit.cwd or self.repo_root,
+                                   inputs=current.inputs)
         return self.module.strace_argv(argv, output=trace, roots=roots, strict=self.strict)
 
     def collect(self, unit: Unit) -> dict[str, Any]:

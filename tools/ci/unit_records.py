@@ -65,7 +65,7 @@ MISSING = "missing"
 HERE = Path(__file__).resolve().parent
 # 执行器版本：执行器目录里参与调度、判定、输入解析与门禁编排的文件（存在的才算；字节码预编译工具另由执行器传入）。
 # 审计结论影响记录是否通过及覆盖是否闭合，审计合同必须进入执行器身份。
-EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
+EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "read_audit_runtime.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh")
 # 只决定缓存放在哪里的环境变量（内容按源码摘要校验或按整树摘要做键），不进环境指纹；执行器自己的控制变量也不进。
 ENV_CACHE_ONLY = frozenset({"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"})
 ENV_EXECUTOR_PREFIX = "UNIT_EXECUTOR_"
@@ -522,7 +522,7 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
       同一受管树的依赖分析经 ``deps_cache`` 共用；
     * ``resolved``：清单生成时已算好的明细（例如数据根才有的内容）。"""
 
-    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit"}
+    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}
     if not isinstance(declaration, Mapping) or set(declaration) - allowed:
         raise RecordsError(f"输入声明非法：{declaration!r}")
     paths = declaration.get("host_paths", [])
@@ -532,7 +532,12 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
     entries = [repo.range_entry(spec) for spec in declaration.get("ranges") or []]
     for path in paths:
         entries.append(_audit_module().host_snapshot(path))
-    if paths or declaration.get("require_read_audit"):
+    if "runtime_contract" in declaration:
+        try:
+            entries.append(_audit_module()._runtime_module().contract_entry(declaration["runtime_contract"]))
+        except (RuntimeError, OSError, ValueError) as error:
+            raise RecordsError(str(error)) from error
+    if paths or declaration.get("require_read_audit") or "runtime_contract" in declaration:
         entries.append(value_entry("policy", "require-read-audit", "all-file-paths/v1"))
     for item in declaration.get("files") or []:
         if not isinstance(item, Mapping) or not isinstance(item.get("category"), str) or set(item) != {"category", "path"}:

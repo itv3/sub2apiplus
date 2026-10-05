@@ -44,6 +44,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 TRACE_SCHEMA = "read-audit-trace/v1"
 STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
+RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
 HOST_SCHEMA = "read-audit-host-snapshot/v1"
 REPORT_SCHEMA = "read-audit-report/v1"
 # strace 选项：只跟踪文件类调用与进程派生（子进程继承工作目录要用）；不解码 stat 等结构、不打印信号（省 strace 自己的
@@ -117,8 +118,26 @@ _QUOTED = re.compile(r'"(' + _ESC + r')"')
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
 
 
+def _operation_flags(body: str) -> set[str]:
+    """标志只取字符串和描述符路径之外的字段，文件名包含 O_CREAT 不能冒充创建动作。"""
+    arguments = _QUOTED.sub('""', body)
+    arguments = re.sub(r"<" + _ANN + r">", "", arguments)
+    return set(re.findall(r"\bO_[A-Z0-9_]+\b", arguments))
+
+
 class AuditError(RuntimeError):
     """审计配置或轨迹文件不可用。"""
+
+
+def _runtime_module():
+    """从受管同目录加载隔离合同，仓库和驱动副本使用同一入口。"""
+    name = "_read_audit_runtime"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE.with_name("read_audit_runtime.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[name] = module
+    return sys.modules[name]
 
 
 # ---------------------------------------------------------------------------
@@ -168,15 +187,29 @@ def _join(directory: str | None, path: str) -> str | None:
 class TraceParser:
     """逐行解析 ``strace -f -y`` 的输出，累积（路径 → 读取方式集合）与每个路径的第一条样例行。"""
 
-    def __init__(self, *, strict: bool = False) -> None:
+    def __init__(self, *, strict: bool = False, runtime_context: dict[str, Any] | None = None) -> None:
         self.cwd: dict[str, str] = {}
         self.accesses: dict[str, set[str]] = {}
         self.samples: dict[str, str] = {}
         self.lines = 0
         self.strict = strict
         self.pending: dict[str, str] = {}
+        # 子进程可以先于父进程 clone 的返回行执行；先缓存这段轨迹，得到父子关系后按原顺序重放。
+        self.deferred: dict[str, list[str]] = {}
+        self.spawn_cwd: dict[str, str | None] = {}
+        self.deferred_count = 0
         self.unresolved = 0
         self.unresolved_reasons: dict[str, int] = {}
+        self.runtime_context = runtime_context
+        self.output_tracker = None
+        self.output_events: list[dict[str, Any]] = []
+        self.event: tuple[str, str, bool] = ("", "", False)
+        if runtime_context is not None:
+            if not strict:
+                raise AuditError("隔离合同必须使用严格审计")
+            runtime = _runtime_module()
+            contract = runtime.validate_context(runtime_context, [runtime_context["contract_entry"]])
+            self.output_tracker = runtime.OutputTracker(contract)
 
     def _unresolved(self, reason: str) -> None:
         """仅登记调用名与分类，不保存可能含参数、凭据或正文的原始行。"""
@@ -190,12 +223,27 @@ class TraceParser:
             return
         self.accesses.setdefault(path, set()).add(kind)
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
+        if self.output_tracker is not None and _under(path, self.output_tracker.root):
+            name, body, succeeded = self.event
+            descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+            target = unescape(descriptor[1]) if descriptor else None
+            flags = _operation_flags(body)
+            self.output_tracker.observe(path, kind, name, "|".join(flags), succeeded, target)
+            # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
+            if len(self.output_events) < 200000:
+                self.output_events.append({"path": path, "kind": kind, "name": name, "succeeded": succeeded,
+                                           "flags": sorted(flags), "target": target})
+            else:
+                self._unresolved("output-event-limit")
 
     def feed(self, raw: str) -> None:
         self.lines += 1
         line = raw.rstrip("\n")
         match = _LINE.match(line)
         pid, rest = (match.group(1), match.group(2)) if match else ("0", line)
+        if self.strict and pid in self.deferred:
+            self._defer(pid, line)
+            return
         resumed = _RESUMED.match(rest)
         if resumed is not None:
             if self.strict:
@@ -224,19 +272,40 @@ class TraceParser:
             if pid in self.pending:
                 self._unresolved("overlapping-unfinished:" + name)
             self.pending[pid] = rest[:rest.rfind("<unfinished ...>")]
+            if name in _SPAWN:
+                self.spawn_cwd[pid] = self.cwd.get(pid)
             return
         result = None if unfinished else _RESULT.search(body)
         if self.strict and (result is None or re.search(r'"\s*\.\.\.', body)):
             self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
+        self.event = (name, body, result is not None and errno is None and result.group(1) != "-1")
         for annotation in _ANNOTATION.finditer(body):
             if annotation.group(1) == "AT_FDCWD":
                 directory = unescape(annotation.group(2))
                 if directory.startswith("/"):
                     self.cwd[pid] = directory
         if name in _SPAWN:
-            if result and result.group(1).isdigit() and pid in self.cwd:
-                self.cwd.setdefault(result.group(1), self.cwd[pid])
+            if self.strict and re.search(r"\bCLONE_(?:UNTRACED|NEWNS)\b", body):
+                self._unresolved("unobservable-child:" + name)
+            inherited = self.spawn_cwd.pop(pid, self.cwd.get(pid))
+            if result and result.group(1).isdigit() and int(result.group(1)) > 0 and inherited:
+                child = result.group(1)
+                self.cwd.setdefault(child, inherited)
+                buffered = self.deferred.pop(child, [])
+                self.deferred_count -= len(buffered)
+                for event in buffered:
+                    self.feed(event)
+                    self.lines -= 1
+            return
+        if name == "fchdir":
+            annotation = _ANNOTATION.search(body)
+            if annotation and unescape(annotation[2]).startswith("/") and errno is None:
+                directory = unescape(annotation[2])
+                self.cwd[pid] = directory
+                self._add(directory, "dir", line)
+            elif self.strict:
+                self._unresolved("directory-fd-not-resolved:fchdir")
             return
         if name == "getdents64":
             annotation = _ANNOTATION.search(body)
@@ -256,8 +325,11 @@ class TraceParser:
                 pairs = pairs[:1]
             missing = errno in _MISSING_ERRNOS
             if name in _DIRFD_READ:
-                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
-                        else "dir" if "O_DIRECTORY" in body else "read")
+                flags = _operation_flags(body)
+                kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in flags else "read")
+                if self.strict and name == "openat2" and not flags:
+                    self._unresolved("open-flags-not-decoded:openat2")
             elif name in _DIRFD_WRITE:
                 kind = "write"
             elif name in _DIRFD_EXEC:
@@ -275,6 +347,8 @@ class TraceParser:
                 target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
                 if target and name in _DIRFD_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
+                elif name in _DIRFD_READ and not failed:
+                    self._unresolved("opened-fd-not-resolved:" + name)
             return
         if name in _PLAIN_READ or name in _PLAIN_PROBE or name in _PLAIN_WRITE or name in _PLAIN_EXEC:
             strings = [unescape(item) for item in _QUOTED.findall(body.split("<unfinished ...>")[0])]
@@ -284,10 +358,14 @@ class TraceParser:
                 strings = strings[:2]
             else:
                 strings = strings[:1]
+            if self.strict and pid not in self.cwd and any(path and not path.startswith("/") for path in strings):
+                self._defer(pid, line)
+                return
             missing = errno in _MISSING_ERRNOS
             if name in _PLAIN_READ:
-                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
-                        else "dir" if "O_DIRECTORY" in body else "read")
+                flags = _operation_flags(body)
+                kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in flags else "read")
             elif name in _PLAIN_WRITE:
                 kind = "write"
             elif name in _PLAIN_EXEC:
@@ -304,6 +382,8 @@ class TraceParser:
                 target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
                 if target and name in _PLAIN_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
+                elif name in _PLAIN_READ and not failed:
+                    self._unresolved("opened-fd-not-resolved:" + name)
             if name in {"chdir", "getcwd"} and not failed and strings:
                 joined = _join(self.cwd.get(pid), strings[0])
                 if joined:
@@ -311,6 +391,14 @@ class TraceParser:
             return
         if self.strict:
             self._unresolved("unsupported-call:" + name)
+
+    def _defer(self, pid: str, line: str) -> None:
+        """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""
+        if self.deferred_count >= 10000:
+            self._unresolved("deferred-process-limit")
+            return
+        self.deferred.setdefault(pid, []).append(line)
+        self.deferred_count += 1
 
 
 def _under(path: str, root: str) -> bool:
@@ -329,9 +417,13 @@ def trace_document(parser: TraceParser, roots: Sequence[str]) -> dict[str, Any]:
             "accesses": [[path, kept[path]] for path in sorted(kept)],
             "samples": {path: (path if parser.strict else parser.samples[path]) for path in sorted(kept)}}
     if parser.strict:
-        value["coverage"] = {"all_host_paths": roots == ["/"], "unresolved": parser.unresolved + len(parser.pending),
+        value["coverage"] = {"all_host_paths": roots == ["/"], "unresolved": parser.unresolved + len(parser.pending) + parser.deferred_count,
                              "stream_complete": True, "unresolved_reasons": dict(sorted(parser.unresolved_reasons.items())),
-                             "unfinished_calls": len(parser.pending)}
+                             "unfinished_calls": len(parser.pending), "unresolved_process_events": parser.deferred_count}
+    if parser.output_tracker is not None:
+        value["schema_version"] = RUNTIME_TRACE_SCHEMA
+        value["runtime"] = {"context": parser.runtime_context, "output_events": parser.output_events,
+                            "outputs": parser.output_tracker.report()}
     return value
 
 
@@ -339,8 +431,9 @@ def _bytecode(path: str) -> bool:
     return "/__pycache__/" in f"/{path}/" or path.endswith((".pyc", ".pyo"))
 
 
-def filter_stream(stream: Iterable[str], roots: Sequence[str], *, strict: bool = False) -> dict[str, Any]:
-    parser = TraceParser(strict=strict)
+def filter_stream(stream: Iterable[str], roots: Sequence[str], *, strict: bool = False,
+                  runtime_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    parser = TraceParser(strict=strict, runtime_context=runtime_context)
     for line in stream:
         parser.feed(line)
     return trace_document(parser, roots)
@@ -361,13 +454,15 @@ def prefilter_pattern(roots: Sequence[str]) -> str:
 
 
 def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], python: str | None = None,
-                strict: bool = False) -> list[str]:
+                strict: bool = False, runtime_context: Path | None = None) -> list[str]:
     """把一个单元的命令包在 strace 下：输出先经 grep 预筛，再交给本模块 ``filter``，只留各个根之下的路径。"""
 
     command = [python or sys.executable, "-B", str(HERE), "filter", "--output", str(output)]
     if strict:
         roots = ["/"]
         command.append("--strict")
+    if runtime_context is not None:
+        command += ["--runtime-context", str(runtime_context)]
     for root in roots:
         command += ["--root", str(root)]
     for part in command:
@@ -377,7 +472,9 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
     if "'" in pattern:
         raise AuditError("预筛表达式里有单引号，不能交给 shell")
     pipe = " ".join(command) if strict else f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
-    options = ["-s", "4096", "-e", "trace=%file,getdents64,clone,clone3,fork,vfork"] if strict else []
+    # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
+    options = ["-s", "4096", "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
+               "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
     return ["strace", *STRACE_OPTIONS, *options, "-o", "|" + pipe, "--", *argv]
 
 
@@ -446,10 +543,16 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
     findings = []
     snapshots = {}
     coverage = document.get("coverage") or {}
-    if (document.get("schema_version") != STRICT_TRACE_SCHEMA or document.get("roots") != ["/"]
+    if (document.get("schema_version") not in {STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA} or document.get("roots") != ["/"]
             or coverage.get("all_host_paths") is not True or coverage.get("stream_complete") is not True
             or coverage.get("unresolved") != 0 or not document.get("lines") or not document.get("accesses")):
         findings.append({"root": "audit", "path": "", "kinds": [], "sample": "", "suggestion": "完整轨迹缺失、未结束或含未解析调用，不可承接"})
+    runtime_paths: set[str] = set()
+    if document.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+        try:
+            runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []))
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            findings.append({"root": "runtime", "path": "", "kinds": [], "sample": "", "suggestion": str(error)})
     for entry in inputs or []:
         detail = entry.get("detail") or {}
         if detail.get("schema_version") != HOST_SCHEMA:
@@ -467,6 +570,8 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
     for path, kinds in document.get("accesses") or []:
         root = "repo" if _under(path, repo_root) else "data" if data_root and _under(path, data_root) else "host"
         counts[root + "_paths"] += 1
+        if path in runtime_paths:
+            continue
         binding = snapshots.get(path)
         if binding is not None:
             kind = binding["kind"]
@@ -527,11 +632,16 @@ def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
     trace = load_trace(trace_path)
     if not strict_audit_reads(trace, record.get("inputs"), repo_root=audit["repo_root"], data_root=audit.get("data_root"))["coverage_complete"]:
         raise AuditError("来源读集不能按当前环境重放，拒绝生成收窄提案")
-    paths = sorted({path for path, _kinds in trace["accesses"]})
+    runtime_inputs = {}
+    excluded = set()
+    if trace.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+        excluded = _runtime_module().replay_runtime(trace, record["inputs"])
+        runtime_inputs["runtime_contract"] = trace["runtime"]["context"]["contract_entry"]["detail"]["contract"]
+    paths = sorted({path for path, _kinds in trace["accesses"]} - excluded)
     return {"schema_version": "unit-read-scope-proposal/v1", "unit_id": record["unit_id"],
             "spec": record["spec"], "requires_validation": True, "reuse_enabled": False,
             "environment_sha256": record["environment_sha256"], "executor_sha256": record["executor"]["sha256"],
-            "inputs": {"host_paths": paths, "require_read_audit": True},
+            "inputs": {"host_paths": paths, "require_read_audit": True, **runtime_inputs},
             "source_record": {"path": str(record_path), "sha256": hashlib.sha256(record_path.read_bytes()).hexdigest()},
             "source_trace": {"path": str(trace_path), "sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest()}}
 
@@ -692,7 +802,7 @@ def load_trace(path: Path) -> dict[str, Any]:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise AuditError(f"审计轨迹读不出来：{path}（{error}）") from error
-    if not isinstance(document, dict) or document.get("schema_version") not in {TRACE_SCHEMA, STRICT_TRACE_SCHEMA}:
+    if not isinstance(document, dict) or document.get("schema_version") not in {TRACE_SCHEMA, STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA}:
         raise AuditError(f"审计轨迹格式不对：{path}")
     return document
 
@@ -704,6 +814,7 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     filt.add_argument("--output", type=Path, required=True)
     filt.add_argument("--root", action="append", default=[], required=True)
     filt.add_argument("--strict", action="store_true")
+    filt.add_argument("--runtime-context", type=Path)
     scope = sub.add_parser("scope", help="从完整正式轨迹生成待重新验收的单元输入提案")
     scope.add_argument("--record", type=Path, required=True)
     scope.add_argument("--trace", type=Path, required=True)
@@ -722,7 +833,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "filter":
         stream = (line.decode("utf-8", "surrogateescape") for line in sys.stdin.buffer)
-        document = filter_stream(stream, args.root, strict=args.strict)
+        runtime_context = json.loads(args.runtime_context.read_text()) if args.runtime_context else None
+        document = filter_stream(stream, args.root, strict=args.strict, runtime_context=runtime_context)
         temporary = args.output.with_name(f".{args.output.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8", errors="surrogateescape")
         os.replace(temporary, args.output)

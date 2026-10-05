@@ -237,6 +237,39 @@ sys.exit(subprocess.run(command).returncode)
 class StrictReadAuditTests(unittest.TestCase):
     """宿主机读取不能由仓库范围声明、目录前缀或一次空轨迹代替。"""
 
+    def test_child_relative_access_before_clone_return_is_replayed_in_order(self):
+        lines = ['1 getcwd("/repo/a/b", 4096) = 10',
+                 '1 clone(child_stack=NULL, flags=CLONE_VFORK|SIGCHLD <unfinished ...>',
+                 '2 chdir("../..") = 0',
+                 '2 execve("./bin/check", ["check"], 0x1) = 0',
+                 '2 openat(AT_FDCWD</repo>, "input", O_RDONLY) = 3</repo/input>',
+                 '1 <... clone resumed>) = 2']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(trace["coverage"]["unresolved"], 0)
+        self.assertEqual(trace["lines"], len(lines))
+        self.assertEqual(dict(trace["accesses"])["/repo/bin/check"], ["exec"])
+        self.assertEqual(dict(trace["accesses"])["/repo/input"], ["read"])
+        # 没有父进程返回行不能用后来观察到的目录倒推先前的相对路径。
+        broken = ra.filter_stream(lines[:-1], ["/"], strict=True)
+        self.assertGreater(broken["coverage"]["unresolved_process_events"], 0)
+        self.assertNotIn("/repo/bin/check", dict(broken["accesses"]))
+
+    def test_audit_trace_names_cannot_collide_or_delete_another_units_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=REPO_ROOT, data_root=None, currents={}, strict=True)
+            identifiers = ["cmd:a", "cmd-a", "suite#1", "suite-1", "x" * 100 + ":a", "x" * 100 + "-a"]
+            units = [ue.Unit(value, value, (), ue.Quota(1, 128), False, 0) for value in identifiers]
+            paths = [auditor.trace_path(unit) for unit in units]
+            self.assertEqual(len(set(paths)), len(units))
+            for unit, path in zip(units, paths):
+                path.write_text(unit.unit_id)
+                self.assertEqual(path.parent, auditor.dir)
+                self.assertLess(len(path.name.encode()), 255)
+            auditor.wrap(units[0], ["true"])
+            self.assertFalse(paths[0].exists())
+            for unit, path in zip(units[1:], paths[1:]):
+                self.assertEqual(path.read_text(), unit.unit_id)
+
     def test_strict_parser_keeps_host_bytecode_and_resumes_file_calls(self):
         lines = ['1 openat(AT_FDCWD</repo>, "/host/__pycache__/a.pyc", O_RDONLY <unfinished ...>\n',
                  '1 <... openat resumed>) = 3</host/__pycache__/a.pyc>\n']
