@@ -599,24 +599,30 @@ class EnvFileParserTests(unittest.TestCase):
             os.unlink(path)
 
     def test_template_parses_and_expands_references(self) -> None:
-        result = self._parse(self._template())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = result.stdout.splitlines()
-        exported = dict(line[len("export "):].split("=", 1) for line in lines if line.startswith("export "))
-        parser = load_script("parse_env")
-        values = parser.parse(self._template())
-        self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
-        # 参数文件里没有、也没有派生默认值的可选键一律 unset：清掉外层环境残留的旧值（E2-06 验收时发现会被继承回来）。
-        unset = {line[len("unset "):] for line in lines if line.startswith("unset ")}
-        self.assertEqual(unset, set(parser.OPTIONAL_KEYS) - set(exported))
-        self.assertIn("ENTRY_COMMIT", unset)
-        self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
-        self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/codex-9.1.0-candidate-round1")
-        # R20：示例阶段预算按实测标定（VC-0 接入目标平台门禁预跑后为 165 分钟起）；这里只验证带空格的值被原样加引号导出。
-        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=165 "))
-        # 输出的每一行都是可安全 eval 的单一赋值或单一 unset
-        for line in lines:
-            self.assertRegex(line, r"^(export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)|unset [A-Z_][A-Z0-9_]*)$")
+        with tempfile.TemporaryDirectory(prefix="driver-env-template-") as directory:
+            # 示例主机根映射到临时目录，避免依赖 /root 权限或读取现场 Campaign。
+            root = Path(directory).resolve()
+            data_root = root / "docker/capture-cli/data"
+            data_root.mkdir(parents=True)
+            template = self._template().replace("/root/", f"{root}/")
+            result = self._parse(template)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = result.stdout.splitlines()
+            exported = dict(line[len("export "):].split("=", 1) for line in lines if line.startswith("export "))
+            parser = load_script("parse_env")
+            values = parser.parse(template)
+            self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
+            # 参数文件里没有、也没有派生默认值的可选键一律 unset：清掉外层环境残留的旧值（E2-06 验收时发现会被继承回来）。
+            unset = {line[len("unset "):] for line in lines if line.startswith("unset ")}
+            self.assertEqual(unset, set(parser.OPTIONAL_KEYS) - set(exported))
+            self.assertIn("ENTRY_COMMIT", unset)
+            self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
+            self.assertEqual(exported["B"], str(data_root / "candidates/codex-9.1.0-candidate-round1"))
+            # R20：示例阶段预算按实测标定（VC-0 接入目标平台门禁预跑后为 165 分钟起）；这里只验证带空格的值被原样加引号导出。
+            self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=165 "))
+            # 输出的每一行都是可安全 eval 的单一赋值或单一 unset
+            for line in lines:
+                self.assertRegex(line, r"^(export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)|unset [A-Z_][A-Z0-9_]*)$")
 
     def test_rejects_command_forms_without_executing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
