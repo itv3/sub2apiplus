@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
@@ -23,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+sys.dont_write_bytecode = True
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -345,6 +348,110 @@ def approval(path, plan, scope):
     return safety.file_binding(path)
 
 
+def collect_cleanup_context(config):
+    """独立只读进程从本轮受管工具重放清理参数，禁止混入收尾仓库的另一份读侧。"""
+    gate = config["gate"]
+    script = safety.plain(Path(gate["driver"]).parent / "cleanup_context.py")
+    inputs = {str(path): safety.file_binding(path) for path in (script, gate["vc_env"])}
+    result = subprocess.run([sys.executable, "-B", str(script), "--env", gate["vc_env"]],
+                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+    if result.returncode:
+        raise CloseoutError("当前清理参数无法重放：" + result.stderr.strip()[-1200:])
+    report = json.loads(result.stdout)
+    if (report.get("schema_version") != "arm64-cleanup-context/v1"
+            or not isinstance(report.get("parameters"), dict) or not report.get("bindings")):
+        raise CloseoutError("清理参数报告不完整")
+    if any(safety.file_binding(path) != value for path, value in inputs.items()):
+        raise CloseoutError("清理参数入口或轮次文件发生漂移")
+    for value in report["bindings"].values():
+        verify_binding({key: value[key] for key in ("path", "sha256")})
+    return report
+
+
+def resolve_cleanup(config):
+    """只展开清理字段中的显式参数引用；原配置保持不变，不执行 shell 替换。"""
+    if config["cleanup"].get("mode") != "execute":
+        return config, None
+    context = collect_cleanup_context(config)
+    parameters = context["parameters"]
+    material = safety.read(config["material"])
+    for name, key in (("campaign_path", "NEWDIR"), ("campaign_id", "NEW"),
+                      ("candidate_id", "CAND"), ("target_version", "TARGET_VERSION")):
+        if material.get(name) != parameters.get(key):
+            raise CloseoutError("清理参数与收尾材料的当前身份不一致：" + name)
+    def expand(value):
+        if not isinstance(value, str):
+            raise CloseoutError("清理路径和参数必须为字符串")
+        def replace(match):
+            name = match[1]
+            if name not in parameters or not str(parameters[name]):
+                raise CloseoutError("未知或空清理参数：" + name)
+            return str(parameters[name])
+        text = re.sub(r"\$\{([A-Z][A-Z0-9_]*)\}", replace, value)
+        if "${" in text or "\x00" in text:
+            raise CloseoutError("清理参数引用格式非法")
+        return text
+    resolved = deepcopy(config)
+    action = resolved["cleanup"]
+    for field in ("script", "result"):
+        action[field] = expand(action[field])
+    for field in ("arguments", "inputs", "targets"):
+        if not isinstance(action[field], list):
+            raise CloseoutError("清理参数、输入及目标必须为数组")
+        action[field] = [expand(value) for value in action[field]]
+    for field in ("backup", "restore_check"):
+        action[field]["path"] = expand(action[field]["path"])
+    assertions = {"--campaign-dir": "NEWDIR", "--campaign-id": "NEW", "--candidate-id": "CAND",
+                  "--attempt-id": "ATT", "--evaluation-baseline": "EVALUATION_BASELINE",
+                  "--vc5": "VC5_RECEIPT", "--vc5-receipt": "VC5_RECEIPT",
+                  "--vc6": "VC6_RECEIPT", "--vc6-receipt": "VC6_RECEIPT",
+                  "--activation-receipt": "ACTIVATION_RECEIPT", "--rollback-receipt": "ROLLBACK_RECEIPT",
+                  "--retire-receipt": "RETIRE_RECEIPT"}
+    for index, word in enumerate(action["arguments"]):
+        option, separator, inline = word.partition("=")
+        if option in assertions:
+            value = inline if separator else (action["arguments"][index + 1] if index + 1 < len(action["arguments"]) else None)
+            if value is None or not parameters.get(assertions[option]) or value != parameters[assertions[option]]:
+                raise CloseoutError("清理脚本参数未绑定当前阶段：" + option)
+    if not action["targets"] or len(set(action["targets"])) != len(action["targets"]):
+        raise CloseoutError("清理目标为空或重复")
+    # 脚本仍由专项批准固定；此处防止删除其运行输入、源码、收据或任一保护路径的祖先。
+    protected = [config["repo"], config["work_root"], parameters["NEWDIR"], parameters["SOURCE_ROOT"],
+                 str(Path(parameters["D"]) / "tools"), str(Path(parameters["D"]) / "evidence"),
+                 str(Path(parameters["B"]) / "production-tree"), parameters["W"],
+                 action["script"], action["backup"]["path"], action["restore_check"]["path"],
+                 *action["inputs"], *[value["path"] for value in context["bindings"].values()]]
+    for value in action["targets"]:
+        if not value or any(c in value for c in "*?[]\n\r"):
+            raise CloseoutError("清理目标必须明确，不能使用模式或空值")
+        if value.startswith("/"):
+            target = safety.plain(value)
+            if target.is_relative_to(Path(parameters["D"]) / "candidates") and not target.is_relative_to(Path(parameters["B"])):
+                raise CloseoutError("清理目标属于其他 Candidate")
+            if any(target.is_relative_to(safety.plain(path)) or safety.plain(path).is_relative_to(target) for path in protected):
+                raise CloseoutError("清理目标与必须保留的输入、源码或证据重叠")
+        elif not re.fullmatch(r"(?:image@sha256:[0-9a-f]{64}|(?:container|volume|network)@[a-zA-Z0-9][a-zA-Z0-9_.-]*)", value):
+            raise CloseoutError("资源清理目标必须明确类型及完整镜像摘要或资源标识")
+    restore = safety.read(verify_binding(action["restore_check"]))
+    if (restore.get("status") != "passed" or restore.get("targets") != action["targets"]
+            or restore.get("backup") != action["backup"]
+            or restore.get("cleanup_context_sha256") != digest(context)):
+        raise CloseoutError("恢复演练未绑定当前清理上下文、对象或备份")
+    verify_binding(action["backup"])
+    return resolved, context
+
+
+def check_cleanup_context(plan):
+    """审核后的清理计划只作相等断言，禁止悄悄替换为新轮次后继续删除。"""
+    basis = plan["basis"]
+    if basis["config"]["cleanup"].get("mode") != "execute":
+        return
+    source = {**basis["config"], "cleanup": basis.get("cleanup_source", {})}
+    resolved, context = resolve_cleanup(source)
+    if context != basis.get("cleanup_context") or resolved != basis["config"]:
+        raise CloseoutError("清理上下文或展开参数已漂移，须重新准备并批准")
+
+
 def validate_config(config):
     required = {"schema_version", "repo", "work_root", "guide", "material", "terminal_facts", "terminal_relative",
                 "tag", "gate", "cleanup", "push", "deployment_check"}
@@ -427,6 +534,8 @@ def config_bindings(config):
 def prepare(config, *, dry_run=False):
     """构建私有候选快照；发布操作不在此阶段执行，原仓库逐字保持不变。"""
     started = datetime.now(timezone.utc).isoformat()
+    cleanup_source = deepcopy(config["cleanup"])
+    config, cleanup_context = resolve_cleanup(config)
     repo, work = validate_config(config)
     bound = config_bindings(config)
     head = git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -453,6 +562,8 @@ def prepare(config, *, dry_run=False):
              "source_tree": git(repo, "rev-parse", "HEAD^{tree}").stdout.strip(),
              "remote_url_sha256": sha(git(repo, "remote", "get-url", config["push"]["remote"]).stdout.encode()),
              "source_updates": updates, "terminal_text": terminal_text}
+    if cleanup_context is not None:
+        basis.update(cleanup_source=cleanup_source, cleanup_context=cleanup_context)
     key = digest(basis)
     if dry_run:
         return {"status": "dry_run", "input_sha256": key, "changed_paths": sorted([*updates, config["terminal_relative"]]),
@@ -503,6 +614,7 @@ def prepare(config, *, dry_run=False):
         plan["review_sha256"] = digest(plan)
         if config_bindings(config) != bound:
             raise CloseoutError("准备期间输入文件变化，候选不可用于发布")
+        check_cleanup_context(plan)
         safety.write_once(path, plan)
         return plan
 
@@ -532,6 +644,7 @@ def load_plan(path):
         raise CloseoutError("方案与工作根绑定不一致")
     if config_bindings(config) != basis["input_files"]:
         raise CloseoutError("收尾输入或工具已改变")
+    check_cleanup_context(plan)
     candidate = safety.plain(plan["candidate"])
     if (git(candidate, "rev-parse", "HEAD").stdout.strip() != plan["candidate_commit"]
             or git(candidate, "rev-parse", "HEAD^{tree}").stdout.strip() != plan["candidate_tree"]
@@ -693,19 +806,29 @@ def check_action_result(plan, name):
                 or result.get("restore_check") != action["restore_check"]):
             raise CloseoutError("清理对象、备份或恢复演练凭证不一致")
         verify_binding(result.get("deletion_verification"))
+        started = journal_read(plan, name, "started")
+        if (result.get("cleanup_context_sha256") != digest(plan["basis"]["cleanup_context"])
+                or not started or result.get("approval") != started.get("approval")):
+            raise CloseoutError("清理结果未绑定当前上下文或实际消费的批准")
+        verify_binding(result["approval"])
         verification = safety.read(result["deletion_verification"]["path"])
         if (verification.get("operation_key") != operation_key(plan, name) or verification.get("targets") != action["targets"]
+                or verification.get("cleanup_context_sha256") != result["cleanup_context_sha256"]
                 or verification.get("status") != "passed" or verification.get("remaining_targets") != []):
             raise CloseoutError("删除后的目标核验未闭合")
     return safety.file_binding(action["result"])
 
 
-def run_action(plan, name):
+def run_action(plan, name, *, cleanup_approval=None):
     """副作用动作先占位；中断后只能复核既有结果，不重复执行未知状态的脚本。"""
     config = plan["basis"]["config"]
     action = config[name]
     if name == "cleanup" and action["mode"] == "defer":
         return journal(plan, name, "done", {"status": "deferred", "reason": action["reason"], "inputs": action["inputs"]})
+    if name == "cleanup":
+        check_cleanup_context(plan)
+        if config_bindings(config) != plan["basis"]["input_files"]:
+            raise CloseoutError("清理脚本、输入或备份已漂移")
     previous = journal_read(plan, name, "done")
     if previous:
         if check_action_result(plan, name) != previous["result"]:
@@ -716,9 +839,19 @@ def run_action(plan, name):
         if Path(action["result"]).exists():
             raise CloseoutError("动作前已存在结果，拒绝误用旧收据")
         argv = [action["script"], *action["arguments"]]
-        journal(plan, name, "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat()})
+        extra = {}
+        if name == "cleanup":
+            extra["approval"] = approval(cleanup_approval, plan, "cleanup")
+            context_path = Path(config["work_root"]) / "cleanup-context.json"
+            safety.write_once(context_path, plan["basis"]["cleanup_context"])
+            extra["context"] = safety.file_binding(context_path)
+        journal(plan, name, "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat(), **extra})
         env = {**os.environ, "CODEX_CLOSEOUT_OPERATION_KEY": operation_key(plan, name),
                "CODEX_CLOSEOUT_REVIEW_SHA256": plan["review_sha256"], "CODEX_CLOSEOUT_RESULT": action["result"]}
+        if name == "cleanup":
+            env.update(CODEX_CLOSEOUT_CLEANUP_CONTEXT=str(context_path),
+                       CODEX_CLOSEOUT_CLEANUP_CONTEXT_SHA256=digest(plan["basis"]["cleanup_context"]),
+                       CODEX_CLOSEOUT_CLEANUP_APPROVAL=extra["approval"]["path"])
         log_path = Path(config["work_root"]) / (name + ".log")
         with log_path.open("xb") as log:
             os.chmod(log.name, 0o600)
@@ -789,7 +922,7 @@ def publish(plan_path, approvals):
                                                "outputs": {p: safety.file_binding(inside(repo, p)) for p in plan["outputs"]}})
         if config["cleanup"]["mode"] == "execute":
             approval(approvals["cleanup"], plan, "cleanup")
-        run_action(plan, "cleanup")
+        run_action(plan, "cleanup", cleanup_approval=approvals.get("cleanup"))
         load_plan(plan_path)
         for scope in ("guide-review", "release-publication"):
             approval(approvals[scope], plan, scope)

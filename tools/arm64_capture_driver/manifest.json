@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 84,
+  "file_count": 85,
   "files": [
     {
       "path": "README.md",
-      "sha256": "2d7cd731302c1bfac596aa6fd22c202841825944a349ea2340196b121f132d10",
+      "sha256": "8a97fbc2cd12ab740c7140c2ec5b6a2cfe081ea7672d24d2343be28bceae850a",
       "mode": "0600",
-      "bytes": 58680
+      "bytes": 59689
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -61,6 +61,12 @@
       "sha256": "7d66759d2b7ea6fff771ed15bdb56df2c9b8bfd188491de48984a9cbc3136d70",
       "mode": "0700",
       "bytes": 10900
+    },
+    {
+      "path": "driver/cleanup_context.py",
+      "sha256": "4a337e5eab156ae8c0904113c92309cf83680fabc1b776c48ec376fd90c83663",
+      "mode": "0700",
+      "bytes": 5128
     },
     {
       "path": "driver/client_launch_probe.py",
@@ -507,5 +513,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "869cac49c8f89c42f25275e3e373fd114b99bea0a5965677cbc36274100a48f2"
+  "manifest_sha256": "70f9bf57272da4626ed6a6af1f84a8793646d0559f5a284a3b9bfcad09997969"
 }

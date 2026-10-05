@@ -31,6 +31,15 @@
   `build` 必须完整重放构建实物；已封存结果的只读查询可核对历史构建收据绑定，报告明确为 `sealed_receipt_binding`，
   不能用作新采集准入。`vc-batch.sh` 在预约前重放直接前序与计划参数，VC-6 另核对步骤收据与当前 acceptance。
 
+* `cleanup_context.py --env "$ARM64_VC_ENV"` 只读输出当前收尾清理参数及 VC-5／VC-6、canonical 收据绑定。
+  `tools/codex_closeout.py` 的 execute 清理配置可在参数、目标和凭证路径中引用 `${B}`、`${VC5_RECEIPT}`、
+  `${VC6_RECEIPT}` 等报告字段；未知引用和旧阶段参数拒绝。恢复演练凭证须含 `status=passed`、展开后的
+  `targets`、`backup` 文件绑定及 `cleanup_context_sha256`（报告规范化 JSON 的 SHA-256）。准备及发布时
+  重放当前参数，变化后必须重新审核。执行脚本从 `CODEX_CLOSEOUT_CLEANUP_CONTEXT` 读取已批准报告，
+  从 `CODEX_CLOSEOUT_CLEANUP_APPROVAL` 读取专项批准；结果须回填 `approval` 文件绑定和上下文摘要，
+  删除核验也须绑定同一摘要。首次执行先持久化占位，中断后只对账、不重派；完成后只读复核。
+  本入口不自动停止容器、删除资源或修改历史脚本，实际动作仍由审核绑定的脚本负责。
+
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。

@@ -142,10 +142,18 @@ class CloseoutTests(unittest.TestCase):
                                             "result": str(self.work / "deployment.json")},
                        "push": {"remote": "origin", "ref": "refs/heads/main", "expected_tip": self.base}}
         self.plan_path = self.work / "plan.json"
+        self.cleanup_context = {"schema_version": "arm64-cleanup-context/v1", "parameters": {
+            "NEW": "c-test", "CAND": "candidate-test", "TARGET_VERSION": "9.9.9",
+            "NEWDIR": str(self.root / "campaign"), "D": str(self.root / "data"),
+            "W": str(self.root / "round"), "B": str(self.root / "candidate"),
+            "SOURCE_ROOT": str(self.root / "candidate/source"), "EVALUATION_BASELINE": "2",
+            "VC5_RECEIPT": str(self.root / "vc5.json"), "VC6_RECEIPT": str(self.root / "vc6.json")},
+            "bindings": {"input": {**closeout.safety.file_binding(self.root / "decision.json"), "bytes": (self.root / "decision.json").stat().st_size}}}
         for patcher in (
             mock.patch.object(closeout, "collect_guide_material", return_value=material),
             mock.patch.object(closeout, "terminal_candidate", side_effect=lambda _repo, facts, _path: json.dumps(facts) + "\n"),
             mock.patch("tools.upstream_merge.freeze.generate_freeze_successor", return_value={"transitions": []}),
+            mock.patch.object(closeout, "collect_cleanup_context", side_effect=lambda _: deepcopy(self.cleanup_context)),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -356,8 +364,10 @@ class CloseoutTests(unittest.TestCase):
 
     def test_cleanup_requires_specific_approval_backup_and_verification(self):
         proof = closeout.safety.file_binding(self.root / "decision.json")
-        self.config["cleanup"] = {**self.config["deployment_check"], "mode": "execute", "targets": ["isolated-object"],
-                                  "backup": proof, "restore_check": proof, "result": str(self.work / "cleanup.json")}
+        restore = write_json(self.root / "restore.json", {"status": "passed", "targets": ["container@isolated-object"],
+                             "backup": proof, "cleanup_context_sha256": closeout.digest(self.cleanup_context)})
+        self.config["cleanup"] = {**self.config["deployment_check"], "mode": "execute", "targets": ["container@isolated-object"],
+                                  "backup": proof, "restore_check": closeout.safety.file_binding(restore), "result": str(self.work / "cleanup.json")}
         self.prepare()
         self.gate_result()
         approvals = self.approvals()
@@ -384,7 +394,12 @@ class CloseoutTests(unittest.TestCase):
         target.write_text("隔离数据")
         backup = self.root / "backup.txt"
         backup.write_bytes(target.read_bytes())
-        restore = write_json(self.root / "restore.json", {"target": str(target), "restored_sha256": closeout.sha(backup.read_bytes())})
+        restored = self.root / "restored.txt"
+        restored.write_bytes(backup.read_bytes())
+        self.assertEqual(restored.read_bytes(), target.read_bytes())
+        restore = write_json(self.root / "restore.json", {"targets": [str(target)], "status": "passed",
+                             "backup": closeout.safety.file_binding(backup), "cleanup_context_sha256": closeout.digest(self.cleanup_context),
+                             "restored_sha256": closeout.sha(restored.read_bytes())})
         action = {**self.config["deployment_check"], "mode": "execute", "targets": [str(target)],
                   "backup": closeout.safety.file_binding(backup), "restore_check": closeout.safety.file_binding(restore),
                   "result": str(self.work / "cleanup.json")}
@@ -395,8 +410,9 @@ class CloseoutTests(unittest.TestCase):
                           + "target=Path(action['targets'][0]); target.unlink()\n"
                           + "p=Path(os.environ['CODEX_CLOSEOUT_RESULT']); verification=p.with_name('deletion.json')\n"
                           + "key=os.environ['CODEX_CLOSEOUT_OPERATION_KEY']\n"
-                          + "verification.write_text(json.dumps({'operation_key':key,'targets':action['targets'],'status':'passed','remaining_targets':[]}))\n"
-                          + "result={'schema_version':'codex-closeout-action-result/v1','operation_key':key,'review_sha256':os.environ['CODEX_CLOSEOUT_REVIEW_SHA256'],'status':'passed','execution_receipt':action['restore_check'],'backup':action['backup'],'restore_check':action['restore_check'],'targets':action['targets'],'deletion_verification':{'path':str(verification),'sha256':hashlib.sha256(verification.read_bytes()).hexdigest()}}\n"
+                          + "context_sha=os.environ['CODEX_CLOSEOUT_CLEANUP_CONTEXT_SHA256']; approval=Path(os.environ['CODEX_CLOSEOUT_CLEANUP_APPROVAL'])\n"
+                          + "verification.write_text(json.dumps({'operation_key':key,'targets':action['targets'],'status':'passed','remaining_targets':[],'cleanup_context_sha256':context_sha}))\n"
+                          + "result={'schema_version':'codex-closeout-action-result/v1','operation_key':key,'review_sha256':os.environ['CODEX_CLOSEOUT_REVIEW_SHA256'],'status':'passed','execution_receipt':action['restore_check'],'backup':action['backup'],'restore_check':action['restore_check'],'targets':action['targets'],'cleanup_context_sha256':context_sha,'approval':{'path':str(approval),'sha256':hashlib.sha256(approval.read_bytes()).hexdigest()},'deletion_verification':{'path':str(verification),'sha256':hashlib.sha256(verification.read_bytes()).hexdigest()}}\n"
                           + "p.write_text(json.dumps(result))\n")
         script.chmod(0o700)
         self.config["cleanup"] = action
@@ -406,6 +422,77 @@ class CloseoutTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(backup.read_text(), "隔离数据")
         self.assertEqual(first, closeout.publish(self.plan_path, {}))
+
+    def cleanup_fixture(self):
+        """动态参数演练固定备份及恢复证明，仅指向临时根。"""
+        backup = closeout.safety.file_binding(self.root / "decision.json")
+        targets = [self.cleanup_context["parameters"]["B"] + "/build-tree"]
+        restore = write_json(self.root / "restore.json", {"status": "passed", "targets": targets, "backup": backup,
+                             "cleanup_context_sha256": closeout.digest(self.cleanup_context)})
+        self.config["cleanup"] = {**self.config["deployment_check"], "mode": "execute", "targets": ["${B}/build-tree"],
+            "arguments": ["--vc5", "${VC5_RECEIPT}", "--vc6", "${VC6_RECEIPT}"], "backup": backup,
+            "restore_check": closeout.safety.file_binding(restore), "result": str(self.work / "cleanup.json")}
+
+    def test_cleanup_templates_use_current_context_and_dry_run_does_not_write(self):
+        self.cleanup_fixture()
+        original = deepcopy(self.config)
+        result = closeout.prepare(self.config, dry_run=True)
+        self.assertEqual(result["status"], "dry_run")
+        self.assertFalse(self.work.exists())
+        self.assertEqual(original, self.config)
+        plan = self.prepare()
+        self.assertEqual(plan["basis"]["config"]["cleanup"]["targets"], [str(self.root / "candidate/build-tree")])
+        self.assertEqual(plan["basis"]["config"]["cleanup"]["arguments"], ["--vc5", str(self.root / "vc5.json"), "--vc6", str(self.root / "vc6.json")])
+
+    def test_cleanup_unknown_templates_and_unsafe_targets_fail_before_writes(self):
+        self.cleanup_fixture()
+        for target in ("${UNKNOWN}/tree", "${B}/../source", "${NEWDIR}", "${D}", "${SOURCE_ROOT}/file", "relative-path", "image@sha256:short", "${B}/*"):
+            with self.subTest(target=target):
+                self.config["cleanup"]["targets"] = [target]
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertFalse(self.work.exists())
+
+    def test_cleanup_round_or_receipt_drift_is_rejected_before_action(self):
+        self.cleanup_fixture()
+        self.prepare()
+        for field in ("CAND", "NEW", "EVALUATION_BASELINE", "VC5_RECEIPT", "VC6_RECEIPT"):
+            previous = self.cleanup_context["parameters"][field]
+            self.cleanup_context["parameters"][field] = "old"
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                closeout.load_plan(self.plan_path)
+            self.cleanup_context["parameters"][field] = previous
+        self.assertFalse((self.work / "journal/cleanup-started.json").exists())
+
+    def test_cleanup_literal_old_receipt_argument_is_rejected(self):
+        self.cleanup_fixture()
+        for arguments in (["--vc5", "/old/vc5.json"], ["--vc6=/old/vc6.json"], ["--candidate-id", "old"], ["--attempt-id"]):
+            self.config["cleanup"]["arguments"] = arguments
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, "脚本参数"):
+                self.prepare()
+        self.assertFalse(self.work.exists())
+
+    def test_cleanup_restoration_must_bind_targets_backup_and_context(self):
+        self.cleanup_fixture()
+        path = Path(self.config["cleanup"]["restore_check"]["path"])
+        original = closeout.safety.read(path)
+        for key, value in (("targets", []), ("backup", {}), ("status", "failed"), ("cleanup_context_sha256", "0" * 64)):
+            write_json(path, {**original, key: value})
+            self.config["cleanup"]["restore_check"] = closeout.safety.file_binding(path)
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "恢复演练"):
+                self.prepare()
+        self.assertFalse(self.work.exists())
+
+    def test_cleanup_direct_action_cannot_bypass_approval_or_retry_unknown_state(self):
+        self.cleanup_fixture()
+        self.prepare()
+        with self.assertRaisesRegex(ValueError, "缺少人工批准"):
+            closeout.run_action(self.plan, "cleanup")
+        self.assertFalse((self.work / "journal/cleanup-started.json").exists())
+        closeout.journal(self.plan, "cleanup", "started", {"fixture": True})
+        with self.assertRaises(ValueError):
+            closeout.run_action(self.plan, "cleanup", cleanup_approval=self.approvals()["cleanup"])
+        self.assertFalse((self.work / "cleanup.log").exists())
 
     def test_symlink_and_path_escape_rejected(self):
         link = self.root / "linked.md"
