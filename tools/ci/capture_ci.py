@@ -194,8 +194,16 @@ class ObservedResult(unittest.TextTestResult):
 
 def run_legacy(selected, out):
     """保留原单进程 TestSuite／TextTestRunner，可显式回退；不调用新调度器。"""
-    with (out / "execution.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-        result = unittest.TextTestRunner(stream=log, verbosity=1, resultclass=ObservedResult).run(unittest.TestSuite(selected))
+    # 回退路径明确关闭身份记忆化，不能继承外层或前一轮配置而与收据矛盾。
+    previous_memo = os.environ.pop("CODEX_UPGRADE_IDENTITY_MEMO", None)
+    try:
+        with (out / "execution.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            result = unittest.TextTestRunner(stream=log, verbosity=1, resultclass=ObservedResult).run(unittest.TestSuite(selected))
+    finally:
+        if previous_memo is None:
+            os.environ.pop("CODEX_UPGRADE_IDENTITY_MEMO", None)
+        else:
+            os.environ["CODEX_UPGRADE_IDENTITY_MEMO"] = previous_memo
     write_once(out / "legacy-results.json", {"tests": result.records, "executed_test_ids": result.seen,
                                              "tests_run": result.testsRun, "successful": result.wasSuccessful()})
     return 0 if result.wasSuccessful() else 1, result.records, result.seen, None

@@ -222,6 +222,16 @@ class CaptureEntryTests(unittest.TestCase):
         self.assertEqual(len({row["detail"]["identity_memo"] for row in receipts}), 2)
         self.assertTrue(all(row["outcomes_sha256"] == receipt["outcomes_sha256"] for row in receipts))
         self.assertEqual(list(foreign.iterdir()), [])
+        # 旧执行器不会创建本片身份目录，因此两个开关取值均必须实际关闭外部缓存。
+        self.tests.joinpath("test_alpha.py").write_text(
+            "import unittest, os\nclass C(unittest.TestCase):\n"
+            " def test_a(self): self.assertIsNone(os.environ.get('CODEX_UPGRADE_IDENTITY_MEMO'))\n")
+        for mode in ("off", "auto"):
+            result, receipt, _ = self.run_entry(f"legacy-{mode}", "legacy", count=1, identity_memo=mode,
+                extra_env={"CODEX_UPGRADE_IDENTITY_MEMO": str(foreign)})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(receipt["identity_memo_mode"], "off")
+        self.assertEqual(list(foreign.iterdir()), [])
 
     def test_registered_exclusive_test_is_verified_from_real_dispatch_events(self):
         config = json.loads(self.config.read_text())
