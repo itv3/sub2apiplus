@@ -26,9 +26,9 @@ class RuntimeReadAuditTests(unittest.TestCase):
                  f'3 mount("tmpfs", "{self.root}", "tmpfs", MS_NOSUID|MS_NODEV, "size=512m,mode=0700") = 0\n')
         self.context = {"schema_version": runtime.CONTEXT_SCHEMA, "contract_entry": self.entry,
                         "parent_namespace": "mnt:[100]", "namespace": "mnt:[101]", "empty_temporary_root": True,
-                        "private_mounts": True, "mounts": [
-                            {"target": runtime.MASK_ROOT, "filesystem": "tmpfs", "options": ["ro"]},
-                            {"target": self.root, "filesystem": "tmpfs", "options": ["rw", "nosuid", "nodev"]}],
+                        "private_mounts": True, "empty_masks": {runtime.MASK_ROOT: True}, "mounts": [
+                            {"mount_id": 200, "target": runtime.MASK_ROOT, "filesystem": "tmpfs", "options": ["ro"]},
+                            {"mount_id": 201, "target": self.root, "filesystem": "tmpfs", "options": ["rw", "nosuid", "nodev"]}],
                         "setup_commands": ["private", runtime.MASK_ROOT, self.root], "setup_success": True,
                         "setup_trace": trace, "setup_trace_sha256": hashlib.sha256(trace.encode()).hexdigest()}
 
@@ -78,7 +78,7 @@ class RuntimeReadAuditTests(unittest.TestCase):
 
     def test_namespace_empty_root_mount_and_trace_mismatch_are_refused(self):
         cases = [{"namespace": "mnt:[100]"}, {"empty_temporary_root": False}, {"private_mounts": False},
-                 {"mounts": []}, {"setup_success": False}, {"setup_commands": []},
+                 {"mounts": []}, {"empty_masks": {runtime.MASK_ROOT: False}}, {"setup_success": False}, {"setup_commands": []},
                  {"setup_trace_sha256": "0" * 64}]
         for changes in cases:
             with self.subTest(changes=changes), self.assertRaises(runtime.RuntimeContractError):

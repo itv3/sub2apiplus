@@ -171,8 +171,11 @@ def validate_context(context: Any, inputs: list[dict[str, Any]]) -> dict[str, An
     if not isinstance(mounts, list) or len(mounts) != len(expected) or {row.get("target") for row in mounts} != set(expected):
         raise RuntimeContractError("实际挂载集合与合同不同")
     for row in mounts:
-        if row.get("filesystem") != "tmpfs" or expected[row["target"]] not in row.get("options", []):
+        if (not isinstance(row.get("mount_id"), int) or row["mount_id"] <= 0
+                or row.get("filesystem") != "tmpfs" or expected[row["target"]] not in row.get("options", [])):
             raise RuntimeContractError("实际挂载类型或只读属性不符")
+    if context.get("empty_masks") != {path: True for path in contract["mask_roots"]}:
+        raise RuntimeContractError("生产别名没有被实际空盘遮挡")
     trace = context.get("setup_trace")
     if not isinstance(trace, str) or hashlib.sha256(trace.encode()).hexdigest() != context.get("setup_trace_sha256"):
         raise RuntimeContractError("启动挂载轨迹缺失或摘要漂移")
@@ -268,9 +271,28 @@ def _mount_rows() -> list[dict[str, Any]]:
         left, right = line.split(" - ", 1)
         parts, fs = left.split(), right.split()
         target = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), parts[4])
-        rows.append({"target": target, "filesystem": fs[0], "options": parts[5].split(","),
+        rows.append({"mount_id": int(parts[0]), "target": target, "filesystem": fs[0], "options": parts[5].split(","),
                      "propagation": parts[6:]})
     return rows
+
+
+def _visible_mounts(rows: list[dict[str, Any]], targets: set[str]) -> list[dict[str, Any]]:
+    """旧 bind mount 仍列在 mountinfo 中；用实际目录描述符的挂载 ID 选择当前可见层，不能按行序猜。"""
+    result = []
+    for target in sorted(targets):
+        descriptor = os.open(target, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = Path(f"/proc/self/fdinfo/{descriptor}").read_text()
+            match = re.search(r"^mnt_id:\s*(\d+)\s*$", info, re.M)
+            if match is None:
+                raise RuntimeContractError("实际目录描述符没有挂载身份")
+            candidates = [row for row in rows if row["mount_id"] == int(match[1]) and row["target"] == target]
+            if len(candidates) != 1:
+                raise RuntimeContractError("实际可见挂载不能与 mountinfo 唯一对应")
+            result.append(candidates[0])
+        finally:
+            os.close(descriptor)
+    return result
 
 
 def run_child(request_path: Path, expected_digest: str) -> int:
@@ -301,15 +323,16 @@ def run_child(request_path: Path, expected_digest: str) -> int:
             raise RuntimeContractError("隔离挂载失败，停止被测命令")
     rows = _mount_rows()
     wanted = {str(root), *contract["mask_roots"]}
-    mounts = [row for row in rows if row["target"] in wanted]
+    mounts = _visible_mounts(rows, wanted)
     context = {"schema_version": CONTEXT_SCHEMA, "contract_entry": entry, "parent_namespace": request["parent_namespace"],
                "namespace": namespace, "empty_temporary_root": not any(root.iterdir()),
+               "empty_masks": {mask: not any(Path(mask).iterdir()) for mask in contract["mask_roots"]},
                "private_mounts": not any(any(value.startswith(("shared:", "master:")) for value in row["propagation"]) for row in rows),
                "mounts": mounts, "setup_commands": setup_commands, "setup_success": True,
                "setup_trace": "".join(setup_parts), "setup_trace_sha256": hashlib.sha256("".join(setup_parts).encode()).hexdigest()}
-    validate_context(context, [entry])
     context_path = trace_path.with_name(trace_path.name + ".context.json")
     _write(context_path, context)
+    validate_context(context, [entry])
     audit = _read_audit()
     before = [audit.host_snapshot(path) for path in request["host_paths"]]
     if before != request["host_entries"]:

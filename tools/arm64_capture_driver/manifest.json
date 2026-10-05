@@ -286,9 +286,9 @@
     },
     {
       "path": "driver/read_audit_runtime.py",
-      "sha256": "ac5d5448b0815c875599ecfae74ed7ac0ca3e12ab3ea9006936f8eae73dfb13b",
+      "sha256": "3c97c280d18ddad01a8b3a038b8c2f628b50d5c03d91b36cb8488f03f8af3dab",
       "mode": "0700",
-      "bytes": 21219
+      "bytes": 22562
     },
     {
       "path": "driver/round_context.py",
@@ -519,5 +519,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "e1eeb25402299c505c83995d1570bc8c5b87f87f30609fbe0dbd6f8818654ab0"
+  "manifest_sha256": "b8b71c9ef01662eef921d101e3c9667a6ebdeb681b3398b1cea59bd358443881"
 }
