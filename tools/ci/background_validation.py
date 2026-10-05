@@ -249,10 +249,15 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationError("后台工作目录必须绑定本轮完整提交和部署摘要，不得共用其它轮次目录")
     if Path(args.bundle).is_symlink() or not Path(args.bundle).is_file():
         raise ValidationError("后台验证 bundle 必须是普通文件")
-    inputs = {"bundle_sha256": _sha256_file(args.bundle), "branch": args.branch, "profile": args.profile,
+    inputs = {"execution_contract": "b09-reexecute-full/v1", "bundle_sha256": _sha256_file(args.bundle), "branch": args.branch, "profile": args.profile,
               "work": str(work), "entry_gates_sha256": _sha256_file(args.entry_gates),
               "record_store": str(args.record_store) if args.record_store else None,
               "vc_env_sha256": _sha256_file(args.vc_env) if args.vc_env else None, "then_dryrun": bool(args.then_dryrun)}
+    full_set_paths = {key: str(getattr(args, key)) if getattr(args, key, None) else None
+                      for key in ("full_set_context", "full_set_clock", "full_set_predecessor", "audit_policy")}
+    if bool(full_set_paths["full_set_context"]) != bool(full_set_paths["full_set_clock"]):
+        raise ValidationError("B-09 签发须同时提供当前上下文和校时凭证")
+    inputs["full_set_files"] = {key: _sha256_file(Path(value)) if value else None for key, value in full_set_paths.items()}
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         if existing.get("input_contract") != inputs or existing.get("commit") != args.commit or existing.get("deployment") != deployment:
@@ -262,7 +267,7 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
     out = path.parent / "runs" / f"{path.stem}-{time.time_ns()}"
     payload: dict[str, Any] = {
         "schema_version": SCHEMA, "commit": args.commit, "branch": args.branch, "bundle": str(args.bundle),
-        "deployment": deployment, "profile": args.profile, "mode": "full-set-pass", "status": "running", "pid": None,
+        "deployment": deployment, "profile": args.profile, "mode": "re-execute", "status": "running", "pid": None,
         "started_at_utc": _utc_now(), "completed_at_utc": None, "out": str(out), "log": f"{out}.log",
         "record_store": str(args.record_store) if args.record_store else None, "work": str(work),
         "input_contract": inputs, "cache_roots": {"GOCACHE": str(work / "go-build-cache"),
@@ -270,6 +275,7 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         "vc_env": str(args.vc_env) if args.vc_env else None, "entry_gates": str(args.entry_gates),
         "data_root": str(args.data_root), "runroot": str(args.runroot), "then_dryrun": bool(args.then_dryrun),
         "failed_gates": [], "reason": None, "returncode": None, "dryrun": None,
+        **full_set_paths,
     }
     if existing is not None:
         # 当前状态文件可更新；每次重新开始前保留上一执行的完整终态，便于复核失败恢复。
@@ -305,11 +311,13 @@ def run(result: Path) -> int:
     if payload is None:
         raise ValidationError(f"后台验证结论文件不可读：{path}")
     # 工作树和全部 Go 缓存使用本次后台验证的独立坐标；承接判断仍交给输入合同，不强行沿用前台记录。
-    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "full-set-pass", "--require-deployed",
+    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "re-execute", "--require-deployed",
             "--wait-lock", str(WAIT_LOCK_SECONDS), "--out", payload["out"]]
     for flag, key in (("--record-store", "record_store"), ("--work", "work")):
         if payload.get(key):
             argv += [flag, payload[key]]
+    if payload.get("audit_policy"):
+        argv += ["--audit-reads", "--audit-strict", "--audit-policy", payload["audit_policy"]]
     argv += [payload["bundle"], payload["branch"], payload["commit"]]
     received: list[int] = []
 
@@ -365,10 +373,35 @@ def run(result: Path) -> int:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
     _write(path, {**current, "status": status, "completed_at_utc": _utc_now(), "reason": reason, "returncode": returncode,
                   "failed_gates": failed})
+    if status == "passed" and current.get("full_set_context"):
+        # 功能通过与可承接签发分开；覆盖不完整时保留通过结论，明确拒签，不生成假绿收据。
+        issued = _issue_full_set(current)
+        _write(path, {**(_read(path) or current), "full_set_receipt": issued})
     if status == "passed" and current.get("then_dryrun"):
         dryrun = _chain_dryrun(current)
         _write(path, {**(_read(path) or current), "dryrun": dryrun})
     return 0
+
+
+def _issue_full_set(payload: Mapping[str, Any]) -> dict[str, Any]:
+    spec = importlib.util.spec_from_file_location("background_full_set", HERE / "full_set_receipt.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        out = Path(payload["out"])
+        summary = _entry_summary(out)
+        source = {"entry": module.reference(out / "entry-gates.json"), "summary": module.reference(summary["executor_summary"]),
+                  "manifest": module.reference(summary["unit_manifest"]["path"]), "store": summary["record_store"]}
+        context = module.read(payload["full_set_context"])
+        receipt = module.issue(source, context, module.reference(payload["full_set_clock"]),
+            predecessor=module.reference(payload["full_set_predecessor"]) if payload.get("full_set_predecessor") else None)
+        output = out / "full-set-receipt.json"
+        with output.open("x", encoding="utf-8") as handle:
+            os.chmod(output, 0o600)
+            handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        return {"status": "issued", "receipt": module.reference(output), "reuse_enabled": False}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return {"status": "refused", "reason": str(error), "reuse_enabled": False}
 
 
 # 通过之后接着空跑入口（E4-02）只到 pre-A3：便宜检查、策略认证、入口门禁与 pre-A3 场景都受统一调度（采集预约会让它停派）；
@@ -434,6 +467,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_start.add_argument("--then-dryrun", action="store_true", help="通过之后接着空跑入口到 pre-A3（E4-02）")
+    p_start.add_argument("--full-set-context", type=Path, help="B-09 全集绑定及外部证据上下文")
+    p_start.add_argument("--full-set-clock", type=Path, help="全集结束时仍有效的校时凭证；不自动补造")
+    p_start.add_argument("--full-set-predecessor", type=Path, help="失效的旧收据，只读关联")
+    p_start.add_argument("--audit-policy", type=Path, help="B-11 已登记的严格读集策略")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")

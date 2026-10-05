@@ -205,7 +205,7 @@
   执行器版本、调度策略版本、环境指纹、单元规格、输入明细与摘要、测试 ID 与逐个结论、退出状态、用量、日志摘要、起止时间、
   自摘要。入口门禁把记录与日志存进记录库 `--record-store`（默认数据根之外跨轮次固定的 `$(dirname $D)/unit-records`）。
 * 两种模式（`entry-gates.sh --mode`，方案 D12）：
-  * `full-set-pass`（全集通过，默认）：先在记录库里给每个单元找可承接的记录，只执行找不到的。可承接＝正式执行、按原始字段
+  * `full-set-pass`（底层逐单元模式，入口由 B-09 全集准入保护）：先在记录库里给每个单元找可承接的记录，只执行找不到的。可承接＝正式执行、按原始字段
     重新判定为通过、单元规格与输入摘要没变、调度策略版本与环境指纹没变、执行器没变、7 天以内、所在运行的清单把它列为该单元
     的正式执行、日志在库且摘要相符。诊断执行的记录永不承接。
   * `re-execute`（重新执行全集）：一个都不承接。升级开工的入口空跑、一致性验收、收尾合入前用；编排器带 `--reexecute-gates`。
@@ -218,7 +218,7 @@
   证书、Go／Docker／Node／pnpm 的变量；USER、LOGNAME、SHELL 不放行——E4-01 起与调用方无关，操作员 shell、修好接着跑、后台验证、
   入口空跑跑出的记录可以互相承接），执行器把这份环境整份算进指纹（字节码前缀除外），再加系统、内核、Python 与已装包、dpkg
   软件包、有效用户、主机名、核数，以及门禁清单给的工具链版本与前端依赖摘要。任何一项变了全部单元不承接。单元规格与环境里有
-  测试树路径，测试树目录也要相同（后台验证与前台入口门禁共用 `$(dirname $D)/entry-gates-work`）。
+  测试树路径，测试树目录也要相同（B-09 不强行让隔离后台缓存与前台共用；坐标不同且输入不能重放时全量重跑）。
 * 清单：每次运行写 `executor/unit-manifest.json`（逐单元本次执行还是承接、承接的原运行与记录摘要、执行的不承接原因）并
   自检——执行＋承接＝全集、重新执行全集不得有承接项、每条承接都追到原始的正式执行记录并逐项重验、测试组记录的测试 ID 并集
   等于全集。自检不通过，门禁结论判失败；自检通过的清单才存进记录库（`runs/`），之后的运行才能承接这次的记录。单独重验：
@@ -476,3 +476,32 @@
   pre-extend 先于对账执行阶段延期），其余种类按受管提示处理后从停下的步骤续跑。reconcile-attempt／approve 每次都对
   目标 attempt 重新对账，不存在"暂停后被跳过"；它们的 deadline 暂停同样从 pre-extend 续跑。永久停线、需审核与命令
   失败不进 revisit，行为不变。
+
+## B-09 全集收据与开工准入
+
+后台验证使用 `re-execute`。可附带 `--full-set-context <JSON> --full-set-clock <JSON>` 与
+`--audit-policy <JSON>`；通过后只对同一次执行且所有单元完整读集覆盖的结果签发 `full-set-receipt.json`。
+覆盖未闭合保留功能通过结果，另外记录拒签，不能把 B-11 的部分覆盖当作全集可承接。
+
+`full_set_receipt.py --source <索引> --context <上下文> --clock <凭证> --output <新文件>` 可独立签发；
+输出不可覆盖。签发时刻取原全集最后单元完成 UTC，期限至多 86400 秒；`--predecessor` 关联失效旧收据，
+同一旧运行不得作为替代重跑，重复签发不续期。
+
+开工 `entry.sh --full-set-request <JSON>` 或独立 `entry-gates.sh --full-set-request <JSON>` 消费请求。
+缺少请求、任一条件失效或开关关闭均重新执行全集。请求使用 `full-set-request/v1`，含 `reuse_enabled`、
+`receipt`、`context`、`consumer_clock`、`revocation`、`approvals`；文件索引均为规范绝对路径和完整 SHA-256。
+两类批准分别登记三方审核与变更批准的角色、账号、UTC、有效期、合同与绑定摘要，工具不代签。
+
+上下文使用 `full-set-context/v1`，`binding` 字段由模块常量列出，`evidence` 绑定部署、画像权威收据、
+运行镜像、外部依赖锁及数据快照。镜像收据须登记 `container_name` 与实际 Docker Image ID；消费时重新查询
+容器镜像、Git HEAD、最新部署和主机平台，不能只相信旧 JSON。工具包摘要取源运行执行器包摘要，
+平台字段用模块 `platform_fields()`；画像使用内容 Digest，不与收据文件 SHA-256 混用。
+
+校时凭证含 `status=synchronized`、`source`、`offset_seconds`、`sampled_at_utc`；偏差绝对值 ≤60 秒，
+采样年龄 ≤300 秒。撤销查询 `full-set-revocation-query/v1` 必须 `status=ok`、`revoked=false`、
+`campaign_status=active`，绑定收据自摘要且查询年龄 ≤60 秒。边界 `now >= expires_at` 立即失效。
+任何审批撤回、证据更正或身份变化应登记撤销事件并重新执行，不修改旧收据。
+
+入口在排队前和获得调度锁后复核，只接受同一来源的完整集合；`full-set-decision.json` 与运行清单同时记录
+实际承接／全量重跑原因、来源 run ID 和原失效时间。开工前每次重新判断，旧步骤缓存不能绕过时效门。
+真实复用当前保持关闭；专项批准及全集覆盖闭合后才可提交开启请求。隔离夹具的批准不具有生产效力。

@@ -444,6 +444,19 @@ class InheritanceEndToEndTests(unittest.TestCase):
         gates = {gate["gate_id"]: gate for gate in summary["gates"]}
         self.assertEqual(gates["test-capture-tools"]["inherited_units"], ["test_leaf", "test_other"])
 
+    def test_b09_invalid_full_set_request_reruns_all_and_records_fallback(self) -> None:
+        self._fix({"pkg/tests/test_fail_a.py": PASS, "pkg/tests/test_fail_b.py": PASS, "pkg/tests/test_fail_c.py": PASS}, "全绿")
+        self.assertEqual(self._run()[0], 0)
+        missing = self.base / "missing-full-set-request.json"
+        rc, summary, manifest = self._run("--full-set-request", str(missing))
+        self.assertEqual(rc, 0, summary)
+        self.assertEqual(manifest["mode"], "re-execute")
+        self.assertEqual(self._inherited(manifest), set(), "不得回到旧逐单元承接路径")
+        self.assertEqual(self._executed(manifest), set(manifest["planned_units"]))
+        self.assertEqual(manifest["full_set_decision"]["action"], "reexecute-all")
+        self.assertEqual(summary["full_set_decision"], manifest["full_set_decision"])
+        self.assertNotEqual(manifest["run_id"], json.loads((self.base / "out-1" / "unit-manifest.json").read_text())["run_id"])
+
     def test_comment_change_reruns_only_that_module_and_managed_change_reruns_all(self) -> None:
         self._fix({"pkg/tests/test_fail_a.py": PASS, "pkg/tests/test_fail_b.py": PASS, "pkg/tests/test_fail_c.py": PASS}, "全绿")
         self.assertEqual(self._run()[0], 0)
