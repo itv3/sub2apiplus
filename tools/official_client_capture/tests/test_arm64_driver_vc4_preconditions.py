@@ -349,11 +349,19 @@ class SnapshotIndexMergeTests(unittest.TestCase):
         cls.root = Path(cls.temporary.name).resolve()
         cls.checker = cls.root / "snapshot-check"
         backend = REPO_ROOT / "backend"
-        with tempfile.TemporaryDirectory(prefix=".snapshot-contract-test-", dir=backend) as directory:
-            main = Path(directory) / "main.go"
-            main.write_bytes((SCRIPTS / "snapshot_catalog_check.go").read_bytes())
-            result = subprocess.run(["go", "build", "-mod=readonly", "-o", str(cls.checker), str(main)],
-                cwd=backend, capture_output=True, text=True, timeout=300)
+        # Go 的 internal 导入要求入口位于模块内；用 overlay 提供虚拟入口，实际源码和产物均留在临时根。
+        # 直接在 backend 下建临时目录会让并发 CI 身份核验观察到脏工作树，不能靠忽略这些文件放宽核验。
+        main = cls.root / "main.go"
+        main.write_bytes((SCRIPTS / "snapshot_catalog_check.go").read_bytes())
+        virtual = backend / (".snapshot-contract-test-" + cls.root.name) / "main.go"
+        overlay = cls.root / "overlay.json"
+        overlay.write_text(json.dumps({"Replace": {str(virtual): str(main)}}))
+        if virtual.parent.exists():
+            cls.temporary.cleanup()
+            raise AssertionError("虚拟构建入口不得占用已有仓库路径")
+        result = subprocess.run(["go", "build", "-mod=readonly", "-overlay", str(overlay),
+                                 "-o", str(cls.checker), str(virtual)],
+            cwd=backend, capture_output=True, text=True, timeout=300)
         if result.returncode:
             cls.temporary.cleanup()
             raise AssertionError(result.stdout + result.stderr)
