@@ -139,6 +139,8 @@
       "memory_mb": 768
     }
   },
+  "reservation_grace_seconds": 30,
+  "reservation_stop_seconds": 5,
   "schema_version": "unit-executor-config/v1",
   "source": "ARM64 实测（E2-01，2026-10-01）：额度与拆块按提交 517ef4304 上 3 路并行逐模块测量的 CPU／墙钟比与内存峰值；默认并行度按提交 88202e274 上 4／6／8 路全量实测（16.3／15.5／14.5 分钟）；独占名单按 6、8 路全量与负载实验定位；A-07.2（2026-10-05）依据完整提交 e509f7523782edc62664c29e825ec5e645bacf03 的四片实测，仅将修复轮模块由两块细分为四块",
   "splits": {

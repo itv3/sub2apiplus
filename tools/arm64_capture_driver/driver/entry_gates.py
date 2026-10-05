@@ -460,7 +460,8 @@ def plan_gates(
 
     def command(unit_id: str, argv: list[str], cwd: str, quota: dict[str, Any], weight: float, env: dict[str, str] | None = None,
                 extra_inputs: list[dict[str, Any]] | None = None) -> str:
-        unit = {"unit_id": unit_id, "argv": [*launcher, *argv], "cwd": cwd, **quota, "weight": weight, "inputs": command_inputs(extra_inputs)}
+        unit = {"unit_id": unit_id, "argv": [*launcher, *argv], "cwd": cwd, **quota, "weight": weight,
+                "inputs": command_inputs(extra_inputs), "reservation_restartable": True}
         if env:
             unit["env"] = env
         units.append(unit)

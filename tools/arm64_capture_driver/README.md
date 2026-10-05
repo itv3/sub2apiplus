@@ -404,8 +404,9 @@
   注意：被停下的运行没有发布运行清单，它执行过的单元记录不能被承接（E3-01 承接要追到原运行清单），下一次验证会重新执行它们。
 * 批次边界：`vc-batch.sh`（VC-2～VC-6 的全部批次都经它）派发前执行 `check-boundary`：当前部署绑定的结论是 failed／aborted
   就拒绝派发、退出 3；passed、running 照常；没有结论（没起、被停下或进程已不在）照常派发并提示先 start。随后
-  `unit_executor.py acquire --owner vc-batch-<Campaign>-<序号> --owner-pid $$`：后台验证停派、等在跑单元结束才批准（上限
-  `VC_ACQUIRE_TIMEOUT` 秒，默认 3600），批次结束（含失败退出）`release`，后台接着跑。VC-0 收口同步派发 VC-1 首批，编排器在
+  `unit_executor.py acquire --owner vc-batch-<Campaign>-<序号> --owner-pid $$`：后台验证立即停派；隔离测试默认宽限 30 秒，超时先 TERM、5 秒仍存活再 KILL，确认原会话清空才批准。
+  命令须显式声明 `reservation_restartable: true`；pre-A3 与一次性预热保持排空等待。申请上限仍为
+  `VC_ACQUIRE_TIMEOUT` 秒（默认 3600）。批次结束（含失败退出）`release`，后台核验输入、环境和工具身份后重派被中止单元。VC-0 收口同步派发 VC-1 首批，编排器在
   调收口模块前后同样申请与归还整机。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
@@ -548,3 +549,9 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 预热通过同一统一执行器的独占准备单元运行，遵守整机预约、进程回收与日志规则；任何编译失败都在正式门禁派发前停止，诊断不会重复编译或覆盖首份收据。`GOCACHE`、`GOMODCACHE`、`GOTMPDIR` 默认取本次 `--work` 根下的独立目录；显式缓存必须在该工作根内、测试树外且互不包含，外部共享目录或符号链接拒绝。后台验证沿用 A-04 已绑定的缓存目录。
 
 `go-compile-warmup.json` 记录提交、后端源码摘要、Go 二进制与环境摘要、三个缓存根、编译日志、退出码和耗时；对应准备执行器的目录为 `go-compile-warmup-executor/`。这是编译收据，不是测试通过凭证，不能承接测试结论。性能比较必须把预热和三组测试全部耗时相加，不只比较预热后的热跑部分。
+
+## 整机预约中止与重派（C-03）
+
+预约批准绑定完整请求摘要，同名 owner 的下一次请求不能复用旧批准。`reservation_grace_seconds` 默认 30、`reservation_stop_seconds` 默认 5；将前者设为 `null` 恢复等待自然结束。并行与独占段都在等待时观察预约；撤回的预约停止后续中止操作。
+
+中止尝试写为 `reservation-aborted`，不可承接，不计测试失败或诊断。每次重派独立命名日志、结果和收据，最终正式记录以 `resumed_from` 关联中止记录；汇总的 `reservation_interruptions` 单独列账。部分审计轨迹只作中止证据保留。实际非零测试失败继续计失败，无法清空会话或重派前身份漂移均拒绝继续。

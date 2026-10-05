@@ -174,6 +174,8 @@ class ExecutorConfig:
     unit_timeout_seconds: float
     orphan_grace_seconds: float
     raw: dict[str, Any]
+    reservation_grace_seconds: float | None = 30.0
+    reservation_stop_seconds: float = 5.0
 
 
 def load_config(path: Path) -> ExecutorConfig:
@@ -217,6 +219,13 @@ def load_config(path: Path) -> ExecutorConfig:
     grace = payload.get("orphan_grace_seconds", 10)
     if not isinstance(timeout, (int, float)) or timeout <= 0 or not isinstance(grace, (int, float)) or grace < 0:
         raise ExecutorError("单元超时或残留进程宽限期非法")
+    reservation_grace = payload.get("reservation_grace_seconds", 30)
+    reservation_stop = payload.get("reservation_stop_seconds", 5)
+    for name, value in (("reservation_grace_seconds", reservation_grace), ("reservation_stop_seconds", reservation_stop)):
+        if name == "reservation_grace_seconds" and value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ExecutorError(name + " 必须是有限非负秒数；宽限期可用 null 关闭中止")
     return ExecutorConfig(
         default_parallelism=parallelism,
         default_quota=quota(payload.get("default_quota") or {}, "default_quota"),
@@ -226,6 +235,8 @@ def load_config(path: Path) -> ExecutorConfig:
         unit_timeout_seconds=float(timeout),
         orphan_grace_seconds=float(grace),
         raw=payload,
+        reservation_grace_seconds=float(reservation_grace) if reservation_grace is not None else None,
+        reservation_stop_seconds=float(reservation_stop),
     )
 
 
@@ -340,13 +351,15 @@ class Unit:
     # 测试单元的启动前缀（E2-04 门禁清单的测试组）：例如在私有挂载命名空间里遮住生产别名再 exec 单元进程；命令单元
     # 需要时直接把前缀写进自己的 argv。
     launcher: tuple[str, ...] = ()
+    # 命令默认排空等待；只有明确可重跑的隔离检查才允许预约中止。
+    reservation_restartable: bool = False
 
 
 COMMANDS_SCHEMA = "unit-executor-commands/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 # inputs／inheritable／not_inheritable_reason 是门禁清单给 E3-01 承接用的声明（输入范围、是否可承接与原因），不影响执行。
 _COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight",
-                   "inputs", "inheritable", "not_inheritable_reason", "input_scope"}
+                   "inputs", "inheritable", "not_inheritable_reason", "input_scope", "reservation_restartable"}
 
 
 def _string_env(value: Any, label: str) -> dict[str, str]:
@@ -384,6 +397,8 @@ def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
     weight = item.get("weight", 0)
     if not isinstance(exclusive, bool):
         raise ExecutorError(f"命令单元的独占标记非法：{unit_id}")
+    if not isinstance(item.get("reservation_restartable", False), bool):
+        raise ExecutorError(f"命令单元的预约重派标记非法：{unit_id}")
     if not isinstance(item.get("inheritable", True), bool) or not isinstance(item.get("not_inheritable_reason", ""), str) \
             or not isinstance(item.get("inputs", {}), dict):
         raise ExecutorError(f"命令单元的承接声明非法：{unit_id}")
@@ -395,6 +410,7 @@ def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
         unit_id=unit_id, module=unit_id, test_ids=(), quota=Quota(min(float(cores), float(max(1, machine_cores))), memory),
         exclusive=exclusive, weight=float(weight), command=tuple(argv), cwd=cwd, env=tuple(sorted(env.items())),
         timeout_seconds=float(timeout) if timeout is not None else None,
+        reservation_restartable=item.get("reservation_restartable", False),
     )
 
 
@@ -730,14 +746,19 @@ class Reservation:
     def granted(self) -> dict[str, Any] | None:
         request = self.current()
         grant = _read_json_file(self.grant_path)
-        if request is None or grant is None or grant.get("owner") != request.get("owner"):
+        if (request is None or grant is None or grant.get("owner") != request.get("owner")
+                or grant.get("request_sha256") != _sha256(request)):
             return None
         return grant
 
-    def grant(self, by: str) -> None:
+    def grant(self, by: str, *, expected: dict[str, Any] | None = None) -> bool:
         request = self.current()
+        if expected is not None and request != expected:
+            return False
         if request is not None and self.granted() is None:
-            _write_json(self.grant_path, {"schema_version": RESERVATION_SCHEMA, "owner": request["owner"], "granted_at_utc": _utc_now(), "granted_by": by})
+            _write_json(self.grant_path, {"schema_version": RESERVATION_SCHEMA, "owner": request["owner"],
+                                         "request_sha256": _sha256(request), "granted_at_utc": _utc_now(), "granted_by": by})
+        return request is not None
 
 
 def acquire(state_dir: Path, owner: str, owner_pid: int, timeout_seconds: float) -> dict[str, Any]:
@@ -759,7 +780,8 @@ def acquire(state_dir: Path, owner: str, owner_pid: int, timeout_seconds: float)
             time.sleep(POLL_SECONDS)
             continue
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"schema_version": RESERVATION_SCHEMA, "owner": owner, "owner_pid": owner_pid, "requested_at_utc": _utc_now()}, handle)
+            json.dump({"schema_version": RESERVATION_SCHEMA, "owner": owner, "owner_pid": owner_pid,
+                       "request_id": os.urandom(16).hex(), "requested_at_utc": _utc_now()}, handle)
         break
     lock_path = reservation.state_dir / "scheduler.lock"
     while True:
@@ -841,6 +863,9 @@ class Running:
     kind: str
     timed_out: bool = False
     started_at_utc: str = ""
+    interruption: dict[str, Any] | None = None
+    stop_started: float | None = None
+    resumed_from: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -886,7 +911,8 @@ def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_se
     cache_only = _records_module().ENV_CACHE_ONLY
     env = {key: value for key, value in dict(unit.env).items() if key not in cache_only}
     common = {"unit_id": unit.unit_id, "env": env, "cores": unit.quota.cores, "memory_mb": unit.quota.memory_mb,
-              "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds}
+              "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds,
+              "reservation_restartable": not unit.command or unit.reservation_restartable}
     if unit.command:
         return {"type": "command", "argv": list(unit.command), "cwd": unit.cwd, **common}
     return {"type": "test", "start": str(start) if start is not None else None, "pattern": pattern, "test_ids": list(unit.test_ids),
@@ -954,6 +980,13 @@ class Recorder:
                 trace = audit["trace"]
                 trace["stored"] = str(self.store.put_log(Path(trace["path"]), trace["sha256"]))
             body["read_audit"] = audit
+        if item.resumed_from:
+            body["resumed_from"] = item.resumed_from
+        if outcome.extra.get("reservation_interruption"):
+            # 中止证据保留原身份，但不进入正式通过／失败或诊断集合，永不可承接。
+            body.update(kind="reservation-aborted", original_kind=item.kind, passed=False, inheritable=False,
+                        not_inheritable_reason="整机预约中止，须完整重派", tests=None,
+                        reservation_interruption=outcome.extra["reservation_interruption"])
         record = self.records.seal_record(body)
         _write_json(item.record_path, record)
         path = self.store.put_record(record) if self.store is not None else item.record_path
@@ -1120,6 +1153,7 @@ class Scheduler:
         recorder: Recorder,
         unit_argv: list[str] | None = None,
         auditor: ReadAuditor | None = None,
+        resume_validator: Any = None,
     ) -> None:
         self.out_dir = Path(out_dir)
         self.state_dir = _state_dir(state_dir)
@@ -1136,6 +1170,10 @@ class Scheduler:
         self.reservation = Reservation(self.state_dir)
         self.running: dict[int, Running] = {}
         self.max_cores_in_use = 0.0
+        self.resume_validator = resume_validator
+        self.deferred: list[tuple[Unit, str]] = []
+        self.attempts: dict[tuple[str, str], int] = {}
+        self.interruptions: list[dict[str, Any]] = []
 
     # -- 事件与预约 -----------------------------------------------------------
     def event(self, name: str, **payload: Any) -> None:
@@ -1161,25 +1199,77 @@ class Scheduler:
         return sum(item.unit.quota.memory_mb for item in self.running.values())
 
     def honor_reservation(self) -> list[Outcome]:
-        """有采集预约时停止派发：等在跑单元结束（残留进程已清理）后批准，等 release 后再继续；返回期间结束的单元。"""
+        """停派、限时排空可重跑单元；只在原会话清理完成后授予同一预约。"""
 
-        if self.reservation.current() is None:
+        request = self.reservation.current()
+        if request is None:
             return []
-        self.event("reservation-requested")
+        token = _sha256(request)
+        started = time.monotonic()
+        self.event("reservation-requested", reservation_sha256=token, owner=request["owner"])
         finished: list[Outcome] = []
         while self.running:
-            finished.extend(self.reap(block=True))
-        self.reservation.grant(f"scheduler-{os.getpid()}")
-        self.event("reservation-granted")
-        while self.reservation.current() is not None:
+            if self.reservation.current() != request:
+                self.event("reservation-withdrawn", reservation_sha256=token)
+                return finished
+            finished.extend(self.reap(block=False))
+            grace = self.config.reservation_grace_seconds
+            if grace is not None and time.monotonic() - started >= grace:
+                for item in list(self.running.values()):
+                    if item.interruption is not None or item.timed_out or (item.unit.command and not item.unit.reservation_restartable):
+                        continue
+                    item.interruption = {"reservation_sha256": token, "owner": request["owner"],
+                                         "status": "interrupted_for_reservation", "counted_as_failure": False,
+                                         "requeue_required": True,
+                                         "requested_at_utc": request.get("requested_at_utc"), "stopped_at_utc": _utc_now(),
+                                         "grace_seconds": grace, "stop_seconds": self.config.reservation_stop_seconds}
+                    item.stop_started = time.monotonic()
+                    # macOS 上刚退出、尚未 wait 的进程组可能返回 EPERM；下一轮先回收，
+                    # 真正仍存活且无法终止的单元会在 KILL 宽限后明确拒绝让出整机。
+                    with contextlib.suppress(PermissionError):
+                        self._signal_session(item.pid, signal.SIGTERM)
+                    self.event("reservation-stop", unit=item.unit.unit_id, pid=item.pid, reservation_sha256=token)
+            if self.running:
+                time.sleep(POLL_SECONDS)
+        if self.reservation.current() != request:
+            return finished
+        if not self.reservation.grant(f"scheduler-{os.getpid()}", expected=request):
+            return finished
+        self.event("reservation-granted", reservation_sha256=token)
+        while self.reservation.current() == request:
             time.sleep(POLL_SECONDS)
-        self.event("reservation-released")
+        self.event("reservation-released", reservation_sha256=token)
         return finished
+
+    def _signal_session(self, pid: int, sig: int) -> None:
+        """主进程组和会话内其它组一起停止，避免只杀包装器就提前让出整机。"""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, sig)
+        for member in _session_members(pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(member, sig)
+
+    def _resume_pending(self, kind: str) -> list[Unit]:
+        if not self.deferred or self.reservation.current() is not None:
+            return []
+        if any(previous_kind != kind for _, previous_kind in self.deferred):
+            raise ExecutorError("中止单元跨越正式／诊断阶段，拒绝重派")
+        units = [unit for unit, _ in self.deferred]
+        if self.resume_validator is not None:
+            self.resume_validator(units)
+        self.deferred.clear()
+        for unit in units:
+            self.event("reservation-requeued", unit=unit.unit_id, kind=kind)
+        return units
 
     # -- 启动与回收 -----------------------------------------------------------
     def launch(self, unit: Unit, kind: str) -> None:
         safe = unit.unit_id.replace("#", "-").replace("!", "-")
         suffix = "" if kind == "formal" else f".{kind}"
+        key = (unit.unit_id, kind)
+        attempt = self.attempts[key] = self.attempts.get(key, 0) + 1
+        if attempt > 1:
+            suffix += f".resume-{attempt}"
         log_path = self.out_dir / "logs" / f"{safe}{suffix}.log"
         result_path = self.out_dir / "units" / f"{safe}{suffix}.result.json"
         record_path = self.out_dir / "units" / f"{safe}{suffix}.record.json"
@@ -1225,11 +1315,12 @@ class Scheduler:
         executable = argv[0] if os.sep in argv[0] else (shutil.which(argv[0], path=env.get("PATH")) or argv[0])
         pid = os.posix_spawn(executable, argv, env, file_actions=actions, setsid=True)
         self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind, started_at_utc=_utc_now())
+        self.running[pid].resumed_from = [row for row in self.interruptions if row["unit_id"] == unit.unit_id and row["kind"] == kind]
         self.max_cores_in_use = max(self.max_cores_in_use, self.cores_in_use())
-        self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores)
+        self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores, attempt=attempt)
 
-    def _clean_orphans(self, session_id: int) -> list[int]:
-        deadline = time.monotonic() + self.config.orphan_grace_seconds
+    def _clean_orphans(self, session_id: int, *, interrupted: bool = False) -> list[int]:
+        deadline = time.monotonic() + (0 if interrupted else self.config.orphan_grace_seconds)
         members = _session_members(session_id)
         while members and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS)
@@ -1249,7 +1340,7 @@ class Scheduler:
                 elapsed = time.monotonic() - item.started
                 # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就 SIGKILL。
                 limit = item.unit.timeout_seconds or self.config.unit_timeout_seconds
-                if elapsed > limit and not item.timed_out:
+                if item.stop_started is None and elapsed > limit and not item.timed_out:
                     item.timed_out = True
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.killpg(pid, signal.SIGTERM)
@@ -1262,9 +1353,15 @@ class Scheduler:
                 except ChildProcessError:
                     waited, status, usage = pid, 0, None
                 if waited == 0:
+                    if item.stop_started is not None and time.monotonic() - item.stop_started >= self.config.reservation_stop_seconds:
+                        try:
+                            self._signal_session(pid, signal.SIGKILL)
+                        except PermissionError:
+                            if time.monotonic() - item.stop_started > self.config.reservation_stop_seconds + 2:
+                                raise ExecutorError("预约中止无法终止仍存活单元，拒绝授予整机")
                     continue
                 del self.running[pid]
-                orphans = self._clean_orphans(pid)
+                orphans = self._clean_orphans(pid, interrupted=item.interruption is not None)
                 exit_code = os.waitstatus_to_exitcode(status)
                 outcome = Outcome(
                     unit=item.unit,
@@ -1282,15 +1379,42 @@ class Scheduler:
                     completed_at_utc=_utc_now(),
                 )
                 # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
-                if self.auditor is not None and item.kind == "formal":
+                interrupted = (item.interruption is not None and
+                               (exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL, -signal.SIGTERM, -signal.SIGKILL)))
+                if interrupted:
+                    # 不吞真实非零失败；预约中止的部分结果单独留档，重派从头执行。
+                    active = []
+                    for member in _session_members(pid):
+                        try:
+                            state = (Path('/proc') / str(member) / 'stat').read_text().rsplit(')', 1)[-1].split()[0]
+                        except FileNotFoundError:
+                            continue
+                        if state not in ('Z', 'X'):
+                            active.append(member)
+                    if active:
+                        raise ExecutorError(f"预约中止后会话仍有活跃进程：{active}")
+                    outcome.extra["reservation_interruption"] = {**item.interruption, "active_session_members": active}
+                    if self.auditor is not None:
+                        trace = self.auditor.trace_path(item.unit)
+                        if trace.is_file():
+                            saved = item.record_path.with_suffix('.interrupted-trace.json')
+                            shutil.copyfile(trace, saved)
+                            outcome.extra["reservation_interruption"]["partial_trace"] = {"path": str(saved), "sha256": self.recorder.records.file_sha256(saved)}
+                elif self.auditor is not None and item.kind == "formal":
                     audit = self.auditor.collect(item.unit)
                     outcome.extra["read_audit"] = audit
                     outcome.extra["reexecute_only"] = audit.get("status") == "reexecute_required"
                 self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
-                finished.append(outcome)
-            if finished or not block or not self.running:
+                if interrupted:
+                    self.deferred.append((item.unit, item.kind))
+                    self.interruptions.append({"unit_id": item.unit.unit_id, "kind": item.kind,
+                                               "record_path": outcome.extra["record_path"], "record_sha256": outcome.extra["record_sha256"],
+                                               **outcome.extra["reservation_interruption"]})
+                else:
+                    finished.append(outcome)
+            if finished or not block or not self.running or self.reservation.current() is not None:
                 return finished
             time.sleep(POLL_SECONDS)
 
@@ -1305,8 +1429,11 @@ class Scheduler:
     def run_parallel(self, units: list[Unit], kind: str) -> list[Outcome]:
         pending = sorted(units, key=lambda u: (-u.weight, u.unit_id))
         outcomes: list[Outcome] = []
-        while pending or self.running:
+        while pending or self.running or self.deferred:
             outcomes.extend(self.honor_reservation())
+            pending.extend(self._resume_pending(kind))
+            if self.reservation.current() is not None:
+                continue
             launched = False
             for unit in list(pending):
                 if self.fits(unit):
@@ -1321,13 +1448,15 @@ class Scheduler:
 
     def run_alone(self, units: list[Unit], kind: str) -> list[Outcome]:
         outcomes: list[Outcome] = []
-        for unit in sorted(units, key=lambda u: u.unit_id):
+        pending = sorted(units, key=lambda u: u.unit_id)
+        while pending or self.running or self.deferred:
             outcomes.extend(self.honor_reservation())
-            while self.running:
-                outcomes.extend(self.reap(block=True))
-            self.launch(unit, kind)
-            while self.running:
-                outcomes.extend(self.reap(block=True))
+            pending = self._resume_pending(kind) + pending
+            if self.reservation.current() is not None:
+                continue
+            if pending and not self.running:
+                self.launch(pending.pop(0), kind)
+            outcomes.extend(self.reap(block=True))
         return outcomes
 
 
@@ -1715,7 +1844,8 @@ def _run_commands(args: argparse.Namespace) -> int:
         diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
         summary = summarize_commands(units, formal, diagnostic, time.monotonic() - started, policy)
         summary.update({"max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
-                        "bytecode_cache": bytecode, "identity_memo": identity_memo})
+                        "bytecode_cache": bytecode, "identity_memo": identity_memo,
+                        "reservation_interruptions": scheduler.interruptions})
         if bytecode["status"] == "failed":
             summary["status"] = "failed"
         _write_json(out_dir / "summary.json", summary)
@@ -2010,6 +2140,7 @@ def _run_gates(args: argparse.Namespace) -> int:
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
     groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
+    resume_manifest_digest = records.file_sha256(args.manifest)
     parallelism = args.parallel or config.default_parallelism
     # 环境指纹要在准备共享缓存之前算：准备缓存会往本进程环境里写缓存位置。
     try:
@@ -2063,6 +2194,9 @@ def _run_gates(args: argparse.Namespace) -> int:
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
+    def resume_basis(values: dict[str, Any]) -> dict[str, Any]:
+        return {key: (value.spec_sha256, value.inputs_sha256, value.inheritable, value.reason) for key, value in values.items()}
+    original_resume_basis = resume_basis(currents)
     if audit_policy is not None:
         entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))
         for unit_id, current in currents.items():
@@ -2149,11 +2283,31 @@ def _run_gates(args: argparse.Namespace) -> int:
                         currents=currents, store=store)
     auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents,
                           strict=args.audit_strict) if args.audit_reads else None
+    def validate_resume(restarted: list[Unit]) -> None:
+        """批次可能改变输入／部署；保留原规格重派前核对，不给新输入沿用旧摘要。"""
+        fresh = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                               manifest=manifest, timeout=config.unit_timeout_seconds)
+        fresh_basis = resume_basis(fresh)
+        if any(fresh_basis[unit.unit_id] != original_resume_basis[unit.unit_id] for unit in restarted):
+            raise ExecutorError("整机预约后单元规格或输入漂移，停止本轮，须重新建计划")
+        for unit in restarted:
+            for entry in recorder.currents[unit.unit_id].inputs or []:
+                name = entry.get("name", "")
+                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:
+                    raise ExecutorError("整机预约后宿主输入漂移，拒绝重派")
+        fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+        if (records.entries_sha256(fresh_environment) != recorder.environment_sha256
+                or records.executor_version([args.bytecode_helper]) != recorder.executor
+                or records.file_sha256(args.manifest) != resume_manifest_digest
+                or gates_policy_digest(load_config(args.config), load_weights(args.weights), load_durations(args.durations),
+                                       parallelism, manifest.get("scheduling")) != policy):
+            raise ExecutorError("整机预约后环境、工具或调度计划漂移，拒绝重派")
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
         machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."), recorder=recorder,
         auditor=auditor,
+        resume_validator=validate_resume,
     )
     try:
         # 锁可能排队很久：重新读请求、现场身份、输入、环境和动态凭证。
@@ -2163,6 +2317,7 @@ def _run_gates(args: argparse.Namespace) -> int:
                 full_set.live_check(request, deployment=args.full_set_deployment, store=store.root, tree=Path.cwd())
                 current_now = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
                                             manifest=manifest, timeout=config.unit_timeout_seconds)
+                original_resume_basis = resume_basis(current_now)
                 currents = current_now
                 recorder.currents = currents
                 facts.now = time.time()
@@ -2242,6 +2397,7 @@ def _run_gates(args: argparse.Namespace) -> int:
         if store is not None and not problems:
             store.put_manifest(unit_manifest)
         summary.update({
+            "reservation_interruptions": scheduler.interruptions,
             "max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
             "bytecode_cache": bytecode, "identity_memo": identity_memo, "mode": args.mode, "run_id": run_id,
             "record_store": str(store.root) if store is not None else None,
@@ -2332,6 +2488,7 @@ def main(argv: list[str] | None = None) -> int:
             expected = {t for ids in grouped.values() for t in ids}
             summary = summarize(units, formal, diagnostic, expected, time.monotonic() - started, policy)
             summary["max_cores_in_use"] = scheduler.max_cores_in_use
+            summary["reservation_interruptions"] = scheduler.interruptions
             summary["machine_cores"] = cores
             summary["parallelism"] = parallelism
             summary["scope"] = scope
