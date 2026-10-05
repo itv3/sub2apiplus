@@ -242,7 +242,12 @@ def main(argv=None):
         receipt["source"] = plan["source"]
         code, records, seen, detail = run_unified(args, plan, out) if args.executor == "unified" else run_legacy(selected, out)
         closed = sorted(seen) == plan["test_ids"] and len(seen) == len(set(seen)) and set(records) == set(plan["test_ids"])
-        source_unchanged = source_identity(args) == plan["source"]
+        source_after = source_identity(args)
+        source_unchanged = source_after == plan["source"]
+        if not source_unchanged:
+            receipt["source_drift"] = {key: {"before": plan["source"].get(key), "after": source_after.get(key)}
+                                       for key in set(plan["source"]) | set(source_after)
+                                       if plan["source"].get(key) != source_after.get(key)}
         outcomes = {test_id: row["outcome"] for test_id, row in sorted(records.items())}
         failed = any(value in {"failed", "error", "unexpected_success"} for value in outcomes.values())
         code = code or (1 if not closed or not source_unchanged or failed else 0)

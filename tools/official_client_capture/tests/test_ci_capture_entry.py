@@ -97,6 +97,10 @@ class CaptureEntryTests(unittest.TestCase):
                 "--durations", str(self.root / "no-durations.json"), "--out-dir", str(output), "--parallel", "2", "--cores", "2"]
         result = subprocess.run(argv, cwd=ROOT, env={**self.environment, **(extra_env or {})}, capture_output=True, text=True, timeout=180)
         receipt = json.loads((output / "receipt.json").read_text()) if (output / "receipt.json").is_file() else None
+        if result.returncode:
+            summary = output / "executor/summary.json"
+            result.stdout += "\n" + json.dumps({"receipt": receipt,
+                "summary": json.loads(summary.read_text()) if summary.is_file() else None}, ensure_ascii=False)
         return result, receipt, output
 
     def test_all_shards_match_legacy_results_identity_and_coverage(self):
