@@ -16,6 +16,9 @@ import os
 from pathlib import Path
 import sys
 
+# 独立入口也须零写入；在导入同目录模块前关闭字节码生成，不依赖调用方传 -B。
+sys.dont_write_bytecode = True
+
 try:
     from .parse_env import coordinates, derive, parse, plain_path
 except ImportError:
@@ -137,5 +140,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.dont_write_bytecode = True
     raise SystemExit(main())

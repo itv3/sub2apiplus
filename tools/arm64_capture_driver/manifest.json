@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/round_context.py",
-      "sha256": "eba1c2a713b4397336b78636c52804c2d65c9dd37021a64595c4909b7b329aec",
+      "sha256": "ba44082aab69d24c4008ce489e078d8b6de0751d8880d8cc0328ee101295fca0",
       "mode": "0700",
-      "bytes": 7296
+      "bytes": 7404
     },
     {
       "path": "driver/snapshot_catalog_check.go",
@@ -501,5 +501,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "cac0822f32edc869636dbc9b1c2847dfce4ef249a82f02c680100663775eea1c"
+  "manifest_sha256": "f0a4fa74df4fbaf9b9af9230c86bb3030b83b4cc8ab986217e7e5f1e7ff1a220"
 }

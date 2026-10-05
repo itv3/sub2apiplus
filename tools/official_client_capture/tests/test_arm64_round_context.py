@@ -196,6 +196,23 @@ class RoundContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), [self.config[key] for key in ("B", "NEWDIR", "CANDIDATE_RECEIPT_ROOT")])
 
+    def test_standalone_init_without_bytecode_flags_stays_read_only(self):
+        driver = self.root / "standalone"
+        driver.mkdir()
+        for name in ("parse_env.py", "round_context.py"):
+            (driver / name).write_bytes((SCRIPTS / name).read_bytes())
+        path = self.root / "new.env"
+        path.write_text(self.fixture.env_file.read_text().replace(self.fixture.new, "uncreated-campaign"))
+        env = {key: value for key, value in os.environ.items()
+               if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONPATH"}}
+        before = self.snapshot()
+        result = subprocess.run([sys.executable, str(driver / "round_context.py"), "--env", str(path), "--mode", "init"],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["state"], "initialization_coordinates")
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((driver / "__pycache__").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
