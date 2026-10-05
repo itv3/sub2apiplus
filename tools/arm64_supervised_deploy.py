@@ -307,7 +307,7 @@ from urllib.parse import urlsplit
 # 原路径不变。control 层变化，监督器摘要随之变化。
 # 2026-10-05（A-07.4）：分钟账本保留 epoch 原精度，防止亚微秒首桶被取整成零长度。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "b5c38f73c3bd0227d6eb5e105985adb9d111fa6a89e85c3adeefdea2a4c4182a"
+    "56b6bef291b37de184034c7d25e131865a493eaaba9c56f58e559603cbf775de"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
