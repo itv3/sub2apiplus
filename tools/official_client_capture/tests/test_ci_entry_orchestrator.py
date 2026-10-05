@@ -496,7 +496,8 @@ class OrchestratorPieceTests(unittest.TestCase):
 
         def text(**extra: str) -> str:
             values = {key: "x" for key in parse_env.REQUIRED_KEYS}
-            values.update({"D": "/data", "C": "a" * 40, "DC": "b" * 40, "BASELINE_VERSION": "0.157.0", "TARGET_VERSION": "0.160.0",
+            # 入口参数仍遵守 A-08 的规范路径合同，其余必需字段可使用安全占位值。
+            values.update({"D": "/data", "RUNROOT": "/rounds/entry-test", "C": "a" * 40, "DC": "b" * 40, "BASELINE_VERSION": "0.157.0", "TARGET_VERSION": "0.160.0",
                            "CODEX_BIN_SHA256": "c" * 64, "OFFICIAL_ASSET_SHA256": "d" * 64, "PROFILE_DIGEST": "e" * 64,
                            "KILO_SHA256": "f" * 64, "CODEX_ACCOUNT_ID": "90", "API_KEY_ID": "7", "PROFILE_ID": "p1",
                            "TARGET_PROFILE_ID": "p1", "MAIN_MODEL": "m", "LITE_MODEL": "l"})
