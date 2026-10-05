@@ -139,25 +139,39 @@ echo "=== 入口门禁 ${SUBJECT}（组合 ${PROFILE}）$(utc_now)"
 echo "bundle=${PBUNDLE} 分支=${PBRANCH} 提交=${PCOMMIT} 前端依赖=${NM_DIR}"
 echo "=== 测试树（clone_test_tree，umask 022）$(utc_now)"
 umask 022
-clone_test_tree "$TREE" "$PBUNDLE" "$PBRANCH" "$PCOMMIT"
+if [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ]; then
+  python3 -B "$DRV/entry_gates.py" verify-scope-workspace --tree "$TREE" --bytecode-cache "$PYC" \
+    --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" | tee "$OUT/scope-workspace.json"
+  verify_history_tree "$TREE" "$PCOMMIT"
+else
+  clone_test_tree "$TREE" "$PBUNDLE" "$PBRANCH" "$PCOMMIT"
+fi
 if [ ! -d "$NM_DIR/node_modules" ] || ! cmp -s "$NM_DIR/pnpm-lock.yaml" "$TREE/frontend/pnpm-lock.yaml"; then
   echo "前端依赖不可用：${NM_DIR}/node_modules 不存在，或 ${NM_DIR}/pnpm-lock.yaml 与本树 frontend/pnpm-lock.yaml 不同"
   echo "本轮 lockfile 有变化时，先按 frontend.sh 同一方式（node:20 容器内 pnpm install --frozen-lockfile）在独立目录装好依赖，再把该目录作为最后一个参数传入"
   echo "ENTRY_GATES_ABORTED：前端依赖不可用，没有门禁结论；主体目录 ${OUT}"
   exit 3
 fi
-cp -a "$NM_DIR/node_modules" "$TREE/frontend/node_modules"
+if [ "${#INPUT_SCOPE_ARGS[@]}" -eq 0 ]; then
+  cp -a "$NM_DIR/node_modules" "$TREE/frontend/node_modules"
+elif [ ! -d "$TREE/frontend/node_modules" ]; then
+  echo "收窄复验缺少原前端依赖，不能自动补装后沿用旧读集" >&2; exit 3
+fi
 umask 077
 TREE_HEAD=$(git -C "$TREE" rev-parse HEAD)
 # 命令替换里一律 `|| true`：set -E 会把 ERR 陷阱带进命令替换，head 截断触发的 SIGPIPE 不能误判为准备失败。
-tree_status() { git -C "$TREE" status --porcelain --untracked-files=all 2>&1 | head -n "${1:-1000000}" || true; }
+tree_status() { git --no-optional-locks -C "$TREE" status --porcelain --untracked-files=all 2>&1 | head -n "${1:-1000000}" || true; }
 echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
 # 执行器的固定 PATH（用途见下方执行环境一段）。预编译必须与执行器是同一个解释器：.pyc 文件名带解释器版本标签，
 # 按调用方 PATH 预编译、执行器再按固定 PATH 解析出另一个 python3 时（如本机 Homebrew 3.14 与 /usr/local/bin 的 3.13），
 # 执行器找不到缓存（UM-21）；只有一个 Python 的 ARM64 与 CI 碰不到。
 EXEC_PATH=/usr/local/go/bin:/opt/node-v20/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-env -u PYTHONPATH PATH="$EXEC_PATH" python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
+if [ "${#INPUT_SCOPE_ARGS[@]}" -eq 0 ]; then
+  env -u PYTHONPATH PATH="$EXEC_PATH" python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
+else
+  echo "收窄复验保留原字节码缓存，由严格轨迹核对实际读取及快照；不重新预编译"
+fi
 
 # 部署绑定：数据根部署的必须就是本提交。含 pre-A3 的组合必做（入口门禁验的是测试树，pre-A3 跑的是数据根的受管树）；
 # 其余组合带 --require-deployed 时也做（后台验证据此把结论绑定到这次部署，E4-01）。设置 DEPLOY（最新部署收据）。
@@ -316,8 +330,12 @@ fi
 AFTER_STATUS=$(tree_status 5)
 trap - ERR
 if [ "$GATES_STATUS" = passed ] && [ "$PRE_A3_OK" = true ] && [ -z "$AFTER_STATUS" ]; then
-  rm -rf "$TREE" "$PYC"
-  echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；测试树与字节码缓存已删除"
+  if [ "$AUDIT_STRICT" = true ]; then
+    echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；保留严格审计的测试树与缓存供后续复核 ${WORK}"
+  else
+    rm -rf "$TREE" "$PYC"
+    echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；测试树与字节码缓存已删除"
+  fi
   echo "ENTRY_GATES_DONE rc=0 subject=${SUBJECT} out=${OUT}"
   exit 0
 fi

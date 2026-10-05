@@ -179,7 +179,8 @@ def _diff_names(left: Sequence[Mapping[str, Any]] | None, right: Sequence[Mappin
 
 
 def _git(root: Path, *args: str) -> bytes:
-    completed = subprocess.run(["git", "-C", str(root), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
+    # 输入核验保持只读，避免 status 的可选索引刷新让已绑定的 .git/index 快照失效。
+    completed = subprocess.run(["git", "--no-optional-locks", "-C", str(root), *args], capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
     if completed.returncode != 0:
         raise RecordsError(f"git {' '.join(args)} 失败：{completed.stderr.decode('utf-8', 'replace').strip()[-300:]}")
     return completed.stdout

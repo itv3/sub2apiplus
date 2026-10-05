@@ -547,6 +547,33 @@ def plan_gates(
     return manifest
 
 
+def verify_scope_workspace(tree: Path, bytecode_cache: Path, *, commit: str, bundle: Path, branch: str) -> dict[str, Any]:
+    """收窄复验沿用原树和缓存；只读核验身份，禁止用重建掩盖快照漂移。"""
+    for path in (tree, bytecode_cache, bundle):
+        if not path.is_absolute() or any(item.is_symlink() for item in (path, *path.parents)):
+            raise ValueError("收窄验收工作区必须使用无符号链接的绝对路径")
+    if not tree.is_dir() or not bytecode_cache.is_dir() or not bundle.is_file():
+        raise ValueError("收窄验收需要保留原测试树、字节码缓存和普通 bundle 文件")
+    if bytecode_cache == tree or tree in bytecode_cache.parents:
+        raise ValueError("字节码缓存必须位于测试树外")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("收窄验收需要完整提交号")
+    git = ["git", "--no-optional-locks", "-C", str(tree)]
+    def read_git(*args: str) -> str:
+        result = subprocess.run([*git, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if result.returncode:
+            raise ValueError("收窄工作区 Git 凭证核验失败：" + " ".join(args[:2]))
+        return result.stdout.strip()
+    if read_git("rev-parse", "HEAD") != commit or read_git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("原测试树提交不符或存在未登记变更，须重新建立读集")
+    read_git("bundle", "verify", str(bundle))
+    refs = [line.split() for line in read_git("bundle", "list-heads", str(bundle)).splitlines()]
+    if not any(value == commit and ref in {branch, "refs/heads/" + branch} for value, ref in refs):
+        raise ValueError("bundle 分支与保留测试树的提交不一致")
+    return {"status": "passed", "tree": str(tree), "bytecode_cache": str(bytecode_cache), "commit": commit,
+            "bundle_sha256": _unit_records_module().file_sha256(bundle), "workspace_rebuilt": False}
+
+
 def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]]) -> None:
     """收窄提案只用于新一轮验证；重放来源并逐项核对当前命令，保留原门禁集合。"""
     if not scopes:
@@ -892,6 +919,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
     plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令单元的输入收窄提案，可重复指定；必须重新执行严格审计")
+    workspace = sub.add_parser("verify-scope-workspace", help="只读核对收窄复验沿用的测试树、缓存和 bundle")
+    workspace.add_argument("--tree", type=Path, required=True)
+    workspace.add_argument("--bytecode-cache", type=Path, required=True)
+    workspace.add_argument("--commit", required=True)
+    workspace.add_argument("--bundle", type=Path, required=True)
+    workspace.add_argument("--branch", required=True)
     export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
     export.add_argument("--manifest", type=Path, required=True)
     export.add_argument("--summary", type=Path, required=True)
@@ -924,6 +957,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "make-checks":
             return make_checks(args.name, list(args.targets))
+        if args.command == "verify-scope-workspace":
+            print(json.dumps(verify_scope_workspace(args.tree, args.bytecode_cache, commit=args.commit,
+                                                    bundle=args.bundle, branch=args.branch), ensure_ascii=False))
+            return 0
         if args.command == "plan":
             launcher = json.loads(args.launcher_json)
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):

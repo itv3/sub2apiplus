@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "482fa9aa9d32b6b984e6e3daf762d5a4fcb7b36bb16b53303b908fb93f2f45fe",
+      "sha256": "cd5be12213944aaf994e1f7c3da2dae3d568cda16359c11e4ce9b4e4a3ae47ac",
       "mode": "0600",
-      "bytes": 58535
+      "bytes": 58808
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -94,9 +94,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "b51d95f3c4ecb2ff9a484bb0cc85fd83dd09c83fd6cbb6112a64f6c1794d1a6e",
+      "sha256": "d8d325e2981931d13d225dd7d439c41f6a70275fc71fa1d29af7f90fe947e088",
       "mode": "0700",
-      "bytes": 29258
+      "bytes": 30117
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -118,9 +118,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "cf51eb978357ef9e91880942ffcafc7501ec8f235d11807aa4bd29302cf44bf9",
+      "sha256": "d3b8e49e2dbfe4de03b741d8cd8234ade87dfe7da04ec279ecc16ff9ed74ec3c",
       "mode": "0700",
-      "bytes": 63682
+      "bytes": 66413
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -334,9 +334,9 @@
     },
     {
       "path": "driver/unit_records.py",
-      "sha256": "f49a608c09874ff3ff7a31648f21269f1f4729937e953ba68388ebe50ec2bf04",
+      "sha256": "d0f8d9b775a0e3d98c1a7084963a46709786759069c85d1fcee61bc8d3e32bc7",
       "mode": "0700",
-      "bytes": 57902
+      "bytes": 58036
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -513,5 +513,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "a03da5e92777d2e73a55831c1e0d1a91f9df87aeebd44698d47fe6e85eafbc04"
+  "manifest_sha256": "e8866f75990781d312b049bbcb3bab85411da7699d55630bdd626c29fceaecc4"
 }
