@@ -32,6 +32,7 @@ import pwd
 import re
 import runpy
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -91,6 +92,21 @@ def _counting_bin(root: Path) -> tuple[Path, Path]:
 def _run(script: Path, *args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     merged = {**os.environ, **(env or {})}
     return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, errors="replace", env=merged, cwd=str(cwd) if cwd else None)
+
+
+def _run_process_group(argv: list[str], *, env: dict[str, str], timeout: float = 120) -> subprocess.CompletedProcess[str]:
+    """带后台心跳的测试独占进程组；成功、超时或异常都先清掉整组，再让临时目录退出。"""
+    with subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, errors="replace", start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
 
 
 class DriverManifestTests(unittest.TestCase):
@@ -1060,9 +1076,9 @@ class LocalVc4HeartbeatTests(unittest.TestCase):
                 path.write_text(text, encoding="utf-8")
                 path.chmod(0o700)
             environment = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", LOCAL_VC4_HEARTBEAT_SECONDS="1")
-            result = subprocess.run(
+            result = _run_process_group(
                 ["bash", str(local / "local-vc4.sh"), "r1", "c" * 40, "d" * 40, "receipt.json", str(root / "out"), "/root/vc-rounds/t"],
-                env=environment, capture_output=True, text=True, timeout=120,
+                env=environment, timeout=120,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("LOCAL_VC4_DONE", result.stdout)
