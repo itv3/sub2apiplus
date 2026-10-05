@@ -18,6 +18,12 @@
   清单生成与复验都失败；安装态 `manifest.json` 自身 0600／root 也在复验范围内。
 * 参数文件不 `source`：`lib.sh` 经 `driver/parse_env.py` 解析（精确键集合、值只允许引用已定义键、任何命令形态拒绝），
   只 `eval` 引号化后的赋值。
+* `B` 自动派生为 `D/candidates/CAND`；旧参数保留时只作相等断言。公共前导与 Python 驱动共用根解析，
+  旧环境中的 `NEWDIR`、候选实物根和收据根均被本轮派生值覆盖；路径跳转或符号链接在建运行目录前拒绝。
+* `python3 -B driver/round_context.py --env "$ARM64_VC_ENV" --mode candidate` 只读重放正式 Campaign、
+  有效账本、激活的 revision 与收据根，输出绑定摘要。`--mode campaign` 允许尚未激活候选；
+  `--mode init` 只允许尚未创建的 Campaign，返回初始化坐标，不能代替正式准入。VC-5 准入已消费严格候选解析。
+  `CAND` 是预期断言，实际候选来自账本；不按最新目录或最大 revision 选择。正式收据的重放、批准和派发合同保持独立。
 
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 

@@ -69,12 +69,8 @@ issue_pre_a3_certification() {
   bash "$DRV/entry-gates.sh" --profile pre-a3 --policy-activation "$POLICY_ACTIVATION" --pre-a3-certification "$PRE_A3_CERTIFICATION" \
     --pre-a3-mode run "$ENTRY_BUNDLE" "$ENTRY_BRANCH" "$ENTRY_COMMIT" < /dev/null
 }
-NEWDIR=$D/evidence/campaigns/$NEW
-W=$D/control/$IN
-TOOLS=$D/tools/official_client_capture
-L=$D/control/$UP-timing-ledger
-G=$D/control/$NEW-candidate-gates
-AS=$D/control/$NEW-assertions
+# 根坐标由 parse_env.py 统一导出，旧环境中的同名值不能覆盖本轮解析结果。
+# 正式候选的身份仍须经 round_context.py 和各阶段原有收据合同重放。
 # 下一批次序号：按 control/vc/batches 中已 COMMIT 的最大序号 +1
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }

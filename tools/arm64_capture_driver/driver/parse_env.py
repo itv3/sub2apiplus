@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 REQUIRED_KEYS = (
-    "ROUND", "STAMP", "D", "RUNROOT", "NEW", "IN", "UP", "CAND", "B", "PREV_CANDIDATE", "HISTORY_TEST_TREE",
+    "ROUND", "STAMP", "D", "RUNROOT", "NEW", "IN", "UP", "CAND", "PREV_CANDIDATE", "HISTORY_TEST_TREE",
     "C", "DC", "RECEIPT", "BUNDLE", "BUNDLE_BRANCH", "OFFICIAL_CAMPAIGN", "OFFICIAL_STOP_LEDGER", "OFFICIAL_STOP_RECEIPT",
     "INPUT_RULE_MIGRATION", "INPUT_TARGET_SNAPSHOT", "PROJECT_DEADLINE_UTC", "STAGE_BUDGETS", "MIN_FREE_GIB",
     "FRONTEND_DEVIATION_APPROVED_BY", "PROFILE_ID", "PROFILE_DIGEST", "KILO_BIN", "KILO_VERSION", "KILO_SHA256",
@@ -32,6 +32,8 @@ REQUIRED_KEYS = (
 )
 # 路径有统一默认布局，已有部署可显式覆盖；不可推导的身份必须在使用它的阶段提供。
 OPTIONAL_KEYS = (
+    # B 由本轮 Candidate 派生；保留旧参数作为相等断言，禁止借它选择另一候选树。
+    "B",
     "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "TARGET_PACKAGE", "TARGET_CODE_MODE_HOST_SHA256",
     "CAPTURE_RUNTIME_IMAGE", "PREVIOUS_POLICY", "PRE_A3_CERTIFICATION", "GATE_MAPPING_INPUT",
     "RETIRE_VERSION", "HISTORICAL_SOURCE_ROOT", "JWTGEN_BIN", "EVIDENCE_DECISION",
@@ -52,6 +54,47 @@ FORBIDDEN = set("`;&|<>()\\\r\n")
 
 class EnvFileError(ValueError):
     pass
+
+
+def plain_path(value: str, label: str) -> Path:
+    """核对路径本身及所有已有父目录；不建目录、不解引用后再掩盖符号链接。"""
+
+    path = Path(value)
+    if not path.is_absolute() or str(path) != value or ".." in path.parts or path == Path("/"):
+        raise EnvFileError(f"{label} 必须是规范绝对路径，且不得含父目录跳转")
+    for part in (path, *path.parents):
+        if part.is_symlink():
+            raise EnvFileError(f"{label} 不得含符号链接：{part}")
+    return path
+
+
+def coordinates(values: dict[str, str]) -> dict[str, str]:
+    """初始化坐标只按显式选择派生，不宣称 Campaign 或候选已经存在、通过验收。"""
+
+    data = plain_path(values["D"], "D")
+    plain_path(values["RUNROOT"], "RUNROOT")
+    campaign = data / "evidence" / "campaigns" / values["NEW"]
+    candidate = data / "candidates" / values["CAND"]
+    if "B" in values and values["B"] != str(candidate):
+        raise EnvFileError("B 与本轮 D/candidates/CAND 不一致，拒绝旧候选路径")
+    roots = {
+        "B": str(candidate), "NEWDIR": str(campaign),
+        "W": str(data / "control" / values["IN"]),
+        "TOOLS": str(data / "tools" / "official_client_capture"),
+        "L": str(data / "control" / f"{values['UP']}-timing-ledger"),
+        "G": str(data / "control" / f"{values['NEW']}-candidate-gates"),
+        "AS": str(data / "control" / f"{values['NEW']}-assertions"),
+        "CAMPAIGN_CONTROL_ROOT": str(campaign / "control" / "vc"),
+        "CAMPAIGN_RECEIPT_ROOT": str(campaign / "control" / "vc" / "receipts"),
+        "CANDIDATE_EVIDENCE_ROOT": str(campaign / "candidates" / values["CAND"]),
+        "CANDIDATE_RECEIPT_ROOT": str(campaign / "control" / "vc" / "receipts" / values["CAND"]),
+    }
+    for key, value in roots.items():
+        path = plain_path(value, key)
+        if path.exists() and not path.is_dir():
+            raise EnvFileError(f"{key} 不是目录：{path}")
+    roots.update(ROUND_CONTEXT_STATE="initialization_coordinates", CANDIDATE_REVISION="", CANDIDATE_REVISION_ROOT="")
+    return roots
 
 
 def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set[str] | frozenset[str]) -> dict[str, str]:
@@ -160,6 +203,8 @@ def parse(text: str) -> dict[str, str]:
         not values["VC4_BUILD_NETWORK_APPROVAL"].startswith("/") or ".." in values["VC4_BUILD_NETWORK_APPROVAL"].split("/")
     ):
         raise EnvFileError("VC4_BUILD_NETWORK_APPROVAL 必须是不含 .. 的绝对路径")
+    # 先核对根路径；lib.sh 只有解析成功后才允许建立 RUNROOT。
+    values["B"] = coordinates(values)["B"]
     return values
 
 
@@ -192,6 +237,7 @@ def derive(values: dict[str, str]) -> dict[str, str]:
         "VC4_BUILD_NETWORK": "default",
     }
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
+    result.update(coordinates(values))
     return result
 
 

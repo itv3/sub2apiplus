@@ -12,7 +12,7 @@ NEW=codex-$TARGET_VERSION-formal-$ROUND-$STAMP
 IN=codex-$TARGET_VERSION-inputs-$ROUND-$STAMP
 UP=codex-$BASELINE_VERSION-to-$TARGET_VERSION-$ROUND-$STAMP
 CAND=codex-$TARGET_VERSION-candidate-$ROUND
-B=$D/candidates/$CAND
+# B 自动派生为 $D/candidates/$CAND。旧文件可保留同值断言，错绑即拒绝。
 PREV_CANDIDATE=$D/candidates/REPLACE_PREVIOUS_CANDIDATE
 HISTORY_TEST_TREE=$D/candidates/REPLACE_HISTORY_CANDIDATE/test-tree
 # C 是候选提交，DC 是其冻结承接提交；不得使用缩写。

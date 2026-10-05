@@ -202,7 +202,12 @@ class ManagedFacts:
 
     def catalog(self) -> dict[str, Any]:
         c, cu = self.config, self.upgrade
-        campaign = Path(c["D"]) / "evidence/campaigns" / c["NEW"]
+        try:
+            from .round_context import resolve
+        except ImportError:
+            from round_context import resolve
+        context = resolve(c, upgrade=cu)
+        campaign = Path(context["parameters"]["NEWDIR"])
         manifest = cu._require_formal_campaign(campaign)
         classification = cu._load_stage_result(campaign, "classify")
         plan = cu._vc_campaign_plan(campaign, manifest)

@@ -4,15 +4,21 @@
 import os
 from pathlib import Path
 
-from parse_env import derive, parse
+from parse_env import OPTIONAL_KEYS, derive, parse
 
 
-def load_config() -> dict[str, str]:
+def load_config(*, require_current: bool = False) -> dict[str, str]:
     path = Path(os.environ["ARM64_VC_ENV"])
     if path.is_symlink() or not path.is_file():
         raise ValueError("ARM64_VC_ENV 必须指向本轮普通参数文件")
     values = parse(path.read_text())
     result = {**values, **derive(values)}
+    if require_current:
+        from round_context import resolve
+        result.update(resolve(result)["parameters"])
+    for key in OPTIONAL_KEYS:
+        if key not in result:
+            os.environ.pop(key, None)
     os.environ.update(result)
     return result
 

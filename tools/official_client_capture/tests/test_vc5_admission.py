@@ -428,12 +428,26 @@ class ManagedReplayTests(unittest.TestCase):
             stage["inventory_sha256"] = upgrade._fingerprint(stage["inventory"])
             receipt = catalog / "catalog-stage-receipt.json"
             admission.write_json(receipt, stage)
-            config = {"D": str(root), "B": str(root / "candidate"), "NEW": "fixture", "CAND": "candidate",
+            config = {"D": str(root), "B": str(root / "candidates/candidate"), "NEW": "fixture", "CAND": "candidate",
+                      "RUNROOT": str(root / "round"), "IN": "inputs", "UP": "upgrade", "BASELINE_VERSION": "9.0.0",
                       "TARGET_VERSION": "9.1.0", "PROFILE_ID": "fixture-profile", "LIFECYCLE_DIR": "docs/lifecycle/fixture", "C": "a" * 40}
-            admission.atomic_write(root / "candidate/source/docs/lifecycle/fixture/catalog-stage/catalog-stage-receipt.json", receipt.read_bytes())
+            admission.atomic_write(root / "candidates/candidate/source/docs/lifecycle/fixture/catalog-stage/catalog-stage-receipt.json", receipt.read_bytes())
             build_path = root / "evidence/campaigns/fixture/candidates/candidate/build-receipt.json"
             admission.write_json(build_path, {})
+            campaign = root / "evidence/campaigns/fixture"
+            manifest = {"campaign_id": "fixture", "baseline_version": "9.0.0", "target_version": "9.1.0",
+                        "vc_control": {"campaign_plan": {"path": "control/vc/campaign-plan.json"}}}
+            admission.write_json(campaign / "campaign.json", manifest)
+            admission.atomic_write(campaign / "campaign.sha256", upgrade.file_sha256(campaign / "campaign.json").encode())
+            admission.write_json(campaign / "control/vc/campaign-plan.json", {})
+            admission.write_json(root / "control/upgrade-timing-ledger/ledger.json", {})
+            revision = {"campaign_id": "fixture", "candidate_id": "candidate"}
+            admission.write_json(campaign / "control/vc/revisions/r1/revision.json", revision)
+            admission.write_json(campaign / "control/vc/revisions/r1/COMMIT", {})
             fake = mock.Mock()
+            fake._require_formal_campaign.return_value = manifest
+            fake._campaign_timing_ledger_dir.return_value = root / "control/upgrade-timing-ledger"
+            fake._candidate_revision_dir.return_value = campaign / "control/vc/revisions/r1"
             fake._load_stage_result.return_value = {"joint_manifest_sha256": "c" * 64}
             fake._replay_vc_checkpoint.return_value = (None, {"stage_receipt": {"path": str(receipt), "sha256": upgrade.file_sha256(receipt)}})
             fake.file_sha256 = upgrade.file_sha256
@@ -442,7 +456,7 @@ class ManagedReplayTests(unittest.TestCase):
             fake._replay_candidate_build_receipt.return_value = ({"image": {"reference": "fixture@sha256:" + "b" * 64,
                                                                            "image_id": "sha256:" + "b" * 64},
                                                                 "build": {"build_id": "fixture-build"}}, {})
-            fake._current_candidate_revision_record.return_value = (1, None)
+            fake._current_candidate_revision_record.return_value = (1, revision)
             fake._bind_candidate_identity_to_build_receipt.return_value = {"git_commit": "a" * 40}
             subject = admission.ManagedFacts.__new__(admission.ManagedFacts)
             subject.config, subject.upgrade = config, fake
