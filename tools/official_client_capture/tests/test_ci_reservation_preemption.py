@@ -54,7 +54,7 @@ class ReservationPreemptionTests(unittest.TestCase):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def start(self, *, exclusive=False, restartable=True, sleep_rounds=1, sleep_seconds=30,
-              gates=False, child=False, exit_code=0, test_mode=False):
+              gates=False, child=False, exit_code=0, test_mode=False, prior_failure=False):
         counter = self.root / 'counter'
         ready = self.root / 'ready'
         child_code = 'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print("就绪",flush=True);time.sleep(60)'
@@ -75,7 +75,13 @@ class ReservationPreemptionTests(unittest.TestCase):
             script = self.tree / 'test_fixture.py'
             # 将命令体放在测试方法里；中止第一次测试后，重新运行必须只上报一个正式用例。
             method = body.removesuffix(f'raise SystemExit({exit_code})\n')
-            script.write_text('import unittest\nclass FixtureTests(unittest.TestCase):\n    def test_resumed(self):\n'
+            first = ''
+            if prior_failure:
+                first = ('    def test_0_fail_once(self):\n        from pathlib import Path\n'
+                         f'        marker=Path({str(self.root / "failure-seen")!r})\n'
+                         '        if not marker.exists():\n            marker.write_text("已观察失败")\n'
+                         '            self.fail("中止前已经发生的断言失败")\n')
+            script.write_text('import unittest\nclass FixtureTests(unittest.TestCase):\n' + first + '    def test_resumed(self):\n'
                               + ''.join('        ' + line + '\n' for line in method.splitlines()))
             command = ['run', '--start', str(self.tree)]
         else:
@@ -158,6 +164,22 @@ class ReservationPreemptionTests(unittest.TestCase):
         self.check_restarted(summary)
         self.assertEqual(summary['reported_tests'], 1)
         self.assertTrue(all(not value for value in summary['full_set'].values()))
+
+    def test_assertion_failure_before_interruption_cannot_be_hidden_by_passing_diagnostic(self):
+        self.start(test_mode=True, prior_failure=True)
+        self.acquire()
+        ue.release(self.state, 'fixture-batch')
+        summary = self.complete(1)
+        self.assertEqual(summary['counts']['failed'], 1)
+        self.assertEqual(summary['reservation_interruptions'], [])
+        self.assertEqual(len(summary['diagnostic']), 1)
+        self.assertTrue(summary['diagnostic'][0]['passed'])
+        records = [json.loads(p.read_text()) for p in (self.out / 'units').glob('*.record.json')]
+        formal = next(row for row in records if row['kind'] == 'formal')
+        self.assertFalse(formal['passed'])
+        self.assertFalse(formal['inheritable'])
+        self.assertTrue(formal['observed_failure']['reservation']['counted_as_failure'])
+        self.assertTrue(Path(formal['observed_failure']['path']).exists())
 
     @unittest.skipUnless(sys.platform.startswith('linux'), '会话进程核验仅在 Linux 上提供 /proc 证据')
     def test_term_resistant_session_child_is_gone_before_grant(self):

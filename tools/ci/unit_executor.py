@@ -602,10 +602,12 @@ def plan_units(
 class _RecordingResult(unittest.TextTestResult):
     """在 unittest 原有输出之外，逐个记录测试 ID 的结论与耗时。"""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, failure_path: Path | None = None, unit_id: str = "", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.records: dict[str, dict[str, Any]] = {}
         self._started: dict[str, float] = {}
+        self.failure_path = failure_path
+        self.unit_id = unit_id
 
     def startTest(self, test: unittest.TestCase) -> None:  # noqa: N802 - unittest 接口
         self._started[test.id()] = time.monotonic()
@@ -623,18 +625,23 @@ class _RecordingResult(unittest.TextTestResult):
         }
         if reason is not None:
             self.records[test_id]["reason"] = reason  # 跳过原因（E2-04：P0 证据的跳过清单逐条带原因）
+        if self.failure_path is not None and outcome in {"failed", "error", "unexpected_success"}:
+            # 在输出失败标志之前持久化。成功路径不增加逐测试写盘；中止不能抹去已观察的失败。
+            _write_json(self.failure_path, {"schema_version": UNIT_RESULT_SCHEMA, "unit_id": self.unit_id,
+                                           "tests": self.records, "tests_run": self.testsRun,
+                                           "successful": False, "partial": True})
 
     def addSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
         super().addSuccess(test)
         self._record(test, "passed")
 
     def addFailure(self, test: unittest.TestCase, err: Any) -> None:  # noqa: N802
-        super().addFailure(test, err)
         self._record(test, "failed")
+        super().addFailure(test, err)
 
     def addError(self, test: unittest.TestCase, err: Any) -> None:  # noqa: N802
-        super().addError(test, err)
         self._record(test, "error")
+        super().addError(test, err)
 
     def addSkip(self, test: unittest.TestCase, reason: str) -> None:  # noqa: N802
         super().addSkip(test, reason)
@@ -645,13 +652,13 @@ class _RecordingResult(unittest.TextTestResult):
         self._record(test, "expected_failure")
 
     def addUnexpectedSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
-        super().addUnexpectedSuccess(test)
         self._record(test, "unexpected_success")
+        super().addUnexpectedSuccess(test)
 
     def addSubTest(self, test: unittest.TestCase, subtest: Any, err: Any) -> None:  # noqa: N802
-        super().addSubTest(test, subtest, err)
         if err is not None:
             self._record(test, "failed" if issubclass(err[0], test.failureException) else "error")
+        super().addSubTest(test, subtest, err)
 
 
 def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
@@ -667,7 +674,8 @@ def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
     for test_id in test_ids:
         name = test_id[len(FAILED_IMPORT_PREFIX):] if test_id.startswith(FAILED_IMPORT_PREFIX) else test_id
         suite.addTests(loader.loadTestsFromName(name))
-    runner = unittest.TextTestRunner(verbosity=1, resultclass=_RecordingResult)
+    runner = unittest.TextTestRunner(verbosity=1, resultclass=lambda *args, **kwargs: _RecordingResult(
+        *args, failure_path=result_path.with_suffix('.observed-failure.json'), unit_id=payload['unit_id'], **kwargs))
     result = runner.run(suite)
     assert isinstance(result, _RecordingResult)
     _write_json(
@@ -982,6 +990,9 @@ class Recorder:
             body["read_audit"] = audit
         if item.resumed_from:
             body["resumed_from"] = item.resumed_from
+        if outcome.extra.get("observed_failure"):
+            body.update(observed_failure=outcome.extra["observed_failure"], inheritable=False,
+                        not_inheritable_reason="预约中止前已登记测试失败，正式失败结论保留")
         if outcome.extra.get("reservation_interruption"):
             # 中止证据保留原身份，但不进入正式通过／失败或诊断集合，永不可承接。
             body.update(kind="reservation-aborted", original_kind=item.kind, passed=False, inheritable=False,
@@ -1275,7 +1286,8 @@ class Scheduler:
         record_path = self.out_dir / "units" / f"{safe}{suffix}.record.json"
         tests_path = self.out_dir / "units" / f"{safe}{suffix}.tests.json"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        for stale in (result_path, record_path):
+        for stale in (result_path, record_path, result_path.with_suffix('.observed-failure.json'),
+                      result_path.with_suffix('.observed-failure.json.tmp')):
             with contextlib.suppress(FileNotFoundError):
                 stale.unlink()
         if unit.command:
@@ -1381,8 +1393,8 @@ class Scheduler:
                 # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
                 interrupted = (item.interruption is not None and
                                (exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL, -signal.SIGTERM, -signal.SIGKILL)))
-                if interrupted:
-                    # 不吞真实非零失败；预约中止的部分结果单独留档，重派从头执行。
+                if item.interruption is not None:
+                    # 无论原单元是否已经失败，都须核对会话清理后才能授予整机。
                     active = []
                     for member in _session_members(pid):
                         try:
@@ -1393,6 +1405,22 @@ class Scheduler:
                             active.append(member)
                     if active:
                         raise ExecutorError(f"预约中止后会话仍有活跃进程：{active}")
+                if interrupted and not item.unit.command:
+                    journal = item.result_path.with_suffix('.observed-failure.json')
+                    incomplete = journal.with_name(journal.name + '.tmp')
+                    if journal.exists() or incomplete.exists():
+                        observed = journal if journal.exists() else incomplete
+                        partial = _read_json_file(observed)
+                        # 原子发布被打断也保留失败；半份失败日志不允许被当成无失败而重跑成通过。
+                        if partial is not None and partial.get('unit_id') == item.unit.unit_id:
+                            outcome.result = outcome.result or partial
+                        outcome.extra['observed_failure'] = {'path': str(observed),
+                            'sha256': self.recorder.records.file_sha256(observed),
+                            'reservation': {**item.interruption, 'status': 'failed_before_interruption',
+                                            'counted_as_failure': True, 'requeue_required': False}}
+                        interrupted = False
+                if interrupted:
+                    # 没有已登记失败的预约中止单独留档，重派从头执行。
                     outcome.extra["reservation_interruption"] = {**item.interruption, "active_session_members": active}
                     if self.auditor is not None:
                         trace = self.auditor.trace_path(item.unit)
