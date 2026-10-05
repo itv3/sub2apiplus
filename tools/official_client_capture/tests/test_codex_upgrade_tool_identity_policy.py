@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import ast
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Iterator
@@ -329,6 +331,25 @@ class IdentityMemoTest(unittest.TestCase):
         payload["value"]["control_sha256"] = "f" * 64
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         self.assertEqual(self._identity()["control_sha256"], identity["control_sha256"], "键原文对不上的条目不得采用")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["value"]["control_sha256"] = "f" * 64
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        with mock.patch.object(tip, "_compute_identity_v2", wraps=tip._compute_identity_v2) as recompute:
+            self.assertEqual(self._dump(self._identity()), self._dump(identity), "输入键未变的结果损坏也必须重算")
+            self.assertEqual(recompute.call_count, 1)
+
+    def test_identical_tree_copy_hits_but_changed_tree_recomputes(self) -> None:
+        from tools.official_client_capture.tests import managed_tree_copy
+
+        identity = self._identity()
+        other = managed_tree_copy.tool_root(managed_tree_copy.copy_managed_tree(self.root / "other", include_tests=False))
+        with mock.patch.object(tip, "_compute_identity_v2", side_effect=AssertionError("同内容树应命中")):
+            self.assertEqual(self._dump(tip.compute_identity_v2(self.policy, other, codex_upgrade._tool_tree_entries(other))), self._dump(identity))
+        (other / "codex_upgrade_timing_ledger.py").write_text("# 独立树变更\n")
+        with mock.patch.object(tip, "_compute_identity_v2", wraps=tip._compute_identity_v2) as recompute:
+            changed = tip.compute_identity_v2(self.policy, other, codex_upgrade._tool_tree_entries(other))
+            self.assertNotEqual(changed["control_sha256"], identity["control_sha256"])
+            self.assertEqual(recompute.call_count, 1)
 
     def test_disabled_without_an_absolute_directory(self) -> None:
         with tempfile.TemporaryDirectory() as cwd:
@@ -338,6 +359,80 @@ class IdentityMemoTest(unittest.TestCase):
                     tip.evaluator_dependency_digests(self.tree)
                     self.assertFalse((Path(cwd) / "relative-memo").exists())
         self.assertFalse(self.memo.exists(), "未启用时不写任何缓存")
+
+
+class IdentityMemoStorageTests(unittest.TestCase):
+    """持久缓存是可丢弃的计算加速层；损坏、权限异常及并发写入不能改变结果。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.entry = (self.root / "memo.json", {"tree": "1" * 64})
+        self.value = {"second": "二", "first": "一"}
+        tip._memo_save(self.entry, self.value)
+
+    def test_permissions_owner_symlink_and_fifo_are_rejected(self):
+        path = self.entry[0]
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        path.chmod(0o644)
+        self.assertIsNone(tip._memo_load(self.entry))
+        path.chmod(0o600)
+        with mock.patch.object(tip.os, "geteuid", return_value=os.geteuid() + 1):
+            self.assertIsNone(tip._memo_load(self.entry))
+        target = self.root / "target.json"
+        path.rename(target)
+        original = target.read_bytes()
+        path.symlink_to(target)
+        self.assertIsNone(tip._memo_load(self.entry))
+        tip._memo_save(self.entry, self.value)
+        self.assertFalse(path.is_symlink())
+        self.assertEqual(target.read_bytes(), original)
+        path.unlink()
+        os.mkfifo(path, 0o600)
+        self.assertIsNone(tip._memo_load(self.entry))
+
+    def test_result_order_and_digest_are_bound(self):
+        path = self.entry[0]
+        self.assertEqual(list(tip._memo_load(self.entry)), list(self.value))
+        payload = json.loads(path.read_text())
+        payload["value"] = dict(reversed(list(payload["value"].items())))
+        path.write_text(json.dumps(payload))
+        self.assertIsNone(tip._memo_load(self.entry))
+
+    def test_concurrent_writers_publish_unique_complete_files(self):
+        barrier = threading.Barrier(8)
+        sources = []
+        replace = os.replace
+
+        def publish(source, target):
+            sources.append(str(source))
+            self.assertEqual(tip._memo_load(self.entry), self.value)
+            barrier.wait(timeout=10)
+            replace(source, target)
+
+        with mock.patch.object(tip.os, "replace", side_effect=publish), ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda _: tip._memo_save(self.entry, self.value), range(8)))
+        self.assertEqual(len(set(sources)), 8)
+        self.assertEqual(tip._memo_load(self.entry), self.value)
+        self.assertEqual(list(self.root.glob("*.tmp")), [])
+
+    def test_failed_publish_keeps_previous_entry_and_removes_only_own_tempfile(self):
+        before = self.entry[0].read_bytes()
+        other = self.root / "another.tmp"
+        other.write_text("其他写入者")
+        with mock.patch.object(tip.os, "replace", side_effect=OSError("模拟发布失败")):
+            tip._memo_save(self.entry, {"changed": True})
+        self.assertEqual(self.entry[0].read_bytes(), before)
+        self.assertEqual(list(self.root.glob("*.tmp")), [other])
+
+    def test_algorithm_and_python_version_change_the_key(self):
+        with mock.patch.dict(os.environ, {tip.IDENTITY_MEMO_ENV: str(self.root)}):
+            original = tip._memo_entry("identity-v2", {"tree": "1" * 64})
+            with mock.patch.object(tip, "_algorithm_sha256", return_value="0" * 64):
+                self.assertNotEqual(tip._memo_entry("identity-v2", {"tree": "1" * 64}), original)
+            with mock.patch.object(tip.sys, "version_info", (3, 99, 1)):
+                self.assertNotEqual(tip._memo_entry("identity-v2", {"tree": "1" * 64}), original)
 
 
 if __name__ == "__main__":

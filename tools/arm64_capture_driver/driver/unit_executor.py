@@ -1453,6 +1453,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--shared-caches", choices=("auto", "bytecode", "off"), default="auto",
                            help="共享缓存：auto 准备字节码和身份记忆化；bytecode 只准备字节码并清除外部身份记忆目录；off 都不准备（单元按原环境运行，诊断用）")
             p.add_argument("--bytecode-helper", type=Path, default=DEFAULT_BYTECODE_HELPER, help="字节码共享层的预编译工具（测试与诊断用）")
+            p.add_argument("--identity-memo", choices=("auto", "off"), default=None,
+                           help="独立控制身份记忆化；省略时沿用 shared-caches 模式，off 清除外部身份目录")
             p.add_argument("--bytecode-source", type=Path, action="append", default=None, help="预编译进共享层的源码目录，可重复；默认 tools")
         if name == "run-gates":
             # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；入口门禁（驱动 entry-gates.sh）缺省全集通过。
@@ -1547,10 +1549,11 @@ def _prepare_shared_caches(args: argparse.Namespace, out_dir: Path, scheduler: S
     print(f"字节码共享层：{note}（{bytecode['prefix'] or '不设前缀'}）", file=sys.stderr, flush=True)
     # 身份记忆化：本次运行的全部单元共用一个缓存目录，同一棵树的身份五摘要与评估器四项只算一次；键是整树逐文件摘要，
     # 测试改副本树后自然重算（见 codex_upgrade_tool_identity_policy）。
-    if args.shared_caches == "bytecode":
+    memo_mode = args.identity_memo or {"auto": "auto", "bytecode": "off", "off": "inherit"}[args.shared_caches]
+    if memo_mode == "off":
         os.environ.pop(IDENTITY_MEMO_ENV, None)
     identity_memo = os.environ.get(IDENTITY_MEMO_ENV) or None
-    if args.shared_caches == "auto" and not identity_memo:
+    if memo_mode == "auto" and not identity_memo:
         identity_memo = str((out_dir / "identity-memo").resolve())
         os.environ[IDENTITY_MEMO_ENV] = identity_memo
     return bytecode, identity_memo

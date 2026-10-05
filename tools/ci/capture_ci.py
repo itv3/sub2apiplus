@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools.ci import capture_test_shards as shards
+from tools.ci import unit_executor as executor
 
 SCHEMA = "capture-ci-shard/v1"
 
@@ -52,6 +53,7 @@ def source_identity(args):
         raise shards.ShardError("CI 提交身份不匹配或源码工作树不干净")
     paths = [Path(__file__), ROOT / "tools/ci/capture_test_shards.py", ROOT / "tools/ci/unit_executor.py",
              ROOT / "tools/ci/unit_records.py", ROOT / "tools/arm64_capture_driver/driver/bytecode_cache.py",
+             ROOT / "tools/official_client_capture/codex_upgrade_tool_identity_policy.py",
              args.weights, args.config, args.durations]
     paths += sorted(args.start.rglob("*.py"))
     parser = os.environ.get("CLAUDE_AST_TYPESCRIPT_MODULE")
@@ -80,10 +82,69 @@ def prepare(args):
     if not selected:
         raise shards.ShardError("空分片不能作为通过凭证")
     ids = sorted(case.id() for case in selected)
+    config = executor.load_config(args.config)
+    for prefix, _reason in config.exclusive:
+        if not any(executor._matches(test_id, prefix) for test_id in all_ids):
+            raise shards.ShardError(f"独占登记没有命中任何测试：{prefix}")
+    exclusive_ids = [test_id for test_id in ids
+                     if any(executor._matches(test_id, prefix) for prefix, _reason in config.exclusive)]
     return selected, {"schema_version": SCHEMA, "source": source_identity(args),
                       "shard_count": args.count, "shard_index": args.index, "modules": modules,
                       "partition_sha256": digest(partitions), "full_test_ids_sha256": digest(all_ids),
-                      "full_test_count": len(all_ids), "test_ids": ids, "selected_test_ids_sha256": digest(ids)}
+                      "full_test_count": len(all_ids), "test_ids": ids, "selected_test_ids_sha256": digest(ids),
+                      "exclusive_test_ids": exclusive_ids}
+
+
+def verify_dispatch(plan, execution_plan, events, summary):
+    """用真实启动／退出事件闭合规划；独占约束覆盖正式执行和诊断，不以诊断替代正式结果。"""
+    units = {}
+    planned_tests = []
+    exclusive = set(plan["exclusive_test_ids"])
+    for unit in execution_plan["units"]:
+        unit_id, tests = unit["unit_id"], unit["tests"]
+        if unit_id in units or not tests:
+            raise shards.ShardError("派发规划含重复或空单元")
+        required = bool(set(tests) & exclusive)
+        if type(unit["exclusive"]) is not bool or unit["exclusive"] != required or (required and not set(tests) <= exclusive):
+            raise shards.ShardError("派发规划的独占标志与登记不符")
+        units[unit_id] = unit
+        planned_tests.extend(tests)
+    if sorted(planned_tests) != plan["test_ids"] or len(set(planned_tests)) != len(planned_tests):
+        raise shards.ShardError("派发规划未闭合本片测试全集")
+    formal = summary["units"]
+    if sorted(row["unit_id"] for row in formal) != sorted(units):
+        raise shards.ShardError("正式单元结果缺失或重复")
+    for row in formal:
+        if row["kind"] != "formal" or row["exclusive"] != units[row["unit_id"]]["exclusive"]:
+            raise shards.ShardError("正式单元独占身份不匹配")
+    active, started, exited = {}, Counter(), Counter()
+    for event in events:
+        if event["event"] not in {"start", "exit"}:
+            continue
+        unit_id, kind, pid = event["unit"], event["kind"], event["pid"]
+        if unit_id not in units or kind not in {"formal", "diagnostic"} or type(pid) is not int or pid <= 0:
+            raise shards.ShardError("派发事件身份非法")
+        identity = (kind, unit_id)
+        if event["event"] == "start":
+            if pid in active or started[identity]:
+                raise shards.ShardError("单元重复派发")
+            if active and (units[unit_id]["exclusive"] or any(units[item[1]]["exclusive"] for item in active.values())):
+                raise shards.ShardError("独占单元与其他单元重叠")
+            active[pid] = identity
+            started[identity] += 1
+        else:
+            if active.pop(pid, None) != identity:
+                raise shards.ShardError("派发启动与退出未配对")
+            exited[identity] += 1
+        if event["running"] != sorted(item[1] for item in active.values()):
+            raise shards.ShardError("派发事件的在跑集合不一致")
+    expected = Counter({("formal", unit_id): 1 for unit_id in units})
+    expected.update(("diagnostic", row["unit_id"]) for row in summary.get("diagnostic", []))
+    if active or started != expected or exited != expected:
+        raise shards.ShardError("派发事件缺报或仍有未退出单元")
+    return {"status": "passed", "formal_units": len(units), "exclusive_tests": len(exclusive),
+            "exclusive_units": sum(unit["exclusive"] for unit in units.values()),
+            "diagnostic_units": len(summary.get("diagnostic", [])), "start_exit_pairs": sum(exited.values())}
 
 
 class ObservedResult(unittest.TextTestResult):
@@ -141,7 +202,7 @@ def run_legacy(selected, out):
 
 
 def run_unified(args, plan, out):
-    """先核对全集与分片；每片共享独立字节码层，身份记忆化仍关闭。"""
+    """先核对全集与分片；每片在独立目录准备字节码与身份缓存，两个开关分别回退。"""
     selection = out / "selection.json"
     write_once(selection, {"schema_version": "unit-executor-selection/v1",
                            "full_test_ids_sha256": plan["full_test_ids_sha256"], "test_ids": plan["test_ids"]})
@@ -152,6 +213,7 @@ def run_unified(args, plan, out):
             "--durations", str(args.durations), "--selection-file", str(selection), "--parallel", str(args.parallel),
             "--cores", str(args.cores), "--state-dir", str(out / "state"), "--out-dir", str(work),
             "--shared-caches", "bytecode" if args.bytecode_cache == "auto" else "off",
+            "--identity-memo", args.identity_memo,
             "--bytecode-source", str(ROOT / "tools")]
     if not args.start.resolve().is_relative_to((ROOT / "tools").resolve()):
         argv.extend(["--bytecode-source", str(args.start.resolve())])
@@ -182,6 +244,10 @@ def run_unified(args, plan, out):
             or binding.get("full_test_ids_sha256") != plan["full_test_ids_sha256"]
             or binding.get("selected_test_ids_sha256") != plan["selected_test_ids_sha256"]):
         raise shards.ShardError("执行器的分片身份或选择件发生漂移")
+    execution_plan_path, events_path = work / "plan.json", work / "events.jsonl"
+    dispatch = verify_dispatch(plan, json.loads(execution_plan_path.read_text()),
+                               [json.loads(line) for line in events_path.read_text().splitlines()], summary)
+    dispatch.update(plan_sha256=file_digest(execution_plan_path), events_sha256=file_digest(events_path))
     records, seen = {}, []
     for unit in summary["units"]:
         if unit.get("kind") != "formal":
@@ -201,7 +267,8 @@ def run_unified(args, plan, out):
         code = code or 1
     return code, records, seen, {"command": argv, "summary_sha256": file_digest(summary_path),
                                 "policy_sha256": summary["policy_sha256"], "diagnostic": summary.get("diagnostic", []),
-                                "bytecode_cache": summary["bytecode_cache"], "identity_memo": summary["identity_memo"]}
+                                "bytecode_cache": summary["bytecode_cache"], "identity_memo": summary["identity_memo"],
+                                "dispatch_verification": dispatch}
 
 
 def main(argv=None):
@@ -211,6 +278,8 @@ def main(argv=None):
     parser.add_argument("--executor", choices=("unified", "legacy"), default="unified")
     parser.add_argument("--bytecode-cache", choices=("auto", "off"), default="auto",
                         help="统一执行器的作业内只读字节码共享；off 显式关闭，旧执行器不预编译")
+    parser.add_argument("--identity-memo", choices=("auto", "off"), default="auto",
+                        help="统一执行器的作业内身份记忆化；off 独立关闭，旧执行器不启用")
     parser.add_argument("--start", type=Path, default=ROOT / shards.DEFAULT_START)
     parser.add_argument("--pattern", default=shards.DEFAULT_PATTERN)
     parser.add_argument("--weights", type=Path, default=ROOT / shards.DEFAULT_WEIGHTS)
@@ -233,6 +302,7 @@ def main(argv=None):
         return 2
     receipt = {"schema_version": SCHEMA, "executor": args.executor, "started_at_utc": started,
                "bytecode_cache_mode": args.bytecode_cache if args.executor == "unified" else "off",
+               "identity_memo_mode": args.identity_memo if args.executor == "unified" else "off",
                "shard_count": args.count, "shard_index": args.index, "automatic_fallback": False}
     code = 2
     interrupted_by = None
@@ -267,7 +337,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         receipt.update(status="aborted", reason="CI 执行被中断，原日志保留")
         code = 143 if interrupted_by == signal.SIGTERM else 130
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, shards.ShardError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, shards.ShardError, executor.ExecutorError) as error:
         receipt.update(status="failed", reason=str(error))
         code = 2
     finally:

@@ -1,5 +1,6 @@
 """CI 接入与回退的隔离验收；比较真实子进程结果，不依赖 GitHub 或生产账户。"""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -90,13 +91,15 @@ class CaptureEntryTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
         self.environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    def run_entry(self, name, mode="unified", index=1, count=2, extra_env=None, bytecode_cache="off"):
+    def run_entry(self, name, mode="unified", index=1, count=2, extra_env=None, bytecode_cache="off", identity_memo="off"):
         output = self.root / name
         argv = [sys.executable, "-B", str(ROOT / "tools/ci/capture_ci.py"), "--count", str(count), "--index", str(index),
                 "--executor", mode, "--start", str(self.tests), "--weights", str(self.weights), "--config", str(self.config),
                 "--durations", str(self.root / "no-durations.json"), "--out-dir", str(output), "--parallel", "2", "--cores", "2"]
         if bytecode_cache is not None:
             argv.extend(["--bytecode-cache", bytecode_cache])
+        if identity_memo is not None:
+            argv.extend(["--identity-memo", identity_memo])
         result = subprocess.run(argv, cwd=ROOT, env={**self.environment, **(extra_env or {})}, capture_output=True, text=True, timeout=180)
         receipt = json.loads((output / "receipt.json").read_text()) if (output / "receipt.json").is_file() else None
         if result.returncode:
@@ -199,6 +202,43 @@ class CaptureEntryTests(unittest.TestCase):
         self.assertTrue(receipt["coverage_closed"])
         self.assertFalse(receipt["automatic_fallback"])
 
+    def test_default_identity_directory_is_per_run_and_external_memo_is_cleared(self):
+        foreign = self.root / "foreign-memo"
+        foreign.mkdir()
+        receipts = []
+        for name, bytecode in (("one", "off"), ("two", "auto")):
+            result, receipt, output = self.run_entry(name, count=1, identity_memo=None, bytecode_cache=bytecode,
+                extra_env={"CODEX_UPGRADE_IDENTITY_MEMO": str(foreign)})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(receipt["identity_memo_mode"], "auto")
+            self.assertEqual(receipt["detail"]["identity_memo"], str(output / "executor/identity-memo"))
+            self.assertEqual(receipt["detail"]["dispatch_verification"]["status"], "passed")
+            receipts.append(receipt)
+        disabled, receipt, _ = self.run_entry("off", count=1, identity_memo="off", bytecode_cache="auto",
+            extra_env={"CODEX_UPGRADE_IDENTITY_MEMO": str(foreign)})
+        self.assertEqual(disabled.returncode, 0, disabled.stdout + disabled.stderr)
+        self.assertEqual(receipt["identity_memo_mode"], "off")
+        self.assertIsNone(receipt["detail"]["identity_memo"])
+        self.assertEqual(len({row["detail"]["identity_memo"] for row in receipts}), 2)
+        self.assertTrue(all(row["outcomes_sha256"] == receipt["outcomes_sha256"] for row in receipts))
+        self.assertEqual(list(foreign.iterdir()), [])
+
+    def test_registered_exclusive_test_is_verified_from_real_dispatch_events(self):
+        config = json.loads(self.config.read_text())
+        config["exclusive"] = [{"tests": "test_alpha.C.test_a", "reason": "隔离计时敏感用例"}]
+        self.config.write_text(json.dumps(config))
+        result, receipt, output = self.run_entry("exclusive", count=1, identity_memo="auto")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        audit = receipt["detail"]["dispatch_verification"]
+        self.assertEqual((audit["exclusive_tests"], audit["exclusive_units"], audit["formal_units"]), (1, 1, 3))
+        self.assertEqual(audit["events_sha256"], ci.file_digest(output / "executor/events.jsonl"))
+        config["exclusive"][0]["tests"] = "test_missing.C.test_a"
+        self.config.write_text(json.dumps(config))
+        result, receipt, output = self.run_entry("stale-exclusive", count=1)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("独占登记", receipt["reason"])
+        self.assertFalse((output / "execution.log").exists())
+
     def test_changed_test_source_is_rejected_after_execution(self):
         self.tests.joinpath("test_alpha.py").write_text(
             "import unittest\nfrom pathlib import Path\nclass C(unittest.TestCase):\n"
@@ -262,6 +302,55 @@ class CaptureEntryTests(unittest.TestCase):
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
                 process.communicate(timeout=40)
+
+
+class DispatchVerificationTests(unittest.TestCase):
+    """损坏的派发记录必须失败关闭，即便测试结果自称通过。"""
+
+    def setUp(self):
+        self.plan = {"test_ids": ["test_a", "test_b"], "exclusive_test_ids": ["test_b"]}
+        self.execution = {"units": [{"unit_id": name, "tests": ["test_" + name], "exclusive": name == "b"}
+                                     for name in ("a", "b")]}
+        self.summary = {"units": [{"unit_id": name, "kind": "formal", "exclusive": name == "b"}
+                                  for name in ("a", "b")], "diagnostic": []}
+        self.events = [{"event": event, "unit": name, "kind": "formal", "pid": pid,
+                        "running": [name] if event == "start" else []}
+                       for name, pid in (("a", 11), ("b", 12)) for event in ("start", "exit")]
+
+    def verify(self):
+        return ci.verify_dispatch(self.plan, self.execution, self.events, self.summary)
+
+    def test_complete_dispatch_is_accepted(self):
+        self.assertEqual(self.verify()["start_exit_pairs"], 2)
+
+    def test_overlapping_exclusive_is_rejected(self):
+        self.events[1], self.events[2] = self.events[2], self.events[1]
+        self.events[1]["running"] = ["a", "b"]
+        with self.assertRaisesRegex(ci.shards.ShardError, "重叠"):
+            self.verify()
+
+    def test_wrong_flags_and_missing_test_are_rejected(self):
+        original = copy.deepcopy(self.execution)
+        for changes in ({"exclusive": False}, {"tests": ["test_b", "test_a"]}, {"tests": []}):
+            self.execution = copy.deepcopy(original)
+            self.execution["units"][1].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ci.shards.ShardError):
+                self.verify()
+
+    def test_missing_duplicate_unpaired_and_wrong_running_events_are_rejected(self):
+        original = copy.deepcopy(self.events)
+        for events in (original[:-1], original[:2], original + original[2:], original[1:],
+                       [dict(original[0], running=[])] + original[1:]):
+            self.events = events
+            with self.subTest(events=events), self.assertRaises(ci.shards.ShardError):
+                self.verify()
+
+    def test_missing_or_diagnostic_formal_summary_is_rejected(self):
+        original = copy.deepcopy(self.summary["units"])
+        for units in (original[:1], original + original[:1], [dict(row, kind="diagnostic") for row in original]):
+            self.summary["units"] = units
+            with self.subTest(units=units), self.assertRaises(ci.shards.ShardError):
+                self.verify()
 
 
 if __name__ == "__main__":

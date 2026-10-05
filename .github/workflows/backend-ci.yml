@@ -20,6 +20,11 @@ on:
         type: choice
         default: auto
         options: [auto, off]
+      capture_identity_memo:
+        description: 'CI 作业内身份记忆化；off 用于独立回退'
+        type: choice
+        default: auto
+        options: [auto, off]
 
 permissions:
   contents: read
@@ -32,6 +37,7 @@ jobs:
     env:
       CAPTURE_TEST_EXECUTOR: ${{ inputs.capture_executor || vars.CAPTURE_TEST_EXECUTOR || 'unified' }}
       CAPTURE_TEST_BYTECODE_CACHE: ${{ inputs.capture_bytecode_cache || vars.CAPTURE_TEST_BYTECODE_CACHE || 'auto' }}
+      CAPTURE_TEST_IDENTITY_MEMO: ${{ inputs.capture_identity_memo || vars.CAPTURE_TEST_IDENTITY_MEMO || 'auto' }}
     strategy:
       fail-fast: false
       matrix:
