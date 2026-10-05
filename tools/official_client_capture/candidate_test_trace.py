@@ -138,8 +138,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 不改变测试、事实宇宙或规则语义（PROTO-002、EP-002、EP-019 按网关口径 inherit，不新增事实）。
 # 2026-10-04（合并上游 v0.2.13）：上游在 `repository/http_upstream.go` 的 Grok CLI 代理头里加 x-grok-client-mode 与
 # x-authenticateresponse 两个请求头（共 4 行，只作用于 Grok 请求）；映射只重绑该源码快照，不改变测试、事实或规则语义。
+# 2026-10-06：C-09.5 将没有生产调用的旧 Header 定型器移入已绑定的候选测试文件。
+# 仅重绑生产文件与测试文件摘要，测试、事实和判据语义保持一致。
 FROZEN_MAPPING_SHA256 = (
-    "e6ecc2b0c9149334700baab5cb1b5ecb97acffaef96dbd0500629d219c781ed3"
+    "76ef6064368472f9b366fe89d49968c314ec5f9116d1ad838f25e9ae2559012e"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
