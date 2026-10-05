@@ -605,7 +605,8 @@ class AbsentEndpointDeferralTest(GateFixture):
 class RetiredLabelDeferralTest(GateFixture):
     """R21：目标版本官方侧声明删掉了冻结画像所选的标签值时，官方 seal 只延后这一类未命中。
 
-    弃用集合 = 基线版本官方侧声明有、目标版本官方侧声明已删的取值。0.156.1 相对 0.154.0
+    弃用集合 = 冻结画像所属版本官方侧声明有、目标版本官方侧声明已删的取值。
+    DIGESTS 的 baseline 键沿用历史命名，绑定画像参照版本。0.156.1 相对 0.154.0
     删去了 variant=optional_missing（改为 v2_config_disabled）与只描述 legacy 请求的
     session_header_scope，冻结画像按旧取值选择必然零命中（D8 及其后的 SPEC-HDR-007）。
     """

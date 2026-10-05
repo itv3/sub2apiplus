@@ -18,6 +18,27 @@
   清单生成与复验都失败；安装态 `manifest.json` 自身 0600／root 也在复验范围内。
 * 参数文件不 `source`：`lib.sh` 经 `driver/parse_env.py` 解析（精确键集合、值只允许引用已定义键、任何命令形态拒绝），
   只 `eval` 引号化后的赋值。
+* `B` 自动派生为 `D/candidates/CAND`；旧参数保留时只作相等断言。公共前导与 Python 驱动共用根解析，
+  旧环境中的 `NEWDIR`、候选实物根和收据根均被本轮派生值覆盖；路径跳转或符号链接在建运行目录前拒绝。
+* `python3 -B driver/round_context.py --env "$ARM64_VC_ENV" --mode candidate` 只读重放正式 Campaign、
+  有效账本、激活的 revision 与收据根，输出绑定摘要。`--mode campaign` 允许尚未激活候选；
+  `--mode init` 只允许尚未创建的 Campaign，返回初始化坐标，不能代替正式准入。VC-5 准入已消费严格候选解析。
+  `CAND` 是预期断言，实际候选来自账本；不按最新目录或最大 revision 选择。正式收据的重放、批准和派发合同保持独立。
+
+* `phase_context.py --env "$ARM64_VC_ENV" --mode paths|build|attempt` 只读解析 VC-5／VC-6 的当前评估基线、
+  阶段读来源与可写目标。`--mode attempt [--attempt-id ...]` 核对唯一有效 attempt 及完成收据；显式 ATT 只作断言。
+  重开后的 checkpoint 使用原生 reopen 路径，reused 阶段不生成写计划；断言配置和门禁目录按候选／基线隔离。
+  `build` 必须完整重放构建实物；已封存结果的只读查询可核对历史构建收据绑定，报告明确为 `sealed_receipt_binding`，
+  不能用作新采集准入。`vc-batch.sh` 在预约前重放直接前序与计划参数，VC-6 另核对步骤收据与当前 acceptance。
+
+* `cleanup_context.py --env "$ARM64_VC_ENV"` 只读输出当前收尾清理参数及 VC-5／VC-6、canonical 收据绑定。
+  `tools/codex_closeout.py` 的 execute 清理配置可在参数、目标和凭证路径中引用 `${B}`、`${VC5_RECEIPT}`、
+  `${VC6_RECEIPT}` 等报告字段；未知引用和旧阶段参数拒绝。恢复演练凭证须含 `status=passed`、展开后的
+  `targets`、`backup` 文件绑定及 `cleanup_context_sha256`（报告规范化 JSON 的 SHA-256）。准备及发布时
+  重放当前参数，变化后必须重新审核。执行脚本从 `CODEX_CLOSEOUT_CLEANUP_CONTEXT` 读取已批准报告，
+  从 `CODEX_CLOSEOUT_CLEANUP_APPROVAL` 读取专项批准；结果须回填 `approval` 文件绑定和上下文摘要，
+  删除核验也须绑定同一摘要。首次执行先持久化占位，中断后只对账、不重派；完成后只读复核。
+  本入口不自动停止容器、删除资源或修改历史脚本，实际动作仍由审核绑定的脚本负责。
 
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
@@ -184,7 +205,7 @@
   执行器版本、调度策略版本、环境指纹、单元规格、输入明细与摘要、测试 ID 与逐个结论、退出状态、用量、日志摘要、起止时间、
   自摘要。入口门禁把记录与日志存进记录库 `--record-store`（默认数据根之外跨轮次固定的 `$(dirname $D)/unit-records`）。
 * 两种模式（`entry-gates.sh --mode`，方案 D12）：
-  * `full-set-pass`（全集通过，默认）：先在记录库里给每个单元找可承接的记录，只执行找不到的。可承接＝正式执行、按原始字段
+  * `full-set-pass`（底层逐单元模式，入口由 B-09 全集准入保护）：先在记录库里给每个单元找可承接的记录，只执行找不到的。可承接＝正式执行、按原始字段
     重新判定为通过、单元规格与输入摘要没变、调度策略版本与环境指纹没变、执行器没变、7 天以内、所在运行的清单把它列为该单元
     的正式执行、日志在库且摘要相符。诊断执行的记录永不承接。
   * `re-execute`（重新执行全集）：一个都不承接。升级开工的入口空跑、一致性验收、收尾合入前用；编排器带 `--reexecute-gates`。
@@ -197,7 +218,7 @@
   证书、Go／Docker／Node／pnpm 的变量；USER、LOGNAME、SHELL 不放行——E4-01 起与调用方无关，操作员 shell、修好接着跑、后台验证、
   入口空跑跑出的记录可以互相承接），执行器把这份环境整份算进指纹（字节码前缀除外），再加系统、内核、Python 与已装包、dpkg
   软件包、有效用户、主机名、核数，以及门禁清单给的工具链版本与前端依赖摘要。任何一项变了全部单元不承接。单元规格与环境里有
-  测试树路径，测试树目录也要相同（后台验证与前台入口门禁共用 `$(dirname $D)/entry-gates-work`）。
+  测试树路径，测试树目录也要相同（B-09 不强行让隔离后台缓存与前台共用；坐标不同且输入不能重放时全量重跑）。
 * 清单：每次运行写 `executor/unit-manifest.json`（逐单元本次执行还是承接、承接的原运行与记录摘要、执行的不承接原因）并
   自检——执行＋承接＝全集、重新执行全集不得有承接项、每条承接都追到原始的正式执行记录并逐项重验、测试组记录的测试 ID 并集
   等于全集。自检不通过，门禁结论判失败；自检通过的清单才存进记录库（`runs/`），之后的运行才能承接这次的记录。单独重验：
@@ -218,26 +239,20 @@
   全部记录、记录的日志与承接项的原运行清单都留着；其余早于保留期的删掉，目录不删。同样的日志内容寻址到同一个文件，发布方
   遇到已有的同名文件会刷新修改时间，清理先移走再复查修改时间，期间被刷新的放回原处。
 
-## 读集审计（E3-04，`driver/read_audit.py`）
+## 读集审计（B-11，`driver/read_audit.py`）
 
-* 用途：承接（E3-01）与步骤失效判定（E2-05）都靠声明的输入范围，漏声明会把该重跑的判成可以承接。审计让每个单元真跑一遍，
-  核对实际读取都在声明里。只在重新执行全集时带：`entry-gates.sh --mode re-execute --audit-reads`，或编排器
-  `--reexecute-gates --audit-reads`（升级开工的入口空跑、E4-03 验收各一次）。要求采集主机有 strace（ARM64 是 6.8）。
-* 做法：执行器把每个正式执行的单元包在 `strace -f -qq --seccomp-bpf -y -e verbose=none -e signal=none
-  -e trace=%file,clone,clone3,fork,vfork` 下（诊断执行不包），输出先经 `grep -E` 预筛（只留测试树、数据根下的路径与
-  派生、execve、chdir 行），再交给 `read_audit.py filter`，写 `executor/audit/<单元>.trace.json`；单元结束后按它本次的
-  输入明细核对。声明了整个仓库的单元（后端、前端、lint、egress 子检查、部署脚本）不包 strace：它们对仓库不可能有
-  未声明读取。不改单元规格、不改执行记录：审计跑出来的记录照常可承接。
-* 核对口径：只判读内容、执行、写和探测不存在的路径；stat 成功、打开或列举目录只算元数据、不判（工具身份计算一类遍历会
-  stat 树里每个文件再按名字排除）；导入系统试探的 `.so` 扩展模块变体与字节码缓存不看。覆盖＝范围项、闭包文件（含
-  `unit_records.EXTRA_TEST_READS` 补登的）、声明的单个文件、HEAD（读 `.git`）、已算明细里的绝对路径（`entry_steps.PRE_A3_DATA_ROOT`
-  那几项：冻结台账目录；录制数据的全部根目录，以及录制配置引用的两棵官方源码树与它们的 git 目录、基线画像、目标安装包；
-  数据根的断言打包脚本；项目总账在 staging 与数据根顶层的两处探测位置）；只读 HEAD 提交号的模块（`HEAD_ID_ONLY_READERS`）
-  读 `.git` 只许 HEAD、refs、配置一类。测试树单元读到数据根一律报出；pre-A3 场景在数据根运行，与仓库同布局的部分按仓库
-  相对路径核对，其余按豁免表 `DATA_ROOT_EXEMPT`／`DATA_ROOT_EXEMPT_PATTERNS`（场景临时根、git 与 Go 的仓库和模块发现、
-  命名空间包标记、编译器与 unittest 的试探、R18 命名空间写探测，每条写明原因）。
-* 结论：有未声明读取的单元写进汇总与 `executor/audit/read-audit.json`（仓库或数据根相对路径、读取方式、样例系统调用、
-  补声明的建议），整次运行判失败；门禁项结论不变。已知局限：只看元数据、不读内容的依赖（只列目录或只 stat）看不到。
+* 旧 `--audit-reads` 仍核对测试树和数据根，明确标为 `coverage_complete=false`，不能作为完整宿主覆盖凭证。
+* `entry-gates.sh --mode re-execute --audit-reads --audit-strict` 记录全根路径，包括宿主依赖、目录元数据、缺失探测和字节码；整仓声明的单元也接受审计。无法解析、轨迹缺失、未绑定路径或输入漂移均失败，不发布可承接的通过记录。仅审计失败不自动重复执行命令。
+* `--audit-host-inputs <JSON>` 以 `unit-host-inputs/v1` 的 `units` 对象登记逐单元精确绝对路径，运行前计算快照。文件绑定内容、元数据、链接及祖先权限；目录只绑定直接目录项，不能代表子文件。虚拟设备、写入和不能稳定绑定的读取不能承接；未闭合单元维持重新执行。
+* 宿主快照 `read-audit-host-snapshot/v2` 保留链接指向、身份、权限、修改时间等属性，排除正常路径解析可能刷新的链接访问时间；普通目标文件和目录的访问时间仍绑定。成功的 `lstat`、带 `AT_SYMLINK_NOFOLLOW` 的元数据读取及 `O_PATH|O_NOFOLLOW` 打开继续拒绝承接，避免遗漏可观察的链接元数据。旧快照须重新取证，不能直接当作 v2 凭证。
+* `read_audit.py scope --record <记录库正式记录> --trace <库内轨迹> --output <新提案>` 重放来源运行清单、日志和完整读集。`entry_gates.py plan --input-scope <提案>` 或入口同名选项只替换该命令的输入声明，保留门禁全集；执行前再核对命令、资源、环境及执行器摘要，必须重新执行严格审计。提案 `reuse_enabled=false`，不直接承接宽范围来源记录。
+* 严格审计保留原测试树和字节码缓存。带 `--input-scope` 再验收时，只读核对原树提交、干净状态、bundle 分支及缓存，禁止重建测试树、复制依赖或重新预编译来绕过快照漂移；原实物缺失则重新建立读集。
+* 原始轨迹按内容摘要入库，审计结论先于执行记录落盘；承接时重新读取轨迹并核对当前快照。正式结果与诊断结果分别登记；覆盖报告逐单元列出缺口，汇总缺少任一单元不能判完整通过。B 类真实承接仍须独立批准。
+* `--audit-policy <JSON>` 登记 `unit-audit-policy/v1`，固定 `default=reexecute-only`；`units` 按真实命令 ID 列出精确 `host_paths`、`require_read_audit=true` 与 `runtime_contract`。只允许重新执行严格审计，登记单元必须覆盖闭合，未登记单元（包括新增测试）按原命令全量执行，记录明确 `inheritable=false`、`reexecute_required`、`coverage_complete=false`。未覆盖项不能成为以后承接的来源；功能与承接边界通过不代表全集读集覆盖。缺单元、错绑或登记项审计失败仍判失败。承接集合只能只读预览，不能以此开关开启真实承接。
+* 控制终端单独绑定 `/dev/tty` 标准字符设备身份和无控制终端状态；只接受轨迹明确为 `ENXIO` 的打开失败或合同内元数据检查。成功访问、其它错误、事件缺失均拒绝，不能把所有设备读取一概豁免。
+* `/bin/bash -n` 语法检查显式设置 `SHELL=/bin/bash` 并绑定到单元规格，避免精简环境下额外查询用户数据库。其它脚本的环境保持原合同；取证和完整门禁必须使用相同的入口环境，不能用 SSH 会话环境替代。
+* 命令输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与命令轨迹，在实际环境中复核外部输入前后快照。只有本轮空 tmpfs 内能按创建顺序及真实描述符证明的文件才算输出；旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接。
+* 动态路径只支持逐项登记 `/proc/filesystems` 和 `/proc/sys/crypto/fips_enabled` 的实际值；`/dev/null` 单独绑定标准设备身份。其它动态内核输入、命名空间变更和未建模通信继续失败关闭，不允许整个 `/tmp`、`/proc` 或 `/dev` 前缀豁免。子进程早于 clone 返回的相对路径按父子关系缓存重放，缺少父子关系仍拒绝；轨迹文件名包含完整单元 ID 摘要，避免不同单元串用。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
 
@@ -265,7 +280,7 @@
 ## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
 
 * 用途：目标平台门禁（采集主机上对候选测试树隔离执行 `make test`，40～70 分钟）原本只在 VC-5 accept 之前跑，门禁自身的
-  问题（修好接着跑第 67 项）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
+  问题（字节码缓存前缀导致计时用例失败）要到那时才暴露。VC-0 先用当时的候选源码（本轮受管工具部署所在的提交）把同一门禁跑一遍，
   问题在 VC-0 就修掉。结果只作预检，**不是** accept 的门禁收据；VC-5 accept 前 `vc5-accept.sh` 仍在候选门禁目录执行正式门禁。
 * 时机：E2-04 起预跑记录取自建账本之前的入口门禁（同一次运行的 `preflight.json`），本命令只在入口门禁之后又改了源码、需要
   单独补跑时使用；单独运行时不与 stage1 各步或 VC-1 取证并行（与 accept 前正式门禁同一安静条件，资源争用会把计时用例拖红）。
@@ -377,7 +392,7 @@
 * 规则（指南“修好接着跑”一节）：定向回归通过即部署接着跑；全量门禁挪到后台，由同一个统一调度执行器跑，结论按修复提交与
   部署收据绑定，每个批次边界检查；采集批次开始前向调度器申请整机。
 * 起：`bash background-validate.sh start <bundle> <分支> <40 位提交>`（fix-and-continue 的 background-validate 步骤自动执行）。
-  绑定数据根最新部署收据，`nice` 降优先级跑 `entry-gates.sh --profile full-gates --mode full-set-pass --require-deployed`
+  绑定数据根最新部署收据，`nice` 降优先级跑 `entry-gates.sh --profile full-gates --mode re-execute --require-deployed`
   （门禁前核对数据根部署的就是这个提交；承接记录库里输入没变的单元，只执行受修复影响的），测试树与缓存和前台入口门禁同一个
   目录（单元规格与环境指纹里有测试树路径，目录不同记录就互相承接不了），前台在跑时 `--wait-lock` 排队等锁。同一提交＋同一部署
   已有在跑或已有结论就不重复起；在跑的其它后台验证先停下（superseded）。
@@ -389,8 +404,9 @@
   注意：被停下的运行没有发布运行清单，它执行过的单元记录不能被承接（E3-01 承接要追到原运行清单），下一次验证会重新执行它们。
 * 批次边界：`vc-batch.sh`（VC-2～VC-6 的全部批次都经它）派发前执行 `check-boundary`：当前部署绑定的结论是 failed／aborted
   就拒绝派发、退出 3；passed、running 照常；没有结论（没起、被停下或进程已不在）照常派发并提示先 start。随后
-  `unit_executor.py acquire --owner vc-batch-<Campaign>-<序号> --owner-pid $$`：后台验证停派、等在跑单元结束才批准（上限
-  `VC_ACQUIRE_TIMEOUT` 秒，默认 3600），批次结束（含失败退出）`release`，后台接着跑。VC-0 收口同步派发 VC-1 首批，编排器在
+  `unit_executor.py acquire --owner vc-batch-<Campaign>-<序号> --owner-pid $$`：后台验证立即停派；隔离测试默认宽限 30 秒，超时先 TERM、5 秒仍存活再 KILL，确认原会话清空才批准。
+  命令须显式声明 `reservation_restartable: true`；pre-A3 与一次性预热保持排空等待。申请上限仍为
+  `VC_ACQUIRE_TIMEOUT` 秒（默认 3600）。批次结束（含失败退出）`release`，后台核验输入、环境和工具身份后重派被中止单元。VC-0 收口同步派发 VC-1 首批，编排器在
   调收口模块前后同样申请与归还整机。
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
@@ -412,7 +428,7 @@
   同一份记录库里刚验过的门禁单元全部承接，真正执行的只有 pre-A3 场景（输入变了的）与便宜检查；零请求 smoke、atomic-double 与
   建账本之后的步骤要用采集容器，只在明确执行的空跑里跑。
 * 让路：有采集在跑（执行器整机预约的申请方还活着）就不起，结论记 `yielded`、退出 4；空跑不申请整机，不挡采集。
-* 日常维护（方案第 8 节：日常化空跑和升级开工前先查磁盘余量）：每次空跑开跑前先清 Go 编译缓存里 6 小时以上没用过的条目
+* 日常维护（空跑和升级开工前先查磁盘余量）：每次空跑开跑前先清 Go 编译缓存里 6 小时以上没用过的条目
   （`go env GOCACHE`，Go 用到一个条目会把它的修改时间刷新到一小时以内）、清理单元执行记录库（见上文「单元执行记录与承接」）、
   只留最近 5 次空跑的演练根与空跑产物（在跑的不动）、部署留下的旧暂存树（数据根 `staging/<名>-managed-tools.superseded-<UTC>`，
   没有收据或账本引用）每组只留最近 2 份（E4-03），再查根盘：越过停线（与 `guard.sh` 同一条：已用超过 69%，或可用少于
@@ -425,7 +441,7 @@
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置；同一提交＋同一部署（同一种空跑）
   已有在跑或已有结论就不重复跑。`status` 列出全部。演练根与空跑产物只留最近 5 次（日常维护自动清）。
 
-## 修好接着跑一条命令（第 35 项，`driver/fix-and-continue.sh`）
+## 修好接着跑一条命令（`driver/fix-and-continue.sh`）
 
 * 用途：候选采集（VC-5）续跑的一轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"由一条命令编排，取代按 sed 复制改写的
   upload-rN／repair-rN 轮次脚本。每轮只换一份轮次参数文件（模板 `driver/fix-and-continue.example.params`，经
@@ -449,15 +465,93 @@
   本脚本从不调用 accounting-resolve／environment-isolate／campaign-resume／request-budget-extend，从不传 `--force`，不重装守护。
 * 阶段延期在对账前（pre-extend）与授权后（extend）各判一次：对账前阶段截止已过时计时账本是 deadline_paused、对账判预算
   暂停且拒绝批准；延期写入又会推进 Campaign 账本 head，放在批准与授权之间会让授权拒绝"账本 head 已推进"。
-* 根因修复登记（第 59 项）：reconcile-runs 与 reconcile-attempt 对账遇"项目总账根因达上限"暂停，走同一条登记路径——
+* 根因修复登记：reconcile-runs 与 reconcile-attempt 对账遇"项目总账根因达上限"暂停，走同一条登记路径——
   shell 函数 `root_cause_repair`（同一判定 repair-plan、同一命令 record-root-cause-repair、同一核对 repair-verdict）。
   reconcile-attempt 照旧记 passed（needs_repair）交 repair 步骤登记、approve 重新对账；reconcile-runs 在 repair 之前，
   参数给了材料就在本步骤内登记、对该对象重新对账一次（仍暂停即停下），没给材料停下时提示 `--from reconcile-runs`。
   受管对账器先写对账收据、入总账再判定，暂停对象的收据按监督器判据核验是通过的：停下记录带 `revisit`，续跑扫描时
   重新对账这些对象，不当作已对账跳过。Campaign 账本 stop_required 不走此路径，只停下等人工 campaign-resume。
-* 续跑重新对账（第 62 项）：`revisit` 覆盖 reconcile-runs 里任何暂停种类（deadline、accounting、environment、request_budget、
+* 续跑重新对账：`revisit` 覆盖 reconcile-runs 里任何暂停种类（deadline、accounting、environment、request_budget、
   root_cause_repair 与受管将来新增的种类），重新对账判可恢复即记 done、仍暂停按原提示停下。暂停提示末尾恰好一个
   `--from`，与停下记录的续跑步骤相同：含 deadline 时是 `pre-extend`（在参数文件填 EXTEND_DEADLINE／EXTEND_REASON，
   pre-extend 先于对账执行阶段延期），其余种类按受管提示处理后从停下的步骤续跑。reconcile-attempt／approve 每次都对
   目标 attempt 重新对账，不存在"暂停后被跳过"；它们的 deadline 暂停同样从 pre-extend 续跑。永久停线、需审核与命令
   失败不进 revisit，行为不变。
+
+## B-09 全集收据与开工准入
+
+后台验证使用 `re-execute`。可附带 `--full-set-context <JSON> --full-set-clock <JSON>` 与
+`--audit-policy <JSON>`；通过后只对同一次执行且所有单元完整读集覆盖的结果签发 `full-set-receipt.json`。
+覆盖未闭合保留功能通过结果，另外记录拒签，不能把 B-11 的部分覆盖当作全集可承接。
+
+`full_set_receipt.py --source <索引> --context <上下文> --clock <凭证> --output <新文件>` 可独立签发；
+输出不可覆盖。签发时刻取原全集最后单元完成 UTC，期限至多 86400 秒；`--predecessor` 关联失效旧收据，
+同一旧运行不得作为替代重跑，重复签发不续期。
+
+开工 `entry.sh --full-set-request <JSON> --full-set-work <来源后台的 work 目录>` 或独立 `entry-gates.sh --full-set-request <JSON>` 消费请求。
+缺少请求、任一条件失效或开关关闭均重新执行全集。请求使用 `full-set-request/v1`，含 `reuse_enabled`、
+`receipt`、`context`、`consumer_clock`、`revocation`、`approvals`；文件索引均为规范绝对路径和完整 SHA-256。
+两类批准分别登记三方审核与变更批准的角色、账号、UTC、有效期、合同与绑定摘要，工具不代签。
+
+上下文使用 `full-set-context/v1`，`binding` 字段由模块常量列出，`evidence` 绑定部署、画像权威收据、
+运行镜像、外部依赖锁及数据快照。镜像收据须登记 `container_name` 与实际 Docker Image ID；消费时重新查询
+容器镜像、Git HEAD、最新部署和主机平台，不能只相信旧 JSON。工具包摘要取源运行执行器包摘要，
+平台字段用模块 `platform_fields()`；画像使用内容 Digest，不与收据文件 SHA-256 混用。
+
+校时凭证含 `status=synchronized`、`source`、`offset_seconds`、`sampled_at_utc`；偏差绝对值 ≤60 秒，
+采样年龄 ≤300 秒。撤销查询 `full-set-revocation-query/v1` 必须 `status=ok`、`revoked=false`、
+`campaign_status=active`，绑定收据自摘要且查询年龄 ≤60 秒。边界 `now >= expires_at` 立即失效。
+任何审批撤回、证据更正或身份变化应登记撤销事件并重新执行，不修改旧收据。
+
+入口在排队前和获得调度锁后复核，只接受同一来源的完整集合；`full-set-decision.json` 与运行清单同时记录
+实际承接／全量重跑原因、来源 run ID 和原失效时间。开工前每次重新判断，旧步骤缓存不能绕过时效门。
+真实复用当前保持关闭；专项批准及全集覆盖闭合后才可提交开启请求。隔离夹具的批准不具有生产效力。
+
+B-09 后台结论到期时自动新建执行；收到撤销或错绑后用 `background-validate.sh start … --rerun-full-set`，
+旧终态按内容摘要归档并关联旧收据，仍在运行时拒绝重复派发。校时采样允许由已登记的校时来源更新；
+部署、画像与数据等静态上下文在运行期间改变则拒签，不能把新上下文套到旧执行上。
+
+来源与消费工作区及缓存必须保持一致；`--full-set-work` 显式传递已登记的后台独立目录，
+工作区重建或路径不同会使严格输入失效并重跑，不能为了承接而忽略路径差异。
+
+## B-10 目标平台单元承接
+
+VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置 `VC5_TARGET_REQUEST` 才进入
+`target_platform_gate.py run`：从固定八类门禁生成完整计划，以同一个 B-09 全集来源选择匹配单元，
+差异与新增单元完整执行。读集未闭合、共享身份变化、审批或来源失效时全部重跑。
+可设置 `VC5_TARGET_TREE`、`VC5_TARGET_PYCACHE` 和 `VC5_TARGET_RECORD_STORE` 指向来源已登记的
+工作树、缓存和记录库；工作树必须与候选测试树同提交且干净，现有缓存只读使用，宿主输入逐次重算。
+路径不同导致不匹配时仍重跑，不自动迁移或改写原记录。
+
+请求为 `target-platform-request/v1`，含 B-09 的 `receipt/context/consumer_clock/revocation/reuse_enabled`，
+两类 `approvals` 的 scope 改为 `target-platform-inheritance/v1`，另需 `platform_compatibility` 签字凭证。
+签字凭证含 `status=approved`、账号、scope、`binding_sha256`、批准与失效 UTC。
+`target` 精确登记 Campaign、Candidate、画像 Digest、目标架构、候选源码摘要和候选 Image ID；
+字段名见 `SUBJECT_FIELDS`，两类批准及平台签字还必须绑定 `target_sha256`。
+执行环境的运行镜像与被验收候选镜像分别绑定，不能假设相等。工具不签批准，演练凭证不用于生产。
+
+判定在排队前、取锁后和差异执行结束时复核；结束时失效不得发布通过清单。
+`target-units/evidence.json` 绑定计划、执行汇总、逐单元清单、封存的动态查询及原失效时间。
+正式外部门禁 v4 的 `unit_execution` 字段引用此证据，实际命令明确记录为单元调度入口。
+受管生成器按钉住的五个验证器摘要加载仓库源码或安装驱动，拒绝缺件和漂移；修改这些文件须同步
+更新生成器的 `TARGET_VERIFIER_SHA256S`、旧 producer 只读登记及必要冻结承接。
+
+`vc5-accept.sh` 在消费旧通过文件及派发 accept 前重新核验。失效或失败的门禁、环境及派生事实
+归档到 `superseded/`，索引保留原路径、归档路径和逐文件完整摘要；本机门禁与采集封存包不动。
+已正式 accept 的结果只作历史重放，后续过期不改写已完成的历史阶段。
+工程代码和驱动安装不自动部署新受管收据合同，也不启用真实承接；受管合同的监督部署、
+完整读集覆盖和专项批准仍需闭合后才允许真实消费。
+
+### C-02：三组后端测试共用一次 Go 预编译
+
+`entry-gates.sh` 的 `entry`／`full-gates` 重新执行路径默认先运行一次 `go build ./...`，只编译生产包和依赖，不运行测试或 `TestMain`。三组正式 `go test` 命令、标签和覆盖保持原样；`--go-warmup off` 关闭预热。已有 B-09 承接请求时跳过预热，不改动来源缓存。
+
+预热通过同一统一执行器的独占准备单元运行，遵守整机预约、进程回收与日志规则；任何编译失败都在正式门禁派发前停止，诊断不会重复编译或覆盖首份收据。`GOCACHE`、`GOMODCACHE`、`GOTMPDIR` 默认取本次 `--work` 根下的独立目录；显式缓存必须在该工作根内、测试树外且互不包含，外部共享目录或符号链接拒绝。后台验证沿用 A-04 已绑定的缓存目录。
+
+`go-compile-warmup.json` 记录提交、后端源码摘要、Go 二进制与环境摘要、三个缓存根、编译日志、退出码和耗时；对应准备执行器的目录为 `go-compile-warmup-executor/`。这是编译收据，不是测试通过凭证，不能承接测试结论。性能比较必须把预热和三组测试全部耗时相加，不只比较预热后的热跑部分。
+
+## 整机预约中止与重派（C-03）
+
+预约批准绑定完整请求摘要，同名 owner 的下一次请求不能复用旧批准。`reservation_grace_seconds` 默认 30、`reservation_stop_seconds` 默认 5；将前者设为 `null` 恢复等待自然结束。并行与独占段都在等待时观察预约；撤回的预约停止后续中止操作。
+
+中止尝试写为 `reservation-aborted`，不可承接，不计测试失败或诊断。每次重派独立命名日志、结果和收据，最终正式记录以 `resumed_from` 关联中止记录；汇总的 `reservation_interruptions` 单独列账。部分审计轨迹只作中止证据保留。Python 断言、错误和意外成功先即时留档再打印；已观察失败即使随后被预约中止、诊断重跑通过，仍保留正式失败。实际非零测试失败继续计失败，无法清空会话或重派前身份漂移均拒绝继续。

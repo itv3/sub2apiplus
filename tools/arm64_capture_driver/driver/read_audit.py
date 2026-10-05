@@ -22,20 +22,30 @@ strace 下，单元结束后按它的输入明细核对，超出声明的读取�
 * 只读 HEAD 提交号的模块（unit_records.HEAD_ID_ONLY_READERS）没声明 HEAD：它们读 ``.git`` 只许 HEAD、refs、配置一类，
   读到对象库（``.git/objects/``）照样报出。
 
-子命令：``filter --output <json> --root <目录> [--root …]``（读标准输入的 strace 输出，见上）。
+以上为旧范围审计，始终标记 coverage_complete=false。B-11 严格模式不预筛路径、不跳过整仓声明，
+逐路径绑定精确宿主快照，元数据、字节码和缺失状态同样核对；不稳定、写入或未解析调用失败关闭。
+
+子命令：``filter --output <json> --root <目录> [--root …] [--strict]``；
+``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 TRACE_SCHEMA = "read-audit-trace/v1"
+STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
+RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
+HOST_SCHEMA = "read-audit-host-snapshot/v2"
 REPORT_SCHEMA = "read-audit-report/v1"
 # strace 选项：只跟踪文件类调用与进程派生（子进程继承工作目录要用）；不解码 stat 等结构、不打印信号（省 strace 自己的
 # 格式化开销）。10-02 ARM64 第一轮实测：原来带 getdents64、全部进程类调用并解码结构时，被测进程只拿到约 30% 的核。
@@ -82,7 +92,7 @@ _DIRFD_EXEC = frozenset({"execveat"})
 # 不带 dirfd 的：第一个（rename、link 是前两个）字符串参数是路径，相对路径按进程最近的工作目录还原。
 _PLAIN_READ = frozenset({"open"})
 _PLAIN_PROBE = frozenset({"stat", "lstat", "stat64", "lstat64", "access", "readlink", "statfs", "statfs64", "chdir", "getxattr", "lgetxattr",
-                          "listxattr", "llistxattr", "inotify_add_watch", "uselib"})
+                          "listxattr", "llistxattr", "inotify_add_watch", "uselib", "getcwd"})
 _PLAIN_WRITE = frozenset({"creat", "mkdir", "rmdir", "unlink", "rename", "link", "symlink", "truncate", "truncate64", "chmod", "chown", "lchown",
                           "utime", "utimes", "setxattr", "lsetxattr", "removexattr", "lremovexattr", "mknod"})
 _PLAIN_EXEC = frozenset({"execve"})
@@ -101,15 +111,76 @@ _CALL = re.compile(r"^([a-z_][a-z0-9_]*)\((.*)$", re.S)
 _RESUMED = re.compile(r"^<\.\.\. ([a-z_][a-z0-9_]*) resumed>")
 _ESC = r'(?:[^"\\]|\\.)*'
 _ANN = r"(?:[^>\\]|\\.)*"
-_PAIR = re.compile(r'(?:AT_FDCWD|-?\d+)<(' + _ANN + r')>,\s*"(' + _ESC + r')"')
 _ANNOTATION = re.compile(r"(AT_FDCWD|-?\d+)<(" + _ANN + r")>")
+_ANNOTATED_VALUE = re.compile(r"<" + _ANN + r">")
 _QUOTED = re.compile(r'"(' + _ESC + r')"')
 # 返回值在行尾：「) = 值[<解析路径>][ 错误码 (说明)]」；从行尾匹配，参数里出现类似字样也不会误判。
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
 
 
+def _call_arguments(body: str, result: re.Match | None) -> list[str]:
+    """保留系统调用参数位置；字符串、描述符、数组及结构里的逗号不分割。
+
+    不从全行捞取引号内容：路径缺失或截断时，后面的 argv、链接结果和扩展属性值不能补位。
+    旧范围模式仍可读取 unfinished 前已完整打印的参数；严格模式先按 PID 拼好调用再进入这里。
+    """
+    text = body[:result.start()] if result is not None else body.removesuffix("<unfinished ...>").rstrip()
+    arguments, stack = [], []
+    start = index = 0
+    while index < len(text):
+        char = text[index]
+        if char in {'"', '<'}:
+            token = (_QUOTED if char == '"' else _ANNOTATED_VALUE).match(text, index)
+            if token is None:
+                return []
+            index = token.end()
+            continue
+        if char in "([{":
+            stack.append({"(": ")", "[": "]", "{": "}"}[char])
+        elif char in ")]}":
+            if not stack or stack.pop() != char:
+                return []
+        elif char == "," and not stack:
+            arguments.append(text[start:index].strip())
+            start = index + 1
+        index += 1
+    if stack:
+        return []
+    arguments.append(text[start:].strip())
+    return arguments
+
+
+def _path_argument(arguments: Sequence[str], index: int) -> str | None:
+    """只接受路径位置上的完整字符串；右引号之后的省略号表示截断，不能当作真实路径。"""
+    value = _QUOTED.fullmatch(arguments[index]) if index < len(arguments) else None
+    return unescape(value[1]) if value is not None else None
+
+
+def _argument_flags(body: str) -> set[str]:
+    """标志只取字符串和描述符路径之外的字段，文件名不能冒充打开或元数据标志。"""
+    arguments = _QUOTED.sub('""', body)
+    arguments = re.sub(r"<" + _ANN + r">", "", arguments)
+    return set(re.findall(r"\b(?:O|AT)_[A-Z0-9_]+\b", arguments))
+
+
+def _operation_flags(body: str) -> set[str]:
+    """输出归属只消费打开标志，保持原事件格式。"""
+    return {flag for flag in _argument_flags(body) if flag.startswith("O_")}
+
+
 class AuditError(RuntimeError):
     """审计配置或轨迹文件不可用。"""
+
+
+def _runtime_module():
+    """从受管同目录加载隔离合同，仓库和驱动副本使用同一入口。"""
+    name = "_read_audit_runtime"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE.with_name("read_audit_runtime.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[name] = module
+    return sys.modules[name]
 
 
 # ---------------------------------------------------------------------------
@@ -159,25 +230,79 @@ def _join(directory: str | None, path: str) -> str | None:
 class TraceParser:
     """逐行解析 ``strace -f -y`` 的输出，累积（路径 → 读取方式集合）与每个路径的第一条样例行。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, strict: bool = False, runtime_context: dict[str, Any] | None = None) -> None:
         self.cwd: dict[str, str] = {}
         self.accesses: dict[str, set[str]] = {}
         self.samples: dict[str, str] = {}
         self.lines = 0
+        self.strict = strict
+        self.pending: dict[str, str] = {}
+        # 子进程可以先于父进程 clone 的返回行执行；先缓存这段轨迹，得到父子关系后按原顺序重放。
+        self.deferred: dict[str, list[str]] = {}
+        self.spawn_cwd: dict[str, str | None] = {}
+        self.deferred_count = 0
+        self.unresolved = 0
+        self.unresolved_reasons: dict[str, int] = {}
+        self.runtime_context = runtime_context
+        self.output_tracker = None
+        self.output_events: list[dict[str, Any]] = []
+        self.terminal_events: list[dict[str, Any]] = []
+        self.event: tuple[str, str, bool] = ("", "", False)
+        if runtime_context is not None:
+            if not strict:
+                raise AuditError("隔离合同必须使用严格审计")
+            runtime = _runtime_module()
+            contract = runtime.validate_context(runtime_context, [runtime_context["contract_entry"]])
+            self.output_tracker = runtime.OutputTracker(contract)
+
+    def _unresolved(self, reason: str) -> None:
+        """仅登记调用名与分类，不保存可能含参数、凭据或正文的原始行。"""
+        self.unresolved += 1
+        self.unresolved_reasons[reason] = self.unresolved_reasons.get(reason, 0) + 1
 
     def _add(self, path: str | None, kind: str, line: str) -> None:
         if not path:
+            if self.strict:
+                self._unresolved("path-not-resolved")
             return
         self.accesses.setdefault(path, set()).add(kind)
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
+        if self.output_tracker is not None and path == "/dev/tty":
+            name, body, succeeded = self.event
+            result = _RESULT.search(body)
+            self.terminal_events.append({"name": name, "kind": kind, "errno": result.group(2) if result else None,
+                                         "succeeded": succeeded})
+        if self.output_tracker is not None and _under(path, self.output_tracker.root):
+            name, body, succeeded = self.event
+            descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+            target = unescape(descriptor[1]) if descriptor else None
+            flags = _operation_flags(body)
+            self.output_tracker.observe(path, kind, name, "|".join(flags), succeeded, target)
+            # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
+            if len(self.output_events) < 200000:
+                self.output_events.append({"path": path, "kind": kind, "name": name, "succeeded": succeeded,
+                                           "flags": sorted(flags), "target": target})
+            else:
+                self._unresolved("output-event-limit")
 
     def feed(self, raw: str) -> None:
         self.lines += 1
         line = raw.rstrip("\n")
         match = _LINE.match(line)
         pid, rest = (match.group(1), match.group(2)) if match else ("0", line)
+        if self.strict and pid in self.deferred:
+            self._defer(pid, line)
+            return
         resumed = _RESUMED.match(rest)
         if resumed is not None:
+            if self.strict:
+                original = self.pending.pop(pid, None)
+                if original is None:
+                    self._unresolved("resume-without-start:" + resumed.group(1))
+                else:
+                    self.feed(pid + " " + original + rest[resumed.end():])
+                    self.lines -= 1
+                return
             if resumed.group(1) in _SPAWN:
                 child = _RESULT.search(rest)
                 if child and child.group(1).isdigit() and pid in self.cwd:
@@ -187,36 +312,89 @@ class TraceParser:
             return
         call = _CALL.match(rest)
         if call is None:
+            if self.strict and rest.strip():
+                self._unresolved("unrecognized-line")
             return
         name, body = call.group(1), call.group(2)
         unfinished = body.rstrip().endswith("<unfinished ...>")
+        if self.strict and unfinished:
+            if pid in self.pending:
+                self._unresolved("overlapping-unfinished:" + name)
+            self.pending[pid] = rest[:rest.rfind("<unfinished ...>")]
+            if name in _SPAWN:
+                self.spawn_cwd[pid] = self.cwd.get(pid)
+            return
         result = None if unfinished else _RESULT.search(body)
+        if self.strict and (result is None or re.search(r'"\s*\.\.\.', body)):
+            self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
-        for annotation in _ANNOTATION.finditer(body):
+        self.event = (name, body, result is not None and errno is None and result.group(1) != "-1")
+        arguments = _call_arguments(body, result)
+        if self.strict and result and result.group(1).isdigit() and errno is None:
+            flags = _argument_flags(body)
+            # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
+            # 显式读链接元数据或取得链接本身的描述符尚无完整合同，必须拒绝承接。
+            if (name in {"lstat", "lstat64"}
+                    or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags)
+                    or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
+                self._unresolved("symlink-metadata-not-bound:" + name)
+        for argument in arguments:
+            annotation = _ANNOTATION.fullmatch(argument)
+            if annotation is None:
+                continue
             if annotation.group(1) == "AT_FDCWD":
                 directory = unescape(annotation.group(2))
                 if directory.startswith("/"):
                     self.cwd[pid] = directory
         if name in _SPAWN:
-            if result and result.group(1).isdigit() and pid in self.cwd:
-                self.cwd.setdefault(result.group(1), self.cwd[pid])
+            if self.strict and re.search(r"\bCLONE_(?:UNTRACED|NEWNS)\b", body):
+                self._unresolved("unobservable-child:" + name)
+            inherited = self.spawn_cwd.pop(pid, self.cwd.get(pid))
+            if result and result.group(1).isdigit() and int(result.group(1)) > 0 and inherited:
+                child = result.group(1)
+                self.cwd.setdefault(child, inherited)
+                buffered = self.deferred.pop(child, [])
+                self.deferred_count -= len(buffered)
+                for event in buffered:
+                    self.feed(event)
+                    self.lines -= 1
+            return
+        if name == "fchdir":
+            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            if annotation and unescape(annotation[2]).startswith("/") and errno is None:
+                directory = unescape(annotation[2])
+                self.cwd[pid] = directory
+                self._add(directory, "dir", line)
+            elif self.strict:
+                self._unresolved("directory-fd-not-resolved:fchdir")
             return
         if name == "getdents64":
-            annotation = _ANNOTATION.search(body)
+            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
             if annotation:
                 path = unescape(annotation.group(2))
                 if path.startswith("/"):
                     self._add(os.path.normpath(path), "list", line)
+                elif self.strict:
+                    self._unresolved("directory-fd-not-resolved")
+            elif self.strict:
+                self._unresolved("directory-fd-not-annotated")
             return
         failed = errno is not None
         if name in _DIRFD_READ or name in _DIRFD_PROBE or name in _DIRFD_WRITE or name in _DIRFD_EXEC:
-            pairs = [(unescape(directory), unescape(path)) for directory, path in _PAIR.findall(body)]
-            if name not in _TWO_PATHS:
-                pairs = pairs[:1]
+            positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
+            pairs = []
+            for position in positions:
+                directory = _ANNOTATION.fullmatch(arguments[position]) if position < len(arguments) else None
+                path = _path_argument(arguments, position + 1)
+                if directory is not None and path is not None:
+                    pairs.append((unescape(directory[2]), path))
             missing = errno in _MISSING_ERRNOS
             if name in _DIRFD_READ:
-                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
-                        else "dir" if "O_DIRECTORY" in body else "read")
+                flags = _operation_flags(body)
+                kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in flags else "read")
+                if self.strict and name == "openat2" and not flags:
+                    self._unresolved("open-flags-not-decoded:openat2")
             elif name in _DIRFD_WRITE:
                 kind = "write"
             elif name in _DIRFD_EXEC:
@@ -227,33 +405,60 @@ class TraceParser:
                 if path == "":
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
                 self._add(_join(directory, path), kind, line)
+            if self.strict:
+                if len(pairs) != len(positions):
+                    self._unresolved("dirfd-path-not-resolved:" + name)
+                # 返回描述符展示解引用后的真实路径，防止用树内链接掩盖宿主机读取。
+                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                if target and name in _DIRFD_READ:
+                    self._add(_join(None, unescape(target[1])), kind, line)
+                elif name in _DIRFD_READ and not failed:
+                    self._unresolved("opened-fd-not-resolved:" + name)
             return
         if name in _PLAIN_READ or name in _PLAIN_PROBE or name in _PLAIN_WRITE or name in _PLAIN_EXEC:
-            strings = [unescape(item) for item in _QUOTED.findall(body.split("<unfinished ...>")[0])]
-            if name == "symlink":
-                strings = strings[1:2]  # 只有链接本身被创建；目标字符串不是被访问的路径
-            elif name in _TWO_PATHS:
-                strings = strings[:2]
-            else:
-                strings = strings[:1]
+            positions = (1,) if name in {"symlink", "inotify_add_watch"} else (0, 1) if name in _TWO_PATHS else (0,)
+            strings = [path for position in positions if (path := _path_argument(arguments, position)) is not None]
+            if self.strict and pid not in self.cwd and any(path and not path.startswith("/") for path in strings):
+                self._defer(pid, line)
+                return
             missing = errno in _MISSING_ERRNOS
             if name in _PLAIN_READ:
-                kind = ("write" if _WRITE_FLAGS.search(body) else "missing" if missing else "stat" if failed
-                        else "dir" if "O_DIRECTORY" in body else "read")
+                flags = _operation_flags(body)
+                kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
+                        else "dir" if "O_DIRECTORY" in flags else "read")
             elif name in _PLAIN_WRITE:
                 kind = "write"
             elif name in _PLAIN_EXEC:
                 kind = "missing" if missing else "stat" if failed else "exec"
-            elif name == "chdir":
+            elif name in {"chdir", "getcwd"}:
                 kind = "missing" if missing else "dir"
             else:
                 kind = "missing" if missing else "stat"
             for path in strings:
                 self._add(_join(self.cwd.get(pid), path), kind, line)
-            if name == "chdir" and not failed and strings:
+            if self.strict:
+                if len(strings) != len(positions):
+                    self._unresolved("plain-path-not-resolved:" + name)
+                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                if target and name in _PLAIN_READ:
+                    self._add(_join(None, unescape(target[1])), kind, line)
+                elif name in _PLAIN_READ and not failed:
+                    self._unresolved("opened-fd-not-resolved:" + name)
+            if name in {"chdir", "getcwd"} and not failed and strings:
                 joined = _join(self.cwd.get(pid), strings[0])
                 if joined:
                     self.cwd[pid] = joined
+            return
+        if self.strict:
+            self._unresolved("unsupported-call:" + name)
+
+    def _defer(self, pid: str, line: str) -> None:
+        """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""
+        if self.deferred_count >= 10000:
+            self._unresolved("deferred-process-limit")
+            return
+        self.deferred.setdefault(pid, []).append(line)
+        self.deferred_count += 1
 
 
 def _under(path: str, root: str) -> bool:
@@ -266,19 +471,29 @@ def trace_document(parser: TraceParser, roots: Sequence[str]) -> dict[str, Any]:
     roots = [os.path.normpath(str(root)) for root in roots]
     kept = {}
     for path, kinds in parser.accesses.items():
-        if any(_under(path, root) for root in roots) and not _bytecode(path):
+        if any(_under(path, root) for root in roots) and (parser.strict or not _bytecode(path)):
             kept[path] = sorted(kinds)
-    return {"schema_version": TRACE_SCHEMA, "roots": roots, "lines": parser.lines,
+    value = {"schema_version": STRICT_TRACE_SCHEMA if parser.strict else TRACE_SCHEMA, "roots": roots, "lines": parser.lines,
             "accesses": [[path, kept[path]] for path in sorted(kept)],
-            "samples": {path: parser.samples[path] for path in sorted(kept)}}
+            "samples": {path: (path if parser.strict else parser.samples[path]) for path in sorted(kept)}}
+    if parser.strict:
+        value["coverage"] = {"all_host_paths": roots == ["/"], "unresolved": parser.unresolved + len(parser.pending) + parser.deferred_count,
+                             "stream_complete": True, "unresolved_reasons": dict(sorted(parser.unresolved_reasons.items())),
+                             "unfinished_calls": len(parser.pending), "unresolved_process_events": parser.deferred_count}
+    if parser.output_tracker is not None:
+        value["schema_version"] = RUNTIME_TRACE_SCHEMA
+        value["runtime"] = {"context": parser.runtime_context, "output_events": parser.output_events,
+                            "outputs": parser.output_tracker.report(), "terminal_events": parser.terminal_events}
+    return value
 
 
 def _bytecode(path: str) -> bool:
     return "/__pycache__/" in f"/{path}/" or path.endswith((".pyc", ".pyo"))
 
 
-def filter_stream(stream: Iterable[str], roots: Sequence[str]) -> dict[str, Any]:
-    parser = TraceParser()
+def filter_stream(stream: Iterable[str], roots: Sequence[str], *, strict: bool = False,
+                  runtime_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    parser = TraceParser(strict=strict, runtime_context=runtime_context)
     for line in stream:
         parser.feed(line)
     return trace_document(parser, roots)
@@ -298,10 +513,16 @@ def prefilter_pattern(roots: Sequence[str]) -> str:
             + "|^[0-9]+ (execve|execveat|chdir|clone|clone3|fork|vfork)\\(|<[.][.][.] (clone|clone3|fork|vfork) resumed>")
 
 
-def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], python: str | None = None) -> list[str]:
+def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], python: str | None = None,
+                strict: bool = False, runtime_context: Path | None = None) -> list[str]:
     """把一个单元的命令包在 strace 下：输出先经 grep 预筛，再交给本模块 ``filter``，只留各个根之下的路径。"""
 
     command = [python or sys.executable, "-B", str(HERE), "filter", "--output", str(output)]
+    if strict:
+        roots = ["/"]
+        command.append("--strict")
+    if runtime_context is not None:
+        command += ["--runtime-context", str(runtime_context)]
     for root in roots:
         command += ["--root", str(root)]
     for part in command:
@@ -310,8 +531,187 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
     pattern = prefilter_pattern(roots)
     if "'" in pattern:
         raise AuditError("预筛表达式里有单引号，不能交给 shell")
-    pipe = f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
-    return ["strace", *STRACE_OPTIONS, "-o", "|" + pipe, "--", *argv]
+    pipe = " ".join(command) if strict else f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
+    # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
+    options = ["-s", "4096", "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
+               "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
+    return ["strace", *STRACE_OPTIONS, *options, "-o", "|" + pipe, "--", *argv]
+
+
+def host_snapshot(raw: str) -> dict[str, Any]:
+    """按精确路径登记宿主输入；目录只绑定直接目录项，不能代表递归内容覆盖。"""
+    path = Path(raw)
+    if not path.is_absolute() or ".." in path.parts or str(path) != raw:
+        raise AuditError("宿主输入必须是规范绝对路径")
+    if any(_under(raw, root) for root in ("/proc", "/sys", "/dev")):
+        raise AuditError("虚拟或设备路径不能冒充稳定文件快照")
+    links = []
+    for item in reversed((path, *path.parents)):
+        if item.is_symlink():
+            link_target = os.readlink(item)
+            info = item.lstat()
+            links.append({"path": str(item), "target": link_target, "mode": info.st_mode,
+                          "uid": info.st_uid, "gid": info.st_gid, "device": info.st_dev, "inode": info.st_ino,
+                          "size": info.st_size,
+                          "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns})
+    target = path.resolve()
+    if any(_under(str(target), root) for root in ("/proc", "/sys", "/dev")):
+        raise AuditError("符号链接指向虚拟或设备路径，不能作为稳定文件快照")
+    try:
+        info = target.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        payload = {"kind": "missing", "target": str(target), "links": links}
+    else:
+        if stat.S_ISREG(info.st_mode):
+            with target.open("rb") as stream:
+                hasher = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            content = hasher.hexdigest()
+            after = target.stat()
+            if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                    after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise AuditError("宿主文件在快照期间变化")
+            payload = {"kind": "file", "content_sha256": content}
+            info = after
+        elif stat.S_ISDIR(info.st_mode):
+            payload = {"kind": "directory", "entries": sorted(item.name for item in target.iterdir())}
+            info = target.stat()
+        else:
+            raise AuditError("宿主输入不是可绑定的普通文件、目录或缺失路径")
+        payload.update(target=str(target), links=links, metadata={
+            "mode": info.st_mode, "uid": info.st_uid, "gid": info.st_gid, "size": info.st_size,
+            "device": info.st_dev, "inode": info.st_ino, "atime_ns": info.st_atime_ns,
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns})
+    ancestors = []
+    for parent in sorted(set(path.parents) | set(target.parents), key=str):
+        try:
+            info = parent.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        ancestors.append({"path": str(parent), "mode": info.st_mode, "uid": info.st_uid, "gid": info.st_gid,
+                          "link": os.readlink(parent) if parent.is_symlink() else None})
+    payload["ancestors"] = ancestors
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return {"category": "environment", "name": "host:" + raw, "sha256": hashlib.sha256(encoded).hexdigest(),
+            "detail": {"path": raw, "schema_version": HOST_SCHEMA, "snapshot": payload}}
+
+
+def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]] | None,
+                       *, repo_root: str, data_root: str | None, historical: bool = False) -> dict[str, Any]:
+    """完整观察与可承接分开判断：所有实际路径必须有事前绑定且运行后未变的精确快照。"""
+    findings = []
+    snapshots = {}
+    coverage = document.get("coverage") or {}
+    if (document.get("schema_version") not in {STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA} or document.get("roots") != ["/"]
+            or coverage.get("all_host_paths") is not True or coverage.get("stream_complete") is not True
+            or coverage.get("unresolved") != 0 or not document.get("lines") or not document.get("accesses")):
+        findings.append({"root": "audit", "path": "", "kinds": [], "sample": "", "suggestion": "完整轨迹缺失、未结束或含未解析调用，不可承接"})
+    runtime_paths: set[str] = set()
+    if document.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+        try:
+            runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []), historical=historical)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            findings.append({"root": "runtime", "path": "", "kinds": [], "sample": "", "suggestion": str(error)})
+    for entry in inputs or []:
+        detail = entry.get("detail") or {}
+        if detail.get("schema_version") != HOST_SCHEMA:
+            continue
+        path = detail.get("path")
+        try:
+            if historical:
+                # 历史重放校验封存快照自身；当前承接仍须重读宿主实物。
+                encoded = json.dumps(detail["snapshot"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                current = {"category": "environment", "name": "host:" + path, "sha256": hashlib.sha256(encoded).hexdigest(),
+                           "detail": detail}
+            else:
+                current = host_snapshot(path)
+            if current != entry:
+                raise AuditError("宿主输入快照漂移")
+        except (OSError, ValueError, TypeError, AuditError) as error:
+            findings.append({"root": "host", "path": str(path), "kinds": [], "sample": "", "suggestion": str(error)})
+            continue
+        snapshots[path] = detail["snapshot"]
+    counts = {"repo_paths": 0, "data_paths": 0, "host_paths": 0, "metadata_only": 0, "import_probes": 0}
+    for path, kinds in document.get("accesses") or []:
+        root = "repo" if _under(path, repo_root) else "data" if data_root and _under(path, data_root) else "host"
+        counts[root + "_paths"] += 1
+        if path in runtime_paths:
+            continue
+        binding = snapshots.get(path)
+        if binding is not None:
+            kind = binding["kind"]
+            if ((kind == "file" and set(kinds) <= {"read", "exec", "stat"})
+                    # libc 也会不带 O_DIRECTORY 只读打开目录；快照已证明该精确路径是目录，直接目录项已绑定。
+                    # 子文件仍须单独快照，不能因为打开了父目录就获得递归覆盖。
+                    or (kind == "directory" and set(kinds) <= METADATA_KINDS | {"read"})
+                    or (kind == "missing" and set(kinds) <= {"missing"})):
+                continue
+        findings.append({"root": root, "path": path, "kinds": kinds, "sample": path,
+                         "suggestion": "实际路径缺少精确快照或访问类型超出绑定；目录声明不能覆盖子文件"})
+    return {"undeclared_count": len(findings), "undeclared": findings[:MAX_FINDINGS], **counts,
+            "coverage_complete": not findings, "coverage_scope": "all-file-paths/v1", "status": "failed" if findings else "passed"}
+
+
+def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
+    """从完整且仍能重放的正式记录生成收窄提案；提案必须再实际运行，不能直接承接旧宽范围记录。"""
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    for path in (record_path, trace_path):
+        if not path.is_absolute() or any(item.is_symlink() for item in (path, *path.parents)):
+            raise AuditError("收窄来源须为无符号链接的绝对路径")
+    record = json.loads(record_path.read_text())
+    body = {key: value for key, value in record.items() if key != "record_sha256"}
+    audit = record.get("read_audit") or {}
+    if (record.get("schema_version") != "unit-execution-record/v1" or digest(body) != record.get("record_sha256")
+            or record.get("kind") != "formal" or record.get("unit_type") != "command" or record.get("inheritable") is not True
+            or record.get("passed") is not True or record.get("exit_code") != 0 or record.get("signal") is not None
+            or record.get("timed_out") is not False or audit.get("coverage_complete") is not True
+            or audit.get("status") != "passed" or audit.get("undeclared_count") != 0
+            or audit.get("coverage_scope") != "all-file-paths/v1"
+            or digest(record.get("spec")) != record.get("spec_sha256")
+            or audit.get("inputs_sha256") != record.get("inputs_sha256")
+            or hashlib.sha256(trace_path.read_bytes()).hexdigest() != audit.get("trace", {}).get("sha256")):
+        raise AuditError("收窄输入必须引用完整通过的正式命令单元及其原始轨迹")
+    # 沿原记录库核对来源清单与日志，未正常结束的运行不能单凭一张自摘要记录生成提案。
+    name = "_read_audit_unit_records"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE.with_name("unit_records.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    records = sys.modules[name]
+    store = records.RecordStore(record_path.parents[2])
+    if (store.record_path(record["unit_id"], record["record_sha256"]) != record_path
+            or store.log_path(audit["trace"]["sha256"]) != trace_path
+            or records.entries_sha256(record["inputs"]) != record["inputs_sha256"]
+            or records.entries_sha256(record["environment"]) != record["environment_sha256"]):
+        raise AuditError("收窄来源必须来自同一正式记录库，输入与环境摘要须闭合")
+    current = records.Current(record["unit_id"], "command", record["spec"], record["spec_sha256"],
+                              record["inputs"], record["inputs_sha256"], True)
+    completed = records.parse_utc(record.get("completed_at_utc"))
+    if completed is None:
+        raise AuditError("来源执行完成时间缺失")
+    facts = records.RunFacts(record["policy_sha256"], record["environment"], record["environment_sha256"],
+                             record["executor"], 24, completed, require_read_audit=True)
+    problems = records.check_record(store, record_path, record, current, facts)
+    if problems:
+        raise AuditError("来源执行记录不能完整复核：" + "；".join(problems))
+    trace = load_trace(trace_path)
+    if not strict_audit_reads(trace, record.get("inputs"), repo_root=audit["repo_root"], data_root=audit.get("data_root"))["coverage_complete"]:
+        raise AuditError("来源读集不能按当前环境重放，拒绝生成收窄提案")
+    runtime_inputs = {}
+    excluded = set()
+    if trace.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+        excluded = _runtime_module().replay_runtime(trace, record["inputs"])
+        runtime_inputs["runtime_contract"] = trace["runtime"]["context"]["contract_entry"]["detail"]["contract"]
+    paths = sorted({path for path, _kinds in trace["accesses"]} - excluded)
+    return {"schema_version": "unit-read-scope-proposal/v1", "unit_id": record["unit_id"],
+            "spec": record["spec"], "requires_validation": True, "reuse_enabled": False,
+            "environment_sha256": record["environment_sha256"], "executor_sha256": record["executor"]["sha256"],
+            "inputs": {"host_paths": paths, "require_read_audit": True, **runtime_inputs},
+            "source_record": {"path": str(record_path), "sha256": hashlib.sha256(record_path.read_bytes()).hexdigest()},
+            "source_trace": {"path": str(trace_path), "sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest()}}
 
 
 # ---------------------------------------------------------------------------
@@ -414,11 +814,14 @@ def _suggestion(relative: str, root: str) -> str:
 
 
 def audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]] | None, *, repo_root: str,
-                data_root: str | None = None, in_data_root: bool = False, head_id_only: bool = False) -> dict[str, Any]:
+                data_root: str | None = None, in_data_root: bool = False, head_id_only: bool = False,
+                strict: bool = False) -> dict[str, Any]:
     """核对一个单元的读集：返回 ``{"undeclared": [...], "undeclared_count", "repo_paths", "data_paths", "listed"}``。
 
     ``in_data_root``：单元在数据根里运行（pre-A3 场景），数据根与仓库同布局的部分按仓库相对路径核对；否则读到数据根一律报出。"""
 
+    if strict:
+        return strict_audit_reads(document, inputs, repo_root=repo_root, data_root=data_root)
     declared = Declared(inputs)
     repo_root = os.path.normpath(repo_root)
     data = os.path.normpath(data_root) if data_root else None
@@ -457,7 +860,9 @@ def audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]]
         findings.append({"root": root, "path": shown, "kinds": judged, "sample": samples.get(path, ""),
                          "suggestion": _suggestion(shown, root)})
     findings.sort(key=lambda item: (item["root"], item["path"]))
-    return {"undeclared_count": len(findings), "undeclared": findings[:MAX_FINDINGS], **counts}
+    return {"undeclared_count": len(findings), "undeclared": findings[:MAX_FINDINGS], **counts,
+            "coverage_complete": False, "coverage_scope": "repo-and-data-only/v1",
+            "status": "failed" if findings else "passed"}
 
 
 def load_trace(path: Path) -> dict[str, Any]:
@@ -465,7 +870,7 @@ def load_trace(path: Path) -> dict[str, Any]:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise AuditError(f"审计轨迹读不出来：{path}（{error}）") from error
-    if not isinstance(document, dict) or document.get("schema_version") != TRACE_SCHEMA:
+    if not isinstance(document, dict) or document.get("schema_version") not in {TRACE_SCHEMA, STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA}:
         raise AuditError(f"审计轨迹格式不对：{path}")
     return document
 
@@ -476,15 +881,28 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     filt = sub.add_parser("filter", help="读标准输入的 strace 输出，只留各个根之下的路径，写紧凑 JSON")
     filt.add_argument("--output", type=Path, required=True)
     filt.add_argument("--root", action="append", default=[], required=True)
+    filt.add_argument("--strict", action="store_true")
+    filt.add_argument("--runtime-context", type=Path)
+    scope = sub.add_parser("scope", help="从完整正式轨迹生成待重新验收的单元输入提案")
+    scope.add_argument("--record", type=Path, required=True)
+    scope.add_argument("--trace", type=Path, required=True)
+    scope.add_argument("--output", type=Path, required=True)
     return parser.parse_args(list(argv))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     sys.dont_write_bytecode = True
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if args.command == "scope":
+        result = narrow_input_scope(args.record, args.trace)
+        with args.output.open("x") as stream:
+            json.dump(result, stream, ensure_ascii=False, sort_keys=True, indent=2)
+            stream.write("\n")
+        return 0
     if args.command == "filter":
         stream = (line.decode("utf-8", "surrogateescape") for line in sys.stdin.buffer)
-        document = filter_stream(stream, args.root)
+        runtime_context = json.loads(args.runtime_context.read_text()) if args.runtime_context else None
+        document = filter_stream(stream, args.root, strict=args.strict, runtime_context=runtime_context)
         temporary = args.output.with_name(f".{args.output.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8", errors="surrogateescape")
         os.replace(temporary, args.output)

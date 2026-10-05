@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "VC-4 构建与上传续跑凭证",
-  "description": "旧轮次无此凭证时重新执行，不追认旧成功日志；输入和产物均由实际工具重算。",
+  "description": "完整历史、建树收据和构建网络批准／实际收据一并绑定；旧 v1 不追认，须重新执行。",
   "oneOf": [
     {
       "type": "object",
@@ -14,7 +14,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "arm64-vc4-resume/v1"
+          "const": "arm64-vc4-resume/v2"
         },
         "stage": {
           "const": "pre-build"
@@ -33,7 +33,9 @@
             "toolchain",
             "base_images",
             "driver_build_sha256",
-            "frontend_deviation_approved_by"
+            "frontend_deviation_approved_by",
+            "tree_preparation",
+            "build_network"
           ],
           "properties": {
             "subject": {
@@ -194,6 +196,47 @@
             "frontend_deviation_approved_by": {
               "type": "string",
               "minLength": 1
+            },
+            "tree_preparation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "build_network": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding",
+                "approval"
+              ],
+              "properties": {
+                "binding": {
+                  "type": "object"
+                },
+                "approval": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
             }
           }
         },
@@ -215,7 +258,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "arm64-vc4-resume/v1"
+          "const": "arm64-vc4-resume/v2"
         },
         "stage": {
           "const": "upload-wait"
@@ -234,7 +277,9 @@
             "toolchain",
             "base_images",
             "driver_build_sha256",
-            "frontend_deviation_approved_by"
+            "frontend_deviation_approved_by",
+            "tree_preparation",
+            "build_network"
           ],
           "properties": {
             "subject": {
@@ -395,6 +440,47 @@
             "frontend_deviation_approved_by": {
               "type": "string",
               "minLength": 1
+            },
+            "tree_preparation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "build_network": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding",
+                "approval"
+              ],
+              "properties": {
+                "binding": {
+                  "type": "object"
+                },
+                "approval": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
             }
           }
         },
@@ -409,7 +495,8 @@
             "build_inventory_sha256",
             "frontend_provenance_sha256",
             "source_transition",
-            "built_at_utc"
+            "built_at_utc",
+            "build_network_receipt"
           ],
           "properties": {
             "parameters_sha256": {
@@ -482,6 +569,24 @@
               }
             },
             "built_at_utc": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "build_network_receipt": {
               "type": "object",
               "additionalProperties": false,
               "required": [

@@ -28,7 +28,7 @@
   从源码编译），结论判失败。
 * **身份记忆化**（E2-02）：环境里没有 ``CODEX_UPGRADE_IDENTITY_MEMO`` 时设为记录目录下的 ``identity-memo``，全部单元
   共用——同一棵受管树的身份五摘要与评估器四项只算一次，键是整树逐文件摘要，测试改了副本树自然重算。
-  ``--shared-caches off`` 时两样都不准备，单元按原环境运行（诊断用）。
+  ``--shared-caches off`` 时两样都不准备，单元按原环境运行（诊断用）；``bytecode`` 只准备字节码，清除外部身份记忆目录。
 * **执行记录与承接**（E3-01，记录格式、输入与判定见同目录 ``unit_records.py``）：每个单元每次执行（正式、诊断）回收
   时写一条不可变记录。``run-gates`` 给了记录库（``--record-store``）时记录同时入库；模式为全集通过
   （``--mode full-set-pass``）时，先在记录库里给每个单元找可承接的记录，只执行找不到的，承接的单元按原记录参加
@@ -56,6 +56,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -173,6 +174,8 @@ class ExecutorConfig:
     unit_timeout_seconds: float
     orphan_grace_seconds: float
     raw: dict[str, Any]
+    reservation_grace_seconds: float | None = 30.0
+    reservation_stop_seconds: float = 5.0
 
 
 def load_config(path: Path) -> ExecutorConfig:
@@ -216,6 +219,13 @@ def load_config(path: Path) -> ExecutorConfig:
     grace = payload.get("orphan_grace_seconds", 10)
     if not isinstance(timeout, (int, float)) or timeout <= 0 or not isinstance(grace, (int, float)) or grace < 0:
         raise ExecutorError("单元超时或残留进程宽限期非法")
+    reservation_grace = payload.get("reservation_grace_seconds", 30)
+    reservation_stop = payload.get("reservation_stop_seconds", 5)
+    for name, value in (("reservation_grace_seconds", reservation_grace), ("reservation_stop_seconds", reservation_stop)):
+        if name == "reservation_grace_seconds" and value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ExecutorError(name + " 必须是有限非负秒数；宽限期可用 null 关闭中止")
     return ExecutorConfig(
         default_parallelism=parallelism,
         default_quota=quota(payload.get("default_quota") or {}, "default_quota"),
@@ -225,6 +235,8 @@ def load_config(path: Path) -> ExecutorConfig:
         unit_timeout_seconds=float(timeout),
         orphan_grace_seconds=float(grace),
         raw=payload,
+        reservation_grace_seconds=float(reservation_grace) if reservation_grace is not None else None,
+        reservation_stop_seconds=float(reservation_stop),
     )
 
 
@@ -339,13 +351,15 @@ class Unit:
     # 测试单元的启动前缀（E2-04 门禁清单的测试组）：例如在私有挂载命名空间里遮住生产别名再 exec 单元进程；命令单元
     # 需要时直接把前缀写进自己的 argv。
     launcher: tuple[str, ...] = ()
+    # 命令默认排空等待；只有明确可重跑的隔离检查才允许预约中止。
+    reservation_restartable: bool = False
 
 
 COMMANDS_SCHEMA = "unit-executor-commands/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 # inputs／inheritable／not_inheritable_reason 是门禁清单给 E3-01 承接用的声明（输入范围、是否可承接与原因），不影响执行。
 _COMMAND_FIELDS = {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "exclusive", "timeout_seconds", "weight",
-                   "inputs", "inheritable", "not_inheritable_reason"}
+                   "inputs", "inheritable", "not_inheritable_reason", "input_scope", "reservation_restartable"}
 
 
 def _string_env(value: Any, label: str) -> dict[str, str]:
@@ -383,6 +397,8 @@ def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
     weight = item.get("weight", 0)
     if not isinstance(exclusive, bool):
         raise ExecutorError(f"命令单元的独占标记非法：{unit_id}")
+    if not isinstance(item.get("reservation_restartable", False), bool):
+        raise ExecutorError(f"命令单元的预约重派标记非法：{unit_id}")
     if not isinstance(item.get("inheritable", True), bool) or not isinstance(item.get("not_inheritable_reason", ""), str) \
             or not isinstance(item.get("inputs", {}), dict):
         raise ExecutorError(f"命令单元的承接声明非法：{unit_id}")
@@ -394,6 +410,7 @@ def _command_unit(item: Any, *, machine_cores: int, seen: set[str]) -> Unit:
         unit_id=unit_id, module=unit_id, test_ids=(), quota=Quota(min(float(cores), float(max(1, machine_cores))), memory),
         exclusive=exclusive, weight=float(weight), command=tuple(argv), cwd=cwd, env=tuple(sorted(env.items())),
         timeout_seconds=float(timeout) if timeout is not None else None,
+        reservation_restartable=item.get("reservation_restartable", False),
     )
 
 
@@ -585,10 +602,12 @@ def plan_units(
 class _RecordingResult(unittest.TextTestResult):
     """在 unittest 原有输出之外，逐个记录测试 ID 的结论与耗时。"""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, failure_path: Path | None = None, unit_id: str = "", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.records: dict[str, dict[str, Any]] = {}
         self._started: dict[str, float] = {}
+        self.failure_path = failure_path
+        self.unit_id = unit_id
 
     def startTest(self, test: unittest.TestCase) -> None:  # noqa: N802 - unittest 接口
         self._started[test.id()] = time.monotonic()
@@ -606,18 +625,23 @@ class _RecordingResult(unittest.TextTestResult):
         }
         if reason is not None:
             self.records[test_id]["reason"] = reason  # 跳过原因（E2-04：P0 证据的跳过清单逐条带原因）
+        if self.failure_path is not None and outcome in {"failed", "error", "unexpected_success"}:
+            # 在输出失败标志之前持久化。成功路径不增加逐测试写盘；中止不能抹去已观察的失败。
+            _write_json(self.failure_path, {"schema_version": UNIT_RESULT_SCHEMA, "unit_id": self.unit_id,
+                                           "tests": self.records, "tests_run": self.testsRun,
+                                           "successful": False, "partial": True})
 
     def addSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
         super().addSuccess(test)
         self._record(test, "passed")
 
     def addFailure(self, test: unittest.TestCase, err: Any) -> None:  # noqa: N802
-        super().addFailure(test, err)
         self._record(test, "failed")
+        super().addFailure(test, err)
 
     def addError(self, test: unittest.TestCase, err: Any) -> None:  # noqa: N802
-        super().addError(test, err)
         self._record(test, "error")
+        super().addError(test, err)
 
     def addSkip(self, test: unittest.TestCase, reason: str) -> None:  # noqa: N802
         super().addSkip(test, reason)
@@ -628,13 +652,13 @@ class _RecordingResult(unittest.TextTestResult):
         self._record(test, "expected_failure")
 
     def addUnexpectedSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
-        super().addUnexpectedSuccess(test)
         self._record(test, "unexpected_success")
+        super().addUnexpectedSuccess(test)
 
     def addSubTest(self, test: unittest.TestCase, subtest: Any, err: Any) -> None:  # noqa: N802
-        super().addSubTest(test, subtest, err)
         if err is not None:
             self._record(test, "failed" if issubclass(err[0], test.failureException) else "error")
+        super().addSubTest(test, subtest, err)
 
 
 def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
@@ -650,7 +674,8 @@ def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
     for test_id in test_ids:
         name = test_id[len(FAILED_IMPORT_PREFIX):] if test_id.startswith(FAILED_IMPORT_PREFIX) else test_id
         suite.addTests(loader.loadTestsFromName(name))
-    runner = unittest.TextTestRunner(verbosity=1, resultclass=_RecordingResult)
+    runner = unittest.TextTestRunner(verbosity=1, resultclass=lambda *args, **kwargs: _RecordingResult(
+        *args, failure_path=result_path.with_suffix('.observed-failure.json'), unit_id=payload['unit_id'], **kwargs))
     result = runner.run(suite)
     assert isinstance(result, _RecordingResult)
     _write_json(
@@ -729,14 +754,19 @@ class Reservation:
     def granted(self) -> dict[str, Any] | None:
         request = self.current()
         grant = _read_json_file(self.grant_path)
-        if request is None or grant is None or grant.get("owner") != request.get("owner"):
+        if (request is None or grant is None or grant.get("owner") != request.get("owner")
+                or grant.get("request_sha256") != _sha256(request)):
             return None
         return grant
 
-    def grant(self, by: str) -> None:
+    def grant(self, by: str, *, expected: dict[str, Any] | None = None) -> bool:
         request = self.current()
+        if expected is not None and request != expected:
+            return False
         if request is not None and self.granted() is None:
-            _write_json(self.grant_path, {"schema_version": RESERVATION_SCHEMA, "owner": request["owner"], "granted_at_utc": _utc_now(), "granted_by": by})
+            _write_json(self.grant_path, {"schema_version": RESERVATION_SCHEMA, "owner": request["owner"],
+                                         "request_sha256": _sha256(request), "granted_at_utc": _utc_now(), "granted_by": by})
+        return request is not None
 
 
 def acquire(state_dir: Path, owner: str, owner_pid: int, timeout_seconds: float) -> dict[str, Any]:
@@ -758,7 +788,8 @@ def acquire(state_dir: Path, owner: str, owner_pid: int, timeout_seconds: float)
             time.sleep(POLL_SECONDS)
             continue
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"schema_version": RESERVATION_SCHEMA, "owner": owner, "owner_pid": owner_pid, "requested_at_utc": _utc_now()}, handle)
+            json.dump({"schema_version": RESERVATION_SCHEMA, "owner": owner, "owner_pid": owner_pid,
+                       "request_id": os.urandom(16).hex(), "requested_at_utc": _utc_now()}, handle)
         break
     lock_path = reservation.state_dir / "scheduler.lock"
     while True:
@@ -840,6 +871,9 @@ class Running:
     kind: str
     timed_out: bool = False
     started_at_utc: str = ""
+    interruption: dict[str, Any] | None = None
+    stop_started: float | None = None
+    resumed_from: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -860,11 +894,21 @@ class Outcome:
     completed_at_utc: str = ""
 
     @property
-    def passed(self) -> bool:
+    def execution_passed(self) -> bool:
         if self.exit_code != 0 or self.signal is not None or self.timed_out:
             return False
-        # 命令单元只认退出码、信号与超时（结果文件由命令自己写、调用方核对）；测试单元还要有一份成功的结果文件。
         return bool(self.unit.command) or (self.result is not None and bool(self.result.get("successful")))
+
+    @property
+    def passed(self) -> bool:
+        if not self.execution_passed:
+            return False
+        audit = self.extra.get("read_audit")
+        if audit is not None and audit.get("status") == "reexecute_required" and self.extra.get("reexecute_only") is True:
+            return True
+        if audit is not None and (audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
+            return False
+        return True
 
 
 def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_seconds: float) -> dict[str, Any]:
@@ -875,7 +919,8 @@ def unit_spec(unit: Unit, *, start: Path | None, pattern: str | None, timeout_se
     cache_only = _records_module().ENV_CACHE_ONLY
     env = {key: value for key, value in dict(unit.env).items() if key not in cache_only}
     common = {"unit_id": unit.unit_id, "env": env, "cores": unit.quota.cores, "memory_mb": unit.quota.memory_mb,
-              "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds}
+              "exclusive": unit.exclusive, "timeout_seconds": unit.timeout_seconds or timeout_seconds,
+              "reservation_restartable": not unit.command or unit.reservation_restartable}
     if unit.command:
         return {"type": "command", "argv": list(unit.command), "cwd": unit.cwd, **common}
     return {"type": "test", "start": str(start) if start is not None else None, "pattern": pattern, "test_ids": list(unit.test_ids),
@@ -937,6 +982,22 @@ class Recorder:
             "started_at_utc": outcome.started_at_utc,
             "completed_at_utc": outcome.completed_at_utc,
         }
+        if "read_audit" in outcome.extra:
+            audit = json.loads(json.dumps(outcome.extra["read_audit"]))
+            if self.store is not None and audit.get("trace"):
+                trace = audit["trace"]
+                trace["stored"] = str(self.store.put_log(Path(trace["path"]), trace["sha256"]))
+            body["read_audit"] = audit
+        if item.resumed_from:
+            body["resumed_from"] = item.resumed_from
+        if outcome.extra.get("observed_failure"):
+            body.update(observed_failure=outcome.extra["observed_failure"], inheritable=False,
+                        not_inheritable_reason="预约中止前已登记测试失败，正式失败结论保留")
+        if outcome.extra.get("reservation_interruption"):
+            # 中止证据保留原身份，但不进入正式通过／失败或诊断集合，永不可承接。
+            body.update(kind="reservation-aborted", original_kind=item.kind, passed=False, inheritable=False,
+                        not_inheritable_reason="整机预约中止，须完整重派", tests=None,
+                        reservation_interruption=outcome.extra["reservation_interruption"])
         record = self.records.seal_record(body)
         _write_json(item.record_path, record)
         path = self.store.put_record(record) if self.store is not None else item.record_path
@@ -945,11 +1006,10 @@ class Recorder:
 
 
 class ReadAuditor:
-    """读集审计（E3-04，规则见 ``read_audit.py``）：正式执行的单元包在 strace 下，轨迹经管道交给过滤器，只留测试树与
-    数据根下的路径；单元结束后按它本次的输入明细核对。诊断执行不审计。不改单元规格、不改执行记录——审计跑出来的记录
-    与平常一样可以承接。"""
+    """正式单元执行后、记录入库前核对读集。严格模式覆盖全根且不跳过整仓声明；
+    旧范围审计仅用于诊断覆盖，不能标记为宿主输入已闭合。"""
 
-    def __init__(self, *, out_dir: Path, repo_root: Path, data_root: Path | None, currents: dict[str, Any]) -> None:
+    def __init__(self, *, out_dir: Path, repo_root: Path, data_root: Path | None, currents: dict[str, Any], strict: bool = False) -> None:
         self.module = _audit_module()
         self.records = _records_module()
         self.dir = Path(out_dir) / "audit"
@@ -958,31 +1018,67 @@ class ReadAuditor:
         self.data_root = str(Path(data_root).resolve()) if data_root is not None else None
         self.currents = currents
         self.results: dict[str, dict[str, Any]] = {}
+        self.strict = strict
 
     def trace_path(self, unit: Unit) -> Path:
-        safe = unit.unit_id.replace("#", "-").replace("!", "-").replace("/", "-").replace(":", "-")
-        return self.dir / f"{safe}.trace.json"
+        # 可读前缀不能保证唯一；完整单元 ID 摘要防止标点替换和长名称截断造成轨迹串用。
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "-", unit.unit_id)[:80].strip(".") or "unit"
+        identity = hashlib.sha256(unit.unit_id.encode("utf-8")).hexdigest()
+        return self.dir / f"{safe}-{identity}.trace.json"
 
     def skipped(self, unit: Unit) -> bool:
         """声明了整个仓库的单元不审计（见 read_audit.declares_whole_repo）。"""
 
         current = self.currents.get(unit.unit_id)
-        return current is not None and self.module.declares_whole_repo(current.inputs)
+        return not self.strict and current is not None and self.module.declares_whole_repo(current.inputs)
 
     def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
+        current = self.currents.get(unit.unit_id)
+        if current and any(entry.get("name") == "reexecute-only-policy" for entry in current.inputs or []):
+            return argv
         if self.skipped(unit):
             return argv
         roots = [self.repo_root] + ([self.data_root] if self.data_root else [])
         trace = self.trace_path(unit)
         with contextlib.suppress(FileNotFoundError):
             trace.unlink()
-        return self.module.strace_argv(argv, output=trace, roots=roots)
+        current = self.currents.get(unit.unit_id)
+        runtime_entries = [entry for entry in (current.inputs or []) if entry.get("name") == "runtime-contract"] if current else []
+        if runtime_entries:
+            if not self.strict or len(runtime_entries) != 1:
+                raise ExecutorError("隔离输出合同必须具有唯一输入绑定并启用严格审计")
+            runtime = self.module._runtime_module()
+            contract = runtime_entries[0]["detail"]["contract"]
+            if unit.command:
+                command = list(unit.command)
+            else:
+                # 测试单元仍保留原执行器参数；启动器单独按固定合同替换。
+                command = argv
+            if command[:len(runtime.LAUNCHER)] == runtime.LAUNCHER:
+                if contract["mask_roots"] != [runtime.MASK_ROOT]:
+                    raise ExecutorError("原启动器的生产别名遮挡不能被取消")
+                command = command[len(runtime.LAUNCHER):]
+            elif contract["mask_roots"]:
+                raise ExecutorError("未识别的启动器不能使用既有遮挡合同")
+            return runtime.prepare(contract, output=trace, argv=command, cwd=unit.cwd or self.repo_root,
+                                   inputs=current.inputs)
+        return self.module.strace_argv(argv, output=trace, roots=roots, strict=self.strict)
 
     def collect(self, unit: Unit) -> dict[str, Any]:
         current = self.currents.get(unit.unit_id)
         inputs = current.inputs if current is not None else None
+        policy = next((entry for entry in inputs or [] if entry.get("name") == "reexecute-only-policy"), None)
+        if policy is not None:
+            if current.inheritable:
+                raise ExecutorError("强制重跑策略与可承接状态矛盾")
+            result = {"status": "reexecute_required", "coverage_complete": False, "coverage_scope": "not-observed",
+                      "reexecute_policy_sha256": policy["sha256"], "undeclared_count": 0, "undeclared": [],
+                      "reason": current.reason, "inputs_sha256": current.inputs_sha256}
+            self.results[unit.unit_id] = result
+            return result
         if self.skipped(unit):
-            result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": []}
+            result = {"skipped": "输入声明了整个仓库，不审计", "undeclared_count": 0, "undeclared": [],
+                      "status": "passed", "coverage_complete": False, "coverage_scope": "not-observed"}
             self.results[unit.unit_id] = result
             return result
         try:
@@ -999,8 +1095,13 @@ class ReadAuditor:
                 in_data_root = bool(self.data_root) and (cwd == self.data_root or cwd.startswith(self.data_root + "/"))
                 head_id_only = not unit.command and unit.module.split("+", 1)[0] in self.records.HEAD_ID_ONLY_READERS
                 result = self.module.audit_reads(document, inputs, repo_root=self.repo_root, data_root=self.data_root,
-                                                 in_data_root=in_data_root, head_id_only=head_id_only)
+                                                 in_data_root=in_data_root, head_id_only=head_id_only, strict=self.strict)
                 result["trace_lines"] = document.get("lines")
+                trace = self.trace_path(unit)
+                result["trace"] = {"path": str(trace), "sha256": self.records.file_sha256(trace)}
+        result.setdefault("status", "failed" if result.get("undeclared_count") else "passed")
+        result.setdefault("coverage_complete", False)
+        result.update(inputs_sha256=current.inputs_sha256 if current else None, repo_root=self.repo_root, data_root=self.data_root)
         self.results[unit.unit_id] = result
         return result
 
@@ -1010,13 +1111,31 @@ class ReadAuditor:
         flagged = sorted(unit_id for unit_id, result in self.results.items() if result.get("undeclared_count"))
         total = sum(int(result.get("undeclared_count") or 0) for result in self.results.values())
         skipped = sorted(unit_id for unit_id, result in self.results.items() if result.get("skipped"))
+        missing = sorted(set(self.currents) - set(self.results))
+        complete = (self.strict and bool(self.currents) and set(self.results) == set(self.currents)
+                    and all(result.get("coverage_complete") is True and result.get("status") == "passed"
+                            for result in self.results.values()))
+        reexecute = sorted(unit_id for unit_id, result in self.results.items() if result.get("status") == "reexecute_required")
+        enforced = (self.strict and bool(self.currents) and not missing and set(self.results) == set(self.currents)
+                    and all((result.get("coverage_complete") is True and result.get("status") == "passed") or
+                            (unit_id in reexecute and result.get("coverage_complete") is False
+                             and self.currents[unit_id].inheritable is False
+                             and any(entry.get("name") == "reexecute-only-policy"
+                                     and entry.get("sha256") == result.get("reexecute_policy_sha256")
+                                     for entry in self.currents[unit_id].inputs or []))
+                            for unit_id, result in self.results.items()))
         path = self.dir / "read-audit.json"
         _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
                            "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
                            "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
-                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped})
+                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped,
+                           "coverage_complete": complete, "strict": self.strict, "missing_units": missing,
+                           "reexecute_required_units": reexecute, "reuse_boundary_enforced": enforced})
         return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
-                "units_with_findings": flagged[:50], "undeclared_total": total, "status": "passed" if not total else "failed"}
+                "units_with_findings": flagged[:50], "undeclared_total": total,
+                "status": "failed" if total or (self.strict and not (complete or enforced)) else "passed",
+                "coverage_complete": complete, "missing_units": missing, "reexecute_required_units": reexecute,
+                "reuse_boundary_enforced": enforced}
 
 
 def _plain_currents(records: Any, units: list[Unit], *, start: Path | None, pattern: str | None, timeout: float, reason: str) -> dict[str, Any]:
@@ -1045,6 +1164,7 @@ class Scheduler:
         recorder: Recorder,
         unit_argv: list[str] | None = None,
         auditor: ReadAuditor | None = None,
+        resume_validator: Any = None,
     ) -> None:
         self.out_dir = Path(out_dir)
         self.state_dir = _state_dir(state_dir)
@@ -1061,6 +1181,10 @@ class Scheduler:
         self.reservation = Reservation(self.state_dir)
         self.running: dict[int, Running] = {}
         self.max_cores_in_use = 0.0
+        self.resume_validator = resume_validator
+        self.deferred: list[tuple[Unit, str]] = []
+        self.attempts: dict[tuple[str, str], int] = {}
+        self.interruptions: list[dict[str, Any]] = []
 
     # -- 事件与预约 -----------------------------------------------------------
     def event(self, name: str, **payload: Any) -> None:
@@ -1086,31 +1210,84 @@ class Scheduler:
         return sum(item.unit.quota.memory_mb for item in self.running.values())
 
     def honor_reservation(self) -> list[Outcome]:
-        """有采集预约时停止派发：等在跑单元结束（残留进程已清理）后批准，等 release 后再继续；返回期间结束的单元。"""
+        """停派、限时排空可重跑单元；只在原会话清理完成后授予同一预约。"""
 
-        if self.reservation.current() is None:
+        request = self.reservation.current()
+        if request is None:
             return []
-        self.event("reservation-requested")
+        token = _sha256(request)
+        started = time.monotonic()
+        self.event("reservation-requested", reservation_sha256=token, owner=request["owner"])
         finished: list[Outcome] = []
         while self.running:
-            finished.extend(self.reap(block=True))
-        self.reservation.grant(f"scheduler-{os.getpid()}")
-        self.event("reservation-granted")
-        while self.reservation.current() is not None:
+            if self.reservation.current() != request:
+                self.event("reservation-withdrawn", reservation_sha256=token)
+                return finished
+            finished.extend(self.reap(block=False))
+            grace = self.config.reservation_grace_seconds
+            if grace is not None and time.monotonic() - started >= grace:
+                for item in list(self.running.values()):
+                    if item.interruption is not None or item.timed_out or (item.unit.command and not item.unit.reservation_restartable):
+                        continue
+                    item.interruption = {"reservation_sha256": token, "owner": request["owner"],
+                                         "status": "interrupted_for_reservation", "counted_as_failure": False,
+                                         "requeue_required": True,
+                                         "requested_at_utc": request.get("requested_at_utc"), "stopped_at_utc": _utc_now(),
+                                         "grace_seconds": grace, "stop_seconds": self.config.reservation_stop_seconds}
+                    item.stop_started = time.monotonic()
+                    # macOS 上刚退出、尚未 wait 的进程组可能返回 EPERM；下一轮先回收，
+                    # 真正仍存活且无法终止的单元会在 KILL 宽限后明确拒绝让出整机。
+                    with contextlib.suppress(PermissionError):
+                        self._signal_session(item.pid, signal.SIGTERM)
+                    self.event("reservation-stop", unit=item.unit.unit_id, pid=item.pid, reservation_sha256=token)
+            if self.running:
+                time.sleep(POLL_SECONDS)
+        if self.reservation.current() != request:
+            return finished
+        if not self.reservation.grant(f"scheduler-{os.getpid()}", expected=request):
+            return finished
+        self.event("reservation-granted", reservation_sha256=token)
+        while self.reservation.current() == request:
             time.sleep(POLL_SECONDS)
-        self.event("reservation-released")
+        self.event("reservation-released", reservation_sha256=token)
         return finished
+
+    def _signal_session(self, pid: int, sig: int) -> None:
+        """主进程组和会话内其它组一起停止，避免只杀包装器就提前让出整机。"""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, sig)
+        for member in _session_members(pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(member, sig)
+
+    def _resume_pending(self, kind: str) -> list[Unit]:
+        if not self.deferred or self.reservation.current() is not None:
+            return []
+        if any(previous_kind != kind for _, previous_kind in self.deferred):
+            raise ExecutorError("中止单元跨越正式／诊断阶段，拒绝重派")
+        units = [unit for unit, _ in self.deferred]
+        if self.resume_validator is not None:
+            self.resume_validator(units)
+        self.deferred.clear()
+        for unit in units:
+            self.event("reservation-requeued", unit=unit.unit_id, kind=kind)
+        return units
 
     # -- 启动与回收 -----------------------------------------------------------
     def launch(self, unit: Unit, kind: str) -> None:
         safe = unit.unit_id.replace("#", "-").replace("!", "-")
         suffix = "" if kind == "formal" else f".{kind}"
+        key = (unit.unit_id, kind)
+        attempt = self.attempts[key] = self.attempts.get(key, 0) + 1
+        if attempt > 1:
+            suffix += f".resume-{attempt}"
         log_path = self.out_dir / "logs" / f"{safe}{suffix}.log"
         result_path = self.out_dir / "units" / f"{safe}{suffix}.result.json"
         record_path = self.out_dir / "units" / f"{safe}{suffix}.record.json"
         tests_path = self.out_dir / "units" / f"{safe}{suffix}.tests.json"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        for stale in (result_path, record_path):
+        for stale in (result_path, record_path, result_path.with_suffix('.observed-failure.json'),
+                      result_path.with_suffix('.observed-failure.json.tmp')):
             with contextlib.suppress(FileNotFoundError):
                 stale.unlink()
         if unit.command:
@@ -1150,11 +1327,12 @@ class Scheduler:
         executable = argv[0] if os.sep in argv[0] else (shutil.which(argv[0], path=env.get("PATH")) or argv[0])
         pid = os.posix_spawn(executable, argv, env, file_actions=actions, setsid=True)
         self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind, started_at_utc=_utc_now())
+        self.running[pid].resumed_from = [row for row in self.interruptions if row["unit_id"] == unit.unit_id and row["kind"] == kind]
         self.max_cores_in_use = max(self.max_cores_in_use, self.cores_in_use())
-        self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores)
+        self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores, attempt=attempt)
 
-    def _clean_orphans(self, session_id: int) -> list[int]:
-        deadline = time.monotonic() + self.config.orphan_grace_seconds
+    def _clean_orphans(self, session_id: int, *, interrupted: bool = False) -> list[int]:
+        deadline = time.monotonic() + (0 if interrupted else self.config.orphan_grace_seconds)
         members = _session_members(session_id)
         while members and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS)
@@ -1174,7 +1352,7 @@ class Scheduler:
                 elapsed = time.monotonic() - item.started
                 # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就 SIGKILL。
                 limit = item.unit.timeout_seconds or self.config.unit_timeout_seconds
-                if elapsed > limit and not item.timed_out:
+                if item.stop_started is None and elapsed > limit and not item.timed_out:
                     item.timed_out = True
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.killpg(pid, signal.SIGTERM)
@@ -1187,9 +1365,15 @@ class Scheduler:
                 except ChildProcessError:
                     waited, status, usage = pid, 0, None
                 if waited == 0:
+                    if item.stop_started is not None and time.monotonic() - item.stop_started >= self.config.reservation_stop_seconds:
+                        try:
+                            self._signal_session(pid, signal.SIGKILL)
+                        except PermissionError:
+                            if time.monotonic() - item.stop_started > self.config.reservation_stop_seconds + 2:
+                                raise ExecutorError("预约中止无法终止仍存活单元，拒绝授予整机")
                     continue
                 del self.running[pid]
-                orphans = self._clean_orphans(pid)
+                orphans = self._clean_orphans(pid, interrupted=item.interruption is not None)
                 exit_code = os.waitstatus_to_exitcode(status)
                 outcome = Outcome(
                     unit=item.unit,
@@ -1207,14 +1391,58 @@ class Scheduler:
                     completed_at_utc=_utc_now(),
                 )
                 # 单元执行记录（E3-01）：不可变、带自摘要；给了记录库同时入库（承接以库里的记录为准）。
-                self.recorder.write(item, outcome)
-                if self.auditor is not None and item.kind == "formal":
+                interrupted = (item.interruption is not None and
+                               (exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL, -signal.SIGTERM, -signal.SIGKILL)))
+                if item.interruption is not None:
+                    # 无论原单元是否已经失败，都须核对会话清理后才能授予整机。
+                    active = []
+                    for member in _session_members(pid):
+                        try:
+                            state = (Path('/proc') / str(member) / 'stat').read_text().rsplit(')', 1)[-1].split()[0]
+                        except FileNotFoundError:
+                            continue
+                        if state not in ('Z', 'X'):
+                            active.append(member)
+                    if active:
+                        raise ExecutorError(f"预约中止后会话仍有活跃进程：{active}")
+                if interrupted and not item.unit.command:
+                    journal = item.result_path.with_suffix('.observed-failure.json')
+                    incomplete = journal.with_name(journal.name + '.tmp')
+                    if journal.exists() or incomplete.exists():
+                        observed = journal if journal.exists() else incomplete
+                        partial = _read_json_file(observed)
+                        # 原子发布被打断也保留失败；半份失败日志不允许被当成无失败而重跑成通过。
+                        if partial is not None and partial.get('unit_id') == item.unit.unit_id:
+                            outcome.result = outcome.result or partial
+                        outcome.extra['observed_failure'] = {'path': str(observed),
+                            'sha256': self.recorder.records.file_sha256(observed),
+                            'reservation': {**item.interruption, 'status': 'failed_before_interruption',
+                                            'counted_as_failure': True, 'requeue_required': False}}
+                        interrupted = False
+                if interrupted:
+                    # 没有已登记失败的预约中止单独留档，重派从头执行。
+                    outcome.extra["reservation_interruption"] = {**item.interruption, "active_session_members": active}
+                    if self.auditor is not None:
+                        trace = self.auditor.trace_path(item.unit)
+                        if trace.is_file():
+                            saved = item.record_path.with_suffix('.interrupted-trace.json')
+                            shutil.copyfile(trace, saved)
+                            outcome.extra["reservation_interruption"]["partial_trace"] = {"path": str(saved), "sha256": self.recorder.records.file_sha256(saved)}
+                elif self.auditor is not None and item.kind == "formal":
                     audit = self.auditor.collect(item.unit)
-                    outcome.extra["read_audit"] = {"undeclared_count": audit.get("undeclared_count", 0)}
+                    outcome.extra["read_audit"] = audit
+                    outcome.extra["reexecute_only"] = audit.get("status") == "reexecute_required"
+                self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
-                finished.append(outcome)
-            if finished or not block or not self.running:
+                if interrupted:
+                    self.deferred.append((item.unit, item.kind))
+                    self.interruptions.append({"unit_id": item.unit.unit_id, "kind": item.kind,
+                                               "record_path": outcome.extra["record_path"], "record_sha256": outcome.extra["record_sha256"],
+                                               **outcome.extra["reservation_interruption"]})
+                else:
+                    finished.append(outcome)
+            if finished or not block or not self.running or self.reservation.current() is not None:
                 return finished
             time.sleep(POLL_SECONDS)
 
@@ -1229,8 +1457,11 @@ class Scheduler:
     def run_parallel(self, units: list[Unit], kind: str) -> list[Outcome]:
         pending = sorted(units, key=lambda u: (-u.weight, u.unit_id))
         outcomes: list[Outcome] = []
-        while pending or self.running:
+        while pending or self.running or self.deferred:
             outcomes.extend(self.honor_reservation())
+            pending.extend(self._resume_pending(kind))
+            if self.reservation.current() is not None:
+                continue
             launched = False
             for unit in list(pending):
                 if self.fits(unit):
@@ -1245,13 +1476,15 @@ class Scheduler:
 
     def run_alone(self, units: list[Unit], kind: str) -> list[Outcome]:
         outcomes: list[Outcome] = []
-        for unit in sorted(units, key=lambda u: u.unit_id):
+        pending = sorted(units, key=lambda u: u.unit_id)
+        while pending or self.running or self.deferred:
             outcomes.extend(self.honor_reservation())
-            while self.running:
-                outcomes.extend(self.reap(block=True))
-            self.launch(unit, kind)
-            while self.running:
-                outcomes.extend(self.reap(block=True))
+            pending = self._resume_pending(kind) + pending
+            if self.reservation.current() is not None:
+                continue
+            if pending and not self.running:
+                self.launch(pending.pop(0), kind)
+            outcomes.extend(self.reap(block=True))
         return outcomes
 
 
@@ -1438,6 +1671,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         else:
             p.add_argument("--start", type=Path, default=DEFAULT_START)
             p.add_argument("--pattern", default=DEFAULT_PATTERN)
+            p.add_argument("--selection-file", type=Path, default=None,
+                           help="CI 分片的测试 ID 选择件；先校验全量身份与调度配置，只允许选择完整执行单元")
         if name != "run-commands":
             p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
             p.add_argument("--durations", type=Path, default=DEFAULT_DURATIONS)
@@ -1448,23 +1683,30 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--out-dir", type=Path, default=None)
         p.add_argument("--wait-seconds", type=float, default=7200.0, help="本机已有调度器在跑时最多等待多久")
         if name in ("run", "run-commands", "run-gates"):
-            p.add_argument("--shared-caches", choices=("auto", "off"), default="auto",
-                           help="字节码共享层与身份记忆化：auto 沿用环境里已有的、没有就在记录目录里新建；off 都不准备（单元按原环境运行，诊断用）")
+            p.add_argument("--shared-caches", choices=("auto", "bytecode", "off"), default="auto",
+                           help="共享缓存：auto 准备字节码和身份记忆化；bytecode 只准备字节码并清除外部身份记忆目录；off 都不准备（单元按原环境运行，诊断用）")
             p.add_argument("--bytecode-helper", type=Path, default=DEFAULT_BYTECODE_HELPER, help="字节码共享层的预编译工具（测试与诊断用）")
+            p.add_argument("--identity-memo", choices=("auto", "off"), default=None,
+                           help="独立控制身份记忆化；省略时沿用 shared-caches 模式，off 清除外部身份目录")
             p.add_argument("--bytecode-source", type=Path, action="append", default=None, help="预编译进共享层的源码目录，可重复；默认 tools")
         if name == "run-gates":
-            # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；入口门禁（驱动 entry-gates.sh）缺省全集通过。
+            # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；B-09 入口只有完整承接请求通过后才承接。
             p.add_argument("--record-store", type=Path, default=None, help="单元执行记录库：记录与日志入库，全集通过模式从这里找可承接的记录")
             p.add_argument("--mode", choices=("re-execute", "full-set-pass"), default="re-execute",
                            help="re-execute：重新执行全集，不承接；full-set-pass：全集通过，承接有效记录、只执行其余单元（要给记录库）")
             p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
             p.add_argument("--decide-only", action="store_true",
                            help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
+            p.add_argument("--target-platform-request", type=Path, help="B-10 目标平台单元承接请求；不得与 B-09 请求混用")
+            p.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；任一条件失效则全量重跑")
+            p.add_argument("--full-set-deployment", type=Path, help="入口本次核对的实际部署收据")
             # E3-04：读集审计。真跑才有读集，只许与 --mode re-execute 同用；要求 PATH 里有 strace（Linux）。
             p.add_argument("--audit-reads", action="store_true",
                            help="读集审计：正式执行的单元包在 strace 下，核对实际读取都在声明的输入范围里，超出即判失败（只许 re-execute）")
             p.add_argument("--audit-data-root", type=Path, default=None,
                            help="数据根：测试树单元读到这里一律报出；工作目录在这里的单元（pre-A3 场景）按与仓库同布局核对")
+            p.add_argument("--audit-strict", action="store_true", help="全路径严格审计；宿主输入未绑定或解析不完整时拒绝通过")
+            p.add_argument("--audit-host-inputs", type=Path, help="逐单元精确宿主输入清单，运行前生成快照并要求完整读集重放")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     unit.add_argument("--tests-file", type=Path, required=True)
@@ -1490,6 +1732,36 @@ def _prepare(args: argparse.Namespace) -> tuple[ExecutorConfig, dict[str, float]
     grouped = discover_test_ids(args.start, args.pattern)
     units = plan_units(grouped, config, weights, durations, machine_cores=cores, full_set=full_set)
     scope = "full" if full_set else "subset"
+    selection_path = getattr(args, "selection_file", None)
+    args.selection_binding = None
+    if selection_path is not None:
+        if selection_path.is_symlink() or not selection_path.is_file():
+            raise ExecutorError("分片选择件必须是普通文件")
+        raw = selection_path.read_bytes()
+        try:
+            selection = json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise ExecutorError("分片选择件不是合法 JSON") from error
+        expected = sorted(test_id for ids in grouped.values() for test_id in ids)
+        if (not isinstance(selection, dict)
+                or set(selection) != {"schema_version", "full_test_ids_sha256", "test_ids"}
+                or selection["schema_version"] != "unit-executor-selection/v1"
+                or selection["full_test_ids_sha256"] != _sha256(expected)):
+            raise ExecutorError("分片选择件的全量测试身份不匹配")
+        selected = selection["test_ids"]
+        if (not isinstance(selected, list) or not selected or not all(isinstance(item, str) for item in selected)
+                or len(selected) != len(set(selected)) or not set(selected) <= set(expected)):
+            raise ExecutorError("分片测试 ID 缺失、重复或超出全集")
+        selected = set(selected)
+        if any(selected.intersection(unit.test_ids) and not set(unit.test_ids) <= selected for unit in units):
+            raise ExecutorError("分片选择件不能截断已规划的执行单元")
+        units = [unit for unit in units if set(unit.test_ids) <= selected]
+        grouped = {module: [test_id for test_id in ids if test_id in selected]
+                   for module, ids in grouped.items() if selected.intersection(ids)}
+        scope = "shard"
+        args.selection_binding = {"path": str(selection_path.resolve()), "sha256": hashlib.sha256(raw).hexdigest(),
+                                  "full_test_ids_sha256": selection["full_test_ids_sha256"],
+                                  "selected_test_ids_sha256": _sha256(sorted(selected))}
     return config, weights, durations, parallelism, cores, grouped, units, policy_digest(config, weights, durations, parallelism), scope
 
 
@@ -1503,7 +1775,7 @@ def _out_dir(args: argparse.Namespace) -> Path:
 
 
 def _prepare_shared_caches(args: argparse.Namespace, out_dir: Path, scheduler: Scheduler) -> tuple[dict[str, Any], str | None]:
-    """字节码共享层与身份记忆化（E2-02）：在任何单元之前准备，耗时计入总时长；``--shared-caches off`` 时都不准备。"""
+    """单元之前准备缓存并计入总时长；bytecode 模式独立关闭身份记忆化，off 保留原诊断行为。"""
 
     if args.shared_caches == "off":
         bytecode = {"status": "off", "prefix": os.environ.get("PYTHONPYCACHEPREFIX") or None, "seconds": 0.0}
@@ -1515,8 +1787,11 @@ def _prepare_shared_caches(args: argparse.Namespace, out_dir: Path, scheduler: S
     print(f"字节码共享层：{note}（{bytecode['prefix'] or '不设前缀'}）", file=sys.stderr, flush=True)
     # 身份记忆化：本次运行的全部单元共用一个缓存目录，同一棵树的身份五摘要与评估器四项只算一次；键是整树逐文件摘要，
     # 测试改副本树后自然重算（见 codex_upgrade_tool_identity_policy）。
+    memo_mode = args.identity_memo or {"auto": "auto", "bytecode": "off", "off": "inherit"}[args.shared_caches]
+    if memo_mode == "off":
+        os.environ.pop(IDENTITY_MEMO_ENV, None)
     identity_memo = os.environ.get(IDENTITY_MEMO_ENV) or None
-    if args.shared_caches != "off" and not identity_memo:
+    if memo_mode == "auto" and not identity_memo:
         identity_memo = str((out_dir / "identity-memo").resolve())
         os.environ[IDENTITY_MEMO_ENV] = identity_memo
     return bytecode, identity_memo
@@ -1597,7 +1872,8 @@ def _run_commands(args: argparse.Namespace) -> int:
         diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
         summary = summarize_commands(units, formal, diagnostic, time.monotonic() - started, policy)
         summary.update({"max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
-                        "bytecode_cache": bytecode, "identity_memo": identity_memo})
+                        "bytecode_cache": bytecode, "identity_memo": identity_memo,
+                        "reservation_interruptions": scheduler.interruptions})
         if bytecode["status"] == "failed":
             summary["status"] = "failed"
         _write_json(out_dir / "summary.json", summary)
@@ -1731,8 +2007,9 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
         print(f"门禁 {gate['gate_id']}：{verdict}{skipped}", file=sys.stderr)
     audit = summary.get("read_audit") or {}
     if audit:
-        verdict = "通过" if audit["status"] == "passed" else f"不通过：{len(audit['units_with_findings'])} 个单元有未声明读取 {audit['undeclared_total']} 处"
-        print(f"读集审计（{audit['units']} 个单元，声明整个仓库不审计的 {audit.get('skipped_whole_repo', 0)} 个）：{verdict}；明细 {audit['report']}",
+        verdict = "全集覆盖通过" if audit.get("coverage_complete") else "承接边界通过，全集读集未覆盖" if audit["status"] == "passed" else "不通过"
+        print(f"读集检查（{audit['units']} 个单元，强制重跑 {len(audit.get('reexecute_required_units', []))} 个，"
+              f"未声明读取 {audit['undeclared_total']} 处）：{verdict}；明细 {audit['report']}",
               file=sys.stderr)
         for unit_id in audit["units_with_findings"][:10]:
             print(f"  未声明读取：{unit_id}", file=sys.stderr)
@@ -1875,6 +2152,12 @@ def _run_gates(args: argparse.Namespace) -> int:
     的记录都入库（给了记录库时），运行结束写清单并自检。"""
 
     records = _records_module()
+    if args.full_set_request and args.target_platform_request:
+        raise ExecutorError("B-09 与 B-10 请求不能同时使用")
+    request_path = args.target_platform_request or args.full_set_request
+    target_mode = args.target_platform_request is not None
+    decision_key = "target_platform_decision" if target_mode else "full_set_decision"
+    decision_file = "target-platform-decision.json" if target_mode else "full-set-decision.json"
     if args.mode == records.FULL_SET_PASS and args.record_store is None:
         raise ExecutorError("全集通过模式（承接）要给记录库：--record-store")
     max_age = float(args.inheritance_max_age_hours)
@@ -1885,6 +2168,7 @@ def _run_gates(args: argparse.Namespace) -> int:
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
     groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
+    resume_manifest_digest = records.file_sha256(args.manifest)
     parallelism = args.parallel or config.default_parallelism
     # 环境指纹要在准备共享缓存之前算：准备缓存会往本进程环境里写缓存位置。
     try:
@@ -1893,6 +2177,24 @@ def _run_gates(args: argparse.Namespace) -> int:
         raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
     executor = records.executor_version([args.bytecode_helper])
     store = records.RecordStore(args.record_store) if args.record_store is not None else None
+    scopes = [item["input_scope"] for item in manifest.get("units", []) if "input_scope" in item]
+    if scopes:
+        if args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict:
+            raise ExecutorError("收窄提案必须重新执行严格审计，不能直接承接来源记录")
+        # 清单只是运输载体：执行前再次重放提案，防止绕过 plan 或篡改 inputs。
+        scope_spec = importlib.util.spec_from_file_location("_unit_executor_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
+        scope_module = importlib.util.module_from_spec(scope_spec)
+        scope_spec.loader.exec_module(scope_module)
+        expected_inputs = {item["unit_id"]: item.get("inputs") for item in manifest["units"] if "input_scope" in item}
+        scope_module.apply_input_scopes(manifest, scopes)
+        for item in manifest["units"]:
+            if "input_scope" not in item:
+                continue
+            scope = item["input_scope"]
+            if (item["inputs"] != expected_inputs[item["unit_id"]]
+                    or scope["environment_sha256"] != records.entries_sha256(environment)
+                    or scope["executor_sha256"] != executor["sha256"]):
+                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
     for group in groups:
@@ -1906,9 +2208,48 @@ def _run_gates(args: argparse.Namespace) -> int:
     if clash:
         raise ExecutorError(f"命令单元与测试单元重名：{clash}")
     units = test_units + command_units
+    audit_policy = manifest.get("audit_policy")
+    if audit_policy is not None:
+        try:
+            records.validate_audit_policy(audit_policy, {unit.unit_id for unit in command_units})
+        except records.RecordsError as error:
+            raise ExecutorError(str(error)) from error
+        if not args.decide_only and not request_path and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict):
+            raise ExecutorError("读集合同登记须重新执行严格审计；当前只能只读预览承接集合")
+        for item in manifest["units"]:
+            if item["unit_id"] in audit_policy["units"] and item.get("inputs") != audit_policy["units"][item["unit_id"]]:
+                raise ExecutorError("单元输入与已登记读集合同不一致")
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
+    def resume_basis(values: dict[str, Any]) -> dict[str, Any]:
+        return {key: (value.spec_sha256, value.inputs_sha256, value.inheritable, value.reason) for key, value in values.items()}
+    original_resume_basis = resume_basis(currents)
+    if audit_policy is not None:
+        entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))
+        for unit_id, current in currents.items():
+            if unit_id not in audit_policy["units"]:
+                current.inputs = records._unique([*(current.inputs or []), entry])
+                current.inputs_sha256 = records.entries_sha256(current.inputs)
+                current.inheritable = False
+                current.reason = "输入合同未闭合：只验证本次执行结果，禁止承接"
+    if args.audit_strict and not args.audit_reads:
+        raise ExecutorError("严格读集审计必须同时启用 --audit-reads")
+    if args.audit_host_inputs:
+        if not args.audit_reads or not args.audit_strict or args.mode != records.RE_EXECUTE:
+            raise ExecutorError("宿主输入登记必须重新执行严格读集审计")
+        host_inputs = _read_json_file(args.audit_host_inputs)
+        if (not isinstance(host_inputs, dict) or set(host_inputs) != {"schema_version", "units"}
+                or host_inputs["schema_version"] != "unit-host-inputs/v1" or not isinstance(host_inputs["units"], dict)
+                or set(host_inputs["units"]) - set(currents)):
+            raise ExecutorError("宿主输入清单格式错误或含未执行单元")
+        for unit_id, paths in host_inputs["units"].items():
+            if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
+                raise ExecutorError("每个单元的宿主输入须为无重复的精确路径数组")
+            current = currents[unit_id]
+            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],
+                                              records.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
+            current.inputs_sha256 = records.entries_sha256(current.inputs)
     if args.audit_reads:
         if args.mode != records.RE_EXECUTE:
             raise ExecutorError("读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用")
@@ -1917,10 +2258,43 @@ def _run_gates(args: argparse.Namespace) -> int:
     run_id, decided_at = records.new_run_id(), records.utc_now()
     facts = records.RunFacts(policy_sha256=policy, environment=environment, environment_sha256=records.entries_sha256(environment),
                              executor=executor, max_age_hours=max_age, now=time.time())
-    decisions = {unit.unit_id: records.evaluate(store, currents[unit.unit_id], facts) if args.mode == records.FULL_SET_PASS
+    decisions = {unit.unit_id: records.evaluate(store, currents[unit.unit_id], facts) if args.mode == records.FULL_SET_PASS and not request_path
                  else records.Decision(reasons=["重新执行全集：不承接"]) for unit in units}
+    full_set_verdict = None
+    if request_path:
+        spec = importlib.util.spec_from_file_location("_full_set_receipt", Path(__file__).with_name("full_set_receipt.py"))
+        full_set = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(full_set)
+        assessor = full_set.assess
+        if target_mode:
+            target_spec = importlib.util.spec_from_file_location("_target_platform_gate", Path(__file__).with_name("target_platform_gate.py"))
+            target_module = importlib.util.module_from_spec(target_spec)
+            target_spec.loader.exec_module(target_module)
+            assessor = target_module.assess
+        try:
+            request = full_set.read(request_path)
+            full_set.live_check(request, deployment=args.full_set_deployment,
+                                store=store.root if store is not None else None, tree=Path.cwd())
+            if args.mode != records.FULL_SET_PASS:
+                request = {**request, "reuse_enabled": False}
+            full_set_verdict, decisions = assessor(request, currents, facts,
+                gate_ids=[gate.gate_id for gate in gates], now=time.time())
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+            full_set_verdict = {"schema_version": "full-set-decision/v1", "action": "reexecute-all", "eligible": False,
+                                "reuse_enabled": False, "reasons": [str(error)], "request": str(request_path)}
+            decisions = {unit.unit_id: records.Decision(reasons=["B-09 全集重跑：" + str(error)]) for unit in units}
+        if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
+            args.mode = records.RE_EXECUTE
+        max_age = min(max_age, 24)
+    # B-11 登记策略下，B-09 拒绝后仍须按原严格审计合同重新执行。
+    if audit_policy is not None and full_set_verdict is not None and args.mode == records.RE_EXECUTE and not args.decide_only:
+        if shutil.which("strace") is None:
+            raise ExecutorError("B-09 全集重跑仍要求原登记的严格审计，缺少 strace")
+        args.audit_reads = args.audit_strict = True
     to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
     out_dir = _out_dir(args)
+    if full_set_verdict is not None:
+        _write_json(out_dir / decision_file, full_set_verdict)
     if args.decide_only:
         # 只判定：每个单元承接还是执行、依据或原因；不执行、不写记录、不占调度锁。
         payload = {"mode": args.mode, "decided_at_utc": decided_at, "policy_sha256": policy, "environment_sha256": facts.environment_sha256,
@@ -1935,14 +2309,68 @@ def _run_gates(args: argparse.Namespace) -> int:
     state_dir = args.state_dir or default_state_dir()
     recorder = Recorder(out_dir=out_dir, mode=args.mode, run_id=run_id, policy=policy, executor=executor, environment=environment,
                         currents=currents, store=store)
-    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents) if args.audit_reads else None
+    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents,
+                          strict=args.audit_strict) if args.audit_reads else None
+    def validate_resume(restarted: list[Unit]) -> None:
+        """批次可能改变输入／部署；保留原规格重派前核对，不给新输入沿用旧摘要。"""
+        fresh = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                               manifest=manifest, timeout=config.unit_timeout_seconds)
+        fresh_basis = resume_basis(fresh)
+        if any(fresh_basis[unit.unit_id] != original_resume_basis[unit.unit_id] for unit in restarted):
+            raise ExecutorError("整机预约后单元规格或输入漂移，停止本轮，须重新建计划")
+        for unit in restarted:
+            for entry in recorder.currents[unit.unit_id].inputs or []:
+                name = entry.get("name", "")
+                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:
+                    raise ExecutorError("整机预约后宿主输入漂移，拒绝重派")
+        fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+        if (records.entries_sha256(fresh_environment) != recorder.environment_sha256
+                or records.executor_version([args.bytecode_helper]) != recorder.executor
+                or records.file_sha256(args.manifest) != resume_manifest_digest
+                or gates_policy_digest(load_config(args.config), load_weights(args.weights), load_durations(args.durations),
+                                       parallelism, manifest.get("scheduling")) != policy):
+            raise ExecutorError("整机预约后环境、工具或调度计划漂移，拒绝重派")
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
     scheduler = Scheduler(
         out_dir=out_dir, state_dir=state_dir, parallelism=parallelism, machine_cores=cores,
         machine_memory=machine_memory_mb(), config=config, policy=policy, start=groups[0].start if groups else Path("."), recorder=recorder,
         auditor=auditor,
+        resume_validator=validate_resume,
     )
     try:
+        # 锁可能排队很久：重新读请求、现场身份、输入、环境和动态凭证。
+        if full_set_verdict is not None and any(d.inherit for d in decisions.values()):
+            try:
+                request = full_set.read(request_path)
+                full_set.live_check(request, deployment=args.full_set_deployment, store=store.root, tree=Path.cwd())
+                current_now = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                            manifest=manifest, timeout=config.unit_timeout_seconds)
+                original_resume_basis = resume_basis(current_now)
+                currents = current_now
+                recorder.currents = currents
+                facts.now = time.time()
+                fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+                fresh_facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment))
+                environment = fresh_environment
+                facts = fresh_facts
+                recorder.environment = environment
+                recorder.environment_sha256 = facts.environment_sha256
+                full_set_verdict, decisions = assessor(request, current_now, fresh_facts,
+                    gate_ids=[gate.gate_id for gate in gates], now=facts.now)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+                full_set_verdict = {"schema_version": "full-set-decision/v1", "action": "reexecute-all", "eligible": False,
+                                    "reuse_enabled": False, "reasons": [str(error)]}
+                decisions = {unit.unit_id: records.Decision(reasons=["B-09 锁后复核拒绝：" + str(error)]) for unit in units}
+            to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
+            if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
+                args.mode = recorder.mode = records.RE_EXECUTE
+                if audit_policy is not None:
+                    if shutil.which("strace") is None:
+                        raise ExecutorError("锁后拒绝承接，重新执行原严格审计所需的 strace 不可用")
+                    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root,
+                                          currents=currents, strict=True)
+                    scheduler.auditor = auditor
+            _write_json(out_dir / decision_file, full_set_verdict)
         started = time.monotonic()
         _write_json(out_dir / "plan.json", {
             "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores, "mode": args.mode, "run_id": run_id,
@@ -1962,7 +2390,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             bytecode, identity_memo = {"status": "off", "prefix": None, "seconds": 0.0, "note": "全部承接，没有要执行的单元"}, None
         formal = scheduler.run_parallel([u for u in to_run if not u.exclusive], "formal")
         formal += scheduler.run_alone([u for u in to_run if u.exclusive], "formal")
-        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.passed], "diagnostic")
+        # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
+        diagnostic = scheduler.run_alone([o.unit for o in formal if not o.execution_passed], "diagnostic")
         inherited = [_inherited_outcome(unit, decisions[unit.unit_id], store) for unit in units if decisions[unit.unit_id].inherit]
         outcomes = formal + inherited
         summary = summarize_gates(groups, group_units, expected, command_units, gates, outcomes, diagnostic, time.monotonic() - started, policy)
@@ -1970,16 +2399,37 @@ def _run_gates(args: argparse.Namespace) -> int:
                                        decided_at=decided_at, policy=policy, environment=environment, executor=executor, units=units,
                                        gates=gates, group_units=group_units, expected=expected, currents=currents, decisions=decisions,
                                        outcomes=outcomes, diagnostic=diagnostic)
+        if full_set_verdict is not None:
+            unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
+                                          decision_key: full_set_verdict}, "manifest_sha256")
         problems = records.verify_manifest(unit_manifest, store=store)
+        if target_mode and inherited:
+            try:
+                request = full_set.read(request_path)
+                full_set.live_check(request, deployment=args.full_set_deployment, store=store.root, tree=Path.cwd())
+                end_currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                             manifest=manifest, timeout=config.unit_timeout_seconds)
+                end_verdict, end_decisions = assessor(request, end_currents, facts,
+                    gate_ids=[gate.gate_id for gate in gates], now=time.time())
+                if (end_verdict["action"] != "inherit-matching-units"
+                        or end_verdict.get("source_receipt") != full_set_verdict.get("source_receipt") or any(
+                            not end_decisions[outcome.unit.unit_id].inherit
+                            or end_decisions[outcome.unit.unit_id].record["record_sha256"] != decisions[outcome.unit.unit_id].record["record_sha256"]
+                            for outcome in inherited)):
+                    raise ValueError("结束复核不通过：" + "；".join(end_verdict["reasons"]))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError) as error:
+                problems.append("B-10 结束时来源已失效：" + str(error))
         manifest_path = out_dir / "unit-manifest.json"
         _write_json(manifest_path, unit_manifest)
         # 自检通过才把清单存进记录库：承接要求原运行的清单把记录列为正式执行，没正常结束或自检不过的运行，它的记录不可承接。
         if store is not None and not problems:
             store.put_manifest(unit_manifest)
         summary.update({
+            "reservation_interruptions": scheduler.interruptions,
             "max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
             "bytecode_cache": bytecode, "identity_memo": identity_memo, "mode": args.mode, "run_id": run_id,
             "record_store": str(store.root) if store is not None else None,
+            decision_key: full_set_verdict,
             "inheritance": {"mode_label": records.MODE_LABELS[args.mode], **{key: unit_manifest["counts"][key] for key in ("executed", "inherited", "inherited_tests")}},
             "unit_manifest": {"path": str(manifest_path), "manifest_sha256": unit_manifest["manifest_sha256"],
                               "self_check": "passed" if not problems else "failed", "problems": problems[:50]},
@@ -2035,6 +2485,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             print(json.dumps({
                 "policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
+                "selection": args.selection_binding,
                 "modules": len(grouped), "tests": sum(len(v) for v in grouped.values()),
                 "units": [{"unit_id": u.unit_id, "tests": len(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive, "weight": round(u.weight, 1)} for u in sorted(units, key=lambda u: -u.weight)],
             }, ensure_ascii=False, indent=1))
@@ -2054,6 +2505,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             started = time.monotonic()
             _write_json(out_dir / "plan.json", {"policy_sha256": policy, "scope": scope, "parallelism": parallelism, "machine_cores": cores,
+                                                "selection": args.selection_binding,
                                                 "units": [{"unit_id": u.unit_id, "tests": list(u.test_ids), "cores": u.quota.cores, "exclusive": u.exclusive} for u in units]})
             print(f"调度：{'全量' if scope == 'full' else '部分模块'} {len(units)} 个单元（{sum(1 for u in units if u.exclusive)} 个独占），并行度 {parallelism}，"
                   f"整机 {cores} 核，策略 {policy[:12]}，记录 {out_dir}", file=sys.stderr, flush=True)
@@ -2064,9 +2516,11 @@ def main(argv: list[str] | None = None) -> int:
             expected = {t for ids in grouped.values() for t in ids}
             summary = summarize(units, formal, diagnostic, expected, time.monotonic() - started, policy)
             summary["max_cores_in_use"] = scheduler.max_cores_in_use
+            summary["reservation_interruptions"] = scheduler.interruptions
             summary["machine_cores"] = cores
             summary["parallelism"] = parallelism
             summary["scope"] = scope
+            summary["selection"] = args.selection_binding
             summary["bytecode_cache"] = bytecode
             summary["identity_memo"] = identity_memo
             if bytecode["status"] == "failed":

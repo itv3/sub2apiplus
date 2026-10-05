@@ -1,5 +1,5 @@
 #!/bin/bash
-# 本机 VC-4／VC-5 门禁＋上传包装（修好接着跑第 20 项）。
+# 本机 VC-4／VC-5 门禁＋上传包装。
 # ARM64 上 vc4-all.sh 等待本机上传的心跳最多 300 秒（wait_state.py heartbeat：心跳文件缺失或过期即失败），
 # 而本机 check-egress-spec 门禁与 make test 全量回归要跑几十分钟；此前心跳只在 local-upload.sh 开始后才发，
 # 总控必然因"上传心跳一直缺失"退出，只能 --resume-from upload-wait 续跑。本包装在门禁一开始就向 ARM64 发心跳：

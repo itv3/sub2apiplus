@@ -4,7 +4,7 @@
   execve 的 unfinished／resumed、ENOENT 探测、八进制转义的中文路径、两路径的 renameat2、AT_EMPTY_PATH、字节码缓存；
 * 覆盖：范围项、文件项、上级目录元数据、HEAD 与只读提交号模块的 .git 例外、数据根同布局与豁免、已算明细的绝对路径；
 * 执行器：PATH 里放假 strace（按单元写合成轨迹并经 ``-o '|…'`` 管道交给过滤器），真跑 run-gates，未声明读取逐条报出、
-  整次判失败，声明齐全时通过；审计不改执行记录、清单自检照常通过；只许 re-execute。
+  整次判失败，声明齐全时通过；审计失败同步写入执行记录，禁止后续误承接；只许 re-execute。
 * 真 strace：Linux 上有 strace 且本进程没被跟踪时，跑一次真实轨迹（入口门禁带审计跑全集时本测试已在 strace 下，跳过）。
 """
 
@@ -18,10 +18,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.ci import read_audit as ra
+from tools.ci import entry_gates as eg
 from tools.ci import unit_executor as ue
 from tools.ci import unit_records as ur
 
@@ -136,6 +139,93 @@ class ReadAuditPrefilterTests(unittest.TestCase):
         self.assertFalse(ra.declares_whole_repo([_range("repo:rest", [""], ["tools/"])]))
 
 
+class TruncatedPathParserTests(unittest.TestCase):
+    """截断项保留原参数位置，不能把 argv、输出缓冲区或扩展属性伪装成路径。"""
+
+    def test_truncated_path_does_not_promote_later_argument(self):
+        lines = [
+            '1 execve("/repo/prefix"..., ["/repo/argv"], 0x1) = -1 ENOENT (No such file or directory)',
+            '1 execveat(AT_FDCWD</repo>, "prefix"..., ["AT_FDCWD</fake>", "/repo/argv"], 0x1, 0) = -1 ENOENT (No such file or directory)',
+            '1 getxattr("/repo/prefix"..., "user.name", "/repo/value", 64) = 11',
+            '1 openat(AT_FDCWD</repo>, "prefix"..., O_RDONLY) = -1 ENOENT (No such file or directory)',
+        ]
+        for strict in (False, True):
+            for line in lines:
+                with self.subTest(strict=strict, line=line):
+                    trace = ra.filter_stream([line], ["/"], strict=strict)
+                    self.assertEqual(trace["accesses"], [])
+                    if strict:
+                        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_non_path_strings_cannot_replace_pointer_arguments(self):
+        for tail in ('"/repo/output"...', '"/repo/output"'):
+            for strict in (False, True):
+                with self.subTest(tail=tail, strict=strict):
+                    trace = ra.filter_stream([f'1 readlink(0x1, {tail}, 128) = -1 EFAULT (Bad address)'], ["/"], strict=strict)
+                    self.assertEqual(trace["accesses"], [])
+                    if strict:
+                        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_truncated_non_path_keeps_real_path_and_conservative_coverage(self):
+        for strict in (False, True):
+            trace = ra.filter_stream(['1 readlink("/repo/link", "/repo/result"..., 8) = 8',
+                                      '1 execve("/repo/check", ["/repo/fake"...], 0x1) = 0'], ["/"], strict=strict)
+            self.assertEqual(dict(trace["accesses"]), {"/repo/check": ["exec"], "/repo/link": ["stat"]})
+            if strict:
+                self.assertGreater(trace["coverage"]["unresolved"], 0, "C-06 不放宽 B-11 的不完整轨迹合同")
+
+    def test_two_path_positions_and_symlink_target_are_not_shifted(self):
+        lines = ['1 rename("/repo/old"..., "/repo/new") = 0',
+                 '1 linkat(AT_FDCWD</repo>, "source"..., AT_FDCWD</repo>, "link", 0) = 0',
+                 '1 symlink("/repo/target"..., "/repo/symbolic") = 0',
+                 '1 symlinkat("/repo/target"..., AT_FDCWD</repo>, "symbolic-at") = 0']
+        for strict in (False, True):
+            trace = ra.filter_stream(lines, ["/"], strict=strict)
+            self.assertEqual(dict(trace["accesses"]), {"/repo/new": ["write"], "/repo/link": ["write"],
+                                                      "/repo/symbolic": ["write"], "/repo/symbolic-at": ["write"]})
+            if strict:
+                self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_quoted_punctuation_and_multiline_filename_stay_complete(self):
+        path = '/repo/a,[]<x>"\\\n...'
+        encoded = json.dumps(path)
+        for strict in (False, True):
+            trace = ra.filter_stream([f'1 access({encoded}, F_OK) = 0'], ["/"], strict=strict)
+            self.assertEqual(trace["accesses"], [[path, ["stat"]]])
+            if strict:
+                self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_interleaved_resumes_do_not_mix_paths_or_arguments(self):
+        lines = ['1 execve("/repo/first"..., ["/repo/argv"] <unfinished ...>',
+                 '2 access("/host/second\\nline", F_OK <unfinished ...>',
+                 '1 <... execve resumed>, 0x1) = -1 ENOENT (No such file or directory)',
+                 '2 <... access resumed>) = 0']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(trace["accesses"], [["/host/second\nline", ["stat"]]])
+        self.assertEqual(trace["coverage"]["unfinished_calls"], 0)
+        self.assertGreater(trace["coverage"]["unresolved"], 0)
+
+    def test_nested_argument_annotation_cannot_change_working_directory(self):
+        lines = ['1 getcwd("/repo", 4096) = 6',
+                 '1 execve("./check", ["AT_FDCWD</fake>", ["x,y"]], 0x1) = 0',
+                 '1 inotify_add_watch(3<anon_inode:inotify>, "file", IN_MODIFY) = 1']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(dict(trace["accesses"]), {"/repo": ["dir"], "/repo/check": ["exec"], "/repo/file": ["stat"]})
+        self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_real_out_of_scope_read_still_fails_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "真实越界输入"
+            path.write_text("不得遗漏")
+            trace = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            report = ra.strict_audit_reads(trace, [], repo_root="/repo", data_root=None)
+            self.assertFalse(report["coverage_complete"])
+            self.assertEqual(report["undeclared_count"], 1)
+            truncated = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "prefix"..., O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            self.assertEqual(dict(truncated["accesses"])[str(path)], ["read"])
+            self.assertFalse(ra.strict_audit_reads(truncated, [ra.host_snapshot(str(path))], repo_root="/repo", data_root=None)["coverage_complete"])
+
+
 class ReadAuditCoverageTests(unittest.TestCase):
     INPUTS = [
         _range("repo:managed", ["tools/official_client_capture/"], ["tools/official_client_capture/tests/"]),
@@ -232,6 +322,290 @@ sys.exit(subprocess.run(command).returncode)
 """
 
 
+class StrictReadAuditTests(unittest.TestCase):
+    """宿主机读取不能由仓库范围声明、目录前缀或一次空轨迹代替。"""
+
+    def test_child_relative_access_before_clone_return_is_replayed_in_order(self):
+        lines = ['1 getcwd("/repo/a/b", 4096) = 10',
+                 '1 clone(child_stack=NULL, flags=CLONE_VFORK|SIGCHLD <unfinished ...>',
+                 '2 chdir("../..") = 0',
+                 '2 execve("./bin/check", ["check"], 0x1) = 0',
+                 '2 openat(AT_FDCWD</repo>, "input", O_RDONLY) = 3</repo/input>',
+                 '1 <... clone resumed>) = 2']
+        trace = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(trace["coverage"]["unresolved"], 0)
+        self.assertEqual(trace["lines"], len(lines))
+        self.assertEqual(dict(trace["accesses"])["/repo/bin/check"], ["exec"])
+        self.assertEqual(dict(trace["accesses"])["/repo/input"], ["read"])
+        # 没有父进程返回行不能用后来观察到的目录倒推先前的相对路径。
+        broken = ra.filter_stream(lines[:-1], ["/"], strict=True)
+        self.assertGreater(broken["coverage"]["unresolved_process_events"], 0)
+        self.assertNotIn("/repo/bin/check", dict(broken["accesses"]))
+
+    def test_audit_trace_names_cannot_collide_or_delete_another_units_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=REPO_ROOT, data_root=None, currents={}, strict=True)
+            identifiers = ["cmd:a", "cmd-a", "suite#1", "suite-1", "x" * 100 + ":a", "x" * 100 + "-a"]
+            units = [ue.Unit(value, value, (), ue.Quota(1, 128), False, 0) for value in identifiers]
+            paths = [auditor.trace_path(unit) for unit in units]
+            self.assertEqual(len(set(paths)), len(units))
+            for unit, path in zip(units, paths):
+                path.write_text(unit.unit_id)
+                self.assertEqual(path.parent, auditor.dir)
+                self.assertLess(len(path.name.encode()), 255)
+            auditor.wrap(units[0], ["true"])
+            self.assertFalse(paths[0].exists())
+            for unit, path in zip(units[1:], paths[1:]):
+                self.assertEqual(path.read_text(), unit.unit_id)
+
+    def test_strict_parser_keeps_host_bytecode_and_resumes_file_calls(self):
+        lines = ['1 openat(AT_FDCWD</repo>, "/host/__pycache__/a.pyc", O_RDONLY <unfinished ...>\n',
+                 '1 <... openat resumed>) = 3</host/__pycache__/a.pyc>\n']
+        report = ra.filter_stream(lines, ["/"], strict=True)
+        self.assertEqual(report["accesses"], [["/host/__pycache__/a.pyc", ["read"]]])
+        self.assertEqual(report["coverage"]["unresolved"], 0)
+        self.assertEqual(report["lines"], 2)
+
+    def test_strict_parser_keeps_dereferenced_target_and_rejects_incomplete(self):
+        report = ra.filter_stream(['1 openat(AT_FDCWD</repo>, "/repo/link", O_RDONLY) = 3</host/data>\n'], ["/"], strict=True)
+        self.assertEqual({row[0] for row in report["accesses"]}, {"/repo/link", "/host/data"})
+        pending = ra.filter_stream(['1 openat(AT_FDCWD</repo>, "x", O_RDONLY <unfinished ...>\n'], ["/"], strict=True)
+        self.assertEqual(pending["coverage"]["unresolved"], 1)
+
+    def test_plain_open_keeps_resolved_target_and_unparsed_calls_fail_closed(self):
+        trace = ra.filter_stream(['1 open("/repo/link", O_RDONLY) = 3</host/input>\n'], ["/"], strict=True)
+        self.assertEqual({row[0] for row in trace["accesses"]}, {"/repo/link", "/host/input"})
+        for line in ('1 open(0x1, O_RDONLY) = -1 EFAULT (Bad address)', '1 getdents64(3, 0x1, 10) = 0'):
+            self.assertGreater(ra.filter_stream([line], ["/"], strict=True)["coverage"]["unresolved"], 0)
+        trace = ra.filter_stream(['1 getcwd("/repo", 4096) = 6', '1 open("input", O_RDONLY) = 3</repo/input>'], ["/"], strict=True)
+        self.assertEqual(trace["coverage"]["unresolved"], 0)
+        self.assertEqual(dict(trace["accesses"])["/repo/input"], ["read"])
+
+    def test_strict_summary_missing_unit_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=REPO_ROOT, data_root=None,
+                                     currents={"a": object(), "b": object()}, strict=True)
+            auditor.results["a"] = {"coverage_complete": True, "undeclared_count": 0}
+            report = auditor.report()
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["missing_units"], ["b"])
+
+    def test_written_and_empty_inputs_never_get_reusable_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input.txt"; path.write_text("不变字节也不能承接写操作")
+            trace = ra.filter_stream([f'1 open("{path}", O_RDWR) = 3<{path}>'], ["/"], strict=True)
+            self.assertFalse(ra.strict_audit_reads(trace, [ra.host_snapshot(str(path))], repo_root="/repo", data_root=None)["coverage_complete"])
+            trace["accesses"] = []
+            self.assertFalse(ra.strict_audit_reads(trace, [], repo_root="/repo", data_root=None)["coverage_complete"])
+
+    def test_host_input_declaration_always_requires_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input.txt"; path.write_text("输入")
+            entries = ur.declared_inputs(mock.Mock(), {"host_paths": [str(path)], "require_read_audit": False})
+            self.assertIn("require-read-audit", {entry["name"] for entry in entries})
+            for invalid in ({"host_paths": "wrong"}, {"host_paths": [str(path), str(path)]}, {"require_read_audit": "true"}):
+                with self.assertRaises(ur.RecordsError):
+                    ur.declared_inputs(mock.Mock(), invalid)
+
+    def test_exact_host_snapshot_binds_content_metadata_and_missing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            file = root / "input.txt"; file.write_text("本轮输入")
+            absent = root / "absent.txt"
+            inputs = [ra.host_snapshot(str(file)), ra.host_snapshot(str(absent))]
+            trace = ra.filter_stream([f'1 openat(AT_FDCWD<{root}>, "{file}", O_RDONLY) = 3<{file}>\n',
+                                     f'1 access("{absent}", F_OK) = -1 ENOENT (No such file or directory)\n'], ["/"], strict=True)
+            check = lambda: ra.audit_reads(trace, inputs, repo_root="/repo", strict=True)
+            self.assertTrue(check()["coverage_complete"])
+            file.write_text("变更输入")
+            self.assertFalse(check()["coverage_complete"])
+            absent.write_text("原来不存在")
+            self.assertGreater(check()["undeclared_count"], 0)
+
+    def test_directory_and_whole_repo_cannot_cover_unbound_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); path = root / "child"; path.write_text("输入")
+            opened = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{root}", O_RDONLY|O_CLOEXEC) = 3<{root}>'], ["/"], strict=True)
+            self.assertTrue(ra.strict_audit_reads(opened, [ra.host_snapshot(str(root))], repo_root="/repo", data_root=None)["coverage_complete"])
+            written = ra.filter_stream([f'1 openat(AT_FDCWD</repo>, "{root}", O_RDWR) = 3<{root}>'], ["/"], strict=True)
+            self.assertFalse(ra.strict_audit_reads(written, [ra.host_snapshot(str(root))], repo_root="/repo", data_root=None)["coverage_complete"])
+            trace = ra.filter_stream([f'1 openat(AT_FDCWD<{root}>, "{path}", O_RDONLY) = 3<{path}>\n'], ["/"], strict=True)
+            inputs = [ra.host_snapshot(str(root)), _range("repo:all", [""])]
+            result = ra.audit_reads(trace, inputs, repo_root=str(root), strict=True)
+            self.assertFalse(result["coverage_complete"])
+            self.assertEqual(result["undeclared"][0]["path"], str(path))
+
+    def test_virtual_relative_and_parent_paths_cannot_be_snapshots(self):
+        for path in ("/proc/self/status", "/dev/null", "/sys/kernel", "relative", "/root/../etc/passwd"):
+            with self.subTest(path=path), self.assertRaises(ra.AuditError):
+                ra.host_snapshot(path)
+
+    def test_symlink_retargeting_invalidates_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ("a", "b"):
+                (root / name).write_text("相同字节")
+            link = root / "link"; link.symlink_to(root / "a")
+            first = ra.host_snapshot(str(link))
+            link.unlink(); link.symlink_to(root / "b")
+            self.assertNotEqual(first, ra.host_snapshot(str(link)))
+
+    def test_symlink_access_time_only_does_not_invalidate_path_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "input"; target.write_text("输入")
+            link = root / "link"; link.symlink_to(target)
+            before = ra.host_snapshot(str(link))
+            original = Path.lstat
+
+            def changed(path, *args, **kwargs):
+                info = original(path, *args, **kwargs)
+                if path == link:
+                    values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                    # 只模拟内核刷新访问时间，utime 还会改 ctime，不能用于这个反例。
+                    values["st_atime_ns"] += 86400 * 10**9
+                    return types.SimpleNamespace(**values)
+                return info
+
+            with mock.patch.object(Path, "lstat", changed):
+                self.assertEqual(before, ra.host_snapshot(str(link)))
+            self.assertNotIn("atime_ns", before["detail"]["snapshot"]["links"][0])
+
+    def test_symlink_identity_permissions_and_mutation_times_remain_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "input"; target.write_text("输入")
+            link = root / "link"; link.symlink_to(target)
+            before = ra.host_snapshot(str(link))
+            original = Path.lstat
+            for field in ("st_mode", "st_uid", "st_gid", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                def changed(path, *args, **kwargs):
+                    info = original(path, *args, **kwargs)
+                    if path == link:
+                        values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                        values[field] += 1
+                        return types.SimpleNamespace(**values)
+                    return info
+                with self.subTest(field=field), mock.patch.object(Path, "lstat", changed):
+                    self.assertNotEqual(before, ra.host_snapshot(str(link)))
+
+    def test_regular_file_and_directory_access_times_remain_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            file = root / "input"; file.write_text("输入")
+            original = Path.stat
+            for target in (file, root):
+                before = ra.host_snapshot(str(target))
+                def changed(path, *args, **kwargs):
+                    info = original(path, *args, **kwargs)
+                    if path == target:
+                        values = {key: getattr(info, key) for key in dir(info) if key.startswith("st_")}
+                        values["st_atime_ns"] += 1
+                        return types.SimpleNamespace(**values)
+                    return info
+                with self.subTest(target=target.name), mock.patch.object(Path, "stat", changed):
+                    self.assertNotEqual(before, ra.host_snapshot(str(target)))
+
+    def test_explicit_symlink_metadata_and_path_descriptors_refuse_reuse(self):
+        calls = [
+            'lstat("/repo/link", 0x1) = 0',
+            'lstat64("/repo/link", 0x1) = 0',
+            'newfstatat(AT_FDCWD</repo>, "link", 0x1, AT_SYMLINK_NOFOLLOW) = 0',
+            'fstatat64(AT_FDCWD</repo>, "link", 0x1, AT_SYMLINK_NOFOLLOW) = 0',
+            'statx(AT_FDCWD</repo>, "link", AT_SYMLINK_NOFOLLOW|AT_STATX_SYNC_AS_STAT, STATX_ALL, 0x1) = 0',
+            'open("/repo/link", O_PATH|O_NOFOLLOW) = 3</repo/link>',
+            'openat(AT_FDCWD</repo>, "link", O_NOFOLLOW|O_PATH|O_CLOEXEC) = 3</repo/link>',
+            'openat2(AT_FDCWD</repo>, "link", {flags=O_PATH|O_NOFOLLOW, resolve=0}, 24) = 3</repo/link>',
+        ]
+        for call in calls:
+            with self.subTest(call=call.split("(")[0]):
+                trace = ra.filter_stream(["1 " + call], ["/"], strict=True)
+                self.assertEqual(trace["coverage"]["unresolved_reasons"],
+                                 {"symlink-metadata-not-bound:" + call.split("(")[0]: 1})
+                self.assertFalse(ra.audit_reads(trace, [], repo_root="/repo", strict=True)["coverage_complete"])
+
+    def test_missing_link_probe_and_flags_in_paths_are_not_metadata_reads(self):
+        calls = [
+            'lstat("/repo/absent", 0x1) = -1 ENOENT (No such file or directory)',
+            'newfstatat(AT_FDCWD</repo>, "absent", 0x1, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)',
+            'openat(AT_FDCWD</repo>, "absent", O_PATH|O_NOFOLLOW) = -1 ENOENT (No such file or directory)',
+            'newfstatat(AT_FDCWD</repo/AT_SYMLINK_NOFOLLOW>, "AT_SYMLINK_NOFOLLOW", 0x1, 0) = 0',
+            'openat(AT_FDCWD</repo/O_PATH>, "O_NOFOLLOW", O_RDONLY) = 3</repo/O_PATH/O_NOFOLLOW>',
+            'readlink("/repo/link", "target", 4096) = 6',
+        ]
+        for call in calls:
+            with self.subTest(call=call):
+                trace = ra.filter_stream(["1 " + call], ["/"], strict=True)
+                self.assertEqual(trace["coverage"]["unresolved"], 0)
+
+    def test_old_host_snapshot_schema_cannot_prove_current_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input"; path.write_text("输入")
+            entry = ra.host_snapshot(str(path))
+            trace = ra.filter_stream([f'1 open("{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            self.assertEqual(entry["detail"]["schema_version"], "read-audit-host-snapshot/v2")
+            self.assertTrue(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
+            entry["detail"]["schema_version"] = "read-audit-host-snapshot/v1"
+            self.assertFalse(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
+
+    def test_historical_host_replay_verifies_saved_snapshot_without_refreshing_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "input"; path.write_text("封存输入")
+            entry = ra.host_snapshot(str(path))
+            trace = ra.filter_stream([f'1 open("{path}", O_RDONLY) = 3<{path}>'], ["/"], strict=True)
+            path.write_text("后来变化")
+            self.assertTrue(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None, historical=True)["coverage_complete"])
+            self.assertFalse(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None)["coverage_complete"])
+            entry["detail"]["snapshot"]["content_sha256"] = "0" * 64
+            self.assertFalse(ra.strict_audit_reads(trace, [entry], repo_root="/repo", data_root=None, historical=True)["coverage_complete"])
+
+    def test_scoped_or_empty_trace_never_proves_complete_coverage(self):
+        scoped = ra.filter_stream([], ["/repo"])
+        self.assertFalse(ra.audit_reads(scoped, [], repo_root="/repo")["coverage_complete"])
+        self.assertFalse(ra.audit_reads(scoped, [], repo_root="/repo", strict=True)["coverage_complete"])
+        empty = ra.filter_stream([], ["/"], strict=True)
+        self.assertFalse(ra.audit_reads(empty, [], repo_root="/repo", strict=True)["coverage_complete"])
+
+    def test_strict_wrapper_does_not_prefilter_host_and_never_skips_whole_repo(self):
+        argv = ra.strace_argv(["true"], output=Path("/out/trace.json"), roots=["/repo"], strict=True)
+        pipe = argv[argv.index("-o") + 1]
+        self.assertNotIn("grep", pipe)
+        self.assertIn("--strict --root /", pipe)
+        with tempfile.TemporaryDirectory() as directory:
+            current = mock.Mock(inputs=[_range("repo:all", [""])])
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=Path(directory), data_root=None,
+                                     currents={"unit": current}, strict=True)
+            self.assertFalse(auditor.skipped(mock.Mock(unit_id="unit")))
+
+    def test_failed_audit_cannot_be_masked_by_successful_exit(self):
+        record = {"exit_code": 0, "signal": None, "timed_out": False, "unit_type": "command", "passed": True,
+                  "read_audit": {"status": "failed", "undeclared_count": 1}}
+        self.assertFalse(ur.derived_pass(record)[0])
+
+    def test_reexecute_policy_report_rejects_missing_unbound_or_relabelled_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry = ur.value_entry("policy", "reexecute-only-policy", "策略摘要")
+            current = mock.Mock(inputs=[entry], inheritable=False, reason="合同未闭合")
+            auditor = ue.ReadAuditor(out_dir=Path(directory), repo_root=Path(directory), data_root=None,
+                                     currents={"covered": mock.Mock(), "rerun": current}, strict=True)
+            auditor.results["covered"] = {"status": "passed", "coverage_complete": True, "undeclared_count": 0}
+            self.assertEqual(auditor.report()["status"], "failed")
+            current.inputs_sha256 = ur.entries_sha256(current.inputs)
+            unit = mock.Mock(unit_id="rerun")
+            self.assertEqual(auditor.wrap(unit, ["true"]), ["true"])
+            auditor.collect(unit)
+            report = auditor.report()
+            self.assertEqual(report["status"], "passed")
+            self.assertFalse(report["coverage_complete"])
+            self.assertTrue(report["reuse_boundary_enforced"])
+            for changed in ({"coverage_complete": True}, {"reexecute_policy_sha256": "wrong"}):
+                auditor.results["rerun"].update(changed)
+                self.assertEqual(auditor.report()["status"], "failed")
+                auditor.collect(unit)
+            current.inheritable = True
+            self.assertEqual(auditor.report()["status"], "failed")
+
+
 class ReadAuditExecutorTests(unittest.TestCase):
     """真跑执行器 run-gates：测试组一个模块、命令单元两个（声明不同的输入），假 strace 按单元写合成读取。"""
 
@@ -250,7 +624,9 @@ class ReadAuditExecutorTests(unittest.TestCase):
         subprocess.run([*git, "commit", "-q", "-m", "x"], check=True)
         return repo.resolve()
 
-    def _run(self, root: Path, repo: Path, reads: dict[str, list[str]], *, mode: str = "re-execute", label: str = "out") -> tuple[int, dict, str]:
+    def _run(self, root: Path, repo: Path, reads: dict[str, list[str]], *, mode: str = "re-execute", label: str = "out",
+             strict: bool = False, host_paths: dict | None = None, scopes: tuple = (),
+             environment: list | None = None, audit_policy: dict | None = None) -> tuple[int, dict, str]:
         bin_dir = root / "bin"
         bin_dir.mkdir(exist_ok=True)
         fake = bin_dir / "strace"
@@ -266,6 +642,14 @@ class ReadAuditExecutorTests(unittest.TestCase):
                       unit("cmd:all", {"ranges": [{"category": "tests", "name": "repo:all", "include": [""], "exclude": []}]})],
             "gates": [{"gate_id": "capture", "test_groups": ["capture-tools"], "units": ["cmd:a"]}, {"gate_id": "spec", "units": ["cmd:all"]}],
         }), encoding="utf-8")
+        if scopes or environment is not None or audit_policy is not None:
+            document = json.loads(manifest.read_text())
+            eg.apply_input_scopes(document, scopes)
+            if environment is not None:
+                document["environment"] = environment
+            if audit_policy is not None:
+                document["audit_policy"] = audit_policy
+            manifest.write_text(json.dumps(document))
         config = root / "config.json"
         config.write_text(json.dumps({"schema_version": ue.CONFIG_SCHEMA, "default_parallelism": 2, "default_quota": {"cores": 1, "memory_mb": 128},
                                       "quotas": {}, "splits": {}, "exclusive": [], "unit_timeout_seconds": 120, "orphan_grace_seconds": 1}),
@@ -274,10 +658,15 @@ class ReadAuditExecutorTests(unittest.TestCase):
         env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT), "PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
                     "FAKE_STRACE_READS": json.dumps(reads)})
         out = root / label
+        options = ["--audit-strict"] if strict else []
+        if host_paths is not None:
+            host_file = root / "host-inputs.json"
+            host_file.write_text(json.dumps({"schema_version": "unit-host-inputs/v1", "units": host_paths}))
+            options += ["--audit-host-inputs", str(host_file)]
         completed = subprocess.run(
             [sys.executable, str(EXECUTOR), "run-gates", "--manifest", str(manifest), "--config", str(config), "--weights", str(root / "none.json"),
              "--durations", str(root / "none.json"), "--parallel", "2", "--cores", "2", "--state-dir", str(root / "state"), "--out-dir", str(out),
-             "--shared-caches", "off", "--record-store", str(root / "store"), "--mode", mode, "--audit-reads", "--audit-data-root", str(root / "data-root")],
+             "--shared-caches", "off", "--record-store", str(root / "store"), "--mode", mode, "--audit-reads", "--audit-data-root", str(root / "data-root"), *options],
             cwd=repo, capture_output=True, text=True, timeout=300, env=env)
         summary = json.loads((out / "summary.json").read_text(encoding="utf-8")) if (out / "summary.json").is_file() else {}
         return completed.returncode, summary, completed.stderr
@@ -304,14 +693,153 @@ class ReadAuditExecutorTests(unittest.TestCase):
             self.assertEqual(report["skipped_whole_repo"], ["cmd:all"])
             self.assertEqual(paths["test_alpha"], [("repo", "tools/official_client_capture/tests/helper_unused.py")],
                              "测试单元的闭包只有自己；data/a.txt 在其余部分范围里")
-            self.assertIn("读集审计（2 个单元，声明整个仓库不审计的 1 个）：不通过", stderr)
-            self.assertTrue(all(gate["status"] == "passed" for gate in summary["gates"]), "审计不改门禁项结论")
-            self.assertEqual(summary["unit_manifest"]["self_check"], "passed", "审计不改执行记录，清单自检照常")
+            self.assertIn("读集检查（2 个单元，强制重跑 0 个", stderr)
+            self.assertTrue(any(gate["status"] == "failed" for gate in summary["gates"]), "审计失败必须同步到门禁结论")
+            self.assertEqual(summary["unit_manifest"]["self_check"], "passed", "失败记录仍须完整可审计，清单结构自检照常")
+            records = [json.loads(path.read_text()) for path in (root / "store/records").rglob("*.json")]
+            failed = [record for record in records if record["unit_id"] == "cmd:a" and record["kind"] == "formal"]
+            self.assertEqual(len(failed), 1)
+            self.assertFalse(failed[0]["passed"])
+            self.assertFalse(ur.derived_pass({**failed[0], "passed": True})[0], "改写 passed 不能掩盖原始审计失败")
 
             clean = {"cmd:a": [str(repo / "data" / "a.txt")], "cmd:all": [str(repo / "data" / "b.txt")],
                      "test_alpha": [str(tests / "test_alpha.py"), str(tests / "__pycache__" / "x.pyc")]}
             code, summary, stderr = self._run(root, repo, clean, label="out-clean")
             self.assertEqual((code, summary["read_audit"]["status"], summary["read_audit"]["undeclared_total"]), (0, "passed", 0), stderr[-2000:])
+
+    def test_reexecute_policy_runs_every_unit_but_records_cannot_be_inherited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}}
+            code, summary, stderr = self._run(root, repo, {}, strict=True, audit_policy=policy)
+            self.assertEqual(code, 0, stderr[-3000:])
+            self.assertFalse(summary["read_audit"]["coverage_complete"])
+            self.assertTrue(summary["read_audit"]["reuse_boundary_enforced"])
+            self.assertEqual(summary["inheritance"]["executed"], 3)
+            self.assertEqual(summary["unit_manifest"]["self_check"], "passed")
+            self.assertIn("全集读集未覆盖", stderr)
+            store = ur.RecordStore(root / "store")
+            for unit_id in ("cmd:a", "cmd:all", "test_alpha"):
+                path, record = store.candidates(unit_id)[0]
+                self.assertTrue(ur.derived_pass(record)[0])
+                self.assertFalse(record["inheritable"])
+                self.assertFalse(record["read_audit"]["coverage_complete"])
+                current = ur.Current(unit_id, record["unit_type"], record["spec"], record["spec_sha256"], record["inputs"], record["inputs_sha256"], True)
+                facts = ur.RunFacts(record["policy_sha256"], record["environment"], record["environment_sha256"], record["executor"],
+                                    1.0, ur.parse_utc(record["completed_at_utc"]))
+                self.assertIn("来源记录明确不可承接", ur.check_record(store, path, record, current, facts))
+                self.assertFalse(ur.derived_pass({**record, "inheritable": True})[0])
+                self.assertFalse(ur.derived_pass({**record, "inputs": []})[0])
+            code, _, stderr = self._run(root, repo, {}, audit_policy=policy, label="without-strict")
+            self.assertEqual(code, 2, stderr)
+
+    def test_strict_host_coverage_replays_and_missing_trace_or_input_drift_refuses_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            host = root / "host.txt"; host.write_text("本轮宿主输入")
+            reads = {"cmd:a": [str(repo / "data/a.txt")], "cmd:all": [str(host)],
+                     "test_alpha": [str(repo / "tools/official_client_capture/tests/test_alpha.py")]}
+            code, summary, stderr = self._run(root, repo, reads, strict=True, host_paths=reads)
+            self.assertEqual(code, 0, stderr[-3000:])
+            self.assertTrue(summary["read_audit"]["coverage_complete"])
+            self.assertEqual(summary["read_audit"]["skipped_whole_repo"], 0)
+            store = ur.RecordStore(root / "store")
+            path, record = store.candidates("cmd:all")[0]
+            current = ur.Current("cmd:all", "command", record["spec"], record["spec_sha256"], record["inputs"], record["inputs_sha256"], True)
+            facts = ur.RunFacts(record["policy_sha256"], record["environment"], record["environment_sha256"], record["executor"],
+                                1.0, ur.parse_utc(record["completed_at_utc"]), require_read_audit=True)
+            self.assertEqual(ur.check_record(store, path, record, current, facts), [])
+            trace = store.log_path(record["read_audit"]["trace"]["sha256"])
+            before = trace.read_bytes(); trace.write_bytes(before + b" ")
+            self.assertTrue(any("轨迹" in reason for reason in ur.check_record(store, path, record, current, facts)))
+            trace.write_bytes(before); host.write_text("输入已变化")
+            self.assertTrue(any("轨迹" in reason for reason in ur.check_record(store, path, record, current, facts)))
+
+    def test_strict_whole_repo_with_unbound_host_is_a_failed_nonreusable_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            host = root / "host.txt"; host.write_text("未登记的宿主输入")
+            code, summary, stderr = self._run(root, repo, {"cmd:all": [str(host)]}, strict=True)
+            self.assertEqual(code, 1, stderr[-1000:])
+            self.assertFalse(summary["read_audit"]["coverage_complete"])
+            records = [record for _, record in ur.RecordStore(root / "store").candidates("cmd:all")]
+            self.assertEqual(len(records), 1, "只因覆盖缺口失败时不得隐式重复执行命令")
+            record = records[0]
+            self.assertEqual(record["kind"], "formal")
+            self.assertFalse(record["passed"])
+            self.assertFalse(record["read_audit"]["coverage_complete"])
+
+    def test_narrow_scope_requires_origin_replay_and_new_strict_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            reads = {"cmd:a": [str(repo / "data/a.txt")], "cmd:all": [str(repo / "data/a.txt")],
+                     "test_alpha": [str(repo / "tools/official_client_capture/tests/test_alpha.py")]}
+            code, summary, stderr = self._run(root, repo, reads, strict=True, host_paths=reads)
+            self.assertEqual(code, 0, stderr[-3000:])
+            store = ur.RecordStore(root / "store")
+            source_path, source = store.candidates("cmd:all")[0]
+            trace_path = store.log_path(source["read_audit"]["trace"]["sha256"])
+            scope = ra.narrow_input_scope(source_path, trace_path)
+            self.assertTrue(scope["requires_validation"])
+            self.assertFalse(scope["reuse_enabled"])
+            self.assertEqual(scope["inputs"]["host_paths"], reads["cmd:all"])
+            before = ur.declared_inputs(ur.RepoIndex.load(repo), scope["inputs"])
+            (repo / "data/b.txt").write_text("无关文件变更\n")
+            after = ur.declared_inputs(ur.RepoIndex.load(repo), scope["inputs"])
+            self.assertEqual(ur.entries_sha256(before), ur.entries_sha256(after))
+            (repo / "data/b.txt").write_text("b\n")
+            code, _summary, stderr = self._run(root, repo, reads, strict=True, host_paths=reads, scopes=(scope,), label="narrow")
+            self.assertEqual(code, 0, stderr[-3000:])
+            records = store.candidates("cmd:all")
+            self.assertEqual(len(records), 2, "收窄后必须留下新的实际执行记录")
+            new_record = next(record for path, record in records if path != source_path)
+            self.assertNotEqual(source["inputs_sha256"], new_record["inputs_sha256"])
+            self.assertTrue(new_record["read_audit"]["coverage_complete"])
+            code, _summary, stderr = self._run(root, repo, reads, mode="full-set-pass", scopes=(scope,), label="refused")
+            self.assertEqual(code, 2)
+            self.assertIn("必须重新执行严格审计", stderr)
+            code, _summary, stderr = self._run(root, repo, reads, strict=True, host_paths=reads, scopes=(scope,), label="platform",
+                environment=[ur.value_entry("environment", "platform-override", "另一内核")])
+            self.assertEqual(code, 2)
+            self.assertIn("平台环境", stderr)
+            origin = store.manifest_path(source["run"]["run_id"])
+            origin_bytes = origin.read_bytes(); origin.unlink()
+            with self.assertRaisesRegex(ra.AuditError, "原运行"):
+                ra.narrow_input_scope(source_path, trace_path)
+            origin.write_bytes(origin_bytes)
+            (repo / "data/a.txt").write_text("相关输入变更\n")
+            changed = ur.declared_inputs(ur.RepoIndex.load(repo), scope["inputs"])
+            self.assertNotEqual(ur.entries_sha256(before), ur.entries_sha256(changed))
+            with self.assertRaises(ra.AuditError):
+                ra.narrow_input_scope(source_path, trace_path)
+
+    def test_scope_refuses_tampered_failed_and_diagnostic_origins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            reads = {"cmd:a": [str(repo / "data/a.txt")], "cmd:all": [str(repo / "data/b.txt")],
+                     "test_alpha": [str(repo / "tools/official_client_capture/tests/test_alpha.py")]}
+            code, _summary, stderr = self._run(root, repo, reads, strict=True, host_paths=reads)
+            self.assertEqual(code, 0, stderr[-1000:])
+            store = ur.RecordStore(root / "store")
+            path, record = store.candidates("cmd:all")[0]
+            trace = store.log_path(record["read_audit"]["trace"]["sha256"])
+            scope = ra.narrow_input_scope(path, trace)
+            manifest = json.loads((root / "gates.json").read_text())
+            for key, value in (("cores", 2), ("argv", ["false"]), ("exclusive", True), ("env", {"A": "changed"})):
+                changed = json.loads(json.dumps(manifest)); changed["units"][1][key] = value
+                with self.assertRaisesRegex(ValueError, "命令、环境或额度"):
+                    eg.apply_input_scopes(changed, (scope,))
+            altered = json.loads(json.dumps(scope)); altered["inputs"]["host_paths"] = []
+            with self.assertRaisesRegex(ValueError, "无法重放"):
+                eg.apply_input_scopes(manifest, (altered,))
+            for changes in ({"passed": False}, {"kind": "diagnostic"}, {"read_audit": {"coverage_complete": False}}):
+                other = ur.seal_record({**record, **changes})
+                other_path = store.put_record(other)
+                with self.assertRaises(ra.AuditError):
+                    ra.narrow_input_scope(other_path, trace)
+            original = trace.read_bytes(); trace.write_bytes(original + b" ")
+            with self.assertRaises(ra.AuditError):
+                ra.narrow_input_scope(path, trace)
 
     def test_audit_is_only_for_re_execute(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -333,6 +861,44 @@ def _traced() -> bool:
 @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("strace") and not _traced(),
                      "要 Linux 上的 strace，且本进程没被跟踪（入口门禁带审计跑全集时本测试已在 strace 下）")
 class ReadAuditRealStraceTests(unittest.TestCase):
+    def test_real_truncated_argv_is_not_recorded_as_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "c06-unique-long-input-filename"
+            source.write_text("隔离输入")
+            trace = root / "raw.trace"
+            # strace 对文件路径保持完整；打开 execve 参数解码后，用真实截断 argv 检验非路径边界。
+            command = ["strace", *ra.STRACE_OPTIONS, "-s", "8", "-e", "verbose=execve", "-o", str(trace), "--", "/usr/bin/cat", str(source)]
+            subprocess.run(command, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120,
+                           env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            lines = trace.read_text().splitlines(True)
+            self.assertTrue(any('"' + str(source)[:8] + '"...' in line for line in lines))
+            for strict in (False, True):
+                parsed = ra.filter_stream(lines, ["/"], strict=strict)
+                self.assertNotIn(str(source)[:8], dict(parsed["accesses"]), "路径前缀不能充当完整路径")
+                if strict:
+                    self.assertEqual(dict(parsed["accesses"])[str(source)], ["read"])
+                    self.assertGreater(parsed["coverage"]["unresolved"], 0)
+
+    def test_real_host_paths_snapshot_and_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "source.txt"; source.write_text("真实宿主输入\n")
+            output = root / "trace.json"
+            command = ra.strace_argv(["/usr/bin/cat", str(source)], output=output, roots=["/"], strict=True)
+            environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}
+            subprocess.run(command, env=environment, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120)
+            discovery = ra.load_trace(output)
+            self.assertEqual(discovery["coverage"]["unresolved"], 0)
+            self.assertTrue(any(not path.startswith(str(root)) for path, _ in discovery["accesses"]), "真实动态链接器与宿主依赖必须出现")
+            inputs = [ra.host_snapshot(path) for path, _ in discovery["accesses"]]
+            subprocess.run(command, env=environment, cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=120)
+            trace = ra.load_trace(output)
+            report = ra.strict_audit_reads(trace, inputs, repo_root=str(root), data_root=None)
+            self.assertTrue(report["coverage_complete"], report)
+            source.write_text("真实输入漂移\n")
+            self.assertFalse(ra.strict_audit_reads(trace, inputs, repo_root=str(root), data_root=None)["coverage_complete"])
+
     def test_real_strace_through_the_filter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -350,6 +916,24 @@ class ReadAuditRealStraceTests(unittest.TestCase):
             accesses = dict((path, kinds) for path, kinds in ra.load_trace(output)["accesses"])
             self.assertIn("read", accesses[str(root / "pkg" / "mod.py")])
             self.assertEqual(accesses[str(root / "pkg" / "nope.txt")], ["missing"])
+
+
+class PinnedVerifierIntegrationTests(unittest.TestCase):
+    def test_receipt_loads_current_repository_verifier_after_audit_change(self) -> None:
+        # 读集实现更新时必须同时验证实际消费者；不能让主机上旧驱动的回退副本掩盖仓库绑定遗漏。
+        from tools.official_client_capture import codex_upgrade_gate_receipt
+
+        verifier = codex_upgrade_gate_receipt._target_gate_verifier()
+        self.assertEqual(Path(verifier.__file__).resolve(), REPO_ROOT / "tools/ci/target_platform_gate.py")
+
+    def test_each_verifier_dependency_digest_drift_refuses_loading(self) -> None:
+        from tools.official_client_capture import codex_upgrade_gate_receipt
+
+        for name in codex_upgrade_gate_receipt.TARGET_VERIFIER_SHA256S:
+            with self.subTest(dependency=name), mock.patch.dict(
+                codex_upgrade_gate_receipt.TARGET_VERIFIER_SHA256S, {name: "0" * 64}
+            ), self.assertRaises(codex_upgrade_gate_receipt.GateReceiptError):
+                codex_upgrade_gate_receipt._target_gate_verifier()
 
 
 if __name__ == "__main__":

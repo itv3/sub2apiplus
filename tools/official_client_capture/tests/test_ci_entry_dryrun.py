@@ -79,6 +79,8 @@ class EntryDryRunTests(unittest.TestCase):
         self.fixture = driver_tests._DriverFixture(self.root)
         self.data = self.fixture.data_root
         self.runroot = self.fixture.runroot
+        # 门禁由替身执行，但后台验证仍须绑定真实普通文件的字节摘要，不能传不存在的 bundle。
+        (self.root / "x.bundle").write_bytes(b"isolated-entry-dryrun-bundle")
         for relative, text in {"tools/__init__.py": "", "tools/official_client_capture/__init__.py": "",
                                "tools/official_client_capture/codex_upgrade_project_ledger.py": STUB_LEDGER}.items():
             path = self.data / relative
@@ -269,6 +271,7 @@ class EntryDryRunTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, bv._read(result))
             time.sleep(0.05)
         validation = bv._read(result)
+        self.assertEqual(validation["input_contract"]["bundle_sha256"], bv._sha256_file(self.root / "x.bundle"))
         self.assertEqual((validation["status"], validation["dryrun"]["action"], validation["dryrun"]["to"]), ("passed", "started", "pre-a3"))
         chained = Path(validation["dryrun"]["result"])
         self.assertTrue(chained.is_file())

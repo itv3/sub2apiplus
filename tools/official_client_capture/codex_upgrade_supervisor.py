@@ -467,6 +467,253 @@ def _process_start_ticks(pid: int) -> str | None:
         return None
 
 
+CAPTURE_STOP_SERVICE = "capture-cli"
+CAPTURE_STOP_SCHEMA = "codex-upgrade-capture-stop/v1"
+_CAPTURE_CONTROL_DEADLINE = contextvars.ContextVar("capture_control_deadline", default=None)
+
+
+def _capture_docker(*arguments: str) -> str:
+    """只执行有界容器控制命令；异常不转录 Docker 输出，避免泄露运维配置。"""
+
+    remaining = 8.0
+    deadline = _CAPTURE_CONTROL_DEADLINE.get()
+    if deadline is not None:
+        remaining = min(remaining, deadline - time.monotonic())
+    if remaining <= 0:
+        raise SupervisorError("采集容器控制总预算耗尽")
+    try:
+        result = subprocess.run(["docker", *arguments], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, timeout=remaining, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SupervisorError("采集容器控制命令不可确认") from error
+    if result.returncode:
+        raise SupervisorError("采集容器控制命令失败")
+    return result.stdout.strip()
+
+
+def _capture_container_state(container: str) -> dict[str, Any]:
+    """只读取停止核验所需字段，不读取或记录容器环境和命令参数。"""
+
+    template = ('{"id":{{json .Id}},"image":{{json .Image}},'
+                '"started_at":{{json .State.StartedAt}},"running":{{json .State.Running}},'
+                '"restarting":{{json .State.Restarting}},"pid":{{json .State.Pid}},'
+                '"pid_mode":{{json .HostConfig.PidMode}},'
+                '"control_id":{{json (index .Config.Labels "sub2apiplus.capture.control_id")}}}')
+    try:
+        value = json.loads(_capture_docker("inspect", "--format", template, container))
+        if (not re.fullmatch(r"[0-9a-f]{64}", value["id"])
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["image"])
+                or not isinstance(value["started_at"], str) or not value["started_at"]
+                or type(value["running"]) is not bool or type(value["restarting"]) is not bool
+                or type(value["pid"]) is not int or value["pid"] < 0):
+            raise ValueError("容器字段非法")
+    except (ValueError, KeyError, TypeError) as error:
+        raise SupervisorError("采集容器身份不可确认") from error
+    return value
+
+
+def _capture_sidecars(container_id: str) -> list[dict[str, Any]]:
+    """仅定位本控制容器创建的 direct 抓包容器，不操作服务、数据库或历史异主容器。"""
+
+    identifiers = _capture_docker("ps", "--no-trunc", "--quiet",
+        "--filter", "label=sub2apiplus.capture.role=direct").splitlines()
+    if len(identifiers) > 32 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in identifiers):
+        raise SupervisorError("采集附属容器清单非法或超过串行清理上限")
+    result = [_capture_container_state(item) for item in sorted(set(identifiers))]
+    active = [item for item in result if item["running"] or item["restarting"] or item["pid"]]
+    if any(not item["control_id"] for item in active):
+        raise SupervisorError("存在无法确认归属的旧抓包容器")
+    owned = [item for item in active if item["control_id"] == container_id]
+    if any(item.get("pid_mode") != f"container:{container_id}" for item in owned):
+        raise SupervisorError("抓包容器没有绑定控制容器的进程命名空间")
+    return owned
+
+
+def _capture_begin(run_dir: Path, state: Mapping[str, Any], *, operation: str,
+                   job_id: str | None, environment: Mapping[str, str] | None) -> Path | None:
+    """正式采集按既有串行合同独占专用容器；绑定先于启动，并独立于宿主 PID 存活。"""
+
+    if state.get("egress_guard") is None or job_id is None or not operation.startswith("job:"):
+        return None
+    if (environment or {}).get("CAPTURE_CONTAINER", CAPTURE_STOP_SERVICE) != CAPTURE_STOP_SERVICE:
+        raise SupervisorError("采集停止合同只允许当前准入的专用采集容器")
+    current = arm64_environment.require_runtime_egress()
+    try:
+        container_id = current["runtime"]["services"][CAPTURE_STOP_SERVICE]["container_id"]
+    except (KeyError, TypeError) as error:
+        raise SupervisorError("采集容器未绑定当前出口准入") from error
+    if not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id):
+        raise SupervisorError("出口准入中的采集容器 ID 非法")
+    before = _capture_container_state(container_id)
+    if (before["id"] != container_id or not before["running"] or before["restarting"]
+            or before.get("pid_mode") not in {"", "private"}
+            or not before["pid"] or _capture_sidecars(container_id)):
+        raise SupervisorError("采集容器未就绪或存在未收尾的抓包进程")
+    root = _validate_state_dir(run_dir / "capture-stops", create=True)
+    with _state_lock(root):
+        if (run_dir / "egress-pause.json").exists():
+            raise RuntimeEgressPaused("出口已暂停，禁止启动采集")
+        for previous in root.iterdir():
+            if previous.is_dir():
+                _validate_state_dir(previous, create=False)
+                if not _capture_released(previous, state):
+                    raise SupervisorError("存在未收尾采集，禁止重叠派发")
+        scope = _validate_state_dir(root / secrets.token_hex(16), create=True)
+        record = {"schema_version": CAPTURE_STOP_SCHEMA, "campaign_id": state["campaign_id"],
+                  "owner_nonce": state["owner_nonce"], "operation": operation, "job_id": job_id,
+                  "container": before, "started_at_utc": _utc_now()}
+        record["binding_sha256"] = _sha256(_canonical(record))
+        _write_json(scope / "binding.json", record, replace=False)
+    return scope
+
+
+def _capture_read_binding(scope: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    record = _read_json(scope / "binding.json")
+    unsigned = {key: value for key, value in record.items() if key != "binding_sha256"}
+    if (record.get("schema_version") != CAPTURE_STOP_SCHEMA
+            or record.get("campaign_id") != state["campaign_id"]
+            or record.get("owner_nonce") != state["owner_nonce"]
+            or record.get("binding_sha256") != _sha256(_canonical(unsigned))):
+        raise SupervisorError("采集停止绑定漂移")
+    return record
+
+
+def _capture_pin_command(command: list[str], environment: Mapping[str, str] | None,
+                         container_id: str) -> tuple[list[str], dict[str, str]]:
+    """冻结实际派发目标，防止容器名称在准入与 docker exec 之间被重新绑定。"""
+
+    effective = dict(environment) if environment is not None else os.environ.copy()
+    effective["CAPTURE_CONTAINER"] = container_id
+    pinned = list(command)
+    if len(pinned) > 1 and Path(pinned[0]).name == "docker" and pinned[1] == "exec":
+        index = 2
+        value_options = {"-e", "--env", "--env-file", "-u", "--user", "-w", "--workdir", "--detach-keys"}
+        flags = {"-i", "--interactive", "-t", "--tty", "-d", "--detach", "--privileged", "-it", "-ti"}
+        while index < len(pinned) and pinned[index].startswith("-"):
+            argument = pinned[index]
+            if argument in value_options:
+                index += 2
+            elif argument in flags or ("=" in argument and argument.split("=", 1)[0] in value_options):
+                index += 1
+            else:
+                raise SupervisorError("采集 docker exec 选项无法确定容器边界")
+        if index >= len(pinned) - 1 or pinned[index] not in {CAPTURE_STOP_SERVICE, container_id}:
+            raise SupervisorError("采集 docker exec 目标与停止绑定不一致")
+        pinned[index] = container_id
+    return pinned, effective
+
+
+def _capture_stop_one(before: Mapping[str, Any]) -> dict[str, Any]:
+    current = _capture_container_state(str(before["id"]))
+    identity = ("id", "image", "started_at")
+    if any(current[key] != before[key] for key in identity):
+        raise SupervisorError("采集容器已被替换或重启，拒绝误停其他运行")
+    if current["running"] or current["restarting"] or current["pid"]:
+        _capture_docker("stop", "--time", "1", str(before["id"]))
+    after = _capture_container_state(str(before["id"]))
+    if (any(after[key] != before[key] for key in identity)
+            or after["running"] or after["restarting"] or after["pid"]):
+        raise SupervisorError("采集容器停止后仍有活动进程或身份漂移")
+    return after
+
+
+def _capture_released(scope: Path, state: Mapping[str, Any]) -> bool:
+    path = scope / "released.json"
+    if not path.exists():
+        return False
+    release = _read_json(path)
+    binding = _capture_read_binding(scope, state)
+    if (release.get("binding_sha256") != binding["binding_sha256"]
+            or (scope / "stop-receipt.json").exists()):
+        raise SupervisorError("采集正常结束凭证与绑定不一致")
+    return True
+
+
+def _capture_stop(scope: Path, state: Mapping[str, Any], *, reason: str) -> dict[str, Any]:
+    """停止保留实物，失败保持未决；同一绑定只生成一次终止收据，owner／monitor 共用。"""
+
+    with _state_lock(scope):
+        receipt_path = scope / "stop-receipt.json"
+        if receipt_path.exists():
+            receipt = _read_json(receipt_path)
+            unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+            binding = _capture_read_binding(scope, state)
+            if (receipt.get("receipt_sha256") != _sha256(_canonical(unsigned))
+                    or receipt.get("binding_sha256") != binding["binding_sha256"]):
+                raise SupervisorError("采集停止收据漂移")
+            return receipt
+        if _capture_released(scope, state):
+            return {"status": "released"}
+        receipt: dict[str, Any] = {"schema_version": CAPTURE_STOP_SCHEMA,
+            "reason": reason, "started_at_utc": _utc_now(), "status": "unconfirmed",
+            "accounting_status": "reconcile-required", "containers": []}
+        control_token = _CAPTURE_CONTROL_DEADLINE.set(time.monotonic() + 12.0)
+        try:
+            binding = _capture_read_binding(scope, state)
+            receipt.update(binding_sha256=binding["binding_sha256"], job_id=binding["job_id"],
+                           campaign_id=binding["campaign_id"], owner_nonce=binding["owner_nonce"])
+            pause_path = scope.parent.parent / "egress-pause.json"
+            receipt["egress_pause_sha256"] = _file_digest(pause_path) if pause_path.exists() else None
+            sidecars_error = None
+            try:
+                sidecars = _capture_sidecars(binding["container"]["id"])
+            except (OSError, ValueError, KeyError, TypeError, SupervisorError) as error:
+                sidecars, sidecars_error = [], error
+            # 附属容器共享控制容器的 PID 命名空间，控制 PID 1 退出时内核同时清理
+            # 全部子进程；排队中的创建也不能再加入已经结束的命名空间。
+            receipt["containers"].append(_capture_stop_one(binding["container"]))
+            if sidecars_error is not None:
+                raise SupervisorError("主采集已停止，但附属容器清单仍不可确认") from sidecars_error
+            for sidecar in sidecars:
+                receipt["containers"].append(_capture_stop_one(sidecar))
+            if _capture_sidecars(binding["container"]["id"]):
+                raise SupervisorError("停止后仍出现活动抓包容器")
+            receipt["status"] = "stopped"
+        except (OSError, ValueError, KeyError, TypeError, SupervisorError) as error:
+            receipt["failure_class"] = type(error).__name__
+        finally:
+            _CAPTURE_CONTROL_DEADLINE.reset(control_token)
+        receipt["finished_at_utc"] = _utc_now()
+        receipt["receipt_sha256"] = _sha256(_canonical(receipt))
+        _write_json(receipt_path, receipt, replace=False)
+        return receipt
+
+
+def _capture_stop_active(run_dir: Path, state: Mapping[str, Any]) -> None:
+    root = run_dir / "capture-stops"
+    if not root.exists():
+        return
+    _validate_state_dir(root, create=False)
+    # 与登记端共享根锁，不能把尚未写完 binding 的新目录误记成清理失败。
+    with _state_lock(root):
+        scopes = sorted(root.iterdir())
+    for scope in scopes:
+        if scope.is_dir():
+            _validate_state_dir(scope, create=False)
+            try:
+                if not _capture_released(scope, state):
+                    _capture_stop(scope, state, reason="runtime-egress-paused")
+            except (OSError, ValueError, SupervisorError):
+                # 损坏的停止证据不得中断 monitor 对宿主进程的后续清理。
+                # 原绑定保留，新派发继续拒绝损坏或未收尾的记录。
+                continue
+
+
+def _capture_release(scope: Path | None, state: Mapping[str, Any]) -> None:
+    if scope is None:
+        return
+    with _state_lock(scope):
+        if (scope / "stop-receipt.json").exists() or (scope.parent.parent / "egress-pause.json").exists():
+            raise RuntimeEgressPaused("采集停止已触发，禁止将命令记为成功")
+        binding = _capture_read_binding(scope, state)
+        current = _capture_container_state(binding["container"]["id"])
+        if current != binding["container"] or _capture_sidecars(current["id"]):
+            raise SupervisorError("采集结束时容器身份或附属进程尚未收尾")
+        _write_json(scope / "released.json", {"binding_sha256": binding["binding_sha256"],
+                                            "released_at_utc": _utc_now()}, replace=False)
+
+
 def job_egress_binding(client: "SupervisorClient | None", *, started_at_epoch: float) -> dict[str, Any] | None:
     """把 Job 的真实执行时段绑定到父监督器，供后续暂停窗口逐 Job 对账。"""
 
@@ -543,6 +790,8 @@ def _request_egress_cleanup(run_dir: Path, state: Mapping[str, Any], path: Path)
 def _interrupt_egress_commands(run_dir: Path, state: Mapping[str, Any], now: float) -> None:
     """owner 未及时响应时由独立进程请求清理；超过原清理预算才终止对应进程组。"""
 
+    # 采集绑定独立于宿主 CLI 的存活；先收尾容器，再处理宿主命令。
+    _capture_stop_active(run_dir, state)
     pause = _read_json(run_dir / "egress-pause.json")
     age = (time.monotonic_ns() - int(pause["detected_at_monotonic_ns"])) / 1e9
     if age < 1:
@@ -2174,8 +2423,10 @@ def _write_minute_record(
         "schema_version": MINUTE_SCHEMA,
         "bucket_start_utc": _epoch_to_utc(bucket_start),
         "bucket_end_utc": _epoch_to_utc(bucket_end),
-        "bucket_start_epoch": round(float(bucket_start), 6),
-        "bucket_end_epoch": round(float(bucket_end), 6),
+        # 审计按 epoch 比较严格正区间；亚微秒首桶不能因小数取整而塌缩。
+        # JSON 数字保留原浮点精度，UTC 与展示时长仍沿用原有格式。
+        "bucket_start_epoch": float(bucket_start),
+        "bucket_end_epoch": float(bucket_end),
         "duration_seconds": round(max(0.0, bucket_end - bucket_start), 3),
         "recorded_at_utc": _utc_now(),
         "classification": classification,
@@ -4504,7 +4755,22 @@ class SupervisorClient:
                     CAMPAIGN_RUN_CLEANUP_GRACE_ENV: str(cleanup_grace),
                 }
             )
+        capture_scope = None
         try:
+            admission_deadline = min(self._deadline_monotonic_ns / 1e9,
+                                     budget_deadline_monotonic) - cleanup_grace - terminal_drain
+            control_token = _CAPTURE_CONTROL_DEADLINE.set(min(time.monotonic() + 12, admission_deadline))
+            try:
+                capture_scope = _capture_begin(run_dir, runtime_state, operation=operation,
+                                               job_id=job_id, environment=process_environment)
+                if capture_scope is not None:
+                    binding = _capture_read_binding(capture_scope, runtime_state)
+                    command, process_environment = _capture_pin_command(command, process_environment,
+                                                                         binding["container"]["id"])
+            finally:
+                _CAPTURE_CONTROL_DEADLINE.reset(control_token)
+            if time.monotonic() >= min(admission_deadline, self._deadline_monotonic_ns / 1e9):
+                raise SupervisorTimeout("采集准入结束时执行预算已耗尽，禁止派发")
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
@@ -4518,6 +4784,8 @@ class SupervisorClient:
             )
         except BaseException as error:
             self._command_failed = True
+            if capture_scope is not None:
+                _capture_stop(capture_scope, runtime_state, reason=type(error).__name__)
             try:
                 self.event_fail(operation, reason=type(error).__name__)
             except BaseException:
@@ -4557,12 +4825,15 @@ class SupervisorClient:
                     result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
                     if result.returncode:
                         self._command_failed = True
+                        if capture_scope is not None:
+                            _capture_stop(capture_scope, runtime_state, reason="capture-command-failed")
                         self.event_fail(
                             operation,
                             job_id=job_id,
                             reason=f"returncode={result.returncode}",
                         )
                     else:
+                        _capture_release(capture_scope, runtime_state)
                         self.event_end(
                             operation,
                             job_id=job_id,
@@ -4575,6 +4846,12 @@ class SupervisorClient:
                         heartbeat_callback(operation)
         except BaseException as error:
             self._command_failed = True
+            if capture_scope is not None:
+                try:
+                    _capture_stop(capture_scope, runtime_state, reason=type(error).__name__)
+                except (OSError, ValueError, SupervisorError):
+                    # 证据异常不能跳过宿主清理；绑定留在独立监控目录，后续派发继续阻断。
+                    pass
             if isinstance(error, RuntimeEgressPaused):
                 cleanup_deadline = min(cleanup_deadline, time.monotonic() + max(0, cleanup_grace - terminal_drain))
             if (

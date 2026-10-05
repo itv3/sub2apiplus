@@ -1,0 +1,99 @@
+{
+  "base_commit": "adbe97e2f2ef5ea9589faad095d88bd66800782a",
+  "changed_path_count": 5,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5618,
+  "frozen_path_count": 2015,
+  "identity_sha256": "8b630b39e0f3d5317082a9476e12e83477eefea69752a9cf824e104457563e99",
+  "issued_at_utc": "2026-10-05T00:27:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-a071-ci-executor-engineering-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "9688dc12805bd98f9a8faba94b88764b591f77a0367e54b7d285f02f504209a0"
+      ],
+      "reason": "用户已授权 A-07.1 工程接入：CI 沿用原四片测试集合并接入可显式回退的执行器；仅登记工作分支 CI 与 Makefile 源码摘要，不发布指南、不签发升级终态或启用承接。 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ce3089143ea099e8ed3edf078266ce950a4e39f65b96d45156d6a9f4bcfa9859"
+    },
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "5d9e9bc60e29c659057d6d941a4acc3400e2b4117ac66230eebb68596ef2eef8"
+      ],
+      "reason": "用户已授权 A-07.1 工程接入：CI 沿用原四片测试集合并接入可显式回退的执行器；仅登记工作分支 CI 与 Makefile 源码摘要，不发布指南、不签发升级终态或启用承接。 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-make-test-dedup-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um20-capture-unit-executor-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0213-prep-frontend-critical-20261004-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "ac7ff08ab3bf7dec31113e5a1d3e74a8630f36aefb0c983f14a86478880ef224"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/unit_executor.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

@@ -224,7 +224,7 @@ STEPS: tuple[Step, ...] = (
     Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
         Input("tests", "source_commit", "ENTRY_COMMIT"),
         *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
-        *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py"),
+        *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py", "full_set_receipt.py"),
         *COMMON_DRIVER,
         *_env("kernel", "python", "go", "node", "golangci_lint", "docker"),
         Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache"),

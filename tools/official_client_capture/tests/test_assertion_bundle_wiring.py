@@ -234,6 +234,7 @@ class AssertionBundleWiringTest(unittest.TestCase):
             None, None, self.roots, target_version=TARGET_VERSION
         )
         original = codex_upgrade.load_acceptance_profile
+        original_verifier = codex_upgrade.verify_frozen_contract
         original_retired = codex_upgrade._retired_official_label_values
         retired_calls: list[tuple[str, str]] = []
 
@@ -257,6 +258,7 @@ class AssertionBundleWiringTest(unittest.TestCase):
             )
         finally:
             codex_upgrade.load_acceptance_profile = original
+            codex_upgrade.verify_frozen_contract = original_verifier
             codex_upgrade._retired_official_label_values = original_retired
         self.assertEqual(retired_calls, [(PROFILE["codex_version"], TARGET_VERSION)])
         self.assertEqual(receipt["side"], "official")
@@ -281,6 +283,7 @@ class AssertionBundleWiringTest(unittest.TestCase):
             None, None, self.roots, target_version=TARGET_VERSION
         )
         original = codex_upgrade.load_acceptance_profile
+        original_verifier = codex_upgrade.verify_frozen_contract
         original_retired = codex_upgrade._retired_official_label_values
         try:
             codex_upgrade.load_acceptance_profile = lambda _path: PROFILE
@@ -299,6 +302,7 @@ class AssertionBundleWiringTest(unittest.TestCase):
                 )
         finally:
             codex_upgrade.load_acceptance_profile = original
+            codex_upgrade.verify_frozen_contract = original_verifier
             codex_upgrade._retired_official_label_values = original_retired
 
 

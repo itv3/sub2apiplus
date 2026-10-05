@@ -38,6 +38,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -679,6 +680,7 @@ class _Round:
         _write_json(self.stub / "state.json", base_state)
         self.params_path = self.root / "upload" / "r99-params.env"
         self.write_params(params or {})
+        self.provide_approvals = True
 
     # --- 夹具构造 ---------------------------------------------------------------
 
@@ -833,6 +835,8 @@ class _Round:
     # --- 运行与观察 ---------------------------------------------------------------
 
     def run(self, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        if self.provide_approvals and "--dry-run" not in extra:
+            self.approve_fixture_operations()
         merged = {
             **os.environ,
             "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
@@ -847,6 +851,25 @@ class _Round:
         merged.update(env or {})
         return subprocess.run(["bash", str(SCRIPT), str(self.params_path), *extra], capture_output=True, text=True,
                               errors="replace", env=merged, cwd=str(self.root), timeout=600)
+
+    def approve_fixture_operations(self):
+        """隔离夹具显式提供批准；生产代码没有代签入口。"""
+        helper = load_helper()
+        params = helper.load_params(self.params_path)
+        safety = helper.fix_safety
+        now = datetime.now(timezone.utc)
+        for operation, subject in (("deploy", self.head), ("evolution", "e" * 64),
+                                   ("deadline-extension", "d" * 64), ("recovery-approve", "a" * 64),
+                                   ("recovery-authorize", "a" * 64)):
+            binding = safety.approval_binding(params, operation, subject)
+            key = safety.digest(binding)
+            path = safety.approval_directory(params) / (key + ".json")
+            if path.exists():
+                continue
+            _write_json(path, {"schema_version": safety.APPROVAL_SCHEMA, "status": "approved", "binding": binding,
+                "review_sha256": key, "approved_by": params["APPROVER"], "proof_ref": "隔离夹具批准，不可用于生产",
+                "approved_at_utc": (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expires_at_utc": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")})
 
     def calls(self) -> list[dict]:
         return [json.loads(line) for line in self.calls_path.read_text(encoding="utf-8").splitlines() if line.strip()]

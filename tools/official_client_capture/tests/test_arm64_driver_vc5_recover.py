@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import json
 import os
 import subprocess
+import runpy
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -35,8 +39,8 @@ class VC5RecoverPlanTests(unittest.TestCase):
     def _layout(self, root: Path) -> tuple[Path, Path, dict]:
         data = root / "data"
         (data / "tools").mkdir(parents=True)
-        # 生成器按 Campaign 目录上推三级取数据根并导入其中的受管工具树。
-        (data / "tools" / "official_client_capture").symlink_to(TOOLS_ROOT / "official_client_capture")
+        # 本用例只测计划与监督器协议；本轮身份解析注入已验证结果，不提供产品旁路。
+        (data / "tools" / "official_client_capture").mkdir()
         (data / "tools" / "__init__.py").write_text("", encoding="utf-8")
         campaign = data / "evidence" / "campaigns" / "c"
         manifests = campaign / "control" / "vc" / "run-manifests"
@@ -64,12 +68,31 @@ class VC5RecoverPlanTests(unittest.TestCase):
                                        "execute_job_ids": ["j1"], "reuse_job_ids": ["j2"]}), encoding="utf-8")
         return campaign, preview, failed
 
-    def _generate(self, out: Path, campaign: Path, preview: Path) -> subprocess.CompletedProcess:
-        environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        return subprocess.run(
-            [sys.executable, str(SCRIPTS / "gen_vc5_recovery_plans.py"), str(out), str(campaign), str(preview)],
-            capture_output=True, text=True, timeout=120, env=environment,
-        )
+    def _generate(self, out: Path, campaign: Path, preview: Path, *, dry_run=False) -> subprocess.CompletedProcess:
+        config = {"NEWDIR": str(campaign), "NEW": "c", "CAND": "cand-r5", "D": str(campaign.parents[2]),
+                  "W": str(out), "CANDIDATE_IMAGE_REPOSITORY": "repo"}
+        params = {"CANDIDATE_REVISION": "1", "BUILD_RECEIPT": self.IDENTITY["--build-receipt"],
+                  "IMAGE_ID": self.IDENTITY["--candidate-image-id"], "IMAGE_REF": self.IDENTITY["--runtime-image"],
+                  "SOURCE_ROOT": self.IDENTITY["--candidate-source"], "BUILD_ID": self.IDENTITY["--build-id"],
+                  "DEPLOYED": self.IDENTITY["--deployed-version"], "PROFILE_ID": self.IDENTITY["--profile-id"],
+                  "PROFILE_DIGEST": self.IDENTITY["--profile-digest"]}
+        fake_config, fake_phase = mock.Mock(), mock.Mock()
+        fake_config.load_config.return_value = config
+        fake_phase.resolve.return_value = {"parameters": params}
+        output, errors, code = io.StringIO(), io.StringIO(), 0
+        argv = [str(SCRIPTS / "gen_vc5_recovery_plans.py"), str(out), str(campaign), str(preview)]
+        if dry_run:
+            argv.append("--dry-run")
+        with mock.patch.dict(sys.modules, {"driver_config": fake_config, "phase_context": fake_phase}), \
+                mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]), mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            try:
+                runpy.run_path(argv[0], run_name="__main__")
+            except SystemExit as error:
+                code = error.code if isinstance(error.code, int) else 1
+                if code:
+                    errors.write(str(error))
+        return subprocess.CompletedProcess(argv, code, output.getvalue(), errors.getvalue())
 
     def test_generated_plans_satisfy_supervisor_recovery_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,6 +163,32 @@ class VC5RecoverPlanTests(unittest.TestCase):
             completed = self._generate(root / "plans2", campaign, preview)
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("非段模式", completed.stderr)
+
+    def test_dry_run_validates_without_creating_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign, preview, _ = self._layout(root)
+            out = root / "uncreated"
+            result = self._generate(out, campaign, preview, dry_run=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(out.exists())
+
+    def test_other_revision_is_not_selected_and_current_parent_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign, preview, failed = self._layout(root)
+            manifests = campaign / "control/vc/run-manifests"
+            (manifests / "0099-vc-5.json").write_text(json.dumps({**failed, "candidate_revision": 99, "batch_sequence": 99}))
+            result = self._generate(root / "plans", campaign, preview)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("parent 0009-vc-5.json", result.stdout)
+            bad = copy.deepcopy(failed)
+            command = bad["actions"][0]["command"]
+            command[command.index("--profile-digest") + 1] = "0" * 64
+            (manifests / "0009-vc-5.json").write_text(json.dumps(bad))
+            result = self._generate(root / "rejected", campaign, preview)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / "rejected").exists())
 
 
 if __name__ == "__main__":

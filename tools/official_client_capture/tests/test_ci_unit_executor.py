@@ -430,6 +430,36 @@ class UnitExecutorBytecodeTests(unittest.TestCase):
 
         self.assertEqual(ue.IDENTITY_MEMO_ENV, tip.IDENTITY_MEMO_ENV)
 
+    def test_identity_switch_is_independent_from_bytecode_and_off_clears_inheritance(self) -> None:
+        for bytecode, memo in (("off", "auto"), ("auto", "off")):
+            with self.subTest(bytecode=bytecode, memo=memo), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "helper.py").write_text(OK_HELPER)
+                inherited = root / "foreign" if memo == "off" else None
+                completed, summary, probe, _ = self._run_probe(root, "--shared-caches", bytecode,
+                    "--identity-memo", memo, "--bytecode-helper", str(root / "helper.py"), memo=inherited)
+                self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+                self.assertEqual(summary["bytecode_cache"]["status"], "off" if bytecode == "off" else "ready")
+                expected = str(root / "out/identity-memo") if memo == "auto" else None
+                self.assertEqual((summary["identity_memo"], probe["memo"]), (expected, expected))
+                self.assertFalse((root / "foreign").exists())
+
+    def test_bytecode_only_mode_hits_cache_and_clears_inherited_identity_memo(self) -> None:
+        """CI 字节码优化独立验收，不得顺带创建或继承身份记忆化目录。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            completed, summary, probe, names = self._run_probe(
+                root, "--shared-caches", "bytecode", "--bytecode-source", str(root / "tests"),
+                memo=root / "foreign-memo")
+            self.assertEqual(completed.returncode, 0, completed.stderr[-3000:])
+            self.assertEqual(summary["bytecode_cache"]["status"], "ready")
+            self.assertTrue(probe["cached_exists"] and probe["dont_write"])
+            self.assertIsNone(summary["identity_memo"])
+            self.assertIsNone(probe["memo"])
+            self.assertFalse((root / "foreign-memo").exists())
+            self.assertFalse((root / "out/identity-memo").exists())
+            self.assertLess(names.index("bytecode-exit"), names.index("start"))
+
     def test_precompile_failure_fails_the_run_while_units_still_run_without_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

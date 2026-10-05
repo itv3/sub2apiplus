@@ -8,6 +8,7 @@ MODE="$1"
 if [ "$MODE" = restore ]; then
   cp "$COMPOSE_BACKUP" docker-compose.yml
 else
+  vc5_require_admission
   TAG="$2"; IMAGE_ID="$3"; TREE="$4"; BUILD_ID="$5"
   cp "$COMPOSE_BACKUP" docker-compose.yml
   python3 - "$TAG" "$CAND" "$IMAGE_ID" "$TREE" "$BUILD_ID" "$PRODUCTION_IMAGE" "$PROFILE_ID" "$PROFILE_DIGEST" <<'PY'

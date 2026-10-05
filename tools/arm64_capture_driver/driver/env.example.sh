@@ -12,7 +12,7 @@ NEW=codex-$TARGET_VERSION-formal-$ROUND-$STAMP
 IN=codex-$TARGET_VERSION-inputs-$ROUND-$STAMP
 UP=codex-$BASELINE_VERSION-to-$TARGET_VERSION-$ROUND-$STAMP
 CAND=codex-$TARGET_VERSION-candidate-$ROUND
-B=$D/candidates/$CAND
+# B 自动派生为 $D/candidates/$CAND。旧文件可保留同值断言，错绑即拒绝。
 PREV_CANDIDATE=$D/candidates/REPLACE_PREVIOUS_CANDIDATE
 HISTORY_TEST_TREE=$D/candidates/REPLACE_HISTORY_CANDIDATE/test-tree
 # C 是候选提交，DC 是其冻结承接提交；不得使用缩写。
@@ -79,3 +79,6 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # 走入口（entry.sh、入口空跑）时必填：入口便宜检查的 required-parameters 一项核对它是已有的普通文件。
 # P0_ROLLBACK_EVIDENCE=$RUNROOT/REPLACE_ROLLBACK_RECEIPT.json
 # JWTGEN_BIN=$D/private-tools/jwtgen
+# VC-4 默认使用 Docker 默认网络；R15 阻断时先获取绑定本轮 bundle／提交／主机／驱动的专项批准，再明确选择 host。
+# VC4_BUILD_NETWORK=host
+# VC4_BUILD_NETWORK_APPROVAL=$RUNROOT/REPLACE_BUILD_NETWORK_APPROVAL.json

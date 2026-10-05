@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -38,6 +40,15 @@ PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
     PRODUCER_SCHEMA: frozenset(
         {
+            # C-06 补齐读集验证器摘要前的生成器；仅承接旧收据的生成器身份，
+            # 其余事实仍由当前验证器重建，不能据此恢复旧读集判据或签发新收据。
+            "1d1239a3a70a98a758cfa642c546a6f4bad310cbb1ffe31d4563e16fc794f398",
+            # B-10 修改前的已部署 v4 生成器，仅用于旧收据只读重放。
+            "6cea115be2c892dd8bd61b81e6521adfc617988f845579afaf7afc20478f9232",
+            # B-10 两轮隔离验收生成器；虽未生产部署，已作为冻结承接图的显式边界登记。
+            # 其验收收据只读重放，新收据仍绑定当前生成器摘要。
+            "302c9a5d5f5f77299fb1be18e7acba954eef84d8ac962144552731a1766cfb8f",
+            "d3d128c234c7d540332f6b649c125faf3b4da99af626c0b457d4a0f65fb1f459",
             # 931ae5b3：bb39c94b6 起部署的受管版本，0.154 期间的外部门禁收据由它生成（入库的
             # docs/egress/maintenance/CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json 即是）。
             "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552",
@@ -47,6 +58,32 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
         }
     ),
 }
+# B-10 验证器由固定源码目录或已安装驱动提供；受管树部署不包含 tools/ci。
+# 只加载下列钉住摘要的实现，不从外部收据中的路径加载代码。
+TARGET_VERIFIER_SHA256S: dict[str, str] = {
+    "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+    "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+    "unit_records.py": "f65b258a7a17f4d28da7e685fe79289e31e33280ce0202563a3b9b55c493bc6c",
+    "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+    "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e"
+}
+
+
+def _target_gate_verifier():
+    roots = (Path(__file__).resolve().parents[1] / "ci", Path("/root/arm64-capture-driver/driver"))
+    for root in roots:
+        if not root.is_dir() or not TARGET_VERIFIER_SHA256S:
+            continue
+        if any((root / name).is_symlink() or not (root / name).is_file()
+               or _sha256_file(root / name) != digest for name, digest in TARGET_VERIFIER_SHA256S.items()):
+            continue
+        spec = importlib.util.spec_from_file_location("_managed_target_gate_verifier", root / "target_platform_gate.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise GateReceiptError("目标门禁验证器缺失或与受管合同的钉住摘要不同")
+
+
 SAME_ROOT_CAUSE_RETRY_LIMIT = 2
 CANDIDATE_PHASE = "candidate_external"
 POST_PROMOTION_PHASE = "post_promotion"
@@ -549,6 +586,8 @@ def _validate_gates(
     contracts: Mapping[str, Mapping[str, Any]],
     *,
     require_test_id: bool,
+    subject: Mapping[str, Any],
+    historical: bool = False,
 ) -> tuple[list[dict[str, Any]], str, list[str], list[str]]:
     if not isinstance(values, list) or not values:
         raise GateReceiptError("gates 不能为空")
@@ -586,6 +625,11 @@ def _validate_gates(
         }
         if require_test_id:
             fields.add("test_id")
+        unit_execution = item.get("unit_execution")
+        if unit_execution is not None:
+            if phase != CANDIDATE_PHASE or item["gate_id"] != "target-platform":
+                raise GateReceiptError("单元承接证据只允许用于候选目标平台门禁")
+            fields.add("unit_execution")
         gate = _expect(
             item,
             fields,
@@ -595,6 +639,15 @@ def _validate_gates(
         contract = contracts[gate_id]
         expected_cwd = contract["working_directory"]
         expected_command = contract["command"]
+        if unit_execution is not None:
+            target_platform_gate = _target_gate_verifier()
+            proof_binding, proof = _binding(root, unit_execution, "target-platform.unit_execution")
+            try:
+                target_platform_gate.verify_evidence(proof, subject=subject, now=None if historical else time.time())
+            except target_platform_gate.ERRORS as error:
+                raise GateReceiptError("目标平台单元证据不能重放：" + str(error)) from error
+            gate = {**gate, "unit_execution": proof_binding}
+            expected_command = tuple(target_platform_gate.COMMAND)
         if (
             gate.get("working_directory") != expected_cwd
             or gate.get("command") != list(expected_command)
@@ -747,6 +800,7 @@ def build_receipt(
     *,
     _seen_receipts: set[str] | None = None,
     _allow_legacy: bool = False,
+    _historical: bool = False,
 ) -> dict[str, Any]:
     root = _private_root(root)
     facts_path = _relative(root, facts_relative, "facts")
@@ -858,6 +912,8 @@ def build_receipt(
         subject["target_architecture"],
         contracts,
         require_test_id=require_test_id,
+        subject=subject,
+        historical=_historical,
     )
     executed_ids = [item["gate_id"] for item in gates]
     if executed_ids != expected_executed_ids:
@@ -1021,6 +1077,7 @@ def replay(
         facts["path"],
         _seen_receipts=seen,
         _allow_legacy=receipt_schema == LEGACY_RECEIPT_SCHEMA,
+        _historical=True,
     )
     # v3 承接原 producer 路径与摘要；v4 只在摘要已登记为只读重放身份时承接旧摘要。其余字段
     # 仍须由当前实现从原始事实逐字重建（见 _replay_producer_identity）。

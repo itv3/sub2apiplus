@@ -30,7 +30,9 @@ import json
 import os
 import pwd
 import re
+import runpy
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -90,6 +92,21 @@ def _counting_bin(root: Path) -> tuple[Path, Path]:
 def _run(script: Path, *args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     merged = {**os.environ, **(env or {})}
     return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, errors="replace", env=merged, cwd=str(cwd) if cwd else None)
+
+
+def _run_process_group(argv: list[str], *, env: dict[str, str], timeout: float = 120) -> subprocess.CompletedProcess[str]:
+    """带后台心跳的测试独占进程组；成功、超时或异常都先清掉整组，再让临时目录退出。"""
+    with subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, errors="replace", start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
 
 
 class DriverManifestTests(unittest.TestCase):
@@ -364,7 +381,12 @@ class PermissionCloseoutTests(unittest.TestCase):
             _write_json(attempt / "evidence-manifest.json", manifest)
             bound_before = self._stat_rows(attempt / "evidence")
             env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CLOSEOUT_OWNER": pwd.getpwuid(os.getuid()).pw_name}
-            result = _run(SCRIPTS / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
+            driver = root / "driver"
+            driver.mkdir()
+            for name in ("lib.sh", "parse_env.py", "vc5-seal-receipts.sh", "vc5-permission-closeout.sh"):
+                (driver / name).write_bytes((SCRIPTS / name).read_bytes())
+            _stub_phase_context(driver)
+            result = _run(driver / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("SEAL_RECEIPTS_VERIFIED", result.stdout)
             self.assertEqual(log.read_text(encoding="utf-8"), "", "manifest 存在时 seal-receipts 不得调用 chmod/chown")
@@ -372,10 +394,58 @@ class PermissionCloseoutTests(unittest.TestCase):
             self.assertEqual(evidence_manifest.verify_manifest_boundary(manifest, [attempt / "evidence"])["status"], "passed")
             # 收据缺失：不可补写，退出 3
             (client / "receipts" / "kilo-responses-receipt.json").unlink()
-            missing = _run(SCRIPTS / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
+            missing = _run(driver / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
             self.assertEqual(missing.returncode, 3, missing.stdout + missing.stderr)
             self.assertIn("收据缺失", missing.stdout)
             self.assertEqual(log.read_text(encoding="utf-8"), "")
+
+
+def _stub_phase_context(driver: Path) -> None:
+    """只给编排边界用例替换阶段解析器；真实解析与拒绝边界由独立合同用例覆盖。"""
+
+    (driver / "phase_context.py").write_text('''import json, os, shlex, sys
+from pathlib import Path
+from parse_env import parse, derive
+args = sys.argv[1:]
+config = parse(Path(args[args.index("--env") + 1]).read_text())
+config.update(derive(config))
+c = Path(config["NEWDIR"]); candidate = config["CAND"]
+attempts = c / "candidates" / candidate / "attempts"
+selected = args[args.index("--attempt-id") + 1] if "--attempt-id" in args else next(iter(sorted(p.name for p in attempts.iterdir())), "") if attempts.exists() else ""
+a = attempts / selected
+d = json.loads((a / "attempt.json").read_text()) if (a / "attempt.json").is_file() else {}
+identity = d.get("identity", {})
+params = {"ATT": selected, "A": str(a), "EV": str(a / "evidence"), "ATT_STATUS": d.get("status", "awaiting_receipts"),
+          "RUN_NONCE": d.get("run_nonce", "nonce"), "STARTED": d.get("started_at_utc", "now"), "CID": config["NEW"],
+          "IMAGE_ID": identity.get("image_id", "sha256:" + "0" * 64), "IMAGE_REF": identity.get("image_reference", "repo@sha256:" + "0" * 64),
+          "BUILD_ID": identity.get("build_id", "b1"), "TREE": identity.get("source_tree_sha256", "t" * 64),
+          "SOURCE_ROOT": identity.get("source_root", "/src"), "DEPLOYED": identity.get("deployed_version", config["TARGET_VERSION"]),
+          "PROFILE_ID": identity.get("profile_id", config["PROFILE_ID"]), "PROFILE_DIGEST": identity.get("profile_digest", config["PROFILE_DIGEST"]),
+          "BUILD_RECEIPT": str(c / "candidates" / candidate / "build-receipt.json"), "EVALUATION_BASELINE": "0",
+          "GATE_ROOT": config["G"], "ASSERTION_CONFIG_DIR": config["AS"]}
+if not d:
+    build = Path(params["BUILD_RECEIPT"])
+    artifact = Path(config["B"]) / "artifacts/build-parameters.json"
+    if build.is_file(): params["BUILD_ID"] = json.loads(build.read_text())["build"]["build_id"]
+    if artifact.is_file(): params["IMAGE_ID"] = json.loads(artifact.read_text())["docker_build"]["image_id"]
+for name, root in (("CAPTURE", "candidates"), ("COMPARE", "comparisons"), ("ACCEPT", "acceptance"), ("ASSERTIONS", "assertions")):
+    path = c / root / candidate / ("results.json" if name == "ASSERTIONS" else "result.json")
+    params[name + "_RESULT"] = str(path)
+    params[name + "_WRITE"] = str(path.parent if name == "ASSERTIONS" else path)
+    params[name + "_READY"] = "1" if path.is_file() else "0"
+params["EVALUATION_RUN"] = str(c / "assertions" / candidate / "evaluation-run.json")
+for phase in ("VC5", "VC6"):
+    receipt = c / "control/vc/receipts" / candidate / (phase.lower() + "-completion.json")
+    params[phase + "_RECEIPT"] = str(receipt)
+    params[phase + "_COMPLETE"] = "1" if receipt.is_file() else "0"
+    params[phase + "_CHECKPOINT"] = str(c / "control/vc" / (phase.lower().replace("vc", "vc-") + "-checkpoint.json"))
+if "--predecessor" in args:
+    params["PRED_CKPT"] = str(c / "control/vc" / (args[args.index("--predecessor") + 1].lower() + "-checkpoint.json"))
+if "--shell" in args:
+    for key, value in params.items(): print("export " + key + "=" + shlex.quote(str(value)))
+else:
+    print(json.dumps({"parameters": params}))
+''', encoding="utf-8")
 
 
 class _DriverFixture:
@@ -427,13 +497,14 @@ class _DriverFixture:
 class Vc5AllResumeTests(unittest.TestCase):
     """vc5-all.sh 以 stub 子脚本运行：只验证阶段续跑分支，不触碰任何受管工具。"""
 
-    STUBS = ("vc5-start.sh", "vc5-seal.sh", "vc5-accept.sh", "vc5-canonical2.sh", "gates.sh", "guard.sh")
+    STUBS = ("vc5-precheck.sh", "vc5-start.sh", "vc5-seal.sh", "vc5-accept.sh", "vc5-canonical2.sh", "gates.sh", "guard.sh")
 
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "wait_state.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        _stub_phase_context(drv)
         calls = root / "stub-calls.log"
         calls.touch()
         for name in self.STUBS:
@@ -442,7 +513,9 @@ class Vc5AllResumeTests(unittest.TestCase):
                 body += f"mkdir -p '{fixture.newdir}/acceptance/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/acceptance/{fixture.cand}/result.json'\n"
             if name == "vc5-canonical2.sh":
                 body += f"mkdir -p '{fixture.newdir}/control/vc/receipts/{fixture.cand}' && echo '{{}}' > '{fixture.newdir}/control/vc/receipts/{fixture.cand}/vc5-completion.json'\n"
-            body += "echo CANONICAL2_DONE STUB_OK\n"
+            # 准入的标准输出是安全 export；空输出表示本夹具无需替换任何参数，不能把旧 banner 交给 eval。
+            if name != "vc5-precheck.sh":
+                body += "echo CANONICAL2_DONE STUB_OK\n"
             (drv / name).write_text(body, encoding="utf-8")
             (drv / name).chmod(0o700)
         return drv, calls
@@ -470,7 +543,7 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-canonical2.sh"], "compare／acceptance 结果存在时只允许进入 canonical 交接")
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-canonical2.sh"], "先消费准入，再进入 canonical 交接")
             self.assertIn("seal 链已完成", result.stdout)
             self.assertIn("accept 已完成", result.stdout)
             self.assertIn("VC5_ALL_DONE", result.stdout)
@@ -487,7 +560,7 @@ class Vc5AllResumeTests(unittest.TestCase):
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(called, ["vc5-accept.sh", "vc5-canonical2.sh"])
+            self.assertEqual(called, ["vc5-precheck.sh", "vc5-accept.sh", "vc5-canonical2.sh"])
             self.assertNotIn("vc5-seal.sh", called)
             self.assertNotIn("vc5-start.sh", called)
 
@@ -632,11 +705,13 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "vc5-seal.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        _stub_phase_context(drv)
         calls = root / "stub-calls.log"
         calls.touch()
         for name in (*self.WRITE_STUBS, "vc5-seal-receipts.sh"):
             (drv / name).write_text(f"#!/bin/bash\necho \"{name} $*\" >> '{calls}'\necho STUB_OK\n", encoding="utf-8")
             (drv / name).chmod(0o700)
+        (drv / "vc5-precheck.sh").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
         (drv / "gen_vc5_plans.py").write_text(
             "import os, sys\n"
             f"open('{calls}', 'a').write('gen_vc5_plans.py ' + ' '.join(sys.argv[1:]) + '\\n')\n"
@@ -690,7 +765,7 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([name for name in called if name in self.WRITE_STUBS], [], "manifest 存在后不得派发 seal checkpoint／assertion／preview／Kilo")
-            self.assertIn("vc5-seal-receipts.sh", called)
+            self.assertNotIn("vc5-seal-receipts.sh", called, "采集和比较已重放完成时直接返回，既有证据保持只读")
             self.assertIn("SEAL_DONE", result.stdout)
             self.assertIn("SEALED=1", result.stdout)
 
@@ -761,18 +836,32 @@ class DriverParameterizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = _DriverFixture(root)
-            output = root / 'plans'
-            output.mkdir()
+            output = fixture.data_root / 'control' / fixture.inputs
+            output.mkdir(parents=True)
             environment = {**os.environ, **fixture.env, 'CANDIDATE_DIR': str(fixture.candidate_dir), 'PYTHONDONTWRITEBYTECODE': '1'}
             image_id = 'sha256:' + 'a' * 64
             commands = [
                 ['gen_vc2_plans.py', str(output), fixture.new, fixture.inputs, 'b' * 64],
                 ['gen_vc4_record_plan.py', image_id, 'build-test', str(root / 'evidence'), str(output / 'vc4.json'), fixture.new, fixture.cand, str(fixture.candidate_dir)],
-                ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test'],
             ]
             for name, *args in commands:
                 result = subprocess.run([sys.executable, str(SCRIPTS / name), *args], env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # VC-5 参数生成现在要求先消费准入；注入隔离收据测试参数转换，不提供产品测试旁路。
+            receipt = {"bindings": {"campaign": fixture.new, "candidate": fixture.cand, "image_id": image_id, "build_id": "build-test"},
+                       "effective_parameters": {"PROFILE_ID": "codex-0.156.1-official", "PROFILE_DIGEST": "3" * 64,
+                                                "OFFICIAL_CAMPAIGN": str(fixture.newdir)}}
+            fake_admission = mock.Mock()
+            fake_admission.Admission.return_value.consume.return_value = receipt
+            fake_phase = mock.Mock()
+            fake_phase.resolve.return_value = {"parameters": {"IMAGE_ID": image_id, "BUILD_ID": "build-test",
+                "BUILD_RECEIPT": str(fixture.newdir / 'candidates' / fixture.cand / 'build-receipt.json'),
+                "PROFILE_ID": "codex-0.156.1-official", "PROFILE_DIGEST": "3" * 64, "CAPTURE_WRITE": "current-result"}}
+            with mock.patch.dict(os.environ, environment), mock.patch.dict(sys.modules, {"vc5_admission": fake_admission, "phase_context": fake_phase}), \
+                    mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]), \
+                    mock.patch.object(sys, "argv", ['gen_vc5_plans.py', str(output), fixture.new, fixture.cand, image_id, 'build-test']), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(str(SCRIPTS / 'gen_vc5_plans.py'), run_name='__main__')
             vc2 = json.loads((output / 'action-plan-vc2-approve.json').read_text())['actions'][0]['command']
             self.assertEqual(vc2[vc2.index('--profile-patch-manifest') + 1], str(fixture.data_root / 'tools/official_client_capture/profile_rule_patches_0_156_1.json'))
             for name in ('vc4.json', 'action-plan-vc5-run.json'):
@@ -919,11 +1008,20 @@ class DynamicDriverGateTests(unittest.TestCase):
         source = self.root / 'catalog'
         source.mkdir()
         blob = 'catalogdata/runtime/profiles/0.156.1/' + 'a' * 64 + '.json'
-        paths = sorted(catalog.MUTABLE | {blob})
+        testdata = REPO_ROOT / 'backend/internal/officialegress/profilecontract/testdata'
+        snapshot = json.loads((testdata / 'snapshot-catalog.json').read_text())['snapshots'][0]
+        snapshot_blob = 'profilecontract/testdata/' + snapshot['file']
+        paths = sorted(catalog.MUTABLE | {blob, snapshot_blob})
         rows = []
         for relative in paths:
             path = source / relative
-            _write_json(path, {'path':relative})
+            if relative == catalog.SNAPSHOT_INDEX:
+                _write_json(path, {'schema_version':1, 'snapshots':[snapshot]})
+            elif relative == snapshot_blob:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(testdata / snapshot['file'], path)
+            else:
+                _write_json(path, {'path':relative})
             rows.append({'path':relative, 'size':path.stat().st_size, 'sha256':self.gates.upgrade.file_sha256(path)})
         receipt = {'inventory':rows, 'inventory_sha256':self.gates.upgrade._fingerprint(rows), 'campaign_id':'fixture', 'target_version':'0.156.1',
                    'post_promotion_gate_requirements_sha256':self.requirements['requirements_sha256']}
@@ -932,9 +1030,13 @@ class DynamicDriverGateTests(unittest.TestCase):
         _write_json(requirements, self.requirements)
         mapping = self.base / 'source' / self.lifecycle / 'gate-mapping.json'
         repository = self.root / 'repository'
-        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        validate = catalog.validate_snapshot_contract
+        # 装配目标是隔离夹具；摘要和可执行画像仍由真实仓库的 Go 合同核验。
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+            catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         before = {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths}
-        catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
+        with mock.patch.object(catalog, 'validate_snapshot_contract', side_effect=lambda _, checks: validate(REPO_ROOT, checks)):
+            catalog.assemble(source, repository, self.lifecycle, requirements, mapping)
         self.assertEqual(before, {relative:(repository / 'backend/internal/officialegress' / relative).read_bytes() for relative in paths})
         (repository / 'backend/internal/officialegress' / blob).write_text('非法覆盖')
         with self.assertRaisesRegex(ValueError, '不可变 Catalog blob'):
@@ -974,9 +1076,9 @@ class LocalVc4HeartbeatTests(unittest.TestCase):
                 path.write_text(text, encoding="utf-8")
                 path.chmod(0o700)
             environment = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", LOCAL_VC4_HEARTBEAT_SECONDS="1")
-            result = subprocess.run(
+            result = _run_process_group(
                 ["bash", str(local / "local-vc4.sh"), "r1", "c" * 40, "d" * 40, "receipt.json", str(root / "out"), "/root/vc-rounds/t"],
-                env=environment, capture_output=True, text=True, timeout=120,
+                env=environment, timeout=120,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("LOCAL_VC4_DONE", result.stdout)
@@ -1317,6 +1419,30 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertFalse((gate / "logs" / "target-platform.gate.json").exists())
             self.assertEqual(list(tree.rglob("__pycache__")), [])
 
+    def test_explicit_target_request_uses_unit_executor_and_requires_evidence(self) -> None:
+        for emit in (True, False):
+            with self.subTest(emit=emit), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, drv, tree, make_probe, env = self._gate_fixture(root)
+                with fixture.env_file.open("a") as handle:
+                    handle.write(f'VC5_TARGET_REQUEST="{root}/target-request.json"\n')
+                helper = drv / "target_platform_gate.py"
+                helper.write_text(
+                    "import sys, os, json\nfrom pathlib import Path\n"
+                    "if sys.argv[1] == 'deployment':\n    print('/isolated/deployment.json')\nelse:\n"
+                    "    assert 'CODEX_UPGRADE_IDENTITY_MEMO' not in os.environ\n"
+                    "    out = Path(sys.argv[sys.argv.index('--out') + 1]); out.mkdir()\n"
+                    + ("    (out / 'evidence.json').write_text(json.dumps({'fixture': True}))\n" if emit else ""))
+                gate = root / "gate"
+                result = _run(drv / "vc5-gate-target.sh", "20260928T000000Z-0123456789abcdef", str(gate), str(tree), env=env, cwd=root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                meta = json.loads((gate / "logs/target-platform.gate.json").read_text())
+                self.assertFalse(make_probe.exists(), "显式单元调度不得额外执行整条 make test")
+                self.assertEqual(meta["command"], ["python3", "-B", "tools/ci/target_platform_gate.py", "run"])
+                self.assertEqual(meta["exit_code"], 0 if emit else 3)
+                self.assertEqual("unit_execution" in meta, emit)
+
 
 def _git(cwd: Path, *arguments: str) -> str:
     """测试用 git：固定提交身份、关掉签名与钩子，不读开发机的个人配置差异。"""
@@ -1596,7 +1722,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             # E3-01：执行器在白名单环境里运行，看不到本轮参数（数据根坐标、认证坐标等）；缺省全集通过、记录库在数据根之外。
             self.assertFalse({"D", "STAMP", "RUNROOT", "ARM64_VC_ENV", "SHIM_RECORD"} & set(call["env_keys"]), call["env_keys"])
             self.assertTrue({"PATH", "HOME", "PYTHONPATH", "PYTHONPYCACHEPREFIX", "CAPTURE_TYPESCRIPT_MODULE"} <= set(call["env_keys"]))
-            self.assertEqual(call["args"][call["args"].index("--mode") + 1], "full-set-pass")
+            self.assertEqual(call["args"][call["args"].index("--mode") + 1], "re-execute")
             self.assertEqual(call["args"][call["args"].index("--record-store") + 1], str(fixture.data_root.parent / "unit-records"))
             self._untouched_vc5_locations(fixture)
             # 通过后删掉测试树与缓存、释放锁；数据根与历史测试树不留字节码。
@@ -1745,7 +1871,7 @@ _CI_WORKFLOW = """jobs:
 # 候选提交里的最小 Makefile：入口门禁按 print-egress-spec-checks 读 check-egress-spec 的子检查清单（与真实 Makefile 同一入口）。
 _CANDIDATE_MAKEFILE = "print-egress-spec-checks:\n\t@echo check-egress-spec-local-source test-official-client-control egress-spec-a\n"
 
-# 执行器替身（驱动随附的 unit_executor.py 换成它）：只支持 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
+# 执行器替身（驱动随附的 unit_executor.py 换成它）：支持准备单元与 run-gates。在测试树里导入探针模块（核对 .pyc 来自预编译的
 # 树外缓存），把工作目录、HEAD、参数、环境与清单逐行记成 JSON，按清单逐单元合成执行器汇总；配置里 fail_units 列出的单元
 # 判失败。执行器在白名单环境里运行（E3-01，看不到测试经环境变量给的东西），配置写在替身旁边的 stub-config.json。执行器
 # 自身的调度、额度、汇总与承接由执行器与承接各自的测试模块实测。
@@ -1753,6 +1879,13 @@ _EXECUTOR_STUB = """import json, os, subprocess, sys
 from pathlib import Path
 config = json.loads((Path(__file__).resolve().parent / "stub-config.json").read_text(encoding="utf-8"))
 args = sys.argv[1:]
+if args[0] == "run-commands":
+    preparation = json.loads(Path(args[args.index("--manifest") + 1]).read_text())
+    assert len(preparation["units"]) == 1 and preparation["units"][0]["unit_id"] == "prepare:go-compile"
+    assert preparation["units"][0]["exclusive"] is True
+    Path(config["record"] + ".preparation").write_text(json.dumps({"manifest": preparation,
+        "cache_roots": {key: os.environ.get(key) for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")}}))
+    sys.exit(1 if config.get("fail_warmup") else 0)
 assert args[0] == "run-gates", args
 manifest = json.loads(Path(args[args.index("--manifest") + 1]).read_text(encoding="utf-8"))
 out = Path(args[args.index("--out-dir") + 1])
@@ -1815,7 +1948,7 @@ class Arm64GateScriptTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._template_root.cleanup()
 
-    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = ""):
+    def _fixture(self, root: Path, *, fail_pattern: str = "", fail_rc: int = 2, fail_units: str = "", fail_warmup: bool = False):
         fixture = _DriverFixture(root)
         hist = fixture.data_root / "candidates" / "hist"
         _git(root, "clone", "-q", str(self.template), str(hist))
@@ -1827,7 +1960,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         drv = root / "drv"
         drv.mkdir(mode=0o700)
         for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
-                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py"):
+                     "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py", "go_compile_warmup.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
@@ -1837,7 +1970,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         shim.write_text(_ISOLATION_SHIM, encoding="utf-8")
         shim.chmod(0o700)
         record = root / "gate-commands.jsonl"
-        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units}), encoding="utf-8")
+        (drv / "stub-config.json").write_text(json.dumps({"record": str(record), "fail_units": fail_units, "fail_warmup": fail_warmup}), encoding="utf-8")
         env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "SHIM_RECORD": str(record),
                "SHIM_FAIL_PATTERN": fail_pattern, "SHIM_FAIL_RC": str(fail_rc)}
         return fixture, work, drv, record, env
@@ -1871,6 +2004,23 @@ class Arm64GateScriptTests(unittest.TestCase):
         fixture.env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # ---- ARM64 全量门禁 ----
+
+    def test_go_warmup_failure_blocks_formal_gates_and_off_restores_original_path(self) -> None:
+        for disabled in (False, True):
+            with self.subTest(disabled=disabled), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, work, drv, record, env = self._fixture(root, fail_warmup=True)
+                commit = self._candidate(work, "codex/warmup")
+                bundle = root / "warmup.bundle"
+                _git(work, "bundle", "create", "-q", str(bundle), "main..codex/warmup")
+                arguments = ["--profile", "full-gates", "--work", str(fixture.runroot / "warmup-work")]
+                if disabled:
+                    arguments += ["--go-warmup", "off"]
+                result = _run(drv / "entry-gates.sh", *arguments, str(bundle), "codex/warmup", commit, env=env, cwd=root)
+                self.assertEqual(result.returncode, 0 if disabled else 3, result.stdout + result.stderr)
+                self.assertEqual(record.exists(), disabled, "预热失败时不能派发正式测试")
+                self.assertEqual(Path(str(record) + ".preparation").exists(), not disabled)
 
     def test_full_gates_run_every_ci_gate_once_and_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

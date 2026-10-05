@@ -22,11 +22,14 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import functools
 import hashlib
 import json
 import os
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -53,10 +56,11 @@ def _fingerprint(payload: Any) -> str:
 # （ARM64 约 1.3 秒与 2.4 秒），入口一轮里几十个进程、每个批次与动作前各算一遍。环境变量
 # CODEX_UPGRADE_IDENTITY_MEMO 指向一个绝对路径目录时，按「被计算的受管树逐文件摘要＋策略内容＋本模块源码摘要＋
 # 解释器版本」做键缓存结果：任何一个受管文件、策略或算法变了，键就不同、必然重算；结果是纯函数的输出，命中时与
-# 重算逐字节相同（缓存保留原来的键顺序）。条目里保存键的原文，读取时整段比对；目录不可读、条目不符或写入失败都
-# 当作未命中、照常计算。不设环境变量时行为与原来完全相同。
+# 重算逐字节相同（缓存保留原来的键顺序）。条目保存输入键与结果摘要，读取时核对普通文件、属主和 0600 权限；
+# 损坏或不可读时回到真实计算。并发首次未命中可以分别计算，用独立临时文件原子发布，不暴露半写入结果。
+# 不设环境变量时行为与原来完全相同。
 IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
-IDENTITY_MEMO_SCHEMA = "codex-upgrade-identity-memo/v1"
+IDENTITY_MEMO_SCHEMA = "codex-upgrade-identity-memo/v2"
 
 
 @functools.lru_cache(maxsize=1)
@@ -78,15 +82,30 @@ def _memo_entry(kind: str, key: Mapping[str, Any]) -> tuple[Path, dict[str, Any]
     return Path(configured) / f"{kind}-{_fingerprint(material)}.json", material
 
 
+def _memo_value_sha256(value: Mapping[str, Any]) -> str:
+    """结果摘要保留字典键序；命中后的序列化输出必须与真实计算一致。"""
+
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _memo_load(entry: tuple[Path, dict[str, Any]] | None) -> dict[str, Any] | None:
     if entry is None:
         return None
     path, material = entry
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        # 原子发布期间固定读取同一 inode；拒绝符号链接、管道和其他账号的缓存。
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+                return None
+            payload = json.load(stream)
     except (OSError, ValueError):
         return None
     if not isinstance(payload, dict) or payload.get("key") != material or not isinstance(payload.get("value"), dict):
+        return None
+    if payload.get("value_sha256") != _memo_value_sha256(payload["value"]):
         return None
     return payload["value"]
 
@@ -95,14 +114,21 @@ def _memo_save(entry: tuple[Path, dict[str, Any]] | None, value: Mapping[str, An
     if entry is None:
         return
     path, material = entry
+    temporary = None
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         # 不排序键：命中时返回的字典与重算的字典键顺序一致，调用方按插入顺序写出的收据逐字节不变。
-        temporary.write_text(json.dumps({"key": material, "value": value}, ensure_ascii=False), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump({"key": material, "value": value, "value_sha256": _memo_value_sha256(value)}, stream, ensure_ascii=False)
         os.replace(temporary, path)
     except (OSError, TypeError, ValueError):
         return
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
 
 
 def load_policy(path: Path | None = None) -> dict[str, Any]:
@@ -872,4 +898,3 @@ def legacy_evaluator_reader_digests(
             active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests, layer=None
         )["closure_sha256"],
     }
-

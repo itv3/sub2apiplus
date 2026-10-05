@@ -1513,19 +1513,9 @@ func TestDeriveOfficialOpenAIHTTPIdentityContentFallbackCollides(t *testing.T) {
 	)
 }
 
-// TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract 把主 Responses HTTP 链
-// 的 header 定型与版本画像绑定。
-//
-// 辅助端点（models/images/search/realtime/wham/files/OAuth refresh）与 WS 握手都经过
-// officialCodexApplyHeaderContract，header 值由画像槽位声明直接生成；主链是唯一
-// 例外，它在 finalizeOfficialOpenAIHTTPHeaders 里手工写出。两处目前完全一致，但这份
-// 一致没有任何机器保证：升级时若只换画像不改 finalizer，辅助端点会跟随新版本而主链
-// 仍按旧值出站——同账号同 IP 上出现两种版本形态，正是 §3.1 列为最强识别特征的那类
-// 不一致。
-//
-// 锁定两条：主链不得发出画像未声明的 header；画像声明了固定值的槽位，主链发出的值
-// 必须与之相同。不要求主链发满全部槽位——条件头在条件不成立时本就不发，
-// host/content-length 由传输层生成。
+// TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract 校验旧 Header 夹具与
+// 历史画像的字段及固定值一致。该夹具仅供测试使用；当前生产出站由 Executor/compiler
+// 定型，并由正式出站与发布门禁验证。保留此对照以支持历史 compact 材料回放。
 func TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract(t *testing.T) {
 	identity := officialOpenAIHTTPIdentity{
 		installationID: testOfficialOpenAIInstallationID,
@@ -1580,7 +1570,7 @@ func TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract(t *testing.T) {
 				require.Truef(
 					t,
 					ok,
-					"主链发出了端点 %s 画像未声明的 header：%s",
+					"历史夹具发出了端点 %s 画像未声明的 header：%s",
 					endpoint.ID,
 					name,
 				)
@@ -1593,8 +1583,7 @@ func TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract(t *testing.T) {
 					t,
 					expected,
 					values[0],
-					"header %s 的值与端点 %s 的画像声明不一致：升级时换了画像却没改 finalizer，"+
-						"辅助端点会跟随新版本而主链仍按旧值出站",
+					"历史夹具 header %s 的值与端点 %s 的画像声明不一致",
 					name,
 					endpoint.ID,
 				)

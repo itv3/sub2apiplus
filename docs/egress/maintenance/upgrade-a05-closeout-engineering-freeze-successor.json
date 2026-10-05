@@ -1,0 +1,55 @@
+{
+  "base_commit": "524525756358a733623cffdccb6e8f957fb0b44d",
+  "changed_path_count": 3,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5617,
+  "frozen_path_count": 2015,
+  "identity_sha256": "e0c6880228fd69233b61c27906b78ed1324872c44771ebbbc3b3c4feddd3b919",
+  "issued_at_utc": "2026-10-04T22:39:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-a05-closeout-engineering-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "fb99290ac548a30064067c2b0d734cf4ddc824ab4a9e109ff160cb0597da54aa"
+      ],
+      "reason": "用户已授权 A-05 工程改造：抽取单份终态候选只读校验，正式集合校验合同保持；仅登记本工作分支检查器的源码摘要后继，不发布指南、不签发升级终态、不部署生产。 path=tools/check_ledger_completeness.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-terminal-gate-candidate-state-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-surface-successors-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0210-ledger-registry-scope-20260930-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0033a23988bcb0da798f0f7e5e06fda073e7045ecd20fe3b26a886a9074a59fb"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/codex_closeout.py",
+    "tools/official_client_capture/tests/test_codex_closeout.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

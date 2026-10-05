@@ -45,6 +45,7 @@ DRV = Path(__file__).resolve().parent
 if str(DRV) not in sys.path:
     sys.path.insert(0, str(DRV))
 import parse_env  # noqa: E402  —— 与驱动参数文件同一安全解析（parse_assignments）
+import fix_safety  # noqa: E402  —— 打包、人工批准与不可覆盖凭证
 
 # ---------------------------------------------------------------------------
 # 步骤与参数
@@ -93,6 +94,7 @@ REQUIRED_KEYS = (
     "APPROVER",  # 批准人（如实记录）
 )
 OPTIONAL_KEYS = (
+    "APPROVALS_DIR",  # 人工批准目录；缺省按 RUNROOT 和 ROUND 派生，脚本只能消费，不代签
     "REGRESSION_GATES",  # 定向回归人工补的门禁项（逗号分隔，入口门禁 --with-gates；改动在测试闭包选不出的地方时给）
     "ITEM_TESTS",  # 人工指定的实测：staging 树上整跑的 unittest 目标（空格分隔）；不给则 item-tests 跳过
     "ITEM_TESTS_K",  # 实测第二段：-k 模式（空格分隔），与 ITEM_TESTS_K_MODULES 同时给
@@ -118,6 +120,7 @@ DEFAULTS = {
     "DEPLOY_MAX_SECONDS": "1800",
 }
 PATH_KEYS = (
+    "APPROVALS_DIR",
     "D", "RUNROOT", "VC_ENV", "VC_STATE_DIR", "SRC", "STAGING_TREE", "BUNDLE", "EXPECT", "ENTRY_GREPS",
     "DRIVER_TARGET", "UPLOAD_SHA256", "REGRESSION_RECEIPT", "REGRESSION_DRAFT",
 )
@@ -367,6 +370,8 @@ def write_step(
         "resume_from": resume_from,
     }
     out = _out(params)
+    # 当前步骤文件是可更新索引，完整历史收据按内容摘要另存，不能被重跑覆盖。
+    fix_safety.write_once(out / "receipts" / (fix_safety.digest(record) + ".json"), record)
     _write_private_json(out / f"{step}.json", record)
     with (out / "history.ndjson").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
@@ -1109,6 +1114,25 @@ def _ok(**exports: Any) -> tuple[int, dict[str, str]]:
     return EXIT_OK, {key: str(value) for key, value in exports.items()}
 
 
+@decider("package")
+def _package(params, args):
+    result = fix_safety.package(params, apply=True)
+    note(params, args.step, package=result)
+    return _ok()
+
+
+@decider("human-approval")
+def _human_approval(params, args):
+    try:
+        approval = fix_safety.require_approval(params, args.mode, args.subject)
+    except (fix_safety.SafetyError, OSError, ValueError) as error:
+        return stop(params, args.step, "needs-operator", str(error),
+                    "由批准人审核 approval-intents 中的精确范围并提供凭证后，从当前步骤续跑；脚本不代签",
+                    run_stamp=args.run_stamp), {}
+    note(params, args.step, operation_approval=approval)
+    return _ok()
+
+
 @decider("preflight")
 def _preflight(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
     step, stamp = "preflight", args.run_stamp
@@ -1117,6 +1141,11 @@ def _preflight(params: dict[str, str], args: argparse.Namespace) -> tuple[int, d
     (out / "raw").mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(out, 0o700)
     os.chmod(out / "raw", 0o700)
+    for name in STEPS:
+        previous = read_step(params, name)
+        if previous is not None and previous.get("identity") != identity(params):
+            return stop(params, step, "needs-operator", f"本轮已有 {name} 的另一组提交或 Campaign 身份，不能覆盖承接",
+                        "使用新的 ROUND 保留旧收据并重新开始", run_stamp=stamp, resume_from=resume), {}
     active = active_runs(Path(params["VC_STATE_DIR"]))
     if active:
         return stop(params, step, "needs-operator", f"监督器状态目录有运行中／prepared 的父 run：{active}",
@@ -1189,8 +1218,9 @@ def _deploy_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int
 
 @decider("deploy-launch")
 def _deploy_launch(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
-    _write_private_json(_out(params) / "deploy.inflight.json",
-                        {"log": args.log, "pid_file": args.pid_file, "started_at_utc": _utc_now()})
+    fix_safety.write_once(_out(params) / "deploy.inflight.json",
+                         {"identity": identity(params), "log": args.log, "pid_file": args.pid_file,
+                          "run_stamp": args.run_stamp, "started_at_utc": _utc_now()})
     return _ok()
 
 
@@ -1201,8 +1231,6 @@ def _deploy_verify(params: dict[str, str], args: argparse.Namespace) -> tuple[in
     text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
     exits = re.findall(r"(?m)^exit=(-?\d+)$", text)
     inflight = _out(params) / "deploy.inflight.json"
-    if inflight.exists():
-        inflight.unlink()
     if not exits or exits[-1] != "0":
         return stop(params, step, "failed", f"受监督部署失败（{exits[-1] if exits else '无 exit 标记'}）：{_tail(text, 20)}",
                     f"查看 {log}：修复后重新生成 bundle 与期望摘要，或确认失败原因后 --from deploy", run_stamp=stamp), {}
@@ -1215,8 +1243,13 @@ def _deploy_verify(params: dict[str, str], args: argparse.Namespace) -> tuple[in
     if problems:
         return stop(params, step, "failed", f"最新部署收据 {receipt_path.name} 与期望摘要不符：{problems}",
                     "核对本地按部署 HEAD 预算的期望摘要（EXPECT）与部署收据；不一致说明部署内容不是本轮提交", run_stamp=stamp), {}
-    return passed(params, step, run_stamp=stamp, summary={"log": str(log), "receipt": str(receipt_path),
-                                                            "receipt_sha256": _sha256_file(receipt_path)}), {}
+    # 只有日志和正式部署收据都通过才释放占位；结果不确定时重跑只能复核，不能再次部署。
+    result = passed(params, step, run_stamp=stamp, summary={"log": str(log), "receipt": str(receipt_path),
+                                                         "receipt_sha256": _sha256_file(receipt_path)})
+    if inflight.exists():
+        inflight.unlink()
+        fix_safety.sync_directory(inflight.parent)
+    return result, {}
 
 
 @decider("postdeploy-receipt")
@@ -1372,7 +1405,7 @@ def self_digest() -> str:
     """本脚本自身（入口、辅助与共用解析／等待模块）的摘要：驱动被本轮重装更新后须用新驱动续跑。"""
 
     parts = []
-    for name in ("fix-and-continue.sh", "fix_and_continue.py", "parse_env.py", "wait_state.py"):
+    for name in ("fix-and-continue.sh", "fix_and_continue.py", "fix_safety.py", "parse_env.py", "wait_state.py"):
         path = DRV / name
         parts.append(f"{name}:{_sha256_file(path) if path.is_file() else '-'}")
     return _sha256_bytes("\n".join(parts).encode("utf-8"))
@@ -2100,6 +2133,10 @@ def _recover_state(params: dict[str, str], args: argparse.Namespace) -> tuple[in
         changed = "" if summary.get("preview_path") == args.preview else f"；当前批准预览已是 {args.preview}，如需按它重派请开新轮次"
         return skip(params, step, f"本轮已启动过 {CANDIDATE_RECOVER_SCRIPT}（日志 {summary.get('log')}），不重复派发{changed}",
                     run_stamp=stamp, summary=summary), {}
+    inflight = _out(params) / "recover.inflight.json"
+    if inflight.exists():
+        return stop(params, step, "needs-operator", "续派已有占位而完成收据缺失，执行结果不确定，禁止自动重派",
+                    f"核对 {inflight}、监督器及账本；完成对账后登记新轮次，保留旧占位", run_stamp=stamp), {}
     active = active_runs(Path(params["VC_STATE_DIR"]))
     processes = driver_processes(params)
     if active or processes:
@@ -2110,6 +2147,14 @@ def _recover_state(params: dict[str, str], args: argparse.Namespace) -> tuple[in
         return stop(params, step, "failed", f"驱动安装目标缺少 {script}", "先 --from postdeploy 重装驱动", run_stamp=stamp,
                     resume_from="postdeploy"), {}
     return _ok(ACTION="start", RECOVER_SCRIPT=script, RECOVER_LOG=Path(params["RUNROOT"]) / "vc5-recover.out")
+
+
+@decider("recover-launch")
+def _recover_launch(params, args):
+    value = {"identity": identity(params), "preview": fix_safety.file_binding(args.preview),
+             "run_stamp": args.run_stamp, "started_at_utc": _utc_now(), "status": "dispatch_pending"}
+    fix_safety.write_once(_out(params) / "recover.inflight.json", value)
+    return _ok()
 
 
 @decider("recover-started")
@@ -2215,6 +2260,8 @@ def main(argv: list[str] | None = None) -> int:
     frm.add_argument("--step", required=True)
     lst = sub.add_parser("list", help="列出本轮各步骤记录")
     lst.add_argument("--params", required=True)
+    dry = sub.add_parser("dry-run", help="只读检查输入与打包计划，不建目录、不部署、不登记或批准")
+    dry.add_argument("--params", required=True)
     sub.add_parser("self-digest", help="本脚本自身摘要")
     st = sub.add_parser("stop", help="写停下记录并打印下一步")
     st.add_argument("--params", required=True)
@@ -2265,6 +2312,18 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(_export_lines(values))
         return EXIT_OK
     params = _load_or_exit(args.params)
+    if args.command == "dry-run":
+        try:
+            load_expect(Path(params["EXPECT"]))
+            load_entries(Path(params["ENTRY_GREPS"]))
+            result = fix_safety.package(params, apply=False)
+            print(json.dumps({"schema_version": "arm64-fix-dry-run/v1", "identity": identity(params), "package": result,
+                              "steps": list(STEPS), "manual_operations": sorted(fix_safety.OPERATIONS),
+                              "approvals_directory": str(fix_safety.approval_directory(params))}, ensure_ascii=False))
+            return EXIT_OK
+        except (fix_safety.SafetyError, FixAndContinueError, OSError, subprocess.SubprocessError) as error:
+            print(f"只读预检失败：{error}", file=sys.stderr)
+            return EXIT_FAILED
     if args.command == "check-from":
         if args.step not in STEPS:
             print(f"未知步骤：{args.step}（可选：{' '.join(STEPS)}）", file=sys.stderr)

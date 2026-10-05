@@ -1,0 +1,69 @@
+{
+  "base_commit": "bb934f34a42b7e14d6d66a070b54796eed8b9253",
+  "changed_path_count": 15,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5635,
+  "frozen_path_count": 2015,
+  "identity_sha256": "780e525eb9995de28f71b9fa97b6036571736bd43144a15edbe978fa05fbebeb",
+  "issued_at_utc": "2026-10-05T14:51:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-b10-history-20261005-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "302c9a5d5f5f77299fb1be18e7acba954eef84d8ac962144552731a1766cfb8f"
+      ],
+      "reason": "B-10 历史收据重放仅核对封存输入；新承接继续强制实时环境核验 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d3d128c234c7d540332f6b649c125faf3b4da99af626c0b457d4a0f65fb1f459"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/full_set_receipt.py",
+    "tools/arm64_capture_driver/driver/read_audit.py",
+    "tools/arm64_capture_driver/driver/read_audit_runtime.py",
+    "tools/arm64_capture_driver/driver/target_platform_gate.py",
+    "tools/arm64_capture_driver/driver/unit_records.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/full_set_receipt.py",
+    "tools/ci/read_audit.py",
+    "tools/ci/read_audit_runtime.py",
+    "tools/ci/target_platform_gate.py",
+    "tools/ci/unit_records.py",
+    "tools/official_client_capture/tests/test_ci_read_audit.py",
+    "tools/official_client_capture/tests/test_ci_read_audit_runtime.py",
+    "tools/official_client_capture/tests/test_ci_target_platform_gate.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

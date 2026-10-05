@@ -8,29 +8,25 @@
 #         > $RUNROOT/vc5-recover.out 2>&1 < /dev/null
 # 原 vc5-run-batch.out 若没有 RUN_BATCH_DONE（失败批次的日志）先改名留档；已有完成标记时不重复派发。
 set -Eeuo pipefail; umask 077
+PHASE_CONTEXT_ARGS=(--mode build)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+vc5_dispatch_lock
+vc5_require_admission
 PREVIEW="$1"; test -f "$PREVIEW"
-export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
-ensure_admin_token
+python3 -B "$DRV/gen_vc5_recovery_plans.py" "$W" "$NEWDIR" "$PREVIEW" --dry-run
 OUT="$RUNROOT/vc5-run-batch.out"
 if [ -f "$OUT" ] && grep -q '^RUN_BATCH_DONE ' "$OUT"; then echo "VC5_RECOVER_SKIP: $OUT 已有 RUN_BATCH_DONE"; exit 0; fi
 if [ -f "$OUT" ]; then mv "$OUT" "$OUT.failed-$(date -u +%Y%m%dt%H%M%Sz)"; fi
-echo $$ > "$RUNROOT/vc5-run-batch.pid"
 mkdir -p "$W"; chmod 700 "$W"
 python3 "$DRV/gen_vc5_recovery_plans.py" "$W" "$NEWDIR" "$PREVIEW" | cut -c1-400
 # 与 vc5-start 同一套派发前检查与候选网关切换：补跑复用的旧结果要求本轮 before 探针与来源 attempt 的 after 探针
 # 在 service／containers／account／configuration 上连续，网关必须切回同一候选镜像与声明身份。
 echo "=== 派发前检查（驱动/磁盘/总账/账本/VC-4 checkpoint）"; bash "$DRV/guard.sh" pre-vc5 "$NEWDIR" 2>&1 | tee -a "$RUNROOT/guard-pre-vc5.out"
-IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
-BUILD_ID=$(python3 -c "import json; print(json.load(open('$NEWDIR/candidates/$CAND/build-receipt.json'))['build']['build_id'])")
 test "$(git -C "$B/source" rev-parse HEAD)" = "$C"; TAG=$CANDIDATE_IMAGE_REPOSITORY:$ROUND-${C:0:9}
-TREE=$(python3 -c "
-from pathlib import Path
-from tools.official_client_capture import codex_upgrade as cu
-print(cu._directory_tree_digest(Path('$B/source')))")
 echo "IMAGE_ID=$IMAGE_ID BUILD_ID=$BUILD_ID TAG=$TAG TREE=$TREE"
 echo "=== 切换候选网关"; bash "$DRV/vc5-switch.sh" candidate "$TAG" "$IMAGE_ID" "$TREE" "$BUILD_ID" 2>&1 | tail -n 3
 echo "=== 预检"; bash "$DRV/vc5-precheck.sh" "$IMAGE_ID" "$BUILD_ID" 2>&1 | tail -n 6 | cut -c1-240
+echo $$ > "$RUNROOT/vc5-run-batch.pid"
 batch() {
   local seq="$1" plan="$2"
   bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$seq" VC-4 "$plan" | grep -v "^$" || true
@@ -48,7 +44,7 @@ PY
   batch "$SEQ" action-plan-vc5-recovery-preview.json
   SEQ=$((SEQ+1)); echo "=== 批次 ${SEQ}：按已批准预览真实补跑 $(utc_now)"
   batch "$SEQ" action-plan-vc5-recovery-run.json
-  ATT=$(ls -1t "$NEWDIR/candidates/$CAND/attempts/" | head -1)
-  python3 -c "import json; d=json.load(open('$NEWDIR/candidates/$CAND/attempts/$ATT/attempt.json')); rs=d.get('results') or []; print('attempt:', {k:d.get(k) for k in ('status','attempt_id')}, 'complete:', sum(1 for r in rs if r.get('status')=='complete'), '/', len(rs), 'reused:', sum(1 for r in rs if r.get('disposition')=='reused'))"
+  phase_require --mode attempt
+  echo "attempt: $ATT status: $ATT_STATUS baseline: b$EVALUATION_BASELINE"
   echo "RUN_BATCH_DONE $(utc_now)"
 } >> "$OUT" 2>&1

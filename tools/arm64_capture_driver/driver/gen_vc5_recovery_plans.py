@@ -12,17 +12,27 @@
 """
 
 import json
+import os
 import pathlib
 import sys
 
 sys.dont_write_bytecode = True
 
+from driver_config import load_config
+from phase_context import resolve
+from round_context import binding
+CONFIG = load_config()
+CONTEXT = resolve(CONFIG, mode="build")
+PARAMS = CONTEXT["parameters"]
 out = pathlib.Path(sys.argv[1])
-campaign_dir = pathlib.Path(sys.argv[2]).resolve(strict=True)
+campaign_dir = pathlib.Path(sys.argv[2])
+if str(campaign_dir) != CONFIG["NEWDIR"] or out != pathlib.Path(CONFIG["W"]):
+    raise SystemExit("恢复计划的 Campaign 或输出目录与本轮不一致")
 preview_path = pathlib.Path(sys.argv[3])
+preview_binding = binding(preview_path)
 if not preview_path.is_absolute() or preview_path.is_symlink() or not preview_path.is_file():
     raise SystemExit(f"恢复预览必须是可信绝对路径普通文件：{preview_path}")
-data_root = campaign_dir.parents[2]
+data_root = pathlib.Path(CONFIG["D"])
 sys.path.insert(0, str(data_root))
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor  # noqa: E402
 
@@ -33,21 +43,51 @@ manifests = sorted((campaign_dir / "control" / "vc" / "run-manifests").glob("*-v
 if not manifests:
     raise SystemExit("Campaign 没有 VC-5 批次清单")
 parent_path = None
-for candidate_path in reversed(manifests):
+parents = []
+for candidate_path in manifests:
+    if candidate_path.is_symlink():
+        raise SystemExit("恢复父批次清单不能是符号链接")
+    payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+    if (payload.get("campaign_id"), payload.get("candidate_id"), payload.get("candidate_revision")) != (
+        CONFIG["NEW"], CONFIG["CAND"], int(PARAMS["CANDIDATE_REVISION"])
+    ):
+        continue
     try:
         prefix, campaign, identity = supervisor.candidate_recovery_parent_identity(
-            json.loads(candidate_path.read_text(encoding="utf-8"))
+            payload
         )
     except supervisor.SupervisorError:
         continue
-    parent_path = candidate_path
-    break
+    sequence = payload.get("batch_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+        raise SystemExit("恢复父批次序号非法")
+    parents.append((sequence, candidate_path, prefix, campaign, identity))
+if parents:
+    if len({row[0] for row in parents}) != len(parents):
+        raise SystemExit("恢复父批次序号不唯一")
+    _, parent_path, prefix, campaign, identity = max(parents, key=lambda row: row[0])
 if parent_path is None:
     raise SystemExit("Campaign 没有候选采集或续跑批次清单，无法取候选身份参数")
+parent_binding = binding(parent_path)
 if pathlib.Path(campaign).resolve(strict=True) != campaign_dir:
     raise SystemExit("父批次命令的 Campaign 目录与参数不一致")
-if identity["--candidate-id"] != preview.get("candidate_id"):
+if identity["--candidate-id"] != preview.get("candidate_id") or preview.get("candidate_id") != CONFIG["CAND"]:
     raise SystemExit("恢复预览的候选与父批次命令的候选不一致")
+
+expected = {
+    "--candidate-id": CONFIG["CAND"], "--build-receipt": PARAMS["BUILD_RECEIPT"],
+    "--candidate-image-id": PARAMS["IMAGE_ID"], "--candidate-source": PARAMS["SOURCE_ROOT"],
+    "--build-id": PARAMS["BUILD_ID"], "--deployed-version": PARAMS["DEPLOYED"],
+    "--profile-id": PARAMS["PROFILE_ID"], "--profile-digest": PARAMS["PROFILE_DIGEST"],
+    "--candidate-purpose": "production_replacement",
+}
+if any(identity.get(key) != value for key, value in expected.items()):
+    raise SystemExit("恢复父命令的构建、源码或画像参数与当前收据不一致")
+if identity.get("--runtime-image") not in {PARAMS["IMAGE_REF"], CONFIG["CANDIDATE_IMAGE_REPOSITORY"] + "@" + PARAMS["IMAGE_ID"]}:
+    raise SystemExit("恢复父命令的运行镜像与当前收据不一致")
+if prefix != ["/usr/bin/python3", str(data_root / "tools/official_client_capture/codex_upgrade.py")]:
+    raise SystemExit("恢复父命令不属于本轮受管工具")
+# 这里只解析身份；批准与计费授权仍由原监督器在派发前重放，不调用可能写授权事件的检查入口。
 
 
 def plan(action_id: str, command: list[str], timeout: int) -> dict:
@@ -67,7 +107,6 @@ def plan(action_id: str, command: list[str], timeout: int) -> dict:
     }
 
 
-out.mkdir(parents=True, exist_ok=True)
 plans = {
     "action-plan-vc5-recovery-preview.json": plan(
         supervisor.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
@@ -80,6 +119,14 @@ plans = {
         21600,
     ),
 }
+if binding(preview_path) != preview_binding or binding(parent_path) != parent_binding:
+    raise SystemExit("恢复预览或父批次在解析期间发生变化")
+if len(sys.argv) > 4:
+    if sys.argv[4:] != ["--dry-run"]:
+        raise SystemExit("恢复计划可选参数只接受 --dry-run")
+    print("恢复计划只读预检通过，未写入输出目录")
+    raise SystemExit(0)
+out.mkdir(parents=True, exist_ok=True)
 for name, payload in plans.items():
     target = out / name
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

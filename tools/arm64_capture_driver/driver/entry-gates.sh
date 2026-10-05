@@ -21,7 +21,7 @@
 # 隔离：测试树里的单元在私有挂载命名空间里遮住 /root/oauth-capture（与 lib.sh 的 isolated_run 同一做法），树外只读字节码
 #   缓存；pre-A3 场景在数据根的生产布局里运行（受管树经生产别名访问的分支也要覆盖到），用生产字节码共享层与身份记忆化。
 # Linux 上不执行 macOS 专用的部署脚本测试（写进门禁记录的 not_executed；CI 在 macos-15 上照常执行）。
-# 模式（--mode，E3-01，方案 D12）：full-set-pass（默认，全集通过）先在单元执行记录库里给每个单元找可承接的记录，只执行
+# 模式（B-09）：默认 re-execute；full-set-pass 必须带 --full-set-request 并通过全集准入，否则全量重跑。旧模式说明：先查记录，只执行
 #   其余单元；re-execute（重新执行全集）不承接。两种模式的单元执行记录都入库（--record-store，默认数据根之外跨轮次固定的
 #   $(dirname $D)/unit-records），执行器另写清单 executor/unit-manifest.json 并自检。门禁项里有承接的单元时两份 P0 证据
 #   写 v2（E3-03：以运行清单为证据，另登记记录库与测试树五摘要，签发与 VC-0 收口按记录库逐条重验）；记录库里没有已发布
@@ -38,10 +38,10 @@
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
 #   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
-#     [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
+#     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
-#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] \
-#     [--record-store <单元执行记录库>] [--audit-reads] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
+#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] \
+#     [--record-store <单元执行记录库>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
 #     > $RUNROOT/entry-gates.out 2>&1 < /dev/null
 #   后三个选项供入口编排器（entry.sh，E2-06）用：激活认证与 pre-A3 认证坐标覆盖参数文件里的值（重做时编排器给新坐标）；
 #   pre-A3 来源由编排器按步骤记录判定后指定——present 只复核并沿用已有认证，run 一定新跑（不按「工具五摘要与策略未变」
@@ -52,18 +52,26 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--record-store <目录>] [--audit-reads] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=full-set-pass; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
+AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
+FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
-    --mode) MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --full-set-request) FULL_SET_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --mode) MODE_EXPLICIT=true; MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --record-store) STORE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --audit-reads) AUDIT_READS=true; shift ;;
+    --audit-strict) AUDIT_STRICT=true; shift ;;
+    --audit-policy) AUDIT_POLICY_ARGS=(--audit-policy "${2:-}"); shift 2 || { usage; exit 2; } ;;
+    --audit-host-inputs) AUDIT_HOST_INPUTS="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
     --wait-lock) WAIT_LOCK="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -83,9 +91,21 @@ PBUNDLE="$1"; PBRANCH="$2"; PCOMMIT="$3"; NM_DIR="${4:-$HISTORY_TEST_TREE/fronte
 case "$PROFILE" in entry|full-gates|preflight|pre-a3|regression) ;; *) echo "未知的门禁组合：$PROFILE" >&2; exit 2 ;; esac
 if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gates 是逗号分隔的门禁项：$WITH_GATES" >&2; exit 2; fi
 if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
+case "$GO_WARMUP" in auto|off) ;; *) echo "未知的 Go 预热模式：$GO_WARMUP" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
 case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
+# B-09：入口的逐单元旧承接模式不能绕过全集准入。无请求时始终重新执行。
+if [ -n "$FULL_SET_REQUEST" ]; then
+  REQUIRE_DEPLOYED=true
+  if [ "$MODE_EXPLICIT" = false ]; then MODE=full-set-pass; fi
+elif [ "$MODE" = full-set-pass ]; then
+  echo "B-09：未提供全集承接请求，回退重新执行全集"
+  MODE=re-execute
+fi
 if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
+if { [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ]; } && { [ "$AUDIT_READS" != true ] || [ "$AUDIT_STRICT" != true ] || [ "$MODE" != re-execute ]; } && [ -z "$FULL_SET_REQUEST" ]; then
+  echo "宿主输入与收窄提案必须使用 --audit-reads --audit-strict --mode re-execute" >&2; exit 2
+fi
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
   if [[ "$file" != /* ]]; then echo "认证坐标必须是绝对路径：$file" >&2; exit 2; fi
 done
@@ -132,25 +152,48 @@ echo "=== 入口门禁 ${SUBJECT}（组合 ${PROFILE}）$(utc_now)"
 echo "bundle=${PBUNDLE} 分支=${PBRANCH} 提交=${PCOMMIT} 前端依赖=${NM_DIR}"
 echo "=== 测试树（clone_test_tree，umask 022）$(utc_now)"
 umask 022
-clone_test_tree "$TREE" "$PBUNDLE" "$PBRANCH" "$PCOMMIT"
+REUSE_WORKSPACE=false
+if [ -n "$FULL_SET_REQUEST" ] && [ -d "$TREE" ]; then
+  if python3 -B "$DRV/entry_gates.py" verify-scope-workspace --tree "$TREE" --bytecode-cache "$PYC" \
+      --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" > "$OUT/workspace-check.json"; then
+    REUSE_WORKSPACE=true
+  else
+    echo "B-09：原工作区无法重放，重建并由准入判定全量重跑"
+  fi
+fi
+if [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "$REUSE_WORKSPACE" = true ]; then
+  python3 -B "$DRV/entry_gates.py" verify-scope-workspace --tree "$TREE" --bytecode-cache "$PYC" \
+    --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" | tee "$OUT/scope-workspace.json"
+  verify_history_tree "$TREE" "$PCOMMIT"
+else
+  clone_test_tree "$TREE" "$PBUNDLE" "$PBRANCH" "$PCOMMIT"
+fi
 if [ ! -d "$NM_DIR/node_modules" ] || ! cmp -s "$NM_DIR/pnpm-lock.yaml" "$TREE/frontend/pnpm-lock.yaml"; then
   echo "前端依赖不可用：${NM_DIR}/node_modules 不存在，或 ${NM_DIR}/pnpm-lock.yaml 与本树 frontend/pnpm-lock.yaml 不同"
   echo "本轮 lockfile 有变化时，先按 frontend.sh 同一方式（node:20 容器内 pnpm install --frozen-lockfile）在独立目录装好依赖，再把该目录作为最后一个参数传入"
   echo "ENTRY_GATES_ABORTED：前端依赖不可用，没有门禁结论；主体目录 ${OUT}"
   exit 3
 fi
-cp -a "$NM_DIR/node_modules" "$TREE/frontend/node_modules"
+if [ "${#INPUT_SCOPE_ARGS[@]}" -eq 0 ] && [ "$REUSE_WORKSPACE" = false ]; then
+  cp -a "$NM_DIR/node_modules" "$TREE/frontend/node_modules"
+elif [ ! -d "$TREE/frontend/node_modules" ]; then
+  echo "收窄复验缺少原前端依赖，不能自动补装后沿用旧读集" >&2; exit 3
+fi
 umask 077
 TREE_HEAD=$(git -C "$TREE" rev-parse HEAD)
 # 命令替换里一律 `|| true`：set -E 会把 ERR 陷阱带进命令替换，head 截断触发的 SIGPIPE 不能误判为准备失败。
-tree_status() { git -C "$TREE" status --porcelain --untracked-files=all 2>&1 | head -n "${1:-1000000}" || true; }
+tree_status() { git --no-optional-locks -C "$TREE" status --porcelain --untracked-files=all 2>&1 | head -n "${1:-1000000}" || true; }
 echo "test-tree HEAD=${TREE_HEAD} status=[$(tree_status)]"
 echo "=== 树外字节码缓存 ${PYC} $(utc_now)"
 # 执行器的固定 PATH（用途见下方执行环境一段）。预编译必须与执行器是同一个解释器：.pyc 文件名带解释器版本标签，
 # 按调用方 PATH 预编译、执行器再按固定 PATH 解析出另一个 python3 时（如本机 Homebrew 3.14 与 /usr/local/bin 的 3.13），
 # 执行器找不到缓存（UM-21）；只有一个 Python 的 ARM64 与 CI 碰不到。
 EXEC_PATH=/usr/local/go/bin:/opt/node-v20/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-env -u PYTHONPATH PATH="$EXEC_PATH" python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
+if [ "${#INPUT_SCOPE_ARGS[@]}" -eq 0 ] && [ "$REUSE_WORKSPACE" = false ]; then
+  env -u PYTHONPATH PATH="$EXEC_PATH" python3 "$DRV/bytecode_cache.py" "$PYC" "$TREE/tools" | tail -n 1 | cut -c1-300
+else
+  echo "收窄复验保留原字节码缓存，由严格轨迹核对实际读取及快照；不重新预编译"
+fi
 
 # 部署绑定：数据根部署的必须就是本提交。含 pre-A3 的组合必做（入口门禁验的是测试树，pre-A3 跑的是数据根的受管树）；
 # 其余组合带 --require-deployed 时也做（后台验证据此把结论绑定到这次部署，E4-01）。设置 DEPLOY（最新部署收据）。
@@ -245,19 +288,40 @@ for name in $(compgen -e); do
   case "$name" in GO*|CGO_*|DOCKER_*|NODE_*|PNPM_*|npm_config_*|COREPACK_*) EXEC_ENV+=("$name=${!name}") ;; esac
 done
 EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
+# C-02：三组后端测试共用一次生产包预编译；每个工作根独立缓存，承接入口不改动来源缓存。
+GO_WARMUP_ACTIVE=false
+if [ "$GO_WARMUP" = auto ] && [ -z "$FULL_SET_REQUEST" ] && { [ "$PLAN_PROFILE" = entry ] || [ "$PLAN_PROFILE" = full-gates ]; }; then
+  GO_WARMUP_ACTIVE=true
+  EXEC_ENV+=("GOCACHE=${GOCACHE:-$WORK/go-build-cache}" "GOMODCACHE=${GOMODCACHE:-$WORK/go-mod-cache}" "GOTMPDIR=${GOTMPDIR:-$WORK/go-tmp}")
+fi
 GATES_STATUS=passed
 if [ "$RUN_GATES" = true ]; then
 mkdir -p "$STORE"; chmod 700 "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \
-    --with-gates "$WITH_GATES" --output "$OUT/gates-manifest.json" ) | cut -c1-400
+    --with-gates "$WITH_GATES" ${INPUT_SCOPE_ARGS[@]+"${INPUT_SCOPE_ARGS[@]}"} ${AUDIT_POLICY_ARGS[@]+"${AUDIT_POLICY_ARGS[@]}"} --output "$OUT/gates-manifest.json" ) | cut -c1-400
+if [ "$GO_WARMUP_ACTIVE" = true ]; then
+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/go_compile_warmup.py" --tree "$TREE" --work "$WORK" \
+      --manifest "$OUT/gates-manifest.json" --output "$OUT/go-compile-warmup.json" \
+      --plan-output "$OUT/go-compile-warmup-plan.json" --launcher-json "$LAUNCHER" )
+  # 独立准备记录纳入本轮总耗时；调度器处理整机预约和子进程，不把编译写成门禁通过。
+  ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/unit_executor.py" run-commands \
+      --manifest "$OUT/go-compile-warmup-plan.json" --out-dir "$OUT/go-compile-warmup-executor" \
+      --shared-caches off ) > "$OUT/go-compile-warmup-executor.log" 2>&1 < /dev/null \
+      || { echo "ENTRY_GATES_ABORTED：Go 预热失败，正式门禁尚未派发；日志 $OUT/go-compile-warmup-executor.log"; exit 3; }
+fi
 echo "=== 一次运行：统一调度执行器 run-gates（模式 ${MODE}，记录库 ${STORE}，记录 ${OUT}/executor）$(utc_now)"
 EXEC_RC=0
 AUDIT_ARGS=()
-if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS=(--audit-reads --audit-data-root "$D"); echo "读集审计：正式执行的单元包在 strace 下（数据根 ${D}）"; fi
+if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS=(--audit-reads --audit-data-root "$D"); echo "读集检查：登记覆盖的单元严格取证；未登记项仅在显式重跑策略下执行（数据根 ${D}）"; fi
+if [ "$AUDIT_STRICT" = true ]; then AUDIT_ARGS+=(--audit-strict); fi
+if [ -n "$AUDIT_HOST_INPUTS" ]; then AUDIT_ARGS+=(--audit-host-inputs "$AUDIT_HOST_INPUTS"); fi
+if [ -n "$FULL_SET_REQUEST" ]; then
+  FULL_SET_ARGS=(--full-set-request "$FULL_SET_REQUEST" --full-set-deployment "$DEPLOY")
+fi
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
-    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
+    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240
 if [ "$EXEC_RC" -gt 1 ] || [ ! -f "$OUT/executor/summary.json" ]; then
   echo "ENTRY_GATES_ABORTED：执行器出错（rc=${EXEC_RC}），没有门禁结论；日志 ${OUT}/executor.log"
@@ -307,8 +371,12 @@ fi
 AFTER_STATUS=$(tree_status 5)
 trap - ERR
 if [ "$GATES_STATUS" = passed ] && [ "$PRE_A3_OK" = true ] && [ -z "$AFTER_STATUS" ]; then
-  rm -rf "$TREE" "$PYC"
-  echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；测试树与字节码缓存已删除"
+  if [ "$AUDIT_STRICT" = true ] || [ -n "$FULL_SET_REQUEST" ]; then
+    echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；保留严格审计的测试树与缓存供后续复核 ${WORK}"
+  else
+    rm -rf "$TREE" "$PYC"
+    echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；测试树与字节码缓存已删除"
+  fi
   echo "ENTRY_GATES_DONE rc=0 subject=${SUBJECT} out=${OUT}"
   exit 0
 fi

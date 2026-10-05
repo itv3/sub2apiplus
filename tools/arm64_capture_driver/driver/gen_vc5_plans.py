@@ -7,15 +7,33 @@ import json, os, pathlib, sys
 sys.dont_write_bytecode = True
 from driver_config import load_config, candidate_job_ids
 CONFIG = load_config()
+from vc5_admission import Admission, ManagedFacts
+try:
+    ADMISSION = Admission(CONFIG, ManagedFacts(CONFIG)).consume()
+except Exception:
+    raise SystemExit("VC-5 准入收据复核失败，禁止生成计划")
+CONFIG.update(ADMISSION["effective_parameters"])
+os.environ.update(ADMISSION["effective_parameters"])
 
 out = pathlib.Path(sys.argv[1]); cid = sys.argv[2]; cand = sys.argv[3]; image_id = sys.argv[4]; build_id = sys.argv[5]
+if (cid, cand, image_id, build_id) != tuple(ADMISSION["bindings"][key] for key in ("campaign", "candidate", "image_id", "build_id")):
+    raise SystemExit("VC-5 计划参数未绑定当前准入收据")
 attempt = sys.argv[6] if len(sys.argv) > 6 else None
 seal_sha = sys.argv[7] if len(sys.argv) > 7 else None
-D = os.environ["D"]; NEW = f"{D}/evidence/campaigns/{cid}"; TOOLS = f"{D}/tools/official_client_capture"
-B = os.environ["CANDIDATE_DIR"]
-BUILD_RECEIPT = f"{NEW}/candidates/{cand}/build-receipt.json"
-PROFILE_ID = os.environ["PROFILE_ID"]
-PROFILE_DIGEST = os.environ["PROFILE_DIGEST"]
+from phase_context import resolve
+CONTEXT = resolve(CONFIG, mode="attempt" if attempt else "build", attempt_id=attempt)
+PARAMS = CONTEXT["parameters"]
+if (image_id, build_id) != (PARAMS["IMAGE_ID"], PARAMS["BUILD_ID"]):
+    raise SystemExit("VC-5 计划镜像或构建与当前收据不一致")
+B = CONFIG["B"]
+if os.environ.get("CANDIDATE_DIR", B) != B:
+    raise SystemExit("CANDIDATE_DIR 与本轮候选实物目录不一致")
+if out != pathlib.Path(CONFIG["W"]):
+    raise SystemExit("VC-5 计划输出目录必须等于本轮 W")
+D = CONFIG["D"]; NEW = CONFIG["NEWDIR"]; TOOLS = CONFIG["TOOLS"]
+BUILD_RECEIPT = PARAMS["BUILD_RECEIPT"]
+PROFILE_ID = PARAMS["PROFILE_ID"]
+PROFILE_DIGEST = PARAMS["PROFILE_DIGEST"]
 JOBS = candidate_job_ids(pathlib.Path(NEW), cand) if attempt else []
 
 
@@ -33,6 +51,10 @@ out.mkdir(parents=True, exist_ok=True)
 
 
 def write(name, payload):
+    # reused 阶段只读；不为其生成写动作，也不沿用目录里上一基线的计划。
+    stages = {"candidate-seal": "CAPTURE", "candidate-run": "CAPTURE", "compare": "COMPARE", "assert-rules": "ASSERTIONS", "acceptance": "ACCEPT"}
+    if any(not PARAMS[stages[item] + "_WRITE"] for item in payload["execute_item_ids"]):
+        return
     (out / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -42,12 +64,13 @@ run_cmd = py + ["capture-candidate", "run"] + ref + [
     "--profile-id", PROFILE_ID, "--profile-digest", PROFILE_DIGEST, "--candidate-purpose", "production_replacement",
     "--max-wall-seconds", "21600", "--acknowledge-live-requests",
 ]
-write("action-plan-vc5-run.json", {"schema_version": "codex-upgrade-vc-action-plan/v1", "execute_item_ids": ["candidate-run"], "reuse_item_ids": [],
+if not attempt:
+    write("action-plan-vc5-run.json", {"schema_version": "codex-upgrade-vc-action-plan/v1", "execute_item_ids": ["candidate-run"], "reuse_item_ids": [],
       "actions": [{"action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600, "command": run_cmd, "item_ids": ["candidate-run"]}]})
 if attempt:
     seal_base = py + ["capture-candidate", "seal"] + ref + ["--build-receipt", BUILD_RECEIPT, "--candidate-purpose", "production_replacement", "--attempt-id", attempt]
     write("action-plan-vc5-seal-checkpoint.json", plan("candidate-seal", [action("candidate-seal-checkpoint", "VC-5:capture-candidate-seal-checkpoint", seal_base, "candidate-seal", 900)], JOBS))
-    A = f"{NEW}/candidates/{cand}/attempts/{attempt}/evidence"
+    A = PARAMS["EV"]
     assertion = ["/usr/bin/env", f"CAMPAIGN_DIR={NEW}", f"ATTEMPT_ID={attempt}", "SIDE=candidate", f"CANDIDATE_ID={cand}",
                  f"CANDIDATE_SOURCE_ROOT={B}/source", f"REPO_ROOT={D}", f"TOOL_ROOT={TOOLS}", "/usr/bin/bash", f"{D}/tools/prepare_assertion_bundle.sh"]
     preview = seal_base + [
@@ -69,15 +92,15 @@ if attempt:
             action("candidate-seal-c-approve", "VC-5:capture-candidate-seal-approve", seal_base + ["--approve-seal-sha256", seal_sha], "candidate-seal", 1800),
             action("candidate-seal-d-compare", "VC-5:compare", py + ["compare"] + ref, "compare", 1800)]}
         write("action-plan-vc5-seal-approve-compare.json", approve_compare)
-    # 改造 5：逐规则断言 builder 在正式 Campaign 布局下必须由父监督器派发（清单冻结候选、评估基线 b0 与 evaluator 摘要），
-    # 编译侧自动为该动作冻结 output_bindings（assertions/<cid>/checkpoints 与 evaluation-run.json）。
-    AS = f"{D}/control/{cid}-assertions"
+    # 断言冻结当前基线；读来源与可写目标分离，reused 阶段不生成写计划。
+    AS = PARAMS["ASSERTION_CONFIG_DIR"]
+    assert_root = PARAMS["ASSERTIONS_WRITE"]
     assert_cmd = ["/usr/bin/python3", f"{TOOLS}/build_rule_assertion_results.py", "--config", f"{AS}/config.json",
-                  "--output", f"{NEW}/assertions/{cand}/results.json", "--results-dir", f"{NEW}/assertions/{cand}/machine",
-                  "--evaluation-baseline", "0", "--reuse-authority", "none"]
+                  "--output", f"{assert_root}/results.json", "--results-dir", f"{assert_root}/machine",
+                  "--evaluation-baseline", PARAMS["EVALUATION_BASELINE"], "--reuse-authority", "none"]
     write("action-plan-vc5-assert.json", plan("assert-rules", [action("candidate-assert", "VC-5:assert", assert_cmd, "assert-rules", 1800)], JOBS))
     write("action-plan-vc5-compare.json", plan("compare", [action("candidate-compare", "VC-5:compare", py + ["compare"] + ref, "compare", 1800)], JOBS))
     write("action-plan-vc5-accept.json", plan("acceptance", [action("candidate-accept", "VC-5:accept", py + ["accept"] + ref + [
-        "--assertions", f"{NEW}/assertions/{cand}/results.json", "--external-gate-root", f"{D}/control/{cid}-candidate-gates",
+        "--assertions", PARAMS["ASSERTIONS_RESULT"], "--external-gate-root", PARAMS["GATE_ROOT"],
         "--external-gate-receipt", "candidate-gates.receipt.json"], "acceptance", 1800)], JOBS))
 print("plans ->", out, sorted(p.name for p in out.iterdir() if p.name.startswith("action-plan-vc5")))

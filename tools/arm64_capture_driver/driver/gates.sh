@@ -24,7 +24,7 @@ if [ "$MODE" = full-regression-isolated ]; then
   # 在私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机（无此路径）环境一致。
   export CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT
   export CAPTURE_TYPESCRIPT_MODULE=$T/frontend/node_modules/typescript/lib/typescript.js
-  # 树外只读字节码缓存（第 67 项，原因同 vc5-gate-target.sh）：先把标准库与测试树 tools 预编译进本次重建的缓存目录
+  # 树外只读字节码缓存（原因同 vc5-gate-target.sh）：先把标准库与测试树 tools 预编译进本次重建的缓存目录
   # （失败即停），make test 期间只读使用，测试树不留 __pycache__。
   PYC="$RUNROOT/pycache-full-regression"
   env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300

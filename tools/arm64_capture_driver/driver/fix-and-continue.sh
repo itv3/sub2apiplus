@@ -1,5 +1,5 @@
 #!/bin/bash
-# 修好接着跑一条命令（第 35 项，老板 2026-09-28 批准）：把每轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"编排成一条命令。
+# 修好接着跑一条命令：把每轮"修复 → 部署 → 登记 → 对账 → 批准 → 重派"编排成一条命令。
 #
 # 此前每轮由人按 sed 复制改写 upload-rN（deploy／postdeploy／resume）与 repair-rN（实测／回归收据／根因修复登记）
 # 十几个步骤逐步执行，人工间隙 15～30 分钟、容易漏改。本脚本随驱动清单受管，每轮只换一份轮次参数文件：
@@ -32,8 +32,8 @@
 #                     父 run 对账提示"属于 attempt 中断"时按提示改走 reconcile-attempt；目标 attempt 留给下一步。
 #                     对账判"项目总账根因达上限"暂停且参数给了登记材料（与 reconcile-attempt 同一判据）时，在本步骤内按
 #                     repair 步骤同一路径登记（root_cause_repair inline），再对该对象重新对账一次，仍暂停即停下；没给材料
-#                     停下时续跑步骤就是本步骤（第 59 项）。上次因对账判暂停而停下的对象（任何暂停种类，收据虽已写）续跑
-#                     时重新对账；暂停含 deadline 时续跑步骤是 pre-extend（先延期再对账），其余是本步骤（第 62 项）
+#                     停下时续跑步骤就是本步骤。上次因对账判暂停而停下的对象（任何暂停种类，收据虽已写）续跑
+#                     时重新对账；暂停含 deadline 时续跑步骤是 pre-extend（先延期再对账），其余是本步骤
 #   reconcile-attempt 目标 attempt 对账；账务暂停／环境污染／永久停线／请求预算／需审核一律停下，不越权
 #   repair            给了 REPAIR_ROOT_CAUSES 才登记根因修复（同一修复提交已登记则跳过；回归收据缺失时可由草稿补本轮
 #                     实测日志与部署收据写一次）；对账因根因达上限暂停而没给材料时停下（root_cause_repair step）
@@ -43,12 +43,12 @@
 #   accepted          已批准预览仍被接受（授权未生效时不做，避免接受检查顺带写授权事件）
 #   recover           后台启动 vc5-recover.sh（旧 vc5-recover.out／vc5-run-batch.out 改名留档；本轮已启动过则不重复派发）
 #
-# 相对设计稿（batch3-r1-r3-r5-design.md 第 35 项）的顺序偏离：
+# 步骤顺序的约束依据：
 #   1. 根因修复登记放在对账之后、批准之前（根因要先由对账入账；登记后批准步骤的重新对账会验证是否解除暂停）；
 #   2. 延期不放在"批准与授权之间"：延期 apply 会在 Campaign 计时账本追加 deadline_extended 事件，授权消费预览时要求账本
 #      head 仍是预览冻结的 head（否则"恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"），该位置必然让授权失败；
 #      改为对账前 pre-extend ＋ 授权后 extend 两处，同一参数、各自幂等；
-#   3. 第 59 项：reconcile-runs 也会遇"项目总账根因达上限"暂停，但它在 repair 之前，停下后 --from repair／reconcile-attempt
+#   3. reconcile-runs 也会遇"项目总账根因达上限"暂停，但它在 repair 之前，停下后 --from repair／reconcile-attempt
 #      都过不了前序核对。不调步骤顺序（repair 仍须在 reconcile-attempt 入账之后），而把登记抽成共用函数 root_cause_repair：
 #      repair 步骤与 reconcile-runs 步骤内登记走同一判定、同一命令、同一核对。
 #
@@ -64,13 +64,14 @@ export PYTHONDONTWRITEBYTECODE=1
 unset PYTHONPATH
 
 usage() {
-  echo "用法：bash $0 <轮次参数文件> [--from <步骤>] [--list]" >&2
+  echo "用法：bash $0 <轮次参数文件> [--from <步骤>] [--list|--dry-run]" >&2
   echo "步骤：$(python3 "$FCPY" steps < /dev/null | tr '\n' ' ')" >&2
 }
 
 PARAMS_ARG=""
 FROM=""
 LIST=0
+DRY_RUN=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --from)
@@ -78,6 +79,7 @@ while [ "$#" -gt 0 ]; do
       FROM="$2"; shift 2 ;;
     --from=*) FROM="${1#--from=}"; shift ;;
     --list) LIST=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "未知选项：$1" >&2; usage; exit 2 ;;
     *)
@@ -86,6 +88,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$PARAMS_ARG" ]; then usage; exit 2; fi
+if [ "$DRY_RUN" = 1 ]; then exec python3 -B "$FCPY" dry-run --params "$PARAMS_ARG"; fi
 if [ "$(id -u)" != 0 ]; then echo "必须以 root 执行（部署、属主收口与受管工具都要求 root）" >&2; exit 2; fi
 
 EXPORTS=$(python3 "$FCPY" load-params "$PARAMS_ARG" < /dev/null) || exit 2
@@ -113,19 +116,11 @@ if [ "$VALID" != 1 ]; then echo "未知步骤：${FROM}（可选：$(echo $STEPS
 
 mkdir -p "$OUT/raw"
 chmod 700 "$OUT" "$OUT/raw"
-# 同一轮次只允许一个实例：mkdir 原子锁；持有者已不在时回收陈旧锁。
-LOCK="$OUT/.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
-    echo "本轮已有 fix-and-continue 在运行（PID ${HOLDER}），拒绝并发" >&2
-    exit 3
-  fi
-  rm -rf "$LOCK"
-  mkdir "$LOCK"
-fi
-printf '%s\n' "$$" > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+# 同一轮次只允许一个实例。子进程对继承的同一打开描述符加锁，父 shell 持有到退出；
+# 不删除锁文件，不通过空 PID 猜测陈旧锁；脱离当前会话的后台作业显式关闭描述符。
+LOCK="$OUT/.round.lock"
+exec 9>>"$LOCK"
+python3 -B "$DRV/fix_safety.py" 9 "$LOCK" "$OUT/.lock" || exit $?
 
 if [ "$FROM" != deploy ]; then
   python3 "$FCPY" check-from --params "$PARAMS" --step "$FROM" < /dev/null || exit 2
@@ -175,9 +170,11 @@ wait_marker() {
 }
 
 step_deploy() {
+  decide package
   decide deploy-state
   if skipped; then return 0; fi
   if [ "$ACTION" = deploy ]; then
+    decide human-approval --mode deploy --subject "$HEAD_COMMIT"
     git -C "$SRC" bundle verify "$BUNDLE" > "$OUT/raw/$TS-deploy-bundle-verify.log" 2>&1 < /dev/null \
       || fail_step "bundle 校验失败：$BUNDLE" "重新上传 bundle 并核对 sha256 清单后 --from deploy"
     local ref="refs/heads/deploy-$ROUND-$TS" got
@@ -201,7 +198,7 @@ step_deploy() {
     { chown -R root:root "$ST" && chmod -R go-w "$ST"; } || fail_step "staging 属主／权限收口失败" "人工核对 $ST"
     decide deploy-launch --log "$LOG" --pid-file "$PIDF"
     setsid -f bash -c 'echo "$$" > "$2"; cd "$0" && python3 tools/arm64_supervised_deploy.py --staging-root "$0" --production-root "$3/tools/official_client_capture" --production-doc-root "$3/docs" --control-root "$3/control" > "$1" 2>&1; echo "exit=$?" >> "$1"' \
-      "$ST" "$LOG" "$PIDF" "$D" < /dev/null > /dev/null 2>&1
+      "$ST" "$LOG" "$PIDF" "$D" < /dev/null > /dev/null 2>&1 9>&-
     echo "  [deploy] 受监督部署已在后台启动：$LOG"
   fi
   if [ "$ACTION" != verify ]; then
@@ -241,7 +238,7 @@ step_item_tests() {
   decide tests-state
   if skipped; then return 0; fi
   if [ "$ACTION" = run ]; then
-    setsid -f python3 "$FCPY" run-tests --params "$PARAMS" --log "$LOG" --pid-file "$PIDF" < /dev/null > /dev/null 2>&1
+    setsid -f python3 "$FCPY" run-tests --params "$PARAMS" --log "$LOG" --pid-file "$PIDF" < /dev/null > /dev/null 2>&1 9>&-
     echo "  [item-tests] 实测已在后台启动：$LOG"
   fi
   wait_marker "$LOG" "$ITEM_TESTS_MAX_SECONDS" "$PIDF" \
@@ -281,6 +278,7 @@ step_evolution() {
   if skipped; then return 0; fi
   managed codex_upgrade evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"
   decide evolution-preview --raw "$RAW"
+  decide human-approval --mode evolution --subject "$REVIEW_SHA256"
   managed codex_upgrade evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \
     --approve-sha256 "$REVIEW_SHA256" --approved-by "$APPROVER"
   decide evolution-apply --raw "$RAW"
@@ -296,6 +294,7 @@ extend_round() {
   managed codex_upgrade extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \
     --new-deadline-at-utc "$EXTEND_DEADLINE" --reason "$EXTEND_REASON"
   decide extend-preview --raw "$RAW" --mode "$mode"
+  decide human-approval --mode deadline-extension --subject "$EXT_SHA256"
   managed codex_upgrade extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \
     --approve-sha256 "$EXT_SHA256" --approved-by "$APPROVER"
   decide extend-apply --raw "$RAW" --mode "$mode"
@@ -303,10 +302,10 @@ extend_round() {
 step_pre_extend() { extend_round pre; }
 step_extend() { extend_round post; }
 
-# root_cause_repair <标签> <模式> [<对象类别> <对象>]：项目总账根因修复登记（第 59 项抽出，repair 步骤与 reconcile-runs 共用）。
+# root_cause_repair <标签> <模式> [<对象类别> <对象>]：项目总账根因修复登记（repair 步骤与 reconcile-runs 共用）。
 #   同一判定（repair-plan：待登记根因、同一修复提交已登记即跳过、回归收据由草稿补本轮实测日志与部署收据写一次并校验）、
 #   同一命令（record-root-cause-repair，参数逐字相同）、同一核对（repair-verdict：命令结果、登记后总账里必须有修复事件）。
-#   模式 step：repair 步骤，结果写 repair 步骤记录（第 35 项原行为）；
+#   模式 step：repair 步骤，结果写 repair 步骤记录（独立修复登记入口）；
 #   模式 inline：reconcile-runs 对账判"项目总账根因达上限"暂停时在步骤内登记，结果并入本步骤记录，停下的续跑步骤是本步骤；
 #     同一修复提交已登记时判定输出 REPAIR_ACTION=already，不再执行登记命令。
 root_cause_repair() {
@@ -393,12 +392,14 @@ step_approve() {
   # 批准摘要只取同一次运行刚生成的恢复预览输出（预览幂等：内容不变时返回同一份），从不复用旧文件里的摘要。
   managed codex_upgrade approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
   decide attempt-verdict --raw "$RAW" --mode approve-preview
+  decide human-approval --mode recovery-approve --subject "$REVIEW_SHA256"
   managed codex_upgrade approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"
   decide approve-verdict --raw "$RAW" --subject "$REVIEW_SHA256" --preview "$PREVIEW_PATH"
 }
 
 step_authorize() {
   decide need-preview
+  decide human-approval --mode recovery-authorize --subject "$REVIEW_SHA256"
   managed codex_upgrade authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"
   decide authorize-verdict --raw "$RAW" --preview "$PREVIEW" --subject "$REVIEW_SHA256"
 }
@@ -413,10 +414,11 @@ step_recover() {
   decide need-preview
   decide recover-state --preview "$PREVIEW"
   if skipped; then return 0; fi
+  decide recover-launch --preview "$PREVIEW"
   for f in vc5-recover.out vc5-run-batch.out; do
     if [ -e "$RUNROOT/$f" ]; then mv "$RUNROOT/$f" "$RUNROOT/$f.pre-$ROUND-$TS"; fi
   done
-  ARM64_VC_ENV="$VC_ENV" VC_STATE_DIR="$VC_STATE_DIR" setsid -f bash "$RECOVER_SCRIPT" "$PREVIEW" > "$RECOVER_LOG" 2>&1 < /dev/null
+  ARM64_VC_ENV="$VC_ENV" VC_STATE_DIR="$VC_STATE_DIR" setsid -f bash "$RECOVER_SCRIPT" "$PREVIEW" > "$RECOVER_LOG" 2>&1 < /dev/null 9>&-
   decide recover-started --preview "$PREVIEW" --log "$RECOVER_LOG"
   echo "VC5_RECOVER_STARTED $RECOVER_LOG"
 }

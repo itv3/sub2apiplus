@@ -277,7 +277,7 @@ class InheritanceDecisionTests(unittest.TestCase):
                 "policy_sha256": "p", "environment": self.environment, "environment_sha256": self.facts.environment_sha256,
                 "spec_sha256": "s", "inputs": self.inputs, "inputs_sha256": self.current.inputs_sha256, "test_ids": ["test_a.T.test_ok"],
                 "tests": {"test_a.T.test_ok": {"outcome": "passed"}}, "passed": True, "exit_code": 0, "signal": None, "timed_out": False,
-                "log": {"sha256": self.log_digest}, "started_at_utc": ur.utc_now(), "completed_at_utc": ur.utc_now()}
+                "log": {"sha256": self.log_digest}, "started_at_utc": ur.utc_now(), "completed_at_utc": ur.utc_now(), "inheritable": True}
         body.update(overrides)
         record = ur.seal_record(body)
         self.store.put_record(record)
@@ -304,6 +304,7 @@ class InheritanceDecisionTests(unittest.TestCase):
             "执行器": ({"executor": {"files": {"unit_executor.py": "old"}, "sha256": "old"}}, "执行器变了：unit_executor.py"),
             "过期": ({"completed_at_utc": "2026-01-01T00:00:00Z"}, "超过承接期限"),
             "日志": ({"log": {"sha256": "f" * 64}}, "日志不在记录库里"),
+            "来源禁用": ({"inheritable": False}, "来源记录明确不可承接"),
         }
         for index, (label, (overrides, expected)) in enumerate(cases.items()):
             with self.subTest(label):
@@ -442,6 +443,19 @@ class InheritanceEndToEndTests(unittest.TestCase):
         self.assertEqual((group["status"], group["expected_tests"], group["reported_tests"]), ("passed", 6, 6), "承接的单元照样参加全集核对")
         gates = {gate["gate_id"]: gate for gate in summary["gates"]}
         self.assertEqual(gates["test-capture-tools"]["inherited_units"], ["test_leaf", "test_other"])
+
+    def test_b09_invalid_full_set_request_reruns_all_and_records_fallback(self) -> None:
+        self._fix({"pkg/tests/test_fail_a.py": PASS, "pkg/tests/test_fail_b.py": PASS, "pkg/tests/test_fail_c.py": PASS}, "全绿")
+        self.assertEqual(self._run()[0], 0)
+        missing = self.base / "missing-full-set-request.json"
+        rc, summary, manifest = self._run("--full-set-request", str(missing))
+        self.assertEqual(rc, 0, summary)
+        self.assertEqual(manifest["mode"], "re-execute")
+        self.assertEqual(self._inherited(manifest), set(), "不得回到旧逐单元承接路径")
+        self.assertEqual(self._executed(manifest), set(manifest["planned_units"]))
+        self.assertEqual(manifest["full_set_decision"]["action"], "reexecute-all")
+        self.assertEqual(summary["full_set_decision"], manifest["full_set_decision"])
+        self.assertNotEqual(manifest["run_id"], json.loads((self.base / "out-1" / "unit-manifest.json").read_text())["run_id"])
 
     def test_comment_change_reruns_only_that_module_and_managed_change_reruns_all(self) -> None:
         self._fix({"pkg/tests/test_fail_a.py": PASS, "pkg/tests/test_fail_b.py": PASS, "pkg/tests/test_fail_c.py": PASS}, "全绿")

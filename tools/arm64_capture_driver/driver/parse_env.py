@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 REQUIRED_KEYS = (
-    "ROUND", "STAMP", "D", "RUNROOT", "NEW", "IN", "UP", "CAND", "B", "PREV_CANDIDATE", "HISTORY_TEST_TREE",
+    "ROUND", "STAMP", "D", "RUNROOT", "NEW", "IN", "UP", "CAND", "PREV_CANDIDATE", "HISTORY_TEST_TREE",
     "C", "DC", "RECEIPT", "BUNDLE", "BUNDLE_BRANCH", "OFFICIAL_CAMPAIGN", "OFFICIAL_STOP_LEDGER", "OFFICIAL_STOP_RECEIPT",
     "INPUT_RULE_MIGRATION", "INPUT_TARGET_SNAPSHOT", "PROJECT_DEADLINE_UTC", "STAGE_BUDGETS", "MIN_FREE_GIB",
     "FRONTEND_DEVIATION_APPROVED_BY", "PROFILE_ID", "PROFILE_DIGEST", "KILO_BIN", "KILO_VERSION", "KILO_SHA256",
@@ -32,6 +32,8 @@ REQUIRED_KEYS = (
 )
 # 路径有统一默认布局，已有部署可显式覆盖；不可推导的身份必须在使用它的阶段提供。
 OPTIONAL_KEYS = (
+    # B 由本轮 Candidate 派生；保留旧参数作为相等断言，禁止借它选择另一候选树。
+    "B",
     "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "TARGET_PACKAGE", "TARGET_CODE_MODE_HOST_SHA256",
     "CAPTURE_RUNTIME_IMAGE", "PREVIOUS_POLICY", "PRE_A3_CERTIFICATION", "GATE_MAPPING_INPUT",
     "RETIRE_VERSION", "HISTORICAL_SOURCE_ROOT", "JWTGEN_BIN", "EVIDENCE_DECISION",
@@ -40,6 +42,12 @@ OPTIONAL_KEYS = (
     "ENTRY_BUNDLE", "ENTRY_BRANCH", "ENTRY_COMMIT", "ENTRY_ROOT",
     # P0 收据（E2-07 固定步骤）的回退依据：上一版本可回退点的收据文件（如前序 Campaign 的画像目录晋升收据）。
     "P0_ROLLBACK_EVIDENCE",
+    # VC-5 补齐批准和 token 的最低剩余有效期；不继承外层残留批准。
+    "VC5_ADMISSION_APPROVAL", "VC5_ADMIN_TOKEN_MIN_SECONDS",
+    # B-10 只消费本轮显式请求；来源工作树／缓存须经过同提交与读集重放。
+    "VC5_TARGET_REQUEST", "VC5_TARGET_TREE", "VC5_TARGET_PYCACHE", "VC5_TARGET_RECORD_STORE",
+    # VC-4 只接受本轮显式网络模式和专项批准，不承接外层残留的 host 网络开关。
+    "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -48,6 +56,47 @@ FORBIDDEN = set("`;&|<>()\\\r\n")
 
 class EnvFileError(ValueError):
     pass
+
+
+def plain_path(value: str, label: str) -> Path:
+    """核对路径本身及所有已有父目录；不建目录、不解引用后再掩盖符号链接。"""
+
+    path = Path(value)
+    if not path.is_absolute() or str(path) != value or ".." in path.parts or path == Path("/"):
+        raise EnvFileError(f"{label} 必须是规范绝对路径，且不得含父目录跳转")
+    for part in (path, *path.parents):
+        if part.is_symlink():
+            raise EnvFileError(f"{label} 不得含符号链接：{part}")
+    return path
+
+
+def coordinates(values: dict[str, str]) -> dict[str, str]:
+    """初始化坐标只按显式选择派生，不宣称 Campaign 或候选已经存在、通过验收。"""
+
+    data = plain_path(values["D"], "D")
+    plain_path(values["RUNROOT"], "RUNROOT")
+    campaign = data / "evidence" / "campaigns" / values["NEW"]
+    candidate = data / "candidates" / values["CAND"]
+    if "B" in values and values["B"] != str(candidate):
+        raise EnvFileError("B 与本轮 D/candidates/CAND 不一致，拒绝旧候选路径")
+    roots = {
+        "B": str(candidate), "NEWDIR": str(campaign),
+        "W": str(data / "control" / values["IN"]),
+        "TOOLS": str(data / "tools" / "official_client_capture"),
+        "L": str(data / "control" / f"{values['UP']}-timing-ledger"),
+        "G": str(data / "control" / f"{values['NEW']}-candidate-gates"),
+        "AS": str(data / "control" / f"{values['NEW']}-assertions"),
+        "CAMPAIGN_CONTROL_ROOT": str(campaign / "control" / "vc"),
+        "CAMPAIGN_RECEIPT_ROOT": str(campaign / "control" / "vc" / "receipts"),
+        "CANDIDATE_EVIDENCE_ROOT": str(campaign / "candidates" / values["CAND"]),
+        "CANDIDATE_RECEIPT_ROOT": str(campaign / "control" / "vc" / "receipts" / values["CAND"]),
+    }
+    for key, value in roots.items():
+        path = plain_path(value, key)
+        if path.exists() and not path.is_dir():
+            raise EnvFileError(f"{key} 不是目录：{path}")
+    roots.update(ROUND_CONTEXT_STATE="initialization_coordinates", CANDIDATE_REVISION="", CANDIDATE_REVISION_ROOT="")
+    return roots
 
 
 def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set[str] | frozenset[str]) -> dict[str, str]:
@@ -93,6 +142,9 @@ def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set
         if not value:
             raise EnvFileError(f"第 {number} 行的值为空：{key}")
         values[key] = value
+    for key in ("VC5_TARGET_REQUEST", "VC5_TARGET_TREE", "VC5_TARGET_PYCACHE", "VC5_TARGET_RECORD_STORE"):
+        if key in values and (not values[key].startswith("/") or ".." in values[key].split("/")):
+            raise EnvFileError(f"{key} 必须是不含 .. 的绝对路径")
     return values
 
 
@@ -142,6 +194,22 @@ def parse(text: str) -> dict[str, str]:
         not values["P0_ROLLBACK_EVIDENCE"].startswith("/") or ".." in values["P0_ROLLBACK_EVIDENCE"].split("/")
     ):
         raise EnvFileError("P0_ROLLBACK_EVIDENCE 必须是不含 .. 的绝对路径")
+    if "VC5_ADMISSION_APPROVAL" in values and (
+        not values["VC5_ADMISSION_APPROVAL"].startswith("/") or ".." in values["VC5_ADMISSION_APPROVAL"].split("/")
+    ):
+        raise EnvFileError("VC5_ADMISSION_APPROVAL 必须是不含 .. 的绝对路径")
+    if "VC5_ADMIN_TOKEN_MIN_SECONDS" in values and (
+        not values["VC5_ADMIN_TOKEN_MIN_SECONDS"].isdigit() or int(values["VC5_ADMIN_TOKEN_MIN_SECONDS"]) < 1800
+    ):
+        raise EnvFileError("VC5_ADMIN_TOKEN_MIN_SECONDS 必须是至少 1800 的整数")
+    if values.get("VC4_BUILD_NETWORK", "default") not in {"default", "none", "host"}:
+        raise EnvFileError("VC4_BUILD_NETWORK 只能是 default、none 或 host")
+    if "VC4_BUILD_NETWORK_APPROVAL" in values and (
+        not values["VC4_BUILD_NETWORK_APPROVAL"].startswith("/") or ".." in values["VC4_BUILD_NETWORK_APPROVAL"].split("/")
+    ):
+        raise EnvFileError("VC4_BUILD_NETWORK_APPROVAL 必须是不含 .. 的绝对路径")
+    # 先核对根路径；lib.sh 只有解析成功后才允许建立 RUNROOT。
+    values["B"] = coordinates(values)["B"]
     return values
 
 
@@ -171,8 +239,10 @@ def derive(values: dict[str, str]) -> dict[str, str]:
         "JWTGEN_BIN": f"{data}/private-tools/jwtgen",
         "EVIDENCE_DECISION": "recapture",
         "ENTRY_ROOT": data,
+        "VC4_BUILD_NETWORK": "default",
     }
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
+    result.update(coordinates(values))
     return result
 
 

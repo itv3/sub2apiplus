@@ -26,12 +26,15 @@ for gate_id, src in (("check-egress-spec", local_dir), ("full-regression", local
         shutil.copyfile(src / f"{gate_id}.gate.json", gate_copy); gate_copy.chmod(0o600)
     evidence = [{"path": f"logs/{gate_id}.gate.json", "sha256": sha(gate_copy)}]
     assert meta["exit_code"] == 0, f"{gate_id} 退出码 {meta['exit_code']}"
-    gates.append({
+    gate = {
         "gate_id": gate_id, "command": meta["command"], "working_directory": meta["working_directory"],
         "host": meta["host"], "architecture": meta["architecture"], "started_at_utc": meta["started_at_utc"], "completed_at_utc": meta["completed_at_utc"],
         "exit_code": 0, "status": "passed", "passed_count": 1, "failed_count": 0, "skipped_count": 0,
         "stdout_sha256": digests["stdout"], "stderr_sha256": digests["stderr"], "evidence": evidence,
-    })
+    }
+    if gate_id == "target-platform" and meta.get("unit_execution"):
+        gate["unit_execution"] = meta["unit_execution"]
+    gates.append(gate)
 gates.sort(key=lambda g: g["gate_id"])
 identity = seal["identity"]
 subject = {

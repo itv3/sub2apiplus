@@ -60,6 +60,11 @@ if [[ $capture_host_root != /* || $capture_host_root == / ]]; then
   exit 1
 fi
 control_image_id=$(docker inspect -f '{{.Image}}' "$control_container")
+control_container_id=$(docker inspect -f '{{.Id}}' "$control_container")
+if [[ ! $control_container_id =~ ^[a-f0-9]{64}$ ]]; then
+  echo "控制容器 ID 非法，拒绝创建无归属的抓包容器。" >&2
+  exit 1
+fi
 if [[ ! $control_image_id =~ ^sha256:[a-f0-9]{64}$ ]]; then
   echo "控制容器镜像 ID 非法。" >&2
   exit 1
@@ -98,6 +103,8 @@ container_id=$(
     --label sub2apiplus.capture.role=direct \
     --label "sub2apiplus.capture.run_id=$run_id" \
     --label "sub2apiplus.capture.subject=$subject" \
+    --label "sub2apiplus.capture.control_id=$control_container_id" \
+    --pid "container:$control_container_id" \
     --network "container:$source_container" \
     --cap-add NET_ADMIN \
     --cap-add NET_RAW \

@@ -26,6 +26,7 @@ from pathlib import Path
 from tools.ci import entry_gates as eg
 from tools.ci import entry_steps as es
 from tools.ci import unit_executor as ue
+from tools.ci import unit_records as ur
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -100,6 +101,26 @@ class EntryGatesMakeChecksTests(unittest.TestCase):
 class EntryGatesPlanTests(unittest.TestCase):
     CHECKS = ["check-egress-spec-local-source", "test-official-client-control", "egress-spec-go-test", "egress-spec-version-leak"]
 
+    def test_audit_policy_preserves_gate_set_and_rejects_unknown_or_relaxed_declarations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); tree = _tree(root, self.CHECKS)
+            original = eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux")
+            unit_id = original["units"][0]["unit_id"]
+            declaration = {"host_paths": [str(tree / "Makefile")], "require_read_audit": True,
+                           "runtime_contract": {"schema_version": "unit-runtime-contract/v1",
+                           "temporary_root": str(root / "private" / "output"), "mask_roots": ["/root/oauth-capture"], "environment_paths": []}}
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {unit_id: declaration}}
+            manifest = eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux", audit_policy=policy)
+            self.assertEqual(manifest["gates"], original["gates"])
+            self.assertEqual(manifest["test_groups"], original["test_groups"])
+            self.assertEqual([unit["unit_id"] for unit in manifest["units"]], [unit["unit_id"] for unit in original["units"]])
+            self.assertEqual(manifest["units"][0]["inputs"], declaration)
+            for invalid in ({**policy, "default": "inherit"}, {**policy, "units": {"unknown": declaration}},
+                            {**policy, "units": {unit_id: {**declaration, "require_read_audit": False}}},
+                            {**policy, "units": {unit_id: {**declaration, "host_paths": ["/root/../input"]}}}):
+                with self.assertRaises(RuntimeError):
+                    eg.plan_gates(tree, profile="full-gates", launcher=LAUNCHER, platform="linux", audit_policy=invalid)
+
     def _pre_a3_units(self, root: Path, data_root: Path) -> Path:
         path = root / "pre-a3-units.json"
         path.write_text(json.dumps({"schema_version": eg.COMMANDS_SCHEMA, "staging_root": str(data_root / "staging" / "x"), "units": [
@@ -137,6 +158,10 @@ class EntryGatesPlanTests(unittest.TestCase):
             self.assertEqual([item["command"] for item in deploy["not_executed"]], [["/bin/bash", "deploy/tests/apple-container-test.sh"]])
             self.assertIn("BSD stat", deploy["not_executed"][0]["reason"])
             integration = next(unit for unit in full["units"] if unit["unit_id"] == "backend:integration")
+            syntax = next(unit for unit in full["units"] if unit["unit_id"] == "deploy:apple-container.sh-syntax")
+            self.assertEqual(syntax["env"], {"SHELL": "/bin/bash"})
+            script = next(unit for unit in full["units"] if unit["unit_id"] == "deploy:tests-docker-compose-security-test.sh")
+            self.assertNotIn("env", script)
             self.assertEqual(integration["env"], {"GOMAXPROCS": "2", "CI": "true"}, "没有 Docker 时失败而不是静默跳过")
             go_test = next(unit for unit in full["units"] if unit["unit_id"] == "backend:go-test")
             self.assertEqual((go_test["cores"], go_test["env"]), (0.7, {"GOMAXPROCS": "2"}), "按实测 CPU 占比排程，内部并行度另给")
@@ -545,6 +570,60 @@ class EntryGatesExportTests(unittest.TestCase):
             self.assertEqual([row["unit_id"] for row in summary["units"]], ["pre-a3:alpha", "pre-a3:beta"])
             self.assertTrue(all(row["kind"] == "formal" for row in summary["units"]))
             self.assertEqual(entry["pre_a3_executor_summary"], str(out / "pre-a3-executor-summary.json"))
+
+
+class EntryGatesScopeWorkspaceTests(unittest.TestCase):
+    """收窄复验保留已绑定实物，身份不符时不能通过重建或补装绕过。"""
+
+    def _fixture(self, root: Path):
+        tree = root / "tree"; tree.mkdir()
+        (tree / "input.txt").write_text("原输入\n")
+        git = ["git", "-C", str(tree), "-c", "user.name=读集验收", "-c", "user.email=scope@example.invalid", "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q", "-b", "codex/scope-fixture"], ["add", "."], ["commit", "-qm", "隔离验收"]):
+            subprocess.run(git + args, check=True)
+        head = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+        bundle = root / "input.bundle"
+        subprocess.run(git + ["bundle", "create", str(bundle), "codex/scope-fixture"], check=True)
+        cache = root / "pycache"; cache.mkdir(); (cache / "kept").write_text("原缓存")
+        return tree, cache, bundle, head
+
+    def test_workspace_validation_preserves_original_files_and_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); tree, cache, bundle, head = self._fixture(root)
+            # 相同内容的新时间戳会诱发普通 git status 刷新索引，核验必须禁止这类写入。
+            tracked = tree / "input.txt"; metadata = tracked.stat()
+            os.utime(tracked, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 2_000_000_000))
+            def snapshot():
+                return {str(path): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ctime_ns)
+                        for parent in (tree, cache) for path in parent.rglob("*") if path.is_file()}
+            before = snapshot()
+            report = eg.verify_scope_workspace(tree, cache, commit=head, bundle=bundle, branch="codex/scope-fixture")
+            self.assertEqual(report["status"], "passed")
+            self.assertFalse(report["workspace_rebuilt"])
+            self.assertTrue(ur.RepoIndex.load(tree).clean)
+            self.assertEqual(before, snapshot())
+
+    def test_missing_dirty_different_commit_or_bundle_ref_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); tree, cache, bundle, head = self._fixture(root)
+            for overrides in ({"commit": "f" * 40}, {"branch": "codex/other"}, {"bytecode_cache": root / "missing"}):
+                args = {"tree": tree, "bytecode_cache": cache, "commit": head, "bundle": bundle, "branch": "codex/scope-fixture", **overrides}
+                with self.assertRaises(ValueError):
+                    eg.verify_scope_workspace(**args)
+            (tree / "input.txt").write_text("未登记变更\n")
+            with self.assertRaisesRegex(ValueError, "未登记变更"):
+                eg.verify_scope_workspace(tree, cache, commit=head, bundle=bundle, branch="codex/scope-fixture")
+            self.assertEqual((tree / "input.txt").read_text(), "未登记变更\n", "失败不能重建或改写原树")
+
+    def test_parent_symlink_and_cache_inside_tree_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); tree, cache, bundle, head = self._fixture(root)
+            link = root / "link"; link.symlink_to(tree, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "符号链接"):
+                eg.verify_scope_workspace(link, cache, commit=head, bundle=bundle, branch="codex/scope-fixture")
+            inner = tree / "pycache"; inner.mkdir()
+            with self.assertRaisesRegex(ValueError, "测试树外"):
+                eg.verify_scope_workspace(tree, inner, commit=head, bundle=bundle, branch="codex/scope-fixture")
 
 
 class EntryGatesDriverCopyTests(unittest.TestCase):

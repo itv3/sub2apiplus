@@ -1,0 +1,50 @@
+{
+  "base_commit": "f802e96c3e6a7426495ce93b40c1a2919ede5f66",
+  "changed_path_count": 3,
+  "current_commit": "903268937826606b82037efb6c28ca1b5dd38b02",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5645,
+  "frozen_path_count": 2015,
+  "identity_sha256": "de09c7d9df606c29ea69360e5d3680bdd439c78174233fbfc1cfd1a9103ef4ac",
+  "issued_at_utc": "2026-10-05T18:35:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-c07-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "predecessor_sha256s": [
+        "1aabec275082a19525b0a641ecb0e5a3a02c896ad12c8cd407b0767df5d215b4"
+      ],
+      "reason": "C-07 测试卫生修复：中继 CLI 输出使用独立临时根，行为断言保持不变 path=tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-aux-workspace-routing-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-relay-task-retention-egress-horizon-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "10402ce506b15721ba330aca115e9f1be02a2d1368f848a59b2e52970b00008b"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/official_client_capture/tests/test_assertion_bundle_wiring.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
