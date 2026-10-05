@@ -555,8 +555,10 @@ def _capture_begin(run_dir: Path, state: Mapping[str, Any], *, operation: str,
         if (run_dir / "egress-pause.json").exists():
             raise RuntimeEgressPaused("出口已暂停，禁止启动采集")
         for previous in root.iterdir():
-            if previous.is_dir() and not (previous / "released.json").exists():
-                raise SupervisorError("存在未收尾采集，禁止重叠派发")
+            if previous.is_dir():
+                _validate_state_dir(previous, create=False)
+                if not _capture_released(previous, state):
+                    raise SupervisorError("存在未收尾采集，禁止重叠派发")
         scope = _validate_state_dir(root / secrets.token_hex(16), create=True)
         record = {"schema_version": CAPTURE_STOP_SCHEMA, "campaign_id": state["campaign_id"],
                   "owner_nonce": state["owner_nonce"], "operation": operation, "job_id": job_id,
@@ -591,6 +593,18 @@ def _capture_stop_one(before: Mapping[str, Any]) -> dict[str, Any]:
     return after
 
 
+def _capture_released(scope: Path, state: Mapping[str, Any]) -> bool:
+    path = scope / "released.json"
+    if not path.exists():
+        return False
+    release = _read_json(path)
+    binding = _capture_read_binding(scope, state)
+    if (release.get("binding_sha256") != binding["binding_sha256"]
+            or (scope / "stop-receipt.json").exists()):
+        raise SupervisorError("采集正常结束凭证与绑定不一致")
+    return True
+
+
 def _capture_stop(scope: Path, state: Mapping[str, Any], *, reason: str) -> dict[str, Any]:
     """停止保留实物，失败保持未决；同一绑定只生成一次终止收据，owner／monitor 共用。"""
 
@@ -604,7 +618,7 @@ def _capture_stop(scope: Path, state: Mapping[str, Any], *, reason: str) -> dict
                     or receipt.get("binding_sha256") != binding["binding_sha256"]):
                 raise SupervisorError("采集停止收据漂移")
             return receipt
-        if (scope / "released.json").exists():
+        if _capture_released(scope, state):
             return {"status": "released"}
         receipt: dict[str, Any] = {"schema_version": CAPTURE_STOP_SCHEMA,
             "reason": reason, "started_at_utc": _utc_now(), "status": "unconfirmed",
@@ -616,10 +630,16 @@ def _capture_stop(scope: Path, state: Mapping[str, Any], *, reason: str) -> dict
                            campaign_id=binding["campaign_id"], owner_nonce=binding["owner_nonce"])
             pause_path = scope.parent.parent / "egress-pause.json"
             receipt["egress_pause_sha256"] = _file_digest(pause_path) if pause_path.exists() else None
-            sidecars = _capture_sidecars(binding["container"]["id"])
+            sidecars_error = None
+            try:
+                sidecars = _capture_sidecars(binding["container"]["id"])
+            except (OSError, ValueError, KeyError, TypeError, SupervisorError) as error:
+                sidecars, sidecars_error = [], error
             # 附属容器共享控制容器的 PID 命名空间，控制 PID 1 退出时内核同时清理
             # 全部子进程；排队中的创建也不能再加入已经结束的命名空间。
             receipt["containers"].append(_capture_stop_one(binding["container"]))
+            if sidecars_error is not None:
+                raise SupervisorError("主采集已停止，但附属容器清单仍不可确认") from sidecars_error
             for sidecar in sidecars:
                 receipt["containers"].append(_capture_stop_one(sidecar))
             if _capture_sidecars(binding["container"]["id"]):
@@ -643,13 +663,13 @@ def _capture_stop_active(run_dir: Path, state: Mapping[str, Any]) -> None:
     for scope in sorted(root.iterdir()):
         if scope.is_dir():
             _validate_state_dir(scope, create=False)
-            if not (scope / "released.json").exists():
-                try:
+            try:
+                if not _capture_released(scope, state):
                     _capture_stop(scope, state, reason="runtime-egress-paused")
-                except (OSError, ValueError, SupervisorError):
-                    # 损坏的停止证据不得中断 monitor 对宿主进程的后续清理。
-                    # 原绑定保留且没有 released 标记，新派发仍失败关闭。
-                    continue
+            except (OSError, ValueError, SupervisorError):
+                # 损坏的停止证据不得中断 monitor 对宿主进程的后续清理。
+                # 原绑定保留，新派发继续拒绝损坏或未收尾的记录。
+                continue
 
 
 def _capture_release(scope: Path | None, state: Mapping[str, Any]) -> None:

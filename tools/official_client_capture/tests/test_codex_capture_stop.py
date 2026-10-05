@@ -172,6 +172,20 @@ class CaptureStopTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "命名空间"):
             self.begin()
 
+    def test_sidecar_inventory_failure_still_stops_primary_and_keeps_unconfirmed(self):
+        scope = self.begin()
+        self.sidecars.append({**self.container, "id": "d" * 64, "control_id": self.container["id"]})
+        receipt = supervisor._capture_stop(scope, self.state, reason="fixture")
+        self.assertEqual(receipt["status"], "unconfirmed")
+        self.assertEqual(self.stopped, [self.container["id"]])
+        self.assertEqual(receipt["containers"][0]["pid"], 0)
+
+    def test_forged_release_cannot_authorize_next_job(self):
+        scope = self.begin()
+        supervisor._write_json(scope / "released.json", {"binding_sha256": "e" * 64}, replace=False)
+        with self.assertRaisesRegex(supervisor.SupervisorError, "结束凭证"):
+            self.begin()
+
     def test_expired_control_window_cannot_start_another_docker_call(self):
         token = supervisor._CAPTURE_CONTROL_DEADLINE.set(time.monotonic() - 1)
         try:
