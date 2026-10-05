@@ -1,0 +1,106 @@
+{
+  "base_commit": "1257838d09d952b4022c3a6e5f169bed27762a34",
+  "changed_path_count": 16,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5632,
+  "frozen_path_count": 2015,
+  "identity_sha256": "75ab5e71dd677a4abc21aef92ba8594b446944995520d7d38142d613c6129434",
+  "issued_at_utc": "2026-10-05T14:41:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upgrade-b10-20261005-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "6cea115be2c892dd8bd61b81e6521adfc617988f845579afaf7afc20478f9232"
+      ],
+      "reason": "B-10 目标平台单元承接合同与正式证据重放，保留旧收据只读重放身份 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "302c9a5d5f5f77299fb1be18e7acba954eef84d8ac962144552731a1766cfb8f"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+      "predecessor_sha256s": [
+        "83f9909721ae659ec4cdff7a381533506077c6607739588d9052e377d1d221af"
+      ],
+      "reason": "B-10 目标平台单元承接合同与正式证据重放，保留旧收据只读重放身份 path=tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "35dd63ba8e2419b902e490fa6f49799c80664a5048508cc6c9a4cb6f2cc07e5b"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "503ea780b32472569a3eedb19dca48d944f3438a593d03c22a824e920e56afbb"
+      ],
+      "reason": "B-10 目标平台单元承接合同与正式证据重放，保留旧收据只读重放身份 path=tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00824c12608f1af16ca8994b2ddad87e3c19488128d0944f502be28aac493056"
+    }
+  ],
+  "unregistered_path_count": 13,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/build_gate_facts.py",
+    "tools/arm64_capture_driver/driver/full_set_receipt.py",
+    "tools/arm64_capture_driver/driver/parse_env.py",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/driver/unit_records.py",
+    "tools/arm64_capture_driver/driver/vc5-accept.sh",
+    "tools/arm64_capture_driver/driver/vc5-gate-target.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/full_set_receipt.py",
+    "tools/ci/unit_executor.py",
+    "tools/ci/unit_records.py",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

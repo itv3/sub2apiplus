@@ -288,6 +288,46 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         self.assertEqual(finalized["phase"], receipt.CANDIDATE_PHASE)
         self.assertEqual(finalized["status"], "passed")
 
+    def _target_unit_facts(self):
+        from tools.official_client_capture.tests import test_ci_target_platform_gate as target_tests
+        case = target_tests.TargetPlatformGateTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        proof = case.target_evidence()
+        path = self._write("target-units/evidence.json", proof)
+        facts = self._facts(receipt.CANDIDATE_PHASE)
+        facts["subject"].update(**case.request["target"],
+                                candidate_image_reference="registry/sub2api@" + case.request["target"]["candidate_image_id"])
+        gate = next(row for row in facts["gates"] if row["gate_id"] == "target-platform")
+        gate.update(command=target_tests.target.COMMAND, architecture="linux/arm64",
+                    unit_execution={"path": "target-units/evidence.json", "sha256": self._digest(path)})
+        return case, facts, gate
+
+    def test_target_units_finalize_replay_and_expired_new_consumption(self):
+        case, facts, _gate = self._target_unit_facts()
+        self._write("unit-facts.json", facts)
+        with mock.patch.object(receipt.time, "time", return_value=case.now):
+            finalized = receipt.finalize(self.root, "unit-facts.json", "unit-receipt.json")
+        gate = next(row for row in finalized["effective_gates"] if row["gate_id"] == "target-platform")
+        self.assertNotEqual(gate["command"], ["make", "test"])
+        self.assertIn("unit_execution", gate)
+        with mock.patch.object(receipt.time, "time", return_value=case.now + 86400):
+            self.assertEqual(receipt.replay(self.root, "unit-receipt.json"), finalized)
+            with self.assertRaises(receipt.GateReceiptError):
+                receipt.build_receipt(self.root, "unit-facts.json")
+
+    def test_target_units_cannot_masquerade_as_fresh_make_test(self):
+        case, facts, gate = self._target_unit_facts()
+        gate["command"] = ["make", "test"]
+        self._write("unit-facts.json", facts)
+        with mock.patch.object(receipt.time, "time", return_value=case.now), self.assertRaises(receipt.GateReceiptError):
+            receipt.build_receipt(self.root, "unit-facts.json")
+
+    def test_target_verifier_is_pinned_and_cannot_be_selected_by_evidence(self):
+        with mock.patch.object(receipt, "TARGET_VERIFIER_SHA256S", {"target_platform_gate.py": "0" * 64}):
+            with self.assertRaises(receipt.GateReceiptError):
+                receipt._target_gate_verifier()
+
     def test_post_promotion_binds_acceptance_and_promotion(self) -> None:
         self._write("post-facts.json", self._facts(receipt.POST_PROMOTION_PHASE))
         finalized = receipt.finalize(self.root, "post-facts.json", "post-receipt.json")

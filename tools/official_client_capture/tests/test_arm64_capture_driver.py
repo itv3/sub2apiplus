@@ -1403,6 +1403,30 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertFalse((gate / "logs" / "target-platform.gate.json").exists())
             self.assertEqual(list(tree.rglob("__pycache__")), [])
 
+    def test_explicit_target_request_uses_unit_executor_and_requires_evidence(self) -> None:
+        for emit in (True, False):
+            with self.subTest(emit=emit), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, drv, tree, make_probe, env = self._gate_fixture(root)
+                with fixture.env_file.open("a") as handle:
+                    handle.write(f'VC5_TARGET_REQUEST="{root}/target-request.json"\n')
+                helper = drv / "target_platform_gate.py"
+                helper.write_text(
+                    "import sys, os, json\nfrom pathlib import Path\n"
+                    "if sys.argv[1] == 'deployment':\n    print('/isolated/deployment.json')\nelse:\n"
+                    "    assert 'CODEX_UPGRADE_IDENTITY_MEMO' not in os.environ\n"
+                    "    out = Path(sys.argv[sys.argv.index('--out') + 1]); out.mkdir()\n"
+                    + ("    (out / 'evidence.json').write_text(json.dumps({'fixture': True}))\n" if emit else ""))
+                gate = root / "gate"
+                result = _run(drv / "vc5-gate-target.sh", "20260928T000000Z-0123456789abcdef", str(gate), str(tree), env=env, cwd=root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                meta = json.loads((gate / "logs/target-platform.gate.json").read_text())
+                self.assertFalse(make_probe.exists(), "显式单元调度不得额外执行整条 make test")
+                self.assertEqual(meta["command"], ["python3", "-B", "tools/ci/target_platform_gate.py", "run"])
+                self.assertEqual(meta["exit_code"], 0 if emit else 3)
+                self.assertEqual("unit_execution" in meta, emit)
+
 
 def _git(cwd: Path, *arguments: str) -> str:
     """测试用 git：固定提交身份、关掉签名与钩子，不读开发机的个人配置差异。"""
@@ -1682,7 +1706,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             # E3-01：执行器在白名单环境里运行，看不到本轮参数（数据根坐标、认证坐标等）；缺省全集通过、记录库在数据根之外。
             self.assertFalse({"D", "STAMP", "RUNROOT", "ARM64_VC_ENV", "SHIM_RECORD"} & set(call["env_keys"]), call["env_keys"])
             self.assertTrue({"PATH", "HOME", "PYTHONPATH", "PYTHONPYCACHEPREFIX", "CAPTURE_TYPESCRIPT_MODULE"} <= set(call["env_keys"]))
-            self.assertEqual(call["args"][call["args"].index("--mode") + 1], "full-set-pass")
+            self.assertEqual(call["args"][call["args"].index("--mode") + 1], "re-execute")
             self.assertEqual(call["args"][call["args"].index("--record-store") + 1], str(fixture.data_root.parent / "unit-records"))
             self._untouched_vc5_locations(fixture)
             # 通过后删掉测试树与缓存、释放锁；数据根与历史测试树不留字节码。

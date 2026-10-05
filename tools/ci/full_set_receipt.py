@@ -268,6 +268,43 @@ def issue(source: Mapping[str, Any], context: Mapping[str, Any], clock: Mapping[
     return {**body, "receipt_sha256": digest(body)}
 
 
+def authorize(request: Mapping[str, Any], *, now: float, request_schema: str = "full-set-request/v1",
+              approval_scope: str = CONTRACT) -> tuple[dict, dict, dict, dict, Any]:
+    """B-09／B-10 共用来源、身份、时钟、撤销与批准校验；不替调用方选择目标单元。"""
+    if request.get("schema_version") != request_schema or type(request.get("reuse_enabled")) is not bool:
+        raise ContractError("全集承接请求格式错误")
+    receipt = replay_ref(request["receipt"])
+    if receipt.get("schema_version") != SCHEMA or receipt.get("receipt_sha256") != digest({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
+        raise ContractError("全集收据自摘要不符")
+    binding = context_check(replay_ref(request["context"]))
+    if binding != receipt["binding"]:
+        raise ContractError("提交、部署、画像、平台或外部输入发生变化")
+    issued, expires = utc(receipt["issued_at_utc"]), utc(receipt["expires_at_utc"])
+    if not 0 < expires - issued <= MAX_VALIDITY_SECONDS or now < issued - CLOCK_SKEW_SECONDS or now >= expires:
+        raise ContractError("签发／失效时间不合法或已过期")
+    clock_check(receipt["issuer_clock"], issued, reference_time=issued)
+    clock_check(request["consumer_clock"], now)
+    revocation = replay_ref(request["revocation"])
+    if (revocation.get("schema_version") != "full-set-revocation-query/v1" or revocation.get("status") != "ok"
+            or revocation.get("receipt_sha256") != receipt["receipt_sha256"] or revocation.get("revoked") is not False
+            or revocation.get("campaign_status") != "active"
+            or not 0 <= now - utc(revocation["queried_at_utc"]) <= REVOCATION_MAX_AGE_SECONDS):
+        raise ContractError("撤销查询失败、过旧、已撤销或 Campaign 不再有效")
+    approvals = [replay_ref(ref) for ref in request["approvals"]]
+    if {a.get("role") for a in approvals} != APPROVAL_ROLES or len(approvals) != len(APPROVAL_ROLES):
+        raise ContractError("缺少三方审核及变更批准")
+    for approval in approvals:
+        if (approval.get("status") != "approved" or not approval.get("account")
+                or approval.get("scope") != approval_scope or approval.get("binding_sha256") != digest(binding)
+                or not utc(approval["approved_at_utc"]) <= now < utc(approval["expires_at_utc"])):
+            raise ContractError("专项批准缺失、错绑、已撤回或过期")
+    manifest, summary, store = source_check(receipt["source"], binding)
+    if (receipt["run_id"] != manifest["run_id"] or receipt["result_digest"] != digest(normalized_result(summary))
+            or issued != max(utc(row["completed_at_utc"]) for row in summary["units"])):
+        raise ContractError("来源时间或语义结果不同")
+    return receipt, binding, manifest, summary, store
+
+
 def assess(request: Mapping[str, Any], currents: Mapping[str, Any], facts: Any, *, gate_ids: list[str], now: float) -> tuple[dict, dict]:
     """返回判定收据与来源决策。任何失败均全拒，不混用其它运行的成功单元。"""
     records = records_module()
@@ -277,40 +314,11 @@ def assess(request: Mapping[str, Any], currents: Mapping[str, Any], facts: Any, 
                "source_receipt": request.get("receipt"), "source_run_id": None, "expires_at_utc": None}
     decisions: dict[str, Any] = {}
     try:
-        if request.get("schema_version") != "full-set-request/v1" or type(request.get("reuse_enabled")) is not bool:
-            raise ContractError("全集承接请求格式错误")
-        receipt = replay_ref(request["receipt"])
-        if receipt.get("schema_version") != SCHEMA or receipt.get("receipt_sha256") != digest({k: v for k, v in receipt.items() if k != "receipt_sha256"}):
-            raise ContractError("全集收据自摘要不符")
-        binding = context_check(replay_ref(request["context"]))
-        if binding != receipt["binding"]:
-            raise ContractError("提交、部署、画像、平台或外部输入发生变化")
-        issued, expires = utc(receipt["issued_at_utc"]), utc(receipt["expires_at_utc"])
+        receipt, binding, manifest, summary, store = authorize(request, now=now)
         verdict.update(source_run_id=receipt["run_id"], expires_at_utc=receipt["expires_at_utc"])
-        if not 0 < expires - issued <= MAX_VALIDITY_SECONDS or now < issued - CLOCK_SKEW_SECONDS or now >= expires:
-            raise ContractError("签发／失效时间不合法或已过期")
-        clock_check(receipt["issuer_clock"], issued, reference_time=issued)
-        clock_check(request["consumer_clock"], now)
-        revocation = replay_ref(request["revocation"])
-        if (revocation.get("schema_version") != "full-set-revocation-query/v1" or revocation.get("status") != "ok"
-                or revocation.get("receipt_sha256") != receipt["receipt_sha256"] or revocation.get("revoked") is not False
-                or revocation.get("campaign_status") != "active"
-                or not 0 <= now - utc(revocation["queried_at_utc"]) <= REVOCATION_MAX_AGE_SECONDS):
-            raise ContractError("撤销查询失败、过旧、已撤销或 Campaign 不再有效")
-        approvals = [replay_ref(ref) for ref in request["approvals"]]
-        if {a.get("role") for a in approvals} != APPROVAL_ROLES or len(approvals) != len(APPROVAL_ROLES):
-            raise ContractError("缺少三方审核及变更批准")
-        for approval in approvals:
-            if (approval.get("status") != "approved" or not approval.get("account")
-                    or approval.get("scope") != CONTRACT or approval.get("binding_sha256") != digest(binding)
-                    or not utc(approval["approved_at_utc"]) <= now < utc(approval["expires_at_utc"])):
-                raise ContractError("专项批准缺失、错绑、已撤回或过期")
-        manifest, summary, store = source_check(receipt["source"], binding)
-        if (receipt["run_id"] != manifest["run_id"] or receipt["result_digest"] != digest(normalized_result(summary))
-                or issued != max(utc(row["completed_at_utc"]) for row in summary["units"])
-                or sorted(currents) != sorted(manifest["planned_units"])
+        if (sorted(currents) != sorted(manifest["planned_units"])
                 or sorted(gate_ids) != sorted(row["gate_id"] for row in summary["gates"])):
-            raise ContractError("来源时间、语义结果或当前门禁全集不同")
+            raise ContractError("当前门禁全集不同")
         facts = replace(facts, require_read_audit=True, max_age_hours=24, now=now)
         for row in manifest["units"]:
             unit_id = row["unit_id"]

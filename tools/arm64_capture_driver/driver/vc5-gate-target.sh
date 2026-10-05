@@ -7,6 +7,12 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT
+# B-10 只用同提交且干净的显式来源测试树，不能凭请求指向任意旧树。
+if [ -n "${VC5_TARGET_REQUEST:-}" ] && [ -n "${VC5_TARGET_TREE:-}" ]; then
+  test "$(git -C "$T" rev-parse HEAD)" = "$(git -C "$VC5_TARGET_TREE" rev-parse HEAD)"
+  test -z "$(git -C "$VC5_TARGET_TREE" status --porcelain --untracked-files=all)"
+  T="$VC5_TARGET_TREE"
+fi
 mkdir -p "$GATE/environment" "$GATE/logs"; chmod 700 "$GATE" "$GATE/environment" "$GATE/logs"
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
@@ -16,20 +22,44 @@ python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt
 # tools 预编译进本次重建的缓存目录（bytecode_cache.py，失败即停），make test 期间只读使用（约 187 毫秒），测试树不留
 # __pycache__。PYTHONPATH=. 会让当前目录里的同名文件遮住标准库，调用辅助脚本时去掉。
 PYC="${4:-$RUNROOT/pycache-target-platform}"
-env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
+if [ -n "${VC5_TARGET_REQUEST:-}" ] && [ -n "${VC5_TARGET_PYCACHE:-}" ]; then
+  PYC="$VC5_TARGET_PYCACHE"; test -d "$PYC"; test ! -L "$PYC"
+else
+  env -u PYTHONPATH python3 "$DRV/bytecode_cache.py" "$PYC" "$T/tools" | tail -n 1 | cut -c1-300
+fi
 export PYTHONPYCACHEPREFIX="$PYC"
 export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"
 export CAPTURE_TYPESCRIPT_MODULE="$T/frontend/node_modules/typescript/lib/typescript.js"
 # 采集主机上 /root/oauth-capture 是受管工具树的 bind 别名，候选测试树会把它当执行副本比对；
 # 私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机环境一致。门禁跑的是测试树：身份记忆化不用 lib.sh 导出的生产
 # 目录（与 isolated_run 相同），交给 make test 里的统一调度执行器在各自的记录目录里新建。
-cd "$T"; START=$(utc_now); set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
-echo "make test rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
+cd "$T"; START=$(utc_now)
+if [ -n "${VC5_TARGET_REQUEST:-}" ]; then
+  DEPLOY=$(python3 -B "$DRV/target_platform_gate.py" deployment --data-root "$D")
+  set +e
+  env -u CODEX_UPGRADE_IDENTITY_MEMO python3 -B "$DRV/target_platform_gate.py" run --tree "$T" --out "$GATE/target-units" \
+    --request "$VC5_TARGET_REQUEST" --deployment "$DEPLOY" --record-store "${VC5_TARGET_RECORD_STORE:-$(dirname "$D")/unit-records}" \
+    --pycache "$PYC" --historical-source "$SRC1491" > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"
+  RC=$?; set -e; END=$(utc_now)
+  if [ "$RC" = 0 ] && [ ! -f "$GATE/target-units/evidence.json" ]; then RC=3; fi
+else
+set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
+fi
+echo "target-platform rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
 cd "$D"; python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-after-facts.json" --output "environment/$ATT-after.json" | cut -c1-160
 python3 - "$GATE/logs/target-platform.gate.json" "$START" "$END" "$RC" "$T" <<'PY'
-import json, sys, socket
+import json, sys, socket, os
 out, start, end, rc, tree = sys.argv[1:]
-json.dump({"gate_id": "target-platform", "command": ["make", "test"], "working_directory": ".", "host": socket.gethostname(), "architecture": "linux/arm64", "started_at_utc": start, "completed_at_utc": end, "exit_code": int(rc), "tree": tree, "isolation": "unshare -m --propagation private; tmpfs(ro) over /root/oauth-capture (host managed-tool alias hidden)"}, open(out, "w"), ensure_ascii=False, indent=2)
+meta = {"gate_id": "target-platform", "command": ["make", "test"], "working_directory": ".", "host": socket.gethostname(), "architecture": "linux/arm64", "started_at_utc": start, "completed_at_utc": end, "exit_code": int(rc), "tree": tree, "isolation": "unshare -m --propagation private; tmpfs(ro) over /root/oauth-capture (host managed-tool alias hidden)"}
+from pathlib import Path
+proof = Path(out).parent.parent / "target-units" / "evidence.json"
+if os.environ.get("VC5_TARGET_REQUEST"):
+    meta["command"] = ["python3", "-B", "tools/ci/target_platform_gate.py", "run"]
+if proof.is_file():
+    import hashlib
+    meta["command"] = ["python3", "-B", "tools/ci/target_platform_gate.py", "run"]
+    meta["unit_execution"] = {"path": "target-units/evidence.json", "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
+json.dump(meta, open(out, "w"), ensure_ascii=False, indent=2)
 PY
 chmod 600 "$GATE"/logs/* "$GATE"/environment/*; echo "GATE_TARGET_DONE rc=$RC"

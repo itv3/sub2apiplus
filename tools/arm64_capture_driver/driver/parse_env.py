@@ -44,6 +44,8 @@ OPTIONAL_KEYS = (
     "P0_ROLLBACK_EVIDENCE",
     # VC-5 补齐批准和 token 的最低剩余有效期；不继承外层残留批准。
     "VC5_ADMISSION_APPROVAL", "VC5_ADMIN_TOKEN_MIN_SECONDS",
+    # B-10 只消费本轮显式请求；来源工作树／缓存须经过同提交与读集重放。
+    "VC5_TARGET_REQUEST", "VC5_TARGET_TREE", "VC5_TARGET_PYCACHE", "VC5_TARGET_RECORD_STORE",
     # VC-4 只接受本轮显式网络模式和专项批准，不承接外层残留的 host 网络开关。
     "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL",
 )
@@ -140,6 +142,9 @@ def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set
         if not value:
             raise EnvFileError(f"第 {number} 行的值为空：{key}")
         values[key] = value
+    for key in ("VC5_TARGET_REQUEST", "VC5_TARGET_TREE", "VC5_TARGET_PYCACHE", "VC5_TARGET_RECORD_STORE"):
+        if key in values and (not values[key].startswith("/") or ".." in values[key].split("/")):
+            raise EnvFileError(f"{key} 必须是不含 .. 的绝对路径")
     return values
 
 

@@ -512,3 +512,31 @@ B-09 后台结论到期时自动新建执行；收到撤销或错绑后用 `back
 
 来源与消费工作区及缓存必须保持一致；`--full-set-work` 显式传递已登记的后台独立目录，
 工作区重建或路径不同会使严格输入失效并重跑，不能为了承接而忽略路径差异。
+
+## B-10 目标平台单元承接
+
+VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置 `VC5_TARGET_REQUEST` 才进入
+`target_platform_gate.py run`：从固定八类门禁生成完整计划，以同一个 B-09 全集来源选择匹配单元，
+差异与新增单元完整执行。读集未闭合、共享身份变化、审批或来源失效时全部重跑。
+可设置 `VC5_TARGET_TREE`、`VC5_TARGET_PYCACHE` 和 `VC5_TARGET_RECORD_STORE` 指向来源已登记的
+工作树、缓存和记录库；工作树必须与候选测试树同提交且干净，现有缓存只读使用，宿主输入逐次重算。
+路径不同导致不匹配时仍重跑，不自动迁移或改写原记录。
+
+请求为 `target-platform-request/v1`，含 B-09 的 `receipt/context/consumer_clock/revocation/reuse_enabled`，
+两类 `approvals` 的 scope 改为 `target-platform-inheritance/v1`，另需 `platform_compatibility` 签字凭证。
+签字凭证含 `status=approved`、账号、scope、`binding_sha256`、批准与失效 UTC。
+`target` 精确登记 Campaign、Candidate、画像 Digest、目标架构、候选源码摘要和候选 Image ID；
+字段名见 `SUBJECT_FIELDS`，两类批准及平台签字还必须绑定 `target_sha256`。
+执行环境的运行镜像与被验收候选镜像分别绑定，不能假设相等。工具不签批准，演练凭证不用于生产。
+
+判定在排队前、取锁后和差异执行结束时复核；结束时失效不得发布通过清单。
+`target-units/evidence.json` 绑定计划、执行汇总、逐单元清单、封存的动态查询及原失效时间。
+正式外部门禁 v4 的 `unit_execution` 字段引用此证据，实际命令明确记录为单元调度入口。
+受管生成器按钉住的五个验证器摘要加载仓库源码或安装驱动，拒绝缺件和漂移；修改这些文件须同步
+更新生成器的 `TARGET_VERIFIER_SHA256S`、旧 producer 只读登记及必要冻结承接。
+
+`vc5-accept.sh` 在消费旧通过文件及派发 accept 前重新核验。失效或失败的门禁、环境及派生事实
+归档到 `superseded/`，索引保留原路径、归档路径和逐文件完整摘要；本机门禁与采集封存包不动。
+已正式 accept 的结果只作历史重放，后续过期不改写已完成的历史阶段。
+工程代码和驱动安装不自动部署新受管收据合同，也不启用真实承接；受管合同的监督部署、
+完整读集覆盖和专项批准仍需闭合后才允许真实消费。

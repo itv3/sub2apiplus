@@ -1540,6 +1540,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
             p.add_argument("--decide-only", action="store_true",
                            help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
+            p.add_argument("--target-platform-request", type=Path, help="B-10 目标平台单元承接请求；不得与 B-09 请求混用")
             p.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；任一条件失效则全量重跑")
             p.add_argument("--full-set-deployment", type=Path, help="入口本次核对的实际部署收据")
             # E3-04：读集审计。真跑才有读集，只许与 --mode re-execute 同用；要求 PATH 里有 strace（Linux）。
@@ -1993,6 +1994,12 @@ def _run_gates(args: argparse.Namespace) -> int:
     的记录都入库（给了记录库时），运行结束写清单并自检。"""
 
     records = _records_module()
+    if args.full_set_request and args.target_platform_request:
+        raise ExecutorError("B-09 与 B-10 请求不能同时使用")
+    request_path = args.target_platform_request or args.full_set_request
+    target_mode = args.target_platform_request is not None
+    decision_key = "target_platform_decision" if target_mode else "full_set_decision"
+    decision_file = "target-platform-decision.json" if target_mode else "full-set-decision.json"
     if args.mode == records.FULL_SET_PASS and args.record_store is None:
         raise ExecutorError("全集通过模式（承接）要给记录库：--record-store")
     max_age = float(args.inheritance_max_age_hours)
@@ -2048,7 +2055,7 @@ def _run_gates(args: argparse.Namespace) -> int:
             records.validate_audit_policy(audit_policy, {unit.unit_id for unit in command_units})
         except records.RecordsError as error:
             raise ExecutorError(str(error)) from error
-        if not args.decide_only and not args.full_set_request and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict):
+        if not args.decide_only and not request_path and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict):
             raise ExecutorError("读集合同登记须重新执行严格审计；当前只能只读预览承接集合")
         for item in manifest["units"]:
             if item["unit_id"] in audit_policy["units"] and item.get("inputs") != audit_policy["units"][item["unit_id"]]:
@@ -2089,26 +2096,32 @@ def _run_gates(args: argparse.Namespace) -> int:
     run_id, decided_at = records.new_run_id(), records.utc_now()
     facts = records.RunFacts(policy_sha256=policy, environment=environment, environment_sha256=records.entries_sha256(environment),
                              executor=executor, max_age_hours=max_age, now=time.time())
-    decisions = {unit.unit_id: records.evaluate(store, currents[unit.unit_id], facts) if args.mode == records.FULL_SET_PASS and not args.full_set_request
+    decisions = {unit.unit_id: records.evaluate(store, currents[unit.unit_id], facts) if args.mode == records.FULL_SET_PASS and not request_path
                  else records.Decision(reasons=["重新执行全集：不承接"]) for unit in units}
     full_set_verdict = None
-    if args.full_set_request:
+    if request_path:
         spec = importlib.util.spec_from_file_location("_full_set_receipt", Path(__file__).with_name("full_set_receipt.py"))
         full_set = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(full_set)
+        assessor = full_set.assess
+        if target_mode:
+            target_spec = importlib.util.spec_from_file_location("_target_platform_gate", Path(__file__).with_name("target_platform_gate.py"))
+            target_module = importlib.util.module_from_spec(target_spec)
+            target_spec.loader.exec_module(target_module)
+            assessor = target_module.assess
         try:
-            request = full_set.read(args.full_set_request)
+            request = full_set.read(request_path)
             full_set.live_check(request, deployment=args.full_set_deployment,
                                 store=store.root if store is not None else None, tree=Path.cwd())
             if args.mode != records.FULL_SET_PASS:
                 request = {**request, "reuse_enabled": False}
-            full_set_verdict, decisions = full_set.assess(request, currents, facts,
+            full_set_verdict, decisions = assessor(request, currents, facts,
                 gate_ids=[gate.gate_id for gate in gates], now=time.time())
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             full_set_verdict = {"schema_version": "full-set-decision/v1", "action": "reexecute-all", "eligible": False,
-                                "reuse_enabled": False, "reasons": [str(error)], "request": str(args.full_set_request)}
+                                "reuse_enabled": False, "reasons": [str(error)], "request": str(request_path)}
             decisions = {unit.unit_id: records.Decision(reasons=["B-09 全集重跑：" + str(error)]) for unit in units}
-        if full_set_verdict["action"] != "inherit-full-set":
+        if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
             args.mode = records.RE_EXECUTE
         max_age = min(max_age, 24)
     # B-11 登记策略下，B-09 拒绝后仍须按原严格审计合同重新执行。
@@ -2119,7 +2132,7 @@ def _run_gates(args: argparse.Namespace) -> int:
     to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
     out_dir = _out_dir(args)
     if full_set_verdict is not None:
-        _write_json(out_dir / "full-set-decision.json", full_set_verdict)
+        _write_json(out_dir / decision_file, full_set_verdict)
     if args.decide_only:
         # 只判定：每个单元承接还是执行、依据或原因；不执行、不写记录、不占调度锁。
         payload = {"mode": args.mode, "decided_at_utc": decided_at, "policy_sha256": policy, "environment_sha256": facts.environment_sha256,
@@ -2144,23 +2157,29 @@ def _run_gates(args: argparse.Namespace) -> int:
     )
     try:
         # 锁可能排队很久：重新读请求、现场身份、输入、环境和动态凭证。
-        if full_set_verdict is not None and not to_run:
+        if full_set_verdict is not None and any(d.inherit for d in decisions.values()):
             try:
-                request = full_set.read(args.full_set_request)
+                request = full_set.read(request_path)
                 full_set.live_check(request, deployment=args.full_set_deployment, store=store.root, tree=Path.cwd())
                 current_now = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
                                             manifest=manifest, timeout=config.unit_timeout_seconds)
+                currents = current_now
+                recorder.currents = currents
                 facts.now = time.time()
                 fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
                 fresh_facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment))
-                full_set_verdict, decisions = full_set.assess(request, current_now, fresh_facts,
+                environment = fresh_environment
+                facts = fresh_facts
+                recorder.environment = environment
+                recorder.environment_sha256 = facts.environment_sha256
+                full_set_verdict, decisions = assessor(request, current_now, fresh_facts,
                     gate_ids=[gate.gate_id for gate in gates], now=facts.now)
             except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
                 full_set_verdict = {"schema_version": "full-set-decision/v1", "action": "reexecute-all", "eligible": False,
                                     "reuse_enabled": False, "reasons": [str(error)]}
                 decisions = {unit.unit_id: records.Decision(reasons=["B-09 锁后复核拒绝：" + str(error)]) for unit in units}
             to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
-            if to_run:
+            if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
                 args.mode = recorder.mode = records.RE_EXECUTE
                 if audit_policy is not None:
                     if shutil.which("strace") is None:
@@ -2168,7 +2187,7 @@ def _run_gates(args: argparse.Namespace) -> int:
                     auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root,
                                           currents=currents, strict=True)
                     scheduler.auditor = auditor
-            _write_json(out_dir / "full-set-decision.json", full_set_verdict)
+            _write_json(out_dir / decision_file, full_set_verdict)
         started = time.monotonic()
         _write_json(out_dir / "plan.json", {
             "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores, "mode": args.mode, "run_id": run_id,
@@ -2199,8 +2218,24 @@ def _run_gates(args: argparse.Namespace) -> int:
                                        outcomes=outcomes, diagnostic=diagnostic)
         if full_set_verdict is not None:
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
-                                          "full_set_decision": full_set_verdict}, "manifest_sha256")
+                                          decision_key: full_set_verdict}, "manifest_sha256")
         problems = records.verify_manifest(unit_manifest, store=store)
+        if target_mode and inherited:
+            try:
+                request = full_set.read(request_path)
+                full_set.live_check(request, deployment=args.full_set_deployment, store=store.root, tree=Path.cwd())
+                end_currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                             manifest=manifest, timeout=config.unit_timeout_seconds)
+                end_verdict, end_decisions = assessor(request, end_currents, facts,
+                    gate_ids=[gate.gate_id for gate in gates], now=time.time())
+                if (end_verdict["action"] != "inherit-matching-units"
+                        or end_verdict.get("source_receipt") != full_set_verdict.get("source_receipt") or any(
+                            not end_decisions[outcome.unit.unit_id].inherit
+                            or end_decisions[outcome.unit.unit_id].record["record_sha256"] != decisions[outcome.unit.unit_id].record["record_sha256"]
+                            for outcome in inherited)):
+                    raise ValueError("结束复核不通过：" + "；".join(end_verdict["reasons"]))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError) as error:
+                problems.append("B-10 结束时来源已失效：" + str(error))
         manifest_path = out_dir / "unit-manifest.json"
         _write_json(manifest_path, unit_manifest)
         # 自检通过才把清单存进记录库：承接要求原运行的清单把记录列为正式执行，没正常结束或自检不过的运行，它的记录不可承接。
@@ -2210,7 +2245,7 @@ def _run_gates(args: argparse.Namespace) -> int:
             "max_cores_in_use": scheduler.max_cores_in_use, "machine_cores": cores, "parallelism": parallelism,
             "bytecode_cache": bytecode, "identity_memo": identity_memo, "mode": args.mode, "run_id": run_id,
             "record_store": str(store.root) if store is not None else None,
-            "full_set_decision": full_set_verdict,
+            decision_key: full_set_verdict,
             "inheritance": {"mode_label": records.MODE_LABELS[args.mode], **{key: unit_manifest["counts"][key] for key in ("executed", "inherited", "inherited_tests")}},
             "unit_manifest": {"path": str(manifest_path), "manifest_sha256": unit_manifest["manifest_sha256"],
                               "self_check": "passed" if not problems else "failed", "problems": problems[:50]},
