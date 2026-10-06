@@ -2,7 +2,9 @@
 
 门禁的定义与实现见 ``producer_replay_registration``（同目录只读辅助模块）。本模块验证四件事：
 
-1. 当前工作树：五个生成器（第 40、42 项起含门禁收据与生产激活收据生成器）在全部部署边界处的旧
+1. 当前工作树：六个生成器（第 40、42 项起含门禁收据与生产激活收据生成器，Claude 升级 B1-10 起含
+   Claude 环境收据生成器；它在门禁基线之后新建，登记在 ``PRODUCERS_ADDED_AFTER_BASELINE``，基线提交处
+   不存在、首次部署前没有部署边界）在全部部署边界处的旧
    摘要都已登记为只读重放身份，或属于门禁基线前已审计的历史豁免；豁免表恰好等于"不带豁免时的违规
    集合"（没有多余、没有遗漏）且全部来自基线前的收据；仓库内入库的门禁收据与生产激活收据，其生成器
    摘要都能被当前生成器承接；任何模块新增只读重放登记常量都必须先纳入覆盖清单。登记集合与入库收据
@@ -21,7 +23,8 @@
 4. 合成临时 git 仓库：变更集内部的中间提交不要求登记；不在 git 历史里的显式节点必须登记；浅克隆
    失败关闭；非 git 树无法判定；门禁基线之后的新边界不得豁免，不带签发时间的收据（上游合并工具的
    源码迁移收据）也不能为豁免背书；缺失提交只跳过前后提交边界；新增文件的空内容前序不计边界；
-   尚无只读重放判定的生成器如实跳过并报告。
+   尚无只读重放判定的生成器如实跳过并报告；形态里文件尚不存在的生成器只在登记为门禁基线之后新建时
+   跳过，否则失败关闭。
 
 真实形态与反证需要完整 git 历史（CI 的 capture-tools job 以 fetch-depth: 0 检出）；不是 git 工作树时
 跳过，浅克隆时门禁本身失败关闭。全程只读真实仓库：历史形态用 ``git ls-tree``／``git cat-file``
@@ -73,6 +76,9 @@ GATE_RECEIPT_PRE_ITEM40_DIGEST = "034331e58aa96dad7b8368c231fd2ead38a826ffce18c4
 GATE_RECEIPT_0154_DIGEST = "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec02f91ae29552"
 GATE_RECEIPT_V4_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 ACTIVATION_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.PRODUCTION_ACTIVATION_PRODUCER)
+CLAUDE_ENVIRONMENT_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.CLAUDE_ENVIRONMENT_RECEIPT_PRODUCER)
+# Claude 环境收据生成器（B1-10 新建）的登记表声明：初始为空，登记旧摘要时整行替换。
+CLAUDE_ENVIRONMENT_EMPTY_REGISTRY = "REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {}"
 # 第 42 项修改前的生产激活收据生成器摘要（ef262c618 起部署），以及生成过 R34 收据的 0.149.1 期间版本。
 ACTIVATION_PRE_ITEM42_DIGEST = "3b4ddbf874a9164654e8496fb6f2a88fbd50b22557f16b5285f0aa0aca7d1292"
 ACTIVATION_R34_DIGEST = "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382"
@@ -225,6 +231,10 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
         self.assertEqual([], self.report.skipped, gate.format_report(self.report))
         for spec in gate.PRODUCERS:
             boundaries = self.report.boundaries[spec.path]
+            if spec.path in gate.PRODUCERS_ADDED_AFTER_BASELINE:
+                # 门禁基线之后新建的生成器：首次部署并登记承接收据之前没有部署边界，空集合是真实状态；
+                # 出现边界后同样受上面 passed 断言的约束。
+                continue
             # 至少有一个非当前的部署边界，证明门禁真的在检查历史（而不是空集合恒通过）。
             self.assertTrue(
                 any(digest != self.report.current[spec.path] for digest in boundaries),
@@ -256,11 +266,19 @@ class CurrentTreeRegistrationGateTest(unittest.TestCase):
         path = REPOSITORY_ROOT / gate.MAINTENANCE_RELATIVE / gate.GATE_BASELINE_RECEIPT
         receipt = json.loads(path.read_bytes())
         self.assertEqual(receipt["issued_at_utc"], gate.GATE_BASELINE_ISSUED_AT_UTC)
-        self.assertEqual(set(gate.GATE_BASELINE_CURRENT_SHA256), {spec.path for spec in gate.PRODUCERS})
+        covered = {spec.path for spec in gate.PRODUCERS}
+        added = set(gate.PRODUCERS_ADDED_AFTER_BASELINE)
+        self.assertLessEqual(added, covered)
+        self.assertEqual(set(gate.GATE_BASELINE_CURRENT_SHA256), covered - added)
         for producer, digest in gate.GATE_BASELINE_CURRENT_SHA256.items():
             blob = _git(REPOSITORY_ROOT, "cat-file", "blob", f"{receipt['current_commit']}:{producer}")
             self.assertEqual(_sha256(blob), digest, producer)
             self.assertNotIn(digest, gate.HISTORICAL_EXEMPTIONS.get(producer, {}))
+        for producer, reason in gate.PRODUCERS_ADDED_AFTER_BASELINE.items():
+            # 门禁基线之后新建：基线收据 current_commit 处该文件还不存在，也不得出现在历史豁免表里。
+            self.assertTrue(reason.strip(), f"{producer} 缺少来历说明")
+            self.assertEqual([], _ls_tree_blobs(receipt["current_commit"], producer, recursive=False), producer)
+            self.assertNotIn(producer, gate.HISTORICAL_EXEMPTIONS)
 
     def test_boundaries_follow_freeze_graph_definition(self) -> None:
         environment = self.report.boundaries[gate.ENVIRONMENT_RECEIPT_PRODUCER]
@@ -496,16 +514,23 @@ class Item36IncidentShapeTest(unittest.TestCase):
         self.assertEqual(report.current[gate.ENVIRONMENT_RECEIPT_PRODUCER], ITEM36_MISSING_DIGEST)
 
     def test_generators_without_registry_in_historical_shapes_are_skipped(self) -> None:
-        # 第 40、42 项之前门禁收据与生产激活收据生成器还没有登记机制：历史形态上如实跳过，
-        # 不影响其它生成器的判定。
+        # 第 40、42 项之前门禁收据与生产激活收据生成器还没有登记机制，门禁基线之后新建的生成器（B1-10 的
+        # Claude 环境收据）文件还不存在：历史形态上都如实跳过，不影响其它生成器的判定。
         for commit, report in self.reports.items():
             with self.subTest(commit=commit[:9]):
                 self.assertEqual(
                     [spec.path for spec, _ in report.skipped],
-                    [gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER],
+                    [
+                        gate.GATE_RECEIPT_PRODUCER,
+                        gate.PRODUCTION_ACTIVATION_PRODUCER,
+                        *gate.PRODUCERS_ADDED_AFTER_BASELINE,
+                    ],
                 )
-                for _, reason in report.skipped:
-                    self.assertIn("尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES", reason)
+                reasons = {spec.path: reason for spec, reason in report.skipped}
+                for path in (gate.GATE_RECEIPT_PRODUCER, gate.PRODUCTION_ACTIVATION_PRODUCER):
+                    self.assertIn("尚无只读重放判定所需的 REGISTERED_REPLAY_PRODUCER_HASHES", reasons[path])
+                for path in gate.PRODUCERS_ADDED_AFTER_BASELINE:
+                    self.assertIn("生成器文件尚不存在", reasons[path])
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +987,33 @@ class RegistrationMutationTest(unittest.TestCase):
             ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, ACTIVATION_PRE_ITEM42_DIGEST
         )
 
+    # --- Claude ARM64 环境收据（B1-10 新建，按版本分组的显式摘要集合，登记表初始为空） ---
+
+    def test_claude_environment_next_edit_must_register_current_digest(self) -> None:
+        """当前摘要成为部署边界（模拟首次部署后的承接收据）之后再修改生成器：不登记即失败；把它登记到
+        REGISTERED_REPLAY_PRODUCER_HASHES["1"] 后不再新增违规。"""
+
+        spec = CLAUDE_ENVIRONMENT_SPEC
+        head = self.baseline.current[spec.path]
+        # 新增文件的承接边前序是空内容摘要（不计边界），后继即当前摘要。
+        self._write_probe_receipt(gate.EMPTY_FILE_SHA256, head, spec.path)
+        self._mutate(spec, lambda text: text + "\n# 反证：首次部署之后再次修改生成器。\n")
+        report = self._check(spec)
+        self._assert_new_since_before(spec, report, {head})
+        self.assertIn("Claude ARM64 事实采集器身份漂移", self._violation_for(report, head).detail)
+        message = gate.format_report(report)
+        self.assertIn("REGISTERED_REPLAY_PRODUCER_HASHES[", message)
+        self.assertIn(Path(spec.path).name, message)
+        self._mutate(
+            spec,
+            lambda text: _replace_once(
+                text,
+                CLAUDE_ENVIRONMENT_EMPTY_REGISTRY,
+                CLAUDE_ENVIRONMENT_EMPTY_REGISTRY[:-2] + f'{{"1": frozenset({{"{head}"}})}}',
+            ),
+        )
+        self._assert_new_since_before(spec, self._check(spec), set())
+
 
 class RegistrationMutationWithSimulatedReceiptTest(RegistrationMutationTest):
     """追加一份模拟的"今后新增承接收据"后重跑全部变异用例：新增边界不得让它们误红。
@@ -1269,6 +1321,18 @@ class SyntheticRepositoryBoundaryTest(unittest.TestCase):
             report.skipped,
         )
         self.assertIn("跳过：synthetic_replay_producer.py", gate.format_report(report))
+
+    def test_missing_producer_is_skipped_only_when_added_after_baseline(self) -> None:
+        # 门禁基线之后新建的生成器在较早的形态里还不存在：登记在 PRODUCERS_ADDED_AFTER_BASELINE 时如实跳过
+        # 并记入报告；未登记时失败关闭，不能因为文件缺失就悄悄放过一个本应检查的生成器。
+        self.repository.commit("只有无关承接收据，合成生成器尚未新建")
+        report = self.repository.check(added_after_baseline={SYNTHETIC_PRODUCER: "合成：门禁基线之后新建"})
+        self.assertTrue(report.passed, gate.format_report(report))
+        self.assertEqual([(SYNTHETIC_SPEC, "该形态下生成器文件尚不存在（门禁基线之后新建）")], report.skipped)
+        self.assertNotIn(SYNTHETIC_PRODUCER, report.boundaries)
+        self.assertIn("跳过：synthetic_replay_producer.py", gate.format_report(report))
+        with self.assertRaisesRegex(gate.GateError, "生成器文件不存在"):
+            self.repository.check(added_after_baseline={})
 
     def test_new_boundary_after_baseline_cannot_be_exempted(self) -> None:
         digest_a, _, _ = self._change_set(issued="2026-10-01T00:00:00Z")

@@ -16,9 +16,9 @@
 
 二、盘点结论：哪些生成器以"文件摘要即身份"且需要按旧身份重放
 ============================================================
-下面五个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
+下面六个生成器同时满足"把自身文件摘要写进收据"与"历史收据须跨工具版本按旧身份重放"，
 并且各自带有旧身份登记机制（``PRODUCERS``；第 4、5 个分别由修好接着跑第 40、42 项补上登记机制后
-纳入）：
+纳入，第 6 个随 Claude 升级 B1-10 新建时即带登记机制纳入）：
 
 1. ``codex_upgrade_arm64_environment_receipt.py``（ARM64 环境收据，P0／attempt 等 12 个 phase）：
    写入 ``producer.tool_sha256``；重放时 ``_validated_producer_version`` 要求等于当前摘要，否则必须
@@ -41,6 +41,11 @@
    ``producer.tool_sha256``；重放时 ``_replay_producer_identity`` 对 v2 收据要求摘要等于当前摘要，
    否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[PRODUCER_SCHEMA]`` 中——同样**按 producer schema
    分组**；v1 收据格式已退役。
+6. ``claude_upgrade_arm64_environment_receipt.py``（Claude 升级的 ARM64 环境收据，phase 与第 1 个相同，
+   通用校验调用第 1 个的函数）：写入 ``producer.tool_sha256``；重放时 ``_validated_producer_version`` 要求
+   等于当前摘要，否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[version]`` 中——与第 1 个同为**按
+   PRODUCER_VERSION 分组的显式摘要集合**，历史登记表初始为空。它在门禁基线之后新增，登记在
+   ``PRODUCERS_ADDED_AFTER_BASELINE``（见第四节末）。
 
 覆盖自检有两道（见第五节）：任何模块新增名字含 ``REPLAY_PRODUCER``／``PRODUCER_*SUCCESSOR`` 的
 登记常量，都必须先纳入 ``PRODUCERS``；任何模块只要"计算自身文件摘要、且重放／校验路径上会重新计算
@@ -77,6 +82,11 @@
 永远不覆盖基线时已部署的版本 ``GATE_BASELINE_CURRENT_SHA256``；此后出现的新边界不提供豁免
 通道——即便某个变更集终点确实没部署过，把它登记为只读重放身份也无害（只读重放不允许生成
 新事实）。
+
+门禁基线之后新建的生成器登记在 ``PRODUCERS_ADDED_AFTER_BASELINE``（逐条写明来历）。基线收据的
+``current_commit`` 处它们还不存在，所以不在 ``GATE_BASELINE_CURRENT_SHA256`` 中；导出的历史形态里
+文件尚不存在时如实跳过并记入报告（其余生成器文件缺失仍失败关闭）；首次部署并登记承接收据之前
+它们没有部署边界，这是真实状态而非门禁失效。此后的检查规则与其它生成器完全相同，同样没有豁免通道。
 
 五、覆盖自检：静态发现"要求摘要严格等于当前"的生成器（第 42 项）
 ============================================================
@@ -141,6 +151,9 @@ RECEIPT_FINALIZER_PRODUCER = "tools/official_client_capture/codex_upgrade_receip
 TIMING_LEDGER_PRODUCER = "tools/official_client_capture/codex_upgrade_timing_ledger.py"
 GATE_RECEIPT_PRODUCER = "tools/official_client_capture/codex_upgrade_gate_receipt.py"
 PRODUCTION_ACTIVATION_PRODUCER = "tools/official_client_capture/production_activation_receipt.py"
+CLAUDE_ENVIRONMENT_RECEIPT_PRODUCER = (
+    "tools/official_client_capture/claude_upgrade_arm64_environment_receipt.py"
+)
 
 
 @dataclass(frozen=True)
@@ -193,7 +206,25 @@ PRODUCERS: tuple[ProducerSpec, ...] = (
         registry="REGISTERED_REPLAY_PRODUCER_HASHES",
         judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_replay_producer_identity"),
     ),
+    # Claude 升级 B1-10：与 ARM64 环境收据同一登记方式（按 PRODUCER_VERSION 分组），判定直接调用它自己的
+    # _validated_producer_version（allow_legacy_replay=True 即只读重放入口）。
+    ProducerSpec(
+        path=CLAUDE_ENVIRONMENT_RECEIPT_PRODUCER,
+        mechanism=MECHANISM_VERSIONED_HASH_SET,
+        registry="REGISTERED_REPLAY_PRODUCER_HASHES",
+        judge_attributes=("REGISTERED_REPLAY_PRODUCER_HASHES", "_validated_producer_version"),
+    ),
 )
+
+# 门禁基线之后新建的生成器：路径 → 来历。基线收据 current_commit 处它们还不存在，因此不在
+# GATE_BASELINE_CURRENT_SHA256 中；历史形态里文件尚不存在时如实跳过（不在本表中的生成器文件缺失仍
+# 失败关闭）；首次部署并登记承接收据之前没有部署边界。只登记新建文件，不得用来豁免任何边界。
+PRODUCERS_ADDED_AFTER_BASELINE: Mapping[str, str] = {
+    CLAUDE_ENVIRONMENT_RECEIPT_PRODUCER: (
+        "Claude 升级 B1-10（2026-10-07）新建的 Claude ARM64 环境收据生成器，新建时即带只读重放登记表"
+        "（初始为空，Claude 尚无历史收据）"
+    ),
+}
 
 # 覆盖自检用的登记常量命名规则：模块级常量名命中即视为"带只读重放登记机制的生成器"，
 # 必须出现在 PRODUCERS 中。命中示例：REGISTERED_REPLAY_PRODUCER_HASHES、
@@ -961,15 +992,17 @@ def check_registration(
     producers: Sequence[ProducerSpec] | None = None,
     exemptions: Mapping[str, Mapping[str, str]] | None = None,
     baseline: str | None = None,
+    added_after_baseline: Mapping[str, str] | None = None,
 ) -> GateReport:
     """对 tree_root（提供承接收据与当前生成器文件）运行门禁；git_root 提供历史对象库。
 
-    ``producers``／``exemptions``／``baseline`` 缺省时取模块常量（在调用时解析，便于反证替换）。
+    ``producers``／``exemptions``／``baseline``／``added_after_baseline`` 缺省时取模块常量（在调用时解析，便于反证替换）。
     """
 
     producers = PRODUCERS if producers is None else producers
     exemptions = HISTORICAL_EXEMPTIONS if exemptions is None else exemptions
     baseline = GATE_BASELINE_ISSUED_AT_UTC if baseline is None else baseline
+    added_after_baseline = PRODUCERS_ADDED_AFTER_BASELINE if added_after_baseline is None else added_after_baseline
     tree_root = Path(tree_root).resolve()
     git_root = Path(git_root).resolve() if git_root is not None else tree_root
     ensure_full_history(git_root)
@@ -979,7 +1012,14 @@ def check_registration(
     for spec in producers:
         if spec.mechanism not in MECHANISMS:
             raise GateError(f"未知登记方式：{spec.mechanism}")
-        current_bytes = (tree_root / spec.path).read_bytes()
+        producer_file = tree_root / spec.path
+        if not producer_file.is_file():
+            if spec.path not in added_after_baseline:
+                raise GateError(f"生成器文件不存在：{producer_file}")
+            # 门禁基线之后新建的生成器在较早的形态里还不存在：如实跳过并记入报告（当前工作树由测试保证不会跳过）。
+            report.skipped.append((spec, "该形态下生成器文件尚不存在（门禁基线之后新建）"))
+            continue
+        current_bytes = producer_file.read_bytes()
         current_sha256 = hashlib.sha256(current_bytes).hexdigest()
         report.current[spec.path] = current_sha256
         boundaries = collect_boundaries(
