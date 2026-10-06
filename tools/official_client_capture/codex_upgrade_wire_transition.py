@@ -871,7 +871,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        from tools.official_client_capture import codex_upgrade
+        # 当前工具身份经客户端适配器取编排器的 _tool_identity（Claude 升级 B5a-01：共享 control 模块不直接导入 Codex
+        # 编排器）。Codex 适配器的 orchestrator 就是 codex_upgrade 模块本身，取值与改造前相同；这条裁定按 Codex v2 策略与
+        # 单根历史副本计算，Claude 的两根副本裁定随它的恢复接入另行实现。
+        from tools.official_client_capture import upgrade_client_adapter
 
         if arguments.command == "verdict-official-attempt-identity":
             policy = tip.load_policy()
@@ -879,7 +882,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.campaign_dir,
                 arguments.attempt_id,
                 control_root=arguments.control_root,
-                current_identity=codex_upgrade._tool_identity(include_git=False),
+                current_identity=upgrade_client_adapter.adapter_for("codex").orchestrator._tool_identity(include_git=False),
                 policy=policy,
             )
             _write_once(arguments.output, result)

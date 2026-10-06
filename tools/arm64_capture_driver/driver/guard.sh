@@ -1,5 +1,7 @@
 #!/bin/bash
 # 派发前检查：先复验驱动安装，再检查磁盘、总账和 Campaign；任一步失败自动停止。
+#   journal   受监督部署的写前意图日志（control/managed-deploy-*.journal）存在即停止：部署进行中或中断后尚未恢复，生产树
+#             可能处在半交换状态，只认已写出的部署收据（Claude 升级 B5a-01；install.py verify 同样拒绝，这里先给出明确原因）
 #   driver    以安装目标内的 install.py verify 复验驱动脚本清单：逐文件 SHA／权限／属主与安装收据绑定的部署收据
 #             必须是 control/ 下当前最新的 codex-*-supervisor-enable 收据（工具重新部署后驱动必须重新安装确认）
 #   disk      根盘：used ≤ 69% 且 available ≥ 30 GiB（候选就绪门禁策略 root-69-percent-and-30-gib/v1）且 available ≥ 操作员阈值
@@ -14,6 +16,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 MODE="${1:-}"; CAMPAIGN="${2:-}"
 case "$MODE" in pre-plan|pre-vc4|pre-vc5) ;; *) echo "guard: MODE 只能是 pre-plan|pre-vc4|pre-vc5（收到 '$MODE'）"; exit 2;; esac
 if [ "$MODE" != pre-plan ] && [ -z "$CAMPAIGN" ]; then echo "guard: $MODE 需要 <campaign_dir>"; exit 2; fi
+if compgen -G "$D/control/managed-deploy-*.journal" > /dev/null; then
+  echo "guard/deploy-journal: FAIL — control 下有未完成的受监督部署事务日志，重新执行受监督部署完成恢复后再派发"; exit 1
+fi
 python3 "$DRV/../install.py" verify --target "$(dirname "$DRV")" --data-root "$D" || { echo "guard/driver: FAIL — 驱动安装复验未通过，停止"; exit 1; }
 # 出口准入必须来自持续守护的当前状态；旧环境收据或发布认证不能替代它。
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt egress-check || { echo "guard/egress: FAIL — 指定出口未通过实时准入，停止派发"; exit 1; }

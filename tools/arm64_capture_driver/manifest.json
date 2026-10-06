@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "749944e9af0b5dbd62f2679277102cd202232b70d8d99ac19cb7a63021f0d468",
+      "sha256": "39f1bb073ea50e41d1d1fd86a886c288b6c6872e94794a38b4c7c50cb57f5743",
       "mode": "0700",
-      "bytes": 32179
+      "bytes": 33906
     },
     {
       "path": "driver/build.sh",
@@ -136,9 +136,9 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "ecb3d0849c446f70732b75d0e370b3553ab586c806345a10adf42f4f2635696c",
+      "sha256": "d86ea20789bc32aeca0e36f458e58b5525745202f7bad8b076d60c26080cff76",
       "mode": "0700",
-      "bytes": 68265
+      "bytes": 69752
     },
     {
       "path": "driver/env.example.sh",
@@ -160,9 +160,9 @@
     },
     {
       "path": "driver/fix_and_continue.py",
-      "sha256": "fe648a6b57e6d1f78c1628c29b322dc2402e6ed838416e63eb08cc06a07a138d",
+      "sha256": "d56a44425a0e1e7cd22d673a5845e50f628fe23f84291e77205081130218676f",
       "mode": "0700",
-      "bytes": 136228
+      "bytes": 137866
     },
     {
       "path": "driver/fix_safety.py",
@@ -220,9 +220,9 @@
     },
     {
       "path": "driver/guard.sh",
-      "sha256": "e18945537af2cddc86df35418b9a4c79a85eab9134deee1390c549ce33935c3e",
+      "sha256": "6feb42449e7980064d97fe5a94ef20fb4c68153bad767953c80422ea075bdb97",
       "mode": "0700",
-      "bytes": 5858
+      "bytes": 6409
     },
     {
       "path": "driver/implementation_gates.py",
@@ -358,9 +358,9 @@
     },
     {
       "path": "driver/unit_records.py",
-      "sha256": "f65b258a7a17f4d28da7e685fe79289e31e33280ce0202563a3b9b55c493bc6c",
+      "sha256": "24fec20af5041bfb10b8053751371888fdc23c00119466359656f697284fd89e",
       "mode": "0700",
-      "bytes": 60696
+      "bytes": 61047
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -532,10 +532,10 @@
     },
     {
       "path": "install.py",
-      "sha256": "20357512dae28e192f4f84af38ebf9b6890adf5bef79d3047548ff9bd18c2e77",
+      "sha256": "0e68f4c1b333bd14086d4ccc64599e511a7d3dcbefb5957045b7623a4dae74b5",
       "mode": "0700",
-      "bytes": 21976
+      "bytes": 24920
     }
   ],
-  "manifest_sha256": "7f82caf9f59c1f20bef998d6d4f72328ae9fb2b490d23e7f9985a152c51349cf"
+  "manifest_sha256": "fd47c58f85ea1199aed6d790c46b19bbf1b947eba57db1b562ccaa44581cb1e1"
 }

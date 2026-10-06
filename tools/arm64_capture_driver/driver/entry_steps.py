@@ -75,6 +75,11 @@ TREE_EXCLUDES = {
     "source": frozenset({".git", "target", "node_modules", "__pycache__"}),
 }
 DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"   # 与驱动 install.py 的 latest_deploy_receipt 同一规则
+# B5a-01：按参数 CLIENT（缺省 codex）选部署收据，规则与驱动 install.py 相同：文件名模式、时间戳前的分隔串（按部署顺序
+# 排序），以及工具身份所在的对象（Codex 收据是顶层，Claude 收据 official-client-managed-deploy/v1 是 identity）。
+DEPLOY_RECEIPT_GLOBS = {"codex": DEPLOY_RECEIPT_GLOB, "claude": "claude-managed-deploy-*.json"}
+DEPLOY_RECEIPT_STAMP_SEPARATORS = {"codex": "-supervisor-enable-", "claude": "claude-managed-deploy-"}
+DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
 TEMPLATE = re.compile(r"\{([A-Z_][A-Z0-9_]*)\}")
 
 
@@ -453,6 +458,15 @@ class Context:
             raise MissingParameter("D")
         return Path(value)
 
+    @property
+    def client(self) -> str:
+        """本轮客户端（参数 CLIENT，缺省 codex）：决定读哪个客户端的部署收据（B5a-01）；不认识的值失败关闭。"""
+
+        value = self.params.get("CLIENT") or "codex"
+        if value not in DEPLOY_RECEIPT_GLOBS:
+            raise EntryStepsError(f"参数 CLIENT 不认识：{value!r}（可选：{sorted(DEPLOY_RECEIPT_GLOBS)}）")
+        return value
+
     def expand(self, template: str) -> str:
         def replace(match: re.Match[str]) -> str:
             key = match.group(1)
@@ -509,8 +523,10 @@ class Context:
     def latest_deploy_receipt(self) -> Path | None:
         if "deploy" not in self.cache:
             control = self.data_root / "control"
-            candidates = sorted((path for path in control.glob(DEPLOY_RECEIPT_GLOB) if path.is_file() and not path.is_symlink()),
-                                key=lambda path: path.name.split("-supervisor-enable-", 1)[1].lower())
+            separator = DEPLOY_RECEIPT_STAMP_SEPARATORS[self.client]
+            candidates = sorted((path for path in control.glob(DEPLOY_RECEIPT_GLOBS[self.client])
+                                 if path.is_file() and not path.is_symlink()),
+                                key=lambda path: path.name.split(separator, 1)[1].lower())
             self.cache["deploy"] = candidates[-1] if candidates else None
         return self.cache["deploy"]
 
@@ -711,7 +727,8 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
         receipt = ctx.latest_deploy_receipt()
         if receipt is None:
             return _missing(item)
-        return _json_field(item, receipt, item.arg)
+        container = DEPLOY_RECEIPT_IDENTITY_KEYS[ctx.client] if item.arg in IDENTITY_FIELDS else None
+        return _json_field(item, receipt, item.arg, container=container)
     if kind == "json_field":
         return _json_field(item, Path(ctx.expand(item.arg)), item.option)
     if kind == "driver":
@@ -738,9 +755,12 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
     raise EntryStepsError(f"输入种类不认识：{kind}")
 
 
-def _json_field(item: Input, path: Path, field: str) -> dict[str, Any]:
+def _json_field(item: Input, path: Path, field: str, *, container: str | None = None) -> dict[str, Any]:
+    """JSON 文件里一个字段的值；``container`` 给出时先取该对象再取字段（Claude 部署收据的身份在 identity 里）。"""
+
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))[field]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        value = (payload if container is None else payload[container])[field]
     except (OSError, ValueError, KeyError, TypeError):
         return _missing(item, path=str(path), field=field)
     return _value_entry(item, json.dumps(value, ensure_ascii=False, sort_keys=True), path=str(path), field=field)

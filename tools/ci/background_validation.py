@@ -64,6 +64,12 @@ DIRECTORY = "background-validation"
 DEFAULT_PROFILE = "full-gates"
 # 与驱动 install.py 的 latest_deploy_receipt 同一规则（按文件名里的时间戳取最新）。
 DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"
+# B5a-01：按客户端（--client，缺省 codex）选部署收据，规则与驱动 install.py 相同；Claude 收据的工具身份在 identity
+# 对象里。Codex 的结论文件逐字不变（不写 client 字段），Claude 的结论写 client，run 与边界判定据此取同一客户端的收据。
+DEPLOY_RECEIPT_GLOBS = {"codex": DEPLOY_RECEIPT_GLOB, "claude": "claude-managed-deploy-*.json"}
+DEPLOY_RECEIPT_STAMP_SEPARATORS = {"codex": "-supervisor-enable-", "claude": "claude-managed-deploy-"}
+DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
+DEPLOY_CLIENTS = tuple(DEPLOY_RECEIPT_GLOBS)
 IDENTITY_FIELDS = ("policy_version", "policy_sha256", "tool_files_sha256", "wire_producer_sha256", "evidence_semantics_sha256",
                    "control_sha256")
 HERE = Path(__file__).resolve().parent
@@ -132,12 +138,15 @@ def _group_alive(pgid: Any) -> bool:
     return True
 
 
-def latest_deployment(data_root: Path) -> dict[str, Any]:
-    """数据根最新的受管工具部署收据：文件名、sha256、工具身份。"""
+def latest_deployment(data_root: Path, client: str = "codex") -> dict[str, Any]:
+    """数据根该客户端最新的受管工具部署收据：文件名、sha256、工具身份。"""
 
+    if client not in DEPLOY_RECEIPT_GLOBS:
+        raise ValidationError(f"不认识的客户端：{client!r}（可选：{list(DEPLOY_CLIENTS)}）")
     control = Path(data_root) / "control"
-    candidates = sorted((path for path in control.glob(DEPLOY_RECEIPT_GLOB) if path.is_file() and not path.is_symlink()),
-                        key=lambda path: path.name.split("-supervisor-enable-", 1)[1].lower())
+    separator = DEPLOY_RECEIPT_STAMP_SEPARATORS[client]
+    candidates = sorted((path for path in control.glob(DEPLOY_RECEIPT_GLOBS[client]) if path.is_file() and not path.is_symlink()),
+                        key=lambda path: path.name.split(separator, 1)[1].lower())
     if not candidates:
         raise ValidationError(f"数据根没有受管工具部署收据：{control}")
     path = candidates[-1]
@@ -147,7 +156,11 @@ def latest_deployment(data_root: Path) -> dict[str, Any]:
         raise ValidationError(f"部署收据不是合法 JSON：{path}：{error}") from error
     if not isinstance(payload, dict) or payload.get("status") != "passed":
         raise ValidationError(f"最新部署收据不是 passed：{path}")
-    return {"receipt": path.name, "sha256": _sha256_file(path), "identity": {field: payload.get(field) for field in IDENTITY_FIELDS}}
+    key = DEPLOY_RECEIPT_IDENTITY_KEYS[client]
+    identity = payload if key is None else payload.get(key)
+    if not isinstance(identity, dict):
+        raise ValidationError(f"部署收据缺少工具身份：{path}")
+    return {"receipt": path.name, "sha256": _sha256_file(path), "identity": {field: identity.get(field) for field in IDENTITY_FIELDS}}
 
 
 def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any]) -> Path:
@@ -239,7 +252,8 @@ def start(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
-    deployment = latest_deployment(args.data_root)
+    client = getattr(args, "client", None) or "codex"
+    deployment = latest_deployment(args.data_root, client)
     path = result_path(args.runroot, args.commit, deployment)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
     isolated_root = Path(args.runroot) / DIRECTORY / "work"
@@ -293,6 +307,8 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         "data_root": str(args.data_root), "runroot": str(args.runroot), "then_dryrun": bool(args.then_dryrun),
         "failed_gates": [], "reason": None, "returncode": None, "dryrun": None,
         **full_set_paths,
+        # B5a-01：只有非 Codex 的结论记录客户端，Codex 结论的字段逐字不变（读取时缺省按 codex）。
+        **({"client": client} if client != "codex" else {}),
     }
     if existing is not None:
         # 当前状态文件可更新；每次重新开始前保留上一执行的完整终态，便于复核失败恢复。
@@ -375,7 +391,7 @@ def run(result: Path) -> int:
     checked = Path(str(((summary or {}).get("source") or {}).get("deploy_receipt") or "")).name
     failed = [str(gate.get("gate_id")) for gate in (summary or {}).get("gates") or [] if gate.get("status") != "passed"]
     try:
-        deployment_matches = latest_deployment(Path(payload["data_root"])) == payload["deployment"]
+        deployment_matches = latest_deployment(Path(payload["data_root"]), payload.get("client") or "codex") == payload["deployment"]
     except (ValidationError, OSError, ValueError):
         deployment_matches = False
     if received:
@@ -447,10 +463,10 @@ def _chain_dryrun(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- 批次边界与 VC-5 前核对
 
-def check(runroot: Path, data_root: Path, *, require_passed: bool) -> tuple[int, str]:
+def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str = "codex") -> tuple[int, str]:
     """批次边界（``require_passed`` 为假）或 VC-5 验收前（为真）的判定：（退出码，说明）。"""
 
-    deployment = latest_deployment(data_root)
+    deployment = latest_deployment(data_root, client)
     found = for_deployment(runroot, deployment)
     if found is None:
         message = f"当前部署（{deployment['receipt']}）还没有后台验证：先 background-validate.sh start <bundle> <分支> <提交>"
@@ -492,6 +508,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--full-set-predecessor", type=Path, help="失效的旧收据，只读关联")
     p_start.add_argument("--audit-policy", type=Path, help="B-11 已登记的严格读集策略")
     p_start.add_argument("--rerun-full-set", action="store_true", help="撤销或错绑后显式重跑全集，保留旧终态并关联旧收据")
+    p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)
     p_stop = sub.add_parser("stop", help="停下在跑的后台验证，标 superseded")
@@ -501,6 +518,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         p = sub.add_parser(name)
         p.add_argument("--runroot", type=Path, required=True)
         p.add_argument("--data-root", type=Path, required=True)
+        p.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="取哪个客户端的部署收据（缺省 codex）")
     p_status = sub.add_parser("status")
     p_status.add_argument("--runroot", type=Path, required=True)
     return parser.parse_args(argv)
@@ -524,7 +542,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"stopped": stop(args.runroot, args.reason)}, ensure_ascii=False))
             return 0
         if args.command in ("check-boundary", "require-passed"):
-            code, message = check(args.runroot, args.data_root, require_passed=args.command == "require-passed")
+            code, message = check(args.runroot, args.data_root, require_passed=args.command == "require-passed",
+                                  client=args.client)
             print(message, flush=True)
             return code
         print(json.dumps([{**payload, "effective_status": effective_status(payload), "path": str(path)}

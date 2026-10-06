@@ -21,6 +21,10 @@
   属主 root 与清单一致、无多余文件；存在一份安装收据其 manifest_sha256
   等于当前清单且其绑定的部署收据仍是 ``control/`` 下最新的一份（受管工具重新部署后必须重新
   ``install`` 确认，否则 guard 失败）。
+
+Claude 升级 B5a-01 起两处补充：``control/`` 下有受监督部署的事务日志（``managed-deploy-*.journal``，部署进行中或
+中断后尚未恢复）时 ``install`` 与 ``verify`` 一律拒绝——生产树可能处在半交换状态，只认已写出的收据；``install``／
+``verify`` 加 ``--client``（缺省 codex），按客户端选部署收据的文件名模式与合同，Codex 的行为逐字不变。
 """
 
 from __future__ import annotations
@@ -42,6 +46,14 @@ MANIFEST_SCHEMA = "arm64-capture-driver-manifest/v1"
 INSTALL_RECEIPT_SCHEMA = "arm64-capture-driver-install/v1"
 MANIFEST_NAME = "manifest.json"
 DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"
+# B5a-01：按客户端选部署收据（与受管部署器 DEPLOY_RECEIPT_GLOBS、各客户端适配器 deploy_receipt_glob 同值）。文件名里
+# 时间戳之前的分隔串用于按部署顺序排序；Claude 收据的工具身份在 identity 对象里，Codex 收据在顶层。
+DEPLOY_RECEIPT_GLOBS = {"codex": DEPLOY_RECEIPT_GLOB, "claude": "claude-managed-deploy-*.json"}
+DEPLOY_RECEIPT_STAMP_SEPARATORS = {"codex": "-supervisor-enable-", "claude": "claude-managed-deploy-"}
+DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
+DEPLOY_CLIENTS = tuple(DEPLOY_RECEIPT_GLOBS)
+# 受监督部署的写前意图日志：存在即说明有部署在进行或中断后尚未恢复（arm64_supervised_deploy.SWITCH_JOURNAL_GLOB）。
+SWITCH_JOURNAL_GLOB = "managed-deploy-*.journal"
 INSTALL_RECEIPT_PREFIX = "arm64-capture-driver-install-"
 # 安装模式：可执行脚本 0700，其余 0600；目录 0700。
 EXECUTABLE_SUFFIXES = {".sh", ".py"}
@@ -231,33 +243,55 @@ def verify_tree(root: Path, manifest: Mapping[str, Any], *, check_mode: bool, re
     return rows
 
 
-def latest_deploy_receipt(control_root: Path) -> tuple[Path, dict[str, Any]]:
-    """control/ 下当前最新的受管工具部署收据（按文件名中的时间戳，即部署顺序）。"""
+def require_no_switch_journal(control_root: Path) -> None:
+    """受监督部署的事务日志还在即拒绝（B5a-01 消费门禁）：生产树可能处在半交换状态，此时只认已写出的收据。"""
 
+    journals = sorted(path.name for path in Path(control_root).glob(SWITCH_JOURNAL_GLOB))
+    if journals:
+        raise DriverError(
+            f"control 目录有未完成的受监督部署事务日志 {journals}：部署进行中或中断后尚未恢复，"
+            "重新执行受监督部署完成恢复后再派发。"
+        )
+
+
+def deploy_receipt_identity(payload: Mapping[str, Any], client: str = "codex") -> Mapping[str, Any]:
+    """部署收据里的工具身份所在对象：Codex 收据是顶层，Claude 收据是 ``identity``。"""
+
+    key = DEPLOY_RECEIPT_IDENTITY_KEYS[client]
+    identity = payload if key is None else payload.get(key)
+    return identity if isinstance(identity, Mapping) else {}
+
+
+def latest_deploy_receipt(control_root: Path, client: str = "codex") -> tuple[Path, dict[str, Any]]:
+    """control/ 下该客户端当前最新的受管工具部署收据（按文件名中的时间戳，即部署顺序）。"""
+
+    if client not in DEPLOY_RECEIPT_GLOBS:
+        raise DriverError(f"不认识的客户端：{client!r}（可选：{list(DEPLOY_CLIENTS)}）")
     control_root = Path(control_root)
-    candidates = sorted((p for p in control_root.glob(DEPLOY_RECEIPT_GLOB) if p.is_file() and not p.is_symlink()),
-                        key=lambda path: path.name.split("-supervisor-enable-", 1)[1].lower())
+    separator = DEPLOY_RECEIPT_STAMP_SEPARATORS[client]
+    candidates = sorted((p for p in control_root.glob(DEPLOY_RECEIPT_GLOBS[client]) if p.is_file() and not p.is_symlink()),
+                        key=lambda path: path.name.split(separator, 1)[1].lower())
     if not candidates:
         raise DriverError(f"control 目录没有受管工具部署收据：{control_root}")
     path = candidates[-1]
-    if len(candidates) > 1 and path.name.split("-supervisor-enable-", 1)[1].lower() == candidates[-2].name.split("-supervisor-enable-", 1)[1].lower():
+    if len(candidates) > 1 and path.name.split(separator, 1)[1].lower() == candidates[-2].name.split(separator, 1)[1].lower():
         raise DriverError("同一时刻存在两份部署收据，无法唯一确定最新部署")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise DriverError(f"部署收据不是合法 JSON：{path}：{error}") from error
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("tool_files_sha256"), str):
+    if not isinstance(payload, Mapping) or not isinstance(deploy_receipt_identity(payload, client).get("tool_files_sha256"), str):
         raise DriverError(f"部署收据缺少 tool_files_sha256：{path}")
     return path, dict(payload)
 
 
-def _deploy_binding(control_root: Path) -> dict[str, Any]:
-    path, payload = latest_deploy_receipt(control_root)
+def _deploy_binding(control_root: Path, client: str = "codex") -> dict[str, Any]:
+    path, payload = latest_deploy_receipt(control_root, client)
     return {
         "path": path.name,
         "sha256": _sha256_file(path),
         "status": payload.get("status"),
-        "tool_files_sha256": payload["tool_files_sha256"],
+        "tool_files_sha256": deploy_receipt_identity(payload, client)["tool_files_sha256"],
         "supervisor_sha256": payload.get("supervisor_sha256"),
     }
 
@@ -317,11 +351,12 @@ def cmd_install(arguments: argparse.Namespace) -> int:
     data_root = Path(arguments.data_root).resolve(strict=True)
     control_root = data_root / "control"
     _require_root()
+    require_no_switch_journal(control_root)
     if target.exists() and target.is_symlink():
         raise DriverError(f"安装目标不得是符号链接：{target}")
     manifest = load_manifest(source)
     verify_tree(source, manifest, check_mode=False, require_root_owner=False)
-    deploy = _deploy_binding(control_root)
+    deploy = _deploy_binding(control_root, getattr(arguments, "client", "codex"))
     stamp = _stamp()
     staging = target.parent / f"{target.name}.staging-{stamp}"
     backup = target.parent / f"{target.name}.previous-{stamp}"
@@ -358,15 +393,16 @@ def cmd_install(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def verify_install(target: Path, data_root: Path) -> dict[str, Any]:
+def verify_install(target: Path, data_root: Path, client: str = "codex") -> dict[str, Any]:
     target = Path(target)
     data_root = Path(data_root)
     control_root = data_root / "control"
+    require_no_switch_journal(control_root)
     if target.is_symlink() or not target.is_dir():
         raise DriverError(f"安装目标不存在或不可信：{target}")
     manifest = load_manifest(target)
     verify_tree(target, manifest, check_mode=True, require_root_owner=_running_as_root())
-    deploy = _deploy_binding(control_root)
+    deploy = _deploy_binding(control_root, client)
     matched: dict[str, Any] | None = None
     stale: list[str] = []
     for path in reversed(_install_receipts(control_root)):
@@ -402,7 +438,7 @@ def verify_install(target: Path, data_root: Path) -> dict[str, Any]:
 
 
 def cmd_verify(arguments: argparse.Namespace) -> int:
-    result = verify_install(Path(arguments.target), Path(arguments.data_root))
+    result = verify_install(Path(arguments.target), Path(arguments.data_root), arguments.client)
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -418,10 +454,12 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--source", required=True)
     install.add_argument("--target", required=True)
     install.add_argument("--data-root", required=True)
+    install.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="按哪个客户端的部署收据绑定（缺省 codex）")
     install.set_defaults(func=cmd_install)
     verify = sub.add_parser("verify", help="复验安装目标与安装收据")
     verify.add_argument("--target", required=True)
     verify.add_argument("--data-root", required=True)
+    verify.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="按哪个客户端的部署收据复验（缺省 codex）")
     verify.set_defaults(func=cmd_verify)
     return parser
 

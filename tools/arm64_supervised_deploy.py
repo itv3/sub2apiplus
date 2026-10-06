@@ -5,6 +5,13 @@
 所有外部命令都经由 ``codex_upgrade_supervisor.SupervisorClient``，文件操作前后均
 写入事件账本。发布后的任一校验失败时，会同时恢复旧工具和旧文档，并保留失败
 的新版本以便审计。
+
+Claude 升级 B5a-01 起，一次部署是一个多根事务：``--managed-roots`` 选择要交换的受管根
+（缺省只有 ``tools/official_client_capture``），``--client`` 选择要签收据的客户端（缺省只有
+codex，Codex 收据的字段、文件名与摘要口径逐字不变）。交换任何对象之前先把完整意图写入
+``control/managed-deploy-<stamp>.journal`` 并 fsync；中断后再次启动时按生产路径的实际内容
+判定每个对象处在哪一步，把它恢复到部署前（或在收据正文已入日志时补齐收据），从不依据
+「进行到哪一步」的记忆。日志存在期间驱动 ``install.py verify`` 与 ``guard.sh`` 拒绝派发。
 """
 
 from __future__ import annotations
@@ -12,6 +19,8 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
+import fcntl
+import fnmatch
 import hashlib
 import importlib.util
 import ipaddress
@@ -310,6 +319,12 @@ from urllib.parse import urlsplit
 # 断言包取证清单版本字段与根因码表经客户端适配器取（Codex 取值逐字不变）；新增 Claude 清单合同
 # official-client-campaign-run/v1（v2 结构加 client），后继协议与批次历史核对前后清单同属一个客户端。control 层变化，
 # 监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
+# 2026-10-07（Claude 升级 B5a-01）：部署改为多根事务——交换任何对象之前写意图日志（control/managed-deploy-<stamp>.journal），
+# 中断后按生产路径的实际内容恢复到部署前或补齐收据；--managed-roots 选择要交换的受管根、--client 选择签收据的客户端，
+# 交换 official_client_capture 根影响两个客户端、official_client_control 根只影响 Claude。Codex 收据
+# codex-arm64-supervisor-enable/v1 的 22 个字段、文件名与单根三后缀摘要口径不变；Claude 另签
+# official-client-managed-deploy/v1（身份由 v3 引擎按 Claude 策略计算）。受管树只有 codex_upgrade_wire_transition.py 的
+# main 改经适配器取 _tool_identity（control 层，Codex 取值不变）；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "9a4b077e261f30dd0ab0cad72b597c3099edafd33c548a9144c442f53faa6a0d"
 )
@@ -317,11 +332,26 @@ DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
 )
 RENAME_EXCHANGE = 2
+# renameat2 的不覆盖标志：目标已存在时内核返回 EEXIST，用于「原路径不存在」的切入与回滚移回（B5a-01）。
+RENAME_NOREPLACE = 1
 AT_FDCWD = -100
+# Codex 部署收据的整树摘要口径（单根、三后缀）。Claude 的摘要口径由 Claude 策略自带（含 .mjs、两个根），
+# 不经这个常量；改它会改变 Codex 收据的 tool_files_sha256，所以 B5a-01 起也只服务 Codex。
 SAFE_SUFFIXES = {".py", ".sh", ".json"}
+# Codex 的活动文档。签 Codex 收据的事务交换这两份（含 repository-docs 归档副本）；Codex 收据的
+# switched_archived_documents 只列它们，VC-0 收口按这份清单逐项核对（codex_upgrade_vc0_closeout 的
+# EXPECTED_MANAGED_DOCUMENTS），因此不能把其他客户端的文档混进这个元组。
 MANAGED_DOCUMENTS = (
     "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
     "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+)
+# Claude 的活动文档（B5a-01）：Claude 指南与两客户端共用控制面的实现文档（设计 D10）。只有签 Claude 收据的事务
+# 才交换它们。没有并进 MANAGED_DOCUMENTS 的原因有二：其一，修复轮驱动（fix-and-continue.sh）只为 Codex 的两份文档
+# 准备 staging 归档副本，缺省 Codex 部署若要求这两份就会在预检失败；其二，上面所说的 VC-0 收口逐项核对。
+# 首次纳管时生产路径不存在，意图记 old_exists=false，回滚恢复为不存在。
+CLAUDE_MANAGED_DOCUMENTS = (
+    "CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+    "OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md",
 )
 # 计时账本会在运行时从仓库根读取这些来源链文档。它们不是普通说明文档，
 # 而是历史 producer 摘要承接的直接依赖，必须与工具树放在同一部署事务中。
@@ -485,7 +515,92 @@ MANAGED_RUNTIME_DOCUMENTS = (
     # 2026-10-07（Claude 升级批次 1 收口）：计时账本加客户端维度后的生产者承接收据；同一张收据也承接本清单这次变更。
     "egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
 )
+# Claude 的运行时依赖文档（B5a-01 扩展点）。Codex 的这张清单存在，是因为计时账本重放历史 producer 摘要时在运行时
+# 读取承接收据；Claude 计时账本的承接表目前为空（B1-05：PRODUCER_FREEZE_SUCCESSORS_BY_CLIENT["claude"] == ()），也没有
+# 别的 Claude 工具在运行时从仓库根读台账，所以清单留空。以后 Claude 工具开始在运行时读某份台账时登记在这里，
+# 签 Claude 收据的事务会把它与工具树放进同一事务。
+CLAUDE_MANAGED_RUNTIME_DOCUMENTS: tuple[str, ...] = ()
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
+
+# ---------------------------------------------------------------------------
+# 多根事务与按客户端签收据（B5a-01）
+# ---------------------------------------------------------------------------
+# 受管根（相对数据根，与仓库内布局相同）→ 交换它会影响身份的客户端。Codex 的身份只覆盖 official_client_capture；
+# Claude 的身份覆盖两个根（Claude 策略 roots）。
+CAPTURE_ROOT = "tools/official_client_capture"
+CONTROL_ROOT = "tools/official_client_control"
+MANAGED_ROOT_CLIENTS: Mapping[str, tuple[str, ...]] = {
+    CAPTURE_ROOT: ("codex", "claude"),
+    CONTROL_ROOT: ("claude",),
+}
+DEFAULT_MANAGED_ROOTS = (CAPTURE_ROOT,)
+# 签收据的顺序固定按这张表：Claude 收据要记录同一事务 Codex 收据的摘要，所以 Codex 收据必须先定稿。
+DEPLOY_CLIENTS = ("codex", "claude")
+DEFAULT_CLIENTS = ("codex",)
+# 客户端身份覆盖的受管根：签某客户端收据时，这些根在部署后都必须等于暂存树的同名根（未交换的根要求生产现状
+# 已与暂存树一致），收据才能如实描述生产身份。
+CLIENT_MANAGED_ROOTS: Mapping[str, tuple[str, ...]] = {
+    "codex": (CAPTURE_ROOT,),
+    "claude": (CAPTURE_ROOT, CONTROL_ROOT),
+}
+CLIENT_MANAGED_DOCUMENTS: Mapping[str, tuple[str, ...]] = {
+    "codex": MANAGED_DOCUMENTS,
+    "claude": CLAUDE_MANAGED_DOCUMENTS,
+}
+CLIENT_MANAGED_RUNTIME_DOCUMENTS: Mapping[str, tuple[str, ...]] = {
+    "codex": MANAGED_RUNTIME_DOCUMENTS,
+    "claude": CLAUDE_MANAGED_RUNTIME_DOCUMENTS,
+}
+# 部署收据：合同、文件名模式（与适配器 deploy_receipt_glob 同值，测试核对）与文件名里时间戳之前的前缀。
+# Codex 的文件名保留它自己维护的版本标签（codex-01600-…），消费者按 "-supervisor-enable-" 之后的时间戳排序。
+CODEX_DEPLOY_RECEIPT_SCHEMA = "codex-arm64-supervisor-enable/v1"
+CLAUDE_DEPLOY_RECEIPT_SCHEMA = "official-client-managed-deploy/v1"
+DEPLOY_RECEIPT_GLOBS: Mapping[str, str] = {
+    "codex": "codex-*-supervisor-enable-*.json",
+    "claude": "claude-managed-deploy-*.json",
+}
+CODEX_RECEIPT_NAME_TEMPLATE = "codex-01600-supervisor-enable-{stamp}.json"
+CLAUDE_RECEIPT_NAME_TEMPLATE = "claude-managed-deploy-{stamp}.json"
+# Codex 收据的字段闭集（22 项，VC-0 收口与驱动按它核对）；B5a-01 不增不减。
+CODEX_DEPLOY_RECEIPT_FIELDS = frozenset({
+    "schema_version", "status", "campaign_id", "created_at_utc", "architecture", "production_tool_root",
+    "production_doc_root", "tool_files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256",
+    "evidence_semantics_sha256", "control_sha256", "supervisor_sha256", "assertion_preparer_sha256", "rollback_backup",
+    "assertion_preparer_rollback_backup", "document_rollback_backup", "switched_archived_documents",
+    "installed_runtime_documents", "supervisor_run_dir", "project_ledger",
+})
+# Claude 收据的字段闭集。设计规定的核心是 client、identity、managed_roots、runtime_bindings、switch_journal_sha256；
+# 其余是消费者需要的公共事实：status／created_at_utc（按部署顺序取最新、按时间找生效收据）、architecture 与
+# supervisor_sha256（修复轮期望摘要的同名键）、documents（Claude 文档的生效摘要与回滚点）、client_binaries 与 pre_a3
+# （冒烟探针与场景表的如实记录，没有目标版本或场景集合为空时写明跳过原因）、transaction_receipts（同一事务签出的
+# 其它客户端收据，B5a-08／B5a-10 据此认定「双收据」属于同一次部署）、notes（事务事实与人工备注，B5a-02 登记未受管旧副本）。
+CLAUDE_DEPLOY_RECEIPT_FIELDS = frozenset({
+    "schema_version", "status", "client", "campaign_id", "created_at_utc", "architecture", "production_data_root",
+    "production_doc_root", "identity", "managed_roots", "runtime_bindings", "switch_journal_sha256", "supervisor_sha256",
+    "supervisor_run_dir", "documents", "client_binaries", "pre_a3", "transaction_receipts", "notes",
+})
+CLAUDE_IDENTITY_FIELDS = (
+    "policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256",
+    "tool_files_sha256",
+)
+# Claude 身份引擎（v3）与策略：随 official_client_capture 根部署，部署时用暂存树里的那一份算预期身份，切换后用
+# 生产树里的那一份复算；两份字节相同（同一事务交换），复算结果必须与预期逐字相等。
+CLAUDE_IDENTITY_ENGINE = "claude_tool_identity_policy.py"
+CLAUDE_IDENTITY_POLICY = "claude_tool_identity_policy_v2.json"
+# v3 引擎以脚本方式（无包）加载时按扁平名导入的兄弟模块；加载与调用期间都要从同一棵树解析。
+CLAUDE_IDENTITY_SIBLINGS = ("claude_tool_identity_policy", "codex_upgrade_tool_identity_policy", "upgrade_client_adapter")
+
+# 写前意图日志（B5a-01）：一个事务一份，放在 control 目录（与候选、备份、收据同一文件系统）。第一行是意图，之后
+# 只追加阶段标记；正常结束删除，回滚结束改名为失败证据（不再匹配活动日志的模式，消费门禁不再拒绝）。
+SWITCH_JOURNAL_SCHEMA = "managed-deploy-journal/v1"
+SWITCH_JOURNAL_GLOB = "managed-deploy-*.journal"
+SWITCH_JOURNAL_NAME_TEMPLATE = "managed-deploy-{stamp}.journal"
+SWITCH_JOURNAL_RETIRED_SUFFIX = ".rolled-back"
+SWITCH_JOURNAL_MARKERS = (
+    "switch_begin", "switch_done", "verified", "receipts_prepared", "rollback_begin", "rollback_done",
+)
+# 同一 control 目录同时只允许一个受监督部署：启动恢复会按内容回滚它发现的日志，另一进程的进行中事务不能被当成残留。
+DEPLOY_LOCK_NAME = "managed-deploy.lock"
 # 生产监督器的编译检查只编译、不落盘（E2-02）：py_compile 会无视 PYTHONDONTWRITEBYTECODE 显式写 .pyc，生产受管树原先
 # 因此每次部署都多一个 __pycache__。内置 compile() 与 py_compile 是同一个编译器，语法与编码声明错误同样失败。
 COMPILE_CHECK_COMMAND = ("python3", "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec', dont_inherit=True)")
@@ -1948,6 +2063,101 @@ def staging_identity_v2(staging_tool: Path) -> dict[str, Any]:
     }
 
 
+def _module_file_under(module: Any, root: Path) -> bool:
+    location = getattr(module, "__file__", None)
+    if not isinstance(location, str):
+        return False
+    try:
+        Path(location).resolve().relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+@contextmanager
+def _staged_module_imports(module_root: Path, names: tuple[str, ...]):
+    """在一棵受管树里以脚本方式（扁平名）导入并调用模块，结束后不留任何痕迹。
+
+    v3 身份引擎按「无包即扁平导入兄弟模块」加载；部署器要用暂存树（或切换后的生产树）里的那一份，不能混入
+    进程内已缓存的同名模块。进入时把 ``module_root`` 放到 ``sys.path`` 首位并暂时移走同名模块；退出时恢复
+    ``sys.path``，丢弃块内从这棵树导入的全部模块（含 ``names``），再放回原来的同名模块。加载与调用都在块内
+    完成，函数体内的延迟导入也解析到同一棵树（2026-09-25 项目总账延迟导入事故的同类问题）。
+    """
+
+    root = module_root.resolve()
+    original_sys_path = list(sys.path)
+    previous = {name: sys.modules[name] for name in names if name in sys.modules}
+    before = set(sys.modules)
+    for name in names:
+        sys.modules.pop(name, None)
+    try:
+        sys.path.insert(0, str(root))
+        yield
+    finally:
+        sys.path[:] = original_sys_path
+        for name in list(sys.modules):
+            if name in names or (name not in before and _module_file_under(sys.modules[name], root)):
+                sys.modules.pop(name, None)
+        sys.modules.update(previous)
+
+
+def _fingerprint_entries(entries: list[dict[str, str]]) -> str:
+    """与身份引擎 ``_fingerprint({"entries": ...})`` 相同的规范 JSON 摘要。"""
+
+    return sha256_bytes(canonical({"entries": entries}))
+
+
+def claude_identity(repository_root: Path) -> dict[str, Any]:
+    """按这棵仓库视图里 official_client_capture 自带的 v3 引擎与 Claude 策略计算 Claude 工具身份。
+
+    ``repository_root`` 是含 ``tools/official_client_capture`` 与 ``tools/official_client_control`` 的目录：
+    预检时是暂存根，切换后复算时是生产数据根。返回五摘要与整树摘要（``tool_files_sha256``）、策略版本、
+    按受管根分组的单根摘要（条目键与整树相同，``<根目录名>/<相对路径>``，两组合起来就是整树清单），以及
+    策略登记的运行时绑定。按默认层归类的文件非空即失败关闭（B1-08 验收口径），否则身份不可信。
+    """
+
+    module_root = repository_root / CAPTURE_ROOT
+    engine_path = module_root / CLAUDE_IDENTITY_ENGINE
+    policy_path = module_root / CLAUDE_IDENTITY_POLICY
+    for path in (engine_path, policy_path):
+        if path.is_symlink() or not path.is_file():
+            raise DeploymentError(f"受管树缺少 Claude 身份引擎或策略：{path}")
+    with _staged_module_imports(module_root, CLAUDE_IDENTITY_SIBLINGS):
+        try:
+            engine = importlib.import_module("claude_tool_identity_policy")
+        except Exception as error:  # noqa: BLE001 - 引擎加载失败必须让部署失败关闭
+            raise DeploymentError(f"无法加载 Claude 身份引擎：{error}") from error
+        if not _module_file_under(engine, module_root.resolve()):
+            raise DeploymentError("Claude 身份引擎没有从目标受管树加载。")
+        try:
+            policy = engine.load_policy(policy_path)
+            identity = engine.compute_identity(policy, repository_root)
+            digests = engine.managed_tree_digests(repository_root, policy)
+        except Exception as error:  # noqa: BLE001 - 策略失败必须让部署失败关闭
+            raise DeploymentError(f"Claude 工具身份计算失败：{error}") from error
+    if policy.get("client") != "claude":
+        raise DeploymentError("Claude 身份策略的 client 不是 claude。")
+    if identity.get("defaulted_paths"):
+        raise DeploymentError(f"Claude 身份策略有未归层的受管文件：{identity['defaulted_paths'][:5]}")
+    policy_roots = [str(root).rstrip("/") for root in policy["roots"]]
+    if sorted(policy_roots) != sorted(CLIENT_MANAGED_ROOTS["claude"]):
+        raise DeploymentError(f"Claude 策略的受管根与部署器登记不一致：{policy_roots}")
+    roots: dict[str, dict[str, Any]] = {}
+    for root in policy_roots:
+        prefix = root.rsplit("/", 1)[-1] + "/"
+        entries = [{"path": key, "sha256": digests[key]} for key in sorted(digests) if key.startswith(prefix)]
+        roots[root] = {"tool_files_sha256": _fingerprint_entries(entries), "entry_count": len(entries)}
+    whole = _fingerprint_entries([{"path": key, "sha256": digests[key]} for key in sorted(digests)])
+    if whole != identity.get("tool_files_sha256"):
+        raise DeploymentError("Claude 整树摘要与身份引擎输出不一致。")
+    return {
+        "client": "claude",
+        **{field: identity[field] for field in CLAUDE_IDENTITY_FIELDS},
+        "roots": roots,
+        "runtime_bindings": sorted((dict(item) for item in policy["runtime_bindings"]), key=lambda item: item["name"]),
+    }
+
+
 def reject_untrusted_tree(root: Path) -> int:
     """拒绝符号链接、非 root 属主和 group/other 写权限。"""
 
@@ -2041,6 +2251,126 @@ def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         os.close(descriptor)
     os.replace(temporary, path)
     fsync_directory(path.parent)
+
+
+def rename_noreplace(source: Path, destination: Path) -> None:
+    """不覆盖地改名（renameat2 RENAME_NOREPLACE）：目标已存在时由内核拒绝，不存在先查后改的竞争窗口。
+
+    用于原路径不存在的对象切入生产（意图 ``old_exists=false``），以及回滚时把这类新产物移回候选区。完成后
+    fsync 两边的父目录，改名本身随之持久化。
+    """
+
+    if source.is_symlink() or destination.is_symlink():
+        raise DeploymentError("不覆盖改名的两端不得是符号链接。")
+    if not source.exists():
+        raise DeploymentError(f"不覆盖改名的源不存在：{source}")
+    if destination.exists():
+        raise DeploymentError(f"不覆盖改名的目标已存在：{destination}")
+    if source.parent.stat().st_dev != destination.parent.stat().st_dev:
+        raise DeploymentError("不覆盖改名的两端不在同一文件系统。")
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        function = libc.renameat2
+    except AttributeError as error:
+        raise DeploymentError("ARM64 内核/运行库不提供 renameat2。") from error
+    function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    result = function(AT_FDCWD, os.fsencode(source), AT_FDCWD, os.fsencode(destination), RENAME_NOREPLACE)
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    fsync_directory(source.parent)
+    fsync_directory(destination.parent)
+
+
+def _bytecode_cache(relative: Path) -> bool:
+    return "__pycache__" in relative.parts or relative.suffix == ".pyc"
+
+
+def tree_content_sha256(root: Path) -> str:
+    """一棵目录的完整内容摘要：恢复时据此判定生产路径上是旧树、新树还是别的东西。
+
+    逐项按相对路径排序记录目录、普通文件（内容 sha256）与符号链接（指向），包括测试目录与非受管后缀——
+    ``tool_digest`` 只覆盖三后缀且排除 tests，新旧两棵树只差测试文件时它给出同一个值，按它判定会把
+    「已交换」误认成「未交换」。字节码缓存（``__pycache__``、``.pyc``）不计：部署之后生产树被别的进程
+    导入时可能新长出缓存，它不是部署内容，不能因此把已交换的树判成「无法判定」。权限与时间不计。
+    """
+
+    if root.is_symlink() or not root.is_dir():
+        raise DeploymentError(f"不是可计算内容摘要的目录：{root}")
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if _bytecode_cache(relative):
+            continue
+        name = relative.as_posix().encode("utf-8")
+        if path.is_symlink():
+            digest.update(b"L\0" + name + b"\0" + os.fsencode(os.readlink(path)) + b"\n")
+        elif path.is_dir():
+            digest.update(b"D\0" + name + b"\n")
+        elif path.is_file():
+            digest.update(b"F\0" + name + b"\0" + file_sha256(path).encode("ascii") + b"\n")
+        else:
+            digest.update(b"O\0" + name + b"\n")
+    return digest.hexdigest()
+
+
+# 实际内容既不是 old 也不是 new 时的占位值：它们不是 64 位摘要，与任何意图摘要都不相等。
+OBJECT_SYMLINK = "symlink"
+OBJECT_TYPE_MISMATCH = "type-mismatch"
+
+
+def object_sha256(path: Path, object_type: str) -> str | None:
+    """按意图登记的对象类型取摘要：目录取完整内容摘要，文件取文件摘要；不存在为 None。
+
+    符号链接与类型不符分别返回占位值，恢复判定把它们落到「其它」一行（失败关闭）。
+    """
+
+    if path.is_symlink():
+        return OBJECT_SYMLINK
+    if not path.exists():
+        return None
+    if object_type == "directory":
+        return tree_content_sha256(path) if path.is_dir() else OBJECT_TYPE_MISMATCH
+    if object_type == "file":
+        return file_sha256(path) if path.is_file() else OBJECT_TYPE_MISMATCH
+    raise DeploymentError(f"意图对象类型非法：{object_type}")
+
+
+def _publish_bytes_once(path: Path, data: bytes) -> None:
+    """一次性发布一个新文件：先写同目录临时文件并 fsync，再以硬链接落到目标名（目标已存在即失败），最后
+    fsync 父目录。读者要么看不到目标，要么看到完整内容；目标一经出现就不再被覆盖（write-once）。"""
+
+    if path.exists() or path.is_symlink():
+        raise DeploymentError(f"目标已存在，拒绝覆盖：{path}")
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        offset = 0
+        while offset < len(data):
+            offset += os.write(descriptor, data[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.link(temporary, path)
+    finally:
+        os.unlink(temporary)
+    fsync_directory(path.parent)
+
+
+def receipt_bytes(payload: Mapping[str, Any]) -> bytes:
+    """部署收据落盘的确切字节（规范 JSON 加换行，与 ``write_json_atomic`` 历来写出的相同）。"""
+
+    return canonical(payload) + b"\n"
+
+
+def write_json_once(path: Path, payload: Mapping[str, Any]) -> int:
+    """write-once 写出部署收据；返回字节数。内容与 ``write_json_atomic`` 相同，只是不覆盖已有文件。"""
+
+    data = receipt_bytes(payload)
+    _publish_bytes_once(path, data)
+    return len(data)
 
 
 def reject_untrusted_file(path: Path, *, label: str) -> None:
@@ -2230,6 +2560,97 @@ def verify_container_codex_binaries(output: str, target_version: str) -> list[di
     return recorded
 
 
+# Claude 部署后冒烟（B5a-01）：容器内目标客户端装在 /opt/claude-<v>/claude（设计 D3：数据根 runtime/claude-<v> 只读挂载）。
+# 每个二进制在隔离的空 HOME 里执行 --version（B1-10 实测不联网、不写 HOME），结束即删除临时 HOME。
+CLAUDE_BINARY_PROBE = (
+    "import glob,json,re,shutil,subprocess,tempfile\n"
+    "rows=[]\n"
+    "for path in sorted(glob.glob('/opt/claude-*/claude')):\n"
+    "    match=re.fullmatch(r'/opt/claude-((?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*))/claude',path)\n"
+    "    row={'path':path,'version':match.group(1) if match else None}\n"
+    "    home=tempfile.mkdtemp(prefix='claude-deploy-probe-')\n"
+    "    try:\n"
+    "        done=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=30,"
+    "env={'HOME':home,'PATH':'/usr/local/bin:/usr/bin:/bin'})\n"
+    "        row.update(returncode=done.returncode,stdout=done.stdout.strip()[:200])\n"
+    "    except Exception as error:\n"
+    "        row.update(returncode=None,stdout='',error=type(error).__name__)\n"
+    "    finally:\n"
+    "        shutil.rmtree(home,ignore_errors=True)\n"
+    "    rows.append(row)\n"
+    "print(json.dumps(rows))\n"
+)
+# Claude 的目标版本登记点（扩展点）：Codex 取自已部署工具树的目标场景清单；Claude 的目标场景清单由 B2-05 建立、目标
+# 客户端由 B5a-07 安装，此前受管树里没有 Claude 目标版本，探针如实跳过并把原因写进 Claude 收据，不伪造。B2-05 登记
+# 目标场景清单时把文件名填在这里，清单需带 claude_version。
+CLAUDE_TARGET_SCENARIO_MANIFEST: str | None = None
+
+
+def read_target_claude_version(tool_root: Path) -> str | None:
+    """本轮目标 Claude 版本：取自已部署工具树的 Claude 目标场景清单；尚未登记时为 None（探针跳过）。"""
+
+    if CLAUDE_TARGET_SCENARIO_MANIFEST is None:
+        return None
+    manifest_path = tool_root / CLAUDE_TARGET_SCENARIO_MANIFEST
+    reject_untrusted_file(manifest_path, label="Claude 目标场景清单")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DeploymentError("无法读取 Claude 目标场景清单。") from error
+    version = manifest.get("claude_version") if isinstance(manifest, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(CODEX_VERSION_PATTERN, version):
+        raise DeploymentError("Claude 目标场景清单缺少合法的 claude_version。")
+    return version
+
+
+def verify_container_claude_binaries(output: str, target_version: str) -> list[dict[str, Any]]:
+    """与 Codex 同一判定：本轮目标版本的 Claude 必须存在、可执行并自报与安装目录一致的版本；其余目录只记录。"""
+
+    try:
+        rows = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise DeploymentError("容器内 Claude 客户端清单无法解析。") from error
+    if not isinstance(rows, list):
+        raise DeploymentError("容器内 Claude 客户端清单格式非法。")
+    target_path = f"/opt/claude-{target_version}/claude"
+    recorded: list[dict[str, Any]] = []
+    target_verified = False
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            raise DeploymentError(f"容器内 Claude 客户端清单行非法：{row}")
+        version = row.get("version") if isinstance(row.get("version"), str) else None
+        verified = False
+        if row["path"] == target_path:
+            stdout = row.get("stdout")
+            if (version != target_version or row.get("returncode") != 0 or not isinstance(stdout, str)
+                    or target_version not in stdout.split()):
+                raise DeploymentError(f"本轮目标版本 {target_version} 的 Claude 客户端不可执行或版本不符：{target_path}")
+            verified = target_verified = True
+        recorded.append({"path": row["path"], "version": version, "verified": verified})
+    if not target_verified:
+        raise DeploymentError(f"容器内缺少本轮目标版本 {target_version} 的 Claude 客户端：{target_path}")
+    return recorded
+
+
+def probe_claude_binaries(client: Any, tool_root: Path) -> dict[str, Any]:
+    """Claude 部署后冒烟：有目标版本才进容器核对，没有就如实跳过（不执行任何容器命令）。"""
+
+    target_version = read_target_claude_version(tool_root)
+    if target_version is None:
+        return {
+            "status": "skipped",
+            "target_version": None,
+            "binaries": [],
+            "reason": "受管工具树尚未登记 Claude 目标版本（目标场景清单 B2-05、目标客户端安装 B5a-07 之前）",
+        }
+    binaries = verify_container_claude_binaries(
+        run_checked(client, "enable:verify-claude-binaries",
+                    ["docker", "exec", "capture-cli", "python3", "-c", CLAUDE_BINARY_PROBE]),
+        target_version,
+    )
+    return {"status": "verified", "target_version": target_version, "binaries": binaries, "reason": None}
+
+
 PRE_A3_CERTIFICATION_MODULE = "codex_upgrade_pre_a3_certification.py"
 MANAGED_TEST_MODULE_PREFIX = "tools.official_client_capture."
 
@@ -2242,13 +2663,7 @@ def verify_pre_a3_scenario_entries(tool_root: Path) -> dict[str, Any]:
     不导入测试模块、不执行任何测试；属主与写权限由调用方的整树检查负责。
     """
 
-    source_path = tool_root / PRE_A3_CERTIFICATION_MODULE
-    if source_path.is_symlink() or not source_path.is_file():
-        raise DeploymentError(f"暂存树缺少 pre-A3 认证模块：{source_path}")
-    try:
-        module = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-    except (OSError, UnicodeDecodeError, SyntaxError) as error:
-        raise DeploymentError("无法解析 pre-A3 认证模块。") from error
+    module = _parse_pre_a3_module(tool_root)
     literals: dict[str, Any] = {}
     for node in module.body:
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
@@ -2274,6 +2689,31 @@ def verify_pre_a3_scenario_entries(tool_root: Path) -> dict[str, Any]:
         or len(set(registered_ids)) != len(registered_ids)
     ):
         raise DeploymentError("pre-A3 场景表或真实链登记集合非法。")
+    return _pre_a3_entry_rows(tool_root, scenarios, registered_ids)
+
+
+def _parse_pre_a3_module(tool_root: Path) -> ast.Module:
+    """读取并解析树内的 pre-A3 认证模块（只做 AST，不导入）。"""
+
+    source_path = tool_root / PRE_A3_CERTIFICATION_MODULE
+    if source_path.is_symlink() or not source_path.is_file():
+        raise DeploymentError(f"暂存树缺少 pre-A3 认证模块：{source_path}")
+    try:
+        return ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    except (OSError, UnicodeDecodeError, SyntaxError) as error:
+        raise DeploymentError("无法解析 pre-A3 认证模块。") from error
+
+
+def _pre_a3_entry_rows(
+    tool_root: Path,
+    scenarios: tuple[tuple[str, str, str, str, str], ...],
+    registered_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    """逐个核对场景入口（模块文件、测试类与方法）随树部署，并核对真实链登记项都在场景表里。
+
+    Codex 与 Claude 的场景表共用这一段核对；表本身的读取与形态校验由各自的调用方负责。
+    """
+
     parsed: dict[Path, ast.Module] = {}
     entries: list[dict[str, str]] = []
     for name, _description, module_name, class_name, method in scenarios:
@@ -2300,6 +2740,89 @@ def verify_pre_a3_scenario_entries(tool_root: Path) -> dict[str, Any]:
     if sorted(entry["id"] for entry in registration) != sorted(registered_ids):
         raise DeploymentError("pre-A3 真实链登记项在场景表中缺失或重复。")
     return {"scenario_count": len(entries), "real_chain_registration": registration}
+
+
+def _top_level_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+        return node.target.id, node.value
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id, node.value
+    return None
+
+
+def _pre_a3_client_table(module: ast.Module, name: str) -> dict[str, Any] | None:
+    """读 pre-A3 模块里按客户端分组的表（``{"codex": …, "claude": …}``）；模块里没有这张表时为 None。
+
+    表的值可以直接写字面量，也可以引用模块内另一个字面量常量（例如 ``{"codex": SCENARIOS, …}``）；两种写法
+    都只做静态求值，不导入模块。其它写法无法静态核对，失败关闭。
+    """
+
+    literals: dict[str, Any] = {}
+    deferred: dict[str, ast.AST] = {}
+    for node in module.body:
+        assignment = _top_level_assignment(node)
+        if assignment is None:
+            continue
+        target, value = assignment
+        try:
+            literals[target] = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError, RecursionError):
+            deferred[target] = value
+    if name in literals:
+        table = literals[name]
+    elif name in deferred:
+        node = deferred[name]
+        if not isinstance(node, ast.Dict):
+            raise DeploymentError(f"pre-A3 {name} 不是可静态核对的字面量。")
+        table = {}
+        for key, value in zip(node.keys, node.values):
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                raise DeploymentError(f"pre-A3 {name} 的键必须是客户端名字符串。")
+            if isinstance(value, ast.Name) and value.id in literals:
+                table[key.value] = literals[value.id]
+                continue
+            try:
+                table[key.value] = ast.literal_eval(value)
+            except (ValueError, TypeError, SyntaxError, RecursionError) as error:
+                raise DeploymentError(f"pre-A3 {name} 不是可静态核对的字面量。") from error
+    else:
+        return None
+    if not isinstance(table, dict):
+        raise DeploymentError(f"pre-A3 {name} 必须是按客户端分组的映射。")
+    return table
+
+
+def verify_claude_pre_a3_entries(tool_root: Path) -> dict[str, Any]:
+    """Claude 的 pre-A3 场景表与真实链登记（B5a-01 留结构，表本身由 B5a-04／B5a-05 建立）。
+
+    按客户端分组的表（``SCENARIOS_BY_CLIENT``／``REAL_CHAIN_IDS_BY_CLIENT``）里有 Claude 场景时，与 Codex 用同一段
+    入口核对（模块文件、测试类与方法随树部署，真实链登记项在场景表内）；还没有时如实记录集合为空与原因，
+    不伪造认证状态。
+    """
+
+    module = _parse_pre_a3_module(tool_root)
+    scenario_table = _pre_a3_client_table(module, "SCENARIOS_BY_CLIENT")
+    chain_table = _pre_a3_client_table(module, "REAL_CHAIN_IDS_BY_CLIENT")
+    scenarios = scenario_table.get("claude") if scenario_table is not None else None
+    registered_ids = chain_table.get("claude") if chain_table is not None else None
+    if not scenarios:
+        return {
+            "status": "not-registered",
+            "scenario_count": 0,
+            "real_chain_registration": [],
+            "reason": "pre-A3 认证模块尚无 Claude 场景表（按客户端分组的场景与真实链由 B5a-04／B5a-05 登记）",
+        }
+    if (
+        not isinstance(scenarios, tuple)
+        or any(not isinstance(row, tuple) or len(row) != 5 or not all(isinstance(item, str) and item for item in row)
+               for row in scenarios)
+        or len({row[0] for row in scenarios}) != len(scenarios)
+        or not isinstance(registered_ids, tuple)
+        or not registered_ids
+        or len(set(registered_ids)) != len(registered_ids)
+    ):
+        raise DeploymentError("pre-A3 Claude 场景表或真实链登记集合非法。")
+    return {"status": "verified", **_pre_a3_entry_rows(tool_root, scenarios, registered_ids), "reason": None}
 
 
 def project_ledger_summary(supervisor: Any, data_root: Path) -> dict[str, Any] | None:
@@ -2551,6 +3074,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ASSERTION_PREPARER_DIGEST,
     )
     parser.add_argument("--max-wall-seconds", type=float, default=900.0)
+    # B5a-01：多根事务与按客户端签收据。缺省只交换 official_client_capture、只签 Codex 收据，与改造前逐字相同。
+    parser.add_argument(
+        "--client",
+        nargs="+",
+        choices=DEPLOY_CLIENTS,
+        default=None,
+        help="要签部署收据的客户端（可多值，缺省 codex）；交换 official_client_capture 影响两个客户端，"
+             "official_client_control 只影响 Claude，已纳管的受影响客户端必须一并签收据",
+    )
+    parser.add_argument(
+        "--managed-roots",
+        nargs="+",
+        default=None,
+        help=f"要交换的受管根（相对数据根，可多值，缺省 {CAPTURE_ROOT}）；可选 {', '.join(MANAGED_ROOT_CLIENTS)}",
+    )
     return parser
 
 
@@ -2589,6 +3127,15 @@ def main(argv: list[str] | None = None) -> int:
         raise DeploymentError("暂存工具树不存在或不可信。")
     if production_root.is_symlink() or not production_root.is_dir():
         raise DeploymentError("生产工具树不存在或不可信。")
+    # B5a-01：事务范围与 Claude 预期身份。与 Codex 的暂存身份一样在启动监督器之前算好（只读暂存树）。缺省（只交换
+    # official_client_capture、只签 Codex）时这里不读任何 Claude 文件；后面的事件序列与改造前相同，只多出写意图、
+    # 收据正文入日志与删除日志三步，Codex 收据的字段与取值不变。
+    scope = transaction_scope(arguments.managed_roots, arguments.client, control_root)
+    signing = scope["clients"]
+    production_data_root = production_root.parent.parent
+    if scope["roots"] != [CAPTURE_ROOT] or "claude" in signing:
+        production_data_root = require_standard_layout(production_root)
+    claude_expected = claude_identity(staging_root) if "claude" in signing else None
     supervisor = load_supervisor(staging_root)
     stamp = utc_stamp().lower()
     campaign_id = f"c01600-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
@@ -2603,249 +3150,365 @@ def main(argv: list[str] | None = None) -> int:
         ledger_interval_seconds=60,
         terminate_owner=False,
     )
-    candidate: Path | None = None
-    backup: Path | None = None
+    documents, runtime_documents = transaction_documents(signing)
+    receipt_paths = {name: control_root / RECEIPT_NAME_TEMPLATES[name].format(stamp=stamp) for name in signing}
+    journal_path = control_root / SWITCH_JOURNAL_NAME_TEMPLATE.format(stamp=stamp)
+    root_candidates: dict[str, Path] = {}
+    root_backups: dict[str, Path] = {}
     assertion_preparer_candidate: Path | None = None
     assertion_preparer_backup: Path | None = None
     transaction_root: Path | None = None
-    switched_documents: list[str] = []
-    switched_archived_documents: list[str] = []
-    installed_documents: list[str] = []
-    tool_switched = False
-    assertion_preparer_switched = False
-    receipt_path = control_root / f"codex-01600-supervisor-enable-{stamp}.json"
+    journal: SwitchJournal | None = None
+    recovery: dict[str, Any] | None = None
 
-    def switch_tool_tree() -> Mapping[str, Any]:
-        """在事件结束写入失败时也保留已经发生的交换状态。"""
+    def write_switch_journal() -> Mapping[str, Any]:
+        """交换任何对象之前写入完整意图：每个对象的新旧摘要按实际内容现算，日志文件与父目录都 fsync。"""
 
-        nonlocal candidate, tool_switched
-        if candidate is None or backup is None:
-            raise DeploymentError("工具树候选或回滚坐标缺失。")
-        result = _exchange_and_backup(candidate, production_root, backup)
-        tool_switched = True
-        candidate = None
+        nonlocal journal
+        if transaction_root is None:
+            raise DeploymentError("文档事务目录坐标缺失。")
+        roots = [
+            intent_entry(
+                "root",
+                root,
+                "directory",
+                production_root if root == CAPTURE_ROOT else production_data_root / root,
+                root_candidates[root],
+                root_backups[root],
+            )
+            for root in scope["roots"]
+        ]
+        preparers = []
+        if assertion_preparer_candidate is not None and assertion_preparer_backup is not None:
+            preparers.append(intent_entry(
+                "preparer",
+                MANAGED_ASSERTION_PREPARER,
+                "file",
+                production_assertion_preparer,
+                assertion_preparer_candidate,
+                assertion_preparer_backup,
+            ))
+        intent = {
+            "schema_version": SWITCH_JOURNAL_SCHEMA,
+            "stamp": stamp,
+            "campaign_id": campaign_id,
+            "created_at_utc": _iso_now(),
+            "clients": list(signing),
+            "affected_clients": list(scope["affected_clients"]),
+            "unmanaged_affected_clients": list(scope["unmanaged_affected_clients"]),
+            "managed_roots": list(scope["roots"]),
+            "control_root": str(control_root),
+            "production_data_root": str(production_data_root),
+            "production_doc_root": str(production_doc_root),
+            "transaction_root": str(transaction_root),
+            "receipt_paths": {name: str(path) for name, path in receipt_paths.items()},
+            "roots": roots,
+            "preparers": preparers,
+            "documents": document_intent_entries(transaction_root, production_doc_root, documents, runtime_documents),
+        }
+        journal = SwitchJournal.create(journal_path, intent)
+        return {
+            "journal": journal_path.name,
+            "intent_sha256": journal.intent_sha256,
+            "roots": [{"root": entry["root"], "old_exists": entry["old_exists"]} for entry in roots],
+            "object_count": len(roots) + len(preparers) + len(intent["documents"]),
+        }
+
+    def active_journal() -> SwitchJournal:
+        if journal is None:
+            raise DeploymentError("部署事务日志尚未写入。")
+        return journal
+
+    def switch_roots() -> Mapping[str, Any]:
+        rows = switch_intent_group(active_journal(), "roots")
+        result: dict[str, Any] = {"roots": rows}
+        if CAPTURE_ROOT in root_backups:
+            result["backup"] = root_backups[CAPTURE_ROOT].name
         return result
 
-    def switch_assertion_preparer() -> Mapping[str, Any]:
-        """切换后立即置位，确保后续事件写入失败仍会共同回滚。"""
+    def switch_preparers() -> Mapping[str, Any]:
+        switch_intent_group(active_journal(), "preparers")
+        return {"backup": assertion_preparer_backup.name if assertion_preparer_backup else None}
 
-        nonlocal assertion_preparer_candidate, assertion_preparer_switched
-        if assertion_preparer_candidate is None or assertion_preparer_backup is None:
-            raise DeploymentError("assertion bundle 入口候选或回滚坐标缺失。")
-        result = _switch_assertion_preparer(
-            assertion_preparer_candidate,
-            production_assertion_preparer,
-            assertion_preparer_backup,
-        )
-        assertion_preparer_switched = True
-        assertion_preparer_candidate = None
-        return result
+    def switch_documents() -> Mapping[str, Any]:
+        rows = switch_intent_group(active_journal(), "documents")
+        active = [row for row in rows if not row["object"].startswith(ARCHIVE_DOCUMENT_PREFIX)]
+        archived = [row for row in rows if row["object"].startswith(ARCHIVE_DOCUMENT_PREFIX)]
+        return {
+            "switched_documents": [row["object"] for row in active if row["result"] == "switched"],
+            "installed_documents": [row["object"] for row in active if row["result"] == "installed"],
+            "switched_archived_documents": [
+                row["object"].removeprefix(ARCHIVE_DOCUMENT_PREFIX) for row in archived if row["result"] == "switched"
+            ],
+            "installed_archived_documents": [
+                row["object"].removeprefix(ARCHIVE_DOCUMENT_PREFIX) for row in archived if row["result"] == "installed"
+            ],
+            "backup_root": str(Path(str(transaction_root)) / "backups"),
+        }
 
-    # campaign-run 子进程复用父监督器；独立调用才创建并结束自己的监督器。
-    with (nullcontext(client) if client.attached else client):
-        try:
-            record_step(
-                client,
-                "enable:preflight",
-                lambda: _preflight(
+    def verify_transaction() -> Mapping[str, Any]:
+        """全局一致性核验：每个对象都已是新版本，再做各签收据客户端的切换后核验。"""
+
+        result: dict[str, Any] = dict(verify_switched_entries(active_journal()))
+        if "codex" in signing:
+            result.update(
+                _post_switch_verify(
                     client,
                     staging_root,
-                    staging_tool,
                     production_root,
                     production_doc_root,
                     arguments.expected_tool_digest,
                     arguments.expected_supervisor_digest,
                     arguments.expected_assertion_preparer_digest,
-                ),
+                )
             )
-            candidate = control_root / (
-                f"codex-01600-tool-candidate-{stamp}-{secrets.token_hex(4)}"
+        if claude_expected is not None:
+            result["claude"] = _post_switch_verify_claude(client, production_data_root, claude_expected)
+        return result
+
+    def prepare_receipts(
+        verification: Mapping[str, Any],
+        ledger_summary: Mapping[str, Any],
+        claude_preflight: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """按签收据客户端组装收据正文（Codex 先定稿，Claude 收据记录它的文件名与摘要）。"""
+
+        current = active_journal()
+        prepared: list[dict[str, Any]] = []
+        if "codex" in signing:
+            archived, installed = codex_document_facts(current.intent)
+            payload = build_codex_receipt(
+                campaign_id=campaign_id,
+                production_root=production_root,
+                production_doc_root=production_doc_root,
+                expected_tool_digest=arguments.expected_tool_digest,
+                identity_v2=arguments.identity_v2,
+                expected_supervisor_digest=arguments.expected_supervisor_digest,
+                expected_assertion_preparer_digest=arguments.expected_assertion_preparer_digest,
+                backup=root_backups.get(CAPTURE_ROOT),
+                assertion_preparer_backup=assertion_preparer_backup,
+                transaction_root=transaction_root,
+                switched_archived_documents=archived,
+                installed_documents=installed,
+                supervisor_run_dir=client.run_dir,
+                ledger_summary=ledger_summary,
             )
-            record_step(
-                client,
-                "enable:copy-candidate",
-                lambda: _copy_candidate(staging_tool, candidate),
+            prepared.append({
+                "client": "codex",
+                "path": str(receipt_paths["codex"]),
+                "sha256": sha256_bytes(receipt_bytes(payload)),
+                "payload": payload,
+            })
+        if claude_expected is not None:
+            payload = build_claude_receipt(
+                campaign_id=campaign_id,
+                journal=current,
+                verification=verification["claude"],
+                pre_a3=claude_preflight["pre_a3"],
+                expected_supervisor_digest=arguments.expected_supervisor_digest,
+                supervisor_run_dir=client.run_dir,
+                transaction_receipts=[
+                    {"client": item["client"], "receipt": Path(item["path"]).name, "sha256": item["sha256"]}
+                    for item in prepared
+                ],
             )
-            record_step(
-                client,
-                "enable:normalize-candidate",
-                lambda: {"entry_count": normalize_tree_permissions(candidate)},
-            )
-            record_step(
-                client,
-                "enable:verify-candidate",
-                lambda: _verify_candidate(
-                    candidate,
-                    arguments.expected_tool_digest,
-                    arguments.expected_supervisor_digest,
-                ),
-            )
-            assertion_preparer_candidate = control_root / (
-                f"assertion-preparer-candidate-{stamp}-{secrets.token_hex(4)}"
-            )
-            record_step(
-                client,
-                "enable:prepare-assertion-preparer",
-                lambda: _prepare_assertion_preparer_candidate(
-                    staging_root,
-                    assertion_preparer_candidate,
-                    arguments.expected_assertion_preparer_digest,
-                ),
-            )
-            transaction_root = production_doc_root / (
-                f".codex-01600-deploy-{stamp}-{secrets.token_hex(4)}"
-            )
+            prepared.append({
+                "client": "claude",
+                "path": str(receipt_paths["claude"]),
+                "sha256": sha256_bytes(receipt_bytes(payload)),
+                "payload": payload,
+            })
+        return prepared
+
+    def record_prepared_receipts(prepared: list[dict[str, Any]]) -> Mapping[str, Any]:
+        active_journal().append("receipts_prepared", receipts=prepared)
+        return {"receipts": [{"client": item["client"], "sha256": item["sha256"]} for item in prepared]}
+
+    def remove_switch_journal() -> Mapping[str, Any]:
+        active_journal().remove()
+        return {"journal": journal_path.name}
+
+    # campaign-run 子进程复用父监督器；独立调用才创建并结束自己的监督器。部署锁先于监督器取得，回滚也在锁内完成。
+    with deploy_lock(control_root), (nullcontext(client) if client.attached else client):
+        try:
+            if pending_switch_journals(control_root):
+                recovery = record_step(
+                    client,
+                    "enable:recover-switch-journal",
+                    lambda: recover_switch_journal(control_root),
+                )
+                if recovery.get("outcome") == "rolled-back":
+                    raise DeploymentError(
+                        f"发现未完成的部署事务，已按内容恢复到部署前并把日志改名为 {recovery.get('journal')} 留证；"
+                        "本次部署被拒绝，核对后重新执行。"
+                    )
+            # 「已纳管」按 control 目录里的已写收据判定：启动时那次判定在取锁之前，期间别的部署（或上面补齐的残留收据）
+            # 可能刚让某个客户端变成已纳管。锁内、恢复之后按当前状态重算一次，范围变了即拒绝，不按过时的判定签收据。
+            if transaction_scope(arguments.managed_roots, arguments.client, control_root) != scope:
+                raise DeploymentError("取得部署锁后事务范围变了（期间有部署签出了收据），重新执行以按当前纳管状态签收据。")
+            if "codex" in signing:
+                record_step(
+                    client,
+                    "enable:preflight",
+                    lambda: _preflight(
+                        client,
+                        staging_root,
+                        staging_tool,
+                        production_root,
+                        production_doc_root,
+                        arguments.expected_tool_digest,
+                        arguments.expected_supervisor_digest,
+                        arguments.expected_assertion_preparer_digest,
+                    ),
+                )
+            claude_preflight: dict[str, Any] = {}
+            if claude_expected is not None:
+                claude_preflight = record_step(
+                    client,
+                    "enable:preflight-claude",
+                    lambda: _preflight_claude(
+                        client,
+                        staging_root,
+                        production_doc_root,
+                        production_data_root,
+                        scope["roots"],
+                        arguments.expected_supervisor_digest,
+                        include_environment="codex" not in signing,
+                    ),
+                )
+            for root in scope["roots"]:
+                suffix = root_event_suffix(root)
+                staging_path = staging_root / root
+                candidate_path = control_root / (
+                    f"codex-01600-tool-candidate-{stamp}-{secrets.token_hex(4)}"
+                    if root == CAPTURE_ROOT
+                    else f"{root_name(root)}-candidate-{stamp}-{secrets.token_hex(4)}"
+                )
+                root_candidates[root] = candidate_path
+                record_step(
+                    client,
+                    f"enable:copy-candidate{suffix}",
+                    lambda source=staging_path, target=candidate_path: _copy_candidate(source, target),
+                )
+                record_step(
+                    client,
+                    f"enable:normalize-candidate{suffix}",
+                    lambda target=candidate_path: {"entry_count": normalize_tree_permissions(target)},
+                )
+                if root == CAPTURE_ROOT:
+                    record_step(
+                        client,
+                        "enable:verify-candidate",
+                        lambda target=candidate_path: _verify_candidate(
+                            target,
+                            arguments.expected_tool_digest,
+                            arguments.expected_supervisor_digest,
+                        ),
+                    )
+                else:
+                    record_step(
+                        client,
+                        f"enable:verify-candidate{suffix}",
+                        lambda source=staging_path, target=candidate_path: _verify_root_candidate(target, source),
+                    )
+            if "codex" in signing:
+                assertion_preparer_candidate = control_root / (
+                    f"assertion-preparer-candidate-{stamp}-{secrets.token_hex(4)}"
+                )
+                record_step(
+                    client,
+                    "enable:prepare-assertion-preparer",
+                    lambda: _prepare_assertion_preparer_candidate(
+                        staging_root,
+                        assertion_preparer_candidate,
+                        arguments.expected_assertion_preparer_digest,
+                    ),
+                )
+            transaction_root = production_doc_root / transaction_root_name(stamp, secrets.token_hex(4), signing)
             record_step(
                 client,
                 "enable:prepare-document-candidates",
-                lambda: _prepare_document_candidates(
+                lambda: _prepare_transaction_documents(
                     staging_root / "docs",
                     production_doc_root,
                     transaction_root,
+                    documents,
+                    runtime_documents,
                 ),
             )
-            backup = control_root / (
-                # 生产目录当前可能已经是某个 0.151 工具树；备份名不能把未知
-                # 的旧树伪装成 0.149.1，具体版本由既有启用收据和摘要确定。
-                f"managed-tools-backup-before-{arguments.expected_tool_digest[:12]}-"
-                f"{stamp}-{secrets.token_hex(4)}"
-            )
-            record_step(
-                client,
-                "enable:atomic-exchange",
-                switch_tool_tree,
-            )
-            assertion_preparer_backup = control_root / (
-                f"assertion-preparer-backup-before-"
-                f"{arguments.expected_assertion_preparer_digest[:12]}-"
-                f"{stamp}-{secrets.token_hex(4)}"
-            )
-            record_step(
-                client,
-                "enable:switch-assertion-preparer",
-                switch_assertion_preparer,
-            )
-            record_step(
-                client,
-                "enable:switch-documents",
-                lambda: _switch_documents(
-                    transaction_root,
-                    production_doc_root,
-                    switched_documents,
-                    switched_archived_documents,
-                    installed_documents=installed_documents,
-                ),
-            )
-            record_step(
-                client,
-                "enable:post-switch-verify",
-                lambda: _post_switch_verify(
-                    client,
-                    staging_root,
-                    production_root,
-                    production_doc_root,
-                    arguments.expected_tool_digest,
-                    arguments.expected_supervisor_digest,
-                    arguments.expected_assertion_preparer_digest,
-                ),
-            )
-            ledger_summary = record_step(
-                client,
-                "enable:read-project-ledger",
-                lambda: project_ledger_summary(supervisor, control_root.parent),
-            )
-            receipt = {
-                "schema_version": "codex-arm64-supervisor-enable/v1",
-                "status": "passed",
-                "campaign_id": campaign_id,
-                "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "architecture": platform.machine(),
-                "production_tool_root": str(production_root),
-                "production_doc_root": str(production_doc_root),
-                "tool_files_sha256": arguments.expected_tool_digest,
-                "policy_version": arguments.identity_v2["policy_version"],
-                "policy_sha256": arguments.identity_v2["policy_sha256"],
-                "wire_producer_sha256": arguments.identity_v2["wire_producer_sha256"],
-                "evidence_semantics_sha256": arguments.identity_v2["evidence_semantics_sha256"],
-                "control_sha256": arguments.identity_v2["control_sha256"],
-                "supervisor_sha256": arguments.expected_supervisor_digest,
-                "assertion_preparer_sha256": (
-                    arguments.expected_assertion_preparer_digest
-                ),
-                "rollback_backup": str(backup) if backup else None,
-                "assertion_preparer_rollback_backup": (
-                    str(assertion_preparer_backup)
-                    if assertion_preparer_backup
-                    else None
-                ),
-                "document_rollback_backup": (
-                    str(transaction_root / "backups") if transaction_root else None
-                ),
-                "switched_archived_documents": list(switched_archived_documents),
-                "installed_runtime_documents": list(installed_documents),
-                "supervisor_run_dir": str(client.run_dir),
-                # B9：项目总账 head 摘要；生产数据根下没有总账时记录为 null。
-                "project_ledger": ledger_summary or None,
-            }
-            record_step(
-                client,
-                "enable:write-receipt",
-                lambda: (
-                    write_json_atomic(receipt_path, receipt)
-                    or {"bytes": receipt_path.stat().st_size}
-                ),
-            )
-        except BaseException:
-            # 必须在监督器仍运行时记录回滚；不能等上下文退出后再补写。
-            if (
-                (
-                    tool_switched
-                    or assertion_preparer_switched
-                    or switched_documents
-                    or installed_documents
+            for root in scope["roots"]:
+                if root == CAPTURE_ROOT:
+                    # 生产目录当前可能已经是某个 0.151 工具树；备份名不能把未知
+                    # 的旧树伪装成 0.149.1，具体版本由既有启用收据和摘要确定。
+                    root_backups[root] = control_root / (
+                        f"managed-tools-backup-before-{arguments.expected_tool_digest[:12]}-"
+                        f"{stamp}-{secrets.token_hex(4)}"
+                    )
+                else:
+                    root_backups[root] = control_root / (
+                        f"{root_name(root)}-backup-before-{tree_content_sha256(root_candidates[root])[:12]}-"
+                        f"{stamp}-{secrets.token_hex(4)}"
+                    )
+            if "codex" in signing:
+                assertion_preparer_backup = control_root / (
+                    f"assertion-preparer-backup-before-"
+                    f"{arguments.expected_assertion_preparer_digest[:12]}-"
+                    f"{stamp}-{secrets.token_hex(4)}"
                 )
-                and backup is not None
-                and backup.is_dir()
-                and production_root.is_dir()
-            ):
+            record_step(client, "enable:write-switch-journal", write_switch_journal)
+            active_journal().append("switch_begin")
+            record_step(client, "enable:atomic-exchange", switch_roots)
+            if assertion_preparer_backup is not None:
+                record_step(client, "enable:switch-assertion-preparer", switch_preparers)
+            record_step(client, "enable:switch-documents", switch_documents)
+            active_journal().append("switch_done")
+            verification = record_step(client, "enable:post-switch-verify", verify_transaction)
+            active_journal().append("verified")
+            ledger_summary = (
+                record_step(
+                    client,
+                    "enable:read-project-ledger",
+                    lambda: project_ledger_summary(supervisor, control_root.parent),
+                )
+                if "codex" in signing
+                else {}
+            )
+            prepared = prepare_receipts(verification, ledger_summary, claude_preflight)
+            record_step(client, "enable:prepare-receipts", lambda: record_prepared_receipts(prepared))
+            record_step(client, "enable:write-receipt", lambda: write_prepared_receipts(prepared))
+            record_step(client, "enable:remove-switch-journal", remove_switch_journal)
+        except BaseException as error:
+            # 必须在监督器仍运行时记录回滚；不能等上下文退出后再补写。收据正文入日志之后不回滚：收据可能已经写出，
+            # 回滚会让它描述一棵不存在的树，留给下次启动按日志正文补齐（设计 B5a-01 残留 ②）。
+            failed = journal
+            if failed is not None and not failed.receipts_prepared and failed.path.exists():
+                reason = type(error).__name__
                 try:
                     record_step(
                         client,
                         "enable:rollback",
-                        lambda: _rollback_deployment(
-                            backup,
-                            production_root,
-                            transaction_root,
-                            production_doc_root,
-                            switched_documents,
-                            switched_archived_documents,
-                            installed_documents=installed_documents,
-                            auxiliary_backup=assertion_preparer_backup,
-                            auxiliary_production=production_assertion_preparer,
-                            auxiliary_switched=assertion_preparer_switched,
-                        ),
+                        lambda: restore_switch_journal(failed, reason=reason),
                     )
                 except BaseException:
                     pass
             raise
-    print(
-        json.dumps(
-            {
-                "status": "passed",
-                "campaign_id": campaign_id,
-                "receipt": str(receipt_path),
-                "supervisor_run_dir": str(client.run_dir),
-                "rollback_backup": str(backup) if backup else None,
-                "assertion_preparer_rollback_backup": (
-                    str(assertion_preparer_backup)
-                    if assertion_preparer_backup
-                    else None
-                ),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-    )
+    output: dict[str, Any] = {
+        "status": "passed",
+        "campaign_id": campaign_id,
+        "receipt": str(receipt_paths["codex"] if "codex" in receipt_paths else receipt_paths["claude"]),
+        "supervisor_run_dir": str(client.run_dir),
+        "rollback_backup": str(root_backups[CAPTURE_ROOT]) if CAPTURE_ROOT in root_backups else None,
+        "assertion_preparer_rollback_backup": (
+            str(assertion_preparer_backup)
+            if assertion_preparer_backup
+            else None
+        ),
+    }
+    if signing != ["codex"]:
+        output["receipts"] = {name: str(path) for name, path in receipt_paths.items()}
+    if recovery is not None:
+        output["recovered_switch_journal"] = recovery
+    print(json.dumps(output, ensure_ascii=False, sort_keys=True))
     return 0
 
 
@@ -3466,6 +4129,996 @@ def _rollback_deployment(
         "restored_assertion_preparer": auxiliary_switched,
         "rollback": "completed",
     }
+
+
+# ---------------------------------------------------------------------------
+# 多根事务：事务范围、写前意图日志、按内容恢复、收据补齐（B5a-01）
+# ---------------------------------------------------------------------------
+# 上面的 _switch_documents、_exchange_and_backup、_switch_assertion_preparer、_rollback_deployment 是改造前按「进行到
+# 哪一步」记忆回滚的单根实现，保留原样供既有测试与历史行为对照；main 的事务改由意图条目驱动，切入与恢复都只看
+# 生产路径的实际内容。
+
+# 意图里的三组条目：组名 → (条目名称键, 对象类型)。切入按这个顺序（根 → 断言预处理器 → 文档，与改造前相同），
+# 恢复逆序进行。每个条目恰好是名称键加下面七项（与设计 B5a-01 的根条目字段逐字相同）。
+JOURNAL_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("roots", "root", "directory"),
+    ("preparers", "preparer", "file"),
+    ("documents", "document", "file"),
+)
+ENTRY_PATH_FIELDS = ("production_path", "candidate_path", "backup_path")
+ENTRY_FIELDS = (*ENTRY_PATH_FIELDS, "old_exists", "old_tree_sha256", "new_tree_sha256")
+INTENT_FIELDS = frozenset({
+    "schema_version", "stamp", "campaign_id", "created_at_utc", "clients", "affected_clients",
+    "unmanaged_affected_clients", "managed_roots", "control_root", "production_data_root", "production_doc_root",
+    "transaction_root", "receipt_paths", *(group for group, _key, _object_type in JOURNAL_GROUPS),
+})
+# 文档条目名是相对生产文档根的路径；repository-docs 下的归档副本单独成条目。
+ARCHIVE_DOCUMENT_PREFIX = "repository-docs/"
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+# 恢复判定（设计 B5a-01 的判定表）：SETTLED 是「未交换或已回滚」「未切入或已回滚」两行，无动作；BLOCKED 是
+# 无法判定、已交换却找不到旧副本、新产物要移回而候选区已被占用——任一条目落在这里，整个恢复一个对象都不动、
+# 失败关闭交人工，现场保持发现时的样子便于分析。
+RECOVERY_SETTLED = frozenset({"at-old", "absent"})
+RECOVERY_BLOCKED = frozenset({"undecidable", "old-copy-missing", "candidate-occupied"})
+RECEIPT_NAME_TEMPLATES: Mapping[str, str] = {
+    "codex": CODEX_RECEIPT_NAME_TEMPLATE,
+    "claude": CLAUDE_RECEIPT_NAME_TEMPLATE,
+}
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _within(path: Path, root: Path) -> bool:
+    if ".." in path.parts:
+        return False
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def root_name(root: str) -> str:
+    return root.rstrip("/").rsplit("/", 1)[-1]
+
+
+def root_event_suffix(root: str) -> str:
+    """监督器事件名后缀：official_client_capture 沿用改造前的事件名，其它根带上根目录名。"""
+
+    return "" if root == CAPTURE_ROOT else f":{root_name(root)}"
+
+
+def managed_clients(control_root: Path) -> list[str]:
+    """已纳管的客户端：control 目录里已经有它的已写部署收据（日志里的收据正文不算）。"""
+
+    return [
+        client
+        for client in DEPLOY_CLIENTS
+        if any(path.is_file() and not path.is_symlink() for path in control_root.glob(DEPLOY_RECEIPT_GLOBS[client]))
+    ]
+
+
+def transaction_scope(
+    managed_roots: list[str] | None,
+    clients: list[str] | None,
+    control_root: Path,
+) -> dict[str, list[str]]:
+    """确定本次事务交换哪些根、为哪些客户端签收据，并拒绝会让某份收据失真的组合。
+
+    * 受影响的客户端由被交换的根推出（``MANAGED_ROOT_CLIENTS``）；签收据的客户端必须受影响（不能为身份没变的
+      客户端签收据），每个被交换的根也必须至少有一个受它影响的客户端签收据（否则这次交换没有任何收据记录）。
+    * 已纳管（已有部署收据）的受影响客户端必须一并签收据：否则它在 control 目录里「最新」的收据描述的是已被换掉
+      的树，按客户端取最新收据的消费者会把过期身份当作生产现状。尚未纳管的受影响客户端（例如 B5a-02 之前的
+      Claude）不签，只记进意图的 ``unmanaged_affected_clients``——它还没有任何收据可被误用。
+    """
+
+    roots = list(dict.fromkeys(managed_roots or DEFAULT_MANAGED_ROOTS))
+    unknown = [root for root in roots if root not in MANAGED_ROOT_CLIENTS]
+    if unknown:
+        raise DeploymentError(f"不认识的受管根：{unknown}（可选：{list(MANAGED_ROOT_CLIENTS)}）")
+    order = list(MANAGED_ROOT_CLIENTS)
+    roots.sort(key=order.index)
+    wanted = set(clients or DEFAULT_CLIENTS)
+    signing = [client for client in DEPLOY_CLIENTS if client in wanted]
+    if wanted - set(DEPLOY_CLIENTS):
+        raise DeploymentError(f"不认识的客户端：{sorted(wanted - set(DEPLOY_CLIENTS))}")
+    affected = [client for client in DEPLOY_CLIENTS if any(client in MANAGED_ROOT_CLIENTS[root] for root in roots)]
+    not_affected = [client for client in signing if client not in affected]
+    if not_affected:
+        raise DeploymentError(f"本次交换的根不影响客户端 {not_affected}，不能为它签部署收据：{roots}")
+    unsigned_roots = [root for root in roots if not set(MANAGED_ROOT_CLIENTS[root]) & set(signing)]
+    if unsigned_roots:
+        raise DeploymentError(f"交换 {unsigned_roots} 却没有为受它影响的客户端签部署收据，加上对应的 --client。")
+    missing = [client for client in affected if client in managed_clients(control_root) and client not in signing]
+    if missing:
+        raise DeploymentError(
+            f"本次交换影响已纳管的客户端 {missing}：必须同时为它签部署收据（--client {' '.join([*signing, *missing])}），"
+            "否则它的最新部署收据会描述已被替换的工具树。"
+        )
+    return {
+        "roots": roots,
+        "clients": signing,
+        "affected_clients": affected,
+        "unmanaged_affected_clients": [client for client in affected if client not in signing],
+    }
+
+
+def require_standard_layout(production_root: Path) -> Path:
+    """多根事务按数据根定位各根：``--production-root`` 必须是 ``<数据根>/tools/official_client_capture``。"""
+
+    if production_root.name != root_name(CAPTURE_ROOT) or production_root.parent.name != "tools":
+        raise DeploymentError(f"多根部署要求生产工具根位于 <数据根>/{CAPTURE_ROOT}：{production_root}")
+    return production_root.parent.parent
+
+
+def transaction_documents(clients: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """签收据客户端的活动文档与运行时依赖文档的并集（按客户端顺序去重）；只签 Codex 时与改造前完全相同。"""
+
+    documents: list[str] = []
+    runtime_documents: list[str] = []
+    for client in DEPLOY_CLIENTS:
+        if client not in clients:
+            continue
+        documents.extend(name for name in CLIENT_MANAGED_DOCUMENTS[client] if name not in documents)
+        runtime_documents.extend(name for name in CLIENT_MANAGED_RUNTIME_DOCUMENTS[client] if name not in runtime_documents)
+    return tuple(documents), tuple(runtime_documents)
+
+
+def transaction_root_name(stamp: str, token: str, clients: list[str]) -> str:
+    """文档事务目录名：签 Codex 收据时沿用改造前的名字（Codex 收据的 document_rollback_backup 指向它）。"""
+
+    return f".codex-01600-deploy-{stamp}-{token}" if "codex" in clients else f".managed-deploy-{stamp}-{token}"
+
+
+@contextmanager
+def deploy_lock(control_root: Path):
+    """同一 control 目录同时只允许一个部署进程（flock，进程退出即释放）。
+
+    启动时的恢复会按内容回滚它发现的事务日志；没有这把锁，另一个仍在进行的部署会被当成中断残留回滚掉。
+    """
+
+    descriptor = os.open(control_root / DEPLOY_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise DeploymentError("另一个受监督部署正在使用同一 control 目录，拒绝并发执行。") from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _journal_entries(intent: Mapping[str, Any]) -> list[tuple[str, str, str, Mapping[str, Any]]]:
+    """意图里的全部条目，按切入顺序：(组名, 条目名, 对象类型, 条目)。"""
+
+    rows: list[tuple[str, str, str, Mapping[str, Any]]] = []
+    for group, key, object_type in JOURNAL_GROUPS:
+        for entry in intent[group]:
+            rows.append((group, str(entry[key]), object_type, entry))
+    return rows
+
+
+def _validate_intent(intent: Any) -> None:
+    """意图结构与路径边界的完整校验：恢复只按日志里的路径动作，被改动或越界的意图一律失败关闭。"""
+
+    if not isinstance(intent, dict) or set(intent) != INTENT_FIELDS or intent.get("schema_version") != SWITCH_JOURNAL_SCHEMA:
+        raise DeploymentError("部署事务意图字段不闭合或 schema 非法。")
+    clients = intent["clients"]
+    if (
+        not isinstance(clients, list)
+        or not clients
+        or any(client not in DEPLOY_CLIENTS for client in clients)
+        or len(set(clients)) != len(clients)
+    ):
+        raise DeploymentError("部署事务意图的签收据客户端非法。")
+    roots = [Path(str(intent[key])) for key in ("control_root", "production_data_root", "production_doc_root")]
+    if any(not path.is_absolute() or ".." in path.parts for path in roots):
+        raise DeploymentError("部署事务意图的目录坐标必须是绝对路径。")
+    control_root, data_root, doc_root = roots
+    transaction_root = intent["transaction_root"]
+    receipt_paths = intent["receipt_paths"]
+    if not isinstance(receipt_paths, dict) or set(receipt_paths) != set(clients):
+        raise DeploymentError("部署事务意图的收据坐标与签收据客户端不一致。")
+    for client, raw in receipt_paths.items():
+        path = Path(str(raw))
+        if path.parent != control_root or not fnmatch.fnmatchcase(path.name, DEPLOY_RECEIPT_GLOBS[client]):
+            raise DeploymentError(f"部署事务意图的收据坐标非法：{raw}")
+    seen: set[tuple[str, str]] = set()
+    for group, key, _object_type in JOURNAL_GROUPS:
+        entries = intent[group]
+        if not isinstance(entries, list):
+            raise DeploymentError(f"部署事务意图的 {group} 必须是列表。")
+        for entry in entries:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {key, *ENTRY_FIELDS}
+                or not isinstance(entry[key], str)
+                or not entry[key]
+                or (group, entry[key]) in seen
+            ):
+                raise DeploymentError(f"部署事务意图的 {group} 条目字段不闭合或重复。")
+            seen.add((group, entry[key]))
+            production, candidate, backup = (Path(str(entry[field])) for field in ENTRY_PATH_FIELDS)
+            if any(not path.is_absolute() or ".." in path.parts for path in (production, candidate, backup)):
+                raise DeploymentError(f"部署事务意图的路径必须是规范绝对路径：{entry[key]}")
+            old = entry["old_tree_sha256"]
+            if (
+                not isinstance(entry["old_exists"], bool)
+                or entry["old_exists"] != (old is not None)
+                or (old is not None and not SHA256_PATTERN.fullmatch(str(old)))
+                or not SHA256_PATTERN.fullmatch(str(entry["new_tree_sha256"]))
+            ):
+                raise DeploymentError(f"部署事务意图的新旧摘要非法：{entry[key]}")
+            if group == "documents":
+                if (
+                    not isinstance(transaction_root, str)
+                    or not _within(production, doc_root)
+                    or not _within(candidate, Path(transaction_root))
+                    or not _within(backup, Path(transaction_root))
+                ):
+                    raise DeploymentError(f"部署事务意图的文档路径越界：{entry[key]}")
+            elif candidate.parent != control_root or backup.parent != control_root or not _within(production, data_root):
+                raise DeploymentError(f"部署事务意图的 {group} 路径越界：{entry[key]}")
+
+
+def _validate_prepared_receipts(receipts: Any, intent: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """日志里的收据正文：客户端与意图逐一对应，坐标与意图相同，摘要等于正文落盘字节的摘要。"""
+
+    if not isinstance(receipts, list) or [
+        item.get("client") if isinstance(item, dict) else None for item in receipts
+    ] != list(intent["clients"]):
+        raise DeploymentError("日志里的收据正文与签收据的客户端不一致。")
+    for item in receipts:
+        if (
+            set(item) != {"client", "path", "sha256", "payload"}
+            or item["path"] != intent["receipt_paths"][item["client"]]
+            or not isinstance(item["payload"], dict)
+            or item["sha256"] != sha256_bytes(receipt_bytes(item["payload"]))
+        ):
+            raise DeploymentError(f"日志里的 {item.get('client')} 收据正文被改动或坐标不符。")
+    return [dict(item) for item in receipts]
+
+
+class SwitchJournal:
+    """一份写前意图日志（JSON Lines）：第一行是完整意图，之后只追加阶段标记。
+
+    意图在交换任何对象之前以一次性发布写入（临时文件 fsync → 硬链接到日志名 → fsync 目录），日志一旦出现就带着
+    完整意图；标记行以 O_APPEND 追加并 fsync。每个标记行都带意图摘要，拼进别的事务的行会被识别。只有最后一行
+    允许不完整（追加时进程中断），等同这个标记没有写成；``receipts_prepared`` 之外的标记缺失都不影响恢复判断。
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        intent: dict[str, Any],
+        intent_sha256: str,
+        markers: list[str],
+        receipts: list[dict[str, Any]] | None,
+    ) -> None:
+        self.path = path
+        self.intent = intent
+        self.intent_sha256 = intent_sha256
+        self.markers = markers
+        self.receipts = receipts
+
+    @property
+    def receipts_prepared(self) -> bool:
+        return self.receipts is not None
+
+    @classmethod
+    def create(cls, path: Path, intent: dict[str, Any]) -> "SwitchJournal":
+        _validate_intent(intent)
+        intent_sha256 = sha256_bytes(canonical(intent))
+        record = {"record": "intent", "intent": intent, "intent_sha256": intent_sha256}
+        _publish_bytes_once(path, canonical(record) + b"\n")
+        return cls(path, intent, intent_sha256, [], None)
+
+    @classmethod
+    def load(cls, path: Path) -> "SwitchJournal":
+        if path.is_symlink() or not path.is_file():
+            raise DeploymentError(f"部署事务日志不是可信普通文件：{path}")
+        lines = path.read_bytes().split(b"\n")
+        records: list[dict[str, Any]] = []
+        for index, line in enumerate(lines):
+            last = index == len(lines) - 1
+            if not line:
+                if last:
+                    continue
+                raise DeploymentError(f"部署事务日志含空行：{path.name}")
+            try:
+                record = json.loads(line)
+            except ValueError as error:
+                if last and records:
+                    break
+                raise DeploymentError(f"部署事务日志损坏：{path.name} 第 {index + 1} 行") from error
+            if not isinstance(record, dict):
+                raise DeploymentError(f"部署事务日志行不是对象：{path.name} 第 {index + 1} 行")
+            records.append(record)
+        if not records or records[0].get("record") != "intent" or set(records[0]) != {"record", "intent", "intent_sha256"}:
+            raise DeploymentError(f"部署事务日志第一行不是意图：{path.name}")
+        intent = records[0]["intent"]
+        _validate_intent(intent)
+        intent_sha256 = sha256_bytes(canonical(intent))
+        if records[0]["intent_sha256"] != intent_sha256:
+            raise DeploymentError(f"部署事务意图摘要不符（意图被改动）：{path.name}")
+        markers: list[str] = []
+        receipts: list[dict[str, Any]] | None = None
+        for record in records[1:]:
+            if (
+                record.get("record") != "marker"
+                or record.get("intent_sha256") != intent_sha256
+                or record.get("marker") not in SWITCH_JOURNAL_MARKERS
+            ):
+                raise DeploymentError(f"部署事务日志的阶段标记非法或不属于这份意图：{path.name}")
+            markers.append(str(record["marker"]))
+            if record["marker"] == "receipts_prepared":
+                if receipts is not None:
+                    raise DeploymentError(f"部署事务日志重复登记收据正文：{path.name}")
+                receipts = _validate_prepared_receipts(record.get("receipts"), intent)
+        return cls(path, intent, intent_sha256, markers, receipts)
+
+    def append(self, marker: str, **fields: Any) -> None:
+        if marker not in SWITCH_JOURNAL_MARKERS:
+            raise DeploymentError(f"未知的阶段标记：{marker}")
+        record = {"record": "marker", "marker": marker, "intent_sha256": self.intent_sha256, "at_utc": _iso_now(), **fields}
+        if marker == "receipts_prepared":
+            _validate_prepared_receipts(fields.get("receipts"), self.intent)
+        line = canonical(record) + b"\n"
+        descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+        try:
+            offset = 0
+            while offset < len(line):
+                offset += os.write(descriptor, line[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        self.markers.append(marker)
+        if marker == "receipts_prepared":
+            self.receipts = [dict(item) for item in fields["receipts"]]
+
+    def remove(self) -> None:
+        os.unlink(self.path)
+        fsync_directory(self.path.parent)
+
+    def retire(self) -> Path:
+        """回滚完成后改名留作失败证据；新名字不再匹配活动日志模式，消费门禁随之放行。"""
+
+        target = self.path.with_name(self.path.name + SWITCH_JOURNAL_RETIRED_SUFFIX)
+        if target.exists() or target.is_symlink():
+            target = self.path.with_name(f"{self.path.name}{SWITCH_JOURNAL_RETIRED_SUFFIX}-{secrets.token_hex(4)}")
+        # 目标不存在已核对；control 目录由部署锁独占，没有并发写者。
+        os.rename(self.path, target)
+        fsync_directory(self.path.parent)
+        return target
+
+
+def intent_entry(key: str, name: str, object_type: str, production: Path, candidate: Path, backup: Path) -> dict[str, Any]:
+    """按生产与候选的实际内容生成一个意图条目（写意图之前调用；候选此时已准备并核验）。"""
+
+    if production.is_symlink():
+        raise DeploymentError(f"生产路径是符号链接：{production}")
+    old_exists = production.exists()
+    old = object_sha256(production, object_type) if old_exists else None
+    if old in {OBJECT_SYMLINK, OBJECT_TYPE_MISMATCH}:
+        raise DeploymentError(f"生产对象类型与候选不一致：{production}")
+    new = object_sha256(candidate, object_type)
+    if new is None or new in {OBJECT_SYMLINK, OBJECT_TYPE_MISMATCH}:
+        raise DeploymentError(f"候选对象缺失或类型非法：{candidate}")
+    if backup.exists() or backup.is_symlink():
+        raise DeploymentError(f"回滚备份路径已存在，拒绝覆盖：{backup}")
+    return {
+        key: name,
+        "production_path": str(production),
+        "candidate_path": str(candidate),
+        "backup_path": str(backup),
+        "old_exists": old_exists,
+        "old_tree_sha256": old,
+        "new_tree_sha256": new,
+    }
+
+
+def document_intent_entries(
+    transaction_root: Path,
+    production_doc_root: Path,
+    documents: tuple[str, ...],
+    runtime_documents: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """活动文档、运行时依赖文档与 repository-docs 归档副本的意图条目（改造前 _switch_documents 的同一组对象）。
+
+    Codex 的两份活动文档与其归档副本必须已在生产存在（改造前同样要求，缺失时部署失败）；其它文档允许首次纳管。
+    生产没有 repository-docs 目录时不处理归档副本，与改造前相同。
+    """
+
+    candidate_root = transaction_root / "candidates"
+    backup_root = transaction_root / "backups"
+    entries: list[dict[str, Any]] = []
+    for name in (*documents, *runtime_documents):
+        production = managed_document_path(production_doc_root, name, label="生产文档", allow_missing=True)
+        candidate = managed_document_path(candidate_root, name, label="文档候选", allow_missing=False)
+        backup = managed_document_path(backup_root, name, label="文档回滚副本", allow_missing=True)
+        entry = intent_entry("document", name, "file", production, candidate, backup)
+        if name in MANAGED_DOCUMENTS and not entry["old_exists"]:
+            raise DeploymentError(f"生产活动文档缺失：{name}")
+        entries.append(entry)
+    production_archive_root = production_doc_root / "repository-docs"
+    candidate_archive_root = candidate_root / "repository-docs"
+    if production_archive_root.is_dir() and not production_archive_root.is_symlink() and candidate_archive_root.is_dir():
+        for name in documents:
+            entry = intent_entry(
+                "document",
+                ARCHIVE_DOCUMENT_PREFIX + name,
+                "file",
+                production_archive_root / name,
+                candidate_archive_root / name,
+                backup_root / "repository-docs" / name,
+            )
+            if name in MANAGED_DOCUMENTS and not entry["old_exists"]:
+                raise DeploymentError(f"生产归档文档缺失：{name}")
+            entries.append(entry)
+    return entries
+
+
+def _prepare_switch_parents(entry: Mapping[str, Any]) -> None:
+    """切入一个文档前准备父目录：活动与运行时文档的生产父目录、全部文档的回滚父目录（root、0700，同改造前）。"""
+
+    parents = [Path(str(entry["backup_path"])).parent]
+    if not str(entry["document"]).startswith(ARCHIVE_DOCUMENT_PREFIX):
+        parents.insert(0, Path(str(entry["production_path"])).parent)
+    for parent in parents:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chown(parent, 0, 0)
+        os.chmod(parent, 0o700)
+
+
+def switch_intent_entry(group: str, entry: Mapping[str, Any]) -> str:
+    """按意图切入一个对象，返回 switched（交换并备份旧对象）或 installed（原路径不存在，不覆盖地移入）。
+
+    ``old_exists=true`` 沿用改造前的两步：先原子交换候选与生产，再把换到候选位置的旧对象移到回滚位置；两步之间
+    旧对象在候选区、备份还不存在，恢复按摘要在候选区找到它。``old_exists=false`` 用不覆盖改名移入生产。
+    回滚副本的属主与权限处理与改造前相同：工具树与断言预处理器去掉 group/other 写，归档文档 0644，活动文档不动。
+    """
+
+    production, candidate, backup = (Path(str(entry[field])) for field in ENTRY_PATH_FIELDS)
+    if not entry["old_exists"]:
+        rename_noreplace(candidate, production)
+        return "installed"
+    if backup.exists() or backup.is_symlink():
+        raise DeploymentError(f"回滚备份路径已存在，拒绝覆盖：{backup}")
+    atomic_exchange(candidate, production)
+    fsync_directory(production.parent)
+    os.rename(candidate, backup)
+    if group != "documents":
+        os.chown(backup, 0, 0)
+        os.chmod(backup, stat.S_IMODE(backup.stat().st_mode) & ~0o022)
+    elif str(entry["document"]).startswith(ARCHIVE_DOCUMENT_PREFIX):
+        os.chown(backup, 0, 0)
+        os.chmod(backup, 0o644)
+    fsync_directory(candidate.parent)
+    fsync_directory(backup.parent)
+    return "switched"
+
+
+def switch_intent_group(journal: SwitchJournal, group: str) -> list[dict[str, str]]:
+    key = next(name_key for name, name_key, _object_type in JOURNAL_GROUPS if name == group)
+    rows: list[dict[str, str]] = []
+    for entry in journal.intent[group]:
+        if group == "documents":
+            _prepare_switch_parents(entry)
+        rows.append({"object": str(entry[key]), "result": switch_intent_entry(group, entry)})
+    return rows
+
+
+def entry_decision(object_type: str, entry: Mapping[str, Any]) -> dict[str, str | None]:
+    """按生产路径的实际内容判定一个条目处在哪一步（设计 B5a-01 判定表），只读。"""
+
+    production, candidate, backup = (Path(str(entry[field])) for field in ENTRY_PATH_FIELDS)
+    actual = object_sha256(production, object_type)
+    old, new = entry["old_tree_sha256"], entry["new_tree_sha256"]
+    if entry["old_exists"]:
+        if actual is not None and actual == old:
+            return {"decision": "at-old", "action": None}
+        if actual == new:
+            # 已交换：按摘要定位旧副本，先看候选区（交换完成、备份尚未移入时中断），再看备份位置。
+            if object_sha256(candidate, object_type) == old:
+                return {"decision": "switched", "action": "exchange-candidate"}
+            if object_sha256(backup, object_type) == old:
+                return {"decision": "switched", "action": "exchange-backup"}
+            return {"decision": "old-copy-missing", "action": None}
+        return {"decision": "undecidable", "action": None}
+    if actual is None:
+        return {"decision": "absent", "action": None}
+    if actual == new:
+        if candidate.exists() or candidate.is_symlink():
+            return {"decision": "candidate-occupied", "action": None}
+        return {"decision": "installed", "action": "move-back"}
+    return {"decision": "undecidable", "action": None}
+
+
+def _apply_recovery_action(entry: Mapping[str, Any], action: str) -> None:
+    production, candidate, backup = (Path(str(entry[field])) for field in ENTRY_PATH_FIELDS)
+    if action == "exchange-candidate":
+        atomic_exchange(candidate, production)
+        fsync_directory(production.parent)
+    elif action == "exchange-backup":
+        atomic_exchange(backup, production)
+        fsync_directory(production.parent)
+    elif action == "move-back":
+        rename_noreplace(production, candidate)
+    else:
+        raise DeploymentError(f"未知的恢复动作：{action}")
+
+
+def restore_switch_journal(journal: SwitchJournal, *, reason: str) -> dict[str, Any]:
+    """把意图里的全部对象按实际内容恢复到部署前；幂等，新产物留在候选区或备份位置，不删除。
+
+    先对全部条目只读判定：任一条目无法判定或找不到旧副本即失败关闭，一个对象都不动、日志保持活动名交人工。
+    之后追加 ``rollback_begin``，逆序执行各条目的回滚动作（单项失败不阻止其余对象），再复判一次，全部落在
+    「无动作」两行才追加 ``rollback_done`` 并把日志改名留证。中途中断时日志仍是活动名，再次恢复时已回滚的对象
+    按内容落到「无动作」，不会重复交换。
+    """
+
+    plan = [
+        (name, object_type, entry, entry_decision(object_type, entry))
+        for _group, name, object_type, entry in reversed(_journal_entries(journal.intent))
+    ]
+    blocked = [f"{name}（{decision['decision']}）" for name, _type, _entry, decision in plan
+               if decision["decision"] in RECOVERY_BLOCKED]
+    if blocked:
+        raise DeploymentError("部署事务无法按内容判定，失败关闭、未动任何对象，交人工：" + "；".join(blocked[:20]))
+    journal.append("rollback_begin", reason=reason)
+    failures: list[str] = []
+    for name, _object_type, entry, decision in plan:
+        if decision["action"] is None:
+            continue
+        try:
+            _apply_recovery_action(entry, str(decision["action"]))
+        except BaseException as error:  # noqa: BLE001 - 单项失败不得阻止其余对象回滚
+            failures.append(f"{name}: {type(error).__name__}")
+    if failures:
+        raise DeploymentError("部署回滚不完整：" + "; ".join(failures))
+    unsettled = [name for name, object_type, entry, _decision in plan
+                 if entry_decision(object_type, entry)["decision"] not in RECOVERY_SETTLED]
+    if unsettled:
+        raise DeploymentError("回滚后仍有对象不在部署前状态：" + "；".join(unsettled[:20]))
+    restored = [{"object": name, "action": decision["action"]} for name, _type, _entry, decision in plan
+                if decision["action"] is not None]
+    journal.append("rollback_done", restored=restored)
+    retired = journal.retire()
+    return {
+        "rollback": "completed",
+        "journal": retired.name,
+        "restored": [item["object"] for item in restored],
+        "unchanged_count": len(plan) - len(restored),
+    }
+
+
+def complete_switch_journal(journal: SwitchJournal) -> dict[str, Any]:
+    """收据正文已入日志的残留：核对每个对象都是新版本，按日志正文补齐缺失的收据、核对已有收据，再删日志。
+
+    任一对象不是新版本、或已写出的收据与日志正文摘要不同，即失败关闭（不回滚：收据可能已经写出，回滚会让
+    收据描述一棵不存在的树）。
+    """
+
+    mismatched = [
+        name
+        for _group, name, object_type, entry in _journal_entries(journal.intent)
+        if object_sha256(Path(str(entry["production_path"])), object_type) != entry["new_tree_sha256"]
+    ]
+    if mismatched:
+        raise DeploymentError(
+            "收据正文已入日志，但生产内容不是本次事务的新版本，失败关闭交人工：" + "；".join(mismatched[:20])
+        )
+    written: list[str] = []
+    verified: list[str] = []
+    for item in journal.receipts or []:
+        path = Path(str(item["path"]))
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file() or file_sha256(path) != item["sha256"]:
+                raise DeploymentError(f"已写出的部署收据与日志正文不一致，失败关闭交人工：{path.name}")
+            verified.append(path.name)
+            continue
+        write_json_once(path, item["payload"])
+        if file_sha256(path) != item["sha256"]:
+            raise DeploymentError(f"补写的部署收据摘要不符：{path.name}")
+        written.append(path.name)
+    journal.remove()
+    return {
+        "outcome": "receipts-completed",
+        "journal": journal.path.name,
+        "written_receipts": written,
+        "verified_receipts": verified,
+    }
+
+
+def pending_switch_journals(control_root: Path) -> list[Path]:
+    return sorted(control_root.glob(SWITCH_JOURNAL_GLOB))
+
+
+def recover_switch_journal(control_root: Path) -> dict[str, Any]:
+    """启动时处理残留的事务日志（设计 B5a-01 三种残留）。
+
+    ① 有日志、没有 ``receipts_prepared``：按内容把全部对象恢复到部署前，日志改名留证（调用方随后拒绝本次部署）；
+    ② 有日志、有 ``receipts_prepared``：核对新版本、补齐收据、删日志，不回滚；③ 没有日志：无事可做。
+    多份活动日志说明有人绕过了部署锁，失败关闭交人工。
+    """
+
+    journals = pending_switch_journals(control_root)
+    if not journals:
+        return {"outcome": "none"}
+    if len(journals) > 1:
+        raise DeploymentError("control 目录有多份未完成的部署事务日志，失败关闭交人工：" + "、".join(path.name for path in journals))
+    journal = SwitchJournal.load(journals[0])
+    if journal.receipts_prepared:
+        return complete_switch_journal(journal)
+    return {"outcome": "rolled-back", **restore_switch_journal(journal, reason="startup-recovery")}
+
+
+def verify_switched_entries(journal: SwitchJournal) -> dict[str, Any]:
+    """全局一致性核验的第一项：意图里的每个对象在生产路径上都已是新版本。"""
+
+    mismatched = [
+        name
+        for _group, name, object_type, entry in _journal_entries(journal.intent)
+        if object_sha256(Path(str(entry["production_path"])), object_type) != entry["new_tree_sha256"]
+    ]
+    if mismatched:
+        raise DeploymentError("切换后的生产内容与意图的新版本不一致：" + "；".join(mismatched[:20]))
+    return {"switched_objects": len(_journal_entries(journal.intent))}
+
+
+def _verify_root_candidate(candidate: Path, staging_path: Path) -> Mapping[str, Any]:
+    """非 Codex 根的候选核验：内容与暂存根逐项相同（不计字节码），属主与写权限可信。"""
+
+    digest = tree_content_sha256(candidate)
+    if digest != tree_content_sha256(staging_path):
+        raise DeploymentError(f"受管根候选与暂存树内容不一致：{candidate.name}")
+    reject_untrusted_tree(candidate)
+    return {"candidate_tree_sha256": digest}
+
+
+def _prepare_transaction_documents(
+    staging_doc_root: Path,
+    production_doc_root: Path,
+    transaction_root: Path,
+    documents: tuple[str, ...],
+    runtime_documents: tuple[str, ...],
+) -> Mapping[str, Any]:
+    """按事务的文档集合准备候选与回滚目录（_prepare_document_candidates 的按客户端推广）。
+
+    只签 Codex 时文档集合就是 MANAGED_DOCUMENTS 与 MANAGED_RUNTIME_DOCUMENTS，做法与返回值同改造前；Codex 文档要求
+    生产已存在（按旧文档规则冻结事实），其它活动文档首次纳管时允许不存在，存在则同样核对写权限。
+    """
+
+    if transaction_root.exists() or transaction_root.is_symlink():
+        raise DeploymentError("文档事务目录已存在，拒绝覆盖。")
+    candidate_root = transaction_root / "candidates"
+    candidate_archive_root = candidate_root / "repository-docs"
+    backup_root = transaction_root / "backups"
+    candidate_root.mkdir(mode=0o700, parents=True)
+    candidate_archive_root.mkdir(mode=0o700)
+    backup_root.mkdir(mode=0o700)
+    for directory in (transaction_root, candidate_root, candidate_archive_root, backup_root):
+        os.chown(directory, 0, 0)
+        os.chmod(directory, 0o700)
+    digests: dict[str, str] = {}
+    runtime_document_bindings: list[dict[str, str]] = []
+    for name in documents:
+        source = staging_doc_root / name
+        production = production_doc_root / name
+        reject_untrusted_file(source, label="暂存活动文档")
+        if name in MANAGED_DOCUMENTS or production.exists() or production.is_symlink():
+            legacy_production_document_facts(production)
+        destination = candidate_root / name
+        archive_destination = candidate_archive_root / name
+        for target in (destination, archive_destination):
+            shutil.copyfile(source, target)
+            os.chown(target, 0, 0)
+            os.chmod(target, 0o644)
+            with target.open("rb") as stream:
+                os.fsync(stream.fileno())
+        if file_sha256(destination) != file_sha256(source):
+            raise DeploymentError(f"文档候选复制后摘要漂移：{name}")
+        if file_sha256(archive_destination) != file_sha256(source):
+            raise DeploymentError(f"文档归档候选复制后摘要漂移：{name}")
+        digests[name] = file_sha256(destination)
+    for name in runtime_documents:
+        source = managed_document_path(staging_doc_root, name, label="暂存运行时依赖文档", allow_missing=False)
+        reject_untrusted_file(source, label="暂存运行时依赖文档")
+        destination = candidate_root / name
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chown(destination.parent, 0, 0)
+        os.chmod(destination.parent, 0o700)
+        shutil.copyfile(source, destination)
+        os.chown(destination, 0, 0)
+        os.chmod(destination, 0o644)
+        with destination.open("rb") as stream:
+            os.fsync(stream.fileno())
+        if file_sha256(destination) != file_sha256(source):
+            raise DeploymentError(f"运行时依赖文档候选复制后摘要漂移：{name}")
+        runtime_document_bindings.append({"path": name, "sha256": file_sha256(destination)})
+    for directory in (candidate_archive_root, candidate_root, backup_root, transaction_root, production_doc_root):
+        fsync_directory(directory)
+    return {
+        "transaction_root": transaction_root.name,
+        "document_sha256": digests,
+        "runtime_document_bindings": runtime_document_bindings,
+    }
+
+
+def _preflight_claude(
+    client: Any,
+    staging_root: Path,
+    production_doc_root: Path,
+    production_data_root: Path,
+    managed_roots: list[str],
+    expected_supervisor_digest: str,
+    *,
+    include_environment: bool,
+) -> dict[str, Any]:
+    """签 Claude 收据前的预检：Claude 文档、两个受管根、pre-A3 Claude 场景表；只签 Claude 时另做环境前提。
+
+    未在本次交换的 Claude 受管根必须已在生产存在且与暂存树逐项相同，否则暂存树算出的身份不等于部署后的生产
+    身份，收据会失真——这时要把它加进 ``--managed-roots`` 一起交换。
+    """
+
+    if production_doc_root.is_symlink() or not production_doc_root.is_dir():
+        raise DeploymentError("生产活动文档目录不存在或不可信。")
+    if production_doc_root.stat().st_uid != 0 or production_doc_root.stat().st_mode & 0o022:
+        raise DeploymentError("生产活动文档目录属主或写权限不安全。")
+    repository_docs = staging_root / "docs" / "repository-docs"
+    if repository_docs.is_symlink() or not repository_docs.is_dir():
+        raise DeploymentError("暂存文档归档目录不存在或不可信。")
+    document_sha256: dict[str, str] = {}
+    legacy_documents: dict[str, Any] = {}
+    for name in CLAUDE_MANAGED_DOCUMENTS:
+        runtime_document = staging_root / "docs" / name
+        archived_document = repository_docs / name
+        if (
+            runtime_document.is_symlink()
+            or archived_document.is_symlink()
+            or not runtime_document.is_file()
+            or not archived_document.is_file()
+            or file_sha256(runtime_document) != file_sha256(archived_document)
+        ):
+            raise DeploymentError(f"暂存文档运行副本与归档副本不一致：{name}")
+        reject_untrusted_file(runtime_document, label="暂存活动文档")
+        reject_untrusted_file(archived_document, label="暂存归档文档")
+        document_sha256[name] = file_sha256(runtime_document)
+        production = production_doc_root / name
+        legacy_documents[name] = (
+            {"status": "present", **legacy_production_document_facts(production)}
+            if production.exists() or production.is_symlink()
+            else {"status": "absent"}
+        )
+    runtime_document_bindings: list[dict[str, str]] = []
+    for name in CLAUDE_MANAGED_RUNTIME_DOCUMENTS:
+        runtime_document = managed_document_path(staging_root / "docs", name, label="暂存运行时依赖文档", allow_missing=False)
+        reject_untrusted_file(runtime_document, label="暂存运行时依赖文档")
+        runtime_document_bindings.append({"path": name, "sha256": file_sha256(runtime_document)})
+    roots: dict[str, str] = {}
+    for root in CLIENT_MANAGED_ROOTS["claude"]:
+        staging_path = staging_root / root
+        reject_untrusted_tree(staging_path)
+        production_path = production_data_root / root
+        if root in managed_roots:
+            if production_path.exists() or production_path.is_symlink():
+                reject_untrusted_tree(production_path)
+            roots[root] = "switched"
+            continue
+        if production_path.is_symlink() or not production_path.is_dir():
+            raise DeploymentError(f"Claude 受管根 {root} 不在本次交换范围、生产上也不存在：把它加入 --managed-roots。")
+        reject_untrusted_tree(production_path)
+        if tree_content_sha256(production_path) != tree_content_sha256(staging_path):
+            raise DeploymentError(f"Claude 受管根 {root} 的生产现状与暂存树不一致：把它加入 --managed-roots 一起交换。")
+        roots[root] = "unchanged"
+    result: dict[str, Any] = {
+        "document_sha256": document_sha256,
+        "legacy_documents": legacy_documents,
+        "runtime_document_bindings": runtime_document_bindings,
+        "roots": roots,
+        "pre_a3": verify_claude_pre_a3_entries(staging_root / CAPTURE_ROOT),
+    }
+    if include_environment:
+        # 只签 Claude 时 Codex 预检不运行，暂存监督器摘要与运行环境前提在这里核对（与 Codex 预检同一组命令）。
+        if file_sha256(staging_root / CAPTURE_ROOT / "codex_upgrade_supervisor.py") != expected_supervisor_digest:
+            raise DeploymentError("暂存监督器摘要不符。")
+        result["capture_ip"] = parse_container_network(
+            run_checked(client, "enable:inspect-capture-network",
+                        ["docker", "inspect", "capture-cli", "--format", "{{json .NetworkSettings.Networks}}"]),
+            "capture-cli",
+        )
+        result["service_ip"] = parse_container_network(
+            run_checked(client, "enable:inspect-service-network",
+                        ["docker", "inspect", "sub2apiplus", "--format", "{{json .NetworkSettings.Networks}}"]),
+            "sub2apiplus",
+        )
+        result["runtime_egress"] = verify_runtime_egress()
+    return result
+
+
+def observe_runtime_bindings(data_root: Path, bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Claude 策略登记的受管运行时（相对数据根）在生产上的观测：不存在如实记 absent（B5a-03 安装之前）；
+    存在却与冻结摘要不同即失败关闭——control_sha256 已把冻结值算进身份，运行时不符时身份不再如实。"""
+
+    rows: list[dict[str, Any]] = []
+    for item in bindings:
+        relative = Path(str(item["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise DeploymentError(f"Claude 运行时绑定路径非法：{item['path']}")
+        path = data_root / relative
+        if path.is_symlink() or not path.exists():
+            rows.append({**item, "observed_sha256": None, "status": "absent"})
+            continue
+        if not path.is_file():
+            raise DeploymentError(f"Claude 运行时绑定不是普通文件：{path}")
+        observed = file_sha256(path)
+        if observed != item["sha256"]:
+            raise DeploymentError(f"Claude 运行时绑定摘要与策略冻结值不一致：{item['name']}")
+        rows.append({**item, "observed_sha256": observed, "status": "matched"})
+    return rows
+
+
+def _post_switch_verify_claude(client: Any, production_data_root: Path, expected: Mapping[str, Any]) -> dict[str, Any]:
+    """切换后用生产树里的 v3 引擎复算 Claude 身份，必须与预检时暂存树的结果逐字相等；再做 Claude 冒烟。"""
+
+    actual = claude_identity(production_data_root)
+    mismatched = [field for field in CLAUDE_IDENTITY_FIELDS if actual[field] != expected[field]]
+    if actual["roots"] != expected["roots"]:
+        mismatched.append("roots")
+    if actual["runtime_bindings"] != expected["runtime_bindings"]:
+        mismatched.append("runtime_bindings")
+    if mismatched:
+        raise DeploymentError(f"切换后生产树的 Claude 身份与暂存树不一致：{mismatched}")
+    return {
+        "identity": {field: actual[field] for field in CLAUDE_IDENTITY_FIELDS},
+        "roots": actual["roots"],
+        "client_binaries": probe_claude_binaries(client, production_data_root / CAPTURE_ROOT),
+        "runtime_bindings": observe_runtime_bindings(production_data_root, actual["runtime_bindings"]),
+    }
+
+
+def codex_document_facts(intent: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    """Codex 收据的两项文档事实，只取 Codex 的文档（VC-0 收口按 Codex 清单逐项核对）。
+
+    ``switched_archived_documents``：按 MANAGED_DOCUMENTS 顺序列出交换过的归档副本；``installed_runtime_documents``：
+    按改造前的顺序列出首次纳管（部署前不存在）的 Codex 活动与运行时文档。
+    """
+
+    by_name = {str(entry["document"]): entry for entry in intent["documents"]}
+    archived = [
+        name for name in MANAGED_DOCUMENTS
+        if bool(by_name.get(ARCHIVE_DOCUMENT_PREFIX + name, {}).get("old_exists"))
+    ]
+    installed = [
+        name for name in (*MANAGED_DOCUMENTS, *MANAGED_RUNTIME_DOCUMENTS)
+        if name in by_name and not by_name[name]["old_exists"]
+    ]
+    return archived, installed
+
+
+def build_codex_receipt(
+    *,
+    campaign_id: str,
+    production_root: Path,
+    production_doc_root: Path,
+    expected_tool_digest: str,
+    identity_v2: Mapping[str, Any],
+    expected_supervisor_digest: str,
+    expected_assertion_preparer_digest: str,
+    backup: Path | None,
+    assertion_preparer_backup: Path | None,
+    transaction_root: Path | None,
+    switched_archived_documents: list[str],
+    installed_documents: list[str],
+    supervisor_run_dir: Any,
+    ledger_summary: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Codex 部署收据：字段、取值与改造前 main 里的字面量逐项相同（codex-arm64-supervisor-enable/v1，22 项）。"""
+
+    return {
+        "schema_version": CODEX_DEPLOY_RECEIPT_SCHEMA,
+        "status": "passed",
+        "campaign_id": campaign_id,
+        "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "architecture": platform.machine(),
+        "production_tool_root": str(production_root),
+        "production_doc_root": str(production_doc_root),
+        "tool_files_sha256": expected_tool_digest,
+        "policy_version": identity_v2["policy_version"],
+        "policy_sha256": identity_v2["policy_sha256"],
+        "wire_producer_sha256": identity_v2["wire_producer_sha256"],
+        "evidence_semantics_sha256": identity_v2["evidence_semantics_sha256"],
+        "control_sha256": identity_v2["control_sha256"],
+        "supervisor_sha256": expected_supervisor_digest,
+        "assertion_preparer_sha256": expected_assertion_preparer_digest,
+        "rollback_backup": str(backup) if backup else None,
+        "assertion_preparer_rollback_backup": str(assertion_preparer_backup) if assertion_preparer_backup else None,
+        "document_rollback_backup": str(transaction_root / "backups") if transaction_root else None,
+        "switched_archived_documents": list(switched_archived_documents),
+        "installed_runtime_documents": list(installed_documents),
+        "supervisor_run_dir": str(supervisor_run_dir),
+        # B9：项目总账 head 摘要；生产数据根下没有总账时记录为 null。
+        "project_ledger": ledger_summary or None,
+    }
+
+
+def build_claude_receipt(
+    *,
+    campaign_id: str,
+    journal: SwitchJournal,
+    verification: Mapping[str, Any],
+    pre_a3: Mapping[str, Any],
+    expected_supervisor_digest: str,
+    supervisor_run_dir: Any,
+    transaction_receipts: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Claude 部署收据（official-client-managed-deploy/v1）：身份取切换后复算的结果（已与暂存树逐字核对）。"""
+
+    intent = journal.intent
+    by_root = {str(entry["root"]): entry for entry in intent["roots"]}
+    managed_roots = [
+        {
+            "root": root,
+            "tool_files_sha256": verification["roots"][root]["tool_files_sha256"],
+            "rollback_backup": (
+                str(by_root[root]["backup_path"]) if root in by_root and by_root[root]["old_exists"] else None
+            ),
+        }
+        for root in CLIENT_MANAGED_ROOTS["claude"]
+    ]
+    claude_documents = {*CLAUDE_MANAGED_DOCUMENTS, *CLAUDE_MANAGED_RUNTIME_DOCUMENTS}
+    documents = [
+        {
+            "document": str(entry["document"]),
+            "sha256": entry["new_tree_sha256"],
+            "rollback_backup": str(entry["backup_path"]) if entry["old_exists"] else None,
+        }
+        for entry in intent["documents"]
+        if str(entry["document"]).removeprefix(ARCHIVE_DOCUMENT_PREFIX) in claude_documents
+    ]
+    notes: list[str] = []
+    for root in CLIENT_MANAGED_ROOTS["claude"]:
+        entry = by_root.get(root)
+        if entry is None:
+            notes.append(f"{root} 未在本次事务交换：部署前已核对生产现状与暂存树逐项相同")
+        elif not entry["old_exists"]:
+            notes.append(f"{root} 首次纳管：部署前生产路径不存在，回滚是把新树移回 {entry['candidate_path']}")
+    return {
+        "schema_version": CLAUDE_DEPLOY_RECEIPT_SCHEMA,
+        "status": "passed",
+        "client": "claude",
+        "campaign_id": campaign_id,
+        "created_at_utc": _iso_now(),
+        "architecture": platform.machine(),
+        "production_data_root": intent["production_data_root"],
+        "production_doc_root": intent["production_doc_root"],
+        "identity": dict(verification["identity"]),
+        "managed_roots": managed_roots,
+        "runtime_bindings": list(verification["runtime_bindings"]),
+        "switch_journal_sha256": journal.intent_sha256,
+        "supervisor_sha256": expected_supervisor_digest,
+        "supervisor_run_dir": str(supervisor_run_dir),
+        "documents": documents,
+        "client_binaries": dict(verification["client_binaries"]),
+        "pre_a3": dict(pre_a3),
+        "transaction_receipts": list(transaction_receipts),
+        "notes": notes,
+    }
+
+
+def write_prepared_receipts(prepared: list[dict[str, Any]]) -> dict[str, Any]:
+    """按日志里的正文逐份 write-once 写出收据（正文与摘要已先入日志，中断后下次启动补齐）。"""
+
+    rows = []
+    for item in prepared:
+        path = Path(str(item["path"]))
+        size = write_json_once(path, item["payload"])
+        if file_sha256(path) != item["sha256"]:
+            raise DeploymentError(f"写出的部署收据摘要与日志正文不符：{path.name}")
+        rows.append({"client": item["client"], "name": path.name, "bytes": size})
+    return {"bytes": sum(row["bytes"] for row in rows), "receipts": rows}
 
 
 if __name__ == "__main__":

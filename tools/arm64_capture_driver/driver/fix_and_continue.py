@@ -142,6 +142,14 @@ DEPLOY_RECEIPT_KEYS = (
     "status", "architecture", "tool_files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256",
     "evidence_semantics_sha256", "control_sha256", "supervisor_sha256",
 )
+# B5a-01：按参数 CLIENT（缺省 codex）选部署收据。EXPECT.deploy_receipt 的键两客户端相同；Claude 收据
+# （official-client-managed-deploy/v1）的工具身份在 identity 对象里，比对前按这张表投影到顶层，Codex 收据原样比对。
+DEPLOY_CLIENTS = ("codex", "claude")
+DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
+DEPLOY_RECEIPT_IDENTITY_FIELDS = (
+    "tool_files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256",
+    "control_sha256",
+)
 DEFAULT_GUARD_STATUS = "/run/sub2api-egress/status.json"
 AUTHORIZABLE_LEDGER_STATES = frozenset({"recovery_required", "stage_review_required", "candidate_review_required"})
 CANDIDATE_RECOVER_SCRIPT = "vc5-recover.sh"
@@ -554,16 +562,36 @@ def _install_module() -> Any:
     return module
 
 
+def deploy_client(params: Mapping[str, str]) -> str:
+    """本轮的客户端（参数 CLIENT，缺省 codex）；不认识的值失败关闭，不默认成 codex。"""
+
+    client = params.get("CLIENT") or "codex"
+    if client not in DEPLOY_CLIENTS:
+        raise FixAndContinueError(f"参数 CLIENT 不认识：{client!r}（可选：{list(DEPLOY_CLIENTS)}）")
+    return client
+
+
 def latest_deploy_receipt(params: Mapping[str, str]) -> tuple[Path, dict[str, Any]]:
     install = _install_module()
     try:
-        return install.latest_deploy_receipt(Path(params["D"]) / "control")
+        return install.latest_deploy_receipt(Path(params["D"]) / "control", deploy_client(params))
     except install.DriverError as error:
         raise FixAndContinueError(str(error)) from error
 
 
-def deploy_receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
-    problems = [f"{key} 期望 {value!r} 实际 {receipt.get(key)!r}" for key, value in expected.items() if receipt.get(key) != value]
+def deploy_receipt_view(receipt: Mapping[str, Any], client: str = "codex") -> dict[str, Any]:
+    """按客户端把部署收据投影成 EXPECT.deploy_receipt 的键：Codex 原样，Claude 把 identity 里的身份字段提到顶层。"""
+
+    key = DEPLOY_RECEIPT_IDENTITY_KEYS[client]
+    if key is None:
+        return dict(receipt)
+    identity = receipt.get(key) if isinstance(receipt.get(key), Mapping) else {}
+    return {**receipt, **{field: identity.get(field) for field in DEPLOY_RECEIPT_IDENTITY_FIELDS}}
+
+
+def deploy_receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any], *, client: str = "codex") -> list[str]:
+    view = deploy_receipt_view(receipt, client)
+    problems = [f"{key} 期望 {value!r} 实际 {view.get(key)!r}" for key, value in expected.items() if view.get(key) != value]
     if receipt.get("rehearsal") is not None:
         problems.append("最新部署收据是演练收据")
     return problems
@@ -1204,7 +1232,7 @@ def _deploy_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int
     head, clean = staging_state(params)
     try:
         receipt_path, receipt = latest_deploy_receipt(params)
-        receipt_ok = not deploy_receipt_problems(receipt, expect["deploy_receipt"])
+        receipt_ok = not deploy_receipt_problems(receipt, expect["deploy_receipt"], client=deploy_client(params))
     except FixAndContinueError:
         receipt_path, receipt_ok = None, False
     if head == params["HEAD_COMMIT"] and clean and receipt_ok and receipt_path is not None:
@@ -1239,7 +1267,7 @@ def _deploy_verify(params: dict[str, str], args: argparse.Namespace) -> tuple[in
         receipt_path, receipt = latest_deploy_receipt(params)
     except FixAndContinueError as error:
         return stop(params, step, "failed", str(error), "人工核对 control/ 下的部署收据", run_stamp=stamp), {}
-    problems = deploy_receipt_problems(receipt, expect["deploy_receipt"])
+    problems = deploy_receipt_problems(receipt, expect["deploy_receipt"], client=deploy_client(params))
     if problems:
         return stop(params, step, "failed", f"最新部署收据 {receipt_path.name} 与期望摘要不符：{problems}",
                     "核对本地按部署 HEAD 预算的期望摘要（EXPECT）与部署收据；不一致说明部署内容不是本轮提交", run_stamp=stamp), {}
@@ -1264,7 +1292,7 @@ def _postdeploy_receipt(params: dict[str, str], args: argparse.Namespace) -> tup
         receipt_path, receipt = latest_deploy_receipt(params)
     except FixAndContinueError as error:
         return stop(params, step, "failed", str(error), "人工核对 control/ 下的部署收据", run_stamp=stamp), {}
-    problems = deploy_receipt_problems(receipt, expect["deploy_receipt"])
+    problems = deploy_receipt_problems(receipt, expect["deploy_receipt"], client=deploy_client(params))
     supervisor_file = Path(params["D"]) / "tools" / "official_client_capture" / "codex_upgrade_supervisor.py"
     actual = _sha256_file(supervisor_file) if supervisor_file.is_file() else None
     if actual != expect["deploy_receipt"]["supervisor_sha256"]:
