@@ -1,0 +1,150 @@
+{
+  "base_commit": "11fb46de6c1012a5490b4824d6649eceb6aeaeb2",
+  "changed_path_count": 18,
+  "current_commit": "23a8502193089ae024d6c819ef455e31b1a5a34a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/upstream_merge/__main__.py",
+    "tools/upstream_merge/baseline.py",
+    "tools/upstream_merge/contracts.py",
+    "tools/upstream_merge/gitops.py",
+    "tools/upstream_merge/request_render.py",
+    "tools/upstream_merge/request_template_v2.json",
+    "tools/upstream_merge/sink_registration.py",
+    "tools/upstream_merge/tests/test_baseline.py",
+    "tools/upstream_merge/tests/test_covered_tags.py",
+    "tools/upstream_merge/tests/test_preflight_paths.py",
+    "tools/upstream_merge/tests/test_private_paths.py",
+    "tools/upstream_merge/tests/test_request_render.py",
+    "tools/upstream_merge/tests/test_sink_registration.py",
+    "tools/upstream_merge/tests/test_timing_ledger.py",
+    "tools/upstream_merge/workflow.py"
+  ],
+  "frozen_edge_count": 5760,
+  "frozen_path_count": 2015,
+  "identity_sha256": "263b03e954c99887273f17f3d0e5f9464fb100bff72599098e51d2a511c04cf9",
+  "issued_at_utc": "2026-10-06T11:48:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-request-memory-base-tools-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/__main__.py",
+      "predecessor_sha256s": [
+        "6640c916345a77b938b8af0b0519ab4b0665631815df6a7022c07b1e5d19dea2"
+      ],
+      "reason": "承接用户已要求提交的上游合并工具及客户端指南配套改动；仅登记已提交源码的实际摘要，不修改实现和历史收据。 path=tools/upstream_merge/__main__.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um18-request-render-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um22-first-round-drafts-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um25-ledger-registry-sinkdraft-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "dc69b2aecb2e546b14cc6aa298a38dff28ec49755cbdd9edb7e9419c3ef8b1ab"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/contracts.py",
+      "predecessor_sha256s": [
+        "b03b75d3eda0894184f7f51b4a11f5d7c9224b03844e220d0edcf151df690236"
+      ],
+      "reason": "承接用户已要求提交的上游合并工具及客户端指南配套改动；仅登记已提交源码的实际摘要，不修改实现和历史收据。 path=tools/upstream_merge/contracts.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9fb8b64ee75d20b5d526e98fb0113044dad912486a5e24c28ba9c248ad0254e2"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/gitops.py",
+      "predecessor_sha256s": [
+        "6717198b8934c0edbea5396edb42adf88070c078770a017a0dcad95e3d301c7d"
+      ],
+      "reason": "承接用户已要求提交的上游合并工具及客户端指南配套改动；仅登记已提交源码的实际摘要，不修改实现和历史收据。 path=tools/upstream_merge/gitops.py",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-egress-snapshot-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-route-scope-source-transition.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e2c710246b59a3a9141b92d0eb68a77de75ffbe3e69f9d338e108ed8c7e3687b"
+    },
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "1013c0b5201dd5519c5b0f113c12458d9b1ef4d1320f28f939c6857c71cd7ad7"
+      ],
+      "reason": "承接用户已要求提交的上游合并工具及客户端指南配套改动；仅登记已提交源码的实际摘要，不修改实现和历史收据。 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um17-source-transition-issued-at-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um21-gate-interpreter-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um22-first-round-drafts-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "91fdaaa4c21f1c89fb36beb9bf3d79b7bc1baecea8b16e28935da79a03e3740a"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py",
+    "tools/upstream_merge/baseline.py",
+    "tools/upstream_merge/request_render.py",
+    "tools/upstream_merge/request_template_v2.json",
+    "tools/upstream_merge/sink_registration.py",
+    "tools/upstream_merge/tests/test_baseline.py",
+    "tools/upstream_merge/tests/test_covered_tags.py",
+    "tools/upstream_merge/tests/test_preflight_paths.py",
+    "tools/upstream_merge/tests/test_private_paths.py",
+    "tools/upstream_merge/tests/test_request_render.py",
+    "tools/upstream_merge/tests/test_sink_registration.py",
+    "tools/upstream_merge/tests/test_timing_ledger.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
