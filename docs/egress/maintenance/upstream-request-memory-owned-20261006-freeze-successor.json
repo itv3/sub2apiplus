@@ -1,0 +1,736 @@
+{
+  "base_commit": "224574413073266e3a8f4e230f7b138ecf86d957",
+  "changed_path_count": 54,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5718,
+  "frozen_path_count": 2015,
+  "identity_sha256": "fb76542aad1d844289baca0198705875682451dace1e38f69759e84695657ab3",
+  "issued_at_utc": "2026-10-06T11:51:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/officialegress/compiler.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-request-memory-owned-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "7e7a2ce2e26a97d87b3e657e763951ba438a3c761ccb31f29d48960e5e57f1c6"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6f898f96557a8b8791220be773c1bf29a84d6d9fd25ab91d08e9090d6711aaef"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/request_body_limit.go",
+      "predecessor_sha256s": [
+        "ff5e36679e6ba990e3e9fe765b8b48cf706f8343ce5057b443a99e3bd406edd8"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/handler/request_body_limit.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "09df482d9739a7abf27ccb9fc59f2cd1753def1e466e34779fe44902fc69deec"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/bundle.go",
+      "predecessor_sha256s": [
+        "3d49e7f60a0e9b6bd43064f9fa3651b1b12835bc2d041cc52895163bde51e3fd"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/bundle.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-route-retirement-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "f063679a2b18d8db79b0ca7932e3a5db981c5c884f3c2c0a11c8505601f0f246"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/codex_0151_formal_recovery_source_transition_test.go",
+      "predecessor_sha256s": [
+        "676662b245658e31b0237a03fe10a5ad8d751aacd6f05e5a43883ec8fd00404d"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/codex_0151_formal_recovery_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0b43aa5d676b21bae1fdebdd304d133295cd41e613d4bc4db342838025cec9fd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler.go",
+      "predecessor_sha256s": [
+        "85c1d76d7d2bc93c1af8a74ed9484125c13b3193f59503729e32c4c010a0cdf6"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/compiler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/ci-repair-source-transition.json",
+        "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9429a536996ec5fdefb0c9297ee7aed0d60fec115904d40572fa9bd7b3d7cf09"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/executor.go",
+      "predecessor_sha256s": [
+        "f4e08ab3e4a9d4be9102b0ece09dc83e285f456c3222f2f5bfdefa03691e5b42"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/executor.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/executor-one-shot-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "891cf4335e366c551e53c79242971a2efab06af4e3e2fde124ac213c64d9af26"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/guard.go",
+      "predecessor_sha256s": [
+        "cab9a78e55729680a89146963a64fba3dc2e6e916677b4872bf1e5e80622d95f"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/guard.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "257395b120acbbcd4e74af19f967978eaae9511ac7114f2e2201cbd404b28a3a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/types.go",
+      "predecessor_sha256s": [
+        "bec6294c49ef048c656c9642c57e8d6db45cc70ac9152e4edd610f725e09a203"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/officialegress/types.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "12afd38e4ebe0413677c2e0f4a32b7f6cf2900d086d5d3750a1d795ad5d286ce"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/httputil/body.go",
+      "predecessor_sha256s": [
+        "3984cd038f2fdf34987d9f2c38e1954187e6b00d14e444d70a685dbcb75f7abf"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/pkg/httputil/body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f2eee661e96882b8f5c82decf211e3d2f3377737503c13ba9b21059fde1c0b3c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/codex_0151_formal_recovery_source_transition_test.go",
+      "predecessor_sha256s": [
+        "3460357a33e790550819051ae9fb41785b681ec5d7e3a79a21a84974d2e4a696"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/codex_0151_formal_recovery_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "4bc25b51940005bfcedccfb7919d37c2770010f24f0271829db4f7fde54b59c7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/content_moderation.go",
+      "predecessor_sha256s": [
+        "d84800a91941e11311a6a76abfece0f18658066f7bf7c8340da07e0772170d20"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/content_moderation.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0e2151bb8f458a67f784ee9437eda31b9bb4099d59c72c1dbf1f4610113eb06c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_anchor.go",
+      "predecessor_sha256s": [
+        "6e4324e896a706c0d37232c6d9b02ea8791ffb769cc478fbdbf52e2ebe47cea7"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_anchor.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "ab91f2f6d06ea59f67481263242969f63072257a5d56de4202cdfb01cfa77097"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "predecessor_sha256s": [
+        "6ac64322afe22e5fa09c0f19bc78f8d8ab8938e5c9807f7b0dfb47ea196c5649"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_json.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "cd14b8578479d65f2cdf2b3fe2d58f03632e4c0c53880f4479db67f12043302a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_decode.go",
+      "predecessor_sha256s": [
+        "2db53deb190a4d973860510fe93bb13687c21565e3cf8987071b5e8acf2caa25"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_json_decode.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5b52145ca5abbb58b44468069a9c43e7ab2670a090e1885a20715a6b69ccb336"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_index.go",
+      "predecessor_sha256s": [
+        "dfec6d86720208c196669693c6b5920af76fddf4eac25fa117fe878fbf01309c"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_json_index.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "903f58107557afaec4cbc0cccda40aab589d899d4af651b8e8d12da9d7fee3c1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "predecessor_sha256s": [
+        "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/official_egress_openai_ws.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f82d82a9ae1a4e4ef1beeb5f3674a9b1d2435a02ff9b10afc371a472d03c3e13"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_tool_names.go",
+      "predecessor_sha256s": [
+        "a5b07ec8bcac9519d4245ce772f76baf6d248fc139785ecb2767b6614ae607aa"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_codex_tool_names.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b6fcbb865e717ec86e8571dfd884ae4de78e1a915324ab507bd2c96308d95f95"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "predecessor_sha256s": [
+        "91427b3245897babeafa20db992e5f918f7e4ba62a0026c7b357ad2ce9ee8dcf"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_codex_transform.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "638586cdfba3ebb25eddde9134df1b65be27691ec53c8777cd6f42d8fde999cb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compact_body_signal.go",
+      "predecessor_sha256s": [
+        "366b3ab8d5f71c80320649cbf809392656343ebd48720a4c4d1ea5677040d827"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_compact_body_signal.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a4b289417539ffacf6a38820542dfa1fc35a9230e24132a8a995382bfd8878ad"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_encrypted_content_lineage.go",
+      "predecessor_sha256s": [
+        "59cae858d5516bd3556977cd12d86789419816166fbc34fa296730622aba45e9"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_encrypted_content_lineage.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6d49222559d06a685b1ebd75be6c83ae3c8b1be92fbaaed05e27c711a3321223"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "193eac82b4aba269d57f99873b21f595f9d28629f7e532b49cc4e1e079c260cd"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-legacy-compact-release-gate-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "577a67c13f42f3f5717bb822e59e65c16a88f9097e548a84e14072a689b8471a"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_gateway_request_body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "84778383baf569356f04d1a7b3d96754d3f860cf3963dfacc121060de8d629f2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_invalid_encrypted_content_state.go",
+      "predecessor_sha256s": [
+        "3ad8271f91c41ab8614eaeea5989355ff92a0272c7b1db9acfa121b4667e934b"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_invalid_encrypted_content_state.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "67b3dbf19c5f74e162e707b96284d68370bf19ec994eb37e91eff615db0f4b73"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_input_compat.go",
+      "predecessor_sha256s": [
+        "cd0e2721e419b43c58e5aa4f4193c90c2419ca2a674f826a3ad585a131247f29"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_responses_input_compat.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f8bf40522e7da70aca9f91a8cf1857a81485d97d572bcac18c83f9c7de0b7a48"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_item_id.go",
+      "predecessor_sha256s": [
+        "245d0e29dde538271dde5efee1b8d52d9d116776eb538b742abad3d12caed1ee"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_responses_item_id.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "22e3116fbae8e0a6c94c7e89b3958e1d3d63ac206c7a8acfa3868dbe8e5cc8a4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_lite_tools.go",
+      "predecessor_sha256s": [
+        "98fefd03741f2c3855b9ac73e2a922410469f9b4022667ef42bc41e928ead373"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_responses_lite_tools.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "22b1878da91c2e78d04e9657702b048c6a2de181dfc7d585ca128480be10c86f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_upstream_transport_error.go",
+      "predecessor_sha256s": [
+        "492a244e2fb7ba95dcbaa411ae404d43756fc274ae2a3f8a6ec01f1049fa7200"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_upstream_transport_error.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "68dffc74a39bfbecf0050672d6473fbf0021d96b7d027656ee2e9a679e231730"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "a12283322aa6a2e3f8ca49e75a523fa10303fc09dbbb430a0a09865a796d0ac9"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d79b7c53d690b9072c158f590ba3a004a417ebadbaabd8e079c02f00f8076bb4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+      "predecessor_sha256s": [
+        "2edd45ae5a333a91bafbb24a3f62a059fe4f54de54bbed9824784da7f09b7dae"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_ws_forwarder_payload.go",
+      "source_receipts": [
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3f5b0adc5d9fd03995ab8bce60f12b7525c841ae39f7f49cfc3df75b396da191"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "0cc0f65c4fcb58343a961b88dc7ceffae4bf457435e70ef757f469bb2b0f1900"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_ws_http_bridge.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00cd4089f5222d4b120e426b2610c0118a157e6ea0ef6c1cbdfd3288c878bafb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2/passthrough_relay.go",
+      "predecessor_sha256s": [
+        "efc86814bcefa3a9ea23007d989ac3bd598f8b0e2f3192541b35a42bcce60bcc"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_ws_v2/passthrough_relay.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6ee84a2fe8e90192b132bdb3bd03e232b0b61cf487d25a309b3de86d2c182876"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "predecessor_sha256s": [
+        "5a718f16aa42591d53f394f37275f13fd3fa92de9a541fd089ff08ec7faf790d"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "744f5f67a23e5b87f2a67df1aa9f72890e8275148a8200c670eafefdfce3dfb9"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "predecessor_sha256s": [
+        "ba9f684ea7b4d9d2ade2acd4e17b139488c8b7e1a2ca7b7c4a1051cb5ae2b615"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1650c446ea3dd8a5d39c5ddb119878116037bc8ab82aaf67095511b0842e2971"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "d9a05d500115e51e9e6960c598d986a2c594f84d6bb241688413988e9d8df7f3"
+      ],
+      "reason": "问题四最终续作：大正文显式系统内存所有权、普通磁盘单次压缩与重放、HTTP及WS生命周期、坏密文重试；当前fact map和trace仅承接五份源码十处摘要。历史addition读取器补齐已审计的精确后继链及拒绝变异测试，历史收据只读。 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "03944e7ce3353ff089197b658c671f55ba30b74c4ff4567c6d90f1a35352e45b"
+    }
+  ],
+  "unregistered_path_count": 19,
+  "unregistered_paths": [
+    "backend/internal/handler/request_memory_admission_pressure_test.go",
+    "backend/internal/officialegress/profilecontract/executable_profile.go",
+    "backend/internal/officialegress/request_body_segmented_test.go",
+    "backend/internal/pkg/httputil/body_spool.go",
+    "backend/internal/pkg/httputil/body_spool_darwin.go",
+    "backend/internal/pkg/httputil/body_spool_linux.go",
+    "backend/internal/pkg/httputil/body_spool_other.go",
+    "backend/internal/service/official_egress_codex_profile_optional.go",
+    "backend/internal/service/official_egress_forward_body.go",
+    "backend/internal/service/official_egress_forward_body_index_test.go",
+    "backend/internal/service/official_egress_openai_json_index_prealloc_test.go",
+    "backend/internal/service/official_egress_openai_memory_profile_test.go",
+    "backend/internal/service/official_egress_ws_session_memory_profile_test.go",
+    "backend/internal/service/openai_ws_client_read.go",
+    "backend/internal/service/openai_ws_http_bridge_memory_test.go",
+    "backend/internal/service/openai_ws_ingress_deferred.go",
+    "backend/internal/service/openai_ws_ingress_deferred_test.go",
+    "backend/internal/service/openai_ws_request_memory.go",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
