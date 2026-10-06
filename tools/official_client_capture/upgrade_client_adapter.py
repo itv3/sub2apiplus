@@ -313,6 +313,11 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     "recovery_segment_summary": "callable",  # 恢复段摘要（签名同对账器原函数）
     "segment_reuse_proofs": "callable",  # 恢复段复用证明（签名同对账器原函数）
     "requires_project_ledger": "callable",  # (campaign_mode, target_version) → 是否必须在项目总账内
+    # 项目总账（B1-04）：两客户端共用数据根、各有一本总账（设计 D3），新建总账用的 plan 合同不同（附录 B），
+    # 候选就绪探针的请求计量类别不同。
+    "project_ledger_dir_name": "value",  # 数据根下的项目总账目录名
+    "project_ledger_plan_schema": "value",  # 新建项目总账写出的 plan 合同（Codex v1 不带 client，Claude v2 带 client）
+    "candidate_probe_accounting_category": "value",  # 候选就绪探针在项目总账里的请求计量类别
 })
 
 
@@ -339,6 +344,9 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "recovery_segment_summary": ("codex_upgrade_reconciler", "recovery_segment_summary"),
         "segment_reuse_proofs": ("codex_upgrade_reconciler", "segment_reuse_proofs"),
         "requires_project_ledger": ("codex_upgrade_project_ledger", "requires_project_ledger"),
+        "project_ledger_dir_name": ("codex_upgrade_project_ledger", "LEDGER_DIR_NAME"),
+        "project_ledger_plan_schema": ("codex_upgrade_project_ledger", "PLAN_SCHEMA"),
+        "candidate_probe_accounting_category": ("codex_upgrade_client_adapter", "CANDIDATE_PROBE_ACCOUNTING_CATEGORY"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -357,6 +365,10 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "recovery_segment_summary": ("claude_upgrade", "recovery_segment_summary"),  # B1-09
         "segment_reuse_proofs": ("claude_upgrade", "segment_reuse_proofs"),  # B1-09
         "requires_project_ledger": ("claude_upgrade_client_adapter", "requires_project_ledger"),
+        "project_ledger_dir_name": ("claude_upgrade_client_adapter", "PROJECT_LEDGER_DIR_NAME"),
+        # v2 合同由项目总账定义与校验，Claude 只是选用它（共享 control 模块，不落到 Codex 编排器）。
+        "project_ledger_plan_schema": ("codex_upgrade_project_ledger", "PLAN_SCHEMA_V2"),
+        "candidate_probe_accounting_category": ("claude_upgrade_client_adapter", "CANDIDATE_PROBE_ACCOUNTING_CATEGORY"),
     }),
 })
 

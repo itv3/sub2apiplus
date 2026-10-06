@@ -54,6 +54,10 @@ TARGET_VERSION_FIELD = "claude_version"
 DEPLOY_RECEIPT_GLOB = "claude-managed-deploy-*.json"
 # Claude 独立根因码表（B1-06）：同 schema，每个码的稳定维度都含 client。
 ROOT_CAUSE_CODES_PATH = Path(__file__).resolve().parent / "claude_root_cause_codes.json"
+# Claude 项目总账目录（B1-04，设计 D3）：与 Codex 共用 ARM64 数据根，目录名不同，两本总账互不可见。
+PROJECT_LEDGER_DIR_NAME = "upgrade-project-ledger-claude"
+# Claude 候选就绪探针在项目总账里的请求计量类别（B1-04 先定名；B4 落实 Claude 候选就绪探针时核对）。
+CANDIDATE_PROBE_ACCOUNTING_CATEGORY = "claude_candidate_readiness_probe/v1"
 # Claude Campaign ID（如 ``claude-code-2_1_226-fw-g-production-replacement-v2-20260821``）不匹配根因模块的 Codex
 # Campaign ID 模式，必须在调用根因 API 前由适配器拒绝；版本号分隔符兼容点与下划线。
 CLAUDE_CAMPAIGN_ID_RE = re.compile(r"claude-code-\d+[._]\d+[._]\d+")

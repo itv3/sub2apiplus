@@ -31,6 +31,9 @@ FORBIDDEN_SUBCOMMANDS = frozenset({
 # 断言包取证清单（``<attempt>/evidence/assertion-bundle/capture-manifest.json``）里记录目标版本的字段名；
 # Campaign 一侧的字段始终叫 ``target_version``。
 TARGET_VERSION_FIELD = "codex_version"
+# 候选就绪探针（``/models`` wire dispatch）在项目总账里的请求计量类别：原写死在项目总账的入账
+# （``RuntimeAdmission.account_candidate_probe``）与重放校验两处，取值逐字不变。
+CANDIDATE_PROBE_ACCOUNTING_CATEGORY = "candidate_readiness_models_probe/v1"
 
 
 def reject_volatile_dimensions(dimensions: Mapping[str, str]) -> None:

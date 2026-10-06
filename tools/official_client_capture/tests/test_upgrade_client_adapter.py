@@ -202,6 +202,10 @@ class CodexMemberValueTests(unittest.TestCase):
         self.assertIs(self.adapter.segment_reuse_proofs, codex_upgrade_reconciler.segment_reuse_proofs)
         self.assertIs(self.adapter.requires_project_ledger, codex_upgrade_project_ledger.requires_project_ledger)
         self.assertIsNone(self.adapter.reject_volatile_dimensions({"phase": "VC-1", "scenario": "claude-code-2.1.286"}))
+        # B1-04 项目总账：目录名、新建总账的 plan 合同与候选就绪探针计量类别逐字等于改造前写死的值。
+        self.assertEqual(self.adapter.project_ledger_dir_name, "upgrade-project-ledger")
+        self.assertEqual(self.adapter.project_ledger_plan_schema, "upgrade-project-ledger-plan/v1")
+        self.assertEqual(self.adapter.candidate_probe_accounting_category, "candidate_readiness_models_probe/v1")
 
     def test_member_patches_are_visible_through_adapter(self) -> None:
         from tools.official_client_capture import codex_upgrade_reconciler

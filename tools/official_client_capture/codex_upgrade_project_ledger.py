@@ -56,6 +56,16 @@ observation，相同根因 ID 也只计一次。旧 ``root_cause`` 单值仍可�
 实际修复的根因子集，只清零该子集；未覆盖根因保留计数。经总账自己的
 ``repairs/outbox/batch-NNNNNN/`` 推送 ``root_cause_repaired``，不属于任何 Campaign，不激活
 历史 Campaign。
+
+客户端维度（Claude 升级控制面设计 B1-04）：两客户端共用数据根、各有一本总账，目录名经适配器取
+（``ledger_dir_name``：codex ``upgrade-project-ledger``，claude ``upgrade-project-ledger-claude``）。Codex 继续用
+``upgrade-project-ledger-plan/v1``：不带 ``client``，历史 v1 一律按 codex 解释（设计 D1），字段、摘要、码表、目录名与
+分桶结果与改造前逐字相同。Claude 用 ``upgrade-project-ledger-plan/v2``：v1 字段加 ``client``（进入 plan 自摘要），
+根因码表按 client 经适配器加载（创建、读取与映射链核对同一份码表）；v2 总账内的 Campaign 账本 plan、注册事件与 head
+的 ``registered_campaigns`` 带 ``client``。客户端差异只按合同版本分支或经适配器取值。身份链：入口所属客户端（Campaign
+总计划声明的 client，或显式给出）必须等于总账 plan 的 client，缺失或不一致即拒绝——Claude 入口遇到缺 client 的 v1 plan
+即拒绝。一本总账只属于一个客户端，所以根因分桶键 ``(client, target_version)`` 在总账内按 ``target_version`` 存放。
+根因码表变更由 ``record-code-migration`` 写映射收据 ``migrations/NNNNNN.json`` 衔接。
 """
 
 from __future__ import annotations
@@ -64,6 +74,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -76,13 +87,27 @@ from typing import Any, Iterator, Mapping
 
 if __package__ in {None, ""}:
     import codex_upgrade_root_cause as root_cause
+    # 按名字导入而不写 import 语句：项目总账在 Codex 作业依赖闭包里，作业依赖分析会把 import 语句计入 Job 的工具
+    # 依赖；适配接口属 control 层、不影响请求字节，写成 import 语句会迫使 Codex 场景清单（wire 层）改写依赖声明，
+    # 违反 Claude 升级的 Codex 身份守恒（与监督器同一写法）。
+    upgrade_client_adapter = importlib.import_module("upgrade_client_adapter")
 else:
     from . import codex_upgrade_root_cause as root_cause
+    from . import upgrade_client_adapter
 
 PLAN_SCHEMA = "upgrade-project-ledger-plan/v1"
+# Claude 的项目总账 plan（设计附录 B）：v1 字段加 client（进入 plan 自摘要），根因码表按 client 加载。新合同只由
+# Claude 使用，Codex 继续 v1；各客户端新建总账用哪一版由适配器成员 project_ledger_plan_schema 给出。
+PLAN_SCHEMA_V2 = "upgrade-project-ledger-plan/v2"
 EVENT_SCHEMA = "upgrade-project-ledger-event/v1"
 HEAD_SCHEMA = "upgrade-project-ledger-head/v1"
 CAMPAIGN_PLAN_SCHEMA = "upgrade-campaign-ledger-plan/v1"
+# v2 总账内的 Campaign 账本 plan：v1 字段加 client，注册事件因此携带 client。
+CAMPAIGN_PLAN_SCHEMA_V2 = "upgrade-campaign-ledger-plan/v2"
+# 总账 plan 合同 → 其下 Campaign 账本 plan 合同（按合同版本分支，不按客户端名）。
+CAMPAIGN_PLAN_SCHEMA_FOR = {PLAN_SCHEMA: CAMPAIGN_PLAN_SCHEMA, PLAN_SCHEMA_V2: CAMPAIGN_PLAN_SCHEMA_V2}
+# 设计 D1：没有 client 字段的历史制品（v1 总账 plan、v1 Campaign 账本 plan、历史 Codex 总计划）一律按 codex 解释，不补写。
+LEGACY_CLIENT = "codex"
 ENTRY_SCHEMA = "upgrade-outbox-entry/v2"
 COMMIT_SCHEMA = "upgrade-outbox-commit/v2"
 REPAIR_SCHEMA = "root-cause-repair/v1"
@@ -92,6 +117,7 @@ REPAIR_SCHEMA = "root-cause-repair/v1"
 SUPERSEDE_APPROVAL_SCHEMA = "campaign-supersede-approval/v1"
 SUPERSESSIONS_DIR_NAME = "supersessions"
 RECONCILE_REPORT_SCHEMA = "project-ledger-reconcile/v1"
+# Codex 的总账目录名（适配器 project_ledger_dir_name 的 Codex 绑定）；按客户端取用 ledger_dir_name(client)。
 LEDGER_DIR_NAME = "upgrade-project-ledger"
 CAMPAIGN_LEDGER_DIR_NAME = "ledger"
 STAGING_DIR_NAME = "staging"
@@ -301,12 +327,20 @@ def _read_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     return payload, raw
 
 
-def _write_once(path: Path, payload: Mapping[str, Any]) -> bytes:
+def _write_once(path: Path, payload: Mapping[str, Any], *, staging_dir: Path | None = None) -> bytes:
+    """只写一次：同文件系统临时文件写满并 fsync 后硬链接发布。
+
+    ``staging_dir`` 给出时临时文件放在那里（须与目标同一文件系统），目标目录里就不会短暂出现临时文件——供读取方
+    不容忍额外文件的目录（映射收据）使用；缺省放在目标目录，与改造前相同。
+    """
+
     if path.exists() or path.is_symlink():
         raise ProjectLedgerError(f"输出已存在，禁止覆盖：{path}")
     _private_dir(path.parent, "输出父目录")
     raw = _canonical(payload) + b"\n"
-    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent if staging_dir is None else staging_dir, prefix=f".{path.name}.", suffix=".tmp"
+    )
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, 0o600)
@@ -400,6 +434,109 @@ def campaign_ledger_lock(campaign_dir: Path) -> Iterator[None]:
 
 
 # ---------------------------------------------------------------------------
+# 客户端维度（B1-04）：目录名、合同版本与身份链核对
+# ---------------------------------------------------------------------------
+
+
+def _client_adapter(client: Any) -> Any:
+    """按 client 取适配器；未知客户端即拒绝，不默认成 codex。适配器异常转成本模块异常（同一份适配接口模块）。"""
+
+    try:
+        return upgrade_client_adapter.adapter_for(client)
+    except upgrade_client_adapter.ClientAdapterError as error:
+        raise ProjectLedgerError(str(error)) from error
+
+
+def ledger_dir_name(client: str) -> str:
+    """客户端的项目总账目录名（数据根下）：经适配器取，codex 即 ``LEDGER_DIR_NAME``。"""
+
+    return str(_client_adapter(client).project_ledger_dir_name)
+
+
+def _v2_client(value: Any, label: str) -> str:
+    """v2 合同（总账 plan 与 Campaign 账本 plan）里的 client：必须是已知客户端，且该客户端新建总账用的就是 v2。
+
+    新合同只由 Claude 使用：Codex 的适配器给出 v1，带 ``client: codex`` 的 v2 制品一律拒绝。
+    """
+
+    adapter = _client_adapter(value)
+    if adapter.project_ledger_plan_schema != PLAN_SCHEMA_V2:
+        raise ProjectLedgerError(f"{label} 的 client 非法：{value!r}（{PLAN_SCHEMA_V2} 只由 Claude 使用，Codex 用 {PLAN_SCHEMA}）")
+    return str(adapter.client)
+
+
+def _plan_client(plan: Mapping[str, Any]) -> str:
+    """总账 plan 的归属客户端：v2 读显式 client；v1 没有该字段，按 codex 解释（设计 D1，不补写）。"""
+
+    return str(plan["client"]) if plan.get("schema_version") == PLAN_SCHEMA_V2 else LEGACY_CLIENT
+
+
+def _plan_adapter(plan: Mapping[str, Any]) -> Any:
+    """总账 plan 所属客户端的适配器。"""
+
+    return _client_adapter(_plan_client(plan))
+
+
+def _campaign_declared_client(campaign_dir: Path) -> str | None:
+    """``campaign_dir`` 处 Campaign 总计划声明的客户端；没有（或读不到、不是 JSON 对象）返回 None。
+
+    与对账器判定 Campaign 归属同一口径：历史 Codex 总计划没有 ``client`` 字段，按 codex 解释（设计 D1）；client 非法即
+    拒绝。读失败按没有总计划处理，Codex 现有调用方（含没有总计划的夹具）的行为因此与改造前相同。
+    """
+
+    path = Path(campaign_dir) / "campaign.json"
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        payload = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    declared = payload.get("client")
+    if declared is None:
+        return LEGACY_CLIENT
+    return str(_client_adapter(declared).client)
+
+
+def _lookup_client(start: Path, client: str | None) -> str:
+    """查找总账时用的客户端：显式给出的 client，或 ``start`` 处 Campaign 总计划声明的 client；都没有时按 codex。
+
+    两者都有且不一致即拒绝：不能用别的客户端的入口去找这个 Campaign 的总账。
+    """
+
+    declared = _campaign_declared_client(start)
+    if client is None:
+        return declared or LEGACY_CLIENT
+    expected = str(_client_adapter(client).client)
+    if declared is not None and declared != expected:
+        raise ProjectLedgerError(f"Campaign 属于 {declared}，不能按 {expected} 查找或使用项目总账")
+    return expected
+
+
+def _require_plan_client(plan: Mapping[str, Any], client: str, label: str) -> None:
+    """身份链：入口所属客户端必须等于总账 plan 的 client。
+
+    v1 plan 缺 client 只按 codex 解释，所以 Claude 入口遇到 v1 plan 即拒绝；Codex 入口遇到 Claude 的 v2 plan 同样拒绝。
+    """
+
+    owner = _plan_client(plan)
+    if owner != client:
+        raise ProjectLedgerError(
+            f"{label}：项目总账 plan（{plan.get('schema_version')}）属于 {owner}，与 {client} 不一致"
+            "（缺 client 的 plan 只按 codex 解释，Claude 总账必须是带 client 的 v2 plan）"
+        )
+
+
+def _require_campaign_owner(campaign_dir: Path, plan: Mapping[str, Any], label: str) -> None:
+    """Campaign 总计划声明的客户端必须与总账 plan 一致；没有总计划时不核对（与改造前相同）。"""
+
+    declared = _campaign_declared_client(campaign_dir)
+    if declared is not None:
+        _require_plan_client(plan, declared, label)
+
+
+# ---------------------------------------------------------------------------
 # 总账 plan
 # ---------------------------------------------------------------------------
 
@@ -429,12 +566,19 @@ PLAN_FIELDS = {
     "bound_receipts",
     "plan_sha256",
 }
+# 合同版本 → 字段闭集：v2 只比 v1 多 client。
+PLAN_FIELDS_BY_SCHEMA = {PLAN_SCHEMA: PLAN_FIELDS, PLAN_SCHEMA_V2: PLAN_FIELDS | {"client"}}
 
 
 def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    _expect(plan, PLAN_FIELDS, "总账 plan")
-    if plan["schema_version"] != PLAN_SCHEMA:
+    schema = plan.get("schema_version") if isinstance(plan, dict) else None
+    known = schema if isinstance(schema, str) and schema in PLAN_FIELDS_BY_SCHEMA else None
+    # 未知 schema 按 v1 闭集核对字段，报错顺序与改造前相同（先字段闭集、再 schema）。
+    _expect(plan, PLAN_FIELDS_BY_SCHEMA[known] if known else PLAN_FIELDS, "总账 plan")
+    if known is None:
         raise ProjectLedgerError("总账 plan schema 非法")
+    if known == PLAN_SCHEMA_V2:
+        _v2_client(plan["client"], "总账 plan")
     _safe_id(plan["project_id"], "project_id")
     started = _timestamp(plan["started_at_utc"], "started_at_utc")
     deadline = _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc")
@@ -550,18 +694,96 @@ def _effective_codes_identity(plan: Mapping[str, Any], migrations: list[dict[str
     return codes_sha256, algorithm, combined
 
 
+def _plan_codes(plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """按合同版本取 plan 冻结身份要比对的当前码表。
+
+    v1 返回 None：根因 API 照旧加载默认码表，调用与改造前相同；v2 按 plan 的 client 经适配器取码表路径，用本模块那份
+    根因模块加载（被调函数与异常类同源）。码表本身加载失败照实报错，不冒充"没有映射收据"。
+    """
+
+    if plan["schema_version"] != PLAN_SCHEMA_V2:
+        return None
+    adapter = _plan_adapter(plan)
+    try:
+        return root_cause.load_codes(adapter.root_cause_codes_path)
+    except root_cause.RootCauseError as error:
+        raise ProjectLedgerError(f"总账客户端 {adapter.client} 的根因码表无法加载：{error}") from error
+
+
 def _load_plan(root: Path) -> tuple[dict[str, Any], bytes]:
     plan, raw = _read_json(root / "plan.json", "总账 plan")
     _validate_plan(plan)
     migrations = _code_migrations(root)
     codes_sha256, algorithm, _mapping = _effective_codes_identity(plan, migrations)
+    codes = _plan_codes(plan)
     try:
-        root_cause.assert_codes_identity(expected_codes_sha256=codes_sha256, expected_algorithm_version=algorithm)
+        root_cause.assert_codes_identity(
+            expected_codes_sha256=codes_sha256, expected_algorithm_version=algorithm, codes=codes
+        )
     except root_cause.RootCauseError as error:
         raise ProjectLedgerError(
             "根因枚举表或算法已变更且没有衔接的旧新 ID 映射收据，总账拒绝服务：" + str(error)
         ) from error
     return plan, raw
+
+
+def record_code_migration(
+    root: Path,
+    *,
+    from_codes: Path,
+    to_codes: Path,
+    approved_by: str,
+    id_mapping: Mapping[str, str] | None = None,
+    approved_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """写根因码表映射收据 ``migrations/NNNNNN.json``（``MIGRATION_SCHEMA``；设计 B1-06 的迁移收据写出方）。
+
+    收据必须衔接映射链末端：``from_codes`` 的摘要与算法版本等于总账冻结身份沿已有收据走到的末端，否则拒绝。
+    ``to_codes`` 是变更后的新码表，可以是尚未部署的新表（部署前先写收据，部署后的工具按新表核对；写完后
+    ``_load_plan`` 按本总账客户端的当前码表核对链末端）。两张表都用本模块那份根因模块校验加载；``id_mapping`` 是
+    旧→新根因 ID 映射，形态校验与读取方 ``_code_migrations`` 同口径，缺省为空。项目锁内只写一次，字段闭集与读取方
+    完全相同；不在锁外读 plan 的码表身份，因此码表已变更、总账正拒绝服务时也能写。
+    """
+
+    if not isinstance(approved_by, str) or not approved_by.strip():
+        raise ProjectLedgerError("映射收据必须记录批准人")
+    mapping = dict(id_mapping or {})
+    if any(not isinstance(k, str) or not k or not isinstance(v, str) or not v for k, v in mapping.items()):
+        raise ProjectLedgerError("id_mapping 必须是非空字符串到非空字符串的映射")
+    approved = approved_at_utc or _utc_now()
+    _timestamp(approved, "approved_at_utc")
+    source = root_cause.load_codes(Path(from_codes))
+    target = root_cause.load_codes(Path(to_codes))
+    source_identity = (source["codes_sha256"], source["algorithm_version"])
+    target_identity = (target["codes_sha256"], target["algorithm_version"])
+    if source_identity == target_identity:
+        raise ProjectLedgerError("新旧码表身份相同，不需要映射收据")
+    with project_lock(root):
+        plan, _raw = _read_json(root / "plan.json", "总账 plan")
+        _validate_plan(plan)
+        migrations = _code_migrations(root)
+        chain_sha256, chain_algorithm, _combined = _effective_codes_identity(plan, migrations)
+        if source_identity != (chain_sha256, chain_algorithm):
+            raise ProjectLedgerError(
+                f"映射收据的旧码表（{source_identity[0]}）与总账映射链末端（{chain_sha256}）不衔接"
+            )
+        sequence = len(migrations) + 1
+        payload = {
+            "schema_version": MIGRATION_SCHEMA,
+            "sequence": sequence,
+            "from_codes_sha256": source["codes_sha256"],
+            "to_codes_sha256": target["codes_sha256"],
+            "from_algorithm_version": source["algorithm_version"],
+            "to_algorithm_version": target["algorithm_version"],
+            "id_mapping": dict(sorted(mapping.items())),
+            "approved_by": approved_by.strip(),
+            "approved_at_utc": approved,
+        }
+        migrations_root = _private_dir(root / "migrations", "映射收据目录", create=True)
+        path = migrations_root / f"{sequence:06d}.json"
+        # 读取方要求 migrations/ 只含连续序号文件，锁外的只读重放也会列目录：临时文件放在总账根目录再硬链接进来。
+        _write_once(path, payload, staging_dir=_private_dir(root, "项目总账目录"))
+    return {"migration_path": str(path), **payload}
 
 
 def create_project_ledger(
@@ -584,15 +806,29 @@ def create_project_ledger(
     bound_receipts: Mapping[str, Mapping[str, str]] | None = None,
     started_at_utc: str | None = None,
     approved_at_utc: str | None = None,
+    client: str | None = None,
 ) -> dict[str, Any]:
-    """创建只写一次的项目总账；绝对截止时间与估计政策必须显式给出批准人。"""
+    """创建只写一次的项目总账；绝对截止时间与估计政策必须显式给出批准人。
 
+    ``client`` 缺省或为 codex 时写 v1 plan（不带 client），与改造前逐字相同；写哪一版由客户端适配器的
+    ``project_ledger_plan_schema`` 给出，v2（Claude）plan 加 ``client``、冻结该客户端码表的身份，且总账目录名必须是该
+    客户端的总账目录名（Codex 一侧按目录名查找时永远看不到 Claude 总账）。
+    """
+
+    adapter = _client_adapter(LEGACY_CLIENT if client is None else client)
+    schema = adapter.project_ledger_plan_schema
     if root.exists() or root.is_symlink():
         raise ProjectLedgerError(f"项目总账已存在：{root}")
     _private_dir(root.parent, "项目总账父目录")
     if fixture_only and STAGING_DIR_NAME not in root.parent.resolve(strict=False).parts:
         raise ProjectLedgerError("fixture_only 总账必须位于 staging 目录树内")
-    codes = root_cause.load_codes()
+    if schema == PLAN_SCHEMA_V2:
+        expected_name = str(adapter.project_ledger_dir_name)
+        if Path(os.path.abspath(root)).name != expected_name:
+            raise ProjectLedgerError(f"{adapter.client} 项目总账目录名必须是 {expected_name}：{root}")
+        codes = root_cause.load_codes(adapter.root_cause_codes_path)
+    else:
+        codes = root_cause.load_codes()
     keys = sorted(set(initial_identity_keys or []))
     now = started_at_utc or _utc_now()
     approved = approved_at_utc or now
@@ -601,7 +837,7 @@ def create_project_ledger(
         or {"campaign_ledgers": [], "batch_sha256s": [], "operation_ids": [], "identity_keys_sha256": _digest(keys)}
     )
     plan: dict[str, Any] = {
-        "schema_version": PLAN_SCHEMA,
+        "schema_version": schema,
         "project_id": project_id,
         "started_at_utc": now,
         "absolute_deadline_utc": absolute_deadline_utc,
@@ -625,6 +861,8 @@ def create_project_ledger(
         "closed_ledger_heads": [dict(item) for item in (closed_ledger_heads or [])],
         "bound_receipts": {name: dict(binding) for name, binding in (bound_receipts or {}).items()},
     }
+    if schema == PLAN_SCHEMA_V2:
+        plan["client"] = adapter.client
     plan["plan_sha256"] = _digest(plan)
     _validate_plan(plan)
     root.mkdir(mode=0o700)
@@ -994,7 +1232,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_registered.campaign_id")
             if campaign_id in state["registered_campaigns"]:
                 raise ProjectLedgerError(f"Campaign 重复注册：{campaign_id}")
-            state["registered_campaigns"][campaign_id] = {
+            record = {
                 "operation_id": operation_id,
                 "campaign_dir": payload.get("campaign_dir"),
                 "campaign_mode": payload.get("campaign_mode"),
@@ -1003,6 +1241,15 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 "registration_batch_sha256": payload.get("registration_batch_sha256"),
                 "sequence": event["sequence"],
             }
+            if plan["schema_version"] == PLAN_SCHEMA_V2:
+                # v2：注册事件必须带本总账的 client，一本总账只登记同一客户端的 Campaign，分桶键 (client, target_version)
+                # 因此在总账内按 target_version 存放；v1 不写该字段，head 与改造前逐字相同。
+                if payload.get("client") != plan["client"]:
+                    raise ProjectLedgerError(
+                        f"campaign_registered 的 client {payload.get('client')!r} 与总账 {plan['client']} 不一致：{campaign_id}"
+                    )
+                record["client"] = plan["client"]
+            state["registered_campaigns"][campaign_id] = record
         elif event_type == "campaign_registration_rejected":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_registration_rejected.campaign_id")
             state["rejected_campaigns"][campaign_id] = {
@@ -1023,6 +1270,8 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             registered = state["registered_campaigns"].get(payload.get("campaign_id"))
             target_version = registered.get("target_version") if isinstance(registered, dict) else None
             # 找不到版本归属的入账（未带 campaign_id 或未注册）按共同底数计，对所有版本生效（保守）。
+            # 分桶键是 (client, target_version)（B1-04）：注册时已核对 Campaign 与总账同属一个客户端（v1 恒为 codex，
+            # v2 为 plan.client），所以桶在本总账内按 target_version 存放，v1 结果与改造前逐字相同。
             bucket = (
                 state["root_cause_counts_by_version"].setdefault(target_version, {})
                 if isinstance(target_version, str) and target_version
@@ -1093,7 +1342,8 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             request = payload.get("request")
             if not isinstance(request, dict):
                 raise ProjectLedgerError("candidate_probe_accounted 缺少请求部分")
-            if payload.get("accounting_category") != "candidate_readiness_models_probe/v1":
+            # 计量类别按总账所属客户端经适配器取（Codex 即原写死的 candidate_readiness_models_probe/v1）。
+            if payload.get("accounting_category") != _plan_adapter(plan).candidate_probe_accounting_category:
                 raise ProjectLedgerError("candidate_probe_accounted 计量类别非法")
             _apply_request_part(
                 state, request, operation_id, "candidate_probe_accounted", campaign_id=_payload_campaign_id(payload)
@@ -1549,9 +1799,9 @@ def deadline_control_scope(campaign_dir: Path, *, executing: bool = False):
         except BlockingIOError as error:
             raise ProjectLedgerError("Campaign 仍在执行或变更预算，待收口后重试") from error
         if not executing:
-            _root, _ledger, _manifest, _artifacts, upgrade, _timing = _deadline_context(campaign_dir)
-            lease = upgrade._read_campaign_lease(campaign_dir)
-            if lease and lease.get("state") == "active" and upgrade._campaign_lease_pid_alive(lease.get("owner_pid")):
+            _root, _ledger, _manifest, _artifacts, adapter, _timing = _deadline_context(campaign_dir)
+            lease = adapter.orchestrator._read_campaign_lease(campaign_dir)
+            if lease and lease.get("state") == "active" and adapter.orchestrator._campaign_lease_pid_alive(lease.get("owner_pid")):
                 raise ProjectLedgerError("Campaign 仍有存活执行租约，不得修改运行中的预算")
         yield
     finally:
@@ -1559,19 +1809,24 @@ def deadline_control_scope(campaign_dir: Path, *, executing: bool = False):
 
 
 def _deadline_context(campaign_dir: Path):
-    """预算控制自持项目锁与 Campaign 锁；不申请已经过期的执行租约。"""
+    """预算控制自持项目锁与 Campaign 锁；不申请已经过期的执行租约。
+
+    返回 Campaign 所属客户端的适配器（不再延迟导入编排器、把模块对象传给调用方）：调用方以字面形式
+    ``adapter.orchestrator.<名字>`` 访问 Campaign 锁与执行租约（``_campaign_lock``、``_read_campaign_lease``、
+    ``_campaign_lease_pid_alive`` 均属编排器服务面），并在锁内读出 plan 后核对总账与 Campaign 同属该客户端。
+    """
     if __package__ in {None, ""}:
-        import codex_upgrade as upgrade
         import codex_upgrade_timing_ledger as timing
     else:
-        from . import codex_upgrade as upgrade, codex_upgrade_timing_ledger as timing
+        from . import codex_upgrade_timing_ledger as timing
     artifacts = _deadline_artifacts()
-    root = find_project_ledger(campaign_dir)
+    client = _lookup_client(campaign_dir, None)
+    root = find_project_ledger(campaign_dir, client=client)
     ledger = artifacts.campaign_timing_ledger(campaign_dir)
     if root is None or ledger is None:
         raise ProjectLedgerError("预算控制必须有项目总账与 Campaign 计时账本")
     manifest, _raw = _read_json(campaign_dir / "campaign.json", "Campaign")
-    return root, ledger, manifest, artifacts, upgrade, timing
+    return root, ledger, manifest, artifacts, _client_adapter(client), timing
 
 
 def _deadline_assert_registered(head: Mapping[str, Any], campaign_id: str) -> None:
@@ -1582,10 +1837,11 @@ def _deadline_assert_registered(head: Mapping[str, Any], campaign_id: str) -> No
 def pause_campaign_deadline(campaign_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
     """到期只记录两本账的暂停事实，不关闭阶段、不生成终态；可重复补齐。"""
 
-    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    root, ledger, manifest, artifacts, adapter, timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
-    with project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "计时暂停"):
+    with project_lock(root), adapter.orchestrator._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "计时暂停"):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "预算暂停")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         campaign_id = manifest["campaign_id"]
         _deadline_assert_registered(head, campaign_id)
@@ -1613,10 +1869,11 @@ def preview_deadline_extension(campaign_dir: Path, *, scope: str, phase: str | N
                                new_deadline_at_utc: str, reason: str, now: datetime | None = None) -> dict[str, Any]:
     """冻结三层之一的延期草案；预览不批准、不放行，也不消费请求。"""
 
-    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    root, ledger, manifest, artifacts, adapter, timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
-    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期预览"):
+    with deadline_control_scope(campaign_dir), project_lock(root), adapter.orchestrator._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期预览"):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "延期预览")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         _deadline_assert_registered(head, manifest["campaign_id"])
         current = timing.inspect_ledger(ledger, now=observed.isoformat())
@@ -1649,15 +1906,16 @@ def apply_deadline_extension(campaign_dir: Path, *, preview_path: Path, approve_
                              approved_by: str, now: datetime | None = None) -> dict[str, Any]:
     """先写批准收据和项目事件，再补 Campaign 事件；重派复核同一批准，不重复两本账。"""
 
-    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    root, ledger, manifest, artifacts, adapter, timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
     preview, _raw = _read_json(preview_path, "延期预览")
     artifacts.validate_deadline_extension(preview, preview=True)
     if (approve_sha256 != preview["review_sha256"] or preview["campaign_id"] != manifest["campaign_id"]
             or Path(preview["project_ledger_path"]) != root.resolve() or not approved_by.strip()):
         raise ProjectLedgerError("延期批准摘要、Campaign、项目或批准人不一致")
-    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期写入"):
+    with deadline_control_scope(campaign_dir), project_lock(root), adapter.orchestrator._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期写入"):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "延期写入")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         _deadline_assert_registered(head, manifest["campaign_id"])
         directory = _private_dir(campaign_dir / "control/deadlines", "预算控制目录", create=True)
@@ -1725,9 +1983,10 @@ def _budget_assert_initiator(head: Mapping[str, Any], campaign_id: str) -> None:
 def preview_live_request_budget_extension(campaign_dir: Path, *, new_budget: int, reason: str) -> dict[str, Any]:
     """修好接着跑第 14 项：冻结请求预算延长预览（原有效预算、新预算、已消耗数与总账 head），只写一次。"""
 
-    root, _ledger, manifest, artifacts, _upgrade, _timing = _deadline_context(campaign_dir)
+    root, _ledger, manifest, artifacts, adapter, _timing = _deadline_context(campaign_dir)
     with deadline_control_scope(campaign_dir), project_lock(root):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "请求预算延长预览")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         campaign_id = str(manifest["campaign_id"])
         _budget_assert_initiator(head, campaign_id)
@@ -1758,7 +2017,7 @@ def apply_live_request_budget_extension(campaign_dir: Path, *, preview_path: Pat
                                         approved_by: str, now: datetime | None = None) -> dict[str, Any]:
     """按批准摘要写请求预算延长：批准收据只写一次，总账事件按预览冻结的 head 做 CAS；重跑幂等。"""
 
-    root, _ledger, manifest, artifacts, _upgrade, _timing = _deadline_context(campaign_dir)
+    root, _ledger, manifest, artifacts, adapter, _timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
     preview, _raw = _read_json(preview_path, "请求预算延长预览")
     try:
@@ -1770,6 +2029,7 @@ def apply_live_request_budget_extension(campaign_dir: Path, *, preview_path: Pat
         raise ProjectLedgerError("请求预算延长的批准摘要、Campaign、项目或批准人不一致")
     with deadline_control_scope(campaign_dir), project_lock(root):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "请求预算延长写入")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         _budget_assert_initiator(head, str(manifest["campaign_id"]))
         directory = _private_dir(campaign_dir / "control/budget", "请求预算控制目录", create=True)
@@ -1808,12 +2068,13 @@ def abandon_campaign(campaign_dir: Path, *, approved_by: str, reason: str,
                      now: datetime | None = None) -> dict[str, Any]:
     """只有显式指令产生 operator_abandoned；超时与 72 小时提醒均不会调用本入口。"""
 
-    root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
+    root, ledger, manifest, artifacts, adapter, timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
     if not approved_by.strip() or not reason.strip():
         raise ProjectLedgerError("显式放弃必须提供批准人和理由")
-    with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "显式放弃"):
+    with deadline_control_scope(campaign_dir), project_lock(root), adapter.orchestrator._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "显式放弃"):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, adapter.client, "显式放弃")
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         if manifest["campaign_id"] not in head["registered_campaigns"]:
             raise ProjectLedgerError("显式放弃拒绝未注册 Campaign")
@@ -2304,19 +2565,26 @@ def _merge_batch_payload(batch: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def requires_project_ledger(campaign_mode: Any, target_version: Any) -> bool:
-    """0.154 起的 formal Campaign 必须在项目总账内创建与执行。"""
+    """0.154 起的 formal Campaign 必须在项目总账内创建与执行（适配器 requires_project_ledger 的 Codex 绑定）。"""
 
     if campaign_mode != "formal" or not isinstance(target_version, str) or not VERSION_RE.fullmatch(target_version):
         return False
     return tuple(int(part) for part in target_version.split(".")) >= PROJECT_LEDGER_MIN_VERSION
 
 
-def find_project_ledger(start: Path) -> Path | None:
-    """从 Campaign 目录向上最多六层查找 ``upgrade-project-ledger/plan.json``。"""
+def find_project_ledger(start: Path, *, client: str | None = None) -> Path | None:
+    """从 Campaign 目录向上最多六层查找本客户端的 ``<总账目录名>/plan.json``。
 
+    总账目录名按客户端经适配器取（codex ``upgrade-project-ledger``，claude ``upgrade-project-ledger-claude``），两客户端
+    共用数据根时各找各的总账。客户端由 ``client`` 显式给出；未给出时按 ``start`` 处 Campaign 总计划声明的 client（历史
+    Codex 总计划没有该字段、或 ``start`` 不是 Campaign 目录时按 codex，与改造前相同），所以只传 Campaign 目录的共享调用方
+    （监督器、对账器、三层预算判定）对 Claude Campaign 同样找到 Claude 总账；显式值与 Campaign 声明不一致即拒绝。
+    """
+
+    name = ledger_dir_name(_lookup_client(start, client))
     current = start.resolve(strict=False)
     for _ in range(MAX_ANCESTOR_DEPTH + 1):
-        candidate = current / LEDGER_DIR_NAME
+        candidate = current / name
         if candidate.is_dir() and not candidate.is_symlink() and (candidate / "plan.json").is_file():
             return candidate
         if current.parent == current:
@@ -2329,23 +2597,48 @@ def _data_root_of(ledger_root: Path) -> Path:
     return ledger_root.parent
 
 
+CAMPAIGN_PLAN_FIELDS = {
+    "schema_version",
+    "campaign_id",
+    "campaign_mode",
+    "target_version",
+    "registration_operation_id",
+    "admission_head_sha256",
+    "project_ledger",
+    "deadline_at_utc",
+    "created_at_utc",
+}
+# 合同版本 → 字段闭集：v2 只比 v1 多 client。
+CAMPAIGN_PLAN_FIELDS_BY_SCHEMA = {
+    CAMPAIGN_PLAN_SCHEMA: CAMPAIGN_PLAN_FIELDS,
+    CAMPAIGN_PLAN_SCHEMA_V2: CAMPAIGN_PLAN_FIELDS | {"client"},
+}
+
+
 def _campaign_plan(ledger_dir: Path) -> dict[str, Any] | None:
     path = ledger_dir / "plan.json"
     if not path.exists():
         return None
     payload, _raw = _read_json(path, "Campaign 账本 plan")
-    _expect(
-        payload,
-        {"schema_version", "campaign_id", "campaign_mode", "target_version", "registration_operation_id", "admission_head_sha256", "project_ledger", "deadline_at_utc", "created_at_utc"},
-        "Campaign 账本 plan",
-    )
-    if payload["schema_version"] != CAMPAIGN_PLAN_SCHEMA:
+    schema = payload.get("schema_version")
+    known = schema if isinstance(schema, str) and schema in CAMPAIGN_PLAN_FIELDS_BY_SCHEMA else None
+    # 未知 schema 按 v1 闭集核对字段，报错顺序与改造前相同。
+    _expect(payload, CAMPAIGN_PLAN_FIELDS_BY_SCHEMA[known] if known else CAMPAIGN_PLAN_FIELDS, "Campaign 账本 plan")
+    if known is None:
         raise ProjectLedgerError("Campaign 账本 plan schema 非法")
+    if known == CAMPAIGN_PLAN_SCHEMA_V2:
+        _v2_client(payload["client"], "Campaign 账本 plan")
     return payload
 
 
+def _campaign_plan_client(campaign_plan: Mapping[str, Any]) -> str:
+    """Campaign 账本 plan 的归属客户端：v2 读显式 client；v1 没有该字段，按 codex 解释。"""
+
+    return str(campaign_plan["client"]) if campaign_plan["schema_version"] == CAMPAIGN_PLAN_SCHEMA_V2 else LEGACY_CLIENT
+
+
 def _registration_payload(campaign_plan: Mapping[str, Any], campaign_dir: Path) -> dict[str, Any]:
-    return {
+    payload = {
         "campaign_id": campaign_plan["campaign_id"],
         "campaign_dir": str(campaign_dir),
         "campaign_mode": campaign_plan["campaign_mode"],
@@ -2353,6 +2646,10 @@ def _registration_payload(campaign_plan: Mapping[str, Any], campaign_dir: Path) 
         "admission_head_sha256": campaign_plan["admission_head_sha256"],
         "deadline_at_utc": campaign_plan["deadline_at_utc"],
     }
+    if campaign_plan["schema_version"] == CAMPAIGN_PLAN_SCHEMA_V2:
+        # v2 注册事件带 client，总账重放时核对它等于 plan.client；v1 payload 与改造前逐字相同。
+        payload["client"] = campaign_plan["client"]
+    return payload
 
 
 def _push_batch(
@@ -2423,6 +2720,8 @@ def reconcile_project_ledger(root: Path, *, campaign_dir: Path | None = None, no
         plan, _raw = _load_plan(root)
         sources: list[tuple[str, Path, Path | None]] = []
         if campaign_dir is not None:
+            # 身份链：推送前核对 Campaign 总计划声明的客户端与总账一致（历史 Codex 总计划按 codex，与改造前相同）。
+            _require_campaign_owner(campaign_dir, plan, "补齐 Campaign outbox")
             ledger_dir = campaign_dir / CAMPAIGN_LEDGER_DIR_NAME
             if ledger_dir.exists():
                 sources.append(("campaign", _private_dir(ledger_dir, "Campaign 账本目录") / "outbox", campaign_dir))
@@ -2466,6 +2765,8 @@ def register_campaign(
         _timestamp(deadline_at_utc, "deadline_at_utc")
     registration_id = operation_id or f"register:{campaign_id}"
     plan, _raw = _load_plan(root)
+    # 身份链：Campaign 总计划声明的客户端（历史 Codex 总计划按 codex）必须与总账一致，Claude Campaign 进不了 Codex 总账。
+    _require_campaign_owner(campaign_dir, plan, "注册 Campaign")
     head = _replay(root, plan, _load_events(root), rebuild_cache=False)
     if deadline_at_utc is not None and _timestamp(deadline_at_utc, "deadline_at_utc") > _timestamp(head["effective_absolute_deadline_utc"], "absolute_deadline_utc"):
         raise ProjectLedgerError("Campaign deadline 超过项目绝对截止时间，拒绝注册")
@@ -2473,7 +2774,7 @@ def register_campaign(
         campaign_plan = _campaign_plan(ledger_dir)
         if campaign_plan is None:
             campaign_plan = {
-                "schema_version": CAMPAIGN_PLAN_SCHEMA,
+                "schema_version": CAMPAIGN_PLAN_SCHEMA_FOR[plan["schema_version"]],
                 "campaign_id": campaign_id,
                 "campaign_mode": campaign_mode,
                 "target_version": target_version,
@@ -2483,8 +2784,14 @@ def register_campaign(
                 "deadline_at_utc": deadline_at_utc,
                 "created_at_utc": _utc_now(),
             }
+            if campaign_plan["schema_version"] == CAMPAIGN_PLAN_SCHEMA_V2:
+                campaign_plan["client"] = plan["client"]
             _write_once(ledger_dir / "plan.json", campaign_plan)
-        elif campaign_plan["campaign_id"] != campaign_id or campaign_plan["registration_operation_id"] != registration_id:
+        elif (
+            campaign_plan["campaign_id"] != campaign_id
+            or campaign_plan["registration_operation_id"] != registration_id
+            or _campaign_plan_client(campaign_plan) != _plan_client(plan)
+        ):
             raise ProjectLedgerError("Campaign 账本 plan 与注册请求身份不一致")
         payload = _registration_payload(campaign_plan, campaign_dir)
         batch = write_batch(
@@ -2621,7 +2928,8 @@ class RuntimeAdmission:
             "campaign_id": campaign_id,
             "candidate_id": candidate_id,
             "dispatch_id": dispatch_id,
-            "accounting_category": "candidate_readiness_models_probe/v1",
+            # 计量类别按总账所属客户端经适配器取（Codex 即原写死的 candidate_readiness_models_probe/v1）。
+            "accounting_category": _plan_adapter(self.plan).candidate_probe_accounting_category,
             "response_status": response_status,
             "receipt_sha256": receipt_sha256,
             "request": {
@@ -2744,7 +3052,10 @@ def runtime_admission_scope(
     now: datetime | None = None,
     retry_root_cause_ids: list[str] | None = None,
 ) -> Iterator[RuntimeAdmission | None]:
-    """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。"""
+    """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。
+
+    总账按 Campaign 所属客户端查找；补齐器在推送前核对 Campaign 与总账 plan 同属一个客户端（B1-04 身份链）。
+    """
 
     root = find_project_ledger(campaign_dir)
     if root is None:
@@ -2787,10 +3098,17 @@ def admission_scope(
     require: bool,
     deadline_at_utc: str | None = None,
     now: datetime | None = None,
+    client: str | None = None,
 ) -> Iterator[Admission | None]:
-    """plan 命令的准入作用域：找不到总账时按 ``require`` 决定拒绝还是放行。"""
+    """plan 命令的准入作用域：找不到总账时按 ``require`` 决定拒绝还是放行。
 
-    root = find_project_ledger(campaign_dir.parent)
+    建 Campaign 之前还没有总计划，客户端由 ``client`` 显式给出（缺省 codex，与改造前相同；Campaign 目录已有总计划时
+    按其声明核对）；按该客户端的总账目录名查找，锁内核对总账 plan 属于同一客户端——Claude 入口遇到缺 client 的 plan
+    即拒绝。
+    """
+
+    client = _lookup_client(campaign_dir, client)
+    root = find_project_ledger(campaign_dir.parent, client=client)
     if root is None:
         if require:
             raise ProjectLedgerError("项目总账不存在，0.154 起 formal Campaign 禁止在总账之外创建")
@@ -2798,6 +3116,7 @@ def admission_scope(
         return
     with project_lock(root):
         plan, _raw = _load_plan(root)
+        _require_plan_client(plan, client, "admission 拒绝")
         _check_fixture_only(root, plan, campaign_dir)
         head = _replay(root, plan, _load_events(root), rebuild_cache=True)
         problems = admission_problems(plan, head, campaign_id=campaign_id, campaign_mode=campaign_mode, target_version=target_version, now=now, allow_registered=True)
@@ -2833,7 +3152,11 @@ def assert_campaign_admitted(
     now: datetime | None = None,
     retry_root_cause_ids: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """消费者门禁：补齐器先行，再锁内重放；不满足即拒绝。"""
+    """消费者门禁：补齐器先行，再锁内重放；不满足即拒绝。
+
+    总账按 Campaign 所属客户端查找（监督器等共享调用方只传 Campaign 目录）；补齐器在推送前核对 Campaign 与总账 plan
+    同属一个客户端，Claude Campaign 遇到缺 client 的 plan 即拒绝（B1-04 身份链）。
+    """
 
     if command not in CONSUMER_COMMANDS:
         raise ProjectLedgerError(f"未知消费者命令：{command}")
@@ -3190,19 +3513,22 @@ def _load_json_file(path: Path, label: str) -> dict[str, Any]:
 FIXTURE_APPROVER = "staging-rehearsal"
 
 
-def create_fixture_ledger(data_root: Path, *, hours: int = 24) -> Path:
+def create_fixture_ledger(data_root: Path, *, hours: int = 24, client: str | None = None) -> Path:
     """在 staging 树内创建 fixture_only 总账（A2.5／演练用），已存在则原样返回。
 
     fixture_only 总账不冻结老板批准，只服务 staging 路径；``data_root`` 必须位于
-    某个 ``staging`` 段之下，否则拒绝，避免被当成生产总账。
+    某个 ``staging`` 段之下，否则拒绝，避免被当成生产总账。``client`` 缺省为 codex（与改造前相同）；总账目录名与 plan
+    合同按客户端取，已存在的总账必须属于同一客户端。
     """
 
+    client = LEGACY_CLIENT if client is None else client
     data_root = Path(data_root)
     if STAGING_DIR_NAME not in data_root.resolve(strict=False).parts:
         raise ProjectLedgerError("fixture_only 总账只能创建在 staging 目录树内")
-    ledger_root = data_root / LEDGER_DIR_NAME
+    ledger_root = data_root / ledger_dir_name(client)
     if (ledger_root / "plan.json").is_file():
         plan, _raw = _load_plan(ledger_root)
+        _require_plan_client(plan, client, "staging 夹具总账")
         if not plan["fixture_only"]:
             raise ProjectLedgerError("staging 树内已有非 fixture_only 总账")
         return ledger_root
@@ -3218,17 +3544,22 @@ def create_fixture_ledger(data_root: Path, *, hours: int = 24) -> Path:
         estimation_policy_approved_by=FIXTURE_APPROVER,
         fixture_only=True,
         formal_open_limit=64,
+        client=client,
     )
     return ledger_root
 
 
 def register_existing_campaign(campaign_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
-    """按 Campaign 清单在总账内完成 admission 与注册；用于演练夹具与中断后补注册。"""
+    """按 Campaign 清单在总账内完成 admission 与注册；用于演练夹具与中断后补注册。
+
+    客户端按 Campaign 总计划的声明（历史 Codex 总计划按 codex）；是否必须在总账内经该客户端的适配器判定。
+    """
 
     manifest, _raw = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
     campaign_id = str(manifest.get("campaign_id") or "")
     campaign_mode = str(manifest.get("campaign_mode") or "")
     target_version = str(manifest.get("target_version") or "")
+    adapter = _client_adapter(_lookup_client(campaign_dir, None))
     deadline = None
     plan_path = campaign_dir / "control" / "vc" / "campaign-plan.json"
     if plan_path.is_file() and not plan_path.is_symlink():
@@ -3240,8 +3571,9 @@ def register_existing_campaign(campaign_dir: Path, *, now: datetime | None = Non
         campaign_id=campaign_id,
         campaign_mode=campaign_mode,
         target_version=target_version,
-        require=requires_project_ledger(campaign_mode, target_version),
+        require=adapter.requires_project_ledger(campaign_mode, target_version),
         now=now,
+        client=adapter.client,
     ) as admission:
         if admission is None:
             return {"status": "no_ledger"}
@@ -3255,7 +3587,7 @@ def register_existing_campaign(campaign_dir: Path, *, now: datetime | None = Non
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="追加式项目总账：创建、状态、补齐、修复收据与历史更正。")
+    parser = argparse.ArgumentParser(description="追加式项目总账：创建、状态、补齐、修复收据、码表映射收据与历史更正。")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create-project-ledger", help="创建只写一次的项目总账")
     create.add_argument("--ledger-dir", type=Path, required=True)
@@ -3268,6 +3600,17 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--live-request-budget", type=int)
     create.add_argument("--formal-open-limit", type=int, default=DEFAULT_FORMAL_OPEN_LIMIT)
     create.add_argument("--bootstrap-json", type=Path, help="含 initial_identity_keys、initial_estimated_count、initial_root_cause_counts、bootstrap_cutover、closed_ledger_heads、bound_receipts 的 JSON")
+    create.add_argument(
+        "--client",
+        choices=upgrade_client_adapter.CLIENTS,
+        help="总账所属客户端；缺省或 codex 写 v1 plan（与改造前相同），claude 写带 client 的 v2 plan 并冻结 Claude 根因码表",
+    )
+    migration = subparsers.add_parser("record-code-migration", help="写根因码表映射收据 migrations/NNNNNN.json，衔接映射链末端")
+    migration.add_argument("--ledger-dir", type=Path, required=True)
+    migration.add_argument("--from-codes", type=Path, required=True, help="映射链末端（变更前）的根因码表文件")
+    migration.add_argument("--to-codes", type=Path, required=True, help="变更后的根因码表文件")
+    migration.add_argument("--approved-by", required=True)
+    migration.add_argument("--id-mapping", help="旧→新根因 ID 映射的 JSON 对象，缺省为空")
     status = subparsers.add_parser("status", help="锁内重放并输出 head")
     status.add_argument("--ledger-dir", type=Path, required=True)
     reconcile = subparsers.add_parser("reconcile-project-ledger", help="推送已 COMMIT 的 batch")
@@ -3335,8 +3678,25 @@ def main(argv: list[str] | None = None) -> int:
                 bootstrap_cutover=bootstrap.get("bootstrap_cutover"),
                 closed_ledger_heads=bootstrap.get("closed_ledger_heads"),
                 bound_receipts=bootstrap.get("bound_receipts"),
+                client=arguments.client,
             )
             result = {k: v for k, v in result.items() if k not in {"accounted_identity_index", "operations"}}
+        elif arguments.command == "record-code-migration":
+            id_mapping: Any = {}
+            if arguments.id_mapping is not None:
+                try:
+                    id_mapping = json.loads(arguments.id_mapping)
+                except ValueError as error:
+                    raise ProjectLedgerError("--id-mapping 不是合法 JSON") from error
+                if not isinstance(id_mapping, dict):
+                    raise ProjectLedgerError("--id-mapping 必须是 JSON 对象（旧根因 ID → 新根因 ID）")
+            result = record_code_migration(
+                arguments.ledger_dir,
+                from_codes=arguments.from_codes,
+                to_codes=arguments.to_codes,
+                approved_by=arguments.approved_by,
+                id_mapping=id_mapping,
+            )
         elif arguments.command == "status":
             result = replay_head(arguments.ledger_dir)
             result = {k: v for k, v in result.items() if k not in {"accounted_identity_index", "operations"}}
