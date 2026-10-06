@@ -1083,16 +1083,46 @@ P0 收据 → EvidencePackage → RuleMigrationLedger／AtomicAssertionLedger
 ## 第四部分公共执行约定（非独立阶段）
 
 以下约定同时适用于 VC-0～VC-6，不产生独立阶段状态。各详细章节只补充 Claude 专用输入、动作和门禁；
-相同规则冲突时以 Framework 为准，不能用历史 FW 工具或当前版本实例建立第二套恢复语义。
+恢复、暂停与对账机制以 Framework §5.3.4、§5.3.6 为唯一定义，本部分只登记 Claude 的参数与入口，不能用
+历史 FW 工具或当前版本实例建立第二套恢复语义。
+
+1. **身份与顺序**：VC-0 冻结 Campaign 总计划、阶段依赖、用途、预算和原始 deadline。后续批次在前序
+   checkpoint 封存后编译，继承同一 Campaign 和账本；不能预填尚未产生的 Candidate、批准、attempt、镜像或
+   收据摘要，批次启动后也不得补写。
+2. **派发**：阶段动作只由父监督器 `campaign-run` 执行。VC-1 首批由 VC-0 收口在同一进程内派发，其余批次
+   由 `claude_upgrade.py compile-and-run-vc-batch` 原子编译并派发；`capture-official`、`classify`、`accept`、
+   `deliver-candidate` 等均为批次动作，不能绕过监督器直接执行，只读预览及有明确合同的控制入口除外。VC-0
+   预检 `plan`、VC-0 收口、`import-predecessor-evidence` 和批次编译入口本身不进入阶段动作队列；
+   `python3 -m tools.official_client_control` 只是 Store 的低级追加与重放入口，不是父监督器。
+3. **恢复范围**：只执行失败、未完成或依赖变化的闭集；执行集合为空时在取得资源或产生副作用前写入
+   `incremental-noop` 证明。承接须有完整来源、身份、环境、依赖与有效批准；文件存在、旧日志绿色或提交
+   相同均不足以放行，工具不支持或证明不足时按原合同重跑。
+4. **身份变化**：按 Framework §5.3.4 身份表处理，Claude 触发条件见下一节。候选源码或构建真实变化且画像
+   不变时，同一 Campaign 开新 candidate revision；单纯改名、改路径或 build ID 不算真实变化。仅断言
+   selector 的批准修正在原 Campaign 以 approval revision 零请求重评；仅控制面或 evaluator 变化只重跑离线
+   门禁。
+5. **完成与批准**：两个用途均须完成 VC-6。预演不代表批准，工程实现不代表生产已启用；已有授权按精确
+   输入形成凭证，输入漂移重新审核。工具缺陷、预算、账务、环境与根因上限先暂停，放行与永久停线条件见
+   Framework §5.3.6。
+
+**每轮参数只维护一份。** Claude 轮次与 Codex 共用同一套驱动参数文件与上下文工具，按 `CLIENT=claude`
+取坐标：从 `env.example.sh` 填写本轮参数，由驱动安全解析，不直接 `source`；`round_context.py` 从正式账本
+取 Campaign／Candidate／revision，`phase_context.py` 取当前评估基线、读来源、写目标和唯一有效 attempt，
+`cleanup_context.py` 取收尾路径和收据。显式 ID 仅作断言，不按“最新目录”猜测，不复制上一轮路径。驱动
+按 `CLIENT` 参数化之前，Claude 轮次不得借用 Codex 参数文件代填，缺口按 P0 工具阻断登记。
+
+**证据目录统一。** 本机升级证据、临时工作材料及归档统一置于
+`/Users/czs/Developer/sub2apiplus-evidence/claude-code/<版本>/` 的版本／轮次子目录，与 `codex-cli/<版本>/`
+同一规则，不散放在 `Developer` 根目录。服务器活动 Campaign 使用冻结的宿主数据根，不能以本机归档路径
+替换。仓库 `local-analysis/` 下的 2.1.226 历史证据只读保留；迁移时保留完整 SHA-256 清单和旧→新路径
+映射，历史收据原字节不改。
 
 ### Claude 阶段依赖、执行闭集与恢复
 
 每个阶段只能消费前序阶段已经封存的输出。Campaign 总计划在 VC-0 冻结阶段依赖、预算和最终用途；每个
 阶段或恢复批次再从最近合法 checkpoint 编译不可变动作清单，分别列出 `execute_items`、`reuse_items`、
-逐项输入、环境身份和直接依赖。未来才产生的 Approval、Candidate、attempt、镜像或收据 ID／摘要不得预填，
-批次启动后也不得补写。
-
-Claude 的逐项结果键固定为：
+逐项输入、环境身份和直接依赖。执行闭集、复用与 no-op 的通用规则见 Framework §5.1.2、§5.1.3；Claude 的
+逐项结果键固定为：
 
 ```text
 result_key = SHA256(canonical_json({
@@ -1103,25 +1133,26 @@ result_key = SHA256(canonical_json({
 }))
 ```
 
-逐文件依赖必须归入 `producer／evaluator／control／scenario／runtime／environment／network／gate` 之一，并
-形成无环下游图。未知文件或未登记依赖在执行前按数据面变化失败关闭，不能退化为无依据全量重跑。执行集合
-为空时，必须在启动运行时、环境探针、深度扫描或 live 请求之前生成 `incremental-noop` 证明，记录
-`scanned_bytes=0`、`live_request_count=0` 后立即结束。
+逐文件依赖归入 `producer／evaluator／control／scenario／runtime／environment／network／gate` 之一，未登记
+文件按数据面变化失败关闭。
 
-恢复统一从最近合法 checkpoint 重新计算：
+身份变化统一按 Framework §5.3.4 身份表处理，Claude 的触发条件如下：
 
-| 变化或失败 | 身份处理与唯一恢复入口 |
+| Claude 触发条件 | 身份表对应行 |
 |---|---|
-| 身份与依赖不变的临时失败 | 保留 Campaign、Candidate 和 attempt，只执行 `failed／pending` |
-| 目标、基线、用途、账号权限、官方产物或证据语义变化 | 建立新 Campaign，从 VC-0 重新冻结并在 VC-1 补齐必要事实 |
-| 规则分类或目标画像变化 | 建立后继 Campaign，分别返回 VC-2 或 VC-3；仍有效官方证据只读复用 |
-| Candidate 源码、测试、依赖、画像、构建或镜像变化 | 保留 Campaign，建立新 Candidate，从 VC-4 执行受影响闭集 |
-| 仅控制面或 evaluator 变化 | 不改变数据面身份，只重跑受影响离线门禁 |
-| 环境或网络语义变化 | 返回 VC-0 复核环境，再按直接依赖决定下游失效范围 |
+| 目标版本或基线、Campaign 用途、官方产物（npm／GCS 二进制）、平台、entrypoint、隐私模式、OAuth 组织与权限、模型目录变化 | 目标、基线、用途、账号权限条件或官方产物身份变化 |
+| RequiredRules、迁移决定、原子断言归属、场景或目标画像变化 | 规则分类、场景定义或目标画像变化 |
+| 候选源码、测试、依赖、构建或镜像变化 | Candidate 的源码、画像或构建产物变化 |
+| relay、驱动或其他产出侧工具改变证据字节 | wire producer 变化 |
+| bundle 分析、提取、脱敏、断言或比较工具改变证据解释 | evidence semantics 变化 |
+| Claude 身份策略文件变化 | policy 变化 |
+| 状态机、账本、监督器、对账器等控制面工具变化 | 控制面或 evaluator 工具变化 |
+| 平台角色、路由、出口或网络语义变化 | 不在身份表内：按 Framework §5.1.3 先重新核验环境，再按直接依赖决定下游失效范围 |
 
-任何恢复都不得覆盖历史事实、改名或复制 Campaign 来绕过失败、重发已可信封存的官方请求，或以新身份重置
-时间预算。同一根因连续失败两次必须停线；现有工具若不能计算结果键、执行／复用闭集、no-op 和恢复计划，
-属于 P0 工具阻断。
+恢复先重放已登记的有效工具与策略演进，再按重放后的有效身份对照上表；工具身份已变化但尚未登记演进时，
+写入入口拒绝并提示先登记，不直接永久停线。任何恢复都不得覆盖历史事实、改名或复制 Campaign 来绕过
+失败、重发已可信封存的官方请求，或以新身份重置时间预算。现有工具若不能计算结果键、执行／复用闭集、
+no-op 和恢复计划，属于 P0 工具阻断。
 
 ### Claude 受管入口、连续监督与文档依赖
 
@@ -1168,7 +1199,11 @@ Campaign Schema 和门禁。仅写在手册、环境变量或操作记录中均�
   监督参数、时间账本和 VC-1 首批动作清单。
 - **完成标志**：身份、用途、批准范围与执行权限完整，工具阻断为零、live 请求为零、预算与回退点有效、
   取证及候选环境可用，且用户管理的 Vircs 生产服务未被修改。
-- **失败恢复**：正式 Campaign 前停线；工具或环境缺口拆成独立变更，修复并冻结新摘要后只重跑 VC-0。
+- **失败恢复**：
+  - 失败层：环境、工具、批准输入或预算账务；Formal Campaign 建立前不产生 live 请求。
+  - 对账入口：Formal Campaign 建立前没有父监督器，按步骤记录定位失败步骤；建立后用
+    `reconcile-supervisor-run`。
+  - 续跑入口：哪一步失败修哪一步、从该步重跑；已通过且输入未变的步骤不重做。
 
 VC-0 只回答“本次升级是否具备安全开工条件”。本阶段可以查询官方发行元数据和执行只读环境检查，
 但不得运行目标客户端产生 live 证据，不得定义目标 ProfileSchema／Snapshot，不得创建 Candidate，也不得
@@ -1265,8 +1300,11 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
   EvidencePackage 和 `evidence_recorded` checkpoint。
 - **完成标志**：目标身份完整，目标发现无截断，证据逐项可定位、可解析、可复算，安全与环境恢复门禁
   全部通过，官方证据包已封存。
-- **失败恢复**：只为缺失目标事实及其直接依赖场景定向补证；已可信封存的官方请求不得重发，身份变化
-  返回 VC-0。
+- **失败恢复**：
+  - 失败层：环境、工具或预算账务；目标、账号权限或官方产物身份变化按 Framework §5.3.4 返回 VC-0。
+  - 对账入口：有尚未收口的采集预约用 `reconcile-attempt`，否则用 `reconcile-supervisor-run`。
+  - 续跑入口：批准零请求恢复预览后，只补缺失目标事实、失败或未完成的 Job 及其直接依赖场景；封存链从
+    失败动作续作，已可信封存的官方请求不得重发。
 
 VC-1 只回答“目标版本实际会产生什么行为”。本阶段不判定相对基线的最终迁移类型，不生成目标画像，
 也不签发 ProfileApprovalFact；`inherit/change/condition_change/add/delete`、最终发现处置和
@@ -1282,7 +1320,8 @@ AtomicAssertionLedger 均在 VC-2 完成。
 | 可信证据只缺少某项目标事实 | 只对该事实、触发条件和直接依赖场景定向取证，其余证据继续只读复用 |
 | 目标、基线、Campaign 用途、官方产物、平台、entrypoint、隐私模式、账号权限或模型可见性变化 | 停止当前 Campaign，返回 VC-0 重新冻结身份和证据策略 |
 | 仅报告、控制面、evaluator 或 Candidate 变化，目标证据语义未变 | 只重跑受影响的离线派生与门禁，不得据此重发官方请求 |
-| 采集、relay、脱敏或其他产出侧工具改变证据字节或语义 | 冻结新工具身份，建立后继 Campaign，并只重采受影响的证据闭集 |
+| 采集、relay 或其他产出侧工具改变证据字节（wire producer 变化） | 在原 Campaign 经 intent／final 两阶段 transition 承接，只重采受影响 Job；全部 Job 受影响才建立后继 Campaign |
+| 提取、脱敏或其他证据处理工具改变证据解释（evidence semantics 变化） | 原 Campaign 追加 evaluation epoch，只重跑离线处理，原始字节不重采 |
 
 纯复用批次必须记录 `live_request_count=0`；工具、报告或 Candidate 变化本身不是官方重采理由。目标事实
 仍取下列五类输入的并集，但只有目标原生发现和同身份目标运行证据能够成为当前版本权威：
@@ -1388,8 +1427,10 @@ VC-1 的退出条件固定为：
 ```
 
 VC-2 若发现某项迁移判断仍缺目标事实，只返回 VC-1 补采该项及其直接依赖；其他已封存 Job、原始请求和
-证据继续只读复用。临时网络失败只建立新 attempt；目标身份或产出侧证据语义变化时建立后继 Campaign；
-仅控制面、报告或 evaluator 工具变化时只重跑受影响的离线门禁，三种情况均不得覆盖历史事实。
+证据继续只读复用。临时网络失败只建立新 attempt；目标身份变化时建立新 Campaign；产出侧工具改变证据字节
+或解释时按 Framework §5.3.4 在原 Campaign 承接（wire producer 变化经两阶段 transition，evidence semantics
+变化追加 evaluation epoch）；仅控制面、报告或 evaluator 工具变化时只重跑受影响的离线门禁。各种情况均不得
+覆盖历史事实。
 
 <a id="claude-vc-2"></a>
 ## 4.2 VC-2 逐规则判定差异
@@ -1403,8 +1444,11 @@ VC-2 若发现某项迁移判断仍缺目标事实，只返回 VC-1 补采该项
   `rule_classification_recorded` 事实。
 - **完成标志**：发现、候选、迁移、原子断言及其归属全部闭合；缺失、重复、孤儿引用、循环引用、
   `blocked` 和其他未决项均为零。
-- **失败恢复**：事实不足返回 VC-1 定向补证；已封存分类或规则映射变化时建立后继 Campaign，从 VC-2
-  继续并只读复用仍有效的官方证据。
+- **失败恢复**：
+  - 失败层：工具或批准输入；缺少目标事实属于 VC-1 证据缺口。
+  - 对账入口：`reconcile-supervisor-run`。
+  - 续跑入口：对账后按批次身份重派；事实不足返回 VC-1 定向补证；已封存分类或规则映射变化按
+    Framework §5.3.4 建立后继 Campaign，从 VC-2 继续并只读复用仍有效的官方证据。
 
 VC-2 只回答“目标版本的每项出站责任相对基线如何变化”。本阶段不生成 Profile、Release 或 Candidate，
 不修改 SupportEnvelope 或生产 selector，也不发送任何官方或 candidate 请求。
@@ -1565,8 +1609,11 @@ VC-2 不建立画像状态 checkpoint；`rule_classification_recorded` 归属 ev
   ProfileApprovalFact、`official_sealed → profile_approved` checkpoint 和未入生产的暂存 Catalog。
 - **完成标志**：Evidence 与画像批准顺序闭合，全部画像差异具有规则或模型事实来源，联合制品 ID、计数和
   摘要一致，生产 Active／Rollback 与 selector 未改变，且尚未创建 Candidate。
-- **失败恢复**：迁移或规则错误返回 VC-2，官方事实不足返回 VC-1；批准前只新建 draft revision，批准后
-  画像或批准闭集变化时建立后继 Campaign。
+- **失败恢复**：
+  - 失败层：工具或批准输入。
+  - 对账入口：`reconcile-supervisor-run`。
+  - 续跑入口：对账后重派，批准前只新建 draft revision；迁移或规则错误返回 VC-2，官方事实不足返回
+    VC-1；批准后画像或批准闭集变化按 Framework §5.3.4 建立后继 Campaign。
 
 VC-3 只回答“如何把已经分类的目标责任表达成可批准画像”。本阶段不修改实现或生产 Catalog，不创建
 Candidate，不运行 official／candidate PAIR，也不签发 AcceptanceFact；这些工作分别属于 VC-4～VC-6。
@@ -1718,8 +1765,12 @@ VC-2，缺少官方事实返回 VC-1；ProfileApprovalFact 封存后若规则、
   VC-5 执行／复用计划。
 - **完成标志**：实现闭集通过，源码、测试、依赖、画像、Release、模型目录、构建和镜像身份可复算，
   Campaign 到达 `candidate_sealed`，生产 Active／Rollback／selector 未改变且未发起候选请求。
-- **失败恢复**：只变更源码、测试、构建或镜像时保留 Campaign 并建立新 Candidate；规则或画像变化时建立
-  后继 Campaign，分别返回 VC-2 或 VC-3。
+- **失败恢复**：
+  - 失败层：工具、候选源码或预算账务。
+  - 对账入口：`reconcile-supervisor-run`；候选作废用 `invalidate-candidate`。
+  - 续跑入口：候选未变时同 revision 续作；源码、测试、依赖、构建或镜像真实变化时，在同一 Campaign 内以
+    `revision-open` 开新 revision，新 revision 对应新 Candidate ID，新候选的抓包从新 attempt 完整执行、
+    不沿用旧镜像证据；规则或画像变化按 Framework §5.3.4 建立后继 Campaign，返回 VC-2 或 VC-3。
 
 VC-4 只回答“如何把已批准画像实现并冻结成可验证的 Candidate”。本阶段不重写 VC-3 事实，不执行
 official／candidate PAIR，不创建 attempt 或 run nonce，不连接 DMIT 运行 Candidate，也不签发
@@ -1845,8 +1896,13 @@ ProfileApprovalFact 与 VC-3 联合摘要可复算
 - **完成标志**：受影响规则及直接依赖全部通过，继承规则来源与收据可重放；workflow checkpoint 按用途
   达到 `ready` 或 `validation_only`，production state 保持 `not_activated`，且生产 Active／Rollback／
   selector 未改变。
-- **失败恢复**：按 Framework §5.3.4 从最近合法 checkpoint 继续，只执行失败、未完成或依赖变化项；
-  已封存官方请求不得因 Candidate、工具或报告变化而重发。
+- **失败恢复**：
+  - 失败层：环境、工具、候选源码、批准输入或预算账务。
+  - 对账入口：候选证据封存前有尚未收口的采集预约用 `reconcile-attempt`，否则用
+    `reconcile-supervisor-run`；封存后的评估失败用 `evaluation-recover`。
+  - 续跑入口：批准恢复预览后从最近合法 checkpoint 只补失败、未完成或依赖变化项；只改断言 selector 的
+    批准修正以 approval revision 零请求重评，仅控制面或 evaluator 变化只重跑离线门禁；已封存官方请求
+    不得因 Candidate、工具或报告变化而重发。
 
 严格合同由 `validation-workflow.schema.json`、`scenario-pair.schema.json` 和追加式 Store 共同执行。
 `validation-attempt-create` 冻结 Candidate、CandidateBuildReceipt、执行计划、run nonce、环境／工具／配置／
@@ -2072,8 +2128,11 @@ Sonnet-only／三模型 Candidate 和当前续作状态统一见 §3.4／§3.6�
   证据和 DeploymentFact。
 - **完成标志**：候选交付收据与 VC-5 AcceptanceFact、VC-4 Candidate 及 DMIT 回退／恢复事实闭合；生产
   分支还须满足 Framework §5.6.2。当前任务不得改变或声称验证 Vircs。
-- **失败恢复**：保留失败事实并从最近合法 checkpoint 续跑 `failed／pending`；身份或批准输入变化时返回
-  最早受影响阶段，禁止为取得通过而无依据重跑 VC-0～VC-5。
+- **失败恢复**：
+  - 失败层：环境、工具或批准输入。
+  - 对账入口：`reconcile-supervisor-run`。
+  - 续跑入口：保留失败事实并从最近合法 checkpoint 续跑 `failed／pending`；身份或批准输入变化时返回最早
+    受影响阶段，禁止为取得通过而无依据重跑 VC-0～VC-5。
 
 严格交付合同由 `candidate-delivery.schema.json`、`candidate-delivery-record`、
 `candidate-delivery-finalize` 和 `receipt-replay` 实现。四个 checkpoint 都使用专用

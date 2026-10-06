@@ -12,7 +12,7 @@
 正式 Campaign 的阶段动作只允许由 `codex_upgrade_supervisor.py campaign-run` 派发；`plan`、
 `reuse-official-evidence` 和 `compile-and-run-vc-batch` 是三个受限的 Campaign 引导／批次控制命令；
 `compile-vc-batch` 仅保留给历史读取和内部测试，0.154.0 起 Formal CLI 会失败关闭。适用边界见
-第四部分开头的[公共执行约定](#codex-part4-premises)、[§4.7](#codex-4-7) 与 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
+第四部分开头的[公共执行约定](#codex-part4-premises)、[§4.7](#codex-4-7) 与 Framework §5.1.2、§5.3.2～§5.3.6。历史恢复入口仅供解释旧收据，不得用于新
 Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/official_client_capture/codex_upgrade_legacy_boundary.py) 及对应版本 Schema／测试为准。
 
 ---
@@ -1363,7 +1363,8 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
    修订或后继 Campaign。候选源码或构建真实变化且画像不变时，同 Campaign 开新 candidate revision；
    单纯改名、改路径或 build ID 不算真实变化。仅断言 selector 的批准修正见 §4.5.5。
 5. **完成与批准**：两个用途均须完成 VC-6。预演不代表批准，工程实现不代表生产已启用；已有授权按精确
-   输入形成凭证，输入漂移重新审核。工具缺陷、预算、账务、环境与根因上限先暂停；永久停线条件见 §4.7。
+   输入形成凭证，输入漂移重新审核。工具缺陷、预算、账务、环境与根因上限先暂停；暂停放行与永久停线条件见
+   [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)，Codex 入口见 [§4.7](#codex-4-7)。
 
 **每轮参数只维护一份。** 从 [env.example.sh](../tools/arm64_capture_driver/driver/env.example.sh) 填写
 `ARM64_VC_ENV`，由驱动安全解析，不直接 `source`。`round_context.py` 从正式账本取 Campaign／candidate／revision；
@@ -1837,8 +1838,8 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 <a id="codex-failure-matrix"></a>
 #### 失败矩阵
 
-按本父 run 期间是否有**尚未完整收口的采集预约**分流：有预约用 `reconcile-attempt`，否则
-`reconcile-supervisor-run`；已有 attempt 但采集已收口的 seal／评估链走后者。不能以“目录有 attempt”代替判定。
+对账入口按 [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 分流：本父 run 期间有**尚未完整收口的
+采集预约**用 `reconcile-attempt`，否则用 `reconcile-supervisor-run`。
 
 | 故障类型 | 修复／恢复入口 | 复核与下一步 |
 |---|---|---|
@@ -1861,19 +1862,17 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
 
 #### 暂停种类与放行
 
-| `pause_kinds` | 必须补齐的条件 |
+暂停种类、放行条件与永久停线判定见 [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)。Codex 入口：
+
+| `pause_kinds` | 放行入口 |
 |---|---|
-| `deadline` | `deadline-extend preview／apply`，项目／Campaign／阶段各自批准；保留原始截止和累计时间 |
-| `request_budget` | `request-budget-extend preview／apply`，新增预算有凭证，不清零已发生请求 |
-| `accounting` | 在所属 Campaign 用 `accounting-resolve`，精确核算或批准上界；未知不能记零 |
-| `environment` | 干净环境复核后 `environment-isolate`；隔离影响项不能 seal／复用，可信窗口外结果按证明保留 |
-| `root_cause_repair` | 项目上限用 `record-root-cause-repair`；账本 `stop_required` 用 `campaign-resume`，绑定修复／回归／部署 |
+| `deadline` | `deadline-extend preview／apply`（项目／Campaign／阶段分别批准） |
+| `request_budget` | `request-budget-extend preview／apply` |
+| `accounting` | 所属 Campaign 的 `accounting-resolve` |
+| `environment` | 干净环境复核后 `environment-isolate` |
+| `root_cause_repair` | 项目上限用 `record-root-cause-repair`；账本 `stop_required` 用 `campaign-resume` |
 
-解除后重新对账，不自动派发。仍暂停即停在原步骤；`fix-and-continue` 不代做补账、隔离、请求预算扩展或 campaign-resume。
-延期不会清空耗时／请求／根因记录，禁止以新建账本绕过预算；批准绑定漂移按工具要求重新预览。
-
-永久停线仅按对账器判定：不可变控制或证据损坏、未被合法演进承接的有效 wire／policy 身份变化、
-账本已停止／完成、已封存官方侧受污染、显式放弃。预算到期或同根因达上限不能直接当作永久失败。
+`fix-and-continue` 不代做补账、隔离、请求预算扩展或 campaign-resume；批准绑定漂移按工具要求重新预览。
 
 ### Codex 项目总账、工具身份策略 v2、对账与只读导入
 
@@ -1886,14 +1885,14 @@ CI 可与续跑并行，后台或 CI 失败则暂停，按部署收据经受监�
   成功 seal 后用 account-sealed 入口登记，不能从脚本退出码宣称零计费。
 - **根因**：使用受管码表和稳定维度，同目标在项目内跨 Campaign／revision／基线累计，默认重试上限 2。
   码表变化先登记迁移，不丢累计次数；修复凭证闭合后按上述入口解除暂停。
-- **工具分层**：wire 变化按受影响 Job 和两阶段 transition 决定补采；全部受影响或官方封存被污染不能强行承接。
-  evidence_semantics 变化登记 evaluation epoch 并重评；control 变化复验控制门禁。
-  policy 变化须兼容／激活认证、受监督部署及 `tool-evolution` 登记；未登记时先补登记，不能直接篡改有效身份。
-- **候选级 revision**：以账本 `stage_revision` 和 COMMIT 确认当前候选；r1 保留原 checkpoint，后继落
-  `control/vc/revisions/r<N>/`。作废／被取代候选只读；review 状态对账只入账，不能当成重派许可。
+- **工具分层**：wire、evidence_semantics、control 与 policy 变化按 Framework §5.3.4 身份表处理，演进登记见
+  §5.3.6。Codex 用 `tool-evolution` 登记演进；policy 变化另需兼容／激活认证与受监督部署。
+- **候选级 revision**：规则见 Framework §5.3.6。Codex 以账本 `stage_revision` 和 COMMIT 确认当前候选，r1 保留原
+  checkpoint，后继落 `control/vc/revisions/r<N>/`；入口为 `invalidate-candidate` 与 `revision-open --supersedes`。
 - **认证与历史**：生成器修改须登记旧摘要为只读重放身份；旧收据不能用旧身份新签。
   `awaiting_receipts` 导入必须满足 §4.0.4 的额外绑定，不能拼多 attempt 为一个可信来源。
 
+两个客户端共用的适配接口、服务面与合同版本见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
 合同字段与原子写入细节以
 [Campaign 工具](../tools/official_client_capture/codex_upgrade.py)、
 [项目总账](../tools/official_client_capture/codex_upgrade_project_ledger.py)、
@@ -1912,33 +1911,20 @@ B-09／B-10 不是默认跳过全集的开关：完整宿主读集、运行镜�
 
 #### 父 run、批次与重派
 
-批次采用 staging／WAL，只有完整 COMMIT 占用序号。控制面负责 admission、直接前序 checkpoint、
-账本和 deadline 核对后启动唯一父监督器；操作员只使用编译派发入口。
-
-| 中断边界 | 续派规则 |
-|---|---|
-| staging／prepare 失败，未 COMMIT | 工具对账后同序号新 staging；保留原失败收据 |
-| COMMIT 已写但父 run 未启动或终态收口丢失 | 对账获许可后 N+1 重派同批次身份；执行细节仅按修复合同调整 |
-| COMMIT 摘要／owner／坐标不符 | 完整性异常，禁止重派 |
-| 有尚未收口预约 | 转 attempt／恢复段对账，不能用父 run 对账绕过请求核算 |
-
-批次身份、动作三元组和来源链须一致；换基线不是普通重派。官方 bundle 已发布时只续未完成 seal 动作。
-对账显示 review、缺幂等证明或失败动作无法可信定位时保持停止，不猜序号，不强行重编已封存批次。
+批次 staging／COMMIT 的中断边界与续派规则见 [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)。
+控制面完成 admission、直接前序 checkpoint、账本和 deadline 核对后启动唯一父监督器；操作员只使用
+`compile-and-run-vc-batch` 编译派发。官方 bundle 已发布时只续未完成的 seal 动作。
 
 ### Codex 评估失败局部恢复与断点续跑
 
-评估基线 b<K> 由账本 `evaluation_baseline` 与 COMMIT 授权，不按最大目录选取。
-`stage_sources` 指定各阶段 local／reuse；四项 evaluator 摘要、输出绑定与逐规则投影共同决定重评范围。
-结果源未锚定或证明不足时 `reuse_authority=none`，不能把旧 pass 直接搬入新基线。
+评估基线、恢复段与增量封存的规则见 [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)，本节只列 Codex 坐标。
+评估基线为 b<K>，由账本 `evaluation_baseline` 与 COMMIT 授权；`stage_sources` 指定各阶段 local／reuse，
+没有复用依据的结果源记为 `reuse_authority=none`。
 
-恢复段 ar<k> 使用 apply 返回编号，只补 J*；原 attempt 和失败段不可覆盖。
-段失败后按段预约→基线 COMMIT→recovery.json 推出权威 J*，批准／授权后开后继段；每个可复用 Job 必须同时有
-完整 result／checkpoint、逐文件摘要和权限边界、相同执行合同、有效 after 探针和恢复报告。
-缺证明进入 execute；复用 Job 启动数为零，只按实际新增请求入账。
+恢复段为 ar<k>，编号取 `evaluation-recover apply` 的返回值，只补 J*；J* 沿段预约 → 基线 COMMIT →
+`recovery.json` 推出。Codex 的恢复证明另须有效 after 探针和恢复报告。
 
-增量封存仍按 Kilo 后检查点 → 受管派生／finalizer → 复用根投影与 delta 扫描 → 预演／seal。
-只扫描 delta，重采根与复用根互斥，最终根集合精确闭合；随后重跑 compare，断言按新依赖投影判定 execute／reuse。
-完整结果已写但父收口丢失时，由对账证明后幂等重派补收口，不重发已成功 Job。
+增量封存顺序为 Kilo 后检查点 → 受管派生／finalizer → 复用根投影与 delta 扫描 → 预演／seal，随后重跑 compare。
 
 ### Codex 连续监督、时间账本与文档部署
 
