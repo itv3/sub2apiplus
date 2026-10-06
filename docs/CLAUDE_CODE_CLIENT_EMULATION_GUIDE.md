@@ -1222,7 +1222,7 @@ VC-0 只回答“本次升级是否具备安全开工条件”。本阶段可以
 | 执行环境 | §6 的四类机器角色、OS／内核／架构、网络／代理／CA／DNS、端口、目录、容器、资源水位、构建链和生产隔离边界 |
 | 证据策略 | baseline 已封存证据及摘要、允许只读复用的事实、目标版本仍需补齐的事实、定向取证清单和禁止复用项 |
 | 控制策略 | Campaign 总 deadline、阶段预算、同根因重试上限、资源水位、阶段交接窗口、回退点、结果键、直接依赖图、首批 `execute／reuse` 范围及 no-op 语义 |
-| 工具身份 | stable 冻结、bundle 提取、静态分析、采集、relay、脱敏、finalizer、环境快照、受管 runner、状态持久化、Schema、受管文档、源码树和测试树摘要；目标 generation policy 在 VC-3 生成，VC-0 不预填 |
+| 工具身份 | Claude 身份策略（`claude_tool_identity_policy_v2.json`，`client: claude`）按多根受管清单计算的 `client` 与五摘要：`policy_sha256`、`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256`、`tool_files_sha256`；清单覆盖 `tools/official_client_capture` 与 `tools/official_client_control` 两个根（条目键带根目录名，后缀含 `.mjs`），运行时依赖 node 与 TypeScript 登记在策略 `runtime_bindings` 并计入 `control_sha256`；另记 Claude 发布认证收据，受管文档随部署收据核对。Store 的 `tool_bundle_sha256` 只是 Store 自身摘要，不代表工具身份；整树摘要不直接作为失效判据，wire、evidence 与 policy 摘要是门禁（Framework §5.3.1 第 2 条）。目标 generation policy 在 VC-3 生成，VC-0 不预填 |
 
 FW-E 首先使用 `claude_fw_e.py freeze` 查询并冻结官方 `stable`；输出必须写入新的冻结目录，不能覆盖
 旧版本材料。2.1.220 等历史版本只能提供 baseline 和证据复用线索，不能选择目标版本。最低离线预演
