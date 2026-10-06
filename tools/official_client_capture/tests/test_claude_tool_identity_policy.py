@@ -10,6 +10,7 @@ Codex 的 wire、evidence、两个编排器闭包与四项评估器摘要必须�
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -363,6 +364,21 @@ class ClaudePolicyFileTests(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertEqual(claude_layer, codex_layer)
         self.assertGreater(shared, 100)
+
+    def test_whole_file_layers_do_not_import_ignored_files(self) -> None:
+        """wire／evidence 层整文件计入、不逐符号遍历，它们导入被忽略的文件会让该依赖在 Claude 身份里不可见。"""
+
+        index = v3._module_index(self.policy, self.digests)
+        modules = {key: module for module, key in index.items()}
+        for key in sorted(self.digests):
+            if v3.classify_path(self.policy, key) not in {"wire_producer", "evidence_semantics"} or key not in modules:
+                continue
+            tree = ast.parse((REPOSITORY_ROOT / "tools" / key).read_text(encoding="utf-8"))
+            nodes = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign))]
+            aliases, symbols = v3._resolve_imports(nodes, modules[key], index)
+            targets = set(aliases.values()) | {owner for owner, _symbol in symbols.values()}
+            with self.subTest(path=key):
+                self.assertEqual([target for target in sorted(targets) if v3.classify_path(self.policy, index[target]) is None], [])
 
     def test_typescript_binding_matches_makefile(self) -> None:
         makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
