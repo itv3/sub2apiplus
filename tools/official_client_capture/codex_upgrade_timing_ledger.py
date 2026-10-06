@@ -530,6 +530,14 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0157-batch3-fix-and-continue-20260927-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        # Claude 升级批次 1（B1-01～B1-16）：计时账本加客户端维度（B1-05；Claude 账本 plan v2 带 client，Codex v1 账本
+        # 逐字不变）；生产者身份从本批起点 main 17c87351a 承接。
+        "path": "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "base_commit": "17c87351a1f30dd5946986017553382619226833",
+        "scope": "upstream-claude-b1-control-plane-20261007-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 # Claude 升级 B1-05：生成器承接表按账本归属的客户端取。Codex 账本沿用上面的历史登记（连同 0.151 的两类边）；
 # Claude 账本从本变更集起才会出现，没有更早的生成器摘要需要承接，初始为空。以后计时工具再改动时，若已有

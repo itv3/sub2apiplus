@@ -482,6 +482,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     # 变更的承接收据都要随工具树部署，否则部署后重放历史账本会因找不到收据而阻断（先例 09-22 ledger-resign／deploy-manifest-22）。
     "egress/maintenance/upstream-codex-0157-batch3-ledger-resign-evidence-manifest-20260927-freeze-successor.json",
     "egress/maintenance/upstream-codex-0157-batch3-deploy-manifest-r12-20260927-freeze-successor.json",
+    # 2026-10-07（Claude 升级批次 1 收口）：计时账本加客户端维度后的生产者承接收据；同一张收据也承接本清单这次变更。
+    "egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 # 生产监督器的编译检查只编译、不落盘（E2-02）：py_compile 会无视 PYTHONDONTWRITEBYTECODE 显式写 .pyc，生产受管树原先
