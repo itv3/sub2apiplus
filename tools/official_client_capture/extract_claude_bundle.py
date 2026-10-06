@@ -23,18 +23,41 @@ JavaScript。提取之后，控制流、常量和条件都在，静态能力等�
 
 只依赖标准库（Mach-O 走 otool，ELF 直接解析 section header）。
 
+模块图（Claude 升级控制面设计 B2-02）
+------------------------------------
+2.1.220 是 8 个模块的单主 bundle（主模块 ``/$bunfs/root/src/entrypoints/cli.js``）；2.1.245 起改为
+Bun 分块打包：上千个 ``chunk-*.js`` 加若干入口、资产与原生模块。提取不再要求旧主模块存在，而是对
+每个模块解码记录尾部的 Bun 标志（encoding／loader／module_format），归类为入口、chunk、JS 模块、
+资产或原生模块，并输出 ``module_graph``。入口规则：
+
+1. 存在旧主模块路径即唯一入口（单主模块退化，与旧产物同口径）；
+2. 否则取非 ``chunk-*``、非资产、非 ``.node`` 的 JS 文本模块为入口候选，由 AST 阶段
+   （``claude_bundle_ast.mjs --bundle-manifest``）按跨模块边确认；
+3. 候选为空时全部 chunk 记「未决」。
+
+模块按 ``modules/<序号:04d>-<basename>`` 落盘（分块 bundle 的 basename 可能重名）；
+``bundle_manifest`` 给 AST 与词法索引一份带逐模块摘要的模块清单，二者都以清单文件的 SHA-256
+作为 bundle 身份。
+
 用法：
   # 提取并写出锚点
   python3 extract_claude_bundle.py --binary <claude> --out-dir <目录> \\
       --expected-sha256 674f61f2... --emit-anchors anchors.json
 
-  # 只校验结构、不落盘（CI 门禁用）
+  # 分块 bundle：同时写出模块清单与多模块词法索引
+  python3 extract_claude_bundle.py --binary <claude> --out-dir <目录>/modules \\
+      --emit-bundle-manifest <目录>/bundle-manifest.json \\
+      --emit-reachability-index <目录>/reachability-index.json
+
+  # 只校验结构、不落盘，打印模块图（CI 门禁用）
   python3 extract_claude_bundle.py --binary <claude> --check-only
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
+import collections
 from dataclasses import dataclass
 import hashlib
 import json
@@ -48,15 +71,53 @@ import sys
 MAGIC = b"\n---- Bun! ----\n"
 
 # magic 之前的 Offsets 结构长度。前 16 字节语义已确认（byte_count + modules_ptr），
-# 其后 16 字节尚未完全逆向，原样记入锚点，格式变化时可被检出。
+# 其后 16 字节原样记入锚点（``offsets_reserved_hex``），格式变化时可被检出。其中前 4 字节是
+# Bun 声明的入口模块序号（entry_point_id）：2.1.220 为 0（旧主模块），2.1.285 为 5（``/$bunfs/root/cli``），
+# 模块图只把它记作 ``declared_entry_index`` 供核对，不据此判定入口。
 OFFSETS_SIZE = 32
 
 # 模块表每条记录长度。前 24 字节为 name/contents/sourcemap 三组 StringPointer，
-# 其余 28 字节（含 loader 标志）未完全逆向，同样原样记入锚点。
+# 其余 28 字节原样记入锚点（``record_tail_hex``）：三组 StringPointer（bytecode、module_info、
+# bytecode_origin_path）之后是 4 个单字节枚举 encoding／loader／module_format／side。
+# 2.1.220 linux-x64 与 2.1.285 linux-arm64 实测：JS 模块 loader=1、原生模块 loader=10、
+# 嵌入文件 loader=5、文本资产 loader=13，与文件类型逐一吻合。
 ENTRY_SIZE = 52
+RECORD_FLAGS_OFFSET = 24 + 24
 
-# 主模块预期路径。Bun 保留了打包前的源码路径，这个值比模块序号稳定。
+# 旧版（≤2.1.226）单主 bundle 的主模块路径。存在即按入口规则 ① 作唯一入口（单主模块退化）；
+# 分块 bundle 没有这个模块。
 MAIN_MODULE = "/$bunfs/root/src/entrypoints/cli.js"
+
+# Bun 记录尾部枚举的取值表。只登记已知取值，未知值说明打包格式变化，提取必须中止。
+# encoding=2 在 2.1.285 的文本资产里实测为 UTF-16LE 内容。
+BUN_ENCODINGS = {0: "binary", 1: "latin1", 2: "utf16"}
+BUN_LOADERS = {
+    0: "jsx", 1: "js", 2: "ts", 3: "tsx", 4: "css", 5: "file", 6: "json", 7: "jsonc",
+    8: "toml", 9: "wasm", 10: "napi", 11: "base64", 12: "dataurl", 13: "text", 14: "bunsh",
+    15: "sqlite", 16: "sqlite_embedded", 17: "html", 18: "yaml",
+}
+BUN_MODULE_FORMATS = {0: "none", 1: "esm", 2: "cjs"}
+# 作为代码执行、需要做 AST 的 loader；原生边界的 loader。其余 loader 一律是资产（嵌入文件、文本、样式等）。
+JS_LOADERS = frozenset({"jsx", "js", "ts", "tsx"})
+NATIVE_LOADERS = frozenset({"napi", "wasm"})
+# JS 模块只接受能逐字符还原的编码：latin1 一字节一字符，utf16 按小端两字节一单元。
+TEXT_ENCODINGS = frozenset({"latin1", "utf16"})
+
+# 模块角色。entry 只出现在规则 ①；entry_candidate 只出现在规则 ②，由 AST 阶段确认。
+ROLE_ENTRY = "entry"
+ROLE_ENTRY_CANDIDATE = "entry_candidate"
+ROLE_CHUNK = "chunk"
+ROLE_JS_MODULE = "js_module"
+ROLE_ASSET = "asset"
+ROLE_NATIVE = "native"
+JS_ROLES = frozenset({ROLE_ENTRY, ROLE_ENTRY_CANDIDATE, ROLE_CHUNK, ROLE_JS_MODULE})
+
+MODULE_GRAPH_SCHEMA = "claude-code-bun-module-graph/v1"
+BUNDLE_MANIFEST_SCHEMA = "claude-code-bun-bundle-manifest/v1"
+# 入口规则与确认状态的取值。
+ENTRY_RULE_LEGACY = "legacy_main_module"
+ENTRY_RULE_CANDIDATES = "non_chunk_js_candidates"
+ENTRY_RULE_NONE = "no_entry_candidates"
 
 
 class ExtractError(RuntimeError):
@@ -176,7 +237,8 @@ def parse_module_graph(blob: bytes, sec_off: int, sec_size: int) -> dict:
             "contents_offset": c_off,
             "contents_length": c_len,
             "sourcemap_length": s_len,
-            # 未逆向字段原样保留，供跨版本比对格式是否变化。
+            # 尾部 28 字节原样保留，供跨版本比对格式是否变化；其中的 encoding／loader／
+            # module_format 由 build_module_graph 解码。
             "record_tail_hex": blob[rec + 24:rec + ENTRY_SIZE].hex(),
         })
 
@@ -197,6 +259,133 @@ def is_text(data: bytes) -> bool:
     return bool(head) and printable >= len(head) * 0.9
 
 
+def _is_text_str(text: str) -> bool:
+    """对已解码文本做与 ``is_text`` 同口径的粗判（取前 256 个字符）。"""
+    head = text[:256]
+    printable = sum(" " <= ch < "\x7f" or ch in "\t\n\r" for ch in head)
+    return bool(head) and printable >= len(head) * 0.9
+
+
+def decode_record_flags(record_tail_hex: str) -> dict:
+    """解码模块记录尾部的 4 个单字节枚举，返回 encoding／loader／module_format 的名字。
+
+    未登记的取值说明 Bun 打包格式变化，按「结构不符必须中止」的原则抛出 ExtractError。
+    """
+    try:
+        tail = bytes.fromhex(record_tail_hex)
+    except ValueError as exc:
+        raise ExtractError(f"模块记录尾部不是十六进制：{record_tail_hex!r}") from exc
+    if len(tail) != ENTRY_SIZE - 24:
+        raise ExtractError(f"模块记录尾部长度 {len(tail)} 不是 {ENTRY_SIZE - 24}")
+    flags = tail[RECORD_FLAGS_OFFSET - 24:RECORD_FLAGS_OFFSET - 24 + 3]
+    decoded = {}
+    for label, value, table in (
+        ("encoding", flags[0], BUN_ENCODINGS),
+        ("loader", flags[1], BUN_LOADERS),
+        ("module_format", flags[2], BUN_MODULE_FORMATS),
+    ):
+        if value not in table:
+            raise ExtractError(f"未登记的 Bun {label} 取值 {value}，打包格式可能已变化")
+        decoded[label] = table[value]
+    return decoded
+
+
+def module_role(module: dict, *, legacy_main_present: bool) -> str:
+    """按 loader 与模块名归类模块角色（不含入口确认，规则见模块文档）。"""
+    name = module["name"]
+    basename = pathlib.PurePosixPath(name).name
+    loader = module["loader"]
+    if loader in NATIVE_LOADERS or basename.endswith(".node"):
+        return ROLE_NATIVE
+    if loader not in JS_LOADERS:
+        return ROLE_ASSET
+    if basename.startswith("chunk-"):
+        return ROLE_CHUNK
+    if legacy_main_present:
+        return ROLE_ENTRY if name == MAIN_MODULE else ROLE_JS_MODULE
+    return ROLE_ENTRY_CANDIDATE
+
+
+def build_module_graph(modules: list[dict], offsets_reserved_hex: str) -> dict:
+    """为模块表补 encoding／loader／module_format／role 字段，并返回模块图摘要。
+
+    纯函数（只读模块记录与 trailer 字段），可直接用真实模块表夹具测试，不需要二进制。
+    """
+    names = [module["name"] for module in modules]
+    if len(set(names)) != len(names):
+        raise ExtractError("模块表中存在重名模块")
+    for module in modules:
+        module.update(decode_record_flags(module["record_tail_hex"]))
+    legacy_main_present = MAIN_MODULE in names
+    for module in modules:
+        module["role"] = module_role(module, legacy_main_present=legacy_main_present)
+        if module["role"] == ROLE_ENTRY and module["loader"] not in JS_LOADERS:
+            raise ExtractError("旧主模块不是 JS 模块，提取结果不可信")
+
+    by_role = collections.Counter(module["role"] for module in modules)
+    chunks = [module["name"] for module in modules if module["role"] == ROLE_CHUNK]
+    if legacy_main_present:
+        entry_rule = ENTRY_RULE_LEGACY
+        confirmation = "legacy_main_module"
+        candidates = [MAIN_MODULE]
+        unresolved: list[str] = []
+    else:
+        candidates = [
+            module["name"] for module in modules if module["role"] == ROLE_ENTRY_CANDIDATE
+        ]
+        if candidates:
+            entry_rule = ENTRY_RULE_CANDIDATES
+            confirmation = "pending_ast"
+            unresolved = []
+        else:
+            # 设计规则 ③：没有任何入口候选时，全部 chunk 记「未决」，不猜测哪个 chunk 是入口。
+            entry_rule = ENTRY_RULE_NONE
+            confirmation = "unresolved"
+            unresolved = list(chunks)
+
+    reserved = bytes.fromhex(offsets_reserved_hex)
+    declared_index = struct.unpack_from("<I", reserved, 0)[0] if len(reserved) >= 4 else None
+    declared_name = (
+        names[declared_index]
+        if declared_index is not None and declared_index < len(names)
+        else None
+    )
+    return {
+        "schema_version": MODULE_GRAPH_SCHEMA,
+        "entry_rule": entry_rule,
+        "entry_confirmation": confirmation,
+        "entry_candidates": candidates,
+        "declared_entry_index": declared_index,
+        "declared_entry": declared_name,
+        "unresolved": unresolved,
+        "module_count": len(modules),
+        "js_module_count": sum(by_role[role] for role in JS_ROLES),
+        "chunk_count": by_role[ROLE_CHUNK],
+        "asset_count": by_role[ROLE_ASSET],
+        "native_count": by_role[ROLE_NATIVE],
+        "unresolved_count": len(unresolved),
+        "role_counts": dict(sorted(by_role.items())),
+        "loader_counts": dict(sorted(collections.Counter(m["loader"] for m in modules).items())),
+    }
+
+
+def decode_module_text(data: bytes, encoding: str) -> str:
+    """按模块表登记的编码还原 JS 文本；AST 工具用同一口径（latin1／utf16le）解码。
+
+    utf16 严格解码：含孤立代理项的模块无法写成 UTF-8 证据，直接失败，不在后续 JSON 输出处才暴露。
+    """
+    if encoding == "latin1":
+        return data.decode("latin-1")
+    if encoding == "utf16":
+        if len(data) % 2:
+            raise ExtractError("utf16 模块字节数不是偶数")
+        try:
+            return data.decode("utf-16-le")
+        except UnicodeDecodeError as exc:
+            raise ExtractError("utf16 模块不是合法的 UTF-16LE 文本（含孤立代理项？）") from exc
+    raise ExtractError(f"模块编码 {encoding} 不能作为 JS 文本解析")
+
+
 def extract(binary: pathlib.Path, expected_sha: str | None) -> dict:
     binary_sha = sha256_file(binary)
     if expected_sha and binary_sha != expected_sha:
@@ -208,18 +397,22 @@ def extract(binary: pathlib.Path, expected_sha: str | None) -> dict:
     graph = parse_module_graph(blob, sec_off, sec_size)
     base = graph["blob_base"]
 
-    main_found = False
     for mod in graph["modules"]:
         start = base + mod["contents_offset"]
         data = blob[start:start + mod["contents_length"]]
         mod["sha256"] = hashlib.sha256(data).hexdigest()
         mod["kind"] = "text" if is_text(data) else "native"
-        if mod["name"] == MAIN_MODULE:
-            main_found = True
-            if mod["kind"] != "text":
-                raise ExtractError("主模块不是文本，提取结果不可信")
-    if not main_found:
-        raise ExtractError(f"模块表中缺少主模块 {MAIN_MODULE}")
+    module_graph = build_module_graph(graph["modules"], graph["offsets_reserved_hex"])
+    # 要做 AST 的模块必须能按登记编码还原成文本：取代旧版只检查主模块的「主模块不是文本」。
+    for mod in graph["modules"]:
+        if mod["role"] not in JS_ROLES:
+            continue
+        if mod["encoding"] not in TEXT_ENCODINGS:
+            raise ExtractError(f"JS 模块 {mod['name']} 的编码 {mod['encoding']} 不是文本编码")
+        start = base + mod["contents_offset"]
+        text = decode_module_text(blob[start:start + mod["contents_length"]], mod["encoding"])
+        if not _is_text_str(text):
+            raise ExtractError(f"JS 模块 {mod['name']} 不是文本，提取结果不可信")
 
     return {
         "binary": str(binary),
@@ -231,7 +424,16 @@ def extract(binary: pathlib.Path, expected_sha: str | None) -> dict:
         "bun_section_size": sec_size,
         "extractor_sha256": sha256_file(pathlib.Path(__file__)),
         **graph,
+        "module_graph": module_graph,
     }
+
+
+def module_file_name(module: dict) -> str:
+    """落盘文件名 ``<序号:04d>-<basename>``：分块 bundle 的 basename 可能重名，序号保证唯一。"""
+    basename = pathlib.PurePosixPath(module["name"]).name
+    if basename in {"", ".", ".."}:
+        raise ExtractError(f"模块名没有可落盘的 basename：{module['name']!r}")
+    return f"{module['index']:04d}-{basename}"
 
 
 def write_modules(binary: pathlib.Path, result: dict, out_dir: pathlib.Path) -> None:
@@ -241,12 +443,83 @@ def write_modules(binary: pathlib.Path, result: dict, out_dir: pathlib.Path) -> 
     for mod in result["modules"]:
         start = base + mod["contents_offset"]
         data = blob[start:start + mod["contents_length"]]
-        # 模块名是打包前的绝对路径，取 basename 落盘，避免写出仓库之外。
-        target = out_dir / pathlib.PurePosixPath(mod["name"]).name
+        # 模块名是打包前的绝对路径，只取 basename 并加序号前缀落盘，避免写出输出目录或互相覆盖。
+        target = out_dir / module_file_name(mod)
         target.write_bytes(data)
         # 只记文件名：输出目录是调用方环境，写进锚点会让同一二进制在不同目录下
         # 算出不同的锚点，破坏复算。
         mod["extracted_name"] = target.name
+
+
+def bundle_manifest(result: dict, manifest_dir: pathlib.Path, modules_dir: pathlib.Path) -> dict:
+    """生成 AST 与词法索引共用的模块清单（必须在 ``write_modules`` 之后调用）。
+
+    每个模块登记角色、编码、摘要与相对 ``manifest_dir`` 的落盘路径；``analyze`` 标出要做
+    AST 与词法分析的 JS 模块。资产与原生模块也列出，供跨模块边识别资产引用与原生边界。
+    清单不含工具摘要与绝对路径，同一二进制在不同目录下得到同一清单摘要。
+    """
+    try:
+        relative_dir = modules_dir.resolve().relative_to(manifest_dir.resolve())
+    except ValueError as exc:
+        raise ExtractError("模块目录必须位于模块清单所在目录之下") from exc
+    rows = []
+    for mod in result["modules"]:
+        if "extracted_name" not in mod:
+            raise ExtractError("生成模块清单前必须先落盘模块")
+        rows.append({
+            "index": mod["index"],
+            "name": mod["name"],
+            "role": mod["role"],
+            "loader": mod["loader"],
+            "encoding": mod["encoding"],
+            "module_format": mod["module_format"],
+            "sha256": mod["sha256"],
+            "bytes": mod["contents_length"],
+            "analyze": mod["role"] in JS_ROLES,
+            "path": (relative_dir / mod["extracted_name"]).as_posix(),
+        })
+    return {
+        "schema_version": BUNDLE_MANIFEST_SCHEMA,
+        "binary_sha256": result["binary_sha256"],
+        "module_graph": result["module_graph"],
+        "modules": rows,
+    }
+
+
+def load_bundle_manifest(manifest_path: pathlib.Path) -> tuple[dict, str]:
+    """读取并校验模块清单，返回（清单，清单文件 SHA-256）。"""
+    raw = manifest_path.read_bytes()
+    try:
+        manifest = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExtractError(f"模块清单不是合法 JSON：{manifest_path}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != BUNDLE_MANIFEST_SCHEMA:
+        raise ExtractError(f"模块清单 schema 不匹配：{manifest_path}")
+    modules = manifest.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise ExtractError("模块清单缺少 modules")
+    names = set()
+    for row in modules:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            raise ExtractError("模块清单行非法")
+        if row["name"] in names:
+            raise ExtractError(f"模块清单重名：{row['name']}")
+        names.add(row["name"])
+        relative = pathlib.PurePosixPath(str(row.get("path", "")))
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ExtractError(f"模块清单路径非法：{row.get('path')!r}")
+        if row.get("analyze") is True and row.get("role") not in JS_ROLES:
+            raise ExtractError(f"模块清单把非 JS 模块标为待分析：{row['name']}")
+    return manifest, hashlib.sha256(raw).hexdigest()
+
+
+def read_manifest_module_text(manifest_path: pathlib.Path, row: dict) -> str:
+    """读取清单中一个待分析模块：核对字节数与摘要后按登记编码解码。"""
+    path = manifest_path.parent / pathlib.PurePosixPath(row["path"])
+    data = path.read_bytes()
+    if len(data) != row["bytes"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
+        raise ExtractError(f"模块文件与清单登记不一致：{row['name']}")
+    return decode_module_text(data, row["encoding"])
 
 
 # 候选台账用到的定位字面量。工具对每处命中给出 α-归一化语义锚点、最近的顶层符号
@@ -401,19 +674,48 @@ CLAUDE_2_1_220_STRUCTURED_PROBES = [
 ]
 
 
-def build_reachability_index(bundle_path: pathlib.Path) -> dict:
-    """对主 bundle 生成 sink 索引与候选锚点。"""
-    from claude_bundle_reachability import SINK_PATTERNS, BundleIndex
+def _reachability_module():
+    """加载词法分析器：包方式导入（claude_fw_e、测试）与脚本方式运行（脚本目录在 sys.path）都要可用。"""
+    try:
+        from tools.official_client_capture import claude_bundle_reachability as module
+    except ImportError:
+        import claude_bundle_reachability as module  # type: ignore[no-redef]
+    return module
 
-    src = bundle_path.read_text(encoding="utf-8")
-    index = BundleIndex(src)
+
+_ASTRAL_RE = re.compile("[\U00010000-\U0010FFFF]")
+
+
+def utf16_offset_mapper(src: str):
+    """返回把 Python 码点偏移换算成 UTF-16 码元偏移的函数。
+
+    Python 字符串按码点计数，TypeScript 按 UTF-16 码元计数，二者只在 BMP 之外的字符
+    （每个占两个码元）处分叉：UTF-16 偏移 = 码点偏移 + 其前的增补平面字符数。
+    """
+    astral = [match.start() for match in _ASTRAL_RE.finditer(src)]
+    if not astral:
+        return lambda offset: offset
+    return lambda offset: offset + bisect.bisect_left(astral, offset)
+
+
+def _index_source(src: str, index, module_name: str | None) -> tuple[list, list]:
+    """对一段源码收集词法 sink 与候选探针命中；``module_name`` 非空时每行加 ``module``。
+
+    单文件与模块清单两种模式共用本函数，单文件模式的输出与旧实现逐字段一致。
+    """
+    SINK_PATTERNS = _reachability_module().SINK_PATTERNS
+    to_utf16 = utf16_offset_mapper(src) if module_name is not None else None
 
     sinks = []
     for kind, pat in SINK_PATTERNS.items():
         for m in pat.finditer(src):
             sym = index.enclosing_symbol(m.start())
-            sinks.append({"kind": kind, "offset": m.start(),
-                          "nearest_symbol": sym["name"] if sym else None})
+            row = {"kind": kind, "offset": m.start(),
+                   "nearest_symbol": sym["name"] if sym else None}
+            if module_name is not None:
+                row["module"] = module_name
+                row["offset_utf16"] = to_utf16(m.start())
+            sinks.append(row)
 
     probes = []
     for probe_id, literal in CANDIDATE_PROBES:
@@ -424,14 +726,17 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
                 pos, before=ANCHOR_TOKENS, after=ANCHOR_TOKENS)
             sym = index.enclosing_symbol(pos)
             window = src[max(0, pos - SINK_WINDOW):pos + SINK_WINDOW]
-            hits.append({
+            hit = {
                 "offset": pos,
                 "nearest_symbol": sym["name"] if sym else None,
                 "alpha_sha256": digest,
                 "alpha_text": text[:600],
                 "sinks_within_window": sorted(
                     k for k, p in SINK_PATTERNS.items() if p.search(window)),
-            })
+            }
+            if module_name is not None:
+                hit["module"] = module_name
+            hits.append(hit)
             pos = src.find(literal, pos + 1)
         probes.append({"candidate": probe_id, "literal": literal,
                        "hit_count": len(hits), "hits": hits})
@@ -451,7 +756,7 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
                 max(0, anchor - SINK_WINDOW):anchor + SINK_WINDOW
             ]
             matched = match.group(0).encode("utf-8")
-            hits.append({
+            hit = {
                 "offset": anchor,
                 "match_start": match.start(),
                 "match_end": match.end(),
@@ -464,7 +769,10 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
                     for kind, sink_pattern in SINK_PATTERNS.items()
                     if sink_pattern.search(window)
                 ),
-            })
+            }
+            if module_name is not None:
+                hit["module"] = module_name
+            hits.append(hit)
         probes.append({
             "candidate": probe.candidate,
             "literal": probe.literal,
@@ -475,6 +783,33 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
             "hit_count": len(hits),
             "hits": hits,
         })
+    return sinks, probes
+
+
+_LIMITATIONS = [
+    "声明分段是作用域近似，nearest_symbol 表示写入点之前最近的顶层符号，"
+    "不等于严格意义上的所属函数。",
+    "sinks_within_window 只说明写入点附近存在出站动作，不构成数据流证明。",
+    "α-归一化摘要跨平台稳定，可用于比对 Darwin 与 Linux 是否同一逻辑。",
+    "结构化 regex 探针只证明命名回溯所约束的局部语义；"
+    "其中的 minify 符号名不得被当成跨版本接口。",
+]
+
+
+def build_reachability_index(bundle_path: pathlib.Path) -> dict:
+    """生成 sink 索引与候选锚点。
+
+    参数是单个 bundle 文件时按旧口径处理（输出与旧实现逐字段一致）；是 ``bundle_manifest``
+    写出的模块清单（``.json``）时逐模块处理全部 JS 模块，每条 sink 与命中带 ``module``，
+    sink 另带 ``offset_utf16`` 供与 TypeScript 坐标合并。
+    """
+    if bundle_path.suffix == ".json":
+        return _build_manifest_reachability_index(bundle_path)
+    BundleIndex = _reachability_module().BundleIndex
+
+    src = bundle_path.read_text(encoding="utf-8")
+    index = BundleIndex(src)
+    sinks, probes = _index_source(src, index, None)
 
     return {
         "bundle": str(bundle_path),
@@ -491,13 +826,131 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
         "sinks": sinks,
         "sink_inventory_truncated": False,
         "probes": probes,
-        "limitations": [
-            "声明分段是作用域近似，nearest_symbol 表示写入点之前最近的顶层符号，"
-            "不等于严格意义上的所属函数。",
-            "sinks_within_window 只说明写入点附近存在出站动作，不构成数据流证明。",
-            "α-归一化摘要跨平台稳定，可用于比对 Darwin 与 Linux 是否同一逻辑。",
-            "结构化 regex 探针只证明命名回溯所约束的局部语义；"
-            "其中的 minify 符号名不得被当成跨版本接口。",
+        "limitations": list(_LIMITATIONS),
+    }
+
+
+def bundle_identity(manifest: dict) -> tuple[str, dict | None]:
+    """模块清单对应的 bundle 身份：返回（身份类别，旧主模块清单行或 None）。
+
+    规则 ①（旧版单主 bundle）的身份保持旧含义，即旧主模块文件本身（路径、字节数、内容摘要与旧产物相同）；
+    分块 bundle 没有单一主文件，身份是模块清单文件。AST、词法索引、inventory 与 containment 都按本函数取身份，
+    并且一律另外绑定清单摘要（``bundle_manifest_sha256``／``bundle.manifest_sha256``）。
+    """
+    graph = manifest.get("module_graph") or {}
+    if graph.get("entry_rule") != ENTRY_RULE_LEGACY:
+        return "bundle_manifest", None
+    rows = [row for row in manifest["modules"] if row.get("name") == MAIN_MODULE]
+    if len(rows) != 1 or rows[0].get("analyze") is not True:
+        raise ExtractError("规则 ① 的模块清单缺少待分析的旧主模块")
+    return "legacy_main_module", rows[0]
+
+
+def _build_manifest_reachability_index(manifest_path: pathlib.Path) -> dict:
+    """按模块清单逐模块建立词法索引；一次只持有一个模块的 BundleIndex，内存以最大模块为上界。
+
+    旧字段的含义不变：规则 ①（旧版单主 bundle）时 ``bundle``、``bundle_sha256``、``bundle_bytes``、
+    ``entry_symbol``、``declaration_segments``、``top_level_symbols`` 只取旧主模块，与单文件旧口径相同；
+    分块 bundle 时它们指模块清单与全部模块合计。``sinks``／``probes`` 始终覆盖全部 JS 模块（规则 ① 时
+    旧主模块的行排在最前、与旧口径逐行相同，其它模块的行只是追加）。新增字段一律追加在 ``limitations`` 之后。
+    """
+    BundleIndex = _reachability_module().BundleIndex
+    manifest, manifest_sha256 = load_bundle_manifest(manifest_path)
+    graph = manifest.get("module_graph") or {}
+    identity_kind, main_row = bundle_identity(manifest)
+    rows = sorted(
+        (row for row in manifest["modules"] if row.get("analyze") is True),
+        key=lambda item: item["index"],
+    )
+    if main_row is not None:
+        rows = [main_row, *(row for row in rows if row["name"] != MAIN_MODULE)]
+        primary = MAIN_MODULE
+    elif graph.get("declared_entry") in (graph.get("entry_candidates") or []):
+        # 分块 bundle 的顶层 entry_symbol 取 Bun 声明的入口候选末尾的入口调用；入口是否成立以 AST 确认为准。
+        primary = graph.get("declared_entry")
+    else:
+        primary = None
+    sinks: list[dict] = []
+    probe_rows: dict[str, dict] = {}
+    probe_order: list[str] = []
+    module_rows = []
+    totals = {"text_length": 0, "declaration_segments": 0, "top_level_symbols": 0}
+    entry_symbol = None
+    for row in rows:
+        src = read_manifest_module_text(manifest_path, row)
+        index = BundleIndex(src)
+        module_sinks, module_probes = _index_source(src, index, row["name"])
+        sinks.extend(module_sinks)
+        for probe in module_probes:
+            key = probe["candidate"]
+            if key not in probe_rows:
+                probe_rows[key] = {**probe, "hits": []}
+                probe_order.append(key)
+            probe_rows[key]["hits"].extend(probe["hits"])
+        module_entry = index.entry_name()
+        if row["name"] == primary:
+            entry_symbol = module_entry
+        module_rows.append({
+            "name": row["name"],
+            "index": row["index"],
+            "role": row["role"],
+            "sha256": row["sha256"],
+            "bytes": row["bytes"],
+            "text_length": len(src),
+            "entry_symbol": module_entry,
+            "declaration_segments": len(index.statements),
+            "top_level_symbols": len(index.by_name),
+            "sink_count": len(module_sinks),
+        })
+        totals["text_length"] += len(src)
+        totals["declaration_segments"] += len(index.statements)
+        totals["top_level_symbols"] += len(index.by_name)
+        del index, src
+    probes = []
+    for key in probe_order:
+        probe = probe_rows[key]
+        probe["hit_count"] = len(probe["hits"])
+        probes.append(probe)
+    if main_row is not None:
+        main_stats = module_rows[0]
+        bundle_path = str(manifest_path.parent / pathlib.PurePosixPath(main_row["path"]))
+        bundle_sha256 = main_row["sha256"]
+        scoped = {key: main_stats[key] for key in ("text_length", "declaration_segments", "top_level_symbols")}
+        scope = "entry_module"
+    else:
+        bundle_path = str(manifest_path)
+        bundle_sha256 = manifest_sha256
+        scoped = dict(totals)
+        scope = "all_analyzed_modules"
+    return {
+        "bundle": bundle_path,
+        "bundle_sha256": bundle_sha256,
+        "bundle_bytes": scoped["text_length"],
+        "analyzer_sha256": sha256_file(
+            pathlib.Path(__file__).with_name("claude_bundle_reachability.py")),
+        "entry_symbol": entry_symbol,
+        "declaration_segments": scoped["declaration_segments"],
+        "top_level_symbols": scoped["top_level_symbols"],
+        "sink_total": len(sinks),
+        "sinks": sinks,
+        "sink_inventory_truncated": False,
+        "probes": probes,
+        "limitations": list(_LIMITATIONS),
+        "bundle_kind": "bun_module_manifest",
+        "bundle_identity_kind": identity_kind,
+        "bundle_manifest": str(manifest_path),
+        "bundle_manifest_sha256": manifest_sha256,
+        "offset_unit": "codepoint",
+        "top_level_count_scope": scope,
+        "all_modules_counts": {"analyzed_module_count": len(module_rows), **totals},
+        "module_graph": graph,
+        "modules": module_rows,
+        "multi_module_limitations": [
+            "多模块索引逐模块分段，nearest_symbol 只在所属模块内有意义；"
+            "offset 按码点、offset_utf16 按 UTF-16 码元，与 AST 坐标合并时用后者。",
+            "bundle、bundle_sha256、bundle_bytes、entry_symbol、declaration_segments、top_level_symbols 的口径见 "
+            "top_level_count_scope 与 bundle_identity_kind：规则 ① 只取旧主模块（与旧单文件产物同义），"
+            "分块 bundle 指模块清单与全部模块合计；全部模块合计另见 all_modules_counts。",
         ],
     }
 
@@ -516,12 +969,17 @@ def main() -> int:
     ap.add_argument("--check-only", action="store_true",
                     help="只做结构校验，不落盘也不写锚点")
     ap.add_argument("--emit-reachability-index", type=pathlib.Path,
-                    help="写出 sink 索引与候选语义锚点 JSON；需要同时给 --out-dir")
+                    help="写出 sink 索引与候选语义锚点 JSON；需要同时给 --out-dir。"
+                         "旧版单主 bundle 不给 --emit-bundle-manifest 时只索引主模块（旧口径），"
+                         "分块 bundle 必须同时给 --emit-bundle-manifest")
+    ap.add_argument("--emit-bundle-manifest", type=pathlib.Path,
+                    help="写出 AST 与词法索引共用的模块清单 JSON；需要同时给 --out-dir，"
+                         "且 --out-dir 必须位于清单所在目录之下")
     args = ap.parse_args()
 
-    if args.emit_reachability_index and not args.out_dir:
-        print("--emit-reachability-index 需要 --out-dir（索引基于提取出的主 bundle）",
-              file=sys.stderr)
+    if (args.emit_reachability_index or args.emit_bundle_manifest) and not args.out_dir:
+        print("--emit-reachability-index／--emit-bundle-manifest 需要 --out-dir"
+              "（索引与清单基于提取出的模块文件）", file=sys.stderr)
         return 2
 
     try:
@@ -529,6 +987,12 @@ def main() -> int:
     except ExtractError as exc:
         print(f"提取失败：{exc}", file=sys.stderr)
         return 1
+    graph = result["module_graph"]
+    if (args.emit_reachability_index and not args.emit_bundle_manifest
+            and graph["entry_rule"] != ENTRY_RULE_LEGACY and not args.check_only):
+        print("分块 bundle 没有旧主模块，--emit-reachability-index 必须同时给 "
+              "--emit-bundle-manifest", file=sys.stderr)
+        return 2
 
     if args.out_dir and not args.check_only:
         write_modules(args.binary, result, args.out_dir)
@@ -536,10 +1000,22 @@ def main() -> int:
         args.emit_anchors.parent.mkdir(parents=True, exist_ok=True)
         args.emit_anchors.write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if args.emit_bundle_manifest and not args.check_only:
+        try:
+            manifest = bundle_manifest(result, args.emit_bundle_manifest.parent, args.out_dir)
+        except ExtractError as exc:
+            print(f"生成模块清单失败：{exc}", file=sys.stderr)
+            return 1
+        args.emit_bundle_manifest.parent.mkdir(parents=True, exist_ok=True)
+        args.emit_bundle_manifest.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if args.emit_reachability_index and not args.check_only:
-        bundle = args.out_dir / pathlib.PurePosixPath(MAIN_MODULE).name
-        index = build_reachability_index(bundle)
+        if args.emit_bundle_manifest:
+            index = build_reachability_index(args.emit_bundle_manifest)
+        else:
+            main_mod = next(m for m in result["modules"] if m["name"] == MAIN_MODULE)
+            index = build_reachability_index(args.out_dir / main_mod["extracted_name"])
         args.emit_reachability_index.parent.mkdir(parents=True, exist_ok=True)
         args.emit_reachability_index.write_text(
             json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -548,14 +1024,20 @@ def main() -> int:
         for probe in index["probes"]:
             print(f"  {probe['candidate']:32s} 命中 {probe['hit_count']}")
 
-    main_mod = next(m for m in result["modules"] if m["name"] == MAIN_MODULE)
     print(f"容器 {result['container']}  section {result['bun_section']} "
           f"offset={result['bun_section_offset']} size={result['bun_section_size']}")
-    print(f"模块数 {len(result['modules'])}；主模块 {main_mod['contents_length']:,} B "
-          f"sha256={main_mod['sha256'][:16]}…")
+    print(f"模块数 {graph['module_count']}；JS 模块 {graph['js_module_count']}，"
+          f"chunk {graph['chunk_count']}，资产 {graph['asset_count']}，"
+          f"原生 {graph['native_count']}；入口规则 {graph['entry_rule']}，"
+          f"入口候选 {len(graph['entry_candidates'])}，未决 {graph['unresolved_count']}")
+    # chunk 数以千计，逐行只列非 chunk 模块；完整模块图以 JSON 输出。
     for mod in result["modules"]:
-        print(f"  [{mod['index']:2d}] {mod['kind']:6s} {mod['contents_length']:>11,} B  "
-              f"{mod['name']}")
+        if mod["role"] == ROLE_CHUNK:
+            continue
+        print(f"  [{mod['index']:4d}] {mod['role']:15s} {mod['loader']:6s} "
+              f"{mod['contents_length']:>11,} B  {mod['name']}")
+    if args.check_only:
+        print(json.dumps(graph, ensure_ascii=False, indent=2))
     return 0
 
 

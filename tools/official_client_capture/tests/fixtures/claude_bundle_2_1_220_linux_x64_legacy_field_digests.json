@@ -1,0 +1,1042 @@
+{
+  "description": "Claude Code 2.1.220 linux-x64 改前工具（HEAD：claude_bundle_ast.mjs b61d662e、extract_claude_bundle.py e3239599、claude_target_inventory.py 9a2d89b2）产物的旧字段形状与逐字段摘要（投影口径见 claude_bundle_fixture.project_legacy_fields）。真实 AST 回归测试用它核对新工具清单模式在规则 ① 下旧字段逐字段不变；工具自身摘要、路径、node 版本与时间随环境变化，不登记。",
+  "binary_sha256": "674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863",
+  "ast": {
+    "shape": {
+      "schema_version": null,
+      "bundle": [
+        "bytes",
+        "sha256"
+      ],
+      "parser": [
+        "parse_diagnostics",
+        "typescript_module_sha256",
+        "typescript_version"
+      ],
+      "completeness": [
+        "disposition_state",
+        "parse_diagnostic_count",
+        "sink_limit",
+        "truncated"
+      ],
+      "entry_candidates": null,
+      "function_count": null,
+      "unique_function_count": null,
+      "reachable_function_count": null,
+      "alias_count": null,
+      "sink_total": null,
+      "sink_category_counts": null,
+      "sinks": null,
+      "limitations": null
+    },
+    "field_sha256": {
+      "schema_version": "43036680634f50ae57bbf7d2237b42269cc8cc80f7115b295040a39c5df971db",
+      "bundle": "644e7bc0aa0e075b6b2b1ddcb584be52c8a293e1a432e2ce9d66e9ae6ddf0fa2",
+      "parser": "f8b1df70afc207d44b28c7219271c87d0781da49a3bacd6f7dd8cbe8772057d0",
+      "completeness": "fffd85f9a831b01b4a1b7e7bc1e133111e695e4c7c8a196c079366a14a8be650",
+      "entry_candidates": "2da26094133d5d23fd0a96d626cab5340b97d7494fa18c433b03378b92e7013d",
+      "function_count": "cb539af3e34568f162f836a17c2d0b75bdd16e5ce4a8b14a722ac48ac785c481",
+      "unique_function_count": "cac740f29742afde785b42f9e03d0caa3a9845e6235b02ef4695cf42cfdf9531",
+      "reachable_function_count": "26d228663f13a88592a12d16cf9587caab0388b262d6d9f126ed62f9333aca94",
+      "alias_count": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "sink_total": "2452984f72ef1195df62ab3f23748777dbf39767229425f1bfd0862d476e5840",
+      "sink_category_counts": "72a19c6ec3108a1445d7e025eccaf347e4cd123c40c2b544e7252a7e1796db4a",
+      "sinks": "9d02ab1d9d2eeeaff89c1ca313db58986e8c3c699f426b200e0875421412522b",
+      "limitations": "4a3584c1ad246bba876797aecd7e6ca3df7977c836ccfee5e5a4a5920daae137"
+    }
+  },
+  "manifest_mode": {
+    "top_level_count_scope": "entry_module",
+    "all_modules_counts": {
+      "analyzed_module_count": 3,
+      "function_count": 85073,
+      "unique_function_count": 30272,
+      "reachable_function_count": 400,
+      "alias_count": 0
+    },
+    "bundle_identity_kind": "legacy_main_module",
+    "completeness": {
+      "truncated": false,
+      "sink_limit": null,
+      "parse_diagnostic_count": 0,
+      "disposition_state": "unclassified_until_crosswalk",
+      "module_count": 3,
+      "unresolved_module_count": 2,
+      "unresolved_dynamic_edge_count": 28,
+      "unresolved_entry_sink_count": 0
+    },
+    "module_graph": {
+      "entry_rule": "legacy_main_module",
+      "entry_confirmation": "legacy_main_module",
+      "entry_candidates": [
+        "/$bunfs/root/src/entrypoints/cli.js"
+      ],
+      "confirmed_entries": [
+        "/$bunfs/root/src/entrypoints/cli.js"
+      ],
+      "rejected_entry_candidates": [],
+      "declared_entry": "/$bunfs/root/src/entrypoints/cli.js",
+      "declared_entry_confirmed": true,
+      "entry_functions": [
+        {
+          "module": "/$bunfs/root/src/entrypoints/cli.js",
+          "function": "nEE"
+        },
+        {
+          "module": "/$bunfs/root/src/entrypoints/cli.js",
+          "function": "hn"
+        },
+        {
+          "module": "/$bunfs/root/src/entrypoints/cli.js",
+          "function": "QVt"
+        },
+        {
+          "module": "/$bunfs/root/src/entrypoints/cli.js",
+          "function": "ZVt"
+        },
+        {
+          "module": "/$bunfs/root/src/entrypoints/cli.js",
+          "function": "setImmediate"
+        }
+      ],
+      "analyzed_module_count": 3,
+      "resolved_module_count": 1,
+      "unresolved_module_count": 2,
+      "unresolved_modules": [
+        {
+          "name": "/$bunfs/root/image-processor.js",
+          "reason": "not_reachable_from_confirmed_entry"
+        },
+        {
+          "name": "/$bunfs/root/audio-capture.js",
+          "reason": "not_reachable_from_confirmed_entry"
+        }
+      ],
+      "unresolved_dynamic_edge_count": 28,
+      "edge_counts_by_kind": {
+        "dynamic_import": 10,
+        "path_reference": 3,
+        "require": 44
+      },
+      "native_boundaries": [
+        {
+          "from": "/$bunfs/root/src/entrypoints/cli.js",
+          "to": "/$bunfs/root/image-processor.node",
+          "kind": "require"
+        },
+        {
+          "from": "/$bunfs/root/src/entrypoints/cli.js",
+          "to": "/$bunfs/root/audio-capture.node",
+          "kind": "require"
+        },
+        {
+          "from": "/$bunfs/root/image-processor.js",
+          "to": "/$bunfs/root/image-processor.node",
+          "kind": "require"
+        },
+        {
+          "from": "/$bunfs/root/audio-capture.js",
+          "to": "/$bunfs/root/audio-capture.node",
+          "kind": "require"
+        }
+      ],
+      "missing_targets": []
+    },
+    "external_specifiers": [
+      "assert",
+      "async_hooks",
+      "buffer",
+      "bun:ffi",
+      "bun:jsc",
+      "child_process",
+      "constants",
+      "crypto",
+      "dns",
+      "dns/promises",
+      "events",
+      "fs",
+      "fs/promises",
+      "http",
+      "http2",
+      "https",
+      "module",
+      "net",
+      "node-fetch",
+      "os",
+      "path",
+      "path/posix",
+      "path/win32",
+      "perf_hooks",
+      "process",
+      "querystring",
+      "readline",
+      "stream",
+      "stream/consumers",
+      "stream/promises",
+      "string_decoder",
+      "timers/promises",
+      "tls",
+      "tty",
+      "undici",
+      "url",
+      "util",
+      "v8",
+      "vm",
+      "worker_threads",
+      "ws",
+      "zlib"
+    ],
+    "modules": [
+      {
+        "name": "/$bunfs/root/src/entrypoints/cli.js",
+        "index": 0,
+        "role": "entry",
+        "status": "resolved",
+        "confirmed_entry": true,
+        "function_count": 85047,
+        "unique_function_count": 30254,
+        "reachable_function_count": 400,
+        "alias_count": 0,
+        "sink_count": 328,
+        "edge_count": 55,
+        "unresolved_dynamic_edge_count": 28,
+        "astral_code_point_count": 0,
+        "parse_diagnostic_count": 0
+      },
+      {
+        "name": "/$bunfs/root/image-processor.js",
+        "index": 1,
+        "role": "js_module",
+        "status": "unresolved",
+        "confirmed_entry": false,
+        "function_count": 13,
+        "unique_function_count": 9,
+        "reachable_function_count": 0,
+        "alias_count": 0,
+        "sink_count": 0,
+        "edge_count": 1,
+        "unresolved_dynamic_edge_count": 0,
+        "astral_code_point_count": 0,
+        "parse_diagnostic_count": 0
+      },
+      {
+        "name": "/$bunfs/root/audio-capture.js",
+        "index": 2,
+        "role": "js_module",
+        "status": "unresolved",
+        "confirmed_entry": false,
+        "function_count": 13,
+        "unique_function_count": 9,
+        "reachable_function_count": 0,
+        "alias_count": 0,
+        "sink_count": 0,
+        "edge_count": 1,
+        "unresolved_dynamic_edge_count": 0,
+        "astral_code_point_count": 0,
+        "parse_diagnostic_count": 0
+      }
+    ],
+    "module_edges": [
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "/$bunfs/root/image-processor.node",
+        "require",
+        "native",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "/$bunfs/root/audio-capture.node",
+        "require",
+        "native",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "crypto",
+        "require",
+        "external",
+        208
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "fs",
+        "require",
+        "external",
+        157
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "process",
+        "require",
+        "external",
+        30
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "os",
+        "require",
+        "external",
+        136
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "path",
+        "require",
+        "external",
+        531
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "fs",
+        "dynamic_import",
+        "external",
+        9
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "path",
+        "dynamic_import",
+        "external",
+        6
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "fs/promises",
+        "require",
+        "external",
+        296
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "stream",
+        "require",
+        "external",
+        54
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "util",
+        "require",
+        "external",
+        68
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "http",
+        "require",
+        "external",
+        26
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "https",
+        "require",
+        "external",
+        16
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "url",
+        "require",
+        "external",
+        47
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "tty",
+        "require",
+        "external",
+        8
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "assert",
+        "require",
+        "external",
+        13
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "http2",
+        "require",
+        "external",
+        7
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "zlib",
+        "require",
+        "external",
+        11
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "events",
+        "require",
+        "external",
+        18
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "perf_hooks",
+        "require",
+        "external",
+        3
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "net",
+        "require",
+        "external",
+        42
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "ws",
+        "require",
+        "external",
+        3
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "buffer",
+        "require",
+        "external",
+        28
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "async_hooks",
+        "require",
+        "external",
+        12
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "child_process",
+        "require",
+        "external",
+        61
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "path/win32",
+        "require",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "readline",
+        "require",
+        "external",
+        15
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "timers/promises",
+        "require",
+        "external",
+        4
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "tls",
+        "require",
+        "external",
+        11
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "async_hooks",
+        "dynamic_import",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "undici",
+        "require",
+        "external",
+        3
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "constants",
+        "require",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "crypto",
+        "dynamic_import",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "node-fetch",
+        "dynamic_import",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "querystring",
+        "require",
+        "external",
+        3
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "dns/promises",
+        "require",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "fs/promises",
+        "dynamic_import",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "path/posix",
+        "require",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "module",
+        "require",
+        "external",
+        4
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "worker_threads",
+        "require",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "stream/consumers",
+        "require",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "string_decoder",
+        "require",
+        "external",
+        9
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "stream/promises",
+        "require",
+        "external",
+        6
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "/$bunfs/root/chart.umd.min.js",
+        "path_reference",
+        "asset",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "/$bunfs/root/hljsBundle.generated.min.js",
+        "path_reference",
+        "asset",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "/$bunfs/root/mermaid.min.js",
+        "path_reference",
+        "asset",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "vm",
+        "require",
+        "external",
+        7
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "dns",
+        "require",
+        "external",
+        3
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "http",
+        "dynamic_import",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "https",
+        "dynamic_import",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "bun:jsc",
+        "dynamic_import",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "v8",
+        "require",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "readline",
+        "dynamic_import",
+        "external",
+        2
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "bun:ffi",
+        "require",
+        "external",
+        1
+      ],
+      [
+        "/$bunfs/root/image-processor.js",
+        "/$bunfs/root/image-processor.node",
+        "require",
+        "native",
+        1
+      ],
+      [
+        "/$bunfs/root/audio-capture.js",
+        "/$bunfs/root/audio-capture.node",
+        "require",
+        "native",
+        1
+      ]
+    ],
+    "unresolved_dynamic_edges": [
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        1717513,
+        1717522,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        1717748,
+        1717757,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        1720002,
+        1720011,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "worker",
+        null,
+        null,
+        4040176,
+        4040189,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "worker",
+        null,
+        null,
+        4131984,
+        4131997,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "D7g",
+        4906567,
+        4906617,
+        {
+          "template_literals": [
+            "/include"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "M7g",
+        4906884,
+        4906930,
+        {
+          "template_literals": [
+            "/lib"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "M7g",
+        4906948,
+        4906990,
+        {
+          "template_literals": [
+            "/lib"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        4909190,
+        4909202,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        4910524,
+        4910568,
+        {
+          "template_literals": [
+            "/package"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        4997459,
+        4997496,
+        {
+          "template_literals": [
+            "/versions"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        4997514,
+        4997559,
+        {
+          "template_literals": [
+            "/versions"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "F3",
+        5562939,
+        5562943,
+        "none"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "Nu",
+        5565230,
+        5565234,
+        "none"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        null,
+        6616904,
+        6617010,
+        "BinaryExpression"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "dynamic_import",
+        null,
+        "sHy",
+        7083210,
+        7083255,
+        "template"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "oG",
+        7830425,
+        7830431,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "oG",
+        7830588,
+        7830601,
+        {
+          "object_keys": [
+            "name"
+          ]
+        }
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "ow",
+        8120169,
+        8120188,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "ow",
+        8120241,
+        8120257,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "ow",
+        8131573,
+        8131598,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "zSd",
+        8980686,
+        8980692,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "zSd",
+        8981119,
+        8981125,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "Df_",
+        10912643,
+        10912653,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "SYe",
+        11720170,
+        11720180,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "QTa",
+        15773138,
+        15773144,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "Z9b",
+        16255023,
+        16255029,
+        "identifier"
+      ],
+      [
+        "/$bunfs/root/src/entrypoints/cli.js",
+        "require",
+        null,
+        "Z9b",
+        16255066,
+        16255074,
+        "null"
+      ]
+    ],
+    "inventory": {
+      "counts": {
+        "ast_sink_count": 328,
+        "lexical_candidate_count": 234,
+        "lexical_matched_ast_count": 89,
+        "lexical_only_count": 145,
+        "inventory_sink_count": 473,
+        "source_kind_counts": {
+          "ast_call": 328,
+          "lexical_only": 145
+        },
+        "by_module": {
+          "/$bunfs/root/src/entrypoints/cli.js": {
+            "ast_sink_count": 328,
+            "lexical_candidate_count": 234,
+            "lexical_matched_ast_count": 89,
+            "lexical_only_count": 145,
+            "inventory_sink_count": 473
+          },
+          "/$bunfs/root/image-processor.js": {
+            "ast_sink_count": 0,
+            "lexical_candidate_count": 0,
+            "lexical_matched_ast_count": 0,
+            "lexical_only_count": 0,
+            "inventory_sink_count": 0
+          },
+          "/$bunfs/root/audio-capture.js": {
+            "ast_sink_count": 0,
+            "lexical_candidate_count": 0,
+            "lexical_matched_ast_count": 0,
+            "lexical_only_count": 0,
+            "inventory_sink_count": 0
+          }
+        },
+        "reachability_counts": {
+          "unknown": 473
+        }
+      },
+      "completeness": {
+        "truncated": false,
+        "ast_parse_diagnostic_count": 0,
+        "ambiguous_lexical_match_count": 0,
+        "duplicate_sink_id_count": 0,
+        "disposition_state": "unclassified_until_crosswalk",
+        "module_count": 3,
+        "unresolved_module_count": 2,
+        "unresolved_dynamic_edge_count": 28,
+        "unresolved_entry_sink_count": 0
+      },
+      "unresolved_entry_kinds": {
+        "dynamic_edge": 28,
+        "module": 2
+      }
+    }
+  },
+  "lexical": {
+    "shape": {
+      "bundle_sha256": null,
+      "bundle_bytes": null,
+      "analyzer_sha256": null,
+      "entry_symbol": null,
+      "declaration_segments": null,
+      "top_level_symbols": null,
+      "sink_total": null,
+      "sinks": null,
+      "sink_inventory_truncated": null,
+      "probes": null,
+      "limitations": null
+    },
+    "field_sha256": {
+      "bundle_sha256": "c4e47bdad404ee560650ddcd12d58fd7db8fa1e82cad6e9a8441fc02b60ffd76",
+      "bundle_bytes": "a6d3a202afb245b656979968690ddf40ee402127b291cd02c83831cd108ff5c6",
+      "analyzer_sha256": "4aaaaf38fa6602dc96a79a7db52dc9a311b63054db0225d28aaea9fceb659a5e",
+      "entry_symbol": "49a39c3e9f959d0a344e2a0a4acd7f3409e3ccaf5f52145257a09a7e1a527fb5",
+      "declaration_segments": "0665f2f9152e95efa368b6f0595b8cd6ffe2ff2cdae6ffc84314cf1d7f692393",
+      "top_level_symbols": "389158216f1f023c061ab9d4fc3efc8f693d3607dabf0a4a60c2ba2eebd0ed36",
+      "sink_total": "114bd151f8fb0c58642d2170da4ae7d7c57977260ac2cc8905306cab6b2acabc",
+      "sinks": "51eb21f741b2bacf44ee696f3747be22887da8aee547a5d9e1d5f713669873b9",
+      "sink_inventory_truncated": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "probes": "a141f2e64575dbdba391999790de929c6710988ecc35693f86c537efa2b14890",
+      "limitations": "0bbd54307f7a5aaf1d096aec256699dd6da942b1cf073ce0c7232178661f2ade"
+    }
+  },
+  "inventory": {
+    "shape": {
+      "schema_version": null,
+      "target_version": null,
+      "platform": null,
+      "bundle_sha256": null,
+      "completeness": [
+        "ambiguous_lexical_match_count",
+        "ast_parse_diagnostic_count",
+        "disposition_state",
+        "duplicate_sink_id_count",
+        "truncated"
+      ],
+      "counts": [
+        "ast_sink_count",
+        "inventory_sink_count",
+        "lexical_candidate_count",
+        "lexical_matched_ast_count",
+        "lexical_only_count",
+        "source_kind_counts"
+      ],
+      "sink_total": null,
+      "sinks": null,
+      "limitations": null
+    },
+    "field_sha256": {
+      "schema_version": "dadbb660502962957f7ddc29d77fcddaad0740e7dfe1731c98371b36444fecb0",
+      "target_version": "14fe9581877646251542c1fccd19fc3f2a6c679f1a52584f919f9f1c0534eb2b",
+      "platform": "4c3782f15c42d759b63f82dbaa498362c1d83960ac0e809f5b1f594ffb24590f",
+      "bundle_sha256": "c4e47bdad404ee560650ddcd12d58fd7db8fa1e82cad6e9a8441fc02b60ffd76",
+      "completeness": "dea24279dca49749f9876fc15e9ff28ba8ecd23614cb54b4b44dadb4f5ef4e56",
+      "counts": "783be26ac751240ea8079aac305d53973c94d837fa6e1e04409fcc6b9267a34b",
+      "sink_total": "3a8f6d79cd434dc10588606993976b7b2bc038ff4a2481e857ac0168fc29a683",
+      "sinks": "6c2a1b482342d90758150569610339f6dd89b172f68feb155be0130925268164",
+      "limitations": "d0883e7828c5f586eb430db20b087339e41c92a80850d1cc9d9df40ec7147aa3"
+    }
+  }
+}

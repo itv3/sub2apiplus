@@ -15,6 +15,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -32,7 +33,9 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture.extract_claude_bundle import (  # noqa: E402
+    ExtractError,
     build_reachability_index,
+    bundle_manifest,
     extract,
     write_modules,
 )
@@ -76,6 +79,20 @@ REGISTRY_KEYS_URL = f"{REGISTRY_BASE}/-/npm/v1/keys"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 AST_TOOL_PATH = Path(__file__).with_name("claude_bundle_ast.mjs")
+# Claude 升级控制面设计 B2-01 的官方制品冻结（claude_upgrade_freeze.py）：linux/arm64、npm 与原生分发双来源。
+SCHEMA_FREEZE_V2 = "claude-code-fw-e-official-freeze/v2"
+# 冻结平台的操作系统 → 二进制容器。Mach-O（需要 otool）只在 darwin 平台被冻结时才会解析。
+PLATFORM_CONTAINERS = {"darwin": "macho", "linux": "elf"}
+# B5a-03：analyze-bundles 默认使用采集容器内的受管运行时（ARM64 数据根 runtime/claude-tooling/ 只读挂载到
+# /opt/claude-tooling）。显式 --node-binary／--typescript-module 可覆盖；默认路径不存在即失败，不退回别的 node。
+MANAGED_NODE_BINARY = Path("/opt/claude-tooling/node")
+MANAGED_TYPESCRIPT_MODULE = Path("/opt/claude-tooling/typescript/lib/typescript.js")
+# 锁定的 TypeScript 5.6.3：与 Makefile 的 CAPTURE_TYPESCRIPT_SHA256、Claude 身份策略 runtime_bindings 相同。
+PINNED_TYPESCRIPT_SHA256 = "f316520790d4db220a10d890c5f85310e26a1bd3c104b8d3b5eb62ba0491651b"
+# AST 子进程超时按 JS 模块数放大：每 256 个模块一个 600 秒基准块，单主 bundle（3 个 JS 模块）仍是 600 秒。
+AST_TIMEOUT_SECONDS = 600
+AST_TIMEOUT_MODULES_PER_BLOCK = 256
+BUNDLE_MANIFEST_NAME = "bundle-manifest.json"
 REQUIRED_PRIVACY_ENV = {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "DISABLE_TELEMETRY": "1",
@@ -550,65 +567,212 @@ def _probe_digest_set(probe: dict[str, Any] | None) -> list[str]:
     )
 
 
+def _frozen_platform_binaries(freeze: dict[str, Any]) -> list[dict[str, str]]:
+    """列出冻结合同里「冻结了的平台」及其二进制，只处理这些平台。
+
+    v1（claude_fw_e.py freeze，darwin/arm64 与 linux/amd64）逐平台登记 path 与 sha256；v2
+    （claude_upgrade_freeze.py，linux/arm64）逐平台登记 npm 与原生分发两渠道，两渠道逐字节相同
+    （``binary_equivalence == "npm=gcs"``）才可分析，divergent 一律拒绝。
+    """
+
+    schema = freeze.get("schema_version")
+    platforms = freeze.get("platforms")
+    binaries = freeze.get("binaries")
+    if (
+        not isinstance(platforms, list)
+        or not platforms
+        or not all(isinstance(item, str) for item in platforms)
+        or len(set(platforms)) != len(platforms)
+        or not isinstance(binaries, dict)
+    ):
+        raise FWEEvidenceError("freeze 的 platforms／binaries 非法")
+    rows: list[dict[str, str]] = []
+    if schema == SCHEMA_FREEZE:
+        for platform in sorted(platforms):
+            row = binaries.get(platform)
+            if not isinstance(row, dict) or not SHA256_RE.fullmatch(str(row.get("sha256", ""))):
+                raise FWEEvidenceError(f"freeze 缺少平台二进制：{platform}")
+            rows.append({"platform": platform, "path": str(row["path"]), "sha256": str(row["sha256"])})
+        return rows
+    if schema != SCHEMA_FREEZE_V2:
+        raise FWEEvidenceError("FW-E freeze schema 不匹配")
+    if freeze.get("binary_equivalence") != "npm=gcs":
+        raise FWEEvidenceError(
+            "v2 冻结的 npm 与原生分发二进制不一致（binary_equivalence="
+            f"{freeze.get('binary_equivalence')!r}），拒绝分析"
+        )
+    for platform in sorted(platforms):
+        channels = binaries.get(platform)
+        npm = channels.get("npm") if isinstance(channels, dict) else None
+        gcs = channels.get("gcs") if isinstance(channels, dict) else None
+        if not isinstance(npm, dict) or not isinstance(gcs, dict):
+            raise FWEEvidenceError(f"v2 冻结缺少平台两渠道二进制：{platform}")
+        digest = str(npm.get("sha256", ""))
+        if (
+            not SHA256_RE.fullmatch(digest)
+            or gcs.get("sha256") != digest
+            or npm.get("path") != gcs.get("path")
+        ):
+            raise FWEEvidenceError(f"v2 冻结的两渠道二进制登记不一致：{platform}")
+        if len(platforms) == 1 and freeze.get("binary_sha256") != digest:
+            raise FWEEvidenceError("v2 冻结的 binary_sha256 与平台二进制不一致")
+        rows.append({"platform": platform, "path": str(npm["path"]), "sha256": digest})
+    return rows
+
+
+def _binary_container(path: Path) -> str:
+    with open(path, "rb") as stream:
+        head = stream.read(4)
+    if head == b"\x7fELF":
+        return "elf"
+    if head in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
+        return "macho"
+    return "unknown"
+
+
+def _resolve_ast_runtime(
+    node_binary: str | None, typescript_module_path: Path | None
+) -> dict[str, str]:
+    """确定 AST 子进程用的 node 与 TypeScript，并计算二者摘要（B5a-03）。
+
+    未显式指定时使用受管运行时 ``/opt/claude-tooling``；默认路径不存在直接失败，不在 PATH 里另找 node。
+    显式 ``--node-binary`` 可以是路径或 PATH 里的命令名（本机测试用）。TypeScript 无论来源都必须等于锁定摘要。
+    """
+
+    if node_binary is None:
+        node_path = MANAGED_NODE_BINARY
+        if not node_path.is_file():
+            raise FWEEvidenceError(
+                f"受管 node 不存在：{node_path}（ARM64 数据根 runtime/claude-tooling/ 未挂载到采集容器？"
+                "本机分析请用 --node-binary 显式指定）"
+            )
+    elif "/" in node_binary:
+        node_path = Path(node_binary)
+        if not node_path.is_file():
+            raise FWEEvidenceError(f"--node-binary 指定的 node 不存在：{node_path}")
+    else:
+        found = shutil.which(node_binary)
+        if found is None:
+            raise FWEEvidenceError(f"--node-binary 指定的命令不在 PATH 中：{node_binary}")
+        node_path = Path(found)
+    if not os.access(node_path, os.X_OK):
+        raise FWEEvidenceError(f"node 不可执行：{node_path}")
+    if typescript_module_path is None:
+        typescript_path = MANAGED_TYPESCRIPT_MODULE
+        if not typescript_path.is_file():
+            raise FWEEvidenceError(
+                f"受管 TypeScript 不存在：{typescript_path}（本机分析请用 --typescript-module 显式指定）"
+            )
+    else:
+        typescript_path = typescript_module_path
+        if not typescript_path.is_file():
+            raise FWEEvidenceError(f"--typescript-module 指定的文件不存在：{typescript_path}")
+    typescript_sha256 = sha256_file(typescript_path)
+    if typescript_sha256 != PINNED_TYPESCRIPT_SHA256:
+        raise FWEEvidenceError(
+            f"TypeScript 解析器摘要 {typescript_sha256} 不是锁定的 {PINNED_TYPESCRIPT_SHA256}"
+        )
+    return {
+        "node_path": str(node_path),
+        "node_sha256": sha256_file(node_path.resolve()),
+        "typescript_module_path": str(typescript_path),
+        "typescript_module_sha256": typescript_sha256,
+    }
+
+
+def _ast_timeout_seconds(js_module_count: int) -> int:
+    blocks = max(1, math.ceil(js_module_count / AST_TIMEOUT_MODULES_PER_BLOCK))
+    return AST_TIMEOUT_SECONDS * blocks
+
+
 def analyze_bundles(
     freeze_root: Path,
     output_root: Path,
     baseline_anchors_path: Path,
     baseline_reachability_path: Path,
-    node_binary: str = "node",
+    node_binary: str | None = None,
     typescript_module_path: Path | None = None,
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FWEEvidenceError("static output_root 必须不存在，禁止覆盖")
     freeze = load_json_file(freeze_root / "freeze.json", "FW-E freeze")
-    if freeze.get("schema_version") != SCHEMA_FREEZE:
-        raise FWEEvidenceError("FW-E freeze schema 不匹配")
+    frozen = _frozen_platform_binaries(freeze)
+    runtime = _resolve_ast_runtime(node_binary, typescript_module_path)
     output_root.mkdir(parents=True, mode=0o700)
     output_root.chmod(0o700)
     platform_results: dict[str, dict[str, Any]] = {}
-    for platform in sorted(PLATFORM_PACKAGES):
-        binary_row = freeze["binaries"].get(platform)
-        if not isinstance(binary_row, dict):
-            raise FWEEvidenceError(f"freeze 缺少平台二进制：{platform}")
-        binary = freeze_root / str(binary_row["path"])
+    for binary_row in frozen:
+        platform = binary_row["platform"]
+        binary = freeze_root / binary_row["path"]
         if sha256_file(binary) != binary_row["sha256"]:
             raise FWEEvidenceError(f"冻结二进制摘要漂移：{platform}")
+        expected_container = PLATFORM_CONTAINERS.get(platform.split("/", 1)[0])
+        actual_container = _binary_container(binary)
+        if expected_container is None or actual_container != expected_container:
+            raise FWEEvidenceError(
+                f"{platform} 冻结二进制的容器是 {actual_container}，不是平台要求的 {expected_container}"
+            )
         platform_dir = output_root / platform.replace("/", "-")
         modules_dir = platform_dir / "modules"
         platform_dir.mkdir(parents=True, mode=0o700)
-        result = extract(binary, str(binary_row["sha256"]))
-        write_modules(binary, result, modules_dir)
+        try:
+            result = extract(binary, binary_row["sha256"])
+            write_modules(binary, result, modules_dir)
+            manifest = bundle_manifest(result, platform_dir, modules_dir)
+        except ExtractError as error:
+            raise FWEEvidenceError(f"{platform} bundle 提取失败：{error}") from error
         anchors_path = platform_dir / "bundle-anchors.json"
         _write_private_json(anchors_path, result)
-        reachability = build_reachability_index(modules_dir / "cli.js")
+        manifest_path = platform_dir / BUNDLE_MANIFEST_NAME
+        _write_private_json(manifest_path, manifest)
+        try:
+            reachability = build_reachability_index(manifest_path)
+        except ExtractError as error:
+            raise FWEEvidenceError(f"{platform} 词法索引失败：{error}") from error
         reachability_path = platform_dir / "reachability-index.json"
         _write_private_json(reachability_path, reachability)
         ast_path = platform_dir / "target-native-ast.json"
+        js_module_count = int(result["module_graph"]["js_module_count"])
+        timeout = _ast_timeout_seconds(js_module_count)
+        # AST 工具核对的是命令行输入文件（模块清单）本身的摘要；bundle 身份（规则 ① 为旧主模块）由工具按清单推出。
+        manifest_sha256 = sha256_file(manifest_path)
+        if reachability.get("bundle_manifest_sha256") != manifest_sha256:
+            raise FWEEvidenceError(f"词法索引没有绑定本次模块清单：{platform}")
         command = [
-            node_binary,
+            runtime["node_path"],
             str(AST_TOOL_PATH),
-            "--bundle",
-            str(modules_dir / "cli.js"),
+            "--bundle-manifest",
+            str(manifest_path),
             "--output",
             str(ast_path),
             "--expected-sha256",
-            str(reachability["bundle_sha256"]),
+            manifest_sha256,
+            "--typescript-module",
+            runtime["typescript_module_path"],
         ]
-        if typescript_module_path is not None:
-            command.extend(["--typescript-module", str(typescript_module_path)])
-        completed = subprocess.run(
-            command,
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=600,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[2],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise FWEEvidenceError(
+                f"目标 AST inventory 超时：{platform}（{js_module_count} 个 JS 模块，{timeout} 秒）"
+            ) from error
         if completed.returncode != 0:
             raise FWEEvidenceError(
                 f"目标 AST inventory 失败：{platform}：{completed.stderr.strip()}"
             )
         ast_inventory = load_json_file(ast_path, f"{platform} AST inventory")
+        parser = ast_inventory.get("parser") if isinstance(ast_inventory.get("parser"), dict) else {}
+        if parser.get("typescript_module_sha256") != runtime["typescript_module_sha256"]:
+            raise FWEEvidenceError(f"AST 产物记录的 TypeScript 摘要与所用解析器不一致：{platform}")
+        if parser.get("node_sha256") != runtime["node_sha256"]:
+            raise FWEEvidenceError(f"AST 产物记录的 node 摘要与所用 node 不一致：{platform}")
         sink_inventory = build_target_inventory(
             ast_inventory,
             reachability,
@@ -625,10 +789,13 @@ def analyze_bundles(
         )
         sink_inventory_path = platform_dir / "target-sink-inventory.json"
         _write_private_json(sink_inventory_path, sink_inventory)
+        ast_graph = ast_inventory.get("module_graph") or {}
         platform_results[platform] = {
             "binary_sha256": binary_row["sha256"],
             "anchors_path": anchors_path.relative_to(output_root).as_posix(),
             "anchors_sha256": sha256_file(anchors_path),
+            "bundle_manifest_path": manifest_path.relative_to(output_root).as_posix(),
+            "bundle_manifest_sha256": sha256_file(manifest_path),
             "reachability_path": reachability_path.relative_to(output_root).as_posix(),
             "reachability_sha256": sha256_file(reachability_path),
             "target_native_ast_path": ast_path.relative_to(output_root).as_posix(),
@@ -639,6 +806,31 @@ def analyze_bundles(
             "target_sink_inventory_sha256": sha256_file(sink_inventory_path),
             "target_sink_count": sink_inventory["sink_total"],
             "bundle_sha256": reachability["bundle_sha256"],
+            "module_graph": {
+                **{
+                    key: result["module_graph"][key]
+                    for key in (
+                        "entry_rule",
+                        "entry_candidates",
+                        "declared_entry",
+                        "module_count",
+                        "js_module_count",
+                        "chunk_count",
+                        "asset_count",
+                        "native_count",
+                    )
+                },
+                "entry_confirmation": ast_graph.get("entry_confirmation"),
+                "confirmed_entries": ast_graph.get("confirmed_entries", []),
+                "unresolved_module_count": ast_graph.get("unresolved_module_count"),
+                "unresolved_dynamic_edge_count": ast_graph.get("unresolved_dynamic_edge_count"),
+                "unresolved_entry_sink_count": sink_inventory["completeness"].get(
+                    "unresolved_entry_sink_count"
+                ),
+                "ast_parse_diagnostic_count": ast_inventory["completeness"]["parse_diagnostic_count"],
+                "ast_truncated": ast_inventory["completeness"]["truncated"],
+                "ast_timeout_seconds": timeout,
+            },
         }
     baseline_anchors = load_json_file(baseline_anchors_path, "2.1.220 anchors")
     baseline_index = load_json_file(baseline_reachability_path, "2.1.220 reachability")
@@ -702,6 +894,7 @@ def analyze_bundles(
             "path": AST_TOOL_PATH.relative_to(Path(__file__).resolve().parents[2]).as_posix(),
             "sha256": sha256_file(AST_TOOL_PATH),
         },
+        "ast_runtime": runtime,
         "producer": {
             "path": "tools/official_client_capture/claude_fw_e.py",
             "sha256": sha256_file(Path(__file__)),
@@ -1369,13 +1562,22 @@ def _build_parser() -> argparse.ArgumentParser:
     freeze = commands.add_parser("freeze", help="查询并冻结当前官方 stable")
     freeze.add_argument("--output-root", type=Path, required=True)
 
-    static = commands.add_parser("analyze-bundles", help="提取目标 bundle 并与 2.1.220 比较")
+    static = commands.add_parser(
+        "analyze-bundles", help="提取冻结平台的目标 bundle（含分块模块图）并与 2.1.220 比较"
+    )
     static.add_argument("--freeze-root", type=Path, required=True)
     static.add_argument("--output-root", type=Path, required=True)
     static.add_argument("--baseline-anchors", type=Path, required=True)
     static.add_argument("--baseline-reachability", type=Path, required=True)
-    static.add_argument("--node-binary", default="node")
-    static.add_argument("--typescript-module", type=Path)
+    static.add_argument(
+        "--node-binary",
+        help=f"node 可执行文件（路径或 PATH 中的命令名）；默认受管运行时 {MANAGED_NODE_BINARY}",
+    )
+    static.add_argument(
+        "--typescript-module",
+        type=Path,
+        help=f"锁定的 typescript.js；默认受管运行时 {MANAGED_TYPESCRIPT_MODULE}",
+    )
 
     capture = commands.add_parser("capture-index", help="复核控制组和目标组完整 M")
     capture.add_argument("--control-root", type=Path, required=True)

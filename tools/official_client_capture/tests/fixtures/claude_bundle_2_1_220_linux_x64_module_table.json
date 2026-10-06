@@ -1,0 +1,97 @@
+{
+  "description": "Claude Code 2.1.220 linux-x64 官方二进制的 Bun 模块表与锚点（取自 local-analysis 冻结锚点 bundle-anchors-linux-x64.json，只含元数据）。",
+  "source_anchor_sha256": "e05a13e2dfa091d6e213ab2bf6084af5e4a3bbb3a1aa42ff6681e8f8b19b3149",
+  "binary_sha256": "674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863",
+  "binary_size": 275012592,
+  "container": "elf",
+  "bun_section": ".bun",
+  "bun_section_offset": 86315008,
+  "bun_section_size": 188646561,
+  "blob_base": 86315016,
+  "byte_count": 188646505,
+  "modules_offset": 188646088,
+  "modules_length": 416,
+  "offsets_reserved_hex": "0000000068843e0b000000000f000000",
+  "modules": [
+    {
+      "index": 0,
+      "name": "/$bunfs/root/src/entrypoints/cli.js",
+      "contents_offset": 160544512,
+      "contents_length": 21633085,
+      "sourcemap_length": 0,
+      "record_tail_hex": "7800000040b691090000000000000000b8b691092300000001010200",
+      "sha256": "8f1dded39f5153b747cd46fdc670fee01d4a766e9bfbcd2158467bc49f77019b",
+      "kind": "text"
+    },
+    {
+      "index": 1,
+      "name": "/$bunfs/root/image-processor.js",
+      "contents_offset": 182177630,
+      "contents_length": 2171,
+      "sourcemap_length": 0,
+      "record_tail_hex": "00000000000000000000000000000000000000000000000001010200",
+      "sha256": "3b8a2a2ab290df5cb9cecd1cccf7a8b404193fc7a9fee73328cc59cd4622c61c",
+      "kind": "text"
+    },
+    {
+      "index": 2,
+      "name": "/$bunfs/root/audio-capture.js",
+      "contents_offset": 182179832,
+      "contents_length": 2169,
+      "sourcemap_length": 0,
+      "record_tail_hex": "00000000000000000000000000000000000000000000000001010200",
+      "sha256": "3dc947f75a201a98591bb64d9ac3e57f4de4daca208fdc9e076ed38d2a9f6116",
+      "kind": "text"
+    },
+    {
+      "index": 3,
+      "name": "/$bunfs/root/image-processor.node",
+      "contents_offset": 182182036,
+      "contents_length": 1464760,
+      "sourcemap_length": 0,
+      "record_tail_hex": "000000000000000000000000000000000000000000000000000a0001",
+      "sha256": "37bec7de530676e3dfe963d34a824b49191595809a8072348a2ef4571f1e5f4d",
+      "kind": "native"
+    },
+    {
+      "index": 4,
+      "name": "/$bunfs/root/chart.umd.min.js",
+      "contents_offset": 183646827,
+      "contents_length": 208522,
+      "sourcemap_length": 0,
+      "record_tail_hex": "00000000000000000000000000000000000000000000000000050001",
+      "sha256": "48444a82d4edcb5bec0f1965faacdde18d9c17db3063d042abada2f705c9f54a",
+      "kind": "text"
+    },
+    {
+      "index": 5,
+      "name": "/$bunfs/root/hljsBundle.generated.min.js",
+      "contents_offset": 183855391,
+      "contents_length": 985483,
+      "sourcemap_length": 0,
+      "record_tail_hex": "00000000000000000000000000000000000000000000000000050001",
+      "sha256": "442152fe2c6e5396ee196f5a92a212a8899a011d0f87fdba9a552057d20b178f",
+      "kind": "text"
+    },
+    {
+      "index": 6,
+      "name": "/$bunfs/root/mermaid.min.js",
+      "contents_offset": 184840903,
+      "contents_length": 3312967,
+      "sourcemap_length": 0,
+      "record_tail_hex": "00000000000000000000000000000000000000000000000000050001",
+      "sha256": "70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de",
+      "kind": "text"
+    },
+    {
+      "index": 7,
+      "name": "/$bunfs/root/audio-capture.node",
+      "contents_offset": 188153903,
+      "contents_length": 492184,
+      "sourcemap_length": 0,
+      "record_tail_hex": "000000000000000000000000000000000000000000000000000a0001",
+      "sha256": "185f990044394fbd4811284cfe9812d261453571c4dfbfa27dadd299c53036eb",
+      "kind": "native"
+    }
+  ]
+}

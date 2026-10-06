@@ -5,6 +5,10 @@
  * 目标 inventory 同时保留 AST 调用点和保守词法候选。词法命中可能只是内嵌文档、字符串、
  * 能力检查或普通同名方法；本工具只陈述其真实语法位置，不直接签发 disposition。人工复核仍须
  * 结合 source-to-sink、隐私门控和运行证据作出唯一处置。
+ *
+ * 输入与 claude_bundle_ast.mjs 一致：`--bundle`（旧版单主 bundle）与 `--bundle-manifest`
+ * （分块 bundle 的模块清单）二选一。清单模式下 inventory 每条 sink 必须带 `module`，坐标是该模块
+ * 文本内的 UTF-16 偏移；按模块逐个解析、一次只持有一个语法树。
  */
 
 import crypto from "node:crypto";
@@ -22,6 +26,16 @@ const WORKSPACE_ROOT = path.resolve(TOOL_DIR, "../..");
 const INVENTORY_SCHEMA = "claude-code-target-sink-inventory/v1";
 const AST_SCHEMA = "claude-code-target-native-inventory/v1";
 const OUTPUT_SCHEMA = "claude-code-fw-e-sink-containment-evidence/v1";
+const MANIFEST_SCHEMA = "claude-code-bun-bundle-manifest/v1";
+const LEGACY_MAIN_MODULE = "/$bunfs/root/src/entrypoints/cli.js";
+const ARGUMENT_KEYS = new Set([
+  "bundle",
+  "bundle-manifest",
+  "inventory",
+  "ast-inventory",
+  "output",
+  "typescript-module",
+]);
 
 function fail(message) {
   process.stderr.write(`失败：${message}\n`);
@@ -36,6 +50,9 @@ function parseArgs(argv) {
       fail(`无法识别参数：${item}`);
     }
     const key = item.slice(2);
+    if (!ARGUMENT_KEYS.has(key)) {
+      fail(`无法识别参数：${item}`);
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) {
       fail(`参数缺少值：${item}`);
@@ -46,10 +63,13 @@ function parseArgs(argv) {
     result[key] = value;
     index += 1;
   }
-  for (const key of ["bundle", "inventory", "ast-inventory", "output"]) {
+  for (const key of ["inventory", "ast-inventory", "output"]) {
     if (!result[key]) {
       fail(`缺少必填参数：--${key}`);
     }
+  }
+  if (Boolean(result.bundle) === Boolean(result["bundle-manifest"])) {
+    fail("--bundle 与 --bundle-manifest 必须且只能给一个");
   }
   return result;
 }
@@ -74,31 +94,34 @@ function readJson(filePath, label) {
   }
 }
 
+/**
+ * 加载 TypeScript 解析器：只取「显式参数 → CLAUDE_AST_TYPESCRIPT_MODULE → 仓库 frontend 依赖」中第一个
+ * 给出的来源，该来源不存在即失败，不静默退回下一个来源（与 claude_bundle_ast.mjs 一致）。
+ */
 function loadTypeScript(explicitPath) {
-  const candidates = [];
+  let candidate;
+  let source;
   if (explicitPath) {
-    candidates.push(path.resolve(explicitPath));
+    candidate = path.resolve(explicitPath);
+    source = "--typescript-module";
+  } else if (process.env.CLAUDE_AST_TYPESCRIPT_MODULE) {
+    candidate = path.resolve(process.env.CLAUDE_AST_TYPESCRIPT_MODULE);
+    source = "CLAUDE_AST_TYPESCRIPT_MODULE";
+  } else {
+    candidate = path.join(WORKSPACE_ROOT, "frontend/node_modules/typescript/lib/typescript.js");
+    source = "仓库 frontend 依赖";
   }
-  if (process.env.CLAUDE_AST_TYPESCRIPT_MODULE) {
-    candidates.push(path.resolve(process.env.CLAUDE_AST_TYPESCRIPT_MODULE));
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
+    fail(
+      `找不到 TypeScript 解析器（来源：${source}）：${candidate}；` +
+        "请通过 --typescript-module 指定锁定的 typescript.js",
+    );
   }
-  candidates.push(
-    path.join(WORKSPACE_ROOT, "frontend/node_modules/typescript/lib/typescript.js"),
-  );
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    return {
-      module: require(candidate),
-      path: candidate,
-      sha256: sha256File(candidate),
-    };
-  }
-  fail(
-    "找不到 TypeScript 解析器；请安装 frontend 依赖或通过 " +
-      "--typescript-module 指定锁定的 typescript.js",
-  );
+  return {
+    module: require(candidate),
+    path: candidate,
+    sha256: sha256File(candidate),
+  };
 }
 
 function canonical(value) {
@@ -240,7 +263,7 @@ function lexicalFinding(ts, token) {
   };
 }
 
-function validateInventory(inventory, astInventory, bundleSha256, sourceLength) {
+function validateInventory(inventory, astInventory, bundleSha256, sourceLength, analyzedModules) {
   if (inventory.schema_version !== INVENTORY_SCHEMA) {
     fail(`目标 inventory schema 不匹配：${inventory.schema_version}`);
   }
@@ -276,23 +299,26 @@ function validateInventory(inventory, astInventory, bundleSha256, sourceLength) 
       !Number.isInteger(row.source_end) ||
       row.source_start < 0 ||
       row.source_end < row.source_start ||
-      row.source_end > sourceLength
+      (sourceLength !== null && row.source_end > sourceLength)
     ) {
       fail(`目标 sink 坐标非法：${row.sink_id}`);
+    }
+    if (analyzedModules !== null && !analyzedModules.has(row.module)) {
+      fail(`目标 sink 没有绑定清单中的待分析模块：${row.sink_id}`);
     }
   }
 }
 
-function buildEvidence(ts, sourceFile, inventory, astInventory) {
-  const astById = new Map(astInventory.sinks.map((row) => [row.sink_id, row]));
+function buildEvidence(ts, sourceFile, sinks, astById, moduleName) {
   const rows = [];
   const failures = [];
-  for (const sink of inventory.sinks) {
+  for (const sink of sinks) {
     const start = sink.source_start;
     const end = sink.source_end;
     const token = ts.getTokenAtPosition(sourceFile, Math.min(start, sourceFile.text.length - 1));
     const base = {
       sink_id: sink.sink_id,
+      ...(moduleName === null ? {} : { module: moduleName }),
       source_kind: sink.source_kind,
       category: sink.category,
       source_start: start,
@@ -311,7 +337,7 @@ function buildEvidence(ts, sourceFile, inventory, astInventory) {
     if (sink.source_kind === "ast_call") {
       const astRow = astById.get(sink.sink_id);
       const exact = findExactCall(ts, sourceFile, token, start, end);
-      if (!astRow || !exact) {
+      if (!astRow || !exact || (moduleName !== null && astRow.module !== moduleName)) {
         failures.push(sink.sink_id);
         rows.push({
           ...base,
@@ -358,29 +384,9 @@ function buildEvidence(ts, sourceFile, inventory, astInventory) {
   return { rows, failures };
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const bundlePath = path.resolve(args.bundle);
-  const inventoryPath = path.resolve(args.inventory);
-  const astInventoryPath = path.resolve(args["ast-inventory"]);
-  const outputPath = path.resolve(args.output);
-  if (fs.existsSync(outputPath)) {
-    fail("output 必须不存在，禁止覆盖既有证据");
-  }
-  const bundleBytes = fs.readFileSync(bundlePath);
-  const bundleSha256 = sha256Bytes(bundleBytes);
-  const source = bundleBytes.toString("utf8");
-  if (Buffer.byteLength(source, "utf8") !== bundleBytes.length) {
-    fail("bundle 不是完整 UTF-8 文本");
-  }
-  const inventory = readJson(inventoryPath, "目标 sink inventory");
-  const astInventory = readJson(astInventoryPath, "AST inventory");
-  validateInventory(inventory, astInventory, bundleSha256, source.length);
-
-  const typescript = loadTypeScript(args["typescript-module"]);
-  const ts = typescript.module;
+function parseSource(ts, fileName, source) {
   const sourceFile = ts.createSourceFile(
-    "cli.js",
+    fileName,
     source,
     ts.ScriptTarget.Latest,
     true,
@@ -391,11 +397,196 @@ function main() {
     start: item.start ?? null,
     length: item.length ?? null,
   }));
+  return { sourceFile, diagnostics };
+}
+
+/** 旧版单主 bundle：整份解析一次，坐标是整个 bundle 的偏移。 */
+function evidenceForBundle(ts, args, inventory, astInventory, astById) {
+  const bundlePath = path.resolve(args.bundle);
+  const bundleBytes = fs.readFileSync(bundlePath);
+  const bundleSha256 = sha256Bytes(bundleBytes);
+  const source = bundleBytes.toString("utf8");
+  if (Buffer.byteLength(source, "utf8") !== bundleBytes.length) {
+    fail("bundle 不是完整 UTF-8 文本");
+  }
+  validateInventory(inventory, astInventory, bundleSha256, source.length, null);
+  const { sourceFile, diagnostics } = parseSource(ts, path.basename(bundlePath), source);
   if (diagnostics.length) {
     fail(`TypeScript 解析出现 ${diagnostics.length} 个诊断`);
   }
+  const evidence = buildEvidence(ts, sourceFile, inventory.sinks, astById, null);
+  return {
+    bundle: {
+      path: args.bundle,
+      sha256: bundleSha256,
+      byte_count: bundleBytes.length,
+    },
+    diagnostics,
+    ...evidence,
+  };
+}
 
-  const evidence = buildEvidence(ts, sourceFile, inventory, astInventory);
+function decodeModule(buffer, encoding, name) {
+  if (encoding === "latin1") {
+    return buffer.toString("latin1");
+  }
+  if (encoding === "utf16") {
+    if (buffer.length % 2 !== 0) {
+      fail(`utf16 模块字节数不是偶数：${name}`);
+    }
+    return buffer.toString("utf16le");
+  }
+  fail(`模块编码不能作为 JS 文本解析：${name}=${encoding}`);
+}
+
+/**
+ * 模块清单的 bundle 身份（与 extract_claude_bundle.bundle_identity 同口径）：规则 ①（旧版单主 bundle）是旧主模块，
+ * 返回其清单行；分块 bundle 返回 null，身份是清单文件本身。
+ */
+function legacyMainRow(manifest) {
+  if (manifest.module_graph?.entry_rule !== "legacy_main_module") {
+    return null;
+  }
+  const rows = manifest.modules.filter((row) => row?.name === LEGACY_MAIN_MODULE && row.analyze === true);
+  if (rows.length !== 1) {
+    fail("规则 ① 的模块清单缺少待分析的旧主模块");
+  }
+  return rows[0];
+}
+
+/** 分块 bundle：按模块清单逐模块解析，只解析含 sink 的模块；证据行顺序与 inventory 一致。 */
+function evidenceForManifest(ts, args, inventory, astInventory, astById) {
+  const manifestPath = path.resolve(args["bundle-manifest"]);
+  const raw = fs.readFileSync(manifestPath);
+  const manifestSha256 = sha256Bytes(raw);
+  let manifest;
+  try {
+    manifest = JSON.parse(raw.toString("utf8"));
+  } catch (error) {
+    fail(`模块清单不是合法 JSON：${error.message}`);
+  }
+  if (!manifest || manifest.schema_version !== MANIFEST_SCHEMA || !Array.isArray(manifest.modules)) {
+    fail("模块清单 schema 不匹配");
+  }
+  const analyzed = new Map();
+  for (const row of manifest.modules) {
+    if (row?.analyze !== true) {
+      continue;
+    }
+    const parts = String(row.path ?? "").split("/");
+    if (!row.path || row.path.startsWith("/") || parts.includes("..") || parts.includes("")) {
+      fail(`模块清单路径非法：${row.name}`);
+    }
+    analyzed.set(row.name, row);
+  }
+  const mainRow = legacyMainRow(manifest);
+  const manifestDir = path.dirname(manifestPath);
+  let identity;
+  if (mainRow) {
+    // 规则 ①：身份是旧主模块文件，先按清单登记核对其字节数与摘要。
+    const mainPath = path.join(manifestDir, ...mainRow.path.split("/"));
+    const mainBytes = fs.readFileSync(mainPath);
+    if (mainBytes.length !== mainRow.bytes || sha256Bytes(mainBytes) !== mainRow.sha256) {
+      fail(`旧主模块文件与清单登记不一致：${mainRow.name}`);
+    }
+    identity = { path: mainPath, sha256: mainRow.sha256, byte_count: mainRow.bytes, identity_kind: "legacy_main_module" };
+  } else {
+    identity = { path: args["bundle-manifest"], sha256: manifestSha256, byte_count: raw.length, identity_kind: "bundle_manifest" };
+  }
+  if (astInventory.bundle?.manifest_sha256 !== manifestSha256) {
+    fail("AST inventory 与模块清单摘要不一致");
+  }
+  validateInventory(inventory, astInventory, identity.sha256, null, new Set(analyzed.keys()));
+  const byModule = new Map();
+  inventory.sinks.forEach((sink, position) => {
+    if (!byModule.has(sink.module)) {
+      byModule.set(sink.module, []);
+    }
+    byModule.get(sink.module).push({ sink, position });
+  });
+  const ordered = [...byModule.keys()].sort(
+    (left, right) => analyzed.get(left).index - analyzed.get(right).index,
+  );
+  const rows = new Array(inventory.sinks.length);
+  const failures = [];
+  const diagnostics = [];
+  for (const moduleName of ordered) {
+    const row = analyzed.get(moduleName);
+    const buffer = fs.readFileSync(path.join(path.dirname(manifestPath), ...row.path.split("/")));
+    if (buffer.length !== row.bytes || sha256Bytes(buffer) !== row.sha256) {
+      fail(`模块文件与清单登记不一致：${moduleName}`);
+    }
+    const source = decodeModule(buffer, row.encoding, moduleName);
+    const items = byModule.get(moduleName);
+    for (const { sink } of items) {
+      if (sink.source_end > source.length) {
+        fail(`目标 sink 坐标超出模块长度：${sink.sink_id}`);
+      }
+    }
+    const parsed = parseSource(ts, path.posix.basename(row.path), source);
+    diagnostics.push(...parsed.diagnostics.map((item) => ({ module: moduleName, ...item })));
+    if (parsed.diagnostics.length) {
+      continue;
+    }
+    const evidence = buildEvidence(
+      ts,
+      parsed.sourceFile,
+      items.map((item) => item.sink),
+      astById,
+      moduleName,
+    );
+    items.forEach((item, offset) => {
+      rows[item.position] = evidence.rows[offset];
+    });
+    failures.push(...evidence.failures);
+  }
+  if (diagnostics.length) {
+    fail(`TypeScript 解析出现 ${diagnostics.length} 个诊断`);
+  }
+  return {
+    // 旧字段 path／sha256／byte_count 的含义随 bundle 身份（规则 ① 为旧主模块文件）；清单绑定字段追加在后。
+    bundle: {
+      path: identity.path,
+      sha256: identity.sha256,
+      byte_count: identity.byte_count,
+      identity_kind: identity.identity_kind,
+      kind: "bun_module_manifest",
+      manifest_path: args["bundle-manifest"],
+      manifest_sha256: manifestSha256,
+      manifest_byte_count: raw.length,
+      parsed_module_count: ordered.length,
+    },
+    diagnostics,
+    rows,
+    failures,
+  };
+}
+
+function nodeIdentity() {
+  return {
+    node_version: process.version,
+    node_path: process.execPath,
+    node_sha256: sha256File(process.execPath),
+  };
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const inventoryPath = path.resolve(args.inventory);
+  const astInventoryPath = path.resolve(args["ast-inventory"]);
+  const outputPath = path.resolve(args.output);
+  if (fs.existsSync(outputPath)) {
+    fail("output 必须不存在，禁止覆盖既有证据");
+  }
+  const inventory = readJson(inventoryPath, "目标 sink inventory");
+  const astInventory = readJson(astInventoryPath, "AST inventory");
+  const typescript = loadTypeScript(args["typescript-module"]);
+  const ts = typescript.module;
+  const astById = new Map(astInventory.sinks?.map((row) => [row.sink_id, row]) ?? []);
+  const evidence = args.bundle
+    ? evidenceForBundle(ts, args, inventory, astInventory, astById)
+    : evidenceForManifest(ts, args, inventory, astInventory, astById);
+
   const findingCounts = {};
   for (const row of evidence.rows) {
     findingCounts[row.structural_finding] = (findingCounts[row.structural_finding] ?? 0) + 1;
@@ -404,11 +595,7 @@ function main() {
     schema_version: OUTPUT_SCHEMA,
     target_version: inventory.target_version,
     platform: inventory.platform,
-    bundle: {
-      path: args.bundle,
-      sha256: bundleSha256,
-      byte_count: bundleBytes.length,
-    },
+    bundle: evidence.bundle,
     inventory: {
       path: args.inventory,
       sha256: sha256File(inventoryPath),
@@ -422,11 +609,11 @@ function main() {
       sha256: sha256File(TOOL_PATH),
     },
     parser: {
-      node_version: process.version,
+      ...nodeIdentity(),
       typescript_version: ts.version,
       module_path: typescript.path,
       module_sha256: typescript.sha256,
-      parse_diagnostics: diagnostics,
+      parse_diagnostics: evidence.diagnostics,
     },
     completeness: {
       target_sink_count: inventory.sinks.length,
@@ -440,7 +627,13 @@ function main() {
     },
     evidence: evidence.rows,
   };
-  output.evidence_sha256 = canonicalSha256(output.evidence);
+  // evidence_sha256 保持旧含义：按旧形状的证据行（不含 module）计算；清单模式另给含模块绑定的摘要。
+  output.evidence_sha256 = canonicalSha256(
+    output.evidence.map(({ module: _module, ...row }) => row),
+  );
+  if (args["bundle-manifest"]) {
+    output.module_bound_evidence_sha256 = canonicalSha256(output.evidence);
+  }
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   fs.chmodSync(path.dirname(outputPath), 0o700);
