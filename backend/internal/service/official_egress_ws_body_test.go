@@ -62,8 +62,16 @@ func TestOfficialWSFrameBodyOwnership(t *testing.T) {
 	second, secondIndex, err := body.decode(source)
 	require.NoError(t, err)
 	require.Same(t, index, secondIndex, "同一版本正文应共享扫描结果")
-	first["input"].([]any)[0].(map[string]any)["role"] = "assistant"
-	require.Equal(t, "user", second["input"].([]any)[0].(map[string]any)["role"], "可写对象树不能共享")
+	firstInput, ok := first["input"].([]any)
+	require.True(t, ok)
+	firstItem, ok := firstInput[0].(map[string]any)
+	require.True(t, ok)
+	firstItem["role"] = "assistant"
+	secondInput, ok := second["input"].([]any)
+	require.True(t, ok)
+	secondItem, ok := secondInput[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "user", secondItem["role"], "可写对象树不能共享")
 	_, nextIndex, err := body.decode(bytes.Clone(source))
 	require.NoError(t, err)
 	require.NotSame(t, index, nextIndex, "换正文后不能误用旧索引")
@@ -104,7 +112,9 @@ func TestOfficialWSFrameMembersMatchLegacyMarshal(t *testing.T) {
 		payload, index, err := body.decode(source)
 		require.NoError(t, err)
 		payload["client_metadata"] = map[string]any{"turn_id": "new", "key": "<>&"}
-		payload["input"] = append(payload["input"].([]any), map[string]any{"role": "user", "content": "next"})
+		input, ok := payload["input"].([]any)
+		require.True(t, ok)
+		payload["input"] = append(input, map[string]any{"role": "user", "content": "next"})
 		want, wantErr := marshalOfficialOpenAIWSJSONPreservingRaw(officialClientProfileModeActive, payload, source)
 		got, gotErr := marshalOfficialWSFrameBody(officialClientProfileModeActive, payload, source, index)
 		if wantErr != nil {

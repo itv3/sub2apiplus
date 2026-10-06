@@ -165,7 +165,7 @@ func TestWebSocketStorageFailureCloses1013WithoutFailover(t *testing.T) {
 				defer cancel()
 				client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", nil)
 				require.NoError(t, err)
-				defer client.CloseNow()
+				defer func() { _ = client.CloseNow() }()
 				for turn := 1; turn <= failTurn; turn++ {
 					err = client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":"hello"}`))
 					require.NoError(t, err)

@@ -29,7 +29,7 @@ func TestOfficialEgressMemoryPrepareFixture(t *testing.T) {
 	if path := strings.TrimSpace(os.Getenv("SUB2API_OFFICIAL_EGRESS_MEMORY_WIRE_FIXTURE")); path != "" {
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		require.NoError(t, err, "压缩入站样本必须使用新的文件，不能覆盖既有对照数据")
-		defer file.Close()
+		defer func() { require.NoError(t, file.Close()) }()
 		encoder, err := zstd.NewWriter(file, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
 		require.NoError(t, err)
 		encoder.ResetContentSize(file, int64(len(body)))

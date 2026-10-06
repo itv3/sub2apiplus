@@ -261,11 +261,6 @@ func readResponsesJSONRequestBodyWithPrealloc(req *http.Request, cfg *appconfig.
 	return pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(req, limit)
 }
 
-// 只允许在 acquireResponsesRequestMemory 成功后调用；关闭准入时沿用保守读取入口。
-func readAdmittedResponsesJSONRequestBody(req *http.Request, cfg *appconfig.Config) ([]byte, error) {
-	return readAdmittedResponsesJSONRequestBodyWithReservation(req, cfg, nil)
-}
-
 // 读取正文后先计算规范化长度并申请差额，只有准入成功才能分配扩展后的正文。
 func readAdmittedResponsesJSONRequestBodyWithReservation(req *http.Request, cfg *appconfig.Config, beforeNormalize func(int) error) ([]byte, error) {
 	if cfg == nil || cfg.Gateway.RequestMemoryBudgetBytes <= 0 {

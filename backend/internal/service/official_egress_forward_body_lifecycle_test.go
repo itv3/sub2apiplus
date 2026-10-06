@@ -92,7 +92,11 @@ func TestOfficialForwardBodyLifecycleEarlyResponseKeepsIndependentUpload(t *test
 			// Forward 已返回但原始 HTTP Body 仍在上传：此时 GetBody 也应能取得独立读者。
 			replay, err := upstream.request.GetBody()
 			require.NoError(t, err)
-			defer replay.Close()
+			defer func() {
+				if closeErr := replay.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			}()
 			hash := sha256.New()
 			_, err = io.CopyN(hash, replay, 31)
 			require.NoError(t, err)

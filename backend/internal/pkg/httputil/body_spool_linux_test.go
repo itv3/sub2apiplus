@@ -13,7 +13,7 @@ func admittedSpoolResidentPages(t *testing.T, file *os.File, size int) int {
 	t.Helper()
 	mapped, err := unix.Mmap(int(file.Fd()), 0, size, unix.PROT_READ, unix.MAP_SHARED)
 	require.NoError(t, err)
-	defer unix.Munmap(mapped)
+	defer func() { require.NoError(t, unix.Munmap(mapped)) }()
 	pages := make([]byte, (size+os.Getpagesize()-1)/os.Getpagesize())
 	_, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(unsafe.Pointer(&mapped[0])), uintptr(len(mapped)), uintptr(unsafe.Pointer(&pages[0])))
 	require.Zero(t, errno)
@@ -34,11 +34,11 @@ func TestRequestBodySpoolLinuxDiscardsWrittenAndReadPages(t *testing.T) {
 	const size = 4 << 20
 	plain, err := os.CreateTemp(directory, "cache-control-*")
 	require.NoError(t, err)
-	defer plain.Close()
+	defer func() { require.NoError(t, plain.Close()) }()
 	spool, err := newRequestBodySpool()
 	require.NoError(t, err)
 	require.NotNil(t, spool)
-	defer spool.file.Close()
+	defer func() { require.NoError(t, spool.file.Close()) }()
 	chunk := make([]byte, admittedBodyReadChunk)
 	for written := 0; written < size; written += len(chunk) {
 		_, err := plain.Write(chunk)

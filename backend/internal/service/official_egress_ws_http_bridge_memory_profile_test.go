@@ -57,7 +57,6 @@ func TestOfficialEgressWSHTTPBridgeMemoryProfile(t *testing.T) {
 		warm := officialEgressWSHTTPBridgePayload(t, buildOfficialEgressMemoryProfileBody(t, 128<<10))
 		_, err := service.proxyOpenAIWSHTTPBridgeTurn(t.Context(), newOfficialOpenAIHTTPTestContext(warm, "/v1/responses"), account, "oauth-token", warm, len(warm), "gpt-5.6-luna", "", "", "", "", 1, func([]byte) error { return nil })
 		require.NoError(t, err)
-		warm = nil
 		upstream.mu.Lock()
 		upstream.businessRequests, upstream.wireBytes, upstream.encodings, upstream.contentLengths = 0, 0, nil, nil
 		upstream.mu.Unlock()

@@ -85,7 +85,11 @@ func TestRequestBodySpoolPreservesReplayAndGuardWithoutMaterializing(t *testing.
 				t.Error(err)
 				return
 			}
-			defer reader.Close()
+			defer func() {
+				if closeErr := reader.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			}()
 			hash := sha256.New()
 			n, err := io.CopyBuffer(hash, reader, make([]byte, 7919))
 			if err != nil || n != int64(len(want)) || !bytes.Equal(hash.Sum(nil), wantHash[:]) {
@@ -164,7 +168,11 @@ func TestRequestBodySpoolCancellationClosesWriterAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	cancel()
 	awaitRequestBodySpoolClosed(t, body.state.spooled.resource)
 	if _, err := request.GetBody(); !errors.Is(err, context.Canceled) {
@@ -345,7 +353,11 @@ func TestRequestBodySpoolExecuteReturnKeepsAsyncUploadReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := result.HTTPResponse()
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	if body.state.spooled.resource.closed.Load() {
 		t.Fatal("Execute 返回响应后提前关闭了仍可能上传的正文")
 	}

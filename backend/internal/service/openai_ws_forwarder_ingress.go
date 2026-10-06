@@ -1045,8 +1045,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			// 轮次已结束，仅重放历史、Grok 种子和上下文工具状态继续持有正文。
 			currentBridgePayload = openAIWSClientPayload{}
-			bridgePayloadRaw = nil
-			currentInputItems, failoverCurrentItems = nil, nil
 			turnReplayState, turnAccountFailoverState = openAIWSReplayInputState{}, openAIWSReplayInputState{}
 			result = nil
 			retained := openAIWSRetainedReplayPayloads([][]byte{grokCacheSeedPayload}, bridgeReplayState, bridgeAccountFailoverState)
@@ -2568,10 +2566,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 
 		// 先把仍需用于续链的源数组交给快照，再清除只属于已完成轮次的引用。
-		currentPayload, currentOriginalPayload, outboundPayload = nil, nil, nil
+		currentPayload = nil
 		frameBody.clear()
-		currentInputItems = nil
-		nextReplayState = openAIWSReplayInputState{}
 		result = nil
 		retained := openAIWSRetainedReplayPayloads([][]byte{lastTurnPayload}, lastTurnReplayState)
 		if lastTurnStrictState != nil {

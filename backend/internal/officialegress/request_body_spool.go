@@ -188,7 +188,7 @@ func (c *requestBodySpoolContent) copyBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	result := make([]byte, c.length)
 	if _, err := io.ReadFull(reader, result); err != nil {
 		return nil, err

@@ -108,7 +108,7 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 						errs <- err
 						return
 					}
-					defer conn.CloseNow()
+					defer func() { _ = conn.CloseNow() }()
 					conn.SetReadLimit(64 << 20)
 					lastWeight := int64(0)
 					memory := NewOpenAIWSRequestMemory(64<<20, 25<<20, 6.11, func(weight int64) bool {
@@ -165,7 +165,7 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 				client, _, err := coderws.Dial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 				require.NoError(t, err)
 				clients[slot] = client
-				defer client.CloseNow()
+				defer func() { _ = client.CloseNow() }()
 			}
 
 			runtime.GC()
@@ -435,7 +435,7 @@ func newOfficialEgressWSDiscardProfileServer() *officialEgressWSDiscardProfileSe
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(128 << 20)
 		for {
 			_, reader, err := conn.Reader(r.Context())

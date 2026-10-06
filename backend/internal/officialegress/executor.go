@@ -883,7 +883,8 @@ func (i *ExecutorInvocation) executeTypedAttempt(
 	if prepared.bodyStorage != nil && prepared.request.Body != nil {
 		// TakeHTTPRequest 已为实际 HTTP 上传创建独立 reader。模板只用于复制请求，
 		// 本次 Execute 退出后撤销它的租约，不能让模板阻止最后上传读者同步关闭文件。
-		defer prepared.request.Body.Close()
+		templateBody := prepared.request.Body
+		defer func() { _ = templateBody.Close() }()
 	}
 	entry, err := i.executor.registry.resolve(prepared.transport)
 	if err != nil {

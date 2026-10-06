@@ -115,7 +115,7 @@ func TestReadOpenAIWSClientMessageStorageFailureCloses1013(t *testing.T) {
 			result <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(4 << 20)
 		memory := NewOpenAIWSRequestMemory(4<<20, 8, 2, func(weight int64) bool { used.Store(weight); return true })
 		ctx := WithOpenAIWSRequestMemory(req.Context(), memory)
@@ -127,7 +127,7 @@ func TestReadOpenAIWSClientMessageStorageFailureCloses1013(t *testing.T) {
 	defer cancel()
 	client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	// 服务器可在上传尚未完成时拒绝；Write 与 Read 都可能先收到相同关闭帧。
 	writeErr := client.Write(ctx, coderws.MessageText, make([]byte, 2<<20))
 	_, _, readErr := client.Read(ctx)

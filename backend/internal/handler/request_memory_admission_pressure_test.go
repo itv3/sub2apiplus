@@ -70,7 +70,11 @@ func TestResponsesRequestMemoryAdmission18MiBConcurrentCancellation(t *testing.T
 						}
 						defer release()
 						body, owner, err := readOwnedAdmittedResponsesJSONRequestBody(c.Request, cfg, nil)
-						defer owner.Close()
+						defer func() {
+							if closeErr := owner.Close(); closeErr != nil {
+								t.Error(closeErr)
+							}
+						}()
 						if err == nil && (int64(len(body)) != bodyBytes || !json.Valid(body)) {
 							err = fmt.Errorf("正文长度或 JSON 校验失败：收到 %d 字节", len(body))
 						}

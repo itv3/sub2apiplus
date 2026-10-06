@@ -160,7 +160,7 @@ func TestOpenAIWSDeferredIngressMatchesLegacyWire(t *testing.T) {
 						serverErrors <- acceptErr
 						return
 					}
-					defer conn.CloseNow()
+					defer func() { _ = conn.CloseNow() }()
 					conn.SetReadLimit(1 << 20)
 					_, frame, readErr := conn.Read(r.Context())
 					if readErr != nil {
@@ -204,7 +204,7 @@ func TestOpenAIWSDeferredIngressMatchesLegacyWire(t *testing.T) {
 				defer cancel()
 				client, _, dialErr := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 				require.NoError(t, dialErr)
-				defer client.CloseNow()
+				defer func() { _ = client.CloseNow() }()
 				for _, frame := range [][]byte{first, second} {
 					require.NoError(t, client.Write(ctx, coderws.MessageText, frame))
 					for {

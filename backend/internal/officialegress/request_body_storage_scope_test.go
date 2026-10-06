@@ -24,7 +24,11 @@ func TestRequestBodyStorageScopeReleasesUnusedAttemptsAndKeepsActiveUpload(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	if _, err := reader.Read(make([]byte, 37)); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +45,11 @@ func TestRequestBodyStorageScopeReleasesUnusedAttemptsAndKeepsActiveUpload(t *te
 	if err != nil {
 		t.Fatalf("早响应后的活动上传无法新增 GetBody 读者：%v", err)
 	}
-	defer lateReader.Close()
+	defer func() {
+		if closeErr := lateReader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	// 初始 Body 尚未读取，同样属于有效租约，不能只保护已经读过前缀的 reader。
 	assertReaderBytes(t, firstRequest.Body, want)
 	assertReaderBytes(t, reader, want[37:])
@@ -69,7 +77,11 @@ func TestRequestBodyStorageScopeKeepsEOFReaderUntilClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	if _, err := io.Copy(io.Discard, reader); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +102,11 @@ func TestRequestBodyStorageScopeCancellationClosesActiveReadersImmediately(t *te
 	defer release()
 	body := newRequestBodySpoolTestBody(t, ctx, bytes.Repeat([]byte("c"), requestBodySpoolThreshold+1))
 	request := newSegmentedTestRequest(t, body)
-	defer request.Body.Close()
+	defer func() {
+		if closeErr := request.Body.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	cancel()
 	release()
 	if !body.state.spooled.resource.closed.Load() {

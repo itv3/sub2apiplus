@@ -52,7 +52,8 @@ func (b *officialWSFrameBody) decode(source []byte) (map[string]any, *officialJS
 	if b != nil {
 		b.index = index
 	}
-	payload := index.decodeValueSharingBody(index.root).(map[string]any)
+	// 根节点已经验证为对象，解码器在此分支只会返回 map。
+	payload, _ := index.decodeValueSharingBody(index.root).(map[string]any)
 	return payload, index, nil
 }
 

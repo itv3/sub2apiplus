@@ -293,7 +293,6 @@ func Relay(
 		})
 	}
 	clientToUpstreamFrames.Add(1)
-	firstClientMessage = nil
 	markActivity()
 
 	exitCh := make(chan relayExitSignal, 3)

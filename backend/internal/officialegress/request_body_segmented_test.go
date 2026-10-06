@@ -89,7 +89,11 @@ func TestSegmentedBodyReaderShortReadsAndClose(t *testing.T) {
 	if n, err := reader.Read(make([]byte, 1)); n != 0 || err != io.EOF {
 		t.Fatalf("正文结束未返回 EOF：n=%d err=%v", n, err)
 	}
-	if reader.(*segmentedBodyReader).segments != nil {
+	segmented, ok := reader.(*segmentedBodyReader)
+	if !ok {
+		t.Fatalf("重放 reader 类型错误：%T", reader)
+	}
+	if segmented.segments != nil {
 		t.Fatal("读取完毕后仍保留块引用")
 	}
 	if err := reader.Close(); err != nil {
@@ -105,7 +109,11 @@ func TestSegmentedBodyReaderShortReadsAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = partial.Close()
-	if partial.(*segmentedBodyReader).segments != nil {
+	partialSegmented, ok := partial.(*segmentedBodyReader)
+	if !ok {
+		t.Fatalf("部分读取 reader 类型错误：%T", partial)
+	}
+	if partialSegmented.segments != nil {
 		t.Fatal("提前关闭后仍保留块引用")
 	}
 }

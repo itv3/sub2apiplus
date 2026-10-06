@@ -31,7 +31,7 @@ func TestOpenAIBorrowedIngressCompatibilityOutlivesOwner(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(raw))
 			owner, err := pkghttputil.ReadOwnedAdmittedLenientJSONRequestBodyWithReservation(request, int64(len(raw)), nil)
 			require.NoError(t, err)
-			defer owner.Close()
+			defer func() { require.NoError(t, owner.Close()) }()
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			c.Request.Header.Set("User-Agent", "curl/8.0")
@@ -53,7 +53,11 @@ func TestOpenAIBorrowedIngressCompatibilityOutlivesOwner(t *testing.T) {
 			require.NotNil(t, upstream.request.GetBody)
 			replay, err := upstream.request.GetBody()
 			require.NoError(t, err)
-			defer replay.Close()
+			defer func() {
+				if closeErr := replay.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			}()
 			digest := sha256.New()
 			_, err = io.Copy(digest, replay)
 			require.NoError(t, err)

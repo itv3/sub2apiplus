@@ -16,7 +16,7 @@ func TestRequestBodyMemoryBufferBoundariesAndReleaseFailure(t *testing.T) {
 		t.Skip("本平台不支持匿名正文映射")
 	}
 	require.NoError(t, err)
-	defer buffer.Close()
+	defer func() { require.NoError(t, buffer.Close()) }()
 	want := []byte("边界正文")
 	offset := int64(ownedRequestBodyMapThreshold - len(want))
 	n, err := buffer.WriteAt(append(bytes.Clone(want), 'x'), offset)

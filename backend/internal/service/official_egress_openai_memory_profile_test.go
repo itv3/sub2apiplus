@@ -539,9 +539,10 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 						}
 						c.Request.Body = file
 						c.Request.ContentLength = wireLengths[index]
-						if ingressEncoding == "chunked" {
+						switch ingressEncoding {
+						case "chunked":
 							c.Request.ContentLength = -1
-						} else if ingressEncoding == "zstd" {
+						case "zstd":
 							c.Request.Header.Set("Content-Encoding", "zstd")
 						}
 						readLimit := bodyLengths[index]

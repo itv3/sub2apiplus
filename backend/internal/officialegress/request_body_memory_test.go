@@ -53,7 +53,11 @@ func TestRequestBodyMemoryReplayLeasesAndAccounting(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			defer reader.Close()
+			defer func() {
+				if closeErr := reader.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			}()
 			hash := sha256.New()
 			_, err = io.CopyBuffer(hash, reader, make([]byte, 7919))
 			if err != nil || !bytes.Equal(hash.Sum(nil), digest[:]) {
@@ -154,7 +158,11 @@ func TestRequestBodyMemoryCancelAndCloseDuringConcurrentReads(t *testing.T) {
 		reader, _, err := body.openReplayable()
 		require.NoError(t, err)
 		group.Go(func() {
-			defer reader.Close()
+			defer func() {
+				if closeErr := reader.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			}()
 			_, err := io.Copy(io.Discard, reader)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
@@ -189,7 +197,11 @@ func TestRequestBodyMemoryGuardReadsActualBytesDespiteCachedCompilerDigest(t *te
 	want := bytes.Repeat([]byte("g"), requestBodyMemoryBlockSize+1)
 	body := newRequestBodySpoolTestBody(t, ctx, want)
 	request := newSegmentedTestRequest(t, body)
-	defer request.Body.Close()
+	defer func() {
+		if closeErr := request.Body.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	normalization := WireNormalizationPlan{HeaderMode: HeaderNormalizationPreserve}
 	digest, err := requestDigest(request, normalization, WireProtocolHTTP)
 	require.NoError(t, err)

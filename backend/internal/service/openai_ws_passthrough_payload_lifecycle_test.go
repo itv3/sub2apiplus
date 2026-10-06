@@ -50,7 +50,7 @@ func TestPassthroughPayloadLifecycleReleasesFirstFrameAndKeepsRawFollowup(t *tes
 			serverErr <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(1 << 20)
 		_, firstFrame, err := ReadOpenAIWSClientMessage(controlCtx, conn, 3*time.Second, coderws.StatusPolicyViolation, "missing first frame")
 		if err != nil {
@@ -90,7 +90,7 @@ func TestPassthroughPayloadLifecycleReleasesFirstFrameAndKeepsRawFollowup(t *tes
 	}))
 	defer server.Close()
 	client := dialPassthroughLifecycleClientWithPayload(t, server, first)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 
 	for turn, source := range []string{first, second} {
 		if turn == 1 {

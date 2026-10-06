@@ -222,17 +222,8 @@ func decodeOfficialOpenAIWSTurnMetadataFieldsWithIndex(body []byte, index *offic
 	return payload, nil
 }
 
-func resolveOfficialOpenAIWSIdentity(
-	c *gin.Context,
-	account *Account,
-	firstPayload []byte,
-	profileMode string,
-) (officialOpenAIWSIdentity, error) {
-	return deriveOfficialOpenAIWSIdentity(c, account, firstPayload, profileMode)
-}
-
 // resolveExplicitOfficialOpenAIWSIdentity 只用于离线 fixture 与诊断，验证某份
-// 握手/首帧样本内部是否自洽。生产出站统一调用 resolveOfficialOpenAIWSIdentity
+// 握手/首帧样本内部是否自洽。生产出站统一调用 deriveOfficialOpenAIWSIdentityWithIndex
 // 派生 active 画像身份，绝不让入站客户端类型取得 wire 身份所有权。
 func resolveExplicitOfficialOpenAIWSIdentity(
 	c *gin.Context,
@@ -366,18 +357,9 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 	return identity, nil
 }
 
-// deriveOfficialOpenAIWSIdentity 为所有客户端统一派生连接级身份。
+// deriveOfficialOpenAIWSIdentityWithIndex 为所有客户端统一派生连接级身份。
 // 握手使用官方 prewarm metadata；真正的 turn metadata 在每个
 // response.create 出站前重新生成。
-func deriveOfficialOpenAIWSIdentity(
-	c *gin.Context,
-	account *Account,
-	firstPayload []byte,
-	profileMode string,
-) (officialOpenAIWSIdentity, error) {
-	return deriveOfficialOpenAIWSIdentityWithIndex(c, account, firstPayload, profileMode, nil)
-}
-
 func deriveOfficialOpenAIWSIdentityWithIndex(
 	c *gin.Context,
 	account *Account,

@@ -64,7 +64,7 @@ func TestOpenAIWSPreparedJSONWireParity(t *testing.T) {
 					serverErrors <- err
 					return
 				}
-				defer conn.CloseNow()
+				defer func() { _ = conn.CloseNow() }()
 				conn.SetReadLimit(8 << 20)
 				for range 2 {
 					kind, payload, readErr := conn.Read(ctx)
@@ -82,7 +82,7 @@ func TestOpenAIWSPreparedJSONWireParity(t *testing.T) {
 			defer server.Close()
 			conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{CompressionMode: compression})
 			require.NoError(t, err)
-			defer conn.CloseNow()
+			defer func() { _ = conn.CloseNow() }()
 			conn.SetReadLimit(8 << 20)
 			raw := []byte(` {"input":"` + strings.Repeat("abcdef", 64<<10) + `<>&","extra": {"b":2,"a":1}} `)
 			original := bytes.Clone(raw)

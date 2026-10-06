@@ -489,15 +489,6 @@ func alignStoreDisabledPreviousResponseID(
 	return updated, true, nil
 }
 
-// cloneOpenAIWSPayloadBytes 复制 WebSocket 正文，避免后续规范化或策略过滤
-// 改写底层字节时影响审计、计费和重试所需的原始请求。
-func cloneOpenAIWSPayloadBytes(payload []byte) []byte {
-	if len(payload) == 0 {
-		return nil
-	}
-	return append([]byte(nil), payload...)
-}
-
 // Replay 状态所有权不变式：replay 序列中的 json.RawMessage 正文一经放入即视为
 // 不可变，所有持有者共享同一份字节，任何修改都必须整体替换元素或重建 payload。
 // 序列头数组在跨持有者保存时必须新建（combineOpenAIWSReplayItems），禁止通过

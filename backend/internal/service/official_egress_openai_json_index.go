@@ -812,18 +812,6 @@ func (index *officialJSONRawIndex) hashArrayItems(items []int32) uint64 {
 	return h.Sum64()
 }
 
-func (index *officialJSONRawIndex) hashUint64s(tag byte, values []uint64) uint64 {
-	var h maphash.Hash
-	h.SetSeed(index.seed)
-	_ = h.WriteByte(tag)
-	var buf [8]byte
-	for _, value := range values {
-		binary.LittleEndian.PutUint64(buf[:], value)
-		_, _ = h.Write(buf[:])
-	}
-	return h.Sum64()
-}
-
 // hashValue 对 Go 值计算与原始正文同一方案的结构摘要。不可规范化编码的类型返回 false，
 // 调用方随即退回旧实现的解码比对路径。
 func (index *officialJSONRawIndex) hashValue(value any) (uint64, bool) {

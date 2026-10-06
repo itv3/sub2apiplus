@@ -249,13 +249,13 @@ func TestOpenAIWSHTTPBridgeCanonicalSegmentsBoundSmallFragmentMemory(t *testing.
 	// 仍足以拦截旧实现每个 token 额外分配 4KiB 的回归。
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(512<<10))
 	var expected bytes.Buffer
-	expected.WriteByte('[')
+	_ = expected.WriteByte('[')
 	for i := range count {
 		if i > 0 {
-			expected.WriteByte(',')
+			_ = expected.WriteByte(',')
 		}
-		expected.Write(long)
+		_, _ = expected.Write(long)
 	}
-	expected.WriteByte(']')
+	_ = expected.WriteByte(']')
 	require.Equal(t, expected.Bytes(), bytes.Join(writer.segments, nil))
 }

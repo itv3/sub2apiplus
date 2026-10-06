@@ -25,8 +25,12 @@ func TestOfficialForwardHTTPBodyDefersValidatedSmallFields(t *testing.T) {
 	view := newOpenAIRequestView(body)
 	payload, err := workspace.decodeRequestView(nil, view)
 	require.NoError(t, err)
-	payload["include"] = append(payload["include"].([]any), "额外字段")
-	payload["client_metadata"].(map[string]any)["session_id"] = "new-session"
+	include, ok := payload["include"].([]any)
+	require.True(t, ok)
+	payload["include"] = append(include, "额外字段")
+	metadata, ok := payload["client_metadata"].(map[string]any)
+	require.True(t, ok)
+	metadata["session_id"] = "new-session"
 	want, err := marshalOfficialJSONObjectPreservingOrderAndRaw(payload, body)
 	require.NoError(t, err)
 	got := body
@@ -43,10 +47,14 @@ func TestOfficialForwardHTTPBodyDefersValidatedSmallFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, encoded, "后续对象树读取必须还原旧重编码路径的全部修改")
 	// 覆盖层里的小值需要保持不可变；一次读取后的 map 修改不能污染重试得到的下一棵树。
-	restored["client_metadata"].(map[string]any)["session_id"] = "temporary"
+	restoredMetadata, ok := restored["client_metadata"].(map[string]any)
+	require.True(t, ok)
+	restoredMetadata["session_id"] = "temporary"
 	again, err := workspace.decodeRequestView(nil, newOpenAIRequestView(got))
 	require.NoError(t, err)
-	require.Equal(t, "new-session", again["client_metadata"].(map[string]any)["session_id"])
+	againMetadata, ok := again["client_metadata"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "new-session", againMetadata["session_id"])
 }
 
 func TestOfficialForwardHTTPBodyMaterializesChangedBusinessField(t *testing.T) {
@@ -57,7 +65,11 @@ func TestOfficialForwardHTTPBodyMaterializesChangedBusinessField(t *testing.T) {
 	view := newOpenAIRequestView(body)
 	payload, err := workspace.decodeRequestView(nil, view)
 	require.NoError(t, err)
-	payload["input"].([]any)[0].(map[string]any)["content"] = "新文本"
+	input, ok := payload["input"].([]any)
+	require.True(t, ok)
+	item, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	item["content"] = "新文本"
 	want, err := marshalOfficialJSONObjectPreservingOrderAndRaw(payload, body)
 	require.NoError(t, err)
 	requestBody := payload
@@ -157,16 +169,32 @@ func TestOfficialForwardHTTPBodyFinalizerHandoffDoesNotLeakIntoRetry(t *testing.
 	require.NoError(t, err)
 	require.Nil(t, workspace.finalizerPayload, "对象树只允许移交一次")
 	require.Nil(t, workspace.finalizerBody)
-	finalized["input"].([]any)[0].(map[string]any)["content"] = "定型期间改写"
-	require.Equal(t, "定型期间改写", payload["input"].([]any)[0].(map[string]any)["content"], "第一次应直接接收已有对象树")
-	finalized["reasoning"].(map[string]any)["context"] = "current_turn"
+	finalizedInput, ok := finalized["input"].([]any)
+	require.True(t, ok)
+	finalizedItem, ok := finalizedInput[0].(map[string]any)
+	require.True(t, ok)
+	finalizedItem["content"] = "定型期间改写"
+	payloadInput, ok := payload["input"].([]any)
+	require.True(t, ok)
+	payloadItem, ok := payloadInput[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "定型期间改写", payloadItem["content"], "第一次应直接接收已有对象树")
+	finalizedReasoning, ok := finalized["reasoning"].(map[string]any)
+	require.True(t, ok)
+	finalizedReasoning["context"] = "current_turn"
 	delete(finalized, "include")
 
 	retry, _, err := workspace.decodeFinalizerPayload(body)
 	require.NoError(t, err)
 	require.True(t, workspace.applyDeferredFields(retry, body))
-	require.Equal(t, "原始文本", retry["input"].([]any)[0].(map[string]any)["content"])
-	require.Equal(t, "all_turns", retry["reasoning"].(map[string]any)["context"])
+	retryInput, ok := retry["input"].([]any)
+	require.True(t, ok)
+	retryItem, ok := retryInput[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "原始文本", retryItem["content"])
+	retryReasoning, ok := retry["reasoning"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "all_turns", retryReasoning["context"])
 	require.Equal(t, []any{"reasoning.encrypted_content"}, retry["include"])
 }
 
@@ -232,7 +260,9 @@ func TestOfficialForwardHTTPBodyWritesLiteDefaultsWhenFinalizerOtherwiseUnchange
 	changed, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, officialOpenAIReasoningDefaults{}, options)
 	require.NoError(t, err)
 	require.False(t, changed, "夹具除缺少 Lite 默认值之外已经满足最终定型")
-	delete(payload["reasoning"].(map[string]any), "context")
+	reasoning, ok := payload["reasoning"].(map[string]any)
+	require.True(t, ok)
+	delete(reasoning, "context")
 	body, err := marshalOpenAIUpstreamJSON(payload)
 	require.NoError(t, err)
 	account := newOfficialOpenAIHTTPTestAccount(94)
