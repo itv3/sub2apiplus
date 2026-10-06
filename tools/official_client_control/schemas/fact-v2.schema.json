@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2api.local/schemas/official-client-control-fact-v2.json",
   "title": "FW-D 正交追加事实 v2",
-  "description": "Campaign v2 的事实：v1 的 8 键加形成期坐标 formed_under、幂等键 idempotency_key 与产出 run producer_run。formed_under 由 Store 在写入时按当前有效工具身份、当前候选 revision、当前评估基线填写，重放按它重跑门禁；idempotency_key = sha256(canonical({logical_action, input_identity_sha256, fact_kind}))，同一 Campaign 内唯一：同键同内容的重试返回原事实、同键异内容拒绝；producer_run 记录写下事实的监督器 run 与动作，对账器按幂等键 fact-lookup 补账时据此认出原 run。",
+  "description": "Campaign v2 的事实：v1 的 8 键加形成期坐标 formed_under、幂等键 idempotency_key 与产出 run producer_run。formed_under 由 Store 在写入时按当前有效工具身份、当前候选 revision、当前评估基线填写，重放按它重跑门禁；idempotency_key = sha256(canonical({logical_action, input_identity_sha256, fact_kind}))，同一 Campaign 内唯一：同键同内容的重试返回原事实、同键异内容拒绝；producer_run 记录写下事实的监督器 run 与动作，对账器按幂等键 fact-lookup 补账时据此认出原 run。只属于 fact v2 的事实种类：candidate_revision_recorded（B3-05 补全作废门禁）与 evaluation_baseline_recorded（B4-04，payload 见 validation-workflow.schema.json#/$defs/evaluationBaseline）；只属于 fact v2 的 payload 合同：PAIR／Acceptance v3 与候选交付事实 v2。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -48,7 +48,8 @@
         "restored_active",
         "inventory_current_appended",
         "candidate_delivery_recorded",
-        "candidate_revision_recorded"
+        "candidate_revision_recorded",
+        "evaluation_baseline_recorded"
       ]
     },
     "sequence": {"type": "integer", "minimum": 1},

@@ -3,6 +3,10 @@
 B1-14 在文件末尾加入前序证据导入：登记（复制对象闭包）、导入收据 finalizer、只读复核与消费端授权
 （``authorize_cross_campaign_reference``），说明见该节开头。
 
+B3-05／B4-04／B4-07（只属于 Campaign v2）在这里补三组共用判定：候选作废对象的查询与「作废后不得写入」
+（``require_revision_not_invalidated``）；评估基线事实决定的当前基线与形成期基线可达性（``FormedContext``）；
+交付恢复段的唯一有效链（``analyze_delivery_chain``）与候选交付收据 v3、finalize 终态幂等。
+
 Claude 升级控制面 B1-12 在这里集中实现 Campaign v2 的三件事，供 store、gates、cli 共用：
 
 * **Store 全包摘要与受管清单**：``control_tool_bundle_sha256()`` 的口径不变；Campaign v2 建立时用 Claude
@@ -33,6 +37,9 @@ from .canonical import (
     sha256_file,
 )
 from .contracts import (
+    CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA,
+    CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA,
+    CANDIDATE_DELIVERY_STAGES,
     DEPLOYMENT_STAGES,
     IDENTITY_CONDITION_ITEMS,
     IDENTITY_CONDITION_SOURCE_FIELDS,
@@ -46,6 +53,7 @@ from .contracts import (
     campaign_identity_document,
     campaign_identity_sha256,
     campaign_is_v2,
+    delivery_recovery_number,
     derive_identity_conditions,
     identity_differences,
     iter_fact_refs,
@@ -397,7 +405,7 @@ def candidate_revision_facts(store: Any, campaign: dict[str, Any]) -> list[dict[
 def current_candidate_revision(store: Any, campaign: dict[str, Any]) -> tuple[int, str | None]:
     """当前候选 revision 与当前有效候选：最后一条 revision 事实决定；没有时隐含 r1、不限定候选。
 
-    B1-12 的最小形态；B3-05 在此基础上加作废对象门禁与 ``revision-open``／``invalidate-candidate`` 入口。
+    当前 revision 是否已被作废（revision_required）另由 ``revision_invalidation`` 判定（B3-05）。
     """
 
     revisions = candidate_revision_facts(store, campaign)
@@ -405,6 +413,95 @@ def current_candidate_revision(store: Any, campaign: dict[str, Any]) -> tuple[in
         return 1, None
     last = revisions[-1]["payload"]
     return int(last["revision"]), str(last["candidate_id"])
+
+
+def candidate_invalidations(
+    store: Any, campaign: dict[str, Any]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Campaign 的候选作废对象 ``[(引用, payload)]``（B3-05，按引用摘要排序）；v1 恒为空。"""
+
+    if not campaign_is_v2(campaign):
+        return []
+    entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_object_refs("candidate_invalidation"):
+        payload = store.load_object(reference)["payload"]
+        if payload["campaign_id"] == campaign["campaign_id"]:
+            entries.append((reference, payload))
+    return entries
+
+
+def revision_invalidation(
+    store: Any, campaign: dict[str, Any], revision: int
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """候选 revision r 的作废对象；没有返回 None。同一 revision 只能作废一次，多份即 Store 已不一致。"""
+
+    matches = [
+        entry for entry in candidate_invalidations(store, campaign) if entry[1]["revision"] == revision
+    ]
+    if len(matches) > 1:
+        raise ControlError(f"候选 revision r{revision} 存在多份作废对象，Store 已不一致")
+    return matches[0] if matches else None
+
+
+def require_revision_not_invalidated(
+    store: Any, campaign: dict[str, Any], revision: int, label: str
+) -> None:
+    """写入时有效性（B3-05）：形成期（即当前）候选 revision 已作废时，候选级事实与收据一律拒绝。
+
+    作废对象封存后当前 revision 进入 revision_required，直到新 revision 事实以 ``invalidation_ref`` 引用它；只在写入
+    路径调用——重放按事实自身形成期验证，作废之前形成的事实照常通过。
+    """
+
+    found = revision_invalidation(store, campaign, revision)
+    if found is not None:
+        reference, payload = found
+        raise ControlError(
+            f"{label}：候选 revision r{revision} 已作废（候选 {payload['candidate_id']}，作废对象 "
+            f"{reference['sha256']}），处于 revision_required：先以新候选登记 r{revision + 1}（revision-open），"
+            "作废候选不得继续写入"
+        )
+
+
+def evaluation_baseline_facts(store: Any, campaign: dict[str, Any]) -> list[dict[str, Any]]:
+    """Campaign 的 ``evaluation_baseline_recorded`` 事实（B4-04，按写入顺序）；v1 恒为空。"""
+
+    if not campaign_is_v2(campaign):
+        return []
+    return [
+        fact
+        for fact in store.list_facts(campaign["campaign_id"], "validation")
+        if fact["fact_kind"] == "evaluation_baseline_recorded"
+    ]
+
+
+def baseline_in_revision(
+    baseline_facts: list[dict[str, Any]], revision: int
+) -> dict[str, Any] | None:
+    """候选 revision r 内最后一条评估基线事实给出的 ``{baseline, baseline_commit_sha256}``；没有时为 None（b0）。"""
+
+    current: dict[str, Any] | None = None
+    for fact in baseline_facts:
+        if fact["formed_under"]["candidate_revision"] == revision:
+            current = fact
+    if current is None:
+        return None
+    return {
+        "baseline": current["payload"]["baseline"],
+        "baseline_commit_sha256": current["payload"]["baseline_commit_sha256"],
+    }
+
+
+def baseline_number(baseline: dict[str, Any] | None) -> int:
+    """形成期评估基线的编号：null（b0）为 0，否则为 K。"""
+
+    return 0 if baseline is None else int(baseline["baseline"])
+
+
+def fact_baseline_number(fact: dict[str, Any]) -> int:
+    """事实形成期评估基线的编号；v1 事实没有形成期坐标，一律为 0（b0）。"""
+
+    formed = fact.get("formed_under")
+    return 0 if formed is None else baseline_number(formed["evaluation_baseline"])
 
 
 def revision_candidate(revision_facts: list[dict[str, Any]], revision: int) -> str | None:
@@ -419,13 +516,19 @@ def revision_candidate(revision_facts: list[dict[str, Any]], revision: int) -> s
 
 
 def current_evaluation_baseline(store: Any, campaign: dict[str, Any]) -> dict[str, Any] | None:
-    """当前评估基线：B1-12 阶段没有基线事实，恒为 None（b0）。B4-04 加入基线事实后改由最后一条基线事实决定。"""
+    """当前评估基线（B4-04）：当前候选 revision 内最后一条评估基线事实的 ``{baseline, baseline_commit_sha256}``。
 
-    return None
+    当前 revision 内没有评估基线事实时为 None（b0）；换候选 revision 即回到 b0（评估基线按候选重新计数）。v1 恒为 None。
+    """
+
+    if not campaign_is_v2(campaign):
+        return None
+    revision, _candidate = current_candidate_revision(store, campaign)
+    return baseline_in_revision(evaluation_baseline_facts(store, campaign), revision)
 
 
 class FormedContext:
-    """一次读入 Campaign 的工具演进登记链与候选 revision 事实，批量解释形成期坐标。
+    """一次读入 Campaign 的工具演进登记链、候选 revision 事实与评估基线事实，批量解释形成期坐标。
 
     重放一个 Campaign 时逐条事实解释坐标，共用一个上下文避免重复扫描登记目录与 validation 链。
     """
@@ -434,7 +537,15 @@ class FormedContext:
         self.campaign = campaign
         self.v2 = campaign_is_v2(campaign)
         self.chain = tool_evolutions(store, campaign)
-        self.revision_facts = candidate_revision_facts(store, campaign)
+        validation = (
+            store.list_facts(campaign["campaign_id"], "validation") if self.v2 else []
+        )
+        self.revision_facts = [
+            fact for fact in validation if fact["fact_kind"] == "candidate_revision_recorded"
+        ]
+        self.baseline_facts = [
+            fact for fact in validation if fact["fact_kind"] == "evaluation_baseline_recorded"
+        ]
 
     def resolve(self, tool_identity_ref: dict[str, Any] | None) -> tuple[dict[str, Any], int]:
         if tool_identity_ref is None:
@@ -454,20 +565,39 @@ class FormedContext:
                 "tool_index": 0,
                 "candidate_revision": 1,
                 "evaluation_baseline": None,
+                "baseline_number": 0,
             }
         formed = document["formed_under"]
         identity, index = self.resolve(formed["tool_identity_ref"])
         revision = formed["candidate_revision"]
         revision_candidate(self.revision_facts, revision)
-        if formed["evaluation_baseline"] is not None:
-            raise ControlError("形成期评估基线无法核验：评估基线事实由 B4-04 定义，当前只接受 null")
+        baseline = formed["evaluation_baseline"]
+        if baseline is not None:
+            self.baseline_fact(revision, baseline)
         return {
             "tool_sha256": identity["tool_files_sha256"],
             "tool_identity": identity,
             "tool_index": index,
             "candidate_revision": revision,
-            "evaluation_baseline": None,
+            "evaluation_baseline": baseline,
+            "baseline_number": baseline_number(baseline),
         }
+
+    def baseline_fact(self, revision: int, baseline: dict[str, Any]) -> dict[str, Any]:
+        """形成期评估基线的可达性（B4-04）：必须是候选 revision r 内一条评估基线事实给出的同一对编号与 COMMIT 摘要。"""
+
+        for fact in self.baseline_facts:
+            payload = fact["payload"]
+            if (
+                fact["formed_under"]["candidate_revision"] == revision
+                and payload["baseline"] == baseline["baseline"]
+                and payload["baseline_commit_sha256"] == baseline["baseline_commit_sha256"]
+            ):
+                return fact
+        raise ControlError(
+            f"形成期评估基线 b{baseline['baseline']}（r{revision}）不可达：本 Campaign 没有对应的评估基线事实"
+            "（评估基线事实由 B4-04 定义的 evaluation_baseline_recorded 登记）"
+        )
 
     def require_causality(
         self,
@@ -479,7 +609,8 @@ class FormedContext:
         """形成期因果序：引用的本 Campaign 事实不得晚于引用者自身的坐标。
 
         工具演进序号与候选 revision 都只增不减，被引用的事实先于引用者形成，所以两项都不得更大。评估基线按
-        候选重新计数（新 revision 回到 b0），不参与比较；同一 revision 内的基线顺序由 B4-04 定义。
+        候选重新计数（新 revision 回到 b0），只在同一 revision 内比较：同一 revision 内基线编号只增不减（B4-04），
+        被引用事实的基线编号也不得更大——旧基线的结果可以被新基线引用，反之不行。
 
         其他 Campaign 的事实没有本 Campaign 的形成期坐标可比：先过消费端核验（B1-14，未经授权即拒绝），
         获授权才跳过比较。
@@ -501,6 +632,10 @@ class FormedContext:
             if (
                 theirs["tool_index"] > own["tool_index"]
                 or theirs["candidate_revision"] > own["candidate_revision"]
+                or (
+                    theirs["candidate_revision"] == own["candidate_revision"]
+                    and theirs["baseline_number"] > own["baseline_number"]
+                )
             ):
                 raise ControlError(
                     f"{label} 的形成期坐标早于其引用的事实"
@@ -514,9 +649,10 @@ def formed_coordinates(
     """事实或收据的形成期坐标，并核对坐标在本 Campaign 内可达。
 
     v2 读文档自身的 ``formed_under``：工具身份引用必须在登记链上，候选 revision 必须是 r1 或某条 revision 事实的
-    revision，评估基线在 B4-04 之前只接受 null。v1 文档没有该字段，按 Campaign ``tool_bundle_sha256`` 解释（隐含
-    r1、无基线）。返回 ``{tool_sha256, tool_identity, tool_index, candidate_revision, evaluation_baseline}``，其中
-    ``tool_sha256`` 是该坐标下工具摘要字段应取的值（v1 为 Store 摘要，v2 为有效身份的 ``tool_files_sha256``）。
+    revision，非空评估基线必须是该 revision 内某条评估基线事实给出的值（B4-04）。v1 文档没有该字段，按 Campaign
+    ``tool_bundle_sha256`` 解释（隐含 r1、无基线）。返回 ``{tool_sha256, tool_identity, tool_index,
+    candidate_revision, evaluation_baseline, baseline_number}``，其中 ``tool_sha256`` 是该坐标下工具摘要字段应取的
+    值（v1 为 Store 摘要，v2 为有效身份的 ``tool_files_sha256``），``baseline_number`` 是基线编号（b0 为 0）。
     """
 
     return FormedContext(store, campaign).coordinates(document)
@@ -642,7 +778,8 @@ def require_receipt_current(store: Any, receipt: dict[str, Any]) -> None:
     """收据写入时有效性：合同版本与 Campaign 一致；v2 收据的坐标与工具摘要必须是当前值。
 
     finalizer 产出的收据天然满足；把旧收据（旧工具身份、旧 revision 或旧基线下形成的）原样或改字段后写入，
-    即「旧结果冒充当前写入」，在这里拒绝。
+    即「旧结果冒充当前写入」，在这里拒绝。绑定候选的收据（前序导入收据以外的五类）在当前候选 revision 已作废时
+    一律拒绝（B3-05）。候选交付收据 v2 只读重放，新写入一律是 v3（B4-07）。
     """
 
     campaign = store.load_campaign(receipt["campaign_id"])
@@ -650,12 +787,20 @@ def require_receipt_current(store: Any, receipt: dict[str, Any]) -> None:
         raise ControlError("收据合同版本与 Campaign 版本不一致")
     if not receipt_is_v2(receipt):
         return
+    if receipt["schema_version"] == CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA:
+        raise ControlError(
+            "候选交付收据 v2 只读重放：B4-07 起 Campaign v2 新签发的候选交付收据一律是 v3"
+        )
     current = _require_effective_tool(store, campaign)
     if (
         receipt["formed_under"] != current["formed_under"]
         or receipt["producer_tool_sha256"] != current["tool_sha256"]
     ):
         raise ControlError("收据的形成期坐标或工具摘要不是当前有效值：旧结果不得冒充当前写入")
+    if receipt["schema_version"] != PREDECESSOR_IMPORT_RECEIPT_SCHEMA:
+        require_revision_not_invalidated(
+            store, campaign, receipt["formed_under"]["candidate_revision"], "收据写入"
+        )
 
 
 def build_candidate_build_receipt(
@@ -1220,16 +1365,426 @@ def finalize_activation(
     return store.write_receipt("activation", receipt)
 
 
+# ---------------------------------------------------------------------------
+# 交付恢复段与唯一有效链（Claude 升级控制面 B4-07，只属于 Campaign v2）
+# ---------------------------------------------------------------------------
+#
+# 一个 delivery 的交付事实按段分组：首轮交付 dr0（``recovery_revision`` 为 null）与恢复段 dr1、dr2…（各有一份
+# ``candidate_delivery_recovery`` 预约）。交付事实全部在 deployment 维度，序号就是写入先后，所以：
+# * 段与段不交错：dr<k> 的事实全部晚于 dr<k-1> 的事实，同一时刻只有最新一段推进（门禁 ⑦）；
+# * 段内从起点逐阶段推进、``previous_stage_ref`` 逐一衔接，失败即收口（门禁 ①～③）；
+# * 预约 dr<k> 时上一段必须已收口（失败，或到达 stable_observed）；failure 锚点是上一段收口的失败事实，
+#   approved_invalidation 锚点是指向当时有效链上某个 pass 的已批准阶段失效（门禁 ⑧）；
+# * 唯一有效链＝dr0 前缀＋每个 dr<k> 以其 ``previous_valid_stage_ref`` 接续并覆盖到末尾，起点之后的旧 pass 一律
+#   失效（门禁 ②④）；尚未被恢复段消费的阶段失效（至多一份）同样截断有效链。
+# 写入（事实、段预约、阶段失效、交付包、收据）与重放共用 ``analyze_delivery_chain``，写入时另核 delivery 未
+# finalize、只有最新一段接受新事实等当前性。
+
+_STAGE_INDEX = {stage: index for index, stage in enumerate(CANDIDATE_DELIVERY_STAGES)}
+
+
+def delivery_segment_label(number: int) -> str:
+    """交付段的展示名：0 为首轮交付，k 为 dr<k>。"""
+
+    return "首轮交付" if number == 0 else f"dr{number}"
+
+
+def delivery_facts(store: Any, campaign_id: str, delivery_id: str) -> list[dict[str, Any]]:
+    """某 delivery 的全部交付阶段事实（deployment 维度，按序号）。"""
+
+    return [
+        fact
+        for fact in store.list_facts(campaign_id, "deployment")
+        if fact["fact_kind"] == "candidate_delivery_recorded"
+        and fact["payload"]["delivery_id"] == delivery_id
+    ]
+
+
+def delivery_recoveries(
+    store: Any, campaign_id: str, delivery_id: str
+) -> dict[int, tuple[dict[str, Any], dict[str, Any]]]:
+    """某 delivery 的恢复段预约 ``{k: (引用, payload)}``（按 k 排序）；同一编号多份即 Store 已不一致。"""
+
+    entries: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for reference in store.list_object_refs("candidate_delivery_recovery"):
+        payload = store.load_object(reference)["payload"]
+        if payload["campaign_id"] != campaign_id or payload["delivery_id"] != delivery_id:
+            continue
+        number = delivery_recovery_number(payload["recovery_revision"])
+        if number in entries:
+            raise ControlError(f"候选交付 {delivery_id} 的恢复段 dr{number} 存在多份预约，Store 已不一致")
+        entries[number] = (reference, payload)
+    return dict(sorted(entries.items()))
+
+
+def delivery_stage_invalidations(
+    store: Any, campaign_id: str, delivery_id: str
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """某 delivery 的阶段失效对象 ``[(引用, payload)]``（按引用摘要排序）。"""
+
+    entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_object_refs("candidate_delivery_stage_invalidation"):
+        payload = store.load_object(reference)["payload"]
+        if payload["campaign_id"] == campaign_id and payload["delivery_id"] == delivery_id:
+            entries.append((reference, payload))
+    return entries
+
+
+def delivery_receipts(
+    store: Any, campaign_id: str, delivery_plan_ref: dict[str, Any]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """绑定某份交付计划（即某个 delivery）的候选交付收据 ``[(引用, 收据)]``；非空即该 delivery 已 finalize。"""
+
+    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_receipt_refs("candidate_delivery"):
+        receipt = store.load_receipt(reference)
+        if receipt["campaign_id"] == campaign_id and receipt["delivery_plan_ref"] == delivery_plan_ref:
+            matches.append((reference, receipt))
+    return matches
+
+
+def campaign_delivery_object_ids(store: Any, campaign_id: str) -> set[str]:
+    """本 Campaign 的恢复段预约与阶段失效对象所属的 delivery_id（重放要覆盖还没有事实的 delivery）。"""
+
+    identifiers: set[str] = set()
+    for kind in ("candidate_delivery_recovery", "candidate_delivery_stage_invalidation"):
+        for reference in store.list_object_refs(kind):
+            payload = store.load_object(reference)["payload"]
+            if payload["campaign_id"] == campaign_id:
+                identifiers.add(str(payload["delivery_id"]))
+    return identifiers
+
+
+def _delivery_group_closed(terminal: dict[str, Any] | None) -> bool:
+    """一段已收口：最后一条事实失败，或已到达 stable_observed（通过或失败）。空段未收口。"""
+
+    if terminal is None:
+        return False
+    payload = terminal["payload"]
+    return payload["result"] == "failed" or payload["stage"] == CANDIDATE_DELIVERY_STAGES[-1]
+
+
+class DeliveryChainState:
+    """一个 delivery 的交付链分析结果（B4-07）。
+
+    ``groups``：段编号 → 本段事实（按序号）；``valid``：唯一有效链（阶段 → 仍有效的 pass 事实，按阶段前缀）；
+    ``consumed``：被恢复段消费的阶段失效（按段编号）；``pending``：尚未消费的阶段失效（至多一份）；
+    ``failures``：全部失败事实（按序号）；``terminal``：最新一段的最后一条事实。
+    """
+
+    def __init__(self, delivery_id: str) -> None:
+        self.delivery_id = delivery_id
+        self.groups: dict[int, list[dict[str, Any]]] = {0: []}
+        self.recoveries: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
+        self.valid: dict[str, dict[str, Any]] = {}
+        self.consumed: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        self.pending: tuple[dict[str, Any], dict[str, Any]] | None = None
+        self.failures: list[dict[str, Any]] = []
+        self.terminal: dict[str, Any] | None = None
+
+    @property
+    def latest(self) -> int:
+        """最新一段的编号（0 为首轮交付）。"""
+
+        return max(self.groups)
+
+    @property
+    def latest_closed(self) -> bool:
+        return _delivery_group_closed(self.terminal)
+
+    def complete(self) -> bool:
+        """有效链四阶段全部通过且没有待消费的阶段失效，才可以封交付包、签收据。"""
+
+        return self.pending is None and all(
+            stage in self.valid for stage in CANDIDATE_DELIVERY_STAGES
+        )
+
+    def valid_refs(self, store: Any) -> list[dict[str, Any]]:
+        return [store.fact_ref(self.valid[stage]) for stage in CANDIDATE_DELIVERY_STAGES]
+
+
+def _walk_delivery_segment(
+    store: Any,
+    delivery_id: str,
+    number: int,
+    group: list[dict[str, Any]],
+    *,
+    start: int,
+    previous: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """一段（首轮交付或 dr<k>）内的事实：从 ``start`` 起逐阶段推进，首条衔接 ``previous``、其后衔接本段直接前一
+    阶段，失败即收口；返回本段的 pass（阶段 → 事实）。"""
+
+    label = delivery_segment_label(number)
+    passes: dict[str, dict[str, Any]] = {}
+    expected_previous = previous
+    for offset, fact in enumerate(group):
+        payload = fact["payload"]
+        index = start + offset
+        if index >= len(CANDIDATE_DELIVERY_STAGES) or payload["stage"] != CANDIDATE_DELIVERY_STAGES[index]:
+            raise ControlError(
+                f"候选交付 {delivery_id} 的{label}必须从 {CANDIDATE_DELIVERY_STAGES[start]} 起逐阶段推进："
+                f"第 {offset + 1} 条是 {payload['stage']}"
+            )
+        if offset and group[offset - 1]["payload"]["result"] != "pass":
+            raise ControlError("失败的候选交付阶段不得继续推进")
+        if payload["previous_stage_ref"] != expected_previous:
+            source = "段预约的 previous_valid_stage_ref" if offset == 0 and number else "本段直接前一阶段"
+            raise ControlError(
+                f"{'②' if offset == 0 and number else '③'} 候选交付 {delivery_id} 的{label} {payload['stage']} "
+                f"没有衔接{source}"
+            )
+        if payload["result"] == "pass":
+            passes[payload["stage"]] = fact
+        expected_previous = store.fact_ref(fact)
+    return passes
+
+
+def analyze_delivery_chain(
+    store: Any,
+    delivery_id: str,
+    facts: list[dict[str, Any]],
+    recoveries: dict[int, tuple[dict[str, Any], dict[str, Any]]],
+    invalidations: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> DeliveryChainState:
+    """沿唯一有效链验证一个 delivery（B4-07 重放规则），结构不一致即拒绝；返回链状态。
+
+    ``facts`` 是该 delivery 的交付事实（任意顺序，按序号处理），``recoveries``、``invalidations`` 是它的段预约与阶段
+    失效对象。写入时传入「现有内容＋新写入」即得到新写入是否保持链一致。
+    """
+
+    state = DeliveryChainState(delivery_id)
+    numbers = sorted(recoveries)
+    if numbers != list(range(1, len(numbers) + 1)):
+        raise ControlError(
+            f"候选交付 {delivery_id} 的恢复段必须从 dr1 起连续编号：{['dr%d' % number for number in numbers]}"
+        )
+    nonces = [payload["run_nonce"] for _reference, payload in recoveries.values()]
+    if len(nonces) != len(set(nonces)):
+        raise ControlError(f"候选交付 {delivery_id} 的恢复段 run_nonce 不得复用")
+    groups: dict[int, list[dict[str, Any]]] = {number: [] for number in (0, *numbers)}
+    ordered = sorted(facts, key=lambda item: item["sequence"])
+    last = 0
+    for fact in ordered:
+        payload = fact["payload"]
+        number = delivery_recovery_number(payload.get("recovery_revision"))
+        if number not in groups:
+            raise ControlError(f"① 交付事实声明的恢复段 dr{number} 没有预约")
+        if number < last:
+            raise ControlError(
+                f"⑦ 候选交付 {delivery_id} 的交付段交错：{delivery_segment_label(number)}的事实晚于 dr{last} 的事实，"
+                "同一时刻只允许最新一段推进"
+            )
+        last = number
+        if number and payload["recovery_ref"] != recoveries[number][0]:
+            raise ControlError(f"① dr{number} 的事实必须以 recovery_ref 引用同一份段预约")
+        groups[number].append(fact)
+    state.groups = groups
+    state.recoveries = dict(recoveries)
+    state.failures = [fact for fact in ordered if fact["payload"]["result"] == "failed"]
+    by_key = {reference["sha256"]: (reference, payload) for reference, payload in invalidations}
+    consumed: set[str] = set()
+    valid = _walk_delivery_segment(store, delivery_id, 0, groups[0], start=0, previous=None)
+    for number in numbers:
+        _reference, reservation = recoveries[number]
+        previous_group = groups[number - 1]
+        terminal = previous_group[-1] if previous_group else None
+        previous_label = delivery_segment_label(number - 1)
+        if not _delivery_group_closed(terminal):
+            raise ControlError(
+                f"⑦ 预约 dr{number} 时{previous_label}尚未收口（既没有失败事实，也没有到达 stable_observed）："
+                "同一 delivery 同一时刻只允许一个未收口的恢复段"
+            )
+        stage = reservation["rerun_from_stage"]
+        start = _STAGE_INDEX[stage]
+        if reservation["anchor_kind"] == "failure":
+            # 走到这里时上一段已收口，terminal 必然存在。
+            if (
+                terminal is None
+                or terminal["payload"]["result"] != "failed"
+                or reservation["anchor_ref"] != store.fact_ref(terminal)
+            ):
+                raise ControlError(f"dr{number} 的 failure 锚点必须是{previous_label}收口时的失败阶段事实")
+            if terminal["payload"]["stage"] != stage:
+                raise ControlError(
+                    f"dr{number} 的 rerun_from_stage 必须等于失败阶段 {terminal['payload']['stage']}"
+                )
+        else:
+            key = reservation["anchor_ref"]["sha256"]
+            entry = by_key.get(key)
+            if entry is None:
+                raise ControlError(f"⑧ dr{number} 的 approved_invalidation 锚点不是本 delivery 的阶段失效对象")
+            if key in consumed:
+                raise ControlError(f"⑧ 阶段失效对象 {key} 已被前序恢复段消费，不得重复锚定")
+            invalidation = entry[1]
+            if invalidation["invalidated_stage"] != stage:
+                raise ControlError(
+                    f"⑧ dr{number} 的 rerun_from_stage 必须等于被失效的阶段 {invalidation['invalidated_stage']}"
+                )
+            current = valid.get(stage)
+            if current is None or store.fact_ref(current) != invalidation["invalidated_stage_ref"]:
+                raise ControlError(f"⑧ dr{number} 锚定的阶段失效指向的不是当时有效链上的 pass")
+            consumed.add(key)
+            state.consumed.append(entry)
+        if start and CANDIDATE_DELIVERY_STAGES[start - 1] not in valid:
+            raise ControlError(f"dr{number} 的起点 {stage} 之前的阶段在有效链上没有 pass")
+        expected_previous = (
+            store.fact_ref(valid[CANDIDATE_DELIVERY_STAGES[start - 1]]) if start else None
+        )
+        if reservation["previous_valid_stage_ref"] != expected_previous:
+            raise ControlError(
+                f"② dr{number} 的 previous_valid_stage_ref 必须是 {stage} 之前最近一份仍有效的 pass"
+            )
+        # ④ 起点之后的旧 pass 一律失效：有效链截到起点之前，再接上本段。
+        valid = {key: fact for key, fact in valid.items() if _STAGE_INDEX[key] < start}
+        valid.update(
+            _walk_delivery_segment(
+                store, delivery_id, number, groups[number], start=start, previous=expected_previous
+            )
+        )
+    latest_group = groups[numbers[-1] if numbers else 0]
+    state.terminal = latest_group[-1] if latest_group else None
+    pending = [entry for entry in invalidations if entry[0]["sha256"] not in consumed]
+    if len(pending) > 1:
+        raise ControlError(
+            f"候选交付 {delivery_id} 至多一份待消费的阶段失效：先以恢复段消费已批准的那一份"
+        )
+    if pending:
+        _reference, invalidation = pending[0]
+        if not _delivery_group_closed(state.terminal):
+            raise ControlError(
+                f"阶段失效只能在最新交付段收口后批准：{delivery_segment_label(numbers[-1] if numbers else 0)}仍在推进"
+            )
+        stage = invalidation["invalidated_stage"]
+        current = valid.get(stage)
+        if current is None or store.fact_ref(current) != invalidation["invalidated_stage_ref"]:
+            raise ControlError("待消费的阶段失效指向的不是当前有效链上的 pass")
+        valid = {key: fact for key, fact in valid.items() if _STAGE_INDEX[key] < _STAGE_INDEX[stage]}
+        state.pending = pending[0]
+    state.valid = valid
+    return state
+
+
+def delivery_chain_state(
+    store: Any,
+    campaign_id: str,
+    delivery_id: str,
+    *,
+    extra_fact: dict[str, Any] | None = None,
+) -> DeliveryChainState:
+    """读取某 delivery 的现有事实、段预约与阶段失效并分析；``extra_fact`` 是写入前待追加的新事实（带 ``_sha256``）。"""
+
+    facts = delivery_facts(store, campaign_id, delivery_id)
+    if extra_fact is not None:
+        facts.append(extra_fact)
+    return analyze_delivery_chain(
+        store,
+        delivery_id,
+        facts,
+        delivery_recoveries(store, campaign_id, delivery_id),
+        delivery_stage_invalidations(store, campaign_id, delivery_id),
+    )
+
+
+def delivery_chain_report(store: Any, campaign_id: str, delivery_id: str) -> dict[str, Any]:
+    """``delivery-chain`` 的结果（合同 ``official-client-control-delivery-chain/v1``，只读，B4-07）。
+
+    编排器预约 dr<k> 与申请阶段失效之前据此取：唯一有效链各阶段的 pass、最新一段编号与是否收口、收口事实、待消费的
+    阶段失效、下一段编号、全部失败事实与段预约，以及已签发的交付收据（非空即已 finalize，终态）。
+    """
+
+    from .contracts import DELIVERY_CHAIN_SCHEMA
+
+    campaign = store.load_campaign(campaign_id)
+    if not campaign_is_v2(campaign):
+        raise ControlError("交付恢复段只属于 Campaign v2：v1 Campaign 没有 delivery-chain")
+    state = delivery_chain_state(store, campaign_id, delivery_id)
+    plan_refs = {
+        canonical_json_bytes(fact["payload"]["delivery_plan_ref"]): fact["payload"]["delivery_plan_ref"]
+        for facts in state.groups.values()
+        for fact in facts
+    } | {
+        canonical_json_bytes(payload["delivery_plan_ref"]): payload["delivery_plan_ref"]
+        for _reference, payload in state.recoveries.values()
+    }
+    receipts = [
+        reference
+        for plan_ref in plan_refs.values()
+        for reference, _receipt in delivery_receipts(store, campaign_id, plan_ref)
+    ]
+    terminal = state.terminal
+    return {
+        "schema_version": DELIVERY_CHAIN_SCHEMA,
+        "campaign_id": campaign_id,
+        "delivery_id": delivery_id,
+        "latest_recovery_revision": None if state.latest == 0 else f"dr{state.latest}",
+        "latest_closed": state.latest_closed,
+        "terminal_ref": None if terminal is None else store.fact_ref(terminal),
+        "terminal_result": None if terminal is None else terminal["payload"]["result"],
+        "valid_stage_refs": {
+            stage: store.fact_ref(state.valid[stage])
+            for stage in CANDIDATE_DELIVERY_STAGES
+            if stage in state.valid
+        },
+        "complete": state.complete(),
+        "pending_invalidation_ref": None if state.pending is None else state.pending[0],
+        "next_recovery_revision": f"dr{state.latest + 1}",
+        "failure_refs": [store.fact_ref(fact) for fact in state.failures],
+        "consumed_invalidation_refs": [reference for reference, _payload in state.consumed],
+        "recovery_refs": [state.recoveries[number][0] for number in sorted(state.recoveries)],
+        "receipt_refs": receipts,
+    }
+
+
+def _delivery_receipt_recovery_inputs(
+    store: Any, campaign_id: str, package: dict[str, Any]
+) -> dict[str, list[dict[str, Any]]]:
+    """候选交付收据 v3 的三组恢复输入，并核对交付包绑定的正是唯一有效链四阶段的最终 pass。"""
+
+    state = delivery_chain_state(store, campaign_id, package["delivery_id"])
+    if state.pending is not None:
+        raise ControlError("候选交付仍有已批准但未消费的阶段失效：先以恢复段重跑，再签发收据")
+    if not state.complete():
+        raise ControlError("候选交付的有效链尚未四阶段全部通过，不能签发收据")
+    if package["delivery_fact_refs"] != state.valid_refs(store):
+        raise ControlError("CandidateDeliveryReceipt 必须取有效链四阶段的最终 pass：交付包绑定的事实不是当前有效链")
+    return {
+        "delivery_failure_refs": [store.fact_ref(fact) for fact in state.failures],
+        "stage_invalidation_refs": [reference for reference, _payload in state.consumed],
+        "recovery_refs": [state.recoveries[number][0] for number in sorted(state.recoveries)],
+    }
+
+
+def _require_delivery_without_recovery(
+    store: Any, campaign_id: str, package: dict[str, Any]
+) -> None:
+    """B1-12 时期的 v2 交付收据形成于交付恢复段合同之前，不能承载恢复段、阶段失效或恢复段事实。"""
+
+    delivery_id = package["delivery_id"]
+    if (
+        delivery_recoveries(store, campaign_id, delivery_id)
+        or delivery_stage_invalidations(store, campaign_id, delivery_id)
+        or any(
+            fact["payload"].get("recovery_revision") is not None
+            for fact in delivery_facts(store, campaign_id, delivery_id)
+        )
+    ):
+        raise ControlError("候选交付收据 v2 不能承载交付恢复段：有恢复段的 delivery 只能签发 v3 收据")
+
+
 def build_candidate_delivery_receipt(
     store: Any,
     campaign_id: str,
     candidate_delivery_package_ref: dict[str, Any],
     *,
     formed_under: dict[str, Any] | None = None,
+    schema: str | None = None,
 ) -> dict[str, Any]:
     """由完整 DMIT 四阶段事实和交付包生成候选交付终态收据。
 
     v2 下只认当前候选 revision 与当前评估基线下形成的 Acceptance（重放时为收据形成期坐标）。
+    B4-07：Campaign v2 写入时一律签发 v3——四阶段取唯一有效链的最终 pass，另记全部失败事实、被消费的阶段失效
+    与段预约；``schema`` 只在重放时传入（收据自身的合同名），B1-12 时期的 v2 收据按 v2 重建。
     """
 
     campaign = store.load_campaign(campaign_id)
@@ -1276,6 +1831,17 @@ def build_candidate_delivery_receipt(
     )
     plan = store.load_object(package["delivery_plan_ref"])["payload"]
     archive_ref = package["private_archive_manifest_ref"]
+    if not producer["v2"]:
+        target_schema = _receipt_schema("candidate_delivery", producer)
+    elif schema is None or schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA:
+        target_schema = CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
+    else:
+        target_schema = _receipt_schema("candidate_delivery", producer)
+    recovery: dict[str, list[dict[str, Any]]] | None = None
+    if target_schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA:
+        recovery = _delivery_receipt_recovery_inputs(store, campaign_id, package)
+    elif producer["v2"]:
+        _require_delivery_without_recovery(store, campaign_id, package)
     inputs = [
         package["candidate_ref"],
         package["candidate_build_receipt_ref"],
@@ -1287,8 +1853,16 @@ def build_candidate_delivery_receipt(
         candidate_delivery_package_ref,
         archive_ref,
     ]
+    if recovery is not None:
+        inputs.extend(
+            [
+                *recovery["delivery_failure_refs"],
+                *recovery["stage_invalidation_refs"],
+                *recovery["recovery_refs"],
+            ]
+        )
     receipt = {
-        "schema_version": _receipt_schema("candidate_delivery", producer),
+        "schema_version": target_schema,
         "campaign_id": campaign_id,
         "campaign_purpose": acceptance_payload["acceptance_purpose"],
         "target_version": campaign["target_version"],
@@ -1315,6 +1889,8 @@ def build_candidate_delivery_receipt(
         "producer_tool_sha256": producer["tool_sha256"],
         "identity_sha256": "",
     }
+    if recovery is not None:
+        receipt.update(recovery)
     _attach_formed_under(receipt, producer)
     receipt["identity_sha256"] = canonical_sha256(
         {key: item for key, item in receipt.items() if key != "identity_sha256"}
@@ -1328,6 +1904,16 @@ def finalize_candidate_delivery(
     campaign_id: str,
     candidate_delivery_package_ref: dict[str, Any],
 ) -> dict[str, Any]:
+    """签发候选交付收据并返回引用。
+
+    v1 Campaign 行为逐字不变：同一 Candidate／Acceptance 已有收据即拒绝。Campaign v2 见
+    ``finalize_candidate_delivery_outcome``：finalize 成功后为终态，同一交付包重复调用返回原收据。
+    """
+
+    if campaign_is_v2(store.load_campaign(campaign_id)):
+        return finalize_candidate_delivery_outcome(
+            store, campaign_id, candidate_delivery_package_ref
+        )["receipt_ref"]
     receipt = build_candidate_delivery_receipt(
         store, campaign_id, candidate_delivery_package_ref
     )
@@ -1339,6 +1925,56 @@ def finalize_candidate_delivery(
         ):
             raise ControlError("同一 Candidate／Acceptance 的候选交付收据不得覆盖")
     return store.write_receipt("candidate_delivery", receipt)
+
+
+def finalize_candidate_delivery_outcome(
+    store: Any,
+    campaign_id: str,
+    candidate_delivery_package_ref: dict[str, Any],
+) -> dict[str, Any]:
+    """签发候选交付收据，返回 ``{"receipt_ref", "reused"}``（Claude 升级 B4-07）。
+
+    Campaign v2：finalize 成功后该 delivery 进入终态。同一交付包再次调用（含工具演进、换基线之后）重放核对原收据后
+    原样返回（``reused: true``），不重新签发；换一个交付包为已 finalize 的 delivery 签发即拒绝；同一
+    Candidate／Acceptance 仍只有一份收据。持 deployment 维度锁签发（与交付事实、段预约、阶段失效同一把锁）：两个
+    并发 finalize 不会各写一份，有效链也不会在核对与落盘之间被新的阶段失效截断。v1 Campaign 委托
+    ``finalize_candidate_delivery``，行为不变（重复调用即拒绝）。
+    """
+
+    campaign = store.load_campaign(campaign_id)
+    if not campaign_is_v2(campaign):
+        return {
+            "receipt_ref": finalize_candidate_delivery(
+                store, campaign_id, candidate_delivery_package_ref
+            ),
+            "reused": False,
+        }
+    document = store.load_object(candidate_delivery_package_ref)
+    if document["object_kind"] != "candidate_delivery_package":
+        raise ControlError("CandidateDeliveryReceipt 必须绑定 CandidateDeliveryPackage")
+    package = document["payload"]
+    with store._dimension_locks(campaign_id, ("deployment",)):
+        finalized = delivery_receipts(store, campaign_id, package["delivery_plan_ref"])
+        for reference, existing in finalized:
+            if existing["candidate_delivery_package_ref"] == candidate_delivery_package_ref:
+                replay_receipt(store, reference)
+                return {"receipt_ref": reference, "reused": True}
+        if finalized:
+            raise ControlError(
+                f"候选交付 {package['delivery_id']} 已 finalize（终态收据 {finalized[0][0]['sha256']}）："
+                "不得以其他交付包重新签发"
+            )
+        receipt = build_candidate_delivery_receipt(
+            store, campaign_id, candidate_delivery_package_ref
+        )
+        for reference in store.list_receipt_refs("candidate_delivery"):
+            existing = store.load_receipt(reference)
+            if (
+                existing["candidate_ref"] == receipt["candidate_ref"]
+                and existing["acceptance_ref"] == receipt["acceptance_ref"]
+            ):
+                raise ControlError("同一 Candidate／Acceptance 的候选交付收据不得覆盖")
+        return store.write_receipt_outcome("candidate_delivery", receipt, allow_existing=True)
 
 
 def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
@@ -1402,6 +2038,7 @@ def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
             existing["campaign_id"],
             existing["candidate_delivery_package_ref"],
             formed_under=formed_under,
+            schema=existing["schema_version"],
         )
     elif kind == "predecessor_import":
         # 形成期重放：前序材料取收据自身记录的（源身份文档、导入事实记录），不解引用前序 Store。

@@ -79,6 +79,35 @@
         "result_source": {"enum": ["execute", "reuse"]},
         "comparison_mode": {"enum": ["dual_wire", "candidate_profile"]}
       }
+    },
+    {
+      "description": "PAIR v3（B4-04，只在 Campaign v2 的 fact v2 里接受）：评估基线 b<K>（K≥1）下形成的 PAIR，比 v2 多记 evaluation_baseline 与 baseline_commit_sha256，二者必须等于事实的 formed_under.evaluation_baseline；没有评估基线（b0）时用 v2。唯一性是 (candidate_id, pair_id, 评估基线)：重评时受影响的规则在新基线重跑写 v3，未受影响的规则沿用上一基线的 PAIR。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pair_id", "spec_id", "candidate_id", "profile_approval_ref", "release_artifact_ref", "condition_sha256", "scenario_approval_refs", "candidate_evidence_package_ref", "atomic_assertion_ledger_ref", "official_result", "candidate_result", "third_party_results", "dynamic_field_checks", "assertion_results", "implementation_anchors", "test_anchors", "result_source", "comparison_mode", "evaluation_baseline", "baseline_commit_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-pair/v3"},
+        "pair_id": {"type": "string", "pattern": "^PAIR-SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "spec_id": {"type": "string", "pattern": "^SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "candidate_id": {"type": "string"},
+        "profile_approval_ref": {"type": "object"},
+        "release_artifact_ref": {"type": "object"},
+        "condition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scenario_approval_refs": {"type": "array", "minItems": 1},
+        "candidate_evidence_package_ref": {"type": "object"},
+        "atomic_assertion_ledger_ref": {"type": "object"},
+        "official_result": {"type": "object"},
+        "candidate_result": {"type": "object"},
+        "third_party_results": {"type": "array"},
+        "dynamic_field_checks": {"type": "array", "minItems": 1},
+        "assertion_results": {"type": "array", "minItems": 1},
+        "implementation_anchors": {"type": "array", "minItems": 1},
+        "test_anchors": {"type": "array", "minItems": 1},
+        "result_source": {"enum": ["execute", "reuse"]},
+        "comparison_mode": {"enum": ["dual_wire", "candidate_profile"]},
+        "evaluation_baseline": {"type": "integer", "minimum": 1},
+        "baseline_commit_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
     }
   ]
 }

@@ -65,6 +65,9 @@ ACTIVATION_RECEIPT_V2_SCHEMA = "official-client-control-activation-receipt/v2"
 CANDIDATE_BUILD_RECEIPT_V2_SCHEMA = "official-client-candidate-build-receipt/v2"
 VALIDATION_GATE_RECEIPT_V2_SCHEMA = "official-client-validation-gate-receipt/v2"
 CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA = "official-client-candidate-delivery-receipt/v2"
+# B4-07：候选交付收据 v3（只属于 Campaign v2）在 v2 之上记录该 delivery 的全部失败事实、阶段失效对象与恢复段
+# 预约；B4-07 之后 Campaign v2 新签发的候选交付收据一律是 v3，B1-12 时期的 v2 收据按自身合同只读重放。
+CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA = "official-client-candidate-delivery-receipt/v3"
 # 收据种类 → (v1 合同名, v2 合同名)；v2 只比 v1 多一个 formed_under 字段。
 RECEIPT_SCHEMA_VERSIONS = {
     "promotion": (PROMOTION_RECEIPT_SCHEMA, PROMOTION_RECEIPT_V2_SCHEMA),
@@ -76,7 +79,10 @@ RECEIPT_SCHEMA_VERSIONS = {
         CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA,
     ),
 }
-RECEIPT_V2_SCHEMAS = frozenset(versions[1] for versions in RECEIPT_SCHEMA_VERSIONS.values())
+# 属于 Campaign v2、带 formed_under 的五类收据合同（含候选交付收据 v3）。
+RECEIPT_V2_SCHEMAS = frozenset(
+    versions[1] for versions in RECEIPT_SCHEMA_VERSIONS.values()
+) | {CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA}
 # 收据种类全集（按 Store 重放顺序）；predecessor_import（B1-14）只有一版合同，只属于 Campaign v2。
 RECEIPT_KINDS = (
     "promotion",
@@ -152,8 +158,50 @@ NON_IMPORTABLE_OBJECT_KINDS = frozenset(
         "candidate_delivery_package",
         "private_archive_manifest",
         "active_support_envelope",
+        # B3-05／B4-07：候选作废、交付阶段失效与交付恢复段预约都绑定本 Campaign 的事实链，同样不可导入。
+        "candidate_invalidation",
+        "candidate_delivery_stage_invalidation",
+        "candidate_delivery_recovery",
     }
 )
+
+# ---------------------------------------------------------------------------
+# Claude 升级控制面 B3-05／B4-04／B4-07：候选作废、评估基线与交付恢复段（只属于 Campaign v2）
+# ---------------------------------------------------------------------------
+# B4-04：评估基线 b<K>（K≥1）下形成的 PAIR／Acceptance 用 v3 合同，多记 evaluation_baseline（K）与
+# baseline_commit_sha256（编排器评估基线 COMMIT 的摘要）；没有评估基线（b0）时仍用 v2 合同。v3 只能出现在 fact v2。
+PAIR_V3_SCHEMA = "official-client-pair/v3"
+ACCEPTANCE_V3_SCHEMA = "official-client-acceptance/v3"
+# 评估基线种类：与编排器评估基线 COMMIT 的 kind 同一闭集（codex_upgrade_vc_artifacts.EVALUATION_BASELINE_KINDS）。
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery", "tool-evolution", "approval-revision")
+# B4-07：候选交付事实 v2 多记 recovery_revision 与 recovery_ref；首轮交付（dr0）两者为 null，与 v1 形状等价。
+# PAIR／Acceptance v3 与交付事实 v2 只在 fact v2 里接受，v1 事实遇到它们按原文案拒绝（见 validate_fact_payload）。
+CANDIDATE_DELIVERY_FACT_V2_SCHEMA = "official-client-candidate-delivery-fact/v2"
+DELIVERY_RECOVERY_REVISION_RE = re.compile(r"^dr[1-9][0-9]*$")
+DELIVERY_RECOVERY_ANCHOR_KINDS = ("failure", "approved_invalidation")
+# 交付环境身份 6 项：恢复段预约的 environment_before 必须与冻结计划逐项相等（门禁 ⑤）。
+CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS = (
+    "host_id",
+    "architecture",
+    "compose_sha256",
+    "environment_sha256",
+    "configuration_sha256",
+    "network_sha256",
+)
+# 候选交付不漂移的 13 个字段（门禁 ⑤）：四阶段与全部恢复段的事实逐字相等，任一变化即拒绝。
+CANDIDATE_DELIVERY_IDENTITY_FIELDS = (
+    "delivery_id",
+    "candidate_id",
+    "candidate_ref",
+    "candidate_build_receipt_ref",
+    "validation_completed_ref",
+    "acceptance_ref",
+    "delivery_plan_ref",
+    *CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS,
+)
+# 两种失效对象（候选作废、交付阶段失效）的批准字段：review_sha256 覆盖批准字段以外的全部字段，preview 输出、
+# apply 以 --approve-sha256 核对后连同批准人与批准时间一次写出（write-once）。
+INVALIDATION_APPROVAL_FIELDS = ("approved_by", "approved_at_utc", "review_sha256")
 
 DIMENSIONS = (
     "discovery",
@@ -189,12 +237,14 @@ FACT_DIMENSION = {
     "restored_active": "deployment",
     "inventory_current_appended": "deployment",
     "candidate_delivery_recorded": "deployment",
-    # B1-12 最小形态（B3-05 补全作废门禁与命令）：决定当前有效候选 revision，只允许出现在 fact v2。
+    # B1-12 立形、B3-05 补全作废门禁：决定当前有效候选 revision，只允许出现在 fact v2。
     "candidate_revision_recorded": "validation",
+    # B4-04：评估基线事实，同一候选 revision 内决定当前评估基线 b<K>，只允许出现在 fact v2。
+    "evaluation_baseline_recorded": "validation",
 }
 
 # 只允许出现在 fact v2（Campaign v2）里的事实种类；v1 文档出现即拒绝。
-FACT_V2_ONLY_KINDS = frozenset({"candidate_revision_recorded"})
+FACT_V2_ONLY_KINDS = frozenset({"candidate_revision_recorded", "evaluation_baseline_recorded"})
 
 # 绑定具体候选的事实种类：v2 下写入与重放都要求候选属于形成期候选 revision，
 # status 只按当前 revision 下形成的这些事实推导检查点（设计 B1-12「交付判定」）。
@@ -208,6 +258,25 @@ CANDIDATE_SCOPED_FACT_KINDS = frozenset(
         "pair_recorded",
         "acceptance_recorded",
         "validation_attempt_created",
+        "validation_completed",
+        "candidate_delivery_recorded",
+        "release_promoted",
+        "accepted_not_activated",
+        "canary_passed",
+        "active",
+        "rollback_verified",
+        "restored_active",
+        # B4-04：评估基线属于具体候选（候选必须属于形成期 revision；作废后不得再开基线）。
+        "evaluation_baseline_recorded",
+    }
+)
+
+# 评估层的候选级事实（B4-04）：status 只认当前候选 revision 且当前评估基线下形成的这些事实；其余候选级事实
+# （候选冻结、场景四阶段、attempt、评估基线本身）属于采集层，换评估基线不改变它们的当前性，只看 revision。
+BASELINE_SCOPED_FACT_KINDS = frozenset(
+    {
+        "pair_recorded",
+        "acceptance_recorded",
         "validation_completed",
         "candidate_delivery_recorded",
         "release_promoted",
@@ -302,6 +371,11 @@ OBJECT_KINDS = {
     "tool_evolution_registration",
     # B1-14：Campaign v2 从前序 Store 导入证据的登记（声明与导入清单），由导入收据核验后才授予引用权限。
     "predecessor_import",
+    # B3-05：候选作废（当前 revision 进入 revision_required，新 revision 以 invalidation_ref 引用它）。
+    "candidate_invalidation",
+    # B4-07：经批准的交付阶段失效（只在 delivery 未 finalize 时允许）与交付恢复段 dr<k> 预约。
+    "candidate_delivery_stage_invalidation",
+    "candidate_delivery_recovery",
 }
 
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -556,8 +630,8 @@ def validate_formed_under(value: Any, label: str = "formed_under") -> dict[str, 
     ``tool_identity_ref`` 为 ``null`` 表示所属 Campaign 的初始工具身份，否则引用一份
     ``tool_evolution_registration``（取其 ``to_identity``）。``candidate_revision`` 从 1 起
     （没有 ``candidate_revision_recorded`` 事实时隐含 r1）。``evaluation_baseline`` 为 ``null``
-    表示没有评估基线（b0）；非空形状 ``{baseline, baseline_commit_sha256}`` 现在一次定好，
-    基线事实与其可达性核验由 B4-04 补全，在此之前非空值在门禁处失败关闭。
+    表示没有评估基线（b0）；非空形状 ``{baseline, baseline_commit_sha256}`` 必须对应同一候选 revision 内一条
+    ``evaluation_baseline_recorded`` 事实（B4-04），可达性在门禁与重放处核验（``receipts.FormedContext``）。
     """
 
     formed = expect_object(value, label)
@@ -2689,6 +2763,217 @@ def require_importable_object(
         )
 
 
+def invalidation_review_sha256(payload: dict[str, Any]) -> str:
+    """两种失效对象（B3-05 候选作废、B4-07 交付阶段失效）的审核摘要：批准字段以外全部字段的规范摘要。
+
+    编排器的 ``preview`` 输出它，``apply`` 以 ``--approve-sha256`` 核对后连同批准人、批准时间一次写出
+    （write-once）；Store 写入与重放都按同一口径复算，审核内容任一字段被改动都会使批准失效。
+    """
+
+    return canonical_sha256(
+        {key: value for key, value in payload.items() if key not in INVALIDATION_APPROVAL_FIELDS}
+    )
+
+
+def _validate_invalidation_approval(payload: dict[str, Any], label: str) -> None:
+    expect_string(payload["approved_by"], f"{label}.approved_by")
+    expect_rfc3339(payload["approved_at_utc"], f"{label}.approved_at_utc")
+    expect_sha256(payload["review_sha256"], f"{label}.review_sha256")
+    if payload["review_sha256"] != invalidation_review_sha256(payload):
+        raise ControlError(f"{label}.review_sha256 与审核内容不一致：批准的不是这份内容")
+
+
+def _validate_candidate_invalidation(value: Any) -> dict[str, Any]:
+    """候选作废对象（设计 B3-05）的形状。
+
+    ``revision`` 是被作废候选所属的候选 revision；``revision_ref`` 引用该 revision 的
+    ``candidate_revision_recorded`` 事实，只有隐含 r1（Campaign 没有显式 r1 事实）可以为 ``null``。作废对象
+    封存后当前 revision 进入 revision_required：候选级写入一律拒绝，直到新 revision 事实以 ``invalidation_ref``
+    引用它。对象图门禁（gates）另核 revision 可达、同一 revision 只作废一次、候选尚未完成 VC-5 验收。
+    """
+
+    label = "candidate_invalidation"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {
+            "campaign_id",
+            "candidate_id",
+            "revision",
+            "revision_ref",
+            "reason",
+            "evidence_refs",
+            *INVALIDATION_APPROVAL_FIELDS,
+        },
+        label,
+    )
+    campaign_id = expect_safe_id(payload["campaign_id"], f"{label}.campaign_id")
+    expect_safe_id(payload["candidate_id"], f"{label}.candidate_id")
+    revision = _expect_positive_int(payload["revision"], f"{label}.revision")
+    reference = payload["revision_ref"]
+    if reference is None:
+        if revision != 1:
+            raise ControlError(f"{label} 只有隐含 r1 可以不引用 revision 事实：r{revision} 必须给出 revision_ref")
+    else:
+        parsed = validate_fact_ref(reference, f"{label}.revision_ref")
+        if (
+            parsed["campaign_id"] != campaign_id
+            or parsed["dimension"] != FACT_DIMENSION["candidate_revision_recorded"]
+        ):
+            raise ControlError(f"{label}.revision_ref 必须引用本 Campaign validation 维度的候选 revision 事实")
+    expect_string(payload["reason"], f"{label}.reason")
+    _validate_ref_list(
+        payload["evidence_refs"], f"{label}.evidence_refs", validate_object_ref, non_empty=False
+    )
+    _validate_invalidation_approval(payload, label)
+    return payload
+
+
+def _validate_candidate_delivery_stage_invalidation(value: Any) -> dict[str, Any]:
+    """经批准的交付阶段失效（设计 B4-07）的形状。
+
+    ``invalidated_stage_ref`` 指向被失效的原 pass 事实（本 Campaign deployment 维度）；对象图门禁另核它确为同一
+    delivery、同一阶段的 pass，写入时再核 delivery 未 finalize、它在当前有效链上、最新交付段已收口。
+    """
+
+    label = "candidate_delivery_stage_invalidation"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {
+            "campaign_id",
+            "delivery_id",
+            "invalidated_stage",
+            "invalidated_stage_ref",
+            "reason",
+            "evidence_refs",
+            *INVALIDATION_APPROVAL_FIELDS,
+        },
+        label,
+    )
+    campaign_id = expect_safe_id(payload["campaign_id"], f"{label}.campaign_id")
+    expect_safe_id(payload["delivery_id"], f"{label}.delivery_id")
+    _expect_enum(
+        payload["invalidated_stage"], set(CANDIDATE_DELIVERY_STAGES), f"{label}.invalidated_stage"
+    )
+    parsed = validate_fact_ref(payload["invalidated_stage_ref"], f"{label}.invalidated_stage_ref")
+    if (
+        parsed["campaign_id"] != campaign_id
+        or parsed["dimension"] != FACT_DIMENSION["candidate_delivery_recorded"]
+    ):
+        raise ControlError(f"{label}.invalidated_stage_ref 必须引用本 Campaign deployment 维度的交付事实")
+    expect_string(payload["reason"], f"{label}.reason")
+    _validate_ref_list(
+        payload["evidence_refs"], f"{label}.evidence_refs", validate_object_ref, non_empty=False
+    )
+    _validate_invalidation_approval(payload, label)
+    return payload
+
+
+def delivery_recovery_number(value: Any) -> int:
+    """交付段编号：首轮交付（``recovery_revision`` 为 null）为 0，``dr<k>`` 为 k。"""
+
+    if value is None:
+        return 0
+    text = expect_string(value, "recovery_revision")
+    if not DELIVERY_RECOVERY_REVISION_RE.fullmatch(text):
+        raise ControlError(f"recovery_revision 必须形如 dr<k>（k≥1）：{text}")
+    return int(text[2:])
+
+
+def _validate_candidate_delivery_recovery(value: Any) -> dict[str, Any]:
+    """交付恢复段 ``dr<k>`` 的预约（设计 B4-07）的形状。
+
+    两种锚点：``failure``（普通失败续跑）的 ``anchor_ref`` 是失败阶段事实，``rerun_from_stage`` 等于失败阶段；
+    ``approved_invalidation``（主动重跑已成功阶段）的 ``anchor_ref`` 是 ``candidate_delivery_stage_invalidation``
+    对象，``rerun_from_stage`` 等于被失效的阶段。``previous_valid_stage_ref`` 是 ``rerun_from_stage`` 之前最近一份仍
+    有效的 pass（首阶段为 null）；``stages_to_rerun`` 强制从 ``rerun_from_stage`` 覆盖到 ``stable_observed``（门禁
+    ④）；``environment_before`` 是重跑前观测到的环境身份 6 项与其证据，必须与冻结计划逐项相等（门禁 ⑤）。
+    """
+
+    label = "candidate_delivery_recovery"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {
+            "campaign_id",
+            "delivery_id",
+            "delivery_plan_ref",
+            "recovery_revision",
+            "anchor_kind",
+            "anchor_ref",
+            "rerun_from_stage",
+            "previous_valid_stage_ref",
+            "stages_to_rerun",
+            "run_nonce",
+            "environment_before",
+        },
+        label,
+    )
+    campaign_id = expect_safe_id(payload["campaign_id"], f"{label}.campaign_id")
+    expect_safe_id(payload["delivery_id"], f"{label}.delivery_id")
+    plan = validate_object_ref(payload["delivery_plan_ref"], f"{label}.delivery_plan_ref")
+    if plan["object_kind"] != "candidate_delivery_plan":
+        raise ControlError(f"{label}.delivery_plan_ref 必须引用 CandidateDeliveryPlan")
+    if delivery_recovery_number(payload["recovery_revision"]) < 1:
+        raise ControlError(f"{label}.recovery_revision 必须形如 dr<k>（k≥1）")
+    anchor_kind = _expect_enum(
+        payload["anchor_kind"], set(DELIVERY_RECOVERY_ANCHOR_KINDS), f"{label}.anchor_kind"
+    )
+    if anchor_kind == "failure":
+        anchor = validate_fact_ref(payload["anchor_ref"], f"{label}.anchor_ref")
+        if (
+            anchor["campaign_id"] != campaign_id
+            or anchor["dimension"] != FACT_DIMENSION["candidate_delivery_recorded"]
+        ):
+            raise ControlError(f"{label} 的 failure 锚点必须引用本 Campaign 的交付阶段事实")
+    else:
+        anchor = validate_object_ref(payload["anchor_ref"], f"{label}.anchor_ref")
+        if anchor["object_kind"] != "candidate_delivery_stage_invalidation":
+            raise ControlError(
+                f"{label} 的 approved_invalidation 锚点必须引用 candidate_delivery_stage_invalidation"
+            )
+    stage = _expect_enum(
+        payload["rerun_from_stage"], set(CANDIDATE_DELIVERY_STAGES), f"{label}.rerun_from_stage"
+    )
+    index = CANDIDATE_DELIVERY_STAGES.index(stage)
+    previous = payload["previous_valid_stage_ref"]
+    if index == 0:
+        if previous is not None:
+            raise ControlError(f"{label} 从首阶段重跑时 previous_valid_stage_ref 必须是 null")
+    else:
+        parsed = validate_fact_ref(previous, f"{label}.previous_valid_stage_ref")
+        if (
+            parsed["campaign_id"] != campaign_id
+            or parsed["dimension"] != FACT_DIMENSION["candidate_delivery_recorded"]
+        ):
+            raise ControlError(f"{label}.previous_valid_stage_ref 必须引用本 Campaign 的交付阶段事实")
+    stages = expect_string_list(
+        payload["stages_to_rerun"], f"{label}.stages_to_rerun", sorted_unique=False
+    )
+    if stages != list(CANDIDATE_DELIVERY_STAGES[index:]):
+        raise ControlError(
+            f"{label}.stages_to_rerun 必须从 rerun_from_stage 覆盖到 stable_observed：起点之后的旧 pass 一律失效"
+        )
+    expect_safe_id(payload["run_nonce"], f"{label}.run_nonce")
+    environment = expect_object(payload["environment_before"], f"{label}.environment_before")
+    expect_exact_keys(
+        environment,
+        {*CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS, "evidence_ref"},
+        f"{label}.environment_before",
+    )
+    expect_safe_id(environment["host_id"], f"{label}.environment_before.host_id")
+    expect_string(environment["architecture"], f"{label}.environment_before.architecture")
+    for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS[2:]:
+        expect_sha256(environment[key], f"{label}.environment_before.{key}")
+    evidence = validate_object_ref(
+        environment["evidence_ref"], f"{label}.environment_before.evidence_ref"
+    )
+    if evidence["object_kind"] != "operational_evidence":
+        raise ControlError(f"{label}.environment_before.evidence_ref 必须引用 operational_evidence")
+    return payload
+
+
 def validate_object_document(value: Any) -> dict[str, Any]:
     document = expect_object(value, "object")
     expect_exact_keys(document, {"schema_version", "object_kind", "payload"}, "object")
@@ -2725,6 +3010,9 @@ def validate_object_document(value: Any) -> dict[str, Any]:
         "scenario_plan": _validate_scenario_plan,
         "tool_evolution_registration": _validate_tool_evolution_registration,
         "predecessor_import": _validate_predecessor_import,
+        "candidate_invalidation": _validate_candidate_invalidation,
+        "candidate_delivery_stage_invalidation": _validate_candidate_delivery_stage_invalidation,
+        "candidate_delivery_recovery": _validate_candidate_delivery_recovery,
     }
     if kind in validators:
         validators[kind](document["payload"])
@@ -3104,9 +3392,30 @@ def _validate_scenario_payload(value: Any, stage: str) -> dict[str, Any]:
     return payload
 
 
-def _validate_pair_payload(value: Any) -> dict[str, Any]:
+def _validate_baseline_fields(payload: dict[str, Any], label: str) -> None:
+    """v3 PAIR／Acceptance 的评估基线字段（B4-04）：编号 K≥1 与评估基线 COMMIT 摘要。"""
+
+    _expect_positive_int(payload["evaluation_baseline"], f"{label}.evaluation_baseline")
+    expect_sha256(payload["baseline_commit_sha256"], f"{label}.baseline_commit_sha256")
+
+
+def payload_evaluation_baseline(payload: dict[str, Any]) -> int:
+    """PAIR／Acceptance payload 记录的评估基线编号：v3 为 ``evaluation_baseline``（K≥1），其余形状为 0（b0）。"""
+
+    if payload.get("schema_version") in {PAIR_V3_SCHEMA, ACCEPTANCE_V3_SCHEMA}:
+        return int(payload["evaluation_baseline"])
+    return 0
+
+
+def _validate_pair_payload(value: Any, *, allow_v3: bool = True) -> dict[str, Any]:
+    """PAIR 事实：历史形状（无 schema_version）、v2 与 v3（B4-04，只在 fact v2 里接受）。
+
+    ``allow_v3`` 为 False（v1 事实）时 v3 与任何未知合同名一样按「schema_version 不匹配」拒绝，v1 报错逐字不变。
+    """
+
     payload = expect_object(value, "pair_recorded")
     schema_version = payload.get("schema_version")
+    v3 = allow_v3 and schema_version == PAIR_V3_SCHEMA
     required = {
         "pair_id",
         "spec_id",
@@ -3119,8 +3428,10 @@ def _validate_pair_payload(value: Any) -> dict[str, Any]:
         "dynamic_field_checks",
     }
     if schema_version is not None:
-        if schema_version != PAIR_V2_SCHEMA:
+        if schema_version != PAIR_V2_SCHEMA and not v3:
             raise ControlError("pair_recorded.schema_version 不匹配")
+        if v3:
+            required |= {"evaluation_baseline", "baseline_commit_sha256"}
         required |= {
             "schema_version",
             "profile_approval_ref",
@@ -3295,12 +3606,17 @@ def _validate_pair_payload(value: Any) -> dict[str, Any]:
             {"dual_wire", "candidate_profile"},
             "pair_recorded.comparison_mode",
         )
+        if v3:
+            _validate_baseline_fields(payload, "pair_recorded")
     return payload
 
 
-def _validate_acceptance_payload(value: Any) -> dict[str, Any]:
+def _validate_acceptance_payload(value: Any, *, allow_v3: bool = True) -> dict[str, Any]:
+    """Acceptance 事实：历史形状、v2 与 v3（B4-04，只在 fact v2 里接受；v1 事实遇到 v3 按原文案拒绝）。"""
+
     payload = expect_object(value, "acceptance_recorded")
     schema_version = payload.get("schema_version")
+    v3 = allow_v3 and schema_version == ACCEPTANCE_V3_SCHEMA
     required = {
         "candidate_id",
         "profile_approval_ref",
@@ -3312,8 +3628,10 @@ def _validate_acceptance_payload(value: Any) -> dict[str, Any]:
         "result",
     }
     if schema_version is not None:
-        if schema_version != ACCEPTANCE_V2_SCHEMA:
+        if schema_version != ACCEPTANCE_V2_SCHEMA and not v3:
             raise ControlError("acceptance_recorded.schema_version 不匹配")
+        if v3:
+            required |= {"evaluation_baseline", "baseline_commit_sha256"}
         required |= {
             "schema_version",
             "candidate_build_receipt_ref",
@@ -3376,6 +3694,8 @@ def _validate_acceptance_payload(value: Any) -> dict[str, Any]:
         )
         if any(reference["receipt_kind"] != "validation_gate" for reference in gate_refs):
             raise ControlError("acceptance_recorded 外部门禁必须引用 validation_gate 收据")
+        if v3:
+            _validate_baseline_fields(payload, "acceptance_recorded")
         expected_identity = canonical_sha256(
             {key: item for key, item in payload.items() if key != "identity_sha256"}
         )
@@ -3503,38 +3823,46 @@ def _validate_validation_completed_payload(value: Any) -> dict[str, Any]:
     return payload
 
 
-def _validate_candidate_delivery_payload(value: Any) -> dict[str, Any]:
+def _validate_candidate_delivery_payload(value: Any, *, allow_v2: bool = True) -> dict[str, Any]:
+    """候选交付阶段事实：v1，或 v2（B4-07，只在 fact v2 里接受）多记 ``recovery_revision``、``recovery_ref``。
+
+    v2 的首轮交付（dr0）两者为 null；恢复段 ``dr<k>`` 的事实两者都非空，``recovery_ref`` 引用该段预约。
+    ``allow_v2`` 为 False（v1 事实）时只按 v1 键集合校验，v1 报错逐字不变。
+    """
+
     payload = expect_object(value, "candidate_delivery_recorded")
-    expect_exact_keys(
-        payload,
-        {
-            "schema_version",
-            "delivery_id",
-            "stage",
-            "candidate_id",
-            "candidate_ref",
-            "candidate_build_receipt_ref",
-            "validation_completed_ref",
-            "acceptance_ref",
-            "delivery_plan_ref",
-            "previous_stage_ref",
-            "host_id",
-            "architecture",
-            "compose_sha256",
-            "environment_sha256",
-            "configuration_sha256",
-            "network_sha256",
-            "runtime_profile_sha256",
-            "image_digest",
-            "check_ids",
-            "evidence_refs",
-            "observed_seconds",
-            "result",
-            "identity_sha256",
-        },
-        "candidate_delivery_recorded",
-    )
-    if payload["schema_version"] != CANDIDATE_DELIVERY_FACT_SCHEMA:
+    v2 = allow_v2 and payload.get("schema_version") == CANDIDATE_DELIVERY_FACT_V2_SCHEMA
+    keys = {
+        "schema_version",
+        "delivery_id",
+        "stage",
+        "candidate_id",
+        "candidate_ref",
+        "candidate_build_receipt_ref",
+        "validation_completed_ref",
+        "acceptance_ref",
+        "delivery_plan_ref",
+        "previous_stage_ref",
+        "host_id",
+        "architecture",
+        "compose_sha256",
+        "environment_sha256",
+        "configuration_sha256",
+        "network_sha256",
+        "runtime_profile_sha256",
+        "image_digest",
+        "check_ids",
+        "evidence_refs",
+        "observed_seconds",
+        "result",
+        "identity_sha256",
+    }
+    if v2:
+        keys |= {"recovery_revision", "recovery_ref"}
+    expect_exact_keys(payload, keys, "candidate_delivery_recorded")
+    if payload["schema_version"] != (
+        CANDIDATE_DELIVERY_FACT_V2_SCHEMA if v2 else CANDIDATE_DELIVERY_FACT_SCHEMA
+    ):
         raise ControlError("candidate_delivery_recorded.schema_version 不匹配")
     for key in ("delivery_id", "candidate_id", "host_id"):
         expect_safe_id(payload[key], f"candidate_delivery_recorded.{key}")
@@ -3590,6 +3918,17 @@ def _validate_candidate_delivery_payload(value: Any) -> dict[str, Any]:
         {"pass", "failed"},
         "candidate_delivery_recorded.result",
     )
+    if v2:
+        recovery_ref = payload["recovery_ref"]
+        if delivery_recovery_number(payload["recovery_revision"]) == 0:
+            if recovery_ref is not None:
+                raise ControlError("首轮交付（dr0）的事实不得声明 recovery_ref")
+        else:
+            if recovery_ref is None:
+                raise ControlError("① 带 recovery_revision 的交付事实必须有 recovery_ref")
+            reference = validate_object_ref(recovery_ref, "candidate_delivery_recorded.recovery_ref")
+            if reference["object_kind"] != "candidate_delivery_recovery":
+                raise ControlError("candidate_delivery_recorded.recovery_ref 必须引用 candidate_delivery_recovery")
     expected_identity = canonical_sha256(
         {key: item for key, item in payload.items() if key != "identity_sha256"}
     )
@@ -3705,10 +4044,11 @@ def _validate_inventory_current_appended(value: Any) -> dict[str, Any]:
 
 
 def _validate_candidate_revision_payload(value: Any) -> dict[str, Any]:
-    """候选 revision 事实（B1-12 最小形态，B3-05 补全作废门禁）。
+    """候选 revision 事实（B1-12 立形，B3-05 补全作废门禁）。
 
     ``revision`` 从 1 起；``supersedes`` 引用被取代的上一条 revision 事实（取代隐含 r1 或显式
-    确认 r1 时为 ``null``）；``invalidation_ref`` 引用作废依据对象，语义由 B3-05 定义。
+    确认 r1 时为 ``null``）；``invalidation_ref`` 引用被取代 revision 的 ``candidate_invalidation`` 对象：r1 不取代
+    任何 revision，必须为 ``null``；r≥2 时被取代的 revision 若已作废就必须引用该作废对象（门禁在 gates 核对）。
     """
 
     label = "candidate_revision_recorded"
@@ -3727,11 +4067,54 @@ def _validate_candidate_revision_payload(value: Any) -> dict[str, Any]:
             raise ControlError(f"{label} r1 不得取代其它 revision")
     invalidation = payload["invalidation_ref"]
     if invalidation is not None:
-        validate_object_ref(invalidation, f"{label}.invalidation_ref")
+        reference = validate_object_ref(invalidation, f"{label}.invalidation_ref")
+        if reference["object_kind"] != "candidate_invalidation":
+            raise ControlError(f"{label}.invalidation_ref 只能引用 candidate_invalidation")
+        if revision == 1:
+            raise ControlError(f"{label} r1 不取代任何 revision，不得声明 invalidation_ref")
     return payload
 
 
-def validate_fact_payload(fact_kind: str, payload: Any) -> dict[str, Any]:
+def _validate_evaluation_baseline_payload(value: Any) -> dict[str, Any]:
+    """评估基线事实（设计 B4-04）的形状。
+
+    ``baseline`` 是新开的评估基线编号 K（≥1，同一候选 revision 内严格递增；未 COMMIT 而放弃的编号不复用，
+    所以不要求连续）；``baseline_commit_sha256`` 是编排器评估基线 COMMIT 的摘要，PAIR／Acceptance v3 与
+    ``formed_under.evaluation_baseline`` 记录的正是这一对值；``candidate_ref`` 是被重评的候选冻结事实；
+    ``supersedes`` 引用同一候选 revision 内的上一条基线事实（b1 为 ``null``）；``kind`` 与 COMMIT 的种类同一闭集。
+    """
+
+    label = "evaluation_baseline_recorded"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {"baseline", "baseline_commit_sha256", "candidate_id", "candidate_ref", "supersedes", "kind"},
+        label,
+    )
+    _expect_positive_int(payload["baseline"], f"{label}.baseline")
+    expect_sha256(payload["baseline_commit_sha256"], f"{label}.baseline_commit_sha256")
+    expect_safe_id(payload["candidate_id"], f"{label}.candidate_id")
+    reference = validate_fact_ref(payload["candidate_ref"], f"{label}.candidate_ref")
+    if reference["dimension"] != FACT_DIMENSION["candidate_frozen"]:
+        raise ControlError(f"{label}.candidate_ref 必须引用 validation 维度的候选冻结事实")
+    supersedes = payload["supersedes"]
+    if supersedes is not None:
+        previous = validate_fact_ref(supersedes, f"{label}.supersedes")
+        if previous["dimension"] != FACT_DIMENSION["evaluation_baseline_recorded"]:
+            raise ControlError(f"{label}.supersedes 必须引用 validation 维度的评估基线事实")
+    _expect_enum(payload["kind"], set(EVALUATION_BASELINE_KINDS), f"{label}.kind")
+    return payload
+
+
+def validate_fact_payload(
+    fact_kind: str, payload: Any, *, allow_v2_payloads: bool = True
+) -> dict[str, Any]:
+    """按种类校验事实 payload。
+
+    ``allow_v2_payloads`` 为 False（v1 事实）时，只属于 fact v2 的 payload 合同（PAIR／Acceptance v3、交付事实 v2）
+    与任何未知合同名一样按原文案「schema_version 不匹配」拒绝，v1 报错逐字不变。
+    """
+
     validators: dict[str, Callable[[Any], dict[str, Any]]] = {
         "discovery_recorded": _validate_discovery_payload,
         "evidence_recorded": _validate_evidence_recorded_payload,
@@ -3739,16 +4122,23 @@ def validate_fact_payload(fact_kind: str, payload: Any) -> dict[str, Any]:
         "evidence_approved": _validate_evidence_approved_payload,
         "profile_approved": _validate_profile_approved_payload,
         "candidate_frozen": _validate_candidate_payload,
-        "pair_recorded": _validate_pair_payload,
-        "acceptance_recorded": _validate_acceptance_payload,
+        "pair_recorded": lambda value: _validate_pair_payload(
+            value, allow_v3=allow_v2_payloads
+        ),
+        "acceptance_recorded": lambda value: _validate_acceptance_payload(
+            value, allow_v3=allow_v2_payloads
+        ),
         "validation_attempt_created": _validate_validation_attempt_payload,
         "validation_completed": _validate_validation_completed_payload,
         "selector_observed": lambda value: _validate_selector_payload(value, activated=False),
         "selector_activated": lambda value: _validate_selector_payload(value, activated=True),
         "release_promoted": _validate_release_promoted_payload,
         "inventory_current_appended": _validate_inventory_current_appended,
-        "candidate_delivery_recorded": _validate_candidate_delivery_payload,
+        "candidate_delivery_recorded": lambda value: _validate_candidate_delivery_payload(
+            value, allow_v2=allow_v2_payloads
+        ),
         "candidate_revision_recorded": _validate_candidate_revision_payload,
+        "evaluation_baseline_recorded": _validate_evaluation_baseline_payload,
     }
     if fact_kind in SCENARIO_FACT_STAGE:
         return _validate_scenario_payload(payload, SCENARIO_FACT_STAGE[fact_kind])
@@ -3807,6 +4197,8 @@ def validate_idempotency_key(value: Any, label: str = "idempotency_key") -> str 
 
 # fact-lookup 的结果合同（对账器按幂等键补账时读取）。
 FACT_LOOKUP_SCHEMA = "official-client-control-fact-lookup/v1"
+# delivery-chain 的结果合同（B4-07，编排器生成段预约与阶段失效前读取唯一有效链）。
+DELIVERY_CHAIN_SCHEMA = "official-client-control-delivery-chain/v1"
 
 
 def fact_idempotency_key(logical_action: str, input_identity_sha256: str, fact_kind: str) -> str:
@@ -3870,7 +4262,7 @@ def _validate_fact_body(document: dict[str, Any], *, allow_v2_kinds: bool) -> No
     else:
         expect_sha256(previous, "fact.previous_fact_sha256")
     expect_rfc3339(document["issued_at_utc"], "fact.issued_at_utc")
-    validate_fact_payload(fact_kind, document["payload"])
+    validate_fact_payload(fact_kind, document["payload"], allow_v2_payloads=allow_v2_kinds)
 
 
 def validate_store_metadata(value: Any) -> dict[str, Any]:
@@ -4206,9 +4598,19 @@ def _validate_validation_gate_receipt(
     return receipt
 
 
+_DELIVERY_RECEIPT_V3_EXTRA_KEYS = ("delivery_failure_refs", "stage_invalidation_refs", "recovery_refs")
+
+
 def _validate_candidate_delivery_receipt(
     value: Any, schema: str = CANDIDATE_DELIVERY_RECEIPT_SCHEMA
 ) -> dict[str, Any]:
+    """候选交付收据：v1、v2（加 formed_under）与 v3（B4-07）。
+
+    v3 在 v2 之上记录该 delivery 的全部失败事实（按事实序号）、被恢复段消费的阶段失效对象与恢复段预约（均按
+    dr 编号），三者都进入 ``input_facts_sha256``；``delivery_fact_refs`` 是有效链四阶段的最终 pass。
+    """
+
+    v3 = schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
     receipt = expect_object(value, "candidate_delivery_receipt")
     expect_exact_keys(
         receipt,
@@ -4238,7 +4640,8 @@ def _validate_candidate_delivery_receipt(
             "producer_tool_sha256",
             "identity_sha256",
         }
-        | _receipt_extra_keys(schema),
+        | _receipt_extra_keys(schema)
+        | (set(_DELIVERY_RECEIPT_V3_EXTRA_KEYS) if v3 else set()),
         "candidate_delivery_receipt",
     )
     if receipt["schema_version"] != schema:
@@ -4299,6 +4702,8 @@ def _validate_candidate_delivery_receipt(
         receipt["candidate_delivery_package_ref"],
         receipt["private_archive_manifest_ref"],
     ]
+    if v3:
+        expected_inputs.extend(_validate_delivery_recovery_inputs(receipt))
     if receipt["input_facts_sha256"] != canonical_sha256(expected_inputs):
         raise ControlError("candidate_delivery_receipt.input_facts_sha256 不匹配")
     for key in ("input_facts_sha256", "producer_tool_sha256"):
@@ -4310,6 +4715,44 @@ def _validate_candidate_delivery_receipt(
     if receipt["identity_sha256"] != expected_identity:
         raise ControlError("candidate_delivery_receipt.identity_sha256 与交付内容不一致")
     return receipt
+
+
+def _validate_delivery_recovery_inputs(receipt: dict[str, Any]) -> list[dict[str, Any]]:
+    """候选交付收据 v3 的三组恢复输入：失败事实（序号严格递增）、阶段失效对象与恢复段预约（各不重复）。
+
+    返回按「失败事实、失效对象、段预约」顺序拼接的引用，供 ``input_facts_sha256`` 复算。
+    """
+
+    label = "candidate_delivery_receipt"
+    failures = receipt["delivery_failure_refs"]
+    if not isinstance(failures, list):
+        raise ControlError(f"{label}.delivery_failure_refs 必须是数组")
+    sequences: list[int] = []
+    for index, reference in enumerate(failures):
+        parsed = validate_fact_ref(reference, f"{label}.delivery_failure_refs[{index}]")
+        if parsed["dimension"] != FACT_DIMENSION["candidate_delivery_recorded"]:
+            raise ControlError(f"{label}.delivery_failure_refs 只能引用交付阶段事实")
+        sequences.append(parsed["sequence"])
+    if sequences != sorted(set(sequences)):
+        raise ControlError(f"{label}.delivery_failure_refs 必须按事实序号严格递增且不得重复")
+    groups: list[list[dict[str, Any]]] = [failures]
+    for key, expected_kind in (
+        ("stage_invalidation_refs", "candidate_delivery_stage_invalidation"),
+        ("recovery_refs", "candidate_delivery_recovery"),
+    ):
+        references = receipt[key]
+        if not isinstance(references, list):
+            raise ControlError(f"{label}.{key} 必须是数组")
+        parsed_refs = [
+            validate_object_ref(item, f"{label}.{key}[{index}]")
+            for index, item in enumerate(references)
+        ]
+        if any(item["object_kind"] != expected_kind for item in parsed_refs):
+            raise ControlError(f"{label}.{key} 只能引用 {expected_kind}")
+        if len({item["sha256"] for item in parsed_refs}) != len(parsed_refs):
+            raise ControlError(f"{label}.{key} 不得重复")
+        groups.append(parsed_refs)
+    return [reference for group in groups for reference in group]
 
 
 def identity_differences(
@@ -4465,6 +4908,12 @@ def _requested_receipt_schema(value: Any, kind: str) -> str | None:
         return None
     if isinstance(value, dict) and value.get("schema_version") == versions[1]:
         return versions[1]
+    if (
+        kind == "candidate_delivery"
+        and isinstance(value, dict)
+        and value.get("schema_version") == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
+    ):
+        return CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
     return versions[0]
 
 

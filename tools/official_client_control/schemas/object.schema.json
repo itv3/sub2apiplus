@@ -42,7 +42,10 @@
         "promotion_diff",
         "acceptance_package",
         "tool_evolution_registration",
-        "predecessor_import"
+        "predecessor_import",
+        "candidate_invalidation",
+        "candidate_delivery_stage_invalidation",
+        "candidate_delivery_recovery"
       ]
     },
     "payload": {"type": "object"}
@@ -55,6 +58,18 @@
     {
       "if": {"properties": {"object_kind": {"const": "predecessor_import"}}},
       "then": {"properties": {"payload": {"$ref": "#/$defs/predecessorImport"}}}
+    },
+    {
+      "if": {"properties": {"object_kind": {"const": "candidate_invalidation"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/candidateInvalidation"}}}
+    },
+    {
+      "if": {"properties": {"object_kind": {"const": "candidate_delivery_stage_invalidation"}}},
+      "then": {"properties": {"payload": {"$ref": "candidate-delivery.schema.json#/$defs/stageInvalidation"}}}
+    },
+    {
+      "if": {"properties": {"object_kind": {"const": "candidate_delivery_recovery"}}},
+      "then": {"properties": {"payload": {"$ref": "candidate-delivery.schema.json#/$defs/recovery"}}}
     }
   ],
   "$defs": {
@@ -120,6 +135,23 @@
         "mode": {"enum": ["read_only_reuse", "regression_fixture"]},
         "approved_by": {"type": "string", "minLength": 1},
         "approved_at_utc": {"type": "string", "format": "date-time"}
+      }
+    },
+    "candidateInvalidation": {
+      "description": "Campaign v2 的候选作废（B3-05）：revision 是被作废候选所属的候选 revision，revision_ref 引用它的 candidate_revision_recorded 事实（只有没有显式 r1 事实的隐含 r1 可以为 null）。review_sha256 等于批准字段（approved_by、approved_at_utc、review_sha256）以外全部字段的规范摘要：preview 输出、apply 以 --approve-sha256 核对后一次写出。封存后当前 revision 进入 revision_required：候选级事实与收据一律拒绝，直到新 revision 事实以 invalidation_ref 引用本对象；同一 revision 只作废一次；已完成 VC-5 验收（validation_completed）的候选不得作废。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "candidate_id", "revision", "revision_ref", "reason", "evidence_refs", "approved_by", "approved_at_utc", "review_sha256"],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "candidate_id": {"$ref": "#/$defs/safeId"},
+        "revision": {"type": "integer", "minimum": 1},
+        "revision_ref": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/factRef"}]},
+        "reason": {"type": "string", "minLength": 1},
+        "evidence_refs": {"type": "array", "items": {"$ref": "#/$defs/objectRef"}},
+        "approved_by": {"type": "string", "minLength": 1},
+        "approved_at_utc": {"type": "string", "format": "date-time"},
+        "review_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "toolEvolutionRegistration": {

@@ -8,14 +8,21 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .canonical import canonical_json_bytes, load_json_file
-from .contracts import CAMPAIGN_SCHEMA, CAMPAIGN_V2_SCHEMA
+from .contracts import (
+    CAMPAIGN_SCHEMA,
+    CAMPAIGN_V2_SCHEMA,
+    INVALIDATION_APPROVAL_FIELDS,
+    invalidation_review_sha256,
+)
 from .errors import ControlError
 from .gates import WorkflowGates
 from .receipts import (
+    delivery_chain_report,
     effective_tool_identity,
     finalize_activation,
     finalize_candidate_build,
     finalize_candidate_delivery,
+    finalize_candidate_delivery_outcome,
     finalize_predecessor_import_outcome,
     finalize_promotion,
     finalize_validation_gate,
@@ -49,8 +56,16 @@ FACT_COMMANDS = {
     "selector-activate": "selector_activated",
     "promotion-record": "release_promoted",
     "inventory-current-append": "inventory_current_appended",
-    # B1-12 最小形态：只允许 Campaign v2；revision-open／invalidate-candidate 编排入口由 B3-05 接入。
+    # 只允许 Campaign v2（B1-12 立形、B3-05 补作废门禁）；编排器的 revision-open 写这条事实。
     "candidate-revision-record": "candidate_revision_recorded",
+    # B4-04：只允许 Campaign v2；编排器评估基线 COMMIT 之后（reevaluate／evaluation-recover）写这条事实。
+    "evaluation-baseline-record": "evaluation_baseline_recorded",
+}
+
+# 两种经批准的失效对象（B3-05 候选作废、B4-07 交付阶段失效）：命令名 → 对象类型。
+INVALIDATION_COMMANDS = {
+    "candidate-invalidate": "candidate_invalidation",
+    "delivery-stage-invalidate": "candidate_delivery_stage_invalidation",
 }
 
 
@@ -164,6 +179,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_verify.add_argument("--predecessor-root", type=_absolute_path, help=predecessor_root_help)
 
+    # 候选作废与交付阶段失效（B3-05／B4-07）：preview 只输出审核摘要；apply 以 --approve-sha256 核对后封存（write-once）。
+    invalidation_help = {
+        "candidate-invalidate": "作废当前候选 revision 的候选（当前 revision 进入 revision_required，等待新 revision 引用）",
+        "delivery-stage-invalidate": "批准失效一个已通过的交付阶段（只在 delivery 未 finalize 时允许）",
+    }
+    for command, kind in INVALIDATION_COMMANDS.items():
+        invalidation = subparsers.add_parser(command, help=invalidation_help[command])
+        _add_store(invalidation)
+        invalidation.add_argument("--campaign", required=True, help="Campaign v2 ID")
+        invalidation.add_argument("--input", required=True, type=_absolute_path, help=f"{kind} payload JSON")
+        step = invalidation.add_mutually_exclusive_group(required=True)
+        step.add_argument(
+            "--preview",
+            action="store_true",
+            help="只输出审核内容与 review_sha256（批准字段 approved_by／approved_at_utc／review_sha256 不计入）",
+        )
+        step.add_argument(
+            "--approve-sha256", help="preview 输出的 review_sha256；必须等于输入里的 review_sha256"
+        )
+        invalidation.add_argument("--allow-existing", action="store_true", help=allow_existing_help)
+
+    recovery = subparsers.add_parser(
+        "delivery-recovery-reserve", help="预约候选交付恢复段 dr<k>（B4-07：failure 或 approved_invalidation 锚点）"
+    )
+    _add_store(recovery)
+    recovery.add_argument("--campaign", required=True, help="Campaign v2 ID")
+    recovery.add_argument(
+        "--input", required=True, type=_absolute_path, help="candidate_delivery_recovery payload JSON"
+    )
+    recovery.add_argument("--allow-existing", action="store_true", help=allow_existing_help)
+
+    chain = subparsers.add_parser(
+        "delivery-chain", help="只读输出某 delivery 的唯一有效链、最新段、待消费失效与收据（B4-07）"
+    )
+    _add_store(chain)
+    chain.add_argument("--campaign", required=True, help="Campaign v2 ID")
+    chain.add_argument("--delivery-id", required=True, help="候选交付 delivery_id")
+
     for command in FACT_COMMANDS:
         fact_parser = subparsers.add_parser(command, help=f"追加 {FACT_COMMANDS[command]} 事实")
         _add_fact_command(fact_parser)
@@ -239,6 +292,11 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_delivery_finalize.add_argument(
         "--package-ref", required=True, type=_absolute_path
     )
+    candidate_delivery_finalize.add_argument(
+        "--allow-existing",
+        action="store_true",
+        help="输出 {receipt_ref, reused}；Campaign v2 下同一交付包重复 finalize 返回原收据（终态）",
+    )
 
     replay = subparsers.add_parser("replay", help="独立复算 Store、事实链和收据")
     _add_store(replay)
@@ -294,6 +352,43 @@ def _append_fact(
         **_fact_write_options(arguments),
     )
     return _fact_write_result(arguments, outcome)
+
+
+def _seal_campaign_object(
+    store: ControlStore,
+    arguments: argparse.Namespace,
+    kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """封存属于 ``--campaign`` 的控制对象；``--allow-existing`` 时输出附 ``reused``（同 B1-13 口径）。"""
+
+    if payload.get("campaign_id") != arguments.campaign:
+        raise ControlError(f"{kind}.campaign_id 与 --campaign 不一致")
+    outcome = store.seal_object_outcome(kind, payload, allow_existing=arguments.allow_existing)
+    result = {"object_ref": outcome["object_ref"]}
+    return result | {"reused": outcome["reused"]} if arguments.allow_existing else result
+
+
+def _invalidation_command(
+    store: ControlStore, arguments: argparse.Namespace, kind: str
+) -> dict[str, Any]:
+    """候选作废／交付阶段失效的两步式入口：preview 输出审核摘要，apply 核对批准摘要后封存。"""
+
+    payload = _load_object(arguments.input, f"{kind} payload")
+    if arguments.preview:
+        if payload.get("campaign_id") != arguments.campaign:
+            raise ControlError(f"{kind}.campaign_id 与 --campaign 不一致")
+        review = {
+            key: value for key, value in payload.items() if key not in INVALIDATION_APPROVAL_FIELDS
+        }
+        return {
+            "object_kind": kind,
+            "review": review,
+            "review_sha256": invalidation_review_sha256(review),
+        }
+    if payload.get("review_sha256") != arguments.approve_sha256:
+        raise ControlError("--approve-sha256 与输入的 review_sha256 不一致：批准的不是这份内容，请重新 preview")
+    return _seal_campaign_object(store, arguments, kind, payload)
 
 
 def execute(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -352,6 +447,17 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             _load_object(arguments.import_ref, "predecessor import ref"),
             predecessor_root=arguments.predecessor_root,
         )
+    if command in INVALIDATION_COMMANDS:
+        return _invalidation_command(store, arguments, INVALIDATION_COMMANDS[command])
+    if command == "delivery-recovery-reserve":
+        return _seal_campaign_object(
+            store,
+            arguments,
+            "candidate_delivery_recovery",
+            _load_object(arguments.input, "candidate_delivery_recovery payload"),
+        )
+    if command == "delivery-chain":
+        return delivery_chain_report(store, arguments.campaign, arguments.delivery_id)
     if command in FACT_COMMANDS:
         return _append_fact(
             store,
@@ -410,11 +516,10 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ControlError("candidate delivery payload.stage 与 --stage 不一致")
         return _append_fact(store, arguments, "candidate_delivery_recorded", payload)
     if command == "candidate-delivery-finalize":
-        return finalize_candidate_delivery(
-            store,
-            arguments.campaign,
-            _load_object(arguments.package_ref, "candidate delivery package ref"),
-        )
+        package_ref = _load_object(arguments.package_ref, "candidate delivery package ref")
+        if arguments.allow_existing:
+            return finalize_candidate_delivery_outcome(store, arguments.campaign, package_ref)
+        return finalize_candidate_delivery(store, arguments.campaign, package_ref)
     if command == "replay":
         return store.replay(
             external_root=arguments.external_root,

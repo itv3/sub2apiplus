@@ -26,13 +26,17 @@ from tools.official_client_control.contracts import (
     candidate_identity_sha256,
     campaign_identity_sha256,
     capability_key,
+    invalidation_review_sha256,
     profile_approval_identity_sha256,
     rule_migration_ledger_identity_sha256,
 )
 from tools.official_client_control.receipts import (
     candidate_revision_facts,
     control_tool_bundle_sha256,
+    current_candidate_revision,
+    current_evaluation_baseline,
     current_tool_manifest,
+    evaluation_baseline_facts,
     finalize_activation,
     finalize_candidate_build,
     finalize_candidate_delivery,
@@ -324,8 +328,13 @@ class SyntheticCampaign:
         self.references[f"tool-evolution-{payload['index']}"] = reference
         return reference
 
-    def open_candidate_revision(self, candidate_id: str) -> dict[str, Any]:
-        """追加下一条候选 revision 事实（B1-12 最小形态），取代当前 revision。"""
+    def open_candidate_revision(
+        self, candidate_id: str, *, invalidation_ref: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """追加下一条候选 revision 事实，取代当前 revision。
+
+        ``invalidation_ref`` 缺省为 null（B1-12 的直接取代，原行为）；B3-05 的测试传入被取代 revision 的作废对象。
+        """
 
         campaign = self.store.load_campaign(self.campaign_id)
         revisions = candidate_revision_facts(self.store, campaign)
@@ -337,7 +346,7 @@ class SyntheticCampaign:
                 "revision": previous["payload"]["revision"] + 1 if previous else 2,
                 "candidate_id": candidate_id,
                 "supersedes": self.store.fact_ref(previous) if previous else None,
-                "invalidation_ref": None,
+                "invalidation_ref": invalidation_ref,
             },
             self._time(),
         )
@@ -1772,3 +1781,417 @@ class SyntheticCampaign:
 
     def debug_json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    # ------------------------------------------------------------------
+    # Claude 升级 B3-05／B4-04／B4-07 的夹具（只增不改：以上原有方法的行为不变）
+    # ------------------------------------------------------------------
+
+    def candidate_invalidation_payload(
+        self, candidate_id: str, *, reason: str = "候选源码需要修改"
+    ) -> dict[str, Any]:
+        """作废当前候选 revision 的 payload（B3-05），review_sha256 按审核内容现算。"""
+
+        campaign = self.store.load_campaign(self.campaign_id)
+        revisions = candidate_revision_facts(self.store, campaign)
+        current = revisions[-1] if revisions else None
+        payload: dict[str, Any] = {
+            "campaign_id": self.campaign_id,
+            "candidate_id": candidate_id,
+            "revision": current["payload"]["revision"] if current else 1,
+            "revision_ref": self.store.fact_ref(current) if current else None,
+            "reason": reason,
+            "evidence_refs": [self.references["operational-evidence"]],
+            "approved_by": "synthetic-reviewer",
+            "approved_at_utc": self._time(),
+            "review_sha256": "",
+        }
+        payload["review_sha256"] = invalidation_review_sha256(payload)
+        return payload
+
+    def invalidate_candidate(self, candidate_id: str) -> dict[str, Any]:
+        """封存候选作废对象：当前 revision 进入 revision_required。"""
+
+        reference = self.store.seal_object(
+            "candidate_invalidation", self.candidate_invalidation_payload(candidate_id)
+        )
+        self.references[f"candidate-invalidation-{candidate_id}"] = reference
+        return reference
+
+    def baseline_commit(self, number: int, tag: str = "strict") -> str:
+        """合成的评估基线 COMMIT 摘要（编排器侧 COMMIT 的 commit_sha256 在 Store 里只作不透明摘要）。"""
+
+        return canonical_sha256({"candidate": f"synthetic-candidate-{tag}", "evaluation_baseline": number})
+
+    def open_evaluation_baseline(
+        self, number: int, *, tag: str = "strict", kind: str = "evaluator-only"
+    ) -> dict[str, Any]:
+        """在当前候选 revision 内为 tag 候选开评估基线 b<number>（B4-04）。"""
+
+        campaign = self.store.load_campaign(self.campaign_id)
+        revision, _candidate = current_candidate_revision(self.store, campaign)
+        earlier = [
+            fact
+            for fact in evaluation_baseline_facts(self.store, campaign)
+            if fact["formed_under"]["candidate_revision"] == revision
+        ]
+        reference = self.store.append_fact(
+            self.campaign_id,
+            "evaluation_baseline_recorded",
+            {
+                "baseline": number,
+                "baseline_commit_sha256": self.baseline_commit(number, tag),
+                "candidate_id": f"synthetic-candidate-{tag}",
+                "candidate_ref": self.references[f"candidate-{tag}"],
+                "supersedes": self.store.fact_ref(earlier[-1]) if earlier else None,
+                "kind": kind,
+            },
+            self._time(),
+        )
+        self.references[f"evaluation-baseline-{tag}-b{number}"] = reference
+        return reference
+
+    def _current_baseline_fields(self) -> dict[str, Any]:
+        baseline = current_evaluation_baseline(
+            self.store, self.store.load_campaign(self.campaign_id)
+        )
+        if baseline is None:
+            raise ValueError("当前没有评估基线（b0），不能写 v3 结果")
+        return {
+            "evaluation_baseline": baseline["baseline"],
+            "baseline_commit_sha256": baseline["baseline_commit_sha256"],
+        }
+
+    def rerun_pair_under_baseline(self, tag: str = "strict") -> dict[str, Any]:
+        """在当前评估基线下重跑 tag 候选的规则：把 b0 的 PAIR 以 v3 合同重写一份（受影响规则）。"""
+
+        base = self.store.load_fact(self.references[f"pair-{tag}"])["payload"]
+        payload = dict(base)
+        payload["schema_version"] = "official-client-pair/v3"
+        payload.update(self._current_baseline_fields())
+        reference = self.store.append_fact(self.campaign_id, "pair_recorded", payload, self._time())
+        self.references[f"pair-{tag}-b{payload['evaluation_baseline']}"] = reference
+        return reference
+
+    def baseline_acceptance_payload(
+        self, pair_refs: list[dict[str, Any]], tag: str = "strict"
+    ) -> dict[str, Any]:
+        """当前评估基线下的 Acceptance v3 payload：除 PAIR 与基线字段外沿用 b0 的 Acceptance。"""
+
+        base = self.store.load_fact(self.references[f"acceptance-{tag}"])["payload"]
+        payload = dict(base)
+        payload["schema_version"] = "official-client-acceptance/v3"
+        payload["pair_refs"] = sorted(pair_refs, key=canonical_sha256)
+        payload.update(self._current_baseline_fields())
+        payload["identity_sha256"] = canonical_sha256(
+            {key: value for key, value in payload.items() if key != "identity_sha256"}
+        )
+        return payload
+
+    def accept_under_baseline(
+        self, pair_refs: list[dict[str, Any]], *, tag: str = "strict", finalize: bool = True
+    ) -> dict[str, Any]:
+        """在当前评估基线下写 Acceptance v3，并（可选）派生该基线的 VC-5 完成事实。"""
+
+        payload = self.baseline_acceptance_payload(pair_refs, tag)
+        number = payload["evaluation_baseline"]
+        reference = self.store.append_fact(
+            self.campaign_id, "acceptance_recorded", payload, self._time()
+        )
+        self.references[f"acceptance-{tag}-b{number}"] = reference
+        if finalize:
+            self.references[f"validation-completed-{tag}-b{number}"] = finalize_validation(
+                self.store,
+                self.campaign_id,
+                reference,
+                self.references["validation-selector-after"],
+                self._time(),
+            )
+        return reference
+
+    # ---- B4-07 交付恢复段 ----
+
+    DELIVERY_STAGE_CHECKS = {
+        "candidate_active": ["health", "smoke"],
+        "rollback_verified": ["auth", "data", "dependencies", "health"],
+        "candidate_restored": ["health", "profile", "smoke"],
+        "stable_observed": ["identity", "safety", "state"],
+    }
+
+    def seal_delivery_plan(self, *, delivery_id: str = "delivery-strict-1") -> dict[str, Any]:
+        """封存严格候选的交付计划（与 ``strict_deliver`` 同值；同内容已封存时复用）。"""
+
+        plan = {
+            "schema_version": "official-client-candidate-delivery-plan/v1",
+            "campaign_id": self.campaign_id,
+            "persona": self.persona,
+            "plan_id": "delivery-plan-strict" if delivery_id == "delivery-strict-1" else f"plan-{delivery_id}",
+            "delivery_id": delivery_id,
+            "candidate_id": "synthetic-candidate-strict",
+            "candidate_ref": self.references["candidate-strict"],
+            "candidate_build_receipt_ref": self.references["candidate-build-receipt"],
+            "validation_completed_ref": self.references["validation-completed"],
+            "acceptance_ref": self.references["acceptance-strict"],
+            "candidate_evidence_package_ref": self.references["candidate-evidence-package"],
+            "host_id": "dmit-synthetic",
+            "architecture": "linux/amd64",
+            "compose_sha256": "d" * 64,
+            "environment_sha256": "4" * 64,
+            "configuration_sha256": "5" * 64,
+            "network_sha256": "6" * 64,
+            "runtime_profile_sha256": SHA_A,
+            "rollback_runtime_profile_sha256": "e" * 64,
+            "candidate_image_digest": TARGET_IMAGE,
+            "rollback_image_digest": ROLLBACK_IMAGE,
+            "observation_window_seconds": 60,
+            "stage_checks": self.DELIVERY_STAGE_CHECKS,
+            "environment_freeze_ref": self.references["operational-evidence"],
+            "rollback_material_refs": [self.references["operational-evidence"]],
+            "vircs_state": {
+                "ownership": "operator_managed",
+                "verification": "unverified",
+                "action": "not_touched",
+            },
+            "identity_sha256": "",
+        }
+        plan["identity_sha256"] = canonical_sha256(
+            {key: value for key, value in plan.items() if key != "identity_sha256"}
+        )
+        reference = self.store.seal_object_outcome(
+            "candidate_delivery_plan", plan, allow_existing=True
+        )["object_ref"]
+        self.references[f"delivery-plan-{delivery_id}"] = reference
+        return reference
+
+    def delivery_stage_payload(
+        self,
+        stage: str,
+        *,
+        previous: dict[str, Any] | None,
+        result: str = "pass",
+        recovery: tuple[int, dict[str, Any]] | None = None,
+        delivery_id: str = "delivery-strict-1",
+        observed_seconds: int | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """候选交付事实 v2 的 payload：``recovery`` 为 ``(k, 段预约引用)`` 时是 dr<k> 的事实，否则是首轮交付。"""
+
+        is_rollback = stage == "rollback_verified"
+        if result == "failed":
+            self._delivery_failures = getattr(self, "_delivery_failures", 0) + 1
+            evidence = self.seal_manifest(
+                "operational_evidence",
+                f"delivery-failure-{self._delivery_failures}",
+                [{"id": "stage-failure", "facts": {"result": "failed"}}],
+            )
+        else:
+            evidence = self.references["operational-evidence"]
+        if observed_seconds is None:
+            observed_seconds = 60 if stage == "stable_observed" and result == "pass" else 0
+        payload: dict[str, Any] = {
+            "schema_version": "official-client-candidate-delivery-fact/v2",
+            "delivery_id": delivery_id,
+            "stage": stage,
+            "candidate_id": "synthetic-candidate-strict",
+            "candidate_ref": self.references["candidate-strict"],
+            "candidate_build_receipt_ref": self.references["candidate-build-receipt"],
+            "validation_completed_ref": self.references["validation-completed"],
+            "acceptance_ref": self.references["acceptance-strict"],
+            "delivery_plan_ref": self.references[f"delivery-plan-{delivery_id}"],
+            "previous_stage_ref": previous,
+            "host_id": "dmit-synthetic",
+            "architecture": "linux/amd64",
+            "compose_sha256": "d" * 64,
+            "environment_sha256": "4" * 64,
+            "configuration_sha256": "5" * 64,
+            "network_sha256": "6" * 64,
+            "runtime_profile_sha256": "e" * 64 if is_rollback else SHA_A,
+            "image_digest": ROLLBACK_IMAGE if is_rollback else TARGET_IMAGE,
+            "check_ids": self.DELIVERY_STAGE_CHECKS[stage],
+            "evidence_refs": [evidence],
+            "observed_seconds": observed_seconds,
+            "result": result,
+            "recovery_revision": None if recovery is None else f"dr{recovery[0]}",
+            "recovery_ref": None if recovery is None else recovery[1],
+            "identity_sha256": "",
+        }
+        payload.update(overrides or {})
+        payload["identity_sha256"] = canonical_sha256(
+            {key: value for key, value in payload.items() if key != "identity_sha256"}
+        )
+        return payload
+
+    def record_delivery_stage(self, stage: str, **kwargs: Any) -> dict[str, Any]:
+        """追加一条候选交付事实 v2（参数同 ``delivery_stage_payload``）。"""
+
+        return self.store.append_fact(
+            self.campaign_id,
+            "candidate_delivery_recorded",
+            self.delivery_stage_payload(stage, **kwargs),
+            self._time(),
+        )
+
+    def record_delivery_run(
+        self,
+        stages: list[str],
+        *,
+        previous: dict[str, Any] | None = None,
+        recovery: tuple[int, dict[str, Any]] | None = None,
+        fail_stage: str | None = None,
+        delivery_id: str = "delivery-strict-1",
+    ) -> list[dict[str, Any]]:
+        """按顺序推进一段交付：首条衔接 ``previous``，其后衔接本段前一阶段；遇到 ``fail_stage`` 记失败并停止。"""
+
+        references: list[dict[str, Any]] = []
+        for stage in stages:
+            failed = stage == fail_stage
+            previous = self.record_delivery_stage(
+                stage,
+                previous=previous,
+                result="failed" if failed else "pass",
+                recovery=recovery,
+                delivery_id=delivery_id,
+            )
+            references.append(previous)
+            if failed:
+                break
+        return references
+
+    def delivery_recovery_payload(
+        self,
+        number: int,
+        *,
+        anchor_kind: str,
+        anchor_ref: dict[str, Any],
+        rerun_from_stage: str,
+        previous_valid_stage_ref: dict[str, Any] | None,
+        delivery_id: str = "delivery-strict-1",
+        environment_overrides: dict[str, Any] | None = None,
+        stages_to_rerun: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """交付恢复段 dr<number> 的预约 payload（B4-07）。"""
+
+        stages = [
+            "candidate_active",
+            "rollback_verified",
+            "candidate_restored",
+            "stable_observed",
+        ]
+        environment = {
+            "host_id": "dmit-synthetic",
+            "architecture": "linux/amd64",
+            "compose_sha256": "d" * 64,
+            "environment_sha256": "4" * 64,
+            "configuration_sha256": "5" * 64,
+            "network_sha256": "6" * 64,
+            "evidence_ref": self.references["operational-evidence"],
+        }
+        environment.update(environment_overrides or {})
+        return {
+            "campaign_id": self.campaign_id,
+            "delivery_id": delivery_id,
+            "delivery_plan_ref": self.references[f"delivery-plan-{delivery_id}"],
+            "recovery_revision": f"dr{number}",
+            "anchor_kind": anchor_kind,
+            "anchor_ref": anchor_ref,
+            "rerun_from_stage": rerun_from_stage,
+            "previous_valid_stage_ref": previous_valid_stage_ref,
+            "stages_to_rerun": stages_to_rerun
+            if stages_to_rerun is not None
+            else stages[stages.index(rerun_from_stage):],
+            "run_nonce": f"delivery-run-{delivery_id}-dr{number}",
+            "environment_before": environment,
+        }
+
+    def reserve_delivery_recovery(self, number: int, **kwargs: Any) -> dict[str, Any]:
+        """封存交付恢复段 dr<number> 的预约（参数同 ``delivery_recovery_payload``）。"""
+
+        reference = self.store.seal_object(
+            "candidate_delivery_recovery", self.delivery_recovery_payload(number, **kwargs)
+        )
+        self.references[f"delivery-recovery-dr{number}"] = reference
+        return reference
+
+    def delivery_stage_invalidation_payload(
+        self, stage: str, stage_ref: dict[str, Any], *, delivery_id: str = "delivery-strict-1"
+    ) -> dict[str, Any]:
+        """经批准的交付阶段失效 payload（B4-07），review_sha256 按审核内容现算。"""
+
+        payload: dict[str, Any] = {
+            "campaign_id": self.campaign_id,
+            "delivery_id": delivery_id,
+            "invalidated_stage": stage,
+            "invalidated_stage_ref": stage_ref,
+            "reason": f"{stage} 的通过结论需要重跑核实",
+            "evidence_refs": [self.references["operational-evidence"]],
+            "approved_by": "synthetic-reviewer",
+            "approved_at_utc": self._time(),
+            "review_sha256": "",
+        }
+        payload["review_sha256"] = invalidation_review_sha256(payload)
+        return payload
+
+    def invalidate_delivery_stage(
+        self, stage: str, stage_ref: dict[str, Any], *, delivery_id: str = "delivery-strict-1"
+    ) -> dict[str, Any]:
+        reference = self.store.seal_object(
+            "candidate_delivery_stage_invalidation",
+            self.delivery_stage_invalidation_payload(stage, stage_ref, delivery_id=delivery_id),
+        )
+        self.references[f"delivery-stage-invalidation-{stage}"] = reference
+        return reference
+
+    def seal_delivery_package(
+        self,
+        fact_refs: list[dict[str, Any]],
+        *,
+        delivery_id: str = "delivery-strict-1",
+        package_id: str = "delivery-package-recovered",
+    ) -> dict[str, Any]:
+        """封存绑定给定四阶段事实的交付包（私有归档清单与 ``strict_deliver`` 同值，已封存即复用）。"""
+
+        archive = {
+            "schema_version": "official-client-private-archive-manifest/v1",
+            "campaign_id": self.campaign_id,
+            "persona": self.persona,
+            "manifest_id": "private-archive-strict",
+            "redacted": True,
+            "entries": [self.private_binding],
+            "entry_count": 1,
+            "total_bytes": self.private_binding["bytes"],
+            "manifest_sha256": canonical_sha256([self.private_binding]),
+            "identity_sha256": "",
+        }
+        archive["identity_sha256"] = canonical_sha256(
+            {key: value for key, value in archive.items() if key != "identity_sha256"}
+        )
+        archive_ref = self.store.seal_object_outcome(
+            "private_archive_manifest", archive, allow_existing=True
+        )["object_ref"]
+        package = {
+            "schema_version": "official-client-candidate-delivery-package/v1",
+            "campaign_id": self.campaign_id,
+            "persona": self.persona,
+            "package_id": package_id,
+            "delivery_id": delivery_id,
+            "candidate_id": "synthetic-candidate-strict",
+            "candidate_ref": self.references["candidate-strict"],
+            "candidate_build_receipt_ref": self.references["candidate-build-receipt"],
+            "validation_completed_ref": self.references["validation-completed"],
+            "acceptance_ref": self.references["acceptance-strict"],
+            "candidate_evidence_package_ref": self.references["candidate-evidence-package"],
+            "delivery_plan_ref": self.references[f"delivery-plan-{delivery_id}"],
+            "delivery_fact_refs": fact_refs,
+            "deployment_configuration_ref": self.references["operational-evidence"],
+            "public_evidence_index_refs": [self.references["operational-evidence"]],
+            "rollback_material_refs": [self.references["operational-evidence"]],
+            "private_archive_manifest_ref": archive_ref,
+            "candidate_image_digest": TARGET_IMAGE,
+            "artifact_count": 3,
+            "identity_sha256": "",
+        }
+        package["identity_sha256"] = canonical_sha256(
+            {key: value for key, value in package.items() if key != "identity_sha256"}
+        )
+        reference = self.store.seal_object("candidate_delivery_package", package)
+        self.references[package_id] = reference
+        return reference

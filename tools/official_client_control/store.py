@@ -6,9 +6,9 @@ import fcntl
 import os
 import re
 import stat
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from .canonical import (
     canonical_json_bytes,
@@ -127,6 +127,17 @@ class ControlStore:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
 
+    @contextmanager
+    def _dimension_locks(self, campaign_id: str, dimensions: Iterable[str]) -> Iterator[None]:
+        """按 ``DIMENSIONS`` 的固定顺序取同一 Campaign 若干维度的事实锁（与 ``append_fact`` 同名），避免死锁。"""
+
+        wanted = set(dimensions)
+        with ExitStack() as stack:
+            for dimension in DIMENSIONS:
+                if dimension in wanted:
+                    stack.enter_context(self._lock(f"fact-{campaign_id}-{dimension}"))
+            yield
+
     def object_path(self, reference: dict[str, Any]) -> Path:
         parsed = validate_object_ref(reference)
         return self.root / "objects" / parsed["object_kind"] / f"{parsed['sha256']}.json"
@@ -198,10 +209,22 @@ class ControlStore:
         # 防止两次并发登记都按同一个链尾通过而分叉。
         # 前序导入登记（B1-14）与该 Campaign 的 evidence 维度事实写入共用维度锁：登记门禁「列入的 EvidencePackage
         # 没被本 Campaign 事实当本地证据引用」与 EvidenceFact 的导入判定不会交错。
+        # 候选作废（B3-05）与候选级事实写入（validation、deployment 两个维度）共用维度锁：作废门禁核完「当前 revision、
+        # 候选未验收」之后，不会有候选级事实插在作废对象落盘之前。交付阶段失效与恢复段预约（B4-07）与交付事实写入
+        # 共用 deployment 维度锁：链状态（最新段已收口、待消费的失效）在锁内判定，不会与新交付事实交错。
         if object_kind == "tool_evolution_registration":
             serial: Any = self._lock(f"tool-evolution-{payload['campaign_id']}")
         elif object_kind == "predecessor_import":
             serial = self._lock(f"fact-{payload['campaign_id']}-{FACT_DIMENSION['evidence_recorded']}")
+        elif object_kind == "candidate_invalidation":
+            serial = self._dimension_locks(
+                payload["campaign_id"],
+                (FACT_DIMENSION["candidate_frozen"], FACT_DIMENSION["candidate_delivery_recorded"]),
+            )
+        elif object_kind in {"candidate_delivery_stage_invalidation", "candidate_delivery_recovery"}:
+            serial = self._dimension_locks(
+                payload["campaign_id"], (FACT_DIMENSION["candidate_delivery_recorded"],)
+            )
         else:
             serial = nullcontext()
         with serial:

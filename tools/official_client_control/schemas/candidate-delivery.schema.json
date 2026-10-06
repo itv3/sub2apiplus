@@ -2,17 +2,34 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2api.local/schemas/official-client-candidate-delivery-v1.json",
   "title": "VC-6 候选交付闭环",
-  "description": "冻结交付计划、四阶段事实、候选交付包与脱敏私有归档清单。",
+  "description": "冻结交付计划、四阶段事实、候选交付包与脱敏私有归档清单；B4-07（只属于 Campaign v2）加交付恢复段：事实 v2 多记 recovery_revision／recovery_ref，恢复段预约 recovery 与经批准的阶段失效 stageInvalidation。唯一有效链＝首轮交付 dr0 前缀＋每个 dr<k> 以预约的 previous_valid_stage_ref 接续并覆盖到 stable_observed，起点之后的旧 pass 一律失效；交付收据 v3 取有效链四阶段的最终 pass。",
   "oneOf": [
     {"$ref": "#/$defs/plan"},
     {"$ref": "#/$defs/fact"},
+    {"$ref": "#/$defs/factV2"},
     {"$ref": "#/$defs/package"},
-    {"$ref": "#/$defs/archive"}
+    {"$ref": "#/$defs/archive"},
+    {"$ref": "#/$defs/recovery"},
+    {"$ref": "#/$defs/stageInvalidation"}
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "imageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "stage": {"enum": ["candidate_active", "rollback_verified", "candidate_restored", "stable_observed"]},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
+    "recoveryRevision": {"type": "string", "pattern": "^dr[1-9][0-9]*$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_kind", "sha256"],
+      "properties": {"object_kind": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "factRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "dimension", "sequence", "sha256"],
+      "properties": {"campaign_id": {"$ref": "#/$defs/safeId"}, "dimension": {"const": "deployment"}, "sequence": {"type": "integer", "minimum": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
     "plan": {
       "type": "object",
       "additionalProperties": false,
@@ -36,6 +53,66 @@
         "candidate_ref": {"type": "object"}, "candidate_build_receipt_ref": {"type": "object"}, "validation_completed_ref": {"type": "object"}, "acceptance_ref": {"type": "object"}, "delivery_plan_ref": {"type": "object"}, "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
         "host_id": {"type": "string"}, "architecture": {"type": "string"}, "compose_sha256": {"$ref": "#/$defs/sha256"}, "environment_sha256": {"$ref": "#/$defs/sha256"}, "configuration_sha256": {"$ref": "#/$defs/sha256"}, "network_sha256": {"$ref": "#/$defs/sha256"}, "runtime_profile_sha256": {"$ref": "#/$defs/sha256"}, "image_digest": {"$ref": "#/$defs/imageDigest"},
         "check_ids": {"type": "array", "minItems": 1}, "evidence_refs": {"type": "array", "minItems": 1}, "observed_seconds": {"type": "integer", "minimum": 0}, "result": {"enum": ["pass", "failed"]}, "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "factV2": {
+      "description": "候选交付事实 v2（B4-07，只在 fact v2 里接受）：v1 字段加 recovery_revision 与 recovery_ref；首轮交付（dr0）两者为 null，恢复段 dr<k> 两者都非空且 recovery_ref 引用该段预约。门禁：① 阶段属于预约的 stages_to_rerun；② 段内首个重跑阶段的 previous_stage_ref 等于预约的 previous_valid_stage_ref；③ 其后衔接本段直接前一阶段的 pass；⑤ 13 个不漂移字段逐字相等（环境变化须开新的 delivery_id）；⑥ stable_observed 观察窗取冻结计划；⑦ 只有最新一段接受新事实；delivery finalize 后不得再追加。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "delivery_id", "stage", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "delivery_plan_ref", "previous_stage_ref", "host_id", "architecture", "compose_sha256", "environment_sha256", "configuration_sha256", "network_sha256", "runtime_profile_sha256", "image_digest", "check_ids", "evidence_refs", "observed_seconds", "result", "recovery_revision", "recovery_ref", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-delivery-fact/v2"}, "delivery_id": {"type": "string"}, "stage": {"$ref": "#/$defs/stage"}, "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"}, "candidate_build_receipt_ref": {"type": "object"}, "validation_completed_ref": {"type": "object"}, "acceptance_ref": {"type": "object"}, "delivery_plan_ref": {"type": "object"}, "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "host_id": {"type": "string"}, "architecture": {"type": "string"}, "compose_sha256": {"$ref": "#/$defs/sha256"}, "environment_sha256": {"$ref": "#/$defs/sha256"}, "configuration_sha256": {"$ref": "#/$defs/sha256"}, "network_sha256": {"$ref": "#/$defs/sha256"}, "runtime_profile_sha256": {"$ref": "#/$defs/sha256"}, "image_digest": {"$ref": "#/$defs/imageDigest"},
+        "check_ids": {"type": "array", "minItems": 1}, "evidence_refs": {"type": "array", "minItems": 1}, "observed_seconds": {"type": "integer", "minimum": 0}, "result": {"enum": ["pass", "failed"]},
+        "recovery_revision": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/recoveryRevision"}]},
+        "recovery_ref": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["object_kind", "sha256"], "properties": {"object_kind": {"const": "candidate_delivery_recovery"}, "sha256": {"$ref": "#/$defs/sha256"}}}]},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "recovery": {
+      "description": "交付恢复段 dr<k> 的预约（B4-07，对象 candidate_delivery_recovery）。anchor_kind=failure：anchor_ref 是上一段收口时的失败阶段事实，rerun_from_stage 等于失败阶段；anchor_kind=approved_invalidation：anchor_ref 是待消费的 candidate_delivery_stage_invalidation，rerun_from_stage 等于被失效的阶段。previous_valid_stage_ref 是 rerun_from_stage 之前最近一份仍有效的 pass（首阶段为 null）；stages_to_rerun 强制从 rerun_from_stage 覆盖到 stable_observed；environment_before 的环境身份 6 项必须与冻结计划逐项相等（环境变化须开新的 delivery_id），evidence_ref 的证据全部通过。编号从 dr1 起连续，run_nonce 不复用；预约时上一段必须已收口（同一 delivery 同一时刻只允许一个未收口的恢复段），delivery finalize 后不得再预约。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "delivery_id", "delivery_plan_ref", "recovery_revision", "anchor_kind", "anchor_ref", "rerun_from_stage", "previous_valid_stage_ref", "stages_to_rerun", "run_nonce", "environment_before"],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "delivery_id": {"$ref": "#/$defs/safeId"},
+        "delivery_plan_ref": {"$ref": "#/$defs/objectRef"},
+        "recovery_revision": {"$ref": "#/$defs/recoveryRevision"},
+        "anchor_kind": {"enum": ["failure", "approved_invalidation"]},
+        "anchor_ref": {"oneOf": [{"$ref": "#/$defs/factRef"}, {"$ref": "#/$defs/objectRef"}]},
+        "rerun_from_stage": {"$ref": "#/$defs/stage"},
+        "previous_valid_stage_ref": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/factRef"}]},
+        "stages_to_rerun": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stage"}},
+        "run_nonce": {"$ref": "#/$defs/safeId"},
+        "environment_before": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host_id", "architecture", "compose_sha256", "environment_sha256", "configuration_sha256", "network_sha256", "evidence_ref"],
+          "properties": {
+            "host_id": {"$ref": "#/$defs/safeId"}, "architecture": {"type": "string", "minLength": 1},
+            "compose_sha256": {"$ref": "#/$defs/sha256"}, "environment_sha256": {"$ref": "#/$defs/sha256"}, "configuration_sha256": {"$ref": "#/$defs/sha256"}, "network_sha256": {"$ref": "#/$defs/sha256"},
+            "evidence_ref": {"$ref": "#/$defs/objectRef"}
+          }
+        }
+      }
+    },
+    "stageInvalidation": {
+      "description": "经批准的交付阶段失效（B4-07，对象 candidate_delivery_stage_invalidation）：invalidated_stage_ref 指向同一 delivery、同一阶段的原 pass 事实。review_sha256 等于批准字段（approved_by、approved_at_utc、review_sha256）以外全部字段的规范摘要，由编排器 delivery-stage-invalidate preview／apply --approve-sha256 两步写出（write-once）。仅在该 delivery 尚无交付收据（未 finalize）、最新交付段已收口、被失效的 pass 在当前有效链上、且没有其他待消费的失效时允许；被一个 approved_invalidation 恢复段消费之前，它截断有效链。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "delivery_id", "invalidated_stage", "invalidated_stage_ref", "reason", "evidence_refs", "approved_by", "approved_at_utc", "review_sha256"],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "delivery_id": {"$ref": "#/$defs/safeId"},
+        "invalidated_stage": {"$ref": "#/$defs/stage"},
+        "invalidated_stage_ref": {"$ref": "#/$defs/factRef"},
+        "reason": {"type": "string", "minLength": 1},
+        "evidence_refs": {"type": "array", "items": {"$ref": "#/$defs/objectRef"}},
+        "approved_by": {"type": "string", "minLength": 1},
+        "approved_at_utc": {"type": "string", "format": "date-time"},
+        "review_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "package": {
