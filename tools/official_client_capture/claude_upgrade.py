@@ -3809,7 +3809,6 @@ def accept_campaign(*arguments: Any, **options: Any) -> Any:
 # Claude 专属子命令：子命令 → (说明, 落实它的工作项)。动作体落实之前，执行即报 ClaudeOrchestratorPending。
 CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "plan": ("预检并创建 Claude Campaign 总计划", "B2-11（VC-0 收口续作与 P0 收据）"),
-    "freeze": ("冻结官方制品：stable 精确版本、linux/arm64 双来源", "B2-01（官方制品冻结）"),
     "import-predecessor-evidence": ("导入前序 Store 证据（read_only_reuse 或 regression_fixture）", "B2-09（两条导入路径）"),
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
     "classify": ("VC-2 规则分类", "B3-02（VC-2 分类 producer）"),
@@ -3831,6 +3830,10 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "deliver-candidate": ("候选交付四阶段", "B4-07（交付四阶段）"),
     "delivery-stage-invalidate": ("经批准的交付阶段失效", "B4-07（交付四阶段）"),
     "status": ("显示 Campaign 状态和下一命令", "B1-09 续（Campaign 总计划读取与工具身份）"),
+}
+# 已落实的 Claude 离线工具子命令（不进入阶段动作队列，监督器预声明动作里禁止）：子命令 → 说明。
+CLAUDE_OFFLINE_SUBCOMMANDS: Mapping[str, str] = {
+    "freeze": "冻结官方制品：npm dist-tag 精确版本、linux/arm64 的 npm 与原生分发双来源（claude_upgrade_freeze）",
 }
 # 共享流程的子命令：参数定义照搬 Codex，执行在 Claude 适配器作用域里转调 upgrade_control_plane。
 SHARED_SUBCOMMANDS = (
@@ -4086,6 +4089,11 @@ def _build_parser() -> argparse.ArgumentParser:
     campaign_abandon.add_argument("--approved-by", required=True)
     campaign_abandon.add_argument("--reason", required=True)
 
+    freeze = subparsers.add_parser("freeze", help=CLAUDE_OFFLINE_SUBCOMMANDS["freeze"])
+    freeze.add_argument("--output-root", type=Path, required=True, help="冻结输出目录（绝对路径，必须不存在）")
+    freeze.add_argument("--dist-tag", default="stable", help="npm 主包的 dist-tag，默认 stable")
+    freeze.add_argument("--platform", default="linux/arm64", help="冻结平台（目前只登记 linux/arm64）")
+
     for name, (summary, work_item) in CLAUDE_OWN_SUBCOMMANDS.items():
         target = subparsers.add_parser(name, help=f"{summary}（由 {work_item} 落实）")
         add_campaign_reference(target)
@@ -4138,12 +4146,23 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Claude 编排器入口：共享子命令转调共享实现，Claude 专属子命令在动作体落实前报未实现。
+    """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，其余 Claude 专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
 
     arguments = _build_parser().parse_args(argv)
+    if arguments.command == "freeze":
+        from tools.official_client_capture import claude_upgrade_freeze
+
+        try:
+            summary = claude_upgrade_freeze.run(arguments)
+        except claude_upgrade_freeze.FreezeError as error:
+            print(f"官方制品冻结失败：{error}", file=sys.stderr)
+            return 1
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        # 两渠道二进制不一致时冻结照常落盘，但退出码 2 提示 VC-0 不得据此建 Formal Campaign。
+        return 0 if summary["binary_equivalence"] == "npm=gcs" else 2
     try:
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)
