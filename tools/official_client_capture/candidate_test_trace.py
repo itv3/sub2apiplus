@@ -148,8 +148,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 本次仅重绑 compiler.go 的源码摘要，Guard 继续独立校验实际正文。
 # 2026-10-06（原生 WS 内存优化）：仅重绑 WS 业务校验与重放状态源码摘要，
 # 字节、历史语义差分测试通过；测试清单、事实及规则语义不变。
+# 2026-10-06（发版静态检查收口）：移除已无调用的 WS 身份和正文复制包装函数，
+# 仅重绑两份生产源码的三处快照；候选测试、事实和断言规则保持不变。
 FROZEN_MAPPING_SHA256 = (
-    "380bc47d156fdc55e3f21184e52a45c28f0327cc1bd930e074111c34bfc647ec"
+    "0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
