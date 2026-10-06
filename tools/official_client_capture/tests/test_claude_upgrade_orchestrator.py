@@ -46,7 +46,9 @@ COPIED = (
     "_campaign_lease_pid_alive", "_campaign_lease_staleness", "_campaign_file", "_capture_attempt_relative",
     "_candidate_build_receipt_path", "_candidate_revisions_root", "_candidate_revision_dir", "_assertions_root_for_baseline",
     "_attempt_recovery_segment_root", "_recovery_continuity_receipt_path", "_evaluation_baseline_dir", "_failed_job_ids",
-    "_read_campaign_lease",
+    "_read_campaign_lease", "CampaignLease", "_campaign_lock", "_campaign_operation_lease", "_write_campaign_lease_stop_once",
+    "_validate_campaign_lease_stop_receipt", "_lease_identity_matches", "_campaign_coordinates", "_require_formal_campaign",
+    "_campaign_effective_tool_identity", "_campaign_tool_evolutions", "_git_commit",
 )
 
 
@@ -104,10 +106,10 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertEqual(set(observed), {"claude"})
 
     def test_pending_members_name_their_work_item(self) -> None:
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_campaign_lock：由 B1-09 续"):
-            claude_upgrade._campaign_lock(Path("/nonexistent"), deadline=None)
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"CampaignLease：由 B1-09 续"):
-            claude_upgrade.CampaignLease()
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status：由 B2-11"):
+            claude_upgrade.campaign_status(Path("/nonexistent"))
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_campaign_jobs：由 B2-06"):
+            claude_upgrade._campaign_jobs(Path("/nonexistent"), {}, "official")
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"scan_evidence：由 B2-07"):
             claude_upgrade.scan_evidence(Path("/nonexistent"))
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
@@ -165,6 +167,123 @@ class CopiedBehaviourContractTests(unittest.TestCase):
                    "deadline_at_utc": "2026-10-07T01:00:00+00:00"}
         results = {label: module._campaign_lease_staleness(payload, now=now) for label, module in self._both()}
         self.assertEqual(results["codex"], results["claude"])
+
+
+def _claude_campaign(root: Path, **overrides) -> Path:
+    """在 ``<root>/evidence/campaigns/claude-c1`` 写一份合法的 Claude Campaign 总计划（含一个计划期输入）。"""
+
+    campaign = root / "evidence" / "campaigns" / "claude-c1"
+    (campaign / "inputs").mkdir(parents=True, mode=0o700)
+    rules = campaign / "inputs" / "rules.json"
+    rules.write_text('{"rules": []}\n', encoding="utf-8")
+    manifest = {
+        "schema_version": "official-client-upgrade-campaign/v1", "client": "claude", "campaign_id": "claude-c1",
+        "created_at_utc": "2026-10-07T00:00:00Z", "campaign_mode": "formal", "campaign_purpose": "validation_only",
+        "baseline_version": "2.1.226", "target_version": "2.1.245", "target_sha256": "a" * 64,
+        "official_identity": {"npm": {}, "gcs": {}, "binary_sha256": "b" * 64, "binary_equivalence": "npm=gcs"},
+        "baseline_identity": {}, "tool_identity": {"client": "claude"}, "control_receipts": {},
+        "inputs": {"rules": {"path": "inputs/rules.json", "sha256": codex_upgrade.file_sha256(rules)}},
+        "configuration": {"platform": "linux/arm64", "entrypoint": "claude-cli", "privacy_mode": "default",
+                          "oauth_org_id": "org-1", "model_catalog_sha256": "c" * 64},
+        "required_rules": [], "coverage_plan": {}, "jobs": [], "vc_control": {}, "predecessor": None,
+    }
+    manifest.update(overrides)
+    raw = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+    (campaign / "campaign.json").write_bytes(raw)
+    (campaign / "campaign.json").chmod(0o600)
+    (campaign / "campaign.sha256").write_text(__import__("hashlib").sha256(raw).hexdigest() + "\n", encoding="utf-8")
+    return campaign
+
+
+class ClaudeCampaignInfrastructureTests(unittest.TestCase):
+    """B1-09 续作：Claude 总计划读取、计时账本绑定、工具身份与租约。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+
+    def test_load_valid_plan_and_formal_gate(self) -> None:
+        campaign = _claude_campaign(self.root)
+        manifest = claude_upgrade.load_campaign_manifest(campaign)
+        self.assertEqual((manifest["client"], manifest["campaign_id"]), ("claude", "claude-c1"))
+        self.assertEqual(claude_upgrade._require_formal_campaign(campaign)["campaign_mode"], "formal")
+        preflight = _claude_campaign(self.root / "p", campaign_mode="preflight_only")
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "preflight_only"):
+            claude_upgrade._require_formal_campaign(preflight)
+
+    def test_plan_rejections(self) -> None:
+        cases = {
+            "Codex 合同": ({"schema_version": "codex-upgrade-campaign/v3"}, "不是 Claude Campaign"),
+            "client 不符": ({"client": "codex"}, "不是 Claude Campaign"),
+            "缺字段": ({"coverage_plan": None}, None),
+            "平台不符": ({"configuration": {"platform": "linux/amd64"}}, "linux/arm64"),
+            "前序绑定": ({"predecessor": {"campaign_id": "x"}}, "B2-09"),
+            "工具身份归属": ({"tool_identity": {}}, "工具身份"),
+        }
+        for index, (label, (overrides, message)) in enumerate(cases.items()):
+            with self.subTest(label=label):
+                campaign = _claude_campaign(self.root / f"case-{index}", **overrides)
+                if overrides.get("coverage_plan", 0) is None:
+                    payload = json.loads((campaign / "campaign.json").read_text(encoding="utf-8"))
+                    payload.pop("coverage_plan")
+                    raw = json.dumps(payload).encode("utf-8")
+                    (campaign / "campaign.json").write_bytes(raw)
+                    (campaign / "campaign.sha256").write_text(__import__("hashlib").sha256(raw).hexdigest() + "\n", encoding="utf-8")
+                    message = "缺少字段"
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, message):
+                    claude_upgrade.load_campaign_manifest(campaign)
+        drifted = _claude_campaign(self.root / "drift")
+        (drifted / "inputs" / "rules.json").write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "摘要漂移"):
+            claude_upgrade.load_campaign_manifest(drifted)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "control epoch"):
+            claude_upgrade.load_campaign_manifest(_claude_campaign(self.root / "epoch"), _control_epoch_bootstrap=True)
+
+    def test_timing_ledger_binding_must_be_claude(self) -> None:
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+
+        fields = dict(baseline_version="2.1.226", target_version="2.1.245", campaign_purpose="validation_only",
+                      evidence_decision="recapture")
+        for client, expect_ok in (("claude", True), ("codex", False)):
+            with self.subTest(client=client):
+                ledger_dir = self.root / f"ledger-{client}"
+                timing.create_ledger(ledger_dir, upgrade_id=f"u-{client}", client=client, **fields)
+                binding = {"upgrade_timing": {"ledger_dir": str(ledger_dir), "ledger_plan_sha256": codex_upgrade.file_sha256(ledger_dir / "ledger.json")}}
+                manifest = {"control_receipts": binding}
+                if expect_ok:
+                    self.assertEqual(claude_upgrade._campaign_timing_ledger_dir(self.root, manifest), ledger_dir.resolve())
+                else:
+                    with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不属于 Claude"):
+                        claude_upgrade._campaign_timing_ledger_dir(self.root, manifest)
+
+    def test_tool_identity_is_v3_two_root(self) -> None:
+        identity = claude_upgrade._tool_identity(include_git=False)
+        computed = claude_identity.compute_identity(claude_identity.load_policy(), REPOSITORY_ROOT)
+        self.assertEqual(identity["client"], "claude")
+        self.assertEqual(identity["files_sha256"], claude_upgrade._fingerprint({"entries": identity["entries"]}))
+        self.assertEqual(identity["files_sha256"], computed["tool_files_sha256"])
+        for field in ("wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "policy_sha256"):
+            self.assertEqual(identity[field], computed[field])
+        roots = {entry["path"].split("/", 1)[0] for entry in identity["entries"]}
+        self.assertEqual(roots, {"official_client_capture", "official_client_control"})
+
+    def test_lease_acquires_against_claude_plan(self) -> None:
+        from tools.official_client_capture import incremental_recovery
+
+        campaign = _claude_campaign(self.root)
+        deadline = incremental_recovery.WallClockDeadline(30)
+        deadline.heartbeat_seconds = 1
+        lease = claude_upgrade.CampaignLease(
+            campaign, phase="official", candidate_id=None, deadline=deadline, command="capture-official", campaign_id="claude-c1",
+        )
+        lease.acquire()
+        try:
+            payload = json.loads((campaign / claude_upgrade.CAMPAIGN_LEASE_FILENAME).read_text(encoding="utf-8"))
+            self.assertEqual((payload["state"], payload["campaign_id"]), ("active", "claude-c1"))
+        finally:
+            lease.release()
+        self.assertNotEqual(json.loads((campaign / claude_upgrade.CAMPAIGN_LEASE_FILENAME).read_text(encoding="utf-8"))["state"], "active")
 
 
 class CommandLineAndBoundaryTests(unittest.TestCase):

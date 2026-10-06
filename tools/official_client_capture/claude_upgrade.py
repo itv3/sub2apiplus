@@ -19,18 +19,23 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import json
 import math
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
+import subprocess
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -41,11 +46,13 @@ if __name__ == "__main__":
     sys.modules.setdefault("tools.official_client_capture.claude_upgrade", sys.modules[__name__])
 
 from tools.official_client_capture.capturelib.model import ConfigurationError
-from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256
+from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256, secure_write_json
+from tools.official_client_capture import claude_tool_identity_policy
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
+from tools.official_client_capture import codex_upgrade_wire_transition
 from tools.official_client_capture import incremental_recovery
 from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture import upgrade_control_plane
@@ -103,6 +110,15 @@ OFFICIAL_COMPACTION_LITE_RECOVERY_FILES = {}
 OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS = frozenset()
 RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {}
 
+# Claude Campaign 总计划（设计 B1-09）：schema、平台与必备顶层字段
+CAMPAIGN_SCHEMA = "official-client-upgrade-campaign/v1"
+CAMPAIGN_PLATFORM = "linux/arm64"
+CAMPAIGN_REQUIRED_FIELDS = frozenset({
+    "schema_version", "client", "campaign_id", "created_at_utc", "campaign_mode", "campaign_purpose",
+    "baseline_version", "target_version", "target_sha256", "official_identity", "baseline_identity", "tool_identity",
+    "control_receipts", "inputs", "configuration", "required_rules", "coverage_plan", "jobs", "vc_control", "predecessor",
+})
+
 # 照搬函数依赖的内部常量（与 Codex 同值）
 SKIP_DIRECTORIES = {
     ".git",
@@ -130,6 +146,15 @@ WATCHDOG_SENSITIVE_RE = re.compile(
     r"(authorization|api[-_]?key|cookie|token|secret|password|credential|bearer)",
     re.IGNORECASE,
 )
+CAMPAIGN_LEASE_LOCK_FILENAME = ".campaign-lease.lock"
+CAMPAIGN_LEASE_STOP_DIRECTORY = "stop-the-line"
+CAMPAIGN_LEASE_STOP_SCHEMA = "codex-upgrade-campaign-lease-stop/v1"
+DEFAULT_WATCHDOG_TIMEOUT_SECONDS = (
+    codex_upgrade_supervisor.DEFAULT_WATCHDOG_TIMEOUT_SECONDS
+)
+_ACTIVE_CAMPAIGN_LEASE: "CampaignLease | None" = None
+CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
+CANDIDATE_PURPOSES = frozenset({"validation_only", "production_replacement"})
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +300,22 @@ def _normalize_watchdog_operation(value: Any) -> str:
     return operation
 
 
+def _normalize_campaign_lease_note(value: Any, *, label: str) -> str:
+    """规范化停线原因／下一动作；允许中文，但拒绝秘密和控制字符。"""
+
+    if not isinstance(value, str):
+        raise ConfigurationError(f"Campaign lease {label} 必须是字符串。")
+    note = " ".join(value.strip().split())
+    if (
+        not note
+        or len(note) > 512
+        or any(ord(character) < 0x20 for character in note)
+        or WATCHDOG_SENSITIVE_RE.search(note)
+    ):
+        raise ConfigurationError(f"Campaign lease {label} 非法。")
+    return note
+
+
 def _campaign_lease_pid_alive(pid: Any) -> bool:
     """以无副作用的 kill(pid, 0) 判断 owner 是否仍存在。"""
 
@@ -413,6 +454,836 @@ def _campaign_lease_staleness(
     if age > stale_after:
         return True, "heartbeat_expired", True, False
     return False, "", True, False
+
+
+def _campaign_lease_stop_path(campaign_dir: Path, owner_nonce: str) -> Path:
+    if not SHA256_RE.fullmatch(owner_nonce):
+        raise ConfigurationError("Campaign lease owner nonce 非法。")
+    root = ensure_private_directory(
+        campaign_dir / CAMPAIGN_LEASE_STOP_DIRECTORY,
+        campaign_dir,
+    )
+    return root / f"lease-{owner_nonce}.json"
+
+
+def _write_campaign_lease_stop_once(
+    campaign_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    reason: str,
+    next_action: str,
+) -> Path:
+    """发布不可覆盖的租约停线收据；重复发现只重放原文件。"""
+
+    lease = _validate_campaign_lease_payload(payload)
+    reason = _normalize_campaign_lease_note(reason, label="reason")
+    next_action = _normalize_campaign_lease_note(next_action, label="next_action")
+    path = _campaign_lease_stop_path(campaign_dir, str(lease["owner_nonce"]))
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("Campaign lease stop 收据路径不可信。")
+        existing = _read_json(path, "Campaign lease stop 收据")
+        _validate_campaign_lease_stop_receipt(existing, path)
+        if (
+            existing.get("campaign_id") != lease.get("campaign_id")
+            or existing.get("phase") != lease.get("phase")
+            or existing.get("candidate_id") != lease.get("candidate_id")
+            or existing.get("owner_nonce") != lease.get("owner_nonce")
+        ):
+            raise ConfigurationError("Campaign lease stop 收据身份与租约不一致。")
+        return path
+    receipt: dict[str, Any] = {
+        "schema_version": CAMPAIGN_LEASE_STOP_SCHEMA,
+        "campaign_id": lease["campaign_id"],
+        "phase": lease["phase"],
+        "candidate_id": lease["candidate_id"],
+        "owner_pid": lease["owner_pid"],
+        "owner_nonce": lease["owner_nonce"],
+        "attempt_id": lease["attempt_id"],
+        "started_at_utc": lease["started_at_utc"],
+        "deadline_at_utc": lease["deadline_at_utc"],
+        "last_heartbeat_at_utc": lease["last_heartbeat_at_utc"],
+        "operation": lease["operation"],
+        "reason": reason,
+        "detected_at_utc": _utc_now(),
+        "next_action": next_action,
+    }
+    receipt["receipt_sha256"] = _fingerprint(receipt)
+    _secure_write_json_once(path, receipt)
+    return path
+
+
+def _validate_campaign_lease_stop_receipt(
+    payload: Mapping[str, Any],
+    path: Path,
+    *,
+    campaign_id: str | None = None,
+) -> dict[str, Any]:
+    """校验单份停线收据，并确保其身份与所属 Campaign 一致。"""
+
+    required = {
+        "schema_version",
+        "campaign_id",
+        "phase",
+        "candidate_id",
+        "owner_pid",
+        "owner_nonce",
+        "attempt_id",
+        "started_at_utc",
+        "deadline_at_utc",
+        "last_heartbeat_at_utc",
+        "operation",
+        "reason",
+        "detected_at_utc",
+        "next_action",
+        "receipt_sha256",
+    }
+    if set(payload) != required:
+        raise ConfigurationError("Campaign lease stop 收据字段不闭合。")
+    unsigned = dict(payload)
+    digest = unsigned.pop("receipt_sha256")
+    if (
+        payload.get("schema_version") != CAMPAIGN_LEASE_STOP_SCHEMA
+        or not SAFE_ID_RE.fullmatch(str(payload.get("campaign_id", "")))
+        or (campaign_id is not None and payload.get("campaign_id") != campaign_id)
+        or payload.get("phase") not in {"official", "candidate"}
+        or not isinstance(payload.get("owner_pid"), int)
+        or isinstance(payload.get("owner_pid"), bool)
+        or payload.get("owner_pid", 0) <= 0
+        or not SHA256_RE.fullmatch(str(payload.get("owner_nonce", "")))
+        or path.name != f"lease-{payload.get('owner_nonce')}.json"
+        or not _is_rfc3339_timestamp(payload.get("started_at_utc"))
+        or not _is_rfc3339_timestamp(payload.get("deadline_at_utc"))
+        or not _is_rfc3339_timestamp(payload.get("last_heartbeat_at_utc"))
+        or not _is_rfc3339_timestamp(payload.get("detected_at_utc"))
+        or not isinstance(payload.get("operation"), str)
+        or _normalize_watchdog_operation(payload.get("operation"))
+        != payload.get("operation")
+        or not isinstance(payload.get("reason"), str)
+        or not isinstance(payload.get("next_action"), str)
+        or digest != _fingerprint(unsigned)
+    ):
+        raise ConfigurationError("Campaign lease stop 收据身份或摘要非法。")
+    if payload.get("phase") == "official":
+        if payload.get("candidate_id") is not None:
+            raise ConfigurationError("official stop 收据不得携带 candidate-id。")
+    elif not isinstance(payload.get("candidate_id"), str) or not SAFE_ID_RE.fullmatch(
+        str(payload.get("candidate_id"))
+    ):
+        raise ConfigurationError("candidate stop 收据缺少合法 candidate-id。")
+    attempt_id = payload.get("attempt_id")
+    if attempt_id is not None and (
+        not isinstance(attempt_id, str) or not SAFE_ID_RE.fullmatch(attempt_id)
+    ):
+        raise ConfigurationError("Campaign lease stop 收据 attempt-id 非法。")
+    _normalize_campaign_lease_note(payload["reason"], label="reason")
+    _normalize_campaign_lease_note(payload["next_action"], label="next_action")
+    return dict(payload)
+
+
+class CampaignLease:
+    """Campaign 级持久租约。
+
+    OS 文件锁只负责并发互斥；JSON 租约负责跨进程留下 owner、deadline 和
+    最后 heartbeat。进程被强杀时文件不会消失，下一次命令会把 stale owner
+    固化为不可覆盖停线收据，而不会静默重新跑全量任务。
+
+    进程由 ``campaign-run`` 派发时，租约仅附加到父监督器的 run 目录，
+    不再创建本地 lease 文件或第二个 monitor。
+    """
+
+    def __init__(
+        self,
+        campaign_dir: Path,
+        *,
+        phase: str,
+        candidate_id: str | None,
+        deadline: incremental_recovery.WallClockDeadline,
+        attempt_id: str | None = None,
+        command: str,
+        allow_stale_recovery: bool = False,
+        campaign_id: str | None = None,
+    ) -> None:
+        if phase not in {"official", "candidate"}:
+            raise ConfigurationError("Campaign lease phase 非法。")
+        if phase == "official" and candidate_id is not None:
+            raise ConfigurationError("official Campaign lease 不得携带 candidate-id。")
+        if phase == "candidate" and (
+            not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id)
+        ):
+            raise ConfigurationError("candidate Campaign lease 缺少合法 candidate-id。")
+        if attempt_id is not None and not SAFE_ID_RE.fullmatch(str(attempt_id)):
+            raise ConfigurationError("Campaign lease attempt-id 非法。")
+        if not isinstance(deadline, incremental_recovery.WallClockDeadline):
+            raise ConfigurationError("Campaign lease 必须绑定 WallClockDeadline。")
+        self.campaign_dir = campaign_dir
+        if campaign_id is not None and not SAFE_ID_RE.fullmatch(str(campaign_id)):
+            raise ConfigurationError("Campaign lease campaign-id 非法。")
+        self.campaign_id = str(campaign_id) if campaign_id is not None else None
+        self.phase = phase
+        self.candidate_id = candidate_id
+        self.deadline = deadline
+        self.attempt_id = attempt_id
+        self.command = _normalize_watchdog_operation(command)
+        self.allow_stale_recovery = bool(allow_stale_recovery)
+        self.owner_pid = os.getpid()
+        self.owner_nonce = secrets.token_hex(32)
+        self._descriptor: int | None = None
+        self._path = campaign_dir / CAMPAIGN_LEASE_FILENAME
+        self._payload: dict[str, Any] | None = None
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._mutex = threading.RLock()
+        self._last_heartbeat_monotonic = 0.0
+        self._failure: BaseException | None = None
+        self._stop_recorded = False
+        self._attached_parent = False
+        self._previous_global: CampaignLease | None = None
+        # 进程内线程只作低延迟备用；真正的强停检测和分钟账本由这个独立进程负责。
+        self._supervisor: codex_upgrade_supervisor.SupervisorClient | None = None
+
+    @property
+    def acquired(self) -> bool:
+        return (
+            self._attached_parent
+            or (self._descriptor is not None and self._payload is not None)
+        )
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise ConfigurationError("Campaign lease 尚未取得。")
+        return dict(self._payload)
+
+    def _open_lock(self) -> int:
+        _validate_existing_campaign_path(self.campaign_dir)
+        lock_path = self.campaign_dir / CAMPAIGN_LEASE_LOCK_FILENAME
+        _reject_symlink_components(lock_path, self.campaign_dir, "Campaign lease 锁")
+        flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        created = False
+        try:
+            descriptor = os.open(
+                lock_path,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            created = True
+        except FileExistsError:
+            descriptor = os.open(lock_path, flags)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or (not created and stat.S_IMODE(metadata.st_mode) != 0o600)
+        ):
+            os.close(descriptor)
+            raise ConfigurationError("Campaign lease 锁必须是当前用户拥有的 0600 文件。")
+        os.fchmod(descriptor, 0o600)
+        return descriptor
+
+    def _write_payload(self, payload: Mapping[str, Any]) -> None:
+        if self._path.is_symlink() or (self._path.exists() and not self._path.is_file()):
+            raise ConfigurationError("Campaign lease 文件路径不可信。")
+        secure_write_json(self._path, dict(payload))
+        metadata = self._path.stat()
+        if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ConfigurationError("Campaign lease 写入后权限或属主非法。")
+
+    def acquire(self) -> "CampaignLease":
+        global _ACTIVE_CAMPAIGN_LEASE
+        if self.acquired:
+            raise ConfigurationError("Campaign lease 不得重复取得。")
+        # campaign-run 是正式流程的唯一父监督器。子命令收到父上下文时，
+        # 只附加到已有 supervisor，不再创建 lease 文件、锁或第二个 monitor。
+        try:
+            attached = codex_upgrade_supervisor.SupervisorClient.attach_from_environment()
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise ConfigurationError(f"无法附加 campaign-run 父监督器：{error}") from error
+        if attached is not None:
+            try:
+                self.deadline.check("campaign-lease:attach")
+                campaign_manifest = self.campaign_dir / "campaign.json"
+                if campaign_manifest.is_file():
+                    manifest = _read_json(campaign_manifest, "Campaign 清单")
+                    if manifest.get("campaign_id") != attached.campaign_id:
+                        raise ConfigurationError(
+                            "campaign-run 父监督器与 Campaign 清单身份不一致。"
+                        )
+                    if manifest.get("campaign_mode") != "formal":
+                        raise ConfigurationError(
+                            "campaign-run 只能承载 formal Campaign。"
+                        )
+                remaining = attached.deadline_at_epoch - time.time()
+                if remaining <= 0:
+                    raise ConfigurationError("campaign-run 父监督器全局 deadline 已到期。")
+                self.deadline = incremental_recovery.WallClockDeadline(
+                    remaining,
+                    label=f"{self.phase}-campaign-run",
+                )
+                # 绑定父 run 的单调时钟边界，而不是以子进程启动时刻重新
+                # 起算；WallClockDeadline 只保留同一绝对 deadline。
+                self.deadline.started_monotonic = (
+                    float(attached._started_monotonic_ns) / 1_000_000_000
+                )
+                self.deadline.deadline_monotonic = (
+                    float(attached._deadline_monotonic_ns) / 1_000_000_000
+                )
+                self.deadline.heartbeat_seconds = float(attached.heartbeat_seconds)
+                self._supervisor = attached
+                self._attached_parent = True
+                self.owner_pid = attached.owner_pid
+                self.owner_nonce = attached.owner_nonce
+                self._payload = {
+                    "schema_version": CAMPAIGN_LEASE_SCHEMA,
+                    "campaign_id": attached.campaign_id,
+                    "phase": self.phase,
+                    "candidate_id": self.candidate_id,
+                    "owner_pid": attached.owner_pid,
+                    "owner_nonce": attached.owner_nonce,
+                    "attempt_id": self.attempt_id,
+                    "state": "active",
+                    "operation": self.command,
+                    "deadline_at_utc": codex_upgrade_supervisor._epoch_to_utc(
+                        attached.deadline_at_epoch
+                    ),
+                    "attached_to_run_dir": str(attached.run_dir),
+                }
+                self._last_heartbeat_monotonic = time.monotonic()
+                self._previous_global = _ACTIVE_CAMPAIGN_LEASE
+                _ACTIVE_CAMPAIGN_LEASE = self
+                attached.heartbeat(f"attach:{self.command}", force=True)
+                return self
+            except BaseException:
+                if attached is not None:
+                    try:
+                        attached._started = False
+                    except BaseException:
+                        pass
+                raise
+        self.deadline.check("campaign-lease:acquire")
+        descriptor = self._open_lock()
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                current = _read_campaign_lease(self.campaign_dir)
+                owner = (
+                    f"owner_pid={current.get('owner_pid')} nonce={current.get('owner_nonce')}"
+                    if current
+                    else "owner=unknown"
+                )
+                raise ConfigurationError(f"Campaign lease 已被占用（{owner}）。")
+            current = _read_campaign_lease(self.campaign_dir)
+            recovered_nonce: str | None = None
+            if current is not None and current.get("state") == "active":
+                stale, reason, _alive, _expired = _campaign_lease_staleness(current)
+                if not stale:
+                    raise ConfigurationError(
+                        "Campaign lease 仍在有效期内，禁止并发或重复运行："
+                        f"owner_pid={current.get('owner_pid')} nonce={current.get('owner_nonce')}"
+                    )
+                _write_campaign_lease_stop_once(
+                    self.campaign_dir,
+                    current,
+                    reason=reason,
+                    next_action=(
+                        "仅允许绑定同一失败源 attempt 的 resume --rerun-failed；"
+                        "先校验 recovery_scope"
+                    ),
+                )
+                recovered_nonce = str(current.get("owner_nonce"))
+                if not self.allow_stale_recovery:
+                    raise ConfigurationError(
+                        "Campaign lease 已过期并已停线；普通 run 禁止接管，"
+                        "请使用同一失败源的显式 resume --rerun-failed。"
+                    )
+            elif current is not None and current.get("state") not in {
+                "released",
+                "stop_the_line",
+            }:
+                raise ConfigurationError("Campaign lease 状态非法。")
+            started = datetime.now(timezone.utc)
+            remaining = self.deadline.remaining_seconds
+            if remaining <= 0:
+                raise incremental_recovery.WallClockTimeoutError(
+                    "campaign-lease:acquire",
+                    elapsed_seconds=self.deadline.elapsed_seconds,
+                    budget_seconds=self.deadline.budget_seconds,
+                )
+            payload: dict[str, Any] = {
+                "schema_version": CAMPAIGN_LEASE_SCHEMA,
+                "campaign_id": self.campaign_id or str(
+                    load_campaign_manifest(
+                        self.campaign_dir,
+                        _control_epoch_bootstrap=(self.command == "control-epoch"),
+                    ).get("campaign_id", "")
+                ),
+                "phase": self.phase,
+                "candidate_id": self.candidate_id,
+                "owner_pid": self.owner_pid,
+                "owner_nonce": self.owner_nonce,
+                "attempt_id": self.attempt_id,
+                "started_at_utc": started.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "deadline_at_utc": (started + timedelta(seconds=remaining)).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "last_heartbeat_at_utc": started.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "heartbeat_seconds": float(getattr(self.deadline, "heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS)),
+                "operation": self.command,
+                "state": "active",
+                "recovered_owner_nonce": recovered_nonce,
+            }
+            _validate_campaign_lease_payload(payload)
+            self._descriptor = descriptor
+            self._payload = payload
+            self._write_payload(payload)
+            try:
+                self._supervisor = codex_upgrade_supervisor.SupervisorClient(
+                    self.campaign_dir / ".supervisor",
+                    campaign_id=str(payload["campaign_id"]),
+                    phase=self.phase,
+                    deadline_at_epoch=time.time() + remaining,
+                    owner_pid=self.owner_pid,
+                    heartbeat_seconds=float(
+                        getattr(
+                            self.deadline,
+                            "heartbeat_seconds",
+                            DEFAULT_HEARTBEAT_SECONDS,
+                        )
+                    ),
+                    watchdog_timeout_seconds=DEFAULT_WATCHDOG_TIMEOUT_SECONDS,
+                    ledger_interval_seconds=60,
+                    # Campaign lease 运行在 CLI 宿主进程内；监督器只负责封存
+                    # watchdog 终态，不得为了一个阶段 deadline 误杀共享宿主
+                    # （例如测试 runner 或上层服务）。外部调用者若使用独立
+                    # owner 进程，可在 SupervisorClient 层显式选择终止。
+                    terminate_owner=False,
+                )
+                self._supervisor.start()
+            except (OSError, codex_upgrade_supervisor.SupervisorError) as error:
+                # 独立监督器是正式可变命令的硬门禁；启动失败不能退化成只有
+                # 进程内线程的不可审计模式。
+                self._supervisor = None
+                self._payload["state"] = "stop_the_line"
+                self._payload["operation"] = "supervisor-start-failed"
+                try:
+                    self._write_payload(self._payload)
+                finally:
+                    raise ConfigurationError(
+                        f"独立升级监督器启动失败：{error}"
+                    ) from error
+            self._last_heartbeat_monotonic = time.monotonic()
+            self._previous_global = _ACTIVE_CAMPAIGN_LEASE
+            _ACTIVE_CAMPAIGN_LEASE = self
+            self._thread = threading.Thread(
+                target=self._watchdog_loop,
+                name=f"codex-campaign-lease-{self.owner_nonce[:8]}",
+                daemon=True,
+            )
+            self._thread.start()
+            return self
+        except BaseException:
+            if self._supervisor is not None:
+                try:
+                    self._supervisor.stop(
+                        reason="supervisor-acquire-failed",
+                        status="failed",
+                    )
+                except BaseException:
+                    pass
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+            raise
+
+    def __enter__(self) -> "CampaignLease":
+        return self.acquire()
+
+    def _mark_stop_line(self, reason: str, *, next_action: str | None = None) -> None:
+        with self._mutex:
+            if self._payload is None:
+                return
+            if self._stop_recorded:
+                return
+            if self._attached_parent:
+                self._stop_recorded = True
+                if self._supervisor is not None:
+                    try:
+                        self._supervisor.event_fail(
+                            "campaign:child-stop",
+                            reason=reason,
+                        )
+                    except BaseException as error:
+                        self._failure = self._failure or error
+                return
+            action = next_action or (
+                "人工审计租约停线收据；仅可绑定同一失败源的显式 resume --rerun-failed"
+            )
+            try:
+                _write_campaign_lease_stop_once(
+                    self.campaign_dir,
+                    self._payload,
+                    reason=reason,
+                    next_action=action,
+                )
+                self._stop_recorded = True
+                if self._supervisor is not None:
+                    try:
+                        self._supervisor.event_fail(
+                            "campaign:stop-the-line",
+                            reason=reason,
+                        )
+                    except BaseException:
+                        # 主租约停线收据是权威事实；监督器附加事件失败时仍须
+                        # 保留主收据，后续审计会标记附加账本缺口。
+                        pass
+            finally:
+                self._payload["state"] = "stop_the_line"
+                self._payload["operation"] = _normalize_watchdog_operation(reason)
+                try:
+                    self._write_payload(self._payload)
+                except BaseException as error:
+                    self._failure = self._failure or error
+
+    def check(self, operation: str | None = None) -> float:
+        """检查 lease 与 attempt deadline；到期先写停线再抛出。"""
+
+        if self._failure is not None:
+            raise self._failure
+        if not self.acquired:
+            raise ConfigurationError("Campaign lease 尚未取得。")
+        if self._attached_parent and self._supervisor is not None:
+            try:
+                self._supervisor._ensure_monitor_alive()
+            except codex_upgrade_supervisor.SupervisorError as error:
+                self._failure = ConfigurationError(str(error))
+                raise self._failure from error
+        try:
+            remaining = self.deadline.check(operation or self.command)
+        except incremental_recovery.WallClockTimeoutError as error:
+            self._mark_stop_line("deadline_expired")
+            self._failure = error
+            raise
+        return remaining
+
+    def heartbeat(
+        self,
+        operation: str,
+        *,
+        force: bool = False,
+        allow_expired: bool = False,
+    ) -> None:
+        operation = _normalize_watchdog_operation(operation)
+        if not self.acquired:
+            return
+        if not allow_expired:
+            self.check(operation)
+        if self._attached_parent:
+            if self._supervisor is not None:
+                self._supervisor.heartbeat(operation, force=force)
+            self._last_heartbeat_monotonic = time.monotonic()
+            return
+        now_monotonic = time.monotonic()
+        interval = float(getattr(self.deadline, "heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS))
+        if not force and now_monotonic - self._last_heartbeat_monotonic < interval:
+            return
+        with self._mutex:
+            if self._payload is None:
+                return
+            if not allow_expired and self.deadline.expired:
+                self._mark_stop_line("deadline_expired")
+                raise incremental_recovery.WallClockTimeoutError(
+                    operation,
+                    elapsed_seconds=self.deadline.elapsed_seconds,
+                    budget_seconds=self.deadline.budget_seconds,
+                )
+            self._payload["operation"] = operation
+            self._payload["last_heartbeat_at_utc"] = _utc_now()
+            self._write_payload(self._payload)
+            self._last_heartbeat_monotonic = now_monotonic
+            if self._supervisor is not None:
+                self._supervisor.heartbeat(operation, force=force)
+
+    def event_start(self, operation: str, *, job_id: str | None = None) -> None:
+        """记录一个统一命令／Job 动作的开始。"""
+
+        if self._supervisor is not None:
+            self._supervisor.event_start(operation, job_id=job_id)
+
+    def event_end(
+        self,
+        operation: str,
+        *,
+        job_id: str | None = None,
+        status: str = "passed",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """记录一个动作的正常结束。"""
+
+        if self._supervisor is not None:
+            self._supervisor.event_end(
+                operation,
+                job_id=job_id,
+                status=status,
+                metadata=metadata,
+            )
+
+    def event_fail(
+        self,
+        operation: str,
+        *,
+        job_id: str | None = None,
+        reason: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """记录一个动作失败；失败原因只允许脱敏短文本。"""
+
+        if self._supervisor is not None:
+            self._supervisor.event_fail(
+                operation,
+                job_id=job_id,
+                reason=reason,
+                metadata=metadata,
+            )
+
+    def run_command(
+        self,
+        argv: Iterable[str],
+        *,
+        operation: str,
+        timeout_seconds: float,
+        cwd: str | os.PathLike[str] | None = None,
+        env: Mapping[str, str] | None = None,
+        output_stream: Any | None = None,
+        heartbeat_callback: Any | None = None,
+        job_id: str | None = None,
+        merge_stderr: bool = True,
+    ) -> subprocess.CompletedProcess[Any]:
+        """通过独立监督器统一执行一个外部命令。"""
+
+        if self._supervisor is None:
+            raise ConfigurationError("Campaign lease 的独立监督器不可用。")
+        return self._supervisor.run_command(
+            list(argv),
+            operation=operation,
+            timeout_seconds=timeout_seconds,
+            cwd=cwd,
+            env=env,
+            capture_output=output_stream is None,
+            output_stream=output_stream,
+            job_id=job_id,
+            heartbeat_callback=heartbeat_callback,
+            merge_stderr=merge_stderr,
+        )
+
+    def bind_attempt(self, attempt_id: str) -> None:
+        """在原子 reservation 发布后把 attempt-id 绑定到当前租约。"""
+
+        if not isinstance(attempt_id, str) or not SAFE_ID_RE.fullmatch(attempt_id):
+            raise ConfigurationError("Campaign lease attempt-id 非法。")
+        self.check("campaign-lease:bind-attempt")
+        if self._attached_parent:
+            self.attempt_id = attempt_id
+            self._payload["attempt_id"] = attempt_id  # type: ignore[index]
+            self.heartbeat("attempt:reserved", force=True)
+            return
+        with self._mutex:
+            if self._payload is None:
+                raise ConfigurationError("Campaign lease 尚未取得。")
+            self._payload["attempt_id"] = attempt_id
+            self._payload["operation"] = "attempt:reserved"
+            self._payload["last_heartbeat_at_utc"] = _utc_now()
+            self._write_payload(self._payload)
+            self._last_heartbeat_monotonic = time.monotonic()
+            if self._supervisor is not None:
+                self._supervisor.heartbeat("attempt:reserved", force=True)
+
+    def _watchdog_loop(self) -> None:
+        interval = max(
+            0.05,
+            float(getattr(self.deadline, "heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS)),
+        )
+        while not self._stop_event.wait(min(interval, max(0.05, self.deadline.remaining_seconds))):
+            try:
+                if self.deadline.expired:
+                    error = incremental_recovery.WallClockTimeoutError(
+                        "campaign-lease:deadline",
+                        elapsed_seconds=self.deadline.elapsed_seconds,
+                        budget_seconds=self.deadline.budget_seconds,
+                    )
+                    self._failure = error
+                    self._mark_stop_line("deadline_expired")
+                    return
+                self.heartbeat(self.command, force=True)
+            except BaseException as error:
+                self._failure = error
+                try:
+                    self._mark_stop_line("heartbeat_write_failed")
+                except BaseException:
+                    pass
+                return
+
+    def release(self, *, outcome: str = "released") -> None:
+        """正常结束时释放 lease；停线状态本身不可被 released 覆盖。"""
+
+        global _ACTIVE_CAMPAIGN_LEASE
+        self._stop_event.set()
+        if self._attached_parent:
+            with self._mutex:
+                if self._supervisor is not None:
+                    self._supervisor.stop(reason="child-release", status="stopped")
+                if _ACTIVE_CAMPAIGN_LEASE is self:
+                    _ACTIVE_CAMPAIGN_LEASE = self._previous_global
+                self._supervisor = None
+                self._payload = None
+                self._attached_parent = False
+                self._descriptor = None
+            return
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.0)
+        with self._mutex:
+            # 独立监督器可能在 owner 线程尚未醒来时先判定 heartbeat/deadline
+            # 终态。先读取它的只读状态并同步 Campaign 停线事实，再决定是否
+            # 将租约标成 released，避免 watchdog-aborted 被“正常释放”掩盖。
+            if self._supervisor is not None and self._payload is not None:
+                if (
+                    self._supervisor.process is not None
+                    and self._supervisor.process.poll() is not None
+                ):
+                    try:
+                        self._supervisor._mark_monitor_exit()
+                    except BaseException as error:
+                        self._failure = self._failure or error
+                try:
+                    supervisor_state = self._supervisor.status().get("state")
+                except BaseException as error:
+                    supervisor_state = "audit-incomplete"
+                    self._failure = self._failure or error
+                if supervisor_state in {"watchdog-aborted", "audit-incomplete"}:
+                    try:
+                        self._mark_stop_line(
+                            f"supervisor_{str(supervisor_state).replace('-', '_')}"
+                        )
+                    except BaseException as error:
+                        self._failure = self._failure or error
+            if self._payload is not None and self._payload.get("state") == "active":
+                try:
+                    self._payload["state"] = "released"
+                    self._payload["operation"] = _normalize_watchdog_operation(
+                        f"lease:{outcome}"
+                    )
+                    self._payload["last_heartbeat_at_utc"] = _utc_now()
+                    self._write_payload(self._payload)
+                except BaseException as error:
+                    self._failure = self._failure or error
+            if self._supervisor is not None:
+                try:
+                    supervisor_status = (
+                        "stopped"
+                        if self._payload is None
+                        or self._payload.get("state") != "stop_the_line"
+                        else "failed"
+                    )
+                    self._supervisor.stop(
+                        reason=(
+                            "normal-completion"
+                            if supervisor_status == "stopped"
+                            else "campaign-stop-the-line"
+                        ),
+                        status=supervisor_status,
+                    )
+                except BaseException as error:
+                    self._failure = self._failure or error
+                finally:
+                    self._supervisor = None
+            if _ACTIVE_CAMPAIGN_LEASE is self:
+                _ACTIVE_CAMPAIGN_LEASE = self._previous_global
+            descriptor = self._descriptor
+            self._descriptor = None
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+
+    def __exit__(self, exc_type: Any, exc: BaseException | None, tb: Any) -> bool:
+        # 任意异常都表示本次可变命令没有形成可验证的正常终态。不能把
+        # ConfigurationError／I/O 错误当作“正常释放”，否则下一条命令会
+        # 看见一个没有停线原因的旧租约并可能误接管。
+        if exc is not None:
+            try:
+                reason = (
+                    "owner_interrupted"
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit))
+                    else "owner_exception"
+                )
+                self._mark_stop_line(reason)
+            except BaseException:
+                pass
+        self.release(outcome="exception" if exc is not None else "released")
+        return False
+
+
+def _lease_identity_matches(
+    lease: CampaignLease,
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> bool:
+    """判断当前进程中的活动租约是否正好覆盖目标命令。"""
+
+    try:
+        same_root = lease.campaign_dir.resolve(strict=True) == campaign_dir.resolve(
+            strict=True
+        )
+    except OSError:
+        same_root = False
+    return (
+        same_root
+        and lease.phase == phase
+        and lease.candidate_id == candidate_id
+    )
+
+
+@contextmanager
+def _campaign_operation_lease(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    command: str,
+    deadline: incremental_recovery.WallClockDeadline,
+    allow_stale_recovery: bool = False,
+    campaign_id: str | None = None,
+) -> Iterable[CampaignLease | None]:
+    """为一个可变 CLI 操作取得 lease；嵌套调用复用同一 owner。"""
+
+    active = _ACTIVE_CAMPAIGN_LEASE
+    if active is not None:
+        if not _lease_identity_matches(
+            active,
+            campaign_dir,
+            phase=phase,
+            candidate_id=candidate_id,
+        ):
+            raise ConfigurationError(
+                "当前进程已经持有另一 Campaign／phase 的 lease，禁止嵌套可变操作。"
+            )
+        active.check(command)
+        yield active
+        active.check(f"{command}:complete")
+        return
+    with CampaignLease(
+        campaign_dir,
+        phase=phase,
+        candidate_id=candidate_id,
+        deadline=deadline,
+        command=command,
+        allow_stale_recovery=allow_stale_recovery,
+        campaign_id=campaign_id,
+    ) as lease:
+        yield lease
+        lease.check(f"{command}:complete")
 
 
 def _campaign_cleanup_reserve_seconds() -> float:
@@ -576,12 +1447,81 @@ def _secure_copy_file_once(source: Path, destination: Path) -> dict[str, Any]:
     }
 
 
+@contextmanager
+def _campaign_lock(
+    campaign_dir: Path,
+    *,
+    deadline: incremental_recovery.WallClockDeadline | None = None,
+) -> Iterable[None]:
+    """以 Campaign 级文件锁串行化 attempt 预约与阶段发布。"""
+
+    _validate_existing_campaign_path(campaign_dir)
+    lock_path = campaign_dir / ".campaign.lock"
+    _reject_symlink_components(lock_path, campaign_dir, "Campaign 锁")
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    created = False
+    try:
+        descriptor = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+    except FileExistsError:
+        descriptor = os.open(lock_path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or (not created and stat.S_IMODE(metadata.st_mode) != 0o600)
+        ):
+            raise ConfigurationError("Campaign 锁必须是当前用户拥有的 0600 普通文件。")
+        if created:
+            os.fchmod(descriptor, 0o600)
+        if deadline is None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        else:
+            # 非阻塞轮询让 Campaign 锁等待也受 attempt 全局预算约束；
+            # 不能因另一个进程持锁而无限挂起。
+            while True:
+                deadline.check("campaign-lock")
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    deadline.sleep(
+                        min(0.1, deadline.remaining_seconds),
+                        operation="campaign-lock-wait",
+                    )
+                except InterruptedError:
+                    continue
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
 def _campaign_file(campaign_dir: Path, relative: str) -> Path:
     path = campaign_dir / relative
     resolved = path.resolve(strict=False)
     if not resolved.is_relative_to(campaign_dir.resolve()):
         raise ConfigurationError(f"Campaign 文件越过根目录：{relative}")
     return path
+
+
+def _git_commit(root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value if re.fullmatch(r"[a-f0-9]{40,64}", value) else None
 
 
 def _candidate_revisions_root(campaign_dir: Path) -> Path:
@@ -675,6 +1615,34 @@ def _existing_candidate_revisions(campaign_dir: Path) -> list[int]:
             raise ConfigurationError(f"候选 revisions 目录含非法条目：{child.name}")
         found.append(int(match.group(1)))
     return sorted(found)
+
+
+def _campaign_coordinates(manifest: Mapping[str, Any]) -> tuple[str, str]:
+    """读取并严格校验 Campaign 创建时冻结的模式与用途。"""
+
+    mode = manifest.get("campaign_mode")
+    purpose = manifest.get("campaign_purpose")
+    if mode not in CAMPAIGN_MODES:
+        raise ConfigurationError("Campaign 缺少或携带非法 campaign_mode。")
+    if purpose not in CANDIDATE_PURPOSES:
+        raise ConfigurationError("Campaign 缺少或携带非法 campaign_purpose。")
+    return str(mode), str(purpose)
+
+
+def _require_formal_campaign(
+    campaign_dir: Path,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """阻止 P0 计划通过任何直接或 continuation 入口进入正式阶段。"""
+
+    current = manifest or load_campaign_manifest(campaign_dir)
+    mode, _ = _campaign_coordinates(current)
+    if mode != "formal":
+        raise ConfigurationError(
+            "preflight_only Campaign 只允许 plan/status；不得进入正式或 live 阶段，"
+            "请以 formal 模式创建全新 Campaign。"
+        )
+    return current
 
 
 def _evaluation_baseline_dir(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
@@ -790,6 +1758,28 @@ def _assertions_root_for_baseline(campaign_dir: Path, candidate_id: str, baselin
     return root / "revisions" / f"b{baseline}" if baseline > 0 else root
 
 
+def _campaign_tool_evolutions(
+    campaign_dir: Path, manifest: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """读取 Campaign 工具演进链；链损坏即失败关闭。"""
+
+    try:
+        return codex_upgrade_wire_transition.load_evolutions(campaign_dir, manifest)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"工具演进链无法重放：{error}") from error
+
+
+def _campaign_effective_tool_identity(
+    campaign_dir: Path, manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Campaign 当前有效工具身份：最新演进的 to 完整身份，没有演进时为 plan 冻结身份。"""
+
+    try:
+        return codex_upgrade_wire_transition.effective_tool_identity(campaign_dir, manifest)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"工具演进链无法重放：{error}") from error
+
+
 def _timing_event_phase(ledger_dir: Path, sequence: int) -> str:
     for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
         if int(event["sequence"]) == sequence:
@@ -801,6 +1791,136 @@ def _timing_event_phase(ledger_dir: Path, sequence: int) -> str:
 # ---------------------------------------------------------------------------
 # 自实现：Claude 语义与 Codex 不同、此刻就能定的成员
 # ---------------------------------------------------------------------------
+
+
+def _verify_campaign_file_bindings(campaign_dir: Path, group: Any, label: str) -> None:
+    """总计划里一组文件绑定（名字 → ``{path, sha256}`` 或空值）：路径在 Campaign 目录内、内容摘要未漂移。"""
+
+    if group is None:
+        return
+    if not isinstance(group, Mapping):
+        raise ConfigurationError(f"Campaign {label} 必须是对象。")
+    for name, reference in group.items():
+        if reference is None:
+            continue
+        if not isinstance(reference, Mapping) or set(reference) - {"path", "sha256", "bytes", "schema_version"}:
+            raise ConfigurationError(f"Campaign {label}.{name} 绑定形态非法。")
+        relative = reference.get("path")
+        expected_sha = reference.get("sha256")
+        if not isinstance(relative, str) or not SHA256_RE.fullmatch(str(expected_sha)):
+            raise ConfigurationError(f"Campaign {label}.{name} 引用非法。")
+        target = _campaign_file(campaign_dir, relative)
+        if not target.is_file() or file_sha256(target) != expected_sha:
+            raise ConfigurationError(f"Campaign {label} 摘要漂移：{relative}")
+
+
+def load_campaign_manifest(
+    path: Path,
+    *,
+    _control_epoch_bootstrap: bool = False,
+    _skip_control_validation: bool = False,
+) -> dict[str, Any]:
+    """加载 Claude Campaign 总计划（``official-client-upgrade-campaign/v1``）：核对自摘要、归属客户端、必备字段与计划期
+    输入绑定。
+
+    与 Codex 同签名。Claude 没有控制纪元，``_control_epoch_bootstrap`` 只能为假；控制收据的语义核验由 P0 收口
+    （B2-11）落实，VC 控制制品的语义重放由原子批次入口（B3-01）落实，这里只核两者的文件绑定；前序绑定由导入路径
+    （B2-09）落实，此前只接受空值。"""
+
+    if _control_epoch_bootstrap:
+        raise ConfigurationError("Claude Campaign 没有 control epoch。")
+    campaign_dir = path.parent if path.name == "campaign.json" else path
+    _validate_existing_campaign_path(campaign_dir)
+    manifest_path = campaign_dir / "campaign.json"
+    digest_path = campaign_dir / "campaign.sha256"
+    if not manifest_path.is_file() or not digest_path.is_file():
+        raise ConfigurationError("Campaign 缺少 campaign.json 或 campaign.sha256。")
+    expected = digest_path.read_text(encoding="utf-8").strip()
+    if not SHA256_RE.fullmatch(expected) or file_sha256(manifest_path) != expected:
+        raise ConfigurationError("Campaign 核心清单摘要不一致，拒绝继续。")
+    manifest = _read_json(manifest_path, "Campaign 核心清单")
+    if manifest.get("schema_version") != CAMPAIGN_SCHEMA or manifest.get("client") != "claude":
+        raise ConfigurationError("不是 Claude Campaign 总计划（schema 或 client 不符）。")
+    missing = sorted(CAMPAIGN_REQUIRED_FIELDS - set(manifest))
+    if missing:
+        raise ConfigurationError(f"Claude Campaign 总计划缺少字段：{missing}")
+    _campaign_coordinates(manifest)
+    if not SAFE_ID_RE.fullmatch(str(manifest.get("campaign_id", ""))):
+        raise ConfigurationError("Claude Campaign ID 非法。")
+    if manifest.get("predecessor") is not None:
+        raise ConfigurationError("Claude Campaign 前序绑定由导入路径（B2-09）落实，当前只接受空值。")
+    identity = manifest.get("tool_identity")
+    if not isinstance(identity, Mapping) or identity.get("client") != "claude":
+        raise ConfigurationError("Claude Campaign 工具身份缺少 client 或归属不符。")
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping) or configuration.get("platform") != CAMPAIGN_PLATFORM:
+        raise ConfigurationError(f"Claude Campaign 只支持 {CAMPAIGN_PLATFORM} 平台。")
+    groups = ("inputs", "vc_control") if _skip_control_validation else ("inputs", "vc_control", "control_receipts")
+    for group_name in groups:
+        _verify_campaign_file_bindings(campaign_dir, manifest.get(group_name), group_name)
+    return manifest
+
+
+def _campaign_timing_ledger_dir(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> Path:
+    """解析 Campaign 绑定的计时账本：Claude 没有控制纪元，只读总计划 ``control_receipts.upgrade_timing``。"""
+
+    del campaign_dir
+    controls = manifest.get("control_receipts")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping):
+        raise ConfigurationError("Campaign 缺少 UpgradeTimingLedger 控制绑定。")
+    ledger_dir = Path(str(timing.get("ledger_dir", "")))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
+        raise ConfigurationError("Campaign UpgradeTimingLedger 路径不可信。")
+    ledger_dir = ledger_dir.resolve(strict=True)
+    plan_path = ledger_dir / "ledger.json"
+    if plan_path.is_symlink() or not plan_path.is_file() or file_sha256(plan_path) != timing.get("ledger_plan_sha256"):
+        raise ConfigurationError("Campaign 绑定的 UpgradeTimingLedger 计划摘要漂移。")
+    if codex_upgrade_timing_ledger.plan_client(codex_upgrade_timing_ledger._load_json(plan_path, "计时账本计划")[0]) != "claude":
+        raise ConfigurationError("Campaign 绑定的计时账本不属于 Claude。")
+    return ledger_dir
+
+
+def _tool_tree_entries(tool_root: Path) -> list[dict[str, Any]]:
+    """按 Claude 身份策略（v3）列出两个受管根的文件摘要，条目键为 ``<根目录名>/<相对路径>``。
+
+    ``tool_root`` 是 ``official_client_capture`` 目录（或其执行副本），同级的 ``official_client_control`` 一并计入。"""
+
+    policy = claude_tool_identity_policy.load_policy()
+    digests = claude_tool_identity_policy.managed_tree_digests(Path(tool_root).resolve().parents[1], policy)
+    return [{"path": key, "sha256": digests[key]} for key in sorted(digests)]
+
+
+def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
+    """Claude 受管工具身份（Campaign 总计划 ``tool_identity``）：v3 引擎的五摘要与两个编排器闭包，加整树条目与摘要。"""
+
+    tool_root = Path(__file__).resolve().parent
+    repository = tool_root.parents[1]
+    try:
+        policy = claude_tool_identity_policy.load_policy()
+        identity = claude_tool_identity_policy.compute_identity(policy, repository)
+    except claude_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"Claude 工具身份策略无法计算：{error}") from error
+    entries = _tool_tree_entries(tool_root)
+    files_sha256 = _fingerprint({"entries": entries})
+    if files_sha256 != identity["tool_files_sha256"]:
+        raise ConfigurationError("Claude 工具整树摘要与身份引擎不一致。")
+    return {
+        "client": "claude",
+        "git_commit": _git_commit(repository) if include_git else None,
+        "entry_count": len(entries),
+        "files_sha256": files_sha256,
+        "entries": entries,
+        "policy_version": identity["policy_version"],
+        "policy_sha256": identity["policy_sha256"],
+        "wire_producer_sha256": identity["wire_producer_sha256"],
+        "evidence_semantics_sha256": identity["evidence_semantics_sha256"],
+        "control_sha256": identity["control_sha256"],
+        "orchestrator_closures": identity["orchestrator_closures"],
+    }
 
 
 def _requires_complete_vc_artifacts(value: Mapping[str, Any] | str) -> bool:
@@ -1724,128 +2844,27 @@ def recovery_preview_continuity(
 # ---------------------------------------------------------------------------
 
 
-# B1-09 续（租约与锁）
-
-
-class CampaignLease:
-    """服务面类成员（Claude 编排器尚未实现，由 B1-09 续（租约与锁） 落实）。"""
-
-    def __init__(self, *arguments: Any, **options: Any) -> None:
-        del arguments, options
-        raise _pending("CampaignLease", "B1-09 续（租约与锁）")
-
-
-@contextmanager
-def _campaign_lock(
-    campaign_dir: Path,
-    *,
-    deadline: incremental_recovery.WallClockDeadline | None = None,
-) -> Iterable[None]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（租约与锁） 落实）。"""
-
-    del campaign_dir, deadline
-    raise _pending("_campaign_lock", "B1-09 续（租约与锁）")
-
-
-@contextmanager
-def _campaign_operation_lease(
-    campaign_dir: Path,
-    *,
-    phase: str,
-    candidate_id: str | None,
-    command: str,
-    deadline: incremental_recovery.WallClockDeadline,
-    allow_stale_recovery: bool = False,
-    campaign_id: str | None = None,
-) -> Iterable[CampaignLease | None]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（租约与锁） 落实）。"""
-
-    del campaign_dir, phase, candidate_id, command, deadline, allow_stale_recovery, campaign_id
-    raise _pending("_campaign_operation_lease", "B1-09 续（租约与锁）")
-
-
-# B1-09 续（Campaign 总计划读取与工具身份）
-
-
-def load_campaign_manifest(
-    path: Path,
-    *,
-    _control_epoch_bootstrap: bool = False,
-    _skip_control_validation: bool = False,
-) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del path, _control_epoch_bootstrap, _skip_control_validation
-    raise _pending("load_campaign_manifest", "B1-09 续（Campaign 总计划读取与工具身份）")
-
-
-def _require_formal_campaign(
-    campaign_dir: Path,
-    manifest: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del campaign_dir, manifest
-    raise _pending("_require_formal_campaign", "B1-09 续（Campaign 总计划读取与工具身份）")
+# B2-11（VC-0 收口续作与 P0 收据）
 
 
 def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B2-11（VC-0 收口续作与 P0 收据） 落实）。"""
 
     del arguments
-    raise _pending("create_campaign", "B1-09 续（Campaign 总计划读取与工具身份）")
+    raise _pending("create_campaign", "B2-11（VC-0 收口续作与 P0 收据）")
 
 
 def campaign_status(
     campaign_dir: Path,
     candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B2-11（VC-0 收口续作与 P0 收据） 落实）。"""
 
     del campaign_dir, candidate_id
-    raise _pending("campaign_status", "B1-09 续（Campaign 总计划读取与工具身份）")
+    raise _pending("campaign_status", "B2-11（VC-0 收口续作与 P0 收据）")
 
 
-def _campaign_timing_ledger_dir(
-    campaign_dir: Path,
-    manifest: Mapping[str, Any],
-) -> Path:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del campaign_dir, manifest
-    raise _pending("_campaign_timing_ledger_dir", "B1-09 续（Campaign 总计划读取与工具身份）")
-
-
-def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del include_git
-    raise _pending("_tool_identity", "B1-09 续（Campaign 总计划读取与工具身份）")
-
-
-def _tool_tree_entries(tool_root: Path) -> list[dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del tool_root
-    raise _pending("_tool_tree_entries", "B1-09 续（Campaign 总计划读取与工具身份）")
-
-
-def _campaign_effective_tool_identity(
-    campaign_dir: Path, manifest: Mapping[str, Any]
-) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del campaign_dir, manifest
-    raise _pending("_campaign_effective_tool_identity", "B1-09 续（Campaign 总计划读取与工具身份）")
-
-
-def _campaign_tool_evolutions(
-    campaign_dir: Path, manifest: Mapping[str, Any]
-) -> list[dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
-
-    del campaign_dir, manifest
-    raise _pending("_campaign_tool_evolutions", "B1-09 续（Campaign 总计划读取与工具身份）")
+# B2-08（工具演进预览）
 
 
 def _tool_evolution_preview(
@@ -1858,10 +2877,10 @@ def _tool_evolution_preview(
     compatibility_receipt: Path | None = None,
     activation_certification: Path | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B1-09 续（Campaign 总计划读取与工具身份） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B2-08（工具演进预览） 落实）。"""
 
     del campaign_dir, manifest, fix_commit, reason, control_root, compatibility_receipt, activation_certification
-    raise _pending("_tool_evolution_preview", "B1-09 续（Campaign 总计划读取与工具身份）")
+    raise _pending("_tool_evolution_preview", "B2-08（工具演进预览）")
 
 
 # B2-06（取证 Job 动作体与环境闭环）
