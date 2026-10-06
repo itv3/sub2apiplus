@@ -5,7 +5,7 @@
 
 * ``ORCHESTRATOR_SURFACE``：共享代码可以经 ``adapter.orchestrator.<原名>`` 访问的编排器符号与签名文本（类记
   ``class``，常量与导入符号记 None）。清单由 ``tests/orchestrator_surface_inventory.py`` 从基线源码提取后冻结：
-  161 个函数、42 个常量、3 个导入符号。
+  209 个可调用成员（含 6 个类）、42 个常量、3 个导入符号。
 * ``ADAPTER_BINDINGS``：每个客户端的服务面成员与适配器成员（值、模块、可调用对象）各自落到哪个模块的哪个符号
   （符号为 None 表示模块本身）。适配器由这张表构造；v3 身份引擎按它解析 ``adapter.orchestrator.<名字>`` 与
   ``adapter.<成员>`` 的间接调用，所以运行时取到的实现与身份引擎解析到的实现同源。
