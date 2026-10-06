@@ -1,0 +1,204 @@
+{
+  "schema_version": "codex-upgrade-root-cause-codes/v1",
+  "algorithm_version": "structured-root-cause/v1",
+  "description": "Claude 升级链路全部根因生产者的稳定错误码枚举表（Claude 升级控制面设计 D5、B1-06）。复制 Codex 码表全部非 legacy 码并在稳定维度里追加 client，另加 Claude 专属码；根因 ID 只由 component、stable_error_code、failed_step 与本表登记的稳定维度生成，同码同步骤因 client 维度不同而与 Codex 的 ID 不同，Codex 码表与历史 ID 零变化。Claude Campaign ID 等Claude 专属的易变形态由适配器 reject_volatile_dimensions 在调用根因 API 前拒绝。Claude 项目总账按 client 加载本表并冻结其摘要与算法版本；修改本表须经 record-code-migration 写旧新 ID 映射收据并继承累计次数。",
+  "codes": {
+    "campaign-run.action-failed": {
+      "component": "supervisor",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "campaign-run 父批次中某个动作以非零退出；failed_step 为动作 ID。"
+    },
+    "vc0-closeout.step-failed": {
+      "component": "vc0-closeout",
+      "stable_dimensions": [
+        "client"
+      ],
+      "description": "VC-0 原子收口在某个步骤失败；failed_step 为步骤名。"
+    },
+    "supervisor-run.interrupted": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "父监督器在派发前或运行中被中断，尚无 attempt。也用于有动作诊断、但既没有枚举失败观测也没有归一化拒因签名的动作失败：failed_step 为失败动作的 operation（冒号换成连字符；清单没有动作表时为父 run 最后操作）。修好接着跑第 60 项起带签名的动作失败改记 campaign-run.action-error；本码继续用于没有动作诊断的中断（owner 丢失、SIGKILL、看门狗）、历史 v1～v3 诊断，以及 v4 诊断的 interrupted、child-returncode（没有异常原文），维度与旧 ID 不变。"
+    },
+    "campaign-run.action-error": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "failure_kind",
+        "error_type",
+        "error_signature",
+        "client"
+      ],
+      "description": "修好接着跑第 60 项：campaign-run 父批次的动作以异常失败且没有枚举失败观测，动作诊断为 codex-upgrade-campaign-action-diagnostic/v4、failure_kind 为 handled-error 或 unexpected-error。failed_step 与 supervisor-run.interrupted 同源（失败动作的 operation，冒号换成连字符）；failure_kind 为诊断的失败种类；error_type 为异常类名（非标识符记 unrecognized）；error_signature 为监督器写诊断时由同一异常的完整原文生成的归一化拒因签名 es1（口径同 staging.attempt-failed，不受诊断 message 的脱敏改写与长度上限影响）。同一动作的不同根本原因互不累计；同一原因只在波动片段上不同仍得同一 ID，上限保护不削弱。v1～v3 诊断没有签名，按 supervisor-run.interrupted 复算，历史对账收据与总账事件照旧重放。"
+    },
+    "attempt.interrupted": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "reservation 之后 attempt 被中断，checkpoint 未写终态。"
+    },
+    "attempt.deadline-expired": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "attempt 因 Campaign 或项目 deadline 到期停止。"
+    },
+    "attempt.accounting-unresolved": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "attempt 的模型请求数无法从不可变证据确定。修好接着跑第 38 项起不再作为根因生成：账务未决只是暂停原因（请求部分 unresolved／总账 blocked，accounting-resolve 补账后继续），不进根因计数；本码只供历史事件重放，第 38 项之前以它为主根因入账的 attempt 在续接对账时由 reconciliation_corrected 更正为按首次收据事实重算的真实根因。"
+    },
+    "attempt.environment-contaminated": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "attempt 的环境恢复失败或前后环境身份不连续。"
+    },
+    "attempt.identity-changed": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "attempt 期间 wire producer 或策略身份发生变化。"
+    },
+    "staging.abandoned": {
+      "component": "orchestrator",
+      "stable_dimensions": [
+        "phase",
+        "stage",
+        "client"
+      ],
+      "description": "VC 批次 staging 制品或 prepared 父 run 在取得执行权前被遗弃（进程崩溃、SIGKILL 或 owner 丢失），正式序号未占用。第 32 项起带原始异常的 prepare／parent-run-create 失败改记 staging.attempt-failed；本码只用于没有异常原文可归因的遗弃（入口孤儿扫描、prepared-abandoned 父 run）以及不带 error_signature 的历史 ABORT 重放，维度与旧 ID 不变。"
+    },
+    "staging.commit-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": [
+        "phase",
+        "stage",
+        "client"
+      ],
+      "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。第 51 项起带提交步骤失败诊断的父 run 改记 staging.commit-step-failed；本码只用于 run 目录没有 staging-commit-failure.json 的父 run（第 51 项之前的监督器封存的历史 run，或诊断写入失败），维度与旧 ID 不变。"
+    },
+    "staging.commit-step-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": [
+        "phase",
+        "stage",
+        "error_type",
+        "error_signature",
+        "client"
+      ],
+      "description": "修好接着跑第 51 项：prepared 父 run 的 staging 提交在写入正式 COMMIT 前的某一步（nonce 校验、evaluator 摘要、账本事件、发布正式文件、写 COMMIT 标记）因异常失败，正式序号未占用。监督器在封存 aborted_prepared（stop reason staging-commit-failed:<step>）前把异常类型、原文与归一化拒因签名写进 run 目录的 staging-commit-failure.json（codex-upgrade-staging-commit-failure/v1，绑定 Campaign、阶段、owner 与 staging 预约身份）。failed_step 与 stage 为失败步骤；error_type 为异常类名（非标识符记 unrecognized）；error_signature 与 staging.attempt-failed 同为 es1。同一步骤的不同拒因互不累计；同一拒因只在波动片段上不同仍得同一 ID，上限保护不削弱。"
+    },
+    "staging.attempt-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": [
+        "phase",
+        "stage",
+        "error_type",
+        "error_signature",
+        "client"
+      ],
+      "description": "修好接着跑第 32 项：VC 批次 staging attempt 在父 run 建立前（prepare 编译落盘，或 parent-run-create 链审计／父 run 创建）因异常中止，正式序号未占用。failed_step 与 stage 相同；error_type 为异常类名（非标识符记 unrecognized）；error_signature 为归一化拒因签名 es1：原始异常全文去控制字符后，把绝对路径、Campaign／attempt／run ID、UUID、时间戳、0x 地址、十六进制摘要替换为占位符，其余数字替换为 #，Python 字符串集合字面量元素排序，空白折叠，取 SHA-256 前 16 位。同一步骤的不同拒因互不累计；同一拒因只在上述波动片段上不同仍得同一 ID，上限保护不削弱。ABORT 收据带 error_signature 时按本码复算，不带时按 staging.abandoned 复算（历史收据照旧重放）。"
+    },
+    "parent-start.failed": {
+      "component": "supervisor",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "正式 COMMIT 已写入但 prepared 父 run 未能转入 running（owner 丢失或状态写入失败），序号已占用，零动作零请求。"
+    },
+    "commit.integrity-mismatch": {
+      "component": "supervisor",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "prepared 父 run 对应的正式 COMMIT 存在但自摘要无效、owner nonce 或 run 目录不匹配，属于制品完整性异常，永久停线。"
+    },
+    "candidate.source-change-required": {
+      "component": "candidate",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "人工审核判定候选实现需要改源码（invalidate-candidate 显式作废）：同阶段的候选源码变更需求跨 revision 累计，达上限即停线。"
+    },
+    "evaluation.rule-failed": {
+      "component": "evaluator",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "候选证据封存后的离线评估失败（evaluation-recover apply 以 evaluator-defect 开评估基线）：failed_step 为首条失败规则 id，compare／accept 动作的工具异常分别为冻结动作 id compare／acceptance；同阶段跨基线累计，达上限即停线。"
+    },
+    "attempt.job-transient-failure": {
+      "component": "reconciler",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "评估失败被裁定为临时环境／Job 故障（evaluation-recover apply 以 transient-environment 开 attempt-recovery 基线）：failed_step 为首个受影响 Job id；同阶段跨恢复段累计，达上限即停线。"
+    },
+    "claude.capture.relay-failed": {
+      "component": "claude-capture",
+      "stable_dimensions": [
+        "phase",
+        "client",
+        "scenario"
+      ],
+      "description": "Claude 官方取证或候选采集中 relay 动作失败；failed_step 为 Job ID，scenario 为场景名。"
+    },
+    "claude.capture.auth-gate": {
+      "component": "claude-capture",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "Claude 客户端在取证前停在授权／登录门（未登录、OAuth 失效或交互屏未确认）；failed_step 为 Job ID。"
+    },
+    "claude.bundle.extract-failed": {
+      "component": "claude-bundle",
+      "stable_dimensions": [
+        "phase",
+        "client"
+      ],
+      "description": "Claude 官方二进制的 Bun 模块图提取或 AST 分析失败；failed_step 为分析步骤名。"
+    },
+    "claude.store.gate-rejected": {
+      "component": "claude-store",
+      "stable_dimensions": [
+        "phase",
+        "client",
+        "fact_kind"
+      ],
+      "description": "official_client_control Store 门禁拒绝写入事实或收据；failed_step 为 Store 子命令，fact_kind 为事实种类。"
+    },
+    "claude.delivery.stage-failed": {
+      "component": "claude-delivery",
+      "stable_dimensions": [
+        "phase",
+        "client",
+        "stage"
+      ],
+      "description": "Claude 候选交付四阶段中某一阶段失败；failed_step 为交付动作 ID，stage 为交付阶段名。"
+    }
+  }
+}
