@@ -11,7 +11,25 @@ import (
 
 const codexCLINarrativeRetirementSHA256 = "5c4eec66d9f1d05bc0a651cace3d9bc4470a008e8bc88abff5dbb591f17832cf"
 
-const codexCLIHistoryAuditPath = "docs/CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md"
+// codexCLIRemovedHistoryAuditName 是 2026-10-07 删除的 Codex CLI 历史审计文件名：它只解释
+// 0.151／0.154 时期的历史收据与旧章节编号，0.160 起已过时。主手册不得再链接它。
+const codexCLIRemovedHistoryAuditName = "CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md"
+
+// codexCLIRetiredChapterAnchors 是退役回执中只落在已删除历史审计「历史章节编号映射」里的
+// 旧章节文字。历史审计删除后，这些旧章节文字不再要求在现行文档中可定位，回执本身仍冻结不变；
+// 清单写死，且每条都必须仍被回执引用，防止豁免范围扩大。
+var codexCLIRetiredChapterAnchors = map[string]struct{}{
+	"4.2 规则比较、画像准备与批准":     {},
+	"4.4 候选验证与封存":          {},
+	"4.4.2 场景与第三方入口":       {},
+	"4.4.3 四阶段封存":          {},
+	"4.4.4 运行纪律与退出条件":      {},
+	"4.5 比较与验收":            {},
+	"4.5.2 逐规则机器断言":        {},
+	"4.5.3 accept 前置与正式验收": {},
+	"4.6 生产启用与回滚":          {},
+	"第五部分 非版本变更维护":         {},
+}
 
 type codexCLINarrativeRemoval struct {
 	Path                string   `json:"path"`
@@ -80,16 +98,11 @@ func TestCodexCLINarrativeRetirementIsFrozenAndComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	guideText := string(guideRaw)
 	if !bytes.Contains(guideRaw, []byte("# "+receipt.Authority.Title)) {
 		t.Fatalf("主手册标题与退役回执不一致：%s", receipt.Authority.Title)
 	}
-	historyAuditRaw, err := os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(codexCLIHistoryAuditPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(guideRaw, []byte("CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md")) {
-		t.Fatal("主手册缺少 Codex CLI 历史审计入口")
+	if bytes.Contains(guideRaw, []byte(codexCLIRemovedHistoryAuditName)) {
+		t.Fatalf("主手册仍链接已删除的历史审计：%s", codexCLIRemovedHistoryAuditName)
 	}
 
 	expectedRemoved := map[string]string{
@@ -105,6 +118,7 @@ func TestCodexCLINarrativeRetirementIsFrozenAndComplete(t *testing.T) {
 		"docs/egress/maintenance/SPEC_TLS_003_JUDGMENT_DEFECT.md":           "bca1b6502d169c6d8b9ec4440ff3de83a8d48c783217a8f9025962c372d62ce7",
 		"docs/egress/maintenance/画像升级评审.md":                                 "9e2900d2a413ff8bbb7c8fdb76bfb17450464f2d4152e894038be649f6f88198",
 	}
+	retiredAnchorsSeen := make(map[string]struct{}, len(codexCLIRetiredChapterAnchors))
 	for _, removed := range receipt.RemovedNarrativeFiles {
 		expectedSHA, ok := expectedRemoved[removed.Path]
 		if !ok || removed.SHA256BeforeRemoval != expectedSHA || len(removed.ReplacementAnchors) == 0 {
@@ -115,13 +129,20 @@ func TestCodexCLINarrativeRetirementIsFrozenAndComplete(t *testing.T) {
 			t.Fatalf("已退役历史叙事仍存在或状态异常：path=%s err=%v", removed.Path, statErr)
 		}
 		for _, anchor := range removed.ReplacementAnchors {
-			if !bytes.Contains([]byte(guideText), []byte(anchor)) && !bytes.Contains(historyAuditRaw, []byte(anchor)) {
-				t.Fatalf("主手册及历史审计均缺少退役内容替代锚点：path=%s anchor=%s", removed.Path, anchor)
+			if _, retired := codexCLIRetiredChapterAnchors[anchor]; retired {
+				retiredAnchorsSeen[anchor] = struct{}{}
+				continue
+			}
+			if !bytes.Contains(guideRaw, []byte(anchor)) {
+				t.Fatalf("主手册缺少退役内容替代锚点：path=%s anchor=%s", removed.Path, anchor)
 			}
 		}
 	}
 	if len(expectedRemoved) != 0 {
 		t.Fatalf("退役回执缺少历史叙事路径：%v", expectedRemoved)
+	}
+	if len(retiredAnchorsSeen) != len(codexCLIRetiredChapterAnchors) {
+		t.Fatalf("已退役旧章节豁免清单含回执未引用的条目：已引用=%v", retiredAnchorsSeen)
 	}
 
 	if len(receipt.RemovedNonSourceFiles) != 1 ||

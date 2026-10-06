@@ -13,7 +13,7 @@
 `reuse-official-evidence` 和 `compile-and-run-vc-batch` 是三个受限的 Campaign 引导／批次控制命令；
 `compile-vc-batch` 仅保留给历史读取和内部测试，0.154.0 起 Formal CLI 会失败关闭。适用边界见
 第四部分开头的[公共执行约定](#codex-part4-premises)、[§4.7](#codex-4-7) 与 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
-Campaign，兼容边界见[历史审计 §2](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)。
+Campaign，兼容边界以 [`codex_upgrade_legacy_boundary.py`](../tools/official_client_capture/codex_upgrade_legacy_boundary.py) 及对应版本 Schema／测试为准。
 
 ---
 
@@ -84,7 +84,7 @@ Campaign，兼容边界见[历史审计 §2](CODEX_CLI_CLIENT_EMULATION_HISTORY_
 
 证据基线与运行角色相互独立：经 VC-2 判定 `inherit` 的规则可以继续引用旧版本 L1／L2／P／R，但这不
 表示旧版本仍是 Active。运行时 Active／Previous 的机器事实只读取 Release Catalog，§3.2 负责其人类可读
-摘要；历史版本身份与原始 run 见[历史审计 §1 版本证据沿革](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#1-01491-与-01470-版本证据沿革)。
+摘要；已退出 Runtime Catalog 的历史版本，其身份与原始 run 只按各自的 Catalog 晋升、生产激活与终态收据读取。
 
 ### 2.1.2 规则准入与观测边界
 
@@ -1327,8 +1327,8 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 
 [Framework §5.3](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 规定 `VC-0 → VC-1 → … → VC-6` 顺序；
 本部分保留 Codex 专用操作与验收合同。脚本参数、安装及实现细节统一见
-[驱动 README](../tools/arm64_capture_driver/README.md)；旧入口与历史事故见
-[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md)，不作为新 Campaign 的执行依据。
+[驱动 README](../tools/arm64_capture_driver/README.md)；旧入口与历史事故只按生成时的收据原文只读解释，
+不作为新 Campaign 的执行依据。
 
 <a id="codex-driver-entries"></a>
 ## VC-0～VC-6 执行导航
@@ -1971,6 +1971,3 @@ Framework 与本指南是受管依赖，部署清单登记路径及完整摘要�
 `docs/egress/maintenance/compatibility-code-retirement-closure.json` 固化。每个候选只能是
 “已退休”或“因产品语义必须保留”；新增未分类标记必须使门禁失败。闭集完成只表示当前范围已审计，
 不授权删除其中明确保留的 API Key、第三方入口、平滑升级或回滚语义。
-
-历史版本证据、0.151 旧恢复机制和旧章节编号映射仅用于审计，见
-[`CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md`](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md)。

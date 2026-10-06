@@ -681,7 +681,7 @@ supervisor-run reconciler 对账；reservation 之后的任何中断由 attempt 
 写阶段废弃与停线事件并向项目总账追加终态事件。Job 完成态以 result 与 checkpoint 同时存在为准，有证据
 无终态 checkpoint 视为不确定并归入失败集合。下文 `KeyboardInterrupt` 孤儿条款只对已采用它的历史
 Campaign 保持只读解释，不再是新 Campaign 的恢复模板；续接、收尾与 deadline 孤儿封口条款已于
-2026-09-16 连同其执行入口删除，历史收据只按客户端历史审计读取。
+2026-09-16 连同其执行入口删除，历史收据只按生成时原文只读解释。
 
 父监督器因明确的 `KeyboardInterrupt` 失败、同一 attempt 已有追加式 Job checkpoint 但尚未写入终态时，
 只有在目标、账号权限、环境语义和数据面身份均未变化的情况下，才允许使用客户端专用的中断恢复合同。
