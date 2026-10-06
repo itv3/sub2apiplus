@@ -585,6 +585,8 @@ type requestBodyState struct {
 	mu         sync.Mutex
 	mode       RequestBodyMode
 	replayable []byte
+	// segmented 保存编译器逐块产出的只读正文；发送、摘要与重放直接读取这些块。
+	segmented *segmentedBodyContent
 	// members 非 nil 表示正文按顶层成员装配（NewSharedReplayableJSONObjectRequestBody），整段
 	// 字节只在确有读取方需要时才由 members 物化，replayable 此时不使用。
 	members    *jsonObjectMembersContent
@@ -597,10 +599,13 @@ type requestBodyState struct {
 
 // JSONObjectMember 是按线序排列的一个顶层对象成员。Name 为未转义的键，QuotedName 为该键在
 // 正文中的 JSON 编码（含引号），Value 为该成员值的 JSON 字节（前后不含空白）。
+// ValueSegments 非 nil 时优先于 Value，按顺序连接后才是完整成员值。大 input 数组可按
+// 左括号、完整元素、逗号、完整元素、右括号交接，避免只为插入一条指令而复制全部历史。
 type JSONObjectMember struct {
-	Name       string
-	QuotedName []byte
-	Value      []byte
+	Name          string
+	QuotedName    []byte
+	Value         []byte
+	ValueSegments [][]byte
 }
 
 // JSONObjectMembersLength 返回成员依次写成顶层对象（见 AppendJSONObjectMembers）后的字节数。
@@ -610,7 +615,14 @@ func JSONObjectMembersLength(members []JSONObjectMember) int {
 		if i > 0 {
 			length++
 		}
-		length += len(member.QuotedName) + 1 + len(member.Value)
+		length += len(member.QuotedName) + 1
+		if member.ValueSegments != nil {
+			for _, segment := range member.ValueSegments {
+				length += len(segment)
+			}
+		} else {
+			length += len(member.Value)
+		}
 	}
 	return length
 }
@@ -625,7 +637,13 @@ func AppendJSONObjectMembers(dst []byte, members []JSONObjectMember) []byte {
 		}
 		dst = append(dst, member.QuotedName...)
 		dst = append(dst, ':')
-		dst = append(dst, member.Value...)
+		if member.ValueSegments != nil {
+			for _, segment := range member.ValueSegments {
+				dst = append(dst, segment...)
+			}
+		} else {
+			dst = append(dst, member.Value...)
+		}
 	}
 	return append(dst, '}')
 }
@@ -684,7 +702,14 @@ func NewSharedReplayableJSONObjectRequestBody(members []JSONObjectMember) Reques
 		owned[i] = JSONObjectMember{
 			Name:       member.Name,
 			QuotedName: member.QuotedName[:len(member.QuotedName):len(member.QuotedName)],
-			Value:      member.Value[:len(member.Value):len(member.Value)],
+		}
+		if member.ValueSegments != nil {
+			owned[i].ValueSegments = make([][]byte, len(member.ValueSegments))
+			for j, segment := range member.ValueSegments {
+				owned[i].ValueSegments[j] = segment[:len(segment):len(segment)]
+			}
+		} else {
+			owned[i].Value = member.Value[:len(member.Value):len(member.Value)]
 		}
 	}
 	content := &jsonObjectMembersContent{members: owned, length: JSONObjectMembersLength(owned)}
@@ -734,6 +759,9 @@ func (b RequestBody) ReplayableBytes() ([]byte, bool) {
 	if b.state != nil && b.state.document != nil {
 		return b.state.document.encodeSourceOrder(), true
 	}
+	if b.state != nil && b.state.segmented != nil {
+		return b.state.segmented.copyBytes(), true
+	}
 	view, ok := b.replayableView()
 	if !ok {
 		return nil, false
@@ -750,10 +778,29 @@ func (b RequestBody) replayableView() ([]byte, bool) {
 	if b.state.mode != RequestBodyReplayable {
 		return nil, false
 	}
+	if b.state.segmented != nil {
+		return b.state.segmented.materialize(), true
+	}
 	if b.state.members != nil {
 		return b.state.members.materialize(), true
 	}
 	return b.state.replayable, true
+}
+
+// openReplayable 每次打开独立读取位置。分段正文必须从块中读取，不能在 HTTP 发送或
+// Guard 摘要阶段悄悄物化为连续字节；空正文也保留可重放能力。
+func (b RequestBody) openReplayable() (io.ReadCloser, bool) {
+	if b.Mode() != RequestBodyReplayable {
+		return nil, false
+	}
+	if b.ContentLength() == 0 {
+		return http.NoBody, true
+	}
+	if b.state.segmented != nil {
+		return &segmentedBodyReader{segments: b.state.segmented.segments}, true
+	}
+	view, _ := b.replayableView()
+	return io.NopCloser(bytes.NewReader(view)), true
 }
 
 func (b RequestBody) clone() RequestBody {
@@ -769,6 +816,7 @@ func (b RequestBody) clone() RequestBody {
 		return RequestBody{state: &requestBodyState{
 			mode:       RequestBodyReplayable,
 			replayable: b.state.replayable,
+			segmented:  b.state.segmented,
 			members:    b.state.members,
 			document:   b.state.document.clone(),
 			length:     b.state.length,
@@ -1431,15 +1479,18 @@ func requestFromCompiled(ctx context.Context, compiled CompiledRequest) (*http.R
 	if compiled.url == nil {
 		return nil, errors.New("CompiledRequest URL 为空")
 	}
-	if body, replayable := compiled.body.replayableView(); replayable {
-		req, err := http.NewRequestWithContext(ctx, compiled.method, compiled.url.String(), bytes.NewReader(body))
+	if reader, replayable := compiled.body.openReplayable(); replayable {
+		req, err := http.NewRequestWithContext(ctx, compiled.method, compiled.url.String(), reader)
 		if err != nil {
+			_ = reader.Close()
 			return nil, err
 		}
 		req.Header = compiled.headers.Clone()
-		req.ContentLength = int64(len(body))
+		req.ContentLength = compiled.body.ContentLength()
+		body := compiled.body
 		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(body)), nil
+			replay, _ := body.openReplayable()
+			return replay, nil
 		}
 		return req, nil
 	}

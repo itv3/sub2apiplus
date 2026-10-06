@@ -202,7 +202,9 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 			serverErrCh <- readErr
 			return
 		}
-		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "access-token-a", firstMessage, nil)
+		memoryCtx, releaseMemory := openAIWSMemoryTestContext(t, r.Context(), firstMessage)
+		defer releaseMemory()
+		proxyErr := svc.ProxyResponsesWebSocketFromClient(memoryCtx, ginCtx, conn, account, "access-token-a", firstMessage, nil)
 		var failoverErr *UpstreamFailoverError
 		if !errors.As(proxyErr, &failoverErr) {
 			serverErrCh <- proxyErr
@@ -220,8 +222,12 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 			return
 		}
 		failoverCh <- retryPayload
+		if err := openAIWSRequestMemoryFromContext(memoryCtx).BeginAttempt(retryPayload); err != nil {
+			serverErrCh <- err
+			return
+		}
 		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(
-			r.Context(), ginCtx, conn, &nextAccount, "access-token-b", retryPayload, nil,
+			memoryCtx, ginCtx, conn, &nextAccount, "access-token-b", retryPayload, nil,
 		)
 	}))
 	defer wsServer.Close()

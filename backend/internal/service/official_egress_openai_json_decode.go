@@ -168,9 +168,41 @@ func decodeOfficialJSONValueUseNumber(body []byte) (any, error) {
 // 视图相同：官方出站链上的请求正文一经产出即只读，视图只能在正文存活期间使用，不得保存到
 // 请求之外。短字符串（类型、角色、ID、模型名等可能被登记或缓存的小值）与含转义的字符串
 // 照常复制，因此不会出现一个小字符串把整段正文钉在内存里的情况。
+// 对结构较多的对象树，本次解码内的重复短字符串只复制一次，并共享不可变字符串的 interface
+// 包装；复用表有严格大小上限，解码结束即释放。不同请求和不同解码调用不共享此表。
 
 // officialJSONSharedStringMinBytes 是按视图引用正文的字符串最小字节数。
 const officialJSONSharedStringMinBytes = 1024
+
+const (
+	// 小对象保持原来的直接解码，避免为几个短字段额外分配复用表。
+	officialJSONSharedDecodeMinNodes = 256
+	// 复用只涉及已复制的短值；唯一值很多时达到上限就回到普通复制，不形成无限增长的缓存。
+	officialJSONSharedDecodeMaxStrings = 512
+	officialJSONSharedDecodeMaxBytes   = 128 << 10
+)
+
+type officialJSONSharedDecodeStrings struct {
+	values map[string]any
+	bytes  int
+}
+
+func (cache *officialJSONSharedDecodeStrings) copyPlainString(segment []byte) any {
+	// 仅查表的 []byte→string 转换不会保留原文字节；插入时必须另行复制，禁止小值引用大正文。
+	if value, found := cache.values[string(segment)]; found {
+		return value
+	}
+	text := string(segment)
+	value := any(text)
+	if len(cache.values) < officialJSONSharedDecodeMaxStrings && cache.bytes+len(text) <= officialJSONSharedDecodeMaxBytes {
+		if cache.values == nil {
+			cache.values = make(map[string]any)
+		}
+		cache.values[text] = value
+		cache.bytes += len(text)
+	}
+	return value
+}
 
 // decodeOfficialJSONObjectSharingBody 与 decodeOfficialJSONObjectUseNumber 的结果逐项相等，
 // 并返回建好的完整正文索引供拼接编码复用；长字符串以只读视图引用 body，调用方只能在
@@ -204,25 +236,40 @@ func decodeOfficialJSONObjectSharingBodyWithIndex(body []byte, index *officialJS
 // decodeValueSharingBody 构建与 decodeValue(node) 逐项相等的值，只把无转义的长字符串换成
 // 引用正文的只读视图。
 func (index *officialJSONRawIndex) decodeValueSharingBody(node int32) any {
+	var stringCache *officialJSONSharedDecodeStrings
+	if len(index.nodes) >= officialJSONSharedDecodeMinNodes {
+		stringCache = &officialJSONSharedDecodeStrings{}
+	}
+	return index.decodeValueSharingBodyWithStrings(node, stringCache)
+}
+
+// decodeValueSharingBodyWithStrings 只共享不可变标量；每次解码仍新建所有对象与数组，
+// 后续业务改写和重试之间不会共享可写 map 或 slice。
+func (index *officialJSONRawIndex) decodeValueSharingBodyWithStrings(node int32, stringCache *officialJSONSharedDecodeStrings) any {
 	n := &index.nodes[node]
 	switch n.kind {
 	case officialJSONRawKindObject:
 		object := make(map[string]any, len(n.members))
 		for _, member := range n.members {
 			// 成员按原始顺序写入：同名键自然取最后一次出现，与 decodeValue 一致。
-			object[member.key] = index.decodeValueSharingBody(member.node)
+			object[member.key] = index.decodeValueSharingBodyWithStrings(member.node, stringCache)
 		}
 		return object
 	case officialJSONRawKindArray:
 		items := make([]any, len(n.items))
 		for i, item := range n.items {
-			items[i] = index.decodeValueSharingBody(item)
+			items[i] = index.decodeValueSharingBodyWithStrings(item, stringCache)
 		}
 		return items
 	case officialJSONRawKindString:
 		// 快速路径的字符串无转义且是合法 UTF-8，decodeString 返回的正是这段原文的副本。
-		if length := n.end - n.start - 2; !n.slowPath && length >= officialJSONSharedStringMinBytes {
-			return unsafe.String(&index.body[n.start+1], length)
+		if !n.slowPath {
+			if length := n.end - n.start - 2; length >= officialJSONSharedStringMinBytes {
+				return unsafe.String(&index.body[n.start+1], length)
+			}
+			if stringCache != nil {
+				return stringCache.copyPlainString(index.body[n.start+1 : n.end-1])
+			}
 		}
 		return index.decodeString(node)
 	default:

@@ -26,7 +26,7 @@ from .canonical import (
     write_json_once,
 )
 from .errors import UpstreamMergeError
-from .gitops import assert_clean, assert_git_repository, commit_tree, rev_parse, tool_bundle
+from .gitops import assert_clean, assert_git_repository, assert_private_path, commit_tree, rev_parse, tool_bundle
 
 
 BASELINE_INPUT_SCHEMA = "official-egress-upstream-baseline-acceptance-input/v1"
@@ -163,10 +163,8 @@ def seal_baseline_acceptance(
         raise UpstreamMergeError(f"基线验收输入不是可信普通文件：{input_path}")
     if not output_path.is_absolute():
         raise UpstreamMergeError("基线验收输出必须是绝对路径")
-    # 收据必须落在仓库之外。否则写入收据本身会把刚刚验收的工作树弄脏，
-    # 也会让基线收据与自己的提交形成循环依赖。
-    if output_path.resolve(strict=False).is_relative_to(root):
-        raise UpstreamMergeError("基线验收收据必须写入仓库之外的证据目录")
+    # 私有目录不得进入版本控制，避免污染已验收工作树或形成收据自引用。
+    assert_private_path(root, output_path, "基线验收收据")
     if output_path.exists() or output_path.is_symlink():
         raise UpstreamMergeError(f"基线验收输出已存在，禁止覆盖：{output_path}")
 

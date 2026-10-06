@@ -1,0 +1,16 @@
+=== RUN   TestResponsesRequestMemoryRejectsNormalizedBodyGrowthAndReleases
+--- PASS: TestResponsesRequestMemoryRejectsNormalizedBodyGrowthAndReleases (0.00s)
+=== RUN   TestResponsesRequestMemoryReservesBeforeNormalizedBodyIsReturned
+--- PASS: TestResponsesRequestMemoryReservesBeforeNormalizedBodyIsReturned (0.00s)
+=== RUN   TestResponsesRequestMemoryKeepsBOMOnlyBodyEmptyError
+--- PASS: TestResponsesRequestMemoryKeepsBOMOnlyBodyEmptyError (0.00s)
+=== RUN   TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation
+=== RUN   TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/identity
+=== RUN   TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/gzip
+=== RUN   TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/unknown
+--- PASS: TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation (0.00s)
+    --- PASS: TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/identity (0.00s)
+    --- PASS: TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/gzip (0.00s)
+    --- PASS: TestResponsesRequestMemoryGrowsOriginalReservationWithoutReducingMaxPreallocation/unknown (0.00s)
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/handler	2.862s

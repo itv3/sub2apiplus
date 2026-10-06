@@ -30,6 +30,7 @@ from typing import Any, Sequence
 
 from .canonical import expect_object, load_json, write_json_once, write_once
 from .errors import UpstreamMergeError
+from .gitops import assert_private_path
 
 SCANNER_RELATIVE = "backend/cmd/egressscan"
 CLASSIFY_RELATIVE = f"{SCANNER_RELATIVE}/classify.go"
@@ -355,12 +356,11 @@ def write_sink_registration(
 ) -> dict[str, Any]:
     """按预检报告写出登记补丁；不给 notes 时另写一份 notes 模板（<补丁名>.notes.json）供改写后回灌。
 
-    补丁与 notes 都是非权威草稿，必须写在主仓库之外，不覆盖既有文件。
+    补丁与 notes 都是非权威草稿，写入仓库外或指定的 Git 忽略目录，不覆盖既有文件。
     """
 
     root = repository_root.resolve()
-    if not output.is_absolute() or output.resolve(strict=False).is_relative_to(root):
-        raise UpstreamMergeError("登记补丁必须写在主仓库之外的绝对路径")
+    assert_private_path(root, output, "登记补丁")
     coverage = expect_object(expect_object(report.get("report"), "preflight report.report").get("scanner_coverage"), "scanner_coverage")
     sinks = coverage.get("unregistered_added_sinks") or []
     if not isinstance(sinks, list):

@@ -23,8 +23,9 @@ type orderedJSONDocument struct {
 }
 
 type orderedJSONField struct {
-	name  string
-	value json.RawMessage
+	name     string
+	value    json.RawMessage
+	segments *orderedJSONArraySegments
 }
 
 type orderedJSONOverlay struct {
@@ -155,20 +156,29 @@ func (d *orderedJSONDocument) clone() *orderedJSONDocument {
 }
 
 func (d *orderedJSONDocument) value(name string) (json.RawMessage, bool) {
-	if d == nil || !d.duplicatesChecked {
+	field, present := d.field(name)
+	if !present {
 		return nil, false
+	}
+	return field.rawBytes(), true
+}
+
+// field 读取不可变字段描述，单纯的存在性、长度、线序和编码操作不得隐式拼接分段值。
+func (d *orderedJSONDocument) field(name string) (orderedJSONField, bool) {
+	if d == nil || !d.duplicatesChecked {
+		return orderedJSONField{}, false
 	}
 	if field, dirty := d.overlay[name]; dirty {
 		if field.omitted {
-			return nil, false
+			return orderedJSONField{}, false
 		}
-		return field.value, true
+		return orderedJSONField{name: name, value: field.value}, true
 	}
 	index, ok := d.fieldIndex[name]
 	if !ok {
-		return nil, false
+		return orderedJSONField{}, false
 	}
-	return d.fields[index].value, true
+	return d.fields[index], true
 }
 
 func (d *orderedJSONDocument) set(name string, value json.RawMessage) {
@@ -197,7 +207,7 @@ func (d *orderedJSONDocument) namesInSourceOrder() []string {
 	}
 	names := make([]string, 0, len(d.fields)+len(d.overlayOrder))
 	for _, field := range d.fields {
-		if _, present := d.value(field.name); present {
+		if _, present := d.field(field.name); present {
 			names = append(names, field.name)
 		}
 	}
@@ -205,7 +215,7 @@ func (d *orderedJSONDocument) namesInSourceOrder() []string {
 		if _, existed := d.fieldIndex[name]; existed {
 			continue
 		}
-		if _, present := d.value(name); present {
+		if _, present := d.field(name); present {
 			names = append(names, name)
 		}
 	}
@@ -223,26 +233,11 @@ func (d *orderedJSONDocument) encodeSourceOrder() []byte {
 // 最后几次写入必然触发整段扩容：大正文会再分配约两倍正文的新缓冲并复制一遍，且扩容后
 // 的缓冲作为编译结果继续驻留。写出的字节与逐段写入完全相同，只是不再扩容。
 func (d *orderedJSONDocument) encodeNames(names []string) []byte {
-	var quoted []byte
-	size := 2
+	out := make([]byte, 0, d.encodedNamesLength(names))
+	out = append(out, '{')
 	written := 0
 	for _, name := range names {
-		value, present := d.value(name)
-		if !present {
-			continue
-		}
-		if written > 0 {
-			size++
-		}
-		quoted = strconv.AppendQuote(quoted[:0], name)
-		size += len(quoted) + 1 + len(value)
-		written++
-	}
-	out := make([]byte, 0, size)
-	out = append(out, '{')
-	written = 0
-	for _, name := range names {
-		value, present := d.value(name)
+		field, present := d.field(name)
 		if !present {
 			continue
 		}
@@ -251,10 +246,70 @@ func (d *orderedJSONDocument) encodeNames(names []string) []byte {
 		}
 		out = strconv.AppendQuote(out, name)
 		out = append(out, ':')
-		out = append(out, value...)
+		out = field.appendTo(out)
 		written++
 	}
 	return append(out, '}')
+}
+
+// encodedNamesLength 只遍历字段描述并计算准确的出站长度，不拼接字段值。
+// 流式 zstd 在写帧头之前使用此长度声明 FrameContentSize，避免丢失长度信息。
+func (d *orderedJSONDocument) encodedNamesLength(names []string) int {
+	var quoted []byte
+	size := 2
+	written := 0
+	for _, name := range names {
+		field, present := d.field(name)
+		if !present {
+			continue
+		}
+		if written > 0 {
+			size++
+		}
+		quoted = strconv.AppendQuote(quoted[:0], name)
+		size += len(quoted) + 1 + field.encodedLength()
+		written++
+	}
+	return size
+}
+
+// writeNames 与 encodeNames 使用同样的字段顺序、转义和标点，字段值直接从只读原文区间
+// 写入目标。只有短小的字段名前缀需要临时缓冲，不再为完整出站 JSON 分配大切片。
+func (d *orderedJSONDocument) writeNames(writer io.Writer, names []string) error {
+	if err := writeJSONDocumentPart(writer, []byte{'{'}); err != nil {
+		return err
+	}
+	var prefix []byte
+	written := 0
+	for _, name := range names {
+		field, present := d.field(name)
+		if !present {
+			continue
+		}
+		prefix = prefix[:0]
+		if written > 0 {
+			prefix = append(prefix, ',')
+		}
+		prefix = strconv.AppendQuote(prefix, name)
+		prefix = append(prefix, ':')
+		if err := writeJSONDocumentPart(writer, prefix); err != nil {
+			return err
+		}
+		if err := field.writeTo(writer); err != nil {
+			return err
+		}
+		written++
+	}
+	return writeJSONDocumentPart(writer, []byte{'}'})
+}
+
+// writeJSONDocumentPart 对短写也失败关闭，防止长度和签名覆盖到截断正文。
+func writeJSONDocumentPart(writer io.Writer, part []byte) error {
+	n, err := writer.Write(part)
+	if err == nil && n != len(part) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 // CompilerOwnedBodyFields 是 prepare 边界从调用方 Body 中抽出的 attempt-local
@@ -348,6 +403,17 @@ func orderedJSONDocumentFromMembers(members []JSONObjectMember) (*orderedJSONDoc
 		if _, duplicate := fieldIndex[name]; duplicate {
 			// 扫描器会以“字段重复”失败关闭，交给物化字节产出同一错误。
 			return nil, false
+		}
+		if member.ValueSegments != nil {
+			segments, ok := newOrderedJSONArraySegments(member.ValueSegments)
+			if !ok {
+				// 未证明是完整 token 分段的合法数组时回到原扫描器，任意片段或非法 JSON
+				// 仍得到与拼接后解析相同的行为，不放宽成员入口的语法验证。
+				return nil, false
+			}
+			fieldIndex[name] = len(fields)
+			fields = append(fields, orderedJSONField{name: name, segments: segments})
+			continue
 		}
 		if len(member.Value) == 0 || isJSONSpace(member.Value[0]) {
 			return nil, false
@@ -456,8 +522,8 @@ func extractCompilerOwnedBodyFields(
 		}
 	}
 	if endpointID == "responses_http" || endpointID == "responses_compact" || endpointID == "responses_ws" {
-		if inputRaw, present := document.value("input"); present {
-			normalizedInput, changed, err := stripUnsupportedPromptCacheBreakpoints(inputRaw)
+		if inputField, present := document.field("input"); present && inputField.contains([]byte(`"`+unsupportedPromptCacheBreakpointField+`"`)) {
+			normalizedInput, changed, err := stripUnsupportedPromptCacheBreakpoints(inputField.rawBytes())
 			if err != nil {
 				return fmt.Errorf("清理 Responses prompt_cache_breakpoint：%w", err)
 			}

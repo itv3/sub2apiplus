@@ -1,0 +1,48 @@
+=== RUN   TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory
+=== RUN   TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory/whole_items
+=== RUN   TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory/token_boundaries
+--- PASS: TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory/whole_items (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsCompileWithoutMaterializingHistory/token_boundaries (0.00s)
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/split_number
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/extra_value
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/nested_values
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/array_comma
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/leading_space
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/empty_parts
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/missing_colon
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/missing_comma
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/object_comma
+=== RUN   TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/split_string
+--- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/split_number (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/extra_value (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/nested_values (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/array_comma (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/leading_space (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/empty_parts (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/missing_colon (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/missing_comma (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/object_comma (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsTokenScannerValidationAndAllocation/split_string (0.00s)
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/extra_value
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/empty_segments
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/empty_array
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/split_string
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/outer_spaces
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/trailing_comma
+=== RUN   TestJSONObjectValueSegmentsFallbackKeepsParserValidation/invalid_element
+--- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/extra_value (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/empty_segments (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/empty_array (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/split_string (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/outer_spaces (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/trailing_comma (0.00s)
+    --- PASS: TestJSONObjectValueSegmentsFallbackKeepsParserValidation/invalid_element (0.00s)
+=== RUN   TestJSONObjectValueSegmentsKeepOwnershipAndUnsupportedFieldCleanup
+--- PASS: TestJSONObjectValueSegmentsKeepOwnershipAndUnsupportedFieldCleanup (0.00s)
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress	0.954s

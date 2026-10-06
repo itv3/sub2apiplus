@@ -196,6 +196,15 @@ func officialForwardBodyCompare(t *testing.T, tc officialForwardBodyCase) offici
 		require.Equal(t, want.url, got.url, label)
 		require.Equal(t, want.host, got.host, label)
 		require.Equal(t, want.header, got.header, "%s：上游 Header 必须一致", label)
+		if !bytes.Equal(want.decoded, got.decoded) {
+			difference := 0
+			for difference < len(want.decoded) && difference < len(got.decoded) && want.decoded[difference] == got.decoded[difference] {
+				difference++
+			}
+			start := max(0, difference-80)
+			t.Fatalf("%s：解压正文在 %d 字节处不同\n旧=%s\n新=%s", label, difference,
+				want.decoded[start:min(len(want.decoded), difference+180)], got.decoded[start:min(len(got.decoded), difference+180)])
+		}
 		require.Equal(t, want.contentLength, got.contentLength, label)
 		require.Equal(t, want.tlsProfile, got.tlsProfile, label)
 		require.True(t, bytes.Equal(want.wire, got.wire), "%s：上游 wire 字节必须逐字节一致\n旧=%s\n新=%s", label,

@@ -82,6 +82,24 @@ func TestOpenAIWSIngressEndedByClient_GoingAwayWithoutCancellationStillReported(
 	require.True(t, shouldReportOpenAIWSProxyAccountFailure(err), "真实上游故障仍须归因账号")
 }
 
+// 本地内存拒绝可以发生在后续轮收帧或历史重建阶段，不应让健康账号退出调度。
+func TestOpenAIWSMemoryRejectionDoesNotPenalizeAccount(t *testing.T) {
+	for _, tooLarge := range []bool{false, true} {
+		name := "共享预算不足"
+		status := coderws.StatusTryAgainLater
+		if tooLarge {
+			name = "单帧超过上限"
+			status = coderws.StatusMessageTooBig
+		}
+		t.Run(name, func(t *testing.T) {
+			cause := &service.OpenAIWSRequestMemoryError{TooLarge: tooLarge}
+			err := fmt.Errorf("ingress turn 2: %w", service.NewOpenAIWSClientCloseError(status, cause.Error(), cause))
+			require.False(t, openAIWSIngressEndedByClient(err))
+			require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
+		})
+	}
+}
+
 // 契约没有丢：真正的故障仍然惩罚账号。判定组合与调用点一致——
 // openAIWSIngressEndedByClient 为假才会走到 shouldReportOpenAIWSProxyAccountFailure。
 func TestOpenAIWSIngressEndedByClient_AbnormalClosuresStillReportAccountFailure(t *testing.T) {

@@ -938,6 +938,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// goroutine）之间同步当前 turn 的 usage metadata。
 	usageMeta.initFromFirstFrame(firstClientMessage, capturedSessionModel)
 	usageMeta.captureRequestedReasoningEffort(originalFirstClientMessage, capturedSessionModel)
+	// 语义定型与用量字段已提取，原首帧副本不再参与后续重放。
+	originalFirstClientMessage = nil
 	_, initialUpstreamModel := usageMeta.turnModels(initialRequestModel)
 	SetOpsUpstreamModel(c, initialUpstreamModel)
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -1419,6 +1421,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 
 	readNextClientFrame := func(readCtx context.Context, conn openaiwsv2.FrameConn) (coderws.MessageType, []byte, error) {
 		for {
+			// relay 仅在上一帧同步写完后进入此处；首帧仍由 relay 参数与重试路径持有。
+			if err := openAIWSRequestMemoryFromContext(ctx).FinishTurn("passthrough", firstClientMessage); err != nil {
+				return 0, nil, err
+			}
 			msgType, payload, readErr := conn.ReadFrame(readCtx)
 			if readErr != nil {
 				return msgType, payload, readErr

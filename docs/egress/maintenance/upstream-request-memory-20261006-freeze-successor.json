@@ -1,0 +1,550 @@
+{
+  "base_commit": "23a8502193089ae024d6c819ef455e31b1a5a34a",
+  "changed_path_count": 72,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5674,
+  "frozen_path_count": 2015,
+  "identity_sha256": "a2b7509f86271b9b7468be536a479e203afeaca361fbeec226f82ff11735b44e",
+  "issued_at_utc": "2026-10-06T09:24:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/officialegress/compiler.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-request-memory-20261006-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "57708be344eb51937b803ffa3d327188a061a5de94dc68eaaca54bd2af765893"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7e7a2ce2e26a97d87b3e657e763951ba438a3c761ccb31f29d48960e5e57f1c6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_ws_client_close_attribution_test.go",
+      "predecessor_sha256s": [
+        "9708a787b304109533f0ef13dbf583950f099820f554cf0cb1e686f8408ef9e0"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/handler/openai_ws_client_close_attribution_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1f86174e21ca8aa62dd393e27a89203075a233f70d2f6c0b551194cc56c11ef9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/request_body_limit.go",
+      "predecessor_sha256s": [
+        "62fc6463db88d9d51ec287bd64024a10f194df8cb09d047c36d7b6169974c709"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/handler/request_body_limit.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "ff5e36679e6ba990e3e9fe765b8b48cf706f8343ce5057b443a99e3bd406edd8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/request_body_limit_test.go",
+      "predecessor_sha256s": [
+        "33282ce13ff7220f94ddf48e4e6f5091d6d67b45fd500403700f8fc7c5ae8921"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/handler/request_body_limit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "523c4e8d009c2d8759045ee6d81fe6ef5bd9ade3adc04367304f4072182aada6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/body_document.go",
+      "predecessor_sha256s": [
+        "93f7599fb61c1d487574674115cc1b5dbeb426817924c43d052734858a2c825b"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/officialegress/body_document.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "93a287ec772f555dd35cb3f751e3b7fc366ac700d7d671ac4c860131c5bfe0ad"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler.go",
+      "predecessor_sha256s": [
+        "92f69d506583f3ddcc1179e875365b8a56bd3fc1d14a763ecfb324a1451789b4"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/officialegress/compiler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/ci-repair-source-transition.json",
+        "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "85c1d76d7d2bc93c1af8a74ed9484125c13b3193f59503729e32c4c010a0cdf6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/types.go",
+      "predecessor_sha256s": [
+        "49e9801d0c6e9f810631f38d8f4882b1f1cecaa2ba7db174574780152981db2b"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/officialegress/types.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "bec6294c49ef048c656c9642c57e8d6db45cc70ac9152e4edd610f725e09a203"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/httputil/body.go",
+      "predecessor_sha256s": [
+        "ba4b12e1fd8c88bef3094728a0937d841b15605bfbbd0115953824148bc4c51e"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/pkg/httputil/body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3984cd038f2fdf34987d9f2c38e1954187e6b00d14e444d70a685dbcb75f7abf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "ecbac127472cf896806fec99da0f2b0b11a553a29b100be7a1dfbe7526a1ed5d"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "predecessor_sha256s": [
+        "a2c6bc986c982f65f2f6d7719867c3eb936cf3b1bff82576dc9af2e38f5a47d4"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/official_egress_openai_json.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6ac64322afe22e5fa09c0f19bc78f8d8ab8938e5c9807f7b0dfb47ea196c5649"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_decode.go",
+      "predecessor_sha256s": [
+        "dfc8a1b244543329204e4589c8a780fccb1a72fb75b40b0da90bf42c5cb805b7"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/official_egress_openai_json_decode.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "2db53deb190a4d973860510fe93bb13687c21565e3cf8987071b5e8acf2caa25"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json_index.go",
+      "predecessor_sha256s": [
+        "5dadf43fb06655e728defb29751064e1b30b3c45dbf6d33a3d7647c0e41a964e"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/official_egress_openai_json_index.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "dfec6d86720208c196669693c6b5920af76fddf4eac25fa117fe878fbf01309c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_account_identity.go",
+      "predecessor_sha256s": [
+        "21d4f82742c1ce5aa226df7494dd73ea5f39cc95012624c701810eca642c52a5"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_codex_account_identity.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "875f8ef6d177269770b91f3ba3574bb0b47f055e73ce19e4a47d25a5c2875c91"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_tool_names.go",
+      "predecessor_sha256s": [
+        "1912aa670039377337435cb9331849916d88336006d52f67a28ae1efe69d4cf1"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_codex_tool_names.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a5b07ec8bcac9519d4245ce772f76baf6d248fc139785ecb2767b6614ae607aa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "c2c7ce29b977d1d362b9006493f4d3195fbc7148c21be8b82dbd7309dc84877a"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-legacy-compact-release-gate-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "193eac82b4aba269d57f99873b21f595f9d28629f7e532b49cc4e1e079c260cd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "9cbc1954cd031f90fef6a35d25a41d250d3f923d3771d1ad20490b672542cca4"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_gateway_request_body.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "577a67c13f42f3f5717bb822e59e65c16a88f9097e548a84e14072a689b8471a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_input_compat.go",
+      "predecessor_sha256s": [
+        "1bde7e0f1d998457fc8cc93bfcda7e0aab96fdbff97de6e6fcd0e05eba294359"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_responses_input_compat.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cd0e2721e419b43c58e5aa4f4193c90c2419ca2a674f826a3ad585a131247f29"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_lite_tools.go",
+      "predecessor_sha256s": [
+        "0450b6b2c96dafbdda3cc869e03c453411367af3e441b096c8a9e884e835850d"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_responses_lite_tools.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "98fefd03741f2c3855b9ac73e2a922410469f9b4022667ef42bc41e928ead373"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "760671a25f48c77c27617f6daf1aca5ba519f438266d4cd971a4c7fd34ad1ff6"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a12283322aa6a2e3f8ca49e75a523fa10303fc09dbbb430a0a09865a796d0ac9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "predecessor_sha256s": [
+        "1b077fdcfe5df2c385cc8ad604c31e5eb2eb46811635ccde50daf88e1d476434"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2fa0f0c3f65e878ae152cb9368636c01da248ea760ed99ce71721598b6440e3b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "591d989f621bc387419853aa1a610ff0b01311686a9960f58403a6cba3b034dd"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_ws_http_bridge.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0cc0f65c4fcb58343a961b88dc7ceffae4bf457435e70ef757f469bb2b0f1900"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "predecessor_sha256s": [
+        "8e009d7b9a505261f005dc24df92665191496afe0a299d54551c79595a88cb9c"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5a718f16aa42591d53f394f37275f13fd3fa92de9a541fd089ff08ec7faf790d"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "predecessor_sha256s": [
+        "76ef6064368472f9b366fe89d49968c314ec5f9116d1ad838f25e9ae2559012e"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ba9f684ea7b4d9d2ade2acd4e17b139488c8b7e1a2ca7b7c4a1051cb5ae2b615"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "ab3fefbb630adfb6d5d372e20c6bf3aeb3bbed6fea48b8144a9d56ef0790fb6c"
+      ],
+      "reason": "问题四请求体内存优化的源码快照承接：分段正文与流式压缩、HTTP/WS共享准入、规范化分配前补额及回放转义上界；当前fact map只重绑三份源码七处摘要，保留十五项测试、三十二项事实及规则语义，历史收据保持只读。 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d9a05d500115e51e9e6960c598d986a2c594f84d6bb241688413988e9d8df7f3"
+    }
+  ],
+  "unregistered_path_count": 48,
+  "unregistered_paths": [
+    "backend/internal/handler/request_memory_admission_pressure_test.go",
+    "backend/internal/officialegress/body_document_segments.go",
+    "backend/internal/officialegress/body_document_segments_test.go",
+    "backend/internal/officialegress/compiler_streaming_body_test.go",
+    "backend/internal/officialegress/compiler_zstd_cache.go",
+    "backend/internal/officialegress/compiler_zstd_cache_test.go",
+    "backend/internal/officialegress/json_scan_segments.go",
+    "backend/internal/officialegress/request_body_segmented_test.go",
+    "backend/internal/officialegress/segmented_body.go",
+    "backend/internal/pkg/httputil/body_admitted_test.go",
+    "backend/internal/pkg/httputil/body_spool.go",
+    "backend/internal/pkg/httputil/body_spool_darwin.go",
+    "backend/internal/pkg/httputil/body_spool_linux.go",
+    "backend/internal/pkg/httputil/body_spool_other.go",
+    "backend/internal/service/official_egress_decode_shared_strings_test.go",
+    "backend/internal/service/official_egress_forward_body.go",
+    "backend/internal/service/official_egress_forward_body_index_test.go",
+    "backend/internal/service/official_egress_forward_body_members_test.go",
+    "backend/internal/service/official_egress_forward_body_segments_test.go",
+    "backend/internal/service/official_egress_forward_body_test.go",
+    "backend/internal/service/official_egress_memory_fixture_prepare_test.go",
+    "backend/internal/service/official_egress_openai_memory_profile_helpers_test.go",
+    "backend/internal/service/official_egress_openai_memory_profile_test.go",
+    "backend/internal/service/official_egress_ws_http_bridge_memory_profile_test.go",
+    "backend/internal/service/official_egress_ws_session_memory_profile_test.go",
+    "backend/internal/service/openai_ws_client_read.go",
+    "backend/internal/service/openai_ws_http_bridge_memory_test.go",
+    "backend/internal/service/openai_ws_http_bridge_resume_test.go",
+    "backend/internal/service/openai_ws_ingress_deferred.go",
+    "backend/internal/service/openai_ws_ingress_deferred_test.go",
+    "backend/internal/service/openai_ws_ingress_memory_test.go",
+    "backend/internal/service/openai_ws_request_memory.go",
+    "backend/internal/service/openai_ws_request_memory_test.go",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/compiler-weak-cache-race.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/compiler-weak-cache-tests.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/final-handler-httputil.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/http-container-v8-extra.jsonl",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/http-container-v8.jsonl",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/http-normalized-body-admission-race.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/httputil-tests.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/json-token-segments-tests.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/local-results.jsonl",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/service-json-tests.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/ws-admission-checks.md",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/ws-session-v9-intermediate.log",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/zstd-final512-independent.json",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.assets/zstd-final512-report.md",
+    "docs/REQUEST_BODY_MEMORY_OPTIMIZATION_20261006.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}

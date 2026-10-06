@@ -128,6 +128,34 @@ def assert_git_repository(repository_root: Path) -> Path:
     return resolved
 
 
+def assert_private_path(repository_root: Path, path: Path, label: str) -> Path:
+    """校验上游私有资料位置：仓库外，或被整体忽略且无跟踪文件的指定目录。
+
+    先解析已有路径组件，再与真实仓库下的字面目录比较，避免符号链接把
+    local-analysis/upstream 的例外扩大到源码目录。旧容器入口可以解析到
+    迁移后的真实目录，历史文件绑定仍按原内容摘要验证。
+    """
+
+    if not path.is_absolute():
+        raise UpstreamMergeError(f"{label} 必须是绝对路径")
+    root = repository_root.resolve(strict=True)
+    resolved = path.resolve(strict=False)
+    if not resolved.is_relative_to(root):
+        return resolved
+    private_root = root / "local-analysis" / "upstream"
+    if not resolved.is_relative_to(private_root):
+        raise UpstreamMergeError(
+            f"{label} 必须位于主仓库之外，或 Git 忽略的 local-analysis/upstream 目录内"
+        )
+    ignored = run_git(root, "check-ignore", "--no-index", "--quiet", "--", str(private_root) + "/", check=False)
+    if ignored.returncode != 0:
+        raise UpstreamMergeError(f"{label} 的 local-analysis/upstream 必须整体被 Git 忽略")
+    tracked = git_output(root, "ls-files", "-z", "--", ":(literal)local-analysis/upstream")
+    if tracked:
+        raise UpstreamMergeError(f"{label} 的 local-analysis/upstream 不得包含 Git 已跟踪文件")
+    return resolved
+
+
 def assert_clean(repository_root: Path, label: str) -> None:
     status = run_git(
         repository_root,

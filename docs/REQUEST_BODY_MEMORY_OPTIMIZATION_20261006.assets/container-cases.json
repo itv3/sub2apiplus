@@ -1,0 +1,145 @@
+[
+  {
+    "name": "native-0.3",
+    "shape": "native",
+    "fixture": "native-0.3.json"
+  },
+  {
+    "name": "native-1",
+    "shape": "native",
+    "fixture": "native-1.json"
+  },
+  {
+    "name": "native-4",
+    "shape": "native",
+    "fixture": "native-4.json"
+  },
+  {
+    "name": "native-16.8",
+    "shape": "native",
+    "fixture": "native-16.8.json"
+  },
+  {
+    "name": "native-33.6",
+    "shape": "native",
+    "fixture": "native-33.6.json"
+  },
+  {
+    "name": "native-50",
+    "shape": "native",
+    "fixture": "native-50.json"
+  },
+  {
+    "name": "native-80",
+    "shape": "native",
+    "fixture": "native-80.json"
+  },
+  {
+    "name": "explicit_instructions-0.3",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-0.3.json"
+  },
+  {
+    "name": "explicit_instructions-1",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-1.json"
+  },
+  {
+    "name": "explicit_instructions-4",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-4.json"
+  },
+  {
+    "name": "explicit_instructions-16.8",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json"
+  },
+  {
+    "name": "explicit_instructions-33.6",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-33.6.json"
+  },
+  {
+    "name": "explicit_instructions-50",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-50.json"
+  },
+  {
+    "name": "explicit_instructions-80",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-80.json"
+  },
+  {
+    "name": "incompressible-16.8",
+    "shape": "incompressible",
+    "fixture": "incompressible-16.8.json"
+  },
+  {
+    "name": "incompressible-50",
+    "shape": "incompressible",
+    "fixture": "incompressible-50.json"
+  },
+  {
+    "name": "incompressible-80",
+    "shape": "incompressible",
+    "fixture": "incompressible-80.json"
+  },
+  {
+    "name": "read-native-identity",
+    "shape": "native",
+    "fixture": "native-50.json",
+    "stage": "read_forward",
+    "encoding": "identity"
+  },
+  {
+    "name": "read-native-chunked",
+    "shape": "native",
+    "fixture": "native-50.json",
+    "stage": "read_forward",
+    "encoding": "chunked"
+  },
+  {
+    "name": "read-native-zstd",
+    "shape": "native",
+    "fixture": "native-50.json",
+    "stage": "read_forward",
+    "encoding": "zstd",
+    "wire": "native-50.zst"
+  },
+  {
+    "name": "read-explicit_instructions-identity",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-50.json",
+    "stage": "read_forward",
+    "encoding": "identity"
+  },
+  {
+    "name": "read-explicit_instructions-chunked",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-50.json",
+    "stage": "read_forward",
+    "encoding": "chunked"
+  },
+  {
+    "name": "read-explicit_instructions-zstd",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-50.json",
+    "stage": "read_forward",
+    "encoding": "zstd",
+    "wire": "explicit_instructions-50.zst"
+  },
+  {
+    "name": "continuous-native",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-explicit_instructions",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "concurrency": 2,
+    "requests": 4
+  }
+]

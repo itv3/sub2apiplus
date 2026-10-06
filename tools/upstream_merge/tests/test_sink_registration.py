@@ -217,6 +217,16 @@ class SinkRegistrationDraftTest(unittest.TestCase):
         with self.assertRaisesRegex(UpstreamMergeError, "禁止覆盖"):
             write_sink_registration(self.root, self._report(), outside / "second.patch", notes_path=edited)
 
+    def test_write_draft_in_designated_private_root(self) -> None:
+        (self.root / ".gitignore").write_text("/local-analysis/\n", encoding="utf-8")
+        output = self.root / "local-analysis/upstream/preflight/draft.patch"
+        before = subprocess.check_output(["git", "status", "--porcelain"], cwd=self.root)
+        result = write_sink_registration(self.root, self._report(), output, date="20261006")
+        self.assertEqual(result["result"], "drafted")
+        self.assertTrue(output.is_file())
+        self.assertTrue(output.with_suffix(".notes.json").is_file())
+        self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=self.root), before)
+
     def test_preflight_command_writes_patch_next_to_report(self) -> None:
         outside = self._outside()
         report = {**self._report(), "result": "blocked", "plan_id": "p", "identity_sha256": "0" * 64, "blockers": ["发送点"]}

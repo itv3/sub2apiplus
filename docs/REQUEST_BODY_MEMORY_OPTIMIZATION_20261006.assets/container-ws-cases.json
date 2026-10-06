@@ -1,0 +1,34 @@
+[
+  {
+    "name": "ws-session-native-4",
+    "shape": "native",
+    "fixture": "native-4.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "native-4"
+  },
+  {
+    "name": "ws-session-native-16.8",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "native-16.8"
+  },
+  {
+    "name": "ws-session-explicit_instructions-16.8",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "explicit_instructions-16.8"
+  },
+  {
+    "name": "ws-session-native-50",
+    "shape": "native",
+    "fixture": "native-50.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "native-50"
+  }
+]

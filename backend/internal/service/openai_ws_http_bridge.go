@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
@@ -91,11 +94,19 @@ func decodeOpenAIWSHTTPBridgeLoweredTools(raw json.RawMessage) []any {
 }
 
 func openAIWSHTTPBridgeRawField(body []byte, name string) (json.RawMessage, bool) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
+	if !json.Valid(body) || !openAIBodyRoot(body).IsObject() {
 		return nil, false
 	}
-	raw, present := fields[name]
+	// 仅复制需要跨 turn 保留的小字段，避免为了读取 tools 连同整份 input 一起复制。
+	// 逐项遍历保留末次同名值，与 map[string]json.RawMessage 的重复键语义相同。
+	var raw string
+	present := false
+	openAIBodyRoot(body).ForEach(func(key, value gjson.Result) bool {
+		if key.Str == name {
+			raw, present = value.Raw, true
+		}
+		return true
+	})
 	return append(json.RawMessage(nil), raw...), present
 }
 
@@ -277,19 +288,383 @@ func skipOpenAIWSJSONValue(payload []byte, i int) int {
 }
 
 func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, error) {
+	return prepareOpenAIWSHTTPBridgeBodyWithWorkspace(account, payload, nil)
+}
+
+// prepareOpenAIWSHTTPBridgeBodyWithWorkspace 保留旧 json.Marshal 的字段排序、转义与数字语义。
+// 普通官方桥接只准备逻辑对象树，原文仍供 model/会话等不变字段读取；最终规范化由片段编码器完成。
+// 复杂的 Lite 转换保留原物化路径。官方 bridge 的长字符串直接引用 WS 原文，对象树只移交一次。
+func prepareOpenAIWSHTTPBridgeBodyWithWorkspace(account *Account, payload []byte, workspace *officialForwardHTTPBody) ([]byte, error) {
 	var body map[string]any
-	if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
-		return nil, err
+	index := workspace.indexFor(payload)
+	if index != nil && index.nodes[index.root].kind == officialJSONRawKindObject {
+		body, _ = index.decodeValueSharingBody(index.root).(map[string]any)
+	} else {
+		if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
+			return nil, err
+		}
 	}
 	if body == nil {
 		return nil, errors.New("response.create payload must be a JSON object")
+	}
+	if workspace != nil && workspace.wsIngress != nil {
+		if err := workspace.wsIngress.applyHeaders(body); err != nil {
+			return nil, err
+		}
 	}
 	delete(body, "type")
 	delete(body, "generate")
 	delete(body, "previous_response_id")
 	deleteOpenAIResponsesNoneReasoningEffortFromObject(account, body)
 	body["stream"] = true
-	return json.Marshal(body)
+	if workspace != nil && account != nil && account.IsOpenAIOAuth() {
+		// namespace、内容回放和触发项需要多次变换，先沿用旧基准，避免合并阶段改变键序。
+		// 任意层的重复键或非法 UTF-8 也须先物化，保证后续 gjson 身份读取与旧规范化正文一致。
+		_, handled, _ := normalizeOpenAIResponsesLiteHeaderFields(payload)
+		if handled && openAIWSHTTPBridgeCanKeepRawBody(index) {
+			workspace.bridge = &openAIWSHTTPBridgeBody{source: payload, account: account, lite: isOpenAIResponsesLiteWebSocketPayload(payload)}
+			if workspace.wsIngress != nil {
+				headerIndex, err := workspace.wsIngress.preparedHeaderIndex(account)
+				if err != nil {
+					return nil, err
+				}
+				workspace.bridge.headerIndex = headerIndex
+			}
+			workspace.releaseRequestMap(&body, newOpenAIRequestView(payload), payload)
+			return payload, nil
+		}
+	}
+	prepared, err := json.Marshal(body)
+	if err == nil && workspace != nil {
+		workspace.index, workspace.indexBody = nil, nil
+		workspace.releaseRequestMap(&body, newOpenAIRequestView(prepared), prepared)
+	}
+	return prepared, err
+}
+
+func openAIWSHTTPBridgeCanKeepRawBody(index *officialJSONRawIndex) bool {
+	if index == nil || !utf8.Valid(index.body) {
+		return false
+	}
+	for node := range index.nodes {
+		if index.nodes[node].kind == officialJSONRawKindObject &&
+			len(index.uniqueKeys(int32(node))) != len(index.nodes[node].members) {
+			return false
+		}
+	}
+	return true
+}
+
+// openAIWSHTTPBridgeBody 保存未物化的 bridge 准备状态。source 在整个 turn 内只读，
+// prepared 只在上游错误或复杂工具呈现确实需要连续正文时建立，不进入普通成功路径。
+type openAIWSHTTPBridgeBody struct {
+	source   []byte
+	account  *Account
+	lite     bool
+	prepared []byte
+	// 入口小字段已先完成归一化，prepare 后的独立索引保留它们正确的规范键序。
+	headerIndex *officialJSONRawIndex
+}
+
+func (b *officialForwardHTTPBody) hasUnmaterializedWSHTTPBridgeBody(body []byte) bool {
+	return b != nil && b.bridge != nil && b.bridge.prepared == nil && officialForwardSameBody(b.bridge.source, body)
+}
+
+func (b *officialForwardHTTPBody) materializeWSHTTPBridgeBody(body []byte) ([]byte, error) {
+	if b == nil || b.bridge == nil {
+		return body, nil
+	}
+	if b.bridge.prepared != nil {
+		if officialForwardSameBody(b.bridge.source, body) {
+			return b.bridge.prepared, nil
+		}
+		return body, nil
+	}
+	if !officialForwardSameBody(b.bridge.source, body) {
+		return body, nil
+	}
+	source := b.bridge.source
+	if b.wsIngress != nil {
+		source = b.wsIngress.materialize()
+	}
+	prepared, err := prepareOpenAIWSHTTPBridgeBody(b.bridge.account, source)
+	if err != nil {
+		return nil, err
+	}
+	if b.bridge.lite {
+		if normalized, changed, normalizeErr := normalizeOpenAIResponsesLitePayloadForAccount(prepared, b.bridge.account); normalizeErr != nil {
+			return nil, normalizeErr
+		} else if changed {
+			prepared = normalized
+		}
+	}
+	b.bridge.prepared = prepared
+	b.index, b.indexBody = nil, nil
+	return prepared, nil
+}
+
+// finalizeHTTPBodyPayloadMembers 仍使用同一个官方 Finalizer 做全部字段修正与契约校验。
+// bridge 仅替换编码基准：旧 prepare 会规范化所有原始对象键与字符串，新的片段编码器复现同一结果。
+func (b *officialForwardHTTPBody) finalizeHTTPBodyPayloadMembers(
+	payload map[string]any,
+	body []byte,
+	index *officialJSONRawIndex,
+	contract *officialOpenAIHTTPBodyContract,
+	defaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) ([]officialegress.JSONObjectMember, bool, error) {
+	if !b.hasUnmaterializedWSHTTPBridgeBody(body) {
+		return finalizeOfficialOpenAIHTTPBodyPayloadMembers(payload, body, index, contract, defaults, options)
+	}
+	if _, err := finalizeOfficialOpenAIHTTPBodyPayloadInPlace(payload, contract, defaults, options); err != nil {
+		return nil, false, err
+	}
+	order, err := officialCodexBodyFieldOrderForMode(options.ProfileMode, officialCodexEndpointResponsesHTTP)
+	if err != nil {
+		return nil, false, err
+	}
+	keys := officialJSONOrderedTopLevelKeys(payload, order, nil)
+	members := make([]officialegress.JSONObjectMember, 0, len(keys))
+	for _, key := range keys {
+		quotedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, false, err
+		}
+		writer := openAIWSHTTPBridgeJSONSegments{}
+		valueIndex := index
+		if key != "input" && b.bridge.headerIndex != nil {
+			valueIndex = b.bridge.headerIndex
+		}
+		if b.bridge.headerIndex != nil {
+			writer.inputIndex, writer.headerIndex = index, b.bridge.headerIndex
+		}
+		if err := writer.appendValue(valueIndex, payload[key], valueIndex.memberNode(valueIndex.root, key)); err != nil {
+			return nil, false, err
+		}
+		writer.flush()
+		member := officialegress.JSONObjectMember{Name: key, QuotedName: quotedKey}
+		if len(writer.segments) == 1 {
+			member.Value = writer.segments[0]
+		} else {
+			member.ValueSegments = writer.segments
+		}
+		members = append(members, member)
+	}
+	// 即使就地修正没有变更，也要写出已删除 WS 字段、强制 stream 和规范化后的逻辑正文。
+	return members, true, nil
+}
+
+// openAIWSHTTPBridgeJSONSegments 把短键、标点等汇入有界小段，长字符串直接引用只读原文。
+// 片段只在完整 JSON token 之间断开；数组项可以跨段，交由编译器的跨段校验与压缩处理。
+type openAIWSHTTPBridgeJSONSegments struct {
+	segments [][]byte
+	buffer   []byte
+	// 延迟入口的逻辑原文由两份索引组成。复合值匹配只能搜索真实 input 和
+	// 已归一化的小字段，不能引用原正文里已被身份隔离替换的小字段旧值。
+	inputIndex  *officialJSONRawIndex
+	headerIndex *officialJSONRawIndex
+}
+
+func (w *openAIWSHTTPBridgeJSONSegments) flush() {
+	if len(w.buffer) > 0 {
+		w.segments = append(w.segments, w.buffer)
+		w.buffer = nil
+	}
+}
+
+func (w *openAIWSHTTPBridgeJSONSegments) appendBytes(value []byte) {
+	if len(value) >= 1024 {
+		w.flush()
+		w.segments = append(w.segments, value)
+		return
+	}
+	if len(w.buffer)+len(value) > 4096 {
+		w.flush()
+	}
+	if w.buffer == nil {
+		w.buffer = make([]byte, 0, 4096)
+	}
+	w.buffer = append(w.buffer, value...)
+}
+
+func (w *openAIWSHTTPBridgeJSONSegments) appendByte(value byte) {
+	if len(w.buffer) == 4096 {
+		w.flush()
+	}
+	if w.buffer == nil {
+		w.buffer = make([]byte, 0, 4096)
+	}
+	w.buffer = append(w.buffer, value)
+}
+
+// appendCanonicalNode 与 json.Marshal(以 UseNumber 解码的原节点) 相同：对象键排序、重复键取末值、
+// 原有 HTML 字符和 Unicode 行分隔符按标准库转义；已规范的长字符串与数字直接共享原 token。
+func (w *openAIWSHTTPBridgeJSONSegments) appendCanonicalNode(index *officialJSONRawIndex, node int32) error {
+	n := &index.nodes[node]
+	switch n.kind {
+	case officialJSONRawKindObject:
+		var local [16]string
+		keys := append(local[:0], index.uniqueKeys(node)...)
+		sort.Strings(keys)
+		w.appendByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				w.appendByte(',')
+			}
+			quoted, _ := json.Marshal(key)
+			w.appendBytes(quoted)
+			w.appendByte(':')
+			if err := w.appendCanonicalNode(index, index.memberNode(node, key)); err != nil {
+				return err
+			}
+		}
+		w.appendByte('}')
+	case officialJSONRawKindArray:
+		w.appendByte('[')
+		for i, child := range n.items {
+			if i > 0 {
+				w.appendByte(',')
+			}
+			if err := w.appendCanonicalNode(index, child); err != nil {
+				return err
+			}
+		}
+		w.appendByte(']')
+	case officialJSONRawKindString:
+		raw := index.raw(node)
+		if !n.slowPath && !bytes.ContainsAny(raw, "<>&\u2028\u2029") {
+			w.appendBytes(raw)
+			return nil
+		}
+		encoded, err := json.Marshal(index.decodeString(node))
+		if err != nil {
+			return err
+		}
+		w.appendBytes(encoded)
+	default:
+		w.appendBytes(index.raw(node))
+	}
+	return nil
+}
+
+// appendValue 复现原保序拼接器的内容匹配与同位置回退，只把“原始字节”换成 prepare 后的规范化 token。
+// 新增/修改的标量沿用 marshalOpenAIUpstreamJSON，保持旧 Finalizer 对新值关闭 HTML 转义的行为。
+func (w *openAIWSHTTPBridgeJSONSegments) appendValue(index *officialJSONRawIndex, value any, node int32) error {
+	if node >= 0 && index.equals(node, value) {
+		return w.appendCanonicalNode(index, node)
+	}
+	if pooled, found := w.lookupComposite(index, value); found >= 0 {
+		return w.appendCanonicalNode(pooled, found)
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		var original []string
+		if node >= 0 && index.nodes[node].kind == officialJSONRawKindObject {
+			original = append([]string(nil), index.uniqueKeys(node)...)
+			sort.Strings(original)
+		}
+		keys := make([]string, 0, len(typed))
+		for _, key := range original {
+			if _, exists := typed[key]; exists {
+				keys = append(keys, key)
+			}
+		}
+		additional := make([]string, 0)
+		for key := range typed {
+			if !slices.Contains(original, key) {
+				additional = append(additional, key)
+			}
+		}
+		sort.Strings(additional)
+		keys = append(keys, additional...)
+		w.appendByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				w.appendByte(',')
+			}
+			quoted, _ := json.Marshal(key)
+			w.appendBytes(quoted)
+			w.appendByte(':')
+			child := int32(-1)
+			if node >= 0 {
+				child = index.memberNode(node, key)
+			}
+			if err := w.appendValue(index, typed[key], child); err != nil {
+				return err
+			}
+		}
+		w.appendByte('}')
+	case []any:
+		var original []int32
+		if node >= 0 && index.nodes[node].kind == officialJSONRawKindArray {
+			original = index.nodes[node].items
+		}
+		used := make([]bool, len(original))
+		w.appendByte('[')
+		for i, item := range typed {
+			if i > 0 {
+				w.appendByte(',')
+			}
+			match := index.matchArrayItem(item, original, used)
+			if match < 0 && i < len(original) && !used[i] {
+				match = i
+			}
+			child := int32(-1)
+			if match >= 0 {
+				used[match], child = true, original[match]
+			}
+			if err := w.appendValue(index, item, child); err != nil {
+				return err
+			}
+		}
+		w.appendByte(']')
+	case json.RawMessage:
+		if json.Valid(typed) {
+			w.appendBytes(typed)
+			return nil
+		}
+		return fmt.Errorf("WS HTTP bridge 包含非法原始 JSON 值")
+	default:
+		encoded, err := marshalOpenAIUpstreamJSON(value)
+		if err != nil {
+			return err
+		}
+		w.appendBytes(encoded)
+	}
+	return nil
+}
+
+func (w *openAIWSHTTPBridgeJSONSegments) lookupComposite(index *officialJSONRawIndex, value any) (*officialJSONRawIndex, int32) {
+	if w.headerIndex == nil {
+		return index, index.lookupComposite(value)
+	}
+	switch value.(type) {
+	case map[string]any, []any:
+	default:
+		return nil, -1
+	}
+	hash, ok := index.hashValue(value)
+	if !ok {
+		return nil, -1
+	}
+	// 小正文的 input=[] 只是占位符，根对象也并非真实正文，二者都不参与匹配。
+	placeholder := w.headerIndex.memberNode(w.headerIndex.root, "input")
+	for _, node := range w.headerIndex.byHash[hash] {
+		if node != w.headerIndex.root && node != placeholder && w.headerIndex.equals(node, value) {
+			return w.headerIndex, node
+		}
+	}
+	input := w.inputIndex.memberNode(w.inputIndex.root, "input")
+	if input >= 0 {
+		span := w.inputIndex.nodes[input]
+		for _, node := range w.inputIndex.byHash[hash] {
+			candidate := w.inputIndex.nodes[node]
+			if candidate.start >= span.start && candidate.end <= span.end && w.inputIndex.equals(node, value) {
+				return w.inputIndex, node
+			}
+		}
+	}
+	return nil, -1
 }
 
 type openAIWSToolCallReplayCollector struct {
@@ -460,23 +835,39 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		officialEgressTurnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 	}
 
-	body, err := prepareOpenAIWSHTTPBridgeBody(account, payload)
+	var profileErr error
+	officialEgressEnabled := false
+	if account.Platform == PlatformOpenAI {
+		officialEgressEnabled, _, profileErr = resolveOfficialEgressAccountProfile(account)
+	}
+	var officialForwardBody *officialForwardHTTPBody
+	if officialEgressEnabled && profileErr == nil {
+		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, payload)
+	}
+	if deferred := openAIWSDeferredIngressBodyFromContext(ctx, payload); deferred != nil {
+		if officialForwardBody == nil {
+			payload = deferred.materialize()
+		} else {
+			officialForwardBody.wsIngress = deferred
+			officialForwardBody.index, officialForwardBody.indexBody = deferred.index, payload
+			// 索引所有权移交工作区，attempt 前释放时不再被入口状态额外保活。
+			deferred.index = nil
+		}
+	}
+	body, err := prepareOpenAIWSHTTPBridgeBodyWithWorkspace(account, payload, officialForwardBody)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
+	}
+	if profileErr != nil {
+		return nil, fmt.Errorf("resolve official egress config: %w", profileErr)
 	}
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	upstreamRequestContext := c
 	managedOfficialBridge := false
-	officialEgressEnabled := false
 	if account.Platform == PlatformOpenAI {
-		var configErr error
-		officialEgressEnabled, _, configErr = resolveOfficialEgressAccountProfile(account)
-		if configErr != nil {
-			return nil, fmt.Errorf("resolve official egress config: %w", configErr)
-		}
 		if officialEgressEnabled {
 			managedOfficialBridge = true
-			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
+			officialEgressBodyContract, err = officialForwardBody.captureContract(c, body)
 			if err != nil {
 				return nil, fmt.Errorf("capture OpenAI HTTP bridge body contract: %w", err)
 			}
@@ -493,9 +884,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 	}
 
-	grokIntentSourceBody := append([]byte(nil), body...)
-	_, grokExplicitToolsField := openAIWSHTTPBridgeRawField(grokIntentSourceBody, "tools")
-	grokExplicitToolIntent := account.Platform == PlatformGrok && hasGrokResponsesToolIntent(grokIntentSourceBody)
+	var grokIntentSourceBody []byte
+	grokExplicitToolsField, grokExplicitToolIntent := false, false
+	if account.Platform == PlatformGrok {
+		// 只有 Grok 缓存路由需要保留适配前意图，OpenAI bridge 不持有这份整段副本。
+		grokIntentSourceBody = append([]byte(nil), body...)
+		_, grokExplicitToolsField = openAIWSHTTPBridgeRawField(grokIntentSourceBody, "tools")
+		grokExplicitToolIntent = hasGrokResponsesToolIntent(grokIntentSourceBody)
+	}
 	var clientToolMapping apicompat.ResponsesClientToolMapping
 	functionToolUpstream := (account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey) || account.Platform == PlatformGrok
 	if functionToolUpstream {
@@ -534,7 +930,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		})
 	}
 	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
-		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+		liteBody, liteChanged, liteErr := officialForwardBody.normalizeResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
 			return nil, fmt.Errorf("normalize responses Lite payload: %w", liteErr)
 		}
@@ -551,6 +947,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if account.Platform == PlatformGrok {
 			upstreamReq, buildErr = buildGrokResponsesRequest(upstreamCtx, c, account, requestBody, token, grokCacheIdentity, s.cfg, s.settingService)
 		} else {
+			promptCacheKey := strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String())
+			if officialForwardBody.hasUnmaterializedWSHTTPBridgeBody(requestBody) && officialForwardBody.wsIngress != nil {
+				promptCacheKey = strings.TrimSpace(openAIBodyGet(officialForwardBody.wsIngress.headers, "prompt_cache_key").String())
+			}
 			upstreamReq, buildErr = s.buildUpstreamRequestOpenAIPassthroughWithPlan(
 				upstreamCtx,
 				upstreamRequestContext,
@@ -559,7 +959,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				token,
 				openAIUpstreamRequestPlan{
 					IsStream:                   true,
-					PromptCacheKey:             strings.TrimSpace(gjson.GetBytes(requestBody, "prompt_cache_key").String()),
+					PromptCacheKey:             promptCacheKey,
 					OfficialEgressBodyContract: officialEgressBodyContract,
 					OfficialEgressTurnState:    officialEgressTurnState,
 				},
@@ -567,6 +967,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		if buildErr != nil {
 			return nil, buildErr
+		}
+		if officialForwardBody != nil {
+			if bridge := officialForwardBody.bridge; bridge != nil && bridge.prepared != nil && officialForwardSameBody(body, bridge.source) {
+				body = bridge.prepared
+				officialForwardBody.bridge = nil
+			}
+			// Finalizer 已接收成员来源，attempt 期间无需继续保留用于对象树解码的索引。
+			officialForwardBody.index, officialForwardBody.indexBody = nil, nil
 		}
 		// OAuth 账号的 Lite 能力只能来自服务端模型 manifest；API Key 和
 		// SetupToken 没有同一份能力清单，继续保留既有客户端协商。
@@ -694,6 +1102,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if resp.StatusCode < 400 {
 			break
 		}
+		if officialForwardBody.hasUnmaterializedWSHTTPBridgeBody(body) {
+			body, err = officialForwardBody.materializeWSHTTPBridgeBody(body)
+			if err != nil {
+				_ = resp.Body.Close()
+				return nil, fmt.Errorf("restore websocket http bridge retry body: %w", err)
+			}
+			officialForwardBody.bridge = nil
+			rejectedFieldRetryState.remember(body)
+		}
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
@@ -755,6 +1172,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	reqStream := openAIWSPayloadBoolFromRaw(body, "stream", true)
+	if officialForwardBody.hasUnmaterializedWSHTTPBridgeBody(body) {
+		// 原 WS 帧可显式写 stream=false，但 bridge 准备的 HTTP 语义始终是 true。
+		reqStream = true
+	}
 	eventCount := 0
 	tokenEventCount := 0
 	terminalEventCount := 0

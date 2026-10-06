@@ -16,6 +16,7 @@ from .contracts import create_plan, load_plan
 from .disposition_draft import DISPOSITION_PURPOSES, draft_candidate_disposition, parse_campaigns
 from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
+from .gitops import assert_private_path, git_output
 from .plan_inputs import AWAITING_MANUAL_INPUT
 from .conflict_rationale import conflict_input_from_rationale, draft_conflict_rationale
 from .plan_replay import conflict_replay, replay_trial_tree, seal_merge_with_replay
@@ -54,7 +55,7 @@ TIMING_LEDGER_SCHEMA = "official-egress-upstream-timing-ledger/v1"
 TIMING_LEDGER_NAME = "timing-ledger.jsonl"
 # 账本落点按此顺序推断：显式 --timing-ledger，其次 Plan 目录（plan.json 所在目录即
 # evidence root），再次各类输出／收据／输入所在目录。--repository 故意不参与推断，
-# 避免把账本写进主仓库。
+# 避免把账本写进受版本控制的源码目录。
 TIMING_LEDGER_ANCHORS = ("plan", "output", "receipt", "transition", "input", "request")
 
 
@@ -108,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_repository(sink_draft)
     sink_draft.add_argument("--preflight", required=True, type=_absolute, help="preflight 写出的报告")
-    sink_draft.add_argument("--output", required=True, type=_absolute, help="补丁路径（主仓库之外），不覆盖既有文件")
+    sink_draft.add_argument("--output", required=True, type=_absolute, help="补丁路径（仓库外或 local-analysis/upstream 内），不覆盖既有文件")
     sink_draft.add_argument("--notes", type=_absolute, help="改写过说明的 notes；省略时按函数与文件起草并另写 notes 模板")
     sink_draft.add_argument("--date", help="本批次承接收据的日期 YYYYMMDD，默认今天（UTC）")
 
@@ -121,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan-root",
         required=True,
         type=_absolute,
-        help="Plan 私有目录，命名为 <上游 tag>-<yyyymmdd>-<序号>；不存在时创建（0700）",
+        help="Plan 私有目录，推荐 <主仓库>/local-analysis/upstream/<上游 tag>-<yyyymmdd>-<序号>；不存在时创建（0700）",
     )
     render.add_argument("--upstream-tag", required=True, help="目标上游 tag，例如 v0.2.13")
     render.add_argument(
@@ -422,7 +423,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def _inside_git_worktree(path: Path) -> bool:
-    """推断出的账本目录若在任何 Git 工作树内，就不能自动写入，以免污染仓库。"""
+    """检测账本所在目录是否属于某个 Git 工作树，供私有目录边界检查使用。"""
 
     probe = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
@@ -432,6 +433,19 @@ def _inside_git_worktree(path: Path) -> bool:
         check=False,
     )
     return probe.returncode == 0 and probe.stdout.strip() == "true"
+
+
+def _inferred_ledger_path(directory: Path) -> tuple[Path | None, str | None]:
+    """仓库内自动账本仅允许落在指定且整体被 Git 忽略的上游私有目录。"""
+
+    inferred = directory / TIMING_LEDGER_NAME
+    if directory.is_dir() and _inside_git_worktree(directory):
+        repository = Path(git_output(directory, "rev-parse", "--show-toplevel"))
+        try:
+            assert_private_path(repository, inferred, "时间账本")
+        except UpstreamMergeError as error:
+            return None, f"推断路径位于 Git 工作树内：{inferred}；{error}"
+    return inferred, None
 
 
 def _enclosing_plan_root(anchor: Path) -> Path | None:
@@ -450,7 +464,7 @@ def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str 
     目录（名如 v0.2.13-20261004-001）之下时，一律写该 Plan 根的账本（UM-25）：v0.2.13 合并时账本按锚点
     所在目录推断，分散在 Plan 根、evidence、inputs 三处，写进 Plan 工作树的收据还漏记。不在任何 Plan
     之下时写锚点所在目录；该目录位于 Git 工作树内（例如把收据写进主仓库 docs/egress/maintenance）或
-    没有任何输出锚点时返回 None。
+    没有任何输出锚点时返回 None；整体被 Git 忽略的 local-analysis/upstream 是唯一仓库内例外。
     """
 
     explicit = getattr(arguments, "timing_ledger", None)
@@ -460,7 +474,7 @@ def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str 
     if isinstance(plan_root, Path):
         # request-render 的锚点是 Plan 目录本身，账本就写在它下面；命令失败且目录未建时不写。
         if plan_root.is_dir() and not plan_root.is_symlink():
-            return plan_root / TIMING_LEDGER_NAME, None
+            return _inferred_ledger_path(plan_root)
         return None, "Plan 目录尚未创建"
     for attribute in TIMING_LEDGER_ANCHORS:
         anchor = getattr(arguments, attribute, None)
@@ -469,11 +483,8 @@ def timing_ledger_path(arguments: argparse.Namespace) -> tuple[Path | None, str 
         if isinstance(anchor, Path):
             plan_directory = _enclosing_plan_root(anchor)
             if plan_directory is not None:
-                return plan_directory / TIMING_LEDGER_NAME, None
-            inferred = anchor.parent / TIMING_LEDGER_NAME
-            if inferred.parent.is_dir() and _inside_git_worktree(inferred.parent):
-                return None, f"推断路径位于 Git 工作树内：{inferred}"
-            return inferred, None
+                return _inferred_ledger_path(plan_directory)
+            return _inferred_ledger_path(anchor.parent)
     return None, "命令没有输出锚点"
 
 

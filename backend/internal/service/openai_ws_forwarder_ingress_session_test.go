@@ -185,7 +185,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, hooks)
+		memoryCtx, releaseMemory := openAIWSMemoryTestContext(t, r.Context(), firstMessage)
+		defer releaseMemory()
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(memoryCtx, ginCtx, conn, account, "sk-test", firstMessage, hooks)
 	}))
 	defer wsServer.Close()
 
@@ -1090,7 +1092,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, hooks)
+		memoryCtx, releaseMemory := openAIWSMemoryTestContext(t, r.Context(), firstMessage)
+		defer releaseMemory()
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(memoryCtx, ginCtx, conn, account, "sk-test", firstMessage, hooks)
 	}))
 	defer wsServer.Close()
 
@@ -1579,7 +1583,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRe
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, hooks)
+		memoryCtx, releaseMemory := openAIWSMemoryTestContext(t, r.Context(), firstMessage)
+		defer releaseMemory()
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(memoryCtx, ginCtx, conn, account, "sk-test", firstMessage, hooks)
 	}))
 	defer wsServer.Close()
 
@@ -1825,7 +1831,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledPre
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, nil)
+		memoryCtx, releaseMemory := openAIWSMemoryTestContext(t, r.Context(), firstMessage)
+		defer releaseMemory()
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(memoryCtx, ginCtx, conn, account, "sk-test", firstMessage, nil)
 	}))
 	defer wsServer.Close()
 

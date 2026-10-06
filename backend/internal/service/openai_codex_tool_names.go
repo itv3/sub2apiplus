@@ -265,15 +265,23 @@ func updateCodexToolNameReverseForWSFrame(c *gin.Context, frame []byte, reverse 
 }
 
 func openAIWSFrameHasExplicitToolDeclarations(frame []byte) bool {
-	if gjson.GetBytes(frame, "tools").Exists() {
+	if openAIBodyGet(frame, "tools").Exists() {
 		return true
 	}
-	for _, item := range gjson.GetBytes(frame, "input").Array() {
-		if strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "additional_tools") && item.Get("tools").Exists() {
-			return true
-		}
+	input := openAIBodyGet(frame, "input")
+	if !input.IsArray() {
+		// 保留 gjson.Array 对非数组值返回单个元素的既有行为。
+		return strings.EqualFold(strings.TrimSpace(input.Get("type").String()), "additional_tools") && input.Get("tools").Exists()
 	}
-	return false
+	declared := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		if strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "additional_tools") && item.Get("tools").Exists() {
+			declared = true
+			return false
+		}
+		return true
+	})
+	return declared
 }
 
 func mergeCodexToolNameReverseMaps(base, overlay map[string]string) map[string]string {

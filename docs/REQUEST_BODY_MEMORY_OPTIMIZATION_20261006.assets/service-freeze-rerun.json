@@ -1,0 +1,21 @@
+{
+  "failed_tests": [
+    "TestCodex01491TerminalServiceStateIsFrozen",
+    "TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen",
+    "TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen",
+    "TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen",
+    "TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation",
+    "TestCompatibilityCodeRetirementClosureIsComplete",
+    "TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation",
+    "TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation",
+    "TestUpstreamSourceTransitionNodesAreFrozenService",
+    "TestUpstreamV0179SourceTransitionIsFrozen",
+    "TestUpstreamV0180SourceTransitionIsFrozen",
+    "TestUpstreamV023SourceTransitionServiceIsFrozen",
+    "TestUpstreamV023SourceTransitionServiceRejectsMutation"
+  ],
+  "pattern": "^(TestCodex01491TerminalServiceStateIsFrozen|TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen|TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen|TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen|TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation|TestCompatibilityCodeRetirementClosureIsComplete|TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources|TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen|TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation|TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen|TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation|TestUpstreamSourceTransitionNodesAreFrozenService|TestUpstreamV0179SourceTransitionIsFrozen|TestUpstreamV0180SourceTransitionIsFrozen|TestUpstreamV023SourceTransitionServiceIsFrozen|TestUpstreamV023SourceTransitionServiceRejectsMutation)$"
+}

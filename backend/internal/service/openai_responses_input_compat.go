@@ -71,6 +71,63 @@ func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []an
 	return true
 }
 
+// openAIResponsesHasOrphanToolOutputsFromIndex 只检查上述清理是否会改写 input。
+// 读取规则保持一致：字符串才参与匹配，同名键取末值，调用项允许以 id 补 call_id，
+// 独立的具名 function_call_output 保留；消息正文和工具输出全文无需解码。
+func openAIResponsesHasOrphanToolOutputsFromIndex(index *officialJSONRawIndex) bool {
+	readString := func(node int32, keys ...string) string {
+		for _, key := range keys {
+			child := index.memberNode(node, key)
+			if child >= 0 && index.nodes[child].kind == officialJSONRawKindString {
+				if value := strings.TrimSpace(index.decodeString(child)); value != "" {
+					return value
+				}
+			}
+		}
+		return ""
+	}
+	if readString(index.root, "previous_response_id") != "" {
+		return false
+	}
+	input := index.memberNode(index.root, "input")
+	if input < 0 || index.nodes[input].kind != officialJSONRawKindArray {
+		return false
+	}
+	knownIDs := make(map[string]struct{})
+	for _, item := range index.nodes[input].items {
+		if index.nodes[item].kind != officialJSONRawKindObject {
+			continue
+		}
+		typeName := readString(item, "type")
+		id := ""
+		if typeName == "item_reference" {
+			id = readString(item, "id")
+		} else if isCodexToolCallContextItemType(typeName) {
+			id = readString(item, "call_id", "id")
+		}
+		if id != "" {
+			knownIDs[id] = struct{}{}
+		}
+	}
+	for _, item := range index.nodes[input].items {
+		if index.nodes[item].kind != officialJSONRawKindObject {
+			continue
+		}
+		typeName := readString(item, "type")
+		if !isCodexToolCallOutputItemType(typeName) {
+			continue
+		}
+		callID := readString(item, "call_id")
+		if callID == "" && typeName == "function_call_output" && readString(item, "name") != "" {
+			continue
+		}
+		if _, exists := knownIDs[callID]; callID == "" || !exists {
+			return true
+		}
+	}
+	return false
+}
+
 func truncateOpenAIResponsesInputText(_ map[string]any) bool {
 	// Do not silently rewrite client or tool output. If an upstream enforces a
 	// text limit, forwarding the original value preserves its explicit error for

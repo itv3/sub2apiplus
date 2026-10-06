@@ -40,6 +40,7 @@ from .errors import UpstreamMergeError
 from .gitops import (
     assert_clean,
     assert_git_repository,
+    assert_private_path,
     command_environment,
     commit_tree,
     current_branch_ref,
@@ -240,11 +241,11 @@ def _assert_separate_roots(
         )
         if path in forbidden and not execution_root:
             raise UpstreamMergeError(f"{label} 不能指向系统根、仓库根或用户主目录")
-        resolved_parent = path.parent.resolve(strict=True)
+        resolved_parent = path.parent.resolve(strict=False)
         if resolved_parent == Path("/") and len(path.parts) <= 2:
             raise UpstreamMergeError(f"{label} 路径过宽：{path}")
-        if (path == repository_root or path.is_relative_to(repository_root)) and not execution_root:
-            raise UpstreamMergeError(f"{label} 必须位于主仓库之外")
+        if not execution_root:
+            assert_private_path(repo, path, label)
     if worktree == evidence_root or worktree.is_relative_to(evidence_root) or evidence_root.is_relative_to(worktree):
         raise UpstreamMergeError("隔离 worktree 与 evidence root 不得互相嵌套")
 
@@ -818,8 +819,8 @@ def create_plan(request_path: Path, repository_root: Path) -> LoadedPlan:
         raise UpstreamMergeError(f"隔离 worktree 目标必须不存在：{worktree}")
     if evidence_requested.exists() and any(evidence_requested.iterdir()):
         raise UpstreamMergeError("新计划的 evidence root 必须不存在或为空")
+    _assert_separate_roots(root, worktree, evidence_requested)
     evidence_root = ensure_private_directory(evidence_requested, create=True)
-    _assert_separate_roots(root, worktree, evidence_root)
 
     route_path = resolve_within(evidence_root, "u0/route-snapshot.json", "U-0 route snapshot")
     fork_tree = commit_tree(root, fork_head)

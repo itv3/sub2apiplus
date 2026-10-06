@@ -1,0 +1,41 @@
+2026/10/06 09:30:17 Timezone initialized: UTC (UTC offset: +00:00)
+=== RUN   TestCodex01491TerminalServiceStateIsFrozen
+    codex_01491_terminal_state_test.go:159: 0.149.1 终态当前摘要不一致：docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md
+--- FAIL: TestCodex01491TerminalServiceStateIsFrozen (3.63s)
+=== RUN   TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen
+--- PASS: TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen (0.00s)
+=== RUN   TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen
+--- PASS: TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen (0.00s)
+=== RUN   TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen
+    codex_0151_formal_recovery_source_transition_test.go:322: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen (0.00s)
+=== RUN   TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation
+    codex_0151_formal_recovery_source_transition_test.go:329: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation (0.00s)
+=== RUN   TestCompatibilityCodeRetirementClosureIsComplete
+--- PASS: TestCompatibilityCodeRetirementClosureIsComplete (0.04s)
+=== RUN   TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources
+--- PASS: TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources (0.00s)
+=== RUN   TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen
+    upstream_merge_framework_v3_successor_test.go:225: 上游合并框架 v3 successor 当前摘要不一致：docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen (0.00s)
+=== RUN   TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation
+    upstream_merge_framework_v3_successor_test.go:232: 上游合并框架 v3 successor 当前摘要不一致：docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation (0.00s)
+=== RUN   TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen
+--- PASS: TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen (0.00s)
+=== RUN   TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation
+--- PASS: TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation (0.08s)
+=== RUN   TestUpstreamSourceTransitionNodesAreFrozenService
+--- PASS: TestUpstreamSourceTransitionNodesAreFrozenService (0.32s)
+=== RUN   TestUpstreamV0179SourceTransitionIsFrozen
+--- PASS: TestUpstreamV0179SourceTransitionIsFrozen (0.00s)
+=== RUN   TestUpstreamV0180SourceTransitionIsFrozen
+--- PASS: TestUpstreamV0180SourceTransitionIsFrozen (0.01s)
+=== RUN   TestUpstreamV023SourceTransitionServiceIsFrozen
+--- PASS: TestUpstreamV023SourceTransitionServiceIsFrozen (0.00s)
+=== RUN   TestUpstreamV023SourceTransitionServiceRejectsMutation
+--- PASS: TestUpstreamV023SourceTransitionServiceRejectsMutation (0.05s)
+FAIL
+FAIL	github.com/Wei-Shaw/sub2api/internal/service	5.638s
+FAIL

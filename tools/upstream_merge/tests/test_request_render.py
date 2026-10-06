@@ -214,6 +214,25 @@ class RequestRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(UpstreamMergeError, "缺少 Inventory 基线"):
             self._render(previous_evidence=unfinished)
 
+    def test_render_after_migration_uses_internal_paths_and_previous_evidence(self) -> None:
+        old = self.plans
+        self.plans = self.root / "local-analysis" / "upstream"
+        old.rename(self.plans)
+        old.symlink_to(self.plans, target_is_directory=True)
+        self.baseline = self.plans / self.baseline.relative_to(old)
+        self.plan_root = self.plans / self.plan_root.name
+        result = self._render()
+        self.assertEqual(result["previous_evidence"], str(self.plans / self.previous.relative_to(old)))
+        self.assertEqual(self._request()["workspace"]["worktree"], str(self.plan_root / "worktree"))
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        self.assertEqual(stat.S_IMODE(self.plan_root.stat().st_mode), 0o700)
+
+    def test_rejects_other_internal_plan_root_before_creating_it(self) -> None:
+        invalid = self.root / "local-analysis" / "other" / self.plan_root.name
+        with self.assertRaisesRegex(UpstreamMergeError, "主仓库之外"):
+            self._render(plan_root=invalid)
+        self.assertFalse(invalid.exists())
+
     def test_missing_source_root_is_reported(self) -> None:
         shutil.rmtree(self.root / "local-analysis")
         with self.assertRaisesRegex(UpstreamMergeError, "源码根不存在"):

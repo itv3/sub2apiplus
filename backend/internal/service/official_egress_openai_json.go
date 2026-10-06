@@ -258,15 +258,66 @@ func marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex(
 		if index != nil {
 			child = index.memberNode(root, key)
 		}
-		value, err := officialJSONValueBytes(index, payload[key], child)
+		value, segments, err := officialJSONMemberValue(index, payload[key], child)
 		if err != nil {
 			return nil, err
 		}
 		members = append(members, officialegress.JSONObjectMember{
-			Name: key, QuotedName: encodedKey, Value: value,
+			Name: key, QuotedName: encodedKey, Value: value, ValueSegments: segments,
 		})
 	}
 	return members, nil
+}
+
+// officialJSONMemberValue 对修改后的顶层数组保留元素片段。只插入一条 developer 指令时，
+// input 的其余历史依旧直接引用原文，不再为数组追加、扩容一份连续大切片。
+// 各片段要么是完整 JSON 元素，要么是数组标点，与旧拼接编码器的输出逐字节相同。
+func officialJSONMemberValue(index *officialJSONRawIndex, value any, node int32) ([]byte, [][]byte, error) {
+	if index != nil {
+		if node >= 0 && index.equals(node, value) {
+			return index.raw(node), nil, nil
+		}
+		if pooled := index.lookupComposite(value); pooled >= 0 {
+			return index.raw(pooled), nil, nil
+		}
+	}
+	items, isArray := value.([]any)
+	if !isArray {
+		encoded, err := officialJSONAppendValue(index, nil, value, node)
+		return encoded, nil, err
+	}
+	var originalItems []int32
+	if index != nil && node >= 0 && index.nodes[node].kind == officialJSONRawKindArray {
+		originalItems = index.nodes[node].items
+	}
+	used := make([]bool, len(originalItems))
+	segments := make([][]byte, 0, len(items)*2+2)
+	segments = append(segments, []byte{'['})
+	for i, item := range items {
+		if i > 0 {
+			segments = append(segments, []byte{','})
+		}
+		// 与 officialJSONAppendArray 完全相同：先按内容匹配，再尝试未占用的同位置节点。
+		match := -1
+		if index != nil {
+			match = index.matchArrayItem(item, originalItems, used)
+		}
+		if match < 0 && i < len(originalItems) && !used[i] {
+			match = i
+		}
+		child := int32(-1)
+		if match >= 0 {
+			used[match] = true
+			child = originalItems[match]
+		}
+		encoded, err := officialJSONValueBytes(index, item, child)
+		if err != nil {
+			return nil, nil, err
+		}
+		segments = append(segments, encoded)
+	}
+	segments = append(segments, []byte{']'})
+	return nil, segments, nil
 }
 
 // officialJSONValueBytes 返回 officialJSONAppendValue 对同一参数会追加的字节：同位置或按内容命中

@@ -1,0 +1,61 @@
+[
+  {
+    "name": "最终handler与读取包全包回归",
+    "command": "GOTOOLCHAIN=local go test ./internal/handler ./internal/pkg/httputil -count=1",
+    "exit_code": 0,
+    "log": "final-handler-httputil.log",
+    "note": "之后的规范化修改另有下述定向与全包验证"
+  },
+  {
+    "name": "规范化最终读取包全包回归",
+    "command": "GOTOOLCHAIN=local go test ./internal/pkg/httputil -count=1",
+    "exit_code": 0,
+    "log": "final-normalization-httputil.log"
+  },
+  {
+    "name": "最终影响范围vet",
+    "command": "GOTOOLCHAIN=local go vet ./internal/handler ./internal/pkg/httputil ./internal/service ./internal/officialegress/...",
+    "exit_code": 0,
+    "log": "final-vet.log"
+  },
+  {
+    "name": "后端最终构建",
+    "command": "GOTOOLCHAIN=local CGO_ENABLED=0 go build -o /tmp/sub2api-memory-optimization-20261006/server-final ./cmd/server",
+    "exit_code": 0,
+    "log": "final-build.log"
+  },
+  {
+    "name": "官方出站与契约全包最终回归",
+    "command": "GOTOOLCHAIN=local go test ./internal/officialegress/... -count=1",
+    "exit_code": 0,
+    "log": "final-officialegress-verified.log"
+  },
+  {
+    "name": "服务层完整回归首次运行",
+    "command": "GOTOOLCHAIN=local go test ./internal/service -count=1",
+    "exit_code": 1,
+    "log": "final-service-tests.log",
+    "note": "229.522秒；仅16项源码冻结检查失败，运行早于successor生成，其他功能无失败"
+  },
+  {
+    "name": "补齐successor后隔离树16项冻结复测",
+    "command": "GOTOOLCHAIN=local go test ./internal/service -run <service-freeze-rerun.json中的pattern> -count=1 -v",
+    "exit_code": 0,
+    "log": "final-service-freeze-worktree-rerun.log"
+  },
+  {
+    "name": "主仓库合并态16项冻结复测",
+    "command": "同上，在主仓库backend执行",
+    "exit_code": 1,
+    "log": "final-service-freeze-rerun.log",
+    "note": "仅5项失败，全部指向用户既有OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md摘要；该文件与回写前一致，未修改"
+  },
+  {
+    "name": "主仓库额外官方出站冻结检查",
+    "command": "GOTOOLCHAIN=local go test ./internal/officialegress -run '(Frozen|CandidateTrace|Upstream.*RejectsMutation)$' -count=1",
+    "exit_code": 1,
+    "status": "interrupted",
+    "log": "main-merged-freeze-tests.log",
+    "note": "主仓库未承接的既有文档变更已由独立复测证实；额外检查运行超过4分钟后中止，不作为通过证据"
+  }
+]

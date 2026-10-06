@@ -138,6 +138,38 @@ class TimingLedgerTest(unittest.TestCase):
         ghost = parser.parse_args(["plan-validate", "--plan", "/nonexistent/v0.2.13-20261004-002/evidence/plan.json"])
         self.assertEqual(timing_ledger_path(ghost)[0], Path("/nonexistent/v0.2.13-20261004-002/evidence") / TIMING_LEDGER_NAME)
 
+    def test_internal_private_baseline_and_plan_keep_automatic_ledger(self) -> None:
+        repository = self.root / "repository"
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository, check=True)
+        (repository / ".gitignore").write_text("/local-analysis/\n", encoding="utf-8")
+        private = repository / "local-analysis" / "upstream"
+        for name in ("baseline-20261006", "v1.0.1-20261006-001"):
+            with self.subTest(name=name):
+                output = private / name / "evidence" / "sealed.json"
+                output.parent.mkdir(parents=True)
+                code, stderr = _run_main(["identity-seal", "--input", str(self.draft), "--output", str(output)])
+                self.assertEqual(code, 0, stderr)
+                ledger = (output.parent.parent if name.startswith("v") else output.parent) / TIMING_LEDGER_NAME
+                self.assertEqual(len(_ledger_rows(ledger)), 1)
+        before = subprocess.check_output(["git", "status", "--porcelain"], cwd=repository)
+        self.assertEqual(before.decode().strip(), "?? .gitignore")
+
+    def test_plan_name_cannot_bypass_repository_ledger_boundary(self) -> None:
+        repository = self.root / "repository"
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository, check=True)
+        plan_root = repository / "v1.0.1-20261006-001"
+        plan_root.mkdir()
+        for arguments in (
+            argparse.Namespace(plan_root=plan_root),
+            argparse.Namespace(plan=plan_root / "evidence" / "plan.json"),
+        ):
+            with self.subTest(arguments=arguments):
+                path, reason = timing_ledger_path(arguments)
+                self.assertIsNone(path)
+                self.assertIn("Git 工作树内", reason)
+
     def test_inferred_ledger_inside_git_worktree_is_skipped(self) -> None:
         repository = self.root / "repository"
         repository.mkdir()

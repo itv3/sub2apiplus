@@ -199,7 +199,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 	if len(body) == 0 || codexAccountIdentityNamespace(account) == "" {
 		return body, false, nil
 	}
-	root := gjson.ParseBytes(body)
+	root := openAIBodyRoot(body)
 	if !root.IsObject() {
 		return body, false, nil
 	}
@@ -207,7 +207,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 	next := body
 	changed := false
 	originalBodySessionID := ""
-	if cm := gjson.GetBytes(body, "client_metadata"); cm.IsObject() {
+	if cm := openAIBodyGet(body, "client_metadata"); cm.IsObject() {
 		clientMetadata := map[string]any{}
 		if err := json.Unmarshal([]byte(cm.Raw), &clientMetadata); err != nil {
 			return body, false, fmt.Errorf("decode client_metadata for account identity: %w", err)
@@ -230,7 +230,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 			changed = true
 		}
 	}
-	if promptCacheKey := gjson.GetBytes(body, "prompt_cache_key"); promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" {
+	if promptCacheKey := openAIBodyGet(body, "prompt_cache_key"); promptCacheKey.Type == gjson.String && strings.TrimSpace(promptCacheKey.String()) != "" {
 		raw := promptCacheKey.String()
 		kind := "prompt-cache"
 		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
@@ -238,7 +238,13 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 		}
 		scoped := scopeCodexAccountIdentityValue(account, apiKeyID, kind, raw)
 		if scoped != raw {
-			rewritten, err := sjson.SetBytes(next, "prompt_cache_key", scoped)
+			// metadata 的替换已经创建独占正文时，第二个短字段可在新缓冲中替换。
+			// 入口正文仍被 rawForHash/换号重放引用，绝不能原位修改入口数组。
+			var options *sjson.Options
+			if changed && !officialForwardSameBody(next, body) {
+				options = &sjson.Options{Optimistic: true, ReplaceInPlace: true}
+			}
+			rewritten, err := sjson.SetBytesOptions(next, "prompt_cache_key", scoped, options)
 			if err != nil {
 				return body, false, fmt.Errorf("splice account-scoped prompt_cache_key: %w", err)
 			}

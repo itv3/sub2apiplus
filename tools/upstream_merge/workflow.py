@@ -78,6 +78,7 @@ from .preflight_report import (
 from .gitops import (
     assert_clean,
     assert_git_repository,
+    assert_private_path,
     changed_paths,
     commit_tree,
     current_branch_ref,
@@ -917,7 +918,7 @@ def run_preflight(
 ) -> dict[str, Any]:
     """在创建正式 U-0 计划前执行离线合并预检。
 
-    预检不会写入主仓库、不会 fetch/push，也不会创建权威阶段制品。它只在临时
+    预检不修改受版本控制的源码、不会 fetch/push，也不会创建权威阶段制品。它只在临时
     detached worktree 中试合并，并将冲突、发送面扫描和快速构建检查汇总为报告。
     """
 
@@ -925,9 +926,7 @@ def run_preflight(
     if output_path is not None:
         if not output_path.is_absolute():
             raise UpstreamMergeError("preflight 输出必须是绝对路径")
-        normalized_output = output_path.resolve(strict=False)
-        if normalized_output.is_relative_to(root):
-            raise UpstreamMergeError("preflight 报告不得写入主仓库内部")
+        assert_private_path(root, output_path, "preflight 报告")
         if output_path.exists() or output_path.is_symlink():
             raise UpstreamMergeError(f"preflight 报告输出已存在，禁止覆盖：{output_path}")
     request = load_request(request_path)

@@ -99,6 +99,20 @@ def draft(*, known_drift: bool = False) -> dict[str, object]:
 
 
 class BaselineAcceptanceTests(unittest.TestCase):
+    def test_seal_in_ignored_private_root_keeps_baseline_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = BaselineRepository(root)
+            (repository.root / ".gitignore").write_text("/local-analysis/\n", encoding="utf-8")
+            run(repository.root, "git", "add", ".gitignore")
+            run(repository.root, "git", "commit", "-m", "忽略私有分析资料")
+            input_path = root / "input.json"
+            input_path.write_text(json.dumps(draft()) + "\n", encoding="utf-8")
+            output = repository.root / "local-analysis/upstream/baseline/evidence/receipt.json"
+            seal_baseline_acceptance(repository.root, input_path, output)
+            self.assertEqual(validate_baseline_acceptance(repository.root, output)["result"], "accepted")
+            self.assertEqual(run(repository.root, "git", "status", "--porcelain"), "")
+
     def test_seal_and_validate_clean_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

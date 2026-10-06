@@ -125,8 +125,8 @@ func TestOfficialForwardHTTPBodyReencodeMatchesMarshal(t *testing.T) {
 			}
 			copied++
 		}
-		for i, span := range workspace.spans {
-			require.Equal(t, string(workspace.members[i].Value), string(got[span.start:span.end]), name)
+		for _, span := range workspace.spans {
+			require.Equal(t, string(span.source), string(got[span.start:span.end]), name)
 		}
 	}
 	require.Greater(t, compared, 100)

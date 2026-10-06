@@ -325,8 +325,7 @@ func TestOfficialForwardHTTPBodyNilWorkspaceDelegatesToOriginals(t *testing.T) {
 }
 
 // TestOfficialForwardHTTPBodyScansEachBodyVersionOnce 在完整 Forward 上验证同一版本正文只扫描一次：
-// 测量形态经 Lite 归一化后的正文 L 供契约捕获、对象树解码与保序重编码共用一次扫描，重编码结果 D 供
-// compaction 规整与 Finalizer 共用一次扫描（Lite 归一化自身对入站正文的一次扫描不经工作区）。
+// 普通 Lite 的小字段通过覆盖层延迟写出，契约捕获、对象树解码、compaction 检查与 Finalizer 共用入口索引。
 func TestOfficialForwardHTTPBodyScansEachBodyVersionOnce(t *testing.T) {
 	source := buildOfficialEgressMemoryProfileBody(t, 1<<20)
 	var workspace *officialForwardHTTPBody
@@ -340,5 +339,5 @@ func TestOfficialForwardHTTPBodyScansEachBodyVersionOnce(t *testing.T) {
 	outcome := officialForwardBodyRun(t, tc, source, false)
 	require.NoError(t, outcome.err)
 	require.NotNil(t, workspace, "上游请求的 ctx 必须带着本次调用的工作区")
-	require.Equal(t, 2, workspace.scans, "L 与 D 两个正文版本各只扫描一次")
+	require.Equal(t, 1, workspace.scans, "小字段覆盖路径始终复用同一入口正文索引")
 }

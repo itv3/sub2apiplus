@@ -1,12 +1,75 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
+
+// normalizeOpenAIResponsesLiteHeaderFields 只验证和归一化不依赖 input 的小字段。
+// handled 为 false 时，调用方必须走原完整路径；namespace 工具会迁移历史，不能在这里延迟。
+// 严格校验整份 JSON 后逐个顶层字段读取；重复键回退完整路径，保留旧解码与重编码语义。
+func normalizeOpenAIResponsesLiteHeaderFields(body []byte) (fields map[string]any, handled bool, err error) {
+	if !json.Valid(body) || !openAIBodyRoot(body).IsObject() {
+		return nil, false, nil
+	}
+	// reasoning content 回放清理和 compaction trigger 重排随后会按标准 JSON 编码排列对象键。
+	// 默认值必须在这次排序之前存在，才能与原流程保持字节一致；这些形态继续立即归一化。
+	canonicalReplay := false
+	input := openAIBodyGet(body, "input")
+	if input.IsArray() {
+		input.ForEach(func(_, item gjson.Result) bool {
+			reasoning, content := false, false
+			// 重复 type/content 也保守回退：原对象树取最后一个值，gjson.Get 则取第一个。
+			item.ForEach(func(key, value gjson.Result) bool {
+				switch key.Str {
+				case "type":
+					typeName := strings.TrimSpace(value.String())
+					canonicalReplay = canonicalReplay || typeName == "compaction_trigger"
+					reasoning = reasoning || typeName == "reasoning"
+				case "content":
+					content = content || (value.IsArray() && value.Get("#").Int() > 0)
+				}
+				return !canonicalReplay
+			})
+			canonicalReplay = canonicalReplay || (reasoning && content)
+			return !canonicalReplay
+		})
+	}
+	if canonicalReplay {
+		return nil, false, nil
+	}
+	fields = make(map[string]any, 3)
+	seen := make(map[string]bool)
+	duplicate := false
+	openAIBodyRoot(body).ForEach(func(key, value gjson.Result) bool {
+		if seen[key.Str] {
+			duplicate = true
+			return false
+		}
+		seen[key.Str] = true
+		switch key.Str {
+		case "tools", "reasoning", "parallel_tool_calls":
+			fields[key.Str], err = decodeOfficialJSONValueUseNumber([]byte(value.Raw))
+		}
+		return err == nil
+	})
+	if err != nil || duplicate {
+		return nil, false, nil
+	}
+	if tools, ok := fields["tools"].([]any); ok {
+		for _, raw := range tools {
+			if tool, ok := raw.(map[string]any); ok && strings.TrimSpace(firstNonEmptyString(tool["type"])) == "namespace" {
+				return nil, false, nil
+			}
+		}
+	}
+	_, err = normalizeOpenAIResponsesLiteTools(fields)
+	return fields, true, err
+}
 
 var openAIResponsesLiteHostedToolTypes = map[string]struct{}{
 	"image_generation":     {},

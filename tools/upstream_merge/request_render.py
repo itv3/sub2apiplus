@@ -26,7 +26,7 @@ from typing import Any
 from .canonical import ensure_private_directory, expect_object, load_json, pretty_bytes, sha256_file
 from .contracts import _tag_minor, upstream_range_tags
 from .errors import UpstreamMergeError
-from .gitops import assert_clean, assert_git_repository, merge_base, rev_parse, tag_commit
+from .gitops import assert_clean, assert_git_repository, assert_private_path, merge_base, rev_parse, tag_commit
 from .preflight_report import (
     CLAUDE_RELEASE_CATALOG,
     OFFICIAL_EGRESS_ROOT,
@@ -183,6 +183,7 @@ def render_request(
         raise UpstreamMergeError(f"Plan 目录必须是绝对路径并命名为 <上游 tag>-<yyyymmdd>-<序号>：{plan_root}")
     if match.group(1) != upstream_tag:
         raise UpstreamMergeError(f"Plan 目录名里的 tag 与 --upstream-tag 不一致：{plan_root.name}")
+    assert_private_path(repository, plan_root, "Plan 私有目录")
     if (plan_root / "evidence" / "plan.json").exists():
         raise UpstreamMergeError("该 Plan 已经 plan-create，不得重渲染请求；需要改请求时新建 Plan 目录")
     if not baseline_acceptance.is_absolute() or not baseline_acceptance.is_file():

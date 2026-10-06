@@ -180,6 +180,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	useResponsesLite := s.normalizeOpenAIResponsesLiteIngressHeader(ctx, c, account, body)
 	compactPath := isOpenAIResponsesCompactPath(c)
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, err
+	}
+	officialOpenAIHTTPEnabled := officialEgressEnabled &&
+		account.Platform == PlatformOpenAI &&
+		account.Type == AccountTypeOAuth &&
+		(passthroughEnabled || wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2)
+	// 工作区先于 Lite 归一化创建；只需补小字段时延迟写入，复用后续解码与终态定型。
+	var officialForwardBody *officialForwardHTTPBody
+	if officialOpenAIHTTPEnabled && !passthroughEnabled {
+		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, canonicalImageIntentBody)
+	}
 	// namespace 冲突必须在 Lite 工具归一化之前校验；非 Lite HTTP 再执行摊平。
 	// 否则转换可能先丢失命名空间结构，让冲突请求绕过 400 校验。
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
@@ -197,7 +210,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 头。统一走按账号类型分派的归一化，兼容 OAuth 工具与 API Key 并行工具。
 	responsesLite := account.IsOpenAI() && (useResponsesLite || isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)))
 	if responsesLite {
-		liteBody, changed, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+		liteWorkspace := officialForwardBody
+		if compactPath {
+			// compact 后续会投影/删除顶层字段，沿用立即归一化，避免延迟覆盖重新注入已删除字段。
+			liteWorkspace = nil
+		}
+		liteBody, changed, liteErr := liteWorkspace.normalizeResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
 			param := "tools"
 			var validationErr *openAIResponsesLiteValidationError
@@ -211,16 +229,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			body = liteBody
 		}
 	}
-	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
-	if err != nil {
-		return nil, err
-	}
-	officialOpenAIHTTPEnabled := officialEgressEnabled &&
-		account.Platform == PlatformOpenAI &&
-		account.Type == AccountTypeOAuth &&
-		// passthrough 分支当前固定走 HTTP，不能因为版本画像默认选择 WSv2 就跳过
-		// HTTP Executor；否则已定型官方身份会误入通用 HTTP 入口并被 fail-close。
-		(passthroughEnabled || wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2)
 	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
 		// 精确官方入口的契约没有 input namespace；若出现只能视为
 		// 画像闭集外残留并清理。派生入口则按 v0.1.170 的上游修复保留
@@ -253,11 +261,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	// 官方出站 HTTP 路径（不含透传）的正文工作区（问题四 M2，official_egress_forward_body.go）；其余
 	// 路径为 nil，其方法原样调用改造前的函数。
-	var officialForwardBody *officialForwardHTTPBody
 	if officialOpenAIHTTPEnabled {
-		if !passthroughEnabled {
-			ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, canonicalImageIntentBody)
-		}
 		officialEgressBodyContract, err = officialForwardBody.captureContract(c, originalBody)
 		if err != nil {
 			return nil, err
@@ -958,14 +962,26 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 延迟计算会与下一请求的进场键漂移。
 	lineageGroupID := getOpenAIGroupIDFromContext(c)
 	lineageEntryBody := body
+	// 小字段覆盖层后续会随重试正文换版；先保留入口时的缓存键投影，保证失败回写仍使用同一会话键。
+	lineageSessionBody := officialForwardBody.sessionHashBody(body)
+	if officialForwardSameBody(lineageSessionBody, body) {
+		lineageSessionBody = nil
+	}
+	lineageBodyForSessionHash := func() []byte {
+		if lineageSessionBody != nil {
+			return lineageSessionBody
+		}
+		return lineageEntryBody
+	}
 	lineageSessionHash := ""
 	if stateStore := s.getOpenAIWSStateStore(); stateStore != nil && stateStore.HasAnySessionInvalidEncryptedContent() {
-		lineageSessionHash = s.GenerateSessionHash(c, body)
+		lineageSessionHash = s.GenerateSessionHash(c, lineageBodyForSessionHash())
 		if invalidDigests := stateStore.GetSessionInvalidEncryptedContentDigests(lineageGroupID, lineageSessionHash); len(invalidDigests) > 0 {
 			strippedBody, strippedCount := s.stripSessionInvalidEncryptedContentLogged(
 				body, invalidDigests, "invalid_encrypted_lineage_strip", account.ID, 0,
 			)
 			if strippedCount > 0 {
+				officialForwardBody.carryDeferredFields(body, strippedBody)
 				body = strippedBody
 				requestView = newOpenAIRequestView(body)
 				reqBody = nil
@@ -1084,7 +1100,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			if len(invalidDigests) > 0 {
 				if lineageSessionHash == "" {
-					lineageSessionHash = s.GenerateSessionHash(c, lineageEntryBody)
+					lineageSessionHash = s.GenerateSessionHash(c, lineageBodyForSessionHash())
 				}
 				s.markOpenAIWSInvalidEncryptedContentLineage(lineageGroupID, lineageSessionHash, invalidDigests)
 			}
@@ -1639,7 +1655,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					}
 					if len(invalidDigests) > 0 {
 						if lineageSessionHash == "" {
-							lineageSessionHash = s.GenerateSessionHash(c, lineageEntryBody)
+							lineageSessionHash = s.GenerateSessionHash(c, lineageBodyForSessionHash())
 						}
 						s.markOpenAIWSInvalidEncryptedContentLineage(lineageGroupID, lineageSessionHash, invalidDigests)
 					}
@@ -1653,6 +1669,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
 			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+				officialForwardBody.carryDeferredFields(body, retryBody)
 				body = retryBody
 				requestView = newOpenAIRequestView(body)
 				reqBody = nil

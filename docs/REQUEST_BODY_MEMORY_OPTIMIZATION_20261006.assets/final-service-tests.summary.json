@@ -1,0 +1,49 @@
+{
+  "record_type": "摘要，非完整原始日志",
+  "original_log_absolute_path": "/tmp/sub2api-memory-optimization-20261006/final-service-tests.log",
+  "original_log_size_bytes": 3526589,
+  "original_log_sha256": "79b13501100310f8caf981f65f2b85db1a818ac233f5222ebb96a753b95b3b79",
+  "command": "GOTOOLCHAIN=local go test ./internal/service -count=1",
+  "duration_seconds": 229.522,
+  "exit_code": 1,
+  "failed_tests": [
+    "TestCodex01491TerminalServiceStateIsFrozen",
+    "TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen",
+    "TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen",
+    "TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen",
+    "TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation",
+    "TestCompatibilityCodeRetirementClosureIsComplete",
+    "TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation",
+    "TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation",
+    "TestUpstreamSourceTransitionNodesAreFrozenService",
+    "TestUpstreamV0179SourceTransitionIsFrozen",
+    "TestUpstreamV0180SourceTransitionIsFrozen",
+    "TestUpstreamV023SourceTransitionServiceIsFrozen",
+    "TestUpstreamV023SourceTransitionServiceRejectsMutation"
+  ],
+  "other_functional_failures_reported": false,
+  "timing_note": "主任务确认：该全包运行在本次 successor 生成前启动并缓存旧冻结证据；后续只复测这 16 项。",
+  "isolated_worktree_rerun": {
+    "log": "final-service-freeze-worktree-rerun.log",
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "exit_code": 0
+  },
+  "main_repository_rerun": {
+    "log": "final-service-freeze-rerun.log",
+    "passed_tests": 11,
+    "failed_tests": 5,
+    "exit_code": 1,
+    "failure_path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+    "current_sha256": "3af48edd980c974e3c3956b57b0df58f509b410e1c065d8955876e9f3295492e",
+    "preservation_note": "主任务已核对该用户既有文档回写前后摘要相同，本次未修改，也未为无关变更新增承接。"
+  },
+  "original_terminal_lines": [
+    "FAIL",
+    "FAIL\tgithub.com/Wei-Shaw/sub2api/internal/service\t229.522s",
+    "FAIL"
+  ]
+}

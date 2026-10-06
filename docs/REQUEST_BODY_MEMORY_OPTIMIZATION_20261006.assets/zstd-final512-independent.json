@@ -1,0 +1,149 @@
+{
+  "scope": "只验证固定 JSON 的最终生产压缩函数输出与独立解码；不宣称性能或全链内存达标",
+  "zstd_version": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***",
+  "go_version": "go version go1.27.1 darwin/arm64",
+  "repository_head": "23a8502193089ae024d6c819ef455e31b1a5a34a",
+  "production_sources_unchanged": true,
+  "production_sources_sha256": {
+    "backend/internal/officialegress/compiler.go": "85c1d76d7d2bc93c1af8a74ed9484125c13b3193f59503729e32c4c010a0cdf6",
+    "backend/internal/officialegress/compiler_zstd_cache.go": "a23168847b03671d0a72ab7283c2eaa3f828d96c19842874c5b16bdc42892111",
+    "backend/internal/officialegress/segmented_body.go": "6db3952aafc4500ed50feaa2ea49e102df26c398722001456ceede6b927944fb",
+    "backend/internal/officialegress/types.go": "bec6294c49ef048c656c9642c57e8d6db45cc70ac9152e4edd610f725e09a203",
+    "backend/go.mod": "301ee563c377b1f37443a748c2f15b888f04d890727538630dac531bce2f97e3",
+    "backend/go.sum": "1493a011de2ec791501f3774be2a3c5ebc9352f227944dbece3b08829c021cea"
+  },
+  "results": [
+    {
+      "shape": "native",
+      "size_mib": "16.8",
+      "input_path": "/var/folders/jz/08cy4rd95fggf6rj8c19zyd80000gn/T/sub2api-memory-comparison-4w1i1m4l/fixtures-native/body-16.8-0.json",
+      "frame_path": "/tmp/sub2api-memory-optimization-20261006/window-evaluation/native-16.8-window512KiB.zst",
+      "raw_bytes": 17622304,
+      "wire_bytes": 11272381,
+      "wire_per_raw": 0.6396655624599371,
+      "window_bytes": 524288,
+      "frame_count": 1,
+      "has_fcs": true,
+      "frame_content_size": 17622304,
+      "dictionary_id": 0,
+      "content_checksum": "XXH64 low 32 bits",
+      "checksum_hex": "9923c232",
+      "libzstd_exit": 0,
+      "decoded_bytes": 17622304,
+      "sha256_equal": true,
+      "sha256": "41873f5684de92580b31b9aa1aac0001950df330e7e2cb398e4b956e16bdbcc3",
+      "compressed_sha256": "492eca4b720408b3280f42d1ac327e1f40260bda7cadb5161d5508dca7cebbd5",
+      "comparison": {
+        "2MiB": {
+          "wire_bytes": 11253629,
+          "wire_delta_bytes": 18752,
+          "wire_delta_percent": 0.16663069308575926
+        },
+        "8MiB": {
+          "wire_bytes": 11243316,
+          "wire_delta_bytes": 29065,
+          "wire_delta_percent": 0.2585091444552479
+        }
+      }
+    },
+    {
+      "shape": "native",
+      "size_mib": "50.0",
+      "input_path": "/var/folders/jz/08cy4rd95fggf6rj8c19zyd80000gn/T/sub2api-memory-comparison-4w1i1m4l/fixtures-native/body-50.0-0.json",
+      "frame_path": "/tmp/sub2api-memory-optimization-20261006/window-evaluation/native-50.0-window512KiB.zst",
+      "raw_bytes": 52441843,
+      "wire_bytes": 33549014,
+      "wire_per_raw": 0.6397375088438444,
+      "window_bytes": 524288,
+      "frame_count": 1,
+      "has_fcs": true,
+      "frame_content_size": 52441843,
+      "dictionary_id": 0,
+      "content_checksum": "XXH64 low 32 bits",
+      "checksum_hex": "40aafa70",
+      "libzstd_exit": 0,
+      "decoded_bytes": 52441843,
+      "sha256_equal": true,
+      "sha256": "538b8f6c27c708ab16d3c54b008c6788254103adc44f81f308ab4c541a6e2b47",
+      "compressed_sha256": "2a1115e858b816e1797735e83cb0554bf282e2996ccde45804c6c3a22bd788c2",
+      "comparison": {
+        "2MiB": {
+          "wire_bytes": 33486273,
+          "wire_delta_bytes": 62741,
+          "wire_delta_percent": 0.18736334139066477
+        },
+        "8MiB": {
+          "wire_bytes": 33475033,
+          "wire_delta_bytes": 73981,
+          "wire_delta_percent": 0.2210035162624037
+        }
+      }
+    },
+    {
+      "shape": "explicit",
+      "size_mib": "16.8",
+      "input_path": "/var/folders/jz/08cy4rd95fggf6rj8c19zyd80000gn/T/sub2api-memory-comparison-4w1i1m4l/fixtures/body-16.8-0.json",
+      "frame_path": "/tmp/sub2api-memory-optimization-20261006/window-evaluation/explicit-16.8-window512KiB.zst",
+      "raw_bytes": 17622340,
+      "wire_bytes": 11272429,
+      "wire_per_raw": 0.6396669795271229,
+      "window_bytes": 524288,
+      "frame_count": 1,
+      "has_fcs": true,
+      "frame_content_size": 17622340,
+      "dictionary_id": 0,
+      "content_checksum": "XXH64 low 32 bits",
+      "checksum_hex": "5bd4ab8b",
+      "libzstd_exit": 0,
+      "decoded_bytes": 17622340,
+      "sha256_equal": true,
+      "sha256": "fa45cf461cbb157d0f3f8754defd92124d1fb7f05bf0115ac57bdc740c4faaaf",
+      "compressed_sha256": "134994e9dcac4234449320b35d7bec836a642ec9b6ff45e28796c2e0f727a2c9",
+      "comparison": {
+        "2MiB": {
+          "wire_bytes": 11253685,
+          "wire_delta_bytes": 18744,
+          "wire_delta_percent": 0.1665587760809015
+        },
+        "8MiB": {
+          "wire_bytes": 11243373,
+          "wire_delta_bytes": 29056,
+          "wire_delta_percent": 0.2584277867504707
+        }
+      }
+    },
+    {
+      "shape": "explicit",
+      "size_mib": "50.0",
+      "input_path": "/var/folders/jz/08cy4rd95fggf6rj8c19zyd80000gn/T/sub2api-memory-comparison-4w1i1m4l/fixtures/body-50.0-0.json",
+      "frame_path": "/tmp/sub2api-memory-optimization-20261006/window-evaluation/explicit-50.0-window512KiB.zst",
+      "raw_bytes": 52441879,
+      "wire_bytes": 33549070,
+      "wire_per_raw": 0.6397381375293589,
+      "window_bytes": 524288,
+      "frame_count": 1,
+      "has_fcs": true,
+      "frame_content_size": 52441879,
+      "dictionary_id": 0,
+      "content_checksum": "XXH64 low 32 bits",
+      "checksum_hex": "2a320eea",
+      "libzstd_exit": 0,
+      "decoded_bytes": 52441879,
+      "sha256_equal": true,
+      "sha256": "e7d5a21d05264e52135a75a8523c29669a313bd5525da26a6c5b677bb1a49cf0",
+      "compressed_sha256": "962ccd105ea5f142b81a06dd61f3d45330c5be4f618d0b283b1378ebab30adc0",
+      "comparison": {
+        "2MiB": {
+          "wire_bytes": 33486320,
+          "wire_delta_bytes": 62750,
+          "wire_delta_percent": 0.18738995506224632
+        },
+        "8MiB": {
+          "wire_bytes": 33475081,
+          "wire_delta_bytes": 73989,
+          "wire_delta_percent": 0.22102709773876275
+        }
+      }
+    }
+  ]
+}

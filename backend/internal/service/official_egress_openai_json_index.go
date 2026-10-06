@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/maphash"
+	"slices"
 	"sort"
+	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -208,6 +210,8 @@ func officialJSONRawIndexForOriginal(original []byte) *officialJSONRawIndex {
 type officialJSONRawScanner struct {
 	index *officialJSONRawIndex
 	pos   int
+	// 字段名只在本次扫描内复用，保留独立副本，避免短键把大正文长期保活。
+	keys map[string]string
 }
 
 func (s *officialJSONRawScanner) skipSpace() {
@@ -405,21 +409,45 @@ func (s *officialJSONRawScanner) parseKey() (string, error) {
 	}
 	s.pos = end
 	if !escaped && utf8.Valid(segment) {
-		return string(segment), nil
+		return s.copyKey(segment), nil
 	}
 	unescaped, unescapeErr := officialJSONUnescape(s.index.scratch[:0], segment)
 	s.index.scratch = unescaped[:0]
 	if unescapeErr != nil {
 		return "", unescapeErr
 	}
-	return string(unescaped), nil
+	return s.copyKey(unescaped), nil
+}
+
+// copyKey 对重复短键只分配一次；任意用户键达到上限后仍照常复制，不建立无界缓存。
+func (s *officialJSONRawScanner) copyKey(value []byte) string {
+	if s.index.validateOnly {
+		return ""
+	}
+	if len(value) > 128 || len(s.index.nodes) < officialJSONSharedDecodeMinNodes {
+		return string(value)
+	}
+	if key, found := s.keys[string(value)]; found {
+		return key
+	}
+	key := string(value)
+	if len(s.keys) < 128 {
+		if s.keys == nil {
+			s.keys = make(map[string]string)
+		}
+		s.keys[key] = key
+	}
+	return key
 }
 
 func (s *officialJSONRawScanner) parseObject(depth int) (int32, error) {
 	body := s.index.body
 	start := s.pos
 	s.pos++ // '{'
+	// 小对象先用栈上空间收集成员，最终仅复制一次；长历史中的消息项不再经历多轮扩容。
+	var localMembers [8]officialJSONRawMember
 	var members []officialJSONRawMember
+	memberCount := 0
 	s.skipSpace()
 	if s.pos < len(body) && body[s.pos] == '}' {
 		s.pos++
@@ -449,7 +477,17 @@ func (s *officialJSONRawScanner) parseObject(depth int) (int32, error) {
 			return -1, err
 		}
 		if !s.index.validateOnly {
-			members = append(members, officialJSONRawMember{key: key, node: child})
+			member := officialJSONRawMember{key: key, node: child}
+			if memberCount < len(localMembers) {
+				localMembers[memberCount] = member
+			} else {
+				if members == nil {
+					members = make([]officialJSONRawMember, len(localMembers), 2*len(localMembers))
+					copy(members, localMembers[:])
+				}
+				members = append(members, member)
+			}
+			memberCount++
 		}
 		s.skipSpace()
 		if s.pos >= len(body) {
@@ -462,6 +500,9 @@ func (s *officialJSONRawScanner) parseObject(depth int) (int32, error) {
 			s.pos++
 			if s.index.validateOnly {
 				return -1, nil
+			}
+			if members == nil {
+				members = append([]officialJSONRawMember(nil), localMembers[:memberCount]...)
 			}
 			return s.addNode(officialJSONRawNode{
 				kind:    officialJSONRawKindObject,
@@ -668,7 +709,12 @@ func (index *officialJSONRawIndex) hashObjectMembers(members []officialJSONRawMe
 	if index.skipDigest {
 		return 0
 	}
-	pairs := make([]officialJSONHashPair, 0, len(members))
+	// 绝大多数消息项只有几个字段，栈上缓冲避免每个对象分配排序切片。
+	var local [16]officialJSONHashPair
+	pairs := local[:0]
+	if len(members) > len(local) {
+		pairs = make([]officialJSONHashPair, 0, len(members))
+	}
 	for _, member := range members {
 		pairs = append(pairs, officialJSONHashPair{key: member.key, hash: index.nodes[member.node].hash})
 	}
@@ -677,7 +723,7 @@ func (index *officialJSONRawIndex) hashObjectMembers(members []officialJSONRawMe
 
 // hashPairs 要求调用方传入可能含重复键的键值摘要对；稳定排序后同键取最后一项。
 func (index *officialJSONRawIndex) hashPairs(pairs []officialJSONHashPair) uint64 {
-	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	slices.SortStableFunc(pairs, func(a, b officialJSONHashPair) int { return strings.Compare(a.key, b.key) })
 	var h maphash.Hash
 	h.SetSeed(index.seed)
 	_ = h.WriteByte('{')
@@ -740,7 +786,11 @@ func (index *officialJSONRawIndex) hashValue(value any) (uint64, bool) {
 	case json.Number:
 		return index.hashString('n', string(typed)), true
 	case map[string]any:
-		pairs := make([]officialJSONHashPair, 0, len(typed))
+		var local [16]officialJSONHashPair
+		pairs := local[:0]
+		if len(typed) > len(local) {
+			pairs = make([]officialJSONHashPair, 0, len(typed))
+		}
 		for key, child := range typed {
 			childHash, ok := index.hashValue(child)
 			if !ok {
@@ -750,15 +800,19 @@ func (index *officialJSONRawIndex) hashValue(value any) (uint64, bool) {
 		}
 		return index.hashPairs(pairs), true
 	case []any:
-		hashes := make([]uint64, 0, len(typed))
+		var h maphash.Hash
+		h.SetSeed(index.seed)
+		_ = h.WriteByte('[')
+		var buf [8]byte
 		for _, child := range typed {
 			childHash, ok := index.hashValue(child)
 			if !ok {
 				return 0, false
 			}
-			hashes = append(hashes, childHash)
+			binary.LittleEndian.PutUint64(buf[:], childHash)
+			_, _ = h.Write(buf[:])
 		}
-		return index.hashUint64s('[', hashes), true
+		return h.Sum64(), true
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		encoded, err := json.Marshal(typed)
 		if err != nil {

@@ -405,7 +405,23 @@ func captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(
 // 即原样走改造前的入口。方法放在契约所在的本文件：工作区文件只管正文内存，不参与出站定型，不应因引用
 // 契约类型而被出站定型面扫描（tools/check_ledger_completeness.py）计为新的定型面。
 func (b *officialForwardHTTPBody) captureContract(c *gin.Context, body []byte) (*officialOpenAIHTTPBodyContract, error) {
-	return captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, b.indexFor(body))
+	contract, err := captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, body, b.indexFor(body))
+	if err == nil && b != nil && b.wsIngress != nil && b.hasUnmaterializedWSHTTPBridgeBody(body) {
+		// input 契约仍来自完整原文；身份、并行调用等小字段来自入口已归一化的版本。
+		// 两者在 prepare 前已属于同一逻辑正文，不能用未隔离的原始身份派生 Header。
+		headers, captureErr := captureOfficialOpenAIHTTPBodyContractForRequestWithIndex(c, b.bridge.headerIndex.body, b.bridge.headerIndex)
+		if captureErr != nil {
+			return nil, captureErr
+		}
+		headers.additionalTools, headers.callIDs = contract.additionalTools, contract.callIDs
+		contract = headers
+	}
+	if err == nil && b != nil && b.liteDefaults {
+		// 契约过去在 Lite 归一化之后捕获，因此字段缺省和显式 true 都已变为 false。
+		contract.parallelPresent = true
+		contract.parallelToolCalls = false
+	}
+	return contract, err
 }
 
 // bindGeneratedOfficialOpenAIHTTPBodyContract 绑定 Chat Completions/Messages
@@ -595,12 +611,13 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	// 本函数内使用，其中的值只会被比较或重新编码进新正文，不会保存到请求之外。同一索引随后
 	// 直接交给拼接编码器，不再为同一正文重复扫描。
 	// 官方出站 HTTP 转发主干的正文工作区已为这一版本的正文建过索引时直接复用（问题四 M2-c）。
-	payload, bodyIndex, decodeErr := decodeOfficialJSONObjectSharingBodyWithIndex(
-		body, officialForwardHTTPBodyFromContext(req.Context()).indexFor(body),
-	)
+	forwardBody := officialForwardHTTPBodyFromContext(req.Context())
+	payload, bodyIndex, decodeErr := forwardBody.decodeFinalizerPayload(body)
 	if decodeErr != nil {
 		return nil, result, fmt.Errorf("decode OpenAI official egress body: %w", decodeErr)
 	}
+	// HTTP 工作区可把已经验证的小字段修改留到最终定型，避免提前物化一整份历史正文。
+	deferredModified := forwardBody.applyFinalizerFields(payload, body)
 	toolPresentationModified := false
 	if !plan.IsCompact {
 		toolPresentationModified, err = officialCodexNormalizeDerivedToolPresentation(
@@ -612,6 +629,14 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			return nil, result, err
 		}
 		if toolPresentationModified {
+			if forwardBody.hasUnmaterializedWSHTTPBridgeBody(body) {
+				// 复杂工具呈现需要以旧 bridge 规范化结果为拼接基准，按需恢复后沿用原定型流程。
+				body, err = forwardBody.materializeWSHTTPBridgeBody(body)
+				if err != nil {
+					return nil, result, fmt.Errorf("恢复 WS HTTP bridge 正文：%w", err)
+				}
+				bodyIndex = nil
+			}
 			body, err = marshalOfficialJSONObjectPreservingOrderAndRawWithIndex(payload, body, bodyIndex)
 			if err != nil {
 				return nil, result, fmt.Errorf("编码 Codex 派生工具呈现：%w", err)
@@ -623,7 +648,7 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	// 终态修正改写正文时不再拼成整段字节，而是产出按线序排列的顶层成员（问题四 M1 第三项）：
 	// 未改动的大字段直接引用 body 的区间，编译器按成员定型 wire JSON，整段语义正文只在确有
 	// 读取方（冻结 Executor、诊断等）读取请求体时才物化。未改写时照旧直接使用 body。
-	finalMembers, finalizeModified, err := finalizeOfficialOpenAIHTTPBodyPayloadMembers(
+	finalMembers, finalizeModified, err := forwardBody.finalizeHTTPBodyPayloadMembers(
 		payload,
 		body,
 		bodyIndex,
@@ -639,6 +664,17 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	)
 	if err != nil {
 		return nil, result, err
+	}
+	if deferredModified && !finalizeModified {
+		// 覆盖层可能已经补齐全部默认值，使 Finalizer 自身判定为未修改；此时仍须编码覆盖后的
+		// payload，不能重新挂回缺少这些小字段的入口原文。
+		finalMembers, err = marshalOfficialOpenAIHTTPJSONMembersPreservingRawWithIndex(
+			egressContext.ProfileMode(), payload, plan.IsCompact, body, bodyIndex,
+		)
+		if err != nil {
+			return nil, result, fmt.Errorf("serialize deferred OpenAI official egress body: %w", err)
+		}
+		finalizeModified = true
 	}
 	bodyModified := finalizeModified || toolPresentationModified
 	if bodyModified {
@@ -683,7 +719,6 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	// body 是官方出站 HTTP 转发主干工作区最近一次重编码物化的正文时，请求体按成员装配且成员值换成
 	// 其来源（调用方原始正文区间或小段副本，逐字节相同），不再引用这份整段正文，Forward 在上游
 	// attempt 期间即可放下它（问题四 M2-a）。其余情况与过去相同。
-	forwardBody := officialForwardHTTPBodyFromContext(req.Context())
 	if finalizeModified {
 		forwardBody.rebaseFinalMembers(body, finalMembers)
 		resetOfficialEgressRequestBodyMembers(req, finalMembers)

@@ -1,0 +1,9 @@
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress	8.462s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/bindingcontract	0.866s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/compositioncontract	1.387s
+?   	github.com/Wei-Shaw/sub2api/internal/officialegress/finalwirecapture	[no test files]
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/finalwirecontract	1.347s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract	5.534s
+?   	github.com/Wei-Shaw/sub2api/internal/officialegress/receiptcontract	[no test files]
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/releasecontract	1.337s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/sealcontract	1.319s

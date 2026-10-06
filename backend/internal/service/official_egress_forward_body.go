@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
@@ -29,16 +31,31 @@ import (
 //   - 上游 attempt（编译、签名、zstd 压缩与发送）期间，Forward 暂时放下这份新正文、请求视图、lineage
 //     基准与对象树，attempt 返回后再按成员物化出逐字节相同的正文放回原处，供错误处理与重试使用。
 //
-// 工作区只在官方出站 HTTP 路径上创建（Forward 中 officialOpenAIHTTPEnabled 为真时），经 ctx 传给
-// 同一次调用的 Finalizer；其余路径拿到的是 nil。所有方法对 nil 接收者原样调用改造前的函数或什么都
-// 不做，非官方出站路径（API Key、透传、兼容转换、WS 及 WS→HTTP 回落等）代码路径与行为不变。
+// 工作区在官方出站 HTTP Forward 和 WS→HTTP 单轮桥接路径上创建，经 ctx 传给同一次调用的
+// Finalizer。桥接先保留准备好的逻辑树，再按规范化片段输出，避免 prepare 对整段正文重编码。
+// 其余路径拿到 nil；所有方法对 nil 接收者原样调用改造前的函数或不做任何事。
 //
 // 正文按只读约束使用（与 openai_json_rawview.go 的零拷贝视图相同）：以“同一底层数组起点、同一
 // 长度”识别正文版本，正文一经产出不再原地改写，因此同一切片必然是同一内容；对象树与成员里引用
 // 正文的值只会被比较或重新编码进新正文，不会保存到请求之外。
 type officialForwardHTTPBody struct {
+	// bridge 仅用于官方 WS→HTTP 单轮桥接：准备阶段保留逻辑正文，Finalizer 才按规范化片段写出。
+	bridge *openAIWSHTTPBridgeBody
+	// wsIngress 是 WS 入口已校验但尚未拼接的大 input 与小字段正文。
+	wsIngress *openAIWSDeferredIngressBody
 	// ingress 是调用方传入 Forward 的原始正文，整个请求期间由调用方持有。
 	ingress []byte
+
+	// liteDefaults 是已在入口完成验证的小字段。普通 Lite 请求的 reasoning/parallel 默认值
+	// 延迟到对象树与 Finalizer 应用，避免为了补一个字段先重建整份历史正文。
+	liteDefaults bool
+	// deferredFields 只包含允许延迟的少数顶层小字段；input 或其他业务字段改变时不使用此路径。
+	// value 为 nil 表示删除，非 nil 是已经按旧规则编码的完整 JSON 值。
+	deferredBody   []byte
+	deferredFields map[string]json.RawMessage
+	// finalizerPayload 只在 Forward 与 Finalizer 之间移交一次；定型取得后立即清空，重试仍从正文恢复。
+	finalizerBody    []byte
+	finalizerPayload map[string]any
 
 	// indexBody 与 index：当前正文版本的索引缓存。只保留一份，正文换版本即替换。scans 记录实际
 	// 扫描正文建立索引的次数，只用于观测（测试据此验证同一版本正文只扫描一次）。
@@ -155,14 +172,224 @@ func (b *officialForwardHTTPBody) decodeRequestView(c *gin.Context, view openAIR
 	}
 	if index := b.indexFor(view.body); index != nil && index.nodes[index.root].kind == officialJSONRawKindObject {
 		if object, ok := index.decodeValueSharingBody(index.root).(map[string]any); ok {
+			b.applyLiteDefaults(object)
+			b.applyDeferredFields(object, view.body)
 			return object, nil
 		}
 	}
-	return getOpenAIRequestBodyMap(c, view.body)
+	object, err := getOpenAIRequestBodyMap(c, view.body)
+	if err == nil {
+		b.applyLiteDefaults(object)
+		b.applyDeferredFields(object, view.body)
+	}
+	return object, err
 }
 
-// reencodeRequestBody 用对象树 payload 整体重编码 *body，返回新正文并同时写回 *body，结果与
-// `marshalOfficialJSONObjectPreservingOrderAndRaw(payload, *body)` 逐字节相同（出错时返回 nil，*body 也置为 nil）。
+// normalizeResponsesLitePayloadForAccount 的复杂路径保持原逻辑；可独立校验的小字段延迟到本次
+// HTTP 正文定型时写出。没有工作区的 API Key、透传和 WS 路径仍立即归一化。
+func (b *officialForwardHTTPBody) normalizeResponsesLitePayloadForAccount(body []byte, account *Account) ([]byte, bool, error) {
+	if b != nil && account != nil && account.IsOpenAIOAuthLike() {
+		_, handled, err := normalizeOpenAIResponsesLiteHeaderFields(body)
+		if handled {
+			if err == nil {
+				b.liteDefaults = true
+			}
+			return body, false, err
+		}
+	}
+	return normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+}
+
+func (b *officialForwardHTTPBody) applyLiteDefaults(payload map[string]any) {
+	if b == nil || !b.liteDefaults || payload == nil {
+		return
+	}
+	// 每次重新解码后独立补齐，避免共享的小 map 被后续模型归一化改写。
+	_, _ = ensureOpenAIResponsesLiteReasoningContext(payload)
+	payload["parallel_tool_calls"] = false
+}
+
+func (b *officialForwardHTTPBody) applyDeferredFields(payload map[string]any, body []byte) bool {
+	if b == nil || payload == nil || !officialForwardSameBody(body, b.deferredBody) {
+		return false
+	}
+	for name, raw := range b.deferredFields {
+		if raw == nil {
+			delete(payload, name)
+			continue
+		}
+		// 小字段已经由拼接编码器验证成功；重新解码给本次调用，防止 map 改写污染重试基准。
+		value, err := decodeOfficialJSONValueUseNumber(raw)
+		if err == nil {
+			payload[name] = value
+		}
+	}
+	return len(b.deferredFields) > 0
+}
+
+// applyFinalizerFields 同时恢复 Lite 默认值与小字段覆盖。移交对象树可能早已带有默认值，
+// 因此须与原文字段比较；不能只依赖 Finalizer 就地修改的返回值来决定是否写出新正文。
+func (b *officialForwardHTTPBody) applyFinalizerFields(payload map[string]any, body []byte) bool {
+	if b == nil || payload == nil {
+		return false
+	}
+	modified := false
+	if b.liteDefaults {
+		b.applyLiteDefaults(payload)
+		reasoningContext := openAIBodyGet(body, "reasoning.context")
+		parallel := openAIBodyGet(body, "parallel_tool_calls")
+		modified = reasoningContext.Type != gjson.String || reasoningContext.String() != "all_turns" || parallel.Type != gjson.False
+	}
+	return b.applyDeferredFields(payload, body) || modified
+}
+
+// deferSmallFields 仅在全部大字段逐值相等时延迟少量顶层差异。数组过滤器即使没有改变 input
+// 也会标记 Modified；过去这会重建整份正文。小字段留到 Finalizer 一并写出，正文相关读取仍
+// 从原文取得 input/model 等不变字段，对象树读取则通过 applyDeferredFields 恢复同一语义。
+func (b *officialForwardHTTPBody) deferSmallFields(payload map[string]any, base []byte, index *officialJSONRawIndex, members []officialegress.JSONObjectMember) bool {
+	if b == nil || !b.liteDefaults || index == nil || index.nodes[index.root].kind != officialJSONRawKindObject {
+		return false
+	}
+	allowed := func(name string) bool {
+		switch name {
+		case "include", "reasoning", "parallel_tool_calls", "prompt_cache_key", "client_metadata":
+			return true
+		default:
+			return false
+		}
+	}
+	changed := make(map[string]bool)
+	for _, name := range index.uniqueKeys(index.root) {
+		value, exists := payload[name]
+		if exists && index.equals(index.memberNode(index.root, name), value) {
+			continue
+		}
+		if !allowed(name) {
+			return false
+		}
+		if name == "prompt_cache_key" {
+			key, ok := value.(string)
+			if !exists || !ok || strings.TrimSpace(key) == "" {
+				// 空键或删除会启用完整正文内容回退，必须立即物化，不能沿用原键。
+				return false
+			}
+		}
+		if name == "reasoning" && !officialForwardOnlyReasoningContextChanged(index, index.memberNode(index.root, name), value) {
+			return false
+		}
+		changed[name] = exists
+	}
+	for name := range payload {
+		if index.memberNode(index.root, name) >= 0 {
+			continue
+		}
+		if !allowed(name) {
+			return false
+		}
+		if name == "prompt_cache_key" {
+			key, ok := payload[name].(string)
+			if !ok || strings.TrimSpace(key) == "" {
+				return false
+			}
+		}
+		if name == "reasoning" && !officialForwardOnlyReasoningContextChanged(index, -1, payload[name]) {
+			return false
+		}
+		changed[name] = true
+	}
+	fields := make(map[string]json.RawMessage, len(changed))
+	for name, present := range changed {
+		if !present {
+			fields[name] = nil
+		}
+	}
+	totalBytes := 0
+	for _, member := range members {
+		if !changed[member.Name] {
+			continue
+		}
+		size := len(member.Value)
+		if member.ValueSegments != nil {
+			size = 0
+			for _, segment := range member.ValueSegments {
+				size += len(segment)
+			}
+		}
+		totalBytes += size
+		if totalBytes > officialForwardDetachLocateMinBytes {
+			return false
+		}
+		raw := make([]byte, 0, size)
+		if member.ValueSegments == nil {
+			raw = append(raw, member.Value...)
+		} else {
+			for _, segment := range member.ValueSegments {
+				raw = append(raw, segment...)
+			}
+		}
+		fields[member.Name] = raw
+	}
+	b.deferredBody, b.deferredFields = base, fields
+	return true
+}
+
+// reasoning.effort 等值会被后续原文读取方使用，仅 context 默认值允许延迟。
+func officialForwardOnlyReasoningContextChanged(index *officialJSONRawIndex, node int32, value any) bool {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if node < 0 || index.nodes[node].kind == officialJSONRawKindNull {
+		return len(object) == 1 && object["context"] == "all_turns"
+	}
+	if index.nodes[node].kind != officialJSONRawKindObject {
+		return false
+	}
+	for _, name := range index.uniqueKeys(node) {
+		if name == "context" {
+			continue
+		}
+		child, exists := object[name]
+		if !exists || !index.equals(index.memberNode(node, name), child) {
+			return false
+		}
+	}
+	for name := range object {
+		if name != "context" && index.memberNode(node, name) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// carryDeferredFields 只用于已知保留覆盖层字段的局部 input/拒绝字段转换；变换后的正文仍需
+// 在对象树和 Finalizer 中应用同一覆盖层，不应因底层切片换版而丢失已经完成的业务修改。
+func (b *officialForwardHTTPBody) carryDeferredFields(before, after []byte) {
+	if b != nil && officialForwardSameBody(before, b.deferredBody) {
+		b.deferredBody = after
+	}
+}
+
+// sessionHashBody 供正文仍未物化时读取已作用域化的 prompt_cache_key；头部优先级由原会话
+// 哈希函数保持。这里只在非空字符串存在时用小对象投影，其他情况继续使用完整原文做内容回退。
+func (b *officialForwardHTTPBody) sessionHashBody(body []byte) []byte {
+	if b == nil || !officialForwardSameBody(body, b.deferredBody) {
+		return body
+	}
+	raw, changed := b.deferredFields["prompt_cache_key"]
+	if !changed || strings.TrimSpace(gjson.ParseBytes(raw).String()) == "" {
+		return body
+	}
+	out := make([]byte, 0, len(raw)+32)
+	out = append(out, `{"prompt_cache_key":`...)
+	out = append(out, raw...)
+	return append(out, '}')
+}
+
+// reencodeRequestBody 用对象树 payload 更新 *body。一般路径返回并写回与旧保序编码器逐字节相同的正文；
+// 经 Lite 校验且只改变受控小字段时保留原切片，将差异存为覆盖层，交给对象树读取方和 Finalizer 应用。
+// 覆盖路径中的原文读取方只读取没有变化的业务字段，会话哈希单独通过 sessionHashBody 取得新缓存键。
+// 出错时返回 nil，*body 也置为 nil。
 // 调用方沿用改造前的写法 `body, err = w.reencodeRequestBody(payload, &body, ...)` 接收；传入正文的地址
 // 只是为了在物化新正文之前放下旧正文。
 //
@@ -186,12 +413,20 @@ func (b *officialForwardHTTPBody) reencodeRequestBody(
 	index := b.indexFor(base)
 	index.ensureDigests()
 	members, err := marshalOfficialOrderedJSONObjectMembersPreservingRawWithIndex(payload, nil, base, index)
-	b.members, b.rebuilt, b.spans = nil, nil, nil
 	if err != nil {
 		*body = nil
 		return nil, err
 	}
+	if b.deferSmallFields(payload, base, index, members) {
+		// 正文底层数组没有改变，现有对象树也已是覆盖后的语义；继续交给 Finalizer，避免再解码。
+		*reqBody = payload
+		return base, nil
+	}
+	b.deferredBody, b.deferredFields = nil, nil
+	// 当前成员可能来自上一次物化结果，先沿已有区间回指，再清空旧物化状态。
+	b.rebaseFinalMembers(base, members)
 	b.detachMembersFrom(members, base)
+	b.members, b.rebuilt, b.spans = nil, nil, nil
 	*reqBody = nil
 	*body = nil
 	view.body = nil
@@ -202,15 +437,32 @@ func (b *officialForwardHTTPBody) reencodeRequestBody(
 	return b.rebuilt, nil
 }
 
-// releaseRequestMap 在官方出站 HTTP 路径进入定型与上游 attempt 之前放下对象树（问题四 M2-a）。只在请求
-// 视图与当前正文是同一版本时放下：此时之后需要对象树的地方（上游返回 invalid_encrypted_content 后的
-// 重试）会由 ensureReqBody 从同一正文重新解码，内容与放下的树相同；二者不一致（失效密文重试已改写
+// releaseRequestMap 在官方出站 HTTP 路径进入定型之前，把对象树移交给 Finalizer，避免重复解码。只在请求
+// 视图与当前正文是同一版本时移交：此时之后需要对象树的地方（上游返回 invalid_encrypted_content 后的
+// 重试）会由 ensureReqBody 从同一正文与覆盖层重新解码；二者不一致（失效密文重试已改写
 // 正文而视图仍是旧版本）时保留，行为与过去完全相同。nil 工作区不做任何事。
 func (b *officialForwardHTTPBody) releaseRequestMap(reqBody *map[string]any, view openAIRequestView, body []byte) {
 	if b == nil || !officialForwardSameBody(view.body, body) {
 		return
 	}
+	b.finalizerBody, b.finalizerPayload = body, *reqBody
 	*reqBody = nil
+}
+
+// decodeFinalizerPayload 接收 Forward 移交的最后一棵对象树。map 不复制，所有权只属于本次
+// Finalizer；后续重试无法取得它，从未变的正文及小字段覆盖层重新解码。
+func (b *officialForwardHTTPBody) decodeFinalizerPayload(body []byte) (map[string]any, *officialJSONRawIndex, error) {
+	if b != nil && b.finalizerPayload != nil && officialForwardSameBody(body, b.finalizerBody) {
+		payload := b.finalizerPayload
+		b.finalizerBody, b.finalizerPayload = nil, nil
+		index := b.indexFor(body)
+		index.ensureDigests()
+		return payload, index, nil
+	}
+	if b != nil {
+		b.finalizerBody, b.finalizerPayload = nil, nil
+	}
+	return decodeOfficialJSONObjectSharingBodyWithIndex(body, b.indexFor(body))
 }
 
 // detachMembersFrom 让成员值不再引用 base（改写前的中间版本正文）：与调用方原始正文同名成员逐字节
@@ -222,6 +474,10 @@ func (b *officialForwardHTTPBody) detachMembersFrom(members []officialegress.JSO
 	}
 	large := make(map[string]int)
 	for i := range members {
+		if members[i].ValueSegments != nil {
+			b.detachMemberSegmentsFrom(&members[i], base)
+			continue
+		}
 		value := members[i].Value
 		if officialForwardOffsetWithin(value, base) < 0 {
 			continue
@@ -255,6 +511,27 @@ func (b *officialForwardHTTPBody) detachMembersFrom(members []officialegress.JSO
 	})
 }
 
+// detachMemberSegmentsFrom 把改动数组中未变的历史元素回指到入口原文。数组整体因插入指令而变化，
+// 但当前 base 中同名数组通常仍与入口完全相同；比较一次大数组后，各元素只按偏移换片段。
+func (b *officialForwardHTTPBody) detachMemberSegmentsFrom(member *officialegress.JSONObjectMember, base []byte) {
+	baseValue := openAIBodyGet(base, member.Name)
+	ingressValue := openAIBodyGet(b.ingress, member.Name)
+	var baseBytes, ingressBytes []byte
+	if baseValue.Raw != "" && baseValue.Raw == ingressValue.Raw &&
+		baseValue.Index >= 0 && baseValue.Index+len(baseValue.Raw) <= len(base) &&
+		ingressValue.Index >= 0 && ingressValue.Index+len(ingressValue.Raw) <= len(b.ingress) {
+		baseBytes = base[baseValue.Index : baseValue.Index+len(baseValue.Raw)]
+		ingressBytes = b.ingress[ingressValue.Index : ingressValue.Index+len(ingressValue.Raw)]
+	}
+	for i, segment := range member.ValueSegments {
+		if offset := officialForwardOffsetWithin(segment, baseBytes); offset >= 0 {
+			member.ValueSegments[i] = ingressBytes[offset : offset+len(segment) : offset+len(segment)]
+		} else if len(segment) < officialForwardDetachLocateMinBytes && officialForwardOffsetWithin(segment, base) >= 0 {
+			member.ValueSegments[i] = append([]byte(nil), segment...)
+		}
+	}
+}
+
 // officialForwardMaterializeMembers 把成员依次写成顶层对象（与 officialegress.AppendJSONObjectMembers
 // 逐字节相同），并记下每个成员值在结果中的区间与来源。
 func officialForwardMaterializeMembers(members []officialegress.JSONObjectMember) ([]byte, []officialForwardBodySpan) {
@@ -267,9 +544,15 @@ func officialForwardMaterializeMembers(members []officialegress.JSONObjectMember
 		}
 		out = append(out, member.QuotedName...)
 		out = append(out, ':')
-		start := len(out)
-		out = append(out, member.Value...)
-		spans = append(spans, officialForwardBodySpan{start: start, end: len(out), source: member.Value})
+		values := member.ValueSegments
+		if values == nil {
+			values = [][]byte{member.Value}
+		}
+		for _, value := range values {
+			start := len(out)
+			out = append(out, value...)
+			spans = append(spans, officialForwardBodySpan{start: start, end: len(out), source: value})
+		}
 	}
 	return append(out, '}'), spans
 }
@@ -296,8 +579,43 @@ func (b *officialForwardHTTPBody) rebaseFinalMembers(body []byte, members []offi
 		return
 	}
 	for i := range members {
-		members[i].Value = b.sourceOf(members[i].Value)
+		if members[i].ValueSegments != nil {
+			for j := range members[i].ValueSegments {
+				members[i].ValueSegments[j] = b.sourceOf(members[i].ValueSegments[j])
+			}
+			continue
+		}
+		value := members[i].Value
+		if source := b.sourceOf(value); !officialForwardSameBody(source, value) {
+			members[i].Value = source
+		} else if segments := b.sourceSegmentsOf(value); len(segments) > 1 {
+			members[i].Value = nil
+			members[i].ValueSegments = segments
+		}
 	}
+}
+
+// sourceSegmentsOf 处理一个数组值横跨多个原始片段的情况；中间只要出现未登记区间就原样保留，
+// 不凭内容猜测来源。由成员物化的数组片段连同标点均有 span，因此可完整恢复原分段表示。
+func (b *officialForwardHTTPBody) sourceSegmentsOf(value []byte) [][]byte {
+	offset := officialForwardOffsetWithin(value, b.rebuilt)
+	if offset < 0 {
+		return nil
+	}
+	end := offset + len(value)
+	i := sort.Search(len(b.spans), func(k int) bool { return b.spans[k].end > offset })
+	var segments [][]byte
+	for offset < end {
+		if i >= len(b.spans) || b.spans[i].start > offset || b.spans[i].end <= offset {
+			return nil
+		}
+		span := b.spans[i]
+		to := min(end, span.end)
+		segments = append(segments, span.source[offset-span.start:to-span.start:to-span.start])
+		offset = to
+		i++
+	}
+	return segments
 }
 
 // membersFor 在 body 正是最近一次 reencode 物化出的正文时返回产出它的顶层成员（依次写出与 body
@@ -317,7 +635,15 @@ func (b *officialForwardHTTPBody) membersFor(body []byte) []officialegress.JSONO
 // attempt 返回后不再无条件恢复（问题四 M3-a）：成功路径只需要 service_tier（serviceTier 从成员读出），
 // 响应流式期间也不再保活整段正文；错误处理、compact 回退与重试这些需要正文的分支入口调用 restore。
 func (b *officialForwardHTTPBody) park(body *[]byte, view *openAIRequestView, lineage *[]byte) {
-	if b == nil || b.parked || b.rebuilt == nil || !officialForwardSameBody(*body, b.rebuilt) {
+	if b == nil || b.parked {
+		return
+	}
+	if b.rebuilt == nil {
+		// 只有小字段覆盖层时没有中间正文可释放，但 Finalizer 完成后仍应放下对象索引。
+		b.index, b.indexBody = nil, nil
+		return
+	}
+	if !officialForwardSameBody(*body, b.rebuilt) {
 		return
 	}
 	b.parked = true
@@ -377,5 +703,10 @@ func (b *officialForwardHTTPBody) normalizeCompactionTriggerInputOrder(body []by
 	if b == nil {
 		return NormalizeCompactionTriggerInputOrder(body)
 	}
-	return normalizeCompactionTriggerInputOrderWithIndex(body, b.indexFor(body))
+	normalized, changed, err := normalizeCompactionTriggerInputOrderWithIndex(body, b.indexFor(body))
+	if err == nil && changed && officialForwardSameBody(body, b.deferredBody) {
+		// 此转换只调整 input 项的位置，其余小字段覆盖继续绑定到新的正文版本。
+		b.deferredBody = normalized
+	}
+	return normalized, changed, err
 }

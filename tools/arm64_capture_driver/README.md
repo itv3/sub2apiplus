@@ -42,17 +42,93 @@
 
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
-1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
-2. 采集主机：先跑入口门禁 `ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash driver/entry-gates.sh <bundle> <分支> <40 位提交>`
-   （E2-04，见下文“入口门禁一次运行”：全部门禁、pre-A3 认证、P0 证据与 VC-0 预跑记录都取自这一次运行；只签 pre-A3 认证时
-   仍可单独用 `pre-a3.sh`，工具身份（五摘要）与策略未变时复用最近一次认证——重新部署也不重跑 pre-A3，跨部署复用登记复用
-   收据），再 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练——stage1 建账本前核验本轮认证，缺失即拒绝
-   （账本一建 VC-0 即开始计时，长检查一律放在建账本之前）。新目标首次取证按指南
-   `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
-   closeout 编排必须先执行 `client_launch_probe.py verify --output-dir "$PROBE" --campaign-dir "$PRE"`（坐标取自
-   `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
-   VC-0 预跑记录取自入口门禁的那次运行（主体目录下的 `preflight.json`），建账本之后不再单独预跑；入口门禁之后改了源码时，
-   按下文“VC-0 预跑目标平台门禁”单独补跑一次，通过才建 Formal Campaign。
+阶段合同与完成条件见[指南第四部分](../../docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-driver-entries)。
+目标是“哪里坏修哪里，修好接着跑、整体约 6 小时”；耗时口径与未开放的承接边界以指南为准。
+本机材料统一放 `/Users/czs/Developer/sub2apiplus-evidence/codex-cli/`，服务器活动数据保持冻结数据根。
+
+1. 填写本轮参数，准备干净工具提交与 bundle，受监督部署工具／文档并安装、复验驱动。
+   先 `entry-dryrun.sh start <bundle> <分支> <完整提交> --opening` 在独立演练根空跑；不写正式总账、不发真实请求。
+2. **新目标**：`entry.sh` 完成预检、P0 和 VC-0 原子收口，最后派发 VC-1 首批；失败重跑同一入口，账本不重建。
+   **同目标官方证据复用**：`pre-a3.sh → stage1.sh → vc0-gate-target.sh → stage2.sh`，只收 `EVIDENCE_DECISION=reuse`；
+   已建账本的 stage1 收尾失败仅跑 `stage1-finish.sh`。`pre-all.sh` 可替代 stage2 并继续 VC-2／VC-3。
+3. VC-1 封存和 checkpoint 重放通过后，先完成人工分类审核，再用 `vc23.sh`；批准前必须通过下节离线判据门。
+4. 本机 `driver/local/local-candidate-chain.sh` 形成 A／C／D 提交链及 bundle，上传到参数中的 `$BUNDLE`。
+   ARM64 先 `arm64-vc4-gates.sh`，确认 `ARM64_VC4_GATES_DONE` 和收据通过后再 `vc4-all.sh`，两者不并行。
+   `driver/local/local-vc4.sh` 只解释旧轮次的本机门禁，新轮次不使用。
+5. VC-4 收据通过后，`vc5-precheck.sh --dry-run` → 按批准 `--apply` → `vc5-all.sh`。
+   现成 VC-4／VC-5 整链冻结生产替换用途；只读交付用途须生成对应的受管批次，不直接套用生产驱动计划。
+6. VC-6 按指南经受管批次执行；收尾材料使用下节 `codex_closeout.py`，人工批准后才正式发布。
+
+采集主机上的长任务使用 `ARM64_VC_ENV=<本轮参数> setsid -f bash <驱动脚本> > <本轮日志> 2>&1 < /dev/null`。
+不要用 `nohup`；完成以正式收据为准。脚本路径相对安装根，`$RUNROOT`、bundle 和日志目录须预先从本轮参数确定。
+
+## VC-2 批准前离线判据门
+
+`vc23.sh` 调用 `vc2-approve-and-stage.sh <联合摘要>`，顺序固定为：批准预览批次 →
+`vc2_assertion_preflight.py record --joint <摘要>` → `verify --joint <摘要> --report <报告>` →
+批准批次 → 再次 verify → VC-3 stage-profile。全部由正式冻结清单派发；不是绕过监督器的低层命令串。
+
+预检在封存官方证据上枚举全部官方适用判据，不发请求；候选内部判据仍在 VC-5 验证。
+报告绑定联合摘要、正式预览及读侧输入，任一漂移必须重新生成。人工先审定五清单，驱动预检通过不能代替人工审核。
+草案、预览或预检报告存在不代表 VC-2 完成，必须重放正式 classification 和 checkpoint。
+
+## VC-5 统一准入（`driver/vc5-precheck.sh`）
+
+每次调用先设置本轮 `ARM64_VC_ENV`，不要手填推导得到的 candidate／attempt／画像参数：
+
+```bash
+bash driver/vc5-precheck.sh --dry-run
+bash driver/vc5-precheck.sh --apply --approval <本轮批准文件>
+bash driver/vc5-precheck.sh --consume
+```
+
+* `--dry-run` 在公共前导前执行，零写入、零续签、零请求；输出 `blocked/needs_apply/ready`，前两者退出 3。
+  `blocked` 先修阻塞；`needs_apply` 列出精确补齐动作。即使 ready，尚无合法准入收据仍须批准封存。
+* 批准文件使用 `codex-vc5-admission-approval/v1`，绑定报告的 `admission_key`、完整 `actions`、
+  `seal_admission=true`、`approval_id`、`approved_by`、`approved_at_utc` 与 `expires_at_utc`。
+  使用当前执行账号所有、0600 的普通文件，可由 `VC5_ADMISSION_APPROVAL` 指定；工具不代签。
+* apply 持派发锁重新检查，只写批准的画像／token／有效参数和准入收据；已完成则只读 consume。
+  失败记录补偿结果；已有失败尝试不能盲目重复使用同一批准。consume 重新核对事实、凭据与 apply 事件。
+* 画像内容 Digest 对照 VC-3，文件 SHA-256 对照 inventory，两者不能混用；宿主／容器副本必须一致。
+  管理 JWT 按实际签发合同检查结构、签名、身份和时效，不额外要求 `iss/sub/aud/jti`。
+  文件当前账号所有、无符号链接；0400 旧输入经批准规范化为 0600。最小剩余有效期为
+  `max(21900, VC5_ADMIN_TOKEN_MIN_SECONDS)` 秒，参数默认 43200；日志不输出 token 或密钥。
+* 完成产物是 `$RUNROOT/vc5-admission.json`、有效参数及 `vc5-admission-events/`；`vc5-all.sh` 与派发入口自动消费。
+  准入不创建采集预约、不切网关、不发送模型请求；派发仍执行正式 Campaign／构建／环境门禁。
+
+## 收尾编排（仓库 `tools/codex_closeout.py`）
+
+该入口在可重放 Campaign 的环境中运行，使用已部署的读侧合同；不替代 VC-6 切换、回滚或目标恢复。
+draft 可提前生成指南材料；prepare／gates／publish 在 VC-6 收口后执行。execute 清理的上下文解析要求
+VC-6 已完成，因此先以延期清理决定封存 VC-6，再按新批准实际清理；不能让清理反过来阻塞其必需的完成收据。
+在仓库根执行，所有参数路径使用本轮绝对路径：
+
+```bash
+python3 -B tools/codex_closeout.py draft --campaign <Campaign目录> --candidate <候选ID> --guide <指南路径> --baseline-profile <基线断言画像> --output <隔离草稿目录>
+python3 -B tools/codex_closeout.py prepare --config <收尾配置> --dry-run
+python3 -B tools/codex_closeout.py prepare --config <收尾配置>
+python3 -B tools/codex_closeout.py gates --plan <工作根/plan.json>
+python3 -B tools/codex_closeout.py publish --plan <工作根/plan.json> --guide-approval <指南批准> --publication-approval <发布批准>
+```
+
+`draft` 重放正式材料后输出 `material.json` 与 `guide.md`，人工核对受影响规则后用于 prepare。
+prepare 要求权威仓库已提交且干净，工作根与仓库互不包含；dry-run 不写入，正式 prepare 只生成隔离候选，
+不改权威分支、不推送。第二部分未变时不更新其派生摘要。配置 schema 为 `codex-upgrade-closeout/v1`：
+
+| 字段 | 输入约束 |
+|---|---|
+| `repo/work_root/guide/material/terminal_facts/terminal_relative/tag` | 权威仓库、隔离根、已审核草稿及正式材料、终态事实、仓库内终态相对路径、本轮标识；不重签已存在终态 |
+| `gate` | 精确提供 `driver`（entry-gates.sh）、`vc_env`、`node_modules`；gates 必须 full-gates／re-execute |
+| `deployment_check` | 只读核验脚本、字符串数组 `arguments`、凭证 `inputs`、工作根内 `result` |
+| `cleanup` | defer：`mode/reason/inputs`；execute：脚本、参数、输入、结果、精确 `targets`、`backup` 和 `restore_check` |
+| `push` | 固定 `remote/ref/expected_tip`，ref 为完整分支引用、expected_tip 为完整提交；仅快进 |
+
+execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／canonical，发布另加
+`--cleanup-approval <专项批准>`；无清理条件登记 defer。备份、恢复演练和删除核验绑定同一上下文摘要。
+指南、发布和清理批准均绑定 plan 的 `review_sha256`、scope、批准人、UTC 有效期与 proof；文件为当前账号所有、0600。
+指南批准 schema 为 `guide-review-approval/v1`，其余为 `codex-closeout-operation-approval/v1`。
+只有正式门禁和批准都通过，publish 才快进权威分支、执行已批准收尾并推送；中断只对账既有动作，不自动重派删除／推送。
+完整配置校验与可重入边界见[工具实现](../codex_closeout.py)，机器夹具见[现有测试](../official_client_capture/tests/test_codex_closeout.py)。
 
 ## 入口便宜检查（E1-02）
 
@@ -172,7 +248,7 @@
 * 日志与记录：每次运行的日志与汇总在 `$RUNROOT/entry-runs/<UTC>/`（`run.json`），步骤记录在 `$RUNROOT/entry-steps/`，运行锁在 `$RUNROOT/.entry.lock`。
   `--plan` 只判定不执行；`--inject-mask <步骤>=<目录>` 只供验收（执行这一步时用只读空 tmpfs 遮住目录，制造一次真实的失败）。
 * 相关脚本的变化：
-  * `pre-a3.sh`、`stage1.sh`、`stage1-finish.sh`、`stage2.sh` 保留，供单独补跑某一段或对照旧轮次；入口一律用 `entry.sh`。
+  * `pre-a3.sh`、`stage1.sh`、`stage1-finish.sh`、`stage2.sh` 保留，供同目标官方证据复用及补跑；新目标入口使用 `entry.sh`。
   * 入口门禁 `entry-gates.sh` 新增 `--policy-activation`、`--pre-a3-certification`、`--pre-a3-mode auto|present|run`，由编排器替它定 pre-A3 沿用还是新跑。
   * 便宜检查结束时写 `summary.json`（逐项状态）。
 
@@ -299,14 +375,6 @@
 * 退出码：0 通过（删掉测试树与缓存，末行 `VC0_GATE_TARGET_DONE`）；1 门禁未通过（打印记录位置、保留测试树，末行
   `VC0_GATE_TARGET_FAILED`）；2 用法错误；3 准备或执行失败（`VC0_GATE_TARGET_ABORTED`，没有门禁结论）。未通过按普通 VC-0
   失败处理：修门禁、驱动、环境或源码后重跑同一命令（新主体标识，旧结果留档）。
-
-3. 本机：候选提交链（A／C／D 三段，见 `driver/local/local-candidate-chain.sh`）→ `git bundle` 推到 `$BUNDLE`。本机只做
-   提交与打包，不跑测试。
-4. 采集主机：先 `setsid -f bash driver/arm64-vc4-gates.sh > $RUNROOT/arm64-vc4-gates.out 2>&1 < /dev/null`（ARM64 版本地门禁，
-   见下文“ARM64 全量门禁与 ARM64 版 VC-4 门禁”），末行 `ARM64_VC4_GATES_DONE` 后再
-   `setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`：READY 已在，上传等待立即通过，两者不并行。
-   `driver/local/local-vc4.sh` 是改为 ARM64 门禁之前的本机做法，只为解释旧轮次记录保留，新轮次不用。
-5. 采集主机：`setsid -f bash driver/vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null`。
 
 ## ARM64 全量门禁与 ARM64 版 VC-4 门禁（测试一律在采集主机执行）
 
@@ -452,7 +520,10 @@
   里没有等 CI 的步骤）；后台验证或 CI 失败时暂停续跑，按该轮部署收据的 `rollback_backup` 回滚已部署工具（同样走受监督部署），
   修好后再走一轮；发版前仍须 CI 全绿。
 * 用法（采集主机 root）：`setsid -f bash /root/arm64-capture-driver/driver/fix-and-continue.sh <参数文件> > <日志> 2>&1 < /dev/null`；
-  `--from <步骤>` 续跑（前序步骤在本轮必须有 passed／skipped 记录），`--list` 查看本轮各步骤记录。
+  `--dry-run` 只读检查打包和动作计划；`--from <步骤>` 续跑（前序步骤在本轮必须有 passed／skipped 记录），`--list` 查看本轮各步骤记录。
+* deploy、evolution、deadline-extension、recovery-approve、recovery-authorize 消费 `fix_safety.py` 定义的独立批准，
+  精确绑定动作、部署包／恢复摘要和有效期；缺失只写 approval intent 并停止，不能由参数中的 APPROVER 代签。
+  `APPROVALS_DIR` 指定凭证目录；失败恢复先核对步骤记录与副作用结果，不能靠重复执行补造批准。
 * 步骤：deploy → postdeploy → regression → item-tests → background-validate → evolution → pre-extend → reconcile-runs →
   reconcile-attempt → repair → approve → authorize → extend → accepted → recover。regression 先停下上一轮还在跑的后台验证
   （同一时间只能有一个调度器），再跑入口门禁 regression 组合（参数 REGRESSION_GATES 人工补门禁项）；item-tests 是人工指定的

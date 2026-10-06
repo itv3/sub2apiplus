@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -209,11 +210,7 @@ func (c *Compiler) Compile(
 	if err != nil {
 		return CompiledExecution{}, err
 	}
-	compiledBody := newOwnedReplayableRequestBody(body)
-	if plan.Body.Mode() == RequestBodySingleUse {
-		compiledBody = plan.Body.clone()
-	}
-	request, err := NewCompiledRequest(plan.Method, target, headers, compiledBody)
+	request, err := NewCompiledRequest(plan.Method, target, headers, body)
 	if err != nil {
 		return CompiledExecution{}, err
 	}
@@ -996,12 +993,12 @@ func compileEndpointBody(
 	bodyConditions BodyRuntimeConditions,
 	authentication AttemptAuthenticationInput,
 	identityFacts CodexIdentityFacts,
-) ([]byte, error) {
+) (RequestBody, error) {
 	if body.Mode() == RequestBodySingleUse {
 		if endpoint.Body.Encoding != profilecontract.BodyRawBytes {
-			return nil, errors.New("只有 raw_bytes endpoint 可以使用 single-use Body")
+			return RequestBody{}, errors.New("只有 raw_bytes endpoint 可以使用 single-use Body")
 		}
-		return nil, nil
+		return body.clone(), nil
 	}
 	// 按顶层成员装配且已建好 document 的 Body（Finalizer 按成员交接的终态正文）不物化整段
 	// 正文：顶层对象至少写成 "{}"，一定非空白；JSON 端点直接按 document 定型，只有需要整段
@@ -1012,7 +1009,7 @@ func compileEndpointBody(
 	if !membersDocument {
 		view, ok := body.replayableView()
 		if !ok {
-			return nil, errors.New("replayable Body 无法读取")
+			return RequestBody{}, errors.New("replayable Body 无法读取")
 		}
 		raw = view
 		blank = len(bytes.TrimSpace(raw)) == 0
@@ -1026,13 +1023,13 @@ func compileEndpointBody(
 	}
 	compressed := headerHasToken(headers, "Content-Encoding", "zstd")
 	if compressed && endpoint.Compression != profilecontract.CompressionZstdWhenFeatureEnabled {
-		return nil, errors.New("端点画像不允许 zstd 请求体")
+		return RequestBody{}, errors.New("端点画像不允许 zstd 请求体")
 	}
 	if endpoint.Upgrade != "" && blank {
-		return raw, nil
+		return newOwnedReplayableRequestBody(raw), nil
 	}
 	if endpoint.ID != "oauth_refresh" && authentication.RefreshToken != "" {
-		return nil, errors.New("非 OAuth refresh Body 禁止 RefreshToken")
+		return RequestBody{}, errors.New("非 OAuth refresh Body 禁止 RefreshToken")
 	}
 	var compiled []byte
 	var err error
@@ -1046,13 +1043,13 @@ func compileEndpointBody(
 				compiled = raw
 				break
 			}
-			return nil, errors.New("JSON Body 为空")
+			return RequestBody{}, errors.New("JSON Body 为空")
 		}
 		document := body.jsonDocument()
 		if document == nil {
 			document, err = newOrderedJSONDocument(raw)
 			if err != nil {
-				return nil, fmt.Errorf("解析 JSON Body: %w", err)
+				return RequestBody{}, fmt.Errorf("解析 JSON Body: %w", err)
 			}
 		}
 		if err = injectCompilerOwnedBodyFields(
@@ -1061,33 +1058,91 @@ func compileEndpointBody(
 				section: optional.ClientMetadata, features: features, authentication: authentication,
 			},
 		); err != nil {
-			return nil, err
+			return RequestBody{}, err
 		}
-		compiled, err = orderJSONDocumentWithPolicy(
+		ordered, orderErr := orderedJSONNamesWithPolicy(
 			document, endpoint.Body, features, identityFacts.Conditions,
 			bodyConditions, authentication,
 		)
+		if orderErr != nil {
+			return RequestBody{}, orderErr
+		}
+		if compressed {
+			if !features.EnableRequestCompression {
+				return RequestBody{}, errors.New("Bundle feature 禁止请求压缩")
+			}
+			return compressRequestBodyZstd(
+				features.RequestCompressionLevel, int64(document.encodedNamesLength(ordered)),
+				func(writer io.Writer) error { return document.writeNames(writer, ordered) },
+			)
+		}
+		compiled = document.encodeNames(ordered)
 	case profilecontract.BodyFormUrlencoded:
 		compiled, err = orderFormBody(
 			wholeBody(), endpoint.Body, features, identityFacts.Conditions,
 			bodyConditions, authentication,
 		)
 	default:
-		return nil, fmt.Errorf("compiler 不支持 Body encoding: %s", endpoint.Body.Encoding)
+		return RequestBody{}, fmt.Errorf("compiler 不支持 Body encoding: %s", endpoint.Body.Encoding)
 	}
 	if err != nil {
-		return nil, err
+		return RequestBody{}, err
 	}
 	if !compressed {
-		return compiled, nil
+		return newOwnedReplayableRequestBody(compiled), nil
 	}
 	if !features.EnableRequestCompression {
-		return nil, errors.New("Bundle feature 禁止请求压缩")
+		return RequestBody{}, errors.New("Bundle feature 禁止请求压缩")
 	}
-	return compressCompiledBodyZstd(features.RequestCompressionLevel, compiled)
+	return compressRequestBodyZstd(
+		features.RequestCompressionLevel, int64(len(compiled)),
+		func(writer io.Writer) error { return writeJSONDocumentPart(writer, compiled) },
+	)
 }
 
-// compressCompiledBodyZstd 用画像给定的等级把定型正文压成单个 zstd 帧。
+// requestBodyZstdWindowSize 把正式流式压缩的历史窗口限制为 512KiB。
+// 固定正文测量相较 2MiB 窗口再减少约 1.5MiB 分配；压缩等级仍由画像决定。
+// 窗口变化允许压缩字节改变，但必须保留单帧、准确 FCS、校验和、字典设置及原文字节。
+const requestBodyZstdWindowSize = 512 << 10
+
+// compressRequestBodyZstd 把正文逐段写成单个 zstd 帧，并保留可重放的分段输出。
+// 正式 JSON 路径由 document 提供字段区间，不生成完整的未压缩出站正文；压缩结果也不
+// 拼成连续切片。压缩仅执行一次，关闭编码器后即可得到准确 Content-Length。
+//
+// 压缩等级保持画像既有值，低内存选项与有界窗口共同降低编码器内部缓冲占用。
+// ResetContentSize 保留准确的原文长度；多块流式编码的帧组织可能不同于 EncodeAll，
+// 但解压后的字节、校验和开关和字典设置必须保持一致。
+func compressRequestBodyZstd(level int, contentLength int64, writeBody func(io.Writer) error) (RequestBody, error) {
+	return compressRequestBodyZstdWithCache(level, contentLength, writeBody, sharedRequestBodyZstdEncoderCache)
+}
+
+// compressRequestBodyZstdWithCache 的 nil cache 路径保留新建编码器对照。
+// 只有完整写入、长度校验及 Close 均成功的编码器可以归还缓存。
+func compressRequestBodyZstdWithCache(
+	level int,
+	contentLength int64,
+	writeBody func(io.Writer) error,
+	cache *requestBodyZstdEncoderCache,
+) (RequestBody, error) {
+	output := newSegmentedBodyWriter()
+	encoder, err := cache.take(level)
+	if err != nil {
+		return RequestBody{}, fmt.Errorf("创建 zstd 编码器: %w", err)
+	}
+	encoder.ResetContentSize(output, contentLength)
+	if err := writeBody(encoder); err != nil {
+		_ = encoder.Close()
+		return RequestBody{}, fmt.Errorf("写入 zstd 正文: %w", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return RequestBody{}, fmt.Errorf("关闭 zstd 编码器: %w", err)
+	}
+	cache.put(level, encoder)
+	return output.finish(), nil
+}
+
+// compressCompiledBodyZstd 保留旧 EncodeAll 编码方式作为兼容与差分测量基准；正式编译路径
+// 使用 compressRequestBodyZstd，避免物化完整 JSON 和连续压缩输出。
 //
 // 两处分配与输出无关，按最小占用设置：
 //   - EncodeAll 每次调用只占用一个编码器，缺省并发度却会在初始化时按 GOMAXPROCS 预建同样数量
@@ -1124,9 +1179,8 @@ func compressCompiledBodyZstd(level int, compiled []byte) ([]byte, error) {
 //
 // 取舍：
 //   - 过去按最坏长度一次预留，压缩期间一份与正文等大的缓冲常驻；可压缩的正文实际只用到其中六到七成。
-//   - 不能改用流式编码按块输出（帧头、重复偏移保存与整块结尾的处理与 EncodeAll 不同，输出字节会变），
-//     也不能复用缓冲（压缩结果随后成为请求体，由执行器与 HTTP 传输持有到请求结束，归还时机无法保证），
-//     更不能先压缩一遍求出长度（两遍压缩）。只能在压缩前估计容量，估计只影响容量、不影响输出字节。
+//   - 此兼容基准保持 EncodeAll 的原有压缩字节，因此不使用正式路径的流式输出，也不复用生命周期
+//     不明确的大缓冲或进行两遍压缩。压缩前的容量估计只影响容量，不影响输出字节。
 //   - 基准取 81%：Go 对大切片扩容一次至少放大到约 1.25 倍，81% × 1.25 > 100%，因此无论估计如何，
 //     EncodeAll 追加过程中最多扩容一次（扩容瞬间新旧两块同时存活，比按最坏长度预留多约 0.8 倍正文）。
 //   - 该编码器（等级 3）的实测规律是两极的：base64 片段与足量可匹配的文本交错时，字面量被熵编码，
@@ -1432,13 +1486,33 @@ func orderJSONDocumentWithPolicy(
 	bodyConditions BodyRuntimeConditions,
 	authentication AttemptAuthenticationInput,
 ) ([]byte, error) {
+	ordered, err := orderedJSONNamesWithPolicy(
+		document, contract, features, requestConditions, bodyConditions, authentication,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return document.encodeNames(ordered), nil
+}
+
+// orderedJSONNamesWithPolicy 先完成闭集、条件和省略规则校验，再返回唯一的字段线序。
+// 流式与整段编码共用此处的权威校验，避免为压缩路径另建一套放宽的正文规则。
+func orderedJSONNamesWithPolicy(
+	document *orderedJSONDocument,
+	contract profilecontract.BodyContractProfile,
+	features profilecontract.FeatureDefaults,
+	requestConditions CodexRequestConditions,
+	bodyConditions BodyRuntimeConditions,
+	authentication AttemptAuthenticationInput,
+) ([]string, error) {
 	if document == nil || !document.duplicatesChecked {
 		return nil, errors.New("JSON Body document 未完成 duplicate 校验")
 	}
 	known := make(map[string]bool, len(contract.Fields))
 	for _, field := range contract.Fields {
 		known[field.Name] = true
-		value, present := document.value(field.Name)
+		bodyField, present := document.field(field.Name)
+		value := bodyField.policyValue()
 		enabled, conditionErr := codexBodyFieldConditionEnabled(
 			field.Condition, features, requestConditions, bodyConditions, authentication,
 		)
@@ -1483,7 +1557,7 @@ func orderJSONDocumentWithPolicy(
 	ordered := make([]string, 0, len(inputNames))
 	added := make(map[string]bool, len(inputNames))
 	for _, field := range contract.Fields {
-		if _, present := document.value(field.Name); present {
+		if _, present := document.field(field.Name); present {
 			ordered = append(ordered, field.Name)
 			added[field.Name] = true
 		}
@@ -1491,13 +1565,13 @@ func orderJSONDocumentWithPolicy(
 	// 开放 WS event 的未知字段按原输入相对顺序追加；不得使用 map 迭代或排序。
 	for _, name := range inputNames {
 		if !added[name] {
-			if _, present := document.value(name); present {
+			if _, present := document.field(name); present {
 				ordered = append(ordered, name)
 				added[name] = true
 			}
 		}
 	}
-	return document.encodeNames(ordered), nil
+	return ordered, nil
 }
 
 // codexBodyConditionOmitsPresentField 列出“条件不成立时省略语义体中已有字段”的条件。
@@ -1785,9 +1859,17 @@ func digestCompiledExecution(
 ) (string, error) {
 	target := request.URL()
 	bodyDigest := "single-use"
-	if body, ok := request.body.replayableView(); ok {
-		sum := sha256.Sum256(body)
-		bodyDigest = hex.EncodeToString(sum[:])
+	if body, ok := request.body.openReplayable(); ok {
+		hash := sha256.New()
+		_, copyErr := io.Copy(hash, body)
+		closeErr := body.Close()
+		if copyErr != nil {
+			return "", fmt.Errorf("读取编译正文摘要: %w", copyErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("关闭编译正文摘要: %w", closeErr)
+		}
+		bodyDigest = hex.EncodeToString(hash.Sum(nil))
 	}
 	raw, err := json.Marshal(struct {
 		Method           string

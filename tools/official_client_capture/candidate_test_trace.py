@@ -140,8 +140,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # x-authenticateresponse 两个请求头（共 4 行，只作用于 Grok 请求）；映射只重绑该源码快照，不改变测试、事实或规则语义。
 # 2026-10-06：C-09.5 将没有生产调用的旧 Header 定型器移入已绑定的候选测试文件。
 # 仅重绑生产文件与测试文件摘要，测试、事实和判据语义保持一致。
+# 2026-10-06（问题四请求体内存优化）：HTTP 工作区与分段正文流式编译调整了已绑定的
+# official_egress_openai_http.go、openai_gateway_forward.go 与 officialegress/compiler.go。
+# 本次仅重绑这三份源码快照的七处引用，测试、事实和规则语义保持不变；验收结果另见本次记录。
 FROZEN_MAPPING_SHA256 = (
-    "76ef6064368472f9b366fe89d49968c314ec5f9116d1ad838f25e9ae2559012e"
+    "ba9f684ea7b4d9d2ade2acd4e17b139488c8b7e1a2ca7b7c4a1051cb5ae2b615"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

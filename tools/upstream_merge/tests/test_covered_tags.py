@@ -168,7 +168,7 @@ class CoveredTagsTest(CoveredTagsFixture):
 class CreatePlanCoveredTagsTest(CoveredTagsFixture):
     """plan-create 在合成仓库上真实执行；只替换扫描器、路由快照、工具摘要等与区间无关的重依赖。"""
 
-    def create(self, upstream: dict) -> tuple[Path, Exception | None]:
+    def create(self, upstream: dict, *, plan_root: Path | None = None) -> tuple[Path, Exception | None]:
         outside = self.root.parent / "outside"
         outside.mkdir(exist_ok=True)
         files = {}
@@ -176,13 +176,14 @@ class CreatePlanCoveredTagsTest(CoveredTagsFixture):
             path = outside / f"{name}.json"
             path.write_text("{}\n", encoding="utf-8")
             files[name] = str(path)
-        evidence = outside / "evidence"
+        workspace = plan_root or outside
+        evidence = workspace / "evidence"
         request = {
             "schema_version": contracts.REQUEST_SCHEMA,
             "plan_id": "synthetic-covered-tags",
             "upstream": upstream,
             "repository": {"managed_ref": "refs/heads/main"},
-            "workspace": {"worktree": str(outside / "worktree"), "evidence_root": str(evidence)},
+            "workspace": {"worktree": str(workspace / "worktree"), "evidence_root": str(evidence)},
             "official_clients": {
                 client: {
                     "persona": {"client": client},
@@ -243,6 +244,24 @@ class CreatePlanCoveredTagsTest(CoveredTagsFixture):
         self.assertIsNone(error)
         plan = json.loads((evidence / "plan.json").read_text(encoding="utf-8"))
         self.assertEqual(plan["upstream"]["covered_tags"], [{"tag": "v1.0.1", "commit": self.tags["v1.0.1"]}])
+
+    def test_create_plan_in_designated_private_root(self) -> None:
+        (self.root / ".gitignore").write_text("/local-analysis/\n", encoding="utf-8")
+        git(self.root, "add", ".gitignore")
+        git(self.root, "commit", "-q", "-m", "忽略私有分析资料")
+        plan_root = self.root / "local-analysis/upstream/v1.0.1-20261006-001"
+        evidence, error = self.create(self.upstream(tag="v1.0.1"), plan_root=plan_root)
+        self.assertIsNone(error)
+        plan = json.loads((evidence / "plan.json").read_text(encoding="utf-8"))
+        self.assertEqual(Path(plan["workspace"]["evidence_root"]), evidence.resolve())
+        self.assertEqual(Path(plan["workspace"]["worktree"]), (plan_root / "worktree").resolve())
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_invalid_internal_root_is_rejected_without_creating_evidence(self) -> None:
+        evidence, error = self.create(self.upstream(tag="v1.0.1"), plan_root=self.root / "other")
+        self.assertIsInstance(error, UpstreamMergeError)
+        self.assertIn("主仓库之外", str(error))
+        self.assertFalse(evidence.exists())
 
 
 if __name__ == "__main__":

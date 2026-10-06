@@ -80,7 +80,9 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 }
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
-	return err != nil && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
+	var memoryErr *service.OpenAIWSRequestMemoryError
+	// 本地请求上限或共享内存预算拒绝不反映上游账号健康，不能影响账号调度。
+	return err != nil && !errors.As(err, &memoryErr) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
 }
 
 // openAIWSIngressEndedByClient reports whether a finished ingress WebSocket turn
@@ -451,6 +453,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesRequestMemory(
 			zap.Int64("capacity_bytes", capacity),
 		)
 	}
+	c.Set(responsesRequestMemoryReservationKey, reservation)
 	return reservation.release, true
 }
 
@@ -501,14 +504,27 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	defer requestMemoryRelease()
 
-	// Read request body
-	body, err := readResponsesJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	// 规范化可能把裸控制字符扩大成六字节转义，必须先补足额度再分配结果。
+	body, err := readAdmittedResponsesJSONRequestBodyWithReservation(c.Request, h.cfg, func(normalizedBytes int) error {
+		if !h.ensureResponsesRequestMemoryForBody(c, normalizedBytes, reqLog) {
+			return errResponsesRequestMemoryRejected
+		}
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, errResponsesRequestMemoryRejected) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
 		logRequestBodyReadFailure(reqLog, c.Request, err)
+		if isRequestBodyStorageError(err) {
+			c.Header("Retry-After", "1")
+			h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "Request body storage temporarily unavailable")
+			return
+		}
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
@@ -517,7 +533,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
-
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
 	compactionProfileMode := ""
@@ -2466,6 +2481,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		ctx = ingressLease.Context()
 		c.Request = c.Request.WithContext(ctx)
 	}
+	maxRequestBytes, fixedRequestBytes, requestAmplification := requestMemoryAdmissionConfig(h.cfg)
+	wsClientReadLimit := service.ResolveOpenAIWSClientReadLimitBytes(h.cfg)
+	if maxRequestBytes <= 0 || wsClientReadLimit < maxRequestBytes {
+		maxRequestBytes = wsClientReadLimit
+	}
+	wsMemoryReservation := &requestMemoryReservation{admission: h.responsesRequestMemoryAdmission()}
+	wsMemory := service.NewOpenAIWSRequestMemory(maxRequestBytes, fixedRequestBytes, requestAmplification, wsMemoryReservation.resize)
+	defer func() {
+		wsMemory.Close()
+		wsMemoryReservation.release()
+	}()
+	ctx = service.WithOpenAIWSRequestMemory(ctx, wsMemory)
+	c.Request = c.Request.WithContext(ctx)
 
 	wsConn, err := coderws.Accept(c.Writer, c.Request, &coderws.AcceptOptions{
 		CompressionMode: coderws.CompressionContextTakeover,
@@ -2485,7 +2513,23 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	defer func() {
 		_ = wsConn.CloseNow()
 	}()
-	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
+	wsConn.SetReadLimit(wsClientReadLimit)
+	closeOnMemoryFailure := func(err error) bool {
+		var memoryErr *service.OpenAIWSRequestMemoryError
+		if !errors.As(err, &memoryErr) {
+			return false
+		}
+		if memoryErr.TooLarge && wsMemoryReservation.admission != nil {
+			wsMemoryReservation.admission.tooLarge.Add(1)
+		}
+		closeStatus := coderws.StatusTryAgainLater
+		if memoryErr.TooLarge {
+			closeStatus = coderws.StatusMessageTooBig
+		}
+		reqLog.Info("openai.websocket_request_memory_rejected", zap.Bool("too_large", memoryErr.TooLarge))
+		closeOpenAIClientWS(wsConn, closeStatus, memoryErr.Error())
+		return true
+	}
 
 	firstMessageTimeout := service.ResolveOpenAIWSClientFirstMessageTimeout(h.cfg)
 	msgType, firstMessage, err := service.ReadOpenAIWSClientMessage(
@@ -2496,6 +2540,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		"missing first response.create message",
 	)
 	if err != nil {
+		if closeOnMemoryFailure(err) {
+			return
+		}
 		if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
 			reqLog.Warn("openai.websocket_ingress_lease_lost_before_first_message", zap.Error(err))
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
@@ -2513,6 +2560,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	firstTurnStartedAt := time.Now()
+	if closeOnMemoryFailure(wsMemory.Retain("handler", firstMessage)) {
+		return
+	}
 	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
 		return
@@ -2599,11 +2649,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	cyberBlockedThisConn := false
 	cyberBlockPendingAfterFailover := false
 	var cyberTurnBodiesMu sync.Mutex
-	cyberTurnBodies := map[int][]byte{1: append([]byte(nil), firstMessage...)}
-	setCyberTurnBody := func(turn int, payload []byte) {
+	// 入站正文按不可变字节共享；规范化和重试必须返回新正文，不能原地改写。
+	// 风控只同步提取封禁 key，异步日志不持有这份正文，因此无需另存整帧副本。
+	cyberTurnBodies := map[int][]byte{1: firstMessage}
+	retainCyberTurnBodies := func() error {
+		payloads := make([][]byte, 0, len(cyberTurnBodies))
+		for _, body := range cyberTurnBodies {
+			payloads = append(payloads, body)
+		}
+		return wsMemory.Retain("cyber", payloads...)
+	}
+	if closeOnMemoryFailure(retainCyberTurnBodies()) {
+		return
+	}
+	setCyberTurnBody := func(turn int, payload []byte) error {
 		cyberTurnBodiesMu.Lock()
-		cyberTurnBodies[turn] = append([]byte(nil), payload...)
-		cyberTurnBodiesMu.Unlock()
+		defer cyberTurnBodiesMu.Unlock()
+		cyberTurnBodies[turn] = payload
+		return retainCyberTurnBodies()
 	}
 	takeCyberTurnBody := func(turn int) []byte {
 		cyberTurnBodiesMu.Lock()
@@ -2714,7 +2777,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
-	wsAttemptMessage := append([]byte(nil), firstMessage...)
+	wsAttemptMessage := firstMessage
+	if closeOnMemoryFailure(wsMemory.Retain("handler", firstMessage, wsAttemptMessage)) {
+		return
+	}
 	waitForWSSameAccountRetry := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
 		if account == nil || failoverErr == nil || failoverErr.StatusCode != http.StatusTooManyRequests || failoverErr.SameAccountRetryDeadline.IsZero() {
 			return false
@@ -2783,6 +2849,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
 	if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) && requestPlatform == service.PlatformOpenAI {
 		requiredCapability = service.OpenAIEndpointCapabilityResponses
+	}
+	// 之后的 failover 只需 wsAttemptMessage；原始首帧已完成校验，不再保活第二份。
+	firstMessage = nil
+	if closeOnMemoryFailure(wsMemory.Retain("handler", wsAttemptMessage)) ||
+		closeOnMemoryFailure(wsMemory.BeginAttempt(wsAttemptMessage)) {
+		return
 	}
 
 	// 分组利润控制：WS 桥按连接装配定价上下文并装门（选号与抢槽共用该
@@ -2999,7 +3071,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
-				setCyberTurnBody(turn, payload)
+				if err := setCyberTurnBody(turn, payload); err != nil {
+					return err
+				}
 				// 连接级 cyber session gate 也在 BeforeRequest 先执行，使 native 与
 				// passthrough ingress 都能在 BeforeTurn 及上游写入前无副作用地拒绝。
 				// BeforeTurn 中保留同一检查作为防御式兜底。
@@ -3112,6 +3186,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
 				turnStart := getTurnStart(turn)
 				cyberBlockBody := takeCyberTurnBody(turn)
+				// 正文仍会被本回调用于审计，回调退出后再撤销其持有快照。
+				defer func() {
+					cyberTurnBodiesMu.Lock()
+					defer cyberTurnBodiesMu.Unlock()
+					_ = retainCyberTurnBodies()
+				}()
 				// 每次 attempt 都清 cyber mark；failover 链结束前保留 recorded guard，
 				// 避免同一逻辑 turn 换号后重复落风控。CyberBlocked 必须在 submit 前
 				// 同步预捕获（task 闭包由 worker 池异步执行，届时 mark 已清除）。
@@ -3238,9 +3318,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		for {
+			if closeOnMemoryFailure(wsMemory.Retain("handler", wsAttemptMessage, wsFirstMessage)) ||
+				closeOnMemoryFailure(wsMemory.BeginAttempt(wsFirstMessage)) {
+				return
+			}
 			err := h.gatewayService.ProxyResponsesWebSocketFromClient(accountCtx, c, wsConn, account, token, wsFirstMessage, hooks)
 			if err == nil {
 				reqLog.Info("openai.websocket_ingress_closed", zap.Int64("account_id", account.ID))
+				return
+			}
+			if closeOnMemoryFailure(err) {
 				return
 			}
 			if service.IsOpenAIWSSessionPreemptedError(err) {

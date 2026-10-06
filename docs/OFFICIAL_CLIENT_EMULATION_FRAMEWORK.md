@@ -422,10 +422,17 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 合并节奏：官方客户端升级在 VC-6（§5.3.2）收口后先清上游积压；积压达到 2 个上游版本 tag，或最早未合并的
 tag 发布已超过 14 天时，下一次官方客户端升级的 VC-0 之前必须先完成合并。紧急客户端修复不受此限。
 
+上游合并的本机私有资料推荐统一放在 `<主仓库>/local-analysis/upstream/`，每次 Plan 使用
+`<tag>-<yyyymmdd>-<三位序号>/`，其下 `inputs/`、`evidence/` 与 `worktree/` 分开存放；基线和预检报告
+也可放在该私有根内。工具仍支持仓库外目录，仓库内仅开放这一处，且必须整体被 Git 忽略、无已跟踪文件；
+`/local-analysis/` 同时从 Docker 构建上下文排除。路径按实际解析位置校验，worktree 与 evidence 不得嵌套。
+迁移历史资料时保留原始文件与摘要，登记旧、新容器根和逐文件校验结果；新资料使用真实新路径。
+旧容器根可保留供历史绑定读取的兼容入口，入口本身不作为新 evidence 根，也不复制或改写封存证据。
+
 ### 5.2.1 升级前基线验收（权威）
 
 基线验收回答“升级前这棵树的功能事实和证据事实分别是什么”。它在主仓库干净工作树上执行，收据写入
-仓库之外的私有 evidence 目录，绑定当前 `HEAD`、tree 和 tool bundle 摘要。合并前在干净 `HEAD` 上封存；
+仓库外或上述 Git 忽略目录内的私有 evidence，绑定当前 `HEAD`、tree 和 tool bundle 摘要。合并前在干净 `HEAD` 上封存；
 `HEAD`、tree 或工具闭集变化（含发版回写与合并前的准备提交）后必须重新封存。基线暴露的问题按总则 1 处理。
 
 基线检查拆成两组：
@@ -458,9 +465,9 @@ tag 发布已超过 14 天时，下一次官方客户端升级的 VC-0 之前必
   前先在其中执行一次与 U-4 相同的 `make upstream-gate-full`，全绿才建正式 Plan；台账类待办先用
   `freeze-successor-generate --dry-run` 查看。
 
-预检报告写到仓库之外。预检在临时隔离 worktree 中试合并，试合并无冲突时再执行 egressscan 快照、
+预检报告写到仓库外或上述 Git 忽略的私有目录。预检在临时隔离 worktree 中试合并，试合并无冲突时再执行 egressscan 快照、
 `go build`、`go vet` 与官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描）
-运行 `make egress-scanner-check`。预检不写入主仓库、不 fetch、不 push、不产生权威阶段制品，报告中
+运行 `make egress-scanner-check`。预检不修改受版本控制的源码、不 fetch、不 push、不产生权威阶段制品，报告中
 `non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含六项，任何一项被跳过或失败都标为阻断；
 六项都不依赖试合并结果，因冲突而 blocked 时照常输出：
 
@@ -572,7 +579,8 @@ U-4 的结果只有三种出口：
    不一致、非线性历史或跨 minor 一律拒绝；跨 minor 仍分 Plan。覆盖区间随 Plan 进入 finalize 收据。
 5. 每个 `tools.upstream_merge` 子命令自动追加一行到 `timing-ledger.jsonl`：命令、参数、起止时间、
    耗时、结果与错误。路径位于某个 Plan 目录（含其 evidence、inputs 与 Plan 工作树）之下时一律写该
-   Plan 根的账本；不在 Plan 之下时写输出所在目录，落在 Git 工作树内时不写并提示（可显式指定账本）；
+   Plan 根的账本；不在 Plan 之下时写输出所在目录。仓库内仅自动写入整体被 Git 忽略的
+   `local-analysis/upstream/`，其他 Git 工作树内位置不写并提示（可显式指定账本）；
    账本写入失败时成功的命令也按系统错误返回。账本无缺口是发版前置条件之一，不得在合并结束后补写。
 6. 废弃 Plan 的 worktree／evidence 只在完成留档和审计确认后清理，不得用清理动作替代收据。
 

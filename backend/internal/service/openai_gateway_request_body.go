@@ -1373,20 +1373,26 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 		changed = true
 	}
 	// Only remove the input-item field, never same-named user content.
-	input := gjson.GetBytes(normalized, "input")
+	input := openAIBodyGet(normalized, "input")
 	if !input.IsArray() {
 		return normalized, changed, nil
 	}
-	for i, item := range input.Array() {
+	var metadataErr error
+	input.ForEach(func(index, item gjson.Result) bool {
 		if !item.IsObject() || !item.Get("internal_chat_message_metadata_passthrough").Exists() {
-			continue
+			return true
 		}
-		next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", i))
+		next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", index.Int()))
 		if err != nil {
-			return body, false, fmt.Errorf("normalize oauth input metadata: %w", err)
+			metadataErr = fmt.Errorf("normalize oauth input metadata: %w", err)
+			return false
 		}
 		normalized = next
 		changed = true
+		return true
+	})
+	if metadataErr != nil {
+		return body, false, metadataErr
 	}
 	return normalized, changed, nil
 }
@@ -1556,9 +1562,20 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	}
 	needsOrphanCleanup := account != nil && account.IsOpenAIOAuthLike() &&
 		openAIBodyGet(normalized, "input").IsArray()
+	var bodyIndex *officialJSONRawIndex
+	if needsOrphanCleanup {
+		// 完整历史通常已包含工具调用上下文，只需读取 type/call_id/id/name，不能为
+		// “没有孤立输出”的检查解码并复制全部长文本。该索引还供末尾触发项检查复用。
+		if index, err := buildOfficialJSONRawIndexForDecode(normalized); err == nil && index.nodes[index.root].kind == officialJSONRawKindObject {
+			bodyIndex = index
+			needsOrphanCleanup = openAIResponsesHasOrphanToolOutputsFromIndex(index)
+		}
+	}
 	if needsOrphanCleanup || openAIResponsesInputMayNeedTruncation(normalized) {
 		var reqBody map[string]any
-		if err := decodeOpenAIJSONUseNumber(normalized, &reqBody); err != nil {
+		if bodyIndex != nil {
+			reqBody, _ = bodyIndex.decodeValueSharingBody(bodyIndex.root).(map[string]any)
+		} else if err := decodeOpenAIJSONUseNumber(normalized, &reqBody); err != nil {
 			return body, false, fmt.Errorf("normalize websocket Responses body: %w", err)
 		}
 		mapChanged := false
@@ -1613,7 +1630,10 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	}
 	// Keep this last: earlier compatibility passes may filter or rebuild input.
 	// Remote compaction v2 requires one trigger as the final input item.
-	if triggerBody, triggerChanged, err := NormalizeCompactionTriggerInputOrder(normalized); err != nil {
+	if bodyIndex != nil && !officialForwardSameBody(normalized, bodyIndex.body) {
+		bodyIndex = nil
+	}
+	if triggerBody, triggerChanged, err := normalizeCompactionTriggerInputOrderWithIndex(normalized, bodyIndex); err != nil {
 		return body, false, fmt.Errorf("normalize websocket compaction trigger order: %w", err)
 	} else if triggerChanged {
 		normalized = triggerBody

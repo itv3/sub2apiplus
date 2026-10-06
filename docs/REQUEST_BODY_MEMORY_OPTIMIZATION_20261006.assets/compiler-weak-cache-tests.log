@@ -1,0 +1,14 @@
+=== RUN   TestRequestBodyZstdEncoderCacheMatchesFreshFrames
+--- PASS: TestRequestBodyZstdEncoderCacheMatchesFreshFrames (0.01s)
+=== RUN   TestRequestBodyZstdEncoderCacheBoundAndLevelIsolation
+--- PASS: TestRequestBodyZstdEncoderCacheBoundAndLevelIsolation (0.00s)
+=== RUN   TestRequestBodyZstdEncoderCacheDiscardsFailedEncoder
+--- PASS: TestRequestBodyZstdEncoderCacheDiscardsFailedEncoder (0.00s)
+=== RUN   TestRequestBodyZstdEncoderCacheClearsOnGC
+--- PASS: TestRequestBodyZstdEncoderCacheClearsOnGC (0.00s)
+=== RUN   TestRequestBodyZstdEncoderCacheReleasesPreviousWriter
+--- PASS: TestRequestBodyZstdEncoderCacheReleasesPreviousWriter (0.00s)
+=== RUN   TestRequestBodyZstdEncoderCacheConcurrentIsolation
+--- PASS: TestRequestBodyZstdEncoderCacheConcurrentIsolation (0.00s)
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress	0.958s

@@ -1,0 +1,68 @@
+[
+  {
+    "name": "read16-native-identity",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "encoding": "identity"
+  },
+  {
+    "name": "read16-native-zstd",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "encoding": "zstd",
+    "wire": "native-16.8.zst"
+  },
+  {
+    "name": "continuous-read16-native-gc100",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4,
+    "gogc": 100
+  },
+  {
+    "name": "continuous-read16-native-gc25",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4,
+    "gogc": 25
+  },
+  {
+    "name": "read16-explicit_instructions-identity",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "encoding": "identity"
+  },
+  {
+    "name": "read16-explicit_instructions-zstd",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "encoding": "zstd",
+    "wire": "explicit_instructions-16.8.zst"
+  },
+  {
+    "name": "continuous-read16-explicit_instructions-gc100",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4,
+    "gogc": 100
+  },
+  {
+    "name": "continuous-read16-explicit_instructions-gc25",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4,
+    "gogc": 25
+  }
+]

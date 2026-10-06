@@ -54,6 +54,9 @@ coverage/
 # 本地闭源插件目录可能包含发布签名私钥，绝不能进入 Docker 构建上下文。
 /plugins/
 
+# 本地分析资料、上游隔离工作树及私有证据不进入 Docker 构建上下文。
+/local-analysis/
+
 # Local config
 config.yaml
 config.local.yaml

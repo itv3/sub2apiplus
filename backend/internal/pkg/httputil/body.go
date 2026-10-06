@@ -165,6 +165,113 @@ func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedByte
 	return NormalizeLenientJSONRequestBody(body, maxNormalizedBytes)
 }
 
+// ReadAdmittedLenientJSONRequestBody 仅供已取得整次请求内存额度的入口使用。
+// 已知未压缩长度时直接读入精确大小的正文，避免分块合并的一份完整副本。
+// 压缩正文直接从入站流解码，不同时保存完整的压缩原文与解压结果；未知长度的大正文
+// 在非内存文件系统暂存，不能依据压缩帧内不可信的长度提前分配大内存。
+func ReadAdmittedLenientJSONRequestBody(req *http.Request, maxNormalizedBytes int64) ([]byte, error) {
+	return ReadAdmittedLenientJSONRequestBodyWithReservation(req, maxNormalizedBytes, nil)
+}
+
+// ReadAdmittedLenientJSONRequestBodyWithReservation 在规范化输出分配前通知准入器其确切长度。
+// beforeNormalize 返回错误时不生成输出副本；原请求的预留仍由调用方负责统一释放。
+func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNormalizedBytes int64, beforeNormalize func(int) error) ([]byte, error) {
+	if maxNormalizedBytes <= 0 {
+		maxNormalizedBytes = maxDecompressedBodySize
+	}
+	if req == nil || req.Body == nil {
+		return nil, nil
+	}
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
+	if preread, ok := req.Body.(*PrereadBody); ok {
+		return normalizeLenientJSONRequestBody(preread.Bytes(), maxNormalizedBytes, beforeNormalize)
+	}
+	encoding := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
+	if encoding == "" || encoding == "identity" {
+		if req.ContentLength > maxNormalizedBytes {
+			return nil, &http.MaxBytesError{Limit: maxNormalizedBytes}
+		}
+		reader := requestBodyContextReader{ctx: req.Context(), reader: http.MaxBytesReader(nil, req.Body, maxNormalizedBytes)}
+		var body []byte
+		var err error
+		if req.ContentLength > 0 {
+			body = make([]byte, req.ContentLength)
+			if _, err = io.ReadFull(reader, body); err != nil {
+				return nil, err
+			}
+			// 读取终止状态，保留底层上传错误，并拒绝声明长度之外的额外字节。
+			var tail [1]byte
+			if n, readErr := io.ReadFull(reader, tail[:]); n != 0 || readErr != io.EOF {
+				if readErr != nil {
+					return nil, readErr
+				}
+				return nil, errors.New("request body exceeds Content-Length")
+			}
+		} else {
+			body, err = readAdmittedUnknownBody(req.Context(), reader)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return normalizeLenientJSONRequestBody(body, maxNormalizedBytes, beforeNormalize)
+	}
+
+	// 压缩传输本身与解压后的 JSON 各自受相同上限约束；读到上限后还会读取一个
+	// 字节确认 EOF，超限返回 MaxBytesError，而不是把截断的 JSON 当成成功结果。
+	source := http.MaxBytesReader(nil, req.Body, maxNormalizedBytes)
+	contextSource := requestBodyContextReader{ctx: req.Context(), reader: source}
+	var decoded io.Reader
+	var closeDecoder func()
+	switch encoding {
+	case "zstd":
+		// 解压后的字节上限不能阻止解码器先按帧头分配巨大的历史窗口。
+		// 保留常用 8MiB 窗口兼容性，更大窗口最多使用本次已准入的正文上限。
+		windowLimit := uint64(max(maxNormalizedBytes, 8<<20))
+		decoder, err := zstd.NewReader(contextSource,
+			zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true),
+			zstd.WithDecoderMaxWindow(windowLimit), zstd.WithDecoderMaxMemory(windowLimit))
+		if err != nil {
+			return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
+		}
+		decoded, closeDecoder = decoder, decoder.Close
+	case "gzip", "x-gzip":
+		decoder, err := gzip.NewReader(contextSource)
+		if err != nil {
+			return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
+		}
+		decoded, closeDecoder = decoder, func() { _ = decoder.Close() }
+	case "deflate":
+		decoder, err := zlib.NewReader(contextSource)
+		if err != nil {
+			return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
+		}
+		decoded, closeDecoder = decoder, func() { _ = decoder.Close() }
+	default:
+		return nil, fmt.Errorf("decode Content-Encoding %q: unsupported Content-Encoding", encoding)
+	}
+	defer closeDecoder()
+	bounded := http.MaxBytesReader(nil, io.NopCloser(decoded), maxNormalizedBytes)
+	body, err := readAdmittedUnknownBody(req.Context(), bounded)
+	if err != nil {
+		return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
+	}
+	// deflate 等解码器可以先于传输正文结束；继续消费受限的入站流，才能检查
+	// 压缩尾部的上传错误和总字节上限，行为与原先先读取完整 wire 正文一致。
+	if _, err := io.Copy(io.Discard, contextSource); err != nil {
+		return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
+	}
+	body, err = normalizeLenientJSONRequestBody(body, maxNormalizedBytes, beforeNormalize)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Del("Content-Encoding")
+	req.Header.Del("Content-Length")
+	req.ContentLength = int64(len(body))
+	return body, nil
+}
+
 func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
 	switch encoding {
 	case "zstd":
@@ -196,35 +303,34 @@ func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
 // NormalizeLenientJSONRequestBody escapes raw control bytes that broken
 // OpenAI-compatible clients sometimes place inside JSON strings.
 func NormalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64) ([]byte, error) {
+	return normalizeLenientJSONRequestBody(body, maxNormalizedBytes, nil)
+}
+
+// 先扫描计长并取得额度，再一次分配输出，避免控制字符密集时反复扩容的峰值。
+// 无需转义的常见正文只扫描一遍并继续共享原切片。
+func normalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64, beforeNormalize func(int) error) ([]byte, error) {
 	if maxNormalizedBytes <= 0 {
 		maxNormalizedBytes = maxDecompressedBodySize
 	}
 
 	body = trimUTF8BOM(body)
-	if len(body) == 0 {
-		return body, nil
-	}
 	if int64(len(body)) > maxNormalizedBytes {
 		return nil, &http.MaxBytesError{Limit: maxNormalizedBytes}
 	}
 
-	var out []byte
+	normalizedBytes := int64(len(body))
+	firstControl := -1
 	inString := false
 	escaped := false
 	for i, b := range body {
 		if inString && isJSONControlByte(b) {
-			if out == nil {
-				capHint := len(body) + 6
-				if int64(capHint) > maxNormalizedBytes {
-					capHint = int(maxNormalizedBytes)
-				}
-				out = make([]byte, 0, capHint)
-				out = append(out, body[:i]...)
-			}
-			if int64(len(out)+6) > maxNormalizedBytes {
+			if normalizedBytes > maxNormalizedBytes-5 {
 				return nil, &http.MaxBytesError{Limit: maxNormalizedBytes}
 			}
-			out = appendJSONUnicodeEscape(out, b)
+			normalizedBytes += 5
+			if firstControl < 0 {
+				firstControl = i
+			}
 			escaped = false
 			continue
 		}
@@ -237,18 +343,35 @@ func NormalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64) ([]b
 		case b == '"':
 			inString = !inString
 		}
-
-		if out != nil {
-			if int64(len(out)+1) > maxNormalizedBytes {
-				return nil, &http.MaxBytesError{Limit: maxNormalizedBytes}
-			}
-			out = append(out, b)
+	}
+	if beforeNormalize != nil {
+		if err := beforeNormalize(int(normalizedBytes)); err != nil {
+			return nil, err
 		}
 	}
-	if out != nil {
-		return out, nil
+	if firstControl < 0 {
+		return body, nil
 	}
-	return body, nil
+	out := make([]byte, 0, int(normalizedBytes))
+	out = append(out, body[:firstControl]...)
+	inString, escaped = true, false
+	for _, b := range body[firstControl:] {
+		if inString && isJSONControlByte(b) {
+			out = appendJSONUnicodeEscape(out, b)
+			escaped = false
+			continue
+		}
+		switch {
+		case escaped:
+			escaped = false
+		case inString && b == '\\':
+			escaped = true
+		case b == '"':
+			inString = !inString
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 func trimUTF8BOM(body []byte) []byte {
