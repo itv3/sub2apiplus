@@ -30,6 +30,7 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "upgrade_client_adapter.py": "B1-01 客户端适配接口、编排器服务面与注册表",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同",
+    "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动",
 }
 
 

@@ -7,6 +7,9 @@
 * 后继协议与批次历史要求前后清单属于同一客户端；
 * 根因维度按码表补齐 client（Codex 码表不含，根因 ID 逐字不变），Claude Campaign ID 作维度值被拒；
 * 监督器不再导入编排器 codex_upgrade（编排器符号全部经适配器）。
+
+对账器（B1-03）：入口按 adapter 参数或 Campaign 归属设定适配器、传错即拒绝；内部函数在入口之外缺省 Codex；
+恢复接口用失败源的候选坐标。
 """
 
 from __future__ import annotations
@@ -17,7 +20,10 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_root_cause as rc
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import upgrade_client_adapter as uca
@@ -155,6 +161,59 @@ class RootCauseDimensionTests(unittest.TestCase):
             uca.root_cause_dimensions(
                 claude, claude_codes, "claude.capture.relay-failed", {"phase": "VC-1", "scenario": "claude-code-2.1.286-formal"}
             )
+
+
+class ReconcilerClientTests(unittest.TestCase):
+    """对账器（B1-03）：入口按 adapter 参数或 Campaign 归属设定适配器，传错即拒绝；内部函数缺省 Codex；
+    恢复接口用失败源的候选坐标。"""
+
+    def test_internal_functions_default_to_codex(self) -> None:
+        self.assertEqual(reconciler._adapter().client, "codex")
+
+    def test_scope_follows_campaign_and_rejects_wrong_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex_campaign = root / "codex"
+            _write(codex_campaign / "campaign.json", {"schema_version": "codex-upgrade-campaign/v3"})
+            claude_campaign = root / "claude"
+            _write(claude_campaign / "campaign.json", {"schema_version": "official-client-upgrade-campaign/v1", "client": "claude"})
+            bare = root / "bare"
+            bare.mkdir()
+            with reconciler._client_scope(codex_campaign, None) as adapter:
+                self.assertEqual((adapter.client, reconciler._adapter().client), ("codex", "codex"))
+            with reconciler._client_scope(claude_campaign, None):
+                self.assertEqual(reconciler._adapter().client, "claude")
+                with reconciler._client_scope(claude_campaign, None):
+                    self.assertEqual(reconciler._adapter().client, "claude")
+            self.assertEqual(reconciler._adapter().client, "codex")
+            with reconciler._client_scope(bare, None) as adapter:
+                self.assertEqual(adapter.client, "codex")
+            for campaign, wrong in ((codex_campaign, "claude"), (claude_campaign, "codex"), (bare, "claude")):
+                with self.subTest(campaign=campaign.name), self.assertRaisesRegex(reconciler.ReconcilerError, "拒绝对账"):
+                    with reconciler._client_scope(campaign, uca.adapter_for(wrong)):
+                        pass
+
+    def test_entry_points_reject_wrong_adapter_before_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory) / "codex"
+            _write(campaign / "campaign.json", {"schema_version": "codex-upgrade-campaign/v3"})
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "拒绝对账"):
+                reconciler.reconcile_attempt(campaign, "a1", adapter=uca.adapter_for("claude"))
+
+    def test_recovery_reuse_check_uses_source_candidate(self) -> None:
+        recorded: dict[str, object] = {}
+
+        def fake(campaign_dir, **kwargs):
+            recorded.update(kwargs)
+            return {"status": "consistent"}
+
+        preview = {
+            "source_attempt_receipt_exists": True, "candidate_id": "cand-v7", "source_attempt_id": "a7",
+            "reuse_job_ids": ["j1"], "execute_job_ids": ["j2"],
+        }
+        with mock.patch.object(codex_upgrade, "recovery_reuse_check", side_effect=fake):
+            reconciler._resume_reuse_check(Path("/c"), phase="candidate", recovery_revision=None, preview=preview)
+        self.assertEqual((recorded["candidate_id"], recorded["source_attempt_id"]), ("cand-v7", "a7"))
 
 
 if __name__ == "__main__":

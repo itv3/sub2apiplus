@@ -68,14 +68,18 @@ class CandidateCoordinates:
 
 @dataclass(frozen=True)
 class RecoveryContext:
-    """恢复接口的统一入参：失败源身份全部显式给出。"""
+    """恢复接口的统一入参：失败源身份全部显式给出。
+
+    ``manifest``／``attempt_root`` 只有工具演进影响与连续性预览要用（缺失时这两个接口报错）；复用核对只用
+    Campaign、阶段、候选坐标与源 attempt，调用方不必为它另读总计划。
+    """
 
     campaign_dir: Path
-    manifest: Mapping[str, Any]
     phase: str
-    attempt_root: Path
     source_attempt_id: str
     candidate: CandidateCoordinates
+    manifest: Mapping[str, Any] | None = None
+    attempt_root: Path | None = None
     output_dir: Path | None = None  # recovery_preview_continuity 的探针输出目录
 
 
@@ -439,8 +443,8 @@ class ClientAdapter:
         )
 
     def recovery_preview_continuity(self, context: RecoveryContext) -> dict[str, Any]:
-        if context.output_dir is None:
-            raise ClientAdapterError("recovery_preview_continuity 需要 RecoveryContext.output_dir（探针输出目录）")
+        if context.manifest is None or context.output_dir is None:
+            raise ClientAdapterError("recovery_preview_continuity 需要 RecoveryContext.manifest 与 output_dir（探针输出目录）")
         return self.orchestrator.recovery_preview_continuity(
             context.campaign_dir,
             manifest=context.manifest,
@@ -451,6 +455,8 @@ class ClientAdapter:
         )
 
     def attempt_evolution_impact(self, context: RecoveryContext) -> dict[str, Any]:
+        if context.manifest is None or context.attempt_root is None:
+            raise ClientAdapterError("attempt_evolution_impact 需要 RecoveryContext.manifest 与 attempt_root")
         return self.orchestrator._attempt_evolution_impact(
             context.campaign_dir,
             context.manifest,
