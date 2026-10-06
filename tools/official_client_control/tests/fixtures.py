@@ -58,6 +58,9 @@ class ManagedToolTree:
     ``active()`` 期间 ``receipts._tool_repository_root`` 指向副本：Campaign v2 的清单核对与写入时有效性都在
     副本上现算，其它进程对真实工作树的并发改动不影响测试；``write`` 在副本里改或加文件以模拟工具演进，
     ``restore`` 撤销全部改动。
+
+    副本里的 Claude 编排器换成只定义身份策略闭包根的替身（``orchestrator_stub``）：v3 引擎的三层摘要因此在
+    副本上可确定性地现算，不随真实编排器（B1-09 及以后仍在演进）的中间状态变化。
     """
 
     def __init__(self, destination: Path) -> None:
@@ -70,6 +73,10 @@ class ManagedToolTree:
             target = destination / "tools" / root_name / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_root / "tools" / root_name / relative, target)
+        policy = engine.load_policy()
+        orchestrator = self.path(str(policy["orchestrator"]["file"]))
+        orchestrator.parent.mkdir(parents=True, exist_ok=True)
+        orchestrator.write_bytes(orchestrator_stub(policy))
         self._originals: dict[Path, bytes | None] = {}
 
     @contextmanager
@@ -107,19 +114,22 @@ class ManagedToolTree:
         self._originals.clear()
 
 
-def synthetic_tool_identity(manifest: dict[str, Any]) -> dict[str, Any]:
-    """由现算清单构造七项工具身份；三层摘要在编排器出现前无法现算，用清单指纹派生的确定性合成值。"""
+def orchestrator_stub(policy: dict[str, Any]) -> bytes:
+    """编排器替身源码：只定义策略登记的 wire／evidence 闭包根，函数体为空。"""
 
-    tool_files = manifest["tool_files_sha256"]
-    return {
-        "client": manifest["client"],
-        "policy_version": manifest["policy_version"],
-        "policy_sha256": manifest["policy_sha256"],
-        "wire_producer_sha256": canonical_sha256({"layer": "wire", "files": tool_files}),
-        "evidence_semantics_sha256": canonical_sha256({"layer": "evidence", "files": tool_files}),
-        "control_sha256": canonical_sha256({"layer": "control", "files": tool_files}),
-        "tool_files_sha256": tool_files,
-    }
+    names = sorted(
+        set(policy["orchestrator"]["wire_roots"]) | set(policy["orchestrator"]["evidence_roots"])
+    )
+    lines = ['"""Store 测试用 Claude 编排器替身：只定义身份策略登记的闭包根。"""', ""]
+    for name in names:
+        lines += ["", f"def {name}():", "    return None", ""]
+    return "\n".join(lines).encode("utf-8")
+
+
+def synthetic_tool_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """由现算清单得到七项工具身份：三层摘要由 v3 引擎在同一（副本）仓库根上现算，与建 Campaign 时的核对同源。"""
+
+    return receipts_module.tool_identity_from_manifest(manifest)
 
 
 class SyntheticCampaign:
@@ -347,11 +357,10 @@ class SyntheticCampaign:
             "operational_evidence", "comparison-policy"
         )
 
-    def record_discovery_and_evidence(self) -> None:
-        """执行 VC-1，只封存不含迁移结论的 EvidencePackage v3。"""
+    def evidence_package_payload(self) -> dict[str, Any]:
+        """VC-1 的 EvidencePackage v3 payload（不含迁移结论）；需先完成 Discovery。"""
 
-        self._record_discovery()
-        evidence = {
+        return {
             "schema_version": "official-client-evidence-package/v3",
             "persona": self.persona,
             "version": "1.0.0",
@@ -371,6 +380,12 @@ class SyntheticCampaign:
                 }
             ],
         }
+
+    def record_discovery_and_evidence(self) -> None:
+        """执行 VC-1，只封存不含迁移结论的 EvidencePackage v3。"""
+
+        self._record_discovery()
+        evidence = self.evidence_package_payload()
         self.references["evidence-package"] = self.store.seal_object(
             "evidence_package", evidence
         )

@@ -3515,9 +3515,8 @@ _FACT_V1_KEYS = (
     "issued_at_utc",
     "payload",
 )
-# fact v2 一次定好形状：8 个 v1 键加形成期坐标、幂等键与产出 run。
-# B1-12 只实现 formed_under 的语义；idempotency_key 与 producer_run 这里只做形状校验，
-# 幂等查找与「同键异内容拒绝」由 B1-13 实现。
+# fact v2：8 个 v1 键加形成期坐标（B1-12）、幂等键与产出 run（B1-13）。合同层只校验形状；幂等键的查链、
+# 「同键同内容复用、同键异内容拒绝」在 ControlStore.append_fact_outcome 的维度锁内执行，重放复核键在 Campaign 内唯一。
 _FACT_V2_EXTRA_KEYS = ("formed_under", "idempotency_key", "producer_run")
 
 
@@ -3526,23 +3525,54 @@ def fact_is_v2(document: dict[str, Any]) -> bool:
 
 
 def validate_producer_run(value: Any, label: str = "producer_run") -> dict[str, Any] | None:
-    """产出 run 坐标（B1-13 绑定监督器 run 与动作）：``null`` 或三键非空字符串。"""
+    """产出 run 坐标：``null``（动作体之外的写入，例如人工批准）或监督器 run 与动作的三键坐标。
+
+    ``run_dir`` 是规范 POSIX 路径（父监督器 ``run-<id>`` 目录，绝对或相对 Campaign 目录均可）；``owner_nonce``
+    与 ``action_id`` 是安全标识符（监督器的 owner nonce 为 64 位十六进制，动作 ID 与 ``action-outputs/<id>.json``
+    的文件名一致）。动作结果 WAL 里对账器据此判断事实是哪个 run 的哪个动作写下的。
+    """
 
     if value is None:
         return None
     run = expect_object(value, label)
     expect_exact_keys(run, {"run_dir", "owner_nonce", "action_id"}, label)
-    for key in ("run_dir", "owner_nonce", "action_id"):
-        expect_string(run[key], f"{label}.{key}")
+    _validate_posix_path(run["run_dir"], f"{label}.run_dir")
+    expect_safe_id(run["owner_nonce"], f"{label}.owner_nonce")
+    expect_safe_id(run["action_id"], f"{label}.action_id")
     return run
 
 
 def validate_idempotency_key(value: Any, label: str = "idempotency_key") -> str | None:
-    """幂等键（B1-13 定义取值公式）：``null`` 或小写 SHA-256。"""
+    """幂等键：``null``（不参与幂等）或小写 SHA-256，取值公式见 ``fact_idempotency_key``。"""
 
     if value is None:
         return None
     return expect_sha256(value, label)
+
+
+# fact-lookup 的结果合同（对账器按幂等键补账时读取）。
+FACT_LOOKUP_SCHEMA = "official-client-control-fact-lookup/v1"
+
+
+def fact_idempotency_key(logical_action: str, input_identity_sha256: str, fact_kind: str) -> str:
+    """事实幂等键（设计 B1-13）：``sha256(canonical({logical_action, input_identity_sha256, fact_kind}))``。
+
+    ``logical_action`` 是跨 run 稳定的逻辑动作名（重派后的新 run 动作 ID 会变，逻辑动作不变）；
+    ``input_identity_sha256`` 是该动作输入的身份摘要；``fact_kind`` 进入键内，同一逻辑动作写不同种类的事实
+    得到不同的键。canonical 取 Store 的规范 JSON（与其它 Store 摘要同一口径）。
+    """
+
+    expect_string(logical_action, "logical_action")
+    expect_sha256(input_identity_sha256, "input_identity_sha256")
+    if expect_string(fact_kind, "fact_kind") not in FACT_DIMENSION:
+        raise ControlError(f"未登记的 fact_kind：{fact_kind}")
+    return canonical_sha256(
+        {
+            "logical_action": logical_action,
+            "input_identity_sha256": input_identity_sha256,
+            "fact_kind": fact_kind,
+        }
+    )
 
 
 def validate_fact_document(value: Any) -> dict[str, Any]:

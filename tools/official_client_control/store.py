@@ -11,6 +11,7 @@ from typing import Any, Iterator
 
 from .canonical import (
     canonical_json_bytes,
+    canonical_sha256,
     ensure_directory,
     expect_rfc3339,
     load_json_file,
@@ -24,6 +25,7 @@ from .canonical import (
 from .contracts import (
     CAMPAIGN_SCHEMA,
     DIMENSIONS,
+    FACT_LOOKUP_SCHEMA,
     FACT_SCHEMA,
     FACT_V2_SCHEMA,
     OBJECT_KINDS,
@@ -37,8 +39,10 @@ from .contracts import (
     validate_campaign,
     validate_fact_document,
     validate_fact_ref,
+    validate_idempotency_key,
     validate_object_document,
     validate_object_ref,
+    validate_producer_run,
     validate_receipt_document,
     validate_receipt_ref,
     validate_store_metadata,
@@ -103,8 +107,45 @@ class ControlStore:
         parsed = validate_receipt_ref(reference)
         return self.root / "receipts" / parsed["receipt_kind"] / f"{parsed['sha256']}.json"
 
-    def seal_object(self, object_kind: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """校验并只写一次封存对象；同摘要再次写入也按覆盖拒绝。"""
+    @staticmethod
+    def _holds_identical(path: Path, content: bytes) -> bool:
+        """不可变文件已存在且字节与 ``content`` 完全相同（内容寻址路径下即同一份制品）。"""
+
+        return not path.is_symlink() and path.is_file() and path.read_bytes() == content
+
+    def _write_once_or_reuse(
+        self, path: Path, content: bytes, lock_name: str, *, allow_existing: bool
+    ) -> bool:
+        """write-once 写入；``allow_existing`` 时目标已有同内容即视为复用。返回是否复用。
+
+        同一路径的写入方（对象、收据、Campaign）都持同名锁，锁内「先查后写」没有并发窗口；write-once 的其它失败
+        （内容不同的覆盖、父目录落盘失败）照常抛出，不当作复用。
+        """
+
+        with self._lock(lock_name):
+            if allow_existing and self._holds_identical(path, content):
+                return True
+            write_once(path, content)
+        return False
+
+    def seal_object(
+        self, object_kind: str, payload: dict[str, Any], *, allow_existing: bool = False
+    ) -> dict[str, Any]:
+        """校验并只写一次封存对象；同摘要再次写入按覆盖拒绝，``allow_existing=True`` 时同内容返回原引用。"""
+
+        return self.seal_object_outcome(
+            object_kind, payload, allow_existing=allow_existing
+        )["object_ref"]
+
+    def seal_object_outcome(
+        self, object_kind: str, payload: dict[str, Any], *, allow_existing: bool = False
+    ) -> dict[str, Any]:
+        """同 ``seal_object``，返回 ``{"object_ref": 引用, "reused": 是否复用已封存的同内容对象}``。
+
+        ``allow_existing``（Claude 升级 B1-13）：同内容对象已封存时直接返回原引用，不再跑写入时门禁。对象内容寻址，
+        同摘要即同一对象，它首次封存时已过门禁、重放另有对象图复核；重试时的写入时门禁反而会因对象自身已存在
+        而失败（例如演进登记的「接在当前链尾」）。
+        """
 
         if object_kind not in OBJECT_KINDS:
             raise ControlError(f"未登记 object_kind：{object_kind}")
@@ -114,8 +155,15 @@ class ControlStore:
             "payload": payload,
         }
         validate_object_document(document)
-        for reference in iter_object_refs(payload):
+        content = canonical_json_bytes(document)
+        digest = sha256_bytes(content)
+        reference = {"object_kind": object_kind, "sha256": digest}
+        path = self.object_path(reference)
+        if allow_existing and self._holds_identical(path, content):
             self.load_object(reference)
+            return {"object_ref": reference, "reused": True}
+        for referenced in iter_object_refs(payload):
+            self.load_object(referenced)
         from .gates import WorkflowGates
 
         # 工具演进登记按 Campaign 串行：链门禁（index、previous_ref、from_identity）与写入在同一把锁内，
@@ -127,13 +175,10 @@ class ControlStore:
         )
         with serial:
             WorkflowGates(self).validate_new_object(document)
-            content = canonical_json_bytes(document)
-            digest = sha256_bytes(content)
-            reference = {"object_kind": object_kind, "sha256": digest}
-            path = self.object_path(reference)
-            with self._lock(f"object-{object_kind}-{digest}"):
-                write_once(path, content)
-        return reference
+            reused = self._write_once_or_reuse(
+                path, content, f"object-{object_kind}-{digest}", allow_existing=allow_existing
+            )
+        return {"object_ref": reference, "reused": reused}
 
     def list_object_refs(self, kind: str) -> list[dict[str, Any]]:
         """列出某类型的全部对象引用并逐个核对摘要与类型；目录不存在时为空。"""
@@ -171,28 +216,40 @@ class ControlStore:
             raise ControlError(f"对象类型与路径不一致：{path}")
         return document
 
-    def create_campaign(self, campaign: dict[str, Any]) -> dict[str, Any]:
+    def create_campaign(
+        self, campaign: dict[str, Any], *, allow_existing: bool = False
+    ) -> dict[str, Any]:
         """建立不可变 Campaign。
 
         Campaign v2 另核对冻结的工具身份与当前受管代码一致：现算多根受管清单的指纹等于
-        ``tool_identity.tool_files_sha256``，清单内 Store 口径条目复算等于 ``tool_bundle_sha256``；Store 任一文件
-        被改而没有进入冻结清单（或没进受管清单）即拒绝。v1 行为不变。
+        ``tool_identity.tool_files_sha256``，三层摘要等于 v3 引擎现算值，清单内 Store 口径条目复算等于
+        ``tool_bundle_sha256``；Store 任一文件被改而没有进入冻结清单（或没进受管清单）即拒绝。v1 行为不变。
+
+        ``allow_existing``（B1-13，编排器重跑建 Campaign 的步骤时用）：同 ID 的 Campaign 已存在且字节相同即返回原
+        结果并附 ``reused: true``，不再核对当前代码（Campaign 冻结的是建立时的身份）；内容不同仍拒绝。
         """
 
         validate_campaign(campaign)
+        campaign_id = campaign["campaign_id"]
+        path = self.root / "campaigns" / f"{campaign_id}.json"
+        content = canonical_json_bytes(campaign)
+        result: dict[str, Any] = {
+            "campaign_id": campaign_id,
+            "identity_sha256": campaign["identity_sha256"],
+        }
+        if allow_existing and (path.exists() or path.is_symlink()):
+            if canonical_json_bytes(self.load_campaign(campaign_id)) != content:
+                raise ControlError(f"Campaign 已存在且内容不同，禁止覆盖：{campaign_id}")
+            return result | {"reused": True}
         self.load_object(campaign["bootstrap_ref"])
         if campaign_is_v2(campaign):
             from .receipts import verify_campaign_tool_manifest
 
             verify_campaign_tool_manifest(campaign)
-        campaign_id = campaign["campaign_id"]
-        path = self.root / "campaigns" / f"{campaign_id}.json"
-        with self._lock(f"campaign-{campaign_id}"):
-            write_once(path, canonical_json_bytes(campaign))
-        return {
-            "campaign_id": campaign_id,
-            "identity_sha256": campaign["identity_sha256"],
-        }
+        reused = self._write_once_or_reuse(
+            path, content, f"campaign-{campaign_id}", allow_existing=allow_existing
+        )
+        return result | {"reused": reused} if allow_existing else result
 
     def load_campaign(self, campaign_id: str) -> dict[str, Any]:
         if not isinstance(campaign_id, str) or not re.fullmatch(
@@ -293,11 +350,42 @@ class ControlStore:
         idempotency_key: str | None = None,
         producer_run: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """通过类型门禁追加事实；不存在绕过门禁的裸追加入口。
+        """通过类型门禁追加事实，返回事实引用；不存在绕过门禁的裸追加入口。
+
+        带幂等键时语义见 ``append_fact_outcome``；同键同内容返回的是原事实的引用。
+        """
+
+        return self.append_fact_outcome(
+            campaign_id,
+            fact_kind,
+            payload,
+            issued_at_utc,
+            idempotency_key=idempotency_key,
+            producer_run=producer_run,
+        )["fact_ref"]
+
+    def append_fact_outcome(
+        self,
+        campaign_id: str,
+        fact_kind: str,
+        payload: dict[str, Any],
+        issued_at_utc: str,
+        *,
+        idempotency_key: str | None = None,
+        producer_run: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """追加事实并返回 ``{"fact_ref": 引用, "reused": 是否复用原事实}``。
 
         Campaign v2 的事实写成 fact v2：先核对当前受管代码匹配有效工具身份，再以当前形成期坐标（有效身份引用、
-        当前候选 revision、当前评估基线）作为 ``formed_under``；``idempotency_key``、``producer_run`` 原样记录并只做
-        形状校验，幂等查找与「同键异内容拒绝」由 B1-13 实现。v1 Campaign 的事实不带这三项，行为不变。
+        当前候选 revision、当前评估基线）作为 ``formed_under``。v1 Campaign 的事实不带幂等键与 producer_run，行为不变。
+
+        幂等（Claude 升级 B1-13，动作结果 WAL 第 ① 步）：维度锁内先按幂等键查本 Campaign 的事实——
+        * 同键、同种类、同 payload 摘要：返回原事实引用并 ``reused: true``，不新增事实。只比 payload，不比
+          ``formed_under``、``issued_at_utc``、``producer_run``：工具演进登记后或在 N+1 重派的新 run 里重试，仍是同一次
+          逻辑写入，原事实保留其形成期坐标与原 producer_run（对账器据此认出是哪个 run 写下的）。
+        * 同键异内容（种类或 payload 不同，含其它维度已用此键）：拒绝。
+        * 无键：照常追加。
+        写入时有效性先于查链：当前受管代码与有效工具身份不一致（未登记演进）时，重试同样被拒，先登记演进。
         """
 
         from .gates import WorkflowGates
@@ -307,8 +395,20 @@ class ControlStore:
         expects_v2 = campaign_is_v2(campaign)
         if not expects_v2 and (idempotency_key is not None or producer_run is not None):
             raise ControlError("v1 Campaign 的事实不支持 idempotency_key／producer_run")
+        validate_idempotency_key(idempotency_key)
+        validate_producer_run(producer_run)
         lock_name = f"fact-{campaign_id}-{dimension}"
         with self._lock(lock_name):
+            formed_under: dict[str, Any] | None = None
+            if expects_v2:
+                from .receipts import current_formed_under
+
+                formed_under = current_formed_under(self, campaign)
+            if idempotency_key is not None:
+                existing = self.find_fact_by_idempotency_key(campaign_id, idempotency_key)
+                if existing is not None:
+                    self._require_same_logical_write(existing, fact_kind, payload)
+                    return {"fact_ref": self.fact_ref(existing), "reused": True}
             chain = self.list_facts(campaign_id, dimension)
             sequence = len(chain) + 1
             previous = chain[-1]["_sha256"] if chain else None
@@ -323,10 +423,8 @@ class ControlStore:
                 "payload": payload,
             }
             if expects_v2:
-                from .receipts import current_formed_under
-
                 document["schema_version"] = FACT_V2_SCHEMA
-                document["formed_under"] = current_formed_under(self, campaign)
+                document["formed_under"] = formed_under
                 document["idempotency_key"] = idempotency_key
                 document["producer_run"] = producer_run
             validate_fact_document(document)
@@ -347,27 +445,104 @@ class ControlStore:
             write_once(path, content)
         stored = dict(document)
         stored["_sha256"] = digest
-        return self.fact_ref(stored)
+        return {"fact_ref": self.fact_ref(stored), "reused": False}
 
-    def write_receipt(self, kind: str, receipt: dict[str, Any]) -> dict[str, Any]:
-        """写入不可覆盖收据；收据合同版本必须与所属 Campaign 一致，v2 收据的形成期坐标必须是当前值。"""
+    @staticmethod
+    def _require_same_logical_write(
+        existing: dict[str, Any], fact_kind: str, payload: dict[str, Any]
+    ) -> None:
+        if existing["fact_kind"] != fact_kind or canonical_sha256(
+            existing["payload"]
+        ) != canonical_sha256(payload):
+            raise ControlError(
+                f"幂等键 {existing['idempotency_key']} 已写入内容不同的事实"
+                f"（{existing['dimension']}#{existing['sequence']} {existing['fact_kind']}）：同键异内容拒绝"
+            )
+
+    def find_fact_by_idempotency_key(
+        self, campaign_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        """按幂等键在 Campaign 全部维度查找事实（只读、不加锁、不核当前工具身份）；没有返回 None。
+
+        键在 Campaign 内唯一（写入时查链保证，重放复核）；查到多条说明 Store 已不一致，失败关闭。v1 Campaign 的
+        事实没有幂等键，查询即拒绝，避免对账器把「查不到」误判成「动作未执行」。
+        """
+
+        campaign = self.load_campaign(campaign_id)
+        if not campaign_is_v2(campaign):
+            raise ControlError("v1 Campaign 的事实没有幂等键：fact-lookup 只用于 Campaign v2")
+        if validate_idempotency_key(idempotency_key, "idempotency_key") is None:
+            raise ControlError("fact-lookup 需要幂等键")
+        matches = [
+            fact
+            for fact in self.list_facts(campaign_id)
+            if fact["idempotency_key"] == idempotency_key
+        ]
+        if len(matches) > 1:
+            raise ControlError(f"幂等键在多条事实上重复，Store 已不一致：{idempotency_key}")
+        return matches[0] if matches else None
+
+    def fact_lookup(self, campaign_id: str, idempotency_key: str) -> dict[str, Any]:
+        """``fact-lookup`` 的结果（合同 ``official-client-control-fact-lookup/v1``），供对账器按幂等键补账。
+
+        ``found`` 为 false 时其余事实字段为 null；为 true 时给出事实引用、种类、payload 摘要、签发时间、形成期坐标与
+        写下它的 producer_run。查不到即「动作未写 Store」，查到而账本没有即「Store 已写、账本未记」。
+        """
+
+        fact = self.find_fact_by_idempotency_key(campaign_id, idempotency_key)
+        return {
+            "schema_version": FACT_LOOKUP_SCHEMA,
+            "campaign_id": campaign_id,
+            "idempotency_key": idempotency_key,
+            "found": fact is not None,
+            "fact_ref": self.fact_ref(fact) if fact is not None else None,
+            "fact_kind": fact["fact_kind"] if fact is not None else None,
+            "payload_sha256": canonical_sha256(fact["payload"]) if fact is not None else None,
+            "issued_at_utc": fact["issued_at_utc"] if fact is not None else None,
+            "formed_under": fact["formed_under"] if fact is not None else None,
+            "producer_run": fact["producer_run"] if fact is not None else None,
+        }
+
+    def write_receipt(
+        self, kind: str, receipt: dict[str, Any], *, allow_existing: bool = False
+    ) -> dict[str, Any]:
+        """写入不可覆盖收据并返回引用；``allow_existing=True`` 时同内容收据已存在即返回原引用。"""
+
+        return self.write_receipt_outcome(kind, receipt, allow_existing=allow_existing)[
+            "receipt_ref"
+        ]
+
+    def write_receipt_outcome(
+        self, kind: str, receipt: dict[str, Any], *, allow_existing: bool = False
+    ) -> dict[str, Any]:
+        """写入收据，返回 ``{"receipt_ref": 引用, "reused": 是否复用}``。
+
+        收据合同版本必须与所属 Campaign 一致，v2 收据的形成期坐标必须是当前值。``allow_existing``（B1-13）：同内容
+        收据已存在时直接返回原引用，不再核对「当前值」——收据是确定性重建的结果，同内容即同一次写入；改了任何
+        字段（含形成期坐标）的收据内容不同，仍按新写入核对、旧结果冒充当前写入照样被拒。
+        """
 
         validate_receipt_document(receipt, kind)
-        for reference in iter_object_refs(receipt):
-            self.load_object(reference)
-        for reference in iter_fact_refs(receipt):
-            self.load_fact(reference)
-        for reference in iter_receipt_refs(receipt):
-            self.load_receipt(reference)
-        from .receipts import require_receipt_current
-
-        require_receipt_current(self, receipt)
         content = canonical_json_bytes(receipt)
         digest = sha256_bytes(content)
         reference = {"receipt_kind": kind, "sha256": digest}
-        with self._lock(f"receipt-{kind}-{digest}"):
-            write_once(self.receipt_path(reference), content)
-        return reference
+        path = self.receipt_path(reference)
+        if allow_existing and self._holds_identical(path, content):
+            self.load_receipt(reference)
+            return {"receipt_ref": reference, "reused": True}
+        for referenced in iter_object_refs(receipt):
+            self.load_object(referenced)
+        for referenced in iter_fact_refs(receipt):
+            self.load_fact(referenced)
+        for referenced in iter_receipt_refs(receipt):
+            self.load_receipt(referenced)
+        from .receipts import require_receipt_current
+
+        require_receipt_current(self, receipt)
+        reused = self._write_once_or_reuse(
+            path, content, f"receipt-{kind}-{digest}", allow_existing=allow_existing
+        )
+        return {"receipt_ref": reference, "reused": reused}
 
     def load_receipt(self, reference: dict[str, Any]) -> dict[str, Any]:
         parsed = validate_receipt_ref(reference)

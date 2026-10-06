@@ -196,12 +196,52 @@ def store_bundle_from_manifest(manifest: dict[str, Any]) -> str:
     return canonical_sha256(entries)
 
 
+_LAYER_FIELDS = ("wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")
+
+
+def tool_identity_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """由现算清单得到完整七项工具身份：三层摘要用 v3 引擎 ``compute_identity`` 在同一仓库根上计算。
+
+    编排器不在受管树里（三层摘要无从计算）时失败关闭；``compute_identity`` 自己复算的整树指纹必须与清单一致，
+    否则说明计算期间受管文件变了。
+    """
+
+    layers = _layer_digests(manifest)
+    if layers is None:
+        raise ControlError(
+            f"编排器 {manifest['policy']['orchestrator']['file']} 不在受管树内，无法计算三层工具身份摘要"
+        )
+    return {
+        "client": manifest["client"],
+        "policy_version": manifest["policy_version"],
+        "policy_sha256": manifest["policy_sha256"],
+        **layers,
+        "tool_files_sha256": manifest["tool_files_sha256"],
+    }
+
+
+def current_tool_identity(client: str) -> dict[str, Any]:
+    """当前受管代码的完整七项工具身份（建 Campaign v2 与登记工具演进时用它核对声明值）。"""
+
+    return tool_identity_from_manifest(current_tool_manifest(client))
+
+
+def identity_drift(declared: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """声明的七项身份与现算身份不相等的字段：先列可现算四项，再列三层摘要（报错文案按此顺序）。"""
+
+    return [
+        key
+        for key in (*_COMPUTABLE_IDENTITY_FIELDS, *_LAYER_FIELDS)
+        if declared.get(key) != current.get(key)
+    ]
+
+
 def verify_campaign_tool_manifest(campaign: dict[str, Any]) -> dict[str, Any]:
     """Campaign v2 建立时核对冻结的工具身份与当前受管代码一致（设计 B1-12「Store 全包摘要的核对方式」）。
 
     ① 身份策略的 client、policy_version、policy_sha256 与冻结值相同；② 现算多根受管清单的指纹等于
-    ``tool_identity.tool_files_sha256``；③ 清单内 Store 口径条目按同一口径复算等于 ``tool_bundle_sha256``。
-    wire／evidence／control 三层摘要不在这里现算（见 ``_COMPUTABLE_IDENTITY_FIELDS`` 的说明）。
+    ``tool_identity.tool_files_sha256``；③ 三层摘要（wire／evidence／control）等于 v3 引擎 ``compute_identity``
+    在同一仓库根上的现算值（B1-13 补齐）；④ 清单内 Store 口径条目按同一口径复算等于 ``tool_bundle_sha256``。
     """
 
     identity = campaign["tool_identity"]
@@ -212,6 +252,11 @@ def verify_campaign_tool_manifest(campaign: dict[str, Any]) -> dict[str, Any]:
     if identity["tool_files_sha256"] != manifest["tool_files_sha256"]:
         raise ControlError(
             "campaign.tool_identity.tool_files_sha256 与现算受管文件清单不一致：受管文件已变化，须按当前代码重算身份"
+        )
+    drift = identity_drift(identity, tool_identity_from_manifest(manifest))
+    if drift:
+        raise ControlError(
+            f"campaign.tool_identity 与 v3 身份引擎现算结果不一致：{'、'.join(drift)}"
         )
     if campaign["tool_bundle_sha256"] != store_bundle_from_manifest(manifest):
         raise ControlError(
@@ -233,10 +278,7 @@ def _layer_digests(manifest: dict[str, Any]) -> dict[str, str] | None:
         raise ControlError(f"三层工具身份摘要无法计算：{error}") from error
     if identity["tool_files_sha256"] != manifest["tool_files_sha256"]:
         raise ControlError("计算三层摘要期间受管文件发生变化，请重试")
-    return {
-        key: identity[key]
-        for key in ("wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")
-    }
+    return {key: identity[key] for key in _LAYER_FIELDS}
 
 
 def tool_digest_v2(client: str = "claude") -> dict[str, Any]:
@@ -881,11 +923,38 @@ def finalize_validation(
     acceptance_ref: dict[str, Any],
     production_selector_after_ref: dict[str, Any],
     issued_at_utc: str,
+    *,
+    idempotency_key: str | None = None,
+    producer_run: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """从严格 Acceptance 派生 VC-5 完成事实；门禁在追加前统一执行。
 
     v2 下 Acceptance 必须形成于当前候选 revision 与当前评估基线（交付判定由 validation_completed 门禁执行）。
+    带幂等键时语义同 ``ControlStore.append_fact_outcome``（重试返回原事实引用）。
     """
+
+    return finalize_validation_outcome(
+        store,
+        campaign_id,
+        acceptance_ref,
+        production_selector_after_ref,
+        issued_at_utc,
+        idempotency_key=idempotency_key,
+        producer_run=producer_run,
+    )["fact_ref"]
+
+
+def finalize_validation_outcome(
+    store: Any,
+    campaign_id: str,
+    acceptance_ref: dict[str, Any],
+    production_selector_after_ref: dict[str, Any],
+    issued_at_utc: str,
+    *,
+    idempotency_key: str | None = None,
+    producer_run: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """同 ``finalize_validation``，返回 ``{"fact_ref", "reused"}``。"""
 
     _require_effective_tool(store, store.load_campaign(campaign_id))
     acceptance = store.load_fact(acceptance_ref)
@@ -917,8 +986,13 @@ def finalize_validation(
     payload["identity_sha256"] = canonical_sha256(
         {key: item for key, item in payload.items() if key != "identity_sha256"}
     )
-    return store.append_fact(
-        campaign_id, "validation_completed", payload, issued_at_utc
+    return store.append_fact_outcome(
+        campaign_id,
+        "validation_completed",
+        payload,
+        issued_at_utc,
+        idempotency_key=idempotency_key,
+        producer_run=producer_run,
     )
 
 

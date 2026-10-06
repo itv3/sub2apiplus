@@ -154,15 +154,11 @@ class WorkflowGates:
 
         重放与写入都核：所属 Campaign 是 v2 且 client 一致；index 1 的 ``from_identity`` 等于 Campaign 冻结身份，
         其后等于 ``previous_ref`` 那份登记的 ``to_identity``；批准时间不早于 Campaign 建立与上一份登记。写入时再核：
-        新登记必须接在当前链尾（不得分叉），``to_identity`` 的可现算四项必须等于当前受管代码——登记的就是当前代码。
-        wire／evidence／control 三层摘要在编排器出现（B1-09）前无法现算，由 ``evolution_receipt`` 承载其来源。
+        新登记必须接在当前链尾（不得分叉），``to_identity`` 的七项必须全部等于当前受管代码的身份——可现算四项
+        现算清单，wire／evidence／control 三层摘要用 v3 引擎 ``compute_identity`` 现算（B1-13 补齐）。
         """
 
-        from .receipts import (
-            _COMPUTABLE_IDENTITY_FIELDS,
-            current_tool_manifest,
-            tool_evolutions,
-        )
+        from .receipts import current_tool_identity, identity_drift, tool_evolutions
 
         campaign = self.store.load_campaign(payload["campaign_id"])
         if not campaign_is_v2(campaign):
@@ -192,12 +188,7 @@ class WorkflowGates:
         tail = chain[-1][0] if chain else None
         if payload["index"] != len(chain) + 1 or payload["previous_ref"] != tail:
             raise ControlError("工具演进登记必须接在当前链尾：index 或 previous_ref 不是当前有效身份")
-        manifest = current_tool_manifest(payload["client"])
-        drift = [
-            key
-            for key in _COMPUTABLE_IDENTITY_FIELDS
-            if manifest[key] != payload["to_identity"][key]
-        ]
+        drift = identity_drift(payload["to_identity"], current_tool_identity(payload["client"]))
         if drift:
             raise ControlError(
                 f"工具演进登记的 to_identity 不是当前受管代码的身份：{'、'.join(drift)}"
@@ -1843,12 +1834,24 @@ class WorkflowGates:
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
     ) -> None:
+        """Runtime Selector 事实（唯一性补齐，Claude 升级 B1-13）。
+
+        ``selector_observed`` 是只读观察：同一快照前后观察两次是合法证据（VC-5 的 before／after），不判重复；
+        它的幂等由幂等键承担——动作体重试带同一幂等键时 Store 返回原事实、不新增，同键异内容被拒。
+        ``selector_activated`` 是一次性切换：同一 Deployment（``deployment_ref`` 指向的 active 阶段）只能激活一次。
+        """
+
         snapshot = self._object(payload["catalog_snapshot_ref"], "runtime_catalog_snapshot")
         if kind == "selector_activated":
             deployment = self._fact(payload["deployment_ref"], "active")
             candidate = self._candidate_by_id(deployment["payload"]["candidate_id"], facts_by_kind)
             if snapshot["production_active_ref"] != candidate["payload"]["release_artifact_ref"]:
                 raise ControlError("selector 激活没有指向已晋升 Candidate Release")
+            if any(
+                fact["payload"]["deployment_ref"] == payload["deployment_ref"]
+                for fact in facts_by_kind["selector_activated"]
+            ):
+                raise ControlError("同一 Deployment 的 selector_activated 不得重复")
 
     def _gate_release_promoted(
         self,
@@ -2064,6 +2067,11 @@ class WorkflowGates:
             raise ControlError("Campaign 存在多个规则分类事实")
         if len(facts_by_kind["evidence_approved"]) > 1:
             raise ControlError("Campaign 存在多个 EvidenceApprovalFact")
+        idempotency_keys = [
+            fact["idempotency_key"] for fact in facts if fact.get("idempotency_key") is not None
+        ]
+        if len(idempotency_keys) != len(set(idempotency_keys)):
+            raise ControlError("Campaign 存在重复的事实幂等键：同一逻辑写入只能落一条事实")
         candidate_ids = [fact["payload"]["candidate_id"] for fact in facts_by_kind["candidate_frozen"]]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ControlError("Campaign 存在重复 Candidate ID")

@@ -17,8 +17,8 @@ from .receipts import (
     finalize_candidate_build,
     finalize_candidate_delivery,
     finalize_promotion,
-    finalize_validation,
     finalize_validation_gate,
+    finalize_validation_outcome,
     replay_receipt,
     tool_digest_v2,
 )
@@ -62,11 +62,26 @@ def _add_store(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--store", required=True, type=_absolute_path, help="受管 Store 绝对路径")
 
 
+def _add_idempotency_options(parser: argparse.ArgumentParser) -> None:
+    """动作结果 WAL（B1-13）：动作体内的 Store 写入带幂等键与产出 run；只用于 Campaign v2。"""
+
+    parser.add_argument(
+        "--idempotency-key",
+        help="事实幂等键（contracts.fact_idempotency_key 计算）；给出时输出 {fact_ref, reused}，同键同内容返回原事实",
+    )
+    parser.add_argument(
+        "--producer-run",
+        type=_absolute_path,
+        help="写下这条事实的监督器 run 坐标 JSON：{run_dir, owner_nonce, action_id}",
+    )
+
+
 def _add_fact_command(parser: argparse.ArgumentParser) -> None:
     _add_store(parser)
     parser.add_argument("--campaign", required=True, help="不可变 Campaign ID")
     parser.add_argument("--input", required=True, type=_absolute_path, help="事实 payload JSON")
     parser.add_argument("--issued-at", required=True, help="事实签发 RFC3339 时间")
+    _add_idempotency_options(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,10 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--root", required=True, type=_absolute_path)
     initialize.add_argument("--created-at", required=True)
 
+    allow_existing_help = "同内容已存在时返回原结果（输出附 reused），重跑同一步骤时用"
+
     seal = subparsers.add_parser("artifact-seal", help="封存受管内容寻址对象")
     _add_store(seal)
     seal.add_argument("--kind", required=True)
     seal.add_argument("--input", required=True, type=_absolute_path)
+    seal.add_argument("--allow-existing", action="store_true", help=allow_existing_help)
 
     campaign = subparsers.add_parser("campaign-create", help="创建不可变 Campaign")
     _add_store(campaign)
@@ -94,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="v1",
         help="输入 Campaign 的合同版本；v2 建立时核对冻结工具身份与当前受管代码",
     )
+    campaign.add_argument("--allow-existing", action="store_true", help=allow_existing_help)
 
     evolution = subparsers.add_parser(
         "tool-evolution", help="登记 Campaign v2 的工具演进，使当前受管代码成为有效工具身份"
@@ -103,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
     evolution.add_argument(
         "--input", required=True, type=_absolute_path, help="tool_evolution_registration payload JSON"
     )
+    evolution.add_argument("--allow-existing", action="store_true", help=allow_existing_help)
+
+    lookup = subparsers.add_parser(
+        "fact-lookup", help="按幂等键查找事实（只读；对账器补「Store 已写、账本未记」用）"
+    )
+    _add_store(lookup)
+    lookup.add_argument("--campaign", required=True, help="Campaign v2 ID")
+    lookup.add_argument("--idempotency-key", required=True, help="事实幂等键")
 
     for command in FACT_COMMANDS:
         fact_parser = subparsers.add_parser(command, help=f"追加 {FACT_COMMANDS[command]} 事实")
@@ -154,6 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     validation.add_argument("--acceptance-ref", required=True, type=_absolute_path)
     validation.add_argument("--selector-after-ref", required=True, type=_absolute_path)
     validation.add_argument("--issued-at", required=True)
+    _add_idempotency_options(validation)
 
     candidate_delivery = subparsers.add_parser(
         "candidate-delivery-record", help="追加候选交付四阶段事实"
@@ -205,6 +233,36 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def _fact_write_options(arguments: argparse.Namespace) -> dict[str, Any]:
+    producer_run = arguments.producer_run
+    return {
+        "idempotency_key": arguments.idempotency_key,
+        "producer_run": None if producer_run is None else _load_object(producer_run, "producer run"),
+    }
+
+
+def _fact_write_result(arguments: argparse.Namespace, outcome: dict[str, Any]) -> dict[str, Any]:
+    """带幂等键的写入输出 ``{fact_ref, reused}``；不带时输出与原来相同的事实引用，可直接作引用文件使用。"""
+
+    return outcome if arguments.idempotency_key is not None else outcome["fact_ref"]
+
+
+def _append_fact(
+    store: ControlStore,
+    arguments: argparse.Namespace,
+    fact_kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    outcome = store.append_fact_outcome(
+        arguments.campaign,
+        fact_kind,
+        payload,
+        arguments.issued_at,
+        **_fact_write_options(arguments),
+    )
+    return _fact_write_result(arguments, outcome)
+
+
 def execute(arguments: argparse.Namespace) -> dict[str, Any]:
     command = arguments.command
     if command == "init-store":
@@ -215,7 +273,10 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
 
     store = ControlStore(arguments.store)
     if command == "artifact-seal":
-        return store.seal_object(arguments.kind, _load_object(arguments.input, "artifact payload"))
+        payload = _load_object(arguments.input, "artifact payload")
+        if arguments.allow_existing:
+            return store.seal_object_outcome(arguments.kind, payload, allow_existing=True)
+        return store.seal_object(arguments.kind, payload)
     if command == "campaign-create":
         campaign = _load_object(arguments.input, "campaign")
         expected = CAMPAIGN_SCHEMA_CHOICES[arguments.schema]
@@ -223,31 +284,36 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ControlError(
                 f"campaign-create --schema {arguments.schema} 要求输入声明 {expected}"
             )
-        return store.create_campaign(campaign)
+        return store.create_campaign(campaign, allow_existing=arguments.allow_existing)
     if command == "tool-evolution":
         payload = _load_object(arguments.input, "tool evolution registration")
         if payload.get("campaign_id") != arguments.campaign:
             raise ControlError("tool evolution registration.campaign_id 与 --campaign 不一致")
-        reference = store.seal_object("tool_evolution_registration", payload)
-        return {
-            "registration_ref": reference,
+        outcome = store.seal_object_outcome(
+            "tool_evolution_registration", payload, allow_existing=arguments.allow_existing
+        )
+        result = {
+            "registration_ref": outcome["object_ref"],
             "effective_tool_identity": effective_tool_identity(
                 store, store.load_campaign(arguments.campaign)
             ),
         }
+        return result | {"reused": outcome["reused"]} if arguments.allow_existing else result
+    if command == "fact-lookup":
+        return store.fact_lookup(arguments.campaign, arguments.idempotency_key)
     if command in FACT_COMMANDS:
-        return store.append_fact(
-            arguments.campaign,
+        return _append_fact(
+            store,
+            arguments,
             FACT_COMMANDS[command],
             _load_object(arguments.input, f"{FACT_COMMANDS[command]} payload"),
-            arguments.issued_at,
         )
     if command == "deployment-record":
-        return store.append_fact(
-            arguments.campaign,
+        return _append_fact(
+            store,
+            arguments,
             arguments.stage,
             _load_object(arguments.input, f"{arguments.stage} payload"),
-            arguments.issued_at,
         )
     if command == "promotion-finalize":
         return finalize_promotion(
@@ -278,23 +344,20 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             _load_object(arguments.input, "validation gate result"),
         )
     if command == "validation-finalize":
-        return finalize_validation(
+        outcome = finalize_validation_outcome(
             store,
             arguments.campaign,
             _load_object(arguments.acceptance_ref, "acceptance ref"),
             _load_object(arguments.selector_after_ref, "selector after ref"),
             arguments.issued_at,
+            **_fact_write_options(arguments),
         )
+        return _fact_write_result(arguments, outcome)
     if command == "candidate-delivery-record":
         payload = _load_object(arguments.input, "candidate delivery payload")
         if payload.get("stage") != arguments.stage:
             raise ControlError("candidate delivery payload.stage 与 --stage 不一致")
-        return store.append_fact(
-            arguments.campaign,
-            "candidate_delivery_recorded",
-            payload,
-            arguments.issued_at,
-        )
+        return _append_fact(store, arguments, "candidate_delivery_recorded", payload)
     if command == "candidate-delivery-finalize":
         return finalize_candidate_delivery(
             store,

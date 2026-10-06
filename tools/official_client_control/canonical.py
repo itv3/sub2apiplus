@@ -212,9 +212,36 @@ def ensure_directory(path: Path, *, mode: int = 0o700) -> None:
     path.chmod(mode)
 
 
-def write_once(path: Path, content: bytes, *, mode: int = 0o600) -> None:
-    """以 O_EXCL 原子创建文件；任何现有目标都视为覆盖尝试。"""
+def _fsync_directory(path: Path) -> None:
+    """把目录项（新建文件或子目录的名字）落盘；只对文件 fsync 不能保证崩溃后目录里还有这个名字。"""
 
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _missing_ancestors(directory: Path) -> list[Path]:
+    """``directory`` 自身及其尚不存在的祖先，由近到远；用于写完后逐级 fsync 新建目录的父目录。"""
+
+    missing: list[Path] = []
+    current = directory
+    while not current.exists() and current != current.parent:
+        missing.append(current)
+        current = current.parent
+    return missing
+
+
+def write_once(path: Path, content: bytes, *, mode: int = 0o600) -> None:
+    """以 O_EXCL 原子创建文件；任何现有目标都视为覆盖尝试。
+
+    持久性（Claude 升级 B1-13）：文件内容 fsync 之后再 fsync 父目录，使「文件已存在」本身在崩溃后仍成立；
+    本次顺带新建的目录也逐级 fsync 其父目录。动作结果 WAL 依赖这一点：Store 写入返回后崩溃，重跑按幂等键
+    一定能查到这条事实。
+    """
+
+    created = _missing_ancestors(path.parent)
     ensure_directory(path.parent)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
@@ -230,6 +257,12 @@ def write_once(path: Path, content: bytes, *, mode: int = 0o600) -> None:
     except BaseException:
         path.unlink(missing_ok=True)
         raise
+    try:
+        _fsync_directory(path.parent)
+        for directory in created:
+            _fsync_directory(directory.parent)
+    except OSError as error:
+        raise ControlError(f"不可变文件已写入但父目录无法落盘：{path}：{error}") from error
 
 
 def atomic_replace_untrusted(path: Path, content: bytes, *, mode: int = 0o600) -> None:
