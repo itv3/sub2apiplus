@@ -29,6 +29,7 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "tool_identity_policy_v2.json": "B1-07 策略 v8：三个共享新文件登记进 control 层，先于文件本身进入受管树",
     "upgrade_client_adapter.py": "B1-01 客户端适配接口、编排器服务面与注册表",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）",
+    "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同",
 }
 
 

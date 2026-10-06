@@ -357,9 +357,23 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
 })
 
 
+def _import_managed(module_name: str) -> Any:
+    """按包路径导入受管模块；脚本方式运行且仓库根不在 sys.path（没有 tools 包）时退回扁平模块名。
+
+    只在缺的正是 ``tools`` 包本身时退回；受管树里缺某个子模块（例如尚未实现的 Claude 模块）照常抛错。
+    """
+
+    try:
+        return importlib.import_module(f"{PACKAGE}.{module_name}")
+    except ModuleNotFoundError as error:
+        if error.name not in {"tools", PACKAGE}:
+            raise
+    return importlib.import_module(module_name)
+
+
 def _resolve(binding: tuple[str, str | None]) -> Any:
     module_name, symbol = binding
-    module = importlib.import_module(f"{PACKAGE}.{module_name}")
+    module = _import_managed(module_name)
     return module if symbol is None else getattr(module, symbol)
 
 
@@ -489,6 +503,27 @@ def client_of(campaign_dir: Path) -> str:
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ClientAdapterError(f"Campaign 总计划不可读：{path}") from error
     return client_of_manifest(manifest)
+
+
+def root_cause_dimensions(
+    adapter: ClientAdapter,
+    codes: Mapping[str, Any],
+    stable_error_code: str,
+    dimensions: Mapping[str, str],
+) -> dict[str, str]:
+    """按码表登记补齐 client 维度，并做客户端专属的易变值检查。
+
+    码表要求 ``client`` 维度时填适配器的客户端名（Claude 码表每个码都有）；Codex 码表不含 ``client``，原样返回，
+    根因 ID 与改造前逐字相同。``codes`` 是调用方用自己那份根因模块 ``load_codes`` 加载的码表；码未登记时原样返回，
+    由根因 API 照常拒绝。
+    """
+
+    result = dict(dimensions)
+    entry = codes.get("codes", {}).get(stable_error_code) if isinstance(codes, Mapping) else None
+    if isinstance(entry, Mapping) and "client" in entry.get("stable_dimensions", ()):
+        result["client"] = adapter.client
+    adapter.reject_volatile_dimensions(result)
+    return result
 
 
 def require_consistent_client(expected: str, sources: Mapping[str, Mapping[str, Any] | None]) -> None:

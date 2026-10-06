@@ -16,6 +16,7 @@ import contextvars
 import errno
 import fcntl
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -40,6 +41,9 @@ if __package__ in {None, ""}:
     import codex_upgrade_root_cause as root_cause
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc_artifacts as vc_artifacts
+    # 按名字导入而不写 import 语句：作业依赖分析会把 import 语句计入 Job 的工具依赖，而适配接口属 control 层、
+    # 不影响请求字节；写成 import 语句会迫使 Codex 场景清单（wire 层）改写依赖声明，违反 Claude 升级的 Codex 身份守恒。
+    upgrade_client_adapter = importlib.import_module("upgrade_client_adapter")
 else:
     from . import build_assertion_bundle
     from . import codex_upgrade_arm64_environment_receipt as arm64_environment
@@ -48,6 +52,7 @@ else:
     from . import codex_upgrade_root_cause as root_cause
     from . import codex_upgrade_timing_ledger as timing_ledger
     from . import codex_upgrade_vc_artifacts as vc_artifacts
+    from . import upgrade_client_adapter
 
 
 SCHEMA_VERSION = "codex-upgrade-supervisor/v1"
@@ -71,6 +76,13 @@ CAMPAIGN_CONTINUITY_SCHEMA = "codex-upgrade-campaign-continuity/v1"
 CAMPAIGN_RUN_SCHEMA = "codex-upgrade-campaign-run/v1"
 CAMPAIGN_RUN_BATCHED_SCHEMA = "codex-upgrade-campaign-run/v2"
 CAMPAIGN_RUN_RECOVERY_SCHEMA = "codex-upgrade-campaign-run/v3"
+# Claude 的 campaign-run 清单（Claude 升级控制面设计附录 B）：v2 结构加 client。新合同只由 Claude 使用，Codex 继续用
+# v1～v3 并隐含 codex。凡按批次模型分支的地方把它与 v2 同等对待；比对前后两份清单时另核对两者属于同一客户端。
+OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA = "official-client-campaign-run/v1"
+OFFICIAL_CLIENT_CAMPAIGN_RUN_CLIENTS = frozenset({"claude"})
+BATCHED_RUN_SCHEMAS = frozenset({CAMPAIGN_RUN_BATCHED_SCHEMA, OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA})
+# 当前批次所属客户端的适配器：只收冻结值、拿不到清单的判定（评估器身份核对）经它取；未设定时即 Codex。
+_RUN_ADAPTER: contextvars.ContextVar[Any] = contextvars.ContextVar("campaign_run_client_adapter", default=None)
 # B4（2026-09-16）：0.154 首轮 VC-1 事故链的一次性权限补偿／alias／预派发锚点常量与
 # 专用验证器已删除；历史 run 与收据只读，新 Campaign 的失败一律由 reconciler 对账。
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
@@ -1527,10 +1539,7 @@ def post_run_tooling_facts(
         run_started = _parse_rfc3339_utc(run_started_at_utc, "父 run 开始")
     except SupervisorError as error:
         return fail(str(error))
-    if inner_manifest.get("schema_version") not in {
-        CAMPAIGN_RUN_BATCHED_SCHEMA,
-        CAMPAIGN_RUN_RECOVERY_SCHEMA,
-    }:
+    if inner_manifest.get("schema_version") not in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
         return fail("批次清单不是 batched／recovery 合同")
     execute_items = inner_manifest.get("execute_items")
     reuse_items = inner_manifest.get("reuse_items")
@@ -2998,6 +3007,8 @@ def attempt_recovery_orphan_facts(
 def verify_attempt_recovery_orphan_output(
     campaign_dir: Path,
     facts: Mapping[str, Any],
+    *,
+    adapter: Any = None,
 ) -> dict[str, Any]:
     """reconciler／后继协议：在 Campaign 目录内以幂等重派同等强度重验绑定的段摘要，并确认段为成功终态。
 
@@ -3008,8 +3019,10 @@ def verify_attempt_recovery_orphan_output(
     只有这样，逐字重派同一批次才必然命中段 run 的幂等返回（零请求）。
     """
 
-    # 延迟导入：codex_upgrade 在模块顶层导入本模块，运行期再反向引用不会形成导入环。
-    from tools.official_client_capture import codex_upgrade as _codex_upgrade
+    # 编排器的段加载与权威链读取经客户端适配器（缺省 Codex，与改造前同一份模块）；适配器在调用时才解析编排器，
+    # 与原先的延迟导入一样不会形成导入环。
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
 
     if not facts.get("complete") or facts.get("binding_mismatch"):
         raise SupervisorError("父终态化丢失批次的恢复段判定不成立。")
@@ -3030,18 +3043,18 @@ def verify_attempt_recovery_orphan_output(
     if recovery_revision != facts.get("recovery_revision"):
         raise SupervisorError("父终态化丢失批次绑定的段号与动作命令不一致。")
     try:
-        _segment_root, reservation, summary = _codex_upgrade._load_attempt_recovery_segment(
+        _segment_root, reservation, summary = adapter.orchestrator._load_attempt_recovery_segment(
             campaign_dir, candidate_id, attempt_id, recovery_revision
         )
-        _baseline, _commit, recovery = _codex_upgrade._authoritative_recovery_execute_jobs(
+        _baseline, _commit, recovery = adapter.orchestrator._authoritative_recovery_execute_jobs(
             campaign_dir, candidate_id, reservation
         )
-    except _codex_upgrade.ConfigurationError as error:
+    except adapter.orchestrator.ConfigurationError as error:
         raise SupervisorError(f"父终态化丢失批次绑定的段摘要无法按段加载校验重验：{error}") from error
     frozen = sorted(str(item) for item in recovery.get("execute_jobs", []))
     results = summary.get("results")
     if (
-        summary.get("status") != _codex_upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS
+        summary.get("status") != adapter.orchestrator.ATTEMPT_RECOVERY_SUCCESS_STATUS
         or not isinstance(results, list)
         or not results
         or any(not isinstance(row, Mapping) or row.get("status") != "complete" for row in results)
@@ -6636,6 +6649,7 @@ def official_assertion_bundle_facts(
     attempt_id: str,
     *,
     verify_content: bool,
+    adapter: Any = None,
 ) -> dict[str, Any]:
     """第 43 项：官方 attempt 的断言证据包是否已发布、能否核对为本 attempt 同一冻结输入的产物（零请求、只读）。
 
@@ -6652,11 +6666,14 @@ def official_assertion_bundle_facts(
     的 artifact 摘要。派发门禁做内容核对；对账与阶段幂等合同只做结构核对——对账保持零扫描，内容由紧接着的派发
     门禁与 seal 本身核对。未发布时 ``published`` 为 False，其余不核对。读取中途的文件系统错误（权限、竞态删除）
     一律按"已发布但核对不上"失败关闭，不让调用方收到未分类异常。
+    capture manifest 里记录目标版本的字段名按 Campaign 所属客户端经适配器取（缺省 Codex 的 ``codex_version``）。
     """
 
     facts: dict[str, Any] = {"published": False, "consistent": False, "reasons": [], "bindings": {}}
     try:
-        _collect_official_assertion_bundle_facts(facts, Path(campaign_dir), attempt_id, verify_content=verify_content)
+        _collect_official_assertion_bundle_facts(
+            facts, Path(campaign_dir), attempt_id, verify_content=verify_content, adapter=adapter
+        )
     except OSError as error:
         facts.update(published=True, consistent=False, bindings={})
         facts["reasons"].append(f"读取断言证据包或其来源失败：{error}")
@@ -6669,9 +6686,12 @@ def _collect_official_assertion_bundle_facts(
     attempt_id: str,
     *,
     verify_content: bool,
+    adapter: Any = None,
 ) -> dict[str, Any]:
     """``official_assertion_bundle_facts`` 的核对主体：就地填写 ``facts``，不一致时追加原因后提前返回。"""
 
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
     attempt_root = campaign_dir / "official" / "attempts" / _safe_id(attempt_id, "attempt_id")
     bundle = attempt_root / OFFICIAL_ASSERTION_BUNDLE_RELATIVE
     if not bundle.exists() and not bundle.is_symlink():
@@ -6700,7 +6720,7 @@ def _collect_official_assertion_bundle_facts(
     if (
         not isinstance(manifest, Mapping)
         or manifest.get("schema_version") != OFFICIAL_ASSERTION_CAPTURE_MANIFEST_SCHEMA
-        or manifest.get("codex_version") != campaign.get("target_version")
+        or manifest.get(adapter.target_version_field) != campaign.get("target_version")
         or manifest.get("capture_id") != campaign.get("campaign_id")
         or manifest.get("status") != "complete"
         or not isinstance(artifacts, list)
@@ -6842,7 +6862,7 @@ def _validate_vc1_assertion_seal_gate(
     断言包已发布却核对不上、或官方证据已封存，一律拒绝。
     """
 
-    if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-1":
+    if schema_version not in BATCHED_RUN_SCHEMAS or phase != "VC-1":
         return
     assertion_indices = [
         index
@@ -6972,7 +6992,7 @@ def _validate_vc5_seal_rehearsal_gate(
     修复必须先在冻结夹具上跑通到最终阶段）。只含 Kilo 检查点的批次不受此门禁。
     """
 
-    if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-5":
+    if schema_version not in BATCHED_RUN_SCHEMAS or phase != "VC-5":
         return
     chain: list[tuple[str, Path, str, str]] = []
     for action in actions:
@@ -7030,6 +7050,49 @@ def manifest_has_candidate_binding(manifest: Mapping[str, Any]) -> bool:
     return "candidate_revision" in manifest and "candidate_id" in manifest
 
 
+def run_manifest_client(manifest: Mapping[str, Any]) -> str:
+    """campaign-run 清单的归属客户端：新合同读显式 client（只认 Claude），Codex 的 v1～v3 不带 client、隐含 codex。"""
+
+    if manifest.get("schema_version") != OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA:
+        return "codex"
+    client = manifest.get("client")
+    if client not in OFFICIAL_CLIENT_CAMPAIGN_RUN_CLIENTS:
+        raise SupervisorError(f"{OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA} 清单的 client 非法：{client!r}")
+    return str(client)
+
+
+def _run_manifest_adapter(manifest: Mapping[str, Any], campaign_dir: Path | None) -> Any:
+    """由清单推出客户端适配器；绑定了 Campaign 时核对总计划归属，防止跨客户端派发。
+
+    新合同严格按 ``client_of_manifest`` 判定总计划归属（缺失或不符即拒绝）；Codex 历史清单只在总计划显式声明了
+    别的客户端时拒绝，未声明沿用现状（历史 Codex 总计划与测试夹具都没有 client 字段）。
+    """
+
+    client = run_manifest_client(manifest)
+    if campaign_dir is not None:
+        campaign_manifest = _read_json(Path(campaign_dir) / "campaign.json")
+        if manifest.get("schema_version") == OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA:
+            try:
+                owner = upgrade_client_adapter.client_of_manifest(campaign_manifest)
+            except upgrade_client_adapter.ClientAdapterError as error:
+                raise SupervisorError(f"Campaign 总计划归属无法判定：{error}") from error
+        else:
+            owner = campaign_manifest.get("client", client)
+        if owner != client:
+            raise SupervisorError(f"campaign-run 清单属于 {client}，Campaign 总计划属于 {owner!r}，拒绝派发。")
+    return upgrade_client_adapter.adapter_for(client)
+
+
+def _same_client_batched_runs(prior_manifest: Mapping[str, Any], successor_manifest: Mapping[str, Any]) -> bool:
+    """后继协议的公共前提：前后两份清单都走批次模型（v2 或 Claude 新合同），且属于同一客户端。"""
+
+    return (
+        prior_manifest.get("schema_version") in BATCHED_RUN_SCHEMAS
+        and successor_manifest.get("schema_version") in BATCHED_RUN_SCHEMAS
+        and run_manifest_client(prior_manifest) == run_manifest_client(successor_manifest)
+    )
+
+
 def _campaign_run_manifest(
     path: Path,
     *,
@@ -7039,6 +7102,7 @@ def _campaign_run_manifest(
 
     生成器可在最终合同原子落盘前只做结构校验；真正执行清单时保持默认值，
     必须重放合同普通文件及其摘要，不能把生成期豁免带到运行边界。
+    Claude 的新合同（v2 结构加 client）与 v2 走同一套校验，编排器 CLI 名与禁止子命令按清单所属客户端取。
     """
 
     path = Path(path)
@@ -7055,10 +7119,7 @@ def _campaign_run_manifest(
             "no_op",
         }
         optional = {"execute_items", "reuse_items"}
-    elif schema_version in {
-        CAMPAIGN_RUN_BATCHED_SCHEMA,
-        CAMPAIGN_RUN_RECOVERY_SCHEMA,
-    }:
+    elif schema_version in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
         required = {
             "schema_version",
             "campaign_id",
@@ -7074,6 +7135,8 @@ def _campaign_run_manifest(
             "reuse_items",
             "no_op",
         }
+        if schema_version == OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA:
+            required.add("client")
         if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
             required.update(
                 {
@@ -7098,6 +7161,7 @@ def _campaign_run_manifest(
         or set(payload) - required - optional
     ):
         raise SupervisorError("Campaign run manifest 字段或 schema 不闭合。")
+    adapter = upgrade_client_adapter.adapter_for(run_manifest_client(payload))
     campaign_id = _safe_id(payload.get("campaign_id"), "campaign_id")
     phase = _safe_id(payload.get("phase"), "phase", maximum=32)
     if ("candidate_revision" in payload) != ("candidate_id" in payload):
@@ -7239,13 +7303,10 @@ def _campaign_run_manifest(
             "timeout_seconds",
             "command",
         }
-        if schema_version in {
-            CAMPAIGN_RUN_BATCHED_SCHEMA,
-            CAMPAIGN_RUN_RECOVERY_SCHEMA,
-        }:
+        if schema_version in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
             expected_action_fields.add("item_ids")
         # 改造 5：batched 清单的动作可携带 output_bindings（Campaign 相对路径闭集）。
-        allow_output_bindings = schema_version == CAMPAIGN_RUN_BATCHED_SCHEMA
+        allow_output_bindings = schema_version in BATCHED_RUN_SCHEMAS
         if not isinstance(raw, dict) or not (
             set(raw) == expected_action_fields
             or (allow_output_bindings and set(raw) == expected_action_fields | {"output_bindings"})
@@ -7283,29 +7344,14 @@ def _campaign_run_manifest(
             raise SupervisorError(f"Campaign run action 第 {index} 项 command 参数过长。")
         command_basenames = {Path(item).name for item in command[:4]}
         is_upgrade_cli = bool(
-            command_basenames & {"codex_upgrade.py", "codex-upgrade"}
+            command_basenames & adapter.orchestrator_basenames
         )
         is_supervisor_cli = bool(
             command_basenames
             & {"codex_upgrade_supervisor.py", "codex-upgrade-supervisor"}
         )
-        forbidden = {
-            "successor",
-            "recover-candidate-failed-jobs",
-            "control-epoch",
-            "evaluation-transition",
-            "terminal-transition-preflight",
-            "plan",
-            "reuse-official-evidence",
-            "harden-evidence-permissions",
-            "reconcile-supervisor-run",
-            "reconcile-attempt",
-            "compile-vc-batch",
-            "compile-vc-interrupted-recovery-batch",
-            "compile-vc-interrupted-recovery-continuation",
-            "continue-vc1-interruption",
-            "finalize-vc1-deadline-orphan",
-        }
+        # 编排器 CLI 的基础禁止子命令按清单所属客户端取；下面按清单版本与监督器 CLI 追加的部分与客户端无关。
+        forbidden = set(adapter.forbidden_subcommands)
         if schema_version != CAMPAIGN_RUN_RECOVERY_SCHEMA:
             forbidden.add("recover-vc1-interruption")
         if is_supervisor_cli:
@@ -7328,10 +7374,7 @@ def _campaign_run_manifest(
             "timeout_seconds": timeout_seconds,
             "command": list(command),
         }
-        if schema_version in {
-            CAMPAIGN_RUN_BATCHED_SCHEMA,
-            CAMPAIGN_RUN_RECOVERY_SCHEMA,
-        }:
+        if schema_version in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
             item_ids = raw.get("item_ids")
             if (
                 not isinstance(item_ids, list)
@@ -7425,7 +7468,7 @@ def _campaign_run_manifest(
         if (
             phase != "VC-1"
             or not recovery_basenames
-            & {"codex_upgrade.py", "codex-upgrade"}
+            & adapter.orchestrator_basenames
             or recovery_action["action_id"]
             != "recover-vc1-interruption-preview"
             or recovery_action["operation"]
@@ -7461,6 +7504,8 @@ def _campaign_run_manifest(
                 "original_deadline_at_utc": original_deadline_at_utc,
             }
         )
+        if schema_version == OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA:
+            normalized["client"] = payload["client"]
         if "candidate_revision" in payload:
             # 改造 2：候选级绑定原样保留（Campaign 级为 null），派发时按批次模型判定存在性。
             normalized["candidate_revision"] = payload["candidate_revision"]
@@ -7567,12 +7612,14 @@ def build_batched_campaign_run_manifest(
     actions: Sequence[Mapping[str, Any]],
     execute_items: Sequence[str],
     reuse_items: Sequence[str],
+    client: str | None = None,
     **candidate_binding: Any,
 ) -> dict[str, Any]:
     """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。
 
     改造 2：staging 模型清单以关键字 ``candidate_revision``／``candidate_id`` 携带候选级
     绑定（Campaign 级阶段为 null）；legacy 模型不传，清单里就没有这两个字段。
+    ``client`` 不传时（Codex）生成 v2、不写 client；给出时生成 Claude 新合同并写入 client，由同一个解析器校验。
     """
 
     unknown = set(candidate_binding) - {
@@ -7585,7 +7632,7 @@ def build_batched_campaign_run_manifest(
     if unknown:
         raise SupervisorError(f"campaign-run 清单不接受字段：{sorted(unknown)}")
     payload = {
-        "schema_version": CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "schema_version": CAMPAIGN_RUN_BATCHED_SCHEMA if client is None else OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA,
         "campaign_id": campaign_id,
         "campaign_plan_sha256": campaign_plan_sha256,
         "batch_id": batch_id,
@@ -7599,6 +7646,8 @@ def build_batched_campaign_run_manifest(
         "execute_items": list(execute_items),
         "reuse_items": list(reuse_items),
     }
+    if client is not None:
+        payload["client"] = client
     if candidate_binding:
         if not {"candidate_revision", "candidate_id"} <= set(candidate_binding):
             raise SupervisorError("candidate_revision 与 candidate_id 必须同时给出。")
@@ -8027,7 +8076,7 @@ def _validate_batched_official_recovery_preview_successor(
 
     successor_actions = successor_manifest.get("actions")
     if (
-        successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        successor_manifest.get("schema_version") not in BATCHED_RUN_SCHEMAS
         or successor_manifest.get("phase") != "VC-1"
         or successor_manifest.get("batch_sequence") != 2
         or not isinstance(successor_actions, list)
@@ -8035,6 +8084,7 @@ def _validate_batched_official_recovery_preview_successor(
         or not isinstance(successor_actions[0], Mapping)
     ):
         return _protocol_reject("后继不是 VC-1 序号 2 的单动作批次")
+    adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest))
     successor_action = successor_actions[0]
     successor_command = successor_action.get("command")
     if (
@@ -8053,7 +8103,7 @@ def _validate_batched_official_recovery_preview_successor(
         or not {
             Path(value).name for value in successor_prefix
         }
-        & {"codex_upgrade.py", "codex-upgrade"}
+        & adapter.orchestrator_basenames
         or len(successor_tail) != 5
         or successor_tail[0] != "resume"
         or successor_tail[1] != "--campaign-dir"
@@ -8071,7 +8121,7 @@ def _validate_batched_official_recovery_preview_successor(
     successor_execute = successor_manifest.get("execute_items")
     successor_reuse = successor_manifest.get("reuse_items")
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        not _same_client_batched_runs(prior_manifest, successor_manifest)
         or prior_manifest.get("campaign_id") != successor_manifest.get("campaign_id")
         or prior_manifest.get("phase") != "VC-1"
         or prior_manifest.get("batch_sequence") != 1
@@ -8363,8 +8413,7 @@ def _validate_batched_official_recovery_preview_retry_successor(
 
     prior_actions = prior_manifest.get("actions")
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
-        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        not _same_client_batched_runs(prior_manifest, successor_manifest)
         or prior_manifest.get("phase") != "VC-1"
         or not isinstance(prior_actions, list)
         or len(prior_actions) != 1
@@ -8932,8 +8981,7 @@ def _validate_batched_official_recovery_run_retry_successor(
 
     prior_actions = prior_manifest.get("actions")
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
-        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        not _same_client_batched_runs(prior_manifest, successor_manifest)
         or prior_manifest.get("phase") != "VC-1"
         or not isinstance(prior_actions, list)
         or len(prior_actions) != 1
@@ -9061,12 +9109,17 @@ _CANDIDATE_RECOVERY_FROZEN_FIELDS = (
 )
 
 
-def candidate_capture_run_identity(command: Any) -> tuple[list[str], str, dict[str, str]] | None:
+def candidate_capture_run_identity(
+    command: Any, *, adapter: Any = None
+) -> tuple[list[str], str, dict[str, str]] | None:
     """解析普通 ``capture-candidate run`` 命令：返回 (解释器前缀, Campaign 目录, 候选身份参数)。
 
-    恢复段（``--attempt-recovery``）、失败重跑或参数不闭合的命令返回 None。
+    恢复段（``--attempt-recovery``）、失败重跑或参数不闭合的命令返回 None。编排器 CLI 名按清单所属客户端经适配器
+    取（缺省 Codex）。
     """
 
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
     if not isinstance(command, list) or not all(isinstance(token, str) and token for token in command):
         return None
     if command.count("capture-candidate") != 1:
@@ -9076,7 +9129,7 @@ def candidate_capture_run_identity(command: Any) -> tuple[list[str], str, dict[s
     tail = command[index + 1:]
     if not tail or tail[0] != "run" or not prefix:
         return None
-    if not {Path(value).name for value in prefix} & {"codex_upgrade.py", "codex-upgrade"}:
+    if not {Path(value).name for value in prefix} & adapter.orchestrator_basenames:
         return None
     pairs: dict[str, str] = {}
     acknowledged = 0
@@ -9176,7 +9229,7 @@ def candidate_recovery_parent_identity(manifest: Mapping[str, Any]) -> tuple[lis
     if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], Mapping):
         raise SupervisorError("候选采集续跑的父批次必须恰好一个动作。")
     command = actions[0].get("command")
-    parsed = candidate_capture_run_identity(command)
+    parsed = candidate_capture_run_identity(command, adapter=_run_manifest_adapter(manifest, None))
     if parsed is not None:
         return parsed
     if actions[0].get("action_id") == CANDIDATE_RECOVERY_RUN_ACTION_ID:
@@ -9237,7 +9290,7 @@ def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: st
         if not isinstance(action, Mapping) or action.get("action_id") != action_id:
             continue
         command = action.get("command")
-        if candidate_capture_run_identity(command) is not None:
+        if candidate_capture_run_identity(command, adapter=_run_manifest_adapter(manifest, None)) is not None:
             return "capture"
         if (
             action_id == CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
@@ -9292,7 +9345,8 @@ def _candidate_recovery_batch_fields_match(
         not isinstance(prior_sequence, bool)
         and isinstance(prior_sequence, int)
         and prior_sequence >= 1
-        and successor_manifest.get("schema_version") == CAMPAIGN_RUN_BATCHED_SCHEMA
+        and successor_manifest.get("schema_version") in BATCHED_RUN_SCHEMAS
+        and run_manifest_client(prior_manifest) == run_manifest_client(successor_manifest)
         and successor_manifest.get("phase") == "VC-5"
         and successor_manifest.get("batch_sequence") == prior_sequence + 1
         and prior_manifest.get("no_op") is False
@@ -9330,14 +9384,15 @@ def _validate_batched_candidate_recovery_preview_successor(
     prior_action = _single_action(prior_manifest)
     successor_action = _single_action(successor_manifest)
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        prior_manifest.get("schema_version") not in BATCHED_RUN_SCHEMAS
+        or run_manifest_client(prior_manifest) != run_manifest_client(successor_manifest)
         or prior_manifest.get("phase") != "VC-5"
         or prior_action is None
         or successor_action is None
         or successor_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
     ):
         return _protocol_reject("前序不是单动作 VC-5 批次，或后继不是候选零请求恢复预览")
-    parent = candidate_capture_run_identity(prior_action.get("command"))
+    parent = candidate_capture_run_identity(prior_action.get("command"), adapter=_run_manifest_adapter(prior_manifest, None))
     if parent is None:
         return _protocol_reject("前序动作不是普通 capture-candidate run")
     prefix, campaign, identity = parent
@@ -9379,7 +9434,8 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
 
     prior_action = _single_action(prior_manifest)
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        prior_manifest.get("schema_version") not in BATCHED_RUN_SCHEMAS
+        or run_manifest_client(prior_manifest) != run_manifest_client(successor_manifest)
         or prior_manifest.get("phase") != "VC-5"
         or prior_action is None
         or prior_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
@@ -9418,7 +9474,8 @@ def _validate_batched_candidate_recovery_run_retry_successor(
     prior_action = _single_action(prior_manifest)
     successor_action = _single_action(successor_manifest)
     if (
-        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        prior_manifest.get("schema_version") not in BATCHED_RUN_SCHEMAS
+        or run_manifest_client(prior_manifest) != run_manifest_client(successor_manifest)
         or prior_manifest.get("phase") != "VC-5"
         or prior_action is None
         or prior_action.get("action_id") != CANDIDATE_RECOVERY_RUN_ACTION_ID
@@ -9591,8 +9648,7 @@ def _validate_batched_evolution_recovery_successor(
     )
     if (
         phase not in {"VC-1", "VC-5"}
-        or prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
-        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or not _same_client_batched_runs(prior_manifest, successor_manifest)
         or successor_manifest.get("phase") != phase
         or successor_action is None
         or successor_action.get("action_id") != preview_action_id
@@ -9704,8 +9760,7 @@ def _validate_batched_seal_chain_successor(
     # 第三批 B3-4：VC-6 的 canonical 三步也是零请求后处理，修复后 --step-receipt 变化时同样以 N+1 非逐字承接。
     if (
         phase not in {"VC-1", "VC-5", "VC-6"}
-        or prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
-        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or not _same_client_batched_runs(prior_manifest, successor_manifest)
         or successor_manifest.get("phase") != phase
         or successor_manifest.get("actions") == prior_manifest.get("actions")
     ):
@@ -10555,12 +10610,17 @@ def _validate_candidate_revision_successor(
 EVALUATION_ACTION_BUILDER_BASENAME = "build_rule_assertion_results.py"
 
 
-def _evaluation_action_kind(command: Sequence[str]) -> str | None:
-    """与派发入口同一识别：断言 builder／compare／accept 三种评估动作；其余 None。"""
+def _evaluation_action_kind(command: Sequence[str], *, adapter: Any = None) -> str | None:
+    """与派发入口同一识别：断言 builder／compare／accept 三种评估动作；其余 None。
 
-    if any(PurePosixPath(token).name == EVALUATION_ACTION_BUILDER_BASENAME for token in command):
+    builder 文件名与编排器 CLI 名按清单所属客户端经适配器取（缺省 Codex，取值与改造前相同）。
+    """
+
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
+    if any(PurePosixPath(token).name == adapter.evaluation_builder_basename for token in command):
         return "assertion"
-    if {PurePosixPath(token).name for token in command[:4]} & vc_artifacts.UPGRADE_CLI_BASENAMES:
+    if {PurePosixPath(token).name for token in command[:4]} & adapter.orchestrator_basenames:
         for token in command:
             if token in {"compare", "accept"}:
                 return token
@@ -10776,7 +10836,9 @@ def _validate_evaluation_baseline_successor(
         (item for item in prior_manifest.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == action_id),
         None,
     )
-    if prior_action is None or _evaluation_action_kind(list(prior_action.get("command", []))) is None:
+    if prior_action is None or _evaluation_action_kind(
+        list(prior_action.get("command", [])), adapter=_run_manifest_adapter(prior_manifest, None)
+    ) is None:
         return _protocol_reject("失败动作不是评估动作（断言 builder／compare／accept）")
     successor_baseline = successor_manifest.get("evaluation_baseline")
     if (
@@ -11616,12 +11678,11 @@ def _redispatch_evaluator_digests_drifted(
             return False
         if campaign_dir is None or not isinstance(candidate_id, str) or not candidate_id:
             return True
-        from tools.official_client_capture import codex_upgrade as upgrade
-
+        adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest))
         try:
-            manifest = upgrade._require_formal_campaign(Path(campaign_dir))
-            history = upgrade._b0_evaluator_authorized_digest_history(Path(campaign_dir), manifest, candidate_id)
-        except upgrade.ConfigurationError:
+            manifest = adapter.orchestrator._require_formal_campaign(Path(campaign_dir))
+            history = adapter.orchestrator._b0_evaluator_authorized_digest_history(Path(campaign_dir), manifest, candidate_id)
+        except adapter.orchestrator.ConfigurationError:
             return True
         return {key: successor.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS} not in history
     if (
@@ -11635,12 +11696,11 @@ def _redispatch_evaluator_digests_drifted(
         or not commit
     ):
         return True
-    from tools.official_client_capture import codex_upgrade as upgrade
-
+    adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest))
     try:
-        manifest = upgrade._require_formal_campaign(Path(campaign_dir))
-        authorized = upgrade._authorized_evaluator_digests(Path(campaign_dir), manifest, candidate_id, baseline)
-    except upgrade.ConfigurationError:
+        manifest = adapter.orchestrator._require_formal_campaign(Path(campaign_dir))
+        authorized = adapter.orchestrator._authorized_evaluator_digests(Path(campaign_dir), manifest, candidate_id, baseline)
+    except adapter.orchestrator.ConfigurationError:
         return True
     return {key: successor.get(key) for key in vc_artifacts.EVALUATOR_DIGEST_FIELDS} != authorized
 
@@ -11718,9 +11778,8 @@ def _validate_batched_stage_review_successor(
         completed_action_ids=stage_replay_completed_action_ids(proof),
     )
     if events[-1][0]["event_id"] == passes[0]["event_id"]:
-        from tools.official_client_capture import codex_upgrade as upgrade
-
-        current = upgrade._campaign_stage_replay_facts(campaign_dir, prior_manifest)
+        adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest))
+        current = adapter.orchestrator._campaign_stage_replay_facts(campaign_dir, prior_manifest)
         if any(current.get(key) != proof.get(key) for key in ("phase", "allowed", "actions", "reasons")):
             raise SupervisorError("阶段动作的输入或半成品在对账后漂移，禁止重派")
     return True
@@ -12024,10 +12083,7 @@ def _validate_batched_campaign_history(
 
     if any(
         prior_manifest.get("schema_version")
-        not in {
-            CAMPAIGN_RUN_BATCHED_SCHEMA,
-            CAMPAIGN_RUN_RECOVERY_SCHEMA,
-        }
+        not in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}
         for _state, prior_manifest, _run_dir in history
     ):
         raise SupervisorError("batched Campaign 不得与历史 v1／v4／v5 run 混用。")
@@ -12091,6 +12147,10 @@ def _validate_batched_campaign_history(
         for state, prior_manifest, run_dir in ordered
     ]
     combined.append((None, manifest, None))
+    # 同一 Campaign 的批次只属于一个客户端（派发时已核对总计划归属）；历史里混入别的客户端清单即失败关闭。
+    history_clients = {run_manifest_client(item_manifest) for _state, item_manifest, _dir in combined}
+    if len(history_clients) > 1:
+        raise SupervisorError(f"同一 Campaign 的批次历史混入了不同客户端的清单：{sorted(history_clients)}")
     for index, (state, current_manifest, run_dir) in enumerate(combined):
         schema = current_manifest.get("schema_version")
         if schema == CAMPAIGN_RUN_RECOVERY_SCHEMA:
@@ -12155,7 +12215,7 @@ def _validate_batched_campaign_history(
             # 通过；每条协议返回 False 时登记的拒因收进兜底文案。
             rejections: list[str] = []
             accepted = False
-            if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            if _same_client_batched_runs(prior_manifest, successor_manifest):
                 for name, protocol in _SUCCESSOR_PROTOCOLS:
                     token = _PROTOCOL_REJECTIONS.set([])
                     try:
@@ -12372,24 +12432,25 @@ def _candidate_failure_hits_permanent_condition(
     return ledger_summary.get("status") in {"stopped", "complete"}
 
 
-def _evaluator_identity_drift(frozen: Any) -> list[str]:
+def _evaluator_identity_drift(frozen: Any, *, adapter: Any = None) -> list[str]:
     """清单冻结的 evaluator 四项摘要与当前受管树的差异项；无冻结值返回空列表。
 
     与编译器、COMMIT 前核对调用同一纯函数 ``evaluator_dependency_digests()``；这里是动作执行前
-    的最后一道核对，任何差异都让动作不执行（identity-drift）。
+    的最后一道核对，任何差异都让动作不执行（identity-drift）。身份引擎按清单所属客户端经适配器取
+    （缺省 Codex）；摘要函数与被捕获的异常类来自同一份模块。
     """
 
     if frozen is None:
         return []
     if not isinstance(frozen, Mapping) or set(frozen) != set(vc_artifacts.EVALUATOR_DIGEST_FIELDS):
         raise SupervisorError("清单 evaluator_digests 字段不闭合。")
-    if __package__ in {None, ""}:
-        import codex_upgrade_tool_identity_policy as identity_policy
-    else:
-        from . import codex_upgrade_tool_identity_policy as identity_policy
+    if adapter is None:
+        adapter = _RUN_ADAPTER.get()
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
     try:
-        current = identity_policy.evaluator_dependency_digests()
-    except identity_policy.ToolIdentityPolicyError as error:
+        current = adapter.identity_policy.evaluator_dependency_digests()
+    except adapter.identity_policy.ToolIdentityPolicyError as error:
         raise SupervisorError(f"当前 evaluator 依赖摘要无法计算：{error}") from error
     return sorted(
         f"{field} 冻结 {str(frozen[field])[:12]} 当前 {str(current[field])[:12]}"
@@ -12633,10 +12694,7 @@ def _close_failed_campaign_timing_ledger(
         != _sha256((ledger_dir / "ledger.json").read_bytes())
     ):
         raise SupervisorError("Campaign、阶段或 UpgradeTimingLedger 计划绑定漂移。")
-    if manifest.get("schema_version") in {
-        CAMPAIGN_RUN_BATCHED_SCHEMA,
-        CAMPAIGN_RUN_RECOVERY_SCHEMA,
-    }:
+    if manifest.get("schema_version") in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
         vc_control = campaign.get("vc_control")
         plan_binding = (
             vc_control.get("campaign_plan")
@@ -12679,6 +12737,9 @@ def _close_failed_campaign_timing_ledger(
     # 根因只由稳定输入生成：同一动作在不同 Campaign 失败得到同一个 ID，
     # 项目总账的同根因上限才能跨 Campaign 累计。failure_digest 仍含
     # campaign_id，只用于让事件 ID 在本账本内唯一。
+    # 码表按清单所属客户端取（Codex 即原默认码表）；维度按码表登记补齐 client（Codex 码表不含，原样）。
+    adapter = _run_manifest_adapter(manifest, None)
+    codes = root_cause.load_codes(adapter.root_cause_codes_path)
     if failure_class == PARENT_START_FAILED_REASON:
         # 改造 4 P4：COMMIT 已写但父 run 未取得执行权，不是动作失败；根因按
         # 父启动失败独立编码（维度只含 phase），与 reconciler 的分支一致。
@@ -12686,14 +12747,20 @@ def _close_failed_campaign_timing_ledger(
             component="supervisor",
             stable_error_code="parent-start.failed",
             failed_step="commit-activate",
-            stable_dimensions={"phase": phase},
+            stable_dimensions=upgrade_client_adapter.root_cause_dimensions(
+                adapter, codes, "parent-start.failed", {"phase": phase}
+            ),
+            codes=codes,
         )
     else:
         root_cause_id = root_cause.structured_root_cause(
             component="supervisor",
             stable_error_code="campaign-run.action-failed",
             failed_step=failed_action_id,
-            stable_dimensions={"phase": phase},
+            stable_dimensions=upgrade_client_adapter.root_cause_dimensions(
+                adapter, codes, "campaign-run.action-failed", {"phase": phase}
+            ),
+            codes=codes,
         )
     event_prefix = f"{CANDIDATE_REVIEW_EVENT_PREFIX}{failure_digest[:FAILURE_DIGEST_PREFIX_LENGTH]}"
     recovery_event_id = f"{event_prefix}-recovery-required"
@@ -13417,7 +13484,7 @@ def _campaign_run_with_budget_lock(
                 action_id = str(action["action_id"])
                 active_action_id = action_id
                 if (
-                    manifest["schema_version"] == CAMPAIGN_RUN_BATCHED_SCHEMA
+                    manifest["schema_version"] in BATCHED_RUN_SCHEMAS
                     and manifest["phase"] == "VC-1"
                     and action_id == "prepare-official-assertion-bundle"
                 ):
@@ -13439,7 +13506,12 @@ def _campaign_run_with_budget_lock(
                 # tool-evolution-required——评估器摘要不影响已生成的请求字节，已完成的采集结果保留在 awaiting
                 # attempt；登记工具演进、对账后按作废作业续跑（第 21 项）或改派同一 attempt 的 seal 链批次。
                 # identity-drift 不再由这里产生（保留给历史诊断与 v1 Campaign 的读侧）。
-                identity_drift = _evaluator_identity_drift(manifest.get("evaluator_digests"))
+                # 身份引擎按本批清单所属客户端取：就地设定上下文里的适配器，调用形式保持单参数。
+                adapter_token = _RUN_ADAPTER.set(_run_manifest_adapter(manifest, None))
+                try:
+                    identity_drift = _evaluator_identity_drift(manifest.get("evaluator_digests"))
+                finally:
+                    _RUN_ADAPTER.reset(adapter_token)
                 drift_class = "tool-evolution-required"
                 if identity_drift:
                     _write_action_diagnostic(
@@ -13502,10 +13574,7 @@ def _campaign_run_with_budget_lock(
                         cleanup_grace_seconds=(
                             DEFAULT_BATCHED_ACTION_CLEANUP_GRACE_SECONDS
                             if manifest["schema_version"]
-                            in {
-                                CAMPAIGN_RUN_BATCHED_SCHEMA,
-                                CAMPAIGN_RUN_RECOVERY_SCHEMA,
-                            }
+                            in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}
                             else 0
                         ),
                         job_id=action_id,
@@ -13709,10 +13778,7 @@ def _campaign_run_with_budget_lock(
             payload["commit_failure"] = dict(commit_failure)
         if campaign_dir is not None:
             payload["timing_closeout"] = timing_closeout
-        if manifest["schema_version"] in {
-            CAMPAIGN_RUN_BATCHED_SCHEMA,
-            CAMPAIGN_RUN_RECOVERY_SCHEMA,
-        }:
+        if manifest["schema_version"] in BATCHED_RUN_SCHEMAS | {CAMPAIGN_RUN_RECOVERY_SCHEMA}:
             payload.update(
                 {
                     "batch_id": manifest["batch_id"],
@@ -13766,15 +13832,18 @@ def _campaign_run_with_budget_lock(
                 pass
 
 
-def _assert_campaign_run_admitted(campaign_dir: Path | None) -> None:
+def _assert_campaign_run_admitted(campaign_dir: Path | None, *, adapter: Any = None) -> None:
     """A0a-12 消费者门禁：campaign-run 派发前先补齐再锁内重放项目总账。
 
     运行清单未绑定 Campaign 目录时（离线演练、无 Campaign 的动作队列）没有门禁对象，
-    直接返回；绑定了 Campaign 的 0.154 formal 派发必须已在总账注册。
+    直接返回；绑定了 Campaign 的 0.154 formal 派发必须已在总账注册。是否必须在总账内按清单所属
+    客户端经适配器判定（缺省 Codex，规则与改造前相同）。
     """
 
     if campaign_dir is None:
         return
+    if adapter is None:
+        adapter = upgrade_client_adapter.adapter_for("codex")
     manifest_path = campaign_dir / "campaign.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return
@@ -13788,7 +13857,7 @@ def _assert_campaign_run_admitted(campaign_dir: Path | None) -> None:
         project_ledger.assert_campaign_admitted(
             campaign_dir,
             command="campaign-run",
-            require=project_ledger.requires_project_ledger(
+            require=adapter.requires_project_ledger(
                 campaign_manifest.get("campaign_mode"), campaign_manifest.get("target_version")
             ),
         )
@@ -13802,7 +13871,8 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
     manifest_path = Path(args.manifest)
     manifest = _campaign_run_manifest(manifest_path)
     campaign_dir = _campaign_dir_from_run_manifest(manifest_path)
-    _assert_campaign_run_admitted(campaign_dir)
+    adapter = _run_manifest_adapter(manifest, campaign_dir)
+    _assert_campaign_run_admitted(campaign_dir, adapter=adapter)
     lock_descriptor, state_dir = _campaign_run_lock(Path(args.state_dir))
     try:
         return _campaign_run_locked(

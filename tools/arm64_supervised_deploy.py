@@ -306,8 +306,12 @@ from urllib.parse import urlsplit
 # 之后由 reevaluate／approval-revision 开的基线沿 previous_baseline 链承接，不再被当成跳号或缺失败诊断而拒绝；失败类基线
 # 原路径不变。control 层变化，监督器摘要随之变化。
 # 2026-10-05（A-07.4）：分钟账本保留 epoch 原精度，防止亚微秒首桶被取整成零长度。
+# 2026-10-07（Claude 升级 B1-02）：监督器不再导入编排器，编排器符号、编排器 CLI 名、禁止子命令、评估 builder 名、
+# 断言包取证清单版本字段与根因码表经客户端适配器取（Codex 取值逐字不变）；新增 Claude 清单合同
+# official-client-campaign-run/v1（v2 结构加 client），后继协议与批次历史核对前后清单同属一个客户端。control 层变化，
+# 监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "6069868aa1d23f90e3fefe6f69fc01308b34bb739b895698dc302bc2e9428565"
+    "9a4b077e261f30dd0ab0cad72b597c3099edafd33c548a9144c442f53faa6a0d"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

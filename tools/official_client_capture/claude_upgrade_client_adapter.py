@@ -14,8 +14,12 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from tools.official_client_capture import codex_upgrade_root_cause
-from tools.official_client_capture.upgrade_client_adapter import OrchestratorFacade
+if __package__ in {None, ""}:
+    import codex_upgrade_root_cause
+    from upgrade_client_adapter import OrchestratorFacade
+else:
+    from . import codex_upgrade_root_cause
+    from .upgrade_client_adapter import OrchestratorFacade
 
 ORCHESTRATOR = OrchestratorFacade("claude")
 
