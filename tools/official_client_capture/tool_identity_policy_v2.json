@@ -1,7 +1,7 @@
 {
   "schema_version": "tool-identity-policy/v2",
-  "policy_version": 7,
-  "description": "受管工具身份四层策略（方案 A2）。v3：登记 B0 reconciler、A2.6 策略认证与 A2.5 路径认证三个控制层模块；v4：注销已删除的两个 VC-1 权限 alias 一次性收口模块（B2／B3）；v5：登记 C1 发布认证模块 certify_release.py 为控制层；v6：将严格 Candidate 构建收据生成器登记为 control，并将会真实派发 /models 探针的 Candidate readiness 登记为 wire_producer。v7：登记 Candidate seal 隔离预演模块 codex_upgrade_seal_rehearsal.py 为 control（在私有 mount namespace 的 OverlayFS 副本上重放正式 seal 链并写收据，不产生请求也不解释证据）。只有 wire_producer 层作为重采判据；evidence_semantics 变化追加 evaluation epoch；control 变化只重跑控制门禁；files 整树摘要只作溯源与三副本一致性。未被任何规则命中的新文件按最严格的 wire_producer 计。ignored 前缀是其它客户端（Claude）专用工具，对 Codex Campaign 既不产生请求也不解释证据，只进入整树摘要。",
+  "policy_version": 8,
+  "description": "受管工具身份四层策略（方案 A2）。v3：登记 B0 reconciler、A2.6 策略认证与 A2.5 路径认证三个控制层模块；v4：注销已删除的两个 VC-1 权限 alias 一次性收口模块（B2／B3）；v5：登记 C1 发布认证模块 certify_release.py 为控制层；v6：将严格 Candidate 构建收据生成器登记为 control，并将会真实派发 /models 探针的 Candidate readiness 登记为 wire_producer。v7：登记 Candidate seal 隔离预演模块 codex_upgrade_seal_rehearsal.py 为 control（在私有 mount namespace 的 OverlayFS 副本上重放正式 seal 链并写收据，不产生请求也不解释证据）。v8：登记 Claude 升级控制面的三个共享新文件为 control——客户端适配接口 upgrade_client_adapter.py、Codex 适配器 codex_upgrade_client_adapter.py（原样导出 codex_upgrade 符号）与共享控制流程 upgrade_control_plane.py（只承接不在任何身份闭包内的流程）；它们不产生请求也不解释证据，Codex 的 wire、evidence 与评估器身份不变。只有 wire_producer 层作为重采判据；evidence_semantics 变化追加 evaluation epoch；control 变化只重跑控制门禁；files 整树摘要只作溯源与三副本一致性。未被任何规则命中的新文件按最严格的 wire_producer 计。ignored 前缀是其它客户端（Claude）专用工具，对 Codex Campaign 既不产生请求也不解释证据，只进入整树摘要。",
   "ignored_prefixes": [
     "claude_",
     "claude_21220/",
@@ -22,6 +22,7 @@
         "codex_upgrade_campaign_disposition.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_candidate_build.py",
+        "codex_upgrade_client_adapter.py",
         "codex_upgrade_environment_probe.py",
         "codex_upgrade_evidence_permissions.py",
         "codex_upgrade_gate_receipt.py",
@@ -52,7 +53,9 @@
         "production_activation_receipt.py",
         "root_cause_codes.json",
         "runtime_host_receipt.py",
-        "tool_identity_policy_v2.json"
+        "tool_identity_policy_v2.json",
+        "upgrade_client_adapter.py",
+        "upgrade_control_plane.py"
       ]
     },
     "evidence_semantics": {

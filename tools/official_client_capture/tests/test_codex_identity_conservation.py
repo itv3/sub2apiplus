@@ -25,7 +25,9 @@ SHARED_CONTROL_PLANE = "upgrade_control_plane.py"
 
 # 本项目登记的 Codex 受管树变化：受管树相对路径 → 工作项与理由。新增、删除、修改都要登记，且只能落在
 # control 层。被 Codex 策略忽略的文件（``claude_`` 前缀等 Claude 专属文件）不影响 Codex 身份，无须登记。
-REGISTERED_CONTROL_CHANGES: dict[str, str] = {}
+REGISTERED_CONTROL_CHANGES: dict[str, str] = {
+    "tool_identity_policy_v2.json": "B1-07 策略 v8：三个共享新文件登记进 control 层，先于文件本身进入受管树",
+}
 
 
 class CodexIdentityConservationTest(unittest.TestCase):
