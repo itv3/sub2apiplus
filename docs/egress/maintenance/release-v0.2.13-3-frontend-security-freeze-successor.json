@@ -1,0 +1,60 @@
+{
+  "base_commit": "c71630f3c86d35bb973b30f9c7881156ac168620",
+  "changed_path_count": 2,
+  "current_commit": "126f913b94ea6254f57a5b57e9a733d6abe45c90",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5792,
+  "frozen_path_count": 2015,
+  "identity_sha256": "ebea3b9f0caeb0f4c0296cc6c0023f3b054cb5b00493761ac1482a99d8e9d474",
+  "issued_at_utc": "2026-10-06T14:34:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-release-v0.2.13-3-frontend-security-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "frontend/package.json",
+      "predecessor_sha256s": [
+        "81f0441fddaf6b1afea5d9bcc23be87d95b81626785542bab2ebf3733d8f10f7"
+      ],
+      "reason": "发布 v0.2.13-3 前修复安全扫描新增告警：Vue 升至 3.5.43、source-map-js 锁定至 1.2.2；登记依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=frontend/package.json",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f800df8f49a411bd89a8e60000f886f80941ec103ee14f90b447e062a215c365"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/pnpm-lock.yaml",
+      "predecessor_sha256s": [
+        "9382acbd57d046c0bc6163f4af7c6969f7d18e2ed92a00d347c4640a7aa6788a"
+      ],
+      "reason": "发布 v0.2.13-3 前修复安全扫描新增告警：Vue 升至 3.5.43、source-map-js 锁定至 1.2.2；登记依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=frontend/pnpm-lock.yaml",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "570c15d7b8cf7f77e47c71f5c56676478239370c50c4155d60ffdb36e957357b"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
