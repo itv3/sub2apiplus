@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import textwrap
@@ -22,8 +23,10 @@ from unittest import mock
 
 from tools.official_client_capture import claude_tool_identity_policy as v3
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as codex_identity
+from tools.official_client_capture import upgrade_client_adapter
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = TOOL_ROOT.parents[1]
 CONTROL_ROOT = TOOL_ROOT.parent / "official_client_control"
 POLICY: dict[str, Any] = {
     "schema_version": "tool-identity-policy/v3",
@@ -316,6 +319,57 @@ class CodexUnaffectedByClaudeMutationTests(_ClaudeTreeMixin, unittest.TestCase):
         codex_before = self._codex_digests()
         self._check_mutations()
         self.assertEqual(self._codex_digests(), codex_before)
+
+
+class ClaudePolicyFileTests(unittest.TestCase):
+    """B1-08：Claude 身份策略对两个受管根逐文件归层；Codex 专属文件忽略，两客户端共用的文件与 Codex 策略同层。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = v3.load_policy()
+        cls.codex = codex_identity.load_policy()
+        cls.digests = v3.managed_tree_digests(REPOSITORY_ROOT, cls.policy)
+        cls.grouped = v3.layer_entries(cls.policy, cls.digests)
+
+    def test_every_managed_file_has_a_layer(self) -> None:
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 1))
+        self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
+        for layer in v3.LAYERS:
+            self.assertTrue(self.grouped[layer], layer)
+
+    def test_orchestrators_and_shared_control(self) -> None:
+        for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
+            self.assertIsNone(v3.classify_path(self.policy, key), key)
+        self.assertEqual(v3.classify_path(self.policy, self.policy["orchestrator"]["file"]), "control")
+        for name in ("codex_upgrade_vc0_closeout.py", "upgrade_client_adapter.py", "upgrade_control_plane.py", "claude_tool_identity_policy_v2.json"):
+            self.assertEqual(v3.classify_path(self.policy, f"official_client_capture/{name}"), "control", name)
+
+    def test_adapter_bound_modules_are_not_ignored(self) -> None:
+        """Claude 适配器绑定的模块都必须归层：绑定即依赖，被忽略的模块一到达闭包 v3 引擎就失败。"""
+
+        for member, (module, _symbol) in upgrade_client_adapter.ADAPTER_BINDINGS["claude"].items():
+            with self.subTest(member=member):
+                self.assertIsNotNone(v3.classify_path(self.policy, f"official_client_capture/{module}.py"))
+
+    def test_shared_files_match_codex_layers(self) -> None:
+        shared = 0
+        for key in sorted(self.digests):
+            root, _, relative = key.partition("/")
+            claude_layer = v3.classify_path(self.policy, key)
+            codex_layer = codex_identity.classify_path(self.codex, relative) if root == "official_client_capture" else None
+            if claude_layer is None or codex_layer is None:
+                continue
+            shared += 1
+            with self.subTest(path=relative):
+                self.assertEqual(claude_layer, codex_layer)
+        self.assertGreater(shared, 100)
+
+    def test_typescript_binding_matches_makefile(self) -> None:
+        makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")
+        frozen = re.search(r"^CAPTURE_TYPESCRIPT_SHA256 := ([0-9a-f]{64})$", makefile, re.MULTILINE)
+        bindings = {item["name"]: item for item in self.policy["runtime_bindings"]}
+        self.assertIsNotNone(frozen)
+        self.assertEqual(bindings["typescript"]["sha256"], frozen.group(1))
 
 
 if __name__ == "__main__":

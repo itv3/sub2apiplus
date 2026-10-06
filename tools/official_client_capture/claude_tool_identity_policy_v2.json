@@ -1,0 +1,215 @@
+{
+  "schema_version": "tool-identity-policy/v3",
+  "client": "claude",
+  "policy_version": 1,
+  "description": "Claude Code 升级受管工具身份策略（Claude 升级控制面设计 B1-08）。两个受管根，条目键为 <根目录名>/<相对路径>；Codex 专属文件进 ignored_prefixes，v3 引擎在闭包到达它们时失败关闭；与 Codex 共用的文件按 Codex 策略的同一层归层（codex_upgrade_vc0_closeout.py 因 host_layout 绑定归 control）；node 运行时在 B5a-03 冻结后登记。",
+  "roots": [
+    "tools/official_client_capture",
+    "tools/official_client_control"
+  ],
+  "suffixes": [
+    ".py",
+    ".sh",
+    ".json",
+    ".mjs"
+  ],
+  "ignored_prefixes": [
+    "official_client_capture/codex_upgrade.py",
+    "official_client_capture/codex_upgrade_client_adapter.py",
+    "official_client_capture/codex_upgrade_scenarios_",
+    "official_client_capture/codex_upgrade_rules_",
+    "official_client_capture/codex_upgrade_evidence_labels_",
+    "official_client_capture/codex_upgrade_campaign_disposition.py",
+    "official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py",
+    "official_client_capture/codex_upgrade_candidate_build.py",
+    "official_client_capture/codex_upgrade_candidate_readiness.py",
+    "official_client_capture/codex_upgrade_environment_probe.py",
+    "official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
+    "official_client_capture/codex_upgrade_legacy_boundary.py",
+    "official_client_capture/codex_upgrade_live_request_provenance.py",
+    "official_client_capture/codex_upgrade_official_asset_receipt.py",
+    "official_client_capture/codex_upgrade_official_attempt_audit.py",
+    "official_client_capture/codex_upgrade_predispatch_stop.py",
+    "official_client_capture/codex_upgrade_receipt_finalizer.py",
+    "official_client_capture/codex_upgrade_seal_rehearsal.py",
+    "official_client_capture/codex_upgrade_time_reconciliation.py",
+    "official_client_capture/codex_upgrade_zero_request_smoke.py",
+    "official_client_capture/codex_egress_profile.schema.json",
+    "official_client_capture/codex_runtime_egress_",
+    "official_client_capture/acceptance_contract.py",
+    "official_client_capture/assertion_gate.py",
+    "official_client_capture/build_",
+    "official_client_capture/candidate_",
+    "official_client_capture/derive_official_observations.py",
+    "official_client_capture/drive_candidate_",
+    "official_client_capture/drive_codex_",
+    "official_client_capture/extract_capture_records.py",
+    "official_client_capture/extract_compaction_reason.py",
+    "official_client_capture/check_sample_integrity.py",
+    "official_client_capture/h1_wire_probe.py",
+    "official_client_capture/mitm_scenario_checkpoint.py",
+    "official_client_capture/model_condition_receipts.py",
+    "official_client_capture/prewarm_codex_",
+    "official_client_capture/production_activation_receipt",
+    "official_client_capture/profile_rule_patches_",
+    "official_client_capture/relay_extract.py",
+    "official_client_capture/root_cause_codes.json",
+    "official_client_capture/run_candidate_",
+    "official_client_capture/run_codex_",
+    "official_client_capture/run_h1_",
+    "official_client_capture/run_images_",
+    "official_client_capture/run_official_",
+    "official_client_capture/run_sub2api_",
+    "official_client_capture/scenario_receipts.py",
+    "official_client_capture/tool_identity_policy_v2.json",
+    "official_client_capture/analyze_claude_",
+    "official_client_capture/claude_21220/"
+  ],
+  "layers": {
+    "wire_producer": {
+      "files": [
+        "official_client_capture/capture.py",
+        "official_client_capture/claude_drive_desktop.py",
+        "official_client_capture/claude_drive_tui_cli.py",
+        "official_client_capture/claude_fw_e_relay.py",
+        "official_client_capture/claude_fw_f_complete_runner.py",
+        "official_client_capture/claude_oauth_refresh.py",
+        "official_client_capture/claude_run_candidate_capture.sh",
+        "official_client_capture/drive_claude_tui.py",
+        "official_client_capture/run_claude_relay_scenario.sh",
+        "official_client_capture/upstream_byte_relay.py"
+      ],
+      "prefixes": [
+        "official_client_capture/addons/",
+        "official_client_capture/capturelib/",
+        "official_client_capture/claude_upgrade_scenarios_",
+        "official_client_capture/fixtures/",
+        "official_client_capture/hooks/",
+        "official_client_capture/runtime_image/",
+        "official_client_capture/runtime_scripts/"
+      ]
+    },
+    "evidence_semantics": {
+      "files": [
+        "official_client_capture/claude_acceptance_contract.py",
+        "official_client_capture/claude_build_rule_assertion_results.py",
+        "official_client_capture/claude_build_runtime_audit.py",
+        "official_client_capture/claude_bundle_ast.mjs",
+        "official_client_capture/claude_bundle_reachability.py",
+        "official_client_capture/claude_generation_policy.py",
+        "official_client_capture/claude_rule_assertion.py",
+        "official_client_capture/claude_sink_containment.mjs",
+        "official_client_capture/claude_target_inventory.py",
+        "official_client_capture/claude_upgrade_live_request_provenance.py",
+        "official_client_capture/codex_upgrade_evidence_manifest.py",
+        "official_client_capture/extract_claude_bundle.py",
+        "official_client_capture/pcap_clienthello.py",
+        "official_client_capture/scrub_raw_bytes.py",
+        "official_client_control/contracts.py",
+        "official_client_control/fw_e.py",
+        "official_client_control/gates.py",
+        "official_client_control/receipts.py",
+        "official_client_control/schemas/atomic-assertion-ledger.schema.json",
+        "official_client_control/schemas/candidate-delivery.schema.json",
+        "official_client_control/schemas/receipt.schema.json",
+        "official_client_control/schemas/rule-migration-ledger.schema.json",
+        "official_client_control/schemas/scenario-pair.schema.json",
+        "official_client_control/schemas/validation-workflow.schema.json"
+      ],
+      "prefixes": [
+        "official_client_capture/claude_fw_e",
+        "official_client_capture/claude_fw_f_",
+        "official_client_capture/claude_fw_g_",
+        "official_client_capture/claude_required_rules_",
+        "official_client_capture/claude_rule_expectations_",
+        "official_client_capture/claude_upgrade_evidence_labels_"
+      ]
+    },
+    "control": {
+      "files": [
+        "__init__.py",
+        "official_client_capture/certify_release.py",
+        "official_client_capture/claude_root_cause_codes.json",
+        "official_client_capture/claude_tool_identity_policy.py",
+        "official_client_capture/claude_tool_identity_policy_v2.json",
+        "official_client_capture/claude_upgrade_client_adapter.py",
+        "official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+        "official_client_capture/codex_upgrade_evidence_permissions.py",
+        "official_client_capture/codex_upgrade_gate_receipt.py",
+        "official_client_capture/codex_upgrade_harden_evidence_permissions.py",
+        "official_client_capture/codex_upgrade_policy_certification.py",
+        "official_client_capture/codex_upgrade_pre_a3_certification.py",
+        "official_client_capture/codex_upgrade_project_ledger.py",
+        "official_client_capture/codex_upgrade_reconciler.py",
+        "official_client_capture/codex_upgrade_root_cause.py",
+        "official_client_capture/codex_upgrade_supervisor.py",
+        "official_client_capture/codex_upgrade_timing_ledger.py",
+        "official_client_capture/codex_upgrade_tool_identity_policy.py",
+        "official_client_capture/codex_upgrade_vc0_closeout.py",
+        "official_client_capture/codex_upgrade_vc_artifacts.py",
+        "official_client_capture/codex_upgrade_vc_receipt.py",
+        "official_client_capture/codex_upgrade_wire_transition.py",
+        "official_client_capture/incremental_recovery.py",
+        "official_client_capture/post_run_secret_scan_receipt.py",
+        "official_client_capture/runtime_host_receipt.py",
+        "official_client_capture/upgrade_client_adapter.py",
+        "official_client_capture/upgrade_control_plane.py",
+        "official_client_control/__main__.py",
+        "official_client_control/canonical.py",
+        "official_client_control/cli.py",
+        "official_client_control/errors.py",
+        "official_client_control/store.py"
+      ],
+      "prefixes": [
+        "official_client_capture/claude_upgrade_"
+      ],
+      "suffixes": [
+        ".schema.json"
+      ]
+    }
+  },
+  "orchestrator": {
+    "file": "official_client_capture/claude_upgrade.py",
+    "wire_roots": [
+      "_load_plan_jobs",
+      "_job_context",
+      "_campaign_arguments",
+      "_run_job_impl",
+      "_scenario_job_execution_contract"
+    ],
+    "evidence_roots": [
+      "scan_evidence",
+      "_evidence_inventory",
+      "_finalize_scenario_receipt",
+      "_seal_capture_attempt"
+    ],
+    "dynamic_call_names": [
+      "eval",
+      "exec",
+      "__import__",
+      "globals",
+      "locals",
+      "vars"
+    ]
+  },
+  "default_layer": "wire_producer",
+  "runtime_bindings": [
+    {
+      "name": "typescript",
+      "path": "runtime/claude-tooling/typescript/lib/typescript.js",
+      "sha256": "f316520790d4db220a10d890c5f85310e26a1bd3c104b8d3b5eb62ba0491651b",
+      "version": "5.6.3"
+    }
+  ],
+  "evaluator": {
+    "checker": "official_client_capture/claude_rule_assertion.py",
+    "builder": "official_client_capture/claude_build_rule_assertion_results.py",
+    "compare_reader_roots": [
+      "compare_campaign"
+    ],
+    "accept_reader_roots": [
+      "accept_campaign"
+    ]
+  },
+  "reader_barriers": {}
+}
