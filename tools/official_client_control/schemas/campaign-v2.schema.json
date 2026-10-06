@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-control-campaign-v2.json",
+  "title": "不可变官方客户端 Campaign v2",
+  "description": "v1 的 12 字段加客户端、用途、账号组织、模型目录、执行权限、阶段依赖与预算、绝对截止、监督器参数、项目总账引用与七项工具身份；identity_sha256 覆盖 v1 的 8 个身份字段与全部 11 个新字段。tool_bundle_sha256 保留为 Store 自身摘要，建立时须等于受管清单内 Store 文件按同一口径复算的结果。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "persona",
+    "target_version",
+    "official_artifacts",
+    "platforms",
+    "entrypoints",
+    "default_conditions",
+    "tool_bundle_sha256",
+    "bootstrap_ref",
+    "created_at_utc",
+    "identity_sha256",
+    "client",
+    "campaign_purpose",
+    "oauth_org_id",
+    "model_catalog_sha256",
+    "execution_permissions",
+    "stage_dependencies",
+    "stage_budgets_minutes",
+    "absolute_deadline_utc",
+    "supervisor_parameters",
+    "project_ledger_ref",
+    "tool_identity"
+  ],
+  "properties": {
+    "schema_version": {"const": "official-client-control-campaign/v2"},
+    "campaign_id": {"$ref": "campaign.schema.json#/$defs/id"},
+    "persona": {"$ref": "campaign.schema.json#/$defs/persona"},
+    "target_version": {"type": "string", "minLength": 1},
+    "official_artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "bootstrap.schema.json#/$defs/binding"}},
+    "platforms": {"$ref": "campaign.schema.json#/$defs/nonEmptyStrings"},
+    "entrypoints": {"$ref": "campaign.schema.json#/$defs/nonEmptyStrings"},
+    "default_conditions": {"$ref": "campaign.schema.json#/$defs/nonEmptyStrings"},
+    "tool_bundle_sha256": {"$ref": "#/$defs/sha256"},
+    "bootstrap_ref": {"$ref": "campaign.schema.json#/$defs/objectRef"},
+    "created_at_utc": {"type": "string", "format": "date-time"},
+    "identity_sha256": {"$ref": "#/$defs/sha256"},
+    "client": {"$ref": "#/$defs/client"},
+    "campaign_purpose": {"enum": ["validation_only", "production_replacement"]},
+    "oauth_org_id": {"$ref": "campaign.schema.json#/$defs/id"},
+    "model_catalog_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hosts", "actions"],
+      "properties": {
+        "hosts": {"$ref": "#/$defs/idList"},
+        "actions": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "stage_dependencies": {
+      "description": "阶段名 → 排序去重的前置阶段；前置必须已登记、不得自依赖、不得成环。",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "campaign.schema.json#/$defs/id"},
+      "additionalProperties": {"type": "array", "uniqueItems": true, "items": {"$ref": "campaign.schema.json#/$defs/id"}}
+    },
+    "stage_budgets_minutes": {
+      "description": "阶段集合与 stage_dependencies 相同，值为正整数分钟。",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "campaign.schema.json#/$defs/id"},
+      "additionalProperties": {"type": "integer", "minimum": 1}
+    },
+    "absolute_deadline_utc": {"type": "string", "format": "date-time"},
+    "supervisor_parameters": {
+      "description": "监督器参数整体冻结进身份；参数名是安全标识符，取值由使用方定义。",
+      "type": "object",
+      "propertyNames": {"$ref": "campaign.schema.json#/$defs/id"}
+    },
+    "project_ledger_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "plan_sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "plan_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tool_identity": {"$ref": "#/$defs/toolIdentity"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "client": {"enum": ["codex", "claude"]},
+    "idList": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "campaign.schema.json#/$defs/id"}},
+    "toolIdentity": {
+      "description": "七项工具身份：client、policy_version 与 v3 身份引擎的五个摘要；client 必须等于 Campaign 的 client。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "tool_files_sha256"],
+      "properties": {
+        "client": {"$ref": "#/$defs/client"},
+        "policy_version": {"type": "integer", "minimum": 1},
+        "policy_sha256": {"$ref": "#/$defs/sha256"},
+        "wire_producer_sha256": {"$ref": "#/$defs/sha256"},
+        "evidence_semantics_sha256": {"$ref": "#/$defs/sha256"},
+        "control_sha256": {"$ref": "#/$defs/sha256"},
+        "tool_files_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

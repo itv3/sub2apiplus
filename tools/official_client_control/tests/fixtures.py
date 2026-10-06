@@ -1,12 +1,21 @@
-"""只使用合成 Persona 和无秘密数据构造完整 FW-D Campaign。"""
+"""只使用合成 Persona 和无秘密数据构造完整 FW-D Campaign。
+
+``SyntheticCampaign(root)`` 构造 v1 Campaign（逐字保持原夹具行为）；``SyntheticCampaign(root, schema="v2")``
+构造 Campaign v2（B1-12），其冻结工具身份按当前受管树现算——测试应先用 ``ManagedToolTree`` 把受管树复制一份并
+替换 ``receipts._tool_repository_root``，既隔离并发改动，也能在副本上模拟工具演进。
+"""
 
 from __future__ import annotations
 
 import json
+import shutil
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from unittest import mock
 
+from tools.official_client_control import receipts as receipts_module
 from tools.official_client_control.canonical import (
     canonical_json_bytes,
     canonical_sha256,
@@ -21,13 +30,17 @@ from tools.official_client_control.contracts import (
     rule_migration_ledger_identity_sha256,
 )
 from tools.official_client_control.receipts import (
+    candidate_revision_facts,
     control_tool_bundle_sha256,
+    current_tool_manifest,
     finalize_activation,
     finalize_candidate_build,
     finalize_candidate_delivery,
     finalize_promotion,
     finalize_validation,
     finalize_validation_gate,
+    store_bundle_from_manifest,
+    tool_evolutions,
 )
 from tools.official_client_control.store import ControlStore
 
@@ -39,11 +52,84 @@ TARGET_IMAGE = f"sha256:{'1' * 64}"
 ROLLBACK_IMAGE = f"sha256:{'2' * 64}"
 
 
+class ManagedToolTree:
+    """两个受管根的受管文件副本（只复制受管清单里的文件）。
+
+    ``active()`` 期间 ``receipts._tool_repository_root`` 指向副本：Campaign v2 的清单核对与写入时有效性都在
+    副本上现算，其它进程对真实工作树的并发改动不影响测试；``write`` 在副本里改或加文件以模拟工具演进，
+    ``restore`` 撤销全部改动。
+    """
+
+    def __init__(self, destination: Path) -> None:
+        engine = receipts_module._identity_engine("claude")
+        source_root = Path(engine.REPOSITORY_ROOT)
+        digests = engine.managed_tree_digests(source_root, engine.load_policy())
+        self.root = destination
+        for key in digests:
+            root_name, _, relative = key.partition("/")
+            target = destination / "tools" / root_name / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_root / "tools" / root_name / relative, target)
+        self._originals: dict[Path, bytes | None] = {}
+
+    @contextmanager
+    def active(self) -> Iterator["ManagedToolTree"]:
+        with mock.patch.object(receipts_module, "_tool_repository_root", return_value=self.root):
+            yield self
+
+    def path(self, key: str) -> Path:
+        """``<根目录名>/<相对路径>`` → 副本中的路径。"""
+
+        root_name, _, relative = key.partition("/")
+        return self.root / "tools" / root_name / relative
+
+    def _remember(self, path: Path) -> None:
+        if path not in self._originals:
+            self._originals[path] = path.read_bytes() if path.exists() else None
+
+    def write(self, key: str, content: bytes) -> None:
+        path = self.path(key)
+        self._remember(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    def remove(self, key: str) -> None:
+        path = self.path(key)
+        self._remember(path)
+        path.unlink(missing_ok=True)
+
+    def restore(self) -> None:
+        for path, original in self._originals.items():
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(original)
+        self._originals.clear()
+
+
+def synthetic_tool_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """由现算清单构造七项工具身份；三层摘要在编排器出现前无法现算，用清单指纹派生的确定性合成值。"""
+
+    tool_files = manifest["tool_files_sha256"]
+    return {
+        "client": manifest["client"],
+        "policy_version": manifest["policy_version"],
+        "policy_sha256": manifest["policy_sha256"],
+        "wire_producer_sha256": canonical_sha256({"layer": "wire", "files": tool_files}),
+        "evidence_semantics_sha256": canonical_sha256({"layer": "evidence", "files": tool_files}),
+        "control_sha256": canonical_sha256({"layer": "control", "files": tool_files}),
+        "tool_files_sha256": tool_files,
+    }
+
+
 class SyntheticCampaign:
     """按文档顺序生成可在单元测试中变异的完整受管事实链。"""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, schema: str = "v1") -> None:
+        if schema not in {"v1", "v2"}:
+            raise ValueError(f"不支持的 Campaign 合同：{schema}")
         self.root = root
+        self.schema = schema
         self.external_root = root / "external"
         self.external_root.mkdir(mode=0o700)
         self.store_root = root / "store"
@@ -57,7 +143,14 @@ class SyntheticCampaign:
             "upstream_route_family": "synthetic-responses",
         }
         self.campaign_id = "synthetic-1.0.0-campaign"
-        self.tool_sha256 = control_tool_bundle_sha256()
+        if schema == "v2":
+            # v2：工具摘要字段取有效身份的 tool_files_sha256；Store 自身摘要按受管清单同一口径复算。
+            manifest = current_tool_manifest("claude")
+            self.tool_identity = synthetic_tool_identity(manifest)
+            self.store_tool_sha256 = store_bundle_from_manifest(manifest)
+            self.tool_sha256 = self.tool_identity["tool_files_sha256"]
+        else:
+            self.tool_sha256 = control_tool_bundle_sha256()
         self._clock = datetime(2026, 8, 18, tzinfo=timezone.utc)
         self.references: dict[str, dict[str, Any]] = {}
         self._prepare_external_files()
@@ -127,6 +220,8 @@ class SyntheticCampaign:
             "tool_bundle_sha256": self.tool_sha256,
             "result": "stable",
         }
+        if self.schema == "v2":
+            bootstrap["tool_bundle_sha256"] = self.store_tool_sha256
         self.references["bootstrap"] = self.store.seal_object("bootstrap", bootstrap)
         campaign = {
             "schema_version": "official-client-control-campaign/v1",
@@ -142,8 +237,98 @@ class SyntheticCampaign:
             "created_at_utc": self._time(),
             "identity_sha256": "",
         }
+        if self.schema == "v2":
+            campaign.update(self.campaign_v2_fields())
         campaign["identity_sha256"] = campaign_identity_sha256(campaign)
+        self.campaign_document = campaign
         self.store.create_campaign(campaign)
+
+    def campaign_v2_fields(self) -> dict[str, Any]:
+        """Campaign v2 在 v1 之上新增与改写的字段（合成值）。"""
+
+        stages = {
+            "VC-0": [],
+            "VC-1": ["VC-0"],
+            "VC-2": ["VC-1"],
+            "VC-3": ["VC-2"],
+            "VC-4": ["VC-3"],
+            "VC-5": ["VC-4"],
+            "VC-6": ["VC-5"],
+        }
+        return {
+            "schema_version": "official-client-control-campaign/v2",
+            "tool_bundle_sha256": self.store_tool_sha256,
+            "client": "claude",
+            "campaign_purpose": "production_replacement",
+            "oauth_org_id": "synthetic-org-0001",
+            "model_catalog_sha256": SHA_B,
+            "execution_permissions": {
+                "hosts": ["arm64-synthetic"],
+                "actions": ["candidate_build", "official_capture"],
+            },
+            "stage_dependencies": stages,
+            "stage_budgets_minutes": {stage: 120 for stage in stages},
+            "absolute_deadline_utc": "2026-08-25T00:00:00Z",
+            "supervisor_parameters": {"watchdog_seconds": 30},
+            "project_ledger_ref": {
+                "path": "upgrade-project-ledger-claude/plan.json",
+                "plan_sha256": SHA_C,
+            },
+            "tool_identity": dict(self.tool_identity),
+        }
+
+    def evolution_payload(self, *, approved_at_utc: str | None = None) -> dict[str, Any]:
+        """把当前受管代码登记为新有效身份的演进 payload（接在当前链尾）。"""
+
+        campaign = self.store.load_campaign(self.campaign_id)
+        chain = tool_evolutions(self.store, campaign)
+        source = chain[-1][1]["to_identity"] if chain else campaign["tool_identity"]
+        target = synthetic_tool_identity(current_tool_manifest("claude"))
+        index = len(chain) + 1
+        return {
+            "client": "claude",
+            "campaign_id": self.campaign_id,
+            "index": index,
+            "from_identity": source,
+            "to_identity": target,
+            "evolution_receipt": {
+                "path": f"control/tool-evolutions/e{index:03d}/evolution.json",
+                "sha256": canonical_sha256({"index": index, "to": target}),
+            },
+            "approved_by": "synthetic-operator",
+            "approved_at_utc": approved_at_utc or self._time(),
+            "previous_ref": chain[-1][0] if chain else None,
+        }
+
+    def register_evolution(self) -> dict[str, Any]:
+        """登记工具演进，并让后续夹具写入使用新有效身份的工具摘要。"""
+
+        payload = self.evolution_payload()
+        reference = self.store.seal_object("tool_evolution_registration", payload)
+        self.tool_identity = dict(payload["to_identity"])
+        self.tool_sha256 = self.tool_identity["tool_files_sha256"]
+        self.references[f"tool-evolution-{payload['index']}"] = reference
+        return reference
+
+    def open_candidate_revision(self, candidate_id: str) -> dict[str, Any]:
+        """追加下一条候选 revision 事实（B1-12 最小形态），取代当前 revision。"""
+
+        campaign = self.store.load_campaign(self.campaign_id)
+        revisions = candidate_revision_facts(self.store, campaign)
+        previous = revisions[-1] if revisions else None
+        reference = self.store.append_fact(
+            self.campaign_id,
+            "candidate_revision_recorded",
+            {
+                "revision": previous["payload"]["revision"] + 1 if previous else 2,
+                "candidate_id": candidate_id,
+                "supersedes": self.store.fact_ref(previous) if previous else None,
+                "invalidation_ref": None,
+            },
+            self._time(),
+        )
+        self.references[f"candidate-revision-{candidate_id}"] = reference
+        return reference
 
     def _record_discovery(self) -> None:
         self.references["discovery"] = self.store.append_fact(
@@ -802,21 +987,17 @@ class SyntheticCampaign:
             self._time(),
         )
 
-    def strict_validate(
-        self,
-        *,
-        finalize: bool = True,
-        gate_result: str = "pass",
-        stop_after_gate: bool = False,
-    ) -> None:
-        """按 VC-4／VC-5 严格合同冻结 Candidate 并生成完成事实。"""
+    def candidate_build_input(self, tag: str = "strict") -> dict[str, Any]:
+        """VC-4 已封存构建输入；同一 tag 的模型目录只封存一次（重试 finalizer 时复用）。"""
+
+        def key(name: str) -> str:
+            return name if tag == "strict" else f"{name}-{tag}"
 
         candidate_purpose = self.store.load_fact(
             self.references["profile-approval"]
         )["payload"]["approval_purpose"]
-        self.references["model-catalog"] = self.seal_manifest(
-            "model_capability_catalog", "model-catalog"
-        )
+        if key("model-catalog") not in self.references:
+            self.seal_manifest("model_capability_catalog", key("model-catalog"))
         artifact_entries = [
             {
                 "role": "backend",
@@ -828,7 +1009,7 @@ class SyntheticCampaign:
             {"execute": ["baseline", "gate-runtime"], "reuse": []}
         )
         build_input = {
-            "candidate_id": "synthetic-candidate-strict",
+            "candidate_id": f"synthetic-candidate-{tag}",
             "candidate_purpose": candidate_purpose,
             "profile_approval_ref": self.references["profile-approval"],
             "release_artifact_ref": self.references["release"],
@@ -844,13 +1025,13 @@ class SyntheticCampaign:
                 "profile_schema_ref": self.references["profile-schema"],
                 "snapshot_ref": self.references["snapshot"],
                 "release_artifact_ref": self.references["release"],
-                "model_capability_catalog_ref": self.references["model-catalog"],
+                "model_capability_catalog_ref": self.references[key("model-catalog")],
                 "support_envelope_ref": self.references["support"],
                 "profile_digest": SHA_A,
             },
             "validation_scope_sha256": validation_scope_sha256,
             "build_identity": {
-                "build_id": "synthetic-build-strict",
+                "build_id": f"synthetic-build-{tag}",
                 "deployed_version": "1.0.0",
                 "target_architecture": "linux/amd64",
                 "toolchain": ["go-1.25", "node-24"],
@@ -875,12 +1056,34 @@ class SyntheticCampaign:
             },
             "completed_at_utc": self._time(),
         }
-        self.references["candidate-build-receipt"] = finalize_candidate_build(
+        return build_input
+
+    def strict_validate(
+        self,
+        *,
+        finalize: bool = True,
+        gate_result: str = "pass",
+        stop_after_gate: bool = False,
+        tag: str = "strict",
+    ) -> None:
+        """按 VC-4／VC-5 严格合同冻结 Candidate 并生成完成事实。
+
+        ``tag`` 区分同一 Campaign 内的多轮候选（例如换 revision 后的新候选）；缺省 ``strict`` 时全部标识符与
+        引用键与原夹具逐字相同。
+        """
+
+        def key(name: str) -> str:
+            return name if tag == "strict" else f"{name}-{tag}"
+
+        build_input = self.candidate_build_input(tag)
+        candidate_purpose = build_input["candidate_purpose"]
+        validation_scope_sha256 = build_input["validation_scope_sha256"]
+        self.references[key("candidate-build-receipt")] = finalize_candidate_build(
             self.store, self.campaign_id, build_input
         )
         candidate = {
             "schema_version": "official-client-validation-candidate/v2",
-            "candidate_id": "synthetic-candidate-strict",
+            "candidate_id": f"synthetic-candidate-{tag}",
             "profile_approval_ref": self.references["profile-approval"],
             "release_artifact_ref": self.references["release"],
             "support_envelope_ref": self.references["support"],
@@ -888,19 +1091,17 @@ class SyntheticCampaign:
             "test_tree_sha256": "8" * 64,
             "dependency_lock_sha256": "9" * 64,
             "target_architecture": "linux/amd64",
-            "build_id": "synthetic-build-strict",
+            "build_id": f"synthetic-build-{tag}",
             "image_digest": TARGET_IMAGE,
             "candidate_purpose": candidate_purpose,
-            "candidate_build_receipt_ref": self.references[
-                "candidate-build-receipt"
-            ],
+            "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
             "identity_sha256": "",
         }
         candidate["identity_sha256"] = candidate_identity_sha256(candidate)
-        self.references["candidate-strict"] = self.store.append_fact(
+        self.references[f"candidate-{tag}"] = self.store.append_fact(
             self.campaign_id, "candidate_frozen", candidate, self._time()
         )
-        self.references["validation-runtime-before"] = self.store.seal_object(
+        self.references[key("validation-runtime-before")] = self.store.seal_object(
             "runtime_catalog_snapshot",
             {
                 "schema_version": "official-client-runtime-catalog-snapshot/v1",
@@ -912,17 +1113,17 @@ class SyntheticCampaign:
                 "source_ref": self.runtime_binding,
             },
         )
-        self.references["validation-selector-before"] = self.store.append_fact(
+        self.references[key("validation-selector-before")] = self.store.append_fact(
             self.campaign_id,
             "selector_observed",
             {
-                "catalog_snapshot_ref": self.references["validation-runtime-before"],
+                "catalog_snapshot_ref": self.references[key("validation-runtime-before")],
                 "observation_kind": "read_only",
             },
             self._time(),
         )
         run_conditions = {
-            "run_nonce": "nonce-strict-1",
+            "run_nonce": f"nonce-{tag}-1",
             "environment_sha256": "4" * 64,
             "tool_sha256": self.tool_sha256,
             "configuration_sha256": "5" * 64,
@@ -933,12 +1134,10 @@ class SyntheticCampaign:
             "schema_version": "official-client-validation-execution-plan/v1",
             "campaign_id": self.campaign_id,
             "persona": self.persona,
-            "plan_id": "validation-plan-strict",
-            "candidate_id": "synthetic-candidate-strict",
-            "candidate_ref": self.references["candidate-strict"],
-            "candidate_build_receipt_ref": self.references[
-                "candidate-build-receipt"
-            ],
+            "plan_id": f"validation-plan-{tag}",
+            "candidate_id": f"synthetic-candidate-{tag}",
+            "candidate_ref": self.references[f"candidate-{tag}"],
+            "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
             "profile_approval_ref": self.references["profile-approval"],
             "scenario_plan_ref": self.references["scenario-plan"],
             "atomic_assertion_ledger_ref": self.references[
@@ -961,9 +1160,7 @@ class SyntheticCampaign:
                 }
             ],
             "run_conditions": run_conditions,
-            "production_selector_before_ref": self.references[
-                "validation-selector-before"
-            ],
+            "production_selector_before_ref": self.references[key("validation-selector-before")],
             "vircs_state": {
                 "ownership": "operator_managed",
                 "verification": "unverified",
@@ -978,22 +1175,18 @@ class SyntheticCampaign:
                 if key != "identity_sha256"
             }
         )
-        self.references["validation-plan"] = self.store.seal_object(
+        self.references[key("validation-plan")] = self.store.seal_object(
             "validation_execution_plan", validation_plan
         )
         attempt = {
             "schema_version": "official-client-validation-attempt/v1",
-            "attempt_id": "attempt-strict-1",
-            "candidate_id": "synthetic-candidate-strict",
-            "candidate_ref": self.references["candidate-strict"],
-            "candidate_build_receipt_ref": self.references[
-                "candidate-build-receipt"
-            ],
-            "validation_execution_plan_ref": self.references["validation-plan"],
+            "attempt_id": f"attempt-{tag}-1",
+            "candidate_id": f"synthetic-candidate-{tag}",
+            "candidate_ref": self.references[f"candidate-{tag}"],
+            "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
+            "validation_execution_plan_ref": self.references[key("validation-plan")],
             "run_conditions": run_conditions,
-            "production_selector_before_ref": self.references[
-                "validation-selector-before"
-            ],
+            "production_selector_before_ref": self.references[key("validation-selector-before")],
             "vircs_state": validation_plan["vircs_state"],
             "result": "created",
             "identity_sha256": "",
@@ -1001,7 +1194,7 @@ class SyntheticCampaign:
         attempt["identity_sha256"] = canonical_sha256(
             {key: value for key, value in attempt.items() if key != "identity_sha256"}
         )
-        self.references["validation-attempt"] = self.store.append_fact(
+        self.references[key("validation-attempt")] = self.store.append_fact(
             self.campaign_id, "validation_attempt_created", attempt, self._time()
         )
         previous: dict[str, Any] | None = None
@@ -1013,10 +1206,10 @@ class SyntheticCampaign:
         ):
             scenario: dict[str, Any] = {
                 "schema_version": "official-client-scenario-stage/v2",
-                "candidate_id": "synthetic-candidate-strict",
+                "candidate_id": f"synthetic-candidate-{tag}",
                 "scenario_id": "baseline",
-                "attempt_id": "attempt-strict-1",
-                "validation_attempt_ref": self.references["validation-attempt"],
+                "attempt_id": f"attempt-{tag}-1",
+                "validation_attempt_ref": self.references[key("validation-attempt")],
                 "stage": stage,
                 "previous_stage_ref": previous,
                 "artifact_refs": []
@@ -1027,29 +1220,27 @@ class SyntheticCampaign:
             if stage == "approve":
                 scenario |= {
                     "reviewer": "synthetic-reviewer",
-                    "review_ref": "review/scenario-strict",
+                    "review_ref": f"review/scenario-{tag}",
                 }
             previous = self.store.append_fact(
                 self.campaign_id, kind, scenario, self._time()
             )
-        self.references["scenario-approval-strict"] = previous
+        self.references[f"scenario-approval-{tag}"] = previous
         evidence_package = {
             "schema_version": "official-client-candidate-evidence-package/v1",
             "campaign_id": self.campaign_id,
             "persona": self.persona,
             "target_version": "1.0.0",
-            "package_id": "candidate-evidence-strict",
-            "candidate_id": "synthetic-candidate-strict",
-            "attempt_id": "attempt-strict-1",
-            "candidate_ref": self.references["candidate-strict"],
-            "candidate_build_receipt_ref": self.references[
-                "candidate-build-receipt"
-            ],
-            "validation_attempt_ref": self.references["validation-attempt"],
+            "package_id": f"candidate-evidence-{tag}",
+            "candidate_id": f"synthetic-candidate-{tag}",
+            "attempt_id": f"attempt-{tag}-1",
+            "candidate_ref": self.references[f"candidate-{tag}"],
+            "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
+            "validation_attempt_ref": self.references[key("validation-attempt")],
             "atomic_assertion_ledger_ref": self.references[
                 "atomic-assertion-ledger"
             ],
-            "scenario_approval_refs": [self.references["scenario-approval-strict"]],
+            "scenario_approval_refs": [self.references[f"scenario-approval-{tag}"]],
             "scenario_assertion_results": [],
             "raw_evidence_inventory": [self.evidence_binding],
             "environment_before_ref": self.references["operational-evidence"],
@@ -1067,13 +1258,13 @@ class SyntheticCampaign:
                 if key != "identity_sha256"
             }
         )
-        self.references["candidate-evidence-package"] = self.store.seal_object(
+        self.references[key("candidate-evidence-package")] = self.store.seal_object(
             "candidate_evidence_package", evidence_package
         )
-        self.references["validation-gate-receipt"] = finalize_validation_gate(
+        self.references[key("validation-gate-receipt")] = finalize_validation_gate(
             self.store,
             self.campaign_id,
-            self.references["validation-attempt"],
+            self.references[key("validation-attempt")],
             {
                 "gate_id": "gate-runtime",
                 "started_at_utc": self._time(),
@@ -1085,23 +1276,21 @@ class SyntheticCampaign:
         )
         if stop_after_gate:
             return
-        self.references["pair-strict"] = self.store.append_fact(
+        self.references[f"pair-{tag}"] = self.store.append_fact(
             self.campaign_id,
             "pair_recorded",
             {
                 "schema_version": "official-client-pair/v2",
                 "pair_id": "PAIR-SPEC-001",
                 "spec_id": "SPEC-001",
-                "candidate_id": "synthetic-candidate-strict",
+                "candidate_id": f"synthetic-candidate-{tag}",
                 "profile_approval_ref": self.references["profile-approval"],
                 "release_artifact_ref": self.references["release"],
                 "condition_sha256": SHA_C,
                 "scenario_approval_refs": [
-                    self.references["scenario-approval-strict"]
+                    self.references[f"scenario-approval-{tag}"]
                 ],
-                "candidate_evidence_package_ref": self.references[
-                    "candidate-evidence-package"
-                ],
+                "candidate_evidence_package_ref": self.references[key("candidate-evidence-package")],
                 "atomic_assertion_ledger_ref": self.references[
                     "atomic-assertion-ledger"
                 ],
@@ -1152,24 +1341,20 @@ class SyntheticCampaign:
         )
         acceptance = {
             "schema_version": "official-client-acceptance/v2",
-            "candidate_id": "synthetic-candidate-strict",
+            "candidate_id": f"synthetic-candidate-{tag}",
             "profile_approval_ref": self.references["profile-approval"],
-            "candidate_ref": self.references["candidate-strict"],
-            "candidate_build_receipt_ref": self.references[
-                "candidate-build-receipt"
-            ],
-            "validation_attempt_ref": self.references["validation-attempt"],
-            "candidate_evidence_package_ref": self.references[
-                "candidate-evidence-package"
-            ],
+            "candidate_ref": self.references[f"candidate-{tag}"],
+            "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
+            "validation_attempt_ref": self.references[key("validation-attempt")],
+            "candidate_evidence_package_ref": self.references[key("candidate-evidence-package")],
             "atomic_assertion_ledger_ref": self.references[
                 "atomic-assertion-ledger"
             ],
-            "pair_refs": [self.references["pair-strict"]],
+            "pair_refs": [self.references[f"pair-{tag}"]],
             "boundary_assertion_refs": [self.references["boundary"]],
             "inventory_assertion_refs": [self.references["operational-evidence"]],
             "external_gate_receipt_refs": [
-                self.references["validation-gate-receipt"]
+                self.references[key("validation-gate-receipt")]
             ],
             "acceptance_purpose": candidate_purpose,
             "result": (
@@ -1186,24 +1371,24 @@ class SyntheticCampaign:
                 if key != "identity_sha256"
             }
         )
-        self.references["acceptance-strict"] = self.store.append_fact(
+        self.references[f"acceptance-{tag}"] = self.store.append_fact(
             self.campaign_id, "acceptance_recorded", acceptance, self._time()
         )
-        self.references["validation-selector-after"] = self.store.append_fact(
+        self.references[key("validation-selector-after")] = self.store.append_fact(
             self.campaign_id,
             "selector_observed",
             {
-                "catalog_snapshot_ref": self.references["validation-runtime-before"],
+                "catalog_snapshot_ref": self.references[key("validation-runtime-before")],
                 "observation_kind": "read_only",
             },
             self._time(),
         )
         if finalize:
-            self.references["validation-completed"] = finalize_validation(
+            self.references[key("validation-completed")] = finalize_validation(
                 self.store,
                 self.campaign_id,
-                self.references["acceptance-strict"],
-                self.references["validation-selector-after"],
+                self.references[f"acceptance-{tag}"],
+                self.references[key("validation-selector-after")],
                 self._time(),
             )
 

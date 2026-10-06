@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .canonical import canonical_json_bytes, load_json_file
+from .contracts import CAMPAIGN_SCHEMA, CAMPAIGN_V2_SCHEMA
 from .errors import ControlError
 from .gates import WorkflowGates
 from .receipts import (
-    control_tool_bundle_sha256,
+    effective_tool_identity,
     finalize_activation,
     finalize_candidate_build,
     finalize_candidate_delivery,
@@ -19,8 +20,12 @@ from .receipts import (
     finalize_validation,
     finalize_validation_gate,
     replay_receipt,
+    tool_digest_v2,
 )
 from .store import ControlStore
+
+# campaign-create --schema 的取值 → 输入 Campaign 必须声明的合同名。
+CAMPAIGN_SCHEMA_CHOICES = {"v1": CAMPAIGN_SCHEMA, "v2": CAMPAIGN_V2_SCHEMA}
 
 
 FACT_COMMANDS = {
@@ -41,6 +46,8 @@ FACT_COMMANDS = {
     "selector-activate": "selector_activated",
     "promotion-record": "release_promoted",
     "inventory-current-append": "inventory_current_appended",
+    # B1-12 最小形态：只允许 Campaign v2；revision-open／invalidate-candidate 编排入口由 B3-05 接入。
+    "candidate-revision-record": "candidate_revision_recorded",
 }
 
 
@@ -81,6 +88,21 @@ def build_parser() -> argparse.ArgumentParser:
     campaign = subparsers.add_parser("campaign-create", help="创建不可变 Campaign")
     _add_store(campaign)
     campaign.add_argument("--input", required=True, type=_absolute_path)
+    campaign.add_argument(
+        "--schema",
+        choices=tuple(CAMPAIGN_SCHEMA_CHOICES),
+        default="v1",
+        help="输入 Campaign 的合同版本；v2 建立时核对冻结工具身份与当前受管代码",
+    )
+
+    evolution = subparsers.add_parser(
+        "tool-evolution", help="登记 Campaign v2 的工具演进，使当前受管代码成为有效工具身份"
+    )
+    _add_store(evolution)
+    evolution.add_argument("--campaign", required=True, help="Campaign v2 ID")
+    evolution.add_argument(
+        "--input", required=True, type=_absolute_path, help="tool_evolution_registration payload JSON"
+    )
 
     for command in FACT_COMMANDS:
         fact_parser = subparsers.add_parser(command, help=f"追加 {FACT_COMMANDS[command]} 事实")
@@ -170,7 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_store(status)
     status.add_argument("--campaign", required=True)
 
-    subparsers.add_parser("tool-digest", help="输出当前 FW-D 工具身份摘要")
+    subparsers.add_parser(
+        "tool-digest", help="输出当前 Store 自身摘要与七项工具身份（tool-identity/v2）"
+    )
     return parser
 
 
@@ -187,16 +211,30 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         store = ControlStore.initialize(arguments.root, arguments.created_at)
         return {"result": "initialized", "store": str(store.root)}
     if command == "tool-digest":
-        return {
-            "schema_version": "official-client-control-tool-identity/v1",
-            "sha256": control_tool_bundle_sha256(),
-        }
+        return tool_digest_v2()
 
     store = ControlStore(arguments.store)
     if command == "artifact-seal":
         return store.seal_object(arguments.kind, _load_object(arguments.input, "artifact payload"))
     if command == "campaign-create":
-        return store.create_campaign(_load_object(arguments.input, "campaign"))
+        campaign = _load_object(arguments.input, "campaign")
+        expected = CAMPAIGN_SCHEMA_CHOICES[arguments.schema]
+        if campaign.get("schema_version") != expected:
+            raise ControlError(
+                f"campaign-create --schema {arguments.schema} 要求输入声明 {expected}"
+            )
+        return store.create_campaign(campaign)
+    if command == "tool-evolution":
+        payload = _load_object(arguments.input, "tool evolution registration")
+        if payload.get("campaign_id") != arguments.campaign:
+            raise ControlError("tool evolution registration.campaign_id 与 --campaign 不一致")
+        reference = store.seal_object("tool_evolution_registration", payload)
+        return {
+            "registration_ref": reference,
+            "effective_tool_identity": effective_tool_identity(
+                store, store.load_campaign(arguments.campaign)
+            ),
+        }
     if command in FACT_COMMANDS:
         return store.append_fact(
             arguments.campaign,

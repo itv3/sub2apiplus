@@ -40,9 +40,57 @@
         "runtime_catalog_snapshot",
         "operational_evidence",
         "promotion_diff",
-        "acceptance_package"
+        "acceptance_package",
+        "tool_evolution_registration"
       ]
     },
     "payload": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"object_kind": {"const": "tool_evolution_registration"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/toolEvolutionRegistration"}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "toolEvolutionRegistration": {
+      "description": "Campaign v2 的工具演进登记：按 index 从 1 起成单链，previous_ref 在 index 1 时为 null；from_identity 承接上一份有效身份，to_identity 是登记时当前受管代码的身份。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "campaign_id", "index", "from_identity", "to_identity", "evolution_receipt", "approved_by", "approved_at_utc", "previous_ref"],
+      "properties": {
+        "client": {"enum": ["codex", "claude"]},
+        "campaign_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
+        "index": {"type": "integer", "minimum": 1},
+        "from_identity": {"$ref": "campaign-v2.schema.json#/$defs/toolIdentity"},
+        "to_identity": {"$ref": "campaign-v2.schema.json#/$defs/toolIdentity"},
+        "evolution_receipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "approved_by": {"type": "string", "minLength": 1},
+        "approved_at_utc": {"type": "string", "format": "date-time"},
+        "previous_ref": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["object_kind", "sha256"],
+              "properties": {
+                "object_kind": {"const": "tool_evolution_registration"},
+                "sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          ]
+        }
+      }
+    }
   }
 }

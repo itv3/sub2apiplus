@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterator
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 from .canonical import (
@@ -53,6 +54,44 @@ CANDIDATE_DELIVERY_PACKAGE_SCHEMA = "official-client-candidate-delivery-package/
 PRIVATE_ARCHIVE_MANIFEST_SCHEMA = "official-client-private-archive-manifest/v1"
 CANDIDATE_DELIVERY_FACT_SCHEMA = "official-client-candidate-delivery-fact/v1"
 
+# ---------------------------------------------------------------------------
+# Claude 升级控制面 B1-12：Campaign v2、fact v2 与五类收据 v2（新合同只由 Claude 使用）
+# ---------------------------------------------------------------------------
+# v1 合同逐字不变、只读重放；v2 Campaign 的事实与收据一律走 v2 合同，二者不得混用。
+CAMPAIGN_V2_SCHEMA = "official-client-control-campaign/v2"
+FACT_V2_SCHEMA = "official-client-control-fact/v2"
+PROMOTION_RECEIPT_V2_SCHEMA = "official-client-control-promotion-receipt/v2"
+ACTIVATION_RECEIPT_V2_SCHEMA = "official-client-control-activation-receipt/v2"
+CANDIDATE_BUILD_RECEIPT_V2_SCHEMA = "official-client-candidate-build-receipt/v2"
+VALIDATION_GATE_RECEIPT_V2_SCHEMA = "official-client-validation-gate-receipt/v2"
+CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA = "official-client-candidate-delivery-receipt/v2"
+# 收据种类 → (v1 合同名, v2 合同名)；v2 只比 v1 多一个 formed_under 字段。
+RECEIPT_SCHEMA_VERSIONS = {
+    "promotion": (PROMOTION_RECEIPT_SCHEMA, PROMOTION_RECEIPT_V2_SCHEMA),
+    "activation": (ACTIVATION_RECEIPT_SCHEMA, ACTIVATION_RECEIPT_V2_SCHEMA),
+    "candidate_build": (CANDIDATE_BUILD_RECEIPT_SCHEMA, CANDIDATE_BUILD_RECEIPT_V2_SCHEMA),
+    "validation_gate": (VALIDATION_GATE_RECEIPT_SCHEMA, VALIDATION_GATE_RECEIPT_V2_SCHEMA),
+    "candidate_delivery": (
+        CANDIDATE_DELIVERY_RECEIPT_SCHEMA,
+        CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA,
+    ),
+}
+RECEIPT_V2_SCHEMAS = frozenset(versions[1] for versions in RECEIPT_SCHEMA_VERSIONS.values())
+# 控制面客户端字段（设计 D1）：取值 codex／claude，与四键 persona 不混用。
+CLIENTS = ("codex", "claude")
+# Campaign v2 冻结的七项工具身份（B1-07 v3 引擎五摘要加 client、policy_version）。
+TOOL_IDENTITY_FIELDS = (
+    "client",
+    "policy_version",
+    "policy_sha256",
+    "wire_producer_sha256",
+    "evidence_semantics_sha256",
+    "control_sha256",
+    "tool_files_sha256",
+)
+# 形成期坐标：事实／收据形成时的有效工具身份、候选 revision 与评估基线。
+FORMED_UNDER_FIELDS = ("tool_identity_ref", "candidate_revision", "evaluation_baseline")
+
 DIMENSIONS = (
     "discovery",
     "evidence",
@@ -87,7 +126,35 @@ FACT_DIMENSION = {
     "restored_active": "deployment",
     "inventory_current_appended": "deployment",
     "candidate_delivery_recorded": "deployment",
+    # B1-12 最小形态（B3-05 补全作废门禁与命令）：决定当前有效候选 revision，只允许出现在 fact v2。
+    "candidate_revision_recorded": "validation",
 }
+
+# 只允许出现在 fact v2（Campaign v2）里的事实种类；v1 文档出现即拒绝。
+FACT_V2_ONLY_KINDS = frozenset({"candidate_revision_recorded"})
+
+# 绑定具体候选的事实种类：v2 下写入与重放都要求候选属于形成期候选 revision，
+# status 只按当前 revision 下形成的这些事实推导检查点（设计 B1-12「交付判定」）。
+CANDIDATE_SCOPED_FACT_KINDS = frozenset(
+    {
+        "candidate_frozen",
+        "scenario_prepared",
+        "scenario_captured",
+        "scenario_sealed",
+        "scenario_approved",
+        "pair_recorded",
+        "acceptance_recorded",
+        "validation_attempt_created",
+        "validation_completed",
+        "candidate_delivery_recorded",
+        "release_promoted",
+        "accepted_not_activated",
+        "canary_passed",
+        "active",
+        "rollback_verified",
+        "restored_active",
+    }
+)
 
 DEPLOYMENT_STAGES = (
     "accepted_not_activated",
@@ -168,6 +235,8 @@ OBJECT_KINDS = {
     "operational_evidence",
     "promotion_diff",
     "acceptance_package",
+    # B1-12：Campaign v2 的工具演进登记，按 index 成单链，决定当前有效工具身份。
+    "tool_evolution_registration",
 }
 
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -348,28 +417,229 @@ def validate_bootstrap_payload(value: Any) -> dict[str, Any]:
     return payload
 
 
+_CAMPAIGN_V1_KEYS = (
+    "schema_version",
+    "campaign_id",
+    "persona",
+    "target_version",
+    "official_artifacts",
+    "platforms",
+    "entrypoints",
+    "default_conditions",
+    "tool_bundle_sha256",
+    "bootstrap_ref",
+    "created_at_utc",
+    "identity_sha256",
+)
+# Campaign v2 在 v1 的 12 字段之上新增的 11 个字段；全部进入 identity_sha256 覆盖集。
+_CAMPAIGN_V2_EXTRA_KEYS = (
+    "client",
+    "campaign_purpose",
+    "oauth_org_id",
+    "model_catalog_sha256",
+    "execution_permissions",
+    "stage_dependencies",
+    "stage_budgets_minutes",
+    "absolute_deadline_utc",
+    "supervisor_parameters",
+    "project_ledger_ref",
+    "tool_identity",
+)
+_CAMPAIGN_V1_IDENTITY_FIELDS = (
+    "persona",
+    "target_version",
+    "official_artifacts",
+    "platforms",
+    "entrypoints",
+    "default_conditions",
+    "tool_bundle_sha256",
+    "bootstrap_ref",
+)
+
+
+def _parse_utc(text: str) -> datetime:
+    """把已通过 ``expect_rfc3339`` 的时间解析成带时区的 datetime，供先后比较。"""
+
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def _expect_positive_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ControlError(f"{label} 必须是正整数")
+    return value
+
+
+def _validate_posix_path(value: Any, label: str) -> str:
+    """规范 POSIX 路径：允许绝对或相对，但不得含 ``.``／``..`` 段、重复或末尾斜杠。"""
+
+    text = expect_string(value, label)
+    path = PurePosixPath(text)
+    if path == PurePosixPath(".") or ".." in path.parts or path.as_posix() != text:
+        raise ControlError(f"{label} 不是规范 POSIX 路径")
+    return text
+
+
+def validate_tool_identity(value: Any, label: str = "tool_identity") -> dict[str, Any]:
+    """七项工具身份：client、policy_version 与 v3 引擎的五个摘要。"""
+
+    identity = expect_object(value, label)
+    expect_exact_keys(identity, set(TOOL_IDENTITY_FIELDS), label)
+    _expect_enum(identity["client"], set(CLIENTS), f"{label}.client")
+    _expect_positive_int(identity["policy_version"], f"{label}.policy_version")
+    for key in TOOL_IDENTITY_FIELDS[2:]:
+        expect_sha256(identity[key], f"{label}.{key}")
+    return identity
+
+
+def validate_formed_under(value: Any, label: str = "formed_under") -> dict[str, Any]:
+    """形成期坐标的形状：工具身份引用、候选 revision、评估基线。
+
+    ``tool_identity_ref`` 为 ``null`` 表示所属 Campaign 的初始工具身份，否则引用一份
+    ``tool_evolution_registration``（取其 ``to_identity``）。``candidate_revision`` 从 1 起
+    （没有 ``candidate_revision_recorded`` 事实时隐含 r1）。``evaluation_baseline`` 为 ``null``
+    表示没有评估基线（b0）；非空形状 ``{baseline, baseline_commit_sha256}`` 现在一次定好，
+    基线事实与其可达性核验由 B4-04 补全，在此之前非空值在门禁处失败关闭。
+    """
+
+    formed = expect_object(value, label)
+    expect_exact_keys(formed, set(FORMED_UNDER_FIELDS), label)
+    reference = formed["tool_identity_ref"]
+    if reference is not None:
+        parsed = validate_object_ref(reference, f"{label}.tool_identity_ref")
+        if parsed["object_kind"] != "tool_evolution_registration":
+            raise ControlError(f"{label}.tool_identity_ref 只能引用 tool_evolution_registration")
+    _expect_positive_int(formed["candidate_revision"], f"{label}.candidate_revision")
+    baseline = formed["evaluation_baseline"]
+    if baseline is not None:
+        item = expect_object(baseline, f"{label}.evaluation_baseline")
+        expect_exact_keys(
+            item, {"baseline", "baseline_commit_sha256"}, f"{label}.evaluation_baseline"
+        )
+        _expect_positive_int(item["baseline"], f"{label}.evaluation_baseline.baseline")
+        expect_sha256(
+            item["baseline_commit_sha256"],
+            f"{label}.evaluation_baseline.baseline_commit_sha256",
+        )
+    return formed
+
+
+def _validate_execution_permissions(value: Any, label: str) -> dict[str, Any]:
+    permissions = expect_object(value, label)
+    expect_exact_keys(permissions, {"hosts", "actions"}, label)
+    for key in ("hosts", "actions"):
+        for index, item in enumerate(expect_string_list(permissions[key], f"{label}.{key}")):
+            expect_safe_id(item, f"{label}.{key}[{index}]")
+    return permissions
+
+
+def _validate_stage_dependencies(value: Any, label: str) -> list[str]:
+    """阶段依赖：阶段名 → 排序去重的前置阶段列表；前置必须已登记、不得自依赖、不得成环。"""
+
+    stages = expect_object(value, label)
+    if not stages:
+        raise ControlError(f"{label} 不得为空")
+    for name, dependencies in stages.items():
+        expect_safe_id(name, f"{label} 阶段名")
+        listed = expect_string_list(dependencies, f"{label}.{name}", non_empty=False)
+        for dependency in listed:
+            if dependency == name:
+                raise ControlError(f"{label}.{name} 不得依赖自身")
+            if dependency not in stages:
+                raise ControlError(f"{label}.{name} 依赖了未登记阶段：{dependency}")
+    remaining = {name: set(dependencies) for name, dependencies in stages.items()}
+    while remaining:
+        ready = [name for name, dependencies in remaining.items() if not dependencies & set(remaining)]
+        if not ready:
+            raise ControlError(f"{label} 存在循环依赖：{sorted(remaining)}")
+        for name in ready:
+            del remaining[name]
+    return sorted(stages)
+
+
+def _validate_stage_budgets(value: Any, stages: list[str], label: str) -> dict[str, Any]:
+    budgets = expect_object(value, label)
+    if sorted(budgets) != stages:
+        raise ControlError(f"{label} 的阶段集合必须等于 stage_dependencies")
+    for name, minutes in budgets.items():
+        _expect_positive_int(minutes, f"{label}.{name}")
+    return budgets
+
+
+def _validate_supervisor_parameters(value: Any, label: str) -> dict[str, Any]:
+    """监督器参数整体冻结进身份；具体参数名由使用方定义，这里只要求参数名是安全标识符。"""
+
+    parameters = expect_object(value, label)
+    for key in parameters:
+        expect_safe_id(key, f"{label} 参数名")
+    return parameters
+
+
+def _validate_project_ledger_ref(value: Any, label: str) -> dict[str, Any]:
+    reference = expect_object(value, label)
+    expect_exact_keys(reference, {"path", "plan_sha256"}, label)
+    _validate_posix_path(reference["path"], f"{label}.path")
+    expect_sha256(reference["plan_sha256"], f"{label}.plan_sha256")
+    return reference
+
+
+def campaign_is_v2(campaign: dict[str, Any]) -> bool:
+    """已校验的 Campaign 是否为 v2（v2 才有七项工具身份、演进登记、形成期坐标）。"""
+
+    return campaign.get("schema_version") == CAMPAIGN_V2_SCHEMA
+
+
 def validate_campaign(value: Any) -> dict[str, Any]:
     payload = expect_object(value, "campaign")
-    expect_exact_keys(
-        payload,
-        {
-            "schema_version",
-            "campaign_id",
-            "persona",
-            "target_version",
-            "official_artifacts",
-            "platforms",
-            "entrypoints",
-            "default_conditions",
-            "tool_bundle_sha256",
-            "bootstrap_ref",
-            "created_at_utc",
-            "identity_sha256",
-        },
-        "campaign",
-    )
+    if payload.get("schema_version") == CAMPAIGN_V2_SCHEMA:
+        return _validate_campaign_v2(payload)
+    expect_exact_keys(payload, set(_CAMPAIGN_V1_KEYS), "campaign")
     if payload["schema_version"] != CAMPAIGN_SCHEMA:
         raise ControlError("campaign.schema_version 不匹配")
+    _validate_campaign_common(payload)
+    expected_identity = campaign_identity_sha256(payload)
+    if payload["identity_sha256"] != expected_identity:
+        raise ControlError("campaign.identity_sha256 与身份字段不一致")
+    return payload
+
+
+def _validate_campaign_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Campaign v2：v1 的 12 字段加 11 个冻结字段，``identity_sha256`` 覆盖全部新字段。"""
+
+    expect_exact_keys(
+        payload, set(_CAMPAIGN_V1_KEYS) | set(_CAMPAIGN_V2_EXTRA_KEYS), "campaign"
+    )
+    _validate_campaign_common(payload)
+    client = _expect_enum(payload["client"], set(CLIENTS), "campaign.client")
+    _expect_enum(payload["campaign_purpose"], APPROVAL_PURPOSES, "campaign.campaign_purpose")
+    expect_safe_id(payload["oauth_org_id"], "campaign.oauth_org_id")
+    expect_sha256(payload["model_catalog_sha256"], "campaign.model_catalog_sha256")
+    _validate_execution_permissions(
+        payload["execution_permissions"], "campaign.execution_permissions"
+    )
+    stages = _validate_stage_dependencies(
+        payload["stage_dependencies"], "campaign.stage_dependencies"
+    )
+    _validate_stage_budgets(
+        payload["stage_budgets_minutes"], stages, "campaign.stage_budgets_minutes"
+    )
+    deadline = expect_rfc3339(payload["absolute_deadline_utc"], "campaign.absolute_deadline_utc")
+    if _parse_utc(deadline) <= _parse_utc(payload["created_at_utc"]):
+        raise ControlError("campaign.absolute_deadline_utc 必须晚于 created_at_utc")
+    _validate_supervisor_parameters(
+        payload["supervisor_parameters"], "campaign.supervisor_parameters"
+    )
+    _validate_project_ledger_ref(payload["project_ledger_ref"], "campaign.project_ledger_ref")
+    identity = validate_tool_identity(payload["tool_identity"], "campaign.tool_identity")
+    if identity["client"] != client:
+        raise ControlError("campaign.tool_identity.client 与 campaign.client 不一致")
+    if payload["identity_sha256"] != campaign_identity_sha256(payload):
+        raise ControlError("campaign.identity_sha256 与身份字段不一致")
+    return payload
+
+
+def _validate_campaign_common(payload: dict[str, Any]) -> None:
+    """v1／v2 共有字段的校验，顺序与 v1 原实现一致。"""
+
     expect_safe_id(payload["campaign_id"], "campaign.campaign_id")
     validate_persona(payload["persona"])
     expect_string(payload["target_version"], "campaign.target_version")
@@ -392,26 +662,15 @@ def validate_campaign(value: Any) -> dict[str, Any]:
     if bootstrap["object_kind"] != "bootstrap":
         raise ControlError("campaign.bootstrap_ref 必须引用 bootstrap")
     expect_rfc3339(payload["created_at_utc"], "campaign.created_at_utc")
-    expected_identity = campaign_identity_sha256(payload)
-    if payload["identity_sha256"] != expected_identity:
-        raise ControlError("campaign.identity_sha256 与身份字段不一致")
-    return payload
 
 
 def campaign_identity_sha256(payload: dict[str, Any]) -> str:
-    fields = {
-        key: payload[key]
-        for key in (
-            "persona",
-            "target_version",
-            "official_artifacts",
-            "platforms",
-            "entrypoints",
-            "default_conditions",
-            "tool_bundle_sha256",
-            "bootstrap_ref",
-        )
-    }
+    """Campaign 身份摘要：v1 覆盖 8 个冻结字段（逐字不变）；v2 再加 11 个新字段。"""
+
+    keys = _CAMPAIGN_V1_IDENTITY_FIELDS
+    if payload.get("schema_version") == CAMPAIGN_V2_SCHEMA:
+        keys = keys + _CAMPAIGN_V2_EXTRA_KEYS
+    fields = {key: payload[key] for key in keys}
     return canonical_sha256(fields)
 
 
@@ -2125,6 +2384,57 @@ def _validate_scenario_plan(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _validate_tool_evolution_registration(value: Any) -> dict[str, Any]:
+    """工具演进登记的形状（设计 B1-12）。
+
+    ``from_identity``／``to_identity`` 是七项工具身份；``index`` 从 1 起成单链，``previous_ref``
+    在 index 1 时为 ``null``、其后引用上一份登记。所属 Campaign 必须是 v2、链衔接与「登记的就是
+    当前受管代码」由 gates 的对象图门禁核对（写入时核当前代码，重放时只核链）。
+    """
+
+    label = "tool_evolution_registration"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {
+            "client",
+            "campaign_id",
+            "index",
+            "from_identity",
+            "to_identity",
+            "evolution_receipt",
+            "approved_by",
+            "approved_at_utc",
+            "previous_ref",
+        },
+        label,
+    )
+    client = _expect_enum(payload["client"], set(CLIENTS), f"{label}.client")
+    expect_safe_id(payload["campaign_id"], f"{label}.campaign_id")
+    index = _expect_positive_int(payload["index"], f"{label}.index")
+    source = validate_tool_identity(payload["from_identity"], f"{label}.from_identity")
+    target = validate_tool_identity(payload["to_identity"], f"{label}.to_identity")
+    if source["client"] != client or target["client"] != client:
+        raise ControlError(f"{label} 的身份 client 与登记 client 不一致")
+    if source["tool_files_sha256"] == target["tool_files_sha256"]:
+        raise ControlError(f"{label} 的受管文件清单没有变化，不构成工具演进")
+    receipt = expect_object(payload["evolution_receipt"], f"{label}.evolution_receipt")
+    expect_exact_keys(receipt, {"path", "sha256"}, f"{label}.evolution_receipt")
+    _validate_posix_path(receipt["path"], f"{label}.evolution_receipt.path")
+    expect_sha256(receipt["sha256"], f"{label}.evolution_receipt.sha256")
+    expect_string(payload["approved_by"], f"{label}.approved_by")
+    expect_rfc3339(payload["approved_at_utc"], f"{label}.approved_at_utc")
+    previous = payload["previous_ref"]
+    if index == 1:
+        if previous is not None:
+            raise ControlError(f"{label} 第一份登记不得声明 previous_ref")
+    else:
+        reference = validate_object_ref(previous, f"{label}.previous_ref")
+        if reference["object_kind"] != "tool_evolution_registration":
+            raise ControlError(f"{label}.previous_ref 必须引用上一份工具演进登记")
+    return payload
+
+
 def validate_object_document(value: Any) -> dict[str, Any]:
     document = expect_object(value, "object")
     expect_exact_keys(document, {"schema_version", "object_kind", "payload"}, "object")
@@ -2159,6 +2469,7 @@ def validate_object_document(value: Any) -> dict[str, Any]:
         "runtime_catalog_snapshot": _validate_runtime_catalog_snapshot,
         "deployment_plan": _validate_deployment_plan,
         "scenario_plan": _validate_scenario_plan,
+        "tool_evolution_registration": _validate_tool_evolution_registration,
     }
     if kind in validators:
         validators[kind](document["payload"])
@@ -3138,6 +3449,33 @@ def _validate_inventory_current_appended(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _validate_candidate_revision_payload(value: Any) -> dict[str, Any]:
+    """候选 revision 事实（B1-12 最小形态，B3-05 补全作废门禁）。
+
+    ``revision`` 从 1 起；``supersedes`` 引用被取代的上一条 revision 事实（取代隐含 r1 或显式
+    确认 r1 时为 ``null``）；``invalidation_ref`` 引用作废依据对象，语义由 B3-05 定义。
+    """
+
+    label = "candidate_revision_recorded"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload, {"revision", "candidate_id", "supersedes", "invalidation_ref"}, label
+    )
+    revision = _expect_positive_int(payload["revision"], f"{label}.revision")
+    expect_safe_id(payload["candidate_id"], f"{label}.candidate_id")
+    supersedes = payload["supersedes"]
+    if supersedes is not None:
+        reference = validate_fact_ref(supersedes, f"{label}.supersedes")
+        if reference["dimension"] != FACT_DIMENSION["candidate_revision_recorded"]:
+            raise ControlError(f"{label}.supersedes 必须引用 validation 维度的 revision 事实")
+        if revision == 1:
+            raise ControlError(f"{label} r1 不得取代其它 revision")
+    invalidation = payload["invalidation_ref"]
+    if invalidation is not None:
+        validate_object_ref(invalidation, f"{label}.invalidation_ref")
+    return payload
+
+
 def validate_fact_payload(fact_kind: str, payload: Any) -> dict[str, Any]:
     validators: dict[str, Callable[[Any], dict[str, Any]]] = {
         "discovery_recorded": _validate_discovery_payload,
@@ -3155,6 +3493,7 @@ def validate_fact_payload(fact_kind: str, payload: Any) -> dict[str, Any]:
         "release_promoted": _validate_release_promoted_payload,
         "inventory_current_appended": _validate_inventory_current_appended,
         "candidate_delivery_recorded": _validate_candidate_delivery_payload,
+        "candidate_revision_recorded": _validate_candidate_revision_payload,
     }
     if fact_kind in SCENARIO_FACT_STAGE:
         return _validate_scenario_payload(payload, SCENARIO_FACT_STAGE[fact_kind])
@@ -3166,24 +3505,67 @@ def validate_fact_payload(fact_kind: str, payload: Any) -> dict[str, Any]:
         raise ControlError(f"未登记的 fact_kind：{fact_kind}") from error
 
 
+_FACT_V1_KEYS = (
+    "schema_version",
+    "campaign_id",
+    "dimension",
+    "fact_kind",
+    "sequence",
+    "previous_fact_sha256",
+    "issued_at_utc",
+    "payload",
+)
+# fact v2 一次定好形状：8 个 v1 键加形成期坐标、幂等键与产出 run。
+# B1-12 只实现 formed_under 的语义；idempotency_key 与 producer_run 这里只做形状校验，
+# 幂等查找与「同键异内容拒绝」由 B1-13 实现。
+_FACT_V2_EXTRA_KEYS = ("formed_under", "idempotency_key", "producer_run")
+
+
+def fact_is_v2(document: dict[str, Any]) -> bool:
+    return document.get("schema_version") == FACT_V2_SCHEMA
+
+
+def validate_producer_run(value: Any, label: str = "producer_run") -> dict[str, Any] | None:
+    """产出 run 坐标（B1-13 绑定监督器 run 与动作）：``null`` 或三键非空字符串。"""
+
+    if value is None:
+        return None
+    run = expect_object(value, label)
+    expect_exact_keys(run, {"run_dir", "owner_nonce", "action_id"}, label)
+    for key in ("run_dir", "owner_nonce", "action_id"):
+        expect_string(run[key], f"{label}.{key}")
+    return run
+
+
+def validate_idempotency_key(value: Any, label: str = "idempotency_key") -> str | None:
+    """幂等键（B1-13 定义取值公式）：``null`` 或小写 SHA-256。"""
+
+    if value is None:
+        return None
+    return expect_sha256(value, label)
+
+
 def validate_fact_document(value: Any) -> dict[str, Any]:
     document = expect_object(value, "fact")
-    expect_exact_keys(
-        document,
-        {
-            "schema_version",
-            "campaign_id",
-            "dimension",
-            "fact_kind",
-            "sequence",
-            "previous_fact_sha256",
-            "issued_at_utc",
-            "payload",
-        },
-        "fact",
-    )
+    if fact_is_v2(document):
+        expect_exact_keys(
+            document, set(_FACT_V1_KEYS) | set(_FACT_V2_EXTRA_KEYS), "fact"
+        )
+        _validate_fact_body(document, allow_v2_kinds=True)
+        validate_formed_under(document["formed_under"], "fact.formed_under")
+        validate_idempotency_key(document["idempotency_key"], "fact.idempotency_key")
+        validate_producer_run(document["producer_run"], "fact.producer_run")
+        return document
+    expect_exact_keys(document, set(_FACT_V1_KEYS), "fact")
     if document["schema_version"] != FACT_SCHEMA:
         raise ControlError("fact.schema_version 不匹配")
+    _validate_fact_body(document, allow_v2_kinds=False)
+    return document
+
+
+def _validate_fact_body(document: dict[str, Any], *, allow_v2_kinds: bool) -> None:
+    """v1／v2 共有的事实字段校验，顺序与 v1 原实现一致。"""
+
     expect_safe_id(document["campaign_id"], "fact.campaign_id")
     dimension = expect_string(document["dimension"], "fact.dimension")
     if dimension not in DIMENSIONS:
@@ -3191,6 +3573,8 @@ def validate_fact_document(value: Any) -> dict[str, Any]:
     fact_kind = expect_string(document["fact_kind"], "fact.fact_kind")
     if FACT_DIMENSION.get(fact_kind) != dimension:
         raise ControlError("fact_kind 与正交 dimension 不匹配")
+    if not allow_v2_kinds and fact_kind in FACT_V2_ONLY_KINDS:
+        raise ControlError(f"{fact_kind} 只能出现在 fact v2（Campaign v2）")
     sequence = expect_non_negative_int(document["sequence"], "fact.sequence")
     if sequence < 1:
         raise ControlError("fact.sequence 必须从 1 开始")
@@ -3202,7 +3586,6 @@ def validate_fact_document(value: Any) -> dict[str, Any]:
         expect_sha256(previous, "fact.previous_fact_sha256")
     expect_rfc3339(document["issued_at_utc"], "fact.issued_at_utc")
     validate_fact_payload(fact_kind, document["payload"])
-    return document
 
 
 def validate_store_metadata(value: Any) -> dict[str, Any]:
@@ -3214,7 +3597,24 @@ def validate_store_metadata(value: Any) -> dict[str, Any]:
     return payload
 
 
-def _validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
+def receipt_is_v2(receipt: dict[str, Any]) -> bool:
+    """收据是否为 v2 合同（v1 字段加 ``formed_under``）。"""
+
+    return receipt.get("schema_version") in RECEIPT_V2_SCHEMAS
+
+
+def _receipt_extra_keys(schema: str) -> set[str]:
+    return {"formed_under"} if schema in RECEIPT_V2_SCHEMAS else set()
+
+
+def _validate_receipt_formed_under(receipt: dict[str, Any], schema: str, label: str) -> None:
+    if schema in RECEIPT_V2_SCHEMAS:
+        validate_formed_under(receipt["formed_under"], f"{label}.formed_under")
+
+
+def _validate_candidate_build_receipt(
+    value: Any, schema: str = CANDIDATE_BUILD_RECEIPT_SCHEMA
+) -> dict[str, Any]:
     receipt = expect_object(value, "candidate_build_receipt")
     expect_exact_keys(
         receipt,
@@ -3237,11 +3637,13 @@ def _validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
             "completed_at_utc",
             "producer_tool_sha256",
             "identity_sha256",
-        },
+        }
+        | _receipt_extra_keys(schema),
         "candidate_build_receipt",
     )
-    if receipt["schema_version"] != CANDIDATE_BUILD_RECEIPT_SCHEMA:
+    if receipt["schema_version"] != schema:
         raise ControlError("candidate_build_receipt.schema_version 不匹配")
+    _validate_receipt_formed_under(receipt, schema, "candidate_build_receipt")
     expect_safe_id(receipt["campaign_id"], "candidate_build_receipt.campaign_id")
     expect_safe_id(receipt["candidate_id"], "candidate_build_receipt.candidate_id")
     _expect_enum(
@@ -3406,7 +3808,9 @@ def _validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
     return receipt
 
 
-def _validate_validation_gate_receipt(value: Any) -> dict[str, Any]:
+def _validate_validation_gate_receipt(
+    value: Any, schema: str = VALIDATION_GATE_RECEIPT_SCHEMA
+) -> dict[str, Any]:
     receipt = expect_object(value, "validation_gate_receipt")
     expect_exact_keys(
         receipt,
@@ -3436,11 +3840,13 @@ def _validate_validation_gate_receipt(value: Any) -> dict[str, Any]:
             "input_facts_sha256",
             "producer_tool_sha256",
             "identity_sha256",
-        },
+        }
+        | _receipt_extra_keys(schema),
         "validation_gate_receipt",
     )
-    if receipt["schema_version"] != VALIDATION_GATE_RECEIPT_SCHEMA:
+    if receipt["schema_version"] != schema:
         raise ControlError("validation_gate_receipt.schema_version 不匹配")
+    _validate_receipt_formed_under(receipt, schema, "validation_gate_receipt")
     for key in ("campaign_id", "candidate_id", "attempt_id", "gate_id", "host_id"):
         expect_safe_id(receipt[key], f"validation_gate_receipt.{key}")
     for key in ("candidate_ref", "validation_attempt_ref"):
@@ -3514,7 +3920,9 @@ def _validate_validation_gate_receipt(value: Any) -> dict[str, Any]:
     return receipt
 
 
-def _validate_candidate_delivery_receipt(value: Any) -> dict[str, Any]:
+def _validate_candidate_delivery_receipt(
+    value: Any, schema: str = CANDIDATE_DELIVERY_RECEIPT_SCHEMA
+) -> dict[str, Any]:
     receipt = expect_object(value, "candidate_delivery_receipt")
     expect_exact_keys(
         receipt,
@@ -3543,11 +3951,13 @@ def _validate_candidate_delivery_receipt(value: Any) -> dict[str, Any]:
             "completed_at_utc",
             "producer_tool_sha256",
             "identity_sha256",
-        },
+        }
+        | _receipt_extra_keys(schema),
         "candidate_delivery_receipt",
     )
-    if receipt["schema_version"] != CANDIDATE_DELIVERY_RECEIPT_SCHEMA:
+    if receipt["schema_version"] != schema:
         raise ControlError("candidate_delivery_receipt.schema_version 不匹配")
+    _validate_receipt_formed_under(receipt, schema, "candidate_delivery_receipt")
     for key in ("campaign_id", "candidate_id", "host_id"):
         expect_safe_id(receipt[key], f"candidate_delivery_receipt.{key}")
     _expect_enum(
@@ -3616,13 +4026,25 @@ def _validate_candidate_delivery_receipt(value: Any) -> dict[str, Any]:
     return receipt
 
 
+def _requested_receipt_schema(value: Any, kind: str) -> str | None:
+    """按收据自身声明选择 v1／v2 校验轨；声明不是 v2 时一律按 v1 校验（含报错文案）。"""
+
+    versions = RECEIPT_SCHEMA_VERSIONS.get(kind)
+    if versions is None:
+        return None
+    if isinstance(value, dict) and value.get("schema_version") == versions[1]:
+        return versions[1]
+    return versions[0]
+
+
 def validate_receipt_document(value: Any, kind: str) -> dict[str, Any]:
+    schema = _requested_receipt_schema(value, kind)
     if kind == "candidate_build":
-        return _validate_candidate_build_receipt(value)
+        return _validate_candidate_build_receipt(value, schema)
     if kind == "validation_gate":
-        return _validate_validation_gate_receipt(value)
+        return _validate_validation_gate_receipt(value, schema)
     if kind == "candidate_delivery":
-        return _validate_candidate_delivery_receipt(value)
+        return _validate_candidate_delivery_receipt(value, schema)
     receipt = expect_object(value, f"{kind}_receipt")
     if kind == "promotion":
         required = {
@@ -3638,7 +4060,6 @@ def validate_receipt_document(value: Any, kind: str) -> dict[str, Any]:
             "completed_at_utc",
             "producer_tool_sha256",
         }
-        expected_schema = PROMOTION_RECEIPT_SCHEMA
     elif kind == "activation":
         required = {
             "schema_version",
@@ -3660,11 +4081,11 @@ def validate_receipt_document(value: Any, kind: str) -> dict[str, Any]:
             "completed_at_utc",
             "producer_tool_sha256",
         }
-        expected_schema = ACTIVATION_RECEIPT_SCHEMA
     else:
         raise ControlError(f"未知 receipt kind：{kind}")
-    expect_exact_keys(receipt, required, f"{kind}_receipt")
-    if receipt["schema_version"] != expected_schema:
+    schema = str(schema)
+    expect_exact_keys(receipt, required | _receipt_extra_keys(schema), f"{kind}_receipt")
+    if receipt["schema_version"] != schema:
         raise ControlError(f"{kind}_receipt.schema_version 不匹配")
     expect_safe_id(receipt["campaign_id"], f"{kind}_receipt.campaign_id")
     validate_fact_ref(receipt["candidate_ref"], f"{kind}_receipt.candidate_ref")
@@ -3710,4 +4131,5 @@ def validate_receipt_document(value: Any, kind: str) -> dict[str, Any]:
     expect_sha256(receipt["input_facts_sha256"], f"{kind}_receipt.input_facts_sha256")
     expect_rfc3339(receipt["completed_at_utc"], f"{kind}_receipt.completed_at_utc")
     expect_sha256(receipt["producer_tool_sha256"], f"{kind}_receipt.producer_tool_sha256")
+    _validate_receipt_formed_under(receipt, schema, f"{kind}_receipt")
     return receipt

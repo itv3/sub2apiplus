@@ -5,7 +5,7 @@ from __future__ import annotations
 import fcntl
 import os
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -25,9 +25,12 @@ from .contracts import (
     CAMPAIGN_SCHEMA,
     DIMENSIONS,
     FACT_SCHEMA,
+    FACT_V2_SCHEMA,
     OBJECT_KINDS,
     OBJECT_SCHEMA,
     STORE_SCHEMA,
+    campaign_is_v2,
+    fact_is_v2,
     iter_fact_refs,
     iter_object_refs,
     iter_receipt_refs,
@@ -115,14 +118,43 @@ class ControlStore:
             self.load_object(reference)
         from .gates import WorkflowGates
 
-        WorkflowGates(self).validate_new_object(document)
-        content = canonical_json_bytes(document)
-        digest = sha256_bytes(content)
-        reference = {"object_kind": object_kind, "sha256": digest}
-        path = self.object_path(reference)
-        with self._lock(f"object-{object_kind}-{digest}"):
-            write_once(path, content)
+        # 工具演进登记按 Campaign 串行：链门禁（index、previous_ref、from_identity）与写入在同一把锁内，
+        # 防止两次并发登记都按同一个链尾通过而分叉。
+        serial = (
+            self._lock(f"tool-evolution-{payload['campaign_id']}")
+            if object_kind == "tool_evolution_registration"
+            else nullcontext()
+        )
+        with serial:
+            WorkflowGates(self).validate_new_object(document)
+            content = canonical_json_bytes(document)
+            digest = sha256_bytes(content)
+            reference = {"object_kind": object_kind, "sha256": digest}
+            path = self.object_path(reference)
+            with self._lock(f"object-{object_kind}-{digest}"):
+                write_once(path, content)
         return reference
+
+    def list_object_refs(self, kind: str) -> list[dict[str, Any]]:
+        """列出某类型的全部对象引用并逐个核对摘要与类型；目录不存在时为空。"""
+
+        if kind not in OBJECT_KINDS:
+            raise ControlError(f"未登记 object_kind：{kind}")
+        directory = self.root / "objects" / kind
+        if not directory.exists():
+            return []
+        if directory.is_symlink() or not directory.is_dir():
+            raise ControlError(f"对象目录不可信：{directory}")
+        references: list[dict[str, Any]] = []
+        for path in sorted(directory.iterdir()):
+            if path.is_symlink() or not path.is_file() or not re.fullmatch(
+                r"[0-9a-f]{64}\.json", path.name
+            ):
+                raise ControlError(f"对象路径非法：{path}")
+            reference = {"object_kind": kind, "sha256": path.stem}
+            self.load_object(reference)
+            references.append(reference)
+        return references
 
     def load_object(self, reference: dict[str, Any]) -> dict[str, Any]:
         parsed = validate_object_ref(reference)
@@ -140,8 +172,19 @@ class ControlStore:
         return document
 
     def create_campaign(self, campaign: dict[str, Any]) -> dict[str, Any]:
+        """建立不可变 Campaign。
+
+        Campaign v2 另核对冻结的工具身份与当前受管代码一致：现算多根受管清单的指纹等于
+        ``tool_identity.tool_files_sha256``，清单内 Store 口径条目复算等于 ``tool_bundle_sha256``；Store 任一文件
+        被改而没有进入冻结清单（或没进受管清单）即拒绝。v1 行为不变。
+        """
+
         validate_campaign(campaign)
         self.load_object(campaign["bootstrap_ref"])
+        if campaign_is_v2(campaign):
+            from .receipts import verify_campaign_tool_manifest
+
+            verify_campaign_tool_manifest(campaign)
         campaign_id = campaign["campaign_id"]
         path = self.root / "campaigns" / f"{campaign_id}.json"
         with self._lock(f"campaign-{campaign_id}"):
@@ -166,17 +209,24 @@ class ControlStore:
             raise ControlError("Campaign ID 与路径不一致")
         return campaign
 
-    def _dimension_path(self, campaign_id: str, dimension: str) -> Path:
-        self.load_campaign(campaign_id)
+    def _campaign_dimension_path(
+        self, campaign_id: str, dimension: str
+    ) -> tuple[dict[str, Any], Path]:
+        campaign = self.load_campaign(campaign_id)
         if dimension not in DIMENSIONS:
             raise ControlError(f"事实维度非法：{dimension}")
-        return self.root / "facts" / campaign_id / dimension
+        return campaign, self.root / "facts" / campaign_id / dimension
+
+    def _dimension_path(self, campaign_id: str, dimension: str) -> Path:
+        return self._campaign_dimension_path(campaign_id, dimension)[1]
 
     def list_facts(self, campaign_id: str, dimension: str | None = None) -> list[dict[str, Any]]:
         dimensions = [dimension] if dimension is not None else list(DIMENSIONS)
         facts: list[dict[str, Any]] = []
         for current_dimension in dimensions:
-            path = self._dimension_path(campaign_id, current_dimension)
+            campaign, path = self._campaign_dimension_path(campaign_id, current_dimension)
+            # v1 Campaign 只含 fact v1、v2 Campaign 只含 fact v2，两种合同不得混在一条链里。
+            expects_v2 = campaign_is_v2(campaign)
             if not path.exists():
                 continue
             if path.is_symlink() or not path.is_dir():
@@ -199,6 +249,8 @@ class ControlStore:
                     raise ControlError(f"事实摘要漂移：{fact_path}")
                 document = load_json_file(fact_path, "事实")
                 validate_fact_document(document)
+                if fact_is_v2(document) != expects_v2:
+                    raise ControlError(f"事实合同版本与 Campaign 版本不一致：{fact_path}")
                 if (
                     document["campaign_id"] != campaign_id
                     or document["dimension"] != current_dimension
@@ -237,13 +289,24 @@ class ControlStore:
         fact_kind: str,
         payload: dict[str, Any],
         issued_at_utc: str,
+        *,
+        idempotency_key: str | None = None,
+        producer_run: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """通过类型门禁追加事实；不存在绕过门禁的裸追加入口。"""
+        """通过类型门禁追加事实；不存在绕过门禁的裸追加入口。
+
+        Campaign v2 的事实写成 fact v2：先核对当前受管代码匹配有效工具身份，再以当前形成期坐标（有效身份引用、
+        当前候选 revision、当前评估基线）作为 ``formed_under``；``idempotency_key``、``producer_run`` 原样记录并只做
+        形状校验，幂等查找与「同键异内容拒绝」由 B1-13 实现。v1 Campaign 的事实不带这三项，行为不变。
+        """
 
         from .gates import WorkflowGates
 
         campaign = self.load_campaign(campaign_id)
         dimension = WorkflowGates.dimension_for(fact_kind)
+        expects_v2 = campaign_is_v2(campaign)
+        if not expects_v2 and (idempotency_key is not None or producer_run is not None):
+            raise ControlError("v1 Campaign 的事实不支持 idempotency_key／producer_run")
         lock_name = f"fact-{campaign_id}-{dimension}"
         with self._lock(lock_name):
             chain = self.list_facts(campaign_id, dimension)
@@ -259,6 +322,13 @@ class ControlStore:
                 "issued_at_utc": issued_at_utc,
                 "payload": payload,
             }
+            if expects_v2:
+                from .receipts import current_formed_under
+
+                document["schema_version"] = FACT_V2_SCHEMA
+                document["formed_under"] = current_formed_under(self, campaign)
+                document["idempotency_key"] = idempotency_key
+                document["producer_run"] = producer_run
             validate_fact_document(document)
             for reference in iter_object_refs(payload):
                 self.load_object(reference)
@@ -280,6 +350,8 @@ class ControlStore:
         return self.fact_ref(stored)
 
     def write_receipt(self, kind: str, receipt: dict[str, Any]) -> dict[str, Any]:
+        """写入不可覆盖收据；收据合同版本必须与所属 Campaign 一致，v2 收据的形成期坐标必须是当前值。"""
+
         validate_receipt_document(receipt, kind)
         for reference in iter_object_refs(receipt):
             self.load_object(reference)
@@ -287,6 +359,9 @@ class ControlStore:
             self.load_fact(reference)
         for reference in iter_receipt_refs(receipt):
             self.load_receipt(reference)
+        from .receipts import require_receipt_current
+
+        require_receipt_current(self, receipt)
         content = canonical_json_bytes(receipt)
         digest = sha256_bytes(content)
         reference = {"receipt_kind": kind, "sha256": digest}

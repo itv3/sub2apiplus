@@ -15,7 +15,7 @@ class SchemaTests(unittest.TestCase):
 
     def test_all_schema_files_are_strict_json(self) -> None:
         paths = sorted(self.root.glob("*.json"))
-        self.assertEqual(len(paths), 13)
+        self.assertEqual(len(paths), 15)
         for path in paths:
             value = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(value["$schema"], "https://json-schema.org/draft/2020-12/schema")
@@ -24,7 +24,9 @@ class SchemaTests(unittest.TestCase):
     def test_core_schema_versions_match_runtime_contract(self) -> None:
         bootstrap = json.loads((self.root / "bootstrap.schema.json").read_text())
         campaign = json.loads((self.root / "campaign.schema.json").read_text())
+        campaign_v2 = json.loads((self.root / "campaign-v2.schema.json").read_text())
         fact = json.loads((self.root / "fact.schema.json").read_text())
+        fact_v2 = json.loads((self.root / "fact-v2.schema.json").read_text())
         receipt = json.loads((self.root / "receipt.schema.json").read_text())
         migration = json.loads(
             (self.root / "rule-migration-ledger.schema.json").read_text()
@@ -41,8 +43,28 @@ class SchemaTests(unittest.TestCase):
             contracts.CAMPAIGN_SCHEMA,
         )
         self.assertEqual(
+            campaign_v2["properties"]["schema_version"]["const"],
+            contracts.CAMPAIGN_V2_SCHEMA,
+        )
+        self.assertEqual(
             fact["properties"]["schema_version"]["const"], contracts.FACT_SCHEMA
         )
+        self.assertEqual(
+            fact_v2["properties"]["schema_version"]["const"], contracts.FACT_V2_SCHEMA
+        )
+        for name, kind in (
+            ("promotionV2", "promotion"),
+            ("activationV2", "activation"),
+            ("candidateBuildV2", "candidate_build"),
+            ("validationGateV2", "validation_gate"),
+            ("candidateDeliveryV2", "candidate_delivery"),
+        ):
+            with self.subTest(receipt=name):
+                self.assertEqual(
+                    receipt["$defs"][name]["properties"]["schema_version"]["const"],
+                    contracts.RECEIPT_SCHEMA_VERSIONS[kind][1],
+                )
+                self.assertIn("formed_under", receipt["$defs"][name]["required"])
         self.assertEqual(
             receipt["$defs"]["promotion"]["properties"]["schema_version"]["const"],
             contracts.PROMOTION_RECEIPT_SCHEMA,

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-control-fact-v2.json",
+  "title": "FW-D 正交追加事实 v2",
+  "description": "Campaign v2 的事实：v1 的 8 键加形成期坐标 formed_under、幂等键 idempotency_key 与产出 run producer_run。formed_under 由 Store 在写入时按当前有效工具身份、当前候选 revision、当前评估基线填写，重放按它重跑门禁；idempotency_key 与 producer_run 的语义由 B1-13 定义。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "dimension",
+    "fact_kind",
+    "sequence",
+    "previous_fact_sha256",
+    "issued_at_utc",
+    "payload",
+    "formed_under",
+    "idempotency_key",
+    "producer_run"
+  ],
+  "properties": {
+    "schema_version": {"const": "official-client-control-fact/v2"},
+    "campaign_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
+    "dimension": {"enum": ["discovery", "evidence", "approval", "validation", "runtime_selector", "deployment"]},
+    "fact_kind": {
+      "enum": [
+        "discovery_recorded",
+        "evidence_recorded",
+        "rule_classification_recorded",
+        "evidence_approved",
+        "profile_approved",
+        "candidate_frozen",
+        "scenario_prepared",
+        "scenario_captured",
+        "scenario_sealed",
+        "scenario_approved",
+        "pair_recorded",
+        "acceptance_recorded",
+        "validation_attempt_created",
+        "validation_completed",
+        "selector_observed",
+        "selector_activated",
+        "release_promoted",
+        "accepted_not_activated",
+        "canary_passed",
+        "active",
+        "rollback_verified",
+        "restored_active",
+        "inventory_current_appended",
+        "candidate_delivery_recorded",
+        "candidate_revision_recorded"
+      ]
+    },
+    "sequence": {"type": "integer", "minimum": 1},
+    "previous_fact_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "issued_at_utc": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object"},
+    "formed_under": {"$ref": "receipt.schema.json#/$defs/formedUnder"},
+    "idempotency_key": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "producer_run": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run_dir", "owner_nonce", "action_id"],
+          "properties": {
+            "run_dir": {"type": "string", "minLength": 1},
+            "owner_nonce": {"type": "string", "minLength": 1},
+            "action_id": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

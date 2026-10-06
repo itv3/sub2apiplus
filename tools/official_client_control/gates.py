@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from .canonical import canonical_sha256
 from .contracts import (
     CANDIDATE_DELIVERY_STAGES,
+    CANDIDATE_SCOPED_FACT_KINDS,
     DEPLOYMENT_STAGES,
     EVIDENCE_PACKAGE_V3_SCHEMA,
     FACT_DIMENSION,
     SCENARIO_FACT_STAGE,
+    campaign_is_v2,
     capability_key,
+    fact_is_v2,
+    iter_fact_refs,
     persona_key,
     validate_fact_document,
     validate_object_document,
@@ -21,6 +26,10 @@ from .errors import ControlError
 
 if TYPE_CHECKING:
     from .store import ControlStore
+
+
+def _parse_utc(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 class WorkflowGates:
@@ -58,14 +67,22 @@ class WorkflowGates:
             raise ControlError(f"{label} 的 Persona 不一致")
 
     def validate_new_object(self, document: dict[str, Any]) -> None:
+        """封存新对象前的对象图门禁；与重放不同，这里还执行写入时有效性（当前受管代码、当前链尾）。"""
+
         validate_object_document(document)
-        self._validate_object_payload_graph(document["object_kind"], document["payload"])
+        self._validate_object_payload_graph(
+            document["object_kind"], document["payload"], new=True
+        )
 
     def validate_object_graph(self, reference: dict[str, Any]) -> None:
+        """已封存对象的对象图复核（重放与引用校验）；只证明形成时一致，与当前受管代码无关。"""
+
         document = self.store.load_object(reference)
         self._validate_object_payload_graph(document["object_kind"], document["payload"])
 
-    def _validate_object_payload_graph(self, kind: str, payload: dict[str, Any]) -> None:
+    def _validate_object_payload_graph(
+        self, kind: str, payload: dict[str, Any], *, new: bool = False
+    ) -> None:
         if kind == "snapshot":
             schema = self._object(payload["profile_schema_ref"], "profile_schema")
             self._same_persona(payload["persona"], schema["persona"], "Snapshot/ProfileSchema")
@@ -115,7 +132,7 @@ class WorkflowGates:
         elif kind == "atomic_assertion_ledger":
             self._validate_atomic_assertion_ledger(payload)
         elif kind == "validation_execution_plan":
-            self._validate_validation_execution_plan(payload)
+            self._validate_validation_execution_plan(payload, new=new)
         elif kind == "candidate_evidence_package":
             self._validate_candidate_evidence_package(payload)
         elif kind == "candidate_delivery_plan":
@@ -126,6 +143,64 @@ class WorkflowGates:
             campaign = self.store.load_campaign(payload["campaign_id"])
             self._same_persona(
                 campaign["persona"], payload["persona"], "Campaign/PrivateArchiveManifest"
+            )
+        elif kind == "tool_evolution_registration":
+            self._validate_tool_evolution_registration(payload, new=new)
+
+    def _validate_tool_evolution_registration(
+        self, payload: dict[str, Any], *, new: bool
+    ) -> None:
+        """工具演进登记的对象图（设计 B1-12「有效工具身份」）。
+
+        重放与写入都核：所属 Campaign 是 v2 且 client 一致；index 1 的 ``from_identity`` 等于 Campaign 冻结身份，
+        其后等于 ``previous_ref`` 那份登记的 ``to_identity``；批准时间不早于 Campaign 建立与上一份登记。写入时再核：
+        新登记必须接在当前链尾（不得分叉），``to_identity`` 的可现算四项必须等于当前受管代码——登记的就是当前代码。
+        wire／evidence／control 三层摘要在编排器出现（B1-09）前无法现算，由 ``evolution_receipt`` 承载其来源。
+        """
+
+        from .receipts import (
+            _COMPUTABLE_IDENTITY_FIELDS,
+            current_tool_manifest,
+            tool_evolutions,
+        )
+
+        campaign = self.store.load_campaign(payload["campaign_id"])
+        if not campaign_is_v2(campaign):
+            raise ControlError("v1 Campaign 不支持工具演进登记：控制面工具变化必须建立新的 Campaign")
+        if payload["client"] != campaign["client"]:
+            raise ControlError("工具演进登记的 client 与 Campaign 不一致")
+        approved_at = _parse_utc(payload["approved_at_utc"])
+        if approved_at < _parse_utc(campaign["created_at_utc"]):
+            raise ControlError("工具演进登记的批准时间早于 Campaign 建立时间")
+        if payload["index"] == 1:
+            expected_from = campaign["tool_identity"]
+        else:
+            previous = self._object(payload["previous_ref"], "tool_evolution_registration")
+            if (
+                previous["campaign_id"] != payload["campaign_id"]
+                or previous["index"] != payload["index"] - 1
+            ):
+                raise ControlError("工具演进登记的 previous_ref 不是同一 Campaign 的上一份登记")
+            if approved_at < _parse_utc(previous["approved_at_utc"]):
+                raise ControlError("工具演进登记的批准时间早于上一份登记")
+            expected_from = previous["to_identity"]
+        if payload["from_identity"] != expected_from:
+            raise ControlError("工具演进登记的 from_identity 未承接上一份有效工具身份")
+        if not new:
+            return
+        chain = tool_evolutions(self.store, campaign)
+        tail = chain[-1][0] if chain else None
+        if payload["index"] != len(chain) + 1 or payload["previous_ref"] != tail:
+            raise ControlError("工具演进登记必须接在当前链尾：index 或 previous_ref 不是当前有效身份")
+        manifest = current_tool_manifest(payload["client"])
+        drift = [
+            key
+            for key in _COMPUTABLE_IDENTITY_FIELDS
+            if manifest[key] != payload["to_identity"][key]
+        ]
+        if drift:
+            raise ControlError(
+                f"工具演进登记的 to_identity 不是当前受管代码的身份：{'、'.join(drift)}"
             )
 
     def _validate_rule_migration_ledger(self, payload: dict[str, Any]) -> None:
@@ -347,7 +422,33 @@ class WorkflowGates:
             )
         replay_receipt(self.store, matches[0])
 
-    def _validate_validation_execution_plan(self, payload: dict[str, Any]) -> None:
+    def _require_plan_tool_identity(
+        self, campaign: dict[str, Any], payload: dict[str, Any], *, new: bool
+    ) -> None:
+        """v2 执行计划的运行工具摘要（gates 原 L395 的 v2 轨）。
+
+        计划是对象，没有自己的 ``formed_under``：封存时必须等于当前有效身份的 ``tool_files_sha256``（并核当前受管
+        代码）；重放时必须是 Campaign 有效身份链上某一身份的摘要。绑定它的 ``validation_attempt_created`` 事实再按
+        自身形成期坐标精确核对。
+        """
+
+        from .receipts import _require_effective_tool, tool_evolutions
+
+        tool_sha256 = payload["run_conditions"]["tool_sha256"]
+        if new:
+            if tool_sha256 != _require_effective_tool(self.store, campaign)["tool_sha256"]:
+                raise ControlError("ValidationExecutionPlan 工具身份不是 Campaign 当前有效工具身份")
+            return
+        known = {campaign["tool_identity"]["tool_files_sha256"]} | {
+            registration["to_identity"]["tool_files_sha256"]
+            for _reference, registration in tool_evolutions(self.store, campaign)
+        }
+        if tool_sha256 not in known:
+            raise ControlError("ValidationExecutionPlan 工具身份不在 Campaign 的有效工具身份链上")
+
+    def _validate_validation_execution_plan(
+        self, payload: dict[str, Any], *, new: bool = False
+    ) -> None:
         from .receipts import replay_receipt
 
         campaign = self.store.load_campaign(payload["campaign_id"])
@@ -392,8 +493,11 @@ class WorkflowGates:
             payload["production_selector_before_ref"], "selector_observed"
         )
         self._object(selector["payload"]["catalog_snapshot_ref"], "runtime_catalog_snapshot")
-        if payload["run_conditions"]["tool_sha256"] != campaign["tool_bundle_sha256"]:
-            raise ControlError("ValidationExecutionPlan 工具身份与 Campaign 不一致")
+        if not campaign_is_v2(campaign):
+            if payload["run_conditions"]["tool_sha256"] != campaign["tool_bundle_sha256"]:
+                raise ControlError("ValidationExecutionPlan 工具身份与 Campaign 不一致")
+        else:
+            self._require_plan_tool_identity(campaign, payload, new=new)
         for gate in payload["external_gates"]:
             if gate["source"] == "reuse":
                 source_receipt = replay_receipt(
@@ -745,13 +849,32 @@ class WorkflowGates:
         campaign: dict[str, Any],
         document: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        context: Any = None,
     ) -> None:
+        """按事实种类执行门禁。
+
+        v2 事实的门禁一律用事实自身的 ``formed_under``：写入时它就是当前坐标（``append_fact`` 已核对当前受管
+        代码匹配有效身份），重放时是形成期坐标——同一套判据既是写入时有效性，也是重放时形成期一致性。
+        v1 事实没有坐标，工具摘要按 Campaign ``tool_bundle_sha256`` 解释，门禁逐字保持原语义。
+        """
+
         kind = document["fact_kind"]
         payload = document["payload"]
+        if campaign_is_v2(campaign) != fact_is_v2(document):
+            raise ControlError("事实合同版本与 Campaign 版本不一致")
+        formed = document.get("formed_under")
+        coordinates: dict[str, Any] | None = None
+        if formed is not None:
+            if context is None:
+                from .receipts import FormedContext
+
+                context = FormedContext(self.store, campaign)
+            coordinates = context.coordinates(document)
+            self._require_candidate_scope(kind, payload, formed, context)
         if kind == "discovery_recorded":
-            self._gate_discovery(campaign, payload, facts_by_kind)
+            self._gate_discovery(campaign, payload, facts_by_kind, coordinates)
         elif kind == "evidence_recorded":
-            self._gate_evidence_recorded(campaign, payload, facts_by_kind)
+            self._gate_evidence_recorded(campaign, payload, facts_by_kind, coordinates)
         elif kind == "rule_classification_recorded":
             self._gate_rule_classification(campaign, payload, facts_by_kind)
         elif kind == "evidence_approved":
@@ -767,29 +890,69 @@ class WorkflowGates:
         elif kind == "acceptance_recorded":
             self._gate_acceptance(payload, facts_by_kind)
         elif kind == "validation_attempt_created":
-            self._gate_validation_attempt(campaign, payload, facts_by_kind)
+            self._gate_validation_attempt(campaign, payload, facts_by_kind, coordinates)
         elif kind == "validation_completed":
-            self._gate_validation_completed(campaign, payload, facts_by_kind)
+            self._gate_validation_completed(campaign, payload, facts_by_kind, formed)
         elif kind in {"selector_observed", "selector_activated"}:
             self._gate_selector(kind, payload, facts_by_kind)
         elif kind == "release_promoted":
-            self._gate_release_promoted(payload, facts_by_kind)
+            self._gate_release_promoted(payload, facts_by_kind, formed)
         elif kind in DEPLOYMENT_STAGES:
-            self._gate_deployment_stage(kind, payload, facts_by_kind)
+            self._gate_deployment_stage(kind, payload, facts_by_kind, formed)
         elif kind == "inventory_current_appended":
             self._gate_inventory_current(payload, facts_by_kind)
         elif kind == "candidate_delivery_recorded":
-            self._gate_candidate_delivery(payload, facts_by_kind)
+            self._gate_candidate_delivery(payload, facts_by_kind, formed)
+        elif kind == "candidate_revision_recorded":
+            self._gate_candidate_revision(document, facts_by_kind, coordinates)
+
+    def _require_candidate_scope(
+        self,
+        kind: str,
+        payload: dict[str, Any],
+        formed: dict[str, Any],
+        context: Any,
+    ) -> None:
+        """v2：绑定候选的事实，其候选必须属于形成期候选 revision（显式 revision 事实指定的候选）。
+
+        写入时形成期 revision 就是当前 revision，所以换 revision 后旧候选的任何新结果都被拒绝；隐含 r1（没有
+        revision 事实）不限定候选。B3-05 在此之上再加「候选未被作废」。
+        """
+
+        if kind not in CANDIDATE_SCOPED_FACT_KINDS:
+            return
+        from .receipts import require_candidate_in_revision
+
+        if kind == "release_promoted":
+            candidate_id = self._fact(payload["candidate_ref"], "candidate_frozen")["payload"][
+                "candidate_id"
+            ]
+        else:
+            candidate_id = payload["candidate_id"]
+        require_candidate_in_revision(context.revision_facts, candidate_id, formed, kind)
+
+    @staticmethod
+    def _expected_tool_sha256(
+        campaign: dict[str, Any], coordinates: dict[str, Any] | None
+    ) -> str:
+        """工具摘要字段的期望值：v1 为 Campaign ``tool_bundle_sha256``；v2 为形成期有效身份的 ``tool_files_sha256``。"""
+
+        if coordinates is None:
+            return str(campaign["tool_bundle_sha256"])
+        return str(coordinates["tool_sha256"])
 
     def _gate_discovery(
         self,
         campaign: dict[str, Any],
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        coordinates: dict[str, Any] | None = None,
     ) -> None:
         if payload["version"] != campaign["target_version"]:
             raise ControlError("Discovery 版本与不可变 Campaign 目标不一致")
-        if payload["tool_sha256"] != campaign["tool_bundle_sha256"]:
+        if payload["tool_sha256"] != self._expected_tool_sha256(campaign, coordinates):
+            if coordinates is not None:
+                raise ControlError("Discovery 工具身份不是形成期有效工具身份")
             raise ControlError("Discovery 工具身份与 Campaign 不一致")
         if facts_by_kind["discovery_recorded"]:
             raise ControlError("同一 Campaign 不得覆盖 DiscoveryFact")
@@ -799,6 +962,7 @@ class WorkflowGates:
         campaign: dict[str, Any],
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        coordinates: dict[str, Any] | None = None,
     ) -> None:
         discovery = self._fact(payload["discovery_fact_ref"], "discovery_recorded")
         if discovery["campaign_id"] != campaign["campaign_id"]:
@@ -807,7 +971,11 @@ class WorkflowGates:
         self._same_persona(campaign["persona"], package["persona"], "Campaign/EvidencePackage")
         if package["version"] != campaign["target_version"]:
             raise ControlError("EvidencePackage 版本与 Campaign 不一致")
-        if package["producer_tool_sha256"] != campaign["tool_bundle_sha256"]:
+        if package["producer_tool_sha256"] != self._expected_tool_sha256(campaign, coordinates):
+            if coordinates is not None:
+                raise ControlError(
+                    "EvidencePackage 工具身份不是形成期有效工具身份：工具变化须先登记演进"
+                )
             raise ControlError("EvidencePackage 工具身份漂移，必须新建 Campaign")
         if package["official_artifacts"] != campaign["official_artifacts"]:
             raise ControlError("EvidencePackage 官方产物与 Campaign 身份不一致")
@@ -1343,11 +1511,17 @@ class WorkflowGates:
         campaign: dict[str, Any],
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        coordinates: dict[str, Any] | None = None,
     ) -> None:
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
         candidate_payload = candidate["payload"]
         if candidate_payload.get("schema_version") is None:
             raise ControlError("ValidationAttempt 只能绑定严格 v2 Candidate")
+        if (
+            coordinates is not None
+            and payload["run_conditions"]["tool_sha256"] != coordinates["tool_sha256"]
+        ):
+            raise ControlError("ValidationAttempt 的运行工具身份不是形成期有效工具身份")
         if (
             candidate_payload["candidate_id"] != payload["candidate_id"]
             or candidate_payload["candidate_build_receipt_ref"]
@@ -1383,11 +1557,15 @@ class WorkflowGates:
         campaign: dict[str, Any],
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        formed: dict[str, Any] | None = None,
     ) -> None:
+        from .receipts import require_acceptance_formed_under
+
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         acceptance_payload = acceptance["payload"]
         if acceptance_payload.get("schema_version") is None:
             raise ControlError("validation_completed 只能绑定严格 v2 Acceptance")
+        require_acceptance_formed_under(acceptance, formed, "validation_completed")
         attempt = self._fact(
             payload["validation_attempt_ref"], "validation_attempt_created"
         )
@@ -1495,11 +1673,15 @@ class WorkflowGates:
         self,
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        formed: dict[str, Any] | None = None,
     ) -> None:
+        from .receipts import require_acceptance_formed_under
+
         plan = self._object(payload["delivery_plan_ref"], "candidate_delivery_plan")
         completed = self._fact(payload["validation_completed_ref"], "validation_completed")
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
+        require_acceptance_formed_under(acceptance, formed, "候选交付阶段")
         expected = {
             "delivery_id": plan["delivery_id"],
             "candidate_id": plan["candidate_id"],
@@ -1596,6 +1778,65 @@ class WorkflowGates:
             if payload[key] != previous["payload"][key]:
                 raise ControlError(f"候选交付四阶段的 {key} 发生漂移")
 
+    def _gate_candidate_revision(
+        self,
+        document: dict[str, Any],
+        facts_by_kind: dict[str, list[dict[str, Any]]],
+        coordinates: dict[str, Any] | None,
+    ) -> None:
+        """候选 revision 事实（B1-12 最小形态；B3-05 补作废对象门禁与 revision-open／invalidate-candidate）。
+
+        只看同一 validation 链里序号更小的事实，写入与重放判据一致：首条只能显式确认 r1（必须先于任何候选级
+        事实）或以 r2 取代隐含 r1，都不声明 supersedes；其后逐一递增并 supersedes 上一条；本事实的形成期 revision
+        必须是写入前的当前 revision；新 revision（r≥2）必须对应新的 Candidate ID。
+        """
+
+        if coordinates is None:
+            raise ControlError("v1 Campaign 不支持候选 revision 事实")
+        payload = document["payload"]
+        sequence = document["sequence"]
+        earlier = sorted(
+            (
+                fact
+                for fact in facts_by_kind["candidate_revision_recorded"]
+                if fact["sequence"] < sequence
+            ),
+            key=lambda fact: fact["sequence"],
+        )
+        previous = earlier[-1] if earlier else None
+        current_revision = previous["payload"]["revision"] if previous is not None else 1
+        if coordinates["candidate_revision"] != current_revision:
+            raise ControlError("候选 revision 事实的形成期 revision 不是写入前的当前 revision")
+        if previous is None:
+            if payload["supersedes"] is not None or payload["revision"] not in (1, 2):
+                raise ControlError(
+                    "首条候选 revision 事实只能显式确认 r1 或以 r2 取代隐含 r1，且不得声明 supersedes"
+                )
+            if payload["revision"] == 1 and any(
+                fact["sequence"] < sequence
+                for kind in CANDIDATE_SCOPED_FACT_KINDS
+                for fact in facts_by_kind[kind]
+                if fact["dimension"] == document["dimension"]
+            ):
+                raise ControlError("显式确认 r1 必须先于任何候选级事实")
+        elif payload["revision"] != current_revision + 1 or payload[
+            "supersedes"
+        ] != self.store.fact_ref(previous):
+            raise ControlError("候选 revision 必须逐一递增并 supersedes 上一条 revision 事实")
+        if payload["revision"] >= 2:
+            used = {fact["payload"]["candidate_id"] for fact in earlier} | {
+                fact["payload"]["candidate_id"]
+                for fact in facts_by_kind["candidate_frozen"]
+                if fact["sequence"] < sequence
+            }
+            if payload["candidate_id"] in used:
+                raise ControlError("新候选 revision 必须对应新的 Candidate ID")
+        if any(
+            fact["payload"]["revision"] == payload["revision"]
+            for fact in facts_by_kind["candidate_revision_recorded"]
+        ):
+            raise ControlError("同一候选 revision 不得重复登记")
+
     def _gate_selector(
         self,
         kind: str,
@@ -1613,11 +1854,15 @@ class WorkflowGates:
         self,
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        formed: dict[str, Any] | None = None,
     ) -> None:
+        from .receipts import require_acceptance_formed_under
+
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         if acceptance["payload"]["result"] != "accepted":
             raise ControlError("validation-only Candidate 不得晋升生产")
+        require_acceptance_formed_under(acceptance, formed, "晋升")
         if acceptance["payload"].get("schema_version") is not None:
             completed = [
                 fact
@@ -1648,8 +1893,12 @@ class WorkflowGates:
         stage: str,
         payload: dict[str, Any],
         facts_by_kind: dict[str, list[dict[str, Any]]],
+        formed: dict[str, Any] | None = None,
     ) -> None:
+        from .receipts import require_acceptance_formed_under
+
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
+        require_acceptance_formed_under(acceptance, formed, f"Deployment {stage}")
         promotion_receipt = self.store.load_receipt(payload["promotion_receipt_ref"])
         if acceptance["payload"]["candidate_id"] != payload["candidate_id"]:
             raise ControlError("Deployment 与 Acceptance Candidate 不一致")
@@ -1780,8 +2029,18 @@ class WorkflowGates:
     def replay_campaign(
         self, campaign: dict[str, Any], facts: list[dict[str, Any]]
     ) -> None:
-        """在完整事实集上复核引用、唯一性和最终状态，不依赖可变状态文件。"""
+        """在完整事实集上复核引用、唯一性和最终状态，不依赖可变状态文件。
 
+        v2 Campaign 的每条事实按自身 ``formed_under`` 重跑门禁（形成期一致性，与当前受管代码无关），并另核：
+        工具演进登记链完整；每条事实的坐标在本 Campaign 内可达；同一维度链内坐标只增不减；引用的事实不晚于
+        引用者；候选 revision 事实构成严格的取代链。
+        """
+
+        context: Any = None
+        if campaign_is_v2(campaign):
+            from .receipts import FormedContext
+
+            context = FormedContext(self.store, campaign)
         facts_by_kind: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for fact in facts:
             validate_fact_document({key: value for key, value in fact.items() if key != "_sha256"})
@@ -1790,11 +2049,13 @@ class WorkflowGates:
                 if referenced["campaign_id"] != campaign["campaign_id"]:
                     raise ControlError("事实链重放发现跨 Campaign 引用")
             facts_by_kind[fact["fact_kind"]].append(fact)
+        if context is not None:
+            self._replay_formed_under(facts, context)
         for fact in facts:
             without_current: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for kind, items in facts_by_kind.items():
                 without_current[kind] = [item for item in items if item is not fact]
-            self._validate_fact_semantics(campaign, fact, without_current)
+            self._validate_fact_semantics(campaign, fact, without_current, context)
         if len(facts_by_kind["discovery_recorded"]) > 1:
             raise ControlError("Campaign 存在多个 DiscoveryFact")
         if len(facts_by_kind["evidence_recorded"]) > 1:
@@ -1869,18 +2130,76 @@ class WorkflowGates:
         if len(delivery_receipt_keys) != len(set(delivery_receipt_keys)):
             raise ControlError("同一 Candidate／Acceptance 存在重复候选交付收据")
 
+    def _replay_formed_under(self, facts: list[dict[str, Any]], context: Any) -> None:
+        """v2 形成期坐标的整体一致性（逐条门禁之外）。"""
+
+        last_by_dimension: dict[str, tuple[int, int]] = {}
+        for fact in facts:
+            coordinates = context.coordinates(fact)
+            key = (coordinates["tool_index"], coordinates["candidate_revision"])
+            previous = last_by_dimension.get(fact["dimension"])
+            if previous is not None and (key[0] < previous[0] or key[1] < previous[1]):
+                raise ControlError(
+                    f"同一维度链内形成期坐标回退：{fact['dimension']}#{fact['sequence']}"
+                )
+            last_by_dimension[fact["dimension"]] = key
+            context.require_causality(
+                self.store,
+                coordinates,
+                iter_fact_refs(fact["payload"]),
+                f"{fact['fact_kind']}#{fact['sequence']}",
+            )
+        revisions = context.revision_facts
+        for position, fact in enumerate(revisions):
+            expected = None if position == 0 else self.store.fact_ref(revisions[position - 1])
+            if fact["payload"]["supersedes"] != expected:
+                raise ControlError("候选 revision 事实没有构成严格的取代链")
+
     @staticmethod
     def _all_fact_refs(value: Any) -> list[dict[str, Any]]:
-        from .contracts import iter_fact_refs
-
         return list(iter_fact_refs(value))
 
     def status(self, campaign_id: str) -> dict[str, Any]:
+        """由正交事实推导 Campaign 检查点。
+
+        v2 的交付判定只认当前候选 revision 与当前评估基线下形成的候选级事实与收据：旧 revision 的 PAIR、
+        Acceptance、VC-5 完成与交付收据重放仍通过（形成期一致），但不计入当前检查点。工具演进不改变判定——
+        登记过的演进下形成的结果仍是当前有效结果。v1 推导逐字不变。
+        """
+
         campaign = self.store.load_campaign(campaign_id)
         facts = self.store.list_facts(campaign_id)
         self.replay_campaign(campaign, facts)
-        kinds = {fact["fact_kind"] for fact in facts}
-        from .receipts import replay_receipt
+        from .receipts import (
+            current_candidate_revision,
+            current_evaluation_baseline,
+            replay_receipt,
+            tool_evolutions,
+        )
+
+        v2 = campaign_is_v2(campaign)
+        current_revision: int = 1
+        current_candidate: str | None = None
+        current_baseline: dict[str, Any] | None = None
+        if v2:
+            current_revision, current_candidate = current_candidate_revision(self.store, campaign)
+            current_baseline = current_evaluation_baseline(self.store, campaign)
+
+        def is_current(document: dict[str, Any]) -> bool:
+            if not v2:
+                return True
+            formed = document["formed_under"]
+            return (
+                formed["candidate_revision"] == current_revision
+                and formed["evaluation_baseline"] == current_baseline
+            )
+
+        considered = [
+            fact
+            for fact in facts
+            if fact["fact_kind"] not in CANDIDATE_SCOPED_FACT_KINDS or is_current(fact)
+        ]
+        kinds = {fact["fact_kind"] for fact in considered}
 
         delivery_receipts: list[dict[str, Any]] = []
         delivery_verified = False
@@ -1889,6 +2208,8 @@ class WorkflowGates:
             if receipt["campaign_id"] != campaign_id:
                 continue
             delivery_receipts.append(reference)
+            if not is_current(receipt):
+                continue
             try:
                 replay_receipt(self.store, reference)
             except ControlError:
@@ -1905,7 +2226,7 @@ class WorkflowGates:
         elif "validation_completed" in kinds:
             completed = next(
                 fact
-                for fact in reversed(facts)
+                for fact in reversed(considered)
                 if fact["fact_kind"] == "validation_completed"
             )
             acceptance = self._fact(
@@ -1919,7 +2240,7 @@ class WorkflowGates:
         elif "acceptance_recorded" in kinds:
             strict_pending = any(
                 fact["payload"].get("schema_version") is not None
-                for fact in facts
+                for fact in considered
                 if fact["fact_kind"] == "acceptance_recorded"
             )
             if strict_pending:
@@ -1927,7 +2248,7 @@ class WorkflowGates:
             else:
                 accepted = any(
                     fact["payload"]["result"] == "accepted"
-                    for fact in facts
+                    for fact in considered
                     if fact["fact_kind"] == "acceptance_recorded"
                 )
                 checkpoint = "ready" if accepted else "validation_only"
@@ -1951,6 +2272,8 @@ class WorkflowGates:
                 if receipt["campaign_id"] != campaign_id:
                     continue
                 activation_receipts.append(reference)
+                if not is_current(receipt):
+                    continue
                 try:
                     replay_receipt(self.store, reference)
                 except ControlError:
@@ -1962,7 +2285,7 @@ class WorkflowGates:
             production_state = "verified_active"
         else:
             production_state = "not_activated"
-        return {
+        result = {
             "schema_version": "official-client-control-status/v1",
             "campaign_id": campaign_id,
             "checkpoint": checkpoint,
@@ -1980,3 +2303,11 @@ class WorkflowGates:
             "production_state": production_state,
             "production_active_proven": activation_verified,
         }
+        if v2:
+            # status/v2 多给出判定所依据的当前坐标：当前候选 revision 与候选、当前评估基线、有效工具身份序号。
+            result["schema_version"] = "official-client-control-status/v2"
+            result["candidate_revision"] = current_revision
+            result["current_candidate_id"] = current_candidate
+            result["evaluation_baseline"] = current_baseline
+            result["tool_identity_index"] = len(tool_evolutions(self.store, campaign))
+        return result
