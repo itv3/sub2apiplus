@@ -1,5 +1,8 @@
 """构建、验证、交付、晋升与激活收据的确定性生成和独立重放。
 
+B1-14 在文件末尾加入前序证据导入：登记（复制对象闭包）、导入收据 finalizer、只读复核与消费端授权
+（``authorize_cross_campaign_reference``），说明见该节开头。
+
 Claude 升级控制面 B1-12 在这里集中实现 Campaign v2 的三件事，供 store、gates、cli 共用：
 
 * **Store 全包摘要与受管清单**：``control_tool_bundle_sha256()`` 的口径不变；Campaign v2 建立时用 Claude
@@ -24,16 +27,33 @@ from .canonical import (
     canonical_sha256,
     expect_exact_keys,
     expect_object,
+    expect_rfc3339,
+    parse_json_bytes,
     sha256_bytes,
     sha256_file,
 )
 from .contracts import (
     DEPLOYMENT_STAGES,
+    IDENTITY_CONDITION_ITEMS,
+    IDENTITY_CONDITION_SOURCE_FIELDS,
+    OBJECT_KINDS,
+    OBJECT_SCHEMA,
+    OFFICIAL_EVIDENCE_OBJECT_KINDS,
+    PREDECESSOR_IMPORT_RECEIPT_SCHEMA,
+    RECEIPT_KINDS,
     RECEIPT_SCHEMA_VERSIONS,
     VALIDATION_COMPLETED_SCHEMA,
+    campaign_identity_document,
+    campaign_identity_sha256,
     campaign_is_v2,
+    derive_identity_conditions,
+    identity_differences,
     iter_fact_refs,
+    iter_object_refs,
+    parse_identity_document_text,
     receipt_is_v2,
+    require_importable_object,
+    validate_object_document,
     validate_receipt_document,
 )
 from .errors import ControlError
@@ -460,12 +480,22 @@ class FormedContext:
 
         工具演进序号与候选 revision 都只增不减，被引用的事实先于引用者形成，所以两项都不得更大。评估基线按
         候选重新计数（新 revision 回到 b0），不参与比较；同一 revision 内的基线顺序由 B4-04 定义。
+
+        其他 Campaign 的事实没有本 Campaign 的形成期坐标可比：先过消费端核验（B1-14，未经授权即拒绝），
+        获授权才跳过比较。
         """
 
         if not self.v2:
             return
         for reference in fact_refs:
             if reference["campaign_id"] != self.campaign["campaign_id"]:
+                authorize_cross_campaign_reference(
+                    store,
+                    self.campaign,
+                    reference,
+                    owner_campaign_id=reference["campaign_id"],
+                    label=f"{label} 引用了其他 Campaign 的事实",
+                )
                 continue
             theirs = self.coordinates(store.load_fact(reference))
             if (
@@ -1317,6 +1347,10 @@ def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
     v2 收据按自身 ``formed_under`` 的坐标重建：工具摘要取形成期有效身份，交付判定比较形成期 revision 与基线，
     与当前受管代码无关——重放只证明形成时一致，当前有效性另由写入门禁与 status 判定。还核对收据引用的事实
     不晚于收据自身的形成期坐标。v1 收据沿用原语义。
+
+    前序导入收据（B1-14）同样按形成期重放：只用本 Store 内的导入登记、复制来的对象、目标 Campaign 与收据记录
+    的源身份文档重建，从不打开前序 Store，因此前序 Store 搬走或删除都不影响重放；需要对照前序 Store 现状时用
+    ``verify_predecessor_import``。
     """
 
     existing = store.load_receipt(reference)
@@ -1369,6 +1403,15 @@ def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
             existing["candidate_delivery_package_ref"],
             formed_under=formed_under,
         )
+    elif kind == "predecessor_import":
+        # 形成期重放：前序材料取收据自身记录的（源身份文档、导入事实记录），不解引用前序 Store。
+        rebuilt = build_predecessor_import_receipt(
+            store,
+            existing["import_ref"],
+            captured=_captured_from_receipt(existing),
+            completed_at_utc=existing["completed_at_utc"],
+            formed_under=formed_under,
+        )
     else:
         raise ControlError(f"未知收据类型：{kind}")
     if canonical_json_bytes(rebuilt) != canonical_json_bytes(existing):
@@ -1393,3 +1436,599 @@ def _find_inventory_current_ref(store: Any, receipt: dict[str, Any]) -> dict[str
     if len(matches) != 1:
         raise ControlError("ActivationReceipt 无法唯一关联最终 Inventory 事实")
     return matches[0]
+
+
+# ---------------------------------------------------------------------------
+# 前序证据导入（Claude 升级控制面 B1-14）
+# ---------------------------------------------------------------------------
+#
+# 模型：复制、自含、只读。
+# * 登记（``register_predecessor_import``）：只读打开前序 Store，核对前序 Campaign 身份摘要与两组七项声明，把
+#   ``imported_objects``（必须对对象引用闭合）按依赖顺序逐字节复制进本 Store，再封存 ``predecessor_import`` 对象。
+#   复制来的对象在本 Store 里是「休眠」的：没有成功的 read_only_reuse 导入收据，消费端一律拒绝跨 Campaign 引用。
+# * 收据（``finalize_predecessor_import``）：再次只读打开前序 Store，从双方 Campaign 的冻结字段独立导出七项，与两组
+#   声明逐项核对；核对每个导入对象与前序 Store 中的字节完全相同、每条导入事实在前序 Campaign 链上且摘要一致。
+#   收据记录源 Campaign 身份文档（规范 JSON 文本）、两组导出七项、来源字段、逐项差异与导入事实记录，因而自含：
+#   重放不打开前序 Store（形成期重放）。一份登记只签发一份收据，重复 finalize 返回原收据。
+# * 前序 Store 一律只读打开（``ControlStore.open_read_only``）：任何写入路径（取锁）都直接拒绝。
+# * ``predecessor.store_root`` 是登记时前序 Store 的绝对路径，只作出处：finalize 缺省从这里读；前序 Store 搬走后
+#   finalize／verify 可显式给新位置（按内容核对，与路径无关）；重放从不解引用它。它不得指向本 Store。
+
+PREDECESSOR_IMPORT_VERIFICATION_SCHEMA = "official-client-predecessor-import-verification/v1"
+_FACT_REF_KEYS = ("campaign_id", "dimension", "sequence", "sha256")
+
+
+def _object_key(reference: dict[str, Any]) -> tuple[str, str]:
+    return str(reference["object_kind"]), str(reference["sha256"])
+
+
+def _show(value: Any) -> str:
+    """报错里展示七项取值：字符串带引号，不可证显示为 null。"""
+
+    return canonical_json_bytes(value).decode("utf-8").strip()
+
+
+def _reference_shape(reference: dict[str, Any]) -> str:
+    keys = set(reference)
+    if keys == {"object_kind", "sha256"}:
+        return "object"
+    if keys == set(_FACT_REF_KEYS):
+        return "fact"
+    if keys == {"receipt_kind", "sha256"}:
+        return "receipt"
+    raise ControlError(f"无法识别的引用：{sorted(keys)}")
+
+
+def _import_payload(store: Any, import_ref: dict[str, Any]) -> dict[str, Any]:
+    document = store.load_object(import_ref)
+    if document["object_kind"] != "predecessor_import":
+        raise ControlError("import_ref 必须引用 predecessor_import 对象")
+    return document["payload"]
+
+
+def predecessor_imports(store: Any, campaign_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """本 Store 里属于 ``campaign_id`` 的前序导入登记 ``[(引用, payload)]``，按引用摘要排序。"""
+
+    entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_object_refs("predecessor_import"):
+        payload = store.load_object(reference)["payload"]
+        if payload["campaign_id"] == campaign_id:
+            entries.append((reference, payload))
+    return entries
+
+
+def predecessor_import_receipts(
+    store: Any, import_ref: dict[str, Any]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """引用某份导入登记的全部导入收据 ``[(收据引用, 收据)]``。"""
+
+    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_receipt_refs("predecessor_import"):
+        receipt = store.load_receipt(reference)
+        if receipt["import_ref"] == import_ref:
+            matches.append((reference, receipt))
+    return matches
+
+
+def find_predecessor_import_receipt(
+    store: Any, import_ref: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """某份导入登记的导入收据；没有返回 None。一份登记只允许一份收据（finalize 幂等保证、重放复核），多份即失败关闭。"""
+
+    matches = predecessor_import_receipts(store, import_ref)
+    if len(matches) > 1:
+        raise ControlError(f"同一前序导入登记存在多份导入收据，Store 已不一致：{import_ref['sha256']}")
+    return matches[0] if matches else None
+
+
+# ------------------------------- 消费端核验 -------------------------------
+
+
+def _import_grant_denial(store: Any, import_ref: dict[str, Any]) -> str | None:
+    """②③：登记有导入收据、收据重放通过、且 mode 为 read_only_reuse；满足返回 None，否则返回理由。"""
+
+    found = find_predecessor_import_receipt(store, import_ref)
+    if found is None:
+        return f"② 导入登记 {import_ref['sha256']} 尚未 finalize，没有导入收据"
+    receipt_ref, receipt = found
+    try:
+        replay_receipt(store, receipt_ref)
+    except ControlError as error:
+        return f"② 导入收据 {receipt_ref['sha256']} 重放失败：{error}"
+    if receipt["mode"] != "read_only_reuse":
+        return f"③ 导入收据 mode={receipt['mode']}，只有 read_only_reuse 授予正式引用权限"
+    return None
+
+
+def cross_campaign_denial(
+    store: Any,
+    campaign: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    owner_campaign_id: str | None = None,
+) -> str | None:
+    """跨 Campaign 引用的消费端核验（设计 B1-14），获授权返回 None，否则返回拒绝理由。
+
+    v2 Campaign 引用其他 Campaign 的证据，必须同时满足四项：
+    ① 引用登记在本 Campaign 的某份 ``predecessor_import`` 里——对象引用在 ``imported_objects``、事实引用在
+       ``imported_fact_refs``；被引用者自带所属 Campaign（``owner_campaign_id``）时必须就是该登记的前序 Campaign；
+       收据不能导入，收据引用永不满足；
+    ② 该登记有导入收据，且 ``replay_receipt`` 重放通过；
+    ③ 收据 ``mode == read_only_reuse``（``regression_fixture`` 收据不授予任何正式引用权限）；
+    ④ 被引用的是官方证据白名单内的对象类型（``OFFICIAL_EVIDENCE_OBJECT_KINDS``）；事实不在白名单内，所以跨
+       Campaign 的事实引用永远不获授权，``imported_fact_refs`` 只是收据里的出处记录。
+    多份登记列出同一引用时任一份满足②③即可；理由按 ①→②③（第一份登记）→④ 的顺序报告首个不满足项。
+    v1 Campaign 没有导入，一律不授权。
+    """
+
+    if not campaign_is_v2(campaign):
+        return "v1 Campaign 不接受跨 Campaign 引用"
+    shape = _reference_shape(reference)
+    if shape == "receipt":
+        return "① 收据不能导入，任何 predecessor_import 都不登记收据引用"
+    listing = "imported_objects" if shape == "object" else "imported_fact_refs"
+    candidates = [
+        import_ref
+        for import_ref, payload in predecessor_imports(store, campaign["campaign_id"])
+        if reference in payload[listing]
+        and (owner_campaign_id is None or payload["predecessor"]["campaign_id"] == owner_campaign_id)
+    ]
+    if not candidates:
+        owner = "" if owner_campaign_id is None else f"（被引用者属于 {owner_campaign_id}）"
+        return f"① 引用不在本 Campaign 的任何 predecessor_import 登记中{owner}"
+    reasons: list[str] = []
+    for import_ref in candidates:
+        reason = _import_grant_denial(store, import_ref)
+        if reason is None:
+            break
+        reasons.append(reason)
+    else:
+        return reasons[0]
+    if shape == "fact":
+        return "④ 被引用的是事实，不是官方证据白名单内的对象类型"
+    if reference["object_kind"] not in OFFICIAL_EVIDENCE_OBJECT_KINDS:
+        return f"④ 对象类型 {reference['object_kind']} 不在官方证据白名单内"
+    return None
+
+
+def authorize_cross_campaign_reference(
+    store: Any,
+    campaign: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    owner_campaign_id: str | None,
+    label: str,
+) -> None:
+    """消费端核验入口：同 Campaign 直接放行；否则须满足 ``cross_campaign_denial`` 的四项，不满足即拒绝。
+
+    ``owner_campaign_id`` 是被引用者所属的 Campaign（事实的 ``campaign_id``、对象 payload 的 ``campaign_id``）；没有
+    所属字段的对象（EvidencePackage）传 None。v1 Campaign 原样抛出 ``label``（原报错文案逐字不变）；v2 在 ``label``
+    后附未获授权的理由。
+    """
+
+    if owner_campaign_id is not None and owner_campaign_id == campaign["campaign_id"]:
+        return
+    if not campaign_is_v2(campaign):
+        raise ControlError(label)
+    reason = cross_campaign_denial(store, campaign, reference, owner_campaign_id=owner_campaign_id)
+    if reason is not None:
+        raise ControlError(f"{label}（未获前序导入授权：{reason}）")
+
+
+def fixture_only_imported_objects(store: Any) -> set[tuple[str, str]]:
+    """只作回归夹具（或尚未 finalize）的导入对象 ``{(object_kind, sha256)}``：其外部证据不计入本 Store 的外部核验。
+
+    导入对象带着前序 Store 的外部证据绑定（相对前序 Store 的 external_root）。被 read_only_reuse 收据授权的对象是
+    本 Campaign 的正式依赖，外部证据照常核验；其余导入对象若也不被本 Store 自有内容（Campaign、事实、导入收据
+    以外的收据、未被任何导入登记列出的对象）沿对象引用触达，就只是夹具，外部证据随前序 Store 自己的重放核验。
+    没有导入登记的 Store（全部历史 Store）直接返回空集，重放行为不变。
+    """
+
+    imports = [
+        (reference, store.load_object(reference)["payload"])
+        for reference in store.list_object_refs("predecessor_import")
+    ]
+    if not imports:
+        return set()
+    imported: set[tuple[str, str]] = set()
+    authorized: set[tuple[str, str]] = set()
+    for reference, payload in imports:
+        keys = {_object_key(item) for item in payload["imported_objects"]}
+        imported |= keys
+        found = find_predecessor_import_receipt(store, reference)
+        if found is not None and found[1]["mode"] == "read_only_reuse":
+            authorized |= keys
+    candidates = imported - authorized
+    if not candidates:
+        return set()
+    roots: list[dict[str, Any]] = []
+    for path in sorted((store.root / "campaigns").iterdir()):
+        if path.suffix != ".json":
+            continue
+        campaign = store.load_campaign(path.stem)
+        roots.extend(iter_object_refs(campaign))
+        for fact in store.list_facts(campaign["campaign_id"]):
+            roots.extend(iter_object_refs(fact["payload"]))
+    for kind in RECEIPT_KINDS:
+        if kind == "predecessor_import":
+            continue
+        for reference in store.list_receipt_refs(kind):
+            roots.extend(iter_object_refs(store.load_receipt(reference)))
+    for kind in sorted(OBJECT_KINDS - {"predecessor_import"}):
+        for reference in store.list_object_refs(kind):
+            if _object_key(reference) not in imported:
+                roots.extend(iter_object_refs(store.load_object(reference)["payload"]))
+    reachable: set[tuple[str, str]] = set()
+    pending = list(roots)
+    while pending:
+        reference = pending.pop()
+        key = _object_key(reference)
+        if key in reachable:
+            continue
+        reachable.add(key)
+        pending.extend(iter_object_refs(store.load_object(reference)["payload"]))
+    return candidates - reachable
+
+
+# ------------------------------- 前序 Store 读取 -------------------------------
+
+
+def require_predecessor_root_outside(store: Any, root: Path) -> Path:
+    """前序 Store 根必须是绝对路径，且不是本 Store、也不与本 Store 互相嵌套；返回解析后的路径。"""
+
+    if not root.is_absolute():
+        raise ControlError("前序 Store 根必须是绝对路径")
+    resolved = root.resolve()
+    own = Path(store.root)
+    if resolved == own or own in resolved.parents or resolved in own.parents:
+        raise ControlError(f"前序 Store 不得指向本 Store，也不得与本 Store 互相嵌套：{resolved}")
+    return resolved
+
+
+def open_predecessor_store(store: Any, root: Path) -> Any:
+    """只读打开前序 Store（B2-09 可直接调用）：路径先过 ``require_predecessor_root_outside``，任何写入都被拒绝。"""
+
+    from .store import ControlStore
+
+    return ControlStore.open_read_only(require_predecessor_root_outside(store, Path(root)))
+
+
+def predecessor_object_closure(
+    predecessor: Any, roots: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """前序 Store 中 ``roots`` 的对象引用闭包，按内容排序，可直接作 ``imported_objects``（B2-09 准备登记清单用）。"""
+
+    seen: dict[tuple[str, str], dict[str, Any]] = {}
+    pending = list(roots)
+    while pending:
+        reference = pending.pop()
+        key = _object_key(reference)
+        if key in seen:
+            continue
+        document = predecessor.load_object(reference)
+        seen[key] = {"object_kind": key[0], "sha256": key[1]}
+        pending.extend(iter_object_refs(document["payload"]))
+    return sorted(seen.values(), key=canonical_sha256)
+
+
+def _load_predecessor_campaign(predecessor: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """读前序 Campaign（加载即复算其 identity_sha256），并核对与登记声明的身份摘要一致。"""
+
+    declared = payload["predecessor"]
+    campaign = predecessor.load_campaign(declared["campaign_id"])
+    if campaign["identity_sha256"] != declared["campaign_identity_sha256"]:
+        raise ControlError(
+            "前序 Campaign 的 identity_sha256 与导入登记声明的不一致："
+            f"声明 {declared['campaign_identity_sha256']}，实际 {campaign['identity_sha256']}"
+        )
+    return campaign
+
+
+def check_import_declarations(
+    payload: dict[str, Any], source: dict[str, Any], target: dict[str, Any]
+) -> dict[str, Any]:
+    """两组七项声明与独立导出值逐项核对（导入 finalizer 的核心判据，登记时也先核一遍以便尽早失败）。
+
+    ``source`` 是源 Campaign（或收据记录的源身份文档），``target`` 是目标 Campaign。不可证的项导出为 null，声明也
+    必须是 null；任一项不符即拒绝并列出全部不符项。read_only_reuse 还要求七项全部可证且逐项相等（差异为空）；
+    regression_fixture 不要求相等，差异与不可证项原样进入收据的 ``identity_differences``。
+    """
+
+    source_conditions, _source_unprovable = derive_identity_conditions(source)
+    target_conditions, _target_unprovable = derive_identity_conditions(target)
+    mismatches: list[str] = []
+    for field, declared, derived in (
+        ("source_identity_conditions", payload["source_identity_conditions"], source_conditions),
+        ("identity_conditions", payload["identity_conditions"], target_conditions),
+    ):
+        for item in IDENTITY_CONDITION_ITEMS:
+            if declared[item] != derived[item]:
+                mismatches.append(
+                    f"{field}.{item} 声明 {_show(declared[item])}，由 "
+                    f"{IDENTITY_CONDITION_SOURCE_FIELDS[item]} 独立导出 {_show(derived[item])}"
+                )
+    if mismatches:
+        raise ControlError("前序导入的七项身份声明与冻结字段独立导出的不一致：" + "；".join(mismatches))
+    differences = identity_differences(source_conditions, target_conditions)
+    if payload["mode"] == "read_only_reuse" and differences:
+        raise ControlError(
+            "read_only_reuse 要求七项全部可证且逐项相等："
+            + "；".join(
+                f"{item['item']} {item['reason']}（源 {_show(item['source'])}，目标 {_show(item['target'])}）"
+                for item in differences
+            )
+        )
+    return {
+        "source_conditions": source_conditions,
+        "target_conditions": target_conditions,
+        "identity_differences": differences,
+    }
+
+
+def _imported_object_plan(
+    predecessor: Any, payload: dict[str, Any]
+) -> list[tuple[dict[str, Any], bytes]]:
+    """在复制任何对象之前核完整个清单：每个对象可导入且属于前序 Campaign（``require_importable_object``）、清单对
+    对象引用闭合；读出原始字节，按依赖顺序（被引用者在前）排列。"""
+
+    predecessor_id = payload["predecessor"]["campaign_id"]
+    listed = {_object_key(reference): reference for reference in payload["imported_objects"]}
+    nested: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    contents: dict[tuple[str, str], bytes] = {}
+    for key, reference in listed.items():
+        content = predecessor.object_bytes(reference)
+        document = parse_json_bytes(content, "前序对象")
+        require_importable_object(document, predecessor_campaign_id=predecessor_id)
+        children = [_object_key(item) for item in iter_object_refs(document["payload"])]
+        missing = sorted(set(children) - set(listed))
+        if missing:
+            raise ControlError(
+                f"predecessor_import.imported_objects 未对对象引用闭合：{key[0]}/{key[1]} 引用了未列入的 "
+                + "、".join(f"{kind}/{digest}" for kind, digest in missing)
+            )
+        nested[key] = children
+        contents[key] = content
+    order: list[tuple[str, str]] = []
+    placed: set[tuple[str, str]] = set()
+    for root in sorted(listed):
+        stack: list[tuple[tuple[str, str], bool]] = [(root, False)]
+        while stack:
+            key, expanded = stack.pop()
+            if key in placed:
+                continue
+            if expanded:
+                placed.add(key)
+                order.append(key)
+                continue
+            stack.append((key, True))
+            stack.extend((child, False) for child in nested[key] if child not in placed)
+    return [(listed[key], contents[key]) for key in order]
+
+
+def register_predecessor_import(store: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """登记前序证据导入（B2-09 两条导入路径的第一步），返回登记结果。
+
+    步骤：① 合同与目标侧判据（``WorkflowGates.validate_predecessor_import_target``：v2、client、批准时间、当前有效
+    工具身份、store_root 不是本 Store、前序 Campaign ID 不与本地重名）；② 只读打开前序 Store，核对前序 Campaign 身份
+    摘要与声明一致、两组七项声明与独立导出值一致（read_only_reuse 另要求逐项相等），导入事实都在前序 Campaign 链上；
+    ③ 核对 ``imported_objects`` 对对象引用闭合，按依赖顺序逐字节复制进本 Store（同内容已存在即复用）；④ 封存
+    ``predecessor_import`` 对象（同内容已封存即复用）。全部核对在复制之前完成。登记本身不授予任何引用权限，要等
+    ``finalize_predecessor_import`` 签发 read_only_reuse 收据。
+
+    返回 ``{"import_ref", "reused", "copied_objects", "reused_objects"}``：``reused`` 指登记对象本身已存在（重跑同一
+    步骤），两个清单分别是本次新复制与本 Store 已有同内容的导入对象。
+    """
+
+    from .gates import WorkflowGates
+
+    validate_object_document(
+        {"schema_version": OBJECT_SCHEMA, "object_kind": "predecessor_import", "payload": payload}
+    )
+    # 目标侧判据（v2、client、批准时间、当前有效工具、store_root 不是本 Store、前序 ID 不与本地重名）先于读前序。
+    campaign = WorkflowGates(store).validate_predecessor_import_target(payload, new=True)
+    predecessor = open_predecessor_store(store, Path(payload["predecessor"]["store_root"]))
+    source = _load_predecessor_campaign(predecessor, payload)
+    check_import_declarations(payload, source, campaign)
+    for reference in payload["imported_fact_refs"]:
+        predecessor.load_fact(reference)
+    copied: list[dict[str, Any]] = []
+    reused_objects: list[dict[str, Any]] = []
+    for reference, content in _imported_object_plan(predecessor, payload):
+        if store.import_object(reference, content):
+            reused_objects.append(reference)
+        else:
+            copied.append(reference)
+    outcome = store.seal_object_outcome("predecessor_import", payload, allow_existing=True)
+    return {
+        "import_ref": outcome["object_ref"],
+        "reused": outcome["reused"],
+        "copied_objects": copied,
+        "reused_objects": reused_objects,
+    }
+
+
+def capture_predecessor_material(
+    store: Any, import_ref: dict[str, Any], *, predecessor_root: Path | None = None
+) -> dict[str, Any]:
+    """finalize／verify 从前序 Store 只读采集并核对的材料。
+
+    缺省从登记的 ``predecessor.store_root`` 读，前序 Store 搬走后用 ``predecessor_root`` 给新位置。核对：前序 Campaign
+    身份摘要等于登记声明；每个导入对象在前序 Store 中存在、摘要一致，且与本 Store 中的副本逐字节相同；每条导入
+    事实在前序 Campaign 链上、摘要一致。返回 ``{"source_campaign_document", "imported_facts", "predecessor_root"}``，
+    其中身份文档是规范 JSON 文本（不含末尾换行），导入事实是 ``{campaign_id, dimension, sequence, sha256, fact_kind}``。
+    """
+
+    payload = _import_payload(store, import_ref)
+    root = Path(payload["predecessor"]["store_root"]) if predecessor_root is None else Path(predecessor_root)
+    predecessor = open_predecessor_store(store, root)
+    source = _load_predecessor_campaign(predecessor, payload)
+    for reference in payload["imported_objects"]:
+        if predecessor.object_bytes(reference) != store.object_bytes(reference):
+            raise ControlError(f"导入对象与前序 Store 中的字节不一致：{reference}")
+    facts: list[dict[str, Any]] = []
+    for reference in payload["imported_fact_refs"]:
+        fact = predecessor.load_fact(reference)
+        facts.append({**{key: reference[key] for key in _FACT_REF_KEYS}, "fact_kind": fact["fact_kind"]})
+    document = canonical_json_bytes(campaign_identity_document(source)).decode("utf-8")
+    return {
+        "source_campaign_document": document[:-1],
+        "imported_facts": facts,
+        "predecessor_root": str(predecessor.root),
+    }
+
+
+def _captured_from_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    """重放用的前序材料：取收据自身记录的，不打开前序 Store。"""
+
+    return {
+        "source_campaign_document": receipt["source_campaign_document"],
+        "imported_facts": receipt["imported_facts"],
+    }
+
+
+def build_predecessor_import_receipt(
+    store: Any,
+    import_ref: dict[str, Any],
+    *,
+    captured: dict[str, Any],
+    completed_at_utc: str,
+    formed_under: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """由导入登记、目标 Campaign 与前序材料确定性地生成导入收据（finalize 与重放共用）。
+
+    ``captured`` 在 finalize 时来自 ``capture_predecessor_material``（读前序 Store），重放时取收据自身记录的；
+    ``formed_under`` 只在重放时传入。源身份文档必须是登记声明的前序 Campaign（ID 一致、复算身份摘要等于声明），
+    七项从源身份文档与目标 Campaign 独立导出后与两组声明逐项核对（``check_import_declarations``）。
+    """
+
+    expect_rfc3339(completed_at_utc, "completed_at_utc")
+    payload = _import_payload(store, import_ref)
+    campaign = store.load_campaign(payload["campaign_id"])
+    if not campaign_is_v2(campaign):
+        raise ControlError("前序证据导入收据只属于 Campaign v2")
+    producer = _receipt_producer(store, campaign, formed_under)
+    if payload["client"] != campaign["client"]:
+        raise ControlError("前序证据导入的 client 与 Campaign 不一致")
+    declared = payload["predecessor"]
+    document = parse_identity_document_text(
+        captured["source_campaign_document"], "source_campaign_document"
+    )
+    if (
+        document["campaign_id"] != declared["campaign_id"]
+        or campaign_identity_sha256(document) != declared["campaign_identity_sha256"]
+    ):
+        raise ControlError("前序 Campaign 身份文档与导入登记声明的前序 Campaign 不符")
+    derived = check_import_declarations(payload, document, campaign)
+    for reference in payload["imported_objects"]:
+        store.load_object(reference)
+    facts = captured["imported_facts"]
+    if [
+        {key: item[key] for key in _FACT_REF_KEYS} for item in facts
+    ] != payload["imported_fact_refs"]:
+        raise ControlError("导入事实记录与导入登记的 imported_fact_refs 不一致")
+    if datetime.fromisoformat(completed_at_utc.replace("Z", "+00:00")) < datetime.fromisoformat(
+        payload["approved_at_utc"].replace("Z", "+00:00")
+    ):
+        raise ControlError("导入收据完成时间早于导入批准时间")
+    receipt: dict[str, Any] = {
+        "schema_version": PREDECESSOR_IMPORT_RECEIPT_SCHEMA,
+        "campaign_id": payload["campaign_id"],
+        "client": payload["client"],
+        "import_ref": {"object_kind": "predecessor_import", "sha256": import_ref["sha256"]},
+        "mode": payload["mode"],
+        "predecessor": dict(declared),
+        "source_campaign_document": captured["source_campaign_document"],
+        "target_campaign_identity_sha256": campaign["identity_sha256"],
+        "source_conditions": derived["source_conditions"],
+        "target_conditions": derived["target_conditions"],
+        "condition_source_fields": dict(IDENTITY_CONDITION_SOURCE_FIELDS),
+        "identity_differences": derived["identity_differences"],
+        "imported_objects": payload["imported_objects"],
+        "imported_facts": facts,
+        "approved_by": payload["approved_by"],
+        "completed_at_utc": completed_at_utc,
+        "producer_tool_sha256": producer["tool_sha256"],
+        "formed_under": producer["formed_under"],
+        "identity_sha256": "",
+    }
+    receipt["identity_sha256"] = canonical_sha256(
+        {key: item for key, item in receipt.items() if key != "identity_sha256"}
+    )
+    validate_receipt_document(receipt, "predecessor_import")
+    return receipt
+
+
+def finalize_predecessor_import(
+    store: Any,
+    import_ref: dict[str, Any],
+    completed_at_utc: str,
+    *,
+    predecessor_root: Path | None = None,
+) -> dict[str, Any]:
+    """同 ``finalize_predecessor_import_outcome``，只返回收据引用。"""
+
+    return finalize_predecessor_import_outcome(
+        store, import_ref, completed_at_utc, predecessor_root=predecessor_root
+    )["receipt_ref"]
+
+
+def finalize_predecessor_import_outcome(
+    store: Any,
+    import_ref: dict[str, Any],
+    completed_at_utc: str,
+    *,
+    predecessor_root: Path | None = None,
+) -> dict[str, Any]:
+    """签发前序导入收据（B2-09 两条导入路径的第二步），返回 ``{"receipt_ref", "reused"}``。
+
+    幂等：同一登记已有收据时，重放核对后原样返回（``reused: true``），不论这次给的完成时间、当前工具身份或形成期
+    坐标是否已变化——一份登记只对应一份收据。没有时按当前形成期坐标签发：只读采集并核对前序材料、独立导出两组
+    七项核对声明，写入收据。按登记串行，两个并发 finalize 不会各写一份。
+    """
+
+    _import_payload(store, import_ref)
+    with store._lock(f"predecessor-import-{import_ref['sha256']}"):
+        existing = find_predecessor_import_receipt(store, import_ref)
+        if existing is not None:
+            replay_receipt(store, existing[0])
+            return {"receipt_ref": existing[0], "reused": True}
+        captured = capture_predecessor_material(
+            store, import_ref, predecessor_root=predecessor_root
+        )
+        receipt = build_predecessor_import_receipt(
+            store, import_ref, captured=captured, completed_at_utc=completed_at_utc
+        )
+        return store.write_receipt_outcome("predecessor_import", receipt, allow_existing=True)
+
+
+def verify_predecessor_import(
+    store: Any, import_ref: dict[str, Any], *, predecessor_root: Path | None = None
+) -> dict[str, Any]:
+    """对照前序 Store 现状复核一份已签发的导入收据（只读；前序 Store 搬走后用 ``predecessor_root`` 给新位置）。
+
+    重放本身不打开前序 Store；这里额外证明收据记录的源身份文档与导入事实记录同前序 Store 现状一致、复制来的对象与
+    前序 Store 中的字节仍完全相同。按内容核对，与前序 Store 当前所在路径无关。
+    """
+
+    found = find_predecessor_import_receipt(store, import_ref)
+    if found is None:
+        raise ControlError("导入登记尚未 finalize，没有可复核的导入收据")
+    receipt_ref, receipt = found
+    replay_receipt(store, receipt_ref)
+    captured = capture_predecessor_material(store, import_ref, predecessor_root=predecessor_root)
+    if captured["source_campaign_document"] != receipt["source_campaign_document"]:
+        raise ControlError("前序 Store 中的 Campaign 身份文档与导入收据记录的不一致")
+    if captured["imported_facts"] != receipt["imported_facts"]:
+        raise ControlError("前序 Store 中的导入事实与导入收据记录的不一致")
+    return {
+        "schema_version": PREDECESSOR_IMPORT_VERIFICATION_SCHEMA,
+        "result": "passed",
+        "import_ref": receipt["import_ref"],
+        "receipt_ref": receipt_ref,
+        "mode": receipt["mode"],
+        "recorded_store_root": receipt["predecessor"]["store_root"],
+        "verified_store_root": captured["predecessor_root"],
+        "imported_objects": len(receipt["imported_objects"]),
+        "imported_facts": len(receipt["imported_facts"]),
+        "identity_differences": receipt["identity_differences"],
+    }

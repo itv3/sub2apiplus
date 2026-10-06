@@ -16,11 +16,14 @@ from .receipts import (
     finalize_activation,
     finalize_candidate_build,
     finalize_candidate_delivery,
+    finalize_predecessor_import_outcome,
     finalize_promotion,
     finalize_validation_gate,
     finalize_validation_outcome,
+    register_predecessor_import,
     replay_receipt,
     tool_digest_v2,
+    verify_predecessor_import,
 )
 from .store import ControlStore
 
@@ -130,6 +133,36 @@ def build_parser() -> argparse.ArgumentParser:
     _add_store(lookup)
     lookup.add_argument("--campaign", required=True, help="Campaign v2 ID")
     lookup.add_argument("--idempotency-key", required=True, help="事实幂等键")
+
+    # 前序证据导入（B1-14）：登记 → 签发收据 →（可选）对照前序 Store 现状复核；前序 Store 一律只读打开。
+    import_register = subparsers.add_parser(
+        "predecessor-import-register",
+        help="登记前序证据导入：只读打开前序 Store，核对声明并复制对象闭包（登记本身不授予引用权限；同内容重跑复用）",
+    )
+    _add_store(import_register)
+    import_register.add_argument("--campaign", required=True, help="目标 Campaign v2 ID")
+    import_register.add_argument(
+        "--input", required=True, type=_absolute_path, help="predecessor_import payload JSON"
+    )
+    predecessor_root_help = "前序 Store 当前位置（搬走后用；缺省为登记记录的 store_root），按内容核对"
+    import_finalize = subparsers.add_parser(
+        "predecessor-import-finalize",
+        help="签发前序导入收据；已有收据时重放核对后返回原收据（输出 {receipt_ref, reused}）",
+    )
+    _add_store(import_finalize)
+    import_finalize.add_argument(
+        "--import-ref", required=True, type=_absolute_path, help="predecessor_import 对象引用 JSON"
+    )
+    import_finalize.add_argument("--completed-at", required=True, help="收据完成 RFC3339 时间")
+    import_finalize.add_argument("--predecessor-root", type=_absolute_path, help=predecessor_root_help)
+    import_verify = subparsers.add_parser(
+        "predecessor-import-verify", help="对照前序 Store 现状只读复核已签发的导入收据"
+    )
+    _add_store(import_verify)
+    import_verify.add_argument(
+        "--import-ref", required=True, type=_absolute_path, help="predecessor_import 对象引用 JSON"
+    )
+    import_verify.add_argument("--predecessor-root", type=_absolute_path, help=predecessor_root_help)
 
     for command in FACT_COMMANDS:
         fact_parser = subparsers.add_parser(command, help=f"追加 {FACT_COMMANDS[command]} 事实")
@@ -301,6 +334,24 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         return result | {"reused": outcome["reused"]} if arguments.allow_existing else result
     if command == "fact-lookup":
         return store.fact_lookup(arguments.campaign, arguments.idempotency_key)
+    if command == "predecessor-import-register":
+        payload = _load_object(arguments.input, "predecessor import")
+        if payload.get("campaign_id") != arguments.campaign:
+            raise ControlError("predecessor import.campaign_id 与 --campaign 不一致")
+        return register_predecessor_import(store, payload)
+    if command == "predecessor-import-finalize":
+        return finalize_predecessor_import_outcome(
+            store,
+            _load_object(arguments.import_ref, "predecessor import ref"),
+            arguments.completed_at,
+            predecessor_root=arguments.predecessor_root,
+        )
+    if command == "predecessor-import-verify":
+        return verify_predecessor_import(
+            store,
+            _load_object(arguments.import_ref, "predecessor import ref"),
+            predecessor_root=arguments.predecessor_root,
+        )
     if command in FACT_COMMANDS:
         return _append_fact(
             store,

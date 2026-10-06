@@ -41,7 +41,8 @@
         "operational_evidence",
         "promotion_diff",
         "acceptance_package",
-        "tool_evolution_registration"
+        "tool_evolution_registration",
+        "predecessor_import"
       ]
     },
     "payload": {"type": "object"}
@@ -50,10 +51,77 @@
     {
       "if": {"properties": {"object_kind": {"const": "tool_evolution_registration"}}},
       "then": {"properties": {"payload": {"$ref": "#/$defs/toolEvolutionRegistration"}}}
+    },
+    {
+      "if": {"properties": {"object_kind": {"const": "predecessor_import"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/predecessorImport"}}}
     }
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_kind", "sha256"],
+      "properties": {
+        "object_kind": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "factRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "dimension", "sequence", "sha256"],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "dimension": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "identityConditions": {
+      "description": "前序导入核验的七项身份（B1-14）：每项为由 Campaign 冻结字段导出的值，不可证时为 null。official_artifacts 是官方产物绑定清单的规范摘要；platform／entrypoint 取 platforms／entrypoints 的唯一一项；privacy_mode 取 default_conditions 里唯一一条 privacy=<值>；oauth_org_id、model_catalog_sha256 只有 Campaign v2 才有。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_version", "official_artifacts", "platform", "entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256"],
+      "properties": {
+        "target_version": {"type": ["string", "null"]},
+        "official_artifacts": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "platform": {"type": ["string", "null"]},
+        "entrypoint": {"type": ["string", "null"]},
+        "privacy_mode": {"type": ["string", "null"]},
+        "oauth_org_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/safeId"}]},
+        "model_catalog_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}
+      }
+    },
+    "predecessorImport": {
+      "description": "Campaign v2 从前序 Store 导入证据的登记（B1-14）。predecessor.store_root 是登记时前序 Store 的绝对路径，只作出处，重放不解引用，且不得指向本 Store；imported_objects 按内容严格排序、必须对对象引用闭合，登记时已逐字节复制进本 Store，绑定 Campaign 控制状态或引用事实／收据的对象不可导入，自带 campaign_id 的对象必须属于前序 Campaign；imported_fact_refs 只能指向前序 Campaign 的事实，只作出处记录。两组七项身份只是申请方声明，导入收据从双方 Campaign 冻结字段独立导出后逐项核对。登记本身不授予任何引用权限。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client", "campaign_id", "predecessor", "imported_objects", "imported_fact_refs", "identity_conditions", "source_identity_conditions", "mode", "approved_by", "approved_at_utc"],
+      "properties": {
+        "client": {"enum": ["codex", "claude"]},
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "predecessor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["store_root", "campaign_id", "campaign_identity_sha256"],
+          "properties": {
+            "store_root": {"type": "string", "pattern": "^/"},
+            "campaign_id": {"$ref": "#/$defs/safeId"},
+            "campaign_identity_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "imported_objects": {"type": "array", "items": {"$ref": "#/$defs/objectRef"}},
+        "imported_fact_refs": {"type": "array", "items": {"$ref": "#/$defs/factRef"}},
+        "identity_conditions": {"$ref": "#/$defs/identityConditions"},
+        "source_identity_conditions": {"$ref": "#/$defs/identityConditions"},
+        "mode": {"enum": ["read_only_reuse", "regression_fixture"]},
+        "approved_by": {"type": "string", "minLength": 1},
+        "approved_at_utc": {"type": "string", "format": "date-time"}
+      }
+    },
     "toolEvolutionRegistration": {
       "description": "Campaign v2 的工具演进登记：按 index 从 1 起成单链，previous_ref 在 index 1 时为 null；from_identity 承接上一份有效身份，to_identity 是登记时当前受管代码的身份。",
       "type": "object",

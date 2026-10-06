@@ -77,6 +77,15 @@ RECEIPT_SCHEMA_VERSIONS = {
     ),
 }
 RECEIPT_V2_SCHEMAS = frozenset(versions[1] for versions in RECEIPT_SCHEMA_VERSIONS.values())
+# 收据种类全集（按 Store 重放顺序）；predecessor_import（B1-14）只有一版合同，只属于 Campaign v2。
+RECEIPT_KINDS = (
+    "promotion",
+    "activation",
+    "candidate_build",
+    "validation_gate",
+    "candidate_delivery",
+    "predecessor_import",
+)
 # 控制面客户端字段（设计 D1）：取值 codex／claude，与四键 persona 不混用。
 CLIENTS = ("codex", "claude")
 # Campaign v2 冻结的七项工具身份（B1-07 v3 引擎五摘要加 client、policy_version）。
@@ -91,6 +100,60 @@ TOOL_IDENTITY_FIELDS = (
 )
 # 形成期坐标：事实／收据形成时的有效工具身份、候选 revision 与评估基线。
 FORMED_UNDER_FIELDS = ("tool_identity_ref", "candidate_revision", "evaluation_baseline")
+
+# ---------------------------------------------------------------------------
+# Claude 升级控制面 B1-14：前序证据导入
+# ---------------------------------------------------------------------------
+PREDECESSOR_IMPORT_RECEIPT_SCHEMA = "official-client-predecessor-import-receipt/v1"
+PREDECESSOR_IMPORT_MODES = ("read_only_reuse", "regression_fixture")
+# 导入核验从 Campaign 冻结字段独立导出的七项身份，及每项的来源字段（收据原样记录）。
+IDENTITY_CONDITION_ITEMS = (
+    "target_version",
+    "official_artifacts",
+    "platform",
+    "entrypoint",
+    "privacy_mode",
+    "oauth_org_id",
+    "model_catalog_sha256",
+)
+IDENTITY_CONDITION_SOURCE_FIELDS = {
+    "target_version": "target_version",
+    "official_artifacts": "official_artifacts",
+    "platform": "platforms",
+    "entrypoint": "entrypoints",
+    "privacy_mode": "default_conditions",
+    "oauth_org_id": "oauth_org_id",
+    "model_catalog_sha256": "model_catalog_sha256",
+}
+# 消费端核验 ④：可跨 Campaign 正式引用的官方证据对象类型。capture_index 等五类是 Claude seal 链（B2-07）的
+# 官方证据制品，登记为 Store 对象类型之前不会出现在任何 Store 里。
+OFFICIAL_EVIDENCE_OBJECT_KINDS = frozenset(
+    {
+        "evidence_package",
+        "capture_index",
+        "sink_inventory",
+        "discovery_inventory",
+        "cross_source_matrix",
+        "runtime_host_receipt",
+        "rule_migration_ledger",
+        "atomic_assertion_ledger",
+    }
+)
+# 不得作为前序证据导入的对象：它们绑定所在 Store 的 Campaign 控制状态——对象图门禁要读 Campaign、事实或收据
+# （工具演进登记、导入登记本身，执行计划、候选证据包、候选交付计划／包、私有归档清单、Active Envelope），脱离
+# 前序 Store 无法复核，也不是可复用的证据。其余对象类型的对象图只依赖对象，可按闭包逐字节复制。
+NON_IMPORTABLE_OBJECT_KINDS = frozenset(
+    {
+        "predecessor_import",
+        "tool_evolution_registration",
+        "validation_execution_plan",
+        "candidate_evidence_package",
+        "candidate_delivery_plan",
+        "candidate_delivery_package",
+        "private_archive_manifest",
+        "active_support_envelope",
+    }
+)
 
 DIMENSIONS = (
     "discovery",
@@ -237,6 +300,8 @@ OBJECT_KINDS = {
     "acceptance_package",
     # B1-12：Campaign v2 的工具演进登记，按 index 成单链，决定当前有效工具身份。
     "tool_evolution_registration",
+    # B1-14：Campaign v2 从前序 Store 导入证据的登记（声明与导入清单），由导入收据核验后才授予引用权限。
+    "predecessor_import",
 }
 
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -308,13 +373,7 @@ def validate_receipt_ref(value: Any, label: str = "receipt_ref") -> dict[str, An
     reference = expect_object(value, label)
     expect_exact_keys(reference, {"receipt_kind", "sha256"}, label)
     kind = expect_string(reference["receipt_kind"], f"{label}.receipt_kind")
-    if kind not in {
-        "promotion",
-        "activation",
-        "candidate_build",
-        "validation_gate",
-        "candidate_delivery",
-    }:
+    if kind not in RECEIPT_KINDS:
         raise ControlError(f"{label}.receipt_kind 非法")
     expect_sha256(reference["sha256"], f"{label}.sha256")
     return reference
@@ -672,6 +731,104 @@ def campaign_identity_sha256(payload: dict[str, Any]) -> str:
         keys = keys + _CAMPAIGN_V2_EXTRA_KEYS
     fields = {key: payload[key] for key in keys}
     return canonical_sha256(fields)
+
+
+def _campaign_identity_keys(schema_version: Any) -> tuple[str, ...]:
+    if schema_version == CAMPAIGN_V2_SCHEMA:
+        return _CAMPAIGN_V1_IDENTITY_FIELDS + _CAMPAIGN_V2_EXTRA_KEYS
+    if schema_version == CAMPAIGN_SCHEMA:
+        return _CAMPAIGN_V1_IDENTITY_FIELDS
+    raise ControlError(f"Campaign 合同名非法：{schema_version}")
+
+
+def campaign_identity_document(campaign: dict[str, Any]) -> dict[str, Any]:
+    """Campaign 身份文档（B1-14）：合同名、ID 与 ``identity_sha256`` 覆盖的全部冻结字段。
+
+    导入收据原样记录源 Campaign 的身份文档；重放时由它复算 ``identity_sha256`` 并与导入登记声明的源身份摘要比对，
+    因此不必再打开前序 Store 也能证明「七项身份确由该 Campaign 的冻结字段导出」。
+    """
+
+    document = {
+        "schema_version": campaign["schema_version"],
+        "campaign_id": campaign["campaign_id"],
+    }
+    for key in _campaign_identity_keys(campaign["schema_version"]):
+        document[key] = campaign[key]
+    return document
+
+
+def validate_campaign_identity_document(value: Any, label: str) -> dict[str, Any]:
+    """身份文档的形状：键集合按合同版本闭合，导出七项要用到的字段类型正确。"""
+
+    document = expect_object(value, label)
+    keys = _campaign_identity_keys(document.get("schema_version"))
+    expect_exact_keys(document, {"schema_version", "campaign_id", *keys}, label)
+    expect_safe_id(document["campaign_id"], f"{label}.campaign_id")
+    expect_string(document["target_version"], f"{label}.target_version")
+    artifacts = document["official_artifacts"]
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ControlError(f"{label}.official_artifacts 必须是非空数组")
+    for index, item in enumerate(artifacts):
+        validate_external_binding(item, f"{label}.official_artifacts[{index}]")
+    for key in ("platforms", "entrypoints", "default_conditions"):
+        expect_string_list(document[key], f"{label}.{key}")
+    if document["schema_version"] == CAMPAIGN_V2_SCHEMA:
+        expect_safe_id(document["oauth_org_id"], f"{label}.oauth_org_id")
+        expect_sha256(document["model_catalog_sha256"], f"{label}.model_catalog_sha256")
+    return document
+
+
+def derive_identity_conditions(campaign: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """从 Campaign（或其身份文档）的冻结字段独立导出七项身份，返回 ``(七项, 不可证项)``。
+
+    * ``target_version``：原值；``official_artifacts``：官方产物绑定清单的规范摘要（只比较身份，不把源 Store 的外部
+      绑定带进本 Store 的外部核验集合）；
+    * ``platform``／``entrypoint``：``platforms``／``entrypoints`` 恰有一项时取该项，否则不可证；
+    * ``privacy_mode``：``default_conditions`` 里唯一一条 ``privacy=<值>`` 的值，没有或多条即不可证；
+    * ``oauth_org_id``、``model_catalog_sha256``：v2 冻结字段，v1 没有即不可证。
+    不可证的项取值为 ``null``。
+    """
+
+    conditions: dict[str, Any] = {
+        "target_version": campaign["target_version"],
+        "official_artifacts": canonical_sha256(campaign["official_artifacts"]),
+        "platform": campaign["platforms"][0] if len(campaign["platforms"]) == 1 else None,
+        "entrypoint": campaign["entrypoints"][0] if len(campaign["entrypoints"]) == 1 else None,
+        "privacy_mode": None,
+        "oauth_org_id": None,
+        "model_catalog_sha256": None,
+    }
+    privacy = [
+        condition.split("=", 1)[1]
+        for condition in campaign["default_conditions"]
+        if condition.startswith("privacy=")
+    ]
+    if len(privacy) == 1 and privacy[0]:
+        conditions["privacy_mode"] = privacy[0]
+    if campaign.get("schema_version") == CAMPAIGN_V2_SCHEMA:
+        conditions["oauth_org_id"] = campaign["oauth_org_id"]
+        conditions["model_catalog_sha256"] = campaign["model_catalog_sha256"]
+    unprovable = [item for item in IDENTITY_CONDITION_ITEMS if conditions[item] is None]
+    return conditions, unprovable
+
+
+def validate_identity_conditions(value: Any, label: str) -> dict[str, Any]:
+    """七项身份声明的形状：每项为对应类型的值或 ``null``（不可证）。"""
+
+    conditions = expect_object(value, label)
+    expect_exact_keys(conditions, set(IDENTITY_CONDITION_ITEMS), label)
+    for item in IDENTITY_CONDITION_ITEMS:
+        item_value = conditions[item]
+        if item_value is None:
+            continue
+        item_label = f"{label}.{item}"
+        if item in {"official_artifacts", "model_catalog_sha256"}:
+            expect_sha256(item_value, item_label)
+        elif item == "oauth_org_id":
+            expect_safe_id(item_value, item_label)
+        else:
+            expect_string(item_value, item_label)
+    return conditions
 
 
 def _validate_legacy_evidence_rule(value: Any, label: str) -> dict[str, Any]:
@@ -2435,6 +2592,103 @@ def _validate_tool_evolution_registration(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _validate_absolute_store_root(value: Any, label: str) -> str:
+    text = _validate_posix_path(value, label)
+    if not text.startswith("/"):
+        raise ControlError(f"{label} 必须是绝对路径")
+    return text
+
+
+def _validate_predecessor_import(value: Any) -> dict[str, Any]:
+    """前序证据导入登记的形状（设计 B1-14）。
+
+    ``predecessor.store_root`` 是形成期登记的前序 Store 绝对路径，只作出处与 finalize 时只读打开；重放不解引用它。
+    ``imported_objects`` 必须对对象引用闭合（由对象图门禁核对），按内容唯一排序；``imported_fact_refs`` 只能指向
+    前序 Campaign 的事实。两组七项身份声明只是申请方的声明，finalize 时从双方冻结字段独立导出逐项核验。
+    """
+
+    label = "predecessor_import"
+    payload = expect_object(value, label)
+    expect_exact_keys(
+        payload,
+        {
+            "client",
+            "campaign_id",
+            "predecessor",
+            "imported_objects",
+            "imported_fact_refs",
+            "identity_conditions",
+            "source_identity_conditions",
+            "mode",
+            "approved_by",
+            "approved_at_utc",
+        },
+        label,
+    )
+    _expect_enum(payload["client"], set(CLIENTS), f"{label}.client")
+    campaign_id = expect_safe_id(payload["campaign_id"], f"{label}.campaign_id")
+    predecessor = expect_object(payload["predecessor"], f"{label}.predecessor")
+    expect_exact_keys(
+        predecessor, {"store_root", "campaign_id", "campaign_identity_sha256"}, f"{label}.predecessor"
+    )
+    _validate_absolute_store_root(predecessor["store_root"], f"{label}.predecessor.store_root")
+    predecessor_id = expect_safe_id(predecessor["campaign_id"], f"{label}.predecessor.campaign_id")
+    expect_sha256(
+        predecessor["campaign_identity_sha256"], f"{label}.predecessor.campaign_identity_sha256"
+    )
+    if predecessor_id == campaign_id:
+        raise ControlError(f"{label} 的前序 Campaign 不得与目标 Campaign 同 ID")
+    objects = _validate_ref_list(
+        payload["imported_objects"], f"{label}.imported_objects", validate_object_ref, non_empty=False
+    )
+    for index, reference in enumerate(objects):
+        if reference["object_kind"] in NON_IMPORTABLE_OBJECT_KINDS:
+            raise ControlError(
+                f"{label}.imported_objects[{index}] 的 {reference['object_kind']} 不是可导入的证据对象"
+            )
+    facts = _validate_ref_list(
+        payload["imported_fact_refs"], f"{label}.imported_fact_refs", validate_fact_ref, non_empty=False
+    )
+    for index, reference in enumerate(facts):
+        if reference["campaign_id"] != predecessor_id:
+            raise ControlError(f"{label}.imported_fact_refs[{index}] 不属于前序 Campaign")
+    if not objects and not facts:
+        raise ControlError(f"{label} 至少要导入一个对象或事实")
+    validate_identity_conditions(payload["identity_conditions"], f"{label}.identity_conditions")
+    validate_identity_conditions(
+        payload["source_identity_conditions"], f"{label}.source_identity_conditions"
+    )
+    _expect_enum(payload["mode"], set(PREDECESSOR_IMPORT_MODES), f"{label}.mode")
+    expect_string(payload["approved_by"], f"{label}.approved_by")
+    expect_rfc3339(payload["approved_at_utc"], f"{label}.approved_at_utc")
+    return payload
+
+
+def require_importable_object(
+    document: dict[str, Any], *, predecessor_campaign_id: str | None = None
+) -> None:
+    """前序导入（B1-14）对单个对象的约束：类型可导入，且 payload 只引用对象、不引用事实或收据。
+
+    事实与收据属于前序 Campaign 的控制状态，不会进入本 Store；引用它们的对象脱离前序 Store 就无法重放。给出
+    ``predecessor_campaign_id`` 时，自带所属 Campaign（payload 顶层 ``campaign_id``，如两份台账）的对象必须属于该前序
+    Campaign——一份导入登记只搬运一个前序 Campaign 的证据，两组七项身份也只对它核验。
+    """
+
+    kind = document["object_kind"]
+    if kind in NON_IMPORTABLE_OBJECT_KINDS:
+        raise ControlError(f"{kind} 绑定所在 Store 的 Campaign 控制状态，不能作为前序证据导入")
+    payload = document["payload"]
+    if next(iter_fact_refs(payload), None) is not None or next(
+        iter_receipt_refs(payload), None
+    ) is not None:
+        raise ControlError(f"{kind} 引用了事实或收据，脱离前序 Store 无法重放，不能作为前序证据导入")
+    owner = payload.get("campaign_id") if isinstance(payload, dict) else None
+    if predecessor_campaign_id is not None and owner is not None and owner != predecessor_campaign_id:
+        raise ControlError(
+            f"{kind} 属于 Campaign {owner}，不是导入登记的前序 Campaign {predecessor_campaign_id}"
+        )
+
+
 def validate_object_document(value: Any) -> dict[str, Any]:
     document = expect_object(value, "object")
     expect_exact_keys(document, {"schema_version", "object_kind", "payload"}, "object")
@@ -2470,6 +2724,7 @@ def validate_object_document(value: Any) -> dict[str, Any]:
         "deployment_plan": _validate_deployment_plan,
         "scenario_plan": _validate_scenario_plan,
         "tool_evolution_registration": _validate_tool_evolution_registration,
+        "predecessor_import": _validate_predecessor_import,
     }
     if kind in validators:
         validators[kind](document["payload"])
@@ -3628,9 +3883,10 @@ def validate_store_metadata(value: Any) -> dict[str, Any]:
 
 
 def receipt_is_v2(receipt: dict[str, Any]) -> bool:
-    """收据是否为 v2 合同（v1 字段加 ``formed_under``）。"""
+    """收据是否属于 Campaign v2（带 ``formed_under``）：五类收据的 v2 合同，以及只属于 v2 的前序导入收据。"""
 
-    return receipt.get("schema_version") in RECEIPT_V2_SCHEMAS
+    schema = receipt.get("schema_version")
+    return schema in RECEIPT_V2_SCHEMAS or schema == PREDECESSOR_IMPORT_RECEIPT_SCHEMA
 
 
 def _receipt_extra_keys(schema: str) -> set[str]:
@@ -4056,6 +4312,151 @@ def _validate_candidate_delivery_receipt(
     return receipt
 
 
+def identity_differences(
+    source_conditions: dict[str, Any], target_conditions: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """七项身份的逐项差异（按七项固定顺序）：值不同，或任一侧不可证。
+
+    ``read_only_reuse`` 的签发条件「七项全部可证且逐项相等」等价于差异为空；``regression_fixture`` 把差异原样写入收据，
+    例如 ``{"item": "platform", "source": "linux/amd64", "target": "linux/arm64", "reason": "different"}``。
+    """
+
+    differences: list[dict[str, Any]] = []
+    for item in IDENTITY_CONDITION_ITEMS:
+        source = source_conditions[item]
+        target = target_conditions[item]
+        if source is None and target is None:
+            reason = "unprovable_in_both"
+        elif source is None:
+            reason = "unprovable_in_source"
+        elif target is None:
+            reason = "unprovable_in_target"
+        elif source != target:
+            reason = "different"
+        else:
+            continue
+        differences.append({"item": item, "source": source, "target": target, "reason": reason})
+    return differences
+
+
+def parse_identity_document_text(text: Any, label: str) -> dict[str, Any]:
+    """导入收据里身份文档以规范 JSON 文本保存（不让其中的 bootstrap_ref、外部绑定被当成本 Store 的引用）。"""
+
+    from .canonical import canonical_json_bytes, parse_json_bytes
+
+    raw = expect_string(text, label)
+    document = validate_campaign_identity_document(
+        parse_json_bytes(raw.encode("utf-8"), label), label
+    )
+    if canonical_json_bytes(document).decode("utf-8") != raw + "\n":
+        raise ControlError(f"{label} 不是规范 JSON 文本")
+    return document
+
+
+def _validate_imported_facts(value: Any, predecessor_id: str, label: str) -> list[dict[str, Any]]:
+    """导入事实记录：事实坐标加种类（五键，不是本 Store 可解引用的事实引用）。"""
+
+    if not isinstance(value, list):
+        raise ControlError(f"{label} 必须是数组")
+    keys: list[str] = []
+    for index, raw in enumerate(value):
+        item_label = f"{label}[{index}]"
+        item = expect_object(raw, item_label)
+        expect_exact_keys(item, {"campaign_id", "dimension", "sequence", "sha256", "fact_kind"}, item_label)
+        reference = validate_fact_ref(
+            {key: item[key] for key in ("campaign_id", "dimension", "sequence", "sha256")}, item_label
+        )
+        if reference["campaign_id"] != predecessor_id:
+            raise ControlError(f"{item_label} 不属于前序 Campaign")
+        kind = expect_string(item["fact_kind"], f"{item_label}.fact_kind")
+        if FACT_DIMENSION.get(kind) != reference["dimension"]:
+            raise ControlError(f"{item_label}.fact_kind 与 dimension 不匹配")
+        keys.append(canonical_sha256(reference))
+    if keys != sorted(set(keys)):
+        raise ControlError(f"{label} 必须按事实坐标内容严格排序且不得重复")
+    return value
+
+
+def _validate_predecessor_import_receipt(value: Any) -> dict[str, Any]:
+    """前序证据导入收据（B1-14）：两组独立导出的七项、来源字段、逐项差异与已核验的导入清单。"""
+
+    label = "predecessor_import_receipt"
+    receipt = expect_object(value, label)
+    expect_exact_keys(
+        receipt,
+        {
+            "schema_version",
+            "campaign_id",
+            "client",
+            "import_ref",
+            "mode",
+            "predecessor",
+            "source_campaign_document",
+            "target_campaign_identity_sha256",
+            "source_conditions",
+            "target_conditions",
+            "condition_source_fields",
+            "identity_differences",
+            "imported_objects",
+            "imported_facts",
+            "approved_by",
+            "completed_at_utc",
+            "producer_tool_sha256",
+            "formed_under",
+            "identity_sha256",
+        },
+        label,
+    )
+    if receipt["schema_version"] != PREDECESSOR_IMPORT_RECEIPT_SCHEMA:
+        raise ControlError(f"{label}.schema_version 不匹配")
+    expect_safe_id(receipt["campaign_id"], f"{label}.campaign_id")
+    _expect_enum(receipt["client"], set(CLIENTS), f"{label}.client")
+    import_ref = validate_object_ref(receipt["import_ref"], f"{label}.import_ref")
+    if import_ref["object_kind"] != "predecessor_import":
+        raise ControlError(f"{label}.import_ref 必须引用 predecessor_import")
+    mode = _expect_enum(receipt["mode"], set(PREDECESSOR_IMPORT_MODES), f"{label}.mode")
+    predecessor = expect_object(receipt["predecessor"], f"{label}.predecessor")
+    expect_exact_keys(
+        predecessor, {"store_root", "campaign_id", "campaign_identity_sha256"}, f"{label}.predecessor"
+    )
+    _validate_absolute_store_root(predecessor["store_root"], f"{label}.predecessor.store_root")
+    predecessor_id = expect_safe_id(predecessor["campaign_id"], f"{label}.predecessor.campaign_id")
+    expect_sha256(predecessor["campaign_identity_sha256"], f"{label}.predecessor.campaign_identity_sha256")
+    document = parse_identity_document_text(
+        receipt["source_campaign_document"], f"{label}.source_campaign_document"
+    )
+    if document["campaign_id"] != predecessor_id:
+        raise ControlError(f"{label} 的源身份文档不属于前序 Campaign")
+    if campaign_identity_sha256(document) != predecessor["campaign_identity_sha256"]:
+        raise ControlError(f"{label} 的源身份文档与前序 Campaign 身份摘要不符")
+    expect_sha256(receipt["target_campaign_identity_sha256"], f"{label}.target_campaign_identity_sha256")
+    source = validate_identity_conditions(receipt["source_conditions"], f"{label}.source_conditions")
+    target = validate_identity_conditions(receipt["target_conditions"], f"{label}.target_conditions")
+    if source != derive_identity_conditions(document)[0]:
+        raise ControlError(f"{label}.source_conditions 不是由源身份文档导出的七项")
+    if receipt["condition_source_fields"] != IDENTITY_CONDITION_SOURCE_FIELDS:
+        raise ControlError(f"{label}.condition_source_fields 与七项来源字段合同不符")
+    differences = identity_differences(source, target)
+    if receipt["identity_differences"] != differences:
+        raise ControlError(f"{label}.identity_differences 与两组七项不一致")
+    if mode == "read_only_reuse" and differences:
+        raise ControlError(f"{label} read_only_reuse 要求七项全部可证且逐项相等")
+    _validate_ref_list(
+        receipt["imported_objects"], f"{label}.imported_objects", validate_object_ref, non_empty=False
+    )
+    _validate_imported_facts(receipt["imported_facts"], predecessor_id, f"{label}.imported_facts")
+    expect_string(receipt["approved_by"], f"{label}.approved_by")
+    expect_rfc3339(receipt["completed_at_utc"], f"{label}.completed_at_utc")
+    expect_sha256(receipt["producer_tool_sha256"], f"{label}.producer_tool_sha256")
+    validate_formed_under(receipt["formed_under"], f"{label}.formed_under")
+    expected_identity = canonical_sha256(
+        {key: item for key, item in receipt.items() if key != "identity_sha256"}
+    )
+    if receipt["identity_sha256"] != expected_identity:
+        raise ControlError(f"{label}.identity_sha256 与收据内容不一致")
+    return receipt
+
+
 def _requested_receipt_schema(value: Any, kind: str) -> str | None:
     """按收据自身声明选择 v1／v2 校验轨；声明不是 v2 时一律按 v1 校验（含报错文案）。"""
 
@@ -4068,6 +4469,8 @@ def _requested_receipt_schema(value: Any, kind: str) -> str | None:
 
 
 def validate_receipt_document(value: Any, kind: str) -> dict[str, Any]:
+    if kind == "predecessor_import":
+        return _validate_predecessor_import_receipt(value)
     schema = _requested_receipt_schema(value, kind)
     if kind == "candidate_build":
         return _validate_candidate_build_receipt(value, schema)

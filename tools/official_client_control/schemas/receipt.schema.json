@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2api.local/schemas/official-client-control-receipt-v1.json",
   "title": "不可覆盖控制收据",
-  "description": "Candidate 构建、验证门禁、候选交付、晋升与激活收据绑定不可变事实引用、对象摘要、工具身份及确定性复算输入；v2（Campaign v2 使用）在 v1 字段外记录形成期坐标 formed_under。",
+  "description": "Candidate 构建、验证门禁、候选交付、晋升与激活收据绑定不可变事实引用、对象摘要、工具身份及确定性复算输入；v2（Campaign v2 使用）在 v1 字段外记录形成期坐标 formed_under。前序证据导入收据（B1-14）只属于 Campaign v2。",
   "oneOf": [
     {"$ref": "#/$defs/promotion"},
     {"$ref": "#/$defs/activation"},
@@ -13,7 +13,8 @@
     {"$ref": "#/$defs/activationV2"},
     {"$ref": "#/$defs/candidateBuildV2"},
     {"$ref": "#/$defs/validationGateV2"},
-    {"$ref": "#/$defs/candidateDeliveryV2"}
+    {"$ref": "#/$defs/candidateDeliveryV2"},
+    {"$ref": "#/$defs/predecessorImport"}
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -292,6 +293,90 @@
         "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
         "identity_sha256": {"$ref": "#/$defs/sha256"},
         "formed_under": {"$ref": "#/$defs/formedUnder"}
+      }
+    },
+    "predecessorImport": {
+      "description": "前序证据导入收据（B1-14，只属于 Campaign v2）：source_campaign_document 是源 Campaign 身份文档（合同名、ID 与 identity_sha256 覆盖的全部冻结字段）的规范 JSON 文本，复算摘要必须等于 predecessor.campaign_identity_sha256；source_conditions／target_conditions 是从双方冻结字段独立导出的七项（等于两组声明），condition_source_fields 记录每项的来源字段，identity_differences 逐项列出不同或不可证的项；imported_facts 记录已在前序 Campaign 链上核验的事实坐标与种类。重放不打开前序 Store。只有 mode=read_only_reuse（此时 identity_differences 必为空）授予正式引用权限；一份登记只有一份收据。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "client", "import_ref", "mode", "predecessor", "source_campaign_document", "target_campaign_identity_sha256", "source_conditions", "target_conditions", "condition_source_fields", "identity_differences", "imported_objects", "imported_facts", "approved_by", "completed_at_utc", "producer_tool_sha256", "formed_under", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-predecessor-import-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "client": {"enum": ["codex", "claude"]},
+        "import_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["object_kind", "sha256"],
+          "properties": {
+            "object_kind": {"const": "predecessor_import"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "mode": {"enum": ["read_only_reuse", "regression_fixture"]},
+        "predecessor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["store_root", "campaign_id", "campaign_identity_sha256"],
+          "properties": {
+            "store_root": {"type": "string", "pattern": "^/"},
+            "campaign_id": {"type": "string"},
+            "campaign_identity_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "source_campaign_document": {"type": "string", "minLength": 2},
+        "target_campaign_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_conditions": {"$ref": "object.schema.json#/$defs/identityConditions"},
+        "target_conditions": {"$ref": "object.schema.json#/$defs/identityConditions"},
+        "condition_source_fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_version", "official_artifacts", "platform", "entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256"],
+          "properties": {
+            "target_version": {"const": "target_version"},
+            "official_artifacts": {"const": "official_artifacts"},
+            "platform": {"const": "platforms"},
+            "entrypoint": {"const": "entrypoints"},
+            "privacy_mode": {"const": "default_conditions"},
+            "oauth_org_id": {"const": "oauth_org_id"},
+            "model_catalog_sha256": {"const": "model_catalog_sha256"}
+          }
+        },
+        "identity_differences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["item", "source", "target", "reason"],
+            "properties": {
+              "item": {"enum": ["target_version", "official_artifacts", "platform", "entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256"]},
+              "source": {"type": ["string", "null"]},
+              "target": {"type": ["string", "null"]},
+              "reason": {"enum": ["different", "unprovable_in_source", "unprovable_in_target", "unprovable_in_both"]}
+            }
+          }
+        },
+        "imported_objects": {"type": "array", "items": {"$ref": "object.schema.json#/$defs/objectRef"}},
+        "imported_facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["campaign_id", "dimension", "sequence", "sha256", "fact_kind"],
+            "properties": {
+              "campaign_id": {"type": "string"},
+              "dimension": {"type": "string"},
+              "sequence": {"type": "integer", "minimum": 1},
+              "sha256": {"$ref": "#/$defs/sha256"},
+              "fact_kind": {"type": "string"}
+            }
+          }
+        },
+        "approved_by": {"type": "string", "minLength": 1},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
+        "formed_under": {"$ref": "#/$defs/formedUnder"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
   }

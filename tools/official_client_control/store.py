@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import stat
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
@@ -15,6 +16,7 @@ from .canonical import (
     ensure_directory,
     expect_rfc3339,
     load_json_file,
+    parse_json_bytes,
     resolve_relative,
     sha256_bytes,
     sha256_file,
@@ -25,11 +27,13 @@ from .canonical import (
 from .contracts import (
     CAMPAIGN_SCHEMA,
     DIMENSIONS,
+    FACT_DIMENSION,
     FACT_LOOKUP_SCHEMA,
     FACT_SCHEMA,
     FACT_V2_SCHEMA,
     OBJECT_KINDS,
     OBJECT_SCHEMA,
+    RECEIPT_KINDS,
     STORE_SCHEMA,
     campaign_is_v2,
     fact_is_v2,
@@ -56,17 +60,38 @@ _FACT_FILE_RE = re.compile(r"^(\d{8})-([0-9a-f]{64})\.json$")
 class ControlStore:
     """Persona 无关、内容寻址且可完整重放的控制面存储。"""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, read_only: bool = False) -> None:
         if not root.is_absolute():
             raise ControlError("Store 根必须是绝对路径")
         if root.is_symlink() or not root.is_dir():
             raise ControlError("Store 根必须是现有的非符号链接目录")
+        # 只读打开（B1-14 读前序 Store）：额外接受去掉写权限的归档权限（根 0500、文件 0400），任何写入都拒绝。
+        self.read_only = read_only
+        self._root_modes = (0o700, 0o500) if read_only else (0o700,)
+        self._file_modes = (0o600, 0o400) if read_only else (0o600,)
         self.root = root.resolve()
-        verify_mode(self.root, 0o700, "Store 根")
+        self._verify_mode(self.root, self._root_modes, "Store 根")
         metadata_path = self.root / "store.json"
         metadata = load_json_file(metadata_path, "Store metadata")
         validate_store_metadata(metadata)
-        verify_mode(metadata_path, 0o600, "Store metadata")
+        self._verify_mode(metadata_path, self._file_modes, "Store metadata")
+
+    @classmethod
+    def open_read_only(cls, root: Path) -> "ControlStore":
+        """只读打开一个 Store（例如前序证据所在的 Store）：只能读取，锁与任何写入都拒绝。"""
+
+        return cls(root, read_only=True)
+
+    @staticmethod
+    def _verify_mode(path: Path, modes: tuple[int, ...], label: str) -> None:
+        if len(modes) == 1:
+            verify_mode(path, modes[0], label)
+            return
+        actual = stat.S_IMODE(path.stat().st_mode)
+        if actual not in modes:
+            raise ControlError(
+                f"{label} 权限必须是 {' 或 '.join(oct(mode) for mode in modes)}，实际为 {oct(actual)}"
+            )
 
     @classmethod
     def initialize(cls, root: Path, created_at_utc: str) -> "ControlStore":
@@ -89,6 +114,9 @@ class ControlStore:
 
     @contextmanager
     def _lock(self, name: str) -> Iterator[None]:
+        # 每条写入路径都先取锁（对象、事实、收据、Campaign），只读实例在这里统一拒绝。
+        if self.read_only:
+            raise ControlError(f"只读打开的 Store 禁止写入：{self.root}")
         lock_path = self.root / "locks" / f"{name}.lock"
         ensure_directory(lock_path.parent)
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -168,17 +196,65 @@ class ControlStore:
 
         # 工具演进登记按 Campaign 串行：链门禁（index、previous_ref、from_identity）与写入在同一把锁内，
         # 防止两次并发登记都按同一个链尾通过而分叉。
-        serial = (
-            self._lock(f"tool-evolution-{payload['campaign_id']}")
-            if object_kind == "tool_evolution_registration"
-            else nullcontext()
-        )
+        # 前序导入登记（B1-14）与该 Campaign 的 evidence 维度事实写入共用维度锁：登记门禁「列入的 EvidencePackage
+        # 没被本 Campaign 事实当本地证据引用」与 EvidenceFact 的导入判定不会交错。
+        if object_kind == "tool_evolution_registration":
+            serial: Any = self._lock(f"tool-evolution-{payload['campaign_id']}")
+        elif object_kind == "predecessor_import":
+            serial = self._lock(f"fact-{payload['campaign_id']}-{FACT_DIMENSION['evidence_recorded']}")
+        else:
+            serial = nullcontext()
         with serial:
             WorkflowGates(self).validate_new_object(document)
             reused = self._write_once_or_reuse(
                 path, content, f"object-{object_kind}-{digest}", allow_existing=allow_existing
             )
         return {"object_ref": reference, "reused": reused}
+
+    def object_bytes(self, reference: dict[str, Any]) -> bytes:
+        """对象文件的原始字节（经权限、摘要与合同核验）；前序导入按字节复制与比对时用。
+
+        返回前再按引用摘要核一次读到的字节，保证交出去的正是被引用的那份内容。
+        """
+
+        parsed = validate_object_ref(reference)
+        self.load_object(parsed)
+        path = self.object_path(parsed)
+        content = path.read_bytes()
+        if sha256_bytes(content) != parsed["sha256"]:
+            raise ControlError(f"对象摘要漂移：{path}")
+        return content
+
+    def import_object(self, reference: dict[str, Any], content: bytes) -> bool:
+        """把前序 Store 的对象逐字节复制进本 Store（B1-14），返回是否复用已有的同内容对象。
+
+        内容寻址：字节摘要必须等于引用，且就是规范 JSON；对象合同有效、类型可导入且只引用对象（绑定前序 Campaign
+        控制状态、或引用事实／收据的对象不可导入），嵌套对象引用已在本 Store（调用方按依赖顺序复制闭包），对象图
+        按重放口径复核（不跑写入时门禁——对象在前序 Store 形成时已过门禁）。
+        """
+
+        from .contracts import require_importable_object
+        from .gates import WorkflowGates
+
+        parsed = validate_object_ref(reference, "imported_object")
+        if sha256_bytes(content) != parsed["sha256"]:
+            raise ControlError(f"导入对象字节与引用摘要不符：{parsed}")
+        document = parse_json_bytes(content, "导入对象")
+        validate_object_document(document)
+        if document["object_kind"] != parsed["object_kind"]:
+            raise ControlError(f"导入对象类型与引用不一致：{parsed}")
+        if canonical_json_bytes(document) != content:
+            raise ControlError(f"导入对象不是规范 JSON：{parsed}")
+        require_importable_object(document)
+        for nested in iter_object_refs(document["payload"]):
+            self.load_object(nested)
+        WorkflowGates(self).validate_imported_object(document)
+        return self._write_once_or_reuse(
+            self.object_path(parsed),
+            content,
+            f"object-{parsed['object_kind']}-{parsed['sha256']}",
+            allow_existing=True,
+        )
 
     def list_object_refs(self, kind: str) -> list[dict[str, Any]]:
         """列出某类型的全部对象引用并逐个核对摘要与类型；目录不存在时为空。"""
@@ -206,7 +282,7 @@ class ControlStore:
         path = self.object_path(parsed)
         if path.is_symlink() or not path.is_file():
             raise ControlError(f"对象引用不存在：{parsed}")
-        verify_mode(path, 0o600, "对象")
+        self._verify_mode(path, self._file_modes, "对象")
         content = path.read_bytes()
         if sha256_bytes(content) != parsed["sha256"]:
             raise ControlError(f"对象摘要漂移：{path}")
@@ -259,7 +335,7 @@ class ControlStore:
         path = self.root / "campaigns" / f"{campaign_id}.json"
         if path.is_symlink() or not path.is_file():
             raise ControlError(f"Campaign 不存在：{campaign_id}")
-        verify_mode(path, 0o600, "Campaign")
+        self._verify_mode(path, self._file_modes, "Campaign")
         campaign = load_json_file(path, "Campaign")
         validate_campaign(campaign)
         if campaign["campaign_id"] != campaign_id:
@@ -300,7 +376,7 @@ class ControlStore:
                 digest = match.group(2)
                 if sequence != expected_sequence:
                     raise ControlError(f"事实链缺号或分叉：{fact_path}")
-                verify_mode(fact_path, 0o600, "事实")
+                self._verify_mode(fact_path, self._file_modes, "事实")
                 content = fact_path.read_bytes()
                 if sha256_bytes(content) != digest:
                     raise ControlError(f"事实摘要漂移：{fact_path}")
@@ -431,9 +507,16 @@ class ControlStore:
             for reference in iter_object_refs(payload):
                 self.load_object(reference)
             for reference in iter_fact_refs(payload):
+                # 消费端核验（B1-14）：跨 Campaign 的事实引用必须获授权；v2 在解引用前核验，v1 保持原顺序与原文案。
+                if expects_v2 and reference["campaign_id"] != campaign_id:
+                    self._authorize_cross_campaign(
+                        campaign, reference, reference["campaign_id"], "事实不得跨 Campaign 引用"
+                    )
                 referenced = self.load_fact(reference)
                 if referenced["campaign_id"] != campaign_id:
-                    raise ControlError("事实不得跨 Campaign 引用")
+                    self._authorize_cross_campaign(
+                        campaign, reference, referenced["campaign_id"], "事实不得跨 Campaign 引用"
+                    )
             for reference in iter_receipt_refs(payload):
                 self.load_receipt(reference)
             WorkflowGates(self).validate_append(campaign, document)
@@ -446,6 +529,19 @@ class ControlStore:
         stored = dict(document)
         stored["_sha256"] = digest
         return {"fact_ref": self.fact_ref(stored), "reused": False}
+
+    def _authorize_cross_campaign(
+        self,
+        campaign: dict[str, Any],
+        reference: dict[str, Any],
+        owner_campaign_id: str,
+        label: str,
+    ) -> None:
+        from .receipts import authorize_cross_campaign_reference
+
+        authorize_cross_campaign_reference(
+            self, campaign, reference, owner_campaign_id=owner_campaign_id, label=label
+        )
 
     @staticmethod
     def _require_same_logical_write(
@@ -549,7 +645,7 @@ class ControlStore:
         path = self.receipt_path(parsed)
         if path.is_symlink() or not path.is_file():
             raise ControlError(f"收据引用不存在：{parsed}")
-        verify_mode(path, 0o600, "收据")
+        self._verify_mode(path, self._file_modes, "收据")
         content = path.read_bytes()
         if sha256_bytes(content) != parsed["sha256"]:
             raise ControlError(f"收据摘要漂移：{path}")
@@ -558,13 +654,7 @@ class ControlStore:
         return receipt
 
     def list_receipt_refs(self, kind: str) -> list[dict[str, Any]]:
-        if kind not in {
-            "promotion",
-            "activation",
-            "candidate_build",
-            "validation_gate",
-            "candidate_delivery",
-        }:
+        if kind not in RECEIPT_KINDS:
             raise ControlError(f"未知收据类型：{kind}")
         directory = self.root / "receipts" / kind
         if not directory.exists():
@@ -607,15 +697,20 @@ class ControlStore:
         external_root: Path | None = None,
         require_external: bool = False,
     ) -> dict[str, Any]:
-        """独立复算 Store、对象图、事实链、收据和可选外部证据。"""
+        """独立复算 Store、对象图、事实链、收据和可选外部证据。
+
+        前序导入（B1-14）复制进来的对象：只有被 read_only_reuse 导入收据授权的，其外部证据才计入本 Store 的外部
+        核验（本 Campaign 依赖它们）；只作回归夹具或尚未 finalize 的导入对象，外部证据随前序 Store 自己的重放核验。
+        """
 
         from .gates import WorkflowGates
-        from .receipts import replay_receipt
+        from .receipts import fixture_only_imported_objects, replay_receipt
 
         metadata = load_json_file(self.root / "store.json", "Store metadata")
         validate_store_metadata(metadata)
         object_count = 0
         external_bindings: list[dict[str, Any]] = []
+        unbound_imports = fixture_only_imported_objects(self)
         for kind in sorted(OBJECT_KINDS):
             directory = self.root / "objects" / kind
             if not directory.exists():
@@ -634,7 +729,8 @@ class ControlStore:
                 WorkflowGates(self).validate_object_graph(
                     {"object_kind": kind, "sha256": digest}
                 )
-                external_bindings.extend(self._iter_external_bindings(document["payload"]))
+                if (kind, digest) not in unbound_imports:
+                    external_bindings.extend(self._iter_external_bindings(document["payload"]))
                 object_count += 1
 
         campaign_count = 0
@@ -652,13 +748,7 @@ class ControlStore:
 
         receipt_count = 0
         receipts_dir = self.root / "receipts"
-        for kind in (
-            "promotion",
-            "activation",
-            "candidate_build",
-            "validation_gate",
-            "candidate_delivery",
-        ):
+        for kind in RECEIPT_KINDS:
             directory = receipts_dir / kind
             if not directory.exists():
                 continue

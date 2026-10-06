@@ -218,7 +218,10 @@ class SyntheticCampaign:
         self.references[manifest_id] = reference
         return reference
 
-    def bootstrap_and_campaign(self) -> None:
+    def bootstrap_and_campaign(self, **campaign_overrides: Any) -> None:
+        """封存 bootstrap 并建立 Campaign；``campaign_overrides`` 覆盖冻结字段（如 platforms、oauth_org_id），
+        供前序导入测试（B1-14）构造身份不同的两个 Campaign，缺省时行为不变。"""
+
         contract_sources = [self.contract_binding]
         bootstrap = {
             "schema_version": "official-client-control-bootstrap/v1",
@@ -249,6 +252,7 @@ class SyntheticCampaign:
         }
         if self.schema == "v2":
             campaign.update(self.campaign_v2_fields())
+        campaign.update(campaign_overrides)
         campaign["identity_sha256"] = campaign_identity_sha256(campaign)
         self.campaign_document = campaign
         self.store.create_campaign(campaign)

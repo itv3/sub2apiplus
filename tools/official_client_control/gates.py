@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .canonical import canonical_sha256
@@ -18,7 +19,9 @@ from .contracts import (
     capability_key,
     fact_is_v2,
     iter_fact_refs,
+    iter_object_refs,
     persona_key,
+    require_importable_object,
     validate_fact_document,
     validate_object_document,
 )
@@ -79,6 +82,47 @@ class WorkflowGates:
 
         document = self.store.load_object(reference)
         self._validate_object_payload_graph(document["object_kind"], document["payload"])
+
+    def validate_imported_object(self, document: dict[str, Any]) -> None:
+        """前序导入对象（B1-14）复制进本 Store 之前的复核：按重放口径核对象图，不跑写入时门禁。
+
+        对象在前序 Store 形成时已过写入时门禁；这里只证明它脱离前序 Store 也能在本 Store 独立重放：类型可导入、
+        不引用任何事实或收据（前序 Campaign 的事实、收据不会进入本 Store），嵌套对象已在本 Store（调用方按依赖
+        顺序复制），对象图门禁通过。
+        """
+
+        validate_object_document(document)
+        require_importable_object(document)
+        self._validate_object_payload_graph(document["object_kind"], document["payload"])
+
+    def _require_campaign_owned(
+        self,
+        campaign: dict[str, Any],
+        reference: dict[str, Any],
+        owner_campaign_id: str,
+        label: str,
+    ) -> None:
+        """消费端核验（B1-14）：被引用者属于本 Campaign，或经 read_only_reuse 导入收据授权（见
+        ``receipts.cross_campaign_denial`` 的四项）。v1 Campaign 原样抛出 ``label``，原文案与判定顺序逐字不变。
+        """
+
+        if owner_campaign_id == campaign["campaign_id"]:
+            return
+        from .receipts import authorize_cross_campaign_reference
+
+        authorize_cross_campaign_reference(
+            self.store, campaign, reference, owner_campaign_id=owner_campaign_id, label=label
+        )
+
+    def _precheck_fact_ref(
+        self, campaign: dict[str, Any], reference: dict[str, Any], label: str
+    ) -> None:
+        """v2：跨 Campaign 的事实引用在解引用之前核验——前序 Campaign 的事实不在本 Store，解引用只会报
+        「Campaign 不存在」而掩盖真正的拒绝理由。v1 不预检，保持原来「先解引用、后比对」的顺序与文案。
+        """
+
+        if campaign_is_v2(campaign) and reference["campaign_id"] != campaign["campaign_id"]:
+            self._require_campaign_owned(campaign, reference, reference["campaign_id"], label)
 
     def _validate_object_payload_graph(
         self, kind: str, payload: dict[str, Any], *, new: bool = False
@@ -146,6 +190,99 @@ class WorkflowGates:
             )
         elif kind == "tool_evolution_registration":
             self._validate_tool_evolution_registration(payload, new=new)
+        elif kind == "predecessor_import":
+            self._validate_predecessor_import(payload, new=new)
+
+    def validate_predecessor_import_target(
+        self, payload: dict[str, Any], *, new: bool
+    ) -> dict[str, Any]:
+        """前序证据导入登记中与导入对象无关的部分（登记在复制对象之前先调用，尽早失败），返回目标 Campaign。
+
+        重放与写入都核：目标 Campaign 是 v2 且 client 一致；批准时间不早于 Campaign 建立。写入时再核：当前受管代码
+        匹配有效工具身份；``predecessor.store_root`` 不是本 Store、不与本 Store 互相嵌套；前序 Campaign ID 不与本 Store
+        已有 Campaign 重名；列入的 EvidencePackage 没有被本 Campaign 的事实当本地证据引用过
+        （``_require_unclaimed_evidence``）。重放不解引用 ``store_root``——它是形成期出处，前序 Store 之后可能已经搬走。
+        """
+
+        campaign = self.store.load_campaign(payload["campaign_id"])
+        if not campaign_is_v2(campaign):
+            raise ControlError("前序证据导入只属于 Campaign v2：v1 Campaign 不接受跨 Campaign 证据")
+        if payload["client"] != campaign["client"]:
+            raise ControlError("前序证据导入的 client 与 Campaign 不一致")
+        if _parse_utc(payload["approved_at_utc"]) < _parse_utc(campaign["created_at_utc"]):
+            raise ControlError("前序证据导入的批准时间早于 Campaign 建立时间")
+        if not new:
+            return campaign
+        from .receipts import _require_effective_tool, require_predecessor_root_outside
+
+        _require_effective_tool(self.store, campaign)
+        require_predecessor_root_outside(self.store, Path(payload["predecessor"]["store_root"]))
+        local = self.store.root / "campaigns" / f"{payload['predecessor']['campaign_id']}.json"
+        if local.exists() or local.is_symlink():
+            raise ControlError(
+                "前序 Campaign ID 与本 Store 已有 Campaign 重名：跨 Store 引用会与本地 Campaign 混淆"
+            )
+        self._require_unclaimed_evidence(campaign, payload)
+        return campaign
+
+    def _require_unclaimed_evidence(
+        self, campaign: dict[str, Any], payload: dict[str, Any]
+    ) -> None:
+        """写入时：新登记列出的 EvidencePackage 若已被本 Campaign 的事实直接引用，必须已经获得导入授权。
+
+        包一旦被导入登记列出，本 Campaign 对它的引用（含既有事实的重放）就改按消费端核验判定；已被事实当本地证据
+        引用、又没有 read_only_reuse 授权的包若再被登记，那些事实的重放会失败。这里在登记时拒绝，保证登记不会让
+        既有事实失效。与 EvidenceFact 写入共用同一把维度锁（见 ``ControlStore.seal_object_outcome``），两者不会交错。
+        """
+
+        from .receipts import cross_campaign_denial
+
+        packages = [
+            item for item in payload["imported_objects"] if item["object_kind"] == "evidence_package"
+        ]
+        if not packages:
+            return
+        referenced = {
+            (item["object_kind"], item["sha256"])
+            for fact in self.store.list_facts(campaign["campaign_id"])
+            for item in iter_object_refs(fact["payload"])
+        }
+        claimed = [
+            item["sha256"]
+            for item in packages
+            if (item["object_kind"], item["sha256"]) in referenced
+            and cross_campaign_denial(self.store, campaign, item) is not None
+        ]
+        if claimed:
+            raise ControlError(
+                "导入清单里的 EvidencePackage 已被本 Campaign 的事实当本地证据引用，登记为导入会让这些事实的重放"
+                f"改按导入授权判定：{'、'.join(claimed)}"
+            )
+
+    def _validate_predecessor_import(self, payload: dict[str, Any], *, new: bool) -> None:
+        """前序证据导入登记的对象图（设计 B1-14）：``validate_predecessor_import_target`` 的全部判据，加上导入对象
+        都已在本 Store、类型可导入、只引用对象、自带所属 Campaign 时属于前序 Campaign，导入清单对对象引用闭合。"""
+
+        self.validate_predecessor_import_target(payload, new=new)
+        listed = {(item["object_kind"], item["sha256"]) for item in payload["imported_objects"]}
+        for reference in payload["imported_objects"]:
+            document = self.store.load_object(reference)
+            require_importable_object(
+                document, predecessor_campaign_id=payload["predecessor"]["campaign_id"]
+            )
+            missing = sorted(
+                {
+                    (item["object_kind"], item["sha256"])
+                    for item in iter_object_refs(document["payload"])
+                }
+                - listed
+            )
+            if missing:
+                raise ControlError(
+                    "predecessor_import.imported_objects 未对对象引用闭合："
+                    f"{reference['object_kind']}/{reference['sha256']} 引用了未列入的 "
+                    + "、".join(f"{kind}/{digest}" for kind, digest in missing)
+                )
 
     def _validate_tool_evolution_registration(
         self, payload: dict[str, Any], *, new: bool
@@ -446,9 +583,13 @@ class WorkflowGates:
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/ValidationExecutionPlan"
         )
+        candidate_label = "ValidationExecutionPlan 的 Candidate 跨 Campaign"
+        self._precheck_fact_ref(campaign, payload["candidate_ref"], candidate_label)
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
         if candidate["campaign_id"] != payload["campaign_id"]:
-            raise ControlError("ValidationExecutionPlan 的 Candidate 跨 Campaign")
+            self._require_campaign_owned(
+                campaign, payload["candidate_ref"], candidate["campaign_id"], candidate_label
+            )
         candidate_payload = candidate["payload"]
         if candidate_payload.get("schema_version") is None:
             raise ControlError("ValidationExecutionPlan 只能绑定严格 v2 Candidate")
@@ -462,7 +603,12 @@ class WorkflowGates:
             raise ControlError("ValidationExecutionPlan 与 CandidateBuildReceipt 引用不一致")
         build = self.store.load_receipt(payload["candidate_build_receipt_ref"])
         if build["campaign_id"] != payload["campaign_id"]:
-            raise ControlError("ValidationExecutionPlan 的 CandidateBuildReceipt 跨 Campaign")
+            self._require_campaign_owned(
+                campaign,
+                payload["candidate_build_receipt_ref"],
+                build["campaign_id"],
+                "ValidationExecutionPlan 的 CandidateBuildReceipt 跨 Campaign",
+            )
         self._candidate_build_matches(campaign, candidate_payload, build)
         if build["validation_scope_sha256"] != payload["validation_scope_sha256"]:
             raise ControlError("ValidationExecutionPlan 与 VC-4 验证闭集摘要不一致")
@@ -502,15 +648,20 @@ class WorkflowGates:
                 )
                 expected_result = "failed"
                 label = "前序失败门禁收据"
+                crossing = f"{label}跨越了 Campaign／Candidate：{gate['gate_id']}"
+                if source_receipt["campaign_id"] != payload["campaign_id"]:
+                    self._require_campaign_owned(
+                        campaign,
+                        gate["previous_failed_receipt_ref"],
+                        source_receipt["campaign_id"],
+                        crossing,
+                    )
                 if (
-                    source_receipt["campaign_id"] != payload["campaign_id"]
-                    or source_receipt["candidate_ref"] != payload["candidate_ref"]
+                    source_receipt["candidate_ref"] != payload["candidate_ref"]
                     or source_receipt["candidate_build_receipt_ref"]
                     != payload["candidate_build_receipt_ref"]
                 ):
-                    raise ControlError(
-                        f"{label}跨越了 Campaign／Candidate：{gate['gate_id']}"
-                    )
+                    raise ControlError(crossing)
             else:
                 continue
             for key in (
@@ -537,13 +688,14 @@ class WorkflowGates:
         )
         if payload["target_version"] != campaign["target_version"]:
             raise ControlError("CandidateEvidencePackage 目标版本与 Campaign 不一致")
+        crossing = "CandidateEvidencePackage 引用了其他 Campaign 的事实"
+        for key in ("candidate_ref", "validation_attempt_ref"):
+            self._precheck_fact_ref(campaign, payload[key], crossing)
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
         attempt = self._fact(payload["validation_attempt_ref"], "validation_attempt_created")
-        if (
-            candidate["campaign_id"] != payload["campaign_id"]
-            or attempt["campaign_id"] != payload["campaign_id"]
-        ):
-            raise ControlError("CandidateEvidencePackage 引用了其他 Campaign 的事实")
+        for key, fact in (("candidate_ref", candidate), ("validation_attempt_ref", attempt)):
+            if fact["campaign_id"] != payload["campaign_id"]:
+                self._require_campaign_owned(campaign, payload[key], fact["campaign_id"], crossing)
         candidate_payload = candidate["payload"]
         attempt_payload = attempt["payload"]
         for key in ("candidate_id", "candidate_build_receipt_ref"):
@@ -611,14 +763,19 @@ class WorkflowGates:
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/CandidateDeliveryPlan"
         )
+        crossing = "CandidateDeliveryPlan 引用了其他 Campaign 的事实"
+        for key in ("validation_completed_ref", "acceptance_ref", "candidate_ref"):
+            self._precheck_fact_ref(campaign, payload[key], crossing)
         completed = self._fact(payload["validation_completed_ref"], "validation_completed")
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
-        if any(
-            fact["campaign_id"] != payload["campaign_id"]
-            for fact in (completed, acceptance, candidate)
+        for key, fact in (
+            ("validation_completed_ref", completed),
+            ("acceptance_ref", acceptance),
+            ("candidate_ref", candidate),
         ):
-            raise ControlError("CandidateDeliveryPlan 引用了其他 Campaign 的事实")
+            if fact["campaign_id"] != payload["campaign_id"]:
+                self._require_campaign_owned(campaign, payload[key], fact["campaign_id"], crossing)
         candidate_payload = candidate["payload"]
         completed_payload = completed["payload"]
         for key in ("candidate_id", "candidate_ref", "candidate_build_receipt_ref", "acceptance_ref"):
@@ -655,7 +812,12 @@ class WorkflowGates:
         )
         plan = self._object(payload["delivery_plan_ref"], "candidate_delivery_plan")
         if plan["campaign_id"] != payload["campaign_id"]:
-            raise ControlError("CandidateDeliveryPackage 与交付计划 Campaign 不一致")
+            self._require_campaign_owned(
+                campaign,
+                payload["delivery_plan_ref"],
+                plan["campaign_id"],
+                "CandidateDeliveryPackage 与交付计划 Campaign 不一致",
+            )
         for key in (
             "delivery_id",
             "candidate_id",
@@ -709,7 +871,12 @@ class WorkflowGates:
             payload["private_archive_manifest_ref"], "private_archive_manifest"
         )
         if archive["campaign_id"] != payload["campaign_id"]:
-            raise ControlError("CandidateDeliveryPackage 私有归档清单跨 Campaign")
+            self._require_campaign_owned(
+                campaign,
+                payload["private_archive_manifest_ref"],
+                archive["campaign_id"],
+                "CandidateDeliveryPackage 私有归档清单跨 Campaign",
+            )
         self._same_persona(payload["persona"], archive["persona"], "DeliveryPackage/Archive")
 
     def _require_release_coordinate(
@@ -955,14 +1122,22 @@ class WorkflowGates:
         facts_by_kind: dict[str, list[dict[str, Any]]],
         coordinates: dict[str, Any] | None = None,
     ) -> None:
+        crossing = "EvidenceFact 引用了其他 Campaign 的 Discovery"
+        self._precheck_fact_ref(campaign, payload["discovery_fact_ref"], crossing)
         discovery = self._fact(payload["discovery_fact_ref"], "discovery_recorded")
         if discovery["campaign_id"] != campaign["campaign_id"]:
-            raise ControlError("EvidenceFact 引用了其他 Campaign 的 Discovery")
+            self._require_campaign_owned(
+                campaign, payload["discovery_fact_ref"], discovery["campaign_id"], crossing
+            )
         package = self._object(payload["evidence_package_ref"], "evidence_package")
         self._same_persona(campaign["persona"], package["persona"], "Campaign/EvidencePackage")
         if package["version"] != campaign["target_version"]:
             raise ControlError("EvidencePackage 版本与 Campaign 不一致")
-        if package["producer_tool_sha256"] != self._expected_tool_sha256(campaign, coordinates):
+        if coordinates is not None and self._listed_by_imports(
+            campaign, payload["evidence_package_ref"]
+        ):
+            self._require_imported_evidence_package(campaign, payload["evidence_package_ref"])
+        elif package["producer_tool_sha256"] != self._expected_tool_sha256(campaign, coordinates):
             if coordinates is not None:
                 raise ControlError(
                     "EvidencePackage 工具身份不是形成期有效工具身份：工具变化须先登记演进"
@@ -972,6 +1147,34 @@ class WorkflowGates:
             raise ControlError("EvidencePackage 官方产物与 Campaign 身份不一致")
         if facts_by_kind["evidence_recorded"]:
             raise ControlError("同一 Campaign 不得原位替换 EvidencePackage")
+
+    def _listed_by_imports(self, campaign: dict[str, Any], reference: dict[str, Any]) -> bool:
+        """对象是否被本 Campaign 的某份前序导入登记列出（B1-14）。"""
+
+        from .receipts import predecessor_imports
+
+        return any(
+            reference in registration["imported_objects"]
+            for _import_ref, registration in predecessor_imports(self.store, campaign["campaign_id"])
+        )
+
+    def _require_imported_evidence_package(
+        self, campaign: dict[str, Any], reference: dict[str, Any]
+    ) -> None:
+        """登记为前序导入的 EvidencePackage 一律按消费端核验判定（B1-14），不再看产出工具是否相同。
+
+        EvidencePackage 没有所属 Campaign 字段，「来自其他 Campaign」由导入登记标明：被本 Campaign 的导入登记列出的包
+        必须满足消费端核验四项（read_only_reuse 收据授权）才能引用，产出工具由收据核对过的源 Campaign 身份担保；
+        即使前序与本 Campaign 工具身份相同、版本与官方产物也相同，回归夹具或未 finalize 的导入照样拒绝（否则平台等
+        差异会绕过收据记录的 identity_differences）。没被列出的包仍按原工具身份判据。登记时另核：列入导入的包不得已被
+        本 Campaign 的事实当本地证据引用（见 ``_require_unclaimed_evidence``），所以这条判据不会让既有事实的重放失效。
+        """
+
+        from .receipts import cross_campaign_denial
+
+        reason = cross_campaign_denial(self.store, campaign, reference)
+        if reason is not None:
+            raise ControlError(f"EvidencePackage 是登记导入的前序证据，未获授权引用：{reason}")
 
     def _gate_rule_classification(
         self,
@@ -992,11 +1195,25 @@ class WorkflowGates:
             payload["atomic_assertion_ledger_ref"], "atomic_assertion_ledger"
         )
         if ledger["campaign_id"] != campaign["campaign_id"]:
-            raise ControlError("RuleMigrationLedger 与 Campaign 身份不一致")
+            self._require_campaign_owned(
+                campaign,
+                payload["rule_migration_ledger_ref"],
+                ledger["campaign_id"],
+                "RuleMigrationLedger 与 Campaign 身份不一致",
+            )
         if ledger["evidence_package_ref"] != payload["evidence_package_ref"]:
             raise ControlError("RuleMigrationLedger 未绑定 VC-1 的 EvidencePackage")
         if atomic["rule_migration_ledger_ref"] != payload["rule_migration_ledger_ref"]:
             raise ControlError("AtomicAssertionLedger 未绑定同一 RuleMigrationLedger")
+        # 断言台账与其规则台账同属一个 Campaign（对象图门禁保证），v1 走到这里时必然与 Campaign 一致；导入的规则台账
+        # 获授权后，同样来自前序 Campaign 的断言台账也要单独满足消费端核验（B1-14）。
+        if atomic["campaign_id"] != campaign["campaign_id"]:
+            self._require_campaign_owned(
+                campaign,
+                payload["atomic_assertion_ledger_ref"],
+                atomic["campaign_id"],
+                "AtomicAssertionLedger 与 Campaign 身份不一致",
+            )
         for label, value in (("RuleMigrationLedger", ledger), ("AtomicAssertionLedger", atomic)):
             self._same_persona(campaign["persona"], value["persona"], f"Campaign/{label}")
             if value["target_version"] != campaign["target_version"]:
@@ -2044,15 +2261,24 @@ class WorkflowGates:
             from .receipts import FormedContext
 
             context = FormedContext(self.store, campaign)
+        crossing = "事实链重放发现跨 Campaign 引用"
         facts_by_kind: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for fact in facts:
             validate_fact_document({key: value for key, value in fact.items() if key != "_sha256"})
             for reference in self._all_fact_refs(fact["payload"]):
+                # 消费端核验（B1-14）：v2 在解引用前核验跨 Campaign 引用（事实永远不在官方证据白名单内，因而一律拒绝）；
+                # v1 保持原顺序与原文案。
+                if context is not None and reference["campaign_id"] != campaign["campaign_id"]:
+                    self._require_campaign_owned(campaign, reference, reference["campaign_id"], crossing)
+                    continue
                 referenced = self.store.load_fact(reference)
                 if referenced["campaign_id"] != campaign["campaign_id"]:
-                    raise ControlError("事实链重放发现跨 Campaign 引用")
+                    self._require_campaign_owned(
+                        campaign, reference, referenced["campaign_id"], crossing
+                    )
             facts_by_kind[fact["fact_kind"]].append(fact)
         if context is not None:
+            self._replay_predecessor_imports(campaign)
             self._replay_formed_under(facts, context)
         for fact in facts:
             without_current: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -2137,6 +2363,18 @@ class WorkflowGates:
                 )
         if len(delivery_receipt_keys) != len(set(delivery_receipt_keys)):
             raise ControlError("同一 Candidate／Acceptance 存在重复候选交付收据")
+
+    def _replay_predecessor_imports(self, campaign: dict[str, Any]) -> None:
+        """v2：本 Campaign 的每份前序导入登记至多一份导入收据（finalize 幂等、按登记串行的结果）。
+
+        收据自身的重建在 Store 重放的收据环节完成；这里只核「一份登记一份收据」，多份即 Store 已不一致。
+        """
+
+        from .receipts import predecessor_import_receipts, predecessor_imports
+
+        for import_ref, _payload in predecessor_imports(self.store, campaign["campaign_id"]):
+            if len(predecessor_import_receipts(self.store, import_ref)) > 1:
+                raise ControlError(f"同一前序导入登记存在多份导入收据：{import_ref['sha256']}")
 
     def _replay_formed_under(self, facts: list[dict[str, Any]], context: Any) -> None:
         """v2 形成期坐标的整体一致性（逐条门禁之外）。"""
