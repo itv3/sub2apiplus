@@ -135,11 +135,15 @@ func (d *officialContentDigester) Sum() officialContentDigest {
 	return digest
 }
 
-// digestOfficialJSONValue 把任意可编码值的确定性 JSON 编码直接流入 SHA-256。
-// encoding/json 对 map 键排序，同一结构化值总能得到同一摘要；编码结果只在编码器
-// 内部短暂存在，不会再生成两倍体积的十六进制字符串。
+// digestOfficialJSONValue 把确定性 JSON 编码直接流入 SHA-256。常见 JSON 树逐项
+// 写入，不在编码器内部积累整份正文；其他类型保留原编码器兼容行为。
 func digestOfficialJSONValue(value any) (officialContentDigest, error) {
 	digester := newOfficialContentDigester()
+	if writeOfficialJSONDigestValue(&digester, value, 0) {
+		digester.WriteString("\n")
+		return digester.Sum(), nil
+	}
+	digester = newOfficialContentDigester()
 	encoder := json.NewEncoder(&digester)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(value); err != nil {

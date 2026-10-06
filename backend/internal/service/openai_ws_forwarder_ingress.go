@@ -228,6 +228,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				forceHTTPBridge = true
 				break
 			}
+			// passthrough 的双向转发 goroutine 可能在主调用返回后才结束。
+			// 首帧给独立堆副本，后续读取退回原有堆模式，不把映射租约交给它。
+			if requestMemory != nil && requestMemory.ownedBodiesEnabled() {
+				requestMemory.DisableOwnedBodies()
+				firstClientMessage = bytes.Clone(firstClientMessage)
+			}
 			// 首轮准入由握手路径完成；后续 response.create 会在写入上游前
 			// 依次回调 BeforeRequest 和 BeforeTurn，并在终止或失败时回调
 			// AfterTurn，从而覆盖 turn 级利润复核、定价冻结和并发槽位释放。
@@ -237,7 +243,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				clientConn,
 				account,
 				token,
-				firstClientMessage,
+				takeOpenAIWSClientPayload(&firstClientMessage),
 				hooks,
 				wsDecision,
 			)
@@ -397,7 +403,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
-		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(normalized, account, responsesLite); compatibilityErr != nil {
+		var normalizedIndex *officialJSONRawIndex
+		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(normalized, account, responsesLite, &normalizedIndex); compatibilityErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", compatibilityErr)
 		} else if compatibilityChanged {
 			normalized = compatibilityBody
@@ -460,8 +467,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if officialEgressEnabled && account.IsOpenAIOAuth() && !workspaceDisabled &&
 			(forceHTTPBridge || bridgeSessionSelected ||
 				(s.openAIWSHTTPBridgeEnabled() && int64(len(normalized)) >= s.openAIWSHTTPBridgeThresholdBytes())) {
-			deferredIngress = newOpenAIWSDeferredIngressBody(normalized, useResponsesLite || responsesLite)
+			deferredIngress = newOpenAIWSDeferredIngressBodyWithIndex(normalized, useResponsesLite || responsesLite, normalizedIndex)
 		}
+		normalizedIndex = nil
 		identityBody := normalized
 		if deferredIngress != nil {
 			identityBody = deferredIngress.headers
@@ -1073,6 +1081,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 
+	ctx, frameBody := newOfficialWSFrameBody(ctx)
+	defer frameBody.clear()
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
 	var firstRoutingHint officialegress.CodexRoutingHintFacts
 	if officialRuntime != nil {
@@ -1908,7 +1918,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			HasFunctionCallOutput: openAIWSRawPayloadHasToolCallOutput(currentPayload),
 		}
 		if isDerivedOpenAIOfficialEgressWSContext(ctx) {
-			derivedPayload, decodeErr := decodeOfficialJSONObjectUseNumber(currentPayload)
+			derivedPayload, _, decodeErr := decodeOfficialWSFrameBody(ctx, currentPayload)
 			if decodeErr != nil {
 				return NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,
@@ -2559,6 +2569,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		// 先把仍需用于续链的源数组交给快照，再清除只属于已完成轮次的引用。
 		currentPayload, currentOriginalPayload, outboundPayload = nil, nil, nil
+		frameBody.clear()
 		currentInputItems = nil
 		nextReplayState = openAIWSReplayInputState{}
 		result = nil

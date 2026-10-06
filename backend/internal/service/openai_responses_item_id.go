@@ -73,9 +73,7 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 		stripID     bool
 		stripCallID bool
 	}
-
-	items := make([]inputItem, 0)
-	input.ForEach(func(_, item gjson.Result) bool {
+	inspect := func(item gjson.Result) inputItem {
 		parsed := inputItem{raw: item.Raw}
 		if item.IsObject() {
 			itemType := item.Get("type")
@@ -86,19 +84,24 @@ func sanitizeOpenAIResponsesInputItemIDs(body []byte) ([]byte, bool, error) {
 				parsed.stripID = shouldStripOpenAIResponsesInputItemID(trimmedItemType, id.String())
 			}
 		}
-		items = append(items, parsed)
-		return true
-	})
-	hasSanitization := false
-	for _, item := range items {
-		if item.stripID || item.stripCallID {
-			hasSanitization = true
-			break
-		}
+		return parsed
 	}
+	// 常见的完整历史不需要删字段。先只读检查，确认有改动后才保存全部项，
+	// 避免无操作路径也为数千条历史分配并扩容描述数组。
+	hasSanitization := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		parsed := inspect(item)
+		hasSanitization = parsed.stripID || parsed.stripCallID
+		return !hasSanitization
+	})
 	if !hasSanitization {
 		return body, false, nil
 	}
+	items := make([]inputItem, 0)
+	input.ForEach(func(_, item gjson.Result) bool {
+		items = append(items, inspect(item))
+		return true
+	})
 
 	rebuiltItems := make([]string, 0, len(items))
 	for index, item := range items {

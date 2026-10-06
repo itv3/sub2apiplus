@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -39,6 +40,8 @@ import (
 // 长度”识别正文版本，正文一经产出不再原地改写，因此同一切片必然是同一内容；对象树与成员里引用
 // 正文的值只会被比较或重新编码进新正文，不会保存到请求之外。
 type officialForwardHTTPBody struct {
+	// releaseStorage 只关闭本次完整转发的出站正文文件，不改变业务或上游 context。
+	releaseStorage func()
 	// bridge 仅用于官方 WS→HTTP 单轮桥接：准备阶段保留逻辑正文，Finalizer 才按规范化片段写出。
 	bridge *openAIWSHTTPBridgeBody
 	// wsIngress 是 WS 入口已校验但尚未拼接的大 input 与小字段正文。
@@ -106,8 +109,30 @@ func newOfficialForwardHTTPBody(ctx context.Context, ingress []byte) (context.Co
 	if disabled, _ := ctx.Value(officialForwardHTTPBodyDisabledContextKey{}).(bool); disabled {
 		return ctx, nil
 	}
-	body := &officialForwardHTTPBody{ingress: ingress}
+	// 压缩输出最多占入口原文的四分之三，另受进程总额度限制；按实际分配的完整
+	// 系统内存块计量。超额时保留普通磁盘回退，不扩大线上准入范围。
+	ctx, release := officialegress.WithRequestBodyStorageMemoryLimit(ctx, int64(len(ingress))*3/4, allocateOfficialRequestBodyMemory)
+	body := &officialForwardHTTPBody{ingress: ingress, releaseStorage: release}
 	return context.WithValue(ctx, officialForwardHTTPBodyContextKey{}, body), body
+}
+
+// 无闭包的组合层适配器只连接内存接口，不让存储资源反向保活业务工作区。
+func allocateOfficialRequestBodyMemory(size int) (officialegress.RequestBodyMemoryBuffer, error) {
+	return pkghttputil.NewRequestBodyMemoryBuffer(size)
+}
+
+// closeStorage 在 HTTP Forward 整体结束或 WS bridge 单轮结束时调用，保留响应头之后
+// 的上传、SSE 消费和本轮重试所需的 GetBody 生命周期；nil 工作区不需要清理。
+func (b *officialForwardHTTPBody) closeStorage() {
+	if b == nil {
+		return
+	}
+	if b.releaseStorage != nil {
+		b.releaseStorage()
+	}
+	// 完整转发已经结束；即使诊断信息或 HTTP transport 暂时仍持有 ctx，也不应
+	// 再通过工作区保活入口原文、索引和对象树。出站重放已独立持有定型正文。
+	*b = officialForwardHTTPBody{scans: b.scans}
 }
 
 // withOfficialForwardHTTPBodyDisabled 只供差分测试使用：返回的 ctx 让 Forward 不创建工作区。

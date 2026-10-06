@@ -1,0 +1,54 @@
+{
+  "measured_cases": 38,
+  "matrix_cases": 19,
+  "baseline_cases": 7,
+  "performance_pairs": 6,
+  "comparisons": {
+    "native-4-2turn": {
+      "before": {
+        "request_memory_peak_bytes": 70860800,
+        "elapsed_ms": 1496,
+        "total_alloc_mib": 390.3,
+        "cgroup_peak_mib": 90.1
+      },
+      "after": {
+        "request_memory_peak_bytes": 49750016,
+        "elapsed_ms": 1324,
+        "total_alloc_mib": 125.9,
+        "cgroup_peak_mib": 63.6
+      },
+      "memory_reduction_percent": 29.791907514450866,
+      "elapsed_reduction_percent": 11.497326203208559
+    },
+    "native-4-10turn": {
+      "before": {
+        "request_memory_peak_bytes": 79683584,
+        "elapsed_ms": 7145,
+        "total_alloc_mib": 1896.6,
+        "cgroup_peak_mib": 103.9
+      },
+      "after": {
+        "request_memory_peak_bytes": 51101696,
+        "elapsed_ms": 6295,
+        "total_alloc_mib": 591.3,
+        "cgroup_peak_mib": 69.7
+      },
+      "memory_reduction_percent": 35.86922997841061,
+      "elapsed_reduction_percent": 11.896431070678792
+    }
+  },
+  "native_websocket_meets_2_5": false,
+  "http_bridge_max_multiple": 2.4690981458927257,
+  "environment": {
+    "host": "ARM64",
+    "go": "go1.27.1",
+    "container_memory_mib": 768,
+    "container_cpus": 2,
+    "gomemlimit_mib": 512,
+    "gogc": 100,
+    "gomaxprocs": 2
+  },
+  "measurement_scope": "真实入站读帧、原生 WS 转发和同连接多轮；包含本地客户端与假上游开销，不含公网、TLS、完整鉴权调度或生产混合负载。",
+  "denominator": "各连接最大单帧之和，不累计轮数；请求峰值为同一时刻 Go HeapInuse 增量加匿名映射，cgroup 单独记录。",
+  "baseline": "上一轮 HTTP 耗时优化最终版 service-speed-boundary-linux-arm64.test，非上游原始版。"
+}

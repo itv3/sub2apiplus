@@ -148,11 +148,14 @@ func prepareOpenAIOfficialEgressWSContext(
 	if c == nil || c.Request == nil {
 		return errors.New("OpenAI official egress WebSocket ingress request is unavailable")
 	}
-	identity, err := resolveOfficialOpenAIWSIdentity(
+	// 身份契约和握手小字段读取同一首帧，复用一次严格扫描的索引。
+	index, _ := buildOfficialJSONRawIndexForDecode(firstPayload)
+	identity, err := deriveOfficialOpenAIWSIdentityWithIndex(
 		c,
 		account,
 		firstPayload,
 		egressContext.ProfileMode(),
+		index,
 	)
 	if err != nil {
 		return err
@@ -166,7 +169,7 @@ func prepareOpenAIOfficialEgressWSContext(
 	if section := officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata; section != nil {
 		// 握手 turn metadata 是 prewarm 形态：不属于某一轮，不写 turn_trigger；
 		// model 与 reasoning_effort 取首帧请求体（缺省 effort 按模型默认值补齐）。
-		firstFrame, decodeErr := decodeOfficialJSONObjectUseNumber(firstPayload)
+		firstFrame, decodeErr := decodeOfficialOpenAIWSTurnMetadataFieldsWithIndex(firstPayload, index)
 		if decodeErr != nil {
 			return fmt.Errorf("decode OpenAI official egress WebSocket first frame: %w", decodeErr)
 		}
@@ -187,6 +190,36 @@ func prepareOpenAIOfficialEgressWSContext(
 		egressContext.openAIWSDerived = &officialOpenAIWSDerivedState{}
 	}
 	return registerOfficialOpenAIWSIdentity(egressContext, identity)
+}
+
+// 握手只需要模型和推理档位。仍严格扫描整帧、按同名键末值解析，但不为
+// input 历史建立对象树或复制长字符串；数值保持 json.Number 的原十进制文本。
+func decodeOfficialOpenAIWSTurnMetadataFields(body []byte) (map[string]any, error) {
+	return decodeOfficialOpenAIWSTurnMetadataFieldsWithIndex(body, nil)
+}
+
+func decodeOfficialOpenAIWSTurnMetadataFieldsWithIndex(body []byte, index *officialJSONRawIndex) (map[string]any, error) {
+	var err error
+	if index == nil {
+		index, err = buildOfficialJSONRawIndexForDecode(body)
+	}
+	if err != nil || index.nodes[index.root].kind != officialJSONRawKindObject {
+		// 保留旧解码器对非法、null 和非对象首帧的原有错误与返回值。
+		return decodeOfficialJSONObjectUseNumberSlow(body)
+	}
+	payload := make(map[string]any, 2)
+	if node := index.memberNode(index.root, "model"); node >= 0 && index.nodes[node].kind == officialJSONRawKindString {
+		payload["model"] = index.decodeString(node)
+	}
+	if node := index.memberNode(index.root, "reasoning"); node >= 0 && index.nodes[node].kind == officialJSONRawKindObject {
+		if effort := index.memberNode(node, "effort"); effort >= 0 {
+			switch index.nodes[effort].kind {
+			case officialJSONRawKindString, officialJSONRawKindNumber:
+				payload["reasoning"] = map[string]any{"effort": index.decodeValue(effort)}
+			}
+		}
+	}
+	return payload, nil
 }
 
 func resolveOfficialOpenAIWSIdentity(
@@ -342,7 +375,17 @@ func deriveOfficialOpenAIWSIdentity(
 	firstPayload []byte,
 	profileMode string,
 ) (officialOpenAIWSIdentity, error) {
-	contract, err := captureOfficialOpenAIHTTPBodyContract(firstPayload)
+	return deriveOfficialOpenAIWSIdentityWithIndex(c, account, firstPayload, profileMode, nil)
+}
+
+func deriveOfficialOpenAIWSIdentityWithIndex(
+	c *gin.Context,
+	account *Account,
+	firstPayload []byte,
+	profileMode string,
+	index *officialJSONRawIndex,
+) (officialOpenAIWSIdentity, error) {
+	contract, err := captureOfficialOpenAIHTTPBodyContractWithIndex(firstPayload, index)
 	if err != nil {
 		return officialOpenAIWSIdentity{}, err
 	}
@@ -482,6 +525,7 @@ func prepareOpenAIOfficialEgressSemanticWSFrame(
 			candidate,
 			expectedPreviousResponseID,
 			allowControlledReplay,
+			officialWSFrameBodyFromContext(ctx),
 		)
 	}
 
@@ -610,22 +654,18 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	candidate []byte,
 	expectedPreviousResponseID string,
 	allowControlledReplay bool,
+	body *officialWSFrameBody,
 ) ([]byte, OfficialEgressFinalizationResult, error) {
 	result := OfficialEgressFinalizationResult{}
-	if err := validateUnifiedOpenAIWSBusinessContract(
+	payload, index, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
 		original,
 		candidate,
 		expectedPreviousResponseID,
 		allowControlledReplay,
-	); err != nil {
-		return nil, result, err
-	}
-	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+		body,
+	)
 	if err != nil {
-		return nil, result, fmt.Errorf(
-			"decode derived OpenAI official egress WebSocket frame: %w",
-			err,
-		)
+		return nil, result, err
 	}
 	eventType := strings.TrimSpace(officialOpenAIString(payload, "type"))
 	if eventType != officialOpenAIWSResponseCreateType {
@@ -721,8 +761,8 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 		)
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
-		egressContext.ProfileMode(), payload, candidate,
+	finalized, err := marshalOfficialWSFrameBody(
+		egressContext.ProfileMode(), payload, candidate, index,
 	)
 	if err != nil {
 		return nil, result, fmt.Errorf(
@@ -765,93 +805,63 @@ func validateUnifiedOpenAIWSBusinessContract(
 	expectedPreviousResponseID string,
 	allowControlledReplay bool,
 ) error {
-	originalPayload, err := decodeOfficialJSONObjectUseNumber(original)
+	_, _, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
+		original, candidate, expectedPreviousResponseID, allowControlledReplay, nil,
+	)
+	return err
+}
+
+// decodeAndValidateUnifiedOpenAIWSBusinessContract 将校验后的候选树直接交给定型器，
+// 避免校验完丢弃再整帧解码。比较只读取树，绝不改写业务输入和借用的源正文。
+func decodeAndValidateUnifiedOpenAIWSBusinessContract(
+	original, candidate []byte,
+	expectedPreviousResponseID string,
+	allowControlledReplay bool,
+	body *officialWSFrameBody,
+) (map[string]any, *officialJSONRawIndex, error) {
+	originalPayload, originalIndex, err := body.decode(original)
 	if err != nil {
-		return fmt.Errorf("decode unified OpenAI official egress ingress WebSocket frame: %w", err)
+		return nil, nil, fmt.Errorf("decode unified OpenAI official egress ingress WebSocket frame: %w", err)
 	}
 	if strings.TrimSpace(officialOpenAIString(originalPayload, "type")) != officialOpenAIWSResponseCreateType {
 		if !bytes.Equal(original, candidate) {
-			return errors.New("OpenAI official egress unknown WebSocket frame was modified")
+			return nil, nil, errors.New("OpenAI official egress unknown WebSocket frame was modified")
 		}
-		return nil
+		return originalPayload, originalIndex, nil
 	}
-	candidatePayload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	candidatePayload, candidateIndex := originalPayload, originalIndex
+	if !officialForwardSameBody(original, candidate) {
+		candidatePayload, candidateIndex, err = body.decode(candidate)
+	}
 	if err != nil {
-		return fmt.Errorf("decode unified OpenAI official egress outbound WebSocket frame: %w", err)
+		return nil, nil, fmt.Errorf("decode unified OpenAI official egress outbound WebSocket frame: %w", err)
 	}
 	if strings.TrimSpace(officialOpenAIString(candidatePayload, "type")) != officialOpenAIWSResponseCreateType {
-		return errors.New("OpenAI official egress WebSocket frame type was modified")
+		return nil, nil, errors.New("OpenAI official egress WebSocket frame type was modified")
 	}
 	if allowControlledReplay {
-		return nil
+		return candidatePayload, candidateIndex, nil
 	}
 	originalPrevious, originalPreviousPresent := originalPayload["previous_response_id"]
 	candidatePrevious, candidatePreviousPresent := candidatePayload["previous_response_id"]
 	if originalPreviousPresent != candidatePreviousPresent || !reflect.DeepEqual(originalPrevious, candidatePrevious) {
-		return errors.New("OpenAI official egress WebSocket previous_response_id was modified")
+		return nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id was modified")
 	}
 	if originalPreviousPresent {
 		originalValue, _ := originalPrevious.(string)
 		if strings.TrimSpace(expectedPreviousResponseID) != "" &&
 			strings.TrimSpace(originalValue) != strings.TrimSpace(expectedPreviousResponseID) {
-			return errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
+			return nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
 		}
 	}
-	originalHistory, err := canonicalOfficialOpenAIWSBusinessHistory(originalPayload)
+	equal, err := equalOfficialOpenAIWSBusinessHistory(originalPayload, candidatePayload)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	candidateHistory, err := canonicalOfficialOpenAIWSBusinessHistory(candidatePayload)
-	if err != nil {
-		return err
+	if !equal {
+		return nil, nil, errors.New("OpenAI official egress WebSocket input was modified")
 	}
-	if !bytes.Equal(originalHistory, candidateHistory) {
-		return errors.New("OpenAI official egress WebSocket input was modified")
-	}
-	return nil
-}
-
-// canonicalOfficialOpenAIWSBusinessHistory 把允许变化的表示层字段剥离后再比较。
-// additional_tools、逐项 turn metadata，以及兼容层按既有规则删除的非法 item.id
-// 与非配对 call_id 都不承载业务语义；消息、工具调用、工具输出及其业务参数仍必须
-// 保持一致。
-func canonicalOfficialOpenAIWSBusinessHistory(payload map[string]any) ([]byte, error) {
-	cloned := cloneOfficialOpenAIMap(payload)
-	if _, err := normalizeDerivedOfficialOpenAIInput(cloned); err != nil {
-		return nil, fmt.Errorf("normalize OpenAI official egress WebSocket business history: %w", err)
-	}
-	input, _ := cloned["input"].([]any)
-	filtered := make([]any, 0, len(input))
-	for _, rawItem := range input {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			filtered = append(filtered, rawItem)
-			continue
-		}
-		if officialOpenAIString(item, "type") == officialOpenAIAdditionalToolsType {
-			continue
-		}
-		itemClone := cloneOfficialOpenAIMap(item)
-		delete(itemClone, officialOpenAIWSItemTurnMetadata)
-		itemType := strings.TrimSpace(officialOpenAIString(itemClone, "type"))
-		if itemID, ok := itemClone["id"].(string); ok &&
-			shouldStripOpenAIResponsesInputItemID(itemType, itemID) {
-			delete(itemClone, "id")
-		}
-		if _, exists := itemClone["call_id"]; exists &&
-			shouldStripOpenAIResponsesNonPairCallID(itemType) {
-			delete(itemClone, "call_id")
-		}
-		if itemType == "message" {
-			itemClone["content"] = officialOpenAIHTTPMessageContentText(itemClone["content"])
-		}
-		filtered = append(filtered, itemClone)
-	}
-	encoded, err := json.Marshal(filtered)
-	if err != nil {
-		return nil, fmt.Errorf("encode OpenAI official egress WebSocket business history: %w", err)
-	}
-	return encoded, nil
+	return candidatePayload, candidateIndex, nil
 }
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
@@ -897,7 +907,7 @@ func injectOfficialOpenAIWSTurnState(
 	if turnState == "" {
 		return payload, nil
 	}
-	body, err := decodeOfficialJSONObjectUseNumber(payload)
+	body, index, err := decodeOfficialWSFrameBody(ctx, payload)
 	if err != nil {
 		return nil, fmt.Errorf("decode OpenAI official egress WebSocket turn-state frame: %w", err)
 	}
@@ -911,8 +921,8 @@ func injectOfficialOpenAIWSTurnState(
 	if !ok {
 		return nil, errors.New("WebSocket turn-state 缺少冻结出站上下文")
 	}
-	encoded, err := marshalOfficialOpenAIWSJSONPreservingRaw(
-		egressContext.ProfileMode(), body, payload,
+	encoded, err := marshalOfficialWSFrameBody(
+		egressContext.ProfileMode(), body, payload, index,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenAI official egress WebSocket turn-state frame: %w", err)
@@ -936,7 +946,7 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		egressContext.openAIWSDerived == nil {
 		return nil, false, nil
 	}
-	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	payload, index, err := decodeOfficialWSFrameBody(ctx, candidate)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket prewarm source: %w",
@@ -1012,8 +1022,8 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		return nil, false, err
 	}
 
-	prewarm, err := marshalOfficialOpenAIWSJSONPreservingRaw(
-		egressContext.ProfileMode(), payload, candidate,
+	prewarm, err := marshalOfficialWSFrameBody(
+		egressContext.ProfileMode(), payload, candidate, index,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -1045,7 +1055,7 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		)
 	}
 
-	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	payload, index, err := decodeOfficialWSFrameBody(ctx, candidate)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket business frame: %w",
@@ -1091,8 +1101,8 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		return nil, err
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
-		egressContext.ProfileMode(), payload, candidate,
+	finalized, err := marshalOfficialWSFrameBody(
+		egressContext.ProfileMode(), payload, candidate, index,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -1297,7 +1307,7 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	if !enabled || egressContext == nil {
 		return candidate, false, nil
 	}
-	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	payload, index, err := decodeOfficialWSFrameBody(ctx, candidate)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket tool continuation: %w",
@@ -1425,8 +1435,8 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 		return nil, false, err
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
-		egressContext.ProfileMode(), payload, candidate,
+	finalized, err := marshalOfficialWSFrameBody(
+		egressContext.ProfileMode(), payload, candidate, index,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(

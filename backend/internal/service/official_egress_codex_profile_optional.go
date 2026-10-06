@@ -41,8 +41,9 @@ func officialCodexProfileUsesPromptCacheKeySession(mode string) bool {
 	if err != nil {
 		return false
 	}
-	for _, endpoint := range profile.Endpoints() {
-		if endpoint.ID != officialCodexEndpointResponsesHTTP && endpoint.ID != officialCodexEndpointResponsesWS {
+	for _, id := range []string{officialCodexEndpointResponsesHTTP, officialCodexEndpointResponsesWS} {
+		endpoint, found := profile.Endpoint(id)
+		if !found {
 			continue
 		}
 		for _, slot := range endpoint.Headers {

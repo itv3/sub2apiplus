@@ -1,0 +1,68 @@
+{
+  "test_count": 15,
+  "fact_count": 32,
+  "source_rebindings": [
+    {
+      "test": "TestCandidateTraceCodex0145LiteAndPrefixFacts",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "before": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169",
+      "after": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "test": "TestCandidateTraceCodex0145LiteAndPrefixFacts",
+      "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+      "before": "2edd45ae5a333a91bafbb24a3f62a059fe4f54de54bbed9824784da7f09b7dae",
+      "after": "3f5b0adc5d9fd03995ab8bce60f12b7525c841ae39f7f49cfc3df75b396da191"
+    },
+    {
+      "test": "TestCandidateTraceCodex0145TurnStateFacts",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "before": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169",
+      "after": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "test": "TestCandidateTraceCodex0145TurnStateFacts",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "before": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33",
+      "after": "f82d82a9ae1a4e4ef1beeb5f3674a9b1d2435a02ff9b10afc371a472d03c3e13"
+    },
+    {
+      "test": "TestCandidateTraceCodex0145OAuthFallbackSameInvocation",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "before": "193eac82b4aba269d57f99873b21f595f9d28629f7e532b49cc4e1e079c260cd",
+      "after": "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2"
+    },
+    {
+      "test": "TestCandidateTraceCodex0145CompactionDecisions",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "before": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169",
+      "after": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "test": "TestCandidateTraceCodexGuardianReviewConditionalHeader",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "before": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169",
+      "after": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "test": "TestCandidateTraceCodexGuardianReviewConditionalHeader",
+      "path": "backend/internal/officialegress/compiler.go",
+      "before": "85c1d76d7d2bc93c1af8a74ed9484125c13b3193f59503729e32c4c010a0cdf6",
+      "after": "9429a536996ec5fdefb0c9297ee7aed0d60fec115904d40572fa9bd7b3d7cf09"
+    },
+    {
+      "test": "TestCandidateTraceCodexTurnMetadataSerialization",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "before": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169",
+      "after": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
+    },
+    {
+      "test": "TestCandidateTraceCodexTurnStateOwnerReset",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "before": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33",
+      "after": "f82d82a9ae1a4e4ef1beeb5f3674a9b1d2435a02ff9b10afc371a472d03c3e13"
+    }
+  ],
+  "semantic_changes": false,
+  "mapping_sha256": "1650c446ea3dd8a5d39c5ddb119878116037bc8ab82aaf67095511b0842e2971"
+}

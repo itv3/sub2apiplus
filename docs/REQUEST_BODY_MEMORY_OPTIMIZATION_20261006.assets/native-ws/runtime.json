@@ -1,0 +1,11 @@
+{
+  "binary_sha256": {
+    "service-speed-boundary-linux-arm64.test": "d7a1d9f2d089d217040600e6b79155c9c81a462af9c09a5c501c2e663d7f0c45",
+    "service-native-ws-v2-linux-arm64.test": "0b8350795a66c525bee283ba4d53d68b18f9ed47c4128e8afffa1336ae1e53e7"
+  },
+  "runner_sha256": "57eacd95d888003393ca16ef0326e0010c7176629e38eecea2410f613d9ff546",
+  "image_id": "sha256:8999da6f0be9491fbb976ce95c41ba6271fa209077a2c9a94811f0b1af713bc9",
+  "image_repo_digests": [
+    "ghcr.io/itv3/sub2apiplus@sha256:8999da6f0be9491fbb976ce95c41ba6271fa209077a2c9a94811f0b1af713bc9"
+  ]
+}

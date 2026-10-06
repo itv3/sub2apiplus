@@ -462,7 +462,7 @@ func openAIResponsesLiteAlreadyNormalized(index *officialJSONRawIndex) bool {
 		if kind(tools) != officialJSONRawKindArray {
 			return false
 		}
-		for _, tool := range index.nodes[tools].items {
+		for _, tool := range index.arrayItems(tools) {
 			switch kind(tool) {
 			case officialJSONRawKindString:
 				if strings.TrimSpace(index.decodeString(tool)) == "" {

@@ -1,0 +1,43 @@
+{
+  "final_ci": {
+    "command": "GOTOOLCHAIN=go1.27.1 make check-egress-spec-ci",
+    "exit_code": 0,
+    "checks": 48
+  },
+  "full_backend": {
+    "exit_code": 0,
+    "packages": [
+      "internal/service",
+      "internal/officialegress",
+      "internal/pkg/httputil",
+      "internal/handler",
+      "internal/service/openai_ws_v2"
+    ],
+    "log": "backend-regression.log"
+  },
+  "targeted": {
+    "focus-v2.log": "通过：最终新增差分、对象所有权、UUID 与业务校验回归",
+    "race-v2.log": "通过：最终新增实现和所有权相关 race",
+    "ws-race-timeout-rerun.log": "通过：单独重跑原组唯一失败的 TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB"
+  },
+  "earlier_failures": [
+    {
+      "log": "ws-regression-v1.log",
+      "reason": "源码冻结摘要尚未承接；后继收据和事实映射补齐后，全后端回归通过。"
+    },
+    {
+      "log": "ws-race.log",
+      "reason": "与全后端及八路门禁同跑时，大帧桥接用例超过原 10 秒 deadline；未修改超时，隔离后 7.636 秒通过。整组未发现 data race，原失败保留。"
+    },
+    {
+      "log": "ci.log",
+      "reason": "首次 48 项门禁中 47 项通过，新增出站定型文件漏登记；按已有 successor 机制补齐。"
+    },
+    {
+      "log": "inventory-check.log",
+      "reason": "登记项路径顺序不符；排序后定向检查和最终整轮通过。"
+    }
+  ],
+  "freeze_receipts": "生成器的 manual_actions_required 原结果保留；授权范围内只重绑事实映射摘要，规则与事实语义不变。生成器禁止覆盖已有不可变收据，因此路径排序后另发 inventory-order 后继收据，旧收据保持原样。",
+  "scope": "保留未提交改动；未部署、未调整线上配置。旧 final 与 speed 归档保持原样，均再次通过其自身摘要校验。"
+}

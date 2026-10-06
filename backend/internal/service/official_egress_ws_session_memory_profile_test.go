@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -120,6 +121,7 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 						}
 						return true
 					})
+					memory.EnableOwnedBodies()
 					ctx := WithOpenAIWSRequestMemory(r.Context(), memory)
 					_, first, err := ReadOpenAIWSClientMessage(ctx, conn, 120*time.Second, coderws.StatusPolicyViolation, "missing first frame")
 					if err == nil {
@@ -127,12 +129,14 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 					}
 					if err == nil {
 						verifiedFrames.Add(1)
-						// 与 handler 的首包 failover 持有点一致，直到连接结束才撤销引用。
+						// 与 handler 一致：仅持有当前轮换号原文，成功后退役，后续轮重新登记。
 						err = memory.Retain("handler", first)
 					}
 					if err == nil {
 						c.Request = c.Request.WithContext(ctx)
 						applyOfficialOpenAIWSIngressHeadersForTest(c, first)
+						var handlerOwnerMu sync.Mutex
+						handlerTurn := 1
 						hooks := &OpenAIWSIngressHooks{BeforeRequest: func(turn int, body []byte, _ string) error {
 							if turn < 1 || turn > len(frameDigests) {
 								return fmt.Errorf("非预期会话轮次：%d", turn)
@@ -141,9 +145,18 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 								return err
 							}
 							verifiedFrames.Add(1)
-							return nil
+							handlerOwnerMu.Lock()
+							defer handlerOwnerMu.Unlock()
+							handlerTurn = turn
+							return memory.Retain("handler", body)
+						}, AfterTurn: func(turn int, _ *OpenAIForwardResult, turnErr error) {
+							handlerOwnerMu.Lock()
+							defer handlerOwnerMu.Unlock()
+							if turnErr == nil && handlerTurn == turn {
+								_ = memory.Retain("handler")
+							}
 						}}
-						err = service.ProxyResponsesWebSocketFromClient(ctx, c, conn, account, "oauth-token", first, hooks)
+						err = service.ProxyResponsesWebSocketFromClient(ctx, c, conn, account, "oauth-token", takeOpenAIWSClientPayload(&first), hooks)
 					}
 					memory.Close()
 					errs <- err
@@ -163,8 +176,9 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 			rssBefore := readOfficialEgressMemoryProfileRSS()
 			var peakRSS atomic.Int64
 			peakRSS.Store(rssBefore)
-			var peakHeap atomic.Uint64
-			peakHeap.Store(before.HeapInuse)
+			ownedBefore := uint64(pkghttputil.ActiveOwnedRequestBodyBytes())
+			var memoryPeak officialEgressMemoryPeak
+			memoryPeak.observe(before.HeapInuse, ownedBefore)
 			stop, samplerDone := make(chan struct{}), make(chan struct{})
 			go func() {
 				defer close(samplerDone)
@@ -177,9 +191,7 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 					case <-ticker.C:
 						var stats runtime.MemStats
 						runtime.ReadMemStats(&stats)
-						if stats.HeapInuse > peakHeap.Load() {
-							peakHeap.Store(stats.HeapInuse)
-						}
+						memoryPeak.observe(stats.HeapInuse, uint64(pkghttputil.ActiveOwnedRequestBodyBytes()))
 						if rss := readOfficialEgressMemoryProfileRSS(); rss > peakRSS.Load() {
 							peakRSS.Store(rss)
 						}
@@ -215,9 +227,7 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 			<-samplerDone
 			var after runtime.MemStats
 			runtime.ReadMemStats(&after)
-			if after.HeapInuse > peakHeap.Load() {
-				peakHeap.Store(after.HeapInuse)
-			}
+			memoryPeak.observe(after.HeapInuse, uint64(pkghttputil.ActiveOwnedRequestBodyBytes()))
 			if rss := readOfficialEgressMemoryProfileRSS(); rss > peakRSS.Load() {
 				peakRSS.Store(rss)
 			}
@@ -227,7 +237,8 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 			}
 			require.Zero(t, reserved.Load())
 			require.EqualValues(t, concurrency*turns, verifiedFrames.Load())
-			heapRequest := float64(peakHeap.Load()) - float64(before.HeapInuse)
+			heapRequest := float64(memoryPeak.heap.Load()) - float64(before.HeapInuse)
+			requestMemory := float64(memoryPeak.total.Load()) - float64(before.HeapInuse+ownedBefore)
 			totalBodyBytes := float64(maxFrameBytes * int64(concurrency))
 			upstream.mu.Lock()
 			httpRequests, httpWireBytes := upstream.businessRequests, upstream.wireBytes
@@ -243,10 +254,15 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 				"concurrency": concurrency, "requests_per_slot": turns, "actual_transport": transport,
 				"body_mib_each": officialEgressMemoryProfileMiB(float64(maxFrameBytes)), "body_mib_total": officialEgressMemoryProfileMiB(totalBodyBytes),
 				"body_bytes_total": maxFrameBytes * int64(concurrency), "heap_request_peak_bytes": int64(heapRequest),
-				"heap_inuse_before_mib": officialEgressMemoryProfileMiB(float64(before.HeapInuse)), "heap_inuse_peak_mib": officialEgressMemoryProfileMiB(float64(peakHeap.Load())), "heap_inuse_after_mib": officialEgressMemoryProfileMiB(float64(after.HeapInuse)),
-				"heap_request_peak_mib": officialEgressMemoryProfileMiB(heapRequest), "resident_multiple_with_body": math.Round(heapRequest/totalBodyBytes*100) / 100,
-				"total_alloc_mib": officialEgressMemoryProfileMiB(float64(after.TotalAlloc - before.TotalAlloc)),
-				"gc_cycles":       after.NumGC - before.NumGC, "gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / float64(time.Millisecond), "elapsed_ms": elapsed.Milliseconds(),
+				"heap_inuse_before_mib": officialEgressMemoryProfileMiB(float64(before.HeapInuse)), "heap_inuse_peak_mib": officialEgressMemoryProfileMiB(float64(memoryPeak.heap.Load())), "heap_inuse_after_mib": officialEgressMemoryProfileMiB(float64(after.HeapInuse)),
+				"heap_request_peak_mib": officialEgressMemoryProfileMiB(heapRequest), "resident_multiple_with_body": math.Round(requestMemory/totalBodyBytes*100) / 100,
+				"request_memory_peak_bytes": int64(requestMemory),
+				"request_memory_peak_mib":   officialEgressMemoryProfileMiB(requestMemory),
+				"owned_memory_peak_mib":     officialEgressMemoryProfileMiB(float64(memoryPeak.owned.Load())),
+				"owned_memory_before_bytes": ownedBefore,
+				"owned_memory_after_bytes":  pkghttputil.ActiveOwnedRequestBodyBytes(),
+				"total_alloc_mib":           officialEgressMemoryProfileMiB(float64(after.TotalAlloc - before.TotalAlloc)),
+				"gc_cycles":                 after.NumGC - before.NumGC, "gc_pause_ms": float64(after.PauseTotalNs-before.PauseTotalNs) / float64(time.Millisecond), "elapsed_ms": elapsed.Milliseconds(),
 				"cgroup_current_before_mib": officialEgressMemoryProfileCgroupMiB(cgroupBefore), "cgroup_peak_mib": officialEgressMemoryProfileCgroupMiB(readOfficialEgressMemoryProfileCgroup("memory.peak")),
 				"rss_before_mib": officialEgressMemoryProfileCgroupMiB(rssBefore), "rss_peak_mib": officialEgressMemoryProfileCgroupMiB(peakRSS.Load()),
 				"http_upstream_requests": httpRequests, "http_upstream_wire_bytes": httpWireBytes, "ws_upstream_frames": wsUpstream.frames.Load(), "ws_upstream_decoded_bytes": wsUpstream.decodedBytes.Load(),
@@ -257,8 +273,10 @@ func TestOfficialEgressWSSessionReadMemoryProfile(t *testing.T) {
 				result["cpu_ms"] = math.Round((cpuAfter - cpuBefore) * 1000)
 			}
 			if maxFrameBytes >= 16<<20 {
-				result["large_body_target_met"] = heapRequest <= 2.5*totalBodyBytes
+				result["large_body_target_met"] = requestMemory <= 2.5*totalBodyBytes
 			}
+			result["owned_memory_after_release_bytes"] = pkghttputil.ActiveOwnedRequestBodyBytes()
+			require.EqualValues(t, ownedBefore, pkghttputil.ActiveOwnedRequestBodyBytes(), "WS 会话退出后不能残留系统正文内存")
 			runtime.GC()
 			debug.FreeOSMemory()
 			var released runtime.MemStats

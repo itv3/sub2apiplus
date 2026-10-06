@@ -231,12 +231,33 @@ func (p ExecutableProfile) Endpoints() []ExecutableEndpointProfile {
 	return out
 }
 
+// Endpoint 仅复制指定端点，避免请求热路径为查一个 ID 深拷贝全部画像端点。
+// 返回值仍独立持有可写切片，调用方不能通过它改写已冻结的画像。
+func (p ExecutableProfile) Endpoint(id string) (ExecutableEndpointProfile, bool) {
+	for _, endpoint := range p.endpoints {
+		if endpoint.ID == id {
+			return endpoint.clone(), true
+		}
+	}
+	return ExecutableEndpointProfile{}, false
+}
+
 func (p ExecutableProfile) Transports() []ExecutableTransportProfile {
 	out := make([]ExecutableTransportProfile, len(p.transports))
 	for i, transport := range p.transports {
 		out[i] = transport.clone()
 	}
 	return out
+}
+
+// Transport 与 Endpoint 相同，只复制当前需要的传输画像。
+func (p ExecutableProfile) Transport(id string) (ExecutableTransportProfile, bool) {
+	for _, transport := range p.transports {
+		if transport.ID == id {
+			return transport.clone(), true
+		}
+	}
+	return ExecutableTransportProfile{}, false
 }
 
 func (p ExecutableProfile) Features() FeatureDefaults { return p.features }

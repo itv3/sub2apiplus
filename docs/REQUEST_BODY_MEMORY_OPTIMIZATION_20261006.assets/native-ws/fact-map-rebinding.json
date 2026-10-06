@@ -1,0 +1,17 @@
+[
+  {
+    "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+    "before": "3f5b0adc5d9fd03995ab8bce60f12b7525c841ae39f7f49cfc3df75b396da191",
+    "after": "007cef16397ae13bc919b150144b849e01d77f16798830759405ce1073178c5f"
+  },
+  {
+    "path": "backend/internal/service/official_egress_openai_ws.go",
+    "before": "f82d82a9ae1a4e4ef1beeb5f3674a9b1d2435a02ff9b10afc371a472d03c3e13",
+    "after": "be666af372db147fd28515f2fa9b3d8536eecf13a4bf5a2ea571e7fa91a68840"
+  },
+  {
+    "path": "backend/internal/service/official_egress_openai_ws.go",
+    "before": "f82d82a9ae1a4e4ef1beeb5f3674a9b1d2435a02ff9b10afc371a472d03c3e13",
+    "after": "be666af372db147fd28515f2fa9b3d8536eecf13a4bf5a2ea571e7fa91a68840"
+  }
+]

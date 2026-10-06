@@ -176,6 +176,10 @@ func ReadAdmittedLenientJSONRequestBody(req *http.Request, maxNormalizedBytes in
 // ReadAdmittedLenientJSONRequestBodyWithReservation 在规范化输出分配前通知准入器其确切长度。
 // beforeNormalize 返回错误时不生成输出副本；原请求的预留仍由调用方负责统一释放。
 func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNormalizedBytes int64, beforeNormalize func(int) error) ([]byte, error) {
+	return readAdmittedLenientJSONRequestBodyAllocated(req, maxNormalizedBytes, beforeNormalize, allocateRequestBodyHeap)
+}
+
+func readAdmittedLenientJSONRequestBodyAllocated(req *http.Request, maxNormalizedBytes int64, beforeNormalize func(int) error, allocate requestBodyAllocator) ([]byte, error) {
 	if maxNormalizedBytes <= 0 {
 		maxNormalizedBytes = maxDecompressedBodySize
 	}
@@ -186,7 +190,7 @@ func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNor
 		return nil, err
 	}
 	if preread, ok := req.Body.(*PrereadBody); ok {
-		return normalizeLenientJSONRequestBody(preread.Bytes(), maxNormalizedBytes, beforeNormalize)
+		return normalizeLenientJSONRequestBodyAllocated(preread.Bytes(), maxNormalizedBytes, beforeNormalize, allocate)
 	}
 	encoding := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
 	if encoding == "" || encoding == "identity" {
@@ -197,7 +201,10 @@ func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNor
 		var body []byte
 		var err error
 		if req.ContentLength > 0 {
-			body = make([]byte, req.ContentLength)
+			body, err = allocateRequestBodySize(req.ContentLength, allocate)
+			if err != nil {
+				return nil, err
+			}
 			if _, err = io.ReadFull(reader, body); err != nil {
 				return nil, err
 			}
@@ -210,12 +217,12 @@ func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNor
 				return nil, errors.New("request body exceeds Content-Length")
 			}
 		} else {
-			body, err = readAdmittedUnknownBody(req.Context(), reader)
+			body, err = readAdmittedBodyStreamAllocated(req.Context(), reader, 0, AdmittedBodyReadHooks{}, newRequestBodySpool, allocate)
 			if err != nil {
 				return nil, err
 			}
 		}
-		return normalizeLenientJSONRequestBody(body, maxNormalizedBytes, beforeNormalize)
+		return normalizeLenientJSONRequestBodyAllocated(body, maxNormalizedBytes, beforeNormalize, allocate)
 	}
 
 	// 压缩传输本身与解压后的 JSON 各自受相同上限约束；读到上限后还会读取一个
@@ -251,18 +258,30 @@ func ReadAdmittedLenientJSONRequestBodyWithReservation(req *http.Request, maxNor
 	default:
 		return nil, fmt.Errorf("decode Content-Encoding %q: unsupported Content-Encoding", encoding)
 	}
-	defer closeDecoder()
+	// defer 只捕获变量，完成解码时清空方法值；不能把 decoder.Close 方法值
+	// 固定在 defer 里直到整个 handler 正文读取结束，否则历史窗口仍被保活。
+	defer func() {
+		if closeDecoder != nil {
+			closeDecoder()
+		}
+	}()
 	bounded := http.MaxBytesReader(nil, io.NopCloser(decoded), maxNormalizedBytes)
-	body, err := readAdmittedUnknownBody(req.Context(), bounded)
+	body, err := readAdmittedBodyStreamAllocated(req.Context(), bounded, maxNormalizedBytes, AdmittedBodyReadHooks{
+		ReadDone: func() error {
+			closeDecoder()
+			closeDecoder = nil
+			decoded = nil
+			bounded = nil
+			// deflate 等解码器可以先于 wire 结束。暂存完成后先释放解码器引用、
+			// 检查上传尾部，再分配最终正文；解除引用不承诺立即回收，不强制 GC。
+			_, err := io.Copy(io.Discard, contextSource)
+			return err
+		},
+	}, newRequestBodySpool, allocate)
 	if err != nil {
 		return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
 	}
-	// deflate 等解码器可以先于传输正文结束；继续消费受限的入站流，才能检查
-	// 压缩尾部的上传错误和总字节上限，行为与原先先读取完整 wire 正文一致。
-	if _, err := io.Copy(io.Discard, contextSource); err != nil {
-		return nil, fmt.Errorf("decode Content-Encoding %q: %w", encoding, err)
-	}
-	body, err = normalizeLenientJSONRequestBody(body, maxNormalizedBytes, beforeNormalize)
+	body, err = normalizeLenientJSONRequestBodyAllocated(body, maxNormalizedBytes, beforeNormalize, allocate)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +328,10 @@ func NormalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64) ([]b
 // 先扫描计长并取得额度，再一次分配输出，避免控制字符密集时反复扩容的峰值。
 // 无需转义的常见正文只扫描一遍并继续共享原切片。
 func normalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64, beforeNormalize func(int) error) ([]byte, error) {
+	return normalizeLenientJSONRequestBodyAllocated(body, maxNormalizedBytes, beforeNormalize, allocateRequestBodyHeap)
+}
+
+func normalizeLenientJSONRequestBodyAllocated(body []byte, maxNormalizedBytes int64, beforeNormalize func(int) error, allocate requestBodyAllocator) ([]byte, error) {
 	if maxNormalizedBytes <= 0 {
 		maxNormalizedBytes = maxDecompressedBodySize
 	}
@@ -344,6 +367,9 @@ func normalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64, befo
 			inString = !inString
 		}
 	}
+	if normalizedBytes > int64(int(^uint(0)>>1)) {
+		return nil, &RequestBodyStorageError{Err: errors.New("normalized request body size overflows")}
+	}
 	if beforeNormalize != nil {
 		if err := beforeNormalize(int(normalizedBytes)); err != nil {
 			return nil, err
@@ -352,7 +378,11 @@ func normalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64, befo
 	if firstControl < 0 {
 		return body, nil
 	}
-	out := make([]byte, 0, int(normalizedBytes))
+	buffer, err := allocate(int(normalizedBytes))
+	if err != nil {
+		return nil, err
+	}
+	out := buffer[:0]
 	out = append(out, body[:firstControl]...)
 	inString, escaped = true, false
 	for _, b := range body[firstControl:] {

@@ -27,14 +27,8 @@ func officialCodexBodyFieldOrderFromProfile(
 	profile profilecontract.ExecutableProfile,
 	endpointID string,
 ) ([]string, error) {
-	var selected profilecontract.ExecutableEndpointProfile
-	for _, endpoint := range profile.Endpoints() {
-		if endpoint.ID == endpointID {
-			selected = endpoint
-			break
-		}
-	}
-	if selected.ID == "" {
+	selected, found := profile.Endpoint(endpointID)
+	if !found {
 		return nil, errors.New("ExecutableProfile 缺少 WS frame endpoint")
 	}
 	fields := make([]string, 0, len(selected.Body.Fields))
@@ -288,7 +282,7 @@ func officialJSONMemberValue(index *officialJSONRawIndex, value any, node int32)
 	}
 	var originalItems []int32
 	if index != nil && node >= 0 && index.nodes[node].kind == officialJSONRawKindArray {
-		originalItems = index.nodes[node].items
+		originalItems = index.arrayItems(node)
 	}
 	used := make([]bool, len(originalItems))
 	segments := make([][]byte, 0, len(items)*2+2)

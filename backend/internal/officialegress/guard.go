@@ -62,6 +62,8 @@ type GuardDecision struct {
 	RejectionReason GuardReason
 	// Diagnostic 只在拒绝时填充，描述形态差异，不含头值。
 	Diagnostic string
+	// cause 保留正文存储等底层错误，防止摘要读取失败被误归为账号或上游故障。
+	cause error
 }
 
 type GuardRejectionError struct {
@@ -71,6 +73,7 @@ type GuardRejectionError struct {
 	// Diagnostic 只描述形态差异（例如最终 header 名集合），不含任何头值或凭据，
 	// 用于把 request_modified_after_finalize 这类同名原因区分到具体环节。
 	Diagnostic string
+	cause      error
 }
 
 func (e *GuardRejectionError) Error() string {
@@ -84,7 +87,12 @@ func (e *GuardRejectionError) Error() string {
 	return message
 }
 
-func (e *GuardRejectionError) Unwrap() error { return ErrGuardRejected }
+func (e *GuardRejectionError) Unwrap() error {
+	if e != nil && e.cause != nil {
+		return errors.Join(ErrGuardRejected, e.cause)
+	}
+	return ErrGuardRejected
+}
 
 // Guard 在四类发送栈的 terminal 边界执行同一状态机。
 type Guard struct {
@@ -312,9 +320,10 @@ func (g *Guard) evaluate(
 			binding, resolvedRoute, metadata, backend, protocol, trustedToken,
 		)
 		if terminal && len(tokenReasons) == 0 {
-			wireReasons, wireDiagnostic := g.finalizationWireReasons(req, metadata, protocol)
+			wireReasons, wireDiagnostic, wireError := g.finalizationWireReasons(req, metadata, protocol)
 			tokenReasons = append(tokenReasons, wireReasons...)
 			decision.Diagnostic = wireDiagnostic
+			decision.cause = wireError
 		}
 	}
 	decision.Reasons = append(decision.Reasons, tokenReasons...)
@@ -504,9 +513,9 @@ func (g *Guard) finalizationWireReasons(
 	req *http.Request,
 	metadata attemptMetadata,
 	protocol WireProtocol,
-) ([]GuardReason, string) {
+) ([]GuardReason, string, error) {
 	if metadata.Token == nil {
-		return []GuardReason{ReasonMissingFinalizationToken, ReasonWrongExecutor}, ""
+		return []GuardReason{ReasonMissingFinalizationToken, ReasonWrongExecutor}, "", nil
 	}
 	token := metadata.Token.payload
 	reasons := make([]GuardReason, 0, 1)
@@ -517,7 +526,9 @@ func (g *Guard) finalizationWireReasons(
 		diagnostics = append(diagnostics, "normalization="+err.Error())
 		reasons = append(reasons, ReasonRequestModifiedAfterFinalize)
 	}
+	finishDigestTiming := startRequestBodyTiming(req.Context(), "guard_digest")
 	digest, err := requestDigest(req, token.Normalization, protocol)
+	finishDigestTiming()
 	switch {
 	case err != nil:
 		diagnostics = append(diagnostics, "digest_error="+err.Error())
@@ -529,7 +540,7 @@ func (g *Guard) finalizationWireReasons(
 		)
 		reasons = append(reasons, ReasonRequestModifiedAfterFinalize)
 	}
-	return uniqueGuardReasons(reasons), strings.Join(diagnostics, "; ")
+	return uniqueGuardReasons(reasons), strings.Join(diagnostics, "; "), err
 }
 
 // sortedHeaderNames 只返回 header 名，用于定位定型后被谁加了头；绝不返回头值。
@@ -716,6 +727,7 @@ func (r *guardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 			SinkID:     attemptSinkID(req),
 			Route:      decision.Route.Key,
 			Diagnostic: decision.Diagnostic,
+			cause:      decision.cause,
 		})
 	}
 	return r.base.RoundTrip(req)

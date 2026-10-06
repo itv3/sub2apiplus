@@ -331,7 +331,7 @@ func collectOfficialOpenAIInputContractFromIndex(index *officialJSONRawIndex, in
 	if input < 0 || index.nodes[input].kind != officialJSONRawKindArray {
 		return additional, callIDs
 	}
-	for _, item := range index.nodes[input].items {
+	for _, item := range index.arrayItems(input) {
 		if index.nodes[item].kind != officialJSONRawKindObject {
 			continue
 		}

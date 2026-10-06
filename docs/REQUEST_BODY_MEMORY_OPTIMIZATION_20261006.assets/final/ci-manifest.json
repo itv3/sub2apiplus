@@ -1,0 +1,680 @@
+{
+ "schema_version": "unit-executor-commands/v1",
+ "units": [
+  {
+   "unit_id": "egress-spec:check-egress-bootstrap-replay",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "check-egress-bootstrap-replay"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 31.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:check-egress-seal",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "check-egress-seal"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:test-official-client-control",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "test-official-client-control"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 17.0
+  },
+  {
+   "unit_id": "egress-spec:test-upstream-merge-tools",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "test-upstream-merge-tools"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 43.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-version-leak-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-version-leak-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-version-leak",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-version-leak"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset5-symbols-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset5-symbols-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset5-symbols",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset5-symbols"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 11.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-transition-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-transition-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-transition",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-transition"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-maintenance-transition-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-maintenance-transition-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-maintenance-transition",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-maintenance-transition"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-multi-persona-transition-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-multi-persona-transition-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-multi-persona-transition",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-multi-persona-transition"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-d-transition-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-d-transition-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-workspace-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-workspace-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-workspace",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-workspace"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-completeness-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-completeness-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-completeness",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-completeness"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-runtime-evidence-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-runtime-evidence-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-runtime-evidence",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-runtime-evidence"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-r-disposition-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-r-disposition-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-fw-e-r-disposition",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-fw-e-r-disposition"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-benchmark-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-benchmark-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-benchmark",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-benchmark"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-audit-index-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-audit-index-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-ledger-completeness",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-ledger-completeness"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-egressscan-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-egressscan-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 5120,
+   "timeout_seconds": 1800,
+   "weight": 57.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-scanner-check",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-scanner-check"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 5120,
+   "timeout_seconds": 1800,
+   "weight": 33.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-sink-stats",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-sink-stats"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-gofmt",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-gofmt"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-go-vet",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-go-vet"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-go-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-go-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 5120,
+   "timeout_seconds": 1800,
+   "weight": 112.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-conflict-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-conflict-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-changeset6-conflict",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-changeset6-conflict"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-maintenance-conflict-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-maintenance-conflict-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-maintenance-conflict",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-maintenance-conflict"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-wire-diff",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-wire-diff"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 15.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-repository-guard",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-repository-guard"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 5.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-service-guard",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-service-guard"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 7.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-httpclient-guard",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-httpclient-guard"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-runtime-catalog-self-test",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-runtime-catalog-self-test"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1,
+   "memory_mb": 1024,
+   "timeout_seconds": 1800,
+   "weight": 2.0
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-runtime-catalog",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-runtime-catalog"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-profile-snapshot",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-profile-snapshot"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-profile-enums",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-profile-enums"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-release-graph",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-release-graph"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-release-bindings",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-release-bindings"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 10.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  },
+  {
+   "unit_id": "egress-spec:egress-spec-go-build",
+   "argv": [
+    "make",
+    "--no-print-directory",
+    "egress-spec-go-build"
+   ],
+   "cwd": "/Users/czs/.codex/worktrees/request-memory-optimization/sub2apiplus",
+   "cores": 1.5,
+   "memory_mb": 3072,
+   "timeout_seconds": 1800,
+   "weight": 20.0,
+   "env": {
+    "GOMAXPROCS": "2"
+   }
+  }
+ ]
+}

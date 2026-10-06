@@ -77,6 +77,7 @@ type RelayOptions struct {
 	TakeNextTurnStartedAt           func() time.Time
 	FirstMessageType                coderws.MessageType
 	FirstMessageSent                bool
+	FirstMessageMetadata            *RelayFirstMessageMetadata
 	StartClientAfterFirstDownstream bool
 	OnUsageParseFailure             func(eventType string, usageRaw string)
 	OnTurnComplete                  func(turn RelayTurnResult)
@@ -87,6 +88,14 @@ type RelayOptions struct {
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
 	Now                             func() time.Time
+}
+
+// RelayFirstMessageMetadata 只在调用方已同步写完首帧时使用。relay 的时序、模型和
+// trace 只依赖这些小字段，无需把已发送的大正文保留到整条连接退出。
+type RelayFirstMessageMetadata struct {
+	RequestModel   string
+	ResponseCreate bool
+	PayloadBytes   int
 }
 
 type RelayTraceEvent struct {
@@ -155,7 +164,18 @@ func Relay(
 	firstClientMessage []byte,
 	options RelayOptions,
 ) (RelayResult, *RelayExit) {
+	firstMessageType := options.FirstMessageType
+	if firstMessageType != coderws.MessageBinary {
+		firstMessageType = coderws.MessageText
+	}
 	result := RelayResult{RequestModel: strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())}
+	firstPayloadBytes := len(firstClientMessage)
+	firstResponseCreate := isClientResponseCreateFrame(firstMessageType, firstClientMessage)
+	if options.FirstMessageSent && options.FirstMessageMetadata != nil {
+		result.RequestModel = options.FirstMessageMetadata.RequestModel
+		firstPayloadBytes = options.FirstMessageMetadata.PayloadBytes
+		firstResponseCreate = options.FirstMessageMetadata.ResponseCreate
+	}
 	if clientConn == nil || upstreamConn == nil {
 		return result, &RelayExit{Stage: "relay_init", Err: errors.New("relay connection is nil")}
 	}
@@ -175,13 +195,9 @@ func Relay(
 	if drainTimeout <= 0 {
 		drainTimeout = 1200 * time.Millisecond
 	}
-	firstMessageType := options.FirstMessageType
-	if firstMessageType != coderws.MessageBinary {
-		firstMessageType = coderws.MessageText
-	}
 	startAt := nowFn()
 	state := &relayState{requestModel: result.RequestModel}
-	if isClientResponseCreateFrame(firstMessageType, firstClientMessage) {
+	if firstResponseCreate {
 		firstTurnStartedAt := options.FirstTurnStartedAt
 		if firstTurnStartedAt.IsZero() {
 			firstTurnStartedAt = startAt
@@ -246,7 +262,7 @@ func Relay(
 	droppedDownstreamFrames := &atomic.Int64{}
 	emitRelayTrace(onTrace, RelayTraceEvent{
 		Stage:        "relay_start",
-		PayloadBytes: len(firstClientMessage),
+		PayloadBytes: firstPayloadBytes,
 		MessageType:  relayMessageTypeString(firstMessageType),
 	})
 
@@ -255,7 +271,7 @@ func Relay(
 			Stage:        "write_first_message_skipped",
 			Direction:    "client_to_upstream",
 			MessageType:  relayMessageTypeString(firstMessageType),
-			PayloadBytes: len(firstClientMessage),
+			PayloadBytes: firstPayloadBytes,
 		})
 	} else {
 		if err := writeUpstream(firstMessageType, firstClientMessage); err != nil {
@@ -264,7 +280,7 @@ func Relay(
 				Stage:        "write_first_message_failed",
 				Direction:    "client_to_upstream",
 				MessageType:  relayMessageTypeString(firstMessageType),
-				PayloadBytes: len(firstClientMessage),
+				PayloadBytes: firstPayloadBytes,
 				Error:        err.Error(),
 			})
 			return result, &RelayExit{Stage: "write_upstream", Err: err}
@@ -273,10 +289,11 @@ func Relay(
 			Stage:        "write_first_message_ok",
 			Direction:    "client_to_upstream",
 			MessageType:  relayMessageTypeString(firstMessageType),
-			PayloadBytes: len(firstClientMessage),
+			PayloadBytes: firstPayloadBytes,
 		})
 	}
 	clientToUpstreamFrames.Add(1)
+	firstClientMessage = nil
 	markActivity()
 
 	exitCh := make(chan relayExitSignal, 3)

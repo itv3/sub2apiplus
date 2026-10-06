@@ -587,6 +587,11 @@ type requestBodyState struct {
 	replayable []byte
 	// segmented 保存编译器逐块产出的只读正文；发送、摘要与重放直接读取这些块。
 	segmented *segmentedBodyContent
+	// spooled 保存可显式释放的系统内存块或只读文件；正常发送及摘要不物化整段字节。
+	spooled *requestBodySpoolContent
+	// bodyDigest 只由输出 writer 在生成不可变压缩正文时计算，用于编译摘要。
+	// 定型签名与 Guard 仍各自读取实际正文，不使用该缓存替代篡改检查。
+	bodyDigest string
 	// members 非 nil 表示正文按顶层成员装配（NewSharedReplayableJSONObjectRequestBody），整段
 	// 字节只在确有读取方需要时才由 members 物化，replayable 此时不使用。
 	members    *jsonObjectMembersContent
@@ -756,6 +761,10 @@ func (b RequestBody) ContentLength() int64 {
 }
 
 func (b RequestBody) ReplayableBytes() ([]byte, bool) {
+	if b.state != nil && b.state.spooled != nil {
+		body, err := b.state.spooled.copyBytes()
+		return body, err == nil
+	}
 	if b.state != nil && b.state.document != nil {
 		return b.state.document.encodeSourceOrder(), true
 	}
@@ -781,6 +790,10 @@ func (b RequestBody) replayableView() ([]byte, bool) {
 	if b.state.segmented != nil {
 		return b.state.segmented.materialize(), true
 	}
+	if b.state.spooled != nil {
+		body, err := b.state.spooled.materialize()
+		return body, err == nil
+	}
 	if b.state.members != nil {
 		return b.state.members.materialize(), true
 	}
@@ -789,18 +802,30 @@ func (b RequestBody) replayableView() ([]byte, bool) {
 
 // openReplayable 每次打开独立读取位置。分段正文必须从块中读取，不能在 HTTP 发送或
 // Guard 摘要阶段悄悄物化为连续字节；空正文也保留可重放能力。
-func (b RequestBody) openReplayable() (io.ReadCloser, bool) {
+func (b RequestBody) openReplayable() (io.ReadCloser, bool, error) {
 	if b.Mode() != RequestBodyReplayable {
-		return nil, false
+		return nil, false, nil
 	}
 	if b.ContentLength() == 0 {
-		return http.NoBody, true
+		return http.NoBody, true, nil
 	}
 	if b.state.segmented != nil {
-		return &segmentedBodyReader{segments: b.state.segmented.segments}, true
+		return &segmentedBodyReader{segments: b.state.segmented.segments}, true, nil
+	}
+	if b.state.spooled != nil {
+		reader, err := b.state.spooled.open()
+		return reader, true, err
 	}
 	view, _ := b.replayableView()
-	return io.NopCloser(bytes.NewReader(view)), true
+	return io.NopCloser(bytes.NewReader(view)), true, nil
+}
+
+// 只用于尚未成功交出的编译/准备结果与失败 attempt。成功发送仍由入站 context
+// 和所有权 cleanup 管理，不能在收到响应时提前中断 transport 的异步正文读取。
+func (b RequestBody) closeOwnedReplayableStorage() {
+	if b.state != nil && b.state.spooled != nil {
+		b.state.spooled.close()
+	}
 }
 
 func (b RequestBody) clone() RequestBody {
@@ -817,6 +842,7 @@ func (b RequestBody) clone() RequestBody {
 			mode:       RequestBodyReplayable,
 			replayable: b.state.replayable,
 			segmented:  b.state.segmented,
+			spooled:    b.state.spooled,
 			members:    b.state.members,
 			document:   b.state.document.clone(),
 			length:     b.state.length,
@@ -1049,6 +1075,8 @@ type PreparedRequest struct {
 	endpoint  ResolvedEndpointPlan
 	identity  CodexIdentityFacts
 	dialect   preparedDialectState
+	// 仅保留暂存资源以便失败 attempt 立即清理；普通内存正文无需额外保活。
+	bodyStorage *requestBodySpoolContent
 }
 
 func (p PreparedRequest) TakeHTTPRequest() (*http.Request, error) {
@@ -1479,7 +1507,11 @@ func requestFromCompiled(ctx context.Context, compiled CompiledRequest) (*http.R
 	if compiled.url == nil {
 		return nil, errors.New("CompiledRequest URL 为空")
 	}
-	if reader, replayable := compiled.body.openReplayable(); replayable {
+	reader, replayable, err := compiled.body.openReplayable()
+	if err != nil {
+		return nil, err
+	}
+	if replayable {
 		req, err := http.NewRequestWithContext(ctx, compiled.method, compiled.url.String(), reader)
 		if err != nil {
 			_ = reader.Close()
@@ -1489,8 +1521,8 @@ func requestFromCompiled(ctx context.Context, compiled CompiledRequest) (*http.R
 		req.ContentLength = compiled.body.ContentLength()
 		body := compiled.body
 		req.GetBody = func() (io.ReadCloser, error) {
-			replay, _ := body.openReplayable()
-			return replay, nil
+			replay, _, err := body.openReplayable()
+			return replay, err
 		}
 		return req, nil
 	}

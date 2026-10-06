@@ -188,11 +188,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth &&
 		(passthroughEnabled || wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2)
+	if openAIBorrowsIngressBody(ctx) && (!officialOpenAIHTTPEnabled || passthroughEnabled) {
+		// 兼容、原生 WS 与透传可能在 Forward 返回后继续上传或调用 GetBody。
+		// 每次账号尝试独立判断，换号到这些路径时也不能继续借用入口系统内存。
+		body = bytes.Clone(body)
+		canonicalImageIntentBody = body
+	}
 	// 工作区先于 Lite 归一化创建；只需补小字段时延迟写入，复用后续解码与终态定型。
 	var officialForwardBody *officialForwardHTTPBody
 	if officialOpenAIHTTPEnabled && !passthroughEnabled {
 		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, canonicalImageIntentBody)
 	}
+	defer officialForwardBody.closeStorage()
 	// namespace 冲突必须在 Lite 工具归一化之前校验；非 Lite HTTP 再执行摊平。
 	// 否则转换可能先丢失命名空间结构，让冲突请求绕过 400 校验。
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
@@ -1649,10 +1656,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 						invalidEncryptedDigests,
 						newInvalidDigests,
 					)
-					body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
+					// 复用当前索引并按清洗后的实际成员计长；密文已删除时，
+					// 不能仍按清洗前的整份正文容量分配重试输出。
+					body, err = officialForwardBody.reencodeRequestBody(decoded, &body, &requestView, &reqBody)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
 					}
+					requestView = newOpenAIRequestView(body)
+					reqBody = nil
 					if len(invalidDigests) > 0 {
 						if lineageSessionHash == "" {
 							lineageSessionHash = s.GenerateSessionHash(c, lineageBodyForSessionHash())

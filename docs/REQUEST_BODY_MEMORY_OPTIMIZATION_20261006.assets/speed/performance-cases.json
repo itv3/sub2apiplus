@@ -1,0 +1,50 @@
+[
+  {
+    "name": "continuous-native-1",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-explicit_instructions-1",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-native-2",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-explicit_instructions-2",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-native-3",
+    "shape": "native",
+    "fixture": "native-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  },
+  {
+    "name": "continuous-explicit_instructions-3",
+    "shape": "explicit_instructions",
+    "fixture": "explicit_instructions-16.8.json",
+    "stage": "read_forward",
+    "concurrency": 2,
+    "requests": 4
+  }
+]

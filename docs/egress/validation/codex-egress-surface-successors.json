@@ -20,6 +20,12 @@
       "reason": "Codex 0.157.0 候选（VC-4）：按画像 TurnMetadata 节追加 x-codex-turn-metadata 新键并校验压缩元数据闭集，参与官方出站头定型。"
     },
     {
+      "path": "backend/internal/service/official_egress_ws_body.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "原生 WS 内存优化：按当前画像字段序复用只读正文索引、逐项比较业务历史并按精确长度组装帧。新增文件承接现有 WS 定型辅助逻辑，不新增端点或发送权限；Executor 的身份、闭集和一次性写能力保持不变。"
+    },
+    {
       "path": "backend/internal/service/openai_codex_turn_state_owner.go",
       "file_type": "regular",
       "kind": "surface_addition",

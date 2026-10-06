@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -421,7 +420,7 @@ func (c *officialCodexPooledWebSocketConnection) WriteMessage(
 	if c == nil || c.lease == nil {
 		return errOpenAIWSConnClosed
 	}
-	return c.lease.WriteJSONContext(ctx, json.RawMessage(append([]byte(nil), payload...)))
+	return c.lease.writePreparedJSONContext(ctx, payload)
 }
 
 func (c *officialCodexPooledWebSocketConnection) Close() error {
@@ -542,7 +541,7 @@ func (c *officialCodexDirectWebSocketConnection) WriteMessage(
 	if c == nil || c.connection == nil {
 		return errOpenAIWSConnClosed
 	}
-	return c.connection.WriteJSON(ctx, json.RawMessage(append([]byte(nil), payload...)))
+	return writeOpenAIPreparedJSON(ctx, c.connection, payload)
 }
 
 func (c *officialCodexDirectWebSocketConnection) WriteWebSocketFrame(
@@ -731,7 +730,7 @@ func (s *executorWebSocketLeaseSession) WriteSemanticJSONWithContextTimeout(
 	value any,
 	timeout time.Duration,
 ) error {
-	payload, err := json.Marshal(value)
+	payload, err := marshalOpenAIWSReadonlyJSON(value)
 	if err != nil {
 		return err
 	}
@@ -758,7 +757,9 @@ func prepareOfficialCodexExecutorWebSocketFrame(
 	if session == nil {
 		return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, errors.New("Codex Executor WebSocket session 为空")
 	}
-	body, ownedFields, err := officialegress.PrepareOfficialCodexAttemptBody("responses_ws", payload)
+	body, ownedFields, err := officialegress.PrepareOfficialCodexAttemptRequestBody(
+		"responses_ws", officialegress.NewSharedReplayableRequestBody(payload),
+	)
 	if err != nil {
 		return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
 	}

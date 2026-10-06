@@ -243,3 +243,27 @@ func TestOpenAIWSDeferredIngressMatchesLegacyWire(t *testing.T) {
 		})
 	}
 }
+
+// 索引只可复用到同一只读正文；兼容改写或后续替换必须重新扫描，不能使用旧坐标。
+func TestOpenAIWSDeferredIngressReusesOnlyMatchingNormalizedIndex(t *testing.T) {
+	account := newOfficialOpenAIHTTPTestAccount(94)
+	body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"message","role":"user","content":"` + strings.Repeat("x", 70<<10) + `"}]}`)
+	var index *officialJSONRawIndex
+	normalized, _, err := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body, account, true, &index)
+	require.NoError(t, err)
+	require.NotNil(t, index)
+	reused := newOpenAIWSDeferredIngressBodyWithIndex(normalized, true, index)
+	require.NotNil(t, reused)
+	require.Same(t, index, reused.index)
+	require.Equal(t, normalized, reused.materialize())
+	changed, err := sjson.SetBytes(normalized, "model", "gpt-5.4")
+	require.NoError(t, err)
+	replacement := newOpenAIWSDeferredIngressBodyWithIndex(changed, true, index)
+	require.NotNil(t, replacement)
+	require.NotSame(t, index, replacement.index)
+	require.Equal(t, changed, replacement.materialize())
+	var unused = index
+	_, _, err = normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body, nil, true, &unused)
+	require.NoError(t, err)
+	require.Nil(t, unused)
+}

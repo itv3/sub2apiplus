@@ -734,7 +734,9 @@ func (i *ExecutorInvocation) prepareTypedAttempt(
 	if err != nil {
 		return PreparedRequest{}, err
 	}
+	finishCompileTiming := startRequestBodyTiming(attemptContext, "compile")
 	compiled, err := dialect.compile(attemptContext, input.bundle, input.plan)
+	finishCompileTiming()
 	if err != nil {
 		return PreparedRequest{}, WrapRuntimeError(
 			RuntimeErrorCodeCompilerRejected,
@@ -742,6 +744,12 @@ func (i *ExecutorInvocation) prepareTypedAttempt(
 			fmt.Errorf("编译 official egress request: %w", err),
 		)
 	}
+	bodyTransferred := false
+	defer func() {
+		if !bodyTransferred {
+			compiled.request.body.closeOwnedReplayableStorage()
+		}
+	}()
 	if err := validateCompiledExecutionForPlan(compiled, i.bundleControl, control); err != nil {
 		return PreparedRequest{}, err
 	}
@@ -778,11 +786,18 @@ func (i *ExecutorInvocation) prepareTypedAttempt(
 	if err != nil {
 		return PreparedRequest{}, err
 	}
+	defer func() {
+		if !bodyTransferred && request.Body != nil {
+			_ = request.Body.Close()
+		}
+	}()
+	finishDigestTiming := startRequestBodyTiming(requestContext, "finalization_digest")
 	digest, err := requestDigest(
 		request,
 		compiled.transport.Normalization,
 		compiled.control.protocol,
 	)
+	finishDigestTiming()
 	if err != nil {
 		return PreparedRequest{}, fmt.Errorf("计算定型请求摘要: %w", err)
 	}
@@ -811,11 +826,15 @@ func (i *ExecutorInvocation) prepareTypedAttempt(
 		singleUse: !compiled.control.bodyReplayable,
 		token:     token, transport: compiled.transport, dialect: compiled.dialectState,
 	}
+	if compiled.request.body.state != nil {
+		prepared.bodyStorage = compiled.request.body.state.spooled
+	}
 	if codexState, ok := compiled.dialectState.(codexPreparedState); ok {
 		prepared.bundle = codexState.bundle
 		prepared.endpoint = compiled.endpointPlan
 		prepared.identity = codexState.identity
 	}
+	bodyTransferred = true
 	return prepared, nil
 }
 
@@ -861,12 +880,23 @@ func (i *ExecutorInvocation) executeTypedAttempt(
 	if err != nil {
 		return TransportResult{}, err
 	}
+	if prepared.bodyStorage != nil && prepared.request.Body != nil {
+		// TakeHTTPRequest 已为实际 HTTP 上传创建独立 reader。模板只用于复制请求，
+		// 本次 Execute 退出后撤销它的租约，不能让模板阻止最后上传读者同步关闭文件。
+		defer prepared.request.Body.Close()
+	}
 	entry, err := i.executor.registry.resolve(prepared.transport)
 	if err != nil {
+		if prepared.bodyStorage != nil {
+			prepared.bodyStorage.close()
+		}
 		return TransportResult{}, err
 	}
 	result, err := entry.adapter.ExecuteOfficialEgress(ctx, prepared)
 	if err != nil {
+		if prepared.bodyStorage != nil {
+			prepared.bodyStorage.close()
+		}
 		return TransportResult{}, WrapRuntimeError(
 			RuntimeErrorCodeTransportFailed, "executor.execute_transport", err,
 		)

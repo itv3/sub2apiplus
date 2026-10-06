@@ -1,7 +1,6 @@
 package service
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
@@ -25,7 +24,7 @@ const openAIWSFallbackReasonInvalidEncryptedContent = "invalid_encrypted_content
 const openAIWSIngressSessionHashContextKey = "openai_ws_ingress_session_hash"
 
 func openAIEncryptedContentDigest(encrypted string) string {
-	sum := sha256.Sum256([]byte(encrypted))
+	sum := openAIEncryptedContentSHA256(encrypted)
 	return hex.EncodeToString(sum[:])
 }
 

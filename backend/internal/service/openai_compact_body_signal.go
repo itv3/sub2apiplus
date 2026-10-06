@@ -209,7 +209,7 @@ func openAICompactionTriggerNeedsReorder(index *officialJSONRawIndex) bool {
 	}
 	triggerCount := 0
 	lastIsTrigger := false
-	for _, item := range index.nodes[input].items {
+	for _, item := range index.arrayItems(input) {
 		isTrigger := false
 		if index.nodes[item].kind == officialJSONRawKindObject {
 			if typeNode := index.memberNode(item, "type"); typeNode >= 0 {

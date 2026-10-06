@@ -630,7 +630,7 @@ func appendOpenAIWSReplayInputState(
 			limits:   limits,
 		}
 	}
-	state.items = append(state.items, items...)
+	state.items = combineOpenAIWSReplayItems(state.items, items)
 	state.exists = true
 	state.rawBytes = nextRawBytes
 	return state, nil
@@ -673,8 +673,21 @@ func normalizeOpenAIWSPayloadWithoutInputAndPreviousResponseID(payload []byte) (
 		return nil, errors.New("payload is empty")
 	}
 	var decoded map[string]any
-	if err := decodeOpenAIJSONUseNumber(payload, &decoded); err != nil {
-		return nil, err
+	index, indexErr := buildOfficialJSONRawIndexForDecode(payload)
+	if indexErr == nil && index.nodes[index.root].kind == officialJSONRawKindObject {
+		// 跨轮严格状态只需要头部字段。扫描仍验证整帧，但不解码随后必定删除的
+		// input；保留下来的小状态使用独立字符串，不会钉住上一轮正文或映射。
+		decoded = make(map[string]any)
+		for _, member := range index.objectMembers(index.root) {
+			if member.key != "input" && member.key != "previous_response_id" {
+				decoded[member.key] = index.decodeValue(member.node)
+			}
+		}
+	} else {
+		// 非对象、非法 JSON 和多个顶层值沿用原解码器的错误行为。
+		if err := decodeOpenAIJSONUseNumber(payload, &decoded); err != nil {
+			return nil, err
+		}
 	}
 	delete(decoded, "input")
 	delete(decoded, "previous_response_id")
@@ -699,11 +712,17 @@ func openAIWSExtractNormalizedInputSequence(payload []byte) ([]json.RawMessage, 
 			if !json.Valid(arrayRaw) {
 				return nil, true, errors.New("input array json is invalid")
 			}
-			elems := inputValue.Array()
-			items := make([]json.RawMessage, 0, len(elems))
-			for _, elem := range elems {
+			// 只需原始区间，先计数再精确分配，避免 Array 先建立更大的 Result 数组。
+			count := 0
+			inputValue.ForEach(func(_, _ gjson.Result) bool {
+				count++
+				return true
+			})
+			items := make([]json.RawMessage, 0, count)
+			inputValue.ForEach(func(_, elem gjson.Result) bool {
 				items = append(items, openAIWSRawMessageFromResult(payload, elem))
-			}
+				return true
+			})
 			return items, true, nil
 		}
 		return []json.RawMessage{openAIWSRawMessageFromResult(payload, inputValue)}, true, nil
@@ -855,12 +874,12 @@ func openAIWSRawPayloadHasToolCallOutput(payload []byte) bool {
 		return false
 	}
 	if input.IsArray() {
-		for _, item := range input.Array() {
-			if isCodexToolCallOutputItemType(item.Get("type").String()) {
-				return true
-			}
-		}
-		return false
+		found := false
+		input.ForEach(func(_, item gjson.Result) bool {
+			found = isCodexToolCallOutputItemType(item.Get("type").String())
+			return !found
+		})
+		return found
 	}
 	if input.Type == gjson.JSON {
 		return isCodexToolCallOutputItemType(input.Get("type").String())
@@ -923,7 +942,7 @@ func buildOpenAIWSReplayInputState(
 			limits,
 		)
 	}
-	merged := append(previousItems, currentItems...)
+	merged := combineOpenAIWSReplayItems(previousItems, currentItems)
 	return validateOpenAIWSReplayInputState(
 		newOpenAIWSReplayInputState(merged, true),
 		limits,

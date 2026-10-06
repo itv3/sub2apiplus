@@ -55,24 +55,31 @@ type officialJSONRawMember struct {
 	node int32
 }
 
-// officialJSONRawNode 是原始正文中一个 JSON 值的只读描述。start/end 是去掉外围空白
-// 后的字节区间；对象的 members 按原始顺序保留全部成员（含重复键），数组的 items 按顺序
-// 保留元素节点。
+// officialJSONRawNode 只记录区间、摘要及子项坐标。成员、数组元素与对象查找缓存分别
+// 集中存放，避免每个字符串、数字节点都携带四个用不到的切片或 map 字段。
 type officialJSONRawNode struct {
-	kind     officialJSONRawKind
-	slowPath bool // 字符串含转义或非法 UTF-8：比对必须走反转义路径
-	start    int
-	end      int
-	hash     uint64
-	members  []officialJSONRawMember
-	items    []int32
-	keys     []string         // 对象：去重后按首次出现排序的键，惰性计算
-	lookup   map[string]int32 // 对象：键 → 最后一次出现的成员节点，成员较多时惰性建立
+	kind          officialJSONRawKind
+	slowPath      bool // 字符串含转义或非法 UTF-8：比对必须走反转义路径
+	object        int32
+	start         int
+	end           int
+	hash          uint64
+	childrenStart int32
+	childrenCount int32
+}
+
+// 对象查找状态只为对象分配，键与查找表仍按原规则惰性计算。
+type officialJSONRawObjectAccess struct {
+	keys   []string         // 对象：去重后按首次出现排序的键，惰性计算
+	lookup map[string]int32 // 对象：键 → 最后一次出现的成员节点，成员较多时惰性建立
 }
 
 type officialJSONRawIndex struct {
 	body         []byte
 	nodes        []officialJSONRawNode
+	members      []officialJSONRawMember
+	items        []int32
+	objects      []officialJSONRawObjectAccess
 	root         int32
 	byHash       map[uint64][]int32 // 复合值按结构摘要索引，保持前序顺序；被同名键遮蔽的子树不登记
 	scratch      []byte
@@ -89,12 +96,7 @@ func buildOfficialJSONRawIndex(body []byte) (*officialJSONRawIndex, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errors.New("JSON 正文为空")
 	}
-	index := &officialJSONRawIndex{
-		body:   body,
-		nodes:  make([]officialJSONRawNode, 0, officialJSONRawCountValues(body)),
-		byHash: make(map[uint64][]int32),
-		seed:   officialJSONRawHashSeed,
-	}
+	index := newOfficialJSONRawIndex(body, false)
 	scanner := officialJSONRawScanner{index: index}
 	root, err := scanner.parseValue(0)
 	if err != nil {
@@ -117,7 +119,20 @@ func buildOfficialJSONRawIndex(body []byte) (*officialJSONRawIndex, error) {
 // bytes.IndexByte 跳到结束引号（按前导反斜杠个数识别转义），不逐字节处理。正文合法时结果精确；非法正文
 // 的计数可能不准，只影响预留容量，扫描器照常按需扩容并报告同样的错误。
 func officialJSONRawCountValues(body []byte) int {
-	count := 1
+	return officialJSONRawCountStructure(body).values
+}
+
+type officialJSONRawStructureCount struct {
+	values  int
+	members int
+	items   int
+	objects int
+}
+
+// 一次预扫描同时计算三张只读表和对象缓存的长度。合法正文的数量精确，非法正文
+// 仍由原扫描器报告错误；预扫描不改变接受范围，也不靠缩小容量隐藏后续扩容。
+func officialJSONRawCountStructure(body []byte) officialJSONRawStructureCount {
+	count := officialJSONRawStructureCount{values: 1}
 	inArray := make([]bool, 0, 64)
 	expectFirstItem := false
 	for i := 0; i < len(body); i++ {
@@ -128,7 +143,8 @@ func officialJSONRawCountValues(body []byte) int {
 		if expectFirstItem {
 			expectFirstItem = false
 			if c != ']' {
-				count++
+				count.values++
+				count.items++
 			}
 		}
 		switch c {
@@ -151,6 +167,7 @@ func officialJSONRawCountValues(body []byte) int {
 			}
 			i = end
 		case '{':
+			count.objects++
 			inArray = append(inArray, false)
 		case '[':
 			inArray = append(inArray, true)
@@ -160,14 +177,49 @@ func officialJSONRawCountValues(body []byte) int {
 				inArray = inArray[:len(inArray)-1]
 			}
 		case ':':
-			count++
+			count.values++
+			count.members++
 		case ',':
 			if len(inArray) > 0 && inArray[len(inArray)-1] {
-				count++
+				count.values++
+				count.items++
 			}
 		}
 	}
 	return count
+}
+
+func newOfficialJSONRawIndex(body []byte, skipDigest bool) *officialJSONRawIndex {
+	count := officialJSONRawCountStructure(body)
+	index := &officialJSONRawIndex{
+		body:       body,
+		nodes:      make([]officialJSONRawNode, 0, count.values),
+		members:    make([]officialJSONRawMember, 0, count.members),
+		items:      make([]int32, 0, count.items),
+		objects:    make([]officialJSONRawObjectAccess, 0, count.objects),
+		skipDigest: skipDigest,
+	}
+	if !skipDigest {
+		index.byHash = make(map[uint64][]int32)
+		index.seed = officialJSONRawHashSeed
+	}
+	return index
+}
+
+func (index *officialJSONRawIndex) objectMembers(node int32) []officialJSONRawMember {
+	n := &index.nodes[node]
+	if n.kind != officialJSONRawKindObject || n.childrenCount == 0 {
+		return nil
+	}
+	return index.members[n.childrenStart : n.childrenStart+n.childrenCount]
+}
+
+func (index *officialJSONRawIndex) arrayItems(node int32) []int32 {
+	n := &index.nodes[node]
+	if n.kind != officialJSONRawKindArray || n.childrenCount == 0 {
+		return nil
+	}
+	return index.items[n.childrenStart : n.childrenStart+n.childrenCount]
 }
 
 // officialJSONValidateObject 用与索引扫描器同一套语法（与 encoding/json 对齐）严格校验
@@ -232,6 +284,29 @@ func (s *officialJSONRawScanner) addNode(node officialJSONRawNode) int32 {
 	}
 	s.index.nodes = append(s.index.nodes, node)
 	return int32(len(s.index.nodes) - 1)
+}
+
+func (s *officialJSONRawScanner) addObject(start int, members []officialJSONRawMember) int32 {
+	index := s.index
+	node := officialJSONRawNode{
+		kind: officialJSONRawKindObject, start: start, end: s.pos,
+		hash: index.hashObjectMembers(members), object: int32(len(index.objects)),
+		childrenStart: int32(len(index.members)), childrenCount: int32(len(members)),
+	}
+	index.members = append(index.members, members...)
+	index.objects = append(index.objects, officialJSONRawObjectAccess{})
+	return s.addNode(node)
+}
+
+func (s *officialJSONRawScanner) addArray(start int, items []int32) int32 {
+	index := s.index
+	node := officialJSONRawNode{
+		kind: officialJSONRawKindArray, start: start, end: s.pos,
+		hash:          index.hashArrayItems(items),
+		childrenStart: int32(len(index.items)), childrenCount: int32(len(items)),
+	}
+	index.items = append(index.items, items...)
+	return s.addNode(node)
 }
 
 func (s *officialJSONRawScanner) parseValue(depth int) (int32, error) {
@@ -454,12 +529,7 @@ func (s *officialJSONRawScanner) parseObject(depth int) (int32, error) {
 		if s.index.validateOnly {
 			return -1, nil
 		}
-		return s.addNode(officialJSONRawNode{
-			kind:  officialJSONRawKindObject,
-			start: start,
-			end:   s.pos,
-			hash:  s.index.hashObjectMembers(nil),
-		}), nil
+		return s.addObject(start, nil), nil
 	}
 	for {
 		s.skipSpace()
@@ -502,15 +572,9 @@ func (s *officialJSONRawScanner) parseObject(depth int) (int32, error) {
 				return -1, nil
 			}
 			if members == nil {
-				members = append([]officialJSONRawMember(nil), localMembers[:memberCount]...)
+				members = localMembers[:memberCount]
 			}
-			return s.addNode(officialJSONRawNode{
-				kind:    officialJSONRawKindObject,
-				start:   start,
-				end:     s.pos,
-				hash:    s.index.hashObjectMembers(members),
-				members: members,
-			}), nil
+			return s.addObject(start, members), nil
 		default:
 			return -1, errors.New("JSON 对象成员分隔符非法")
 		}
@@ -528,12 +592,7 @@ func (s *officialJSONRawScanner) parseArray(depth int) (int32, error) {
 		if s.index.validateOnly {
 			return -1, nil
 		}
-		return s.addNode(officialJSONRawNode{
-			kind:  officialJSONRawKindArray,
-			start: start,
-			end:   s.pos,
-			hash:  s.index.hashArrayItems(nil),
-		}), nil
+		return s.addArray(start, nil), nil
 	}
 	for {
 		child, err := s.parseValue(depth + 1)
@@ -555,13 +614,7 @@ func (s *officialJSONRawScanner) parseArray(depth int) (int32, error) {
 			if s.index.validateOnly {
 				return -1, nil
 			}
-			return s.addNode(officialJSONRawNode{
-				kind:  officialJSONRawKindArray,
-				start: start,
-				end:   s.pos,
-				hash:  s.index.hashArrayItems(items),
-				items: items,
-			}), nil
+			return s.addArray(start, items), nil
 		default:
 			return -1, errors.New("JSON 数组元素分隔符非法")
 		}
@@ -581,7 +634,7 @@ func (index *officialJSONRawIndex) registerComposites(node int32) {
 	case officialJSONRawKindArray:
 		hash := index.nodes[node].hash
 		index.byHash[hash] = append(index.byHash[hash], node)
-		for _, item := range index.nodes[node].items {
+		for _, item := range index.arrayItems(node) {
 			index.registerComposites(item)
 		}
 	}
@@ -598,15 +651,17 @@ func (index *officialJSONRawIndex) uniqueKeys(node int32) []string {
 	if n.kind != officialJSONRawKindObject {
 		return nil
 	}
-	if n.keys != nil || len(n.members) == 0 {
-		return n.keys
+	access := &index.objects[n.object]
+	members := index.objectMembers(node)
+	if access.keys != nil || len(members) == 0 {
+		return access.keys
 	}
-	keys := make([]string, 0, len(n.members))
-	if len(n.members) <= officialJSONRawLookupThreshold {
-		for i, member := range n.members {
+	keys := make([]string, 0, len(members))
+	if len(members) <= officialJSONRawLookupThreshold {
+		for i, member := range members {
 			duplicate := false
 			for j := 0; j < i; j++ {
-				if n.members[j].key == member.key {
+				if members[j].key == member.key {
 					duplicate = true
 					break
 				}
@@ -616,8 +671,8 @@ func (index *officialJSONRawIndex) uniqueKeys(node int32) []string {
 			}
 		}
 	} else {
-		seen := make(map[string]struct{}, len(n.members))
-		for _, member := range n.members {
+		seen := make(map[string]struct{}, len(members))
+		for _, member := range members {
 			if _, exists := seen[member.key]; exists {
 				continue
 			}
@@ -625,7 +680,7 @@ func (index *officialJSONRawIndex) uniqueKeys(node int32) []string {
 			keys = append(keys, member.key)
 		}
 	}
-	n.keys = keys
+	access.keys = keys
 	return keys
 }
 
@@ -636,22 +691,24 @@ func (index *officialJSONRawIndex) memberNode(node int32, key string) int32 {
 	if n.kind != officialJSONRawKindObject {
 		return -1
 	}
-	if len(n.members) > officialJSONRawLookupThreshold {
-		if n.lookup == nil {
-			lookup := make(map[string]int32, len(n.members))
-			for _, member := range n.members {
+	access := &index.objects[n.object]
+	members := index.objectMembers(node)
+	if len(members) > officialJSONRawLookupThreshold {
+		if access.lookup == nil {
+			lookup := make(map[string]int32, len(members))
+			for _, member := range members {
 				lookup[member.key] = member.node
 			}
-			n.lookup = lookup
+			access.lookup = lookup
 		}
-		if child, exists := n.lookup[key]; exists {
+		if child, exists := access.lookup[key]; exists {
 			return child
 		}
 		return -1
 	}
-	for i := len(n.members) - 1; i >= 0; i-- {
-		if n.members[i].key == key {
-			return n.members[i].node
+	for i := len(members) - 1; i >= 0; i-- {
+		if members[i].key == key {
+			return members[i].node
 		}
 	}
 	return -1
@@ -855,11 +912,11 @@ func (index *officialJSONRawIndex) equals(node int32, value any) bool {
 		}
 		return true
 	case []any:
-		if n.kind != officialJSONRawKindArray || len(n.items) != len(typed) {
+		if n.kind != officialJSONRawKindArray || int(n.childrenCount) != len(typed) {
 			return false
 		}
 		for i, child := range typed {
-			if !index.equals(n.items[i], child) {
+			if !index.equals(index.arrayItems(node)[i], child) {
 				return false
 			}
 		}
@@ -1143,7 +1200,7 @@ func officialJSONAppendObject(index *officialJSONRawIndex, out []byte, payload m
 func officialJSONAppendArray(index *officialJSONRawIndex, out []byte, items []any, node int32) ([]byte, error) {
 	var originalItems []int32
 	if index != nil && node >= 0 && index.nodes[node].kind == officialJSONRawKindArray {
-		originalItems = index.nodes[node].items
+		originalItems = index.arrayItems(node)
 	}
 	used := make([]bool, len(originalItems))
 	out = append(out, '[')

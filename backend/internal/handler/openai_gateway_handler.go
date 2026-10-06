@@ -81,8 +81,8 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 	var memoryErr *service.OpenAIWSRequestMemoryError
-	// 本地请求上限或共享内存预算拒绝不反映上游账号健康，不能影响账号调度。
-	return err != nil && !errors.As(err, &memoryErr) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
+	// 本地正文限额、内存准入及磁盘暂存错误不反映账号健康，不能影响账号调度。
+	return err != nil && !errors.As(err, &memoryErr) && !service.IsRequestBodyStorageError(err) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
 }
 
 // openAIWSIngressEndedByClient reports whether a finished ingress WebSocket turn
@@ -273,9 +273,11 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	if parent != nil {
 		done = service.InflightReservationFromContext(parent).Acquire()
 	}
+	// 任务入队前只复制计费确实需要的标量值，后台闭包不保活整个入站 context。
+	values := usageRecordContext(parent, context.Background())
 	return func(ctx context.Context) {
 		defer done()
-		task(usageRecordContext(parent, ctx))
+		task(usageRecordContext(values, ctx))
 	}, done
 }
 
@@ -505,12 +507,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	defer requestMemoryRelease()
 
 	// 规范化可能把裸控制字符扩大成六字节转义，必须先补足额度再分配结果。
-	body, err := readAdmittedResponsesJSONRequestBodyWithReservation(c.Request, h.cfg, func(normalizedBytes int) error {
+	body, bodyOwner, err := readOwnedAdmittedResponsesJSONRequestBody(c.Request, h.cfg, func(normalizedBytes int) error {
 		if !h.ensureResponsesRequestMemoryForBody(c, normalizedBytes, reqLog) {
 			return errResponsesRequestMemoryRejected
 		}
 		return nil
 	})
+	defer func() {
+		if closeErr := bodyOwner.Close(); closeErr != nil {
+			reqLog.Error("openai.request_body_release_failed", zap.Error(closeErr))
+		}
+	}()
+	if bodyOwner.IsMapped() {
+		c.Request = c.Request.WithContext(service.WithOpenAIBorrowedIngressBody(c.Request.Context()))
+	}
 	if err != nil {
 		if errors.Is(err, errResponsesRequestMemoryRejected) {
 			return
@@ -520,9 +530,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		logRequestBodyReadFailure(reqLog, c.Request, err)
-		if isRequestBodyStorageError(err) {
-			c.Header("Retry-After", "1")
-			h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "Request body storage temporarily unavailable")
+		if h.handleRequestBodyStorageFailure(c, err, streamStarted, false) {
 			return
 		}
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
@@ -933,6 +941,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 			sessionID := service.ExtractClientSessionID(c)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
+			channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel)
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             res,
@@ -948,7 +957,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel),
+					ChannelUsageFields: channelUsageFields,
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
 					NativeCompactionV2: nativeV2,
@@ -978,6 +987,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 					zap.Error(err),
 				)
+				submitResponsesUsage(result)
+				return
+			}
+			if h.handleRequestBodyStorageFailure(c, err, streamStarted, false) {
 				submitResponsesUsage(result)
 				return
 			}
@@ -1304,6 +1317,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
+		if h.handleRequestBodyStorageFailure(c, err, streamStarted, true) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
@@ -1568,6 +1584,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if h.handleRequestBodyStorageFailure(c, err, streamStarted, true) {
+				submitMessagesUsage(result)
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai_messages.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -1804,6 +1824,9 @@ func normalizeCodexAutomationBootstrap(body []byte) ([]byte, bool) {
 }
 
 func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]any) bool, allowHistoricalContext bool) ([]byte, bool) {
+	if !codexBootstrapMayNeedNormalization(body) {
+		return body, false
+	}
 	if !hasUniqueJSONMembers(body) {
 		return body, false
 	}
@@ -2488,6 +2511,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	wsMemoryReservation := &requestMemoryReservation{admission: h.responsesRequestMemoryAdmission()}
 	wsMemory := service.NewOpenAIWSRequestMemory(maxRequestBytes, fixedRequestBytes, requestAmplification, wsMemoryReservation.resize)
+	wsMemory.EnableOwnedBodies()
 	defer func() {
 		wsMemory.Close()
 		wsMemoryReservation.release()
@@ -2777,8 +2801,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
-	wsAttemptMessage := firstMessage
-	if closeOnMemoryFailure(wsMemory.Retain("handler", firstMessage, wsAttemptMessage)) {
+	wsTurnPayload := &openAIWSTurnPayload{memory: wsMemory}
+	if closeOnMemoryFailure(wsTurnPayload.setCurrent(1, firstMessage, reqModel)) {
 		return
 	}
 	waitForWSSameAccountRetry := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
@@ -2850,12 +2874,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) && requestPlatform == service.PlatformOpenAI {
 		requiredCapability = service.OpenAIEndpointCapabilityResponses
 	}
-	// 之后的 failover 只需 wsAttemptMessage；原始首帧已完成校验，不再保活第二份。
+	// 首帧校验已完成，换号与审计各自按轮次持有原文；成功的轮次结束后即可释放。
 	firstMessage = nil
-	if closeOnMemoryFailure(wsMemory.Retain("handler", wsAttemptMessage)) ||
-		closeOnMemoryFailure(wsMemory.BeginAttempt(wsAttemptMessage)) {
-		return
-	}
 
 	// 分组利润控制：WS 桥按连接装配定价上下文并装门（选号与抢槽共用该
 	// ctx）。连接内不重选号，但每个 turn 开始经 BeforeTurn 重新冻结 pricingAt
@@ -3071,6 +3091,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
+				if err := wsTurnPayload.setCurrent(turn, payload, originalModel); err != nil {
+					return err
+				}
 				if err := setCyberTurnBody(turn, payload); err != nil {
 					return err
 				}
@@ -3184,6 +3207,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return checkSimpleModeTurnBilling()
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
+				if turnErr == nil {
+					// 风控回调仍有独立只读引用；本回调结束后同步撤销成功轮次的重试原文。
+					defer wsTurnPayload.retire(turn)
+				}
 				turnStart := getTurnStart(turn)
 				cyberBlockBody := takeCyberTurnBody(turn)
 				// 正文仍会被本回调用于审计，回调退出后再撤销其持有快照。
@@ -3260,7 +3287,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if scheduleModel == "" {
 					scheduleModel = turnRequestedModel
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				if !service.IsRequestBodyStorageError(turnErr) {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				}
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
@@ -3296,38 +3325,46 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			},
 		}
 
-		wsFirstMessage := wsAttemptMessage
-		// 切组/会话失配防护：previous_response_id 未在当前分组命中粘连账号（StickyPreviousHit=false），
-		// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
-		// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
-		// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
-		if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
-			wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
-			reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
-				zap.Int64("account_id", account.ID),
-				zap.String("schedule_layer", scheduleDecision.Layer),
-			)
-		}
+		{
+			wsFirstMessage, _, _ := wsTurnPayload.snapshot()
+			// 切组/会话失配防护：previous_response_id 未在当前分组命中粘连账号（StickyPreviousHit=false），
+			// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
+			// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
+			// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
+			if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+				wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
+				reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
+					zap.Int64("account_id", account.ID),
+					zap.String("schedule_layer", scheduleDecision.Layer),
+				)
+			}
 
-		// WebSocket 首包可能很大，hash 必须在 hooks 外算成字符串，避免 AfterTurn 闭包保活请求体。
-		requestPayloadHash = service.HashUsageRequestPayload(wsFirstMessage)
-		if preemptCtx, cleanupPreempt, armed := h.gatewayService.BeginOpenAIWSIngressSessionPreemptionWithClient(accountCtx, c, account, wsFirstMessage, wsConn); armed {
-			ctx = preemptCtx
-			accountCtx = preemptCtx
-			defer cleanupPreempt()
+			// WebSocket 首包可能很大，hash 必须在 hooks 外算成字符串，避免 AfterTurn 闭包保活请求体。
+			requestPayloadHash = service.HashUsageRequestPayload(wsFirstMessage)
+			if preemptCtx, cleanupPreempt, armed := h.gatewayService.BeginOpenAIWSIngressSessionPreemptionWithClient(accountCtx, c, account, wsFirstMessage, wsConn); armed {
+				ctx = preemptCtx
+				accountCtx = preemptCtx
+				defer cleanupPreempt()
+			}
+			if closeOnMemoryFailure(wsTurnPayload.prepare(wsFirstMessage)) {
+				return
+			}
 		}
 
 		for {
-			if closeOnMemoryFailure(wsMemory.Retain("handler", wsAttemptMessage, wsFirstMessage)) ||
-				closeOnMemoryFailure(wsMemory.BeginAttempt(wsFirstMessage)) {
+			if closeOnMemoryFailure(wsTurnPayload.beginAttempt()) {
 				return
 			}
-			err := h.gatewayService.ProxyResponsesWebSocketFromClient(accountCtx, c, wsConn, account, token, wsFirstMessage, hooks)
+			err := h.gatewayService.ProxyResponsesWebSocketFromClient(accountCtx, c, wsConn, account, token, wsTurnPayload.takePrepared(), hooks)
 			if err == nil {
 				reqLog.Info("openai.websocket_ingress_closed", zap.Int64("account_id", account.ID))
 				return
 			}
 			if closeOnMemoryFailure(err) {
+				return
+			}
+			if service.IsRequestBodyStorageError(err) {
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "request body storage temporarily unavailable; retry later")
 				return
 			}
 			if service.IsOpenAIWSSessionPreemptedError(err) {
@@ -3338,12 +3375,43 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				retryPayload, retryCurrentTurn := service.OpenAIWSCurrentTurnRetryPayload(err)
-				nextAttemptMessage, retrySafe := openAIWSNextAttemptMessage(wsAttemptMessage, retryPayload, retryCurrentTurn)
+				currentPayload, currentModel, currentTurn := wsTurnPayload.snapshot()
+				nextAttemptMessage, retrySafe := openAIWSNextAttemptMessage(currentPayload, retryPayload, retryCurrentTurn)
 				if !retrySafe {
 					closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 					return
 				}
-				wsAttemptMessage = nextAttemptMessage
+				// 后续帧可省略模型；跨账号后它成为新 attempt 的首帧，须恢复当前客户端模型。
+				if strings.TrimSpace(gjson.GetBytes(nextAttemptMessage, "model").String()) == "" && currentModel != "" {
+					nextAttemptMessage = h.gatewayService.ReplaceModelInBody(nextAttemptMessage, currentModel)
+				}
+				if currentTurn > 1 {
+					reqModel = currentModel
+					if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformComposite {
+						wsRouteModel = reqModel
+					}
+					channelMappingWS, _ = h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, wsRouteModel)
+					wsForwardModel = openAIChannelForwardModel(channelMappingWS, wsRouteModel)
+					imageIntent = service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, nextAttemptMessage)
+					requiredCapability = service.OpenAIEndpointCapabilityChatCompletions
+					if imageIntent && requestPlatform == service.PlatformOpenAI {
+						requiredCapability = service.OpenAIEndpointCapabilityResponses
+					}
+				}
+				previousResponseID = strings.TrimSpace(gjson.GetBytes(nextAttemptMessage, "previous_response_id").String())
+				coverage := service.AnalyzeToolCallOutputContextCoverageBytes(nextAttemptMessage)
+				previousResponseCanMove = !coverage.HasFunctionCallOutput || coverage.ContextCoversAllCallIDs
+				if closeOnMemoryFailure(wsTurnPayload.setCurrent(1, nextAttemptMessage, reqModel)) {
+					return
+				}
+				// 一个 attempt 已完全退出，旧轮次审计引用也应随重试原文一起替换。
+				cyberTurnBodiesMu.Lock()
+				cyberTurnBodies = map[int][]byte{1: nextAttemptMessage}
+				cyberMemoryErr := retainCyberTurnBodies()
+				cyberTurnBodiesMu.Unlock()
+				if closeOnMemoryFailure(cyberMemoryErr) {
+					return
+				}
 				if retryCurrentTurn {
 					previousResponseID = ""
 					reqLog.Warn("openai.websocket_current_turn_failover_retry",
@@ -3371,7 +3439,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						}
 						currentAccountRelease = wrapReleaseOnDone(ctx, accountRelease)
 					}
-					wsFirstMessage = wsAttemptMessage
+					if closeOnMemoryFailure(wsTurnPayload.prepare(nextAttemptMessage)) {
+						return
+					}
 					continue
 				}
 				if handleWSFailover(account, failoverErr) {
@@ -3811,6 +3881,31 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 	h.handleStreamingAwareErrorWithCode(c, status, errType, "", message, streamStarted, false)
 }
 
+// handleRequestBodyStorageFailure 在任何换号或账号健康记账之前响应本机暂存故障。
+// 已提交的 SSE 保持原协议，通过已有流内终止事件通知重试；不泄露暂存路径。
+func (h *OpenAIGatewayHandler) handleRequestBodyStorageFailure(c *gin.Context, err error, streamStarted, anthropic bool) bool {
+	if !service.IsRequestBodyStorageError(err) {
+		return false
+	}
+	if service.IsResponseCommitted(c) {
+		return true
+	}
+	const message = "Request body storage temporarily unavailable; retry later"
+	// 先停止心跳并取得 Writer 所有权，再判断响应头是否还能写入。
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) || c.Writer.Written() {
+		streamStarted = true
+	}
+	if !streamStarted {
+		c.Header("Retry-After", "1")
+	}
+	if anthropic {
+		h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", message, streamStarted)
+	} else {
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "service_unavailable", message, streamStarted)
+	}
+	return true
+}
+
 func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 	c *gin.Context,
 	status int,
@@ -4106,6 +4201,9 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 
 func openAIWSNextAttemptMessage(current, retryPayload []byte, retryCurrentTurn bool) ([]byte, bool) {
 	if !retryCurrentTurn {
+		if len(current) == 0 {
+			return nil, false
+		}
 		return append([]byte(nil), current...), true
 	}
 	if len(retryPayload) == 0 {

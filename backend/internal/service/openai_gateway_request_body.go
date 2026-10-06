@@ -1495,6 +1495,14 @@ func normalizeOpenAIResponseFormatSchemasBody(body []byte) ([]byte, bool, error)
 }
 
 func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account, responsesLite bool) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body, account, responsesLite, nil)
+}
+
+// 返回仍对应最终只读正文的索引，供随后 bridge 准备复用；任何改写都会使旧索引失效。
+func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body []byte, account *Account, responsesLite bool, indexOut **officialJSONRawIndex) ([]byte, bool, error) {
+	if indexOut != nil {
+		*indexOut = nil
+	}
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
@@ -1638,6 +1646,9 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	} else if triggerChanged {
 		normalized = triggerBody
 		changed = true
+	}
+	if indexOut != nil && bodyIndex != nil && officialForwardSameBody(normalized, bodyIndex.body) {
+		*indexOut = bodyIndex
 	}
 	return normalized, changed, nil
 }

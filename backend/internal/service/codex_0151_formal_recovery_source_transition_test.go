@@ -113,11 +113,30 @@ func codex0151WorktreeSuccessorAfterService(path, currentDigest string) bool {
 		return false
 	}
 	for _, entry := range receipt.Entries {
-		if entry.Path == path && entry.After.SHA256 == currentDigest {
+		// 历史 addition 也可能继续演进；必须从已经验证的工作区摘要沿同一路径的
+		// 已审计 successor 边抵达当前摘要，不能仅凭“文件存在”或摘要格式放行。
+		if entry.Path == path && (entry.After.SHA256 == currentDigest ||
+			auditedSourceSuccessorReachesService(path, entry.After.SHA256, currentDigest)) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestCodex0151WorktreeSuccessorAfterServiceRejectsUnregisteredDigest(t *testing.T) {
+	const path = "backend/internal/service/openai_invalid_encrypted_content_state.go"
+	raw, err := os.ReadFile(filepath.Join("../../..", path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := upstreamMergeFrameworkServiceDigest(raw)
+	if !codex0151WorktreeSuccessorAfterService(path, digest) {
+		t.Fatal("已登记的精确后继链必须能够承接历史 addition")
+	}
+	if codex0151WorktreeSuccessorAfterService(path, strings.Repeat("a", 64)) ||
+		codex0151WorktreeSuccessorAfterService(path+".unknown", digest) {
+		t.Fatal("未登记的摘要或其他路径不能借用已登记后继链")
+	}
 }
 
 func codex0151WorktreeSuccessorEdgeService(path, priorDigest, currentDigest string) bool {

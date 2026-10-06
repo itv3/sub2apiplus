@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -18,6 +19,12 @@ const (
 )
 
 type openAIInvalidEncryptedDigest [sha256.Size]byte
+
+// 哈希只同步读取字符串，返回的固定长度摘要不引用原文。直接借用只读视图，
+// 避免在坏密文重试时为整段 encrypted_content 再复制一份字节切片。
+func openAIEncryptedContentSHA256(value string) [sha256.Size]byte {
+	return sha256.Sum256(unsafe.Slice(unsafe.StringData(value), len(value)))
+}
 
 type openAIInvalidEncryptedAccountBinding struct {
 	digests   map[openAIInvalidEncryptedDigest]struct{}
@@ -119,7 +126,8 @@ func buildOpenAIInvalidEncryptedScope(
 		return openAIInvalidEncryptedScope{}, false
 	}
 	return openAIInvalidEncryptedScope{
-		Model:    model,
+		// 作用域会进入跨请求缓存，不能保留共享解码借用的入站正文。
+		Model:    strings.Clone(model),
 		Protocol: protocol,
 		Endpoint: endpoint,
 		ChainKey: chainKey,
@@ -140,7 +148,7 @@ func openAIEncryptedReasoningItemDigest(item any) (openAIInvalidEncryptedDigest,
 		return openAIInvalidEncryptedDigest{}, false
 	}
 	if encryptedString, ok := encryptedContent.(string); ok {
-		return sha256.Sum256([]byte(encryptedString)), true
+		return openAIEncryptedContentSHA256(encryptedString), true
 	}
 	encoded, err := json.Marshal(encryptedContent)
 	if err != nil {

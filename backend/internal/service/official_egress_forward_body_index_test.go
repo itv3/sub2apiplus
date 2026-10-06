@@ -33,8 +33,8 @@ func forwardBodyIndexRequireEqual(t *testing.T, name string, want, got *official
 		require.Equal(t, w.start, g.start, "%s：节点 %d", name, i)
 		require.Equal(t, w.end, g.end, "%s：节点 %d", name, i)
 		require.Equal(t, w.hash, g.hash, "%s：节点 %d 摘要", name, i)
-		require.Equal(t, w.members, g.members, "%s：节点 %d", name, i)
-		require.Equal(t, w.items, g.items, "%s：节点 %d", name, i)
+		require.Equal(t, want.objectMembers(int32(i)), got.objectMembers(int32(i)), "%s：节点 %d", name, i)
+		require.Equal(t, want.arrayItems(int32(i)), got.arrayItems(int32(i)), "%s：节点 %d", name, i)
 	}
 	require.Equal(t, want.byHash, got.byHash, "%s：复合值索引必须一致", name)
 }

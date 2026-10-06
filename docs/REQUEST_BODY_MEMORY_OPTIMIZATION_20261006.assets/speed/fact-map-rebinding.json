@@ -1,0 +1,14 @@
+{
+  "before": "1650c446ea3dd8a5d39c5ddb119878116037bc8ab82aaf67095511b0842e2971",
+  "after": "5871ec9996f204e6c67c027c46fc21bf7051d3ebb6f8ff71fb1eb8055bc599f1",
+  "changed": [
+    {
+      "test": "TestCandidateTraceCodexGuardianReviewConditionalHeader",
+      "path": "backend/internal/officialegress/compiler.go",
+      "before": "9429a536996ec5fdefb0c9297ee7aed0d60fec115904d40572fa9bd7b3d7cf09",
+      "after": "886733e5e17de07d174f1dbe52fa9cd2999851809608b857274aff671233054e"
+    }
+  ],
+  "tests": 15,
+  "facts": 32
+}

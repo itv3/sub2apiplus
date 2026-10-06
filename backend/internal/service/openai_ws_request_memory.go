@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 	"sync"
 	"unsafe"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	coderws "github.com/coder/websocket"
 	"github.com/tidwall/gjson"
 )
@@ -33,6 +35,11 @@ func (e *OpenAIWSRequestMemoryError) closeError() *OpenAIWSClientCloseError {
 
 type openAIWSMemoryRange struct{ start, end uintptr }
 
+type openAIWSOwnedBuffer struct {
+	body  *pkghttputil.OwnedRequestBody
+	spans []openAIWSMemoryRange
+}
+
 // OpenAIWSRequestMemory 只在连接内保存当前 owner 快照。共享正文按底层数组去重，
 // 处理中正文使用放大权重，跨轮缓存只按实际仍保活的数组容量计费。
 // resize 必须原子替换该连接在 HTTP/WS 公共准入器中的权重。
@@ -50,6 +57,9 @@ type OpenAIWSRequestMemory struct {
 	workingBytes    int64
 	readingBytes    int64
 	joinBytes       int64
+	ownedBodies     bool
+	ownedBuffers    []openAIWSOwnedBuffer
+	readers         sync.WaitGroup
 	closed          bool
 }
 
@@ -60,7 +70,64 @@ func NewOpenAIWSRequestMemory(maxBytes, fixedBytes int64, amplification float64,
 	}
 }
 
+// EnableOwnedBodies 仅供已审计正文借用生命周期的入口显式开启。
+// 默认仍使用 Go 堆正文，兼容把裸切片持有到连接之外的旧调用方。
+func (m *OpenAIWSRequestMemory) EnableOwnedBodies() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.closed {
+		m.ownedBodies = true
+	}
+}
+
+// DisableOwnedBodies 只影响之后的读取；已有映射仍由原持有点保护，不能就地释放。
+func (m *OpenAIWSRequestMemory) DisableOwnedBodies() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ownedBodies = false
+}
+
+func (m *OpenAIWSRequestMemory) ownedBodiesEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ownedBodies && !m.closed
+}
+
+// 先在锁内登记读者，再启动 goroutine，避免 Close 的 Wait 与新的 Add 交错。
+func (m *OpenAIWSRequestMemory) startReader() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return (&OpenAIWSRequestMemoryError{}).closeError()
+	}
+	m.readers.Add(1)
+	return nil
+}
+
+func (m *OpenAIWSRequestMemory) finishReader() {
+	if m != nil {
+		m.readers.Done()
+	}
+}
+
 type openAIWSRequestMemoryContextKey struct{}
+
+// takeOpenAIWSClientPayload 把入口正文移交给下一层，同时清除调用层的切片引用。
+// 正文仍按只读约定共享；此处不复制，也不改变重试或审计各自持有的当前轮原文。
+func takeOpenAIWSClientPayload(payload *[]byte) []byte {
+	body := *payload
+	*payload = nil
+	return body
+}
 
 func WithOpenAIWSRequestMemory(ctx context.Context, memory *OpenAIWSRequestMemory) context.Context {
 	return context.WithValue(ctx, openAIWSRequestMemoryContextKey{}, memory)
@@ -120,7 +187,12 @@ func (m *OpenAIWSRequestMemory) EnsureWorkingBytes(bytes int64) error {
 func (m *OpenAIWSRequestMemory) beginRead() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.applyLocked(map[string][][]byte{"frame": nil}, 0, 0, 0)
+	if err := m.applyLocked(map[string][][]byte{"frame": nil}, 0, 0, 0); err != nil {
+		return err
+	}
+	// 轮次边界前已登记完 handler、replay、重试和 context 的所有持有点。
+	// Retain 本身不释放映射，允许调用方在同步交接期间先撤销旧名称再登记新名称。
+	return m.releaseUnusedOwnedLocked(nil)
 }
 
 func (m *OpenAIWSRequestMemory) growRead(bytes, joinBytes int64) error {
@@ -135,6 +207,24 @@ func (m *OpenAIWSRequestMemory) commitRead(payload []byte) error {
 	return m.applyLocked(map[string][][]byte{"frame": {payload}}, int64(len(payload)), 0, 0)
 }
 
+func (m *OpenAIWSRequestMemory) commitOwnedRead(body *pkghttputil.OwnedRequestBody) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	buffer := openAIWSOwnedBuffer{body: body}
+	for _, payload := range body.RetainedBuffers() {
+		if cap(payload) > 0 {
+			start := uintptr(unsafe.Pointer(unsafe.SliceData(payload)))
+			buffer.spans = append(buffer.spans, openAIWSMemoryRange{start: start, end: start + uintptr(cap(payload))})
+		}
+	}
+	m.ownedBuffers = append(m.ownedBuffers, buffer)
+	if err := m.applyLocked(map[string][][]byte{"frame": {body.Bytes()}}, int64(len(body.Bytes())), 0, 0); err != nil {
+		m.ownedBuffers = m.ownedBuffers[:len(m.ownedBuffers)-1]
+		return err
+	}
+	return nil
+}
+
 func (m *OpenAIWSRequestMemory) abortRead() {
 	if m == nil {
 		return
@@ -144,23 +234,92 @@ func (m *OpenAIWSRequestMemory) abortRead() {
 	_ = m.applyLocked(map[string][][]byte{"frame": nil}, 0, 0, 0)
 }
 
+// discardRead 只用于取消方丢弃尚未交付的成功读结果，调用前必须 join 读协程。
+// 普通失败的本次租约由读取函数关闭；其余已登记的跨轮映射仍留到下一次 beginRead。
+func (m *OpenAIWSRequestMemory) discardRead(body *pkghttputil.OwnedRequestBody) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.applyLocked(map[string][][]byte{"frame": nil}, 0, 0, 0); err != nil {
+		return err
+	}
+	if body == nil {
+		return nil
+	}
+	return m.releaseUnusedOwnedLocked(body)
+}
+
+// Close 先禁止新增读者，再等待已登记读协程结束，最后同步释放映射。
+// 调用方应先关闭连接或取消读取；本方法不替代传输层取消，也不允许尚有正文消费者时关闭。
 func (m *OpenAIWSRequestMemory) Close() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return
-	}
 	m.closed = true
+	m.mu.Unlock()
+	m.readers.Wait()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.owners = nil
 	m.roots = nil
-	m.retainedBytes, m.frameBytes = 0, 0
+	m.frameBytes = 0
 	m.workingBytes, m.readingBytes, m.joinBytes = 0, 0, 0
-	if m.resize != nil {
-		m.resize(0)
+	if err := m.releaseUnusedOwnedLocked(nil); err != nil {
+		// munmap 失败时保留租约和实际计费，后续 Close 允许重试；不能报告已释放。
+		logOpenAIWSModeInfo("ingress_ws_owned_body_release_failed cause=%v", err)
 	}
+}
+
+func openAIWSRangesOverlap(roots []openAIWSMemoryRange, span openAIWSMemoryRange) bool {
+	index := sort.Search(len(roots), func(i int) bool { return roots[i].end > span.start })
+	return index < len(roots) && roots[index].start < span.end
+}
+
+func (m *OpenAIWSRequestMemory) retainedBytesLocked(roots []openAIWSMemoryRange) int64 {
+	var retained int64
+	for _, span := range roots {
+		retained += int64(span.end - span.start)
+	}
+	for _, buffer := range m.ownedBuffers {
+		for _, span := range buffer.spans {
+			if !openAIWSRangesOverlap(roots, span) {
+				// 已撤销引用但尚未到释放边界的映射同样占系统内存，不能提前归还预算。
+				retained += int64(span.end - span.start)
+			}
+		}
+	}
+	return retained
+}
+
+func (m *OpenAIWSRequestMemory) releaseUnusedOwnedLocked(only *pkghttputil.OwnedRequestBody) error {
+	var releaseErr error
+	kept := m.ownedBuffers[:0]
+	for _, buffer := range m.ownedBuffers {
+		retained := only != nil && buffer.body != only
+		for _, span := range buffer.spans {
+			retained = retained || openAIWSRangesOverlap(m.roots, span)
+		}
+		if !retained {
+			if err := buffer.body.Close(); err != nil {
+				releaseErr = errors.Join(releaseErr, err)
+				retained = true
+			}
+		}
+		if retained {
+			kept = append(kept, buffer)
+		}
+	}
+	clear(m.ownedBuffers[len(kept):])
+	m.ownedBuffers = kept
+	retained := m.retainedBytesLocked(m.roots)
+	if err := m.resizeWeightLocked(retained, m.frameBytes, m.workingBytes, m.readingBytes, m.joinBytes); err != nil {
+		return errors.Join(releaseErr, err)
+	}
+	m.retainedBytes = retained
+	return releaseErr
 }
 
 func (m *OpenAIWSRequestMemory) applyLocked(changes map[string][][]byte, working, reading, joining int64) error {
@@ -201,6 +360,13 @@ func (m *OpenAIWSRequestMemory) applyLocked(changes map[string][][]byte, working
 			if index < len(m.roots) && m.roots[index].start <= span.start && m.roots[index].end >= span.end {
 				span = m.roots[index]
 			}
+			for _, buffer := range m.ownedBuffers {
+				for _, ownedSpan := range buffer.spans {
+					if ownedSpan.start <= span.start && ownedSpan.end >= span.end {
+						span = ownedSpan
+					}
+				}
+			}
 			ranges = append(ranges, span)
 			if owner == "frame" {
 				frameBytes += int64(span.end - span.start)
@@ -218,10 +384,7 @@ func (m *OpenAIWSRequestMemory) applyLocked(changes map[string][][]byte, working
 			roots = append(roots, span)
 		}
 	}
-	var retained int64
-	for _, span := range roots {
-		retained += int64(span.end - span.start)
-	}
+	retained := m.retainedBytesLocked(roots)
 	if err := m.resizeWeightLocked(retained, frameBytes, working, reading, joining); err != nil {
 		return err
 	}

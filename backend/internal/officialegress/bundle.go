@@ -577,23 +577,13 @@ func resolveBundleProfileFacts(
 	profile profilecontract.ExecutableProfile,
 	endpointID string,
 ) (profilecontract.ExecutableEndpointProfile, profilecontract.ExecutableTransportProfile, error) {
-	var endpoint profilecontract.ExecutableEndpointProfile
-	foundEndpoint := false
-	for _, candidate := range profile.Endpoints() {
-		if candidate.ID == endpointID {
-			endpoint = candidate
-			foundEndpoint = true
-			break
-		}
-	}
+	endpoint, foundEndpoint := profile.Endpoint(endpointID)
 	if !foundEndpoint {
 		return profilecontract.ExecutableEndpointProfile{}, profilecontract.ExecutableTransportProfile{},
 			fmt.Errorf("ProfileSpec 缺少 endpoint: %s", endpointID)
 	}
-	for _, transport := range profile.Transports() {
-		if transport.ID == endpoint.TransportID {
-			return endpoint, transport, nil
-		}
+	if transport, found := profile.Transport(endpoint.TransportID); found {
+		return endpoint, transport, nil
 	}
 	return profilecontract.ExecutableEndpointProfile{}, profilecontract.ExecutableTransportProfile{},
 		fmt.Errorf("endpoint %s 缺少 transport: %s", endpointID, endpoint.TransportID)

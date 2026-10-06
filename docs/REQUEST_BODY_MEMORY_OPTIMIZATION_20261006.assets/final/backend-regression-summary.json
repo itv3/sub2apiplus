@@ -1,0 +1,21 @@
+{
+  "说明": "该次 service 全包退出失败；仅列出的七项摘要冻结检查失败，随后冻结专项已修复并通过。不得把这次全包命令记为成功。",
+  "source_path": "/tmp/sub2api-memory-optimization-20261006/continued-final-backend-tests.log",
+  "raw_log_sha256": "141f86a57596955b6076da9ed038f7a67a09b66555d46fe877fdc6596ef0a246",
+  "failed_tests": [
+    "TestCodex01491TerminalServiceStateIsFrozen",
+    "TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen",
+    "TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation",
+    "TestUpstreamSourceTransitionNodesAreFrozenService",
+    "TestUpstreamV0179SourceTransitionIsFrozen",
+    "TestUpstreamV0180SourceTransitionIsFrozen"
+  ],
+  "handler_seconds": 50.721,
+  "httputil_seconds": 1.415,
+  "openai_ws_v2_seconds": 3.465,
+  "service_seconds": 298.344,
+  "service_freeze_rerun_log": "continued-final-service-freeze-verified.log",
+  "officialegress_freeze_rerun_log": "continued-final-official-freeze-verified.log",
+  "final_production_delta": "全包执行后的坏密文哈希与清洗重编码修改，另有定向功能、race、wire 差分和最终容器重试场景验证。"
+}

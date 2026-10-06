@@ -68,9 +68,9 @@ func TestSegmentedBodyWriterOwnsImmutableBoundedBlocks(t *testing.T) {
 func TestSegmentedBodyReaderShortReadsAndClose(t *testing.T) {
 	want := bytes.Repeat([]byte("0123456789"), segmentedBodyBlockSize/5)
 	body := newSegmentedTestBody(t, want)
-	reader, ok := body.openReplayable()
-	if !ok {
-		t.Fatal("分段正文没有重放能力")
+	reader, ok, err := body.openReplayable()
+	if !ok || err != nil {
+		t.Fatalf("分段正文没有重放能力：%v", err)
 	}
 	if n, err := reader.Read(nil); n != 0 || err != nil {
 		t.Fatalf("零长度读取改变了 reader：n=%d err=%v", n, err)
@@ -98,9 +98,9 @@ func TestSegmentedBodyReaderShortReadsAndClose(t *testing.T) {
 	if n, err := reader.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("关闭后读取未返回关闭错误：n=%d err=%v", n, err)
 	}
-	replay, _ := body.openReplayable()
+	replay, _, _ := body.openReplayable()
 	assertReaderBytes(t, replay, want)
-	partial, _ := body.openReplayable()
+	partial, _, _ := body.openReplayable()
 	if _, err := partial.Read(make([]byte, 3)); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestSegmentedBodyReaderShortReadsAndClose(t *testing.T) {
 func TestSegmentedBodyReaderAllowsConcurrentClose(t *testing.T) {
 	body := newSegmentedTestBody(t, bytes.Repeat([]byte("a"), 3*segmentedBodyBlockSize))
 	for range 16 {
-		reader, _ := body.openReplayable()
+		reader, _, _ := body.openReplayable()
 		var wait sync.WaitGroup
 		wait.Add(2)
 		go func() {
@@ -201,7 +201,7 @@ func TestSegmentedBodyPreservesGuardDigestAndMutationDetection(t *testing.T) {
 		RequestDigest: digest, Normalization: normalization,
 	}}}
 	guard := &Guard{}
-	if reasons, detail := guard.finalizationWireReasons(request, metadata, WireProtocolHTTP); len(reasons) != 0 {
+	if reasons, detail, _ := guard.finalizationWireReasons(request, metadata, WireProtocolHTTP); len(reasons) != 0 {
 		t.Fatalf("分段重放改变了 Guard 摘要：reasons=%v detail=%s", reasons, detail)
 	}
 	assertReaderBytes(t, request.Body, want)
@@ -211,7 +211,7 @@ func TestSegmentedBodyPreservesGuardDigestAndMutationDetection(t *testing.T) {
 	request.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(want[:len(want)-1])), nil
 	}
-	if reasons, _ := guard.finalizationWireReasons(request, metadata, WireProtocolHTTP); !slices.Contains(reasons, ReasonRequestModifiedAfterFinalize) {
+	if reasons, _, _ := guard.finalizationWireReasons(request, metadata, WireProtocolHTTP); !slices.Contains(reasons, ReasonRequestModifiedAfterFinalize) {
 		t.Fatalf("重放正文被截断后 Guard 未拒绝：%v", reasons)
 	}
 }
@@ -221,7 +221,7 @@ func TestSingleUseBodyCannotOpenReplayable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reader, replayable := body.openReplayable(); replayable || reader != nil {
+	if reader, replayable, err := body.openReplayable(); replayable || reader != nil || err != nil {
 		t.Fatal("single-use 正文错误获得重放能力")
 	}
 	reader, _, _, err := body.takeSingleUse()

@@ -1,0 +1,170 @@
+{
+  "说明": "正文与二进制不入库；此处仅保存最终固定样本摘要。重新生成随机正文时必须登记新摘要。",
+  "http": [
+    {
+      "name": "explicit_instructions-0.3.json",
+      "bytes": 317303,
+      "sha256": "f9fae1d42fad8500c5aec8f44f1044a147ee8d53e767ce9ab67f2a0f62cb95e6"
+    },
+    {
+      "name": "explicit_instructions-1.json",
+      "bytes": 1059291,
+      "sha256": "504542eae5d003f25a4cb449ade0e82c5867f584b229f9e6ddef86fa5c479176"
+    },
+    {
+      "name": "explicit_instructions-16.8.json",
+      "bytes": 17622340,
+      "sha256": "fa45cf461cbb157d0f3f8754defd92124d1fb7f05bf0115ac57bdc740c4faaaf"
+    },
+    {
+      "name": "explicit_instructions-16.8.zst",
+      "bytes": 11243373,
+      "sha256": "3434dbf9e75901d3fde6bb987d043b3485704621def2e0ef3cd187f18540ccd1"
+    },
+    {
+      "name": "explicit_instructions-33.6.json",
+      "bytes": 35245284,
+      "sha256": "50cf67bc2f0b75376007efab61c09509c3d67e1056f352d439a19abc0e3b9ffe"
+    },
+    {
+      "name": "explicit_instructions-4.json",
+      "bytes": 4201291,
+      "sha256": "73948a77c98e32a513fe4ca996255326d04ed233d4225c19ce13faf75fc16c86"
+    },
+    {
+      "name": "explicit_instructions-50.json",
+      "bytes": 52441879,
+      "sha256": "e7d5a21d05264e52135a75a8523c29669a313bd5525da26a6c5b677bb1a49cf0"
+    },
+    {
+      "name": "explicit_instructions-50.zst",
+      "bytes": 33475081,
+      "sha256": "a3e13bd7e88fd71c30dd3edd03f65a2c843fb8618417e2ffc794080842c2de52"
+    },
+    {
+      "name": "explicit_instructions-80.json",
+      "bytes": 83897924,
+      "sha256": "67551354da0242f84e4142508b397be0faf66c3669b3756e1ba2e60b89941efe"
+    },
+    {
+      "name": "incompressible-16.8.json",
+      "bytes": 17952299,
+      "sha256": "36061e5e02fdccce4d32a44414f4e501338d08d4a62fdb997dc98add48aeea96"
+    },
+    {
+      "name": "incompressible-50.json",
+      "bytes": 52446045,
+      "sha256": "2d2eecba6ba8e5f3c7da0e999813d15bf24e084bd74cf6c867188e0ae822a3c9"
+    },
+    {
+      "name": "incompressible-80.json",
+      "bytes": 84124065,
+      "sha256": "4aae18be846e75c75ff32561af84d637b5e28e778eb40b05d9fe9d17a08402fc"
+    },
+    {
+      "name": "native-0.3.json",
+      "bytes": 317267,
+      "sha256": "f87bd8672ae7467f8ff43e7ba4f51ed470b59251b0238ea1eedf1d7a34bd30e6"
+    },
+    {
+      "name": "native-1.json",
+      "bytes": 1059255,
+      "sha256": "8cc8b1c6488d657e5134a5ed8b6012c860385d53013865e76af3de3525705d79"
+    },
+    {
+      "name": "native-16.8.json",
+      "bytes": 17622304,
+      "sha256": "41873f5684de92580b31b9aa1aac0001950df330e7e2cb398e4b956e16bdbcc3"
+    },
+    {
+      "name": "native-16.8.zst",
+      "bytes": 11243316,
+      "sha256": "3e7abba265a7b16218517992bd94e60b0b068216bb13fdc1923636e2d907f5a0"
+    },
+    {
+      "name": "native-33.6.json",
+      "bytes": 35245248,
+      "sha256": "20775bf58c8e02dcc8605a4295f8bdce1c324ccb698e1da06ecd89ee82565373"
+    },
+    {
+      "name": "native-4.json",
+      "bytes": 4201255,
+      "sha256": "302fc2deaae2feabbd59690e10b16f891d8a56b829fe314b0680e43b29be7900"
+    },
+    {
+      "name": "native-50.json",
+      "bytes": 52441843,
+      "sha256": "538b8f6c27c708ab16d3c54b008c6788254103adc44f81f308ab4c541a6e2b47"
+    },
+    {
+      "name": "native-50.zst",
+      "bytes": 33475033,
+      "sha256": "0a9afc09a149a3b35da606c8d3d62124186c572d9b27fbe3f706d94c952968ae"
+    },
+    {
+      "name": "native-80.json",
+      "bytes": 83897888,
+      "sha256": "81c3fd247cd2220f23e798127ee0dabb3ae546454ad1980d68887a32b8e80390"
+    },
+    {
+      "name": "tool-continuation-16.8.json",
+      "bytes": 17622562,
+      "sha256": "91a7649b7e2d60583b0e6f7ffe5a5bbec06acb13355d3b3b1849585d77efb38e"
+    },
+    {
+      "name": "tool-continuation-50.json",
+      "bytes": 52442101,
+      "sha256": "61d58eeb184409e317b057c924308d3651f67bca8de9e9c6c1ee2cabb5d223b7"
+    }
+  ],
+  "ws": [
+    {
+      "name": "native-4",
+      "source_sha256": "302fc2deaae2feabbd59690e10b16f891d8a56b829fe314b0680e43b29be7900",
+      "frame_bytes": [
+        4201362,
+        4201466
+      ],
+      "frame_sha256": [
+        "07258647f61c4505d72d913686276b5e1d551d96ea5c2af52226a0040f5dde14",
+        "bc5d478b16890069cadc82546818387d750449e9725c86cbef7c9f09d64bca73"
+      ]
+    },
+    {
+      "name": "native-16.8",
+      "source_sha256": "41873f5684de92580b31b9aa1aac0001950df330e7e2cb398e4b956e16bdbcc3",
+      "frame_bytes": [
+        17622411,
+        17622515
+      ],
+      "frame_sha256": [
+        "b370ab9c1a4798df98db44df5c0fab67c120e47507c4b24664b82d274582251c",
+        "125380ed6885f599b78dc759766f990702744995d86db8634a9fdc86adbf28b0"
+      ]
+    },
+    {
+      "name": "explicit_instructions-16.8",
+      "source_sha256": "fa45cf461cbb157d0f3f8754defd92124d1fb7f05bf0115ac57bdc740c4faaaf",
+      "frame_bytes": [
+        17622447,
+        17622551
+      ],
+      "frame_sha256": [
+        "a8e79b49a9ef82ef2f9ca2e52689ca3278ba08558d1bd73ba5c81f41b25ae7f3",
+        "13325d1bbe7949988d203d223dbf8e0af1b4c5e969aef7d37fc16f9ca80a9249"
+      ]
+    },
+    {
+      "name": "native-50",
+      "source_sha256": "538b8f6c27c708ab16d3c54b008c6788254103adc44f81f308ab4c541a6e2b47",
+      "frame_bytes": [
+        52441950,
+        52442054
+      ],
+      "frame_sha256": [
+        "ad889ff5d9c5ca7ca22acccaeccfa1486ac6cc2228e005e76df24e1489ffbe45",
+        "7d1e5e23859992b9a96baf00eae7a5086d572fdbf798f58ebca43eb33513a073"
+      ]
+    }
+  ]
+}

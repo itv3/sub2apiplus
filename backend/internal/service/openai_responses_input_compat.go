@@ -14,8 +14,9 @@ func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []an
 		return false
 	}
 
-	toolCallIDs := make(map[string]struct{}, len(input))
-	referenceIDs := make(map[string]struct{}, len(input))
+	// 历史长度远大于实际工具调用数，按实际插入分配，空引用表不预占整段历史容量。
+	toolCallIDs := make(map[string]struct{})
+	referenceIDs := make(map[string]struct{})
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if !ok {
@@ -37,11 +38,13 @@ func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []an
 	}
 
 	modified := false
-	normalized := make([]any, 0, len(input))
-	for _, rawItem := range input {
+	var normalized []any
+	for position, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if !ok || !isCodexToolCallOutputItemType(strings.TrimSpace(firstNonEmptyString(item["type"]))) {
-			normalized = append(normalized, rawItem)
+			if modified {
+				normalized = append(normalized, rawItem)
+			}
 			continue
 		}
 
@@ -52,17 +55,26 @@ func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []an
 		// the request that started the turn.
 		if callID == "" && strings.TrimSpace(firstNonEmptyString(item["type"])) == "function_call_output" &&
 			strings.TrimSpace(firstNonEmptyString(item["name"])) != "" {
-			normalized = append(normalized, rawItem)
+			if modified {
+				normalized = append(normalized, rawItem)
+			}
 			continue
 		}
 		_, hasToolCall := toolCallIDs[callID]
 		_, hasReference := referenceIDs[callID]
 		if callID != "" && (hasToolCall || hasReference) {
-			normalized = append(normalized, rawItem)
+			if modified {
+				normalized = append(normalized, rawItem)
+			}
 			continue
 		}
 
-		modified = true
+		if !modified {
+			// 首次删除时复制此前未变的前缀；没有孤立输出就无需另建 input 数组。
+			normalized = make([]any, position, len(input)-1)
+			copy(normalized, input[:position])
+			modified = true
+		}
 	}
 	if !modified {
 		return false
@@ -94,7 +106,7 @@ func openAIResponsesHasOrphanToolOutputsFromIndex(index *officialJSONRawIndex) b
 		return false
 	}
 	knownIDs := make(map[string]struct{})
-	for _, item := range index.nodes[input].items {
+	for _, item := range index.arrayItems(input) {
 		if index.nodes[item].kind != officialJSONRawKindObject {
 			continue
 		}
@@ -109,7 +121,7 @@ func openAIResponsesHasOrphanToolOutputsFromIndex(index *officialJSONRawIndex) b
 			knownIDs[id] = struct{}{}
 		}
 	}
-	for _, item := range index.nodes[input].items {
+	for _, item := range index.arrayItems(input) {
 		if index.nodes[item].kind != officialJSONRawKindObject {
 			continue
 		}

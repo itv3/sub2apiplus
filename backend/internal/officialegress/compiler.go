@@ -197,7 +197,8 @@ func (c *Compiler) Compile(
 	if err != nil {
 		return CompiledExecution{}, err
 	}
-	body, err := compileEndpointBody(
+	body, err := compileEndpointBodyContext(
+		ctx,
 		endpointPlan.template.endpoint,
 		bundle.release.ExecutableProfile().Features(),
 		bundle.release.ExecutableProfile().Optional(),
@@ -210,6 +211,12 @@ func (c *Compiler) Compile(
 	if err != nil {
 		return CompiledExecution{}, err
 	}
+	bodyTransferred := false
+	defer func() {
+		if !bodyTransferred {
+			body.closeOwnedReplayableStorage()
+		}
+	}()
 	request, err := NewCompiledRequest(plan.Method, target, headers, body)
 	if err != nil {
 		return CompiledExecution{}, err
@@ -269,12 +276,15 @@ func (c *Compiler) Compile(
 	if err := transport.Validate(); err != nil {
 		return CompiledExecution{}, err
 	}
+	finishDigestTiming := startRequestBodyTiming(ctx, "compiled_digest")
 	compiledDigest, err := digestCompiledExecution(
 		request, endpointPlan, transport, bundle.ReleaseDigest(), bundle.BundleDigest(), connection,
 	)
+	finishDigestTiming()
 	if err != nil {
 		return CompiledExecution{}, err
 	}
+	bodyTransferred = true
 	return CompiledExecution{
 		request: request, endpointPlan: endpointPlan, transport: transport,
 		releaseDigest: bundle.ReleaseDigest(), profileDigest: bundle.ProfileDigest(),
@@ -994,6 +1004,21 @@ func compileEndpointBody(
 	authentication AttemptAuthenticationInput,
 	identityFacts CodexIdentityFacts,
 ) (RequestBody, error) {
+	return compileEndpointBodyContext(context.Background(), endpoint, features, optional, headers,
+		body, bodyConditions, authentication, identityFacts)
+}
+
+func compileEndpointBodyContext(
+	ctx context.Context,
+	endpoint profilecontract.ExecutableEndpointProfile,
+	features profilecontract.FeatureDefaults,
+	optional profilecontract.OptionalSections,
+	headers http.Header,
+	body RequestBody,
+	bodyConditions BodyRuntimeConditions,
+	authentication AttemptAuthenticationInput,
+	identityFacts CodexIdentityFacts,
+) (RequestBody, error) {
 	if body.Mode() == RequestBodySingleUse {
 		if endpoint.Body.Encoding != profilecontract.BodyRawBytes {
 			return RequestBody{}, errors.New("只有 raw_bytes endpoint 可以使用 single-use Body")
@@ -1071,7 +1096,8 @@ func compileEndpointBody(
 			if !features.EnableRequestCompression {
 				return RequestBody{}, errors.New("Bundle feature 禁止请求压缩")
 			}
-			return compressRequestBodyZstd(
+			return compressRequestBodyZstdContext(
+				ctx,
 				features.RequestCompressionLevel, int64(document.encodedNamesLength(ordered)),
 				func(writer io.Writer) error { return document.writeNames(writer, ordered) },
 			)
@@ -1094,7 +1120,8 @@ func compileEndpointBody(
 	if !features.EnableRequestCompression {
 		return RequestBody{}, errors.New("Bundle feature 禁止请求压缩")
 	}
-	return compressRequestBodyZstd(
+	return compressRequestBodyZstdContext(
+		ctx,
 		features.RequestCompressionLevel, int64(len(compiled)),
 		func(writer io.Writer) error { return writeJSONDocumentPart(writer, compiled) },
 	)
@@ -1105,15 +1132,20 @@ func compileEndpointBody(
 // 窗口变化允许压缩字节改变，但必须保留单帧、准确 FCS、校验和、字典设置及原文字节。
 const requestBodyZstdWindowSize = 512 << 10
 
-// compressRequestBodyZstd 把正文逐段写成单个 zstd 帧，并保留可重放的分段输出。
+// compressRequestBodyZstd 把正文逐段写成单个 zstd 帧，并保留可重放的输出。
 // 正式 JSON 路径由 document 提供字段区间，不生成完整的未压缩出站正文；压缩结果也不
-// 拼成连续切片。压缩仅执行一次，关闭编码器后即可得到准确 Content-Length。
+// 拼成连续切片。超过阈值的压缩输出移交普通文件，小输出仍保留分段字节。压缩仅执行
+// 一次，关闭编码器后即可得到准确 Content-Length。
 //
 // 压缩等级保持画像既有值，低内存选项与有界窗口共同降低编码器内部缓冲占用。
 // ResetContentSize 保留准确的原文长度；多块流式编码的帧组织可能不同于 EncodeAll，
 // 但解压后的字节、校验和开关和字典设置必须保持一致。
 func compressRequestBodyZstd(level int, contentLength int64, writeBody func(io.Writer) error) (RequestBody, error) {
-	return compressRequestBodyZstdWithCache(level, contentLength, writeBody, sharedRequestBodyZstdEncoderCache)
+	return compressRequestBodyZstdContext(context.Background(), level, contentLength, writeBody)
+}
+
+func compressRequestBodyZstdContext(ctx context.Context, level int, contentLength int64, writeBody func(io.Writer) error) (RequestBody, error) {
+	return compressRequestBodyZstdWithCacheContext(ctx, level, contentLength, writeBody, sharedRequestBodyZstdEncoderCache)
 }
 
 // compressRequestBodyZstdWithCache 的 nil cache 路径保留新建编码器对照。
@@ -1124,7 +1156,19 @@ func compressRequestBodyZstdWithCache(
 	writeBody func(io.Writer) error,
 	cache *requestBodyZstdEncoderCache,
 ) (RequestBody, error) {
-	output := newSegmentedBodyWriter()
+	return compressRequestBodyZstdWithCacheContext(context.Background(), level, contentLength, writeBody, cache)
+}
+
+func compressRequestBodyZstdWithCacheContext(
+	ctx context.Context,
+	level int,
+	contentLength int64,
+	writeBody func(io.Writer) error,
+	cache *requestBodyZstdEncoderCache,
+) (RequestBody, error) {
+	defer startRequestBodyTiming(ctx, "compression")()
+	output := newRequestBodyOutputWriter(ctx)
+	defer output.abort()
 	encoder, err := cache.take(level)
 	if err != nil {
 		return RequestBody{}, fmt.Errorf("创建 zstd 编码器: %w", err)
@@ -1138,7 +1182,7 @@ func compressRequestBodyZstdWithCache(
 		return RequestBody{}, fmt.Errorf("关闭 zstd 编码器: %w", err)
 	}
 	cache.put(level, encoder)
-	return output.finish(), nil
+	return output.finish()
 }
 
 // compressCompiledBodyZstd 保留旧 EncodeAll 编码方式作为兼容与差分测量基准；正式编译路径
@@ -1859,7 +1903,11 @@ func digestCompiledExecution(
 ) (string, error) {
 	target := request.URL()
 	bodyDigest := "single-use"
-	if body, ok := request.body.openReplayable(); ok {
+	if request.body.state != nil && request.body.state.bodyDigest != "" {
+		bodyDigest = request.body.state.bodyDigest
+	} else if body, replayable, err := request.body.openReplayable(); err != nil {
+		return "", fmt.Errorf("打开编译正文摘要: %w", err)
+	} else if replayable {
 		hash := sha256.New()
 		_, copyErr := io.Copy(hash, body)
 		closeErr := body.Close()

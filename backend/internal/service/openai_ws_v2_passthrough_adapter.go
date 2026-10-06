@@ -782,7 +782,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
-	originalFirstClientMessage := cloneOpenAIWSPayloadBytes(firstClientMessage)
+	originalFirstClientMessage := firstClientMessage
 	shouldNormalizeLitePayload := func(payload []byte) bool {
 		if account.IsOpenAIOAuth() {
 			return openAIResponsesLiteCapabilityFromContext(ctx)
@@ -938,7 +938,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// goroutine）之间同步当前 turn 的 usage metadata。
 	usageMeta.initFromFirstFrame(firstClientMessage, capturedSessionModel)
 	usageMeta.captureRequestedReasoningEffort(originalFirstClientMessage, capturedSessionModel)
-	// 语义定型与用量字段已提取，原首帧副本不再参与后续重放。
+	// 语义定型与用量字段已提取，本层无需继续持有原始首帧。
 	originalFirstClientMessage = nil
 	_, initialUpstreamModel := usageMeta.turnModels(initialRequestModel)
 	SetOpsUpstreamModel(c, initialUpstreamModel)
@@ -1180,7 +1180,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
-			originalPayload := cloneOpenAIWSPayloadBytes(payload)
+			originalPayload := payload
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
 			responseCreateAt := time.Time{}
@@ -1251,7 +1251,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					requestModelForThisFrame = capturedSessionModel
 				}
 				if hooks != nil && hooks.BeforeRequest != nil {
-					if err := hooks.BeforeRequest(turnNo, payload, requestModelForThisFrame); err != nil {
+					if err := hooks.BeforeRequest(turnNo, originalPayload, requestModelForThisFrame); err != nil {
 						return payload, nil, err
 					}
 				}
@@ -1418,11 +1418,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		)
 	}
 	upstreamFirstMessageSent = true
+	firstMessageMetadata := &openaiwsv2.RelayFirstMessageMetadata{
+		RequestModel:   strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String()),
+		ResponseCreate: strings.TrimSpace(gjson.GetBytes(firstClientMessage, "type").String()) == "response.create",
+		PayloadBytes:   len(firstClientMessage),
+	}
+	// 首帧已经同步写完，relay 只需要小元数据；换号原文由 handler 的当前轮状态持有。
+	firstClientMessage = nil
 
 	readNextClientFrame := func(readCtx context.Context, conn openaiwsv2.FrameConn) (coderws.MessageType, []byte, error) {
 		for {
-			// relay 仅在上一帧同步写完后进入此处；首帧仍由 relay 参数与重试路径持有。
-			if err := openAIWSRequestMemoryFromContext(ctx).FinishTurn("passthrough", firstClientMessage); err != nil {
+			// relay 仅在上一帧同步写完后进入此处，不再为历史首帧保留持有点。
+			if err := openAIWSRequestMemoryFromContext(ctx).FinishTurn("passthrough"); err != nil {
 				return 0, nil, err
 			}
 			msgType, payload, readErr := conn.ReadFrame(readCtx)
@@ -1444,10 +1451,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	failureAccountSideEffectsApplied := false
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
-		Ctx:                ctx,
-		ClientConn:         policyClientConn,
-		UpstreamConn:       relayUpstreamFrameConn,
-		FirstClientMessage: firstClientMessage,
+		Ctx:          ctx,
+		ClientConn:   policyClientConn,
+		UpstreamConn: relayUpstreamFrameConn,
 		Options: openaiwsv2.RelayOptions{
 			WriteTimeout:       s.openAIWSWriteTimeout(),
 			FirstTurnStartedAt: firstTurnStartedAt,
@@ -1464,6 +1470,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			IdleTimeout:                     0,
 			FirstMessageType:                coderws.MessageText,
 			FirstMessageSent:                upstreamFirstMessageSent,
+			FirstMessageMetadata:            firstMessageMetadata,
 			StartClientAfterFirstDownstream: true,
 			ReadClientFrame:                 readNextClientFrame,
 			OnUsageParseFailure: func(eventType string, usageRaw string) {
@@ -1703,9 +1710,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		if turnCount == 0 && !relayExit.WroteDownstream {
 			relayErr = failoverErr
 		} else {
-			// The handler only retains the initial response.create across
-			// account attempts. Replaying it after a later-turn timeout would
-			// duplicate the first turn, so later turns end the client session.
+			// 后续轮超时没有完整重放上下文；当前轮原文的持有不改变该重试约束，
+			// 仍结束客户端会话，由客户端带上下文重连。
 			relayErr = NewOpenAIWSClientCloseError(
 				coderws.StatusGoingAway,
 				"upstream produced no semantic output; please reconnect",

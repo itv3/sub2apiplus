@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -348,7 +349,7 @@ func openAIWSHTTPBridgeCanKeepRawBody(index *officialJSONRawIndex) bool {
 	}
 	for node := range index.nodes {
 		if index.nodes[node].kind == officialJSONRawKindObject &&
-			len(index.uniqueKeys(int32(node))) != len(index.nodes[node].members) {
+			len(index.uniqueKeys(int32(node))) != len(index.objectMembers(int32(node))) {
 			return false
 		}
 	}
@@ -467,31 +468,36 @@ type openAIWSHTTPBridgeJSONSegments struct {
 
 func (w *openAIWSHTTPBridgeJSONSegments) flush() {
 	if len(w.buffer) > 0 {
-		w.segments = append(w.segments, w.buffer)
-		w.buffer = nil
+		// 长 token 会频繁分隔短标点。已写区间冻结后继续使用同一小块的剩余容量，
+		// 避免每个长字符串前的几个字节都独占 4KiB；片段容量收紧，禁止扩展覆盖后续片段。
+		used := len(w.buffer)
+		w.segments = append(w.segments, w.buffer[:used:used])
+		w.buffer = w.buffer[used:used]
 	}
 }
 
 func (w *openAIWSHTTPBridgeJSONSegments) appendBytes(value []byte) {
-	if len(value) >= 1024 {
+	// 中等长度的工具输入/输出也直接引用原 token。只把短键和标点汇入小块，
+	// 避免几百字节的历史内容在原文之外又累计成数 MiB 的片段副本。
+	if len(value) >= 128 {
 		w.flush()
 		w.segments = append(w.segments, value)
 		return
 	}
-	if len(w.buffer)+len(value) > 4096 {
+	if len(w.buffer)+len(value) > cap(w.buffer) {
 		w.flush()
 	}
-	if w.buffer == nil {
+	if cap(w.buffer)-len(w.buffer) < len(value) {
 		w.buffer = make([]byte, 0, 4096)
 	}
 	w.buffer = append(w.buffer, value...)
 }
 
 func (w *openAIWSHTTPBridgeJSONSegments) appendByte(value byte) {
-	if len(w.buffer) == 4096 {
+	if len(w.buffer) == cap(w.buffer) {
 		w.flush()
 	}
-	if w.buffer == nil {
+	if cap(w.buffer) == 0 {
 		w.buffer = make([]byte, 0, 4096)
 	}
 	w.buffer = append(w.buffer, value)
@@ -521,7 +527,7 @@ func (w *openAIWSHTTPBridgeJSONSegments) appendCanonicalNode(index *officialJSON
 		w.appendByte('}')
 	case officialJSONRawKindArray:
 		w.appendByte('[')
-		for i, child := range n.items {
+		for i, child := range index.arrayItems(node) {
 			if i > 0 {
 				w.appendByte(',')
 			}
@@ -597,7 +603,7 @@ func (w *openAIWSHTTPBridgeJSONSegments) appendValue(index *officialJSONRawIndex
 	case []any:
 		var original []int32
 		if node >= 0 && index.nodes[node].kind == officialJSONRawKindArray {
-			original = index.nodes[node].items
+			original = index.arrayItems(node)
 		}
 		used := make([]bool, len(original))
 		w.appendByte('[')
@@ -814,7 +820,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	grokCacheIdentity string,
 	turn int,
 	writeClientMessage func([]byte) error,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, returnErr error) {
+	// 所有轮次、所有构建/发送/读取阶段统一保留本地故障原因，交由 WS 入口
+	// 发送 1013。不得合成上游 502，也不得让首轮错误进入账号换号链路。
+	defer func() {
+		if IsRequestBodyStorageError(returnErr) {
+			returnErr = NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater,
+				"request body storage temporarily unavailable; retry later", returnErr)
+		}
+	}()
 	if s == nil {
 		return nil, errors.New("service is nil")
 	}
@@ -844,6 +858,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if officialEgressEnabled && profileErr == nil {
 		ctx, officialForwardBody = newOfficialForwardHTTPBody(ctx, payload)
 	}
+	defer officialForwardBody.closeStorage()
 	if deferred := openAIWSDeferredIngressBodyFromContext(ctx, payload); deferred != nil {
 		if officialForwardBody == nil {
 			payload = deferred.materialize()
@@ -1089,6 +1104,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			)
 		}
 		if err != nil {
+			if IsRequestBodyStorageError(err) {
+				return nil, err
+			}
 			if turn == 1 {
 				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 			}

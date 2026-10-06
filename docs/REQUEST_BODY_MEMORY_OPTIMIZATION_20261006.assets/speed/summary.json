@@ -1,0 +1,70 @@
+{
+  "schema_version": "request-body-memory-speed-evidence/v1",
+  "final_measurement_label": "speed-boundary-matrix",
+  "case_count": 42,
+  "large_case_count": 35,
+  "all_exit_zero": true,
+  "all_no_oom": true,
+  "all_owned_memory_released": true,
+  "max_memory_multiple": 2.4802598267046445,
+  "max_memory_case": "ws-session-repeat-1",
+  "performance": {
+    "native": {
+      "before_ms": [
+        6053,
+        5878,
+        5869
+      ],
+      "after_ms": [
+        5944,
+        6061,
+        5855
+      ],
+      "before_median_ms": 5878,
+      "after_median_ms": 5944,
+      "median_change_percent": 1.1228308948622034,
+      "peak_memory_multiple_max": 1.9219861375674827,
+      "cgroup_peak_mib_max": 90.3
+    },
+    "explicit_instructions": {
+      "before_ms": [
+        6156,
+        6223,
+        6163
+      ],
+      "after_ms": [
+        6064,
+        6206,
+        6015
+      ],
+      "before_median_ms": 6163,
+      "after_median_ms": 6064,
+      "median_change_percent": -1.6063605386986812,
+      "peak_memory_multiple_max": 1.9203551855201977,
+      "cgroup_peak_mib_max": 86.8
+    }
+  },
+  "binary_sha256": "d7a1d9f2d089d217040600e6b79155c9c81a462af9c09a5c501c2e663d7f0c45",
+  "baseline_binary_sha256": "e45d679759f886a2f49d1a7bc7180ef0207b57379432442b69b35f946ffa6cc1",
+  "image_digest": "sha256:8999da6f0be9491fbb976ce95c41ba6271fa209077a2c9a94811f0b1af713bc9",
+  "limits": {
+    "container_mib": 768,
+    "gomemlimit_mib": 512,
+    "cpus": 2,
+    "gogc": 100,
+    "gomaxprocs": 2
+  },
+  "source_manifest_sha256": "2da392a528b370da0eb370680df88e12fc54a516d34511f2fb882d8c47547b69",
+  "storage_policy": {
+    "memory_block_bytes": 1048576,
+    "per_forward_fraction": 0.75,
+    "process_output_memory_limit_bytes": 67108864,
+    "quota_counts_full_capacity": true,
+    "fallback": "普通磁盘；启用额度后内存及普通磁盘均不可用时返回服务端存储错误，不绕过额度扩张 Go 堆。"
+  },
+  "limitations": [
+    "性能同速结论对应两形态、两并发槽、每槽四次 16.8MiB 的固定样本；不保证额度耗尽后的磁盘回退同速。",
+    "2.5 倍是受测大正文峰值结论，不是任意正文和长期混合负载的数学上界。",
+    "小请求 WS、真实生产观察、复杂兼容形态和容量校准仍待后续；未发布、未提交、未改线上参数。"
+  ]
+}

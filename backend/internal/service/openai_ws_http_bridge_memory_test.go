@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -224,4 +225,37 @@ func TestOpenAIWSHTTPBridgeCanonicalSegmentsMatchJSONMarshal(t *testing.T) {
 			require.Greater(t, shared, len(fixture)-64, "长字符串 token 应共享原帧，不能重新复制")
 		}
 	}
+}
+
+// 大量长字符串之间只有少量标点，不应为每个分隔点再保留整块空闲容量。
+// 同时核对全部已输出片段未被后续追加覆盖，防止小块共享破坏 wire 字节。
+func TestOpenAIWSHTTPBridgeCanonicalSegmentsBoundSmallFragmentMemory(t *testing.T) {
+	const count = 1024
+	long := []byte(`"` + strings.Repeat("x", 4096) + `"`)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	writer := openAIWSHTTPBridgeJSONSegments{}
+	writer.appendByte('[')
+	for i := range count {
+		if i > 0 {
+			writer.appendByte(',')
+		}
+		writer.appendBytes(long)
+	}
+	writer.appendByte(']')
+	writer.flush()
+	runtime.ReadMemStats(&after)
+	// 除原 token 外只有约 1KiB 的标点与片段描述；给运行时噪声留宽余量，
+	// 仍足以拦截旧实现每个 token 额外分配 4KiB 的回归。
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(512<<10))
+	var expected bytes.Buffer
+	expected.WriteByte('[')
+	for i := range count {
+		if i > 0 {
+			expected.WriteByte(',')
+		}
+		expected.Write(long)
+	}
+	expected.WriteByte(']')
+	require.Equal(t, expected.Bytes(), bytes.Join(writer.segments, nil))
 }

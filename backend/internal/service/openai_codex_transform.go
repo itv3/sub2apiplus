@@ -213,7 +213,8 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			reqBody["model"] = normalizedModel
 			result.Modified = true
 		}
-		result.NormalizedModel = normalizedModel
+		// 结果可能进入异步计费与跨请求缓存，不能借用已完成请求的正文。
+		result.NormalizedModel = strings.Clone(normalizedModel)
 	}
 
 	if opts.IsCompact {
@@ -1948,6 +1949,13 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// below (id stripped when !PreserveReferences, encrypted_content
 		// preserved either way), which is safe and needs no special-casing.
 		if typ == "reasoning" {
+			_, hasID := m["id"]
+			_, hasCallID := m["call_id"]
+			if summary, present := m["summary"]; !hasID && !hasCallID && present && summary != nil {
+				// 已符合规则的历史项只读复用；有删除或补字段时仍独立复制，保护输入。
+				filtered = append(filtered, item)
+				continue
+			}
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
 				if key == "id" || key == "call_id" {
@@ -2029,8 +2037,10 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		}
 
 		if !isCodexToolCallItemType(typ) {
-			ensureCopy()
-			delete(newItem, "call_id")
+			if _, exists := newItem["call_id"]; exists {
+				ensureCopy()
+				delete(newItem, "call_id")
+			}
 		}
 
 		if codexInputItemRequiresName(typ) {
@@ -2050,8 +2060,10 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		}
 
 		if !opts.PreserveReferences {
-			ensureCopy()
-			delete(newItem, "id")
+			if _, exists := newItem["id"]; exists {
+				ensureCopy()
+				delete(newItem, "id")
+			}
 		} else if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {
 			ensureCopy()
 			delete(newItem, "id")

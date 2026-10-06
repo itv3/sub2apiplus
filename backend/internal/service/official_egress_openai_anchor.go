@@ -181,39 +181,40 @@ func officialOpenAIUserAnchorsFromBody(body []byte) officialOpenAIUserAnchors {
 	case input.Type == gjson.String:
 		anchors.observeStringInput(input.Str)
 	case input.IsArray():
-		var candidates []gjson.Result
-		var indices []int
+		type candidate struct {
+			index int
+			raw   string
+		}
+		var candidates []candidate
 		index := 0
+		// 候选只保存原始只读区间与序号，避免为每条历史消息保存完整 Result。
+		// 仍只解析首末有效文本；逐条计算会复制所有带转义的历史消息。
 		input.ForEach(func(_, item gjson.Result) bool {
 			if isOfficialOpenAIJSONUserMessage(item) {
-				candidates = append(candidates, item)
-				indices = append(indices, index)
+				candidates = append(candidates, candidate{index: index, raw: item.Raw})
 			}
 			index++
 			return true
 		})
-		for position, item := range candidates {
-			digest, found := digestOfficialOpenAIMessageContentJSON(item.Get("content"))
-			if !found {
-				continue
+		for _, item := range candidates {
+			digest, found := digestOfficialOpenAIMessageContentJSON(gjson.Get(item.raw, "content"))
+			if found {
+				anchors.first = officialOpenAIUserAnchor{index: item.index, digest: digest}
+				anchors.firstFound = true
+				break
 			}
-			anchors.first = officialOpenAIUserAnchor{index: indices[position], digest: digest}
-			anchors.firstFound = true
-			break
 		}
 		if !anchors.firstFound {
 			return anchors
 		}
 		for position := len(candidates) - 1; position >= 0; position-- {
-			digest, found := digestOfficialOpenAIMessageContentJSON(
-				candidates[position].Get("content"),
-			)
-			if !found {
-				continue
+			item := candidates[position]
+			digest, found := digestOfficialOpenAIMessageContentJSON(gjson.Get(item.raw, "content"))
+			if found {
+				anchors.last = officialOpenAIUserAnchor{index: item.index, digest: digest}
+				anchors.lastFound = true
+				break
 			}
-			anchors.last = officialOpenAIUserAnchor{index: indices[position], digest: digest}
-			anchors.lastFound = true
-			break
 		}
 	}
 	return anchors

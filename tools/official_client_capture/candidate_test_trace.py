@@ -142,9 +142,14 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 仅重绑生产文件与测试文件摘要，测试、事实和判据语义保持一致。
 # 2026-10-06（问题四请求体内存优化）：HTTP 工作区与分段正文流式编译调整了已绑定的
 # official_egress_openai_http.go、openai_gateway_forward.go 与 officialegress/compiler.go。
-# 本次仅重绑这三份源码快照的七处引用，测试、事实和规则语义保持不变；验收结果另见本次记录。
+# 续作另含 official_egress_openai_ws.go 与 openai_ws_forwarder_payload.go；当前五份源码十处引用
+# 仅重绑摘要，测试、事实与规则语义保持不变，验收结果见请求体内存测试记录。
+# 2026-10-06（问题四性能优化）：压缩输出改为受限系统内存，编译摘要复用写入时摘要；
+# 本次仅重绑 compiler.go 的源码摘要，Guard 继续独立校验实际正文。
+# 2026-10-06（原生 WS 内存优化）：仅重绑 WS 业务校验与重放状态源码摘要，
+# 字节、历史语义差分测试通过；测试清单、事实及规则语义不变。
 FROZEN_MAPPING_SHA256 = (
-    "ba9f684ea7b4d9d2ade2acd4e17b139488c8b7e1a2ca7b7c4a1051cb5ae2b615"
+    "380bc47d156fdc55e3f21184e52a45c28f0327cc1bd930e074111c34bfc647ec"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +40,7 @@ func TestResponsesRequestMemoryAdmission18MiBConcurrentCancellation(t *testing.T
 			require.Greater(t, weight*2, cfg.Gateway.RequestMemoryBudgetBytes)
 
 			runWave := func(count int) {
+				ownedBefore := pkghttputil.ActiveOwnedRequestBodyBytes()
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				type outcome struct {
@@ -67,7 +69,8 @@ func TestResponsesRequestMemoryAdmission18MiBConcurrentCancellation(t *testing.T
 							return
 						}
 						defer release()
-						body, err := readAdmittedResponsesJSONRequestBody(c.Request, cfg)
+						body, owner, err := readOwnedAdmittedResponsesJSONRequestBody(c.Request, cfg, nil)
+						defer owner.Close()
 						if err == nil && (int64(len(body)) != bodyBytes || !json.Valid(body)) {
 							err = fmt.Errorf("正文长度或 JSON 校验失败：收到 %d 字节", len(body))
 						}
@@ -106,6 +109,7 @@ func TestResponsesRequestMemoryAdmission18MiBConcurrentCancellation(t *testing.T
 					}
 				}
 				require.Zero(t, admission.usedBytes.Load(), "取消后必须同步归还全部准入预算")
+				require.Equal(t, ownedBefore, pkghttputil.ActiveOwnedRequestBodyBytes(), "额度归还时大正文系统内存也必须已经释放")
 				for index, result := range outcomes {
 					if result.admitted {
 						require.Equal(t, bodyBytes, readers[index].readBytes.Load())

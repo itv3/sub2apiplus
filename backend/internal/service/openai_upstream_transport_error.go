@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -23,6 +25,14 @@ const openAITransportErrorTempUnschedDuration = 10 * time.Minute
 // inline 502 body so the client-visible payload is unchanged if failover is
 // ultimately exhausted.
 var openAITransportFailoverBody = []byte(`{"error":{"type":"upstream_error","message":"Upstream request failed"}}`)
+
+// IsRequestBodyStorageError 统一识别入站与官方出站正文的本机暂存故障。
+// 必须保留包装链：磁盘空间、读写或文件生命周期错误均不代表上游账号故障。
+func IsRequestBodyStorageError(err error) bool {
+	var inbound *pkghttputil.RequestBodyStorageError
+	var outbound *officialegress.RequestBodyStorageError
+	return errors.As(err, &inbound) || errors.As(err, &outbound)
+}
 
 // upstreamTransportErrorClass describes how to react to a transport-level upstream
 // failure — i.e. the HTTP round-trip never completed (proxy / DNS / TCP / TLS
@@ -112,9 +122,14 @@ func isClientCanceledTransportError(ctx context.Context, err error) bool {
 //
 // It deliberately does NOT write to the response: the handler owns the response
 // (failover, or a protocol-correct error once failover is exhausted).
+// 本机正文暂存故障在上述上游归因之前原样返回，由入口处理 503 或 WS 1013。
 //
 // passthrough tags the Ops error event for the OpenAI passthrough forward path.
 func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Context, c *gin.Context, account *Account, err error, passthrough bool) error {
+	// 暂存文件由本机管理，不能记录为上游网络错误或触发换号、账号降权。
+	if IsRequestBodyStorageError(err) {
+		return err
+	}
 	if isClientCanceledTransportError(ctx, err) {
 		return err
 	}

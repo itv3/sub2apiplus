@@ -305,6 +305,28 @@ func (l *openAIWSConnLease) WriteJSONContext(ctx context.Context, value any) err
 	return conn.writeJSON(value, ctx)
 }
 
+// writePreparedJSONContext 与普通写入共用连接锁、租约校验和活跃时间更新。
+// 只在正式 Executor 已完成帧编译后使用，正文借用截至同步发送返回。
+func (l *openAIWSConnLease) writePreparedJSONContext(ctx context.Context, payload []byte) error {
+	conn, err := l.activeConn()
+	if err != nil {
+		return err
+	}
+	conn.writeMu.Lock()
+	defer conn.writeMu.Unlock()
+	if conn.ws == nil {
+		return errOpenAIWSConnClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := writeOpenAIPreparedJSON(ctx, conn.ws, payload); err != nil {
+		return err
+	}
+	conn.touch()
+	return nil
+}
+
 func (l *openAIWSConnLease) ReadMessage(timeout time.Duration) ([]byte, error) {
 	conn, err := l.activeConn()
 	if err != nil {

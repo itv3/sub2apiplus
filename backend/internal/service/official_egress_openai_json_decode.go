@@ -23,11 +23,7 @@ func buildOfficialJSONRawIndexForDecode(body []byte) (*officialJSONRawIndex, err
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errors.New("JSON 正文为空")
 	}
-	index := &officialJSONRawIndex{
-		body:       body,
-		nodes:      make([]officialJSONRawNode, 0, officialJSONRawCountValues(body)),
-		skipDigest: true,
-	}
+	index := newOfficialJSONRawIndex(body, true)
 	scanner := officialJSONRawScanner{index: index}
 	root, err := scanner.parseValue(0)
 	if err != nil {
@@ -72,9 +68,9 @@ func (index *officialJSONRawIndex) ensureDigests() {
 		case officialJSONRawKindTrue, officialJSONRawKindFalse, officialJSONRawKindNull:
 			n.hash = index.hashBytes(officialJSONRawHashTag(n.kind), nil)
 		case officialJSONRawKindObject:
-			n.hash = index.hashObjectMembers(n.members)
+			n.hash = index.hashObjectMembers(index.objectMembers(int32(i)))
 		case officialJSONRawKindArray:
-			n.hash = index.hashArrayItems(n.items)
+			n.hash = index.hashArrayItems(index.arrayItems(int32(i)))
 		}
 	}
 	index.byHash = make(map[uint64][]int32)
@@ -86,15 +82,17 @@ func (index *officialJSONRawIndex) decodeValue(node int32) any {
 	n := &index.nodes[node]
 	switch n.kind {
 	case officialJSONRawKindObject:
-		object := make(map[string]any, len(n.members))
-		for _, member := range n.members {
+		members := index.objectMembers(node)
+		object := make(map[string]any, len(members))
+		for _, member := range members {
 			// 成员按原始顺序写入：同名键自然取最后一次出现，与 encoding/json 一致。
 			object[member.key] = index.decodeValue(member.node)
 		}
 		return object
 	case officialJSONRawKindArray:
-		items := make([]any, len(n.items))
-		for i, item := range n.items {
+		children := index.arrayItems(node)
+		items := make([]any, len(children))
+		for i, item := range children {
 			items[i] = index.decodeValue(item)
 		}
 		return items
@@ -249,15 +247,17 @@ func (index *officialJSONRawIndex) decodeValueSharingBodyWithStrings(node int32,
 	n := &index.nodes[node]
 	switch n.kind {
 	case officialJSONRawKindObject:
-		object := make(map[string]any, len(n.members))
-		for _, member := range n.members {
+		members := index.objectMembers(node)
+		object := make(map[string]any, len(members))
+		for _, member := range members {
 			// 成员按原始顺序写入：同名键自然取最后一次出现，与 decodeValue 一致。
 			object[member.key] = index.decodeValueSharingBodyWithStrings(member.node, stringCache)
 		}
 		return object
 	case officialJSONRawKindArray:
-		items := make([]any, len(n.items))
-		for i, item := range n.items {
+		children := index.arrayItems(node)
+		items := make([]any, len(children))
+		for i, item := range children {
 			items[i] = index.decodeValueSharingBodyWithStrings(item, stringCache)
 		}
 		return items

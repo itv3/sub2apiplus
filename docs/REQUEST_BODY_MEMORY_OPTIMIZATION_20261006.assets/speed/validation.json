@@ -1,0 +1,46 @@
+{
+  "final_ci": {
+    "command": "GOTOOLCHAIN=go1.27.1 make check-egress-spec-ci",
+    "exit_code": 0,
+    "checks": 48
+  },
+  "final_targeted_checks": {
+    "memory-final-race.log": "go test -race ./internal/officialegress -run ^TestRequestBodyMemory -count=1",
+    "storage-boundary-race.log": "go test -race ./internal/officialegress ./internal/pkg/httputil -run Test(RequestBody|OwnedRequestBody|Changeset5OfficialEgressDependencyClosure) -count=1",
+    "memory-buffer-race.log": "go test -race ./internal/pkg/httputil -run ^TestRequestBodyMemoryBuffer -count=1",
+    "service-boundary-race.log": "go test -race ./internal/service -run Test(OfficialForward.*|Official.*Body.*Lifecycle.*|OpenAIWSHTTPBridge.*) -count=1",
+    "service-freeze-final.log": "go test ./internal/service -run Frozen|Transition|Successor|Drift -count=1",
+    "fact-map-tests.log": "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace",
+    "upstream-tools-rerun.log": "make test-upstream-merge-tools",
+    "final-business-vet.log": "go vet ./internal/service ./internal/handler ./internal/pkg/httputil ./internal/service/openai_ws_v2"
+  },
+  "targeted_exit_codes": {
+    "memory-final-race.log": 0,
+    "storage-boundary-race.log": 0,
+    "memory-buffer-race.log": 0,
+    "service-boundary-race.log": 0,
+    "service-freeze-final.log": 0,
+    "fact-map-tests.log": 0,
+    "upstream-tools-rerun.log": 0,
+    "final-business-vet.log": 0
+  },
+  "earlier_full_backend_regression": {
+    "exit_code": 0,
+    "packages": [
+      "internal/service",
+      "internal/handler",
+      "internal/pkg/httputil",
+      "internal/service/openai_ws_v2"
+    ],
+    "note": "业务组合层注入调整前的全包记录；最终版本另跑存储及转发生命周期 race、服务冻结专项、48 项门禁和容器矩阵。"
+  },
+  "first_ci_attempt": {
+    "exit_code": 2,
+    "failures": [
+      "officialegress 不允许直接依赖 httputil，已由组合层注入修复",
+      "上游工具中断测试遇到 PermissionError，独立重跑和最终整轮均通过"
+    ],
+    "note": "保留失败原日志，不把先前失败改记为通过。"
+  },
+  "freeze_receipts": "生成器原结果 manual_actions_required 保留；已在授权变更范围内审查源码差异、只重绑事实映射摘要，事实和规则语义不变，最终门禁通过。"
+}

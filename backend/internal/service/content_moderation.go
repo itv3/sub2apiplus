@@ -1189,6 +1189,9 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 		s.asyncDropped.Add(1)
 		return
 	}
+	// 正文已同步提取成独立的审核内容；后台任务只消费 content 和请求元数据。
+	// 不把入站原文带入队列，确保显式正文所有者可在请求结束后释放。
+	input.Body = nil
 	task := contentModerationTask{
 		input:      input,
 		content:    content,

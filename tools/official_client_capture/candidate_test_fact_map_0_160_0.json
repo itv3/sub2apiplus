@@ -145,11 +145,11 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+          "sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
         },
         {
           "path": "backend/internal/service/openai_ws_forwarder_payload.go",
-          "sha256": "2edd45ae5a333a91bafbb24a3f62a059fe4f54de54bbed9824784da7f09b7dae"
+          "sha256": "007cef16397ae13bc919b150144b849e01d77f16798830759405ce1073178c5f"
         }
       ],
       "facts": [
@@ -193,11 +193,11 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+          "sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33"
+          "sha256": "be666af372db147fd28515f2fa9b3d8536eecf13a4bf5a2ea571e7fa91a68840"
         }
       ],
       "facts": [
@@ -277,7 +277,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "193eac82b4aba269d57f99873b21f595f9d28629f7e532b49cc4e1e079c260cd"
+          "sha256": "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
@@ -409,7 +409,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+          "sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
@@ -516,7 +516,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+          "sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
         },
         {
           "path": "backend/internal/service/official_egress_identity_authority.go",
@@ -524,7 +524,7 @@
         },
         {
           "path": "backend/internal/officialegress/compiler.go",
-          "sha256": "85c1d76d7d2bc93c1af8a74ed9484125c13b3193f59503729e32c4c010a0cdf6"
+          "sha256": "886733e5e17de07d174f1dbe52fa9cd2999851809608b857274aff671233054e"
         }
       ],
       "facts": [
@@ -552,7 +552,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_openai_http.go",
-          "sha256": "9bc05668c64c4fee8946b2a19d42c190038c7964f04009f4a4492b4e3ed48169"
+          "sha256": "155fa3c5acca07571ec1a9137f072a8208cce1bf5192a3e4f5aeb79a2136ea91"
         },
         {
           "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",
@@ -592,7 +592,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_openai_ws.go",
-          "sha256": "bc2625e162a9d449d6f9761efd618824d483f59fa091b6364a328b57ebcb1f33"
+          "sha256": "be666af372db147fd28515f2fa9b3d8536eecf13a4bf5a2ea571e7fa91a68840"
         }
       ],
       "facts": [

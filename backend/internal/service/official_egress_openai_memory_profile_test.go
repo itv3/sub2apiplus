@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
@@ -87,11 +88,12 @@ const (
 
 // officialEgressDiscardUpstream 是只丢弃业务请求体的上游桩；模型清单请求照常应答。
 type officialEgressDiscardUpstream struct {
-	mu               sync.Mutex
-	businessRequests int
-	wireBytes        int64
-	encodings        []string
-	contentLengths   []int64
+	mu                  sync.Mutex
+	businessRequests    int
+	wireBytes           int64
+	encodings           []string
+	contentLengths      []int64
+	rejectFirstBusiness bool
 }
 
 func (u *officialEgressDiscardUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -122,7 +124,13 @@ func (u *officialEgressDiscardUpstream) Do(req *http.Request, _ string, _ int64,
 	u.wireBytes += written
 	u.encodings = append(u.encodings, req.Header.Get("Content-Encoding"))
 	u.contentLengths = append(u.contentLengths, req.ContentLength)
+	reject := u.rejectFirstBusiness && u.businessRequests == 1
 	u.mu.Unlock()
+	if reject {
+		// 只拒绝首个定型版本，测量真实坏密文修复与第二次发送的峰值，不在桩中保留正文。
+		return newOfficialOpenAIHTTPJSONResponse(http.StatusBadRequest,
+			`{"error":{"message":"The encrypted content could not be verified.","type":"invalid_request_error","code":"invalid_encrypted_content"}}`), nil
+	}
 	return newOfficialOpenAIHTTPSSECompletedResponse("resp_memory_profile"), nil
 }
 
@@ -348,6 +356,7 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 	}
 	require.Contains(t, []string{"identity", "chunked", "zstd"}, ingressEncoding)
 	wireFixture := strings.TrimSpace(os.Getenv("SUB2API_OFFICIAL_EGRESS_MEMORY_WIRE_FIXTURE"))
+	retryFirst := os.Getenv("SUB2API_OFFICIAL_EGRESS_MEMORY_RETRY_FIRST") == "1"
 	targetBytes := int(bodyMiB * (1 << 20))
 
 	gcPercent := debug.SetGCPercent(-1)
@@ -371,9 +380,16 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		warmOfficialEgressMemoryProfile(t, service, account)
 		upstream.mu.Lock()
 		upstream.businessRequests, upstream.wireBytes, upstream.encodings, upstream.contentLengths = 0, 0, nil, nil
+		upstream.rejectFirstBusiness = retryFirst
 		upstream.mu.Unlock()
 
 		bodies := make([][]byte, concurrency)
+		owners := make([]*pkghttputil.OwnedRequestBody, concurrency)
+		t.Cleanup(func() {
+			for _, owner := range owners {
+				_ = owner.Close()
+			}
+		})
 		contexts := make([]*gin.Context, concurrency)
 		bodyDigests := make([]string, concurrency)
 		bodyLengths := make([]int64, concurrency)
@@ -461,8 +477,9 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		var peakRSS atomic.Int64
 		peakRSS.Store(rssBefore)
 
-		var peakHeapInuse atomic.Uint64
-		peakHeapInuse.Store(before.HeapInuse)
+		ownedBefore := uint64(pkghttputil.ActiveOwnedRequestBodyBytes())
+		var memoryPeak officialEgressMemoryPeak
+		memoryPeak.observe(before.HeapInuse, ownedBefore)
 		stop := make(chan struct{})
 		samplerDone := make(chan struct{})
 		go func() {
@@ -479,17 +496,19 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 					if rss := readOfficialEgressMemoryProfileRSS(); rss > peakRSS.Load() {
 						peakRSS.Store(rss)
 					}
-					for {
-						current := peakHeapInuse.Load()
-						if stats.HeapInuse <= current || peakHeapInuse.CompareAndSwap(current, stats.HeapInuse) {
-							break
-						}
-					}
+					memoryPeak.observe(stats.HeapInuse, uint64(pkghttputil.ActiveOwnedRequestBodyBytes()))
 				}
 			}
 		}()
 
 		started := time.Now()
+		var timingMu sync.Mutex
+		phaseTimes := make(map[string]float64)
+		observeTiming := func(stage string, duration time.Duration) {
+			timingMu.Lock()
+			phaseTimes[stage] += float64(duration) / float64(time.Millisecond)
+			timingMu.Unlock()
+		}
 		errs := make([]error, concurrency)
 		var wg sync.WaitGroup
 		for i := 0; i < concurrency; i++ {
@@ -498,6 +517,7 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 				defer wg.Done()
 				// 同一槽依次转发 requestsPerSlot 次（默认 1 次）；正文只读、各次共用，第二次起在窗口内新建上下文。
 				for request := 0; request < requestsPerSlot; request++ {
+					officialEgressMemoryProfilePhase("before_read", index, request)
 					c := contexts[index]
 					if stage == "read_forward" {
 						if request > 0 {
@@ -507,6 +527,11 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 							contexts[index] = fresh
 						}
 						bodies[index] = nil
+						if err := owners[index].Close(); err != nil {
+							errs[index] = err
+							return
+						}
+						owners[index] = nil
 						file, err := os.Open(wireFixtures[index])
 						if err != nil {
 							errs[index] = err
@@ -523,12 +548,16 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 						if wireLengths[index] > readLimit {
 							readLimit = wireLengths[index]
 						}
-						body, readErr := pkghttputil.ReadAdmittedLenientJSONRequestBody(c.Request, readLimit)
+						readStarted := time.Now()
+						owner, readErr := pkghttputil.ReadOwnedAdmittedLenientJSONRequestBodyWithReservation(c.Request, readLimit, nil)
+						observeTiming("ingress_read", time.Since(readStarted))
+						owners[index] = owner
 						closeErr := file.Close()
 						if readErr != nil || closeErr != nil {
 							errs[index] = fmt.Errorf("入口读取失败: read=%v close=%v", readErr, closeErr)
 							return
 						}
+						body := owner.Bytes()
 						bodies[index] = body
 						if digest := fmt.Sprintf("%x", sha256.Sum256(body)); digest != bodyDigests[index] {
 							errs[index] = fmt.Errorf("入口读取的正文与固定对照样本不一致")
@@ -539,7 +568,15 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 						// 请求结束后入口上下文随请求退役；只保留当前请求，不能把第一轮缓存钉住整场测量。
 						contexts[index] = c
 					}
-					result, err := service.Forward(t.Context(), c, account, bodies[index])
+					officialEgressMemoryProfilePhase("before_forward", index, request)
+					forwardCtx := officialegress.WithRequestBodyTiming(t.Context(), observeTiming)
+					if owners[index] != nil {
+						forwardCtx = WithOpenAIBorrowedIngressBody(forwardCtx)
+					}
+					forwardStarted := time.Now()
+					result, err := service.Forward(forwardCtx, c, account, bodies[index])
+					observeTiming("forward", time.Since(forwardStarted))
+					officialEgressMemoryProfilePhase("after_forward", index, request)
 					if err == nil && result == nil {
 						err = fmt.Errorf("Forward 返回空结果")
 					}
@@ -562,9 +599,10 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		runtime.KeepAlive(bodies)
 		runtime.KeepAlive(contexts)
 		// 采样协程已停止，这里直接把转发结束时的 HeapInuse 并入峰值（见文件头测量口径）。
-		if after.HeapInuse > peakHeapInuse.Load() {
-			peakHeapInuse.Store(after.HeapInuse)
-		}
+		memoryPeak.observe(after.HeapInuse, uint64(pkghttputil.ActiveOwnedRequestBodyBytes()))
+		phaseJSON, err := json.Marshal(phaseTimes)
+		require.NoError(t, err)
+		fmt.Printf("MEMPROFILE_TIMING %s\n", phaseJSON)
 		cgroupPeak := readOfficialEgressMemoryProfileCgroup("memory.peak")
 		if rss := readOfficialEgressMemoryProfileRSS(); rss > peakRSS.Load() {
 			peakRSS.Store(rss)
@@ -578,13 +616,21 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		encodings := append([]string(nil), upstream.encodings...)
 		contentLengths := append([]int64(nil), upstream.contentLengths...)
 		upstream.mu.Unlock()
-		require.Equal(t, concurrency*requestsPerSlot, businessRequests, "上游收到的业务请求数与并发数乘每槽请求数不一致")
+		expectedRequests := concurrency * requestsPerSlot
+		if retryFirst {
+			expectedRequests++
+		}
+		require.Equal(t, expectedRequests, businessRequests, "业务请求数必须等于入站数加实际注入的一次重试")
 
-		extraHeap := float64(peakHeapInuse.Load()) - float64(before.HeapInuse)
+		extraHeap := float64(memoryPeak.heap.Load()) - float64(before.HeapInuse)
 		requestHeap := extraHeap + float64(totalBodyBytes)
 		if stage == "read_forward" {
 			// 此阶段基线未持有原文，读取分配已进入采样，不能再加一份正文。
 			requestHeap = extraHeap
+		}
+		requestMemory := float64(memoryPeak.total.Load()) - float64(before.HeapInuse+ownedBefore)
+		if stage == "forward" {
+			requestMemory += float64(totalBodyBytes)
 		}
 		totalAlloc := float64(after.TotalAlloc - before.TotalAlloc)
 		result := map[string]any{
@@ -596,6 +642,8 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 			"fixture_path":                fixture,
 			"concurrency":                 concurrency,
 			"requests_per_slot":           requestsPerSlot,
+			"retry_first_business":        retryFirst,
+			"business_requests":           businessRequests,
 			"body_mib_each":               officialEgressMemoryProfileMiB(float64(totalBodyBytes) / float64(concurrency)),
 			"body_mib_total":              officialEgressMemoryProfileMiB(float64(totalBodyBytes)),
 			"body_bytes_total":            totalBodyBytes,
@@ -603,13 +651,18 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 			"wire_content_encodings":      encodings,
 			"wire_content_lengths":        contentLengths,
 			"heap_inuse_before_mib":       officialEgressMemoryProfileMiB(float64(before.HeapInuse)),
-			"heap_inuse_peak_mib":         officialEgressMemoryProfileMiB(float64(peakHeapInuse.Load())),
+			"heap_inuse_peak_mib":         officialEgressMemoryProfileMiB(float64(memoryPeak.heap.Load())),
 			"heap_inuse_after_mib":        officialEgressMemoryProfileMiB(float64(after.HeapInuse)),
 			"heap_extra_peak_mib":         officialEgressMemoryProfileMiB(extraHeap),
 			"heap_request_peak_mib":       officialEgressMemoryProfileMiB(requestHeap),
 			"heap_request_peak_bytes":     int64(requestHeap),
 			"extra_multiple":              math.Round(extraHeap/float64(totalBodyBytes)*100) / 100,
-			"resident_multiple_with_body": math.Round(requestHeap/float64(totalBodyBytes)*100) / 100,
+			"resident_multiple_with_body": math.Round(requestMemory/float64(totalBodyBytes)*100) / 100,
+			"request_memory_peak_bytes":   int64(requestMemory),
+			"request_memory_peak_mib":     officialEgressMemoryProfileMiB(requestMemory),
+			"owned_memory_peak_mib":       officialEgressMemoryProfileMiB(float64(memoryPeak.owned.Load())),
+			"owned_memory_before_bytes":   ownedBefore,
+			"owned_memory_after_bytes":    pkghttputil.ActiveOwnedRequestBodyBytes(),
 			"total_alloc_mib":             officialEgressMemoryProfileMiB(totalAlloc),
 			"total_alloc_mib_per_request": officialEgressMemoryProfileMiB(totalAlloc / float64(concurrency*requestsPerSlot)),
 			"gc_cycles":                   after.NumGC - before.NumGC,
@@ -628,12 +681,16 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 			result["cpu_ms"] = math.Round((cpuAfter - cpuBefore) * 1000)
 		}
 		if totalBodyBytes/concurrency >= 16<<20 {
-			result["large_body_target_met"] = requestHeap <= 2.5*float64(totalBodyBytes)
+			result["large_body_target_met"] = requestMemory <= 2.5*float64(totalBodyBytes)
 		}
 		for i := range bodies {
 			bodies[i] = nil
 			contexts[i] = nil
+			require.NoError(t, owners[i].Close())
+			owners[i] = nil
 		}
+		result["owned_memory_after_release_bytes"] = pkghttputil.ActiveOwnedRequestBodyBytes()
+		require.EqualValues(t, ownedBefore, pkghttputil.ActiveOwnedRequestBodyBytes(), "显式正文内存必须同步释放")
 		// 强制回收只用于测量窗口结束后的释放检查，禁止在请求期间用 GC 压低峰值。
 		runtime.GC()
 		debug.FreeOSMemory()
@@ -645,4 +702,14 @@ func TestOfficialEgressHTTPForwardMemoryProfile(t *testing.T) {
 		require.NoError(t, err)
 		fmt.Printf("MEMPROFILE_RESULT %s\n", encoded)
 	}
+}
+
+// 分阶段诊断仅在显式开关下记录堆状态，不强制 GC；正式峰值验收保持关闭。
+func officialEgressMemoryProfilePhase(phase string, slot, request int) {
+	if os.Getenv("SUB2API_OFFICIAL_EGRESS_MEMORY_PHASES") != "1" {
+		return
+	}
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	fmt.Printf("MEMPROFILE_PHASE phase=%s slot=%d request=%d heap=%.1f inuse=%.1f next=%.1f gc=%d\n", phase, slot, request, float64(stats.HeapAlloc)/(1<<20), float64(stats.HeapInuse)/(1<<20), float64(stats.NextGC)/(1<<20), stats.NumGC)
 }

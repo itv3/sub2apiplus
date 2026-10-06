@@ -236,11 +236,6 @@ func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {
 	return nil, false
 }
 
-func isRequestBodyStorageError(err error) bool {
-	var storageErr *pkghttputil.RequestBodyStorageError
-	return errors.As(err, &storageErr)
-}
-
 func formatBodyLimit(limit int64) string {
 	const mb = 1024 * 1024
 	if limit >= mb {
@@ -281,6 +276,24 @@ func readAdmittedResponsesJSONRequestBodyWithReservation(req *http.Request, cfg 
 		limit = maxRequest
 	}
 	return pkghttputil.ReadAdmittedLenientJSONRequestBodyWithReservation(req, limit, beforeNormalize)
+}
+
+// 显式所有权入口只在已启用准入时使用；未准入和旧调用者保持原有堆正文语义。
+// 调用方必须把 owner 保留到全部请求处理与账号重试结束，之后同步 Close。
+func readOwnedAdmittedResponsesJSONRequestBody(req *http.Request, cfg *appconfig.Config, beforeNormalize func(int) error) ([]byte, *pkghttputil.OwnedRequestBody, error) {
+	if cfg == nil || cfg.Gateway.RequestMemoryBudgetBytes <= 0 {
+		body, err := readResponsesJSONRequestBodyWithPrealloc(req, cfg)
+		return body, nil, err
+	}
+	limit := gatewayMaxBodySize(cfg)
+	if maxRequest, _, _ := requestMemoryAdmissionConfig(cfg); maxRequest > 0 && (limit <= 0 || maxRequest < limit) {
+		limit = maxRequest
+	}
+	owner, err := pkghttputil.ReadOwnedAdmittedLenientJSONRequestBodyWithReservation(req, limit, beforeNormalize)
+	if err != nil {
+		return nil, nil, err
+	}
+	return owner.Bytes(), owner, nil
 }
 
 func gatewayMaxBodySize(cfg *appconfig.Config) int64 {

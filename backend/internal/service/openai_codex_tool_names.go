@@ -205,7 +205,9 @@ func storeCodexToolNameReverse(c *gin.Context, key string, reverse map[string]st
 	}
 	copyMap := make(map[string]string, len(reverse))
 	for aliased, original := range reverse {
-		copyMap[aliased] = original
+		// 共享解码的长名字经 TrimSpace 后仍引用入口正文；即使只剩 "python"，
+		// 也必须复制后跨响应或 WS 轮次保存，避免入口租约释放后读取失效内存。
+		copyMap[aliased] = strings.Clone(original)
 	}
 	c.Set(key, copyMap)
 }

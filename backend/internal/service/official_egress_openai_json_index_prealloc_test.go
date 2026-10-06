@@ -15,7 +15,7 @@ import (
 
 func indexPreallocCheck(t *testing.T, name string, body []byte) {
 	t.Helper()
-	count := officialJSONRawCountValues(body)
+	count := officialJSONRawCountStructure(body)
 	for label, build := range map[string]func([]byte) (*officialJSONRawIndex, error){
 		"decode": buildOfficialJSONRawIndexForDecode,
 		"full":   buildOfficialJSONRawIndex,
@@ -24,8 +24,14 @@ func indexPreallocCheck(t *testing.T, name string, body []byte) {
 		if err != nil {
 			continue
 		}
-		require.Equal(t, len(index.nodes), count, "%s（%s）：预计数必须等于登记的节点数", name, label)
+		require.Equal(t, len(index.nodes), count.values, "%s（%s）：预计数必须等于登记的节点数", name, label)
 		require.Equal(t, cap(index.nodes), len(index.nodes), "%s（%s）：节点表不得扩容", name, label)
+		require.Equal(t, len(index.members), count.members, "%s（%s）：对象成员计数必须精确", name, label)
+		require.Equal(t, len(index.items), count.items, "%s（%s）：数组元素计数必须精确", name, label)
+		require.Equal(t, len(index.objects), count.objects, "%s（%s）：对象缓存计数必须精确", name, label)
+		require.Equal(t, len(index.members), cap(index.members), "%s（%s）：成员表不得扩容", name, label)
+		require.Equal(t, len(index.items), cap(index.items), "%s（%s）：元素表不得扩容", name, label)
+		require.Equal(t, len(index.objects), cap(index.objects), "%s（%s）：对象缓存表不得扩容", name, label)
 	}
 }
 

@@ -16,6 +16,10 @@ type openAIWSDeferredIngressBody struct {
 type openAIWSDeferredIngressBodyContextKey struct{}
 
 func newOpenAIWSDeferredIngressBody(body []byte, lite bool) *openAIWSDeferredIngressBody {
+	return newOpenAIWSDeferredIngressBodyWithIndex(body, lite, nil)
+}
+
+func newOpenAIWSDeferredIngressBodyWithIndex(body []byte, lite bool, index *officialJSONRawIndex) *openAIWSDeferredIngressBody {
 	input := openAIBodyGet(body, "input")
 	if len(input.Raw) < officialForwardDetachLocateMinBytes ||
 		len(body)-len(input.Raw) > officialForwardDetachLocateMinBytes {
@@ -25,7 +29,10 @@ func newOpenAIWSDeferredIngressBody(body []byte, lite bool) *openAIWSDeferredIng
 	if !handled {
 		return nil
 	}
-	index, err := buildOfficialJSONRawIndexForDecode(body)
+	var err error
+	if index == nil || !officialForwardSameBody(body, index.body) {
+		index, err = buildOfficialJSONRawIndexForDecode(body)
+	}
 	if err != nil || !openAIWSHTTPBridgeCanKeepRawBody(index) {
 		return nil
 	}

@@ -1,0 +1,59 @@
+[
+  {
+    "name": "native-0.3-2turn",
+    "shape": "native",
+    "fixture": "native-0.3.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "ws-native-opt-native-0.3-10"
+  },
+  {
+    "name": "native-1-2turn",
+    "shape": "native",
+    "fixture": "native-1.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "ws-native-opt-native-1-10"
+  },
+  {
+    "name": "native-4-2turn",
+    "shape": "native",
+    "fixture": "native-4.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "ws-native-opt-native-4-10"
+  },
+  {
+    "name": "native-4-10turn",
+    "shape": "native",
+    "fixture": "native-4.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 10,
+    "ws_session_fixture_dir": "ws-native-opt-native-4-10"
+  },
+  {
+    "name": "native-8-2turn",
+    "shape": "native",
+    "fixture": "native-8.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 2,
+    "ws_session_fixture_dir": "ws-native-opt-native-8-10"
+  },
+  {
+    "name": "native-8-10turn",
+    "shape": "native",
+    "fixture": "native-8.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 10,
+    "ws_session_fixture_dir": "ws-native-opt-native-8-10"
+  },
+  {
+    "name": "native-4-10turn-c2",
+    "shape": "native",
+    "fixture": "native-4.json",
+    "test": "TestOfficialEgressWSSessionReadMemoryProfile",
+    "requests": 10,
+    "concurrency": 2,
+    "ws_session_fixture_dir": "ws-native-opt-native-4-10"
+  }
+]
