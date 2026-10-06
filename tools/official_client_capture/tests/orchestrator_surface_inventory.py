@@ -4,9 +4,10 @@
 ``upgrade_client_adapter.ORCHESTRATOR_SURFACE``：符号名 → 签名文本（类为 ``class``，常量与导入符号为 None）。
 
 口径（与设计第 2 节 B1-01、附录 E 一致）：
-* 可迁入共享流程：附录 E 第 3 节的 119 个函数（``MIGRATABLE_FUNCTIONS``）。它们引用的、不在可迁集合内的编排器
-  函数全部进入服务面；引用的常量若还被其它编排器函数或常量使用，或落在任一身份闭包内，则是共用常量、进入服务面，
-  其余随迁（不进服务面）。
+* 可迁入共享流程：附录 E 第 3 节的 119 个函数（``MIGRATABLE_FUNCTIONS``），B1-09 实际迁入其中去掉
+  ``RETAINED_FUNCTIONS`` 的部分。迁入函数引用的、不在迁入集合内的编排器函数全部进入服务面；迁入函数之间经编排器
+  互调（``routed_migrated_functions``：被其它迁入函数调用的迁入函数）也进入服务面；引用的常量若还被其它编排器函数或常量使用，或落在任一身份
+  闭包内，则是共用常量、进入服务面，其余随迁（不进服务面）。
 * 共享模块：引用 ``codex_upgrade`` 的 control 层模块（``SHARED_MODULES``）。对账器只计评估读侧闭包之外的函数
   （闭包内的 7 个函数原位不动、继续直接引用 ``codex_upgrade``）。
 * 导入符号只取编排器里非标准库、非受管模块的三个：``ConfigurationError``、``file_sha256``、``__file__``；
@@ -95,6 +96,40 @@ MIGRATABLE_FUNCTIONS = (
 )
 
 
+# B1-09 留在编排器原位、由 Claude 自实现的可迁函数：被测试以 inspect.getsource 钉住（recovery_reuse_check），
+# 或函数体依赖 Codex 专属内容——编排器模块路径（_campaign_stage_replay_facts）、VC-0 收口文件名与历史目标版本
+# （_reject_unparented_formal_write、_reject_campaign_run_legacy_write）、候选失效标记 schema
+# （_seal_candidate_revision）、Codex v2 身份策略布局（_tool_evolution_preview、_policy_only_change_paths、
+# _policy_evolution_transition、_evaluator_entry_digests）、Codex 候选构建参数（_candidate_identity_snapshot）、
+# Codex 验收合同的模式常量（_derive_b0_evaluation_run）。
+RETAINED_FUNCTIONS = (
+    "recovery_reuse_check", "_campaign_stage_replay_facts", "_reject_unparented_formal_write",
+    "_reject_campaign_run_legacy_write", "_seal_candidate_revision", "_tool_evolution_preview",
+    "_policy_only_change_paths", "_policy_evolution_transition", "_evaluator_entry_digests",
+    "_candidate_identity_snapshot", "_derive_b0_evaluation_run",
+)
+def migrated_function_names() -> tuple[str, ...]:
+    """B1-09 实际迁入 upgrade_control_plane.py 的函数（按附录 E 顺序）。"""
+
+    return tuple(name for name in MIGRATABLE_FUNCTIONS if name not in RETAINED_FUNCTIONS)
+
+
+def routed_migrated_functions(functions: dict[str, ast.AST]) -> set[str]:
+    """B1-09 迁入后仍经编排器互调的迁入函数：被其它迁入函数调用的全部迁入函数。
+
+    Codex 测试以替身打桩编排器上的同名符号（含以变量名循环打桩的写法），迁入函数之间直接调用会绕过替身；所以迁入
+    函数之间的调用一律写成 ``adapter.orchestrator.<原名>``，由各编排器原位薄壳转回共享实现，迁出前后的打桩行为不变。
+    """
+
+    migrated = set(migrated_function_names())
+    return {
+        child.id
+        for name in migrated
+        for child in ast.walk(functions[name])
+        if isinstance(child, ast.Name) and child.id in migrated and child.id != name
+    }
+
+
 def _names(node: ast.AST) -> set[str]:
     return {child.id for child in ast.walk(node) if isinstance(child, ast.Name)}
 
@@ -171,11 +206,12 @@ def compute_surface(tool_root: Path) -> dict[str, Any]:
     closure = {item["name"] for item in wire["functions"] + wire["constants"] + evidence["functions"] + evidence["constants"]}
     closure |= reader.get(ORCHESTRATOR_MODULE, set())
 
-    migrated_functions: set[str] = set()
+    migrated = set(migrated_function_names())
+    migrated_functions: set[str] = routed_migrated_functions(functions)
     migrated_constants: set[str] = set()
-    for name in MIGRATABLE_FUNCTIONS:
+    for name in migrated:
         for referenced in _names(functions[name]):
-            if referenced in functions and referenced not in migratable:
+            if referenced in functions and referenced not in migrated:
                 migrated_functions.add(referenced)
             elif referenced in constants:
                 migrated_constants.add(referenced)
@@ -185,7 +221,7 @@ def compute_surface(tool_root: Path) -> dict[str, Any]:
             if referenced in constants and referenced != owner:
                 users.setdefault(referenced, set()).add(owner)
     shared_constants = {
-        name for name in migrated_constants if name in closure or users.get(name, set()) - migratable
+        name for name in migrated_constants if name in closure or users.get(name, set()) - migrated
     }
     moving_constants = migrated_constants - shared_constants
 

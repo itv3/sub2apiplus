@@ -150,8 +150,8 @@ class CodexBindingTests(unittest.TestCase):
 
     def test_surface_counts_match_design(self) -> None:
         signatures = list(uca.ORCHESTRATOR_SURFACE.values())
-        self.assertEqual(len(signatures), 206)
-        self.assertEqual(sum(1 for value in signatures if value is not None), 161)
+        self.assertEqual(len(signatures), 254)
+        self.assertEqual(sum(1 for value in signatures if value is not None), 209)
         self.assertEqual(
             sorted(name for name in uca.ORCHESTRATOR_SURFACE if not hasattr(codex_upgrade, name) or name.startswith("__")),
             ["__file__"],
