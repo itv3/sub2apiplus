@@ -224,8 +224,10 @@ FROZEN_MAPPING_SHA256 = (
 # 的 all_match 判据由 ^str: 改为整串写法 ^str:.+$；同时随主手册第二部分摘要重绑 source_spec_sha256（见
 # candidate_rule_assertion 同日注释）。与修订画像逐字节比对只差 source_spec_sha256 一行，规则、场景、检查 ID 与
 # 其余判据载荷不变。
+# 2026-10-07：随主手册第二部分摘要重绑 source_spec_sha256（删除历史审计链接，见 candidate_rule_assertion 同日注释）；
+# 0.160.0 断言画像的规则、场景、检查 ID 与判据载荷逐字不变，diff 仅 source_spec_sha256 一行。
 FROZEN_PROFILE_SHA256 = (
-    "6565e95dbb2e3049725fcc572ee87766d718a9b84331387eadf8fddc54722029"
+    "c29dea53d6211abe503692d6010807a8bec1be908d796d88b9deafac26edbb54"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

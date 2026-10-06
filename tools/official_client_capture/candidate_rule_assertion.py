@@ -78,8 +78,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-04 主手册第二部分按当前 active 0.160.0 改写（BODY-006 数字档位、EP-019 官方 WHAM 允许集合、EP-022
 # 生图背景与 file_id 编辑三条规则重写）后，第二部分摘要变为 30013e8c…，十二份场景／预期清单的 source_spec 摘要
 # 随之重绑；0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
+# 2026-10-07 删除过时的 Codex CLI 历史审计后，主手册第二部分去掉指向它的链接（改为当前态表述，规则正文不变），
+# 第二部分摘要变为 476f9d55…，十二份场景／预期清单的 source_spec 摘要随之重绑；0.149.1 基线的规则、场景、
+# selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "d5ec23821ffc3eefcc00a7f225acd146a6784d67e5277311f649f03f72b5b58a"
+    "34f34b69a34baba5ee5dc283b4a497afb8b39a3c6fa2fcdf1ba70a52353c03d9"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
