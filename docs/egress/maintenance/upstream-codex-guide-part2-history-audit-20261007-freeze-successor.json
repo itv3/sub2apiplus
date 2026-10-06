@@ -1,0 +1,212 @@
+{
+  "base_commit": "424d2eff2a8a249c8a5744c4e62f6c5f7b6b6232",
+  "changed_path_count": 14,
+  "current_commit": "bfe22732d9b82f16cc21c422104e0718b72e419a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5815,
+  "frozen_path_count": 2015,
+  "identity_sha256": "330462afab84257f105e938913ec9b4f879d34a727e03efeffd7a630384535d5",
+  "issued_at_utc": "2026-10-06T17:09:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-guide-part2-history-audit-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_rule_assertion.py",
+      "predecessor_sha256s": [
+        "6b1c6118d6151ac5b16974663af43f7bce9f8acae5c4972e36c6639ff89e963d"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/candidate_rule_assertion.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-batch1-tool-evolution-20260927-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item56-env-probe-exclusion-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "predecessor_sha256s": [
+        "d5ec23821ffc3eefcc00a7f225acd146a6784d67e5277311f649f03f72b5b58a"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "34f34b69a34baba5ee5dc283b4a497afb8b39a3c6fa2fcdf1ba70a52353c03d9"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_151_0.json",
+      "predecessor_sha256s": [
+        "fdad1aa7ebf6981cc1ed796647380907cd96ab96726c0e92a46bfdcd94de470f"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/candidate_rule_expectations_0_151_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b4b9e69bf556f561341bafc09ae9bf6d231f92652af1f088a1c8a44fc5162ae3"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "f30ccd75456025e9f45eb276e7dcb3c1aa0cd34825f8113a9b0b6952c7352f1c"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-candidate-snapshot-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b8e53183cd572b1623a5c8fb90b93b08bed1976b1480b2b1ba79f5e4db6303c0"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "predecessor_sha256s": [
+        "6374cbfd4c86e6a4b60b9948b4ad6778f8227acaed5697be2afb66fc3ce1653a"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "bec63af15865972df862a04c00810b6d0f88b6ff85baeddd1bd8a9298f7f56ab"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_151_0.json",
+      "predecessor_sha256s": [
+        "3325e5cf26db852c926fcb264d477278ce3d531aa59a39e08fbb68c754de2806"
+      ],
+      "reason": "删除历史审计后主手册第二章摘要变化，十二份场景／预期清单的 source_spec 摘要与两处冻结画像摘要随之重绑；规则、场景与判据载荷不变，不改变官方客户端画像、Persona、请求字节或生产代码。 path=tools/official_client_capture/codex_upgrade_scenarios_0_151_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-c2pa-job-identity-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-system-proxy-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "8aea5308e430c51937db8e1d99b1df1b621be2b4a2077eaafe2f2904568bede2"
+    }
+  ],
+  "unregistered_path_count": 8,
+  "unregistered_paths": [
+    "tools/official_client_capture/candidate_rule_expectations_0_154_0.json",
+    "tools/official_client_capture/candidate_rule_expectations_0_156_1.json",
+    "tools/official_client_capture/candidate_rule_expectations_0_157_0.json",
+    "tools/official_client_capture/candidate_rule_expectations_0_160_0.json",
+    "tools/official_client_capture/codex_upgrade_scenarios_0_154_0.json",
+    "tools/official_client_capture/codex_upgrade_scenarios_0_156_1.json",
+    "tools/official_client_capture/codex_upgrade_scenarios_0_157_0.json",
+    "tools/official_client_capture/codex_upgrade_scenarios_0_160_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
