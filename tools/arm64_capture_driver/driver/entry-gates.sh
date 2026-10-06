@@ -225,6 +225,10 @@ PYDEPLOY
   fi
 }
 PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""; DEPLOY=""
+# B5a-04：pre-A3 认证模块的 plan／find-reusable／issue／record-reuse 按本轮客户端（参数 CLIENT，缺省 codex）。Codex 不带参数，
+# 命令行与改造前逐字相同；其余客户端带 --client（场景单元 ID 前缀、身份、部署收据与认证合同随之按客户端，记录库里互不承接）。
+PA3_CLIENT_ARGS=()
+if [ "${CLIENT:-codex}" != codex ]; then PA3_CLIENT_ARGS=(--client "$CLIENT"); fi
 if [ "$PROFILE" != entry ] && [ "$PROFILE" != pre-a3 ] && [ "$REQUIRE_DEPLOYED" = true ]; then
   echo "=== 部署绑定 $(utc_now)"
   check_deployed
@@ -243,7 +247,7 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   plan_pre_a3_run() {
     PRE_A3_MODE=run
     UNITS="$OUT/pre-a3-units.json"
-    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" \
+    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} \
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_parent"])')
     PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-data-root "$D" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
     if [ -d "$PYC_MANAGED" ]; then PRE_A3_ARGS+=(--pre-a3-env "PYTHONPYCACHEPREFIX=$PYC_MANAGED"); fi
@@ -254,11 +258,11 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
     plan_pre_a3_run
   elif [ -f "$PRE_A3_CERTIFICATION" ]; then
     # 已有的本轮认证先按 stage1 同一口径复核（无效即在跑门禁之前停下，不白跑一遍）。
-    python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null
+    python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} >/dev/null
     PRE_A3_MODE=present; echo "PRE_A3_PRESENT $PRE_A3_CERTIFICATION（不纳入本次运行）"
   elif [ "$PRE_A3_SOURCE" = present ]; then
     echo "ENTRY_GATES_ABORTED：--pre-a3-mode present 要求认证已在：${PRE_A3_CERTIFICATION}"; exit 3
-  elif REUSE=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION"); then
+  elif REUSE=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"}); then
     cp -p "$REUSE" "$PRE_A3_CERTIFICATION"; chmod 600 "$PRE_A3_CERTIFICATION"
     PRE_A3_MODE=reused; echo "PRE_A3_REUSED $REUSE（不纳入本次运行）"
   else
@@ -356,7 +360,7 @@ if [ "$PRE_A3_MODE" = run ]; then
   # E3-02：从本次运行的清单与记录库组装 v2 认证（每个场景恰好一条通过的正式执行记录，本次执行或承接；网络计数为 0）。
   # 清单只在执行器自检通过后才发布进记录库，没发布的运行签不出认证。
   echo "=== pre-A3 认证签发（从单元执行记录组装，核对场景全集与网络计数）$(utc_now)"
-  if ! python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$PA3_PARENT" \
+  if ! python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$PA3_PARENT" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} \
       --unit-manifest "$OUT/executor/unit-manifest.json" --record-store "$STORE" \
       --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300; then
     PRE_A3_OK=false
@@ -364,8 +368,8 @@ if [ "$PRE_A3_MODE" = run ]; then
 fi
 if [ "$PRE_A3_MODE" != none ] && [ "$PRE_A3_OK" = true ]; then
   # 与 stage1 建账本前同一口径复核本轮坐标；跨部署复用登记复用收据（同一组绑定不重复写）。
-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null
-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-300
+  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} >/dev/null
+  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} | cut -c1-300
   echo "PRE_A3_DONE $PRE_A3_CERTIFICATION（${PRE_A3_MODE}）"
 fi
 AFTER_STATUS=$(tree_status 5)

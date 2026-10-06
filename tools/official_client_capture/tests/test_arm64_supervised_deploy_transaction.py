@@ -650,12 +650,14 @@ class TreeDigestTests(unittest.TestCase):
 class ClaudeStructureTests(unittest.TestCase):
     """Claude 的 pre-A3 与二进制探针：现在没有登记就如实记录，登记之后按同一规则核对。"""
 
-    def test_current_tree_has_no_claude_pre_a3_table(self) -> None:
+    def test_current_tree_claude_pre_a3_set_is_empty(self) -> None:
+        """B5a-04 起按客户端分组的表已在，Claude 集合在 B5a-05 登记之前为空：如实记录，不算已认证。"""
+
         tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
         result = deploy.verify_claude_pre_a3_entries(tool_root)
         self.assertEqual((result["status"], result["scenario_count"], result["real_chain_registration"]),
                          ("not-registered", 0, []))
-        self.assertTrue(result["reason"])
+        self.assertIn("集合为空", result["reason"])
 
     def test_registered_claude_table_is_checked_like_codex(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

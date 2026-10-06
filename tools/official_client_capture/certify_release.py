@@ -7,6 +7,11 @@
 
 签发（``issue``）时逐项重放各输入收据；校验（``verify``）只核对认证自摘要、五摘要与
 各绑定文件的摘要，不重跑演练。收据只写一次，``superseded_by`` 非空即失效。
+
+Claude 升级 B5a-04 起按客户端分组：``issue／verify --client``（缺省 codex，签 ``tool-release-certification/v1``，字段与
+内容逐字不变）；Claude 签 ``…/v2``（v1 字段加 ``client``），绑定 Claude 部署收据、Claude 的 pre-A3 v3 认证与 Claude 身份。
+Claude 的 Job 演练（B2-10）与 atomic-double（B5a-09）收据合同落实之前，Claude 签发在核完 pre-A3 后失败关闭；pre-A3
+场景集合为空时更早被 pre-A3 拒绝。对编排器的引用（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -22,38 +28,64 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_campaign_run_rehearsal_receipt as campaign_rehearsal
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as job_rehearsal
 from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+from tools.official_client_capture import upgrade_client_adapter
 
 SCHEMA_VERSION = "tool-release-certification/v1"
-SHA256_RE = codex_upgrade.SHA256_RE
+# B5a-04：Claude 的发布认证（v1 字段加 client），只由 Claude 使用（设计 D2、附录 B）。
+SCHEMA_VERSION_V2 = "tool-release-certification/v2"
+CLIENT_SCHEMAS: Mapping[str, str] = {"codex": SCHEMA_VERSION, "claude": SCHEMA_VERSION_V2}
+SCHEMAS_WITH_CLIENT = frozenset({SCHEMA_VERSION_V2})
+DEFAULT_CLIENT = "codex"
+# 64 位小写十六进制摘要；与编排器 SHA256_RE 同一个模式（两客户端相同，测试核对），不为一个正则导入编排器。
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 class ReleaseCertificationError(ValueError):
     """发布认证输入不完整、绑定漂移或自摘要不一致。"""
 
 
+def require_client(client: Any) -> str:
+    """认证客户端：只认登记的客户端名，不认识即拒绝，不默认成 codex。"""
+
+    if not isinstance(client, str) or client not in CLIENT_SCHEMAS:
+        raise ReleaseCertificationError(f"不认识的客户端：{client!r}（可选：{list(CLIENT_SCHEMAS)}）")
+    return client
+
+
+def _adapter(client: str) -> upgrade_client_adapter.ClientAdapter:
+    return upgrade_client_adapter.adapter_for(require_client(client))
+
+
+def certification_client(payload: Mapping[str, Any]) -> str:
+    """发布认证所属的客户端：v2 读 ``client`` 字段，v1 没有该字段、按合同隐含 codex。"""
+
+    if payload.get("schema_version") in SCHEMAS_WITH_CLIENT:
+        return require_client(payload.get("client"))
+    return "codex"
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _fingerprint(value: Any) -> str:
-    return codex_upgrade._fingerprint(value)
+def _fingerprint(value: Any, client: str = DEFAULT_CLIENT) -> str:
+    return _adapter(client).orchestrator._fingerprint(value)
 
 
-def _bind_file(path: Path, label: str) -> dict[str, str]:
+def _bind_file(path: Path, label: str, client: str = DEFAULT_CLIENT) -> dict[str, str]:
     """绝对路径 + 内容摘要的最小文件绑定。"""
 
     resolved = Path(path)
     if not resolved.is_absolute() or resolved.is_symlink() or not resolved.is_file():
         raise ReleaseCertificationError(f"{label} 必须是存在的非符号链接绝对文件：{path}")
-    return {"path": str(resolved), "sha256": codex_upgrade.file_sha256(resolved)}
+    return {"path": str(resolved), "sha256": _adapter(client).orchestrator.file_sha256(resolved)}
 
 
-def _check_binding(binding: Any, label: str) -> None:
+def _check_binding(binding: Any, label: str, client: str = DEFAULT_CLIENT) -> None:
     if not isinstance(binding, Mapping) or set(binding) < {"path", "sha256"}:
         raise ReleaseCertificationError(f"{label} 绑定字段不闭合")
     path = Path(str(binding.get("path", "")))
@@ -61,7 +93,7 @@ def _check_binding(binding: Any, label: str) -> None:
         not path.is_absolute()
         or path.is_symlink()
         or not path.is_file()
-        or codex_upgrade.file_sha256(path) != binding.get("sha256")
+        or _adapter(client).orchestrator.file_sha256(path) != binding.get("sha256")
     ):
         raise ReleaseCertificationError(f"{label} 缺失或摘要漂移：{path}")
 
@@ -223,11 +255,13 @@ def compose_certification(
     issued_at_utc: str | None = None,
     real_chain_coverage: list[dict[str, Any]] | None = None,
     pre_a3_reuse_receipt: Mapping[str, Any] | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
-    """按固定字段组装并自签发布认证；各绑定由调用方（签发或测试夹具）提供。"""
+    """按固定字段组装并自签发布认证；各绑定由调用方（签发或测试夹具）提供。合同按客户端：Codex v1（字段不变）、
+    Claude v2（另带 ``client``）。"""
 
     core = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": CLIENT_SCHEMAS[require_client(client)],
         "status": "active",
         "issued_at_utc": issued_at_utc or _utc_now(),
         "identity": {name: identity[name] for name in policy_certification.IDENTITY_FIELDS},
@@ -248,7 +282,15 @@ def compose_certification(
     # 修好接着跑第 19 项：pre-A3 认证是跨部署复用来的才绑定复用收据；同一部署下签发的认证不加此字段。
     if pre_a3_reuse_receipt is not None:
         core["pre_a3_reuse_receipt"] = dict(pre_a3_reuse_receipt)
-    return {**core, "receipt_sha256": _fingerprint(core)}
+    if core["schema_version"] in SCHEMAS_WITH_CLIENT:
+        core["client"] = client
+    return {**core, "receipt_sha256": _fingerprint(core, client)}
+
+
+# 各客户端能重放的演练收据合同。Codex：Job 演练、atomic-double、campaign-run 演练（现行合同）。Claude 的同组合同
+# （official-client-job-rehearsal-receipt/v1、official-client-atomic-vc0-vc1-rehearsal/v1）由 B2-10、B5a-09 落实，此前
+# 签发 Claude 发布认证在核完 pre-A3 与复用收据之后失败关闭，不拿 Codex 的演练合同冒充。
+CLIENT_REHEARSAL_REPLAY: Mapping[str, bool] = {"codex": True, "claude": False}
 
 
 def _require_release_platform() -> None:
@@ -287,30 +329,35 @@ def build_certification(
     data_root: Path | None = None,
     issued_at_utc: str | None = None,
     pre_a3_reuse_receipt: Path | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """逐项重放输入并组装发布认证；给出 ``atomic_container`` 时在容器内重放 atomic-double。
 
     pre-A3 认证绑定的部署收据不是本次部署收据时（修好接着跑第 19 项：工具身份未变、跨部署复用），必须给出
     把这份认证绑定到本次部署收据的复用收据 ``pre_a3_reuse_receipt``，否则失败关闭。
+
+    ``client`` 决定身份、部署收据与 pre-A3 认证的合同（Claude：v3 引擎身份、Claude 部署收据、pre-A3 v3）；各项必须属于
+    同一个客户端，混用即五摘要或合同不符而拒绝。
     """
 
-    identity = policy_certification.current_identity()
+    identity = policy_certification.current_identity(require_client(client))
     _require_release_platform()
     try:
-        deployment = policy_certification.load_deployment_receipt(deployment_receipt, expected_identity=identity)
-        pre_a3_payload = pre_a3.verify_certification(pre_a3_certification, expected_identity=identity)
-        coverage = pre_a3.real_chain_coverage(pre_a3_payload)
+        deployment = policy_certification.load_deployment_receipt(deployment_receipt, expected_identity=identity, client=client)
+        pre_a3_payload = pre_a3.verify_certification(pre_a3_certification, expected_identity=identity, client=client)
+        coverage = pre_a3.real_chain_coverage(pre_a3_payload, client=client)
     except (policy_certification.PolicyCertificationError, pre_a3.CertificationError) as error:
         raise ReleaseCertificationError(str(error)) from error
     pre_a3_deployment = pre_a3_payload.get("deployment_receipt") or {}
-    deployment_binding = _bind_file(deployment_receipt, "ARM64 部署收据")
+    deployment_binding = _bind_file(deployment_receipt, "ARM64 部署收据", client)
     activation_binding: dict[str, Any] | None = None
     if policy_activation is not None:
         try:
-            policy_certification.verify_activation_certification(policy_activation, expected_identity=identity)
+            policy_certification.verify_activation_certification(policy_activation, expected_identity=identity, client=client)
         except policy_certification.PolicyCertificationError as error:
             raise ReleaseCertificationError(str(error)) from error
-        activation_binding = {**_bind_file(policy_activation, "策略激活认证"), "schema_version": policy_certification.POLICY_ACTIVATION_SCHEMA}
+        activation_binding = {**_bind_file(policy_activation, "策略激活认证", client),
+                              "schema_version": policy_certification.POLICY_ACTIVATION_SCHEMA}
     reuse_binding: dict[str, Any] | None = None
     if pre_a3_deployment.get("sha256") != deployment_binding["sha256"] and pre_a3_reuse_receipt is None:
         raise ReleaseCertificationError(
@@ -324,16 +371,21 @@ def build_certification(
                 deployment_receipt_sha256=deployment_binding["sha256"],
                 policy_activation_sha256=activation_binding["sha256"] if activation_binding else None,
                 expected_identity=identity,
+                client=client,
             )
         except pre_a3.CertificationError as error:
             raise ReleaseCertificationError(str(error)) from error
         reuse_binding = {
-            **_bind_file(pre_a3_reuse_receipt, "pre-A3 复用收据"),
+            **_bind_file(pre_a3_reuse_receipt, "pre-A3 复用收据", client),
             "schema_version": pre_a3.REUSE_SCHEMA_VERSION,
             "receipt_sha256": reuse_payload.get("receipt_sha256"),
             "reused_at_utc": reuse_payload.get("reused_at_utc"),
             "bound_deployment_receipt_sha256": (reuse_payload.get("reused_certification") or {}).get("bound_deployment_receipt_sha256"),
         }
+    if not CLIENT_REHEARSAL_REPLAY[client]:
+        raise ReleaseCertificationError(
+            f"客户端 {client} 的 Job 演练与 atomic-double 收据合同尚未落实（B2-10、B5a-09），不能签发发布认证"
+        )
     campaign_run: dict[str, Any] | None = None
     if (campaign_run_rehearsal_root is None) != (campaign_run_rehearsal_receipt is None):
         raise ReleaseCertificationError("campaign-run rehearsal 的证据根与收据必须同时提供")
@@ -357,7 +409,7 @@ def build_certification(
         identity=identity,
         deployment_receipt={**deployment_binding, "created_at_utc": deployment.get("created_at_utc")},
         pre_a3_certification={
-            **_bind_file(pre_a3_certification, "pre-A3 路径认证"),
+            **_bind_file(pre_a3_certification, "pre-A3 路径认证", client),
             "receipt_sha256": pre_a3_payload.get("receipt_sha256"),
             "scenario_count": pre_a3_payload.get("scenario_count"),
         },
@@ -367,33 +419,40 @@ def build_certification(
         campaign_run_rehearsal=campaign_run,
         issued_at_utc=issued_at_utc,
         pre_a3_reuse_receipt=reuse_binding,
+        client=client,
     )
 
 
-def verify(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """校验发布认证：schema、active、自摘要、五摘要等于期望身份、各绑定文件摘要一致。"""
+def verify(
+    path: Path, *, expected_identity: Mapping[str, Any] | None = None, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
+    """校验发布认证：schema、active、自摘要、五摘要等于期望身份、各绑定文件摘要一致。
+
+    认证必须是 ``client`` 的合同（Codex v1、Claude v2）且属于该客户端，身份按该客户端现算；缺省 codex 与改造前相同。"""
 
     payload = policy_certification._read_json(Path(path), "发布认证")
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    if payload.get("schema_version") != CLIENT_SCHEMAS[require_client(client)]:
         raise ReleaseCertificationError("发布认证 schema 非法")
+    if certification_client(payload) != client:
+        raise ReleaseCertificationError(f"发布认证不属于客户端 {client}")
     unsigned = {k: v for k, v in payload.items() if k != "receipt_sha256"}
-    if _fingerprint(unsigned) != payload.get("receipt_sha256"):
+    if _fingerprint(unsigned, client) != payload.get("receipt_sha256"):
         raise ReleaseCertificationError("发布认证自摘要不一致")
     if payload.get("status") != "active" or payload.get("superseded_by") is not None:
         raise ReleaseCertificationError("发布认证不是 active 或已被替换")
-    identity = expected_identity or policy_certification.current_identity()
+    identity = expected_identity or policy_certification.current_identity(client)
     if {k: str(v) for k, v in (payload.get("identity") or {}).items()} != {
         name: str(identity[name]) for name in policy_certification.IDENTITY_FIELDS
     } or payload.get("policy_version") != identity["policy_version"]:
         raise ReleaseCertificationError("发布认证五摘要或策略版本与当前工具身份不一致")
-    _check_binding(payload.get("deployment_receipt"), "发布认证绑定的部署收据")
-    _check_binding(payload.get("pre_a3_certification"), "发布认证绑定的 pre-A3 路径认证")
+    _check_binding(payload.get("deployment_receipt"), "发布认证绑定的部署收据", client)
+    _check_binding(payload.get("pre_a3_certification"), "发布认证绑定的 pre-A3 路径认证", client)
     if payload.get("pre_a3_reuse_receipt") is not None:
-        _check_binding(payload.get("pre_a3_reuse_receipt"), "发布认证绑定的 pre-A3 复用收据")
+        _check_binding(payload.get("pre_a3_reuse_receipt"), "发布认证绑定的 pre-A3 复用收据", client)
     if "real_chain_coverage" in payload:
         try:
             paths = policy_certification._read_json(Path(payload["pre_a3_certification"]["path"]), "pre-A3 路径认证")
-            expected_coverage = pre_a3.real_chain_coverage(paths, historical=True)
+            expected_coverage = pre_a3.real_chain_coverage(paths, historical=True, client=client)
         except pre_a3.CertificationError as error:
             raise ReleaseCertificationError(str(error)) from error
         if payload["real_chain_coverage"] != expected_coverage:
@@ -405,6 +464,7 @@ def verify(path: Path, *, expected_identity: Mapping[str, Any] | None = None) ->
         _check_binding(
             {"path": str(Path(str(section.get("evidence_root", ""))) / str(section.get("receipt", ""))), "sha256": section.get("sha256")},
             f"发布认证绑定的 {label}",
+            client,
         )
     if not SHA256_RE.fullmatch(str((payload.get("job_rehearsal") or {}).get("failure_lifecycle_probe_sha256", ""))):
         raise ReleaseCertificationError("发布认证缺少失败生命周期探针摘要")
@@ -440,6 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument("--output", type=Path, required=True)
     verify_parser = commands.add_parser("verify", help="只读校验发布认证")
     verify_parser.add_argument("--certification", type=Path, required=True)
+    # B5a-04：按客户端签发与校验（缺省 codex，签 v1，与改造前相同；claude 签 v2）。
+    for command in (issue_parser, verify_parser):
+        command.add_argument("--client", choices=tuple(CLIENT_SCHEMAS), default=DEFAULT_CLIENT,
+                             help="按哪个客户端的身份、部署收据与 pre-A3 认证签发或校验（缺省 codex）")
     return parser
 
 
@@ -463,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
                 atomic_container=arguments.atomic_container,
                 data_root=arguments.data_root,
                 pre_a3_reuse_receipt=arguments.pre_a3_reuse_receipt,
+                client=arguments.client,
             )
             summary = {
                 "status": result["status"],
@@ -472,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
                 "job_count": result["job_rehearsal"]["job_count"],
             }
         else:
-            payload = verify(arguments.certification)
+            payload = verify(arguments.certification, client=arguments.client)
             summary = {"status": payload["status"], "receipt_sha256": payload["receipt_sha256"], "identity": payload["identity"]}
     except (ReleaseCertificationError, OSError, ValueError) as error:
         print(f"发布认证失败：{error}", file=sys.stderr)

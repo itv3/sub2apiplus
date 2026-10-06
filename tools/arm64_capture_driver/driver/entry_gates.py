@@ -178,6 +178,17 @@ PREFLIGHT_SCHEMA = "arm64-vc0-target-gate-preflight/v1"
 COMMANDS_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 CAPTURE_GROUP = "capture-tools"
 PRE_A3_PREFIX = "pre-a3:"
+# B5a-04：pre-A3 场景单元按客户端分前缀（与认证模块 CLIENT_UNIT_PREFIXES 同值，测试核对）。Claude 单元仍在 pre-a3 门禁项之下，
+# 单元 ID 不同，同一记录库里与 Codex 单元互不承接；一份场景清单只属一个客户端（门禁记录的字面命令按它取）。
+PRE_A3_CLIENT_PREFIXES: dict[str, str] = {"codex": PRE_A3_PREFIX, "claude": "pre-a3:claude:"}
+
+
+def pre_a3_unit_client(unit_id: Any) -> str | None:
+    """pre-A3 场景单元属于哪个客户端（最长匹配的前缀）；不是 pre-A3 单元时为 None。"""
+
+    text = str(unit_id)
+    matches = [client for client, prefix in PRE_A3_CLIENT_PREFIXES.items() if text.startswith(prefix)]
+    return max(matches, key=lambda client: len(PRE_A3_CLIENT_PREFIXES[client])) if matches else None
 # pre-A3 场景的调度额度与预计秒数（E2-04 第三次验收的 ARM64 实测：秒数、CPU 占比）。认证模块 plan 给的是统一的 1 核，而 44 个
 # 场景一半以上 CPU 占比不到 0.5（等子进程、等超时为主），按 1 核排程会让 4 核额度用不满。额度＝实测占比向上取到 0.25 的
 # 倍数、最低 0.25；最长的 vc1-recovery 链在关键路径上，保底 1 核。没登记的场景按 0.5 核。内存峰值实测不超过 0.5 GB。
@@ -265,6 +276,21 @@ GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
     "deploy-scripts": (["deploy-scripts"], "."),
     "pre-a3": (["python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario"], "."),
 }
+# pre-A3 门禁项按客户端的字面命令（B5a-04）：Codex 就是上表那一条（逐字不变），Claude 的场景单元命令另带 --client claude。
+PRE_A3_GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
+    "codex": GATE_COMMANDS["pre-a3"],
+    "claude": ([*GATE_COMMANDS["pre-a3"][0], "--client", "claude"], GATE_COMMANDS["pre-a3"][1]),
+}
+
+
+def gate_literal_command(gate_id: str, units: Sequence[str] = ()) -> tuple[list[str], str]:
+    """门禁记录里写的字面命令：pre-a3 门禁项按它的场景单元所属客户端取（清单只属一个客户端，规划时已核对），
+    其余门禁项照旧查表；没有单元时按 Codex（与改造前相同）。"""
+
+    if gate_id == "pre-a3":
+        clients = {pre_a3_unit_client(unit_id) for unit_id in units} - {None}
+        return PRE_A3_GATE_COMMANDS[clients.pop() if len(clients) == 1 else "codex"]
+    return GATE_COMMANDS.get(gate_id, (["make", "test"], "."))
 # 额度按 ARM64 实测的 CPU／墙钟比与单进程内存峰值（E2-04，10-01，入口门禁一次运行）：
 # * 后端 go test 三组各 10～11.5 分钟，CPU 只用约 1.1 核（编译之外大半时间在等待），单进程峰值 4～4.5 GB——原来按 2 核申请，
 #   两组就占满 4 核额度、其它单元干等；改按 1.1 核（GOMAXPROCS 随额度向上取整为 2，编译仍可两路并行）、5 GB；
@@ -526,6 +552,9 @@ def plan_gates(
             payload = json.loads(Path(pre_a3_units).read_text(encoding="utf-8"))
             if payload.get("schema_version") != COMMANDS_SCHEMA or not isinstance(payload.get("units"), list) or not payload["units"]:
                 raise ValueError(f"pre-A3 场景清单格式非法：{pre_a3_units}")
+            unit_clients = {pre_a3_unit_client(unit.get("unit_id", "")) for unit in payload["units"]}
+            if len(unit_clients - {None}) > 1:
+                raise ValueError(f"pre-A3 场景清单混有多个客户端的单元：{sorted(item for item in unit_clients if item)}")
             members = []
             for unit in payload["units"]:
                 if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
@@ -754,7 +783,8 @@ def export_records(
                                driver_dir=HERE, steps_dir=out)
 
     def gate_record(gate_id: str, exit_code: int, started: str | None, completed: str | None, extra: dict[str, Any]) -> dict[str, Any]:
-        argv, workdir = GATE_COMMANDS.get(gate_id, (["make", "test"], "."))
+        argv, workdir = gate_literal_command(
+            gate_id, next((gate["units"] for gate in manifest["gates"] if gate["gate_id"] == gate_id), ()))
         return {
             "gate_id": gate_id, "command": argv, "working_directory": workdir, "host": host, "architecture": architecture,
             "started_at_utc": started, "completed_at_utc": completed, "exit_code": exit_code, "tree": tree,

@@ -292,6 +292,7 @@ GIT_READERS: dict[str, str] = {
     "test_claude_fw_g_acceptance": "经 claude_fw_g_acceptance 对真实仓库 ls-tree 历史提交",
     "test_codex_01491_terminal_state": "经 tools/check_ledger_completeness 对真实仓库 git log、git show",
     "test_arm64_supervised_deploy_codex_parity": "对真实仓库 git show 读 B5a-01 开工基线提交的部署脚本，与改造后逐字节对照 Codex 收据",
+    "test_pre_a3_codex_parity": "对真实仓库 git show 读 B5a-04 开工基线提交的 pre-A3 认证模块与入口门禁，逐字对照 Codex 场景单元与输入声明",
 }
 # 读集审计（E3-04）实测、静态闭包漏掉的测试目录读取：模块名 → {测试目录相对路径: 原因}。来源都是受管模块之间的函数内
 # 导入（静态闭包按设计不追，见 TestDependencies 的说明）：被测代码运行时延迟导入别的受管模块，后者在模块级导入测试目录

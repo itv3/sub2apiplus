@@ -14,6 +14,12 @@ epoch、策略 v2 的 seal 分支、``reuse-official-evidence`` 从 ``awaiting_r
 E3-02 起签发新形状 ``pre-a3-path-certification/v2``：场景作为入口门禁的可承接单元执行，认证从单元执行记录
 组装（每个场景引用一条正式执行记录的摘要，并标明本次执行或承接），核验时逐条重验记录。v1 的全部字段原样保留，
 消费端照读；v1 历史认证照旧只读重放。
+
+Claude 升级 B5a-04 起按客户端分组：场景表与真实链登记按客户端（``SCENARIOS_BY_CLIENT``、``REAL_CHAIN_IDS_BY_CLIENT``），
+签发、核验、复用与命令行都带 ``client``（缺省 codex，Codex 的场景、单元 ID、命令与收据逐字不变）。Claude 的场景单元 ID
+是 ``pre-a3:claude:<场景>``，与 Codex 单元在同一记录库里按单元 ID 区分、互不承接；Claude 只从单元执行记录签发
+``pre-a3-path-certification/v3``（v2 结构加 ``client``），场景集合为空时拒绝规划、签发与核验（场景由 B5a-05 登记）。
+对编排器的引用（指纹、文件摘要、补账命令、``ConfigurationError``）一律经客户端适配器取，本模块不再导入 ``codex_upgrade``。
 """
 
 from __future__ import annotations
@@ -33,17 +39,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
-from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_campaign_run_rehearsal_receipt as rehearsal
 from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_zero_request_smoke as smoke
+from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 # E3-02：从单元执行记录组装的新形状（v1 字段全部保留，另带逐场景的执行记录引用与运行清单引用）。
 SCHEMA_VERSION_V2 = "pre-a3-path-certification/v2"
+# B5a-04：Claude 的认证（v2 结构加 client），只由 Claude 使用（设计 D2、附录 B）。
+SCHEMA_VERSION_V3 = "pre-a3-path-certification/v3"
 CERTIFICATION_SCHEMAS = (SCHEMA_VERSION, SCHEMA_VERSION_V2)
+# 每个客户端认的认证合同：Codex 照旧 v1／v2（v1 只读重放），Claude 只有 v3。
+CLIENT_CERTIFICATION_SCHEMAS: Mapping[str, tuple[str, ...]] = {
+    "codex": CERTIFICATION_SCHEMAS,
+    "claude": (SCHEMA_VERSION_V3,),
+}
+# 从单元执行记录组装、核验时逐条重验记录的合同；其中带 client 字段的只有 v3。
+RECORD_SCHEMAS = frozenset({SCHEMA_VERSION_V2, SCHEMA_VERSION_V3})
+SCHEMAS_WITH_CLIENT = frozenset({SCHEMA_VERSION_V3})
+# 签发合同：从执行记录签（records）与串行／执行器汇总签（serial，E2-03 的旧路径）。Claude 没有串行合同：v3 的核心是
+# 逐场景的正式执行记录，串行认证拿不出记录，不能签 v3，也不为它另立合同。
+CLIENT_RECORD_SCHEMAS: Mapping[str, str] = {"codex": SCHEMA_VERSION_V2, "claude": SCHEMA_VERSION_V3}
+CLIENT_SERIAL_SCHEMAS: Mapping[str, str | None] = {"codex": SCHEMA_VERSION, "claude": None}
+DEFAULT_CLIENT = "codex"
 # 修好接着跑第 19 项：跨部署复用既有 pre-A3 认证时登记的复用收据（write-once、按绑定内容幂等）。
 REUSE_SCHEMA_VERSION = "pre-a3-reuse-receipt/v1"
 REUSE_RECEIPT_PREFIX = "pre-a3-reuse-"
@@ -361,18 +382,58 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_consumers_reject_unregistered_0154_formal_and_pass_legacy",
     ),
 )
+# B5a-04：Claude 的场景表与真实链登记，形状与 Codex 相同。最小恢复演练四条链（vc-chain.claude-reconcile 等，模块
+# tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain）由 B5a-05 登记；登记之前集合为空，
+# Claude 的规划、签发与核验一律拒绝（不签出零场景的认证）。场景名不得与 Codex 重名，也不得以客户端单元前缀开头。
+CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = ()
+CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = ()
+# 按客户端分组的登记表（设计 B5a-04）。值引用上面的模块常量，部署脚本据此静态核对场景入口随树部署
+#（arm64_supervised_deploy.verify_claude_pre_a3_entries）。运行时一律经 scenarios_for／real_chain_ids_for 现取模块属性：
+# 这两张字典在导入时就绑定了元组对象，测试与历史回放对 SCENARIOS 等模块属性的替换不会改到它们。
+SCENARIOS_BY_CLIENT: Mapping[str, tuple[tuple[str, str, str, str, str], ...]] = {
+    "codex": SCENARIOS,
+    "claude": CLAUDE_SCENARIOS,
+}
+REAL_CHAIN_IDS_BY_CLIENT: Mapping[str, tuple[str, ...]] = {
+    "codex": REAL_CHAIN_IDS,
+    "claude": CLAUDE_REAL_CHAIN_IDS,
+}
 
 
 class CertificationError(RuntimeError):
     """路径认证的前置绑定不满足或某个场景失败。"""
 
 
+def require_client(client: Any) -> str:
+    """认证客户端：只认登记的客户端名，不认识即拒绝，不默认成 codex。"""
+
+    if not isinstance(client, str) or client not in CLIENT_CERTIFICATION_SCHEMAS:
+        raise CertificationError(f"不认识的客户端：{client!r}（可选：{list(CLIENT_CERTIFICATION_SCHEMAS)}）")
+    return client
+
+
+def _adapter(client: str) -> upgrade_client_adapter.ClientAdapter:
+    return upgrade_client_adapter.adapter_for(require_client(client))
+
+
+def scenarios_for(client: str = DEFAULT_CLIENT) -> tuple[tuple[str, str, str, str, str], ...]:
+    """该客户端登记的场景表（与 SCENARIOS_BY_CLIENT 同一张表，但每次现取模块属性）。"""
+
+    return {"codex": SCENARIOS, "claude": CLAUDE_SCENARIOS}[require_client(client)]
+
+
+def real_chain_ids_for(client: str = DEFAULT_CLIENT) -> tuple[str, ...]:
+    """该客户端登记的真实链（与 REAL_CHAIN_IDS_BY_CLIENT 同一张表，但每次现取模块属性）。"""
+
+    return {"codex": REAL_CHAIN_IDS, "claude": CLAUDE_REAL_CHAIN_IDS}[require_client(client)]
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _fingerprint(value: Any) -> str:
-    return codex_upgrade._fingerprint(value)
+def _fingerprint(value: Any, client: str = DEFAULT_CLIENT) -> str:
+    return _adapter(client).orchestrator._fingerprint(value)
 
 
 def _load_test_case(module_name: str, class_name: str, method: str) -> unittest.TestCase:
@@ -412,24 +473,37 @@ def run_scenario(scenario: tuple[str, str, str, str, str]) -> dict[str, Any]:
         record["error"] = problems[0][-2000:]
     if result.skipped:
         record["error"] = "场景被跳过"
-        if name in REAL_CHAIN_IDS:
+        # 场景名在两客户端之间不重名（测试核对），按全部客户端的真实链登记判定，签名不变（测试与历史调用只传场景）。
+        if name in REAL_CHAIN_IDS or name in CLAUDE_REAL_CHAIN_IDS:
             record["status"] = "uncertified"
     if hasattr(case, "real_chain_metrics"):
         record["metrics"] = case.real_chain_metrics
     return record
 
 
-def real_chain_registration() -> list[dict[str, str]]:
+def real_chain_registration(client: str = DEFAULT_CLIENT) -> list[dict[str, str]]:
     """冻结本发布包登记的链集合；后续增加链不得改变历史包的回放要求。"""
 
     return [{"id": name, "test": f"{scenario[2]}:{scenario[3]}.{scenario[4]}"}
-            for name in REAL_CHAIN_IDS
-            for scenario in SCENARIOS if scenario[0] == name]
+            for name in real_chain_ids_for(client)
+            for scenario in scenarios_for(client) if scenario[0] == name]
 
 
-def real_chain_coverage(payload: Mapping[str, Any], *, historical: bool = False) -> list[dict[str, Any]]:
-    """新签发要求当前登记；历史回放只核验当时绑定的集合，缺失与 skip 均拒绝。"""
+def certification_client(payload: Mapping[str, Any]) -> str:
+    """认证收据所属的客户端：带 client 的合同（v3）读字段，Codex 的 v1／v2 没有该字段、按合同隐含 codex。"""
 
+    if payload.get("schema_version") in SCHEMAS_WITH_CLIENT:
+        return require_client(payload.get("client"))
+    return "codex"
+
+
+def real_chain_coverage(
+    payload: Mapping[str, Any], *, historical: bool = False, client: str = DEFAULT_CLIENT,
+) -> list[dict[str, Any]]:
+    """新签发要求当前登记；历史回放只核验当时绑定的集合，缺失与 skip 均拒绝。认证必须属于 ``client``。"""
+
+    if certification_client(payload) != require_client(client):
+        raise CertificationError(f"路径认证不属于客户端 {client}")
     rows = payload.get("scenarios")
     if not isinstance(rows, list):
         raise CertificationError("路径认证缺少逐场景结果")
@@ -440,7 +514,7 @@ def real_chain_coverage(payload: Mapping[str, Any], *, historical: bool = False)
                    or not isinstance(item["test"], str) or not item["test"] for item in registration)
             or len({item["id"] for item in registration}) != len(registration)):
         raise CertificationError("真实链登记集合缺失或非法")
-    if not historical and registration != real_chain_registration():
+    if not historical and registration != real_chain_registration(client):
         raise CertificationError("真实链登记集合与当前发布包不一致")
     coverage: list[dict[str, Any]] = []
     for entry in registration:
@@ -503,12 +577,13 @@ def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
             campaign_dir=campaign_dir, operation_id=operation_id, estimated_count=None, evidence=None,
             reason="补回证据后按当前证据精确补账", approve_sha256=None, approved_by=None,
         )
-        preview = codex_upgrade._accounting_resolve_command(arguments)
+        # 补账场景是 Codex 的场景（用 test_codex_upgrade 的 B0 夹具），补账命令经 Codex 适配器取编排器的同名入口。
+        preview = _adapter("codex").orchestrator._accounting_resolve_command(arguments)
         if preview["status"] != "approval_required" or preview["resolution_mode"] != "precise_from_current_evidence":
             raise CertificationError(f"补账预览口径错误：{preview.get('resolution_mode')}")
         arguments.approve_sha256 = preview["review_sha256"]
         arguments.approved_by = "pre-A3 认证"
-        resolved = codex_upgrade._accounting_resolve_command(arguments)
+        resolved = _adapter("codex").orchestrator._accounting_resolve_command(arguments)
         if resolved["status"] != "resolved" or resolved["blocked"]:
             raise CertificationError("补账后总账仍 blocked")
         again = reconciler.reconcile_attempt(campaign_dir, attempt_id)
@@ -523,11 +598,7 @@ def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
     return record
 
 
-def _bind_rehearsal_receipt(path: Path | None, identity: Mapping[str, Any]) -> dict[str, Any] | None:
-    """可选：绑定真实 v2 Formal 结构的原子演练收据，其工具身份必须来自当前树。"""
-
-    if path is None:
-        return None
+def _bind_codex_rehearsal_receipt(path: Path, identity: Mapping[str, Any]) -> dict[str, Any]:
     payload = rehearsal._load_json(Path(path).resolve(strict=True), "原子演练收据")
     if payload.get("schema_version") != rehearsal.ATOMIC_RECEIPT_SCHEMA:
         raise CertificationError("原子演练收据 schema 非法")
@@ -535,12 +606,33 @@ def _bind_rehearsal_receipt(path: Path | None, identity: Mapping[str, Any]) -> d
         raise CertificationError("原子演练收据的工具身份不是当前工具树；先用当前树重做 campaign-run 演练")
     return {
         "path": str(Path(path).resolve(strict=True)),
-        "sha256": codex_upgrade.file_sha256(Path(path)),
+        "sha256": _adapter("codex").orchestrator.file_sha256(Path(path)),
         "schema_version": payload.get("schema_version"),
         "campaign_id": payload.get("campaign_id"),
         "official_job_count": payload.get("official_job_count"),
         "tool_files_sha256": identity["tool_files_sha256"],
     }
+
+
+# 可绑定原子演练收据的客户端 → 绑定函数。Claude 的原子演练收据（official-client-atomic-vc0-vc1-rehearsal/v1）由 B5a-09
+# 落实，此前给出即拒绝，不拿 Codex 的演练合同冒充。
+REHEARSAL_BINDERS: Mapping[str, Callable[[Path, Mapping[str, Any]], dict[str, Any]] | None] = {
+    "codex": _bind_codex_rehearsal_receipt,
+    "claude": None,
+}
+
+
+def _bind_rehearsal_receipt(
+    path: Path | None, identity: Mapping[str, Any], client: str = DEFAULT_CLIENT,
+) -> dict[str, Any] | None:
+    """可选：绑定真实 v2 Formal 结构的原子演练收据，其工具身份必须来自当前树。"""
+
+    if path is None:
+        return None
+    binder = REHEARSAL_BINDERS[require_client(client)]
+    if binder is None:
+        raise CertificationError(f"客户端 {client} 的原子演练收据合同尚未落实（B5a-09），不能绑定")
+    return binder(Path(path), identity)
 
 
 def _fresh_staging_root(staging_root: Path) -> Path:
@@ -563,33 +655,42 @@ def _fresh_staging_root(staging_root: Path) -> Path:
 
 def _certification_bindings(
     deployment_receipt: Path, policy_activation: Path, campaign_run_rehearsal_receipt: Path | None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
-    """签发前的绑定：当前工具身份、部署收据与激活认证（五摘要都等于当前身份），以及可选的原子演练收据。"""
+    """签发前的绑定：当前工具身份、部署收据与激活认证（五摘要都等于当前身份），以及可选的原子演练收据。
 
-    identity = policy_certification.current_identity()
+    身份、部署收据合同与激活认证都按 ``client``：Claude 用 v3 引擎的两根身份与 Claude 部署收据。"""
+
+    identity = policy_certification.current_identity(client)
     deployment_path = Path(deployment_receipt).resolve(strict=True)
-    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity)
+    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity, client=client)
     activation_path = Path(policy_activation).resolve(strict=True)
-    activation = policy_certification.verify_activation_certification(activation_path, expected_identity=identity)
+    activation = policy_certification.verify_activation_certification(
+        activation_path, expected_identity=identity, client=client
+    )
     return {
         "identity": identity, "deployment_path": deployment_path, "deployment": deployment,
         "activation_path": activation_path, "activation": activation,
-        "rehearsal": _bind_rehearsal_receipt(campaign_run_rehearsal_receipt, identity),
+        "rehearsal": _bind_rehearsal_receipt(campaign_run_rehearsal_receipt, identity, client),
     }
 
 
 def _build_receipt(
     staging_root: Path, bindings: Mapping[str, Any], report: list[dict[str, Any]], failed: list[str], network_attempts: int,
-    observed_at_utc: str | None, *, records: Mapping[str, Any] | None = None,
+    observed_at_utc: str | None, *, records: Mapping[str, Any] | None = None, client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """串行（run）、按场景并行（issue）与从单元执行记录签发（E3-02）共用的收据形状。
 
-    ``records`` 给出时签 v2：另带运行清单引用（``unit_manifest``）与记录库路径（``record_store``），逐场景的执行记录
-    引用（``unit_record``）已由调用方放进 ``report``。v1 的字段一个不少，消费端照读。"""
+    ``records`` 给出时签从记录组装的合同（Codex v2、Claude v3）：另带运行清单引用（``unit_manifest``）与记录库路径
+    （``record_store``），逐场景的执行记录引用（``unit_record``）已由调用方放进 ``report``。v1 的字段一个不少，消费端照读。
+    Claude 的收据另带 ``client``；Claude 没有串行合同，``records`` 缺失即拒绝。"""
 
+    schema = CLIENT_RECORD_SCHEMAS[require_client(client)] if records is not None else CLIENT_SERIAL_SCHEMAS[client]
+    if schema is None:
+        raise CertificationError(f"客户端 {client} 的 pre-A3 认证只从单元执行记录签发（{CLIENT_RECORD_SCHEMAS[client]}）")
     identity = bindings["identity"]
     receipt = {
-        "schema_version": SCHEMA_VERSION_V2 if records is not None else SCHEMA_VERSION,
+        "schema_version": schema,
         "status": "passed" if not failed and not network_attempts else "failed",
         "certified_at_utc": observed_at_utc or _utc_now(),
         "staging_root": str(staging_root),
@@ -598,16 +699,16 @@ def _build_receipt(
         "policy_version": identity["policy_version"],
         "deployment_receipt": {
             "path": str(bindings["deployment_path"]),
-            "sha256": codex_upgrade.file_sha256(bindings["deployment_path"]),
+            "sha256": _adapter(client).orchestrator.file_sha256(bindings["deployment_path"]),
             "created_at_utc": bindings["deployment"].get("created_at_utc"),
         },
         "policy_activation": {
             "path": str(bindings["activation_path"]),
-            "sha256": codex_upgrade.file_sha256(bindings["activation_path"]),
+            "sha256": _adapter(client).orchestrator.file_sha256(bindings["activation_path"]),
             "policy_sha256": bindings["activation"].get("policy_sha256"),
         },
         "campaign_run_rehearsal_receipt": bindings["rehearsal"],
-        "real_chain_registration": real_chain_registration(),
+        "real_chain_registration": real_chain_registration(client),
         "scenarios": report,
         "scenario_count": len(report),
         "failed_scenarios": failed,
@@ -615,10 +716,12 @@ def _build_receipt(
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if schema in SCHEMAS_WITH_CLIENT:
+        receipt["client"] = client
     if records is not None:
         receipt["unit_manifest"] = dict(records["unit_manifest"])
         receipt["record_store"] = str(records["record_store"])
-    receipt["receipt_sha256"] = _fingerprint(receipt)
+    receipt["receipt_sha256"] = _fingerprint(receipt, client)
     return receipt
 
 
@@ -674,14 +777,23 @@ def run_certification(
     campaign_run_rehearsal_receipt: Path | None = None,
     scenarios: tuple[tuple[str, str, str, str, str], ...] = SCENARIOS,
     observed_at_utc: str | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
-    """串行认证：一个进程里依次跑全部场景（与按场景并行的 issue 同一收据形状，用于对照与回退）。"""
+    """串行认证：一个进程里依次跑全部场景（与按场景并行的 issue 同一收据形状，用于对照与回退）。
 
+    串行认证签的是 v1，只服务 Codex；Claude 的认证只从单元执行记录签 v3（入口门禁的场景单元），给 ``client=claude``
+    在跑任何场景之前就拒绝。"""
+
+    if CLIENT_SERIAL_SCHEMAS[require_client(client)] is None:
+        raise CertificationError(
+            f"客户端 {client} 没有串行认证合同：pre-A3 认证只从单元执行记录签发（{CLIENT_RECORD_SCHEMAS[client]}），"
+            "走入口门禁的场景单元"
+        )
     _check_tree_copy_records()
     staging_root = _fresh_staging_root(staging_root)
     staging_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging_root.chmod(0o700)
-    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt)
+    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt, client)
     temp_root = staging_root / "tmp"
     temp_root.mkdir(mode=0o700)
     previous_tempdir = tempfile.tempdir
@@ -702,7 +814,7 @@ def run_certification(
         else:
             os.environ[FIXTURE_ONLY_ENV] = previous_env
     failed = [item["name"] for item in report if item["status"] != "passed"]
-    return _build_receipt(staging_root, bindings, report, failed, len(attempts), observed_at_utc)
+    return _build_receipt(staging_root, bindings, report, failed, len(attempts), observed_at_utc, client=client)
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +826,11 @@ def run_certification(
 SCENARIO_RESULT_SCHEMA = "pre-a3-scenario-result/v1"
 ACCOUNTING_SCENARIO_NAME = "accounting.resolved-unblocks"
 SCENARIO_UNIT_PREFIX = "pre-a3:"
+# B5a-04：场景单元 ID 的前缀按客户端。Codex 照旧 ``pre-a3:<场景>``；Claude 是 ``pre-a3:claude:<场景>``——仍在入口门禁认的
+# ``pre-a3:`` 门禁项之下，单元 ID 与 Codex 的不同，同一记录库里互不承接。判定单元归属取最长匹配的前缀。
+CLIENT_UNIT_PREFIXES: Mapping[str, str] = {"codex": SCENARIO_UNIT_PREFIX, "claude": "pre-a3:claude:"}
+# 各客户端在登记场景之外、本模块内实现的场景（Codex 的补账场景）；排在登记场景之后。
+CLIENT_INLINE_SCENARIOS: Mapping[str, tuple[str, ...]] = {"codex": (ACCOUNTING_SCENARIO_NAME,), "claude": ()}
 EXECUTOR_COMMANDS_SCHEMA = "unit-executor-commands/v1"
 EXECUTOR_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 RESULTS_DIR_NAME = "results"
@@ -733,21 +850,44 @@ REAL_CHAIN_TIMEOUT_SECONDS = 2400
 SCENARIO_TIMEOUT_SECONDS = 900
 
 
-def scenario_names() -> list[str]:
-    """认证场景全集：登记的受管测试场景加上进程内的补账场景，顺序即认证里的顺序。"""
+def scenario_names(client: str = DEFAULT_CLIENT) -> list[str]:
+    """认证场景全集：登记的受管测试场景加上进程内实现的场景（Codex 的补账场景），顺序即认证里的顺序。"""
 
-    return [scenario[0] for scenario in SCENARIOS] + [ACCOUNTING_SCENARIO_NAME]
+    return [scenario[0] for scenario in scenarios_for(client)] + list(CLIENT_INLINE_SCENARIOS[client])
+
+
+def scenario_unit_prefix(client: str = DEFAULT_CLIENT) -> str:
+    return CLIENT_UNIT_PREFIXES[require_client(client)]
+
+
+def unit_client(unit_id: Any) -> str | None:
+    """场景单元 ID 属于哪个客户端（最长匹配的前缀）；不是 pre-A3 场景单元时为 None。"""
+
+    text = str(unit_id)
+    matches = [client for client, prefix in CLIENT_UNIT_PREFIXES.items() if text.startswith(prefix)]
+    return max(matches, key=lambda client: len(CLIENT_UNIT_PREFIXES[client])) if matches else None
+
+
+def require_scenarios(client: str = DEFAULT_CLIENT) -> list[str]:
+    """该客户端的场景全集；为空即拒绝——不规划、不签发、也不核验零场景的认证（Claude 在 B5a-05 登记场景之前）。"""
+
+    names = scenario_names(client)
+    if not names:
+        raise CertificationError(
+            f"客户端 {client} 的 pre-A3 场景集合为空：场景与真实链登记之前不能规划、签发或核验 pre-A3 认证"
+        )
+    return names
 
 
 def _scenario_file_name(name: str) -> str:
     return name.replace("/", "_")
 
 
-def run_single_scenario(name: str, staging_root: Path) -> dict[str, Any]:
+def run_single_scenario(name: str, staging_root: Path, *, client: str = DEFAULT_CLIENT) -> dict[str, Any]:
     """在当前进程（执行器派发的单元子进程）跑一个场景：自己的临时目录、只用夹具总账、装网络守卫，返回单场景结果
     （场景记录与本进程的网络连接尝试次数）。进程级设置只在这个子进程里改，跑完进程就退出。"""
 
-    if name not in scenario_names():
+    if name not in scenario_names(client):
         raise CertificationError(f"未登记的认证场景：{name}")
     root = Path(staging_root).resolve(strict=False)
     if project_ledger.STAGING_DIR_NAME not in root.parts:
@@ -760,7 +900,7 @@ def run_single_scenario(name: str, staging_root: Path) -> dict[str, Any]:
         if name == ACCOUNTING_SCENARIO_NAME:
             record = _accounting_resolved_scenario(temp_root)
         else:
-            record = run_scenario(next(scenario for scenario in SCENARIOS if scenario[0] == name))
+            record = run_scenario(next(scenario for scenario in scenarios_for(client) if scenario[0] == name))
     return {
         "schema_version": SCENARIO_RESULT_SCHEMA,
         "name": name,
@@ -799,8 +939,8 @@ def plan_scenario_units(staging_root: Path, *, python: str | None = None, cwd: P
     return {"schema_version": EXECUTOR_COMMANDS_SCHEMA, "staging_root": str(root), "units": units}
 
 
-def _placeholder_record(name: str, problems: list[str], seconds: Any) -> dict[str, Any]:
-    scenario = next((item for item in SCENARIOS if item[0] == name), None)
+def _placeholder_record(name: str, problems: list[str], seconds: Any, client: str = DEFAULT_CLIENT) -> dict[str, Any]:
+    scenario = next((item for item in scenarios_for(client) if item[0] == name), None)
     return {
         "name": name,
         "description": scenario[1] if scenario else "账务无法核清只暂停；补回证据后 accounting-resolve 按当前证据精确补账，解除 blocked 后同一对象续跑",
@@ -951,23 +1091,27 @@ def _parse_utc(text: Any) -> float | None:
     return parsed.timestamp() if parsed.tzinfo is not None else None
 
 
-def scenario_test_module(name: str) -> str:
-    """场景用到的测试模块（点分名）：登记场景取场景表，补账场景是 test_codex_upgrade。"""
+def scenario_test_module(name: str, client: str = DEFAULT_CLIENT) -> str:
+    """场景用到的测试模块（点分名）：登记场景取该客户端的场景表，Codex 的补账场景是 test_codex_upgrade。"""
 
-    if name == ACCOUNTING_SCENARIO_NAME:
+    if name in CLIENT_INLINE_SCENARIOS[require_client(client)]:
         return ACCOUNTING_TEST_MODULE
-    for scenario in SCENARIOS:
+    for scenario in scenarios_for(client):
         if scenario[0] == name:
             return scenario[2]
     raise CertificationError(f"未登记的认证场景：{name}")
 
 
-def run_scenario_unit(name: str, staging_parent: Path, *, diagnostic: bool = False) -> dict[str, Any]:
+def run_scenario_unit(
+    name: str, staging_parent: Path, *, diagnostic: bool = False, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
     """E3-02 的单场景入口：在 ``staging_parent`` 下新建本次的临时根跑一个场景，返回带自摘要的单场景结果
     （``pre-a3-scenario-result/v2``）。通过且零网络时删掉临时根，否则保留供排查。诊断执行（执行器下发
-    ``UNIT_EXECUTOR_KIND=diagnostic``）的临时根另带前缀、结果标 ``kind=diagnostic``，不参与签发。"""
+    ``UNIT_EXECUTOR_KIND=diagnostic``）的临时根另带前缀、结果标 ``kind=diagnostic``，不参与签发。
 
-    if name not in scenario_names():
+    场景结果行的合同两客户端相同（不在附录 B 之列）：场景归属由执行记录的单元 ID（``pre-a3:claude:`` 前缀）区分。"""
+
+    if name not in scenario_names(client):
         raise CertificationError(f"未登记的认证场景：{name}")
     parent = Path(staging_parent).resolve(strict=False)
     if project_ledger.STAGING_DIR_NAME not in parent.parts:
@@ -975,7 +1119,7 @@ def run_scenario_unit(name: str, staging_parent: Path, *, diagnostic: bool = Fal
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     prefix = ("diagnostic-" if diagnostic else "") + _scenario_file_name(name) + "-"
     root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-    result = run_single_scenario(name, root)
+    result = run_single_scenario(name, root, client=client)
     payload = _sealed({
         "schema_version": SCENARIO_RESULT_V2_SCHEMA,
         "name": name,
@@ -1007,27 +1151,40 @@ def _emit_result_line(result: Mapping[str, Any]) -> None:
         line = line[os.write(descriptor, line):]
 
 
-def plan_scenario_commands(staging_parent: Path, *, python: str | None = None, cwd: Path | None = None) -> dict[str, Any]:
+# 场景单元命令里选客户端的参数：Codex 不带（命令与改造前逐字相同，单元规格不变、记录照常承接），Claude 带 --client。
+CLIENT_ARGV: Mapping[str, tuple[str, ...]] = {"codex": (), "claude": ("--client", "claude")}
+
+
+def client_argv(client: str = DEFAULT_CLIENT) -> list[str]:
+    return list(CLIENT_ARGV[require_client(client)])
+
+
+def plan_scenario_commands(
+    staging_parent: Path, *, python: str | None = None, cwd: Path | None = None, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
     """E3-02 的场景命令单元清单：每个场景一条 ``run-scenario --name X --staging-parent <父目录>``，命令只带稳定内容。
-    每个单元另给场景的测试模块文件（``scenario_test_file``，仓库相对路径），入口门禁据此按静态依赖闭包声明单元输入。"""
+    每个单元另给场景的测试模块文件（``scenario_test_file``，仓库相对路径），入口门禁据此按静态依赖闭包声明单元输入。
+
+    按客户端出清单：单元 ID 前缀与命令里的 ``--client`` 按客户端（Codex 逐字不变）；场景集合为空即拒绝。"""
 
     parent = Path(staging_parent).resolve(strict=False)
     if project_ledger.STAGING_DIR_NAME not in parent.parts:
         raise CertificationError("场景父目录必须位于 staging 目录树内")
-    real_chains = {scenario[0] for scenario in SCENARIOS if ".real_chains." in scenario[2]}
+    names = require_scenarios(client)
+    real_chains = {scenario[0] for scenario in scenarios_for(client) if ".real_chains." in scenario[2]}
     workdir = str(Path(cwd or os.getcwd()).resolve())
     units = []
-    for name in scenario_names():
+    for name in names:
         units.append({
-            "unit_id": f"{SCENARIO_UNIT_PREFIX}{name}",
+            "unit_id": f"{scenario_unit_prefix(client)}{name}",
             "argv": [python or sys.executable, "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario",
-                     "--name", name, "--staging-parent", str(parent)],
+                     *client_argv(client), "--name", name, "--staging-parent", str(parent)],
             "cwd": workdir,
             "cores": 1,
             "memory_mb": 1024,
             "timeout_seconds": REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS,
             "weight": SCENARIO_SECONDS.get(name, 30.0),
-            "scenario_test_file": scenario_test_module(name).replace(".", "/") + ".py",
+            "scenario_test_file": scenario_test_module(name, client).replace(".", "/") + ".py",
         })
     return {"schema_version": EXECUTOR_COMMANDS_SCHEMA, "staging_parent": str(parent), "units": units}
 
@@ -1087,15 +1244,15 @@ def _published_manifest(store: _RecordStore, path: Path) -> dict[str, Any]:
 
 
 def _scenario_from_records(store: _RecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any],
-                           name: str) -> tuple[dict[str, Any] | None, int, list[str]]:
+                           name: str, client: str = DEFAULT_CLIENT) -> tuple[dict[str, Any] | None, int, list[str]]:
     """核验运行清单里一个场景的那一项，返回（带执行记录引用的场景记录、网络计数、问题）。问题非空即该场景失败。
 
     核对：处置是本次执行或承接（重新执行全集不得承接）；记录在库、文件名＝自摘要、是该场景的正式执行、规格与输入
     摘要等于清单、按原始字段判通过；本次执行的记录来自本次运行，承接的记录来自别的运行、原运行清单把它列为正式执行、
     没超过清单的承接期限；日志在库且摘要相符，日志里恰好一行场景结果、自摘要相符、场景名对、是正式执行、网络计数为 0、
-    场景通过。"""
+    场景通过。单元 ID 按客户端的前缀拼（Claude 的记录只认 ``pre-a3:claude:`` 单元，不承接 Codex 的同名记录）。"""
 
-    unit_id = f"{SCENARIO_UNIT_PREFIX}{name}"
+    unit_id = f"{scenario_unit_prefix(client)}{name}"
     disposition = entry.get("disposition")
     if disposition not in ("executed", "inherited"):
         return None, 0, [f"运行清单里的处置不是本次执行或承接：{disposition!r}"]
@@ -1165,27 +1322,31 @@ def _scenario_from_records(store: _RecordStore, manifest: Mapping[str, Any], ent
     return {**scenario, "unit_record": reference}, count, problems
 
 
-def _scenarios_from_records(store: _RecordStore, manifest: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[str], int]:
-    """按场景全集逐个核验运行清单，返回（逐场景报告、失败项、网络计数合计）。清单里全集之外的 pre-A3 单元同样让认证
-    不通过（记在失败项）。"""
+def _scenarios_from_records(
+    store: _RecordStore, manifest: Mapping[str, Any], client: str = DEFAULT_CLIENT,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    """按场景全集逐个核验运行清单，返回（逐场景报告、失败项、网络计数合计）。清单里该客户端全集之外的 pre-A3 单元
+    同样让认证不通过（记在失败项）；别的客户端的 pre-A3 单元（另一前缀）不在本客户端的核验范围内。"""
 
-    names = scenario_names()
+    names = scenario_names(client)
+    prefix = scenario_unit_prefix(client)
     entries: dict[str, list[Mapping[str, Any]]] = {}
     for item in manifest.get("units") or []:
-        if isinstance(item, Mapping) and str(item.get("unit_id", "")).startswith(SCENARIO_UNIT_PREFIX):
+        if isinstance(item, Mapping) and unit_client(item.get("unit_id", "")) == client:
             entries.setdefault(str(item["unit_id"]), []).append(item)
-    stray = sorted(set(entries) - {f"{SCENARIO_UNIT_PREFIX}{name}" for name in names})
+    stray = sorted(set(entries) - {f"{prefix}{name}" for name in names})
     report: list[dict[str, Any]] = []
     attempts = 0
     for name in names:
-        found = entries.get(f"{SCENARIO_UNIT_PREFIX}{name}", [])
+        found = entries.get(f"{prefix}{name}", [])
         if len(found) != 1:
-            report.append(_placeholder_record(name, ["运行清单里没有该场景（缺报）" if not found else "运行清单里该场景出现多次"], None))
+            report.append(_placeholder_record(name, ["运行清单里没有该场景（缺报）" if not found else "运行清单里该场景出现多次"], None,
+                                              client))
             continue
-        row, count, problems = _scenario_from_records(store, manifest, found[0], name)
+        row, count, problems = _scenario_from_records(store, manifest, found[0], name, client)
         attempts += count
         if problems or row is None:
-            report.append(_placeholder_record(name, problems or ["场景执行记录核验不通过"], (row or {}).get("seconds")))
+            report.append(_placeholder_record(name, problems or ["场景执行记录核验不通过"], (row or {}).get("seconds"), client))
         else:
             report.append(row)
     failed = [item["name"] for item in report if item["status"] != "passed"]
@@ -1202,33 +1363,36 @@ def issue_certification_from_records(
     policy_activation: Path,
     campaign_run_rehearsal_receipt: Path | None = None,
     observed_at_utc: str | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
-    """E3-02 签发 v2：从入口门禁 ``run-gates`` 的运行清单与记录库组装认证。
+    """E3-02 签发 v2（Claude 签 v3）：从入口门禁 ``run-gates`` 的运行清单与记录库组装认证。
 
     签发条件：全部场景在清单里各恰好一项、每项都是一条通过的正式执行记录（本次执行或承接）、输入摘要等于清单（清单
     由执行器按当前测试树算出，入口门禁跑之前已核对数据根部署的就是这棵树）、网络计数为 0；清单本身已经发布到记录库。
-    ``staging_root`` 是场景父目录（写进收据的 ``staging_root``，v1 字段含义不变：认证用的 staging 位置）。"""
+    ``staging_root`` 是场景父目录（写进收据的 ``staging_root``，v1 字段含义不变：认证用的 staging 位置）。
+    ``client`` 决定场景全集、单元前缀、工具身份与部署收据合同；场景集合为空在读任何绑定之前拒绝。"""
 
+    require_scenarios(client)
     root = Path(staging_root).resolve(strict=False)
     if project_ledger.STAGING_DIR_NAME not in root.parts:
         raise CertificationError("场景父目录必须位于 staging 目录树内")
-    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt)
+    bindings = _certification_bindings(deployment_receipt, policy_activation, campaign_run_rehearsal_receipt, client)
     try:
         store = _RecordStore(Path(record_store))
     except OSError as error:
         raise CertificationError(f"记录库不可读：{error}") from error
     manifest = _published_manifest(store, Path(unit_manifest))
-    report, failed, attempts = _scenarios_from_records(store, manifest)
+    report, failed, attempts = _scenarios_from_records(store, manifest, client)
     records = {
         "unit_manifest": {"path": str(store.manifest_path(str(manifest["run_id"]))), "manifest_sha256": manifest["manifest_sha256"],
                           "run_id": manifest["run_id"], "mode": manifest["mode"]},
         "record_store": str(store.root),
     }
-    return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc, records=records)
+    return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc, records=records, client=client)
 
 
-def _verify_records_v2(payload: Mapping[str, Any]) -> None:
-    """v2 认证的逐条重验：按收据登记的记录库与运行清单重新核验每个场景，逐场景报告必须与收据完全一致。"""
+def _verify_records_v2(payload: Mapping[str, Any], client: str = DEFAULT_CLIENT) -> None:
+    """v2／v3 认证的逐条重验：按收据登记的记录库与运行清单重新核验每个场景，逐场景报告必须与收据完全一致。"""
 
     reference = payload.get("unit_manifest") if isinstance(payload.get("unit_manifest"), Mapping) else {}
     try:
@@ -1240,7 +1404,7 @@ def _verify_records_v2(payload: Mapping[str, Any]) -> None:
     if (manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(manifest, "manifest_sha256")
             or manifest.get("manifest_sha256") != reference.get("manifest_sha256") or manifest.get("mode") != reference.get("mode")):
         raise CertificationError("v2 认证引用的运行清单在记录库里缺失，或与收据登记的不符")
-    report, failed, attempts = _scenarios_from_records(store, manifest)
+    report, failed, attempts = _scenarios_from_records(store, manifest, client)
     if failed or attempts:
         raise CertificationError(f"v2 认证的执行记录重验不通过：{failed[:3]}")
     if payload.get("scenarios") != report:
@@ -1265,38 +1429,47 @@ def write_certification(output: Path, receipt: Mapping[str, Any]) -> Path:
     return target
 
 
-def verify_certification(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """只读校验认证对当前工具是否有效：v1、v2 都认；v2 另按登记的记录库与运行清单逐条重验执行记录（E3-02）。"""
+def verify_certification(
+    path: Path, *, expected_identity: Mapping[str, Any] | None = None, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
+    """只读校验认证对当前工具是否有效：Codex 认 v1、v2，Claude 只认 v3；从记录组装的合同（v2／v3）另按登记的记录库与
+    运行清单逐条重验执行记录（E3-02）。认证必须属于 ``client``（v1／v2 隐含 codex），身份按该客户端现算。"""
 
     payload = policy_certification._read_json(Path(path), "pre-A3 路径认证收据")
-    if payload.get("schema_version") not in CERTIFICATION_SCHEMAS or payload.get("status") != "passed":
+    if payload.get("schema_version") not in CLIENT_CERTIFICATION_SCHEMAS[require_client(client)] or payload.get("status") != "passed":
         raise CertificationError("路径认证收据 schema 非法或未通过")
+    if certification_client(payload) != client:
+        raise CertificationError(f"路径认证收据不属于客户端 {client}")
     unsigned = {k: v for k, v in payload.items() if k != "receipt_sha256"}
-    if _fingerprint(unsigned) != payload.get("receipt_sha256"):
+    if _fingerprint(unsigned, client) != payload.get("receipt_sha256"):
         raise CertificationError("路径认证收据自摘要不一致")
-    identity = expected_identity or policy_certification.current_identity()
+    identity = expected_identity or policy_certification.current_identity(client)
     if {k: str(v) for k, v in (payload.get("identity") or {}).items()} != {
         name: str(identity[name]) for name in policy_certification.IDENTITY_FIELDS
     }:
         raise CertificationError("路径认证收据五摘要与当前工具身份不一致")
     if payload.get("network_attempts") != 0 or payload.get("live_request_count") != 0:
         raise CertificationError("路径认证收据零请求边界不满足")
-    if payload["schema_version"] == SCHEMA_VERSION_V2:
-        _verify_records_v2(payload)
+    if payload["schema_version"] in RECORD_SCHEMAS:
+        # 场景集合为空时逐条重验会得到空报告并「通过」：先拒绝，不让零场景的认证被当成有效。
+        require_scenarios(client)
+        _verify_records_v2(payload, client)
     return payload
 
 
-def _current_bindings(deployment_receipt: Path, policy_activation: Path) -> dict[str, Any]:
+def _current_bindings(deployment_receipt: Path, policy_activation: Path, client: str = DEFAULT_CLIENT) -> dict[str, Any]:
     """本次部署的绑定：当前工具身份、通过校验的部署收据与激活认证（五摘要都必须等于当前身份、策略等于当前策略）。
 
     任一项不合法即抛错：这不是"没有可复用的认证"，而是本次部署本身不能认证（新跑 pre-A3 同样会失败）。
     """
 
-    identity = policy_certification.current_identity()
+    identity = policy_certification.current_identity(client)
     deployment_path = Path(deployment_receipt).resolve(strict=True)
-    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity)
+    deployment = policy_certification.load_deployment_receipt(deployment_path, expected_identity=identity, client=client)
     activation_path = Path(policy_activation).resolve(strict=True)
-    activation = policy_certification.verify_activation_certification(activation_path, expected_identity=identity)
+    activation = policy_certification.verify_activation_certification(
+        activation_path, expected_identity=identity, client=client
+    )
     return {
         "identity": identity,
         "deployment_path": deployment_path,
@@ -1306,23 +1479,25 @@ def _current_bindings(deployment_receipt: Path, policy_activation: Path) -> dict
     }
 
 
-def verify_reusable_certification(path: Path, *, bindings: Mapping[str, Any]) -> dict[str, Any]:
+def verify_reusable_certification(
+    path: Path, *, bindings: Mapping[str, Any], client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
     """按工具身份及认证合同判定一份 pre-A3 认证对本次部署是否可复用。
 
     可复用当且仅当：收据通过 ``verify_certification``（自摘要、五摘要等于当前工具身份、零请求）、策略版本
     等于当前策略、收据绑定的激活策略摘要等于本次激活认证的策略摘要、真实链登记集合等于当前发布包。
     不再要求收据绑定的部署收据／激活认证与本次逐字相同：重新部署一次但工具五摘要与策略都没变时仍复用；
-    策略变化、任一摘要不同、收据自身校验失败都不复用。
+    策略变化、任一摘要不同、收据自身校验失败都不复用。认证与本次部署必须属于同一个客户端。
     """
 
     identity = bindings["identity"]
-    payload = verify_certification(path, expected_identity=identity)
+    payload = verify_certification(path, expected_identity=identity, client=client)
     if payload.get("policy_version") != identity["policy_version"]:
         raise CertificationError("路径认证收据 policy_version 与当前策略不一致")
     bound_activation = payload.get("policy_activation") or {}
     if bound_activation.get("policy_sha256") != bindings["activation"].get("policy_sha256"):
         raise CertificationError("路径认证收据绑定的激活策略与本次激活认证不一致")
-    real_chain_coverage(payload)
+    real_chain_coverage(payload, client=client)
     return payload
 
 
@@ -1332,6 +1507,7 @@ def find_reusable_certification(
     policy_activation: Path,
     search_root: Path | None = None,
     certification: Path | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> Path | None:
     """查找能通过当前工具身份、策略和认证合同复核的 pre-A3 认证。
 
@@ -1341,14 +1517,14 @@ def find_reusable_certification(
     下取通过复核且认证时间最近的一份。是否重跑由合同判定，耗时以对应运行记录为准。
     """
 
-    bindings = _current_bindings(deployment_receipt, policy_activation)
+    bindings = _current_bindings(deployment_receipt, policy_activation, client)
     candidates = [Path(certification)] if certification is not None else sorted(Path(search_root).glob("*.json"))
     best: tuple[str, Path] | None = None
     for path in candidates:
         if path.is_symlink() or not path.is_file():
             continue
         try:
-            payload = verify_reusable_certification(path, bindings=bindings)
+            payload = verify_reusable_certification(path, bindings=bindings, client=client)
         except (CertificationError, policy_certification.PolicyCertificationError, OSError, ValueError):
             continue
         key = str(payload.get("certified_at_utc"))
@@ -1382,20 +1558,22 @@ def build_reuse_receipt(
     deployment_receipt: Path,
     policy_activation: Path,
     observed_at_utc: str | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """复用收据（不落盘）：把被复用的 pre-A3 认证与本次部署收据、激活认证、五摘要绑定在一起，供审计与发布认证。
 
     被复用的认证文件本身不改动、不重签；收据同时记下认证原先绑定的部署收据／激活认证摘要，审计时可以
-    看出"这份认证是在哪次部署下签发、在哪次部署下被复用"。
+    看出"这份认证是在哪次部署下签发、在哪次部署下被复用"。复用收据不在设计附录 B 的新合同之列，两客户端沿用
+    ``pre-a3-reuse-receipt/v1``：它绑定的认证（Claude 是带 client 的 v3）与部署收据已经确定了客户端。
     """
 
-    bindings = _current_bindings(deployment_receipt, policy_activation)
+    bindings = _current_bindings(deployment_receipt, policy_activation, client)
     certification_path = Path(certification).resolve(strict=True)
-    payload = verify_reusable_certification(certification_path, bindings=bindings)
+    payload = verify_reusable_certification(certification_path, bindings=bindings, client=client)
     identity = bindings["identity"]
     five = {name: identity[name] for name in policy_certification.IDENTITY_FIELDS}
-    deployment_sha256 = codex_upgrade.file_sha256(bindings["deployment_path"])
-    activation_sha256 = codex_upgrade.file_sha256(bindings["activation_path"])
+    deployment_sha256 = _adapter(client).orchestrator.file_sha256(bindings["deployment_path"])
+    activation_sha256 = _adapter(client).orchestrator.file_sha256(bindings["activation_path"])
     key = _reuse_binding_key(
         certification_receipt_sha256=str(payload.get("receipt_sha256")),
         deployment_receipt_sha256=deployment_sha256,
@@ -1410,7 +1588,7 @@ def build_reuse_receipt(
         "policy_version": identity["policy_version"],
         "reused_certification": {
             "path": str(certification_path),
-            "sha256": codex_upgrade.file_sha256(certification_path),
+            "sha256": _adapter(client).orchestrator.file_sha256(certification_path),
             "receipt_sha256": str(payload.get("receipt_sha256")),
             "certified_at_utc": payload.get("certified_at_utc"),
             "bound_deployment_receipt_sha256": (payload.get("deployment_receipt") or {}).get("sha256"),
@@ -1428,23 +1606,25 @@ def build_reuse_receipt(
             "policy_sha256": bindings["activation"].get("policy_sha256"),
             "activated_at_utc": bindings["activation"].get("activated_at_utc"),
         },
-        "binding_sha256": _fingerprint(key),
+        "binding_sha256": _fingerprint(key, client),
         "rule": "工具五摘要与策略未变时复用既有 pre-A3 认证；本收据只登记复用事实，不改变被复用的认证文件。",
     }
-    receipt["receipt_sha256"] = _fingerprint(receipt)
+    receipt["receipt_sha256"] = _fingerprint(receipt, client)
     return receipt
 
 
-def load_reuse_receipt(path: Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """只读校验复用收据：schema、自摘要、判重键与内容一致、五摘要与策略版本等于期望身份。"""
+def load_reuse_receipt(
+    path: Path, *, expected_identity: Mapping[str, Any] | None = None, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
+    """只读校验复用收据：schema、自摘要、判重键与内容一致、五摘要与策略版本等于期望身份（按 ``client`` 现算）。"""
 
     payload = policy_certification._read_json(Path(path), "pre-A3 复用收据")
     if payload.get("schema_version") != REUSE_SCHEMA_VERSION:
         raise CertificationError("pre-A3 复用收据 schema 非法")
     unsigned = {k: v for k, v in payload.items() if k != "receipt_sha256"}
-    if _fingerprint(unsigned) != payload.get("receipt_sha256"):
+    if _fingerprint(unsigned, client) != payload.get("receipt_sha256"):
         raise CertificationError("pre-A3 复用收据自摘要不一致")
-    identity = expected_identity or policy_certification.current_identity()
+    identity = expected_identity or policy_certification.current_identity(client)
     if {k: str(v) for k, v in (payload.get("identity") or {}).items()} != {
         name: str(identity[name]) for name in policy_certification.IDENTITY_FIELDS
     } or payload.get("policy_version") != identity["policy_version"]:
@@ -1456,7 +1636,7 @@ def load_reuse_receipt(path: Path, *, expected_identity: Mapping[str, Any] | Non
         identity=payload.get("identity"),
         policy_version=payload.get("policy_version"),
     )
-    if _fingerprint(key) != payload.get("binding_sha256"):
+    if _fingerprint(key, client) != payload.get("binding_sha256"):
         raise CertificationError("pre-A3 复用收据判重键与内容不一致")
     return payload
 
@@ -1468,10 +1648,11 @@ def verify_reuse_receipt(
     deployment_receipt_sha256: str,
     policy_activation_sha256: str | None = None,
     expected_identity: Mapping[str, Any] | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """复用收据必须把给定的 pre-A3 认证（按 ``receipt_sha256``）绑定到给定的部署收据（及激活认证）。"""
 
-    payload = load_reuse_receipt(path, expected_identity=expected_identity)
+    payload = load_reuse_receipt(path, expected_identity=expected_identity, client=client)
     if (payload.get("reused_certification") or {}).get("receipt_sha256") != certification.get("receipt_sha256"):
         raise CertificationError("pre-A3 复用收据绑定的不是这份路径认证")
     if (payload.get("deployment_receipt") or {}).get("sha256") != deployment_receipt_sha256:
@@ -1481,14 +1662,14 @@ def verify_reuse_receipt(
     return payload
 
 
-def find_reuse_receipt(receipt_root: Path, binding_sha256: str) -> Path | None:
+def find_reuse_receipt(receipt_root: Path, binding_sha256: str, client: str = DEFAULT_CLIENT) -> Path | None:
     """目录下已登记同一组绑定（判重键相同）的复用收据；没有则返回 None。"""
 
     for path in sorted(Path(receipt_root).glob(f"{REUSE_RECEIPT_PREFIX}*.json")):
         if path.is_symlink() or not path.is_file():
             continue
         try:
-            payload = load_reuse_receipt(path)
+            payload = load_reuse_receipt(path, client=client)
         except (CertificationError, policy_certification.PolicyCertificationError, OSError, ValueError):
             continue
         if payload.get("binding_sha256") == binding_sha256:
@@ -1503,6 +1684,7 @@ def record_reuse(
     policy_activation: Path,
     receipt_root: Path,
     observed_at_utc: str | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """登记复用事实（write-once、幂等），返回摘要供驱动脚本打印：
 
@@ -1512,7 +1694,8 @@ def record_reuse(
     """
 
     receipt = build_reuse_receipt(
-        certification, deployment_receipt=deployment_receipt, policy_activation=policy_activation, observed_at_utc=observed_at_utc
+        certification, deployment_receipt=deployment_receipt, policy_activation=policy_activation, observed_at_utc=observed_at_utc,
+        client=client,
     )
     reused = receipt["reused_certification"]
     summary = {
@@ -1526,7 +1709,7 @@ def record_reuse(
     ):
         return {**summary, "status": "not_needed", "reuse_receipt": None}
     root = Path(receipt_root).resolve(strict=False)
-    existing = find_reuse_receipt(root, receipt["binding_sha256"])
+    existing = find_reuse_receipt(root, receipt["binding_sha256"], client)
     if existing is not None:
         return {**summary, "status": "existing", "reuse_receipt": str(existing)}
     stamp = "".join(ch for ch in str(receipt["reused_at_utc"]) if ch.isalnum())
@@ -1590,11 +1773,24 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--deployment-receipt", type=Path, required=True)
     record.add_argument("--policy-activation", type=Path, required=True)
     record.add_argument("--receipt-root", type=Path, required=True, help="复用收据目录（通常就是认证所在目录）")
+    # B5a-04：全部子命令按客户端（缺省 codex，命令与输出同改造前）。Claude 只走 E3-02 的场景单元与从执行记录签发：
+    # 串行 run、plan --staging-root、run-scenario --staging-root/--result、issue --executor-summary 是 Codex 的旧路径。
+    for command in (run, plan, single, issue, verify, reusable, record):
+        command.add_argument("--client", choices=tuple(CLIENT_CERTIFICATION_SCHEMAS), default=DEFAULT_CLIENT,
+                             help="按哪个客户端的场景表、身份与部署收据认证（缺省 codex）")
     return parser
+
+
+def _require_records_path(client: str, label: str) -> None:
+    """E2-03 的旧路径（串行、执行器汇总、带结果文件的单场景）只签 Codex 的 v1；其余客户端用到即拒绝。"""
+
+    if CLIENT_SERIAL_SCHEMAS[require_client(client)] is None:
+        raise CertificationError(f"客户端 {client} 不走 {label}（E2-03 旧路径，只签 Codex 的 v1）：改用 --staging-parent 与 --unit-manifest")
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    client = arguments.client
     try:
         if arguments.action in ("run", "issue"):
             if arguments.action == "run":
@@ -1604,6 +1800,7 @@ def main(argv: list[str] | None = None) -> int:
                         deployment_receipt=arguments.deployment_receipt,
                         policy_activation=arguments.policy_activation,
                         campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                        client=client,
                     )
             elif arguments.unit_manifest is not None:
                 if arguments.record_store is None:
@@ -1615,10 +1812,12 @@ def main(argv: list[str] | None = None) -> int:
                     deployment_receipt=arguments.deployment_receipt,
                     policy_activation=arguments.policy_activation,
                     campaign_run_rehearsal_receipt=arguments.campaign_run_rehearsal_receipt,
+                    client=client,
                 )
             else:
                 if arguments.record_store is not None:
                     raise CertificationError("--record-store 只与 --unit-manifest 同用")
+                _require_records_path(client, "issue --executor-summary")
                 receipt = issue_certification(
                     arguments.staging_root,
                     executor_summary=arguments.executor_summary,
@@ -1640,9 +1839,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if receipt["status"] == "passed" else 2
         if arguments.action == "plan":
             if arguments.staging_parent is not None:
-                manifest = plan_scenario_commands(arguments.staging_parent)
+                manifest = plan_scenario_commands(arguments.staging_parent, client=client)
                 where = {"staging_parent": manifest["staging_parent"]}
             else:
+                _require_records_path(client, "plan --staging-root")
                 manifest = plan_scenario_units(arguments.staging_root)
                 where = {"staging_root": manifest["staging_root"]}
             policy_certification._write_once(arguments.output.resolve(strict=False), manifest)
@@ -1654,7 +1854,7 @@ def main(argv: list[str] | None = None) -> int:
             if arguments.staging_parent is not None:
                 if arguments.staging_root is not None or arguments.result is not None:
                     raise CertificationError("--staging-parent 不能与 --staging-root、--result 同用")
-                result = run_scenario_unit(arguments.name, arguments.staging_parent, diagnostic=diagnostic)
+                result = run_scenario_unit(arguments.name, arguments.staging_parent, diagnostic=diagnostic, client=client)
                 record = result["scenario"]
                 print(json.dumps({"name": arguments.name, "status": record.get("status"), "network_attempts": result["network_attempts"],
                                   "seconds": record.get("seconds"), "staging_root": result["staging_root"]}, ensure_ascii=False, sort_keys=True),
@@ -1663,6 +1863,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if record.get("status") == "passed" and result["network_attempts"] == 0 else 1
             if arguments.staging_root is None or arguments.result is None:
                 raise CertificationError("run-scenario 需要 --staging-parent，或者同时给 --staging-root 与 --result")
+            _require_records_path(client, "run-scenario --staging-root/--result")
             staging = Path(f"{arguments.staging_root}.diagnostic") if diagnostic else arguments.staging_root
             result_path = arguments.result.with_name(arguments.result.stem + ".diagnostic.json") if diagnostic else arguments.result
             result = run_single_scenario(arguments.name, staging)
@@ -1686,6 +1887,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy_activation=arguments.policy_activation,
                 search_root=arguments.search_root,
                 certification=arguments.certification,
+                client=client,
             )
             if found is None:
                 print("没有工具身份与策略未变、对本次部署有效的 pre-A3 认证。", file=sys.stderr)
@@ -1698,13 +1900,15 @@ def main(argv: list[str] | None = None) -> int:
                 deployment_receipt=arguments.deployment_receipt,
                 policy_activation=arguments.policy_activation,
                 receipt_root=arguments.receipt_root,
+                client=client,
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 0
-        payload = verify_certification(arguments.certification)
+        payload = verify_certification(arguments.certification, client=client)
         print(json.dumps({"status": "valid", "scenario_count": payload["scenario_count"]}, ensure_ascii=False))
         return 0
-    except (CertificationError, policy_certification.PolicyCertificationError, codex_upgrade.ConfigurationError, OSError, ValueError) as error:
+    except (CertificationError, policy_certification.PolicyCertificationError, _adapter(client).orchestrator.ConfigurationError,
+            OSError, ValueError) as error:
         print(f"pre-A3 路径认证失败：{error}", file=sys.stderr)
         return 2
 

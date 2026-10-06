@@ -2793,10 +2793,10 @@ def _pre_a3_client_table(module: ast.Module, name: str) -> dict[str, Any] | None
 
 
 def verify_claude_pre_a3_entries(tool_root: Path) -> dict[str, Any]:
-    """Claude 的 pre-A3 场景表与真实链登记（B5a-01 留结构，表本身由 B5a-04／B5a-05 建立）。
+    """Claude 的 pre-A3 场景表与真实链登记（B5a-01 留结构；按客户端分组的表由 B5a-04 建立，Claude 场景由 B5a-05 登记）。
 
     按客户端分组的表（``SCENARIOS_BY_CLIENT``／``REAL_CHAIN_IDS_BY_CLIENT``）里有 Claude 场景时，与 Codex 用同一段
-    入口核对（模块文件、测试类与方法随树部署，真实链登记项在场景表内）；还没有时如实记录集合为空与原因，
+    入口核对（模块文件、测试类与方法随树部署，真实链登记项在场景表内）；表不存在或 Claude 集合为空时如实记录与原因，
     不伪造认证状态。
     """
 
@@ -2810,7 +2810,11 @@ def verify_claude_pre_a3_entries(tool_root: Path) -> dict[str, Any]:
             "status": "not-registered",
             "scenario_count": 0,
             "real_chain_registration": [],
-            "reason": "pre-A3 认证模块尚无 Claude 场景表（按客户端分组的场景与真实链由 B5a-04／B5a-05 登记）",
+            "reason": (
+                "pre-A3 认证模块的 Claude 场景集合为空（四条最小恢复演练链由 B5a-05 登记）"
+                if scenario_table is not None
+                else "pre-A3 认证模块没有按客户端分组的场景表"
+            ),
         }
     if (
         not isinstance(scenarios, tuple)
