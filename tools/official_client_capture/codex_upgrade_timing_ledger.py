@@ -19,6 +19,11 @@ from typing import Any, Iterator, Mapping
 
 
 PLAN_SCHEMA = "codex-upgrade-timing-ledger-plan/v1"
+# Claude 升级 B1-05：带客户端维度的计划。只在 create --client claude 时写出，v2 计划的 client 只允许 Claude；
+# 缺省或 codex 仍写上面的 v1，计划字段逐字不变（v1 计划恒属 codex）。
+CLIENT_PLAN_SCHEMA = "upgrade-timing-ledger-plan/v2"
+CLIENT_PLAN_CLIENTS = frozenset({"claude"})
+PLAN_CLIENTS = ("codex", "claude")
 EVENT_SCHEMA = "codex-upgrade-timing-ledger-event/v1"
 RECEIPT_SCHEMA = "codex-upgrade-timing-ledger-receipt/v1"
 PRODUCER_SCHEMA = "codex-upgrade-timing-ledger-producer/v1"
@@ -32,6 +37,12 @@ DEFAULT_STAGE_BUDGETS = {
     "VC-4": 90,
     "VC-5": 75,
     "VC-6": 75,
+}
+# Claude 升级 B1-05：未绑定项目总账时的阶段默认上限按客户端取。Codex 沿用上面的历史默认值；Claude 首轮直接取
+# 驱动示例按 R20 公式（顺利路径估算上限 × 1.5 + 30 分钟，向上取整到 15 分钟）校准后的值。总预算默认值与上限两客户端相同。
+DEFAULT_STAGE_BUDGETS_BY_CLIENT: Mapping[str, Mapping[str, int]] = {
+    "codex": DEFAULT_STAGE_BUDGETS,
+    "claude": {"VC-0": 165, "VC-1": 120, "VC-2": 210, "VC-3": 75, "VC-4": 165, "VC-5": 210, "VC-6": 165},
 }
 DEFAULT_TOTAL_BUDGET_MINUTES = 360
 # 未绑定项目总账时沿用文档上限；绑定后由总账绝对截止裁剪（见 _budget_ceilings）。
@@ -520,6 +531,13 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "result": "manual_actions_required",
     },
 )
+# Claude 升级 B1-05：生成器承接表按账本归属的客户端取。Codex 账本沿用上面的历史登记（连同 0.151 的两类边）；
+# Claude 账本从本变更集起才会出现，没有更早的生成器摘要需要承接，初始为空。以后计时工具再改动时，若已有
+# Claude 账本要跨版本重放，同一份承接收据的描述也要追加进 Claude 表。
+PRODUCER_FREEZE_SUCCESSORS_BY_CLIENT: Mapping[str, tuple[dict[str, str], ...]] = {
+    "codex": PRODUCER_FREEZE_SUCCESSORS,
+    "claude": (),
+}
 
 
 class TimingLedgerError(ValueError):
@@ -1088,8 +1106,11 @@ def _load_current_worktree_successor_edge(
     return before, after
 
 
-def _producer_identity_matches(frozen: Any, current: dict[str, str]) -> bool:
-    """按规范坐标和内容摘要承接历史 producer，不绑定工作树绝对根。"""
+def _producer_identity_matches(frozen: Any, current: dict[str, str], *, client: str = "codex") -> bool:
+    """按规范坐标和内容摘要承接历史 producer，不绑定工作树绝对根。
+
+    ``client`` 是账本归属的客户端（B1-05）：Codex 沿 0.151 的两类边与 Codex 承接表前进；Claude 只沿 Claude 承接表。
+    """
 
     if frozen == current:
         return True
@@ -1115,16 +1136,17 @@ def _producer_identity_matches(frozen: Any, current: dict[str, str]) -> bool:
     repository_root = tool.parents[2]
     if tool != repository_root / PRODUCER_TOOL_RELATIVE:
         return False
+    codex_history = client == "codex"
     edges = [
         _load_producer_successor_edge(repository_root, descriptor)
-        for descriptor in PRODUCER_SUCCESSOR_TRANSITIONS
+        for descriptor in (PRODUCER_SUCCESSOR_TRANSITIONS if codex_history else ())
     ]
-    current_edge = _load_current_worktree_successor_edge(repository_root)
+    current_edge = _load_current_worktree_successor_edge(repository_root) if codex_history else None
     if current_edge is not None:
         edges.append(current_edge)
     edges.extend(
         _load_freeze_successor_edge(repository_root, descriptor)
-        for descriptor in PRODUCER_FREEZE_SUCCESSORS
+        for descriptor in PRODUCER_FREEZE_SUCCESSORS_BY_CLIENT[client]
     )
     if not edges:
         return False
@@ -1145,6 +1167,17 @@ def _producer_identity_matches(frozen: Any, current: dict[str, str]) -> bool:
     return True
 
 
+def plan_client(plan: Mapping[str, Any]) -> str:
+    """计时账本计划归属的客户端（B1-05）：v1 计划恒为 codex；v2 计划读 ``client``，只允许 Claude。"""
+
+    if plan.get("schema_version") != CLIENT_PLAN_SCHEMA:
+        return "codex"
+    client = plan.get("client")
+    if client not in CLIENT_PLAN_CLIENTS:
+        raise TimingLedgerError(f"ledger plan client 非法：{client!r}")
+    return str(client)
+
+
 def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
     """按是否绑定项目总账给出总预算与阶段预算上限。
 
@@ -1157,7 +1190,7 @@ def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
 
     binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
     if binding is None:
-        return UNBOUND_TOTAL_BUDGET_CEILING_MINUTES, dict(DEFAULT_STAGE_BUDGETS)
+        return UNBOUND_TOTAL_BUDGET_CEILING_MINUTES, dict(DEFAULT_STAGE_BUDGETS_BY_CLIENT[plan_client(plan)])
     fields = set(PROJECT_LEDGER_BINDING_FIELDS)
     if isinstance(binding, dict) and PROJECT_LEDGER_FROZEN_DEADLINE_FIELD in binding:
         fields.add(PROJECT_LEDGER_FROZEN_DEADLINE_FIELD)
@@ -1201,9 +1234,13 @@ def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
     if isinstance(plan, dict) and PROJECT_LEDGER_BINDING_FIELD in plan:
         # 历史账本没有该字段；有字段时必须闭合校验，不允许悄悄漂移。
         required = required | {PROJECT_LEDGER_BINDING_FIELD}
+    if isinstance(plan, dict) and plan.get("schema_version") == CLIENT_PLAN_SCHEMA:
+        # B1-05：v2 计划必须带 client；v1 计划出现 client 按多余字段拒绝。
+        required = required | {"client"}
     _expect(plan, required, "ledger plan")
-    if plan.get("schema_version") != PLAN_SCHEMA:
+    if plan.get("schema_version") not in {PLAN_SCHEMA, CLIENT_PLAN_SCHEMA}:
         raise TimingLedgerError("ledger plan schema_version 不匹配")
+    client = plan_client(plan)
     _safe_id(plan.get("upgrade_id"), "upgrade_id")
     created = _timestamp(plan.get("created_at_utc"), "created_at_utc")
     started = _timestamp(plan.get("started_at_utc"), "started_at_utc")
@@ -1232,7 +1269,7 @@ def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
             raise TimingLedgerError(f"{phase} 预算必须为正数且不得宽于上限 {ceiling}")
     if plan.get("same_root_cause_retry_limit") != DEFAULT_RETRY_LIMIT:
         raise TimingLedgerError("同根因重试上限必须固定为 2")
-    if not _producer_identity_matches(plan.get("producer"), _producer()):
+    if not _producer_identity_matches(plan.get("producer"), _producer(), client=client):
         raise TimingLedgerError("计时台账生成器身份漂移")
     return plan
 
@@ -1742,10 +1779,10 @@ def _summarize(
             try:
                 if isinstance(binding, Mapping):
                     project_root = _locate_project_root(root, recorded_path=str(binding["path"]),
-                                                        plan_sha256=binding["plan_sha256"])
+                                                        plan_sha256=binding["plan_sha256"], client=plan_client(plan))
                     project.verify_committed_deadline_extension(extension, root=project_root)
                 else:
-                    _locate_extension_project_root(root, extension)
+                    _locate_extension_project_root(root, extension, client=plan_client(plan))
             except _ProjectLedgerUnreachable as error:
                 if not project_ledger_optional:
                     raise
@@ -2332,7 +2369,7 @@ def _summarize(
         project_head = None
         try:
             project_root = _locate_project_root(root, recorded_path=str(project_binding["path"]),
-                                                plan_sha256=str(project_binding["plan_sha256"]))
+                                                plan_sha256=str(project_binding["plan_sha256"]), client=plan_client(plan))
             project_deadline = _timestamp(project.effective_project_deadline(project_root, as_of=as_of), "项目有效截止")
             project_plan, _raw = project._load_plan(project_root)
             project_head = project._replay(project_root, project_plan, project._load_events(project_root), rebuild_cache=False)
@@ -2475,16 +2512,21 @@ def create_ledger(
     total_budget_minutes: int = DEFAULT_TOTAL_BUDGET_MINUTES,
     stage_budgets_minutes: dict[str, int] | None = None,
     project_ledger_dir: Path | None = None,
+    client: str = "codex",
 ) -> dict[str, Any]:
+    """创建账本；``client`` 缺省为 codex 时写 v1 计划（与改造前逐字相同），claude 写带 client 的 v2 计划。"""
+
+    if client not in PLAN_CLIENTS:
+        raise TimingLedgerError(f"未知客户端：{client!r}")
     root = _private_ledger(root, must_exist=False)
     started = started_at_utc or _utc_now()
     binding = (
-        _project_ledger_binding(project_ledger_dir, started_at_utc=started)
+        _project_ledger_binding(project_ledger_dir, started_at_utc=started, client=client)
         if project_ledger_dir is not None
         else None
     )
     plan = {
-        "schema_version": PLAN_SCHEMA,
+        "schema_version": PLAN_SCHEMA if client == "codex" else CLIENT_PLAN_SCHEMA,
         "upgrade_id": upgrade_id,
         "created_at_utc": started,
         "started_at_utc": started,
@@ -2493,10 +2535,12 @@ def create_ledger(
         "campaign_purpose": campaign_purpose,
         "evidence_decision": evidence_decision,
         "total_budget_minutes": total_budget_minutes,
-        "stage_budgets_minutes": stage_budgets_minutes or dict(DEFAULT_STAGE_BUDGETS),
+        "stage_budgets_minutes": stage_budgets_minutes or dict(DEFAULT_STAGE_BUDGETS_BY_CLIENT[client]),
         "same_root_cause_retry_limit": DEFAULT_RETRY_LIMIT,
         "producer": _producer(),
     }
+    if client != "codex":
+        plan["client"] = client
     if binding is not None:
         plan[PROJECT_LEDGER_BINDING_FIELD] = binding
     _validate_plan(plan)
@@ -2523,10 +2567,11 @@ def create_ledger(
     return inspect_ledger(root, now=started)
 
 
-def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str) -> dict[str, Any]:
+def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str, client: str = "codex") -> dict[str, Any]:
     """绑定项目总账 plan：绝对路径、plan 摘要、绝对截止时间，以及账本开始时刻的项目有效截止。
 
-    创建是写路径，这里按总账重放取开始时刻已批准的项目延期并冻结；此后读侧只用这些字段。
+    创建是写路径，这里按总账重放取开始时刻已批准的项目延期并冻结；此后读侧只用这些字段。``client`` 是计时账本归属的
+    客户端（B1-05）：总账 plan 的归属（v1 按 codex 解释，v2 读显式 client）必须与之相同，不能跨客户端绑定。
     """
 
     directory = Path(project_ledger_dir)
@@ -2536,11 +2581,13 @@ def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str) ->
     if plan_path.is_symlink() or not plan_path.is_file():
         raise TimingLedgerError("项目总账缺少 plan.json")
     payload, _raw = _load_json(plan_path, "项目总账 plan")
-    if payload.get("schema_version") != "upgrade-project-ledger-plan/v1":
+    _artifacts, project = _deadline_modules()
+    if payload.get("schema_version") not in {project.PLAN_SCHEMA, project.PLAN_SCHEMA_V2}:
         raise TimingLedgerError("项目总账 plan schema 非法")
+    if project._plan_client(payload) != client:
+        raise TimingLedgerError(f"项目总账属于 {project._plan_client(payload)}，不能绑定 {client} 的计时账本")
     deadline = payload.get("absolute_deadline_utc")
     _timestamp(deadline, "项目总账 absolute_deadline_utc")
-    _artifacts, project = _deadline_modules()
     effective = project.effective_project_deadline(
         directory.resolve(strict=True), as_of=_timestamp(started_at_utc, "started_at_utc"),
     )
@@ -2552,7 +2599,7 @@ def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str) ->
     }
 
 
-def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: str | None) -> Path:
+def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: str | None, client: str = "codex") -> Path:
     """定位项目总账：在记录的路径与计时账本目录逐级向上的同名总账目录中，按计划摘要唯一命中。
 
     收据与绑定里的绝对路径只作候选之一，数据根整体迁移后靠逐级向上查找重新定位。R8 复审修正：
@@ -2565,7 +2612,8 @@ def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: 
         raise _ProjectLedgerUnreachable("计时账本没有绑定总账计划摘要，无法确认总账身份，不接受任何候选总账")
     _artifacts, project = _deadline_modules()
     candidates = [Path(recorded_path)]
-    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    # B1-05：逐级向上找的是计时账本所属客户端的总账目录（两客户端共用数据根、总账目录名不同）。
+    candidates.extend(parent / project.ledger_dir_name(client) for parent in Path(ledger_root).resolve().parents)
     matches: dict[Path, Path] = {}
     for candidate in candidates:
         plan_path = candidate / "plan.json"
@@ -2587,7 +2635,7 @@ def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: 
     return next(iter(matches.values()))
 
 
-def _locate_extension_project_root(ledger_root: Path, extension: Mapping[str, Any]) -> Path:
+def _locate_extension_project_root(ledger_root: Path, extension: Mapping[str, Any], *, client: str = "codex") -> Path:
     """R8 复审修正：定位不绑定总账的计时账本里某次延期所在的项目总账，定位即核对提交证明。
 
     指南允许 Campaign 账本不绑定项目总账（沿用默认预算），这类账本同样可以延期。没有绑定的计划摘要时，以
@@ -2598,7 +2646,7 @@ def _locate_extension_project_root(ledger_root: Path, extension: Mapping[str, An
 
     _artifacts, project = _deadline_modules()
     candidates = [Path(str(extension["project_ledger_path"]))]
-    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    candidates.extend(parent / project.ledger_dir_name(client) for parent in Path(ledger_root).resolve().parents)
     present: set[Path] = set()
     matches: dict[Path, Path] = {}
     for candidate in candidates:
@@ -2947,7 +2995,7 @@ def replay(root: Path, receipt_relative: str, *, project_ledger_optional: bool =
         "producer": receipt.get("producer"),
     }
     if (
-        not _producer_identity_matches(receipt.get("producer"), _producer())
+        not _producer_identity_matches(receipt.get("producer"), _producer(), client=plan_client(plan))
         or head.get("sha256") != summary["head_sha256"]
         or _canonical(expected) != raw
     ):
@@ -2988,12 +3036,12 @@ def assert_usable(
     return summary
 
 
-def _stage_budget_arguments(values: list[str]) -> dict[str, int] | None:
-    """解析 ``VC-N=分钟`` 覆盖项；未覆盖的阶段沿用默认预算。"""
+def _stage_budget_arguments(values: list[str], *, client: str = "codex") -> dict[str, int] | None:
+    """解析 ``VC-N=分钟`` 覆盖项；未覆盖的阶段沿用该客户端的默认预算。"""
 
     if not values:
         return None
-    budgets = dict(DEFAULT_STAGE_BUDGETS)
+    budgets = dict(DEFAULT_STAGE_BUDGETS_BY_CLIENT[client])
     for item in values:
         phase, separator, minutes = str(item).partition("=")
         if not separator or phase not in PHASE_ORDER or not minutes.isdigit() or int(minutes) <= 0:
@@ -3273,6 +3321,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PHASE=MINUTES",
         help="覆盖单个阶段预算，可重复；未给出的阶段沿用默认值",
     )
+    create_parser.add_argument(
+        "--client",
+        choices=PLAN_CLIENTS,
+        default="codex",
+        help="账本归属的客户端（Claude 升级 B1-05）：缺省 codex 写 v1 计划；claude 写带 client 的 v2 计划、用 Claude 默认预算",
+    )
     append_parser = commands.add_parser("append", help="追加一个不可覆盖的计时事件")
     append_parser.add_argument("--ledger-dir", type=Path, required=True)
     append_parser.add_argument("--event-id", required=True)
@@ -3314,8 +3368,9 @@ def main(argv: list[str] | None = None) -> int:
                 campaign_purpose=arguments.campaign_purpose,
                 evidence_decision=arguments.evidence_decision,
                 total_budget_minutes=arguments.total_budget_minutes,
-                stage_budgets_minutes=_stage_budget_arguments(arguments.stage_budget_minutes),
+                stage_budgets_minutes=_stage_budget_arguments(arguments.stage_budget_minutes, client=arguments.client),
                 project_ledger_dir=arguments.project_ledger_dir,
+                client=arguments.client,
             )
         elif arguments.command == "append":
             bindings = _receipt_arguments(arguments.receipt)
