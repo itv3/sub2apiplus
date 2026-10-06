@@ -258,6 +258,28 @@ class ClaudeIdentityEngineTests(_ClaudeTreeMixin, unittest.TestCase):
                 finally:
                     path.write_text(original, encoding="utf-8")
 
+    def test_reaching_ignored_file_is_rejected(self) -> None:
+        """闭包到达被策略忽略的另一客户端专属文件即失败；只导入、不在可达函数里使用不受影响。"""
+
+        tools = self.repo / "tools" / "official_client_capture"
+        (tools / "codex_only.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+        policy_path = self.repo / "policy-ignored.json"
+        policy_path.write_text(json.dumps(dict(POLICY, ignored_prefixes=["official_client_capture/codex_"])), encoding="utf-8")
+        policy = v3.load_policy(policy_path)
+        shared = tools / "upgrade_control_plane.py"
+        original = shared.read_text(encoding="utf-8")
+        imported = original.replace(
+            "from tools.official_client_capture import upgrade_client_adapter\n",
+            "from tools.official_client_capture import codex_only, upgrade_client_adapter\n",
+        )
+        shared.write_text(imported, encoding="utf-8")
+        v3.compute_identity(policy, self.repo)
+        shared.write_text(imported.replace("    return digest, proofs, receipt\n", "    return digest, proofs, receipt, codex_only.helper()\n"), encoding="utf-8")
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "shared_flow 引用了被策略忽略的文件 official_client_capture/codex_only.py"):
+            v3.compute_identity(policy, self.repo)
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "被策略忽略的文件"):
+            v3.evaluator_dependency_digests(self.repo, policy)
+
     def test_memo_matches_recompute(self) -> None:
         plain = self._claude_digests()
         identity = v3.compute_identity(self.policy, self.repo)

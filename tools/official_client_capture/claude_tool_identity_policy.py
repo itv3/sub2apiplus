@@ -13,6 +13,9 @@
   符号）；名字不在绑定表，或 ``orchestrator`` 被赋值、传递、``getattr``，判为无法解析，``plan`` 与认证失败。适配接口的
   注册表与动态解析机制（``adapter_for``、``_resolve``、``_import_managed``、``OrchestratorFacade``）是引擎内建屏障：
   间接调用已由本引擎直接解析到实现，不再穿过这层机制。
+* 闭包到达被策略忽略的文件（``ignored_prefixes``，即另一客户端的专属文件）即失败：Codex 引擎对其它层模块只是
+  不计入，跨模块按符号遍历后照此处理会让 Claude 闭包实际依赖的 Codex 实现在身份里不可见。到达即说明它不再专属，
+  要么在策略里归层，要么改经适配器。
 
 纯函数（指纹、分层、模块符号表、动态调用检查、源码段、跨进程记忆化）从 Codex 引擎调用，不复制；导入解析因要覆盖
 两个包而另写。本文件被 Codex 身份策略忽略（``claude_`` 前缀），不影响 Codex 的任何摘要。
@@ -331,20 +334,31 @@ def closure(
             parsed[module] = (source, tree, functions, constants, aliases, symbol_imports, lines)
         return parsed[module]
 
-    def whole_module(module: str) -> None:
-        key = index.get(module)
-        if key is not None and module not in whole:
-            whole[module] = {"module": module, "path": key, "sha256": digests[key]}
+    def reject_ignored(module: str, owner: str) -> str | None:
+        """模块所属的层；被策略忽略的文件不得出现在闭包里。"""
 
-    def refer(module: str, name: str) -> None:
         key = index.get(module)
         if key is None:
-            return
+            return None
         module_layer = classify_path(policy, key)
+        if module_layer is None:
+            raise ToolIdentityPolicyError(f"{owner} 引用了被策略忽略的文件 {key}：须在策略里归层，或改经适配器")
+        return module_layer
+
+    def whole_module(module: str, owner: str) -> None:
+        key = index.get(module)
+        if key is not None and module not in whole:
+            reject_ignored(module, owner)
+            whole[module] = {"module": module, "path": key, "sha256": digests[key]}
+
+    def refer(module: str, name: str, owner: str) -> None:
+        module_layer = reject_ignored(module, owner)
+        if module_layer is None:
+            return
         if module == orchestrator_module or module_layer == "control":
             pending.append((module, name))
         elif layer is None or module_layer == layer:
-            whole_module(module)
+            whole_module(module, owner)
 
     for root in roots:
         pending.append(tuple(root))  # type: ignore[arg-type]
@@ -359,8 +373,9 @@ def closure(
         if node is None:
             if module == orchestrator_module:
                 raise ToolIdentityPolicyError(f"闭包根或引用的编排器符号不存在：{name}")
-            whole_module(module)
+            whole_module(module, f"{module}.{name}")
             continue
+        owner = f"{module}.{name}"
         kind = "function" if name in functions else "constant"
         symbols[(module, name)] = {
             "module": module,
@@ -374,8 +389,8 @@ def closure(
         scope_aliases = {**aliases, **local_aliases}
         scope_symbols = {**symbol_imports, **local_symbols}
         if kind == "function":
-            codex_identity._reject_dynamic(node, f"{module}.{name}", dynamic_policy, scope_aliases, functions)
-        _reject_non_literal_orchestrator(node, f"{module}.{name}")
+            codex_identity._reject_dynamic(node, owner, dynamic_policy, scope_aliases, functions)
+        _reject_non_literal_orchestrator(node, owner)
         handled: set[int] = set()
         parents = {id(child): parent for parent in ast.walk(node) for child in ast.iter_child_nodes(parent)}
         for child in ast.walk(node):
@@ -384,8 +399,8 @@ def closure(
             if isinstance(child.value, ast.Attribute) and child.value.attr == "orchestrator":
                 binding = active_bindings.get(child.attr)
                 if binding is None or child.attr not in upgrade_client_adapter.ORCHESTRATOR_SURFACE or binding[1] is None:
-                    raise ToolIdentityPolicyError(f"{module}.{name} 经适配器访问的编排器符号 {child.attr} 不在绑定表")
-                refer(_binding_module(binding[0], index), binding[1])
+                    raise ToolIdentityPolicyError(f"{owner} 经适配器访问的编排器符号 {child.attr} 不在绑定表")
+                refer(_binding_module(binding[0], index), binding[1], owner)
                 handled.update({id(child), id(child.value)})
             elif isinstance(child.value, ast.Name) and child.value.id in scope_aliases:
                 continue
@@ -393,17 +408,17 @@ def closure(
                 binding = active_bindings[child.attr]
                 target_module = _binding_module(binding[0], index)
                 if binding[1] is not None:
-                    refer(target_module, binding[1])
+                    refer(target_module, binding[1], owner)
                 else:
                     parent = parents.get(id(child))
                     if isinstance(parent, ast.Attribute) and parent.value is child:
-                        refer(target_module, parent.attr)
+                        refer(target_module, parent.attr, owner)
                         handled.add(id(parent))
                     else:
-                        whole_module(target_module)
+                        whole_module(target_module, owner)
                 handled.add(id(child))
             elif child.attr in ADAPTER_METHODS and adapter_module is not None and id(child) not in handled:
-                refer(adapter_module, "ClientAdapter")
+                refer(adapter_module, "ClientAdapter", owner)
         attribute_bases: set[int] = set()
         for child in ast.walk(node):
             if (
@@ -415,16 +430,16 @@ def closure(
                 and child.value.id not in constants
             ):
                 attribute_bases.add(id(child.value))
-                refer(scope_aliases[child.value.id], child.attr)
+                refer(scope_aliases[child.value.id], child.attr, owner)
         for child in ast.walk(node):
             if not isinstance(child, ast.Name) or id(child) in attribute_bases or child.id == name:
                 continue
             if child.id in functions or child.id in constants:
                 pending.append((module, child.id))
             elif child.id in scope_symbols:
-                refer(*scope_symbols[child.id])
+                refer(*scope_symbols[child.id], owner)
             elif child.id in scope_aliases:
-                whole_module(scope_aliases[child.id])
+                whole_module(scope_aliases[child.id], owner)
     record = {
         "schema_version": CLOSURE_SCHEMA,
         "layer": layer or "reader",
