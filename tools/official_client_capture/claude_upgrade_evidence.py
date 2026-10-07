@@ -24,6 +24,11 @@
 * **EvidencePackage v3**：每个 probe 一个证据项（``EVIDENCE-<probe>``），只含 ``source_ids``（probe 所属场景）、外部
   证据绑定与适用条件，不含规则结论。深度扫描（``evidence_inventory``，seal 预览阶段唯一一次）之后才绑定摘要，
   并按 Store 的内容寻址算法预先算出流量观测策略、完整性清单与 EvidencePackage 的对象引用。
+* **候选证据**（B4-02，见文末一节）：同一组 evidence 根按侧别分流——``scan_relay_evidence`` 的 ``label`` 为 candidate、
+  ``build_seal_drafts`` 的视图带 ``side: candidate`` 时走候选路径。capture 段（逐 probe 复核与贴标签）两侧共用，候选侧
+  另加网关坐标、connect 中继、候选 M 门禁、恢复报告与账号刷新触发的复核，闭合门禁另核 VC-3 ScenarioPlan 场景覆盖与
+  场景清单登记的客户端收据、边界核对；绑定产出 Store 写入层（``claude_upgrade_candidate_seal``）要的场景证据、运行证据
+  条目与原始证据清单。官方路径的输出与拆出共用段之前逐字相同。
 
 外部证据路径一律相对宿主数据根（Store 外部核验的 external root）。本文件被 Codex 身份策略忽略（``claude_`` 前缀），
 在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层，经 evidence 根按符号进入 evidence 闭包。
@@ -99,6 +104,57 @@ COMPLETENESS_PURPOSES = {
     "production_inventory": "Campaign 冻结的生产现状清单（前序批准画像的生产入口清单、出站处置清单与目标处置）",
 }
 OPTIONAL_COMPLETENESS = frozenset({"dispositions", "static_analysis", "production_inventory"})
+
+# ---- 候选证据（B4-02，见文末「候选证据」一节）----------------------------------------------------------------------
+# 候选中继清单的固定形态、宿主脚本的恢复报告与账号刷新触发结果：与 B4-01a 的中继候选模式（``claude_fw_e_relay``）和宿主
+# 脚本（``claude_run_candidate_capture.sh``）同值，由测试锁定两边一致；这里不导入 wire 层模块。
+CANDIDATE_SIDE = "candidate"
+CANDIDATE_RELAY_MODE = "connect"
+CANDIDATE_CLIENT_AUTHENTICATION = "ANTHROPIC_AUTH_TOKEN"
+CANDIDATE_HOSTS_RECOVERY = {"scope": "candidate-no-hosts-override", "restored": True}
+# 候选取证完整 M 门禁的 15 项（官方取证是另一组）：键集必须恰好是这些且全部为真，官方清单冒充候选在这里被挡下。
+CANDIDATE_M_REQUIREMENTS = frozenset(
+    {
+        "runtime_identity",
+        "client_identity",
+        "capture_execution_sources",
+        "candidate_runtime_bound",
+        "client_outcome_recorded",
+        "production_forwarding_boundary",
+        "relay_integrity",
+        "wire_inventory_recorded",
+        "equal_length_scrubbing",
+        "exact_secret_scan",
+        "tui_temporary_state_cleanup",
+        "tls_p_channel",
+        "relay_stopped",
+        "hosts_restored",
+        "campaign_status",
+    }
+)
+# 网关行为观测（只记录、不作复核失败条件，由评估器逐规则判定）。
+CANDIDATE_OBSERVATION_FIELDS = ("client_outcome_valid", "message_request_expectation_met", "synthetic_plan_closed", "dimension_result")
+CANDIDATE_GATEWAY_FIELDS = ("base_url", "account_id", "api_key_id", "trigger", "client_authentication", "oauth_credentials_read")
+# 宿主脚本在 Job 证据根下按 probe 写的恢复报告（``<Job 根>/candidate-gateway/<probe>.json``）。
+CANDIDATE_RESTORATION_DIRNAME = "candidate-gateway"
+CANDIDATE_RESTORATION_SCHEMA = "claude-candidate-gateway-restoration/v1"
+CANDIDATE_RESTORATION_EQUALITIES = (
+    "account_proxy_restored_equal",
+    "account_gate_restored_equal",
+    "hosts_sha256_equal",
+    "ca_bundle_sha256_equal",
+)
+# 账号刷新触发（官方 probe 的驱动是客户端 OAuth 刷新时由中继请网关刷新账号令牌）的结果文件，在 probe 目录内。
+CANDIDATE_TRIGGER_RELATIVE = Path("results") / "gateway-trigger.json"
+CANDIDATE_TRIGGER_SCHEMA = "claude-candidate-gateway-trigger/v1"
+CANDIDATE_TRIGGER_CLIENT = "client"
+CANDIDATE_TRIGGER_ACCOUNT_REFRESH = "gateway-account-refresh"
+CANDIDATE_CAPTURE_INDEX_SCHEMA = "claude-upgrade-candidate-capture-index/v1"
+# 候选 seal 草稿：capture manifest 与官方同一合同（每个 artifact 带 job_id／probe_id／path，评估用 manifest 由它合成），
+# CaptureIndex 另有候选合同（多出网关坐标、恢复报告与观测）。
+CANDIDATE_DRAFT_FILES = {"capture_manifest": "capture-manifest.json", "capture_index": "capture-index.json"}
+# 客户端收据与 attempt 级边界核对收据的最小绑定字段（占位：两类收据的合同由 B4-01 交回，届时按合同补齐核对）。
+CANDIDATE_RECEIPT_BINDING_FIELDS = ("campaign_id", "candidate_id", "attempt_id", "run_nonce")
 
 
 class SealEvidenceError(ConfigurationError):
@@ -205,6 +261,12 @@ def relay_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
     取证，B2-07 补充项）的步骤身份「<模型>-<probe>」由 ``scan_relay_evidence`` 按目录名定。
     """
 
+    return _relay_probe_view(probe_dir, base=base)[0]
+
+
+def _relay_probe_view(probe_dir: Path, *, base: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``relay_probe_view`` 的实现：另返回读到的完整中继清单，候选视图（B4-02）据此补候选字段，不必再读一次。"""
+
     manifest = _read_json(probe_dir / RELAY_MANIFEST_FILENAME, "中继清单")
     relay = _read_json(probe_dir / RELAY_INDEX_RELATIVE, "中继连接索引")
     connections = relay.get("connections")
@@ -265,7 +327,7 @@ def relay_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
         ],
         "excluded_connection_ids": sorted(excluded),
         "files": [_relative(path, probe_dir, "probe 证据文件") for path in _walk_files(probe_dir)],
-    }
+    }, manifest
 
 
 def _probe_directories(root: Path) -> list[Path]:
@@ -298,12 +360,16 @@ def scan_relay_evidence(paths: Iterable[Path], label: str, *, base: Path) -> dic
 
     视图按步骤身份（目录名，见 ``_step_probe_identity``）登记，``probe_id`` 改写成步骤身份，中继清单的基础 probe 留在
     ``relay_probe_id``。
+
+    ``label == "candidate"``（候选证据，B4-02）时每个视图另带 ``candidate``（候选中继清单的侧别、网关坐标、connect 中继、
+    hosts 恢复、M 绑定逐项要求与网关行为观测）、``restoration``（宿主脚本的恢复报告）与 ``gateway_trigger``（账号刷新触发
+    结果），见 ``candidate_probe_view``；官方视图不变。
     """
 
     probes: dict[str, dict[str, Any]] = {}
     for root in paths:
         for probe_dir in _probe_directories(Path(root)):
-            view = relay_probe_view(probe_dir, base=base)
+            view = candidate_probe_view(probe_dir, base=base) if label == CANDIDATE_SIDE else relay_probe_view(probe_dir, base=base)
             probe_id = _step_probe_identity(probe_dir.name, view)
             if probe_id is None:
                 raise SealEvidenceError(f"probe 目录名与中继清单的 probe_id 不一致：{probe_dir}")
@@ -437,6 +503,82 @@ def _probe_checks(view: Mapping[str, Any], *, probe: str, context: Mapping[str, 
         "response_mode": bool(manifest.get("response_plan")) == synthetic and manifest.get("live_requests") is (not synthetic),
     }
     return sorted(name for name, passed in checks.items() if not passed)
+
+
+def _capture_segment(
+    view: Mapping[str, Any],
+    *,
+    extra_checks: Any = None,
+    index_extra: Any = None,
+) -> dict[str, Any]:
+    """官方与候选共用的 capture 段：逐 Job、逐 probe 复核中继清单并按证据标签贴标签。
+
+    返回带标签的证据（按路径排序，每条带 ``job_id``／``probe_id``／``path``）、标签不一致、复核失败、CaptureIndex 的逐 Job
+    行、复核通过且有证据的 probe → 证据，以及 probe → 所属场景。``extra_checks(probe_view, job, probe)`` 返回候选侧另加的
+    未通过检查名，``index_extra(probe_view, job, probe)`` 返回并入 CaptureIndex probe 行的候选字段；官方两者都不给，结果与
+    抽出之前逐字相同。
+    """
+
+    labels = claude_upgrade_plan.load_evidence_labels(
+        Path(view["labels_path"]), expected_version=view["target_version"], scenario_payload=view["scenarios"]
+    )
+    probe_scenarios = _probe_scenarios(view["scenarios"])
+    job_rules = {entry["job_id"]: entry["rules"] for entry in labels["document"]["entries"]}
+    synthetic = _synthetic_probes(labels)
+    artifacts: list[dict[str, Any]] = []
+    mismatches: list[dict[str, str]] = []
+    failures: list[dict[str, Any]] = []
+    index_jobs: list[dict[str, Any]] = []
+    evidence_probes: dict[str, list[dict[str, Any]]] = {}
+    for job in view["jobs"]:
+        job_id = str(job["job_id"])
+        index_probes = []
+        for probe in job["probe_ids"]:
+            probe_view = view["probes"].get(probe)
+            if probe_view is None:
+                failures.append({"job_id": job_id, "probe_id": probe, "failed_checks": ["evidence_missing"]})
+                index_probes.append({"probe_id": probe, "result": "failed", "failed_checks": ["evidence_missing"]})
+                continue
+            failed = _probe_checks(probe_view, probe=probe, context=view, synthetic=probe in synthetic)
+            if extra_checks is not None:
+                failed = sorted({*failed, *extra_checks(probe_view, job, probe)})
+            if not probe_scenarios.get(probe):
+                failed = sorted({*failed, "scenario_membership"})
+            if failed:
+                failures.append({"job_id": job_id, "probe_id": probe, "failed_checks": failed})
+            probe_artifacts: list[dict[str, Any]] = []
+            try:
+                probe_artifacts = _label_artifacts(job_id, probe_view, labels["plans"][job_id][probe], job_rules[job_id])
+            except claude_upgrade_plan.LabelSequenceMismatch as error:
+                mismatches.append({"job_id": job_id, "probe_id": probe, "reason": str(error)})
+            artifacts.extend(probe_artifacts)
+            if probe_artifacts and not failed:
+                evidence_probes[probe] = probe_artifacts
+            row = {
+                "probe_id": probe,
+                "directory": probe_view["directory"],
+                "result": "failed" if failed else "passed",
+                "failed_checks": failed,
+                "response_mode": "synthetic" if probe in synthetic else "live",
+                "response_plan": probe_view["manifest"]["response_plan"],
+                "host_runtime_receipt_sha256": probe_view["manifest"]["host_runtime_receipt_sha256"],
+                "upstream_host": probe_view["manifest"]["upstream_host"],
+                "connections": probe_view["connections"],
+                "excluded_connection_ids": probe_view["excluded_connection_ids"],
+            }
+            if index_extra is not None:
+                row.update(index_extra(probe_view, job, probe))
+            index_probes.append(row)
+        index_jobs.append({"job_id": job_id, "evidence_root": job["evidence_root"], "probes": index_probes})
+    artifacts.sort(key=lambda item: (item["path"], json.dumps(item["labels"], sort_keys=True)))
+    return {
+        "artifacts": artifacts,
+        "mismatches": mismatches,
+        "failures": failures,
+        "index_jobs": index_jobs,
+        "evidence_probes": evidence_probes,
+        "probe_scenarios": probe_scenarios,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -596,55 +738,16 @@ def build_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] |
     有效工具身份）；``completeness_paths``（``COMPLETENESS_PURPOSES`` 各项的文件路径，可选项可为 None）。
     """
 
-    labels = claude_upgrade_plan.load_evidence_labels(
-        Path(view["labels_path"]), expected_version=view["target_version"], scenario_payload=view["scenarios"]
-    )
-    probe_scenarios = _probe_scenarios(view["scenarios"])
-    job_rules = {entry["job_id"]: entry["rules"] for entry in labels["document"]["entries"]}
-    synthetic = _synthetic_probes(labels)
-    artifacts: list[dict[str, Any]] = []
-    mismatches: list[dict[str, str]] = []
-    failures: list[dict[str, Any]] = []
-    index_jobs: list[dict[str, Any]] = []
-    evidence_probes: dict[str, list[dict[str, Any]]] = {}
-    for job in view["jobs"]:
-        job_id = str(job["job_id"])
-        index_probes = []
-        for probe in job["probe_ids"]:
-            probe_view = view["probes"].get(probe)
-            if probe_view is None:
-                failures.append({"job_id": job_id, "probe_id": probe, "failed_checks": ["evidence_missing"]})
-                index_probes.append({"probe_id": probe, "result": "failed", "failed_checks": ["evidence_missing"]})
-                continue
-            failed = _probe_checks(probe_view, probe=probe, context=view, synthetic=probe in synthetic)
-            if not probe_scenarios.get(probe):
-                failed = sorted({*failed, "scenario_membership"})
-            if failed:
-                failures.append({"job_id": job_id, "probe_id": probe, "failed_checks": failed})
-            probe_artifacts: list[dict[str, Any]] = []
-            try:
-                probe_artifacts = _label_artifacts(job_id, probe_view, labels["plans"][job_id][probe], job_rules[job_id])
-            except claude_upgrade_plan.LabelSequenceMismatch as error:
-                mismatches.append({"job_id": job_id, "probe_id": probe, "reason": str(error)})
-            artifacts.extend(probe_artifacts)
-            if probe_artifacts and not failed:
-                evidence_probes[probe] = probe_artifacts
-            index_probes.append(
-                {
-                    "probe_id": probe,
-                    "directory": probe_view["directory"],
-                    "result": "failed" if failed else "passed",
-                    "failed_checks": failed,
-                    "response_mode": "synthetic" if probe in synthetic else "live",
-                    "response_plan": probe_view["manifest"]["response_plan"],
-                    "host_runtime_receipt_sha256": probe_view["manifest"]["host_runtime_receipt_sha256"],
-                    "upstream_host": probe_view["manifest"]["upstream_host"],
-                    "connections": probe_view["connections"],
-                    "excluded_connection_ids": probe_view["excluded_connection_ids"],
-                }
-            )
-        index_jobs.append({"job_id": job_id, "evidence_root": job["evidence_root"], "probes": index_probes})
-    artifacts.sort(key=lambda item: (item["path"], json.dumps(item["labels"], sort_keys=True)))
+    if view.get("side") == CANDIDATE_SIDE:
+        # 候选证据（B4-02）：同一组 evidence 根进来，按视图侧别分流；官方视图不带 side，走下面的原路径。
+        return build_candidate_seal_drafts(view, inventory=inventory)
+    segment = _capture_segment(view)
+    artifacts = segment["artifacts"]
+    mismatches = segment["mismatches"]
+    failures = segment["failures"]
+    index_jobs = segment["index_jobs"]
+    evidence_probes = segment["evidence_probes"]
+    probe_scenarios = segment["probe_scenarios"]
     layers = build_discovery_layers(view)
     discovery = layers["discovery_inventory"]
     matrix = _cross_source_matrix(view, evidence_probes, layers)
@@ -792,6 +895,353 @@ def _bind_seal_plan(view: Mapping[str, Any], evidence_items: Sequence[Mapping[st
             "tool_sha256": view["tool_files_sha256"],
             "artifact_refs": [dict(item) for item in store["official_artifacts"]],
         },
+        "inventory_digest": inventory["digest"],
+        "scanned_bytes": inventory["total_bytes"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 候选证据（B4-02）
+# ---------------------------------------------------------------------------
+#
+# 候选侧与官方侧共用中继证据视图、capture 段（``_capture_segment``：按证据标签贴标签，每个 artifact 带 job_id／probe_id／
+# path）与深度扫描；候选证据由同一官方客户端按同一 FW-F v5 probe 驱动、经候选网关出站（B4-01a），所以另外：
+#
+# * 逐 probe 多一组候选复核（``_candidate_probe_checks``）：中继清单侧别是 candidate、run-id 与步骤一致、connect 中继与
+#   冻结端口、网关坐标（base URL、候选账号与 ingress API Key、触发方式、客户端只持网关 API Key、不读官方 OAuth 凭据）、
+#   hosts 恢复范围、候选 M 门禁 15 项逐项为真、网关行为观测已记录；宿主脚本的恢复报告（四项恢复后相等、秘密文件已删、
+#   取证退出码 0、坐标一致）；账号刷新触发的步骤必须有送达的触发结果，其余步骤不得有。网关行为观测只记进 CaptureIndex，
+#   不作复核失败条件（由评估器逐规则判定）。
+# * 闭合门禁：复核失败、标签不一致、VC-3 ScenarioPlan 有场景没有复核通过的证据、场景清单登记的客户端收据或 attempt 级
+#   边界核对缺失或不符，任一即 blocked。
+# * 给出深度扫描清单时绑定：每个 ScenarioPlan 场景的证据（复核通过的 probe 里 scenario_ids 含该场景的 artifact）、
+#   逐 probe 的恢复与秘密扫描运行证据条目、全部原始证据清单、capture manifest 草稿与客户端收据的绑定。Store 写入请求的
+#   其余部分（运行条件、selector 前态、外部门禁坐标与 attempt 级环境证据）由控制流程按 attempt 组装。
+#
+# 客户端收据与边界核对收据的合同由 B4-01 交回；在那之前只核最小绑定字段（``CANDIDATE_RECEIPT_BINDING_FIELDS`` 加
+# client_id／status 或 check_id／result），合同落地后在这里补齐。
+
+
+def _strict_equal(left: Any, right: Any) -> bool:
+    """类型与取值都相同（JSON 的 true 不能冒充 1，0 也不能冒充 false）。"""
+
+    return type(left) is type(right) and left == right
+
+
+def _optional_json(path: Path, base: Path, label: str) -> dict[str, Any] | None:
+    """可缺的证据 JSON：不存在时 None；存在则必须是可信普通文件且是 JSON 对象。"""
+
+    if not path.exists() and not path.is_symlink():
+        return None
+    return {"path": _relative(path, base, label), "payload": _read_json(path, label)}
+
+
+def candidate_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
+    """候选 probe 目录的视图：官方视图加 ``candidate``（中继清单的候选字段）、``restoration``、``gateway_trigger``。"""
+
+    view, manifest = _relay_probe_view(probe_dir, base=base)
+    gateway = manifest.get("candidate_gateway")
+    upstream = _mapping(manifest.get("upstream"))
+    requirements = _mapping(manifest.get("m_binding")).get("requirements")
+    observation = manifest.get("candidate_observation")
+    hosts = manifest.get("hosts_recovery")
+    view["candidate"] = {
+        "side": manifest.get("side"),
+        "run_id": manifest.get("run_id"),
+        "gateway": {field: gateway.get(field) for field in CANDIDATE_GATEWAY_FIELDS} if isinstance(gateway, Mapping) else None,
+        "relay_mode": upstream.get("relay_mode"),
+        "relay_listen_port": upstream.get("relay_listen_port"),
+        "hosts_recovery": dict(hosts) if isinstance(hosts, Mapping) else None,
+        "m_requirements": dict(requirements) if isinstance(requirements, Mapping) else None,
+        "observation": (
+            {field: observation.get(field) for field in CANDIDATE_OBSERVATION_FIELDS} if isinstance(observation, Mapping) else None
+        ),
+    }
+    view["restoration"] = _optional_json(
+        probe_dir.parent / CANDIDATE_RESTORATION_DIRNAME / f"{probe_dir.name}.json", base, "候选恢复报告"
+    )
+    view["gateway_trigger"] = _optional_json(probe_dir / CANDIDATE_TRIGGER_RELATIVE, base, "账号刷新触发结果")
+    return view
+
+
+def _restoration_failures(probe_view: Mapping[str, Any], expected: Mapping[str, Any], probe: str) -> list[str]:
+    """恢复报告未通过的字段（空表示通过）；没有报告记 ``missing``。"""
+
+    restoration = probe_view.get("restoration")
+    if restoration is None:
+        return ["missing"]
+    report = restoration["payload"]
+    wanted: dict[str, Any] = {
+        "schema_version": CANDIDATE_RESTORATION_SCHEMA,
+        "status": "complete",
+        "run_id": expected["run_id"],
+        "probe_id": probe,
+        "account_id": expected["account_id"],
+        "api_key_id": expected["api_key_id"],
+        "trigger": expected["trigger"],
+        "relay_port": expected["relay_port"],
+        "capture_exit_code": 0,
+        "runtime_secrets_removed": True,
+        **{name: True for name in CANDIDATE_RESTORATION_EQUALITIES},
+    }
+    return sorted(field for field, value in wanted.items() if not _strict_equal(report.get(field), value))
+
+
+def _trigger_failures(probe_view: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
+    """账号刷新触发结果未通过的字段：只有账号刷新触发的步骤有这份结果，且必须已送达。"""
+
+    trigger = probe_view.get("gateway_trigger")
+    if expected["trigger"] != CANDIDATE_TRIGGER_ACCOUNT_REFRESH:
+        return [] if trigger is None else ["unexpected"]
+    if trigger is None:
+        return ["missing"]
+    payload = trigger["payload"]
+    wanted = {
+        "schema_version": CANDIDATE_TRIGGER_SCHEMA,
+        "trigger": CANDIDATE_TRIGGER_ACCOUNT_REFRESH,
+        "account_id": expected["account_id"],
+        "valid": True,
+    }
+    return sorted(field for field, value in wanted.items() if not _strict_equal(payload.get(field), value))
+
+
+def _candidate_probe_checks(view: Mapping[str, Any], probe_view: Mapping[str, Any], job: Mapping[str, Any], probe: str) -> list[str]:
+    """候选侧另加的逐 probe 复核：返回未通过的检查名（空表示通过）。"""
+
+    expected = job["candidate_steps"][probe]
+    candidate = probe_view["candidate"]
+    gateway = candidate["gateway"]
+    gateway_expected = {
+        "base_url": view["gateway_base_url"],
+        "account_id": expected["account_id"],
+        "api_key_id": expected["api_key_id"],
+        "trigger": expected["trigger"],
+        "client_authentication": CANDIDATE_CLIENT_AUTHENTICATION,
+        "oauth_credentials_read": False,
+    }
+    hosts = candidate["hosts_recovery"]
+    requirements = candidate["m_requirements"]
+    checks = {
+        "candidate_side": candidate["side"] == CANDIDATE_SIDE,
+        "candidate_run_identity": _strict_equal(candidate["run_id"], expected["run_id"]),
+        "connect_relay": candidate["relay_mode"] == CANDIDATE_RELAY_MODE
+        and _strict_equal(candidate["relay_listen_port"], expected["relay_port"]),
+        "candidate_gateway": gateway is not None
+        and all(_strict_equal(gateway.get(field), value) for field, value in gateway_expected.items()),
+        "hosts_recovery": hosts is not None
+        and set(hosts) == set(CANDIDATE_HOSTS_RECOVERY)
+        and all(_strict_equal(hosts[key], value) for key, value in CANDIDATE_HOSTS_RECOVERY.items()),
+        "m_binding_requirements": requirements is not None
+        and set(requirements) == CANDIDATE_M_REQUIREMENTS
+        and all(value is True for value in requirements.values()),
+        "candidate_observation_recorded": candidate["observation"] is not None,
+        "restoration": not _restoration_failures(probe_view, expected, probe),
+        "gateway_trigger": not _trigger_failures(probe_view, expected),
+    }
+    return sorted(name for name, passed in checks.items() if not passed)
+
+
+def _candidate_index_extra(probe_view: Mapping[str, Any], job: Mapping[str, Any], probe: str) -> dict[str, Any]:
+    """并入候选 CaptureIndex probe 行的字段：网关坐标、网关行为观测、恢复报告与账号刷新触发结果的要点。"""
+
+    expected = job["candidate_steps"][probe]
+    restoration = probe_view.get("restoration")
+    trigger = probe_view.get("gateway_trigger")
+    return {
+        "candidate_gateway": probe_view["candidate"]["gateway"],
+        "candidate_observation": probe_view["candidate"]["observation"],
+        "restoration": {
+            "path": restoration["path"] if restoration is not None else None,
+            "status": restoration["payload"].get("status") if restoration is not None else None,
+            "failed_fields": _restoration_failures(probe_view, expected, probe),
+        },
+        "gateway_trigger": (
+            None
+            if trigger is None
+            else {
+                "path": trigger["path"],
+                "http_status": trigger["payload"].get("http_status"),
+                "valid": trigger["payload"].get("valid"),
+                "failed_fields": _trigger_failures(probe_view, expected),
+            }
+        ),
+    }
+
+
+def _candidate_client_evidence(view: Mapping[str, Any]) -> dict[str, Any]:
+    """场景清单登记的客户端收据（Mac 侧两个官方客户端正例）与 attempt 级边界核对：逐项状态与闭合门禁原因。"""
+
+    scenarios = view["scenarios"]
+    attempt = view["attempt"]
+    values = {
+        "campaign_id": view["campaign_id"],
+        "candidate_id": view["candidate_id"],
+        "attempt_id": attempt["attempt_id"],
+        "run_nonce": attempt["run_nonce"],
+    }
+    binding = {field: values[field] for field in CANDIDATE_RECEIPT_BINDING_FIELDS}
+    given = view["client_evidence"]
+    reasons: list[str] = []
+    summary: dict[str, dict[str, Any]] = {"client_bindings": {}, "boundary_checks": {}}
+    for group, required, identity, outcome, missing, invalid in (
+        ("client_bindings", scenarios["required_client_bindings"], "client_id", ("status", "success"), "client_binding_missing", "client_binding_invalid"),
+        ("boundary_checks", scenarios["required_boundary_checks"], "check_id", ("result", "pass"), "boundary_check_missing", "boundary_check_failed"),
+    ):
+        unexpected = sorted(set(given[group]) - set(required))
+        if unexpected:
+            raise SealEvidenceError(f"给出了场景清单没有登记的{group}：{unexpected}")
+        for item in required:
+            entry = given[group].get(item)
+            if entry is None:
+                reasons.append(missing)
+                summary[group][item] = {"path": None, "failed_fields": ["missing"]}
+                continue
+            wanted = {identity: item, **binding, outcome[0]: outcome[1]}
+            failed = sorted(field for field, value in wanted.items() if not _strict_equal(entry["payload"].get(field), value))
+            if failed:
+                reasons.append(invalid)
+            summary[group][item] = {"path": entry["path"], "failed_fields": failed}
+    # 原因按「客户端收据缺失／不符、边界核对缺失／未通过」的固定顺序，各出现一次。
+    return {**summary, "reasons": list(dict.fromkeys(reasons))}
+
+
+def build_candidate_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """候选证据视图 → 封存草稿（capture manifest、候选 CaptureIndex）与闭合门禁；给出深度扫描清单时再绑定摘要。
+
+    ``view`` 除官方同名字段（``campaign_id``、``target_version``、``target_sha256``、``runtime_image``、``attempt``、
+    ``scenarios``、``labels_path``、``probes``／``surfaces``，路径相对宿主数据根）外另有：``side``（candidate）、
+    ``candidate_id``、``jobs[].candidate_steps``（probe → 步骤冻结的 run-id、候选账号与 API Key 的 ID、中继端口、触发方式）、
+    ``gateway_base_url``、``scenario_plan_ids``（Store 的 VC-3 ScenarioPlan 场景全集）、``client_evidence``（客户端收据与
+    边界核对收据：ID → ``{path, payload}``）与 ``draft_paths``（草稿相对宿主数据根的路径）。
+    """
+
+    segment = _capture_segment(
+        view,
+        extra_checks=lambda probe_view, job, probe: _candidate_probe_checks(view, probe_view, job, probe),
+        index_extra=_candidate_index_extra,
+    )
+    plan_ids = sorted(view["scenario_plan_ids"])
+    covered = {scenario for items in segment["evidence_probes"].values() for item in items for scenario in item["scenario_ids"]}
+    uncovered = sorted(set(plan_ids) - covered)
+    client = _candidate_client_evidence(view)
+    reasons = [
+        reason
+        for reason, present in (
+            ("capture_index_failed", bool(segment["failures"])),
+            ("label_mismatch", bool(segment["mismatches"])),
+            ("scenario_uncovered", bool(uncovered)),
+        )
+        if present
+    ]
+    reasons.extend(client["reasons"])
+    closure = {"status": "blocked" if reasons else "closed", "reasons": reasons}
+    attempt = dict(view["attempt"])
+    artifacts = segment["artifacts"]
+    drafts = {
+        "capture_manifest": {
+            "schema_version": CAPTURE_MANIFEST_SCHEMA,
+            "side": CANDIDATE_SIDE,
+            "campaign_id": view["campaign_id"],
+            "candidate_id": view["candidate_id"],
+            "target_version": view["target_version"],
+            "attempt": attempt,
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts,
+            "label_mismatches": segment["mismatches"],
+        },
+        "capture_index": {
+            "schema_version": CANDIDATE_CAPTURE_INDEX_SCHEMA,
+            "side": CANDIDATE_SIDE,
+            "campaign_id": view["campaign_id"],
+            "candidate_id": view["candidate_id"],
+            "target_version": view["target_version"],
+            "target_sha256": view["target_sha256"],
+            "runtime_image": view["runtime_image"],
+            "gateway_base_url": view["gateway_base_url"],
+            "attempt": attempt,
+            "jobs": segment["index_jobs"],
+            "failures": segment["failures"],
+            "scenario_plan": {"scenario_ids": plan_ids, "uncovered": uncovered},
+            "client_evidence": {group: client[group] for group in ("client_bindings", "boundary_checks")},
+            "network_inventory": {"host_prefilter_disabled": True, "surfaces": list(view["surfaces"])},
+            "result": "failed" if segment["failures"] else "passed",
+        },
+    }
+    result: dict[str, Any] = {
+        "drafts": drafts,
+        "closure": closure,
+        "metrics": {
+            "probe_count": sum(len(job["probe_ids"]) for job in view["jobs"]),
+            "passed_probe_count": len(segment["evidence_probes"]),
+            "artifact_count": len(artifacts),
+            "scenario_count": len(plan_ids),
+            "uncovered_scenario_count": len(uncovered),
+        },
+    }
+    if inventory is not None:
+        result["seal"] = _bind_candidate_seal(view, segment, inventory)
+    return result
+
+
+def _bind_candidate_seal(
+    view: Mapping[str, Any],
+    segment: Mapping[str, Any],
+    inventory: Mapping[str, Any],
+) -> dict[str, Any]:
+    """绑定摘要：场景证据、逐 probe 的恢复与秘密扫描运行证据、原始证据清单、capture manifest 与客户端收据。"""
+
+    if inventory.get("schema_version") != EVIDENCE_INVENTORY_SCHEMA or not isinstance(inventory.get("entries"), list):
+        raise SealEvidenceError("深度扫描清单合同名不符。")
+    index = {entry["path"]: entry for entry in inventory["entries"]}
+    scenario_evidence: dict[str, list[dict[str, Any]]] = {}
+    for scenario in sorted(view["scenario_plan_ids"]):
+        paths = sorted(
+            {item["path"] for items in segment["evidence_probes"].values() for item in items if scenario in item["scenario_ids"]}
+        )
+        if paths:
+            scenario_evidence[scenario] = [_inventory_binding(index, path, "场景证据文件") for path in paths]
+    recovery: list[dict[str, Any]] = []
+    secret_scan: list[dict[str, Any]] = []
+    for job in view["jobs"]:
+        job_id = str(job["job_id"])
+        for probe in job["probe_ids"]:
+            probe_view = view["probes"].get(probe)
+            if probe_view is None:
+                continue
+            expected = job["candidate_steps"][probe]
+            restoration = probe_view.get("restoration")
+            failed = _restoration_failures(probe_view, expected, probe)
+            facts: dict[str, Any] = {"result": "fail" if failed else "pass", "job_id": job_id, "failed_fields": failed}
+            if restoration is not None:
+                facts["report"] = _inventory_binding(index, restoration["path"], "候选恢复报告")
+            recovery.append({"id": f"restoration-{probe}", "facts": facts})
+            removed = restoration is not None and restoration["payload"].get("runtime_secrets_removed") is True
+            scanned = probe_view["manifest"]["secret_scan_passed"] is True
+            secret_scan.append(
+                {
+                    "id": f"secret-scan-{probe}",
+                    "facts": {
+                        "result": "pass" if scanned and removed else "fail",
+                        "job_id": job_id,
+                        "relay_manifest": _inventory_binding(index, f"{probe_view['directory']}/{RELAY_MANIFEST_FILENAME}", "候选中继清单"),
+                        "relay_secret_scan_passed": scanned,
+                        "runtime_secrets_removed": removed,
+                    },
+                }
+            )
+    bindings = {
+        group: {item: _inventory_binding(index, entry["path"], f"{group} 收据") for item, entry in view["client_evidence"][group].items()}
+        for group in ("client_bindings", "boundary_checks")
+    }
+    return {
+        "scenario_evidence": scenario_evidence,
+        "operational_evidence": {
+            "recovery": sorted(recovery, key=lambda item: item["id"]),
+            "secret_scan": sorted(secret_scan, key=lambda item: item["id"]),
+        },
+        "raw_evidence_inventory": [{"path": entry["path"], "sha256": entry["sha256"], "bytes": entry["bytes"]} for entry in inventory["entries"]],
+        "capture_manifest": _inventory_binding(index, str(view["draft_paths"]["capture_manifest"]), "capture manifest 草稿"),
+        "client_evidence": bindings,
         "inventory_digest": inventory["digest"],
         "scanned_bytes": inventory["total_bytes"],
     }

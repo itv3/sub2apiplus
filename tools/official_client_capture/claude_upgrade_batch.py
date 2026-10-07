@@ -18,7 +18,9 @@ VC-0 交接链）在 ``claude_upgrade_vc``。
 * ``stage-profile``（别名 ``profile``）：B3-03 的 ``profile/result.json``（``claude_upgrade_profile.load_stage_result``），
   同样要求 VC-3 checkpoint 已绑定。Codex 的 VC-3 没有阶段结果，``_stage_path`` 照搬 Codex 不认识这个阶段，所以在这里
   先于 ``_stage_path`` 分流；``prepare-profile`` 的准备结果不是阶段结果，读侧是 ``claude_upgrade_profile.load_prepare_result``。
-* 候选级三阶段报待实现，写明工作项（B4-02／B4-03／B4-06）。
+* ``capture-candidate``：B4-02 的候选阶段结果（``claude_upgrade_candidate_seal.load_stage_result``），候选 seal 批准时先写
+  Store（到 candidate_sealed）再写它，所以存在即已封存；路径按 ``_stage_path``（b≥1 按评估基线的读来源）。
+* compare／accept 两个候选级阶段报待实现，写明工作项（B4-03／B4-06）。
 
 二、评估阶段路径（服务面 ``_stage_read_source``／``_stage_write_target``）
 =====================================================================
@@ -136,7 +138,6 @@ DEFAULT_ACTION_TIMEOUT_SECONDS = 900
 # 一、阶段结果
 PROFILE_STAGE_NAMES = frozenset({"stage-profile", "profile"})
 CANDIDATE_STAGE_WORK_ITEMS: Mapping[str, str] = {
-    "capture-candidate": "B4-02（候选证据四阶段封存）",
     "compare": "B4-03（Claude 评估器）",
     "accept": "B4-06（accept 门禁 Claude 版）",
 }
@@ -274,6 +275,13 @@ def load_stage_result(
         from tools.official_client_capture import claude_upgrade_seal
 
         return claude_upgrade_seal.load_stage_result(campaign_dir, path, manifest=manifest)
+    if canonical == "capture-candidate":
+        # B4-02：候选阶段结果（``candidates/<cid>/result.json``，b≥1 按评估基线的读来源）由候选 seal 批准写出。
+        from tools.official_client_capture import claude_upgrade_candidate_seal
+
+        if not isinstance(candidate_id, str):
+            raise ConfigurationError("capture-candidate 必须提供 candidate-id。")
+        return claude_upgrade_candidate_seal.load_stage_result(campaign_dir, path, candidate_id, manifest=manifest)
     if candidate_id is not None:
         raise ConfigurationError(f"{canonical} 是 Campaign 级阶段，不接受 candidate-id。")
     current = orchestrator._require_formal_campaign(campaign_dir, dict(manifest) if manifest is not None else None)

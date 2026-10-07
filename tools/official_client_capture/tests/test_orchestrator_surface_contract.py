@@ -139,11 +139,15 @@ class SurfaceContractTests(unittest.TestCase):
         # 候选恢复段（B4-05b）仍各自报待实现。
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status（候选阶段）：由 B4-01"):
             claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
-        for stage, work_item in (("capture-candidate", "B4-02"), ("compare", "B4-03"), ("accept", "B4-06")):
+        for stage, work_item in (("compare", "B4-03"), ("accept", "B4-06")):
             with self.subTest(stage=stage), self.assertRaisesRegex(
                 claude_upgrade.ClaudeOrchestratorPending, rf"_load_stage_result（{stage}）：由 {work_item}"
             ):
                 claude_upgrade._load_stage_result(Path("/nonexistent"), stage, "c1")
+        # B4-02 落实候选阶段结果：不存在的 Campaign 失败关闭（配置错误，不是待实现异常）。
+        with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
+            claude_upgrade._load_stage_result(Path("/nonexistent"), "capture-candidate", "c1")
+        self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
         # b≥1 不再报待实现：按评估基线 COMMIT 解析，COMMIT 不存在即失败关闭（不是待实现异常）。
         with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"评估基线 b1 没有 COMMIT") as caught:
             claude_upgrade._stage_read_source(Path("/nonexistent"), "c1", 1, "compare")

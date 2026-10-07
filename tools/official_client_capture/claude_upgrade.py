@@ -3899,8 +3899,10 @@ def _campaign_contamination_facts(
 
     记录 ID 与 Codex 同一口径：``campaign-marker``（marker）与 ``official:<attempt>:attempt``（attempt 收据状态
     ``environment_contaminated``）。B2-06 的 run 在任一采集容器（抓包或断网）前后探针漂移、或任一侧残留取证进程时
-    写下这两项；残留进程即污染这一判定不在这里放宽。候选侧事实（候选 seal 失败收据、恢复段污染、metadata-only 修复
-    后的冗余标记）由 B4-02／B4-05 落实：出现候选 attempt 或官方 attempt 下的 seal 失败收据即失败关闭。
+    写下这两项；残留进程即污染这一判定不在这里放宽。候选 attempt（B4-02）与官方同一口径：预约收据必须可读，attempt 收据
+    状态为 ``environment_contaminated`` 即记 ``<candidate>:<attempt>:attempt``。Claude 的候选 seal 是零请求封存、没有 Codex
+    那种 Kilo 后环境恢复门禁，不产出 seal 失败收据：任一 attempt 下出现 ``seal-failure.json`` 即失败关闭、先人工审计。候选
+    attempt 恢复段的污染事实随 B4-05b 落实，出现恢复段目录即报待实现。
     """
 
     facts: list[dict[str, Any]] = []
@@ -3924,8 +3926,8 @@ def _campaign_contamination_facts(
             )
         )
     for phase, current_candidate_id, attempt_root in _campaign_attempt_roots(campaign_dir):
-        if phase != "official":
-            raise _pending("候选 attempt 的环境污染事实", "B4-02（候选证据四阶段封存）")
+        if phase != "official" and (attempt_root / ATTEMPT_RECOVERY_DIRNAME).exists():
+            raise _pending("候选 attempt 恢复段的环境污染事实", "B4-05b（候选 attempt 恢复段）")
         _load_capture_reservation(
             campaign_dir,
             attempt_root,
@@ -3959,7 +3961,9 @@ def _campaign_contamination_facts(
                 )
         seal_failure = attempt_root / "seal-failure.json"
         if seal_failure.exists() or seal_failure.is_symlink():
-            raise ConfigurationError("官方 attempt 下出现了只属于候选 seal 的失败收据（seal-failure.json），先人工审计。")
+            if phase == "official":
+                raise ConfigurationError("官方 attempt 下出现了只属于候选 seal 的失败收据（seal-failure.json），先人工审计。")
+            raise ConfigurationError("候选 attempt 下出现了 Claude 候选 seal 不产出的失败收据（seal-failure.json），先人工审计。")
     return facts
 
 
@@ -5039,6 +5043,11 @@ def _build_parser() -> argparse.ArgumentParser:
                 claude_upgrade_profile.add_stage_arguments(target)
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
+        if name == "capture-candidate":
+            # seal 的参数（B4-02）：attempt、批准摘要与批准人、客户端收据；run 的参数随 B4-01 b 段。
+            from tools.official_client_capture import claude_upgrade_candidate_seal
+
+            claude_upgrade_candidate_seal.add_seal_arguments(target)
         if name == "plan-candidate-gates":
             # 候选源码树、树内映射与计划输出（与 Codex 同名同义；三者都不给时是需求预览），B3-04。
             from tools.official_client_capture import claude_upgrade_candidate
@@ -5309,6 +5318,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_seal
 
             result, return_code = claude_upgrade_seal.seal_command(arguments)
+        elif arguments.command == "capture-candidate" and arguments.capture_action == "seal":
+            from tools.official_client_capture import claude_upgrade_candidate_seal
+
+            result, return_code = claude_upgrade_candidate_seal.seal_command(arguments)
         elif arguments.command == "analyze-target":
             from tools.official_client_capture import claude_upgrade_static
 
