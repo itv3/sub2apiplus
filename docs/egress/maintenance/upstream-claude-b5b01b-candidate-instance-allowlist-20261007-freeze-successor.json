@@ -1,0 +1,107 @@
+{
+  "base_commit": "350918d624e577d8e193bf1951bc72f197fce856",
+  "changed_path_count": 31,
+  "current_commit": "b699ace1b6e42d34f5f14d65446710781402eae0",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5865,
+  "frozen_path_count": 2015,
+  "identity_sha256": "05bf09d3fa4e778fbbbc1f2d80cc466adda41349c97e31fd8257870723a5c677",
+  "issued_at_utc": "2026-10-07T20:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-b5b01b-candidate-instance-allowlist-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256s": [
+        "34cd6ee8e65a40a1cbd97b43994d96aefc3a91e485c64fd1908d7a6800808ae9"
+      ],
+      "reason": "Claude 升级 B5b-01b：Claude FW-G 候选开关的实例校验改为登记隔离实例允许名单 {DMIT, ARM64} path=backend/internal/config/config.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "17955f0941ac2889fabbc8f5fcb41b69ea49476c61db8a7ba8b69f1c7ae015d3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config_test.go",
+      "predecessor_sha256s": [
+        "e0b925f13007c3b4ae4958b6ea9194360aaded88c43764607c4cf2c994b0ba6e"
+      ],
+      "reason": "Claude 升级 B5b-01b：Claude FW-G 候选开关的实例校验改为登记隔离实例允许名单 {DMIT, ARM64} path=backend/internal/config/config_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b1a35ad60fdde8d5c533179f8080633acf392fabf999531c7454b89847d7d81f"
+    }
+  ],
+  "unregistered_path_count": 29,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/build_gate_facts.py",
+    "tools/arm64_capture_driver/driver/claude_vc5.py",
+    "tools/arm64_capture_driver/driver/client_table.py",
+    "tools/arm64_capture_driver/driver/gen_vc5_plans.py",
+    "tools/arm64_capture_driver/driver/lib.sh",
+    "tools/arm64_capture_driver/driver/phase_context.py",
+    "tools/arm64_capture_driver/driver/vc5-accept.sh",
+    "tools/arm64_capture_driver/driver/vc5-all.sh",
+    "tools/arm64_capture_driver/driver/vc5-canonical2.sh",
+    "tools/arm64_capture_driver/driver/vc5-claude-accept.sh",
+    "tools/arm64_capture_driver/driver/vc5-claude-seal.sh",
+    "tools/arm64_capture_driver/driver/vc5-claude-start.sh",
+    "tools/arm64_capture_driver/driver/vc5-claude-switch.sh",
+    "tools/arm64_capture_driver/driver/vc5-kilo.sh",
+    "tools/arm64_capture_driver/driver/vc5-precheck.sh",
+    "tools/arm64_capture_driver/driver/vc5-recover.sh",
+    "tools/arm64_capture_driver/driver/vc5-seal-receipts.sh",
+    "tools/arm64_capture_driver/driver/vc5-seal.sh",
+    "tools/arm64_capture_driver/driver/vc5-start.sh",
+    "tools/arm64_capture_driver/driver/vc5-switch.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/client_table.py",
+    "tools/official_client_capture/claude_upgrade_candidate_seal.py",
+    "tools/official_client_capture/tests/claude_vc5_chain_fixture.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_candidate_seal_evidence.py",
+    "tools/official_client_capture/tests/test_claude_vc5_driver.py",
+    "tools/official_client_capture/tests/test_driver_client_table.py",
+    "tools/official_client_capture/tests/test_driver_client_table_codex_parity.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
