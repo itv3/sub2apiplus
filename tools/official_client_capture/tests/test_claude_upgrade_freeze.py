@@ -3,6 +3,10 @@
 网络读取全部由替身提供：测试现场生成一把 ECDSA P-256 密钥，按 npm Registry 的签名口径
 （``<package>@<version>:<integrity>``）给合成 tarball 签名，所以 sha512 SRI、sha1 与签名校验走的是真实代码路径；
 合成的 ELF64 二进制只带冻结判定需要的 ELF 头与 ``PT_INTERP``。
+
+复核（B5a-09）：``verify_freeze_receipt`` 对真实冻结流程的产物逐项通过且不写文件；本轮登记值（目标版本、目标二进制
+摘要、冻结收据摘要）不符、两渠道不一致、冻结目录里任一登记文件被改、缺失、换成符号链接或登记路径越出冻结目录时
+都拒绝；``verify`` 子命令与原有不带子命令的冻结用法并存。``freeze_fixture`` 供 plan 审计测试复用。
 """
 
 from __future__ import annotations
@@ -13,8 +17,10 @@ import gzip
 import hashlib
 import io
 import json
+import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -298,6 +304,160 @@ class FreezeOfficialReleaseTests(unittest.TestCase):
         summary = json.loads(output.getvalue())
         self.assertEqual((summary["target_version"], summary["binary_equivalence"]), (VERSION, "npm=gcs"))
         self.assertEqual(summary["freeze_sha256"], claude_fw_e.sha256_file(target / "freeze.json"))
+
+
+
+def freeze_fixture(output_root: Path, *, signer: _Signer, binary: bytes | None = None, version: str | None = None) -> Path:
+    """在 ``output_root``（不存在的绝对路径）按真实冻结流程冻结一份两渠道等价的合成官方制品，返回 ``freeze.json``。
+
+    ``version`` 缺省为本模块的 ``VERSION``；给出时 Registry 替身整体换成该版本（plan 审计测试按真实场景清单的目标版本冻结）。"""
+
+    data = binary if binary is not None else _elf(GLIBC)
+    with mock.patch.object(sys.modules[__name__], "VERSION", version or VERSION):
+        registry = _Registry(signer, npm_binary=data, native_binary=data)
+        with mock.patch.object(freeze_module, "_http_get", registry):
+            freeze_module.freeze_official_release(output_root, clock=_clock())
+    return output_root / "freeze.json"
+
+
+class FreezeVerificationTests(unittest.TestCase):
+    """B5a-09：只读复核已有冻结目录（入口便宜检查 official-package 与 plan --audit-only 共用），不联网、不写文件。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._keys = tempfile.TemporaryDirectory()
+        cls.signer = _Signer(Path(cls._keys.name))
+        cls._frozen = tempfile.TemporaryDirectory()
+        cls.binary = _elf(GLIBC)
+        cls.source = freeze_fixture(Path(cls._frozen.name).resolve() / "freeze", signer=cls.signer, binary=cls.binary)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._frozen.cleanup()
+        cls._keys.cleanup()
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.copies = 0
+
+    def _fresh(self) -> Path:
+        """冻结产物的一份独立副本（每个篡改用例各用一份），返回副本里的 freeze.json。"""
+
+        self.copies += 1
+        root = self.base / f"freeze-{self.copies}"
+        shutil.copytree(self.source.parent, root, symlinks=True)
+        return root / "freeze.json"
+
+    @staticmethod
+    def _rewrite(freeze: Path, change: Callable[[dict[str, Any]], None]) -> None:
+        payload = json.loads(freeze.read_text(encoding="utf-8"))
+        change(payload)
+        freeze.write_text(json.dumps(payload), encoding="utf-8")
+
+    @staticmethod
+    def _tree(root: Path) -> dict[str, tuple[str, int]]:
+        return {str(path.relative_to(root)): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode)
+                for path in sorted(root.rglob("*")) if path.is_file()}
+
+    def _expected(self, freeze: Path) -> dict[str, str]:
+        return {"expected_version": VERSION, "expected_binary_sha256": hashlib.sha256(self.binary).hexdigest(),
+                "expected_freeze_sha256": hashlib.sha256(freeze.read_bytes()).hexdigest()}
+
+    def test_verifies_real_freeze_output_without_writes(self) -> None:
+        freeze = self._fresh()
+        before = self._tree(freeze.parent)
+        result = freeze_module.verify_freeze_receipt(freeze, **self._expected(freeze))
+        self.assertEqual(self._tree(freeze.parent), before)
+        self.assertEqual((result["schema_version"], result["status"]), (freeze_module.FREEZE_VERIFICATION_SCHEMA, "passed"))
+        self.assertEqual((result["target_version"], result["platform"], result["binary_equivalence"]), (VERSION, "linux/arm64", "npm=gcs"))
+        self.assertEqual((result["files_written"], result["network_requests"]), (0, 0))
+        self.assertEqual(result["binary_bytes"], len(self.binary))
+        self.assertEqual(result["elf"]["libc"], "glibc")
+        self.assertEqual([item["role"] for item in result["verified_files"]], [
+            "Registry 快照", f"npm tarball {freeze_module.MAIN_PACKAGE}", f"npm tarball {PLATFORM_PACKAGE}",
+            "原生分发 manifest", "平台二进制",
+        ])
+        # 不给本轮登记值时只核收据与冻结目录自身的一致性。
+        self.assertEqual(freeze_module.verify_freeze_receipt(freeze)["binary_sha256"], hashlib.sha256(self.binary).hexdigest())
+
+    def test_rejections(self) -> None:
+        dashed = "linux-arm64"
+
+        def tamper(relative: str) -> Callable[[Path], None]:
+            return lambda freeze: (freeze.parent / relative).write_bytes((freeze.parent / relative).read_bytes() + b"x")
+
+        def remove(relative: str) -> Callable[[Path], None]:
+            return lambda freeze: (freeze.parent / relative).unlink()
+
+        def symlink(relative: str) -> Callable[[Path], None]:
+            def change(freeze: Path) -> None:
+                target = freeze.parent / relative
+                moved = freeze.parent / "moved.json"
+                target.rename(moved)
+                target.symlink_to(moved)
+            return change
+
+        def rewrite(change: Callable[[dict[str, Any]], None]) -> Callable[[Path], None]:
+            return lambda freeze: self._rewrite(freeze, change)
+
+        def both_rows(field: str, value: Any) -> Callable[[dict[str, Any]], None]:
+            def change(payload: dict[str, Any]) -> None:
+                for channel in ("npm", "gcs"):
+                    payload["binaries"]["linux/arm64"][channel][field] = value
+            return change
+
+        tarball = f"official/{claude_fw_e._safe_package_name(PLATFORM_PACKAGE)}-{VERSION}.tgz"
+        cases: dict[str, tuple[Callable[[Path], None] | None, dict[str, Any], str]] = {
+            "目标版本不符": (None, {"expected_version": "2.1.299"}, "不是本轮目标版本"),
+            "目标二进制摘要不符": (None, {"expected_binary_sha256": "0" * 64}, "不是本轮登记的目标二进制摘要"),
+            "冻结收据摘要不符": (None, {"expected_freeze_sha256": "0" * 64}, "与登记值"),
+            "登记值不是摘要": (None, {"expected_binary_sha256": "REPLACE_ME"}, "不是完整的小写 SHA-256"),
+            "两渠道不一致": (rewrite(lambda p: p.update(binary_equivalence="divergent")), {}, "两渠道二进制不一致"),
+            "合同不符": (rewrite(lambda p: p.update(schema_version="claude-code-fw-e-official-freeze/v1")), {}, "合同不是"),
+            "平台不符": (rewrite(lambda p: p.update(platforms=["darwin/arm64"])), {}, "平台"),
+            "dist-tag 首尾不符": (rewrite(lambda p: p.update(dist_tag_at_end="2.1.301")), {}, "dist-tag 首尾"),
+            "producer 不是冻结工具": (rewrite(lambda p: p["producer"].update(path="tools/x.py")), {}, "producer"),
+            "二进制被改": (tamper(f"binaries/{dashed}/claude"), {}, "平台二进制 摘要"),
+            "Registry 快照被改": (tamper("registry-snapshot.json"), {}, "Registry 快照 摘要"),
+            "manifest 被改": (tamper("native/manifest.json"), {}, "原生分发 manifest 摘要"),
+            "tarball 缺失": (remove(tarball), {}, "缺少"),
+            "manifest 换成符号链接": (symlink("native/manifest.json"), {}, "符号链接"),
+            "登记路径越出冻结目录": (rewrite(lambda p: p.update(registry_snapshot_path="../registry-snapshot.json")), {}, "规范相对路径"),
+            "ELF 记录不符": (rewrite(both_rows("elf", {"class": "ELF64", "machine": "aarch64", "interpreter": MUSL, "libc": "musl"})), {}, "ELF 判定"),
+            "两渠道登记不同二进制": (rewrite(lambda p: p["binaries"]["linux/arm64"]["gcs"].update(bytes=1)), {}, "同一个二进制"),
+            "npm 制品缺平台包": (rewrite(lambda p: p["npm"].update(artifacts=p["npm"]["artifacts"][:1])), {}, "主包与平台包"),
+            "manifest checksum 不符": (rewrite(lambda p: p["gcs"].update(checksum="0" * 64)), {}, "checksum"),
+        }
+        for label, (mutate, expected, message) in cases.items():
+            with self.subTest(label=label):
+                freeze = self._fresh()
+                if mutate is not None:
+                    mutate(freeze)
+                with self.assertRaisesRegex(freeze_module.FreezeError, message):
+                    freeze_module.verify_freeze_receipt(freeze, **expected)
+        with self.assertRaisesRegex(freeze_module.FreezeError, "绝对路径"):
+            freeze_module.verify_freeze_receipt(Path("relative/freeze.json"))
+        with self.assertRaisesRegex(freeze_module.FreezeError, "不存在或不是普通文件"):
+            freeze_module.verify_freeze_receipt(self.base / "missing" / "freeze.json")
+
+    def test_verify_subcommand_and_legacy_freeze_usage(self) -> None:
+        freeze = self._fresh()
+        expected = self._expected(freeze)
+        argv = ["verify", "--freeze", str(freeze), "--target-version", VERSION,
+                "--binary-sha256", expected["expected_binary_sha256"], "--freeze-sha256", expected["expected_freeze_sha256"]]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(freeze_module.main(argv), 0)
+            self.assertEqual(freeze_module.main([*argv[:4], "2.1.299"]), 1)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "passed")
+        self.assertIn("冻结目录复核未通过", stderr.getvalue())
+        registry = _Registry(self.signer, npm_binary=self.binary, native_binary=self.binary)
+        target = self.base / "legacy-freeze"
+        with mock.patch.object(freeze_module, "_http_get", registry), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(freeze_module.main(["--output-root", str(target)]), 0)
+        self.assertEqual(freeze_module.verify_freeze_receipt(target / "freeze.json")["status"], "passed")
 
 
 if __name__ == "__main__":

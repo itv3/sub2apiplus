@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -98,8 +99,11 @@ class ClientTableStructureTests(unittest.TestCase):
             referenced.update(re.findall(r"\bCT_[A-Z0-9_]+", path.read_text(encoding="utf-8")))
         self.assertTrue(referenced)
         self.assertLessEqual(referenced, emitted, "驱动脚本引用的 CT_ 变量都由客户端表给出（拼错即红）")
+        # 待接入变量取表里第一个条目作样本（条目随工作项落实删去，样本跟着表走）：本客户端已接入时为空串。
+        sample = CT.pending_names()[0]
+        variable = CT._shell_name("pending_" + sample)
         script = ('set -Eeuo pipefail\neval "$(python3 -B "$1" shell)"\n'
-                  'printf "%s|%s|%s|" "$CT_CLIENT" "$CT_ORCHESTRATOR_MODULE" "$CT_PENDING_CHECK_PLAN_AUDIT"\n'
+                  f'printf "%s|%s|%s|" "$CT_CLIENT" "$CT_ORCHESTRATOR_MODULE" "${variable}"\n'
                   'printf "[%s]" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}\necho\nenv | grep -c "^CT_" || true\n')
         environment = {key: value for key, value in os.environ.items() if key != "CLIENT"}
         for client, expected_argv in (("codex", "[]"), ("claude", "[--client][claude]")):
@@ -108,7 +112,7 @@ class ClientTableStructureTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             first, exported = completed.stdout.splitlines()
             module = CT.spec(client)["orchestrator_module"]
-            pending = CT.pending(client, "check:plan-audit") or ""
+            pending = CT.pending(client, sample) or ""
             self.assertEqual(first, f"{client}|{module}|{pending}|{expected_argv}")
             self.assertEqual(exported, "0", "只赋值、不导出：子进程看不到 CT_ 变量")
         unknown = subprocess.run([sys.executable, "-B", str(DRIVER / "client_table.py"), "shell"],
@@ -243,15 +247,18 @@ class ParseEnvClaudeTests(unittest.TestCase):
         template = (DRIVER / "env.example.sh").read_text(encoding="utf-8")
         overrides = dict(re.findall(r"^#   ([A-Z_][A-Z0-9_]*)=([^\s（]+)", template, flags=re.M))
         self.assertEqual({"CLIENT", "TARGET_PROFILE_ID", "NEW", "IN", "UP", "CAND", "BUNDLE_BRANCH", "CLIENT_BIN", "CLIENT_BIN_SHA256",
-                          "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH"}, set(overrides))
+                          "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP"},
+                         set(overrides))
         lines = []
         for line in template.splitlines():
             key = line.split("=", 1)[0]
             if key in {"KILO_BIN", "KILO_VERSION", "KILO_SHA256"}:
                 continue
             lines.append(f"{key}={overrides[key]}" if key in overrides and not line.startswith("#") else line)
-        lines += [f"{key}={value}" for key, value in overrides.items() if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE"}]
+        lines += [f"{key}={value}" for key, value in overrides.items()
+                  if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP"}]
         text = "\n".join(lines) + "\n"
+        text = text.replace("REPLACE_API_ANTHROPIC_COM_IP", "160.79.104.10")
         for placeholder in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CLAUDE_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256"):
             text = text.replace(placeholder, "a" * 64)
         text = text.replace("REPLACE_CLAUDE_ACCOUNT_ID", "17").replace("REPLACE_API_KEY_ID", "92").replace("/root/", f"{self.root}/")
@@ -261,6 +268,36 @@ class ParseEnvClaudeTests(unittest.TestCase):
         self.assertEqual(values["CLIENT"], "claude")
         self.assertTrue(values["NEW"].startswith("claude-code-9.1.0-formal-"))
         self.assertTrue(derived["TARGET_PACKAGE"].endswith("/official/claude-code-9.1.0/freeze.json"))
+        self.assertEqual(values["UPSTREAM_IP"], "160.79.104.10")
+        with self.assertRaisesRegex(self.parser.EnvFileError, "UPSTREAM_IP 必须是 IP 地址"):
+            self.parser.parse(text.replace("UPSTREAM_IP=160.79.104.10", "UPSTREAM_IP=api.anthropic.com"))
+
+    def test_plan_audit_template_uses_exported_parameters_and_real_plan_flags(self) -> None:
+        """B5a-09：Claude 的 plan-audit 参数模板只引用参数文件导出的键（UPSTREAM_IP 可缺省、由必填项报缺），展开后是 Claude
+        plan --audit-only 认得的参数。"""
+
+        from tools.official_client_capture import claude_upgrade
+
+        values = self.parser.parse(self.text)
+        exported = {**values, **self.parser.derive(values)}
+        template = CT.spec("claude")["plan_audit_argv"]
+        names = [item[1:] for item in template if item.startswith("$")]
+        self.assertTrue(names)
+        # 夹具参数文件没写的键只能是参数文件可缺省、由便宜检查的必填项报缺的那几个（UPSTREAM_IP、采集镜像）。
+        absent = set(names) - set(exported)
+        self.assertIn("UPSTREAM_IP", absent)
+        self.assertLessEqual(absent, set(self.parser.OPTIONAL_KEYS) & set(CT.spec("claude")["preflight_required"]))
+        self.assertNotIn("UPSTREAM_IP", CT.spec("codex")["preflight_required"])
+        filled = {"UPSTREAM_IP": "160.79.104.10", "CAPTURE_RUNTIME_IMAGE": "oauth-egress-capture-capture-cli@sha256:" + "b" * 64}
+        argv = [exported.get(item[1:], filled.get(item[1:])) if item.startswith("$") else item for item in template]
+        arguments = claude_upgrade._build_parser().parse_args(
+            ["plan", "--audit-only", "--campaign-dir", "/x/campaign", "--campaign-id", "c-plan-audit", *argv])
+        self.assertTrue(arguments.audit_only)
+        self.assertEqual((str(arguments.target_package), arguments.target_package_sha256),
+                         (exported["TARGET_PACKAGE"], exported["OFFICIAL_ASSET_SHA256"]))
+        self.assertEqual((arguments.target_sha256, arguments.claude_bin, arguments.upstream_ip),
+                         (exported["CLIENT_BIN_SHA256"], exported["CLIENT_BIN"], "160.79.104.10"))
+        self.assertEqual(CT.spec("codex")["plan_audit_argv"], (), "Codex 沿用脚本里的原参数形状")
 
     def test_lib_sh_gives_unexported_client_table_variables(self) -> None:
         drv = self.root / "drv"
@@ -390,13 +427,30 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
             kind, _, step_id = name.partition(":")
             if kind == "step":
                 self.assertIn(f"尚未接入：{work_item}", reasons[step_id])
-        result = self.orchestrator().orchestrate()
+        smoke_module, smoke_calls = CT.spec("claude")["zero_request_smoke_module"], []
+
+        def runner(argv, cwd, env, log):
+            # B5a-09 接入的零请求 smoke：执行客户端表登记的 Claude 模块（替身照收据合同写一份通过的收据）。
+            if smoke_module in argv:
+                smoke_calls.append(list(argv))
+                output = Path(_option(argv, "--output"))
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps({"schema_version": "zero-request-smoke/v1", "client": "claude", "status": "passed"}),
+                                  encoding="utf-8")
+                return 0
+            return self.commands(argv, cwd, env, log)
+
+        result = self.orchestrator(runner).orchestrate()
         actions = {step["step_id"]: (step["action"], step["status"], "；".join(step["reasons"])) for step in result["steps"]}
-        for step_id in ("zero-request-smoke", "atomic-double"):
-            self.assertEqual(actions[step_id][:2], ("执行", "failed"))
-            self.assertIn("B5a-09", actions[step_id][2])
+        self.assertEqual(actions["zero-request-smoke"][:2], ("执行", "passed"))
+        [smoke] = smoke_calls
+        self.assertEqual(smoke[smoke.index("-m") + 1:smoke.index("-m") + 2], [smoke_module])
+        self.assertTrue(_option(smoke, "--output").endswith(f"/audit/zero-request-smoke-{self.fx.params['STAMP']}.json"))
+        self.assertIn(f"/staging/zero-request-smoke-{self.fx.params['STAMP']}", _option(smoke, "--staging-root"))
+        self.assertEqual(actions["atomic-double"][:2], ("执行", "failed"))
+        self.assertIn(CT.pending("claude", "step:atomic-double"), actions["atomic-double"][2])
         joined = [" ".join(call) for call in self.commands.calls]
-        self.assertFalse([call for call in joined if "zero_request_smoke" in call or call.startswith("docker exec")],
+        self.assertFalse([call for call in joined if "codex_upgrade_zero_request_smoke" in call or call.startswith("docker exec")],
                          "待接入的步骤不执行，不拿 Codex 的实现顶替")
         policy = [call for call in self.commands.calls if "codex_upgrade_policy_certification" in " ".join(call)]
         self.assertEqual([call[-2:] for call in policy], [["--client", "claude"]] * 2, "策略兼容与激活认证带 --client claude")
@@ -509,15 +563,14 @@ class EntryScriptClaudeTests(unittest.TestCase):
                               env={**environment, "CLIENT": client, **env}, capture_output=True, text=True)
 
     def test_preflight_checks_follow_the_client_table(self) -> None:
-        audit = self.shell(self.function("entry-preflight.sh", "plan_audit") + "plan_audit\n", "claude")
-        self.assertEqual(audit.returncode, 1)
-        self.assertIn("plan-audit 尚未接入：B5a-09", audit.stdout)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             binary = root / "claude"
             binary.write_text(f"#!/bin/bash\necho '{TARGET} (Claude Code)'\n", encoding="utf-8")
             binary.chmod(0o700)
-            (root / "docker").write_text('#!/bin/bash\nshift 2\nexec "$@"\n', encoding="utf-8")
+            # docker 替身：容器内命令在本机执行；SYNTHETIC_SHA 给出时断网合成容器报这个摘要（模拟两个容器装的不是同一份）。
+            (root / "docker").write_text('#!/bin/bash\nif [ "$2" = capture-cli-synthetic ] && [ -n "${SYNTHETIC_SHA:-}" ]; then\n'
+                                         '  echo "$SYNTHETIC_SHA  $4"; exit 0\nfi\nshift 2\nexec "$@"\n', encoding="utf-8")
             (root / "docker").chmod(0o700)
             digest = subprocess.run(["shasum", "-a", "256", str(binary)], capture_output=True, text=True).stdout.split()[0]
             (root / "sha256sum").write_text('#!/bin/bash\nexec shasum -a 256 "$@"\n', encoding="utf-8")
@@ -526,13 +579,82 @@ class EntryScriptClaudeTests(unittest.TestCase):
             target = self.shell(self.function("entry-preflight.sh", "target_client") + "target_client\n", "claude", **env)
             self.assertEqual(target.returncode, 0, target.stdout + target.stderr)
             self.assertIn(f"登记 {digest}", target.stdout)
-            wrong = self.shell(self.function("entry-preflight.sh", "target_client") + "target_client\n", "claude",
-                               **{**env, "CLIENT_BIN_SHA256": "0" * 64})
-            self.assertNotEqual(wrong.returncode, 0)
+            self.assertIn(f"capture-cli-synthetic {digest}", target.stdout, "Claude 另核断网合成容器（B5a-09）")
+            for label, overrides in (("登记摘要不符", {"CLIENT_BIN_SHA256": "0" * 64}), ("断网容器不同", {"SYNTHETIC_SHA": "1" * 64})):
+                with self.subTest(label):
+                    wrong = self.shell(self.function("entry-preflight.sh", "target_client") + "target_client\n", "claude",
+                                       **{**env, **overrides})
+                    self.assertNotEqual(wrong.returncode, 0)
+            codex = self.shell(self.function("entry-preflight.sh", "target_client") + "target_client\n", "codex",
+                               **{**env, "CODEX_BIN": str(binary), "CODEX_BIN_SHA256": digest, "SYNTHETIC_SHA": "1" * 64})
+            self.assertEqual(codex.returncode, 0, codex.stdout + codex.stderr)
+            self.assertNotIn("capture-cli-synthetic", codex.stdout, "Codex 只核宿主机与 capture-cli")
             required = {key: "x" for key in CT.spec("claude")["preflight_required"]}
             required["P0_ROLLBACK_EVIDENCE"] = str(binary)
             check = self.shell(self.function("entry-preflight.sh", "required_parameters") + "required_parameters\n", "claude", **required)
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+    def test_plan_audit_and_official_package_run_the_claude_tools(self) -> None:
+        """B5a-09：抽出的 plan-audit 与 official-package 两项按 Claude 取值调用真实的 plan --audit-only 与冻结复核（合成冻结
+        目录、仓库里的 2.1.285 清单），通过时零写入；缺 UPSTREAM_IP、摘要不符时不通过并如实报出。Codex 的 official-package
+        仍只核源码树，不调用冻结复核。"""
+
+        from tools.official_client_capture.tests import test_claude_upgrade_freeze as freeze_tests
+
+        version = "2.1.285"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "keys").mkdir()
+            binary = freeze_tests._elf(freeze_tests.GLIBC, payload=b"claude-entry-preflight")
+            freeze = freeze_tests.freeze_fixture(root / "data" / "official" / f"claude-code-{version}", signer=freeze_tests._Signer(root / "keys"),
+                                                 binary=binary, version=version)
+            (root / "bin").mkdir()
+            (root / "bin" / "sha256sum").write_text('#!/bin/bash\nexec shasum -a 256 "$@"\n', encoding="utf-8")
+            (root / "bin" / "sha256sum").chmod(0o700)
+            (root / "out").mkdir()
+            digest = lambda path: subprocess.run(["shasum", "-a", "256", str(path)], capture_output=True, text=True).stdout.split()[0]  # noqa: E731
+            env = {
+                "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "PYTHONPATH": str(REPO_ROOT), "PYTHONDONTWRITEBYTECODE": "1",
+                "D": str(root / "data"), "OUT": str(root / "out"), "CAMPAIGN_PREFIX": f"claude-code-{version.replace('.', '_')}",
+                "BASELINE_VERSION": BASELINE, "TARGET_VERSION": version, "CLIENT_BIN": f"/opt/claude-{version}/claude",
+                "CLIENT_BIN_SHA256": hashlib.sha256(binary).hexdigest(), "TARGET_PACKAGE": str(freeze),
+                "OFFICIAL_ASSET_SHA256": digest(freeze), "CAPTURE_RUNTIME_IMAGE": "oauth-egress-capture-capture-cli@sha256:" + "b" * 64,
+                "SCENARIOS_JSON": str(OCC / f"claude_upgrade_scenarios_{version.replace('.', '_')}.json"),
+                "MAIN_MODEL": "claude-sonnet-5", "UPSTREAM_IP": "160.79.104.10",
+            }
+            audit_body = (self.function("entry-preflight.sh", "plan_audit_from_table") + self.function("entry-preflight.sh", "plan_audit")
+                          + "plan_audit\n")
+            audit = self.shell(audit_body, "claude", **env)
+            self.assertEqual(audit.returncode, 0, audit.stdout + audit.stderr)
+            result = json.loads((root / "out" / "plan-audit.json").read_text(encoding="utf-8"))
+            self.assertEqual((result["schema_version"], result["status"]), ("claude-upgrade-plan-audit/v1", "passed"))
+            self.assertEqual([item["name"] for item in result["checks"]], ["arguments", "official-package", "manifests", "jobs", "tool-identity"])
+            self.assertIn("passed   official-package", audit.stdout)
+            self.assertIn("未校验（建账本之后由 plan 校验）", audit.stdout)
+            self.assertFalse((root / "data" / "staging").exists(), "审计零写入：拟定的 Campaign 目录不会被创建")
+            missing = self.shell(audit_body, "claude", **{key: value for key, value in env.items() if key != "UPSTREAM_IP"})
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("failed   arguments", missing.stdout)
+            self.assertIn("blocked  jobs", missing.stdout)
+            package_body = self.function("entry-preflight.sh", "official_package") + "official_package\n"
+            package = self.shell(package_body, "claude", **env)
+            self.assertEqual(package.returncode, 0, package.stdout + package.stderr)
+            self.assertIn('"status": "passed"', package.stdout)
+            for label, overrides, message in (
+                ("目标二进制摘要不符", {"CLIENT_BIN_SHA256": "0" * 64}, "冻结目录复核未通过"),
+                ("冻结收据摘要不符", {"OFFICIAL_ASSET_SHA256": "0" * 64}, f"官方包 {digest(freeze)}；登记 {'0' * 64}"),
+            ):
+                with self.subTest(label):
+                    wrong = self.shell(package_body, "claude", **{**env, **overrides})
+                    self.assertEqual(wrong.returncode, 1)
+                    self.assertIn(message, wrong.stdout + wrong.stderr)
+            sources = {"BASELINE_SOURCE": str(root / "base-src"), "TARGET_SOURCE": str(root / "target-src")}
+            for value in sources.values():
+                Path(value).mkdir()
+            codex = self.shell(package_body, "codex", **{**env, **sources})
+            self.assertEqual(codex.returncode, 0, codex.stdout + codex.stderr)
+            self.assertIn("基线与目标源码树就位", codex.stdout)
+            self.assertNotIn('"status"', codex.stdout, "Codex 不调用冻结复核")
 
     def test_entry_gates_and_guard_bind_the_client(self) -> None:
         gates = (DRIVER / "entry-gates.sh").read_text(encoding="utf-8")

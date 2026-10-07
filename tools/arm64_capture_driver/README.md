@@ -148,6 +148,11 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   不读账本、不写文件）；`environment-probe`：ARM64 环境收据在临时目录试采并封存，结束即删除。
 * 零请求：不建账本、不建 Campaign、不签收据。计时账本、checkpoint、环境收据与 VC 控制制品在建账本之后才有，
   由 stage1 建预检 Campaign 时的 plan 照旧校验。
+* Claude（B5a-09，`CLIENT=claude`，取值见客户端表）：`required-parameters` 另要 `UPSTREAM_IP`（场景清单的必需 Campaign
+  变量 `upstream_ip`）；`target-client` 另核断网合成容器 `capture-cli-synthetic` 内同一路径的摘要；`official-package`
+  没有源码树，按 B2-01 冻结合同只读复核目标版本的冻结目录（`claude_upgrade_freeze verify`：收据合同、目标版本、两渠道
+  等价、二进制摘要等于 `CLIENT_BIN_SHA256`、目录内每个登记文件的摘要）；`plan-audit` 调 `claude_upgrade plan --audit-only`
+  （参数、官方包、规则／场景清单／证据标签与 Job 展开、工具身份并与 Store 现算身份按值比对），参数形状取客户端表的模板。
 
 ## pre-A3 路径认证：按场景并行（E2-03），从单元执行记录签发（E3-02）
 

@@ -18,6 +18,13 @@
 产物写入一个此前不存在的目录（先写同级暂存目录，完成后整体改名，失败即删除暂存），``freeze.json`` 合同为
 ``claude-code-fw-e-official-freeze/v2``。``claude_fw_e.py freeze``（v1，x86_64／darwin 两平台）只读保留，不修改。
 Campaign 层面的条件（entrypoint、隐私模式、账号与模型）由 VC-0 总计划冻结，不写进本收据。
+
+**复核**（B5a-09，``verify`` 子命令与 ``verify_freeze_receipt``）：入口便宜检查 ``official-package`` 与
+``claude_upgrade plan --audit-only`` 的官方包一项读已有的冻结目录，不联网、不写任何文件，逐项核对——收据合同与
+平台、目标版本、两渠道等价（``divergent`` 即拒绝：VC-0 不得据此建 Formal Campaign）、``binary_sha256`` 等于本轮登记的
+目标二进制摘要，以及冻结目录里每个登记文件（Registry 快照、两个 npm tarball、原生分发 manifest、平台二进制）的
+摘要与字节数等于收据登记值、二进制的 ELF 判定等于收据记录且为 glibc。冻结目录只认收据所在目录，登记路径必须是
+目录内的相对路径、不得经过符号链接。
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 if __package__ in {None, ""}:
@@ -43,6 +50,9 @@ from tools.official_client_capture import claude_fw_e
 
 FREEZE_SCHEMA = "claude-code-fw-e-official-freeze/v2"
 REGISTRY_SNAPSHOT_SCHEMA = "claude-code-fw-e-registry-snapshot/v2"
+# 复核结论（只输出、不落盘）：入口便宜检查与 plan --audit-only 打印它。
+FREEZE_VERIFICATION_SCHEMA = "claude-code-fw-e-official-freeze-verification/v1"
+PRODUCER_PATH = "tools/official_client_capture/claude_upgrade_freeze.py"
 MAIN_PACKAGE = claude_fw_e.MAIN_PACKAGE
 PACKAGE_BINARY_MEMBER = claude_fw_e.PACKAGE_BINARY_MEMBER
 NATIVE_BASE_URL = "https://downloads.claude.ai/claude-code-releases"
@@ -419,6 +429,195 @@ def freeze_official_release(
         raise
 
 
+# --------------------------------------------------------------------------- 复核（B5a-09）
+
+
+def _freeze_member(root: Path, relative: Any, label: str) -> Path:
+    """冻结目录内登记的相对路径：只能是目录内的普通文件，路径上任何一段都不得是符号链接。"""
+
+    if not isinstance(relative, str) or not relative:
+        raise FreezeError(f"冻结收据的 {label} 路径缺失")
+    pure = PurePosixPath(relative)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts) or relative != pure.as_posix():
+        raise FreezeError(f"冻结收据的 {label} 路径必须是冻结目录内的规范相对路径：{relative!r}")
+    current = root
+    for part in pure.parts:
+        current = current / part
+        if current.is_symlink():
+            raise FreezeError(f"冻结目录里的 {label} 经过符号链接：{relative}")
+    if not current.is_file():
+        raise FreezeError(f"冻结目录里缺少 {label}：{relative}")
+    return current
+
+
+def _require_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not claude_fw_e.SHA256_RE.fullmatch(value):
+        raise FreezeError(f"{label} 不是完整的小写 SHA-256：{value!r}")
+    return value
+
+
+def verify_freeze_receipt(
+    freeze_path: Path,
+    *,
+    expected_version: str | None = None,
+    expected_binary_sha256: str | None = None,
+    expected_freeze_sha256: str | None = None,
+    platform: str = "linux/arm64",
+) -> dict[str, Any]:
+    """只读复核一个已有的冻结目录（``freeze.json`` 及其登记的全部文件），返回复核结论；任一项不符即 ``FreezeError``。
+
+    不联网、不写文件。``expected_*`` 给出时分别核对目标版本、目标二进制摘要（本轮参数的 ``CLIENT_BIN_SHA256``）与
+    冻结收据自身的摘要（本轮参数的 ``OFFICIAL_ASSET_SHA256``）。``binary_equivalence`` 不是 ``npm=gcs`` 一律拒绝：
+    两渠道不一致的冻结不能作为本轮官方来源。
+    """
+
+    if platform not in PLATFORMS:
+        raise FreezeError(f"不支持的冻结平台：{platform}（已登记：{sorted(PLATFORMS)}）")
+    freeze_path = Path(freeze_path)
+    if not freeze_path.is_absolute():
+        raise FreezeError("冻结收据路径必须是绝对路径")
+    if freeze_path.is_symlink() or not freeze_path.is_file():
+        raise FreezeError(f"冻结收据不存在或不是普通文件：{freeze_path}")
+    root = freeze_path.parent
+    if root.is_symlink():
+        raise FreezeError(f"冻结目录是符号链接：{root}")
+    raw = freeze_path.read_bytes()
+    freeze_sha256 = hashlib.sha256(raw).hexdigest()
+    if expected_freeze_sha256 is not None and freeze_sha256 != _require_sha256(expected_freeze_sha256, "登记的冻结收据摘要"):
+        raise FreezeError(f"冻结收据摘要 {freeze_sha256} 与登记值 {expected_freeze_sha256} 不一致")
+    try:
+        freeze = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise FreezeError("冻结收据不是合法 JSON") from error
+    if not isinstance(freeze, dict) or freeze.get("schema_version") != FREEZE_SCHEMA:
+        raise FreezeError(f"冻结收据合同不是 {FREEZE_SCHEMA}")
+    version = freeze.get("target_version")
+    if not isinstance(version, str) or not claude_fw_e.VERSION_RE.fullmatch(version):
+        raise FreezeError(f"冻结收据的 target_version 不是三段版本：{version!r}")
+    if expected_version is not None and version != expected_version:
+        raise FreezeError(f"冻结收据的目标版本 {version} 不是本轮目标版本 {expected_version}")
+    if freeze.get("platforms") != [platform]:
+        raise FreezeError(f"冻结收据的平台 {freeze.get('platforms')!r} 不是 [{platform!r}]")
+    if (freeze.get("dist_tag_at_start"), freeze.get("dist_tag_at_end")) != (version, version):
+        raise FreezeError("冻结收据记录的 npm dist-tag 首尾版本与目标版本不一致")
+    if freeze.get("binary_equivalence") != "npm=gcs":
+        raise FreezeError(
+            f"冻结收据的两渠道二进制不一致（binary_equivalence={freeze.get('binary_equivalence')!r}）：不能作为本轮官方来源"
+        )
+    binary_sha256 = _require_sha256(freeze.get("binary_sha256"), "冻结收据的 binary_sha256")
+    if expected_binary_sha256 is not None and binary_sha256 != _require_sha256(expected_binary_sha256, "登记的目标二进制摘要"):
+        raise FreezeError(f"冻结收据的 binary_sha256 {binary_sha256} 不是本轮登记的目标二进制摘要 {expected_binary_sha256}")
+    producer = freeze.get("producer")
+    if not isinstance(producer, dict) or producer.get("path") != PRODUCER_PATH:
+        raise FreezeError("冻结收据的 producer 不是本冻结工具")
+    verified: list[dict[str, Any]] = []
+    unchecked = object()
+
+    def member(relative: Any, label: str, *, sha256: Any, size: Any = unchecked) -> Path:
+        path = _freeze_member(root, relative, label)
+        digest = claude_fw_e.sha256_file(path)
+        if digest != _require_sha256(sha256, f"冻结收据登记的 {label} 摘要"):
+            raise FreezeError(f"冻结目录里的 {label} 摘要与收据登记值不一致：{relative}")
+        if size is not unchecked and (
+            not isinstance(size, int) or isinstance(size, bool) or path.stat().st_size != size
+        ):
+            raise FreezeError(f"冻结目录里的 {label} 字节数与收据登记值不一致：{relative}")
+        verified.append({"role": label, "path": str(relative), "sha256": digest})
+        return path
+
+    snapshot_path = member(freeze.get("registry_snapshot_path"), "Registry 快照", sha256=freeze.get("registry_snapshot_sha256"))
+    try:
+        snapshot = json.loads(snapshot_path.read_bytes())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise FreezeError("Registry 快照不是合法 JSON") from error
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != REGISTRY_SNAPSHOT_SCHEMA:
+        raise FreezeError(f"Registry 快照合同不是 {REGISTRY_SNAPSHOT_SCHEMA}")
+    if snapshot.get("dist_tag_at_end") != version or snapshot.get("dist_tag") != freeze.get("dist_tag"):
+        raise FreezeError("Registry 快照记录的 dist-tag 与冻结收据不一致")
+
+    spec = PLATFORMS[platform]
+    npm = freeze.get("npm")
+    if not isinstance(npm, dict) or npm.get("platform_package") != spec["npm_package"]:
+        raise FreezeError(f"冻结收据的 npm 平台包不是 {spec['npm_package']}")
+    artifacts = npm.get("artifacts")
+    if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts) or sorted(
+        str(item.get("package")) for item in artifacts
+    ) != sorted([MAIN_PACKAGE, spec["npm_package"]]):
+        raise FreezeError("冻结收据的 npm 制品必须恰为主包与平台包各一个")
+    for item in artifacts:
+        if item.get("version") != version:
+            raise FreezeError(f"冻结收据的 npm 制品 {item.get('package')} 版本不是 {version}")
+        member(item.get("tarball_path"), f"npm tarball {item.get('package')}", sha256=item.get("tarball_sha256"),
+               size=item.get("tarball_bytes"))
+
+    gcs = freeze.get("gcs")
+    if not isinstance(gcs, dict) or gcs.get("version") != version or gcs.get("platform_key") != spec["native_key"]:
+        raise FreezeError("冻结收据的原生分发记录与目标版本或平台不一致")
+    member(gcs.get("manifest_path"), "原生分发 manifest", sha256=gcs.get("manifest_sha256"))
+    if gcs.get("checksum") != binary_sha256:
+        raise FreezeError("原生分发 manifest 登记的 checksum 与冻结收据的 binary_sha256 不一致")
+
+    binaries = freeze.get("binaries")
+    rows = binaries.get(platform) if isinstance(binaries, dict) else None
+    if not isinstance(rows, dict) or set(rows) != {"npm", "gcs"} or not isinstance(rows["npm"], dict) or rows["npm"] != rows["gcs"]:
+        raise FreezeError("冻结收据两渠道等价时 npm 与原生分发必须登记同一个二进制")
+    row = rows["npm"]
+    if (npm.get("binary_path"), gcs.get("binary_path")) != (row.get("path"), row.get("path")):
+        raise FreezeError("冻结收据两渠道的二进制路径与 binaries 登记不一致")
+    if row.get("sha256") != binary_sha256 or gcs.get("size") != row.get("bytes"):
+        raise FreezeError("冻结收据 binaries 登记的摘要或字节数与两渠道记录不一致")
+    binary_path = member(row.get("path"), "平台二进制", sha256=row.get("sha256"), size=row.get("bytes"))
+    identity = elf_identity(binary_path.read_bytes(), platform)
+    _require_glibc(identity, platform, "冻结")
+    if identity != row.get("elf"):
+        raise FreezeError(f"平台二进制的 ELF 判定 {identity} 与冻结收据记录 {row.get('elf')} 不一致")
+    return {
+        "schema_version": FREEZE_VERIFICATION_SCHEMA,
+        "status": "passed",
+        "freeze_path": str(freeze_path),
+        "freeze_sha256": freeze_sha256,
+        "target_version": version,
+        "platform": platform,
+        "dist_tag": freeze.get("dist_tag"),
+        "binary_equivalence": freeze["binary_equivalence"],
+        "binary_sha256": binary_sha256,
+        "binary_bytes": row["bytes"],
+        "elf": identity,
+        "verified_files": verified,
+        "files_written": 0,
+        "network_requests": 0,
+    }
+
+
+def build_verify_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="claude_upgrade_freeze.py verify", description="只读复核已有的冻结目录（B5a-09）")
+    parser.add_argument("--freeze", type=Path, required=True, help="冻结收据 freeze.json 的绝对路径")
+    parser.add_argument("--target-version", help="本轮目标版本；给出时核对冻结收据的 target_version")
+    parser.add_argument("--binary-sha256", help="本轮登记的目标二进制摘要；给出时核对冻结收据的 binary_sha256")
+    parser.add_argument("--freeze-sha256", help="本轮登记的冻结收据摘要；给出时核对 freeze.json 自身的摘要")
+    parser.add_argument("--platform", default="linux/arm64", choices=sorted(PLATFORMS), help="冻结平台")
+    return parser
+
+
+def verify_main(argv: list[str]) -> int:
+    """``verify`` 子命令：通过时打印复核结论、退出 0；不通过时 stderr 写原因、退出 1。"""
+
+    arguments = build_verify_parser().parse_args(argv)
+    try:
+        result = verify_freeze_receipt(
+            arguments.freeze,
+            expected_version=arguments.target_version,
+            expected_binary_sha256=arguments.binary_sha256,
+            expected_freeze_sha256=arguments.freeze_sha256,
+            platform=arguments.platform,
+        )
+    except (FreezeError, OSError) as error:
+        print(f"冻结目录复核未通过：{error}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output-root", type=Path, required=True, help="冻结输出目录（绝对路径，必须不存在）")
@@ -445,6 +644,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # 复核走 verify 子命令（B5a-09）；不带子命令的原有冻结用法（--output-root …）不变。
+    if argv[:1] == ["verify"]:
+        return verify_main(argv[1:])
     arguments = build_parser().parse_args(argv)
     try:
         result = run(arguments)

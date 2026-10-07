@@ -7,13 +7,15 @@
 #                        P0_ROLLBACK_EVIDENCE 还要是已有的普通文件（P0 收据一步读它）；
 #   guard-pre-plan       驱动安装复验、指定出口实时准入、磁盘余量（与 stage1 建账本前同一守卫）；
 #   deployment-identity  最新受监督部署收据的策略与五摘要等于当前受管工具树；
-#   target-client        目标客户端两处安装：宿主机与采集容器内同一路径，摘要与版本等于本轮登记值；
-#   official-package     官方包摘要等于登记值，基线与目标源码树就位；
-#   plan-audit           plan --audit-only：参数、官方包、源码、规则与场景清单、作业 covers、覆盖计划、基线证据、执行副本；
+#   target-client        目标客户端两处安装：宿主机与采集容器内同一路径，摘要与版本等于本轮登记值（Claude 另核断网合成容器
+#                        capture-cli-synthetic 内同一路径的摘要）；
+#   official-package     官方包摘要等于登记值，基线与目标源码树就位（Claude 没有源码树：按 B2-01 冻结合同复核目标版本的
+#                        冻结目录）；
+#   plan-audit           plan --audit-only：参数、官方包、源码、规则与场景清单、作业 covers、覆盖计划、基线证据、执行副本（Claude：
+#                        参数、官方包、规则／场景清单／证据标签与 Job 展开、工具身份）；
 #   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）。
-# 按客户端（Claude 升级 B5a-06）：必填参数、部署收据与五摘要、目标客户端的参数键、环境收据模块与探针版本参数取客户端表
-#   （lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。客户端表登记为尚未接入的检查项（Claude 的 plan-audit）直接判
-#   未通过并写明落实它的工作项，其余各项照查。
+# 按客户端（Claude 升级 B5a-06、B5a-09）：必填参数、部署收据与五摘要、目标客户端的参数键与另核的容器、官方包的复核模块、
+#   plan-audit 的参数模板、环境收据模块与探针版本参数取客户端表（lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。
 # 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh、stage1.sh 与入口编排器 entry.sh 开头调用，也可单独运行）
 # 输出目录默认 $RUNROOT/entry-preflight/<UTC>，环境变量 ENTRY_PREFLIGHT_OUT 可指定（编排器用）；结束时写 summary.json（逐项状态，
 # 编排器据此判断哪些步骤被阻塞，例如部署绑定没过时依赖它的认证与门禁）。
@@ -87,12 +89,18 @@ PY
 
 target_client() {
   # 二进制与摘要的参数键取客户端表（Codex：CODEX_BIN／CODEX_BIN_SHA256；Claude：CLIENT_BIN／CLIENT_BIN_SHA256）。
-  local host container version binary=${!CT_BINARY_KEY} expected=${!CT_BINARY_SHA256_KEY}
+  local host container version binary=${!CT_BINARY_KEY} expected=${!CT_BINARY_SHA256_KEY} name extra mismatched=0
   host=$(sha256sum "$binary" | cut -c1-64) || return 1
   container=$(docker exec capture-cli sha256sum "$binary" | cut -c1-64) || return 1
   version=$("$binary" --version 2>&1 | head -n 1) || return 1
   echo "宿主机 ${host}；采集容器 ${container}；登记 ${expected}；版本 ${version}"
-  [ "$host" = "$expected" ] && [ "$container" = "$expected" ] && [[ $version == *"$TARGET_VERSION"* ]]
+  # 客户端表登记的其余容器（Claude：合成 probe 跑在断网容器 capture-cli-synthetic 里，B5a-09）：容器内同一路径也要等于登记值。
+  for name in ${CT_BINARY_EXTRA_CONTAINERS[@]+"${CT_BINARY_EXTRA_CONTAINERS[@]}"}; do
+    extra=$(docker exec "$name" sha256sum "$binary" | cut -c1-64) || return 1
+    echo "${name} ${extra}"
+    [ "$extra" = "$expected" ] || mismatched=1
+  done
+  [ "$host" = "$expected" ] && [ "$container" = "$expected" ] && [[ $version == *"$TARGET_VERSION"* ]] && [ "$mismatched" = 0 ]
 }
 
 official_package() {
@@ -100,12 +108,33 @@ official_package() {
   actual=$(sha256sum "$TARGET_PACKAGE" | cut -c1-64) || return 1
   echo "官方包 ${actual}；登记 ${OFFICIAL_ASSET_SHA256}"
   [ "$actual" = "$OFFICIAL_ASSET_SHA256" ] || return 1
+  # 客户端表登记了官方包复核模块的客户端（Claude，B5a-09）：官方包是 B2-01 冻结收据，按冻结合同只读复核目标版本的冻结目录
+  # （收据合同、目标版本、两渠道等价、二进制摘要等于本轮登记值、目录内每个登记文件的摘要）；Claude 没有官方源码树。
+  if [ -n "$CT_OFFICIAL_PACKAGE_VERIFIER" ]; then
+    python3 -m "$CT_OFFICIAL_PACKAGE_VERIFIER" verify --freeze "$TARGET_PACKAGE" --target-version "$TARGET_VERSION" \
+      --binary-sha256 "${!CT_BINARY_SHA256_KEY}" --freeze-sha256 "$OFFICIAL_ASSET_SHA256"
+    return
+  fi
   test -d "$BASELINE_SOURCE" && test ! -L "$BASELINE_SOURCE" && test -d "$TARGET_SOURCE" && test ! -L "$TARGET_SOURCE" && echo "基线与目标源码树就位"
 }
 
+plan_audit_from_table() {
+  # 客户端表的 plan --audit-only 参数模板（Claude，B5a-09）：以 $ 开头的项代入同名参数（缺了代入空值，由审计的参数项报出，
+  # 其余各项照查），其余照抄；作业坐标与 Codex 同一形式。
+  local item name argv=()
+  for item in "${CT_PLAN_AUDIT_ARGV[@]}"; do
+    if [[ $item == \$* ]]; then name=${item#\$}; argv+=("${!name:-}"); else argv+=("$item"); fi
+  done
+  python3 -m "$CT_ORCHESTRATOR_MODULE" plan --audit-only \
+    --campaign-dir "$D/staging/entry-preflight-$(date -u +%Y%m%dt%H%M%Sz)/campaign" --campaign-id "${CAMPAIGN_PREFIX}-plan-audit" "${argv[@]}"
+}
+
 plan_audit() {
-  # 客户端表登记为尚未接入时不调用（Claude 的 plan --audit-only 由 B5a-09 接入），判未通过并写明工作项。
-  if [ -n "$CT_PENDING_CHECK_PLAN_AUDIT" ]; then echo "本轮客户端（${CT_CLIENT}）的 plan-audit 尚未接入：${CT_PENDING_CHECK_PLAN_AUDIT}"; return 1; fi
+  local rc
+  # 客户端表给出了参数模板的客户端（Claude）按模板展开调用编排器；Codex 的模板为空，走下面原来的参数形状。
+  if [ "${#CT_PLAN_AUDIT_ARGV[@]}" != 0 ]; then
+    plan_audit_from_table > "$OUT/plan-audit.json"; rc=$?
+  else
   # 拟定路径只作作业坐标与输出路径校验，不会被创建；审计不读账本与环境收据（建账本之后才有）。
   # 参数文件可缺省的两个身份参数缺了时传空值：审计的参数项报出来，清单、源码等其余各项照查（不能因缺参数跳过 covers 等）。
   # 下面是 Codex 编排器 plan 的参数形状（编排器模块取客户端表）。
@@ -120,7 +149,8 @@ plan_audit() {
     --capture-codex-bin "$CODEX_BIN" --relay-codex-bin "$CODEX_BIN" --suite full --model "$MAIN_MODEL" --lite-model "$LITE_MODEL" \
     --codex-account-id "$CODEX_ACCOUNT_ID" --api-key-id "$API_KEY_ID" --live-attestation-compose-dir "$COMPOSE_DIR" \
     --live-attestation-compose-files "$COMPOSE_DIR/docker-compose.yml" > "$OUT/plan-audit.json"
-  local rc=$?
+  rc=$?
+  fi
   python3 -B - "$OUT/plan-audit.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1], encoding="utf-8"))

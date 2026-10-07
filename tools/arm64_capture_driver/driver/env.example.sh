@@ -104,4 +104,7 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   BASELINE_SOURCE=$D/official/claude-code-$BASELINE_VERSION
 #   TARGET_SOURCE=$D/official/claude-code-$TARGET_VERSION
 #   TARGET_PACKAGE=$D/official/claude-code-$TARGET_VERSION/freeze.json（OFFICIAL_ASSET_SHA256 是它的 SHA-256）
+#   入口便宜检查的 official-package 一项按 B2-01 冻结合同复核目标版本的冻结目录（B5a-09），基线版本的冻结目录不核对。
+#   UPSTREAM_IP=REPLACE_API_ANTHROPIC_COM_IP（api.anthropic.com 的冻结公开上游 IP：场景清单的必需 Campaign 变量 upstream_ip，
+#   入口便宜检查的 plan-audit 与之后的 plan 都用它；不写时 required-parameters 一项报缺）
 #   ENTRY_BRANCH=claude/REPLACE_TOOL_BRANCH

@@ -4561,6 +4561,15 @@ def _plan_command(arguments: argparse.Namespace) -> dict[str, Any]:
     return claude_upgrade_plan.plan_report(arguments, jobs, rules, {**inputs, "evidence_labels": labels})
 
 
+def _plan_audit_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """``plan --audit-only``（B5a-09）：实现在 ``claude_upgrade_plan.plan_audit``；Job 展开用本模块的 wire 根、工具身份用
+    总计划冻结的同一份（``_tool_identity``）。"""
+
+    return claude_upgrade_plan.plan_audit(
+        arguments, load_plan_jobs=_load_plan_jobs, tool_identity=lambda: _tool_identity(include_git=False)
+    )
+
+
 def _import_predecessor_command(arguments: argparse.Namespace) -> dict[str, Any]:
     """``import-predecessor-evidence``（B2-09）：Campaign 锁内、没有未释放的执行租约时导入；实现在 ``claude_upgrade_predecessor``。"""
 
@@ -4645,6 +4654,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)
+        elif arguments.command == "plan" and arguments.audit_only:
+            # B5a-09：只审计，逐项报全、零写入；有任一项未通过即返回 1（与 Codex 的 plan --audit-only 同一口径）。
+            result = _plan_audit_command(arguments)
+            return_code = 0 if result["status"] == "passed" else 1
         elif arguments.command == "plan":
             result, return_code = _plan_command(arguments), 0
         elif arguments.command == "import-predecessor-evidence":

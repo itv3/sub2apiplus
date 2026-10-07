@@ -4,7 +4,8 @@
 模块对象加载，与改造后的模块在同一组输入下各算一次：
 
 * 参数解析（``parse_env.py``）：同一份 Codex 参数文件（驱动测试夹具与改造前的参数模板）``parse`` 与 ``derive`` 的结果逐字
-  相同（含键的先后），主程序输出等于改造前的输出再加上新增四个可选键的 ``unset``（清掉外层环境残留的另一客户端参数）；
+  相同（含键的先后），主程序输出等于改造前的输出再加上新增可选键（B5a-06 四个、B5a-09 的 ``UPSTREAM_IP``）的 ``unset``
+  （清掉外层环境残留的另一客户端参数）；
   一组非法改写的报错逐字相同；用通用键（``CLIENT_BIN`` 等）写的 Codex 参数文件与用旧键写的解析结果相同；
 * 入口步骤（``entry_steps.py``）：Codex 步骤表的输入声明与摘要、门禁项输入清单逐字相同；同一夹具上无记录、改造前写的
   记录、改造后写的记录、逐类改动输入、Formal 已建与强制重做各情形下 ``evaluate`` 的结果逐字相同；
@@ -15,7 +16,9 @@
   部署收据规则与 pre-A3 声明和改造前相同。
 
 基线提交读不到（浅克隆）时跳过并写明原因；某个驱动脚本在 B5a-06 之后又改过（内容摘要不再是 ``SHELL_DIGESTS`` 登记的
-那份）时，它的逐行对照跳过——以新的基线提交重新对照。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
+那份）时，它的逐行对照跳过——以新的基线提交重新对照：B5a-09 改过的入口便宜检查以 B5a-09 开工时的提交
+（``B5A09_BASELINE_COMMIT``）为新基线再对照一次（``B5A09_SHELL_RESIDUALS``）。本模块读真实仓库的 git 历史，按
+``unit_records.GIT_READERS`` 登记。
 """
 
 from __future__ import annotations
@@ -45,12 +48,13 @@ from tools.official_client_capture.tests.test_ci_entry_steps import Fixture
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_COMMIT = "f28c0250a"
 DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
-NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in ("CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID"))
+# 新增可选键的 unset：B5a-06 的四个通用键，B5a-09 的 UPSTREAM_IP（Claude 场景清单的必需 Campaign 变量，Codex 参数文件不写）。
+NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in ("CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID", "UPSTREAM_IP"))
 
 
-def git_source(relative: str) -> bytes | None:
+def git_source(relative: str, commit: str = BASELINE_COMMIT) -> bytes | None:
     try:
-        return subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{BASELINE_COMMIT}:{relative}"],
+        return subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{commit}:{relative}"],
                               capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -457,6 +461,72 @@ class DriverScriptCodexParityTests(unittest.TestCase):
                     self.skipTest(f"读不到基线提交 {BASELINE_COMMIT} 的 {name}")
                 self.assertEqual(residual(baseline_codex_effective(source.decode("utf-8")), codex_effective(text, values)),
                                  SHELL_RESIDUALS.get(name, []))
+
+
+# ------------------------------------------------------------------------------------------------ B5a-09 新基线
+
+# B5a-09 改了入口便宜检查（上面 B5a-06 的逐行对照因此跳过）：以 B5a-09 开工时的提交为新基线，代入 Codex 取值后再逐行对照一次。
+# 只剩下面登记的几处，每处 Codex 下都走不到或与基线等价：
+# * target-client：另核容器的循环——Codex 的另核容器表为空，循环体一次不执行，判定只多一个恒为真的条件；
+# * official-package：冻结复核分支——Codex 没有官方包复核模块（空串），分支不进，源码树核对那一行逐字不变；
+# * plan-audit：按参数模板展开的函数与分支——Codex 的模板为空，走原来的参数形状（那一段逐字不变）；删掉的是 B5a-06 留下的待接入
+#   判断（Codex 恒不成立）；退出码变量改成先声明、两个分支各自赋值（取值不变）。
+# 基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 是 Claude 待接入条目的 shell 视图（Codex 为空串），B5a-09 落实后表里不再
+# 输出它，对照时按 Codex 的空串代入。
+B5A09_BASELINE_COMMIT = "5ad660473"
+B5A09_SHELL_DIGESTS: dict[str, str] = {
+    "entry-preflight.sh": "762a64e1ca33bf25e84e44711497717ce0a8a3b530730306946d506a225c8cc4",
+}
+B5A09_SHELL_RESIDUALS: dict[str, list[str]] = {
+    "entry-preflight.sh": [
+        '-  local host container version binary=${!CT_BINARY_KEY} expected=${!CT_BINARY_SHA256_KEY}',
+        '+  local host container version binary=${!CT_BINARY_KEY} expected=${!CT_BINARY_SHA256_KEY} name extra mismatched=0',
+        '-  [ "$host" = "$expected" ] && [ "$container" = "$expected" ] && [[ $version == *"$TARGET_VERSION"* ]]',
+        '+  for name in; do',
+        '+    extra=$(docker exec "$name" sha256sum "$binary" | cut -c1-64) || return 1',
+        '+    echo "${name} ${extra}"',
+        '+    [ "$extra" = "$expected" ] || mismatched=1',
+        '+  done',
+        '+  [ "$host" = "$expected" ] && [ "$container" = "$expected" ] && [[ $version == *"$TARGET_VERSION"* ]] && [ "$mismatched" = 0 ]',
+        '+  if [ -n "" ]; then',
+        '+    python3 -m "" verify --freeze "$TARGET_PACKAGE" --target-version "$TARGET_VERSION" \\',
+        '+      --binary-sha256 "${!CT_BINARY_SHA256_KEY}" --freeze-sha256 "$OFFICIAL_ASSET_SHA256"',
+        '+    return',
+        '+  fi',
+        '+plan_audit_from_table() {',
+        '+  local item name argv=()',
+        '+  for item in ; do',
+        '+    if [[ $item == \\$* ]]; then name=${item#\\$}; argv+=("${!name:-}"); else argv+=("$item"); fi',
+        '+  done',
+        '+  python3 -m tools.official_client_capture.codex_upgrade plan --audit-only \\',
+        '+    --campaign-dir "$D/staging/entry-preflight-$(date -u +%Y%m%dt%H%M%Sz)/campaign" --campaign-id "${CAMPAIGN_PREFIX}-plan-audit" "${argv[@]}"',
+        '+}',
+        '-  if [ -n "" ]; then echo "本轮客户端（codex）的 plan-audit 尚未接入："; return 1; fi',
+        '+  local rc',
+        '+  if [ "${#CT_PLAN_AUDIT_ARGV[@]}" != 0 ]; then',
+        '+    plan_audit_from_table > "$OUT/plan-audit.json"; rc=$?',
+        '+  else',
+        '-  local rc=$?',
+        '+  rc=$?',
+        '+  fi',
+    ],
+}
+
+
+class DriverScriptB5a09CodexParityTests(unittest.TestCase):
+    def test_scripts_with_codex_values_match_b5a09_start(self) -> None:
+        values = {**_codex_shell_values(), "CT_PENDING_CHECK_PLAN_AUDIT": ""}
+        self.assertEqual(sorted(B5A09_SHELL_DIGESTS), sorted(B5A09_SHELL_RESIDUALS))
+        for name, digest in B5A09_SHELL_DIGESTS.items():
+            with self.subTest(name):
+                text = (DRIVER / name).read_text(encoding="utf-8")
+                if hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+                    self.skipTest(f"{name} 在 B5a-09 之后又改过：以新的基线提交重新对照")
+                source = git_source(f"tools/arm64_capture_driver/driver/{name}", B5A09_BASELINE_COMMIT)
+                if source is None:
+                    self.skipTest(f"读不到基线提交 {B5A09_BASELINE_COMMIT} 的 {name}")
+                self.assertEqual(residual(codex_effective(source.decode("utf-8"), values), codex_effective(text, values)),
+                                 B5A09_SHELL_RESIDUALS[name])
 
 
 # ------------------------------------------------------------------------------------------------ 安装脚本与其它模块

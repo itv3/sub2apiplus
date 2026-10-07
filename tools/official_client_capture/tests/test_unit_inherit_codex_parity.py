@@ -10,9 +10,11 @@
 * 记录层、P0 v2 证据重验、pre-A3 从记录签发与核验：基线模块作为独立模块对象加载，与改造后的模块在同一批合成记录库与
   变异上各算一次，结果或报错逐字相同；
 * 源码残差：各文件相对基线删掉或改写的行只有登记的那几处（每处写明为什么 Codex 下等价），入口门禁脚本代入 Codex 的客户端表
-  取值后与基线的差异只有登记的新增与改写行；Codex 的入口步骤表与门禁项输入与基线逐字相同。
+  取值后与基线的差异只有登记的新增与改写行；Codex 的入口步骤表与门禁项输入与基线逐字相同（Claude 的步骤声明只有
+  ``STEP_CHANGES_AFTER_B5A08`` 登记的设计变化）。
 基线读不到（浅克隆）时跳过并写明原因；某个文件在 B5a-08 之后又改过（摘要不再是 ``SOURCE_DIGESTS`` 登记的那份）时，它的残差
-对照跳过——以新的基线提交重新对照。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
+对照跳过——以新的基线提交重新对照：B5a-09 改过的入口步骤以 B5a-09 开工时的提交（``B5A09_BASELINE_COMMIT``）为新基线再核一次
+删改的行。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
 """
 
 from __future__ import annotations
@@ -47,9 +49,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_COMMIT = "31f7c0308"
 
 
-def git_source(relative: str) -> bytes | None:
+def git_source(relative: str, commit: str = BASELINE_COMMIT) -> bytes | None:
     try:
-        return subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{BASELINE_COMMIT}:{relative}"],
+        return subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{commit}:{relative}"],
                               capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -445,6 +447,26 @@ ENTRY_GATES_RESIDUAL: list[str] = [
     "+  if [ \"$AUDIT_STRICT\" = true ] || [ -n \"$FULL_SET_REQUEST\" ] || [ \"$MODE\" = unit-inherit ]; then",
 ]
 ENTRY_GATES = "tools/arm64_capture_driver/driver/entry-gates.sh"
+# B5a-09 改过的文件（上面 B5a-08 的残差对照因此跳过）：以 B5a-09 开工时的提交为新基线再核一次删改的行，每处 Codex 下等价：
+# * entry_steps.py：零请求 smoke 一步登记的身份摘要改为取客户端表（Codex 的取值就是原来的 control_sha256，Codex 步骤声明逐字
+#   不变，见 test_codex_step_table_and_gate_inputs_match_the_baseline）；注释补一句说明。
+B5A09_BASELINE_COMMIT = "5ad660473"
+B5A09_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "f164437889a9620f26c089c313af3c61f03bf912c8846fc79a65981477f33335",
+}
+B5A09_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_steps.py": [
+        "        # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。",
+        '            Input("managed", "identity", "control_sha256"), *tests_trees,',
+    ],
+}
+# B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 理由)。Codex 一侧不得出现。
+STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], str]]] = {
+    "claude": {
+        "zero-request-smoke": (["identity:evidence_semantics_sha256"],
+                               "B5a-09：Claude smoke 依赖的 provenance 在 Claude 身份的 evidence 层，登记的身份摘要取客户端表"),
+    },
+}
 
 
 def removed_lines(relative: str, old: str) -> list[str]:
@@ -469,6 +491,18 @@ class SourceResidualCodexParityTests(unittest.TestCase):
             with self.subTest(relative):
                 self.assertEqual(removed_lines(relative, self._source(relative)), expected)
 
+    def test_b5a09_only_rewrote_the_registered_lines(self) -> None:
+        self.assertEqual(sorted(B5A09_SOURCE_DIGESTS), sorted(B5A09_SOURCE_REMOVED_LINES))
+        self.assertNotIn("codex", STEP_CHANGES_AFTER_B5A08, "Codex 的步骤声明不得改")
+        for relative, digest in B5A09_SOURCE_DIGESTS.items():
+            with self.subTest(relative):
+                if hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() != digest:
+                    self.skipTest(f"{relative} 在 B5a-09 之后又改过：以新的基线提交重新对照")
+                source = git_source(relative, B5A09_BASELINE_COMMIT)
+                if source is None:
+                    self.skipTest(f"读不到基线提交 {B5A09_BASELINE_COMMIT} 的 {relative}")
+                self.assertEqual(removed_lines(relative, source.decode("utf-8")), B5A09_SOURCE_REMOVED_LINES[relative])
+
     def test_entry_gates_script_with_codex_values_differs_only_in_registered_lines(self) -> None:
         old = self._source(ENTRY_GATES)
         values = b5a06._codex_shell_values()
@@ -481,8 +515,19 @@ class SourceResidualCodexParityTests(unittest.TestCase):
             self.skipTest(f"读不到基线提交 {BASELINE_COMMIT} 的入口步骤")
         for client in es.CT.CLIENTS:
             with self.subTest(client):
-                self.assertEqual([step.spec_sha256() for step in es.STEPS_BY_CLIENT[client]],
-                                 [step.spec_sha256() for step in old.STEPS_BY_CLIENT[client]], "不用逐单元承接时步骤表逐字相同")
+                current, baseline = es.STEPS_BY_CLIENT[client], old.STEPS_BY_CLIENT[client]
+                self.assertEqual([step.step_id for step in current], [step.step_id for step in baseline])
+                # B5a-08 之后按设计改过的步骤声明只有登记的那几项（只在 Claude 一侧）；其余步骤逐字相同。
+                changed = STEP_CHANGES_AFTER_B5A08.get(client, {})
+                for now, before in zip(current, baseline):
+                    if now.step_id in changed:
+                        # 基线模块的 Input 是另一个类对象：按声明内容比较。
+                        now_items, before_items = [item.as_json() for item in now.inputs], [item.as_json() for item in before.inputs]
+                        added = [item.name for item in now.inputs if item.as_json() not in before_items]
+                        removed = [item.name for item in before.inputs if item.as_json() not in now_items]
+                        self.assertEqual((added, removed), (changed[now.step_id][0], []), now.step_id)
+                        continue
+                    self.assertEqual(now.spec_sha256(), before.spec_sha256(), f"不用逐单元承接时步骤表逐字相同：{now.step_id}")
                 as_json = lambda table: {key: [item.as_json() for item in value] for key, value in table.items()}  # noqa: E731
                 self.assertEqual(as_json(es.GATE_INPUTS_BY_CLIENT[client]), as_json(old.GATE_INPUTS_BY_CLIENT[client]))
                 inherit = es.STEPS_BY_CLIENT_UNIT_INHERIT[client]

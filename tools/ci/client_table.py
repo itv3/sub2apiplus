@@ -22,6 +22,9 @@
   活动文档（与受管部署器 ``arm64_supervised_deploy`` 的同名表一致，测试核对）；
 * 文档：指南文件名与第二部分标题、入口步骤读的文档、部署一致性核对的部分；
 * 身份策略文件名、环境收据步骤登记的受管文件、Job 演练的容器、VC-5 准入合同与运行画像路径；
+* 入口便宜检查（B5a-09）：目标客户端除宿主机与 ``capture-cli`` 之外还要核对的容器、官方包的复核模块、``plan --audit-only``
+  的参数模板（以 ``$`` 开头的项代入同名参数，其余照抄；Codex 为空，沿用脚本里的原形状），以及零请求 smoke 一步登记的
+  工具身份摘要（smoke 依赖的模块落在哪几层，哪几层的摘要就要登记）；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -85,7 +88,6 @@ _SHARED: Mapping[str, Any] = {
     # 状态见 pending。
     "job_rehearsal_module": _module("codex_upgrade_job_rehearsal_receipt"),
     "atomic_rehearsal_module": _module("codex_upgrade_campaign_run_rehearsal_receipt"),
-    "job_containers": ("capture-cli", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis"),
     "framework_file": "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
 }
 
@@ -145,6 +147,8 @@ _CODEX: Mapping[str, Any] = {
     "environment_receipt_files": ("codex_upgrade_arm64_environment_receipt.py", "incremental_recovery.py"),
     "atomic_root_prefix": "codex-atomic-vc0-vc1-",
     "zero_request_smoke_module": _module("codex_upgrade_zero_request_smoke"),
+    # 零请求 smoke 一步登记的工具身份摘要：Codex smoke 依赖的模块（provenance、账本与总账等）都在 control 层。
+    "zero_request_smoke_identity": ("control_sha256",),
     "project_ledger_dir_name": "upgrade-project-ledger",
     # ---- 部署
     "deploy_receipt_glob": "codex-*-supervisor-enable-*.json",
@@ -161,8 +165,14 @@ _CODEX: Mapping[str, Any] = {
         "tools/official_client_capture", "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
         "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md", "tools/arm64_supervised_deploy.py",
     ),
+    # ---- 入口便宜检查（B5a-09）：Codex 只核宿主机与 capture-cli、核对两棵官方源码树、plan-audit 用脚本里的原形状。
+    "binary_extra_containers": (),
+    "official_package_verifier": None,
+    "plan_audit_argv": (),
     # ---- 其它
     "identity_policy_file": "tool_identity_policy_v2.json",
+    # Job 演练的五个容器（入口步骤 job-rehearsal 登记它们的镜像）。
+    "job_containers": ("capture-cli", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis"),
     "vc5_admission_schema": "codex-vc5-admission/v1",
     "vc5_admission_approval_schema": "codex-vc5-admission-approval/v1",
     "runtime_profile": "runtime/codex-profile-{version}.json",
@@ -179,12 +189,14 @@ _CLAUDE: Mapping[str, Any] = {
     "exclusive_required_keys": ("CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID"),
     "key_aliases": {},
     "extra_sha256_keys": (),
-    # Claude 没有 Codex 的 code-mode-host，不要求 TARGET_CODE_MODE_HOST_SHA256；其余与 Codex 同一份，二进制与账号换通用键。
+    # Claude 没有 Codex 的 code-mode-host，不要求 TARGET_CODE_MODE_HOST_SHA256；其余与 Codex 同一份，二进制与账号换通用键；
+    # 另要 UPSTREAM_IP（B5a-09）：Claude 场景清单的必需 Campaign 变量 upstream_ip（api.anthropic.com 的冻结公开上游 IP），
+    # plan-audit 与之后的 plan 都要它，参数文件可缺省（同 Codex 的 CAPTURE_RUNTIME_IMAGE），在这里报缺。
     "preflight_required": (
         "CAPTURE_RUNTIME_IMAGE", "CLIENT_BIN", "CLIENT_BIN_SHA256", "OFFICIAL_ASSET_SHA256", "TARGET_PACKAGE",
         "TARGET_SOURCE", "BASELINE_SOURCE", "ACTIVE_PROFILE", "MAIN_MODEL", "LITE_MODEL", "CLIENT_ACCOUNT_ID", "API_KEY_ID",
         "COMPOSE_DIR", "PROJECT_DEADLINE_UTC", "STAGE_BUDGETS", "POLICY_COMPAT_RECEIPT", "POLICY_ACTIVATION",
-        "PRE_A3_CERTIFICATION", "P0_ROLLBACK_EVIDENCE",
+        "PRE_A3_CERTIFICATION", "P0_ROLLBACK_EVIDENCE", "UPSTREAM_IP",
     ),
     # 按 Codex 同一组映射（B2-11 落实 claude_upgrade plan 的参数表时核对）。
     "plan_params": (
@@ -204,7 +216,8 @@ _CLAUDE: Mapping[str, Any] = {
     "profile_patch_manifest": "claude_profile_rule_patches_{underscored}.json",
     "lifecycle_dir": "docs/egress/lifecycle/claude-{compact}-candidate",
     # Claude 没有官方源码树：官方来源是 B2-01 冻结目录（claude_upgrade_freeze --output-root，npm 与原生分发双来源与
-    # freeze.json），官方包取冻结收据。B5a-09 的 official-package 检查与 B2-11 的 plan 参数按这个布局核对。
+    # freeze.json），官方包取冻结收据，OFFICIAL_ASSET_SHA256 是冻结收据 freeze.json 的摘要。B5a-09 的 official-package
+    # 检查与 plan-audit 按这个布局复核目标版本的冻结目录；B2-11 的 plan 参数按同一布局核对。
     "official_source": "official/claude-code-{version}",
     "official_package": "official/claude-code-{version}/freeze.json",
     # 与 Codex 认证同在 control/policy-certification 下，文件名带客户端前缀，互不占用坐标。
@@ -226,6 +239,8 @@ _CLAUDE: Mapping[str, Any] = {
     ),
     "atomic_root_prefix": "claude-atomic-vc0-vc1-",
     "zero_request_smoke_module": _module("claude_upgrade_zero_request_smoke"),
+    # Claude smoke 依赖的 provenance（claude_upgrade_live_request_provenance）在 Claude 身份的 evidence 层，其余在 control 层。
+    "zero_request_smoke_identity": ("control_sha256", "evidence_semantics_sha256"),
     "project_ledger_dir_name": "upgrade-project-ledger-claude",
     # ---- 部署
     "deploy_receipt_glob": "claude-managed-deploy-*.json",
@@ -245,17 +260,36 @@ _CLAUDE: Mapping[str, Any] = {
         "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md", "docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md",
         "tools/arm64_supervised_deploy.py",
     ),
+    # ---- 入口便宜检查（B5a-09）。合成 probe 在断网容器 capture-cli-synthetic 里跑（B5a-07），容器内同一路径的二进制也要
+    # 等于登记值；官方包按 B2-01 冻结合同复核；plan-audit 的参数形状是 Claude plan 的参数（campaign-dir 与 campaign-id
+    # 两客户端同一形式，在脚本里给出）。
+    "binary_extra_containers": ("capture-cli-synthetic",),
+    "official_package_verifier": _module("claude_upgrade_freeze"),
+    "plan_audit_argv": (
+        "--campaign-mode", "preflight_only", "--campaign-purpose", "production_replacement",
+        "--baseline-version", "$BASELINE_VERSION", "--target-version", "$TARGET_VERSION",
+        "--target-sha256", "$CLIENT_BIN_SHA256", "--target-package", "$TARGET_PACKAGE",
+        "--target-package-sha256", "$OFFICIAL_ASSET_SHA256", "--runtime-image", "$CAPTURE_RUNTIME_IMAGE",
+        "--scenario-manifest", "$SCENARIOS_JSON", "--claude-bin", "$CLIENT_BIN", "--model", "$MAIN_MODEL",
+        "--upstream-ip", "$UPSTREAM_IP", "--suite", "full",
+    ),
     # ---- 其它
     "identity_policy_file": "claude_tool_identity_policy_v2.json",
+    # Job 演练的容器：Codex 的五个加断网合成容器（B2-06 起合成 probe 在那里跑；入口步骤 job-rehearsal 登记镜像，B2-10 的
+    # Job 演练按这一份核对）。
+    "job_containers": (
+        "capture-cli", "capture-cli-synthetic", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis",
+    ),
     # VC-5 准入合同与运行画像路径由 Claude 候选采集落实（见 pending 的 tool:vc5-admission），未定之前为空。
     "vc5_admission_schema": None,
     "vc5_admission_approval_schema": None,
     "runtime_profile": None,
     "pending": {
-        "check:plan-audit": "B5a-09（便宜检查 plan-audit 调 claude_upgrade plan --audit-only；B1-09 骨架先补只审参数、官方包、"
-                            "场景清单与工具身份的实现）",
-        "step:zero-request-smoke": "B5a-09（新文件 claude_upgrade_zero_request_smoke.py）",
-        "step:atomic-double": "B5a-09（atomic-double 收据模块加适配器参数，Claude 签 official-client-atomic-vc0-vc1-rehearsal/v1）",
+        # atomic-double 的 Claude 一侧要真跑一次 VC-0→VC-1 批次编译与派发：Claude 的批次入口（_vc_campaign_plan、
+        # _vc_run_manifest_from_batch 等）由 B3-01 落实，总计划控制收据的读回与 Claude 身份策略对收据模块的覆盖也要先补，
+        # 在那之前不拿 Codex 的合同顶替（B5a-09 调研结论）。
+        "step:atomic-double": "B5a-09 续（atomic-double 收据模块加适配器参数，Claude 签 official-client-atomic-vc0-vc1-rehearsal/v1；"
+                              "依赖 B3-01 的 Claude 批次入口、B2-11 的总计划控制收据读回与 Claude 身份策略覆盖收据模块）",
         "step:preflight-plan": "B2-11（claude_upgrade plan --campaign-mode preflight_only）",
         "step:job-rehearsal": "B2-10（Job 演练收据模块加适配器参数，Claude 签 official-client-job-rehearsal-receipt/v1）",
         "step:client-launch-probe": "B2-10（客户端启动探测 Claude 版）",
@@ -280,7 +314,8 @@ SHELL_ENTRIES = (
     "policy_certification_module", "release_certification_module", "environment_receipt_module",
     "environment_probe_version_option", "timing_ledger_module", "project_ledger_module", "project_ledger_dir_name",
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
-    "deploy_receipt_identity_key", "preflight_required",
+    "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
+    "plan_audit_argv",
 )
 
 

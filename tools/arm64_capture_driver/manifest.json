@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "70d68f9a3780f14e3f2e6014c3d15084e0a51a78bd5729553a8ff12668ee7646",
+      "sha256": "62f59b0475b34b63c59de80ee43c31609ceb3f76c9454c98d1d61c01cbfece7d",
       "mode": "0600",
-      "bytes": 81008
+      "bytes": 81768
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/client_table.py",
-      "sha256": "1253eef08bed39763689f9740f451ae86abfb187194d160cbeafaf8c66fe9a7d",
+      "sha256": "69ba33960f2658c2ef935ac5406f02bd83a05c06a2177173a4327f453cc22534",
       "mode": "0700",
-      "bytes": 25372
+      "bytes": 28703
     },
     {
       "path": "driver/driver_config.py",
@@ -106,9 +106,9 @@
     },
     {
       "path": "driver/entry-preflight.sh",
-      "sha256": "b18f8106f495a6893ddccf94c453213a927f00981d7a681dbd22ccbbdcf0edda",
+      "sha256": "762a64e1ca33bf25e84e44711497717ce0a8a3b530730306946d506a225c8cc4",
       "mode": "0700",
-      "bytes": 10974
+      "bytes": 12955
     },
     {
       "path": "driver/entry.sh",
@@ -142,15 +142,15 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "819328b6c5fe2e450d2a5a4bfbf8840d152c943c340f91babbce069f61675a6c",
+      "sha256": "f164437889a9620f26c089c313af3c61f03bf912c8846fc79a65981477f33335",
       "mode": "0700",
-      "bytes": 78614
+      "bytes": 78824
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "5ffa88560ee0be5503880f02a3fd89cc546a863bb130e039467b7da1e96be6d3",
+      "sha256": "d4af4aff52a5fd3fcc7a466a0895f8b4d6c92b0e1c1f36d6a2490959d242680f",
       "mode": "0700",
-      "bytes": 7650
+      "bytes": 8067
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "03f8fb6be5f937066f4d20c8da4c91244c454a8efafcb30a3cddc7d03ee15975",
+      "sha256": "a8fbc5ef12fd3403d084bae8242499e1086b84337e0e04803e9be435476d4530",
       "mode": "0700",
-      "bytes": 21892
+      "bytes": 22379
     },
     {
       "path": "driver/phase_context.py",
@@ -549,5 +549,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "b7510f05856f07d6c34e507165931e88768bd6380c08627cb3bfd8ba27c8bde1"
+  "manifest_sha256": "42e3be7a37f6f326ec88d2e8d068d27fd6e2fde4173892363c4a465decf1ed94"
 }

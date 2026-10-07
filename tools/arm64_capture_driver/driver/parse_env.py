@@ -23,6 +23,7 @@ Claude 升级 B5a-06 起按客户端解析：可选键 ``CLIENT``（缺省 codex
 from __future__ import annotations
 
 import importlib.util
+import ipaddress
 import re
 import shlex
 import sys
@@ -62,6 +63,9 @@ OPTIONAL_KEYS = (
     # B5a-06：本轮客户端与目标客户端的通用键。对 Codex 它们可缺省（通用键是旧键的别名），对 Claude 后三个必填（见
     # required_keys）；放在可选键里，没有出现时主程序照样 unset，外层环境残留的另一客户端参数不会被带进本轮。
     "CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID",
+    # B5a-09：Claude 场景清单的必需 Campaign 变量 upstream_ip（api.anthropic.com 的冻结公开上游 IP）。参数文件可缺省，
+    # Claude 的入口便宜检查（required-parameters）报缺；写了就必须是 IP 地址。
+    "UPSTREAM_IP",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -291,6 +295,11 @@ def parse(text: str) -> dict[str, str]:
         not values["VC5_ADMIN_TOKEN_MIN_SECONDS"].isdigit() or int(values["VC5_ADMIN_TOKEN_MIN_SECONDS"]) < 1800
     ):
         raise EnvFileError("VC5_ADMIN_TOKEN_MIN_SECONDS 必须是至少 1800 的整数")
+    if "UPSTREAM_IP" in values:
+        try:
+            ipaddress.ip_address(values["UPSTREAM_IP"])
+        except ValueError:
+            raise EnvFileError("UPSTREAM_IP 必须是 IP 地址") from None
     if values.get("VC4_BUILD_NETWORK", "default") not in {"default", "none", "host"}:
         raise EnvFileError("VC4_BUILD_NETWORK 只能是 default、none 或 host")
     if "VC4_BUILD_NETWORK_APPROVAL" in values and (

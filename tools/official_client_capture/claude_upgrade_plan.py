@@ -1218,6 +1218,28 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "--ca-cert",
     ):
         parser.add_argument(flag, default=None)
+    # B5a-09：官方包与只审计。官方包是 B2-01 冻结收据 freeze.json（驱动参数 TARGET_PACKAGE），摘要为本轮登记的
+    # OFFICIAL_ASSET_SHA256；--audit-only 只审参数、官方包、清单与工具身份，不建 Campaign、不写任何文件。
+    parser.add_argument("--target-package", type=Path, default=None, help="B2-01 冻结收据 freeze.json（绝对路径）")
+    parser.add_argument("--target-package-sha256", default="", help="冻结收据 freeze.json 的登记摘要")
+    parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help=(
+            "B5a-09：只做计划输入审计——参数、官方包（B2-01 冻结目录）、规则／场景清单／证据标签与 Job 展开、工具身份，"
+            "逐项报全；不读计时账本与环境收据、不建 Campaign、不写任何文件，供建账本之前的入口便宜检查使用。"
+        ),
+    )
+
+
+def default_manifest_paths(arguments: argparse.Namespace) -> None:
+    """规则清单、场景清单与证据标签的缺省路径（就地写回 ``arguments``）：没有显式给出时按版本派生。
+
+    plan 的参数准备与 ``--audit-only`` 的清单项共用这一份规则：参数项中途失败时清单项照样按同一路径审计。"""
+
+    arguments.rule_manifest = Path(arguments.rule_manifest or baseline_rule_manifest_path(arguments.baseline_version))
+    arguments.scenario_manifest = Path(arguments.scenario_manifest or scenario_manifest_path(arguments.target_version))
+    arguments.evidence_labels = Path(arguments.evidence_labels or evidence_labels_path(arguments.target_version))
 
 
 def prepare_plan_arguments(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -1242,9 +1264,7 @@ def prepare_plan_arguments(arguments: argparse.Namespace) -> dict[str, Any]:
     campaign_dir = Path(arguments.campaign_dir)
     if not campaign_dir.is_absolute() or not SAFE_ABSOLUTE_PATH_RE.fullmatch(str(campaign_dir)):
         raise ConfigurationError("--campaign-dir 必须是安全绝对路径。")
-    arguments.rule_manifest = Path(arguments.rule_manifest or baseline_rule_manifest_path(arguments.baseline_version))
-    arguments.scenario_manifest = Path(arguments.scenario_manifest or scenario_manifest_path(arguments.target_version))
-    arguments.evidence_labels = Path(arguments.evidence_labels or evidence_labels_path(arguments.target_version))
+    default_manifest_paths(arguments)
     payload = _read_json(arguments.scenario_manifest, "场景清单")
     validate_scenario_manifest(payload)
     contract = _variable_contract(payload)
@@ -1382,4 +1402,143 @@ def plan_report(
             }
             for job in jobs
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# plan --audit-only（B5a-09）：建计时账本之前把 plan 能查的输入一次查全
+# ---------------------------------------------------------------------------
+
+PLAN_AUDIT_SCHEMA = "claude-upgrade-plan-audit/v1"
+# --audit-only 不校验的项：它们在建计时账本之后才存在，由建 Campaign 时的 plan（B2-11）校验；名字与 Codex 的同一组。
+PLAN_AUDIT_UNCHECKED = (
+    "timing-ledger-and-checkpoint",
+    "arm64-environment-receipt",
+    "p0-environment-producer",
+    "vc-control-artifacts",
+)
+# 编排器总计划的工具身份字段 ↔ Store Campaign v2 的工具身份字段：同一指纹，键名按各自设计不同（设计 B1-12），按值比对。
+TOOL_IDENTITY_FIELD_PAIRS = (
+    ("policy_version", "policy_version"),
+    ("policy_sha256", "policy_sha256"),
+    ("wire_producer_sha256", "wire_producer_sha256"),
+    ("evidence_semantics_sha256", "evidence_semantics_sha256"),
+    ("control_sha256", "control_sha256"),
+    ("files_sha256", "tool_files_sha256"),
+)
+
+
+def plan_audit(
+    arguments: argparse.Namespace,
+    *,
+    load_plan_jobs: Callable[[argparse.Namespace, tuple[str, ...]], tuple[list[Any], dict[str, dict[str, str]]]],
+    tool_identity: Callable[[], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """``plan --audit-only``：只审参数、官方包、清单与工具身份，逐项报全；不读账本、不建 Campaign、不写任何文件。
+
+    各项互相独立，一项失败其余照查；依赖失败项的标为被阻塞（``blocked_by``）。输出形状与 Codex 的
+    ``codex-upgrade-plan-audit/v1`` 相同（入口便宜检查按同一字段打印）。检查项：
+
+    * ``arguments``：plan 的参数准备（``prepare_plan_arguments``，同 plan 一份）与 Campaign 作用域变量的取值合同；
+    * ``official-package``：B2-01 冻结目录逐项复核（``claude_upgrade_freeze.verify_freeze_receipt``），目标版本、目标二进制
+      摘要（``--target-sha256``）与冻结收据摘要（``--target-package-sha256``）等于本轮登记值；
+    * ``manifests``：基线与目标规则清单、目标场景清单（结构、规则绑定、版本事实）与证据标签（逐 Job、逐 probe 闭合）——
+      不依赖参数项，缺省路径与 plan 同一规则（``default_manifest_paths``）；
+    * ``jobs``：经编排器的 wire 根 ``load_plan_jobs`` 展开全部 Job（与 plan 同一函数）并核对 Job 闭合与 official 覆盖；
+    * ``tool-identity``：编排器的工具身份（``tool_identity``，即总计划冻结的那一份）与 Store 现算的七项身份按值一致。
+    """
+
+    checks: list[dict[str, Any]] = []
+    state: dict[str, Any] = {}
+
+    def run(name: str, action: Callable[[], Any], *, requires: tuple[str, ...] = ()) -> None:
+        blocked = [item["name"] for item in checks if item["name"] in requires and item["status"] != "passed"]
+        if blocked:
+            checks.append({"name": name, "status": "blocked", "blocked_by": blocked})
+            return
+        try:
+            detail = action()
+        except Exception as error:  # noqa: BLE001 - 审计要如实报出每一项的失败，一项异常不能中断其余各项
+            checks.append({"name": name, "status": "failed", "error": f"{type(error).__name__}: {error}"})
+            return
+        checks.append({"name": name, "status": "passed", "detail": detail})
+
+    def check_arguments() -> dict[str, Any]:
+        payload = prepare_plan_arguments(arguments)
+        validate_campaign_context(payload, plan_context(arguments))
+        return {"campaign_id": arguments.campaign_id, "campaign_mode": arguments.campaign_mode, "suite": arguments.suite}
+
+    def check_official_package() -> dict[str, Any]:
+        from tools.official_client_capture import claude_upgrade_freeze
+
+        package = getattr(arguments, "target_package", None)
+        expected = str(getattr(arguments, "target_package_sha256", "") or "")
+        if package is None or not str(package):
+            raise ConfigurationError("缺少 --target-package（B2-01 冻结收据 freeze.json）。")
+        if not expected:
+            raise ConfigurationError("缺少 --target-package-sha256（本轮登记的冻结收据摘要）。")
+        result = claude_upgrade_freeze.verify_freeze_receipt(
+            Path(package),
+            expected_version=str(arguments.target_version),
+            expected_binary_sha256=str(arguments.target_sha256),
+            expected_freeze_sha256=expected,
+        )
+        return {
+            "freeze_sha256": result["freeze_sha256"],
+            "binary_sha256": result["binary_sha256"],
+            "binary_equivalence": result["binary_equivalence"],
+            "verified_file_count": len(result["verified_files"]),
+        }
+
+    def check_manifests() -> dict[str, Any]:
+        default_manifest_paths(arguments)
+        rules = load_baseline_rules(arguments.rule_manifest, arguments.baseline_version)
+        verify_target_rules(arguments, rules)
+        payload = read_scenario_manifest(arguments.scenario_manifest, expected_version=arguments.target_version, rules=rules)
+        labels = evidence_labels_binding(arguments, rules)
+        state["rules"] = rules
+        return {
+            "rule_count": len(rules),
+            "capture_job_count": len(payload["capture_jobs"]),
+            "scenario_manifest": _binding(arguments.scenario_manifest),
+            "evidence_labels": labels,
+        }
+
+    def check_jobs() -> dict[str, Any]:
+        jobs, inputs = load_plan_jobs(arguments, state["rules"])
+        coverage = coverage_plan(jobs, state["rules"])
+        return {
+            "job_count": len(jobs),
+            "step_count": sum(len(job.steps) for job in jobs),
+            "official_unmapped": coverage["official_unmapped"],
+            "inputs": inputs,
+        }
+
+    def check_tool_identity() -> dict[str, Any]:
+        from tools.official_client_control import receipts as control_receipts
+
+        orchestrator = tool_identity()
+        store = control_receipts.current_tool_identity("claude")
+        drift = [f"{left}↔{right}" for left, right in TOOL_IDENTITY_FIELD_PAIRS if orchestrator.get(left) != store.get(right)]
+        if drift:
+            raise ConfigurationError(f"编排器工具身份与 Store 现算身份不一致：{'、'.join(drift)}")
+        return {left: orchestrator[left] for left, _right in TOOL_IDENTITY_FIELD_PAIRS}
+
+    run("arguments", check_arguments)
+    run("official-package", check_official_package)
+    run("manifests", check_manifests)
+    run("jobs", check_jobs, requires=("arguments", "manifests"))
+    run("tool-identity", check_tool_identity)
+    failed = [item["name"] for item in checks if item["status"] != "passed"]
+    return {
+        "schema_version": PLAN_AUDIT_SCHEMA,
+        "status": "passed" if not failed else "failed",
+        "baseline_version": getattr(arguments, "baseline_version", None),
+        "target_version": getattr(arguments, "target_version", None),
+        "campaign_mode": getattr(arguments, "campaign_mode", None),
+        "checks": checks,
+        "failed_checks": failed,
+        "unchecked": list(PLAN_AUDIT_UNCHECKED),
+        "files_written": 0,
+        "live_request_count": 0,
     }

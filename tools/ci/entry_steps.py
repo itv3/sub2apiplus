@@ -312,9 +312,10 @@ def build_steps(client: str) -> tuple[Step, ...]:
             *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "pre-a3.sh"), *common_driver,
             *_env("kernel", "python"),
         ), products=(Product("certification", "{PRE_A3_CERTIFICATION}"), Product("reuse-receipt", optional=True))),
-        # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。
+        # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。登记的身份摘要取客户端表
+        # （Codex 只有 control；Claude 的 provenance 在 Claude 身份的 evidence 层，另登记 evidence 摘要，B5a-09）。
         Step("zero-request-smoke", "零请求 smoke", "pre_ledger", inputs=(
-            Input("managed", "identity", "control_sha256"), *tests_trees,
+            *(Input("managed", "identity", name) for name in spec["zero_request_smoke_identity"]), *tests_trees,
             *_drivers("stage1.sh"), *common_driver, *_env("python"),
         ), products=(Product("receipt", "{D}/audit/zero-request-smoke-{STAMP}.json"),)),
         # atomic-double 在 capture-cli 容器里跑：导入链没有逐一核实，受管工具按整树摘要从宽。
