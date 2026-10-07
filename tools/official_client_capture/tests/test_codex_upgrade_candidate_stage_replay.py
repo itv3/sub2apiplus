@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
@@ -142,6 +143,10 @@ class CandidateStageReplayChainTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
+        # 父 run 收口时 SupervisorClient.stop() 只等 monitor 子进程退出 2 秒；VC-2 首次派发代跑的 no-op 引导首批
+        # 在 start 后立即 stop，monitor 冷启动被门禁负载拖过 2 秒就被误封 audit-incomplete。与
+        # test_codex_upgrade_staging_dispatch 的 SUPERVISOR_STOP_WAIT_SECONDS 同口径放宽到 30 秒（详细说明见那里）。
+        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 30.0))
 
     def _to_vc4(self, root: Path) -> dict:
         fixture = self.case._vc_chain_fixture(root)

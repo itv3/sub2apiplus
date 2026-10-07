@@ -31,6 +31,17 @@ from tools.official_client_capture.tests import test_codex_upgrade
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ORDER = artifacts.VC_PHASES
 
+# 父 run 收口时 SupervisorClient.stop() 写出 stop-request 后，只等独立 monitor 子进程退出
+# DEFAULT_STOP_WAIT_SECONDS（2 秒），到时即把父 run 封成 audit-incomplete(supervisor-stop-timeout)，
+# 不再写 stop-receipt。派发链里有几处父 run 在 start 之后很快就 stop：原子入口代跑的 no-op 引导首批
+# （start 后立即 stop）、staging 批次在 commit 回调里失败（aborted_prepared／完整性异常）、合成动作秒退。
+# 这时 monitor 往往还在冷启动（新解释器、导入监督器、首轮重放三层预算），门禁高并发下超过 2 秒：
+# 首批被误封后，下一批的批次历史校验报“前序 Campaign 批次没有可信终态”（2026-10-07 ARM64 后台验证
+# 门禁实测）；commit 失败的父 run 则缺 stop-receipt。夹具把这一等待上限放宽到 30 秒：monitor 一处理完
+# stop-request 就退出，正常路径不多等；被测的派发、提交与对账路径不变。经子进程派发的 DRIVER 用同一数值。
+# 同夹具的 stage_recovery、candidate_revision、candidate_stage_replay、stage_replay_binding 模块同样放宽。
+SUPERVISOR_STOP_WAIT_SECONDS = 30.0
+
 # 子进程驱动：按配置 patch 入口内部函数（raise／exit_before／exit_after），再跑真实入口。
 DRIVER = r"""
 import argparse, json, os, sys, tempfile
@@ -45,6 +56,9 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
 from tools.official_client_capture.tests import runtime_egress_fixtures
+# 与父用例的 _fixture 一致：父 run 收口等待 monitor 退出的上限放宽（见模块常量 SUPERVISOR_STOP_WAIT_SECONDS）；
+# 子进程里同样会代跑 no-op 引导首批、走 commit 失败收口，monitor 冷启动被门禁负载拖过 2 秒就会被误封 audit-incomplete。
+supervisor.DEFAULT_STOP_WAIT_SECONDS = config["stop_wait_seconds"]
 modules = {"codex_upgrade": codex_upgrade, "supervisor": supervisor, "reconciler": reconciler}
 for item in config["patches"]:
     module = modules[item["module"]]
@@ -95,6 +109,8 @@ class StagingDispatchTests(unittest.TestCase):
         )
         self.helper.setUp()
         self.addCleanup(self.helper.doCleanups)
+        # 父 run 收口等待 monitor 退出的上限放宽到 30 秒，原因见模块常量 SUPERVISOR_STOP_WAIT_SECONDS。
+        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", SUPERVISOR_STOP_WAIT_SECONDS))
 
     def _fixture(self, root: Path) -> dict[str, object]:
         return self.helper._vc_chain_fixture(root)
@@ -158,6 +174,7 @@ class StagingDispatchTests(unittest.TestCase):
         config = {
             "patches": patches,
             "tmpdir": str(driver_tmp),
+            "stop_wait_seconds": SUPERVISOR_STOP_WAIT_SECONDS,
             "arguments": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(arguments).items()},
         }
         completed = subprocess.run(
@@ -203,7 +220,9 @@ class StagingDispatchTests(unittest.TestCase):
             if supervisor._read_state(path).get("staging_binding") is not None
         ]
 
-    def _wait_terminal(self, run_dir: Path, expected: set[str], *, timeout: float = 5.0) -> dict[str, object]:
+    def _wait_terminal(self, run_dir: Path, expected: set[str], *, timeout: float = 30.0) -> dict[str, object]:
+        # owner 在子进程里 os._exit 后，由独立 monitor 判 owner 丢失并封存终态。owner 若在 start 之后立刻退出，
+        # monitor 往往还在冷启动，门禁高并发下封存要晚几秒（原先 5 秒的上限会撞到）；只放宽上限，封存一出现即返回。
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self._read(run_dir / "state.json")

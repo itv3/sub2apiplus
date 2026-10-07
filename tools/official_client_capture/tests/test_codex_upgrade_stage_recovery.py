@@ -28,12 +28,20 @@ from tools.official_client_capture.tests import test_codex_upgrade as upgrade_te
 from tools.official_client_capture.tests import test_codex_upgrade_supervisor as supervisor_tests
 from tools.official_client_capture.tests import test_codex_upgrade_timing_ledger as timing_tests
 
+# 父 run 收口时 SupervisorClient.stop() 只等 monitor 子进程退出 2 秒（DEFAULT_STOP_WAIT_SECONDS）；派发链的
+# no-op 引导首批、合成动作秒退等父 run 在 start 后很快 stop，monitor 冷启动被门禁负载拖过 2 秒就被误封
+# audit-incomplete，下一批报“前序 Campaign 批次没有可信终态”。与 test_codex_upgrade_staging_dispatch 的
+# SUPERVISOR_STOP_WAIT_SECONDS 同口径放宽到 30 秒（详细说明见那里）；正常路径不多等。
+SUPERVISOR_STOP_WAIT_SECONDS = 30.0
+
 
 class StageRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.case = upgrade_tests.CodexUpgradeTest()
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
+        # 父 run 收口等待 monitor 退出的上限放宽，原因见模块常量 SUPERVISOR_STOP_WAIT_SECONDS。
+        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", SUPERVISOR_STOP_WAIT_SECONDS))
 
     def test_unknown_partial_action_remains_review_after_accounting(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -167,6 +175,9 @@ class _OfficialSealChainFixture:
         ``_vc_chain_fixture`` 同形，只是不写 VC-1 checkpoint）。"""
 
         self.case.enterContext(runtime_egress_fixtures.offline_campaign_egress())
+        # 首次派发同样代跑 no-op 引导首批：父 run 收口等待 monitor 退出的上限放宽，原因见模块常量
+        # SUPERVISOR_STOP_WAIT_SECONDS。
+        self.case.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", SUPERVISOR_STOP_WAIT_SECONDS))
         original = upgrade._create_initial_vc_control_artifacts
 
         def as_reuse(*args: object, **kwargs: object) -> dict:
@@ -1033,6 +1044,10 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
 from tools.official_client_capture.tests import runtime_egress_fixtures
 
+# 与父用例一致：父 run 收口等待 monitor 退出的上限放宽到 30 秒（数值同本模块 SUPERVISOR_STOP_WAIT_SECONDS）；
+# 序号 2 首次派发时子进程会先代跑 no-op 引导首批。
+supervisor.DEFAULT_STOP_WAIT_SECONDS = 30.0
+
 original = rehearsal._target_evidence_label_declaration_sha256
 original_append = supervisor.timing_ledger.append_event
 
@@ -1085,6 +1100,9 @@ class OrphanedStageFailureCloseoutTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
+        # 进程内派发的父 run 收口等待 monitor 退出的上限放宽，原因见模块常量 SUPERVISOR_STOP_WAIT_SECONDS；
+        # 子进程替身脚本 _OWNER_LOST_AT_CLOSEOUT 自己放宽。
+        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", SUPERVISOR_STOP_WAIT_SECONDS))
 
     @staticmethod
     def _plan(root: Path, name: str, action: dict) -> Path:
