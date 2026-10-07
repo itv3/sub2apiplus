@@ -4995,32 +4995,12 @@ def _plan_audit_command(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def _require_quiescent_campaign_lease(campaign_dir: Path, *, action: str, attempt_id: str | None = None) -> None:
-    """seal 与前序证据导入的静止门禁（B2-08 定恢复协议；调用方须已持 Campaign 锁）：没有仍在执行的租约，拒绝时零写入。
+    """seal、前序证据导入、classify 与 VC-3 的静止门禁（B2-08 定协议，B3-06 补过期租约的停线固化与「已封存即了结」）：
+    转调 ``claude_upgrade_recovery.require_quiescent_campaign_lease``，判据见那里。"""
 
-    * 没有租约或 ``released``：静止；
-    * ``stop_the_line``：执行者已退出并留下不可覆盖的停线事实（例如未登记工具演进时 run 在预约前被拒、resume 在预约前
-      停止），Campaign 同样静止——与 Codex 一致（Codex 的 seal 取执行租约，停线租约不挡获取）；停线租约绑定的 attempt
-      不是本次对象时，先对账那个 attempt；
-    * ``active``：仍在有效期内即有执行者在运行；已过期（执行者被强杀）先由 ``resume --rerun-failed`` 接管（写停线收据）
-      或 ``reconcile-attempt`` 对账相应 attempt。
+    from tools.official_client_capture import claude_upgrade_recovery as recovery
 
-    B2-07／B2-09 原先只认 ``released``：停线之后只有成功结束的执行租约会话能把租约变回 released，而 attempt 等待 seal 时
-    run 与 resume 都在预约前被拒（并再次留下停线），seal 就再也走不下去。
-    """
-
-    lease = _read_campaign_lease(campaign_dir)
-    if lease is None or lease.get("state") == "released":
-        return
-    state = lease.get("state")
-    if state == "stop_the_line":
-        bound = lease.get("attempt_id")
-        if bound is None or (attempt_id is not None and str(bound) == str(attempt_id)):
-            return
-        raise ConfigurationError(f"Campaign 停线租约绑定 attempt {bound}，不是本次{action}的对象：先 reconcile-attempt 对账该 attempt。")
-    raise ConfigurationError(
-        f"Campaign 有未释放的执行租约（state={state}）：{action}要求 Campaign 静止；仍在有效期内即有执行者在运行，"
-        "已过期则先以 resume --rerun-failed 接管或 reconcile-attempt 对账相应 attempt。"
-    )
+    recovery.require_quiescent_campaign_lease(campaign_dir, action=action, attempt_id=attempt_id)
 
 
 def _import_predecessor_command(arguments: argparse.Namespace) -> dict[str, Any]:

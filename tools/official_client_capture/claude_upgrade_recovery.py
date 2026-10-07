@@ -68,11 +68,13 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import json
 import os
 import re
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1691,6 +1693,123 @@ def _run_recovery_attempt(
         "execution_error": capture._error_record(execution_error),
         "next_gate": attempt["next_gate"],
     }
+
+
+# ---------------------------------------------------------------------------
+# 静止判据：停线租约与过期租约（B2-08 定协议，B3-06 补过期租约的停线固化与「已封存即了结」）
+# ---------------------------------------------------------------------------
+
+
+def _open_existing_lease_lock(campaign_dir: Path) -> int | None:
+    """打开已有的租约锁文件（不创建）；口径与 ``CampaignLease._open_lock`` 相同：当前用户拥有的 0600 普通文件。"""
+
+    lock_path = campaign_dir / claude_upgrade.CAMPAIGN_LEASE_LOCK_FILENAME
+    claude_upgrade._reject_symlink_components(lock_path, campaign_dir, "Campaign lease 锁")
+    try:
+        descriptor = os.open(lock_path, os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.close(descriptor)
+        raise ConfigurationError("Campaign lease 锁必须是当前用户拥有的 0600 文件。")
+    return descriptor
+
+
+def _solidify_expired_lease(campaign_dir: Path, *, action: str) -> dict[str, Any] | None:
+    """active 租约：非阻塞取租约锁，取到且已过期就写不可覆盖的停线收据（Codex 同语义），返回锁内重读的租约。
+
+    执行者仍持锁（进程活着）即拒绝；锁空着但租约仍在有效期内（例如 PID 已被复用、心跳尚未超时）同样拒绝，等过期后再试。
+    取锁期间租约变成 released／stop_the_line 时按新状态返回。租约文件本身不改写：停线收据是不可覆盖的事实，之后的取租约者
+    （resume 接管、普通 run 拒绝）照 ``CampaignLease`` 原语义处理，重复发现只重放同一份收据。
+    """
+
+    descriptor = _open_existing_lease_lock(campaign_dir)
+    try:
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ConfigurationError(
+                    f"Campaign 有未释放的执行租约，且执行者仍持有租约锁：{action}要求 Campaign 静止，等执行结束，"
+                    "或执行者已挂起时按恢复协议处理。"
+                ) from error
+        current = claude_upgrade._read_campaign_lease(campaign_dir)
+        if current is None or current.get("state") != "active":
+            return current
+        stale, reason, _owner_alive, _expired = claude_upgrade._campaign_lease_staleness(current)
+        if not stale:
+            raise ConfigurationError(
+                f"Campaign 有未释放的执行租约且仍在有效期内：{action}要求 Campaign 静止；执行者仍在运行就等它结束，"
+                "已被强杀则等心跳过期后重试（过期租约会固化为停线收据）。"
+            )
+        claude_upgrade._write_campaign_lease_stop_once(
+            campaign_dir,
+            current,
+            reason=reason,
+            next_action=(
+                "执行者已退出：租约绑定的 attempt 已完成待封存时直接 capture-official seal；失败或中断的 attempt 先 "
+                "reconcile-attempt，按批准的恢复预览 resume --rerun-failed"
+            ),
+        )
+        return current
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _bound_attempt_sealed(campaign_dir: Path, lease: Mapping[str, Any]) -> bool:
+    """租约绑定的官方 attempt 已经封存（官方阶段结果按采集路径绑定的就是它，且 VC-1 checkpoint 已绑定该结果）。
+
+    已封存的 attempt 请求由 ``account-sealed-official`` 入账，不再需要对账，这份停线事实即视为了结。候选 attempt 的了结判定
+    随候选证据封存（B4-02），这里一律不算了结。
+    """
+
+    bound = lease.get("attempt_id")
+    if lease.get("phase") != PHASE or not isinstance(bound, str) or not bound:
+        return False
+    if not (campaign_dir / "official" / "result.json").is_file():
+        return False
+    try:
+        stage = claude_upgrade._load_stage_result(campaign_dir, "capture-official")
+    except ConfigurationError:
+        return False
+    binding = stage.get("attempt")
+    return (
+        stage.get("mode") == "captured"
+        and isinstance(binding, Mapping)
+        and binding.get("path") == f"official/attempts/{bound}/attempt.json"
+    )
+
+
+def require_quiescent_campaign_lease(campaign_dir: Path, *, action: str, attempt_id: str | None = None) -> None:
+    """seal、前序证据导入、classify 与 VC-3 的静止门禁（调用方须已持 Campaign 锁）：没有仍在执行的租约。拒绝时唯一可能留下的
+    写入是过期租约的停线收据（不可覆盖的事实，与 Codex 同语义），租约文件与其余状态都不动。
+
+    * 没有租约或 ``released``：静止；
+    * ``active``：先非阻塞取租约锁——取不到即执行者仍在运行，拒绝；取到且按 ``_campaign_lease_staleness`` 已过期（执行者
+      被强杀），写不可覆盖的停线收据后按停线租约处理（与 Codex ``CampaignLease`` 发现过期租约时同一语义）；仍在有效期内拒绝；
+    * ``stop_the_line``（含上一步固化的过期租约）：执行者已退出。租约未绑定 attempt、绑定的就是本次对象、或绑定的官方 attempt
+      已经封存（视为了结），即静止；否则先 ``reconcile-attempt`` 对账那个 attempt。
+
+    B3-06 修的死角：run 写完 attempt.json 之后、释放租约之前被强杀，租约停在 active；原先 seal 一律拒绝，而该 attempt 已完成待
+    封存、resume 也没有可续跑的失败作业，于是两头都走不下去。现在 seal 先把过期租约固化为停线收据再继续；封存之后的
+    classify、VC-3 与前序导入按「已封存即了结」放行，不会被同一份停线事实永久挡住。
+    """
+
+    lease = claude_upgrade._read_campaign_lease(campaign_dir)
+    if lease is None or lease.get("state") == "released":
+        return
+    if lease.get("state") == "active":
+        lease = _solidify_expired_lease(campaign_dir, action=action)
+        if lease is None or lease.get("state") == "released":
+            return
+    if lease.get("state") not in {"active", "stop_the_line"}:
+        raise ConfigurationError(f"Campaign 租约状态非法：{lease.get('state')}")
+    bound = lease.get("attempt_id")
+    if bound is None or (attempt_id is not None and str(bound) == str(attempt_id)) or _bound_attempt_sealed(campaign_dir, lease):
+        return
+    raise ConfigurationError(f"Campaign 停线租约绑定 attempt {bound}，不是本次{action}的对象：先 reconcile-attempt 对账该 attempt。")
 
 
 # ---------------------------------------------------------------------------

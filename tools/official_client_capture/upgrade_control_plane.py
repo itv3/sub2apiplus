@@ -56,15 +56,28 @@ def _adapter() -> Any:
 
 @contextmanager
 def adapter_scope(adapter: Any) -> Iterator[Any]:
-    """设定当前客户端适配器；嵌套作用域只能是同一客户端，防止一个客户端的流程误入另一个客户端的编排器。"""
+    """设定当前客户端适配器；嵌套作用域只能是同一客户端，防止一个客户端的流程误入另一个客户端的编排器。
+
+    同一作用域同时设定对账器的客户端（Claude 升级 B3-06）：本模块直接调用对账器的内部函数（staging 中止根因、总账推送、
+    判定、身份事实等），它们按对账器自己的作用域取适配器，不经对账器公开入口时缺省是 Codex——Claude 的 staging 中止收据会
+    按 Codex 码表算根因，对账时又按 Claude 重算，两边对不上而失败关闭。对账器作用域已由公开入口设为另一客户端时同样拒绝。
+    Codex 设定的就是对账器的缺省值，行为不变。
+    """
 
     outer = _ADAPTER.get()
     if outer is not None and outer.client != adapter.client:
         raise RuntimeError(f"共享控制流程的客户端作用域冲突：{outer.client} 内进入 {adapter.client}")
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    reconciler_outer = reconciler._ADAPTER.get()
+    if reconciler_outer is not None and reconciler_outer.client != adapter.client:
+        raise RuntimeError(f"对账器的客户端作用域冲突：{reconciler_outer.client} 内进入 {adapter.client}")
     token = _ADAPTER.set(adapter)
+    reconciler_token = reconciler._ADAPTER.set(adapter)
     try:
         yield adapter
     finally:
+        reconciler._ADAPTER.reset(reconciler_token)
         _ADAPTER.reset(token)
 
 

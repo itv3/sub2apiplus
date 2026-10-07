@@ -11777,7 +11777,9 @@ def _validate_batched_stage_review_successor(
         effective_class=str(receipt["failure_class"]), label="阶段审核",
         completed_action_ids=stage_replay_completed_action_ids(proof),
     )
-    if events[-1][0]["event_id"] == passes[0]["event_id"]:
+    # 只有正要派发的直接后继才复算实物；后继已经执行过（历史链里本段有后继 run）时只重放冻结许可。阶段内还有后续批次时，
+    # 成功的后继不写账本事件，许可事件仍是最后一条，复算会看到后继自己的产物而误判漂移、把本阶段后续批次全部拒绝（B3-06）。
+    if events[-1][0]["event_id"] == passes[0]["event_id"] and _historical_window_end(prior_dir) is None:
         adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest))
         current = adapter.orchestrator._campaign_stage_replay_facts(campaign_dir, prior_manifest)
         if any(current.get(key) != proof.get(key) for key in ("phase", "allowed", "actions", "reasons")):
