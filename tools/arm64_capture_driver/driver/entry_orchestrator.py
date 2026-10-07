@@ -393,10 +393,14 @@ class Orchestrator:
         total = int((deadline - datetime.now(timezone.utc)).total_seconds() // 60) - 5   # 留 5 分钟余量（同 stage1.sh）
         budgets = [argument for item in self.params.get("STAGE_BUDGETS", "").split() for argument in ("--stage-budget-minutes", item)]
         self.ledger_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Campaign 用途（B5b-01）：客户端表登记了用途参数键的客户端（Claude）按参数取（parse_env 派生缺省值），预检 plan 的模板
+        # 代入同一参数；Codex 没有这个键，固定 production_replacement，命令行与改造前相同。
+        purpose_key = self.spec["campaign_purpose_key"]
+        purpose = self.p(purpose_key) if purpose_key else "production_replacement"
         rc = self.run("ledger", self.py(self.spec["timing_ledger_module"], "create",
                                         "--ledger-dir", str(self.ledger_dir), "--upgrade-id", self.p("UP"),
                                         "--baseline-version", self.p("BASELINE_VERSION"), "--target-version", self.p("TARGET_VERSION"),
-                                        "--campaign-purpose", "production_replacement",
+                                        "--campaign-purpose", purpose,
                                         "--evidence-decision", self.params.get("EVIDENCE_DECISION") or "recapture",
                                         "--project-ledger-dir", str(self.project_ledger), "--total-budget-minutes", str(total), *budgets,
                                         *self.client_argv))

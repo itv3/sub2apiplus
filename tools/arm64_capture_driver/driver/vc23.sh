@@ -3,6 +3,8 @@
 # 用法：ARM64_VC_ENV=… bash vc23.sh
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+# 派发脚本按客户端表（B5b-01）：Claude 的 VC-2／VC-3 走 vc23-claude.sh，这里只给 Codex。
+[ "$CT_VC23_DISPATCH_SCRIPT" = vc23.sh ] || { echo "本轮客户端（${CT_CLIENT}）的 VC-2／VC-3 派发脚本是 ${CT_VC23_DISPATCH_SCRIPT}，拒绝"; exit 3; }
 echo "=== 管理 token"; ensure_admin_token force
 echo "=== 五清单与计划"; mkdir -p "$W"; chmod 700 "$W"
 cp "$RULES_JSON" "$W/target-rules.json"

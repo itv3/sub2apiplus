@@ -3,6 +3,8 @@
 # 用法：bash vc5-kilo.sh <attempt_id>
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
+# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 RAW="$EV/client/raw"; LOG="$D/control/$NEW-kilo-logs/run$(date -u +%Y%m%dt%H%M%Sz)"
 # 已封存 attempt 不得再进入 Kilo（manifest 绑定 evidence/**）；kilo-facts 已存在也不得重发请求

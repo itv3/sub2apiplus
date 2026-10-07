@@ -14,8 +14,9 @@ if [ -n "${VC5_TARGET_REQUEST:-}" ] && [ -n "${VC5_TARGET_TREE:-}" ]; then
   T="$VC5_TARGET_TREE"
 fi
 mkdir -p "$GATE/environment" "$GATE/logs"; chmod 700 "$GATE" "$GATE/environment" "$GATE/logs"
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
+# 环境收据模块与探针版本参数取客户端表（B5b-01；Codex 即原模块与 --rust-tls-codex-version，命令行与改造前相同）。
+python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" "$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION" | cut -c1-160
+python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
 # 树外只读字节码缓存：lib.sh 全局禁写字节码。缓存前缀若是空目录，解释器改到前缀下找全部 .pyc
 # （含标准库自带的）而全部落空，每个子进程都从源码重编，ARM64 监督器 CLI 启动 584 毫秒，候选树监督器计时用例确定性失败；
 # 不设前缀也要每次从源码编译测试树模块（约 323 毫秒），心跳间隔用例只剩约 20 毫秒余量。make test 前把标准库与测试树
@@ -46,8 +47,8 @@ else
 set +e; env -u CODEX_UPGRADE_IDENTITY_MEMO unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
 fi
 echo "target-platform rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
-cd "$D"; python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-after-facts.json" --output "environment/$ATT-after.json" | cut -c1-160
+cd "$D"; python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" "$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION" | cut -c1-160
+python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" finalize --evidence-root "$GATE" --facts "environment/$ATT-after-facts.json" --output "environment/$ATT-after.json" | cut -c1-160
 python3 - "$GATE/logs/target-platform.gate.json" "$START" "$END" "$RC" "$T" <<'PY'
 import json, sys, socket, os
 out, start, end, rc, tree = sys.argv[1:]

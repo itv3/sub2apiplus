@@ -48,6 +48,34 @@ class ClientAdapterError(ValueError):
     """客户端未知、绑定缺失，或身份根之间的 client 缺失、不一致。"""
 
 
+class Vc5AdmissionFactError(ClientAdapterError):
+    """VC-5 准入的受管事实不成立（B5b-01，适配器成员 ``catalog_stage_profile``／``vc5_official_campaign``）。
+
+    消息只是静态错误码（与驱动 ``vc5_admission.AdmissionError`` 同一组码），驱动原样记为准入报告里 blocked 的原因；
+    不带路径、凭据或收据内容。"""
+
+
+def vc5_plain_path(path: Path) -> None:
+    """VC-5 准入事实读取的路径核对：拒绝非绝对路径、父目录跳转与整条路径上的符号链接（与驱动 ``plain_path`` 同一判据、
+    同一错误码，两客户端的实现共用）。"""
+
+    if not path.is_absolute() or ".." in path.parts:
+        raise Vc5AdmissionFactError("path_not_absolute_or_contains_parent")
+    for item in (path, *path.parents):
+        if item.is_symlink():
+            raise Vc5AdmissionFactError("path_contains_symlink")
+
+
+def vc5_read_json(path: Path) -> dict[str, Any]:
+    """VC-5 准入事实读取的 JSON 对象（与驱动 ``read_json`` 非私有读取同一判据与错误码）。"""
+
+    vc5_plain_path(path)
+    value = json.loads(path.read_bytes())
+    if not isinstance(value, dict):
+        raise Vc5AdmissionFactError("json_not_object")
+    return value
+
+
 @dataclass(frozen=True)
 class CandidateCoordinates:
     """候选运行坐标：对应编排器 ``_campaign_jobs``／``_campaign_arguments`` 的关键字参数。
@@ -400,6 +428,17 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # 形态精确闭合的静态分析）。
     "official_post_run_tooling_item_ids": "value",
     "official_attempt_free_post_run_action": "callable",
+    # VC-5 准入（B5b-01）：驱动 ``vc5_admission`` 的两项受管事实，参数一律按关键字给出。
+    # ``catalog_stage_profile(campaign_dir, *, campaign_id, candidate_id, target_version, profile_id, candidate_source,
+    # lifecycle_dir, candidate_commit)``：VC-3 暂存画像与 VC-4 候选构建收据的重放，返回两客户端同一组字段（profile_bytes、
+    # profile_sha256、profile_digest、profile_id、vc3_receipt_sha256、build_receipt_sha256、build_id、image_id；Claude 另带
+    # extra_bindings 并入准入绑定）。Codex 是驱动原 ``ManagedFacts.catalog`` 的函数体（候选用途照旧写死），Claude 按
+    # catalogdata/claude 的画像合同、候选用途取冻结的总计划。
+    # ``vc5_official_campaign(data_root, *, campaign_id, target_version, evidence_decision, predecessor_campaign)``：官方
+    # 证据所在的 Campaign 与阻断原因（证据决定为 reuse 时核对总计划冻结的前序）。
+    # 事实不成立一律抛 ``Vc5AdmissionFactError``（静态错误码）。
+    "catalog_stage_profile": "callable",
+    "vc5_official_campaign": "callable",
 })
 
 
@@ -444,6 +483,9 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         # VC-1 续跑路径：Codex 的阶段项闭集就是监督器原常量（原位不动），不绑定 attempt 的动作判定恒为假。
         "official_post_run_tooling_item_ids": ("codex_upgrade_supervisor", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),
         "official_attempt_free_post_run_action": ("codex_upgrade_client_adapter", "official_attempt_free_post_run_action"),
+        # B5b-01：VC-5 准入两项事实，函数体是驱动原写在 vc5_admission 里的 Codex 逻辑，原样搬入。
+        "catalog_stage_profile": ("codex_upgrade_client_adapter", "catalog_stage_profile"),
+        "vc5_official_campaign": ("codex_upgrade_client_adapter", "vc5_official_campaign"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -477,6 +519,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "atomic_rehearsal_profile": ("claude_upgrade_atomic_rehearsal", None),  # B5a-09 续
         "official_post_run_tooling_item_ids": ("claude_upgrade_client_adapter", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),  # VC-1 续跑路径
         "official_attempt_free_post_run_action": ("claude_upgrade_client_adapter", "official_attempt_free_post_run_action"),  # VC-1 续跑路径
+        "catalog_stage_profile": ("claude_upgrade_vc5_admission", "catalog_stage_profile"),  # B5b-01
+        "vc5_official_campaign": ("claude_upgrade_vc5_admission", "vc5_official_campaign"),  # B5b-01
     }),
 })
 

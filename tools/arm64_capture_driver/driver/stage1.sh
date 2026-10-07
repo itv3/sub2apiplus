@@ -6,6 +6,11 @@
 # 收尾段失败时修复环境后单独重跑 stage1-finish.sh 即可续跑（R19），不要重跑本脚本（会新建账本）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+# 按客户端（B5b-01）：本脚本的预检 plan 是 Codex 编排器的参数形状。客户端表给出了预检 plan 参数模板的客户端（Claude）由入口
+# 编排器 entry.sh 按模板建预检 Campaign（证据决定 reuse 时一并冻结前序只读复用），在建账本、环境收据之前就拒绝，不留半截产物。
+if [ "${#CT_PREFLIGHT_PLAN_ARGV[@]}" != 0 ]; then
+  echo "本轮客户端（${CT_CLIENT}）的预检 Campaign 由入口编排器按客户端表模板建立：改用 entry.sh（同一 ARM64_VC_ENV）"; exit 3
+fi
 echo "ROUND=$ROUND STAMP=$STAMP"
 # 旧坐标先改名留档：本次任何一步失败都不能让上一次的 stage1.env／stage1.partial.env 被当成本次结果。
 for old in stage1.env stage1.partial.env; do

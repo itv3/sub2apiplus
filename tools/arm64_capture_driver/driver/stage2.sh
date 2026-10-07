@@ -3,6 +3,10 @@
 # 读取 $RUNROOT/stage1.env（stage1 产物坐标）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
+# 按客户端（B5b-01）：本脚本的落点是编排器的 reuse-official-evidence（Codex 原子导入前序官方证据并对齐账本）。没有这个子命令的
+# 客户端（Claude）同目标复用走 entry.sh：证据决定 reuse 时预检 plan 冻结前序只读复用，VC-0 收口按它建 Formal，VC-1 seal 一步
+# 只读封存；在认证与导入之前就拒绝。
+[ -n "$CT_OFFICIAL_REUSE_SUBCOMMAND" ] || { echo "本轮客户端（${CT_CLIENT}）没有 reuse-official-evidence：同目标复用改用 entry.sh（EVIDENCE_DECISION=reuse）"; exit 3; }
 # shellcheck disable=SC1091
 source "$RUNROOT/stage1.env"
 # R19：客户端启动探测必须已通过且属于本轮预检 Campaign，否则不进入认证与导入。

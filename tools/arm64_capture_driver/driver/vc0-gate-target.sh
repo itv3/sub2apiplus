@@ -66,8 +66,9 @@ mkdir -m 0700 "$OUT" "$OUT/environment"
 echo "=== VC-0 预跑目标平台门禁 ${SUBJECT}（只作预检，不是 accept 门禁收据；入口门禁一次运行）$(utc_now)"
 echo "bundle=${PBUNDLE} 分支=${PBRANCH} 提交=${PCOMMIT} 前端依赖=${NM_DIR}"
 environment_receipt() {  # <gate_before|gate_after> <文件名前缀>
-  python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$OUT" --output "environment/$SUBJECT-$2-facts.json" --phase "$1" --subject-id "$SUBJECT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
-  python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$OUT" --facts "environment/$SUBJECT-$2-facts.json" --output "environment/$SUBJECT-$2.json" | cut -c1-160
+  # 环境收据模块与探针版本参数取客户端表（B5b-01；Codex 即原模块与 --rust-tls-codex-version，命令行与改造前相同）。
+  python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" collect --evidence-root "$OUT" --output "environment/$SUBJECT-$2-facts.json" --phase "$1" --subject-id "$SUBJECT" "$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION" | cut -c1-160
+  python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" finalize --evidence-root "$OUT" --facts "environment/$SUBJECT-$2-facts.json" --output "environment/$SUBJECT-$2.json" | cut -c1-160
 }
 environment_receipt gate_before before
 trap - ERR

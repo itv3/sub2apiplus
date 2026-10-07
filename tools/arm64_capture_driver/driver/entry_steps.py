@@ -290,6 +290,8 @@ def build_steps(client: str) -> tuple[Step, ...]:
         return Input("command", "command", " ".join((certification, action, *spec["client_argv"])))
 
     host_binary = spec["host_binary"].format(version="{TARGET_VERSION}")
+    # Campaign 用途参数（B5b-01）：Claude 的计时账本一步另登记它（预检 plan 一步经 plan_params 登记）；Codex 为空。
+    purpose_params = (spec["campaign_purpose_key"],) if spec["campaign_purpose_key"] else ()
     return (
         # 便宜检查七项合成一个实时步骤：每次几十秒内重跑，记下输入只供复盘。
         Step("entry-preflight", "入口便宜检查", "cheap", live=True, creation_chain=False, inputs=(
@@ -348,8 +350,9 @@ def build_steps(client: str) -> tuple[Step, ...]:
         # 计时账本：只认决定「这本账属于哪次升级」的参数。截止时间只在建账本时折算总预算，之后的延期记在账本事件里
         # （deadline-extend），参数文件里的截止时间改了不影响已建账本，所以不列。工具改了不影响已建账本（生成器摘要漂移
         # 由账本自己的承接收据处理）。
+        # Campaign 用途（B5b-01）：登记了用途参数键的客户端（Claude）另登记它，用途一变账本重建；Codex 没有，声明逐字不变。
         Step("ledger", "计时账本", "post_ledger", ledger=True, inputs=(
-            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),
+            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS", *purpose_params),
         ), products=(Product("ledger", "{ENTRY_ROOT}/control/{UP}-timing-ledger/ledger.json"),)),
         # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。
         Step("environment-p0", "ARM64 环境收据（p0）", "post_ledger", inputs=(

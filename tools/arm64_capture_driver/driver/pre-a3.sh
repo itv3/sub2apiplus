@@ -8,30 +8,31 @@
 # 产物：$POLICY_COMPAT_RECEIPT、$POLICY_ACTIVATION、$PRE_A3_CERTIFICATION（及复用收据）；stage2 发现已存在即跳过。
 # E1-02：第一步先跑入口便宜检查（entry-preflight.sh）——参数、守卫、部署绑定、目标客户端、官方包、plan 审计、
 # 环境探针试采，几分钟内把这些错误一次报全；未通过即停，不进入 pre-A3。
+# 按客户端（B5b-01）：部署收据、策略认证与 pre-A3 认证模块及追加的 --client 取客户端表（lib.sh 加载）；Codex 的命令行与改造前相同。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 bash "$DRV/entry-preflight.sh"
 use_managed_bytecode   # 便宜检查刚按受管树内容准备好字节码共享层，本脚本后续的子命令沿用（E2-02）
-DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
+DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" "$CT_CLIENT" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('installed_driver', sys.argv[1])
 module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])
+print(module.latest_deploy_receipt(Path(sys.argv[2])/'control', sys.argv[3])[0])
 PYDEPLOY
 )
-[ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
-[ -f "$POLICY_ACTIVATION" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
+[ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m "$CT_POLICY_CERTIFICATION_MODULE" compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
+[ -f "$POLICY_ACTIVATION" ] || python3 -m "$CT_POLICY_CERTIFICATION_MODULE" activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
 if [ -f "$PRE_A3_CERTIFICATION" ]; then
   echo "PRE_A3_PRESENT $PRE_A3_CERTIFICATION"
-elif REUSE=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION"); then
+elif REUSE=$(python3 -m "$CT_PRE_A3_MODULE" find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}); then
   cp -p "$REUSE" "$PRE_A3_CERTIFICATION"; chmod 600 "$PRE_A3_CERTIFICATION"
   echo "PRE_A3_REUSED $REUSE"
 else
   issue_pre_a3_certification   # E3-02：入口门禁 pre-a3 组合跑场景、从单元执行记录签发（lib.sh），没通过即停、修好后同一 STAMP 直接重跑
 fi
 # 与 stage1 建账本前同一口径复核本轮坐标（复用与新跑都要通过）。
-python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" >/dev/null
+python3 -m "$CT_PRE_A3_MODULE" find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} >/dev/null
 # 跨部署复用登记复用收据（同一组绑定不重复写；认证就是本次部署下签发的则不需要）。
-python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-300
+python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-300
 echo "PRE_A3_DONE $PRE_A3_CERTIFICATION"

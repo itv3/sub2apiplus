@@ -22,6 +22,14 @@ from driver_config import load_config
 from phase_context import resolve
 from round_context import binding
 CONFIG = load_config()
+# 待接入的驱动工具（B5b-01）：Claude 的候选恢复段与续跑计划随 B4-05b、B4-01c 落实（B5b-01b 接入），在阶段解析之前拒绝；
+# Codex 没有待接入条目，恒不触发。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # 同目录的参数解析与客户端表（脚本运行时它本来就在最前）
+from parse_env import client_spec, client_table  # noqa: E402
+WAITING = [item for item in (client_table().pending(client_spec(CONFIG)["client"], name)
+                             for name in ("tool:vc5-recover", "tool:vc5-run")) if item]
+if WAITING:
+    raise SystemExit("本轮客户端的 VC-5 续跑计划尚未接入：" + "；".join(WAITING))
 CONTEXT = resolve(CONFIG, mode="build")
 PARAMS = CONTEXT["parameters"]
 out = pathlib.Path(sys.argv[1])

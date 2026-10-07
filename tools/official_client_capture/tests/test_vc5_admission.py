@@ -42,9 +42,10 @@ def token(*, claims=None, header=None, secret="隔离验收签名密钥"):
 class Facts:
     """仅在测试进程注入；正式命令行和环境无法选择此替身。"""
 
-    def __init__(self, profile):
+    def __init__(self, profile, config=None):
         self.profile_bytes = admission.canonical({"Digest": "d" * 64, "Version": "9.1.0"})
         self.profile = profile
+        self.config = config
         self.issued = 0
         self.fail_after_issue = False
         self.failure = None
@@ -63,6 +64,13 @@ class Facts:
 
     def container(self):
         return {"container_id": "fixture-container", "image_id": "fixture-image", "mount_destination": "/capture"}
+
+    def official_campaign(self):
+        """官方证据所在的 Campaign 走正式适配器（B5b-01：本客户端的 ``vc5_official_campaign``），测试按需替换编排器的只读成员。"""
+
+        subject = admission.ManagedFacts.__new__(admission.ManagedFacts)
+        subject.config = self.config
+        return subject.official_campaign()
 
     def container_profile(self, path):
         if not path.exists():
@@ -90,7 +98,7 @@ class AdmissionTests(unittest.TestCase):
                        "PROFILE_DIGEST": "b" * 64, "EVIDENCE_DECISION": "recapture", "OFFICIAL_CAMPAIGN": "old-campaign",
                        "B": str(self.root / "candidate"), "COMPOSE_DIR": str(compose), "JWTGEN_BIN": str(signer)}
         profile = self.root / "data/runtime/codex-profile-9.1.0.json"
-        self.facts = Facts(profile)
+        self.facts = Facts(profile, self.config)
         self.subject = admission.Admission(self.config, self.facts)
 
     def approval(self, **changes):
@@ -208,18 +216,21 @@ class AdmissionTests(unittest.TestCase):
         self.config.update(EVIDENCE_DECISION="reuse", PREDECESSOR_CAMPAIGN=str(official))
         source = {"campaign_id": "predecessor", "target_version": "9.1.0"}
         current = {"predecessor": {"campaign_dir": str(official), "campaign_id": "predecessor", "campaign_manifest_sha256": "e" * 64}}
-        upgrade = mock.Mock()
-        upgrade._require_formal_campaign.side_effect = lambda path: source if path == official else current
-        upgrade.file_sha256.return_value = "e" * 64
-        self.facts.upgrade = upgrade
-        report = self.subject.inspect()
-        self.assertEqual(report["status"], "ready")
-        self.assertEqual(report["effective_parameters"]["OFFICIAL_CAMPAIGN"], str(official))
-        source["target_version"] = "9.0.0"
-        self.assertEqual(self.subject.inspect()["status"], "blocked")
-        source["target_version"] = "9.1.0"
-        current["predecessor"]["campaign_manifest_sha256"] = "wrong"
-        self.assertEqual(self.subject.inspect()["status"], "blocked")
+        # B5b-01：reuse 分支搬进 Codex 适配器（codex_upgrade_client_adapter.vc5_official_campaign），只读成员取 codex_upgrade。
+        from tools.official_client_capture import codex_upgrade as upgrade
+        with mock.patch.object(upgrade, "_require_formal_campaign", side_effect=lambda path: source if path == official else current), \
+                mock.patch.object(upgrade, "file_sha256", return_value="e" * 64):
+            report = self.subject.inspect()
+            self.assertEqual(report["status"], "ready")
+            self.assertEqual(report["effective_parameters"]["OFFICIAL_CAMPAIGN"], str(official))
+            source["target_version"] = "9.0.0"
+            blocked = self.subject.inspect()
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertIn({"check": "official_campaign", "status": "blocked", "reason": "official_reuse_binding_invalid"}, blocked["checks"])
+            self.assertEqual(blocked["effective_parameters"]["OFFICIAL_CAMPAIGN"], str(official))
+            source["target_version"] = "9.1.0"
+            current["predecessor"]["campaign_manifest_sha256"] = "wrong"
+            self.assertEqual(self.subject.inspect()["status"], "blocked")
 
     def test_failure_compensates_previous_bytes_and_modes(self):
         now = int(time.time())
@@ -460,13 +471,21 @@ class ManagedReplayTests(unittest.TestCase):
             fake._bind_candidate_identity_to_build_receipt.return_value = {"git_commit": "a" * 40}
             subject = admission.ManagedFacts.__new__(admission.ManagedFacts)
             subject.config, subject.upgrade = config, fake
-            result = subject.catalog()
-            self.assertNotEqual(result["profile_digest"], result["profile_sha256"])
-            self.assertEqual(result["profile_sha256"], hashlib.sha256(raw).hexdigest())
-            fake._replay_vc_checkpoint.assert_any_call(mock.ANY, mock.ANY, "VC-4", revision=1)
-            admission.atomic_write(catalog / relative, b"drift")
-            with self.assertRaises(upgrade.ConfigurationError):
-                subject.catalog()
+            # B5b-01：重放搬进 Codex 适配器（codex_upgrade_client_adapter.catalog_stage_profile），它直接取 codex_upgrade 的成员，
+            # 把同一组替身装到 codex_upgrade 上（轮次根解析仍经 subject.upgrade）。
+            replaced = {name: getattr(fake, name) for name in (
+                "_require_formal_campaign", "_load_stage_result", "_vc_campaign_plan", "_replay_vc_checkpoint",
+                "_verify_catalog_stage_output", "_profile_binding_from_manifest", "_replay_candidate_build_receipt",
+                "_current_candidate_revision_record", "_candidate_identity_for_run", "_bind_candidate_identity_to_build_receipt",
+            )}
+            with mock.patch.multiple(upgrade, **replaced):
+                result = subject.catalog()
+                self.assertNotEqual(result["profile_digest"], result["profile_sha256"])
+                self.assertEqual(result["profile_sha256"], hashlib.sha256(raw).hexdigest())
+                fake._replay_vc_checkpoint.assert_any_call(mock.ANY, mock.ANY, "VC-4", revision=1)
+                admission.atomic_write(catalog / relative, b"drift")
+                with self.assertRaises(upgrade.ConfigurationError):
+                    subject.catalog()
 
 
 class EntryOrderingTests(unittest.TestCase):
@@ -504,7 +523,7 @@ import vc5_admission as module
 from driver_config import load_config
 from tools.official_client_capture.tests.test_vc5_admission import Facts
 config=load_config()
-facts=Facts(Path(config["D"])/"runtime"/("codex-profile-"+config["TARGET_VERSION"]+".json"))
+facts=Facts(Path(config["D"])/"runtime"/("codex-profile-"+config["TARGET_VERSION"]+".json"),config)
 original=facts.catalog
 facts.catalog=lambda: {{**original(),"profile_id":config["PROFILE_ID"]}}
 with mock.patch.object(module,"ManagedFacts",return_value=facts):

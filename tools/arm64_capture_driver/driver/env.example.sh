@@ -121,3 +121,7 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   OAUTH_ORG_ID=REPLACE_OAUTH_ORG_ID
 #   MODEL_CATALOG_SHA256=REPLACE_MODEL_CATALOG_SHA256
 #   ENTRY_BRANCH=claude/REPLACE_TOOL_BRANCH
+#   CAMPAIGN_PURPOSE=validation_only（B5b-01：Campaign 用途，缺省 production_replacement；入口建计时账本、预检 plan 与之后各阶段
+#   都按它，VC-4 构建与 VC-5 准入从冻结的总计划读取。Codex 的入口固定 production_replacement，不得写这一项）
+#   API_KEY_ID 与 CLIENT_ACCOUNT_ID 是候选阶段专用的 ingress API Key 与验收账号（B4-01），预检 plan 冻结进 Campaign 配置，
+#   VC-0 收口按它恢复 Formal plan 参数。

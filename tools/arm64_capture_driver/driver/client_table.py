@@ -15,7 +15,7 @@
   pre-A3 认证文件名、宿主机二进制路径（模板字段见 ``format_fields``）；
 * 模块：编排器（模块名、文件名与 CLI 基名）、pre-A3 认证、策略认证、发布认证、VC-0 收口、P0 收据（与 facts 合同）、
   环境收据（与探针版本参数）、Job 演练、atomic-double（与演练根前缀）、零请求 smoke、计时账本、项目总账（与目录名）、
-  门禁收据、VC 制品、监督器。两客户端共用的模块同名，客户端靠 ``client_argv``（追加给共享模块命令行的 ``--client``）
+  门禁收据、VC 制品、监督器、对账器。两客户端共用的模块同名，客户端靠 ``client_argv``（追加给共享模块命令行的 ``--client``）
   与 ``identity_args``（受管身份函数 ``current_identity`` 的位置参数）区分；Codex 这两项都为空，命令行与调用和改造前
   逐字相同；
 * 部署：部署收据的文件名模式、时间戳之前的分隔串、工具身份所在对象与合同名，客户端身份覆盖的受管根，部署事务归档的
@@ -28,11 +28,15 @@
 * 预检 plan（B2-11 第二部分）：建 ``preflight_only`` Campaign 的参数模板（写法同 ``plan --audit-only`` 的模板；Codex 为空，
   入口编排器沿用原来的 Codex 参数形状）、证据决定为 ``reuse`` 时追加的前序参数模板，以及这一步另读的文件与目录
   （``kind:模板``，``file``／``tree``；Codex 为空，步骤表逐字不变）；
+* 同目标复用旧链（B5b-01）：``stage2.sh`` 导入前序官方证据的编排器子命令（Claude 为空：同目标复用走 ``entry.sh``）；
 * 入口空跑（B5a-10）：结论文件名的客户端前缀（Codex 为空，结论文件名与改造前逐字相同；同一提交＋同一部署两客户端各一份）；
 * VC-4（B3-04a）：门禁需求的来源（``local-chain``：本机候选链经 ssh 在采集主机现算；``arm64-preview``：采集主机小步骤
   ``vc4-requirements.sh`` 经编排器的需求预览写进本轮 RUNROOT，本机候选链只读取）与 VC-4 总控最后一步的派发脚本；
 * VC-1（B2-11 第二部分）：首批之后的 VC-1 封存批次（静态分析在 seal 预览之前、seal 批准）的派发脚本（Codex 为空：Codex 的
-  VC-1 封存链不经这里）；
+  VC-1 封存链不经这里）；VC-2／VC-3（B5b-01）的派发脚本（Codex 是 ``vc23.sh``，Claude 是 ``vc23-claude.sh``）；
+* Campaign 用途（B5b-01）：选用途的参数键。Codex 为空——入口建计时账本与预检 Campaign 固定 ``production_replacement``，
+  参数文件写了 ``CAMPAIGN_PURPOSE`` 即拒绝，步骤表与命令行逐字不变；Claude 是 ``CAMPAIGN_PURPOSE``（缺省
+  ``production_replacement``，可选 ``validation_only``），计时账本与预检 plan 两步登记它；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -92,6 +96,8 @@ _SHARED: Mapping[str, Any] = {
     "gate_receipt_module": _module("codex_upgrade_gate_receipt"),
     "vc_artifacts_module": _module("codex_upgrade_vc_artifacts"),
     "supervisor_module": _module("codex_upgrade_supervisor"),
+    # 对账器两客户端共用（公开入口按 Campaign 归属设定适配器）；修复轮按表取它（B5b-01）。
+    "reconciler_module": _module("codex_upgrade_reconciler"),
     # Job 演练与 atomic-double 的收据模块两客户端共用（加适配器参数，Claude 另签 official-client-* 合同：Job 演练 B2-10、
     # atomic-double B5a-09 续）。
     "job_rehearsal_module": _module("codex_upgrade_job_rehearsal_receipt"),
@@ -195,20 +201,29 @@ _CODEX: Mapping[str, Any] = {
     "vc4_dispatch_script": "vc4.sh",
     # VC-1 首批之后的封存批次派发脚本（B2-11 第二部分）：Codex 没有这一项。
     "vc1_dispatch_script": None,
+    # VC-2／VC-3 的派发脚本（B5b-01）：Codex 是 vc23.sh（流程不变）。
+    "vc23_dispatch_script": "vc23.sh",
     "vc5_admission_schema": "codex-vc5-admission/v1",
     "vc5_admission_approval_schema": "codex-vc5-admission-approval/v1",
     "runtime_profile": "runtime/codex-profile-{version}.json",
+    # Campaign 用途（B5b-01）：Codex 没有选用途的参数，入口固定 production_replacement（与改造前相同）。
+    "campaign_purpose_key": None,
+    # 同目标复用旧链（B5b-01）：stage2.sh 用编排器这个子命令把前序官方证据原子导入新 Campaign 并对齐账本（Codex 原样）。
+    "official_reuse_subcommand": "reuse-official-evidence",
     "pending": {},
 }
 
 # Claude plan 的参数模板：plan-audit（B5a-09）与预检 plan（B2-11 第二部分）共用这一份，两处不会各改各的。
 _CLAUDE_PLAN_ARGV = (
-    "--campaign-mode", "preflight_only", "--campaign-purpose", "production_replacement",
+    "--campaign-mode", "preflight_only", "--campaign-purpose", "$CAMPAIGN_PURPOSE",
     "--baseline-version", "$BASELINE_VERSION", "--target-version", "$TARGET_VERSION",
     "--target-sha256", "$CLIENT_BIN_SHA256", "--target-package", "$TARGET_PACKAGE",
     "--target-package-sha256", "$OFFICIAL_ASSET_SHA256", "--runtime-image", "$CAPTURE_RUNTIME_IMAGE",
     "--scenario-manifest", "$SCENARIOS_JSON", "--claude-bin", "$CLIENT_BIN", "--model", "$MAIN_MODEL",
     "--upstream-ip", "$UPSTREAM_IP", "--suite", "full",
+    # 候选阶段专用的验收账号与 ingress API Key（B4-01 d 段，B5b-01 落实）：预检 Campaign 冻结进 configuration，VC-0 收口按它
+    # 恢复 Formal plan 参数，候选 run 之前由编排器核对非空。
+    "--claude-account-id", "$CLIENT_ACCOUNT_ID", "--api-key-id", "$API_KEY_ID",
 )
 
 _CLAUDE: Mapping[str, Any] = {
@@ -236,15 +251,16 @@ _CLAUDE: Mapping[str, Any] = {
         "PRODUCTION_INVENTORY_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
     ),
     # 预检 plan 实际读的参数键（B2-11 第二部分核对）：参数模板代入的键、证据决定与前序、来源提交、Campaign 命名用的前缀与
-    # 升级 ID，以及冻结目录两棵（官方包在目标冻结目录里）。Codex 那组里的 LITE_MODEL、CLIENT_ACCOUNT_ID、API_KEY_ID、
-    # COMPOSE_DIR 不被 Claude plan 读取，不登记，免得无关参数变动让预检及其下游 Job 演练重做。
+    # 升级 ID，以及冻结目录两棵（官方包在目标冻结目录里）。B5b-01 起模板另带 Campaign 用途与候选阶段的账号、ingress API Key
+    # （CAMPAIGN_PURPOSE、CLIENT_ACCOUNT_ID、API_KEY_ID），一并登记；Codex 那组里的 LITE_MODEL、COMPOSE_DIR 不被 Claude plan
+    # 读取，不登记，免得无关参数变动让预检及其下游 Job 演练重做。
     "plan_params": (
         "BASELINE_VERSION", "TARGET_VERSION", "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "CLIENT_BIN",
         "CLIENT_BIN_SHA256", "TARGET_PACKAGE", "OFFICIAL_ASSET_SHA256", "CAPTURE_RUNTIME_IMAGE", "SCENARIOS_JSON", "MAIN_MODEL",
         "UPSTREAM_IP", "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY",
         "PRODUCTION_INVENTORY_STORE", "PRODUCTION_INVENTORY_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID",
         "MODEL_CATALOG_SHA256", "ENTRY_COMMIT", "EVIDENCE_DECISION", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN",
-        "CAMPAIGN_PREFIX", "UP",
+        "CAMPAIGN_PREFIX", "UP", "CAMPAIGN_PURPOSE", "CLIENT_ACCOUNT_ID", "API_KEY_ID",
     ),
     "job_rehearsal_params": ("CLIENT_BIN", "CAPTURE_RUNTIME_IMAGE"),
     # ---- 派生模板。Campaign 前缀落在 Claude Campaign ID 的形态里（claude-code-<版本，点换下划线>，适配器据此把它认作
@@ -346,12 +362,28 @@ _CLAUDE: Mapping[str, Any] = {
     # vc1-01-analyze-target 在 seal 预览 vc1-02-seal-preview 之前，审核后 seal 批准 vc1-03-seal-approve（动作取受管
     # claude_upgrade_static.vc1_seal_actions，经 claude_vc1.py 写计划、vc-batch.sh 派发）。
     "vc1_dispatch_script": "vc1-claude.sh",
-    # VC-5 准入合同与运行画像路径由 Claude 候选采集落实（见 pending 的 tool:vc5-admission），未定之前为空。
-    "vc5_admission_schema": None,
-    "vc5_admission_approval_schema": None,
-    "runtime_profile": None,
+    # VC-2／VC-3（B5b-01）：vc23-claude.sh 一次派发一个批次（classify 草案／修订／批准，prepare-profile 草案／修订／批准，
+    # stage-profile 预览／批准），动作取受管 claude_upgrade_batch 的受管动作（经 claude_vc23.py 写计划、vc-batch.sh 派发）。
+    "vc23_dispatch_script": "vc23-claude.sh",
+    # VC-5 准入（B4-01 d 段，B5b-01 落实）：Claude 签 official-client-* 合同（设计附录 B）。运行画像副本是 VC-3 暂存、VC-4
+    # 进候选源码树的那份 Claude 画像（catalogdata/claude/profiles/<版本>/<摘要>.json）逐字节，准入补齐时装到数据根
+    # runtime 下，采集容器经 /capture 同路径可读；候选 run（B4-01b）要用画像就读这份。
+    "vc5_admission_schema": "official-client-vc5-admission/v1",
+    "vc5_admission_approval_schema": "official-client-vc5-admission-approval/v1",
+    "runtime_profile": "runtime/claude-profile-{version}.json",
+    # Campaign 用途（B5b-01）：参数 CAMPAIGN_PURPOSE 选用途（缺省 production_replacement），入口建计时账本与预检 Campaign、
+    # plan-audit 都按它；之后各阶段（VC-4 构建、VC-5 准入）一律从冻结的 Campaign 总计划读取。
+    "campaign_purpose_key": "CAMPAIGN_PURPOSE",
+    # 同目标复用旧链（B5b-01）：Claude 没有 reuse-official-evidence——同目标复用由 entry.sh 承担（证据决定 reuse 时预检 plan
+    # 冻结前序只读复用，VC-0 收口按它建 Formal，VC-1 seal 一步只读封存），stage1.sh／stage2.sh 对 Claude 失败关闭并指向 entry.sh。
+    "official_reuse_subcommand": None,
+    # B5b-01 拆出的 b 段：Claude 的 VC-5 派发动作依赖尚在进行的候选采集与封存、验收读侧和候选恢复，这些驱动在落实前一律失败
+    # 关闭并写明工作项，不先猜旗标，也不拿 Codex 的形状顶替。
     "pending": {
-        "tool:vc5-admission": "B4-01（Claude 候选采集的 VC-5 准入合同与运行画像路径）",
+        "tool:vc5-run": "B4-01b（Claude 候选 run 的参数与 attempt 布局：VC-5 run 计划、候选网关切换与派发前预检，B5b-01b 接入）",
+        "tool:vc5-seal": "B4-02 证据侧与 B4-01e（候选证据四阶段封存与 Desktop、VS Code 客户端收据，B5b-01b 接入）",
+        "tool:vc5-accept": "B4-06b（compare／accept 读侧根、canonical 交接与 VC-5 completion，B5b-01b 接入）",
+        "tool:vc5-recover": "B4-05b 与 B4-01c（候选恢复段与 VC-5 续跑计划，B5b-01b 接入）",
     },
 }
 
@@ -372,7 +404,8 @@ SHELL_ENTRIES = (
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
     "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script", "vc1_dispatch_script",
-    "atomic_rehearsal_module", "atomic_root_prefix",
+    "atomic_rehearsal_module", "atomic_root_prefix", "vc23_dispatch_script", "campaign_purpose_key", "preflight_plan_argv",
+    "official_reuse_subcommand",
 )
 
 

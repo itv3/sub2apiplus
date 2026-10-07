@@ -192,6 +192,12 @@ class ClientTableStructureTests(unittest.TestCase):
             self.assertIsNotNone(re.search(pattern, sample), sample)
 
 
+def codex_names_all(steps: dict) -> set[str]:
+    """Codex 全部步骤的输入名（核对 Codex 的声明里没有混进 Claude 专属的参数）。"""
+
+    return {item.name for step in steps.values() for item in step.inputs}
+
+
 class ParseEnvClaudeTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -206,8 +212,10 @@ class ParseEnvClaudeTests(unittest.TestCase):
         self.assertEqual((values["CLIENT"], values["CLIENT_BIN"]), ("claude", f"/opt/claude-{TARGET}/claude"))
         derived = self.parser.derive(values)
         codex_derived = self.parser.derive(self.parser.parse(self.fixture.env_file.read_text(encoding="utf-8")))
-        self.assertEqual(set(derived) - {"CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID"}, set(codex_derived),
-                         "与 Codex 派生同一组键（另加本轮写的客户端键）")
+        self.assertEqual(set(derived) - {"CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID", "CAMPAIGN_PURPOSE"},
+                         set(codex_derived), "与 Codex 派生同一组键（另加本轮写的客户端键与 Claude 的 Campaign 用途）")
+        self.assertEqual(derived["CAMPAIGN_PURPOSE"], "production_replacement", "Claude 缺省用途（B5b-01）")
+        self.assertNotIn("CAMPAIGN_PURPOSE", codex_derived, "Codex 不派生用途，与改造前相同")
         data, tools = str(self.fixture.data_root), f"{self.fixture.data_root}/tools/official_client_capture"
         expected = {
             "CAMPAIGN_PREFIX": "claude-code-2_1_245", "TARGET_TAG": "claude-21245",
@@ -236,6 +244,17 @@ class ParseEnvClaudeTests(unittest.TestCase):
             self.assertIn(f"unset {key}\n", completed.stdout, "外层环境残留的 Codex 专属参数被清掉")
             self.assertNotIn(f"export {key}=", completed.stdout)
 
+    def test_campaign_purpose_is_claude_only_and_closed(self) -> None:
+        """B5b-01：Campaign 用途只对登记了用途参数键的客户端（Claude）生效，可选值闭合；Codex 参数文件写了即拒绝。"""
+
+        values = self.parser.parse(self.text + "CAMPAIGN_PURPOSE=validation_only\n")
+        self.assertEqual(self.parser.derive(values)["CAMPAIGN_PURPOSE"], "validation_only")
+        with self.assertRaisesRegex(self.parser.EnvFileError, "CAMPAIGN_PURPOSE 只能是"):
+            self.parser.parse(self.text + "CAMPAIGN_PURPOSE=fixture_only\n")
+        codex = self.fixture.env_file.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(self.parser.EnvFileError, "不得写 CAMPAIGN_PURPOSE"):
+            self.parser.parse(codex + "CAMPAIGN_PURPOSE=production_replacement\n")
+
     def test_claude_rejects_codex_keys_and_requires_generic_keys(self) -> None:
         cases = {
             "Codex 二进制键": (self.text + 'CODEX_BIN="/opt/codex/bin/codex"\n', "专属键"),
@@ -258,7 +277,7 @@ class ParseEnvClaudeTests(unittest.TestCase):
         overrides = dict(re.findall(r"^#   ([A-Z_][A-Z0-9_]*)=([^\s（]+)", template, flags=re.M))
         self.assertEqual({"CLIENT", "TARGET_PROFILE_ID", "NEW", "IN", "UP", "CAND", "BUNDLE_BRANCH", "CLIENT_BIN", "CLIENT_BIN_SHA256",
                           "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP",
-                          *PLAN_KEYS}, set(overrides))
+                          "CAMPAIGN_PURPOSE", *PLAN_KEYS}, set(overrides))
         lines = []
         for line in template.splitlines():
             key = line.split("=", 1)[0]
@@ -386,7 +405,12 @@ class EntryStepsClaudeTests(unittest.TestCase):
         self.assertTrue({"param:ACTIVE_RELEASE_CATALOG", "param:PRODUCTION_INVENTORY_STORE", "param:PREDECESSOR_STORE",
                          "file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
                          "tree:{PRODUCTION_INVENTORY_STORE}#pycache", "tree:{PREDECESSOR_STORE}#pycache"} <= names["preflight-plan"])
-        self.assertFalse({"param:LITE_MODEL", "param:CLIENT_ACCOUNT_ID", "param:API_KEY_ID", "param:COMPOSE_DIR"} & names["preflight-plan"])
+        self.assertFalse({"param:LITE_MODEL", "param:COMPOSE_DIR"} & names["preflight-plan"])
+        # B5b-01：预检 plan 另带 Campaign 用途与候选阶段的账号、ingress API Key（原 B4-01 d 段），计时账本一步登记用途；
+        # Codex 的两步声明不变（没有用途参数，账号键是 CODEX_ACCOUNT_ID 且 Codex 预检本来就登记）。
+        self.assertTrue({"param:CAMPAIGN_PURPOSE", "param:CLIENT_ACCOUNT_ID", "param:API_KEY_ID"} <= names["preflight-plan"])
+        self.assertIn("param:CAMPAIGN_PURPOSE", names["ledger"])
+        self.assertNotIn("param:CAMPAIGN_PURPOSE", {item.name for item in codex["ledger"].inputs} | codex_names_all(codex))
         codex_names = {item.name for item in codex["preflight-plan"].inputs}
         self.assertFalse({name for name in codex_names if "ACTIVE_RELEASE_CATALOG" in name or "PRODUCTION_INVENTORY" in name},
                          "Codex 的预检 plan 输入不变")
@@ -443,7 +467,7 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
         (self.fx.data / "audit" / f"zero-request-smoke-{self.fx.params['STAMP']}.json").unlink()
         self.fx.params.update({"RUNROOT": str(self.root / "run"), "ENTRY_BUNDLE": str(self.root / "x.bundle"), "ENTRY_BRANCH": "claude/test",
                                "BASELINE_RULES_JSON": str(self.root / "rules.json"), "BASELINE_SCENARIOS_JSON": str(self.root / "scenarios.json"),
-                               "CLIENT": "claude"})
+                               "CLIENT": "claude", "CAMPAIGN_PURPOSE": "production_replacement"})
         (self.fx.data / "control" / "claude-managed-deploy-20261005t000000z.json").write_text(
             json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "f" * 64}}), encoding="utf-8")
         self.commands = Commands(self.fx)
@@ -506,6 +530,12 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
         ledger, environment = calls
         self.assertEqual(ledger[3], CT.spec("claude")["timing_ledger_module"])
         self.assertEqual(ledger[-2:], ["--client", "claude"])
+        self.assertEqual(_option(ledger, "--campaign-purpose"), "production_replacement")
+        # B5b-01：Claude 的计时账本按参数 CAMPAIGN_PURPOSE 建（文档路发现的 validation_only 走不了 entry.sh）。
+        self.fx.params["CAMPAIGN_PURPOSE"] = "validation_only"
+        self.orchestrator(runner).step_ledger()
+        self.assertEqual(_option(calls[-1], "--campaign-purpose"), "validation_only")
+        calls[:] = [ledger, environment]
         self.assertTrue(_option(ledger, "--project-ledger-dir").endswith("/evidence/campaigns/upgrade-project-ledger-claude"))
         self.assertEqual(environment[3], "tools.official_client_capture.claude_upgrade_arm64_environment_receipt")
         self.assertEqual(_option(environment, "--claude-version"), self.fx.params["TARGET_VERSION"])
@@ -535,6 +565,8 @@ class EntryOrchestratorClaudeBackHalfTests(unittest.TestCase):
             "PRODUCTION_INVENTORY_STORE": str(store), "PRODUCTION_INVENTORY_CAMPAIGN": "claude-code-active",
             "ENTRYPOINT": "sdk-cli", "PRIVACY_MODE": "essential-traffic", "OAUTH_ORG_ID": "claude-org", "MODEL_CATALOG_SHA256": "e" * 64,
             "RUNROOT": str(self.root / "run"), "CAMPAIGN_PREFIX": "claude-code-2_1_245",
+            # B5b-01：parse_env 给 Claude 派生的 Campaign 用途；候选阶段的验收账号（Claude 用通用键，API_KEY_ID 两客户端同名）。
+            "CAMPAIGN_PURPOSE": "production_replacement", "CLIENT_ACCOUNT_ID": "7",
         }
         self.fx.params.update(self.claude)
         (self.fx.data / "control" / "claude-managed-deploy-20261005t000000z.json").write_text(
@@ -613,9 +645,15 @@ class EntryOrchestratorClaudeBackHalfTests(unittest.TestCase):
             "production_inventory_campaign": "claude-code-active", "entrypoint": "sdk-cli", "privacy_mode": "essential-traffic",
             "oauth_org_id": "claude-org", "model_catalog_sha256": "e" * 64, "source_commit": self.fx.params["ENTRY_COMMIT"],
             "predecessor_store": None, "predecessor_campaign": None,
+            # B5b-01（原 B4-01 d 段）：Campaign 用途与候选阶段的账号、ingress API Key 进预检，VC-0 收口按它恢复 Formal plan。
+            "campaign_purpose": "production_replacement", "claude_account_id": "7", "api_key_id": self.fx.params["API_KEY_ID"],
         }
         self.assertEqual({key: getattr(parsed, key) for key in expected}, expected)
         claude_upgrade_campaign._require_create_arguments(parsed)
+        self.fx.params["CAMPAIGN_PURPOSE"] = "validation_only"
+        self.calls.clear()
+        self.assertTrue(self.orchestrator().step_preflight_plan()[0])
+        self.assertEqual(claude_upgrade._build_parser().parse_args(self.plan_call()[4:]).campaign_purpose, "validation_only")
 
     def test_preflight_plan_reuse_and_missing_parameters(self) -> None:
         from tools.official_client_capture import claude_upgrade
@@ -906,6 +944,8 @@ class EntryScriptClaudeTests(unittest.TestCase):
                 "OFFICIAL_ASSET_SHA256": digest(freeze), "CAPTURE_RUNTIME_IMAGE": "oauth-egress-capture-capture-cli@sha256:" + "b" * 64,
                 "SCENARIOS_JSON": str(OCC / f"claude_upgrade_scenarios_{version.replace('.', '_')}.json"),
                 "MAIN_MODEL": "claude-sonnet-5", "UPSTREAM_IP": "160.79.104.10",
+                # B5b-01：模板另带 Campaign 用途（parse_env 给 Claude 派生缺省值）与候选阶段的账号、ingress API Key。
+                "CAMPAIGN_PURPOSE": "production_replacement", "CLIENT_ACCOUNT_ID": "7", "API_KEY_ID": "8",
             }
             audit_body = (self.function("entry-preflight.sh", "plan_audit_from_table") + self.function("entry-preflight.sh", "plan_audit")
                           + "plan_audit\n")
@@ -1134,11 +1174,14 @@ class FixAndContinueDeployScopeTests(unittest.TestCase):
 
 
 class PendingToolsClaudeTests(unittest.TestCase):
-    def test_entry_dryrun_is_wired_and_vc5_admission_still_refuses_claude(self) -> None:
+    def test_entry_dryrun_and_vc5_admission_are_wired_for_claude(self) -> None:
         """B5a-10 落实了入口空跑（客户端表不再登记 tool:entry-dryrun）：Claude 的空跑按 Claude 的部署收据起，数据根没有它时报的是
-        缺收据，不是「尚未接入」；VC-5 准入仍待 B4-01。"""
+        缺收据，不是「尚未接入」。B5b-01 落实了 VC-5 准入（不再登记 tool:vc5-admission）：两客户端都放行；Claude 的 VC-5 派发
+        （run／seal／accept／recover）在 B5b-01b 接入前仍登记为待接入。"""
 
         self.assertIsNone(CT.pending("claude", "tool:entry-dryrun"))
+        self.assertIsNone(CT.pending("claude", "tool:vc5-admission"))
+        self.assertEqual(sorted(CT.TABLE["claude"]["pending"]), ["tool:vc5-accept", "tool:vc5-recover", "tool:vc5-run", "tool:vc5-seal"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)
@@ -1155,8 +1198,7 @@ class PendingToolsClaudeTests(unittest.TestCase):
             parser = load_parse_env()
             config = parser.parse(env.read_text(encoding="utf-8"))
             with mock.patch.object(sys, "path", [str(DRIVER), *sys.path]):
-                with self.assertRaisesRegex(admission.AdmissionError, "client_admission_pending"):
-                    admission._require_client_admission(config)
+                admission._require_client_admission(config)
                 admission._require_client_admission(parser.parse(fixture.env_file.read_text(encoding="utf-8")))
 
 

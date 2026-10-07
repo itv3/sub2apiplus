@@ -7,6 +7,8 @@
 #   只允许读侧复核（seal-receipts 只核对模式）与批准 + compare。manifest 不存在时按产物存在与否逐步续跑。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
+# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 vc5_require_admission

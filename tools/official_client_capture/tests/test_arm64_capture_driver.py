@@ -828,15 +828,19 @@ class DriverParameterizationTests(unittest.TestCase):
     def test_environment_collect_binds_round_target_version(self):
         """每一处环境事实采集都必须把本轮参数 TARGET_VERSION 交给 Rust TLS 探针，不能写死或省略。"""
 
+        # B5b-01 起两份目标平台门禁脚本按客户端表取环境收据模块与探针版本参数（Codex 即原模块与 --rust-tls-codex-version）：
+        # 写死 Codex 模块的调用必须带 Rust TLS 版本参数，按客户端表取的调用必须带客户端表给出的版本参数，两种都交本轮 TARGET_VERSION。
         calls = []
         for path in sorted(SCRIPTS.rglob('*.sh')):
             for number, line in enumerate(path.read_text().splitlines(), 1):
-                if 'codex_upgrade_arm64_environment_receipt collect' in line:
+                if 'codex_upgrade_arm64_environment_receipt collect' in line or '"$CT_ENVIRONMENT_RECEIPT_MODULE" collect' in line:
                     calls.append((path.name, number, line))
         self.assertGreaterEqual(len(calls), 3, calls)
         for name, number, line in calls:
             with self.subTest(script=name, line=number):
-                self.assertIn('--rust-tls-codex-version "$TARGET_VERSION"', line)
+                option = ('"$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION"' if "$CT_ENVIRONMENT_RECEIPT_MODULE" in line
+                          else '--rust-tls-codex-version "$TARGET_VERSION"')
+                self.assertIn(option, line)
 
     def test_target_parameters_generate_vc2_vc4_and_vc5_commands(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1157,8 +1161,10 @@ class PreA3OrderingTests(unittest.TestCase):
 
         pre_a3 = (SCRIPTS / "pre-a3.sh").read_text(encoding="utf-8")
         record = "codex_upgrade_pre_a3_certification record-reuse --certification"
-        self.assertIn(record, pre_a3)
-        self.assertGreater(pre_a3.index(record), pre_a3.rindex("find-reusable --certification"))
+        # B5b-01：pre-a3.sh 按客户端表取 pre-A3 模块（Codex 即 codex_upgrade_pre_a3_certification）。
+        table_record = 'python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification'
+        self.assertIn(table_record, pre_a3)
+        self.assertGreater(pre_a3.index(table_record), pre_a3.rindex("find-reusable --certification"))
         self.assertIn('--receipt-root "$(dirname "$PRE_A3_CERTIFICATION")"', pre_a3)
         stage1 = (SCRIPTS / "stage1.sh").read_text(encoding="utf-8")
         self.assertGreater(stage1.index(record), stage1.index("find-reusable --certification"))

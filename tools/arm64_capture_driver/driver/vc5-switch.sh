@@ -2,6 +2,8 @@
 # 把 ARM64 网关切换为候选镜像（previous 模式，声明目标画像）或恢复生产镜像。
 # 用法：bash vc5-switch.sh candidate <image_tag> <image_id> <source_tree_sha256> <build_id> | bash vc5-switch.sh restore
 set -Eeuo pipefail
+# 恢复生产镜像两客户端通用；切换候选网关用候选 run 的环境变量形状，Claude 在 B5b-01b 接入前拒绝（B5b-01）。
+[ "${1:-}" = restore ] || CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$COMPOSE_DIR"
 MODE="$1"

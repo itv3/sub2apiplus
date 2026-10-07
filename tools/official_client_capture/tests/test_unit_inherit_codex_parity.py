@@ -491,10 +491,30 @@ B5A11_SOURCE_DIGESTS: dict[str, str] = {
     "tools/official_client_capture/codex_upgrade_vc_receipt.py": "019f19b5cf6acf56e07b04981a9001e6b1ff33a3805a12da489928ce254661a5",
 }
 B5A11_SOURCE_REMOVED_LINES: dict[str, list[str]] = {relative: [] for relative in B5A11_SOURCE_DIGESTS}
+# B5b-01a（Claude 的 Campaign 用途按参数 CAMPAIGN_PURPOSE）改了入口编排器与入口步骤：以 B5b-01a 开工时的提交为基线（与驱动
+# 脚本同一个 B5B01A_BASELINE_COMMIT；它到收口基线之间这两个文件没有变化），各只改写一行，Codex 下等价：
+# * entry_orchestrator.py：建计时账本的 --campaign-purpose 改为「客户端表登记了用途参数键就取参数，否则 production_replacement」，
+#   Codex 没有用途参数键，命令行逐字不变（B5a-06 对照模块的 EntryLedgerAndPreflightCodexParityTests 逐字核对）；
+# * entry_steps.py：计时账本一步的参数输入末尾追加客户端表的用途参数键，Codex 为空，步骤声明逐字不变
+#   （test_codex_step_table_and_gate_inputs_match_the_baseline 守住）。
+B5B01A_BASELINE_COMMIT = b5a06.B5B01A_BASELINE_COMMIT
+B5B01A_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_orchestrator.py": "232ed80834e96d35a2aaa930af64db484595a81ff9328a23a47699d52965723d",
+    "tools/ci/entry_steps.py": "810272e0b0a663e9d2fa588d33b378080b840a2d54a09fcf5bb19e4013ba0904",
+}
+B5B01A_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_orchestrator.py": [
+        '                                        "--campaign-purpose", "production_replacement",',
+    ],
+    "tools/ci/entry_steps.py": [
+        '            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SOURCE_DIGESTS, B5A11_SOURCE_REMOVED_LINES),
+    ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SOURCE_DIGESTS, B5B01A_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
@@ -508,6 +528,8 @@ STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]]
                             "tree:{PRODUCTION_INVENTORY_STORE}#pycache", "tree:{PREDECESSOR_STORE}#pycache"], [],
                            "B2-11 第二部分：Claude 预检 plan 另读的文件与 Store 目录取客户端表 preflight_plan_inputs（Active Release 目录、"
                            "静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store）；Codex 这一项为空，步骤表不变"),
+        "ledger": (["param:CAMPAIGN_PURPOSE"], [],
+                   "B5b-01a：Claude 的计时账本按参数 CAMPAIGN_PURPOSE 建（用途一变账本重建）；Codex 没有用途参数键，步骤表不变"),
     },
 }
 

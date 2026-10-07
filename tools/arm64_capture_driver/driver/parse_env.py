@@ -73,7 +73,13 @@ OPTIONAL_KEYS = (
     "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY",
     "PRODUCTION_INVENTORY_STORE", "PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN",
     "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
+    # B5b-01：Campaign 用途。只对客户端表登记了用途参数键的客户端（Claude）生效：缺省 production_replacement，可选
+    # validation_only，入口建计时账本与预检 Campaign 都按它。Codex 的入口固定 production_replacement，参数文件写了即拒绝。
+    "CAMPAIGN_PURPOSE",
 )
+# Campaign 用途参数的可选值与缺省值（B5b-01；与编排器 plan 的 --campaign-purpose 可选值相同）。
+CAMPAIGN_PURPOSES = ("production_replacement", "validation_only")
+DEFAULT_CAMPAIGN_PURPOSE = "production_replacement"
 # B2-11 第二部分的新键里：绝对路径、安全标识与成对出现的几组。
 PLAN_PATH_KEYS = (
     "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
@@ -325,6 +331,11 @@ def parse(text: str) -> dict[str, str]:
     for first, second in PLAN_PAIRED_KEYS:
         if (first in values) != (second in values):
             raise EnvFileError(f"{first} 与 {second} 必须同时给出")
+    if "CAMPAIGN_PURPOSE" in values:
+        if spec["campaign_purpose_key"] != "CAMPAIGN_PURPOSE":
+            raise EnvFileError(f"CLIENT={spec['client']} 的入口固定 Campaign 用途 {DEFAULT_CAMPAIGN_PURPOSE}，参数文件不得写 CAMPAIGN_PURPOSE")
+        if values["CAMPAIGN_PURPOSE"] not in CAMPAIGN_PURPOSES:
+            raise EnvFileError(f"CAMPAIGN_PURPOSE 只能是 {' 或 '.join(CAMPAIGN_PURPOSES)}")
     if values.get("VC4_BUILD_NETWORK", "default") not in {"default", "none", "host"}:
         raise EnvFileError("VC4_BUILD_NETWORK 只能是 default、none 或 host")
     if "VC4_BUILD_NETWORK_APPROVAL" in values and (
@@ -369,6 +380,9 @@ def derive(values: dict[str, str]) -> dict[str, str]:
         "ENTRY_ROOT": data,
         "VC4_BUILD_NETWORK": "default",
     }
+    # B5b-01：登记了用途参数键的客户端（Claude）派生缺省用途，参数文件写了即以它为准（下一行覆盖）；Codex 不派生，与改造前相同。
+    if spec["campaign_purpose_key"] is not None:
+        result[spec["campaign_purpose_key"]] = DEFAULT_CAMPAIGN_PURPOSE
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
     result.update(coordinates(values))
     return result

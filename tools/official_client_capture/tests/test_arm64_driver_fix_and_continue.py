@@ -279,6 +279,9 @@ def _attempt(st, attempt_id, *, approve=None):
 def cli(module, argv):
     argv = list(argv)
     record({"module": module, "argv": argv})
+    # B5b-01：Claude 编排器（claude_upgrade）与 Codex 编排器同名同参的子命令给同一组应答；调用记录保留原模块名。
+    if module == "claude_upgrade":
+        module = "codex_upgrade"
     key = _key(module, argv)
     override = _override(key)
     if override is not None:
@@ -395,6 +398,20 @@ _STUB_MODULES = {
         if __name__ == "__main__":
             import sys
             raise SystemExit(_stub.cli("codex_upgrade", sys.argv[1:]))
+    '''),
+    "claude_upgrade.py": textwrap.dedent('''
+        """测试替身：claude_upgrade（CLI 与 _tool_identity；B5b-01 修复轮按客户端表取编排器）。"""
+        from tools.official_client_capture import _stub
+
+
+        def _tool_identity(include_git=True):
+            closure = _stub.scenario().get("wire_closure", "b" * 64)
+            return {"orchestrator_closures": {"wire_producer": {"closure_sha256": closure}}}
+
+
+        if __name__ == "__main__":
+            import sys
+            raise SystemExit(_stub.cli("claude_upgrade", sys.argv[1:]))
     '''),
     "codex_upgrade_project_ledger.py": textwrap.dedent('''
         """测试替身：项目总账（CLI record-root-cause-repair 与只读事件）。"""
@@ -528,6 +545,13 @@ def main(argv):
     path = control / f"codex-01570-supervisor-enable-{{stamp}}.json"
     path.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
     path.chmod(0o600)
+    # B5b-01：事务范围带 claude 时同一事务另签 Claude 受管部署收据（工具身份在 identity 对象里）。
+    if "--client" in argv and "claude" in argv[argv.index("--client") + 1:]:
+        claude = json.loads((stub / "claude-deploy-receipt.json").read_text(encoding="utf-8"))
+        claude["created_at_utc"] = receipt["created_at_utc"]
+        claude_path = control / f"claude-managed-deploy-{{stamp}}.json"
+        claude_path.write_text(json.dumps(claude, indent=2), encoding="utf-8")
+        claude_path.chmod(0o600)
     print(json.dumps({{"status": "passed", "receipt": str(path)}}))
     return 0
 
@@ -648,9 +672,15 @@ class _Round:
     """一轮"修好接着跑"的完整离线夹具：数据根（受管工具替身）、驱动参数、监督器状态目录、git bundle、期望文件。"""
 
     def __init__(self, root: Path, *, runs: list[tuple[str, str, float]] | None = None, scenario: dict | None = None,
-                 state: dict | None = None, params: dict[str, str] | None = None) -> None:
+                 state: dict | None = None, params: dict[str, str] | None = None, client: str = "codex") -> None:
         self.root = root
+        self.client = client
         self.fixture = driver_tests._DriverFixture(root)
+        if client == "claude":
+            # B5b-01：Claude 轮次的驱动参数文件（CLIENT=claude、通用键）；修复轮从它取本轮客户端。
+            from tools.official_client_capture.tests.test_driver_client_table import claude_env_text
+
+            self.fixture.env_file.write_text(claude_env_text(self.fixture), encoding="utf-8")
         self.data = self.fixture.data_root
         self.runroot = self.fixture.runroot
         self.campaign = self.fixture.new
@@ -712,6 +742,9 @@ class _Round:
             ".gitignore": "docs/repository-docs/\n",
             "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md": "# 框架\n",
             "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md": "# 指南\n",
+            # B5b-01：Claude 已纳管时部署归档 Claude 指南与共享控制面文档（两客户端的活动文档都进 repository-docs）。
+            "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md": "# Claude 指南\n",
+            "docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md": "# 共享控制面\n",
             "tools/__init__.py": "",
             "tools/arm64_supervised_deploy.py": self.deploy_script_new,
             "tools/official_client_capture/__init__.py": "",
@@ -763,6 +796,17 @@ class _Round:
             "control_sha256": "5" * 64, "supervisor_sha256": self.supervisor_sha,
         }
         _write_json(self.stub / "deploy-receipt.json", {"schema_version": "codex-arm64-supervisor-enable/v1", **self.receipt_fields})
+        if self.client == "claude":
+            # Claude 受管部署收据：工具身份在 identity 对象里，状态、架构与监督器摘要在顶层（修复轮按客户端投影后比对 EXPECT）。
+            identity = {key: self.receipt_fields[key] for key in (
+                "tool_files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")}
+            claude = {"schema_version": "official-client-managed-deploy/v1", "client": "claude", "status": "passed",
+                      "architecture": self.receipt_fields["architecture"], "supervisor_sha256": self.supervisor_sha, "identity": identity}
+            _write_json(self.stub / "claude-deploy-receipt.json", claude)
+            # 首次部署之后的现场：control 里已有两客户端的部署收据（都已纳管），本轮部署事务带两客户端。
+            _write_json(self.data / "control" / "claude-managed-deploy-20261001t000000000000z.json", claude)
+            _write_json(self.data / "control" / "codex-01570-supervisor-enable-20261001t000000000000z.json",
+                        {"schema_version": "codex-arm64-supervisor-enable/v1", **self.receipt_fields})
         self.expect_path = self.root / "upload" / "expect.json"
         self.write_expect()
         self.entry_path = _write_json(self.root / "upload" / "entry.json", {
@@ -834,7 +878,9 @@ class _Round:
 
     # --- 运行与观察 ---------------------------------------------------------------
 
-    def run(self, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def run(self, *extra: str, env: dict[str, str] | None = None, script: Path | None = None) -> subprocess.CompletedProcess[str]:
+        """跑一轮；``script`` 给出另一份驱动（B5b-01 的 Codex 逐字对照用基线提交的驱动目录），缺省是仓库里的驱动。"""
+
         if self.provide_approvals and "--dry-run" not in extra:
             self.approve_fixture_operations()
         merged = {
@@ -849,7 +895,7 @@ class _Round:
         merged.pop("FC_ITEM_DIRTY", None)
         merged.pop("FC_ITEM_ENV_RECORD", None)
         merged.update(env or {})
-        return subprocess.run(["bash", str(SCRIPT), str(self.params_path), *extra], capture_output=True, text=True,
+        return subprocess.run(["bash", str(script or SCRIPT), str(self.params_path), *extra], capture_output=True, text=True,
                               errors="replace", env=merged, cwd=str(self.root), timeout=600)
 
     def approve_fixture_operations(self):
@@ -878,7 +924,7 @@ class _Round:
         keys: list[str] = []
         for call in self.calls():
             module, argv = call["module"], call["argv"]
-            if module == "codex_upgrade":
+            if module in ("codex_upgrade", "claude_upgrade"):
                 command = argv[0]
                 if command == "tool-evolution":
                     keys.append("tool-evolution:apply" if "--approve-sha256" in argv else "tool-evolution:preview")
@@ -1290,6 +1336,56 @@ class FixAndContinueScriptTests(unittest.TestCase):
         self.assertEqual(apply[apply.index("--approved-by") + 1], "测试批准人（老板授权“修好接着跑”）")
         self.assertTrue(any((fixture.out / "raw").glob("*-evolution-preview.out")))
         self.assertIn("vc5-all.sh", result.stdout)
+
+    def test_full_round_runs_steps_in_order_for_claude(self) -> None:
+        """B5b-01 验收：驱动参数文件 CLIENT=claude 时 15 步全部走通——受管命令调 Claude 编排器（项目总账、VC 制品、监督器、
+        对账器两客户端共用），部署事务带两客户端与两个受管根、归档两客户端的活动文档，部署收据按 Claude 收据比对 EXPECT。"""
+
+        fixture = _Round(self.root, client="claude")
+        result = fixture.run()
+        self._assert_ok(result)
+        self.assertEqual(fixture.call_keys(), FULL_ORDER)
+        statuses = {name: fixture.step(name)["status"] for name in (
+            "deploy", "postdeploy", "regression", "item-tests", "background-validate", "evolution", "pre-extend", "reconcile-runs",
+            "reconcile-attempt", "repair", "approve", "authorize", "extend", "accepted", "recover")}
+        self.assertEqual(statuses, {
+            "deploy": "passed", "postdeploy": "passed", "regression": "passed", "item-tests": "passed",
+            "background-validate": "passed", "evolution": "passed",
+            "pre-extend": "skipped", "reconcile-runs": "passed", "reconcile-attempt": "passed", "repair": "skipped",
+            "approve": "passed", "authorize": "passed", "extend": "skipped", "accepted": "passed", "recover": "passed",
+        })
+        modules = {call["module"] for call in fixture.calls()}
+        self.assertIn("claude_upgrade", modules)
+        self.assertNotIn("codex_upgrade", modules, "Claude 轮次不调 Codex 编排器")
+        orchestrated = [call["argv"][0] for call in fixture.calls() if call["module"] == "claude_upgrade"]
+        self.assertEqual(sorted(set(orchestrated)), ["reconcile-attempt", "reconcile-supervisor-run", "tool-evolution", "tool-evolution-status"])
+        deploy = [call["argv"] for call in fixture.calls() if call["module"] == "arm64_supervised_deploy"][0]
+        self.assertEqual(deploy[deploy.index("--client"):], ["--client", "codex", "claude", "--managed-roots",
+                                                               "tools/official_client_capture", "tools/official_client_control"])
+        archived = sorted(path.name for path in (fixture.staging_tree / "docs" / "repository-docs").iterdir())
+        self.assertEqual(archived, ["CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md", "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+                                    "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md", "OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md"])
+        self.assertIn("claude-managed-deploy-", fixture.step("postdeploy")["summary"]["receipt"])
+        modules = subprocess.run([sys.executable, "-B", str(HELPER), "client-modules", "--params", str(fixture.params_path)],
+                                 capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=True).stdout
+        self.assertEqual(modules, "ORCHESTRATOR=claude_upgrade\nPROJECT_LEDGER_MODULE=codex_upgrade_project_ledger\n")
+        # 客户端不进轮次参数集合：人工批准绑定轮次参数与 VC_ENV 文件摘要（客户端随文件摘要绑定），与 Codex 同一形状。
+        exports = subprocess.run([sys.executable, "-B", str(HELPER), "load-params", str(fixture.params_path)], capture_output=True,
+                                 text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=True).stdout
+        self.assertNotIn("export CLIENT=", exports)
+        self.assertEqual(load_helper().deploy_client(load_helper().load_params(fixture.params_path)), "claude")
+        recover_call = [c for c in fixture.calls() if c["module"] == "vc5-recover.sh"][0]
+        self.assertEqual(recover_call["ARM64_VC_ENV"], str(fixture.runroot / "env.sh"), "续跑脚本读同一份 Claude 驱动参数")
+
+    def test_round_params_cannot_name_the_client(self) -> None:
+        """客户端只取驱动参数文件（vc5-recover.sh 读的同一份）：轮次参数文件写 CLIENT 即拒绝。"""
+
+        fixture = _Round(self.root)
+        fixture.write_params({"CLIENT": "claude"})
+        completed = subprocess.run([sys.executable, "-B", str(HELPER), "load-params", str(fixture.params_path)], capture_output=True,
+                                   text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("CLIENT", completed.stderr)
 
     def test_second_run_skips_idempotently(self) -> None:
         fixture = _Round(self.root)

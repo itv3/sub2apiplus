@@ -30,8 +30,8 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
-# 准入报告与批准件的合同（Codex 的取值；按客户端取客户端表，B5a-06）。Claude 的 VC-5 准入合同由候选采集落实（客户端表
-# pending 的 tool:vc5-admission），在那之前 Claude 参数文件的准入一律拒绝，不拿 Codex 合同顶替。
+# 准入报告与批准件的合同（Codex 的取值；按客户端取客户端表，B5a-06）。Claude 签 official-client-vc5-admission/v1 与
+# 批准件 official-client-vc5-admission-approval/v1（B5b-01，原 B4-01 d 段），运行画像副本路径同样取客户端表。
 SCHEMA = "codex-vc5-admission/v1"
 APPROVAL_SCHEMA = "codex-vc5-admission-approval/v1"
 CONTRACT_SCHEMA = "sub2api-admin-jwt/v1"
@@ -217,7 +217,11 @@ def _require_client_admission(config: dict[str, str]) -> None:
 
 
 class ManagedFacts:
-    """正式路径只调用现有收据重放器；测试替身不能由命令行或环境启用。"""
+    """正式路径只调用现有收据重放器；测试替身不能由命令行或环境启用。
+
+    画像与 VC-3／VC-4 收据的重放、官方证据所在 Campaign 的判定经客户端适配器（B5b-01：``catalog_stage_profile``、
+    ``vc5_official_campaign``；Codex 的实现就是这里原有的函数体，搬进 ``codex_upgrade_client_adapter``，结果与错误码不变），
+    适配器抛出的静态错误码原样转成 ``AdmissionError``。"""
 
     def __init__(self, config: dict[str, str]):
         self.config = config
@@ -225,6 +229,26 @@ class ManagedFacts:
         os.environ.pop("CODEX_UPGRADE_IDENTITY_MEMO", None)
         # 编排器按本轮客户端取客户端表（B5a-06；Codex 即 codex_upgrade）。
         self.upgrade = importlib.import_module(_client_spec(config)["orchestrator_module"])
+
+    @property
+    def client(self) -> str:
+        return str(_client_spec(self.config)["client"])
+
+    @staticmethod
+    def _adapters() -> Any:
+        """受管树里的客户端适配器注册表（数据根已在 sys.path 最前）。"""
+
+        return importlib.import_module("tools.official_client_capture.upgrade_client_adapter")
+
+    @contextlib.contextmanager
+    def _fact_errors(self):
+        """适配器的事实错误（只含静态错误码）转成准入错误；其它异常照旧由调用方记为 ``<检查>_replay_failed``。"""
+
+        adapters = self._adapters()
+        try:
+            yield adapters.adapter_for(self.client)
+        except adapters.Vc5AdmissionFactError as error:
+            raise AdmissionError(str(error)) from error
 
     def catalog(self) -> dict[str, Any]:
         c, cu = self.config, self.upgrade
@@ -234,58 +258,23 @@ class ManagedFacts:
             from round_context import resolve
         context = resolve(c, upgrade=cu)
         campaign = Path(context["parameters"]["NEWDIR"])
-        manifest = cu._require_formal_campaign(campaign)
-        classification = cu._load_stage_result(campaign, "classify")
-        plan = cu._vc_campaign_plan(campaign, manifest)
-        _, checkpoint = cu._replay_vc_checkpoint(campaign, plan, "VC-3")
-        ref = checkpoint["stage_receipt"]
-        receipt_path = Path(ref["path"])
-        if not receipt_path.is_absolute():
-            receipt_path = campaign / receipt_path
-        plain_path(receipt_path)
-        if cu.file_sha256(receipt_path) != ref["sha256"]:
-            raise AdmissionError("vc3_receipt_binding_invalid")
-        stage = read_json(receipt_path)
-        cu._verify_catalog_stage_output(receipt_path.parent, stage)
-        profile_id, profile_digest = cu._profile_binding_from_manifest(campaign, classification)
-        if (stage.get("campaign_id"), stage.get("target_version"), stage.get("profile_id"), stage.get("target_profile_digest")) != (
-            c["NEW"], c["TARGET_VERSION"], c["PROFILE_ID"], profile_digest,
-        ) or profile_id != c["PROFILE_ID"] or stage.get("classification_sha256") != classification.get("joint_manifest_sha256"):
-            raise AdmissionError("vc3_profile_binding_invalid")
-        build_path = campaign / "candidates" / c["CAND"] / "build-receipt.json"
-        build, binding = cu._replay_candidate_build_receipt(campaign, manifest, c["CAND"], build_path)
-        revision, record = cu._current_candidate_revision_record(campaign, manifest)
-        if revision is None or (record is not None and record.get("candidate_id") != c["CAND"]):
-            raise AdmissionError("active_candidate_revision_invalid")
-        cu._replay_vc_checkpoint(campaign, plan, "VC-4", revision=revision)
-        args = argparse.Namespace(
-            campaign_dir=campaign, candidate_id=c["CAND"], runtime_image=build["image"]["reference"],
-            candidate_image_id=build["image"]["image_id"], candidate_source=Path(c["B"]) / "source",
-            build_id=build["build"]["build_id"], deployed_version=c["TARGET_VERSION"],
-            profile_id=profile_id, profile_digest=profile_digest, candidate_purpose="production_replacement",
-        )
-        identity = cu._candidate_identity_for_run(args, manifest, classification, verify_image=False)
-        identity = cu._bind_candidate_identity_to_build_receipt(args, identity, build, binding)
-        if identity["git_commit"] != c["C"]:
-            raise AdmissionError("candidate_commit_invalid")
-        source_receipt = Path(c["B"]) / "source" / c["LIFECYCLE_DIR"] / "catalog-stage/catalog-stage-receipt.json"
-        plain_path(source_receipt)
-        if source_receipt.read_bytes() != receipt_path.read_bytes():
-            raise AdmissionError("candidate_catalog_receipt_drift")
-        relative = f"catalogdata/runtime/profiles/{c['TARGET_VERSION']}/{profile_digest}.json"
-        matching = [item for item in stage["inventory"] if item["path"] == relative]
-        if len(matching) != 1:
-            raise AdmissionError("target_profile_inventory_invalid")
-        raw = (receipt_path.parent / relative).read_bytes()
-        if json.loads(raw).get("Digest") != profile_digest:
-            raise AdmissionError("target_profile_content_digest_invalid")
-        # 内容 Digest 和文件 SHA-256 是两项独立合同，不能互相替代。
-        return {
-            "profile_bytes": raw, "profile_sha256": matching[0]["sha256"], "profile_digest": profile_digest,
-            "profile_id": profile_id, "vc3_receipt_sha256": ref["sha256"],
-            "build_receipt_sha256": cu.file_sha256(build_path), "build_id": args.build_id,
-            "image_id": args.candidate_image_id,
-        }
+        with self._fact_errors() as adapter:
+            return dict(adapter.catalog_stage_profile(
+                campaign, campaign_id=c["NEW"], candidate_id=c["CAND"], target_version=c["TARGET_VERSION"],
+                profile_id=c["PROFILE_ID"], candidate_source=Path(c["B"]) / "source", lifecycle_dir=c["LIFECYCLE_DIR"],
+                candidate_commit=c["C"],
+            ))
+
+    def official_campaign(self) -> tuple[Path, str | None]:
+        """官方证据所在的 Campaign 与阻断原因（证据决定为 reuse 时核对总计划冻结的前序，经适配器）。"""
+
+        c = self.config
+        with self._fact_errors() as adapter:
+            result = adapter.vc5_official_campaign(
+                Path(c["D"]), campaign_id=c["NEW"], target_version=c["TARGET_VERSION"],
+                evidence_decision=c["EVIDENCE_DECISION"], predecessor_campaign=c.get("PREDECESSOR_CAMPAIGN", ""),
+            )
+        return Path(result["path"]), result["blocked_reason"]
 
     def state(self) -> dict[str, Any]:
         from background_validation import check, latest_deployment
@@ -334,10 +323,12 @@ class ManagedFacts:
                 pass
             else:
                 raise AdmissionError("driver_run_active")
-        rc, _ = check(Path(c["RUNROOT"]), Path(c["D"]), require_passed=True)
+        # 后台验证与部署取本轮客户端的部署收据（B5b-01；Codex 即缺省 codex，与改造前相同）。
+        rc, _ = check(Path(c["RUNROOT"]), Path(c["D"]), require_passed=True, client=self.client)
         if rc:
             raise AdmissionError("background_validation_not_passed")
-        return {**latest_deployment(Path(c["D"])), "supervisor_root": str(state_root), "background_validation": "passed"}
+        return {**latest_deployment(Path(c["D"]), self.client), "supervisor_root": str(state_root),
+                "background_validation": "passed"}
 
     def container(self) -> dict[str, Any]:
         c = self.config
@@ -477,25 +468,16 @@ class Admission:
         effective: dict[str, str] = {}
         if not blocked:
             catalog = values["catalog"]
-            official = Path(c["D"]) / "evidence/campaigns" / c["NEW"]
-            if c["EVIDENCE_DECISION"] == "reuse":
-                official = Path(c["PREDECESSOR_CAMPAIGN"])
-                if not official.is_absolute():
-                    official = Path(c["D"]) / "evidence/campaigns" / official
-                try:
-                    plain_path(official)
-                    source = self.facts.upgrade._require_formal_campaign(official)
-                    if source.get("target_version") != c["TARGET_VERSION"]:
-                        raise AdmissionError("official_reuse_target_mismatch")
-                    current_manifest = self.facts.upgrade._require_formal_campaign(Path(c["D"]) / "evidence/campaigns" / c["NEW"])
-                    predecessor = current_manifest.get("predecessor") or {}
-                    if (Path(str(predecessor.get("campaign_dir", ""))) != official
-                            or predecessor.get("campaign_id") != source.get("campaign_id")
-                            or predecessor.get("campaign_manifest_sha256") != self.facts.upgrade.file_sha256(official / "campaign.json")):
-                        raise AdmissionError("official_reuse_not_current_predecessor")
-                except Exception:
-                    checks.append({"check": "official_campaign", "status": "blocked", "reason": "official_reuse_binding_invalid"})
-                    blocked = True
+            # 官方证据所在的 Campaign 经适配器判定（B5b-01；Codex 是这里原有的 reuse 分支，原样搬进适配器）：阻断时路径照旧
+            # 进有效参数，检查项记 blocked。
+            try:
+                official, reason = self.facts.official_campaign()
+            except Exception as error:
+                official = Path(c["D"]) / "evidence/campaigns" / c["NEW"]
+                reason = str(error) if isinstance(error, AdmissionError) else "official_reuse_binding_invalid"
+            if reason is not None:
+                checks.append({"check": "official_campaign", "status": "blocked", "reason": reason})
+                blocked = True
             effective = {"PROFILE_ID": catalog["profile_id"], "PROFILE_DIGEST": catalog["profile_digest"],
                          "OFFICIAL_CAMPAIGN": str(official)}
             environment = {"host": platform.node(), "architecture": platform.machine(), "kernel": platform.release(),
@@ -508,7 +490,10 @@ class Admission:
                         "image_id": catalog["image_id"], "effective_parameters_sha256": digest(effective),
                         "minimum_token_ttl_seconds": self.minimum,
                         "paths_sha256": digest({"profile": str(self.profile), "token": str(self.token), "runroot": str(self.root),
-                                                "source": c["B"], "signer": c["JWTGEN_BIN"], "compose": c["COMPOSE_DIR"]})}
+                                                "source": c["B"], "signer": c["JWTGEN_BIN"], "compose": c["COMPOSE_DIR"]}),
+                        # 客户端补充的绑定（B5b-01：Claude 绑定暂存 Release 的 release_sha256 与 Campaign 用途；Codex 没有，
+                        # 绑定与准入键逐字不变）。
+                        **dict(catalog.get("extra_bindings") or {})}
         report = {"schema_version": self.schema, "checked_at_utc": utc_now(), "checks": checks, "bindings": bindings,
                   "admission_key": digest(bindings) if bindings else None, "effective_parameters": effective,
                   "credential": credential, "issuer_contract": values.get("contract"), "actions": sorted(actions),

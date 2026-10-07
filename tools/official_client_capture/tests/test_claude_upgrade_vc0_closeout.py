@@ -312,6 +312,37 @@ class FormalArgumentRecoveryTests(ClaudeCloseoutTestCase):
         self.assertEqual(arguments.source_commit, self.preflight_manifest["configuration"]["source_commit"])
         self.assertIsNone(arguments.predecessor_binding)
 
+    def test_recovered_arguments_carry_candidate_variables(self) -> None:
+        """B4-01 d 段（B5b-01 落实）：预检 configuration 里的候选阶段变量（网关侧三个容器名、候选验收账号与 ingress API Key）原样
+        带进 Formal plan；空串与缺字段不带（与预检同一取值），类型不对即拒绝。"""
+
+        import dataclasses
+
+        validated = self.validated()
+        configuration = dict(validated.preflight_manifest["configuration"])
+        configuration.update(service_container="sub2apiplus", keeper_container="sub2apiplus-keeper", postgres_container="sub2apiplus-postgres",
+                             claude_account_id="7", api_key_id="8")
+
+        def recover(values: dict[str, Any]) -> Any:
+            manifest = {**validated.preflight_manifest, "configuration": values}
+            return claude_closeout.recover_formal_plan_arguments(
+                dataclasses.replace(validated, preflight_manifest=manifest), formal_campaign_dir=self.formal,
+                formal_campaign_id=FORMAL_ID, timing_receipt=self.world.ledger / "x.json",
+            )
+
+        arguments = recover(configuration)
+        self.assertEqual(
+            (arguments.service_container, arguments.keeper_container, arguments.postgres_container, arguments.claude_account_id,
+             arguments.api_key_id),
+            ("sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "7", "8"),
+        )
+        empty = recover({**configuration, "claude_account_id": "", "api_key_id": ""})
+        self.assertEqual((empty.claude_account_id, empty.api_key_id), ("", ""), "预检里为空（official-only）就不带，取 plan 缺省的空串")
+        missing = recover({key: value for key, value in configuration.items() if key not in {"claude_account_id", "api_key_id"}})
+        self.assertEqual((missing.claude_account_id, missing.api_key_id), ("", ""), "B4-01 之前建的预检没有这两个字段")
+        with self.assertRaisesRegex(closeout.VC0CloseoutError, "configuration.api_key_id 不是字符串"):
+            recover({**configuration, "api_key_id": 8})
+
     def test_baseline_rules_drift_after_preflight_is_rejected(self) -> None:
         validated = self.validated()
         drifted = self.root / "drifted-baseline-rules.json"

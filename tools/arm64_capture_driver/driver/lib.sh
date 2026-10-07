@@ -15,6 +15,17 @@ eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
 # shell 变量给各脚本用（只赋值、不导出：子进程与各步骤判定读的环境不变）。不认识的客户端失败关闭。
 CLIENT_TABLE_ASSIGNMENTS=$(python3 -B "$DRV/client_table.py" shell) || { echo "客户端表拒绝加载：CLIENT=${CLIENT:-}"; exit 2; }
 eval "$CLIENT_TABLE_ASSIGNMENTS"; unset CLIENT_TABLE_ASSIGNMENTS
+# 待接入的驱动工具（B5b-01）：调用方在 source 之前把这一步要用的待接入条目变量名（如 CT_PENDING_TOOL_VC5_RUN）放进
+# CLIENT_TOOLS_REQUIRED；本客户端有任何一条尚未接入，就在阶段解析、建目录与任何副作用之前拒绝，并列出全部工作项（Codex 没有
+# 待接入条目，恒不触发；不拿 Codex 的实现顶替）。
+if declare -p CLIENT_TOOLS_REQUIRED >/dev/null 2>&1; then
+  CLIENT_TOOLS_WAITING=""
+  for CLIENT_TOOL in "${CLIENT_TOOLS_REQUIRED[@]}"; do
+    if [ -n "${!CLIENT_TOOL:-}" ]; then CLIENT_TOOLS_WAITING="${CLIENT_TOOLS_WAITING}；${!CLIENT_TOOL}"; fi
+  done
+  if [ -n "$CLIENT_TOOLS_WAITING" ]; then echo "本轮客户端（${CT_CLIENT}）的这一步尚未接入：${CLIENT_TOOLS_WAITING#；}"; exit 3; fi
+  unset CLIENT_TOOL CLIENT_TOOLS_WAITING
+fi
 # 阶段入口先只读解析；错误必须先于目录、预约或网络副作用。
 phase_require() {
   local exports

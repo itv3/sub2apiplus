@@ -17,6 +17,13 @@ deploy／postdeploy／resume 与 repair-rN 的实测／回归收据／根因修�
 
 绝不做的事：不调用 accounting-resolve、environment-isolate、campaign-resume、request-budget-extend；不传任何
 ``--force`` 类参数；不重装出口守护；不修改受管工具源码；不生成 docs/egress/maintenance 下的收据。
+
+按客户端（Claude 升级 B5b-01）：本轮客户端取驱动参数文件（VC_ENV）的 ``CLIENT``——与 vc5-recover.sh 读同一份，轮次参数文件
+不另写；编排器与共享受管模块（项目总账、VC 制品、监督器、对账器）按客户端表取（Codex 即 ``codex_upgrade`` 与原模块，命令行、
+步骤记录与改造前逐字相同），部署收据、部署事务范围与归档文档按客户端（B5a-01／B5a-06）。客户端不进轮次参数集合：人工批准
+绑定的是轮次参数与 VC_ENV 文件摘要（客户端随文件摘要一并绑定），Codex 的批准范围与改造前逐字相同。``client-modules`` 子命令
+给出编排器与项目总账模块的短名（``ORCHESTRATOR``、``PROJECT_LEDGER_MODULE``，只赋值不导出），``fix-and-continue.sh`` 的
+受管命令据此调用。
 """
 
 from __future__ import annotations
@@ -587,10 +594,38 @@ def deploy_scope(params: Mapping[str, str]) -> tuple[list[str], list[str]]:
     return arguments, documents
 
 
-def deploy_client(params: Mapping[str, str]) -> str:
-    """本轮的客户端（参数 CLIENT，缺省 codex）；不认识的值失败关闭，不默认成 codex。"""
+def _client_row(params: Mapping[str, str]) -> Mapping[str, Any]:
+    """本轮客户端在客户端表里的整行（B5b-01）。"""
 
-    client = params.get("CLIENT") or "codex"
+    return parse_env.client_table().spec(deploy_client(params))
+
+
+_DRIVER_CLIENTS: dict[str, str] = {}
+
+
+def _driver_client(params: Mapping[str, str]) -> str:
+    """驱动参数文件（VC_ENV）的客户端（B5b-01）：与 vc5-recover.sh 读同一份，同一进程只解析一次；没有 VC_ENV（只读判定的局部
+    参数）即 codex。参数文件的 CLIENT 不认识时解析即拒绝。"""
+
+    env = params.get("VC_ENV")
+    if not env:
+        return "codex"
+    if env not in _DRIVER_CLIENTS:
+        values = parse_env.parse(Path(env).read_text(encoding="utf-8"))
+        _DRIVER_CLIENTS[env] = str(parse_env.client_spec(values)["client"])
+    return _DRIVER_CLIENTS[env]
+
+
+def _short_module(module: str) -> str:
+    """受管包内模块的短名（``tools.official_client_capture.codex_upgrade`` → ``codex_upgrade``）。"""
+
+    return module.rsplit(".", 1)[1]
+
+
+def deploy_client(params: Mapping[str, str]) -> str:
+    """本轮的客户端：显式的 CLIENT（只读判定与测试给出），否则取驱动参数文件（B5b-01）；不认识的值失败关闭，不默认成 codex。"""
+
+    client = params.get("CLIENT") or _driver_client(params)
     if client not in DEPLOY_CLIENTS:
         raise FixAndContinueError(f"参数 CLIENT 不认识：{client!r}（可选：{list(DEPLOY_CLIENTS)}）")
     return client
@@ -714,6 +749,13 @@ def _managed(params: Mapping[str, str], name: str) -> Any:
     if sys.path[:1] != [data]:
         sys.path.insert(0, data)
     return importlib.import_module(f"tools.official_client_capture.{name}")
+
+
+def _managed_from_table(params: Mapping[str, str], key: str) -> Any:
+    """按本轮客户端在客户端表里的取值导入受管模块（B5b-01）：编排器随客户端；项目总账、VC 制品、监督器与对账器两客户端
+    共用同一模块（按 Campaign 归属或 ``--client`` 区分合同），Codex 的取值与改造前写死的模块名相同。"""
+
+    return _managed(params, _short_module(_client_row(params)[key]))
 
 
 # ---------------------------------------------------------------------------
@@ -1131,7 +1173,7 @@ def build_regression_receipt(params: Mapping[str, str], draft: Mapping[str, Any]
 def registered_repairs(params: Mapping[str, str]) -> tuple[Path, dict[str, set[str]]]:
     """项目总账里已登记的 root_cause_repaired：{根因 ID: {修复提交…}}（只读，受管 _load_events 带链校验）。"""
 
-    ledger = _managed(params, "codex_upgrade_project_ledger")
+    ledger = _managed_from_table(params, "project_ledger_module")
     root = ledger.find_project_ledger(Path(params["C"]))
     if root is None:
         raise FixAndContinueError("找不到 Campaign 所属的项目总账")
@@ -1320,14 +1362,14 @@ def _postdeploy_receipt(params: dict[str, str], args: argparse.Namespace) -> tup
     except FixAndContinueError as error:
         return stop(params, step, "failed", str(error), "人工核对 control/ 下的部署收据", run_stamp=stamp), {}
     problems = deploy_receipt_problems(receipt, expect["deploy_receipt"], client=deploy_client(params))
-    supervisor_file = Path(params["D"]) / "tools" / "official_client_capture" / "codex_upgrade_supervisor.py"
+    supervisor_file = Path(params["D"]) / "tools" / "official_client_capture" / f"{_short_module(_client_row(params)['supervisor_module'])}.py"
     actual = _sha256_file(supervisor_file) if supervisor_file.is_file() else None
     if actual != expect["deploy_receipt"]["supervisor_sha256"]:
         problems.append(f"数据根监督器 sha256={actual} 不是期望的 {expect['deploy_receipt']['supervisor_sha256']}")
     closure = None
     if expect.get("wire_closure_sha256"):
         try:
-            identity_payload = _managed(params, "codex_upgrade")._tool_identity(include_git=False)
+            identity_payload = _managed_from_table(params, "orchestrator_module")._tool_identity(include_git=False)
             closure = identity_payload["orchestrator_closures"]["wire_producer"]["closure_sha256"]
         except Exception as error:  # 受管计算失败即失败关闭
             problems.append(f"数据根 wire 闭包无法计算：{error}")
@@ -1681,7 +1723,7 @@ def _evolution_apply(params: dict[str, str], args: argparse.Namespace) -> tuple[
 
 
 def _deadlines(params: Mapping[str, str]) -> dict[str, Any]:
-    artifacts = _managed(params, "codex_upgrade_vc_artifacts")
+    artifacts = _managed_from_table(params, "vc_artifacts_module")
     return dict(artifacts.effective_deadlines(Path(params["C"]), project_ledger_optional=True))
 
 
@@ -1752,7 +1794,7 @@ def _scan_runs(params: dict[str, str], args: argparse.Namespace) -> tuple[int, d
     # 本次运行里这些对象要么已重新对账到 recoverable（从 revisit 移除），要么已让本步骤停下。
     carried = [] if final else prior_revisit(params)
     try:
-        supervisor = _managed(params, "codex_upgrade_supervisor")
+        supervisor = _managed_from_table(params, "supervisor_module")
         result = scan_reconciliation_targets(Path(params["C"]), Path(params["VC_STATE_DIR"]), campaign_id=params["CAMPAIGN"],
                                              target_attempt=params["ATTEMPT"], supervisor=supervisor,
                                              exclude_runs=args.exclude_run or (), revisit=carried)
@@ -2164,7 +2206,7 @@ def _accepted(params: dict[str, str], args: argparse.Namespace) -> tuple[int, di
                     "先 --from authorize（接受检查在可授权状态下会顺带写授权事件，本脚本不这样做）", run_stamp=stamp,
                     resume_from="authorize"), {}
     try:
-        reconciler = _managed(params, "codex_upgrade_reconciler")
+        reconciler = _managed_from_table(params, "reconciler_module")
         consumed = reconciler.load_approved_recovery_preview(Path(params["C"]), Path(args.preview), phase="candidate",
                                                              candidate_id=params["CANDIDATE"])
     except Exception as error:
@@ -2310,6 +2352,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("steps", help="按顺序列出步骤名")
     load = sub.add_parser("load-params", help="安全解析轮次参数文件，输出 export 赋值")
     load.add_argument("params")
+    modules = sub.add_parser("client-modules", help="本轮客户端的编排器与项目总账模块短名（只赋值，B5b-01）")
+    modules.add_argument("--params", required=True)
     frm = sub.add_parser("check-from", help="--from 续跑前核对前序步骤记录")
     frm.add_argument("--params", required=True)
     frm.add_argument("--step", required=True)
@@ -2367,6 +2411,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(_export_lines(values))
         return EXIT_OK
     params = _load_or_exit(args.params)
+    if args.command == "client-modules":
+        row = _client_row(params)
+        sys.stdout.write(_assignment_lines({"ORCHESTRATOR": _short_module(row["orchestrator_module"]),
+                                            "PROJECT_LEDGER_MODULE": _short_module(row["project_ledger_module"])}))
+        return EXIT_OK
     if args.command == "dry-run":
         try:
             load_expect(Path(params["EXPECT"]))

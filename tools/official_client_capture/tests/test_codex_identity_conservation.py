@@ -40,7 +40,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                  "收口画像成员 closeout_profile（模块型），Codex 绑定到 VC-0 收口模块本身；B5a-09 续新增原子双跑画像成员 "
                                  "atomic_rehearsal_profile（模块型），Codex 绑定到原子双跑收据模块本身；VC-1 续跑路径新增两个成员"
                                  "（official_post_run_tooling_item_ids 值型、official_attempt_free_post_run_action 可调用型），Codex "
-                                 "绑定到监督器原常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS 与恒为假的新函数",
+                                 "绑定到监督器原常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS 与恒为假的新函数；B5b-01 新增 VC-5 准入的两个"
+                                 "可调用成员（catalog_stage_profile、vc5_official_campaign）与它们共用的静态错误码异常和路径／JSON 读取"
+                                 "小工具，Codex 绑定到 codex_upgrade_client_adapter 里原样搬入的驱动函数体",
     "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
                                      "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
                                      "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
@@ -62,7 +64,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                               "代码不变",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）；B2-08 新增两个成员函数，取值逐字等于对账器原写法"
                                        "（after 探针加恢复收据、部署收据顶层五摘要）；VC-1 续跑路径新增 official_attempt_free_post_run_action"
-                                       "（恒为假：Codex 的 VC-1 seal 链动作都指向同一个官方 attempt）",
+                                       "（恒为假：Codex 的 VC-1 seal 链动作都指向同一个官方 attempt）；B5b-01 搬入驱动 vc5_admission 原有的"
+                                       "两段 Codex 逻辑（ManagedFacts.catalog 的画像与 VC-3／VC-4 收据重放、Admission.inspect 的 reuse 分支），"
+                                       "候选用途照旧写死、错误码不变，不被 codex_upgrade 引用，不进编排器闭包与评估读侧闭包",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"
                                    "（_validate_batched_stage_review_successor，读侧闭包外）只对正要派发的直接后继复算实物，已执行过的"
                                    "历史后继只重放冻结许可（原先阶段内还有后续批次时，成功的后继不写账本事件，复算看到后继自己的产物"

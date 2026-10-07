@@ -9,6 +9,8 @@
 #       > $RUNROOT/fix-and-continue-<轮次>.out 2>&1 < /dev/null
 #     bash .../fix-and-continue.sh <轮次参数文件> --list        # 只列本轮各步骤记录
 #   参数模板：driver/fix-and-continue.example.params（KEY=VALUE，经 parse_env.py 同一词法层安全解析，绝不 source）。
+#   客户端（B5b-01）：取 VC_ENV 驱动参数文件的 CLIENT（缺省 codex，轮次参数文件不另写）；编排器、项目总账等受管模块、部署
+#   收据与部署事务范围都按它，Codex 的命令行与步骤记录与改造前相同。
 #   部署前提（指南“修好接着跑”一节）：本轮修复在本机全量门禁通过后即可从 deploy 开始跑；推送后 CI 与续跑并行，本脚本
 #   没有等待 CI 的步骤。CI 失败时暂停续跑，按本轮部署收据的 rollback_backup 回滚已部署工具，修好后再走一轮。
 #
@@ -96,6 +98,11 @@ if [ "$(id -u)" != 0 ]; then echo "必须以 root 执行（部署、属主收口
 EXPORTS=$(python3 "$FCPY" load-params "$PARAMS_ARG" < /dev/null) || exit 2
 eval "$EXPORTS"
 unset EXPORTS
+# 本轮客户端（取 VC_ENV 驱动参数文件）的编排器与项目总账模块短名（B5b-01，只赋值不导出；Codex 即 codex_upgrade 与
+# codex_upgrade_project_ledger）。
+CLIENT_MODULES=$(python3 "$FCPY" client-modules --params "$PARAMS_PATH" < /dev/null) || exit 2
+eval "$CLIENT_MODULES"
+unset CLIENT_MODULES
 # 共享缓存（E2-02，与 lib.sh 同一约定）：身份记忆化目录与字节码共享层都在数据根之外。共享层由入口便宜检查按数据根
 # 受管树内容重建，这里只在它存在时导出。部署换了受管树之后，按内容摘要失效的字节码与以整树摘要为键的身份缓存都会
 # 自动重算，不会用到旧结果。
@@ -158,6 +165,8 @@ fail_step() {
   exit "$rc"
 }
 # managed <模块> <标签> <参数…>：在数据根执行受管工具 CLI，stdout／stderr／退出码落到 $RAW.{out,err,rc}。
+# 编排器与项目总账模块按本轮客户端取客户端表（B5b-01，client-modules 给出 ORCHESTRATOR、PROJECT_LEDGER_MODULE；Codex 即
+# codex_upgrade 与 codex_upgrade_project_ledger，命令行与改造前相同）。
 managed() {
   local module="$1" label="$2" rc=0
   shift 2
@@ -280,16 +289,16 @@ step_background_validate() {
 }
 
 step_evolution() {
-  managed codex_upgrade evolution-status tool-evolution-status --campaign-dir "$C"
+  managed "$ORCHESTRATOR" evolution-status tool-evolution-status --campaign-dir "$C"
   decide evolution-status --raw "$RAW"
   if skipped; then return 0; fi
-  managed codex_upgrade evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"
+  managed "$ORCHESTRATOR" evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"
   decide evolution-preview --raw "$RAW"
   decide human-approval --mode evolution --subject "$REVIEW_SHA256"
-  managed codex_upgrade evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \
+  managed "$ORCHESTRATOR" evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \
     --approve-sha256 "$REVIEW_SHA256" --approved-by "$APPROVER"
   decide evolution-apply --raw "$RAW"
-  managed codex_upgrade evolution-status-after tool-evolution-status --campaign-dir "$C"
+  managed "$ORCHESTRATOR" evolution-status-after tool-evolution-status --campaign-dir "$C"
   decide evolution-status --raw "$RAW" --mode final
 }
 
@@ -298,11 +307,11 @@ extend_round() {
   local mode="$1"
   decide extend-state --mode "$mode"
   if skipped; then return 0; fi
-  managed codex_upgrade extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \
+  managed "$ORCHESTRATOR" extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \
     --new-deadline-at-utc "$EXTEND_DEADLINE" --reason "$EXTEND_REASON"
   decide extend-preview --raw "$RAW" --mode "$mode"
   decide human-approval --mode deadline-extension --subject "$EXT_SHA256"
-  managed codex_upgrade extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \
+  managed "$ORCHESTRATOR" extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \
     --approve-sha256 "$EXT_SHA256" --approved-by "$APPROVER"
   decide extend-apply --raw "$RAW" --mode "$mode"
 }
@@ -325,7 +334,7 @@ root_cause_repair() {
   for cause in $TODO_RCS; do args+=(--root-cause-id "$cause"); done
   args+=(--kind code --binding "fix_commit_sha=$REPAIR_FIX_COMMIT" --binding "regression_receipt_sha256=$REG_SHA256"
          --binding "deployment_receipt_sha256=$DEPLOY_RECEIPT_SHA256" --note "$REPAIR_NOTE")
-  managed codex_upgrade_project_ledger "$label" "${args[@]}"
+  managed "$PROJECT_LEDGER_MODULE" "$label" "${args[@]}"
   decide repair-verdict --raw "$RAW" --subject "$TODO_RCS" --mode "$mode" ${object[@]+"${object[@]}"}
 }
 
@@ -335,11 +344,11 @@ root_cause_repair() {
 reconcile_object() {
   local label="$1" kind="$2" subject="$3"
   shift 3
-  managed codex_upgrade "$label" "$@"
+  managed "$ORCHESTRATOR" "$label" "$@"
   decide run-verdict --raw "$RAW" --kind "$kind" --subject "$subject"
   if [ "$ACTION" != repair ]; then return 0; fi
   root_cause_repair "$label-repair" inline "$kind" "$subject"
-  managed codex_upgrade "$label-after-repair" "$@"
+  managed "$ORCHESTRATOR" "$label-after-repair" "$@"
   decide run-verdict --raw "$RAW" --kind "$kind" --subject "$subject" --mode after-repair
 }
 
@@ -387,7 +396,7 @@ step_reconcile_runs() {
 }
 
 step_reconcile_attempt() {
-  managed codex_upgrade reconcile reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
+  managed "$ORCHESTRATOR" reconcile reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
   decide attempt-verdict --raw "$RAW" --mode reconcile
 }
 
@@ -397,17 +406,17 @@ step_repair() {
 
 step_approve() {
   # 批准摘要只取同一次运行刚生成的恢复预览输出（预览幂等：内容不变时返回同一份），从不复用旧文件里的摘要。
-  managed codex_upgrade approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
+  managed "$ORCHESTRATOR" approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"
   decide attempt-verdict --raw "$RAW" --mode approve-preview
   decide human-approval --mode recovery-approve --subject "$REVIEW_SHA256"
-  managed codex_upgrade approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"
+  managed "$ORCHESTRATOR" approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"
   decide approve-verdict --raw "$RAW" --subject "$REVIEW_SHA256" --preview "$PREVIEW_PATH"
 }
 
 step_authorize() {
   decide need-preview
   decide human-approval --mode recovery-authorize --subject "$REVIEW_SHA256"
-  managed codex_upgrade authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"
+  managed "$ORCHESTRATOR" authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"
   decide authorize-verdict --raw "$RAW" --preview "$PREVIEW" --subject "$REVIEW_SHA256"
 }
 

@@ -7,6 +7,8 @@
 # 用法：ARM64_VC_ENV=… setsid -f bash vc5-all.sh > $RUNROOT/vc5-all.out 2>&1 < /dev/null
 set -Eeuo pipefail
 PHASE_CONTEXT_ARGS=(--mode paths)
+# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN CT_PENDING_TOOL_VC5_SEAL CT_PENDING_TOOL_VC5_ACCEPT)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 vc5_require_admission
 G=$GATE_ROOT

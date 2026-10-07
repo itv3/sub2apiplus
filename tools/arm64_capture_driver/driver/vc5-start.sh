@@ -3,6 +3,8 @@
 # 用法：ARM64_VC_ENV=… bash vc5-start.sh（批次日志 $RUNROOT/vc5-run-batch.out）
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode build)
+# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 vc5_dispatch_lock
 vc5_require_admission

@@ -7,6 +7,14 @@ import json, os, pathlib, sys
 sys.dont_write_bytecode = True
 from driver_config import load_config, candidate_job_ids
 CONFIG = load_config()
+# 待接入的驱动工具（B5b-01）：Claude 的 run／seal／compare／accept 动作形状随 B4-01b、B4-02 证据侧与 B4-06b 落实（B5b-01b 接入），
+# 在那之前于读准入收据与写任何计划之前拒绝；Codex 没有待接入条目，恒不触发。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # 同目录的参数解析与客户端表（脚本运行时它本来就在最前）
+from parse_env import client_spec, client_table
+WAITING = [item for item in (client_table().pending(client_spec(CONFIG)["client"], name)
+                             for name in ("tool:vc5-run", "tool:vc5-seal", "tool:vc5-accept")) if item]
+if WAITING:
+    raise SystemExit("本轮客户端的 VC-5 计划生成尚未接入：" + "；".join(WAITING))
 from vc5_admission import Admission, ManagedFacts
 try:
     ADMISSION = Admission(CONFIG, ManagedFacts(CONFIG)).consume()

@@ -62,6 +62,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
     "PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE",
     "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
+    # B5b-01a：Claude 的 Campaign 用途（Codex 参数文件不得写）。
+    "CAMPAIGN_PURPOSE",
 ))
 
 
@@ -617,6 +619,131 @@ B5A11_SHELL_DIGESTS: dict[str, str] = {
     "vc5-precheck.sh": "226e9a93763b1d7c149f6cb1b0bf12efba24d51dc9c142c9e4b2d2b61d9ecb75",
 }
 B5A11_SHELL_RESIDUALS: dict[str, list[str]] = {name: [] for name in B5A11_SHELL_DIGESTS}
+# B5b-01a（驱动链 VC-5 准入、修复轮、入口用途与同目标复用旧链按客户端）改了下面这些脚本：以 B5b-01a 开工时的提交为基线，代入
+# Codex 取值后只剩登记的几处，每处 Codex 下都等价或走不到：
+# * fix-and-continue.sh：受管命令的编排器与项目总账模块改取 client-modules 给出的短名（Codex 即 codex_upgrade 与
+#   codex_upgrade_project_ledger，受管命令逐字不变；修复轮的逐字对照见下面 FixAndContinueCodexParityTests）；
+# * lib.sh：待接入工具核对（Codex 没有待接入条目，循环里的条件恒不成立）；各 VC-5 脚本在 source lib.sh 之前登记要用的
+#   待接入条目（CLIENT_TOOLS_REQUIRED，对 Codex 是空操作）；vc5-switch.sh 只在切候选时登记，恢复生产两客户端通用；
+# * pre-a3.sh：取部署收据多传客户端（Codex 即缺省值 codex，与 entry-gates.sh 同一写法）；
+# * stage1.sh／stage2.sh／vc23.sh：给出了预检 plan 模板、没有 reuse-official-evidence、VC-2／VC-3 派发脚本不是 vc23.sh 的客户端
+#   （Claude）在副作用之前拒绝，Codex 的模板为空、子命令与派发脚本即本脚本，判断恒不触发；
+# * vc0-gate-target.sh、vc5-gate-target.sh 与 env.example.sh：代入后逐行相同（环境收据模块与版本参数按客户端表；模板只加了注释）。
+B5B01A_BASELINE_COMMIT = "b6f9d3d2f"
+B5B01A_SHELL_DIGESTS: dict[str, str] = {
+    "env.example.sh": "a6559b2e2c7658c2866dcb9f03e72ad8a569890ef8d03ecca69fb16840fc0042",
+    "fix-and-continue.sh": "b510a649430f1287ba88051029e58cb6133fdc40a09a1cfe19af5741046c0256",
+    "lib.sh": "e10f364e823194d5deb596d1cadd944b253d5cfb5c241446697fbb756d080431",
+    "pre-a3.sh": "1f31682216574e38383af72c88649ce6415bc75632790ff008e73c3c09e1d438",
+    "stage1.sh": "34b0ee1f365acb0632212556c880dc380a01485f42457d9cf1e4bc2850cdaf63",
+    "stage2.sh": "7c2911e6e28857d021034db47756be12fea1934dbf898d190f81dc13517db856",
+    "vc0-gate-target.sh": "15b772d2f55fb6a45ce73f428e36ce5cf241581b6d86a224b42128e8f525071d",
+    "vc23.sh": "524633590dea68471ec75d1d49f56cf6784a07b8efa47d9a5676c2a057635ca5",
+    "vc5-accept.sh": "3478f336fb261f53825aa300406077a720e6c46e2275f0bb22913d988ba5ceb8",
+    "vc5-all.sh": "b78d00a9763452debf7e5a4f8f0fdfe2146469cfdd7b7182383e9a2cbec0c6fa",
+    "vc5-canonical2.sh": "0753b7e0d05ff5d8a5d80c4d354c97ade30a32f89ad0ff15b19230267c5c1cd1",
+    "vc5-gate-target.sh": "9b991b8397ea1be59d44b63175d8cb8149d005b540691c5357bcb9e75b8992b3",
+    "vc5-kilo.sh": "df082d2f204ce6d61eb49ed29368800297f85a73c90d7b9544d61528d6134694",
+    "vc5-precheck.sh": "54b4c14e9a7824ee6f34a3717d9b160eb8180594055424b85a5dba28b7c12710",
+    "vc5-recover.sh": "861d23b205cc18cf445945ee8a1002c829ad0b88c6154f529b81f235bafdb91e",
+    "vc5-seal-receipts.sh": "169b32b4274a6a947856c83d545776b5d8cab74c571bb4cd7be04068dadd0e13",
+    "vc5-seal.sh": "54fb4b9f26513ebe55b389e70ec5fd7e1a80abd959603ecf4d6250818ccfe7fb",
+    "vc5-start.sh": "56f79dddd134d8ea2a79bf56baf21ddc622d5e9f8f90b41b321fc79fdbed7682",
+    "vc5-switch.sh": "8a785fe25972a1ff8b8f666b3096f5485f79ecd933d759547860ce67de97cf4e",
+}
+B5B01A_SHELL_RESIDUALS: dict[str, list[str]] = {
+    "env.example.sh": [],
+    "fix-and-continue.sh": [
+        '+CLIENT_MODULES=$(python3 "$FCPY" client-modules --params "$PARAMS_PATH" < /dev/null) || exit 2',
+        '+eval "$CLIENT_MODULES"',
+        "+unset CLIENT_MODULES",
+        '-  managed codex_upgrade evolution-status tool-evolution-status --campaign-dir "$C"',
+        '+  managed "$ORCHESTRATOR" evolution-status tool-evolution-status --campaign-dir "$C"',
+        '-  managed codex_upgrade evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"',
+        '+  managed "$ORCHESTRATOR" evolution-preview tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON"',
+        '-  managed codex_upgrade evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \\',
+        '+  managed "$ORCHESTRATOR" evolution-apply tool-evolution --campaign-dir "$C" --fix-commit "$FIX_COMMIT" --reason "$EVOLUTION_REASON" \\',
+        '-  managed codex_upgrade evolution-status-after tool-evolution-status --campaign-dir "$C"',
+        '+  managed "$ORCHESTRATOR" evolution-status-after tool-evolution-status --campaign-dir "$C"',
+        '-  managed codex_upgrade extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \\',
+        '+  managed "$ORCHESTRATOR" extend-preview deadline-extend preview --campaign-dir "$C" --scope stage --phase "$EXTEND_PHASE" \\',
+        '-  managed codex_upgrade extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \\',
+        '+  managed "$ORCHESTRATOR" extend-apply deadline-extend apply --campaign-dir "$C" --preview "$EXT_PREVIEW" \\',
+        '-  managed codex_upgrade_project_ledger "$label" "${args[@]}"',
+        '+  managed "$PROJECT_LEDGER_MODULE" "$label" "${args[@]}"',
+        '-  managed codex_upgrade "$label" "$@"',
+        '+  managed "$ORCHESTRATOR" "$label" "$@"',
+        '-  managed codex_upgrade "$label-after-repair" "$@"',
+        '+  managed "$ORCHESTRATOR" "$label-after-repair" "$@"',
+        '-  managed codex_upgrade reconcile reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"',
+        '+  managed "$ORCHESTRATOR" reconcile reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"',
+        '-  managed codex_upgrade approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"',
+        '+  managed "$ORCHESTRATOR" approve-preview reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT"',
+        '-  managed codex_upgrade approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"',
+        '+  managed "$ORCHESTRATOR" approve reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --approve-recovery-sha256 "$REVIEW_SHA256"',
+        '-  managed codex_upgrade authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"',
+        '+  managed "$ORCHESTRATOR" authorize reconcile-attempt --campaign-dir "$C" --attempt-id "$ATTEMPT" --authorize-recovery-preview "$PREVIEW"',
+    ],
+    "lib.sh": [
+        "+if declare -p CLIENT_TOOLS_REQUIRED >/dev/null 2>&1; then",
+        '+  CLIENT_TOOLS_WAITING=""',
+        '+  for CLIENT_TOOL in "${CLIENT_TOOLS_REQUIRED[@]}"; do',
+        '+    if [ -n "${!CLIENT_TOOL:-}" ]; then CLIENT_TOOLS_WAITING="${CLIENT_TOOLS_WAITING}；${!CLIENT_TOOL}"; fi',
+        "+  done",
+        '+  if [ -n "$CLIENT_TOOLS_WAITING" ]; then echo "本轮客户端（codex）的这一步尚未接入：${CLIENT_TOOLS_WAITING#；}"; exit 3; fi',
+        "+  unset CLIENT_TOOL CLIENT_TOOLS_WAITING",
+        "+fi",
+    ],
+    "pre-a3.sh": [
+        "-DEPLOY=$(python3 -B - \"$DRV/../install.py\" \"$D\" <<'PYDEPLOY'",
+        "+DEPLOY=$(python3 -B - \"$DRV/../install.py\" \"$D\" codex <<'PYDEPLOY'",
+        "-print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])",
+        "+print(module.latest_deploy_receipt(Path(sys.argv[2])/'control', sys.argv[3])[0])",
+    ],
+    "stage1.sh": [
+        '+if [ "${#CT_PREFLIGHT_PLAN_ARGV[@]}" != 0 ]; then',
+        '+  echo "本轮客户端（codex）的预检 Campaign 由入口编排器按客户端表模板建立：改用 entry.sh（同一 ARM64_VC_ENV）"; exit 3',
+        "+fi",
+    ],
+    "stage2.sh": [
+        '+[ -n reuse-official-evidence ] || { echo "本轮客户端（codex）没有 reuse-official-evidence：同目标复用改用 entry.sh（EVIDENCE_DECISION=reuse）"; exit 3; }',
+    ],
+    "vc0-gate-target.sh": [],
+    "vc23.sh": [
+        '+[ vc23.sh = vc23.sh ] || { echo "本轮客户端（codex）的 VC-2／VC-3 派发脚本是 vc23.sh，拒绝"; exit 3; }',
+    ],
+    "vc5-accept.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_ACCEPT)",
+    ],
+    "vc5-all.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN CT_PENDING_TOOL_VC5_SEAL CT_PENDING_TOOL_VC5_ACCEPT)",
+    ],
+    "vc5-canonical2.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_ACCEPT)",
+    ],
+    "vc5-gate-target.sh": [],
+    "vc5-kilo.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+    ],
+    "vc5-precheck.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)",
+    ],
+    "vc5-recover.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RECOVER CT_PENDING_TOOL_VC5_RUN)",
+    ],
+    "vc5-seal-receipts.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+    ],
+    "vc5-seal.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+    ],
+    "vc5-start.sh": [
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)",
+    ],
+    "vc5-switch.sh": [
+        '+[ "${1:-}" = restore ] || CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)',
+    ],
+}
 # 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项改为核对接管（当前
 # 内容由更新的一批登记），改了驱动脚本的批次在末尾追加一项。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端
 # 表给出，按 Codex 的空串代入（见 B5a-09 一段）。
@@ -625,6 +752,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
     ("B3-04a", B304A_BASELINE_COMMIT, B304A_SHELL_DIGESTS, B304A_SHELL_RESIDUALS),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SHELL_DIGESTS, B5A11_SHELL_RESIDUALS),
+    ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SHELL_DIGESTS, B5B01A_SHELL_RESIDUALS),
 )
 
 
@@ -708,6 +836,320 @@ class InstallAndConstantsCodexParityTests(unittest.TestCase):
                 before = [entry["name"] for entry in old_eg.pre_a3_data_root_inputs(data)]
             self.assertEqual([entry["name"] for entry in eg.pre_a3_data_root_inputs(data)], before)
             self.assertEqual([entry["name"] for entry in eg.pre_a3_data_root_inputs(data, "codex")], before)
+
+
+# ------------------------------------------------------------------------------------------------ B5b-01a 的 Python 对照
+
+# 修复轮、VC-5 准入、VC-5 计划生成器与入口编排器的 Codex 行为以 B5b-01a 开工时的提交（B5B01A_BASELINE_COMMIT，见上面驱动脚本
+# 一段）为基线逐字对照（同一夹具上改造前后各跑一次）。基线提交读不到（浅克隆）时整条用例在父级跳过，子测试里一律不跳过。
+
+
+def skip_unless_b5b01a_readable(case: unittest.TestCase) -> None:
+    if not commit_readable(B5B01A_BASELINE_COMMIT):
+        case.skipTest(f"读不到基线提交 {B5B01A_BASELINE_COMMIT}（浅克隆或不在仓库内）")
+
+
+def _b5b01a_module(relative: str, name: str, *, siblings: dict[str, types.ModuleType] | None = None) -> types.ModuleType:
+    source = git_source(relative, B5B01A_BASELINE_COMMIT)
+    if source is None:
+        raise AssertionError(f"基线提交 {B5B01A_BASELINE_COMMIT} 里没有 {relative}")
+    module = types.ModuleType(name)
+    module.__file__ = str(REPO_ROOT / relative)
+    with mock.patch.dict(sys.modules, {name: module, **(siblings or {})}), mock.patch.object(sys, "path", [str(DRIVER), *sys.path]):
+        exec(compile(source, f"{B5B01A_BASELINE_COMMIT}:{relative}", "exec"), module.__dict__)  # noqa: S102 - 受控的历史源码
+    return module
+
+
+def _b5b01a_driver(root: Path) -> Path:
+    """基线提交的整个驱动目录（git archive 解到 ``root``），修复轮对照用它的 fix-and-continue.sh 与同目录模块。"""
+
+    archive = subprocess.run(["git", "-C", str(REPO_ROOT), "archive", B5B01A_BASELINE_COMMIT, "tools/arm64_capture_driver"],
+                             capture_output=True, stdin=subprocess.DEVNULL)
+    if archive.returncode:
+        raise AssertionError(f"读不到基线提交 {B5B01A_BASELINE_COMMIT} 的驱动目录：{archive.stderr.decode(errors='replace')[:200]}")
+    root.mkdir(mode=0o700)
+    subprocess.run(["tar", "-x", "-C", str(root)], input=archive.stdout, check=True)
+    return root / "tools" / "arm64_capture_driver" / "driver"
+
+
+class FixAndContinueCodexParityTests(unittest.TestCase):
+    """修复轮（B5b-01a 改为按客户端表取编排器与共享模块、客户端取驱动参数文件）：Codex 一轮完整的 15 步，改造前后的受管调用
+    （模块与参数）、各步骤记录与终端输出逐字相同（夹具根、提交号、摘要与时刻归一化后比较）。"""
+
+    def run_round(self, root: Path, script: Path | None) -> dict[str, object]:
+        from tools.official_client_capture.tests import test_arm64_driver_fix_and_continue as fc
+
+        root.mkdir(mode=0o700)
+        fixture = fc._Round(root)
+        completed = fixture.run(script=script)
+        self.assertEqual(completed.returncode, 0, completed.stdout[-3000:] + completed.stderr[-3000:])
+        drivers = [str(fc.SCRIPTS)] + ([str(script.parent)] if script is not None else [])
+
+        def normal(text: str) -> str:
+            for path in drivers:
+                text = text.replace(path, "<DRV>")
+            text = text.replace(str(root), "<ROOT>").replace(fixture.head, "<HEAD>")
+            text = re.sub(r"\b[0-9a-f]{64}\b", "<SHA256>", text)
+            text = re.sub(r"\d{8}t\d{6}(?:\d+)?z(?:-\d+)?", "<STAMP>", text)
+            text = re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)", "<UTC>", text)
+            return re.sub(r"\[\d{2}:\d{2}:\d{2}Z\]", "[<CLOCK>]", text)
+
+        records = {path.name: normal(path.read_text(encoding="utf-8")) for path in sorted(fixture.out.glob("*.json"))}
+        calls = [normal(json.dumps(call, ensure_ascii=False, sort_keys=True)) for call in fixture.calls()]
+        return {"stdout": normal(completed.stdout), "records": records, "calls": calls}
+
+    def test_codex_round_matches_b5b01a_baseline(self) -> None:
+        skip_unless_b5b01a_readable(self)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            baseline = _b5b01a_driver(root / "baseline-tree")
+            before = self.run_round(root / "before", baseline / "fix-and-continue.sh")
+            after = self.run_round(root / "after", None)
+        self.assertEqual(after["calls"], before["calls"], "受管调用（模块与参数）逐字相同")
+        self.assertEqual(sorted(after["records"]), sorted(before["records"]))
+        for name in before["records"]:
+            with self.subTest(record=name):
+                self.assertEqual(after["records"][name], before["records"][name])
+        self.assertEqual(after["stdout"], before["stdout"], "终端输出逐字相同")
+
+
+class Vc5AdmissionCodexParityTests(unittest.TestCase):
+    """VC-5 准入（B5b-01a 把画像与收据重放、reuse 分支搬进 Codex 适配器）：同一组编排器替身上，改造前后的目标画像结果、各处失败
+    的错误类型与静态错误码、准入报告逐字相同。"""
+
+    def setUp(self) -> None:
+        from tools.arm64_capture_driver.driver import vc5_admission as admission
+
+        skip_unless_b5b01a_readable(self)
+        self.new = admission
+        self.old = _b5b01a_module("tools/arm64_capture_driver/driver/vc5_admission.py", "vc5_admission_before_b5b01a")
+        # 改造前的模块按扁平名导入同目录的参数解析与轮次根解析（驱动以脚本方式运行时它们就在 sys.path 最前）。
+        path = mock.patch.object(sys, "path", [str(DRIVER), *sys.path])
+        path.start()
+        self.addCleanup(path.stop)
+
+    def catalog_world(self, root: Path) -> tuple[dict[str, str], mock.Mock, dict[str, object]]:
+        from tools.official_client_capture import codex_upgrade as upgrade
+
+        admission = self.new
+        catalog = root / "catalog"
+        profile_digest = "d" * 64
+        relative = f"catalogdata/runtime/profiles/9.1.0/{profile_digest}.json"
+        raw = admission.canonical({"Digest": profile_digest})
+        admission.atomic_write(catalog / relative, raw)
+        stage = {"campaign_id": "fixture", "target_version": "9.1.0", "profile_id": "fixture-profile",
+                 "target_profile_digest": profile_digest, "classification_sha256": "c" * 64,
+                 "inventory": [{"path": relative, "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}]}
+        stage["inventory_sha256"] = upgrade._fingerprint(stage["inventory"])
+        receipt = catalog / "catalog-stage-receipt.json"
+        admission.write_json(receipt, stage)
+        config = {"D": str(root), "B": str(root / "candidates/candidate"), "NEW": "fixture", "CAND": "candidate",
+                  "RUNROOT": str(root / "round"), "IN": "inputs", "UP": "upgrade", "BASELINE_VERSION": "9.0.0",
+                  "TARGET_VERSION": "9.1.0", "PROFILE_ID": "fixture-profile", "LIFECYCLE_DIR": "docs/lifecycle/fixture", "C": "a" * 40}
+        admission.atomic_write(root / "candidates/candidate/source/docs/lifecycle/fixture/catalog-stage/catalog-stage-receipt.json",
+                               receipt.read_bytes())
+        campaign = root / "evidence/campaigns/fixture"
+        admission.write_json(campaign / "candidates/candidate/build-receipt.json", {})
+        manifest = {"campaign_id": "fixture", "baseline_version": "9.0.0", "target_version": "9.1.0",
+                    "vc_control": {"campaign_plan": {"path": "control/vc/campaign-plan.json"}}}
+        admission.write_json(campaign / "campaign.json", manifest)
+        admission.atomic_write(campaign / "campaign.sha256", upgrade.file_sha256(campaign / "campaign.json").encode())
+        admission.write_json(campaign / "control/vc/campaign-plan.json", {})
+        admission.write_json(root / "control/upgrade-timing-ledger/ledger.json", {})
+        revision = {"campaign_id": "fixture", "candidate_id": "candidate"}
+        admission.write_json(campaign / "control/vc/revisions/r1/revision.json", revision)
+        admission.write_json(campaign / "control/vc/revisions/r1/COMMIT", {})
+        fake = mock.Mock()
+        fake._require_formal_campaign.return_value = manifest
+        fake._campaign_timing_ledger_dir.return_value = root / "control/upgrade-timing-ledger"
+        fake._candidate_revision_dir.return_value = campaign / "control/vc/revisions/r1"
+        fake._load_stage_result.return_value = {"joint_manifest_sha256": "c" * 64}
+        fake._replay_vc_checkpoint.return_value = (None, {"stage_receipt": {"path": str(receipt), "sha256": upgrade.file_sha256(receipt)}})
+        fake.file_sha256 = upgrade.file_sha256
+        fake._verify_catalog_stage_output = upgrade._verify_catalog_stage_output
+        fake._profile_binding_from_manifest.return_value = ("fixture-profile", profile_digest)
+        fake._replay_candidate_build_receipt.return_value = ({"image": {"reference": "fixture@sha256:" + "b" * 64,
+                                                                       "image_id": "sha256:" + "b" * 64},
+                                                             "build": {"build_id": "fixture-build"}}, {})
+        fake._current_candidate_revision_record.return_value = (1, revision)
+        fake._bind_candidate_identity_to_build_receipt.return_value = {"git_commit": "a" * 40}
+        return config, fake, {"catalog": catalog, "relative": relative, "receipt": receipt}
+
+    def outcome(self, module: types.ModuleType, config: dict[str, str], fake: mock.Mock) -> tuple[str, object]:
+        from tools.official_client_capture import codex_upgrade as upgrade
+
+        subject = module.ManagedFacts.__new__(module.ManagedFacts)
+        subject.config, subject.upgrade = config, fake
+        names = ("_require_formal_campaign", "_load_stage_result", "_vc_campaign_plan", "_replay_vc_checkpoint",
+                 "_verify_catalog_stage_output", "_profile_binding_from_manifest", "_replay_candidate_build_receipt",
+                 "_current_candidate_revision_record", "_candidate_identity_for_run", "_bind_candidate_identity_to_build_receipt",
+                 "file_sha256")
+        # 改造后经适配器直接取 codex_upgrade 的成员：装上与 subject.upgrade 同一组替身（改造前只用 subject.upgrade）。
+        with mock.patch.multiple(upgrade, **{name: getattr(fake, name) for name in names}):
+            try:
+                return "result", subject.catalog()
+            except Exception as error:  # 对照的是错误的类型名与消息
+                return type(error).__name__, str(error)
+
+    def test_catalog_results_and_refusals_match_b5b01a_baseline(self) -> None:
+        cases = {
+            "通过": lambda config, fake, world: None,
+            "VC-3 收据摘要漂移": lambda config, fake, world: fake._replay_vc_checkpoint.return_value[1]["stage_receipt"].update(sha256="0" * 64),
+            "画像绑定不符": lambda config, fake, world: setattr(fake._profile_binding_from_manifest, "return_value", ("other-profile", "d" * 64)),
+            "候选 revision 不符": lambda config, fake, world: setattr(fake._current_candidate_revision_record, "return_value",
+                                                                 (1, {"candidate_id": "other"})),
+            "候选提交不符": lambda config, fake, world: setattr(fake._bind_candidate_identity_to_build_receipt, "return_value",
+                                                           {"git_commit": "b" * 40}),
+            "树内收据漂移": lambda config, fake, world: (Path(config["B"]) / "source/docs/lifecycle/fixture/catalog-stage/catalog-stage-receipt.json")
+            .write_bytes(b"{}"),
+            "画像内容漂移": lambda config, fake, world: (world["catalog"] / world["relative"]).write_bytes(b"drift"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                outcomes = []
+                for module in (self.old, self.new):
+                    root = Path(directory).resolve() / ("old" if module is self.old else "new")
+                    config, fake, world = self.catalog_world(root)
+                    mutate(config, fake, world)
+                    outcomes.append(self.outcome(module, config, fake))
+                self.assertEqual(outcomes[1], outcomes[0])
+
+    def test_inspection_reports_match_b5b01a_baseline(self) -> None:
+        from tools.official_client_capture import codex_upgrade as upgrade
+        from tools.official_client_capture.tests import test_vc5_admission as admission_tests
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            compose = root / "compose"
+            compose.mkdir()
+            self.new.atomic_write(compose / ".env", ('JWT_SECRET="隔离验收签名密钥"\nADMIN_EMAIL=admin@fixture.invalid\n'
+                                                     "POSTGRES_USER=fixture\nPOSTGRES_PASSWORD=fixture\nPOSTGRES_DB=fixture\n").encode())
+            self.new.atomic_write(root / "signer", b"#!/bin/sh\nexit 1\n", 0o700)
+            official = root / "data/evidence/campaigns/predecessor"
+            config = {"D": str(root / "data"), "RUNROOT": str(root / "round"), "NEW": "fixture-campaign", "CAND": "fixture-candidate",
+                      "UP": "fixture", "TARGET_VERSION": "9.1.0", "PROFILE_ID": "fixture-profile", "PROFILE_DIGEST": "b" * 64,
+                      "EVIDENCE_DECISION": "recapture", "OFFICIAL_CAMPAIGN": "old-campaign", "PREDECESSOR_CAMPAIGN": str(official),
+                      "B": str(root / "candidate"), "COMPOSE_DIR": str(compose), "JWTGEN_BIN": str(root / "signer")}
+            source = {"campaign_id": "predecessor", "target_version": "9.1.0"}
+            current = {"predecessor": {"campaign_dir": str(official), "campaign_id": "predecessor", "campaign_manifest_sha256": "e" * 64}}
+
+            def reports() -> list[dict]:
+                found = []
+                for module in (self.old, self.new):
+                    facts = admission_tests.Facts(root / "data/runtime/codex-profile-9.1.0.json", config)
+                    facts.upgrade = upgrade  # 改造前的 reuse 分支经 facts.upgrade 取编排器
+                    report = module.Admission(dict(config), facts).inspect()
+                    report.pop("checked_at_utc")
+                    found.append(report)
+                return found
+
+            with mock.patch.object(upgrade, "_require_formal_campaign", side_effect=lambda path: source if path == official else current), \
+                    mock.patch.object(upgrade, "file_sha256", return_value="e" * 64):
+                for label, change in (("recapture", {}), ("reuse 通过", {"EVIDENCE_DECISION": "reuse"}),
+                                      ("reuse 目标版本不同", {"source": "9.0.0"}), ("reuse 前序摘要不符", {"current": "wrong"})):
+                    with self.subTest(label):
+                        if "source" in change:
+                            source["target_version"] = change["source"]
+                        elif "current" in change:
+                            source["target_version"] = "9.1.0"
+                            current["predecessor"]["campaign_manifest_sha256"] = change["current"]
+                        else:
+                            config.update(change)
+                        before, after = reports()
+                        self.assertEqual(after, before)
+
+
+class Vc5PlanGeneratorCodexParityTests(unittest.TestCase):
+    """VC-5 计划生成器（B5b-01a 只加了待接入核对，对 Codex 恒不触发）：同一组准入收据与阶段坐标，改造前后写出的每份计划逐字相同。"""
+
+    def generate(self, script: Path, output: Path, args: list[str], modules: dict, environment: dict) -> dict[str, bytes]:
+        import os
+        import runpy
+
+        argv = ["gen_vc5_plans.py", str(output), *args]
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(sys.modules), mock.patch.dict(os.environ, environment), \
+                mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "path", list(sys.path)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            runpy.run_path(str(script), run_name="__main__")
+        return {path.name: path.read_bytes() for path in sorted(output.iterdir()) if path.name.startswith("action-plan-vc5")}
+
+    def test_generated_plans_match_b5b01a_baseline(self) -> None:
+        from tools.arm64_capture_driver.driver import parse_env
+
+        skip_unless_b5b01a_readable(self)
+        source = git_source("tools/arm64_capture_driver/driver/gen_vc5_plans.py", B5B01A_BASELINE_COMMIT)
+        self.assertIsNotNone(source, f"基线提交 {B5B01A_BASELINE_COMMIT} 里没有 VC-5 计划生成器")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            baseline = root / "baseline" / "gen_vc5_plans.py"
+            baseline.parent.mkdir()
+            baseline.write_bytes(source)
+            fixture = driver_tests._DriverFixture(root / "fixture")
+            config = parse_env.parse(fixture.env_file.read_text())
+            config.update(parse_env.derive(config))
+            image = "sha256:" + "a" * 64
+            receipt = {"effective_parameters": {"PROFILE_ID": config["PROFILE_ID"], "PROFILE_DIGEST": "d" * 64,
+                                                "OFFICIAL_CAMPAIGN": str(fixture.newdir)},
+                       "bindings": {"campaign": fixture.new, "candidate": fixture.cand, "image_id": image, "build_id": "build"}}
+            fake_admission = mock.Mock()
+            fake_admission.Admission.return_value.consume.return_value = receipt
+            attempt_root = fixture.newdir / "candidates" / fixture.cand / "attempts" / "attempt-1"
+            parameters = {
+                "IMAGE_ID": image, "BUILD_ID": "build", "BUILD_RECEIPT": str(fixture.newdir / "candidates" / fixture.cand / "build-receipt.json"),
+                "PROFILE_ID": config["PROFILE_ID"], "PROFILE_DIGEST": "d" * 64, "CAPTURE_WRITE": "current-result",
+                "COMPARE_WRITE": "current-compare", "ASSERTIONS_WRITE": str(root / "assertions-write"), "ACCEPT_WRITE": "current-accept",
+                "EV": str(attempt_root / "evidence"), "ASSERTION_CONFIG_DIR": str(root / "assertion-config"), "EVALUATION_BASELINE": "0",
+                "ASSERTIONS_RESULT": str(root / "assertions-write" / "results.json"), "GATE_ROOT": str(root / "gates"),
+            }
+            fake_phase = mock.Mock()
+            fake_phase.resolve.return_value = {"parameters": parameters}
+            fake_config = mock.Mock(load_config=lambda: dict(config), candidate_job_ids=lambda campaign, candidate: ["job-a", "job-b"])
+            modules = {"vc5_admission": fake_admission, "driver_config": fake_config, "phase_context": fake_phase}
+            environment = {**config, "CANDIDATE_DIR": str(fixture.candidate_dir)}
+            for label, extra in (("run", []), ("attempt", ["attempt-1"]), ("seal", ["attempt-1", "e" * 64])):
+                with self.subTest(label):
+                    outputs = []
+                    for name, script in (("before", baseline), ("after", DRIVER / "gen_vc5_plans.py")):
+                        output = Path(config["W"])
+                        if output.exists():
+                            shutil.rmtree(output)
+                        output.mkdir(parents=True)
+                        outputs.append(self.generate(script, output, [fixture.new, fixture.cand, image, "build", *extra], modules, environment))
+                    self.assertTrue(outputs[0])
+                    self.assertEqual(outputs[1], outputs[0])
+
+
+class EntryLedgerAndPreflightCodexParityTests(unittest.TestCase):
+    """入口编排器（B5b-01a：Claude 按参数 CAMPAIGN_PURPOSE 建账本）：Codex 的建账本与预检 plan 命令行与 B5b-01a 开工时逐字相同。"""
+
+    def test_codex_ledger_and_preflight_commands_match_b5b01a_baseline(self) -> None:
+        skip_unless_b5b01a_readable(self)
+        old_steps = _b5b01a_module("tools/ci/entry_steps.py", "entry_steps_before_b5b01a")
+        old = _b5b01a_module("tools/ci/entry_orchestrator.py", "entry_orchestrator_before_b5b01a",
+                             siblings={"entry_steps_sibling": old_steps})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            commands = []
+            for label, module in (("before", old), ("after", eo)):
+                fx = Fixture(root / label)
+                shutil.rmtree(fx.data / "control" / f"{fx.params['UP']}-timing-ledger")
+                fx.params.update({"RUNROOT": str(root / label / "run")})
+                calls: list[list[str]] = []
+
+                def runner(argv, cwd, env, log, calls=calls, label=label):
+                    # 总预算按当前时刻折算到项目截止（分钟），两次运行可能跨分钟：只比较它之外的逐字参数。
+                    text = [str(item).replace(str(root / label), "<ROOT>") for item in argv]
+                    if "--total-budget-minutes" in text:
+                        text[text.index("--total-budget-minutes") + 1] = "<MINUTES>"
+                    calls.append(text)
+                    return 1
+
+                orchestrator = module.Orchestrator(fx.params, driver_dir=fx.driver, run_dir=root / label / "runs", steps_dir=fx.steps_dir,
+                                                   runner=runner, es_runner=fx.runner)
+                orchestrator.step_ledger()
+                commands.append(calls)
+        self.assertEqual(commands[1], commands[0], "Codex 建账本命令（用途固定 production_replacement）逐字相同")
 
 
 if __name__ == "__main__":

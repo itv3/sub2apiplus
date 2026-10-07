@@ -32,7 +32,9 @@
 
 三、Formal plan 参数
 ====================
-全部取自预检 Campaign：取证坐标、Store 身份四项与冻结收据坐标取 ``configuration``；场景清单、证据标签、Active 两件、
+全部取自预检 Campaign：取证坐标、Store 身份四项与冻结收据坐标取 ``configuration``；候选阶段变量（网关侧三个容器名、候选
+验收账号与 ingress API Key，B4-01 d 段）同样取 ``configuration``，预检里为空（official-only 的预检可以不给）或缺字段（B4-01
+之前建的预检）就不带，与预检同一取值；场景清单、证据标签、Active 两件、
 静态基线两件与生产现状清单取预检的冻结副本（两份 Campaign 逐字节同源）；基线规则清单必须是仓库里的那一份（目标规则
 清单按仓库路径绑定它），其摘要必须等于预检冻结的副本；前序只读复用沿用预检冻结的绑定（``predecessor_binding``）；
 控制收据是收口这一组：新写的 active VC-0 checkpoint、预检的环境收据、发布认证绑定的 Job 演练、P0 门禁与发布认证。
@@ -346,6 +348,14 @@ CONFIGURATION_FLAGS = (
     ("--model-catalog-sha256", "model_catalog_sha256"),
     ("--source-commit", "source_commit"),
 )
+# 候选阶段变量（B4-01 d 段，B5b-01 落实）：旗标即变量名换连字符，与 ``claude_upgrade_plan`` 的命令行参数同名；预检
+# configuration 里非空才带，空串与缺字段都不带（plan 的缺省同样是空或场景清单变量合同的 default）。
+def candidate_configuration_flags() -> tuple[tuple[str, str], ...]:
+    from tools.official_client_capture import claude_upgrade_plan
+
+    return tuple(("--" + name.replace("_", "-"), name) for name in claude_upgrade_plan.CANDIDATE_CAMPAIGN_VARIABLES)
+
+
 # 取预检冻结副本的 plan 参数（旗标 → 冻结输入名）。
 FROZEN_INPUT_FLAGS = (
     ("--scenario-manifest", "target_scenarios"),
@@ -414,6 +424,14 @@ def recover_formal_plan_arguments(
         if not isinstance(value, str) or not value:
             raise VC0CloseoutError(f"preflight configuration.{field} 缺失")
         command += [flag, value]
+    for flag, field in candidate_configuration_flags():
+        value = configuration.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise VC0CloseoutError(f"preflight configuration.{field} 不是字符串")
+        if value:
+            command += [flag, value]
     for flag, name in FROZEN_INPUT_FLAGS:
         command += [flag, str(frozen(name))]
     try:

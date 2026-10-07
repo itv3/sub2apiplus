@@ -5,6 +5,8 @@
 # 不生成任何文件，只断言全部收据已存在；manifest 绑定的证据根从此不可触碰。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1" --client-checkpoint-at-utc "$2")
+# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 CKPT="$2"
 
