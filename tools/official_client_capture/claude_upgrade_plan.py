@@ -11,6 +11,12 @@
 * ``claude_upgrade_evidence_labels_<ver>.json``（``claude-upgrade-evidence-labels/v1``）：逐 Job 证据子路径的标签；中继
   请求按「有效连接序号」逐连接贴标签，``match_relay_connections`` 是封存编目（B2-07）与逐连接顺序测试共用的匹配器。
 
+非主模型的模型能力取证（B2-07 补充项）沿用 2.1.226 模型能力 Campaign 的做法：中继仍跑 FW-F v5 的基础 probe（``--probe-id``
+与 ``--fw-f-v5-probe`` 都是基础 probe），``--model`` 写字面模型名，步骤的 ``probe_id`` 与输出目录名取「<模型>-<probe>」，
+全部归入发现项场景 ``aux.model_capability``（不覆盖必需规则，只供 VC-3 Wire 模型能力目录逐模型投影）。主模型步骤的
+``--model`` 一律是 Campaign 变量 ``{model}``，非主模型的字面模型名在 plan 时不得等于它；非主模型步骤的基础 probe 必须
+也由主模型步骤执行。``probe_catalog.probe_count`` 仍是 FW-F v5 目录的 probe 数（对应主模型步骤），非主模型步骤不计入。
+
 变量分两种作用域：``campaign`` 在 plan 时代入；``step_runtime``（宿主运行凭据的容器路径与摘要、run nonce）由取证动作体
 （B2-06）在每步执行前用 ``bind_step_runtime`` 绑定，plan 展开时原样保留占位，因此模板里除变量占位外不允许出现花括号。
 
@@ -74,6 +80,11 @@ TOOL_ROOT_PLACEHOLDER = "{capture_tool_root}"
 TOOL_ROOT_RELATIVE = "tools/official_client_capture"
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+# 非主模型（模型能力取证）步骤的字面模型名；主模型步骤的 --model 只能是 Campaign 变量占位。
+MODEL_ID_RE = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{0,62}$")
+MODEL_VARIABLE_PLACEHOLDER = "{model}"
+# 非主模型取证步骤归入的发现项场景（不覆盖必需规则，见模块说明）。
+MODEL_CAPABILITY_SCENARIO = "aux.model_capability"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SAFE_ABSOLUTE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/+:-]+$")
@@ -432,12 +443,13 @@ def _validate_step(job_id: str, step_index: int, step: Any, *, catalog_arguments
     # 每一步都是一次受管 R 取证：动作体、子命令与 probe 身份必须在 argv 里逐字可核。
     if not any(item == RELAY_SCRIPT or item.endswith(f"/{RELAY_SCRIPT}") for item in argv) or "capture" not in argv:
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 不是 {RELAY_SCRIPT} capture 动作体。")
-    if "--execute" not in argv or _argument_value(argv, "--probe-id") != probe_id or _argument_value(argv, FW_F_PROBE_FLAG) != probe_id:
+    relay_probe = step_relay_probe(probe_id, argv)
+    if "--execute" not in argv or relay_probe is None:
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --execute／--probe-id／{FW_F_PROBE_FLAG} 与 probe_id 不一致。")
     if any(flag in argv for flag in LEGACY_PROBE_FLAGS):
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 只能用 FW-F v5 目录，不得再带 {list(LEGACY_PROBE_FLAGS)}。")
-    if probe_id not in _fw_f_v5().PROBE_IDS:
-        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 probe {probe_id} 不在 FW-F v5 目录里。")
+    if relay_probe not in _fw_f_v5().PROBE_IDS:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 probe {relay_probe} 不在 FW-F v5 目录里。")
     # 目录模块与版本事实：逐字等于清单顶层绑定（版本事实的文件摘要随步骤 argv 进入 Job 执行摘要）。
     for flag, expected in catalog_arguments.items():
         if _argument_value(argv, flag) != expected:
@@ -459,6 +471,33 @@ def _validate_step(job_id: str, step_index: int, step: Any, *, catalog_arguments
             f"{job_id} 步骤 {step_index} 是{kind}步骤，必须以 docker exec {expected_container} 执行。"
         )
     return probe_id
+
+
+def step_relay_probe(probe_id: str, argv: Sequence[str]) -> str | None:
+    """步骤身份 → 中继执行的 FW-F v5 基础 probe；``--probe-id`` 与 ``--fw-f-v5-probe`` 不一致或身份对不上时为 None。
+
+    主模型步骤：``probe_id`` 就是基础 probe，``--model`` 是 Campaign 变量 ``{model}``；非主模型（模型能力取证）步骤：
+    ``probe_id`` 是「<字面模型名>-<基础 probe>」，``--model`` 是该字面模型名（见模块说明）。
+    """
+
+    relay_probe = _argument_value(argv, "--probe-id")
+    if relay_probe is None or _argument_value(argv, FW_F_PROBE_FLAG) != relay_probe:
+        return None
+    model = _argument_value(argv, "--model")
+    if probe_id == relay_probe:
+        return relay_probe if model == MODEL_VARIABLE_PLACEHOLDER else None
+    if model is not None and MODEL_ID_RE.fullmatch(model) and probe_id == f"{model}-{relay_probe}":
+        return relay_probe
+    return None
+
+
+def step_model(probe_id: str, argv: Sequence[str]) -> str | None:
+    """非主模型（模型能力取证）步骤的字面模型名；主模型步骤为 None。"""
+
+    relay_probe = step_relay_probe(probe_id, argv)
+    if relay_probe is None or probe_id == relay_probe:
+        return None
+    return _argument_value(argv, "--model")
 
 
 def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_arguments: Mapping[str, str]) -> None:
@@ -487,8 +526,9 @@ def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_argum
     # Claude 每个 Job 只有一个证据根，各步输出根都是它下面以 probe 命名的子目录。
     if not _unique_strings(job.get("evidence_roots")) or len(job["evidence_roots"]) != 1:
         raise ConfigurationError(f"{job_id} 的 evidence_roots 必须恰好一个。")
+    # 只承载发现项场景的 Job（模型能力取证）不覆盖规则；场景闭合（covers 为空时全部场景须是发现项）在清单级核对。
     covers = job.get("covers")
-    if not _unique_strings(covers) or any(not RULE_RE.fullmatch(rule) for rule in covers):
+    if not _unique_strings(covers, allow_empty=True) or any(not RULE_RE.fullmatch(rule) for rule in covers):
         raise ConfigurationError(f"{job_id} 的 covers 非法。")
     receipts = job.get("required_scenario_receipts")
     if not isinstance(receipts, list) or not set(map(str, receipts)).issubset(SCENARIO_RECEIPT_SCENARIOS):
@@ -591,8 +631,16 @@ def validate_scenario_manifest(payload: Any) -> None:
             "场景声明的 probe 与 Job 执行的 probe 不一致："
             f"未执行={sorted(set(probe_scenarios) - set(executed))}，未归属场景={sorted(set(executed) - set(probe_scenarios))}"
         )
-    if catalog["probe_count"] != len(executed):
-        raise ConfigurationError("场景清单 probe_catalog.probe_count 与执行的 probe 数不一致。")
+    # probe_catalog.probe_count 是 FW-F v5 目录的 probe 数，对应主模型步骤；非主模型（模型能力取证）步骤复用主模型已执行的
+    # 基础 probe（标签规则也照主模型步骤复制），不计入目录数。
+    primary_relay = {step["probe_id"] for job in jobs for step in job["steps"] if step_model(step["probe_id"], step["argv"]) is None}
+    if catalog["probe_count"] != len(primary_relay):
+        raise ConfigurationError("场景清单 probe_catalog.probe_count 与主模型执行的 probe 数不一致。")
+    for job in jobs:
+        for step in job["steps"]:
+            relay_probe = step_relay_probe(step["probe_id"], step["argv"])
+            if step_model(step["probe_id"], step["argv"]) is not None and relay_probe not in primary_relay:
+                raise ConfigurationError(f"{job['id']}／{step['probe_id']}：非主模型步骤的基础 probe {relay_probe} 没有主模型步骤执行。")
     for job in jobs:
         expected = set().union(*(probe_scenarios[step["probe_id"]] for step in job["steps"]))
         if set(job["scenario_ids"]) != expected:
@@ -600,6 +648,20 @@ def validate_scenario_manifest(payload: Any) -> None:
         proven = set().union(*(set(scenario_by_id[sid]["covers"]) for sid in job["scenario_ids"]))
         if not set(job["covers"]).issubset(proven):
             raise ConfigurationError(f"{job['id']} 的 covers 未被绑定场景证明。")
+        if not job["covers"] and any(scenario_by_id[sid]["purpose"] != "discovery" for sid in job["scenario_ids"]):
+            raise ConfigurationError(f"{job['id']} 不覆盖规则，只能承载发现项场景。")
+        # 非主模型（模型能力取证）步骤只归入模型能力场景，主模型步骤不归入它。
+        for step in job["steps"]:
+            capability = step_model(step["probe_id"], step["argv"]) is not None
+            memberships = probe_scenarios[step["probe_id"]]
+            if (capability and memberships != {MODEL_CAPABILITY_SCENARIO}) or (not capability and MODEL_CAPABILITY_SCENARIO in memberships):
+                raise ConfigurationError(
+                    f"{job['id']}／{step['probe_id']}：非主模型步骤必须且只能归入 {MODEL_CAPABILITY_SCENARIO}，主模型步骤不得归入它。"
+                )
+    # 模型能力场景只是发现项：非主模型的证据只供 VC-3 逐模型投影，不得用来证明必需规则。
+    capability_scenario = scenario_by_id.get(MODEL_CAPABILITY_SCENARIO)
+    if capability_scenario is not None and capability_scenario["purpose"] != "discovery":
+        raise ConfigurationError(f"{MODEL_CAPABILITY_SCENARIO} 必须是发现项场景（purpose=discovery、covers 为空）。")
     roots = [root for job in jobs for root in job["evidence_roots"]]
     if len(roots) != len(set(roots)):
         raise ConfigurationError("同一证据根只能由单一 Job 独占。")
@@ -675,6 +737,12 @@ def validate_campaign_context(payload: Mapping[str, Any], context: Mapping[str, 
             raise ConfigurationError(f"场景必需变量 {name} 没有 Campaign 值。")
         if value and not _value_matches_type(value, str(item["type"])):
             raise ConfigurationError(f"场景变量 {name} 的实际值不符合 {item['type']}。")
+    # 非主模型（模型能力取证）步骤的字面模型名不得等于 Campaign 的主模型（同一模型在两个目录下各取一遍证）。
+    primary_model = context.get("model")
+    for job in payload["capture_jobs"]:
+        for step in job["steps"]:
+            if primary_model and step_model(step["probe_id"], step["argv"]) == primary_model:
+                raise ConfigurationError(f"{job['id']}／{step['probe_id']} 的非主模型与 Campaign 主模型 {primary_model} 相同。")
     # 合成步骤的断网容器必须独立于联网的抓包容器（plan 与从 Campaign 冻结副本展开同一口径）。
     live_container = context.get("capture_container")
     if live_container and context.get("synthetic_capture_container") == live_container:

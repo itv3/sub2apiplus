@@ -196,6 +196,9 @@ def relay_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
 
     有效连接 = ``relay.json`` 登记 ``valid: true`` 且不在中继清单 ``excluded_connections`` 里的连接（标签匹配前先剔除
     握手前断开的连接，设计 B2-05）；被剔除的连接上不得有请求。
+
+    ``probe_id``／``relay_probe_id`` 都是中继清单记的基础 probe，``manifest.model`` 是中继记的模型；非主模型（模型能力
+    取证，B2-07 补充项）的步骤身份「<模型>-<probe>」由 ``scan_relay_evidence`` 按目录名定。
     """
 
     manifest = _read_json(probe_dir / RELAY_MANIFEST_FILENAME, "中继清单")
@@ -232,10 +235,12 @@ def relay_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
     cleanup = _mapping(manifest.get("cleanup"))
     return {
         "probe_id": manifest.get("probe_id"),
+        "relay_probe_id": manifest.get("probe_id"),
         "directory": _relative(probe_dir, base, "probe 证据目录"),
         "manifest": {
             "schema_version": manifest.get("schema_version"),
             "status": manifest.get("status"),
+            "model": manifest.get("model"),
             "fw_f_v5_probe": manifest.get("fw_f_v5_probe"),
             "fw_f_v4_probe": manifest.get("fw_f_v4_probe"),
             "response_plan": manifest.get("response_plan"),
@@ -271,16 +276,34 @@ def _probe_directories(root: Path) -> list[Path]:
     )
 
 
+def _step_probe_identity(directory_name: str, view: Mapping[str, Any]) -> str | None:
+    """probe 目录的步骤身份：目录名等于中继清单的 probe（主模型），或等于「<中继记的模型>-<probe>」（非主模型的模型能力
+    取证，B2-07 补充项，沿用 2.1.226 模型能力 Campaign 的目录约定）；都不是即 None。"""
+
+    relay_probe = str(view.get("relay_probe_id") or view.get("probe_id") or "")
+    model = _mapping(view.get("manifest")).get("model")
+    if relay_probe and directory_name == relay_probe:
+        return directory_name
+    if relay_probe and isinstance(model, str) and model and directory_name == f"{model}-{relay_probe}":
+        return directory_name
+    return None
+
+
 def scan_relay_evidence(paths: Iterable[Path], label: str, *, base: Path) -> dict[str, Any]:
-    """在证据根里找全部 probe 目录，返回逐 probe 视图与不经 host 预过滤的全 host／path 出站面。"""
+    """在证据根里找全部 probe 目录，返回逐 probe 视图与不经 host 预过滤的全 host／path 出站面。
+
+    视图按步骤身份（目录名，见 ``_step_probe_identity``）登记，``probe_id`` 改写成步骤身份，中继清单的基础 probe 留在
+    ``relay_probe_id``。
+    """
 
     probes: dict[str, dict[str, Any]] = {}
     for root in paths:
         for probe_dir in _probe_directories(Path(root)):
             view = relay_probe_view(probe_dir, base=base)
-            probe_id = str(view["probe_id"])
-            if probe_dir.name != probe_id:
+            probe_id = _step_probe_identity(probe_dir.name, view)
+            if probe_id is None:
                 raise SealEvidenceError(f"probe 目录名与中继清单的 probe_id 不一致：{probe_dir}")
+            view["probe_id"] = probe_id
             if probe_id in probes:
                 raise SealEvidenceError(f"同一 probe 出现在多个证据根：{probe_id}")
             probes[probe_id] = view
@@ -389,12 +412,17 @@ def _probe_checks(view: Mapping[str, Any], *, probe: str, context: Mapping[str, 
 
     manifest = view["manifest"]
     version = str(manifest.get("client_version") or "").split(" ", 1)[0]
+    relay_probe = str(view.get("relay_probe_id") or view.get("probe_id") or "")
     checks = {
         "relay_manifest_schema": manifest.get("schema_version") == RELAY_MANIFEST_SCHEMA,
         "status_complete": manifest.get("status") == "complete",
         # 升级取证一律用 FW-F v5 目录（claude_upgrade_plan 校验步骤只带 --fw-f-v5-probe）：v4 中继清单在这里判不通过。
+        # 非主模型（模型能力取证）步骤身份是「<中继记的模型>-<基础 probe>」，中继清单的 v5 probe 是基础 probe。
         "probe_identity": (
-            manifest.get("fw_f_v5_probe") == probe and manifest.get("fw_f_v4_probe") is None and view.get("probe_id") == probe
+            manifest.get("fw_f_v5_probe") == relay_probe
+            and manifest.get("fw_f_v4_probe") is None
+            and view.get("probe_id") == probe
+            and _step_probe_identity(probe, view) == probe
         ),
         "client_identity": manifest.get("client_sha256") == context["target_sha256"] and version == context["target_version"],
         "runtime_image": manifest.get("runtime_image") == context["runtime_image"],

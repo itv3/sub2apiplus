@@ -15,6 +15,9 @@
   ProfileApprovalFact 之后再起草案、以不同批准人重复批准一律拒绝。
 * 准备批准在 evidence-approve 之后被 SIGKILL：草案仍可起，重跑原批准命令沿用已写的 EvidenceApprovalFact 收敛。
 * 画像流程不进 wire／evidence 闭包。
+* VC-1 证据来源（B2-07 补充项）：模型能力目录证据的 campaign_root 取 VC-1 证据所在的 Campaign（只读复用时是前序），
+  capture manifest 与 CaptureIndex 自报的来源对不上即失败关闭；VC-1 带上非主模型的模型能力取证证据后，Active 的三模型
+  投影策略原样投影出三模型目录，缺非主模型证据时一次列全缺的 probe 并失败关闭。
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from tools.official_client_capture import claude_upgrade_release
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import claude_upgrade_wire_projection as wire_projection
+from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_classify as classify_tests
 from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
@@ -72,8 +76,9 @@ def run_main(argv: list[str]) -> tuple[int, dict | None, str]:
 class _ProfileCase(classify_tests._ClassifyCase):
     """在 B3-02 夹具上走完 VC-2，并把真实的 2.1.226 Active 复制进 Campaign。
 
-    VC-1 证据另带主模型 23 个 probe 的合成请求字节与 P 通道（``claude_wire_fixture``），供 Wire 投影；投影策略的机器草案
-    取受管树里 2.1.226 的那一份（三个模型），审核人替身改成只保留主模型（VC-1 现行场景清单只用主模型取证）。
+    VC-1 证据缺省另带主模型 23 个 probe 的合成请求字节与 P 通道（``claude_wire_fixture``），供 Wire 投影；投影策略的机器
+    草案取受管树里 2.1.226 的那一份（三个模型），审核人替身改成只保留主模型（夹具缺省不合成非主模型证据；三模型投影见
+    ``ReleaseEvidenceTests``）。
     """
 
     @staticmethod
@@ -87,8 +92,8 @@ class _ProfileCase(classify_tests._ClassifyCase):
             kwargs["wire_files"] = builder.files()
         return super().build_campaign(**kwargs)
 
-    def approved_vc2(self) -> Path:
-        campaign = self.build_campaign()
+    def approved_vc2(self, **kwargs: Any) -> Path:
+        campaign = self.build_campaign(**kwargs)
         draft = self.draft(campaign)
         docs = self.resolved_documents(Path(draft["draft_dir"]), change=(CHANGE,), delete=(DELETE,))
         for row in docs["profile_patches"]["rule_patches"]:
@@ -186,7 +191,7 @@ class _ProfileCase(classify_tests._ClassifyCase):
             "rollback_target_kind": "legacy_deployment",
             "failure_policy": "persona_fail_close",
         }
-        # VC-1 只有主模型的证据：投影策略只保留主模型（画像的 supported_models 随目录派生成一个模型）。
+        # 夹具缺省只合成主模型的证据：投影策略只保留主模型（画像的 supported_models 随目录派生成一个模型）。
         docs["projection"] = wire_fixture.single_model_policy(docs["projection"])
         return docs
 
@@ -607,6 +612,89 @@ class ProfileApprovalChainTests(_ProfileCase):
         code, _result, stderr = run_main(["prepare-profile", "--campaign-dir", str(campaign), "--approve-revision", "rev-0001"])
         self.assertEqual(code, 1)
         self.assertIn("--approved-by", stderr)
+
+
+class ReleaseEvidenceTests(_ProfileCase):
+    """VC-1 证据来源（B2-07 补充项）：目录证据的 campaign_root 与 attempt 标签同源；三模型投影消费模型能力取证证据。"""
+
+    def release_evidence(self, campaign: Path) -> claude_upgrade_release.ReleaseEvidence:
+        """与 prepare-profile 同一读法：VC-2 阶段结果 → Store 里的 EvidencePackage → VC-1 证据索引。"""
+
+        manifest = claude_upgrade.load_campaign_manifest(campaign)
+        store, _store_campaign = claude_upgrade_store.open_campaign_store(campaign, manifest)
+        stage = json.loads((campaign / classify_tests.classify.STAGE_RESULT_RELATIVE).read_text(encoding="utf-8"))
+        package = store.load_object(dict(stage["store"]["evidence_package_ref"]))["payload"]
+        return claude_upgrade_release.load_release_evidence(campaign, store, package, stage)
+
+    def test_catalog_evidence_root_on_captured_campaign(self) -> None:
+        evidence = self.release_evidence(self.approved_vc2())
+        own = f"evidence/campaigns/{CAMPAIGN_ID}"
+        self.assertEqual((evidence.campaign_root, evidence.evidence_campaign_root), (own, own))
+        source = claude_upgrade_release.UpgradeEvidenceSource(evidence, wire_fixture.single_model_policy(self.projection_policy()))
+        self.assertEqual(source.catalog_evidence()["campaign_root"], own)
+
+    def test_catalog_evidence_root_follows_read_only_reuse(self) -> None:
+        """只读复用：VC-1 证据（含 capture manifest）在前序 Campaign，目录证据的 campaign_root 记前序、attempt 标签取同一份
+        capture manifest；实现策略的 evidence_ledger 仍是本 Campaign 的 VC-2 副本。"""
+
+        evidence = self.release_evidence(self.approved_vc2(official_reuse=True))
+        own, predecessor = f"evidence/campaigns/{CAMPAIGN_ID}", f"evidence/campaigns/{CAMPAIGN_ID}-predecessor"
+        self.assertEqual((evidence.campaign_root, evidence.evidence_campaign_root), (own, predecessor))
+        self.assertTrue(evidence.capture_manifest["path"].startswith(predecessor + "/"))
+        self.assertTrue(evidence.ledger["path"].startswith(own + "/"))
+        catalog = claude_upgrade_release.UpgradeEvidenceSource(evidence, wire_fixture.single_model_policy(self.projection_policy())).catalog_evidence()
+        self.assertEqual(catalog["campaign_root"], predecessor)
+        self.assertTrue(catalog["attempts"])
+        self.assertTrue(all(item["attempt_id"].startswith("attempt-fixture/") for item in catalog["attempts"]))
+
+    def test_evidence_campaign_root_requires_one_source(self) -> None:
+        manifest = {"campaign_id": "c-pre", "attempt": {"attempt_id": "attempt-1"}}
+        index = {"campaign_id": "c-pre", "attempt": {"attempt_id": "attempt-1"}}
+        binding = {"path": "evidence/campaigns/c-pre/official/seal/g1/drafts/capture-manifest.json"}
+        self.assertEqual(claude_upgrade_release._evidence_campaign_root(manifest, binding, index), "evidence/campaigns/c-pre")
+        cases = {
+            "自报 Campaign 与路径不同": (dict(manifest, campaign_id="c-other"), binding, dict(index, campaign_id="c-other"), "自报的 Campaign"),
+            "缺自报 Campaign": ({"attempt": manifest["attempt"]}, binding, index, "自报的 Campaign"),
+            "不在 evidence/campaigns 下": (manifest, {"path": "runs/c-pre/capture-manifest.json"}, index, "evidence/campaigns"),
+            "CaptureIndex 来自别的 Campaign": (manifest, binding, dict(index, campaign_id="c-other"), "CaptureIndex"),
+            "CaptureIndex 来自别的 attempt": (manifest, binding, dict(index, attempt={"attempt_id": "attempt-2"}), "CaptureIndex"),
+        }
+        for label, (bad_manifest, bad_binding, bad_index, message) in cases.items():
+            with self.subTest(label=label), self.assertRaisesRegex(ConfigurationError, message):
+                claude_upgrade_release._evidence_campaign_root(bad_manifest, bad_binding, bad_index)
+
+    def test_three_model_projection_consumes_model_capability_evidence(self) -> None:
+        """VC-1 带上非主模型的模型能力取证证据（EVIDENCE-<模型>-<基础 probe>）后，Active 的三模型投影策略原样投影出三模型
+        目录；只带主模型证据时，缺的非主模型 probe 一次列全并失败关闭。"""
+
+        policy = self.projection_policy()
+        self.assertEqual(policy["models"]["ordered"], ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"])
+        builder = wire_fixture.WireEvidenceBuilder(policy, classify_tests.TARGET)
+        evidence = self.release_evidence(self.approved_vc2(wire_files=builder.files(models=True)))
+        projection = claude_upgrade_release.project_catalog(evidence, policy, target_version=classify_tests.TARGET, required_rule_count=40)
+        models = projection.catalog["models"]
+        self.assertEqual([item["canonical_model"] for item in models], policy["models"]["ordered"])
+        self.assertIsNone(models[0]["scenarios"]["server_fallback"])
+        self.assertIsNone(models[1]["scenarios"]["server_fallback"])
+        self.assertIsNotNone(models[2]["scenarios"]["server_fallback"])
+        catalog_evidence = projection.catalog["evidence"]
+        self.assertEqual(catalog_evidence["successful_attempts"], len(wire_projection.catalog_probes(policy)))
+        attempts = {item["attempt_id"] for item in catalog_evidence["attempts"]}
+        self.assertIn("attempt-fixture/claude-opus-5-v4-replay-tui", attempts)
+        self.assertIn("attempt-fixture/claude-fable-5-v4-bash", attempts)
+        self.assertEqual(claude_upgrade_release.model_identity(projection)["supported_models"], policy["models"]["ordered"])
+
+    def test_three_model_projection_lists_missing_model_probes(self) -> None:
+        """只带主模型证据（夹具缺省）时，三模型投影策略缺的 33 个非主模型 probe 一次列全并失败关闭。"""
+
+        policy = self.projection_policy()
+        primary_only = self.release_evidence(self.approved_vc2())
+        with self.assertRaises(claude_upgrade_release.ProjectionError) as raised:
+            claude_upgrade_release.project_catalog(primary_only, policy, target_version=classify_tests.TARGET, required_rule_count=40)
+        missing = [probe for probe in wire_projection.catalog_probes(policy) if probe.startswith(("claude-opus-5-", "claude-fable-5-"))]
+        self.assertEqual(len(missing), 33)
+        for probe in missing:
+            self.assertIn(probe, str(raised.exception))
 
 
 class PointerAndDiffTests(unittest.TestCase):

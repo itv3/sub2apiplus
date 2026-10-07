@@ -1524,15 +1524,25 @@ def _container_preconditions(
 
 
 def _relay_step_coordinates(argv: Sequence[str]) -> dict[str, Any]:
-    """relay ``capture`` 步骤的关键坐标；B2-05 保证每一步都是这个动作体。"""
+    """relay ``capture`` 步骤的关键坐标；B2-05 保证每一步都是这个动作体。
+
+    ``probe_id`` 是步骤身份，取输出目录名（B2-05 保证输出根是证据根下以步骤 probe 命名的子目录）：主模型步骤就是中继的
+    ``--probe-id``；非主模型（模型能力取证）步骤是「<--model>-<--probe-id>」，中继清单里记的仍是基础 probe 与该模型
+    （``relay_probe_id``、``model``）。
+    """
 
     scripts = [index for index, item in enumerate(argv) if item == RELAY_SCRIPT_NAME or str(item).endswith(f"/{RELAY_SCRIPT_NAME}")]
     if len(scripts) != 1 or scripts[0] + 1 >= len(argv) or argv[scripts[0] + 1] != "capture":
         raise ConfigurationError(f"步骤不是 {RELAY_SCRIPT_NAME} capture 动作体。")
+    output_root = _argument_value(argv, "--output-root")
+    relay_probe = _argument_value(argv, "--probe-id")
+    model = _argument_value(argv, "--model")
     coordinates = {
-        "output_root": _argument_value(argv, "--output-root"),
+        "output_root": output_root,
         "run_id": _argument_value(argv, "--run-id"),
-        "probe_id": _argument_value(argv, "--probe-id"),
+        "probe_id": PurePosixPath(output_root).name if output_root else None,
+        "relay_probe_id": relay_probe,
+        "model": model,
         "expected_version": _argument_value(argv, "--expected-version"),
         "expected_sha256": _argument_value(argv, "--expected-sha256"),
         "upstream_ip": _argument_value(argv, "--upstream-ip"),
@@ -1540,8 +1550,10 @@ def _relay_step_coordinates(argv: Sequence[str]) -> dict[str, Any]:
         "synthetic": "--acknowledge-synthetic-responses" in argv,
         "execute": "--execute" in argv,
     }
-    if not coordinates["output_root"] or not coordinates["run_id"] or not coordinates["probe_id"]:
+    if not coordinates["output_root"] or not coordinates["run_id"] or not relay_probe:
         raise ConfigurationError("relay 步骤缺少 --output-root／--run-id／--probe-id。")
+    if coordinates["probe_id"] not in {relay_probe, f"{model}-{relay_probe}"}:
+        raise ConfigurationError("relay 步骤的输出目录名既不是 --probe-id，也不是「<--model>-<--probe-id>」。")
     return coordinates
 
 
@@ -1682,7 +1694,12 @@ def _relay_manifest_check(
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), Mapping) else {}
     host_receipt = runtime.get("host_runtime_receipt") if isinstance(runtime.get("host_runtime_receipt"), Mapping) else {}
     checks = (
-        ("schema-mismatch", payload.get("schema_version") == RELAY_RUN_SCHEMA and payload.get("probe_id") == coordinates["probe_id"]),
+        (
+            "schema-mismatch",
+            payload.get("schema_version") == RELAY_RUN_SCHEMA
+            and payload.get("probe_id") == coordinates["relay_probe_id"]
+            and (coordinates["probe_id"] == coordinates["relay_probe_id"] or payload.get("model") == coordinates["model"]),
+        ),
         ("incomplete", payload.get("status") == "complete"),
         ("m-binding-open", (payload.get("m_binding") or {}).get("complete") is True),
         ("secret-scan-failed", (payload.get("secret_scan") or {}).get("passed") is True),
@@ -1721,7 +1738,9 @@ def _relay_plan_check(coordinates: Mapping[str, Any], log_path: Path) -> dict[st
     # 演练 argv 已去掉请求确认参数；真实上游意图以冻结的 --upstream-ip 判断（B2-05：真实 probe 必带、合成 probe 禁带）。
     checks = (
         plan.get("schema_version") == RELAY_PLAN_SCHEMA,
-        plan.get("run_id") == coordinates["run_id"] and plan.get("probe_id") == coordinates["probe_id"],
+        plan.get("run_id") == coordinates["run_id"] and plan.get("probe_id") == coordinates["relay_probe_id"],
+        # 非主模型（模型能力取证）步骤：计划回显的模型必须是步骤身份里的模型（与正式执行的 relay 清单核对同一口径）。
+        coordinates["probe_id"] == coordinates["relay_probe_id"] or plan.get("model") == coordinates["model"],
         plan.get("version") == coordinates["expected_version"],
         plan.get("production_changes") is False,
         (plan.get("live_requests") is True) == (coordinates["upstream_ip"] is not None),

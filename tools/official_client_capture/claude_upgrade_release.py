@@ -11,11 +11,16 @@
 * 某 probe 的请求字节取 VC-1 封存的 capture manifest 里该 probe 的 ``relay_binary`` 标签（按有效连接序号排序），P 通道取
   ``pcap`` 标签；每个文件读前按 EvidencePackage v3 的外部证据绑定核对路径（宿主数据根内）、摘要与字节数，未封存即拒绝。
   这等价于历史布局里「R 通道必须绑定 MeasuredRuleLedger」。
-* 非主模型的 probe 为 ``<模型>-<基础 probe>``（FW-G 模型能力 Campaign 的约定）。VC-1 现行场景清单只用主模型取证，投影
-  策略登记多个模型时，缺证据的 probe 会被一次列全并失败关闭。
+* 非主模型的 probe 为 ``<模型>-<基础 probe>``（FW-G 模型能力 Campaign 的约定）。VC-1 场景清单的 ``aux.model_capability``
+  场景按 Active 投影策略的非主模型逐个取证（中继跑基础 probe，步骤、证据目录与 capture manifest 的 ``probe_id`` 都用这个
+  名字，B2-07 补充项）；投影策略登记的模型缺证据时，缺的 probe 会被一次列全并失败关闭。
 * thinking.display 的生产零改动证明、模型能力目录的 ``production_diff`` 都绑定 VC-1 的 CaptureIndex：它逐 probe 核过中继
   计划 ``production_changes=false`` 与环境闭环，是 VC-1 的生产零改动证明。实现策略的 ``evidence_ledger`` 绑定 VC-2 批准的
   原子断言台账副本。证据路径一律相对宿主数据根。
+* 证据所在的 Campaign：模型能力目录证据的 ``campaign_root`` 取 VC-1 证据实际所在的 Campaign——采集路径是本 Campaign，
+  只读复用（read_only_reuse）是前序 Campaign——与 attempt 标签（同一份 capture manifest 的 ``attempt_id``）同源；
+  capture manifest、CaptureIndex 自报的 Campaign 与 attempt 必须和绑定路径一致，否则失败关闭。``evidence_ledger`` 是本
+  Campaign 的 VC-2 副本，仍取本 Campaign。
 
 二、投影策略（准备草案第五个文件 ``wire-projection-policy.json``）
 ===============================================================
@@ -83,10 +88,15 @@ MODEL_IDENTITY_FIELDS = ("supported_models", "model_alias_policy", "unknown_mode
 
 @dataclass(frozen=True)
 class ReleaseEvidence:
-    """VC-1 封存证据里 Wire 投影要用的部分：标签索引、外部绑定与两份封存对象的绑定。"""
+    """VC-1 封存证据里 Wire 投影要用的部分：标签索引、外部绑定与两份封存对象的绑定。
+
+    ``campaign_root`` 是本 Campaign（VC-2 批准的原子断言台账副本在这里）；``evidence_campaign_root`` 是 VC-1 证据实际所在的
+    Campaign（采集路径即本 Campaign，只读复用为前序 Campaign），两者都是数据根相对的 ``evidence/campaigns/<id>``。
+    """
 
     data_root: Path
     campaign_root: str
+    evidence_campaign_root: str
     attempt_id: str
     relay: dict[str, list[dict[str, Any]]]
     pcaps: dict[str, dict[str, Any]]
@@ -112,6 +122,26 @@ def _completeness_bindings(store: Any, package: Mapping[str, Any]) -> dict[str, 
     return found
 
 
+def _evidence_campaign_root(manifest: Mapping[str, Any], binding: Mapping[str, Any], index: Mapping[str, Any]) -> str:
+    """VC-1 证据所在 Campaign 的根（数据根相对 ``evidence/campaigns/<id>``）。
+
+    capture manifest 由产出证据的 Campaign 在自己的 ``official/seal/<代号>/drafts/`` 下生成并自报 ``campaign_id``；只读复用
+    导入的 EvidencePackage 原样绑定前序的这份文件。绑定路径的 Campaign 段必须等于自报的 ``campaign_id``，CaptureIndex
+    （``production_diff`` 绑定它）自报的 Campaign 与 attempt 也必须和 capture manifest 相同：任何一处对不上，说明目录证据的
+    来源和 attempt 标签不同源，失败关闭。
+    """
+
+    parts = PurePosixPath(str(binding.get("path", ""))).parts
+    campaign_id = manifest.get("campaign_id")
+    if not isinstance(campaign_id, str) or len(parts) < 4 or parts[:2] != ("evidence", "campaigns") or parts[2] != campaign_id:
+        raise ConfigurationError(
+            f"VC-1 capture manifest 不在它自报的 Campaign（{campaign_id!r}）的 evidence/campaigns/<id> 目录下：{binding.get('path')}"
+        )
+    if index.get("campaign_id") != campaign_id or index.get("attempt") != manifest.get("attempt"):
+        raise ConfigurationError("VC-1 CaptureIndex 与 capture manifest 自报的 Campaign 或 attempt 不一致：两者不是同一次封存。")
+    return PurePosixPath(*parts[:3]).as_posix()
+
+
 def load_release_evidence(
     campaign_dir: Path,
     store: Any,
@@ -133,6 +163,7 @@ def load_release_evidence(
         raise ConfigurationError("VC-1 capture manifest 合同名不符或仍有标签不一致。")
     if index.get("result") != "passed":
         raise ConfigurationError("VC-1 CaptureIndex 不是 passed：VC-1 尚未闭合。")
+    evidence_campaign_root = _evidence_campaign_root(manifest, manifest_binding, index)
     bindings: dict[str, dict[str, Any]] = {}
     items: dict[str, dict[str, Any]] = {}
     for item in package["evidence_items"]:
@@ -166,6 +197,7 @@ def load_release_evidence(
     return ReleaseEvidence(
         data_root=data_root,
         campaign_root=campaign_root,
+        evidence_campaign_root=evidence_campaign_root,
         attempt_id=str(attempt.get("attempt_id", "")),
         relay=relay,
         pcaps=pcaps,
@@ -262,7 +294,10 @@ class UpgradeEvidenceSource:
         return dict(self.evidence.ledger)
 
     def catalog_evidence(self) -> dict[str, Any]:
-        """模型能力目录的证据摘要：目录引用的每个 probe 一个完整 attempt 条目；VC-1 只封存通过的 probe，历史失败记 0。"""
+        """模型能力目录的证据摘要：目录引用的每个 probe 一个完整 attempt 条目；VC-1 只封存通过的 probe，历史失败记 0。
+
+        ``campaign_root`` 取 VC-1 证据所在的 Campaign（只读复用时是前序 Campaign），与 attempt 标签同源。
+        """
 
         attempts: list[dict[str, Any]] = []
         for probe in wire_projection.catalog_probes(self.policy):
@@ -278,7 +313,7 @@ class UpgradeEvidenceSource:
                 {"attempt_id": f"{self.evidence.attempt_id}/{probe}", "status": "complete", "manifest_sha256": str(manifests[0]["sha256"])}
             )
         evidence = {
-            "campaign_root": self.evidence.campaign_root,
+            "campaign_root": self.evidence.evidence_campaign_root,
             "successful_attempts": len(attempts),
             "historical_failed_attempts": 0,
             "attempts": attempts,

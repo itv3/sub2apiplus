@@ -67,6 +67,27 @@ SEAL_JOBS = (
     "official-agency-session",
 )
 MODEL_REQUESTS = {"POST /v1/messages", "POST /v1/messages/count_tokens", "POST /v1/messages/batches"}
+# 非主模型的模型能力取证 Job（B2-07 补充项）：裁剪到基础 probe 在 SEAL_JOBS 里由主模型执行的步骤。
+MODEL_JOB = "official-model-capability-claude-opus-5"
+
+
+def model_capability_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
+    """SEAL_JOBS 加裁剪过的 ``MODEL_JOB``：返回 (场景清单, 证据标签)，两者按同一组步骤闭合（标签只留保留步骤的规则）。"""
+
+    payload = capture_tests._reduced_payload({*SEAL_JOBS, MODEL_JOB})
+    primary = {step["probe_id"] for job in payload["capture_jobs"] if job["id"] != MODEL_JOB for step in job["steps"]}
+    job = next(item for item in payload["capture_jobs"] if item["id"] == MODEL_JOB)
+    job["steps"] = [step for step in job["steps"] if plan.step_relay_probe(step["probe_id"], step["argv"]) in primary]
+    kept = {step["probe_id"] for step in job["steps"]}
+    for scenario in payload["evidence_scenarios"]:
+        if scenario["scenario_id"] == plan.MODEL_CAPABILITY_SCENARIO:
+            scenario["probe_ids"] = [probe for probe in scenario["probe_ids"] if probe in kept]
+    labels = json.loads(plan.evidence_labels_path(TARGET).read_text(encoding="utf-8"))
+    labels["entries"] = [entry for entry in labels["entries"] if entry["job_id"] in {*SEAL_JOBS, MODEL_JOB}]
+    for entry in labels["entries"]:
+        if entry["job_id"] == MODEL_JOB:
+            entry["rules"] = [rule for rule in entry["rules"] if rule["labels"]["probe"] in kept]
+    return payload, labels
 
 FULL_FAKE_RELAY = r'''#!/usr/bin/env python3
 """claude_fw_e_relay.py 的离线替身（B2-07）：按 2.1.226 实测连接序列写一份完整的 FW-E 中继证据目录，不联网。"""
@@ -125,7 +146,7 @@ with open(os.path.join(output, "tls-clienthello.pcap"), "wb") as handle:
 with open(os.path.join(output, "results", "debug.log"), "w", encoding="utf-8") as handle:
     handle.write("synthetic debug log\n")
 manifest = {
-    "schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "status": "complete",
+    "schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "model": value("--model"), "status": "complete",
     "client": {"version": value("--expected-version") + " (Claude Code)", "sha256": value("--expected-sha256")},
     "fw_f_v5_probe": value("--fw-f-v5-probe"), "fw_f_v4_probe": value("--fw-f-v4-probe"), "response_plan": record["response_plan"],
     "runtime": {"runtime_image_reference": value("--runtime-image"),
@@ -364,8 +385,17 @@ class RelayViewTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.base = Path(directory.name).resolve()
 
-    def write_probe(self, *, requests_on: dict[int, list[str]], connections: list[dict], excluded: list[int]) -> Path:
-        probe = self.base / "runs" / "job" / "v4-background"
+    def write_probe(
+        self,
+        *,
+        requests_on: dict[int, list[str]],
+        connections: list[dict],
+        excluded: list[int],
+        name: str = "v4-background",
+        job: str = "job",
+        manifest: dict | None = None,
+    ) -> Path:
+        probe = self.base / "runs" / job / name
         (probe / "relay").mkdir(parents=True)
         inventory = []
         for number, lines in requests_on.items():
@@ -379,6 +409,7 @@ class RelayViewTests(unittest.TestCase):
             {
                 "schema_version": evidence.RELAY_MANIFEST_SCHEMA,
                 "probe_id": "v4-background",
+                **(manifest or {}),
                 "relay_integrity": {"result": "passed", "excluded_connections": [{"connection_id": item, "reason": "r"} for item in excluded]},
                 "dimension_evidence": {"actual_wire_inventory": inventory},
             },
@@ -412,6 +443,35 @@ class RelayViewTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(evidence.SealEvidenceError, "请求落在无效或握手前断开的连接上"):
             evidence.relay_probe_view(probe, base=self.base)
+
+    def test_model_capability_step_identity(self) -> None:
+        """非主模型（模型能力取证，B2-07 补充项）的目录名是「<模型>-<基础 probe>」，中继清单记基础 probe 与模型：扫描按目录
+        名登记步骤身份、基础 probe 留在 relay_probe_id；目录名的模型与中继清单不符即失败关闭；逐 probe 复核认同一规则。"""
+
+        step = "claude-opus-5-v4-background"
+        relay = {"model": "claude-opus-5", "fw_f_v5_probe": "v4-background", "fw_f_v4_probe": None}
+        probe = self.write_probe(
+            requests_on={1: ["HEAD /api/hello"]}, connections=[{"connection_id": 1, "valid": True}], excluded=[], name=step, manifest=relay
+        )
+        scanned = evidence.scan_relay_evidence([probe.parent], "official", base=self.base)
+        self.assertEqual(list(scanned["probes"]), [step])
+        view = scanned["probes"][step]
+        self.assertEqual((view["probe_id"], view["relay_probe_id"], view["manifest"]["model"]), (step, "v4-background", "claude-opus-5"))
+        context = {"target_sha256": "a" * 64, "target_version": TARGET, "runtime_image": "image"}
+        self.assertNotIn("probe_identity", evidence._probe_checks(view, probe=step, context=context, synthetic=False))
+        # 同一视图当成别的步骤复核、或中继清单的 v5 probe 不是基础 probe：probe_identity 不通过。
+        self.assertIn("probe_identity", evidence._probe_checks(view, probe="claude-fable-5-v4-background", context=context, synthetic=False))
+        broken = {**view, "manifest": {**view["manifest"], "fw_f_v5_probe": step}}
+        self.assertIn("probe_identity", evidence._probe_checks(broken, probe=step, context=context, synthetic=False))
+        # 目录名的模型与中继清单记的模型不同、或中继清单缺模型：扫描失败关闭。
+        for index, manifest in enumerate(({**relay, "model": "claude-fable-5"}, {**relay, "model": None})):
+            with self.subTest(model=manifest["model"]):
+                other = self.write_probe(
+                    requests_on={1: ["HEAD /api/hello"]}, connections=[{"connection_id": 1, "valid": True}], excluded=[],
+                    name=step, job=f"other-{index}", manifest=manifest,
+                )
+                with self.assertRaisesRegex(evidence.SealEvidenceError, "probe 目录名与中继清单的 probe_id 不一致"):
+                    evidence.scan_relay_evidence([other.parent], "official", base=self.base)
 
 
 class _SealCampaignCase(capture_tests.CaptureFixture):
@@ -449,8 +509,10 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
         ):
             yield
 
-    def build_campaign(self) -> Path:
-        payload = capture_tests._reduced_payload(set(SEAL_JOBS))
+    def build_campaign(self, inputs: tuple[dict[str, Any], dict[str, Any]] | None = None) -> Path:
+        """``inputs``：(场景清单, 证据标签)；缺省是 SEAL_JOBS 裁剪的真实清单与对应的标签条目。"""
+
+        payload = inputs[0] if inputs is not None else capture_tests._reduced_payload(set(SEAL_JOBS))
         # Store Campaign v2 规格：合成 persona 与官方产物，冻结身份与总计划同源（B2-11 建 Campaign 时冻结同一份）。
         scratch = self.root / "store-build"
         scratch.mkdir()
@@ -470,8 +532,11 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
             campaign_id=CAMPAIGN_ID,
             configuration={key: derived[key] for key in ("entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256")},
         )
-        labels = json.loads(plan.evidence_labels_path(TARGET).read_text(encoding="utf-8"))
-        labels["entries"] = [entry for entry in labels["entries"] if entry["job_id"] in SEAL_JOBS]
+        if inputs is not None:
+            labels = inputs[1]
+        else:
+            labels = json.loads(plan.evidence_labels_path(TARGET).read_text(encoding="utf-8"))
+            labels["entries"] = [entry for entry in labels["entries"] if entry["job_id"] in SEAL_JOBS]
         frozen = {
             "evidence_labels": _write_json(campaign / "inputs" / "evidence-labels.json", labels),
             "store_bootstrap": _write_json(
@@ -667,6 +732,41 @@ class CapturedSealChainTests(_SealCampaignCase):
             self.assertEqual(code, 1)
             self.assertIn("闭合门禁 blocked", stderr)
             self.assertEqual(facts_by_kind(claude_upgrade_store.campaign_store_root(campaign), CAMPAIGN_ID), {})
+
+
+class ModelCapabilitySealTests(_SealCampaignCase):
+    """非主模型的模型能力取证（B2-07 补充项）走同一条采集与 seal 链：中继跑基础 probe、清单记模型，步骤身份「<模型>-<基础
+    probe>」贯穿 CaptureIndex、capture manifest 与证据项（Wire 模型能力目录按 EVIDENCE-<模型>-<probe> 取证）。"""
+
+    def test_model_capability_probes_seal_with_step_identity(self) -> None:
+        payload, labels = model_capability_inputs()
+        model_probes = sorted(step["probe_id"] for job in payload["capture_jobs"] if job["id"] == MODEL_JOB for step in job["steps"])
+        self.assertEqual(len(model_probes), 8)
+        campaign = self.build_campaign((payload, labels))
+        attempt_id = self.run_capture(campaign)
+        with self.seal_patched():
+            code, preview, stderr = run_main(self.seal_argv(campaign, attempt_id))
+        self.assertEqual((code, preview["status"]), (2, "awaiting_seal_approval"), stderr)
+        seal_dir = campaign / seal.SEAL_ROOT / preview["generation"]
+        draft = json.loads((seal_dir / seal.SEAL_DRAFT_FILENAME).read_text(encoding="utf-8"))
+        index = json.loads((seal_dir / seal.DRAFTS_DIRNAME / "capture-index.json").read_text(encoding="utf-8"))
+        manifest_draft = json.loads((seal_dir / seal.DRAFTS_DIRNAME / "capture-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual((index["result"], index["failures"], manifest_draft["label_mismatches"]), ("passed", [], []))
+        rows = {item["probe_id"]: item for job in index["jobs"] if job["job_id"] == MODEL_JOB for item in job["probes"]}
+        self.assertEqual(sorted(rows), model_probes)
+        items = {item["evidence_id"]: item for item in draft["evidence_items"]}
+        self.assertEqual(len(items), 42 + len(model_probes))
+        probe = "claude-opus-5-v4-replay-tui"
+        self.assertEqual(items[f"EVIDENCE-{probe}"]["source_ids"], [plan.MODEL_CAPABILITY_SCENARIO])
+        self.assertIn(f"probe={probe}", items[f"EVIDENCE-{probe}"]["applicability"])
+        artifacts = [item for item in manifest_draft["artifacts"] if item["probe_id"] == probe]
+        self.assertTrue(artifacts)
+        for artifact in artifacts:
+            self.assertEqual((artifact["job_id"], artifact["labels"]["probe"], artifact["labels"]["model"]), (MODEL_JOB, probe, "claude-opus-5"))
+            self.assertIn(f"/{MODEL_JOB}/{probe}/", artifact["path"])
+        relay_artifact = next(item for item in artifacts if item["kind"] == "relay_manifest")
+        relay = json.loads((self.data / relay_artifact["path"]).read_text(encoding="utf-8"))
+        self.assertEqual((relay["probe_id"], relay["fw_f_v5_probe"], relay["model"]), ("v4-replay-tui", "v4-replay-tui", "claude-opus-5"))
 
 
 class PredecessorReuseSealTests(predecessor_tests._PredecessorCase):

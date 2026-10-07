@@ -7,7 +7,8 @@
     "中继请求按有效连接序号贴标签：序号按中继连接号升序、剔除中继清单登记的握手前断开连接后从 1 起算；每条有效连接必须恰好命中一条规则，声明的序号必须全部出现，尾部规则的最少连接数必须满足，否则失败关闭，不得静默错标。",
     "每条连接规则声明请求方法与路径（不含查询串）；封存编目时按中继自身记录逐条核对，合成计划另核对干预动作；不一致即失败关闭，须修订本声明并登记演进后重评，不得改动证据。",
     "本声明属于 evidence semantics：修改只追加 evaluation epoch，不触发重采；plan 阶段随场景清单冻结摘要。",
-    "2.1.285 的连接序列以 2.1.226 实测为初始模型；VC-1 实测不同即按上一条失败关闭并修订。"
+    "2.1.285 的连接序列以 2.1.226 实测为初始模型；VC-1 实测不同即按上一条失败关闭并修订。",
+    "非主模型的模型能力取证（aux.model_capability）照主模型同名基础 probe 的规则复制，标签另加 model：连接序列模型沿用主模型的冻结参数推出的序列；2.1.226 模型能力 Campaign 实测与之不同的已知例外（TUI 两个 probe 缺 oauth_profile 启动连接）不改初始模型，VC-1 实测不同即按上面的规则失败关闭并修订。"
   ],
   "entries": [
     {
@@ -5075,6 +5076,2382 @@
           "parser": "jsonl",
           "labels": {"probe": "v4-oauth-refresh", "response_mode": "synthetic", "channel": "M", "response_plan": "oauth-refresh-reject"},
           "rationale": "合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-model-capability-claude-opus-5",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "claude-opus-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-baseline",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-baseline",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-baseline",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-baseline",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-baseline 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-baseline/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-baseline", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-baseline 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-custom-system", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-append-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-append-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-append-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-append-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-append-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-append-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-append-system", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-append-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-exclude-dynamic-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-exclude-dynamic-system", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-low",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-low",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-low",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-low",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-low/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-effort-low", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-medium",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-medium",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-medium",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-medium",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-medium/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-effort-medium", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-max",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-max",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-max",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-max",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-max/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-effort-max", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-xhigh",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-xhigh",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-xhigh",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-effort-xhigh",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-effort-xhigh/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-effort-xhigh", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-thinking-disabled",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-thinking-disabled",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-thinking-disabled",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-thinking-disabled",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-thinking-disabled/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-thinking-disabled", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-agent-depth1",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-agent-depth1",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-agent-depth1",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-agent-depth1",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-agent-depth1 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-agent-depth1/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-agent-depth1", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-agent-depth1 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-background-subagent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-background-subagent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-background-subagent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-background-subagent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background-subagent 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background-subagent/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-background-subagent", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background-subagent 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-agent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-agent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-agent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-custom-agent",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-custom-agent/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-custom-agent", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background/relay/conn*.client_to_upstream.bin",
+          "connection": {
+            "order": "unordered",
+            "requests": ["GET /api/claude_code/policy_limits", "GET /api/claude_code/settings", "HEAD /api/hello", "POST /v1/messages"]
+          },
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {"probe": "claude-opus-5-v4-background", "model": "claude-opus-5", "entrypoint": "sdk-cli", "response_mode": "live", "connection_order": "unordered"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background 的规则：--bg 后台会话由守护进程按需建连，连接序号与条数不确定；只声明允许的请求集合，端点从派生观测读取。"
+        },
+        {
+          "glob": "claude-opus-5-v4-background/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-background", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-background 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-web-search",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-web-search",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-opus-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-web-search",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-opus-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-web-search",
+            "model": "claude-opus-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-web-search 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-web-search/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-web-search", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-web-search 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-tui",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-tui 的规则：cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/oauth/profile", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-tui",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "oauth_profile",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-tui 的规则：cli 启动序列第 2 条连接：oauth_profile。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 3, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-replay-tui",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-tui 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-replay-tui/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-replay-tui", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-replay-tui 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-opus-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-tui-count-tokens",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-opus-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/oauth/profile", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-tui-count-tokens",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "oauth_profile",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 2 条连接：oauth_profile。"
+        },
+        {
+          "glob": "claude-opus-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /v1/mcp_servers", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-tui-count-tokens",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "mcp_servers",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 3 条连接：mcp_servers。"
+        },
+        {
+          "glob": "claude-opus-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages/count_tokens", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-opus-5-v4-tui-count-tokens",
+            "model": "claude-opus-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "count_tokens",
+            "endpoint_class": "auxiliary"
+          },
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：启动序列之后的连接都承载 count_tokens；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-opus-5-v4-tui-count-tokens/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-opus-5-v4-tui-count-tokens", "model": "claude-opus-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-opus-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-model-capability-claude-fable-5",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "claude-fable-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-baseline",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-baseline",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-baseline",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-baseline 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-baseline",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-baseline 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-baseline/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-baseline", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-baseline 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-custom-system", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-append-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-append-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-append-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-append-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-append-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-append-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-append-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-append-system", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-append-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-exclude-dynamic-system",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-exclude-dynamic-system/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-exclude-dynamic-system", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-exclude-dynamic-system 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-low",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-low",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-low",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-low",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-low/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-effort-low", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-low 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-medium",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-medium",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-medium",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-medium",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-medium/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-effort-medium", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-medium 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-max",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-max",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-max",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-max",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-max/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-effort-max", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-max 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-xhigh",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-xhigh",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-xhigh",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-effort-xhigh",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-effort-xhigh/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-effort-xhigh", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-effort-xhigh 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-thinking-disabled",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-thinking-disabled",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-thinking-disabled",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-thinking-disabled",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-thinking-disabled/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-thinking-disabled", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-thinking-disabled 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-agent-depth1",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-agent-depth1",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-agent-depth1",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-agent-depth1 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-agent-depth1",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-agent-depth1 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-agent-depth1/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-agent-depth1", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-agent-depth1 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-background-subagent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-background-subagent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-background-subagent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background-subagent 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-background-subagent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background-subagent 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background-subagent/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-background-subagent", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background-subagent 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-agent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-agent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-agent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-custom-agent",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-custom-agent/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-custom-agent", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-custom-agent 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-bash/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-bash",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-bash 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-bash/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-bash",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-bash 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-bash/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-bash",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-bash 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-bash/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-bash",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-bash 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-bash/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-bash", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-bash 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background/relay/conn*.client_to_upstream.bin",
+          "connection": {
+            "order": "unordered",
+            "requests": ["GET /api/claude_code/policy_limits", "GET /api/claude_code/settings", "HEAD /api/hello", "POST /v1/messages"]
+          },
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {"probe": "claude-fable-5-v4-background", "model": "claude-fable-5", "entrypoint": "sdk-cli", "response_mode": "live", "connection_order": "unordered"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background 的规则：--bg 后台会话由守护进程按需建连，连接序号与条数不确定；只声明允许的请求集合，端点从派生观测读取。"
+        },
+        {
+          "glob": "claude-fable-5-v4-background/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-background", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-background 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-web-search",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/claude_code/policy_limits", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-web-search",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "policy_limits",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 2 条连接：policy_limits。"
+        },
+        {
+          "glob": "claude-fable-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /api/claude_code/settings", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-web-search",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "settings",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-web-search 的规则：sdk-cli 启动序列第 3 条连接：settings。"
+        },
+        {
+          "glob": "claude-fable-5-v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-web-search",
+            "model": "claude-fable-5",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-web-search 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-web-search/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-web-search", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-web-search 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-tui",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-tui 的规则：cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/oauth/profile", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-tui",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "oauth_profile",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-tui 的规则：cli 启动序列第 2 条连接：oauth_profile。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 3, "request": "POST /v1/messages", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-replay-tui",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "messages",
+            "endpoint_class": "inference"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-tui 的规则：启动序列之后的连接都承载 messages；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-replay-tui/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-replay-tui", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-replay-tui 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "claude-fable-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 1, "request": "HEAD /api/hello", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-tui-count-tokens",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "hello",
+            "endpoint_class": "lifecycle"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 1 条连接：hello。"
+        },
+        {
+          "glob": "claude-fable-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 2, "request": "GET /api/oauth/profile", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-tui-count-tokens",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "oauth_profile",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 2 条连接：oauth_profile。"
+        },
+        {
+          "glob": "claude-fable-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal": 3, "request": "GET /v1/mcp_servers", "count": "one"},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-tui-count-tokens",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "mcp_servers",
+            "endpoint_class": "startup"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：cli 启动序列第 3 条连接：mcp_servers。"
+        },
+        {
+          "glob": "claude-fable-5-v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"ordinal_from": 4, "request": "POST /v1/messages/count_tokens", "count": "one_or_more", "min_connections": 1},
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "claude-fable-5-v4-tui-count-tokens",
+            "model": "claude-fable-5",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "endpoint": "count_tokens",
+            "endpoint_class": "auxiliary"
+          },
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：启动序列之后的连接都承载 count_tokens；keep-alive 时一条连接可承载多次请求，条数随客户端行为变化。"
+        },
+        {
+          "glob": "claude-fable-5-v4-tui-count-tokens/relay-manifest.json",
+          "scenario_ids": ["aux.model_capability"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "claude-fable-5-v4-tui-count-tokens", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
+          "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
         }
       ]
     }

@@ -118,7 +118,8 @@ def _binding(path: Path, base: Path) -> dict[str, Any]:
 
 
 def _scenarios(version: str) -> dict[str, Any]:
-    """真实 2.1.285 目标场景清单（全部 79 个 probe）；版本不同时只改 ``claude_version``（2.1.226 夹具用）。"""
+    """真实 2.1.285 目标场景清单（全部 112 个 probe：主模型 79 个、非主模型模型能力取证 33 个）；版本不同时只改
+    ``claude_version``（2.1.226 夹具用）。"""
 
     payload = json.loads(plan.scenario_manifest_path(TARGET).read_text(encoding="utf-8"))
     payload["claude_version"] = version
@@ -172,12 +173,17 @@ class _ClassifyCase(unittest.TestCase):
         control_receipts: dict[str, Any] | None = None,
         wire_files: Mapping[str, Sequence[tuple[str, bytes, str, int | None]]] | None = None,
         official_reuse: bool = False,
+        relay_identities: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
 
         ``official_reuse`` 为真时 VC-1 按只读复用前序证据的形态封存（B3-01 的原子批次链用）：中继证据在同一数据根下的
-        前序 Campaign 目录里，本 Campaign 没有官方 attempt，官方阶段结果为 ``predecessor_reuse``。缺省是采集路径形态。"""
+        前序 Campaign 目录里，本 Campaign 没有官方 attempt，官方阶段结果为 ``predecessor_reuse``。缺省是采集路径形态。
+
+        中继清单的身份字段与真实 relay 同形：``probe_id`` 记中继跑的基础 probe，非主模型（模型能力取证，B2-07 补充项）
+        步骤另记 ``model``，步骤身份「<模型>-<基础 probe>」由它推出。``relay_identities``：probe → 覆盖这两个字段的值
+        （失败关闭用例用）。"""
 
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
@@ -224,8 +230,11 @@ class _ClassifyCase(unittest.TestCase):
         store, store_campaign = seal._ensure_store_campaign(campaign, manifest)
         tool_sha = seal._require_store_tool_current(store, store_campaign)
 
-        # VC-1 封存对象（路径都在宿主数据根内，完整性清单按数据根相对路径绑定）。
-        drafts = campaign / "official" / "seal" / "g-fixture" / "drafts"
+        # VC-1 封存对象（路径都在宿主数据根内，完整性清单按数据根相对路径绑定）。只读复用形态下封存草稿与中继证据一样在
+        # 前序 Campaign 里（导入的 EvidencePackage 原样绑定前序的文件），capture manifest 与 CaptureIndex 自报前序 Campaign。
+        evidence_campaign_id = f"{campaign_id}-predecessor" if official_reuse else campaign_id
+        evidence_campaign = self.data / "evidence" / "campaigns" / evidence_campaign_id
+        drafts = evidence_campaign / "official" / "seal" / "g-fixture" / "drafts"
         discovery_path = _write_bytes(
             drafts / "discovery-inventory.json",
             discovery if discovery is not None else json.dumps(DISCOVERY_INVENTORY, ensure_ascii=False).encode("utf-8"),
@@ -235,25 +244,27 @@ class _ClassifyCase(unittest.TestCase):
             probe: sorted(item["scenario_id"] for item in scenarios["evidence_scenarios"] if probe in item["probe_ids"]) for probe in probes
         }
         relay_overrides = relay_overrides or {}
-        evidence_attempt = (
-            self.data / "evidence" / "campaigns" / f"{campaign_id}-predecessor" / "official" / "attempts" / "attempt-fixture"
-            if official_reuse
-            else campaign / "official" / "attempts" / "attempt-fixture"
-        )
+        evidence_attempt = evidence_campaign / "official" / "attempts" / "attempt-fixture"
+        steps = {step["probe_id"]: step for job in scenarios["capture_jobs"] for step in job["steps"]}
         relays: dict[str, Path] = {}
         for probe in probes:
+            identity: dict[str, Any] = {"probe_id": plan.step_relay_probe(probe, steps[probe]["argv"])}
+            model = plan.step_model(probe, steps[probe]["argv"])
+            if model is not None:
+                identity["model"] = model
+            identity.update((relay_identities or {}).get(probe, {}))
             dimensions = [scenario for scenario in probe_scenarios[probe] if scenario in claude_fw_f_v5.OBSERVED_ONLY_DIMENSIONS]
             dimension_evidence = relay_overrides.get(
                 probe,
                 {
                     "schema_version": claude_fw_f_v5.SCHEMA_DIMENSION_EVIDENCE,
-                    "probe_id": probe,
+                    "probe_id": identity["probe_id"],
                     "observed_only": [self.observed_entry(dimension) for dimension in dimensions],
                 },
             )
             relays[probe] = _write_json(
                 evidence_attempt / "evidence" / probe / "relay-manifest.json",
-                {"schema_version": evidence.RELAY_MANIFEST_SCHEMA, "probe_id": probe, "status": "complete", "dimension_evidence": dimension_evidence},
+                {"schema_version": evidence.RELAY_MANIFEST_SCHEMA, **identity, "status": "complete", "dimension_evidence": dimension_evidence},
             )
         matrix_rows = []
         for spec_id in rules:
@@ -286,11 +297,17 @@ class _ClassifyCase(unittest.TestCase):
             "capture_manifest": _write_json(
                 drafts / "capture-manifest.json",
                 {
-                    "schema_version": evidence.CAPTURE_MANIFEST_SCHEMA, "attempt": {"attempt_id": "attempt-fixture"},
-                    "artifacts": wire_artifacts, "label_mismatches": [],
+                    "schema_version": evidence.CAPTURE_MANIFEST_SCHEMA, "campaign_id": evidence_campaign_id,
+                    "attempt": {"attempt_id": "attempt-fixture"}, "artifacts": wire_artifacts, "label_mismatches": [],
                 },
             ),
-            "capture_index": _write_json(drafts / "capture-index.json", {"schema_version": evidence.CAPTURE_INDEX_SCHEMA, "result": "passed"}),
+            "capture_index": _write_json(
+                drafts / "capture-index.json",
+                {
+                    "schema_version": evidence.CAPTURE_INDEX_SCHEMA, "campaign_id": evidence_campaign_id,
+                    "attempt": {"attempt_id": "attempt-fixture"}, "result": "passed",
+                },
+            ),
             "discovery_inventory": discovery_path,
             # 正交候选分母由 VC-1 封存（B2-07 补充项），与发现清单一起绑定进完整性清单。
             "candidate_denominator": _write_bytes(
@@ -573,7 +590,8 @@ class MachineDraftTests(_ClassifyCase):
             [{"binding_type": "supporting_fact_bound", "fact_ids": [limit["fact_id"]], "owner_kind": "record_only", "evidence_role": "observed_only_absent_record_only"}],
         )
         receipt = json.loads((Path(result["draft_dir"]) / classify.DRAFT_RECEIPT_FILENAME).read_text(encoding="utf-8"))
-        self.assertEqual(len(receipt["inputs"]["observed_only_sources"]), 79)
+        # 每个证据项一份中继清单来源：主模型 79 个加非主模型（模型能力取证）33 个。
+        self.assertEqual(len(receipt["inputs"]["observed_only_sources"]), 112)
 
     def test_missing_v5_evidence_fails_closed(self) -> None:
         for index, (label, override, message) in enumerate(
@@ -592,6 +610,34 @@ class MachineDraftTests(_ClassifyCase):
                 self.assertEqual(code, 1)
                 self.assertIn(message, stderr)
                 self.assertFalse((campaign / classify.DRAFT_ROOT).exists())
+
+    def test_model_capability_relay_identity(self) -> None:
+        """非主模型（模型能力取证，B2-07 补充项）的证据项是 EVIDENCE-<模型>-<基础 probe>，绑定的中继清单与真实 relay 同形：
+        probe_id 记基础 probe、model 记模型。按「<模型>-<基础 probe>」认步骤身份；模型或基础 probe 对不上即失败关闭。
+        （此前本判据要求中继清单 probe_id 等于证据项 probe，真实数据会在 VC-2 失败关闭；旧夹具把 probe_id 写成步骤名盖住了它。）"""
+
+        probe = "claude-opus-5-v4-replay-tui"
+        campaign = self.build_campaign()
+        relay_path = campaign / "official" / "attempts" / "attempt-fixture" / "evidence" / probe / "relay-manifest.json"
+        relay = json.loads(relay_path.read_text(encoding="utf-8"))
+        self.assertEqual((relay["probe_id"], relay["model"]), ("v4-replay-tui", "claude-opus-5"))
+        code, result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
+        self.assertEqual(code, 2, stderr)
+        receipt = json.loads((Path(result["draft_dir"]) / classify.DRAFT_RECEIPT_FILENAME).read_text(encoding="utf-8"))
+        self.assertIn(f"EVIDENCE-{probe}", {item["evidence_id"] for item in receipt["inputs"]["observed_only_sources"]})
+        for index, (label, identity) in enumerate(
+            (
+                ("模型对不上", {"model": "claude-fable-5"}),
+                ("缺模型", {"model": None}),
+                ("基础 probe 对不上", {"probe_id": "v4-replay-baseline"}),
+            )
+        ):
+            with self.subTest(label=label):
+                broken = self.build_campaign(campaign_id=f"claude-code-2_1_285-mc-{index}", relay_identities={probe: identity})
+                code, _result, stderr = run_main(["classify", "--campaign-dir", str(broken)])
+                self.assertEqual(code, 1)
+                self.assertIn(f"证据项 EVIDENCE-{probe} 的中继清单 probe_id 不符", stderr)
+                self.assertFalse((broken / classify.DRAFT_ROOT).exists())
 
     def test_inputs_are_verified_before_drafting(self) -> None:
         # VC-1 封存的候选分母声明计数与实际不一致：分母必须由内容计算。

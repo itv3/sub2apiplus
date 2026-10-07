@@ -1,11 +1,14 @@
 """Claude 官方取证场景清单、规则清单与证据标签（Claude 升级控制面设计 B2-05）。
 
-* 场景清单 ``claude-upgrade-scenarios/v1``：结构闭合、变量合同（设计规定的 14 个变量加四项实施补充）、与 FW-F v5
-  目录（与 v4 同构：49 维 79 probe）逐项一致、版本事实绑定、规则覆盖与 ``tool_dependencies``（作业依赖分析器生成）
-  逐项相等。
+* 场景清单 ``claude-upgrade-scenarios/v1``：结构闭合、变量合同（设计规定的 14 个变量加四项实施补充）、主模型步骤与
+  FW-F v5 目录（与 v4 同构：49 维 79 probe）逐项一致、版本事实绑定、规则覆盖与 ``tool_dependencies``（作业依赖分析器
+  生成）逐项相等。
+* 模型能力取证（B2-07 补充项）：非主模型步骤恰好是 Active 投影策略推出的 33 个「<模型>-<基础 probe>」，逐字复制主模型
+  同名基础 probe 的步骤（只换 probe_id、--run-id、--output-root 与 --model），全部归入发现项场景 aux.model_capability。
 * 验收一：``plan --campaign-mode preflight_only`` 展开全部 Job（零写入），运行期变量保留占位并能逐步绑定。
 * 验收二：证据标签逐连接顺序测试——每个 probe 的逐连接标签与 2.1.226 实测的中继有效连接序列逐条匹配（方法与
-  路径、单连接请求数、合成计划的干预动作），任何错位都失败关闭。
+  路径、单连接请求数、合成计划的干预动作），任何错位都失败关闭；非主模型 probe 的标签照主模型复制，另与 2.1.226
+  模型能力 Campaign 的实测序列逐条核对，已知例外写死。
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from unittest import mock
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_plan as plan
+from tools.official_client_capture import claude_upgrade_release as release
+from tools.official_client_capture import claude_upgrade_wire_projection as wire_projection
 from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
 from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
 from tools.official_client_capture.capturelib.model import ConfigurationError
@@ -34,6 +39,14 @@ REPOSITORY_ROOT = TOOL_ROOT.parents[1]
 TARGET = "2.1.285"
 BASELINE = "2.1.226"
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "claude_2_1_226_relay_connection_sequences.json"
+# 2.1.226 模型能力 Campaign 里 33 个非主模型 probe 的逐连接序列（只读抽取，口径同上）。
+MODEL_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "claude_2_1_226_model_capability_connection_sequences.json"
+MODEL_JOB_PREFIX = "official-model-capability-"
+# 模型能力实测与照主模型复制的标签不同的已知例外：两个非主模型的 TUI 启动序列缺 oauth_profile 连接（当次运行器状态与
+# 主模型取证不同）。标签仍以主模型序列为初始模型；VC-1 实测不同即由封存编目失败关闭并修订标签。
+MODEL_SEQUENCE_EXCEPTIONS = frozenset(
+    f"{model}-{probe}" for model in ("claude-opus-5", "claude-fable-5") for probe in ("v4-replay-tui", "v4-tui-count-tokens")
+)
 # 设计 B2-05 规定的变量合同；实施补充 capture_root、capture_tool_root、host_runtime_receipt_sha256 与 B2-06 补充的
 # synthetic_capture_container（合成 probe 的断网容器，见各自说明）。
 DESIGN_VARIABLES = {
@@ -52,6 +65,28 @@ def _scenario_payload() -> dict:
 
 def _baseline_rules() -> tuple[str, ...]:
     return plan.load_baseline_rules(plan.baseline_rule_manifest_path(BASELINE), BASELINE)
+
+
+def _model_capability_probes() -> list[str]:
+    """Active（基线）投影策略推出的非主模型 probe：模型能力目录引用的 probe 去掉主模型的基础 probe。"""
+
+    policy, _binding = release.active_projection_policy(BASELINE)
+    return sorted(probe for probe in wire_projection.catalog_probes(policy) if probe not in v5.PROBE_IDS)
+
+
+def _capability_argv(primary_step: dict, model: str, job_id: str) -> list[str]:
+    """主模型步骤 argv 换成非主模型步骤应有的 argv：只换 --run-id、--output-root 与 --model 三处取值。"""
+
+    base = primary_step["probe_id"]
+    expected = list(primary_step["argv"])
+    replacements = {
+        "--run-id": f"{{campaign_id}}-{model}-{base}",
+        "--output-root": f"{{capture_root}}/runs/claude-official/{{campaign_id}}/{job_id}/{model}-{base}",
+        "--model": model,
+    }
+    for flag, value in replacements.items():
+        expected[expected.index(flag) + 1] = value
+    return expected
 
 
 def _plan_argv(campaign_dir: Path, *extra: str, campaign_id: str = "claude-code-2_1_285-t1") -> list[str]:
@@ -79,7 +114,12 @@ class ScenarioManifestTests(unittest.TestCase):
         self.assertEqual(payload["rule_manifest"]["path"], f"tools/official_client_capture/claude_upgrade_rules_{TARGET.replace('.', '_')}.json")
         guide = REPOSITORY_ROOT / payload["source_spec"]["path"]
         self.assertEqual(plan.guide_section_sha256(guide, "第二部分"), payload["source_spec"]["sha256"])
-        self.assertEqual(len(payload["capture_jobs"]), 12)
+        # 12 个主模型 Job 加 2 个非主模型的模型能力取证 Job（claude-opus-5、claude-fable-5）。
+        self.assertEqual(len(payload["capture_jobs"]), 14)
+        self.assertEqual(
+            [job["id"] for job in payload["capture_jobs"] if job["id"].startswith(MODEL_JOB_PREFIX)],
+            [f"{MODEL_JOB_PREFIX}claude-opus-5", f"{MODEL_JOB_PREFIX}claude-fable-5"],
+        )
         self.assertTrue(all(job["phase"] == "official" for job in payload["capture_jobs"]))
 
     def test_variable_contract_covers_design_and_scopes(self) -> None:
@@ -111,11 +151,29 @@ class ScenarioManifestTests(unittest.TestCase):
 
         first_job = lambda payload: payload["capture_jobs"][0]  # noqa: E731
         first_step = lambda payload: payload["capture_jobs"][0]["steps"][0]  # noqa: E731
+        model_job = lambda payload: next(job for job in payload["capture_jobs"] if job["id"].startswith(MODEL_JOB_PREFIX))  # noqa: E731
+        model_step = lambda payload: model_job(payload)["steps"][0]  # noqa: E731
+        scenario = lambda payload, sid: next(item for item in payload["evidence_scenarios"] if item["scenario_id"] == sid)  # noqa: E731
 
         def drop_flag(payload, flag):
             argv = first_step(payload)["argv"]
             position = argv.index(flag)
             del argv[position:position + 2]
+
+        def set_flag(step, flag, value):
+            step["argv"][step["argv"].index(flag) + 1] = value
+
+        def model_step_also_in_discovery(payload):
+            # 非主模型步骤兼归另一个发现项场景（Job 的 scenario_ids 同步，绕过前面的闭合检查）。
+            scenario(payload, "aux.models")["probe_ids"].append(model_step(payload)["probe_id"])
+            model_job(payload)["scenario_ids"] = sorted([*model_job(payload)["scenario_ids"], "aux.models"])
+
+        def primary_step_in_capability(payload):
+            scenario(payload, plan.MODEL_CAPABILITY_SCENARIO)["probe_ids"].append(first_step(payload)["probe_id"])
+            first_job(payload)["scenario_ids"] = sorted([*first_job(payload)["scenario_ids"], plan.MODEL_CAPABILITY_SCENARIO])
+
+        def capability_as_rule_evidence(payload):
+            scenario(payload, plan.MODEL_CAPABILITY_SCENARIO).update(purpose="rule_evidence", covers=["SPEC-BODY-001"])
 
         cases = {
             "顶层多字段": (lambda p: p.update(extra=1), "顶层字段不闭合"),
@@ -185,6 +243,19 @@ class ScenarioManifestTests(unittest.TestCase):
                 lambda p: first_step(p).update(argv=first_step(p)["argv"][3:]),
                 "docker exec {capture_container}",
             ),
+            # 模型能力取证（B2-07 补充项）：步骤身份、模型名与场景归属。
+            "主模型步骤写字面模型名": (lambda p: set_flag(first_step(p), "--model", "claude-sonnet-5"), "与 probe_id 不一致"),
+            "非主模型步骤沿用模型变量": (lambda p: set_flag(model_step(p), "--model", "{model}"), "与 probe_id 不一致"),
+            "非主模型步骤身份与模型不符": (lambda p: set_flag(model_step(p), "--model", "claude-fable-5"), "与 probe_id 不一致"),
+            "非主模型步骤中继跑模型名": (
+                lambda p: [set_flag(model_step(p), flag, model_step(p)["probe_id"]) for flag in ("--probe-id", "--fw-f-v5-probe")],
+                "与 probe_id 不一致|不在 FW-F v5 目录",
+            ),
+            "非主模型步骤兼归其他场景": (model_step_also_in_discovery, "必须且只能归入"),
+            "主模型步骤归入模型能力场景": (primary_step_in_capability, "必须且只能归入"),
+            "模型能力场景证明规则": (capability_as_rule_evidence, "发现项"),
+            "不覆盖规则的 Job 承载规则场景": (lambda p: first_job(p).update(covers=[]), "只能承载发现项场景"),
+            "目录 probe 数计入非主模型步骤": (lambda p: p["probe_catalog"].update(probe_count=112), "probe_count"),
         }
         for label, (change, message) in cases.items():
             with self.subTest(label=label):
@@ -214,6 +285,10 @@ class ScenarioManifestTests(unittest.TestCase):
             plan.validate_campaign_context(escaped, context)
         with self.assertRaisesRegex(ConfigurationError, "运行期变量不得在 plan 时取值"):
             plan.validate_campaign_context(payload, {**context, "run_nonce": SHA_A})
+        # 非主模型的字面模型名不得等于 Campaign 主模型（同一模型在两个目录下各取一遍证）。
+        plan.validate_campaign_context(payload, {**context, "model": "claude-sonnet-5"})
+        with self.assertRaisesRegex(ConfigurationError, "与 Campaign 主模型 claude-opus-5 相同"):
+            plan.validate_campaign_context(payload, {**context, "model": "claude-opus-5"})
         with self.assertRaisesRegex(ConfigurationError, "ip_address"):
             plan.validate_campaign_context(payload, {**context, "upstream_ip": "10.0.0.1"})
         root_runtime = copy.deepcopy(payload)
@@ -292,19 +367,27 @@ class VersionFactsBindingTests(unittest.TestCase):
 
 
 class CatalogConsistencyTests(unittest.TestCase):
-    """场景清单与 FW-F v5 目录（与 v4 同构：49 维 79 probe）逐项一致。"""
+    """主模型步骤与 FW-F v5 目录（与 v4 同构：49 维 79 probe）逐项一致；非主模型步骤逐字复制主模型步骤。"""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.payload = _scenario_payload()
         cls.steps = {step["probe_id"]: (job, step) for job in cls.payload["capture_jobs"] for step in job["steps"]}
         cls.scenarios = {item["scenario_id"]: item for item in cls.payload["evidence_scenarios"]}
+        cls.primary = {probe: pair for probe, pair in cls.steps.items() if plan.step_model(probe, pair[1]["argv"]) is None}
+        cls.capability = {probe: pair for probe, pair in cls.steps.items() if probe not in cls.primary}
+
+    def base_probe(self, probe_id: str) -> str:
+        return str(plan.step_relay_probe(probe_id, self.steps[probe_id][1]["argv"]))
 
     def test_every_probe_runs_exactly_once(self) -> None:
         executed = [step["probe_id"] for job in self.payload["capture_jobs"] for step in job["steps"]]
-        self.assertEqual(sorted(executed), sorted(v5.PROBE_IDS))
-        self.assertEqual(v5.PROBE_IDS, v4.PROBE_IDS)
         self.assertEqual(len(executed), len(set(executed)))
+        self.assertEqual(sorted(self.primary), sorted(v5.PROBE_IDS))
+        self.assertEqual(v5.PROBE_IDS, v4.PROBE_IDS)
+        # 非主模型步骤恰好是 Active 投影策略推出的 33 个 probe（opus、fable 各 16 个，另加 fable 的 server fallback）。
+        self.assertEqual(sorted(self.capability), _model_capability_probes())
+        self.assertEqual(len(self.capability), 33)
         catalog = self.payload["probe_catalog"]
         self.assertEqual((catalog["probe_count"], catalog["dimension_count"]), (len(v5.PROBES), len(v5.REQUIRED_MATRIX_DIMENSIONS)))
         self.assertEqual((catalog["probe_count"], catalog["dimension_count"]), (79, 49))
@@ -316,15 +399,32 @@ class CatalogConsistencyTests(unittest.TestCase):
                 expected = sorted(pid for pid, probe in v5.PROBES.items() if dimension in probe.dimensions)
                 self.assertEqual(self.scenarios[dimension]["probe_ids"], expected)
         conditions = {sid: item for sid, item in self.scenarios.items() if sid.startswith("condition.")}
-        self.assertEqual(set(self.scenarios) - set(conditions), set(v5.REQUIRED_MATRIX_DIMENSIONS))
+        self.assertEqual(set(self.scenarios) - set(conditions) - {plan.MODEL_CAPABILITY_SCENARIO}, set(v5.REQUIRED_MATRIX_DIMENSIONS))
         members = sorted(pid for item in conditions.values() for pid in item["probe_ids"])
         self.assertEqual(members, sorted(pid for pid, probe in v5.PROBES.items() if not probe.dimensions))
         discovery = sorted(sid for sid, item in self.scenarios.items() if item["purpose"] == "discovery")
-        self.assertEqual(discovery, ["agency.hook", "aux.models", "header.dispatch_id", "header.usage_limit"])
+        self.assertEqual(discovery, ["agency.hook", "aux.model_capability", "aux.models", "header.dispatch_id", "header.usage_limit"])
+        capability = self.scenarios[plan.MODEL_CAPABILITY_SCENARIO]
+        self.assertEqual((capability["probe_ids"], capability["covers"]), (_model_capability_probes(), []))
+
+    def test_model_capability_steps_copy_primary_steps(self) -> None:
+        """非主模型步骤：中继跑主模型已执行的同名基础 probe，argv 只换 --run-id、--output-root 与 --model。"""
+
+        for probe_id, (job, step) in sorted(self.capability.items()):
+            model = plan.step_model(probe_id, step["argv"])
+            base = self.base_probe(probe_id)
+            with self.subTest(probe=probe_id):
+                self.assertEqual(probe_id, f"{model}-{base}")
+                _primary_job, primary_step = self.primary[base]
+                self.assertEqual(step["argv"], _capability_argv(primary_step, str(model), job["id"]))
+                self.assertEqual((step["environment"], step["timeout_seconds"]), (primary_step["environment"], primary_step["timeout_seconds"]))
+                self.assertEqual(job["id"], f"{MODEL_JOB_PREFIX}{model}")
+                self.assertEqual((job["covers"], job["scenario_ids"], job["required"]), ([], [plan.MODEL_CAPABILITY_SCENARIO], True))
+                self.assertEqual(job["suites"], ["core", "full"])
 
     def test_steps_follow_probe_definitions(self) -> None:
         for probe_id, (job, step) in self.steps.items():
-            probe = v5.PROBES[probe_id]
+            probe = v5.PROBES[self.base_probe(probe_id)]
             with self.subTest(probe=probe_id):
                 synthetic = "--acknowledge-synthetic-responses" in step["argv"]
                 self.assertEqual(synthetic, bool(probe.response_plan))
@@ -338,7 +438,7 @@ class CatalogConsistencyTests(unittest.TestCase):
 
     def test_artifact_kinds_follow_probe_channels(self) -> None:
         for scenario_id, item in self.scenarios.items():
-            probes = [v5.PROBES[pid] for pid in item["probe_ids"]]
+            probes = [v5.PROBES[self.base_probe(pid)] for pid in item["probe_ids"]]
             with self.subTest(scenario=scenario_id):
                 kinds = set(item["required_artifact_kinds"])
                 self.assertTrue({"relay_binary", "relay_manifest"} <= kinds)
@@ -421,9 +521,9 @@ class PlanExpansionTests(unittest.TestCase):
         self.assertEqual((report["campaign_created"], report["files_written"], report["live_request_count"]), (False, 0, 0))
         self.assertFalse(self.campaign_dir.exists())
         self.assertEqual([job["id"] for job in report["jobs"]], [job["id"] for job in payload["capture_jobs"]])
-        self.assertEqual((report["job_count"], report["step_count"]), (12, 79))
+        self.assertEqual((report["job_count"], report["step_count"]), (14, 112))
         probes = [step["probe_id"] for job in report["jobs"] for step in job["steps"]]
-        self.assertEqual(sorted(probes), sorted(v5.PROBE_IDS))
+        self.assertEqual(sorted(probes), sorted([*v5.PROBE_IDS, *_model_capability_probes()]))
         self.assertEqual(report["coverage_plan"]["official_unmapped"], [])
         self.assertEqual(report["required_rules"], list(_baseline_rules()))
         self.assertEqual(report["configuration"]["claude_bin"], f"/opt/claude-{TARGET}/claude")
@@ -475,6 +575,10 @@ class PlanExpansionTests(unittest.TestCase):
             "合成容器与抓包容器相同": (
                 _plan_argv(self.campaign_dir, "--synthetic-capture-container", "capture-cli"), "独立的断网容器"
             ),
+            "主模型与非主模型取证模型相同": (
+                [item if item != "claude-sonnet-5" else "claude-fable-5" for item in _plan_argv(self.campaign_dir)],
+                "与 Campaign 主模型 claude-fable-5 相同",
+            ),
         }
         for label, (argv, message) in cases.items():
             with self.subTest(label=label):
@@ -523,33 +627,85 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
         cls.labels = plan.load_evidence_labels(plan.evidence_labels_path(TARGET), expected_version=TARGET, scenario_payload=cls.payload)
         cls.plans = {probe: probe_plan for job_plans in cls.labels["plans"].values() for probe, probe_plan in job_plans.items()}
         cls.fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        cls.model_fixture = json.loads(MODEL_FIXTURE.read_text(encoding="utf-8"))
         cls.rules = {
             entry["job_id"]: entry["rules"] for entry in cls.labels["document"]["entries"]
         }
 
     def test_fixture_is_metadata_only_and_complete(self) -> None:
-        self.assertEqual(self.fixture["claude_version"], BASELINE)
-        self.assertEqual(sorted(self.fixture["probes"]), sorted(v5.PROBE_IDS))
-        for probe_id, record in self.fixture["probes"].items():
-            for connection in record["connections"]:
-                with self.subTest(probe=probe_id, connection=connection["connection_id"]):
-                    self.assertEqual(set(connection), {"connection_id", "requests", "intervention"})
-                    self.assertTrue(all(plan.REQUEST_LINE_RE.fullmatch(item) for item in connection["requests"]))
-                    self.assertNotIn(connection["connection_id"], record["excluded_connection_ids"])
+        for fixture, expected in ((self.fixture, sorted(v5.PROBE_IDS)), (self.model_fixture, _model_capability_probes())):
+            self.assertEqual(fixture["claude_version"], BASELINE)
+            self.assertEqual(sorted(fixture["probes"]), expected)
+            for probe_id, record in fixture["probes"].items():
+                for connection in record["connections"]:
+                    with self.subTest(probe=probe_id, connection=connection["connection_id"]):
+                        self.assertEqual(set(connection), {"connection_id", "requests", "intervention"})
+                        self.assertTrue(all(plan.REQUEST_LINE_RE.fullmatch(item) for item in connection["requests"]))
+                        self.assertNotIn(connection["connection_id"], record["excluded_connection_ids"])
+        # 模型能力夹具另记中继清单的模型与基础 probe：目录名就是「<模型>-<基础 probe>」，中继跑的是主模型目录里的基础 probe。
+        for probe_id, record in self.model_fixture["probes"].items():
+            with self.subTest(probe=probe_id):
+                self.assertEqual(probe_id, f"{record['model']}-{record['relay_probe']}")
+                self.assertIn(record["relay_probe"], v5.PROBE_IDS)
+                self.assertEqual((record["response_mode"], record["response_plan"]), ("live", None))
 
     def test_every_job_and_probe_has_labels(self) -> None:
         self.assertEqual(set(self.labels["plans"]), {job["id"] for job in self.payload["capture_jobs"]})
-        self.assertEqual(sorted(self.plans), sorted(v5.PROBE_IDS))
+        self.assertEqual(sorted(self.plans), sorted([*v5.PROBE_IDS, *_model_capability_probes()]))
 
     def test_label_sequences_match_observed_connections(self) -> None:
-        """逐连接顺序：每个 probe 的有效连接逐条命中标签规则（方法与路径、单连接请求数、合成干预动作）。"""
+        """逐连接顺序：每个主模型 probe 的有效连接逐条命中标签规则（方法与路径、单连接请求数、合成干预动作）。"""
 
         for probe_id, probe_plan in sorted(self.plans.items()):
+            if probe_id not in v5.PROBE_IDS:
+                continue  # 非主模型 probe 见 test_model_capability_labels_follow_primary
             record = self.fixture["probes"][probe_id]
             with self.subTest(probe=probe_id):
                 matches = plan.match_relay_connections(probe_plan, record["connections"])
                 self.assertEqual([item["connection_id"] for item in matches], [c["connection_id"] for c in record["connections"]])
                 self.assertEqual([item["ordinal"] for item in matches], list(range(1, len(matches) + 1)))
+
+    def test_model_capability_labels_follow_primary(self) -> None:
+        """非主模型 probe 的标签规则照主模型同名基础 probe 复制（只换 glob、probe 标签与场景，另加 model 标签）；逐连接
+        计划命中主模型的 2.1.226 实测序列，也命中 2.1.226 模型能力实测序列——已知例外（TUI 缺 oauth_profile 启动连接）
+        在这里写死：例外之外的 probe 必须匹配，例外必须仍然不匹配（实测或标签变了要回来改这张表）。"""
+
+        primary_rules: dict[str, list[dict]] = {}
+        for entry in self.labels["document"]["entries"]:
+            if not entry["job_id"].startswith(MODEL_JOB_PREFIX):
+                for rule in entry["rules"]:
+                    primary_rules.setdefault(rule["labels"]["probe"], []).append(rule)
+        for entry in self.labels["document"]["entries"]:
+            if not entry["job_id"].startswith(MODEL_JOB_PREFIX):
+                continue
+            model = entry["job_id"][len(MODEL_JOB_PREFIX):]
+            by_probe: dict[str, list[dict]] = {}
+            for rule in entry["rules"]:
+                by_probe.setdefault(rule["labels"]["probe"], []).append(rule)
+            for probe_id, rules in by_probe.items():
+                base = probe_id[len(model) + 1:]
+                with self.subTest(probe=probe_id):
+                    self.assertEqual(probe_id, f"{model}-{base}")
+                    expected = []
+                    for rule in primary_rules[base]:
+                        copied = copy.deepcopy(rule)
+                        copied["glob"] = f"{probe_id}/" + rule["glob"][len(base) + 1:]
+                        copied["scenario_ids"] = [plan.MODEL_CAPABILITY_SCENARIO]
+                        copied["labels"] = {**rule["labels"], "probe": probe_id, "model": model}
+                        copied["rationale"] = f"{model} 模型能力取证，照主模型 {base} 的规则：{rule['rationale']}"
+                        expected.append(copied)
+                    self.assertEqual(rules, expected)
+        for probe_id in _model_capability_probes():
+            record = self.model_fixture["probes"][probe_id]
+            with self.subTest(probe=probe_id):
+                primary = self.fixture["probes"][record["relay_probe"]]["connections"]
+                self.assertTrue(plan.match_relay_connections(self.plans[probe_id], primary))
+                if probe_id in MODEL_SEQUENCE_EXCEPTIONS:
+                    with self.assertRaisesRegex(plan.LabelSequenceMismatch, "GET /api/oauth/profile"):
+                        plan.match_relay_connections(self.plans[probe_id], record["connections"])
+                else:
+                    matches = plan.match_relay_connections(self.plans[probe_id], record["connections"])
+                    self.assertEqual([item["connection_id"] for item in matches], [c["connection_id"] for c in record["connections"]])
 
     def test_endpoint_labels_follow_declared_requests(self) -> None:
         endpoints = {
@@ -665,6 +821,9 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
             "未登记 parser": (lambda d: first_rule(d)[1].update(parser="raw"), "未登记"),
             "请求带查询串": (lambda d: first_rule(d)[1]["connection"].update(request="POST /v1/messages?beta=true"), "不含查询串"),
             "版本不符": (lambda d: d.update(claude_version="2.1.226"), "版本"),
+            "非主模型标签越出模型能力场景": (
+                lambda d: first_rule(d, "claude-opus-5-v4-replay-tui")[1]["scenario_ids"].append("entrypoint.tui"), "子集"
+            ),
         }
         with tempfile.TemporaryDirectory() as directory:
             for label, (change, message) in cases.items():

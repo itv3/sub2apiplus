@@ -122,8 +122,9 @@ class PlanAuditTests(unittest.TestCase):
         details = {item["name"]: item["detail"] for item in result["checks"]}
         self.assertEqual(details["official-package"]["binary_sha256"], hashlib.sha256(self.binary).hexdigest())
         self.assertEqual(details["official-package"]["verified_file_count"], 5)
-        self.assertEqual(details["manifests"]["capture_job_count"], 12)
-        self.assertEqual((details["jobs"]["job_count"], details["jobs"]["official_unmapped"]), (12, []))
+        # 12 个主模型 Job 加 2 个非主模型的模型能力取证 Job（B2-07 补充项）。
+        self.assertEqual(details["manifests"]["capture_job_count"], 14)
+        self.assertEqual((details["jobs"]["job_count"], details["jobs"]["official_unmapped"]), (14, []))
         # 工具身份按值等于编排器总计划冻结的那一份（files_sha256 ↔ Store 的 tool_files_sha256）。
         identity = claude_upgrade._tool_identity(include_git=False)
         self.assertEqual(details["tool-identity"], {key: identity[key] for key, _ in plan.TOOL_IDENTITY_FIELD_PAIRS})

@@ -774,7 +774,10 @@ def _observed_only_facts(
         if len(refs) != 1:
             raise ConfigurationError(f"证据项 {evidence_id} 必须恰好绑定一份中继清单（{claude_upgrade_evidence.RELAY_MANIFEST_FILENAME}）。")
         relay, binding = _read_bound_json(data_root, refs[0], f"证据项 {evidence_id} 的中继清单")
-        if relay.get("probe_id") != probe:
+        # 中继清单的 probe_id 是中继跑的基础 probe：主模型证据项就是它；非主模型（模型能力取证，B2-07 补充项）证据项是
+        # 「<中继清单 model>-<基础 probe>」。与封存编目定步骤身份同一规则（claude_upgrade_evidence._step_probe_identity）。
+        relay_identity = {"relay_probe_id": relay.get("probe_id"), "manifest": {"model": relay.get("model")}}
+        if claude_upgrade_evidence._step_probe_identity(probe, relay_identity) != probe:
             raise ConfigurationError(f"证据项 {evidence_id} 的中继清单 probe_id 不符。")
         dimension_evidence = relay.get("dimension_evidence")
         if (

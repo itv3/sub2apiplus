@@ -1,9 +1,11 @@
 """VC-1 Wire 投影的合成证据夹具（Claude 升级控制面设计 B3-03 补充项、B3-04 的测试共用）。
 
-只生成主模型（投影策略模型闭集的第一个）需要的 23 个 probe：每个 probe 的中继请求字节按「一条有效连接一条请求」写成
-``relay/connNNN.client_to_upstream.bin``，P 通道写四条 ClientHello（两条带 ALPN、两条不带）。请求的形态满足投影的全部
-选择谓词（agent-id、标题与 fallback 模型、background 四条、WebSearch 两种、工具目录计数、advisor 类型、effort、
-thinking.display、count_tokens），推理请求的计费头按投影策略的 salt 与 message index 算出版本指纹。
+缺省只生成主模型（投影策略模型闭集的第一个）需要的 23 个 probe；``files(models=True)`` 另生成非主模型的模型能力取证
+probe（「<模型>-<基础 probe>」，B2-07 补充项：逐场景、count_tokens、thinking 关闭、各档 effort，登记了 server fallback 的
+模型另加锁存请求）。每个 probe 的中继请求字节按「一条有效连接一条请求」写成 ``relay/connNNN.client_to_upstream.bin``，
+P 通道写四条 ClientHello（两条带 ALPN、两条不带）。请求的形态满足投影的全部选择谓词（agent-id、标题与 fallback 模型、
+background 四条、WebSearch 两种、工具目录计数、advisor 类型、effort、thinking.display、count_tokens），推理请求的计费头
+按投影策略的 salt 与 message index 算出版本指纹。
 
 不读任何本地取证数据；Authorization 一律是脱敏占位 ``<secret>``。
 """
@@ -98,17 +100,17 @@ class WireEvidenceBuilder:
         body["stream"] = True
         return http_request(wire_projection.MESSAGES_TARGET, [*_header_list(self.version, agent_id=agent_id), *(extra_headers or [])], body)
 
-    def server_fallback(self, fallback_model: str) -> bytes:
-        """server fallback 锁存请求：回退模型、``x-is-refusal-fallback: true`` 与锁存来源 Header。"""
+    def server_fallback(self, fallback_model: str, latched_by: str | None = None) -> bytes:
+        """server fallback 锁存请求：回退模型、``x-is-refusal-fallback: true`` 与锁存来源 Header（缺省主模型）。"""
 
         return self.messages(
             model=fallback_model,
             user_text="Run ls after refusal",
-            extra_headers=[("x-cc-fallback-latched-by", self.model), ("x-is-refusal-fallback", "true")],
+            extra_headers=[("x-cc-fallback-latched-by", latched_by or self.model), ("x-is-refusal-fallback", "true")],
         )
 
-    def count_tokens(self) -> bytes:
-        body = {"model": self.model, "messages": [{"role": "user", "content": "count me"}]}
+    def count_tokens(self, model: str | None = None) -> bytes:
+        body = {"model": model or self.model, "messages": [{"role": "user", "content": "count me"}]}
         return http_request(f"{wire_projection.COUNT_TOKENS_TARGET_PREFIX}?beta=true", _header_list(self.version), body)
 
     @staticmethod
@@ -179,15 +181,74 @@ class WireEvidenceBuilder:
             ]
         return result
 
+    def model_probes(self) -> dict[str, list[bytes]]:
+        """非主模型（模型能力取证，B2-07 补充项）的「<模型>-<基础 probe>」请求字节，满足投影逐模型场景与能力证据的选择谓词。"""
+
+        named = lambda name: {"name": name, "description": "fixture", "input_schema": {"type": "object"}}  # noqa: E731
+        policy = dict(self.policy)
+        result: dict[str, list[bytes]] = {}
+        for model in self.models["ordered"][1:]:
+            probe = lambda name, model=model: wire_projection.model_probe(policy, model, name)  # noqa: E731
+            result[probe(wire_projection.PROBE_BASELINE)] = [self.messages(model=model, user_text=f"{model} baseline run")]
+            result[probe(wire_projection.PROBE_AGENT)] = [
+                self.messages(model=model, tools=self.tools(3, first=named(wire_projection.TOOL_AGENT)), user_text=f"{model} agent run"),
+                self.messages(model=model, user_text=f"{model} subagent task", agent_id="0123456789abcdef0"),
+            ]
+            result[probe(wire_projection.PROBE_TUI)] = [
+                self.messages(model=model, user_text=f"{model} tui haiku"),
+                self.messages(model=self.models["title_model"], user_text=f"Generate a title for: {model}", thinking=False),
+            ]
+            result[probe(wire_projection.PROBE_BACKGROUND)] = [
+                self.messages(model=model, tools=self.tools(self.selectors["background_tool_count"]), user_text=f"{model} background"),
+                self.messages(model=self.models["title_model"], user_text=f"{model} background title", thinking=False),
+                self.messages(model=self.models["fallback_model"], user_text=f"{model} background summary one", thinking=False),
+                self.messages(model=self.models["fallback_model"], user_text=f"{model} background summary two", thinking=False),
+            ]
+            result[probe(wire_projection.PROBE_BACKGROUND_SUBAGENT)] = [
+                self.messages(model=model, user_text=f"{model} background subagent main"),
+                self.messages(model=model, user_text=f"{model} background subagent child", agent_id="fedcba9876543210f"),
+            ]
+            result[probe(wire_projection.PROBE_WEB_SEARCH)] = [
+                self.messages(model=model, tools=[named(wire_projection.TOOL_WEB_SEARCH_OUTER)], user_text=f"{model} search the web"),
+                self.messages(
+                    model=model,
+                    tools=[{"type": "web_search_20250305", "name": wire_projection.TOOL_WEB_SEARCH_SERVER}],
+                    tool_choice={"type": "tool", "name": wire_projection.TOOL_WEB_SEARCH_SERVER},
+                    user_text=f"Perform a web search for the query: {model}",
+                ),
+            ]
+            for name in (
+                wire_projection.PROBE_CUSTOM_SYSTEM,
+                wire_projection.PROBE_APPEND_SYSTEM,
+                wire_projection.PROBE_EXCLUDE_DYNAMIC,
+                wire_projection.PROBE_CUSTOM_AGENT,
+            ):
+                result[probe(name)] = [self.messages(model=model, user_text=f"{model} {name} run")]
+            result[probe(wire_projection.PROBE_COUNT_TOKENS)] = [self.count_tokens(model=model)]
+            result[probe(wire_projection.PROBE_THINKING_DISABLED)] = [self.messages(model=model, thinking=False, user_text=f"{model} no thinking")]
+            for effort in self.policy["efforts"]:
+                if effort != wire_projection.BASELINE_EFFORT:
+                    result[probe(wire_projection.effort_probe(effort))] = [
+                        self.messages(model=model, effort=effort, user_text=f"{model} effort {effort} run")
+                    ]
+            for entry in self.models["server_fallbacks"]:
+                if entry["model"] == model:
+                    result[probe(entry["probe"])] = [
+                        self.messages(model=model, tools=self.tools(4, first=named(wire_projection.TOOL_BASH)), user_text=f"{model} run ls"),
+                        self.server_fallback(entry["fallback_model"], latched_by=model),
+                    ]
+        return result
+
     def pcap(self) -> bytes:
         tls = self.policy["tls"]
         return b"".join(client_hello(tls, alpn=index < 2, seed=index) for index in range(4))
 
-    def files(self) -> WireFiles:
-        """probe → 证据文件（中继请求按连接号逐条一个文件；TLS probe 另带 pcap）。"""
+    def files(self, *, models: bool = False) -> WireFiles:
+        """probe → 证据文件（中继请求按连接号逐条一个文件；TLS probe 另带 pcap）；``models`` 为真时含非主模型的 probe。"""
 
         result: WireFiles = {}
-        for probe, requests in self.probes().items():
+        probes = {**self.probes(), **(self.model_probes() if models else {})}
+        for probe, requests in probes.items():
             result[probe] = [
                 (f"relay/conn{index:03d}.client_to_upstream.bin", raw, "relay_binary", index) for index, raw in enumerate(requests, start=1)
             ]
@@ -232,7 +293,7 @@ def client_hello(tls: Mapping[str, Any], *, alpn: bool, seed: int) -> bytes:
 
 
 def single_model_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
-    """只保留主模型的投影策略（VC-1 现行场景清单只用主模型取证）。"""
+    """只保留主模型的投影策略（只给主模型证据的用例用；VC-1 场景清单自 B2-07 补充项起也为非主模型取证）。"""
 
     result = json.loads(json.dumps(policy))
     primary = result["models"]["ordered"][0]

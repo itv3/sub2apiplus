@@ -85,6 +85,7 @@ if dry:
         print("output exists", file=sys.stderr)
         sys.exit(2)
     print(json.dumps({"schema_version": "claude-code-fw-e-relay-plan/v1", "run_id": value("--run-id"), "probe_id": probe,
+                      "model": value("--model"),
                       "version": value("--expected-version"), "live_requests": value("--upstream-ip") is not None,
                       "upstream_ip": value("--upstream-ip"), "production_changes": False}, indent=2, sort_keys=True))
     sys.exit(0)
@@ -113,7 +114,8 @@ if probe in (control.get("contaminate"), control.get("residual")):
         environment["processes"]["capture_processes"].append(role + ":relay")
     json.dump(environment, open(env_path, "w", encoding="utf-8"))
 status = "failed" if counts[probe] <= int(control.get("fail", {}).get(probe, 0)) else "complete"
-manifest = {"schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "status": status,
+# 与真实 relay 同一形态：probe_id 记中继跑的基础 probe（--probe-id），model 记 --model（非主模型步骤靠它定步骤身份）。
+manifest = {"schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "model": value("--model"), "status": status,
             "m_binding": {"complete": status == "complete"}, "secret_scan": {"passed": True},
             "cleanup": {"relay_stopped": True, "hosts_restored": True},
             "client": {"version": value("--expected-version") + " (Claude Code)", "sha256": value("--expected-sha256")},
@@ -155,7 +157,9 @@ def _reduced_payload(job_ids: set[str]) -> dict:
             scenarios.append({**scenario, "probe_ids": probes})
     payload["capture_jobs"] = jobs
     payload["evidence_scenarios"] = scenarios
-    payload["probe_catalog"] = {**payload["probe_catalog"], "probe_count": len(executed)}
+    # probe_catalog.probe_count 只数主模型步骤（非主模型的模型能力取证步骤复用基础 probe，不计入目录数）。
+    primary = [step for job in jobs for step in job["steps"] if plan.step_model(step["probe_id"], step["argv"]) is None]
+    payload["probe_catalog"] = {**payload["probe_catalog"], "probe_count": len(primary)}
     return payload
 
 
@@ -745,6 +749,95 @@ class RoutingTests(unittest.TestCase):
             )
 
 
+class ModelCapabilityStepTests(unittest.TestCase):
+    """非主模型（模型能力取证，B2-07 补充项）步骤：步骤身份取输出目录名「<模型>-<基础 probe>」，relay 计划回显与清单记的是
+    基础 probe 与模型（真实 relay 的形态）；模型或基础 probe 对不上即判失败（正式执行 schema-mismatch、演练 plan-mismatch）。"""
+
+    MODEL_JOB = "official-model-capability-claude-opus-5"
+    VALUES = {
+        "{capture_root}": "/capture", "{campaign_id}": "c1", "{target_version}": TARGET, "{target_sha256}": TARGET_SHA,
+        "{upstream_ip}": "160.79.104.10",
+    }
+    RECEIPT = {"sha256": "1" * 64, "run_nonce": "2" * 64}
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.layout = capture.CaptureLayout(
+            host_data_root=self.root, capture_root=PurePosixPath("/capture"), capture_container=CAPTURE,
+            capture_tool_root=PurePosixPath("/capture/tools/official_client_capture"), host_tool_root=TOOL_ROOT,
+            runtime_image=IMAGE, synthetic_container=SYNTHETIC,
+        )
+        payload = json.loads(plan.scenario_manifest_path(TARGET).read_text(encoding="utf-8"))
+        self.steps = {step["probe_id"]: step for job in payload["capture_jobs"] for step in job["steps"]}
+
+    def argv(self, probe_id: str) -> list[str]:
+        argv = []
+        for item in self.steps[probe_id]["argv"]:
+            for placeholder, value in self.VALUES.items():
+                item = item.replace(placeholder, value)
+            argv.append(item)
+        return argv
+
+    def manifest_row(self, coordinates: dict, **overrides) -> dict:
+        output = capture._host_path(PurePosixPath(coordinates["output_root"]), self.layout)
+        output.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "schema_version": capture.RELAY_RUN_SCHEMA, "probe_id": coordinates["relay_probe_id"], "model": coordinates["model"],
+            "status": "complete", "m_binding": {"complete": True}, "secret_scan": {"passed": True},
+            "cleanup": {"relay_stopped": True, "hosts_restored": True},
+            "client": {"version": f"{TARGET} (Claude Code)", "sha256": TARGET_SHA}, "runtime": {"host_runtime_receipt": dict(self.RECEIPT)},
+        }
+        manifest.update(overrides)
+        (output / "relay-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return capture._relay_manifest_check(coordinates, self.layout, receipt=self.RECEIPT)
+
+    def plan_row(self, coordinates: dict, **overrides) -> dict:
+        echo = {
+            "schema_version": capture.RELAY_PLAN_SCHEMA, "run_id": coordinates["run_id"], "probe_id": coordinates["relay_probe_id"],
+            "model": coordinates["model"], "version": TARGET, "production_changes": False, "live_requests": True,
+            "upstream_ip": "160.79.104.10",
+        }
+        echo.update(overrides)
+        log = self.root / "plan.log"
+        log.write_text(json.dumps(echo), encoding="utf-8")
+        return capture._relay_plan_check(coordinates, log)
+
+    def test_step_identity_and_relay_checks(self) -> None:
+        probe = "claude-opus-5-v4-replay-tui"
+        coordinates = capture._relay_step_coordinates(self.argv(probe))
+        self.assertEqual(
+            (coordinates["probe_id"], coordinates["relay_probe_id"], coordinates["model"], coordinates["run_id"]),
+            (probe, "v4-replay-tui", "claude-opus-5", f"c1-{probe}"),
+        )
+        self.assertEqual(coordinates["output_root"], f"/capture/runs/claude-official/c1/{self.MODEL_JOB}/{probe}")
+        passed = self.manifest_row(coordinates)
+        self.assertEqual((passed["status"], passed["probe_id"]), ("passed", probe))
+        self.assertEqual(self.plan_row(coordinates)["status"], "passed")
+        for label, overrides in (
+            ("模型对不上", {"model": "claude-fable-5"}),
+            ("缺模型", {"model": None}),
+            ("probe_id 写成步骤身份", {"probe_id": probe}),
+        ):
+            with self.subTest(label=label):
+                row = self.manifest_row(coordinates, **overrides)
+                self.assertEqual((row["status"], row["failure_code"]), ("failed", "schema-mismatch"))
+                plan_row = self.plan_row(coordinates, **overrides)
+                self.assertEqual((plan_row["status"], plan_row["failure_code"]), ("failed", "plan-mismatch"))
+        # 主模型步骤：步骤身份就是基础 probe，模型取 Campaign 主模型，不按模型推身份。
+        primary = capture._relay_step_coordinates(self.argv("v4-replay-tui"))
+        self.assertEqual((primary["probe_id"], primary["relay_probe_id"]), ("v4-replay-tui", "v4-replay-tui"))
+        self.assertEqual(self.manifest_row(primary, model="claude-sonnet-5")["status"], "passed")
+
+    def test_output_directory_must_carry_step_identity(self) -> None:
+        argv = self.argv("claude-opus-5-v4-replay-tui")
+        position = argv.index("--output-root") + 1
+        argv[position] = argv[position].rsplit("/", 1)[0] + "/claude-fable-5-v4-replay-tui"
+        with self.assertRaisesRegex(ConfigurationError, "输出目录名既不是 --probe-id"):
+            capture._relay_step_coordinates(argv)
+
+
 class SupervisorCaptureContractTests(unittest.TestCase):
     """钉住合成步骤所依赖的监督器行为（只读调用，不改监督器）：出口守护下只有 ``job:`` 开头的操作会建立 capture-cli 停止
     绑定；绑定后 ``docker exec`` 到断网容器会被拒绝。监督器这两条行为变了，本测试先红，合成步骤的路由需要重新评估。"""
@@ -884,7 +977,8 @@ class RehearsalRunTests(CaptureFixture):
              "--runtime-image", IMAGE, "--model", "claude-sonnet-5", "--upstream-ip", "160.79.104.10", "--campaign-id", "claude-code-2_1_285-r1"]
         )
         summary = capture.build_rehearsal_campaign(arguments)
-        self.assertEqual((summary["campaign_mode"], len(summary["jobs"])), ("preflight_only", 12))
+        # 12 个主模型 Job 加 2 个非主模型的模型能力取证 Job；步骤 79 个主模型 probe 加 33 个非主模型 probe。
+        self.assertEqual((summary["campaign_mode"], len(summary["jobs"])), ("preflight_only", 14))
         manifest = claude_upgrade.load_campaign_manifest(campaign)
         self.assertTrue(manifest["rehearsal_only"])
         self.assertEqual(manifest["configuration"]["capture_root"], "/capture")
@@ -892,7 +986,7 @@ class RehearsalRunTests(CaptureFixture):
             (manifest["configuration"]["capture_container"], manifest["configuration"]["synthetic_capture_container"]), (CAPTURE, SYNTHETIC)
         )
         self.assertEqual(manifest["configuration"]["capture_tool_root"], "/root/oauth-capture/tools/official_client_capture")
-        self.assertEqual(sum(job["steps"] for job in summary["jobs"]), 79)
+        self.assertEqual(sum(job["steps"] for job in summary["jobs"]), 112)
         copied = campaign / manifest["inputs"]["target_scenarios"]["path"]
         self.assertEqual(copied.read_bytes(), plan.scenario_manifest_path(TARGET).read_bytes())
         with self.assertRaisesRegex(ConfigurationError, "不存在"):
