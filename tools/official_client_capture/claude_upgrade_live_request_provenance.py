@@ -931,6 +931,195 @@ def _map_root(value: Any, *, configuration: Mapping[str, Any], host_data_root: P
     return closeout._map_container_evidence_root(value, capture_root=capture_root, host_data_root=host_data_root)
 
 
+def _recovery_bound_json(campaign_dir: Path, binding: Any, expected: Path, label: str) -> dict[str, Any]:
+    """段来源只接受同 Campaign 的规范路径与文件摘要，不能用自述路径跳到另一候选或另一段。"""
+
+    if (not isinstance(binding, Mapping) or binding.get("path") != expected.relative_to(campaign_dir).as_posix()
+            or expected.resolve(strict=True) != expected):
+        raise ProvenanceError(f"{label} 路径不属于预期段")
+    value, raw = closeout._load_json(expected, label)
+    if _sha256(raw) != binding.get("sha256") or ("bytes" in binding and len(raw) != binding["bytes"]):
+        raise ProvenanceError(f"{label} 文件摘要或字节数漂移")
+    return value
+
+
+def _recovery_self_digest(value: Mapping[str, Any], key: str, label: str) -> None:
+    if value.get(key) != _sha256(_canonical({name: item for name, item in value.items() if name != key})):
+        raise ProvenanceError(f"{label} 自摘要漂移")
+
+
+def _recovery_segment_origin(
+    campaign_dir: Path, segment: Path, result: Mapping[str, Any], *, depth: int = 0,
+    authority: tuple[int, str, str] | None = None,
+) -> str:
+    """核验段授权和执行来源，返回真正生产该 Job 的段号。
+
+    请求核算只读不可变控制制品；不调用编排器，不重放机器环境，不要求中断段已有摘要。完整 checkpoint 链可证明中断前
+    已发布的 Job；摘要一旦存在也必须逐字包含该 Job。后继复用沿直接前段的结果及 checkpoint 绑定回溯，不能只凭后缀授权。
+    """
+
+    if __package__ in {None, ""}:
+        import codex_upgrade_vc_artifacts as artifacts
+        import incremental_recovery as incremental
+    else:
+        from . import codex_upgrade_vc_artifacts as artifacts
+        from . import incremental_recovery as incremental
+
+    parts = segment.relative_to(campaign_dir).parts
+    if (depth >= 128 or len(parts) != 6 or parts[0] != "candidates" or parts[2] != "attempts"
+            or parts[4] != "recovery" or not RECOVERY_REVISION_RE.fullmatch(parts[5])
+            or segment.resolve(strict=True) != segment):
+        raise ProvenanceError("恢复段来源路径非法或继承链过长")
+    candidate_id, attempt_id, revision = parts[1], parts[3], parts[5]
+    original_root = segment.parent.parent
+    manifest, manifest_raw = closeout._load_json(campaign_dir / "campaign.json", "段来源总计划")
+    reservation, _raw = closeout._load_json(segment / "recovery-reservation.json", "段来源预约")
+    _recovery_self_digest(reservation, "reservation_digest", "段来源预约")
+    expected = {
+        "schema_version": "claude-upgrade-attempt-recovery-reservation/v1", "campaign_id": campaign_dir.name,
+        "campaign_manifest_sha256": _sha256(manifest_raw), "campaign_mode": "formal", "phase": "candidate",
+        "campaign_purpose": manifest.get("campaign_purpose"), "candidate_purpose": manifest.get("campaign_purpose"),
+        "candidate_id": candidate_id, "attempt_id": attempt_id, "recovery_revision": revision,
+    }
+    if (manifest.get("client") != CLIENT or manifest.get("campaign_mode") != "formal"
+            or not isinstance(manifest.get("campaign_purpose"), str)
+            or any(reservation.get(key) != value for key, value in expected.items())
+            or any(not re.fullmatch(r"[0-9a-f]{64}", str(reservation.get(key, ""))) for key in ("run_nonce", "identity_sha256"))):
+        raise ProvenanceError("恢复段预约与 Campaign 或原生坐标不一致")
+    original_reservation = _recovery_bound_json(campaign_dir, reservation.get("original_reservation"), original_root / "reservation.json", "原预约")
+    original_attempt = _recovery_bound_json(campaign_dir, reservation.get("original_attempt"), original_root / "attempt.json", "原 attempt")
+    for value, schema, digest_name in (
+        (original_reservation, "claude-upgrade-capture-reservation/v1", "reservation_digest"),
+        (original_attempt, "claude-upgrade-capture-attempt/v1", "attempt_digest"),
+    ):
+        _recovery_self_digest(value, digest_name, "段来源原 attempt")
+        if (value.get("schema_version") != schema or any(value.get(key) != wanted for key, wanted in {
+                "client": CLIENT, "mode": "formal", "phase": "candidate", "campaign_id": campaign_dir.name,
+                "candidate_id": candidate_id, "attempt_id": attempt_id,
+                "campaign_mode": "formal", "campaign_purpose": manifest["campaign_purpose"],
+                "candidate_purpose": manifest["campaign_purpose"], "campaign_manifest_sha256": _sha256(manifest_raw),
+            }.items())):
+            raise ProvenanceError("恢复段原预约／attempt 身份不一致")
+    if (reservation["original_reservation"].get("run_nonce") != original_reservation.get("run_nonce")
+            or reservation["original_attempt"].get("attempt_digest") != original_attempt.get("attempt_digest")
+            or not isinstance(original_attempt.get("identity"), Mapping)
+            or reservation["identity_sha256"] != _sha256(_canonical(original_attempt["identity"]))
+            or original_reservation.get("identity_sha256") != reservation["identity_sha256"]
+            or original_attempt.get("run_nonce") != original_reservation.get("run_nonce")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(original_reservation.get("run_nonce", "")))
+            or _recovery_bound_json(campaign_dir, original_attempt.get("reservation"), original_root / "reservation.json", "原 attempt 的预约") != original_reservation):
+        raise ProvenanceError("恢复段原预约随机数、原 attempt 摘要或身份绑定漂移")
+    baseline = reservation.get("evaluation_baseline")
+    if type(baseline) is not int or baseline < 1:
+        raise ProvenanceError("恢复段评估基线编号非法")
+    baseline_root = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{baseline}"
+    try:
+        commit = artifacts.validate_evaluation_baseline_commit(closeout._load_json(baseline_root / "COMMIT", "段来源 COMMIT")[0])
+        recovery = artifacts.validate_evaluation_recovery(closeout._load_json(baseline_root / "recovery.json", "段来源裁定")[0])
+    except artifacts.VCArtifactError as error:
+        raise ProvenanceError(f"恢复段基线控制制品非法：{error}") from error
+    if (any(value.get("campaign_id") != campaign_dir.name or value.get("candidate_id") != candidate_id
+            or value.get("evaluation_baseline") != baseline or value.get("kind") != "attempt-recovery" for value in (commit, recovery))
+            or commit["candidate_revision"] != recovery["candidate_revision"]
+            or commit["commit_sha256"] != reservation.get("baseline_commit_sha256")
+            or commit["recovery_sha256"] != recovery["recovery_sha256"] or recovery["recovery_sha256"] != reservation.get("recovery_sha256")
+            or recovery.get("attempt_id") != attempt_id or int(recovery["recovery_revision"][2:]) > int(revision[2:])):
+        raise ProvenanceError("恢复段预约没有闭合到同一原 attempt 的 COMMIT／裁定")
+    current_authority = (baseline, commit["commit_sha256"], recovery["recovery_sha256"])
+    if authority is not None and authority != current_authority:
+        raise ProvenanceError("后继恢复段继承跨越了不同基线裁定")
+    planned_rows, original_rows = reservation.get("planned_jobs"), original_reservation.get("planned_jobs")
+    if not isinstance(planned_rows, list) or not isinstance(original_rows, list):
+        raise ProvenanceError("恢复段或原预约缺少 Job 清单")
+    planned = {row.get("id"): row for row in planned_rows if isinstance(row, Mapping)}
+    original = {row.get("id"): row for row in original_rows if isinstance(row, Mapping)}
+    if (len(planned) != len(planned_rows) or len(original) != len(original_rows)
+            or any(not isinstance(key, str) or not SAFE_ID_RE.fullmatch(key) for key in [*planned, *original])
+            or sorted(planned) != recovery["execute_jobs"]
+            or reservation.get("reuse_jobs") != recovery["reuse_jobs"]):
+        raise ProvenanceError("恢复段计划 Job 不等于基线冻结的 J*")
+    for job_id, row in planned.items():
+        if (job_id not in original or row.get("source_execution_sha256") != original[job_id].get("execution_sha256")
+                or type(row.get("required")) is not bool
+                or any(not re.fullmatch(r"[0-9a-f]{64}", str(row.get(key, ""))) for key in ("execution_sha256", "source_execution_sha256"))):
+            raise ProvenanceError("恢复段 Job 原执行摘要不属于原预约")
+    job_id = result.get("id")
+    if (job_id not in planned or result.get("execution_sha256") != planned[job_id]["execution_sha256"]
+            or result.get("source_execution_sha256", planned[job_id]["source_execution_sha256"]) != planned[job_id]["source_execution_sha256"]):
+        raise ProvenanceError("恢复段 Job 执行摘要与预约不一致")
+    try:
+        checkpoints = incremental.CheckpointStore(segment / "checkpoints", create=False).records()
+    except incremental.IncrementalRecoveryError as error:
+        raise ProvenanceError(f"恢复段 checkpoint 链不可信：{error}") from error
+    matching = [row for row in checkpoints if row.get("item_id") == job_id]
+    if not matching:
+        raise ProvenanceError("恢复段 Job 缺少已发布 checkpoint")
+    checkpoint = matching[-1]
+    if (checkpoint.get("result") != result or checkpoint.get("result_sha256") != incremental.digest(result)
+            or checkpoint.get("disposition") != result.get("disposition")
+            or checkpoint.get("status") != ("complete" if result.get("status") == "complete" else "failed")
+            or any(checkpoint.get(key) != value for key, value in {
+                "checkpoint_schema_version": "claude-upgrade-job-checkpoint/v1", "client": CLIENT,
+                "mode": "formal", "phase": "candidate", "campaign_id": campaign_dir.name,
+                "attempt_id": f"{attempt_id}.{revision}", "run_nonce": reservation["run_nonce"],
+            }.items())):
+        raise ProvenanceError("恢复段 Job 与 checkpoint 的结果或身份不一致")
+    summary_path = segment / "attempt-recovery.json"
+    if summary_path.exists() or summary_path.is_symlink():
+        summary, _raw = closeout._load_json(summary_path, "段来源摘要")
+        _recovery_self_digest(summary, "attempt_recovery_digest", "段来源摘要")
+        bound = _recovery_bound_json(campaign_dir, summary.get("reservation"), segment / "recovery-reservation.json", "摘要中的段预约")
+        if (bound != reservation or summary.get("schema_version") != "claude-upgrade-attempt-recovery/v1"
+                or any(summary.get(key) != reservation.get(key) for key in ("campaign_id", "candidate_id", "attempt_id", "recovery_revision", "evaluation_baseline", "baseline_commit_sha256", "run_nonce"))
+                or _sha256(_canonical(summary.get("identity"))) != reservation["identity_sha256"]
+                or not isinstance(summary.get("results"), list)
+                or [row for row in summary.get("results", []) if isinstance(row, Mapping) and row.get("id") == job_id] != [result]):
+            raise ProvenanceError("恢复段摘要没有完整承接预约及 Job")
+    execute = reservation.get("execute_job_ids", sorted(planned))
+    reuse = reservation.get("reuse_job_ids", [])
+    proofs = reservation.get("reuse_proofs", {})
+    reuse_fields = {"execute_job_ids", "reuse_job_ids", "reuse_proofs", "reuse_proofs_sha256", "recovery_review_sha256"}
+    has_review = bool(reuse_fields & set(reservation))
+    if (not isinstance(execute, list) or not isinstance(reuse, list) or not isinstance(proofs, Mapping)
+            or not all(isinstance(item, str) for item in [*execute, *reuse])
+            or len(set(execute)) != len(execute) or len(set(reuse)) != len(reuse) or set(execute) & set(reuse)
+            or set(execute) | set(reuse) != set(planned) or set(proofs) != set(reuse)
+            or (has_review and (not reuse_fields <= set(reservation)
+                or _sha256(_canonical(proofs)) != reservation.get("reuse_proofs_sha256")
+                or not re.fullmatch(r"[0-9a-f]{64}", str(reservation.get("recovery_review_sha256", "")))))
+            or (revision == recovery["recovery_revision"] and has_review)
+            or (revision != recovery["recovery_revision"] and not has_review)):
+        raise ProvenanceError("恢复段执行／复用分割或证明摘要不一致")
+    if job_id in execute:
+        if result.get("disposition") != "executed" or result.get("recovered_from") is not None:
+            raise ProvenanceError("恢复段新执行 Job 的来源标记不一致")
+        return revision
+    previous_revision = f"ar{int(revision[2:]) - 1}"
+    previous_root = segment.parent / previous_revision
+    proof = proofs[job_id]
+    if (not isinstance(proof, Mapping) or not isinstance(proof.get("checkpoint"), Mapping)
+            or proof.get("source_execution_sha256") != planned[job_id]["source_execution_sha256"]
+            or result.get("disposition") != "reused"
+            or result.get("source_receipt") != proof.get("result") or result.get("recovery_checkpoint") != proof.get("checkpoint")):
+        raise ProvenanceError("恢复段复用来源没有绑定预约冻结的证明")
+    previous = _recovery_bound_json(campaign_dir, proof.get("result"), previous_root / f"job-{job_id}.json", "前段 Job")
+    sequence = Path(str(proof.get("checkpoint", {}).get("path", ""))).name
+    if not re.fullmatch(r"[0-9]{8}\.json", sequence):
+        raise ProvenanceError("前段 checkpoint 编号非法")
+    prior_checkpoint = _recovery_bound_json(campaign_dir, proof.get("checkpoint"), previous_root / "checkpoints" / sequence, "前段 checkpoint")
+    if prior_checkpoint.get("result") != previous:
+        raise ProvenanceError("前段 checkpoint 没有绑定前段 Job")
+    wanted = {key: value for key, value in previous.items() if key not in {"started_at_utc", "completed_at_utc"}}
+    wanted.update(disposition="reused", recovered_from=proof.get("recovered_from"), source_receipt=dict(proof["result"]),
+                  recovery_checkpoint=dict(proof["checkpoint"]), source_execution_sha256=planned[job_id]["source_execution_sha256"])
+    if result != wanted or previous.get("status") != "complete":
+        raise ProvenanceError("恢复段继承改写了前段 Job 的执行事实")
+    origin = _recovery_segment_origin(campaign_dir, previous_root, previous, depth=depth + 1, authority=current_authority)
+    if origin != result.get("recovered_from"):
+        raise ProvenanceError("恢复段继承来源未闭合到实际生产段")
+    return origin
+
+
 def _candidate_restoration_bindings(
     campaign_dir: Path, attempt: Path, payload: Mapping[str, Any], *,
     configuration: Mapping[str, Any], host_data_root: Path,
@@ -978,7 +1167,11 @@ def _candidate_restoration_bindings(
         archive = FAILED_ATTEMPT_ROOT_RE.fullmatch(logical_name)
         if archive is not None:
             logical_name = archive.group("base")
-        if root.parent != host_data_root / "runs" / "claude-candidate" / run_prefix or logical_name != payload.get("id"):
+        expected_name = str(payload.get("id"))
+        if len(parts) == 6:
+            origin_revision = _recovery_segment_origin(campaign_dir, attempt, payload)
+            expected_name += f"-recovery-{origin_revision}"
+        if root.parent != host_data_root / "runs" / "claude-candidate" / run_prefix or logical_name != expected_name:
             return None
         directory = root / CANDIDATE_RESTORATION_DIRNAME
         if directory.is_symlink() or not directory.is_dir() or root.resolve(strict=True) != root:
