@@ -284,6 +284,33 @@ class ClaudeIdentityEngineTests(_ClaudeTreeMixin, unittest.TestCase):
         with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "被策略忽略的文件"):
             v3.evaluator_dependency_digests(self.repo, policy)
 
+    def test_import_outside_managed_roots_is_rejected(self) -> None:
+        """闭包里的模块导入受管根外的仓库模块即失败：部署树没有根外模块，根外的变化也不进身份（2026-10-07）。"""
+
+        shared = self.repo / "tools" / "official_client_capture" / "upgrade_control_plane.py"
+        original = shared.read_text(encoding="utf-8")
+        head = "from tools.official_client_capture import upgrade_client_adapter\n"
+        body = "    adapter = upgrade_client_adapter.adapter_for(\"claude\")\n"
+        for label, old, new, target in (
+            ("模块顶层 from tools import", head, head + "from tools import generate_claude_fw_g_profile\n", "tools.generate_claude_fw_g_profile"),
+            ("函数内 from tools.<根外包>", body, body + "    from tools.ci import entry_gates\n", "tools.ci"),
+            ("import tools.<根外模块>", head, head + "import tools.arm64_supervised_deploy\n", "tools.arm64_supervised_deploy"),
+            ("相对导入跳出受管根", head, head + "from .. import check_ledger_completeness\n", "tools.check_ledger_completeness"),
+            ("importlib 字面量", body, body + "    helper = importlib.import_module(\"tools.codex_closeout\")\n", "tools.codex_closeout"),
+        ):
+            with self.subTest(label=label):
+                shared.write_text(original.replace(old, new), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(v3.ToolIdentityPolicyError, f"导入了受管根外的仓库模块 {target}"):
+                        v3.compute_identity(self.policy, self.repo)
+                    with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "受管根外"):
+                        v3.evaluator_dependency_digests(self.repo, self.policy)
+                finally:
+                    shared.write_text(original, encoding="utf-8")
+        # 两个受管根之间互相导入照常。
+        shared.write_text(original.replace(head, head + "from tools.official_client_control import store\n"), encoding="utf-8")
+        v3.compute_identity(self.policy, self.repo)
+
     def test_memo_matches_recompute(self) -> None:
         plain = self._claude_digests()
         identity = v3.compute_identity(self.policy, self.repo)

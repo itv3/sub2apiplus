@@ -95,10 +95,10 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
 
 六、边界与已知缺口
 ==================
-* Wire 与模型能力目录（B3-03 补充项）：投影工具 ``tools/generate_claude_fw_g_profile.py`` 拆出了版本专用的 Wire 投影策略，
-  VC-1 布局的证据来源与装配在 ``claude_upgrade_release``。VC-1 现行场景清单只用主模型取证，非主模型（``<模型>-<probe>``）
-  没有证据：投影策略登记多个模型时投影失败关闭，审核人只能先把模型闭集收到主模型（画像 ``supported_models`` 随之派生），
-  或等 VC-1 补模型能力取证作业。
+* Wire 与模型能力目录（B3-03 补充项）：投影算法（受管模块 ``claude_upgrade_wire_projection``，2026-10-07 自仓库根的历史
+  生成器逐字搬入）拆出了版本专用的 Wire 投影策略，VC-1 布局的证据来源与装配在 ``claude_upgrade_release``。VC-1 现行
+  场景清单只用主模型取证，非主模型（``<模型>-<probe>``）没有证据：投影策略登记多个模型时投影失败关闭，审核人只能先把
+  模型闭集收到主模型（画像 ``supported_models`` 随之派生），或等 VC-1 补模型能力取证作业。
 * 生产入口清单、出站处置清单的现状没有 VC-1 生产者（B2-07 补充项），这里由审核人在 ``joint-inputs.json`` 提供，按 Store
   合同与上面的门禁核对。
 * B3-01（已落实，见 ``claude_upgrade_batch``）：``_load_stage_result`` 的 ``stage-profile`` 分支、VC-3 阶段重派证明；计时账本
@@ -832,8 +832,8 @@ def collect_inputs(
             "module": "claude_upgrade_profile",
             "policy_schema": PROFILE_POLICY_SCHEMA,
             # Wire、模型能力目录与 Release 的确定性投影工具（指南 §4.3.2）与其策略合同。
-            "projection_module": "tools.generate_claude_fw_g_profile",
-            "projection_policy_schema": release.generator.PROJECTION_POLICY_SCHEMA,
+            "projection_module": "tools.official_client_capture.claude_upgrade_wire_projection",
+            "projection_policy_schema": release.wire_projection.PROJECTION_POLICY_SCHEMA,
         },
     }
     bindings = {"policy": policy, "active_release_catalog": catalog_binding, "active_profile": profile_binding}
@@ -2101,8 +2101,8 @@ def _approve_prepare(campaign_dir: Path, manifest: Mapping[str, Any], revision: 
         "target_profile_sha256": derived["derivation"]["target_profile_sha256"],
         "profile_diff_paths": derived["derivation"]["profile_diff_paths"],
         "release": release.release_summary(gate["derived"]["projection"], gate["derived"]["release"]),
-        # 投影工具在受管树之外：批准时的文件摘要留档（审核与重放核对用，不进审核摘要）。
-        "projection_tool_sha256": file_sha256(Path(release.generator.__file__)),
+        # 投影模块的文件摘要留档（审核与重放核对用，不进审核摘要）；它在受管树内，变化同时反映在 tool_files_sha256。
+        "projection_tool_sha256": file_sha256(Path(release.wire_projection.__file__)),
         "store": {
             "root": claude_upgrade_store.CAMPAIGN_STORE_DIRNAME,
             "campaign_id": inputs.store_campaign_id,

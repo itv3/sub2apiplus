@@ -16,6 +16,10 @@
 * 闭包到达被策略忽略的文件（``ignored_prefixes``，即另一客户端的专属文件）即失败：Codex 引擎对其它层模块只是
   不计入，跨模块按符号遍历后照此处理会让 Claude 闭包实际依赖的 Codex 实现在身份里不可见。到达即说明它不再专属，
   要么在策略里归层，要么改经适配器。
+* 闭包里的模块导入受管根外的仓库模块（``tools`` 包下两个受管根以外的任何模块，含相对导入跳出受管根与
+  ``importlib.import_module`` 字面量）即失败（2026-10-07 起）：部署树与真实链／pre-A3 副本树只交换两个受管根，根外模块
+  在那里不存在；它的变化也不进本身份，闭包对它的依赖不可见。闭包之外的受管模块由
+  ``tests/test_managed_root_imports.py`` 静态扫描同一规则，两者口径相同。
 
 纯函数（指纹、分层、模块符号表、动态调用检查、源码段、跨进程记忆化）从 Codex 引擎调用，不复制；导入解析因要覆盖
 两个包而另写。本文件被 Codex 身份策略忽略（``claude_`` 前缀），不影响 Codex 的任何摘要。
@@ -200,19 +204,42 @@ def _package_of(module: str, index: Mapping[str, str]) -> str:
     return module if key.endswith("/__init__.py") else module.rpartition(".")[0]
 
 
+def _outside_managed_target(target: str, managed_roots: frozenset[str]) -> bool:
+    """模块全名落在仓库 ``tools`` 包里、却不在受管根内（``tools`` 包本身也算：受管工具只该依赖两个受管根）。"""
+
+    parts = target.split(".")
+    return parts[0] == "tools" and (len(parts) < 2 or parts[1] not in managed_roots)
+
+
 def _resolve_imports(
     nodes: Iterable[ast.AST],
     module: str,
     index: Mapping[str, str],
+    *,
+    managed_roots: Iterable[str] | None = None,
 ) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
     """导入语句 → (模块别名 → 模块全名, 符号别名 → (模块全名, 符号))。
 
     覆盖包形式、相对形式、脚本方式的扁平兄弟导入（按当前模块所在根解析），以及监督器为避开作业依赖分析而写的
-    ``x = importlib.import_module("兄弟模块")``。
+    ``x = importlib.import_module("兄弟模块")``。导入受管根外的仓库模块（``managed_roots`` 缺省取模块索引里出现的
+    根目录名）即失败，见模块说明。
     """
 
     package = _package_of(module, index)
     root_package = ".".join(module.split(".")[:2])
+    roots = frozenset(
+        managed_roots
+        if managed_roots is not None
+        else (name.split(".")[1] for name in index if name.startswith("tools.") and name.count(".") >= 1)
+    )
+
+    def reject_outside(target: str) -> None:
+        if _outside_managed_target(target, roots):
+            raise ToolIdentityPolicyError(
+                f"{module} 导入了受管根外的仓库模块 {target}：受管工具只能依赖两个受管根内的模块"
+                "（部署树与副本树只交换受管根，根外模块的变化也不进 Claude 身份）"
+            )
+
     aliases: dict[str, str] = {}
     symbols: dict[str, tuple[str, str]] = {}
     for node in nodes:
@@ -226,6 +253,11 @@ def _resolve_imports(
                 owner = node.module or ""
                 if owner and owner not in index and f"{root_package}.{owner}" in index:
                     owner = f"{root_package}.{owner}"
+            if owner == "tools":
+                for alias in node.names:
+                    reject_outside(f"tools.{alias.name}")
+            else:
+                reject_outside(owner)
             for alias in node.names:
                 name = alias.asname or alias.name
                 candidate = f"{owner}.{alias.name}" if owner else alias.name
@@ -235,6 +267,7 @@ def _resolve_imports(
                     symbols[name] = (owner, alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
+                reject_outside(alias.name)
                 full = alias.name
                 if full not in index and f"{root_package}.{full}" in index:
                     full = f"{root_package}.{full}"
@@ -254,6 +287,7 @@ def _resolve_imports(
             and isinstance(node.value.args[0].value, str)
         ):
             target = node.value.args[0].value
+            reject_outside(target)
             full = target if target in index else f"{root_package}.{target}"
             if full in index:
                 aliases[node.targets[0].id] = full
@@ -312,6 +346,7 @@ def closure(
     """
 
     index = _module_index(policy, digests)
+    managed_roots = frozenset(name for _relative, name in _root_names(policy))
     active_bindings = bindings if bindings is not None else _bindings_for(policy)
     orchestrator_module = _module_of_key(str(policy["orchestrator"]["file"]), index)
     adapter_module = next((module for module in index if module.endswith(f".{ADAPTER_MODULE}")), None)
@@ -330,7 +365,9 @@ def closure(
             source, tree, functions, constants, lines = codex_identity._reader_parsed_module(
                 str(_key_path(repository_root, policy, key)), digests[key]
             )
-            aliases, symbol_imports = _resolve_imports(_top_level_binding_nodes(tree), module, index)
+            aliases, symbol_imports = _resolve_imports(
+                _top_level_binding_nodes(tree), module, index, managed_roots=managed_roots
+            )
             parsed[module] = (source, tree, functions, constants, aliases, symbol_imports, lines)
         return parsed[module]
 
@@ -384,7 +421,10 @@ def closure(
             "sha256": _sha256(codex_identity._reader_source_segment(source, lines, node).encode("utf-8")),
         }
         local_aliases, local_symbols = _resolve_imports(
-            [child for child in ast.walk(node) if isinstance(child, (ast.Import, ast.ImportFrom, ast.Assign))], module, index
+            [child for child in ast.walk(node) if isinstance(child, (ast.Import, ast.ImportFrom, ast.Assign))],
+            module,
+            index,
+            managed_roots=managed_roots,
         )
         scope_aliases = {**aliases, **local_aliases}
         scope_symbols = {**symbol_imports, **local_symbols}

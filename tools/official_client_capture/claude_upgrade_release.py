@@ -1,11 +1,13 @@
 """Claude VC-3 的 Wire、模型能力目录与暂存 Release（Claude 升级控制面设计 B3-03 补充项）。
 
-投影算法在 ``tools/generate_claude_fw_g_profile.py``（指南 §4.3.2 的确定性投影工具，历史 2.1.226 制品由它逐字复算）。
+投影算法在受管模块 ``claude_upgrade_wire_projection``（指南 §4.3.2 的确定性投影工具；2026-10-07 自仓库根的历史生成器
+``tools/generate_claude_fw_g_profile.py`` 逐字搬入，历史 2.1.226 制品仍由生成器的历史命令行逐字复算）。受管根内的模块
+不得导入受管根外的仓库模块：部署树与副本树只有两个受管根，根外模块的变化也不进 Claude 工具身份。
 本模块只提供两样东西：Claude 升级 VC-1 证据布局的证据来源，以及 VC-3 的装配（投影策略草案、模型身份派生、Release
 身份、Store 模型能力目录对象、暂存 Release 与收据）。全程离线、零请求，不写仓库文件。
 
-一、证据来源（``UpgradeEvidenceSource``，与生成器的 ``FwfCampaignSource`` 同名方法）
-=====================================================================================
+一、证据来源（``UpgradeEvidenceSource``，与历史生成器的 ``FwfCampaignSource`` 同名方法）
+=========================================================================================
 * 某 probe 的请求字节取 VC-1 封存的 capture manifest 里该 probe 的 ``relay_binary`` 标签（按有效连接序号排序），P 通道取
   ``pcap`` 标签；每个文件读前按 EvidencePackage v3 的外部证据绑定核对路径（宿主数据根内）、摘要与字节数，未封存即拒绝。
   这等价于历史布局里「R 通道必须绑定 MeasuredRuleLedger」。
@@ -52,13 +54,13 @@ from typing import Any, Mapping
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tools import generate_claude_fw_g_profile as generator
 from tools.official_client_capture import claude_upgrade_classify as classify
 from tools.official_client_capture import claude_upgrade_evidence
+from tools.official_client_capture import claude_upgrade_wire_projection as wire_projection
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256
 
-ProjectionError = generator.ProjectionError
+ProjectionError = wire_projection.ProjectionError
 
 PROJECTION_POLICY_FILENAME = "claude_upgrade_wire_projection_{underscored}.json"
 CATALOG_OBJECT_KIND = "model_capability_catalog"
@@ -182,7 +184,7 @@ def load_release_evidence(
 
 @dataclass
 class UpgradeEvidenceSource:
-    """Claude 升级 VC-1 布局的证据来源（方法与 ``generator.FwfCampaignSource`` 同名同义）。"""
+    """Claude 升级 VC-1 布局的证据来源（方法与历史生成器的 ``FwfCampaignSource`` 同名同义）。"""
 
     evidence: ReleaseEvidence
     policy: dict[str, Any]
@@ -202,14 +204,14 @@ class UpgradeEvidenceSource:
         if not resolved.is_relative_to(self.evidence.data_root.resolve(strict=True)):
             raise ProjectionError(f"证据文件越过宿主数据根：{path}")
         data = resolved.read_bytes()
-        if generator.sha256_hex(data) != binding["sha256"] or len(data) != binding["bytes"]:
+        if wire_projection.sha256_hex(data) != binding["sha256"] or len(data) != binding["bytes"]:
             raise ProjectionError(f"证据文件摘要或字节数与 VC-1 封存绑定不一致：{path}")
         return data
 
     def require_probes(self, probes: list[str]) -> None:
         missing = [probe for probe in probes if not self.evidence.relay.get(probe)]
-        if generator.PROBE_TLS in probes and generator.PROBE_TLS not in self.evidence.pcaps:
-            missing.append(f"{generator.PROBE_TLS}（pcap）")
+        if wire_projection.PROBE_TLS in probes and wire_projection.PROBE_TLS not in self.evidence.pcaps:
+            missing.append(f"{wire_projection.PROBE_TLS}（pcap）")
         if missing:
             raise ProjectionError(f"VC-1 证据缺少 Wire 投影所需的 probe：{sorted(set(missing))}")
 
@@ -221,7 +223,7 @@ class UpgradeEvidenceSource:
             parsed: list[dict[str, Any]] = []
             for artifact in artifacts:
                 path = str(artifact["path"])
-                for request in generator.parse_http_stream(self._read(path), f"{probe}:{PurePosixPath(path).name}"):
+                for request in wire_projection.parse_http_stream(self._read(path), f"{probe}:{PurePosixPath(path).name}"):
                     request = dict(request)
                     request["evidence_path"] = path
                     parsed.append(request)
@@ -229,25 +231,25 @@ class UpgradeEvidenceSource:
         return self._requests[probe]
 
     def messages(self, probe: str) -> list[dict[str, Any]]:
-        selected = [request for request in self.requests(probe) if request.get("request_target") == generator.MESSAGES_TARGET]
+        selected = [request for request in self.requests(probe) if request.get("request_target") == wire_projection.MESSAGES_TARGET]
         if not selected:
             raise ProjectionError(f"{probe} 没有 messages R 通道")
         return selected
 
     def select_messages(self, probe: str, predicate: Any, description: str) -> dict[str, Any]:
-        return generator.select_request(self.messages(probe), predicate, description, probe)
+        return wire_projection.select_request(self.messages(probe), predicate, description, probe)
 
     def base_select(self, probe: str, predicate: Any, description: str) -> dict[str, Any]:
-        return generator.select_request(self.requests(probe), predicate, description, probe)
+        return wire_projection.select_request(self.requests(probe), predicate, description, probe)
 
     def model_select(self, probe: str, predicate: Any, description: str) -> dict[str, Any]:
-        return generator.select_request(self.requests(probe), predicate, description, probe)
+        return wire_projection.select_request(self.requests(probe), predicate, description, probe)
 
     def model_requests(self, probe: str) -> list[dict[str, Any]]:
         return self.requests(probe)
 
     def thinking_display_request(self, display: str) -> dict[str, Any]:
-        probe = f"{generator.PROBE_THINKING_DISPLAY_PREFIX}{display}"
+        probe = f"{wire_projection.PROBE_THINKING_DISPLAY_PREFIX}{display}"
         requests = self.messages(probe)
         if len(requests) != 1:
             raise ProjectionError(f"{probe} messages R 通道数量不是 1")
@@ -263,7 +265,7 @@ class UpgradeEvidenceSource:
         """模型能力目录的证据摘要：目录引用的每个 probe 一个完整 attempt 条目；VC-1 只封存通过的 probe，历史失败记 0。"""
 
         attempts: list[dict[str, Any]] = []
-        for probe in generator.catalog_probes(self.policy):
+        for probe in wire_projection.catalog_probes(self.policy):
             item = self.evidence.items.get(f"EVIDENCE-{probe}")
             manifests = [
                 ref
@@ -285,23 +287,23 @@ class UpgradeEvidenceSource:
                 "sha256": str(self.evidence.capture_index["sha256"]),
                 "identical": True,
             },
-            "behavior_traffic_disposition": generator.BEHAVIOR_TRAFFIC_DISPOSITION,
+            "behavior_traffic_disposition": wire_projection.BEHAVIOR_TRAFFIC_DISPOSITION,
         }
-        evidence["campaign_sha256"] = generator.sha256_hex(generator.canonical_bytes(evidence))
+        evidence["campaign_sha256"] = wire_projection.sha256_hex(wire_projection.canonical_bytes(evidence))
         return evidence
 
     def messages_evidence(self) -> tuple[bytes, str]:
         """Wire 的 messages 基线：基线 probe 第一条推理请求的原始字节（同一连接复用时按流内偏移截取）。"""
 
-        request = self.messages(generator.PROBE_BASELINE)[0]
+        request = self.messages(wire_projection.PROBE_BASELINE)[0]
         data = self._read(str(request["evidence_path"]))
         start = int(request["stream_offset"])
         return data[start : start + int(request["stream_length"])], str(request["evidence_path"])
 
     def tls_evidence(self) -> tuple[bytes, str]:
-        artifact = self.evidence.pcaps.get(generator.PROBE_TLS)
+        artifact = self.evidence.pcaps.get(wire_projection.PROBE_TLS)
         if artifact is None:
-            raise ProjectionError(f"VC-1 证据缺少 P 通道 pcap：{generator.PROBE_TLS}")
+            raise ProjectionError(f"VC-1 证据缺少 P 通道 pcap：{wire_projection.PROBE_TLS}")
         return self._read(str(artifact["path"])), str(artifact["path"])
 
     def inference_requests(self) -> list[dict[str, Any]]:
@@ -311,7 +313,7 @@ class UpgradeEvidenceSource:
             request
             for probe in sorted(self._requests)
             for request in self._requests[probe]
-            if request.get("request_target") == generator.MESSAGES_TARGET
+            if request.get("request_target") == wire_projection.MESSAGES_TARGET
         ]
 
 
@@ -325,7 +327,7 @@ def active_projection_policy(active_version: str) -> tuple[dict[str, Any], dict[
 
     path = Path(__file__).resolve().parent / PROJECTION_POLICY_FILENAME.format(underscored=active_version.replace(".", "_"))
     try:
-        policy = generator.load_projection_policy(path)
+        policy = wire_projection.load_projection_policy(path)
     except ProjectionError as error:
         raise ConfigurationError(f"Active 版本 {active_version} 的 Wire 投影策略不可用：{error}") from error
     if policy["version"] != active_version:
@@ -361,23 +363,23 @@ class CatalogProjection:
 def project_catalog(evidence: ReleaseEvidence, policy_document: Any, *, target_version: str, required_rule_count: int) -> CatalogProjection:
     """按投影策略从 VC-1 证据投影实现策略与模型能力目录，并逐条复算版本指纹。失败抛 ``ProjectionError``。"""
 
-    policy = generator.validate_projection_policy(policy_document)
+    policy = wire_projection.validate_projection_policy(policy_document)
     if policy["version"] != target_version:
         raise ProjectionError(f"Wire 投影策略的 version 不是目标版本 {target_version}")
     source = UpgradeEvidenceSource(evidence, policy)
-    source.require_probes(generator.required_probes(policy))
-    implementation = generator.build_implementation_policy(source, policy)
-    catalog = generator.build_model_capability_catalog(source, policy, implementation["scenarios"], required_rule_count)
+    source.require_probes(wire_projection.required_probes(policy))
+    implementation = wire_projection.build_implementation_policy(source, policy)
+    catalog = wire_projection.build_model_capability_catalog(source, policy, implementation["scenarios"], required_rule_count)
     messages = source.messages_evidence()
     tls = source.tls_evidence()
-    count = generator.verify_version_fingerprints(source.inference_requests(), policy, target_version)
-    catalog_bytes = generator.canonical_bytes(catalog)
+    count = wire_projection.verify_version_fingerprints(source.inference_requests(), policy, target_version)
+    catalog_bytes = wire_projection.canonical_bytes(catalog)
     return CatalogProjection(
         policy=policy,
         implementation=implementation,
         catalog=catalog,
         catalog_bytes=catalog_bytes,
-        catalog_sha256=generator.sha256_hex(catalog_bytes),
+        catalog_sha256=wire_projection.sha256_hex(catalog_bytes),
         fingerprint_count=count,
         messages=messages,
         tls=tls,
@@ -408,7 +410,7 @@ def finish_release(
     """画像派生之后：投影 Wire，计算 Release 身份与 release-catalog 条目（与 Go 加载器的交叉校验同口径）。"""
 
     version = projection.policy["version"]
-    profile_sha256 = generator.sha256_hex(target_profile_bytes)
+    profile_sha256 = wire_projection.sha256_hex(target_profile_bytes)
     rules = target_profile.get("rules") if isinstance(target_profile.get("rules"), list) else []
     endpoints = target_profile.get("strict_endpoints") if isinstance(target_profile.get("strict_endpoints"), list) else []
     identity = target_profile.get("identity") if isinstance(target_profile.get("identity"), Mapping) else {}
@@ -418,7 +420,7 @@ def finish_release(
         model["canonical_model"] for model in projection.catalog["models"]
     ]:
         raise ProjectionError("目标画像的模型闭集或能力目录摘要与投影出的模型能力目录不一致")
-    wire = generator.build_wire_artifact(
+    wire = wire_projection.build_wire_artifact(
         projection.policy,
         projection.implementation,
         projection.catalog,
@@ -429,8 +431,8 @@ def finish_release(
         profile_sha256,
         platform,
     )
-    wire_bytes = generator.canonical_bytes(wire)
-    wire_sha256 = generator.sha256_hex(wire_bytes)
+    wire_bytes = wire_projection.canonical_bytes(wire)
+    wire_sha256 = wire_projection.sha256_hex(wire_bytes)
     rule_count = len(rules)
     if rule_count != projection.catalog["required_rule_count"]:
         raise ProjectionError("目标画像规则数与模型能力目录的 required_rule_count 不一致")
@@ -439,7 +441,7 @@ def finish_release(
     evidence = projection.catalog["evidence"]
     if min(rule_count, len(endpoints), profile_assertions, local_assertions, int(evidence["successful_attempts"])) <= 0:
         raise ProjectionError("Release 计数不完整：规则、严格端点、画像断言、本地场景断言与模型证据都必须大于 0")
-    release_sha256, bundle_sha256 = generator.build_release_identity(
+    release_sha256, bundle_sha256 = wire_projection.build_release_identity(
         version=version,
         platform=platform,
         profile_digest=profile_sha256,
@@ -549,7 +551,7 @@ def staged_release_receipt(
     """暂存 Release 收据：逐文件 inventory、Release 条目、validation_candidate 选择器建议与 Store 引用。"""
 
     inventory = [
-        {"path": path, "sha256": generator.sha256_hex(data), "size": len(data)}
+        {"path": path, "sha256": wire_projection.sha256_hex(data), "size": len(data)}
         for path, data in sorted(files.items())
     ]
     return {
@@ -571,7 +573,7 @@ def staged_release_receipt(
         "active_unchanged": True,
         "production_selector_changed": False,
         "inventory": inventory,
-        "inventory_sha256": generator.sha256_hex(generator.canonical_bytes(inventory)),
+        "inventory_sha256": wire_projection.sha256_hex(wire_projection.canonical_bytes(inventory)),
     }
 
 
@@ -579,7 +581,7 @@ def verify_staged_release(root: Path, receipt: Mapping[str, Any]) -> None:
     """逐文件复算暂存 Release：inventory 精确覆盖目录下全部文件，摘要与字节数一致。"""
 
     inventory = receipt.get("inventory")
-    if not isinstance(inventory, list) or generator.sha256_hex(generator.canonical_bytes(inventory)) != receipt.get("inventory_sha256"):
+    if not isinstance(inventory, list) or wire_projection.sha256_hex(wire_projection.canonical_bytes(inventory)) != receipt.get("inventory_sha256"):
         raise ConfigurationError("暂存 Release 收据的 inventory 摘要不一致。")
     expected: set[str] = set()
     for item in inventory:

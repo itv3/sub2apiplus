@@ -29,13 +29,13 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from tools import generate_claude_fw_g_profile as generator
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_profile as profile
 from tools.official_client_capture import claude_upgrade_release
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc
+from tools.official_client_capture import claude_upgrade_wire_projection as wire_projection
 from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_classify as classify_tests
 from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
@@ -532,20 +532,20 @@ class ProfileApprovalChainTests(_ProfileCase):
         profile_raw = (root / entry["profile"]["path"]).read_bytes()
         wire_raw = (root / entry["wire"]["path"]).read_bytes()
         self.assertEqual(entry["profile"]["path"], f"catalogdata/claude/profiles/{classify_tests.TARGET}/{prepared['target_profile_sha256']}.json")
-        self.assertEqual(generator.sha256_hex(profile_raw), prepared["target_profile_sha256"])
+        self.assertEqual(wire_projection.sha256_hex(profile_raw), prepared["target_profile_sha256"])
         wire = json.loads(wire_raw)
         target = json.loads(profile_raw)
         self.assertEqual(wire["identity"]["profile_digest"], prepared["target_profile_sha256"])
         self.assertEqual(wire["identity"]["model_capability_catalog_digest"], target["identity"]["model_capability_catalog_sha256"])
         self.assertEqual(entry["models"], target["identity"]["supported_models"])
         self.assertEqual(entry["models"], [item["canonical_model"] for item in wire["implementation_policy"]["model_catalog"]["models"]])
-        catalog_sha = generator.sha256_hex(generator.canonical_bytes(wire["implementation_policy"]["model_catalog"]))
+        catalog_sha = wire_projection.sha256_hex(wire_projection.canonical_bytes(wire["implementation_policy"]["model_catalog"]))
         self.assertEqual(catalog_sha, target["identity"]["model_capability_catalog_sha256"])
-        release_sha, bundle_sha = generator.build_release_identity(
+        release_sha, bundle_sha = wire_projection.build_release_identity(
             version=classify_tests.TARGET,
             platform="linux/arm64",
             profile_digest=prepared["target_profile_sha256"],
-            wire_digest=generator.sha256_hex(wire_raw),
+            wire_digest=wire_projection.sha256_hex(wire_raw),
             model_catalog_digest=catalog_sha,
             required_rules_manifest_sha256=entry["required_rules_manifest_sha256"],
             required_rule_count=len(target["rules"]),

@@ -15,7 +15,7 @@ import json
 import struct
 from typing import Any, Mapping
 
-from tools import generate_claude_fw_g_profile as generator
+from tools.official_client_capture import claude_upgrade_wire_projection as wire_projection
 
 # 证据文件：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号或 None)]。
 WireFiles = dict[str, list[tuple[str, bytes, str, int | None]]]
@@ -59,13 +59,13 @@ class WireEvidenceBuilder:
     def __init__(self, policy: Mapping[str, Any], version: str) -> None:
         self.policy = policy
         self.version = version
-        self.model = generator.base_model(dict(policy))
+        self.model = wire_projection.base_model(dict(policy))
         self.models = policy["models"]
         self.selectors = policy["selectors"]
 
     def _system(self, user_text: str) -> list[dict[str, Any]]:
-        fingerprint = generator.version_fingerprint(dict(self.policy), self.version, user_text)
-        billing = f"{generator.BILLING_HEADER_PREFIX} cc_version={self.version}.{fingerprint}; cc_entrypoint=sdk-cli; cch=abcde;"
+        fingerprint = wire_projection.version_fingerprint(dict(self.policy), self.version, user_text)
+        billing = f"{wire_projection.BILLING_HEADER_PREFIX} cc_version={self.version}.{fingerprint}; cc_entrypoint=sdk-cli; cch=abcde;"
         return [{"type": "text", "text": billing}, *(dict(block) for block in STATIC_SYSTEM)]
 
     def messages(
@@ -76,7 +76,7 @@ class WireEvidenceBuilder:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: dict[str, Any] | None = None,
         thinking: dict[str, Any] | None | bool = True,
-        effort: str = generator.BASELINE_EFFORT,
+        effort: str = wire_projection.BASELINE_EFFORT,
         agent_id: str | None = None,
         extra_headers: list[tuple[str, str]] | None = None,
     ) -> bytes:
@@ -91,12 +91,12 @@ class WireEvidenceBuilder:
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
         if thinking is True:
-            body["thinking"] = {"type": generator.THINKING_TYPE}
+            body["thinking"] = {"type": wire_projection.THINKING_TYPE}
         elif isinstance(thinking, dict):
             body["thinking"] = thinking
         body["output_config"] = {"effort": effort}
         body["stream"] = True
-        return http_request(generator.MESSAGES_TARGET, [*_header_list(self.version, agent_id=agent_id), *(extra_headers or [])], body)
+        return http_request(wire_projection.MESSAGES_TARGET, [*_header_list(self.version, agent_id=agent_id), *(extra_headers or [])], body)
 
     def server_fallback(self, fallback_model: str) -> bytes:
         """server fallback 锁存请求：回退模型、``x-is-refusal-fallback: true`` 与锁存来源 Header。"""
@@ -109,7 +109,7 @@ class WireEvidenceBuilder:
 
     def count_tokens(self) -> bytes:
         body = {"model": self.model, "messages": [{"role": "user", "content": "count me"}]}
-        return http_request(f"{generator.COUNT_TOKENS_TARGET_PREFIX}?beta=true", _header_list(self.version), body)
+        return http_request(f"{wire_projection.COUNT_TOKENS_TARGET_PREFIX}?beta=true", _header_list(self.version), body)
 
     @staticmethod
     def tools(count: int, *, first: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -123,59 +123,59 @@ class WireEvidenceBuilder:
         named = lambda name: {"name": name, "description": "fixture", "input_schema": {"type": "object"}}  # noqa: E731
         background_tools = self.tools(self.selectors["background_tool_count"])
         result: dict[str, list[bytes]] = {
-            generator.PROBE_BASELINE: [self.messages()],
-            generator.PROBE_AGENT: [
-                self.messages(tools=self.tools(3, first=named(generator.TOOL_AGENT))),
+            wire_projection.PROBE_BASELINE: [self.messages()],
+            wire_projection.PROBE_AGENT: [
+                self.messages(tools=self.tools(3, first=named(wire_projection.TOOL_AGENT))),
                 self.messages(user_text="Subagent task: list files", agent_id="0123456789abcdef0"),
             ],
-            generator.PROBE_TUI: [
+            wire_projection.PROBE_TUI: [
                 self.messages(user_text="Write a haiku about tests"),
                 self.messages(model=self.models["title_model"], user_text="Generate a title for: tests", thinking=False),
             ],
-            generator.PROBE_FALLBACK: [
+            wire_projection.PROBE_FALLBACK: [
                 self.messages(user_text="Trigger fallback please"),
                 self.messages(model=self.models["fallback_model"], user_text="Trigger fallback please", thinking=False),
             ],
-            generator.PROBE_BACKGROUND_SUBAGENT: [
+            wire_projection.PROBE_BACKGROUND_SUBAGENT: [
                 self.messages(user_text="Background subagent main"),
                 self.messages(user_text="Background subagent child", agent_id="fedcba9876543210f"),
             ],
-            generator.PROBE_BACKGROUND: [
+            wire_projection.PROBE_BACKGROUND: [
                 self.messages(tools=background_tools, user_text="Run in background"),
                 self.messages(model=self.models["title_model"], user_text="Background title", thinking=False),
                 self.messages(model=self.models["fallback_model"], user_text="Background summary one", thinking=False),
                 self.messages(model=self.models["fallback_model"], user_text="Background summary two", thinking=False),
             ],
-            generator.PROBE_CUSTOM_SYSTEM: [self.messages(user_text="Custom system prompt run")],
-            generator.PROBE_APPEND_SYSTEM: [self.messages(user_text="Append system prompt run")],
-            generator.PROBE_EXCLUDE_DYNAMIC: [self.messages(user_text="Exclude dynamic system run")],
-            generator.PROBE_CUSTOM_AGENT: [self.messages(user_text="Custom agent run")],
-            generator.PROBE_WEB_SEARCH: [
-                self.messages(tools=[named(generator.TOOL_WEB_SEARCH_OUTER)], user_text="Search the web for fixtures"),
+            wire_projection.PROBE_CUSTOM_SYSTEM: [self.messages(user_text="Custom system prompt run")],
+            wire_projection.PROBE_APPEND_SYSTEM: [self.messages(user_text="Append system prompt run")],
+            wire_projection.PROBE_EXCLUDE_DYNAMIC: [self.messages(user_text="Exclude dynamic system run")],
+            wire_projection.PROBE_CUSTOM_AGENT: [self.messages(user_text="Custom agent run")],
+            wire_projection.PROBE_WEB_SEARCH: [
+                self.messages(tools=[named(wire_projection.TOOL_WEB_SEARCH_OUTER)], user_text="Search the web for fixtures"),
                 self.messages(
-                    tools=[{"type": "web_search_20250305", "name": generator.TOOL_WEB_SEARCH_SERVER}],
-                    tool_choice={"type": "tool", "name": generator.TOOL_WEB_SEARCH_SERVER},
+                    tools=[{"type": "web_search_20250305", "name": wire_projection.TOOL_WEB_SEARCH_SERVER}],
+                    tool_choice={"type": "tool", "name": wire_projection.TOOL_WEB_SEARCH_SERVER},
                     user_text="Perform a web search for the query: fixtures",
                 ),
             ],
-            generator.PROBE_JSON_SCHEMA: [self.messages(tools=[named(generator.TOOL_STRUCTURED_OUTPUT)], user_text="Return JSON")],
-            generator.PROBE_BASH: [self.messages(tools=self.tools(4, first=named(generator.TOOL_BASH)), user_text="Run ls")],
-            generator.PROBE_MCP_DEFERRED: [self.messages(tools=self.tools(self.selectors["mcp_deferred_tool_count"]), user_text="Use MCP")],
-            generator.PROBE_ADVISOR: [
+            wire_projection.PROBE_JSON_SCHEMA: [self.messages(tools=[named(wire_projection.TOOL_STRUCTURED_OUTPUT)], user_text="Return JSON")],
+            wire_projection.PROBE_BASH: [self.messages(tools=self.tools(4, first=named(wire_projection.TOOL_BASH)), user_text="Run ls")],
+            wire_projection.PROBE_MCP_DEFERRED: [self.messages(tools=self.tools(self.selectors["mcp_deferred_tool_count"]), user_text="Use MCP")],
+            wire_projection.PROBE_ADVISOR: [
                 self.messages(
                     tools=[*self.tools(2), {"type": self.selectors["advisor_tool_type"], "name": "advisor", "model": self.model}],
                     user_text="Ask the advisor",
                 )
             ],
-            generator.PROBE_COUNT_TOKENS: [self.count_tokens()],
-            generator.PROBE_THINKING_DISABLED: [self.messages(thinking=False, user_text="No thinking please")],
+            wire_projection.PROBE_COUNT_TOKENS: [self.count_tokens()],
+            wire_projection.PROBE_THINKING_DISABLED: [self.messages(thinking=False, user_text="No thinking please")],
         }
         for effort in self.policy["efforts"]:
-            if effort != generator.BASELINE_EFFORT:
-                result[generator.effort_probe(effort)] = [self.messages(effort=effort, user_text=f"Effort {effort} run")]
+            if effort != wire_projection.BASELINE_EFFORT:
+                result[wire_projection.effort_probe(effort)] = [self.messages(effort=effort, user_text=f"Effort {effort} run")]
         for display in self.policy["thinking_display_values"]:
-            result[f"{generator.PROBE_THINKING_DISPLAY_PREFIX}{display}"] = [
-                self.messages(thinking={"type": generator.THINKING_TYPE, "display": display}, user_text=f"Display {display} run")
+            result[f"{wire_projection.PROBE_THINKING_DISPLAY_PREFIX}{display}"] = [
+                self.messages(thinking={"type": wire_projection.THINKING_TYPE, "display": display}, user_text=f"Display {display} run")
             ]
         return result
 
@@ -192,7 +192,7 @@ class WireEvidenceBuilder:
                 (f"relay/conn{index:03d}.client_to_upstream.bin", raw, "relay_binary", index) for index, raw in enumerate(requests, start=1)
             ]
         tls_request = http_request("/api/hello", _header_list(self.version), {"probe": "tls"})
-        result[generator.PROBE_TLS] = [
+        result[wire_projection.PROBE_TLS] = [
             ("relay/conn001.client_to_upstream.bin", tls_request, "relay_binary", 1),
             ("tls-clienthello.pcap", self.pcap(), "pcap", None),
         ]
@@ -206,13 +206,13 @@ def client_hello(tls: Mapping[str, Any], *, alpn: bool, seed: int) -> bytes:
         data = b"".join(struct.pack(">H", item) for item in items)
         return struct.pack(">H", len(data)) + data
 
-    name = generator.TLS_SNI.encode("ascii")
+    name = wire_projection.TLS_SNI.encode("ascii")
     payloads: dict[int, bytes] = {
         0: struct.pack(">H", len(name) + 3) + b"\x00" + struct.pack(">H", len(name)) + name,
         10: u16_vector(tls["supported_groups"]),
         11: bytes([len(tls["point_formats"])]) + bytes(tls["point_formats"]),
         13: u16_vector(tls["signature_algorithms"]),
-        16: struct.pack(">H", len(generator.TLS_ALPN) + 1) + bytes([len(generator.TLS_ALPN)]) + generator.TLS_ALPN.encode("ascii"),
+        16: struct.pack(">H", len(wire_projection.TLS_ALPN) + 1) + bytes([len(wire_projection.TLS_ALPN)]) + wire_projection.TLS_ALPN.encode("ascii"),
         43: bytes([2 * len(tls["supported_versions"])]) + b"".join(struct.pack(">H", item) for item in tls["supported_versions"]),
         45: bytes([len(tls["psk_modes"])]) + bytes(tls["psk_modes"]),
     }
