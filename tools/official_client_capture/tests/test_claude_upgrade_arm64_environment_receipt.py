@@ -22,7 +22,7 @@ import tempfile
 import types
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 from unittest import mock
 
@@ -52,8 +52,26 @@ FAKE_STATVFS = types.SimpleNamespace(
     f_bfree=60 * GIB // BLOCK_SIZE,
     f_bavail=60 * GIB // BLOCK_SIZE,
 )
-# 当前合同摘要。共用常量、Claude 探针合同或合同结构的任何变化都会改变它，必须同时升 PRODUCER_VERSION 并为旧版本冻结合同。
-FROZEN_CONTRACT_SHA256 = "9714de189e028860b1a85fc25ae2dd75cad5d73552fbcdde08c30a26ad04d102"
+# 合同摘要。共用常量、Claude 探针合同或合同结构的任何变化都会改变它，必须同时升 PRODUCER_VERSION 并为旧版本冻结合同。
+# 版本 1（B1-10）冻结不变；版本 2（B2-06）在版本 1 之上加断网合成容器一节。
+FROZEN_CONTRACT_SHA256_V1 = "9714de189e028860b1a85fc25ae2dd75cad5d73552fbcdde08c30a26ad04d102"
+FROZEN_CONTRACT_SHA256 = "a16d39c0736846daed948845ab94ce69701e4818075c95e3b084b98df9cc8e14"
+# 版本 1 producer 的唯一一份字节摘要（已部署到 ARM64，登记为只读重放）。
+V1_PRODUCER_SHA256 = "8e7e5c168e0c36f9f9792b7e630394cd251a5c61a4805e3c0be2ac264325bad0"
+SYNTHETIC = "capture-cli-synthetic"
+SYNTHETIC_ID = "9" * 64
+# 抓包容器的挂载（含 Docker 控制面）；断网合成容器取同一组、去掉 Docker 控制面。
+CAPTURE_MOUNTS = [
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data", "Destination": "/capture", "RW": False},
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data/runs", "Destination": "/capture/runs", "RW": True},
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data/runtime", "Destination": "/capture/runtime", "RW": True},
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data", "Destination": "/root/oauth-capture", "RW": True},
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data/state/claude", "Destination": "/root/.claude", "RW": True},
+    {"Type": "bind", "Source": "/root/docker/capture-cli/data/runtime/claude-2.1.226", "Destination": CLAUDE_BINARY.rsplit("/", 1)[0], "RW": False},
+    {"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/var/run/docker.sock", "RW": True},
+    {"Type": "bind", "Source": "/usr/bin/docker", "Destination": "/usr/bin/docker", "RW": False},
+]
+SYNTHETIC_MOUNTS = [mount for mount in CAPTURE_MOUNTS if "docker" not in PurePosixPath(mount["Destination"]).name]
 
 
 def _private_dir(path: Path) -> Path:
@@ -118,6 +136,7 @@ class FakeHost:
         version_exit: int = 0,
         digests: list[str] | None = None,
         digest_path: str | None = None,
+        synthetic: dict[str, Any] | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
         # (容器, URL) → 依次返回的 (退出码, 标准输出, 标准错误)；计划用尽后按 HTTP 200 成功返回。
@@ -129,22 +148,39 @@ class FakeHost:
         # 依次返回的二进制摘要；None 表示恒为 BINARY_SHA256。digest_path 覆盖 sha256sum 输出里的文件名。
         self.digests = None if digests is None else list(digests)
         self.digest_path = digest_path
+        # 断网合成容器 inspect 的覆盖项（顶层键整体替换），用于构造联网、换镜像、挂载不一致等反例；None 表示合规。
+        self.synthetic = dict(synthetic or {})
 
     @staticmethod
     def container_id(name: str) -> str:
         return str(sorted(codex_arm.CONTAINER_CONTRACTS).index(name) + 1) * 64
 
-    @classmethod
-    def inspect(cls, name: str) -> bytes:
-        """与 control_receipt_fixtures.create_arm_receipt 同一组身份（network_id 取 continuity_seed "a"）。"""
+    def inspect(self, name: str) -> bytes:
+        """与 control_receipt_fixtures.create_arm_receipt 同一组身份（network_id 取 continuity_seed "a"）。
 
+        抓包容器带挂载表（含 Docker 控制面）；断网合成容器与它同镜像、同挂载（不含 Docker 控制面）、network_mode none。
+        """
+
+        if name == SYNTHETIC:
+            capture = json.loads(self.inspect("capture-cli"))[0]
+            item = {
+                "Id": SYNTHETIC_ID,
+                "Image": capture["Image"],
+                "State": {"Running": True},
+                "HostConfig": {"NetworkMode": "none"},
+                "NetworkSettings": {"Networks": {"none": {"NetworkID": "b" * 64, "EndpointID": "", "IPAddress": "", "Gateway": ""}}},
+                "Mounts": [dict(mount) for mount in SYNTHETIC_MOUNTS],
+            }
+            item.update(self.synthetic)
+            return json.dumps([item]).encode()
         expected = codex_arm.CONTAINER_CONTRACTS[name]
         index = sorted(codex_arm.CONTAINER_CONTRACTS).index(name) + 1
         payload = [
             {
-                "Id": cls.container_id(name),
+                "Id": self.container_id(name),
                 "Image": f"sha256:{str(index + 2) * 64}",
                 "State": {"Running": True},
+                "HostConfig": {"NetworkMode": expected["network"]},
                 "NetworkSettings": {
                     "Networks": {
                         expected["network"]: {
@@ -155,6 +191,7 @@ class FakeHost:
                         }
                     }
                 },
+                "Mounts": [dict(mount) for mount in CAPTURE_MOUNTS] if name == "capture-cli" else [],
             }
         ]
         return json.dumps(payload).encode()
@@ -175,11 +212,11 @@ class FakeHost:
                 code, out, err = plan.pop(0)
                 return subprocess.CompletedProcess(argv, code, out, err)
             return subprocess.CompletedProcess(argv, 0, TLS_SUCCESS, b"")
-        if argv[:4] == ["docker", "exec", "capture-cli", "/usr/bin/sha256sum"] and len(argv) == 5:
+        if argv[:2] == ["docker", "exec"] and argv[2] in {"capture-cli", SYNTHETIC} and argv[3] == "/usr/bin/sha256sum" and len(argv) == 5:
             digest = BINARY_SHA256 if self.digests is None else self.digests.pop(0)
             path = self.digest_path or argv[4]
             return subprocess.CompletedProcess(argv, 0, f"{digest}  {path}\n".encode(), b"")
-        if argv[:5] == ["docker", "exec", "capture-cli", "/usr/bin/env", "-i"]:
+        if argv[:2] == ["docker", "exec"] and argv[2] in {"capture-cli", SYNTHETIC} and argv[3:5] == ["/usr/bin/env", "-i"]:
             if self.version_exit != 0:
                 return subprocess.CompletedProcess(argv, self.version_exit, b"", b"error: boom\n")
             return subprocess.CompletedProcess(argv, 0, self.version_stdout, b"")
@@ -301,9 +338,28 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
             {
                 "schema_version", "client", "status", "phase", "subject_id", "observed_at_utc", "contract_sha256",
                 "continuity_identity_sha256", "resource_gate", "facts", "producer", "environment_equivalence",
-                "runtime_egress", "client_binary",
+                "runtime_egress", "client_binary", "synthetic_container",
             },
         )
+        self.assertEqual(
+            receipt["synthetic_container"],
+            {
+                "name": SYNTHETIC,
+                "container_id": SYNTHETIC_ID,
+                "image_id": facts["containers"][0]["image_id"],
+                "network_mode": "none",
+                "shared_mounts_sha256": facts["synthetic_container"]["shared_mounts_sha256"],
+                "client_binary": {"path": CLAUDE_BINARY, "sha256": BINARY_SHA256, "version": CLAUDE_VERSION},
+            },
+        )
+        synthetic = facts["synthetic_container"]
+        self.assertEqual(
+            (synthetic["network_names"], synthetic["reference_container"], synthetic["shared_mount_count"]),
+            (["none"], "capture-cli", len(SYNTHETIC_MOUNTS)),
+        )
+        self.assertEqual(synthetic["excluded_reference_mounts"], ["/usr/bin/docker", "/var/run/docker.sock"])
+        self.assertEqual(synthetic["shared_mounts_sha256"], synthetic["reference_shared_mounts_sha256"])
+        self.assertEqual(synthetic["client_binary_probe"]["container"], SYNTHETIC)
         self.assertEqual(receipt["schema_version"], "official-client-arm64-environment-receipt/v1")
         self.assertEqual(receipt["client"], "claude")
         self.assertEqual(receipt["status"], "passed")
@@ -315,7 +371,7 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
         self.assertEqual(receipt["producer"], claude_arm._current_producer())
         self.assertEqual(
             (receipt["producer"]["schema_version"], receipt["producer"]["version"]),
-            ("official-client-arm64-environment-producer/v1", "1"),
+            ("official-client-arm64-environment-producer/v1", "2"),
         )
         self.assertEqual(receipt["contract_sha256"], claude_arm.contract_sha256())
         self.assertEqual(receipt["resource_gate"], {"used_percent": 40, "available_bytes": 60 * GIB, "passed": True})
@@ -363,15 +419,19 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
             self.assertFalse({"-H", "--header", "-u", "--user", "-d", "--data", "-b", "--cookie"} & set(argv))
         self.assertEqual(
             [argv[2:] for argv in host.digest_calls()],
-            [["capture-cli", "/usr/bin/sha256sum", CLAUDE_BINARY]] * 2,
+            [["capture-cli", "/usr/bin/sha256sum", CLAUDE_BINARY]] * 2 + [[SYNTHETIC, "/usr/bin/sha256sum", CLAUDE_BINARY]] * 2,
         )
-        (version_call,) = host.version_calls()
-        home = version_call[5]
-        self.assertTrue(home.startswith(f"HOME={codex_arm.RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT}/claude-version-"), home)
-        self.assertEqual(
-            version_call[:5] + version_call[6:],
-            ["docker", "exec", "capture-cli", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", CLAUDE_BINARY, "--version"],
-        )
+        version_calls = host.version_calls()
+        self.assertEqual([argv[2] for argv in version_calls], ["capture-cli", SYNTHETIC])
+        for version_call in version_calls:
+            home = version_call[5]
+            self.assertTrue(home.startswith(f"HOME={codex_arm.RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT}/claude-version-"), home)
+            self.assertEqual(
+                version_call[:2] + version_call[3:5] + version_call[6:],
+                ["docker", "exec", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", CLAUDE_BINARY, "--version"],
+            )
+        # 断网合成容器只做 inspect 与二进制探针：不跑 curl、不读路由表（它没有网络）。
+        self.assertFalse([argv for argv in host.calls if argv[:3] == ["docker", "exec", SYNTHETIC] and argv[3] not in {"/usr/bin/sha256sum", "/usr/bin/env"}])
         joined = " ".join(" ".join(argv) for argv in host.calls).upper()
         for secret_marker in ("TOKEN", "API_KEY", "AUTHORIZATION", "X-API-KEY", "ANTHROPIC_"):
             self.assertNotIn(secret_marker, joined)
@@ -461,9 +521,13 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
                 operations = [item[0] for item in seen]
                 self.assertIn("arm64:tls-ready:capture-cli:anthropic-api-hello:1", operations)
                 self.assertIn("arm64:client-binary:version", operations)
+                expected_digest_reads = ["arm64:client-binary:sha256:before", "arm64:client-binary:sha256:after"]
+                if failure is None:
+                    expected_digest_reads *= 2
+                    self.assertIn(f"arm64:docker-inspect:{SYNTHETIC}", operations)
                 self.assertEqual(
                     [operation for operation in operations if operation.startswith("arm64:client-binary:sha256:")],
-                    ["arm64:client-binary:sha256:before", "arm64:client-binary:sha256:after"],
+                    expected_digest_reads,
                 )
 
     def test_collect_rejects_invalid_target_or_host_before_reading(self) -> None:
@@ -504,6 +568,56 @@ class ClaudeEnvironmentCollectTests(ClaudeEnvironmentTestCase):
             with self.subTest(case=name), fake_arm64(FakeHost(), self.runtime_root, **options):
                 with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, message):
                     claude_arm.collect_facts(phase="p0", subject_id="upgrade-x", claude_version=CLAUDE_VERSION)
+
+    def test_collect_rejects_unsafe_synthetic_container(self) -> None:
+        """断网合成容器：联网、带地址、换镜像、挂载不一致、挂载 Docker 控制面、共用 hosts 或未运行，一律拒绝采集。"""
+
+        capture_image = json.loads(FakeHost().inspect("capture-cli"))[0]["Image"]
+        extra_mount = [*SYNTHETIC_MOUNTS, {"Type": "bind", "Source": "/srv/other", "Destination": "/srv", "RW": True}]
+        docker_socket = [*SYNTHETIC_MOUNTS, {"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/run/docker.sock", "RW": True}]
+        shared_hosts = {
+            "Mounts": [*SYNTHETIC_MOUNTS, {"Type": "bind", "Source": "/srv/hosts", "Destination": "/etc/hosts", "RW": True}],
+        }
+        cases = (
+            ("bridge", {"HostConfig": {"NetworkMode": "capture-network"}}, "network_mode none"),
+            ("attached", {"NetworkSettings": {"Networks": {"capture-network": {"IPAddress": "172.30.0.11"}}}}, "接入了网络"),
+            ("address", {"NetworkSettings": {"Networks": {"none": {"IPAddress": "10.0.0.2"}}}}, "接入了网络"),
+            ("image", {"Image": "sha256:" + "8" * 64}, "不是同一镜像"),
+            ("extra-mount", {"Mounts": extra_mount}, "挂载与 capture-cli 不一致"),
+            ("missing-mount", {"Mounts": SYNTHETIC_MOUNTS[1:]}, "挂载与 capture-cli 不一致"),
+            ("read-write-drift", {"Mounts": [dict(SYNTHETIC_MOUNTS[0], RW=True), *SYNTHETIC_MOUNTS[1:]]}, "挂载与 capture-cli 不一致"),
+            ("docker-socket", {"Mounts": docker_socket}, "Docker 控制面"),
+            ("stopped", {"State": {"Running": False}}, "未运行"),
+            ("same-container", {"Id": FakeHost.container_id("capture-cli")}, None),
+        )
+        self.assertEqual(capture_image, json.loads(FakeHost().inspect(SYNTHETIC))[0]["Image"])
+        for name, override, message in cases:
+            with self.subTest(case=name):
+                host = FakeHost(synthetic=override)
+                with fake_arm64(host, self.runtime_root):
+                    if message is None:
+                        facts = claude_arm.collect_facts(phase="p0", subject_id="upgrade-x", claude_version=CLAUDE_VERSION)
+                        # 采集不判断"是否同一容器"，封存校验拒绝。
+                        root = _private_dir(self.workspace / f"same-{name}")
+                        codex_arm._write_once(root / "facts.json", facts)
+                        with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "断网合成容器事实"):
+                            claude_arm.build_receipt(root, "facts.json")
+                        continue
+                    with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, message):
+                        claude_arm.collect_facts(phase="p0", subject_id="upgrade-x", claude_version=CLAUDE_VERSION)
+        # 两边都显式挂载 /etc/hosts 时来源必须不同（中继会改写 hosts）。
+        host = FakeHost(synthetic=shared_hosts)
+        original = host.inspect
+
+        def inspect(name: str) -> bytes:
+            payload = json.loads(original(name))
+            if name == "capture-cli":
+                payload[0]["Mounts"].append({"Type": "bind", "Source": "/srv/hosts", "Destination": "/etc/hosts", "RW": True})
+            return json.dumps(payload).encode()
+
+        host.inspect = inspect  # type: ignore[method-assign]
+        with fake_arm64(host, self.runtime_root), self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "逐容器文件"):
+            claude_arm.collect_facts(phase="p0", subject_id="upgrade-x", claude_version=CLAUDE_VERSION)
 
     def test_equivalence_projection_is_shared_with_codex_receipts(self) -> None:
         """同一宿主与容器：Claude 收据与 Codex v8 收据的等价摘要相同；但 Claude 入口不接受 Codex 收据。"""
@@ -787,6 +901,18 @@ class ClaudeEnvironmentValidationTests(ClaudeEnvironmentTestCase):
             ("stale-status", set_path(("observed_at_utc",), "2026-10-07T03:10:00.000000+00:00"), "过期"),
             ("containers-shape", set_path(("containers",), [None, None]), "固定双容器"),
             ("collector", set_path(("collector", "tool_sha256"), "0" * 64), "身份漂移"),
+            ("synthetic-missing", lambda facts: facts.pop("synthetic_container"), "字段不闭合"),
+            ("synthetic-network-mode", set_path(("synthetic_container", "network_mode"), "capture-network"), "断网合成容器事实"),
+            ("synthetic-network-name", set_path(("synthetic_container", "network_names"), ["capture-network"]), "断网合成容器事实"),
+            ("synthetic-image", set_path(("synthetic_container", "image_id"), "sha256:" + "8" * 64), "断网合成容器事实"),
+            ("synthetic-mounts", set_path(("synthetic_container", "shared_mounts_sha256"), "7" * 64), "断网合成容器事实"),
+            ("synthetic-same-container", set_path(("synthetic_container", "container_id"), "1" * 64), "断网合成容器事实"),
+            ("synthetic-reference", set_path(("synthetic_container", "reference_container_id"), "f" * 64), "断网合成容器事实"),
+            ("synthetic-name", set_path(("synthetic_container", "name"), "capture-cli"), "断网合成容器事实"),
+            ("synthetic-binary", set_path(("synthetic_container", "client_binary", "sha256"), "cd" * 32), "不是同一份"),
+            ("synthetic-probe-container", set_path(("synthetic_container", "client_binary_probe", "container"), "capture-cli"),
+             "探针事实"),
+            ("synthetic-contract-v1", set_path(("contract_sha256",), FROZEN_CONTRACT_SHA256_V1), "合同摘要漂移"),
         )
         for name, mutate, message in cases:
             with self.subTest(case=name):
@@ -842,8 +968,11 @@ class ClaudeEnvironmentReplayTests(ClaudeEnvironmentTestCase):
         receipt_path.write_bytes(original)
         self.assertEqual(claude_arm.replay(self.root, "receipt.json"), receipt)
 
-        # facts 在封存后被改动（即使改动后的 facts 本身仍合法）：重放必须失败。
+        # facts 在封存后被改动（即使改动后的 facts 本身仍合法）：重放必须失败。版本 2 要求两个容器的二进制
+        # 是同一份，所以两边一起改，保证失败只来自"封存后改动"本身。
         facts["client_binary"]["sha256"] = "cd" * 32
+        facts["synthetic_container"]["client_binary"]["sha256"] = "cd" * 32
+        claude_arm.validate_facts(facts)
         _rewrite(self.root / "facts.json", facts)
         with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "重放结果不一致"):
             claude_arm.replay(self.root, "receipt.json")
@@ -864,28 +993,62 @@ class ClaudeEnvironmentReplayTests(ClaudeEnvironmentTestCase):
         codex_arm._write_once(self.root / "receipt.json", receipt)
         self.assertEqual(claude_arm.replay(self.root, "receipt.json")["producer"], relocated)
 
-    def test_registered_legacy_producer_replays_but_cannot_produce_new_receipts(self) -> None:
-        """历史登记表初始为空；登记后旧摘要只允许只读重放，不允许生成新收据，登记在错误版本下无效。"""
+    def _v1_facts(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """版本 1 形态的 facts：没有断网合成容器、合同摘要取版本 1、collector 为登记的版本 1 摘要。"""
 
-        self.assertEqual(claude_arm.REGISTERED_REPLAY_PRODUCER_HASHES, {})
-        legacy = "e" * 64
         _host, facts = self.collect()
-        producer = dict(facts["collector"], tool_sha256=legacy)
-        facts["collector"] = producer
-        _rewrite(self.root / "facts.json", facts)
-        for registry in ({}, {"2": frozenset({legacy})}):
-            with self.subTest(registry=registry), mock.patch.dict(claude_arm.REGISTERED_REPLAY_PRODUCER_HASHES, registry):
-                with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "身份漂移"):
-                    claude_arm._build_receipt(self.root, "facts.json", replay_producer=producer)
-        with mock.patch.dict(claude_arm.REGISTERED_REPLAY_PRODUCER_HASHES, {"1": frozenset({legacy})}):
-            receipt = claude_arm._build_receipt(self.root, "facts.json", replay_producer=producer)
-            codex_arm._write_once(self.root / "receipt.json", receipt)
-            self.assertEqual(claude_arm.replay(self.root, "receipt.json"), receipt)
-            self.assertEqual(receipt["producer"]["tool_sha256"], legacy)
-            with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "身份漂移"):
-                claude_arm.build_receipt(self.root, "facts.json")
+        legacy = {key: value for key, value in facts.items() if key != "synthetic_container"}
+        producer = dict(facts["collector"], tool_sha256=V1_PRODUCER_SHA256, version="1")
+        legacy["collector"] = producer
+        legacy["contract_sha256"] = claude_arm.contract_sha256("1")
+        return legacy, producer
+
+    def test_registered_v1_producer_replays_but_cannot_produce_new_receipts(self) -> None:
+        """版本 1 的已部署摘要登记为只读重放：旧收据按版本 1 字段闭集与合同逐字重放，不能再生成新收据。"""
+
+        self.assertEqual(claude_arm.REGISTERED_REPLAY_PRODUCER_HASHES, {"1": frozenset({V1_PRODUCER_SHA256})})
+        self.assertEqual(claude_arm.contract_sha256("1"), FROZEN_CONTRACT_SHA256_V1)
+        legacy, producer = self._v1_facts()
+        _rewrite(self.root / "facts.json", legacy)
+        receipt = claude_arm._build_receipt(self.root, "facts.json", replay_producer=producer)
+        self.assertEqual(
+            set(receipt),
+            {
+                "schema_version", "client", "status", "phase", "subject_id", "observed_at_utc", "contract_sha256",
+                "continuity_identity_sha256", "resource_gate", "facts", "producer", "environment_equivalence",
+                "runtime_egress", "client_binary",
+            },
+        )
+        codex_arm._write_once(self.root / "receipt.json", receipt)
+        self.assertEqual(claude_arm.replay(self.root, "receipt.json"), receipt)
+        self.assertEqual(claude_arm.receipt_equivalence_sha256(self.root, receipt), receipt["continuity_identity_sha256"])
         with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "身份漂移"):
-            claude_arm.replay(self.root, "receipt.json")
+            claude_arm.build_receipt(self.root, "facts.json")
+
+    def test_v1_contract_and_fields_stay_frozen(self) -> None:
+        """版本 1 facts 不得带版本 2 字段、不得换成版本 2 合同；未登记的摘要或登记在错误版本下都是身份漂移。"""
+
+        legacy, producer = self._v1_facts()
+        for name, mutate, message in (
+            ("v2-field", lambda facts: facts.update(synthetic_container={}), "字段不闭合"),
+            ("v2-contract", lambda facts: facts.update(contract_sha256=FROZEN_CONTRACT_SHA256), "合同摘要漂移"),
+        ):
+            with self.subTest(case=name):
+                root = _private_dir(self.workspace / f"v1-{name}")
+                payload = json.loads(json.dumps(legacy))
+                mutate(payload)
+                _rewrite(root / "facts.json", payload)
+                with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, message):
+                    claude_arm._build_receipt(root, "facts.json", replay_producer=producer)
+        for registry, version in (({}, "1"), ({"2": frozenset({V1_PRODUCER_SHA256})}, "1"), ({"1": frozenset({V1_PRODUCER_SHA256})}, "3")):
+            with self.subTest(registry=registry, version=version):
+                root = _private_dir(self.workspace / f"registry-{len(list(self.workspace.iterdir()))}")
+                drifted = dict(producer, version=version)
+                payload = dict(legacy, collector=drifted)
+                _rewrite(root / "facts.json", payload)
+                with mock.patch.dict(claude_arm.REGISTERED_REPLAY_PRODUCER_HASHES, registry, clear=True):
+                    with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "身份漂移"):
+                        claude_arm._build_receipt(root, "facts.json", replay_producer=drifted)
 
 
 class ClaudeEnvironmentContractTests(unittest.TestCase):
@@ -893,7 +1056,21 @@ class ClaudeEnvironmentContractTests(unittest.TestCase):
 
     def test_contract_binds_shared_codex_constants_and_claude_probes(self) -> None:
         self.assertEqual(claude_arm.contract_sha256(), FROZEN_CONTRACT_SHA256)
+        self.assertEqual(claude_arm.contract_sha256("2"), FROZEN_CONTRACT_SHA256)
+        self.assertEqual(claude_arm.contract_sha256("1"), FROZEN_CONTRACT_SHA256_V1)
+        with self.assertRaisesRegex(claude_arm.Arm64EnvironmentReceiptError, "没有登记版本"):
+            claude_arm.contract_sha256("3")
         self.assertNotEqual(claude_arm.contract_sha256(), codex_arm.contract_sha256())
+        # 断网合成容器合同只进版本 2：改它不动版本 1 的冻结摘要。
+        for name, value in (
+            ("SYNTHETIC_CONTAINER", "capture-cli-offline"),
+            ("SYNTHETIC_NETWORK_MODE", "host"),
+            ("DOCKER_CONTROL_DESTINATIONS", ("/usr/bin/docker",)),
+            ("PER_CONTAINER_DESTINATIONS", ("/etc/hosts",)),
+        ):
+            with self.subTest(synthetic=name), mock.patch.object(claude_arm, name, value):
+                self.assertNotEqual(claude_arm.contract_sha256(), FROZEN_CONTRACT_SHA256)
+                self.assertEqual(claude_arm.contract_sha256("1"), FROZEN_CONTRACT_SHA256_V1)
         # 共用常量：Codex 改动时 Claude 合同随之变化。
         for name, value in (
             ("ROOT_MAX_USED_PERCENT", codex_arm.ROOT_MAX_USED_PERCENT - 1),
@@ -978,8 +1155,13 @@ class ClaudeEnvironmentContractTests(unittest.TestCase):
                 "official-client-arm64-environment-facts/v1",
                 "official-client-arm64-environment-receipt/v1",
                 "official-client-arm64-environment-producer/v1",
-                "1",
+                "2",
             ),
+        )
+        self.assertEqual(claude_arm.FACT_FIELDS - claude_arm.FACT_FIELDS_V1, {"synthetic_container"})
+        self.assertEqual(
+            (claude_arm.SYNTHETIC_CONTAINER, claude_arm.SYNTHETIC_REFERENCE_CONTAINER, claude_arm.SYNTHETIC_NETWORK_MODE),
+            ("capture-cli-synthetic", "capture-cli", "none"),
         )
         self.assertIs(claude_arm.Arm64EnvironmentReceiptError, codex_arm.Arm64EnvironmentReceiptError)
         self.assertIs(claude_arm.PHASES, codex_arm.PHASES)

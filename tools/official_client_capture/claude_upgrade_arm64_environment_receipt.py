@@ -25,8 +25,12 @@
   同形（name、url、expected_http_status、required_successes、attempts），内容是 Claude 的探针集合。
 * receipt：``official-client-arm64-environment-receipt/v1``，在 Codex v8 收据字段之外带 ``client`` 与
   ``client_binary{path, sha256, version}``（取代 Codex 的 ``rust_tls_probe``）。
-* producer：``official-client-arm64-environment-producer/v1``，``PRODUCER_VERSION = "1"``；producer 对象与 Codex 同为
+* producer：``official-client-arm64-environment-producer/v1``，当前 ``PRODUCER_VERSION = "2"``；producer 对象与 Codex 同为
   四字段 ``{schema_version, tool, tool_sha256, version}``，身份是本文件的精确字节摘要加规范相对坐标（工作树根可迁移）。
+* 版本 2（Claude 升级 B2-06 补充）在 facts 与收据里各加一个 ``synthetic_container``：合成 probe 专用的断网容器
+  ``capture-cli-synthetic`` 的身份、断网事实、与抓包容器的镜像与挂载一致性，以及容器内目标二进制的版本探针，见第八节。
+  facts／receipt／producer 的 schema 名不变（与 Codex 同法，按 producer 版本分支）；版本 1 的 facts 与收据按登记的
+  旧摘要只读重放，字段闭集与合同摘要都按版本 1 冻结。
 
 三、与 Codex 模块的同构关系：调用什么、自实现什么
 ================================================
@@ -94,16 +98,34 @@ WireGuard：Codex v8 的 ``collect`` 已不再读取 wg1 配置（``_wireguard_o
 
 六、只读重放登记
 ================
-``REGISTERED_REPLAY_PRODUCER_HASHES`` 是按 ``PRODUCER_VERSION`` 分组的历史 producer 摘要登记表，初始为空（Claude 还
-没有历史收据）。本文件部署后再修改时，必须把修改前已部署的摘要登记到它生成收据时的版本号下（写成
-``"1": frozenset({"<旧摘要>"})``），只允许只读重放，不允许生成新 facts。``tests/producer_replay_registration.py`` 的
-生成器只读重放登记门禁覆盖本文件，会在提交阶段拦下漏登记。
+``REGISTERED_REPLAY_PRODUCER_HASHES`` 是按 ``PRODUCER_VERSION`` 分组的历史 producer 摘要登记表。版本 1 的唯一一份
+（B1-10 ``8c4298131`` 起到 B2-06 ``697235dca`` 一直未变、已随受管部署上到 ARM64）登记在 ``"1"`` 下，只允许只读重放，
+不允许生成新 facts。以后再改本文件时，同样把修改前已部署的摘要登记到它生成收据时的版本号下。
+``tests/producer_replay_registration.py`` 的生成器只读重放登记门禁覆盖本文件，会在提交阶段拦下漏登记。
 
 七、跨模块依赖的边界
 ====================
 本 producer 的校验结果还依赖 Codex 模块共享函数的行为，而 producer 身份只覆盖本文件字节。Codex 模块受 Codex 身份
 守恒与其自身重放登记门禁约束，改动这些共享函数时须保持对既有 v8 收据（以及本收据）的只读重放兼容；共用常量的变化
 由合同摘要直接暴露（见第四节）。
+
+八、版本 2：合成 probe 的断网容器
+================================
+合成 probe（中继按冻结计划合成应答，不转发上游）仍会让客户端访问没被 hosts 覆盖的域名（启动预检、刷新端点之外的
+主机等）并携带真实凭据；只有不接入任何网络的容器能保证一个真实请求都发不出去。2.1.226 的 FW-F 完整 Campaign 让
+合成 probe 走 ``--network none`` 的独立容器，B2-06 在 ARM64 沿用这一做法：``capture-cli-synthetic``。收据证明：
+
+* 断网：``HostConfig.NetworkMode == "none"``，``NetworkSettings.Networks`` 只能是空或 ``none``，且没有任何 IPv4／IPv6
+  地址与网关；
+* 同镜像：与抓包容器 ``capture-cli`` 同一 image ID；
+* 同挂载：两边挂载逐项相同（类型、来源、目标、读写），只剔除两类——Docker 控制面（``docker.sock`` 与 docker 客户端，
+  断网容器里必须不存在，否则可借宿主 Docker 绕开断网）与逐容器文件（``/etc/hosts``、``/etc/hostname``、
+  ``/etc/resolv.conf``，中继会改写 hosts，两边若都显式挂载必须来源不同）；
+* 同二进制：容器内 ``/opt/claude-<v>/claude`` 的版本探针与 ``capture-cli`` 同一合同，摘要必须与 ``client_binary``
+  相同（两边经同一只读挂载执行同一份字节）。
+
+断网容器不接入出口守护：它没有网卡也没有地址，R15 的放行键（cgroup、网卡、源地址）与固定 IP 都不涉及它；收据的
+连续性／等价身份仍只取 Codex v8 的等价投影（不含本节容器），断网容器的跨时间连续性由取证 attempt 的前后探针覆盖。
 """
 
 from __future__ import annotations
@@ -134,15 +156,20 @@ CLIENT = "claude"
 FACTS_SCHEMA = "official-client-arm64-environment-facts/v1"
 RECEIPT_SCHEMA = "official-client-arm64-environment-receipt/v1"
 PRODUCER_SCHEMA = "official-client-arm64-environment-producer/v1"
-PRODUCER_VERSION = "1"
+PRODUCER_VERSION = "2"
 PRODUCER_TOOL_RELATIVE = (
     "tools/official_client_capture/claude_upgrade_arm64_environment_receipt.py"
 )
 NETWORK_CONTRACT_SCHEMA = "official-client-arm64-network-contract/v1"
+# 版本 2 的合同多一节断网合成容器（见模块文档第八节），合同 schema 随之升到 v2；版本 1 的合同按原样冻结。
+NETWORK_CONTRACT_SCHEMA_V2 = "official-client-arm64-network-contract/v2"
 # 历史 producer 摘要登记表：按 PRODUCER_VERSION 分组，只允许只读重放已封存收据，不允许生成新 facts。
-# 初始为空——Claude 还没有任何历史收据。本文件部署后再修改时，把修改前已部署的摘要登记到它生成收据时的
-# 版本号下，例如 "1": frozenset({"<旧摘要>"})，并在注释写明它生成过哪些收据（生成器只读重放登记门禁会检查）。
-REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {}
+# 版本 1：B1-10（8c4298131）新建后到 B2-06（697235dca）一直是同一份字节，已随受管部署上到 ARM64，入口预检可能已用它
+# 生成过 p0／attempt 等环境收据；B2-06 补充断网合成容器后升为版本 2，旧收据只读重放。以后再改本文件时，同样把修改前
+# 已部署的摘要登记到它生成收据时的版本号下（生成器只读重放登记门禁会检查）。
+REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
+    "1": frozenset({"8e7e5c168e0c36f9f9792b7e630394cd251a5c61a4805e3c0be2ac264325bad0"}),
+}
 
 # 与 Codex 模块共用同一个异常类：调用方捕获一个类即可覆盖本模块与被调用的 Codex 函数抛出的错误。
 Arm64EnvironmentReceiptError = codex_arm.Arm64EnvironmentReceiptError
@@ -150,7 +177,8 @@ Arm64EnvironmentReceiptError = codex_arm.Arm64EnvironmentReceiptError
 PHASES = codex_arm.PHASES
 
 # facts 顶层字段闭集。与 Codex v8 相比：多 client、client_binary、client_binary_probe，少 rust_tls_readiness。
-FACT_FIELDS = frozenset(
+# 版本 1 冻结为 FACT_FIELDS_V1；版本 2 再多 synthetic_container（断网合成容器，见模块文档第八节）。
+FACT_FIELDS_V1 = frozenset(
     {
         "schema_version",
         "client",
@@ -167,6 +195,7 @@ FACT_FIELDS = frozenset(
         "collector",
     }
 )
+FACT_FIELDS = FACT_FIELDS_V1 | {"synthetic_container"}
 
 # Claude 启动前实际依赖的 TLS 路径：Claude Code 启动时对 base URL 的无凭据 HEAD 预检。每项为
 # （探针名, URL, 期望 HTTP 状态），与 Codex 的 TLS_READINESS_PROBES 同形；请求方法单独冻结在 TLS_READINESS_METHOD。
@@ -191,6 +220,18 @@ CLIENT_PROBE_HOST_RUNTIME_ROOT = codex_arm.RUST_TLS_PROBE_HOST_RUNTIME_ROOT
 CLIENT_PROBE_CONTAINER_RUNTIME_ROOT = codex_arm.RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT
 # GNU coreutils sha256sum 的单文件输出：64 位小写十六进制、一个空格、文本模式空格或二进制模式星号、文件名、换行。
 SHA256SUM_LINE_RE = re.compile(r"(?P<sha256>[0-9a-f]{64}) [ *](?P<path>[^\n]+)\n")
+
+# 版本 2：合成 probe 的断网容器（模块文档第八节）。名称与参照容器都是固定合同，工具不随部署改名。
+SYNTHETIC_CONTAINER = "capture-cli-synthetic"
+SYNTHETIC_REFERENCE_CONTAINER = CLIENT_BINARY_PROBE_CONTAINER
+SYNTHETIC_NETWORK_MODE = "none"
+SYNTHETIC_ALLOWED_NETWORK_NAMES = frozenset({"none"})
+# Docker 控制面挂载：断网容器里必须不存在（可借宿主 Docker 起联网容器绕开断网）；参照容器里的这类挂载不参与比较。
+DOCKER_CONTROL_SOCKET_NAME = "docker.sock"
+DOCKER_CONTROL_DESTINATIONS = ("/usr/bin/docker", "/usr/local/bin/docker")
+# 逐容器文件：中继会改写 hosts，两容器不得共用；显式挂载时不参与一致性比较，两边都挂载时来源必须不同。
+PER_CONTAINER_DESTINATIONS = ("/etc/hostname", "/etc/hosts", "/etc/resolv.conf")
+SYNTHETIC_ADDRESS_FIELDS = ("IPAddress", "Gateway", "GlobalIPv6Address", "IPv6Gateway")
 
 # Codex ``_validate_container`` 只在 producer_version 属于 {"5"} ∪ RUST_TLS_READINESS_PRODUCER_VERSIONS 时把
 # tls_readiness 计入容器字段闭集，并按 Codex 的 ChatGPT／OpenAI 端点逐项校验。Claude 容器的 tls_readiness 是 Claude
@@ -271,12 +312,10 @@ def _validated_producer_version(value: Any, *, allow_legacy_replay: bool) -> str
     raise Arm64EnvironmentReceiptError("Claude ARM64 事实采集器身份漂移")
 
 
-def contract_sha256() -> str:
-    """Claude v1 合同摘要：与客户端无关的部分逐项读取 Codex 模块常量，再加 Claude 专属探针合同（见模块文档第四节）。"""
+def _contract_v1() -> dict[str, Any]:
+    """版本 1 合同：与客户端无关的部分逐项读取 Codex 模块常量，再加 Claude 专属探针合同（见模块文档第四节）。"""
 
-    return codex_arm._sha256_bytes(
-        codex_arm._canonical(
-            {
+    return {
                 "schema_version": NETWORK_CONTRACT_SCHEMA,
                 "client": CLIENT,
                 "shared_with_codex": {
@@ -309,8 +348,38 @@ def contract_sha256() -> str:
                     "sha256_source": "容器内 /usr/bin/sha256sum，版本探针前后各读一次且必须一致",
                 },
             }
-        )
-    )
+
+
+def _contract_v2() -> dict[str, Any]:
+    """版本 2 合同：版本 1 的全部内容，加断网合成容器一节（见模块文档第八节）。"""
+
+    contract = _contract_v1()
+    contract["schema_version"] = NETWORK_CONTRACT_SCHEMA_V2
+    contract["synthetic_container"] = {
+        "name": SYNTHETIC_CONTAINER,
+        "reference_container": SYNTHETIC_REFERENCE_CONTAINER,
+        "network_mode": SYNTHETIC_NETWORK_MODE,
+        "allowed_network_names": sorted(SYNTHETIC_ALLOWED_NETWORK_NAMES),
+        "address_fields_must_be_empty": list(SYNTHETIC_ADDRESS_FIELDS),
+        "image": "与参照容器同一 image ID",
+        "mounts": "与参照容器逐项相同（类型、来源、目标、读写），剔除 Docker 控制面与逐容器文件",
+        "docker_control": {"socket_name": DOCKER_CONTROL_SOCKET_NAME, "destinations": list(DOCKER_CONTROL_DESTINATIONS)},
+        "per_container_destinations": list(PER_CONTAINER_DESTINATIONS),
+        "client_binary": "与参照容器同一路径模板与版本探针合同，摘要必须与 client_binary 相同",
+    }
+    return contract
+
+
+def contract_sha256(version: str = PRODUCER_VERSION) -> str:
+    """合同摘要：按 producer 版本取冻结合同（版本 1 无断网合成容器一节）。"""
+
+    if version == "1":
+        contract = _contract_v1()
+    elif version == "2":
+        contract = _contract_v2()
+    else:
+        raise Arm64EnvironmentReceiptError(f"Claude ARM64 环境合同没有登记版本 {version!r}")
+    return codex_arm._sha256_bytes(codex_arm._canonical(contract))
 
 
 def client_binary_target(claude_version: str) -> dict[str, str]:
@@ -325,6 +394,13 @@ def client_binary_target(claude_version: str) -> dict[str, str]:
         "path": CLIENT_BINARY_TEMPLATE.format(version=claude_version),
         "version": claude_version,
     }
+
+
+def synthetic_binary_target(claude_version: str) -> dict[str, str]:
+    """断网合成容器里的目标二进制：与 ``client_binary_target`` 同一路径模板与版本，只换容器（版本 2）。"""
+
+    target = client_binary_target(claude_version)
+    return {**target, "container": SYNTHETIC_CONTAINER}
 
 
 def _expected_version_stdout(claude_version: str) -> str:
@@ -666,6 +742,123 @@ def _client_binary_observation(target: dict[str, str]) -> tuple[dict[str, Any], 
     )
 
 
+def _inspect_single(name: str) -> tuple[dict[str, Any], bytes]:
+    """``docker inspect <容器>`` 的唯一对象与原始字节（经 Codex 受 deadline 约束的执行器）。"""
+
+    raw = codex_arm._run(["docker", "inspect", name], f"{name} docker inspect", operation=f"arm64:docker-inspect:{name}")
+    try:
+        inspected = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise Arm64EnvironmentReceiptError(f"{name} inspect 不是合法 JSON") from error
+    if not isinstance(inspected, list) or len(inspected) != 1 or not isinstance(inspected[0], dict):
+        raise Arm64EnvironmentReceiptError(f"{name} inspect 结果格式非法")
+    return inspected[0], raw
+
+
+def _is_docker_control_mount(mount: dict[str, str]) -> bool:
+    """Docker 控制面挂载：docker.sock（任一端）或 docker 客户端二进制。"""
+
+    return (
+        PurePosixPath(mount["destination"]).name == DOCKER_CONTROL_SOCKET_NAME
+        or PurePosixPath(mount["source"]).name == DOCKER_CONTROL_SOCKET_NAME
+        or mount["destination"] in DOCKER_CONTROL_DESTINATIONS
+    )
+
+
+def _classified_mounts(item: dict[str, Any], name: str) -> tuple[list[dict[str, Any]], list[str], dict[str, str]]:
+    """把 inspect 的 Mounts 分成三类：可比较挂载（按目标排序）、Docker 控制面目标、逐容器文件（目标 → 来源）。"""
+
+    raw = item.get("Mounts")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or not all(isinstance(mount, dict) for mount in raw):
+        raise Arm64EnvironmentReceiptError(f"{name} 挂载表格式非法")
+    shared: list[dict[str, Any]] = []
+    docker_control: list[str] = []
+    per_container: dict[str, str] = {}
+    for mount in raw:
+        row = {
+            "type": str(mount.get("Type", "")),
+            "source": str(mount.get("Name") or mount.get("Source") or ""),
+            "destination": str(mount.get("Destination", "")),
+            "rw": mount.get("RW") is True,
+        }
+        # tmpfs 挂载没有来源；其余类型（bind、volume）必须有来源（卷取卷名，绑定取宿主路径）。
+        if not row["destination"].startswith("/") or (not row["source"] and row["type"] != "tmpfs"):
+            raise Arm64EnvironmentReceiptError(f"{name} 挂载坐标非法")
+        if _is_docker_control_mount(row):
+            docker_control.append(row["destination"])
+        elif row["destination"] in PER_CONTAINER_DESTINATIONS:
+            per_container[row["destination"]] = row["source"]
+        else:
+            shared.append(row)
+    destinations = [row["destination"] for row in shared]
+    if len(destinations) != len(set(destinations)):
+        raise Arm64EnvironmentReceiptError(f"{name} 挂载目标重复")
+    return sorted(shared, key=lambda row: row["destination"]), sorted(docker_control), per_container
+
+
+def _synthetic_container_observation(claude_version: str) -> dict[str, Any]:
+    """断网合成容器（版本 2）：断网、与参照容器同镜像同挂载、没有 Docker 控制面、容器内目标二进制身份（第八节）。"""
+
+    reference, reference_raw = _inspect_single(SYNTHETIC_REFERENCE_CONTAINER)
+    synthetic, synthetic_raw = _inspect_single(SYNTHETIC_CONTAINER)
+    state = synthetic.get("State") if isinstance(synthetic.get("State"), dict) else {}
+    host_config = synthetic.get("HostConfig") if isinstance(synthetic.get("HostConfig"), dict) else {}
+    settings = synthetic.get("NetworkSettings") if isinstance(synthetic.get("NetworkSettings"), dict) else {}
+    networks = settings.get("Networks") if isinstance(settings.get("Networks"), dict) else {}
+    container_id = str(synthetic.get("Id", ""))
+    image_id = str(synthetic.get("Image", ""))
+    reference_id = str(reference.get("Id", ""))
+    if state.get("Running") is not True:
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 当前未运行")
+    if (
+        not codex_arm.CONTAINER_ID_RE.fullmatch(container_id)
+        or not codex_arm.IMAGE_ID_RE.fullmatch(image_id)
+        or not codex_arm.CONTAINER_ID_RE.fullmatch(reference_id)
+    ):
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 或参照容器的身份非法")
+    if host_config.get("NetworkMode") != SYNTHETIC_NETWORK_MODE:
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 必须以 network_mode none 运行（断网）")
+    if not set(networks).issubset(SYNTHETIC_ALLOWED_NETWORK_NAMES) or any(
+        not isinstance(binding, dict) or any(binding.get(field) for field in SYNTHETIC_ADDRESS_FIELDS)
+        for binding in networks.values()
+    ):
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 接入了网络或带有地址／网关，不是断网容器")
+    if image_id != str(reference.get("Image", "")):
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 与 {SYNTHETIC_REFERENCE_CONTAINER} 不是同一镜像")
+    shared, docker_control, per_container = _classified_mounts(synthetic, SYNTHETIC_CONTAINER)
+    reference_shared, reference_control, reference_private = _classified_mounts(reference, SYNTHETIC_REFERENCE_CONTAINER)
+    if docker_control:
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 挂载了 Docker 控制面，可绕开断网：{docker_control}")
+    if shared != reference_shared:
+        raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 的挂载与 {SYNTHETIC_REFERENCE_CONTAINER} 不一致")
+    for destination in set(per_container) & set(reference_private):
+        if per_container[destination] == reference_private[destination]:
+            raise Arm64EnvironmentReceiptError(f"{SYNTHETIC_CONTAINER} 与参照容器共用逐容器文件 {destination}")
+    client_binary, client_binary_probe = _client_binary_observation(synthetic_binary_target(claude_version))
+    mounts_sha256 = codex_arm._sha256_bytes(codex_arm._canonical(shared))
+    return {
+        "name": SYNTHETIC_CONTAINER,
+        "container_id": container_id,
+        "image_id": image_id,
+        "network_mode": SYNTHETIC_NETWORK_MODE,
+        "network_names": sorted(networks),
+        "reference_container": SYNTHETIC_REFERENCE_CONTAINER,
+        "reference_container_id": reference_id,
+        "shared_mounts_sha256": mounts_sha256,
+        "reference_shared_mounts_sha256": codex_arm._sha256_bytes(codex_arm._canonical(reference_shared)),
+        "shared_mount_count": len(shared),
+        "excluded_reference_mounts": reference_control,
+        "client_binary": client_binary,
+        "client_binary_probe": client_binary_probe,
+        "raw_sha256": {
+            "docker_inspect": codex_arm._sha256_bytes(synthetic_raw),
+            "reference_docker_inspect": codex_arm._sha256_bytes(reference_raw),
+        },
+    }
+
+
 def _collect_facts(*, phase: str, subject_id: str, claude_version: str) -> dict[str, Any]:
     """只读采集真实抓包拓扑、资源与客户端二进制，并在前后核验当前授权出口策略（与 Codex v8 同序）。
 
@@ -688,12 +881,16 @@ def _collect_facts(*, phase: str, subject_id: str, claude_version: str) -> dict[
         for name in sorted(codex_arm.CONTAINER_CONTRACTS)
     ]
     client_binary, client_binary_probe = _client_binary_observation(target)
+    synthetic = _synthetic_container_observation(claude_version)
     after, checked_at = codex_arm._checked_runtime_egress()
     if before["policy_sha256"] != after["policy_sha256"] or any(
         item["container_id"] != after["runtime"]["services"][item["name"]]["container_id"]
         for item in containers
     ):
         raise Arm64EnvironmentReceiptError("环境采集期间策略或容器身份变化，须重新准入")
+    reference = next(item for item in containers if item["name"] == SYNTHETIC_REFERENCE_CONTAINER)
+    if synthetic["reference_container_id"] != reference["container_id"]:
+        raise Arm64EnvironmentReceiptError("断网合成容器比对期间参照容器发生重建，须重新采集")
     return {
         "schema_version": FACTS_SCHEMA,
         "client": CLIENT,
@@ -710,6 +907,7 @@ def _collect_facts(*, phase: str, subject_id: str, claude_version: str) -> dict[
         "containers": containers,
         "client_binary": client_binary,
         "client_binary_probe": client_binary_probe,
+        "synthetic_container": synthetic,
         "collector": _current_producer(),
     }
 
@@ -781,11 +979,11 @@ def _validate_tls_readiness(value: Any, container_name: str) -> None:
                 )
 
 
-def _validate_client_binary(binary_value: Any, probe_value: Any) -> None:
-    """校验客户端二进制身份与版本探针事实：路径由版本按模板派生，版本原文恰为冻结输出。"""
+def _validate_client_binary(binary_value: Any, probe_value: Any, *, container: str = CLIENT_BINARY_PROBE_CONTAINER) -> None:
+    """校验客户端二进制身份与版本探针事实：路径由版本按模板派生，版本原文恰为冻结输出，探针在指定容器内执行。"""
 
     binary = codex_arm._expect(binary_value, {"path", "sha256", "version"}, "client_binary")
-    target = client_binary_target(binary.get("version"))
+    target = {**client_binary_target(binary.get("version")), "container": container}
     if binary.get("path") != target["path"]:
         raise Arm64EnvironmentReceiptError("client_binary.path 与本轮目标版本的路径模板不一致")
     if not codex_arm.SHA256_RE.fullmatch(str(binary.get("sha256", ""))):
@@ -808,6 +1006,51 @@ def _validate_client_binary(binary_value: Any, probe_value: Any) -> None:
         or not 0 < float(duration) <= CLIENT_BINARY_PROBE_TIMEOUT_SECONDS
     ):
         raise Arm64EnvironmentReceiptError("Claude 客户端二进制探针事实与冻结合同不一致")
+
+
+def _validate_synthetic_container(value: Any, facts: dict[str, Any]) -> None:
+    """版本 2：断网合成容器事实——断网、与参照容器同镜像同挂载、没有 Docker 控制面、二进制与 client_binary 相同。"""
+
+    item = codex_arm._expect(
+        value,
+        {
+            "name", "container_id", "image_id", "network_mode", "network_names", "reference_container",
+            "reference_container_id", "shared_mounts_sha256", "reference_shared_mounts_sha256", "shared_mount_count",
+            "excluded_reference_mounts", "client_binary", "client_binary_probe", "raw_sha256",
+        },
+        "synthetic_container",
+    )
+    reference = next(
+        (container for container in facts["containers"] if container.get("name") == SYNTHETIC_REFERENCE_CONTAINER), None
+    )
+    excluded = item.get("excluded_reference_mounts")
+    raw = codex_arm._expect(item.get("raw_sha256"), {"docker_inspect", "reference_docker_inspect"}, "synthetic_container.raw_sha256")
+    count = item.get("shared_mount_count")
+    if (
+        reference is None
+        or item.get("name") != SYNTHETIC_CONTAINER
+        or item.get("reference_container") != SYNTHETIC_REFERENCE_CONTAINER
+        or item.get("reference_container_id") != reference.get("container_id")
+        or item.get("image_id") != reference.get("image_id")
+        or not codex_arm.CONTAINER_ID_RE.fullmatch(str(item.get("container_id", "")))
+        or item.get("container_id") == reference.get("container_id")
+        or item.get("network_mode") != SYNTHETIC_NETWORK_MODE
+        or not isinstance(item.get("network_names"), list)
+        or not set(item["network_names"]).issubset(SYNTHETIC_ALLOWED_NETWORK_NAMES)
+        or item["network_names"] != sorted(set(item["network_names"]))
+        or not codex_arm.SHA256_RE.fullmatch(str(item.get("shared_mounts_sha256", "")))
+        or item.get("shared_mounts_sha256") != item.get("reference_shared_mounts_sha256")
+        or type(count) is not int
+        or count <= 0
+        or not isinstance(excluded, list)
+        or excluded != sorted(excluded)
+        or any(not isinstance(entry, str) or not entry.startswith("/") for entry in excluded)
+        or not all(codex_arm.SHA256_RE.fullmatch(str(raw.get(key, ""))) for key in ("docker_inspect", "reference_docker_inspect"))
+    ):
+        raise Arm64EnvironmentReceiptError("断网合成容器事实与冻结合同不一致（断网、同镜像、同挂载或参照身份）")
+    _validate_client_binary(item.get("client_binary"), item.get("client_binary_probe"), container=SYNTHETIC_CONTAINER)
+    if item.get("client_binary") != facts.get("client_binary"):
+        raise Arm64EnvironmentReceiptError("断网合成容器里的目标二进制与抓包容器不是同一份")
 
 
 def _resource_gate(value: Any, phase: str) -> dict[str, Any]:
@@ -858,13 +1101,17 @@ def _validate_facts(facts: Any, *, allow_legacy_replay: bool) -> dict[str, Any]:
     producer_version = _validated_producer_version(
         facts.get("collector"), allow_legacy_replay=allow_legacy_replay
     )
-    if producer_version != PRODUCER_VERSION:
-        # v1 是首个版本。以后升 PRODUCER_VERSION 时，旧版本 facts 必须按它生成时的字段闭集与合同摘要只读重放：
-        # 在这里按版本分支冻结历史合同（与 Codex validate_facts 的 v1～v7 分支同法），不能用当前合同重写结论。
+    # 历史版本按它生成时的字段闭集与合同摘要只读重放（与 Codex validate_facts 的 v1～v7 分支同法），不能用当前合同
+    # 重写结论：版本 1 没有断网合成容器；版本 2 起必须有。
+    if producer_version == "1":
+        fact_fields = FACT_FIELDS_V1
+    elif producer_version == "2":
+        fact_fields = FACT_FIELDS
+    else:
         raise Arm64EnvironmentReceiptError(
             f"Claude ARM64 环境 facts 版本 {producer_version} 没有登记事实合同"
         )
-    codex_arm._expect(facts, set(FACT_FIELDS), "facts")
+    codex_arm._expect(facts, set(fact_fields), "facts")
     if facts.get("schema_version") != FACTS_SCHEMA:
         raise Arm64EnvironmentReceiptError("facts.schema_version 不匹配")
     if facts.get("client") != CLIENT:
@@ -873,7 +1120,7 @@ def _validate_facts(facts: Any, *, allow_legacy_replay: bool) -> dict[str, Any]:
         raise Arm64EnvironmentReceiptError("facts.phase 非法")
     codex_arm._safe_id(facts.get("subject_id"), "facts.subject_id")
     codex_arm._rfc3339(facts.get("observed_at_utc"), "facts.observed_at_utc")
-    if facts.get("contract_sha256") != contract_sha256():
+    if facts.get("contract_sha256") != contract_sha256(producer_version):
         raise Arm64EnvironmentReceiptError("固定网络、资源或 Claude 探针合同摘要漂移")
     host = codex_arm._expect(facts.get("host"), {"hostname", "architecture"}, "facts.host")
     if (
@@ -928,6 +1175,8 @@ def _validate_facts(facts: Any, *, allow_legacy_replay: bool) -> dict[str, Any]:
         }:
             raise Arm64EnvironmentReceiptError("容器网络事实与出口守护登记不一致")
     _validate_client_binary(facts.get("client_binary"), facts.get("client_binary_probe"))
+    if producer_version != "1":
+        _validate_synthetic_container(facts.get("synthetic_container"), facts)
 
     # 连续性与等价身份都取 Codex v8 的等价投影（宿主、镜像与抓包拓扑），与 Codex v8 相同；二进制身份见收据
     # client_binary。同一宿主与容器下，本收据与 Codex v8 收据的等价摘要相同。
@@ -970,7 +1219,7 @@ def _build_receipt(
         raise Arm64EnvironmentReceiptError("facts 与 receipt producer 身份不一致")
     if validation["producer_version"] != producer.get("version"):
         raise Arm64EnvironmentReceiptError("facts 与 receipt producer 版本不一致")
-    return {
+    receipt: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA,
         "client": CLIENT,
         "status": "passed",
@@ -1000,6 +1249,17 @@ def _build_receipt(
             key: facts["client_binary"][key] for key in ("path", "sha256", "version")
         },
     }
+    if validation["producer_version"] != "1":
+        synthetic = facts["synthetic_container"]
+        receipt["synthetic_container"] = {
+            "name": synthetic["name"],
+            "container_id": synthetic["container_id"],
+            "image_id": synthetic["image_id"],
+            "network_mode": synthetic["network_mode"],
+            "shared_mounts_sha256": synthetic["shared_mounts_sha256"],
+            "client_binary": dict(synthetic["client_binary"]),
+        }
+    return receipt
 
 
 def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:

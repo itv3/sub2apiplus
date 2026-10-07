@@ -8,9 +8,10 @@
 （``_campaign_arguments``、``_run_job_impl``）的实现都在这里。另两个 wire 根 ``_load_plan_jobs``、``_job_context`` 与场景
 清单的展开、运行期变量绑定由 B2-05 在 ``claude_upgrade_plan`` 落实，本模块直接调用。
 
-* 动作体：场景清单里每个 Job 的每一步都是 ``docker exec <capture_container> python3 <capture_tool_root>/claude_fw_e_relay.py
+* 动作体：场景清单里每个 Job 的每一步都是 ``docker exec <容器> python3 <capture_tool_root>/claude_fw_e_relay.py
   capture --execute …``（hosts override 与 leaf cert、relay、claude 由 relay 在容器内完成），经 Campaign 租约的独立监督器
   ``SupervisorClient.run_command`` 执行；没有活跃租约时（单元测试、离线调用）以独立进程组执行并受同一条 deadline 约束。
+  真实上游步骤进联网的抓包容器 ``capture_container``，合成步骤进断网容器 ``synthetic_capture_container``（见第五节）。
 * 每个 Job 的环境闭环（每次执行都做一遍）：before 探针 → 每步执行前在宿主签发运行镜像凭据并核对容器内可见 → 执行步骤 →
   after 探针 → 前后快照逐字比较（漂移即判环境污染、不补跑、停止后续 Job）→ relay 清单核对；Job 终态（含有限补跑与失败证据
   归档）之后做一次 Job 级证据权限收口、写 Job 闭环收据，再追加一条 Job checkpoint。
@@ -45,6 +46,25 @@ attempt 收据），唯一差别是把 relay 步骤的 ``--execute`` 与请求�
 启动中继与客户端之前返回计划，不发任何请求；编排器据此核对计划回显、并要求证据根保持不存在。演练 attempt 写在
 ``<Campaign>/rehearsal/official/attempts/``，与正式 attempt 命名空间分开，任何正式读侧都看不到它。演练用 Campaign 由本模块
 命令行 ``rehearsal-campaign`` 生成，演练结果由 ``verify-rehearsal`` 只读复核（见 ``main``）。
+
+五、两个采集容器：联网的抓包容器与断网的合成容器
+================================================
+合成 probe 不转发上游，但客户端仍会访问没被 hosts 覆盖的域名，并带着真实凭据。2.1.226 的 FW-F 完整取证让 21 个合成
+probe 在 ``--network none`` 的容器里执行；这里沿用同一隔离，只是容器由 ARM64 compose 常驻（``capture-cli-synthetic``），
+不是每轮临时创建：
+
+* 路由：B2-05 在 plan 时就把真实上游步骤钉在 ``{capture_container}``、合成步骤钉在 ``{synthetic_capture_container}``；
+  执行时 ``ScenarioReceiptContext`` 再按冻结的 ``--upstream-ip`` 复核一次（真实上游步骤必带、合成步骤禁带），写错即失败；
+* 预约前：``_verify_official_binaries`` 调 ARM64 环境收据版本 2 的同一份断网容器核验（存在且运行、``network_mode``
+  为 none 且没有任何地址、与抓包容器同镜像、去掉 Docker 控制面后挂载逐项相同、两边不共用 hosts 等逐容器文件、容器内
+  目标二进制版本自报与摘要），两个容器里的二进制都必须等于 ``target_sha256``；``_container_preconditions`` 核对两个容器
+  里的凭据、CA 与全局状态文件，正式 run 还要求两边的全局状态内容相同（只记布尔值，不记内容或摘要）；
+* 每一步：宿主运行凭据按步骤实际所在的容器签发并核对容器内可见（relay 在容器内用 hostname 与 mountinfo 复核容器身份）；
+* 探针：before／after 两个容器各采一份，五类快照都按角色（``capture``／``synthetic``）分开记录，任一容器漂移或残留取证
+  进程都判环境污染；
+* 监督器：出口守护下 ``job:`` 开头的操作会绑定唯一准入的 ``capture-cli``，失败时停掉它、并拒绝 ``docker exec`` 到别的
+  容器（``codex_upgrade_supervisor._capture_begin``／``_capture_pin_command``）。断网容器不在出口准入里，合成步骤的操作名
+  因此改用 ``synthetic-job:`` 前缀：不建停止绑定、不改写目标；没有网络就没有真实请求可停，残留进程由 after 探针判污染。
 """
 
 from __future__ import annotations
@@ -95,8 +115,9 @@ CAPTURE_RESERVATION_SCHEMA = "claude-upgrade-capture-reservation/v1"
 CAPTURE_ATTEMPT_SCHEMA = "claude-upgrade-capture-attempt/v1"
 JOB_CHECKPOINT_SCHEMA = "claude-upgrade-job-checkpoint/v1"
 JOB_CLOSURE_SCHEMA = "claude-upgrade-job-closure/v1"
-PROBE_MANIFEST_SCHEMA = "claude-upgrade-environment-probe/v1"
-BINARY_VERIFICATION_SCHEMA = "claude-upgrade-official-binary-verification/v1"
+# 探针与二进制核验 v2：同时覆盖联网的抓包容器与断网的合成容器（v1 只有抓包容器，没有任何正式 attempt 用过）。
+PROBE_MANIFEST_SCHEMA = "claude-upgrade-environment-probe/v2"
+BINARY_VERIFICATION_SCHEMA = "claude-upgrade-official-binary-verification/v2"
 WATCHDOG_HEARTBEAT_SCHEMA = "claude-upgrade-watchdog-heartbeat/v1"
 WATCHDOG_CHECKPOINT_SCHEMA = "claude-upgrade-watchdog-checkpoint/v1"
 ENVIRONMENT_CONTAMINATION_SCHEMA = "claude-upgrade-environment-contamination/v1"
@@ -158,6 +179,15 @@ CAPTURE_PROCESS_SCRIPT_LABELS = {
 }
 CAPTURE_PROCESS_BINARY_LABELS = {"claude": "claude", "mitmdump": "mitmdump", "tcpdump": "tcpdump", "tshark": "tshark"}
 RELAY_ACKNOWLEDGE_FLAGS = ("--acknowledge-live-requests", "--acknowledge-synthetic-responses")
+# 两个采集容器的角色 → 总计划 configuration 里的容器名字段（探针、凭据签发与前提检查都按角色区分）。
+ROLE_CAPTURE = "capture"
+ROLE_SYNTHETIC = "synthetic"
+CONTAINER_ROLE_FIELDS = {ROLE_CAPTURE: "capture_container", ROLE_SYNTHETIC: "synthetic_capture_container"}
+# 步骤操作名：真实上游步骤沿用 ``job:``（出口守护下绑定 capture-cli 的停止合同），合成步骤改用 ``synthetic-job:``。
+LIVE_STEP_OPERATION_PREFIX = "job:"
+SYNTHETIC_STEP_OPERATION_PREFIX = "synthetic-job:"
+# relay 读取全局状态的开关与缺省值（场景清单不传时 relay 用 /root/.claude.json）。
+GLOBAL_STATE_FLAG = "--claude-global-state-file"
 
 
 def _client_adapter() -> Any:
@@ -510,7 +540,11 @@ def _job_incremental_metadata(
 
 @dataclass(frozen=True)
 class CaptureLayout:
-    """一次取证的坐标布局：宿主数据根、容器内的数据根别名与工具执行副本、采集容器与运行镜像。"""
+    """一次取证的坐标布局：宿主数据根、容器内的数据根别名与工具执行副本、两个采集容器与运行镜像。
+
+    ``capture_container`` 是联网的抓包容器（真实上游步骤），``synthetic_container`` 是与它同镜像、同挂载的断网容器
+    （合成步骤）。两个容器挂载相同，所以容器坐标到宿主坐标的映射对两者一致。
+    """
 
     host_data_root: Path
     capture_root: PurePosixPath
@@ -518,10 +552,16 @@ class CaptureLayout:
     capture_tool_root: PurePosixPath
     host_tool_root: Path
     runtime_image: str
+    synthetic_container: str
 
     @property
     def host_runs_root(self) -> Path:
         return self.host_data_root / "runs"
+
+    def containers(self) -> dict[str, str]:
+        """角色 → 容器名（``capture``、``synthetic``）。"""
+
+        return {ROLE_CAPTURE: self.capture_container, ROLE_SYNTHETIC: self.synthetic_container}
 
     def container_data_aliases(self) -> tuple[PurePosixPath, ...]:
         """容器内指向同一宿主数据根的别名：``capture_root`` 与登记 runs 别名的上级目录（``/capture``、``/root/oauth-capture``）。"""
@@ -552,12 +592,17 @@ def _capture_layout(campaign_dir: Path, manifest: Mapping[str, Any]) -> CaptureL
     capture_root = str(configuration.get("capture_root", ""))
     tool_root = str(configuration.get("capture_tool_root", ""))
     container = str(configuration.get("capture_container", ""))
+    synthetic_container = str(configuration.get("synthetic_capture_container", ""))
     runtime_image = str(configuration.get("runtime_image", ""))
     for label, value in (("capture_root", capture_root), ("capture_tool_root", tool_root)):
         if not SAFE_ABSOLUTE_PATH_RE.fullmatch(value) or ".." in PurePosixPath(value).parts:
             raise ConfigurationError(f"Claude Campaign configuration.{label} 不是安全绝对路径。")
     if not SAFE_ID_RE.fullmatch(container):
         raise ConfigurationError("Claude Campaign configuration.capture_container 非法。")
+    if not SAFE_ID_RE.fullmatch(synthetic_container) or synthetic_container == container:
+        raise ConfigurationError(
+            "Claude Campaign configuration.synthetic_capture_container 必须是与 capture_container 不同的断网容器名。"
+        )
     if not IMMUTABLE_IMAGE_RE.fullmatch(runtime_image):
         raise ConfigurationError("Claude Campaign configuration.runtime_image 必须是 repository@sha256 引用。")
     if PurePosixPath(tool_root).parts[-2:] != EXECUTION_TREE_SUFFIX:
@@ -576,7 +621,29 @@ def _capture_layout(campaign_dir: Path, manifest: Mapping[str, Any]) -> CaptureL
         capture_tool_root=PurePosixPath(tool_root),
         host_tool_root=Path(__file__).resolve().parent,
         runtime_image=runtime_image,
+        synthetic_container=synthetic_container,
     )
+
+
+def _step_route(argv: Sequence[str], layout: CaptureLayout) -> tuple[str, str]:
+    """步骤的执行容器 → ``(角色, 容器名)``：真实上游步骤（冻结了 ``--upstream-ip``）只能在联网的抓包容器里执行，合成步骤
+    只能在断网容器里执行。
+
+    B2-05 在 plan 时已按同一规则校验 ``docker exec {capture_container}``／``{synthetic_capture_container}``；这里在执行与签发
+    凭据时再核一次，任何偏离（包括 Campaign 冻结副本被改、容器名与布局不符）都在发出命令之前失败。判断依据取
+    ``--upstream-ip`` 而不是请求确认参数，因为零请求演练会去掉确认参数，而 ``--upstream-ip`` 两种模式都保留。
+    """
+
+    command = [str(item) for item in argv]
+    if len(command) < 4 or Path(command[0]).name != "docker" or command[1] != "exec":
+        raise ConfigurationError("取证步骤必须以 docker exec <容器> 执行。")
+    live = _argument_value(command, "--upstream-ip") is not None
+    role = ROLE_CAPTURE if live else ROLE_SYNTHETIC
+    expected = layout.containers()[role]
+    if command[2] != expected:
+        kind = "真实上游" if live else "合成"
+        raise ConfigurationError(f"{kind}步骤必须在容器 {expected} 里执行，实际目标 {command[2]}。")
+    return role, expected
 
 
 def _host_path(container_path: str | PurePosixPath, layout: CaptureLayout) -> Path:
@@ -967,7 +1034,9 @@ def _docker_inspect(container: str, *, deadline: Any | None, heartbeat: Any | No
     return value[0]
 
 
-def _containers_state(container: str, item: Mapping[str, Any]) -> dict[str, Any]:
+def _container_record(role: str, container: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    """一个采集容器的 inspect 快照（角色、身份、网络与挂载）；断网容器的 ``networks`` 只应有 ``none`` 且没有地址。"""
+
     state = item.get("State") if isinstance(item.get("State"), Mapping) else {}
     config = item.get("Config") if isinstance(item.get("Config"), Mapping) else {}
     host = item.get("HostConfig") if isinstance(item.get("HostConfig"), Mapping) else {}
@@ -977,41 +1046,50 @@ def _containers_state(container: str, item: Mapping[str, Any]) -> dict[str, Any]
     if not CONTAINER_ID_RE.fullmatch(container_id) or not IMAGE_ID_RE.fullmatch(str(item.get("Image", ""))):
         raise ConfigurationError(f"采集容器 {container} 的 ID 或 image ID 格式非法。")
     return {
-        "probe_kind": "containers",
-        "containers": [
-            {
-                "role": "capture",
-                "name": container,
-                "id": container_id,
-                "image_id": str(item.get("Image", "")),
-                "image_reference": str(config.get("Image", "")),
-                "status": str(state.get("Status", "")),
-                "running": state.get("Running") is True,
-                "started_at": str(state.get("StartedAt", "")),
-                "restart_count": int(item.get("RestartCount", 0) or 0),
-                "privileged": host.get("Privileged") is True,
-                "network_mode": str(host.get("NetworkMode", "")),
-                "networks": {
-                    str(name): str(binding.get("IPAddress", ""))
-                    for name, binding in sorted((networks or {}).items())
-                    if isinstance(binding, Mapping)
-                },
-                "mounts": sorted(
-                    (
-                        {
-                            "destination": str(mount.get("Destination", "")),
-                            "source": str(mount.get("Source", "")),
-                            "rw": mount.get("RW") is True,
-                            "type": str(mount.get("Type", "")),
-                        }
-                        for mount in mounts
-                        if isinstance(mount, Mapping)
-                    ),
-                    key=lambda row: (row["destination"], row["source"]),
-                ),
-            }
-        ],
+        "role": role,
+        "name": container,
+        "id": container_id,
+        "image_id": str(item.get("Image", "")),
+        "image_reference": str(config.get("Image", "")),
+        "status": str(state.get("Status", "")),
+        "running": state.get("Running") is True,
+        "started_at": str(state.get("StartedAt", "")),
+        "restart_count": int(item.get("RestartCount", 0) or 0),
+        "privileged": host.get("Privileged") is True,
+        "network_mode": str(host.get("NetworkMode", "")),
+        "networks": {
+            str(name): str(binding.get("IPAddress", ""))
+            for name, binding in sorted((networks or {}).items())
+            if isinstance(binding, Mapping)
+        },
+        "mounts": sorted(
+            (
+                {
+                    "destination": str(mount.get("Destination", "")),
+                    "source": str(mount.get("Source", "")),
+                    "rw": mount.get("RW") is True,
+                    "type": str(mount.get("Type", "")),
+                }
+                for mount in mounts
+                if isinstance(mount, Mapping)
+            ),
+            key=lambda row: (row["destination"], row["source"]),
+        ),
     }
+
+
+def _probe_targets(configuration: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """探针目标：``[(capture, 抓包容器), (synthetic, 断网容器)]``；缺任一容器名即失败关闭（不悄悄只探一个）。"""
+
+    targets: list[tuple[str, str]] = []
+    for role, field in CONTAINER_ROLE_FIELDS.items():
+        name = str(configuration.get(field, ""))
+        if not SAFE_ID_RE.fullmatch(name):
+            raise ConfigurationError(f"环境探针缺少 {field}（两个采集容器都要探）。")
+        targets.append((role, name))
+    if targets[0][1] == targets[1][1]:
+        raise ConfigurationError("环境探针的抓包容器与断网容器不能是同一个容器。")
+    return targets
 
 
 def _hosts_digest(lines: Sequence[str], container_id: str) -> tuple[str, int]:
@@ -1029,12 +1107,13 @@ def _collect_probe_states(
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """只读采集五类快照：一次 ``docker inspect`` 加一次 ``docker exec`` 只读脚本（离线测试替换本函数）。"""
+    """只读采集五类快照：两个采集容器各一次 ``docker inspect`` 加一次 ``docker exec`` 只读脚本（离线测试替换本函数）。
+
+    每类快照按角色分开记录（``containers`` 是带角色的列表，其余是 ``targets.<角色>``）；``processes`` 的标签带角色前缀
+    （例如 ``synthetic:relay``），任一容器里残留取证进程都让它非空。
+    """
 
     configuration = manifest["configuration"]
-    container = str(configuration["capture_container"])
-    item = _docker_inspect(container, deadline=deadline, heartbeat=heartbeat)
-    containers = _containers_state(container, item)
     arguments = {
         "ca_cert": str(configuration["ca_cert"]),
         "ca_signing_pem": str(configuration["ca_signing_pem"]),
@@ -1046,38 +1125,49 @@ def _collect_probe_states(
         "binary_labels": CAPTURE_PROCESS_BINARY_LABELS,
         "script_labels": CAPTURE_PROCESS_SCRIPT_LABELS,
     }
-    completed = _run_probe_command(
-        ["docker", "exec", container, "python3", "-c", _CONTAINER_PROBE_SCRIPT, json.dumps(arguments, sort_keys=True)],
-        operation=f"probe:{container}:read-only-state",
-        deadline=deadline,
-        heartbeat=heartbeat,
-    )
-    try:
-        observed = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        raise ConfigurationError("采集容器只读探针未返回合法 JSON。") from error
-    hosts_sha256, hosts_lines = _hosts_digest(observed.get("hosts_lines") or [], containers["containers"][0]["id"])
-    return {
-        "containers": containers,
-        "configuration": {
-            "probe_kind": "configuration",
-            "hosts_digest_mode": HOSTS_DIGEST_MODE,
+    records: list[dict[str, Any]] = []
+    configurations: dict[str, Any] = {}
+    clients: dict[str, Any] = {}
+    listeners: dict[str, Any] = {}
+    processes: list[str] = []
+    for role, container in _probe_targets(configuration):
+        record = _container_record(role, container, _docker_inspect(container, deadline=deadline, heartbeat=heartbeat))
+        completed = _run_probe_command(
+            ["docker", "exec", container, "python3", "-c", _CONTAINER_PROBE_SCRIPT, json.dumps(arguments, sort_keys=True)],
+            operation=f"probe:{container}:read-only-state",
+            deadline=deadline,
+            heartbeat=heartbeat,
+        )
+        try:
+            observed = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise ConfigurationError(f"采集容器 {container} 的只读探针未返回合法 JSON。") from error
+        if not isinstance(observed, Mapping):
+            raise ConfigurationError(f"采集容器 {container} 的只读探针结果不是对象。")
+        hosts_sha256, hosts_lines = _hosts_digest(observed.get("hosts_lines") or [], record["id"])
+        records.append(record)
+        configurations[role] = {
             "hosts_sha256": hosts_sha256,
             "hosts_line_count": hosts_lines,
             "resolv_conf": observed.get("resolv_conf"),
             "ca_bundle": observed.get("ca_bundle"),
             "mitm_ca_cert": observed.get("mitm_ca_cert"),
             "mitm_ca_signing_pem": observed.get("mitm_ca_signing_pem"),
-        },
-        "client": {
-            "probe_kind": "client",
+        }
+        clients[role] = {
             "claude_bin": observed.get("claude_bin"),
             "global_state": observed.get("global_state"),
             "credentials_file": observed.get("credentials_file"),
             "state_dir": observed.get("state_dir"),
-        },
-        "processes": {"probe_kind": "processes", "capture_processes": list(observed.get("capture_processes") or [])},
-        "listeners": {"probe_kind": "listeners", "tcp_listen_ports": list(observed.get("tcp_listen_ports") or [])},
+        }
+        listeners[role] = list(observed.get("tcp_listen_ports") or [])
+        processes.extend(f"{role}:{label}" for label in observed.get("capture_processes") or [])
+    return {
+        "containers": {"probe_kind": "containers", "containers": records},
+        "configuration": {"probe_kind": "configuration", "hosts_digest_mode": HOSTS_DIGEST_MODE, "targets": configurations},
+        "client": {"probe_kind": "client", "targets": clients},
+        "processes": {"probe_kind": "processes", "capture_processes": sorted(processes)},
+        "listeners": {"probe_kind": "listeners", "targets": listeners},
     }
 
 
@@ -1153,7 +1243,7 @@ def _probe_capture_environment(
         "client": CLIENT,
         "phase": phase,
         "observed_at_utc": claude_upgrade._utc_now(),
-        "targets": {"capture": str(manifest["configuration"]["capture_container"])},
+        "targets": dict(_probe_targets(manifest["configuration"])),
         "snapshots": snapshots,
         "capture_processes": list(states["processes"]["capture_processes"]),
     }
@@ -1262,12 +1352,15 @@ def _verify_official_binaries(
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
-    """服务面成员：任何真实请求之前核对目标客户端两处安装与运行镜像。
+    """服务面成员：任何真实请求之前核对目标客户端的三处安装、断网容器与运行镜像。
 
-    * 容器内实际执行的 ``/opt/claude-<v>/claude``：复用 B1-10 已验收的版本探针（隔离空 HOME 的 ``--version`` 恰为
+    * 抓包容器里实际执行的 ``/opt/claude-<v>/claude``：复用 B1-10 已验收的版本探针（隔离空 HOME 的 ``--version`` 恰为
       ``<v> (Claude Code)``，探针前后容器内 sha256sum 一致），摘要必须等于 ``target_sha256``；
+    * 断网容器（合成步骤）：调 ARM64 环境收据版本 2 的同一份核验 ``_synthetic_container_observation``——存在且运行、
+      ``network_mode`` 为 none 且没有地址、与抓包容器同镜像、去掉 Docker 控制面后挂载逐项相同、不共用逐容器文件，
+      容器内同一路径的二进制版本自报一致、摘要同为 ``target_sha256``；
     * 宿主 ``/opt/claude-<v>/claude``（B5a-07 实体安装）：摘要同为 ``target_sha256``；
-    * 运行容器的镜像 RepoDigests 含冻结的 ``runtime_image``。
+    * 运行容器的镜像 RepoDigests 含冻结的 ``runtime_image``（断网容器与它同一 image ID）。
     """
 
     configuration = manifest["configuration"]
@@ -1285,6 +1378,11 @@ def _verify_official_binaries(
             f"Claude 取证坐标必须是容器 {target['container']} 里的 {target['path']}（B5a-07 安装形态），"
             f"实际 {configuration.get('capture_container')}:{configuration.get('claude_bin')}。"
         )
+    if configuration.get("synthetic_capture_container") != claude_arm64.SYNTHETIC_CONTAINER:
+        raise ConfigurationError(
+            f"合成步骤的断网容器必须是 {claude_arm64.SYNTHETIC_CONTAINER}（与 ARM64 环境收据版本 2 同一合同），"
+            f"实际 {configuration.get('synthetic_capture_container')}。"
+        )
     if deadline is not None:
         deadline.check("official-binary:start")
     image_id = _container_image_reference_verified(
@@ -1297,6 +1395,16 @@ def _verify_official_binaries(
         raise ConfigurationError(f"容器内目标客户端核验失败：{error}") from error
     if client_binary.get("sha256") != target_sha256:
         raise ConfigurationError("容器内目标客户端摘要与 target_sha256 不一致。")
+    try:
+        with claude_arm64._shared_deadline_scope(deadline, heartbeat):
+            synthetic = claude_arm64._synthetic_container_observation(target_version)
+    except claude_arm64.Arm64EnvironmentReceiptError as error:
+        raise ConfigurationError(f"断网容器核验失败：{error}") from error
+    synthetic_binary = synthetic.get("client_binary") if isinstance(synthetic.get("client_binary"), Mapping) else {}
+    if synthetic_binary.get("sha256") != target_sha256 or dict(synthetic_binary) != dict(client_binary):
+        raise ConfigurationError("断网容器里的目标客户端摘要与 target_sha256 或抓包容器里的那份不一致。")
+    if synthetic.get("image_id") != image_id or synthetic.get("name") != configuration.get("synthetic_capture_container"):
+        raise ConfigurationError("断网容器与已核对 RepoDigests 的运行镜像不是同一 image ID，或容器名不符。")
     host_binary = Path(HOST_CLIENT_BINARY_TEMPLATE.format(version=target_version))
     if host_binary.is_symlink() or not host_binary.is_file():
         raise ConfigurationError(f"宿主机缺少目标客户端实体安装：{host_binary}（B5a-07）")
@@ -1311,10 +1419,37 @@ def _verify_official_binaries(
         "target_sha256": target_sha256,
         "container_binary": dict(client_binary),
         "container_probe": dict(probe),
+        "synthetic_container": {
+            key: synthetic[key]
+            for key in (
+                "name", "container_id", "image_id", "network_mode", "network_names", "reference_container",
+                "reference_container_id", "shared_mounts_sha256", "shared_mount_count", "excluded_reference_mounts",
+                "client_binary", "client_binary_probe",
+            )
+        },
         "host_binary": {"path": str(host_binary), "sha256": host_sha256},
         "runtime_image": {"reference": str(configuration["runtime_image"]), "image_id": image_id},
         "verified_at_utc": claude_upgrade._utc_now(),
     }
+
+
+def _planned_global_state_file(jobs: Sequence[Any]) -> str:
+    """计划步骤里 relay 读取的全局状态文件：步骤显式给 ``--claude-global-state-file`` 时取它，否则取 relay 缺省值。
+
+    全部步骤必须指向同一个文件，否则前提检查与探针覆盖不到其余路径，失败关闭。
+    """
+
+    paths = {
+        _argument_value([str(item) for item in step.get("argv") or []], GLOBAL_STATE_FLAG) or CLAUDE_GLOBAL_STATE_FILE
+        for job in jobs
+        for step in getattr(job, "steps", ())
+    }
+    if len(paths) > 1:
+        raise ConfigurationError(f"计划步骤的全局状态文件不唯一：{sorted(paths)}")
+    path = next(iter(paths), CLAUDE_GLOBAL_STATE_FILE)
+    if not SAFE_ABSOLUTE_PATH_RE.fullmatch(path) or ".." in PurePosixPath(path).parts:
+        raise ConfigurationError("计划步骤的全局状态文件不是安全绝对路径。")
+    return path
 
 
 def _container_preconditions(
@@ -1322,27 +1457,65 @@ def _container_preconditions(
     layout: CaptureLayout,
     *,
     mode: str,
+    jobs: Sequence[Any] = (),
     deadline: Any | None,
     heartbeat: Any | None,
 ) -> dict[str, Any]:
-    """容器内凭据与 CA 文件的存在性（只看元数据，不读内容）。正式 run 缺任一项即在预约前失败；演练只记录结果。"""
+    """两个采集容器里取证必需文件的存在性，以及全局状态在两边是否相同。正式 run 缺任一项或不同即在预约前失败；演练只记录。
+
+    * 凭据、CA 签名 PEM、CA 证书、全局状态（relay 读 ``/root/.claude.json``：抓包容器的 TUI／账号状态 probe 与断网容器的
+      OAuth refresh probe 都要它）：``test -f``，只看是否存在；
+    * 全局状态不在共享挂载里（容器私有层），两个容器各有一份：两边都在时各在容器内取 sha256 比较，结果只记布尔值，
+      不记内容或摘要。凭据与 CA 在共享挂载里，同一份由断网容器的挂载核对（``_verify_official_binaries``）保证。
+    """
 
     configuration = manifest["configuration"]
+    global_state = _planned_global_state_file(jobs)
     files = {name: str(configuration[name]) for name in ("credentials_file", "ca_signing_pem", "ca_cert")}
-    observed: dict[str, Any] = {}
-    for name, path in files.items():
-        completed = _run_probe_command(
-            ["docker", "exec", layout.capture_container, "test", "-f", path],
-            operation=f"precondition:{name}",
-            deadline=deadline,
-            heartbeat=heartbeat,
-            check=False,
-        )
-        observed[name] = {"path": path, "present": completed.returncode == 0}
-    missing = sorted(name for name, item in observed.items() if not item["present"])
-    if missing and mode == MODE_FORMAL:
-        raise ConfigurationError(f"采集容器缺少取证必需文件：{missing}（凭据需先完成官方 OAuth 授权，见 B5a-07）。")
-    return {"files": observed, "missing": missing, "enforced": mode == MODE_FORMAL}
+    files["global_state"] = global_state
+    targets: dict[str, Any] = {}
+    missing: list[str] = []
+    for role, container in layout.containers().items():
+        observed: dict[str, Any] = {}
+        for name, path in files.items():
+            completed = _run_probe_command(
+                ["docker", "exec", container, "test", "-f", path],
+                operation=f"precondition:{role}:{name}",
+                deadline=deadline,
+                heartbeat=heartbeat,
+                check=False,
+            )
+            observed[name] = {"path": path, "present": completed.returncode == 0}
+            if completed.returncode != 0:
+                missing.append(f"{role}:{name}")
+        targets[role] = {"container": container, "files": observed}
+    identical: bool | None = None
+    if all(targets[role]["files"]["global_state"]["present"] for role in targets):
+        digests = {
+            _container_file_sha256(
+                container,
+                PurePosixPath(global_state),
+                operation=f"precondition:{role}:global-state-identity",
+                deadline=deadline,
+                heartbeat=heartbeat,
+            )
+            for role, container in layout.containers().items()
+        }
+        identical = len(digests) == 1
+    if mode == MODE_FORMAL:
+        if missing:
+            raise ConfigurationError(
+                f"采集容器缺少取证必需文件：{sorted(missing)}（凭据需先完成官方 OAuth 授权，见 B5a-07；断网容器的全局状态需从"
+                "抓包容器同步一份）。"
+            )
+        if identical is not True:
+            raise ConfigurationError("抓包容器与断网容器里的全局状态文件内容不同，须重新同步后再取证。")
+    return {
+        "targets": targets,
+        "global_state": {"path": global_state, "identical_across_containers": identical},
+        "missing": sorted(missing),
+        "enforced": mode == MODE_FORMAL,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1391,12 +1564,15 @@ def _container_file_sha256(
     container: str,
     path: PurePosixPath,
     *,
+    operation: str = "host-runtime-receipt:container-visibility",
     deadline: Any | None,
     heartbeat: Any | None,
 ) -> str:
+    """在指定容器内用 ``/usr/bin/sha256sum`` 取一个文件的摘要（输出必须是该路径的单行标准格式）。"""
+
     completed = _run_probe_command(
         ["docker", "exec", container, "/usr/bin/sha256sum", str(path)],
-        operation="host-runtime-receipt:container-visibility",
+        operation=operation,
         deadline=deadline,
         heartbeat=heartbeat,
     )
@@ -1413,17 +1589,22 @@ def _issue_host_runtime_receipt(
     probe_id: str,
     run_index: int,
     step_index: int,
+    container: str,
     deadline: Any | None,
     heartbeat: Any | None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    """每步执行前在宿主签发运行镜像凭据（``runtime_host_receipt.py``，15 分钟有效）并核对它在采集容器内逐字可见。
+    """每步执行前在宿主签发运行镜像凭据（``runtime_host_receipt.py``，15 分钟有效）并核对它在该步所在容器内逐字可见。
 
+    ``container`` 是该步实际执行的容器（真实上游步骤是抓包容器，合成步骤是断网容器）：relay 在容器内用 hostname 与
+    mountinfo 里的完整容器 ID 复核凭据绑定的容器，签错容器会让 relay 在任何请求之前拒绝。
     返回 ``(运行期变量取值, 凭据绑定)``；relay 执行时再核对凭据的 nonce、镜像、容器身份与执行源，二者构成同一条链。
     """
 
     layout = context.layout
     if layout is None:
         raise ConfigurationError("运行期变量绑定缺少坐标布局。")
+    if container not in layout.containers().values():
+        raise ConfigurationError(f"宿主运行凭据只能签给登记的两个采集容器，实际 {container}。")
     receipts_root = _private_directory(context.job_run_root(job_id, run_index) / "receipts", context.attempt_root)
     output = receipts_root / f"step-{step_index:02d}-{probe_id}.host-runtime-receipt.json"
     if output.exists() or output.is_symlink():
@@ -1434,7 +1615,7 @@ def _issue_host_runtime_receipt(
             sys.executable,
             str(layout.host_tool_root / HOST_RUNTIME_RECEIPT_SCRIPT),
             "--container",
-            layout.capture_container,
+            container,
             "--runtime-image",
             layout.runtime_image,
             "--capture-tool-root",
@@ -1450,27 +1631,28 @@ def _issue_host_runtime_receipt(
         heartbeat=heartbeat,
     )
     receipt = claude_upgrade._read_json(output, "宿主运行凭据")
-    container = receipt.get("container") if isinstance(receipt.get("container"), Mapping) else {}
+    bound = receipt.get("container") if isinstance(receipt.get("container"), Mapping) else {}
     if (
         receipt.get("schema_version") != HOST_RUNTIME_RECEIPT_SCHEMA
         or receipt.get("run_nonce") != nonce
         or receipt.get("runtime_image_reference") != layout.runtime_image
         or receipt.get("repo_digest_verified") is not True
-        or container.get("name") != layout.capture_container
-        or not CONTAINER_ID_RE.fullmatch(str(container.get("id", "")))
+        or bound.get("name") != container
+        or not CONTAINER_ID_RE.fullmatch(str(bound.get("id", "")))
     ):
         raise ConfigurationError("宿主运行凭据的 schema、nonce、镜像或容器身份与本次取证不符。")
     digest = file_sha256(output)
     container_path = _container_path(output, layout)
-    if _container_file_sha256(layout.capture_container, container_path, deadline=deadline, heartbeat=heartbeat) != digest:
-        raise ConfigurationError("宿主运行凭据在采集容器内不可见或摘要不符（容器坐标映射错位）。")
+    if _container_file_sha256(container, container_path, deadline=deadline, heartbeat=heartbeat) != digest:
+        raise ConfigurationError(f"宿主运行凭据在容器 {container} 内不可见或摘要不符（容器坐标映射错位）。")
     values = {"host_runtime_receipt": str(container_path), "host_runtime_receipt_sha256": digest, "run_nonce": nonce}
     binding = {
         "path": output.relative_to(context.attempt_root).as_posix(),
         "sha256": digest,
         "container_path": str(container_path),
         "run_nonce": nonce,
-        "container_id": str(container["id"]),
+        "container_name": container,
+        "container_id": str(bound["id"]),
         "issued_at_utc": str(receipt.get("issued_at_utc", "")),
     }
     return values, binding
@@ -1603,15 +1785,28 @@ class ScenarioReceiptContext:
         probe_id: str,
         run_index: int,
         step_index: int,
+        argv: Sequence[str],
         deadline: Any | None,
         heartbeat: Any | None,
     ) -> tuple[dict[str, str], dict[str, Any]]:
-        """运行期变量的取值与凭据绑定：每步执行前在宿主签发运行镜像凭据（见 ``_issue_host_runtime_receipt``）。"""
+        """运行期变量的取值与凭据绑定：每步执行前在宿主签发运行镜像凭据（见 ``_issue_host_runtime_receipt``）。
 
-        if not self.environmental:
+        ``argv`` 是该步未绑定运行期变量的冻结 argv：先按 ``_step_route`` 复核执行容器（真实上游步骤进抓包容器、合成步骤进
+        断网容器），再把凭据签给该容器。
+        """
+
+        if not self.environmental or self.layout is None:
             raise ConfigurationError("运行期变量（宿主运行凭据与 nonce）只能在 attempt 上下文里签发。")
+        _role, container = _step_route(argv, self.layout)
         return _issue_host_runtime_receipt(
-            self, job_id=job_id, probe_id=probe_id, run_index=run_index, step_index=step_index, deadline=deadline, heartbeat=heartbeat
+            self,
+            job_id=job_id,
+            probe_id=probe_id,
+            run_index=run_index,
+            step_index=step_index,
+            container=container,
+            deadline=deadline,
+            heartbeat=heartbeat,
         )
 
     def execute_step(
@@ -1626,8 +1821,19 @@ class ScenarioReceiptContext:
         deadline: Any | None,
         heartbeat: Any | None,
     ) -> int:
-        """执行一步并把 stdout／stderr 写进 0600 日志（活跃租约下经独立监督器）。"""
+        """执行一步并把 stdout／stderr 写进 0600 日志（活跃租约下经独立监督器）。
 
+        attempt 上下文里先按 ``_step_route`` 复核执行容器；合成步骤的操作名从 ``job:…`` 改成 ``synthetic-job:…``：出口守护下
+        监督器只给 ``job:`` 开头的操作建立 capture-cli 停止绑定，并拒绝 ``docker exec`` 到别的容器，断网容器不在出口准入里
+        （模块文档第五节）。没有 attempt 的执行上下文（Job 演练的合成作业）不做路由，原样执行。
+        """
+
+        if self.layout is not None:
+            role, _container = _step_route(argv, self.layout)
+            if not operation.startswith(LIVE_STEP_OPERATION_PREFIX):
+                raise ConfigurationError(f"取证步骤的操作名必须以 {LIVE_STEP_OPERATION_PREFIX} 开头：{operation}")
+            if role == ROLE_SYNTHETIC:
+                operation = SYNTHETIC_STEP_OPERATION_PREFIX + operation[len(LIVE_STEP_OPERATION_PREFIX):]
         with log_path.open("w", encoding="utf-8") as log:
             os.chmod(log_path, 0o600)
             return _run_step_command(
@@ -1689,7 +1895,13 @@ def _run_job_impl(
         if declared:
             try:
                 values, receipt = scenario_context.runtime_values(
-                    job_id=job.job_id, probe_id=probe_id, run_index=attempt_index, step_index=index, deadline=deadline, heartbeat=heartbeat
+                    job_id=job.job_id,
+                    probe_id=probe_id,
+                    run_index=attempt_index,
+                    step_index=index,
+                    argv=list(raw_step["argv"]),
+                    deadline=deadline,
+                    heartbeat=heartbeat,
                 )
             except ConfigurationError as error:
                 steps.append(
@@ -2787,6 +2999,7 @@ def _attempt_identity(manifest: Mapping[str, Any], layout: CaptureLayout, mode: 
         "official_identity_sha256": claude_upgrade._fingerprint(dict(manifest["official_identity"])),
         "runtime_image": layout.runtime_image,
         "capture_container": layout.capture_container,
+        "synthetic_capture_container": layout.synthetic_container,
         "capture_tool_root": str(layout.capture_tool_root),
         "claude_bin": str(manifest["configuration"]["claude_bin"]),
     }
@@ -2861,7 +3074,7 @@ def run_capture_attempt(
     host_tool_parent = _host_path(layout.capture_tool_root, layout).parents[1]
     claude_upgrade._verify_execution_tree(host_tool_parent)
     binary_verification = claude_upgrade._verify_official_binaries(manifest, deadline=deadline)
-    preconditions = _container_preconditions(manifest, layout, mode=mode, deadline=deadline, heartbeat=None)
+    preconditions = _container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None)
     identity = _attempt_identity(manifest, layout, mode)
     for job in jobs:
         _job_tool_dependency_files(job, current_tool)
@@ -2906,7 +3119,7 @@ def run_capture_attempt(
         before_manifest = claude_upgrade._probe_capture_environment(dict(manifest), environment_root / "before", "before", deadline=deadline, heartbeat=heartbeat)
         if before_manifest.get("capture_processes"):
             attempt_observations.append({"check_id": "attempt.environment.processes", "failure_code": "residual"})
-            raise ConfigurationError("采集容器存在残留取证进程，环境不干净，拒绝执行任何 Job。")
+            raise ConfigurationError("采集容器（抓包或断网）存在残留取证进程，环境不干净，拒绝执行任何 Job。")
         for job in jobs:
             _require_capture_budget(deadline, operation=f"job:{job.job_id}:admission")
             _write_attempt_heartbeat(heartbeat_path, deadline, operation=f"job:{job.job_id}:start", attempt_root=attempt_root)
@@ -3090,6 +3303,7 @@ def run_capture_attempt(
                 "host_data_root": str(layout.host_data_root),
                 "capture_root": str(layout.capture_root),
                 "capture_container": layout.capture_container,
+                "synthetic_capture_container": layout.synthetic_container,
                 "capture_tool_root": str(layout.capture_tool_root),
                 "runtime_image": layout.runtime_image,
             },
@@ -3227,6 +3441,7 @@ def build_rehearsal_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         ("--capture-root", arguments.capture_root),
         ("--capture-tool-root", arguments.capture_tool_root),
         ("--capture-container", arguments.capture_container),
+        ("--synthetic-capture-container", arguments.synthetic_capture_container),
         ("--credentials-file", arguments.credentials_file),
         ("--ca-signing-pem", arguments.ca_signing_pem),
         ("--ca-cert", arguments.ca_cert),
@@ -3366,6 +3581,14 @@ def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, A
         except (ConfigurationError, KeyError, OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
             check(f"job:{job_id}:closure", False, str(error))
         steps = result.get("steps") or []
+        try:
+            routed = bool(steps) and all(
+                _step_route(step.get("argv") or [], layout)[1] == (step.get("host_runtime_receipt") or {}).get("container_name")
+                for step in steps
+            )
+            check(f"job:{job_id}:container-routing", routed)
+        except ConfigurationError as error:
+            check(f"job:{job_id}:container-routing", False, str(error))
         check(
             f"job:{job_id}:all-steps-dry-run",
             bool(steps) and all("--dry-run" in (step.get("argv") or []) and "--execute" not in (step.get("argv") or []) for step in steps),
@@ -3387,6 +3610,15 @@ def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, A
         check("job-checkpoint-chain", False, str(error))
     environment = payload.get("environment") or {}
     check("attempt-environment-stable", bool(environment.get("before_probe")) and bool(environment.get("after_probe")) and not environment.get("drifted_kinds"))
+    verification = payload.get("binary_verification") if isinstance(payload.get("binary_verification"), Mapping) else {}
+    synthetic = verification.get("synthetic_container") if isinstance(verification.get("synthetic_container"), Mapping) else {}
+    check(
+        "synthetic-container-verified",
+        verification.get("schema_version") == BINARY_VERIFICATION_SCHEMA
+        and synthetic.get("name") == layout.synthetic_container
+        and synthetic.get("network_mode") == "none"
+        and (synthetic.get("client_binary") or {}).get("sha256") == manifest.get("target_sha256"),
+    )
     verdict = "passed" if all(item["passed"] for item in checks) else "failed"
     return {
         "schema_version": REHEARSAL_VERDICT_SCHEMA,
@@ -3413,7 +3645,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rehearsal.add_argument("--suite", choices=("core", "full"), default="full")
     for flag in (
         "--scenario-manifest", "--claude-bin", "--capture-root", "--capture-tool-root", "--capture-container",
-        "--credentials-file", "--ca-signing-pem", "--ca-cert",
+        "--synthetic-capture-container", "--credentials-file", "--ca-signing-pem", "--ca-cert",
     ):
         rehearsal.add_argument(flag, default=None)
     verify = commands.add_parser("verify-rehearsal", help="只读复核一次零请求演练 attempt")

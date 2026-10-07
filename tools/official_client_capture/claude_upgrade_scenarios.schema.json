@@ -123,7 +123,7 @@
       }
     },
     "commandStep": {
-      "description": "一个 probe 的一次受管 R 取证：argv 必须调用 claude_fw_e_relay.py capture --execute，--probe-id 与 --fw-f-v4-probe 都等于 probe_id；真实上游步骤带 --acknowledge-live-requests 与 --upstream-ip，合成步骤带 --acknowledge-synthetic-responses 且不得带 --upstream-ip。",
+      "description": "一个 probe 的一次受管 R 取证：argv 必须调用 claude_fw_e_relay.py capture --execute，--probe-id 与 --fw-f-v4-probe 都等于 probe_id；真实上游步骤带 --acknowledge-live-requests 与 --upstream-ip、以 docker exec {capture_container} 开头，合成步骤带 --acknowledge-synthetic-responses、不得带 --upstream-ip、以 docker exec {synthetic_capture_container}（断网容器）开头。",
       "type": "object",
       "additionalProperties": false,
       "required": ["probe_id", "argv", "environment", "timeout_seconds"],

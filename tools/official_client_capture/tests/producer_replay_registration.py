@@ -44,7 +44,8 @@
 6. ``claude_upgrade_arm64_environment_receipt.py``（Claude 升级的 ARM64 环境收据，phase 与第 1 个相同，
    通用校验调用第 1 个的函数）：写入 ``producer.tool_sha256``；重放时 ``_validated_producer_version`` 要求
    等于当前摘要，否则必须在 ``REGISTERED_REPLAY_PRODUCER_HASHES[version]`` 中——与第 1 个同为**按
-   PRODUCER_VERSION 分组的显式摘要集合**，历史登记表初始为空。它在门禁基线之后新增，登记在
+   PRODUCER_VERSION 分组的显式摘要集合**。新建时登记表为空；B2-06 补充修正（断网合成容器）升到版本 2 时，
+   把版本 1 的唯一已部署摘要 8e7e5c16… 登记在 ``"1"`` 下。它在门禁基线之后新增，登记在
    ``PRODUCERS_ADDED_AFTER_BASELINE``（见第四节末）。
 
 覆盖自检有两道（见第五节）：任何模块新增名字含 ``REPLAY_PRODUCER``／``PRODUCER_*SUCCESSOR`` 的

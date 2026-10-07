@@ -77,8 +77,10 @@ GATE_RECEIPT_0154_DIGEST = "931ae5b3f6537eaa9a8c38fa4569a9560b178c8d250d0e95aeec
 GATE_RECEIPT_V4_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 ACTIVATION_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.PRODUCTION_ACTIVATION_PRODUCER)
 CLAUDE_ENVIRONMENT_SPEC = next(spec for spec in gate.PRODUCERS if spec.path == gate.CLAUDE_ENVIRONMENT_RECEIPT_PRODUCER)
-# Claude 环境收据生成器（B1-10 新建）的登记表声明：初始为空，登记旧摘要时整行替换。
-CLAUDE_ENVIRONMENT_EMPTY_REGISTRY = "REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {}"
+# Claude 环境收据生成器（B1-10 新建）的登记表声明开头：B2-06 补充修正升到版本 2 时登记了版本 1 的唯一摘要
+# （B1-10 8c4298131 起到 697235dca 未变、已部署到 ARM64），新的登记行插在声明开头之后。
+CLAUDE_ENVIRONMENT_REGISTRY_ANCHOR = "REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {\n"
+CLAUDE_ENVIRONMENT_V1_DIGEST = "8e7e5c168e0c36f9f9792b7e630394cd251a5c61a4805e3c0be2ac264325bad0"
 # 第 42 项修改前的生产激活收据生成器摘要（ef262c618 起部署），以及生成过 R34 收据的 0.149.1 期间版本。
 ACTIVATION_PRE_ITEM42_DIGEST = "3b4ddbf874a9164654e8496fb6f2a88fbd50b22557f16b5285f0aa0aca7d1292"
 ACTIVATION_R34_DIGEST = "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382"
@@ -987,19 +989,21 @@ class RegistrationMutationTest(unittest.TestCase):
             ACTIVATION_SPEC, ACTIVATION_V2_SCHEMA, ACTIVATION_PRE_ITEM42_DIGEST
         )
 
-    # --- Claude ARM64 环境收据（B1-10 新建，按版本分组的显式摘要集合，登记表初始为空） ---
+    # --- Claude ARM64 环境收据（B1-10 新建，按版本分组的显式摘要集合；版本 1 摘要已登记） ---
 
     def test_claude_environment_next_edit_must_register_current_digest(self) -> None:
-        """当前摘要成为部署边界（模拟首次部署后的承接收据）之后再修改生成器：不登记即失败；把它登记到
-        REGISTERED_REPLAY_PRODUCER_HASHES["1"] 后不再新增违规。"""
+        """当前摘要成为部署边界（模拟部署后的承接收据）之后再修改生成器：不登记即失败；把它登记到它生成收据时的
+        版本号（当前 PRODUCER_VERSION）下后不再新增违规。"""
 
         spec = CLAUDE_ENVIRONMENT_SPEC
         head = self.baseline.current[spec.path]
-        # 新增文件的承接边前序是空内容摘要（不计边界），后继即当前摘要。
-        self._write_probe_receipt(gate.EMPTY_FILE_SHA256, head, spec.path)
-        self._mutate(spec, lambda text: text + "\n# 反证：首次部署之后再次修改生成器。\n")
+        version = self._producer_version(spec)
+        # 探针收据保证当前摘要是部署边界；前序取已登记的版本 1 摘要（真实的上一部署边界）。
+        self._write_probe_receipt(CLAUDE_ENVIRONMENT_V1_DIGEST, head, spec.path)
+        self._mutate(spec, lambda text: text + "\n# 反证：部署之后再次修改生成器。\n")
         report = self._check(spec)
         self._assert_new_since_before(spec, report, {head})
+        # 当前摘要未提交时门禁读不到它的历史内容，登记分组键可能未知（提示里写占位），这里只断言登记表名。
         self.assertIn("Claude ARM64 事实采集器身份漂移", self._violation_for(report, head).detail)
         message = gate.format_report(report)
         self.assertIn("REGISTERED_REPLAY_PRODUCER_HASHES[", message)
@@ -1008,11 +1012,32 @@ class RegistrationMutationTest(unittest.TestCase):
             spec,
             lambda text: _replace_once(
                 text,
-                CLAUDE_ENVIRONMENT_EMPTY_REGISTRY,
-                CLAUDE_ENVIRONMENT_EMPTY_REGISTRY[:-2] + f'{{"1": frozenset({{"{head}"}})}}',
+                CLAUDE_ENVIRONMENT_REGISTRY_ANCHOR,
+                CLAUDE_ENVIRONMENT_REGISTRY_ANCHOR + f'    "{version}": frozenset({{"{head}"}}),\n',
             ),
         )
         self._assert_new_since_before(spec, self._check(spec), set())
+
+    def test_claude_environment_dropping_v1_registration_fails(self) -> None:
+        """删掉版本 1 摘要的登记：它是 B1 承接收据 current_commit 处的真实部署边界，恰好多出这一条违规。"""
+
+        spec = CLAUDE_ENVIRONMENT_SPEC
+        self.assertNotEqual(self.baseline.current[spec.path], CLAUDE_ENVIRONMENT_V1_DIGEST)
+        self.assertIn(CLAUDE_ENVIRONMENT_V1_DIGEST, self.before_boundaries[spec.path])
+        self._mutate(spec, lambda text: _replace_once(text, f'"{CLAUDE_ENVIRONMENT_V1_DIGEST}"', ""))
+        report = self._check(spec)
+        self._assert_new_since_control(spec, report, {CLAUDE_ENVIRONMENT_V1_DIGEST})
+        self.assertEqual(self._violation_for(report, CLAUDE_ENVIRONMENT_V1_DIGEST).registry_key, "1")
+
+    def test_claude_environment_v1_registration_in_wrong_version_fails(self) -> None:
+        """把版本 1 摘要挪到当前版本号下：历史内容里的 PRODUCER_VERSION 是 "1"，挪错分组等同未登记。"""
+
+        spec = CLAUDE_ENVIRONMENT_SPEC
+        version = self._producer_version(spec)
+        self.assertNotEqual(version, "1")
+        self._mutate(spec, lambda text: _replace_once(text, '    "1": frozenset({', f'    "{version}": frozenset({{'))
+        report = self._check(spec)
+        self._assert_new_since_control(spec, report, {CLAUDE_ENVIRONMENT_V1_DIGEST})
 
 
 class RegistrationMutationWithSimulatedReceiptTest(RegistrationMutationTest):

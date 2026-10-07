@@ -73,8 +73,17 @@
       "required": false,
       "sensitive": false,
       "scope": "campaign",
-      "description": "隔离抓包容器名称。",
+      "description": "真实上游 probe 的抓包容器名称（受出口守护保护、固定 IP 的联网容器）；合成 probe 禁止使用。",
       "default": "capture-cli"
+    },
+    {
+      "name": "synthetic_capture_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scope": "campaign",
+      "description": "合成 probe 的抓包容器名称：与 capture_container 同镜像、同挂载（不挂 Docker 控制面），network_mode 为 none，只有 lo；合成步骤只能在它里面执行，真实上游步骤禁止使用。",
+      "default": "capture-cli-synthetic"
     },
     {
       "name": "claude_bin",
@@ -4263,7 +4272,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4308,7 +4317,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4353,7 +4362,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4398,7 +4407,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4443,7 +4452,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4488,7 +4497,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4533,7 +4542,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4578,7 +4587,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4623,7 +4632,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4668,7 +4677,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4713,7 +4722,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4758,7 +4767,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4803,7 +4812,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4901,7 +4910,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4946,7 +4955,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -4991,7 +5000,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -5036,7 +5045,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -5081,7 +5090,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -5126,7 +5135,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -5171,7 +5180,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",
@@ -5269,7 +5278,7 @@
           "argv": [
             "docker",
             "exec",
-            "{capture_container}",
+            "{synthetic_capture_container}",
             "python3",
             "{capture_tool_root}/claude_fw_e_relay.py",
             "capture",

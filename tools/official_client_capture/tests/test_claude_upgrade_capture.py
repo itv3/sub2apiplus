@@ -3,11 +3,13 @@
 不起 Docker、不联网、不读凭据：
 * relay 用夹具替身（``claude_fw_e_relay.py`` 同名脚本，dry-run 回显计划、execute 写 relay 清单），步骤仍经真实
   Campaign 租约的独立监督器 ``SupervisorClient.run_command`` 执行；
-* 宿主命令边界（宿主运行凭据签发、容器内可见核对、凭据与 CA 文件存在性）由 ``FakeHost`` 替身应答；
-* 环境探针的采集函数换成读一份可被替身 relay 改写的环境文件，用来制造「执行后漂移」。
+* 步骤保留场景清单里的 ``docker exec <容器>`` 前缀（B2-05 要求真实上游步骤进 ``capture-cli``、合成步骤进断网容器
+  ``capture-cli-synthetic``），PATH 最前面放一个 ``docker`` 替身：记下目标容器，再在本机执行容器内命令；
+* 宿主命令边界（宿主运行凭据签发、容器内可见核对、两个容器里的必需文件与全局状态）由 ``FakeHost`` 替身应答；
+* 环境探针的采集函数换成读一份可被替身 relay 改写的环境文件，用来制造「执行后漂移」与「残留取证进程」。
 
-场景清单取 B2-05 的真实 2.1.285 清单，裁剪到少数 Job 并去掉 ``docker exec <容器>`` 前缀（B2-05 的步骤校验不要求它），
-测试里的「容器坐标」与宿主坐标相同（``capture_root`` 指向临时数据根）。
+场景清单取 B2-05 的真实 2.1.285 清单，裁剪到少数 Job；测试里的「容器坐标」与宿主坐标相同（``capture_root`` 指向临时
+数据根）。
 """
 
 from __future__ import annotations
@@ -40,8 +42,27 @@ TARGET = "2.1.285"
 BASELINE = "2.1.226"
 TARGET_SHA = "a" * 64
 IMAGE = "oauth-egress-capture-capture-cli@sha256:" + "b" * 64
-SMALL_SYNTHETIC_JOB = "official-synthetic-oauth-refresh"  # 1 个合成 probe
+SMALL_SYNTHETIC_JOB = "official-synthetic-oauth-refresh"  # 1 个合成 probe（断网容器）
 SMALL_LIVE_JOB = "official-transport-baseline"  # 4 个真实上游 probe（零请求演练改写成 dry-run）
+CAPTURE = "capture-cli"
+SYNTHETIC = "capture-cli-synthetic"
+CONTAINER_IDS = {CAPTURE: "c" * 64, SYNTHETIC: "9" * 64}
+ROLE_OF = {CAPTURE: "capture", SYNTHETIC: "synthetic"}
+GLOBAL_STATE = "/root/.claude.json"
+
+FAKE_DOCKER = r'''#!/usr/bin/env python3
+"""docker 的离线替身：只接受 ``docker exec <容器> <命令…>``，记下目标容器后在本机执行命令（测试里容器坐标即宿主坐标）。"""
+import json, os, sys
+args = sys.argv[1:]
+if len(args) < 3 or args[0] != "exec" or args[1].startswith("-"):
+    print("fake docker 只接受 exec <容器> <命令>", file=sys.stderr)
+    sys.exit(125)
+container, command = args[1], args[2:]
+with open(os.environ["FAKE_DOCKER_CALLS"], "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"container": container, "command": os.path.basename(command[0])}) + "\n")
+os.environ["FAKE_DOCKER_CONTAINER"] = container
+os.execvp(command[0], command)
+'''
 
 FAKE_RELAY = r'''#!/usr/bin/env python3
 """claude_fw_e_relay.py 的离线替身：dry-run 回显计划；execute 核对宿主凭据摘要后写 relay 清单与一份非空产物。"""
@@ -52,8 +73,10 @@ def value(flag):
 control = json.load(open(os.environ["FAKE_RELAY_CONTROL"], encoding="utf-8"))
 probe = value("--probe-id")
 dry = "--dry-run" in args
+container = os.environ.get("FAKE_DOCKER_CONTAINER")
+role = {"capture-cli": "capture", "capture-cli-synthetic": "synthetic"}.get(container)
 with open(os.environ["FAKE_RELAY_CALLS"], "a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"probe": probe, "dry_run": dry, "execute": "--execute" in args,
+    handle.write(json.dumps({"probe": probe, "dry_run": dry, "execute": "--execute" in args, "container": container,
                              "acknowledgements": [item for item in args if item.startswith("--acknowledge")]}) + "\n")
 output = value("--output-root")
 if dry:
@@ -69,6 +92,10 @@ digest = hashlib.sha256(open(receipt, "rb").read()).hexdigest()
 if digest != value("--host-runtime-receipt-sha256"):
     print("receipt mismatch", file=sys.stderr)
     sys.exit(2)
+# 与真实 relay 同一要求：凭据绑定的容器必须是当前所在容器（真实 relay 用 hostname 与 mountinfo 复核）。
+if json.load(open(receipt, encoding="utf-8"))["container"]["name"] != container:
+    print("receipt container mismatch", file=sys.stderr)
+    sys.exit(2)
 counts_path = os.environ["FAKE_RELAY_CONTROL"] + ".counts"
 counts = json.load(open(counts_path, encoding="utf-8")) if os.path.exists(counts_path) else {}
 counts[probe] = counts.get(probe, 0) + 1
@@ -76,10 +103,13 @@ json.dump(counts, open(counts_path, "w", encoding="utf-8"))
 os.makedirs(output, mode=0o700)
 with open(os.path.join(output, "relay-raw.bin"), "wb") as handle:
     handle.write(b"POST /v1/messages HTTP/1.1\r\n\r\n")
-if control.get("contaminate") == probe:
+if probe in (control.get("contaminate"), control.get("residual")):
     env_path = os.environ["FAKE_RELAY_ENV"]
     environment = json.load(open(env_path, encoding="utf-8"))
-    environment["configuration"]["hosts_sha256"] = "f" * 64
+    if control.get("contaminate") == probe:
+        environment["configuration"]["targets"][role]["hosts_sha256"] = "f" * 64
+    else:
+        environment["processes"]["capture_processes"].append(role + ":relay")
     json.dump(environment, open(env_path, "w", encoding="utf-8"))
 status = "failed" if counts[probe] <= int(control.get("fail", {}).get(probe, 0)) else "complete"
 manifest = {"schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "status": status,
@@ -93,11 +123,17 @@ sys.exit(0 if status == "complete" else 2)
 '''
 
 BASE_ENVIRONMENT = {
-    "containers": {"probe_kind": "containers", "containers": [{"role": "capture", "name": "capture-cli", "id": "c" * 64, "started_at": "t0"}]},
-    "configuration": {"probe_kind": "configuration", "hosts_sha256": "1" * 64},
-    "client": {"probe_kind": "client", "global_state": {"exists": True, "mtime_ns": 1}},
+    "containers": {
+        "probe_kind": "containers",
+        "containers": [
+            {"role": "capture", "name": CAPTURE, "id": CONTAINER_IDS[CAPTURE], "started_at": "t0", "network_mode": "capture-network"},
+            {"role": "synthetic", "name": SYNTHETIC, "id": CONTAINER_IDS[SYNTHETIC], "started_at": "t0", "network_mode": "none"},
+        ],
+    },
+    "configuration": {"probe_kind": "configuration", "targets": {"capture": {"hosts_sha256": "1" * 64}, "synthetic": {"hosts_sha256": "2" * 64}}},
+    "client": {"probe_kind": "client", "targets": {role: {"global_state": {"exists": True, "mtime_ns": 1}} for role in ("capture", "synthetic")}},
     "processes": {"probe_kind": "processes", "capture_processes": []},
-    "listeners": {"probe_kind": "listeners", "tcp_listen_ports": [{"family": "tcp", "port": 22}]},
+    "listeners": {"probe_kind": "listeners", "targets": {"capture": [{"family": "tcp", "port": 22}], "synthetic": []}},
 }
 
 
@@ -105,8 +141,8 @@ def _baseline_rules() -> tuple[str, ...]:
     return plan.load_baseline_rules(plan.baseline_rule_manifest_path(BASELINE), BASELINE)
 
 
-def _reduced_payload(job_ids: set[str], *, strip_docker: bool = True) -> dict:
-    """真实 2.1.285 场景清单裁剪到指定 Job（场景只保留被执行的 probe），可去掉 ``docker exec <容器>`` 前缀。"""
+def _reduced_payload(job_ids: set[str]) -> dict:
+    """真实 2.1.285 场景清单裁剪到指定 Job（场景只保留被执行的 probe），步骤原样保留 ``docker exec <容器>`` 前缀。"""
 
     payload = json.loads(plan.scenario_manifest_path(TARGET).read_text(encoding="utf-8"))
     jobs = [job for job in payload["capture_jobs"] if job["id"] in job_ids]
@@ -116,11 +152,6 @@ def _reduced_payload(job_ids: set[str], *, strip_docker: bool = True) -> dict:
         probes = [probe for probe in scenario["probe_ids"] if probe in executed]
         if probes:
             scenarios.append({**scenario, "probe_ids": probes})
-    if strip_docker:
-        for job in jobs:
-            for step in job["steps"]:
-                assert step["argv"][:3] == ["docker", "exec", "{capture_container}"], step["argv"][:3]
-                step["argv"] = step["argv"][3:]
     payload["capture_jobs"] = jobs
     payload["evidence_scenarios"] = scenarios
     payload["probe_catalog"] = {**payload["probe_catalog"], "probe_count": len(executed)}
@@ -128,10 +159,15 @@ def _reduced_payload(job_ids: set[str], *, strip_docker: bool = True) -> dict:
 
 
 class FakeHost:
-    """宿主命令边界替身：签发宿主运行凭据、容器内 sha256sum、凭据与 CA 文件存在性（测试里容器坐标即宿主坐标）。"""
+    """宿主命令边界替身：签发宿主运行凭据、容器内 sha256sum、两个容器里的必需文件与全局状态（容器坐标即宿主坐标）。
 
-    def __init__(self, *, files_present: bool = True) -> None:
+    ``missing`` 列出缺失的 ``(容器, 路径)``；``global_state_digests`` 是两个容器里全局状态文件的摘要（缺省相同）。
+    """
+
+    def __init__(self, *, files_present: bool = True, missing: frozenset = frozenset(), global_state_digests: dict | None = None) -> None:
         self.files_present = files_present
+        self.missing = set(missing)
+        self.global_state_digests = dict(global_state_digests or {CAPTURE: "5" * 64, SYNTHETIC: "5" * 64})
         self.calls: list[list[str]] = []
 
     def run(self, argv, *, operation, timeout_seconds=30, deadline=None, heartbeat=None, check=True):
@@ -147,7 +183,7 @@ class FakeHost:
                         "schema_version": "official-client-runtime-host-receipt/v1",
                         "issued_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "run_nonce": value("--run-nonce"),
-                        "container": {"name": value("--container"), "id": "c" * 64, "hostname": "capture"},
+                        "container": {"name": value("--container"), "id": CONTAINER_IDS[value("--container")], "hostname": value("--container")},
                         "runtime_image_reference": value("--runtime-image"),
                         "runtime_image_id": "sha256:" + "d" * 64,
                         "repo_digest_verified": True,
@@ -160,11 +196,15 @@ class FakeHost:
             output.chmod(0o600)
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[:2] == ["docker", "exec"] and argv[3:5] == ["test", "-f"]:
-            code = 0 if self.files_present else 1
+            assert argv[2] in CONTAINER_IDS, argv
+            code = 0 if self.files_present and (argv[2], argv[5]) not in self.missing else 1
             if check and code:
                 raise ConfigurationError("missing")
             return subprocess.CompletedProcess(argv, code, "", "")
         if argv[:2] == ["docker", "exec"] and argv[3] == "/usr/bin/sha256sum":
+            assert argv[2] in CONTAINER_IDS, argv
+            if argv[4] == GLOBAL_STATE:
+                return subprocess.CompletedProcess(argv, 0, f"{self.global_state_digests[argv[2]]}  {argv[4]}\n", "")
             digest = hashlib.sha256(Path(argv[4]).read_bytes()).hexdigest()
             return subprocess.CompletedProcess(argv, 0, f"{digest}  {argv[4]}\n", "")
         raise AssertionError(f"FakeHost 收到未登记的命令：{argv}")
@@ -191,9 +231,15 @@ class CaptureFixture(unittest.TestCase):
         relay = self.tool_copy / "claude_fw_e_relay.py"
         relay.write_text(FAKE_RELAY, encoding="utf-8")
         relay.chmod(0o700)
+        self.fake_bin = self.root / "bin"
+        self.fake_bin.mkdir(mode=0o700)
+        docker = self.fake_bin / "docker"
+        docker.write_text(FAKE_DOCKER, encoding="utf-8")
+        docker.chmod(0o700)
         self.control_file = self.root / "relay-control.json"
         self.env_file = self.root / "environment.json"
         self.calls_file = self.root / "relay-calls.jsonl"
+        self.docker_calls_file = self.root / "docker-calls.jsonl"
         self.set_control({})
         self.env_file.write_text(json.dumps(BASE_ENVIRONMENT), encoding="utf-8")
         self.host = FakeHost()
@@ -221,7 +267,8 @@ class CaptureFixture(unittest.TestCase):
             "runtime_image": IMAGE,
             "capture_root": str(self.data),
             "capture_tool_root": str(self.tool_copy),
-            "capture_container": "capture-cli",
+            "capture_container": CAPTURE,
+            "synthetic_capture_container": SYNTHETIC,
             "claude_bin": f"/opt/claude-{TARGET}/claude",
             "model": "claude-sonnet-5",
             "upstream_ip": "160.79.104.10",
@@ -252,7 +299,12 @@ class CaptureFixture(unittest.TestCase):
 
     def fake_binaries(self, manifest, *, deadline=None, heartbeat=None):
         del deadline, heartbeat
-        return {"schema_version": capture.BINARY_VERIFICATION_SCHEMA, "target_sha256": manifest["target_sha256"], "fake": True}
+        return {
+            "schema_version": capture.BINARY_VERIFICATION_SCHEMA,
+            "target_sha256": manifest["target_sha256"],
+            "synthetic_container": {"name": SYNTHETIC, "network_mode": "none", "client_binary": {"sha256": manifest["target_sha256"]}},
+            "fake": True,
+        }
 
     @contextlib.contextmanager
     def patched(self):
@@ -278,6 +330,8 @@ class CaptureFixture(unittest.TestCase):
                         "FAKE_RELAY_CONTROL": str(self.control_file),
                         "FAKE_RELAY_ENV": str(self.env_file),
                         "FAKE_RELAY_CALLS": str(self.calls_file),
+                        "FAKE_DOCKER_CALLS": str(self.docker_calls_file),
+                        "PATH": str(self.fake_bin) + os.pathsep + os.environ.get("PATH", ""),
                     },
                 )
             )
@@ -294,6 +348,16 @@ class CaptureFixture(unittest.TestCase):
         if not self.calls_file.exists():
             return []
         return [json.loads(line) for line in self.calls_file.read_text(encoding="utf-8").splitlines()]
+
+    def docker_calls(self) -> list[dict]:
+        if not self.docker_calls_file.exists():
+            return []
+        return [json.loads(line) for line in self.docker_calls_file.read_text(encoding="utf-8").splitlines()]
+
+    def supervisor_ledger(self, campaign: Path) -> str:
+        ledgers = list((campaign / ".supervisor").glob("run-*/events.ndjson"))
+        self.assertEqual(len(ledgers), 1)
+        return ledgers[0].read_text(encoding="utf-8")
 
 
 class CampaignJobsTests(CaptureFixture):
@@ -312,6 +376,10 @@ class CampaignJobsTests(CaptureFixture):
                 self.assertEqual(placeholders, {"host_runtime_receipt", "host_runtime_receipt_sha256", "run_nonce"})
         again = claude_upgrade._campaign_jobs(campaign, manifest, "official")
         self.assertEqual([claude_upgrade._job_execution_sha256(job) for job in jobs], [capture._job_execution_sha256(job) for job in again])
+        # 合成步骤展开到断网容器，真实上游步骤展开到抓包容器（B2-05 plan 校验同一规则）。
+        containers = {job.job_id: {tuple(step["argv"][:3]) for step in job.steps} for job in jobs}
+        self.assertEqual(containers[SMALL_SYNTHETIC_JOB], {("docker", "exec", SYNTHETIC)})
+        self.assertEqual(containers[SMALL_LIVE_JOB], {("docker", "exec", CAPTURE)})
 
     def test_frozen_rows_and_bindings_fail_closed(self) -> None:
         payload = _reduced_payload({SMALL_SYNTHETIC_JOB})
@@ -322,6 +390,13 @@ class CampaignJobsTests(CaptureFixture):
         other = self.write_campaign(payload, campaign_id="claude-code-2_1_285-t2", configuration={"capture_tool_root": ""})
         with self.assertRaisesRegex(ConfigurationError, "capture_tool_root"):
             claude_upgrade._campaign_jobs(other, claude_upgrade.load_campaign_manifest(other), "official")
+        # 早于断网容器的总计划（configuration 没有 synthetic_capture_container）不能再展开，也不在运行期补默认值。
+        legacy = self.write_campaign(payload, campaign_id="claude-code-2_1_285-t4", configuration={"synthetic_capture_container": ""})
+        with self.assertRaisesRegex(ConfigurationError, "synthetic_capture_container"):
+            claude_upgrade._campaign_jobs(legacy, claude_upgrade.load_campaign_manifest(legacy), "official")
+        same = self.write_campaign(payload, campaign_id="claude-code-2_1_285-t5", configuration={"synthetic_capture_container": CAPTURE})
+        with self.assertRaisesRegex(ConfigurationError, "独立的断网容器"):
+            claude_upgrade._campaign_jobs(same, claude_upgrade.load_campaign_manifest(same), "official")
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B4-01"):
             claude_upgrade._campaign_jobs(campaign, claude_upgrade.load_campaign_manifest(campaign), "candidate", candidate_id="c1")
 
@@ -337,7 +412,7 @@ class CampaignJobsTests(CaptureFixture):
             capture._campaign_relative_file(campaign, "../escape.json")
 
     def test_tool_dependencies_map_policy_ignored_files(self) -> None:
-        campaign = self.write_campaign(_reduced_payload({SMALL_LIVE_JOB}, strip_docker=False))
+        campaign = self.write_campaign(_reduced_payload({SMALL_LIVE_JOB}))
         job = claude_upgrade._campaign_jobs(campaign, claude_upgrade.load_campaign_manifest(campaign), "official")[0]
         files = claude_upgrade._job_tool_dependency_files(job, self.tool_identity)
         self.assertEqual(len(files), 38)
@@ -390,17 +465,21 @@ class WireClosureTests(unittest.TestCase):
 
 
 class ProbeTests(unittest.TestCase):
-    """Claude 只读探针：一次 inspect 加一次容器内只读脚本，五类快照逐字比较，残留取证进程即漂移。"""
+    """Claude 只读探针：两个采集容器各一次 inspect 加一次容器内只读脚本，五类快照按角色记录、逐字比较，任一容器残留
+    取证进程即漂移。"""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()
-        self.hosts = ["127.0.0.1 localhost", "172.30.0.10 " + ("c" * 12)]
-        self.processes: list[str] = []
+        self.hosts = {CAPTURE: ["127.0.0.1 localhost", "172.30.0.10 " + ("c" * 12)], SYNTHETIC: ["127.0.0.1 localhost"]}
+        self.processes: dict[str, list[str]] = {CAPTURE: [], SYNTHETIC: []}
+        self.network = {SYNTHETIC: ("none", {"none": {"IPAddress": ""}})}
+        self.probed: list[tuple[str, str]] = []
         self.manifest = {
             "configuration": {
-                "capture_container": "capture-cli", "ca_cert": "/opt/mitm/mitmproxy-ca-cert.pem", "ca_signing_pem": "/opt/mitm/mitmproxy-ca.pem",
+                "capture_container": CAPTURE, "synthetic_capture_container": SYNTHETIC,
+                "ca_cert": "/opt/mitm/mitmproxy-ca-cert.pem", "ca_signing_pem": "/opt/mitm/mitmproxy-ca.pem",
                 "claude_bin": f"/opt/claude-{TARGET}/claude", "credentials_file": "/root/.claude/.credentials.json",
             }
         }
@@ -408,24 +487,29 @@ class ProbeTests(unittest.TestCase):
     def fake_command(self, argv, *, operation, timeout_seconds=30, deadline=None, heartbeat=None, check=True):
         del operation, timeout_seconds, deadline, heartbeat, check
         if argv[:2] == ["docker", "inspect"]:
+            name = argv[2]
+            mode, networks = self.network.get(name, ("capture-network", {"capture-network": {"IPAddress": "172.30.0.10"}}))
             item = {
-                "Id": "c" * 64, "Image": "sha256:" + "d" * 64, "Config": {"Image": "capture"}, "RestartCount": 0,
+                "Id": CONTAINER_IDS[name], "Image": "sha256:" + "d" * 64, "Config": {"Image": "capture"}, "RestartCount": 0,
                 "State": {"Status": "running", "Running": True, "StartedAt": "2026-10-07T00:00:00Z"},
-                "HostConfig": {"Privileged": True, "NetworkMode": "capture-network"},
-                "NetworkSettings": {"Networks": {"capture-network": {"IPAddress": "172.30.0.10"}}},
+                "HostConfig": {"Privileged": name == CAPTURE, "NetworkMode": mode},
+                "NetworkSettings": {"Networks": networks},
                 "Mounts": [{"Destination": "/capture", "Source": "/data", "RW": False, "Type": "bind"}],
             }
+            self.probed.append(("inspect", name))
             return subprocess.CompletedProcess(argv, 0, json.dumps([item]), "")
-        self.assertEqual(argv[:5], ["docker", "exec", "capture-cli", "python3", "-c"])
+        self.assertEqual((argv[:2], argv[3:5]), (["docker", "exec"], ["python3", "-c"]))
+        name = argv[2]
+        self.probed.append(("exec", name))
         arguments = json.loads(argv[6])
         self.assertEqual(arguments["state_dir"], "/root/.claude")
         observed = {
-            "hosts_lines": self.hosts, "resolv_conf": {"exists": True, "sha256": "2" * 64},
+            "hosts_lines": self.hosts[name], "resolv_conf": {"exists": True, "sha256": "2" * 64},
             "ca_bundle": {"exists": True, "sha256": "3" * 64}, "mitm_ca_cert": {"exists": True, "sha256": "4" * 64},
             "mitm_ca_signing_pem": {"exists": True, "size": 10}, "claude_bin": {"exists": True, "size": 5},
             "global_state": {"exists": True, "mtime_ns": 1}, "credentials_file": {"exists": False},
             "state_dir": {"path": "/root/.claude", "entries": [], "truncated": False},
-            "capture_processes": list(self.processes), "tcp_listen_ports": [],
+            "capture_processes": list(self.processes[name]), "tcp_listen_ports": [],
         }
         return subprocess.CompletedProcess(argv, 0, json.dumps(observed), "")
 
@@ -448,22 +532,56 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "拒绝覆盖"):
             self.probe("before", "before")
         self.assertEqual(claude_upgrade.CONTINUITY_PROBE_KINDS, ("containers", "configuration", "client"))
-        credentials = json.loads((self.root / "before" / "client-state.json").read_text(encoding="utf-8"))["credentials_file"]
-        self.assertNotIn("sha256", credentials)
+        clients = json.loads((self.root / "before" / "client-state.json").read_text(encoding="utf-8"))["targets"]
+        self.assertEqual(set(clients), {"capture", "synthetic"})
+        self.assertTrue(all("sha256" not in item["credentials_file"] for item in clients.values()))
+        # 两个容器都探：各一次 inspect 加一次只读脚本，快照按角色记录。
+        self.assertEqual(self.probed, [("inspect", CAPTURE), ("exec", CAPTURE), ("inspect", SYNTHETIC), ("exec", SYNTHETIC)])
+        self.assertEqual(probe["targets"], {"capture": CAPTURE, "synthetic": SYNTHETIC})
+        containers = json.loads((self.root / "before" / "containers-state.json").read_text(encoding="utf-8"))["containers"]
+        self.assertEqual([(item["role"], item["name"], item["network_mode"]) for item in containers],
+                         [("capture", CAPTURE, "capture-network"), ("synthetic", SYNTHETIC, "none")])
 
     def test_drift_rules(self) -> None:
         before = self.probe("a", "before")
-        self.hosts = list(reversed(self.hosts)) + ["172.30.0.11 " + ("c" * 12)]
+        self.hosts[CAPTURE] = list(reversed(self.hosts[CAPTURE])) + ["172.30.0.11 " + ("c" * 12)]
         self.assertEqual(capture._probe_drift(before, self.probe("b", "after")), [])
-        self.hosts.append("127.0.0.1 api.anthropic.com")
+        self.hosts[CAPTURE].append("127.0.0.1 api.anthropic.com")
         self.assertEqual(capture._probe_drift(before, self.probe("c", "after")), ["configuration"])
-        self.hosts.pop()
-        self.processes = ["relay"]
-        self.assertEqual(capture._probe_drift(before, self.probe("d", "after")), ["processes"])
+        self.hosts[CAPTURE].pop()
+        self.processes[CAPTURE] = ["relay"]
+        drifted = self.probe("d", "after")
+        self.assertEqual(capture._probe_drift(before, drifted), ["processes"])
+        self.assertEqual(drifted["capture_processes"], ["capture:relay"])
+
+    def test_synthetic_container_drift_is_detected(self) -> None:
+        """断网容器同样逐字比较：hosts 残留、残留取证进程、被接入网络，都判漂移。"""
+
+        before = self.probe("a", "before")
+        self.hosts[SYNTHETIC].append("127.0.0.1 platform.claude.com")
+        self.assertEqual(capture._probe_drift(before, self.probe("b", "after")), ["configuration"])
+        self.hosts[SYNTHETIC].pop()
+        self.processes[SYNTHETIC] = ["claude", "relay"]
+        residual = self.probe("c", "after")
+        self.assertEqual(capture._probe_drift(before, residual), ["processes"])
+        self.assertEqual(residual["capture_processes"], ["synthetic:claude", "synthetic:relay"])
+        self.processes[SYNTHETIC] = []
+        self.network[SYNTHETIC] = ("capture-network", {"capture-network": {"IPAddress": "172.30.0.11"}})
+        self.assertEqual(capture._probe_drift(before, self.probe("d", "after")), ["containers"])
+
+    def test_both_containers_are_required(self) -> None:
+        for override in ({"synthetic_capture_container": ""}, {"synthetic_capture_container": CAPTURE}):
+            with self.subTest(override=override):
+                manifest = {"configuration": {**self.manifest["configuration"], **override}}
+                with mock.patch.object(capture, "_run_probe_command", self.fake_command), self.assertRaises(ConfigurationError):
+                    claude_upgrade._probe_capture_environment(
+                        manifest, self.root / f"x-{override['synthetic_capture_container'] or 'empty'}", "before"
+                    )
 
 
 class BinaryVerificationTests(unittest.TestCase):
-    """容器内二进制（复用 B1-10 版本探针）、宿主实体安装与运行镜像 RepoDigests 一起核对。"""
+    """抓包容器与断网容器里的二进制（复用 B1-10 版本探针与环境收据版本 2 的断网容器核验）、宿主实体安装与运行镜像
+    RepoDigests 一起核对。"""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -476,8 +594,31 @@ class BinaryVerificationTests(unittest.TestCase):
         self.digests = [IMAGE]
         self.manifest = {
             "target_version": TARGET, "target_sha256": self.sha, "official_identity": {"binary_sha256": self.sha},
-            "configuration": {"capture_container": "capture-cli", "claude_bin": f"/opt/claude-{TARGET}/claude", "runtime_image": IMAGE},
+            "configuration": {
+                "capture_container": CAPTURE, "synthetic_capture_container": SYNTHETIC,
+                "claude_bin": f"/opt/claude-{TARGET}/claude", "runtime_image": IMAGE,
+            },
         }
+        self.synthetic_error: Exception | None = None
+        self.synthetic_overrides: dict = {}
+
+    def synthetic_observation(self, version: str) -> dict:
+        """环境收据版本 2 的断网容器核验结果（替身）；``synthetic_error`` 模拟它拒绝（联网、换镜像、挂载不一致等）。"""
+
+        self.assertEqual(version, TARGET)
+        if self.synthetic_error is not None:
+            raise self.synthetic_error
+        value = {
+            "name": SYNTHETIC, "container_id": CONTAINER_IDS[SYNTHETIC], "image_id": "sha256:" + "d" * 64, "network_mode": "none",
+            "network_names": ["none"], "reference_container": CAPTURE, "reference_container_id": CONTAINER_IDS[CAPTURE],
+            "shared_mounts_sha256": "6" * 64, "reference_shared_mounts_sha256": "6" * 64, "shared_mount_count": 6,
+            "excluded_reference_mounts": ["/usr/bin/docker", "/var/run/docker.sock"],
+            "client_binary": {"path": f"/opt/claude-{TARGET}/claude", "sha256": self.sha, "version": TARGET},
+            "client_binary_probe": {"container": SYNTHETIC, "isolated_empty_home": True},
+            "raw_sha256": {"docker_inspect": "7" * 64, "reference_docker_inspect": "8" * 64},
+        }
+        value.update(self.synthetic_overrides)
+        return value
 
     def fake_command(self, argv, *, operation, timeout_seconds=30, deadline=None, heartbeat=None, check=True):
         del operation, timeout_seconds, deadline, heartbeat, check
@@ -491,12 +632,20 @@ class BinaryVerificationTests(unittest.TestCase):
         observation = ({"path": f"/opt/claude-{TARGET}/claude", "sha256": container_sha, "version": TARGET}, {"isolated_empty_home": True})
         with mock.patch.object(capture, "_run_probe_command", self.fake_command), mock.patch.object(
             capture.claude_arm64, "_client_binary_observation", return_value=observation
+        ), mock.patch.object(
+            capture.claude_arm64, "_synthetic_container_observation", side_effect=self.synthetic_observation
         ), mock.patch.object(capture, "HOST_CLIENT_BINARY_TEMPLATE", str(self.root / "opt" / "claude-{version}" / "claude")):
             return claude_upgrade._verify_official_binaries(self.manifest)
 
     def test_success_and_rejections(self) -> None:
         result = self.verify(self.sha)
+        self.assertEqual(result["schema_version"], "claude-upgrade-official-binary-verification/v2")
         self.assertEqual((result["host_binary"]["sha256"], result["runtime_image"]["reference"]), (self.sha, IMAGE))
+        self.assertEqual(
+            (result["synthetic_container"]["name"], result["synthetic_container"]["network_mode"], result["synthetic_container"]["client_binary"]["sha256"]),
+            (SYNTHETIC, "none", self.sha),
+        )
+        self.assertNotIn("raw_sha256", result["synthetic_container"])
         with self.assertRaisesRegex(ConfigurationError, "容器内目标客户端摘要"):
             self.verify("f" * 64)
         self.digests = ["other@sha256:" + "9" * 64]
@@ -506,6 +655,111 @@ class BinaryVerificationTests(unittest.TestCase):
         self.manifest["configuration"]["capture_container"] = "other"
         with self.assertRaisesRegex(ConfigurationError, "B5a-07"):
             self.verify(self.sha)
+
+    def test_synthetic_container_rejections(self) -> None:
+        """断网容器：名字不是合同容器、环境收据核验拒绝、二进制或镜像与抓包容器不同，一律在任何请求之前失败。"""
+
+        cases = (
+            ("name", lambda: self.manifest["configuration"].update(synthetic_capture_container="capture-cli-offline"), "断网容器必须是"),
+            ("networked", lambda: setattr(self, "synthetic_error", capture.claude_arm64.Arm64EnvironmentReceiptError(
+                "capture-cli-synthetic 必须以 network_mode none 运行（断网）")), "断网容器核验失败.*network_mode none"),
+            ("binary", lambda: self.synthetic_overrides.update(
+                client_binary={"path": f"/opt/claude-{TARGET}/claude", "sha256": "e" * 64, "version": TARGET}), "断网容器里的目标客户端"),
+            ("image", lambda: self.synthetic_overrides.update(image_id="sha256:" + "8" * 64), "同一 image ID"),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(case=name):
+                self.setUp()
+                mutate()
+                with self.assertRaisesRegex(ConfigurationError, message):
+                    self.verify(self.sha)
+
+
+class RoutingTests(unittest.TestCase):
+    """执行容器路由：真实上游步骤只进抓包容器、合成步骤只进断网容器；合成步骤的操作名换成 ``synthetic-job:`` 前缀。"""
+
+    LIVE = ["docker", "exec", CAPTURE, "python3", "/capture/tools/official_client_capture/claude_fw_e_relay.py", "capture",
+            "--execute", "--acknowledge-live-requests", "--upstream-ip", "160.79.104.10"]
+    SYNTHETIC_STEP = ["docker", "exec", SYNTHETIC, "python3", "/capture/tools/official_client_capture/claude_fw_e_relay.py", "capture",
+                      "--execute", "--acknowledge-synthetic-responses"]
+
+    @staticmethod
+    def layout() -> capture.CaptureLayout:
+        return capture.CaptureLayout(
+            host_data_root=Path("/data"), capture_root=PurePosixPath("/capture"), capture_container=CAPTURE,
+            capture_tool_root=PurePosixPath("/capture/tools/official_client_capture"), host_tool_root=TOOL_ROOT,
+            runtime_image=IMAGE, synthetic_container=SYNTHETIC,
+        )
+
+    def test_step_route(self) -> None:
+        layout = self.layout()
+        self.assertEqual(capture._step_route(self.LIVE, layout), ("capture", CAPTURE))
+        self.assertEqual(capture._step_route(self.SYNTHETIC_STEP, layout), ("synthetic", SYNTHETIC))
+        # 零请求演练去掉确认参数后仍按 --upstream-ip 判定。
+        self.assertEqual(capture._step_route(capture._rehearsal_argv(self.LIVE), layout), ("capture", CAPTURE))
+        self.assertEqual(capture._step_route(capture._rehearsal_argv(self.SYNTHETIC_STEP), layout), ("synthetic", SYNTHETIC))
+        for name, argv, message in (
+            ("live-in-synthetic", [*self.LIVE[:2], SYNTHETIC, *self.LIVE[3:]], "真实上游步骤必须在容器 capture-cli 里"),
+            ("synthetic-in-capture", [*self.SYNTHETIC_STEP[:2], CAPTURE, *self.SYNTHETIC_STEP[3:]], "合成步骤必须在容器 capture-cli-synthetic"),
+            ("no-docker", self.SYNTHETIC_STEP[3:], "docker exec"),
+            ("exec-option", ["docker", "exec", "-u", "root", SYNTHETIC, "python3"], "合成步骤必须在容器"),
+        ):
+            with self.subTest(case=name), self.assertRaisesRegex(ConfigurationError, message):
+                capture._step_route(argv, layout)
+
+    def test_execute_step_routes_and_renames_synthetic_operations(self) -> None:
+        context = capture.ScenarioReceiptContext(layout=self.layout())
+        seen: list[tuple[str, str]] = []
+
+        def fake_run(argv, *, operation, **_kwargs):
+            seen.append((argv[2], operation))
+            return 0
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(capture, "_run_step_command", fake_run):
+            log = Path(directory) / "step.log"
+            options = {"timeout_seconds": 1, "environment": {}, "log_path": log, "job_id": "j", "deadline": None, "heartbeat": None}
+            context.execute_step(self.SYNTHETIC_STEP, operation="job:j:step-1:attempt-1", **options)
+            context.execute_step(self.LIVE, operation="job:j:step-2:attempt-1", **options)
+            with self.assertRaisesRegex(ConfigurationError, "合成步骤必须"):
+                context.execute_step([*self.SYNTHETIC_STEP[:2], CAPTURE, *self.SYNTHETIC_STEP[3:]], operation="job:j:step-3:attempt-1", **options)
+            with self.assertRaisesRegex(ConfigurationError, "操作名必须以 job: 开头"):
+                context.execute_step(self.SYNTHETIC_STEP, operation="other:j", **options)
+        self.assertEqual(seen, [(SYNTHETIC, "synthetic-job:j:step-1:attempt-1"), (CAPTURE, "job:j:step-2:attempt-1")])
+
+    def test_host_runtime_receipt_rejects_unregistered_container(self) -> None:
+        context = capture.ScenarioReceiptContext(layout=self.layout(), attempt_root=Path("/nonexistent"), manifest={})
+        with self.assertRaisesRegex(ConfigurationError, "登记的两个采集容器"):
+            capture._issue_host_runtime_receipt(
+                context, job_id="j", probe_id="p", run_index=1, step_index=1, container="other", deadline=None, heartbeat=None
+            )
+
+
+class SupervisorCaptureContractTests(unittest.TestCase):
+    """钉住合成步骤所依赖的监督器行为（只读调用，不改监督器）：出口守护下只有 ``job:`` 开头的操作会建立 capture-cli 停止
+    绑定；绑定后 ``docker exec`` 到断网容器会被拒绝。监督器这两条行为变了，本测试先红，合成步骤的路由需要重新评估。"""
+
+    def test_synthetic_operations_skip_capture_stop_binding(self) -> None:
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        state = {"egress_guard": {"campaign_dir": "/nonexistent", "required": True}, "campaign_id": "c", "owner_nonce": "n"}
+
+        class AdmissionReached(Exception):
+            pass
+
+        with mock.patch.object(supervisor.arm64_environment, "require_runtime_egress", side_effect=AssertionError("合成步骤不得进入停止绑定")):
+            self.assertIsNone(
+                supervisor._capture_begin(Path("/nonexistent"), state, operation="synthetic-job:j:step-1:attempt-1", job_id="j", environment={})
+            )
+        with mock.patch.object(supervisor.arm64_environment, "require_runtime_egress", side_effect=AdmissionReached):
+            with self.assertRaises(AdmissionReached):
+                supervisor._capture_begin(Path("/nonexistent"), state, operation="job:j:step-1:attempt-1", job_id="j", environment={})
+        container_id = CONTAINER_IDS[CAPTURE]
+        pinned, environment = supervisor._capture_pin_command(["docker", "exec", CAPTURE, "python3"], {}, container_id)
+        self.assertEqual((pinned[2], environment["CAPTURE_CONTAINER"]), (container_id, container_id))
+        with self.assertRaisesRegex(supervisor.SupervisorError, "停止绑定不一致"):
+            supervisor._capture_pin_command(["docker", "exec", SYNTHETIC, "python3"], {}, container_id)
+        self.assertEqual(supervisor.CAPTURE_STOP_SERVICE, CAPTURE)
+        self.assertEqual((capture.LIVE_STEP_OPERATION_PREFIX, capture.SYNTHETIC_STEP_OPERATION_PREFIX), ("job:", "synthetic-job:"))
 
 
 class RehearsalRunTests(CaptureFixture):
@@ -524,6 +778,9 @@ class RehearsalRunTests(CaptureFixture):
         calls = self.relay_calls()
         self.assertEqual(len(calls), 4)
         self.assertTrue(all(call["dry_run"] and not call["execute"] and not call["acknowledgements"] for call in calls))
+        # 真实上游步骤只在联网的抓包容器里执行。
+        self.assertEqual({call["container"] for call in calls}, {CAPTURE})
+        self.assertEqual({call["container"] for call in self.docker_calls()}, {CAPTURE})
         self.assertFalse((self.data / "runs" / "claude-official").exists())
         self.assertFalse((campaign / "official").exists())
         attempt_root = campaign / "rehearsal" / "official" / "attempts" / result["attempt_id"]
@@ -541,17 +798,50 @@ class RehearsalRunTests(CaptureFixture):
         self.assertEqual([(record["item_id"], record["status"]) for record in records], [(SMALL_LIVE_JOB, "complete")])
         self.assertEqual(self.execution_tree_calls, [self.data])
         # 每一步都经 Campaign 租约的独立监督器执行：监督器事件账本里有逐步的命令事件。
-        ledgers = list((campaign / ".supervisor").glob("run-*/events.ndjson"))
-        self.assertEqual(len(ledgers), 1)
-        ledger = ledgers[0].read_text(encoding="utf-8")
+        ledger = self.supervisor_ledger(campaign)
         for index in range(1, 5):
-            self.assertIn(f"job:{SMALL_LIVE_JOB}:step-{index}:attempt-1", ledger)
+            self.assertIn(f'"job:{SMALL_LIVE_JOB}:step-{index}:attempt-1"', ledger)
+        self.assertNotIn("synthetic-job:", ledger)
+        self.assertEqual({step["host_runtime_receipt"]["container_name"] for step in job["steps"]}, {CAPTURE})
         # 判定方法的反例：证据根一旦出现（有输出落盘）或收据被改，复核即判失败。
         (self.data / "runs" / "claude-official" / "claude-code-2_1_285-t1" / SMALL_LIVE_JOB).mkdir(parents=True)
         with self.patched():
             tampered = capture.verify_rehearsal_attempt(campaign, result["attempt_id"])
         self.assertEqual(tampered["verdict"], "failed")
         self.assertIn(f"job:{SMALL_LIVE_JOB}:evidence-roots-absent", [item["check"] for item in tampered["checks"] if not item["passed"]])
+
+    def test_synthetic_job_rehearsal_runs_in_offline_container(self) -> None:
+        """合成 probe 的零请求演练（ARM64 上 official-synthetic-oauth-refresh 的重跑方式）：步骤、宿主凭据与可见核对都在
+        断网容器里，监督器操作名是 synthetic-job:，复核通过且包含路由与断网容器核验两项。"""
+
+        campaign = self.write_campaign(_reduced_payload({SMALL_SYNTHETIC_JOB, SMALL_LIVE_JOB}), mode="preflight_only")
+        with self.patched():
+            code, result, stderr = self.run_main(
+                ["capture-official", "run", "--campaign-dir", str(campaign), "--zero-request-rehearsal", "--job-id", SMALL_SYNTHETIC_JOB]
+            )
+            self.assertEqual((code, result["status"]), (0, "rehearsal_passed"), stderr)
+            verdict = capture.verify_rehearsal_attempt(campaign, result["attempt_id"])
+        self.assertEqual(verdict["verdict"], "passed", [item for item in verdict["checks"] if not item["passed"]])
+        names = {item["check"] for item in verdict["checks"]}
+        self.assertTrue({f"job:{SMALL_SYNTHETIC_JOB}:container-routing", "synthetic-container-verified"} <= names)
+        calls = self.relay_calls()
+        self.assertEqual([(call["probe"], call["container"], call["dry_run"]) for call in calls], [("v4-oauth-refresh", SYNTHETIC, True)])
+        self.assertEqual({call["container"] for call in self.docker_calls()}, {SYNTHETIC})
+        receipts = [argv for argv in self.host.calls if argv[1].endswith("runtime_host_receipt.py")]
+        self.assertEqual([argv[argv.index("--container") + 1] for argv in receipts], [SYNTHETIC])
+        visibility = [argv for argv in self.host.calls if argv[:2] == ["docker", "exec"] and argv[3] == "/usr/bin/sha256sum" and argv[4] != GLOBAL_STATE]
+        self.assertEqual({argv[2] for argv in visibility}, {SYNTHETIC})
+        ledger = self.supervisor_ledger(campaign)
+        self.assertIn(f'"synthetic-job:{SMALL_SYNTHETIC_JOB}:step-1:attempt-1"', ledger)
+        self.assertNotIn(f'"job:{SMALL_SYNTHETIC_JOB}:step-1:attempt-1"', ledger)
+        attempt = json.loads((campaign / "rehearsal" / "official" / "attempts" / result["attempt_id"] / "attempt.json").read_text(encoding="utf-8"))
+        self.assertEqual(attempt["identity"]["synthetic_capture_container"], SYNTHETIC)
+        self.assertEqual(attempt["layout"]["synthetic_capture_container"], SYNTHETIC)
+        step = attempt["results"][0]["steps"][0]
+        self.assertEqual((step["argv"][:3], step["host_runtime_receipt"]["container_name"]), (["docker", "exec", SYNTHETIC], SYNTHETIC))
+        # 演练只记录前提：两个容器里的必需文件都在、全局状态两边相同。
+        self.assertEqual((attempt["preconditions"]["missing"], attempt["preconditions"]["global_state"]["identical_across_containers"]), ([], True))
+        self.assertEqual(set(attempt["preconditions"]["targets"]), {"capture", "synthetic"})
 
     def test_gates_refuse_before_any_write(self) -> None:
         payload = _reduced_payload({SMALL_SYNTHETIC_JOB})
@@ -587,6 +877,9 @@ class RehearsalRunTests(CaptureFixture):
         manifest = claude_upgrade.load_campaign_manifest(campaign)
         self.assertTrue(manifest["rehearsal_only"])
         self.assertEqual(manifest["configuration"]["capture_root"], "/capture")
+        self.assertEqual(
+            (manifest["configuration"]["capture_container"], manifest["configuration"]["synthetic_capture_container"]), (CAPTURE, SYNTHETIC)
+        )
         self.assertEqual(manifest["configuration"]["capture_tool_root"], "/root/oauth-capture/tools/official_client_capture")
         self.assertEqual(sum(job["steps"] for job in summary["jobs"]), 79)
         copied = campaign / manifest["inputs"]["target_scenarios"]["path"]
@@ -620,6 +913,17 @@ class FormalRunTests(CaptureFixture):
         calls = self.relay_calls()
         self.assertEqual(len(calls), 5)
         self.assertTrue(all(call["execute"] and not call["dry_run"] for call in calls))
+        # 合成 probe 在断网容器、真实上游 probe 在抓包容器；宿主凭据签给步骤实际所在的容器（替身 relay 也逐步核对）。
+        self.assertEqual({call["probe"]: call["container"] for call in calls}["v4-oauth-refresh"], SYNTHETIC)
+        self.assertEqual({call["container"] for call in calls if call["probe"] != "v4-oauth-refresh"}, {CAPTURE})
+        for job in attempt["results"]:
+            expected = SYNTHETIC if job["id"] == SMALL_SYNTHETIC_JOB else CAPTURE
+            self.assertEqual({step["host_runtime_receipt"]["container_name"] for step in job["steps"]}, {expected})
+            self.assertEqual({step["argv"][2] for step in job["steps"]}, {expected})
+        ledger = self.supervisor_ledger(campaign)
+        self.assertIn(f'"synthetic-job:{SMALL_SYNTHETIC_JOB}:step-1:attempt-1"', ledger)
+        self.assertIn(f'"job:{SMALL_LIVE_JOB}:step-1:attempt-1"', ledger)
+        self.assertEqual(attempt["preconditions"]["global_state"], {"path": GLOBAL_STATE, "identical_across_containers": True})
         layout = attempt["evidence_permission_layout"]
         permissions.replay_evidence_permission_closeout(
             attempt_root,
@@ -703,6 +1007,56 @@ class FormalRunTests(CaptureFixture):
         code, _again, stderr = self.run_formal(campaign)
         self.assertEqual(code, 1)
         self.assertIn("B2-08", stderr)
+
+
+class OfflineContainerFormalTests(CaptureFixture):
+    """正式 run 对断网容器的预约前门禁与污染判定。"""
+
+    def run_formal(self, campaign: Path) -> tuple[int, dict, str]:
+        with self.patched():
+            code, result, stderr = self.run_main(["capture-official", "run", "--campaign-dir", str(campaign), "--acknowledge-live-requests"])
+        return code, result or {}, stderr
+
+    def test_preconditions_cover_both_containers_before_reservation(self) -> None:
+        cases = (
+            ("synthetic-global-state-missing", {"missing": frozenset({(SYNTHETIC, GLOBAL_STATE)})}, "synthetic:global_state"),
+            ("capture-credentials-missing", {"missing": frozenset({(CAPTURE, "/root/.claude/.credentials.json")})}, "capture:credentials_file"),
+            ("global-state-differs", {"global_state_digests": {CAPTURE: "5" * 64, SYNTHETIC: "6" * 64}}, "全局状态文件内容不同"),
+        )
+        for index, (name, options, message) in enumerate(cases):
+            with self.subTest(case=name):
+                self.host = FakeHost(**options)
+                campaign = self.write_campaign(_reduced_payload({SMALL_SYNTHETIC_JOB}), campaign_id=f"claude-code-2_1_285-p{index}")
+                code, _result, stderr = self.run_formal(campaign)
+                self.assertEqual(code, 1, stderr)
+                self.assertIn(message, stderr)
+                self.assertFalse((campaign / "official").exists())
+        self.assertEqual(self.relay_calls(), [])
+
+    def test_residual_process_in_offline_container_contaminates(self) -> None:
+        campaign = self.write_campaign(_reduced_payload({SMALL_SYNTHETIC_JOB}))
+        self.set_control({"residual": "v4-oauth-refresh"})
+        code, result, stderr = self.run_formal(campaign)
+        self.assertEqual((code, result["status"]), (2, "environment_contaminated"), stderr)
+        with self.patched():
+            _root, attempt = claude_upgrade._load_capture_attempt(campaign, "official", None, result["attempt_id"], _replay_evidence_permissions=False)
+        job = attempt["results"][0]
+        self.assertTrue(job["environment_contaminated"])
+        self.assertEqual(job["attempt_index"], 1)
+        self.assertIn(
+            {"check_id": f"job.{SMALL_SYNTHETIC_JOB}.environment.processes", "failure_code": "drifted"},
+            [{key: item[key] for key in ("check_id", "failure_code")} for item in attempt["failure_observations"]],
+        )
+        self.assertEqual(len(self.relay_calls()), 1)
+
+    def test_offline_container_drift_contaminates(self) -> None:
+        campaign = self.write_campaign(_reduced_payload({SMALL_SYNTHETIC_JOB}))
+        self.set_control({"contaminate": "v4-oauth-refresh"})
+        code, result, stderr = self.run_formal(campaign)
+        self.assertEqual((code, result["status"]), (2, "environment_contaminated"), stderr)
+        environment = json.loads(self.env_file.read_text(encoding="utf-8"))
+        self.assertEqual(environment["configuration"]["targets"]["synthetic"]["hosts_sha256"], "f" * 64)
+        self.assertEqual(environment["configuration"]["targets"]["capture"]["hosts_sha256"], "1" * 64)
 
 
 class DetachedRetryTests(CaptureFixture):

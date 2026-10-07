@@ -54,6 +54,9 @@ BASELINE_RULE_PREFIX = "claude_required_rules_"
 GUIDE_SECTION_HEADINGS = {"第二部分": "# 第二部分 Claude Code 客户端规则画像"}
 # 取证动作体：Claude 官方取证的每一步都是这一个受管脚本的 capture 子命令。
 RELAY_SCRIPT = "claude_fw_e_relay.py"
+# 步骤的执行容器占位：真实上游步骤进联网的抓包容器，合成步骤进断网容器（见 _validate_step）。
+LIVE_CONTAINER_PLACEHOLDER = "{capture_container}"
+SYNTHETIC_CONTAINER_PLACEHOLDER = "{synthetic_capture_container}"
 # 中继请求字节文件的统一命名（中继按连接号写 connNNN.client_to_upstream.bin）。
 RELAY_REQUEST_GLOB_SUFFIX = "relay/conn*.client_to_upstream.bin"
 
@@ -394,6 +397,15 @@ def _validate_step(job_id: str, step_index: int, step: Any) -> str:
     # 中继规则：真实上游场景必须冻结上游 IP，合成故障场景禁止携带。
     if live != ("--upstream-ip" in argv):
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --upstream-ip 与请求确认方式不一致。")
+    # 执行容器：真实上游步骤只能在联网的抓包容器里执行，合成步骤只能在断网容器（network_mode none）里执行。
+    # 合成计划不转发上游，但客户端仍会访问没被 hosts 覆盖的域名并携带真实凭据，只有断网容器能保证一个真实请求都发不出去
+    # （2.1.226 的 FW-F 完整 Campaign 同样让合成 probe 走 --network none 的容器）。写错容器一律失败关闭。
+    expected_container = LIVE_CONTAINER_PLACEHOLDER if live else SYNTHETIC_CONTAINER_PLACEHOLDER
+    if list(argv[:3]) != ["docker", "exec", expected_container]:
+        kind = "真实上游" if live else "合成"
+        raise ConfigurationError(
+            f"{job_id} 步骤 {step_index} 是{kind}步骤，必须以 docker exec {expected_container} 执行。"
+        )
     return probe_id
 
 
@@ -602,6 +614,10 @@ def validate_campaign_context(payload: Mapping[str, Any], context: Mapping[str, 
             raise ConfigurationError(f"场景必需变量 {name} 没有 Campaign 值。")
         if value and not _value_matches_type(value, str(item["type"])):
             raise ConfigurationError(f"场景变量 {name} 的实际值不符合 {item['type']}。")
+    # 合成步骤的断网容器必须独立于联网的抓包容器（plan 与从 Campaign 冻结副本展开同一口径）。
+    live_container = context.get("capture_container")
+    if live_container and context.get("synthetic_capture_container") == live_container:
+        raise ConfigurationError("synthetic_capture_container 必须是独立的断网容器，不能与 capture_container 相同。")
     for job in payload["capture_jobs"]:
         for value in _job_templates(job):
             for field in _template_fields(value):
@@ -1095,6 +1111,7 @@ CAMPAIGN_VARIABLES = (
     "capture_root",
     "capture_tool_root",
     "capture_container",
+    "synthetic_capture_container",
     "claude_bin",
     "model",
     "upstream_ip",
@@ -1123,7 +1140,15 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--evidence-labels", type=Path, help="目标证据标签；缺省 claude_upgrade_evidence_labels_<目标>.json")
     parser.add_argument("--claude-bin", default="", help="缺省 /opt/claude-<目标版本>/claude")
     # 以下容器内坐标缺省取场景清单变量合同的 default（单一来源，不在这里重复写死）。
-    for flag in ("--capture-root", "--capture-tool-root", "--capture-container", "--credentials-file", "--ca-signing-pem", "--ca-cert"):
+    for flag in (
+        "--capture-root",
+        "--capture-tool-root",
+        "--capture-container",
+        "--synthetic-capture-container",
+        "--credentials-file",
+        "--ca-signing-pem",
+        "--ca-cert",
+    ):
         parser.add_argument(flag, default=None)
 
 
@@ -1163,9 +1188,15 @@ def prepare_plan_arguments(arguments: argparse.Namespace) -> dict[str, Any]:
     if not arguments.claude_bin:
         arguments.claude_bin = f"/opt/claude-{arguments.target_version}/claude"
     # 与 Codex plan 同一约束：模型与容器名只能是安全标识（进入 argv 与运行坐标）。
-    for flag, value in (("--model", arguments.model), ("--capture-container", arguments.capture_container)):
+    for flag, value in (
+        ("--model", arguments.model),
+        ("--capture-container", arguments.capture_container),
+        ("--synthetic-capture-container", arguments.synthetic_capture_container),
+    ):
         if not SAFE_ID_RE.fullmatch(str(value or "")):
             raise ConfigurationError(f"{flag} 格式非法。")
+    if arguments.synthetic_capture_container == arguments.capture_container:
+        raise ConfigurationError("--synthetic-capture-container 必须是独立的断网容器，不能与 --capture-container 相同。")
     return payload
 
 

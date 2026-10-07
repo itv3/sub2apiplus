@@ -30,12 +30,13 @@ REPOSITORY_ROOT = TOOL_ROOT.parents[1]
 TARGET = "2.1.285"
 BASELINE = "2.1.226"
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "claude_2_1_226_relay_connection_sequences.json"
-# 设计 B2-05 规定的变量合同；实施补充 capture_root、capture_tool_root 与 host_runtime_receipt_sha256（见各自说明）。
+# 设计 B2-05 规定的变量合同；实施补充 capture_root、capture_tool_root、host_runtime_receipt_sha256 与 B2-06 补充的
+# synthetic_capture_container（合成 probe 的断网容器，见各自说明）。
 DESIGN_VARIABLES = {
     "campaign_id", "campaign_dir", "target_version", "target_sha256", "runtime_image", "capture_container", "claude_bin",
     "model", "upstream_ip", "credentials_file", "ca_signing_pem", "ca_cert", "host_runtime_receipt", "run_nonce",
 }
-SUPPLEMENTED_VARIABLES = {"capture_root", "capture_tool_root", "host_runtime_receipt_sha256"}
+SUPPLEMENTED_VARIABLES = {"capture_root", "capture_tool_root", "host_runtime_receipt_sha256", "synthetic_capture_container"}
 RUNTIME_VARIABLES = {"host_runtime_receipt", "host_runtime_receipt_sha256", "run_nonce"}
 SHA_A = "a" * 64
 IMAGE = "oauth-egress-capture-capture-cli@sha256:" + "b" * 64
@@ -138,6 +139,20 @@ class ScenarioManifestTests(unittest.TestCase):
             "依赖未排序": (lambda p: first_job(p)["tool_dependencies"].reverse(), "tool_dependencies"),
             "两个证据根": (lambda p: first_job(p)["evidence_roots"].append("/capture/runs/x"), "恰好一个"),
             "收据场景非空": (lambda p: first_job(p)["required_scenario_receipts"].append("A11"), "required_scenario_receipts"),
+            "真实步骤进断网容器": (
+                lambda p: first_step(p)["argv"].__setitem__(2, "{synthetic_capture_container}"),
+                "docker exec {capture_container}",
+            ),
+            "合成步骤进联网容器": (
+                lambda p: next(job for job in p["capture_jobs"] if job["id"].startswith("official-synthetic-"))["steps"][0][
+                    "argv"
+                ].__setitem__(2, "{capture_container}"),
+                "docker exec {synthetic_capture_container}",
+            ),
+            "步骤不经 docker exec": (
+                lambda p: first_step(p).update(argv=first_step(p)["argv"][3:]),
+                "docker exec {capture_container}",
+            ),
         }
         for label, (change, message) in cases.items():
             with self.subTest(label=label):
@@ -152,8 +167,11 @@ class ScenarioManifestTests(unittest.TestCase):
             capture_root="/capture", capture_tool_root="/root/oauth-capture/tools/official_client_capture",
             claude_bin="/opt/claude-2.1.285/claude", upstream_ip="160.79.104.10", credentials_file="/root/.claude/c.json",
             ca_signing_pem="/opt/mitm/a.pem", ca_cert="/opt/mitm/b.pem",
+            capture_container="capture-cli", synthetic_capture_container="capture-cli-synthetic",
         )
         plan.validate_campaign_context(payload, context)
+        with self.assertRaisesRegex(ConfigurationError, "独立的断网容器"):
+            plan.validate_campaign_context(payload, {**context, "synthetic_capture_container": "capture-cli"})
         bad = copy.deepcopy(payload)
         bad["capture_jobs"][0]["steps"][0]["argv"].append("{undeclared_name}")
         with self.assertRaisesRegex(ConfigurationError, "variable_contract 外变量"):
@@ -208,6 +226,8 @@ class CatalogConsistencyTests(unittest.TestCase):
                 synthetic = "--acknowledge-synthetic-responses" in step["argv"]
                 self.assertEqual(synthetic, bool(probe.response_plan))
                 self.assertEqual("--upstream-ip" in step["argv"], not synthetic)
+                container = "{synthetic_capture_container}" if synthetic else "{capture_container}"
+                self.assertEqual(step["argv"][:3], ["docker", "exec", container])
                 self.assertIn(f"{{capture_root}}/runs/claude-official/{{campaign_id}}/{job['id']}/{probe_id}", step["argv"])
                 self.assertEqual(job["evidence_roots"], [f"{{capture_root}}/runs/claude-official/{{campaign_id}}/{job['id']}"])
                 if synthetic:
@@ -305,6 +325,10 @@ class PlanExpansionTests(unittest.TestCase):
         self.assertEqual(report["required_rules"], list(_baseline_rules()))
         self.assertEqual(report["configuration"]["claude_bin"], f"/opt/claude-{TARGET}/claude")
         self.assertEqual(report["configuration"]["capture_root"], "/capture")
+        self.assertEqual(
+            (report["configuration"]["capture_container"], report["configuration"]["synthetic_capture_container"]),
+            ("capture-cli", "capture-cli-synthetic"),
+        )
         for name, path in (
             ("target_scenarios", plan.scenario_manifest_path(TARGET)),
             ("evidence_labels", plan.evidence_labels_path(TARGET)),
@@ -345,6 +369,9 @@ class PlanExpansionTests(unittest.TestCase):
             "run-id 超长": (_plan_argv(self.campaign_dir, campaign_id="c" * 100), "run-id"),
             "相对目录": (_plan_argv(Path("relative/campaign")), "安全绝对路径"),
             "模型名非法": ([item if item != "claude-sonnet-5" else "bad model" for item in _plan_argv(self.campaign_dir)], "--model 格式非法"),
+            "合成容器与抓包容器相同": (
+                _plan_argv(self.campaign_dir, "--synthetic-capture-container", "capture-cli"), "独立的断网容器"
+            ),
         }
         for label, (argv, message) in cases.items():
             with self.subTest(label=label):
