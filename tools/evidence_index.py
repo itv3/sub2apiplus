@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import pathlib
 import re
@@ -818,9 +819,83 @@ class CampaignEvidence:
     archive_bytes: int
 
 
-def active_campaign_evidence(text: str) -> CampaignEvidence:
-    """解析当前 Active 版本的终态收据；第二部分开头必须写明其 Campaign 链，否则失败关闭。"""
+def _load_sibling(name: str, relative: str):
+    """按文件加载 ``tools/`` 下的同仓工具模块（脚本直跑与按包导入两种方式都可用）。"""
 
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    path = pathlib.Path(__file__).resolve().parent / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"无法加载 {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _part2_by_heading(text: str, heading: str) -> str:
+    """按客户端表登记的第二部分标题切出第二部分（边界规则与 ``spec_status.second_part`` 相同：标题恰好一次，止于第三部分）。"""
+
+    starts = list(re.finditer(r"^" + re.escape(heading) + r"\s*$", text, re.M))
+    if len(starts) != 1:
+        raise ValueError(f"“{heading}”应恰好出现 1 次，实际 {len(starts)} 次")
+    end_match = re.search(r"^# 第三部分(?:\s|$)", text[starts[0].end():], re.M)
+    if end_match is None:
+        raise ValueError("缺少第二部分之后的“# 第三部分”边界")
+    return text[starts[0].start(): starts[0].end() + end_match.start()]
+
+
+def claude_campaign_evidence(text: str, root: pathlib.Path) -> CampaignEvidence | None:
+    """Claude 当前生产版本的 Campaign 封存证据坐标（Claude 升级控制面设计 B5b-06）。
+
+    按 ``tools/claude_terminal_state.py`` 的当前生产终态门禁取 production_active 的终态收据：门禁失败即失败关闭；合同生效前
+    的 2.1.226 基线精确豁免、没有终态收据与 Campaign 链，返回 None（没有 C 类证据可登记）。有收据时与 Codex 同一口径：官方
+    证据来源与末级 Campaign 必须写进 Claude 指南第二部分，私有归档坐标取收据的 ``evidence_archive``。
+    """
+
+    terminal = _load_sibling("claude_terminal_state", "claude_terminal_state.py")
+    row = _load_sibling("evidence_index_client_table", "ci/client_table.py").spec("claude")
+    try:
+        state, current = terminal.current_terminal_receipt(root)
+    except terminal.TerminalStateError as error:
+        raise ValueError(f"Claude 终态门禁失败：{error}") from error
+    if current is None:
+        return None
+    path, receipt = current
+    chain = receipt["campaign_chain"]
+    official = tuple(str(link["campaign_id"]) for link in chain if link.get("role") == "official_evidence_source")
+    canonical = str(chain[-1]["campaign_id"])
+    part = _part2_by_heading(text, str(row["guide_part2_heading"]))
+    missing = [campaign for campaign in (*official, canonical) if campaign not in part]
+    if missing:
+        raise ValueError(f"Claude 第二部分未写明 {state['version']} 终态收据的 Campaign：{missing}")
+    archive = receipt["evidence_archive"]
+    return CampaignEvidence(
+        version=str(state["version"]),
+        receipt=path.relative_to(root).as_posix(),
+        official_campaigns=official,
+        canonical_campaign=canonical,
+        archive_path=str(archive["path"]),
+        archive_sha256=str(archive["sha256"]),
+        archive_bytes=int(archive["bytes"]),
+    )
+
+
+def active_campaign_evidence(
+    text: str, *, client: str = "codex", root: pathlib.Path | None = None
+) -> CampaignEvidence | None:
+    """解析当前 Active 版本的终态收据；第二部分开头必须写明其 Campaign 链，否则失败关闭。
+
+    ``client="claude"`` 时转 ``claude_campaign_evidence``（``root`` 缺省为本仓库根，``text`` 是 Claude 指南全文）；Codex
+    分支只读本仓库固定坐标，判据与改动前逐字相同，不接受 ``root``。
+    """
+
+    if client == "claude":
+        return claude_campaign_evidence(text, pathlib.Path(root) if root is not None else ROOT)
+    if client != "codex" or root is not None:
+        raise ValueError(f"终态证据读取的客户端或仓库根非法：client={client!r}，root={root!r}")
     catalog = json.loads(RUNTIME_CATALOG.read_text(encoding="utf-8"))
     graph_path = RUNTIME_CATALOG.parents[2] / catalog["release_graph"]["path"]
     graph = json.loads(graph_path.read_text(encoding="utf-8"))

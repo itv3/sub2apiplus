@@ -37,6 +37,9 @@
 * Campaign 用途（B5b-01）：选用途的参数键。Codex 为空——入口建计时账本与预检 Campaign 固定 ``production_replacement``，
   参数文件写了 ``CAMPAIGN_PURPOSE`` 即拒绝，步骤表与命令行逐字不变；Claude 是 ``CAMPAIGN_PURPOSE``（缺省
   ``production_replacement``，可选 ``validation_only``），计时账本与预检 plan 两步登记它；
+* 收尾编排（B5b-06）：收尾配置与方案的合同名（``closeout_schema``，``tools/codex_closeout.py`` 按配置的合同名分派客户端）、
+  候选分支名（``closeout_candidate_branch``）与终态收据文件名前缀（``terminal_receipt_prefix``）。Codex 三项与改造前收尾里的
+  字面逐字相同；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -210,6 +213,10 @@ _CODEX: Mapping[str, Any] = {
     "campaign_purpose_key": None,
     # 同目标复用旧链（B5b-01）：stage2.sh 用编排器这个子命令把前序官方证据原子导入新 Campaign 并对齐账本（Codex 原样）。
     "official_reuse_subcommand": "reuse-official-evidence",
+    # 收尾编排（B5b-06）：与改造前 codex_closeout 的合同名、候选分支名与终态收据前缀逐字相同。
+    "closeout_schema": "codex-upgrade-closeout/v1",
+    "closeout_candidate_branch": "codex-closeout-candidate",
+    "terminal_receipt_prefix": "CODEX_CLI_",
     "pending": {},
 }
 
@@ -377,6 +384,10 @@ _CLAUDE: Mapping[str, Any] = {
     # 同目标复用旧链（B5b-01）：Claude 没有 reuse-official-evidence——同目标复用由 entry.sh 承担（证据决定 reuse 时预检 plan
     # 冻结前序只读复用，VC-0 收口按它建 Formal，VC-1 seal 一步只读封存），stage1.sh／stage2.sh 对 Claude 失败关闭并指向 entry.sh。
     "official_reuse_subcommand": None,
+    # 收尾编排（B5b-06）：同一份 codex_closeout 按合同名分派到 tools/claude_closeout.py；终态收据合同见 tools/claude_terminal_state.py。
+    "closeout_schema": "claude-upgrade-closeout/v1",
+    "closeout_candidate_branch": "claude-closeout-candidate",
+    "terminal_receipt_prefix": "CLAUDE_CODE_",
     # B5b-01 拆出的 b 段：Claude 的 VC-5 派发动作依赖尚在进行的候选采集与封存、验收读侧和候选恢复，这些驱动在落实前一律失败
     # 关闭并写明工作项，不先猜旗标，也不拿 Codex 的形状顶替。
     "pending": {

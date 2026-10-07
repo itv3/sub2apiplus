@@ -118,9 +118,9 @@
     },
     {
       "path": "driver/client_table.py",
-      "sha256": "5168f171b67a7cfba492f3c753ac3cd49d5d908f48e21dc92814ab88cb1ec8c5",
+      "sha256": "37e839448e47c305f277b14d0e67ed33a78a225002a0871093f432aa1c868f18",
       "mode": "0700",
-      "bytes": 38390
+      "bytes": 39338
     },
     {
       "path": "driver/driver_config.py",
@@ -621,5 +621,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "4f19cd7142244f72b32a13bd78d150471a603641ed3b7ff9520eab6d712c45e5"
+  "manifest_sha256": "31555964d2e27a289b3186e803acb870ec0cc08a788ae9b8e96ad1e7dae06f7d"
 }

@@ -2,6 +2,11 @@
 """Codex 升级收尾：候选制品、指南人工批准、完整门禁和可恢复发布。
 
 候选制品只写入隔离目录；正式冻结承接、终态签发与推送必须消费同一份指南批准和门禁结论。
+
+Claude 升级共用这一份收尾编排（Claude 升级控制面设计 B5b-06）：配置合同名是 ``claude-upgrade-closeout/v1`` 时（客户端表
+``closeout_schema``），随客户端变的三件事——指南材料的封存读侧、第二部分摘要连锁、终态收据的生成与校验——转给
+``tools/claude_closeout.py``，指南文件与第二部分标题、候选分支名、终态收据文件名前缀按客户端表取值；候选隔离、人工批准、
+完整门禁、步骤日志、清理与推送逐字共用。Codex 配置的输入、输出、报错与改造前逐字相同（客户端表的 Codex 取值就是原字面）。
 """
 
 from __future__ import annotations
@@ -31,11 +36,16 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.arm64_capture_driver.driver import fix_safety as safety
+from tools.ci import client_table
 
 GUIDE = "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 PART2 = "# 第二部分 Codex CLI 客户端规则画像"
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SCHEMA = "codex-upgrade-closeout/v1"
+# 收尾配置与方案的合同名 → 客户端（B5b-06，客户端表 ``closeout_schema``；Codex 一行就是上面的 ``SCHEMA``）。
+CLIENT_SCHEMAS = {client_table.spec(name)["closeout_schema"]: name for name in client_table.CLIENTS}
+# Claude 收尾另绑定的工具文件（相对本文件所在目录）：客户端部分、终态合同与客户端表。
+CLIENT_TOOL_FILES = ("claude_closeout.py", "claude_terminal_state.py", "ci/client_table.py")
 
 
 class CloseoutError(ValueError):
@@ -58,6 +68,21 @@ def inside(root, relative):
     return safety.plain(Path(root) / item)
 
 
+def client_of(config):
+    """收尾配置（或方案）属于哪个客户端：按合同名查客户端表（未知合同名先由 ``validate_config`` 拒绝）。"""
+    return CLIENT_SCHEMAS[config["schema_version"]]
+
+
+def _claude():
+    from tools import claude_closeout
+    return claude_closeout
+
+
+def _base():
+    """传给客户端部分的本模块（共用路径、摘要、Git 与错误类型；直跑与按包导入都取到正在运行的这一份）。"""
+    return sys.modules[__name__]
+
+
 def load_module(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -66,10 +91,10 @@ def load_module(path, name):
     return module
 
 
-def part2_sha(text):
-    """与正式 source_spec_section_sha256 保持相同的章节边界和原始换行。"""
+def part2_sha(text, heading=PART2):
+    """与正式 source_spec_section_sha256 保持相同的章节边界和原始换行（``heading`` 缺省为 Codex 第二部分标题）。"""
     lines = text.splitlines(keepends=True)
-    starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == PART2]
+    starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == heading]
     if len(starts) != 1:
         raise CloseoutError("指南必须恰有一个第二部分")
     start = starts[0]
@@ -77,8 +102,10 @@ def part2_sha(text):
     return sha("".join(lines[start:end]).encode())
 
 
-def source_updates(repo, guide_text):
-    """只更新指南、十二类现存清单的来源摘要与实际引用它们的检查器常量。"""
+def source_updates(repo, guide_text, client="codex"):
+    """只更新指南、十二类现存清单的来源摘要与实际引用它们的检查器常量（Claude 转 ``claude_closeout.source_updates``）。"""
+    if client != "codex":
+        return _claude().source_updates(repo, guide_text, base=_base())
     repo = safety.plain(repo)
     guide = inside(repo, GUIDE)
     before = guide.read_text()
@@ -151,15 +178,21 @@ def source_updates(repo, guide_text):
     return updates
 
 
-def collect_guide_material(campaign, candidate):
+def collect_guide_material(campaign, candidate, client="codex"):
     """在独立解释器中使用 Campaign 的受管读侧，避免把源码副本误当成证据数据根。"""
     campaign = safety.plain(campaign)
     if campaign.parent.name != "campaigns" or campaign.parent.parent.name != "evidence":
         raise CloseoutError("Campaign 必须位于受管根的 evidence/campaigns 下")
     reader_root = campaign.parents[2]
-    safety.file_binding(reader_root / "tools/official_client_capture/codex_upgrade.py")
-    result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "read-material",
-                             "--campaign", str(campaign), "--candidate", candidate],
+    if client == "codex":
+        safety.file_binding(reader_root / "tools/official_client_capture/codex_upgrade.py")
+    else:
+        _claude().reader_binding(reader_root, _base())
+    argv = [sys.executable, "-B", str(Path(__file__).resolve()), "read-material",
+            "--campaign", str(campaign), "--candidate", candidate]
+    if client != "codex":
+        argv += ["--client", client]
+    result = subprocess.run(argv,
                             cwd=reader_root, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                             capture_output=True, text=True)
     if result.returncode:
@@ -219,15 +252,15 @@ def read_guide_material(campaign, candidate):
             "official_observation_counts": counts}
 
 
-def guide_draft(original, material, baseline_profile):
-    """生成受影响规则的可审核草稿，不把候选内部判据的零官方观测称为实测通过。"""
+def guide_draft(original, material, baseline_profile, heading=PART2):
+    """生成受影响规则的可审核草稿，不把候选内部判据的零官方观测称为实测通过（``heading`` 缺省为 Codex 第二部分标题）。"""
     entries = material["migration"]["entries"]
     current = {row["rule_id"]: row for row in material["profile"]["rules"]}
     baseline = {row["rule_id"]: row for row in baseline_profile["rules"]}
     affected = []
-    start = original.index(PART2)
-    end = re.search(r"(?m)^# ", original[start + len(PART2):])
-    end = start + len(PART2) + end.start() if end else len(original)
+    start = original.index(heading)
+    end = re.search(r"(?m)^# ", original[start + len(heading):])
+    end = start + len(heading) + end.start() if end else len(original)
     prefix, text, suffix = original[:start], original[start:end], original[end:]
     for entry in entries:
         rule_id = entry.get("target_rule") or entry.get("baseline_rule")
@@ -254,7 +287,7 @@ def guide_draft(original, material, baseline_profile):
             text = text[:found[0].start()] + body + text[found[0].end():]
         else:
             lines = text.splitlines(keepends=True)
-            start = next(i for i, line in enumerate(lines) if line.rstrip() == PART2)
+            start = next(i for i, line in enumerate(lines) if line.rstrip() == heading)
             end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("# ")), len(lines))
             text = "".join(lines[:end]) + body + "".join(lines[end:])
     return {"guide_text": prefix + text + suffix, "affected_rule_ids": sorted(set(affected)), "material_sha256": digest(material)}
@@ -272,6 +305,14 @@ def terminal_candidate(repo, facts, receipt_relative):
     value["identity_sha256"] = ledger.codex_terminal_state_identity(value, trailing_newline=False)
     ledger.validate_codex_terminal_state_document(value, receipt_relative)
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
+def terminal_for(client):
+    """终态候选生成器：Codex 是本文件的 ``terminal_candidate``（调用时取，便于隔离替身），Claude 转 ``claude_closeout``。"""
+    if client == "codex":
+        return terminal_candidate
+    claude = _claude()
+    return lambda repo, facts, relative: claude.terminal_candidate(repo, facts, relative, base=_base())
 
 
 def git(repo, *args, check=True):
@@ -455,7 +496,7 @@ def check_cleanup_context(plan):
 def validate_config(config):
     required = {"schema_version", "repo", "work_root", "guide", "material", "terminal_facts", "terminal_relative",
                 "tag", "gate", "cleanup", "push", "deployment_check"}
-    if set(config) != required or config["schema_version"] != SCHEMA:
+    if set(config) != required or config["schema_version"] not in CLIENT_SCHEMAS:
         raise CloseoutError("收尾配置字段不完整或存在未知字段")
     repo, work = safety.plain(config["repo"]), safety.plain(config["work_root"])
     if work.is_relative_to(repo) or repo.is_relative_to(work):
@@ -514,6 +555,8 @@ def config_bindings(config):
     paths += [config["gate"][name] for name in ("driver", "vc_env")]
     paths += [str(Path(config["gate"]["node_modules"]) / "pnpm-lock.yaml")]
     paths.append(str(Path(__file__).resolve()))
+    if client_of(config) != "codex":
+        paths += [str(Path(__file__).resolve().parent / name) for name in CLIENT_TOOL_FILES]
     # 入口脚本会加载同目录工具；只绑定一个 shell 文件不足以防止门禁实现漂移。
     driver = Path(config["gate"]["driver"])
     if driver.name != "entry-gates.sh":
@@ -537,25 +580,28 @@ def prepare(config, *, dry_run=False):
     cleanup_source = deepcopy(config["cleanup"])
     config, cleanup_context = resolve_cleanup(config)
     repo, work = validate_config(config)
+    client, row = client_of(config), client_table.spec(client_of(config))
     bound = config_bindings(config)
     head = git(repo, "rev-parse", "HEAD").stdout.strip()
     branch = git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
     if git(repo, "status", "--porcelain").stdout.strip():
         raise CloseoutError("权威仓库必须先提交并保持干净，才能绑定收尾方案")
-    updates = source_updates(repo, Path(config["guide"]).read_text())
+    updates = source_updates(repo, Path(config["guide"]).read_text(), client=client)
     material = safety.read(config["material"])
     if not all(material.get(key) for key in ("campaign_id", "candidate_id", "target_version", "classification_sha256", "official_stage_sha256")):
         raise CloseoutError("指南缺少正式 VC-2 与 VC-1 材料绑定")
-    if collect_guide_material(material["campaign_path"], material["candidate_id"]) != material:
+    if client != "codex" and material.get("client") != client:
+        raise CloseoutError("指南材料不是本客户端的封存链材料")
+    if collect_guide_material(material["campaign_path"], material["candidate_id"], client=client) != material:
         raise CloseoutError("指南材料不能从封存链重放")
     facts = safety.read(config["terminal_facts"])
     if facts.get("target", {}).get("version") != material["target_version"] or facts.get("campaign_chain", [{}])[-1].get("campaign_id") != material["campaign_id"]:
         raise CloseoutError("终态事实和指南材料不是同一 Campaign／版本")
-    terminal_text = terminal_candidate(repo, facts, config["terminal_relative"])
+    terminal_text = terminal_for(client)(repo, facts, config["terminal_relative"])
     terminal_path = inside(repo, config["terminal_relative"])
     if terminal_path.exists():
         raise CloseoutError("终态坐标已存在，不允许重签旧升级；使用下一轮真实事实")
-    for existing in terminal_path.parent.glob("CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json"):
+    for existing in terminal_path.parent.glob(row["terminal_receipt_prefix"] + "*_TERMINAL_STATE_RECEIPT.json"):
         if safety.read(existing).get("target", {}).get("version") == material["target_version"]:
             raise CloseoutError("目标版本已有终态收据，不允许换路径重复签发")
     basis = {"config": config, "input_files": bound, "base_commit": head, "branch": branch,
@@ -588,6 +634,8 @@ def prepare(config, *, dry_run=False):
         for relative, update in updates.items():
             inside(candidate, relative).write_text(update["text"])
         write_text_once(inside(candidate, config["terminal_relative"]), terminal_text)
+        if client != "codex":
+            _claude().verify_candidate(candidate, config["terminal_relative"], base=_base())
         from tools.upstream_merge.freeze import generate_freeze_successor
         freeze_relative = "docs/egress/maintenance/closeout-" + config["tag"] + "-freeze-successor.json"
         freeze = generate_freeze_successor(candidate, head, None, inside(candidate, freeze_relative), tag=config["tag"],
@@ -602,11 +650,11 @@ def prepare(config, *, dry_run=False):
         git(candidate, "add", "--", *outputs)
         git(candidate, "commit", "--no-gpg-sign", "-m", "收尾候选：" + config["tag"])
         commit = git(candidate, "rev-parse", "HEAD").stdout.strip()
-        git(candidate, "branch", "codex-closeout-candidate", commit)
+        git(candidate, "branch", row["closeout_candidate_branch"], commit)
         bundle = work / "candidate.bundle"
-        git(candidate, "bundle", "create", str(bundle), "codex-closeout-candidate")
+        git(candidate, "bundle", "create", str(bundle), row["closeout_candidate_branch"])
         candidate_manifest = tree_manifest(candidate)
-        plan = {"schema_version": SCHEMA, "input_sha256": key, "basis": basis, "candidate": str(candidate),
+        plan = {"schema_version": config["schema_version"], "input_sha256": key, "basis": basis, "candidate": str(candidate),
                 "candidate_commit": commit, "candidate_tree": git(candidate, "rev-parse", "HEAD^{tree}").stdout.strip(),
                 "candidate_files": candidate_manifest, "bundle": safety.file_binding(bundle), "outputs": sorted(outputs),
                 "candidate_only": True, "prepared_at_utc": datetime.now(timezone.utc).isoformat()}
@@ -631,7 +679,7 @@ def verify_binding(binding):
 def load_plan(path):
     """所有入口重新核对候选、bundle 和输入，外部修改必须新建方案及批准。"""
     plan = safety.read(path)
-    if plan.get("schema_version") != SCHEMA or not plan.get("candidate_only"):
+    if plan.get("schema_version") not in CLIENT_SCHEMAS or not plan.get("candidate_only"):
         raise CloseoutError("不是受管候选方案")
     if plan.get("review_sha256") != digest({k: v for k, v in plan.items() if k != "review_sha256"}):
         raise CloseoutError("方案自摘要不一致")
@@ -640,6 +688,8 @@ def load_plan(path):
         raise CloseoutError("方案输入摘要不一致")
     config = basis["config"]
     repo, work = validate_config(config)
+    if config["schema_version"] != plan["schema_version"]:
+        raise CloseoutError("不是受管候选方案")
     if safety.plain(path) != work / "plan.json" or Path(plan["candidate"]) != work / "candidate":
         raise CloseoutError("方案与工作根绑定不一致")
     if config_bindings(config) != basis["input_files"]:
@@ -775,7 +825,8 @@ def run_gates(plan_path):
             argv = ["bash", config["gate"]["driver"], "--profile", "full-gates", "--mode", "re-execute",
                     "--out", str(work / "gates"), "--work", str(work / "gate-work"),
                     "--record-store", str(work / "gate-records"), plan["bundle"]["path"],
-                    "codex-closeout-candidate", plan["candidate_commit"], config["gate"]["node_modules"]]
+                    client_table.spec(client_of(config))["closeout_candidate_branch"], plan["candidate_commit"],
+                    config["gate"]["node_modules"]]
             journal(plan, "gates", "started", {"argv": argv, "started_at_utc": datetime.now(timezone.utc).isoformat()})
             env = {**os.environ, "ARM64_VC_ENV": config["gate"]["vc_env"], "PYTHONDONTWRITEBYTECODE": "1"}
             started = time.monotonic()
@@ -903,10 +954,13 @@ def publish(plan_path, approvals):
         # 部署核验是只读动作，失败阻断后续正式写入；动作脚本与凭证本身已绑定人工批准。
         run_action(plan, "deployment_check")
         load_plan(plan_path)
+        client = client_of(config)
         material = safety.read(config["material"])
-        if collect_guide_material(material["campaign_path"], material["candidate_id"]) != material:
+        if collect_guide_material(material["campaign_path"], material["candidate_id"], client=client) != material:
             raise CloseoutError("发布前封存链发生漂移")
-        terminal_candidate(plan["candidate"], safety.read(config["terminal_facts"]), config["terminal_relative"])
+        terminal_for(client)(plan["candidate"], safety.read(config["terminal_facts"]), config["terminal_relative"])
+        if client != "codex":
+            _claude().verify_candidate(plan["candidate"], config["terminal_relative"], base=_base())
         tip = remote_tip(plan)
         if tip not in {config["push"]["expected_tip"], plan["candidate_commit"]}:
             raise CloseoutError("远端提交变化，停止发布")
@@ -918,7 +972,8 @@ def publish(plan_path, approvals):
                 raise CloseoutError("缺少权威分支推进占位")
             journal(plan, "integrate", "started", {"approvals": evidence, "commit": plan["candidate_commit"]})
         if git(repo, "rev-parse", "HEAD").stdout.strip() == plan["basis"]["base_commit"]:
-            git(repo, "fetch", "--no-tags", "--no-write-fetch-head", plan["candidate"], "refs/heads/codex-closeout-candidate")
+            git(repo, "fetch", "--no-tags", "--no-write-fetch-head", plan["candidate"],
+                "refs/heads/" + client_table.spec(client)["closeout_candidate_branch"])
             git(repo, "merge", "--ff-only", "--no-edit", plan["candidate_commit"])
         if tree_manifest(repo) != plan["candidate_files"]:
             raise CloseoutError("权威分支与通过门禁的候选不一致")
@@ -959,9 +1014,11 @@ def main(argv=None):
     reader = sub.add_parser("read-material", help="独立进程按受管数据根重放正式材料")
     reader.add_argument("--campaign", required=True)
     reader.add_argument("--candidate", required=True)
+    reader.add_argument("--client", choices=client_table.CLIENTS, default="codex", help="缺省 codex（与改造前相同）")
     draft = sub.add_parser("draft", help="从正式封存链生成指南材料和草稿，不签发批准")
     for name in ("campaign", "candidate", "guide", "baseline-profile", "output"):
         draft.add_argument("--" + name, required=True)
+    draft.add_argument("--client", choices=client_table.CLIENTS, default="codex", help="缺省 codex（与改造前相同）")
     pre = sub.add_parser("prepare", help="生成可审核隔离候选；dry-run 零写入")
     pre.add_argument("--config", required=True)
     pre.add_argument("--dry-run", action="store_true")
@@ -975,10 +1032,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "read-material":
-            result = read_guide_material(args.campaign, args.candidate)
+            if args.client == "codex":
+                result = read_guide_material(args.campaign, args.candidate)
+            else:
+                result = _claude().read_guide_material(args.campaign, args.candidate, base=_base())
         elif args.command == "draft":
-            material = collect_guide_material(args.campaign, args.candidate)
-            generated = guide_draft(safety.plain(args.guide).read_text(), material, safety.read(args.baseline_profile))
+            material = collect_guide_material(args.campaign, args.candidate, client=args.client)
+            heading = PART2 if args.client == "codex" else client_table.spec(args.client)["guide_part2_heading"]
+            generated = guide_draft(safety.plain(args.guide).read_text(), material, safety.read(args.baseline_profile), heading=heading)
             output = safety.plain(args.output)
             safety.write_once(output / "material.json", material)
             write_text_once(output / "guide.md", generated["guide_text"])

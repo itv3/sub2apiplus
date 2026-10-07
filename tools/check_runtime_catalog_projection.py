@@ -13,12 +13,19 @@
 `0.151→0.154` 终态收据批准的 0.149.1 画像，在 0.157 成为 Active 后仍由它批准）。当前 Active
 必须恰好有一份终态收据；任何一项不满足都失败关闭，排除之后其余文件仍必须与 dump 结果逐字节
 完全一致。
+
+Claude 当前生产终态门禁（Claude 升级控制面设计 B5b-06）也由本检查承担：运行投影闭集通过之后，实检接着按
+``tools/claude_terminal_state.py`` 核对 Claude Release 目录的 production_active 恰好有一份通过校验的终态收据（合同生效前的
+2.1.226 基线精确豁免，见该文件模块说明）。Claude 部分只在失败时向 stderr 报错，stdout 仍只输出运行投影报告；上面 Codex
+部分的判据、报告与报错逐字不变。自测在 Codex 正负例之后另跑 Claude 合成夹具的正负例，以及“Codex 投影通过、Claude 终态
+缺失或损坏”时实检失败的组合例。
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import sys
@@ -38,6 +45,10 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class ProjectionError(RuntimeError):
     """运行投影闭集不可信；一律失败关闭，不降级为警告。"""
+
+
+class ClaudeTerminalError(ProjectionError):
+    """Claude 当前生产终态门禁失败（与运行投影闭集失败分开报出）。"""
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -286,6 +297,43 @@ def _relative_files(directory: Path, label: str) -> dict[str, Path]:
         if path.is_file():
             files[path.relative_to(directory).as_posix()] = path
     return files
+
+
+def _claude_terminal_state() -> Any:
+    """按文件加载同目录的 ``claude_terminal_state.py``（脚本直跑与按包导入两种方式都可用）。"""
+
+    module = sys.modules.get("claude_terminal_state")
+    if module is not None:
+        return module
+    path = Path(__file__).resolve().with_name("claude_terminal_state.py")
+    spec = importlib.util.spec_from_file_location("claude_terminal_state", path)
+    if spec is None or spec.loader is None:
+        raise ProjectionError(f"无法加载 Claude 终态合同：{path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["claude_terminal_state"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def verify_claude_terminal(root: Path) -> dict[str, Any]:
+    """Claude 当前生产终态门禁（B5b-06）：转调 ``claude_terminal_state``，失败一律转成 ``ProjectionError``。"""
+
+    module = _claude_terminal_state()
+    try:
+        return module.validate_claude_terminal_state_receipts(root)
+    except module.TerminalStateError as error:
+        raise ProjectionError(str(error)) from error
+
+
+def check(root: Path, dump_root: Path, repo_root: Path) -> dict[str, Any]:
+    """实检：运行投影闭集，再接 Claude 当前生产终态门禁；返回运行投影报告（Claude 部分只在失败时报错）。"""
+
+    report = verify(root, dump_root, repo_root)
+    try:
+        verify_claude_terminal(root)
+    except ProjectionError as error:
+        raise ClaudeTerminalError(str(error)) from error
+    return report
 
 
 def verify(root: Path, dump_root: Path, repo_root: Path) -> dict[str, Any]:
@@ -653,7 +701,42 @@ def self_test() -> int:
         _expect_failure("历史收据退休自身目标版本", root, dump, runtime)
 
     print("运行投影闭集门禁自测通过：正例 2 项、负例 16 项")
+    claude = _claude_terminal_state()
+    try:
+        positives, negatives = claude.self_test()
+    except AssertionError as error:
+        raise SystemExit(f"🔴 {error}") from error
+    combined = _claude_combined_self_test(claude)
+    print(f"Claude 终态门禁自测通过：正例 {positives + combined[0]} 项、负例 {negatives + combined[1]} 项")
     return 0
+
+
+def _claude_combined_self_test(claude: Any) -> tuple[int, int]:
+    """组合例：Codex 运行投影闭集通过时，实检仍须按 Claude 终态门禁失败关闭（缺失、损坏），合规时通过。"""
+
+    with tempfile.TemporaryDirectory() as directory:
+        base = Path(directory)
+        root, dump, runtime = _build_fixture(base / "claude-ok")
+        state = claude.write_fixture_catalog(root, "9.9.9")
+        claude.write_fixture_receipt(root, claude.fixture_terminal_receipt(root, state, previous_version="9.9.8"))
+        if check(root, dump, runtime) != verify(root, dump, runtime):
+            raise SystemExit("🔴 自测组合正例：实检报告与运行投影报告不一致")
+        failures = 0
+        for label, damage in (
+            ("Claude 终态收据缺失", lambda path: path.unlink()),
+            ("Claude 终态收据损坏", lambda path: path.write_text("{", encoding="utf-8")),
+        ):
+            root, dump, runtime = _build_fixture(base / ("claude-" + str(failures)))
+            state = claude.write_fixture_catalog(root, "9.9.9")
+            damage(claude.write_fixture_receipt(root, claude.fixture_terminal_receipt(root, state, previous_version="9.9.8")))
+            verify(root, dump, runtime)
+            try:
+                check(root, dump, runtime)
+            except ClaudeTerminalError:
+                failures += 1
+                continue
+            raise SystemExit(f"🔴 自测组合负例未失败关闭：{label}")
+    return 1, failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -671,7 +754,10 @@ def main(argv: list[str] | None = None) -> int:
     if dump is None:
         parser.error("实检必须提供 --dump")
     try:
-        report = verify(root, dump.resolve(), repo.resolve())
+        report = check(root, dump.resolve(), repo.resolve())
+    except ClaudeTerminalError as error:
+        print(f"🔴 Claude 终态门禁失败：{error}", file=sys.stderr)
+        return 1
     except ProjectionError as error:
         print(f"🔴 运行投影闭集校验失败：{error}", file=sys.stderr)
         return 1
