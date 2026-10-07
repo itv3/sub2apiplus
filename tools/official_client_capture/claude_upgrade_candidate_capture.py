@@ -342,6 +342,7 @@ def formal_admission(
     *,
     deadline: Any | None = None,
     heartbeat: Any | None = None,
+    recovery_revision: str | None = None,
 ) -> CandidateAdmission:
     """正式候选 run 的入口门（见文件头第一节，顺序固定）；任何一项不满足即在预约之前拒绝，零写入。"""
 
@@ -422,7 +423,12 @@ def formal_admission(
     # 5. 运行坐标覆盖（Claude 恒为失败关闭或原样返回）。
     effective = apply_runtime_override(campaign_dir, manifest, candidate_id)
     # 6. 未封存。
-    require_unsealed(campaign_dir, candidate_id, revision=revision)
+    if recovery_revision is None:
+        require_unsealed(campaign_dir, candidate_id, revision=revision)
+    else:
+        from tools.official_client_capture import claude_upgrade_attempt_segment
+
+        claude_upgrade_attempt_segment.validate_recovery_admission(campaign_dir, candidate_id, recovery_revision)
     return CandidateAdmission(
         candidate_id=candidate_id,
         manifest=effective,
@@ -1382,10 +1388,12 @@ class CandidateRunHooks:
     gateway_drifted: list[str] = field(default_factory=list)
     selector_path: Path | None = None
     activation_fact: dict[str, Any] | None = None
+    recovery_revision: str | None = None
 
     def admit(self, manifest: dict[str, Any], *, deadline: Any | None) -> dict[str, Any]:
         admit = formal_admission if self.mode == capture.MODE_FORMAL else rehearsal_admission
-        self.admission = admit(self.campaign_dir, manifest, self.candidate_id, deadline=deadline)
+        self.admission = admit(self.campaign_dir, manifest, self.candidate_id, deadline=deadline,
+                               **({"recovery_revision": self.recovery_revision} if self.recovery_revision is not None else {}))
         return self.admission.manifest
 
     def _require_admitted(self) -> CandidateAdmission:
@@ -1573,6 +1581,9 @@ def add_run_arguments(target: argparse.ArgumentParser) -> None:
         help="零请求演练：只用于 preflight_only Campaign，宿主脚本只做只读前检、relay 改为 --dry-run，不发任何请求。",
     )
     target.add_argument("--job-id", help="零请求演练要执行的单个 candidate Job。")
+    target.add_argument("--attempt-recovery", help="当前 transient 裁定授权的恢复段 ar<k>（run 与 seal 共用）。")
+    target.add_argument("--rerun-failed", action="store_true", help="恢复段失败后，按已批准预览开连续后继段。")
+    target.add_argument("--recovery-preview", type=Path, help="直接前段经 reconcile-attempt 批准的恢复预览。")
     target.add_argument(
         "--max-wall-seconds",
         type=int,

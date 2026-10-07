@@ -162,14 +162,14 @@ class CommandLineAndBoundaryTests(unittest.TestCase):
         self.assertEqual(set(DESIGN_SUBCOMMANDS) - listed, set())
         self.assertIn("compile-and-run-vc-batch", output.getvalue())
 
-    def test_own_subcommands_report_pending(self) -> None:
+    def test_implemented_subcommands_reject_missing_campaign(self) -> None:
         # classify（B3-02）、prepare-profile／stage-profile（B3-03）、plan-candidate-gates 与 record-candidate-build（B3-04）、
-        # compare 与 accept（B4-06b）已落实，这里换成仍待实现的 account-sealed-candidate（B4-02）。
+        # compare、accept 与 account-sealed-candidate 已落实，缺失 Campaign 必须报配置错误。
         error = io.StringIO()
         with contextlib.redirect_stderr(error):
-            code = claude_upgrade.main(["account-sealed-candidate", "--campaign-dir", "/nonexistent"])
+            code = claude_upgrade.main(["account-sealed-candidate", "--campaign-dir", "/nonexistent", "--candidate-id", "c1"])
         self.assertEqual(code, 1)
-        self.assertIn("B4-02", error.getvalue())
+        self.assertNotIn("尚未实现", error.getvalue())
         # compare 已落实：不存在的 Campaign 失败关闭（配置错误），不再报待实现。
         error = io.StringIO()
         with contextlib.redirect_stderr(error):

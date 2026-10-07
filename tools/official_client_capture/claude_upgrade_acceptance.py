@@ -757,6 +757,16 @@ def _accept(
             ),
         }
     audit, activation_binding = runtime_audit(campaign_dir, manifest, candidate_id, attempt_root, attempt, build)
+    if isinstance(candidate.get("recovery"), Mapping):
+        from tools.official_client_capture import claude_upgrade_segment_seal
+
+        segment_audits, segment_activations = [], []
+        for segment_root, segment in claude_upgrade_segment_seal.audit_segments(campaign_dir, candidate_id, candidate):
+            segment_audit, segment_activation = runtime_audit(campaign_dir, manifest, candidate_id, segment_root, segment, build)
+            segment_audits.append(segment_audit)
+            segment_activations.append(segment_activation)
+        audit = {**audit, "recovery_segments": segment_audits}
+        activation_binding = {**activation_binding, "recovery_segments": segment_activations}
     clients = client_receipts(campaign_dir, manifest, candidate, attempt)
     candidate_stage_binding = comparison["inputs"]["candidate_stage"]
     sources = {

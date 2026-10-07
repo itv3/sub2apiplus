@@ -4253,7 +4253,12 @@ def _load_stage_result(
     """
 
     del _import_chain, _replay_machine_receipts, _shallow, _ignore_checkpoint, _import_cache, _skip_evidence_scan
-    del _historical_manifest_controls, _baseline
+    del _historical_manifest_controls
+    if stage == "capture-candidate" and _baseline is not None:
+        from tools.official_client_capture import claude_upgrade_candidate_seal
+
+        source = _stage_read_source(Path(campaign_dir), str(candidate_id), _baseline, stage)
+        return claude_upgrade_candidate_seal.load_stage_result(Path(campaign_dir), Path(source["path"]), str(candidate_id), manifest=_verified_campaign_manifest)
     return claude_upgrade_batch.load_stage_result(
         Path(campaign_dir), stage, candidate_id, manifest=_verified_campaign_manifest
     )
@@ -5095,8 +5100,10 @@ def _build_parser() -> argparse.ArgumentParser:
                 claude_upgrade_profile.add_prepare_arguments(target)
             else:
                 claude_upgrade_profile.add_stage_arguments(target)
-        if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
+        if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build", "account-sealed-candidate"}:
             target.add_argument("--candidate-id")
+        if name == "account-sealed-candidate":
+            target.add_argument("--attempt-recovery", help="已增量封存的恢复段 ar<k>。")
         if name == "capture-candidate":
             # seal 的参数（B4-02）：attempt、批准摘要与批准人、客户端收据；run 的参数随 B4-01 b 段。
             from tools.official_client_capture import claude_upgrade_candidate_seal
@@ -5379,6 +5386,9 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_capture
 
             result, return_code = claude_upgrade_capture.capture_official_run_command(arguments)
+        elif arguments.command == "account-sealed-candidate":
+            with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
+                result, return_code = upgrade_control_plane._account_sealed_candidate_command(arguments), 0
         elif arguments.command == "capture-candidate" and arguments.capture_action == "run":
             from tools.official_client_capture import claude_upgrade_capture
 

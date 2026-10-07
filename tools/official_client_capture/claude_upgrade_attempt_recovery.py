@@ -172,9 +172,21 @@ def load_segment(campaign_dir: Path, candidate_id: str, attempt_id: str, recover
     if summary is None:
         raise ConfigurationError("恢复段尚未形成摘要，应先对账中断段。")
     authoritative_execute_jobs(campaign_dir, candidate_id, reservation)
-    upgrade._replay_attempt_recovery_evidence_permissions(segment, summary)
+    planned = {row["id"]: row["execution_sha256"] for row in reservation["planned_jobs"]}
+    results = summary.get("results")
+    if (not isinstance(results, list) or not all(isinstance(row, Mapping) for row in results)
+            or len({row.get("id") for row in results}) != len(results)
+            or any(planned.get(row.get("id")) != row.get("execution_sha256") for row in results)
+            or upgrade._fingerprint(dict(summary.get("identity") or {})) != reservation["identity_sha256"]
+            or (summary.get("status") == upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS and {row.get("id") for row in results} != set(planned))):
+        raise ConfigurationError("恢复段摘要的身份、Job 集合或执行摘要与预约不一致。")
+    from tools.official_client_capture import claude_upgrade_segment_seal
+
+    sealed = claude_upgrade_segment_seal.segment_boundary(campaign_dir, segment, summary)
+    if sealed is None:
+        upgrade._replay_attempt_recovery_evidence_permissions(segment, summary)
     candidate_capture.verify_attempt_bindings(segment, summary)
-    if reservation.get("reuse_job_ids"):
+    if reservation.get("reuse_job_ids") and sealed is None:
         prior = f"ar{int(recovery_revision[2:]) - 1}"
         proofs = segment_reuse_proofs(campaign_dir, candidate_id, attempt_id, prior, [item["id"] for item in reservation["planned_jobs"]])
         rows = {item["id"]: item for item in summary["results"]}

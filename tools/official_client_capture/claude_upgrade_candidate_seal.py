@@ -899,7 +899,7 @@ STAGE_RESULT_FIELDS = frozenset(
     }
 )
 ROUND_RESULT_FIELDS = STAGE_RESULT_FIELDS | {"validation_round", "round_one_result"}
-OPTIONAL_STAGE_RESULT_FIELDS = frozenset({predecessor_sealed.STAGE_FIELD})
+OPTIONAL_STAGE_RESULT_FIELDS = frozenset({predecessor_sealed.STAGE_FIELD, "recovery", "previous_stage", "effective_results", "results", "root_sets"})
 
 
 def add_seal_arguments(target: Any) -> None:
@@ -964,6 +964,18 @@ def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
     with orchestrator._campaign_lock(campaign_dir):
         orchestrator._require_quiescent_campaign_lease(campaign_dir, action="seal", attempt_id=attempt_id)
         manifest = orchestrator._require_formal_campaign(campaign_dir)
+        recovery_revision = getattr(arguments, "attempt_recovery", None)
+        if recovery_revision is not None:
+            from tools.official_client_capture import claude_upgrade_segment_seal
+
+            if getattr(arguments, "client_evidence", None):
+                raise ConfigurationError("恢复段按摘要继承原 Mac／边界收据，不接受客户端收据替换。")
+            if revalidate:
+                return _revalidate_candidate_seal(campaign_dir, manifest, candidate_id=candidate_id, attempt_id=attempt_id,
+                                                  recovery_revision=recovery_revision), 0
+            return claude_upgrade_segment_seal.seal_segment(campaign_dir, manifest, candidate_id=candidate_id,
+                attempt_id=attempt_id, revision=recovery_revision, approve=approve, approved_by=approved_by,
+                gate_overrides=gate_overrides)
         if revalidate:
             return _revalidate_candidate_seal(campaign_dir, manifest, candidate_id=candidate_id, attempt_id=attempt_id), 0
         return _seal_candidate_attempt(
@@ -1320,6 +1332,7 @@ def _preview_candidate_seal(
     generation: str,
     generation_key: Mapping[str, Any],
     seal_dir: Path,
+    segment_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """①～③：客户端检查点、证据视图与草稿、唯一一次深度扫描、评估用 manifest 与预览；全部只写一次，同代重跑逐字复用。"""
 
@@ -1363,7 +1376,12 @@ def _preview_candidate_seal(
                 "candidate_steps": _step_expectations(job, result=result, campaign_id=str(manifest["campaign_id"]), candidate_id=candidate_id),
             }
         )
-    scanned = orchestrator.scan_evidence(roots, claude_upgrade_evidence.CANDIDATE_SIDE, base=data_root)
+    from tools.official_client_capture import claude_upgrade_segment_seal as segment_seal
+
+    scanned = (orchestrator.scan_evidence(roots, claude_upgrade_evidence.CANDIDATE_SIDE, base=data_root)
+               if segment_context is None else segment_seal.relay_view(campaign_dir, segment_context, jobs, roots, data_root))
+    relay_view_path = seal_dir / segment_seal.RELAY_VIEW_FILENAME
+    write_once(relay_view_path, scanned)
     drafts_dir = seal_dir / DRAFTS_DIRNAME
     draft_paths = {name: drafts_dir / filename for name, filename in claude_upgrade_evidence.CANDIDATE_DRAFT_FILES.items()}
     view = {
@@ -1402,7 +1420,12 @@ def _preview_candidate_seal(
         scenarios_path,
         *[path for files in client_files.values() for path in files.values()],
     ]
-    inventory = orchestrator._evidence_inventory(scan_roots, base=data_root)
+    if segment_context is None:
+        inventory = orchestrator._evidence_inventory(scan_roots, base=data_root)
+        scanned_bytes = int(inventory["total_bytes"])
+    else:
+        scan_roots.append(segment_context["segment_root"] / orchestrator.ATTEMPT_RECOVERY_SUMMARY_FILENAME)
+        inventory, scanned_bytes = segment_seal.incremental_inventory(campaign_dir, segment_context, scan_roots, data_root)
     bound = orchestrator._seal_capture_attempt(view, inventory=inventory)
     if bound["drafts"] != drafted["drafts"]:
         raise ConfigurationError("同一证据视图两次生成的封存草稿不一致（证据在扫描期间被改动）。")
@@ -1432,17 +1455,18 @@ def _preview_candidate_seal(
     seal_binding = bound["seal"]
     store_request = {
         "candidate_id": candidate_id,
-        "capture_attempt_id": str(attempt["attempt_id"]),
+        "capture_attempt_id": str(attempt["attempt_id"]) if segment_context is None else segment_context["store_capture_attempt_id"],
         "validation_round": FIRST_ROUND,
-        "issued_at_utc": str(attempt["completed_at_utc"]),
-        "run_conditions": {"run_nonce": str(attempt["run_nonce"]), **gateway["run_conditions"]},
+        "issued_at_utc": str(attempt["completed_at_utc"] if segment_context is None else segment_context["summary"]["completed_at_utc"]),
+        "run_conditions": {"run_nonce": str(attempt["run_nonce"] if segment_context is None else segment_context["summary"]["run_nonce"]), **gateway["run_conditions"]},
         "selector_before_snapshot": dict(gateway["selector_before_snapshot"]),
         "gate_execution": (
             {**dict(gateway["host"]), "overrides": dict(generation_key["gate_execution_overrides"])}
             if "gate_execution_overrides" in generation_key
             else dict(gateway["host"])
         ),
-        "job_ids": {"execute": sorted(job.job_id for job in jobs), "reuse": []},
+        "job_ids": ({"execute": sorted(job.job_id for job in jobs), "reuse": []} if segment_context is None else
+                    {"execute": segment_context["execute_item_ids"], "reuse": segment_context["reuse_item_ids"]}),
         "scenario_evidence": seal_binding["scenario_evidence"],
         "seal": {
             "generation": generation,
@@ -1482,6 +1506,7 @@ def _preview_candidate_seal(
             "generation": generation,
             "generation_key": dict(generation_key),
             "drafts": {name: claude_upgrade_seal._binding(path, campaign_dir) for name, path in draft_paths.items()},
+            "relay_view": claude_upgrade_seal._binding(relay_view_path, campaign_dir),
             "evaluation_manifest": evaluation_binding,
             "closure": closure,
             "metrics": bound["metrics"],
@@ -1508,7 +1533,7 @@ def _preview_candidate_seal(
         "metrics": bound["metrics"],
         "store_plan": store_plan,
         "live_request_count": int(counted["precise_total"]),
-        "scanned_bytes": int(inventory["total_bytes"]),
+        "scanned_bytes": scanned_bytes,
     }
     preview = write_once(seal_dir / SEAL_PREVIEW_FILENAME, {**core, "review_sha256": orchestrator._fingerprint(core)})
     blocked = closure["status"] != "closed"
@@ -1531,6 +1556,7 @@ def _preview_candidate_seal(
             else (
                 f"capture-candidate seal --candidate-id {candidate_id} --attempt-id {attempt['attempt_id']} "
                 f"--approve-seal-sha256 {preview['review_sha256']} --approved-by <批准人>"
+                + (f" --attempt-recovery {segment_context['revision']}" if segment_context is not None else "")
             )
         ),
     }
@@ -1549,6 +1575,7 @@ def _approve_candidate_seal(
     stage_path: Path,
     candidate_id: str,
     data_root: Path,
+    segment_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """④ 批准：核对冻结预览与草稿，写封存证据清单，经第三节写入链写 Store（到 candidate_sealed），再写候选阶段结果（只写一次）。
 
@@ -1594,32 +1621,29 @@ def _approve_candidate_seal(
         raise ConfigurationError("候选 seal 预览没有评估用 manifest。")
     verify(campaign_dir, preview["evaluation_manifest"], "评估用 manifest")
     draft = orchestrator._read_json(verify(campaign_dir, preview["seal_draft"], "候选 seal 草稿"), "候选 seal 草稿")
+    if draft.get("relay_view") is not None:
+        verify(campaign_dir, draft["relay_view"], "封存解析视图")
     for name, binding in draft["drafts"].items():
         verify(campaign_dir, binding, f"封存草稿 {name}")
-    execute = sorted(job.job_id for job in jobs)
+    execute = sorted(job.job_id for job in jobs) if segment_context is None else list(segment_context["execute_item_ids"])
     if execute != draft["store_request"]["job_ids"]["execute"]:
         raise ConfigurationError("Campaign 候选 Job 与 seal 草稿登记的执行项不一致。")
     attempt_binding = _stage_binding(attempt_path, campaign_dir)
     if attempt_binding["sha256"] != draft["generation_key"]["attempt"]["sha256"]:
         raise ConfigurationError("attempt 收据与 seal 草稿绑定的摘要不一致。")
     attempt = orchestrator._read_json(attempt_path, "候选 attempt")
-    predecessor_entries = _verify_predecessor_attempt(campaign_dir, candidate_id, attempt, manifest=manifest)
-    sealed_manifest = _seal_evidence_boundary(
-        campaign_dir,
-        attempt_path.parent,
-        seal_dir,
-        candidate_id=candidate_id,
-        data_root=data_root,
-        predecessor_entries=predecessor_entries,
-        inventory=orchestrator._read_json(claude_upgrade_seal._verify_bound_file(campaign_dir, preview["evidence_manifest"], "深度扫描清单"), "深度扫描清单"),
-        job_roots=[
-            str(job["evidence_root"])
-            for job in orchestrator._read_json(
-                claude_upgrade_seal._verify_bound_file(campaign_dir, draft["drafts"]["capture_index"], "封存草稿 capture_index"),
-                "候选 CaptureIndex",
-            )["jobs"]
-        ],
-    )
+    inventory = orchestrator._read_json(verify(campaign_dir, preview["evidence_manifest"], "深度扫描清单"), "深度扫描清单")
+    capture_index = orchestrator._read_json(verify(campaign_dir, draft["drafts"]["capture_index"], "封存草稿 capture_index"), "候选 CaptureIndex")
+    job_roots = [str(job["evidence_root"]) for job in capture_index["jobs"]]
+    if segment_context is None:
+        predecessor_entries = _verify_predecessor_attempt(campaign_dir, candidate_id, attempt, manifest=manifest)
+        sealed_manifest = _seal_evidence_boundary(campaign_dir, attempt_path.parent, seal_dir, candidate_id=candidate_id,
+            data_root=data_root, predecessor_entries=predecessor_entries, inventory=inventory, job_roots=job_roots)
+    else:
+        from tools.official_client_capture import claude_upgrade_segment_seal
+
+        predecessor_entries = []
+        sealed_manifest = claude_upgrade_segment_seal.seal_boundary(campaign_dir, segment_context, seal_dir, inventory, job_roots)
     request = dict(draft["store_request"])
     request["seal"] = {**request["seal"], "review_sha256": preview["review_sha256"], "reviewer": approved_by}
     recorded = record_candidate_seal_chain(campaign_dir, manifest, request)
@@ -1669,11 +1693,13 @@ def _approve_candidate_seal(
             "capture_manifest": {key: draft["drafts"]["capture_manifest"][key] for key in ("path", "sha256")},
         },
         "execute_item_ids": execute,
-        "reuse_item_ids": [],
+        "reuse_item_ids": [] if segment_context is None else list(segment_context["reuse_item_ids"]),
         "live_request_count": int(preview["live_request_count"]),
         "scanned_bytes": int(preview["scanned_bytes"]),
         "sealed_at_utc": orchestrator._utc_now(),
     }
+    if segment_context is not None:
+        payload.update(claude_upgrade_segment_seal.stage_fields(campaign_dir, segment_context))
     if predecessor_entries:
         payload[predecessor_sealed.STAGE_FIELD] = predecessor_entries
     stage = claude_upgrade_seal._write_once_or_reuse(stage_path, payload, ignore=("sealed_at_utc",))
@@ -1746,14 +1772,16 @@ def _load_round_document(
     return stage
 
 
-def _round_result_path(campaign_dir: Path, candidate_id: str, validation_round: int) -> Path:
-    return Path(campaign_dir) / "candidates" / candidate_id / VALIDATION_ROUNDS_DIRNAME / f"v{int(validation_round)}" / "result.json"
+def _round_result_path(campaign_dir: Path, candidate_id: str, validation_round: int, *, round_one_path: Path | None = None) -> Path:
+    root = round_one_path.parent if round_one_path is not None else Path(campaign_dir) / "candidates" / candidate_id
+    return root / VALIDATION_ROUNDS_DIRNAME / f"v{int(validation_round)}" / "result.json"
 
 
-def _existing_rounds(campaign_dir: Path, candidate_id: str) -> list[int]:
+def _existing_rounds(campaign_dir: Path, candidate_id: str, *, round_one_path: Path | None = None) -> list[int]:
     """已写出结果的第 2 轮起各轮轮次号（升序，必须从 2 连续）；目录里有别的条目或轮次不连续即失败关闭。"""
 
-    root = Path(campaign_dir) / "candidates" / candidate_id / VALIDATION_ROUNDS_DIRNAME
+    parent = round_one_path.parent if round_one_path is not None else Path(campaign_dir) / "candidates" / candidate_id
+    root = parent / VALIDATION_ROUNDS_DIRNAME
     if root.is_symlink() or (root.exists() and not root.is_dir()):
         raise ConfigurationError("候选门禁重试轮次目录不可信。")
     if not root.exists():
@@ -1781,12 +1809,16 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
     """
 
     stage = _load_round_document(Path(campaign_dir), Path(path), candidate_id, manifest=manifest, validation_round=FIRST_ROUND)
+    if "recovery" in stage:
+        from tools.official_client_capture import claude_upgrade_segment_seal
+
+        claude_upgrade_segment_seal.validate_stage(Path(campaign_dir), stage, candidate_id)
     round_one_sha256 = file_sha256(Path(path))
     latest = stage
-    for validation_round in _existing_rounds(Path(campaign_dir), candidate_id):
+    for validation_round in _existing_rounds(Path(campaign_dir), candidate_id, round_one_path=Path(path)):
         document = _load_round_document(
             Path(campaign_dir),
-            _round_result_path(Path(campaign_dir), candidate_id, validation_round),
+            _round_result_path(Path(campaign_dir), candidate_id, validation_round, round_one_path=Path(path)),
             candidate_id,
             manifest=manifest,
             validation_round=validation_round,
@@ -1797,6 +1829,10 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
             or document.get(predecessor_sealed.STAGE_FIELD, []) != stage.get(predecessor_sealed.STAGE_FIELD, [])
         ):
             raise ConfigurationError(f"第 {validation_round} 轮候选阶段结果没有承接这一份第 1 轮结果。")
+        if "recovery" in stage:
+            claude_upgrade_segment_seal.validate_stage(Path(campaign_dir), document, candidate_id)
+            if document["recovery"] != stage["recovery"]:
+                raise ConfigurationError("恢复段门禁重试改变了原段绑定。")
         latest = document
     return latest
 
@@ -2021,6 +2057,10 @@ def verify_sealed_boundary(campaign_dir: Path, stage: Mapping[str, Any], attempt
 def sealed_attempt_context(campaign_dir: Path, stage: Mapping[str, Any], *, candidate_id: str) -> tuple[Path, dict[str, Any]]:
     """封存后的读侧：候选阶段结果绑定的 attempt（不重放 run 末收口），证据边界按封存证据清单加重绑链核对。"""
 
+    if "recovery" in stage:
+        from tools.official_client_capture import claude_upgrade_segment_seal
+
+        return claude_upgrade_segment_seal.validate_stage(Path(campaign_dir), stage, candidate_id)
     orchestrator = _orchestrator()
     reference = stage.get("attempt")
     orchestrator._require_file_binding(reference, "抓包 attempt")
@@ -2165,10 +2205,19 @@ def _round_issued_at(store: Any, campaign: Mapping[str, Any], capture_attempt: s
     )
 
 
-def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], *, candidate_id: str, attempt_id: str) -> dict[str, Any]:
+def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], *, candidate_id: str, attempt_id: str, recovery_revision: str | None = None) -> dict[str, Any]:
     orchestrator = _orchestrator()
     orchestrator._reject_contaminated_campaign(campaign_dir)
-    round_one_path, round_one = load_round_one_result(campaign_dir, candidate_id, manifest=manifest)
+    if recovery_revision is None:
+        round_one_path, round_one = load_round_one_result(campaign_dir, candidate_id, manifest=manifest)
+    else:
+        from tools.official_client_capture import claude_upgrade_attempt_segment
+
+        baseline, _commit, _recovery, _preview = claude_upgrade_attempt_segment.current_baseline(campaign_dir, candidate_id, recovery_revision, allow_successor=True)
+        round_one_path = orchestrator._stage_write_target(campaign_dir, candidate_id, baseline, STAGE_NAME)
+        round_one = _load_round_document(campaign_dir, round_one_path, candidate_id, manifest=manifest, validation_round=FIRST_ROUND)
+        if (round_one.get("recovery") or {}).get("recovery_revision") != recovery_revision:
+            raise ConfigurationError("门禁重试指定的恢复段与已封存阶段不一致。")
     sealed_attempt = orchestrator._campaign_file(campaign_dir, str(round_one["attempt"]["path"])).parent.name
     if sealed_attempt != attempt_id:
         raise ConfigurationError(f"候选 {candidate_id} 第 1 轮封存的是 attempt {sealed_attempt}，不是 {attempt_id}。")
@@ -2177,9 +2226,10 @@ def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], 
     verify = claude_upgrade_seal._verify_bound_file
     draft = orchestrator._read_json(verify(campaign_dir, round_one["seal"]["seal_draft"], "候选 seal 草稿"), "候选 seal 草稿")
     store, store_campaign = claude_upgrade_store.open_campaign_store(campaign_dir, manifest)
-    rounds = _existing_rounds(campaign_dir, candidate_id)
+    capture_attempt = str(draft["store_request"]["capture_attempt_id"])
+    rounds = _existing_rounds(campaign_dir, candidate_id, round_one_path=round_one_path)
     latest = max([FIRST_ROUND, *rounds])
-    if _round_closed_failed(store, store_campaign, attempt_id, latest):
+    if _round_closed_failed(store, store_campaign, capture_attempt, latest):
         target = latest + 1
     elif latest > FIRST_ROUND:
         target = latest
@@ -2189,7 +2239,7 @@ def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], 
         )
     request = dict(draft["store_request"])
     request["validation_round"] = target
-    request["issued_at_utc"] = _round_issued_at(store, store_campaign, attempt_id, target)
+    request["issued_at_utc"] = _round_issued_at(store, store_campaign, capture_attempt, target)
     request["seal"] = {**request["seal"], "review_sha256": round_one["seal"]["review_sha256"], "reviewer": round_one["seal"]["reviewer"]}
     recorded = record_candidate_seal_chain(campaign_dir, manifest, request)
     status = claude_upgrade_seal.store_cli(["status", "--store", Path(store.root), "--campaign", str(store_campaign["campaign_id"])])
@@ -2205,7 +2255,7 @@ def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], 
         "scenario_approval_refs": {scenario: dict(ref) for scenario, ref in sorted(recorded["scenario_approval_refs"].items())},
         "external_gates": recorded["external_gates"],
     }
-    path = _round_result_path(campaign_dir, candidate_id, target)
+    path = _round_result_path(campaign_dir, candidate_id, target, round_one_path=round_one_path)
     existed = path.exists() or path.is_symlink()
     payload = {
         **{key: value for key, value in round_one.items() if key not in {"store", "sealed_at_utc"}},

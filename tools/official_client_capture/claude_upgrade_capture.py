@@ -2920,9 +2920,8 @@ def _active_unsealed_attempts(
     已封存阶段的 attempt 绑定由 VC 阶段读取（B3-01）给出；只读核对状态，不重放证据边界（重放属于 seal 链）。
     """
 
-    del _baseline
     if phase == "candidate":
-        return _active_unsealed_candidate_attempts(campaign_dir, _manifest=_manifest)
+        return _active_unsealed_candidate_attempts(campaign_dir, _manifest=_manifest, _baseline=_baseline)
     if phase != "official":
         raise ConfigurationError(f"未知取证阶段：{phase}")
     sealed_attempt_id: str | None = None
@@ -2962,7 +2961,7 @@ def _active_unsealed_attempts(
     return active
 
 
-def _active_unsealed_candidate_attempts(campaign_dir: Path, *, _manifest: Mapping[str, Any] | None) -> list[str]:
+def _active_unsealed_candidate_attempts(campaign_dir: Path, *, _manifest: Mapping[str, Any] | None, _baseline: int | None = None) -> list[str]:
     """候选阶段的未完成预约或等待封存 attempt（B4-01b，与 Codex 同一判据与 ``<candidate-id>:<attempt-id>`` 写法）。
 
     已封存的候选以 b0 阶段结果（``candidates/<cid>/result.json``）绑定的 attempt 为准；候选阶段结果的读取由 B4-02 落实，
@@ -2981,7 +2980,7 @@ def _active_unsealed_candidate_attempts(campaign_dir: Path, *, _manifest: Mappin
             sealed[candidate_id] = None
             result_path = claude_upgrade_candidate_capture.legacy_stage_result_path(campaign_dir, candidate_id)
             if result_path.exists() or result_path.is_symlink():
-                stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=_manifest)
+                stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=_manifest, _baseline=0 if _baseline is None else _baseline)
                 reference = stage.get("attempt")
                 if not isinstance(reference, Mapping):
                     raise ConfigurationError("已封存候选阶段缺少 attempt 绑定。")
@@ -3277,6 +3276,11 @@ def run_capture_attempt(
     污染与封存状态、工具身份已登记、Job 展开、坐标布局、执行树、官方二进制与容器内必需文件。预约之后无论成败都写出
     attempt 收据（中断信号在写完收据后再抛出）。
     """
+
+    if phase == "candidate" and getattr(arguments, "attempt_recovery", None):
+        from tools.official_client_capture import claude_upgrade_attempt_segment
+
+        return claude_upgrade_attempt_segment.run_segment(arguments, _lease=_lease, _manifest=_manifest, _deadline=_deadline)
 
     if phase not in {"official", "candidate"}:
         raise ConfigurationError(f"未知取证阶段：{phase}")

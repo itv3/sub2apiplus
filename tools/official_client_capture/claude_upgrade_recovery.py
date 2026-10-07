@@ -1372,7 +1372,7 @@ def _candidate_status(
     sealed = stage_path.exists() or stage_path.is_symlink()
     sealed_attempt_id: str | None = None
     if sealed:
-        stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=manifest)
+        stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=manifest, _baseline=0)
         reference = stage.get("attempt")
         sealed_attempt_id = Path(str(reference.get("path", ""))).parent.name if isinstance(reference, Mapping) else None
     invalidated = capture._invalidated_attempts(campaign_dir)
@@ -1476,6 +1476,11 @@ def _evaluation_and_delivery_status(
     ``delivery_state_inconsistent`` 并原样给出原因，交人工审计。
     """
 
+    from tools.official_client_capture import claude_upgrade_attempt_segment
+
+    segment_status = claude_upgrade_attempt_segment.segment_status(campaign_dir, candidate_id)
+    if segment_status is not None:
+        return segment_status["status"], segment_status["next_command"], None
     vc5_batch = "compile-and-run-vc-batch --phase VC-5"
     compared = claude_upgrade._stage_path(campaign_dir, "compare", candidate_id)[1]
     if not (compared.exists() or compared.is_symlink()):
@@ -1545,6 +1550,8 @@ def resume_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     arguments.campaign_dir = campaign_dir
     manifest = claude_upgrade._require_formal_campaign(campaign_dir)
     candidate_id = getattr(arguments, "candidate_id", None)
+    if getattr(arguments, "attempt_recovery", None) and not candidate_id:
+        raise ConfigurationError("恢复段续跑必须提供 --candidate-id。")
     if candidate_id:
         return _resume_candidate(campaign_dir, manifest, arguments, str(candidate_id))
     status = claude_upgrade.campaign_status(campaign_dir)
@@ -1594,6 +1601,11 @@ def _resume_candidate(
     * 其余状态（中断未对账、等待 seal、已封存、污染、不一致）拒绝并给出下一命令。
     """
 
+    if getattr(arguments, "attempt_recovery", None):
+        from tools.official_client_capture import claude_upgrade_attempt_segment
+
+        result = claude_upgrade_attempt_segment.run_segment(arguments)
+        return result, _resume_exit_code(result)
     status = claude_upgrade.campaign_status(campaign_dir, candidate_id)
     current = str(status["status"])
     if current == "environment_contaminated":
@@ -2001,6 +2013,15 @@ def _supersede_occupied_roots(
     return receipt
 
 
+def _segment_checkpoint_evidence(result: Mapping[str, Any], layout: Any) -> dict[str, Any]:
+    """恢复段检查点按宿主路径冻结内容清单，避免把容器逻辑路径交给文件读取器。"""
+
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    roots = [str(capture._host_path(str(value), layout)) for value in result.get("evidence_roots", [])]
+    return {"recovery_evidence": claude_upgrade_attempt_recovery.job_inventory(roots)}
+
+
 def _record_reused_result(
     attempt_root: Path,
     checkpoint_store: Any,
@@ -2008,6 +2029,7 @@ def _record_reused_result(
     manifest: Mapping[str, Any],
     result: dict[str, Any],
     phase: str = PHASE,
+    *, execution_attempt_id: str | None = None, segment: bool = False, layout: Any | None = None,
 ) -> None:
     records = checkpoint_store.records()
     checkpoint_store.append(
@@ -2017,7 +2039,7 @@ def _record_reused_result(
             "mode": capture.MODE_FORMAL,
             "campaign_id": manifest["campaign_id"],
             "phase": phase,
-            "attempt_id": attempt_root.name,
+            "attempt_id": execution_attempt_id or attempt_root.name,
             "run_nonce": reservation["run_nonce"],
             "item_id": result["id"],
             "status": "complete",
@@ -2025,6 +2047,7 @@ def _record_reused_result(
             "result_sha256": incremental_recovery.digest(result),
             "result_key": result.get("incremental_result_key"),
             "result": result,
+            **(_segment_checkpoint_evidence(result, layout) if segment else {}),
             "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
         }
     )
@@ -2119,13 +2142,39 @@ def _run_recovery_attempt(
         candidate_id=candidate_id,
         reuse=reuse,
     )
+    return _execute_recovery_attempt(
+        campaign_dir, manifest, lease=lease, deadline=deadline, phase=phase, candidate_id=candidate_id,
+        attempt_root=attempt_root, reservation=reservation, recovery_source=recovery_source,
+        hooks=hooks, jobs=jobs, execute_jobs=execute_jobs, identity=identity, current_tool=current_tool,
+        layout=layout, binary_verification=binary_verification, preconditions=preconditions,
+        plan=plan, source_id=source_id, reuse=reuse,
+    )
+
+
+def _execute_recovery_attempt(
+    campaign_dir: Path, manifest: dict[str, Any], *, lease: Any, deadline: Any,
+    phase: str, candidate_id: str | None, attempt_root: Path, reservation: Mapping[str, Any],
+    recovery_source: Mapping[str, Any], hooks: Any | None, jobs: Sequence[Any], execute_jobs: Sequence[Any],
+    identity: Mapping[str, Any], current_tool: Mapping[str, Any], layout: Any,
+    binary_verification: Mapping[str, Any], preconditions: Any, plan: Mapping[str, Any], source_id: str,
+    reuse: Any | None = None, segment: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Claude 续跑与恢复段共用的预约后执行体：Job 执行、检查点、环境复核和两级权限收口。
+
+    普通续跑仍生成 attempt.json；恢复段由已冻结的 segment 上下文生成段摘要，Job 身份使用原 attempt 加段号。
+    恢复段只写新证据根，不取代旧根；逐 Job 检查点另冻结内容清单，供失败段的后继复用逐文件重放。
+    """
+
+    mode = capture.MODE_FORMAL
+    reuse_ids = set(plan["reuse_job_ids"])
+    execution_attempt_id = attempt_root.name if segment is None else f"{reservation['attempt_id']}.{reservation['recovery_revision']}"
     log_root = capture._private_directory(attempt_root / "logs", campaign_dir)
     evidence_root = capture._private_directory(attempt_root / "evidence", campaign_dir)
     environment_root = capture._private_directory(evidence_root / "environment", evidence_root)
     heartbeat_path = attempt_root / "watchdog-heartbeat.json"
     context = capture.ScenarioReceiptContext(
         campaign_id=str(manifest["campaign_id"]),
-        attempt_id=attempt_root.name,
+        attempt_id=execution_attempt_id,
         run_nonce=str(reservation["run_nonce"]),
         evidence_root=evidence_root,
         campaign_dir=campaign_dir,
@@ -2161,7 +2210,7 @@ def _run_recovery_attempt(
         if hooks is not None:
             hooks.before_jobs(manifest, layout, environment_root, attempt_observations, deadline=deadline, heartbeat=heartbeat)
         if reuse_ids:
-            if reuse is None or execute_jobs:
+            if segment is None and (reuse is None or execute_jobs):
                 # 后继候选复用在执行集合为空时不做连续性核对：不发请求、不新增证据，被复用证据的环境前提由来源 attempt
                 # 自己的前后探针与网关恢复核验证明（绑定在复用来源收据里）。
                 continuity = _verify_environment_continuity(
@@ -2172,9 +2221,9 @@ def _run_recovery_attempt(
                 if job.job_id in reuse_ids:
                     reused = dict(plan["reuse_results"][job.job_id])
                     results.append(reused)
-                    _record_reused_result(attempt_root, checkpoint_store, reservation, manifest, reused, phase)
+                    _record_reused_result(attempt_root, checkpoint_store, reservation, manifest, reused, phase, execution_attempt_id=execution_attempt_id, segment=segment is not None, layout=layout)
             capture._write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt:reused-results-recorded", force=True, attempt_root=attempt_root)
-        if execute_jobs:
+        if execute_jobs and segment is None:
             supersession = _supersede_occupied_roots(
                 campaign_dir, manifest, attempt_root, execute_jobs, layout, phase=phase, candidate_id=candidate_id
             )
@@ -2208,7 +2257,7 @@ def _run_recovery_attempt(
                     "mode": mode,
                     "campaign_id": manifest["campaign_id"],
                     "phase": phase,
-                    "attempt_id": attempt_root.name,
+                    "attempt_id": execution_attempt_id,
                     "run_nonce": reservation["run_nonce"],
                     "item_id": job.job_id,
                     "status": "complete" if result.get("status") == "complete" else "failed",
@@ -2216,6 +2265,7 @@ def _run_recovery_attempt(
                     "result_sha256": incremental_recovery.digest(result),
                     "result_key": result.get("incremental_result_key"),
                     "result": result,
+                    **(_segment_checkpoint_evidence(result, layout) if segment is not None and result.get("status") == "complete" else {}),
                     "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
                 }
             )
@@ -2285,7 +2335,10 @@ def _run_recovery_attempt(
     try:
         from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 
-        container_roots = predecessor_sealed.closeout_roots(results, layout, owned_roots=closeout_roots)
+        container_roots = predecessor_sealed.closeout_roots(
+            results if segment is None else [row for row in results if row.get("recovered_from") is None],
+            layout, owned_roots=closeout_roots
+        )
         closeout_roots.extend(capture._external_host_roots(container_roots, layout))
         receipt_path, _receipt = codex_upgrade_evidence_permissions.close_evidence_permissions(
             attempt_root, closeout_roots, managed_data_root=layout.host_data_root, logical_runs_roots=(layout.host_runs_root,)
@@ -2346,10 +2399,7 @@ def _run_recovery_attempt(
     if hooks is not None:
         # 与首个候选 attempt 同名：共享的候选恢复准入读 environment.restoration_report（网关隔离恢复核验文件）。
         environment["restoration_report"] = candidate_fields["gateway_recovery"]["file"]
-    attempt = capture._write_capture_attempt(
-        campaign_dir,
-        attempt_root,
-        {
+    attempt_payload = {
             "campaign_id": manifest["campaign_id"],
             "phase": phase,
             "candidate_id": candidate_id,
@@ -2383,7 +2433,7 @@ def _run_recovery_attempt(
             "restoration_error": capture._error_record(restoration_error),
             "live_request_count_planned": None,
             "recovery": {
-                "source": _binding(campaign_dir, attempt_root / _recovery_source_name(reuse)),
+                "source": _binding(campaign_dir, attempt_root / _recovery_source_name(reuse)) if segment is None else None,
                 "source_attempt_id": source_id,
                 **({"source_campaign_id": reuse.context["source_campaign"]["campaign_id"]} if reuse is not None else {}),
                 "reuse_job_ids": sorted(reuse_ids),
@@ -2403,11 +2453,19 @@ def _run_recovery_attempt(
                 else "reconcile-attempt → 批准恢复预览 → resume --rerun-failed（B2-08）"
             ),
             **candidate_fields,
-        },
-        manifest=manifest,
-        reservation=reservation,
-        mode=mode,
-    )
+        }
+    if segment is not None:
+        from tools.official_client_capture import claude_upgrade_attempt_segment
+
+        attempt_payload.pop("recovery", None)
+        attempt_payload.update(client=CLIENT, mode=mode, execute_jobs=sorted(job.job_id for job in execute_jobs))
+        attempt = claude_upgrade_attempt_segment.write_summary(
+            campaign_dir, manifest, attempt_root, reservation, attempt_payload, segment=segment
+        )
+    else:
+        attempt = capture._write_capture_attempt(
+            campaign_dir, attempt_root, attempt_payload, manifest=manifest, reservation=reservation, mode=mode
+        )
     if status == "environment_contaminated":
         try:
             claude_upgrade._secure_write_json_once(
@@ -2417,7 +2475,7 @@ def _run_recovery_attempt(
                     "client": CLIENT,
                     "mode": mode,
                     "phase": phase,
-                    "attempt_id": attempt_root.name,
+                    "attempt_id": execution_attempt_id,
                     "drifted_kinds": attempt_drift,
                     "contaminated_jobs": sorted(str(item.get("id")) for item in results if item.get("environment_contaminated")),
                     **(hooks.contamination_marker_fields() if hooks is not None else {}),
@@ -2433,9 +2491,10 @@ def _run_recovery_attempt(
         "mode": mode,
         "phase": phase,
         **({"candidate_id": candidate_id} if phase == CANDIDATE_PHASE else {}),
-        "attempt_id": attempt_root.name,
+        "attempt_id": attempt_root.name if segment is None else reservation["attempt_id"],
         "attempt": str(attempt_root),
-        "attempt_digest": attempt["attempt_digest"],
+        "attempt_digest": attempt.get("attempt_digest", attempt.get("attempt_recovery_digest")),
+        **({"recovery_revision": reservation["recovery_revision"], "evaluation_baseline": reservation["evaluation_baseline"]} if segment is not None else {}),
         "run_nonce": reservation["run_nonce"],
         "started_at_utc": reservation["started_at_utc"],
         "recovery": {
@@ -2590,6 +2649,16 @@ def harden_evidence_permissions_command(arguments: argparse.Namespace) -> tuple[
     if getattr(arguments, "harden_action", None) == "rebind-boundary":
         from tools.official_client_capture import claude_upgrade_candidate_seal
 
+        if getattr(arguments, "attempt_recovery", None):
+            from tools.official_client_capture import claude_upgrade_segment_seal
+
+            candidate_id = getattr(arguments, "candidate_id", None)
+            if not candidate_id:
+                raise ConfigurationError("恢复段边界重绑必须提供 --candidate-id。")
+            return claude_upgrade_segment_seal.rebind_boundary(
+                Path(arguments.campaign_dir), str(candidate_id), str(arguments.attempt_id), str(arguments.attempt_recovery),
+                str(getattr(arguments, "operator", None) or "harden-evidence-permissions"),
+            ), 0
         record = claude_upgrade_candidate_seal.rebind_sealed_boundary(
             Path(arguments.campaign_dir),
             str(arguments.attempt_id),
@@ -2638,6 +2707,7 @@ def add_reconcile_supervisor_run_arguments(target: argparse.ArgumentParser) -> N
 
 
 def add_resume_arguments(target: argparse.ArgumentParser) -> None:
+    target.add_argument("--attempt-recovery", help="已封存候选的 transient 恢复段 ar<k>。")
     for name in ("--candidate-id", "--runtime-image", "--candidate-image-id", "--build-id", "--deployed-version", "--profile-id", "--profile-digest"):
         target.add_argument(name)
     target.add_argument("--candidate-source", type=Path)
@@ -2666,6 +2736,7 @@ def add_harden_arguments(target: argparse.ArgumentParser) -> None:
     target.add_argument("--approve-sha256")
     target.add_argument("--candidate-id")
     target.add_argument("--operator")
+    target.add_argument("--attempt-recovery", help="增量封存恢复段 ar<k> 的边界重绑。")
 
 
 def add_wire_transition_arguments(target: argparse.ArgumentParser, *, final: bool) -> None:
