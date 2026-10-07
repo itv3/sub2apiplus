@@ -787,7 +787,9 @@ class ToolEvolutionChainTests(RecoveryChainCase):
             self.assertEqual((code, proposed["status"]), (0, "approval_required"), stderr)
             self.assertEqual(proposed["impact"]["official"]["affected_job_ids"], [EVOLVED_JOB])
             self.assertEqual(proposed["changes"]["impact_paths"], [key])
-            self.assertEqual((proposed["evaluator"]["from"]["status"], proposed["evaluator"]["to"]["status"]), ("not_established", "not_established"))
+            # B4-03 起 checker 与 builder 已在受管树里：两侧都是「已建立」，本次只改了取证依赖，评估器两项摘要不变。
+            self.assertEqual((proposed["evaluator"]["from"]["status"], proposed["evaluator"]["to"]["status"]), ("established", "established"))
+            self.assertFalse(proposed["evaluator"]["established_in_this_evolution"])
             self.assertEqual(proposed["evaluator"]["changed_fields"], [])
             code, applied, stderr = self.run_main([*evolution_argv, "--approve-sha256", proposed["review_sha256"], "--approved-by", "测试"])
             self.assertEqual((code, applied["status"], applied["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
