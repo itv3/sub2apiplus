@@ -533,6 +533,19 @@ B405B1_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '    script = Path(params["DRIVER_TARGET"]) / "driver" / CANDIDATE_RECOVER_SCRIPT',
     ],
 }
+# B5b-03 B 组仍并入既有 recovery-chain：只扩展 Claude 场景说明，并把它的预算估计从 85 秒调为 340 秒。
+# 不新增链、不改 Codex 的任何登记值；A 组的第六条链等其实现及验收完成再登记。
+B5B03B_BASELINE_COMMIT = "3d114ee8973f2d07090c72f2c3ef3773d166dd9b"
+B5B03B_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "ef339a76a7843793fd0fab7d18b18248b518c3476fd64dc25cf2ab2324901a19",
+}
+B5B03B_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": [
+        '        "多根部署各故障点与四类跨客户端误用，逐场景核对可信结果保留、合法闭集、不重复入账、累计时间不重置、历史不覆盖与续跑入口",',
+        '    # B5b-03：recovery-chain 暂按本机降级模式实测（约 85 秒，取整）登记，ARM64 私有命名空间预跑后按实测替换。',
+        '    "vc-chain.claude-recovery-chain": 85.0,',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
@@ -540,6 +553,7 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SOURCE_DIGESTS, B5B01A_SOURCE_REMOVED_LINES),
     ("B5b-03", B5B03_BASELINE_COMMIT, B5B03_SOURCE_DIGESTS, B5B03_SOURCE_REMOVED_LINES),
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SOURCE_DIGESTS, B405B1_SOURCE_REMOVED_LINES),
+    ("B5b-03 B 组", B5B03B_BASELINE_COMMIT, B5B03B_SOURCE_DIGESTS, B5B03B_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {

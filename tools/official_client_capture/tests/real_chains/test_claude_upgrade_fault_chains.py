@@ -11,6 +11,8 @@
   - 预算到期（批次派发前 Campaign 预算真实到期 → 暂停期间派发零写入拒绝 → 延期 → 原 Campaign 同序号派发）；
   - 同根因暂停（批次派发事务同一根因失败两次 → 达上限停线 → campaign-resume 凭修复证据放行 → 续派）；
   - 工具演进后旧链重放（演进登记后旧收据按形成期重放仍通过、作废作业只重跑它们）；
+  - 候选真实对账到续跑（未批准拒绝、重复对账／批准不重复入账，只重跑失败候选 Job）；
+  - 有候选 attempt 的完整工具演进（真实身份变化 → 整体预览 → 两侧登记 → 候选作废闭集 → 对账批准续跑）；
   - 多根部署各故障点（受监督部署在交换、备份、新增根、回滚、收据各点被杀 → 下次启动按日志恢复 → 再部署成功）；
   - 跨客户端误用（Codex 收据喂给 Claude 入口、缺 client 的合同、x86_64 证据喂给 arm64 目标、夹具收据冒充正式引用）。
 * ``vc-chain.claude-late-stage-faults``：VC-2～VC-6 一个 Campaign 的连续后段故障链，等 B4-06b（compare／accept）与 B4-07
@@ -55,6 +57,7 @@ from typing import Any, Callable, Iterable, Mapping
 from unittest import mock
 
 from tools.official_client_capture.tests import managed_tree_copy as trees
+from tools.official_client_capture.tests import claude_chain_driver as chain_driver
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
@@ -1170,6 +1173,170 @@ class _OfficialFaultScenarios(recovery_tests.RecoveryChainCase):
 # ---------------------------------------------------------------------------
 
 
+class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
+    """B 组：只保留集中登记的输入来源替身，真实对账／批准消费／续跑与演进判定共同推进一个候选。"""
+
+    def _audit(self, scenario: str, campaign: Path, trusted: Iterable[Path]) -> ScenarioAudit:
+        from tools.official_client_capture import claude_upgrade_store
+
+        audit = ScenarioAudit(self, scenario)
+        audit.snapshot(
+            trusted=[campaign / "campaign.json", campaign / "official" / "result.json", *trusted],
+            history=[claude_upgrade_store.campaign_store_root(campaign), self.ledger_dir / "events", self.ledger_dir / "ledger.json",
+                     self.project_root / "events", self.project_root / "plan.json", campaign / "control" / "reconciliation",
+                     campaign / "control" / "tool-evolution"],
+            timing_dir=self.ledger_dir, project_root=self.project_root,
+        )
+        return audit
+
+    def _scenario_candidate_reconcile_resume(self) -> None:
+        """候选中继写完字节后失败 → 真实对账 → 未批准拒绝 → 批准与重复批准 → 只重跑失败作业。"""
+
+        from tools.official_client_capture import claude_upgrade
+        from tools.official_client_capture import claude_upgrade_recovery as recovery
+
+        campaign = self.candidate_world()
+        first = self.candidate_run(campaign, fail_refresh=True)
+        first_root, _first_attempt = self.candidate_attempt(campaign, first["attempt_id"])
+        roots = self.candidate_job_roots(campaign)
+        audit = self._audit("候选真实对账链端到端", campaign, [first_root, roots[chain_driver.LIVE_JOB]])
+        calls = self.relay_probe_calls()
+        reconciled = self.candidate_reconcile(campaign, first["attempt_id"])
+        preview = reconciled["recovery_preview"]
+        self.assertEqual((preview["phase"], preview["candidate_id"]), ("candidate", chain_driver.CANDIDATE))
+        self.assertEqual((preview["execute_job_ids"], preview["reuse_job_ids"]),
+                         ([chain_driver.REFRESH_JOB], [chain_driver.LIVE_JOB]))
+        self.assertEqual(reconciled["resume_reuse_check"]["status"], "consistent")
+        first_state = audit.accounting_state()
+        receipt_bytes = file_digests(campaign / "control" / "reconciliation")
+        repeated = self.candidate_reconcile(campaign, first["attempt_id"])
+        second_state = audit.accounting_state()
+        self.assertEqual(repeated["recovery_preview"]["review_sha256"], preview["review_sha256"])
+        for path, digest in receipt_bytes.items():
+            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
+        attempts_root = first_root.parent
+        before = sorted(path.name for path in attempts_root.iterdir())
+        with self.source_context():
+            code, _result, refusal = self.run_main([
+                "resume", "--campaign-dir", str(campaign), "--candidate-id", chain_driver.CANDIDATE, "--rerun-failed",
+                "--recovery-preview", reconciled["recovery_preview_path"], "--acknowledge-live-requests",
+            ])
+        self.assertEqual(code, 1)
+        self.assertIn("尚未批准", refusal)
+        self.assertEqual(sorted(path.name for path in attempts_root.iterdir()), before)
+        self.assertEqual(self.relay_probe_calls(), calls)
+        approved = self.candidate_approve(campaign, first["attempt_id"], preview)
+        approved_state = audit.accounting_state()
+        again = self.candidate_approve(campaign, first["attempt_id"], preview)
+        repeated_approval_state = audit.accounting_state()
+        self.assertEqual(again["recovery_approval"], approved["recovery_approval"])
+        resumed = self.candidate_resume(campaign, reconciled["recovery_preview_path"])
+        self.assertEqual(self.relay_probe_calls()[len(calls):], [chain_driver.REFRESH_PROBE])
+        attempt_root, attempt = self.candidate_attempt(campaign, resumed["attempt_id"])
+        with self.source_context():
+            source = recovery.load_recovery_source(campaign, attempt_root)
+            status = claude_upgrade.campaign_status(campaign, chain_driver.CANDIDATE)
+        self.assertEqual((source["source_attempt_id"], source["execute_job_ids"]),
+                         (first["attempt_id"], [chain_driver.REFRESH_JOB]))
+        self.assertEqual(source["recovery_approval"], {
+            "index": approved["recovery_approval"]["index"],
+            "receipt_sha256": approved["recovery_approval"]["receipt_sha256"],
+        })
+        self.assertIsNotNone(source["timing_recovery_event"], "恢复批准必须真实推进计时账本并绑定消费事件")
+        self.assertEqual(status["status"], "candidate_awaiting_client_checkpoint")
+        executed = [row["id"] for row in attempt["results"] if row["disposition"] == "executed"]
+        reused = [row["id"] for row in attempt["results"] if row["disposition"] == "reused"]
+        self.assertTrue(all(row["status"] == "complete" for row in attempt["results"]))
+        counted = recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])["precise_total"]
+        self.assertGreater(counted, 0, "替身中继原始字节必须真正进入请求核算，不能用零请求占位绕过")
+        audit.check_trusted()
+        audit.check_closure(executed=executed, expected=[chain_driver.REFRESH_JOB], reused=reused,
+                            expected_reused=[chain_driver.LIVE_JOB], what="真实批准消费后的候选执行")
+        audit.check_accounting(precise_delta=counted, root_causes=1, repeats=[
+            ("重复候选对账", first_state, second_state), ("重复候选恢复批准", approved_state, repeated_approval_state),
+        ])
+        audit.check_elapsed()
+        audit.check_history()
+        audit.check_entry({"reconcile": reconciled["next_command"], "status": status["next_command"]}, "resume", "client-evidence")
+        audit.report(candidate_id=chain_driver.CANDIDATE, source_attempt=first["attempt_id"], resumed_attempt=resumed["attempt_id"],
+                     counted_requests=counted, input_source="claude_chain_driver 已登记的离线来源，B5b-02 待替换")
+
+    def _scenario_candidate_tool_evolution(self) -> None:
+        """隔离副本里修候选脚本：整体预览判定官方不受影响、已有候选两项失效，登记后真实对账续跑。"""
+
+        from tools.official_client_capture import claude_upgrade
+        from tools.official_client_capture import claude_upgrade_store
+        from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
+        from tools.official_client_control import receipts as store_receipts
+
+        campaign = self.candidate_world()
+        first = self.candidate_run(campaign)
+        first_root, _attempt = self.candidate_attempt(campaign, first["attempt_id"])
+        audit = self._audit("有候选 attempt 的整条工具演进预览", campaign, [first_root])
+        calls = self.relay_probe_calls()
+        # 必须在外层建立的隔离副本内变异；手工直接调用本场景时宁可拒绝，也不改用户源码。
+        self.assertEqual(Path(os.environ.get(shell.TREE_ENV, "/missing")).resolve(), REPO_ROOT.resolve())
+        shell._assert_isolation(self, shell._ChainRecorder("candidate-evolution-input"))
+        path = Path(claude_upgrade.__file__).resolve().parent / chain_driver.EVOLVED_DEPENDENCY
+        original = path.read_bytes()
+        self.addCleanup(path.write_bytes, original)
+        path.write_bytes(original + "\n# B5b-03：候选采集脚本修复后的身份来源。\n".encode("utf-8"))
+        key = f"official_client_capture/{chain_driver.EVOLVED_DEPENDENCY}"
+        self.tree.write(key, path.read_bytes())
+        self.addCleanup(self.tree.restore)
+        evolved = claude_upgrade._tool_identity(include_git=False)
+        self.assertNotEqual(evolved["wire_producer_sha256"], self.tool_identity["wire_producer_sha256"])
+        ledger_fixture.write_claude_deploy_receipt(self.data, evolved, stamp="20261008t020000z")
+        argv = ["tool-evolution", "--campaign-dir", str(campaign), "--fix-commit", "b" * 40, "--reason", "修复候选采集脚本"]
+        before = file_digests(campaign, self.ledger_dir, self.project_root)
+        with self.source_context():
+            code, preview, stderr = self.run_main(argv)
+        self.assertEqual((code, preview["status"]), (0, "approval_required"), stderr)
+        self.assertEqual(file_digests(campaign, self.ledger_dir, self.project_root), before, "完整演进预览必须只读")
+        self.assertEqual(preview["changes"]["impact_paths"], [key])
+        self.assertEqual(preview["changes"]["unmapped_paths"], [])
+        self.assertFalse(preview["changes"]["wire_closure_changed"])
+        self.assertEqual((preview["impact"]["official"]["sealed"], preview["impact"]["official"]["affected_job_ids"]), (True, []))
+        self.assertEqual(set(preview["impact"]["candidates"]), {chain_driver.CANDIDATE})
+        impact = preview["impact"]["candidates"][chain_driver.CANDIDATE]
+        expected = sorted([chain_driver.LIVE_JOB, chain_driver.REFRESH_JOB])
+        self.assertEqual((impact["planned_job_ids"], impact["affected_job_ids"], impact["sealed"]), (expected, expected, False))
+        self.assertEqual(preview["evaluator"]["candidates"][chain_driver.CANDIDATE]["current_evaluation_baseline"], 0)
+        approved_argv = [*argv, "--approve-sha256", preview["review_sha256"], "--approved-by", "故障恢复链"]
+        with self.source_context():
+            code, applied, stderr = self.run_main(approved_argv)
+            self.assertEqual((code, applied["status"], applied["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
+            first_state = audit.accounting_state()
+            code, again, stderr = self.run_main(approved_argv)
+            self.assertEqual((code, again["reused"], again["store_registration"]["status"]), (0, True, "current"), stderr)
+            second_state = audit.accounting_state()
+            status = claude_upgrade.campaign_status(campaign, chain_driver.CANDIDATE)
+        self.assertEqual(status["candidate_attempt"]["evolution_invalidated_job_ids"], expected)
+        self.assertEqual(self.relay_probe_calls(), calls, "演进预览与登记不执行任何 probe")
+        reconciled = self.candidate_reconcile(campaign, first["attempt_id"])
+        recovery_preview = reconciled["recovery_preview"]
+        self.assertEqual((recovery_preview["execute_job_ids"], recovery_preview["reuse_job_ids"]), (expected, []))
+        self.candidate_approve(campaign, first["attempt_id"], recovery_preview)
+        resumed = self.candidate_resume(campaign, reconciled["recovery_preview_path"])
+        _root, replayed = self.candidate_attempt(campaign, resumed["attempt_id"])
+        self.assertEqual(self.relay_probe_calls()[len(calls):], calls, "共同依赖变化后应恰好重跑候选全部 probe 一次")
+        reservation = recovery_tests._read(_root / "reservation.json")
+        self.assertEqual(reservation["tool_evolution"]["index"], 1)
+        store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, claude_upgrade.load_campaign_manifest(campaign))
+        self.assertEqual(len(store_receipts.tool_evolutions(store, dict(store_campaign))), 1)
+        counted = recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])["precise_total"]
+        self.assertGreater(counted, 0)
+        audit.check_trusted()
+        audit.check_closure(executed=[row["id"] for row in replayed["results"] if row["disposition"] == "executed"], expected=expected,
+                            reused=[row["id"] for row in replayed["results"] if row["disposition"] == "reused"], what="完整演进判定后的候选闭集")
+        audit.check_accounting(precise_delta=counted, root_causes=0, repeats=[("重复候选工具演进批准", first_state, second_state)])
+        audit.check_elapsed()
+        audit.check_history()
+        audit.check_entry(status["next_command"], "reconcile-attempt")
+        audit.report(candidate_id=chain_driver.CANDIDATE, invalidated=expected, resumed_attempt=resumed["attempt_id"],
+                     counted_requests=counted, input_source="claude_chain_driver 已登记的离线来源，B5b-02 待替换")
+
+
 class _DeployFaultScenarios(unittest.TestCase):
     """受监督部署在各故障点被杀（``fork`` 出的子进程在注入点 ``os._exit``，不执行任何 except／finally，现场就是进程被杀的
     样子）→ 下次启动的部署先按日志恢复：收据正文未入日志的残留按内容回滚到部署前、拒绝本次部署并提示重新执行；收据正文已入
@@ -1477,6 +1644,10 @@ RECOVERY_CHAIN_GROUPS: tuple[tuple[str, Mapping[str, str]], ...] = (
         "_OfficialFaultScenarios._scenario_tool_evolution_replay": "工具演进后旧链重放",
         "_OfficialFaultScenarios._scenario_misuse_codex_receipt": "跨客户端误用：Codex 收据喂给 Claude 入口",
         "_OfficialFaultScenarios._scenario_misuse_missing_client": "跨客户端误用：缺 client 的合同",
+    }),
+    ("候选取证：真实对账批准续跑、有候选 attempt 的完整工具演进预览", {
+        "_CandidateFaultScenarios._scenario_candidate_reconcile_resume": "候选真实对账链端到端",
+        "_CandidateFaultScenarios._scenario_candidate_tool_evolution": "有候选 attempt 的整条工具演进预览",
     }),
     ("多根受监督部署各故障点", {
         "_DeployFaultScenarios._scenario_deploy_after_exchange": "多根部署故障点：首根交换完成后被杀",

@@ -435,7 +435,8 @@ CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "vc-chain.claude-recovery-chain",
         "故障恢复链：父进程中断、预约后中断、seal 失败、提交中崩溃两层、账务未决、预算到期、同根因暂停、工具演进后旧链重放、"
-        "多根部署各故障点与四类跨客户端误用，逐场景核对可信结果保留、合法闭集、不重复入账、累计时间不重置、历史不覆盖与续跑入口",
+        "候选真实对账批准续跑、有候选 attempt 的完整工具演进、多根部署各故障点与四类跨客户端误用，"
+        "逐场景核对可信结果保留、合法闭集、不重复入账、累计时间不重置、历史不覆盖与续跑入口",
         "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
         "ClaudeFaultChainTests",
         "test_recovery_chain_keeps_trusted_results_and_resumes_every_fault",
@@ -906,8 +907,8 @@ SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.claude-tool-evolution": 78.0,
     "vc-chain.claude-root-cause": 72.0,
     "vc-chain.claude-reconcile": 57.0,
-    # B5b-03：recovery-chain 暂按本机降级模式实测（约 85 秒，取整）登记，ARM64 私有命名空间预跑后按实测替换。
-    "vc-chain.claude-recovery-chain": 85.0,
+    # B5b-03：原恢复链本机降级模式约 85 秒；并入 B 组后先登记 ARM64 预算估计，B5b-04 重认证时以实测替换。
+    "vc-chain.claude-recovery-chain": 340.0,
 }
 # 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
 REAL_CHAIN_TIMEOUT_SECONDS = 2400
