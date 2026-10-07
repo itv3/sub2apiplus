@@ -33,7 +33,7 @@
 2. 客户端身份贯穿整条摘要链（第 3 节），任一环缺失或不一致即拒绝，不默认成 Codex。
 3. 公共恢复算法只有一份：admission、批次编译与 staging、对账判定、恢复预览、评估基线、候选 revision 两个
    编排器调用同一份实现。例外是被 Codex 身份闭包计入的读取、路径与校验函数，由两个编排器各自实现，以合同
-   测试对齐（第 11 节）。
+   测试对齐（第 12 节）。
 
 ## 2 适配接口与服务面
 
@@ -69,7 +69,7 @@
 | 成员 | 种类 | Codex 取值 | Claude 取值 |
 |---|---|---|---|
 | `orchestrator_basenames` | 值 | `codex_upgrade.py`、`codex-upgrade` | `claude_upgrade.py`、`claude-upgrade` |
-| `forbidden_subcommands` | 值 | 15 个控制面与引导子命令 | 同 15 个，加 `freeze`、`import-predecessor-evidence` |
+| `forbidden_subcommands` | 值 | 15 个控制面与引导子命令 | 同 15 个，加 `freeze`、`import-predecessor-evidence`、`environment-cleanup` |
 | `evaluation_builder_basename` | 值 | 监督器 `EVALUATION_ACTION_BUILDER_BASENAME` | `claude_build_rule_assertion_results.py` |
 | `target_version_field` | 值 | `codex_version` | `claude_version` |
 | `root_cause_codes_path` | 值 | `root_cause_codes.json` | `claude_root_cause_codes.json` |
@@ -81,10 +81,18 @@
 | `provenance` | 模块 | `codex_upgrade_live_request_provenance` | `claude_upgrade_live_request_provenance` |
 | `identity_policy` | 模块 | `codex_upgrade_tool_identity_policy` | `claude_tool_identity_policy` |
 | `reject_volatile_dimensions` | 函数 | 无附加检查 | 拒绝含 Claude Campaign ID 的维度值 |
-| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名实现 |
+| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，候选恢复段调用即报待实现 |
 | `requires_project_ledger` | 函数 | 0.154 起的 Formal Campaign 在项目总账内 | Formal Campaign 一律在项目总账内 |
+| `attempt_environment_restored` | 函数 | after 探针加恢复收据 | after 探针在位，两个采集容器前后探针零漂移 |
+| `deploy_receipt_identity` | 函数 | 部署收据顶层 | 部署收据的 `identity` 子键 |
+| `effective_wire_identity` | 函数 | `codex_upgrade_wire_transition`：wire transition 与工具演进两条链 | `claude_upgrade_evolution`：只有工具演进链 |
+| `job_rehearsal_profile` | 模块 | `codex_upgrade_job_rehearsal_receipt` | `claude_upgrade_job_rehearsal` |
+| `build_job_contract`、`binary_facts`、`job_contract_replay` | 函数 | 委托原执行合同构造器与二进制核对 | Claude 执行合同 `official-client-job-rehearsal-contract/v1` 的构造、二进制表与重放 |
+| `closeout_profile` | 模块 | `codex_upgrade_vc0_closeout` | `claude_upgrade_vc0_closeout` |
 
-子命令名、阶段名与动作 ID 两客户端相同（Claude 子命令与 Codex 同名），共享代码按字面书写，不经适配器。
+子命令名与阶段名两客户端相同（Claude 子命令与 Codex 同名），共享代码按字面书写，不经适配器。动作 ID 由各自的
+动作计划给出：Claude 的 VC-1 封存批次用 `vc1-01-analyze-target`、`vc1-02-seal-preview`、`vc1-03-seal-approve`，不用
+Codex 的 `seal-official-*`（监督器按那两个名字执行 Codex 的断言证据包门禁）。
 
 ### 2.4 访问规则
 
@@ -142,6 +150,10 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | pre-A3 路径认证 | `pre-a3-path-certification/v2`（v1 只读重放） | `…/v3`（v2 结构加 `client`） |
 | 发布认证 | `tool-release-certification/v1` | `…/v2`（v1 字段加 `client`） |
 | 入口步骤记录、单元执行记录与运行清单、逐单元承接、后台验证与入口空跑结论、P0 收据与离线门禁证据 | `entry-step-record/v1`、`unit-execution-record/v1`、`unit-execution-manifest/v1`、`unit-inherit-request/v1`／`-context/v1`／`-decision/v1`、`background-validation/v1`、`entry-dryrun/v1`、`codex-upgrade-vc-receipt/v1`、`codex-p0-offline-gate-evidence/v1`／`v2` | 同左（客户端无关，或经计时账本 subject 与部署收据绑定） |
+| 官方产物冻结 | `codex-upgrade-official-asset-receipt/v1` | `claude-code-fw-e-official-freeze/v2`（npm 与原生分发双来源；v1 只读） |
+| VC-0 收口收据组（收口收据、失败诊断、现场、上限后恢复预览、首批交接） | `codex-upgrade-vc0-closeout-receipt/v1` 等 | `official-client-vc0-closeout-*/v1` 同组 |
+| Job 演练收据组（facts、收据、执行合同、采集器） | `codex-upgrade-job-rehearsal-*`（执行合同 v2） | `official-client-job-rehearsal-*/v1` 同组 |
+| 失败生命周期探针 | `codex-upgrade-failure-lifecycle-probe/v1` | `official-client-failure-lifecycle-probe/v1` |
 | 请求账务 | `live-request-provenance/v2` | 同左（计量单位不同，见 Claude 指南） |
 | 根因码表 | `root_cause_codes.json` | `claude_root_cause_codes.json`（同 schema，维度含 `client`） |
 | 恢复预约、恢复段摘要、连续性漂移收据 | `codex-upgrade-*` | `claude-upgrade-*` |
@@ -185,16 +197,21 @@ def compile_and_run_vc_batch(arguments):
 
 `claude_upgrade.py` 以同名同签名提供服务面全部成员，不导入 `codex_upgrade`。函数成员分四档：
 
-| 档位 | 数量 | 含义 |
-|---|---|---|
-| 迁入薄壳 | 78 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
-| 照搬 | 41 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取），逐字取 Codex 实现，测试锁定逐字一致 |
-| 自实现 | 6 | Claude 语义不同的成员：总计划读取、计时账本归属、两根工具清单与工具身份等 |
-| 待实现 | 78 | 调用即报 `ClaudeOrchestratorPending`，写明由哪个后续阶段落实，不伪造行为 |
+| 档位 | 含义 |
+|---|---|
+| 迁入薄壳 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
+| 照搬 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取、证据根取代归档与冲突隔离读取、阶段路径等），逐字取 Codex 实现，由 `tests/test_orchestrator_surface_contract.py` 的照搬清单锁定逐字一致；先照搬后因 Claude 语义分叉的成员另行登记 |
+| 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划读取与建立、取证 attempt、封存、VC-1 恢复、工具演进、阶段结果与批次、分类、画像、候选 revision 与候选构建等 |
+| 待实现 | 调用即报 `ClaudeOrchestratorPending` 并写明原因，不伪造行为；集中在候选采集与候选封存、评估基线与评估恢复、候选恢复段 |
 
-另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。命令行子命令与 Codex 同名：14 个共享
-流程子命令照搬 Codex 的参数定义并在 Claude 作用域里转调共享实现，其余子命令的动作体落实前报未实现。
-两个编排器的行为一致性由 `tests/test_orchestrator_surface_contract.py` 对两个适配器各跑同一组用例保证。
+另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。命令行子命令与 Codex 同名：13 个共享流程
+子命令照搬 Codex 的参数定义并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
+`revision-open`、`invalidate-candidate` 另写 Store 侧登记。`tool-evolution` 参数照搬、执行是 Claude 自己的
+演进链（第 11.4 节）。Claude 专属子命令（`plan`、`freeze`、`import-predecessor-evidence`、`capture-official`、
+`analyze-target`、`classify`、`prepare-profile`、`stage-profile`、`plan-candidate-gates`、`record-candidate-build`、对账与
+恢复类）各有实现模块；`capture-candidate`、`compare`、`accept`、`account-sealed-candidate`、`deliver-candidate`、
+`delivery-stage-invalidate` 执行即报未实现。两个编排器的行为一致性由 `tests/test_orchestrator_surface_contract.py` 对两个
+适配器各跑同一组用例保证。
 
 ## 5 两层事务、崩溃分类与锁顺序
 
@@ -265,7 +282,13 @@ Store 侧的实现：
 
 ## 7 前序证据导入与消费端核验
 
-Claude 的新 Campaign 可以引用前序 Store 的官方证据，但只能经「登记 → 签发收据」两步获得授权。
+Claude 的新 Campaign 可以引用前序 Store 的官方证据，但只能经「登记 → 签发收据」两步获得授权。编排器入口是
+`claude_upgrade.py import-predecessor-evidence --mode read_only_reuse|regression_fixture`（`claude_upgrade_predecessor`，
+Campaign 锁内、静止时执行）：两种模式共用一条链，选取前序最新一条 `evidence_recorded` 引用的 EvidencePackage 及其对象
+闭包；两组七项声明一律从双方 Store Campaign 的冻结字段导出，编排器不替申请方声明；同内容的登记沿用，一份登记只签一份
+收据。`read_only_reuse` 只在 Formal Campaign、且总计划 `predecessor` 冻结了该前序 Campaign 时允许，签发后供 VC-1 零请求
+封存（第 11.3 节）。
+
 
 - **登记**（`predecessor-import-register`，对象 `predecessor_import`）：payload 记录目标 Campaign、前序 Store 根
   （绝对路径，只作形成期出处）与前序 Campaign 身份摘要、被导入的对象与事实引用、申请方声明的两组七项身份
@@ -476,7 +499,110 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
 - 日常维护（`entry_housekeeping.py`）清理记录库时，保留被 Codex pre-A3 v2、Claude pre-A3 v3 与两客户端 P0 v2 证据
   引用的运行。
 
-## 11 Codex 身份守恒
+## 11 官方取证链
+
+本节写 Claude 取证链（VC-0 收口到 VC-1 封存）在共享控制面上的落点；操作顺序、批次与续跑入口见 Claude 指南
+§4.0、§4.1。
+
+### 11.1 VC-0 收口与 Campaign 建立
+
+收口流程只有一份，在 `codex_upgrade_vc0_closeout`：只读现场判定（Formal 未建／已建未派发／已派发）、收口 attempt、
+收据副本组、建 Formal、控制产物副本、总账注册推送、「VC-0 完成」「VC-1 开始」两条事件、首批派发、已派发之后的对账与
+恢复批次、上限后的账本恢复与收口收据；失败留不可覆盖诊断，同一 Formal ID 重跑即续作。客户端差异收进收口画像
+（适配器成员 `closeout_profile`）：
+
+| | Codex | Claude |
+|---|---|---|
+| 画像与入口 | `codex_upgrade_vc0_closeout` 本身 | `claude_upgrade_vc0_closeout`：同时设定共享控制流程与收口流程的客户端作用域，再调用同一套流程 |
+| 合同名 | `codex-upgrade-vc0-closeout-*` | `official-client-vc0-closeout-*`（收口收据、失败诊断、现场、上限后恢复预览、首批交接） |
+| 四份输入 | Codex 合同 | ARM64 环境收据（Claude 合同）、Claude 部署收据、Claude 发布认证（其 Job 演练与预检总计划算出的执行合同兼容）、P0 门禁收据（两客户端同一合同） |
+| Formal `plan` 参数 | 从预检清单恢复 Codex 参数 | 全部取自预检 Campaign：取证坐标、Store 身份四项与冻结收据坐标取 `configuration`，冻结输入取预检副本，前序复用沿用预检冻结的绑定 |
+| 历史修复子命令 | `repair-failure-accounting`、`repair-failure-closure` | 明确拒绝 |
+
+Claude 的 `create_campaign` 在 `claude_upgrade_campaign`（`plan` 带控制收据时建 `preflight_only`，Formal 只由收口经 Python
+接口建立，命令行 `plan --campaign-mode formal` 一律拒绝）。输入全部先校验、任一不过零写入；Store Campaign v2
+（`<campaign_dir>/control-store`）在总计划写出之前建立，并与总计划逐项核对同源。总计划冻结 `inputs`（场景清单、证据
+标签、基线与目标规则清单、Active 目录与画像、静态基线两件、生产现状清单、Store 建立输入）、取自冻结收据的
+`official_identity`、`configuration`、`control_receipts`（预检两件，Formal 另有 Job 演练、发布认证与 P0 门禁）、
+`vc_control` 与 `predecessor`；`predecessor` 必须与计时账本的证据决定一致。生产现状清单（`claude-upgrade-production-inventory/v1`）
+从前序 Store 最新一条 `profile_approved` 只读取出、冻结成文件，不搬进本 Campaign 的 Store。四处 `client`（总计划、Store
+Campaign、项目总账计划、计时账本计划）必须一致。Formal 首批恰有一个 `capture-official` 动作：共享监督器的 VC-1 普通
+恢复链与收口的恢复批次都要求首批恰有这一个采集动作；只读复用前序时是零请求 no-op 首批。
+
+### 11.2 Job 演练与启动探测
+
+完整 Job 离线演练的共享流程（增量计划、checkpoint、逐 Job 执行与复用、收据封存与重放、Formal 与恢复兼容）在
+`codex_upgrade_job_rehearsal_receipt`，`--client claude` 经适配器取 Claude 画像 `claude_upgrade_job_rehearsal`：
+
+- `build_job_contract`、`binary_facts`、`job_contract_replay` 构造并重放完整的 Claude 执行合同
+  （`official-client-job-rehearsal-contract/v1`）：Claude 总计划没有 Codex 的官方包与 code-mode-host 字段，所以是另一份
+  合同，不是在 Codex 合同上换名字；
+- 模块型成员 `job_rehearsal_profile` 给出合同名组（`official-client-job-rehearsal-*`）、场景清单输入名、只展开 official
+  阶段、两个采集容器各自的工具树、命令依赖与步骤启动器、执行副本坐标、运行时探针与采集器身份；
+- 失败生命周期探针（`claude_upgrade_failure_lifecycle`，`official-client-failure-lifecycle-probe/v1`）在断网容器里用真实
+  `campaign-run` 父监督器与 Claude 父租约演练一遍失败、补跑与归档，零请求；Formal 与发布认证都要求 Job 演练绑定这项摘要。
+
+客户端启动探测的宿主侧入口是驱动 `client_launch_probe.py`，`--client claude` 时作业展开经适配器，运行器为
+`claude_launch_probe_runner.py`：回环网络，本地替身终结 `api.anthropic.com` 与 `platform.claude.com`，在覆盖层下的私有
+HOME 里启动 TUI，替身收到正文含口令的首个 `/v1/messages` 才算通过。TUI 驱动循环（信任框确认与主输入框就绪判定）在
+`capturelib/claude_fw_f_v3.py`，中继与启动探测共用这一份。
+
+### 11.3 取证 attempt 与封存
+
+| 模块 | 职责 |
+|---|---|
+| `claude_upgrade_plan` | 场景清单展开与校验、wire 根 `_load_plan_jobs`／`_job_context`、运行期变量绑定、证据标签加载与匹配 |
+| `claude_upgrade_capture` | `capture-official run` 的实现体与 wire 根 `_campaign_arguments`／`_run_job_impl`；预约、探针、补跑与归档、权限收口、checkpoint 与 attempt 收据 |
+| `claude_upgrade_static` | VC-1 静态分析 `analyze-target`（调用 evidence 层的 `claude_fw_e` 与 `claude_sink_containment.mjs`）与 VC-1 封存批次的动作生成 |
+| `claude_upgrade_seal` | `capture-official seal` 的控制流程：锁、总计划、Store 写入、checkpoint、计时账本与请求计量 |
+| `claude_upgrade_evidence`、`claude_upgrade_discovery` | 封存的证据语义与发现补全；编排器的 evidence 根 `scan_evidence`、`_evidence_inventory`、`_seal_capture_attempt` 只转调它们 |
+| `claude_upgrade_vc` | VC checkpoint 与阶段完成登记 |
+
+- wire 根 `_run_job_impl` 只覆盖“一次执行”：运行期变量绑定（含宿主运行收据签发与容器内可见核对）、零请求演练的
+  `--dry-run` 改写、经监督器执行步骤、证据根与 relay 清单核对。探针与漂移判定、补跑与归档、权限收口、checkpoint 与
+  attempt 收据都在 wire 根之外，改它们不改变 Claude 的 wire 身份；seal 的控制流程同理不进入 evidence 闭包。
+- 编排器自有对象一律用 `claude-upgrade-*` 合同名：预约 `claude-upgrade-capture-reservation/v1`、attempt
+  `claude-upgrade-capture-attempt/v1`、Job checkpoint 与闭环收据、探针与二进制核验 v2、环境污染、静态分析收据、seal 草稿、
+  预览与阶段结果等。
+- 证据根写成容器坐标 `<capture_root>/runs/claude-official/<campaign_id>/<job_id>`；宿主侧一切读写经登记的 runs 别名表
+  映射到 `<数据根>/runs`，收口参数写进 attempt 的 `evidence_permission_layout`，重放按同一组参数执行。
+- 合成步骤用 `synthetic-job:` 操作名：监督器不为它建立出口准入下的停止绑定，也不改写 `docker exec` 的目标；`job:` 操作
+  仍只绑定唯一准入的 `capture-cli`。
+- seal 的草稿与预览按代号放在 `official/seal/<代号>/`，代号由 attempt 收据、Store Campaign 身份、Store 有效工具身份、
+  evidence 摘要与静态和冻结输入导出。Store 写入经进程内 `official_client_control` CLI：对象 `--allow-existing`，两条事实
+  带 `fact_idempotency_key(逻辑动作, payload 摘要, 事实种类)`、payload 只用冻结值，父监督器上下文里另带 `--producer-run`，
+  即动作结果 WAL 的第一步（第 5.2 节）。只读复用路径一步写完两条事实、阶段结果与 VC-1 checkpoint，补三条计时事件（ID
+  前缀 `predecessor-reuse-`），写入前做同 ID 冲突预检。
+- seal、前序导入、`classify` 与 VC-3 运行在 Campaign 锁内并要求 Campaign 静止：active 租约拒绝；停线租约视为静止；
+  run 被强杀留下的过期 active 租约先固化为不可覆盖的停线收据再继续；停线租约绑定的 attempt 已封存即视为了结。它们
+  不取得 `CampaignLease`，被强杀后不留需要对账的过期租约。
+- VC-1 checkpoint 的 `live_request_count` 由 `claude_upgrade_live_request_provenance` 核算：逐 probe 分支，中继清单登记
+  的排除连接与零客户端字节连接计零并逐条留证。
+
+### 11.4 VC-1 恢复与工具演进
+
+对账、续跑闭集、resume、残留进程清理在 `claude_upgrade_recovery`，共享对账流程在 Claude 适配器作用域里转调：
+
+- 有未收口预约：`reconcile-attempt` 先入账后判定，可恢复时由共享对账器写零请求恢复预览，并以 Claude 的
+  `recovery_reuse_check` 按 resume 同一判定只读复算，不一致即拒绝批准；批准后 `resume --rerun-failed --recovery-preview`
+  建新 attempt，在同一临时目录里原子发布 `reservation.json` 与 `recovery-source.json`
+  （`claude-upgrade-recovery-source/v1`），复用已完成作业、只执行预览冻结的执行集合。复用集合是对账器判为 complete、
+  attempt 收据存在、环境判为已恢复的作业，再去掉被工具演进作废的作业；每个复用作业逐项复核 Job 闭环收据、Job 级权限
+  收口重放与 relay 清单摘要。
+- 无预约：`reconcile-supervisor-run` 入账判定，按提示以 N+1 批次重派。
+- 残留取证进程：对账后对两个采集容器只读探针留证；`environment-cleanup preview／apply` 在明确批准下先 TERM 后 KILL，
+  前后探针并写清理收据 `control/environment/cleanup/cleanup-NN.json`；resume 预约之前再查一次，有残留即零写入拒绝。
+- `harden-evidence-permissions` 与 `wire-transition-intent`／`wire-transition-final` 参数完整、执行即拒绝：Claude 的 run 在
+  每个 Job 终态与 run 末各收口一次，wire 层变化一律经工具演进登记，不建 wire transition 链。
+
+工具演进链在 `claude_upgrade_evolution`：合同 `tool-evolution/v1`、文件 `control/tool-evolution/evolution-NN.json`、自摘要与
+衔接规则与共享实现相同，只是策略演进的变化路径按 Claude 策略文件的受管条目键核对、`to_identity` 必须属于 Claude（共享链
+校验在 Codex 评估读侧闭包内，不改）。预览把 wire 层变化映射到作业（编排器 wire 闭包变化或映射不到作业时全部受影响），
+evidence 层变化只记评估路径，control 层变化影响为空但同样要登记；官方已封存而仍有作业受影响时拒绝登记。批准写完
+编排器收据后，在 Campaign Store 登记一份 `tool_evolution_registration`；两步之间中断时以同一批准重跑只补 Store 登记。
+Store Campaign 未建立时零写入拒绝。
+
+## 12 Codex 身份守恒
 
 本控制面改造对 Codex 只增不改：
 
@@ -496,7 +622,7 @@ control 层、策略与整树摘要的变化逐文件落在 `REGISTERED_CONTROL_
 可迁但留原位的函数。两个编排器各自实现的读取与校验函数以后合并为一份，需要 Codex 改用跨模块按符号的 v3 引擎，
 并重算其 evidence 闭包与评估器摘要，时机放在 Codex 某次新目标版本升级的 VC-0 之前。
 
-## 12 修改本控制面时
+## 13 修改本控制面时
 
 - 先判断改动落在哪个客户端的哪个身份层：改共享 control 模块要同时按两份策略评估，并在
   `REGISTERED_CONTROL_CHANGES` 登记；改到 Codex 身份闭包内的符号属于身份守恒违规，应改为新增并行实现。

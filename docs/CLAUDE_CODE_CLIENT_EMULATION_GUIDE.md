@@ -1054,22 +1054,23 @@ OfficialIngressCatalog：只有 Claude Code 2.1.226、Claude Desktop 2.1.237、C
 Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部分是 Claude 轨道的参数、证据和门禁
 权威，只补充没有目标版本官方源码、依赖生产 bundle 逆向、隐私模式、OfficialIngressCatalog、模型能力
 目录及专用机器职责的取证边界。历史 FW 阶段和工具状态只记录已发生的迁移事实，不得重定义 Framework
-的通用状态语义。
+的通用状态语义。脚本参数、安装及实现细节统一见[驱动 README](../tools/arm64_capture_driver/README.md)；两个客户端
+共用的控制面实现见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
 
 ## VC-0～VC-6 执行导航
 
-下表只负责导航和展示阶段交接链，不重复建立另一套执行规范。每个锚点直接落到唯一详细章节；FW-E～FW-H
-和具体版本状态仅为历史事实，不能代替这些阶段入口。
+每阶段完成后先重放收据与 checkpoint，再推进下一阶段；脚本成功提示仅供定位，不能替代验收。下表为唯一阶段
+入口表，每个阶段锚点直接落到详细章节；FW-E～FW-H 和具体版本状态仅为历史事实，不能代替这些阶段入口。
 
-| 阶段 | 步骤 | 核心封存输出 | checkpoint／终态 | 唯一详细章节 |
+| 阶段 | 必备输入 | 首跑入口 | 完成标志 | 续跑入口 |
 |---|---|---|---|---|
-| VC-0 | 冻结升级输入 | P0 收据、Campaign 总计划和首批动作清单 | 允许创建 Formal Campaign | [§4.0](#claude-vc-0) |
-| VC-1 | 收集目标证据 | EvidencePackage、CaptureIndex、SinkInventory 和 DiscoveryInventory | `evidence_recorded` | [§4.1](#claude-vc-1) |
-| VC-2 | 逐规则判定差异 | RuleMigrationLedger、AtomicAssertionLedger 和 `rule_classification_recorded` | 分类事实封存；checkpoint 仍为 `evidence_recorded` | [§4.2](#claude-vc-2) |
-| VC-3 | 生成目标画像 | EvidenceApprovalFact、ProfileApprovalFact 和内容寻址画像 | `official_sealed → profile_approved` | [§4.3](#claude-vc-3) |
-| VC-4 | 实现固定 Candidate | CandidateBuildReceipt 与 `candidate_frozen` | `candidate_sealed` | [§4.4](#claude-vc-4) |
-| VC-5 | 定向验证 | CandidateEvidencePackage、逐规则结果与 AcceptanceFact | `validation_only／ready`；production state 为 `not_activated` | [§4.5](#claude-vc-5) |
-| VC-6 | 交付或生产激活 | 候选交付收据；获授权时另有 DeploymentFact | `ready_for_operator_release／production_active_upgraded` | [§4.6](#claude-vc-6) |
+| [VC-0](#claude-vc-0) 冻结输入 | 目标／基线、用途、官方制品冻结、环境、预算和回退依据 | 开工 `entry-dryrun.sh … --opening`；新目标 `entry.sh`；同目标官方证据复用见 §4.0.4 | P0 收据、发布认证与 VC-0 checkpoint 可重放，Formal Campaign 已建立并派发 VC-1 首批；正式取证前 live 请求为零 | 重跑同一 `entry.sh` |
+| [VC-1](#claude-vc-1) 目标取证 | VC-0、冻结的官方二进制、场景清单与证据标签 | VC-0 收口派发首批 `capture-official run`；随后 `vc1-claude.sh`（静态分析与 seal 预览）→ `vc1-claude.sh <review_sha256>`（seal 批准） | EvidencePackage v3 封存、Store `evidence_recorded` 与 VC-1 checkpoint | 有未收口预约：`reconcile-attempt` → 批准恢复预览 → `resume --rerun-failed`；否则 `reconcile-supervisor-run` 对账后按结论处理 |
+| [VC-2](#claude-vc-2) 分类批准 | VC-1 封存、基线 RequiredRules | `vc-batch.sh` 派发 `classify` 草案、修订与批准批次 | `rule_classification_recorded`、清零收据与 VC-2 checkpoint；Store 仍为 `evidence_recorded` | 对账后按批次身份重派 |
+| [VC-3](#claude-vc-3) 生成画像 | VC-2 批准、冻结的 Active 目录与画像 | `vc-batch.sh` 派发 `prepare-profile` 与 `stage-profile` 批次 | `official_sealed → profile_approved`、暂存 Release 与 VC-3 checkpoint；Active 未变 | 对账后重派；ProfileApprovalFact 之前只追加 revision |
+| [VC-4](#claude-vc-4) 固定候选 | VC-3 暂存 Release、批准实现闭集 | ARM64 `vc4-requirements.sh` → 本机 `local-claude-candidate-chain.sh` → ARM64 `arm64-vc4-gates.sh` → `vc4-all.sh` | 同源构建收据、`candidate_sealed` 与当前 revision 的 VC-4 checkpoint | 重入 `vc4-all.sh`（上传中断用 `--resume-from upload-wait`）；候选真实变化先 `invalidate-candidate`，再 `revision-open --supersedes` |
+| [VC-5](#claude-vc-5) 定向验收 | 固定候选与 VC-4 收据 | 编排器的候选采集、比较与验收入口尚未接入（`capture-candidate`、`compare`、`accept` 执行即报未实现） | AcceptanceFact、`validation_only／ready`；production state 为 `not_activated` | — |
+| [VC-6](#claude-vc-6) 交付／激活 | VC-5；生产用途另需生产权限与回退点 | 编排器的候选交付入口尚未接入（`deliver-candidate` 执行即报未实现） | 候选交付收据；获授权时另有 DeploymentFact | — |
 
 主交接链固定为：
 
@@ -1206,65 +1207,98 @@ policy 或 Schema 都是直接依赖。受监督部署把本指南与共享实�
 ## 4.0 VC-0 冻结升级输入
 
 - **输入**：目标版本与官方发行通道、当前 Active／Rollback 或明确的用户管理边界、隐私模式、entrypoint、
-  平台角色、账号与模型条件、Campaign 用途、批准范围、执行权限、预算、证据复用计划和回退点。
-- **操作与工具**：只读冻结 npm／二进制／bundle 身份，核验 Vircs 官方取证、DMIT candidate、Mac 构建控制
-  和 ARM64 镜像封装边界，演练受管执行、恢复与文档部署后生成 P0 记录。
-- **产物**：P0 收据、Campaign 总计划、目标与基线身份、环境／工具／文档摘要、证据复用计划、阶段依赖、
-  监督参数、时间账本和 VC-1 首批动作清单。
-- **完成标志**：身份、用途、批准范围与执行权限完整，工具阻断为零、live 请求为零、预算与回退点有效、
-  取证及候选环境可用，且用户管理的 Vircs 生产服务未被修改。
+  平台、账号与模型条件、Campaign 用途、批准范围、执行权限、预算、证据复用决定和回退依据。
+- **操作与工具**：`claude_upgrade.py freeze` 只读冻结官方制品；受监督部署受管工具与文档；开工空跑后由入口
+  编排器 `entry.sh` 依次完成便宜检查、认证、入口门禁、演练、建账本、环境收据、预检 Campaign、Job 演练、
+  启动探测、发布认证、P0 收据与 VC-0 原子收口。
+- **产物**：官方冻结收据、P0 收据、发布认证、Campaign 总计划与 Store Campaign、计时账本、环境收据和 VC-1 首批。
+- **完成标志**：身份、用途、批准范围与执行权限完整，工具阻断为零，正式取证前 live 请求为零，预算与回退
+  依据有效，Formal Campaign 已建立并派发 VC-1 首批，用户管理的生产环境未被修改。
 - **失败恢复**：
   - 失败层：环境、工具、批准输入或预算账务；Formal Campaign 建立前不产生 live 请求。
-  - 对账入口：Formal Campaign 建立前没有父监督器，按步骤记录定位失败步骤；建立后用
-    `reconcile-supervisor-run`。
-  - 续跑入口：哪一步失败修哪一步、从该步重跑；已通过且输入未变的步骤不重做。
+  - 对账入口：Formal Campaign 建立前没有父监督器，按入口步骤记录定位失败步骤；首批派发之后的中断走 VC-1
+    的对账入口。
+  - 续跑入口：修好后重跑同一 `entry.sh`，已通过且输入未变的步骤沿用，从失败的那一步接着做（§4.0.3）。
 
 VC-0 只回答“本次升级是否具备安全开工条件”。本阶段可以查询官方发行元数据和执行只读环境检查，
 但不得运行目标客户端产生 live 证据，不得定义目标 ProfileSchema／Snapshot，不得创建 Candidate，也不得
 修改 Runtime Selector 或生产服务；这些工作分别从 VC-1、VC-3、VC-4 和 VC-6 开始。
 
-### 4.0.1 P0 冻结清单与执行边界
+先准备本轮参数、干净工具提交与 bundle、目标版本的官方冻结目录（数据根 `official/claude-code-<版本>/`）、
+有效回退依据与批准预算，并按冻结的 `binary_sha256` 装好目标客户端（§4.0.3）。受管工具与文档用
+`tools/arm64_supervised_deploy.py` 部署：交换共享受管根时两客户端都签部署收据，Claude 另覆盖
+`tools/official_client_control`。随后按[驱动 README](../tools/arm64_capture_driver/README.md) 安装并复验驱动；部署
+收据与实际执行副本一致后才开工。
+
+新目标顺序固定：开工空跑 → `entry.sh` → VC-0 原子收口 → VC-1 首批。开工空跑
+`entry-dryrun.sh start <bundle> <分支> <提交> --opening` 在数据根 staging 下的演练根与 `fixture_only` 演练总账里
+执行，重新执行全集并审计读集，零真实请求，不写正式 Campaign，最远到 P0 收据；结论文件名带 `claude-` 前缀。
+演练通过不代表承接已获批准。`entry.sh --plan` 只展示判定，`--from`／`--to` 指定起止步骤。
+
+### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
+
+入口编排器负责以下步骤，操作员按输出处理阻塞，不逐项手填命令：
+
+| 顺序 | 入口负责的工作 | 验收要点 |
+|---|---|---|
+| 1 | 便宜检查、策略兼容／激活认证 | 必填参数、派发守卫、部署身份、目标客户端三处安装、官方冻结目录复核、`claude_upgrade.py plan --audit-only` 与环境试采一次报全；依赖失败项标阻塞 |
+| 2 | 入口门禁与 pre-A3、零请求 smoke、atomic-double | 同一次门禁产出 P0 证据与 Claude pre-A3 认证；全部通过才建账本 |
+| 3 | 计时账本、ARM64 环境收据、checkpoint、预检 Campaign | `preflight_only` 零请求建立，总计划与 Store Campaign 同源；账本创建后沿用，不重建计时 |
+| 4 | 完整 Job 演练、客户端启动探测 | 宿主与两个采集容器的二进制、执行副本与步骤启动器可运行，失败生命周期探针通过；TUI 组合在本地替身上发出带口令的首个 `/v1/messages` 请求 |
+| 5 | 发布认证、P0 finalize／replay | 当前部署、认证、门禁、环境和回退依据绑定一致 |
+| 6 | 原子 VC-0 收口 | Formal 创建与 VC-1 首批派发由同一入口完成 |
+
+客户端表登记为尚未接入的步骤执行即失败并写明原因，不以 Codex 的实现顶替，`entry.sh --plan` 同样列出。
+
+P0 必须包含 `make test-capture-tools`、`make check-egress-spec` 的完整结论，`unexpected_skip=0`；两份证据取自入口
+门禁那一次运行，subject 取 Claude 计时账本计划。测试跳过必须登记为 `approved_skip／unexpected_skip`。工具、
+场景或证据标签残留旧版本硬编码，或必须依赖临时安装、修改宿主网络和生产配置才能运行时，均视为工具阻断。ARM64
+后台运行使用 `setsid -f … < /dev/null`；`nohup` 继承的 SIGHUP 忽略状态会破坏挂断用例。
 
 通用冻结、身份恢复、环境安全和时间控制分别以 Framework §5.3.1、§5.3.4、§5.1.4～§5.1.5 和
-§5.3.5 为准。本节只列 Claude Campaign 必须在 P0 中落盘的专用输入：
+§5.3.5 为准。Claude Campaign 在 P0 中落盘的专用输入：
 
 | 冻结面 | Claude P0 必须记录 |
 |---|---|
-| 目标与基线 | 目标版本／发行通道、npm URL 与 integrity、tgz／二进制／bundle SHA、内嵌 Bun／SDK、平台与架构；当前 Active／Rollback 的 Release、Profile、镜像和回退事实，或明确的 `operator_managed／unverified／not_touched` 边界 |
+| 目标与基线 | 目标版本、官方冻结收据（npm 平台包与原生分发两条来源的联合登记）、二进制 SHA 与平台；当前 Active／Rollback 的 Release、Profile、镜像和回退事实，或明确的 `operator_managed／unverified／not_touched` 边界 |
 | Campaign 身份 | Campaign ID、`validation_only／production_replacement` 用途与终点、批准范围、生产执行权限、证据根、目标场景、entrypoint、隐私模式和受管工具版本 |
 | 账号与模型 | OAuth 组织与非秘密账号标识、权限／scope、模型能力目录、精确别名、effort、feature、故障条件和场景矩阵；OAuth secret 不进入 P0 收据 |
-| 执行环境 | §6 的四类机器角色、OS／内核／架构、网络／代理／CA／DNS、端口、目录、容器、资源水位、构建链和生产隔离边界 |
-| 证据策略 | baseline 已封存证据及摘要、允许只读复用的事实、目标版本仍需补齐的事实、定向取证清单和禁止复用项 |
+| 执行环境 | §4.0.3 的 ARM64 核对项、OS／内核／架构、网络／代理／CA／DNS、端口、目录、容器、资源水位、构建链和生产隔离边界 |
+| 证据策略 | 证据决定（重新取证或只读复用前序）、baseline 已封存证据及摘要、允许只读复用的事实、目标版本仍需补齐的事实、定向取证清单和禁止复用项 |
 | 控制策略 | Campaign 总 deadline、阶段预算、同根因重试上限、资源水位、阶段交接窗口、回退点、结果键、直接依赖图、首批 `execute／reuse` 范围及 no-op 语义 |
 | 工具身份 | Claude 身份策略（`claude_tool_identity_policy_v2.json`，`client: claude`）按多根受管清单计算的 `client` 与五摘要：`policy_sha256`、`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256`、`tool_files_sha256`；清单覆盖 `tools/official_client_capture` 与 `tools/official_client_control` 两个根（条目键带根目录名，后缀含 `.mjs`），运行时依赖 node 与 TypeScript 登记在策略 `runtime_bindings` 并计入 `control_sha256`；另记 Claude 发布认证收据，受管文档随部署收据核对。Store 的 `tool_bundle_sha256` 只是 Store 自身摘要，不代表工具身份；整树摘要不直接作为失效判据，wire、evidence 与 policy 摘要是门禁（Framework §5.3.1 第 2 条）。目标 generation policy 在 VC-3 生成，VC-0 不预填 |
 
-FW-E 首先使用 `claude_fw_e.py freeze` 查询并冻结官方 `stable`；输出必须写入新的冻结目录，不能覆盖
-旧版本材料。2.1.220 等历史版本只能提供 baseline 和证据复用线索，不能选择目标版本。最低离线预演
-应证明 bundle 提取、发现、采集编排、环境快照、脱敏、finalizer 和收据链能处理冻结夹具，并执行：
+官方制品冻结用 `claude_upgrade.py freeze --output-root <此前不存在的绝对路径>`（缺省 `--dist-tag stable`、
+`--platform linux/arm64`）。它是离线工具，不依赖采集容器里的二进制、不发模型请求；产物先写同级暂存目录、完成后
+整体改名，收据 `freeze.json` 为 `claude-code-fw-e-official-freeze/v2`。登记与校验顺序：
 
-```bash
-make test-capture-tools
-make check-egress-spec
-```
+1. 版本只取 npm 主包 `dist-tags.stable` 的精确三段版本；原生分发的 `latest`／`stable` 端点只记录、用于核对，不参与
+   选版本；冻结结束时复查 npm 标签，期间漂移即作废本轮；
+2. npm 渠道：主包与平台包 `@anthropic-ai/claude-code-linux-arm64` 核 sha512 SRI、sha1 与 Registry 签名，主包
+   `optionalDependencies` 精确绑定平台包，从平台包解出二进制；
+3. 原生分发渠道：同一精确版本的 `manifest.json` 取平台 `linux-arm64` 的 checksum 与 size，另记 commit、buildDate
+   与清单签名执行状态，下载同版本二进制核对 sha256 与字节数；
+4. 两份二进制都必须是 aarch64 ELF64，按 `PT_INTERP` 区分 glibc 与 musl，`linux/arm64` 只接受 glibc；
+5. 两渠道二进制逐字节比较：相同则登记唯一的 `binary_sha256` 并绑定两渠道证明；不同则两份都存、`binary_equivalence`
+   记 `divergent`、`binary_sha256` 为空，冻结退出码 2，VC-0 不得据此建立 Formal Campaign。
 
-预演只证明工具能力，不生成目标版本证据。测试跳过必须登记为 `approved_skip／unexpected_skip`；正式
-P0 要求 `unexpected_skip=0`。工具、场景或证据标签残留旧版本硬编码，或必须依赖临时安装、修改宿主网络
-和生产配置才能运行时，均视为工具阻断。最小历史夹具还必须证明父监督、结果键、执行／复用闭集、
-`incremental-noop`、时间账本、超时／失联停线、checkpoint 恢复及受管文档部署；任一能力只能靠人工保证时，
-不得创建 Formal Campaign。
+冻结目录放到数据根 `official/claude-code-<版本>/`。入口便宜检查的 `official-package` 一项与 `plan --audit-only` 只读
+复核它（`claude_upgrade_freeze verify`）：收据合同与平台、目标版本、两渠道等价、`binary_sha256` 等于本轮
+`CLIENT_BIN_SHA256`，以及目录里每个登记文件的摘要与字节数。冻结只证明官方产物身份；entrypoint、隐私模式、账号
+与模型条件由 VC-0 总计划与 Store Campaign 冻结。`claude_fw_e.py freeze`（v1，`linux/amd64` 与 `darwin/arm64`）只读
+保留，只解释 2.1.226 的历史冻结。
 
-### 4.0.2 Claude 专用身份、用途与环境角色
-
-Campaign、Candidate 和 attempt 的身份边界见 Framework §3.3、§5.1。Claude P0 额外冻结：
+Campaign、Candidate 和 attempt 的身份边界见 Framework §3.3、§5.1。Claude P0 另冻结以下身份维度：
 
 | 身份维度 | 冻结要求 |
 |---|---|
-| 官方产物 | npm URL、integrity、tgz／二进制／bundle SHA、内嵌 Bun／SDK、平台和架构必须联合判定，任一变化均为新目标身份 |
+| 官方产物 | 官方冻结收据、两渠道证明、二进制 SHA 与平台联合判定，任一变化均为新目标身份 |
 | 隐私模式 | `essential-traffic`／`no-telemetry`／`default` 不得混用；复用证据必须与目标模式一致 |
 | entrypoint | `sdk-cli` 与真实 TTY 的 `cli` 分开取证；`-p` 不能伪造 TUI，Desktop 与 VS Code 也不能继承 CLI 身份 |
-| 平台 | Linux x86_64 是当前主基准；Darwin arm64 只作交叉复核，不替代目标平台 wire |
+| 平台 | Linux arm64 是当前官方客户端平台；x86_64 证据只读作历史 baseline，不能证明 arm64 目标 |
 | 账号与模型 | OAuth 组织、权限、scope、模型目录、精确别名、effort 和可见性共同构成证据条件，不能在验收后追认 |
-| 环境角色 | Vircs 只承担隔离官方取证且不得扰动其生产服务；DMIT 只验收固定 Candidate；Mac 负责控制与构建；ARM64 只封装 linux/amd64 镜像，详细边界见 §6 |
+
+### 4.0.2 用途
 
 每个 Campaign 必须在 P0 选择一个用途，进入正式 Campaign 后不得更换：
 
@@ -1273,52 +1307,119 @@ Campaign、Candidate 和 attempt 的身份边界见 Framework §3.3、§5.1。Cl
 | `validation_only` | 交付已验收候选并停在 `ready_for_operator_release`；不改变或声称验证用户管理的生产环境 |
 | `production_replacement` | 先达到 `ready_for_operator_release`；具备明确生产权限、可复算 Active／Rollback 和有效回退点后，继续 canary、切流、实际回滚与目标恢复 |
 
-Campaign 用途描述最终目标，执行权限描述本次操作可以推进到哪里，两者不得互相替代。当前 2.1.226
-official-client-only Approval 已冻结为 `production_replacement`，而当前任务的权限只覆盖 DMIT 候选交付；
-因此可以推进到 `ready_for_operator_release` 后交给用户，但不得改写用途、进入 Vircs 或声明 VC-6 的生产
-分支完成。后续生产操作必须取得独立授权并从 VC-0 重新冻结生产输入；新 Campaign 若本来就不以生产替换为
-目标，才选择 `validation_only`。
+Campaign 用途描述最终目标，执行权限描述本次操作可以推进到哪里，两者不得互相替代。Store Campaign 冻结的执行
+权限是主机 `arm64` 与动作 `official_capture`、`candidate_build`、`candidate_capture`，不含生产动作；执行权限只覆盖
+候选交付时，可以推进到 `ready_for_operator_release` 后交给用户，但不得改写用途或声明 VC-6 的生产分支完成。生产
+操作必须取得独立授权并从 VC-0 重新冻结生产输入。入口编排器建计时账本与预检 Campaign 时用途固定为
+`production_replacement`。用途、账号／模型能力和证据语义在 VC-0 冻结，验收后不能追认或修改。
 
 Discovery、Evidence、Approval、Candidate、Acceptance 和 Deployment 均是后续阶段的追加事实，VC-0 不得
 预填其 ID、摘要或状态。2.1.226 的当前进度与恢复检查点只见 §3.6，不写入新版本 VC-0 冻结清单。
 
-### 4.0.3 退出条件与阻断处置
+### 4.0.3 ARM64 环境
+
+官方取证、各类门禁、候选构建与候选验收在 ARM64 完成；本机负责权威源码、候选提交链与三个官方客户端的本机正例
+（机器职责见 §6.2）。
+
+| 必须核对 | 要求 |
+|---|---|
+| 数据和权限 | 宿主 `/root/docker/capture-cli/data`，与 Codex 同一数据根；活动数据只放其下，目录 `0700`、文件 `0600`；禁止向 `/root` 解包 |
+| 目标客户端 | 宿主 `/opt/claude-<v>/claude`（实体目录）与数据根 `runtime/claude-<v>`（只读挂载到 `capture-cli`、`capture-cli-synthetic` 的 `/opt/claude-<v>`），三处摘要等于冻结的 `binary_sha256`，容器内 `--version` 自报目标版本 |
+| 镜像与依赖 | 断网容器 `capture-cli-synthetic` 与 `capture-cli` 同镜像，`network_mode: none`，挂载逐项相同（去掉 Docker 控制面），逐容器文件不共用来源；受管运行时 `runtime/claude-tooling` 只读挂载到 `/opt/claude-tooling`，node 与 TypeScript 的摘要等于身份策略 `runtime_bindings` |
+| 出口 | 读取受限运维策略，`capture-cli` 与 `sub2apiplus` 两端保护通过实时准入；断网容器不在出口准入里；禁止自动学习出口、回退直连或改网络迁就检查 |
+| 凭据 | 正式取证要求两个采集容器都有 Claude OAuth 凭据（容器内 `/root/.claude`，数据根 `state/claude`）、CA 与全局状态文件，且两边全局状态内容相同；Job 演练与启动探测不读凭据内容，未登录时也能通过 |
+| 资源 | 根盘已用 ≤69%、可用 ≥30 GiB；驱动派发前可用 ≥40 GiB（参数 `MIN_FREE_GIB` 只能调高），与 Codex 同一条停线。清理只针对未被收据引用的缓存和临时产物 |
+
+网络配置、接口与切换步骤见[运行时出口运维说明](egress/runtime-egress-operations.md)，本节不重复具体拓扑。环境
+producer `claude_upgrade_arm64_environment_receipt` 按当前出口策略、boot ID、租期、两个采集容器与目标客户端二进制
+核验。TLS 就绪由容器内 curl 对 `https://api.anthropic.com/api/hello` 发无凭据 `HEAD`（期望 200）证明；Claude 二进制
+自身 TLS 栈经当前出口的就绪性没有无凭据可观察手段，收据不伪造这一项。旧环境收据不能替代当前准入；经批准的出口
+策略变更重新准入即可。
+
+建账本后的失败重跑同一 `entry.sh`：完整步骤按绑定承接，半成品使用新坐标（`-r2`、`-r3` …）并保留原记录，便宜检查与
+启动探测每次重新执行，Job 演练上次失败且留下收据时只重跑失败的作业。Formal 已建后创建链冻结，只补收口；已派发
+首批不得再次派发，转对账恢复。
+
+### 4.0.4 退出条件与建 Campaign
 
 VC-0 的退出条件固定为：
 
 ```text
 P0 收据通过
 ∧ 目标、基线、Campaign 用途、批准范围、执行权限、账号与模型条件完整
+∧ 官方冻结两渠道逐字节相同
 ∧ 工具阻断 = 0
 ∧ unexpected_skip = 0
 ∧ live_request_count = 0
-∧ 受管 runner、阶段依赖、监督参数、时间账本和文档部署预演通过
-∧ 环境、目录、预算、资源水位和回退点有效
-∧ Vircs 生产状态未变化
-⇒ 封存 VC-0 输出并进入 VC-1
+∧ 发布认证、两端保护、指定出口、目录与资源有效
+∧ 回退依据有效
+∧ 用户管理的生产环境未变化
+⇒ VC-0 收口建立 Formal Campaign 并派发 VC-1 首批
 ```
+
+- **新目标**：`entry.sh` 最后一步调用 `claude_upgrade_vc0_closeout`，先只读判定现场。Formal 未建时重放预检
+  Campaign、ARM64 环境收据、Claude 部署收据、Claude 发布认证与 P0 收据，要求计时账本处于 active VC-0 且剩余至少
+  300 秒，向统一调度执行器申请整机后，在同一进程内建立 Formal（总计划与 Store Campaign v2 同源，参数全部从预检
+  Campaign 恢复）并派发 VC-1 首批；Formal 已建未派发时只补缺的事件并派发首批；首批已派发时不再派发，交给 VC-1 的
+  对账恢复链。需要批准时（同根因到上限后的账本恢复、首批恢复预览）这一步退出 3 并打印下一条命令，批准后带
+  `--approve-sha256`／`--approved-by`（上限后的恢复另带 `--reason`）重跑同一 `entry.sh`。命令行
+  `claude_upgrade.py plan --campaign-mode formal` 一律拒绝；演练根里不做收口。
+- **同目标可信官方证据复用**：参数文件写 `EVIDENCE_DECISION=reuse` 与前序 Store、Campaign
+  （`PREDECESSOR_STORE`、`PREDECESSOR_STORE_CAMPAIGN`），走同一条 `entry.sh`：计时账本以 `reuse` 建立，预检 plan 在
+  总计划冻结 `predecessor`（只冻结前序 Campaign 身份，不冻结 Store 位置），收口建 Formal 后首批是零请求 no-op（复用
+  项为全部 official Job）。随后用 `claude_upgrade.py import-predecessor-evidence --mode read_only_reuse` 导入前序的
+  VC-1 官方证据——七项身份全部可证且逐项相等才签发导入收据——再按 §4.1.2 派发 VC-1 预览批次，seal 在同一批次里
+  零请求完成，并补齐 VC-0 完成、VC-1 开始与完成的计时事件（已登记的跳过）。复用决定只能在 VC-0 建 Campaign 时
+  冻结，不能建完再挑；`--mode regression_fixture` 只登记回归夹具，不授予任何正式引用权限。
 
 目标、基线、用途、账号权限、模型可见性或官方产物身份变化时，当前冻结结果失效，必须从 VC-0 建立
 新的 Campaign 身份。工具、Schema、场景、网络、目录、资源、预算或回退能力存在缺口时，不得启动正式
-Campaign；先记录最后合法检查点、根因和唯一下一动作，再独立修复并重跑受影响的 P0 检查。全部条件通过
-后应立即封存 P0 收据、Campaign 总计划和 VC-1 首批输入，不得以准备工作为由停留在 VC-0。
+Campaign；先记录最后合法检查点、根因和唯一下一动作，再独立修复并重跑受影响的入口步骤。全部条件通过
+后应立即收口，不得以准备工作为由停留在 VC-0。
+
+### 4.0.5 受管工具发布认证
+
+认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
+`--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude v3 引擎计算；pre-A3 签
+`pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
+发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
+（`official-client-job-rehearsal-receipt/v1`，含失败生命周期探针）与 atomic-double 收据，只能在具备 Go 与 Docker
+的 Linux ARM64 上签发。按客户端分组的实现见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
+
+Claude 的 pre-A3 场景是登记的四条真实链，单元 ID 为 `pre-a3:claude:<场景>`，与 Codex 单元同一记录库、互不承接：
+
+| 真实链 | 覆盖 |
+|---|---|
+| `vc-chain.claude-reconcile` | 首批采集失败 → `reconcile-attempt` → 批准恢复预览 → `resume` 只重跑失败 Job；无预约时 `reconcile-supervisor-run` → N+1 重派 |
+| `vc-chain.claude-deadline` | 阶段预算到期两本账暂停 → `deadline-extend` 预览与批准（两本账之间被强杀后补齐收敛）→ 原 Campaign 续跑 |
+| `vc-chain.claude-root-cause` | 同根因累计达冻结上限只暂停、门禁只挡该根因 → 修复收据放行 → 续跑 |
+| `vc-chain.claude-tool-evolution` | 部署新工具 → 未登记即拒绝写入 → 登记演进 → 有效身份更新 → Store finalizer 通过 → 旧收据按形成期重放 |
+
+四条链零请求，在两个受管根的副本树上运行，Linux root 上进入 `unshare -m -n` 私有命名空间（临时根 `/var/tmp`）；
+登记的真实链必须完整执行，失败、缺失或 skip 均拒签。只改 `tools/official_client_control` 时 Claude 场景单元失效
+重跑，Codex 场景单元不受影响。跨部署沿用 pre-A3 时由 `record-reuse` 登记复用收据并纳入发布认证，无有效证明就
+重跑。旧认证按冻结合同只读重放，不追改历史字节。
+
+Claude 发布认证：待认证。当前签发在核完 pre-A3 与 Job 演练之后失败关闭（Claude 的 atomic-double 收据尚不能被
+发布认证重放），VC-0 收口要求的 Claude 发布认证因此还签不出来。
 
 <a id="claude-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
 
-- **输入**：VC-0 收据与正式 Campaign 身份、目标生产 bundle、证据复用计划、历史稳定来源、目标场景
-  清单及模型能力轨道。
-- **操作与工具**：先判定复用或补证范围，再验证 integrity、确定性提取 Bun SEA、全量分析网络 sink，
-  并为缺失目标事实采集 P／R／J／M 和全 host／path 出站。
-- **产物**：目标身份与 P／R／J／M、CaptureIndex、SinkInventory、DiscoveryInventory、跨来源矩阵、
-  EvidencePackage 和 `evidence_recorded` checkpoint。
+- **输入**：VC-0 收据与 Formal Campaign 身份、冻结的官方二进制与冻结目录、证据复用决定、历史候选基线、
+  目标场景清单（含模型能力作业）、证据标签与生产现状清单。
+- **操作与工具**：首批 `capture-official run` 按冻结场景清单取证；之后的 VC-1 批次先做静态分析 `analyze-target`
+  （Bun 模块图、多模块 AST、目标 SinkInventory 与 sink containment），再经 `capture-official seal` 预览、审核与
+  批准封存；只读复用前序时零请求封存。
+- **产物**：attempt 收据、P／R／J／M、静态分析收据、CaptureIndex、SinkInventory、DiscoveryInventory、语义候选与
+  候选分母、跨来源矩阵、EvidencePackage v3、`official/result.json` 与 VC-1 checkpoint。
 - **完成标志**：目标身份完整，目标发现无截断，证据逐项可定位、可解析、可复算，安全与环境恢复门禁
-  全部通过，官方证据包已封存。
+  全部通过，Store 到 `evidence_recorded`。
 - **失败恢复**：
   - 失败层：环境、工具或预算账务；目标、账号权限或官方产物身份变化按 Framework §5.3.4 返回 VC-0。
   - 对账入口：有尚未收口的采集预约用 `reconcile-attempt`，否则用 `reconcile-supervisor-run`。
-  - 续跑入口：批准零请求恢复预览后，只补缺失目标事实、失败或未完成的 Job 及其直接依赖场景；封存链从
-    失败动作续作，已可信封存的官方请求不得重发。
+  - 续跑入口：批准零请求恢复预览后，`resume --rerun-failed --recovery-preview` 只补失败或未完成的 Job；静态
+    分析与 seal 批次失败先对账，按对账结论处理；已可信封存的官方请求不得重发。
 
 VC-1 只回答“目标版本实际会产生什么行为”。本阶段不判定相对基线的最终迁移类型，不生成目标画像，
 也不签发 ProfileApprovalFact；`inherit/change/condition_change/add/delete`、最终发现处置和
@@ -1326,7 +1427,7 @@ AtomicAssertionLedger 均在 VC-2 完成。
 
 ### 4.1.1 证据来源与复用判定
 
-先按 VC-0 冻结的证据策略逐项判定，不能把“已有文件”直接解释为“可以复用”：
+先按 VC-0 冻结的证据决定逐项判定，不能把“已有文件”直接解释为“可以复用”：
 
 | 情况 | VC-1 动作 |
 |---|---|
@@ -1334,11 +1435,15 @@ AtomicAssertionLedger 均在 VC-2 完成。
 | 可信证据只缺少某项目标事实 | 只对该事实、触发条件和直接依赖场景定向取证，其余证据继续只读复用 |
 | 目标、基线、Campaign 用途、官方产物、平台、entrypoint、隐私模式、账号权限或模型可见性变化 | 停止当前 Campaign，返回 VC-0 重新冻结身份和证据策略 |
 | 仅报告、控制面、evaluator 或 Candidate 变化，目标证据语义未变 | 只重跑受影响的离线派生与门禁，不得据此重发官方请求 |
-| 采集、relay 或其他产出侧工具改变证据字节（wire producer 变化） | 在原 Campaign 经 intent／final 两阶段 transition 承接，只重采受影响 Job；全部 Job 受影响才建立后继 Campaign |
-| 提取、脱敏或其他证据处理工具改变证据解释（evidence semantics 变化） | 原 Campaign 追加 evaluation epoch，只重跑离线处理，原始字节不重采 |
+| 采集、relay 或其他产出侧工具改变证据字节（wire producer 变化） | 官方未封存时在原 Campaign 以 `tool-evolution` 登记演进：预览按作业声明的工具依赖算出受影响 Job（编排器 wire 闭包变化或变化映射不到作业时全部受影响）并逐作业作废，`resume` 只重采受影响 Job；官方已封存后仍有 Job 受影响即拒绝登记，Campaign 内不再重采官方证据 |
+| 提取、脱敏或其他证据处理工具改变证据解释（evidence semantics 变化） | 原 Campaign 以 `tool-evolution` 登记演进并按评估纪元重评，只重跑离线处理，原始字节不重采 |
 
-纯复用批次必须记录 `live_request_count=0`；工具、报告或 Candidate 变化本身不是官方重采理由。目标事实
-仍取下列五类输入的并集，但只有目标原生发现和同身份目标运行证据能够成为当前版本权威：
+同目标只读复用经 `import-predecessor-evidence --mode read_only_reuse` 进入本 Campaign（§4.0.4）：七项身份（目标
+版本、官方产物、平台、entrypoint、隐私模式、OAuth 组织、模型目录摘要）全部可证且逐项相等才签发导入收据，导入的
+EvidencePackage 才获正式引用权限；`regression_fixture` 收据只供测试与回放，不授予正式引用。纯复用批次必须记录
+`live_request_count=0`；工具、报告或 Candidate 变化本身不是官方重采理由。
+
+目标事实仍取下列五类输入的并集，但只有目标原生发现和同身份目标运行证据能够成为当前版本权威：
 
 | 输入 | 每版动作 | 权威边界 |
 |---|---|---|
@@ -1348,30 +1453,59 @@ AtomicAssertionLedger 均在 VC-2 完成。
 | 2.1.88 真源码 | 重放已冻结的 102 个源码机制候选 | 只作机制线索 |
 | HitCC 2.1.197 | 重放已冻结的 71 个线索 | 只作发送面和分支线索 |
 
-首次历史基线必须绑定原始目录、工具、覆盖合同、稳定 ID、原文位置和收据。2.1.88 全量覆盖
-`src／node_modules／vendor` 的网络反向切片；HitCC 每篇 `clue_source` 和未抽成 clue 的 Markdown 项均须
-无截断登记，不能按关键词未命中排除。后继 Campaign 必须重放全部稳定 ID；可以复用提取结果，不能复用
-针对新目标的迁移结论，旧资料也不能单独支持任何活动规则。
+历史资料的提取结果冻结为受管根内的历史候选基线 `claude_fw_e_historical_candidate_baseline_v1.json`：它从 2.1.226 的
+语义闭合与完整 Campaign 产物只读生成，带提取收据（输入产物与提取工具的摘要、2.1.88 与 HitCC 原始目录摘要、语义
+候选目录摘要），`claude_upgrade_discovery.py freeze-baseline` 可逐字节复现，属于 Claude 身份的 evidence 层。seal 逐项
+重放这份基线，不重扫 2.1.88 的 `src／node_modules／vendor`、不逐篇重提 HitCC；后继 Campaign 必须重放全部稳定 ID，
+历史处置不复制成新版本结论，旧资料也不能单独支持任何活动规则。
 
 仅在原始摘要／引用无法复算、提取能力或覆盖合同实质变化、目标出现无法解释的新网络机制、目标证据与
 历史候选冲突／闭集缺口，或候选粒度不足以唯一映射时，才全量重审原始资料。重审必须建立新的内容寻址
 基线和追加式收据，记录触发原因、摘要、ID 迁移和覆盖差异；旧基线不得覆盖。
 
-### 4.1.2 Bundle 分析与官方取证
+### 4.1.2 Bundle 分析、抓包与封存
 
-Claude 没有可审计的目标版本未压缩源码，必须以官方生产 bundle 和目标运行证据为主：
+Claude 没有可审计的目标版本未压缩源码，以官方生产 bundle 和目标运行证据为主。VC-1 的动作全部由父监督器
+`campaign-run` 派发，是受监督动作；参数取自 Formal 总计划冻结的输入（场景清单、证据标签、静态基线、生产现状
+清单）与取证坐标，不现场补写：
 
-1. 核对 VC-0 冻结的 npm 来源、integrity、tgz／二进制／bundle 摘要和平台，确定性提取 Bun SEA；
-2. 解析目标 bundle 的全部文本模块，从官方入口独立枚举网络 sink、请求构造、Header／Body 写入、环境与
-   feature gate、端点、重试和跨请求状态，不得只围绕旧规则或固定字面量搜索；
-3. 将 AST 调用点、无截断词法候选、历史稳定 ID 和运行待证事实合并，冻结目标场景、条件、模型轨道和
-   证据通道；场景清单冻结后不得现场补写；
-4. 在 Vircs 隔离环境按冻结清单运行官方客户端，全 host／path 观察进程出站，不得用待证 endpoint、host
-   或历史规则预筛；
-5. 每个 run 同时封存 P／R／J／M、实际 argv／环境、工具摘要、宿主回执、连接索引、秘密扫描、目录权限和
-   before／after 恢复事实；
-6. 生成 CaptureIndex，将静态发现、触发场景、连接、host／path、P／R／J／M 和环境身份双向绑定，再执行
-   跨来源闭合与 EvidencePackage 封存。
+| 批次与动作 | 做什么 | 失败层与续跑 |
+|---|---|---|
+| 首批 `capture-official`（VC-0 收口派发） | `capture-official run --acknowledge-live-requests` 按冻结场景清单逐 Job 取证 | 环境、工具或预算账务；有未收口预约走 `reconcile-attempt` → 批准恢复预览 → `resume --rerun-failed --recovery-preview`，否则 `reconcile-supervisor-run` 后按提示以 N+1 批次重派 |
+| 预览批次 `vc1-01-analyze-target` | `analyze-target`：对冻结的官方二进制做 bundle 分析与 sink containment，产物在 `official/static-analysis/` | 工具；`reconcile-supervisor-run` 对账后按结论处理；规范产物已存在时只重放收据，不重复分析 |
+| 预览批次 `vc1-02-seal-preview` | `capture-official seal` 预览：生成封存草稿、唯一一次深度扫描，给出 `review_sha256`；停在等批准是批次内的合法暂停点 | 工具或证据标签；`reconcile-supervisor-run` 对账后按结论处理；工具演进或输入变化得到新代号，旧代预览不能被批准 |
+| 批准批次 `vc1-03-seal-approve` | 带审核过的 `review_sha256` 批准：Store 幂等追加到 `evidence_recorded`，写阶段结果与 VC-1 checkpoint | 工具；`reconcile-supervisor-run` 对账后按结论处理；同一批准命令重跑收敛，Store 事实数不增 |
+
+首批完成、官方 attempt 处于 `awaiting_receipts` 之后，在采集主机运行 `vc1-claude.sh` 派发预览批次；审核
+`claude_vc1.py summary` 打印的预览（闭合状态与 `review_sha256`）后，运行 `vc1-claude.sh <review_sha256>` 派发批准批次。
+发现项需要人工处置时用环境变量 `DISCOVERY_DISPOSITIONS` 给出 Campaign 内的处置文件，预览与批准给同一份。只读复用
+前序的 Campaign 没有采集 attempt，预览批次里 seal 直接零请求完成。封存后 `account-sealed-official` 把官方阶段的
+模型请求写入项目总账（零请求、按 attempt 幂等）。
+
+**取证 Job。** 每个 Job 的每一步都是 `docker exec <容器> python3 <工具根>/claude_fw_e_relay.py capture --execute …`：
+中继在容器内完成 hosts override、leaf cert、relay 与客户端运行，经 Campaign 租约的独立监督器执行。预约之前依次核对
+模式、污染标记、是否已封存、工具身份、冻结副本、坐标布局、执行树、宿主与两个采集容器里的二进制、凭据与 CA、预算；
+原子预约之后每一步在宿主签发运行收据，并核对容器内逐字可见。真实上游步骤只在 `capture-cli` 执行，合成步骤只在
+断网容器 `capture-cli-synthetic` 执行（plan 时钉定，执行时按冻结的上游 IP 复核）。每个 Job 前后对两个采集容器采
+探针，快照漂移或残留取证进程即判环境污染、不补跑、停止后续 Job；失败作业按冻结上限补跑，失败证据归档为
+`.failed-attempt<N>`；每个 Job 终态做一次证据权限收口并写 Job 闭环收据与 checkpoint，run 末再收口一次，写只写一次的
+`attempt.json`。模型能力作业以“<模型>-<probe>”命名，逐模型取证。
+
+**静态分析。** `analyze-target` 用 `claude_fw_e.analyze_bundles` 提取 Bun 模块图（入口按模块间的加载关系确认，入口
+关系未决的模块、动态加载边与 sink 单列为未决项），对全部 JS 模块做 AST 与可达性分析并合并为目标 SinkInventory，
+与 Campaign 冻结的 2.1.220 词法基线做静态差异，再用 `claude_sink_containment.mjs` 给出逐 sink 的 AST 包含关系证据。
+node 与 TypeScript 是受管运行时依赖：取宿主数据根 `runtime/claude-tooling/` 下的两件（采集容器内挂载为
+`/opt/claude-tooling`），摘要必须等于 Claude 身份策略 `runtime_bindings` 的登记值；默认路径缺失即失败，不在 `PATH`
+里另找。在本机单独运行 `claude_fw_e.py analyze-bundles` 必须显式给出 `--node-binary` 与 `--typescript-module`，
+TypeScript 无论来源都对照锁定摘要。产物先写临时目录、完成后整体改名，收据 `claude-upgrade-static-analysis/v1` 绑定
+冻结收据、基线、运行时与全部产物。
+
+**封存。** seal 先写客户端身份 checkpoint，再生成草稿：按证据标签逐连接匹配中继的有效连接得到 capture manifest，
+逐 Job／probe 复核中继清单得到 CaptureIndex，从目标 SinkInventory、入口未决项与历史候选基线生成 DiscoveryInventory、
+语义候选与正交候选分母，再生成跨来源矩阵；预览时唯一一次深度扫描，写证据清单、封存草稿与预览。闭合门禁有四种阻断
+原因——CaptureIndex 复核失败、标签错位、发现项未分类、规则缺口——任一存在都不能批准；闭合只表示来源覆盖和证据
+缺口已闭合，不等于已经完成 VC-2 的规则迁移分类。批准是幂等写入：被强杀后重跑同一命令收敛，Store 事实数不增。
+取证、封存与恢复的实现落点见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)第 11 节。
 
 `SinkInventory` 至少覆盖 `fetch`、Anthropic SDK resource、Node／Bun HTTP、TLS、socket、
 WebSocket／EventSource、动态 wrapper 和外部网络子进程；禁止数量上限或抽样。无 sourcemap 的 minify
@@ -1388,45 +1522,24 @@ source-to-sink、反向数据流和运行闭环。JavaScript 无法证明的 Bun
 `DISABLE_TELEMETRY=1` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`；telemetry／nonessential 的合法
 零流量只登记为 supporting fact，不能证明相关代码不存在，也不能用于删除影响 essential 请求的共享状态。
 
-### 4.1.3 目标闭集、封存与退出
+### 4.1.3 目标事实整理与退出
 
 VC-1 的跨来源产物只保存事实、来源和待审查候选，不形成最终规则结论：
 
 | 层 | 内容与阶段边界 |
 |---|---|
-| `SinkInventory` | 无截断保存目标发送点、transport、host／path 和触发条件，并与运行 inventory 对照 |
-| `DiscoveryInventory` | 保存目标调用、历史原子命题、clue 和 Markdown 原子；发现项不能直接生成规则 |
-| `SemanticRuleCandidate` | 以 `source_ids` 多对一归并稳定 `CAND-*`，只作为 VC-2 输入；`observed／blocked` 均不是生产规则 |
-| 跨来源矩阵 | 绑定目标发现、历史来源、CaptureIndex 和证据缺口；只证明来源覆盖，不签发迁移结论 |
-| `EvidencePackage v3` | 只保存有序 `evidence_items`；每项绑定稳定 `evidence_id`、`source_ids`、外部证据摘要和适用条件，不含规则、证据等级或迁移结论 |
+| `SinkInventory` | 无截断保存目标发送点、所在模块、transport、host／path 和触发条件，并与运行 inventory 对照；入口关系未决的模块、动态加载边与 sink 单列 |
+| `DiscoveryInventory` | 目标 SinkInventory 的每个 sink、入口未决项，以及历史候选基线逐项重放的历史原子命题、clue 和 Markdown 原子；发现项不能直接生成规则 |
+| `SemanticRuleCandidate` | 32 个稳定 `CAND-*` 族一律列出，以 `source_ids` 多对一归并并与发现项双向闭合，只作为 VC-2 输入；`observed／blocked` 均不是生产规则 |
+| 正交候选分母 | 目标发送点、语义候选族与三组历史候选共五组，由输入计算、不写死，供 VC-2 逐项处置 |
+| 跨来源矩阵 | 逐条必需规则绑定覆盖它的场景、probe 与证据项，缺证据即缺口；只证明来源覆盖，不签发迁移结论 |
+| `EvidencePackage v3` | 每个 probe 一个证据项（`EVIDENCE-<probe>`），只含 `source_ids`、外部证据绑定和适用条件，不含规则、证据等级或迁移结论 |
 
-一个发现可以关联多个语义候选，但来源引用必须双向闭合。`claude_fw_e_seal_plan.py` 为兼容 2.1.226
-历史输入仍读取 `claude_fw_e.py rule-assessments`，但 v4 seal plan 只提取 `source_ids`、证据路径和适用条件，
-并生成不含规则结论的 `evidence_items`。历史输入中的 `migration_decision`、证据等级、生命周期和兼容类别
-不得进入 EvidencePackage v3，也不得自动写入 RuleMigrationLedger、AtomicAssertionLedger、Profile 或
-生产清单。
-
-机器执行顺序固定为：
-
-```text
-claude_fw_e.py analyze-bundles
-→ claude_sink_containment.mjs
-→ 冻结目标场景并执行官方 Campaign／relay 取证
-→ claude_fw_e.py capture-index
-→ claude_fw_e_dispositions.py
-→ claude_fw_e_validation_closure.py
-→ claude_fw_e_crosswalk.py --require-explicit
-→ claude_fw_e_crosswalk.py --require-closed
-→ claude_fw_e.py rule-assessments（仅历史 seal 兼容预评估）
-→ claude_fw_e_seal_plan.py
-→ claude_fw_e.py seal
-```
-
-`analyze-bundles` 对每个平台运行锁定 TypeScript 解析器，并把 AST 调用点与无截断词法候选合并为
-`target-sink-inventory.json`。`--require-closed` 中的 `unclassified=0` 只表示来源覆盖和证据缺口已闭合，
-不等于已经完成 VC-2 的规则迁移分类。`seal` 必须绑定目标 inventory、矩阵、closure、CaptureIndex 和
-工具摘要，并封存 `official-client-evidence-package/v3`；该包只有 `evidence_items`，不得包含 `rules` 或
-`migration_decision`，也不得签发 Evidence／Profile ApprovalFact。
+一个发现可以关联多个语义候选，但来源引用必须双向闭合。DiscoveryInventory、语义候选、候选分母与生产现状清单都
+绑定进完整性清单，VC-2 直接从 VC-1 读取。`claude_fw_e_seal_plan.py`、`claude_fw_e.py rule-assessments` 与
+`claude_fw_e_crosswalk.py` 只解释 2.1.226 的历史输入；历史输入里的 `migration_decision`、证据等级、生命周期和兼容
+类别不得进入 EvidencePackage v3，也不得自动写入 RuleMigrationLedger、AtomicAssertionLedger、Profile 或生产清单。
+seal 只封存 `official-client-evidence-package/v3`，不签发 Evidence／Profile ApprovalFact。
 
 VC-1 的退出条件固定为：
 
@@ -1441,10 +1554,8 @@ VC-1 的退出条件固定为：
 ```
 
 VC-2 若发现某项迁移判断仍缺目标事实，只返回 VC-1 补采该项及其直接依赖；其他已封存 Job、原始请求和
-证据继续只读复用。临时网络失败只建立新 attempt；目标身份变化时建立新 Campaign；产出侧工具改变证据字节
-或解释时按 Framework §5.3.4 在原 Campaign 承接（wire producer 变化经两阶段 transition，evidence semantics
-变化追加 evaluation epoch）；仅控制面、报告或 evaluator 工具变化时只重跑受影响的离线门禁。各种情况均不得
-覆盖历史事实。
+证据继续只读复用。临时网络失败只建立新 attempt；目标身份变化时建立新 Campaign；产出侧工具变化按 §4.1.1 的
+复用判定登记演进；仅控制面、报告或 evaluator 工具变化时只重跑受影响的离线门禁。各种情况均不得覆盖历史事实。
 
 <a id="claude-vc-2"></a>
 ## 4.2 VC-2 逐规则判定差异
