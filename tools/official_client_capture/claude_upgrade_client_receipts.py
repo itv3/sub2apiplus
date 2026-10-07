@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -54,6 +55,16 @@ def _context(campaign_dir: Path, candidate_id: str, attempt_id: str) -> tuple[di
     return manifest, root, attempt
 
 
+@contextmanager
+def _client_control_lock(campaign_dir: Path) -> Any:
+    """遵守项目锁在前、Campaign 锁在后的顺序；离线夹具无项目时仍保留 Campaign 串行性。"""
+    from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+
+    project = ledger.find_project_ledger(campaign_dir)
+    with (ledger.project_lock(project) if project is not None else nullcontext()), _upgrade()._campaign_lock(campaign_dir):
+        yield
+
+
 def _require_unique_task_producer(campaign_dir: Path, task: Mapping[str, Any]) -> None:
     """同一 producer、捕获根与捕获 ID 不得重新分配给另一个任务。"""
     for path in campaign_dir.glob("candidates/*/attempts/*/client-evidence/*/tasks/*/task.json"):
@@ -65,7 +76,7 @@ def _require_unique_task_producer(campaign_dir: Path, task: Mapping[str, Any]) -
 
 def prepare(campaign_dir: Path, candidate_id: str, attempt_id: str, client_id: str, plan_path: Path) -> dict[str, Any]:
     """冻结任务的状态读取、身份复核与发布均在同一 Campaign 锁内完成。"""
-    with _upgrade()._campaign_lock(campaign_dir):
+    with _client_control_lock(campaign_dir):
         return _prepare_locked(campaign_dir, candidate_id, attempt_id, client_id, plan_path)
 
 
@@ -188,7 +199,7 @@ def import_bundle(campaign_dir: Path, attempt_root: Path, client_id: str, task_p
         contract.require(current_attempt == attempt_root, "正式导入 attempt 不是当前 Campaign 的受管目录")
     run_root = attempt_root / "client-evidence" / client_id / "runs" / task["task_nonce"]
     target_bundle = run_root / "source"
-    with upgrade._campaign_lock(campaign_dir):
+    with _client_control_lock(campaign_dir):
         _require_unique_task_producer(campaign_dir, task)
         if task["execution"]["source_scope"] == "formal":
             _context(campaign_dir, task["candidate_id"], task["attempt_id"])

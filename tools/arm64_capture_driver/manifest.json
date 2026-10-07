@@ -100,9 +100,9 @@
     },
     {
       "path": "driver/claude_vc5.py",
-      "sha256": "05ca79635b6e9d0d90218301203b3e58b9f8077d4532ef8dd20b562bd0d846c5",
+      "sha256": "cdc635b0e6118d4e6430e7644987ba7b42e1c0cb639f76d75003e83ad409cd1b",
       "mode": "0700",
-      "bytes": 43667
+      "bytes": 44566
     },
     {
       "path": "driver/cleanup_context.py",
@@ -568,9 +568,9 @@
     },
     {
       "path": "driver/vc5-claude-seal.sh",
-      "sha256": "8f950e09f9c277b0cd2be55a6a8df2cb84cc0000a68cb0dabd9d066c66c87d41",
+      "sha256": "5d9060e3232739f23171f3e49ad9d98234fa796f2b8d3af20b13f83699c997e9",
       "mode": "0700",
-      "bytes": 6457
+      "bytes": 6616
     },
     {
       "path": "driver/vc5-claude-start.sh",
@@ -657,5 +657,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "9de410396bf962a844cd468c4873873532a0237646c05e3d7ad3f362d921cc0d"
+  "manifest_sha256": "065c7f9b8719a6f7df3c1eb7cfae4d64bb75279e06d268a05778c2cc24ae58ef"
 }
