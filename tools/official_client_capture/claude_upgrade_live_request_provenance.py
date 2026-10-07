@@ -1040,7 +1040,7 @@ def _restoration_producer_context(
     campaign_dir: Path, payload: Mapping[str, Any], producer: Mapping[str, Any], *,
     configuration: Mapping[str, Any], host_data_root: Path,
 ) -> tuple[Path, Path, Mapping[str, Any]]:
-    """后继候选沿原生产者读取：总计划摘要、候选坐标、闭环摘要及权限收口全部通过才采用来源坐标。
+    """后继候选沿原生产者读取：总计划摘要、候选坐标、闭环摘要及有效证据边界全部通过才采用来源坐标。
 
     这里只复核请求核算需要的不可变来源，复用许可仍由正式复用入口验证。不能仅凭 producer 自述的 Campaign ID
     改写当前上下文，也不能把一个有效闭环用于它没有收口的外部证据根。
@@ -1099,11 +1099,23 @@ def _restoration_producer_context(
                     for value in payload.get("evidence_roots") or []]
     if not mapped_roots or not set(mapped_roots).issubset({Path(value) for value in external}):
         raise ProvenanceError("候选原生产者没有收口当前证据根")
-    evidence_permissions.replay_evidence_permission_closeout(
-        job_root, [job_root / "evidence", job_root / "logs", *(Path(value) for value in external)],
-        {"path": filename, "sha256": permission.get("sha256"), "bytes": permission.get("bytes")},
-        managed_data_root=host_data_root, logical_runs_roots=(host_data_root / "runs",),
-    )
+    if __package__ in {None, ""}:
+        import claude_upgrade_predecessor_sealed as predecessor_sealed
+    else:
+        from . import claude_upgrade_predecessor_sealed as predecessor_sealed
+
+    roots = [job_root / "evidence", job_root / "logs", *(Path(value) for value in external)]
+    if predecessor_sealed.COVER_FIELD in producer:
+        cover = producer[predecessor_sealed.COVER_FIELD]
+        if not isinstance(cover, Mapping) or cover.get("campaign") != origin or cover.get("attempt_id") != producer["attempt_id"]:
+            raise ProvenanceError("候选封存覆盖证明与原生产者坐标不一致")
+        # 已封存来源采用清单及其追加的元数据重绑链；仍核全部原闭环根和本次取证根，不能借另一份 cover 排除目录。
+        predecessor_sealed.verify_cover(cover, required_roots=[*roots, *mapped_roots])
+    else:
+        evidence_permissions.replay_evidence_permission_closeout(
+            job_root, roots, {"path": filename, "sha256": permission.get("sha256"), "bytes": permission.get("bytes")},
+            managed_data_root=host_data_root, logical_runs_roots=(host_data_root / "runs",),
+        )
     return source, attempt, source_configuration
 
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
+from tools.official_client_capture.tests import test_claude_upgrade_candidate_reuse as reuse_tests
 from tools.official_client_capture.tests.test_claude_upgrade_live_request_provenance import _messages, _relay_root, _write
 
 
@@ -251,3 +253,121 @@ class CandidateRestorationAccountingTests(unittest.TestCase):
                 receipt = self._collect(campaign)
                 self.assertEqual((receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"]),
                                  ("accounting_unresolved", 1, [self.JOB_ID]))
+
+
+class SealedCandidateRestorationAccountingTests(reuse_tests.CandidateReuseFixture):
+    """沿用 c3b 的真实候选来源及封存清单；正式 cover、重绑、收据链和 provenance 均不替换。"""
+
+    def write_candidate_campaign(self, **kwargs):
+        campaign = super().write_candidate_campaign(**kwargs)
+        manifest = reuse_tests.claude_upgrade.load_campaign_manifest(campaign)
+        # 既有 c3 夹具未冻结 Job 行；补齐生产总计划中的模板行，再运行和封存，避免事后修改来源身份。
+        jobs = [job for phase in ("official", "candidate")
+                for job in reuse_tests.capture._expand_phase_jobs(campaign, manifest, phase, candidate_id=None)]
+        manifest["jobs"] = [{"id": job.job_id, "phase": job.phase,
+                             "execution_sha256": reuse_tests.capture._job_execution_sha256(job),
+                             "evidence_roots": list(job.evidence_roots)} for job in jobs]
+        _write(campaign / "campaign.json", json.dumps(manifest))
+        _write(campaign / "campaign.sha256", hashlib.sha256((campaign / "campaign.json").read_bytes()).hexdigest())
+        return campaign
+
+    def _world(self):
+        source, source_attempt = reuse_tests.SealedReuseTests.sealed_predecessor(self)
+        campaign = self.successor()
+        preview = self.preview(campaign, source, source_attempt)
+        code, result, stderr = self.resume_reuse(
+            campaign, source, source_attempt, "--approve-candidate-reuse-sha256", preview["preview_sha256"]
+        )
+        self.assertEqual((code, (result or {}).get("status")), (2, "awaiting_receipts"), stderr)
+        attempt_root, attempt = self.load_attempt(campaign, result["attempt_id"])
+        return source, source_attempt, campaign, attempt_root, attempt["results"]
+
+    def _bindings(self, campaign, attempt_root, row):
+        with self.reuse_patched():
+            manifest = reuse_tests.claude_upgrade.load_campaign_manifest(campaign)
+            return provenance._candidate_restoration_bindings(
+                campaign, attempt_root, row, configuration=manifest["configuration"], host_data_root=self.data
+            )
+
+    def test_sealed_source_uses_real_cover_without_touching_predecessor(self):
+        source, source_attempt, campaign, attempt_root, rows = self._world()
+        before = reuse_tests.SealedReuseTests.source_boundary(self, source, source_attempt)
+        for row in rows:
+            self.assertIsNotNone(self._bindings(campaign, attempt_root, row))
+        self.assertEqual(reuse_tests.SealedReuseTests.source_boundary(self, source, source_attempt), before)
+
+    def test_metadata_rebind_replaces_old_job_closeout_only_with_cover(self):
+        from tools.official_client_capture import codex_upgrade_harden_evidence_permissions as harden
+
+        source, source_attempt, campaign, attempt_root, rows = self._world()
+        row = rows[0]
+        report = Path(row["restoration_checks"][0]["report"]["path"])
+        metadata = report.stat()
+        os.utime(report, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000))
+        self.assertIsNone(self._bindings(campaign, attempt_root, row), "未登记元数据重绑时必须未决")
+        harden.rebind_boundary(source, source_attempt, candidate_id=reuse_tests.CANDIDATE, operator="候选账务回归")
+        before = reuse_tests.SealedReuseTests.source_boundary(self, source, source_attempt)
+        self.assertIsNotNone(self._bindings(campaign, attempt_root, row), "正式重绑后沿同一封存 cover 重放")
+        without_cover = json.loads(json.dumps(row))
+        without_cover["reused_from"]["producer"].pop(reuse_tests.predecessor_sealed.COVER_FIELD)
+        self.assertIsNone(self._bindings(campaign, attempt_root, without_cover), "没有 cover 仍重放旧 Job 收口，不能静默放行")
+        self.assertEqual(reuse_tests.SealedReuseTests.source_boundary(self, source, source_attempt), before)
+
+    def test_forged_cover_and_tampered_report_stay_unresolved(self):
+        source, source_attempt, campaign, attempt_root, rows = self._world()
+        row = rows[0]
+        for case in ("错 Campaign", "错候选", "错 attempt", "错阶段摘要", "错清单摘要", "未知字段", "空证明"):
+            with self.subTest(case=case):
+                altered = json.loads(json.dumps(row))
+                producer = altered["reused_from"]["producer"]
+                cover = producer[reuse_tests.predecessor_sealed.COVER_FIELD]
+                if case == "错 Campaign":
+                    cover["campaign"]["campaign_id"] = "forged-source"
+                elif case == "错候选":
+                    cover["campaign"]["candidate_id"] = "forged-candidate"
+                elif case == "错 attempt":
+                    cover["attempt_id"] = "forged-attempt"
+                elif case == "错阶段摘要":
+                    cover["stage_result"]["sha256"] = "0" * 64
+                elif case == "错清单摘要":
+                    cover["sealed_evidence_manifest"]["sha256"] = "0" * 64
+                elif case == "未知字段":
+                    cover["unknown"] = True
+                else:
+                    producer[reuse_tests.predecessor_sealed.COVER_FIELD] = None
+                self.assertIsNone(self._bindings(campaign, attempt_root, altered))
+        report = Path(row["restoration_checks"][0]["report"]["path"])
+        report.chmod(0o600)
+        _write(report, report.read_bytes() + b" ")
+        self.assertIsNone(self._bindings(campaign, attempt_root, row))
+
+    def test_valid_cover_that_omits_the_producer_root_stays_unresolved(self):
+        """重建一份内容有效但漏掉当前外部根的来源清单：cover 自身可重放，provenance 的根覆盖核验必须拒绝。"""
+
+        source, source_attempt, campaign, attempt_root, rows = self._world()
+        row = rows[0]
+        seal = reuse_tests.candidate_seal
+        producer = row["reused_from"]["producer"]
+        cover = producer[reuse_tests.predecessor_sealed.COVER_FIELD]
+        source_root = source / "candidates" / reuse_tests.CANDIDATE / "attempts" / source_attempt
+        attempt_path = source_root / "attempt.json"
+        source_payload = json.loads(attempt_path.read_bytes())
+        excluded = set(row["evidence_roots"])
+        source_payload["evidence_roots"] = [value for value in source_payload["evidence_roots"] if value not in excluded]
+        _write(attempt_path, json.dumps(source_payload))
+        document = reuse_tests.evidence_manifest.build_evidence_manifest(
+            seal._sealed_evidence_roots(source, source_attempt, reuse_tests.CANDIDATE),
+            checkpoint_path=source_root / "provenance-partial-cover-checkpoint.json",
+        )
+        manifest_path = source_root / seal.SEALED_EVIDENCE_MANIFEST_FILENAME
+        _write(manifest_path, json.dumps(document))
+        stage_path = source / cover["stage_result"]["path"]
+        stage = json.loads(stage_path.read_bytes())
+        stage["attempt"] = seal._stage_binding(attempt_path, source)
+        stage[seal.SEALED_EVIDENCE_MANIFEST_FIELD] = seal._stage_binding(manifest_path, source)
+        _write(stage_path, json.dumps(stage))
+        cover["stage_result"] = seal._stage_binding(stage_path, source)
+        cover["sealed_evidence_manifest"] = stage[seal.SEALED_EVIDENCE_MANIFEST_FIELD]
+        with self.reuse_patched():
+            reuse_tests.predecessor_sealed.verify_cover(cover)
+        self.assertIsNone(self._bindings(campaign, attempt_root, row))
