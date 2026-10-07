@@ -48,6 +48,7 @@ if __name__ == "__main__":
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256, secure_write_json
 from tools.official_client_capture import claude_tool_identity_policy
+from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
@@ -3725,18 +3726,24 @@ def _derive_b0_evaluation_run(
 # ---------------------------------------------------------------------------
 
 
-def _load_plan_jobs(*arguments: Any, **options: Any) -> Any:
-    """wire 根：从总计划装载 Job 清单（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+def _load_plan_jobs(
+    arguments: argparse.Namespace,
+    rules: tuple[str, ...],
+) -> tuple[list[Job], dict[str, dict[str, str]]]:
+    """wire 根（B2-05）：按目标版本场景清单展开 plan 的全部取证 Job，返回 (Job 列表, 规则与场景三份输入的路径与摘要)。
 
-    del arguments, options
-    raise _pending("_load_plan_jobs", "B2-06（取证 Job 动作体与环境闭环）")
+    Claude 没有基线场景清单（2.1.226 的场景目录是 FW-F v4 probe 目录，已并入目标场景清单）；场景清单的绑定核对、
+    Job 闭合与 official 覆盖校验在 ``claude_upgrade_plan.plan_jobs``。证据标签属于 evidence 语义，由 ``_plan_command``
+    在本根之外校验，不进 wire 闭包。
+    """
+
+    return claude_upgrade_plan.plan_jobs(arguments, rules, context=_job_context(arguments), job_factory=Job)
 
 
-def _job_context(*arguments: Any, **options: Any) -> Any:
-    """wire 根：单个 Job 的执行上下文（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+def _job_context(arguments: argparse.Namespace) -> dict[str, str]:
+    """wire 根（B2-05）：场景模板的 Campaign 作用域变量取值；运行期变量（宿主运行凭据与 nonce）由取证动作体逐步绑定。"""
 
-    del arguments, options
-    raise _pending("_job_context", "B2-06（取证 Job 动作体与环境闭环）")
+    return claude_upgrade_plan.plan_context(arguments)
 
 
 def _campaign_arguments(*arguments: Any, **options: Any) -> Any:
@@ -3753,11 +3760,10 @@ def _run_job_impl(*arguments: Any, **options: Any) -> Any:
     raise _pending("_run_job_impl", "B2-06（取证 Job 动作体与环境闭环）")
 
 
-def _scenario_job_execution_contract(*arguments: Any, **options: Any) -> Any:
-    """wire 根：场景 Job 的执行合同（Claude 编排器尚未实现，由 B2-05（官方取证场景清单与证据标签） 落实）。"""
+def _scenario_job_execution_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """wire 根（B2-05）：提取场景清单全部 Job 中会改变实际执行或封存判定的字段。"""
 
-    del arguments, options
-    raise _pending("_scenario_job_execution_contract", "B2-05（官方取证场景清单与证据标签）")
+    return claude_upgrade_plan.scenario_job_execution_contract(payload)
 
 
 def scan_evidence(*arguments: Any, **options: Any) -> Any:
@@ -3807,8 +3813,8 @@ def accept_campaign(*arguments: Any, **options: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 # Claude 专属子命令：子命令 → (说明, 落实它的工作项)。动作体落实之前，执行即报 ClaudeOrchestratorPending。
+# ``plan`` 已由 B2-05 落实展开与校验（见 ``_plan_command``），不在此表。
 CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
-    "plan": ("预检并创建 Claude Campaign 总计划", "B2-11（VC-0 收口续作与 P0 收据）"),
     "import-predecessor-evidence": ("导入前序 Store 证据（read_only_reuse 或 regression_fixture）", "B2-09（两条导入路径）"),
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
     "classify": ("VC-2 规则分类", "B3-02（VC-2 分类 producer）"),
@@ -4089,6 +4095,15 @@ def _build_parser() -> argparse.ArgumentParser:
     campaign_abandon.add_argument("--approved-by", required=True)
     campaign_abandon.add_argument("--reason", required=True)
 
+    plan = subparsers.add_parser(
+        "plan",
+        help=(
+            "B2-05：按目标场景清单展开并校验全部取证 Job（preflight_only 零写入、输出展开结果）；"
+            "建 Campaign 与 formal 由 B2-11（VC-0 收口）落实"
+        ),
+    )
+    claude_upgrade_plan.add_plan_arguments(plan)
+
     freeze = subparsers.add_parser("freeze", help=CLAUDE_OFFLINE_SUBCOMMANDS["freeze"])
     freeze.add_argument("--output-root", type=Path, required=True, help="冻结输出目录（绝对路径，必须不存在）")
     freeze.add_argument("--dist-tag", default="stable", help="npm 主包的 dist-tag，默认 stable")
@@ -4102,6 +4117,24 @@ def _build_parser() -> argparse.ArgumentParser:
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
     return parser
+
+
+def _plan_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """``plan``（B2-05）：校验参数，按目标场景清单展开全部取证 Job 并核对规则、标签与覆盖，输出零写入报告。
+
+    建 Campaign（计时账本、环境收据、控制收据与总计划落盘）归 B2-11；Formal Campaign 只由 VC-0 收口创建，
+    这里直接拒绝 ``--campaign-mode formal``。
+    """
+
+    if arguments.campaign_mode == "formal":
+        raise _pending("plan --campaign-mode formal（Formal Campaign 只由 VC-0 收口创建）", "B2-11（VC-0 收口续作与 P0 收据）")
+    claude_upgrade_plan.prepare_plan_arguments(arguments)
+    rules = claude_upgrade_plan.load_baseline_rules(arguments.rule_manifest, arguments.baseline_version)
+    claude_upgrade_plan.verify_target_rules(arguments, rules)
+    jobs, inputs = _load_plan_jobs(arguments, rules)
+    # 证据标签属于 evidence 语义：在 wire 根之外校验并绑定，标签校验代码的变化不改变 wire 身份。
+    labels = claude_upgrade_plan.evidence_labels_binding(arguments, rules)
+    return claude_upgrade_plan.plan_report(arguments, jobs, rules, {**inputs, "evidence_labels": labels})
 
 
 def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -4146,7 +4179,8 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，其余 Claude 专属子命令在动作体落实前报未实现。
+    """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），其余 Claude
+    专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
@@ -4166,6 +4200,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)
+        elif arguments.command == "plan":
+            result, return_code = _plan_command(arguments), 0
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

@@ -1,0 +1,1004 @@
+{
+  "claude_version": "2.1.226",
+  "description": "Claude Code 2.1.226 官方取证（complete-v21 与 thinking-display 补采）每个 FW-F v4 probe 的逐连接请求序列：只含中继有效连接按连接号排序后各自承载的请求方法与路径（去掉查询串）、合成计划的干预动作名，以及中继判为握手前断开而排除的连接号；不含任何 Header、正文、响应或凭据。供证据标签逐连接顺序测试对照实测序列。",
+  "platform": "linux/amd64",
+  "schema_version": "claude-relay-connection-sequence-fixture/v1",
+  "sources": [{"probe_count": 77, "run": "local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5"}, {"probe_count": 2, "run": "local-analysis/fw-f/claude-code-2.1.226/thinking-display-supplement-v1-94f7d00d704f"}],
+  "probes": {
+    "v4-advisor-default-negative": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-advisor-enabled-positive": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-agent-depth1": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-agent-depth2": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-agent-depth3": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages", "POST /v1/messages", "POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-agent-usage-limit": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-background": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [2, 3, 10, 11, 13, 14, 16, 17],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 4, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 5, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 6, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 7, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]},
+        {"connection_id": 8, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 9, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 12, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 15, "intervention": null, "requests": ["HEAD /api/hello"]}
+      ]
+    },
+    "v4-background-subagent": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-bash": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-connection-reuse": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-context-claude-md": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-dispatch-account-negative": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-hook": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-mcp-deferred": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-mcp-tool": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages"]}
+      ]
+    },
+    "v4-models-privacy-state": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-native-tls-baseline": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-oauth-refresh": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "oauth-refresh-reject",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "oauth_refresh_rejected", "requests": ["POST /v1/oauth/token"]}
+      ]
+    },
+    "v4-replay-adaptive-thinking-disabled": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-additional-protection": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-agent-sdk": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-append-system": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-attribution-disabled": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-baseline": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-beta-deduplicate": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-cache-disabled": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-cache-one-hour": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-cache-sonnet-disabled": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-client-app": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-custom-agent": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-custom-agent-safe-mode": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]}
+      ]
+    },
+    "v4-replay-custom-header-grammar": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-custom-header-invalid-name": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]}
+      ]
+    },
+    "v4-replay-custom-system": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-disconnect-retry": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "disconnect-retry",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "disconnect_without_response", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "disconnect_retry_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-effort-low": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-effort-max": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-effort-medium": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-effort-xhigh": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-exclude-dynamic-system": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-extra-body": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-extra-metadata": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-fallback-model": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "fallback-model",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "fallback_primary_529", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "fallback_primary_529", "requests": ["POST /v1/messages"]},
+        {"connection_id": 6, "intervention": "fallback_primary_529", "requests": ["POST /v1/messages"]},
+        {"connection_id": 7, "intervention": "fallback_model_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-gzip-request": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-header-combination": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-json-schema": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-max-output-tokens": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-nonretry-400": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "nonretry-400",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "nonretry_400", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-nonretry-403": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "nonretry-403",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "nonretry_403", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-remote-container": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-remote-session": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-401": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-401",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-401_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-401_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-408": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-408",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-408_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-408_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-409": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-409",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-409_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-409_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-429": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-429",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-429_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-429_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-500": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-500",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-500_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-500_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-502": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-502",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-502_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-502_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-503": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-503",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-503_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-503_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-529": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-529",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-529_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-529_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-after-date": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-429-after-date",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-429-after-date_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-429-after-date_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-after-seconds": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "retry-429-after-seconds",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "retry-429-after-seconds_fault", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "retry-429-after-seconds_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-retry-limit": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "always-529",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "always_529", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "always_529", "requests": ["POST /v1/messages"]},
+        {"connection_id": 6, "intervention": "always_529", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-session-fork": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 6, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 7, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 8, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-session-resume": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 6, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 7, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 8, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-stream-404-disable-flag": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "stream-404-fallback",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "stream_404", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "nonstream_fallback_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-stream-404-fallback": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "stream-404-fallback",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "stream_404", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "nonstream_fallback_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-stream-interrupt": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "stream-interrupt-fallback",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "stream_interrupted", "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": "interrupt_nonstream_success", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-stream-interrupt-no-fallback": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "stream-interrupt-no-fallback",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "stream_interrupted", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-thinking-disabled": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-timeout": {
+      "attempt": "attempt-001",
+      "response_mode": "synthetic",
+      "response_plan": "stall",
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": "hello_success", "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": "policy_limits_absent", "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": "remote_settings_absent", "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": "stall_without_response", "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-tui": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-replay-workload": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-thinking-display-omitted": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-thinking-display-summarized": {
+      "attempt": "attempt-002",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-tui-attachment": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /v1/mcp_servers"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-tui-compact": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /v1/mcp_servers"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages"]},
+        {"connection_id": 5, "intervention": null, "requests": ["POST /v1/messages"]}
+      ]
+    },
+    "v4-tui-count-tokens": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /v1/mcp_servers"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 5, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 6, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 7, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 8, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 9, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 10, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 11, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 12, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 13, "intervention": null, "requests": ["POST /v1/messages/count_tokens"]},
+        {"connection_id": 14, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 15, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 16, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 17, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 18, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 19, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 20, "intervention": null, "requests": ["POST /v1/messages/count_tokens", "POST /v1/messages/count_tokens"]},
+        {"connection_id": 21, "intervention": null, "requests": ["POST /v1/messages/count_tokens"]},
+        {"connection_id": 22, "intervention": null, "requests": ["POST /v1/messages/count_tokens"]},
+        {"connection_id": 23, "intervention": null, "requests": ["POST /v1/messages/count_tokens"]}
+      ]
+    },
+    "v4-tui-usage": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/oauth/profile"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /v1/mcp_servers"]}
+      ]
+    },
+    "v4-web-search": {
+      "attempt": "attempt-001",
+      "response_mode": "live",
+      "response_plan": null,
+      "excluded_connection_ids": [],
+      "connections": [
+        {"connection_id": 1, "intervention": null, "requests": ["HEAD /api/hello"]},
+        {"connection_id": 2, "intervention": null, "requests": ["GET /api/claude_code/policy_limits"]},
+        {"connection_id": 3, "intervention": null, "requests": ["GET /api/claude_code/settings"]},
+        {"connection_id": 4, "intervention": null, "requests": ["POST /v1/messages", "POST /v1/messages", "POST /v1/messages"]}
+      ]
+    }
+  }
+}

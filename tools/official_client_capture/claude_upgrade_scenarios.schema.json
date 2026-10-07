@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/claude-upgrade-scenarios-v1.json",
+  "title": "Claude Code 出站版本化场景清单",
+  "description": "结构对齐 codex-upgrade-scenarios/v1：把目标 Claude Code 版本的证据场景、取证 Job 命令模板、证据根与规则覆盖从编排器代码移到不可变机器清单。场景来源是 FW-F v4 的 49 个矩阵维度与 79 个 probe：维度即证据场景，没有维度的 probe 归入 condition.* 条件场景；每个 probe 是一个取证步骤（claude_fw_e_relay.py capture），probe 归并为 Job。变量分 campaign（plan 时代入）与 step_runtime（取证动作体每步绑定）两种作用域。运行时校验见 claude_upgrade_plan.validate_scenario_manifest（不依赖第三方 JSON Schema 库，失败关闭）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claude_version",
+    "profile_id",
+    "source_spec",
+    "rule_manifest",
+    "probe_catalog",
+    "variable_contract",
+    "evidence_scenarios",
+    "capture_jobs"
+  ],
+  "properties": {
+    "$schema": {"type": "string", "minLength": 1},
+    "schema_version": {"const": "claude-upgrade-scenarios/v1"},
+    "claude_version": {"$ref": "#/$defs/version"},
+    "profile_id": {"$ref": "#/$defs/safeId"},
+    "source_spec": {"$ref": "#/$defs/sourceBinding"},
+    "rule_manifest": {"$ref": "#/$defs/ruleManifestBinding"},
+    "probe_catalog": {"$ref": "#/$defs/probeCatalogBinding"},
+    "variable_contract": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/variable"}
+    },
+    "evidence_scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/evidenceScenario"}
+    },
+    "capture_jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/captureJob"}
+    }
+  },
+  "$defs": {
+    "nonEmptyText": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relativePath": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "ruleId": {"type": "string", "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"},
+    "scenarioId": {
+      "description": "FW-F v4 矩阵维度（如 transport.native_tls）或没有维度的 probe 所归入的条件场景（condition.*）。",
+      "type": "string",
+      "pattern": "^(?:transport|entrypoint|agency|header|body|tool|failure|aux|privacy|condition)\\.[a-z0-9_]+$"
+    },
+    "artifactKind": {"enum": ["relay_binary", "relay_manifest", "synthetic_intervention", "pcap", "debug_log"]},
+    "sourceBinding": {
+      "description": "绑定 Claude 手册第二部分（规则画像）的章节摘要：从标题行算到下一个一级标题之前。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fragment", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "fragment": {"const": "第二部分"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ruleManifestBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "rule_count"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "rule_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "probeCatalogBinding": {
+      "description": "场景与步骤引用的 probe 目录；目录模块本身在 wire 层，随工具身份与逐作业依赖摘要冻结。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "schema_version", "probe_count", "dimension_count"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "schema_version": {"const": "claude-code-fw-f-v4-scenario-catalog/v1"},
+        "probe_count": {"type": "integer", "minimum": 1},
+        "dimension_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "required", "sensitive", "scope", "description"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "type": {"enum": ["string", "integer", "absolute_path", "sha256", "image_reference", "ip_address"]},
+        "required": {"type": "boolean"},
+        "sensitive": {"const": false},
+        "scope": {
+          "description": "campaign：plan 时由 Campaign 取值代入；step_runtime：取证动作体每步执行前绑定（宿主运行凭据与 nonce），plan 只保留占位，必须 required 且无默认值。",
+          "enum": ["campaign", "step_runtime"]
+        },
+        "default": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        "description": {"$ref": "#/$defs/nonEmptyText"}
+      }
+    },
+    "evidenceScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenario_id", "purpose", "description", "trigger", "preconditions", "probe_ids", "required_artifact_kinds", "covers"],
+      "properties": {
+        "scenario_id": {"$ref": "#/$defs/scenarioId"},
+        "purpose": {
+          "description": "rule_evidence 必须覆盖至少一条规则；discovery 是 2.1.226 实测未形成必需规则的发现项场景，covers 必须为空。",
+          "enum": ["rule_evidence", "discovery"]
+        },
+        "description": {"$ref": "#/$defs/nonEmptyText"},
+        "trigger": {"$ref": "#/$defs/nonEmptyText"},
+        "preconditions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonEmptyText"}},
+        "probe_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/safeId"}},
+        "required_artifact_kinds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/artifactKind"}},
+        "covers": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ruleId"}}
+      }
+    },
+    "commandStep": {
+      "description": "一个 probe 的一次受管 R 取证：argv 必须调用 claude_fw_e_relay.py capture --execute，--probe-id 与 --fw-f-v4-probe 都等于 probe_id；真实上游步骤带 --acknowledge-live-requests 与 --upstream-ip，合成步骤带 --acknowledge-synthetic-responses 且不得带 --upstream-ip。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_id", "argv", "environment", "timeout_seconds"],
+      "properties": {
+        "probe_id": {"$ref": "#/$defs/safeId"},
+        "argv": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonEmptyText"}},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "captureJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "suites",
+        "scenario_ids",
+        "description",
+        "required",
+        "steps",
+        "evidence_roots",
+        "covers",
+        "required_scenario_receipts",
+        "tool_dependencies"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/safeId"},
+        "phase": {
+          "description": "当前只接受 official；候选取证 Job 由 B4-01 落实后放开。",
+          "enum": ["official", "candidate"]
+        },
+        "suites": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["core", "full"]}},
+        "scenario_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/scenarioId"}},
+        "description": {"$ref": "#/$defs/nonEmptyText"},
+        "required": {"type": "boolean"},
+        "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/commandStep"}},
+        "evidence_roots": {
+          "description": "恰好一个证据根；各步 --output-root 是它下面以 probe 命名的子目录。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/nonEmptyText"}
+        },
+        "covers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/ruleId"}},
+        "required_scenario_receipts": {
+          "description": "对齐 Codex 结构保留；Claude 尚未登记需要场景真实性收据的目标场景，只能为空。",
+          "type": "array",
+          "maxItems": 0
+        },
+        "tool_dependencies": {
+          "description": "逐作业显式工具依赖（R16），由 tests/job_dependency_analyzer.py 生成：相对工具根的路径，排序去重，全部作业都必须声明。",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"}
+        }
+      }
+    }
+  }
+}
