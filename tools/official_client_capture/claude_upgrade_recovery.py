@@ -84,7 +84,11 @@ attempt 收据），差别只在：
   before 快照逐字段相等，记在 ``recovery.continuity.gateway``，不等即零请求失败）；attempt 末采网关 after 快照、写候选字段。
 * 恢复来源收据沿用 v1 字段闭集：候选 ID 由所在目录与预约收据的 ``phase``／``candidate_id`` 表达。
 * 对账：候选 attempt 另采一次网关只读快照留证（``control/reconciliation/attempt-<id>/gateway-probes/<时刻>/``），残留项写进
-  ``gateway_residue``；残留的清理随 c2 落实。
+  ``gateway_residue``。
+* 强杀后的网关残留（c2）：宿主脚本在第一处修改之前把运行前原值写进 ``<运行目录>/restore/state.json``；``environment-cleanup
+  preview`` 在残留进程之外列出候选网关残留（带原值的运行目录、网关快照里的改动残留；没有原值可依的记 ``unrecoverable``，
+  给 ``manual_required``），``apply`` 在同一批准下对每个运行目录串行执行宿主脚本 ``--restore-only``，前后网关快照与每个
+  恢复报告（``claude-candidate-gateway-cleanup/v1``）记进清理收据的 ``gateway_residue``。
 * 状态：``status --candidate-id``（或只有一个活跃候选时不带）给出候选采集状态，状态名与 Codex 同名（``profile_approved``、
   ``candidate_capture_failed``／``candidate_capture_interrupted``、``candidate_awaiting_client_checkpoint``、
   ``candidate_awaiting_seal_approval``、``candidate_sealed``）；多个活跃候选时是 ``candidate_selection_required``。
@@ -736,6 +740,8 @@ def _approved_recovery_preview(campaign_dir: Path, manifest: Mapping[str, Any], 
     require_current_source(campaign_dir, manifest, str(preview["source_attempt_id"]), phase=phase, candidate_id=candidate_id)
     return {
         "kind": "recovery_approval",
+        # 候选续跑的恢复批准（B4-01 c2）另记候选 ID（官方的批准依据逐字不变）。
+        **({"candidate_id": str(candidate_id)} if phase == CANDIDATE_PHASE else {}),
         "source_attempt_id": str(preview["source_attempt_id"]),
         "recovery_preview": _binding(campaign_dir, resolved),
         "review_sha256": str(preview["review_sha256"]),
@@ -783,7 +789,14 @@ def _cleanup_chain(campaign_dir: Path) -> list[dict[str, Any]]:
     return chain
 
 
-def _cleanup_preview(campaign_dir: Path, manifest: Mapping[str, Any], basis: Mapping[str, Any], processes: Sequence[Mapping[str, Any]], reason: str) -> dict[str, Any]:
+def _cleanup_preview(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    basis: Mapping[str, Any],
+    processes: Sequence[Mapping[str, Any]],
+    reason: str,
+    gateway: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     preview = {
         "schema_version": CLEANUP_PREVIEW_SCHEMA,
         "client": CLIENT,
@@ -793,12 +806,33 @@ def _cleanup_preview(campaign_dir: Path, manifest: Mapping[str, Any], basis: Map
         "reason": reason,
         "live_request_count": 0,
     }
+    if gateway is not None:
+        # 候选网关残留（B4-01 c2）：只在有残留时进预览（没有残留的预览与 c2 之前逐字相同）。
+        preview["gateway_residue"] = dict(gateway)
     preview["review_sha256"] = claude_upgrade._fingerprint(preview)
     return preview
 
 
+def _gateway_residue(manifest: Mapping[str, Any], campaign_dir: Path) -> dict[str, Any] | None:
+    """候选网关残留（B4-01 c2；只读）：总计划没有候选变量时不适用（None）。"""
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+    if not candidate_capture.gateway_cleanup_enabled(manifest):
+        return None
+    return candidate_capture.list_gateway_residue(manifest, capture._host_data_root(campaign_dir))
+
+
 def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """``environment-cleanup preview|apply``：在明确批准下清理两个采集容器里的残留取证进程，前后探针与清理收据留证。"""
+    """``environment-cleanup preview|apply``：在明确批准下清理两个采集容器里的残留取证进程与候选网关残留（B4-01 c2），
+    前后探针、网关快照与清理收据留证。
+
+    候选网关残留：宿主候选运行目录里每个带运行前原值（``restore/state.json``）的条目在 apply 时串行执行宿主脚本的
+    ``--restore-only``（脚本按现场判定要恢复的项、恢复并逐项核验，报告只打到 stdout）；残留却没有原值可依、或运行目录没有
+    原值时记「无法自动恢复」，预览给出 ``manual_required``、apply 拒绝，须人工处置。
+    """
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
 
     action = str(arguments.cleanup_action)
     campaign_dir = _resolved_campaign(arguments.campaign_dir)
@@ -810,9 +844,17 @@ def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str
     basis = _cleanup_basis(campaign_dir, manifest, recovery_preview)
     if action == "preview":
         processes = list_residual_processes(manifest)
-        if not processes:
+        residue = _gateway_residue(manifest, campaign_dir)
+        gateway = residue["summary"] if residue is not None and candidate_capture.residue_present(residue["summary"]) else None
+        if not processes and gateway is None:
             return {"status": "clean", "campaign_id": manifest["campaign_id"], "basis": basis, "processes": [], "live_request_count": 0}, 0
-        preview = _cleanup_preview(campaign_dir, manifest, basis, processes, reason)
+        preview = _cleanup_preview(campaign_dir, manifest, basis, processes, reason, gateway)
+        if gateway is not None and gateway["unrecoverable"]:
+            return {
+                "status": "manual_required",
+                **preview,
+                "next_command": "候选网关有无法自动恢复的残留（见 gateway_residue.unrecoverable）：人工处置后重新预览",
+            }, 3
         return {
             "status": "approval_required",
             **preview,
@@ -836,20 +878,32 @@ def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str
         with claude_upgrade._campaign_lock(campaign_dir):
             basis = _cleanup_basis(campaign_dir, manifest, recovery_preview)
             processes = list_residual_processes(manifest)
-            preview = _cleanup_preview(campaign_dir, manifest, basis, processes, reason)
-            if not processes:
-                raise ConfigurationError("当前两个采集容器里没有残留取证进程，无需清理（批准作废）。")
+            residue = _gateway_residue(manifest, campaign_dir)
+            gateway = residue["summary"] if residue is not None and candidate_capture.residue_present(residue["summary"]) else None
+            preview = _cleanup_preview(campaign_dir, manifest, basis, processes, reason, gateway)
+            if not processes and gateway is None:
+                raise ConfigurationError("当前两个采集容器里没有残留取证进程、候选网关也没有残留，无需清理（批准作废）。")
+            if gateway is not None and gateway["unrecoverable"]:
+                raise ConfigurationError("候选网关有无法自动恢复的残留（见预览 gateway_residue.unrecoverable）：人工处置后重新预览。")
             if preview["review_sha256"] != approve:
-                raise ConfigurationError("残留进程清单或批准依据在预览之后已变化，批准作废；重新预览后再批准。")
+                raise ConfigurationError("残留进程清单、网关残留或批准依据在预览之后已变化，批准作废；重新预览后再批准。")
             chain = _cleanup_chain(campaign_dir)
             index = len(chain) + 1
             directory = capture._private_directory(campaign_dir / CLEANUP_DIR, campaign_dir)
             evidence = capture._private_directory(directory / f"cleanup-{index:02d}", campaign_dir)
             before = capture._probe_capture_environment(dict(manifest), evidence / "before", "before")
-            results = terminate_residual_processes(manifest, processes)
+            results = terminate_residual_processes(manifest, processes) if processes else []
+            gateway_record: dict[str, Any] | None = None
+            gateway_cleaned = True
+            if gateway is not None and residue is not None:
+                gateway_record, gateway_cleaned = _restore_gateway_residue(campaign_dir, manifest, evidence, gateway, residue["snapshot"])
             after = capture._probe_capture_environment(dict(manifest), evidence / "after", "after")
             remaining = list(after.get("capture_processes") or [])
-            cleaned = not remaining and all(item.get("outcome") in {"terminated", "already_gone"} for item in results)
+            cleaned = (
+                not remaining
+                and all(item.get("outcome") in {"terminated", "already_gone"} for item in results)
+                and gateway_cleaned
+            )
             receipt = {
                 "schema_version": CLEANUP_RECEIPT_SCHEMA,
                 "client": CLIENT,
@@ -867,6 +921,8 @@ def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str
                 "after_probe": _binding(campaign_dir, evidence / "after" / capture.PROBE_MANIFEST_NAME),
                 "before_capture_processes": list(before.get("capture_processes") or []),
                 "after_capture_processes": remaining,
+                # 候选网关残留的恢复（B4-01 c2）；没有网关部分时为 null（c2 之前的收据没有这个键，链校验不受影响）。
+                "gateway_residue": gateway_record,
                 "observed_at_utc": after.get("observed_at_utc"),
                 "recorded_at_utc": claude_upgrade._utc_now(),
                 "live_request_count": 0,
@@ -875,7 +931,11 @@ def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str
             receipt_path = directory / f"cleanup-{index:02d}.json"
             claude_upgrade._secure_write_json_once(receipt_path, receipt)
     if basis["kind"] == "recovery_approval":
-        next_command = f"resume --rerun-failed --recovery-preview {campaign_dir / basis['recovery_preview']['path']} --acknowledge-live-requests"
+        candidate_flag = f"--candidate-id {basis['candidate_id']} " if basis.get("candidate_id") else ""
+        next_command = (
+            f"resume {candidate_flag}--rerun-failed --recovery-preview {campaign_dir / basis['recovery_preview']['path']} "
+            "--acknowledge-live-requests"
+        )
     else:
         next_command = (
             f"以 {receipt_path} 作 --environment-repair-receipt、以 {campaign_dir / receipt['after_probe']['path']} 作 "
@@ -887,10 +947,48 @@ def environment_cleanup_command(arguments: argparse.Namespace) -> tuple[dict[str
         "cleanup_sha256": receipt["cleanup_sha256"],
         "results": results,
         "after_capture_processes": remaining,
-        "next_command": next_command if cleaned else "仍有进程未清理（见 results／after_capture_processes）：人工处置后重新预览",
+        "gateway_residue": gateway_record,
+        "next_command": (
+            next_command
+            if cleaned
+            else "仍有残留未清理（见 results／after_capture_processes／gateway_residue）：人工处置后重新预览"
+        ),
         "live_request_count": 0,
     }
     return result, 0 if cleaned else 3
+
+
+def _restore_gateway_residue(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    evidence: Path,
+    summary: Mapping[str, Any],
+    before_snapshot: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """按批准对每个带运行前原值的运行目录串行执行 ``--restore-only``，前后网关快照留证；返回 ``(收据记录, 是否清理干净)``。"""
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+    layout = capture._capture_layout(campaign_dir, manifest)
+    host_data_root = capture._host_data_root(campaign_dir)
+    before_path = evidence / "gateway-before.json"
+    claude_upgrade._secure_write_json_once(before_path, dict(before_snapshot))
+    restores = [candidate_capture.restore_runtime_entry(layout, host_data_root, entry) for entry in summary["entries"]]
+    after_snapshot = candidate_capture.probe_gateway_environment(manifest, host_data_root, "readiness")
+    after_path = evidence / "gateway-after.json"
+    claude_upgrade._secure_write_json_once(after_path, after_snapshot)
+    after_residue = sorted(set(candidate_capture.readiness_failures(after_snapshot)) & candidate_capture.RESIDUE_FAILURES)
+    cleaned = all(item["status"] == "restored" for item in restores) and not after_residue
+    record = {
+        "entries": list(summary["entries"]),
+        "residue_failures_before": list(summary["residue_failures"]),
+        "restores": restores,
+        "residue_failures_after": after_residue,
+        "before_snapshot": _binding(campaign_dir, before_path),
+        "after_snapshot": _binding(campaign_dir, after_path),
+        "status": "restored" if cleaned else "incomplete",
+    }
+    return record, cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -923,8 +1021,8 @@ def reconcile_attempt_command(arguments: argparse.Namespace) -> tuple[dict[str, 
             result["gateway_residue"] = gateway
             if gateway["status"] == "residual":
                 result["next_command"] = (
-                    f"候选网关残留 {gateway['failures']}（只读快照已留证）：resume 之前先清理网关残留（宿主候选运行目录 restore/ 下有"
-                    "运行前快照；候选网关残留的 environment-cleanup 随 B4-01 c2 落实），否则续跑在预约前拒绝；"
+                    f"候选网关残留 {gateway['failures']}（只读快照已留证）：resume 之前先 environment-cleanup preview/apply"
+                    "（--recovery-preview <已批准的恢复预览>）在恢复批准下按运行前原值恢复网关并留证，否则续跑在预约前拒绝；"
                     + str(result.get("next_command", ""))
                 )
     return result, 0 if result.get("status") in {"recoverable", "authorized"} else 3

@@ -10,7 +10,7 @@
 
 覆盖：候选状态（无 attempt、等待客户端收据、等待 seal 批准、失败、选择候选、官方未封存即不一致）；resume 的候选分支
 （拒绝 Codex 身份参数、只读续跑闭集、只重跑失败作业并只读承接已完成作业、网关连续性漂移零请求失败）；R17 候选复算；
-对账时的网关残留识别；激活事实的 docker 边界；工具演进对候选取证作业的影响。
+对账时的网关残留识别；强杀后网关残留的 environment-cleanup（c2）；激活事实的 docker 边界；工具演进对候选取证作业的影响。
 """
 
 from __future__ import annotations
@@ -266,6 +266,97 @@ class GatewayResidueTests(CandidateRecoveryFixture):
             residual = recovery.identify_gateway_residue(campaign, manifest, first["attempt_id"], CANDIDATE)
         self.assertEqual((residual["status"], residual["failures"]), ("residual", ["custom-ca-present", "residual-candidate-proxy"]))
         self.assertEqual(recovery._attempt_scope(campaign, first["attempt_id"]), ("candidate", CANDIDATE))
+
+
+class GatewayResidueCleanupTests(CandidateRecoveryFixture):
+    """强杀后的候选网关残留（c2）：environment-cleanup 预览列出带运行前原值的运行目录，按批准串行 --restore-only 并留证。"""
+
+    def runtime_entry(self, name: str, *, with_state: bool = True) -> Path:
+        directory = self.data / "runtime" / "claude-candidate" / name
+        (directory / "restore").mkdir(parents=True, mode=0o700)
+        if with_state:
+            values = {field: "x" for field in candidate_capture.RESTORE_STATE_FIELDS}
+            values.update({"run_id": name, "probe_id": REFRESH_PROBE, "account_id": "7", "api_key_id": "9", "proxy_name": f"claude-candidate-{name}",
+                           "keeper_was_running": "true", "started_at": "2026-10-08T00:00:00Z"})
+            (directory / "restore" / "state.json").write_text(
+                json.dumps({"schema_version": candidate_capture.RESTORE_STATE_SCHEMA, "values": values}), encoding="utf-8"
+            )
+        return directory
+
+    def dirty_gateway(self) -> None:
+        dirty = json.loads(json.dumps(candidate_tests.BASE_GATEWAY))
+        dirty["residual_candidate_proxies"] = 1
+        dirty["service"]["custom_ca_present"] = True
+        dirty["runtime_residue"] = ["killed-run"]
+        self.gateway_file.write_text(json.dumps(dirty), encoding="utf-8")
+
+    def fake_restore(self, argv, environment, timeout):
+        del timeout
+        self.restore_calls.append(list(argv))
+        assert environment["CLAUDE_CANDIDATE_CAPTURE"] == candidate_tests.plan.CANDIDATE_CAPTURE_GATE
+        target = Path(argv[-1])
+        import shutil
+
+        shutil.rmtree(target)
+        self.gateway_file.write_text(json.dumps(candidate_tests.BASE_GATEWAY), encoding="utf-8")
+        report = {"schema_version": candidate_capture.CLEANUP_REPORT_SCHEMA, "status": "restored", "run_id": target.name}
+        return subprocess.CompletedProcess(argv, 0, "候选网关恢复\n" + json.dumps(report) + "\n", "")
+
+    def cleanup(self, campaign: Path, action: str, *extra: str) -> tuple[int, dict[str, Any] | None, str]:
+        with self.recovery_patched(), mock.patch.object(recovery, "list_residual_processes", lambda _manifest: []), \
+                mock.patch.object(candidate_capture, "_run_restore_only", self.fake_restore):
+            return self.run_main(
+                ["environment-cleanup", action, "--campaign-dir", str(campaign), "--reason", "候选 run 被强杀", *extra]
+            )
+
+    def contaminated_campaign(self) -> Path:
+        campaign = self.write_candidate_campaign()
+        self.set_candidate_control({"restoration_fail": [REFRESH_PROBE]})
+        _code, result, stderr = self.run_candidate(campaign, "--acknowledge-live-requests")
+        self.assertEqual(result.get("status"), "environment_contaminated", stderr)
+        self.set_candidate_control({})
+        return campaign
+
+    def test_preview_apply_restores_gateway_and_writes_receipt(self) -> None:
+        campaign = self.contaminated_campaign()
+        self.restore_calls: list[list[str]] = []
+        code, clean, stderr = self.cleanup(campaign, "preview")
+        self.assertEqual((code, clean["status"]), (0, "clean"), stderr)
+        entry = self.runtime_entry("killed-run")
+        self.dirty_gateway()
+        code, preview, stderr = self.cleanup(campaign, "preview")
+        self.assertEqual((code, preview["status"]), (0, "approval_required"), stderr)
+        gateway = preview["gateway_residue"]
+        self.assertEqual([item["name"] for item in gateway["entries"]], ["killed-run"])
+        self.assertEqual(gateway["residue_failures"], ["custom-ca-present", "residual-candidate-proxy", "runtime-residue"])
+        self.assertEqual(self.restore_calls, [], "预览零写入、不执行恢复")
+        code, applied, stderr = self.cleanup(campaign, "apply", "--approve-sha256", preview["review_sha256"], "--approved-by", "reviewer-a")
+        self.assertEqual((code, applied["status"]), (0, "cleaned"), stderr)
+        self.assertEqual([call[2:] for call in self.restore_calls], [["--restore-only", str(entry)]])
+        self.assertTrue(self.restore_calls[0][1].endswith(candidate_tests.plan.CANDIDATE_SCRIPT))
+        self.assertFalse(entry.exists())
+        receipt = json.loads(Path(applied["receipt_path"]).read_text(encoding="utf-8"))
+        record = receipt["gateway_residue"]
+        self.assertEqual((record["status"], record["residue_failures_after"]), ("restored", []))
+        self.assertEqual(record["restores"][0]["report"]["status"], "restored")
+        for name in ("before_snapshot", "after_snapshot"):
+            self.assertTrue((campaign / record[name]["path"]).is_file())
+        self.assertIn("environment-isolate", applied["next_command"])
+
+    def test_unrecoverable_residue_requires_manual_handling(self) -> None:
+        campaign = self.contaminated_campaign()
+        self.restore_calls = []
+        self.runtime_entry("no-state", with_state=False)
+        self.dirty_gateway()
+        code, preview, stderr = self.cleanup(campaign, "preview")
+        self.assertEqual((code, preview["status"]), (3, "manual_required"), stderr)
+        reasons = [item["reason"] for item in preview["gateway_residue"]["unrecoverable"]]
+        self.assertTrue(any("没有运行前原值" in reason for reason in reasons))
+        self.assertTrue(any("没有带运行前原值的运行目录" in reason for reason in reasons))
+        code, _applied, stderr = self.cleanup(campaign, "apply", "--approve-sha256", preview["review_sha256"], "--approved-by", "reviewer-a")
+        self.assertEqual(code, 1)
+        self.assertIn("无法自动恢复", stderr)
+        self.assertEqual(self.restore_calls, [])
 
 
 class ActivationFactBoundaryTests(unittest.TestCase):

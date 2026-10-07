@@ -29,11 +29,389 @@ umask 077
 #
 # 零请求演练（B4-01b）：中继命令带 --dry-run（编排器的零请求演练把 --execute 换成 --dry-run）时，本脚本只做全部只读前检，
 # 不取锁、不建运行目录、不写恢复报告、不改 keeper／账号／代理／CA，随后直接执行中继的 dry-run（只回显计划）。
+#
+# 强杀后的恢复（B4-01 c2）：脚本被 SIGKILL（或在恢复途中被杀）时 trap 不会执行，网关留在被修改的样子，而账号 proxy／调度门
+# 原值只在内存里。所以在第一处修改之前，先把全部运行前原值（不含任何秘密）只写一次落到 <运行目录>/restore/state.json；
+#   claude_run_candidate_capture.sh --restore-only <宿主运行目录>
+# 只做恢复：同一显式开关、同一把锁，参数全部取自 state.json（逐项校验），按现场实际状态判定要恢复的项（临时代理在不在、
+# 账号是否挂着它、临时 CA 在不在、keeper 是否被停），再走与 trap 同一段恢复与核验。恢复报告（claude-candidate-gateway-cleanup/v1）
+# 只打到 stdout，不写回原证据根（那里已经做过权限收口）；成功删除运行目录、退出 0，失败退出 97 并保留 restore/。
+# 编排器的 environment-cleanup 在明确批准下调用它，并把报告写进清理收据。
 
 required_gate=YES_I_ACCEPT_CANDIDATE_GATEWAY_CAPTURE
 if [[ ${CLAUDE_CANDIDATE_CAPTURE:-} != "$required_gate" ]]; then
   echo "拒绝启动：必须显式设置 CLAUDE_CANDIDATE_CAPTURE=${required_gate}。" >&2
   exit 2
+fi
+
+# ---- 公共定义（取证与 --restore-only 共用；函数按调用时的全局变量取值） ------------------------------------------------
+safe_name='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+safe_path='^/[A-Za-z0-9._/+:-]+$'
+custom_ca_path=/usr/local/share/ca-certificates/claude-candidate-capture.crt
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+proxy_id=""
+proxy_created=0
+proxy_bound=0
+ca_installed=0
+keeper_stopped=0
+restore_failed=0
+capture_exit_code=""
+restored_hosts_hash=""
+restored_ca_hash=""
+restored_gate_equal=false
+restored_proxy_equal=false
+
+load_db_metadata() {
+  db_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_USER=//p')
+  db_name=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_DB=//p')
+  if [[ -z $db_user || -z $db_name ]]; then
+    echo "无法读取 PostgreSQL 连接元数据。" >&2
+    exit 1
+  fi
+}
+
+db_query() {
+  docker exec "$postgres_container" psql -U "$db_user" -d "$db_name" -qAtc "$1"
+}
+
+wait_healthy() {
+  local health
+  for _ in $(seq 1 90); do
+    health=$(docker inspect -f \
+      '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+      "$service_container" 2>/dev/null || true)
+    if [[ $health == healthy || $health == running ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "候选服务未在 90 秒内恢复健康。" >&2
+  return 1
+}
+
+# 服务容器重启经共享监督器的出口维护声明执行（与 Codex 候选采集脚本同一入口）。
+restart_service() {
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
+  wait_healthy
+}
+
+# 账号调度门：connect 中继在场期间网关的后台出站也会打到中继上，被拒会让账号临时熔断；开跑前清一次，退出时按原值恢复。
+clear_account_gate() {
+  db_query "update accounts set temp_unschedulable_until = null, temp_unschedulable_reason = null where id = $account_id" >/dev/null
+}
+
+account_gate_state() {
+  db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
+}
+
+restore_account_gate() {
+  local until_hex reason_hex
+  [[ -n $original_gate_state ]] || return 0
+  until_hex=${original_gate_state%%|*}
+  reason_hex=${original_gate_state##*|}
+  [[ $until_hex =~ ^[0-9a-f]*$ && $reason_hex =~ ^[0-9a-f]*$ ]] || return 1
+  db_query "update accounts set temp_unschedulable_until = nullif(convert_from(decode('$until_hex','hex'),'UTF8'),'')::timestamptz, temp_unschedulable_reason = nullif(convert_from(decode('$reason_hex','hex'),'UTF8'),'') where id = $account_id" >/dev/null
+}
+
+proxy_state() {
+  db_query "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id"
+}
+
+remove_runtime_secrets() {
+  rm -f -- "$runtime_host/api-key" "$runtime_host/admin-token" "$runtime_host/known-secrets.json" \
+    "$runtime_host/gateway.json"
+}
+
+write_report() {
+  local status=$1
+  install -d -m 0700 "$report_dir"
+  python3 - "$report_path" "$status" "$run_id" "$probe_id" "$account_id" "$api_key_id" "$gateway_trigger" \
+    "$original_proxy_state" "$restored_proxy_equal" "$restored_gate_equal" "$original_hosts_hash" \
+    "$restored_hosts_hash" "$original_ca_hash" "$restored_ca_hash" "$keeper_was_running" "$capture_exit_code" \
+    "$started_at" "$relay_port" <<'PY'
+import json, os, sys, time
+
+(path, status, run_id, probe_id, account_id, api_key_id, trigger, original_proxy, proxy_equal, gate_equal,
+ hosts_before, hosts_after, ca_before, ca_after, keeper_was_running, capture_exit_code, started_at, relay_port) = sys.argv[1:]
+report = {
+    "schema_version": "claude-candidate-gateway-restoration/v1",
+    "status": status,
+    "run_id": run_id,
+    "probe_id": probe_id,
+    "account_id": int(account_id),
+    "api_key_id": int(api_key_id),
+    "trigger": trigger,
+    "relay_port": int(relay_port),
+    "capture_exit_code": int(capture_exit_code) if capture_exit_code.lstrip("-").isdigit() else None,
+    "account_proxy_original": original_proxy,
+    "account_proxy_restored_equal": proxy_equal == "true",
+    "account_gate_restored_equal": gate_equal == "true",
+    "hosts_sha256_equal": bool(hosts_before) and hosts_after == hosts_before,
+    "ca_bundle_sha256_equal": bool(ca_before) and ca_after == ca_before,
+    "keeper_was_running": keeper_was_running == "true",
+    "runtime_secrets_removed": True,
+    "started_at_utc": started_at,
+    "ended_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+}
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+    json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+}
+
+# 恢复与核验的核心（trap 与 --restore-only 共用）：按 proxy_bound／proxy_created／ca_installed／keeper_stopped 标志恢复，
+# 再逐项核验，任一不成立置 restore_failed=1；不写报告、不退出。
+restore_gateway() {
+  local proxy_value fallback_value service_container_id_after
+  remove_runtime_secrets
+
+  if [[ $proxy_bound == 1 && $original_proxy_state =~ ^(NULL|[0-9]+)\|(NULL|[0-9]+)$ ]]; then
+    read -r proxy_value fallback_value <<<"${original_proxy_state/|/ }"
+    db_query "update accounts set proxy_id = $proxy_value, proxy_fallback_origin_id = $fallback_value where id = $account_id" \
+      >/dev/null || restore_failed=1
+    proxy_bound=0
+  fi
+  if [[ $proxy_created == 1 && $proxy_id =~ ^[0-9]+$ ]]; then
+    db_query "delete from proxies where id = $proxy_id and name = 'claude-candidate-${run_id:0:64}'" >/dev/null ||
+      restore_failed=1
+    proxy_created=0
+  fi
+  if [[ $ca_installed == 1 ]]; then
+    docker exec "$service_container" rm -f "$custom_ca_path" >/dev/null 2>&1 || restore_failed=1
+    docker exec "$service_container" update-ca-certificates --fresh >/dev/null 2>&1 || restore_failed=1
+    restart_service cleanup || restore_failed=1
+    ca_installed=0
+  fi
+  # docker restart 会重建 /etc/hosts：容器实例没换时按字节回灌运行前快照，随后不再重启。
+  service_container_id_after=$(docker inspect -f '{{.Id}}' "$service_container" 2>/dev/null || true)
+  if [[ -s $runtime_host/restore/hosts.before && $service_container_id_after == "$service_container_id_before" ]]; then
+    docker cp "$runtime_host/restore/hosts.before" "$service_container:/tmp/claude-candidate-hosts.restore" \
+      >/dev/null 2>&1 || restore_failed=1
+    docker exec "$service_container" sh -c \
+      'cat /tmp/claude-candidate-hosts.restore > /etc/hosts && rm -f /tmp/claude-candidate-hosts.restore' \
+      >/dev/null 2>&1 || restore_failed=1
+  else
+    restore_failed=1
+  fi
+  restored_ca_hash=$(docker exec "$service_container" sha256sum /etc/ssl/certs/ca-certificates.crt 2>/dev/null | awk '{print $1}')
+  if [[ $restored_ca_hash != "$original_ca_hash" && -s $runtime_host/restore/ca-certificates.before ]]; then
+    docker cp "$runtime_host/restore/ca-certificates.before" "$service_container:/tmp/claude-candidate-ca.restore" \
+      >/dev/null 2>&1 || restore_failed=1
+    docker exec "$service_container" sh -c \
+      'cat /tmp/claude-candidate-ca.restore > /etc/ssl/certs/ca-certificates.crt && rm -f /tmp/claude-candidate-ca.restore' \
+      >/dev/null 2>&1 || restore_failed=1
+    restored_ca_hash=$(docker exec "$service_container" sha256sum /etc/ssl/certs/ca-certificates.crt 2>/dev/null | awk '{print $1}')
+  fi
+  if [[ $keeper_stopped == 1 ]]; then
+    docker start "$keeper_container" >/dev/null 2>&1 || restore_failed=1
+  fi
+  if restore_account_gate && [[ $(account_gate_state) == "$original_gate_state" ]]; then
+    restored_gate_equal=true
+  else
+    restore_failed=1
+  fi
+  if [[ $(proxy_state 2>/dev/null) == "$original_proxy_state" ]]; then
+    restored_proxy_equal=true
+  else
+    restore_failed=1
+  fi
+  restored_hosts_hash=$(docker exec "$service_container" sha256sum /etc/hosts 2>/dev/null | awk '{print $1}')
+  [[ $restored_hosts_hash == "$original_hosts_hash" ]] || restore_failed=1
+  [[ $restored_ca_hash == "$original_ca_hash" ]] || restore_failed=1
+  docker exec "$service_container" test ! -e "$custom_ca_path" >/dev/null 2>&1 || restore_failed=1
+}
+
+restore_environment() {
+  local original_exit_code=$?
+  trap - EXIT ERR INT TERM
+  set +e
+  [[ -n $capture_exit_code ]] || capture_exit_code=$original_exit_code
+  restore_gateway
+
+  if [[ $restore_failed != 0 ]]; then
+    write_report restoration_failed || true
+    echo "Claude 候选取证环境恢复失败；运行前快照保留在 $runtime_host/restore。" >&2
+    exit 97
+  fi
+  if [[ $capture_exit_code == 0 ]]; then
+    write_report complete || exit 97
+  else
+    write_report capture_failed || exit 97
+  fi
+  rm -rf -- "$runtime_host"
+  echo "候选网关隔离已精确恢复：账号 proxy/fallback、调度门、hosts、CA bundle 与 keeper 状态均已核验。"
+  exit "$capture_exit_code"
+}
+
+# 只做恢复（--restore-only <宿主运行目录>）：原值全部取自 restore/state.json，按现场状态判定要恢复的项，报告只打到 stdout。
+restore_only_main() {
+  local target=${1:-} count=$2 state assignments key value found_proxy found_temporary found_bound found_ca found_keeper
+  local current_proxy keeper_now
+  if (( count != 2 )) || [[ ! $target =~ $safe_path || $target == *"/../"* || $target == *"/.." || $target == *"/./"* ]]; then
+    echo "--restore-only 只接受一个规范安全绝对路径（宿主候选运行目录）。" >&2
+    exit 2
+  fi
+  if [[ ! -d $target || -L $target || $(basename "$(dirname "$target")") != claude-candidate ||
+    $(basename "$(dirname "$(dirname "$target")")") != runtime ]]; then
+    echo "--restore-only 的目标必须是 <数据根>/runtime/claude-candidate/<运行> 目录。" >&2
+    exit 2
+  fi
+  state="$target/restore/state.json"
+  if [[ ! -f $state || -L $state ]]; then
+    echo "运行目录没有运行前原值（restore/state.json），无法证明要恢复成什么：拒绝自动恢复，需人工处置。" >&2
+    exit 2
+  fi
+  exec 8>"$(dirname "$target")/.capture.lock"
+  if ! flock -n 8; then
+    echo "另一个 Claude 候选取证正持有锁，拒绝并发恢复。" >&2
+    exit 2
+  fi
+  assignments=$(python3 - "$state" <<'PY'
+import json, re, sys
+
+FIELDS = {
+    "run_id": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "probe_id": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "account_id": r"[1-9][0-9]{0,9}",
+    "api_key_id": r"[1-9][0-9]{0,9}",
+    "relay_port": r"[1-9][0-9]{3,4}",
+    "gateway_trigger": r"client|gateway-account-refresh",
+    "service_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "keeper_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "postgres_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "capture_name": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+    "proxy_name": r"claude-candidate-[A-Za-z0-9._-]{1,64}",
+    "service_container_id_before": r"[0-9a-f]{64}",
+    "original_proxy_state": r"(NULL|[0-9]+)\|(NULL|[0-9]+)",
+    "original_gate_state": r"[0-9a-f]*\|[0-9a-f]*",
+    "keeper_was_running": r"true|false",
+    "original_hosts_hash": r"[0-9a-f]{64}",
+    "original_ca_hash": r"[0-9a-f]{64}",
+    "started_at": r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+}
+try:
+    payload = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError) as error:
+    sys.exit(f"restore/state.json 无法读取：{type(error).__name__}")
+if not isinstance(payload, dict) or payload.get("schema_version") != "claude-candidate-gateway-restore-state/v1":
+    sys.exit("restore/state.json 的 schema 不是 claude-candidate-gateway-restore-state/v1。")
+values = payload.get("values")
+if not isinstance(values, dict) or set(values) != set(FIELDS):
+    sys.exit("restore/state.json 的原值字段不闭合。")
+for name, pattern in FIELDS.items():
+    if not isinstance(values[name], str) or re.fullmatch(pattern, values[name]) is None:
+        sys.exit(f"restore/state.json 的 {name} 非法。")
+if values["proxy_name"] != "claude-candidate-" + values["run_id"][:64]:
+    sys.exit("restore/state.json 的临时代理名与 run_id 不一致。")
+for name in FIELDS:
+    print(f"{name}={values[name]}")
+PY
+  ) || exit 2
+  while IFS='=' read -r key value; do
+    case $key in
+      run_id) run_id=$value ;;
+      probe_id) probe_id=$value ;;
+      account_id) account_id=$value ;;
+      api_key_id) api_key_id=$value ;;
+      relay_port) relay_port=$value ;;
+      gateway_trigger) gateway_trigger=$value ;;
+      service_container) service_container=$value ;;
+      keeper_container) keeper_container=$value ;;
+      postgres_container) postgres_container=$value ;;
+      capture_name) capture_name=$value ;;
+      proxy_name) proxy_name=$value ;;
+      service_container_id_before) service_container_id_before=$value ;;
+      original_proxy_state) original_proxy_state=$value ;;
+      original_gate_state) original_gate_state=$value ;;
+      keeper_was_running) keeper_was_running=$value ;;
+      original_hosts_hash) original_hosts_hash=$value ;;
+      original_ca_hash) original_ca_hash=$value ;;
+      started_at) started_at=$value ;;
+    esac
+  done <<<"$assignments"
+  runtime_host=$target
+  load_db_metadata
+  set +e
+  # 按现场判定要恢复的项（被杀时内存里的进度标志已经丢失）。
+  found_proxy=$(db_query "select coalesce(string_agg(id::text, ',' order by id), '') from proxies where name = '$proxy_name'")
+  found_temporary=false
+  if [[ $found_proxy =~ ^[0-9]+$ ]]; then
+    proxy_id=$found_proxy
+    proxy_created=1
+    found_temporary=true
+  elif [[ -n $found_proxy ]]; then
+    restore_failed=1
+  fi
+  current_proxy=$(proxy_state)
+  found_bound=false
+  if [[ $current_proxy != "$original_proxy_state" ]]; then
+    if [[ $proxy_created == 1 && $current_proxy == "$proxy_id|NULL" ]]; then
+      proxy_bound=1
+      found_bound=true
+    else
+      # 账号挂着的不是本轮临时代理：不知道该恢复成什么之外的改动，不动它，核验必然失败（人工处置）。
+      restore_failed=1
+    fi
+  fi
+  found_ca=false
+  if docker exec "$service_container" test -e "$custom_ca_path" >/dev/null 2>&1; then
+    ca_installed=1
+    found_ca=true
+  fi
+  keeper_now=$(docker inspect -f '{{.State.Running}}' "$keeper_container" 2>/dev/null || true)
+  found_keeper=false
+  if [[ $keeper_was_running == true && $keeper_now != true ]]; then
+    keeper_stopped=1
+    found_keeper=true
+  fi
+  restore_gateway
+  python3 - "$(if [[ $restore_failed == 0 ]]; then echo restored; else echo restoration_failed; fi)" "$run_id" "$probe_id" \
+    "$account_id" "$api_key_id" "$gateway_trigger" "$original_proxy_state" "$restored_proxy_equal" "$restored_gate_equal" \
+    "$original_hosts_hash" "$restored_hosts_hash" "$original_ca_hash" "$restored_ca_hash" "$keeper_was_running" "$started_at" \
+    "$found_temporary" "$found_bound" "$found_ca" "$found_keeper" <<'PY'
+import json, sys, time
+
+(status, run_id, probe_id, account_id, api_key_id, trigger, original_proxy, proxy_equal, gate_equal, hosts_before, hosts_after,
+ ca_before, ca_after, keeper_was_running, started_at, found_proxy, found_bound, found_ca, found_keeper) = sys.argv[1:]
+print(json.dumps({
+    "schema_version": "claude-candidate-gateway-cleanup/v1",
+    "status": status,
+    "run_id": run_id,
+    "probe_id": probe_id,
+    "account_id": int(account_id),
+    "api_key_id": int(api_key_id),
+    "trigger": trigger,
+    "found": {
+        "temporary_proxy": found_proxy == "true",
+        "account_bound_to_temporary_proxy": found_bound == "true",
+        "custom_ca": found_ca == "true",
+        "keeper_stopped": found_keeper == "true",
+    },
+    "account_proxy_original": original_proxy,
+    "account_proxy_restored_equal": proxy_equal == "true",
+    "account_gate_restored_equal": gate_equal == "true",
+    "hosts_sha256_equal": bool(hosts_before) and hosts_after == hosts_before,
+    "ca_bundle_sha256_equal": bool(ca_before) and ca_after == ca_before,
+    "keeper_was_running": keeper_was_running == "true",
+    "runtime_secrets_removed": True,
+    "started_at_utc": started_at,
+    "restored_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+}, ensure_ascii=False, sort_keys=True))
+PY
+  if [[ $restore_failed != 0 ]]; then
+    echo "候选网关残留恢复失败；运行前快照保留在 $runtime_host/restore。" >&2
+    exit 97
+  fi
+  rm -rf -- "$runtime_host"
+  exit 0
+}
+
+if [[ ${1:-} == --restore-only ]]; then
+  restore_only_main "${2:-}" "$#"
 fi
 
 campaign_dir=${CAMPAIGN_DIR:-}
@@ -52,8 +430,6 @@ relay_port=${RELAY_PORT:-}
 gateway_trigger=${GATEWAY_TRIGGER:-}
 ca_cert=${CA_CERT:-}
 
-safe_name='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
-safe_path='^/[A-Za-z0-9._/+:-]+$'
 for pair in "CAPTURE_CONTAINER=$capture_container" "SERVICE_CONTAINER=$service_container" \
   "KEEPER_CONTAINER=$keeper_container" "POSTGRES_CONTAINER=$postgres_container" "RUN_ID=$run_id" \
   "PROBE_ID=$probe_id"; do
@@ -186,9 +562,6 @@ output_host=$(host_path "$output_root") || {
 }
 report_dir="$(dirname "$output_host")/candidate-gateway"
 report_path="$report_dir/$probe_id.json"
-custom_ca_path=/usr/local/share/ca-certificates/claude-candidate-capture.crt
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-
 admin_token=""
 if [[ $gateway_trigger == gateway-account-refresh ]]; then
   admin_token=${ADMIN_BEARER_TOKEN:-}
@@ -250,62 +623,7 @@ if [[ ! $capture_id =~ ^[0-9a-f]{64}$ || $capture_id != "$named_capture_id" ]]; 
 fi
 set -- docker exec "$capture_id" "${@:4}"
 
-db_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_USER=//p')
-db_name=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_DB=//p')
-if [[ -z $db_user || -z $db_name ]]; then
-  echo "无法读取 PostgreSQL 连接元数据。" >&2
-  exit 1
-fi
-
-db_query() {
-  docker exec "$postgres_container" psql -U "$db_user" -d "$db_name" -qAtc "$1"
-}
-
-wait_healthy() {
-  local health
-  for _ in $(seq 1 90); do
-    health=$(docker inspect -f \
-      '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
-      "$service_container" 2>/dev/null || true)
-    if [[ $health == healthy || $health == running ]]; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "候选服务未在 90 秒内恢复健康。" >&2
-  return 1
-}
-
-# 服务容器重启经共享监督器的出口维护声明执行（与 Codex 候选采集脚本同一入口）。
-restart_service() {
-  local -a maintenance_args=()
-  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
-  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
-    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
-  wait_healthy
-}
-
-# 账号调度门：connect 中继在场期间网关的后台出站也会打到中继上，被拒会让账号临时熔断；开跑前清一次，退出时按原值恢复。
-clear_account_gate() {
-  db_query "update accounts set temp_unschedulable_until = null, temp_unschedulable_reason = null where id = $account_id" >/dev/null
-}
-
-account_gate_state() {
-  db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
-}
-
-restore_account_gate() {
-  local until_hex reason_hex
-  [[ -n $original_gate_state ]] || return 0
-  until_hex=${original_gate_state%%|*}
-  reason_hex=${original_gate_state##*|}
-  [[ $until_hex =~ ^[0-9a-f]*$ && $reason_hex =~ ^[0-9a-f]*$ ]] || return 1
-  db_query "update accounts set temp_unschedulable_until = nullif(convert_from(decode('$until_hex','hex'),'UTF8'),'')::timestamptz, temp_unschedulable_reason = nullif(convert_from(decode('$reason_hex','hex'),'UTF8'),'') where id = $account_id" >/dev/null
-}
-
-proxy_state() {
-  db_query "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id"
-}
+load_db_metadata
 
 # ---- 只读前检：任何修改之前完成，前检失败不留下任何改动 -------------------------------------------------------
 account_shape=$(db_query \
@@ -387,139 +705,29 @@ original_hosts_hash=$(sha256sum "$runtime_host/restore/hosts.before" | awk '{pri
 original_ca_hash=$(sha256sum "$runtime_host/restore/ca-certificates.before" | awk '{print $1}')
 keeper_was_running=$(docker inspect -f '{{.State.Running}}' "$keeper_container")
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if [[ ! $service_container_id_before =~ ^[0-9a-f]{64}$ || ! $keeper_was_running =~ ^(true|false)$ ]]; then
+  echo "无法读取服务容器 ID 或 keeper 运行状态（快照阶段，尚未修改任何东西）。" >&2
+  exit 1
+fi
+# 运行前原值落盘（强杀后 --restore-only 的依据）：不含任何秘密，只写一次；写在第一处修改之前。
+python3 - "$runtime_host/restore/state.json" "$run_id" "$probe_id" "$account_id" "$api_key_id" "$relay_port" \
+  "$gateway_trigger" "$service_container" "$keeper_container" "$postgres_container" "$capture_name" \
+  "claude-candidate-${run_id:0:64}" "$service_container_id_before" "$original_proxy_state" "$original_gate_state" \
+  "$keeper_was_running" "$original_hosts_hash" "$original_ca_hash" "$started_at" <<'PY'
+import json, os, sys
 
-proxy_id=""
-proxy_created=0
-proxy_bound=0
-ca_installed=0
-keeper_stopped=0
-restore_failed=0
-capture_exit_code=""
-restored_hosts_hash=""
-restored_ca_hash=""
-restored_gate_equal=false
-restored_proxy_equal=false
-
-remove_runtime_secrets() {
-  rm -f -- "$runtime_host/api-key" "$runtime_host/admin-token" "$runtime_host/known-secrets.json" \
-    "$runtime_host/gateway.json"
-}
-
-write_report() {
-  local status=$1
-  install -d -m 0700 "$report_dir"
-  python3 - "$report_path" "$status" "$run_id" "$probe_id" "$account_id" "$api_key_id" "$gateway_trigger" \
-    "$original_proxy_state" "$restored_proxy_equal" "$restored_gate_equal" "$original_hosts_hash" \
-    "$restored_hosts_hash" "$original_ca_hash" "$restored_ca_hash" "$keeper_was_running" "$capture_exit_code" \
-    "$started_at" "$relay_port" <<'PY'
-import json, os, sys, time
-
-(path, status, run_id, probe_id, account_id, api_key_id, trigger, original_proxy, proxy_equal, gate_equal,
- hosts_before, hosts_after, ca_before, ca_after, keeper_was_running, capture_exit_code, started_at, relay_port) = sys.argv[1:]
-report = {
-    "schema_version": "claude-candidate-gateway-restoration/v1",
-    "status": status,
-    "run_id": run_id,
-    "probe_id": probe_id,
-    "account_id": int(account_id),
-    "api_key_id": int(api_key_id),
-    "trigger": trigger,
-    "relay_port": int(relay_port),
-    "capture_exit_code": int(capture_exit_code) if capture_exit_code.lstrip("-").isdigit() else None,
-    "account_proxy_original": original_proxy,
-    "account_proxy_restored_equal": proxy_equal == "true",
-    "account_gate_restored_equal": gate_equal == "true",
-    "hosts_sha256_equal": bool(hosts_before) and hosts_after == hosts_before,
-    "ca_bundle_sha256_equal": bool(ca_before) and ca_after == ca_before,
-    "keeper_was_running": keeper_was_running == "true",
-    "runtime_secrets_removed": True,
-    "started_at_utc": started_at,
-    "ended_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-}
+names = (
+    "run_id", "probe_id", "account_id", "api_key_id", "relay_port", "gateway_trigger", "service_container", "keeper_container",
+    "postgres_container", "capture_name", "proxy_name", "service_container_id_before", "original_proxy_state",
+    "original_gate_state", "keeper_was_running", "original_hosts_hash", "original_ca_hash", "started_at",
+)
+path, values = sys.argv[1], dict(zip(names, sys.argv[2:], strict=True))
+document = {"schema_version": "claude-candidate-gateway-restore-state/v1", "values": values}
 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
 with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-    json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True)
+    json.dump(document, stream, ensure_ascii=False, indent=2, sort_keys=True)
     stream.write("\n")
 PY
-}
-
-restore_environment() {
-  local original_exit_code=$?
-  local proxy_value fallback_value service_container_id_after
-  trap - EXIT ERR INT TERM
-  set +e
-  [[ -n $capture_exit_code ]] || capture_exit_code=$original_exit_code
-  remove_runtime_secrets
-
-  if [[ $proxy_bound == 1 && $original_proxy_state =~ ^(NULL|[0-9]+)\|(NULL|[0-9]+)$ ]]; then
-    read -r proxy_value fallback_value <<<"${original_proxy_state/|/ }"
-    db_query "update accounts set proxy_id = $proxy_value, proxy_fallback_origin_id = $fallback_value where id = $account_id" \
-      >/dev/null || restore_failed=1
-    proxy_bound=0
-  fi
-  if [[ $proxy_created == 1 && $proxy_id =~ ^[0-9]+$ ]]; then
-    db_query "delete from proxies where id = $proxy_id and name = 'claude-candidate-${run_id:0:64}'" >/dev/null ||
-      restore_failed=1
-    proxy_created=0
-  fi
-  if [[ $ca_installed == 1 ]]; then
-    docker exec "$service_container" rm -f "$custom_ca_path" >/dev/null 2>&1 || restore_failed=1
-    docker exec "$service_container" update-ca-certificates --fresh >/dev/null 2>&1 || restore_failed=1
-    restart_service cleanup || restore_failed=1
-    ca_installed=0
-  fi
-  # docker restart 会重建 /etc/hosts：容器实例没换时按字节回灌运行前快照，随后不再重启。
-  service_container_id_after=$(docker inspect -f '{{.Id}}' "$service_container" 2>/dev/null || true)
-  if [[ -s $runtime_host/restore/hosts.before && $service_container_id_after == "$service_container_id_before" ]]; then
-    docker cp "$runtime_host/restore/hosts.before" "$service_container:/tmp/claude-candidate-hosts.restore" \
-      >/dev/null 2>&1 || restore_failed=1
-    docker exec "$service_container" sh -c \
-      'cat /tmp/claude-candidate-hosts.restore > /etc/hosts && rm -f /tmp/claude-candidate-hosts.restore' \
-      >/dev/null 2>&1 || restore_failed=1
-  else
-    restore_failed=1
-  fi
-  restored_ca_hash=$(docker exec "$service_container" sha256sum /etc/ssl/certs/ca-certificates.crt 2>/dev/null | awk '{print $1}')
-  if [[ $restored_ca_hash != "$original_ca_hash" && -s $runtime_host/restore/ca-certificates.before ]]; then
-    docker cp "$runtime_host/restore/ca-certificates.before" "$service_container:/tmp/claude-candidate-ca.restore" \
-      >/dev/null 2>&1 || restore_failed=1
-    docker exec "$service_container" sh -c \
-      'cat /tmp/claude-candidate-ca.restore > /etc/ssl/certs/ca-certificates.crt && rm -f /tmp/claude-candidate-ca.restore' \
-      >/dev/null 2>&1 || restore_failed=1
-    restored_ca_hash=$(docker exec "$service_container" sha256sum /etc/ssl/certs/ca-certificates.crt 2>/dev/null | awk '{print $1}')
-  fi
-  if [[ $keeper_stopped == 1 ]]; then
-    docker start "$keeper_container" >/dev/null 2>&1 || restore_failed=1
-  fi
-  if restore_account_gate && [[ $(account_gate_state) == "$original_gate_state" ]]; then
-    restored_gate_equal=true
-  else
-    restore_failed=1
-  fi
-  if [[ $(proxy_state 2>/dev/null) == "$original_proxy_state" ]]; then
-    restored_proxy_equal=true
-  else
-    restore_failed=1
-  fi
-  restored_hosts_hash=$(docker exec "$service_container" sha256sum /etc/hosts 2>/dev/null | awk '{print $1}')
-  [[ $restored_hosts_hash == "$original_hosts_hash" ]] || restore_failed=1
-  [[ $restored_ca_hash == "$original_ca_hash" ]] || restore_failed=1
-  docker exec "$service_container" test ! -e "$custom_ca_path" >/dev/null 2>&1 || restore_failed=1
-
-  if [[ $restore_failed != 0 ]]; then
-    write_report restoration_failed || true
-    echo "Claude 候选取证环境恢复失败；运行前快照保留在 $runtime_host/restore。" >&2
-    exit 97
-  fi
-  if [[ $capture_exit_code == 0 ]]; then
-    write_report complete || exit 97
-  else
-    write_report capture_failed || exit 97
-  fi
-  rm -rf -- "$runtime_host"
-  echo "候选网关隔离已精确恢复：账号 proxy/fallback、调度门、hosts、CA bundle 与 keeper 状态均已核验。"
-  exit "$capture_exit_code"
-}
 
 # ---- 从这里开始才修改 keeper、账号、代理与 CA；所有只读前检与恢复快照已经完成 -----------------------------------
 trap restore_environment EXIT ERR INT TERM

@@ -802,6 +802,149 @@ def copy_activation_fact(manifest: Mapping[str, Any], environment_root: Path, *,
 
 
 # ---------------------------------------------------------------------------
+# 强杀后的网关残留（B4-01 c2）：只读列出与按批准调用宿主脚本的 --restore-only
+# ---------------------------------------------------------------------------
+
+RESTORE_STATE_FILENAME = "state.json"
+RESTORE_STATE_SCHEMA = "claude-candidate-gateway-restore-state/v1"
+CLEANUP_REPORT_SCHEMA = "claude-candidate-gateway-cleanup/v1"
+RESTORE_ONLY_FLAG = "--restore-only"
+RESTORE_ONLY_TIMEOUT_SECONDS = 600
+# 网关就绪核对里属于「取证留下的改动」的项（其余如账号形态不对不是残留，清理不处理）。
+RESIDUE_FAILURES = frozenset({"custom-ca-present", "residual-candidate-proxy", "runtime-residue"})
+# 宿主脚本写的运行前原值字段（与 claude_run_candidate_capture.sh 的 state.json 同一闭集；脚本恢复前另按正则逐项校验）。
+RESTORE_STATE_FIELDS = frozenset(
+    {
+        "run_id", "probe_id", "account_id", "api_key_id", "relay_port", "gateway_trigger", "service_container", "keeper_container",
+        "postgres_container", "capture_name", "proxy_name", "service_container_id_before", "original_proxy_state",
+        "original_gate_state", "keeper_was_running", "original_hosts_hash", "original_ca_hash", "started_at",
+    }
+)
+
+
+def gateway_cleanup_enabled(manifest: Mapping[str, Any]) -> bool:
+    """总计划冻结了候选变量（会跑候选采集）的 Campaign 才有候选网关残留可清理。"""
+
+    try:
+        candidate_variables(manifest)
+    except ConfigurationError:
+        return False
+    return True
+
+
+def candidate_runtime_root(host_data_root: Path) -> Path:
+    return Path(host_data_root).joinpath(*RUNTIME_DIR_PARTS)
+
+
+def _restore_state_entry(directory: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """一个宿主运行目录的运行前原值摘要（只读）；没有或不合法时返回 ``(None, 原因)``。"""
+
+    if directory.is_symlink() or not directory.is_dir():
+        return None, "不是普通目录"
+    path = directory / "restore" / RESTORE_STATE_FILENAME
+    if path.is_symlink() or not path.is_file():
+        return None, "没有运行前原值（restore/state.json），无法证明要恢复成什么"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, "restore/state.json 无法读取"
+    values = document.get("values") if isinstance(document, Mapping) else None
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version") != RESTORE_STATE_SCHEMA
+        or not isinstance(values, Mapping)
+        or set(values) != RESTORE_STATE_FIELDS
+        or not all(isinstance(value, str) for value in values.values())
+    ):
+        return None, "restore/state.json 的 schema 或字段不闭合"
+    return {
+        "name": directory.name,
+        "run_id": values["run_id"],
+        "probe_id": values["probe_id"],
+        "account_id": values["account_id"],
+        "api_key_id": values["api_key_id"],
+        "proxy_name": values["proxy_name"],
+        "keeper_was_running": values["keeper_was_running"],
+        "started_at_utc": values["started_at"],
+        "state_sha256": file_sha256(path),
+    }, None
+
+
+def list_gateway_residue(manifest: Mapping[str, Any], host_data_root: Path, *, deadline: Any | None = None) -> dict[str, Any]:
+    """只读列出候选网关残留：宿主候选运行目录（带运行前原值的可自动恢复，没有的记无法自动恢复）与网关只读快照。
+
+    网关快照显示有改动残留（临时 CA、临时代理）却没有任何可恢复的运行目录时，同样记无法自动恢复（需人工处置）。
+    返回 ``summary``（进预览与批准摘要，不含观测时刻）与 ``snapshot``（留证）。
+    """
+
+    entries: list[dict[str, Any]] = []
+    unrecoverable: list[dict[str, Any]] = []
+    root = candidate_runtime_root(host_data_root)
+    if root.exists() or root.is_symlink():
+        if root.is_symlink() or not root.is_dir():
+            raise ConfigurationError("宿主候选运行目录不可信。")
+        for child in sorted(root.iterdir()):
+            if child.name == RUNTIME_LOCK_NAME:
+                continue
+            entry, reason = _restore_state_entry(child)
+            if entry is not None:
+                entries.append(entry)
+            else:
+                unrecoverable.append({"name": child.name, "reason": reason})
+    snapshot = probe_gateway_environment(manifest, host_data_root, "readiness", deadline=deadline)
+    failures = readiness_failures(snapshot)
+    residue = sorted(set(failures) & RESIDUE_FAILURES)
+    mutations = sorted(set(residue) - {"runtime-residue"})
+    if mutations and not entries:
+        unrecoverable.append({"name": None, "reason": f"网关有改动残留 {mutations}，但没有带运行前原值的运行目录可以恢复"})
+    return {
+        "summary": {"entries": entries, "unrecoverable": unrecoverable, "residue_failures": residue},
+        "snapshot": snapshot,
+    }
+
+
+def residue_present(summary: Mapping[str, Any] | None) -> bool:
+    return bool(summary) and bool(summary.get("entries") or summary.get("unrecoverable") or summary.get("residue_failures"))
+
+
+def _run_restore_only(argv: Sequence[str], environment: Mapping[str, str], timeout: float) -> Any:
+    """执行边界（离线测试替换它）：宿主脚本的 --restore-only。"""
+
+    import subprocess
+
+    return subprocess.run(list(argv), env=dict(environment), capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def restore_runtime_entry(layout: Any, host_data_root: Path, entry: Mapping[str, Any]) -> dict[str, Any]:
+    """对一个带运行前原值的宿主运行目录执行宿主脚本的 ``--restore-only``（工具执行副本里的同一脚本），返回结果与报告。"""
+
+    target = candidate_runtime_root(host_data_root) / str(entry["name"])
+    script = capture._host_path(f"{layout.capture_tool_root}/{claude_upgrade_plan.CANDIDATE_SCRIPT}", layout)
+    environment = {**os.environ, "CLAUDE_CANDIDATE_CAPTURE": claude_upgrade_plan.CANDIDATE_CAPTURE_GATE}
+    try:
+        completed = _run_restore_only(["bash", str(script), RESTORE_ONLY_FLAG, str(target)], environment, RESTORE_ONLY_TIMEOUT_SECONDS)
+    except Exception as error:  # noqa: BLE001 —— 超时或无法启动一律记失败，由调用方判清理未完成
+        return {"name": entry["name"], "exit_code": None, "status": "failed", "error": f"{type(error).__name__}: {str(error)[:300]}", "report": None}
+    report: dict[str, Any] | None = None
+    lines = [line for line in str(completed.stdout).splitlines() if line.strip()]
+    if lines:
+        try:
+            parsed = json.loads(lines[-1])
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, Mapping) and parsed.get("schema_version") == CLEANUP_REPORT_SCHEMA:
+            report = dict(parsed)
+    restored = completed.returncode == 0 and report is not None and report.get("status") == "restored" and not target.exists()
+    return {
+        "name": entry["name"],
+        "exit_code": completed.returncode,
+        "status": "restored" if restored else "failed",
+        "error": None if restored else str(completed.stderr)[-500:],
+        "report": report,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 生产 selector 只读观察
 # ---------------------------------------------------------------------------
 

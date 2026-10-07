@@ -443,6 +443,9 @@ def sql(query):
     if q.startswith("delete from proxies"):
         state["proxies"] = {}
         return ""
+    if q.startswith("select coalesce(string_agg(id::text"):
+        name = re.search(r"where name = '([^']+)'", q).group(1)
+        return ",".join(sorted(key for key, stored in state["proxies"].items() if f"'{name}'" in stored))
     if "select key from api_keys" in q:
         return "sk-candidate-key"
     if "coalesce(credentials->>'access_token','') from accounts" in q:
@@ -491,6 +494,12 @@ if command == "exec":
         done(hashlib.sha256(content.encode()).hexdigest() + "  " + rest[1] + "\n")
     if rest[0] == "python3" and rest[1].endswith("/claude_fw_e_relay.py"):
         state["relay_target"] = container
+        if os.environ.get("FAKE_KILL_SCRIPT") == "1":
+            # 仿真强杀：对宿主脚本（本进程的父进程）发 SIGKILL，trap 不会执行，网关留在被修改的样子。
+            import signal
+            save()
+            os.kill(os.getppid(), signal.SIGKILL)
+            sys.exit(137)
         if "--dry-run" in rest:
             state["dry_run_observed"] = {"runtime_exists": Path(os.environ["FAKE_RUNTIME_HOST"]).exists()}
             done(json.dumps({"schema_version": "claude-code-fw-e-relay-plan/v1", "side": "candidate"}) + "\n")
@@ -551,8 +560,8 @@ for name in sys.argv[1:]:
 '''
 
 
-class CandidateScriptTests(unittest.TestCase):
-    """宿主侧候选采集脚本端到端（仿真 docker）。"""
+class _CandidateScriptCase(unittest.TestCase):
+    """宿主侧候选采集脚本的仿真环境（仿真 docker、监督器与 sha256sum）与公共动作；不含用例。"""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -574,7 +583,7 @@ class CandidateScriptTests(unittest.TestCase):
         self.original_hosts = "127.0.0.1 localhost\n172.30.0.20 abc123\n"
         self.state = {
             "calls": [], "account_shape": "anthropic|oauth|NULL|live", "eligible": "7", "proxy": "3", "fallback": None,
-            "gate": "|", "proxies": {}, "next_proxy": 77, "service_id": "svc-1", "keeper_running": True,
+            "gate": "|", "proxies": {}, "next_proxy": 77, "service_id": "5" * 64, "keeper_running": True,
             "custom_ca_present": False, "hosts": self.original_hosts, "staged_hosts": "", "ca_bundle": "BUNDLE\n",
             "capture_ids": {"capture-cli": CAPTURE_ID, CAPTURE_ID: CAPTURE_ID, "capture-cli-other": "e" * 64},
         }
@@ -631,6 +640,10 @@ class CandidateScriptTests(unittest.TestCase):
         self.assertEqual((state["gate"], state["keeper_running"], state["custom_ca_present"]), ("|", True, False))
         self.assertEqual(state["hosts"], self.original_hosts)
 
+
+class CandidateScriptTests(_CandidateScriptCase):
+    """宿主侧候选采集脚本端到端（仿真 docker）。"""
+
     def test_complete_run_isolates_and_restores_exactly(self) -> None:
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -671,7 +684,8 @@ class CandidateScriptTests(unittest.TestCase):
         self.assertEqual(self.report()["status"], "restoration_failed")
         self.assertFalse(self.report()["account_proxy_restored_equal"])
         remaining = sorted(path.name for path in self.runtime_host.rglob("*") if path.is_file())
-        self.assertEqual(remaining, ["ca-certificates.before", "capture-ca.crt", "hosts.before"])
+        # 秘密已删；运行前快照与原值（state.json，c2 的 --restore-only 依据）保留。
+        self.assertEqual(remaining, ["ca-certificates.before", "capture-ca.crt", "hosts.before", "state.json"])
 
     def test_read_only_prechecks_make_no_changes(self) -> None:
         for label, state, message in (
@@ -782,6 +796,92 @@ class CandidateScriptTests(unittest.TestCase):
         self.assertEqual(observed["admin"], f"hdr.{segment}.sig")
         self.assertEqual(observed["gateway"]["trigger"], "gateway-account-refresh")
         self.assertFalse(self.runtime_host.exists())
+
+
+class CandidateRestoreOnlyTests(_CandidateScriptCase):
+    """强杀之后的 --restore-only（B4-01 c2）：原值取自 restore/state.json，按现场状态恢复，报告只打到 stdout。"""
+
+    def kill_mid_capture(self, **state) -> dict:
+        result = self.run_script(environment={"FAKE_KILL_SCRIPT": "1"}, **state)
+        self.assertEqual(result.returncode, -9, result.stderr)
+        killed = self.final_state()
+        # 被杀时 trap 没有执行：临时代理挂在账号上、临时 CA 在、keeper 停着、运行目录与秘密都还在。
+        self.assertEqual((killed["proxy"], killed["custom_ca_present"], killed["keeper_running"]), ("77", True, False))
+        self.assertTrue((self.runtime_host / "api-key").is_file())
+        return killed
+
+    def restore_only(self, target: Path | None = None, *, environment: dict | None = None, extra: list[str] | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(self.script), "--restore-only", str(target or self.runtime_host), *(extra or [])],
+            env={**self.environment, **(environment or {})}, capture_output=True, text=True, timeout=120,
+        )
+
+    def test_state_is_persisted_before_mutation_without_secrets(self) -> None:
+        self.kill_mid_capture()
+        path = self.runtime_host / "restore" / "state.json"
+        self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600")
+        document = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(document["schema_version"], "claude-candidate-gateway-restore-state/v1")
+        values = document["values"]
+        self.assertEqual((values["original_proxy_state"], values["keeper_was_running"]), ("3|NULL", "true"))
+        self.assertEqual(values["proxy_name"], f"claude-candidate-cid-{self.probe}")
+        text = path.read_text(encoding="utf-8")
+        for secret in ("sk-candidate-key", "tok-access", "tok-refresh"):
+            self.assertNotIn(secret, text)
+
+    def test_restore_only_restores_everything_after_sigkill(self) -> None:
+        self.kill_mid_capture()
+        result = self.restore_only()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["schema_version"], report["status"]), ("claude-candidate-gateway-cleanup/v1", "restored"))
+        self.assertEqual(
+            report["found"],
+            {"temporary_proxy": True, "account_bound_to_temporary_proxy": True, "custom_ca": True, "keeper_stopped": True},
+        )
+        self.assertTrue(all(report[key] for key in ("account_proxy_restored_equal", "account_gate_restored_equal",
+                                                    "hosts_sha256_equal", "ca_bundle_sha256_equal")))
+        self.assert_restored(self.final_state())
+        self.assertFalse(self.runtime_host.exists())
+        # 不写回原证据根（那里已经做过权限收口）。
+        self.assertFalse((self.data / "runs").exists())
+        # 服务重启经监督器的出口维护声明（清理形态）。
+        self.assertIn(["restart", "sub2apiplus"], [call for call in self.final_state()["calls"] if call[0] == "restart"])
+
+    def test_restore_only_refusals_and_failures(self) -> None:
+        self.kill_mid_capture()
+        for label, kwargs, message in (
+            ("缺开关", {"environment": {"CLAUDE_CANDIDATE_CAPTURE": "no"}}, "CLAUDE_CANDIDATE_CAPTURE"),
+            ("多余参数", {"extra": ["x"]}, "--restore-only 只接受"),
+            ("不在运行根下", {"target": self.root}, "runtime/claude-candidate"),
+        ):
+            with self.subTest(label=label):
+                result = self.restore_only(**kwargs)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+        state_path = self.runtime_host / "restore" / "state.json"
+        original = state_path.read_text(encoding="utf-8")
+        tampered = json.loads(original)
+        tampered["values"]["proxy_name"] = "claude-candidate-other"
+        state_path.write_text(json.dumps(tampered), encoding="utf-8")
+        result = self.restore_only()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("临时代理名", result.stderr)
+        state_path.unlink()
+        result = self.restore_only()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("人工处置", result.stderr)
+        state_path.write_text(original, encoding="utf-8")
+        state_path.chmod(0o600)
+        # 账号挂着的不是本轮临时代理：不动账号，核验失败、退出 97、保留运行前快照。
+        current = self.final_state()
+        current["proxy"] = "55"
+        self.state_path.write_text(json.dumps(current))
+        result = self.restore_only()
+        self.assertEqual(result.returncode, 97, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "restoration_failed")
+        self.assertEqual(self.final_state()["proxy"], "55")
+        self.assertTrue((self.runtime_host / "restore" / "hosts.before").is_file())
 
 
 class CandidateScriptStaticTests(unittest.TestCase):
