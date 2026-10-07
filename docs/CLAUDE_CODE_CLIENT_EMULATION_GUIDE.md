@@ -1560,13 +1560,14 @@ VC-2 若发现某项迁移判断仍缺目标事实，只返回 VC-1 补采该项
 <a id="claude-vc-2"></a>
 ## 4.2 VC-2 逐规则判定差异
 
-- **输入**：VC-1 封存的目标身份、SinkInventory、DiscoveryInventory、语义候选、跨来源矩阵、
-  EvidencePackage，以及当前基线 RequiredRules 和 Campaign 用途。
-- **操作与工具**：在全离线条件下生成分类草案，逐项完成 discovery／candidate 终态处置，判定
-  `inherit/change/condition_change/add/delete`，生成原子断言并按实现责任归并为目标 RequiredRules。
-- **产物**：DiscoveryDispositionLedger、CandidateResolutionLedger、RuleMigrationLedger、目标
-  RequiredRules manifest、AtomicAssertionLedger、`affected_rules／inherited_rules`、清零收据和
-  `rule_classification_recorded` 事实。
+- **输入**：VC-1 封存的目标身份、SinkInventory、DiscoveryInventory、语义候选与候选分母、跨来源矩阵、
+  生产现状清单、EvidencePackage，以及当前基线 RequiredRules 和 Campaign 用途。
+- **操作与工具**：`classify` 在全离线条件下生成机器草案，审核人修订后批准，三种调用都是父监督器派发的 VC-2
+  批次动作：逐项完成 discovery／candidate 终态处置，判定 `inherit/change/condition_change/add/delete`，生成原子
+  断言并按实现责任归并为目标 RequiredRules。
+- **产物**：`classification/draft/<rev>/` 下的六个文件（目标 RequiredRules manifest、RuleMigrationLedger、
+  AtomicAssertionLedger、DiscoveryDispositionLedger、场景清单与画像补丁计划）、批准副本、清零收据
+  `classification/result.json`、`rule_classification_recorded` 事实与 VC-2 checkpoint。
 - **完成标志**：发现、候选、迁移、原子断言及其归属全部闭合；缺失、重复、孤儿引用、循环引用、
   `blocked` 和其他未决项均为零。
 - **失败恢复**：
@@ -1580,27 +1581,43 @@ VC-2 只回答“目标版本的每项出站责任相对基线如何变化”。
 
 ### 4.2.1 执行步骤与阶段产物
 
-1. 校验 VC-1 `evidence_recorded` checkpoint、目标身份、SinkInventory、DiscoveryInventory、CaptureIndex、
-   跨来源矩阵和 EvidencePackage 摘要，并加载当前基线 RequiredRules；任一输入漂移都不得开始分类。
-2. 在新的只写一次目录生成分类草案。FW-E `rule-assessments` 中的历史兼容预评估只作为编辑线索；既有规则
-   默认保持 `blocked`，不得根据旧结论、相同字符串或摘要相近自动填为 `inherit`。
-3. 从已封存 P／R／J／M 离线复算可独立验证的原子断言，逐项绑定适用条件、官方正例、条件对照或零违规
-   分母、证据通道、场景、连接和原始字节位置；本步骤不得补发请求。
-4. 逐项处置全部 discovery 和 `CAND-*`，使每个源项落到规则、支撑事实、受管出站、非出站、目标缺失或
-   规范重复项之一；聚类不能减少源项分母。
-5. 按第二部分的复合实现责任粒度，把一条或多条原子断言归并到 RequiredRule；客户端本地命题只能进入
-   scenario-only 场景组，不能伪装成出站规则。
-6. 对每条基线规则和目标新增规则定稿迁移决定，生成目标规则全集、RuleMigrationLedger，并派生
-   `affected_rules／inherited_rules`；两组必须互斥且覆盖完整迁移分母。
-7. 执行数量、引用、证据、归属和边界门禁；先以内容寻址对象封存 RuleMigrationLedger 与
-   AtomicAssertionLedger，再通过 `rule-classification-record` 把二者、原 VC-1 EvidenceFact 和
-   EvidencePackage 绑定为同一 Campaign 的 `rule_classification_recorded`。失败草案不得追加事实或进入
-   画像生成与批准流程。
+VC-2 的三种调用都由 `vc-batch.sh <NEW> <IN> VC-2 <序号> VC-1 <计划>` 派发为 VC-2 批次（动作计划用
+`claude_upgrade_batch.action_plan` 生成，命令是受管 Python 直接调 `claude_upgrade.py`），全程离线零请求：
 
-2.1.226 的现有实现由 `claude_fw_f_v21_finalize.py`、`claude_fw_f_discovery_clearance.py` 和
-`claude_required_rules_2_1_226.json` 完成实测复算、发现清零及 110→40 映射，具体命令见 §2.1.3。
-这些文件绑定当前版本、历史分母和固定计数，只是本阶段合同的已完成实例；后继版本必须使用新策略、
-新输出目录和由目标证据动态产生的计数，不能把 2.1.226 的结果直接当成新版本分类。
+1. **机器草案**（`classify --campaign-dir <C>`）：输入一律取 VC-1 封存——VC-1 checkpoint 逐级重放到 VC-0，Store
+   检查点必须是 `evidence_recorded`、有效工具身份等于当前受管代码，DiscoveryInventory、候选分母、CaptureIndex、
+   跨来源矩阵、目标 SinkInventory、场景清单与生产现状清单都经 EvidencePackage 的完整性清单取得并逐个核摘要；基线
+   取总计划冻结的 `inputs.baseline_rules`。在 `classification/draft/rev-NNNN/` 写只写一次的 revision：每条基线规则的
+   迁移决定与证据等级都是 `blocked`，每个发现项、候选与只记录事实的终态绑定都为空；只预填不构成结论的线索（跨来源
+   矩阵给出的规则证据项、这些证据项共有的适用条件、VC-1 处置与 SPEC 关联）。同一输入重跑返回同一 revision。
+2. **审核人修订**（`classify --from-revision <rev> --revision-input <目录>`）：把某个 revision 的六个文件复制出去逐项
+   处置后整目录交回，按字节写成新 revision，旧 revision 不覆盖；父 revision 的输入已漂移时拒绝，须重新生成机器草案。
+   审核人在修订中完成：
+   - 从已封存 P／R／J／M 离线复算可独立验证的原子断言，逐项绑定适用条件、官方正例、条件对照或零违规分母、证据
+     通道、场景、连接和原始字节位置；不得补发请求；
+   - 逐项处置全部 discovery、`CAND-*` 与只记录事实，使每个源项落到规则、支撑事实、受管出站、非出站、目标缺失或
+     规范重复项之一；聚类不能减少源项分母；
+   - 按第二部分的复合实现责任粒度，把一条或多条原子断言归并到 RequiredRule；客户端本地命题只能进入 scenario-only
+     场景组，不能伪装成出站规则；
+   - 对每条基线规则和目标新增规则定稿迁移决定，生成目标规则全集与 RuleMigrationLedger，并派生
+     `affected_rules／inherited_rules`；两组必须互斥且覆盖完整迁移分母。
+3. 草案与修订调用都按当前工具对该 revision 复算 §4.2.4 的清零门禁并给出 `review_sha256`（直接执行时退出码 2；在
+   父批次里是合法暂停点，退出 0）。门禁结果不写进 revision，工具演进后重跑即得到新口径下的结论与摘要。
+4. **批准**（`classify --approve-revision <rev> --approve-review-sha256 <sha>`）：核对 revision 未被改动、输入未漂移、
+   门禁 closed、审核摘要与当前复算一致；先以 `artifact-seal` 封存 RuleMigrationLedger 与 AtomicAssertionLedger，再用
+   `rule-classification-record` 把二者、原 VC-1 EvidenceFact 和 EvidencePackage 绑定为同一 Campaign 的
+   `rule_classification_recorded`，随后写 `classification/approved/`（被批准 revision 的逐字副本）、清零收据
+   `classification/result.json` 与 VC-2 checkpoint（执行项为空、复用项为 `inherited_rules`、零请求）。失败草案不得
+   追加事实或进入画像生成与批准流程。
+
+分母一律由输入计算：发现项数等于 DiscoveryInventory 条目数，候选数等于候选分母各组候选 ID 之并，原子断言数与规则数
+以基线清单为起点，只记录事实数等于封存证据里识别出的条目数；当前 Campaign 的计数从清零收据
+`classification/result.json` 读取。
+
+2.1.226 已完成实例：`claude_fw_f_v21_finalize.py`、`claude_fw_f_discovery_clearance.py` 与
+`claude_required_rules_2_1_226.json` 完成了实测复算、发现清零及规则映射——发现项 7368、候选 593、基线规则 110 映射
+为 40 条 RequiredRules，命令见 §2.1.3。这些文件绑定当时的版本、历史分母和固定计数，只是本阶段合同的已完成实例；
+后继版本用 `classify`，计数由目标证据动态产生，不能把 2.1.226 的结果直接当成新版本分类。
 
 ### 4.2.2 发现终态与迁移分类
 
@@ -1616,10 +1633,18 @@ VC-2 只回答“目标版本的每项出站责任相对基线如何变化”。
 | `target_absent_proven` | 目标 stable 的静态不可达／不存在证据；适用时补充条件感知的运行负例 |
 | `duplicate_bound` | 规范发现 ID；引用链必须无环并最终落到以上非重复终态 |
 
-`DiscoveryDispositionLedger` 必须绑定 VC-1 的 DiscoveryInventory、CaptureIndex、跨来源矩阵和
-EvidencePackage 摘要；总数与 ID 集合完全一致，每项唯一解决且所有引用存在并双向闭合。
-`unclassified`、`mapped_validation`、`catalogued_context`、未收敛 `CAND-*`、无主事实、缺失、重复和
-循环引用必须全为 0。SupportEnvelope 缩小不能替代发现项处置，发现项也不得原位改名为规则。
+`DiscoveryDispositionLedger`（`discovery-disposition-ledger.json`）分三个分区：VC-1 DiscoveryInventory 的全部发现项、
+候选分母的全部 `CAND-*` 等候选（候选处置合在这里，不另成文件）、FW-F v5 的只记录事实。它必须绑定 VC-1 的
+DiscoveryInventory、CaptureIndex、跨来源矩阵和 EvidencePackage 摘要；总数与 ID 集合完全一致，每项唯一解决且所有
+引用存在并双向闭合。`unclassified`、`mapped_validation`、`catalogued_context`、未收敛 `CAND-*`、无主事实、缺失、
+重复和循环引用必须全为 0。`managed_egress_bound` 的出站 ID 必须在 VC-1 封存的生产现状清单里，`duplicate_bound`
+只能指向同分区另一项。SupportEnvelope 缩小不能替代发现项处置，发现项也不得原位改名为规则。
+
+只记录事实来自 v5 场景目录：两个灰度 Header 与 `/api/oauth/usage` 用量查询只记录、不让取证失败，每条事实以稳定
+ID `OBSERVED-<probe>-<维度>` 进入只记录事实分区，原样保留是否可观测、是否出现、出现的取值、请求计数与条件。冻结
+场景清单里以只记录维度命名的场景，其每个 probe 都必须产出对应事实，缺一即失败关闭。未出现（合法零流量）只能绑定
+`supporting_fact_bound` 或 `target_absent_proven`，不得 `rule_bound`；不可观测的一律阻断、返回 VC-1 补证；出现了的
+事实可以绑定到规则或支撑事实。对应规则是否因此 `change`／`condition_change`／`delete`，由审核人在迁移台账里逐条判定。
 
 规则迁移与 discovery 终态是两个维度：前者描述 RequiredRule 如何变化，后者描述原始发现如何归属。
 每条基线规则必须恰有一个迁移决定，每条目标新增规则必须恰有一个 `add` 来源：
@@ -1714,11 +1739,13 @@ VC-1 checkpoint = evidence_recorded
 ```
 
 VC-2 不建立画像状态 checkpoint；`rule_classification_recorded` 归属 evidence dimension，Campaign 在 VC-3
-签发 ApprovalFact 前仍保持 `evidence_recorded`。机器入口固定为先用 `artifact-seal` 封存两个 Ledger，再用
-`rule-classification-record` 追加分类事实；不得再次执行 `evidence-record` 或替换 EvidencePackage。
-封存前修订必须写入新的 draft revision，不能覆盖旧草案；封存后若迁移决定、RequiredRules 或断言归属
-变化，必须建立后继 Campaign 并从 VC-2 继续。若只是缺少目标事实，则返回 VC-1 定向补证，其他官方证据
-继续只读复用；任何恢复分支都不得在 VC-2 发送请求或提前修改画像和实现。
+签发 ApprovalFact 前仍保持 `evidence_recorded`。`classify` 批准在同一动作里先用 `artifact-seal` 封存两个 Ledger，
+再用 `rule-classification-record` 追加分类事实；不得再次执行 `evidence-record` 或替换 EvidencePackage。批准在任一步
+被强杀后，对账并重跑同一批准命令逐步复用、事实数不增；VC-2 批次有阶段幂等重派合同，对账后按批次身份重派。
+封存前修订必须写入新的 draft revision，不能覆盖旧草案；批准之后再批准同一 revision 只逐字复用，批准另一 revision
+或再生成草案一律拒绝；迁移决定、RequiredRules 或断言归属需要变化时，必须建立后继 Campaign 并从 VC-2 继续。若只是
+缺少目标事实，则返回 VC-1 定向补证，其他官方证据继续只读复用；任何恢复分支都不得在 VC-2 发送请求或提前修改画像
+和实现。
 
 <a id="claude-vc-3"></a>
 ## 4.3 VC-3 生成目标画像
@@ -1726,12 +1753,14 @@ VC-2 不建立画像状态 checkpoint；`rule_classification_recorded` 归属 ev
 - **输入**：VC-2 封存的 DiscoveryDispositionLedger、RuleMigrationLedger、目标 RequiredRules、
   AtomicAssertionLedger、`affected_rules／inherited_rules`、模型能力差异，以及 VC-0 冻结的当前
   Active／Rollback、Campaign 用途和已封存 EvidencePackage。
-- **操作与工具**：从当前 Active 画像派生目标草案，只应用版本身份、`affected_rules` 和已批准模型能力
-  差异，生成并联合核对 ProfileSchema、Snapshot、Wire、ReleaseArtifact、ModelCapabilityCatalog、
-  SupportEnvelope、两个 Inventory、场景、断言与 Persona 派生；先以 EvidenceApprovalFact 批准原
-  EvidencePackage 与 VC-2 分类事实的组合，再签发 ProfileApprovalFact，全程不改写 EvidencePackage。
-- **产物**：阶段专用 Profile policy、目标画像及内容寻址 Release、联合审批包、EvidenceApprovalFact、
-  ProfileApprovalFact、`official_sealed → profile_approved` checkpoint 和未入生产的暂存 Catalog。
+- **操作与工具**：`prepare-profile` 从当前 Active 画像派生目标草案，只应用版本身份、`affected_rules` 和已批准
+  模型能力差异，第一次准备批准时签发 EvidenceApprovalFact；`stage-profile` 生成并联合核对 ProfileSchema、
+  Snapshot、Wire、ReleaseArtifact、ModelCapabilityCatalog、SupportEnvelope、两个 Inventory、场景、断言与 Persona
+  派生，批准时签发 ProfileApprovalFact。两者都是父监督器派发的 VC-3 批次动作，全程离线零请求，不改写
+  EvidencePackage。
+- **产物**：阶段专用 Profile policy、准备包与目标画像、联合清单与内容寻址联合对象、EvidenceApprovalFact、
+  ProfileApprovalFact、`official_sealed → profile_approved` checkpoint、暂存 Release（`profile/release/`）、阶段结果
+  `profile/result.json` 与 VC-3 checkpoint。
 - **完成标志**：Evidence 与画像批准顺序闭合，全部画像差异具有规则或模型事实来源，联合制品 ID、计数和
   摘要一致，生产 Active／Rollback 与 selector 未改变，且尚未创建 Candidate。
 - **失败恢复**：
@@ -1745,35 +1774,60 @@ Candidate，不运行 official／candidate PAIR，也不签发 AcceptanceFact；
 
 ### 4.3.1 画像派生与差异约束
 
-开始生成前，必须校验 `rule_classification_recorded` 对两个 Ledger、原 EvidenceFact／EvidencePackage 的绑定，
-并复算当前 Active／Rollback 和 Campaign 用途的摘要。
+VC-3 在 VC-1／VC-2 的同一个受管 Store 里继续，`prepare-profile` 与 `stage-profile` 都由 `vc-batch.sh <NEW> <IN> VC-3
+<序号> VC-2 <计划>` 派发。开始生成前，必须校验 `rule_classification_recorded` 对两个 Ledger、原
+EvidenceFact／EvidencePackage 的绑定，并复算当前 Active／Rollback 和 Campaign 用途的摘要。当前 Active 一律取总计划
+冻结的 `inputs.active_release_catalog` 与 `inputs.active_profile`，命令行不得另给；Release 目录 `production_active`
+选择器指向的 Release，其画像摘要必须等于冻结的画像文件。`prepare-profile` 有三种调用：
+
+1. **机器草案**（`prepare-profile --campaign-dir <C>`）：在 `profile/prepare/draft/rev-NNNN/` 写只写一次的 revision，含
+   `profile-policy.json`（阶段专用 Profile policy，由输入派生、只读）、`rule-patches.json`（受影响规则的画像补丁，
+   审核人逐条填）、`model-capability-patch.json`（已批准的模型能力差异，可为空）、`joint-inputs.json`（联合制品里不能
+   由输入推出的事实：生产入口与出站清单、目标处置、支持范围、边界断言、Persona 派生、兼容边界与部署计划）与
+   `wire-projection-policy.json`（Active 版本的 Wire 投影策略，只换版本号）；补丁一律为空，门禁因此 blocked。
+2. **修订**（`--from-revision <rev> --revision-input <目录>`）：审核人处置五个文件后整目录交回，写成新 revision。
+3. **批准**（`--approve-revision <rev> --approve-review-sha256 <sha> --approved-by <人>`）：核对 revision 未被改动、
+   输入未漂移、门禁 closed、审核摘要一致；第一次准备批准时签发 EvidenceApprovalFact（Store 到 `official_sealed`），
+   之后写准备包 `profile/prepare/approved/<rev>/` 与准备结果 `profile/prepare/results/<rev>.json`。
+
 目标画像从当前 Active 的同一 Schema／DialectCompiler 派生，目标证据拥有行为选择权；“target-first”
 表示不能让旧版 fixture 限制目标事实，并不表示丢弃 Active 结构后从空白画像重新拼装：
 
 ```text
 target_profile = current_active_profile
                + version_identity_patch
+               + model_identity_from_capability_catalog
                + rule_patches[affected_rules]
                + approved_model_capability_patch
 
 profile_diff_paths
 ⊆ version_identity_paths
+ ∪ model_identity_paths
  ∪ rule_field_paths[affected_rules]
  ∪ approved_model_capability_paths
 ```
 
-每个画像补丁必须记录唯一 owner、JSON path、`before／after`、迁移决定和证据引用。`inherited_rules` 对应
-字段必须保持不变；`add／change／condition_change` 只能修改自身画像落点，`delete` 只能从目标选择面移除
-已证明不可达的绑定，不能删除历史 Release、规则编号或证据。依赖扩圈必须回指 VC-2 已登记的直接依赖，
-不得把完整画像重写伪装成版本升级。
+版本身份替换只做精确值替换：Active 的版本、平台与二进制摘要，以及 `version=`／`platform=`／`binary_sha256=` 三种
+条件串，替换成 Campaign 的目标值，证据路径与说明文字不做子串替换。模型能力目录按批准的 Wire 投影策略从 VC-1 证据
+投影，画像 `identity` 里的支持模型、别名策略、未知模型策略与模型能力目录摘要随目录派生（`model_identity_paths`），
+补丁不得再碰这四个落点；模型能力补丁只能落在模型闭集、别名与未知模型策略、能力目录摘要和模型特有 `fallbacks` 之内。
+
+每个画像补丁必须记录唯一 owner、JSON path、`before／after`、迁移决定和证据引用；路径用 JSON Pointer，对象数组有
+唯一键字段时段写成 `<字段>=<值>`（例如 `/rules/spec_id=SPEC-BODY-001/title`）。每条受影响规则至少一个操作，路径必须
+落在 VC-2 画像补丁计划为该规则登记的落点之内，不同 owner 的操作不得重叠，每个操作都必须产生差异。`inherited_rules`
+对应字段必须保持不变；`add／change／condition_change` 只能修改自身画像落点，`delete` 只能从目标选择面移除已证明
+不可达的绑定，不能删除历史 Release、规则编号或证据。目标画像的规则全集必须等于 VC-2 目标规则，严格端点与
+`feature_matrix` 不得引用目标规则之外的 SPEC。依赖扩圈必须回指 VC-2 已登记的直接依赖，不得把完整画像重写伪装成
+版本升级。`profile_diff_paths` 写进派生收据，批准后随准备包冻结。
 
 目标生成完成后，再用同一 Schema／DialectCompiler 表达 VC-0 冻结的 Active／Rollback fixture。当前
 2.1.226 Campaign 中的 2.1.220 只是该次升级的历史 baseline fixture；后继版本必须使用当次 VC-0 身份，
 不能永久把 2.1.220 当成升级基线或目标设计权威。
 
-VC-3 使用只包含本阶段已知事实的 Profile policy，至少冻结目标与基线身份、Campaign 用途、VC-2 输入
-摘要、动态规则／断言计数、Schema／Compiler、模型能力差异和生成工具身份。不得预填尚未产生的
-Candidate ID、源码／镜像摘要、独立官方复测、DMIT 收据或 AcceptanceFact。
+VC-3 使用只包含本阶段已知事实的 Profile policy（`claude-upgrade-profile-policy/v1`），冻结目标与基线身份、Campaign
+用途、Active 目录与画像及投影策略的绑定、VC-2 输入摘要、动态规则／断言计数、版本身份替换、模型能力落点和生成器与
+投影模块；生成时的有效工具身份冻结在准备结果里。不得预填尚未产生的 Candidate ID、源码／镜像摘要、独立官方复测、
+候选环境收据或 AcceptanceFact。
 
 当前 2.1.226 曾使用下列历史聚合入口：
 
@@ -1804,10 +1858,16 @@ RuleMigrationLedger、AtomicAssertionLedger、`affected_rules／inherited_rules`
 
 ### 4.3.2 联合制品与一致性审核
 
-生成顺序固定为：目标 ProfileSchema／Snapshot → ModelCapabilityCatalog → Wire／ReleaseArtifact →
-SupportEnvelope → ProductionIngressInventory／EgressDispositionInventory → 场景与断言绑定 → Persona 派生、
-compatibility 边界和三个运行 Envelope。每项产物写入新的只写一次目录并内容寻址，不能改写当前 Active、
-Rollback 或历史对象。
+`stage-profile` 有两种调用。**预览**（`stage-profile --campaign-dir <C>`）从最新批准的准备包确定性构造联合制品——
+PersonaDescriptor、ProfileSchema、Snapshot、ReleaseBundle（绑定 Wire、模型能力目录与 Release 的摘要）、
+ReleaseArtifact、ModelCapabilityCatalog、入口与出站的 Observation／Inventory、边界断言、SupportEnvelope、
+PersonaDerivation、CompatibilityBoundary、ScenarioPlan 与 DeploymentPlan——按 Store 的内容寻址算法预先算出引用，写
+`profile/stage/<代号>/joint-manifest.json` 与 `stage-preview.json`，给出联合摘要 `joint_sha256`（直接执行时退出码 2，
+在父批次里是合法暂停点）。**批准**（`--approve-joint-sha256 <sha> --approved-by <人>`）按依赖顺序以
+`artifact-seal --allow-existing` 封存全部联合制品，再用 `profile-approve` 追加 `profile_approved`，随后写暂存 Release
+`profile/release/`（布局对应仓库 `catalogdata/claude/`）、阶段结果 `profile/result.json` 与 VC-3 checkpoint（执行项为空、
+复用项为 `inherited_rules`、零请求）。每项产物内容寻址、只写一次，不能改写当前 Active、Rollback 或历史对象；任一步
+被强杀后重跑同一命令逐步复用、事实数不增。
 
 联合审批包至少包含：
 
@@ -1830,15 +1890,21 @@ SupportEnvelope 只能按 Campaign 用途纳入证据等级满足要求的规则
 出站仍须选择 §3.3 三态。ModelCapabilityCatalog、Profile、Wire 和 Release 必须共享同一目标身份；模型
 目录变化不能在 ProfileApprovalFact 之后追加。只有现有 ProfileSchema 或 DialectCompiler 无法表达
 VC-2 已批准的新责任时，才停止 VC-3，按 Framework §5.4 独立修改共享合同并复验受影响 Persona；不得在
-Claude 运行代码中增加临时版本分支。
+Claude 运行代码中增加临时版本分支。生产入口清单、出站处置清单与目标处置由审核人在 `joint-inputs.json` 提供，草案
+阶段即按 Store 合同与 `profile_approved` 写入门禁的跨对象一致性逐项核对：入口别名与调用方闭合、目标处置覆盖完整
+Inventory、SupportEnvelope 只覆盖 `migrated_strict` 入口、DeploymentPlan 的 Active 范围等于 SupportEnvelope、
+ScenarioPlan 精确覆盖目标规则全集与 `migrated_strict` 协议类别、严格端点以 `persona_strict` 绑定同一组 SPEC，
+`production_replacement` 用途下目标规则的证据等级必须是 `verified`。
 
 VC-3 只生成未入库的暂存 Release／Catalog。纳入同源 Candidate 源码树属于 VC-4，生产 Catalog 注册和
-selector 切换属于 VC-6。`generate_claude_fw_g_profile.py` 只有在其最终 Profile、Wire、模型目录和 Release
-全部进入同一份批准摘要时，才能作为本阶段的确定性投影工具；当前历史输出只按 §3.4／§3.6 审计。
+selector 切换属于 VC-6。Wire 与模型能力目录由受管模块 `claude_upgrade_wire_projection.py` 按 Wire 投影策略
+`claude_upgrade_wire_projection_<版本下划线>.json` 从 VC-1 证据确定性投影；仓库根的 `tools/generate_claude_fw_g_profile.py`
+只重放 2.1.226 的历史生成（投影逻辑从受管模块导入），不是本阶段入口，历史输出只按 §3.4／§3.6 审计。
 
 ### 4.3.3 EvidenceApprovalFact、ProfileApprovalFact、退出与恢复
 
-VC-2 分类事实封存后，审核者签发 EvidenceApprovalFact；该事实必须同时引用原 `evidence_recorded` 事实、
+VC-2 分类事实封存后，第一次 `prepare-profile` 批准签发 EvidenceApprovalFact（每个 Campaign 只有一份，之后批准新的
+准备 revision 时沿用）；该事实必须同时引用原 `evidence_recorded` 事实、
 未改写的 EvidencePackage v3 和同一 Campaign 的 `rule_classification_recorded`。分类事实再绑定
 RuleMigrationLedger 与 AtomicAssertionLedger，因此无需、也禁止把 VC-2 结果补写进 EvidencePackage。
 批准通过后 Campaign checkpoint 达到 `official_sealed`；缺少 EvidenceApprovalFact 时不得签发画像批准。
@@ -1850,9 +1916,13 @@ ProfileApprovalFact。该事实必须引用上述 EvidenceApprovalFact，并以�
 与发现清单、EvidencePackage、Profile、Wire、Release、ModelCapabilityCatalog、SupportEnvelope、两个
 Inventory、场景、断言、Persona 派生、compatibility 边界、三个运行 Envelope、隐私模式和 Campaign 用途。
 
-ProfileApprovalFact 不得引用未来 Candidate、构建或镜像，不得预填 official rerun、DMIT 或生产收据，
-也不得更新 Runtime Selector。`claude_fw_g_official_finalize.py` 与 `claude_fw_g_acceptance.py` 分别消费独立
-官方复测、Candidate 和 DMIT 结果，属于 VC-5 的验证与 AcceptanceFact 封存入口，VC-3 禁止执行。
+准备批准之后、`stage-profile` 批准之前，审核人仍可起草、修订并批准新的准备 revision，`stage-profile` 一律采用最新
+批准的一份。ProfileApprovalFact 只批准一次：以不同批准人或不同联合摘要重复批准一律拒绝，之后再起草或批准准备
+revision 也都拒绝。
+
+ProfileApprovalFact 不得引用未来 Candidate、构建或镜像，不得预填 official rerun、候选环境或生产收据，
+也不得更新 Runtime Selector。`claude_fw_g_official_finalize.py` 与 `claude_fw_g_acceptance.py` 是 2.1.226 的历史
+聚合入口，VC-3 禁止执行。
 
 VC-3 的退出条件固定为：
 
@@ -1862,6 +1932,7 @@ VC-2 rule_classification_recorded 已在同一 Campaign 封存
 ∧ checkpoint = official_sealed
 ∧ profile_diff_paths
   ⊆ version_identity_paths
+   ∪ model_identity_paths
    ∪ rule_field_paths[affected_rules]
    ∪ approved_model_capability_paths
 ∧ 联合制品的规则、断言、端点、模型、计数和摘要一致
@@ -1875,37 +1946,58 @@ VC-2 rule_classification_recorded 已在同一 Campaign 封存
 批准前的生成或复算失败只写新的 draft revision，输入未变时可留在 VC-3 重试。发现规则分类错误返回
 VC-2，缺少官方事实返回 VC-1；ProfileApprovalFact 封存后若规则、迁移、画像、模型目录、SupportEnvelope、
 场景、断言、用途或联合摘要变化，必须建立后继 Campaign，并从最早受影响阶段继续。仅后续源码、测试、
-构建或镜像变化时不改写本批准，在 VC-4 建立新的 Candidate。2.1.226 当前批准与续作状态只见
+构建或镜像变化时不改写本批准，在 VC-4 以新 revision 建立新的 Candidate。2.1.226 当前批准与续作状态只见
 §3.4／§3.6，不在本节重复维护。
 
 <a id="claude-vc-4"></a>
 ## 4.4 VC-4 实现固定 Candidate
 
-- **输入**：VC-3 的 ProfileApprovalFact 与联合摘要、未入生产的 Profile／Wire／Release／
-  ModelCapabilityCatalog、SupportEnvelope、两个 Inventory、`affected_rules／inherited_rules`、原子断言、
-  Campaign 用途，以及 VC-0 冻结的构建环境和目标架构。
-- **操作与工具**：只实现 `affected_rules` 及其直接依赖，把批准画像、实现与测试纳入同一最终源码树，
-  从该树构建不可变镜像，生成构建收据并独立冻结 ValidationCandidate。
-- **产物**：候选源码树、测试树、依赖锁、CandidateBuildReceipt、制品 inventory、`candidate_frozen` 事实和
-  VC-5 执行／复用计划。
+- **输入**：VC-3 的 ProfileApprovalFact 与联合摘要、暂存 Release（Profile／Wire／ModelCapabilityCatalog）、
+  SupportEnvelope、两个 Inventory、`affected_rules／inherited_rules`、原子断言、Campaign 用途，以及 VC-0 冻结的
+  构建环境和目标架构。
+- **操作与工具**：只实现 `affected_rules` 及其直接依赖，把批准画像、实现与测试纳入同一最终源码树，从该树
+  构建不可变镜像；`plan-candidate-gates` 与 `record-candidate-build` 两个 VC-4 批次生成门禁计划、复算构建、签发
+  构建收据并在 Store 冻结 ValidationCandidate。
+- **产物**：候选源码树、测试树、依赖锁、门禁计划、CandidateBuildReceipt、制品 inventory、`candidate_frozen` 事实、
+  revision seal、候选构建收据和 VC-4 checkpoint。
 - **完成标志**：实现闭集通过，源码、测试、依赖、画像、Release、模型目录、构建和镜像身份可复算，
   Campaign 到达 `candidate_sealed`，生产 Active／Rollback／selector 未改变且未发起候选请求。
 - **失败恢复**：
   - 失败层：工具、候选源码或预算账务。
   - 对账入口：`reconcile-supervisor-run`；候选作废用 `invalidate-candidate`。
-  - 续跑入口：候选未变时同 revision 续作；源码、测试、依赖、构建或镜像真实变化时，在同一 Campaign 内以
-    `revision-open` 开新 revision，新 revision 对应新 Candidate ID，新候选的抓包从新 attempt 完整执行、
-    不沿用旧镜像证据；规则或画像变化按 Framework §5.3.4 建立后继 Campaign，返回 VC-2 或 VC-3。
+  - 续跑入口：候选未变时同 revision 续作（重入 `vc4-all.sh`，VC-4 批次有阶段幂等重派合同）；源码、测试、依赖、
+    构建或镜像真实变化时，在同一 Campaign 内以 `revision-open` 开新 revision，新 revision 对应新 Candidate ID，新候选的
+    抓包从新 attempt 完整执行、不沿用旧镜像证据；规则或画像变化按 Framework §5.3.4 建立后继 Campaign，返回 VC-2
+    或 VC-3。
 
 VC-4 只回答“如何把已批准画像实现并冻结成可验证的 Candidate”。本阶段不重写 VC-3 事实，不执行
-official／candidate PAIR，不创建 attempt 或 run nonce，不连接 DMIT 运行 Candidate，也不签发
-AcceptanceFact。
+official／candidate PAIR，不创建 attempt 或 run nonce，不运行 Candidate，也不签发 AcceptanceFact。
 
 ### 4.4.1 入库与实现边界
 
 开始实现前必须复算 ProfileApprovalFact、联合摘要和全部输入清单，并确认 `approval_purpose` 与 Campaign
-用途一致。将 VC-3 暂存的 Profile、Wire、Release、ModelCapabilityCatalog 及其只读引用纳入候选源码树或
-确定性构建上下文；只能追加目标对象，不能改写当前 Active、Rollback、历史 Release 或生产 Catalog。
+用途一致：Store 检查点必须是 `profile_approved`，Store 唯一的 ProfileApprovalFact 就是 VC-3 阶段结果登记的那一条，
+目标规则等于 VC-2 目标规则，批准核心与冻结的联合清单逐字相同；计时账本处于 `active`。只能追加目标对象，不能改写
+当前 Active、Rollback、历史 Release 或生产 Catalog。候选链按以下顺序执行（脚本参数见驱动 README）：
+
+1. 采集主机 `vc4-requirements.sh`：派发守卫 → 登记当前候选 revision（按参数 `CAND`：没有 revision 时
+   `revision-open --initial` 建显式 r1，候选已变且旧候选已作废时 `revision-open --supersedes <旧候选>`，同一参数重跑
+   幂等）→ 门禁需求预览写 `$RUNROOT/vc4-gate-requirements.json`。门禁需求由 VC-2、VC-3 阶段结果确定性推出（受影响与
+   继承规则分区、联合摘要、迁移台账副本），`plan-candidate-gates` 只给 Campaign 与候选时是零写入的需求预览。
+2. 本机 `local-claude-candidate-chain.sh`：只读取回 Campaign 总计划、VC-3 产物与需求预览，按摘要链核验后装配三段
+   提交：
+   - A 段（资产）：暂存 Release 的画像与 Wire（`backend/internal/officialegress/catalogdata/claude/profiles/<版本>/` 与
+     `…/wire/<版本>/` 下的内容寻址文件，已有的只能逐字复用）、Wire 投影策略
+     `tools/official_client_capture/claude_upgrade_wire_projection_<版本下划线>.json`、lifecycle 目录
+     `docs/egress/lifecycle/claude-<版本去点>-candidate/` 的 `catalog-stage/`（暂存收据与 Release 条目，恰好两个文件）、
+     门禁映射 `gate-mapping.json` 与门禁计划 `gate-plan.json`；
+   - C 段：只有 `catalogdata/claude/release-catalog.json`——VC-3 冻结的 Active 目录逐项保留，`releases` 末尾追加暂存
+     Release，`selectors.validation_candidate` 指向它；写完先用候选源码的 Go 加载器核对，任一项不过即还原、停下；
+   - D 段：`freeze-successor-generate --before A --after C` 的承接收据，要求摘要边恰好只有 `release-catalog.json`。
+
+   仓库当前提交的 Claude 目录必须就是 VC-3 冻结的 Active 目录，否则候选链停下。投影策略随 A 段进入受管树，部署含它的
+   候选树之前先登记一次 control 层工具演进。
+3. 采集主机 `arm64-vc4-gates.sh`，确认门禁收据有效后再运行 `vc4-all.sh`，两者不并行（§4.4.2）。
 
 实现闭集必须满足：
 
@@ -1914,8 +2006,8 @@ AcceptanceFact。
 2. `inherited_rules` 对应目标语义和画像保持不变，只重放来源、既有测试和验收收据；共享实现锚点仅在已登记
    直接依赖要求时允许变化，并必须补做继承规则回归。执行计划分别记录规则总数、受影响数、继承数、实际
    执行数和复用数；
-3. ValidationCandidate 直接绑定独立 immutable ReleaseArtifact，不借用 production active、rollback 或
-   `previous` selector；生产默认选择器在 VC-4 全程不变；
+3. ValidationCandidate 直接绑定独立 immutable ReleaseArtifact，由 `validation_candidate` 选择器显式选择，不借用
+   `production_active`、`production_rollback` 选择器；生产默认选择器在 VC-4 全程不变；
 4. Candidate 显式绑定目标 Profile、内容寻址 ModelCapabilityCatalog 和 SupportEnvelope；Planner／Compiler
    对范围外入口、模型、条件和出站 fail-close，连接池、fallback 和状态不得跨 Profile／Release／模型身份；
 5. 版本、endpoint、Header、Body、TLS、重试、状态和工具语义优先由批准画像与 Claude DialectCompiler
@@ -1930,9 +2022,10 @@ AcceptanceFact。
 ### 4.4.2 同源构建
 
 同一最终源码树是源码摘要、测试摘要、依赖摘要、二进制和镜像的唯一输入。禁止从不同提交、未登记 dirty
-worktree、临时复制文件或多个节点的未封存输出拼装 Candidate。当前构建拓扑执行 §6.2／§6.5 的“Mac 编译、
-ARM64 只封装、DMIT 只运行”；后继 Campaign 若改变节点或架构，必须先在 VC-0 重新冻结，不能沿用历史
-`linux/amd64` 常量。
+worktree、临时复制文件或多个节点的未封存输出拼装 Candidate。构建在 ARM64 执行（§6.5）：`vc4-all.sh` 从同一干净提交
+准备源码、测试、构建与 Docker context，构建前端、linux/arm64 后端与 `docker build --platform linux/arm64` 镜像，再跑
+实现测试；续跑凭证与实现门禁按客户端取 Claude 的绑定，最后一步派发 `vc4-claude.sh`。改变节点或架构必须先在 VC-0
+重新冻结。Claude 不复用实现测试：每轮全量重跑，r≥2 的候选也一样。
 
 本文将本阶段生成的只写一次联合构建收据称为 CandidateBuildReceipt，至少冻结：
 
@@ -1946,22 +2039,28 @@ ARM64 只封装、DMIT 只运行”；后继 Campaign 若改变节点或架构�
 
 镜像交接必须使用可复算的 OCI manifest digest，不能只写可变 tag。VC-5 和 VC-6 必须运行本阶段冻结的同一
 镜像；后续阶段重编译、重新封装或向镜像追加文件都会产生新 Candidate，不能以“源码相同”为由复用旧身份。
-使用受管 finalizer 生成并只写一次保存 CandidateBuildReceipt；`receipt-replay` 会从批准事实、内容寻址对象和
-收据中的冻结输入重新构造同一字节，拒绝手工散列、可变 tag、历史 generation policy 或事后
-AcceptanceFact：
 
-```bash
-python3 -m tools.official_client_control candidate-build-finalize \
-  --store /绝对路径/VC-3-control-store \
-  --campaign <campaign-id> \
-  --input /绝对路径/candidate-build-input.json
-```
+`vc4-claude.sh` 派发两个 VC-4 批次，动作计划都用受管动作生成、按 VC-4 阶段幂等重派合同自检：
+
+1. `plan-candidate-gates`：生成模式给出候选源码树、树内门禁映射与树内尚不存在的输出路径，计划只写一次、落盘后按
+   VC-3 门禁需求复算（门禁需求合同与 Codex 相同，计划沿用共享的 `build_gate_plan`）。派发前在批次外以同一组旗标预演
+   一次，与提交内 `gate-plan.json` 逐字节比对。
+2. `record-candidate-build`：十九个旗标与 Codex 同名同义、全部必需。全部复算在任何写入之前：用途、部署版本与架构、
+   不可变镜像引用、独立干净的候选源码树与三个树摘要、严格构建参数、候选树里的 Claude 目录数据逐字节来自 VC-3 暂存
+   Release、树外可复算的 source transition、树内门禁计划、实现测试收据，以及经 docker／go 复算的构建实物；r≥2 时
+   另做 revision seal 预检。写入顺序：四件机器收据 → Store CandidateBuildReceipt（内容寻址，同输入复用）→ Store
+   `candidate_frozen` → revision seal → 候选构建收据（`official-client-upgrade-candidate-build-receipt/v1`）→ VC-4
+   checkpoint；任一步被强杀后重跑同一命令收敛。派发前用 `--preview` 在批次外做零写入预览（退出码 2），前后比对
+   Campaign 写域。
+
+Store 收据由 `receipt-replay` 从批准事实、内容寻址对象和收据中的冻结输入重新构造同一字节，拒绝手工散列、可变
+tag、历史 generation policy 或事后 AcceptanceFact；Store 的 `candidate-build-finalize`、`candidate-freeze` 只由
+`record-candidate-build` 在同一动作里调用，操作员不直接执行。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 
-CandidateBuildReceipt 通过后，按
-`tools/official_client_control/schemas/validation-candidate.schema.json` 生成 payload。ValidationCandidate
-必须一次冻结以下字段：
+`record-candidate-build` 按 `tools/official_client_control/schemas/validation-candidate.schema.json` 生成 payload，
+在 Store 一次冻结以下字段：
 
 | 身份层 | `candidate_frozen` 必须冻结的字段 |
 |---|---|
@@ -1973,20 +2072,22 @@ CandidateBuildReceipt 通过后，按
 
 `candidate_purpose` 必须与 ProfileApprovalFact 的 `approval_purpose` 完全一致，ReleaseArtifact 和
 SupportEnvelope 必须直接来自同一批准事实；CandidateBuildReceipt 中更完整的 commit、tree、二进制、
-构建参数、ModelCapabilityCatalog、image ID 和镜像引用也必须与 payload 一致。使用共享控制面追加事实：
+构建参数、ModelCapabilityCatalog、image ID 和镜像引用也必须与 payload 一致。严格 v2 payload 直接引用刚生成的
+`candidate_build` 收据；受管入口会逐项核对批准引用、用途、Persona、source／test／dependency、build ID、架构和
+OCI digest。后继 Campaign 必须在首个 VC-5 attempt 和候选真实请求之前独立取得 `candidate_frozen`。
+`claude_fw_g_acceptance.py` 将 Candidate 与 AcceptanceFact 聚合生成，只用于解释历史 2.1.226 制品，不能作为后继
+版本的 VC-4 入口。
 
-```bash
-python3 -m tools.official_client_control candidate-freeze \
-  --store /绝对路径/VC-3-control-store \
-  --campaign <campaign-id> \
-  --input /绝对路径/validation-candidate-payload.json \
-  --issued-at <冻结时间>
-```
+候选 revision 有编排器与 Store 两份登记，必须一致；Claude 不认隐含 r1，候选级动作要求先建显式 r1。候选源码、测试、
+依赖、构建或镜像真实变化时：
 
-严格 v2 payload 必须直接引用刚生成的 `candidate_build` 收据；受管入口会逐项核对批准引用、用途、Persona、
-source／test／dependency、build ID、架构和 OCI digest。后继 Campaign 必须在首个 VC-5 attempt 和候选真实
-请求之前独立取得 `candidate_frozen`。`claude_fw_g_acceptance.py` 将 Candidate 与 AcceptanceFact 聚合生成，
-只用于解释历史 2.1.226 制品，不能作为后继版本的 VC-4 入口。
+1. `invalidate-candidate preview` 生成诊断草案与 `review_sha256`，审核后 `invalidate-candidate apply` 写编排器作废
+   记录、根因与账本事件，并在 Store 写作废对象（证据先封存为运营证据）；预算暂停与永久停线不写 Store；
+2. 作废冻结整个当前 revision：候选级事实、绑定候选的收据与新执行计划一律拒绝，直到开新 revision；已有
+   `validation_completed` 的候选不得作废；
+3. 换新的 `CAND` 重跑 `vc4-requirements.sh`，由 `revision-open --supersedes <旧候选>` 开 r(N+1)，再走候选链；
+4. `record-candidate-build` 写 revision seal：r≥2 以被取代候选冻结的身份快照为基准，源码层与构建层全部相同即拒绝
+   （不是新候选），被取代候选写失效标记 `superseded-by.json`。
 
 VC-4 的退出条件固定为：
 
@@ -2003,8 +2104,8 @@ ProfileApprovalFact 与 VC-3 联合摘要可复算
 ```
 
 冻结前的实现或构建失败，在输入身份不变时可以留在 VC-4 重试；冻结后源码、测试、依赖、构建参数、二进制、
-镜像或运行时 Profile 任一变化，必须保留旧事实并建立新 Candidate。历史 Sonnet-only 与三模型 Candidate 的
-精确身份分别以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)和
+镜像或运行时 Profile 任一变化，必须保留旧事实，按上面的作废与 `revision-open` 建立新 Candidate。历史 Sonnet-only
+与三模型 Candidate 的精确身份分别以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)和
 [三模型 FW-G 验收收据](egress/maintenance/claude-fw-g-three-model-acceptance.json)为准，当前续作状态见
 §3.6；这些历史身份不直接代表当前入站准入、候选交付或生产状态。
 

@@ -33,7 +33,7 @@
 2. 客户端身份贯穿整条摘要链（第 3 节），任一环缺失或不一致即拒绝，不默认成 Codex。
 3. 公共恢复算法只有一份：admission、批次编译与 staging、对账判定、恢复预览、评估基线、候选 revision 两个
    编排器调用同一份实现。例外是被 Codex 身份闭包计入的读取、路径与校验函数，由两个编排器各自实现，以合同
-   测试对齐（第 12 节）。
+   测试对齐（第 13 节）。
 
 ## 2 适配接口与服务面
 
@@ -154,6 +154,8 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | VC-0 收口收据组（收口收据、失败诊断、现场、上限后恢复预览、首批交接） | `codex-upgrade-vc0-closeout-receipt/v1` 等 | `official-client-vc0-closeout-*/v1` 同组 |
 | Job 演练收据组（facts、收据、执行合同、采集器） | `codex-upgrade-job-rehearsal-*`（执行合同 v2） | `official-client-job-rehearsal-*/v1` 同组 |
 | 失败生命周期探针 | `codex-upgrade-failure-lifecycle-probe/v1` | `official-client-failure-lifecycle-probe/v1` |
+| 编排器候选构建收据 | `codex-upgrade-candidate-build-receipt/v2` | `official-client-upgrade-candidate-build-receipt/v1`（带 `client`） |
+| 候选 revision seal、被取代失效标记 | `codex-upgrade-candidate-revision-seal/v1`、`codex-upgrade-candidate-superseded/v1` | seal 同左；失效标记 `claude-upgrade-candidate-superseded/v1` |
 | 请求账务 | `live-request-provenance/v2` | 同左（计量单位不同，见 Claude 指南） |
 | 根因码表 | `root_cause_codes.json` | `claude_root_cause_codes.json`（同 schema，维度含 `client`） |
 | 恢复预约、恢复段摘要、连续性漂移收据 | `codex-upgrade-*` | `claude-upgrade-*` |
@@ -166,7 +168,7 @@ Claude 的 Store 合同（Codex 不涉及）：
 | Store fact | `official-client-control-fact/v1` | `…/v2`：加 `idempotency_key`、`producer_run`、`formed_under` |
 | Store 工具摘要 | `official-client-control-tool-identity/v1` | `…/v2` |
 | 五类收据（晋升、激活、候选构建、验收门禁、候选交付） | `…/v1` | `…/v2`：加形成期坐标 |
-| 新对象与查询 | — | `tool_evolution_registration`、`predecessor_import`；新事实 `candidate_revision_recorded`；新收据 `predecessor_import`（`official-client-predecessor-import-receipt/v1`）；`fact-lookup` 结果 `official-client-control-fact-lookup/v1` |
+| 新对象与查询 | — | `tool_evolution_registration`、`predecessor_import`、候选作废对象 `candidate_invalidation`（两步批准：`candidate-invalidate --preview`／`--approve-sha256`）；新事实 `candidate_revision_recorded`；新收据 `predecessor_import`（`official-client-predecessor-import-receipt/v1`）；`fact-lookup` 结果 `official-client-control-fact-lookup/v1` |
 
 ## 4 共享控制流程与两个编排器
 
@@ -206,7 +208,7 @@ def compile_and_run_vc_batch(arguments):
 
 另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。命令行子命令与 Codex 同名：13 个共享流程
 子命令照搬 Codex 的参数定义并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
-`revision-open`、`invalidate-candidate` 另写 Store 侧登记。`tool-evolution` 参数照搬、执行是 Claude 自己的
+`revision-open`、`invalidate-candidate` 另写 Store 侧登记（第 12 节）。`tool-evolution` 参数照搬、执行是 Claude 自己的
 演进链（第 11.4 节）。Claude 专属子命令（`plan`、`freeze`、`import-predecessor-evidence`、`capture-official`、
 `analyze-target`、`classify`、`prepare-profile`、`stage-profile`、`plan-candidate-gates`、`record-candidate-build`、对账与
 恢复类）各有实现模块；`capture-candidate`、`compare`、`accept`、`account-sealed-candidate`、`deliver-candidate`、
@@ -260,6 +262,34 @@ Store 侧的实现：
 ### 5.3 锁顺序
 
 项目总账锁 → Campaign 账本锁 → Store 维度锁 → Store 对象锁。持 Store 锁时不得再取账本锁。
+
+### 5.4 提交中崩溃的收敛（P1～P4）
+
+中断边界与续派规则见 Framework §5.3.6。共享批次流程 `upgrade_control_plane.compile_and_run_vc_batch` 在
+`control/vc/staging/NNNN-vc-x/attempt-K` 里准备批次，四个中断点两客户端同一份处理：
+
+| 中断点 | 收敛方式 |
+|---|---|
+| P1：prepare 之后、父 run 之前失败 | 写 ABORT，入账一次根因，序号不占；同序号新 staging 重派 |
+| P2：父 run 已 prepared、owner 在 COMMIT 之前被强杀 | monitor 封存 `aborted_prepared`；下次入口对账、ABORT，同序号重派 |
+| P3：COMMIT 的发布步失败（账本事件已写、COMMIT 未写） | 对账、ABORT，归档已发布的半产物，同序号重派 |
+| P4：COMMIT 已写、父 run 激活失败 | 账本进入 `recovery_required`，对账后以下一序号重派同一批次身份 |
+
+两个中间态同样收敛：P1 链 ABORT 已写而总账未推送、P3 链对账收据已写而 outbox 未提交，下次入口都会闭合，不重复入账。
+
+- **对账器作用域**：共享控制流程直接调用对账器的内部函数（staging 中止根因、总账推送、判定、身份事实等），它们按
+  对账器自己的作用域取适配器。`upgrade_control_plane.adapter_scope` 进入时同时设定对账器作用域：同客户端嵌套照旧，
+  跨客户端拒绝，对账器作用域已由公开入口设为另一客户端时同样拒绝。Codex 设定的就是对账器的缺省值，行为不变。
+- **重派之后的同阶段后继**：只有正要派发的直接后继按实物复算，已执行过的历史后继只重放冻结许可；一个阶段失败、对账、
+  重派成功之后，同一阶段的后续批次不会被误判为漂移。
+- **Claude 的阶段幂等重派合同**在 `claude_upgrade_batch.STAGE_REPLAY_CONTRACTS`：VC-2 `classify`，VC-3 `prepare-profile`
+  与 `stage-profile`，VC-4 `plan-candidate-gates` 与 `record-candidate-build`；VC-1 没有阶段重派合同。合同只认受管 Python
+  对 `claude_upgrade.py` 的直接调用、旗标精确闭合；许可写进 `codex-upgrade-stage-replay/v1` 证明，监督器派发直接后继
+  前再算一次、逐字相同才放行。VC-4 的判定交给共享的 `_candidate_stage_replay_action_facts`，Claude 在其上补 Store 侧：
+  Store 已冻结本候选的另一次构建即拒绝。
+- **动作结果 WAL 的 Claude 落点**：VC-2、VC-3、VC-4 的 Store 写入都带幂等键（第 5.2 节）。写入前崩溃时 N+1 重派写下唯一
+  一条事实（`producer_run` 是重派的 run）；写入后崩溃时 N+1 按幂等键复用原事实（`producer_run` 仍是写下它的 run），
+  事实数不增。
 
 ## 6 形成期重放与有效工具身份
 
@@ -602,7 +632,42 @@ evidence 层变化只记评估路径，control 层变化影响为空但同样要
 编排器收据后，在 Campaign Store 登记一份 `tool_evolution_registration`；两步之间中断时以同一批准重跑只补 Store 登记。
 Store Campaign 未建立时零写入拒绝。
 
-## 12 Codex 身份守恒
+## 12 候选 revision 与候选构建
+
+候选 revision 的通用规则见 Framework §5.3.6。`revision-open`、`invalidate-candidate` 是共享流程子命令，Claude 在共享流程
+之外再写 Store 侧，实现在 `claude_upgrade_revision`；候选构建在 `claude_upgrade_candidate`。
+
+| 登记 | 内容 | 写入方 |
+|---|---|---|
+| 编排器侧 | `control/vc/revisions/r<N>/revision.json` 与 `COMMIT`，计时账本的 `stage_revision` 事件（激活） | 共享流程 |
+| Store 侧 | `candidate_revision_recorded` 事实（`revision`、`candidate_id`、`supersedes`、`invalidation_ref`），决定当前有效候选 | `claude_upgrade_revision` |
+
+- **当前 revision**：账本最后一条 `stage_revision` 与目录 COMMIT 决定，并核对 Store 的当前 revision 与候选相同；编排器
+  先写、Store 后写，两者之间被强杀时这里拒绝，重跑 `revision-open` 收敛。Claude 不认隐含 r1：没有 `stage_revision` 即
+  没有当前候选，候选级动作要求先 `revision-open --initial`，服务面的 `_implicit_r1_candidate_id` 一律拒绝。
+- **`revision-open`**：Store 预检（零写入）→ 共享流程写编排器侧 → Store `candidate_revision_recorded`（幂等键为逻辑动作
+  `claude-upgrade:revision-open` 加 payload，签发时刻取 `revision.json` 的 `opened_at_utc`）→ 复核两份登记一致。`--initial`
+  要求 Store 尚无 revision 事实（或恰是同一候选的 r1）；`--supersedes <旧候选>` 要求 Store 当前候选就是旧候选，且 Store
+  已有该 revision 的作废对象。预检不过即拒绝，两份登记不会分叉。
+- **`invalidate-candidate preview／apply`**：共享流程完成审核与编排器侧（诊断草案与 `review_sha256`、作废记录、根因
+  入账、二次判定与账本 `candidate_invalidated`）；apply 通过后 Claude 写 Store 侧：证据清单先封存为
+  `official-client-operational-evidence/v1`，再写作废对象 `candidate_invalidation`（批准人取诊断的审核人，批准时刻取
+  作废记录的冻结值；Store 的两步批准由编排器以同一审核结论转写）。预算暂停与永久停线不写 Store；apply 与 Store 之间被
+  强杀时以同一批准摘要重跑 apply 补写。Store 侧同一 revision 只作废一次，已有 `validation_completed` 的候选不得作废；
+  作废冻结整个当前 revision，候选级事实、绑定候选的收据与新执行计划一律拒绝，直到开新 revision。
+- **revision seal**：`record-candidate-build` 在 Store 冻结之后、候选构建收据之前写 `control/vc/revisions/r<N>/seal.json`
+  （`codex-upgrade-candidate-revision-seal/v1`，显式 r1 也写）。r≥2 以被取代候选作废记录冻结的身份快照为基准，源码层与
+  构建层全部相同即拒绝；被取代候选写失效标记 `candidates/<旧候选>/superseded-by.json`
+  （`claude-upgrade-candidate-superseded/v1`，这是 Claude 自实现 `_seal_candidate_revision` 与 Codex 唯一的差别）。任何写入
+  之前先以不写入方式预检一次，全同的候选不会留下 Store 冻结事实。
+- **候选构建收据**：客户端中立合同 `official-client-upgrade-candidate-build-receipt/v1`（带 `client`）放在共享模块
+  `codex_upgrade_vc_artifacts` 末尾，只由 Claude 编排器签发；Codex 的构建收据与读侧闭包内的校验函数原位不动。门禁计划
+  沿用共享的 `build_gate_plan`，门禁需求合同与 Codex 相同（`codex-post-promotion-gate-requirements/v1`），需求从 VC-2、
+  VC-3 阶段结果确定性推出，不另存文件。
+- **重放**：事实与收据的形成期坐标里有 `candidate_revision`，旧 revision 下的结果按形成时重放（第 6 节），交付判定只认
+  当前 revision。
+
+## 13 Codex 身份守恒
 
 本控制面改造对 Codex 只增不改：
 
@@ -622,7 +687,7 @@ control 层、策略与整树摘要的变化逐文件落在 `REGISTERED_CONTROL_
 可迁但留原位的函数。两个编排器各自实现的读取与校验函数以后合并为一份，需要 Codex 改用跨模块按符号的 v3 引擎，
 并重算其 evidence 闭包与评估器摘要，时机放在 Codex 某次新目标版本升级的 VC-0 之前。
 
-## 13 修改本控制面时
+## 14 修改本控制面时
 
 - 先判断改动落在哪个客户端的哪个身份层：改共享 control 模块要同时按两份策略评估，并在
   `REGISTERED_CONTROL_CHANGES` 登记；改到 Codex 身份闭包内的符号属于身份守恒违规，应改为新增并行实现。
