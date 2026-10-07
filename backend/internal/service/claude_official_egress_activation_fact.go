@@ -18,6 +18,10 @@ import (
 const (
 	claudeEgressActivationFactSchema = "claude-egress-activation-fact/v1"
 	claudeEgressActivationPathEnv    = "GATEWAY_CLAUDE_EGRESS_ACTIVATION_FACT_PATH"
+	// claudeEgressActivationModeCandidate 是 FW-G 候选 Runtime 生效时的 profile_mode：
+	// 生产 selector 仍为 legacy，进程装配的是 validation_candidate 角色的 Claude Runtime。
+	// 与 legacy／active 同一 schema、同一字段集合与 event_id 算法，只扩展取值。
+	claudeEgressActivationModeCandidate = "validation_candidate"
 )
 
 var claudeEgressActivationIdentityEnv = []struct {
@@ -36,6 +40,10 @@ var claudeEgressActivationIdentityEnv = []struct {
 
 // ClaudeOfficialEgressActivationFact 与 Codex 激活事实完全分离，避免一个 Persona
 // 的 selector 或批准摘要被另一个 Persona 借用。
+//
+// profile_mode 三种取值：legacy（不加载 Claude 画像，摘要全空）、active（正式
+// Runtime，五项摘要齐全）、validation_candidate（候选 Runtime，版本与四项画像链
+// 摘要齐全，批准摘要恒为空——候选没有生产批准）。
 type ClaudeOfficialEgressActivationFact struct {
 	SchemaVersion    string `json:"schema_version"`
 	Source           string `json:"source"`
@@ -82,6 +90,12 @@ func resolveClaudeOfficialEgressActivationFact(
 		SourceTreeSHA256: declared["source_tree_sha256"], BuildID: declared["build_id"],
 		DeployedVersion: declared["deployed_version"],
 	}
+	candidateEnabled := cfg != nil && cfg.Gateway.ClaudeFWGCandidateEnabled
+	if mode == "legacy" && candidateEnabled {
+		if err := fillClaudeCandidateActivationFact(&fact, declared); err != nil {
+			return ClaudeOfficialEgressActivationFact{}, err
+		}
+	}
 	if mode == "active" {
 		runtimeState := processOfficialEgressRuntime.Load()
 		if runtimeState == nil || runtimeState.Claude == nil ||
@@ -110,6 +124,43 @@ func resolveClaudeOfficialEgressActivationFact(
 	}
 	fact.EventID = claudeOfficialEgressActivationEventID(fact)
 	return fact, nil
+}
+
+// fillClaudeCandidateActivationFact 按进程实际装配的候选 Runtime 填写画像链摘要。
+// 候选开关打开却没有候选 Runtime（或装配成正式 Runtime）时拒绝落盘；部署者声明的
+// profile／release 摘要必须与运行时解析结果逐字一致，声明批准摘要一律拒绝。
+func fillClaudeCandidateActivationFact(
+	fact *ClaudeOfficialEgressActivationFact,
+	declared map[string]string,
+) error {
+	runtimeState := processOfficialEgressRuntime.Load()
+	if runtimeState == nil || runtimeState.ClaudeCandidate == nil ||
+		runtimeState.ClaudeCandidate.IsProductionActive() {
+		return errors.New("Claude 候选开关已打开但候选 Runtime 未生效")
+	}
+	candidate := runtimeState.ClaudeCandidate
+	fact.ProfileMode = claudeEgressActivationModeCandidate
+	fact.ClaudeVersion = candidate.ReleaseVersion()
+	fact.ProfileDigest = candidate.ProfileDigest()
+	fact.WireDigest = candidate.WireDigest()
+	fact.ReleaseDigest = candidate.ReleaseDigest()
+	fact.BundleDigest = candidate.BundleDigest()
+	fact.ApprovalDigest = candidate.ProductionApprovalDigest()
+	if fact.ApprovalDigest != "" {
+		return errors.New("Claude 候选 Runtime 不应携带生产批准摘要")
+	}
+	if declared["approval_digest"] != "" {
+		return errors.New("Claude 候选 Runtime 没有生产批准，不得声明 approval_digest")
+	}
+	for field, actual := range map[string]string{
+		"profile_digest": fact.ProfileDigest,
+		"release_digest": fact.ReleaseDigest,
+	} {
+		if declared[field] != "" && declared[field] != actual {
+			return errors.New("声明的 Claude " + field + " 与候选 Runtime 解析结果不一致")
+		}
+	}
+	return nil
 }
 
 func claudeOfficialEgressActivationEventID(fact ClaudeOfficialEgressActivationFact) string {

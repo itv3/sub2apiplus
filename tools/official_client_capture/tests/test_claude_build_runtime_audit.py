@@ -1,9 +1,11 @@
-"""Claude 运行画像审计（升级控制面设计 B4-03）：激活事实校验、event_id 按 Go 口径复算、声明身份逐字比对与 write-once 输出。
+"""Claude 运行画像审计（升级控制面设计 B4-03，B4-06a 补候选 Runtime）：激活事实校验、event_id 按 Go 口径复算、声明身份逐字
+比对与 write-once 输出。
 
-两份样例事实的 event_id 是在本机离线编译运行一段只含 Go 标准库的程序得到的：程序逐字复制
+前两份样例事实的 event_id 是在本机离线编译运行一段只含 Go 标准库的程序得到的：程序逐字复制
 ``backend/internal/service/claude_official_egress_activation_fact.go`` 的结构体与 ``claudeOfficialEgressActivationEventID``，
 对下面两份事实（第二份专门放了 HTML 字符、U+2028、中文、引号、反斜杠、换行、制表与控制字符）求值。Python 复算必须与之
-逐字相等，否则 Go 侧写出的真实事实会被误拒。
+逐字相等，否则 Go 侧写出的真实事实会被误拒。第三份候选事实（B4-06a）的 event_id 由 Go 测试
+``TestClaudeCandidateActivationEventIDMatchesPythonAudit`` 以同一常量反向锁定。
 """
 
 from __future__ import annotations
@@ -56,6 +58,25 @@ LEGACY_FACT = {
     "build_id": "b",
     "deployed_version": "v",
 }
+CANDIDATE_FACT = {
+    "schema_version": "claude-egress-activation-fact/v1",
+    "source": "sub2api-runtime",
+    "event_type": "claude_profile_observed",
+    "event_id": "97c0648ed625ac16968f356be8d938058bcdcc58c675edcfca4a5f123971a3da",
+    "observed_at_utc": "2026-10-07T12:00:00Z",
+    "profile_mode": "validation_candidate",
+    "claude_version": "2.1.285",
+    "profile_digest": "1" * 64,
+    "wire_digest": "2" * 64,
+    "release_digest": "3" * 64,
+    "bundle_digest": "4" * 64,
+    "approval_digest": "",
+    "image_id": "sha256:" + "6" * 64,
+    "image_reference": "ghcr.io/itv3/sub2apiplus@sha256:" + "6" * 64,
+    "source_tree_sha256": "7" * 64,
+    "build_id": "build-candidate-20261007",
+    "deployed_version": "0.2.13-1-candidate",
+}
 DECLARED = {
     "campaign_id": "claude-code-2_1_226-runtime-audit-fixture",
     "attempt_id": "attempt-0001",
@@ -75,6 +96,16 @@ DECLARED = {
 }
 
 
+CANDIDATE_DECLARED = dict(
+    DECLARED,
+    target_version="2.1.285",
+    approval_digest="",
+    image_reference=CANDIDATE_FACT["image_reference"],
+    build_id=CANDIDATE_FACT["build_id"],
+    deployed_version=CANDIDATE_FACT["deployed_version"],
+)
+
+
 def _resealed(fact: dict, **changes) -> dict:
     """改字段后按 Go 口径重算 event_id：模拟服务真的写出了这样一份事实。"""
 
@@ -89,6 +120,8 @@ class ActivationFactTests(unittest.TestCase):
         self.assertEqual(audit.activation_event_id(LEGACY_FACT), LEGACY_FACT["event_id"])
         self.assertEqual(audit.FACT_FIELDS, tuple(ACTIVE_FACT))
         self.assertEqual(audit.validate_fact(LEGACY_FACT)["profile_mode"], "legacy")
+        self.assertEqual(audit.activation_event_id(CANDIDATE_FACT), CANDIDATE_FACT["event_id"])
+        self.assertEqual(audit.validate_fact(CANDIDATE_FACT)["profile_mode"], "validation_candidate")
 
     def test_fact_validation_fails_closed(self) -> None:
         cases = {
@@ -103,6 +136,9 @@ class ActivationFactTests(unittest.TestCase):
             "必须是 SHA-256": _resealed(ACTIVE_FACT, release_digest=""),
             "claude_version 非法": _resealed(ACTIVE_FACT, claude_version="2.1"),
             "legacy 事实不应携带": _resealed(LEGACY_FACT, profile_digest="1" * 64),
+            "validation_candidate 事实不应携带 approval_digest": _resealed(CANDIDATE_FACT, approval_digest="5" * 64),
+            "validation_candidate 事实的 wire_digest 必须是 SHA-256": _resealed(CANDIDATE_FACT, wire_digest=""),
+            "validation_candidate 事实的 claude_version 非法": _resealed(CANDIDATE_FACT, claude_version=""),
         }
         for message, fact in cases.items():
             with self.subTest(message=message), self.assertRaisesRegex(audit.RuntimeAuditError, message):
@@ -137,6 +173,45 @@ class RuntimeAuditTests(unittest.TestCase):
         for message, declared in cases.items():
             with self.subTest(message=message), self.assertRaisesRegex(audit.RuntimeAuditError, message):
                 audit.build_runtime_audit(ACTIVE_FACT, **declared)
+
+    def test_candidate_runtime_audit(self) -> None:
+        """候选 Runtime（B4-06a）：按 validation_candidate 审计，批准摘要恒为空；与正式审计互不冒充。"""
+
+        document = audit.build_runtime_audit(CANDIDATE_FACT, **CANDIDATE_DECLARED, profile_mode="validation_candidate")
+        self.assertEqual((document["profile_mode"], document["approval_digest"], document["target_version"]), ("validation_candidate", "", "2.1.285"))
+        self.assertEqual(set(document), {"schema_version", "source", "event_type", "event_id", "profile_mode", "observed_at_utc", *DECLARED})
+        cases = {
+            "画像激活事实来自 validation_candidate Runtime，不是要审计的 active Runtime": (CANDIDATE_FACT, CANDIDATE_DECLARED, "active"),
+            "画像激活事实来自 active Runtime，不是要审计的 validation_candidate Runtime": (ACTIVE_FACT, DECLARED, "validation_candidate"),
+            "画像激活事实不是 validation_candidate：legacy 模式不加载 Claude 画像": (LEGACY_FACT, CANDIDATE_DECLARED, "validation_candidate"),
+            "候选审计的 approval_digest 必须声明为空": (CANDIDATE_FACT, dict(CANDIDATE_DECLARED, approval_digest="5" * 64), "validation_candidate"),
+            "运行时 profile_digest 与声明身份不一致": (CANDIDATE_FACT, dict(CANDIDATE_DECLARED, profile_digest="9" * 64), "validation_candidate"),
+            "只能审计 active／validation_candidate Runtime": (CANDIDATE_FACT, CANDIDATE_DECLARED, "legacy"),
+        }
+        for message, (fact, declared, mode) in cases.items():
+            with self.subTest(message=message), self.assertRaisesRegex(audit.RuntimeAuditError, message):
+                audit.build_runtime_audit(fact, **declared, profile_mode=mode)
+
+    def test_cli_candidate_mode_and_active_requires_approval(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claude-runtime-audit-") as temporary:
+            root = Path(temporary)
+            fact_path = root / "candidate-fact.json"
+            fact_path.write_text(json.dumps(CANDIDATE_FACT, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            output = root / "candidate-audit.json"
+            argv = ["--activation-fact", str(fact_path), "--output", str(output), "--profile-mode", "validation_candidate"]
+            for field, value in CANDIDATE_DECLARED.items():
+                if field != "approval_digest":
+                    argv.extend([f"--{field.replace('_', '-')}", value])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(audit.main(argv), 0)
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")),
+                audit.build_runtime_audit(CANDIDATE_FACT, **CANDIDATE_DECLARED, profile_mode="validation_candidate"),
+            )
+            active_argv = [item for item in argv if item not in {"--profile-mode", "validation_candidate"}]
+            active_argv[active_argv.index(str(output))] = str(root / "active-audit.json")
+            with self.assertRaisesRegex(audit.RuntimeAuditError, "active 审计必须提供 --approval-digest"):
+                audit.main(active_argv)
 
     def test_cli_writes_once_with_private_mode(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claude-runtime-audit-") as temporary:

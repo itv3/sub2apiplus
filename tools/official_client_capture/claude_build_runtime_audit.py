@@ -9,14 +9,18 @@
 
 1. 校验事实文档：键集与 Go 结构体逐字一致、schema／来源／事件类型、``event_id`` 按 Go 口径复算一致（防止事实被手改
    而 event_id 未跟着变）、观测时刻是 RFC3339 UTC；
-2. 只接受 ``profile_mode=active``：Go 只在 Claude 正式 Runtime 生效时写出画像摘要，``legacy`` 事实不含任何 Claude 摘要，
-   不能证明画像生效，一律拒绝；
-3. 声明身份逐字比对（版本、五项画像链摘要、镜像与构建身份），再补上 attempt 坐标（campaign／attempt／run_nonce／
+2. 只接受调用方要审计的那种 Runtime 写出的事实：
+   * ``active``（正式 Runtime，生产激活与 B4-08 生产分支用）：版本与五项画像链摘要齐全，批准摘要是正式 Runtime 启动时
+     复算的 ProductionApproval；
+   * ``validation_candidate``（候选 Runtime，VC-5 候选验收用，B4-06a 起 Go 侧补写）：版本与 profile／wire／release／bundle
+     四项摘要齐全，批准摘要恒为空——候选没有生产批准，声明了批准摘要一律拒绝；
+   * ``legacy`` 事实不含任何 Claude 摘要，不能证明画像生效，一律拒绝；
+3. 声明身份逐字比对（版本、画像链摘要、镜像与构建身份），再补上 attempt 坐标（campaign／attempt／run_nonce／
    candidate），这些坐标是采集侧自身的权威事实，服务在启动时无从得知。
 
-已知边界（如实记录，不在本工具里绕开）：Go 的候选 Runtime（``validation_candidate`` 角色）不产出带摘要的激活事实——
-``active`` 模式下候选 Runtime 会让事实解析直接报错，``legacy`` 模式下事实不含摘要。因此本工具当前只能审计正式 Runtime
-（``production_active``）的画像生效事实；候选验收阶段要证明候选画像生效，需要 Go 侧另行补候选事实。
+候选事实与正式事实同一 schema（``claude-egress-activation-fact/v1``）、同一字段集合与 ``event_id`` 算法，只扩展
+``profile_mode`` 的取值；审计文档也沿用 ``claude-egress-runtime-audit/v1``，``profile_mode`` 记录审计的是哪种 Runtime，
+候选审计的 ``approval_digest`` 为空串。
 
 本文件在 Claude 身份策略里归 evidence 层（整文件计入）；Codex 身份策略忽略它。只依赖标准库。
 """
@@ -38,7 +42,11 @@ RUNTIME_AUDIT_SCHEMA = "claude-egress-runtime-audit/v1"
 ACTIVATION_SOURCE = "sub2api-runtime"
 ACTIVATION_EVENT = "claude_profile_observed"
 PROFILE_MODE_ACTIVE = "active"
-PROFILE_MODES = frozenset({"legacy", PROFILE_MODE_ACTIVE})
+PROFILE_MODE_CANDIDATE = "validation_candidate"
+PROFILE_MODE_LEGACY = "legacy"
+PROFILE_MODES = frozenset({PROFILE_MODE_LEGACY, PROFILE_MODE_ACTIVE, PROFILE_MODE_CANDIDATE})
+# 可审计的 Runtime：legacy 不加载 Claude 画像，不在其中。
+AUDITED_PROFILE_MODES = (PROFILE_MODE_ACTIVE, PROFILE_MODE_CANDIDATE)
 
 # 与 Go 结构体 ClaudeOfficialEgressActivationFact 的字段顺序逐字一致：event_id 是该结构体（event_id 置空）经 json.Marshal
 # 紧凑序列化后的 SHA-256，复算必须按这个顺序。
@@ -61,8 +69,9 @@ FACT_FIELDS = (
     "build_id",
     "deployed_version",
 )
-# 画像链五项摘要：Go 只在正式 Runtime 生效时填写。
+# 画像链五项摘要：Go 在正式 Runtime 生效时全部填写；候选 Runtime 填前四项，批准摘要恒为空。
 DIGEST_FIELDS = ("profile_digest", "wire_digest", "release_digest", "bundle_digest", "approval_digest")
+CANDIDATE_DIGEST_FIELDS = DIGEST_FIELDS[:-1]
 # 部署身份：由部署注入的环境变量原样带入事实。
 DEPLOYMENT_FIELDS = ("image_id", "image_reference", "source_tree_sha256", "build_id", "deployed_version")
 
@@ -146,10 +155,14 @@ def validate_fact(fact: Mapping[str, Any]) -> dict[str, str]:
         datetime.strptime(observed[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
     except ValueError as error:
         raise RuntimeAuditError("画像激活事实观测时刻不是合法日期时间") from error
-    if fact["profile_mode"] == PROFILE_MODE_ACTIVE:
-        _require(bool(VERSION_RE.fullmatch(fact["claude_version"])), "active 事实的 claude_version 非法")
-        for field in DIGEST_FIELDS:
-            _require(bool(SHA256_RE.fullmatch(fact[field])), f"active 事实的 {field} 必须是 SHA-256")
+    if fact["profile_mode"] in AUDITED_PROFILE_MODES:
+        mode = fact["profile_mode"]
+        required = DIGEST_FIELDS if mode == PROFILE_MODE_ACTIVE else CANDIDATE_DIGEST_FIELDS
+        _require(bool(VERSION_RE.fullmatch(fact["claude_version"])), f"{mode} 事实的 claude_version 非法")
+        for field in required:
+            _require(bool(SHA256_RE.fullmatch(fact[field])), f"{mode} 事实的 {field} 必须是 SHA-256")
+        if mode == PROFILE_MODE_CANDIDATE:
+            _require(fact["approval_digest"] == "", "validation_candidate 事实不应携带 approval_digest（候选没有生产批准）")
     else:
         for field in ("claude_version", *DIGEST_FIELDS):
             _require(fact[field] == "", f"legacy 事实不应携带 {field}")
@@ -174,13 +187,21 @@ def build_runtime_audit(
     source_tree_sha256: str,
     build_id: str,
     deployed_version: str,
+    profile_mode: str = PROFILE_MODE_ACTIVE,
 ) -> dict[str, Any]:
-    """校验事实并与声明身份逐字比对，产出 ``claude-egress-runtime-audit/v1``。"""
+    """校验事实并与声明身份逐字比对，产出 ``claude-egress-runtime-audit/v1``。
 
+    ``profile_mode`` 是要审计的 Runtime：``active``（缺省，正式 Runtime）或 ``validation_candidate``（VC-5 候选验收）。
+    候选审计的 ``approval_digest`` 必须声明为空串。
+    """
+
+    _require(profile_mode in AUDITED_PROFILE_MODES, f"只能审计 {'／'.join(AUDITED_PROFILE_MODES)} Runtime，收到 {profile_mode}")
     checked = validate_fact(fact)
+    if checked["profile_mode"] == PROFILE_MODE_LEGACY:
+        raise RuntimeAuditError(f"画像激活事实不是 {profile_mode}：legacy 模式不加载 Claude 画像，不能证明画像生效")
     _require(
-        checked["profile_mode"] == PROFILE_MODE_ACTIVE,
-        "画像激活事实不是 active：legacy 模式不加载 Claude 画像，不能证明画像生效",
+        checked["profile_mode"] == profile_mode,
+        f"画像激活事实来自 {checked['profile_mode']} Runtime，不是要审计的 {profile_mode} Runtime",
     )
     for name, value in (("campaign_id", campaign_id), ("attempt_id", attempt_id), ("candidate_id", candidate_id)):
         _require(bool(SAFE_ID_RE.fullmatch(str(value))), f"{name} 格式非法")
@@ -194,6 +215,9 @@ def build_runtime_audit(
         "approval_digest": approval_digest,
     }
     for field, value in declared_digests.items():
+        if profile_mode == PROFILE_MODE_CANDIDATE and field == "approval_digest":
+            _require(value == "", "候选审计的 approval_digest 必须声明为空（候选没有生产批准）")
+            continue
         _require(bool(SHA256_RE.fullmatch(str(value))), f"声明的 {field} 必须是 SHA-256")
     # 服务解析出的画像必须与声明身份逐字一致，否则说明跑的不是这份画像。
     _require(checked["claude_version"] == target_version, "运行时画像版本与目标版本不一致")
@@ -248,6 +272,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="把 Claude 画像激活事实组装成运行画像审计文档")
     parser.add_argument("--activation-fact", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile-mode", choices=AUDITED_PROFILE_MODES, default=PROFILE_MODE_ACTIVE)
+    # active 审计必须给批准摘要；候选审计不给（或给空串）。
+    parser.add_argument("--approval-digest", default=None)
     for name in (
         "campaign-id",
         "attempt-id",
@@ -258,7 +285,6 @@ def main(argv: list[str] | None = None) -> int:
         "wire-digest",
         "release-digest",
         "bundle-digest",
-        "approval-digest",
         "image-id",
         "image-reference",
         "source-tree-sha256",
@@ -268,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument(f"--{name}", required=True)
     arguments = parser.parse_args(argv)
 
+    if arguments.profile_mode == PROFILE_MODE_ACTIVE and arguments.approval_digest is None:
+        raise RuntimeAuditError("active 审计必须提供 --approval-digest")
     if arguments.output.exists() or arguments.output.is_symlink():
         raise RuntimeAuditError("--output 必须是不存在的路径，拒绝覆盖既有审计文档")
     document = build_runtime_audit(
@@ -281,12 +309,13 @@ def main(argv: list[str] | None = None) -> int:
         wire_digest=arguments.wire_digest,
         release_digest=arguments.release_digest,
         bundle_digest=arguments.bundle_digest,
-        approval_digest=arguments.approval_digest,
+        approval_digest=arguments.approval_digest or "",
         image_id=arguments.image_id,
         image_reference=arguments.image_reference,
         source_tree_sha256=arguments.source_tree_sha256,
         build_id=arguments.build_id,
         deployed_version=arguments.deployed_version,
+        profile_mode=arguments.profile_mode,
     )
     _write_once(arguments.output, (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     print(json.dumps({"output": str(arguments.output), "event_id": document["event_id"]}, ensure_ascii=False))
