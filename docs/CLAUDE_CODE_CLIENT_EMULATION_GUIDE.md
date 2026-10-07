@@ -985,10 +985,10 @@ Claude 的生产 Active 身份必须同时满足
 | 范围 | 当前边界 |
 |---|---|
 | VC-0～VC-4 | 受管入口、官方取证／恢复、分类批准、画像暂存和候选 revision／构建已接入；正式开工仍需 §4.0.5 的发布认证 |
-| VC-5 | 候选采集与封存、compare、accept、评估基线及 evaluator-defect／candidate-source／approval-inputs 三类裁定已有实现；真实 Mac 三官方客户端驱动／收据闭合仍有缺口 |
+| VC-5 | 候选采集与封存、compare、accept、评估基线及 evaluator-defect／candidate-source／approval-inputs 三类裁定已有实现；Mac 客户端收据已有离线准备、核验与导入合同，三官方客户端真账号采集及正式 recorder 仍未接通 |
 | 封存后临时环境故障 | B4-05b 的 `ar<k>` 恢复段读写、对账与增量封存仍在实现／待验收；不能把封存前 resume 当作其替代入口 |
 | VC-6 候选交付 | 四阶段、`dr<k>`、阶段失效与 finalize 控制面已接入；ARM64 四阶段真实交付执行器尚未完成，当前不能宣称已完成真实切换、回退或稳定观察 |
-| 完整链与认证 | B5b-02 录制快照基座只产出 `regression_fixture`，完整录制回放尚未完成；故障链仍在收口，B5b-04 发布认证待完成 |
+| 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链仍须按实际串行执行结果验收，B5b-04 当前发布认证未签发 |
 | 生产激活 | B4-08 另批；候选交付与生产激活的权限、收据及终态分开，见 §4.6 |
 
 旧 §3.6.1 的 DMIT／Vircs 运行坐标已失去续跑资格，原记录完整保存在
@@ -1279,7 +1279,8 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 （`official-client-job-rehearsal-receipt/v1`，含失败生命周期探针）与 atomic-double 收据，只能在具备 Go 与 Docker
 的 Linux ARM64 上签发。按客户端分组的实现见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
 
-Claude 的 pre-A3 按注册表执行全部已登记真实链，单元 ID 为 `pre-a3:claude:<场景>`，与 Codex 单元同一记录库、互不承接：
+Claude 的 pre-A3 按注册表执行全部已登记真实链，单元 ID 为 `pre-a3:claude:<场景>`，与 Codex 单元同一记录库、互不承接。
+发布准入另要求下列八条必需链全部齐备；尚未登记、未执行、失败或跳过的必需链均阻止签发，不能以已登记子集通过替代完整覆盖：
 
 | 真实链 | 覆盖 |
 |---|---|
@@ -1287,7 +1288,10 @@ Claude 的 pre-A3 按注册表执行全部已登记真实链，单元 ID 为 `pr
 | `vc-chain.claude-deadline` | 阶段预算到期两本账暂停 → `deadline-extend` 预览与批准（两本账之间被强杀后补齐收敛）→ 原 Campaign 续跑 |
 | `vc-chain.claude-root-cause` | 同根因累计达冻结上限只暂停、门禁只挡该根因 → 修复收据放行 → 续跑 |
 | `vc-chain.claude-tool-evolution` | 部署新工具 → 未登记即拒绝写入 → 登记演进 → 有效身份更新 → Store finalizer 通过 → 旧收据按形成期重放 |
+| `vc-chain.claude-vc1-capture` | 2.1.226 历史来源保持原身份与原字节，经真实 VC-0 收口、监督复制、VC-1 seal 与 checkpoint；源码存在不等于该链已认证 |
+| `vc-chain.claude-full-validation-only` | VC-0～VC-6 的 `validation_only` 连续控制链；须独立执行并核对终态，不能拼接局部通过记录 |
 | `vc-chain.claude-recovery-chain` | 批次／官方取证／多根部署／前序导入故障链，追加候选对账、来源复用与演进场景；完整收口由 B5b-03 验收 |
+| `vc-chain.claude-late-stage-faults` | 候选及交付后段的故障与恢复链；须具备对应完整执行结果，不能用成功主链代替 |
 
 这些链零请求，在两个受管根的副本树上运行，Linux root 上进入 `unshare -m -n` 私有命名空间（临时根 `/var/tmp`）；
 登记的真实链必须完整执行，失败、缺失或 skip 均拒签。只改 `tools/official_client_control` 时 Claude 场景单元失效
@@ -1298,8 +1302,10 @@ Claude 的 atomic-double 由同一共享收据模块加 `--client claude` 执行
 Formal Campaign，经原子入口完成一次 VC-0→VC-1 与失败父 run 收口及四个负例，零请求，签
 `official-client-atomic-vc0-vc1-rehearsal/v1`；发布认证按 Claude 合同重放它，容器内重放追加 `--client claude`。
 
-Claude 发布认证：**待认证**。上述入口与场景登记不等于已经签发认证；B5b-02 完整录制回放、B5b-03
+Claude 发布认证：**待认证**。上述入口、源码与离线合同不等于已经签发认证；八条必需链的实际执行结果、B5b-03
 后段故障链及 B5b-04 的当前部署 `certify_release issue --client claude`／`verify` 全部通过后，才能更新此结论。
+录制链中的发布循环前置与静态控制投影是明确标记的测试夹具，不能反向证明八链已通过；局部 VC-0→VC-1
+通过也不能证明 VC-0～VC-6 全链通过。Mac 真账号采集与 ARM64 真实交付执行器的现场验收仍须分别完成。
 本次文档同步只登记结构与实际入口，不补签认证或把旧 pre-A3 收据视为当前发布证明。
 
 <a id="claude-vc-1"></a>
@@ -2008,7 +2014,8 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-all.sh"
 `capture-candidate`、`compare`、`assert-rules`、`accept` 是父批次中的动作，操作员通过驱动或
 `compile-and-run-vc-batch` 派发。Store 低级写入命令由编排器调用，不作为人工拼接事实的操作步骤。
 
-**当前限制**：Mac 三官方客户端真实驱动／收据仍有缺口；缺少 Desktop／VS Code 收据或 seal 批准时，驱动写
+**当前限制**：Mac 客户端收据已有离线准备、核验与导入合同，但三官方客户端真账号采集尚未接通，正式
+recorder／独立捕获来源登记仍为空。缺少 Desktop／VS Code 收据或 seal 批准时，驱动写
 `vc5-pause.json` 并暂停。B4-05b 的封存后 `ar<k>` 恢复段仍在实现／待验收，完整录制回放与发布认证也未完成，
 见 §3.6。以下入口和合同不能替代这些现场验收。
 
@@ -2061,6 +2068,11 @@ for VS Code 按批准计划驱动候选。Claude 按 ModelCapabilityCatalog 枚�
 第三方拒绝与 Codex 隔离由 `capture-candidate boundary-check` 的 `third-party-ingress-rejection`、
 `codex-final-wire-isolation` 两项单独留证；后者需要冻结的 Codex 账号／API Key／模型、生产 commit 及真实请求
 确认。驱动按顺序派发边界核对，不能用手工 HTTP 正例或伪造客户端 Header 替代真实客户端收据。
+
+Mac 客户端材料通过 `capture-candidate client-evidence prepare／verify／import` 冻结任务、核验原始附件并导入。
+这组入口目前只具备离线合同能力：没有已登记的真实 recorder 就不能预约正式客户端运行；
+`regression_fixture` 只归档历史回归材料，不能满足正式 `--client-evidence` 或真账号验收。后续须接通
+真实客户端、独立捕获来源与请求前预算准入，再按同一合同形成可消费的正式收据。
 
 ### 4.5.3 Candidate 证据封存
 
@@ -2381,7 +2393,7 @@ attempt 不足以选前者。下表的“已接入”指当前入口，完整现
 | VC-4 构建／上传中断 | 父 run 对账 | 原身份且幂等证明成立时续作 | `vc4-all.sh`；上传用 `--resume-from upload-wait` | 已接入 |
 | VC-5 未封存采集失败 | 预约对账 | 批准、授权、`vc5-claude-recover.sh` | 保留可信 Job，只补执行闭集 | `fix-and-continue.sh` 已接入 |
 | 网关残留／取证进程残留 | 预约对账与 `environment-cleanup preview` | 批准清理、干净环境复核，必要时隔离 | 原恢复轮，再批准补跑 | 清理工具已接入，需独立批准 |
-| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | 暂停点已接；Mac 真实驱动仍有缺口 |
+| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | 暂停点与离线收据合同已接；Mac 真账号采集及正式 recorder 未接 |
 | 边界核对／seal／compare 批次失败 | 父 run 对账 | 按失败码修复与登记演进 | 同一候选的未完成动作 | seal／compare 已接；不合法既有边界收据先人工审计 |
 | 已封存 evaluator 缺陷 | `evaluation-recover preview` | 修复、部署、演进、批准 `evaluator-defect` | 新 `b<K>`，只重评影响项 | 离线恢复已接入 |
 | 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | B4-05b 实现／验收中 |
