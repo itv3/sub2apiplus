@@ -1,0 +1,1555 @@
+"""Claude 候选交付（VC-6）编排：四阶段交付、交付恢复段 dr<k>、经批准的阶段失效与交付终态
+（Claude 升级控制面设计 B4-07 编排器部分；Store 侧合同见 ``official_client_control`` 的 B4-07 门禁 ①～⑧、
+``delivery-chain`` 与候选交付收据 v3）。
+
+一、边界
+========
+* 输入只认 VC-5 已在 Store 形成的终态：当前候选 revision、当前评估基线下最后一条 ``validation_completed``，再沿它取
+  AcceptanceFact、CandidateEvidencePackage、``candidate_frozen`` 与 CandidateBuildReceipt。编排器不重算 VC-5，也不调用
+  accept 门禁（B4-06）的代码；B4-06 如另定「VC-6 交接清单」，只需改 ``_vc5_handoff`` 一处。
+* 计时账本必须是当前 revision 的 VC-5 已完成、VC-6 进行中（VC-6 由批次层开始）；交付写入一律在这个前提下进行。
+* 暂不包含（B4-07 收尾，等 B4-06 合入后接上）：VC-6 checkpoint 与阶段完成登记、VC-6 批次接入（动作计划、阶段幂等重派
+  合同、父监督器退出码）。ARM64 隔离候选环境的真实执行器是 B4-07 遗留项，另行排期（第二节）。
+
+二、交付环境执行器
+==================
+四阶段的环境动作（切到候选镜像、实际回退、恢复候选、稳定观察；任一阶段失败立即恢复回退镜像）由交付环境执行器完成，
+编排器只做冻结、核对与登记。执行器按名字登记在 ``ENVIRONMENT_EXECUTORS``（名字 → 无参工厂），``--environment-executor``
+选择；生产环境目前不登记任何执行器，选了即报「待落实」。执行器对象提供两个方法：
+
+* ``freeze(request)``：只读冻结当前环境，返回环境身份 6 项（``host_id``、``architecture``、``compose_sha256``、
+  ``environment_sha256``、``configuration_sha256``、``network_sha256``）、真实回退点（``rollback.image_digest``、
+  ``rollback.runtime_profile_sha256``）、交付门禁结果（``gates``，id 闭集是 ``DELIVERY_GATES``，设计 §4.6.2：镜像身份、
+  Compose 差异、启动与 health、依赖连通、入口路由、秘密扫描、证据 inventory、回退可用性、观察窗条件）、回退材料
+  （``rollback_material``）与候选部署配置（``deployment_configuration``）。
+* ``run_stage(request)``：执行一个阶段并返回观测：``result``（pass／failed）、实际环境身份、实际镜像与运行 Profile、
+  逐项检查（id 闭集是冻结计划的 ``stage_checks[stage]``）、``observed_seconds``、失败时可给 ``root_cause_id``，以及
+  可选的私有文件（``private_files``：``[{name, content}]``）。``live_request_count`` 必须为 0：交付 smoke 的请求入账随真实
+  执行器一起设计，在那之前执行器不得发模型请求。
+
+执行器说 pass 但编排器核对不符（环境身份漂移、镜像或 Profile 不是计划值、检查未全过、观察窗不足）一律按失败登记，
+根因分别为 ``delivery-environment-drift`` 与 ``delivery-<阶段>-verification``；执行器自己判失败时根因取它给出的值，缺省
+``delivery-<阶段>``。
+
+三、``deliver-candidate run``
+=============================
+一次调用把当前 delivery 推进到下一个停点，重跑同一条命令即接着跑：
+
+1. 只读解析与补账（第六节），当前 delivery 已签收据即返回 ``finalized``；
+2. 执行器 ``freeze``：交付门禁有未通过项即停在 ``delivery_gates_failed``（零写入）；
+3. 选 delivery：命名 ``<候选>-d<n>``。还没有 delivery，或环境身份 6 项、回退镜像、回退 Profile 任一与当前计划不同，就开
+   新 delivery（门禁 ⑤：环境变化不能在同一 delivery 内恢复）；旧 delivery 的最新段还在推进时，先把它的下一阶段以
+   ``delivery-environment-drift`` 记为失败、收口（只写失败事实，不调用执行器）。新 delivery 先封存环境冻结证据、回退
+   材料与交付计划（``candidate_delivery_plan``，同内容复用）；
+4. 按 ``delivery-chain`` 决定下一步：最新段已收口且是失败，或有待消费的已批准失效，就 ``delivery-recovery-reserve``
+   预约 dr<k>（failure 锚点从失败阶段起跑，approved_invalidation 锚点从被失效的阶段起跑，``previous_valid_stage_ref``
+   取有效链上起点前一阶段的 pass，``environment_before`` 取本次冻结）；否则沿最新段继续；
+5. 逐阶段 ``run_stage`` → 写私有文件 → 封阶段证据清单 → ``candidate-delivery-record``（事实 v2，带幂等键）；
+6. 停点：四阶段有效链全部通过且没有待消费失效 → ``awaiting_finalize``（退出 2，附交付包审核摘要）；某阶段失败 →
+   ``stage_failed``（退出 3）。同根因失败达到计时账本冻结上限时，在任何 Store 写入之前拒绝。
+
+``--rerun-from`` 只用于核对：必须等于第 4 步推导出的起点，否则拒绝（已通过的阶段要重跑，必须先 delivery-stage-invalidate）。
+
+四、``deliver-candidate finalize``
+==================================
+不带 ``--approve-sha256`` 时只输出交付包审核内容（零写入，退出 2）；带上且与审核摘要相同才封存私有归档清单、部署配置
+与交付包（同内容复用），再 ``candidate-delivery-finalize --allow-existing`` 签发 ``ready_for_operator_release`` 收据。交付包
+内容由 Store 交付链与证据确定性推出，所以重复 finalize 得到同一交付包，Store 返回原收据（``reused``）。交付包绑定有效链
+四阶段的最终 pass；公开证据索引取这四个阶段的证据清单；私有归档清单收录本 delivery 全部阶段（含失败阶段）的私有文件。
+
+五、``delivery-stage-invalidate preview|apply``
+===============================================
+只在 delivery 未 finalize、最新段已收口、没有待消费失效、被失效阶段在当前有效链上时允许。preview 零写入：证据清单的
+对象引用按内容现算（不封存），审核摘要由 Store 同名命令 ``--preview`` 给出；apply 核对批准摘要后封存证据清单，转调 Store
+``delivery-stage-invalidate --approve-sha256 --allow-existing``，再记账本。重跑 apply 命中同一份待消费失效即复用。批次控制面
+命令：父监督器（campaign-run）上下文里一律拒绝。
+
+六、计时账本：先 Store 后账本
+=============================
+四个交付事件（``codex_upgrade_timing_ledger.DELIVERY_EVENT_TYPES``）全部由 Store 交付链确定性推出：每个已消费或待消费的
+阶段失效一条 ``delivery_stage_invalidated``，每个 dr<k> 一条 ``delivery_recovery_started``，段收口时一条 completed／failed。
+每次 Store 写入之后、以及每条命令开头都按 Store 补齐账本缺的事件（``_catch_up_ledger``，事件 ID 确定），所以两者之间被
+强杀后重跑同一条命令即收敛；账本里已有的交付事件必须与推导结果的前缀逐项一致，否则拒绝。首轮交付（dr0）的失败不单独
+记账，锚定它的 dr1 在 started 里补计一次同根因失败。
+
+七、并发
+========
+一条命令全程持交付级排他锁（``control/delivery/.delivery.lock``，非阻塞，另一个交付命令在跑即拒绝）；每一步 Store 写入与
+账本补账持 Campaign 锁。
+
+本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层。
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Iterator, Mapping, Sequence
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from tools.official_client_capture import claude_upgrade_batch
+from tools.official_client_capture import claude_upgrade_seal
+from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import codex_upgrade_supervisor
+from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
+from tools.official_client_capture.capturelib.model import ConfigurationError
+from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256
+from tools.official_client_control import receipts as store_receipts
+from tools.official_client_control.canonical import (
+    canonical_json_bytes,
+    canonical_sha256,
+    expect_image_digest,
+    sha256_bytes,
+)
+from tools.official_client_control.contracts import (
+    CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS,
+    CANDIDATE_DELIVERY_FACT_V2_SCHEMA,
+    CANDIDATE_DELIVERY_PACKAGE_SCHEMA,
+    CANDIDATE_DELIVERY_PLAN_SCHEMA,
+    CANDIDATE_DELIVERY_STAGES,
+    OBJECT_SCHEMA,
+    PRIVATE_ARCHIVE_MANIFEST_SCHEMA,
+    fact_idempotency_key,
+    invalidation_review_sha256,
+)
+from tools.official_client_control.errors import ControlError
+
+SUBCOMMANDS = ("deliver-candidate", "delivery-stage-invalidate")
+DELIVERY_ACTIONS = ("run", "finalize")
+INVALIDATION_ACTIONS = ("preview", "apply")
+STAGES = CANDIDATE_DELIVERY_STAGES
+DELIVERY_PHASE = "VC-6"
+# 四阶段冻结的检查闭集（设计 §4.6.3）：候选启动并通过交付 smoke；只替换应用容器切回真实回退镜像，验证 health、鉴权、数据
+# 与依赖；恢复同一候选 digest，复核 Profile、入口与运行事实；冻结观察窗内无身份、安全、数据、状态或跨 Release 混用异常。
+STAGE_CHECKS: Mapping[str, tuple[str, ...]] = {
+    "candidate_active": ("entry-routing", "health", "image-identity", "smoke"),
+    "rollback_verified": ("auth", "data", "dependencies", "health", "image-identity"),
+    "candidate_restored": ("entry-routing", "health", "image-identity", "profile"),
+    "stable_observed": ("data", "identity", "release-isolation", "safety", "state"),
+}
+# 交付门禁闭集（设计 §4.6.2）：任何写操作之前由执行器 freeze 给出，全部通过才封存交付计划或预约恢复段。
+DELIVERY_GATES = (
+    "compose-diff",
+    "dependency-connectivity",
+    "entry-routing",
+    "evidence-inventory",
+    "health",
+    "image-identity",
+    "observation-window",
+    "rollback-availability",
+    "secret-scan",
+)
+DEFAULT_OBSERVATION_WINDOW_SECONDS = 900
+# 用户管理的生产环境状态（设计附录 G 例外④：字段名沿用 vircs_state）：候选交付不连接、不修改、不验证生产环境。
+PRODUCTION_STATE = {"ownership": "operator_managed", "verification": "unverified", "action": "not_touched"}
+OPERATIONAL_EVIDENCE_SCHEMA = "official-client-operational-evidence/v1"
+DELIVERY_RELATIVE = Path("control") / "delivery"
+STORE_SCRATCH_RELATIVE = Path("control") / "store-inputs"
+LOCK_FILENAME = ".delivery.lock"
+ROOT_CAUSE_ENVIRONMENT_DRIFT = "delivery-environment-drift"
+LOGICAL_ACTION_PREFIX = "claude-upgrade:deliver-candidate"
+EXECUTOR_PENDING_WORK_ITEM = "B4-07 遗留项：ARM64 隔离候选环境真实执行器（另行排期）"
+# 交付环境执行器登记表：名字 → 无参工厂。生产环境目前不登记任何执行器（第二节）。
+ENVIRONMENT_EXECUTORS: dict[str, Callable[[], Any]] = {}
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+RESULTS = ("pass", "failed")
+
+
+def _orchestrator() -> Any:
+    from tools.official_client_capture import claude_upgrade
+
+    return claude_upgrade
+
+
+# ---------------------------------------------------------------------------
+# 一、上下文：Formal Campaign、当前候选 revision、Store、计时账本与 VC-5 交接
+# ---------------------------------------------------------------------------
+
+
+class DeliveryContext:
+    """一次交付命令的只读上下文（解析时已核对候选属于当前 revision、Store 工具身份当前有效、VC-5 已在 Store 完成）。"""
+
+    def __init__(
+        self,
+        *,
+        campaign_dir: Path,
+        manifest: Mapping[str, Any],
+        candidate_id: str,
+        revision: int,
+        store: Any,
+        campaign: Mapping[str, Any],
+        ledger_dir: Path,
+        data_root: Path,
+        handoff: Mapping[str, Any],
+    ) -> None:
+        self.campaign_dir = campaign_dir
+        self.manifest = manifest
+        self.candidate_id = candidate_id
+        self.revision = revision
+        self.store = store
+        self.campaign = dict(campaign)
+        self.campaign_id = str(campaign["campaign_id"])
+        self.persona = dict(campaign["persona"])
+        self.ledger_dir = ledger_dir
+        self.data_root = data_root
+        self.handoff = dict(handoff)
+        self.session = claude_upgrade_seal._StoreSession(
+            Path(store.root), self.campaign_id, campaign_dir / STORE_SCRATCH_RELATIVE
+        )
+
+    @property
+    def delivery_root(self) -> Path:
+        return self.campaign_dir / DELIVERY_RELATIVE
+
+
+def _resolve(campaign_dir: Path, candidate_id: str, *, action: str) -> DeliveryContext:
+    orchestrator = _orchestrator()
+    if not SAFE_ID_RE.fullmatch(candidate_id or ""):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    campaign_dir = Path(campaign_dir)
+    manifest = orchestrator._require_formal_campaign(campaign_dir)
+    revision, record = orchestrator._require_candidate_revision(campaign_dir, manifest, action=action)
+    if record is None or record.get("candidate_id") != candidate_id:
+        current = record.get("candidate_id") if isinstance(record, Mapping) else None
+        raise ConfigurationError(f"{action}：候选 {candidate_id} 不是当前候选 revision r{revision} 的候选（当前是 {current}）。")
+    store, store_campaign = claude_upgrade_store.open_campaign_store(campaign_dir, manifest)
+    campaign = dict(store_campaign)
+    claude_upgrade_seal._require_store_tool_current(store, campaign)
+    try:
+        if store_receipts.revision_invalidation(store, campaign, int(revision)) is not None:
+            raise ConfigurationError(f"候选 revision r{revision} 已作废（revision_required）：不能交付作废候选。")
+        handoff = _vc5_handoff(store, campaign, candidate_id)
+    except ControlError as error:
+        raise ConfigurationError(f"Store 无法给出交付输入：{error}") from error
+    ledger_dir = orchestrator._campaign_timing_ledger_dir(campaign_dir, manifest)
+    from tools.official_client_capture import claude_upgrade_capture
+
+    data_root = claude_upgrade_capture._host_data_root(campaign_dir)
+    return DeliveryContext(
+        campaign_dir=campaign_dir.resolve(strict=True),
+        manifest=manifest,
+        candidate_id=candidate_id,
+        revision=int(revision),
+        store=store,
+        campaign=campaign,
+        ledger_dir=ledger_dir,
+        data_root=data_root,
+        handoff=handoff,
+    )
+
+
+def _vc5_handoff(store: Any, campaign: Mapping[str, Any], candidate_id: str) -> dict[str, Any]:
+    """VC-5 → VC-6 的交接：当前候选 revision、当前评估基线下该候选最后一条 ``validation_completed`` 及其引用链。"""
+
+    formed = store_receipts.current_formed_under(store, dict(campaign))
+    coordinates = (
+        (formed["candidate_revision"], formed["evaluation_baseline"]) if isinstance(formed, Mapping) else None
+    )
+    completed = [
+        fact
+        for fact in store.list_facts(str(campaign["campaign_id"]), "validation")
+        if fact["fact_kind"] == "validation_completed"
+        and fact["payload"].get("candidate_id") == candidate_id
+        and (
+            coordinates is None
+            or (fact["formed_under"]["candidate_revision"], fact["formed_under"]["evaluation_baseline"]) == coordinates
+        )
+    ]
+    if not completed:
+        raise ConfigurationError(
+            f"候选 {candidate_id} 在当前候选 revision 与评估基线下没有 VC-5 完成事实（validation_completed）："
+            "交付只能在 accept 门禁通过、validation-finalize 之后进行。"
+        )
+    fact = completed[-1]
+    payload = fact["payload"]
+    candidate = store.load_fact(payload["candidate_ref"])["payload"]
+    build = store.load_receipt(payload["candidate_build_receipt_ref"])
+    return {
+        "validation_completed_ref": dict(store.fact_ref(fact)),
+        "acceptance_ref": dict(payload["acceptance_ref"]),
+        "candidate_ref": dict(payload["candidate_ref"]),
+        "candidate_build_receipt_ref": dict(payload["candidate_build_receipt_ref"]),
+        "candidate_evidence_package_ref": dict(payload["candidate_evidence_package_ref"]),
+        "candidate_image_digest": str(candidate["image_digest"]),
+        "architecture": str(candidate["target_architecture"]),
+        "runtime_profile_sha256": str(build["profile_identity"]["profile_digest"]),
+    }
+
+
+def _ledger_state(context: DeliveryContext) -> dict[str, Any]:
+    try:
+        return timing_ledger.phase_ledger_state(context.ledger_dir)
+    except timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"计时账本不可读：{error}") from error
+
+
+def _require_vc6_open(context: DeliveryContext, state: Mapping[str, Any]) -> None:
+    """交付写入的账本前提：当前 revision 的 VC-5 已完成、VC-6 进行中、账本处于 active。"""
+
+    phases = state.get("revision_phase_state", {}).get(str(context.revision), {})
+    if state.get("current_revision") != context.revision or phases.get("VC-5") != "completed":
+        raise ConfigurationError(
+            f"计时账本里候选 revision r{context.revision} 的 VC-5 尚未完成：交付只能在 VC-5 完成之后进行。"
+        )
+    if state.get("status") != "active" or state.get("active_phase") != DELIVERY_PHASE:
+        raise ConfigurationError(
+            f"计时账本当前状态 {state.get('status')}、进行中阶段 {state.get('active_phase')}：交付写入要求 VC-6 进行中"
+            "（VC-6 由批次层开始；预算暂停须先批准延期，停线或同根因达上限须先 campaign-resume）。"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 二、交付环境执行器
+# ---------------------------------------------------------------------------
+
+
+def _environment_executor(name: Any) -> Any:
+    if not isinstance(name, str) or not SAFE_NAME_RE.fullmatch(name):
+        raise ConfigurationError("--environment-executor 格式非法。")
+    factory = ENVIRONMENT_EXECUTORS.get(name)
+    if factory is None:
+        raise _orchestrator()._pending(f"交付环境执行器 {name}", EXECUTOR_PENDING_WORK_ITEM)
+    return factory()
+
+
+def _expect(condition: bool, message: str) -> None:
+    if not condition:
+        raise ConfigurationError(f"交付环境执行器返回非法：{message}")
+
+
+def _checked_items(value: Any, expected_ids: Sequence[str] | None, label: str) -> list[dict[str, Any]]:
+    """``[{id, result, facts}]``：id 安全且唯一；给出 ``expected_ids`` 时必须恰好是这个闭集。"""
+
+    _expect(isinstance(value, list), f"{label} 必须是数组")
+    items: list[dict[str, Any]] = []
+    for item in value:
+        _expect(isinstance(item, Mapping) and set(item) <= {"id", "result", "facts"} and "id" in item, f"{label} 条目字段非法")
+        item_id = item["id"]
+        _expect(isinstance(item_id, str) and SAFE_NAME_RE.fullmatch(item_id) is not None, f"{label} 条目 id 非法")
+        result = item.get("result", "pass")
+        _expect(result in RESULTS, f"{label}.{item_id} 的 result 非法")
+        facts = item.get("facts", {})
+        _expect(isinstance(facts, Mapping), f"{label}.{item_id} 的 facts 必须是对象")
+        items.append({"id": item_id, "result": result, "facts": json.loads(json.dumps(facts))})
+    ids = [item["id"] for item in items]
+    _expect(len(ids) == len(set(ids)), f"{label} 条目 id 重复")
+    if expected_ids is not None:
+        _expect(sorted(ids) == sorted(expected_ids), f"{label} 必须恰好覆盖 {sorted(expected_ids)}")
+    return sorted(items, key=lambda item: item["id"])
+
+
+def _environment(value: Any, label: str) -> dict[str, str]:
+    _expect(isinstance(value, Mapping) and set(value) == set(CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS), f"{label} 字段不闭合")
+    _expect(isinstance(value["host_id"], str) and SAFE_ID_RE.fullmatch(value["host_id"]) is not None, f"{label}.host_id 非法")
+    _expect(isinstance(value["architecture"], str) and bool(value["architecture"]), f"{label}.architecture 非法")
+    for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS[2:]:
+        _expect(isinstance(value[key], str) and SHA256_RE.fullmatch(value[key]) is not None, f"{label}.{key} 非法")
+    return {key: str(value[key]) for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS}
+
+
+def _image_digest(value: Any, label: str) -> str:
+    try:
+        return expect_image_digest(value, label)
+    except ControlError as error:
+        raise ConfigurationError(f"交付环境执行器返回非法：{error}") from error
+
+
+def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str, window: int) -> dict[str, Any]:
+    """执行器只读冻结当前环境，并按第二节校验返回值。"""
+
+    request = {
+        "campaign_id": context.campaign_id,
+        "candidate_id": context.candidate_id,
+        "delivery_id": delivery_id,
+        "candidate_image_digest": context.handoff["candidate_image_digest"],
+        "architecture": context.handoff["architecture"],
+        "runtime_profile_sha256": context.handoff["runtime_profile_sha256"],
+        "observation_window_seconds": window,
+        "delivery_gates": list(DELIVERY_GATES),
+    }
+    raw = executor.freeze(request)
+    _expect(isinstance(raw, Mapping), "freeze 必须返回对象")
+    _expect(
+        set(raw) == {"environment", "rollback", "gates", "rollback_material", "deployment_configuration"},
+        "freeze 字段不闭合",
+    )
+    rollback = raw["rollback"]
+    _expect(isinstance(rollback, Mapping) and set(rollback) == {"image_digest", "runtime_profile_sha256"}, "rollback 字段不闭合")
+    _expect(
+        isinstance(rollback["runtime_profile_sha256"], str) and SHA256_RE.fullmatch(rollback["runtime_profile_sha256"]) is not None,
+        "rollback.runtime_profile_sha256 非法",
+    )
+    snapshot = {
+        "executor": name,
+        "environment": _environment(raw["environment"], "environment"),
+        "rollback": {
+            "image_digest": _image_digest(rollback["image_digest"], "rollback.image_digest"),
+            "runtime_profile_sha256": str(rollback["runtime_profile_sha256"]),
+        },
+        "gates": _checked_items(raw["gates"], DELIVERY_GATES, "gates"),
+        "rollback_material": _checked_items(raw["rollback_material"], None, "rollback_material"),
+        "deployment_configuration": _checked_items(raw["deployment_configuration"], None, "deployment_configuration"),
+    }
+    _expect(bool(snapshot["rollback_material"]), "rollback_material 不能为空")
+    _expect(bool(snapshot["deployment_configuration"]), "deployment_configuration 不能为空")
+    for key in ("rollback_material", "deployment_configuration"):
+        _expect(all(item["result"] == "pass" for item in snapshot[key]), f"{key} 必须全部通过")
+    return snapshot
+
+
+def _observation(raw: Any, stage: str) -> dict[str, Any]:
+    _expect(isinstance(raw, Mapping), "run_stage 必须返回对象")
+    allowed = {
+        "stage", "result", "environment", "image_digest", "runtime_profile_sha256", "checks", "observed_seconds",
+        "root_cause_id", "live_request_count", "private_files",
+    }
+    _expect(set(raw) <= allowed and set(raw) >= allowed - {"root_cause_id", "live_request_count", "private_files"}, "run_stage 字段不闭合")
+    _expect(raw["stage"] == stage, f"run_stage 返回的阶段不是 {stage}")
+    _expect(raw["result"] in RESULTS, "run_stage.result 非法")
+    count = raw.get("live_request_count", 0)
+    _expect(count == 0 and not isinstance(count, bool), "live_request_count 必须为 0（交付 smoke 请求入账随真实执行器一起设计）")
+    seconds = raw["observed_seconds"]
+    _expect(isinstance(seconds, int) and not isinstance(seconds, bool) and seconds >= 0, "observed_seconds 非法")
+    cause = raw.get("root_cause_id")
+    _expect(cause is None or (isinstance(cause, str) and SAFE_ID_RE.fullmatch(cause) is not None), "root_cause_id 非法")
+    _expect(
+        isinstance(raw["runtime_profile_sha256"], str) and SHA256_RE.fullmatch(raw["runtime_profile_sha256"]) is not None,
+        "runtime_profile_sha256 非法",
+    )
+    files = raw.get("private_files", [])
+    _expect(isinstance(files, list), "private_files 必须是数组")
+    private: list[dict[str, str]] = []
+    for item in files:
+        _expect(isinstance(item, Mapping) and set(item) == {"name", "content"}, "private_files 条目字段不闭合")
+        _expect(isinstance(item["name"], str) and SAFE_NAME_RE.fullmatch(item["name"]) is not None, "private_files.name 非法")
+        _expect(item["name"] != "observation.json", "private_files 不得使用保留名 observation.json")
+        _expect(isinstance(item["content"], str), "private_files.content 必须是文本")
+        private.append({"name": item["name"], "content": item["content"]})
+    _expect(len({item["name"] for item in private}) == len(private), "private_files 名字重复")
+    return {
+        "stage": stage,
+        "result": str(raw["result"]),
+        "environment": _environment(raw["environment"], "run_stage.environment"),
+        "image_digest": _image_digest(raw["image_digest"], "run_stage.image_digest"),
+        "runtime_profile_sha256": str(raw["runtime_profile_sha256"]),
+        "checks": _checked_items(raw["checks"], None, "checks"),
+        "observed_seconds": int(seconds),
+        "root_cause_id": cause,
+        "private_files": sorted(private, key=lambda item: item["name"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 三、Store 读写的小工具
+# ---------------------------------------------------------------------------
+
+
+def _store(argv: Sequence[Any]) -> Any:
+    return claude_upgrade_seal.store_cli([str(item) for item in argv])
+
+
+def _object_ref(kind: str, payload: Mapping[str, Any]) -> dict[str, str]:
+    """对象内容寻址引用（与 ``ControlStore.seal_object_outcome`` 同一算法），不封存。"""
+
+    document = {"schema_version": OBJECT_SCHEMA, "object_kind": kind, "payload": dict(payload)}
+    return {"object_kind": kind, "sha256": sha256_bytes(canonical_json_bytes(document))}
+
+
+def _with_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    payload["identity_sha256"] = ""
+    payload["identity_sha256"] = canonical_sha256({key: value for key, value in payload.items() if key != "identity_sha256"})
+    return payload
+
+
+def _manifest(context: DeliveryContext, manifest_id: str, entries: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if not SAFE_ID_RE.fullmatch(manifest_id):
+        raise ConfigurationError(f"证据清单编号过长或非法：{manifest_id}")
+    return {
+        "schema_version": OPERATIONAL_EVIDENCE_SCHEMA,
+        "persona": dict(context.persona),
+        "manifest_id": manifest_id,
+        "entries": sorted((dict(entry) for entry in entries), key=lambda entry: str(entry["id"])),
+    }
+
+
+def _sorted_refs(references: Any) -> list[dict[str, Any]]:
+    """Store 引用数组的规范形态：按 ``canonical_sha256`` 严格排序、去重（``contracts._validate_ref_list``）。"""
+
+    unique = {canonical_sha256(dict(reference)): dict(reference) for reference in references}
+    return [unique[key] for key in sorted(unique)]
+
+
+def _entry(entry_id: str, result: str, **facts: Any) -> dict[str, Any]:
+    return {"id": entry_id, "facts": {"result": result, **facts}}
+
+
+def _chain(context: DeliveryContext, delivery_id: str) -> dict[str, Any]:
+    return dict(_store(["delivery-chain", "--store", context.store.root, "--campaign", context.campaign_id, "--delivery-id", delivery_id]))
+
+
+def _deliveries(context: DeliveryContext) -> list[dict[str, Any]]:
+    """本候选的交付（按编号）：``[{delivery_id, index, plan_ref, plan}]``；编号取自 ``<候选>-d<n>``。"""
+
+    pattern = re.compile(rf"^{re.escape(context.candidate_id)}-d([1-9][0-9]*)$")
+    found: dict[str, dict[str, Any]] = {}
+    for reference in context.store.list_object_refs("candidate_delivery_plan"):
+        plan = context.store.load_object(reference)["payload"]
+        if plan["campaign_id"] != context.campaign_id or plan["candidate_id"] != context.candidate_id:
+            continue
+        match = pattern.fullmatch(str(plan["delivery_id"]))
+        if match is None:
+            raise ConfigurationError(f"Store 里有不按 <候选>-d<n> 命名的交付计划：{plan['delivery_id']}，不是本编排器写的。")
+        if plan["delivery_id"] in found:
+            raise ConfigurationError(f"交付 {plan['delivery_id']} 在 Store 里有多份交付计划，Store 已不一致。")
+        found[plan["delivery_id"]] = {
+            "delivery_id": str(plan["delivery_id"]),
+            "index": int(match.group(1)),
+            "plan_ref": dict(reference),
+            "plan": dict(plan),
+        }
+    deliveries = sorted(found.values(), key=lambda item: item["index"])
+    if [item["index"] for item in deliveries] != list(range(1, len(deliveries) + 1)):
+        raise ConfigurationError("交付编号必须从 d1 起连续。")
+    return deliveries
+
+
+def _select_delivery(context: DeliveryContext, delivery_id: str | None) -> dict[str, Any]:
+    deliveries = _deliveries(context)
+    if not deliveries:
+        raise ConfigurationError(f"候选 {context.candidate_id} 还没有交付：先执行 deliver-candidate run。")
+    current = deliveries[-1]
+    if delivery_id is not None and delivery_id != current["delivery_id"]:
+        raise ConfigurationError(
+            f"--delivery-id {delivery_id} 不是当前交付 {current['delivery_id']}：环境变化后旧交付只读保留，不再推进。"
+        )
+    return current
+
+
+@contextlib.contextmanager
+def _delivery_lock(context: DeliveryContext) -> Iterator[None]:
+    root = ensure_private_directory(context.delivery_root, context.campaign_dir)
+    path = root / LOCK_FILENAME
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ConfigurationError("交付锁必须是当前用户拥有的普通文件。")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ConfigurationError("另一个交付命令正在运行（交付锁被占用）：等它结束后再重跑。") from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+@contextlib.contextmanager
+def _write_scope(context: DeliveryContext) -> Iterator[None]:
+    with _orchestrator()._campaign_lock(context.campaign_dir):
+        yield
+
+
+# ---------------------------------------------------------------------------
+# 四、计时账本：由 Store 交付链推出交付事件并补齐（第六节）
+# ---------------------------------------------------------------------------
+
+
+def _failure_root_cause(context: DeliveryContext, payload: Mapping[str, Any]) -> str:
+    """失败阶段事实的根因：证据清单 ``stage-failure`` 项登记的 ``root_cause_id``，缺省 ``delivery-<阶段>``。"""
+
+    for reference in payload.get("evidence_refs", []):
+        manifest = context.store.load_object(reference)["payload"]
+        for entry in manifest.get("entries", []):
+            facts = entry.get("facts", {})
+            if entry.get("id") == "stage-failure" and isinstance(facts.get("root_cause_id"), str):
+                return str(facts["root_cause_id"])
+    return f"delivery-{payload['stage']}"
+
+
+def _event(context: DeliveryContext, event_id: str, event_type: str, *, delivery_id: str, stage: str,
+           recovery: str | None, cause: str | None, next_action: str) -> dict[str, Any]:
+    if not SAFE_ID_RE.fullmatch(event_id):
+        raise ConfigurationError(f"计时账本事件 ID 过长或非法：{event_id}")
+    return {
+        "event_id": event_id,
+        "phase": DELIVERY_PHASE,
+        "event_type": event_type,
+        "root_cause_id": cause,
+        "next_action": next_action,
+        "revision": context.revision,
+        "candidate_id": context.candidate_id,
+        "delivery_id": delivery_id,
+        "delivery_recovery_revision": recovery,
+        "delivery_stage": stage,
+    }
+
+
+def _expected_ledger_events(context: DeliveryContext) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for delivery in _deliveries(context):
+        delivery_id = delivery["delivery_id"]
+        try:
+            state = store_receipts.delivery_chain_state(context.store, context.campaign_id, delivery_id)
+        except ControlError as error:
+            raise ConfigurationError(f"交付 {delivery_id} 的 Store 交付链不一致：{error}") from error
+
+        def invalidation(reference: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+            return _event(
+                context,
+                f"delivery-{delivery_id}-invalidation-{str(reference['sha256'])[:16]}",
+                "delivery_stage_invalidated",
+                delivery_id=delivery_id,
+                stage=str(payload["invalidated_stage"]),
+                recovery=None,
+                cause=None,
+                next_action=f"deliver-candidate run：以 approved_invalidation 恢复段从 {payload['invalidated_stage']} 起重跑",
+            )
+
+        for number in sorted(state.recoveries):
+            _reference, reservation = state.recoveries[number]
+            recovery = f"dr{number}"
+            stage = str(reservation["rerun_from_stage"])
+            if reservation["anchor_kind"] == "approved_invalidation":
+                anchor = reservation["anchor_ref"]
+                events.append(invalidation(anchor, context.store.load_object(anchor)["payload"]))
+                cause = None
+            else:
+                cause = _failure_root_cause(context, context.store.load_fact(reservation["anchor_ref"])["payload"])
+            events.append(
+                _event(
+                    context, f"delivery-{delivery_id}-{recovery}-started", "delivery_recovery_started",
+                    delivery_id=delivery_id, stage=stage, recovery=recovery, cause=cause,
+                    next_action=f"{recovery}：从 {stage} 起重跑到 stable_observed",
+                )
+            )
+            group = state.groups.get(number, [])
+            last = group[-1]["payload"] if group else None
+            if last is not None and last["result"] == "failed":
+                failed_cause = _failure_root_cause(context, last)
+                events.append(
+                    _event(
+                        context, f"delivery-{delivery_id}-{recovery}-failed", "delivery_recovery_failed",
+                        delivery_id=delivery_id, stage=str(last["stage"]), recovery=recovery, cause=failed_cause,
+                        next_action=f"deliver-candidate run：预约下一恢复段从 {last['stage']} 续跑",
+                    )
+                )
+            elif last is not None and last["stage"] == STAGES[-1]:
+                events.append(
+                    _event(
+                        context, f"delivery-{delivery_id}-{recovery}-completed", "delivery_recovery_completed",
+                        delivery_id=delivery_id, stage=STAGES[-1], recovery=recovery, cause=None,
+                        next_action="deliver-candidate finalize：审核交付包后签发候选交付收据",
+                    )
+                )
+        if state.pending is not None:
+            events.append(invalidation(*state.pending))
+    return events
+
+
+_EVENT_COMPARED_FIELDS = (
+    "event_type", "phase", "root_cause_id", "revision", "candidate_id", "delivery_id", "delivery_recovery_revision",
+    "delivery_stage",
+)
+
+
+def _catch_up_ledger(context: DeliveryContext) -> list[str]:
+    """按 Store 补齐账本里缺的交付事件；账本已有的交付事件必须是推导结果的前缀（逐项一致）。返回本次追加的事件 ID。"""
+
+    expected = _expected_ledger_events(context)
+    appended: list[str] = []
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(context.ledger_dir):
+            existing = [
+                event
+                for event, _raw in timing_ledger._load_events(context.ledger_dir)
+                if event.get("event_type") in timing_ledger.DELIVERY_EVENT_TYPES
+                and event.get("revision") == context.revision
+            ]
+            if len(existing) > len(expected):
+                raise ConfigurationError("计时账本的交付事件多于 Store 交付链能推出的事件：账本与 Store 不一致。")
+            for actual, wanted in zip(existing, expected):
+                if actual.get("event_id") != wanted["event_id"] or any(
+                    actual.get(field) != wanted.get(field) for field in _EVENT_COMPARED_FIELDS
+                ):
+                    raise ConfigurationError(
+                        f"计时账本的交付事件 {actual.get('event_id')} 与 Store 交付链推出的 {wanted['event_id']} 不一致。"
+                    )
+            for wanted in expected[len(existing):]:
+                timing_ledger.append_event(context.ledger_dir, live_request_count=0, receipts=[], **wanted)
+                appended.append(wanted["event_id"])
+    except (timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(
+            f"计时账本拒绝补记交付事件（Store 已写、账本待补；处理账本状态后重跑同一条命令即补齐）：{error}"
+        ) from error
+    return appended
+
+
+# ---------------------------------------------------------------------------
+# 五、交付计划、恢复段预约与阶段登记
+# ---------------------------------------------------------------------------
+
+
+def _delivery_id(context: DeliveryContext, index: int) -> str:
+    delivery_id = f"{context.candidate_id}-d{index}"
+    if not SAFE_ID_RE.fullmatch(delivery_id):
+        raise ConfigurationError(f"候选 ID 过长，无法派生交付编号：{delivery_id}")
+    return delivery_id
+
+
+def _environment_entries(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        _entry("environment", "pass", **snapshot["environment"]),
+        _entry("executor", "pass", name=snapshot["executor"]),
+        _entry("rollback-point", "pass", **snapshot["rollback"]),
+    ]
+
+
+def _freeze_manifest(context: DeliveryContext, manifest_id: str, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """环境冻结证据：交付门禁、环境身份、回退点、执行器与候选部署配置。"""
+
+    entries = _environment_entries(snapshot)
+    entries += [_entry(f"gate-{item['id']}", item["result"], detail=item["facts"]) for item in snapshot["gates"]]
+    entries += [_entry(f"deployment-{item['id']}", "pass", detail=item["facts"]) for item in snapshot["deployment_configuration"]]
+    return _manifest(context, manifest_id, entries)
+
+
+def _plan_drift(plan: Mapping[str, Any], snapshot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """冻结计划与本次冻结的差异：环境身份 6 项、回退镜像与回退 Profile（任一不同即须开新 delivery）。"""
+
+    drift: dict[str, dict[str, Any]] = {}
+    for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS:
+        if plan[key] != snapshot["environment"][key]:
+            drift[key] = {"planned": plan[key], "observed": snapshot["environment"][key]}
+    if plan["rollback_image_digest"] != snapshot["rollback"]["image_digest"]:
+        drift["rollback_image_digest"] = {"planned": plan["rollback_image_digest"], "observed": snapshot["rollback"]["image_digest"]}
+    if plan["rollback_runtime_profile_sha256"] != snapshot["rollback"]["runtime_profile_sha256"]:
+        drift["rollback_runtime_profile_sha256"] = {
+            "planned": plan["rollback_runtime_profile_sha256"],
+            "observed": snapshot["rollback"]["runtime_profile_sha256"],
+        }
+    return drift
+
+
+def _open_delivery(context: DeliveryContext, index: int, snapshot: Mapping[str, Any], window: int) -> dict[str, Any]:
+    """封存环境冻结证据、回退材料与交付计划（同内容复用），返回新 delivery。"""
+
+    delivery_id = _delivery_id(context, index)
+    if snapshot["environment"]["architecture"] != context.handoff["architecture"]:
+        raise ConfigurationError(
+            f"交付环境架构 {snapshot['environment']['architecture']} 与候选 {context.handoff['architecture']} 不一致。"
+        )
+    freeze = _freeze_manifest(context, f"{delivery_id}-environment-freeze", snapshot)
+    rollback = _manifest(
+        context,
+        f"{delivery_id}-rollback-material",
+        [_entry(f"rollback-{item['id']}", "pass", detail=item["facts"]) for item in snapshot["rollback_material"]],
+    )
+    with _write_scope(context):
+        freeze_ref = context.session.seal_object("operational_evidence", freeze)
+        rollback_ref = context.session.seal_object("operational_evidence", rollback)
+        plan = _with_identity(
+            {
+                "schema_version": CANDIDATE_DELIVERY_PLAN_SCHEMA,
+                "campaign_id": context.campaign_id,
+                "persona": dict(context.persona),
+                "plan_id": f"{delivery_id}-plan",
+                "delivery_id": delivery_id,
+                "candidate_id": context.candidate_id,
+                "candidate_ref": context.handoff["candidate_ref"],
+                "candidate_build_receipt_ref": context.handoff["candidate_build_receipt_ref"],
+                "validation_completed_ref": context.handoff["validation_completed_ref"],
+                "acceptance_ref": context.handoff["acceptance_ref"],
+                "candidate_evidence_package_ref": context.handoff["candidate_evidence_package_ref"],
+                **snapshot["environment"],
+                "runtime_profile_sha256": context.handoff["runtime_profile_sha256"],
+                "rollback_runtime_profile_sha256": snapshot["rollback"]["runtime_profile_sha256"],
+                "candidate_image_digest": context.handoff["candidate_image_digest"],
+                "rollback_image_digest": snapshot["rollback"]["image_digest"],
+                "observation_window_seconds": window,
+                "stage_checks": {stage: list(STAGE_CHECKS[stage]) for stage in STAGES},
+                "environment_freeze_ref": freeze_ref,
+                "rollback_material_refs": [rollback_ref],
+                "vircs_state": dict(PRODUCTION_STATE),
+            }
+        )
+        plan_ref = context.session.seal_object("candidate_delivery_plan", plan)
+    return {"delivery_id": delivery_id, "index": index, "plan_ref": plan_ref, "plan": plan}
+
+
+def _require_plan_current(context: DeliveryContext, delivery: Mapping[str, Any]) -> None:
+    plan = delivery["plan"]
+    for key in ("validation_completed_ref", "acceptance_ref", "candidate_ref", "candidate_build_receipt_ref"):
+        if plan[key] != context.handoff[key]:
+            raise ConfigurationError(
+                f"交付 {delivery['delivery_id']} 的计划绑定的 {key} 不是当前 VC-5 交接：VC-5 输入在交付开始后发生了变化。"
+            )
+
+
+def _segment(context: DeliveryContext, chain: Mapping[str, Any]) -> tuple[int, dict[str, Any] | None, dict[str, Any] | None]:
+    """最新段：``(编号, 段预约引用, 段预约)``；首轮交付（dr0）后两者为 None。"""
+
+    latest = chain.get("latest_recovery_revision")
+    if latest is None:
+        return 0, None, None
+    number = int(str(latest)[2:])
+    reference = dict(chain["recovery_refs"][number - 1])
+    return number, reference, dict(context.store.load_object(reference)["payload"])
+
+
+def _next_stage(context: DeliveryContext, chain: Mapping[str, Any]) -> tuple[str, dict[str, Any] | None] | None:
+    """最新段未收口时它的下一阶段与前序事实引用；已收口返回 None（要么签收据，要么先预约新恢复段）。"""
+
+    if chain["latest_closed"]:
+        return None
+    number, _reference, reservation = _segment(context, chain)
+    terminal = chain.get("terminal_ref")
+    if terminal is None:
+        if number == 0:
+            return STAGES[0], None
+        assert reservation is not None
+        return str(reservation["rerun_from_stage"]), reservation["previous_valid_stage_ref"]
+    payload = context.store.load_fact(terminal)["payload"]
+    return STAGES[STAGES.index(payload["stage"]) + 1], dict(terminal)
+
+
+def _anchor(context: DeliveryContext, chain: Mapping[str, Any]) -> tuple[str, dict[str, Any], str, str | None]:
+    """新恢复段的锚点：``(anchor_kind, anchor_ref, rerun_from_stage, 根因)``；待消费失效优先（Store 门禁 ④）。"""
+
+    pending = chain.get("pending_invalidation_ref")
+    if pending is not None:
+        payload = context.store.load_object(pending)["payload"]
+        return "approved_invalidation", dict(pending), str(payload["invalidated_stage"]), None
+    terminal = chain.get("terminal_ref")
+    payload = context.store.load_fact(terminal)["payload"] if terminal is not None else None
+    if payload is None or payload["result"] != "failed":
+        raise ConfigurationError("最新交付段没有以失败收口，也没有待消费的阶段失效：没有可续跑的恢复段。")
+    return "failure", dict(terminal), str(payload["stage"]), _failure_root_cause(context, payload)
+
+
+def _reserve(
+    context: DeliveryContext,
+    delivery: Mapping[str, Any],
+    chain: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    rerun_from: str | None,
+) -> dict[str, Any]:
+    """预约 dr<k>：先做账本预检（零写入），再封 environment_before 证据与段预约，最后补账（delivery_recovery_started）。"""
+
+    anchor_kind, anchor_ref, stage, cause = _anchor(context, chain)
+    if rerun_from is not None and rerun_from != stage:
+        raise ConfigurationError(
+            f"推导出的续跑起点是 {stage}，与 --rerun-from {rerun_from} 不同：已通过的阶段要重跑，须先 delivery-stage-invalidate。"
+        )
+    number = int(str(chain["next_recovery_revision"])[2:])
+    index = STAGES.index(stage)
+    previous = chain["valid_stage_refs"].get(STAGES[index - 1]) if index else None
+    if index and previous is None:
+        raise ConfigurationError(f"续跑起点 {stage} 之前的阶段在有效链上没有 pass：Store 交付链不一致。")
+    state = _ledger_state(context)
+    _require_vc6_open(context, state)
+    if cause is not None:
+        try:
+            plan, _raw = timing_ledger._load_plan(context.ledger_dir)
+        except timing_ledger.TimingLedgerError as error:
+            raise ConfigurationError(f"计时账本计划不可读：{error}") from error
+        limit = int(plan["same_root_cause_retry_limit"])
+        count = int(state.get("same_root_cause_failures", {}).get(cause, 0)) + (1 if number == 1 else 0)
+        if count >= limit:
+            raise ConfigurationError(
+                f"同一根因 {cause} 的交付失败已达计时账本冻结上限（{count}／{limit}）：零写入停在这里，修复并经 "
+                "campaign-resume 确认后再续跑。"
+            )
+    delivery_id = str(delivery["delivery_id"])
+    recovery = f"dr{number}"
+    environment = _manifest(context, f"{delivery_id}-{recovery}-environment-before", _environment_entries(snapshot)
+                            + [_entry(f"gate-{item['id']}", item["result"], detail=item["facts"]) for item in snapshot["gates"]])
+    with _write_scope(context):
+        evidence_ref = context.session.seal_object("operational_evidence", environment)
+        payload = {
+            "campaign_id": context.campaign_id,
+            "delivery_id": delivery_id,
+            "delivery_plan_ref": dict(delivery["plan_ref"]),
+            "recovery_revision": recovery,
+            "anchor_kind": anchor_kind,
+            "anchor_ref": anchor_ref,
+            "rerun_from_stage": stage,
+            "previous_valid_stage_ref": dict(previous) if previous is not None else None,
+            "stages_to_rerun": list(STAGES[index:]),
+            "run_nonce": f"{delivery_id}-{recovery}",
+            "environment_before": {**snapshot["environment"], "evidence_ref": evidence_ref},
+        }
+        outcome = context.session._with_input(
+            payload,
+            lambda path: _store(
+                ["delivery-recovery-reserve", "--store", context.store.root, "--campaign", context.campaign_id,
+                 "--input", path, "--allow-existing"]
+            ),
+        )
+        appended = _catch_up_ledger(context)
+    return {
+        "recovery_revision": recovery,
+        "recovery_ref": dict(outcome["object_ref"]),
+        "anchor_kind": anchor_kind,
+        "rerun_from_stage": stage,
+        "root_cause_id": cause,
+        "ledger_events": appended,
+    }
+
+
+def _expected_stage_identity(plan: Mapping[str, Any], stage: str) -> tuple[str, str]:
+    if stage == "rollback_verified":
+        return str(plan["rollback_image_digest"]), str(plan["rollback_runtime_profile_sha256"])
+    return str(plan["candidate_image_digest"]), str(plan["runtime_profile_sha256"])
+
+
+def _verdict(plan: Mapping[str, Any], stage: str, observation: Mapping[str, Any]) -> tuple[str, str | None, list[str]]:
+    """编排器对执行器观测的核对（第二节）：``(结果, 根因, 不符项)``。"""
+
+    problems: list[str] = []
+    drift = [key for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS if observation["environment"][key] != plan[key]]
+    if drift:
+        problems.append(f"环境身份漂移：{'、'.join(drift)}")
+    image, profile = _expected_stage_identity(plan, stage)
+    if observation["image_digest"] != image:
+        problems.append("镜像不是冻结计划值")
+    if observation["runtime_profile_sha256"] != profile:
+        problems.append("运行 Profile 不是冻结计划值")
+    if [item["id"] for item in observation["checks"]] != sorted(plan["stage_checks"][stage]):
+        problems.append("检查项不是冻结闭集")
+    elif any(item["result"] != "pass" for item in observation["checks"]):
+        problems.append("检查未全部通过")
+    if stage == STAGES[-1] and observation["observed_seconds"] < int(plan["observation_window_seconds"]):
+        problems.append("观察窗不足")
+    if observation["result"] == "failed":
+        return "failed", observation["root_cause_id"] or f"delivery-{stage}", problems
+    if not problems:
+        return "pass", None, []
+    if drift:
+        return "failed", ROOT_CAUSE_ENVIRONMENT_DRIFT, problems
+    return "failed", f"delivery-{stage}-verification", problems
+
+
+def _write_private(context: DeliveryContext, delivery_id: str, label: str, files: Sequence[tuple[str, bytes]]) -> list[dict[str, Any]]:
+    """把一次阶段运行的私有文件写进 ``control/delivery/<delivery_id>/<label>-*/``（0600，只写一次），返回数据根相对绑定。"""
+
+    root = ensure_private_directory(context.delivery_root / delivery_id, context.campaign_dir)
+    directory = Path(tempfile.mkdtemp(prefix=f"{label}-", dir=root))
+    bindings: list[dict[str, Any]] = []
+    for name, content in files:
+        path = directory / name
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        bindings.append(
+            {
+                "path": path.resolve(strict=True).relative_to(context.data_root.resolve(strict=True)).as_posix(),
+                "sha256": file_sha256(path),
+                "bytes": path.stat().st_size,
+            }
+        )
+    return sorted(bindings, key=lambda item: item["path"])
+
+
+def _stage_payload(
+    context: DeliveryContext,
+    delivery: Mapping[str, Any],
+    stage: str,
+    *,
+    previous: Mapping[str, Any] | None,
+    recovery: tuple[str, Mapping[str, Any]] | None,
+    evidence_ref: Mapping[str, Any],
+    observed_seconds: int,
+    result: str,
+) -> dict[str, Any]:
+    plan = delivery["plan"]
+    image, profile = _expected_stage_identity(plan, stage)
+    return _with_identity(
+        {
+            "schema_version": CANDIDATE_DELIVERY_FACT_V2_SCHEMA,
+            "delivery_id": plan["delivery_id"],
+            "stage": stage,
+            "candidate_id": plan["candidate_id"],
+            "candidate_ref": plan["candidate_ref"],
+            "candidate_build_receipt_ref": plan["candidate_build_receipt_ref"],
+            "validation_completed_ref": plan["validation_completed_ref"],
+            "acceptance_ref": plan["acceptance_ref"],
+            "delivery_plan_ref": dict(delivery["plan_ref"]),
+            "previous_stage_ref": dict(previous) if previous is not None else None,
+            **{key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS},
+            "runtime_profile_sha256": profile,
+            "image_digest": image,
+            "check_ids": list(plan["stage_checks"][stage]),
+            "evidence_refs": [dict(evidence_ref)],
+            # Store 合同：只有 stable_observed 记观察秒数，其余阶段恒为 0（执行器报的耗时留在阶段证据的 run 项）。
+            "observed_seconds": int(observed_seconds) if stage == STAGES[-1] else 0,
+            "result": result,
+            "recovery_revision": recovery[0] if recovery is not None else None,
+            "recovery_ref": dict(recovery[1]) if recovery is not None else None,
+        }
+    )
+
+
+def _record_stage(context: DeliveryContext, stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """``candidate-delivery-record``（事实 v2）：带幂等键，父监督器里另带 producer run；返回 ``{fact_ref, reused}``。"""
+
+    key = fact_idempotency_key(
+        f"{LOGICAL_ACTION_PREFIX}:{payload['delivery_id']}:{payload['recovery_revision'] or 'dr0'}:{stage}",
+        canonical_sha256(dict(payload)),
+        "candidate_delivery_recorded",
+    )
+    producer = claude_upgrade_seal._producer_run()
+
+    def call(path: Path) -> Any:
+        argv: list[Any] = [
+            "candidate-delivery-record", "--store", context.store.root, "--campaign", context.campaign_id,
+            "--stage", stage, "--input", path, "--issued-at", _orchestrator()._utc_now(), "--idempotency-key", key,
+        ]
+        if producer is None:
+            return _store(argv)
+        return context.session._with_input(producer, lambda producer_path: _store([*argv, "--producer-run", producer_path]))
+
+    outcome = context.session._with_input(dict(payload), call)
+    return {"fact_ref": dict(outcome["fact_ref"]), "reused": bool(outcome["reused"])}
+
+
+def _execute_stage(
+    context: DeliveryContext,
+    executor: Any,
+    executor_name: str,
+    delivery: Mapping[str, Any],
+    stage: str,
+    previous: Mapping[str, Any] | None,
+    recovery: tuple[str, Mapping[str, Any], Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """执行器跑一个阶段 → 核对 → 写私有文件 → 封阶段证据 → 登记阶段事实 → 补账。"""
+
+    plan = delivery["plan"]
+    delivery_id = str(delivery["delivery_id"])
+    segment = recovery[0] if recovery is not None else "dr0"
+    run_nonce = str(recovery[2]["run_nonce"]) if recovery is not None else f"{delivery_id}-dr0"
+    request = {
+        "campaign_id": context.campaign_id,
+        "candidate_id": context.candidate_id,
+        "delivery_id": delivery_id,
+        "segment": segment,
+        "run_nonce": run_nonce,
+        "stage": stage,
+        "plan": {
+            **{key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS},
+            "candidate_image_digest": plan["candidate_image_digest"],
+            "rollback_image_digest": plan["rollback_image_digest"],
+            "runtime_profile_sha256": plan["runtime_profile_sha256"],
+            "rollback_runtime_profile_sha256": plan["rollback_runtime_profile_sha256"],
+            "observation_window_seconds": plan["observation_window_seconds"],
+            "stage_checks": list(plan["stage_checks"][stage]),
+        },
+    }
+    observation = _observation(executor.run_stage(request), stage)
+    result, cause, problems = _verdict(plan, stage, observation)
+    files = [("observation.json", canonical_json_bytes({**observation, "private_files": [item["name"] for item in observation["private_files"]]}))]
+    files += [(item["name"], item["content"].encode("utf-8")) for item in observation["private_files"]]
+    bindings = _write_private(context, delivery_id, f"{segment}-{stage}", files)
+    entries = [_entry(f"check-{item['id']}", item["result"], detail=item["facts"]) for item in observation["checks"]]
+    entries += [
+        _entry("environment", "failed" if any(problem.startswith("环境身份漂移") for problem in problems) else "pass",
+               **observation["environment"]),
+        _entry("image", "pass" if not any(problem.startswith(("镜像", "运行 Profile")) for problem in problems) else "failed",
+               image_digest=observation["image_digest"], runtime_profile_sha256=observation["runtime_profile_sha256"]),
+        _entry("run", "pass", segment=segment, run_nonce=run_nonce, executor=executor_name,
+               observed_seconds=observation["observed_seconds"]),
+    ]
+    entries += [_entry(f"private-{index:03d}", "pass", **binding) for index, binding in enumerate(bindings, start=1)]
+    if result == "failed":
+        entries.append(_entry("stage-failure", "failed", root_cause_id=cause, problems=problems))
+    manifest = _manifest(context, f"{delivery_id}-{segment}-{stage}", entries)
+    with _write_scope(context):
+        evidence_ref = context.session.seal_object("operational_evidence", manifest)
+        payload = _stage_payload(
+            context,
+            delivery,
+            stage,
+            previous=previous,
+            recovery=(recovery[0], recovery[1]) if recovery is not None else None,
+            evidence_ref=evidence_ref,
+            observed_seconds=observation["observed_seconds"],
+            result=result,
+        )
+        recorded = _record_stage(context, stage, payload)
+        appended = _catch_up_ledger(context)
+    return {
+        "stage": stage,
+        "segment": segment,
+        "result": result,
+        "root_cause_id": cause,
+        "problems": problems,
+        "fact_ref": recorded["fact_ref"],
+        "evidence_ref": evidence_ref,
+        "ledger_events": appended,
+    }
+
+
+def _close_for_drift(
+    context: DeliveryContext,
+    delivery: Mapping[str, Any],
+    chain: Mapping[str, Any],
+    drift: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """环境变化时收口旧 delivery 仍在推进的最新段：把它的下一阶段以环境漂移记为失败（不调用执行器）。"""
+
+    if chain["latest_closed"]:
+        return None
+    number, reference, _reservation = _segment(context, chain)
+    if number == 0 and chain.get("terminal_ref") is None:
+        return None  # 首轮交付还没有任何事实：旧 delivery 原样保留，不需要收口。
+    step = _next_stage(context, chain)
+    assert step is not None
+    stage, previous = step
+    delivery_id = str(delivery["delivery_id"])
+    segment = f"dr{number}" if number else "dr0"
+    entries = [
+        _entry("stage-failure", "failed", root_cause_id=ROOT_CAUSE_ENVIRONMENT_DRIFT, drift=dict(drift)),
+        _entry("run", "pass", segment=segment, executor="not-invoked"),
+    ]
+    manifest = _manifest(context, f"{delivery_id}-{segment}-{stage}-environment-drift", entries)
+    with _write_scope(context):
+        evidence_ref = context.session.seal_object("operational_evidence", manifest)
+        payload = _stage_payload(
+            context,
+            delivery,
+            stage,
+            previous=previous,
+            recovery=(segment, reference) if number and reference is not None else None,
+            evidence_ref=evidence_ref,
+            observed_seconds=0,
+            result="failed",
+        )
+        recorded = _record_stage(context, stage, payload)
+        appended = _catch_up_ledger(context)
+    return {"stage": stage, "segment": segment, "fact_ref": recorded["fact_ref"], "ledger_events": appended}
+
+
+# ---------------------------------------------------------------------------
+# 六、交付包与终态收据
+# ---------------------------------------------------------------------------
+
+
+def _private_bindings(context: DeliveryContext, delivery_id: str) -> list[dict[str, Any]]:
+    """本 delivery 全部阶段事实（含失败阶段）证据清单登记的私有文件，逐个核对仍在数据根内且摘要不变。"""
+
+    bindings: dict[str, dict[str, Any]] = {}
+    for fact in store_receipts.delivery_facts(context.store, context.campaign_id, delivery_id):
+        for reference in fact["payload"]["evidence_refs"]:
+            manifest = context.store.load_object(reference)["payload"]
+            for entry in manifest["entries"]:
+                if not str(entry["id"]).startswith("private-"):
+                    continue
+                facts = entry["facts"]
+                binding = {"path": str(facts["path"]), "sha256": str(facts["sha256"]), "bytes": int(facts["bytes"])}
+                path = context.data_root / binding["path"]
+                if path.is_symlink() or not path.is_file() or file_sha256(path) != binding["sha256"]:
+                    raise ConfigurationError(f"交付私有文件缺失或摘要漂移：{binding['path']}")
+                bindings[binding["path"]] = binding
+    if not bindings:
+        raise ConfigurationError(f"交付 {delivery_id} 没有可归档的私有文件。")
+    return [bindings[path] for path in sorted(bindings)]
+
+
+def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any]) -> dict[str, Any]:
+    """确定性推出私有归档清单、部署配置与交付包（不封存）；审核摘要即交付包的 ``identity_sha256``。"""
+
+    delivery_id = str(delivery["delivery_id"])
+    plan = delivery["plan"]
+    entries = _private_bindings(context, delivery_id)
+    archive = _with_identity(
+        {
+            "schema_version": PRIVATE_ARCHIVE_MANIFEST_SCHEMA,
+            "campaign_id": context.campaign_id,
+            "persona": dict(context.persona),
+            "manifest_id": f"{delivery_id}-private-archive",
+            "redacted": True,
+            "entries": entries,
+            "entry_count": len(entries),
+            "total_bytes": sum(item["bytes"] for item in entries),
+            "manifest_sha256": canonical_sha256(entries),
+        }
+    )
+    freeze = context.store.load_object(plan["environment_freeze_ref"])["payload"]
+    deployment = _manifest(
+        context,
+        f"{delivery_id}-deployment-configuration",
+        [entry for entry in freeze["entries"] if str(entry["id"]).startswith("deployment-")],
+    )
+    valid = [dict(chain["valid_stage_refs"][stage]) for stage in STAGES]
+    public = _sorted_refs(
+        reference for fact_ref in valid for reference in context.store.load_fact(fact_ref)["payload"]["evidence_refs"]
+    )
+    rollback = [dict(reference) for reference in plan["rollback_material_refs"]]
+    package = _with_identity(
+        {
+            "schema_version": CANDIDATE_DELIVERY_PACKAGE_SCHEMA,
+            "campaign_id": context.campaign_id,
+            "persona": dict(context.persona),
+            "package_id": f"{delivery_id}-package",
+            "delivery_id": delivery_id,
+            "candidate_id": plan["candidate_id"],
+            "candidate_ref": plan["candidate_ref"],
+            "candidate_build_receipt_ref": plan["candidate_build_receipt_ref"],
+            "validation_completed_ref": plan["validation_completed_ref"],
+            "acceptance_ref": plan["acceptance_ref"],
+            "candidate_evidence_package_ref": plan["candidate_evidence_package_ref"],
+            "delivery_plan_ref": dict(delivery["plan_ref"]),
+            "delivery_fact_refs": valid,
+            "deployment_configuration_ref": _object_ref("operational_evidence", deployment),
+            "public_evidence_index_refs": public,
+            "rollback_material_refs": rollback,
+            "private_archive_manifest_ref": _object_ref("private_archive_manifest", archive),
+            "candidate_image_digest": plan["candidate_image_digest"],
+            "artifact_count": 1 + len(public) + len(rollback),
+        }
+    )
+    return {
+        "review_sha256": package["identity_sha256"],
+        "package": package,
+        "private_archive_manifest": archive,
+        "deployment_configuration": deployment,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 七、子命令
+# ---------------------------------------------------------------------------
+
+
+def add_arguments(name: str, parser: argparse.ArgumentParser) -> None:
+    """``claude_upgrade.py`` 的解析器循环里转调（``--campaign-dir`` 由编排器统一加）。"""
+
+    parser.add_argument("--candidate-id", required=True)
+    parser.add_argument("--delivery-id", help="核对用：必须是当前交付（缺省取当前交付）")
+    if name == "deliver-candidate":
+        parser.add_argument("delivery_action", choices=DELIVERY_ACTIONS)
+        parser.add_argument("--environment-executor", help="run：交付环境执行器名字（第二节）")
+        parser.add_argument(
+            "--observation-window-seconds", type=int,
+            help=f"run：新交付计划冻结的稳定观察窗（秒，缺省 {DEFAULT_OBSERVATION_WINDOW_SECONDS}）；已有计划时只用于核对",
+        )
+        parser.add_argument("--rerun-from", choices=STAGES, help="run：核对新恢复段的起点（不能用来重跑已通过的阶段）")
+        parser.add_argument("--approve-sha256", help="finalize：交付包审核摘要；缺省只输出审核内容")
+    else:
+        parser.add_argument("invalidation_action", choices=INVALIDATION_ACTIONS)
+        parser.add_argument("--stage", required=True, choices=STAGES)
+        parser.add_argument("--reason", required=True)
+        parser.add_argument("--evidence", action="append", type=Path, default=[], help="支撑失效理由的 Campaign 内文件，可多次给出")
+        parser.add_argument("--approve-sha256", help="apply：preview 输出的 review_sha256")
+        parser.add_argument("--approved-by", help="apply：批准人")
+
+
+def command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """``claude_upgrade.main`` 转调入口：返回 ``(结果, 退出码)``。"""
+
+    if arguments.command == "deliver-candidate":
+        if arguments.delivery_action == "run":
+            return _run(arguments)
+        return _finalize(arguments)
+    if arguments.command == "delivery-stage-invalidate":
+        return _invalidate(arguments)
+    raise ConfigurationError(f"不是交付子命令：{arguments.command}")
+
+
+def _summary(context: DeliveryContext, delivery: Mapping[str, Any] | None) -> dict[str, Any]:
+    return {
+        "campaign_id": context.campaign_id,
+        "candidate_id": context.candidate_id,
+        "revision": context.revision,
+        "delivery_id": delivery["delivery_id"] if delivery is not None else None,
+        "delivery_plan_ref": dict(delivery["plan_ref"]) if delivery is not None else None,
+        "live_request_count": 0,
+    }
+
+
+def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action="deliver-candidate run")
+    executor = _environment_executor(arguments.environment_executor)
+    rerun_from = arguments.rerun_from
+    with _delivery_lock(context):
+        with _write_scope(context):
+            ledger_events = _catch_up_ledger(context)
+        deliveries = _deliveries(context)
+        current = deliveries[-1] if deliveries else None
+        if arguments.delivery_id is not None and (current is None or arguments.delivery_id != current["delivery_id"]):
+            raise ConfigurationError(f"--delivery-id {arguments.delivery_id} 不是当前交付。")
+        if current is not None:
+            _require_plan_current(context, current)
+            chain = _chain(context, current["delivery_id"])
+            if chain["receipt_refs"]:
+                return {
+                    **_summary(context, current),
+                    "status": "finalized",
+                    "receipt_refs": chain["receipt_refs"],
+                    "chain": chain,
+                    "ledger_events": ledger_events,
+                }, 0
+        _require_vc6_open(context, _ledger_state(context))
+        window = arguments.observation_window_seconds
+        if current is not None and window is not None and window != current["plan"]["observation_window_seconds"]:
+            raise ConfigurationError(
+                f"--observation-window-seconds {window} 与当前交付计划冻结的观察窗 {current['plan']['observation_window_seconds']} 不同。"
+            )
+        if window is None:
+            window = int(current["plan"]["observation_window_seconds"]) if current is not None else DEFAULT_OBSERVATION_WINDOW_SECONDS
+        if window <= 0:
+            raise ConfigurationError("--observation-window-seconds 必须大于 0。")
+        proposed = current["delivery_id"] if current is not None else _delivery_id(context, 1)
+        snapshot = _freeze(context, executor, str(arguments.environment_executor), proposed, window)
+        failed_gates = [item["id"] for item in snapshot["gates"] if item["result"] != "pass"]
+        if failed_gates:
+            return {
+                **_summary(context, current),
+                "status": "delivery_gates_failed",
+                "failed_gates": failed_gates,
+                "gates": snapshot["gates"],
+                "ledger_events": ledger_events,
+                "next_command": "修复交付环境后重跑 deliver-candidate run（零写入）",
+            }, 3
+        switched: dict[str, Any] | None = None
+        if current is not None:
+            drift = _plan_drift(current["plan"], snapshot)
+            if drift:
+                if rerun_from is not None:
+                    raise ConfigurationError("交付环境已变化，要开新交付从首阶段交付：--rerun-from 不适用。")
+                closed = _close_for_drift(context, current, chain, drift)
+                switched = {"previous_delivery_id": current["delivery_id"], "drift": drift, "closed": closed}
+                current = None
+        if current is None:
+            current = _open_delivery(context, len(_deliveries(context)) + 1, snapshot, window)
+        stages: list[dict[str, Any]] = []
+        reservation: dict[str, Any] | None = None
+        while True:
+            chain = _chain(context, current["delivery_id"])
+            base = {**_summary(context, current), "environment_changed": switched, "recovery": reservation, "stages": stages}
+            if chain["complete"] and chain["pending_invalidation_ref"] is None:
+                if rerun_from is not None:
+                    raise ConfigurationError(
+                        "当前交付四阶段有效链已全部通过：已通过的阶段要重跑，须先 delivery-stage-invalidate 批准阶段失效。"
+                    )
+                review = _package_review(context, current, chain)
+                return {
+                    **base,
+                    "status": "awaiting_finalize",
+                    "chain": chain,
+                    "package_review": review,
+                    "ledger_events": ledger_events + [item for stage in stages for item in stage["ledger_events"]],
+                    "next_command": (
+                        f"审核交付包后执行 deliver-candidate finalize --candidate-id {context.candidate_id} "
+                        f"--approve-sha256 {review['review_sha256']}"
+                    ),
+                }, 2
+            step = _next_stage(context, chain)
+            if step is None:
+                reservation = _reserve(context, current, chain, snapshot, rerun_from)
+                ledger_events += reservation["ledger_events"]
+                rerun_from = None
+                continue
+            if rerun_from is not None:
+                raise ConfigurationError(
+                    "当前交付段仍在推进：--rerun-from 只在预约新恢复段时核对起点；重跑同一条命令即沿当前段接着跑。"
+                )
+            stage, previous = step
+            number, recovery_ref, recovery_payload = _segment(context, chain)
+            recovery = (f"dr{number}", recovery_ref, recovery_payload) if number else None
+            outcome = _execute_stage(context, executor, str(arguments.environment_executor), current, stage, previous, recovery)
+            stages.append(outcome)
+            if outcome["result"] == "failed":
+                return {
+                    **base,
+                    "status": "stage_failed",
+                    "failed_stage": stage,
+                    "root_cause_id": outcome["root_cause_id"],
+                    "chain": _chain(context, current["delivery_id"]),
+                    "ledger_events": ledger_events + [item for stage in stages for item in stage["ledger_events"]],
+                    "next_command": "修复后重跑 deliver-candidate run：自动预约下一恢复段，从失败阶段续跑",
+                }, 3
+
+
+def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action="deliver-candidate finalize")
+    with _delivery_lock(context):
+        delivery = _select_delivery(context, arguments.delivery_id)
+        _require_plan_current(context, delivery)
+        chain = _chain(context, delivery["delivery_id"])
+        finalized = bool(chain["receipt_refs"])
+        if not finalized and not (chain["complete"] and chain["pending_invalidation_ref"] is None):
+            raise ConfigurationError(
+                f"交付 {delivery['delivery_id']} 的有效链尚未四阶段全部通过或仍有待消费的阶段失效：先 deliver-candidate run。"
+            )
+        review = _package_review(context, delivery, chain)
+        if arguments.approve_sha256 is None:
+            return {
+                **_summary(context, delivery),
+                "status": "finalized" if finalized else "awaiting_finalize",
+                "receipt_refs": chain["receipt_refs"],
+                "package_review": review,
+            }, 0 if finalized else 2
+        if arguments.approve_sha256 != review["review_sha256"]:
+            raise ConfigurationError("--approve-sha256 与交付包审核摘要不一致：批准的不是这份交付包，请重新查看审核内容。")
+        if not finalized:
+            _require_vc6_open(context, _ledger_state(context))
+        with _write_scope(context):
+            deployment_ref = context.session.seal_object("operational_evidence", review["deployment_configuration"])
+            archive_ref = context.session.seal_object("private_archive_manifest", review["private_archive_manifest"])
+            package_ref = context.session.seal_object("candidate_delivery_package", review["package"])
+            if deployment_ref != review["package"]["deployment_configuration_ref"] or archive_ref != review["package"]["private_archive_manifest_ref"]:
+                raise ConfigurationError("封存后的部署配置或私有归档清单引用与交付包不一致。")
+            outcome = context.session._with_input(
+                package_ref,
+                lambda path: _store(
+                    ["candidate-delivery-finalize", "--store", context.store.root, "--campaign", context.campaign_id,
+                     "--package-ref", path, "--allow-existing"]
+                ),
+            )
+            ledger_events = _catch_up_ledger(context)
+    return {
+        **_summary(context, delivery),
+        "status": "finalized",
+        "receipt_ref": dict(outcome["receipt_ref"]),
+        "reused": bool(outcome["reused"]),
+        "package_ref": package_ref,
+        "release_state": "ready_for_operator_release",
+        "ledger_events": ledger_events,
+    }, 0
+
+
+def _invalidation_evidence(context: DeliveryContext, stage: str, stage_ref: Mapping[str, Any], files: Sequence[Path]) -> dict[str, Any]:
+    entries = [_entry("invalidated-stage", "pass", stage=stage, fact_ref=dict(stage_ref))]
+    for index, value in enumerate(files, start=1):
+        path = Path(value)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"--evidence 不是可信普通文件：{value}")
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(context.campaign_dir):
+            raise ConfigurationError(f"--evidence 必须位于 Campaign 目录内：{value}")
+        entries.append(
+            _entry(
+                f"evidence-{index:03d}", "pass",
+                path=resolved.relative_to(context.data_root.resolve(strict=True)).as_posix(),
+                sha256=file_sha256(resolved),
+                bytes=resolved.stat().st_size,
+            )
+        )
+    return _manifest(context, f"{stage_ref['sha256'][:16]}-stage-invalidation", entries)
+
+
+def _invalidate(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    if claude_upgrade_batch.in_campaign_run():
+        raise ConfigurationError("delivery-stage-invalidate 是批次控制面命令，禁止由 campaign-run 动作派发。")
+    action = str(arguments.invalidation_action)
+    context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action=f"delivery-stage-invalidate {action}")
+    reason = str(arguments.reason or "").strip()
+    if not reason:
+        raise ConfigurationError("--reason 不能为空。")
+    with _delivery_lock(context):
+        delivery = _select_delivery(context, arguments.delivery_id)
+        delivery_id = str(delivery["delivery_id"])
+        chain = _chain(context, delivery_id)
+        if chain["receipt_refs"]:
+            raise ConfigurationError(
+                f"③ 交付 {delivery_id} 已 finalize（终态收据 {chain['receipt_refs'][0]['sha256']}）：已 finalize 的交付不得申请阶段失效。"
+            )
+        pending = chain.get("pending_invalidation_ref")
+        if pending is not None:
+            existing = context.store.load_object(pending)["payload"]
+            if action == "apply" and arguments.approve_sha256 == existing["review_sha256"]:
+                with _write_scope(context):
+                    ledger_events = _catch_up_ledger(context)
+                return {
+                    **_summary(context, delivery),
+                    "status": "applied",
+                    "reused": True,
+                    "invalidation_ref": dict(pending),
+                    "review_sha256": existing["review_sha256"],
+                    "ledger_events": ledger_events,
+                }, 0
+            raise ConfigurationError(
+                f"交付 {delivery_id} 已有待消费的阶段失效（{existing['invalidated_stage']}）：先 deliver-candidate run 以恢复段消费它。"
+            )
+        if not chain["latest_closed"]:
+            raise ConfigurationError("阶段失效只能在最新交付段收口（失败或到达 stable_observed）后申请：先让当前段跑完。")
+        stage = str(arguments.stage)
+        stage_ref = chain["valid_stage_refs"].get(stage)
+        if stage_ref is None:
+            raise ConfigurationError(f"{stage} 不在当前有效链上（失败阶段以 failure 锚点续跑，不需要失效）。")
+        evidence = _invalidation_evidence(context, stage, stage_ref, arguments.evidence)
+        review = {
+            "campaign_id": context.campaign_id,
+            "delivery_id": delivery_id,
+            "invalidated_stage": stage,
+            "invalidated_stage_ref": dict(stage_ref),
+            "reason": reason,
+            "evidence_refs": [_object_ref("operational_evidence", evidence)],
+        }
+        preview = context.session._with_input(
+            review,
+            lambda path: _store(
+                ["delivery-stage-invalidate", "--store", context.store.root, "--campaign", context.campaign_id,
+                 "--input", path, "--preview"]
+            ),
+        )
+        review_sha256 = str(preview["review_sha256"])
+        if review_sha256 != invalidation_review_sha256(review):
+            raise ConfigurationError("Store 给出的审核摘要与编排器复算不一致。")
+        if action == "preview":
+            return {
+                **_summary(context, delivery),
+                "status": "preview",
+                "review": preview["review"],
+                "review_sha256": review_sha256,
+                "evidence_manifest": evidence,
+                "next_command": (
+                    f"delivery-stage-invalidate apply --candidate-id {context.candidate_id} --stage {stage} "
+                    f"--reason <同一理由> --approve-sha256 {review_sha256} --approved-by <批准人>"
+                ),
+            }, 2
+        if arguments.approve_sha256 != review_sha256:
+            raise ConfigurationError("--approve-sha256 与审核摘要不一致：批准的不是这份内容，请重新 preview。")
+        approved_by = str(arguments.approved_by or "").strip()
+        if not approved_by:
+            raise ConfigurationError("apply 必须给出 --approved-by。")
+        _require_vc6_open(context, _ledger_state(context))
+        payload = {**review, "approved_by": approved_by, "approved_at_utc": _orchestrator()._utc_now(), "review_sha256": review_sha256}
+        with _write_scope(context):
+            evidence_ref = context.session.seal_object("operational_evidence", evidence)
+            if evidence_ref != review["evidence_refs"][0]:
+                raise ConfigurationError("封存后的失效证据清单引用与审核内容不一致。")
+            outcome = context.session._with_input(
+                payload,
+                lambda path: _store(
+                    ["delivery-stage-invalidate", "--store", context.store.root, "--campaign", context.campaign_id,
+                     "--input", path, "--approve-sha256", review_sha256, "--allow-existing"]
+                ),
+            )
+            ledger_events = _catch_up_ledger(context)
+    return {
+        **_summary(context, delivery),
+        "status": "applied",
+        "reused": bool(outcome.get("reused", False)),
+        "invalidation_ref": dict(outcome["object_ref"]),
+        "review_sha256": review_sha256,
+        "ledger_events": ledger_events,
+        "next_command": f"deliver-candidate run --candidate-id {context.candidate_id}：以 approved_invalidation 恢复段从 {stage} 起重跑",
+    }, 0

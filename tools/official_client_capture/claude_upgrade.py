@@ -4669,8 +4669,10 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
     "accept": ("逐规则正式验收门禁", "B4-06（accept 门禁 Claude 版）"),
     "account-sealed-candidate": ("候选封存后的请求入账", "B4-02（候选证据四阶段封存）"),
-    "deliver-candidate": ("候选交付四阶段", "B4-07（交付四阶段）"),
-    "delivery-stage-invalidate": ("经批准的交付阶段失效", "B4-07（交付四阶段）"),
+    # deliver-candidate（run／finalize）与 delivery-stage-invalidate（preview／apply）由 B4-07 编排器部分落实（实现在
+    # claude_upgrade_delivery，见 ``main`` 的分派）；表项只用于注册子命令解析器。
+    "deliver-candidate": ("候选交付四阶段：run 推进到下一停点，finalize 签发交付收据", "B4-07（交付四阶段）"),
+    "delivery-stage-invalidate": ("经批准的交付阶段失效：preview 与 apply", "B4-07（交付四阶段）"),
 }
 # B2-08 落实的 Claude 子命令（实现在 ``claude_upgrade_recovery``，参数与 Codex 同名同参；environment-cleanup 是 Claude 新增）：
 # 子命令 → 说明。harden-evidence-permissions 与两个 wire-transition 子命令按设计明确拒绝（理由见 claude_upgrade_recovery 第五节）。
@@ -5029,6 +5031,11 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_candidate
 
             claude_upgrade_candidate.add_record_build_arguments(target)
+        if name in {"deliver-candidate", "delivery-stage-invalidate"}:
+            # 候选交付与经批准的交付阶段失效（B4-07 编排器部分），参数定义见 claude_upgrade_delivery。
+            from tools.official_client_capture import claude_upgrade_delivery
+
+            claude_upgrade_delivery.add_arguments(name, target)
     return parser
 
 
@@ -5233,7 +5240,8 @@ def main(argv: list[str] | None = None) -> int:
     （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 与 record-candidate-build 做 VC-4
     门禁计划与候选构建冻结（B3-04），revision-open 与 invalidate-candidate 在共享流程之外写 Store 侧两份登记（B3-05 编排器
     部分，``claude_upgrade_revision``），plan 带控制收据时建 preflight_only Campaign、analyze-target 做 VC-1 静态分析
-    （B2-11），其余 Claude 专属子命令在动作体落实前报未实现。
+    （B2-11），deliver-candidate 与 delivery-stage-invalidate 做 VC-6 候选交付、交付恢复段与经批准的阶段失效（B4-07 编排器
+    部分，``claude_upgrade_delivery``），其余 Claude 专属子命令在动作体落实前报未实现。
 
     B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律
     拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
@@ -5306,6 +5314,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_candidate
 
             result, return_code = claude_upgrade_candidate.record_candidate_build_command(arguments)
+        elif arguments.command in {"deliver-candidate", "delivery-stage-invalidate"}:
+            from tools.official_client_capture import claude_upgrade_delivery
+
+            result, return_code = claude_upgrade_delivery.command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

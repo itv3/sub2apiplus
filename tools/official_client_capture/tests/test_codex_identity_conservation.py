@@ -70,7 +70,11 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "
                                    "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）",
     "codex_upgrade_project_ledger.py": "B1-04 项目总账客户端维度：Claude v2 plan 带 client，码表、目录名与计量类别经适配器；Codex v1 逐字不变",
-    "codex_upgrade_timing_ledger.py": "B1-05 计时账本客户端维度：Claude v2 计划带 client，默认预算、承接表与总账目录名按客户端；Codex v1 逐字不变",
+    "codex_upgrade_timing_ledger.py": (
+        "B1-05 计时账本客户端维度：Claude v2 计划带 client，默认预算、承接表与总账目录名按客户端；Codex v1 逐字不变；"
+        "B4-07 交付恢复段与阶段失效四个事件（单列 DELIVERY_EVENT_TYPES，只对 Claude 计划放行，三个交付字段只写进 Claude "
+        "交付事件，摘要键集合不变），Codex v1 账本的事件字节、判定与报错不变"
+    ),
     "codex_upgrade.py": "B1-09 迁出 108 个不在任何身份闭包内的共享流程函数，原位留同名薄壳；随迁常量留别名",
     "upgrade_control_plane.py": "B1-09 新增共享控制流程：迁入函数经 adapter.orchestrator 访问编排器；B3-06 adapter_scope 同时设定对账器的"
                                 "客户端作用域（本模块直接调用的对账器内部函数随同一客户端，跨客户端即拒绝；Codex 设定的就是对账器缺省值，"

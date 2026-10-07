@@ -132,6 +132,31 @@ ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
     {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
 )
 DEADLINE_CONTROL_EVENTS = frozenset({"deadline_paused", "deadline_extended", "campaign_abandoned"})
+# Claude 升级 B4-07：候选交付恢复段 dr<k> 与经批准的交付阶段失效的四个事件（阶段 VC-6），只属于 Claude 计划
+#（plan v2、client=claude）。单列一组、不并入 EVENT_TYPES：账本命令行 append 的 --event-type 可选值不变，Codex（v1 计划）
+# 账本出现它们时按与改动前相同的「phase 或 event_type 非法」拒绝。编排器（claude_upgrade_delivery）在 Store 写入之后
+# 经 append_event 记账：
+# * delivery_recovery_started：预约 dr<k> 之后。failure 锚点带根因（锚定首轮失败时在此补计一次，锚定上一段失败时
+#   由上一段的 failed 事件计过），approved_invalidation 锚点不带根因、消费同一 delivery 待消费的阶段失效；
+# * delivery_recovery_completed／delivery_recovery_failed：本段到达 stable_observed 通过／某阶段失败之后收口，failed
+#   带根因并计入同根因失败次数（达到冻结上限即 stop_required，与 attempt 同一纪律）；
+# * delivery_stage_invalidated：阶段失效对象封存之后，登记该 delivery 待消费的失效阶段。
+# 交付段状态只在重放里使用，不进摘要（摘要键集合与 checkpoint 合同不变）。
+DELIVERY_EVENT_TYPES = frozenset(
+    {
+        "delivery_recovery_started",
+        "delivery_recovery_completed",
+        "delivery_recovery_failed",
+        "delivery_stage_invalidated",
+    }
+)
+DELIVERY_EVENT_CLIENTS = frozenset({"claude"})
+DELIVERY_PHASE = "VC-6"
+# 交付事件的三个专属字段：只在交付事件里出现（append_event 也只给交付事件写这些键），其他事件带上即「字段不闭合」。
+DELIVERY_EVENT_FIELDS = frozenset({"delivery_id", "delivery_recovery_revision", "delivery_stage"})
+# 与 Store 合同（official_client_control.contracts.CANDIDATE_DELIVERY_STAGES）同值；计时账本保持自包含，不导入 Store。
+DELIVERY_STAGES = ("candidate_active", "rollback_verified", "candidate_restored", "stable_observed")
+DELIVERY_RECOVERY_REVISION_RE = re.compile(r"^dr[1-9][0-9]*$")
 
 
 def _deadline_modules():
@@ -1327,8 +1352,12 @@ def _load_events(root: Path, *, limit: int | None = None) -> list[tuple[dict[str
     return [_load_json(path, f"event {path.name}") for path in paths]
 
 
-def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> None:
-    """校验改造 2 的四个可选字段；缺失即 None（历史事件），存在则类型与语义闭合。"""
+def _validate_event_revision_fields(event: dict[str, Any], sequence: int, *, delivery_events: bool = True) -> None:
+    """校验改造 2 的四个可选字段；缺失即 None（历史事件），存在则类型与语义闭合。
+
+    ``delivery_events``（B4-07）：是否按交付事件处理 ``DELIVERY_EVENT_TYPES``；为 False 时与改动前逐字相同（见
+    ``_validate_event_shape``）。
+    """
 
     revision = event.get("revision")
     if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 1):
@@ -1411,6 +1440,14 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
             )
         if commit is not None or supersedes is not None:
             raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
+    elif delivery_events and event_type in DELIVERY_EVENT_TYPES:
+        # B4-07：交付事件属于当前候选 revision 的 VC-6，显式携带 revision 与 candidate_id（Claude 没有隐含 r1）。
+        if phase != DELIVERY_PHASE or revision is None or candidate_id is None:
+            raise TimingLedgerError(
+                f"event {sequence} {event_type} 必须在 VC-6 且携带 revision 与 candidate_id"
+            )
+        if commit is not None or supersedes is not None:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
     else:
         if commit is not None or supersedes is not None:
             raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
@@ -1420,7 +1457,42 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
             raise TimingLedgerError(f"event {sequence} {event_type} 不接受 candidate_id")
 
 
-def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> dict[str, Any]:
+def _validate_delivery_event_fields(event: dict[str, Any], sequence: int) -> None:
+    """B4-07：交付事件的三个专属字段形态闭合（语义与阶段状态在 ``_summarize`` 里核）。
+
+    ``delivery_stage``：started 是本段起点（rerun_from_stage），completed 恒为 stable_observed，failed 是失败的阶段，
+    invalidated 是被失效的阶段；``delivery_recovery_revision`` 是 dr<k>，阶段失效事件为 null。
+    """
+
+    event_type = event.get("event_type")
+    if not DELIVERY_EVENT_FIELDS.issubset(event):
+        raise TimingLedgerError(f"event {sequence} 字段不闭合")
+    _safe_id(event.get("delivery_id"), f"event {sequence}.delivery_id")
+    stage = event.get("delivery_stage")
+    if stage not in DELIVERY_STAGES:
+        raise TimingLedgerError(f"event {sequence}.delivery_stage 必须是四个交付阶段之一")
+    recovery = event.get("delivery_recovery_revision")
+    if event_type == "delivery_stage_invalidated":
+        if recovery is not None:
+            raise TimingLedgerError(f"event {sequence} delivery_stage_invalidated 不绑定恢复段")
+    elif not isinstance(recovery, str) or not DELIVERY_RECOVERY_REVISION_RE.fullmatch(recovery):
+        raise TimingLedgerError(f"event {sequence}.delivery_recovery_revision 必须是 dr<k>")
+    if event_type == "delivery_recovery_completed" and stage != DELIVERY_STAGES[-1]:
+        raise TimingLedgerError(f"event {sequence} delivery_recovery_completed 必须收口在 stable_observed")
+    if event.get("attempt_id") is not None:
+        raise TimingLedgerError(f"event {sequence} {event_type} 不绑定 attempt")
+
+
+def _validate_event_shape(
+    root: Path, event: dict[str, Any], sequence: int, *, delivery_events: bool = True
+) -> dict[str, Any]:
+    """校验单个事件的形态并返回规范化事件（receipts 绑定已解析）。
+
+    ``delivery_events``（B4-07）：是否在形态上接受四个交付事件。账本自身重放（``_summarize``）按计划归属的客户端
+    传入：Codex（v1 计划）为 False，判定与报错和改动前逐字相同；只看事件形态、不读计划的外部调用方（项目总账的延期
+    提交核对等）沿用缺省 True，交付事件只在形态上放行，是否属于 Claude 账本由该账本自身的重放决定。
+    """
+
     required = {
         "schema_version",
         "sequence",
@@ -1437,10 +1509,16 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     }
     if not isinstance(event, dict):
         raise TimingLedgerError(f"event {sequence} 必须是对象")
-    extra = set(event) - required - EVENT_REVISION_FIELDS - {"deadline_control"}
+    # B4-07：交付事件的三个专属字段只在交付事件里放行；其他事件带上仍是「字段不闭合」（判定与文案不变）。
+    delivery_fields = (
+        DELIVERY_EVENT_FIELDS if delivery_events and event.get("event_type") in DELIVERY_EVENT_TYPES else frozenset()
+    )
+    extra = set(event) - required - EVENT_REVISION_FIELDS - delivery_fields - {"deadline_control"}
     if extra or not required.issubset(event):
         raise TimingLedgerError(f"event {sequence} 字段不闭合")
-    _validate_event_revision_fields(event, sequence)
+    _validate_event_revision_fields(event, sequence, delivery_events=delivery_events)
+    if delivery_fields:
+        _validate_delivery_event_fields(event, sequence)
     control = event.get("deadline_control")
     if event.get("event_type") in DEADLINE_CONTROL_EVENTS:
         if not isinstance(control, dict):
@@ -1467,7 +1545,10 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
         raise TimingLedgerError(f"event {sequence} schema 或序号不一致")
     _safe_id(event.get("event_id"), f"event {sequence}.event_id")
     _timestamp(event.get("recorded_at_utc"), f"event {sequence}.recorded_at_utc")
-    if event.get("phase") not in PHASE_ORDER or event.get("event_type") not in EVENT_TYPES:
+    if event.get("phase") not in PHASE_ORDER or (
+        event.get("event_type") not in EVENT_TYPES
+        and not (delivery_events and event.get("event_type") in DELIVERY_EVENT_TYPES)
+    ):
         raise TimingLedgerError(f"event {sequence} phase 或 event_type 非法")
     for field in ("attempt_id", "root_cause_id"):
         value = event.get(field)
@@ -1694,6 +1775,14 @@ def _summarize(
     # 第三批 R5 前置：当前 revision 最近一次经 evaluation_reopened 重开 VC-5 时的评估基线号。VC-5 重开后的
     # checkpoint 与完成收据按它落到 reopen-b<K>/ 目录，与首次完成的 write-once 制品并存；随候选 revision 切换清零。
     vc5_reopened_baseline: int | None = None
+    # Claude 升级 B4-07：交付事件只属于 Claude 计划；Codex（v1 计划）账本的形态校验与改动前逐字相同。
+    # 交付恢复段以 (delivery_id, dr<k>) 为键记录段状态，待消费的阶段失效以 delivery_id 为键记录被失效的阶段；
+    # 二者随候选 revision 切换清空，只在重放里使用、不进摘要。revision_candidates 记录各 revision 激活的候选，
+    # 交付事件必须属于当前 revision 的候选。
+    delivery_events_allowed = plan_client(plan) in DELIVERY_EVENT_CLIENTS
+    delivery_segments: dict[str, dict[str, Any]] = {}
+    delivery_pending_invalidations: dict[str, str] = {}
+    revision_candidates: dict[int, str] = {}
     total_live_requests = 0
     last_time: datetime | None = None
     previous_raw: bytes | None = None
@@ -1721,7 +1810,7 @@ def _summarize(
         active_phase_revision = None
 
     for sequence, (event, raw) in enumerate(raw_events, 1):
-        normalized = _validate_event_shape(root, event, sequence)
+        normalized = _validate_event_shape(root, event, sequence, delivery_events=delivery_events_allowed)
         recorded = _timestamp(normalized["recorded_at_utc"], "event time")
         if recorded < _timestamp(plan["started_at_utc"], "started_at_utc"):
             raise TimingLedgerError("event 早于台账开始时间")
@@ -1848,6 +1937,10 @@ def _summarize(
                 or any(item["status"] == "active" for item in attempt_recoveries.values())
             ):
                 raise TimingLedgerError("stage_completed 与当前阶段或 attempt 状态不一致")
+            if any(item["status"] == "active" for item in delivery_segments.values()):
+                # B4-07：交付恢复段只出现在 Claude 账本；Codex 账本恒空，判定不变。待消费的阶段失效不挡阶段完成：
+                # 环境变化后旧 delivery 留下的失效永远不会被消费，签发收据的那个 delivery 由 Store 保证没有待消费失效。
+                raise TimingLedgerError("stage_completed 时仍有未收口的交付恢复段")
             if candidate_level:
                 assert event_revision is not None
                 revision_phase_state.setdefault(event_revision, {})[phase] = "completed"
@@ -1960,6 +2053,10 @@ def _summarize(
             current_evaluation_baseline = None
             attempt_recoveries = {}
             vc5_reopened_baseline = None
+            # B4-07：交付恢复段与待消费的阶段失效属于旧候选，随 revision 切换清空；记下新 revision 激活的候选。
+            delivery_segments = {}
+            delivery_pending_invalidations = {}
+            revision_candidates[revision] = str(normalized["candidate_id"])
         elif event_type == "evaluation_reopened":
             # 第三批 B3-3／R5：VC-5 在当前 revision 已完成、VC-6 尚未开始时，凭新评估基线把 VC-5 置回进行中
             # 并切换当前基线（评估器／证据层修好后重评，或批准输入修订）。VC-6 一旦开始就不能回头。
@@ -2077,6 +2174,96 @@ def _summarize(
                     failure_counts[cause] = failure_counts.get(cause, 0) + 1
                 else:
                     attempt_recoveries[key]["status"] = "completed"
+        elif event_type in DELIVERY_EVENT_TYPES:
+            # Claude 升级 B4-07：只会出现在 Claude 账本（Codex 账本在形态校验处即按 event_type 非法拒绝）。
+            # 交付链本身（锚点、有效链、环境身份）由 Store 门禁裁定；账本只核阶段归属、段的开合、待消费失效与同根因纪律。
+            delivery_id = str(normalized["delivery_id"])
+            stage = str(normalized["delivery_stage"])
+            cause = normalized["root_cause_id"]
+            if (
+                current_revision is None
+                or event_revision != current_revision
+                or normalized["candidate_id"] != revision_candidates.get(current_revision)
+            ):
+                raise TimingLedgerError(f"{event_type} 必须属于当前候选 revision 激活的候选")
+            open_segments = [item for item in delivery_segments.values() if item["status"] == "active"]
+            if event_type == "delivery_stage_invalidated":
+                if (
+                    active_phase != DELIVERY_PHASE
+                    or active_phase_revision != current_revision
+                    or open_segments
+                    or delivery_id in delivery_pending_invalidations
+                    or cause is not None
+                ):
+                    raise TimingLedgerError(
+                        "delivery_stage_invalidated 只能在 VC-6 进行中、没有未收口的交付恢复段、该 delivery 没有待消费的"
+                        "阶段失效时登记，且不登记根因"
+                    )
+                delivery_pending_invalidations[delivery_id] = stage
+            elif event_type == "delivery_recovery_started":
+                recovery_revision = str(normalized["delivery_recovery_revision"])
+                number = int(recovery_revision[2:])
+                key = f"{delivery_id}:{recovery_revision}"
+                previous_segment = delivery_segments.get(f"{delivery_id}:dr{number - 1}")
+                if (
+                    active_phase != DELIVERY_PHASE
+                    or active_phase_revision != current_revision
+                    or open_segments
+                    or key in delivery_segments
+                    or (number > 1 and previous_segment is None)
+                ):
+                    raise TimingLedgerError(
+                        "delivery_recovery_started 必须在 VC-6 进行中、没有未收口的交付恢复段时登记，"
+                        "段编号从 dr1 起连续且同段不得重开"
+                    )
+                pending_stage = delivery_pending_invalidations.get(delivery_id)
+                if cause is None:
+                    # approved_invalidation 锚点：消费同一 delivery 待消费的阶段失效，从被失效的阶段起跑。
+                    if pending_stage != stage:
+                        raise TimingLedgerError(
+                            "approved_invalidation 交付恢复段必须消费同一 delivery 待消费的阶段失效，且从被失效的阶段起跑"
+                        )
+                    del delivery_pending_invalidations[delivery_id]
+                else:
+                    if pending_stage is not None:
+                        raise TimingLedgerError(
+                            "存在待消费的阶段失效：下一交付恢复段必须以 approved_invalidation 锚定它"
+                        )
+                    if number == 1:
+                        # 首轮交付的失败不单独记账：锚定它的 dr1 在此补计一次同根因失败。
+                        failure_counts[cause] = failure_counts.get(cause, 0) + 1
+                    elif (
+                        previous_segment is None
+                        or previous_segment["status"] != "failed"
+                        or previous_segment["root_cause_id"] != cause
+                        or previous_segment["delivery_stage"] != stage
+                    ):
+                        raise TimingLedgerError(
+                            "failure 锚点的交付恢复段必须承接上一段同根因、同阶段的失败"
+                        )
+                    if failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
+                        raise TimingLedgerError("同一根因已连续失败两次，禁止第三次交付恢复段")
+                delivery_segments[key] = {
+                    "delivery_id": delivery_id,
+                    "delivery_recovery_revision": recovery_revision,
+                    "status": "active",
+                    "root_cause_id": cause,
+                    "delivery_stage": stage,
+                }
+            else:
+                recovery_revision = str(normalized["delivery_recovery_revision"])
+                segment = delivery_segments.get(f"{delivery_id}:{recovery_revision}")
+                if segment is None or segment["status"] != "active":
+                    raise TimingLedgerError(f"{event_type} 没有对应的未收口交付恢复段")
+                if event_type == "delivery_recovery_failed":
+                    if cause is None:
+                        raise TimingLedgerError("delivery_recovery_failed 必须登记 root_cause_id")
+                    segment.update(status="failed", root_cause_id=cause, delivery_stage=stage)
+                    failure_counts[cause] = failure_counts.get(cause, 0) + 1
+                else:
+                    if cause is not None:
+                        raise TimingLedgerError("delivery_recovery_completed 不登记根因")
+                    segment.update(status="completed", delivery_stage=stage)
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
             candidate_capture_review = (
@@ -2318,6 +2505,9 @@ def _summarize(
                 or any(item["status"] == "active" for item in attempt_recoveries.values())
             ):
                 raise TimingLedgerError("upgrade_completed 时仍有未关闭阶段或 attempt")
+            if any(item["status"] == "active" for item in delivery_segments.values()):
+                # B4-07：只在 Claude 账本可能成立；Codex 账本交付段恒空，判定不变。
+                raise TimingLedgerError("upgrade_completed 时仍有未收口的交付恢复段")
             completed = True
         if normalized["receipts"]:
             last_successful_receipt = normalized["receipts"][-1]
@@ -2735,7 +2925,16 @@ def append_event(
     baseline_kind: str | None = None,
     recovery_revision: str | None = None,
     deadline_control: dict[str, Any] | None = None,
+    delivery_id: str | None = None,
+    delivery_recovery_revision: str | None = None,
+    delivery_stage: str | None = None,
 ) -> dict[str, Any]:
+    """追加一条事件（先按「现有事件＋本事件」完整重放，通过才只写一次落盘），返回追加后的摘要。
+
+    ``delivery_id``／``delivery_recovery_revision``／``delivery_stage`` 只属于 B4-07 的四个交付事件，也只在 Claude 账本的
+    交付事件里写出；其他事件与 Codex 账本的字节、判定和报错与改动前相同。
+    """
+
     root = _private_ledger(root, must_exist=True)
     plan, _ = _load_plan(root)
     raw_events = _load_events(root)
@@ -2747,6 +2946,8 @@ def append_event(
         "attempt_failed", "attempt_recovery_failed", "receipt_passed", "stage_abandoned", "stop_the_line",
         # R4×R8：stage_abandoned 之后补齐的阶段／候选审核同属元数据收口，不启动、复用或封存任何动作。
         "stage_review_required", "candidate_review_required",
+        # B4-07：交付恢复段失败收口与 attempt 恢复段同口径，属于元数据收口（Store 失败事实已经写下）。
+        "delivery_recovery_failed",
     }:
         raise TimingLedgerError("预算已暂停；批准延期前禁止继续执行或封存")
     if current["status"] == "deadline_paused" and (
@@ -2754,7 +2955,8 @@ def append_event(
         or (event_type in {"stage_abandoned", "stop_the_line"} and root_cause_id is None)
     ):
         raise TimingLedgerError("预算暂停不能冒充普通完成或无根因停线；需要批准延期或显式放弃")
-    if (current["status"] == "deadline_paused" and event_type in {"attempt_failed", "attempt_recovery_failed"}
+    if (current["status"] == "deadline_paused"
+            and event_type in {"attempt_failed", "attempt_recovery_failed", "delivery_recovery_failed"}
             and (receipts or live_request_count != 0)):
         raise TimingLedgerError("预算暂停只允许元数据失败登记；请求计量必须由后续对账收据承接")
     if phase in CANDIDATE_PHASES and event_type in CANDIDATE_STAGE_EVENT_TYPES:
@@ -2825,6 +3027,16 @@ def append_event(
     }
     if deadline_control is not None:
         event["deadline_control"] = dict(deadline_control)
+    delivery_values = {
+        "delivery_id": delivery_id,
+        "delivery_recovery_revision": delivery_recovery_revision,
+        "delivery_stage": delivery_stage,
+    }
+    if event_type in DELIVERY_EVENT_TYPES and plan_client(plan) in DELIVERY_EVENT_CLIENTS:
+        event.update(delivery_values)
+    elif any(value is not None for value in delivery_values.values()):
+        # Codex 账本不写交付字段：交付事件类型在 Codex 账本里照旧由下面的重放按 event_type 非法拒绝。
+        raise TimingLedgerError("交付字段只属于 Claude 计时账本的交付事件")
     candidate_raw = _canonical(event)
     _summarize(root, plan, [*raw_events, (event, candidate_raw)], as_of=recorded)
     _write_once(root / "events" / f"{sequence:06d}.json", event)
