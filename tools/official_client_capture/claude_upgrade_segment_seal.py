@@ -19,6 +19,7 @@ from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import claude_upgrade_seal as official_seal
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_client_receipt_contract
 from tools.official_client_capture import codex_upgrade_evidence_manifest as boundary
 from tools.official_client_capture import upgrade_control_plane as control
 from tools.official_client_capture.capturelib.model import ConfigurationError
@@ -54,6 +55,25 @@ def _results(stage: Mapping[str, Any], attempt: Mapping[str, Any]) -> dict[str, 
     if len(result) != len(rows) or any(row.get("status") != "complete" for row in result.values()):
         raise ConfigurationError("候选有效结果存在重复或未完成 Job。")
     return result
+
+
+def inherited_client_files(campaign_dir: Path, original_root: Path, client_evidence: Any) -> dict[str, dict[str, Path]]:
+    """承接时重放原 attempt 的完整 Mac 收据；旧绑定摘要相同不等于附件和项目账务仍有效。"""
+    if not isinstance(client_evidence, Mapping) or set(client_evidence) != {"client_bindings", "boundary_checks"}:
+        raise ConfigurationError("恢复段前序客户端证据分组不完整。")
+    files: dict[str, dict[str, Path]] = {}
+    for group, values in client_evidence.items():
+        if not isinstance(values, Mapping):
+            raise ConfigurationError("恢复段前序客户端证据绑定必须为对象。")
+        files[group] = {}
+        for item, binding in values.items():
+            path = _bound(campaign_dir, binding, f"继承 {item} 收据")
+            if path.parent != original_root / seal.CLIENT_EVIDENCE_DIRNAME:
+                raise ConfigurationError("恢复段只能承接原 attempt 客户端证据目录的收据。")
+            if group == "client_bindings":
+                claude_client_receipt_contract.verify_client_receipt(original_root, str(item), path)
+            files[group][str(item)] = path
+    return files
 
 
 def _effective_jobs(source_jobs: Sequence[Any], results: Mapping[str, Mapping[str, Any]], revision: str) -> list[Any]:
@@ -98,6 +118,7 @@ def prepare_context(campaign_dir: Path, manifest: Mapping[str, Any], candidate_i
     original_root, original = seal.sealed_attempt_context(campaign_dir, previous, candidate_id=candidate_id)
     if original_root.name != attempt_id:
         raise ConfigurationError("前序封存结果不是当前裁定的原 attempt。")
+    inherited_client_files(campaign_dir, original_root, previous["client_evidence"])
     segment_root, reservation, summary = reader.load_segment(campaign_dir, candidate_id, attempt_id, revision)
     if summary.get("status") != upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS or upgrade._failed_job_ids(summary.get("results")):
         raise ConfigurationError("恢复段必须成功收口才能增量封存。")
@@ -156,8 +177,7 @@ def seal_segment(campaign_dir: Path, manifest: dict[str, Any], *, candidate_id: 
     scenarios_path = official_seal._frozen_input(campaign_dir, manifest, "target_scenarios")
     scenarios = claude_upgrade_plan.read_scenario_manifest(scenarios_path, expected_version=str(manifest["target_version"]),
                                                           rules=tuple(manifest["required_rules"]), verify_source_spec=False)
-    client_files = {group: {item: _bound(campaign_dir, binding, f"继承 {item} 收据") for item, binding in values.items()}
-                    for group, values in context["previous"]["client_evidence"].items()}
+    client_files = inherited_client_files(campaign_dir, context["original_root"], context["previous"]["client_evidence"])
     attempt_path = context["original_root"] / "attempt.json"
     summary_path = context["segment_root"] / upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
     generation_key = {
@@ -323,6 +343,7 @@ def validate_stage(campaign_dir: Path, stage: Mapping[str, Any], candidate_id: s
     root, original = seal.sealed_attempt_context(campaign_dir, previous, candidate_id=candidate_id)
     if stage["attempt"] != previous["attempt"] or stage["client_evidence"] != previous["client_evidence"]:
         raise ConfigurationError("恢复段必须逐字承接原 attempt 与 Mac／边界收据绑定。")
+    inherited_client_files(campaign_dir, root, stage["client_evidence"])
     document = upgrade._read_json(_bound(campaign_dir, stage["effective_results"], "有效结果"), "有效结果")
     unsigned = {key: value for key, value in document.items() if key != "effective_results_sha256"}
     if (document.get("schema_version") != EFFECTIVE_SCHEMA or document.get("effective_results_sha256") != upgrade._fingerprint(unsigned)

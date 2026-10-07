@@ -13,6 +13,7 @@ from unittest import mock
 from tools.official_client_capture import claude_client_receipt_contract as contract
 from tools.official_client_capture import claude_upgrade_client_receipts as importer
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
+from tools.official_client_capture import claude_upgrade_segment_seal as segment_seal
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture.tests import claude_client_receipt_fixture as fixture
@@ -217,6 +218,37 @@ class ClientReceiptContractTests(unittest.TestCase):
         # 先拒来源绑定；重新冻结其他条件不能沿用旧源包。
         with self.assertRaisesRegex(ValueError, "来源清单不是本任务"):
             contract.verify_client_bundle(current, bundle, capture)
+
+    def test_segment_inherits_original_client_receipt_without_writing_or_recounting(self) -> None:
+        receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        bindings = {"client_bindings": {"claude-desktop": {"path": receipt.relative_to(self.campaign).as_posix(), "sha256": contract.binding(receipt, self.campaign)["sha256"]}}, "boundary_checks": {}}
+        project = fixture.fixture_ledger(self.attempt)
+        head = ledger.replay_head(project)
+        raw = receipt.read_bytes()
+        for _baseline in (1, 2):
+            result = segment_seal.inherited_client_files(self.campaign, self.attempt, bindings)
+            self.assertEqual(result["client_bindings"]["claude-desktop"], receipt)
+        self.assertEqual(receipt.read_bytes(), raw)
+        self.assertEqual(ledger.replay_head(project)["head_sha256"], head["head_sha256"])
+
+    def test_segment_rejects_tampered_attachment_with_unchanged_top_receipt(self) -> None:
+        receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        bindings = {"client_bindings": {"claude-desktop": {"path": receipt.relative_to(self.campaign).as_posix(), "sha256": contract.binding(receipt, self.campaign)["sha256"]}}, "boundary_checks": {}}
+        (self.bundle / "process-session.json").write_bytes(b"{}\n")
+        with self.assertRaisesRegex(ValueError, "摘要或字节数漂移"):
+            segment_seal.inherited_client_files(self.campaign, self.attempt, bindings)
+
+    def test_segment_rejects_rebound_placeholder_and_foreign_attempt_receipt(self) -> None:
+        receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        fixture.write(receipt, {"client_id": "claude-desktop", **self.values, "status": "success"})
+        bindings = {"client_bindings": {"claude-desktop": {"path": receipt.relative_to(self.campaign).as_posix(), "sha256": contract.binding(receipt, self.campaign)["sha256"]}}, "boundary_checks": {}}
+        with self.assertRaisesRegex(ValueError, "拒绝占位成功"):
+            segment_seal.inherited_client_files(self.campaign, self.attempt, bindings)
+        other = self.attempt.parent / "other-attempt"
+        foreign = fixture.write_receipt(other, "claude-desktop", {**self.values, "attempt_id": "other-attempt", "run_nonce": "other-nonce"})
+        bindings["client_bindings"]["claude-desktop"] = {"path": foreign.relative_to(self.campaign).as_posix(), "sha256": contract.binding(foreign, self.campaign)["sha256"]}
+        with self.assertRaisesRegex(ValueError, "原 attempt 客户端证据目录"):
+            segment_seal.inherited_client_files(self.campaign, self.attempt, bindings)
 
 
 class FormalClientImportTests(seal_fixture._CandidateSealCase):

@@ -1778,7 +1778,10 @@ def _load_round_document(
         target = orchestrator._campaign_file(campaign_dir, str(binding["path"]))
         if file_sha256(target) != binding["sha256"]:
             raise ConfigurationError("封存后的客户端收据摘要漂移。")
-        claude_client_receipt_contract.verify_client_receipt(target.parent.parent, str(client_id), target)
+        attempt_root = orchestrator._campaign_file(campaign_dir, str(stage["attempt"]["path"])).parent
+        if target.parent != attempt_root / CLIENT_EVIDENCE_DIRNAME:
+            raise ConfigurationError("封存后的客户端收据不属于阶段结果绑定的原 attempt。")
+        claude_client_receipt_contract.verify_client_receipt(attempt_root, str(client_id), target)
     return stage
 
 
