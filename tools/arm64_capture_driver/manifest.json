@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "1b3d86f7dafa9db2e5734f48662b2dd777a401952750bd1231be35a36019d9b5",
+      "sha256": "0cfb9772dae1d4f405bf2b3d60511355926f3a795970bc4d6ede21e2830c9c46",
       "mode": "0600",
-      "bytes": 93410
+      "bytes": 93847
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -76,9 +76,9 @@
     },
     {
       "path": "driver/claude_launch_probe_runner.py",
-      "sha256": "4ed425aa0fe0ba81d45e84e690c25c4fcc003d54090fcd73bff1d298f06ceaef",
+      "sha256": "bc1744b438d8836d4c58c543dadc5c7eaa276b3e69388750dbbc402fa557d12b",
       "mode": "0700",
-      "bytes": 39433
+      "bytes": 39783
     },
     {
       "path": "driver/claude_vc1.py",
@@ -100,9 +100,9 @@
     },
     {
       "path": "driver/client_launch_probe.py",
-      "sha256": "c12f724a8e7f01a1f013e400a523675779ee9ec51bf7ccfc18d761bc180e0796",
+      "sha256": "0771cbf7b5d88bce258c23f378e35a3b7330bab9fdafb4a0121bbe09d73db40e",
       "mode": "0700",
-      "bytes": 42527
+      "bytes": 42690
     },
     {
       "path": "driver/client_launch_probe_runner.py",
@@ -609,5 +609,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "72d111056a06468c80e16d37cfc0fb9c6f4fb1d87a45ecfa0623429dfe5b17d2"
+  "manifest_sha256": "4b6e0bfeccc9b7cbd98aa49aa6d58fe5eebab1b16a685ec4ece41b3f483e9d76"
 }

@@ -3,6 +3,21 @@
 该模块只接受源码内冻结的场景身份，不接受任意 argv、任意 prompt 或任意环境变量。
 真实上游场景用于观察 Header／Body／状态关系；合成故障场景仍由同一个官方二进制
 发起请求，但响应来自隔离中继的白名单计划，绝不连接生产上游。
+
+Claude 侧 TUI 驱动（2026-10-07，B2-10 启动探测在 ARM64 上用 2.1.285 实测发现）
+------------------------------------------------------------------------------
+v3、v4、v5 的 TUI 场景与启动探测的驱动入口（``claude_drive_tui_cli.py``）都用本模块的 ``claude_tui_drive``／
+``claude_tui_drive_sequence``。共用驱动 ``drive_claude_tui.py`` 被 Codex 身份策略按 ``drive_`` 前缀计入 Codex wire 层，
+改它就改了 Codex 的 wire 摘要；驱动循环放在这里（Claude wire 层，Codex 策略忽略 ``capturelib/claude_fw_``），并且本文件
+已在执行源清单与各场景清单逐作业依赖的闭包里，不新增任何依赖文件。循环与共用驱动逐行相同（复用它的 ``clean``／
+``flatten``／``classify_screen``），只有两处按 2.1.285 改：
+
+* 信任框：2.1.285 的 ``TrustDialog`` 把取消项排在前面并默认聚焦（「❯ No, exit」），回车接受默认项就退出。改由
+  ``TrustDialogHandler`` 按选项文字把焦点移到「Yes, I trust this folder」、核对重绘后再回车，拿不准就不回车。
+* 主输入框是否可以输入：共用状态机只认页脚「? for shortcuts」。2.1.285 以 auto 为缺省启动权限模式（模型支持、设置没有
+  禁用时；GrowthBook 不可用时 ``tengu_auto_mode_config`` 取缺省 enabled），页脚在非缺省模式下不再显示「? for shortcuts」，
+  空闲时是「⏵⏵ auto mode on (shift+tab to cycle) · ← for agents」，忙碌时是「… · esc to interrupt · ← for agents」。
+  ``classify_screen`` 把这些空闲提示也算作可以输入，紧跟在「esc to interrupt」后面的同一段忙碌页脚除外。
 """
 
 from __future__ import annotations
@@ -10,12 +25,17 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import pty
+import re
+import select
+import signal
 import subprocess
+import time
 import uuid
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
-from tools.official_client_capture.drive_claude_tui import drive as drive_tui
+import tools.official_client_capture.drive_claude_tui as drive_claude_tui
 
 from .environment import INJECTABLE_PROBE_KEYS, environment_manifest_view
 from .lifecycle import _popen_safety_options
@@ -27,6 +47,407 @@ from .security import (
     secure_write_json,
     secure_write_text,
 )
+
+
+# ---------------------------------------------------------------------------
+# 信任框：按选项文字定位确认项（取值见 2.1.226／2.1.285 冻结二进制里 TrustDialog 与选择组件的源码）
+# ---------------------------------------------------------------------------
+
+# 信任框的识别文案（去空白后匹配）：2.1.226／2.1.285 的确认项文字，与更早版本的标题。
+TRUST_SCREEN_MARKERS = ("Itrustthisfolder", "Doyoutrustthefilesinthisfolder")
+# 一次完整渲染的起点（去空白后匹配）：只解析最后一次渲染，避免把旧帧的指针当成当前焦点。
+TRUST_HEADER_MARKERS = ("Accessingworkspace:", "Quicksafetycheck", "Doyoutrustthefilesinthisfolder")
+# 确认项与取消项的选项文字。取消项在 2.1.285 有两种（项目带预批准权限时是「继续但不带这些权限」）。
+TRUST_CONFIRM_LABELS = ("Yes, I trust this folder", "Yes, proceed")
+TRUST_CANCEL_LABELS = ("No, exit", "No, continue without these permissions")
+# 选择组件的按键（两个版本的默认键位里 Select 上下文都有 home→select:first、end→select:last、down→select:next，
+# 终端序列 ESC[H／ESC[F／ESC[B 由客户端的按键解析表识别）。Home／End 是幂等的：重发不会像 Down 那样绕回取消项。
+KEY_HOME = b"\x1b[H"
+KEY_END = b"\x1b[F"
+KEY_DOWN = b"\x1b[B"
+KEY_ENTER = b"\r"
+# 信任框首次出现后等它画完、选择组件的按键处理器注册完再发键；移动焦点后等客户端重绘再核对。
+TRUST_SETTLE_SECONDS = 1.0
+TRUST_VERIFY_SECONDS = 1.0
+# 移动焦点最多重试的次数；同一会话里信任框最多确认的次数（再出现说明确认没有生效，不再回车）。
+TRUST_MAX_MOVES = 3
+TRUST_MAX_CONFIRMS = 2
+POINTER = "❯"
+_TRUST_LABELS = tuple((label, drive_claude_tui.flatten(label)) for label in TRUST_CONFIRM_LABELS + TRUST_CANCEL_LABELS)
+_OPTION_INDEX_RE = re.compile(r"[0-9]+\.")
+
+
+def trust_dialog_options(flat: str) -> tuple[list[str], str | None]:
+    """在去空白的渲染文本里按出现顺序列出已知选项，并找出紧跟指针 ``❯``（可带「1.」一类编号）的焦点项。
+
+    指针后没有紧跟已知选项（例如客户端只重绘了指针所在的格子）时焦点记为 None。
+    """
+
+    found = sorted((flat.find(needle), label) for label, needle in _TRUST_LABELS if needle in flat)
+    options = [label for _, label in found]
+    focused: str | None = None
+    for match in re.finditer(POINTER, flat):
+        rest = flat[match.end():]
+        index = _OPTION_INDEX_RE.match(rest)
+        if index is not None:
+            rest = rest[index.end():]
+        for label, needle in _TRUST_LABELS:
+            if rest.startswith(needle):
+                focused = label
+                break
+    return options, focused
+
+
+def trust_selection(view: str) -> dict[str, Any] | None:
+    """把一轮渲染解析成信任框的处理计划；不是信任框时返回 None。
+
+    计划的 ``action``：``wait`` 渲染还不完整（确认项与取消项没有同时出现），不发任何键；``confirm`` 焦点已在确认项上，
+    直接回车；``move`` 先发 ``keys`` 把焦点移到确认项（确认项在末位用 End、在首位用 Home、在中间用 Home 加若干 Down，
+    都与当前焦点无关），核对后再回车。
+    """
+
+    flat = drive_claude_tui.flatten(view)
+    if not any(marker in flat for marker in TRUST_SCREEN_MARKERS):
+        return None
+    start = max(flat.rfind(marker) for marker in TRUST_HEADER_MARKERS)
+    options, focused = trust_dialog_options(flat[start:] if start >= 0 else flat)
+    target = next((label for label in options if label in TRUST_CONFIRM_LABELS), None)
+    if target is None or not any(label in TRUST_CANCEL_LABELS for label in options):
+        return {"action": "wait"}
+    if focused == target:
+        return {"action": "confirm", "target": target, "keys": b"", "options": options, "focused": focused}
+    index = options.index(target)
+    if index == len(options) - 1:
+        keys = KEY_END
+    elif index == 0:
+        keys = KEY_HOME
+    else:
+        keys = KEY_HOME + KEY_DOWN * index
+    return {"action": "move", "target": target, "keys": keys, "options": options, "focused": focused}
+
+
+class TrustDialogHandler:
+    """信任框状态机：等渲染稳定 → 按文字把焦点移到确认项 → 等重绘核对 → 回车；拿不准就不回车。
+
+    ``step`` 每轮由驱动循环在屏幕归为菜单时调用：不是信任框返回 None（驱动照共用状态机处理）；是信任框返回 ``pending``
+    （等待中，本轮不发别的键）、``confirmed``（刚回车确认）或 ``unresolved``（放弃：此后信任框上一个键都不发）。
+    """
+
+    def __init__(self, write: Callable[[int, bytes], Any] = os.write, clock: Callable[[], float] = time.time) -> None:
+        self._write = write
+        self._clock = clock
+        self.seen_at: float | None = None
+        self.moved_at: float | None = None
+        self.mark = 0
+        self.target: str | None = None
+        self.keys = b""
+        self.moves = 0
+        self.confirms = 0
+        self.unresolved = False
+
+    def step(self, fd: int, view: str, transcript: bytearray, push: Callable[[str], None]) -> str | None:
+        plan = trust_selection(view)
+        if plan is None:
+            return None
+        if self.unresolved:
+            return "unresolved"
+        if self.confirms >= TRUST_MAX_CONFIRMS:
+            return self._give_up(push)
+        now = self._clock()
+        if self.seen_at is None:
+            self.seen_at = now
+        if self.moved_at is None:
+            if plan["action"] == "wait" or now - self.seen_at < TRUST_SETTLE_SECONDS:
+                return "pending"
+            if plan["action"] == "confirm":
+                return self._confirm(fd, push)
+            self.target, self.keys = plan["target"], plan["keys"]
+            return self._move(fd, transcript, push)
+        if now - self.moved_at < TRUST_VERIFY_SECONDS:
+            return "pending"
+        # 只看移动之后的新输出：客户端按格子差分重绘，旧帧里的指针仍停在原焦点上。
+        redrawn = drive_claude_tui.clean(bytes(transcript[self.mark:]))
+        _, focused = trust_dialog_options(drive_claude_tui.flatten(redrawn))
+        if POINTER in redrawn and focused in {None, self.target}:
+            return self._confirm(fd, push)
+        if self.moves >= TRUST_MAX_MOVES:
+            return self._give_up(push)
+        push("trust-focus-unverified")
+        return self._move(fd, transcript, push)
+
+    def _move(self, fd: int, transcript: bytearray, push: Callable[[str], None]) -> str:
+        self.mark = len(transcript)
+        self._write(fd, self.keys)
+        self.moved_at = self._clock()
+        self.moves += 1
+        push("trust-focus-confirm-option")
+        return "pending"
+
+    def _confirm(self, fd: int, push: Callable[[str], None]) -> str:
+        self._write(fd, KEY_ENTER)
+        push("enter-menu")
+        self.confirms += 1
+        self.seen_at = self.moved_at = self.target = None
+        self.keys, self.mark, self.moves = b"", 0, 0
+        return "confirmed"
+
+    def _give_up(self, push: Callable[[str], None]) -> str:
+        self.unresolved = True
+        push("trust-dialog-unresolved")
+        return "unresolved"
+
+
+# ---------------------------------------------------------------------------
+# 主输入框是否可以输入（取值见 2.1.226／2.1.285 冻结二进制里主输入框页脚组件的源码）
+# ---------------------------------------------------------------------------
+
+# 主输入框页脚里表示「空闲、可以输入」的提示（去空白后匹配）：
+# * 「? for shortcuts」：2.1.226 的空闲页脚，2.1.285 在缺省权限模式下仍显示；
+# * 「← for agents」与「(shift+tab to cycle)」：2.1.285 在 auto 等非缺省权限模式下省略「? for shortcuts」（页脚组件里
+#   ``!(Lr&&js&&ys)`` 才推入它），空闲页脚是「⏵⏵ auto mode on (shift+tab to cycle) · ← for agents」。
+IDLE_FOOTER_MARKERS = ("?forshortcuts", "←foragents", "(shift+tabtocycle)")
+# 忙碌提示：两个版本都是「esc to interrupt」。
+BUSY_FOOTER_MARKER = "esctointerrupt"
+# 忙碌页脚是「… · esc to interrupt · ← for agents」（页脚组件先推入忙碌提示与有后台任务时的「ctrl+t to show/hide tasks」，
+# 再推入「← for agents」）：紧跟在忙碌提示后面的这两项属于同一次忙碌渲染，其中的「← for agents」不算空闲。只认这两项，
+# 不按「·」往后延伸（扁平化后「● high · /effort」等别处的「·」会把无关文字连进来）。
+_BUSY_FOOTER_RUN_RE = re.compile(r"esctointerrupt(?:·ctrl\+tto(?:show|hide)tasks)?(?:·←foragents)?")
+
+
+def classify_screen(text: str) -> str:
+    """Claude 侧屏幕状态：登录门禁与引导菜单照共用状态机判；主输入框的空闲／忙碌按两个版本的页脚判。
+
+    与共用状态机同一口径：以最后一次页脚提示为当前状态（客户端按格子差分重绘，旧提示仍留在累积字节里），并要求本轮
+    流里出现过主输入指针 ``❯``。区别只在空闲提示多认 2.1.285 的两种，且忙碌页脚自带的「← for agents」不算空闲。
+    """
+
+    state = drive_claude_tui.classify_screen(text)
+    if state in {"auth_gate", "menu"}:
+        return state
+    view = drive_claude_tui.flatten(text)
+    busy_runs = [match.span() for match in _BUSY_FOOTER_RUN_RE.finditer(view)]
+    idle_index = -1
+    for marker in IDLE_FOOTER_MARKERS:
+        start = view.find(marker)
+        while start >= 0:
+            if not any(begin <= start < end for begin, end in busy_runs):
+                idle_index = max(idle_index, start)
+            start = view.find(marker, start + 1)
+    busy_index = view.rfind(BUSY_FOOTER_MARKER)
+    if POINTER in view and idle_index >= 0 and idle_index > busy_index:
+        return "idle_prompt"
+    if busy_index >= 0 and busy_index > idle_index:
+        return "busy"
+    return "waiting"
+
+
+# ---------------------------------------------------------------------------
+# Claude 侧驱动循环：与 drive_claude_tui.drive／drive_sequence 逐行相同，只多信任框一支、主输入框按本模块的
+# classify_screen 判定
+# ---------------------------------------------------------------------------
+
+
+def _stop(fd: int, pid: int) -> None:
+    """会话收尾：与共用状态机相同（Ctrl-C、SIGINT、SIGKILL、非阻塞回收）。"""
+
+    os.write(fd, b"\x03")
+    time.sleep(0.5)
+    try:
+        os.kill(pid, signal.SIGINT)
+        time.sleep(0.8)
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except Exception:
+        pass
+
+
+def claude_tui_drive(
+    claude: str,
+    model: str,
+    prompt: str,
+    env: dict,
+    total_timeout: int = 75,
+    quiet_after_prompt: int = 20,
+    extra_args: tuple[str, ...] = (),
+) -> dict:
+    """单次提交：``drive_claude_tui.drive`` 的同一状态机，信任框改由 ``TrustDialogHandler`` 按选项文字确认。"""
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(claude, [claude, "--model", model, *extra_args], env)
+    os.set_blocking(fd, False)
+
+    transcript = bytearray()
+    start = time.time()
+    deadline = start + total_timeout
+    steps: list[tuple[float, str]] = []
+    sent_prompt = False
+    prompt_at = None
+    last_menu = 0.0
+    scan_from = 0
+    auth_gate_detected = False
+    trust = TrustDialogHandler()
+
+    def push(tag):
+        steps.append((round(time.time() - start, 1), tag))
+
+    while time.time() < deadline:
+        r, _, _ = select.select([fd], [], [], 0.5)
+        if r:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            transcript += chunk
+        scan_start = max(scan_from, len(transcript) - 8000)
+        view = drive_claude_tui.clean(bytes(transcript[scan_start:]))
+        screen_state = classify_screen(view)
+
+        if screen_state == "auth_gate":
+            auth_gate_detected = True
+            push("auth-gate-detected")
+            break
+
+        if sent_prompt:
+            if prompt_at and time.time() - prompt_at > quiet_after_prompt:
+                push("response-window-done")
+                break
+            continue
+
+        if screen_state == "menu":
+            # 信任框只走这一支，绝不落到下面「回车接受默认高亮项」。
+            outcome = trust.step(fd, view, transcript, push)
+            if outcome == "confirmed":
+                last_menu = time.time()
+                scan_from = len(transcript)
+                time.sleep(1.5)
+                continue
+            if outcome is not None:
+                continue
+
+        # 引导菜单：回车接受默认高亮项，限速避免连续误发
+        if screen_state == "menu" and time.time() - last_menu > 2.0:
+            os.write(fd, b"\r")
+            last_menu = time.time()
+            # 后续只扫描本次操作之后的新渲染，避免旧菜单仍留在 transcript
+            # 时每两秒重复发送回车。
+            scan_from = len(transcript)
+            push("enter-menu")
+            time.sleep(1.5)
+            continue
+
+        if screen_state == "idle_prompt" and time.time() - start > 3:
+            os.write(fd, prompt.encode())
+            time.sleep(0.4)
+            os.write(fd, b"\r")
+            sent_prompt = True
+            prompt_at = time.time()
+            push("sent-prompt")
+            continue
+
+    _stop(fd, pid)
+    return {
+        "steps": steps,
+        "sent_prompt": sent_prompt,
+        "auth_gate_detected": auth_gate_detected,
+        "transcript": drive_claude_tui.clean(bytes(transcript)),
+    }
+
+
+def claude_tui_drive_sequence(
+    claude: str,
+    model: str,
+    inputs: tuple[str, ...],
+    env: dict,
+    total_timeout: int = 150,
+    quiet_after_last_input: int = 25,
+    extra_args: tuple[str, ...] = (),
+) -> dict:
+    """同一会话逐项提交：``drive_claude_tui.drive_sequence`` 的同一状态机，信任框改由 ``TrustDialogHandler`` 确认。"""
+
+    if not inputs or any(not isinstance(value, str) or not value for value in inputs):
+        raise ValueError("TUI 固定输入序列不能为空。")
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve(claude, [claude, "--model", model, *extra_args], env)
+    os.set_blocking(fd, False)
+    transcript = bytearray()
+    start = time.time()
+    deadline = start + total_timeout
+    steps: list[tuple[float, str]] = []
+    sent: list[str] = []
+    last_input_at: float | None = None
+    last_menu = 0.0
+    scan_from = 0
+    auth_gate_detected = False
+    trust = TrustDialogHandler()
+
+    def push(tag):
+        steps.append((round(time.time() - start, 1), tag))
+
+    while time.time() < deadline:
+        readable, _, _ = select.select([fd], [], [], 0.5)
+        if readable:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            transcript += chunk
+        scan_start = max(scan_from, len(transcript) - 12000)
+        view = drive_claude_tui.clean(bytes(transcript[scan_start:]))
+        screen_state = classify_screen(view)
+        if screen_state == "auth_gate":
+            auth_gate_detected = True
+            push("auth-gate-detected")
+            break
+        if len(sent) == len(inputs):
+            if last_input_at and time.time() - last_input_at > quiet_after_last_input:
+                push("response-window-done")
+                break
+            continue
+        if screen_state == "menu":
+            outcome = trust.step(fd, view, transcript, push)
+            if outcome == "confirmed":
+                last_menu = time.time()
+                scan_from = len(transcript)
+                time.sleep(1.5)
+                continue
+            if outcome is not None:
+                continue
+        if screen_state == "menu" and time.time() - last_menu > 2.0:
+            os.write(fd, b"\r")
+            last_menu = time.time()
+            scan_from = len(transcript)
+            push("enter-menu")
+            time.sleep(1.5)
+            continue
+        if screen_state == "idle_prompt" and time.time() - start > 3:
+            value = inputs[len(sent)]
+            os.write(fd, value.encode())
+            time.sleep(0.4)
+            os.write(fd, b"\r")
+            sent.append(value)
+            last_input_at = time.time()
+            scan_from = len(transcript)
+            push(f"sent-input-{len(sent)}")
+            # 下一项必须等待本次提交之后重新渲染输入框，不能复用旧光标。
+            time.sleep(1.0)
+
+    _stop(fd, pid)
+    return {
+        "steps": steps,
+        "sent_inputs": sent,
+        "all_inputs_sent": tuple(sent) == inputs,
+        "auth_gate_detected": auth_gate_detected,
+        "transcript": drive_claude_tui.clean(bytes(transcript)),
+    }
 
 
 DEFAULT_MARKER = "FW_F_V3_OK"
@@ -582,7 +1003,7 @@ def run_claude_fw_f_probe(
             extra_args = ("--safe-mode", *extra_args)
         command = [claude_bin, "--model", model, *extra_args]
         invocations.append(_manifest_command(command, environment, known_secrets))
-        result = drive_tui(
+        result = claude_tui_drive(
             claude_bin,
             model,
             probe.prompt,

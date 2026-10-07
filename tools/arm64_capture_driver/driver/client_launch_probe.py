@@ -142,8 +142,9 @@ CLAUDE_RELAY_SCRIPT = "claude_fw_e_relay.py"
 CLAUDE_PROBE_FLAG = "--fw-f-v5-probe"
 # 中继 capture 子命令 --claude-global-state-file 的缺省值（静态测试对照中继命令行）。
 CLAUDE_GLOBAL_STATE_DEFAULT = "/root/.claude.json"
-# 容器内实际执行、宿主核对与数据根部署版本一致的两份受管驱动：命令行入口与它调用的 TUI 状态机。
-CLAUDE_DRIVE_FILES = ("claude_drive_tui_cli.py", "drive_claude_tui.py")
+# 容器内实际执行、宿主核对与数据根部署版本一致的三份受管驱动：命令行入口、共用 TUI 状态机与 Claude 侧驱动循环
+# （capturelib/claude_fw_f_v3.py：信任框与新版主输入框判定，中继的 TUI 场景用同一份）。
+CLAUDE_DRIVE_FILES = ("claude_drive_tui_cli.py", "drive_claude_tui.py", "capturelib/claude_fw_f_v3.py")
 CLAUDE_STUB_HOSTS = ["api.anthropic.com", "platform.claude.com"]
 # 覆盖层目标：私有 HOME 与工作目录都在 /work 下（运行器另把 /dev/shm 换成私有 tmpfs）。不改系统证书目录：客户端经
 # NODE_EXTRA_CA_CERTS 信任替身 CA，与中继 TUI 路径同一机制。

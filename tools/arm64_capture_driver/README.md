@@ -369,14 +369,17 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   证据 runs 根，目标客户端三处摘要，逐步核对真实上游步骤只进抓包容器、合成步骤只进断网容器，受管中继与目录文件在
   执行容器里可用；不读凭据，ARM64 还没做 Claude OAuth 登录时也能通过。启动探测的组合来自中继步骤
   `--fw-f-v5-probe` 指向的 TUI probe（按启动身份去重），运行器 `claude_launch_probe_runner.py` 经受管驱动入口
-  `claude_drive_tui_cli.py` 启动 TUI：工作目录与夹具用中继同一函数建，私有 HOME 在覆盖层 `/work/probe-home`
+  `claude_drive_tui_cli.py` 启动 TUI（入口与中继 TUI 场景用同一份 Claude 侧驱动 `capturelib/claude_fw_f_v3.py`：
+  2.1.285 以 auto 为缺省启动权限模式，页脚不再显示「? for shortcuts」，空闲时是「⏵⏵ auto mode on (shift+tab to cycle) ·
+  ← for agents」，驱动把它也认作可以输入；报告的 `host_drive_sha256` 与逐组合 `drive_sha256` 覆盖入口、共用状态机与这份
+  驱动三个文件）：工作目录与夹具用中继同一函数建，私有 HOME 在覆盖层 `/work/probe-home`
   （合成凭据、隐私设置、全局状态 `/root/.claude.json` 的规范化副本；文件不存在时从空对象开始；与中继 TUI 临时 HOME
   同法预置工作目录信任 `projects[<工作目录>].hasTrustDialogAccepted`），`/dev/shm` 换成私有 tmpfs，本地替身终结
   `api.anthropic.com` 与 `platform.claude.com`，替身收到正文含口令的 `POST /v1/messages` 才算通过（其余回 404，2.1.285
   启动期的 hello／profile／settings／policy_limits 都把 404 当作「没有」放行）。会话文本里识别信任目录、登录、onboarding、
   主题、模型迁移等交互屏，拦住首帧的屏判失败并以 48×160 窗口复跑诊断。信任目录屏只在 `untrust:` 验收变更下是预期的
   （驱动入口按选项文字把焦点移到「Yes, I trust this folder」再确认，2.1.285 起默认焦点在「No, exit」）；正常路径出现它判
-  `trust_dialog_unexpected`（预置信任失效，作业的共用驱动不会确认它）。前后指纹另覆盖 `/root/.claude`（凭据文件只记
+  `trust_dialog_unexpected`（预置信任失效，启动流程与设计不符，先查预置再放行）。前后指纹另覆盖 `/root/.claude`（凭据文件只记
   元数据，不读内容）与 `/root/.claude.json`。验收参数 `--test-mutation untrust:<目录>`（目录须是探测工作目录或其上级）
   撤销工作目录信任链（工作目录本身与它的全部上级）上的信任确认，`--only-scenario` 取 TUI probe 编号；报告合同 `official-client-launch-probe/v1`，
   `verify` 要带 `--client claude`。atomic-double 的 Claude 一侧尚未接入（客户端表 pending），`stage1-finish.sh` 跑到那一步即停。

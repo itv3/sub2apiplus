@@ -9,15 +9,18 @@
   全部通过、失败组合以 48×160 窗口复跑诊断、注入未确认信任目录被识别为交互屏且报告不能放行、``/root/.claude.json``
   指纹漂移判失败、受管驱动与数据根不一致判失败、未知验收参数拒绝；verify 认客户端、拒绝验收参数报告并按适配器绑定
   预检 Campaign；
-* 驱动入口的信任框处理（2026-10-07 ARM64 实测 2.1.285 回归）：按选项文字定位确认项的纯函数与状态机，以及用伪终端里的
-  替身客户端端到端驱动（2.1.285 默认聚焦「No, exit」时选到 Yes；2.1.226 默认聚焦 Yes 时只发一个回车；共用状态机在
-  2.1.285 上选到「No, exit」作反向对照）；
+* Claude 侧驱动（``capturelib/claude_fw_f_v3``，驱动入口与中继 v3／v4／v5 的 TUI 场景共用；2026-10-07 ARM64 实测 2.1.285
+  的两处回归）：信任框按选项文字定位确认项的纯函数与状态机；主输入框判定认 2.1.285 auto 权限模式的页脚、忙碌页脚自带的
+  「← for agents」不算空闲、2.1.226 页脚与共用状态机同判；用伪终端里的替身客户端端到端驱动（2.1.285 默认聚焦「No, exit」
+  时选到 Yes 并在 auto 模式主界面提交；已信任时直接提交；多轮输入等页脚回到空闲才发下一轮；2.1.226 只发一个回车；共用状态机
+  在 2.1.285 上选到「No, exit」、认不出主输入框作反向对照）；中继路径绑定同一份驱动，并端到端走一遍 v4 的 TUI 场景执行函数；
 * 入口步骤与编排：Claude 的启动探测登记 Claude 运行器，Job 演练与启动探测的命令行追加 ``--client claude``。
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import gzip
 import hashlib
 import importlib.util
@@ -40,6 +43,7 @@ from tools.official_client_capture import claude_fw_e_relay as relay
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import drive_claude_tui
+from tools.official_client_capture.capturelib import claude_fw_f_v3 as v3
 from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
 from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
 from tools.official_client_capture.capturelib import environment as capture_environment
@@ -469,6 +473,7 @@ class HostRunTests(unittest.TestCase):
         source = REPO_ROOT / "tools" / "official_client_capture"
         self.drive = {}
         for name in probe.CLAUDE_DRIVE_FILES:
+            (tools / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / name, tools / name)
             self.drive[name] = hashlib.sha256((source / name).read_bytes()).hexdigest()
         self.campaign = self.root / "campaign"
@@ -648,33 +653,33 @@ class _Clock:
 
 
 class DriveCliTrustDialogTests(unittest.TestCase):
-    """驱动入口的信任框处理：按选项文字定位确认项；焦点核对不了就绝不回车。"""
+    """Claude 侧驱动（v3，驱动入口与中继共用）的信任框处理：按选项文字定位确认项；焦点核对不了就绝不回车。"""
 
     YES = "Yes, I trust this folder"
 
     def test_trust_selection_by_option_text(self) -> None:
-        plan = drive_cli.trust_selection(TRUST_SCREEN_285)
-        self.assertEqual((plan["action"], plan["target"], plan["focused"], plan["keys"]), ("move", self.YES, "No, exit", drive_cli.KEY_END),
+        plan = v3.trust_selection(TRUST_SCREEN_285)
+        self.assertEqual((plan["action"], plan["target"], plan["focused"], plan["keys"]), ("move", self.YES, "No, exit", v3.KEY_END),
                          "2.1.285：取消项在前且默认聚焦，用 End 把焦点移到末位的确认项")
         self.assertEqual(plan["options"], ["No, exit", self.YES])
-        plan = drive_cli.trust_selection(TRUST_SCREEN_226)
+        plan = v3.trust_selection(TRUST_SCREEN_226)
         self.assertEqual((plan["action"], plan["focused"], plan["keys"]), ("confirm", self.YES, b""), "2.1.226：焦点已在确认项上，直接回车")
         cancel_variant = TRUST_SCREEN_285.replace("❯No,exit", "❯No,continuewithouttheseperm\nissions")
-        self.assertEqual(drive_cli.trust_selection(cancel_variant)["keys"], drive_cli.KEY_END)
+        self.assertEqual(v3.trust_selection(cancel_variant)["keys"], v3.KEY_END)
         middle = TRUST_SCREEN_285.replace("Yes,Itrustthisfolder", "Yes,Itrustthisfolder\n\nNo,continuewithoutthesepermissions")
-        self.assertEqual(drive_cli.trust_selection(middle)["keys"], drive_cli.KEY_HOME + drive_cli.KEY_DOWN, "确认项在中间：Home 再 Down")
+        self.assertEqual(v3.trust_selection(middle)["keys"], v3.KEY_HOME + v3.KEY_DOWN, "确认项在中间：Home 再 Down")
         legacy = "╭──╮│ Do you trust the files in this folder? │ ❯ 1. Yes, proceed │ 2. No, exit"
-        self.assertEqual(drive_cli.trust_selection(legacy)["action"], "confirm")
+        self.assertEqual(v3.trust_selection(legacy)["action"], "confirm")
         partial = TRUST_SCREEN_226.split("2.No,exit")[0]
-        self.assertEqual(drive_cli.trust_selection(partial), {"action": "wait"}, "取消项还没画出来：渲染不完整，不发键")
-        self.assertIsNone(drive_cli.trust_selection("Choose the text style\n❯ 1. Dark mode"), "不是信任框")
-        self.assertIsNone(drive_cli.trust_selection(TRUST_SCREEN_285.split("❯No,exit")[0]), "确认项还没画出来：不当信任框处理")
+        self.assertEqual(v3.trust_selection(partial), {"action": "wait"}, "取消项还没画出来：渲染不完整，不发键")
+        self.assertIsNone(v3.trust_selection("Choose the text style\n❯ 1. Dark mode"), "不是信任框")
+        self.assertIsNone(v3.trust_selection(TRUST_SCREEN_285.split("❯No,exit")[0]), "确认项还没画出来：不当信任框处理")
         stale_then_redrawn = TRUST_SCREEN_285 + TRUST_SCREEN_226
-        self.assertEqual(drive_cli.trust_selection(stale_then_redrawn)["action"], "confirm", "只解析最后一次完整渲染")
+        self.assertEqual(v3.trust_selection(stale_then_redrawn)["action"], "confirm", "只解析最后一次完整渲染")
 
-    def _handler(self) -> tuple[drive_cli.TrustDialogHandler, _Clock, list[bytes], list[str]]:
+    def _handler(self) -> tuple[v3.TrustDialogHandler, _Clock, list[bytes], list[str]]:
         clock, writes, steps = _Clock(), [], []
-        handler = drive_cli.TrustDialogHandler(write=lambda fd, data: writes.append(data), clock=clock)
+        handler = v3.TrustDialogHandler(write=lambda fd, data: writes.append(data), clock=clock)
         return handler, clock, writes, steps
 
     def test_handler_moves_focus_verifies_the_redraw_then_confirms(self) -> None:
@@ -685,23 +690,23 @@ class DriveCliTrustDialogTests(unittest.TestCase):
                 transcript = bytearray(TRUST_SCREEN_285.encode("utf-8"))
                 self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending")
                 self.assertEqual(writes, [], "首次看到信任框先等它画完、按键处理器就绪")
-                clock.now += drive_cli.TRUST_SETTLE_SECONDS
+                clock.now += v3.TRUST_SETTLE_SECONDS
                 self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending")
-                self.assertEqual(writes, [drive_cli.KEY_END])
+                self.assertEqual(writes, [v3.KEY_END])
                 transcript += redraw.encode("utf-8")
                 self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending", "核对前等重绘")
-                clock.now += drive_cli.TRUST_VERIFY_SECONDS
+                clock.now += v3.TRUST_VERIFY_SECONDS
                 self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "confirmed")
-                self.assertEqual(writes, [drive_cli.KEY_END, drive_cli.KEY_ENTER])
+                self.assertEqual(writes, [v3.KEY_END, v3.KEY_ENTER])
                 self.assertEqual(steps, ["trust-focus-confirm-option", "enter-menu"])
 
     def test_handler_confirms_2_1_226_with_a_single_enter(self) -> None:
         handler, clock, writes, steps = self._handler()
         transcript = bytearray(TRUST_SCREEN_226.encode("utf-8"))
         handler.step(7, TRUST_SCREEN_226, transcript, steps.append)
-        clock.now += drive_cli.TRUST_SETTLE_SECONDS
+        clock.now += v3.TRUST_SETTLE_SECONDS
         self.assertEqual(handler.step(7, TRUST_SCREEN_226, transcript, steps.append), "confirmed")
-        self.assertEqual(writes, [drive_cli.KEY_ENTER], "与共用状态机发出的按键相同")
+        self.assertEqual(writes, [v3.KEY_ENTER], "与共用状态机发出的按键相同")
 
     def test_handler_never_presses_enter_when_the_focus_cannot_be_verified(self) -> None:
         for label, redraw in (("重绘显示焦点仍在取消项", "\x1b[13;1H❯ No, exit"), ("按键后客户端没有任何重绘", "")):
@@ -710,16 +715,16 @@ class DriveCliTrustDialogTests(unittest.TestCase):
                 transcript = bytearray(TRUST_SCREEN_285.encode("utf-8"))
                 handler.step(7, TRUST_SCREEN_285, transcript, steps.append)
                 outcome = None
-                for _ in range(drive_cli.TRUST_MAX_MOVES + 2):
-                    clock.now += max(drive_cli.TRUST_SETTLE_SECONDS, drive_cli.TRUST_VERIFY_SECONDS)
+                for _ in range(v3.TRUST_MAX_MOVES + 2):
+                    clock.now += max(v3.TRUST_SETTLE_SECONDS, v3.TRUST_VERIFY_SECONDS)
                     outcome = handler.step(7, TRUST_SCREEN_285, transcript, steps.append)
                     transcript += redraw.encode("utf-8")
                 self.assertEqual(outcome, "unresolved")
-                self.assertNotIn(drive_cli.KEY_ENTER, writes, "信任框上拿不准就不回车（回车会按默认项选到退出）")
-                self.assertEqual(writes, [drive_cli.KEY_END] * drive_cli.TRUST_MAX_MOVES)
+                self.assertNotIn(v3.KEY_ENTER, writes, "信任框上拿不准就不回车（回车会按默认项选到退出）")
+                self.assertEqual(writes, [v3.KEY_END] * v3.TRUST_MAX_MOVES)
                 self.assertEqual(steps[-1], "trust-dialog-unresolved")
                 self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "unresolved", "放弃后不再发任何键")
-                self.assertEqual(len(writes), drive_cli.TRUST_MAX_MOVES)
+                self.assertEqual(len(writes), v3.TRUST_MAX_MOVES)
 
     def test_handler_waits_for_a_complete_render_and_ignores_other_menus(self) -> None:
         handler, clock, writes, steps = self._handler()
@@ -731,19 +736,32 @@ class DriveCliTrustDialogTests(unittest.TestCase):
         self.assertIsNone(handler.step(7, "Choose the text style\n❯ 1. Dark mode", bytearray(), steps.append))
 
 
-# 伪终端里的替身客户端：画信任框（FAKE_CLAUDE_MODE 取 2.1.285 或 2.1.226 的选项顺序与默认焦点），焦点变化时只重绘指针
-# 所在的格子（与客户端按格子差分、无颜色时的重绘同形），回车按焦点确认或取消（取消后保持存活，避免平台差异）；确认后进入
-# 主输入框，每收到一行就记下并重新画出空闲输入框。按键、选择与提交都记进 FAKE_CLAUDE_LOG。
-FAKE_CLAUDE_BODY = r'''
-import json, os, sys, time, tty
+# 伪终端里的替身客户端（FAKE_CLAUDE_MODE）：
+# * ``285``／``226``：先画信任框（2.1.285 取消项在前且默认聚焦、不带编号；2.1.226 确认项在前、带编号），焦点变化时只重画
+#   指针所在的格子（与客户端无颜色时按格子差分重绘同形），回车按焦点确认或取消（取消后保持存活，避免平台差异）；
+# * ``285-trusted``：工作目录已预置信任，直接进主界面。
+# 主界面：2.1.285 的页脚是「⏵⏵ auto mode on (shift+tab to cycle) · ← for agents」（不显示「? for shortcuts」），2.1.226 是
+# 「⏸ manual mode on · ? for shortcuts · ← for agents」。每次提交：输入框随消息增加下移重画（❯ 重新输出），页脚只重画提示
+# 部分为「esc to interrupt · ← for agents」，忙碌 FAKE_CLAUDE_BUSY_SECONDS 秒（其间收到的输入记成 bytes_while_busy），再画
+# 回答、下移输入框并把提示部分改回空闲。按键、选择与提交都记进 FAKE_CLAUDE_LOG。
+FAKE_CLAUDE_BODY = r"""
+import json, os, select, sys, time, tty
 
 MODE = os.environ["FAKE_CLAUDE_MODE"]
 LOG = os.environ["FAKE_CLAUDE_LOG"]
+BUSY_SECONDS = float(os.environ.get("FAKE_CLAUDE_BUSY_SECONDS", "0.3"))
 tty.setraw(0)
-OPTIONS = ["No, exit", "Yes, I trust this folder"] if MODE == "285" else ["Yes, I trust this folder", "No, exit"]
-NUMBERED = MODE != "285"
+AUTO = MODE.startswith("285")
+OPTIONS = ["No, exit", "Yes, I trust this folder"] if AUTO else ["Yes, I trust this folder", "No, exit"]
+NUMBERED = not AUTO
 FIRST_ROW = 13
-state = {"focus": 0, "screen": "trust", "line": b""}
+FOOTER_ROW = 40
+MODE_LABEL = "⏵⏵ auto mode on (shift+tab to cycle)" if AUTO else "⏸ manual mode on"
+IDLE_HINTS = "← for agents" if AUTO else "? for shortcuts · ← for agents"
+BUSY_HINTS = "esc to interrupt · ← for agents"
+HINT_COLUMN = len(MODE_LABEL) + 4
+state = {"focus": 0, "screen": "prompt" if MODE == "285-trusted" else "trust", "line": b"", "turns": 0, "box": 8}
+buffer = bytearray()
 
 
 def out(text):
@@ -761,15 +779,6 @@ def row(index):
     return f"\x1b[{FIRST_ROW + 2 * index};1H{pointer}{number}{OPTIONS[index]}"
 
 
-def idle():
-    out("\r\n❯ \r\n  ? for shortcuts\r\n")
-
-
-out("\x1b[2J\x1b[H" + "─" * 40 + "\r\n Accessing workspace:\r\n\r\n /work/fake\r\n\r\n"
-    " Quick safety check: Is this a project you created or one you trust?\r\n\r\n Security guide\r\n"
-    + "".join(row(index) for index in range(len(OPTIONS))) + f"\x1b[{FIRST_ROW + 2 * len(OPTIONS) + 1};1H Enter to confirm · Esc to cancel\r\n")
-
-
 def move(target):
     old = state["focus"]
     state["focus"] = target % len(OPTIONS)
@@ -777,26 +786,77 @@ def move(target):
         out(f"\x1b[{FIRST_ROW + 2 * old};1H \x1b[{FIRST_ROW + 2 * state['focus']};1H❯")
 
 
-buffer = b""
+def input_box():
+    out(f"\x1b[{state['box']};1H" + "─" * 40 + f"\x1b[{state['box'] + 1};1H❯  \x1b[{state['box'] + 2};1H" + "─" * 40)
+
+
+def hints(text, previous):
+    out(f"\x1b[{FOOTER_ROW};{HINT_COLUMN}H{text}" + " " * max(0, len(previous) - len(text)))
+
+
+def main_screen():
+    notice = " ▎ Auto mode is now Claude Code's default permission mode.\r\n 1 more notice hidden\r\n" if AUTO else ""
+    out("\x1b[2J\x1b[H ▐▛███▜▌ Claude Code\r\n" + notice + " ● high · /effort\r\n")
+    input_box()
+    out(f"\x1b[{FOOTER_ROW};1H{MODE_LABEL} · {IDLE_HINTS}")
+
+
+def read_input(timeout):
+    readable, _, _ = select.select([0], [], [], timeout)
+    if not readable:
+        return b""
+    data = os.read(0, 1024)
+    if not data:
+        raise SystemExit(0)
+    return data
+
+
+def submit():
+    state["turns"] += 1
+    record("prompt", state["line"].decode("utf-8"))
+    out(f"\x1b[{state['box']};1H❯ {state['line'].decode('utf-8')}")
+    state["line"] = b""
+    state["box"] += 3
+    input_box()
+    hints(BUSY_HINTS, IDLE_HINTS)
+    deadline = time.time() + BUSY_SECONDS
+    while time.time() < deadline:
+        data = read_input(max(0.0, deadline - time.time()))
+        if data:
+            record("bytes_while_busy", data.decode("latin-1"))
+            buffer.extend(data)
+    out(f"\x1b[{state['box']};1H RESPONSE {state['turns']}")
+    state["box"] += 2
+    input_box()
+    hints(IDLE_HINTS, BUSY_HINTS)
+
+
+if state["screen"] == "trust":
+    out("\x1b[2J\x1b[H" + "─" * 40 + "\r\n Accessing workspace:\r\n\r\n /work/fake\r\n\r\n"
+        " Quick safety check: Is this a project you created or one you trust?\r\n\r\n Security guide\r\n"
+        + "".join(row(index) for index in range(len(OPTIONS)))
+        + f"\x1b[{FIRST_ROW + 2 * len(OPTIONS) + 1};1H Enter to confirm · Esc to cancel\r\n")
+else:
+    main_screen()
+
 while True:
     try:
-        data = os.read(0, 1024)
+        data = read_input(None)
     except OSError:
         break
-    if not data:
-        break
     record("bytes", data.decode("latin-1"))
-    buffer += data
+    buffer.extend(data)
     while buffer:
         if state["screen"] == "trust":
             for sequence, action in ((b"\x1b[F", "end"), (b"\x1b[H", "home"), (b"\x1b[B", "down"), (b"\x1b[A", "up"), (b"\r", "enter")):
                 if buffer.startswith(sequence):
-                    buffer = buffer[len(sequence):]
+                    del buffer[:len(sequence)]
                     break
             else:
                 if buffer.startswith(b"\x1b") and len(buffer) < 3:
                     break
-                buffer, action = buffer[1:], None
+                del buffer[:1]
+                action = None
             if action == "end":
                 move(len(OPTIONS) - 1)
             elif action == "home":
@@ -810,30 +870,25 @@ while True:
                 record("selected", choice)
                 if choice.startswith("Yes"):
                     state["screen"] = "prompt"
-                    out("\x1b[2J\x1b[H Welcome back\r\n")
-                    idle()
+                    main_screen()
                 else:
                     state["screen"] = "exited"
                     out("\x1b[2J\x1b[H exiting\r\n")
         elif state["screen"] == "prompt":
             if buffer.startswith(b"\r"):
-                buffer = buffer[1:]
-                record("prompt", state["line"].decode("utf-8"))
-                state["line"] = b""
-                out("\r\n  esc to interrupt\r\n")
-                time.sleep(0.2)
-                out("\r\n  RESPONSE\r\n")
-                idle()
+                del buffer[:1]
+                submit()
             else:
-                state["line"] += buffer[:1]
-                buffer = buffer[1:]
+                state["line"] += bytes(buffer[:1])
+                del buffer[:1]
         else:
-            buffer = b""
-'''
+            buffer.clear()
+"""
 
 
 class DriveCliTrustPtyTests(unittest.TestCase):
-    """在伪终端里端到端驱动替身客户端：驱动入口在 2.1.285 的信任框上选到 Yes；共用状态机作反向对照选到「No, exit」。"""
+    """在伪终端里端到端驱动替身客户端：Claude 侧驱动（驱动入口与中继共用）在 2.1.285 上确认信任框、认出 auto 模式页脚下的
+    主输入框并提交；共用状态机作反向对照（选到「No, exit」；已信任时也认不出 2.1.285 的主输入框）。"""
 
     YES = "Yes, I trust this folder"
 
@@ -846,9 +901,9 @@ class DriveCliTrustPtyTests(unittest.TestCase):
         self.fake.chmod(0o700)
         self.log = self.root / "fake-claude.jsonl"
 
-    def environment(self, mode: str) -> dict[str, str]:
-        return {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_LOG": str(self.log), "PYTHONDONTWRITEBYTECODE": "1",
-                "PATH": os.environ.get("PATH", "")}
+    def environment(self, mode: str, busy_seconds: float = 0.3) -> dict[str, str]:
+        return {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_LOG": str(self.log), "FAKE_CLAUDE_BUSY_SECONDS": str(busy_seconds),
+                "PYTHONDONTWRITEBYTECODE": "1", "PATH": os.environ.get("PATH", "")}
 
     def events(self, kind: str) -> list[str]:
         if not self.log.exists():
@@ -859,8 +914,14 @@ class DriveCliTrustPtyTests(unittest.TestCase):
         chunks = self.events("bytes")
         return chunks[:chunks.index(TOKEN)] if TOKEN in chunks else chunks
 
-    def test_cli_entry_selects_yes_when_2_1_285_focuses_no_exit(self) -> None:
-        """经运行器实际调用的入口 ``main``（与启动探测同样的参数形状）：信任框上先移焦点再确认，口令进了输入框。"""
+    def input_bytes(self, kind: str = "bytes") -> list[str]:
+        """收到的输入，去掉驱动收尾时发的 Ctrl-C（``_stop`` 的 ``\x03``，不是输入）。"""
+
+        return [chunk for chunk in self.events(kind) if chunk != "\x03"]
+
+    def test_cli_entry_confirms_trust_and_submits_on_2_1_285(self) -> None:
+        """经运行器实际调用的入口 ``main``（与启动探测同样的参数形状）：信任框上先移焦点再确认，auto 模式页脚下的主输入框
+        认作可以输入，口令进了输入框。"""
 
         transcript = self.root / "transcript.txt"
         argv = ["--claude-bin", str(self.fake), "--model", "m", "--cwd", str(self.root), "--prompt", TOKEN,
@@ -872,18 +933,40 @@ class DriveCliTrustPtyTests(unittest.TestCase):
         self.assertEqual(code, drive_cli.EXIT_COMPLETE, summary)
         self.assertEqual(self.events("selected"), [self.YES])
         self.assertEqual(self.events("prompt"), [TOKEN])
-        self.assertEqual(self.keys_before_prompt(), [drive_cli.KEY_END.decode(), "\r"], "先用 End 把焦点移到确认项，核对后再回车")
+        self.assertEqual(self.keys_before_prompt(), [v3.KEY_END.decode(), "\r"], "先用 End 把焦点移到确认项，核对后再回车")
         self.assertEqual([tag for _, tag in summary["steps"]][:3], ["trust-focus-confirm-option", "enter-menu", "sent-prompt"])
         self.assertEqual(sum(1 for _, tag in summary["steps"] if tag == "enter-menu"), 1, "运行器的 menus_accepted 口径不变")
-        self.assertIn("Yes,Itrustthisfolder", "".join(transcript.read_text(encoding="utf-8").split()))
+        flat = "".join(transcript.read_text(encoding="utf-8").split())
+        self.assertIn("Yes,Itrustthisfolder", flat)
+        self.assertIn("automodeon(shift+tabtocycle)", flat)
+        self.assertNotIn("?forshortcuts", flat, "2.1.285 的 auto 模式页脚没有「? for shortcuts」")
 
-    def test_shared_state_machine_selects_no_exit_on_2_1_285(self) -> None:
-        """反向对照：改动前驱动入口调用的共用状态机回车接受默认项，在 2.1.285 上选到「No, exit」（ARM64 实测的现象）。"""
+    def test_cli_entry_submits_when_the_workspace_is_already_trusted(self) -> None:
+        """正常路径（私有 HOME 与中继都预置了信任）：直接进 auto 模式主界面，不经信任框就提交。"""
+
+        argv = ["--claude-bin", str(self.fake), "--model", "m", "--prompt", TOKEN, "--total-timeout", "20", "--quiet-after", "1"]
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, self.environment("285-trusted")), contextlib.redirect_stdout(stdout):
+            code = drive_cli.main(argv)
+        summary = json.loads(stdout.getvalue().strip().splitlines()[-1])
+        self.assertEqual(code, drive_cli.EXIT_COMPLETE, summary)
+        self.assertEqual(self.events("prompt"), [TOKEN])
+        self.assertEqual([tag for _, tag in summary["steps"]][:1], ["sent-prompt"])
+
+    def test_shared_state_machine_cannot_finish_on_2_1_285(self) -> None:
+        """反向对照（ARM64 实测的两处现象）：共用状态机在 2.1.285 的信任框上回车选到「No, exit」；已信任时认不出 auto 模式
+        页脚下的主输入框，一条输入都不发。"""
 
         result = drive_claude_tui.drive(str(self.fake), "m", TOKEN, self.environment("285"), total_timeout=4, quiet_after_prompt=1)
         self.assertFalse(result["sent_prompt"])
         self.assertEqual(self.events("selected"), ["No, exit"])
         self.assertEqual(self.keys_before_prompt()[:1], ["\r"])
+        self.log.unlink()
+        result = drive_claude_tui.drive(str(self.fake), "m", TOKEN, self.environment("285-trusted"), total_timeout=6, quiet_after_prompt=1)
+        self.assertFalse(result["sent_prompt"])
+        self.assertEqual((result["steps"], self.input_bytes()), ([], []), "主输入框已就绪，共用状态机却一个键都没发")
+        self.assertEqual(drive_claude_tui.classify_screen(result["transcript"]), "waiting")
+        self.assertEqual(v3.classify_screen(result["transcript"]), "idle_prompt")
 
     def test_cli_driver_sends_the_same_single_enter_on_2_1_226(self) -> None:
         result = drive_cli.drive(str(self.fake), "m", TOKEN, self.environment("226"), total_timeout=25, quiet_after_prompt=1)
@@ -891,12 +974,101 @@ class DriveCliTrustPtyTests(unittest.TestCase):
         self.assertEqual(self.events("selected"), [self.YES])
         self.assertEqual(self.keys_before_prompt(), ["\r"], "焦点已在确认项上：只发一个回车，与共用状态机相同")
 
-    def test_cli_sequence_driver_confirms_the_trust_dialog(self) -> None:
-        result = drive_cli.drive_sequence(str(self.fake), "m", ("ALPHAINPUT", "BRAVOINPUT"), self.environment("285"),
-                                          total_timeout=30, quiet_after_last_input=1)
+    def test_cli_sequence_driver_waits_for_the_auto_mode_footer_to_go_idle(self) -> None:
+        """compact 一类多轮场景：第一轮回答期间页脚是「… · esc to interrupt · ← for agents」，忙碌页脚里的「← for agents」
+        不算空闲，第二轮等页脚改回空闲再发（忙碌 2 秒，长于驱动每轮提交后等的 1 秒）。"""
+
+        result = drive_cli.drive_sequence(str(self.fake), "m", ("ALPHAINPUT", "BRAVOINPUT"), self.environment("285", busy_seconds=2.0),
+                                          total_timeout=40, quiet_after_last_input=1)
         self.assertTrue(result["all_inputs_sent"], result["steps"])
         self.assertEqual(self.events("selected"), [self.YES])
         self.assertEqual(self.events("prompt"), ["ALPHAINPUT", "BRAVOINPUT"])
+        self.assertEqual(self.input_bytes("bytes_while_busy"), [], "忙碌期间一个键都不发")
+
+
+class ClaudeTuiScreenStateTests(unittest.TestCase):
+    """Claude 侧主输入框判定（v3.classify_screen）：2.1.285 的 auto 模式页脚与 2.1.226 的页脚。"""
+
+    # 2026-10-07 m4 ARM64 实测（claude-code-2_1_285-b210-20261007t114446z-client-launch-probe，v4-tui-usage 组合的
+    # tui_visible_tail，空格被光标定位吃掉；❯ 后是不换行空格）。
+    IDLE_285 = (
+        "\n▐▛███▛█ClaudeCodev2.1.285\n▝▜██████▀Sonnet5·ClaudeAPI\n▝▝▝▝/work/probe-run/results/workspace\n"
+        "▎AutomodeisnowClaudeCode'sdefaultpermissionmode.\n▎AutomodeletsClaudehandlepermissionpromptsautomatically.\n"
+        "▎https://code.claude.com/docs/en/permission-modes\n1morenoticehidden\n●high·/effort\n" + "─" * 80 + "\n❯\xa0 \n"
+        + "─" * 80 + "\n⏵⏵automodeon(shift+tabtocycle)·←foragents\n▟▟\n█▟█▟\n"
+    )
+    # 2.1.226 真实采集（complete-v16 v4-tui-compact 的 tui-transcript.log）里的空闲与忙碌页脚。
+    IDLE_226 = "─" * 40 + "❯" + "─" * 40 + "⏸manualmodeon·?forshortcuts·←foragents●high·/effort"
+    BUSY_226 = "❯只回复FW_F_V4_COMPACT_SEED_OK，不得调用任何工具。✻Orchestrating…" + "─" * 40 + "❯" + "─" * 40 + "⏸manualmodeon·esctointerrupt·←foragents●high·/effort✽✻"
+
+    def test_2_1_285_auto_mode_footer_is_ready_for_input(self) -> None:
+        self.assertEqual(drive_claude_tui.classify_screen(self.IDLE_285), "waiting", "共用状态机只认「? for shortcuts」：卡住")
+        self.assertEqual(v3.classify_screen(self.IDLE_285), "idle_prompt")
+
+    def test_busy_footer_tail_is_not_idle(self) -> None:
+        busy = self.IDLE_285 + "\n❯ " + TOKEN + "\n⏵⏵automodeon(shift+tabtocycle)·esctointerrupt·←foragents\n✻Thinking…"
+        self.assertEqual(v3.classify_screen(busy), "busy", "忙碌页脚自带的「← for agents」不算空闲")
+        diff_busy = self.IDLE_285 + "\n❯ " + TOKEN + "esctointerrupt·←foragents"
+        self.assertEqual(v3.classify_screen(diff_busy), "busy", "按格子差分只重画了提示部分")
+        tasks = self.IDLE_285 + "esctointerrupt·ctrl+ttoshowtasks·←foragents"
+        self.assertEqual(v3.classify_screen(tasks), "busy")
+        idle_again = diff_busy + "RESPONSE❯\xa0 ←foragents"
+        self.assertEqual(v3.classify_screen(idle_again), "idle_prompt", "提示部分改回空闲")
+        self.assertEqual(v3.classify_screen(idle_again + "esctointerrupt·←foragents"), "busy")
+
+    def test_2_1_226_footers_keep_the_shared_verdict(self) -> None:
+        for label, screen in (("空闲", self.IDLE_226), ("忙碌", self.BUSY_226), ("忙碌后回到空闲", self.BUSY_226 + "?forshortcuts·←foragents"),
+                              ("只有指针", "❯"), ("忙碌提示", "Working…\nesc to interrupt")):
+            with self.subTest(label=label):
+                self.assertEqual(v3.classify_screen(screen), drive_claude_tui.classify_screen(screen))
+
+    def test_menus_and_login_keep_precedence_and_pointer_is_required(self) -> None:
+        self.assertEqual(v3.classify_screen("Select login method\n❯ Claude account\n⏵⏵ auto mode on (shift+tab to cycle)"), "auth_gate")
+        self.assertEqual(v3.classify_screen(TRUST_SCREEN_285), "menu")
+        self.assertEqual(v3.classify_screen("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"), "waiting", "没有主输入指针")
+
+
+class RelayTuiDriverTests(unittest.TestCase):
+    """中继的 TUI 场景（v3／v4／v5）与驱动入口用同一份 Claude 侧驱动，并端到端走一遍 v4 的 TUI 场景执行函数。"""
+
+    def test_relay_paths_bind_the_claude_side_driver(self) -> None:
+        self.assertIs(v4.drive_tui, v3.claude_tui_drive)
+        self.assertIs(v4.drive_tui_sequence, v3.claude_tui_drive_sequence)
+        self.assertIs(drive_cli.drive, v3.claude_tui_drive)
+        self.assertIs(drive_cli.drive_sequence, v3.claude_tui_drive_sequence)
+        tui_probe = next(probe_id for probe_id in v3.PROBE_IDS if v3.get_probe(probe_id).driver == "tui")
+        item = v3.get_probe(tui_probe)
+        calls: list = []
+
+        def fake(claude, model, prompt, environment, **options):
+            calls.append((claude, model, prompt))
+            return {"sent_prompt": True, "transcript": "", "steps": []}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(v3, "claude_tui_drive", fake):
+            summary = v3.run_claude_fw_f_probe(claude_bin="/opt/claude/claude", model="m", probe_id=tui_probe,
+                                               environment=dict(item.env_dict()), output_dir=Path(directory) / "out",
+                                               timeout=10, known_secrets={})
+        self.assertEqual(calls, [("/opt/claude/claude", "m", item.prompt)], "v3 的 TUI 场景（v5 清单里的 v4-replay-tui）也走它")
+        self.assertTrue(summary["valid"])
+
+    def test_v4_tui_probe_submits_on_2_1_285_end_to_end(self) -> None:
+        item = dataclasses.replace(v5.get_probe("v4-tui-attachment"), wait_seconds=1)
+        self.assertFalse(item.require_debug_log)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "claude"
+            fake.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_BODY, encoding="utf-8")
+            fake.chmod(0o700)
+            log = root / "fake-claude.jsonl"
+            output = root / "results"
+            output.mkdir()
+            environment = {**item.env_dict(), "FAKE_CLAUDE_MODE": "285-trusted", "FAKE_CLAUDE_LOG": str(log),
+                           "PYTHONDONTWRITEBYTECODE": "1", "PATH": os.environ.get("PATH", "")}
+            result = v4._run_tui_probe(claude_bin=str(fake), model="m", probe=item, environment=environment,
+                                       output_dir=output, timeout=20, known_secrets={})
+            prompts = [entry["value"] for entry in map(json.loads, log.read_text(encoding="utf-8").splitlines()) if entry["kind"] == "prompt"]
+        self.assertTrue(result["input_complete"], result["steps"])
+        self.assertEqual(prompts, [item.prompt], "中继的 TUI 场景把固定提示词提交进 2.1.285 的主输入框")
 
 
 class EntryWiringTests(unittest.TestCase):

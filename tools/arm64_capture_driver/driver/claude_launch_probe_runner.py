@@ -20,21 +20,22 @@
   的其余内容不复制：作业的 TUI 临时 HOME 里也没有它们。
 * 工作目录信任：与中继（``claude_fw_e_relay._seed_tui_workspace_trust``）同法，在 ``.claude.json`` 副本里预置
   ``projects[<工作目录>].hasTrustDialogAccepted = true``（客户端判定「已信任」读的就是这个键，从工作目录逐级向上找；
-  2.1.226 与 2.1.285 相同，官方自托管 runner 也这样预置）。2.1.285 的信任框默认焦点在「No, exit」，作业的共用驱动
-  回车会选到退出，所以作业靠预置信任不出现信任框。
+  新旧版本相同，官方自托管 runner 也这样预置）。作业与探测都按「预置信任、不出现信任框」的启动流程设计。
 * 进程：本进程是私有 PID 命名空间的 1 号进程，退出时内核回收命名空间内全部子进程。
 
 判据
 ----
 按作业相同的方式启动 TUI：工作目录与夹具由受管 ``capturelib/claude_fw_f_v4._fixture_paths`` 建（与中继同一函数），
 客户端参数与 ``_run_tui_probe`` 的拼法相同，环境与中继 TUI 路径相同（最小白名单、隐私变量、``NODE_EXTRA_CA_CERTS``、私有
-HOME），经受管驱动入口 ``claude_drive_tui_cli.py``（同一状态机：引导菜单回车接受、登录页立即停；信任框按选项文字确认）
-只把提示词换成探测口令。替身收到正文含完整口令的 ``POST /v1/messages`` 才算通过（``run_verdict``）。交互屏（信任目录、
-登录、onboarding、主题选择、模型迁移等）从会话文本里识别，写进结果作诊断：拦住首帧的屏让口令进不了输入框，替身收不到
-带口令的请求，判为失败。信任目录屏只在 ``untrust:`` 验收变更下是预期的（驱动确认它，不影响判定）；正常路径上出现它
-说明预置信任失效——作业的驱动不会确认它，所以即使驱动确认后收到了口令也判失败（``trust_dialog_unexpected``）。
+HOME），经受管驱动入口 ``claude_drive_tui_cli.py`` 只把提示词换成探测口令。入口用的是与中继同一份 Claude 侧驱动
+（``capturelib/claude_fw_f_v3.claude_tui_drive``）：引导菜单回车接受、登录页立即停、信任框按选项文字确认、新版 auto
+权限模式的页脚也认作可以输入。替身收到正文含完整口令的 ``POST /v1/messages`` 才算通过（``run_verdict``）。交互屏
+（信任目录、登录、onboarding、主题选择、模型迁移等）从会话文本里识别，写进结果作诊断：拦住首帧的屏让口令进不了输入框，
+替身收不到带口令的请求，判为失败。信任目录屏只在 ``untrust:`` 验收变更下是预期的（驱动确认它，不影响判定）；正常路径上
+出现它说明预置信任失效、启动流程已与设计不符（中继的证据仍会记 ``workspace_trust_seeded``），即使驱动确认后收到了口令
+也判失败（``trust_dialog_unexpected``），先查预置再放行。
 
-替身的应答：``POST /v1/messages`` 回 400（不触发重试），其余一律 404。2.1.285 对启动期的四个请求都把 404 当作「没有」
+替身的应答：``POST /v1/messages`` 回 400（不触发重试），其余一律 404。目标版本对启动期的四个请求都把 404 当作「没有」
 放行：``HEAD /api/hello`` 是预连接、结果被丢弃；``/api/oauth/profile`` 失败只记日志、沿用全局状态里的 ``oauthAccount``；
 ``/api/claude_code/settings`` 把 404 定义为「没有远程设置」；``/api/claude_code/policy_limits`` 无缓存时 404 即本会话不限制。
 结果只记录主机、方法、路径与头部名称（另有口令是否出现、正文能否解码与替身自己的应答码），任何头部取值与正文都不写进结果。
@@ -65,6 +66,8 @@ PROBE_RUN = Path("/work/probe-run")
 SHM = Path("/dev/shm")
 DRIVE_CLI = "claude_drive_tui_cli.py"
 DRIVE_MODULE = "drive_claude_tui.py"
+# Claude 侧驱动循环（信任框与新版主输入框判定）所在的受管模块；与入口、共用状态机一起核对容器副本与数据根一致。
+DRIVE_LOOP = "capturelib/claude_fw_f_v3.py"
 MESSAGES_PATH = "/v1/messages"
 MAX_BODY_BYTES = 64 * 1024 * 1024
 # 合成凭据：替身不核对令牌；有效期取远未来，客户端不会在探测期间刷新。
@@ -381,8 +384,8 @@ def run_verdict(
     """一次运行的（状态，原因）。
 
     没有 ``untrust:`` 验收变更时出现信任目录屏先判 ``trust_dialog_unexpected``：私有 HOME 与中继 TUI 临时 HOME 都预置了
-    工作目录信任，作业的共用驱动不会确认信任框（2.1.285 默认焦点在「No, exit」），探测这边驱动确认后收到口令也不能
-    代表作业能过。其余与原判定顺序相同：收到带口令的请求即通过，否则依次是登录门禁、超时、没收到口令。
+    工作目录信任，作业按不出现信任框的启动流程设计；正常路径还出现它说明预置失效，驱动确认后收到口令也先不放行。其余
+    与原判定顺序相同：收到带口令的请求即通过，否则依次是登录门禁、超时、没收到口令。
     """
 
     trust_expected = any(str(mutation).startswith("untrust:") for mutation in mutations)
@@ -721,7 +724,7 @@ def main() -> int:
         _install_hosts(config["stub_hosts"])
         ca, cert, key = _install_tls(config["stub_hosts"])
         tool_root = Path(config["tool_root"])
-        result["drive_sha256"] = {name: _sha256_file(tool_root / name) for name in (DRIVE_CLI, DRIVE_MODULE)}
+        result["drive_sha256"] = {name: _sha256_file(tool_root / name) for name in (DRIVE_CLI, DRIVE_MODULE, DRIVE_LOOP)}
         catalog, fixtures, environment = _managed(config["tool_root"])
         probe = catalog.get_probe(config["probe_id"])
         if probe.driver != "tui" or probe_launch(probe) != config["launch"]:

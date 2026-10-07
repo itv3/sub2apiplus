@@ -20,13 +20,11 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from tools.official_client_capture.drive_claude_tui import (
-    drive as drive_tui,
-    drive_sequence as drive_tui_sequence,
-)
-
+# TUI 驱动用 v3 里的 Claude 侧驱动（2.1.285 的信任框与 auto 权限模式页脚；共用驱动归 Codex wire 层不能改）。
 from .claude_fw_f_v3 import (
     PROBES as V3_PROBES,
+    claude_tui_drive as drive_tui,
+    claude_tui_drive_sequence as drive_tui_sequence,
     run_claude_fw_f_probe as run_v3_probe,
 )
 from .environment import INJECTABLE_PROBE_KEYS, environment_manifest_view

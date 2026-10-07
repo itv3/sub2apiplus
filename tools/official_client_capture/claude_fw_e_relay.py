@@ -321,10 +321,11 @@ def _rewrite_file(path: Path, content: bytes) -> None:
 # ---------------------------------------------------------------------------
 # TUI 临时 HOME 的工作目录信任（2026-10-07，B2-10 启动探测在 ARM64 上用 2.1.285 实测发现）
 #
-# 交互模式启动时，工作目录没有信任确认就先弹信任框。2.1.226 的信任框默认焦点在「Yes, I trust this folder」，共用驱动
-# drive_claude_tui 回车即确认；2.1.285 的信任框把取消项排在前面并默认聚焦（「❯ No, exit」），回车就退出，TUI 场景一个请求
-# 都发不出去。共用驱动归 Codex wire 层不能改，所以在临时 HOME 的全局状态副本里预置工作目录信任：客户端判定「已信任」
-# 读 ``projects[<目录>].hasTrustDialogAccepted``（从启动目录逐级向上找，2.1.285 在 git 根处截止），官方自托管 runner 也是
+# 交互模式启动时，工作目录没有信任确认就先弹信任框。2.1.226 的信任框默认焦点在「Yes, I trust this folder」，回车即确认；
+# 2.1.285 的信任框把取消项排在前面并默认聚焦（「❯ No, exit」），回车接受默认项就退出，TUI 场景一个请求都发不出去。TUI 场景
+# 的驱动（capturelib/claude_fw_f_v3 的 Claude 侧驱动）会按选项文字确认信任框，这里仍在临时 HOME 的全局状态副本里预置
+# 工作目录信任，让启动流程不出现信任框（与启动探测同法，不依赖信任框的界面细节）：客户端判定「已信任」读
+# ``projects[<目录>].hasTrustDialogAccepted``（从启动目录逐级向上找，2.1.285 在 git 根处截止），官方自托管 runner 也是
 # 这样预置的。副本在 /dev/shm 的临时 HOME 里、用完即删，长期全局状态不受影响（temporary_claude_tui_state 照旧核对）。
 # 启动探测的私有 HOME（arm64_capture_driver/driver/claude_launch_probe_runner.seed_project_trust）按同一规则预置。
 # ---------------------------------------------------------------------------
@@ -1867,7 +1868,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                                 expected_version=arguments.expected_version,
                             ) as (tui_home, _tui_config, state_receipt):
                                 tui_state_receipt = state_receipt
-                                # 预置 TUI 启动目录的信任：2.1.285 的信任框默认聚焦「No, exit」，共用驱动回车即退出。
+                                # 预置 TUI 启动目录的信任，启动流程不出现信任框（2.1.285 的信任框默认聚焦「No, exit」）。
                                 state_receipt["workspace_trust_seeded"] = bool(
                                     _seed_tui_workspace_trust(tui_home, _tui_trust_paths(result_root, Path.cwd()))
                                 )
