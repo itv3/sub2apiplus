@@ -28,8 +28,9 @@
   同内容复用；两条事实带幂等键 ``fact_idempotency_key(逻辑动作, payload 摘要, 事实种类)``，payload 只用冻结值（attempt
   完成时刻、导入收据完成时刻），重跑得到同一 payload、同一键，Store 复用原事实；有父监督器上下文时带 ``--producer-run``。
 * 文件制品只写一次：已存在时除时间字段外逐字段比较，相同即复用、不同即拒绝（与 Codex ``_complete_vc_phase`` 同一判据）。
-* 运行在 Campaign 锁内，并要求没有未释放的执行租约（与 B2-09 导入同口径）：seal 不取得 ``CampaignLease``，被强杀后不
-  留下需要对账的过期租约；父监督器（campaign-run）不写本地租约文件，监督器内派发不受影响。
+* 运行在 Campaign 锁内，并要求没有仍在执行的租约（与 B2-09 导入同口径，``_require_quiescent_campaign_lease``；B2-08 起
+  停线租约视为静止）：seal 不取得 ``CampaignLease``，被强杀后不留下需要对账的过期租约；父监督器（campaign-run）不写本地
+  租约文件，监督器内派发不受影响。
 
 三、交给后续工作项的边界
 ========================
@@ -161,12 +162,8 @@ def seal_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     campaign_dir = campaign_dir.resolve(strict=True)
     orchestrator._require_formal_campaign(campaign_dir)
     with orchestrator._campaign_lock(campaign_dir):
-        lease = orchestrator._read_campaign_lease(campaign_dir)
-        if lease is not None and lease.get("state") != "released":
-            raise ConfigurationError(
-                f"Campaign 有未释放的执行租约（state={lease.get('state')}）：seal 要求 Campaign 静止；"
-                "停线或过期租约先按恢复协议对账（B2-08）。"
-            )
+        # B2-08 定的恢复协议：停线租约（执行者已退出）视为静止，仍在执行或已过期的 active 租约拒绝（零写入）。
+        orchestrator._require_quiescent_campaign_lease(campaign_dir, action="seal", attempt_id=getattr(arguments, "attempt_id", None))
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         if manifest.get("predecessor") is not None:
             return _seal_predecessor_reuse(campaign_dir, manifest, arguments), 0
@@ -332,6 +329,11 @@ def _ensure_store_campaign(campaign_dir: Path, manifest: Mapping[str, Any]) -> t
         store_cli(
             ["campaign-create", "--store", root, "--input", _frozen_input(campaign_dir, manifest, "store_campaign"), "--schema", "v2", "--allow-existing"]
         )
+    # B2-08：编排器链已登记、Store 尚未登记的工具演进在这里补登（tool-evolution 批准后、Store 登记之前中断时），seal 两层
+    # 核对同一身份。Store Campaign 本身必须在工具变化之前建立（VC-0 收口，B2-11），tool-evolution 在登记前核对。
+    from tools.official_client_capture import claude_upgrade_evolution
+
+    claude_upgrade_evolution.ensure_store_tool_registration(campaign_dir, manifest)
     return claude_upgrade_store.open_campaign_store(campaign_dir, manifest)
 
 
@@ -437,6 +439,61 @@ def _complete_stage(
     return stage, checkpoint
 
 
+STAGE_RESULT_FIELDS = frozenset(
+    {
+        "schema_version", "client", "campaign_id", "stage", "status", "mode", "attempt", "seal", "predecessor_reuse",
+        "store", "execute_item_ids", "reuse_item_ids", "live_request_count", "scanned_bytes", "sealed_at_utc",
+    }
+)
+
+
+def load_stage_result(campaign_dir: Path, path: Path, *, manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """读取并核对官方阶段结果（B2-08 起供编排器 ``_load_stage_result`` 使用；完整阶段重放归 B3-01）。
+
+    核对合同、字段闭集、Campaign、阶段与完成状态、两种路径各自的绑定（采集路径：attempt 收据摘要；只读复用：复用
+    来源），以及 VC-1 checkpoint 已经绑定这份阶段结果——阶段结果写出、checkpoint 尚未写出的半成品按未封存处理
+    （重跑 seal 即收敛）。没有阶段结果时报「尚未封存」。
+    """
+
+    orchestrator = _orchestrator()
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ConfigurationError("官方阶段结果路径不可信。")
+    if not path.exists():
+        raise ConfigurationError("官方阶段尚未封存（official/result.json 不存在）。")
+    stage = _read_json(path, "官方阶段结果")
+    campaign_id = (manifest or _read_json(Path(campaign_dir) / "campaign.json", "Campaign 核心清单")).get("campaign_id")
+    mode = stage.get("mode")
+    if (
+        set(stage) != STAGE_RESULT_FIELDS
+        or stage.get("schema_version") != STAGE_RESULT_SCHEMA
+        or stage.get("client") != "claude"
+        or stage.get("campaign_id") != campaign_id
+        or stage.get("stage") != "capture-official"
+        or stage.get("status") != "complete"
+        or mode not in {"captured", "predecessor_reuse"}
+        or not orchestrator._is_rfc3339_timestamp(stage.get("sealed_at_utc"))
+    ):
+        raise ConfigurationError("官方阶段结果合同、Campaign 或状态不一致。")
+    if mode == "captured":
+        binding = stage.get("attempt")
+        orchestrator._require_file_binding(binding, "官方阶段结果 attempt")
+        attempt_path = orchestrator._campaign_file(Path(campaign_dir), str(binding["path"]))
+        if attempt_path.is_symlink() or not attempt_path.is_file() or file_sha256(attempt_path) != binding["sha256"]:
+            raise ConfigurationError("官方阶段结果绑定的 attempt 收据摘要漂移。")
+        if stage.get("predecessor_reuse") is not None or not isinstance(stage.get("seal"), Mapping):
+            raise ConfigurationError("采集路径的官方阶段结果必须绑定 seal 预览且不带复用来源。")
+    elif stage.get("attempt") is not None or stage.get("seal") is not None or not isinstance(stage.get("predecessor_reuse"), Mapping):
+        raise ConfigurationError("只读复用的官方阶段结果不得绑定 attempt 或 seal 预览。")
+    checkpoint_path = claude_upgrade_vc.vc_checkpoint_path(Path(campaign_dir), "VC-1")
+    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
+        raise ConfigurationError("官方阶段尚未封存完整：阶段结果已写出、VC-1 checkpoint 尚未写出（重跑 capture-official seal 收敛）。")
+    checkpoint = _read_json(checkpoint_path, "VC-1 checkpoint")
+    receipt = checkpoint.get("stage_receipt") if isinstance(checkpoint.get("stage_receipt"), Mapping) else {}
+    if receipt.get("path") != STAGE_RESULT_RELATIVE.as_posix() or receipt.get("sha256") != file_sha256(path):
+        raise ConfigurationError("VC-1 checkpoint 没有绑定这份官方阶段结果。")
+    return stage
+
+
 # ---------------------------------------------------------------------------
 # 采集路径：四阶段
 # ---------------------------------------------------------------------------
@@ -505,8 +562,8 @@ def _seal_captured_attempt(campaign_dir: Path, manifest: dict[str, Any], argumen
     attempt_id = getattr(arguments, "attempt_id", None)
     if not attempt_id:
         raise ConfigurationError("capture-official seal 必须提供 --attempt-id。")
-    if (campaign_dir / capture.CONTAMINATION_MARKER).exists():
-        raise ConfigurationError("Campaign 已记录环境污染：先走环境隔离与恢复（B2-08），禁止 seal。")
+    # B2-08：未隔离的污染事实封锁 Campaign（已被 environment-isolate 覆盖的旁路标记不再挡住续跑之后的 seal）。
+    orchestrator._reject_contaminated_campaign(campaign_dir)
     key = ("official", None, str(attempt_id))
     if key in orchestrator._conflict_quarantined_attempts(campaign_dir):
         raise ConfigurationError("该 attempt 已被证据根冲突隔离（证据不可信，永不复用、永不 seal）。")
@@ -525,6 +582,14 @@ def _seal_captured_attempt(campaign_dir: Path, manifest: dict[str, Any], argumen
     failed = orchestrator._failed_job_ids(attempt.get("results"))
     if failed:
         raise ConfigurationError("attempt 仍有失败 Job，禁止 seal：" + "、".join(failed) + "；只能定向补跑失败闭集（B2-08）。")
+    invalidated = orchestrator._attempt_evolution_invalidated_job_ids(
+        campaign_dir, manifest, attempt_root, attempt, phase="official", candidate_id=None
+    )
+    if invalidated:
+        raise ConfigurationError(
+            f"官方 attempt {attempt_id} 有作业被工具演进作废（{'、'.join(invalidated)}）：先 reconcile-attempt 按作废对账、"
+            "批准恢复预览后 resume --rerun-failed 只重跑失效作业，再对新 attempt 走 seal。"
+        )
     jobs = orchestrator._campaign_jobs(campaign_dir, manifest, "official")
     results = _attempt_results(attempt, jobs)
     current_tool = orchestrator._tool_identity(include_git=False)

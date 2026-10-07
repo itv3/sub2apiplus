@@ -35,6 +35,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_permissions as permissions
 from tools.official_client_capture import incremental_recovery
 from tools.official_client_capture.capturelib.model import ConfigurationError
+from tools.official_client_capture.tests import claude_project_ledger_fixture
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TOOL_ROOT.parents[1]
@@ -291,6 +292,9 @@ class CaptureFixture(unittest.TestCase):
         (campaign / "campaign.json").write_bytes(raw)
         (campaign / "campaign.json").chmod(0o600)
         (campaign / "campaign.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n", encoding="utf-8")
+        if mode == "formal":
+            # B2-08 起正式 run 与 seal 先过项目总账消费者门禁：Formal Campaign 在数据根的 Claude 总账里注册。
+            claude_project_ledger_fixture.register_claude_campaign(campaign)
         return campaign
 
     def fake_states(self, manifest, *, deadline=None, heartbeat=None):
@@ -1013,7 +1017,8 @@ class FormalRunTests(CaptureFixture):
         self.assertNotIn("v4-oauth-refresh", {call["probe"] for call in self.relay_calls()})
         code, _again, stderr = self.run_formal(campaign)
         self.assertEqual(code, 1)
-        self.assertIn("B2-08", stderr)
+        # B2-08 落实后：未隔离的污染封锁 Campaign，提示先清理残留进程、再 environment-isolate。
+        self.assertIn("environment-isolate", stderr)
 
 
 class OfflineContainerFormalTests(CaptureFixture):

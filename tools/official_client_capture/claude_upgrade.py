@@ -37,7 +37,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -1771,10 +1771,16 @@ def _assertions_root_for_baseline(campaign_dir: Path, candidate_id: str, baselin
 def _campaign_tool_evolutions(
     campaign_dir: Path, manifest: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
-    """读取 Campaign 工具演进链；链损坏即失败关闭。"""
+    """读取 Campaign 工具演进链；链损坏即失败关闭。
+
+    B2-08 起与 Codex 照搬版本分叉：共享链校验（在 Codex 评估读侧闭包内，不改）把策略演进的变化路径钉死为 Codex 策略文件，
+    Claude 的链读写在 ``claude_upgrade_evolution``（合同与衔接规则相同，策略文件按 Claude 受管条目键核对）。
+    """
+
+    from tools.official_client_capture import claude_upgrade_evolution
 
     try:
-        return codex_upgrade_wire_transition.load_evolutions(campaign_dir, manifest)
+        return claude_upgrade_evolution.load_evolutions(campaign_dir, manifest)
     except codex_upgrade_wire_transition.WireTransitionError as error:
         raise ConfigurationError(f"工具演进链无法重放：{error}") from error
 
@@ -1782,10 +1788,12 @@ def _campaign_tool_evolutions(
 def _campaign_effective_tool_identity(
     campaign_dir: Path, manifest: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Campaign 当前有效工具身份：最新演进的 to 完整身份，没有演进时为 plan 冻结身份。"""
+    """Campaign 当前有效工具身份：最新演进的 to 完整身份，没有演进时为 plan 冻结身份（B2-08 起读 Claude 演进链，同上）。"""
+
+    from tools.official_client_capture import claude_upgrade_evolution
 
     try:
-        return codex_upgrade_wire_transition.effective_tool_identity(campaign_dir, manifest)
+        return claude_upgrade_evolution.effective_tool_identity(campaign_dir, manifest)
     except codex_upgrade_wire_transition.WireTransitionError as error:
         raise ConfigurationError(f"工具演进链无法重放：{error}") from error
 
@@ -1868,7 +1876,13 @@ def load_campaign_manifest(
         raise ConfigurationError(f"Claude Campaign 只支持 {CAMPAIGN_PLATFORM} 平台。")
     groups = ("inputs", "vc_control") if _skip_control_validation else ("inputs", "vc_control", "control_receipts")
     for group_name in groups:
-        _verify_campaign_file_bindings(campaign_dir, manifest.get(group_name), group_name)
+        group = manifest.get(group_name)
+        if group_name == "control_receipts" and isinstance(group, Mapping) and group.get("upgrade_timing") is not None:
+            # 计时账本绑定的是 Campaign 外的账本目录与计划摘要（不是 Campaign 内文件），按账本规则核对；其余控制收据照文件
+            # 绑定核对（B2-09 记录的绑定形状缺陷，对账与续跑要读账本，B2-08 先修；控制收据的完整语义仍归 B2-11）。
+            _campaign_timing_ledger_dir(campaign_dir, manifest)
+            group = {name: value for name, value in group.items() if name != "upgrade_timing"}
+        _verify_campaign_file_bindings(campaign_dir, group, group_name)
     return manifest
 
 
@@ -2869,10 +2883,14 @@ def campaign_status(
     campaign_dir: Path,
     candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-11（VC-0 收口续作与 P0 收据） 落实）。"""
+    """服务面成员（B2-08 落实 VC-1 resume 必需的官方阶段部分，候选阶段与其余状态由 B2-11 完善）：从不可变收据推导状态。
 
-    del campaign_dir, candidate_id
-    raise _pending("campaign_status", "B2-11（VC-0 收口续作与 P0 收据）")
+    实现在 ``claude_upgrade_recovery.campaign_status``。
+    """
+
+    from tools.official_client_capture import claude_upgrade_recovery
+
+    return claude_upgrade_recovery.campaign_status(campaign_dir, candidate_id)
 
 
 # B2-08（工具演进预览）
@@ -2888,10 +2906,19 @@ def _tool_evolution_preview(
     compatibility_receipt: Path | None = None,
     activation_certification: Path | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（工具演进预览） 落实）。"""
+    """服务面成员（B2-08）：Claude 工具演进预览（变化路径、逐作业影响、评估器状态与部署绑定）；实现在 ``claude_upgrade_evolution``。"""
 
-    del campaign_dir, manifest, fix_commit, reason, control_root, compatibility_receipt, activation_certification
-    raise _pending("_tool_evolution_preview", "B2-08（工具演进预览）")
+    from tools.official_client_capture import claude_upgrade_evolution
+
+    return claude_upgrade_evolution.tool_evolution_preview(
+        campaign_dir,
+        manifest,
+        fix_commit=fix_commit,
+        reason=reason,
+        control_root=control_root,
+        compatibility_receipt=compatibility_receipt,
+        activation_certification=activation_certification,
+    )
 
 
 # B2-06（取证 Job 动作体与环境闭环）：实现在 ``claude_upgrade_capture``，这里是同名同签名的薄壳（延迟导入，避免与
@@ -3256,8 +3283,50 @@ def _replay_attempt_evidence_permissions(
     if payload.get("schema_version") != claude_upgrade_capture.CAPTURE_ATTEMPT_SCHEMA:
         raise ConfigurationError("抓包 attempt schema_version 不受支持。")
     return _replay_permission_closeout_binding(
-        attempt_root, payload, success_status="awaiting_receipts", label="attempt ", root_relocations=root_relocations
+        attempt_root,
+        payload,
+        success_status="awaiting_receipts",
+        label="attempt ",
+        root_relocations=_host_root_relocations(payload, root_relocations),
     )
+
+
+def _host_root_relocations(payload: Mapping[str, Any], relocations: Mapping[str, str] | None) -> dict[str, str] | None:
+    """取代映射换到 attempt 收口的宿主坐标（B2-08）。
+
+    取代收据的 ``logical_root`` 与结果的 ``evidence_roots`` 同一口径，是容器坐标（证据根冲突判定按它比较）；Claude attempt 的
+    run 末收口记录的是宿主路径（``_external_host_roots``）。这里按 attempt 记录的坐标布局（宿主数据根、``capture_root`` 与
+    登记的 runs 别名）把容器坐标换成宿主路径，只保留确实是本 attempt 收口根的映射；已经是宿主路径的映射原样保留。
+    """
+
+    if not relocations:
+        return None if relocations is None else {}
+    layout = payload.get("layout") if isinstance(payload.get("layout"), Mapping) else {}
+    host_data_root = Path(str(layout.get("host_data_root", "")))
+    aliases = [PurePosixPath(str(layout.get("capture_root", "")))]
+    aliases.extend(PurePosixPath(item).parent for item in FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS)
+    roots = {str(item) for item in payload.get("evidence_roots") or [] if isinstance(item, str)}
+
+    def host(value: str) -> str:
+        candidate = PurePosixPath(value)
+        if host_data_root.is_absolute():
+            for alias in aliases:
+                if not str(alias).startswith("/"):
+                    continue
+                try:
+                    relative = candidate.relative_to(alias)
+                except ValueError:
+                    continue
+                return str(host_data_root.joinpath(*relative.parts))
+        return value
+
+    translated: dict[str, str] = {}
+    for source, target in relocations.items():
+        for key, value in ((host(str(source)), host(str(target))), (str(source), str(target))):
+            if key in roots:
+                translated[key] = value
+                break
+    return translated
 
 
 def _replay_attempt_recovery_evidence_permissions(
@@ -3495,14 +3564,34 @@ def _attempt_conflict_quarantine_receipt(
     return None
 
 
-# B2-08（VC-1 恢复接入共享对账）
+# B2-08（VC-1 恢复接入共享对账）：环境污染与隔离、作废集合、工具演进影响与连续性漂移收据。与 Codex 同一合同的函数
+# 照搬，逐字一致由 ``test_orchestrator_surface_contract.COPIED`` 锁定；恢复闭集、resume 的真实执行与残留进程清理在
+# ``claude_upgrade_recovery``。候选侧（VC-5 恢复段、候选 seal 失败收据、metadata-only 修复）由 B4-02／B4-05 落实。
+
+ENVIRONMENT_ISOLATION_RE = re.compile(r"^isolation-(\d{2,})\.json$")
 
 
 def _attempt_continuity_drift_receipt(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """读取该 attempt 的预览期连续性漂移收据；没有即 None，形态非法失败关闭。
 
-    del campaign_dir, attempt_id
-    raise _pending("_attempt_continuity_drift_receipt", "B2-08（VC-1 恢复接入共享对账）")
+    收据一旦写入，源 attempt 的已完成作业不再复用（环境已在两轮之间漂移，证据前提不成立），与 resume 真实执行前
+    ``_verify_environment_continuity`` 的判定同口径；预览、R17 复算与 resume 都从这里读同一事实。
+    """
+
+    path = _recovery_continuity_receipt_path(campaign_dir, attempt_id)
+    if path.is_symlink():
+        raise ConfigurationError("连续性漂移收据不能是符号链接。")
+    if not path.is_file():
+        return None
+    receipt = _read_json(path, "连续性漂移收据")
+    if (
+        receipt.get("schema_version") != RECOVERY_CONTINUITY_DRIFT_RECEIPT_SCHEMA
+        or receipt.get("source_attempt_id") != attempt_id
+        or receipt.get("status") not in RECOVERY_CONTINUITY_DRIFT_STATUSES
+        or not isinstance(receipt.get("drifted_kinds"), list)
+    ):
+        raise ConfigurationError("连续性漂移收据形态非法或不属于该 attempt。")
+    return receipt
 
 
 def _attempt_evolution_impact(
@@ -3513,10 +3602,31 @@ def _attempt_evolution_impact(
     phase: str,
     candidate_id: str | None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """attempt 生产序号之后全部工具演进对本阶段作业的累计影响。
 
-    del campaign_dir, manifest, attempt_root, phase, candidate_id
-    raise _pending("_attempt_evolution_impact", "B2-08（VC-1 恢复接入共享对账）")
+    attempt 内全部结果（新产出与只读承接）都在其生产序号下有效：承接时已核对过来源到该序号
+    之间的演进。因此只需看序号之后的演进。返回 ``index``、``affected_job_ids``、``changed_paths``。
+    v1 Campaign 或没有演进时影响为空。
+    """
+
+    frozen = manifest.get("tool_identity")
+    empty = {"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []}
+    if not isinstance(frozen, Mapping) or not _is_policy_v2_identity(frozen):
+        return empty
+    chain = _campaign_tool_evolutions(campaign_dir, manifest)
+    if not chain:
+        return empty
+    reservation = _load_capture_reservation(
+        campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
+    )
+    try:
+        index = codex_upgrade_wire_transition.reservation_production_index(reservation, chain)
+        impact = codex_upgrade_wire_transition.evolution_impact_since(
+            chain, index, phase=phase, candidate_id=candidate_id
+        )
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"attempt 工具演进影响无法判定：{error}") from error
+    return {"index": index, **impact}
 
 
 def _attempt_evolution_invalidated_job_ids(
@@ -3528,10 +3638,23 @@ def _attempt_evolution_invalidated_job_ids(
     phase: str,
     candidate_id: str | None,
 ) -> list[str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """已完成作业中被 attempt 生产序号之后的工具演进作废的作业（没有演进时为空，不读预约）。
 
-    del campaign_dir, manifest, attempt_root, attempt, phase, candidate_id
-    raise _pending("_attempt_evolution_invalidated_job_ids", "B2-08（VC-1 恢复接入共享对账）")
+    非空说明这个 attempt 的部分结果已失效：不能 seal，也不能当作正常等待封存；它是续跑来源——
+    对账后按恢复预览只重跑这些作业，其余已完成作业只读复用（修好接着跑第 21 项）。
+    """
+
+    impact = _attempt_evolution_impact(
+        campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+    )
+    if not impact["affected_job_ids"]:
+        return []
+    completed = {
+        str(item.get("id"))
+        for item in attempt.get("results", [])
+        if isinstance(item, Mapping) and item.get("status") == "complete"
+    }
+    return sorted(completed & set(impact["affected_job_ids"]))
 
 
 def _attempt_recovery_segment_terminal_failed(
@@ -3541,10 +3664,10 @@ def _attempt_recovery_segment_terminal_failed(
     attempt_id: str,
     segment_root: Path,
 ) -> bool:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
 
     del campaign_dir, candidate_id, attempt_id, segment_root
-    raise _pending("_attempt_recovery_segment_terminal_failed", "B2-08（VC-1 恢复接入共享对账）")
+    raise _pending("_attempt_recovery_segment_terminal_failed", "B4-05（评估失败局部恢复）")
 
 
 def _authoritative_recovery_execute_jobs(
@@ -3552,10 +3675,10 @@ def _authoritative_recovery_execute_jobs(
     candidate_id: str,
     reservation: Mapping[str, Any],
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
 
     del campaign_dir, candidate_id, reservation
-    raise _pending("_authoritative_recovery_execute_jobs", "B2-08（VC-1 恢复接入共享对账）")
+    raise _pending("_authoritative_recovery_execute_jobs", "B4-05（评估失败局部恢复）")
 
 
 def _load_attempt_recovery_reservation(
@@ -3566,10 +3689,10 @@ def _load_attempt_recovery_reservation(
     attempt_id: str,
     recovery_revision: str,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
 
     del campaign_dir, segment_root, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_reservation", "B2-08（VC-1 恢复接入共享对账）")
+    raise _pending("_load_attempt_recovery_reservation", "B4-05（评估失败局部恢复）")
 
 
 def _load_attempt_recovery_segment(
@@ -3578,10 +3701,10 @@ def _load_attempt_recovery_segment(
     attempt_id: str,
     recovery_revision: str,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
 
     del campaign_dir, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_segment", "B2-08（VC-1 恢复接入共享对账）")
+    raise _pending("_load_attempt_recovery_segment", "B4-05（评估失败局部恢复）")
 
 
 def _require_recovery_preview_scope_equals_frozen_jobs(
@@ -3590,10 +3713,26 @@ def _require_recovery_preview_scope_equals_frozen_jobs(
     *,
     label: str,
 ) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """R11：后继段 execute／reuse 必须分割 J*，请求估算只覆盖 execute
+    （与监督器第七种协议共用 ``recovery_preview_scope_violation``）。"""
 
-    del preview, execute_jobs, label
-    raise _pending("_require_recovery_preview_scope_equals_frozen_jobs", "B2-08（VC-1 恢复接入共享对账）")
+    violation = codex_upgrade_supervisor.recovery_preview_scope_violation(preview, list(execute_jobs))
+    if violation is not None:
+        raise ConfigurationError(f"{label}：恢复预览{violation}，拒绝开后继段。")
+
+
+def recovery_segment_summary(*arguments: Any, **options: Any) -> Any:
+    """适配器成员 ``recovery_segment_summary``（候选恢复段摘要）：VC-1 官方路径不经过它，由 B4-05 落实。"""
+
+    del arguments, options
+    raise _pending("recovery_segment_summary（候选恢复段）", "B4-05（评估失败局部恢复）")
+
+
+def segment_reuse_proofs(*arguments: Any, **options: Any) -> Any:
+    """适配器成员 ``segment_reuse_proofs``（候选恢复段复用证明）：VC-1 官方路径不经过它，由 B4-05 落实。"""
+
+    del arguments, options
+    raise _pending("segment_reuse_proofs（候选恢复段）", "B4-05（评估失败局部恢复）")
 
 
 def recovery_reuse_check(
@@ -3605,31 +3744,121 @@ def recovery_reuse_check(
     reuse_job_ids: Iterable[str],
     execute_job_ids: Iterable[str],
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（B2-08）：R17，只读复算 ``resume --rerun-failed`` 对失败 attempt 的复用判定。
 
-    del campaign_dir, phase, candidate_id, source_attempt_id, reuse_job_ids, execute_job_ids
-    raise _pending("recovery_reuse_check", "B2-08（VC-1 恢复接入共享对账）")
+    与 resume 走同一个恢复闭集函数（``claude_upgrade_recovery.recovery_plan``）：resume 会拒绝的情形在这里原样抛
+    ``ConfigurationError``，共享对账器据此把预览判为 inconsistent、拒绝批准。不取租约、不写文件、不发请求、不采探针。
+    候选阶段（VC-5 采集续跑）由 B4-01 落实。
+    """
+
+    from tools.official_client_capture import claude_upgrade_recovery
+
+    return claude_upgrade_recovery.recovery_reuse_check(
+        campaign_dir,
+        phase=phase,
+        candidate_id=candidate_id,
+        source_attempt_id=source_attempt_id,
+        reuse_job_ids=reuse_job_ids,
+        execute_job_ids=execute_job_ids,
+    )
 
 
 def _rerun_all_invalidated_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """结果全部作废、续跑全部重跑的 attempt：环境隔离作废（第 13 项）∪ 证据根冲突隔离（第 24 项）。"""
 
-    del campaign_dir
-    raise _pending("_rerun_all_invalidated_attempts", "B2-08（VC-1 恢复接入共享对账）")
+    return _isolation_invalidated_attempts(campaign_dir) | _conflict_quarantined_attempts(campaign_dir)
 
 
 def _isolation_invalidated_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """已被隔离作废的 attempt（phase, candidate_id, attempt_id）：结果永不复用、永不 seal，按失败 attempt 续跑。
 
-    del campaign_dir
-    raise _pending("_isolation_invalidated_attempts", "B2-08（VC-1 恢复接入共享对账）")
+    只含 attempt 级事实（attempt／seal）；恢复段事实只作废该段，原 attempt 仍按自身状态处理。
+    """
+
+    return {
+        (str(item["phase"]), item.get("candidate_id"), str(item["attempt_id"]))
+        for receipt in _environment_isolations(campaign_dir)
+        for item in receipt["invalidated_attempts"]
+        if isinstance(item, Mapping) and item.get("recovery_revision") is None
+    }
 
 
 def _environment_isolations(campaign_dir: Path) -> list[dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """读取并逐项核对隔离收据链（序号连续、previous 成链、自摘要、Campaign 一致、制品副本摘要一致）。"""
 
-    del campaign_dir
-    raise _pending("_environment_isolations", "B2-08（VC-1 恢复接入共享对账）")
+    directory = campaign_dir / ENVIRONMENT_ISOLATION_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("环境隔离收据目录不可信。")
+    indexed: list[tuple[int, Path]] = []
+    for child in directory.iterdir():
+        match = ENVIRONMENT_ISOLATION_RE.fullmatch(child.name)
+        if match:
+            indexed.append((int(match.group(1)), child))
+    if not indexed:
+        return []
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for position, (index, path) in enumerate(sorted(indexed), start=1):
+        if index != position or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"环境隔离收据序号不连续或路径不可信：{path.name}")
+        receipt = _read_json(path, "环境隔离收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "isolation_sha256"}
+        if (
+            receipt.get("schema_version") != ENVIRONMENT_ISOLATION_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("index") != index
+            or receipt.get("previous_isolation_sha256") != previous
+            or not isinstance(receipt.get("covered"), list)
+            or not receipt["covered"]
+            or not isinstance(receipt.get("invalidated_attempts"), list)
+            # 第三批 B3-14：污染发生时刻可选（旧收据没有该键＝无窗口），给出即须是 RFC3339。
+            or (
+                receipt.get("contamination_started_at_utc") is not None
+                and not _is_rfc3339_timestamp(receipt.get("contamination_started_at_utc"))
+            )
+            or _fingerprint(unsigned) != receipt.get("isolation_sha256")
+        ):
+            raise ConfigurationError(f"环境隔离收据形态、成链或自摘要不一致：{path.name}")
+        for role in ("environment_repair", "clean_environment"):
+            binding = receipt.get(role)
+            copy = campaign_dir / str(binding.get("path")) if isinstance(binding, Mapping) else None
+            if copy is None or copy.is_symlink() or not copy.is_file() or file_sha256(copy) != binding.get("sha256"):
+                raise ConfigurationError(f"环境隔离收据 {path.name} 的 {role} 副本缺失或摘要不一致。")
+        previous = str(receipt["isolation_sha256"])
+        chain.append(receipt)
+    return chain
+
+
+def _contamination_fact(
+    campaign_dir: Path,
+    record: str,
+    kind: str,
+    source: Path,
+    *,
+    phase: Any,
+    candidate_id: Any,
+    attempt_id: Any,
+    recovery_revision: str | None = None,
+    at_utc: Any = None,
+) -> dict[str, Any]:
+    """一条结构化污染事实；来源文件按 Campaign 相对路径＋摘要绑定（隔离收据按 record＋摘要覆盖）。"""
+
+    return {
+        "record": record,
+        "kind": kind,
+        "phase": phase if isinstance(phase, str) else None,
+        "candidate_id": candidate_id if isinstance(candidate_id, str) else None,
+        "attempt_id": attempt_id if isinstance(attempt_id, str) else None,
+        "recovery_revision": recovery_revision,
+        "at_utc": at_utc if _is_rfc3339_timestamp(at_utc) else None,
+        "source": {
+            "path": source.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(source) if source.is_file() and not source.is_symlink() else None,
+        },
+    }
 
 
 def _campaign_contamination_facts(
@@ -3637,10 +3866,81 @@ def _campaign_contamination_facts(
     *,
     _manifest: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（B2-08）：从官方 attempt 事实推导结构化污染事实；旁路 marker 仅作冗余提示。
 
-    del campaign_dir, _manifest
-    raise _pending("_campaign_contamination_facts", "B2-08（VC-1 恢复接入共享对账）")
+    记录 ID 与 Codex 同一口径：``campaign-marker``（marker）与 ``official:<attempt>:attempt``（attempt 收据状态
+    ``environment_contaminated``）。B2-06 的 run 在任一采集容器（抓包或断网）前后探针漂移、或任一侧残留取证进程时
+    写下这两项；残留进程即污染这一判定不在这里放宽。候选侧事实（候选 seal 失败收据、恢复段污染、metadata-only 修复
+    后的冗余标记）由 B4-02／B4-05 落实：出现候选 attempt 或官方 attempt 下的 seal 失败收据即失败关闭。
+    """
+
+    facts: list[dict[str, Any]] = []
+    marker = campaign_dir / "environment-contaminated.json"
+    if marker.exists() or marker.is_symlink():
+        content: Mapping[str, Any] = {}
+        if marker.is_file() and not marker.is_symlink():
+            try:
+                content = _read_json(marker, "环境污染旁路标记")
+            except (ConfigurationError, OSError, ValueError):
+                content = {}
+        facts.append(
+            _contamination_fact(
+                campaign_dir,
+                "campaign-marker",
+                "marker",
+                marker,
+                phase=content.get("phase"),
+                candidate_id=content.get("candidate_id"),
+                attempt_id=content.get("attempt_id"),
+            )
+        )
+    for phase, current_candidate_id, attempt_root in _campaign_attempt_roots(campaign_dir):
+        if phase != "official":
+            raise _pending("候选 attempt 的环境污染事实", "B4-02（候选证据四阶段封存）")
+        _load_capture_reservation(
+            campaign_dir,
+            attempt_root,
+            phase=phase,
+            candidate_id=current_candidate_id,
+            _manifest=_manifest,
+        )
+        attempt_path = attempt_root / "attempt.json"
+        if attempt_path.exists() or attempt_path.is_symlink():
+            if attempt_path.is_symlink() or not attempt_path.is_file():
+                raise ConfigurationError("抓包 attempt 收据路径不可信。")
+            _, attempt = _load_capture_attempt(
+                campaign_dir,
+                phase,
+                current_candidate_id,
+                attempt_root.name,
+                _verified_campaign_manifest=_manifest,
+            )
+            if attempt.get("status") == "environment_contaminated":
+                facts.append(
+                    _contamination_fact(
+                        campaign_dir,
+                        f"{current_candidate_id or phase}:{attempt_root.name}:attempt",
+                        "attempt",
+                        attempt_path,
+                        phase=phase,
+                        candidate_id=current_candidate_id,
+                        attempt_id=attempt_root.name,
+                        at_utc=attempt.get("completed_at_utc"),
+                    )
+                )
+        seal_failure = attempt_root / "seal-failure.json"
+        if seal_failure.exists() or seal_failure.is_symlink():
+            raise ConfigurationError("官方 attempt 下出现了只属于候选 seal 的失败收据（seal-failure.json），先人工审计。")
+    return facts
+
+
+def _isolated_contamination_keys(campaign_dir: Path) -> set[tuple[str, str | None]]:
+    return {
+        (str(item.get("record")), (item.get("source") or {}).get("sha256"))
+        for receipt in _environment_isolations(campaign_dir)
+        for item in receipt["covered"]
+        if isinstance(item, Mapping)
+    }
 
 
 def _campaign_contamination_records(
@@ -3648,10 +3948,17 @@ def _campaign_contamination_records(
     *,
     _manifest: Mapping[str, Any] | None = None,
 ) -> list[str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """未被隔离收据覆盖的污染记录（修好接着跑第 13 项起已隔离的事实不再封锁 Campaign）。"""
 
-    del campaign_dir, _manifest
-    raise _pending("_campaign_contamination_records", "B2-08（VC-1 恢复接入共享对账）")
+    facts = _campaign_contamination_facts(campaign_dir, _manifest=_manifest)
+    if not facts:
+        return []
+    covered = _isolated_contamination_keys(campaign_dir)
+    return [
+        fact["record"]
+        for fact in facts
+        if (fact["record"], fact["source"]["sha256"]) not in covered
+    ]
 
 
 def _campaign_environment_decision(
@@ -3659,10 +3966,27 @@ def _campaign_environment_decision(
     *,
     _manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """对账与状态共用的环境判定：clear／contaminated（未隔离，暂停待隔离）／official_sealed_contaminated（不可恢复）。"""
 
-    del campaign_dir, _manifest
-    raise _pending("_campaign_environment_decision", "B2-08（VC-1 恢复接入共享对账）")
+    facts = _campaign_contamination_facts(campaign_dir, _manifest=_manifest)
+    covered = _isolated_contamination_keys(campaign_dir) if facts else set()
+    effective = [
+        fact for fact in facts if (fact["record"], fact["source"]["sha256"]) not in covered
+    ]
+    official_sealed = bool(effective) and _stage_path(campaign_dir, "capture-official", None)[1].is_file()
+    official_effective = [fact["record"] for fact in effective if fact["phase"] == "official"]
+    status = (
+        "official_sealed_contaminated"
+        if official_sealed and official_effective
+        else "contaminated"
+        if effective
+        else "clear"
+    )
+    return {
+        "status": status,
+        "records": [fact["record"] for fact in effective],
+        "official_records": official_effective,
+    }
 
 
 def _reject_contaminated_campaign(
@@ -3672,10 +3996,23 @@ def _reject_contaminated_campaign(
     attempt_root: Path | None = None,
     attempt: Mapping[str, Any] | None = None,
 ) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-08（VC-1 恢复接入共享对账） 落实）。"""
+    """服务面成员（B2-08）：存在未隔离的主污染事实时，除只读 status 与 environment-isolate 外禁止继续使用 Campaign。
 
-    del campaign_dir, allow_metadata_only_repair, attempt_root, attempt
-    raise _pending("_reject_contaminated_campaign", "B2-08（VC-1 恢复接入共享对账）")
+    与 Codex 同一判据：已被隔离收据覆盖的事实不再封锁。``allow_metadata_only_repair`` 只属于候选 seal 的一次性收据
+    修复路径（B4-02），这里传入即拒绝。Claude 的环境修复：残留取证进程先以 ``environment-cleanup`` 在明确批准下清理
+    并留证，再用清理后的探针清单作干净环境复核收据去 ``environment-isolate``。
+    """
+
+    del attempt_root, attempt
+    if allow_metadata_only_repair:
+        raise _pending("候选 seal 的 metadata-only 收据修复", "B4-02（候选证据四阶段封存）")
+    records = _campaign_contamination_records(campaign_dir)
+    if records:
+        raise ConfigurationError(
+            "存在未隔离的环境污染，Campaign 已封锁：修复环境（残留取证进程先以 environment-cleanup preview/apply 在明确批准下"
+            "清理并留证）并取得晚于污染的干净环境复核后，以 environment-isolate preview/apply 隔离污染 attempt 再继续"
+            f"（官方已封存且官方侧受污染时不可恢复）。污染事实={records}"
+        )
 
 
 # B2-10（Job 演练与客户端启动探测）
@@ -3755,17 +4092,20 @@ def _vc_run_manifest_from_batch(
     raise _pending("_vc_run_manifest_from_batch", "B3-01（VC-2～VC-6 原子批次入口接入）")
 
 
-def _stage_path(
-    campaign_dir: Path,
-    stage: str,
-    candidate_id: str | None = None,
-    *,
-    mode: str = "read",
-) -> tuple[str, Path]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
-
-    del campaign_dir, stage, candidate_id, mode
-    raise _pending("_stage_path", "B3-01（VC-2～VC-6 原子批次入口接入）")
+# 阶段路径照搬 Codex（B2-08 起用，逐字一致由 COPIED 锁定）：Campaign 级阶段（capture-official／classify）路径固定；
+# 候选级阶段按当前评估基线解析，评估基线（B4-04）落实之前候选阶段一律报未实现。
+_STAGE_ALIASES = {
+    "official": "capture-official",
+    "candidate": "capture-candidate",
+    "classification": "classify",
+    "comparison": "compare",
+    "acceptance": "accept",
+}
+_CANDIDATE_STAGE_ROOTS = {
+    "capture-candidate": "candidates",
+    "compare": "comparisons",
+    "accept": "acceptance",
+}
 
 
 def _legacy_stage_path(
@@ -3773,10 +4113,46 @@ def _legacy_stage_path(
     stage: str,
     candidate_id: str | None = None,
 ) -> tuple[str, Path]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """改造 5 之前的固定阶段路径（b0 原路径）；候选级三阶段按当前基线解析见 ``_stage_path``。"""
 
-    del campaign_dir, stage, candidate_id
-    raise _pending("_legacy_stage_path", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    canonical = _STAGE_ALIASES.get(stage, stage)
+    if canonical == "capture-official":
+        return canonical, campaign_dir / "official" / "result.json"
+    if canonical == "classify":
+        return canonical, campaign_dir / "classification" / "result.json"
+    if canonical in _CANDIDATE_STAGE_ROOTS:
+        if not candidate_id or not SAFE_ID_RE.fullmatch(candidate_id):
+            raise ConfigurationError(f"{canonical} 必须提供合法 candidate-id。")
+        return canonical, campaign_dir / _CANDIDATE_STAGE_ROOTS[canonical] / candidate_id / "result.json"
+    raise ConfigurationError(f"未知 Campaign 阶段：{stage}")
+
+
+def _stage_path(
+    campaign_dir: Path,
+    stage: str,
+    candidate_id: str | None = None,
+    *,
+    mode: str = "read",
+) -> tuple[str, Path]:
+    """阶段结果路径。
+
+    Campaign 级阶段（capture-official／classify）路径固定。候选级三阶段（capture-candidate／
+    compare／accept）改造 5 起按当前评估基线解析：``mode="read"`` 走 ``_stage_read_source``
+    （reused 递归到 local 或 b0），``mode="write"`` 走 ``_stage_write_target``（reused 拒绝）。
+    """
+
+    canonical, legacy_path = _legacy_stage_path(campaign_dir, stage, candidate_id)
+    if canonical not in _CANDIDATE_STAGE_ROOTS:
+        return canonical, legacy_path
+    if mode not in {"read", "write"}:
+        raise ConfigurationError("阶段路径解析模式只能是 read 或 write。")
+    assert candidate_id is not None
+    baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    if baseline == 0:
+        return canonical, legacy_path
+    if mode == "write":
+        return canonical, _stage_write_target(campaign_dir, candidate_id, baseline, canonical)
+    return canonical, _stage_read_source(campaign_dir, candidate_id, baseline, canonical)["path"]
 
 
 def _load_stage_result(
@@ -3794,10 +4170,21 @@ def _load_stage_result(
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
     _baseline: int | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B2-08 的官方阶段最小实现，其余由 B3-01 落实）：读取并核对 ``official/result.json``。
 
-    del campaign_dir, stage, candidate_id, _import_chain, _replay_machine_receipts, _shallow, _ignore_checkpoint, _import_cache, _skip_evidence_scan, _historical_manifest_controls, _verified_campaign_manifest, _baseline
-    raise _pending("_load_stage_result", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    官方阶段结果由 B2-07 的 seal 链写入（``claude_upgrade_seal.STAGE_RESULT_SCHEMA``）；这里只做共享入账与 attempt 读侧
+    需要的核对（合同、Campaign、阶段、完成状态与 attempt 绑定摘要），完整的阶段重放（VC-1 checkpoint 链、导入链与
+    机器收据）归 B3-01。没有阶段结果时报「尚未封存」（共享流程按这几个字区分）。
+    """
+
+    del _import_chain, _replay_machine_receipts, _shallow, _ignore_checkpoint, _import_cache, _skip_evidence_scan
+    del _historical_manifest_controls, _baseline
+    canonical, path = _stage_path(campaign_dir, stage, candidate_id)
+    if canonical != "capture-official":
+        raise _pending(f"_load_stage_result（{canonical}）", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    from tools.official_client_capture import claude_upgrade_seal
+
+    return claude_upgrade_seal.load_stage_result(Path(campaign_dir), path, manifest=_verified_campaign_manifest)
 
 
 def _stage_read_source(
@@ -4227,19 +4614,22 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
     "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
     "accept": ("逐规则正式验收门禁", "B4-06（accept 门禁 Claude 版）"),
-    # Claude 的 run 已内置 Job 级与 attempt 级两级收口（B2-06），没有需要事后补做收口的历史 attempt；独立补做入口只在恢复链
-    # 需要时出现，随 B2-08 定（B2-07 汇报偏离项）。
-    "harden-evidence-permissions": ("证据权限收口", "B2-08（VC-1 恢复接入共享对账）"),
-    "wire-transition-intent": ("wire 层变化的两阶段过渡：意图", "B2-08（VC-1 恢复接入共享对账）"),
-    "wire-transition-final": ("wire 层变化的两阶段过渡：终态", "B2-08（VC-1 恢复接入共享对账）"),
-    "reconcile-supervisor-run": ("对账父监督器运行", "B2-08（VC-1 恢复接入共享对账）"),
-    "reconcile-attempt": ("对账失败 attempt", "B2-08（VC-1 恢复接入共享对账）"),
-    "account-sealed-official": ("官方封存后的请求入账", "B2-08（VC-1 恢复接入共享对账）"),
     "account-sealed-candidate": ("候选封存后的请求入账", "B4-02（候选证据四阶段封存）"),
-    "resume": ("按最近稳定状态续跑失败阶段", "B2-08（VC-1 恢复接入共享对账）"),
     "deliver-candidate": ("候选交付四阶段", "B4-07（交付四阶段）"),
     "delivery-stage-invalidate": ("经批准的交付阶段失效", "B4-07（交付四阶段）"),
-    "status": ("显示 Campaign 状态和下一命令", "B1-09 续（Campaign 总计划读取与工具身份）"),
+}
+# B2-08 落实的 Claude 子命令（实现在 ``claude_upgrade_recovery``，参数与 Codex 同名同参；environment-cleanup 是 Claude 新增）：
+# 子命令 → 说明。harden-evidence-permissions 与两个 wire-transition 子命令按设计明确拒绝（理由见 claude_upgrade_recovery 第五节）。
+RECOVERY_SUBCOMMANDS: Mapping[str, str] = {
+    "reconcile-attempt": "对账预约之后中断或失败的 attempt：先入账后判定，可恢复时生成零请求恢复预览，批准后才能 resume --rerun-failed",
+    "reconcile-supervisor-run": "对账尚无 attempt 的父监督器 run（派发前失败、强杀或中断），先入账后判定；可恢复时按 N+1 重派",
+    "account-sealed-official": "把已封存官方阶段的模型请求写入项目总账（零请求、按 attempt 幂等）",
+    "resume": "按 Campaign 状态续跑官方阶段：失败或已对账中断的 attempt 只经已批准的恢复预览 --rerun-failed",
+    "status": "显示 Campaign 状态和下一命令（官方阶段；候选阶段由 B2-11 完善）",
+    "environment-cleanup": "在明确批准下清理两个采集容器里的残留取证进程，前后探针与清理收据留证（Claude 新增）",
+    "harden-evidence-permissions": "Claude 不提供：run 内置 Job 级与 run 末两级收口，失败收口经 resume 重新收口",
+    "wire-transition-intent": "Claude 不提供：wire 层变化一律经 tool-evolution 登记",
+    "wire-transition-final": "Claude 不提供：wire 层变化一律经 tool-evolution 登记",
 }
 # 已落实的 Claude 离线工具子命令（不进入阶段动作队列，监督器预声明动作里禁止）：子命令 → 说明。
 CLAUDE_OFFLINE_SUBCOMMANDS: Mapping[str, str] = {
@@ -4248,9 +4638,11 @@ CLAUDE_OFFLINE_SUBCOMMANDS: Mapping[str, str] = {
 # 共享流程的子命令：参数定义照搬 Codex，执行在 Claude 适配器作用域里转调 upgrade_control_plane。
 SHARED_SUBCOMMANDS = (
     "compile-and-run-vc-batch", "revision-open", "invalidate-candidate", "evaluation-recover", "evaluation-epoch",
-    "tool-evolution", "tool-evolution-status", "deadline-extend", "request-budget-extend", "campaign-resume",
+    "tool-evolution-status", "deadline-extend", "request-budget-extend", "campaign-resume",
     "accounting-resolve", "environment-isolate", "evidence-conflict-quarantine", "campaign-abandon",
 )
+# tool-evolution 的参数照搬 Codex，执行是 Claude 自己的（B2-08）：编排器演进链按 Claude 策略文件校验，批准后还要在 Campaign
+# Store 登记同一身份（seal 两层都核有效工具身份），见 ``claude_upgrade_evolution.tool_evolution_command``。
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -4522,6 +4914,26 @@ def _build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--dist-tag", default="stable", help="npm 主包的 dist-tag，默认 stable")
     freeze.add_argument("--platform", default="linux/arm64", help="冻结平台（目前只登记 linux/arm64）")
 
+    from tools.official_client_capture import claude_upgrade_recovery as recovery
+
+    for name, summary in RECOVERY_SUBCOMMANDS.items():
+        target = subparsers.add_parser(name, help=summary)
+        add_campaign_reference(target)
+        if name == "reconcile-attempt":
+            recovery.add_reconcile_attempt_arguments(target)
+        elif name == "reconcile-supervisor-run":
+            recovery.add_reconcile_supervisor_run_arguments(target)
+        elif name == "resume":
+            recovery.add_resume_arguments(target)
+        elif name == "status":
+            target.add_argument("--candidate-id")
+        elif name == "environment-cleanup":
+            recovery.add_environment_cleanup_arguments(target)
+        elif name == "harden-evidence-permissions":
+            recovery.add_harden_arguments(target)
+        elif name in {"wire-transition-intent", "wire-transition-final"}:
+            recovery.add_wire_transition_arguments(target, final=name == "wire-transition-final")
+
     for name, (summary, work_item) in CLAUDE_OWN_SUBCOMMANDS.items():
         target = subparsers.add_parser(name, help=f"{summary}（由 {work_item} 落实）")
         add_campaign_reference(target)
@@ -4579,15 +4991,42 @@ def _plan_audit_command(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _require_quiescent_campaign_lease(campaign_dir: Path, *, action: str, attempt_id: str | None = None) -> None:
+    """seal 与前序证据导入的静止门禁（B2-08 定恢复协议；调用方须已持 Campaign 锁）：没有仍在执行的租约，拒绝时零写入。
+
+    * 没有租约或 ``released``：静止；
+    * ``stop_the_line``：执行者已退出并留下不可覆盖的停线事实（例如未登记工具演进时 run 在预约前被拒、resume 在预约前
+      停止），Campaign 同样静止——与 Codex 一致（Codex 的 seal 取执行租约，停线租约不挡获取）；停线租约绑定的 attempt
+      不是本次对象时，先对账那个 attempt；
+    * ``active``：仍在有效期内即有执行者在运行；已过期（执行者被强杀）先由 ``resume --rerun-failed`` 接管（写停线收据）
+      或 ``reconcile-attempt`` 对账相应 attempt。
+
+    B2-07／B2-09 原先只认 ``released``：停线之后只有成功结束的执行租约会话能把租约变回 released，而 attempt 等待 seal 时
+    run 与 resume 都在预约前被拒（并再次留下停线），seal 就再也走不下去。
+    """
+
+    lease = _read_campaign_lease(campaign_dir)
+    if lease is None or lease.get("state") == "released":
+        return
+    state = lease.get("state")
+    if state == "stop_the_line":
+        bound = lease.get("attempt_id")
+        if bound is None or (attempt_id is not None and str(bound) == str(attempt_id)):
+            return
+        raise ConfigurationError(f"Campaign 停线租约绑定 attempt {bound}，不是本次{action}的对象：先 reconcile-attempt 对账该 attempt。")
+    raise ConfigurationError(
+        f"Campaign 有未释放的执行租约（state={state}）：{action}要求 Campaign 静止；仍在有效期内即有执行者在运行，"
+        "已过期则先以 resume --rerun-failed 接管或 reconcile-attempt 对账相应 attempt。"
+    )
+
+
 def _import_predecessor_command(arguments: argparse.Namespace) -> dict[str, Any]:
-    """``import-predecessor-evidence``（B2-09）：Campaign 锁内、没有未释放的执行租约时导入；实现在 ``claude_upgrade_predecessor``。"""
+    """``import-predecessor-evidence``（B2-09）：Campaign 锁内、没有仍在执行的租约时导入；实现在 ``claude_upgrade_predecessor``。"""
 
     campaign_dir = Path(arguments.campaign_dir)
     load_campaign_manifest(campaign_dir)
     with _campaign_lock(campaign_dir):
-        lease = _read_campaign_lease(campaign_dir)
-        if lease is not None and lease.get("state") != "released":
-            raise ConfigurationError("Campaign 有未释放的执行租约，前序证据导入要求 Campaign 静止：先按恢复协议对账。")
+        _require_quiescent_campaign_lease(campaign_dir, action="前序证据导入")
         manifest = load_campaign_manifest(campaign_dir)
         return claude_upgrade_predecessor.import_predecessor_evidence(
             campaign_dir,
@@ -4599,11 +5038,93 @@ def _import_predecessor_command(arguments: argparse.Namespace) -> dict[str, Any]
         )
 
 
-def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """共享流程的子命令：在 Claude 适配器作用域里转调共享实现；退出码口径与 Codex 相同。"""
+def _run_recovery_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """B2-08 的子命令：实现在 ``claude_upgrade_recovery``（共享对账流程在 Claude 适配器作用域里转调）。"""
+
+    from tools.official_client_capture import claude_upgrade_recovery as recovery
 
     command = str(arguments.command)
-    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
+    if command == "reconcile-attempt":
+        return recovery.reconcile_attempt_command(arguments)
+    if command == "reconcile-supervisor-run":
+        return recovery.reconcile_supervisor_run_command(arguments)
+    if command == "account-sealed-official":
+        return recovery.account_sealed_official_command(arguments)
+    if command == "resume":
+        return recovery.resume_command(arguments)
+    if command == "status":
+        return campaign_status(Path(arguments.campaign_dir), getattr(arguments, "candidate_id", None)), 0
+    if command == "environment-cleanup":
+        return recovery.environment_cleanup_command(arguments)
+    if command == "harden-evidence-permissions":
+        return recovery.harden_evidence_permissions_command(arguments)
+    if command in {"wire-transition-intent", "wire-transition-final"}:
+        return recovery.wire_transition_command(arguments)
+    raise ConfigurationError(f"不是 B2-08 落实的子命令：{command}")
+
+
+def _assert_consumer_admission(arguments: argparse.Namespace) -> None:
+    """项目总账消费者门禁（B2-08 落实设计「随 B1-09 续」的入口外层一项）：在任何写入之前补齐总账并锁内重放。
+
+    * resume、capture-official seal 走共享 ``_assert_project_ledger_consumer``：resume 只挡已批准恢复预览对应根因与达上限根因
+      的交集，seal 整版本保守挡；
+    * 不在 campaign-run 父监督器里的正式 ``capture-official run``（Claude 允许操作员直接派发）按 campaign-run 消费者准入，
+      与父监督器派发前的门禁同一判据；父监督器里的 run 已由父监督器准入。零请求演练（preflight_only）不过门禁。
+    """
+
+    command = str(arguments.command)
+    try:
+        with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
+            upgrade_control_plane._assert_project_ledger_consumer(command, arguments)
+        if (
+            command == "capture-official"
+            and getattr(arguments, "capture_action", None) == "run"
+            and getattr(arguments, "acknowledge_live_requests", False)
+            and os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1"
+        ):
+            campaign_dir = Path(arguments.campaign_dir)
+            try:
+                manifest = load_campaign_manifest(campaign_dir)
+            except ConfigurationError:
+                # 总计划读不进来时 run 自己在预约前按原口径报错；没有可准入的 Formal Campaign，门禁不越俎代庖。
+                return
+            if manifest.get("campaign_mode") == "formal":
+                codex_upgrade_project_ledger.assert_campaign_admitted(
+                    campaign_dir,
+                    command="campaign-run",
+                    require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+                )
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账拒绝 {command}：{error}") from error
+
+
+@contextmanager
+def _shared_reconciler_scope(arguments: argparse.Namespace, adapter: Any) -> Iterator[None]:
+    """共享流程直接调用对账器内部函数时，对账器也在 Claude 适配器下（B2-08）。
+
+    对账器有自己的适配器上下文：公开入口按 Campaign 归属自动设定，内部函数（如 campaign-resume 绑定部署收据用的
+    ``_deployment_receipt``）不经入口，缺省是 Codex 适配器——Claude 的部署收据按 Codex 的文件名与顶层五摘要永远找不到。
+    Campaign 总计划存在时按它设定（归属不是 Claude 即拒绝，Codex Campaign 不能交给 Claude 编排器）；不存在时不设，
+    共享流程按原口径报错。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    campaign_dir = getattr(arguments, "campaign_dir", None)
+    manifest_path = Path(campaign_dir) / "campaign.json" if isinstance(campaign_dir, (str, Path)) else None
+    if manifest_path is None or manifest_path.is_symlink() or not manifest_path.is_file():
+        yield
+        return
+    with reconciler._client_scope(Path(campaign_dir), adapter):
+        yield
+
+
+def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """共享流程的子命令：在 Claude 适配器作用域里转调共享实现（对账器同一适配器）；退出码口径与 Codex 相同。"""
+
+    command = str(arguments.command)
+    adapter = upgrade_client_adapter.adapter_for("claude")
+    with upgrade_control_plane.adapter_scope(adapter), _shared_reconciler_scope(arguments, adapter):
         if command == "compile-and-run-vc-batch":
             return upgrade_control_plane.compile_and_run_vc_batch(arguments)
         if command == "revision-open":
@@ -4616,8 +5137,6 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
             return result, 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         if command == "evaluation-epoch":
             return upgrade_control_plane._evaluation_epoch_command(arguments), 0
-        if command == "tool-evolution":
-            return upgrade_control_plane._tool_evolution_command(arguments), 0
         if command == "tool-evolution-status":
             return upgrade_control_plane._tool_evolution_status_command(arguments), 0
         if command == "deadline-extend":
@@ -4643,10 +5162,13 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 def main(argv: list[str] | None = None) -> int:
     """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
     import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
-    seal 封存官方证据（B2-07），classify 做 VC-2 规则分类（B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），
-    其余 Claude 专属子命令在动作体落实前报未实现。
+    seal 封存官方证据（B2-07），tool-evolution 与 ``RECOVERY_SUBCOMMANDS``（对账、恢复预览、resume --rerun-failed、
+    status、环境清理与两类明确拒绝）由 B2-08 落实，plan --audit-only 只审计（B5a-09），classify 做 VC-2 规则分类
+    （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），其余 Claude 专属子命令在动作体落实前报未实现。
 
-    租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
+    分派前先过项目总账消费者门禁（``_assert_consumer_admission``，与 Codex 主入口同一判据：达上限只挡该根因）；
+    可处理异常与 Codex 主入口同一组，报错退出 1。租约、遗留入口拒绝与停线收据等 Codex 主入口的其余外层流程，
+    随租约与锁（B1-09 续）一起落实。
     """
 
     arguments = _build_parser().parse_args(argv)
@@ -4662,12 +5184,19 @@ def main(argv: list[str] | None = None) -> int:
         # 两渠道二进制不一致时冻结照常落盘，但退出码 2 提示 VC-0 不得据此建 Formal Campaign。
         return 0 if summary["binary_equivalence"] == "npm=gcs" else 2
     try:
+        _assert_consumer_admission(arguments)
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)
         elif arguments.command == "plan" and arguments.audit_only:
             # B5a-09：只审计，逐项报全、零写入；有任一项未通过即返回 1（与 Codex 的 plan --audit-only 同一口径）。
             result = _plan_audit_command(arguments)
             return_code = 0 if result["status"] == "passed" else 1
+        elif arguments.command == "tool-evolution":
+            from tools.official_client_capture import claude_upgrade_evolution
+
+            result, return_code = claude_upgrade_evolution.tool_evolution_command(arguments), 0
+        elif arguments.command in RECOVERY_SUBCOMMANDS:
+            result, return_code = _run_recovery_subcommand(arguments)
         elif arguments.command == "plan":
             result, return_code = _plan_command(arguments), 0
         elif arguments.command == "import-predecessor-evidence":
@@ -4694,7 +5223,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)
-    except ConfigurationError as error:
+    except (ConfigurationError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        # 与 Codex 主入口同一组可处理异常（共享流程抛的总账、账本、对账器错误都是 ValueError 子类）：报错退出 1。
         print(f"Claude 升级失败：{error}", file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

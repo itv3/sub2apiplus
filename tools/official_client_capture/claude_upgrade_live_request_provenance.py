@@ -1071,6 +1071,14 @@ def collect_campaign_provenance(
         if attempts_present[phase]:
             roots = list(actual_roots.get(job_id, []))
             logs = list(attempt_logs.get(job_id, []))
+            # B2-08：被强杀的 attempt 没有正在执行那个 Job 的收据，它写到一半的证据只在冻结的证据根路径下；路径存在而没有任何
+            # 收据登记时一并核算（中断前已经发出的请求不能因为缺收据而漏计，续跑取代归档之后也不再重算它）。
+            templates = item.get("evidence_roots")
+            if isinstance(templates, list):
+                for value in templates:
+                    for root in _all_attempt_roots(_map_root(value, configuration=configuration, host_data_root=host_data_root)):
+                        if root not in roots:
+                            roots.append(root)
         else:
             templates = item.get("evidence_roots")
             if not isinstance(templates, list):

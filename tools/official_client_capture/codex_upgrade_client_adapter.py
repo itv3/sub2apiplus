@@ -7,7 +7,7 @@ Codex 的编排器服务面就是按包路径导入的 ``codex_upgrade`` 模块�
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Any, Mapping
 
 # 监督器 ``_campaign_run_manifest`` 对编排器 CLI 预声明动作拒绝的基础子命令（原写死在该函数里的 15 项）。
 # 按清单版本追加 ``recover-vc1-interruption``、对监督器 CLI 追加的 7 项与客户端无关，仍留在监督器。
@@ -40,3 +40,16 @@ def reject_volatile_dimensions(dimensions: Mapping[str, str]) -> None:
     """Codex 的易变形态已全部由根因模块的六类模式覆盖，没有附加检查。"""
 
     del dimensions
+
+
+def attempt_environment_restored(attempt: Mapping[str, Any]) -> bool:
+    """对账器判定 attempt 环境已恢复：after 探针与恢复收据都在位（原写死在对账器 ``_environment_facts`` 里，逐字不变）。"""
+
+    environment = attempt.get("environment") if isinstance(attempt.get("environment"), Mapping) else {}
+    return environment.get("after_probe") is not None and environment.get("restoration_report") is not None
+
+
+def deploy_receipt_identity(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Codex 部署收据的工具五摘要就在收据顶层（原写死在对账器 ``_deployment_receipt`` 里，取值逐字不变）。"""
+
+    return payload

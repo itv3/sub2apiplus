@@ -2716,12 +2716,14 @@ def _load_capture_attempt(
 
 
 def _attempt_reconciled_terminal(campaign_dir: Path, attempt_id: str) -> Mapping[str, Any] | None:
-    """已对账的孤儿 attempt 以对账收据为终态（B2-08 接入共享对账后落实）；没有对账制品时恒为 None。"""
+    """已对账的孤儿 attempt（没有 attempt.json）以共享对账器的对账收据为终态，不再视为 active（B2-08 落实，与 Codex 同源）。"""
 
-    subject = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}"
-    if subject.exists() or subject.is_symlink():
-        raise claude_upgrade._pending("attempt 对账终态读取", "B2-08（VC-1 恢复接入共享对账）")
-    return None
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.attempt_reconciled_terminal(campaign_dir, attempt_id)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
 
 
 def _invalidated_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:

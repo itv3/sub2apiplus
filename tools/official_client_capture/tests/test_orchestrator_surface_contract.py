@@ -28,12 +28,22 @@ COPIED = (
     "_attempt_recovery_segment_root", "_recovery_continuity_receipt_path", "_evaluation_baseline_dir", "_failed_job_ids",
     "_read_campaign_lease", "CampaignLease", "_campaign_lock", "_campaign_operation_lease", "_write_campaign_lease_stop_once",
     "_validate_campaign_lease_stop_receipt", "_lease_identity_matches", "_campaign_coordinates", "_require_formal_campaign",
-    "_campaign_effective_tool_identity", "_campaign_tool_evolutions", "_git_commit",
+    "_git_commit",
     # B2-07：证据根取代归档与冲突隔离的读取（服务面四个成员与它们的辅助函数）
     "_attempt_reference_matches", "_validate_attempt_reference", "_evidence_root_supersessions", "_supersession_row_state",
     "_evidence_root_relocations", "_evidence_conflict_quarantines", "_conflict_quarantined_attempts",
     "_attempt_conflict_quarantine_receipt",
+    # B2-08：环境污染与隔离、作废集合、工具演进影响、连续性漂移收据与阶段路径（Campaign 级阶段）
+    "_attempt_continuity_drift_receipt", "_attempt_evolution_impact", "_attempt_evolution_invalidated_job_ids",
+    "_require_recovery_preview_scope_equals_frozen_jobs", "_rerun_all_invalidated_attempts", "_isolation_invalidated_attempts",
+    "_environment_isolations", "_contamination_fact", "_isolated_contamination_keys", "_campaign_contamination_records",
+    "_campaign_environment_decision", "_legacy_stage_path", "_stage_path",
 )
+# 登记的分叉（照搬后改为 Claude 自己的实现）：函数 → 理由。
+FORKED = {
+    "_campaign_tool_evolutions": "B2-08：演进链读写改由 claude_upgrade_evolution 校验（共享链校验在 Codex 评估读侧闭包内，策略文件钉死为 Codex 的）",
+    "_campaign_effective_tool_identity": "B2-08：同上，有效工具身份取 Claude 演进链",
+}
 
 
 class SurfaceContractTests(unittest.TestCase):
@@ -65,6 +75,10 @@ class SurfaceContractTests(unittest.TestCase):
         for name in COPIED:
             with self.subTest(name=name):
                 self.assertEqual(inspect.getsource(getattr(claude_upgrade, name)), inspect.getsource(getattr(codex_upgrade, name)))
+        self.assertEqual(set(COPIED) & set(FORKED), set())
+        for name in FORKED:
+            with self.subTest(forked=name):
+                self.assertNotEqual(inspect.getsource(getattr(claude_upgrade, name)), inspect.getsource(getattr(codex_upgrade, name)))
 
     def test_shells_run_shared_flow_under_claude_scope(self) -> None:
         observed: list[str] = []
@@ -90,12 +104,16 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertEqual(set(observed), {"claude"})
 
     def test_pending_members_name_their_work_item(self) -> None:
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status：由 B2-11"):
-            claude_upgrade.campaign_status(Path("/nonexistent"))
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_stage_result：由 B3-01"):
-            claude_upgrade._load_stage_result(Path("/nonexistent"), "capture-official")
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_isolation_invalidated_attempts：由 B2-08"):
-            claude_upgrade._isolation_invalidated_attempts(Path("/nonexistent"))
+        # B2-08 只落实官方阶段：候选状态、Campaign 级以外的阶段结果与候选恢复段仍各自报待实现。
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status（候选阶段）：由 B2-11"):
+            claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_stage_result（classify）：由 B3-01"):
+            claude_upgrade._load_stage_result(Path("/nonexistent"), "classify")
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_attempt_recovery_segment：由 B4-05"):
+            claude_upgrade._load_attempt_recovery_segment(Path("/nonexistent"), candidate_id="c1", attempt_id="a1", recovery_revision="ar1")
+        for member in ("recovery_segment_summary", "segment_reuse_proofs"):
+            with self.subTest(member=member), self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"B4-05"):
+                getattr(uca.adapter_for("claude"), member)(Path("/nonexistent"), "c1", "a1", "ar1")
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
 
 

@@ -325,7 +325,8 @@ def _identity_facts(campaign_dir: Path, manifest: Mapping[str, Any], current: Ma
         raise ReconcilerError("Campaign 缺少冻结工具身份")
     if adapter.orchestrator._is_policy_v2_identity(frozen):
         try:
-            effective = wire_transition.effective_wire_identity(campaign_dir, manifest)
+            # 有效 wire 身份按客户端取（B2-08 经适配器）：Codex 即 wire_transition.effective_wire_identity（逐字等价）。
+            effective = adapter.effective_wire_identity(campaign_dir, manifest)
         except wire_transition.WireTransitionError as error:
             raise ReconcilerError(f"当前有效 wire 身份无法重放：{error}") from error
         unchanged = (
@@ -455,21 +456,23 @@ def _deployment_receipt(control_root: Path, current: Mapping[str, Any], *, requi
         candidates.append((created, path, payload))
     candidates.sort(key=lambda item: item[0])
     for created, path, payload in reversed(candidates):
+        # 五摘要所在的对象按客户端取（B2-08 经适配器）：Codex 是收据顶层（与原写法逐字等价），Claude 是 identity 子键。
+        identity = adapter.deploy_receipt_identity(payload)
         matches = (
-            payload.get("tool_files_sha256") == current.get("files_sha256")
-            and payload.get("policy_sha256") == current.get("policy_sha256")
-            and payload.get("wire_producer_sha256") == current.get("wire_producer_sha256")
-            and payload.get("evidence_semantics_sha256") == current.get("evidence_semantics_sha256")
-            and payload.get("control_sha256") == current.get("control_sha256")
+            identity.get("tool_files_sha256") == current.get("files_sha256")
+            and identity.get("policy_sha256") == current.get("policy_sha256")
+            and identity.get("wire_producer_sha256") == current.get("wire_producer_sha256")
+            and identity.get("evidence_semantics_sha256") == current.get("evidence_semantics_sha256")
+            and identity.get("control_sha256") == current.get("control_sha256")
         )
         if matches:
             return {
                 "path": str(path),
                 "sha256": adapter.orchestrator.file_sha256(path),
                 "created_at_utc": payload.get("created_at_utc"),
-                "tool_files_sha256": payload.get("tool_files_sha256"),
-                "policy_sha256": payload.get("policy_sha256"),
-                "wire_producer_sha256": payload.get("wire_producer_sha256"),
+                "tool_files_sha256": identity.get("tool_files_sha256"),
+                "policy_sha256": identity.get("policy_sha256"),
+                "wire_producer_sha256": identity.get("wire_producer_sha256"),
             }
     if required:
         raise ReconcilerError("当前工具身份没有对应的通过部署收据；对账命令必须在已受管部署的工具上运行")
@@ -1696,7 +1699,6 @@ def _environment_facts(
     if contamination:
         status = "contaminated"
     elif attempt is not None:
-        environment = attempt.get("environment") if isinstance(attempt.get("environment"), Mapping) else {}
         restoration_error = attempt.get("restoration_error")
         if (
             attempt.get("status") == "environment_contaminated"
@@ -1715,7 +1717,8 @@ def _environment_facts(
         elif adapter.orchestrator._attempt_continuity_drifted(attempt):
             # 修好接着跑第 22 项：因环境连续性漂移失败的 attempt，它承接的结果证据前提不成立，不复用、全部重跑。
             status = "continuity_drift"
-        elif environment.get("after_probe") is not None and environment.get("restoration_report") is not None:
+        elif adapter.attempt_environment_restored(attempt):
+            # 环境已恢复的证据按客户端取（B2-08 经适配器）：Codex 是 after 探针加恢复收据，取值与原写法逐字等价。
             status = "restored"
     elif after.is_file() and restoration.is_file():
         status = "restored"
@@ -3462,6 +3465,9 @@ def reconcile_attempt(
                 # 修好接着跑第 13 项：污染记录与判定口径随 environment-isolate 变化，隔离后同一对象要能重新对账
                 # （与监督器运行对账的 contamination_records 同口径）。
                 "environment",
+                # B2-08：Campaign 有效截止随批准的延期变化（预算暂停 → deadline-extend → 从原对账继续）；它与账本、总账一样是
+                # 判定时的控制事实，按首次落盘为准，不能让延期之后同一对象再也对不了账。
+                "campaign_deadline_at_utc",
             ),
         )
         # 中断后重放：根因与请求状态以首次落盘的收据为准，后续步骤按同一根因幂等推进。
@@ -5462,6 +5468,8 @@ def reconcile_supervisor_run(
                 "request_part_status",
                 "provenance_receipt_sha256",
                 "contamination_records",
+                # B2-08：同 attempt 对账，Campaign 有效截止随批准的延期变化。
+                "campaign_deadline_at_utc",
             ),
         )
         cause = dict(stored["root_cause"])

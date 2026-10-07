@@ -26,7 +26,8 @@ ORCHESTRATOR = OrchestratorFacade("claude")
 # Claude 编排器的 CLI 名（B1-09）；监督器据此识别预声明动作是否调用编排器。
 ORCHESTRATOR_BASENAMES = frozenset({"claude_upgrade.py", "claude-upgrade"})
 # 预声明动作里拒绝的控制面与引导入口：Codex 的 15 项（Claude 没有的历史子命令一并拒绝，无害）加 Claude 的
-# 官方制品冻结（B2-01，VC-0 之前的离线工具）与前序证据导入（B2-09，对应 Codex 的 reuse-official-evidence）。
+# 官方制品冻结（B2-01，VC-0 之前的离线工具）、前序证据导入（B2-09，对应 Codex 的 reuse-official-evidence）与残留取证
+# 进程清理（B2-08：在明确批准下杀进程，只能由操作员直接执行，不进动作队列）。
 FORBIDDEN_SUBCOMMANDS = frozenset({
     "successor",
     "recover-candidate-failed-jobs",
@@ -45,6 +46,7 @@ FORBIDDEN_SUBCOMMANDS = frozenset({
     "finalize-vc1-deadline-orphan",
     "freeze",
     "import-predecessor-evidence",
+    "environment-cleanup",
 })
 # Claude 评估器的断言结果 builder（B4-03）。
 EVALUATION_BUILDER_BASENAME = "claude_build_rule_assertion_results.py"
@@ -78,3 +80,29 @@ def requires_project_ledger(campaign_mode: Any, target_version: Any) -> bool:
 
     del target_version
     return campaign_mode == "formal"
+
+
+def attempt_environment_restored(attempt: Mapping[str, Any]) -> bool:
+    """对账器判定 Claude attempt 环境已恢复（B2-08）：before／after 探针都在位，且前后探针没有任何漂移。
+
+    Claude 的环境恢复在每步中继里完成（恢复 hosts、停止中继，中继清单记 ``cleanup``），attempt 级没有单独的恢复收据；
+    恢复是否成立由 attempt 前后两次只读探针（两个采集容器）逐类比较给出：任一类漂移或残留取证进程都会让 run 判污染
+    （``environment_contaminated``），对账器在调用本函数之前已按污染、恢复错误、冲突隔离与连续性漂移分流。
+    """
+
+    environment = attempt.get("environment") if isinstance(attempt.get("environment"), Mapping) else {}
+    return (
+        environment.get("before_probe") is not None
+        and environment.get("after_probe") is not None
+        and environment.get("drifted_kinds") == []
+    )
+
+
+def deploy_receipt_identity(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Claude 受管部署收据（``official-client-managed-deploy/v1``，B5a-01）的工具五摘要在 ``identity`` 子键里（B2-08）。
+
+    收据声明的 ``client`` 不是 claude、或 ``identity`` 不是对象时返回空映射：比对一律不相等，对账器照常跳过这份收据。
+    """
+
+    identity = payload.get("identity") if payload.get("client") == "claude" else None
+    return identity if isinstance(identity, Mapping) else {}

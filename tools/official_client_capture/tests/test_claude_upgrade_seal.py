@@ -42,6 +42,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture.capturelib.model import ConfigurationError
+from tools.official_client_capture.tests import claude_project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
 from tools.official_client_control.contracts import derive_identity_conditions
@@ -606,6 +607,8 @@ class PredecessorReuseSealTests(predecessor_tests._PredecessorCase):
         binding = self.binding(ControlStore.open_read_only(self.predecessor_root), predecessor_tests.PREDECESSOR_ID)
         campaign_dir, _fixture = self.make_target(name, predecessor=binding)
         write_vc_control(campaign_dir)
+        # B2-08 起 seal 先过项目总账消费者门禁。
+        claude_project_ledger_fixture.register_claude_campaign(campaign_dir)
         self.run_import(campaign_dir, self.predecessor_root, predecessor_tests.PREDECESSOR_ID, "read_only_reuse")
         ledger = self.workspace / f"{name}-ledger"
         timing.create_ledger(

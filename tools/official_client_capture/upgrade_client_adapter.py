@@ -363,6 +363,15 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     "recovery_segment_summary": "callable",  # 恢复段摘要（签名同对账器原函数）
     "segment_reuse_proofs": "callable",  # 恢复段复用证明（签名同对账器原函数）
     "requires_project_ledger": "callable",  # (campaign_mode, target_version) → 是否必须在项目总账内
+    # 对账器判定 attempt 环境已恢复的口径（B2-08）：两客户端的恢复证据不同——Codex 是 after 探针加恢复收据，Claude 是
+    # after 探针在位且前后探针无漂移（中继逐步恢复 hosts 并停止，没有单独的恢复收据）。
+    "attempt_environment_restored": "callable",
+    # 部署收据里工具五摘要所在的对象（B2-08）：Codex 部署收据在收据顶层，Claude 受管部署收据（official-client-managed-deploy/v1）
+    # 在 ``identity`` 子键里；对账器按它比对当前工具身份（原写死为读收据顶层）。
+    "deploy_receipt_identity": "callable",
+    # Campaign 当前有效 wire 身份（B2-08）：Codex 由 wire transition 与工具演进两条链推出（共享原函数逐字不变）；Claude 只有
+    # 工具演进链，链上策略演进的策略文件按 Claude 受管条目键核对（共享链校验在 Codex 评估读侧闭包内，不改）。
+    "effective_wire_identity": "callable",
     # 项目总账（B1-04）：两客户端共用数据根、各有一本总账（设计 D3），新建总账用的 plan 合同不同（附录 B），
     # 候选就绪探针的请求计量类别不同。
     "project_ledger_dir_name": "value",  # 数据根下的项目总账目录名
@@ -394,6 +403,9 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "recovery_segment_summary": ("codex_upgrade_reconciler", "recovery_segment_summary"),
         "segment_reuse_proofs": ("codex_upgrade_reconciler", "segment_reuse_proofs"),
         "requires_project_ledger": ("codex_upgrade_project_ledger", "requires_project_ledger"),
+        "attempt_environment_restored": ("codex_upgrade_client_adapter", "attempt_environment_restored"),
+        "deploy_receipt_identity": ("codex_upgrade_client_adapter", "deploy_receipt_identity"),
+        "effective_wire_identity": ("codex_upgrade_wire_transition", "effective_wire_identity"),
         "project_ledger_dir_name": ("codex_upgrade_project_ledger", "LEDGER_DIR_NAME"),
         "project_ledger_plan_schema": ("codex_upgrade_project_ledger", "PLAN_SCHEMA"),
         "candidate_probe_accounting_category": ("codex_upgrade_client_adapter", "CANDIDATE_PROBE_ACCOUNTING_CATEGORY"),
@@ -415,6 +427,9 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "recovery_segment_summary": ("claude_upgrade", "recovery_segment_summary"),  # B1-09
         "segment_reuse_proofs": ("claude_upgrade", "segment_reuse_proofs"),  # B1-09
         "requires_project_ledger": ("claude_upgrade_client_adapter", "requires_project_ledger"),
+        "attempt_environment_restored": ("claude_upgrade_client_adapter", "attempt_environment_restored"),  # B2-08
+        "deploy_receipt_identity": ("claude_upgrade_client_adapter", "deploy_receipt_identity"),  # B2-08
+        "effective_wire_identity": ("claude_upgrade_evolution", "effective_wire_identity"),  # B2-08
         "project_ledger_dir_name": ("claude_upgrade_client_adapter", "PROJECT_LEDGER_DIR_NAME"),
         # v2 合同由项目总账定义与校验，Claude 只是选用它（共享 control 模块，不落到 Codex 编排器）。
         "project_ledger_plan_schema": ("codex_upgrade_project_ledger", "PLAN_SCHEMA_V2"),
