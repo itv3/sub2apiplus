@@ -82,6 +82,10 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "B4-07 收尾：candidate_post_run_recovery_action 在共享闭集判定之后，按清单客户端经适配器"
                                    " candidate_post_run_extra_action 额外放行（新增 _candidate_post_run_extra_items；Codex 认定恒为假、额外项为空，"
                                    "判定逐字不变，见 test_claude_upgrade_vc6_batch 的 Codex 对照）；_post_run_tooling_item_allowed 与五判据不变。"
+                                   "10-08 m11 满载收尾误封修复：_wait_for_monitor_stop 在 _monitor_stop_progress 检出新落盘进展时"
+                                   "续期 2 秒，_monitor_acknowledged_stop 确认本 owner 的 stop-requested 事件后允许单步慢写；"
+                                   "两种续期都受 DEFAULT_MONITOR_STOP_FINALIZE_SECONDS（stop 起算 30 秒）的等待上限约束，"
+                                   "无进展且未接手请求时沿用原等待窗口，超时封存与终止逻辑不变。"
                                    "改动与新增的符号都在 wire、evidence 与评估读侧闭包外",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "

@@ -336,8 +336,11 @@ from urllib.parse import urlsplit
 # 2026-10-08（Claude 升级 B4-07 收尾）：候选级零请求后处理判定（candidate_post_run_recovery_action）在共享闭集之外按清单
 # 客户端经适配器 candidate_post_run_extra_action 额外放行（Codex 恒为假，判定逐字不变；Claude 认 VC-6 两个交付动作）。
 # control 层变化，监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
+# 2026-10-08（m11 满载收尾误封修复）：stop 等 monitor 收口时，有新落盘进展就续期 2 秒；monitor 已写出本 owner 的
+# stop-requested 事件时允许单步慢写，两种续期都受 stop 起算 30 秒的等待上限约束。没有进展且未接手停止请求的 monitor
+# 仍沿用原等待窗口，超时封存与终止逻辑不变；本次只改 control 层，Codex 的 wire、evidence 与评估器摘要不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "fa1167ad6a9ac4bd3966ed27dcc5452e33dd3b5a96786ef2963abb5f5873e000"
+    "d19e95215ec5a49e7f798ca1e099cc1c49ae1578e0cbfdbe9b2f7d82de3f7003"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

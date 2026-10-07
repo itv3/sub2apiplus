@@ -260,6 +260,24 @@ DEFAULT_STOP_WAIT_SECONDS = 2
 # 后续批次全被历史校验拒绝（2026-10-07 ARM64 后台验证门禁实测）。冷启动中的 monitor 最多等到父 run 起动后这么久；
 # 已写出首条心跳的 monitor 仍按 DEFAULT_STOP_WAIT_SECONDS 判卡住，到时的处理不变。
 DEFAULT_MONITOR_STARTUP_GRACE_SECONDS = 30
+# stop 等 monitor 收口时的收尾宽限：DEFAULT_STOP_WAIT_SECONDS 判的是“monitor 卡住了”，不是“收尾写入总共只能用 2 秒”。
+# monitor 处理 stop-request 要依次追加 stop-requested 与终态两条事件、写停线收据、封存终态账本桶、发布 state 终态，
+# 每一步都 fsync 文件与目录；机器满载、磁盘被并行写入拖慢时，逐步推进的收尾总耗时会超过 2 秒，父 run 就被误封
+# audit-incomplete(supervisor-stop-timeout)，monitor 已写出的 failed／stopped 终态事件反而成了不可信前序
+# （2026-10-08 ARM64 m11 后台验证门禁：VC-5 失败批次收尾被封 audit-incomplete，诊断复跑全过；每步写入拖慢 0.7 秒
+# 即可确定性复现）。所以 2 秒窗口只在 monitor 毫无进展时生效：它每写出一步就从那一刻起再给 2 秒；它已接手停止
+# 请求（写出 stop-requested 事件）时，直接等到本宽限为止。两种续期都以 stop 写出 stop-request 起这么多秒为绝对
+# 上限，到时的处理与原来一样：封存 supervisor-stop-timeout 并终止 monitor 进程组。
+DEFAULT_MONITOR_STOP_FINALIZE_SECONDS = 30
+# 收尾等待里判断 monitor 进展所看的文件：都由 monitor 写（stop 写出 stop-request 之后 owner 自己不再写它们，只写
+# heartbeat.json，不在其列）。只比较 inode、大小与修改时间，不解析内容。
+_MONITOR_STOP_PROGRESS_FILES = (
+    "events.ndjson",
+    "watchdog-heartbeats.ndjson",
+    "minute-ledger.ndjson",
+    "stop-receipt.json",
+    "state.json",
+)
 # v2 及后续批次必须在原始总截止前主动结束数据面动作，为 attempt after、
 # restoration、ARM64 after、timeout checkpoint 和父监督器终态留下固定窗口。
 # 这不是延长 deadline：数据面可用时间会相应缩短，原始绝对截止保持不变。
@@ -2542,6 +2560,66 @@ def _monitor_watchdog_started(run_dir: Path) -> bool:
     except OSError:
         return False
     return stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0
+
+
+def _monitor_stop_progress(run_dir: Path) -> tuple[tuple[int, int, int] | None, ...]:
+    """stop 收尾等待用的 monitor 进展指纹：_MONITOR_STOP_PROGRESS_FILES 各自的 (inode, 大小, 修改时间纳秒)，缺失为 None。
+
+    前后两次指纹不同，说明这段时间里 monitor 又写出了一步（追加事件、心跳、账本桶，写收据，或原子替换 state）。
+    只用 lstat，不打开、不解析文件，也不拿监督器锁，不会与 monitor 的写入互相等待。
+    """
+
+    fingerprint: list[tuple[int, int, int] | None] = []
+    for name in _MONITOR_STOP_PROGRESS_FILES:
+        try:
+            metadata = os.lstat(Path(run_dir) / name)
+        except OSError:
+            fingerprint.append(None)
+            continue
+        fingerprint.append((metadata.st_ino, metadata.st_size, metadata.st_mtime_ns))
+    return tuple(fingerprint)
+
+
+def _monitor_acknowledged_stop(run_dir: Path, owner_nonce: str) -> bool:
+    """monitor 是否已接手本 owner 的停止请求：events.ndjson 末尾已有它写的 stop-requested 事件。
+
+    stop-requested 只由 monitor 在读到并校验 stop-request 之后写（随后是终态事件、停线收据、终态账本桶和 state
+    终态），所以出现它就说明 monitor 没有卡在读请求之前，而是在收尾。只读文件末尾 64 KiB（stop-requested 之后最多
+    再追加一条终态事件）；窗口起点截断的行和正在追加的半行解析失败，直接跳过。读不到时按未接手处理，等待上限退回
+    原来的判卡住口径（保守方向）。
+    """
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(Path(run_dir) / "events.ndjson", flags)
+    except OSError:
+        return False
+    try:
+        size = os.fstat(descriptor).st_size
+        os.lseek(descriptor, max(0, size - 65536), os.SEEK_SET)
+        tail = b""
+        while len(tail) < 65536:
+            chunk = os.read(descriptor, 65536 - len(tail))
+            if not chunk:
+                break
+            tail += chunk
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    for raw in tail.splitlines():
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if (
+            isinstance(record, dict)
+            and record.get("event_type") == "stop-requested"
+            and record.get("operation") == "supervisor:stop-request"
+            and record.get("owner_nonce") == owner_nonce
+        ):
+            return True
+    return False
 
 
 def _stop_receipt(
@@ -4967,6 +5045,44 @@ class SupervisorClient:
         elapsed = (time.monotonic_ns() - self._started_monotonic_ns) / 1_000_000_000
         return max(wait_seconds, float(DEFAULT_MONITOR_STARTUP_GRACE_SECONDS) - elapsed)
 
+    def _wait_for_monitor_stop(self, run_dir: Path, process: subprocess.Popen[Any]) -> bool:
+        """stop 写出 stop-request 后等 monitor 收口并退出；返回 False 表示判它卡住（调用方封存 supervisor-stop-timeout）。
+
+        初始截止沿用 _monitor_stop_wait_seconds（已就绪 2 秒、冷启动最多到父 run 起动后 30 秒）。等待中：
+        - monitor 每写出一步（_monitor_stop_progress 指纹变化），截止推到“这一刻 + DEFAULT_STOP_WAIT_SECONDS”，
+          只延不缩：逐步推进的收尾不会因为总耗时超过 2 秒被当成卡住；
+        - 截止到时 monitor 已接手停止请求（_monitor_acknowledged_stop），截止直接放到收尾宽限上限：单步 fsync
+          超过 2 秒的收尾也等它写完；
+        - 两种续期都不超过 stop 起算 DEFAULT_MONITOR_STOP_FINALIZE_SECONDS（冷启动宽限更长时以它为准）。
+        既没有进展、也没有接手停止请求的 monitor，截止到时照旧判卡住，与改动前同一语义。
+        """
+
+        began = time.monotonic()
+        deadline = began + self._monitor_stop_wait_seconds(run_dir)
+        cap = max(deadline, began + float(DEFAULT_MONITOR_STOP_FINALIZE_SECONDS))
+        progress = _monitor_stop_progress(run_dir)
+        acknowledged = False
+        while True:
+            # 每 0.05 秒看一次 monitor 是否退出、有无新进展；退出即返回，不等满截止。
+            try:
+                process.wait(timeout=max(0.0, min(deadline - time.monotonic(), 0.05)))
+                return True
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            current = _monitor_stop_progress(run_dir)
+            if current != progress:
+                progress = current
+                deadline = max(deadline, min(cap, now + float(DEFAULT_STOP_WAIT_SECONDS)))
+            if now < deadline:
+                continue
+            if not acknowledged and deadline < cap and _monitor_acknowledged_stop(run_dir, self.owner_nonce):
+                acknowledged = True
+                deadline = cap
+                continue
+            # 判卡住前再看一眼：上一轮等待之后刚好退出的 monitor 已经发布了自己的终态，不再封存。
+            return process.poll() is not None
+
     def stop(self, *, reason: str = "normal-completion", status: str = "stopped") -> None:
         if self._stop_completed:
             return
@@ -5009,11 +5125,11 @@ class SupervisorClient:
         # 轮询只等待一个很小的上限；monitor 自身会先把 stop 事实 fsync，
         # 再退出。若它卡住，立即留下 audit-incomplete 并终止 monitor，
         # 不能让 release 在这里阻塞数分钟。还在冷启动的 monitor 不算卡住，
-        # 上限按 _monitor_stop_wait_seconds 放宽（父 run 起动后最多 30 秒）。
+        # 上限按 _monitor_stop_wait_seconds 放宽（父 run 起动后最多 30 秒）；
+        # 仍在逐步收尾或已接手停止请求的 monitor 也不算卡住，按
+        # _wait_for_monitor_stop 续期（stop 起算最多 30 秒）。
         if self.process is not None and self.process.poll() is None:
-            try:
-                self.process.wait(timeout=self._monitor_stop_wait_seconds(run_dir))
-            except subprocess.TimeoutExpired:
+            if not self._wait_for_monitor_stop(run_dir, self.process):
                 try:
                     self._event(
                         "audit-incomplete",

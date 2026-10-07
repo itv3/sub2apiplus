@@ -71,17 +71,56 @@ def _campaign_process_alive(pid: object) -> bool:
     return True
 
 
-# 替身 monitor 的三种形态（stop 等 monitor 收口的冷启动宽限回归用）：
+# 替身 monitor 的形态（stop 等 monitor 收口的冷启动宽限、收尾宽限回归用）：
 # slow-start            先睡 delay_seconds 再 exec 真正的 monitor（同一 PID、同一会话），确定性地拖长冷启动；
 # hang-before-heartbeat 一直不写 watchdog 心跳也不处理 stop-request（冷启动卡死）；
 # hang-after-heartbeat  已就绪的 monitor 卡住：拉起替身之前由本进程同步写好一行 watchdog 心跳（start() 返回时
-#                       一定已就绪，不与 stop 计算等待上限竞争），替身本身只挂住。
-# 两种 hang 不持有任何监督器锁，owner 的超时分支能照常写事件、终止进程组；不用 SIGSTOP 冻结真实 monitor，
-# 因为它可能正好冻在持有 .supervisor.lock 的时刻，owner 写超时事件时会一起卡死。
+#                       一定已就绪，不与 stop 计算等待上限竞争），替身本身只挂住；
+# spin-after-heartbeat  同样预写一行心跳，替身之后每 0.1 秒再追加一行，却永远不处理 stop-request（一直有进展、
+#                       永不收尾）；
+# slow-stop             跑真正的 monitor，stop-request 出现后它每次落盘写入（追加事件、心跳、账本桶，写停线收据，
+#                       发布 state 终态）之前先睡 delay_seconds：满载机器上 fsync 被拖慢的收尾（ARM64 m11 形态）；
+# slow-receipt          跑真正的 monitor，stop-request 出现后只在写停线收据之前睡 delay_seconds：stop-requested
+#                       与终态事件都已写出（已接手停止请求），随后单步卡住。
+# 拖慢都包在函数调用之前，睡眠时不持有监督器锁；hang／spin 也不持锁，owner 的超时分支能照常写事件、终止进程组。
+# 不用 SIGSTOP 冻结真实 monitor，因为它可能正好冻在持有 .supervisor.lock 的时刻，owner 写超时事件时会一起卡死。
+_MONITOR_WRAPPER_SCRIPT = """
+import importlib.util, os, sys, time
+names, delay, script, argv = sys.argv[1].split(","), float(sys.argv[2]), sys.argv[3], sys.argv[4:]
+# 与 python 直接运行监督器脚本同一导入口径：脚本目录在 sys.path 里，扁平模块名能导入。
+sys.path.insert(0, os.path.dirname(script))
+spec = importlib.util.spec_from_file_location("codex_upgrade_supervisor_stand_in", script)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+request = os.path.join(argv[argv.index("--state-dir") + 1], "stop-request.json")
+def slowed(function):
+    def wrapper(*args, **kwargs):
+        if os.path.exists(request):
+            time.sleep(delay)
+        return function(*args, **kwargs)
+    return wrapper
+for name in names:
+    setattr(module, name, slowed(getattr(module, name)))
+sys.exit(module.main(argv))
+"""
+_MONITOR_WRAPPED_FUNCTIONS = {
+    "slow-stop": "_append_event,_append_jsonl,_stop_receipt,_set_terminal_state",
+    "slow-receipt": "_stop_receipt",
+}
 _MONITOR_STAND_IN_SCRIPTS = {
     "slow-start": "import os, sys, time; time.sleep(float(sys.argv[1])); os.execv(sys.argv[2], sys.argv[2:])",
     "hang-before-heartbeat": "import time; time.sleep(600)",
     "hang-after-heartbeat": "import time; time.sleep(600)",
+    "spin-after-heartbeat": (
+        "import sys, time\n"
+        "while True:\n"
+        "    with open(sys.argv[1], 'a', encoding='utf-8') as stream:\n"
+        "        stream.write('{}\\n')\n"
+        "    time.sleep(0.1)\n"
+    ),
+    "slow-stop": _MONITOR_WRAPPER_SCRIPT,
+    "slow-receipt": _MONITOR_WRAPPER_SCRIPT,
 }
 
 
@@ -110,16 +149,21 @@ def monitor_launch_stand_in(mode: str, *, delay_seconds: float = 0.0, launches: 
                     remaining[0] -= 1
                 if mode == "slow-start":
                     args = [sys.executable, "-c", script, str(delay_seconds), *args]
+                elif mode in _MONITOR_WRAPPED_FUNCTIONS:
+                    args = [
+                        sys.executable, "-c", script, _MONITOR_WRAPPED_FUNCTIONS[mode], str(delay_seconds),
+                        str(args[1]), *args[2:],
+                    ]
                 else:
-                    if mode == "hang-after-heartbeat":
-                        run_dir = Path(str(args[list(args).index("--state-dir") + 1]))
-                        heartbeats = run_dir / "watchdog-heartbeats.ndjson"
+                    run_dir = Path(str(args[list(args).index("--state-dir") + 1]))
+                    heartbeats = run_dir / "watchdog-heartbeats.ndjson"
+                    if mode in {"hang-after-heartbeat", "spin-after-heartbeat"}:
                         descriptor = os.open(heartbeats, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
                         try:
                             os.write(descriptor, b"{}\n")
                         finally:
                             os.close(descriptor)
-                    args = [sys.executable, "-c", script]
+                    args = [sys.executable, "-c", script, str(heartbeats)]
                 super().__init__(args, *popen_args, **popen_kwargs)
                 started.append(self)
                 return
@@ -462,7 +506,7 @@ class SupervisorTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _cold_start_client(root: Path) -> SupervisorClient:
+    def _cold_start_client(root: Path, *, ledger_interval_seconds: float = 0.05) -> SupervisorClient:
         """宽限回归用的客户端：截止放远、不允许看门狗终止 owner（owner 就是测试进程）。"""
 
         return SupervisorClient(
@@ -472,9 +516,18 @@ class SupervisorTests(unittest.TestCase):
             deadline_at_epoch=time.time() + 120,
             heartbeat_seconds=0.05,
             watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
-            ledger_interval_seconds=0.05,
+            ledger_interval_seconds=ledger_interval_seconds,
             terminate_owner=False,
         )
+
+    def _wait_for_watchdog_heartbeat(self, run_dir: Path) -> None:
+        """等 monitor 写出首条 watchdog 心跳（冷启动完成），让 stop 走已就绪 monitor 的等待口径。"""
+
+        heartbeats = run_dir / "watchdog-heartbeats.ndjson"
+        deadline = time.monotonic() + 30
+        while not (heartbeats.is_file() and heartbeats.stat().st_size > 0):
+            self.assertLess(time.monotonic(), deadline, "monitor 未在预算内写出心跳")
+            time.sleep(0.02)
 
     def test_stop_waits_for_cold_starting_monitor_instead_of_sealing_audit_incomplete(self) -> None:
         """monitor 冷启动比 2 秒还慢（no-op 批次 start 之后立即 stop 的形态）：stop 等它处理完 stop-request，父 run 照常
@@ -539,6 +592,119 @@ class SupervisorTests(unittest.TestCase):
             self.assertIsNotNone(client.process.poll())
             self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS + 0.5)
             self.assertLess(waited, grace + 5)
+
+    # ------------------------------------------------------------------
+    # stop 等 monitor 收口的收尾宽限（2026-10-08 ARM64 m11 后台验证门禁 VC-5 失败批次被误封的产品侧修复）
+    # ------------------------------------------------------------------
+
+    def test_stop_waits_for_started_monitor_whose_stop_writes_are_slow(self) -> None:
+        """已就绪的 monitor 在满载机器上逐步收尾：stop-request 之后它每次落盘写入都慢 0.6 秒，两条事件、停线收据、
+        终态账本桶与 state 终态加起来超过 2 秒，但每一步都在推进。stop 等它写完：父 run 是请求的 failed，停线收据与
+        审计完整。修复前 2 秒一到就封 audit-incomplete(supervisor-stop-timeout)：monitor 已写出的 failed 终态事件后面
+        跟着 owner 的超时事件、没有停线收据，campaign-run 返回 audit-incomplete 并附 requested_terminal=failed
+        （2026-10-08 ARM64 m11 后台验证门禁，test_invalidation_paused_decision_does_not_stop_and_resumes_after_extension
+        的 VC-5 失败批次收尾）。"""
+
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("slow-stop", delay_seconds=0.6):
+            # 账本桶取 60 秒（生产口径）：终态只封一个部分桶，收尾步数固定，耗时可预期。
+            client = self._cold_start_client(Path(directory), ledger_interval_seconds=60)
+            client.start()
+            run_dir = client.run_dir
+            self._wait_for_watchdog_heartbeat(run_dir)
+            client.event_start("campaign:vc-5-synthetic")
+            client.event_end("campaign:vc-5-synthetic")
+            began = time.monotonic()
+            client.stop(reason="action-failed:vc-5-synthetic", status="failed")
+            waited = time.monotonic() - began
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "failed")
+            receipt = supervisor.read_stop_receipt(run_dir)
+            self.assertEqual((receipt["event_type"], receipt["reason"]), ("failed", "action-failed:vc-5-synthetic"))
+            events = supervisor.load_events(run_dir)
+            self.assertEqual((events[-1]["event_type"], events[-1]["operation"]), ("failed", "supervisor:stop"))
+            self.assertNotIn("supervisor-stop-timeout", [event.get("reason") for event in events])
+            self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
+            self.assertEqual(client.process.returncode, 0)
+            self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)
+
+    def test_stop_waits_for_monitor_that_took_over_stop_request_even_if_one_write_stalls(self) -> None:
+        """monitor 已接手停止请求（stop-requested 与 failed 终态事件都已写出）后，写停线收据这一步卡了 3 秒、期间
+        没有任何新写入：2 秒无进展不再判卡住，stop 等它写完收据、封终态账本、发布 state 终态。修复前封
+        audit-incomplete(supervisor-stop-timeout)。"""
+
+        delay = supervisor.DEFAULT_STOP_WAIT_SECONDS + 1.0
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("slow-receipt", delay_seconds=delay):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            run_dir = client.run_dir
+            self._wait_for_watchdog_heartbeat(run_dir)
+            began = time.monotonic()
+            client.stop(reason="action-failed:vc-5-synthetic", status="failed")
+            waited = time.monotonic() - began
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "failed")
+            self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "action-failed:vc-5-synthetic")
+            self.assertNotIn(
+                "supervisor-stop-timeout", [event.get("reason") for event in supervisor.load_events(run_dir)]
+            )
+            self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
+            self.assertGreater(waited, delay)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STOP_FINALIZE_SECONDS)
+
+    def test_stop_progress_extension_is_bounded_by_finalize_cap(self) -> None:
+        """一直有写入、却永远不处理 stop-request 的 monitor（替身每 0.1 秒追加一行心跳）：进展续期不能无限等，到 stop
+        起算的收尾宽限上限照常封存 audit-incomplete(supervisor-stop-timeout)、不写收据、终止进程组。这里把 2 秒窗口
+        缩到 0.5 秒、上限缩到 3 秒：等满 3 秒说明续期生效，3 秒加余量内结束说明上限生效。"""
+
+        cap = 3
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("spin-after-heartbeat"), \
+                mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 0.5), \
+                mock.patch.object(supervisor, "DEFAULT_MONITOR_STOP_FINALIZE_SECONDS", cap):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            run_dir = client.run_dir
+            self._wait_for_watchdog_heartbeat(run_dir)
+            began = time.monotonic()
+            client.stop(reason="normal-completion", status="stopped")
+            waited = time.monotonic() - began
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "audit-incomplete")
+            last = supervisor.load_events(run_dir)[-1]
+            self.assertEqual((last["event_type"], last["reason"]), ("audit-incomplete", "supervisor-stop-timeout"))
+            self.assertFalse((run_dir / "stop-receipt.json").exists())
+            self.assertIsNotNone(client.process.poll())
+            self.assertGreaterEqual(waited, cap)
+            self.assertLess(waited, cap + 5)
+
+    def test_stop_wait_for_monitor_that_took_over_stop_request_is_bounded(self) -> None:
+        """接手停止请求后卡死的 monitor（写停线收据之前一直不动）：同样只等到收尾宽限上限，到时封存
+        audit-incomplete(supervisor-stop-timeout)、终止进程组；monitor 写过的 stop-requested 与 failed 事件保留，
+        后面紧跟 owner 的超时事件，没有停线收据。2 秒窗口缩到 0.5 秒、上限缩到 3 秒。"""
+
+        cap = 3
+        with tempfile.TemporaryDirectory() as directory, \
+                monitor_launch_stand_in("slow-receipt", delay_seconds=600), \
+                mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 0.5), \
+                mock.patch.object(supervisor, "DEFAULT_MONITOR_STOP_FINALIZE_SECONDS", cap):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            run_dir = client.run_dir
+            self._wait_for_watchdog_heartbeat(run_dir)
+            began = time.monotonic()
+            client.stop(reason="action-failed:vc-5-synthetic", status="failed")
+            waited = time.monotonic() - began
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "audit-incomplete")
+            tail = [
+                (event["event_type"], event["operation"], event["reason"])
+                for event in supervisor.load_events(run_dir)[-3:]
+            ]
+            self.assertEqual(tail, [
+                ("stop-requested", "supervisor:stop-request", "action-failed:vc-5-synthetic"),
+                ("failed", "supervisor:stop", "action-failed:vc-5-synthetic"),
+                ("audit-incomplete", "supervisor:stop", "supervisor-stop-timeout"),
+            ])
+            self.assertFalse((run_dir / "stop-receipt.json").exists())
+            self.assertIsNotNone(client.process.poll())
+            self.assertGreaterEqual(waited, cap)
+            self.assertLess(waited, cap + 5)
 
     def test_campaign_run_returns_sealed_terminal_state_when_stop_cannot_confirm(self) -> None:
         """campaign-run 的返回值以落盘终态为准：stop 等不到 monitor 而封存 audit-incomplete 时返回 1、落盘终态与封存
