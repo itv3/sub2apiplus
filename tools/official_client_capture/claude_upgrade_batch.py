@@ -1,4 +1,5 @@
-"""Claude 原子批次入口（Claude 升级控制面设计 B3-01）：VC-2～VC-6 经 ``compile-and-run-vc-batch`` 派发时 Claude 侧的成员。
+"""Claude 原子批次入口（Claude 升级控制面设计 B3-01）：首批之后的 VC 批次（VC-1 封存批次、VC-2～VC-6）经 ``compile-and-run-vc-batch``
+派发时 Claude 侧的成员。
 
 共享流程只在 ``upgrade_control_plane.compile_and_run_vc_batch`` 有一份：三层治理（工具演进登记、项目总账准入、计时账本
 只读预检）→ 孤儿对账 → staging 编译（``control/vc/staging/NNNN-vc-x/attempt-K``）→ prepared 父 run → COMMIT 四步
@@ -50,8 +51,30 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
   收据、build-evidence 与 revision seal 的摘要，已写构建收据的候选与构建标识核对；VC-4 checkpoint 重放后绑定），Claude 在
   其上补 Store 侧：Store 已冻结本候选的另一次构建（``build_id`` 或镜像摘要不同）即拒绝（逐字重派必然撞上 Store 的冻结），
   本候选的 ``candidate_frozen`` 事实与 Store CandidateBuildReceipt 引用进 ``outputs``。
-* VC-1：Claude 没有阶段幂等重派合同（采集与已发布预约只走 ``reconcile-attempt``；seal 链零请求失败按 post-run-tooling
-  对账后由 N+1 重派协议承接）；VC-5、VC-6 随 B4。
+* VC-1：首批之后的封存批次（``claude_upgrade_static.vc1_seal_actions``：预览批次 ``vc1-01-analyze-target`` →
+  ``vc1-02-seal-preview``，批准批次 ``vc1-03-seal-approve``）有合同，与 Codex D-10（``_official_seal_chain_stage_replay_actions``）
+  同构。为什么放在这里：共享监督器的 VC-1 post-run-tooling 判据与 seal 链续派协议只认 Codex 的阶段项名，Claude 故意不用
+  那几个名字（避开 Codex 的断言证据包门禁），所以 Claude 封存批次失败一律按 execution-failure 收账、进阶段审核，只能经本合同
+  取得重派许可。判据：
+
+  - 形态：action_id 与唯一 item_id 等于命令形态判定的种类——``analyze-target --campaign-dir``；``capture-official seal
+    --campaign-dir`` 可带 ``--attempt-id``、``--discovery-dispositions``，带 ``--approve-seal-sha256`` 即批准；种类不重复，
+    execute_items 恰为这些种类，reuse_items 为空。采集批次（``capture-official run``）没有合同，只走 ``reconcile-attempt``。
+  - 封存状态：VC-1 checkpoint 已写即拒绝（已封存不重封，共享批次入口也拒绝再编译）；官方阶段结果已写、checkpoint 未写
+    （seal 批准写到一半）时只许完成封存的原批次——采集路径的批准、只读复用路径的 seal——重派，阶段结果的模式、attempt 与
+    批准摘要须与动作一致。
+  - 采集路径：seal 动作必须指向同一个官方 attempt，且与 seal 自身的拒绝判据同口径：未被污染封锁、证据根冲突隔离或环境
+    隔离作废，处于 awaiting_receipts，没有失败 Job，没有作业被工具演进作废（这些只走 ``reconcile-attempt``）。同批次没有
+    先行预览的批准，须有唯一一份摘要等于批准参数、闭合门禁 closed 的冻结预览与草案，草案冻结的工具文件摘要与 evidence
+    层摘要等于当前受管代码（修复改变了 seal 代号时旧预览不能再批准），批准给的发现处置文件与草案绑定的是同一份。
+  - 只读复用路径（总计划冻结了前序只读复用）：seal 只接受 ``--campaign-dir``，一步完成封存。
+
+  ``inputs`` 绑定 attempt 收据、处置文件、静态分析收据与被批准的预览和草案；``outputs`` 绑定静态分析收据（静态分析动作），
+  或 ``official/seal/`` 下每个普通文件、官方阶段结果与本 Campaign 的 Discovery／Evidence 事实（seal 动作）。静态分析与 seal
+  的落盘都是只写一次或重放复用，逐字重派在已写半成品上续作。
+
+  剩余缺口：批准批次失败、修复又改变了 seal 代号时，后继要换成新的预览批次——那不是逐字重派，阶段审核协议不承接，共享 seal
+  链续派协议又只认 Codex 阶段项，目前只能显式停线。VC-5、VC-6 随 B4。
 
 四、父监督器上下文的退出码（``campaign_run_aware_exit_code``）
 =========================================================
@@ -155,8 +178,7 @@ STAGE_REPLAY_OUTPUTS: Mapping[str, tuple[str, tuple[str, ...]]] = {
     "VC-3": ("profile", ("evidence_approved", "profile_approved")),
 }
 VC1_REPLAY_REASON = (
-    "Claude VC-1 没有阶段幂等重派合同：采集与已发布预约只走 reconcile-attempt；"
-    "seal 链零请求失败按 post-run-tooling 对账后由 N+1 重派协议承接"
+    "Claude VC-1 采集批次（capture-official run）没有阶段幂等重派合同：采集与已发布预约只走 reconcile-attempt"
 )
 
 # 四、父监督器上下文里的合法暂停点。
@@ -351,13 +373,7 @@ def _parse_contract(phase: str, argv: Sequence[str], campaign_dir: Path) -> tupl
     subcommand = str(argv[0]) if argv else ""
     if subcommand not in contracts:
         raise ConfigurationError(f"{phase} 的动作 {subcommand or '（空）'} 没有阶段幂等合同")
-    rest = [str(item) for item in argv[1:]]
-    if len(rest) % 2:
-        raise ConfigurationError(f"{subcommand} 的参数不是成对的旗标与值，没有幂等合同")
-    keys = rest[0::2]
-    flags = dict(zip(keys, rest[1::2]))
-    if len(flags) != len(keys) or any(not key.startswith("--") for key in keys):
-        raise ConfigurationError(f"{subcommand} 的旗标重复或形态非法")
+    flags = _paired_flags(subcommand, argv[1:])
     if len(contracts[subcommand]) == 1:
         (mode,) = contracts[subcommand]
     elif "--approve-revision" in flags or "--approve-joint-sha256" in flags:
@@ -372,13 +388,32 @@ def _parse_contract(phase: str, argv: Sequence[str], campaign_dir: Path) -> tupl
         raise ConfigurationError(f"{subcommand} {mode} 的参数没有精确闭合：{sorted(set(flags))}")
     if extra & _PAIRED_OPTIONAL and extra & _PAIRED_OPTIONAL != _PAIRED_OPTIONAL:
         raise ConfigurationError(f"{subcommand} 的 Active 输入必须成对给出")
+    _require_same_campaign(subcommand, flags, campaign_dir)
+    return subcommand, mode, flags
+
+
+def _paired_flags(label: str, rest: Sequence[Any]) -> dict[str, str]:
+    """子命令之后的参数：必须全是成对的「旗标 值」，旗标不重复；返回旗标 → 值。"""
+
+    rest = [str(item) for item in rest]
+    if len(rest) % 2:
+        raise ConfigurationError(f"{label} 的参数不是成对的旗标与值，没有幂等合同")
+    keys = rest[0::2]
+    flags = dict(zip(keys, rest[1::2]))
+    if len(flags) != len(keys) or any(not key.startswith("--") for key in keys):
+        raise ConfigurationError(f"{label} 的旗标重复或形态非法")
+    return flags
+
+
+def _require_same_campaign(label: str, flags: Mapping[str, str], campaign_dir: Path) -> None:
+    """``--campaign-dir`` 必须解析到本 Campaign（两边都解析真实路径再比较）。"""
+
     try:
         same_campaign = Path(flags["--campaign-dir"]).resolve(strict=True) == Path(campaign_dir).resolve(strict=True)
     except OSError:
         same_campaign = False
     if not same_campaign:
-        raise ConfigurationError(f"{subcommand} 的 --campaign-dir 不是本 Campaign")
-    return subcommand, mode, flags
+        raise ConfigurationError(f"{label} 的 --campaign-dir 不是本 Campaign")
 
 
 def _campaign_input_file(campaign_dir: Path, value: str, flag: str) -> str:
@@ -671,6 +706,239 @@ def _candidate_stage_facts(
     return dict(inputs), outputs
 
 
+# -- VC-1 封存批次（见模块说明第三节「VC-1」） ----------------------------------
+
+
+def _static() -> Any:
+    from tools.official_client_capture import claude_upgrade_static
+
+    return claude_upgrade_static
+
+
+def _vc1_seal_action_shape(argv: Sequence[Any], campaign_dir: Path) -> tuple[str, dict[str, str]]:
+    """VC-1 封存批次动作的种类（即它应有的 action_id）与精确闭合的成对旗标；别的子命令与形态一律没有合同。"""
+
+    static = _static()
+    argv = [str(item) for item in argv]
+    if argv[:2] == ["capture-official", "run"]:
+        raise ConfigurationError(VC1_REPLAY_REASON)
+    if argv[:1] == ["analyze-target"]:
+        label, kind = "analyze-target", static.ACTION_ID
+        flags = _paired_flags(label, argv[1:])
+        allowed = {"--campaign-dir"}
+    elif argv[:2] == ["capture-official", "seal"]:
+        label = "capture-official seal"
+        flags = _paired_flags(label, argv[2:])
+        approve = "--approve-seal-sha256" in flags
+        kind = static.SEAL_APPROVE_ACTION_ID if approve else static.SEAL_PREVIEW_ACTION_ID
+        allowed = {"--campaign-dir", "--attempt-id", "--discovery-dispositions", *(["--approve-seal-sha256"] if approve else [])}
+    else:
+        name = " ".join(argv[:2]) if argv[:1] == ["capture-official"] else (argv[0] if argv else "（空）")
+        raise ConfigurationError(f"VC-1 的动作 {name} 没有阶段幂等合同")
+    if "--campaign-dir" not in flags or set(flags) - allowed:
+        raise ConfigurationError(f"{label} 的参数没有精确闭合：{sorted(flags)}")
+    _require_same_campaign(label, flags, campaign_dir)
+    return kind, flags
+
+
+def _vc1_attempt_inputs(campaign_dir: Path, manifest: Mapping[str, Any], attempt_id: str) -> dict[str, str]:
+    """采集路径 seal 动作的 attempt 前置（与 seal 自身的拒绝判据同口径），返回 attempt 收据摘要。
+
+    污染封锁、证据根冲突隔离、环境隔离作废、不处于 awaiting_receipts、仍有失败 Job、有作业被工具演进作废——这些情形下
+    seal 必然拒绝，恢复只走 ``reconcile-attempt`` 的 attempt 恢复链。"""
+
+    from tools.official_client_capture import claude_upgrade_capture
+
+    orchestrator = _orchestrator()
+    if not SAFE_ID_RE.fullmatch(attempt_id):
+        raise ConfigurationError("seal 动作的 --attempt-id 非法")
+    orchestrator._reject_contaminated_campaign(campaign_dir)
+    key = ("official", None, attempt_id)
+    if key in orchestrator._conflict_quarantined_attempts(campaign_dir):
+        raise ConfigurationError(f"官方 attempt {attempt_id} 已被证据根冲突隔离（永不 seal）：先 reconcile-attempt 入账并批准恢复预览")
+    if key in claude_upgrade_capture._invalidated_attempts(campaign_dir):
+        raise ConfigurationError(f"官方 attempt {attempt_id} 已被环境隔离或冲突隔离作废（永不 seal）：先 reconcile-attempt 入账并批准恢复预览")
+    attempt_root, attempt = orchestrator._load_capture_attempt(
+        campaign_dir, "official", None, attempt_id, _verified_campaign_manifest=manifest
+    )
+    if attempt.get("status") != "awaiting_receipts":
+        raise ConfigurationError(f"官方 attempt {attempt_id} 不处于 awaiting_receipts（当前 {attempt.get('status')}），seal 重派必然被拒绝")
+    failed = orchestrator._failed_job_ids(attempt.get("results"))
+    if failed:
+        raise ConfigurationError(f"官方 attempt {attempt_id} 仍有失败 Job（{'、'.join(failed)}）：seal 重派必然被拒绝，只走 reconcile-attempt 定向补跑")
+    invalidated = orchestrator._attempt_evolution_invalidated_job_ids(
+        campaign_dir, manifest, attempt_root, attempt, phase="official", candidate_id=None
+    )
+    if invalidated:
+        raise ConfigurationError(
+            f"官方 attempt {attempt_id} 有作业被工具演进作废（{'、'.join(invalidated)}）：先 reconcile-attempt 按作废对账，改走零请求恢复预览"
+        )
+    path = (Path(attempt_root) / "attempt.json").resolve(strict=True)
+    return {path.relative_to(campaign_dir).as_posix(): file_sha256(path)}
+
+
+def _vc1_frozen_preview(campaign_dir: Path, attempt_id: str, approve: str, dispositions_sha256: str | None) -> dict[str, str]:
+    """批准动作（同批次没有先行预览）要重放的冻结预览：唯一、闭合门禁 closed、草案在，且没有可廉价判定的代号漂移。
+
+    seal 批准按当前输入重算代号、只认该代的预览。修复工具后代号（含 Store 有效工具身份与 evidence 层摘要）随之变化，旧代
+    预览不能再批准：冻结草案记录的 ``tool_files_sha256``／``evidence_semantics_sha256`` 与当前受管代码不同即判批准重派必然
+    被拒（与 seal 取值同一来源）；批准动作给的发现处置文件与冻结草案绑定的不是同一份时同样必然被拒。静态输入取只写一次的
+    静态分析规范产物，不在这里复算。"""
+
+    seal = _seal()
+    root = campaign_dir / seal.SEAL_ROOT
+    matches: list[tuple[Path, dict[str, Any]]] = []
+    if root.is_dir() and not root.is_symlink():
+        for path in sorted(root.glob(f"*/{seal.SEAL_PREVIEW_FILENAME}")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            preview = _read_json(path, "seal 预览")
+            if preview.get("review_sha256") == approve and preview.get("attempt_id") == attempt_id:
+                matches.append((path, preview))
+    if len(matches) != 1:
+        raise ConfigurationError("没有与批准摘要一致的冻结 seal 预览：批准重派必然被拒绝，先派发预览批次")
+    path, preview = matches[0]
+    if not isinstance(preview.get("closure"), Mapping) or preview["closure"].get("status") != "closed":
+        raise ConfigurationError("冻结 seal 预览的闭合门禁不是 closed：批准重派必然被拒绝")
+    draft = path.with_name(seal.SEAL_DRAFT_FILENAME)
+    if draft.is_symlink() or not draft.is_file():
+        raise ConfigurationError("seal 冻结草案缺失：批准重派必然被拒绝，先派发预览批次")
+    key = _read_json(draft, "seal 草案").get("generation_key")
+    key = key if isinstance(key, Mapping) else {}
+    bound = key.get("dispositions")
+    if (bound.get("sha256") if isinstance(bound, Mapping) else None) != dispositions_sha256:
+        raise ConfigurationError("批准动作的发现处置文件与冻结预览绑定的不是同一份（预览与批准要给同一份）：批准逐字重派必然被拒绝")
+    try:
+        current_files = seal.store_receipts.current_tool_manifest("claude")["tool_files_sha256"]
+    except ControlError as error:
+        raise ConfigurationError(f"受管工具清单无法现算：{error}") from error
+    current_semantics = _orchestrator()._tool_identity(include_git=False)["evidence_semantics_sha256"]
+    if key.get("tool_files_sha256") != current_files or key.get("evidence_semantics_sha256") != current_semantics:
+        raise ConfigurationError(
+            "冻结 seal 预览的工具身份与当前受管代码不一致（修复改变了 seal 代号）：批准逐字重派必然被拒绝，须重新预览"
+        )
+    return {item.relative_to(campaign_dir).as_posix(): file_sha256(item) for item in (path, draft)}
+
+
+def _vc1_static_outputs(campaign_dir: Path) -> dict[str, str]:
+    """静态分析的规范收据（存在时）：规范目录要么不存在、要么带收据（整目录改名发布），没有收据即判不完整。
+
+    只绑定收据（收据按摘要绑定全部产物），对账不重放产物，与「对账零扫描」同口径；``analyze-target`` 重派时自己重放。"""
+
+    static = _static()
+    root = campaign_dir / static.STATIC_ROOT
+    if root.is_symlink():
+        raise ConfigurationError("静态分析规范目录不得是符号链接")
+    if not root.exists():
+        return {}
+    receipt = root / static.RECEIPT_NAME
+    if not root.is_dir() or receipt.is_symlink() or not receipt.is_file():
+        raise ConfigurationError("静态分析规范目录没有收据（official/static-analysis 不完整）：analyze-target 重派会失败关闭，先人工核对")
+    return {receipt.relative_to(campaign_dir).as_posix(): file_sha256(receipt)}
+
+
+def _vc1_seal_outputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, str]:
+    """seal 已写的半成品：``official/seal/`` 下每个普通文件、官方阶段结果，以及本 Campaign 的 Discovery／Evidence 事实。"""
+
+    seal = _seal()
+    outputs = _tree_digests(campaign_dir / seal.SEAL_ROOT, campaign_dir, "seal 产物目录")
+    stage_path = campaign_dir / seal.STAGE_RESULT_RELATIVE
+    if stage_path.exists() or stage_path.is_symlink():
+        if stage_path.is_symlink() or not stage_path.is_file():
+            raise ConfigurationError("官方阶段结果路径不可信")
+        outputs[seal.STAGE_RESULT_RELATIVE.as_posix()] = file_sha256(stage_path)
+    facts = _store_facts(campaign_dir, manifest)
+    for kind in ("discovery_recorded", "evidence_recorded"):
+        matching = _facts_of(facts, kind)
+        if matching:
+            outputs[f"control-store/{kind}"] = canonical_sha256([dict(fact) for fact in matching])
+    return outputs
+
+
+def _vc1_seal_batch_replay_actions(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """VC-1 封存批次（``claude_upgrade_static.vc1_seal_actions`` 生成）的阶段幂等重派合同；合同不成立时抛出带原因的
+    ``ConfigurationError``，留在阶段审核（判据与绑定见模块说明第三节「VC-1」）。"""
+
+    orchestrator = _orchestrator()
+    static, seal = _static(), _seal()
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = orchestrator._require_formal_campaign(campaign_dir)
+    actions = run_manifest.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise ConfigurationError("失败批次没有可核验动作")
+    parsed: list[tuple[list[str], str, dict[str, str]]] = []
+    for action in actions:
+        command = [str(item) for item in action["command"]]
+        kind, flags = _vc1_seal_action_shape(_orchestrator_argv(command), campaign_dir)
+        if action.get("action_id") != kind or list(action.get("item_ids") or []) != [kind]:
+            raise ConfigurationError(f"动作 {action.get('action_id')} 的 action_id／item_ids 与命令形态（{kind}）不一致，没有幂等合同")
+        parsed.append((command, kind, flags))
+    kinds = [kind for _command, kind, _flags in parsed]
+    if len(set(kinds)) != len(kinds) or sorted(run_manifest.get("execute_items") or []) != sorted(kinds):
+        raise ConfigurationError("VC-1 封存批次的动作种类重复，或 execute_items 与动作不一致")
+    if run_manifest.get("reuse_items") != []:
+        raise ConfigurationError("VC-1 封存批次不复用作业项，reuse_items 必须为空")
+    checkpoint = claude_upgrade_vc.vc_checkpoint_path(campaign_dir, "VC-1")
+    if checkpoint.exists() or checkpoint.is_symlink():
+        raise ConfigurationError(
+            "官方证据已封存（control/vc/vc-1-checkpoint.json 已存在）：已封存不重封，共享批次入口也拒绝再编译 VC-1 批次"
+        )
+    reuse = manifest.get("predecessor") is not None
+    seal_flags = [flags for _command, kind, flags in parsed if kind != static.ACTION_ID]
+    # 完成封存的动作：采集路径的 seal 批准，只读复用路径的 seal（一步完成）。
+    sealing = static.SEAL_APPROVE_ACTION_ID in kinds or (reuse and static.SEAL_PREVIEW_ACTION_ID in kinds)
+    stage_path = campaign_dir / seal.STAGE_RESULT_RELATIVE
+    stage: dict[str, Any] | None = None
+    if stage_path.exists() or stage_path.is_symlink():
+        if not sealing:
+            raise ConfigurationError(
+                "官方阶段结果已写出（official/result.json）、VC-1 checkpoint 未写：只有原批准（只读复用为原 seal）批次逐字重派能收敛，"
+                "预览与静态分析批次不能重派"
+            )
+        stage = _read_json(stage_path, "官方阶段结果")
+        if stage.get("mode") != ("predecessor_reuse" if reuse else "captured"):
+            raise ConfigurationError(f"官方阶段结果的模式 {stage.get('mode')} 与总计划的 VC-1 路径不一致：重派的 seal 必然被拒绝覆盖")
+    attempt_id: str | None = None
+    attempt_inputs: dict[str, str] = {}
+    if reuse:
+        if any(set(flags) != {"--campaign-dir"} for flags in seal_flags):
+            raise ConfigurationError("总计划冻结了前序只读复用：seal 动作只接受 --campaign-dir（不带 attempt、处置与批准），重派必然被拒绝")
+    elif seal_flags:
+        attempt_ids = {flags.get("--attempt-id") for flags in seal_flags}
+        if None in attempt_ids or len(attempt_ids) != 1:
+            raise ConfigurationError("采集路径的 seal 动作必须带 --attempt-id，且指向同一个官方 attempt")
+        attempt_id = str(next(iter(attempt_ids)))
+        attempt_inputs = _vc1_attempt_inputs(campaign_dir, manifest, attempt_id)
+        if stage is not None:
+            bound = stage.get("attempt") if isinstance(stage.get("attempt"), Mapping) else {}
+            if Path(str(bound.get("path", ""))).parent.name != attempt_id:
+                raise ConfigurationError("官方证据已由另一 attempt 封存（official/result.json）：重派的 seal 必然被拒绝覆盖")
+    static_receipt = _vc1_static_outputs(campaign_dir)
+    seal_outputs = _vc1_seal_outputs(campaign_dir, manifest) if seal_flags else {}
+    results: list[dict[str, Any]] = []
+    preview_before = False
+    for command, kind, flags in parsed:
+        if kind == static.ACTION_ID:
+            results.append({"action_id": kind, "command": command, "inputs": {}, "outputs": dict(static_receipt)})
+            continue
+        # 采集路径的 seal 默认取静态分析规范产物（``canonical_outputs``）；只读复用路径不读静态输入。
+        inputs = {**attempt_inputs, **({} if reuse else static_receipt)}
+        if "--discovery-dispositions" in flags:
+            inputs["--discovery-dispositions"] = _campaign_input_file(
+                campaign_dir, flags["--discovery-dispositions"], "--discovery-dispositions"
+            )
+        if kind == static.SEAL_PREVIEW_ACTION_ID:
+            preview_before = True
+        else:
+            approve = _require_sha256(flags["--approve-seal-sha256"], "--approve-seal-sha256")
+            if stage is not None and (stage.get("seal") if isinstance(stage.get("seal"), Mapping) else {}).get("review_sha256") != approve:
+                raise ConfigurationError("官方证据已按另一 seal 预览封存：重派的批准动作必然被拒绝")
+            if not preview_before:
+                inputs.update(_vc1_frozen_preview(campaign_dir, str(attempt_id), approve, inputs.get("--discovery-dispositions")))
+        results.append({"action_id": kind, "command": command, "inputs": inputs, "outputs": dict(seal_outputs)})
+    return results
+
+
 def campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
     """服务面 ``_campaign_stage_replay_facts``：只读判定失败批次能否按原批次 N+1 重派（合同见模块说明第三节）。
 
@@ -681,7 +949,12 @@ def campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, A
     phase = str(run_manifest.get("phase"))
     result: dict[str, Any] = {"phase": phase, "allowed": False, "actions": [], "reasons": []}
     if phase == "VC-1":
-        result["reasons"].append(VC1_REPLAY_REASON)
+        try:
+            result["actions"] = _vc1_seal_batch_replay_actions(Path(campaign_dir), run_manifest)
+            result["allowed"] = True
+        except (OSError, ValueError, KeyError, TypeError, ConfigurationError, ControlError, codex_upgrade_supervisor.SupervisorError) as error:
+            result["actions"] = []
+            result["reasons"].append(str(error))
         return result
     if phase not in STAGE_REPLAY_CONTRACTS:
         result["reasons"].append(f"{phase} 没有阶段幂等重派合同")

@@ -98,9 +98,10 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
 六、边界与已知缺口
 ==================
 * Wire 与模型能力目录（B3-03 补充项）：投影算法（受管模块 ``claude_upgrade_wire_projection``，2026-10-07 自仓库根的历史
-  生成器逐字搬入）拆出了版本专用的 Wire 投影策略，VC-1 布局的证据来源与装配在 ``claude_upgrade_release``。VC-1 现行
-  场景清单只用主模型取证，非主模型（``<模型>-<probe>``）没有证据：投影策略登记多个模型时投影失败关闭，审核人只能先把
-  模型闭集收到主模型（画像 ``supported_models`` 随之派生），或等 VC-1 补模型能力取证作业。
+  生成器逐字搬入）拆出了版本专用的 Wire 投影策略，VC-1 布局的证据来源与装配在 ``claude_upgrade_release``。VC-1 场景
+  清单的 ``aux.model_capability`` 场景按 Active 投影策略的非主模型逐个取证（probe 为 ``<模型>-<基础 probe>``，B2-07
+  补充项），非主模型的证据随 VC-1 一起封存；投影策略登记的模型缺证据时，缺的 probe 一次列全并失败关闭（见
+  ``claude_upgrade_release`` 说明）。
 * 生产入口清单、出站处置清单的现状没有 VC-1 生产者（B2-07 补充项），这里由审核人在 ``joint-inputs.json`` 提供，按 Store
   合同与上面的门禁核对。
 * B3-01（已落实，见 ``claude_upgrade_batch``）：``_load_stage_result`` 的 ``stage-profile`` 分支、VC-3 阶段重派证明；计时账本

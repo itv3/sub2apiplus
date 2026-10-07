@@ -14,6 +14,10 @@
   ``plan-candidate-gates``（在候选源码副本上重新生成计划，与提交内计划逐字一致）与 ``record-candidate-build``（假 docker／go
   在 PATH 最前，子进程里的构建复算落到它们）——Store 到 ``candidate_sealed``、VC-4 checkpoint 写出、阶段完成登记；VC-4 的
   阶段幂等重派证明：构建动作可逐字重派并绑定 checkpoint，计划动作输出已存在即拒绝。
+* VC-1 封存批次续跑（``Vc1SealBatchReplayTests``）：总计划冻结前序只读复用、VC-1 未封存的 Campaign 派发驱动用的
+  ``vc1_seal_actions`` 预览批次，静态分析真实失败 → 按 execution-failure 收账进阶段审核（共享 post-run-tooling 判据只认
+  Codex 阶段项名）、对账前 N+1 被拒 → ``reconcile-supervisor-run`` 按 VC-1 封存批次合同写证明 → N+1 逐字重派（动作子进程
+  替身成功）由共享阶段审核协议承接。采集路径的合同判据见 ``test_claude_upgrade_recovery.Vc1SealBatchContractTests``。
 * 接口与对照：checkpoint 坐标与重放（含 r≥2 与 VC-5 重开）与 Codex 逐项相同；队列清单除合同名与 ``client`` 外与 Codex 的
   staging 清单相同、重派身份（12 字段＋动作三元组）相等；``vc_control`` 语义；阶段结果读取；阶段幂等重派证明的形态闭合与
   schema；父监督器上下文的暂停点退出码与控制面命令拒绝。
@@ -38,6 +42,7 @@ from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_batch as batch
 from tools.official_client_capture import claude_upgrade_classify as classify
 from tools.official_client_capture import claude_upgrade_profile as profile
+from tools.official_client_capture import claude_upgrade_static
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade
@@ -412,7 +417,8 @@ class StageResultAndReplayTests(_VC2Mixin, classify_tests._ClassifyCase):
         campaign = self.build_campaign()
         # 草案只有 --campaign-dir：分母与其它输入一律取 VC-1 封存（B2-07 补充项「VC-1 发现补全」）。
         candidates = ["classify", "--campaign-dir", campaign]
-        for phase, reason in (("VC-1", batch.VC1_REPLAY_REASON), ("VC-4", "VC-4 的动作 classify 没有阶段幂等合同"), ("VC-5", "VC-5 没有阶段幂等重派合同")):
+        # VC-1 只有封存批次的合同（静态分析与 seal，见 Vc1SealBatchReplayTests 与 test_claude_upgrade_recovery）。
+        for phase, reason in (("VC-1", "VC-1 的动作 classify 没有阶段幂等合同"), ("VC-4", "VC-4 的动作 classify 没有阶段幂等合同"), ("VC-5", "VC-5 没有阶段幂等重派合同")):
             with self.subTest(phase=phase):
                 result = self.facts(campaign, phase, self.action("x", candidates))
                 self.assertEqual(result, {"phase": phase, "allowed": False, "actions": [], "reasons": [reason]})
@@ -520,14 +526,18 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         egress.__enter__()
         self.addCleanup(egress.__exit__, None, None, None)
 
-    def build_batch_campaign(self) -> Path:
+    def build_batch_campaign(self, *, vc1_sealed: bool = True, predecessor: dict[str, Any] | None = None) -> Path:
         """分类夹具（VC-0／VC-1 已封存，VC-1 为只读复用前序证据的形态：本 Campaign 没有官方 attempt）＋ VC-0 交接链首批（零请求
         no-op，复用全部官方作业）＋ Claude 计时账本（VC-0 完成）＋ 项目总账注册 ＋ 当前工具身份的受管部署收据 ＋ 规范坐标的
-        监督器状态目录。"""
+        监督器状态目录。
+
+        ``vc1_sealed`` 为假时 VC-1 停在封存之前；``predecessor`` 给出总计划冻结的前序只读复用声明（形状同
+        ``claude_upgrade_predecessor.validate_predecessor_binding``），二者供 VC-1 封存批次的续跑用例使用，在项目总账注册之前
+        写进总计划。"""
 
         # 下面补写控制收据，按 VC-0 收口建立的 Campaign 形状在建立时就冻结 Active 输入（B2-11，db6a57aab：带控制收据的
         # Campaign 不接受命令行回退）。
-        campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files())
+        campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files(), vc1_sealed=vc1_sealed)
         # 只读复用形态：VC-1 证据（中继清单与 Wire 证据）都在前序 Campaign 里，本 Campaign 没有官方 attempt 目录；
         # 对账器会按正式 attempt 读这里每个目录的原子预约收据，夹具不得留下半个 attempt。
         self.assertFalse((campaign / "official" / "attempts").exists(), "只读复用形态的 Campaign 不得出现官方 attempt 目录")
@@ -557,6 +567,7 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
                     "evidence_decision": "recapture",
                 }
             },
+            **({"predecessor": predecessor} if predecessor is not None else {}),
         )
         for directory in (campaign / "control", campaign / "control" / "vc"):
             directory.chmod(0o700)
@@ -833,6 +844,85 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
         self.assertFalse(refused["allowed"])
         self.assertIn("已存在", refused["reasons"][0])
         self.assert_zero_requests()
+
+
+VC1_STUB_ACTIONS_ENV = "CLAUDE_VC1_TEST_STUB_ACTIONS"
+# 只在列出的动作子进程里生效的替身：子进程启动即成功退出（动作本体不执行）。VC-1 封存批次续跑用例用它替掉夹具里
+# 跑不起来的静态分析与只读复用 seal 本体（二者的幂等收敛另有 test_claude_upgrade_static／test_claude_upgrade_seal 覆盖），
+# 只验证控制面续跑链。
+VC1_STUB_USERCUSTOMIZE = f'''"""VC-1 续跑用例注入（不进受管树）：列出的动作子进程启动即成功退出。"""
+import os
+
+if os.environ.get("{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV}") in os.environ.get("{VC1_STUB_ACTIONS_ENV}", "").split(","):
+    os._exit(0)
+'''
+
+
+@unittest.skipUnless(site.ENABLE_USER_SITE, "动作替身经 usercustomize 进入动作子进程，要求启用用户 site")
+class Vc1SealBatchReplayTests(_RealTreeBatchCase):
+    """VC-1 封存批次失败后的续跑（修好接着跑）：失败按 execution-failure 收账进阶段审核 → ``reconcile-supervisor-run`` 按
+    VC-1 封存批次的阶段幂等重派合同写证明 → N+1 逐字重派由共享阶段审核协议承接。
+
+    Campaign 为总计划冻结了前序只读复用、VC-1 尚未封存的形态（本 Campaign 没有官方 attempt，对账器不读预约收据）；批次就是
+    驱动用的 ``vc1_seal_actions`` 预览批次。批次 2 里静态分析在夹具中没有冻结官方二进制与受管运行时，真实失败（等同工具
+    缺陷），seal 不执行；N+1 里两个动作的子进程用替身成功退出。
+    """
+
+    PREDECESSOR = {"mode": "read_only_reuse", "campaign_id": f"{CAMPAIGN_ID}-predecessor", "campaign_identity_sha256": "c" * 64}
+
+    def test_failed_seal_batch_reconciles_and_redispatches_same_batch(self) -> None:
+        campaign = self.campaign = self.build_batch_campaign(vc1_sealed=False, predecessor=dict(self.PREDECESSOR))
+        self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-1").exists())
+        actions = claude_upgrade_static.vc1_seal_actions(campaign)
+        self.assertEqual(
+            [item["action_id"] for item in actions], [claude_upgrade_static.ACTION_ID, claude_upgrade_static.SEAL_PREVIEW_ACTION_ID]
+        )
+
+        # 批次 2：静态分析真实失败，账本进阶段审核（不是 post-run-tooling：共享判据只认 Codex 阶段项）。
+        code, failed, stderr = self.dispatch(campaign, "VC-1", 2, actions)
+        self.assertIsNotNone(failed, stderr)
+        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, f"action-failed:{claude_upgrade_static.ACTION_ID}"), stderr)
+        failed_run = Path(failed["campaign_run"]["run_dir"])
+        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "stage_review_required")
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0002-vc-1.json").is_file())
+
+        # 对账前 N+1 被拒，零写入。
+        code, _result, stderr = self.dispatch(campaign, "VC-1", 3, actions)
+        self.assertEqual(code, 1)
+        self.assertIn("stage_review_required", stderr)
+        self.assertFalse((campaign / "control" / "vc" / "staging" / "0003-vc-1").exists())
+
+        # 对账：VC-1 封存批次合同成立，写证明，账本重开 VC-1、下一动作逐字重派。
+        code, reconciled, stderr = run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
+        self.assertIsNotNone(reconciled, stderr)
+        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), json.dumps(reconciled.get("stage_replay"), ensure_ascii=False) + stderr)
+        # 失败按 execution-failure 收账（不是 post-run-tooling），由阶段幂等重派证明承接。
+        self.assertEqual(_read(campaign / reconciled["reconciliation_receipt"]["path"])["failure_class"], "execution-failure")
+        proof = reconciled["stage_replay"]
+        self.assertEqual((proof["allowed"], proof["phase"], proof["next_action"]), (True, "VC-1", "redispatch-same-batch"))
+        self.assertEqual([item["action_id"] for item in proof["actions"]], [item["action_id"] for item in actions])
+        # 只读复用：静态分析尚无产物、seal 尚无半成品，两个动作都没有可绑定的输入输出。
+        self.assertEqual([(item["inputs"], item["outputs"]) for item in proof["actions"]], [({}, {}), ({}, {})])
+        state = timing.inspect_ledger(self.ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]), ("active", "VC-1", "redispatch-same-batch"))
+        self.assertEqual(_read(campaign / "control" / "reconciliation" / f"run-{failed_run.name}" / "stage-replay.json"), proof)
+        schema = json.loads(Path(codex_upgrade.__file__).with_name("codex_upgrade_stage_replay.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(proof), set(schema["required"]))
+
+        # N+1 逐字重派（动作替身成功）：共享阶段审核协议复算一致后放行，批次提交，VC-1 仍在进行（seal 本体未执行）。
+        inject = self.root / "inject"
+        inject.mkdir(mode=0o700)
+        (inject / "usercustomize.py").write_text(VC1_STUB_USERCUSTOMIZE, encoding="utf-8")
+        stub = {"PYTHONPATH": str(inject), VC1_STUB_ACTIONS_ENV: ",".join(item["action_id"] for item in actions)}
+        with mock.patch.dict(os.environ, stub):
+            result = self.assert_batch_passed(self.dispatch(campaign, "VC-1", 3, actions), 3, "VC-1")
+        self.assertIsNone(result["timing_ledger"]["completion"])
+        sequences = sorted(int(path.name[:4]) for path in (campaign / "control" / "vc" / "commits").iterdir())
+        self.assertEqual(sequences, [2, 3])
+        state = timing.inspect_ledger(self.ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"]), ("active", "VC-1"))
+        self.assert_zero_requests()
+
 
 if __name__ == "__main__":
     unittest.main()

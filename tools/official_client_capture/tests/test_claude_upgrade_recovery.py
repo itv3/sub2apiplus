@@ -6,6 +6,7 @@
   编排器的恢复段函数替换成一调用就失败，证明 VC-1 官方路径不经过它们。
 * 其余：断网容器残留进程（对账识别 → 恢复批准下清理留证 → resume）、环境污染（清理 → 隔离 → 全部重跑）、被强杀的孤儿
   attempt（写到一半的证据被计量并取代归档）、无预约的父监督器 run 与 seal 链零请求失败（reconcile-supervisor-run）、
+  VC-1 封存批次（驱动的 ``vc1-0X-*`` 动作）的阶段幂等重派合同、
   批准延期之后再对账、工具演进（编排器链与 Store 两侧登记、作废作业只重跑它们；未登记时 run 被拒留下的停线租约不挡
   resume 与 seal；只改 control 层时不作废作业、seal 两层放行；Store Campaign 未在工具变化之前建立时演进登记零写入拒绝）、
   项目总账消费者门禁（只挡该根因）、同根因达上限只暂停 → campaign-resume 凭修复证据放行 → 再对账续跑、
@@ -35,11 +36,14 @@ from typing import Any
 from unittest import mock
 
 from tools.official_client_capture import claude_upgrade
+from tools.official_client_capture import claude_upgrade_batch as batch
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_evolution as evolution
 from tools.official_client_capture import claude_upgrade_recovery as recovery
 from tools.official_client_capture import claude_upgrade_seal as seal
+from tools.official_client_capture import claude_upgrade_static as static
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
@@ -639,6 +643,9 @@ class SupervisorRunReconcileTests(RecoveryChainCase):
         self.assertTrue(again["batch"]["reused"])
 
     def test_seal_chain_zero_request_failure_is_post_run_tooling(self) -> None:
+        """共享 post-run-tooling 判据认得 Claude 的 seal 命令与 attempt 布局（动作取 Codex 阶段项名时）。Claude 驱动的封存批次
+        不用这些名字（``vc1-0X-*``），失败按 execution-failure 进阶段审核，由 ``Vc1SealBatchContractTests`` 的合同承接。"""
+
         campaign = self.build_recovery_campaign()
         attempt = self.capture_run(campaign)
         self.assertEqual(attempt["status"], "awaiting_receipts")
@@ -654,6 +661,130 @@ class SupervisorRunReconcileTests(RecoveryChainCase):
         self.assertEqual(receipt["failure_class"], "post-run-tooling")
         self.assertEqual(receipt["run"]["action_diagnostic"]["post_run_tooling"]["attempt_id"], attempt["attempt_id"])
         self.assertIn("官方 seal 链零请求失败已对账", result["next_command"])
+
+
+class Vc1SealBatchContractTests(RecoveryChainCase):
+    """VC-1 封存批次的阶段幂等重派合同（采集路径，``claude_upgrade_batch``）：只读判定、不执行命令。
+
+    在真实的 awaiting_receipts attempt 上判定驱动生成的预览批次与批准批次，覆盖封存三种状态（未封存／阶段结果已写而
+    checkpoint 未写／已封存）、修复改变 seal 代号、处置文件不一致、attempt 被隔离与形态闭合。端到端的「失败 → 对账 →
+    N+1 逐字重派」见 ``test_claude_upgrade_batch.Vc1SealBatchReplayTests``。
+    """
+
+    @staticmethod
+    def run_manifest(actions: list[dict[str, Any]]) -> dict[str, Any]:
+        ordered = sorted((dict(action) for action in actions), key=lambda action: str(action["action_id"]))
+        return {
+            "phase": "VC-1", "actions": ordered,
+            "execute_items": sorted({item for action in ordered for item in action["item_ids"]}), "reuse_items": [],
+        }
+
+    def facts(self, campaign: Path, actions: list[dict[str, Any]], **overrides: Any) -> dict[str, Any]:
+        with self.chain_patched():
+            return claude_upgrade._campaign_stage_replay_facts(campaign, {**self.run_manifest(actions), **overrides})
+
+    def seal_action(self, campaign: Path, kind: str, attempt_id: str, *extra: str, action_id: str | None = None) -> dict[str, Any]:
+        argv = [
+            "capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", attempt_id,
+            "--discovery-dispositions", str(self.dispositions_path), *extra,
+        ]
+        return batch.managed_action(action_id or kind, f"VC-1:{action_id or kind}", argv, item_ids=[action_id or kind])
+
+    def assert_refused(self, result: dict[str, Any], pattern: str) -> None:
+        self.assertFalse(result["allowed"], result)
+        self.assertEqual(result["actions"], [])
+        self.assertRegex(result["reasons"][0], pattern)
+
+    def test_capture_path_seal_batches(self) -> None:
+        campaign = self.build_recovery_campaign()
+        attempt_id = self.capture_run(campaign)["attempt_id"]
+        with self.chain_patched():
+            preview_batch = static.vc1_seal_actions(campaign, discovery_dispositions=self.dispositions_path)
+
+        # 未封存的预览批次：静态分析尚无产物，seal 尚无半成品；输入绑定 attempt 收据与处置文件。
+        allowed = self.facts(campaign, preview_batch)
+        self.assertTrue(allowed["allowed"], allowed)
+        analyze, preview = allowed["actions"]
+        self.assertEqual((analyze["action_id"], analyze["inputs"], analyze["outputs"]), (static.ACTION_ID, {}, {}))
+        self.assertEqual(preview["action_id"], static.SEAL_PREVIEW_ACTION_ID)
+        (attempt_key,) = [key for key in preview["inputs"] if key.endswith("/attempt.json")]
+        self.assertIn(attempt_id, attempt_key)
+        self.assertEqual(set(preview["inputs"]), {attempt_key, "--discovery-dispositions"})
+        self.assertEqual(preview["outputs"], {})
+
+        # 形态闭合与 attempt 前置。
+        approve_argv = ["capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", attempt_id, "--approve-seal-sha256", "0" * 64]
+        for label, actions, overrides, pattern in (
+            ("Codex 阶段项名", [batch.managed_action("seal-official-approve", "VC-1:x", approve_argv, item_ids=["seal-official-approve"])], {}, "action_id／item_ids 与命令形态"),
+            ("未登记旗标", [self.seal_action(campaign, static.SEAL_PREVIEW_ACTION_ID, attempt_id, "--target-inventory", str(self.inventory_path))], {}, "没有精确闭合"),
+            ("缺 attempt", [batch.managed_action(static.SEAL_PREVIEW_ACTION_ID, "VC-1:p", ["capture-official", "seal", "--campaign-dir", str(campaign)], item_ids=[static.SEAL_PREVIEW_ACTION_ID])], {}, "必须带 --attempt-id"),
+            ("两个 attempt", [self.seal_action(campaign, static.SEAL_PREVIEW_ACTION_ID, attempt_id), self.seal_action(campaign, static.SEAL_APPROVE_ACTION_ID, "attempt-other", "--approve-seal-sha256", "0" * 64)], {}, "同一个官方 attempt"),
+            ("采集批次", [batch.managed_action("capture-official", "VC-1:c", ["capture-official", "run", "--campaign-dir", str(campaign), "--acknowledge-live-requests"], item_ids=["capture-official"])], {}, "只走 reconcile-attempt"),
+            ("别的 Campaign", [batch.managed_action(static.ACTION_ID, "VC-1:a", ["analyze-target", "--campaign-dir", str(self.root)], item_ids=[static.ACTION_ID])], {}, "不是本 Campaign"),
+            ("execute_items 漂移", preview_batch, {"execute_items": [static.ACTION_ID]}, "execute_items"),
+            ("复用项", preview_batch, {"reuse_items": [FAILING_JOB]}, "reuse_items"),
+            ("attempt 不存在", [self.seal_action(campaign, static.SEAL_PREVIEW_ACTION_ID, "attempt-missing")], {}, "."),
+        ):
+            with self.subTest(shape=label):
+                self.assert_refused(self.facts(campaign, actions, **overrides), pattern)
+        with mock.patch.object(claude_upgrade, "_conflict_quarantined_attempts", return_value={("official", None, attempt_id)}):
+            self.assert_refused(self.facts(campaign, preview_batch), "证据根冲突隔离")
+
+        # 预览之后的批准批次：重放唯一的冻结预览与草案（输入绑定），seal 半成品进输出。
+        with self.chain_patched():
+            code, previewed, stderr = self.run_main(self.seal_argv(campaign, attempt_id))
+        self.assertEqual((code, previewed["status"]), (2, "awaiting_seal_approval"), stderr)
+        review = previewed["review_sha256"]
+        approve = self.seal_action(campaign, static.SEAL_APPROVE_ACTION_ID, attempt_id, "--approve-seal-sha256", review)
+        allowed = self.facts(campaign, [approve])
+        self.assertTrue(allowed["allowed"], allowed)
+        (only,) = allowed["actions"]
+        generation = f"official/seal/{previewed['generation']}/"
+        self.assertTrue({generation + seal.SEAL_PREVIEW_FILENAME, generation + seal.SEAL_DRAFT_FILENAME} <= set(only["inputs"]))
+        self.assertIn(generation + seal.SEAL_PREVIEW_FILENAME, only["outputs"])
+        self.assertNotIn("official/result.json", only["outputs"])
+        self.assert_refused(
+            self.facts(campaign, [self.seal_action(campaign, static.SEAL_APPROVE_ACTION_ID, attempt_id, "--approve-seal-sha256", "0" * 64)]),
+            "没有与批准摘要一致的冻结 seal 预览",
+        )
+        other = self.root / "other-dispositions.json"
+        shutil.copyfile(self.dispositions_path, other)
+        moved = campaign / "analysis" / "other-dispositions.json"
+        other.rename(moved)
+        moved.write_text(moved.read_text(encoding="utf-8").rstrip() + "\n\n", encoding="utf-8")
+        mismatched = batch.managed_action(
+            static.SEAL_APPROVE_ACTION_ID, "VC-1:a",
+            ["capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", attempt_id, "--discovery-dispositions", str(moved), "--approve-seal-sha256", review],
+            item_ids=[static.SEAL_APPROVE_ACTION_ID],
+        )
+        self.assert_refused(self.facts(campaign, [mismatched]), "发现处置文件与冻结预览绑定的不是同一份")
+        # 修复改变了 seal 代号（evidence 层摘要变化）：旧预览不能再批准，批准逐字重派必然被拒。
+        real_identity = claude_upgrade._tool_identity
+
+        def drifted(*, include_git: bool = True) -> dict[str, Any]:
+            return {**real_identity(include_git=include_git), "evidence_semantics_sha256": "0" * 64}
+
+        with mock.patch.object(claude_upgrade, "_tool_identity", drifted):
+            self.assert_refused(self.facts(campaign, [approve]), "修复改变了 seal 代号")
+
+        # 真跑批准（与预览同一组显式输入）：阶段结果与 VC-1 checkpoint 写出后已封存不重封；checkpoint 未写（批准写到一半）
+        # 时只许原批准批次重派，输出绑定阶段结果与 Store 事实，预览批次被拒。
+        with self.chain_patched():
+            code, sealed, stderr = self.run_main(self.seal_argv(campaign, attempt_id, "--approve-seal-sha256", review))
+        self.assertEqual((code, sealed["status"]), (0, "complete"), stderr)
+        self.assert_refused(self.facts(campaign, [approve]), "已封存")
+        checkpoint = claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-1")
+        parked = checkpoint.with_name("parked-vc-1-checkpoint.json")
+        checkpoint.rename(parked)
+        try:
+            half = self.facts(campaign, [approve])
+            self.assertTrue(half["allowed"], half)
+            outputs = half["actions"][0]["outputs"]
+            self.assertIn("official/result.json", outputs)
+            self.assertTrue({"control-store/discovery_recorded", "control-store/evidence_recorded"} <= set(outputs))
+            self.assert_refused(self.facts(campaign, preview_batch), "官方阶段结果已写出")
+        finally:
+            parked.rename(checkpoint)
 
 
 class DeadlineExtensionReconcileTests(RecoveryChainCase):

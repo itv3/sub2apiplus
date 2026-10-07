@@ -176,6 +176,7 @@ class _ClassifyCase(unittest.TestCase):
         official_reuse: bool = False,
         relay_identities: Mapping[str, Mapping[str, Any]] | None = None,
         frozen_files: Mapping[str, bytes] | None = None,
+        vc1_sealed: bool = True,
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
@@ -190,7 +191,10 @@ class _ClassifyCase(unittest.TestCase):
         ``frozen_files``：额外冻结进总计划 ``inputs`` 的输入（名字 → 字节），按正式建 Campaign 时同名的 Campaign 内文件
         （``claude_upgrade_campaign.FROZEN_INPUT_FILES``）写出并绑定摘要。带控制收据的 Campaign 由 plan 或 VC-0 收口建立，
         B2-11（db6a57aab）起建立时一律冻结 Active 输入、不接受命令行回退，这类夹具经这里冻结 ``active_release_catalog``
-        与 ``active_profile``；缺省不冻结，不带控制收据的旧形状用例不受影响。"""
+        与 ``active_profile``；缺省不冻结，不带控制收据的旧形状用例不受影响。
+
+        ``vc1_sealed`` 为假时 VC-1 停在封存之前（VC-1 封存批次的续跑用例用）：Store 对象照常封存，但不写 Discovery／Evidence
+        事实、官方阶段结果与 VC-1 checkpoint；缺省封存完成，原有用例不受影响。"""
 
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
@@ -373,6 +377,8 @@ class _ClassifyCase(unittest.TestCase):
             ],
         }
         package_ref = store.seal_object("evidence_package", package)
+        if not vc1_sealed:
+            return campaign
         discovery_ref = store.append_fact(
             campaign_id,
             "discovery_recorded",

@@ -4241,29 +4241,29 @@ def _stage_write_target(
 
 
 def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """服务面成员（B3-01）：阶段幂等重派证明的事实（VC-2 classify、VC-3 prepare-profile／stage-profile），
-    转调 ``claude_upgrade_batch.campaign_stage_replay_facts``。"""
+    """服务面成员（B3-01）：阶段幂等重派证明的事实（VC-1 封存批次、VC-2 classify、VC-3 prepare-profile／stage-profile、
+    VC-4 候选计划与构建），转调 ``claude_upgrade_batch.campaign_stage_replay_facts``。"""
 
     return claude_upgrade_batch.campaign_stage_replay_facts(Path(campaign_dir), run_manifest)
 
 
-# B3-02／B3-03（分类与画像 producer）
+# B4-04／B4-05（VC-5 评估读侧的分类与画像视图；B3-02／B3-03 只落实了分类与画像的 producer，这六个成员只被 VC-5 评估流程调用）
 
 
 def _classification_official_authority(
     classification: dict[str, Any],
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del classification
-    raise _pending("_classification_official_authority", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_classification_official_authority", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 def _effective_classification_view(campaign_dir: Path, candidate_id: str, classification: dict[str, Any]) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del campaign_dir, candidate_id, classification
-    raise _pending("_effective_classification_view", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_effective_classification_view", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 def _approved_rules(
@@ -4272,31 +4272,31 @@ def _approved_rules(
     *,
     require_approved: bool,
 ) -> tuple[str, ...]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del campaign_dir, manifest, require_approved
-    raise _pending("_approved_rules", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_approved_rules", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 def _effective_assertion_profile(campaign_dir: Path, candidate_id: str, baseline: int) -> dict[str, Any] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del campaign_dir, candidate_id, baseline
-    raise _pending("_effective_assertion_profile", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_effective_assertion_profile", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 def _approval_revision_baselines(campaign_dir: Path, candidate_id: str) -> list[int]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del campaign_dir, candidate_id
-    raise _pending("_approval_revision_baselines", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_approval_revision_baselines", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 def _approval_revision_delta(current_path: Path, revised_path: Path) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-02／B3-03（分类与画像 producer） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
 
     del current_path, revised_path
-    raise _pending("_approval_revision_delta", "B3-02／B3-03（分类与画像 producer）")
+    raise _pending("_approval_revision_delta", "B4-04／B4-05（VC-5 评估读侧）")
 
 
 # B3-04／B3-05（候选构建与 revision）
