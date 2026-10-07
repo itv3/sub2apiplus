@@ -563,6 +563,14 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-claude-b1-control-plane-20261007-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        # Claude 升级 B4-07：四个候选交付事件（DELIVERY_EVENT_TYPES）只对 Claude（plan v2）放行，Codex v1 账本逐字不变；
+        # 生产者身份从 B4-07 源码提交的父提交承接（ARM64 上尚无 Claude 账本，Claude 表仍为空）。
+        "path": "docs/egress/maintenance/upstream-claude-b407-delivery-ledger-20261007-freeze-successor.json",
+        "base_commit": "46111f3f12ecb2486f4898f7228814c87b9f23c9",
+        "scope": "upstream-claude-b407-delivery-ledger-20261007-freeze-successor",
+        "result": "passed_local_evidence_successor",
+    },
 )
 # Claude 升级 B1-05：生成器承接表按账本归属的客户端取。Codex 账本沿用上面的历史登记（连同 0.151 的两类边）；
 # Claude 账本从本变更集起才会出现，没有更早的生成器摘要需要承接，初始为空。以后计时工具再改动时，若已有

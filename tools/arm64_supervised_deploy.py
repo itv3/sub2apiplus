@@ -518,6 +518,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0157-batch3-deploy-manifest-r12-20260927-freeze-successor.json",
     # 2026-10-07（Claude 升级批次 1 收口）：计时账本加客户端维度后的生产者承接收据；同一张收据也承接本清单这次变更。
     "egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+    # 2026-10-07（Claude 升级 B4-07）：计时账本加四个候选交付事件后的生产者承接收据；同一张收据也承接本清单这次变更。
+    "egress/maintenance/upstream-claude-b407-delivery-ledger-20261007-freeze-successor.json",
 )
 # Claude 的运行时依赖文档（B5a-01 扩展点）。Codex 的这张清单存在，是因为计时账本重放历史 producer 摘要时在运行时
 # 读取承接收据；Claude 计时账本的承接表目前为空（B1-05：PRODUCER_FREEZE_SUCCESSORS_BY_CLIENT["claude"] == ()），也没有
