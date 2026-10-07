@@ -24,6 +24,8 @@
 | `claude_upgrade.py` | Claude 编排器；服务面全部成员同名同签名 |
 | 监督器、对账器、项目总账、计时账本等 `codex_upgrade_*` 共享 control 模块 | 文件名保留历史前缀，客户端差异经适配器取 |
 | `tools/official_client_control/` | Claude 的事实存储（Store）：对象、事实、收据与重放 |
+| `tools/arm64_supervised_deploy.py`（受管树之外） | 受监督部署：多根事务、写前意图日志与按客户端签收据（第 9 节） |
+| `tools/ci/` 与驱动 `tools/arm64_capture_driver/driver/` 的入口基础设施（受管树之外） | 入口编排、入口门禁、空跑与后台验证；客户端差异只在客户端表（第 10 节） |
 
 三条硬约束：
 
@@ -31,7 +33,7 @@
 2. 客户端身份贯穿整条摘要链（第 3 节），任一环缺失或不一致即拒绝，不默认成 Codex。
 3. 公共恢复算法只有一份：admission、批次编译与 staging、对账判定、恢复预览、评估基线、候选 revision 两个
    编排器调用同一份实现。例外是被 Codex 身份闭包计入的读取、路径与校验函数，由两个编排器各自实现，以合同
-   测试对齐（第 9 节）。
+   测试对齐（第 11 节）。
 
 ## 2 适配接口与服务面
 
@@ -131,8 +133,15 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（`policy_version` 1） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（`policy_version` 2） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
+| 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
+| 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
+| 驱动安装收据 | `arm64-capture-driver-install/v1`（只有一个客户端纳管时） | 两客户端都纳管时 `…/v2`（`deployment_receipts` 按客户端绑定） |
+| 策略兼容收据、策略激活认证 | `policy-compatibility-receipt/v1`、`policy-activation-certification/v1` | 同左（不加 `client`，身份按 Claude v3 引擎算；客户端由策略摘要与绑定的部署收据区分） |
+| pre-A3 路径认证 | `pre-a3-path-certification/v2`（v1 只读重放） | `…/v3`（v2 结构加 `client`） |
+| 发布认证 | `tool-release-certification/v1` | `…/v2`（v1 字段加 `client`） |
+| 入口步骤记录、单元执行记录与运行清单、逐单元承接、后台验证与入口空跑结论、P0 收据与离线门禁证据 | `entry-step-record/v1`、`unit-execution-record/v1`、`unit-execution-manifest/v1`、`unit-inherit-request/v1`／`-context/v1`／`-decision/v1`、`background-validation/v1`、`entry-dryrun/v1`、`codex-upgrade-vc-receipt/v1`、`codex-p0-offline-gate-evidence/v1`／`v2` | 同左（客户端无关，或经计时账本 subject 与部署收据绑定） |
 | 请求账务 | `live-request-provenance/v2` | 同左（计量单位不同，见 Claude 指南） |
 | 根因码表 | `root_cause_codes.json` | `claude_root_cause_codes.json`（同 schema，维度含 `client`） |
 | 恢复预约、恢复段摘要、连续性漂移收据 | `codex-upgrade-*` | `claude-upgrade-*` |
@@ -288,7 +297,7 @@ Claude 的新 Campaign 可以引用前序 Store 的官方证据，但只能经�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，`policy_version` 1 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，`policy_version` 2 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -296,8 +305,9 @@ Claude 的新 Campaign 可以引用前序 Store 的官方证据，但只能经�
 
 Codex 策略 v8 只在 control 层登记三个共享新文件（`upgrade_client_adapter.py`、`codex_upgrade_client_adapter.py`、
 `upgrade_control_plane.py`）。Claude 策略把 Codex 专属文件逐项列入 53 项 `ignored_prefixes`，未归层文件数必须为
-零；`runtime_bindings` 登记 TypeScript 运行时摘要并进入 `control_sha256`。两客户端共用的文件在两份策略里同层，
-任一方修改都会同时改变双方身份，修改前按双方策略评估。
+零；`runtime_bindings` 登记两个受管运行时——`node`（`runtime/claude-tooling/node`）与 `typescript`
+（`runtime/claude-tooling/typescript/lib/typescript.js`）的路径、版本与摘要，进入 `control_sha256`。两客户端共用的
+文件在两份策略里同层，任一方修改都会同时改变双方身份，修改前按双方策略评估。
 
 ### 8.2 v3 引擎规则
 
@@ -312,7 +322,161 @@ Codex 策略 v8 只在 control 层登记三个共享新文件（`upgrade_client_
 - wire 与 evidence 层整文件计入，这两层模块的导入不得落到被忽略的文件。
 - 跨进程身份记忆化与 Codex 共用同一缓存目录，键含策略、算法与适配接口源码摘要，两客户端不会串用。
 
-## 9 Codex 身份守恒
+## 9 受监督部署与发布认证
+
+### 9.1 部署事务
+
+受管工具与活动文档只由 `tools/arm64_supervised_deploy.py` 在 ARM64 上以 root 部署；外部命令都经独立监督器执行，
+不执行官方请求。一次部署是一个多根事务：
+
+- `--managed-roots` 选择要交换的受管根（相对数据根，缺省只有 `tools/official_client_capture`）。交换
+  `tools/official_client_capture` 影响两个客户端，交换 `tools/official_client_control` 只影响 Claude。
+- `--client` 选择要签部署收据的客户端（可多值，缺省 codex）。签收据的客户端必须受本次交换影响，每个被交换的根至少
+  有一个受它影响的客户端签收据；已纳管（control 目录里已有其部署收据）的受影响客户端必须一并签收据，否则它的最新
+  收据会描述已被替换的树。尚未纳管的受影响客户端只记进意图。
+- 签收据客户端的活动文档取并集：Codex 是 Framework 与 Codex 指南（`MANAGED_DOCUMENTS`），Claude 是 Claude 指南与
+  本文（`CLAUDE_MANAGED_DOCUMENTS`），各自另有运行时依赖文档；暂存树的 `docs/repository-docs/` 放这些文档的归档副本。
+  两组不合并：VC-0 收口要求 Codex 收据登记的切换文档恰好是 Codex 那两份。
+- 客户端身份覆盖的受管根（Codex 一根，Claude 两根）在部署后都必须等于暂存树的同名根；未交换的根要求生产现状已与
+  暂存树一致，收据才能如实描述生产身份。
+- 同一 control 目录同时只允许一个部署进程（`managed-deploy.lock`，flock）。
+
+### 9.2 写前意图日志与按内容恢复
+
+正常顺序：准备全部根候选并预检 → 写意图 → 逐根切入 → 全局一致性核验 → 收据正文入日志 → 写收据 → 删日志。
+
+意图日志 `control/managed-deploy-<stamp>.journal` 在交换任何对象之前写入完整意图并 fsync（文件与父目录）。意图有根、
+断言预处理器、文档三组条目，每条记 `production_path`、`candidate_path`、`backup_path`、`old_exists`、`old_tree_sha256`、
+`new_tree_sha256`；写入后不再修改，之后只追加阶段标记 `switch_begin`、`switch_done`、`verified`、`receipts_prepared`、
+`rollback_begin`、`rollback_done`，其中只有 `receipts_prepared` 参与恢复判断。目录的新旧按完整内容摘要判定（含测试
+目录，不计字节码与权限）。原路径存在时原子交换后把旧树移入备份；原路径不存在时用不覆盖的 rename 切入。
+
+部署启动时（锁内）发现日志即按生产路径的实际内容恢复，不依据“进行到哪一步”：
+
+| 前态 | 生产路径现状 | 判定 | 回滚动作 |
+|---|---|---|---|
+| 原路径存在 | 摘要等于旧版本 | 未交换或已回滚 | 无 |
+| 原路径存在 | 摘要等于新版本 | 已交换 | 候选区或备份位置的摘要等于旧版本就与它换回；两处都找不到即失败关闭 |
+| 原路径不存在 | 不存在 | 未切入或已回滚 | 无 |
+| 原路径不存在 | 摘要等于新版本 | 已切入 | 把新产物移回候选区，恢复为不存在；候选区已被占用即失败关闭 |
+| 任一 | 其它 | 无法判定 | 失败关闭，现场不动，交人工 |
+
+三种残留：有日志、没有 `receipts_prepared`——全部对象恢复到部署前，日志改名为 `.rolled-back` 留证，拒绝本次部署；
+有日志、有 `receipts_prepared`——核对每根等于新版本，按日志里的收据正文补齐缺失收据、核对已有收据，一致后删日志，
+不回滚；没有日志——正常。重复恢复只会落到“无”的行，回滚因此幂等。日志存在期间驱动 `install.py verify` 与
+`guard.sh` 拒绝派发。
+
+### 9.3 按客户端签收据
+
+| | Codex | Claude |
+|---|---|---|
+| 合同与文件名 | `codex-arm64-supervisor-enable/v1`，`codex-01600-supervisor-enable-<stamp>.json` | `official-client-managed-deploy/v1`，`claude-managed-deploy-<stamp>.json` |
+| 工具身份 | 收据顶层的策略版本与五摘要，单根、`.py`／`.sh`／`.json` 三后缀口径 | `identity{policy_version, policy_sha256, wire_producer_sha256, evidence_semantics_sha256, control_sha256, tool_files_sha256}`，由 v3 引擎按 Claude 策略算两根（含 `.mjs`） |
+| 其余字段 | 22 字段闭集不变 | `client`、`managed_roots[{root, tool_files_sha256, rollback_backup}]`、`runtime_bindings`、`switch_journal_sha256`（意图摘要）、`documents`（Claude 文档的生效摘要与回滚点）、`client_binaries`、`pre_a3`、`transaction_receipts`、`notes` 等 |
+
+签收据顺序固定 Codex 在前：Claude 收据的 `transaction_receipts` 记录同一事务签出的其它客户端收据，消费方据此认定
+两份收据属于同一次部署。收据只写一次。Claude 身份在部署时用暂存树里的 v3 引擎与策略算出预期值，切换后用生产树
+复算，两者必须逐字相等。部署前核对 Claude 的 pre-A3 场景表与真实链入口随树部署（记入 `pre_a3`）；目标客户端冒烟
+探针没有登记目标场景清单时如实记录跳过原因（`client_binaries`），不伪造结果。
+
+### 9.4 部署收据的消费方
+
+消费方都按客户端选最新收据：文件名模式与时间戳前的分隔串按客户端取，Claude 收据的五摘要在 `identity` 下。
+
+| 消费方 | 用法 |
+|---|---|
+| 驱动 `install.py` | 安装收据绑定全部已纳管客户端各自最新的部署收据；`verify --client` 取该客户端最新收据判定 |
+| 入口步骤 `entry_steps.py` 与入口门禁 | 按本轮 `CLIENT` 取收据与五摘要；部署一致性按客户端核对受管根、指南与部署脚本副本；`deploy-check` 核对其它已纳管客户端的部署也是同一测试树 |
+| 后台验证 | 两客户端都纳管时只跑一次全量门禁，结论绑定部署收据集合 |
+| 修复轮 | 部署范围按纳管情况取；比对前把 Claude 收据的 `identity` 投影到顶层 |
+| 共享对账器 | 经适配器成员 `deploy_receipt_glob`、`deploy_receipt_identity` 读当前部署身份 |
+| VC-0 收口、发布认证、策略激活 | 核对收据的客户端与五摘要等于当前工具身份 |
+
+### 9.5 认证链与真实链
+
+认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify。三个认证模块
+（`codex_upgrade_policy_certification`、`codex_upgrade_pre_a3_certification`、`certify_release`）都带可选 `--client`，缺省
+codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用（指纹、文件摘要、工具身份）经适配器取。
+
+- 场景表与真实链按客户端登记（`SCENARIOS_BY_CLIENT`、`REAL_CHAIN_IDS_BY_CLIENT`，纯字面量，部署脚本只做静态求值）；
+  一份 pre-A3 场景清单只属一个客户端。场景单元 ID：Codex 为 `pre-a3:<场景>`，Claude 为 `pre-a3:claude:<场景>`，同一
+  记录库里互不承接。Claude 场景集合为空时规划、签发与核验一律拒绝；Claude 只从单元执行记录签发 v3。
+- Claude 登记四条真实链（`tests/real_chains/test_claude_upgrade_control_chain.py`）：`vc-chain.claude-reconcile`、
+  `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`。四条链零请求，在两个受管根
+  的副本树上运行；Linux root 上必须进入 `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），
+  不满足即失败。Claude 场景单元另声明第二受管根：只改 `tools/official_client_control` 时 Claude 场景单元失效，Codex
+  场景单元不受影响。
+- 发布认证绑定当前部署收据的五摘要、pre-A3 认证（跨部署沿用时另绑复用收据）、Job 演练与 atomic-double 收据；Job 演练
+  按客户端合同重放，两客户端同样要求存储与失败生命周期两项探针摘要；只能在具备 Go 与 Docker 的 Linux ARM64 上签发。
+  各客户端能重放的 atomic-double 合同登记在 `certify_release.CLIENT_ATOMIC_DOUBLE_REPLAY`：Claude 一项为假，Claude 签发
+  在核完 pre-A3、复用收据与 Job 演练之后失败关闭，不拿 Codex 的演练合同顶替。pre-A3 认证可选绑定的分批演练收据只属于
+  Codex，Claude 给出即拒绝。
+
+## 10 升级入口
+
+### 10.1 客户端表
+
+入口基础设施（入口编排器、入口步骤判定、入口门禁与统一调度执行器、便宜检查、派发前守卫、入口空跑、后台验证与日常
+维护、各阶段驱动脚本）两客户端共用一份，客户端差异只在客户端表 `client_table.py`：`tools/ci/` 与驱动目录各一份、
+逐字相同，只用标准库（驱动在受管树之外运行，不导入受管工具）。本轮客户端取参数 `CLIENT`，缺省 codex，不认识即失败关闭。
+
+- 表里只有两客户端各自的取值，没有逻辑，导入时核对两行键集合闭合。表项：参数键（二进制、摘要、账号，专属必填键与
+  旧键别名，便宜检查、预检 plan 与 Job 演练登记的键）、派生模板（Campaign 前缀、清单文件名、生命周期目录、官方制品
+  布局、认证文件名、宿主二进制路径）、模块（编排器、认证、收口、P0、环境收据、Job 演练、atomic-double、零请求 smoke、
+  计时账本、项目总账、监督器等）、部署（收据文件名模式、时间戳分隔串、身份所在对象、合同、受管根、活动文档）、文档
+  （指南、第二部分标题、入口步骤读的文档、部署一致性核对的部分）、预检 plan 的参数模板、各阶段派发脚本与 `pending`。
+- 两客户端共用的模块同名，靠 `client_argv`（追加给共享模块命令行的 `--client claude`）与 `identity_args`（受管身份
+  函数的位置参数）区分；Codex 两项都为空，命令行与调用和改造前逐字相同，Codex 一行由对照测试锁定。
+- Codex 参数文件的通用键 `CLIENT_BIN`／`CLIENT_BIN_SHA256`／`CLIENT_ACCOUNT_ID` 解析后归一成旧键；Claude 只认通用键。
+  另一客户端的专属键出现在本客户端参数文件里即拒绝，也从环境里清掉残留。
+- `pending` 登记某客户端尚未接入的入口步骤（`step:`）、便宜检查项（`check:`）与驱动工具（`tool:`）：执行到即失败关闭
+  并写明原因，`entry.sh --plan` 也列出，不拿另一客户端的实现顶替。
+- 驱动 `lib.sh` 解析参数后输出 `CT_` 变量，只赋值不导出，子进程环境与步骤判定读的环境不变。
+- 受管树里的适配接口与客户端表同名的取值（部署收据文件名模式、编排器 CLI 基名、项目总账目录名）由测试核对一致。驱动
+  `install.py` 是驱动完整性的复验者，不在复验前加载被复验的驱动文件，所以自带一份客户端规则，由测试核对两份一致。
+
+### 10.2 入口 16 步的两客户端实现
+
+入口编排器 `entry.sh`（`entry_orchestrator.py`，步骤输入与判定在 `entry_steps.py`）的步骤、依赖、步骤记录、沿用／重做／
+冻结／阻塞判定与续跑规则两客户端相同；Claude 的步骤输入另登记第二受管根、本文与客户端表。各步的实现：
+
+| 步骤 | Codex | Claude |
+|---|---|---|
+| `entry-preflight` | 七项便宜检查；目标客户端核宿主与 `capture-cli`；官方包核两棵源码树；`codex_upgrade plan --audit-only` | 同七项；目标客户端另核 `capture-cli-synthetic`；官方包以 `claude_upgrade_freeze` 复核冻结目录；`claude_upgrade plan --audit-only`（参数取客户端表模板） |
+| `policy-compatibility`、`policy-activation` | `codex_upgrade_policy_certification` | 同一模块加 `--client claude` |
+| `entry-gates`、`pre-a3` | `entry-gates.sh` 同一次运行；pre-A3 v2 | 同一入口门禁；pre-A3 v3 |
+| `zero-request-smoke` | `codex_upgrade_zero_request_smoke` | `claude_upgrade_zero_request_smoke` |
+| `atomic-double` | `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` | 客户端表 `pending`：执行即失败 |
+| `ledger` | `codex_upgrade_timing_ledger create`（计划 v1） | 同一模块加 `--client claude`（计划 v2）；项目总账目录 `upgrade-project-ledger-claude` |
+| `environment-p0` | `codex_upgrade_arm64_environment_receipt`（`--rust-tls-codex-version`） | `claude_upgrade_arm64_environment_receipt`（`--claude-version`） |
+| `ledger-checkpoint` | 计时账本 checkpoint | 同左 |
+| `preflight-plan` | `codex_upgrade plan --campaign-mode preflight_only` | `claude_upgrade plan`，参数取客户端表模板；证据决定为 `reuse` 时追加前序 Store 与 Campaign |
+| `job-rehearsal` | `codex_upgrade_job_rehearsal_receipt collect／finalize` | 同一模块加 `--client claude`，经适配器取 Claude 画像 `claude_upgrade_job_rehearsal` |
+| `client-launch-probe` | `client_launch_probe.py`，运行器 `client_launch_probe_runner.py` | 同一入口加 `--client claude`，运行器 `claude_launch_probe_runner.py` |
+| `release-certification` | `certify_release issue／verify`（v1） | 同一模块加 `--client claude`（v2） |
+| `p0-receipt` | `codex_upgrade_vc_receipt finalize／replay` | 同一模块与合同 |
+| `vc0-closeout` | `codex_upgrade_vc0_closeout` | `claude_upgrade_vc0_closeout`（共享收口流程的 Claude 画像） |
+
+建账本之前的步骤一次报全，全部通过才建账本；建账本之后失败即停；Formal 建成后创建链冻结，只剩收口按判定续作。
+产物坐标、只写一次坐标被占用时换 `-r2` 等规则见入口编排器的模块说明。
+
+### 10.3 记录库、空跑与日常维护
+
+- 两客户端的入口门禁写同一个单元执行记录库。门禁单元（采集工具测试、出站规格子检查、后端、lint、前端、部署脚本）的
+  单元 ID 与输入声明不随客户端变化；pre-A3 场景单元按客户端加前缀，互不承接，Claude 场景单元的输入另含第二受管根。
+  承接只经入口门禁的受控模式（全集通过、逐单元承接），由单元记录逐条核对。
+- 逐单元承接两客户端共用：当前上下文含客户端与部署收据集合，批准绑定上下文摘要与来源集合摘要；消费端（P0 v2 证据与
+  收据、pre-A3 v2／v3 签发）按决策收据重验形成期证明。
+- 入口空跑（`entry-dryrun.sh`）按本轮客户端绑定其最新部署收据，结论文件名带客户端前缀（Codex 为空，Claude 为
+  `claude-`），同一提交加同一部署两客户端各一份；两份空跑在入口门禁工作目录里经空跑串行锁排队。Claude 的结论另带没通过
+  各步的分类（`registered_pending`、`scenario_pending`、`blocked`、`real`），`real_failed_steps` 为空即没有真实失败。
+- 后台验证在两客户端都纳管时只跑一次仓库全量门禁，结论的 `deployments` 绑定部署收据集合；数据根
+  `control/background-validation/` 登记“提交加收据集合 → 结论”，搭上的轮次在自己的运行根留 `attached/` 指针；
+  `check-boundary`、`require-passed` 按本轮客户端取结论。`vc-batch.sh` 派发前的批次边界与整机预约两客户端共用。
+- 日常维护（`entry_housekeeping.py`）清理记录库时，保留被 Codex pre-A3 v2、Claude pre-A3 v3 与两客户端 P0 v2 证据
+  引用的运行。
+
+## 11 Codex 身份守恒
 
 本控制面改造对 Codex 只增不改：
 
@@ -332,7 +496,7 @@ control 层、策略与整树摘要的变化逐文件落在 `REGISTERED_CONTROL_
 可迁但留原位的函数。两个编排器各自实现的读取与校验函数以后合并为一份，需要 Codex 改用跨模块按符号的 v3 引擎，
 并重算其 evidence 闭包与评估器摘要，时机放在 Codex 某次新目标版本升级的 VC-0 之前。
 
-## 10 修改本控制面时
+## 12 修改本控制面时
 
 - 先判断改动落在哪个客户端的哪个身份层：改共享 control 模块要同时按两份策略评估，并在
   `REGISTERED_CONTROL_CHANGES` 登记；改到 Codex 身份闭包内的符号属于身份守恒违规，应改为新增并行实现。

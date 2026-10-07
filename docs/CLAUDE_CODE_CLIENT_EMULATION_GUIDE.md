@@ -1105,11 +1105,13 @@ P0 收据 → EvidencePackage → RuleMigrationLedger／AtomicAssertionLedger
    输入形成凭证，输入漂移重新审核。工具缺陷、预算、账务、环境与根因上限先暂停，放行与永久停线条件见
    Framework §5.3.6。
 
-**每轮参数只维护一份。** Claude 轮次与 Codex 共用同一套驱动参数文件与上下文工具，按 `CLIENT=claude`
-取坐标：从 `env.example.sh` 填写本轮参数，由驱动安全解析，不直接 `source`；`round_context.py` 从正式账本
-取 Campaign／Candidate／revision，`phase_context.py` 取当前评估基线、读来源、写目标和唯一有效 attempt，
-`cleanup_context.py` 取收尾路径和收据。显式 ID 仅作断言，不按“最新目录”猜测，不复制上一轮路径。驱动
-按 `CLIENT` 参数化之前，Claude 轮次不得借用 Codex 参数文件代填，缺口按 P0 工具阻断登记。
+**每轮参数只维护一份。** Claude 轮次与 Codex 共用同一套驱动参数文件格式与上下文工具：按
+[env.example.sh](../tools/arm64_capture_driver/driver/env.example.sh) 中 Claude 的写法填写本轮参数（`CLIENT=claude`），
+由驱动安全解析，不直接 `source`。Claude 参数文件只认通用键 `CLIENT_BIN`／`CLIENT_BIN_SHA256`／`CLIENT_ACCOUNT_ID`，
+出现 Codex 专属键（Kilo 三项、`CODEX_*`、`TARGET_CODE_MODE_HOST_SHA256`）即拒绝；随客户端变化的模块、合同、
+目录与文件名一律取驱动客户端表 `client_table.py`。`round_context.py` 从正式账本取 Campaign／Candidate／revision，
+`phase_context.py` 取当前评估基线、读来源、写目标和唯一有效 attempt，`cleanup_context.py` 取收尾路径和收据，三者都按
+`CLIENT` 取编排器。显式 ID 仅作断言，不按“最新目录”猜测，不复制上一轮路径。
 
 **证据目录统一。** 本机升级证据、临时工作材料及归档统一置于
 `/Users/czs/Developer/sub2apiplus-evidence/claude-code/<版本>/` 的版本／轮次子目录，与 `codex-cli/<版本>/`
@@ -1156,9 +1158,16 @@ no-op 和恢复计划，属于 P0 工具阻断。
 
 ### Claude 受管入口、连续监督与文档依赖
 
-`python3 -m tools.official_client_control` 是对象、事实、状态和既有收据的低级只写追加／只读重放入口，不是
-正式 Campaign 的父监督器。阶段 producer／finalizer 只能生成动作清单声明的 payload，再由受管入口校验和
-追加；操作员不得手写事实、绕过前序门禁或直接把历史聚合脚本当作后继版本入口。
+Claude Campaign 的阶段动作只有一个派发入口：`claude_upgrade.py compile-and-run-vc-batch` 在 Claude 适配器作用域
+里调用共享批次流程，由父监督器 `codex_upgrade_supervisor.py campaign-run` 执行（运行清单
+`official-client-campaign-run/v1`）；VC-1 首批由 VC-0 收口在同一进程内派发。父监督器上下文里调用批次之间的
+控制面命令（批次入口自身、`revision-open`、`invalidate-candidate`、评估恢复、延期、放弃、隔离、工具演进等）
+即拒绝，对账、前序导入、官方冻结与环境清理写进预声明动作即拒绝。
+
+`python3 -m tools.official_client_control` 只是 Store 对象、事实、状态和收据的低级追加与重放入口，不是父监督器。
+阶段 producer 经它写入：对象带 `--allow-existing` 同内容复用，事实带幂等键；写入门禁按 Campaign 的有效工具
+身份核对，工具身份变化而未登记演进时拒绝写入。操作员不得手写事实、绕过前序门禁或把历史聚合脚本当作后继
+版本入口。
 
 用途、权限和状态是四个正交维度：
 
@@ -1172,21 +1181,26 @@ no-op 和恢复计划，属于 P0 工具阻断。
 因此 `ready／not_activated` 表示 checkpoint 与 production state 的组合，不是新枚举；
 `ready_for_operator_release` 也不能替代 `production_active_upgraded`。
 
-正式批次的状态机固定为 `dispatching → executing → evaluating → terminal`。P0 必须冻结父监督器、动作超时、
-worker 心跳间隔、失联阈值、批次派发阈值、阶段交接窗口和不可后移的总 deadline；具体数值写入本次批准的
-Campaign 计划。监督器连续落盘动作开始／结束／失败、等待原因、execute／reuse、live 请求量、扫描量和
-`planning／active／waiting` 时间区间。进程重启、新 attempt、Candidate 或恢复执行均不得重置时间账本；
-worker 失联、动作超时、派发超时、无法分类的时间区间或需要人工补派时立即停线。
+正式 Campaign 的不可变计划是两份同源对象，建立时逐项核对一致：
 
-现有 `claude_fw_e_complete_campaign.py`、`claude_fw_f_complete_runner.py` 及 FW-G 聚合 finalizer 只解释各自
-冻结的历史实例，不能证明已具备上述通用父监督能力。后继 Formal Campaign 若没有经 P0 演练的受管 runner、
-状态持久化、超时／失联处理和 checkpoint 格式，必须登记工具阻断，不能依靠人工连续执行脚本。
+| 对象 | 冻结内容 |
+|---|---|
+| 编排器总计划 `official-client-upgrade-campaign/v1` | `client`、模式与用途、目标与基线版本、官方身份（冻结收据的 npm、原生分发、`binary_sha256` 与等价结论）、工具身份、冻结输入副本、取证坐标、控制收据、VC 控制与前序复用绑定 |
+| Store Campaign `official-client-control-campaign/v2` | 目标版本、官方产物、平台、entrypoint、默认条件（含 `privacy=`）之外，另冻结 `client`、`campaign_purpose`、OAuth 组织、模型目录摘要、执行权限（主机与动作）、阶段依赖、阶段预算、绝对截止、监督参数、项目总账引用与七项工具身份 |
 
-受管工具运行时读取的 Framework、本指南、policy 或 Schema 都是直接依赖。部署清单必须登记规范相对路径、
-内容摘要及“不存在”基线，与工具树在同一可回滚事务中切换，并从实际运行根完成重放；只在完整开发工作树
-通过不代表部署完整。当前 `official-client-control-campaign/v1` 尚未直接冻结 `campaign_purpose`、执行权限、
-阶段依赖、预算和 deadline；后继 Campaign 必须先把这些字段纳入所有阶段共同引用的不可变 P0 计划，或升级
-Campaign Schema 和门禁。仅写在手册、环境变量或操作记录中均属于 P0 工具阻断。
+正式批次的状态机固定为 `dispatching → executing → evaluating → terminal`。Store Campaign 记录建立时的监督参数
+（心跳间隔、账本间隔与看门狗超时）；批次入口的唯一墙钟边界是 Campaign 冻结的原始绝对截止，不接受第二个相对
+时限。监督器连续落盘动作开始／结束／失败、等待原因、execute／reuse、live 请求量、扫描量和
+`planning／active／waiting` 时间区间；进程重启、新 attempt、Candidate 或恢复执行均不得重置时间账本。worker
+失联、动作或派发超时后，按 Framework §5.3.6 对账判定暂停或停线，不能靠人工补派。
+
+`claude_fw_e_complete_campaign.py`、`claude_fw_f_complete_runner.py` 及 FW-G 聚合 finalizer 只解释各自冻结的
+2.1.226 历史实例，不是后继版本的入口。
+
+受管工具运行时读取的 Framework、本指南、[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)、
+policy 或 Schema 都是直接依赖。受监督部署把本指南与共享实现文档作为 Claude 的活动文档，与工具树在同一可回滚
+事务中切换，摘要与回滚点登记在 Claude 部署收据里；入口步骤把它们登记为输入，部署一致性核对数据根与测试树逐项
+相同。只在完整开发工作树通过不代表部署完整。部署事务、收据合同与消费方见共享实现文档。
 
 <a id="claude-vc-0"></a>
 ## 4.0 VC-0 冻结升级输入
@@ -2312,8 +2326,8 @@ FW-H／Vircs／DMIT 事实只读保留，归档与清理统一遵守 §6.7。
 # 第六部分 Claude Code 取证、测试与生产环境
 
 本部分记录当前稳定机器角色和安全边界，不构成 Claude Code 客户端规则证据。每次正式 Campaign
-仍须在 manifest 中冻结实际主机、网络、镜像、工具和环境摘要；环境发生变化时按 Framework §3.3
-判断新建 attempt、candidate 或 Campaign。
+仍须在总计划、环境收据和部署收据中冻结实际主机、网络、镜像、工具和环境摘要；环境发生变化时按
+Framework §3.3 判断新建 attempt、candidate 或 Campaign。
 
 ## 6.1 当前拓扑与代理边界
 
@@ -2324,9 +2338,11 @@ ImmortalWrt 192.168.9.1
     └── Surge：决定该 Mac 的代理与实际出口
 
 Mac／控制端
-├── SSH／候选验收 → DMIT x86_64
-├── SSH／官方取证 → Vircs x86_64（唯一官方 Claude Code 主采集机；同时为用户管理的生产机）
-└── 产物封装 → ARM64（接收 linux/amd64 二进制并封装 amd64 Docker 镜像）
+├── 本机：权威源码、候选提交链，以及 Claude Desktop、Claude Code CLI、Claude Code for VS Code 本机正例
+└── SSH → ARM64（官方取证、候选验收、构建与部署统一环境；数据根 /root/docker/capture-cli/data）
+          └── capture-cli 与 sub2apiplus 两个受保护容器经指定出口 DMIT 69.63.195.102 出网
+
+DMIT：线上 Sub2API 生产机，兼作 ARM64 指定出口的出口端；不做候选验收
 ```
 
 HomeProxy 的绕过只说明路由器不代理该 Mac；Mac 是否直连仍由 Surge、系统代理、增强模式、CA、DNS
@@ -2336,66 +2352,68 @@ ALPN、连接复用和 HTTP 协议不得作为官方客户端直连证据，只�
 本地 Claude Desktop、Claude Code CLI 和 Claude Code for VS Code 是三个独立官方来源产品；当前由
 OfficialIngressCatalog 分别登记，再规范化到同一个 Claude Code 2.1.226 目标 Persona。它们的 UA、
 Header、System 和工具目录不能互相继承，也不能为目标 Linux TLS 提供证据。Codex Desktop 不属于该
-Persona。Mac 的代理状态也不会自动影响 Vircs、DMIT 或 ARM64，服务器侧代理、CA、DNS 和转发条件
-必须分别冻结。
+Persona。Mac 的代理状态也不会自动影响 ARM64 或 DMIT，服务器侧代理、CA、DNS 和转发条件必须分别冻结。
 
 ## 6.2 机器职责
 
 | 节点 | 固定角色 | 可以执行 | 禁止或不能证明 |
 |---|---|---|---|
-| Mac `192.168.9.99` | 控制端、源码与前端构建端、官方 Desktop／Code／VS Code 测试端 | SSH 编排、原生构建前端、交叉编译 linux/amd64 Go 后端、官方入口验证和必要的 UI／TTY 驱动 | 默认直连 TLS 权威证据；把三个来源客户端的 wire 身份互相继承 |
-| Vircs x86_64 | 唯一官方 Claude Code 主取证机、用户管理的 Sub2API 生产机 | 隔离取证和取证前后环境核对；生产替换仅由用户另行执行 | 本任务连接、修改、部署或验证其 Sub2API 服务；为抓包中断既有服务 |
-| DMIT x86_64 | Sub2API 候选验收机，1 核／1.9G／20G | 固定镜像正负矩阵、应用回退／恢复、稳定观察和只读依赖核对 | 现场编译、声称生产已激活、数据库或依赖重建；官方 Claude Code 权威证据源 |
-| ARM64 | linux/amd64 Docker 镜像封装端 | 接收 Mac 已编译的 linux/amd64 后端和前端产物，封装并核对 amd64 镜像 | 重新编译源码、生成官方规则证据、代替 DMIT 运行验收 |
+| Mac `192.168.9.99` | 控制端；权威源码与候选提交链；三个官方客户端的本机正例驱动 | SSH 编排、本机候选提交链与 bundle、官方入口验证和必要的 UI／TTY 驱动 | 默认直连 TLS 权威证据；把三个来源客户端的 wire 身份互相继承；代替 ARM64 取证、构建或候选验收 |
+| ARM64 | 官方取证、候选验收、构建与部署统一环境，与 Codex 同一数据根与出口策略（§4.0.3） | 受监督部署受管工具与文档；在 `capture-cli` 与断网容器 `capture-cli-synthetic` 里隔离取证；构建 linux/arm64 候选镜像；在 sub2apiplus 候选容器里验收 | 绕过出口守护准入；为取证修改宿主全局网络、CA 或生产 compose；向 `/root` 解包 |
+| DMIT | 线上 Sub2API 生产机；ARM64 两个受保护容器的指定出口 | 用户管理的生产服务与出口守护的出口端 | 候选验收、官方取证；本任务连接、修改、部署或验证其 Sub2API 服务 |
 
-当前已验证的构建链是“Mac 原生前端 → Mac 交叉编译 linux/amd64 Go 后端 → ARM64 仅封装 amd64
-Docker 镜像 → DMIT 仅加载和运行”。每次构建仍须冻结工具、参数、产物传输路径和摘要链。
+每次构建仍须冻结工具、参数、产物传输路径和摘要链。
 
-## 6.3 Vircs 官方采集纪律
+## 6.3 ARM64 官方采集纪律
 
-Vircs 的硬约束是任何取证不得改变或中断该机由用户管理的 Sub2API 生产服务：
+官方取证在数据根 `/root/docker/capture-cli/data` 下的隔离容器里进行，不得改变宿主全局状态：
 
-1. 官方二进制按版本和 SHA 独立保存，不原位覆盖唯一封存版本；
-2. 使用独立用户目录、证据目录、端口和可证明的网络隔离；
-3. 不修改宿主级 `hosts`、系统 CA、默认路由、iptables、全局代理或生产 compose；
-4. 采集进程设置资源限制，避免争抢生产 CPU、内存、磁盘和连接；
-5. 开始前后记录生产容器 digest、健康、端口、网络、挂载、依赖和错误日志摘要；
-6. after 与 before 不一致时，本 attempt 失败并先恢复环境。
+1. 真实上游步骤只在采集容器 `capture-cli`（`capture-network` 固定 IPv4 `172.30.0.10`）执行，经指定出口 DMIT
+   `69.63.195.102` 出网；采集前后都通过出口守护的实时准入，旧环境收据不能替代当前准入；
+2. 合成步骤只在断网容器 `capture-cli-synthetic` 执行：`network_mode: none`，与 `capture-cli` 同镜像、挂载逐项相同
+   （去掉 Docker 控制面），hosts 等逐容器文件不共用来源；它不在出口准入里；
+3. 目标版本按 VC-0 冻结的 `binary_sha256` 装两处：宿主 `/opt/claude-<v>/claude`（实体目录）与数据根
+   `runtime/claude-<v>`（只读挂载到两个采集容器的 `/opt/claude-<v>`），宿主与两个容器内的摘要相同；官方二进制按
+   版本与 SHA 独立保存，不原位覆盖；
+4. 受管运行时 `runtime/claude-tooling`（node 与 TypeScript）只读挂载到 `/opt/claude-tooling`，摘要等于 Claude 身份
+   策略 `runtime_bindings` 的登记值；
+5. 凭据在数据根 `state/claude`（容器内 `/root/.claude`）；正式取证要求两个采集容器的凭据、CA 与全局状态文件齐全，
+   且两边全局状态内容相同；
+6. 不修改宿主 `hosts`、系统 CA、默认路由、防火墙、全局代理或生产 compose；hosts override 与 leaf cert 由中继在
+   容器内完成并逐步恢复；
+7. 每个 Job 前后对两个采集容器各采一次探针，任一快照漂移或残留取证进程即判环境污染：不补跑、停止后续 Job；
+8. 活动数据目录 `0700`、文件 `0600`；证据根在数据根 `runs/` 下（容器坐标 `/capture/runs`）。
 
-必须修改宿主全局状态或重启生产服务的场景不得在 Vircs 执行，应改造为隔离方案或登记为阻断。
-Vircs 上官方 Claude Code 生成的材料才可作为当前 Linux x86_64 官方 wire 主证据；DMIT 上 Sub2API
-生成的是实现与候选验收证据，不能反向证明官方规则；Darwin arm64 发行物只作静态交叉复核；故障注入
-样本必须与自然失败分开。
+必须修改宿主全局状态的场景不得执行，应改造为隔离方案或登记为阻断。ARM64 上官方 Claude Code 生成的材料才是
+当前 Linux arm64 官方 wire 主证据；候选容器里 Sub2API 生成的是实现与候选验收证据，不能反向证明官方规则；
+2.1.226 的 x86_64 官方证据只读作历史 baseline；故障注入样本必须与自然失败分开。
 
-## 6.4 DMIT 候选验收纪律
+## 6.4 ARM64 候选容器纪律
 
-DMIT 不是生产权威。每次候选验收必须绑定固定的 linux/amd64 OCI digest、image ID、源码树摘要、
-画像摘要、构建 ID、AcceptanceFact 和可运行回退镜像；只替换应用容器，不重建依赖服务。
+候选在 ARM64 的 sub2apiplus compose 项目里运行：应用容器 `sub2apiplus`、依赖容器 `sub2apiplus-keeper`、
+`sub2apiplus-postgres`、`sub2apiplus-redis` 与采集容器 `capture-cli` 在 sub2apiplus 网络里使用固定 IP；`sub2apiplus`
+另在 `proxy-network` 使用固定 IPv4 `172.25.0.3`，两个受保护容器的网络合同登记在环境收据里。候选容器不是生产
+权威。每次候选验收必须绑定固定的 linux/arm64 OCI digest、image ID、源码树摘要、画像摘要、构建 ID、
+AcceptanceFact 和可运行回退镜像；只替换应用容器，不重建依赖服务，也不改变五个容器的固定 IP。
 
-当前候选运行入口是 `/root/Docker/sub2apiplus/app/docker-compose.yml` 与
-`/root/Docker/sub2apiplus/app/docker-compose.claude-persona-catalog.yml` 的组合；后者固定 active 镜像
-digest、Catalog Release 摘要和验收 fact 路径。临时 override、容器当前状态或裸标签都不能替代
-这两个 Compose 文件及其候选验收收据。
-
-受 1 核／1.9G／20G 限制，不在 DMIT 执行 Go／Node 编译；开跑前检查磁盘下限，避免 pcap、R 字节和
-镜像层填满系统盘。故障注入和破坏性验证必须与 DMIT 的数据库、网络和账号隔离；不得把候选验收机
-当作可破坏测试机。证据完成 inventory、秘密扫描和摘要后
-同步到受控私有归档；同步和独立复算完成前不得删除唯一副本。
-
-另行隔离环境允许破坏不等于可以省略 before／after、秘密扫描、恢复记录或固定 digest。
+验收过程中不现场编译；开跑前按驱动守卫检查根盘水位，避免 pcap、R 字节和镜像层填满系统盘。故障注入和破坏性
+验证必须与候选环境的数据库、网络和账号隔离。证据完成 inventory、秘密扫描和摘要后同步到受控私有归档；同步和
+独立复算完成前不得删除唯一副本。另行隔离环境允许破坏不等于可以省略 before／after、秘密扫描、恢复记录或固定
+digest。
 
 ## 6.5 构建与架构边界
 
-当前正式构建职责为 Mac 编译、ARM64 封装；无论后续是否更换节点，都必须满足：
+三个平台分别冻结、分别验证：
 
-1. 构建源、依赖锁、工具版本和参数可复算；
-2. 目标产物明确为 DMIT 所需的 `linux/amd64`；
-3. 多架构 manifest 的平台 digest 可分别核对；
-4. candidate 与 production 镜像身份分开；
-5. 构建机只证明制品同源性，不产生官方客户端规则事实。
+| 平台 | 要求 |
+|---|---|
+| 官方客户端 | linux/arm64：npm 平台包与原生分发同一精确版本、两份二进制逐字节相同、aarch64 glibc ELF；x86_64 证据只读作历史 baseline，不能证明 arm64 目标 |
+| 候选运行 | linux/arm64 候选容器：ARM64 从同一干净提交建树、构建前端与 arm64 后端、`docker build --platform linux/arm64`；核对镜像 platform、运行容器架构和实际 image ID |
+| 生产交付 | 按各生产机架构单独验证对应制品；不能用候选镜像的 arm64 身份推断生产镜像 |
 
-ARM64 只封装 Mac 已交叉编译的 amd64 后端，不在该机重新编译；必须核对镜像 platform、DMIT 运行
-容器架构和实际 image ID，不能用 ARM64 宿主架构推断镜像架构。
+无论哪个平台，都必须满足：构建源、依赖锁、工具版本和参数可复算；多架构 manifest 的平台 digest 可分别核对；
+candidate 与 production 镜像身份分开；构建机只证明制品同源性，不产生官方客户端规则事实；不能用宿主架构推断
+镜像架构。
 
 ## 6.6 Campaign 环境冻结
 
@@ -2404,9 +2422,11 @@ ARM64 只封装 Mac 已交叉编译的 amd64 后端，不在该机重新编译�
 | 类别 | 必须记录 |
 |---|---|
 | 主机 | 角色、标识、OS、内核、架构、时区和资源限制 |
-| 客户端 | 包来源、版本、二进制 SHA、entrypoint、隐私模式和用户目录 |
+| 客户端 | 包来源（npm 平台包与原生分发）、版本、二进制 SHA、entrypoint、隐私模式和用户目录 |
+| 运行时 | node 与 TypeScript 的路径、版本与摘要（Claude 身份策略 `runtime_bindings`） |
 | Sub2API | Git／tree、构建 ID、部署版本、镜像 digest、画像 ID／digest |
 | 网络 | 代理、CA、DNS、hosts、端口、namespace 及 Surge／HomeProxy 影响边界 |
+| 出口 | 出口策略 revision 与摘要、守护状态的 boot ID 与内核租期（环境收据记录） |
 | 工具 | 采集、relay、MITM addon、脱敏、分析、finalizer 和环境探针摘要 |
 | 服务 | 生产／测试标识、数据库、缓存、依赖、挂载和启动配置摘要 |
 | 安全 | 目录权限、秘密扫描、等长脱敏、inventory 和清理结果 |
@@ -2417,7 +2437,7 @@ candidate 或 Campaign。
 
 ## 6.7 证据归档与清理
 
-DMIT 候选交付和 Vircs 生产边界见 §4.6；本节只规定私有证据的保存与清理。
+候选交付与生产边界见 §4.6；本节只规定私有证据的保存与清理。
 
 | 私有材料 | 处理 |
 |---|---|
