@@ -130,7 +130,8 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                           "B2-11 第二部分 Job 演练按认证的客户端重放（Codex 传 codex：合法收据的结果与报错不变，另一客户端的收据被拒），"
                           "atomic-double 门槛单列；B5a-09 续 atomic-double 按认证的客户端重放（本机与容器内；Codex 的命令行、合同名与"
                           "工具身份核对逐字不变，Claude 容器内重放追加 --client claude），去掉 Claude 的失败关闭门槛，Claude 不接受 Codex "
-                          "专属的分批演练",
+                          "专属的分批演练；B5b-04 为 Claude 签发与核验补八条发布必需链的完整覆盖门槛，"
+                          "Codex 未登记额外门槛，v1 字段、输出及历史校验行为不变",
     "codex_upgrade_vc_receipt.py": "B5a-08 P0 v2 重验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数，验证器只从仓库 tools/ci 或"
                                    "已安装驱动加载）；逐条核验与门禁重验多一个缺省为全集通过的 inheriting_mode 参数；读侧闭包内的符号原位不动"
                                    "（Codex 两种模式的结果与报错逐字不变，见 test_unit_inherit_codex_parity）",

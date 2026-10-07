@@ -50,7 +50,8 @@ def claude_registered():
     """临时把 Claude 的登记换成一条替身链（与 B5a-05 登记的真实四条链无关，单元与记录都用替身）。"""
 
     with mock.patch.object(pre_a3, "CLAUDE_SCENARIOS", CLAUDE_FAKE), \
-            mock.patch.object(pre_a3, "CLAUDE_REAL_CHAIN_IDS", (CLAUDE_FAKE_NAME,)):
+            mock.patch.object(pre_a3, "CLAUDE_REAL_CHAIN_IDS", (CLAUDE_FAKE_NAME,)), \
+            mock.patch.dict(certify_release.RELEASE_REQUIRED_CHAINS, {"claude": (CLAUDE_FAKE_NAME,)}):
         yield
 
 

@@ -14,7 +14,8 @@ Job 演练与 atomic-double 都按客户端的合同重放（收据必须属于�
 两项探针摘要（Claude 的失败生命周期探针由 B2-11 第二部分补上，见 ``claude_upgrade_failure_lifecycle``），atomic-double 收据按
 客户端的合同名与工具身份核对（Claude 签 ``official-client-atomic-vc0-vc1-rehearsal/v1``，B5a-09 续，画像见
 ``claude_upgrade_atomic_rehearsal``），容器内重放给 Claude 追加 ``--client claude``。pre-A3 场景集合为空时 Claude 签发更早被
-pre-A3 拒绝。对编排器的引用（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
+pre-A3 拒绝。B5b-04 另设 Claude 发布必需链集合：基座 pre-A3 可以先认证已实现的链，发布签发与验收则必须包含完整回放和
+后段故障链，不能因某条链尚未登记而自动缩小 Formal 准入范围。对编排器的引用（指纹、文件摘要）经客户端适配器取。
 """
 
 from __future__ import annotations
@@ -43,6 +44,20 @@ SCHEMA_VERSION_V2 = "tool-release-certification/v2"
 CLIENT_SCHEMAS: Mapping[str, str] = {"codex": SCHEMA_VERSION, "claude": SCHEMA_VERSION_V2}
 SCHEMAS_WITH_CLIENT = frozenset({SCHEMA_VERSION_V2})
 DEFAULT_CLIENT = "codex"
+# 与 pre-A3 当前可执行登记分开：尚未实现的必需链也必须阻止发布，不能悄悄从准入全集消失。
+# Codex 继续沿用它已有的登记集合核验，不改变历史 v1 认证的形状及行为。
+RELEASE_REQUIRED_CHAINS: Mapping[str, tuple[str, ...]] = {
+    "claude": (
+        "vc-chain.claude-reconcile",
+        "vc-chain.claude-deadline",
+        "vc-chain.claude-root-cause",
+        "vc-chain.claude-tool-evolution",
+        "vc-chain.claude-vc1-capture",
+        "vc-chain.claude-full-validation-only",
+        "vc-chain.claude-recovery-chain",
+        "vc-chain.claude-late-stage-faults",
+    ),
+}
 # 64 位小写十六进制摘要；与编排器 SHA256_RE 同一个模式（两客户端相同，测试核对），不为一个正则导入编排器。
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
@@ -61,6 +76,26 @@ def require_client(client: Any) -> str:
 
 def _adapter(client: str) -> upgrade_client_adapter.ClientAdapter:
     return upgrade_client_adapter.adapter_for(require_client(client))
+
+
+def require_release_chain_coverage(coverage: Any, *, client: str) -> None:
+    """核对发布必需链，拒绝缺报、重复、跳过与失败；调用方仍须重放绑定的 pre-A3 收据。"""
+
+    required = RELEASE_REQUIRED_CHAINS.get(require_client(client), ())
+    if not required:
+        return
+    if not isinstance(coverage, list) or any(
+        not isinstance(row, Mapping) or not isinstance(row.get("id"), str)
+        or not isinstance(row.get("test"), str) or not row["test"] or row.get("status") != "passed"
+        for row in coverage
+    ):
+        raise ReleaseCertificationError(f"{client} 发布必需链覆盖缺失、非法或未通过")
+    ids = [row["id"] for row in coverage]
+    if len(ids) != len(set(ids)):
+        raise ReleaseCertificationError(f"{client} 发布必需链覆盖含重复结果")
+    missing = sorted(set(required) - set(ids))
+    if missing:
+        raise ReleaseCertificationError(f"{client} 发布必需链未认证：{', '.join(missing)}")
 
 
 def certification_client(payload: Mapping[str, Any]) -> str:
@@ -357,6 +392,7 @@ def build_certification(
         coverage = pre_a3.real_chain_coverage(pre_a3_payload, client=client)
     except (policy_certification.PolicyCertificationError, pre_a3.CertificationError) as error:
         raise ReleaseCertificationError(str(error)) from error
+    require_release_chain_coverage(coverage, client=client)
     pre_a3_deployment = pre_a3_payload.get("deployment_receipt") or {}
     deployment_binding = _bind_file(deployment_receipt, "ARM64 部署收据", client)
     activation_binding: dict[str, Any] | None = None
@@ -465,6 +501,7 @@ def verify(
             raise ReleaseCertificationError(str(error)) from error
         if payload["real_chain_coverage"] != expected_coverage:
             raise ReleaseCertificationError("发布认证真实链覆盖与已绑定的 pre-A3 结果不一致")
+    require_release_chain_coverage(payload.get("real_chain_coverage"), client=client)
     for label, key in (("Job rehearsal 收据", "job_rehearsal"), ("atomic-double 收据", "atomic_double_rehearsal")):
         section = payload.get(key)
         if not isinstance(section, Mapping):
