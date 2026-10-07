@@ -69,7 +69,7 @@
 | 成员 | 种类 | Codex 取值 | Claude 取值 |
 |---|---|---|---|
 | `orchestrator_basenames` | 值 | `codex_upgrade.py`、`codex-upgrade` | `claude_upgrade.py`、`claude-upgrade` |
-| `forbidden_subcommands` | 值 | 15 个控制面与引导子命令 | 同 15 个，加 `freeze`、`import-predecessor-evidence`、`environment-cleanup` |
+| `forbidden_subcommands` | 值 | 控制面与引导子命令闭集 | 同一公共闭集，加 Claude 官方冻结、前序导入、环境清理和交付阶段失效等控制入口；以适配器声明为准 |
 | `evaluation_builder_basename` | 值 | 监督器 `EVALUATION_ACTION_BUILDER_BASENAME` | `claude_build_rule_assertion_results.py` |
 | `target_version_field` | 值 | `codex_version` | `claude_version` |
 | `root_cause_codes_path` | 值 | `root_cause_codes.json` | `claude_root_cause_codes.json` |
@@ -81,7 +81,9 @@
 | `provenance` | 模块 | `codex_upgrade_live_request_provenance` | `claude_upgrade_live_request_provenance` |
 | `identity_policy` | 模块 | `codex_upgrade_tool_identity_policy` | `claude_tool_identity_policy` |
 | `reject_volatile_dimensions` | 函数 | 无附加检查 | 拒绝含 Claude Campaign ID 的维度值 |
-| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，候选恢复段调用即报待实现 |
+| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，B4-05b 候选恢复段仍在实现／待验收 |
+| `candidate_recovery_identity_flags` | 值 | Codex 原候选身份旗标闭集 | 仅 `--candidate-id`，候选身份从 VC-4 构建收据读取 |
+| `candidate_post_run_extra_action` | 函数 | 无额外动作（恒为假） | 供监督器 `candidate_post_run_recovery_action` 识别 Claude VC-6 run／finalize 的受管动作闭集 |
 | `requires_project_ledger` | 函数 | 0.154 起的 Formal Campaign 在项目总账内 | Formal Campaign 一律在项目总账内 |
 | `attempt_environment_restored` | 函数 | after 探针加恢复收据 | after 探针在位，两个采集容器前后探针零漂移 |
 | `deploy_receipt_identity` | 函数 | 部署收据顶层 | 部署收据的 `identity` 子键 |
@@ -169,7 +171,9 @@ Claude 的 Store 合同（Codex 不涉及）：
 | Store Campaign | `official-client-control-campaign/v1` | `…/v2`：加客户端、用途、账号组织、模型目录、执行权限、阶段依赖与预算、绝对截止、监督参数、项目总账引用与七项工具身份 |
 | Store fact | `official-client-control-fact/v1` | `…/v2`：加 `idempotency_key`、`producer_run`、`formed_under` |
 | Store 工具摘要 | `official-client-control-tool-identity/v1` | `…/v2` |
-| 五类收据（晋升、激活、候选构建、验收门禁、候选交付） | `…/v1` | `…/v2`：加形成期坐标 |
+| 收据形成期坐标（晋升、激活、候选构建、验收门禁） | `…/v1` | `…/v2`：加形成期坐标 |
+| PAIR／Acceptance | 严格 v2 只读重放 | 严格 v3：加评估基线与有效来源绑定 |
+| 候选交付收据 | v1／v2 只读重放 | v3：有效四阶段链及失败事实、阶段失效、恢复段预约引用 |
 | 新对象与查询 | — | `tool_evolution_registration`、`predecessor_import`、候选作废对象 `candidate_invalidation`（两步批准：`candidate-invalidate --preview`／`--approve-sha256`）；新事实 `candidate_revision_recorded`；新收据 `predecessor_import`（`official-client-predecessor-import-receipt/v1`）；`fact-lookup` 结果 `official-client-control-fact-lookup/v1` |
 
 ## 4 共享控制流程与两个编排器
@@ -205,16 +209,17 @@ def compile_and_run_vc_batch(arguments):
 |---|---|
 | 迁入薄壳 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
 | 照搬 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取、证据根取代归档与冲突隔离读取、阶段路径等），逐字取 Codex 实现，由 `tests/test_orchestrator_surface_contract.py` 的照搬清单锁定逐字一致；先照搬后因 Claude 语义分叉的成员另行登记 |
-| 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划读取与建立、取证 attempt、封存、VC-1 恢复、工具演进、阶段结果与批次、分类、画像、候选 revision 与候选构建等 |
-| 待实现 | 调用即报 `ClaudeOrchestratorPending` 并写明原因，不伪造行为；集中在候选采集与候选封存、评估失败恢复与候选恢复段、VC-5 评估用的分类与画像视图 |
+| 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划、官方／候选 attempt、封存与恢复、工具演进、阶段批次、分类、画像、候选 revision／构建、compare／accept、评估基线与交付等 |
+| 未完成或待验收 | 未接入成员报 `ClaudeOrchestratorPending` 或明确的配置错误；B4-05b 封存后恢复段仍在实现／验收中，Mac 真实客户端驱动与 ARM64 交付执行器仍有缺口，完整发布认证待完成 |
 
-另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。命令行子命令与 Codex 同名：13 个共享流程
-子命令照搬 Codex 的参数定义并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
+另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。共享流程子命令沿用 Codex 的参数定义，
+并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
 `revision-open`、`invalidate-candidate` 另写 Store 侧登记（第 12 节）。`tool-evolution` 参数照搬、执行是 Claude 自己的
 演进链（第 11.4 节）。Claude 专属子命令（`plan`、`freeze`、`import-predecessor-evidence`、`capture-official`、
 `analyze-target`、`classify`、`prepare-profile`、`stage-profile`、`plan-candidate-gates`、`record-candidate-build`、对账与
-恢复类）各有实现模块；`capture-candidate`、`compare`、`accept`、`account-sealed-candidate`、`deliver-candidate`、
-`delivery-stage-invalidate` 执行即报未实现。两个编排器的行为一致性由 `tests/test_orchestrator_surface_contract.py` 对两个
+恢复类）各有实现模块；`capture-candidate`、`compare`、`accept`、`deliver-candidate`、
+`delivery-stage-invalidate` 已有控制面实现，详见第 12 节。`account-sealed-candidate` 及封存后恢复段全链随 B4-05b
+收口，不能因参数已定义就视为已验收。两个编排器的行为一致性由 `tests/test_orchestrator_surface_contract.py` 对两个
 适配器各跑同一组用例保证。
 
 ## 5 两层事务、崩溃分类与锁顺序
@@ -456,9 +461,11 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
 - 场景表与真实链按客户端登记（`SCENARIOS_BY_CLIENT`、`REAL_CHAIN_IDS_BY_CLIENT`，纯字面量，部署脚本只做静态求值）；
   一份 pre-A3 场景清单只属一个客户端。场景单元 ID：Codex 为 `pre-a3:<场景>`，Claude 为 `pre-a3:claude:<场景>`，同一
   记录库里互不承接。Claude 场景集合为空时规划、签发与核验一律拒绝；Claude 只从单元执行记录签发 v3。
-- Claude 登记四条真实链（`tests/real_chains/test_claude_upgrade_control_chain.py`）：`vc-chain.claude-reconcile`、
-  `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`。四条链零请求，在两个受管根
-  的副本树上运行；Linux root 上必须进入 `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），
+- Claude 核心四条真实链在 `tests/real_chains/test_claude_upgrade_control_chain.py`：`vc-chain.claude-reconcile`、
+  `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`；故障恢复链
+  `vc-chain.claude-recovery-chain` 在 `test_claude_upgrade_fault_chains.py`。最终执行闭集取注册表；B5b-02 完整录制回放、
+  B5b-03 后段故障链与 B5b-04 发布认证仍待收口。这些链零请求，在两个受管根的副本树上运行；Linux root 上必须进入
+  `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），
   不满足即失败。Claude 场景单元另声明第二受管根：只改 `tools/official_client_control` 时 Claude 场景单元失效，Codex
   场景单元不受影响。
 - 发布认证绑定当前部署收据的五摘要、pre-A3 认证（跨部署沿用时另绑复用收据）、Job 演练与 atomic-double 收据；Job 演练
@@ -623,8 +630,10 @@ HOME 里启动 TUI，替身收到正文含口令的首个 `/v1/messages` 才算�
 - 无预约：`reconcile-supervisor-run` 入账判定，按提示以 N+1 批次重派。
 - 残留取证进程：对账后对两个采集容器只读探针留证；`environment-cleanup preview／apply` 在明确批准下先 TERM 后 KILL，
   前后探针并写清理收据 `control/environment/cleanup/cleanup-NN.json`；resume 预约之前再查一次，有残留即零写入拒绝。
-- `harden-evidence-permissions` 与 `wire-transition-intent`／`wire-transition-final` 参数完整、执行即拒绝：Claude 的 run 在
-  每个 Job 终态与 run 末各收口一次，wire 层变化一律经工具演进登记，不建 wire transition 链。
+- `harden-evidence-permissions` 只提供带 `--candidate-id` 的 `rebind-boundary`：已封存候选或半封存候选的内容、路径、类型、
+  权限与属主均未变时，承接 mtime／ctime／inode 元数据变化；其它历史补收口动作拒绝。Claude 从首个受管版本起在每个
+  Job 终态与 run 末各收口一次，不回填 Codex 旧式权限收口。`wire-transition-intent`／`wire-transition-final` 仍拒绝，wire
+  层变化经 `tool-evolution` 登记。
 
 工具演进链在 `claude_upgrade_evolution`：合同 `tool-evolution/v1`、文件 `control/tool-evolution/evolution-NN.json`、自摘要与
 衔接规则与共享实现相同，只是策略演进的变化路径按 Claude 策略文件的受管条目键核对、`to_identity` 必须属于 Claude（共享链
@@ -667,6 +676,55 @@ Store Campaign 未建立时零写入拒绝。
   VC-3 阶段结果确定性推出，不另存文件。
 - **重放**：事实与收据的形成期坐标里有 `candidate_revision`，旧 revision 下的结果按形成时重放（第 6 节），交付判定只认
   当前 revision。
+
+### 12.1 候选采集、来源复用与封存
+
+Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recovery`、`claude_upgrade_candidate_reuse` 与
+`claude_upgrade_candidate_seal`；操作入口见 [Claude 指南 §4.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-5)。
+
+- `capture-candidate run` 从 VC-4 收据取候选身份，在首个修改前保存网关原态，每个 Job 和整个 attempt 都写恢复／
+  权限收口。`resume --candidate-id` 复用同一闭集计算，保留最初产出者，不以候选目录或恢复报告存在代替摘要核验。
+- 对账、批准恢复预览、授权、受监督 resume 四步按共享合同执行；`candidate_recovery_identity_flags` 只取候选 ID，
+  `vc5-claude-recover.sh` 生成零请求预览与真实补跑两个批次，成功后返回 seal／accept 链。
+- 跨 Campaign 来源通过 `--candidate-reuse-source-*` 三坐标和独立批准摘要绑定，先核冻结总计划与不可变闭环。已封存
+  来源带 `producer.predecessor_sealed_cover`，按源封存清单与元数据重绑链复核，覆盖原闭环全部根及当前根；无 cover 的
+  来源沿原 Job 权限收口校验。producer 坐标必须一致，逐跳 Job 收据摘要追溯最初生产者，计费请求沿同一身份去重。
+- seal 冻结执行计划、ValidationAttempt、场景 `prepare／capture／seal／approve`、CandidateEvidencePackage、候选
+  评估 manifest 和边界。`--revalidate` 为外部门禁重试新建 `v<N>`，只读复用首轮原始证据，零请求、不重新深扫。
+- Mac Desktop／VS Code 收据与两项边界检查按 attempt 绑定；CLI 正例来自候选 PAIR。驱动缺材料／批准即写
+  `vc5-pause.json`，真实 Mac 驱动／收据闭合尚未完成，不能以合成材料登记全链通过。
+
+### 12.2 评估基线、compare 与 accept
+
+当前实现为 `claude_upgrade_baseline`、`claude_upgrade_compare`、`claude_upgrade_acceptance`，评估器为
+`claude_rule_assertion`、`claude_build_rule_assertion_results` 与 `claude_build_runtime_audit`。
+
+- `compare` 验证官方 EvidencePackage v3 与候选封存输入，首次冻结批准断言画像，写官方评估 manifest、builder 配置和
+  比较收据；网络 surface 只作诊断，逐规则覆盖不足零写入拒绝。候选评估 manifest 只读消费 seal 产物。
+- builder 写逐规则 checkpoint、依赖投影、结果与 `evaluation-run.json`。accept 核候选激活事实、客户端／边界收据和
+  共享外部门禁收据，推导 PAIR、写严格 v3 PAIR／Acceptance，再 `validation-finalize` 与 VC-5 checkpoint。
+- 当前基线由时间账本、`b<K>/COMMIT` 和 Store `evaluation_baseline_recorded` 联合判定；形成期重放保留旧 b0，当前
+  判定只取新基线有效来源。`evaluation-recover` 的 preview／apply、reevaluate、approval-revision 接共享控制流程，
+  后两者无批准摘要时只预览；不存在独立的 approval-revision 子命令。
+- 四类裁定是 evaluator-defect、transient-environment、candidate-source、approval-inputs；已有的离线／候选
+  分流不能外推为 transient 补采全链已经通过。B4-05b 的 `ar<k>`、增量封存及封存后请求入账仍在实现／待验收。
+- Claude 不从缺失的历史 b0 `evaluation-run.json` 猜造新读侧事实；同基线未完成批次按对账结论逐字重派。
+
+### 12.3 交付四阶段、恢复段与终态
+
+`claude_upgrade_delivery` 实现 `deliver-candidate run／finalize`、`delivery-stage-invalidate preview／apply`，
+Store 提供 `delivery-chain`、恢复段预约、阶段事实和 v3 交付收据。操作合同见
+[Claude 指南 §4.6](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-6)。
+
+- run 与批准版 finalize 是两份父批次动作；无批准 finalize 只看审核内容，阶段失效在批次之间执行。进入前重放 VC-5
+  checkpoint 并核 accept、构建收据、镜像 digest 同链，写入后再补时间账本。
+- 有效链为 `candidate_active → rollback_verified → candidate_restored → stable_observed`。失败或批准失效分别作为
+  `dr<k>` 的锚；重跑阶段之后的旧 pass 全部失效，一段必须覆盖至末阶段。环境身份漂移开新 delivery，finalize 后拒绝
+  新失效，重复 finalize 返回原收据。
+- run 的 `awaiting_finalize=2`／`stage_failed=3` 在父批次映射为合法暂停点；最终 `validation_only` 写 VC-6 checkpoint，
+  `production_replacement` 停 `production_activation_pending`。生产 B4-08 另批，现有终态校验器不能代替真实部署。
+- **真实执行范围**：`ENVIRONMENT_EXECUTORS` 当前为空，ARM64 四阶段真实执行器未完成；控制面夹具通过不证明已经
+  切换现场。完整录制回放、故障链和发布认证状态均见 Claude 指南 §3.6／§4.0.5。
 
 ## 13 Codex 身份守恒
 
