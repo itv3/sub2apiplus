@@ -7,6 +7,12 @@ TLS 腿之间的应用字节。原始凭据在终态前做等长替换，完整�
 宿主镜像、恢复和秘密扫描共同构成 M 绑定。
 
 本工具不会生成画像、Snapshot、Persona 或 production binding。
+
+FW-F 场景目录有三版：``--fw-f-probe``（v3，只绑定 2.1.226）、``--fw-f-v4-probe``（v4）与 ``--fw-f-v5-probe``（v5，
+Claude 升级取证用，与 v4 同构，判定按场景清单冻结的版本事实取）。三者与 ``--scenario`` 互斥。v5 目录模块由
+``--fw-f-v5-catalog`` 指向本工具根 ``capturelib/`` 下的那一份按路径加载，源码里不静态 import：Codex 0.157.0／0.160.0
+场景清单经 ``capturelib/identity.py`` 的执行源清单把本文件及其 import 闭包登记为作业依赖（R16），多一条静态 import
+就要改那些 Codex 清单。v5 的版本事实文件由 ``--fw-f-v5-version-facts`` 与 ``--fw-f-v5-version-facts-sha256`` 钉住。
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib
 import ipaddress
 import json
 import os
@@ -28,7 +35,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, Sequence
 
 if __package__ in {None, ""}:
@@ -113,6 +120,9 @@ DEFAULT_RUNTIME_IMAGE = (
     "sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c"
 )
 FW_F_V3_VERSION = "2.1.226"
+# v5 目录模块的文件名主干：只接受本工具根 capturelib/ 下的这一份（按路径加载，见模块说明）。
+FW_F_V5_CATALOG_STEM = "claude_fw_f_v5"
+TOOL_PACKAGE = __package__ or "tools.official_client_capture"
 
 
 class RelayEvidenceError(RuntimeError):
@@ -149,6 +159,33 @@ def _validate_static_file(path: Path, label: str, *, executable: bool = False) -
         raise ConfigurationError(f"{label} 所有者或写权限不安全。")
     if executable and not os.access(path, os.X_OK):
         raise ConfigurationError(f"{label} 不可执行。")
+
+
+def _load_fw_f_v5_catalog(path: Path | None) -> tuple[ModuleType, dict[str, Any]]:
+    """加载 ``--fw-f-v5-catalog`` 指向的 v5 目录模块：只能是本工具根 ``capturelib/`` 下的那一份可信普通文件。
+
+    返回 ``(模块, 绑定)``；绑定记录实际加载文件的路径与摘要，写进 dry-run 计划与中继清单。
+    """
+
+    expected = Path(__file__).resolve().parent / "capturelib" / f"{FW_F_V5_CATALOG_STEM}.py"
+    if path is None:
+        raise ConfigurationError("--fw-f-v5-probe 必须同时提供 --fw-f-v5-catalog。")
+    candidate = Path(path)
+    if (
+        not candidate.is_absolute()
+        or candidate.is_symlink()
+        or expected.parent.is_symlink()
+        or candidate.resolve(strict=False) != expected.resolve(strict=False)
+    ):
+        raise ConfigurationError("--fw-f-v5-catalog 必须是中继工具根 capturelib/ 下的 v5 目录模块。")
+    _validate_static_file(expected, "FW-F v5 目录模块")
+    try:
+        module = importlib.import_module(".".join((TOOL_PACKAGE, "capturelib", FW_F_V5_CATALOG_STEM)))
+    except ImportError as error:
+        raise ConfigurationError(f"FW-F v5 目录模块无法加载：{type(error).__name__}") from error
+    if Path(str(getattr(module, "__file__", ""))).resolve() != expected.resolve():
+        raise ConfigurationError("加载到的 FW-F v5 目录模块不是中继工具根下的那一份。")
+    return module, {"path": str(expected), "sha256": file_sha256(expected), "schema_version": module.SCHEMA_CATALOG}
 
 
 def _validate_output_root(path: Path, *, create: bool) -> None:
@@ -1227,19 +1264,31 @@ def _invocation_binding_complete(
     fw_f_probe: str | None,
     fw_f_v4_probe: str | None = None,
     response_plan: str | None,
+    fw_f_v5_probe: str | None = None,
+    fw_f_v5_summary: tuple[str, str] | None = None,
 ) -> bool:
-    """核验旧场景或 FW-F v3/v4 的 argv 与环境事实已绑定到结果。"""
+    """核验旧场景或 FW-F v3/v4/v5 的 argv 与环境事实已绑定到结果。
+
+    v5 与 v4 的结果同形，只是文件名与 schema 不同（``fw_f_v5_summary`` 为 v5 目录模块给出的 ``(文件名, schema)``）。
+    """
 
     if not summary:
         return False
-    if fw_f_v4_probe is not None:
-        path = result_root / "v4-summary.json"
+    complete_probe = fw_f_v4_probe if fw_f_v4_probe is not None else fw_f_v5_probe
+    if complete_probe is not None:
+        if fw_f_v4_probe is not None:
+            filename, schema = "v4-summary.json", "claude-code-fw-f-v4-probe-result/v1"
+        elif fw_f_v5_summary is not None:
+            filename, schema = fw_f_v5_summary
+        else:
+            return False
+        path = result_root / filename
         if not path.is_file() or path.is_symlink():
             return False
-        value = _load_json(path, "FW-F v4 result")
+        value = _load_json(path, "FW-F 完整场景结果")
         if (
-            value.get("schema_version") != "claude-code-fw-f-v4-probe-result/v1"
-            or value.get("probe_id") != fw_f_v4_probe
+            value.get("schema_version") != schema
+            or value.get("probe_id") != complete_probe
             or value.get("response_plan") != response_plan
             or value.get("valid") is not True
         ):
@@ -1334,10 +1383,22 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--run-nonce 格式非法。")
     fw_f_probe_id = getattr(arguments, "fw_f_probe", None)
     fw_f_v4_probe_id = getattr(arguments, "fw_f_v4_probe", None)
+    fw_f_v5_probe_id = getattr(arguments, "fw_f_v5_probe", None)
     scenario = getattr(arguments, "scenario", None)
-    if sum(bool(value) for value in (fw_f_probe_id, fw_f_v4_probe_id, scenario)) > 1:
-        raise ConfigurationError("--scenario、--fw-f-probe 与 --fw-f-v4-probe 互斥。")
-    fw_f_v4_probe = None
+    if sum(bool(value) for value in (fw_f_probe_id, fw_f_v4_probe_id, fw_f_v5_probe_id, scenario)) > 1:
+        raise ConfigurationError("--scenario、--fw-f-probe、--fw-f-v4-probe 与 --fw-f-v5-probe 互斥。")
+    v5_inputs = [
+        getattr(arguments, name, None)
+        for name in ("fw_f_v5_catalog", "fw_f_v5_version_facts", "fw_f_v5_version_facts_sha256")
+    ]
+    if not fw_f_v5_probe_id and any(value is not None for value in v5_inputs):
+        raise ConfigurationError("--fw-f-v5-catalog 与版本事实参数只用于 --fw-f-v5-probe。")
+    # v4 与 v5 的场景完全同构（v5 只改判定），下文用 fw_f_complete_probe 表示两者之一。
+    fw_f_complete_probe = None
+    fw_f_v5_catalog: ModuleType | None = None
+    fw_f_v5_catalog_binding: dict[str, Any] | None = None
+    version_facts: dict[str, Any] | None = None
+    version_facts_binding: dict[str, Any] | None = None
     if fw_f_probe_id:
         if fw_f_probe_id not in FW_F_V3_PROBE_IDS:
             raise ConfigurationError("--fw-f-probe 非法。")
@@ -1369,16 +1430,49 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ConfigurationError("FW-F v4 场景的 --expected-version 必须是精确三段版本号。")
         if arguments.inject_env:
             raise ConfigurationError("FW-F v4 场景禁止额外 --inject-env。")
-        fw_f_v4_probe = get_fw_f_v4_probe(fw_f_v4_probe_id)
-        injected = fw_f_v4_probe.env_dict()
-        response_plan = fw_f_v4_probe.response_plan
-        message_request_expectation = fw_f_v4_probe.message_request_expectation
-        target_host = fw_f_v4_probe.target_host
+        fw_f_complete_probe = get_fw_f_v4_probe(fw_f_v4_probe_id)
+        injected = fw_f_complete_probe.env_dict()
+        response_plan = fw_f_complete_probe.response_plan
+        message_request_expectation = fw_f_complete_probe.message_request_expectation
+        target_host = fw_f_complete_probe.target_host
         capture_mode = "fw-f-v4"
         synthetic_profile = "claude-fw-f-v4" if response_plan else None
         synthetic_success_marker = (
             "FW_F_V3_OK"
-            if response_plan and fw_f_v4_probe.source_v3_probe
+            if response_plan and fw_f_complete_probe.source_v3_probe
+            else "FW_F_V4_OK" if response_plan else None
+        )
+    elif fw_f_v5_probe_id:
+        # v5 是 Claude 升级取证的场景目录：与 v4 同一组 probe 与驱动、接受场景清单冻结的目标版本（二进制核验链与 v4
+        # 相同：执行前 _client_identity 核摘要与自报版本，宿主运行收据核容器与执行源），判定按版本事实取。
+        if not VERSION_RE.fullmatch(arguments.expected_version):
+            raise ConfigurationError("FW-F v5 场景的 --expected-version 必须是精确三段版本号。")
+        if arguments.inject_env:
+            raise ConfigurationError("FW-F v5 场景禁止额外 --inject-env。")
+        fw_f_v5_catalog, fw_f_v5_catalog_binding = _load_fw_f_v5_catalog(getattr(arguments, "fw_f_v5_catalog", None))
+        if fw_f_v5_probe_id not in fw_f_v5_catalog.PROBE_IDS:
+            raise ConfigurationError("--fw-f-v5-probe 非法。")
+        if arguments.probe_id != fw_f_v5_probe_id:
+            raise ConfigurationError("FW-F v5 的 --probe-id 必须等于 --fw-f-v5-probe。")
+        facts_path = getattr(arguments, "fw_f_v5_version_facts", None)
+        facts_sha256 = getattr(arguments, "fw_f_v5_version_facts_sha256", None)
+        if facts_path is None or facts_sha256 is None:
+            raise ConfigurationError("--fw-f-v5-probe 必须提供 --fw-f-v5-version-facts 与 --fw-f-v5-version-facts-sha256。")
+        version_facts, version_facts_binding = fw_f_v5_catalog.load_version_facts(
+            Path(facts_path), str(facts_sha256), expected_version=arguments.expected_version
+        )
+        _validate_static_file(Path(facts_path), "FW-F v5 版本事实文件")
+        fw_f_complete_probe = fw_f_v5_catalog.get_probe(fw_f_v5_probe_id)
+        injected = fw_f_complete_probe.env_dict()
+        response_plan = fw_f_complete_probe.response_plan
+        message_request_expectation = fw_f_complete_probe.message_request_expectation
+        target_host = fw_f_complete_probe.target_host
+        capture_mode = "fw-f-v5"
+        # v5 的合成响应计划与 v4 逐字相同，字节中继沿用它的 v4 合成画像（upstream_byte_relay 是共用 wire 文件，不改）。
+        synthetic_profile = "claude-fw-f-v4" if response_plan else None
+        synthetic_success_marker = (
+            "FW_F_V3_OK"
+            if response_plan and fw_f_complete_probe.source_v3_probe
             else "FW_F_V4_OK" if response_plan else None
         )
     else:
@@ -1397,23 +1491,23 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
     if arguments.port != 443:
         raise ConfigurationError("Claude 官方域名 R 取证只允许隔离容器内端口 443。")
     v4_source_v3_probe = (
-        get_fw_f_probe(str(fw_f_v4_probe.source_v3_probe))
-        if fw_f_v4_probe is not None and fw_f_v4_probe.source_v3_probe
+        get_fw_f_probe(str(fw_f_complete_probe.source_v3_probe))
+        if fw_f_complete_probe is not None and fw_f_complete_probe.source_v3_probe
         else None
     )
     requires_tui_state = bool(
         (fw_f_probe_id and fw_f_probe.driver == "tui")
         or (
-            fw_f_v4_probe is not None
+            fw_f_complete_probe is not None
             and (
-                fw_f_v4_probe.driver == "tui"
-                or fw_f_v4_probe.requires_account_state
+                fw_f_complete_probe.driver == "tui"
+                or fw_f_complete_probe.requires_account_state
                 or (v4_source_v3_probe and v4_source_v3_probe.driver == "tui")
             )
         )
     )
     requires_refresh_state = bool(
-        fw_f_v4_probe is not None and fw_f_v4_probe.driver == "oauth-refresh"
+        fw_f_complete_probe is not None and fw_f_complete_probe.driver == "oauth-refresh"
     )
     upstream_value = getattr(arguments, "upstream_ip", None)
     if response_plan:
@@ -1437,6 +1531,9 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "scenario": scenario,
             "fw_f_probe": fw_f_probe_id,
             "fw_f_v4_probe": fw_f_v4_probe_id,
+            "fw_f_v5_probe": fw_f_v5_probe_id,
+            "fw_f_v5_catalog": fw_f_v5_catalog_binding,
+            "fw_f_v5_version_facts": version_facts_binding,
             "response_plan": response_plan,
             "synthetic_success_marker": synthetic_success_marker,
             "message_request_expectation": message_request_expectation,
@@ -1489,7 +1586,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "archived_in_evidence": False,
         "removed": not requires_refresh_state,
     }
-    pcap_required = bool(fw_f_v4_probe is not None and fw_f_v4_probe.require_pcap)
+    pcap_required = bool(fw_f_complete_probe is not None and fw_f_complete_probe.require_pcap)
     pcap_receipt: dict[str, Any] = {
         "required": pcap_required,
         "stopped": not pcap_required,
@@ -1529,6 +1626,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "scenario": scenario,
         "fw_f_probe": fw_f_probe_id,
         "fw_f_v4_probe": fw_f_v4_probe_id,
+        "fw_f_v5_probe": fw_f_v5_probe_id,
+        "fw_f_v5_catalog": fw_f_v5_catalog_binding,
+        "fw_f_v5_version_facts": (
+            None if version_facts_binding is None else {**version_facts_binding, "facts": version_facts}
+        ),
         "response_plan": response_plan,
         "synthetic_success_marker": synthetic_success_marker,
         "message_request_expectation": message_request_expectation,
@@ -1657,6 +1759,17 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                         def execute_selected_probe(
                             selected_environment: dict[str, str],
                         ) -> dict[str, Any]:
+                            if fw_f_v5_catalog is not None and fw_f_v5_probe_id:
+                                return fw_f_v5_catalog.run_claude_fw_f_v5_probe(
+                                    claude_bin=str(arguments.claude_bin),
+                                    model=arguments.model,
+                                    probe_id=fw_f_v5_probe_id,
+                                    environment=selected_environment,
+                                    output_dir=result_root,
+                                    timeout=arguments.timeout,
+                                    known_secrets=secrets,
+                                    version_facts=version_facts or {},
+                                )
                             if fw_f_v4_probe_id:
                                 return run_claude_fw_f_complete_probe(
                                     claude_bin=str(arguments.claude_bin),
@@ -1739,7 +1852,25 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     message_request_expectation=message_request_expectation,
                     target_host=target_host,
                 )
-                if fw_f_v4_probe_id:
+                if fw_f_v5_catalog is not None and fw_f_v5_probe_id:
+                    if scenario_summary is None:
+                        raise RelayEvidenceError("FW-F v5 缺少场景结果。")
+                    dimension_evidence = fw_f_v5_catalog.validate_v5_probe_evidence(
+                        probe_id=fw_f_v5_probe_id,
+                        relay_root=relay_root,
+                        scenario_summary=scenario_summary,
+                        relay_integrity=relay_integrity,
+                        pcap_receipt=pcap_receipt,
+                        version_facts=version_facts or {},
+                    )
+                    secure_write_json(
+                        run_root / "dimension-evidence.json", dimension_evidence
+                    )
+                    if dimension_evidence.get("result") != "passed":
+                        raise RelayEvidenceError(
+                            "Claude v5 实际 wire／工具／状态维度断言失败。"
+                        )
+                elif fw_f_v4_probe_id:
                     if scenario_summary is None:
                         raise RelayEvidenceError("FW-F v4 缺少场景结果。")
                     dimension_evidence = validate_complete_probe_evidence(
@@ -1781,6 +1912,12 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             result_root,
             fw_f_probe=fw_f_probe_id,
             fw_f_v4_probe=fw_f_v4_probe_id,
+            fw_f_v5_probe=fw_f_v5_probe_id,
+            fw_f_v5_summary=(
+                None
+                if fw_f_v5_catalog is None
+                else (fw_f_v5_catalog.SUMMARY_FILENAME, fw_f_v5_catalog.SCHEMA_RESULT)
+            ),
             response_plan=response_plan,
         ),
         "production_forwarding_boundary": live_requests
@@ -1793,7 +1930,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         ),
         "relay_integrity": bool(relay_integrity and relay_integrity.get("result") == "passed"),
         "actual_dimension_evidence": bool(
-            fw_f_v4_probe_id is None
+            (fw_f_v4_probe_id is None and fw_f_v5_probe_id is None)
             or (
                 dimension_evidence
                 and dimension_evidence.get("result") == "passed"
@@ -2042,6 +2179,11 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_mode.add_argument("--scenario", choices=SCENARIOS)
     probe_mode.add_argument("--fw-f-probe", choices=FW_F_V3_PROBE_IDS)
     probe_mode.add_argument("--fw-f-v4-probe", choices=FW_F_V4_PROBE_IDS)
+    # v5 的 probe 集合由加载后的目录模块核对（中继不静态 import v5，见模块说明）。
+    probe_mode.add_argument("--fw-f-v5-probe")
+    capture.add_argument("--fw-f-v5-catalog", type=Path, default=None, help="v5 目录模块：中继工具根 capturelib/ 下的那一份")
+    capture.add_argument("--fw-f-v5-version-facts", type=Path, default=None, help="场景清单冻结的 v5 版本事实文件")
+    capture.add_argument("--fw-f-v5-version-facts-sha256", default=None, help="版本事实文件的冻结摘要")
     capture.add_argument("--model", default="claude-sonnet-5")
     capture.add_argument("--inject-env", action="append", metavar="KEY=VALUE")
     capture.add_argument(

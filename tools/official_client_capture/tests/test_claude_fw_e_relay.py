@@ -1227,5 +1227,133 @@ class ClaudeFWEVersionBindingTests(unittest.TestCase):
                 relay._client_identity(binary, "2.1.286", digest)
 
 
+
+V5_CATALOG = TOOL_ROOT / "capturelib" / "claude_fw_f_v5.py"
+V5_FACTS = TOOL_ROOT / "capturelib" / "claude_fw_f_v5_version_facts_2_1_285.json"
+
+
+class ClaudeFWEV5CatalogTests(unittest.TestCase):
+    """Claude 升级 FW-F v5：与 v3、v4 并列互斥；目录模块按路径加载、版本事实按摘要钉住；二进制核验链与 v4 相同。"""
+
+    def _argv(self, probe_id: str, *, version: str = "2.1.285", live: bool = True, extra: tuple[str, ...] = (),
+              catalog: Path | None = V5_CATALOG, facts: Path | None = V5_FACTS, facts_sha: str | None = None,
+              output: Path) -> list[str]:
+        argv = [
+            "capture", "--dry-run", "--run-id", f"{probe_id}-run", "--probe-id", probe_id, "--fw-f-v5-probe", probe_id,
+            "--output-root", str(output), "--claude-bin", "/opt/claude", "--expected-version", version,
+            "--expected-sha256", "a" * 64, "--claude-credentials-file", "/run/credentials.json",
+            "--ca-signing-pem", "/run/ca.pem", "--ca-cert", "/run/ca.crt", "--host-runtime-receipt", "/run/receipt.json",
+            "--host-runtime-receipt-sha256", "b" * 64, "--run-nonce", "c" * 64, *extra,
+        ]
+        if catalog is not None:
+            argv += ["--fw-f-v5-catalog", str(catalog)]
+        if facts is not None:
+            argv += ["--fw-f-v5-version-facts", str(facts)]
+        if facts_sha is not False:
+            argv += ["--fw-f-v5-version-facts-sha256", facts_sha or hashlib.sha256(V5_FACTS.read_bytes()).hexdigest()]
+        if live:
+            argv += ["--upstream-ip", "160.79.104.10"]
+        return argv
+
+    def _dry_run(self, probe_id: str, **options) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            return _capture(_build_parser().parse_args(self._argv(probe_id, output=Path(directory) / "new-run", **options)))
+
+    def test_v5_dry_run_binds_catalog_and_version_facts(self) -> None:
+        live = self._dry_run("v4-advisor-enabled-positive")
+        self.assertEqual((live["capture_mode"], live["version"], live["fw_f_v5_probe"]), ("fw-f-v5", "2.1.285", "v4-advisor-enabled-positive"))
+        self.assertIsNone(live["fw_f_v4_probe"])
+        self.assertEqual(live["fw_f_v5_catalog"]["path"], str(V5_CATALOG.resolve()))
+        self.assertEqual(live["fw_f_v5_catalog"]["sha256"], hashlib.sha256(V5_CATALOG.read_bytes()).hexdigest())
+        self.assertEqual(live["fw_f_v5_version_facts"]["sha256"], hashlib.sha256(V5_FACTS.read_bytes()).hexdigest())
+        self.assertEqual(live["fw_f_v5_version_facts"]["claude_version"], "2.1.285")
+        self.assertTrue(live["live_requests"])
+        self.assertEqual(live["injected_probe_env"], {"CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL": "1"})
+        refresh = self._dry_run("v4-oauth-refresh", live=False)
+        self.assertEqual((refresh["capture_mode"], refresh["upstream_host"], refresh["response_plan"]), ("fw-f-v5", "platform.claude.com", "oauth-refresh-reject"))
+        self.assertEqual((refresh["synthetic_success_marker"], refresh["live_requests"]), ("FW_F_V4_OK", False))
+        replay = self._dry_run("v4-replay-disconnect-retry", live=False)
+        self.assertEqual(replay["synthetic_success_marker"], "FW_F_V3_OK")
+
+    def test_v5_rejections_before_any_read(self) -> None:
+        cases = (
+            ("缺目录模块", {"catalog": None}, "--fw-f-v5-catalog"),
+            ("目录模块不是 v5", {"catalog": TOOL_ROOT / "capturelib" / "claude_fw_f_v4.py"}, "v5 目录模块"),
+            ("缺版本事实", {"facts": None}, "--fw-f-v5-version-facts"),
+            ("版本事实摘要不符", {"facts_sha": "0" * 64}, "摘要与场景清单冻结值不一致"),
+            ("版本事实属于其他版本", {"version": "2.1.226"}, "目标版本"),
+            ("版本号非法", {"version": "2.1.285-beta"}, "三段版本号"),
+        )
+        for label, options, message in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(Exception, message):
+                self._dry_run("v4-native-tls-baseline", **options)
+        with self.assertRaisesRegex(Exception, "--fw-f-v5-probe 非法"):
+            self._dry_run("v4-not-in-catalog")
+        with tempfile.TemporaryDirectory() as directory:
+            argv = self._argv("v4-native-tls-baseline", output=Path(directory) / "new-run")
+            argv[argv.index("--probe-id") + 1] = "other-probe"
+            with self.assertRaisesRegex(Exception, "--probe-id 必须等于 --fw-f-v5-probe"):
+                _capture(_build_parser().parse_args(argv))
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                _build_parser().parse_args([*self._argv("v4-native-tls-baseline", output=Path(directory) / "x"), "--fw-f-v4-probe", "v4-native-tls-baseline"])
+            v4_argv = self._argv("v4-native-tls-baseline", output=Path(directory) / "y")
+            v4_argv[v4_argv.index("--fw-f-v5-probe")] = "--fw-f-v4-probe"
+            with self.assertRaisesRegex(Exception, "只用于 --fw-f-v5-probe"):
+                _capture(_build_parser().parse_args(v4_argv))
+
+    def test_relay_does_not_statically_import_v5(self) -> None:
+        """中继源码不静态引用 v5：否则 Codex 0.157.0／0.160.0 场景清单的作业依赖（R16）会多出 v5，只能改 Codex 清单。"""
+
+        from tools.official_client_capture.tests import job_dependency_analyzer as analyzer
+
+        source = (TOOL_ROOT / "claude_fw_e_relay.py").read_text(encoding="utf-8")
+        for token in ("capturelib.claude_fw_f_v5", "capturelib/claude_fw_f_v5.py", "claude_fw_f_v5.py"):
+            self.assertNotIn(token, analyzer.strip_python_comments(source))
+        shared = analyzer.DependencyAnalyzer(analyzer.current_tool_index())
+        self.assertNotIn("capturelib/claude_fw_f_v5.py", shared.file_edges("claude_fw_e_relay.py"))
+        codex = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
+        relay_jobs = [job for job in codex["capture_jobs"] if "claude_fw_e_relay.py" in job.get("tool_dependencies", [])]
+        self.assertTrue(relay_jobs)
+        for job in relay_jobs:
+            self.assertNotIn("capturelib/claude_fw_f_v5.py", shared.analyze_steps(job["steps"]))
+
+    def test_execute_path_checks_binary_before_credentials(self) -> None:
+        """v5 的 --execute 与 v4 走同一条执行前核验：二进制摘要或自报版本不符时，凭据一次都不读。"""
+
+        from tools.official_client_capture import claude_fw_e_relay as relay
+
+        with tempfile.TemporaryDirectory() as directory:
+            argv = self._argv("v4-oauth-refresh", live=False, output=Path(directory) / "new-run")
+            argv[argv.index("--dry-run")] = "--execute"
+            argv.append("--acknowledge-synthetic-responses")
+            arguments = _build_parser().parse_args(argv)
+            with (
+                mock.patch.object(relay, "_tool_identity", return_value={"execution_sources": {"sha256": "d" * 64}}),
+                mock.patch.object(relay, "_client_identity", side_effect=relay.ConfigurationError("Claude 二进制 SHA-256 与本轮冻结身份不一致。")),
+                mock.patch.object(relay, "load_claude_credentials", side_effect=AssertionError("不得读取凭据")) as credentials,
+            ):
+                with self.assertRaisesRegex(relay.ConfigurationError, "SHA-256"):
+                    _capture(arguments)
+            credentials.assert_not_called()
+
+    def test_invocation_binding_reads_v5_summary(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = {
+                "schema_version": "claude-code-fw-f-v5-probe-result/v1", "probe_id": "v4-models-privacy-state",
+                "response_plan": None, "valid": True, "driver": "print",
+                "inner_result": {"invocation": {"argv_sha256": "e" * 64, "environment": {"sha256": "f" * 64}}},
+            }
+            write_json(root / "v5-summary.json", summary)
+            options = dict(fw_f_probe=None, response_plan=None, fw_f_v5_probe="v4-models-privacy-state",
+                           fw_f_v5_summary=("v5-summary.json", "claude-code-fw-f-v5-probe-result/v1"))
+            self.assertTrue(relay._invocation_binding_complete(summary, root, **options))
+            write_json(root / "v5-summary.json", {**summary, "schema_version": "claude-code-fw-f-v4-probe-result/v1"})
+            self.assertFalse(relay._invocation_binding_complete(summary, root, **options))
+            self.assertFalse(relay._invocation_binding_complete(summary, root, **{**options, "fw_f_v5_summary": None}))
+
+
 if __name__ == "__main__":
     unittest.main()

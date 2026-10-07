@@ -415,9 +415,12 @@ class CampaignJobsTests(CaptureFixture):
         campaign = self.write_campaign(_reduced_payload({SMALL_LIVE_JOB}))
         job = claude_upgrade._campaign_jobs(campaign, claude_upgrade.load_campaign_manifest(campaign), "official")[0]
         files = claude_upgrade._job_tool_dependency_files(job, self.tool_identity)
-        self.assertEqual(len(files), 38)
+        # 38 个原有依赖加 FW-F v5 目录模块与 2.1.285 版本事实（步骤 argv 引用，作业依赖分析器同样识别）。
+        self.assertEqual(len(files), 40)
         self.assertIn("official_client_capture/drive_codex_model_catalog.py", files)
         self.assertIn("official_client_capture/claude_fw_e_relay.py", files)
+        self.assertIn("official_client_capture/capturelib/claude_fw_f_v5.py", files)
+        self.assertIn("official_client_capture/capturelib/claude_fw_f_v5_version_facts_2_1_285.json", files)
         policy = claude_identity.load_policy()
         self.assertIsNone(claude_identity.classify_path(policy, "official_client_capture/drive_codex_model_catalog.py"))
         broken = dict(self.tool_identity)
@@ -427,7 +430,11 @@ class CampaignJobsTests(CaptureFixture):
 
 
 class WireClosureTests(unittest.TestCase):
-    """wire 根闭包保持小：只到 claude_upgrade、claude_upgrade_plan、claude_upgrade_capture 与两个整文件 wire 模块。"""
+    """wire 根闭包保持小：只到 claude_upgrade、claude_upgrade_plan、claude_upgrade_capture 与三个整文件 wire 模块。
+
+    FW-F v5 起多一个整文件模块 ``capturelib.claude_fw_f_v5``：plan 校验场景清单时用它核版本事实与 probe 集合（与中继
+    同一份实现），它在 Claude 策略里属 wire 层，整文件计入；它 import 的 v4 不再展开（闭包对整文件模块不追 import）。
+    """
 
     def test_wire_closure_module_set_is_locked(self) -> None:
         policy = claude_identity.load_policy()
@@ -445,7 +452,7 @@ class WireClosureTests(unittest.TestCase):
         )
         self.assertEqual(
             {item["module"] for item in wire["modules"]},
-            {package + "capturelib.model", package + "capturelib.security"},
+            {package + "capturelib.model", package + "capturelib.security", package + "capturelib.claude_fw_f_v5"},
         )
         self.assertEqual(
             by_module[package + "claude_upgrade"],

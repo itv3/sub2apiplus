@@ -1,7 +1,8 @@
 """Claude 官方取证场景清单、规则清单与证据标签（Claude 升级控制面设计 B2-05）。
 
-* 场景清单 ``claude-upgrade-scenarios/v1``：结构闭合、变量合同（设计规定的 14 个变量加三项实施补充）、与 FW-F v4
-  目录（49 维 79 probe）逐项一致、规则覆盖与 ``tool_dependencies``（作业依赖分析器生成）逐项相等。
+* 场景清单 ``claude-upgrade-scenarios/v1``：结构闭合、变量合同（设计规定的 14 个变量加四项实施补充）、与 FW-F v5
+  目录（与 v4 同构：49 维 79 probe）逐项一致、版本事实绑定、规则覆盖与 ``tool_dependencies``（作业依赖分析器生成）
+  逐项相等。
 * 验收一：``plan --campaign-mode preflight_only`` 展开全部 Job（零写入），运行期变量保留占位并能逐步绑定。
 * 验收二：证据标签逐连接顺序测试——每个 probe 的逐连接标签与 2.1.226 实测的中继有效连接序列逐条匹配（方法与
   路径、单连接请求数、合成计划的干预动作），任何错位都失败关闭。
@@ -15,13 +16,16 @@ import copy
 import io
 import json
 import tempfile
+import shutil
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
+from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import job_dependency_analyzer as analyzer
 
@@ -125,9 +129,37 @@ class ScenarioManifestTests(unittest.TestCase):
                 "purpose 与 covers",
             ),
             "候选 Job": (lambda p: first_job(p).update(phase="candidate"), "B4-01"),
-            "缺 fw-f-v4-probe": (
-                lambda p: first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--fw-f-v4-probe") + 1, "v4-other"),
-                "fw-f-v4-probe",
+            "fw-f-v5-probe 与 probe_id 不符": (
+                lambda p: first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--fw-f-v5-probe") + 1, "v4-other"),
+                "fw-f-v5-probe",
+            ),
+            "仍带 v4 开关": (lambda p: first_step(p)["argv"].extend(["--fw-f-v4-probe", first_step(p)["probe_id"]]), "只能用 FW-F v5"),
+            "probe 不在 v5 目录": (
+                lambda p: [
+                    first_step(p).update(probe_id="v4-unknown"),
+                    first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--probe-id") + 1, "v4-unknown"),
+                    first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--fw-f-v5-probe") + 1, "v4-unknown"),
+                ],
+                "不在 FW-F v5 目录",
+            ),
+            "目录模块指向别处": (
+                lambda p: first_step(p)["argv"].__setitem__(
+                    first_step(p)["argv"].index("--fw-f-v5-catalog") + 1, "{capture_tool_root}/capturelib/claude_fw_f_v4.py"
+                ),
+                "--fw-f-v5-catalog",
+            ),
+            "缺版本事实摘要": (lambda p: drop_flag(p, "--fw-f-v5-version-facts-sha256"), "--fw-f-v5-version-facts-sha256"),
+            "步骤版本事实摘要与顶层不符": (
+                lambda p: first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--fw-f-v5-version-facts-sha256") + 1, SHA_A),
+                "--fw-f-v5-version-facts-sha256",
+            ),
+            "顶层版本事实绑定缺摘要": (lambda p: p["version_facts"].pop("sha256"), "version_facts"),
+            "目录绑定仍指向 v4": (
+                lambda p: p["probe_catalog"].update(path="tools/official_client_capture/capturelib/claude_fw_f_v4.py"),
+                "FW-F v5",
+            ),
+            "目录 schema 仍是 v4": (
+                lambda p: p["probe_catalog"].update(schema_version="claude-code-fw-f-v4-scenario-catalog/v1"), "probe_catalog"
             ),
             "真实步骤缺上游 IP": (lambda p: drop_flag(p, "--upstream-ip"), "upstream-ip"),
             "probe 执行两次": (
@@ -190,8 +222,77 @@ class ScenarioManifestTests(unittest.TestCase):
             plan.validate_campaign_context(root_runtime, context)
 
 
+class VersionFactsBindingTests(unittest.TestCase):
+    """版本事实：顶层绑定的文件、摘要与目标版本闭合，每个步骤逐字携带同一份绑定；plan 时就失败关闭。"""
+
+    def test_binding_matches_file_and_steps(self) -> None:
+        payload = _scenario_payload()
+        binding = payload["version_facts"]
+        path = REPOSITORY_ROOT / binding["path"]
+        self.assertEqual(plan.file_sha256(path), binding["sha256"])
+        facts, loaded = v5.load_version_facts(path.resolve(), binding["sha256"], expected_version=TARGET)
+        self.assertEqual((facts["claude_version"], facts["advisor"]["tool_type"]), (TARGET, "advisor_20260301"))
+        self.assertEqual(loaded["sha256"], binding["sha256"])
+        expected = {
+            "--fw-f-v5-catalog": "{capture_tool_root}/capturelib/claude_fw_f_v5.py",
+            "--fw-f-v5-version-facts": "{capture_tool_root}/capturelib/claude_fw_f_v5_version_facts_2_1_285.json",
+            "--fw-f-v5-version-facts-sha256": binding["sha256"],
+        }
+        for job in payload["capture_jobs"]:
+            for step in job["steps"]:
+                with self.subTest(probe=step["probe_id"]):
+                    argv = step["argv"]
+                    for flag, value in expected.items():
+                        self.assertEqual(argv[argv.index(flag) + 1], value)
+                    self.assertNotIn("--fw-f-v4-probe", argv)
+                    self.assertIn("capturelib/claude_fw_f_v5.py", job["tool_dependencies"])
+                    self.assertIn("capturelib/claude_fw_f_v5_version_facts_2_1_285.json", job["tool_dependencies"])
+
+    def test_read_rejects_drifted_or_foreign_facts(self) -> None:
+        """在临时仓库根里放改过的版本事实（不写受管树）：其他版本、字段不闭合、类型非法、句式带换行、摘要漂移都拒绝。"""
+
+        payload_template = _scenario_payload()
+        binding = payload_template["version_facts"]
+        original = json.loads((REPOSITORY_ROOT / binding["path"]).read_text(encoding="utf-8"))
+        rule_relative = payload_template["rule_manifest"]["path"]
+
+        def attempt(facts: dict | None, *, sha_override: str | None = None) -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for relative in (rule_relative, plan.PROBE_CATALOG_PATH):
+                    (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(REPOSITORY_ROOT / relative, root / relative)
+                facts_path = root / binding["path"]
+                facts_path.write_text(json.dumps(facts if facts is not None else original, ensure_ascii=False), encoding="utf-8")
+                digest = sha_override or plan.file_sha256(facts_path)
+                payload = copy.deepcopy(payload_template)
+                payload["version_facts"] = {"path": binding["path"], "sha256": digest}
+                for job in payload["capture_jobs"]:
+                    for step in job["steps"]:
+                        step["argv"][step["argv"].index("--fw-f-v5-version-facts-sha256") + 1] = digest
+                manifest = root / "scenarios.json"
+                manifest.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                with mock.patch.object(plan, "REPOSITORY_ROOT", root):
+                    plan.read_scenario_manifest(manifest, expected_version=TARGET, rules=_baseline_rules(), verify_source_spec=False)
+
+        attempt(None)  # 对照：原样复制的版本事实照常通过，下面每个失败都只来自对应的改动。
+        for label, mutate, message in (
+            ("其他版本的事实", lambda facts: facts.update(claude_version="2.1.226"), "目标版本"),
+            ("字段不闭合", lambda facts: facts.update(extra=1), "字段不闭合"),
+            ("工具类型非法", lambda facts: facts["advisor"].update(tool_type="Advisor Tool"), "tool_type"),
+            ("宣告句式带换行", lambda facts: facts["advisor"]["model_declaration"].update(prefix="a\nb"), "换行"),
+        ):
+            with self.subTest(label=label):
+                facts = copy.deepcopy(original)
+                mutate(facts)
+                with self.assertRaisesRegex(ConfigurationError, message):
+                    attempt(facts)
+        with self.assertRaisesRegex(ConfigurationError, "摘要与场景清单冻结值不一致"):
+            attempt(None, sha_override=SHA_A)
+
+
 class CatalogConsistencyTests(unittest.TestCase):
-    """场景清单与 FW-F v4 目录（49 维 79 probe）逐项一致。"""
+    """场景清单与 FW-F v5 目录（与 v4 同构：49 维 79 probe）逐项一致。"""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -201,27 +302,29 @@ class CatalogConsistencyTests(unittest.TestCase):
 
     def test_every_probe_runs_exactly_once(self) -> None:
         executed = [step["probe_id"] for job in self.payload["capture_jobs"] for step in job["steps"]]
-        self.assertEqual(sorted(executed), sorted(v4.PROBE_IDS))
+        self.assertEqual(sorted(executed), sorted(v5.PROBE_IDS))
+        self.assertEqual(v5.PROBE_IDS, v4.PROBE_IDS)
         self.assertEqual(len(executed), len(set(executed)))
         catalog = self.payload["probe_catalog"]
-        self.assertEqual((catalog["probe_count"], catalog["dimension_count"]), (len(v4.PROBES), len(v4.REQUIRED_MATRIX_DIMENSIONS)))
+        self.assertEqual((catalog["probe_count"], catalog["dimension_count"]), (len(v5.PROBES), len(v5.REQUIRED_MATRIX_DIMENSIONS)))
         self.assertEqual((catalog["probe_count"], catalog["dimension_count"]), (79, 49))
+        self.assertEqual((catalog["path"], catalog["schema_version"]), (plan.PROBE_CATALOG_PATH, v5.SCHEMA_CATALOG))
 
     def test_dimension_and_condition_scenarios(self) -> None:
-        for dimension in v4.REQUIRED_MATRIX_DIMENSIONS:
+        for dimension in v5.REQUIRED_MATRIX_DIMENSIONS:
             with self.subTest(dimension=dimension):
-                expected = sorted(pid for pid, probe in v4.PROBES.items() if dimension in probe.dimensions)
+                expected = sorted(pid for pid, probe in v5.PROBES.items() if dimension in probe.dimensions)
                 self.assertEqual(self.scenarios[dimension]["probe_ids"], expected)
         conditions = {sid: item for sid, item in self.scenarios.items() if sid.startswith("condition.")}
-        self.assertEqual(set(self.scenarios) - set(conditions), set(v4.REQUIRED_MATRIX_DIMENSIONS))
+        self.assertEqual(set(self.scenarios) - set(conditions), set(v5.REQUIRED_MATRIX_DIMENSIONS))
         members = sorted(pid for item in conditions.values() for pid in item["probe_ids"])
-        self.assertEqual(members, sorted(pid for pid, probe in v4.PROBES.items() if not probe.dimensions))
+        self.assertEqual(members, sorted(pid for pid, probe in v5.PROBES.items() if not probe.dimensions))
         discovery = sorted(sid for sid, item in self.scenarios.items() if item["purpose"] == "discovery")
         self.assertEqual(discovery, ["agency.hook", "aux.models", "header.dispatch_id", "header.usage_limit"])
 
     def test_steps_follow_probe_definitions(self) -> None:
         for probe_id, (job, step) in self.steps.items():
-            probe = v4.PROBES[probe_id]
+            probe = v5.PROBES[probe_id]
             with self.subTest(probe=probe_id):
                 synthetic = "--acknowledge-synthetic-responses" in step["argv"]
                 self.assertEqual(synthetic, bool(probe.response_plan))
@@ -235,7 +338,7 @@ class CatalogConsistencyTests(unittest.TestCase):
 
     def test_artifact_kinds_follow_probe_channels(self) -> None:
         for scenario_id, item in self.scenarios.items():
-            probes = [v4.PROBES[pid] for pid in item["probe_ids"]]
+            probes = [v5.PROBES[pid] for pid in item["probe_ids"]]
             with self.subTest(scenario=scenario_id):
                 kinds = set(item["required_artifact_kinds"])
                 self.assertTrue({"relay_binary", "relay_manifest"} <= kinds)
@@ -320,7 +423,7 @@ class PlanExpansionTests(unittest.TestCase):
         self.assertEqual([job["id"] for job in report["jobs"]], [job["id"] for job in payload["capture_jobs"]])
         self.assertEqual((report["job_count"], report["step_count"]), (12, 79))
         probes = [step["probe_id"] for job in report["jobs"] for step in job["steps"]]
-        self.assertEqual(sorted(probes), sorted(v4.PROBE_IDS))
+        self.assertEqual(sorted(probes), sorted(v5.PROBE_IDS))
         self.assertEqual(report["coverage_plan"]["official_unmapped"], [])
         self.assertEqual(report["required_rules"], list(_baseline_rules()))
         self.assertEqual(report["configuration"]["claude_bin"], f"/opt/claude-{TARGET}/claude")
@@ -426,7 +529,7 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
 
     def test_fixture_is_metadata_only_and_complete(self) -> None:
         self.assertEqual(self.fixture["claude_version"], BASELINE)
-        self.assertEqual(sorted(self.fixture["probes"]), sorted(v4.PROBE_IDS))
+        self.assertEqual(sorted(self.fixture["probes"]), sorted(v5.PROBE_IDS))
         for probe_id, record in self.fixture["probes"].items():
             for connection in record["connections"]:
                 with self.subTest(probe=probe_id, connection=connection["connection_id"]):
@@ -436,7 +539,7 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
 
     def test_every_job_and_probe_has_labels(self) -> None:
         self.assertEqual(set(self.labels["plans"]), {job["id"] for job in self.payload["capture_jobs"]})
-        self.assertEqual(sorted(self.plans), sorted(v4.PROBE_IDS))
+        self.assertEqual(sorted(self.plans), sorted(v5.PROBE_IDS))
 
     def test_label_sequences_match_observed_connections(self) -> None:
         """逐连接顺序：每个 probe 的有效连接逐条命中标签规则（方法与路径、单连接请求数、合成干预动作）。"""

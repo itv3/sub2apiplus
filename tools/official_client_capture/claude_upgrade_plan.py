@@ -3,8 +3,9 @@
 本模块装载并校验三份按目标版本冻结的机器清单，并把场景清单展开成取证 Job：
 
 * ``claude_upgrade_scenarios_<ver>.json``（``claude-upgrade-scenarios/v1``，结构对齐 Codex 场景清单）：变量合同、证据场景
-  （FW-F v4 的 49 个矩阵维度，加没有维度的 probe 归入的条件场景）与 official 取证 Job（79 个 probe 归并为 Job，每个
-  probe 一步，动作体 ``claude_fw_e_relay.py capture``）；
+  （FW-F v5 目录的 49 个矩阵维度——与 v4 同一组——加没有维度的 probe 归入的条件场景）、版本事实绑定与 official 取证 Job
+  （79 个 probe 归并为 Job，每个 probe 一步，动作体 ``claude_fw_e_relay.py capture --fw-f-v5-probe``，同时逐字携带目录
+  模块与版本事实参数）；
 * ``claude_upgrade_rules_<ver>.json``（``claude-upgrade-rule-manifest/v1``）：本轮逐规则重测的必需规则全集，绑定基线
   ``claude_required_rules_<baseline>.json`` 的路径与摘要；
 * ``claude_upgrade_evidence_labels_<ver>.json``（``claude-upgrade-evidence-labels/v1``）：逐 Job 证据子路径的标签；中继
@@ -15,7 +16,8 @@
 
 本模块不导入 ``codex_upgrade`` 与任何被 Claude 身份策略忽略的文件。编排器的 wire 根 ``_load_plan_jobs``、
 ``_job_context``、``_scenario_job_execution_contract`` 转调这里，按符号进入 Claude 的 wire 闭包；本文件按
-``claude_upgrade_`` 前缀归 control 层。
+``claude_upgrade_`` 前缀归 control 层。版本事实校验与 v5 probe 集合取自 ``capturelib/claude_fw_f_v5``（与中继同一份
+实现），它是 wire 层文件，按整文件进入 wire 闭包。
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import json
 import re
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 if __package__ in {None, ""}:
@@ -42,7 +44,9 @@ RULE_MANIFEST_SCHEMA = "claude-upgrade-rule-manifest/v1"
 EVIDENCE_LABELS_SCHEMA = "claude-upgrade-evidence-labels/v1"
 BASELINE_RULE_SCHEMA = "claude-code-required-rule-manifest/v1"
 PLAN_REPORT_SCHEMA = "claude-upgrade-plan/v1"
-PROBE_CATALOG_SCHEMA = "claude-code-fw-f-v4-scenario-catalog/v1"
+# 取证 probe 目录：FW-F v5（与 v4 同一组 probe 与驱动，判定按版本事实取；见 capturelib/claude_fw_f_v5.py）。
+PROBE_CATALOG_SCHEMA = "claude-code-fw-f-v5-scenario-catalog/v1"
+PROBE_CATALOG_PATH = "tools/official_client_capture/capturelib/claude_fw_f_v5.py"
 
 TOOL_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = TOOL_ROOT.parents[1]
@@ -59,6 +63,15 @@ LIVE_CONTAINER_PLACEHOLDER = "{capture_container}"
 SYNTHETIC_CONTAINER_PLACEHOLDER = "{synthetic_capture_container}"
 # 中继请求字节文件的统一命名（中继按连接号写 connNNN.client_to_upstream.bin）。
 RELAY_REQUEST_GLOB_SUFFIX = "relay/conn*.client_to_upstream.bin"
+# v5 步骤的四个开关：probe、目录模块、版本事实文件与其冻结摘要（中继按路径加载目录模块，见中继模块说明）。
+FW_F_PROBE_FLAG = "--fw-f-v5-probe"
+FW_F_CATALOG_FLAG = "--fw-f-v5-catalog"
+FW_F_VERSION_FACTS_FLAG = "--fw-f-v5-version-facts"
+FW_F_VERSION_FACTS_SHA256_FLAG = "--fw-f-v5-version-facts-sha256"
+# 其他目录版本的 probe 开关不得出现在升级取证步骤里。
+LEGACY_PROBE_FLAGS = ("--fw-f-probe", "--fw-f-v4-probe", "--scenario")
+TOOL_ROOT_PLACEHOLDER = "{capture_tool_root}"
+TOOL_ROOT_RELATIVE = "tools/official_client_capture"
 
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -107,6 +120,7 @@ _SCENARIO_TOP_FIELDS = frozenset(
         "source_spec",
         "rule_manifest",
         "probe_catalog",
+        "version_facts",
         "variable_contract",
         "evidence_scenarios",
         "capture_jobs",
@@ -368,7 +382,37 @@ def _argument_value(argv: Sequence[str], flag: str) -> str | None:
     return argv[positions[0] + 1]
 
 
-def _validate_step(job_id: str, step_index: int, step: Any) -> str:
+def _fw_f_v5() -> Any:
+    """FW-F v5 目录模块（版本事实校验与 probe 集合的唯一来源，plan 与中继共用同一份实现）。"""
+
+    from tools.official_client_capture.capturelib import claude_fw_f_v5
+
+    return claude_fw_f_v5
+
+
+def _tool_root_argument(repository_path: str) -> str:
+    """仓库相对路径 → 步骤 argv 里的容器内坐标（``{capture_tool_root}/<工具根内相对路径>``）。"""
+
+    relative = PurePosixPath(repository_path)
+    try:
+        inside = relative.relative_to(TOOL_ROOT_RELATIVE)
+    except ValueError as error:
+        raise ConfigurationError(f"取证步骤引用的文件必须在受管工具根 {TOOL_ROOT_RELATIVE} 下：{repository_path}") from error
+    return f"{TOOL_ROOT_PLACEHOLDER}/{inside.as_posix()}"
+
+
+def _step_catalog_arguments(payload: Mapping[str, Any]) -> dict[str, str]:
+    """每个 v5 步骤必须逐字携带的目录模块与版本事实参数（取自清单顶层绑定）。"""
+
+    facts = payload["version_facts"]
+    return {
+        FW_F_CATALOG_FLAG: _tool_root_argument(PROBE_CATALOG_PATH),
+        FW_F_VERSION_FACTS_FLAG: _tool_root_argument(str(facts["path"])),
+        FW_F_VERSION_FACTS_SHA256_FLAG: str(facts["sha256"]),
+    }
+
+
+def _validate_step(job_id: str, step_index: int, step: Any, *, catalog_arguments: Mapping[str, str]) -> str:
     if not isinstance(step, dict) or set(step) != _STEP_FIELDS:
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 字段不闭合。")
     probe_id = step.get("probe_id")
@@ -388,8 +432,16 @@ def _validate_step(job_id: str, step_index: int, step: Any) -> str:
     # 每一步都是一次受管 R 取证：动作体、子命令与 probe 身份必须在 argv 里逐字可核。
     if not any(item == RELAY_SCRIPT or item.endswith(f"/{RELAY_SCRIPT}") for item in argv) or "capture" not in argv:
         raise ConfigurationError(f"{job_id} 步骤 {step_index} 不是 {RELAY_SCRIPT} capture 动作体。")
-    if "--execute" not in argv or _argument_value(argv, "--probe-id") != probe_id or _argument_value(argv, "--fw-f-v4-probe") != probe_id:
-        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --execute／--probe-id／--fw-f-v4-probe 与 probe_id 不一致。")
+    if "--execute" not in argv or _argument_value(argv, "--probe-id") != probe_id or _argument_value(argv, FW_F_PROBE_FLAG) != probe_id:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --execute／--probe-id／{FW_F_PROBE_FLAG} 与 probe_id 不一致。")
+    if any(flag in argv for flag in LEGACY_PROBE_FLAGS):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 只能用 FW-F v5 目录，不得再带 {list(LEGACY_PROBE_FLAGS)}。")
+    if probe_id not in _fw_f_v5().PROBE_IDS:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 probe {probe_id} 不在 FW-F v5 目录里。")
+    # 目录模块与版本事实：逐字等于清单顶层绑定（版本事实的文件摘要随步骤 argv 进入 Job 执行摘要）。
+    for flag, expected in catalog_arguments.items():
+        if _argument_value(argv, flag) != expected:
+            raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 {flag} 必须是 {expected}。")
     live = "--acknowledge-live-requests" in argv
     synthetic = "--acknowledge-synthetic-responses" in argv
     if live == synthetic:
@@ -409,7 +461,7 @@ def _validate_step(job_id: str, step_index: int, step: Any) -> str:
     return probe_id
 
 
-def _validate_capture_job(index: int, job: Any, seen: set[str]) -> None:
+def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_arguments: Mapping[str, str]) -> None:
     if not isinstance(job, dict) or set(job) != _JOB_FIELDS:
         raise ConfigurationError(f"场景任务 {index} 字段不闭合（tool_dependencies 必须逐作业声明）。")
     job_id = job.get("id")
@@ -431,7 +483,7 @@ def _validate_capture_job(index: int, job: Any, seen: set[str]) -> None:
     if not isinstance(steps, list) or not steps:
         raise ConfigurationError(f"{job_id} 没有可执行步骤。")
     for step_index, step in enumerate(steps, 1):
-        _validate_step(job_id, step_index, step)
+        _validate_step(job_id, step_index, step, catalog_arguments=catalog_arguments)
     # Claude 每个 Job 只有一个证据根，各步输出根都是它下面以 probe 命名的子目录。
     if not _unique_strings(job.get("evidence_roots")) or len(job["evidence_roots"]) != 1:
         raise ConfigurationError(f"{job_id} 的 evidence_roots 必须恰好一个。")
@@ -488,11 +540,20 @@ def validate_scenario_manifest(payload: Any) -> None:
         not isinstance(catalog, dict)
         or set(catalog) != {"path", "schema_version", "probe_count", "dimension_count"}
         or catalog.get("schema_version") != PROBE_CATALOG_SCHEMA
-        or not _nonempty_text(catalog.get("path"))
+        or catalog.get("path") != PROBE_CATALOG_PATH
         or not isinstance(catalog.get("probe_count"), int)
-        or not isinstance(catalog.get("dimension_count"), int)
+        or catalog.get("dimension_count") != len(_fw_f_v5().REQUIRED_MATRIX_DIMENSIONS)
     ):
-        raise ConfigurationError("场景清单 probe_catalog 绑定非法。")
+        raise ConfigurationError("场景清单 probe_catalog 绑定非法（必须指向 FW-F v5 目录）。")
+    facts = payload.get("version_facts")
+    if (
+        not isinstance(facts, dict)
+        or set(facts) != {"path", "sha256"}
+        or not _nonempty_text(facts.get("path"))
+        or not SHA256_RE.fullmatch(str(facts.get("sha256", "")))
+    ):
+        raise ConfigurationError("场景清单 version_facts 绑定非法。")
+    catalog_arguments = _step_catalog_arguments(payload)
 
     variables = payload.get("variable_contract")
     if not isinstance(variables, list) or not variables:
@@ -513,7 +574,7 @@ def validate_scenario_manifest(payload: Any) -> None:
         raise ConfigurationError("场景清单 capture_jobs 不能为空。")
     job_ids: set[str] = set()
     for index, job in enumerate(jobs, 1):
-        _validate_capture_job(index, job, job_ids)
+        _validate_capture_job(index, job, job_ids, catalog_arguments=catalog_arguments)
 
     # 场景、probe 与 Job 的绑定闭合：每个 probe 恰好由一步执行；被执行的 probe 都属于某个场景，场景列出的 probe
     # 都被执行；Job 的 scenario_ids 等于其各步 probe 所属场景之并，covers 不超出这些场景的 covers。
@@ -776,6 +837,13 @@ def read_scenario_manifest(
             raise ConfigurationError("场景清单绑定的规格章节摘要不一致。")
     catalog = payload["probe_catalog"]
     _repository_file(catalog["path"], "场景清单绑定的 probe 目录")
+    # 版本事实：与中继同一份实现核文件摘要、字段与版本（plan 时就失败，不等到 ARM64 上中继拒绝）。
+    facts = payload["version_facts"]
+    facts_path = _repository_file(facts["path"], "场景清单绑定的版本事实")
+    try:
+        _fw_f_v5().load_version_facts(facts_path.resolve(), str(facts["sha256"]), expected_version=str(payload["claude_version"]))
+    except _fw_f_v5().ClaudeFWFV5ProbeError as error:
+        raise ConfigurationError(f"场景清单绑定的版本事实不合法：{error}") from error
     return payload
 
 

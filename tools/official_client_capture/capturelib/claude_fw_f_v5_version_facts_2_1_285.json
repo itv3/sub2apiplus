@@ -1,0 +1,16 @@
+{
+  "schema_version": "claude-code-fw-f-v5-version-facts/v1",
+  "claude_version": "2.1.285",
+  "advisor": {
+    "tool_type": "advisor_20260301",
+    "model_declaration": {
+      "prefix": "[AdvisorTool] Server-side tool enabled with ",
+      "suffix": " as the advisor model"
+    }
+  },
+  "provenance": {
+    "binary_platform": "linux/arm64",
+    "binary_sha256": "24fac77749bed3d91365d6b6915aa4b824e14318ecb6bc17adbc192f01c9173d",
+    "basis": "取自冻结的官方 2.1.285 linux-arm64 二进制（freeze-20261007）内嵌 JS 的字面量：启用 advisor 时，messages 请求的 tools 里推入一个 type 为常量 advisor_20260301、model 为解析出的 advisor 模型的描述符（新增可选字段 defer_loading）；同一个模型在 debug 日志里以「[AdvisorTool] Server-side tool enabled with <模型> as the advisor model」宣告。2.1.226 实测的 debug 日志是同一句式（宣告 claude-fable-5）。2.1.285 的 fable 别名默认解析到 claude-fable-5-1，所以版本事实只冻结工具类型与宣告句式，不冻结模型名。"
+  }
+}

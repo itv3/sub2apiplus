@@ -124,7 +124,7 @@ with open(os.path.join(output, "results", "debug.log"), "w", encoding="utf-8") a
 manifest = {
     "schema_version": "claude-code-fw-e-relay-run/v1", "probe_id": probe, "status": "complete",
     "client": {"version": value("--expected-version") + " (Claude Code)", "sha256": value("--expected-sha256")},
-    "fw_f_v4_probe": value("--fw-f-v4-probe"), "response_plan": record["response_plan"],
+    "fw_f_v5_probe": value("--fw-f-v5-probe"), "fw_f_v4_probe": value("--fw-f-v4-probe"), "response_plan": record["response_plan"],
     "runtime": {"runtime_image_reference": value("--runtime-image"),
                 "host_runtime_receipt": {"sha256": digest, "run_nonce": value("--run-nonce")}},
     "upstream": {"host": host, "live_requests": live},

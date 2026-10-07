@@ -240,6 +240,7 @@ def relay_probe_view(probe_dir: Path, *, base: Path) -> dict[str, Any]:
         "manifest": {
             "schema_version": manifest.get("schema_version"),
             "status": manifest.get("status"),
+            "fw_f_v5_probe": manifest.get("fw_f_v5_probe"),
             "fw_f_v4_probe": manifest.get("fw_f_v4_probe"),
             "response_plan": manifest.get("response_plan"),
             "client_version": client.get("version"),
@@ -395,7 +396,10 @@ def _probe_checks(view: Mapping[str, Any], *, probe: str, context: Mapping[str, 
     checks = {
         "relay_manifest_schema": manifest.get("schema_version") == RELAY_MANIFEST_SCHEMA,
         "status_complete": manifest.get("status") == "complete",
-        "probe_identity": manifest.get("fw_f_v4_probe") == probe and view.get("probe_id") == probe,
+        # 升级取证一律用 FW-F v5 目录（claude_upgrade_plan 校验步骤只带 --fw-f-v5-probe）：v4 中继清单在这里判不通过。
+        "probe_identity": (
+            manifest.get("fw_f_v5_probe") == probe and manifest.get("fw_f_v4_probe") is None and view.get("probe_id") == probe
+        ),
         "client_identity": manifest.get("client_sha256") == context["target_sha256"] and version == context["target_version"],
         "runtime_image": manifest.get("runtime_image") == context["runtime_image"],
         "m_binding_complete": manifest.get("m_binding_complete") is True,

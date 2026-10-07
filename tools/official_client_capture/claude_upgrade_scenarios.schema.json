@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/claude-upgrade-scenarios-v1.json",
   "title": "Claude Code 出站版本化场景清单",
-  "description": "结构对齐 codex-upgrade-scenarios/v1：把目标 Claude Code 版本的证据场景、取证 Job 命令模板、证据根与规则覆盖从编排器代码移到不可变机器清单。场景来源是 FW-F v4 的 49 个矩阵维度与 79 个 probe：维度即证据场景，没有维度的 probe 归入 condition.* 条件场景；每个 probe 是一个取证步骤（claude_fw_e_relay.py capture），probe 归并为 Job。变量分 campaign（plan 时代入）与 step_runtime（取证动作体每步绑定）两种作用域。运行时校验见 claude_upgrade_plan.validate_scenario_manifest（不依赖第三方 JSON Schema 库，失败关闭）。",
+  "description": "结构对齐 codex-upgrade-scenarios/v1：把目标 Claude Code 版本的证据场景、取证 Job 命令模板、证据根与规则覆盖从编排器代码移到不可变机器清单。场景来源是 FW-F v5 目录（与 v4 同一组 49 个矩阵维度与 79 个 probe，判定按 version_facts 绑定的版本事实取）：维度即证据场景，没有维度的 probe 归入 condition.* 条件场景；每个 probe 是一个取证步骤（claude_fw_e_relay.py capture），probe 归并为 Job。变量分 campaign（plan 时代入）与 step_runtime（取证动作体每步绑定）两种作用域。运行时校验见 claude_upgrade_plan.validate_scenario_manifest（不依赖第三方 JSON Schema 库，失败关闭）。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,6 +12,7 @@
     "source_spec",
     "rule_manifest",
     "probe_catalog",
+    "version_facts",
     "variable_contract",
     "evidence_scenarios",
     "capture_jobs"
@@ -24,6 +25,7 @@
     "source_spec": {"$ref": "#/$defs/sourceBinding"},
     "rule_manifest": {"$ref": "#/$defs/ruleManifestBinding"},
     "probe_catalog": {"$ref": "#/$defs/probeCatalogBinding"},
+    "version_facts": {"$ref": "#/$defs/versionFactsBinding"},
     "variable_contract": {
       "type": "array",
       "minItems": 1,
@@ -75,6 +77,16 @@
         "rule_count": {"type": "integer", "minimum": 1}
       }
     },
+    "versionFactsBinding": {
+      "description": "FW-F v5 判定依赖的版本事实（claude-code-fw-f-v5-version-facts/v1）：仓库相对路径与文件摘要；每个步骤以 --fw-f-v5-version-facts／--fw-f-v5-version-facts-sha256 逐字携带同一份绑定。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "probeCatalogBinding": {
       "description": "场景与步骤引用的 probe 目录；目录模块本身在 wire 层，随工具身份与逐作业依赖摘要冻结。",
       "type": "object",
@@ -82,7 +94,7 @@
       "required": ["path", "schema_version", "probe_count", "dimension_count"],
       "properties": {
         "path": {"$ref": "#/$defs/relativePath"},
-        "schema_version": {"const": "claude-code-fw-f-v4-scenario-catalog/v1"},
+        "schema_version": {"const": "claude-code-fw-f-v5-scenario-catalog/v1"},
         "probe_count": {"type": "integer", "minimum": 1},
         "dimension_count": {"type": "integer", "minimum": 1}
       }
@@ -123,7 +135,7 @@
       }
     },
     "commandStep": {
-      "description": "一个 probe 的一次受管 R 取证：argv 必须调用 claude_fw_e_relay.py capture --execute，--probe-id 与 --fw-f-v4-probe 都等于 probe_id；真实上游步骤带 --acknowledge-live-requests 与 --upstream-ip、以 docker exec {capture_container} 开头，合成步骤带 --acknowledge-synthetic-responses、不得带 --upstream-ip、以 docker exec {synthetic_capture_container}（断网容器）开头。",
+      "description": "一个 probe 的一次受管 R 取证：argv 必须调用 claude_fw_e_relay.py capture --execute，--probe-id 与 --fw-f-v5-probe 都等于 probe_id，--fw-f-v5-catalog 指向 {capture_tool_root}/capturelib/claude_fw_f_v5.py，--fw-f-v5-version-facts／--fw-f-v5-version-facts-sha256 等于顶层 version_facts 绑定，不得带 --fw-f-probe、--fw-f-v4-probe 或 --scenario；真实上游步骤带 --acknowledge-live-requests 与 --upstream-ip、以 docker exec {capture_container} 开头，合成步骤带 --acknowledge-synthetic-responses、不得带 --upstream-ip、以 docker exec {synthetic_capture_container}（断网容器）开头。",
       "type": "object",
       "additionalProperties": false,
       "required": ["probe_id", "argv", "environment", "timeout_seconds"],
