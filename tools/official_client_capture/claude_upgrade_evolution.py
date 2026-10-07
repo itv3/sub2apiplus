@@ -27,8 +27,10 @@ Codex 的策略文件名 ``tool_identity_policy_v2.json``，Claude 的策略演�
 「尚未建立」（摘要为 null，``status`` 为 ``not_established``），不失败；两次都尚未建立算不变；从尚未建立到建立的那次演进记
 一次「评估器建立」（两项都列为变化）；只建立了一个即失败关闭。候选侧（B4-04）：按 Codex 同一口径扫描 ``candidates/``，
 有作废记录或被取代标记的候选记入 ``impact.inactive_candidates``；活跃候选在 ``evaluator.candidates`` 记当前评估基线、b0 已有
-评估产出与 ``b0_authorization_moved``（b0 且没有产出时 b0 授权随本次演进迁移，见 ``claude_upgrade_baseline``）。候选已有
-取证 attempt 时它的作业影响由 B4-01（候选采集）落实，此时报待实现。
+评估产出与 ``b0_authorization_moved``（b0 且没有产出时 b0 授权随本次演进迁移，见 ``claude_upgrade_baseline``）。已有取证
+attempt 的活跃候选（B4-01 c1）按最近一个带 attempt.json 的 attempt 展开作业，与官方作业同一映射记进
+``impact.candidates[<cid>]``（``planned_job_ids``、``affected_job_ids``、``basis``、``sealed``）；只有孤儿预约时保守地全部受影响；
+已封存候选的作业受影响即拒绝登记（补采走评估失败局部恢复）。
 
 策略演进（4b）：当前策略与有效策略不同时只允许「只改策略文件」的演进，绑定按 Claude v3 引擎出具的兼容收据与激活认证
 （``codex_upgrade_policy_certification`` 的 ``client="claude"`` 口径），判据与 Codex 的 ``_policy_evolution_transition`` 相同。
@@ -494,45 +496,19 @@ def tool_evolution_preview(
     impact_paths = sorted(set(drift["wire_producer"]))
     evaluation_paths = sorted(set(drift["evidence_semantics"]))
 
-    # 候选侧（B4-04）：活跃候选的评估器授权迁移按 Codex 同一口径记录；候选已有取证 attempt 时它的作业影响由 B4-01 落实。
+    # 候选侧（B4-04 评估器授权迁移；B4-01 c1 取证作业影响）：活跃候选按 Codex 同一口径记录（见 ``evolution_job_impact``）。
     from tools.official_client_capture import claude_upgrade_baseline
 
     active_candidates, inactive_candidates = claude_upgrade_baseline.evolution_candidates(campaign_dir)
-    for candidate_id in active_candidates:
-        if claude_upgrade_baseline.candidate_has_capture_attempts(campaign_dir, candidate_id):
-            raise orchestrator._pending(f"候选 {candidate_id} 取证作业的工具演进影响", "B4-01（候选采集）")
     evaluator_candidates = claude_upgrade_baseline.evaluator_candidate_records(campaign_dir, active_candidates)
-    official_jobs = orchestrator._campaign_jobs(campaign_dir, manifest, "official")
-    path_map: dict[str, set[str]] = {}
-    for job in official_jobs:
-        for declared in getattr(job, "tool_dependencies", ()) or ():
-            path_map.setdefault(capture._normalized_tool_dependency(str(declared)), set()).add(job.job_id)
-    unmapped = sorted(path for path in impact_paths if path not in path_map)
-    mapped_affected: set[str] = set()
-    for path in [*impact_paths, *drift["ignored"]]:
-        mapped_affected.update(path_map.get(path, set()))
-    planned_ids = sorted(job.job_id for job in official_jobs)
-    all_affected = wire_closure_changed or bool(unmapped)
-    affected = list(planned_ids) if all_affected else sorted(set(planned_ids) & mapped_affected)
-    sealed = orchestrator._stage_path(campaign_dir, "capture-official", None)[1].exists()
-    official_part = {
-        "planned_job_ids": planned_ids,
-        "affected_job_ids": affected,
-        "basis": (
-            "编排器 wire 闭包变化或存在映射不到作业的 wire 层变化路径，全部受影响"
-            if all_affected
-            else "wire 层变化路径与被作业声明依赖的其它客户端文件 ∩ 作业声明依赖"
-        ),
-        "sealed": sealed,
-    }
-    if sealed and affected:
-        raise ConfigurationError(
-            "修改影响已封存的 official 作业，Campaign 内无法重采官方证据："
-            + "、".join(affected)
-            + (f"（映射不到作业的变化路径：{'、'.join(unmapped)}）" if unmapped else "")
-            + ("（编排器 wire 闭包变化）" if wire_closure_changed else "")
-            + "。请核对修改范围。"
-        )
+    official_part, candidate_parts, unmapped = evolution_job_impact(
+        campaign_dir,
+        manifest,
+        impact_paths=impact_paths,
+        ignored_paths=drift["ignored"],
+        wire_closure_changed=wire_closure_changed,
+        active_candidates=active_candidates,
+    )
     from_evaluator = evaluator_state(from_identity, policy)
     to_evaluator = evaluator_state(current, policy)
     if from_evaluator["status"] == EVALUATOR_NOT_ESTABLISHED and to_evaluator["status"] == EVALUATOR_NOT_ESTABLISHED:
@@ -559,7 +535,7 @@ def tool_evolution_preview(
             "wire_closure_changed": wire_closure_changed,
             "evidence_closure_changed": from_summary["evidence_closure_sha256"] != to_summary["evidence_closure_sha256"],
         },
-        "impact": {"official": official_part, "candidates": {}, "inactive_candidates": inactive_candidates},
+        "impact": {"official": official_part, "candidates": candidate_parts, "inactive_candidates": inactive_candidates},
         "evaluator": {
             "from": from_evaluator,
             "to": to_evaluator,
@@ -691,6 +667,95 @@ def ensure_store_tool_registration(
 # ---------------------------------------------------------------------------
 # tool-evolution 子命令（Claude 版：编排器链 + Store 登记）
 # ---------------------------------------------------------------------------
+
+
+def evolution_job_impact(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    impact_paths: list[str],
+    ignored_paths: list[str],
+    wire_closure_changed: bool,
+    active_candidates: list[str],
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """工具演进对官方与候选取证作业的影响（与 Codex 同一口径），返回 ``(official, candidates, unmapped_paths)``。
+
+    已有取证 attempt 的活跃候选（B4-01 c1）按最近一个带 attempt.json 的 attempt 展开作业（共享
+    ``_tool_evolution_candidate_jobs``；只有孤儿预约时保守地全部受影响）。wire 层变化路径与被作业声明依赖的其它客户端文件
+    映射到作业；编排器 wire 闭包变化或存在映射不到任何作业的 wire 层路径时全部受影响。已封存阶段的作业受影响即拒绝登记。
+    """
+
+    from tools.official_client_capture import claude_upgrade_baseline
+    from tools.official_client_capture import claude_upgrade_capture as capture
+    from tools.official_client_capture import upgrade_control_plane
+
+    orchestrator = _orchestrator()
+    official_jobs = orchestrator._campaign_jobs(campaign_dir, dict(manifest), "official")
+    scopes: list[tuple[str, str | None, list[Any] | None, list[str]]] = [
+        ("official", None, list(official_jobs), sorted(job.job_id for job in official_jobs))
+    ]
+    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
+        for candidate_id in active_candidates:
+            if not claude_upgrade_baseline.candidate_has_capture_attempts(campaign_dir, candidate_id):
+                continue
+            candidate_jobs, candidate_planned = upgrade_control_plane._tool_evolution_candidate_jobs(campaign_dir, dict(manifest), candidate_id)
+            if candidate_planned:
+                scopes.append(("candidate", candidate_id, candidate_jobs, list(candidate_planned)))
+    path_map: dict[str, set[str]] = {}
+    for _phase, _candidate, jobs, _planned in scopes:
+        for job in jobs or ():
+            for declared in getattr(job, "tool_dependencies", ()) or ():
+                path_map.setdefault(capture._normalized_tool_dependency(str(declared)), set()).add(job.job_id)
+    unmapped = sorted(path for path in impact_paths if path not in path_map)
+    mapped_affected: set[str] = set()
+    for path in [*impact_paths, *ignored_paths]:
+        mapped_affected.update(path_map.get(path, set()))
+    all_affected = wire_closure_changed or bool(unmapped)
+    official_part: dict[str, Any] = {}
+    candidate_parts: dict[str, Any] = {}
+    for phase, candidate_id, jobs, planned_ids in scopes:
+        if jobs is None or all_affected:
+            affected = list(planned_ids)
+            basis = (
+                "只有孤儿预约、无法展开作业身份，按保守口径全部受影响"
+                if jobs is None
+                else "编排器 wire 闭包变化或存在映射不到作业的 wire 层变化路径，全部受影响"
+            )
+        else:
+            affected = sorted(set(planned_ids) & mapped_affected)
+            basis = "wire 层变化路径与被作业声明依赖的其它客户端文件 ∩ 作业声明依赖"
+        # 候选是否已封存看 b0 阶段结果（b≥1 只在 b0 封存之后才会开，读来源最终都回到它；不必读 Store 定当前基线）。
+        stage_path = (
+            orchestrator._stage_path(campaign_dir, "capture-official", None)[1]
+            if phase == "official"
+            else orchestrator._legacy_stage_path(campaign_dir, "capture-candidate", candidate_id)[1]
+        )
+        part = {
+            "planned_job_ids": list(planned_ids),
+            "affected_job_ids": affected,
+            "basis": basis,
+            "sealed": stage_path.exists(),
+        }
+        if phase == "official":
+            official_part = part
+        else:
+            candidate_parts[str(candidate_id)] = part
+    if official_part["sealed"] and official_part["affected_job_ids"]:
+        raise ConfigurationError(
+            "修改影响已封存的 official 作业，Campaign 内无法重采官方证据："
+            + "、".join(official_part["affected_job_ids"])
+            + (f"（映射不到作业的变化路径：{'、'.join(unmapped)}）" if unmapped else "")
+            + ("（编排器 wire 闭包变化）" if wire_closure_changed else "")
+            + "。请核对修改范围。"
+        )
+    for candidate_id, part in candidate_parts.items():
+        if part["sealed"] and part["affected_job_ids"]:
+            raise ConfigurationError(
+                f"修改影响候选 {candidate_id} 已封存的作业："
+                + "、".join(part["affected_job_ids"])
+                + "；已封存候选的补采须走评估失败局部恢复（evaluation-recover 开 attempt-recovery 基线）。"
+            )
+    return official_part, candidate_parts, unmapped
 
 
 def tool_evolution_command(arguments: argparse.Namespace) -> dict[str, Any]:

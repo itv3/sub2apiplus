@@ -42,7 +42,12 @@ deadline 预算）照常执行；候选五个 Campaign 变量必须非空；账�
   ``gateway.json`` 同一取法），另有服务／keeper／postgres 容器、账号与 API Key ID、connect 中继端口；
 * ``gateway_environment``（``claude-upgrade-candidate-gateway-environment/v1``）：``before``／``after`` 两份快照文件的绑定
   （路径相对 ``<attempt>/evidence``）、参与比较的字段 ``compared_fields`` 与漂移字段 ``drifted_fields``；对应 Store 的
-  environment_before／environment_after；
+  environment_before／environment_after。另有 ``activation_fact``（c1 补充项，供 B4-06b 运行审计）：after 快照时从服务容器
+  环境 ``GATEWAY_CLAUDE_EGRESS_ACTIVATION_FACT_PATH`` 指向的文件只读复制的 Go 激活事实，固定写在
+  ``<attempt>/evidence/environment/claude-egress-activation-fact.json``，绑定字段 ``path``（相对 ``<attempt>/evidence``）、
+  ``sha256``、``bytes``、``source_path``（容器内路径）、``schema_version``（``claude-egress-activation-fact/v1``）、
+  ``profile_mode``（必须是 ``validation_candidate``）、``event_id``。缺失、不可读或不是候选 Runtime：正式 run 按环境污染处理，
+  零请求演练判演练失败；等待封存的 attempt 必有这份副本；
 * ``gateway_recovery``（``claude-upgrade-candidate-gateway-recovery/v1``）：网关隔离恢复核验文件的绑定与结论 ``status``
   （``passed``／``failed``）；文件里汇总每步恢复报告的核对、前后快照是否相等；对应 Store 的 recovery_evidence；
 * ``selector_observed``（``claude-upgrade-candidate-selector-observation/v1``）：生产 selector 只读快照文件的绑定（正式 run
@@ -119,6 +124,12 @@ GATEWAY_BEFORE_FILENAME = "gateway-before.json"
 GATEWAY_AFTER_FILENAME = "gateway-after.json"
 GATEWAY_RECOVERY_FILENAME = "gateway-recovery.json"
 SELECTOR_FILENAME = "selector-observed.json"
+# 网关进程写出的 Claude 激活事实（Go ``claude_official_egress_activation_fact.go``）：after 快照时只读复制进 attempt 证据目录，
+# seal 深度扫描自然封进去，供 B4-06b 运行审计读取（c1 补充项）。
+ACTIVATION_FACT_FILENAME = "claude-egress-activation-fact.json"
+ACTIVATION_FACT_PATH_ENV = "GATEWAY_CLAUDE_EGRESS_ACTIVATION_FACT_PATH"
+ACTIVATION_FACT_SCHEMA = "claude-egress-activation-fact/v1"
+ACTIVATION_FACT_CANDIDATE_MODE = "validation_candidate"
 
 # 与宿主脚本 claude_run_candidate_capture.sh 同一组坐标（改一处必须同步另一处）。
 CUSTOM_CA_PATH = "/usr/local/share/ca-certificates/claude-candidate-capture.crt"
@@ -743,6 +754,53 @@ def write_gateway_snapshot(environment_root: Path, snapshot: Mapping[str, Any]) 
     return path
 
 
+class ActivationFactInvalid(ConfigurationError):
+    """网关的 Claude 激活事实读到了，但 schema 或 profile_mode 不对（不是候选 Runtime）。"""
+
+
+def _read_activation_fact(manifest: Mapping[str, Any]) -> tuple[str, str]:
+    """docker 边界：从服务容器环境取激活事实路径，在容器内只读 ``cat`` 出全文；返回 ``(容器内路径, 原文)``。"""
+
+    service = candidate_variables(manifest)["service_container"]
+    environment = capture._run_probe_command(
+        ["docker", "inspect", "--format", ENV_TEMPLATE, service], operation="candidate-gateway:activation-fact-path"
+    ).stdout
+    path = _env_value(environment, ACTIVATION_FACT_PATH_ENV)
+    if not path or not capture.SAFE_ABSOLUTE_PATH_RE.fullmatch(path) or ".." in PurePosixPath(path).parts:
+        raise ConfigurationError(f"服务容器没有配置 {ACTIVATION_FACT_PATH_ENV}，或路径不是安全绝对路径。")
+    completed = capture._run_probe_command(["docker", "exec", service, "cat", path], operation="candidate-gateway:activation-fact")
+    return path, completed.stdout
+
+
+def copy_activation_fact(manifest: Mapping[str, Any], environment_root: Path, *, evidence_root: Path) -> dict[str, Any]:
+    """只读复制 Go 写出的 Claude 激活事实到 ``<attempt>/evidence/environment/claude-egress-activation-fact.json``（只写一次）。
+
+    校验：JSON 对象、``schema_version`` 为 ``claude-egress-activation-fact/v1``、``profile_mode`` 为 ``validation_candidate``
+    （候选 Runtime）；任一不成立即失败关闭。不改网关、不写 Store。返回写进 ``gateway_environment.activation_fact`` 的绑定。
+    """
+
+    source_path, raw = _read_activation_fact(manifest)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("网关的 Claude 激活事实不是 JSON。") from error
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != ACTIVATION_FACT_SCHEMA:
+        raise ActivationFactInvalid(f"网关的 Claude 激活事实 schema 不是 {ACTIVATION_FACT_SCHEMA}。")
+    if payload.get("profile_mode") != ACTIVATION_FACT_CANDIDATE_MODE:
+        raise ActivationFactInvalid(
+            f"网关的 Claude 激活事实 profile_mode 是 {payload.get('profile_mode')!r}，不是候选 Runtime（{ACTIVATION_FACT_CANDIDATE_MODE}）。"
+        )
+    target = environment_root / ACTIVATION_FACT_FILENAME
+    capture._exclusive_write_bytes(target, raw.encode("utf-8"))
+    return {
+        **capture._probe_binding(evidence_root, target),
+        "source_path": source_path,
+        "schema_version": ACTIVATION_FACT_SCHEMA,
+        "profile_mode": str(payload["profile_mode"]),
+        "event_id": payload.get("event_id"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # 生产 selector 只读观察
 # ---------------------------------------------------------------------------
@@ -1129,7 +1187,15 @@ def verify_attempt_bindings(attempt_root: Path, payload: Mapping[str, Any]) -> N
         raise ConfigurationError("候选 attempt 的运行条件摘要字段不闭合。")
     if facts["base_url"] != (gateway.get("base_url") if isinstance(gateway, Mapping) else None):
         raise ConfigurationError("候选 attempt 的 candidate_gateway.base_url 与网关坐标不一致。")
-    bindings = [environment.get("before"), environment.get("after"), recovery.get("file"), payload.get("selector_observed")]
+    bindings = [
+        environment.get("before"),
+        environment.get("after"),
+        environment.get("activation_fact"),
+        recovery.get("file"),
+        payload.get("selector_observed"),
+    ]
+    if payload.get("status") == "awaiting_receipts" and environment.get("activation_fact") is None:
+        raise ConfigurationError("等待封存的候选 attempt 缺少网关 Claude 激活事实副本。")
     for binding in bindings:
         if binding is None:
             continue
@@ -1139,6 +1205,214 @@ def verify_attempt_bindings(attempt_root: Path, payload: Mapping[str, Any]) -> N
         claude_upgrade._reject_symlink_components(target, evidence_root, "候选 attempt 文件")
         if not target.is_file() or file_sha256(target) != binding.get("sha256"):
             raise ConfigurationError(f"候选 attempt 文件 {binding['path']} 缺失或摘要漂移。")
+
+
+# ---------------------------------------------------------------------------
+# 候选 run 的环节对象（c1：官方 run、候选 run、候选续跑与恢复段共用）
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CandidateRunHooks:
+    """一次候选 attempt（首个 run、续跑或恢复段）里候选专属的全部环节，按调用顺序：
+
+    1. ``admit``：入口门（正式核 VC-4／Store／构建收据／服务镜像／覆盖收据／未封存，演练只核变量与覆盖），返回生效清单；
+    2. ``identity``：attempt 身份（预约收据的 ``identity_sha256`` 绑定它）；
+    3. ``pre_reservation``：管理凭据、网关只读就绪、生产 selector 只读观察（都在预约之前，零写入）；
+    4. ``before_jobs``：网关 before 快照落盘、就绪复核、selector 观察落盘（attempt before 探针之后、任何 Job 之前）；
+    5. ``after_jobs``：网关 after 快照与逐字段比较（finally 里调用，deadline 到期也采）；
+    6. ``attempt_fields``：网关隔离恢复核验落盘并给出 attempt 的候选字段（权限收口之前调用）。
+
+    调用方（``run_capture_attempt``、``claude_upgrade_recovery._run_recovery_attempt``，以及路线二的候选恢复段）按同一顺序
+    调用即得到同一份 attempt 合同（见文件头第二节）。
+    """
+
+    campaign_dir: Path
+    candidate_id: str
+    mode: str
+    admission: CandidateAdmission | None = None
+    selector_observation: dict[str, Any] | None = None
+    gateway: dict[str, Any] | None = None
+    gateway_before: dict[str, Any] | None = None
+    gateway_before_path: Path | None = None
+    gateway_after_path: Path | None = None
+    gateway_drifted: list[str] = field(default_factory=list)
+    selector_path: Path | None = None
+    activation_fact: dict[str, Any] | None = None
+
+    def admit(self, manifest: dict[str, Any], *, deadline: Any | None) -> dict[str, Any]:
+        admit = formal_admission if self.mode == capture.MODE_FORMAL else rehearsal_admission
+        self.admission = admit(self.campaign_dir, manifest, self.candidate_id, deadline=deadline)
+        return self.admission.manifest
+
+    def _require_admitted(self) -> CandidateAdmission:
+        if self.admission is None:
+            raise ConfigurationError("候选环节必须先过入口门（admit）。")
+        return self.admission
+
+    def identity(self, manifest: Mapping[str, Any], layout: Any) -> dict[str, Any]:
+        return attempt_identity(manifest, layout, self.mode, self._require_admitted())
+
+    def pre_reservation(self, manifest: Mapping[str, Any], layout: Any, jobs: Sequence[Any], *, deadline: Any | None) -> None:
+        self._require_admitted()
+        # 账号刷新触发的步骤（演练时宿主脚本的只读前检同样核管理凭据）：预约前确认环境里给出了管理凭据。
+        require_admin_token_for(jobs)
+        # 网关只读就绪核对（不落盘）：残留临时代理、临时 CA、运行目录或账号形态不对时在预约前拒绝，不留失败 attempt。
+        readiness = probe_gateway_environment(manifest, layout.host_data_root, "readiness", deadline=deadline)
+        not_ready = readiness_failures(readiness)
+        if not_ready:
+            raise ConfigurationError(f"候选网关环境未就绪：{not_ready}（先清理上一轮残留或修正专用账号与 API Key）。")
+        # 生产 selector 只读观察：正式 run 必须有 Campaign 冻结的 Active Release 目录（预约前读一次，预约后原样落盘）。
+        self.selector_observation = observe_selectors(self.campaign_dir, manifest, required=self.mode == capture.MODE_FORMAL)
+
+    def before_jobs(
+        self,
+        manifest: Mapping[str, Any],
+        layout: Any,
+        environment_root: Path,
+        observations: list[dict[str, str]],
+        *,
+        deadline: Any | None,
+        heartbeat: Any | None,
+    ) -> None:
+        admission = self._require_admitted()
+        if deadline is not None:
+            deadline.check("attempt:gateway-before")
+        self.gateway_before = probe_gateway_environment(manifest, layout.host_data_root, "before", deadline=deadline, heartbeat=heartbeat)
+        self.gateway_before_path = write_gateway_snapshot(environment_root, self.gateway_before)
+        self.gateway = gateway_coordinates(admission.variables, service_port=self.gateway_before["service"]["port"])
+        not_ready = readiness_failures(self.gateway_before)
+        if not_ready:
+            observations.extend({"check_id": f"attempt.gateway.{code}", "failure_code": "not-ready"} for code in not_ready)
+            raise ConfigurationError(f"候选网关环境未就绪：{not_ready}，拒绝执行任何 Job。")
+        if self.selector_observation is not None:
+            self.selector_path = environment_root / SELECTOR_FILENAME
+            claude_upgrade._secure_write_json_once(self.selector_path, self.selector_observation)
+
+    def after_jobs(
+        self, manifest: Mapping[str, Any], layout: Any, environment_root: Path, observations: list[dict[str, str]]
+    ) -> tuple[bool, BaseException | None]:
+        """返回 ``(是否污染, 采集错误)``。before 快照都没采到（没有执行任何 Job）时不采、不判。"""
+
+        if self.gateway_before is None:
+            return False, None
+        # deadline 到期也要采（每条只读命令各有 30 秒上限）：生产形态的网关状态不能因为预算用完就不核验。
+        try:
+            gateway_after = probe_gateway_environment(manifest, layout.host_data_root, "after")
+            self.gateway_after_path = write_gateway_snapshot(environment_root, gateway_after)
+            self.gateway_drifted = gateway_drift(self.gateway_before, gateway_after)
+        except BaseException as error:
+            observations.append({"check_id": "attempt.gateway.after-probe", "failure_code": "probe-failed"})
+            return True, error
+        # Claude 激活事实只读复制：缺失、不可读或不是候选 Runtime 一律失败关闭。正式 run 按环境污染处理（网关没有证明自己
+        # 装配的是候选 Runtime）；零请求演练没有动网关，只判演练失败。
+        try:
+            self.activation_fact = copy_activation_fact(manifest, environment_root, evidence_root=environment_root.parent)
+        except BaseException as error:
+            failure = "invalid" if isinstance(error, ActivationFactInvalid) else "missing"
+            observations.append({"check_id": "attempt.gateway.activation-fact", "failure_code": failure})
+            return self.mode == capture.MODE_FORMAL, error
+        if self.gateway_drifted:
+            observations.extend({"check_id": f"attempt.gateway.{name}", "failure_code": "drifted"} for name in self.gateway_drifted)
+            return True, None
+        return False, None
+
+    def attempt_fields(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        evidence_root: Path,
+        environment_root: Path,
+        results: Sequence[Mapping[str, Any]],
+        capture_before: Path | None,
+        capture_after: Path | None,
+        capture_drifted: Sequence[str],
+    ) -> tuple[dict[str, Any], BaseException | None]:
+        """网关隔离恢复核验落盘并返回 ``(attempt 候选字段, 落盘错误)``；结果须是归档改写之后的终值。"""
+
+        admission = self._require_admitted()
+        recovery: dict[str, Any] = {"schema_version": GATEWAY_RECOVERY_SCHEMA, "status": "failed", "file": None}
+        recovery_path: Path | None = None
+        recovery_status = "failed"
+        error: BaseException | None = None
+        try:
+            recovery_path, recovery_status = write_recovery(
+                environment_root,
+                results,
+                before=self.gateway_before_path,
+                after=self.gateway_after_path,
+                drifted=self.gateway_drifted,
+                evidence_root=evidence_root,
+            )
+            recovery = {"schema_version": GATEWAY_RECOVERY_SCHEMA, "status": recovery_status, "file": capture._probe_binding(evidence_root, recovery_path)}
+        except BaseException as caught:
+            error = caught
+        selector = (
+            runtime_catalog_snapshot(self.selector_observation, admission.persona)
+            if self.selector_path is not None and self.selector_observation is not None and admission.persona is not None
+            else None
+        )
+        fields = {
+            "gateway": self.gateway,
+            "gateway_environment": {
+                "schema_version": GATEWAY_ENVIRONMENT_SCHEMA,
+                "before": capture._probe_binding(evidence_root, self.gateway_before_path) if self.gateway_before_path is not None else None,
+                "after": capture._probe_binding(evidence_root, self.gateway_after_path) if self.gateway_after_path is not None else None,
+                "compared_fields": list(GATEWAY_COMPARED_FIELDS),
+                "drifted_fields": list(self.gateway_drifted),
+                # Claude 激活事实的只读副本（路径相对 <attempt>/evidence；没有复制成功时为 null，attempt 不会是 awaiting_receipts）。
+                "activation_fact": dict(self.activation_fact) if self.activation_fact is not None else None,
+            },
+            "gateway_recovery": recovery,
+            "selector_observed": (
+                {"schema_version": SELECTOR_OBSERVATION_SCHEMA, **capture._probe_binding(evidence_root, self.selector_path)}
+                if self.selector_path is not None
+                else None
+            ),
+            # 与 B4-02 证据侧约定的字段（见 candidate_gateway_facts）。
+            "candidate_gateway": candidate_gateway_facts(
+                evidence_root=evidence_root,
+                gateway=self.gateway,
+                run_conditions=run_condition_digests(
+                    manifest=manifest, gateway=self.gateway or {}, capture_before=capture_before, gateway_before=self.gateway_before_path
+                ),
+                capture_before=capture_before,
+                capture_after=capture_after,
+                capture_drifted=capture_drifted,
+                gateway_before=self.gateway_before_path,
+                gateway_after=self.gateway_after_path,
+                gateway_drifted=self.gateway_drifted,
+                results=results,
+                recovery=recovery_path,
+                recovery_status=recovery_status,
+                selector=selector,
+            ),
+        }
+        return fields, error
+
+    def contamination_marker_fields(self) -> dict[str, Any]:
+        return {"candidate_id": self.candidate_id, "gateway_drifted_fields": list(self.gateway_drifted)}
+
+    def verify_continuity(self, source_attempt_root: Path) -> dict[str, Any]:
+        """续跑承接时的网关连续性：来源 attempt 的网关 after 快照与本轮 before 快照逐字段相等（``GATEWAY_COMPARED_FIELDS``）。
+
+        返回写进 ``recovery.continuity.gateway`` 的记录；不成立时抛 ``GatewayContinuityDrift``（类名与官方连续性漂移同一
+        判据由调用方换算）。
+        """
+
+        if self.gateway_before is None:
+            raise ConfigurationError("网关连续性核对必须在 before 快照之后。")
+        source = Path(source_attempt_root) / "evidence" / "environment" / GATEWAY_AFTER_FILENAME
+        if source.is_symlink() or not source.is_file():
+            raise GatewayContinuityDrift("被承接的候选 attempt 缺少网关 after 快照，无法证明网关连续性。")
+        drifted = gateway_drift(claude_upgrade._read_json(source, "被承接 attempt 的网关 after 快照"), self.gateway_before)
+        if drifted:
+            raise GatewayContinuityDrift(f"上一轮结束后网关环境已漂移（{'、'.join(drifted)}）")
+        return {"source_after_sha256": file_sha256(source), "compared_fields": list(GATEWAY_COMPARED_FIELDS)}
+
+
+class GatewayContinuityDrift(ConfigurationError):
+    """被承接候选 attempt 的网关收尾快照与本轮起始快照不一致（调用方换算成官方同一个连续性漂移错误类型）。"""
 
 
 # ---------------------------------------------------------------------------

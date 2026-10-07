@@ -95,11 +95,16 @@ def attempt_environment_restored(attempt: Mapping[str, Any]) -> bool:
     """
 
     environment = attempt.get("environment") if isinstance(attempt.get("environment"), Mapping) else {}
-    return (
+    restored = (
         environment.get("before_probe") is not None
         and environment.get("after_probe") is not None
         and environment.get("drifted_kinds") == []
     )
+    if attempt.get("phase") == "candidate":
+        # 候选 attempt（B4-01 c1）另要求网关隔离恢复核验通过：每步恢复报告全部核对通过、网关前后快照逐字段相等。
+        recovery = attempt.get("gateway_recovery") if isinstance(attempt.get("gateway_recovery"), Mapping) else {}
+        restored = restored and recovery.get("status") == "passed"
+    return restored
 
 
 def deploy_receipt_identity(payload: Mapping[str, Any]) -> Mapping[str, Any]:

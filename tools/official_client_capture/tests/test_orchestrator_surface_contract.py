@@ -135,10 +135,11 @@ class SurfaceContractTests(unittest.TestCase):
                 patched.assert_not_called()
 
     def test_pending_members_name_their_work_item(self) -> None:
-        # B2-08 落实官方阶段、B3-01 补 Campaign 级阶段结果与 b0 评估路径、B4-04 补 b≥1 评估路径：候选状态、候选级阶段结果与
-        # 候选恢复段（B4-05b）仍各自报待实现。
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status（候选阶段）：由 B4-01"):
+        # B2-08 落实官方阶段、B3-01 补 Campaign 级阶段结果与 b0 评估路径、B4-04 补 b≥1 评估路径、B4-01 c1 补候选状态：
+        # 候选恢复段（B4-05b）等仍各自报待实现。候选状态对不存在的 Campaign 失败关闭（配置错误，不是待实现异常）。
+        with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
             claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
+        self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
         for stage, work_item in (("compare", "B4-03"), ("accept", "B4-06")):
             with self.subTest(stage=stage), self.assertRaisesRegex(
                 claude_upgrade.ClaudeOrchestratorPending, rf"_load_stage_result（{stage}）：由 {work_item}"

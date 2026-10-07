@@ -2993,9 +2993,18 @@ def _active_unsealed_candidate_attempts(campaign_dir: Path, *, _manifest: Mappin
             attempt.get("status") == "awaiting_receipts"
             and attempt_root.name != sealed[candidate_id]
             and ("candidate", candidate_id, attempt_root.name) not in invalidated
+            # 已按「工具演进作废作业」对账的等待封存 attempt 以对账收据为终态（与 Codex 同一判据），改由续跑处理。
+            and not _attempt_evolution_reconciled(campaign_dir, attempt_root.name)
         ):
             active.append(f"{candidate_id}:{attempt_root.name}")
     return active
+
+
+def _attempt_evolution_reconciled(campaign_dir: Path, attempt_id: str) -> bool:
+    """等待封存的 attempt 已按「工具演进作废作业」对账（对账收据带 ``tool_evolution_invalidation``）。"""
+
+    receipt = _attempt_reconciled_terminal(campaign_dir, attempt_id)
+    return isinstance(receipt, Mapping) and isinstance(receipt.get("tool_evolution_invalidation"), Mapping)
 
 
 def _failed_capture_attempts(
@@ -3306,14 +3315,11 @@ def run_capture_attempt(
         raise ConfigurationError("官方证据已经封存，禁止重复抓包。")
     current_tool = claude_upgrade._tool_identity(include_git=False)
     claude_upgrade._require_tool_evolution_registered(campaign_dir, manifest, current=current_tool, action=f"capture-{phase} run")
-    admission: Any | None = None
-    selector_observation: dict[str, Any] | None = None
+    hooks: Any | None = None
     if phase == "candidate":
-        # 候选入口门（B4-01b，见 claude_upgrade_candidate_capture 第一节）：正式 run 依次核 VC-4、Store、构建收据、服务镜像、
-        # 运行坐标覆盖与未封存；演练只核候选变量与覆盖收据。之后全程使用入口门给出的生效清单。
-        admit = candidate_capture.formal_admission if mode == MODE_FORMAL else candidate_capture.rehearsal_admission
-        admission = admit(campaign_dir, manifest, str(candidate_id), deadline=deadline)
-        manifest = admission.manifest
+        # 候选环节（B4-01b，c1 起收成 CandidateRunHooks，续跑与恢复段同一顺序调用）：入口门之后全程使用生效清单。
+        hooks = candidate_capture.CandidateRunHooks(campaign_dir, str(candidate_id), mode)
+        manifest = hooks.admit(manifest, deadline=deadline)
     jobs = claude_upgrade._campaign_jobs(campaign_dir, manifest, phase, candidate_id=candidate_id)
     requested_job = getattr(arguments, "job_id", None)
     if mode == MODE_REHEARSAL:
@@ -3325,17 +3331,9 @@ def run_capture_attempt(
     claude_upgrade._verify_execution_tree(host_tool_parent)
     binary_verification = claude_upgrade._verify_official_binaries(manifest, deadline=deadline)
     preconditions = _container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None, phase=phase)
-    if admission is not None:
-        identity = candidate_capture.attempt_identity(manifest, layout, mode, admission)
-        # 账号刷新触发的步骤（演练时宿主脚本的只读前检同样核管理凭据）：预约前确认环境里给出了管理凭据。
-        candidate_capture.require_admin_token_for(jobs)
-        # 网关只读就绪核对（不落盘）：残留临时代理、临时 CA、运行目录或账号形态不对时在预约前拒绝，不留失败 attempt。
-        readiness = candidate_capture.probe_gateway_environment(manifest, layout.host_data_root, "readiness", deadline=deadline)
-        not_ready = candidate_capture.readiness_failures(readiness)
-        if not_ready:
-            raise ConfigurationError(f"候选网关环境未就绪：{not_ready}（先清理上一轮残留或修正专用账号与 API Key）。")
-        # 生产 selector 只读观察：正式 run 必须有 Campaign 冻结的 Active Release 目录（预约前读一次，预约后原样落盘）。
-        selector_observation = candidate_capture.observe_selectors(campaign_dir, manifest, required=mode == MODE_FORMAL)
+    if hooks is not None:
+        identity = hooks.identity(manifest, layout)
+        hooks.pre_reservation(manifest, layout, jobs, deadline=deadline)
     else:
         identity = _attempt_identity(manifest, layout, mode)
     for job in jobs:
@@ -3382,13 +3380,6 @@ def run_capture_attempt(
     checkpoint_store: incremental_recovery.CheckpointStore | None = None
     timeout_checkpoint_path: Path | None = None
     contaminated = False
-    # 候选阶段（B4-01b）：网关前后快照、漂移字段、selector 观察文件与网关坐标。
-    gateway_before: dict[str, Any] | None = None
-    gateway_before_path: Path | None = None
-    gateway_after_path: Path | None = None
-    gateway_drifted: list[str] = []
-    selector_path: Path | None = None
-    gateway: dict[str, Any] | None = None
     try:
         checkpoint_store = incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
         _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt:reserved", force=True, attempt_root=attempt_root)
@@ -3397,20 +3388,8 @@ def run_capture_attempt(
         if before_manifest.get("capture_processes"):
             attempt_observations.append({"check_id": "attempt.environment.processes", "failure_code": "residual"})
             raise ConfigurationError("采集容器（抓包或断网）存在残留取证进程，环境不干净，拒绝执行任何 Job。")
-        if admission is not None:
-            deadline.check("attempt:gateway-before")
-            gateway_before = candidate_capture.probe_gateway_environment(
-                manifest, layout.host_data_root, "before", deadline=deadline, heartbeat=heartbeat
-            )
-            gateway_before_path = candidate_capture.write_gateway_snapshot(environment_root, gateway_before)
-            gateway = candidate_capture.gateway_coordinates(admission.variables, service_port=gateway_before["service"]["port"])
-            not_ready = candidate_capture.readiness_failures(gateway_before)
-            if not_ready:
-                attempt_observations.extend({"check_id": f"attempt.gateway.{code}", "failure_code": "not-ready"} for code in not_ready)
-                raise ConfigurationError(f"候选网关环境未就绪：{not_ready}，拒绝执行任何 Job。")
-            if selector_observation is not None:
-                selector_path = environment_root / candidate_capture.SELECTOR_FILENAME
-                claude_upgrade._secure_write_json_once(selector_path, selector_observation)
+        if hooks is not None:
+            hooks.before_jobs(manifest, layout, environment_root, attempt_observations, deadline=deadline, heartbeat=heartbeat)
         for job in jobs:
             _require_capture_budget(deadline, operation=f"job:{job.job_id}:admission")
             _write_attempt_heartbeat(heartbeat_path, deadline, operation=f"job:{job.job_id}:start", attempt_root=attempt_root)
@@ -3487,22 +3466,11 @@ def run_capture_attempt(
             if before_manifest is not None:
                 contaminated = True
                 attempt_observations.append({"check_id": "attempt.environment.after-probe", "failure_code": "probe-failed"})
-        if admission is not None and gateway_before is not None:
-            # 候选网关 after 快照：与 before 逐字段比较（GATEWAY_COMPARED_FIELDS），漂移或采不到都判环境污染。deadline 到期
-            # 也要采（每条只读命令各有 30 秒上限）：生产形态的网关状态不能因为预算用完就不核验。
-            try:
-                gateway_after = candidate_capture.probe_gateway_environment(manifest, layout.host_data_root, "after")
-                gateway_after_path = candidate_capture.write_gateway_snapshot(environment_root, gateway_after)
-                gateway_drifted = candidate_capture.gateway_drift(gateway_before, gateway_after)
-                if gateway_drifted:
-                    contaminated = True
-                    attempt_observations.extend(
-                        {"check_id": f"attempt.gateway.{name}", "failure_code": "drifted"} for name in gateway_drifted
-                    )
-            except BaseException as error:
-                restoration_error = restoration_error or error
-                contaminated = True
-                attempt_observations.append({"check_id": "attempt.gateway.after-probe", "failure_code": "probe-failed"})
+        if hooks is not None:
+            # 候选网关 after 快照：与 before 逐字段比较，漂移或采不到都判环境污染（deadline 到期也采）。
+            gateway_contaminated, gateway_error = hooks.after_jobs(manifest, layout, environment_root, attempt_observations)
+            contaminated = contaminated or gateway_contaminated
+            restoration_error = restoration_error or gateway_error
 
     if isinstance(execution_error, incremental_recovery.WallClockTimeoutError) or deadline.expired:
         try:
@@ -3518,67 +3486,17 @@ def run_capture_attempt(
 
     # 候选阶段（B4-01b）：网关隔离恢复核验在权限收口之前落盘（收口边界要包含它）；结果已是归档改写之后的终值。
     candidate_fields: dict[str, Any] = {}
-    if admission is not None:
-        gateway_recovery: dict[str, Any] = {"schema_version": candidate_capture.GATEWAY_RECOVERY_SCHEMA, "status": "failed", "file": None}
-        recovery_path: Path | None = None
-        recovery_status = "failed"
-        try:
-            recovery_path, recovery_status = candidate_capture.write_recovery(
-                environment_root,
-                results,
-                before=gateway_before_path,
-                after=gateway_after_path,
-                drifted=gateway_drifted,
-                evidence_root=evidence_root,
-            )
-            gateway_recovery = {
-                "schema_version": candidate_capture.GATEWAY_RECOVERY_SCHEMA,
-                "status": recovery_status,
-                "file": _probe_binding(evidence_root, recovery_path),
-            }
-        except BaseException as error:
-            execution_error = execution_error or error
-        candidate_fields = {
-            "gateway": gateway,
-            "gateway_environment": {
-                "schema_version": candidate_capture.GATEWAY_ENVIRONMENT_SCHEMA,
-                "before": _probe_binding(evidence_root, gateway_before_path) if gateway_before_path is not None else None,
-                "after": _probe_binding(evidence_root, gateway_after_path) if gateway_after_path is not None else None,
-                "compared_fields": list(candidate_capture.GATEWAY_COMPARED_FIELDS),
-                "drifted_fields": list(gateway_drifted),
-            },
-            "gateway_recovery": gateway_recovery,
-            "selector_observed": (
-                {"schema_version": candidate_capture.SELECTOR_OBSERVATION_SCHEMA, **_probe_binding(evidence_root, selector_path)}
-                if selector_path is not None
-                else None
-            ),
-            # 与 B4-02 证据侧约定的字段（见 claude_upgrade_candidate_capture.candidate_gateway_facts）。
-            "candidate_gateway": candidate_capture.candidate_gateway_facts(
-                evidence_root=evidence_root,
-                gateway=gateway,
-                run_conditions=candidate_capture.run_condition_digests(
-                    manifest=manifest,
-                    gateway=gateway or {},
-                    capture_before=(environment_root / "before" / PROBE_MANIFEST_NAME) if before_manifest else None,
-                    gateway_before=gateway_before_path,
-                ),
-                capture_before=(environment_root / "before" / PROBE_MANIFEST_NAME) if before_manifest else None,
-                capture_after=(environment_root / "after" / PROBE_MANIFEST_NAME) if after_manifest else None,
-                capture_drifted=attempt_drift,
-                gateway_before=gateway_before_path,
-                gateway_after=gateway_after_path,
-                gateway_drifted=gateway_drifted,
-                results=results,
-                recovery=recovery_path,
-                recovery_status=recovery_status,
-                selector=(
-                    candidate_capture.runtime_catalog_snapshot(selector_observation, admission.persona)
-                    if selector_path is not None and selector_observation is not None and admission.persona is not None
-                    else None
-                ),
-            ),
-        }
+    if hooks is not None:
+        candidate_fields, fields_error = hooks.attempt_fields(
+            manifest,
+            evidence_root=evidence_root,
+            environment_root=environment_root,
+            results=results,
+            capture_before=(environment_root / "before" / PROBE_MANIFEST_NAME) if before_manifest else None,
+            capture_after=(environment_root / "after" / PROBE_MANIFEST_NAME) if after_manifest else None,
+            capture_drifted=attempt_drift,
+        )
+        execution_error = execution_error or fields_error
 
     container_roots = sorted(
         {
@@ -3652,7 +3570,7 @@ def run_capture_attempt(
         "drifted_kinds": attempt_drift,
         "continuity_probe_kinds": list(CONTINUITY_PROBE_KINDS),
     }
-    if admission is not None:
+    if hooks is not None:
         # 与 Codex 候选 attempt 同名的恢复收据绑定（共享的候选恢复准入读 environment.restoration_report）：Claude 取网关
         # 隔离恢复核验文件，路径相对 <attempt>/evidence。
         environment["restoration_report"] = candidate_fields["gateway_recovery"]["file"]
@@ -3716,11 +3634,7 @@ def run_capture_attempt(
                     "attempt_id": attempt_root.name,
                     "drifted_kinds": attempt_drift,
                     "contaminated_jobs": sorted(str(item.get("id")) for item in results if item.get("environment_contaminated")),
-                    **(
-                        {"candidate_id": candidate_id, "gateway_drifted_fields": list(gateway_drifted)}
-                        if phase == "candidate"
-                        else {}
-                    ),
+                    **(hooks.contamination_marker_fields() if hooks is not None else {}),
                     "recorded_at_utc": claude_upgrade._utc_now(),
                 },
             )

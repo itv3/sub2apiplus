@@ -2912,7 +2912,7 @@ def campaign_status(
     campaign_dir: Path,
     candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（B2-08 落实 VC-1 resume 必需的官方阶段部分，候选阶段的状态随候选采集 attempt 由 B4-01 完善）：从不可变收据推导状态。
+    """服务面成员（B2-08 落实官方阶段，B4-01 c1 补候选采集阶段）：从不可变收据推导状态。
 
     实现在 ``claude_upgrade_recovery.campaign_status``。
     """
@@ -4723,7 +4723,7 @@ RECOVERY_SUBCOMMANDS: Mapping[str, str] = {
     "reconcile-supervisor-run": "对账尚无 attempt 的父监督器 run（派发前失败、强杀或中断），先入账后判定；可恢复时按 N+1 重派",
     "account-sealed-official": "把已封存官方阶段的模型请求写入项目总账（零请求、按 attempt 幂等）",
     "resume": "按 Campaign 状态续跑官方阶段：失败或已对账中断的 attempt 只经已批准的恢复预览 --rerun-failed",
-    "status": "显示 Campaign 状态和下一命令（官方阶段；候选阶段由 B2-11 完善）",
+    "status": "显示 Campaign 状态和下一命令（官方阶段与候选采集阶段；--candidate-id 指定候选）",
     "environment-cleanup": "在明确批准下清理两个采集容器里的残留取证进程，前后探针与清理收据留证（Claude 新增）",
     "harden-evidence-permissions": "Claude 不提供：run 内置 Job 级与 run 末两级收口，失败收口经 resume 重新收口",
     "wire-transition-intent": "Claude 不提供：wire 层变化一律经 tool-evolution 登记",

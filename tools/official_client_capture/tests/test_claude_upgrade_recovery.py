@@ -1354,8 +1354,10 @@ class ReuseCheckAndStatusTests(RecoveryChainCase):
             self.assertIn("复用判定不一致", stderr)
         with self.chain_patched():
             self.assertEqual(claude_upgrade.campaign_status(campaign)["status"], "official_capture_failed")
-            with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B4-01"):
+            # B4-01 c1 起候选状态已落实：不存在的候选失败关闭（配置错误，不是待实现异常）。
+            with self.assertRaisesRegex(ConfigurationError, "没有候选 c1") as caught:
                 claude_upgrade.campaign_status(campaign, "c1")
+            self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
 
         # 收口之后证据被改动：读取 attempt 时的权限收口重放失败关闭，对账不写任何收据。
         _root, attempt = self.load_attempt(campaign, first["attempt_id"], replay=False)

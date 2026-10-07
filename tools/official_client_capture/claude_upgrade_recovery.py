@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude VC-1 恢复：对账、续跑闭集、resume、残留取证进程清理（Claude 升级控制面设计 B2-08）。
+"""Claude 恢复：对账、续跑闭集、resume、残留取证进程清理（Claude 升级控制面设计 B2-08；候选续跑 B4-01 c1）。
 
 一、链路
 ========
@@ -69,6 +69,25 @@ attempt 收据），差别只在：
   的读侧按封存证据清单加重绑链核对（``claude_upgrade_candidate_seal`` 第六节）；必须带 ``--candidate-id``。
 * ``wire-transition-intent``／``wire-transition-final``：Claude Campaign 只用工具演进链，wire 层变化一律经 ``tool-evolution``
   登记（逐作业作废，resume 只重跑受影响作业）；两条链在共享合同里互斥，Claude 不建 wire transition 链。
+
+六、候选续跑（B4-01 c1）
+========================
+官方阶段的同一套对账、续跑闭集、恢复来源收据与恢复 attempt，按阶段与候选 ID 参数化：
+
+* 命令：``resume --candidate-id <cid> --rerun-failed --recovery-preview <已批准> --acknowledge-live-requests``；候选身份只来自
+  VC-4 构建收据（Codex 用来重建候选身份的 ``--runtime-image``／``--build-id`` 等一律拒绝）。``resume --candidate-id`` 在候选
+  还没有 attempt 时起首个候选 run；``--preview-recovery`` 只读输出续跑闭集（``claude-upgrade-candidate-recovery-plan/v1``）。
+* 来源：本候选最新的 attempt；本候选其余预约都已收口，官方阶段与其它候选没有未封存的预约或 attempt。
+* 复用证据多核一项：每步网关恢复报告的摘要（``restoration_checks``）。
+* 恢复 attempt 与首个候选 attempt 同一合同：预约前走 ``CandidateRunHooks`` 的入口门、身份、网关只读就绪与 selector 观察
+  （都在消费恢复授权之前），before 探针之后采网关 before 快照；有复用时连续性另核网关（来源 attempt 的网关 after 快照与本轮
+  before 快照逐字段相等，记在 ``recovery.continuity.gateway``，不等即零请求失败）；attempt 末采网关 after 快照、写候选字段。
+* 恢复来源收据沿用 v1 字段闭集：候选 ID 由所在目录与预约收据的 ``phase``／``candidate_id`` 表达。
+* 对账：候选 attempt 另采一次网关只读快照留证（``control/reconciliation/attempt-<id>/gateway-probes/<时刻>/``），残留项写进
+  ``gateway_residue``；残留的清理随 c2 落实。
+* 状态：``status --candidate-id``（或只有一个活跃候选时不带）给出候选采集状态，状态名与 Codex 同名（``profile_approved``、
+  ``candidate_capture_failed``／``candidate_capture_interrupted``、``candidate_awaiting_client_checkpoint``、
+  ``candidate_awaiting_seal_approval``、``candidate_sealed``）；多个活跃候选时是 ``candidate_selection_required``。
 """
 
 from __future__ import annotations
@@ -106,6 +125,7 @@ from tools.official_client_capture import upgrade_control_plane
 
 CLIENT = "claude"
 PHASE = "official"
+CANDIDATE_PHASE = "candidate"
 RECOVERY_SOURCE_FILENAME = "recovery-source.json"
 RECOVERY_SOURCE_SCHEMA = "claude-upgrade-recovery-source/v1"
 RECOVERY_SOURCE_FIELDS = frozenset(
@@ -146,10 +166,22 @@ def _resolved_campaign(value: Any) -> Path:
     return campaign_dir.resolve(strict=True)
 
 
-def _attempt_root(campaign_dir: Path, attempt_id: str) -> Path:
+def _attempt_root(campaign_dir: Path, attempt_id: str, phase: str = PHASE, candidate_id: str | None = None) -> Path:
     if not capture.SAFE_ID_RE.fullmatch(str(attempt_id)):
         raise ConfigurationError("attempt-id 非法。")
-    return campaign_dir / claude_upgrade._capture_attempt_relative(PHASE, None) / "attempts" / str(attempt_id)
+    return campaign_dir / claude_upgrade._capture_attempt_relative(phase, candidate_id) / "attempts" / str(attempt_id)
+
+
+def _scope(phase: str, candidate_id: str | None) -> tuple[str, str]:
+    """(阶段在 attempt 列表里的前缀, 提示里的称呼)：官方是 ``official``／「官方」，候选是候选 ID／「候选 <ID> 的」。"""
+
+    if phase == PHASE:
+        if candidate_id is not None:
+            raise ConfigurationError("official 阶段不得携带 candidate-id。")
+        return "official", "官方"
+    if phase != CANDIDATE_PHASE or not isinstance(candidate_id, str) or not capture.SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("候选阶段必须给出合法的 candidate-id。")
+    return candidate_id, f"候选 {candidate_id} 的"
 
 
 def _binding(campaign_dir: Path, path: Path) -> dict[str, str]:
@@ -170,14 +202,23 @@ def _attempt_evolution_reconciled(campaign_dir: Path, attempt_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def require_current_source(campaign_dir: Path, manifest: Mapping[str, Any], source_attempt_id: str) -> None:
-    """续跑来源必须是最新的官方 attempt，且其余官方预约都已收口（已对账的孤儿、被作废或已对账作废的待封存 attempt）。"""
+def require_current_source(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source_attempt_id: str,
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
+) -> None:
+    """续跑来源必须是本阶段（官方，或本候选）最新的 attempt，且本阶段其余预约都已收口（已对账的孤儿、被作废或已对账作废的
+    待封存 attempt）。候选续跑另要求官方阶段与其它候选没有未封存的预约或 attempt（同一时刻只有一条采集链）。"""
 
-    ordered = claude_upgrade._ordered_capture_attempts(campaign_dir, PHASE, None, _manifest=manifest)
+    prefix, label = _scope(phase, candidate_id)
+    ordered = claude_upgrade._ordered_capture_attempts(campaign_dir, phase, candidate_id, _manifest=manifest)
     newest = ordered[0][0].name if ordered else None
     if newest != source_attempt_id:
         raise ConfigurationError(
-            f"续跑来源必须是最新的官方 attempt：来源 {source_attempt_id}，最新 {newest}（来源已经续跑过，或其后另有 attempt；"
+            f"续跑来源必须是最新的{label} attempt：来源 {source_attempt_id}，最新 {newest}（来源已经续跑过，或其后另有 attempt；"
             "对最新 attempt 重新对账）。"
         )
     invalidated = capture._invalidated_attempts(campaign_dir)
@@ -185,19 +226,26 @@ def require_current_source(campaign_dir: Path, manifest: Mapping[str, Any], sour
     for root, _reservation in ordered[1:]:
         if not (root / "attempt.json").exists():
             if capture._attempt_reconciled_terminal(campaign_dir, root.name) is None:
-                foreign.append(f"official:{root.name}:reserved_or_interrupted")
+                foreign.append(f"{prefix}:{root.name}:reserved_or_interrupted")
             continue
         _root, attempt = claude_upgrade._load_capture_attempt(
-            campaign_dir, PHASE, None, root.name, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
+            campaign_dir, phase, candidate_id, root.name, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
         )
         if (
             attempt.get("status") == "awaiting_receipts"
-            and (PHASE, None, root.name) not in invalidated
+            and (phase, candidate_id, root.name) not in invalidated
             and not _attempt_evolution_reconciled(campaign_dir, root.name)
         ):
-            foreign.append(f"official:{root.name}")
+            foreign.append(f"{prefix}:{root.name}")
+    if phase == CANDIDATE_PHASE:
+        foreign.extend(claude_upgrade._active_unsealed_attempts(campaign_dir, PHASE, _manifest=manifest))
+        foreign.extend(
+            item
+            for item in claude_upgrade._active_unsealed_attempts(campaign_dir, CANDIDATE_PHASE, _manifest=manifest)
+            if not item.startswith(f"{candidate_id}:")
+        )
     if foreign:
-        raise ConfigurationError(f"Campaign 还有其它未收口的官方预约或待封存 attempt，禁止续跑：{foreign}")
+        raise ConfigurationError(f"Campaign 还有其它未收口的{label}预约或待封存 attempt，禁止续跑：{foreign}")
 
 
 def _producer(campaign_dir: Path, source_root: Path, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -225,8 +273,12 @@ def _verify_reusable_evidence(
     result: Mapping[str, Any],
     producer: Mapping[str, Any],
     layout: Any,
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
 ) -> None:
-    """复用前逐项复核证据：Job 闭环收据摘要、Job 级权限收口重放、relay 清单摘要（任一不成立即失败关闭）。"""
+    """复用前逐项复核证据：Job 闭环收据摘要、Job 级权限收口重放、relay 清单摘要；候选另核每步恢复报告摘要（任一不成立即
+    失败关闭）。"""
 
     job_id = str(result.get("id"))
     binding = producer["job_closure"]
@@ -234,7 +286,7 @@ def _verify_reusable_evidence(
     if closure_path.is_symlink() or not closure_path.is_file() or file_sha256(closure_path) != binding.get("sha256"):
         raise ConfigurationError(f"复用 Job {job_id} 的闭环收据缺失或摘要漂移。")
     closure = claude_upgrade._read_json(closure_path, "Job 闭环收据")
-    producer_root = _attempt_root(campaign_dir, str(producer["attempt_id"]))
+    producer_root = _attempt_root(campaign_dir, str(producer["attempt_id"]), phase, candidate_id)
     job_root = closure_path.parent
     if (
         closure.get("schema_version") != capture.JOB_CLOSURE_SCHEMA
@@ -267,6 +319,15 @@ def _verify_reusable_evidence(
         path = capture._host_path(str(manifest.get("path", "")), layout)
         if row.get("status") != "passed" or path.is_symlink() or not path.is_file() or file_sha256(path) != manifest.get("sha256"):
             raise ConfigurationError(f"复用 Job {job_id} 的 {row.get('probe_id')} relay 清单缺失、未通过或已漂移。")
+    if phase == CANDIDATE_PHASE:
+        rows = result.get("restoration_checks")
+        if not isinstance(rows, list) or not rows:
+            raise ConfigurationError(f"复用候选 Job {job_id} 缺少每步恢复报告核对。")
+        for row in rows:
+            report = row.get("report") if isinstance(row, Mapping) and isinstance(row.get("report"), Mapping) else {}
+            path = capture._host_path(str(report.get("path", "")), layout)
+            if row.get("status") != "passed" or path.is_symlink() or not path.is_file() or file_sha256(path) != report.get("sha256"):
+                raise ConfigurationError(f"复用候选 Job {job_id} 的 {row.get('probe_id')} 网关恢复报告缺失、未通过或已漂移。")
 
 
 def recovery_plan(
@@ -275,27 +336,32 @@ def recovery_plan(
     *,
     source_attempt_id: str,
     jobs: Sequence[Any] | None = None,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """冻结失败（或被作废、被强杀）官方 attempt 的续跑闭集；只读：不取租约、不写文件、不发请求、不采探针。"""
+    """冻结失败（或被作废、被强杀）官方或候选 attempt 的续跑闭集；只读：不取租约、不写文件、不发请求、不采探针。"""
 
     campaign_dir = Path(campaign_dir)
-    source_root = _attempt_root(campaign_dir, source_attempt_id)
+    _prefix, label = _scope(phase, candidate_id)
+    source_root = _attempt_root(campaign_dir, source_attempt_id, phase, candidate_id)
     if source_root.is_symlink() or not source_root.is_dir():
-        raise ConfigurationError(f"Campaign 内没有官方 attempt：{source_attempt_id}")
-    reservation = claude_upgrade._load_capture_reservation(campaign_dir, source_root, phase=PHASE, candidate_id=None, _manifest=manifest)
+        raise ConfigurationError(f"Campaign 内没有{label} attempt：{source_attempt_id}")
+    reservation = claude_upgrade._load_capture_reservation(
+        campaign_dir, source_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
+    )
     planned = {str(row["id"]): str(row["execution_sha256"]) for row in reservation["planned_jobs"]}
-    jobs = list(jobs) if jobs is not None else claude_upgrade._campaign_jobs(campaign_dir, dict(manifest), PHASE)
+    jobs = list(jobs) if jobs is not None else claude_upgrade._campaign_jobs(campaign_dir, dict(manifest), phase, candidate_id=candidate_id)
     if {job.job_id: claude_upgrade._job_execution_sha256(job) for job in jobs} != planned:
-        raise ConfigurationError("Campaign 冻结的 official Job 与来源 attempt 的预约计划不一致（ID 或执行摘要漂移），禁止续跑。")
+        raise ConfigurationError(f"Campaign 冻结的 {phase} Job 与来源 attempt 的预约计划不一致（ID 或执行摘要漂移），禁止续跑。")
     attempt: dict[str, Any] | None = None
     if (source_root / "attempt.json").exists() or (source_root / "attempt.json").is_symlink():
         _root, attempt = claude_upgrade._load_capture_attempt(
-            campaign_dir, PHASE, None, source_attempt_id, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
+            campaign_dir, phase, candidate_id, source_attempt_id, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
         )
     status = str(attempt.get("status")) if attempt is not None else "reserved_or_interrupted"
-    key = (PHASE, None, source_attempt_id)
+    key = (phase, candidate_id, source_attempt_id)
     rerun_all = key in capture._invalidated_attempts(campaign_dir)
-    impact = claude_upgrade._attempt_evolution_impact(campaign_dir, manifest, source_root, phase=PHASE, candidate_id=None)
+    impact = claude_upgrade._attempt_evolution_impact(campaign_dir, manifest, source_root, phase=phase, candidate_id=candidate_id)
     if attempt is None:
         if capture._attempt_reconciled_terminal(campaign_dir, source_attempt_id) is None:
             raise ConfigurationError(f"被中断的 attempt {source_attempt_id} 尚未对账：先 reconcile-attempt 入账并批准恢复预览。")
@@ -304,11 +370,11 @@ def recovery_plan(
             raise ConfigurationError("环境污染 attempt 尚未隔离：先修复环境并 environment-isolate，再对账续跑。")
     elif status == "awaiting_receipts":
         evolved = claude_upgrade._attempt_evolution_invalidated_job_ids(
-            campaign_dir, manifest, source_root, attempt, phase=PHASE, candidate_id=None
+            campaign_dir, manifest, source_root, attempt, phase=phase, candidate_id=candidate_id
         )
         if not rerun_all and not evolved:
             raise ConfigurationError(
-                f"attempt {source_attempt_id} 正等待 seal、没有被作废的作业，不是续跑来源；按正常流程 capture-official seal。"
+                f"attempt {source_attempt_id} 正等待 seal、没有被作废的作业，不是续跑来源；按正常流程 capture-{phase} seal。"
             )
     elif status != "failed":
         raise ConfigurationError(f"attempt 状态 {status} 不能作为续跑来源。")
@@ -334,7 +400,7 @@ def recovery_plan(
         for job_id in reuse:
             result = results[job_id]
             producer = _producer(campaign_dir, source_root, result)
-            _verify_reusable_evidence(campaign_dir, result, producer, layout)
+            _verify_reusable_evidence(campaign_dir, result, producer, layout, phase=phase, candidate_id=candidate_id)
             reused = copy.deepcopy(dict(result))
             receipt_path = source_root / f"job-{job_id}.json"
             reused.update(
@@ -379,17 +445,26 @@ def recovery_reuse_check(
     reuse_job_ids: Iterable[str],
     execute_job_ids: Iterable[str],
 ) -> dict[str, Any]:
-    """R17：按 resume 同一复用判定只读复算恢复预览；resume 会拒绝的情形原样抛 ``ConfigurationError``。"""
+    """R17：按 resume 同一复用判定只读复算恢复预览（官方与候选）；resume 会拒绝的情形原样抛 ``ConfigurationError``。
 
-    if phase != PHASE or candidate_id is not None:
-        raise claude_upgrade._pending("recovery_reuse_check（候选阶段）", "B4-01（候选采集 attempt）")
+    候选阶段（c1）：生效清单经运行坐标覆盖（Claude 恒为原样或失败关闭）；候选必须未封存；不重走入口门（那要采 docker
+    与 Store 事实，属于 resume 的预约前门禁），复用判定与 resume 是同一个 ``recovery_plan``。
+    """
+
+    _scope(phase, candidate_id)
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     manifest = claude_upgrade._require_formal_campaign(campaign_dir)
     claude_upgrade._reject_contaminated_campaign(campaign_dir)
-    if capture._official_sealed(campaign_dir):
-        raise ConfigurationError("官方证据已经封存，禁止续跑。")
-    require_current_source(campaign_dir, manifest, str(source_attempt_id))
-    plan = recovery_plan(campaign_dir, manifest, source_attempt_id=str(source_attempt_id))
+    if phase == PHASE:
+        if capture._official_sealed(campaign_dir):
+            raise ConfigurationError("官方证据已经封存，禁止续跑。")
+    else:
+        from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+        candidate_capture.require_unsealed(campaign_dir, str(candidate_id), revision=None)
+        manifest = candidate_capture.apply_runtime_override(campaign_dir, manifest, candidate_id)
+    require_current_source(campaign_dir, manifest, str(source_attempt_id), phase=phase, candidate_id=candidate_id)
+    plan = recovery_plan(campaign_dir, manifest, source_attempt_id=str(source_attempt_id), phase=phase, candidate_id=candidate_id)
     preview_reuse = sorted({str(item) for item in reuse_job_ids})
     preview_execute = sorted({str(item) for item in execute_job_ids})
     if preview_reuse != plan["reuse_job_ids"] or preview_execute != plan["execute_job_ids"]:
@@ -620,7 +695,8 @@ def _require_no_residual_processes(manifest: Mapping[str, Any], deadline: Any) -
 
 
 def _approved_recovery_preview(campaign_dir: Path, manifest: Mapping[str, Any], preview_path: Path) -> dict[str, Any]:
-    """只读核对已批准的恢复预览（不消费授权）：位置、自摘要、零请求边界、批准收据；来源必须仍是最新的官方 attempt。"""
+    """只读核对已批准的恢复预览（不消费授权）：位置、自摘要、零请求边界、批准收据；来源必须仍是本阶段（官方或该候选）最新的
+    attempt（候选续跑同样可以凭它在恢复批准下清理残留进程）。"""
 
     if preview_path.is_symlink() or not preview_path.is_file():
         raise ConfigurationError(f"恢复预览不存在或不可信：{preview_path}")
@@ -633,8 +709,8 @@ def _approved_recovery_preview(campaign_dir: Path, manifest: Mapping[str, Any], 
     if (
         preview.get("schema_version") != reconciler.RECOVERY_PREVIEW_SCHEMA
         or claude_upgrade._fingerprint(unsigned) != preview.get("review_sha256")
-        or preview.get("phase") != PHASE
-        or preview.get("candidate_id") is not None
+        or preview.get("phase") not in {PHASE, CANDIDATE_PHASE}
+        or (preview.get("phase") == PHASE) != (preview.get("candidate_id") is None)
         or preview.get("recovery_revision") is not None
         or preview.get("live_request_count") != 0
         or resolved.parent.name != f"attempt-{preview.get('source_attempt_id')}"
@@ -655,7 +731,9 @@ def _approved_recovery_preview(campaign_dir: Path, manifest: Mapping[str, Any], 
             approval = payload
     if approval is None:
         raise ConfigurationError("恢复预览尚未批准；先 reconcile-attempt --approve-recovery-sha256 <review_sha256>。")
-    require_current_source(campaign_dir, manifest, str(preview["source_attempt_id"]))
+    phase = str(preview["phase"])
+    candidate_id = preview.get("candidate_id") if phase == CANDIDATE_PHASE else None
+    require_current_source(campaign_dir, manifest, str(preview["source_attempt_id"]), phase=phase, candidate_id=candidate_id)
     return {
         "kind": "recovery_approval",
         "source_attempt_id": str(preview["source_attempt_id"]),
@@ -839,7 +917,54 @@ def reconcile_attempt_command(arguments: argparse.Namespace) -> tuple[dict[str, 
                 "（--recovery-preview <已批准的恢复预览>）在恢复批准下清理并留证，否则续跑在预约前拒绝；"
                 + str(result.get("next_command", ""))
             )
+        phase, candidate_id = _attempt_scope(campaign_dir, str(arguments.attempt_id))
+        if phase == CANDIDATE_PHASE:
+            gateway = identify_gateway_residue(campaign_dir, manifest, str(arguments.attempt_id), str(candidate_id))
+            result["gateway_residue"] = gateway
+            if gateway["status"] == "residual":
+                result["next_command"] = (
+                    f"候选网关残留 {gateway['failures']}（只读快照已留证）：resume 之前先清理网关残留（宿主候选运行目录 restore/ 下有"
+                    "运行前快照；候选网关残留的 environment-cleanup 随 B4-01 c2 落实），否则续跑在预约前拒绝；"
+                    + str(result.get("next_command", ""))
+                )
     return result, 0 if result.get("status") in {"recoverable", "authorized"} else 3
+
+
+def _attempt_scope(campaign_dir: Path, attempt_id: str) -> tuple[str, str | None]:
+    """attempt 所属阶段与候选（按 Campaign 内的 attempt 目录定位，与共享对账器同一取法）。"""
+
+    for phase, candidate_id, attempt_root in claude_upgrade._campaign_attempt_roots(campaign_dir):
+        if attempt_root.name == attempt_id:
+            return phase, candidate_id
+    raise ConfigurationError(f"Campaign 内没有 attempt：{attempt_id}")
+
+
+GATEWAY_PROBE_DIRNAME = "gateway-probes"
+
+
+def identify_gateway_residue(campaign_dir: Path, manifest: Mapping[str, Any], attempt_id: str, candidate_id: str) -> dict[str, Any]:
+    """候选 attempt 对账时识别网关残留（B4-01 c1）：采一次网关只读快照留证在对账目录下，按候选 run 的就绪判据给出残留项；
+    快照采不到时记 probe_failed，不改变对账结论。"""
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+    stamp = claude_upgrade._utc_now().replace(":", "").replace("-", "").replace(".", "")
+    output_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR / f"attempt-{attempt_id}" / GATEWAY_PROBE_DIRNAME / stamp
+    try:
+        effective = candidate_capture.apply_runtime_override(campaign_dir, dict(manifest), candidate_id)
+        snapshot = candidate_capture.probe_gateway_environment(effective, capture._host_data_root(campaign_dir), "readiness")
+        capture._private_directory(output_dir, campaign_dir)
+        path = output_dir / "gateway-readiness.json"
+        claude_upgrade._secure_write_json_once(path, snapshot)
+    except (ConfigurationError, OSError, incremental_recovery.IncrementalRecoveryError) as error:
+        return {"status": "probe_failed", "reason": f"{type(error).__name__}: {str(error)[:300]}", "failures": None}
+    failures = candidate_capture.readiness_failures(snapshot)
+    return {
+        "status": "residual" if failures else "clean",
+        "failures": failures,
+        "snapshot": _binding(campaign_dir, path),
+        "observed_at_utc": snapshot.get("observed_at_utc"),
+    }
 
 
 def reconcile_supervisor_run_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -870,21 +995,28 @@ def account_sealed_official_command(arguments: argparse.Namespace) -> tuple[dict
 
 
 # ---------------------------------------------------------------------------
-# campaign_status（官方阶段；候选阶段的状态随候选采集 attempt 由 B4-01 完善）
+# campaign_status（官方阶段 B2-08；候选阶段 B4-01 c1）
 # ---------------------------------------------------------------------------
 
 STATUS_SCHEMA = "claude-upgrade-status/v1"
 
 
-def _attempt_summary(campaign_dir: Path, manifest: Mapping[str, Any], attempt_root: Path) -> dict[str, Any]:
-    """一个官方 attempt 的只读摘要（不重放证据边界）：状态与作废、隔离、连续性漂移等续跑判定事实。"""
+def _attempt_summary(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """一个官方或候选 attempt 的只读摘要（不重放证据边界）：状态与作废、隔离、连续性漂移等续跑判定事实。"""
 
     attempt_id = attempt_root.name
     if not (attempt_root / "attempt.json").exists():
         reconciled = capture._attempt_reconciled_terminal(campaign_dir, attempt_id) is not None
         return {"attempt_id": attempt_id, "status": "reconciled_interrupted" if reconciled else "reserved_or_interrupted"}
     _root, attempt = claude_upgrade._load_capture_attempt(
-        campaign_dir, PHASE, None, attempt_id, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
+        campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
     )
     summary: dict[str, Any] = {
         "attempt_id": attempt_id,
@@ -892,10 +1024,10 @@ def _attempt_summary(campaign_dir: Path, manifest: Mapping[str, Any], attempt_ro
         "failed_job_ids": claude_upgrade._failed_job_ids(attempt.get("results")),
         "recovery_source_attempt_id": (attempt.get("recovery") or {}).get("source_attempt_id") if isinstance(attempt.get("recovery"), Mapping) else None,
     }
-    key = (PHASE, None, attempt_id)
+    key = (phase, candidate_id, attempt_id)
     if attempt.get("status") == "awaiting_receipts" and not summary["failed_job_ids"]:
         invalidated = claude_upgrade._attempt_evolution_invalidated_job_ids(
-            campaign_dir, manifest, attempt_root, attempt, phase=PHASE, candidate_id=None
+            campaign_dir, manifest, attempt_root, attempt, phase=phase, candidate_id=candidate_id
         )
         if invalidated:
             summary["evolution_invalidated_job_ids"] = invalidated
@@ -911,8 +1043,6 @@ def _attempt_summary(campaign_dir: Path, manifest: Mapping[str, Any], attempt_ro
 def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict[str, Any]:
     """官方阶段的 Campaign 状态与下一命令（只读浅检查）；状态名与 Codex ``campaign_status`` 的官方阶段一致。"""
 
-    if candidate_id is not None:
-        raise claude_upgrade._pending("campaign_status（候选阶段）", "B4-01（候选采集 attempt）")
     campaign_dir = Path(campaign_dir)
     manifest = claude_upgrade.load_campaign_manifest(campaign_dir)
     mode, purpose = claude_upgrade._campaign_coordinates(manifest)
@@ -930,11 +1060,23 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
             "status": "preflight_complete",
             "next_command": "Formal Campaign 只由 VC-0 收口创建：python3 -m tools.official_client_capture.claude_upgrade_vc0_closeout",
         }
-    candidates_root = campaign_dir / "candidates"
-    if candidates_root.is_dir() and not candidates_root.is_symlink() and any(child.is_dir() for child in candidates_root.iterdir()):
-        raise claude_upgrade._pending("campaign_status（候选阶段已开始）", "B4-01（候选采集 attempt）")
     decision = claude_upgrade._campaign_environment_decision(campaign_dir, _manifest=manifest)
     sealed = capture._official_sealed(campaign_dir)
+    if candidate_id is not None:
+        return _candidate_status(campaign_dir, manifest, base, str(candidate_id), decision=decision, official_sealed=sealed)
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    active_candidates, _inactive = claude_upgrade_baseline.evolution_candidates(campaign_dir)
+    if sealed and decision["status"] == "clear" and active_candidates:
+        # 官方已封存、有活跃候选：只有一个时就是它的状态（带 candidate_id）；多个时要求指定 --candidate-id（与 Codex 同名状态）。
+        if len(active_candidates) == 1:
+            return _candidate_status(campaign_dir, manifest, base, active_candidates[0], decision=decision, official_sealed=sealed)
+        return {
+            **base,
+            "status": "candidate_selection_required",
+            "candidates": active_candidates,
+            "next_command": "从候选列表选择 candidate-id 执行 status／capture-candidate／resume",
+        }
     ordered = claude_upgrade._ordered_capture_attempts(campaign_dir, PHASE, None, _manifest=manifest)
     sealed_attempt_id: str | None = None
     if sealed:
@@ -957,6 +1099,11 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
     ]
     failed = [f"official:{item['attempt_id']}" for item in summaries if item["status"] in {"failed", "environment_contaminated"}]
     latest = summaries[0] if summaries else None
+    candidate_attempts = [
+        f"{current_candidate}:{root.name}"
+        for current_phase, current_candidate, root in claude_upgrade._campaign_attempt_roots(campaign_dir)
+        if current_phase == CANDIDATE_PHASE
+    ]
     if decision["status"] != "clear":
         status = "environment_contaminated"
         next_command = (
@@ -965,9 +1112,13 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
             else "修复环境（残留取证进程先 environment-cleanup 在明确批准下清理并留证）并取得晚于污染的干净环境复核后，"
             "environment-isolate preview/apply 隔离污染 attempt，再对账续跑"
         )
-    elif sealed and unsealed:
+    elif (sealed and unsealed) or (not sealed and candidate_attempts):
         status = "capture_state_inconsistent"
-        next_command = "官方已封存却还有未封存的预约或 attempt：人工审计"
+        next_command = (
+            "官方已封存却还有未封存的预约或 attempt：人工审计"
+            if sealed
+            else f"官方证据尚未封存却已有候选 attempt {candidate_attempts}：人工审计"
+        )
     elif sealed:
         status = "official_sealed"
         next_command = "classify（VC-2，B3-02）"
@@ -1011,12 +1162,153 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
     }
 
 
+def _candidate_seal_preview_attempts(campaign_dir: Path, candidate_id: str) -> set[str]:
+    """已经生成过候选 seal 预览的 attempt（``candidates/<cid>/seal/<代号>/seal-preview.json`` 的 ``attempt_id``，B4-02）。"""
+
+    from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
+
+    root = campaign_dir / "candidates" / candidate_id / candidate_seal.SEAL_DIRNAME
+    attempts: set[str] = set()
+    if not root.is_dir() or root.is_symlink():
+        return attempts
+    for generation in sorted(root.iterdir()):
+        preview = generation / candidate_seal.SEAL_PREVIEW_FILENAME
+        if generation.is_symlink() or not generation.is_dir() or preview.is_symlink() or not preview.is_file():
+            continue
+        attempt_id = claude_upgrade._read_json(preview, "候选 seal 预览").get("attempt_id")
+        if isinstance(attempt_id, str):
+            attempts.add(attempt_id)
+    return attempts
+
+
+def _candidate_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    base: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    decision: Mapping[str, Any],
+    official_sealed: bool,
+) -> dict[str, Any]:
+    """一个候选的采集状态与下一命令（只读浅检查；状态名与 Codex ``campaign_status`` 的候选部分同名）。
+
+    覆盖到候选采集封存为止（``candidate_sealed`` 的下一步是 compare，B4-03）；compare／accept／交付之后的状态随对应工作项。
+    """
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+    if not capture.SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("status --candidate-id 格式非法。")
+    candidate_root = campaign_dir / "candidates" / candidate_id
+    if candidate_root.is_symlink() or not candidate_root.is_dir():
+        raise ConfigurationError(f"Campaign 内没有候选 {candidate_id}（先完成 VC-4 revision-open 与 record-candidate-build）。")
+    ordered = claude_upgrade._ordered_capture_attempts(campaign_dir, CANDIDATE_PHASE, candidate_id, _manifest=manifest)
+    summaries = [
+        _attempt_summary(campaign_dir, manifest, root, phase=CANDIDATE_PHASE, candidate_id=candidate_id) for root, _reservation in ordered
+    ]
+    stage_path = candidate_capture.legacy_stage_result_path(campaign_dir, candidate_id)
+    sealed = stage_path.exists() or stage_path.is_symlink()
+    sealed_attempt_id: str | None = None
+    if sealed:
+        stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=manifest)
+        reference = stage.get("attempt")
+        sealed_attempt_id = Path(str(reference.get("path", ""))).parent.name if isinstance(reference, Mapping) else None
+    invalidated = capture._invalidated_attempts(campaign_dir)
+    unsealed = [
+        f"{candidate_id}:{item['attempt_id']}" + (":reserved_or_interrupted" if item["status"] == "reserved_or_interrupted" else "")
+        for item in summaries
+        if item["status"] == "reserved_or_interrupted"
+        or (
+            item["status"] == "awaiting_receipts"
+            and item["attempt_id"] != sealed_attempt_id
+            and (CANDIDATE_PHASE, candidate_id, item["attempt_id"]) not in invalidated
+            and not item.get("evolution_invalidated_job_ids")
+            and not _attempt_evolution_reconciled(campaign_dir, item["attempt_id"])
+        )
+    ]
+    failed = [f"{candidate_id}:{item['attempt_id']}" for item in summaries if item["status"] in {"failed", "environment_contaminated"}]
+    latest = summaries[0] if summaries else None
+    build_receipt = claude_upgrade._candidate_build_receipt_path(campaign_dir, candidate_id)
+    run_command = f"capture-candidate run --campaign-dir <Campaign> --candidate-id {candidate_id} --acknowledge-live-requests"
+    resume_command = f"resume --candidate-id {candidate_id} --rerun-failed --recovery-preview <已批准的 recovery-preview> --acknowledge-live-requests"
+    if decision["status"] != "clear":
+        status = "environment_contaminated"
+        next_command = (
+            "修复环境（残留取证进程先 environment-cleanup 在明确批准下清理并留证）并取得晚于污染的干净环境复核后，"
+            "environment-isolate preview/apply 隔离污染 attempt，再对账续跑"
+        )
+    elif not official_sealed or (sealed and unsealed):
+        status = "capture_state_inconsistent"
+        next_command = (
+            "官方证据尚未封存却已有候选：人工审计" if not official_sealed else "候选已封存却还有未封存的预约或 attempt：人工审计"
+        )
+    elif sealed:
+        status = "candidate_sealed"
+        next_command = f"compare --candidate-id {candidate_id}（B4-03）"
+    elif latest is None:
+        status = "profile_approved"
+        next_command = (
+            run_command
+            if build_receipt.is_file() and not build_receipt.is_symlink()
+            else "依次执行 plan-candidate-gates、record-candidate-build（VC-4），再执行 " + run_command
+        )
+    elif latest.get("isolation_invalidated") or latest.get("evidence_conflict_quarantine"):
+        status = "candidate_capture_failed"
+        next_command = "该 attempt 已被隔离作废（结果永不复用、永不 seal）：reconcile-attempt 入账并批准恢复预览后，" + resume_command + " 全部重跑"
+    elif latest["status"] == "reconciled_interrupted":
+        status = "candidate_capture_failed"
+        next_command = resume_command
+    elif latest["status"] == "reserved_or_interrupted":
+        status = "candidate_capture_interrupted"
+        next_command = "先执行 reconcile-attempt；按判定与已批准预览决定 resume 或永久停线"
+    elif latest["status"] == "awaiting_receipts" and latest.get("failed_job_ids"):
+        status = "candidate_capture_failed"
+        next_command = "存在失败 Job，禁止 seal：reconcile-attempt 入账并批准恢复预览后，" + resume_command
+    elif latest["status"] == "awaiting_receipts" and latest.get("evolution_invalidated_job_ids"):
+        status = "candidate_capture_failed"
+        next_command = (
+            "工具演进使已完成作业失效（" + "、".join(latest["evolution_invalidated_job_ids"]) + "），禁止 seal：reconcile-attempt"
+            " 入账并批准恢复预览后，" + resume_command + " 只重跑失效作业，再 seal"
+        )
+    elif latest["status"] == "awaiting_receipts" and latest["attempt_id"] in _candidate_seal_preview_attempts(campaign_dir, candidate_id):
+        status = "candidate_awaiting_seal_approval"
+        next_command = f"capture-candidate seal --candidate-id {candidate_id} --attempt-id {latest['attempt_id']} --approve-seal-sha256 <review_sha256>"
+    elif latest["status"] == "awaiting_receipts":
+        status = "candidate_awaiting_client_checkpoint"
+        next_command = (
+            "Mac 侧 Desktop／VS Code 客户端收据与 attempt 级边界核对收据放进 <attempt>/client-evidence/ 之后，"
+            f"capture-candidate seal --candidate-id {candidate_id} --attempt-id {latest['attempt_id']}（先预览，再按 review_sha256 批准）"
+        )
+    elif latest.get("continuity_drift"):
+        status = "candidate_capture_failed"
+        next_command = "上一轮结束后环境已漂移（承接前失败、零请求）：reconcile-attempt 对账后恢复预览全部重跑，批准后 " + resume_command
+    else:
+        status = "candidate_capture_failed"
+        next_command = "reconcile-attempt 入账并批准恢复预览后，" + resume_command + " 只重跑失败作业"
+    return {
+        **base,
+        "status": status,
+        "candidate_id": candidate_id,
+        "candidate_attempt": latest,
+        "candidate_attempts": summaries,
+        "candidate_sealed_attempt_id": sealed_attempt_id,
+        "active_unsealed_attempts": {
+            "official": claude_upgrade._active_unsealed_attempts(campaign_dir, PHASE, _manifest=manifest),
+            "candidate": unsealed,
+        },
+        "failed_attempts": {"candidate": failed},
+        "contamination_records": list(decision["records"]),
+        "next_command": next_command,
+    }
+
+
 # ---------------------------------------------------------------------------
 # resume
 # ---------------------------------------------------------------------------
 
-_CANDIDATE_RESUME_FIELDS = (
-    "candidate_id", "runtime_image", "candidate_image_id", "candidate_source", "build_id", "deployed_version", "profile_id",
+# Codex resume 用来重建候选身份的参数：Claude 的候选身份只来自 VC-4 构建收据（入口门重放），一律拒绝。
+_CANDIDATE_IDENTITY_FIELDS = (
+    "runtime_image", "candidate_image_id", "candidate_source", "build_id", "deployed_version", "profile_id",
     "profile_digest", "build_receipt", "candidate_purpose",
 )
 _REUSE_SOURCE_FIELDS = (
@@ -1026,23 +1318,38 @@ _REUSE_SOURCE_FIELDS = (
 
 
 def _reject_unsupported_resume(arguments: argparse.Namespace) -> None:
-    if any(getattr(arguments, field, None) for field in _CANDIDATE_RESUME_FIELDS):
-        raise claude_upgrade._pending("resume（候选阶段）", "B4-01（候选采集 attempt）")
+    given = [field for field in _CANDIDATE_IDENTITY_FIELDS if getattr(arguments, field, None)]
+    if given:
+        raise ConfigurationError(
+            f"Claude 候选身份只来自 VC-4 构建收据（resume 重走候选入口门），不接受 {['--' + item.replace('_', '-') for item in given]}；"
+            "只给 --candidate-id。"
+        )
     if any(getattr(arguments, field, None) for field in _REUSE_SOURCE_FIELDS):
-        raise claude_upgrade._pending("resume 的分类事实纠正后继候选复用", "B4-01（候选采集 attempt）")
+        raise claude_upgrade._pending("resume 的分类事实纠正后继候选复用", "B4-01 c3（后继候选复用）")
     if getattr(arguments, "assertions", None) or getattr(arguments, "external_gate_root", None) or getattr(arguments, "external_gate_receipt", None):
         raise claude_upgrade._pending("resume compare／accept", "B4-03／B4-06（Claude 评估器与 accept 门禁）")
-    if getattr(arguments, "preview_recovery", False):
-        raise claude_upgrade._pending("resume --preview-recovery（候选零请求续跑预览）", "B4-01（候选采集 attempt）")
+    if getattr(arguments, "preview_recovery", False) and not getattr(arguments, "candidate_id", None):
+        raise ConfigurationError("--preview-recovery 只用于候选续跑（给出 --candidate-id）；官方续跑的闭集由 reconcile-attempt 的恢复预览给出。")
+
+
+def _resume_exit_code(result: Mapping[str, Any]) -> int:
+    in_campaign_run = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
+    return 0 if result.get("status") == "awaiting_receipts" and in_campaign_run else 2
 
 
 def resume_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """``resume``：按 Campaign 状态续跑（官方阶段）。失败或已对账中断的 attempt 只经已批准的恢复预览 ``--rerun-failed``。"""
+    """``resume``：按 Campaign 状态续跑。失败或已对账中断的 attempt 只经已批准的恢复预览 ``--rerun-failed``。
+
+    给出 ``--candidate-id`` 时是候选续跑（B4-01 c1，见 ``_resume_candidate``）；否则是官方阶段（B2-08）。
+    """
 
     _reject_unsupported_resume(arguments)
     campaign_dir = _resolved_campaign(arguments.campaign_dir)
     arguments.campaign_dir = campaign_dir
     manifest = claude_upgrade._require_formal_campaign(campaign_dir)
+    candidate_id = getattr(arguments, "candidate_id", None)
+    if candidate_id:
+        return _resume_candidate(campaign_dir, manifest, arguments, str(candidate_id))
     status = claude_upgrade.campaign_status(campaign_dir)
     current = str(status["status"])
     if current == "environment_contaminated":
@@ -1055,6 +1362,8 @@ def resume_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         raise ConfigurationError("官方 attempt 正等待 seal；resume 不会代替 capture-official seal 的人工审核。")
     if current == "official_sealed":
         raise ConfigurationError("官方证据已封存，下一步是 VC-2 classify（B3-02）；resume 不会自动批准语义分类。")
+    if current.startswith("candidate_") or current == "profile_approved":
+        raise ConfigurationError(f"Campaign 已进入候选阶段（{current}）：候选续跑必须给出 --candidate-id。{status.get('next_command', '')}")
     if not getattr(arguments, "acknowledge_live_requests", False):
         raise ConfigurationError("续跑会执行官方取证 Job 并发真实请求，必须确认 --acknowledge-live-requests。")
     if current == "planned":
@@ -1068,39 +1377,113 @@ def resume_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             raise ConfigurationError("resume --rerun-failed 必须提供 --recovery-preview（已批准的 recovery-preview/v1）。")
         result = _run_with_lease(campaign_dir, manifest, arguments)
     else:
-        raise claude_upgrade._pending(f"resume（Campaign 状态 {current}）", "B4-01（候选采集 attempt：候选阶段的状态与续跑）")
-    in_campaign_run = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
-    return result, 0 if result.get("status") == "awaiting_receipts" and in_campaign_run else 2
+        raise ConfigurationError(f"Campaign 状态 {current} 没有可续跑的官方动作：{status.get('next_command', '')}")
+    return result, _resume_exit_code(result)
 
 
-def _run_with_lease(campaign_dir: Path, manifest: dict[str, Any], arguments: argparse.Namespace) -> dict[str, Any]:
+RECOVERY_PLAN_PREVIEW_SCHEMA = "claude-upgrade-candidate-recovery-plan/v1"
+
+
+def _resume_candidate(
+    campaign_dir: Path, manifest: dict[str, Any], arguments: argparse.Namespace, candidate_id: str
+) -> tuple[dict[str, Any], int]:
+    """候选续跑（B4-01 c1）：按候选状态续跑。
+
+    * ``profile_approved``（VC-4 已构建、还没有 attempt）：起首个候选 run（与 ``capture-candidate run`` 同一入口）；
+    * ``candidate_capture_failed``：``--preview-recovery`` 只读输出续跑闭集（零写入，``claude-upgrade-candidate-recovery-plan/v1``）；
+      ``--rerun-failed --recovery-preview <已批准>`` 在 Campaign 租约下建候选恢复 attempt（复用已完成作业、只执行冻结的执行集合）；
+    * 其余状态（中断未对账、等待 seal、已封存、污染、不一致）拒绝并给出下一命令。
+    """
+
+    status = claude_upgrade.campaign_status(campaign_dir, candidate_id)
+    current = str(status["status"])
+    if current == "environment_contaminated":
+        raise ConfigurationError("存在未隔离的环境污染，Campaign 已封锁，不能自动 resume：" + str(status.get("next_command")))
+    if current == "candidate_capture_interrupted":
+        raise ConfigurationError("候选 attempt 已中断且尚未对账；先执行 reconcile-attempt，按判定与已批准的恢复预览决定是否 resume --rerun-failed。")
+    if current == "capture_state_inconsistent":
+        raise ConfigurationError("存在额外的未封存预约：只能人工审计。" + str(status.get("next_command", "")))
+    if current in {"candidate_awaiting_client_checkpoint", "candidate_awaiting_seal_approval"}:
+        raise ConfigurationError("候选 attempt 正等待 seal；resume 不会代替 capture-candidate seal 的人工审核。" + str(status.get("next_command", "")))
+    if current == "candidate_sealed":
+        raise ConfigurationError("候选证据已封存，下一步是 compare（B4-03）；resume 不会自动比较与验收。")
+    if getattr(arguments, "preview_recovery", False):
+        if current != "candidate_capture_failed":
+            raise ConfigurationError(f"候选状态 {current} 没有可预览的续跑闭集。")
+        source_id = str((status.get("candidate_attempt") or {}).get("attempt_id"))
+        effective = claude_upgrade._apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
+        require_current_source(campaign_dir, effective, source_id, phase=CANDIDATE_PHASE, candidate_id=candidate_id)
+        plan = recovery_plan(campaign_dir, effective, source_attempt_id=source_id, phase=CANDIDATE_PHASE, candidate_id=candidate_id)
+        return {
+            "schema_version": RECOVERY_PLAN_PREVIEW_SCHEMA,
+            "status": "recovery_plan",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            **{key: plan[key] for key in (
+                "source_attempt_id", "source_status", "source_reservation", "source_attempt", "planned_job_ids",
+                "complete_job_ids", "reuse_job_ids", "execute_job_ids", "invalidated",
+            )},
+            "next_command": "reconcile-attempt 入账写恢复预览并批准后，resume --candidate-id <cid> --rerun-failed --recovery-preview <预览>",
+            "live_request_count": 0,
+        }, 0
+    if not getattr(arguments, "acknowledge_live_requests", False):
+        raise ConfigurationError("候选续跑会经候选网关发真实请求，必须确认 --acknowledge-live-requests。")
+    if current == "profile_approved":
+        if getattr(arguments, "rerun_failed", False):
+            raise ConfigurationError(f"候选 {candidate_id} 还没有 attempt，没有可以 --rerun-failed 的失败 attempt。")
+        result = capture.run_capture_attempt(arguments, CANDIDATE_PHASE)
+    elif current == "candidate_capture_failed":
+        if not getattr(arguments, "rerun_failed", False):
+            raise ConfigurationError("失败候选 attempt 只能显式使用 resume --candidate-id <cid> --rerun-failed --recovery-preview <已批准的恢复预览>。")
+        if getattr(arguments, "recovery_preview", None) is None:
+            raise ConfigurationError("resume --rerun-failed 必须提供 --recovery-preview（已批准的 recovery-preview/v1）。")
+        result = _run_with_lease(campaign_dir, manifest, arguments, phase=CANDIDATE_PHASE, candidate_id=candidate_id)
+    else:
+        raise ConfigurationError(f"候选状态 {current} 没有可续跑的动作：{status.get('next_command', '')}")
+    return result, _resume_exit_code(result)
+
+
+def _run_with_lease(
+    campaign_dir: Path,
+    manifest: dict[str, Any],
+    arguments: argparse.Namespace,
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
     """在 Campaign 租约下执行恢复 attempt：强杀留下的过期租约由本次显式续跑接管（写停线收据）。"""
 
     try:
         active = claude_upgrade._ACTIVE_CAMPAIGN_LEASE
         if active is not None:
-            if not claude_upgrade._lease_identity_matches(active, campaign_dir, phase=PHASE, candidate_id=None):
+            if not claude_upgrade._lease_identity_matches(active, campaign_dir, phase=phase, candidate_id=candidate_id):
                 raise ConfigurationError("resume 与当前 Campaign lease 的 phase／candidate 不一致。")
-            deadline = capture._bind_attempt_deadline_metadata(active.deadline, PHASE)
-            return _run_recovery_attempt(campaign_dir, manifest, arguments, lease=active, deadline=deadline)
-        deadline = claude_upgrade._attempt_deadline(arguments, PHASE)
+            deadline = capture._bind_attempt_deadline_metadata(active.deadline, phase)
+            return _run_recovery_attempt(
+                campaign_dir, manifest, arguments, lease=active, deadline=deadline, phase=phase, candidate_id=candidate_id
+            )
+        deadline = claude_upgrade._attempt_deadline(arguments, phase)
         with claude_upgrade.CampaignLease(
             campaign_dir,
-            phase=PHASE,
-            candidate_id=None,
+            phase=phase,
+            candidate_id=candidate_id,
             deadline=deadline,
             command="resume",
             allow_stale_recovery=True,
             campaign_id=str(manifest.get("campaign_id", "")),
         ) as lease:
-            return _run_recovery_attempt(campaign_dir, manifest, arguments, lease=lease, deadline=deadline)
+            return _run_recovery_attempt(
+                campaign_dir, manifest, arguments, lease=lease, deadline=deadline, phase=phase, candidate_id=candidate_id
+            )
     except (incremental_recovery.IncrementalRecoveryError, codex_upgrade_supervisor.SupervisorError) as error:
         raise ConfigurationError(f"resume 在预约前停止：{type(error).__name__}：{error}") from error
 
 
-def _consume_recovery_approval(campaign_dir: Path, preview_path: Path) -> dict[str, Any]:
+def _consume_recovery_approval(
+    campaign_dir: Path, preview_path: Path, *, phase: str = PHASE, candidate_id: str | None = None
+) -> dict[str, Any]:
     try:
-        return reconciler.load_approved_recovery_preview(campaign_dir, Path(preview_path), phase=PHASE, candidate_id=None)
+        return reconciler.load_approved_recovery_preview(campaign_dir, Path(preview_path), phase=phase, candidate_id=candidate_id)
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
 
@@ -1116,10 +1499,23 @@ def _require_plan_matches_preview(plan: Mapping[str, Any], consumed: Mapping[str
         )
 
 
-def _verify_environment_continuity(campaign_dir: Path, source_attempt_id: str, before_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """来源 attempt 的 after 探针与本轮 before 探针在承接比较的三类快照（两个容器）逐字相等，否则零请求失败。"""
+def _verify_environment_continuity(
+    campaign_dir: Path,
+    source_attempt_id: str,
+    before_manifest: Mapping[str, Any],
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
+    hooks: Any | None = None,
+) -> dict[str, Any]:
+    """来源 attempt 的 after 探针与本轮 before 探针在承接比较的三类快照（两个容器）逐字相等，否则零请求失败。
 
-    after_path = _attempt_root(campaign_dir, source_attempt_id) / "evidence" / "environment" / "after" / capture.PROBE_MANIFEST_NAME
+    候选续跑（c1）另核网关：来源 attempt 的网关 after 快照与本轮网关 before 快照逐字段相等（``GATEWAY_COMPARED_FIELDS``），
+    结果记在 ``gateway``；不等同样按连续性漂移零请求失败。
+    """
+
+    source_root = _attempt_root(campaign_dir, source_attempt_id, phase, candidate_id)
+    after_path = source_root / "evidence" / "environment" / "after" / capture.PROBE_MANIFEST_NAME
     if after_path.is_symlink() or not after_path.is_file():
         raise EnvironmentContinuityDrift("被承接 attempt 缺少 after 环境探针，无法证明连续性。")
     previous = capture._probe_snapshot_digests(claude_upgrade._read_json(after_path, "被承接 attempt 的 after 探针"))
@@ -1130,12 +1526,23 @@ def _verify_environment_continuity(campaign_dir: Path, source_attempt_id: str, b
             "承接失败：上一轮结束后环境已漂移（" + "、".join(drifted) + "），被承接任务的证据前提不再成立；本 attempt 在任何 Job"
             "执行前失败（零请求）。reconcile-attempt 对账后恢复预览全部重跑（不承接），批准后 resume --rerun-failed。"
         )
-    return {
+    continuity: dict[str, Any] = {
         "schema_version": "claude-upgrade-attempt-continuity/v1",
         "source_attempt_id": source_attempt_id,
         "compared_kinds": list(capture.CONTINUITY_PROBE_KINDS),
         "source_after_probe_sha256": file_sha256(after_path),
     }
+    if hooks is not None:
+        from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+        try:
+            continuity["gateway"] = hooks.verify_continuity(source_root)
+        except candidate_capture.GatewayContinuityDrift as error:
+            raise EnvironmentContinuityDrift(
+                f"承接失败：{error}，被承接任务的证据前提不再成立；本 attempt 在任何 Job 执行前失败（零请求）。"
+                "reconcile-attempt 对账后恢复预览全部重跑（不承接），批准后 resume --rerun-failed。"
+            ) from error
+    return continuity
 
 
 def _reserve_recovery_attempt(
@@ -1148,22 +1555,34 @@ def _reserve_recovery_attempt(
     lease: Any,
     plan: Mapping[str, Any],
     consumed: Mapping[str, Any],
+    phase: str = PHASE,
+    candidate_id: str | None = None,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    """Campaign 锁内原子发布恢复 attempt：同一临时目录里写 reservation.json 与 recovery-source.json 后整体改名。"""
+    """Campaign 锁内原子发布恢复 attempt：同一临时目录里写 reservation.json 与 recovery-source.json 后整体改名。
+
+    候选续跑的恢复来源收据沿用同一 v1 字段闭集：候选 ID 由所在目录与预约收据的 ``phase``／``candidate_id`` 表达。
+    """
 
     deadline.check("attempt:reserve:start")
     lease.check("attempt:reserve:start")
     source_id = str(plan["source_attempt_id"])
+    _scope(phase, candidate_id)
     with claude_upgrade._campaign_lock(campaign_dir, deadline=deadline):
-        if capture._official_sealed(campaign_dir):
+        if phase == PHASE and capture._official_sealed(campaign_dir):
             raise ConfigurationError("官方证据已经封存，禁止创建新 attempt。")
-        require_current_source(campaign_dir, manifest, source_id)
+        if phase == CANDIDATE_PHASE:
+            from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+            candidate_capture.require_unsealed(campaign_dir, str(candidate_id), revision=None)
+        require_current_source(campaign_dir, manifest, source_id, phase=phase, candidate_id=candidate_id)
         if not lease.acquired:
             raise ConfigurationError("reservation 缺少 active Campaign lease。")
         lease_payload = lease.payload
         if lease_payload.get("campaign_id") != manifest.get("campaign_id"):
             raise ConfigurationError("reservation 与 Campaign lease 身份不一致。")
-        attempts_root = capture._private_directory(campaign_dir / capture._attempt_relative(capture.MODE_FORMAL) / "attempts", campaign_dir)
+        attempts_root = capture._private_directory(
+            campaign_dir / capture._attempt_relative(capture.MODE_FORMAL, phase, candidate_id) / "attempts", campaign_dir
+        )
         attempt_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + f"-{secrets.token_hex(8)}"
         lease.bind_attempt(attempt_id)
         final_root = attempts_root / attempt_id
@@ -1177,9 +1596,9 @@ def _reserve_recovery_attempt(
             "campaign_mode": manifest["campaign_mode"],
             "campaign_purpose": manifest["campaign_purpose"],
             "campaign_manifest_sha256": file_sha256(campaign_dir / "campaign.json"),
-            "phase": PHASE,
-            "candidate_id": None,
-            "candidate_purpose": None,
+            "phase": phase,
+            "candidate_id": candidate_id if phase == CANDIDATE_PHASE else None,
+            "candidate_purpose": manifest["campaign_purpose"] if phase == CANDIDATE_PHASE else None,
             "attempt_id": attempt_id,
             "run_nonce": secrets.token_hex(32),
             "started_at_utc": claude_upgrade._utc_now(),
@@ -1271,11 +1690,14 @@ def _supersede_occupied_roots(
     attempt_root: Path,
     jobs: Sequence[Any],
     layout: Any,
+    *,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
 ) -> dict[str, Any] | None:
     """执行集合作业的固定证据根已存在时先写取代收据、再改名为同级 ``<名>.superseded-<本 attempt>``（核对 inode）。"""
 
     registrants = claude_upgrade._evidence_root_registrants(
-        campaign_dir, manifest, phase=PHASE, candidate_id=None, exclude_attempt_id=attempt_root.name
+        campaign_dir, manifest, phase=phase, candidate_id=candidate_id, exclude_attempt_id=attempt_root.name
     )
     rows: list[dict[str, Any]] = []
     claimed: set[str] = set()
@@ -1313,8 +1735,8 @@ def _supersede_occupied_roots(
     receipt: dict[str, Any] = {
         "schema_version": claude_upgrade.EVIDENCE_ROOT_SUPERSESSION_SCHEMA,
         "campaign_id": str(manifest["campaign_id"]),
-        "phase": PHASE,
-        "candidate_id": None,
+        "phase": phase,
+        "candidate_id": candidate_id,
         "superseding_attempt_id": attempt_root.name,
         "recorded_at_utc": claude_upgrade._utc_now(),
         "roots": rows,
@@ -1336,6 +1758,7 @@ def _record_reused_result(
     reservation: Mapping[str, Any],
     manifest: Mapping[str, Any],
     result: dict[str, Any],
+    phase: str = PHASE,
 ) -> None:
     records = checkpoint_store.records()
     checkpoint_store.append(
@@ -1344,7 +1767,7 @@ def _record_reused_result(
             "client": CLIENT,
             "mode": capture.MODE_FORMAL,
             "campaign_id": manifest["campaign_id"],
-            "phase": PHASE,
+            "phase": phase,
             "attempt_id": attempt_root.name,
             "run_nonce": reservation["run_nonce"],
             "item_id": result["id"],
@@ -1366,37 +1789,65 @@ def _run_recovery_attempt(
     *,
     lease: Any,
     deadline: Any,
+    phase: str = PHASE,
+    candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """执行一次恢复 attempt（正式）；attempt 合同与 B2-06 的 run 相同，复用结果只读承接，执行集合逐 Job 执行与收口。"""
+    """执行一次恢复 attempt（正式）；attempt 合同与 B2-06 的 run 相同，复用结果只读承接，执行集合逐 Job 执行与收口。
+
+    候选续跑（c1）：预约前走与 ``capture-candidate run`` 相同的候选环节（``CandidateRunHooks``：入口门、身份、管理凭据、
+    网关只读就绪与 selector 观察），before 探针之后采网关 before 快照，有复用时另核网关连续性，attempt 末采网关 after
+    快照并写候选字段——与首个候选 attempt 同一合同。
+    """
 
     mode = capture.MODE_FORMAL
+    _prefix, label = _scope(phase, candidate_id)
     # —— 预约前门禁（零写入；只有恢复授权的消费追加计时账本事件） ——
     claude_upgrade._reject_contaminated_campaign(campaign_dir)
-    if capture._official_sealed(campaign_dir):
+    if phase == PHASE and capture._official_sealed(campaign_dir):
         raise ConfigurationError("官方证据已经封存，禁止续跑。")
     current_tool = claude_upgrade._tool_identity(include_git=False)
     claude_upgrade._require_tool_evolution_registered(campaign_dir, manifest, current=current_tool, action="resume --rerun-failed")
-    jobs = claude_upgrade._campaign_jobs(campaign_dir, manifest, PHASE)
+    hooks: Any | None = None
+    if phase == CANDIDATE_PHASE:
+        from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+        hooks = candidate_capture.CandidateRunHooks(campaign_dir, str(candidate_id), mode)
+        manifest = hooks.admit(manifest, deadline=deadline)
+    jobs = claude_upgrade._campaign_jobs(campaign_dir, manifest, phase, candidate_id=candidate_id)
     layout = capture._capture_layout(campaign_dir, manifest)
     claude_upgrade._verify_execution_tree(capture._host_path(layout.capture_tool_root, layout).parents[1])
     binary_verification = claude_upgrade._verify_official_binaries(manifest, deadline=deadline)
-    preconditions = capture._container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None)
-    identity = capture._attempt_identity(manifest, layout, mode)
+    preconditions = capture._container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None, phase=phase)
+    identity = hooks.identity(manifest, layout) if hooks is not None else capture._attempt_identity(manifest, layout, mode)
     _require_no_residual_processes(manifest, deadline)
-    consumed = _consume_recovery_approval(campaign_dir, Path(arguments.recovery_preview))
+    if hooks is not None:
+        # 网关只读就绪与 selector 观察在消费恢复授权之前（不合格时账本不动）；管理凭据按执行集合在闭集冻结之后核。
+        hooks.pre_reservation(manifest, layout, (), deadline=deadline)
+    consumed = _consume_recovery_approval(campaign_dir, Path(arguments.recovery_preview), phase=phase, candidate_id=candidate_id)
     source_id = str(consumed["source_attempt_id"])
-    plan = recovery_plan(campaign_dir, manifest, source_attempt_id=source_id, jobs=jobs)
+    plan = recovery_plan(campaign_dir, manifest, source_attempt_id=source_id, jobs=jobs, phase=phase, candidate_id=candidate_id)
     _require_plan_matches_preview(plan, consumed)
     if plan["source_identity"] is not None and dict(plan["source_identity"]) != dict(identity):
-        raise ConfigurationError("来源 attempt 的官方运行坐标与当前不同，不能承接其结果。")
+        raise ConfigurationError(f"来源 attempt 的{label}运行坐标与当前不同，不能承接其结果。")
     reuse_ids = set(plan["reuse_job_ids"])
     execute_jobs = [job for job in jobs if job.job_id in set(plan["execute_job_ids"])]
     for job in execute_jobs:
         capture._job_tool_dependency_files(job, current_tool)
+    if hooks is not None:
+        candidate_capture.require_admin_token_for(execute_jobs)
     capture._require_capture_budget(deadline, operation="attempt:reservation-admission", reservation=True)
     # —— 原子预约（此后一律写 attempt 收据） ——
     attempt_root, reservation, recovery_source = _reserve_recovery_attempt(
-        campaign_dir, manifest, identity=identity, jobs=jobs, deadline=deadline, lease=lease, plan=plan, consumed=consumed
+        campaign_dir,
+        manifest,
+        identity=identity,
+        jobs=jobs,
+        deadline=deadline,
+        lease=lease,
+        plan=plan,
+        consumed=consumed,
+        phase=phase,
+        candidate_id=candidate_id,
     )
     log_root = capture._private_directory(attempt_root / "logs", campaign_dir)
     evidence_root = capture._private_directory(attempt_root / "evidence", campaign_dir)
@@ -1437,16 +1888,22 @@ def _run_recovery_attempt(
         if before_manifest.get("capture_processes"):
             attempt_observations.append({"check_id": "attempt.environment.processes", "failure_code": "residual"})
             raise ConfigurationError("采集容器（抓包或断网）存在残留取证进程，环境不干净，拒绝执行任何 Job。")
+        if hooks is not None:
+            hooks.before_jobs(manifest, layout, environment_root, attempt_observations, deadline=deadline, heartbeat=heartbeat)
         if reuse_ids:
-            continuity = _verify_environment_continuity(campaign_dir, source_id, before_manifest)
+            continuity = _verify_environment_continuity(
+                campaign_dir, source_id, before_manifest, phase=phase, candidate_id=candidate_id, hooks=hooks
+            )
             for job in jobs:
                 if job.job_id in reuse_ids:
                     reused = dict(plan["reuse_results"][job.job_id])
                     results.append(reused)
-                    _record_reused_result(attempt_root, checkpoint_store, reservation, manifest, reused)
+                    _record_reused_result(attempt_root, checkpoint_store, reservation, manifest, reused, phase)
             capture._write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt:reused-results-recorded", force=True, attempt_root=attempt_root)
         if execute_jobs:
-            supersession = _supersede_occupied_roots(campaign_dir, manifest, attempt_root, execute_jobs, layout)
+            supersession = _supersede_occupied_roots(
+                campaign_dir, manifest, attempt_root, execute_jobs, layout, phase=phase, candidate_id=candidate_id
+            )
         for job in execute_jobs:
             capture._require_capture_budget(deadline, operation=f"job:{job.job_id}:admission")
             capture._write_attempt_heartbeat(heartbeat_path, deadline, operation=f"job:{job.job_id}:start", attempt_root=attempt_root)
@@ -1476,7 +1933,7 @@ def _run_recovery_attempt(
                     "client": CLIENT,
                     "mode": mode,
                     "campaign_id": manifest["campaign_id"],
-                    "phase": PHASE,
+                    "phase": phase,
                     "attempt_id": attempt_root.name,
                     "run_nonce": reservation["run_nonce"],
                     "item_id": job.job_id,
@@ -1517,6 +1974,11 @@ def _run_recovery_attempt(
             if before_manifest is not None:
                 contaminated = True
                 attempt_observations.append({"check_id": "attempt.environment.after-probe", "failure_code": "probe-failed"})
+        if hooks is not None:
+            # 候选网关 after 快照：与 before 逐字段比较，漂移或采不到都判环境污染（deadline 到期也采）。
+            gateway_contaminated, gateway_error = hooks.after_jobs(manifest, layout, environment_root, attempt_observations)
+            contaminated = contaminated or gateway_contaminated
+            restoration_error = restoration_error or gateway_error
     if isinstance(execution_error, EnvironmentContinuityDrift):
         attempt_observations.append({"check_id": "attempt.environment.continuity", "failure_code": "drifted"})
     if isinstance(execution_error, incremental_recovery.WallClockTimeoutError) or deadline.expired:
@@ -1531,6 +1993,18 @@ def _run_recovery_attempt(
         except BaseException as error:
             execution_error = execution_error or error
 
+    candidate_fields: dict[str, Any] = {}
+    if hooks is not None:
+        candidate_fields, fields_error = hooks.attempt_fields(
+            manifest,
+            evidence_root=evidence_root,
+            environment_root=environment_root,
+            results=results,
+            capture_before=(environment_root / "before" / capture.PROBE_MANIFEST_NAME) if before_manifest else None,
+            capture_after=(environment_root / "after" / capture.PROBE_MANIFEST_NAME) if after_manifest else None,
+            capture_drifted=attempt_drift,
+        )
+        execution_error = execution_error or fields_error
     container_roots = sorted(
         {str(root) for result in results for root in [*(result.get("evidence_roots") or []), *(result.get("archived_evidence_roots") or [])]}
     )
@@ -1595,18 +2069,21 @@ def _run_recovery_attempt(
         "drifted_kinds": attempt_drift,
         "continuity_probe_kinds": list(capture.CONTINUITY_PROBE_KINDS),
     }
+    if hooks is not None:
+        # 与首个候选 attempt 同名：共享的候选恢复准入读 environment.restoration_report（网关隔离恢复核验文件）。
+        environment["restoration_report"] = candidate_fields["gateway_recovery"]["file"]
     attempt = capture._write_capture_attempt(
         campaign_dir,
         attempt_root,
         {
             "campaign_id": manifest["campaign_id"],
-            "phase": PHASE,
-            "candidate_id": None,
+            "phase": phase,
+            "candidate_id": candidate_id,
             "status": status,
             "identity": identity,
             "results": results,
             "attempt_failure_observations": (
-                capture._normalize_failure_observations(attempt_observations, phase=PHASE) if attempt_observations else []
+                capture._normalize_failure_observations(attempt_observations, phase=phase) if attempt_observations else []
             ),
             "evidence_roots": [str(path) for path in closeout_roots],
             "evidence_permission_layout": {
@@ -1644,12 +2121,13 @@ def _run_recovery_attempt(
                 ),
             },
             "next_gate": (
-                "capture-official seal（B2-07）"
+                f"capture-{phase} seal（{'B2-07' if phase == PHASE else 'B4-02'}）"
                 if status == "awaiting_receipts"
                 else "环境隔离与恢复（environment-cleanup／environment-isolate，B2-08）"
                 if status == "environment_contaminated"
                 else "reconcile-attempt → 批准恢复预览 → resume --rerun-failed（B2-08）"
             ),
+            **candidate_fields,
         },
         manifest=manifest,
         reservation=reservation,
@@ -1663,10 +2141,11 @@ def _run_recovery_attempt(
                     "schema_version": capture.ENVIRONMENT_CONTAMINATION_SCHEMA,
                     "client": CLIENT,
                     "mode": mode,
-                    "phase": PHASE,
+                    "phase": phase,
                     "attempt_id": attempt_root.name,
                     "drifted_kinds": attempt_drift,
                     "contaminated_jobs": sorted(str(item.get("id")) for item in results if item.get("environment_contaminated")),
+                    **(hooks.contamination_marker_fields() if hooks is not None else {}),
                     "recorded_at_utc": claude_upgrade._utc_now(),
                 },
             )
@@ -1677,7 +2156,8 @@ def _run_recovery_attempt(
     return {
         "status": status,
         "mode": mode,
-        "phase": PHASE,
+        "phase": phase,
+        **({"candidate_id": candidate_id} if phase == CANDIDATE_PHASE else {}),
         "attempt_id": attempt_root.name,
         "attempt": str(attempt_root),
         "attempt_digest": attempt["attempt_digest"],

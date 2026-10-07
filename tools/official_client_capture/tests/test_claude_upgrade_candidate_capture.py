@@ -198,6 +198,12 @@ class CandidateFixture(capture_tests.CaptureFixture):
         self.source = self.root / "candidate-source"
         (self.source / "backend").mkdir(parents=True)
         (self.source / "backend" / "main.go").write_text("package main\n", encoding="utf-8")
+        # 网关写出的 Claude 激活事实（c1 补充项）：缺省是候选 Runtime；None 表示文件不存在。
+        self.activation_fact: dict | None = {
+            "schema_version": candidate_capture.ACTIVATION_FACT_SCHEMA, "source": "sub2api-runtime",
+            "event_type": "claude_profile_observed", "event_id": "a" * 64, "profile_mode": "validation_candidate",
+            "claude_version": capture_tests.TARGET, "profile_digest": "d" * 64, "image_id": SERVICE_IMAGE_ID,
+        }
 
     def set_candidate_control(self, control: dict) -> None:
         self.candidate_control.write_text(json.dumps(control), encoding="utf-8")
@@ -224,6 +230,12 @@ class CandidateFixture(capture_tests.CaptureFixture):
         if mode == "formal":
             claude_project_ledger_fixture.register_claude_campaign(campaign)
         return campaign
+
+    def fake_activation_fact(self, manifest):
+        del manifest
+        if self.activation_fact is None:
+            raise ConfigurationError("容器内没有激活事实文件（测试注入）")
+        return "/app/data/claude-egress-activation-fact.json", json.dumps(self.activation_fact, sort_keys=True) + "\n"
 
     def fake_gateway_facts(self, manifest, host_data_root, *, deadline=None, heartbeat=None):
         del manifest, host_data_root, deadline, heartbeat
@@ -257,6 +269,7 @@ class CandidateFixture(capture_tests.CaptureFixture):
         with contextlib.ExitStack() as stack:
             stack.enter_context(self.patched())
             stack.enter_context(mock.patch.object(candidate_capture, "_collect_gateway_facts", self.fake_gateway_facts))
+            stack.enter_context(mock.patch.object(candidate_capture, "_read_activation_fact", self.fake_activation_fact))
             stack.enter_context(mock.patch.object(candidate_capture, "formal_admission", self.fake_admission))
             stack.enter_context(mock.patch.object(candidate_capture, "observe_service_image", lambda *_a, **_k: SERVICE_IMAGE_ID))
             stack.enter_context(
@@ -647,6 +660,14 @@ class FormalCandidateRunTests(CandidateFixture):
         self.assertEqual(environment["schema_version"], candidate_capture.GATEWAY_ENVIRONMENT_SCHEMA)
         self.assertEqual((environment["before"]["path"], environment["after"]["path"]), ("environment/gateway-before.json", "environment/gateway-after.json"))
         self.assertEqual(environment["drifted_fields"], [])
+        # Go 激活事实的只读副本（B4-06b 运行审计读它）：固定文件名，绑定路径、摘要与容器内来源。
+        fact = environment["activation_fact"]
+        self.assertEqual(fact["path"], f"environment/{candidate_capture.ACTIVATION_FACT_FILENAME}")
+        fact_path = attempt_root / "evidence" / fact["path"]
+        self.assertEqual(fact["sha256"], claude_upgrade.file_sha256(fact_path))
+        self.assertEqual(json.loads(fact_path.read_text(encoding="utf-8")), self.activation_fact)
+        self.assertEqual((fact["source_path"], fact["profile_mode"], fact["schema_version"]),
+                         ("/app/data/claude-egress-activation-fact.json", "validation_candidate", candidate_capture.ACTIVATION_FACT_SCHEMA))
         self.assertEqual(attempt["gateway_recovery"]["status"], "passed")
         # 共享的候选恢复准入读 environment.restoration_report（Codex 同名）：Claude 绑定网关隔离恢复核验文件。
         self.assertEqual(attempt["environment"]["restoration_report"], attempt["gateway_recovery"]["file"])
@@ -756,6 +777,22 @@ class FormalCandidateRunTests(CandidateFixture):
                         [(item["check_id"], item["failure_code"]) for item in attempt["failure_observations"]],
                     )
 
+    def test_activation_fact_missing_or_not_candidate_fails_closed(self) -> None:
+        """激活事实缺失、不可读或不是候选 Runtime：正式 run 按环境污染处理（attempt 不会等待封存）。"""
+
+        for label, fact, code in (
+            ("缺失", None, "missing"),
+            ("不是候选 Runtime", {"schema_version": candidate_capture.ACTIVATION_FACT_SCHEMA, "profile_mode": "legacy"}, "invalid"),
+        ):
+            with self.subTest(label=label):
+                campaign = self.write_candidate_campaign(campaign_id=f"claude-code-2_1_285-{code}")
+                self.activation_fact = fact
+                _code, result, stderr = self.run_candidate(campaign, "--acknowledge-live-requests")
+                self.assertEqual(result.get("status"), "environment_contaminated", stderr)
+                _root, attempt = self.load_attempt(campaign, result["attempt_id"])
+                self.assertIsNone(attempt["gateway_environment"]["activation_fact"])
+                self.assertIn(("attempt.gateway.activation-fact", code), [(item["check_id"], item["failure_code"]) for item in attempt["failure_observations"]])
+
     def test_precheck_refusal_is_not_contamination_and_blocks_rerun(self) -> None:
         campaign = self.write_candidate_campaign()
         self.set_candidate_control({"precheck_fail": ["v4-oauth-refresh"]})
@@ -828,6 +865,12 @@ class CandidateRehearsalTests(CandidateFixture):
         self.assertEqual([check["status"] for check in attempt["results"][0]["relay_checks"]], ["passed"] * 4)
         self.assertEqual(attempt["results"][0]["restoration_checks"], [])
         self.assertFalse((campaign / "candidates").exists())
+        self.assertEqual(attempt["gateway_environment"]["activation_fact"]["profile_mode"], "validation_candidate")
+        # 激活事实不是候选 Runtime：演练没有动网关，只判演练失败，不记环境污染。
+        self.activation_fact = {"schema_version": candidate_capture.ACTIVATION_FACT_SCHEMA, "profile_mode": "legacy"}
+        code, failed, stderr = self.run_candidate(campaign, "--zero-request-rehearsal", "--job-id", REFRESH_JOB)
+        self.assertEqual((code, failed.get("status")), (2, "rehearsal_failed"), stderr)
+        self.assertFalse((campaign / capture.CONTAMINATION_MARKER).exists())
         # 演练只认 preflight_only；正式 Campaign 上的演练在预约前拒绝。
         formal = self.write_candidate_campaign(campaign_id="claude-code-2_1_285-t2")
         code, _result, stderr = self.run_candidate(formal, "--zero-request-rehearsal", "--job-id", LIVE_JOB)
