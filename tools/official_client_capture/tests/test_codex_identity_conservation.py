@@ -37,12 +37,20 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "upgrade_client_adapter.py": "B1-01 客户端适配接口、编排器服务面与注册表；B2-08 新增三个适配器成员（attempt 环境已恢复口径、部署收据五摘要"
                                  "所在对象、有效 wire 身份），Codex 绑定到原写法或原函数；B2-10 新增 Job 演练的四个适配器成员（画像模块、"
                                  "执行合同构造、二进制表、合同重放），Codex 绑定到 Job 演练收据模块本身与它的原函数体；B2-11 新增"
-                                 "收口画像成员 closeout_profile（模块型），Codex 绑定到 VC-0 收口模块本身",
+                                 "收口画像成员 closeout_profile（模块型），Codex 绑定到 VC-0 收口模块本身；B5a-09 续新增原子双跑画像成员 "
+                                 "atomic_rehearsal_profile（模块型），Codex 绑定到原子双跑收据模块本身",
     "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
                                      "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
                                      "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
                                      "两处项目总账查找显式给出客户端（Codex 给 codex，与缺省相同），新增命令提示用的 ORCHESTRATOR_CLI_MODULE；"
                                      "Codex 专属的输入校验、Formal 参数恢复与两个历史修复子命令原样不动。本模块没有符号在评估读侧闭包内",
+    "codex_upgrade_campaign_run_rehearsal_receipt.py": "B5a-09 续 原子双跑加客户端作用域（client_scope，缺省 Codex）：7 处编排器"
+                                                       "引用经服务面（Codex 服务面就是 codex_upgrade 模块本身，不再直接导入），其余"
+                                                       "客户端差异经画像（Codex 画像是本模块，常量与两个画像函数取值是改造前写死的"
+                                                       "原值），计时账本与测试用总账显式给出客户端（Codex 给 codex，与缺省相同）；"
+                                                       "原子双跑与 worker 命令行加 --client（缺省 codex），分批演练不变。本模块没有"
+                                                       "符号在评估读侧闭包内；Codex 的收据、清单、inventory 与报错逐字不变（"
+                                                       "test_codex_upgrade_campaign_run_rehearsal_receipt 照常通过）",
     "codex_upgrade_job_rehearsal_receipt.py": "B2-10 Job 演练收据模块加适配器参数：13 个编排器引用经服务面，执行合同构造、二进制表与合同"
                                               "重放经适配器成员，其余客户端差异经画像（Codex 画像就是本模块，各项取值是改造前写死的原值），"
                                               "四个依赖与容器探针加缺省为原值的参数；facts、收据与合同按合同名认客户端，Claude 签 "
@@ -74,7 +82,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "codex_upgrade_policy_certification.py": "B5a-04 策略认证按客户端：Claude 按 v3 引擎算身份、认 Claude 部署收据；编排器引用经适配器（Codex 合同与输出逐字不变）",
     "certify_release.py": "B5a-04 发布认证按客户端：Claude 签 tool-release-certification/v2（加 client）；编排器引用经适配器（Codex v1 逐字不变）；"
                           "B2-11 第二部分 Job 演练按认证的客户端重放（Codex 传 codex：合法收据的结果与报错不变，另一客户端的收据被拒），"
-                          "atomic-double 门槛单列（Claude 先逐项重放 Job 演练、再在 atomic-double 处失败关闭）",
+                          "atomic-double 门槛单列；B5a-09 续 atomic-double 按认证的客户端重放（本机与容器内；Codex 的命令行、合同名与"
+                          "工具身份核对逐字不变，Claude 容器内重放追加 --client claude），去掉 Claude 的失败关闭门槛，Claude 不接受 Codex "
+                          "专属的分批演练",
     "codex_upgrade_vc_receipt.py": "B5a-08 P0 v2 重验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数，验证器只从仓库 tools/ci 或"
                                    "已安装驱动加载）；逐条核验与门禁重验多一个缺省为全集通过的 inheriting_mode 参数；读侧闭包内的符号原位不动"
                                    "（Codex 两种模式的结果与报错逐字不变，见 test_unit_inherit_codex_parity）",

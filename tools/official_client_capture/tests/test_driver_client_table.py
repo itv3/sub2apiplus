@@ -454,13 +454,13 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
         return eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.root / "runs" / str(self.runs),
                                steps_dir=self.fx.steps_dir, runner=runner or self.commands, es_runner=self.fx.runner)
 
-    def test_pending_steps_are_listed_in_the_plan_and_never_executed(self) -> None:
+    def test_pre_ledger_steps_run_the_claude_tools(self) -> None:
+        """建账本之前的各步对 Claude 全部接入（B5a-09 续落实 atomic-double 之后，Claude 已没有待接入的入口步骤）：零请求 smoke
+        执行 Claude 的模块，atomic-double 在 capture-cli 里调共享收据模块并追加 --client claude，证据根取 Claude 的前缀。"""
+
+        self.assertFalse([name for name in CT.TABLE["claude"]["pending"] if name.startswith("step:")], "Claude 没有待接入的入口步骤")
         plan = self.orchestrator().orchestrate(plan_only=True)
-        reasons = {step["step_id"]: "；".join(step["reasons"]) for step in plan["steps"]}
-        for name, work_item in CT.TABLE["claude"]["pending"].items():
-            kind, _, step_id = name.partition(":")
-            if kind == "step":
-                self.assertIn(f"尚未接入：{work_item}", reasons[step_id])
+        self.assertFalse([step["step_id"] for step in plan["steps"] if any("尚未接入" in reason for reason in step["reasons"])])
         smoke_module, smoke_calls = CT.spec("claude")["zero_request_smoke_module"], []
 
         def runner(argv, cwd, env, log):
@@ -474,21 +474,24 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
                 return 0
             return self.commands(argv, cwd, env, log)
 
-        result = self.orchestrator(runner).orchestrate()
+        result = self.orchestrator(runner).orchestrate(to_step="atomic-double")
         actions = {step["step_id"]: (step["action"], step["status"], "；".join(step["reasons"])) for step in result["steps"]}
         self.assertEqual(actions["zero-request-smoke"][:2], ("执行", "passed"))
         [smoke] = smoke_calls
         self.assertEqual(smoke[smoke.index("-m") + 1:smoke.index("-m") + 2], [smoke_module])
         self.assertTrue(_option(smoke, "--output").endswith(f"/audit/zero-request-smoke-{self.fx.params['STAMP']}.json"))
         self.assertIn(f"/staging/zero-request-smoke-{self.fx.params['STAMP']}", _option(smoke, "--staging-root"))
-        self.assertEqual(actions["atomic-double"][:2], ("执行", "failed"))
-        self.assertIn(CT.pending("claude", "step:atomic-double"), actions["atomic-double"][2])
+        self.assertEqual(actions["atomic-double"][:2], ("执行", "passed"), actions["atomic-double"])
+        [atomic] = [call for call in self.commands.calls if call[:2] == ["docker", "exec"]]
+        self.assertEqual(atomic[atomic.index("-m") + 1:atomic.index("-m") + 3],
+                         [CT.spec("claude")["atomic_rehearsal_module"], "atomic-double-collect"])
+        self.assertEqual(atomic[-2:], ["--client", "claude"], "共享收据模块按 --client claude 签 Claude 合同")
+        self.assertTrue(_option(atomic, "--evidence-root").startswith(f"/capture/staging/{CT.spec('claude')['atomic_root_prefix']}"))
         joined = [" ".join(call) for call in self.commands.calls]
-        self.assertFalse([call for call in joined if "codex_upgrade_zero_request_smoke" in call or call.startswith("docker exec")],
-                         "待接入的步骤不执行，不拿 Codex 的实现顶替")
+        self.assertFalse([call for call in joined if "codex_upgrade_zero_request_smoke" in call], "不拿 Codex 的实现顶替")
         policy = [call for call in self.commands.calls if "codex_upgrade_policy_certification" in " ".join(call)]
         self.assertEqual([call[-2:] for call in policy], [["--client", "claude"]] * 2, "策略兼容与激活认证带 --client claude")
-        self.assertEqual(result["exit_code"], 1, "建账本之前有步骤没通过：不建账本")
+        self.assertEqual(result["exit_code"], 0, result.get("stopped_because"))
 
     def test_claude_ledger_and_environment_commands(self) -> None:
         calls: list[list[str]] = []

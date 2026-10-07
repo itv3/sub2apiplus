@@ -403,8 +403,10 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
 
     def test_claude_dry_run_is_prefixed_bound_to_claude_and_classifies_pending_steps(self) -> None:
         store = pre_a3_store(self.root, {name: waiting_scenario(name) for name in CLAUDE_CHAINS})
-        self.configure(passed=["entry-preflight", "policy-compatibility", "policy-activation", "entry-gates", "zero-request-smoke"],
-                       failed=["pre-a3", "atomic-double"], rc=1, pre_a3_failed=store)
+        # B5a-09 续落实 atomic-double 之后 Claude 没有登记待接入的入口步骤：空跑里它照常执行（这里通过），只剩 pre-A3 占位。
+        self.configure(passed=["entry-preflight", "policy-compatibility", "policy-activation", "entry-gates", "zero-request-smoke",
+                               "atomic-double"],
+                       failed=["pre-a3"], rc=1, pre_a3_failed=store)
         started = self.start_claude()
         self.assertEqual(started.returncode, 0, started.stderr)
         outcome = json.loads(started.stdout.strip().splitlines()[-1])
@@ -414,8 +416,10 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         self.assertEqual((payload["status"], payload["client"], payload["deployment"]["receipt"]),
                          ("failed", "claude", self.claude_receipt.name))
         classes = payload["failure_classes"]
-        self.assertEqual(classes["atomic-double"]["class"], "registered_pending")
-        self.assertTrue(classes["atomic-double"]["work_item"].startswith("B5a-09"))
+        self.assertEqual(set(classes), {"pre-a3"})
+        # 没有登记为待接入的步骤失败一律算真实失败（atomic-double 不再是 registered_pending）。
+        self.assertEqual(dr.classify_failures("claude", [{"step_id": "atomic-double", "action": "执行", "reasons": ["收据没写出"]}],
+                                              self.root)["atomic-double"]["class"], "real")
         self.assertEqual(classes["pre-a3"]["class"], "scenario_pending", classes["pre-a3"])
         self.assertEqual(sorted(classes["pre-a3"]["detail"]["pending"]), sorted(f"pre-a3:claude:{name}" for name in CLAUDE_CHAINS))
         self.assertEqual(payload["real_failed_steps"], [], "只差登记过的待接入与占位，没有真实失败")

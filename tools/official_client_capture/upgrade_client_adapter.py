@@ -389,6 +389,11 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # 续作）；客户端差异收进收口画像模块——合同名（收口收据、失败诊断、现场、上限后恢复预览、首批交接）、四份输入的校验
     # ``validate_inputs``、从预检恢复 Formal plan 参数的 ``recover_formal_plan_arguments`` 与命令提示里的编排器模块名。
     "closeout_profile": "module",
+    # 原子双跑（B5a-09 续）：共享流程在 codex_upgrade_campaign_run_rehearsal_receipt（两个独立新根里经原子入口完成 VC-0→VC-1、
+    # 权限收口、失败父 run 的账本收口与负例，收据封存与重放）；客户端差异收进画像模块——合同名（收据、动作事实、VC-0 阶段
+    # 事实）、合成 Campaign 的版本与归属字段、父 run 队列清单合同、动作命令的客户端参数、工具身份额外绑定的文件、失败父 run 的
+    # 清单形状。
+    "atomic_rehearsal_profile": "module",
 })
 
 
@@ -428,6 +433,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "job_contract_replay": ("codex_upgrade_job_rehearsal_receipt", "codex_job_contract_replay"),
         # B2-11：Codex 收口画像就是收口模块本身（合同名与两个函数是改造前的原值与原函数）。
         "closeout_profile": ("codex_upgrade_vc0_closeout", None),
+        # B5a-09 续：Codex 原子双跑画像就是共享模块本身（合同名与取值是改造前写死的原值）。
+        "atomic_rehearsal_profile": ("codex_upgrade_campaign_run_rehearsal_receipt", None),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -458,6 +465,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "binary_facts": ("claude_upgrade_job_rehearsal", "binary_facts"),  # B2-10
         "job_contract_replay": ("claude_upgrade_job_rehearsal", "job_contract_replay"),  # B2-10
         "closeout_profile": ("claude_upgrade_vc0_closeout", None),  # B2-11
+        "atomic_rehearsal_profile": ("claude_upgrade_atomic_rehearsal", None),  # B5a-09 续
     }),
 })
 

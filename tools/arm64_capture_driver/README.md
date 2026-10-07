@@ -382,7 +382,8 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   `trust_dialog_unexpected`（预置信任失效，启动流程与设计不符，先查预置再放行）。前后指纹另覆盖 `/root/.claude`（凭据文件只记
   元数据，不读内容）与 `/root/.claude.json`。验收参数 `--test-mutation untrust:<目录>`（目录须是探测工作目录或其上级）
   撤销工作目录信任链（工作目录本身与它的全部上级）上的信任确认，`--only-scenario` 取 TUI probe 编号；报告合同 `official-client-launch-probe/v1`，
-  `verify` 要带 `--client claude`。atomic-double 的 Claude 一侧尚未接入（客户端表 pending），`stage1-finish.sh` 跑到那一步即停。
+  `verify` 要带 `--client claude`。atomic-double 按客户端表取收据模块、`--client` 与证据根前缀（B5a-09 续：Claude 的证据根是
+  `$D/staging/claude-atomic-vc0-vc1-<轮次>-<时间戳>`，收据 `official-client-atomic-vc0-vc1-rehearsal/v1`）。
 
 ## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
 
@@ -609,7 +610,8 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   已有在跑或已有结论就不重复跑。`status` 列出全部。演练根与空跑产物只留最近 5 次（日常维护自动清）。
 * 按客户端（Claude 升级 B5a-10）：本轮客户端取参数文件的 `CLIENT`，空跑绑定该客户端最新的部署收据，结论文件名带客户端表的
   前缀（Codex 为空，与改造前同名同形；Claude 是 `claude-`），同一提交＋同一部署两客户端各一份；演练总账按该客户端建。Claude 的
-  结论另带没通过各步的分类 `failure_classes`：客户端表登记的待接入步骤（如 atomic-double）记 `registered_pending`；pre-A3 一步按
+  结论另带没通过各步的分类 `failure_classes`：客户端表登记的待接入步骤记 `registered_pending`（B5a-09 续落实 atomic-double 之后
+  Claude 已没有待接入的入口步骤）；pre-A3 一步按
   演练根里的 pre-A3 认证（没通过时是旁路文件）登记的记录库与运行清单逐场景读日志里的场景结果，链体停在登记占位上（指标
   `pending`，如「等 B2-08」）、错误信息就是占位、零请求零网络、隔离没有降级的记 `scenario_pending`，其余记 `real`；被阻塞的
   记 `blocked`。`real_failed_steps` 为空＝只差登记过的待接入与占位，没有真实失败。

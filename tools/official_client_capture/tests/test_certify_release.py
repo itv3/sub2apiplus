@@ -224,6 +224,7 @@ class CertifyReleaseTests(unittest.TestCase):
             self.assertEqual(command[:2], ["docker", "exec"])
             self.assertIn("/capture/staging/atomic-double", command)
             self.assertIn("atomic-double-replay", command)
+            self.assertNotIn("--client", command, "Codex 的容器内重放命令与改造前相同（B5a-09 续只给 Claude 追加）")
             self.assertEqual(certification["atomic_double_rehearsal"]["replayed_in_container"], "capture-cli")
             failed = mock.Mock(returncode=1, stdout=b"", stderr=b"tampered")
             with mock.patch.object(certify_release.subprocess, "run", return_value=failed), self.assertRaisesRegex(

@@ -92,8 +92,8 @@ _SHARED: Mapping[str, Any] = {
     "gate_receipt_module": _module("codex_upgrade_gate_receipt"),
     "vc_artifacts_module": _module("codex_upgrade_vc_artifacts"),
     "supervisor_module": _module("codex_upgrade_supervisor"),
-    # Job 演练与 atomic-double 的收据模块两客户端共用（加适配器参数，Claude 另签 official-client-* 合同）；Claude 的接入
-    # 状态见 pending。
+    # Job 演练与 atomic-double 的收据模块两客户端共用（加适配器参数，Claude 另签 official-client-* 合同：Job 演练 B2-10、
+    # atomic-double B5a-09 续）。
     "job_rehearsal_module": _module("codex_upgrade_job_rehearsal_receipt"),
     "atomic_rehearsal_module": _module("codex_upgrade_campaign_run_rehearsal_receipt"),
     "framework_file": "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
@@ -351,11 +351,6 @@ _CLAUDE: Mapping[str, Any] = {
     "vc5_admission_approval_schema": None,
     "runtime_profile": None,
     "pending": {
-        # atomic-double 的 Claude 一侧要真跑一次 VC-0→VC-1 批次编译与派发：Claude 的批次入口（_vc_campaign_plan、
-        # _vc_run_manifest_from_batch 等）由 B3-01 落实，总计划控制收据的读回与 Claude 身份策略对收据模块的覆盖也要先补，
-        # 在那之前不拿 Codex 的合同顶替（B5a-09 调研结论）。
-        "step:atomic-double": "B5a-09 续（atomic-double 收据模块加适配器参数，Claude 签 official-client-atomic-vc0-vc1-rehearsal/v1；"
-                              "依赖 B3-01 的 Claude 批次入口、B2-11 的总计划控制收据读回与 Claude 身份策略覆盖收据模块）",
         "tool:vc5-admission": "B4-01（Claude 候选采集的 VC-5 准入合同与运行画像路径）",
     },
 }
@@ -377,6 +372,7 @@ SHELL_ENTRIES = (
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
     "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script", "vc1_dispatch_script",
+    "atomic_rehearsal_module", "atomic_root_prefix",
 )
 
 

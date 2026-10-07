@@ -5,11 +5,27 @@
 ``campaign-run v2`` 的批次序号、原始 deadline 承接、execute/reuse
 分离和父监督器终态。第三个批次故意漂移 deadline，必须在动作前被拒绝。
 工具不创建 Formal Campaign，不调用 Codex CLI，不发送任何官方请求。
+
+原子双跑（``atomic-double-collect``／``atomic-double-replay``）按客户端（Claude 升级控制面设计 B5a-09 续）：命令行
+``--client``（缺省 codex，不带它时命令行、合同与收据和改造前逐字相同）选客户端适配器，放进本模块的客户端作用域
+（``client_scope``，与 VC-0 收口模块同一写法）：
+
+* 对编排器的 7 处引用（原子入口 ``compile_and_run_vc_batch``、staging 写入 ``_write_staging_batch_artifacts``、队列清单编译
+  ``_vc_run_manifest_from_batch``、总计划读取 ``load_campaign_manifest``、只写一次 ``_secure_write_json_once``、异常类
+  ``ConfigurationError`` 与编排器文件 ``__file__``）经编排器服务面 ``adapter.orchestrator.<原名>``；Codex 的服务面就是
+  ``codex_upgrade`` 模块本身，本模块不再直接导入它；
+* 其余客户端差异经模块型适配器成员 ``atomic_rehearsal_profile``：Codex 的画像就是本模块（名字与取值是改造前写死的
+  原值），Claude 的画像在 ``claude_upgrade_atomic_rehearsal``——合同名（收据、动作事实、VC-0 阶段事实）、合成 Campaign
+  的版本与归属字段、父 run 的队列清单合同、动作命令追加的客户端参数、工具身份额外绑定的文件、失败父 run 的清单形状；
+* 计时账本与测试用项目总账按客户端建（Claude 是带 client 的 v2 计划与 ``upgrade-project-ledger-claude``）。
+
+分批演练（``collect``／``replay``）只属于 Codex（消费 Codex 的 preflight Campaign），不接受 ``--client``。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import json
 import os
@@ -18,27 +34,48 @@ import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Iterator, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# 作为主程序运行（``python -m`` 或按路径执行 worker）时让包路径也指向这一份：客户端适配器按包路径解析 Codex 画像，取到的
+# 必须是同一个模块对象（同一个作用域变量与同一个异常类），否则画像里抛出的错误在主程序里接不住。
+if __name__ == "__main__":
+    sys.modules.setdefault("tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt", sys.modules[__name__])
 
-from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_predispatch_stop
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
+from tools.official_client_capture import upgrade_client_adapter
 
 
 RECEIPT_SCHEMA = "codex-p0-campaign-run-rehearsal/v1"
 EXECUTIONS_SCHEMA = "codex-p0-campaign-run-executions/v1"
 ACTION_RESULT_SCHEMA = "codex-p0-campaign-run-action-result/v1"
 ATOMIC_RECEIPT_SCHEMA = "codex-atomic-vc0-vc1-rehearsal/v2"
+# ---- 原子双跑的 Codex 画像（B5a-09 续；本模块即 Codex 的 ``atomic_rehearsal_profile``，取值是改造前写死的原值）：
+DEFAULT_CLIENT = "codex"
+CLIENT = "codex"
+CLI_LABEL = "Codex"
+# 合成 VC-0 阶段事实的合同名与合成 Campaign 的两个版本。
+ATOMIC_VC0_STAGE_SCHEMA = "codex-atomic-vc0-stage/v1"
+ATOMIC_BASELINE_VERSION = "0.151.0"
+ATOMIC_TARGET_VERSION = "0.154.0"
+# 原子父 run 记录的队列清单合同（Codex staging 清单是 v2）。
+ATOMIC_RUN_SCHEMA = codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+# 收据顶层与合成 Campaign 清单另带的归属字段（Codex 没有）、动作命令追加的客户端参数（Codex 为空）、负例里 deadline 漂移
+# 清单另带的字段（Codex 没有）。
+ATOMIC_CLIENT_FIELDS: Mapping[str, Any] = MappingProxyType({})
+ATOMIC_CLIENT_ARGV: tuple[str, ...] = ()
+ATOMIC_BATCHED_MANIFEST_EXTRA: Mapping[str, Any] = MappingProxyType({})
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MINIMUM_REMAINING_SECONDS = 120
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -47,6 +84,75 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class CampaignRunRehearsalError(RuntimeError):
     """campaign-run 演练输入、执行或收据未闭合。"""
+
+
+# ---------------------------------------------------------------------------
+# 客户端作用域（B5a-09 续）：原子双跑的编排器引用与客户端画像都从当前作用域的适配器取，缺省 Codex
+# ---------------------------------------------------------------------------
+
+_ADAPTER: contextvars.ContextVar[Any] = contextvars.ContextVar("campaign_run_rehearsal_adapter", default=None)
+
+
+def _adapter() -> Any:
+    """当前作用域的客户端适配器；没有进入作用域时是 Codex（改造前的唯一客户端）。"""
+
+    adapter = _ADAPTER.get()
+    return adapter if adapter is not None else upgrade_client_adapter.adapter_for(DEFAULT_CLIENT)
+
+
+def _profile() -> Any:
+    """当前客户端的原子双跑画像：Codex 即本模块，Claude 是 ``claude_upgrade_atomic_rehearsal``。"""
+
+    return _adapter().atomic_rehearsal_profile
+
+
+def atomic_profile(client: str) -> Any:
+    """指定客户端的原子双跑画像（发布认证按客户端核对收据合同用）；客户端不认识即拒绝。"""
+
+    return upgrade_client_adapter.adapter_for(client).atomic_rehearsal_profile
+
+
+@contextmanager
+def client_scope(client: str | None) -> Iterator[Any]:
+    """在 ``client`` 的作用域里执行（``None`` 沿用当前作用域）；不得在一个客户端的作用域里嵌套另一个客户端。"""
+
+    if client is None:
+        yield _adapter()
+        return
+    adapter = upgrade_client_adapter.adapter_for(client)
+    current = _ADAPTER.get()
+    if current is not None and current.client != adapter.client:
+        raise CampaignRunRehearsalError(f"原子演练不得在 {current.client} 的作用域里切换到 {adapter.client}")
+    token = _ADAPTER.set(adapter)
+    try:
+        yield adapter
+    finally:
+        _ADAPTER.reset(token)
+
+
+def atomic_extra_tool_files() -> tuple[Path, ...]:
+    """Codex 画像：工具身份在原子入口与共享 producer／consumer 之外没有额外绑定的文件。"""
+
+    return ()
+
+
+def atomic_failing_parent_manifest(campaign_dir: Path, campaign_id: str, action_id: str) -> dict[str, Any]:
+    """Codex 画像：失败父 run 的队列清单（v1 相对预算清单，改造前的原样）；``campaign_dir`` 只为与 Claude 画像同签名。"""
+
+    del campaign_dir
+    return codex_upgrade_supervisor.build_campaign_run_manifest(
+        campaign_id,
+        "VC-1",
+        30,
+        actions=[
+            {
+                "action_id": action_id,
+                "operation": f"VC-1:{action_id}",
+                "timeout_seconds": 5,
+                "command": [sys.executable, "-c", "raise SystemExit(7)"],
+            }
+        ],
+    )
 
 
 @dataclass(frozen=True)
@@ -263,11 +369,11 @@ def _tool_sha256(manifest: Mapping[str, Any], relative: str) -> str:
 def _load_preflight_inputs(campaign_dir: Path) -> PreflightInputs:
     root = _private_directory(campaign_dir, "preflight Campaign")
     try:
-        manifest = codex_upgrade.load_campaign_manifest(
+        manifest = _adapter().orchestrator.load_campaign_manifest(
             root,
             _skip_control_validation=True,
         )
-    except (OSError, ValueError, codex_upgrade.ConfigurationError) as error:
+    except (OSError, ValueError, _adapter().orchestrator.ConfigurationError) as error:
         raise CampaignRunRehearsalError(
             f"preflight Campaign 重放失败：{error}"
         ) from error
@@ -416,7 +522,7 @@ def _action_worker(arguments: argparse.Namespace) -> dict[str, Any]:
     operation = "p0:campaign-run-rehearsal-child"
     client.event_start(operation)
     payload = {
-        "schema_version": ACTION_RESULT_SCHEMA,
+        "schema_version": _profile().ACTION_RESULT_SCHEMA,
         "status": "passed",
         "campaign_id": campaign_id,
         "phase": phase,
@@ -449,7 +555,7 @@ def _run_summary(
         raise CampaignRunRehearsalError(f"rehearsal run 审计失败：{error}") from error
     marker = _load_json(marker_path, "rehearsal action marker")
     expected_marker = {
-        "schema_version": ACTION_RESULT_SCHEMA,
+        "schema_version": _profile().ACTION_RESULT_SCHEMA,
         "status": "passed",
         "campaign_id": expected_campaign_id,
         "phase": f"VC-{expected_sequence}",
@@ -475,7 +581,7 @@ def _run_summary(
     ):
         raise CampaignRunRehearsalError("campaign-run 批次未形成完整零请求终态")
     return {
-        "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "schema_version": _profile().ATOMIC_RUN_SCHEMA,
         "batch_id": expected_batch_id,
         "batch_sequence": expected_sequence,
         "original_deadline_at_utc": expected_deadline,
@@ -1128,19 +1234,29 @@ def _atomic_environment(*, require_arm64: bool) -> dict[str, Any]:
     }
 
 
-def _atomic_tool_identity() -> dict[str, Any]:
-    """冻结原子入口及其真实 producer／consumer 的当前字节身份。"""
+def _atomic_tool_identity(client: str | None = None) -> dict[str, Any]:
+    """冻结原子入口及其真实 producer／consumer 的当前字节身份（``client`` 缺省取当前作用域）。
 
+    编排器文件经服务面取（Codex 即 ``codex_upgrade.py``）；画像给出的额外文件一并绑定（Claude：共享控制面实现、Claude VC
+    制品与画像模块本身；Codex 没有）。
+    """
+
+    with client_scope(client):
+        return _atomic_tool_identity_in_scope()
+
+
+def _atomic_tool_identity_in_scope() -> dict[str, Any]:
     tool_root = Path(__file__).resolve().parent
     paths = sorted(
         {
             Path(__file__).resolve(),
-            Path(codex_upgrade.__file__).resolve(),
+            Path(_adapter().orchestrator.__file__).resolve(),
             Path(codex_upgrade_evidence_permissions.__file__).resolve(),
             Path(codex_upgrade_predispatch_stop.__file__).resolve(),
             Path(codex_upgrade_supervisor.__file__).resolve(),
             Path(codex_upgrade_timing_ledger.__file__).resolve(),
             Path(codex_upgrade_vc_artifacts.__file__).resolve(),
+            *(Path(item).resolve() for item in _profile().atomic_extra_tool_files()),
         },
         key=lambda item: item.relative_to(tool_root).as_posix(),
     )
@@ -1216,12 +1332,13 @@ def _write_atomic_campaign(
     campaign_dir.mkdir(mode=0o700)
     state_dir.mkdir(mode=0o700)
     now = datetime.now(timezone.utc)
+    profile = _profile()
     plan = codex_upgrade_vc_artifacts.build_campaign_plan(
         campaign_id=campaign_id,
         campaign_mode="formal",
         campaign_purpose="validation_only",
-        baseline_version="0.151.0",
-        target_version="0.154.0",
+        baseline_version=profile.ATOMIC_BASELINE_VERSION,
+        target_version=profile.ATOMIC_TARGET_VERSION,
         created_at_utc=now.isoformat(),
         original_deadline_at_utc=(now + timedelta(minutes=10)).isoformat(),
         timing_checkpoint_sha256="1" * 64,
@@ -1238,7 +1355,7 @@ def _write_atomic_campaign(
     _write_once(
         stage_receipt_path,
         {
-            "schema_version": "codex-atomic-vc0-stage/v1",
+            "schema_version": profile.ATOMIC_VC0_STAGE_SCHEMA,
             "status": "passed",
             "campaign_id": campaign_id,
             "live_request_count": 0,
@@ -1266,10 +1383,11 @@ def _write_atomic_campaign(
     codex_upgrade_timing_ledger.create_ledger(
         timing_root,
         upgrade_id=f"{campaign_id}-upgrade",
-        baseline_version="0.151.0",
-        target_version="0.154.0",
+        baseline_version=profile.ATOMIC_BASELINE_VERSION,
+        target_version=profile.ATOMIC_TARGET_VERSION,
         campaign_purpose="validation_only",
         evidence_decision="recapture",
+        client=_adapter().client,
     )
     codex_upgrade_timing_ledger.append_event(
         timing_root,
@@ -1288,11 +1406,12 @@ def _write_atomic_campaign(
     _write_once(
         campaign_dir / "campaign.json",
         {
+            **profile.ATOMIC_CLIENT_FIELDS,
             "campaign_id": campaign_id,
             "campaign_mode": "formal",
             "campaign_purpose": "validation_only",
-            "baseline_version": "0.151.0",
-            "target_version": "0.154.0",
+            "baseline_version": profile.ATOMIC_BASELINE_VERSION,
+            "target_version": profile.ATOMIC_TARGET_VERSION,
             "vc_control": {
                 "campaign_plan": {
                     "path": plan_path.relative_to(campaign_dir).as_posix(),
@@ -1310,7 +1429,7 @@ def _write_atomic_campaign(
     )
     # 演练实例是 staging 树内的 formal 0.154 Campaign，派发前必须经项目总账门禁；
     # 这里为实例根创建 fixture_only 总账并完成注册，生产总账不受影响。
-    codex_upgrade_project_ledger.create_fixture_ledger(root)
+    codex_upgrade_project_ledger.create_fixture_ledger(root, client=_adapter().client)
     codex_upgrade_project_ledger.register_existing_campaign(campaign_dir)
     return campaign_dir, state_dir, plan, checkpoint_path, checkpoint
 
@@ -1371,16 +1490,16 @@ def _atomic_compiler(
             raise CampaignRunRehearsalError("原子演练 staging 参数必须成对给出")
         if staging_attempt_dir is not None:
             assert owner_nonce is not None
-            return codex_upgrade._write_staging_batch_artifacts(
+            return _adapter().orchestrator._write_staging_batch_artifacts(
                 arguments.campaign_dir,
                 staging_attempt_dir,
                 plan=plan,
                 batch=batch,
-                run_manifest=codex_upgrade._vc_run_manifest_from_batch(batch, batch_model="staging"),
+                run_manifest=_adapter().orchestrator._vc_run_manifest_from_batch(batch, batch_model="staging"),
                 owner_nonce=owner_nonce,
                 prepared_at_utc=now.isoformat(),
             )
-        codex_upgrade._secure_write_json_once(batch_path, batch)
+        _adapter().orchestrator._secure_write_json_once(batch_path, batch)
         manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
             campaign_id=batch["campaign_id"],
             campaign_plan_sha256=batch["campaign_plan_sha256"],
@@ -1394,7 +1513,7 @@ def _atomic_compiler(
             execute_items=batch["execute_item_ids"],
             reuse_items=batch["reuse_item_ids"],
         )
-        codex_upgrade._secure_write_json_once(manifest_path, manifest)
+        _adapter().orchestrator._secure_write_json_once(manifest_path, manifest)
         return {
             "status": "complete",
             "campaign_id": batch["campaign_id"],
@@ -1464,6 +1583,7 @@ def _atomic_negative_checks(
         actions=[],
         execute_items=[],
         reuse_items=[],
+        **_profile().ATOMIC_BATCHED_MANIFEST_EXTRA,
     )
     history = codex_upgrade_supervisor._campaign_run_history(
         state_dir,
@@ -1512,12 +1632,15 @@ def _atomic_action(campaign_id: str, marker_path: Path) -> dict[str, Any]:
         "action_id": action_id,
         "operation": "VC-1:atomic-offline-rehearsal",
         "timeout_seconds": 30.0,
-        "command": _action_command(
-            campaign_id=campaign_id,
-            phase="VC-1",
-            action_id=action_id,
-            output=marker_path,
-        ),
+        "command": [
+            *_action_command(
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id=action_id,
+                output=marker_path,
+            ),
+            *_profile().ATOMIC_CLIENT_ARGV,
+        ],
         "item_ids": [execute_id],
     }
 
@@ -1651,19 +1774,7 @@ def _atomic_failing_parent(
     manifest_path = (
         campaign_dir / "control" / "vc" / "run-manifests" / f"{action_id}.json"
     )
-    manifest = codex_upgrade_supervisor.build_campaign_run_manifest(
-        campaign_id,
-        "VC-1",
-        30,
-        actions=[
-            {
-                "action_id": action_id,
-                "operation": f"VC-1:{action_id}",
-                "timeout_seconds": 5,
-                "command": [sys.executable, "-c", "raise SystemExit(7)"],
-            }
-        ],
-    )
+    manifest = _profile().atomic_failing_parent_manifest(campaign_dir, campaign_id, action_id)
     _write_once(manifest_path, manifest)
     returncode, result = codex_upgrade_supervisor._campaign_run_command(
         argparse.Namespace(
@@ -1842,7 +1953,7 @@ def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
         watchdog_timeout_seconds=5.0,
         ledger_interval_seconds=1.0,
     )
-    result, returncode = codex_upgrade.compile_and_run_vc_batch(
+    result, returncode = _adapter().orchestrator.compile_and_run_vc_batch(
         arguments,
         _compiler=_atomic_compiler(
             plan=plan,
@@ -1943,9 +2054,20 @@ def collect_atomic_double(
     output_relative: str | Path,
     *,
     require_arm64: bool = True,
+    client: str | None = None,
 ) -> dict[str, Any]:
-    """在两个完全独立的新根中连续完成 VC-0→VC-1 原子闭环。"""
+    """在两个完全独立的新根中连续完成 VC-0→VC-1 原子闭环；``client`` 缺省取当前作用域（缺省 Codex）。"""
 
+    with client_scope(client):
+        return _collect_atomic_double(evidence_root, output_relative, require_arm64=require_arm64)
+
+
+def _collect_atomic_double(
+    evidence_root: Path,
+    output_relative: str | Path,
+    *,
+    require_arm64: bool,
+) -> dict[str, Any]:
     root = _private_directory(evidence_root, "原子双跑证据根")
     if stat.S_IMODE(root.stat().st_mode) != 0o700:
         raise CampaignRunRehearsalError("原子双跑证据根权限必须精确为 0700")
@@ -1969,7 +2091,8 @@ def collect_atomic_double(
         if path.is_file() and first_root in path.read_bytes():
             raise CampaignRunRehearsalError("第二次演练读取或引用了第一次状态")
     receipt: dict[str, Any] = {
-        "schema_version": ATOMIC_RECEIPT_SCHEMA,
+        "schema_version": _profile().ATOMIC_RECEIPT_SCHEMA,
+        **_profile().ATOMIC_CLIENT_FIELDS,
         "status": "passed",
         "collected_at_utc": datetime.now(timezone.utc)
         .isoformat(timespec="milliseconds")
@@ -2181,19 +2304,7 @@ def _replay_atomic_failing_parent(
         campaign_dir / "control" / "vc" / "run-manifests" / f"{action_id}.json"
     )
     manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
-    expected_manifest = codex_upgrade_supervisor.build_campaign_run_manifest(
-        campaign_id,
-        "VC-1",
-        30,
-        actions=[
-            {
-                "action_id": action_id,
-                "operation": f"VC-1:{action_id}",
-                "timeout_seconds": 5,
-                "command": [sys.executable, "-c", "raise SystemExit(7)"],
-            }
-        ],
-    )
+    expected_manifest = _profile().atomic_failing_parent_manifest(campaign_dir, campaign_id, action_id)
     recorded_manifest = _expect_fields(
         _load_json(run_dir / "campaign-run-manifest.json", "失败父不可变 manifest"),
         {"schema_version", "manifest_sha256", "manifest"},
@@ -2203,7 +2314,7 @@ def _replay_atomic_failing_parent(
         manifest != expected_manifest
         or recorded_manifest
         != {
-            "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_SCHEMA,
+            "schema_version": expected_manifest["schema_version"],
             "manifest_sha256": codex_upgrade_supervisor._sha256(
                 codex_upgrade_supervisor._canonical(expected_manifest)
             ),
@@ -2372,22 +2483,23 @@ def _atomic_expected_inventory_paths(
     attempt = (
         f"data/evidence/campaigns/{campaign_id}/official/attempts/permission-attempt"
     )
+    ledger = str(_adapter().project_ledger_dir_name)
     paths = {
         "campaign",
         "campaign/campaign.json",
         # R8：父批次执行期间持有 Campaign 目录内的预算控制共享锁（deadline_control_scope），锁文件随之创建。
         "campaign/.deadline-control.lock",
-        # 项目总账门禁：实例根内的 fixture_only 总账与 Campaign 侧注册 batch。
-        "upgrade-project-ledger",
-        "upgrade-project-ledger/.project-ledger.lock",
-        "upgrade-project-ledger/plan.json",
-        "upgrade-project-ledger/initial-identity-keys.json",
-        "upgrade-project-ledger/head.json",
-        "upgrade-project-ledger/events",
-        "upgrade-project-ledger/events/000001.json",
-        "upgrade-project-ledger/repairs",
-        "upgrade-project-ledger/repairs/outbox",
-        "upgrade-project-ledger/repairs/receipts",
+        # 项目总账门禁：实例根内的 fixture_only 总账（目录名按客户端：Codex upgrade-project-ledger）与 Campaign 侧注册 batch。
+        ledger,
+        f"{ledger}/.project-ledger.lock",
+        f"{ledger}/plan.json",
+        f"{ledger}/initial-identity-keys.json",
+        f"{ledger}/head.json",
+        f"{ledger}/events",
+        f"{ledger}/events/000001.json",
+        f"{ledger}/repairs",
+        f"{ledger}/repairs/outbox",
+        f"{ledger}/repairs/receipts",
         "campaign/ledger",
         "campaign/ledger/.ledger.lock",
         "campaign/ledger/plan.json",
@@ -2530,12 +2642,13 @@ def _replay_atomic_instance(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise CampaignRunRehearsalError("原子演练 Campaign plan 非法") from error
+    profile = _profile()
     if (
         plan.get("campaign_id") != campaign_id
         or plan.get("campaign_mode") != "formal"
         or plan.get("campaign_purpose") != "validation_only"
-        or plan.get("baseline_version") != "0.151.0"
-        or plan.get("target_version") != "0.154.0"
+        or plan.get("baseline_version") != profile.ATOMIC_BASELINE_VERSION
+        or plan.get("target_version") != profile.ATOMIC_TARGET_VERSION
         or plan.get("controls")
         != {
             "timing_checkpoint_sha256": "1" * 64,
@@ -2549,6 +2662,7 @@ def _replay_atomic_instance(
     campaign_document = _expect_fields(
         _load_json(campaign_dir / "campaign.json", "原子演练 Campaign 清单"),
         {
+            *profile.ATOMIC_CLIENT_FIELDS,
             "campaign_id",
             "campaign_mode",
             "campaign_purpose",
@@ -2560,11 +2674,12 @@ def _replay_atomic_instance(
         "原子演练 Campaign 清单",
     )
     if campaign_document != {
+        **profile.ATOMIC_CLIENT_FIELDS,
         "campaign_id": campaign_id,
         "campaign_mode": "formal",
         "campaign_purpose": "validation_only",
-        "baseline_version": "0.151.0",
-        "target_version": "0.154.0",
+        "baseline_version": profile.ATOMIC_BASELINE_VERSION,
+        "target_version": profile.ATOMIC_TARGET_VERSION,
         "vc_control": {
             "campaign_plan": {
                 "path": "control/vc/campaign-plan.json",
@@ -2589,7 +2704,7 @@ def _replay_atomic_instance(
         "原子演练 VC-0 阶段事实",
     )
     if _load_json(stage_path, "原子演练 VC-0 阶段事实") != {
-        "schema_version": "codex-atomic-vc0-stage/v1",
+        "schema_version": profile.ATOMIC_VC0_STAGE_SCHEMA,
         "status": "passed",
         "campaign_id": campaign_id,
         "live_request_count": 0,
@@ -2692,7 +2807,7 @@ def _replay_atomic_instance(
     # 与生成侧同一函数按演练 Campaign 的批次模型重建：staging 模型清单携带 null 的
     # 候选级绑定字段，legacy 模型不含。
     try:
-        expected_manifest = codex_upgrade._vc_run_manifest_from_batch(
+        expected_manifest = _adapter().orchestrator._vc_run_manifest_from_batch(
             {
                 **batch,
                 "campaign_id": campaign_id,
@@ -2707,7 +2822,7 @@ def _replay_atomic_instance(
             },
             batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
         )
-    except (codex_upgrade.ConfigurationError, codex_upgrade_supervisor.SupervisorError) as error:
+    except (_adapter().orchestrator.ConfigurationError, codex_upgrade_supervisor.SupervisorError) as error:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 无法按批次模型重建") from error
     if manifest != expected_manifest:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 未由 batch 确定性编译")
@@ -2741,7 +2856,7 @@ def _replay_atomic_instance(
     except codex_upgrade_supervisor.SupervisorError as error:
         raise CampaignRunRehearsalError("原子演练父 run 无法审计") from error
     expected_parent = {
-        "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "schema_version": profile.ATOMIC_RUN_SCHEMA,
         "batch_id": batch["batch_id"],
         "batch_sequence": 1,
         "original_deadline_at_utc": plan["original_deadline_at_utc"],
@@ -2762,7 +2877,7 @@ def _replay_atomic_instance(
         "父 run 不可变 manifest",
     )
     if recorded_manifest != {
-        "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "schema_version": profile.ATOMIC_RUN_SCHEMA,
         "manifest_sha256": _sha256_bytes(
             codex_upgrade_vc_artifacts.canonical_bytes(manifest)
         ),
@@ -2777,7 +2892,7 @@ def _replay_atomic_instance(
         "原子演练动作事实",
     )
     if marker_file != marker_path or _load_json(marker_file, "原子演练动作事实") != {
-        "schema_version": ACTION_RESULT_SCHEMA,
+        "schema_version": profile.ACTION_RESULT_SCHEMA,
         "status": "passed",
         "campaign_id": campaign_id,
         "phase": "VC-1",
@@ -2858,9 +2973,21 @@ def replay_atomic_double(
     receipt_relative: str | Path,
     *,
     require_arm64: bool | None = None,
+    client: str | None = None,
 ) -> dict[str, Any]:
-    """重放双跑收据、工具身份、隔离关系及完整文件 inventory。"""
+    """重放双跑收据、工具身份、隔离关系及完整文件 inventory；收据必须是 ``client``（缺省取当前作用域）的合同。"""
 
+    with client_scope(client):
+        return _replay_atomic_double(evidence_root, receipt_relative, require_arm64=require_arm64)
+
+
+def _replay_atomic_double(
+    evidence_root: Path,
+    receipt_relative: str | Path,
+    *,
+    require_arm64: bool | None,
+) -> dict[str, Any]:
+    profile = _profile()
     root = _private_directory(evidence_root, "原子双跑证据根")
     if stat.S_IMODE(root.stat().st_mode) != 0o700:
         raise CampaignRunRehearsalError("原子双跑证据根权限必须精确为 0700")
@@ -2887,6 +3014,7 @@ def replay_atomic_double(
         "scanned_bytes",
         "network_used",
         "receipt_sha256",
+        *profile.ATOMIC_CLIENT_FIELDS,
     }
     try:
         collected_at = datetime.fromisoformat(
@@ -2899,7 +3027,8 @@ def replay_atomic_double(
     ).replace("+00:00", "Z")
     if (
         set(receipt) != expected_fields
-        or receipt.get("schema_version") != ATOMIC_RECEIPT_SCHEMA
+        or receipt.get("schema_version") != profile.ATOMIC_RECEIPT_SCHEMA
+        or any(receipt.get(key) != value for key, value in profile.ATOMIC_CLIENT_FIELDS.items())
         or receipt.get("status") != "passed"
         or receipt.get("live_request_count") != 0
         or receipt.get("scanned_bytes") != 0
@@ -2938,6 +3067,17 @@ def replay_atomic_double(
     return receipt
 
 
+def _add_client_argument(parser: argparse.ArgumentParser) -> None:
+    """``--client``（B5a-09 续）：只给原子双跑与它的 worker；缺省 codex，不带它时命令行与改造前相同。"""
+
+    parser.add_argument(
+        "--client",
+        choices=upgrade_client_adapter.CLIENTS,
+        default=DEFAULT_CLIENT,
+        help=f"客户端（缺省 {DEFAULT_CLIENT}）",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2955,23 +3095,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     atomic_collect_parser.add_argument("--evidence-root", type=Path, required=True)
     atomic_collect_parser.add_argument("--output", required=True)
+    _add_client_argument(atomic_collect_parser)
     atomic_replay_parser = commands.add_parser(
         "atomic-double-replay",
         help="仅在 ARM64 capture-cli 内重放原子双跑收据",
     )
     atomic_replay_parser.add_argument("--evidence-root", type=Path, required=True)
     atomic_replay_parser.add_argument("--receipt", required=True)
+    _add_client_argument(atomic_replay_parser)
     worker_parser = commands.add_parser("action-worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("--campaign-id", required=True)
     worker_parser.add_argument("--phase", required=True)
     worker_parser.add_argument("--action-id", required=True)
     worker_parser.add_argument("--output", type=Path, required=True)
+    _add_client_argument(worker_parser)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     arguments = build_parser().parse_args(argv)
+    with client_scope(getattr(arguments, "client", DEFAULT_CLIENT)):
+        return _main(arguments)
+
+
+def _main(arguments: argparse.Namespace) -> int:
     try:
         if arguments.command == "collect":
             result = collect(
@@ -3006,7 +3154,7 @@ def main(argv: list[str] | None = None) -> int:
         RuntimeError,
         ValueError,
     ) as error:
-        print(f"Codex campaign-run 演练失败：{error}", file=sys.stderr)
+        print(f"{_profile().CLI_LABEL} campaign-run 演练失败：{error}", file=sys.stderr)
         return 1
     print(
         json.dumps(

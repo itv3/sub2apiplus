@@ -35,9 +35,11 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 
 按客户端（Claude 升级 B5a-06）：执行顺序与续跑规则两客户端相同；各步骤调用的模块、合同、目录与追加给共享模块的
 ``--client`` 取客户端表（``client_table.py``，本轮客户端取参数 ``CLIENT``，缺省 codex），Codex 的命令行与改造前逐字相同。
-客户端表登记为尚未接入的步骤（Claude 的 atomic-double）不执行，记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex
-的实现顶替。预检 plan 的参数形状按客户端表的模板展开（B2-11 第二部分：Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，
-沿用下面写死的 Codex 参数形状）；VC-0 收口按客户端表的收口模块执行（两客户端同一组参数）。
+客户端表登记为尚未接入的步骤不执行，记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex 的实现顶替（B5a-09 续落实
+Claude 的 atomic-double 之后，两客户端都没有待接入的入口步骤）。预检 plan 的参数形状按客户端表的模板展开（B2-11 第二部分：
+Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，沿用下面写死的 Codex 参数形状）；atomic-double 给共享模块追加
+``--client``（Claude 签 ``official-client-atomic-vc0-vc1-rehearsal/v1``）；VC-0 收口按客户端表的收口模块执行（两客户端同一组
+参数）。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -377,11 +379,12 @@ class Orchestrator:
         root = fresh(self.data / "staging" / f"{self.spec['atomic_root_prefix']}{self.p('ROUND')}-{self.p('STAMP')}")
         root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.mkdir(mode=0o700)
+        # 共享收据模块按 --client 取客户端画像（B5a-09 续；Codex 为空，命令行与改造前相同）。
         rc = self.run("atomic-double", ["docker", "exec", "--env", "PYTHONPATH=/capture", "--env", "PYTHONDONTWRITEBYTECODE=1",
                                         "--workdir", "/capture", "capture-cli", "python3", "-m",
                                         self.spec["atomic_rehearsal_module"],
                                         "atomic-double-collect", "--evidence-root", f"/capture/staging/{root.name}",
-                                        "--output", "receipt.json"])
+                                        "--output", "receipt.json", *self.client_argv])
         receipt = root / "receipt.json"
         return rc == 0 and receipt.is_file(), {"receipt": str(receipt)}
 

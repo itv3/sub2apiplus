@@ -10,10 +10,11 @@
 
 Claude 升级 B5a-04 起按客户端分组：``issue／verify --client``（缺省 codex，签 ``tool-release-certification/v1``，字段与
 内容逐字不变）；Claude 签 ``…/v2``（v1 字段加 ``client``），绑定 Claude 部署收据、Claude 的 pre-A3 v3 认证与 Claude 身份。
-Job 演练按客户端的合同重放（收据必须属于本次认证的客户端），两客户端同样要求存储与失败生命周期两项探针摘要（Claude 的
-失败生命周期探针由 B2-11 第二部分补上，见 ``claude_upgrade_failure_lifecycle``）。Claude 的 atomic-double 收据合同（B5a-09
-续）落实之前，Claude 签发在核完 pre-A3 与 Job 演练之后失败关闭；pre-A3 场景集合为空时更早被 pre-A3 拒绝。对编排器的引用
-（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
+Job 演练与 atomic-double 都按客户端的合同重放（收据必须属于本次认证的客户端）：两客户端同样要求 Job 演练带存储与失败生命周期
+两项探针摘要（Claude 的失败生命周期探针由 B2-11 第二部分补上，见 ``claude_upgrade_failure_lifecycle``），atomic-double 收据按
+客户端的合同名与工具身份核对（Claude 签 ``official-client-atomic-vc0-vc1-rehearsal/v1``，B5a-09 续，画像见
+``claude_upgrade_atomic_rehearsal``），容器内重放给 Claude 追加 ``--client claude``。pre-A3 场景集合为空时 Claude 签发更早被
+pre-A3 拒绝。对编排器的引用（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
 """
 
 from __future__ import annotations
@@ -142,19 +143,21 @@ def replay_job_rehearsal(root: Path, receipt: Path, client: str = DEFAULT_CLIENT
     }
 
 
-def replay_atomic_double(root: Path, receipt: Path, *, require_arm64: bool | None = None) -> dict[str, Any]:
-    """重放 atomic-double 原子双跑收据，工具身份必须来自当前受管树。"""
+def replay_atomic_double(
+    root: Path, receipt: Path, *, require_arm64: bool | None = None, client: str = DEFAULT_CLIENT,
+) -> dict[str, Any]:
+    """重放 atomic-double 原子双跑收据，工具身份必须来自当前受管树；收据必须是 ``client`` 的合同（B5a-09 续）。"""
 
     relative = _relative_inside(root, receipt, "atomic-double 收据")
     try:
         replayed = campaign_rehearsal.replay_atomic_double(
-            Path(root).resolve(strict=True), relative, require_arm64=require_arm64
+            Path(root).resolve(strict=True), relative, require_arm64=require_arm64, client=require_client(client)
         )
     except (OSError, ValueError, campaign_rehearsal.CampaignRunRehearsalError) as error:
         raise ReleaseCertificationError(f"atomic-double 收据重放失败：{error}") from error
-    if replayed.get("tool_identity") != campaign_rehearsal._atomic_tool_identity():
+    if replayed.get("tool_identity") != campaign_rehearsal._atomic_tool_identity(client):
         raise ReleaseCertificationError("atomic-double 收据的工具身份不是当前工具树")
-    binding = _bind_file(Path(root).resolve(strict=True) / relative, "atomic-double 收据")
+    binding = _bind_file(Path(root).resolve(strict=True) / relative, "atomic-double 收据", client)
     return {
         "evidence_root": str(Path(root).resolve(strict=True)),
         "receipt": relative,
@@ -172,13 +175,17 @@ def replay_atomic_double_in_container(
     data_root: Path,
     container: str,
     timeout_seconds: float = 300.0,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """在 ``capture-cli`` 内重放 atomic-double 收据并绑定宿主侧同源文件。
 
     原子双跑的环境门禁（``/capture`` 只读、``/capture/staging`` 可写、双 runs 别名同
     inode）只能在容器内复算，宿主上无法本地重放；这里沿用 VC-0 收口曾用的容器内
-    ``atomic-double-replay`` 委托，只接受零请求的通过输出。
+    ``atomic-double-replay`` 委托，只接受零请求的通过输出。收据按 ``client`` 的合同核对，
+    Claude 的容器内重放追加 ``--client claude``（Codex 的命令行与改造前逐字相同）。
     """
+
+    profile = campaign_rehearsal.atomic_profile(require_client(client))
 
     evidence_root = Path(root).resolve(strict=True)
     try:
@@ -196,6 +203,7 @@ def replay_atomic_double_in_container(
         "docker", "exec", "--env", "PYTHONPATH=/capture", "--env", "PYTHONDONTWRITEBYTECODE=1", "--workdir", "/capture", container,
         "python3", "-m", "tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt",
         "atomic-double-replay", "--evidence-root", str(container_root), "--receipt", receipt_relative,
+        *([] if client == DEFAULT_CLIENT else ["--client", client]),
     ]
     try:
         completed = subprocess.run(command, check=False, capture_output=True, timeout=timeout_seconds)
@@ -212,11 +220,13 @@ def replay_atomic_double_in_container(
     if replayed != {"campaign_id": None, "live_request_count": 0, "status": "passed"}:
         raise ReleaseCertificationError("atomic-double 容器重放未闭合零请求边界")
     payload = policy_certification._read_json(evidence_root / receipt_relative, "atomic-double 收据")
-    if payload.get("schema_version") != campaign_rehearsal.ATOMIC_RECEIPT_SCHEMA:
+    if payload.get("schema_version") != profile.ATOMIC_RECEIPT_SCHEMA or any(
+        payload.get(key) != value for key, value in profile.ATOMIC_CLIENT_FIELDS.items()
+    ):
         raise ReleaseCertificationError("atomic-double 收据 schema 非法")
-    if payload.get("tool_identity") != campaign_rehearsal._atomic_tool_identity():
+    if payload.get("tool_identity") != campaign_rehearsal._atomic_tool_identity(client):
         raise ReleaseCertificationError("atomic-double 收据的工具身份不是当前工具树")
-    binding = _bind_file(evidence_root / receipt_relative, "atomic-double 收据")
+    binding = _bind_file(evidence_root / receipt_relative, "atomic-double 收据", client)
     return {
         "evidence_root": str(evidence_root),
         "receipt": receipt_relative,
@@ -290,13 +300,6 @@ def compose_certification(
     if core["schema_version"] in SCHEMAS_WITH_CLIENT:
         core["client"] = client
     return {**core, "receipt_sha256": _fingerprint(core, client)}
-
-
-# 各客户端能重放的 atomic-double 收据合同。Job 演练两客户端都已落实（Codex 现行合同；Claude 是 B2-10 的
-# official-client-job-rehearsal-receipt/v1，B2-11 第二部分补上失败生命周期探针），按客户端重放、同一组探针摘要要求。
-# Claude 的 official-client-atomic-vc0-vc1-rehearsal/v1 由 B5a-09 续落实：此前签发 Claude 发布认证在核完 pre-A3、复用收据
-# 与 Job 演练之后失败关闭，不拿 Codex 的演练合同冒充。
-CLIENT_ATOMIC_DOUBLE_REPLAY: Mapping[str, bool] = {"codex": True, "claude": False}
 
 
 def _require_release_platform() -> None:
@@ -388,16 +391,12 @@ def build_certification(
             "reused_at_utc": reuse_payload.get("reused_at_utc"),
             "bound_deployment_receipt_sha256": (reuse_payload.get("reused_certification") or {}).get("bound_deployment_receipt_sha256"),
         }
-    if not CLIENT_ATOMIC_DOUBLE_REPLAY[client]:
-        # Job 演练合同已落实：先逐项重放（含失败生命周期探针），Job 演练有问题时先报它；atomic-double 合同落实之前在这里
-        # 失败关闭。
-        replay_job_rehearsal(job_rehearsal_root, job_rehearsal_receipt, client)
-        raise ReleaseCertificationError(
-            f"客户端 {client} 的 atomic-double 收据合同尚未落实（B5a-09 续），不能签发发布认证（Job 演练收据已逐项重放通过）"
-        )
     campaign_run: dict[str, Any] | None = None
     if (campaign_run_rehearsal_root is None) != (campaign_run_rehearsal_receipt is None):
         raise ReleaseCertificationError("campaign-run rehearsal 的证据根与收据必须同时提供")
+    if campaign_run_rehearsal_root is not None and client != DEFAULT_CLIENT:
+        # 可选的分批演练只有 Codex 的合同（消费 Codex 的 preflight Campaign）；Claude 不绑定它。
+        raise ReleaseCertificationError(f"客户端 {client} 没有 campaign-run 分批演练合同，不接受 --campaign-run-rehearsal-*")
     if campaign_run_rehearsal_root is not None:
         if preflight_campaign_dir is None:
             raise ReleaseCertificationError("重放 campaign-run rehearsal 需要 preflight Campaign 目录")
@@ -409,10 +408,10 @@ def build_certification(
         if data_root is None:
             raise ReleaseCertificationError("容器内重放 atomic-double 需要 --data-root")
         atomic_binding = replay_atomic_double_in_container(
-            atomic_rehearsal_root, atomic_rehearsal_receipt, data_root=data_root, container=atomic_container
+            atomic_rehearsal_root, atomic_rehearsal_receipt, data_root=data_root, container=atomic_container, client=client
         )
     else:
-        atomic_binding = replay_atomic_double(atomic_rehearsal_root, atomic_rehearsal_receipt, require_arm64=enforce)
+        atomic_binding = replay_atomic_double(atomic_rehearsal_root, atomic_rehearsal_receipt, require_arm64=enforce, client=client)
     return compose_certification(
         real_chain_coverage=coverage,
         identity=identity,
