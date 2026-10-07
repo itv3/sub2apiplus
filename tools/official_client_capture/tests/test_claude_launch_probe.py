@@ -371,16 +371,24 @@ class HostComboTests(unittest.TestCase):
 
     def test_real_manifest_combos(self) -> None:
         combos = probe.claude_tui_combos(_jobs())
-        groups = sorted(sorted(combo["probe_ids"]) for combo in combos)
-        self.assertEqual(groups, [["v4-tui-attachment"], ["v4-tui-compact", "v4-tui-count-tokens"], ["v4-tui-usage"]],
+        # 主模型（official-tui）三个组合与只有主模型时相同；B2-07 补充项的两个非主模型能力 Job 各有一个 TUI 步骤，模型不同
+        # 即启动身份不同，各成一个组合（真实清单 14 个 Job 时共 5 个组合、6 个 TUI 作业）。
+        main = [combo for combo in combos if set(combo["job_ids"]) == {"official-tui"}]
+        extra = [combo for combo in combos if set(combo["job_ids"]) != {"official-tui"}]
+        self.assertEqual(sorted(sorted(combo["probe_ids"]) for combo in main),
+                         [["v4-tui-attachment"], ["v4-tui-compact", "v4-tui-count-tokens"], ["v4-tui-usage"]],
                          "输入序列与等待时间不进启动身份：compact 与 count-tokens 同一组合")
-        self.assertEqual(sum(len(combo["job_ids"]) for combo in combos), 4)
+        self.assertEqual(sorted((combo["model"], combo["probe_ids"], sorted(combo["job_ids"])) for combo in extra),
+                         [("claude-fable-5", ["v4-tui-count-tokens"], ["official-model-capability-claude-fable-5"]),
+                          ("claude-opus-5", ["v4-tui-count-tokens"], ["official-model-capability-claude-opus-5"])],
+                         "非主模型能力 Job 的 TUI 步骤按模型各成一个组合")
+        self.assertEqual(sum(len(combo["job_ids"]) for combo in combos), 6)
         for combo in combos:
             with self.subTest(combo=combo["combo_id"]):
                 self.assertRegex(combo["combo_id"], r"^tui-[0-9a-f]{12}$")
                 self.assertEqual((combo["container"], combo["tool_root"], combo["claude_bin"]), ("capture-cli", TOOL_ROOT, f"/opt/claude-{TARGET}/claude"))
-                self.assertEqual((combo["model"], combo["target_version"], combo["global_state_file"]), ("claude-sonnet-5", TARGET, "/root/.claude.json"))
-                self.assertEqual(set(combo["job_ids"]), {"official-tui"})
+                model = "claude-sonnet-5" if combo in main else combo["job_ids"][0].removeprefix("official-model-capability-")
+                self.assertEqual((combo["model"], combo["target_version"], combo["global_state_file"]), (model, TARGET, "/root/.claude.json"))
                 config = probe.claude_runner_config(combo, token=TOKEN, test_mutations=["untrust:/work"], diagnostic_window=probe.DIAGNOSTIC_WINDOW)
                 self.assertEqual(runner.validate_config(config), config, "宿主生成的运行器参数过运行器自己的闭集校验")
         usage = next(combo for combo in combos if combo["probe_ids"] == ["v4-tui-usage"])
@@ -498,14 +506,14 @@ class HostRunTests(unittest.TestCase):
         code, report = self.run_probe()
         self.assertEqual(code, 0, report.get("problems"))
         self.assertEqual((report["schema_version"], report["client"], report["status"]), (probe.CLAUDE_REPORT_SCHEMA, "claude", "passed"))
-        self.assertEqual(len(report["combos"]), 3)
-        self.assertEqual(report["tui_job_count"], 4)
+        self.assertEqual(len(report["combos"]), 5)
+        self.assertEqual(report["tui_job_count"], 6)
         self.assertEqual(report["host_drive_sha256"], self.drive)
         self.assertFalse(report["drive_mismatch"])
         self.assertTrue(all(combo["diagnostic"] is None for combo in report["combos"]))
         self.assertEqual(report["runner_sha256"], hashlib.sha256((SCRIPTS / "claude_launch_probe_runner.py").read_bytes()).hexdigest())
         runner_calls = [call for call in self.docker_calls() if "unshare" in call]
-        self.assertEqual(len(runner_calls), 3)
+        self.assertEqual(len(runner_calls), 5)
         for call in runner_calls:
             self.assertEqual(call[:4], ["exec", "-i", "capture-cli", "unshare"])
             config = json.loads(call[-1])
@@ -524,8 +532,8 @@ class HostRunTests(unittest.TestCase):
         self.assertEqual(failed["diagnostic"]["detected_screens"], ["model_migration"])
         self.assertEqual(failed["diagnostic"]["diagnostic_window"], probe.DIAGNOSTIC_WINDOW)
         configs = [json.loads(call[-1]) for call in self.docker_calls() if "unshare" in call]
-        self.assertEqual(len(configs), 4)
-        self.assertEqual(len({config["token"] for config in configs}), 4, "每次运行都用新口令")
+        self.assertEqual(len(configs), 6, "5 个组合各跑一次，失败的那个再以诊断窗口复跑一次")
+        self.assertEqual(len({config["token"] for config in configs}), 6, "每次运行都用新口令")
         self.assertEqual(self.verify("--client", "claude"), 1)
 
     def test_injected_untrusted_directory_is_identified_and_never_releases(self) -> None:
@@ -558,7 +566,9 @@ class HostRunTests(unittest.TestCase):
     def test_only_scenario_selects_by_probe(self) -> None:
         code, report = self.run_probe("--only-scenario", "v4-tui-count-tokens")
         self.assertEqual(code, 4)
-        self.assertEqual([combo["probe_ids"] for combo in report["combos"]], [["v4-tui-compact", "v4-tui-count-tokens"]])
+        self.assertEqual(sorted(combo["probe_ids"] for combo in report["combos"]),
+                         [["v4-tui-compact", "v4-tui-count-tokens"], ["v4-tui-count-tokens"], ["v4-tui-count-tokens"]],
+                         "按 probe 选中主模型组合与两个非主模型组合")
 
     def test_verify_binds_campaign_through_the_adapter(self) -> None:
         self.assertEqual(self.run_probe()[0], 0)
