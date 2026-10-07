@@ -6,7 +6,7 @@
 来源，替换 ``claude_chain_driver`` 的来源接口，不能因此跳过真实 VC-0／VC-1 控制动作。
 
 只复制既有 ``claude_2_1_226_evaluator_fixture`` 消费的中继清单、relay 字节、debug 日志与 pcap，另保留明确登记的
-顶层来源清单。永不遍历、读取或复制 ``state``／``recovery`` 凭据目录。主录制全部场景及补充录制的 omitted 场景
+顶层来源清单与每个已选 probe 的唯一宿主收据。永不遍历、读取或复制 ``state``／``recovery`` 凭据目录。主录制全部场景及补充录制的 omitted 场景
 保持原字节、原 probe／run 坐标；summarized 补充缺 actual_wire_inventory，不纳入来源。
 
 本模块不联网、不启动客户端或子进程。真实请求零次仅指本次离线操作，不能把录制中的历史模型请求当成零次。
@@ -122,7 +122,15 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
                     or str(client.get("version", "")).split(" ")[0] != evaluator_fixture.TARGET_VERSION
                     or not isinstance(dimensions, Mapping) or not isinstance(dimensions.get("actual_wire_inventory"), list)):
                 raise ReplayError(f"录制场景尚未闭合、版本不符或缺 wire inventory：{source_id}/{probe}")
-            selected = [attempt / "relay-manifest.json"]
+            # 只按已选 probe 精确加入一份原宿主收据，不遍历 runtime-receipts，也不接受旁支凭据。
+            receipt_path = root / "runtime-receipts" / f"{probe}-attempt-001.json"
+            receipt = _json(receipt_path, root)
+            binding = (manifest.get("runtime") or {}).get("host_runtime_receipt") or {}
+            if (receipt.get("schema_version") != "official-client-runtime-host-receipt/v1"
+                    or _digest(receipt_path)["sha256"] != binding.get("sha256")
+                    or not receipt.get("run_nonce") or receipt.get("run_nonce") != binding.get("run_nonce")):
+                raise ReplayError(f"原宿主收据与 relay 的摘要或 nonce 不闭合：{source_id}/{probe}")
+            selected = [attempt / "relay-manifest.json", receipt_path]
             relay = attempt / "relay"
             _regular(relay, root, directory=True)
             _regular(relay / "relay.json", root)

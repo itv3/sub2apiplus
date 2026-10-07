@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -43,9 +44,15 @@ class ClaudeRecordedSnapshotTests(unittest.TestCase):
         })
         for probe in probes:
             attempt = root / "attempts" / probe / "attempt-001"
+            receipt = _write(root / "runtime-receipts" / f"{probe}-attempt-001.json", {
+                "schema_version": "official-client-runtime-host-receipt/v1", "run_nonce": probe,
+            })
             _write(attempt / "relay-manifest.json", {
                 "schema_version": "claude-code-fw-e-relay-run/v1", "status": "complete", "probe_id": probe,
                 "client": {"version": "2.1.226 (Claude Code)"}, "dimension_evidence": {"actual_wire_inventory": []},
+                "runtime": {"host_runtime_receipt": {
+                    "sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(), "run_nonce": probe,
+                }},
             })
             _write(attempt / "relay" / "relay.json", {"connections": []})
             (attempt / "relay" / "intervention.jsonl").write_bytes(b'{"fixture_only":true}\n')
