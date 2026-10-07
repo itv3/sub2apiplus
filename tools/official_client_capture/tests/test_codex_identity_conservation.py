@@ -43,7 +43,10 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                  "绑定到监督器原常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS 与恒为假的新函数；B5b-01 新增 VC-5 准入的两个"
                                  "可调用成员（catalog_stage_profile、vc5_official_campaign）与它们共用的静态错误码异常和路径／JSON 读取"
                                  "小工具，Codex 绑定到 codex_upgrade_client_adapter 里原样搬入的驱动函数体；B4-07 收尾新增可调用成员 "
-                                 "candidate_post_run_extra_action（候选级共享闭集之外的零请求后处理动作），Codex 绑定到恒为假的新函数",
+                                 "candidate_post_run_extra_action（候选级共享闭集之外的零请求后处理动作），Codex 绑定到恒为假的新函数；"
+                                 "B4-05b-1 新增值型成员 "
+                                 "candidate_recovery_identity_flags（候选续跑命令的身份参数），Codex 绑定到监督器原常量 "
+                                 "CANDIDATE_RECOVERY_IDENTITY_FLAGS",
     "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
                                      "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
                                      "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
@@ -86,6 +89,11 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "续期 2 秒，_monitor_acknowledged_stop 确认本 owner 的 stop-requested 事件后允许单步慢写；"
                                    "两种续期都受 DEFAULT_MONITOR_STOP_FINALIZE_SECONDS（stop 起算 30 秒）的等待上限约束，"
                                    "无进展且未接手请求时沿用原等待窗口，超时封存与终止逻辑不变。"
+                                   "B4-05b-1 候选采集续跑：续跑命令逐字携带的身份参数改经新函数 candidate_recovery_identity_flags 按清单"
+                                   "归属客户端的适配器取（未给适配器即原常量 CANDIDATE_RECOVERY_IDENTITY_FLAGS，原位不动）；"
+                                   "candidate_capture_run_identity、_candidate_identity_tokens、两个续跑命令构造函数与"
+                                   "_candidate_recovery_command_identity 加缺省为 Codex 的适配器参数，各调用点传清单归属客户端的适配器"
+                                   "（Codex 清单得到的就是原常量，判定、命令与报错逐字不变，见 test_driver_client_table_codex_parity）。"
                                    "改动与新增的符号都在 wire、evidence 与评估读侧闭包外",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "

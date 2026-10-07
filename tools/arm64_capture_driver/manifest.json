@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 108,
+  "file_count": 109,
   "files": [
     {
       "path": "README.md",
@@ -100,9 +100,9 @@
     },
     {
       "path": "driver/claude_vc5.py",
-      "sha256": "dba4ac1a8b065e682a31cd293a444189b6b0da3bc3a08b78df75464ed539cdc5",
+      "sha256": "05ca79635b6e9d0d90218301203b3e58b9f8077d4532ef8dd20b562bd0d846c5",
       "mode": "0700",
-      "bytes": 31237
+      "bytes": 43667
     },
     {
       "path": "driver/cleanup_context.py",
@@ -124,9 +124,9 @@
     },
     {
       "path": "driver/client_table.py",
-      "sha256": "24cc058b6c9d7ae08e4fbf05052dde51a84e1a7be8b364a03cf04dc742a7a499",
+      "sha256": "c01a7ac7dcf89e43a6968fdcf7275b482773c662700e18df6b4151bdbe5ab916",
       "mode": "0700",
-      "bytes": 40826
+      "bytes": 42979
     },
     {
       "path": "driver/driver_config.py",
@@ -190,9 +190,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "a6559b2e2c7658c2866dcb9f03e72ad8a569890ef8d03ecca69fb16840fc0042",
+      "sha256": "b8f7cecb3eda9a6807d1d0239f48ccc31d52b9f310cfff62b393c41c656ac651",
       "mode": "0700",
-      "bytes": 9920
+      "bytes": 10597
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -208,9 +208,9 @@
     },
     {
       "path": "driver/fix_and_continue.py",
-      "sha256": "2c69eb7f772af311acf8a39f66a68699c588b0c1ab473c20bec0501aef9ca6bf",
+      "sha256": "1148d8ba53d46bd460e2c68c30cbc6cc11e08a0463a2ac1557a8e3e95a73a3a9",
       "mode": "0700",
-      "bytes": 143006
+      "bytes": 143236
     },
     {
       "path": "driver/fix_safety.py",
@@ -256,9 +256,9 @@
     },
     {
       "path": "driver/gen_vc5_recovery_plans.py",
-      "sha256": "79da8ff02328332684ea7eb718efda9eb109344b26247ecb8be7adf9701cae7c",
+      "sha256": "cd50995746ddc1e0413265938e19c6c2ddc8f5e7a68b2e702f0eb26c5ade08eb",
       "mode": "0700",
-      "bytes": 7436
+      "bytes": 7525
     },
     {
       "path": "driver/go_compile_warmup.py",
@@ -280,7 +280,7 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "2b735161039e81facf72c3e5810aaf84ebe9ff26bd180ce5edbc2a49c21cb7c9",
+      "sha256": "41c966559b1fd8cb99cfd23b8033f062e0621dcdb5391591d3f1666697460233",
       "mode": "0700",
       "bytes": 20586
     },
@@ -322,9 +322,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "92991e27f9c1dc788c0f63e380c11d7be7eb77a5c0610da255d9f3122b03c35f",
+      "sha256": "9c5d67c0116e4f05c7dc335f26fa44d832e7776603dea7779fd192db2815c7a4",
       "mode": "0700",
-      "bytes": 26188
+      "bytes": 27625
     },
     {
       "path": "driver/phase_context.py",
@@ -561,16 +561,22 @@
       "bytes": 6039
     },
     {
-      "path": "driver/vc5-claude-seal.sh",
-      "sha256": "c717e7f6d272eb21812e291cf355cd7bc5fd0c693695d4f7d94a798f6c8ede7b",
+      "path": "driver/vc5-claude-recover.sh",
+      "sha256": "57af1c7d5ca9f3280ed5f339da1a794e356dd4e2e4f240702636c921751ca0f0",
       "mode": "0700",
-      "bytes": 5728
+      "bytes": 3916
+    },
+    {
+      "path": "driver/vc5-claude-seal.sh",
+      "sha256": "8f950e09f9c277b0cd2be55a6a8df2cb84cc0000a68cb0dabd9d066c66c87d41",
+      "mode": "0700",
+      "bytes": 6457
     },
     {
       "path": "driver/vc5-claude-start.sh",
-      "sha256": "462d6e41165204685b3163ebeb7194fce75c5f1e90d2805f67d475295e03924d",
+      "sha256": "30e0e0c8f5a073cd04724a5ba5789770af9aa87d20674ab3c1394af9220d20aa",
       "mode": "0700",
-      "bytes": 2563
+      "bytes": 2913
     },
     {
       "path": "driver/vc5-claude-switch.sh",
@@ -604,9 +610,9 @@
     },
     {
       "path": "driver/vc5-recover.sh",
-      "sha256": "03e948c1fc251dfe6c131c37c98d434daace79f0a0c6f8b755f1eedc4dcfaf7b",
+      "sha256": "5f590092be6304e8bde89f4a4e7a8fc37e8f8e3c7b26b75dab5f3a3fbebb5307",
       "mode": "0700",
-      "bytes": 3850
+      "bytes": 3764
     },
     {
       "path": "driver/vc5-seal-receipts.sh",
@@ -651,5 +657,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "3a8d5fff288ce414b1c1862cf8c7310e2f5bdff21952f06965312e89826d5a12"
+  "manifest_sha256": "0dc94d41d636df16237c70910f79ef038646c89a61b70d01c9cdb3dce69441e0"
 }

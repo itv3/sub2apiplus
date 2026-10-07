@@ -44,7 +44,11 @@
   批次）、seal 链、accept 与 canonical 交接（``vc5_start_script``／``vc5_seal_script``／``vc5_accept_script``／
   ``vc5_canonical_script``）。Codex 四项即原来的四个脚本；Claude 是 ``vc5-claude-*.sh``，canonical 为空（Claude 在 accept 时
   完成 VC-5，不做 canonical 交接，设计附录 G 例外①），``vc5-all.sh`` 跳过这一步。Codex 那几个脚本（及其辅助脚本）开头按
-  这些表项核对本客户端的这一步就是自己，不是即在任何副作用之前拒绝（``lib.sh`` 的 ``CLIENT_STEP_REQUIRED``）；
+  这些表项核对本客户端的这一步就是自己，不是即在任何副作用之前拒绝（``lib.sh`` 的 ``CLIENT_STEP_REQUIRED``）。候选采集
+  续跑（B4-05b-1，``vc5_recover_script``）同理：Codex 是原来的 ``vc5-recover.sh``，Claude 是 ``vc5-claude-recover.sh``；
+* 专属可选键（``exclusive_optional_keys``，B5b-01b 续：边界核对接入）：只属于本客户端、可缺省的参数键（Claude 是 VC-5 边界核对
+  codex-final-wire-isolation 的四个轮次参数）。与专属必填键一样，出现在别的客户端的参数文件里即拒绝、也从环境里清掉残留；
+  Codex 没有这类键，Codex 参数文件的解析结果不变；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -123,6 +127,8 @@ _CODEX: Mapping[str, Any] = {
     "account_key": "CODEX_ACCOUNT_ID",
     # 只属于本客户端的必填键：Kilo 是 Codex 画像的第三方客户端用例（VC-5 Kilo）。
     "exclusive_required_keys": ("KILO_BIN", "KILO_VERSION", "KILO_SHA256", "CODEX_BIN", "CODEX_BIN_SHA256", "CODEX_ACCOUNT_ID"),
+    # 只属于本客户端的可选键：Codex 没有。
+    "exclusive_optional_keys": (),
     "key_aliases": {"CLIENT_BIN": "CODEX_BIN", "CLIENT_BIN_SHA256": "CODEX_BIN_SHA256", "CLIENT_ACCOUNT_ID": "CODEX_ACCOUNT_ID"},
     # 除二进制摘要、官方包与画像摘要外还要核对为完整 SHA-256 的必填键（顺序即报错顺序）。
     "extra_sha256_keys": ("KILO_SHA256",),
@@ -227,6 +233,8 @@ _CODEX: Mapping[str, Any] = {
     "vc5_seal_script": "vc5-seal.sh",
     "vc5_accept_script": "vc5-accept.sh",
     "vc5_canonical_script": "vc5-canonical2.sh",
+    # 候选采集续跑（B4-05b-1）：即原来的 vc5-recover.sh。
+    "vc5_recover_script": "vc5-recover.sh",
     "pending": {},
 }
 
@@ -251,6 +259,13 @@ _CLAUDE: Mapping[str, Any] = {
     "binary_sha256_key": "CLIENT_BIN_SHA256",
     "account_key": "CLIENT_ACCOUNT_ID",
     "exclusive_required_keys": ("CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID"),
+    # 只属于本客户端的可选键（B5b-01b 续：边界核对接入）：VC-5 边界核对 codex-final-wire-isolation 的轮次参数——本轮 Codex 专用 OpenAI
+    # 账号、它所在单账号分组的网关 API Key、Codex 主轨模型与当前生产部署的源码提交（capture-candidate boundary-check 的
+    # --codex-account-id／--codex-api-key-id／--codex-model／--production-commit）。参数文件可缺省，seal 链派发边界核对之前
+    # 与 VC-5 启动预检报缺；写了就核格式（parse_env）。出现在 Codex 参数文件里即拒绝。
+    "exclusive_optional_keys": (
+        "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+    ),
     "key_aliases": {},
     "extra_sha256_keys": (),
     # Claude 没有 Codex 的 code-mode-host，不要求 TARGET_CODE_MODE_HOST_SHA256；其余与 Codex 同一份，二进制与账号换通用键；
@@ -404,14 +419,11 @@ _CLAUDE: Mapping[str, Any] = {
     "vc5_seal_script": "vc5-claude-seal.sh",
     "vc5_accept_script": "vc5-claude-accept.sh",
     "vc5_canonical_script": None,
-    # 仍待接入的 VC-5 驱动工具：落实前一律失败关闭并写明工作项，不先猜旗标，也不拿 Codex 的形状顶替。
-    # * 边界核对（B4-01 f 段）：命令形状已定（capture-candidate boundary-check --candidate-id --attempt-id --check <check_id>
-    #   [--acknowledge-live-requests]，VC-5 批次动作、阶段项 candidate-seal），入口进主线前 seal 链在派发它之前停下；
-    # * 候选恢复段与 VC-5 续跑计划（B4-05b）。
-    "pending": {
-        "tool:vc5-boundary-check": "B4-01 f 段（capture-candidate boundary-check：Codex final wire 隔离与第三方入口拒绝两项边界核对）",
-        "tool:vc5-recover": "B4-05b 与 B4-01c（候选恢复段与 VC-5 续跑计划）",
-    },
+    # 候选采集续跑（B4-05b-1）：失败的候选 run 批次对账、批准并授权恢复预览后，派发 N+1 零请求恢复预览与 N+2 按预览补跑
+    # （resume --candidate-id，命令经共享监督器同一组构造函数生成）。边界核对（B4-01 f 段）已由 seal 链真实调用，VC-5 驱动
+    # 工具没有待接入项。
+    "vc5_recover_script": "vc5-claude-recover.sh",
+    "pending": {},
 }
 
 
@@ -433,6 +445,7 @@ SHELL_ENTRIES = (
     "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script", "vc1_dispatch_script",
     "atomic_rehearsal_module", "atomic_root_prefix", "vc23_dispatch_script", "campaign_purpose_key", "preflight_plan_argv",
     "official_reuse_subcommand", "vc5_start_script", "vc5_seal_script", "vc5_accept_script", "vc5_canonical_script",
+    "vc5_recover_script",
 )
 
 
@@ -499,8 +512,28 @@ def pending(client: Any, name: str) -> str | None:
     return spec(client)["pending"].get(name)
 
 
+def _foreign_optional_keys(own: Mapping[str, Any], taken: list[str]) -> list[str]:
+    """其它客户端的专属可选键里、本客户端不作别名也不自有、且还没列出的那些（按客户端顺序、表内顺序）。"""
+
+    names: list[str] = []
+    for other in CLIENTS:
+        if other == own["client"]:
+            continue
+        for key in TABLE[other]["exclusive_optional_keys"]:
+            if (
+                key not in own["key_aliases"]
+                and key not in own["exclusive_required_keys"]
+                and key not in own["exclusive_optional_keys"]
+                and key not in taken
+                and key not in names
+            ):
+                names.append(key)
+    return names
+
+
 def foreign_keys(client: Any) -> tuple[str, ...]:
-    """其它客户端的专属必填键里、在本客户端不作别名的那些：出现在本客户端的参数文件里即拒绝，也要从环境里清掉残留。"""
+    """其它客户端的专属键（必填键在前、可选键在后）里、在本客户端不作别名的那些：出现在本客户端的参数文件里即拒绝，也要从
+    环境里清掉残留。专属可选键（B5b-01b 续：边界核对接入）排在必填键之后；Codex 没有专属可选键，Claude 的结果不变。"""
 
     own = spec(client)
     names: list[str] = []
@@ -510,6 +543,7 @@ def foreign_keys(client: Any) -> tuple[str, ...]:
         for key in TABLE[other]["exclusive_required_keys"]:
             if key not in own["key_aliases"] and key not in own["exclusive_required_keys"] and key not in names:
                 names.append(key)
+    names.extend(_foreign_optional_keys(own, names))
     return tuple(names)
 
 

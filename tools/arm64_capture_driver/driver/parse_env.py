@@ -76,6 +76,18 @@ OPTIONAL_KEYS = (
     # B5b-01：Campaign 用途。只对客户端表登记了用途参数键的客户端（Claude）生效：缺省 production_replacement，可选
     # validation_only，入口建计时账本与预检 Campaign 都按它。Codex 的入口固定 production_replacement，参数文件写了即拒绝。
     "CAMPAIGN_PURPOSE",
+    # B5b-01b 续（边界核对接入）：Claude 专属可选键（客户端表 exclusive_optional_keys）——VC-5 边界核对
+    # codex-final-wire-isolation 的四个轮次参数。参数文件可缺省，seal 链派发边界核对之前与 VC-5 启动预检报缺；写了就核格式
+    # （BOUNDARY_FORMAT_KEYS）。别的客户端（Codex）的参数文件写了即按另一客户端的专属键拒绝。
+    "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+)
+# 边界核对轮次参数的格式（B5b-01b 续）：两个 ID 是正整数，模型是安全标识，生产提交是完整 40 位小写 sha1（与
+# capture-candidate boundary-check 的入口校验同一口径）。
+BOUNDARY_FORMAT_KEYS = (
+    ("BOUNDARY_CODEX_ACCOUNT_ID", re.compile(r"[1-9][0-9]{0,17}"), "本轮 Codex 专用账号的正整数 ID"),
+    ("BOUNDARY_CODEX_API_KEY_ID", re.compile(r"[1-9][0-9]{0,17}"), "该账号所在单账号分组的网关 API Key 的正整数 ID"),
+    ("BOUNDARY_CODEX_MODEL", re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}"), "安全标识（Codex 主轨模型）"),
+    ("PRODUCTION_COMMIT", re.compile(r"[0-9a-f]{40}"), "完整 40 位小写 sha1（当前生产部署的源码提交）"),
 )
 # Campaign 用途参数的可选值与缺省值（B5b-01；与编排器 plan 的 --campaign-purpose 可选值相同）。
 CAMPAIGN_PURPOSES = ("production_replacement", "validation_only")
@@ -331,6 +343,9 @@ def parse(text: str) -> dict[str, str]:
     for first, second in PLAN_PAIRED_KEYS:
         if (first in values) != (second in values):
             raise EnvFileError(f"{first} 与 {second} 必须同时给出")
+    for key, pattern, label in BOUNDARY_FORMAT_KEYS:
+        if key in values and not pattern.fullmatch(values[key]):
+            raise EnvFileError(f"{key} 必须是{label}")
     if "CAMPAIGN_PURPOSE" in values:
         if spec["campaign_purpose_key"] != "CAMPAIGN_PURPOSE":
             raise EnvFileError(f"CLIENT={spec['client']} 的入口固定 Campaign 用途 {DEFAULT_CAMPAIGN_PURPOSE}，参数文件不得写 CAMPAIGN_PURPOSE")

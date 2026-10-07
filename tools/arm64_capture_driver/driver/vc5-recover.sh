@@ -9,10 +9,9 @@
 # 原 vc5-run-batch.out 若没有 RUN_BATCH_DONE（失败批次的日志）先改名留档；已有完成标记时不重复派发。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode build)
-# 待接入的驱动工具（B5b-01）：Claude 的候选恢复段与续跑计划在 B4-05b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项；
-# 本脚本的 run 计划与候选切换属于 Codex 的 VC-5 启动（vc5-start.sh），按派发脚本另核一次（B5b-01b）。
-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RECOVER)
-CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)
+# 按客户端分了续跑派发脚本（B4-05b-1）：本脚本是 Codex 的候选采集续跑（计划生成、候选切换与预检都是 Codex 的形状），Claude
+# 的在 vc5-claude-recover.sh，lib.sh 在任何副作用之前拒绝别的客户端。
+CLIENT_STEP_REQUIRED=(CT_VC5_RECOVER_SCRIPT vc5-recover.sh)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 vc5_dispatch_lock
 vc5_require_admission

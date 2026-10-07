@@ -605,6 +605,8 @@ _STUB_VC5_RECOVER = '''#!/bin/bash
 python3 -c 'import json,os,sys; open(os.environ["FC_TEST_STUB_DIR"] + "/calls.jsonl", "a").write(json.dumps({"module": "vc5-recover.sh", "argv": sys.argv[1:], "ARM64_VC_ENV": os.environ.get("ARM64_VC_ENV"), "VC_STATE_DIR": os.environ.get("VC_STATE_DIR")}) + "\\n")' "$@"
 echo "VC5_RECOVER_STUB $*"
 '''
+# Claude 派发替身单独记真实脚本名；不能把误入 Codex 脚本的调用伪装成 Claude 成功。
+_STUB_CLAUDE_VC5_RECOVER = _STUB_VC5_RECOVER.replace("vc5-recover.sh", "vc5-claude-recover.sh")
 
 _STUB_ENTRY_GATES = '''#!/bin/bash
 # 测试替身：入口门禁（定向回归），记录调用、写总摘要与运行清单；FC_REGRESSION_FAIL=1 时判没通过
@@ -753,6 +755,7 @@ class _Round:
             "tools/arm64_capture_driver/install.py": _STUB_INSTALL,
             "tools/arm64_capture_driver/manifest.json": json.dumps({"manifest_sha256": "9" * 64}) + "\n",
             "tools/arm64_capture_driver/driver/vc5-recover.sh": _STUB_VC5_RECOVER,
+            "tools/arm64_capture_driver/driver/vc5-claude-recover.sh": _STUB_CLAUDE_VC5_RECOVER,
             "tools/arm64_capture_driver/driver/entry-gates.sh": _STUB_ENTRY_GATES,
             "tools/arm64_capture_driver/driver/background-validate.sh": _STUB_BACKGROUND_VALIDATE,
         }
@@ -815,7 +818,8 @@ class _Round:
                 {"path": "tools/official_client_capture/codex_upgrade_supervisor.py", "regex": "^ACTIVE_STATES = "},
                 {"path": "tools/official_client_capture/codex_upgrade.py", "fixed": "def _tool_identity("},
                 {"exists": "tools/official_client_capture/codex_upgrade_reconciler.py"},
-                {"path": str(self.driver_target / "driver" / "vc5-recover.sh"), "fixed": "VC5_RECOVER_STUB"},
+                {"path": str(self.driver_target / "driver" / ("vc5-claude-recover.sh" if self.client == "claude" else "vc5-recover.sh")),
+                 "fixed": "VC5_RECOVER_STUB"},
             ],
         })
 
@@ -1344,7 +1348,7 @@ class FixAndContinueScriptTests(unittest.TestCase):
         fixture = _Round(self.root, client="claude")
         result = fixture.run()
         self._assert_ok(result)
-        self.assertEqual(fixture.call_keys(), FULL_ORDER)
+        self.assertEqual(fixture.call_keys(), ["vc5-claude-recover.sh" if item == "vc5-recover.sh" else item for item in FULL_ORDER])
         statuses = {name: fixture.step(name)["status"] for name in (
             "deploy", "postdeploy", "regression", "item-tests", "background-validate", "evolution", "pre-extend", "reconcile-runs",
             "reconcile-attempt", "repair", "approve", "authorize", "extend", "accepted", "recover")}
@@ -1357,6 +1361,8 @@ class FixAndContinueScriptTests(unittest.TestCase):
         modules = {call["module"] for call in fixture.calls()}
         self.assertIn("claude_upgrade", modules)
         self.assertNotIn("codex_upgrade", modules, "Claude 轮次不调 Codex 编排器")
+        self.assertIn("vc5-claude-recover.sh", modules)
+        self.assertNotIn("vc5-recover.sh", modules, "Claude 轮次不能误入 Codex 续跑脚本")
         orchestrated = [call["argv"][0] for call in fixture.calls() if call["module"] == "claude_upgrade"]
         self.assertEqual(sorted(set(orchestrated)), ["reconcile-attempt", "reconcile-supervisor-run", "tool-evolution", "tool-evolution-status"])
         deploy = [call["argv"] for call in fixture.calls() if call["module"] == "arm64_supervised_deploy"][0]
@@ -1374,7 +1380,7 @@ class FixAndContinueScriptTests(unittest.TestCase):
                                  text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=True).stdout
         self.assertNotIn("export CLIENT=", exports)
         self.assertEqual(load_helper().deploy_client(load_helper().load_params(fixture.params_path)), "claude")
-        recover_call = [c for c in fixture.calls() if c["module"] == "vc5-recover.sh"][0]
+        recover_call = [c for c in fixture.calls() if c["module"] == "vc5-claude-recover.sh"][0]
         self.assertEqual(recover_call["ARM64_VC_ENV"], str(fixture.runroot / "env.sh"), "续跑脚本读同一份 Claude 驱动参数")
 
     def test_round_params_cannot_name_the_client(self) -> None:

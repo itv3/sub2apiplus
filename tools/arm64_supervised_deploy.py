@@ -339,8 +339,11 @@ from urllib.parse import urlsplit
 # 2026-10-08（m11 满载收尾误封修复）：stop 等 monitor 收口时，有新落盘进展就续期 2 秒；monitor 已写出本 owner 的
 # stop-requested 事件时允许单步慢写，两种续期都受 stop 起算 30 秒的等待上限约束。没有进展且未接手停止请求的 monitor
 # 仍沿用原等待窗口，超时封存与终止逻辑不变；本次只改 control 层，Codex 的 wire、evidence 与评估器摘要不变。
+# 2026-10-08（Claude 升级 B4-05b-1）：候选续跑命令的身份参数经适配器 candidate_recovery_identity_flags 提供；Codex 保留
+# 原十项及其顺序，Claude 只传 --candidate-id、候选身份由 VC-4 构建收据重放。解析、预览／补跑命令与后继协议使用同一组
+# 参数；只改 control 层并登记身份守恒，wire、evidence 与评估器摘要不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "d19e95215ec5a49e7f798ca1e099cc1c49ae1578e0cbfdbe9b2f7d82de3f7003"
+    "6c27d186bd121c1a0d78fb8d7c6b1e1312c3aa4efbd9ed789771a4b67123080c"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

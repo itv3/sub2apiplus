@@ -23,7 +23,8 @@ deploy／postdeploy／resume 与 repair-rN 的实测／回归收据／根因修�
 步骤记录与改造前逐字相同），部署收据、部署事务范围与归档文档按客户端（B5a-01／B5a-06）。客户端不进轮次参数集合：人工批准
 绑定的是轮次参数与 VC_ENV 文件摘要（客户端随文件摘要一并绑定），Codex 的批准范围与改造前逐字相同。``client-modules`` 子命令
 给出编排器与项目总账模块的短名（``ORCHESTRATOR``、``PROJECT_LEDGER_MODULE``，只赋值不导出），``fix-and-continue.sh`` 的
-受管命令据此调用。
+受管命令据此调用。B4-05b-1 的候选采集续跑同样按客户端表 ``vc5_recover_script`` 选择脚本：Codex 沿用
+``vc5-recover.sh``，Claude 调 ``vc5-claude-recover.sh``，避免完成对账与授权后误入另一客户端的驱动。
 """
 
 from __future__ import annotations
@@ -162,7 +163,6 @@ DEPLOY_RECEIPT_IDENTITY_FIELDS = (
 DEPLOYER_DEFAULT_CLIENTS = ("codex",)
 DEFAULT_GUARD_STATUS = "/run/sub2api-egress/status.json"
 AUTHORIZABLE_LEDGER_STATES = frozenset({"recovery_required", "stage_review_required", "candidate_review_required"})
-CANDIDATE_RECOVER_SCRIPT = "vc5-recover.sh"
 # 第 59 项：受管对账器 _decide 两类"根因重试达上限"暂停原因的原文片段。Campaign 账本 stop_required 只能由人执行
 # campaign-resume（本脚本不代办）；项目总账根因达上限由本脚本按参数给的材料执行 record-root-cause-repair 后重新对账。
 CAMPAIGN_ROOT_CAUSE_STOP = "Campaign 账本同根因重试已达上限"
@@ -2223,12 +2223,13 @@ def _accepted(params: dict[str, str], args: argparse.Namespace) -> tuple[int, di
 @decider("recover-state")
 def _recover_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int, dict[str, str]]:
     step, stamp = "recover", args.run_stamp
+    recover_script = str(_client_row(params)["vc5_recover_script"])
     record = read_step(params, step) or {}
     summary = record.get("summary") or {}
     if record.get("status") in {"passed", "skipped"}:
         # 同一轮次只派发一次：批次结束后再空跑时恢复预览可能已换成新索引，也不能据此再派一次（重派须开新轮次）。
         changed = "" if summary.get("preview_path") == args.preview else f"；当前批准预览已是 {args.preview}，如需按它重派请开新轮次"
-        return skip(params, step, f"本轮已启动过 {CANDIDATE_RECOVER_SCRIPT}（日志 {summary.get('log')}），不重复派发{changed}",
+        return skip(params, step, f"本轮已启动过 {recover_script}（日志 {summary.get('log')}），不重复派发{changed}",
                     run_stamp=stamp, summary=summary), {}
     inflight = _out(params) / "recover.inflight.json"
     if inflight.exists():
@@ -2239,7 +2240,7 @@ def _recover_state(params: dict[str, str], args: argparse.Namespace) -> tuple[in
     if active or processes:
         return stop(params, step, "needs-operator", f"已有运行中的父 run {active} 或驱动进程 {processes}",
                     "等其结束后再续跑", run_stamp=stamp), {}
-    script = Path(params["DRIVER_TARGET"]) / "driver" / CANDIDATE_RECOVER_SCRIPT
+    script = Path(params["DRIVER_TARGET"]) / "driver" / recover_script
     if not script.is_file():
         return stop(params, step, "failed", f"驱动安装目标缺少 {script}", "先 --from postdeploy 重装驱动", run_stamp=stamp,
                     resume_from="postdeploy"), {}

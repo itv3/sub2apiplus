@@ -518,12 +518,28 @@ B5B03_SOURCE_DIGESTS: dict[str, str] = {
     "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "4e58938dae2753cfb666f517e229d7212a66c6a26a9d9ae9c4693d61134dd484",
 }
 B5B03_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/official_client_capture/codex_upgrade_pre_a3_certification.py": []}
+# B4-05b-1 把修复轮最终的候选恢复脚本改为取客户端表，Codex 表值仍是 vc5-recover.sh，命令与幂等跳过文案不变。
+# 下列删改行含说明文字与原常量；完整修复轮行为由 test_driver_client_table_codex_parity 的
+# FixAndContinueCodexParityTests 对照 B5b-01a 基线，Claude 分派由 test_arm64_driver_fix_and_continue 覆盖。
+B405B1_BASELINE_COMMIT = "3d114ee8973f2d07090c72f2c3ef3773d166dd9b"
+B405B1_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/arm64_capture_driver/driver/fix_and_continue.py": "1148d8ba53d46bd460e2c68c30cbc6cc11e08a0463a2ac1557a8e3e95a73a3a9",
+}
+B405B1_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/arm64_capture_driver/driver/fix_and_continue.py": [
+        "受管命令据此调用。",
+        'CANDIDATE_RECOVER_SCRIPT = "vc5-recover.sh"',
+        '''        return skip(params, step, f"本轮已启动过 {CANDIDATE_RECOVER_SCRIPT}（日志 {summary.get('log')}），不重复派发{changed}",''',
+        '    script = Path(params["DRIVER_TARGET"]) / "driver" / CANDIDATE_RECOVER_SCRIPT',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SOURCE_DIGESTS, B5A11_SOURCE_REMOVED_LINES),
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SOURCE_DIGESTS, B5B01A_SOURCE_REMOVED_LINES),
     ("B5b-03", B5B03_BASELINE_COMMIT, B5B03_SOURCE_DIGESTS, B5B03_SOURCE_REMOVED_LINES),
+    ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SOURCE_DIGESTS, B405B1_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {

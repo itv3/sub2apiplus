@@ -125,3 +125,10 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   都按它，VC-4 构建与 VC-5 准入从冻结的总计划读取。Codex 的入口固定 production_replacement，不得写这一项）
 #   API_KEY_ID 与 CLIENT_ACCOUNT_ID 是候选阶段专用的 ingress API Key 与验收账号（B4-01），预检 plan 冻结进 Campaign 配置，
 #   VC-0 收口按它恢复 Formal plan 参数。
+#   VC-5 边界核对 codex-final-wire-isolation 的轮次参数（B5b-01b 续，Claude 专属可选键；Codex 参数文件不得写）：本轮 Codex
+#   专用 OpenAI 账号与它所在单账号分组的网关 API Key（正整数 ID）、Codex 主轨模型，以及当前生产部署的源码提交（40 位，
+#   必须在候选源码仓里；由操作员按实际部署填写）。可缺省，VC-5 启动预检与 seal 链派发边界核对之前报缺：
+#   BOUNDARY_CODEX_ACCOUNT_ID=REPLACE_CODEX_ACCOUNT_ID
+#   BOUNDARY_CODEX_API_KEY_ID=REPLACE_CODEX_API_KEY_ID
+#   BOUNDARY_CODEX_MODEL=REPLACE_CODEX_MAIN_MODEL
+#   PRODUCTION_COMMIT=REPLACE_PRODUCTION_COMMIT_40_HEX

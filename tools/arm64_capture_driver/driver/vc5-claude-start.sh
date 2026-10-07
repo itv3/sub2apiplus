@@ -1,7 +1,8 @@
 #!/bin/bash
 # Claude 的 VC-5 启动（Claude 升级 B5b-01b，客户端表 vc5_start_script）：派发前检查（pre-vc5）→ run 计划（claude_vc5.py 用受管
-#   capture-candidate run 生成）→ 切换候选网关（vc5-claude-switch.sh：Claude 候选开关、隔离实例 ARM64 与激活事实变量）→ 只读
-#   预检（候选 run 的正式入口门）→ 后台派发 run 批次。与 Codex 的 vc5-start.sh 同一套锁、准入、守卫与后台批次写法。
+#   capture-candidate run 生成）→ 边界核对轮次参数（参数文件四个键与生产提交，零写入）→ 切换候选网关（vc5-claude-switch.sh：
+#   Claude 候选开关、隔离实例 ARM64 与激活事实变量）→ 只读预检（候选 run 的正式入口门）→ 后台派发 run 批次。与 Codex 的
+#   vc5-start.sh 同一套锁、准入、守卫与后台批次写法。
 # 用法：ARM64_VC_ENV=… bash vc5-claude-start.sh（批次日志 $RUNROOT/vc5-run-batch.out）
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode build)
@@ -15,6 +16,8 @@ test "$(git -C "$B/source" rev-parse HEAD)" = "$C"; TAG=$CANDIDATE_IMAGE_REPOSIT
 echo "IMAGE_ID=$IMAGE_ID BUILD_ID=$BUILD_ID TAG=$TAG TREE=$TREE"
 mkdir -p "$W"; chmod 700 "$W"
 python3 "$DRV/claude_vc5.py" run-plan --output "$W/action-plan-vc5-run.json" | cut -c1-200
+# 边界核对 codex-final-wire-isolation 的轮次参数在切换网关与派发 run 之前就核对（零写入），免得候选 run 跑完才发现缺参数。
+echo "=== 边界核对轮次参数"; python3 "$DRV/claude_vc5.py" boundary-parameters | cut -c1-240
 echo "=== 切换候选网关"; bash "$DRV/vc5-claude-switch.sh" candidate "$TAG" 2>&1 | tail -n 4
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 echo "=== 预检"; python3 "$DRV/claude_vc5.py" precheck 2>&1 | tail -n 6 | cut -c1-240

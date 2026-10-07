@@ -64,6 +64,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
     # B5b-01a：Claude 的 Campaign 用途（Codex 参数文件不得写）。
     "CAMPAIGN_PURPOSE",
+    # B5b-01b 续（边界核对接入）：Claude 专属可选键——VC-5 边界核对 codex-final-wire-isolation 的四个轮次参数（Codex 参数文件不得写）。
+    "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
 ))
 
 
@@ -185,6 +187,20 @@ class ParseEnvCodexParityTests(unittest.TestCase):
                 with self.assertRaises(self.new.EnvFileError) as new_error:
                     self.new.parse(text)
                 self.assertEqual(str(new_error.exception), str(old_error.exception))
+
+    def test_codex_refuses_claude_boundary_keys(self) -> None:
+        """B5b-01b 续：边界核对的四个轮次参数是 Claude 专属可选键。Codex 参数文件写了照旧被拒（改造前是「键不在允许集合内」，
+        现在是「不得含其它客户端的专属键」——只有报错措辞变化，接受的参数文件集合不变）。"""
+
+        source = self.fixture.env_file.read_text(encoding="utf-8")
+        for key, value in (("BOUNDARY_CODEX_ACCOUNT_ID", "42"), ("BOUNDARY_CODEX_API_KEY_ID", "7"),
+                           ("BOUNDARY_CODEX_MODEL", "gpt-5.6-codex"), ("PRODUCTION_COMMIT", "a" * 40)):
+            with self.subTest(key=key):
+                text = source + f"{key}={value}\n"
+                with self.assertRaisesRegex(self.old.EnvFileError, "键不在允许集合内"):
+                    self.old.parse(text)
+                with self.assertRaisesRegex(self.new.EnvFileError, f"不得含其它客户端的专属键：\\['{key}'\\]"):
+                    self.new.parse(text)
 
     def test_generic_keys_are_aliases_of_the_codex_keys(self) -> None:
         """「旧键作别名」：Codex 参数文件用通用键写目标客户端二进制、摘要与账号，解析结果与用旧键写的逐字相同（归一成旧键）。"""
@@ -845,6 +861,27 @@ M9_BYTECODE_SHELL_RESIDUALS: dict[str, list[str]] = {
         '+ARM64_VC_ENV_EXPORTS=$(python3 -B "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }',
     ],
 }
+# B4-05b-1（候选采集续跑按客户端分派脚本，含 B5b-01b 续的边界核对接入）改了下面三个脚本：以 rebase 后父提交为基线，代入 Codex
+# 取值后只剩登记的几处：
+# * env.example.sh：只追加 Claude 边界核对参数的中文注释，Codex 参数与代码不变；
+# * lib.sh：只改注释里的待接入变量示例（待接入条目全部落实，表里不再有 CT_PENDING_TOOL_VC5_RECOVER），代码不变；
+# * vc5-recover.sh：候选恢复段的待接入登记删去（对 Codex 本来就是空操作），按派发脚本核对改认续跑派发脚本表项
+#   CT_VC5_RECOVER_SCRIPT（Codex 取值就是 vc5-recover.sh 自己，条件恒不成立）。
+B405B1_BASELINE_COMMIT = "3d114ee8973f2d07090c72f2c3ef3773d166dd9b"
+B405B1_SHELL_DIGESTS: dict[str, str] = {
+    "env.example.sh": "b8f7cecb3eda9a6807d1d0239f48ccc31d52b9f310cfff62b393c41c656ac651",
+    "lib.sh": "41c966559b1fd8cb99cfd23b8033f062e0621dcdb5391591d3f1666697460233",
+    "vc5-recover.sh": "5f590092be6304e8bde89f4a4e7a8fc37e8f8e3c7b26b75dab5f3a3fbebb5307",
+}
+B405B1_SHELL_RESIDUALS: dict[str, list[str]] = {
+    "env.example.sh": [],
+    "lib.sh": [],
+    "vc5-recover.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RECOVER)",
+        "-CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_RECOVER_SCRIPT vc5-recover.sh)",
+    ],
+}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -853,6 +890,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SHELL_DIGESTS, B5B01A_SHELL_RESIDUALS),
     ("m9-bytecode", M9_BYTECODE_BASELINE_COMMIT, M9_BYTECODE_SHELL_DIGESTS, M9_BYTECODE_SHELL_RESIDUALS),
     ("B5b-01b", B5B01B_BASELINE_COMMIT, B5B01B_SHELL_DIGESTS, B5B01B_SHELL_RESIDUALS),
+    ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SHELL_DIGESTS, B405B1_SHELL_RESIDUALS),
 )
 
 
@@ -1350,6 +1388,165 @@ class EntryLedgerAndPreflightCodexParityTests(unittest.TestCase):
                 orchestrator.step_ledger()
                 commands.append(calls)
         self.assertEqual(commands[1], commands[0], "Codex 建账本命令（用途固定 production_replacement）逐字相同")
+
+
+
+# ------------------------------------------------------------------------------------------------ B4-05b-1 的监督器与续跑计划对照
+
+def skip_unless_b405b1_readable(case: unittest.TestCase) -> None:
+    if not commit_readable(B405B1_BASELINE_COMMIT):
+        case.skipTest(f"读不到基线提交 {B405B1_BASELINE_COMMIT}（浅克隆或不在仓库内）")
+
+
+CODEX_RECOVERY_PREFIX = ["/usr/bin/python3", "/data/tools/official_client_capture/codex_upgrade.py"]
+CODEX_RECOVERY_IDENTITY = {
+    "--candidate-id": "cand-1",
+    "--build-receipt": "/data/campaign/candidates/cand-1/build-receipt.json",
+    "--runtime-image": "repo@sha256:" + "1" * 64,
+    "--candidate-image-id": "sha256:" + "1" * 64,
+    "--candidate-source": "/root/candidate/source",
+    "--build-id": "build-1",
+    "--deployed-version": "0.160.0",
+    "--profile-id": "profile-1",
+    "--profile-digest": "2" * 64,
+    "--candidate-purpose": "production_replacement",
+}
+
+
+class SupervisorCandidateRecoveryCodexParityTests(unittest.TestCase):
+    """监督器候选采集续跑（B4-05b-1：续跑命令的身份参数改经适配器按清单归属客户端取）：同一组 Codex 输入（Codex 批次清单、
+    未给适配器的直接调用），B4-05b-1 开工时的监督器与现在的逐字相同——解析、命令构造、续跑动作种类与路由、父批次身份与三个
+    续跑后继协议（父 run 的失败终态与对账核验在两边换成同一个记录替身）。gen_vc5_recovery_plans.py 只换了客户端守卫一段。"""
+
+    def setUp(self) -> None:
+        skip_unless_b405b1_readable(self)
+        relative = "tools/official_client_capture/codex_upgrade_supervisor.py"
+        source = git_source(relative, B405B1_BASELINE_COMMIT)
+        self.assertIsNotNone(source)
+        old = types.ModuleType("codex_upgrade_supervisor_before_b405b1")
+        old.__file__ = str(REPO_ROOT / relative)
+        with mock.patch.dict(sys.modules, {old.__name__: old}):
+            exec(compile(source, f"{B405B1_BASELINE_COMMIT}:{relative}", "exec"), old.__dict__)  # noqa: S102 - 受控的历史源码
+        from tools.official_client_capture import codex_upgrade_supervisor as new
+
+        self.old, self.new = old, new
+
+    def tokens(self) -> list[str]:
+        return [item for flag in self.new.CANDIDATE_RECOVERY_IDENTITY_FLAGS for item in (flag, CODEX_RECOVERY_IDENTITY[flag])]
+
+    def same(self, call) -> object:
+        """同一调用在改造前后各跑一次：返回值逐字相同，或抛同名异常且消息相同。"""
+
+        outcomes = []
+        for module in (self.old, self.new):
+            try:
+                outcomes.append(("ok", call(module)))
+            except Exception as error:  # noqa: BLE001 - 两边的异常类是各自模块的同名类，按类名与消息比
+                outcomes.append((type(error).__name__, str(error)))
+        self.assertEqual(outcomes[1], outcomes[0])
+        return outcomes[1][1]
+
+    def manifest(self, action: dict, sequence: int = 1) -> dict:
+        return {
+            "schema_version": self.new.CAMPAIGN_RUN_BATCHED_SCHEMA, "phase": "VC-5", "batch_sequence": sequence, "no_op": False,
+            "campaign_id": "c1", "campaign_plan_sha256": "p" * 64, "original_deadline_at_utc": "2026-10-10T15:59:00Z",
+            "predecessor_checkpoint": {"phase": "VC-4"}, "candidate_id": "cand-1", "candidate_revision": 1,
+            "evaluation_baseline": None, "baseline_commit_sha256": None, "execute_items": ["candidate-run"], "reuse_items": [],
+            "actions": [action],
+        }
+
+    def test_codex_candidate_recovery_matches_b405b1_baseline(self) -> None:
+        campaign = "/data/campaign"
+        run = [*CODEX_RECOVERY_PREFIX, "capture-candidate", "run", "--campaign-dir", campaign, *self.tokens(),
+               "--acknowledge-live-requests", "--max-wall-seconds", "21600"]
+        self.assertEqual(self.new.candidate_recovery_identity_flags(), self.new.CANDIDATE_RECOVERY_IDENTITY_FLAGS)
+        claude_run = ["/usr/bin/python3", "/data/tools/official_client_capture/claude_upgrade.py", "capture-candidate", "run",
+                      "--campaign-dir", campaign, "--candidate-id", "cand-1", "--acknowledge-live-requests"]
+        for label, command in (("run", run), ("缺身份参数", run[:-6] + run[-4:]), ("多一个参数", [*run, "--extra", "x"]),
+                               ("Claude 形状", claude_run), ("非列表", "run")):
+            with self.subTest(parse=label):
+                self.same(lambda module, command=command: module.candidate_capture_run_identity(command))
+        preview = self.same(lambda module: module.candidate_recovery_preview_command(CODEX_RECOVERY_PREFIX, campaign, CODEX_RECOVERY_IDENTITY))
+        rerun = self.same(lambda module: module.candidate_recovery_run_command(
+            CODEX_RECOVERY_PREFIX, campaign, CODEX_RECOVERY_IDENTITY, "/data/campaign/control/reconciliation/attempt-1/recovery-preview-01.json"))
+        claude_preview = [*claude_run[:2], "resume", "--campaign-dir", campaign, "--rerun-failed", "--preview-recovery", "--candidate-id", "cand-1"]
+        for label, command, is_preview in (("预览", preview, True), ("补跑", rerun, False), ("预览当补跑", preview, False),
+                                           ("Claude 预览", claude_preview, True)):
+            with self.subTest(identity=label):
+                self.same(lambda module, command=command, is_preview=is_preview:
+                          module._candidate_recovery_command_identity(command, preview=is_preview))
+        actions = {
+            "capture": {"action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600,
+                        "command": run, "item_ids": ["candidate-run"]},
+            "preview": {"action_id": self.new.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID, "operation": self.new.CANDIDATE_RECOVERY_OPERATION,
+                        "timeout_seconds": 1800, "command": preview, "item_ids": ["candidate-run"]},
+            "run": {"action_id": self.new.CANDIDATE_RECOVERY_RUN_ACTION_ID, "operation": self.new.CANDIDATE_RECOVERY_OPERATION,
+                    "timeout_seconds": 21600, "command": rerun, "item_ids": ["candidate-run"]},
+            "seal": {"action_id": "candidate-seal", "operation": "VC-5:seal", "timeout_seconds": 900,
+                     "command": [*CODEX_RECOVERY_PREFIX, "capture-candidate", "seal", "--campaign-dir", campaign], "item_ids": ["candidate-seal"]},
+        }
+        for kind, action in actions.items():
+            manifest = self.manifest(action)
+            with self.subTest(kind=kind):
+                self.same(lambda module, manifest=manifest: module.candidate_recovery_parent_identity(manifest))
+                self.same(lambda module, manifest=manifest, action=action: module.candidate_capture_recovery_action(manifest, action["action_id"]))
+                for failure_class in ("execution-failure", "deadline-expired"):
+                    self.same(lambda module, manifest=manifest, action=action, failure_class=failure_class:
+                              module.candidate_capture_recovery_route(manifest, action["action_id"], failure_class))
+
+    def test_codex_recovery_successor_protocols_match_b405b1_baseline(self) -> None:
+        campaign = "/data/campaign"
+        run = [*CODEX_RECOVERY_PREFIX, "capture-candidate", "run", "--campaign-dir", campaign, *self.tokens(), "--acknowledge-live-requests"]
+        preview = self.new.candidate_recovery_preview_command(CODEX_RECOVERY_PREFIX, campaign, CODEX_RECOVERY_IDENTITY)
+        rerun = self.new.candidate_recovery_run_command(CODEX_RECOVERY_PREFIX, campaign, CODEX_RECOVERY_IDENTITY, "/data/p.json")
+        operation, preview_id, run_id = (self.new.CANDIDATE_RECOVERY_OPERATION, self.new.CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+                                         self.new.CANDIDATE_RECOVERY_RUN_ACTION_ID)
+        capture_action = {"action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 21600,
+                          "command": run, "item_ids": ["candidate-run"]}
+        preview_action = {"action_id": preview_id, "operation": operation, "timeout_seconds": 1800, "command": preview, "item_ids": ["candidate-run"]}
+        run_action = {"action_id": run_id, "operation": operation, "timeout_seconds": 21600, "command": rerun, "item_ids": ["candidate-run"]}
+        drifted = dict(preview_action, command=[*preview[:-2], "--candidate-purpose", "validation_only"])
+        cases = (
+            ("采集失败后预览", "_validate_batched_candidate_recovery_preview_successor", capture_action, preview_action),
+            ("采集失败后预览·身份漂移", "_validate_batched_candidate_recovery_preview_successor", capture_action, drifted),
+            ("预览失败后逐字重派", "_validate_batched_candidate_recovery_preview_retry_successor", preview_action, preview_action),
+            ("补跑失败后新预览", "_validate_batched_candidate_recovery_run_retry_successor", run_action, preview_action),
+            ("补跑失败后新预览·身份漂移", "_validate_batched_candidate_recovery_run_retry_successor", run_action, drifted),
+            ("前序不是续跑", "_validate_batched_candidate_recovery_run_retry_successor", capture_action, preview_action),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            prior_dir = Path(directory)
+            for label, protocol, prior_action, successor_action in cases:
+                prior, successor = self.manifest(prior_action, 1), self.manifest(successor_action, 2)
+                calls: dict[str, list] = {"old": [], "new": []}
+
+                def check(module, protocol=protocol, prior=prior, successor=successor):
+                    side = "old" if module is self.old else "new"
+                    with mock.patch.object(module, "_verify_failed_official_recovery_parent",
+                                           lambda *args, **kwargs: calls[side].append(kwargs.get("action_id"))):
+                        return getattr(module, protocol)({}, prior, prior_dir, successor, campaign_dir=Path(campaign))
+
+                with self.subTest(case=label):
+                    self.same(check)
+                    self.assertEqual(calls["new"], calls["old"])
+
+    def test_codex_recovery_plan_generator_only_swaps_the_client_guard(self) -> None:
+        source = git_source("tools/arm64_capture_driver/driver/gen_vc5_recovery_plans.py", B405B1_BASELINE_COMMIT)
+        self.assertIsNotNone(source)
+        self.assertEqual(
+            residual(source.decode("utf-8"), (DRIVER / "gen_vc5_recovery_plans.py").read_text(encoding="utf-8")),
+            [
+                '-WAITING = [item for item in (client_table().pending(client_spec(CONFIG)["client"], name)',
+                '-                             for name in ("tool:vc5-recover", "tool:vc5-run")) if item]',
+                "-if WAITING:",
+                '-    raise SystemExit("本轮客户端的 VC-5 续跑计划尚未接入：" + "；".join(WAITING))',
+                '+DISPATCH = client_table().spec(client_spec(CONFIG)["client"])["vc5_recover_script"]',
+                '+if DISPATCH != "vc5-recover.sh":',
+                '+    raise SystemExit(f"本轮客户端的 VC-5 续跑由 {DISPATCH} 派发（计划由 claude_vc5.py recovery-plans 生成），本生成器只给 Codex 的续跑驱动用")',
+            ],
+        )
+        # Codex 的续跑派发脚本表项就是 vc5-recover.sh：守卫对 Codex 恒不触发。
+        self.assertEqual(es.CT.spec("codex")["vc5_recover_script"], "vc5-recover.sh")
 
 
 if __name__ == "__main__":

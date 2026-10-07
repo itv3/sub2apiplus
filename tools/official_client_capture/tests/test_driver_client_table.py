@@ -1177,11 +1177,12 @@ class PendingToolsClaudeTests(unittest.TestCase):
     def test_entry_dryrun_and_vc5_admission_are_wired_for_claude(self) -> None:
         """B5a-10 落实了入口空跑（客户端表不再登记 tool:entry-dryrun）：Claude 的空跑按 Claude 的部署收据起，数据根没有它时报的是
         缺收据，不是「尚未接入」。B5b-01 落实了 VC-5 准入（不再登记 tool:vc5-admission）：两客户端都放行；B5b-01b 接入了 Claude
-        的 VC-5 run／seal／accept（各有派发脚本，见 test_claude_vc5_driver），待接入只剩边界核对（B4-01 f 段）与候选恢复段（B4-05b）。"""
+        的 VC-5 run／seal／accept（各有派发脚本，见 test_claude_vc5_driver）；B4-01 f 段与 B4-05b-1 接入边界核对和候选采集续跑，
+        驱动工具的待接入项已清零。恢复段读写仍由后续 B4-05b-2／3 实施，不属于本次采集续跑入口。"""
 
         self.assertIsNone(CT.pending("claude", "tool:entry-dryrun"))
         self.assertIsNone(CT.pending("claude", "tool:vc5-admission"))
-        self.assertEqual(sorted(CT.TABLE["claude"]["pending"]), ["tool:vc5-boundary-check", "tool:vc5-recover"])
+        self.assertEqual(CT.TABLE["claude"]["pending"], {})
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)

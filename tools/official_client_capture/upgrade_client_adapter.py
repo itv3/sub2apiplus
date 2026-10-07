@@ -444,6 +444,10 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # 事实不成立一律抛 ``Vc5AdmissionFactError``（静态错误码）。
     "catalog_stage_profile": "callable",
     "vc5_official_campaign": "callable",
+    # VC-5 候选采集续跑（B4-05b-1）：监督器续跑后继协议与驱动生成续跑命令时，候选续跑命令逐字携带的身份参数
+    # （``codex_upgrade_supervisor.candidate_recovery_identity_flags``）。Codex 是监督器原常量（十个身份旗标，原位不动）；
+    # Claude 的候选身份只来自 VC-4 构建收据，只有 ``--candidate-id``。
+    "candidate_recovery_identity_flags": "value",
 })
 
 
@@ -493,6 +497,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         # B5b-01：VC-5 准入两项事实，函数体是驱动原写在 vc5_admission 里的 Codex 逻辑，原样搬入。
         "catalog_stage_profile": ("codex_upgrade_client_adapter", "catalog_stage_profile"),
         "vc5_official_campaign": ("codex_upgrade_client_adapter", "vc5_official_campaign"),
+        # B4-05b-1：Codex 的候选续跑身份参数就是监督器原常量。
+        "candidate_recovery_identity_flags": ("codex_upgrade_supervisor", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -529,6 +535,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "candidate_post_run_extra_action": ("claude_upgrade_client_adapter", "candidate_post_run_extra_action"),  # B4-07 收尾
         "catalog_stage_profile": ("claude_upgrade_vc5_admission", "catalog_stage_profile"),  # B5b-01
         "vc5_official_campaign": ("claude_upgrade_vc5_admission", "vc5_official_campaign"),  # B5b-01
+        "candidate_recovery_identity_flags": ("claude_upgrade_client_adapter", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),  # B4-05b-1
     }),
 })
 

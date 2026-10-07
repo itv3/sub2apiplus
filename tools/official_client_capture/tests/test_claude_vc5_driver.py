@@ -1,12 +1,12 @@
 """Claude 的 VC-5 驱动（Claude 升级 B5b-01b：``vc5-claude-*.sh``／``claude_vc5.py``、阶段解析的 Claude 分支与派发脚本表项）。
 
-* 客户端表：两客户端 VC-5 各步的派发脚本（Codex 即原来四个脚本、Claude 的 canonical 为空）都在驱动里；待接入只剩边界
-  核对（B4-01 f 段）与候选恢复段（B4-05b）；
+* 客户端表：两客户端 VC-5 各步的派发脚本（Codex 即原来脚本、Claude 的 canonical 为空）都在驱动里；边界核对与候选采集续跑
+  已接入（B4-01 f 段、B4-05b-1），恢复段读写不在本批范围；
 * 派发脚本互斥：Codex 的 VC-5 脚本及其辅助脚本对 Claude 参数、Claude 的脚本对 Codex 参数，都在阶段解析与任何副作用之前
   拒绝（``lib.sh`` 的 ``CLIENT_STEP_REQUIRED``）；Codex 的计划生成器 ``gen_vc5_plans.py`` 对 Claude 拒绝；
 * 计划与辅助：compose 改写（候选开关、隔离实例 ARM64 与激活事实变量，不声明批准摘要；备份里已有这些变量即拒绝）、门禁执行
-  主机覆盖（两条本机门禁取本机门禁记录、目标平台门禁按 ``write_gate_json`` 的算法）、边界核对在待接入期间拒绝且接入后只有
-  Codex final wire 一项带真实请求确认、seal 批准必须给审核摘要与批准人；
+  主机覆盖（两条本机门禁取本机门禁记录、目标平台门禁按 ``write_gate_json`` 的算法）、边界核对只有 Codex final wire 一项带
+  真实请求确认、非法已有收据不自动重跑、seal 批准必须给审核摘要与批准人；零请求批次复用候选 Job 全集；
 * ``vc5-all.sh`` 的暂停语义（原文件逐字节执行，替身 lib.sh 与派发脚本，暂停文件由真实 ``claude_vc5.py pause`` 写）：seal 链
   暂停即打印 VC5_ALL_PAUSED 并退出 0、不进 accept；seal 链失败仍按失败退出；重起先清掉旧暂停文件；Claude 没有 canonical 交接；
 * 真实批次链（沿用 B4-06b 的输入源接缝，见 ``claude_vc5_chain_fixture``）：驱动生成的 compare、assert 与 accept 计划在父监督器里
@@ -34,7 +34,9 @@ from tools.ci import client_table as CT
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_compare as compare
 from tools.official_client_capture import claude_upgrade_vc
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
 from tools.official_client_capture.tests import test_arm64_capture_driver as driver_tests
 from tools.official_client_capture.tests import test_claude_upgrade_compare_accept as chain_tests
@@ -47,13 +49,17 @@ CODEX_STEPS = {
     "vc5_seal_script": "vc5-seal.sh",
     "vc5_accept_script": "vc5-accept.sh",
     "vc5_canonical_script": "vc5-canonical2.sh",
+    "vc5_recover_script": "vc5-recover.sh",
 }
 CLAUDE_STEPS = {
     "vc5_start_script": "vc5-claude-start.sh",
     "vc5_seal_script": "vc5-claude-seal.sh",
     "vc5_accept_script": "vc5-claude-accept.sh",
     "vc5_canonical_script": None,
+    "vc5_recover_script": "vc5-claude-recover.sh",
 }
+BOUNDARY_KEYS = ("BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT")
+JOBS = ["job-a", "job-b"]
 
 
 def load_vc5() -> Any:
@@ -73,13 +79,19 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
             with self.subTest(script=script):
                 self.assertTrue((DRIVER / script).is_file())
                 self.assertEqual(os.stat(DRIVER / script).st_mode & 0o111, 0o111)
-        self.assertEqual(sorted(CT.TABLE["claude"]["pending"]), ["tool:vc5-boundary-check", "tool:vc5-recover"])
+        # 边界核对（B4-01 f 段）与候选采集续跑（B4-05b-1）都已接入：两客户端都没有待接入项，shell 视图里也就没有待接入变量。
+        self.assertEqual(CT.TABLE["claude"]["pending"], {})
         self.assertEqual(CT.TABLE["codex"]["pending"], {})
         shell = subprocess.run([sys.executable, str(DRIVER / "client_table.py"), "shell"], env={**os.environ, "CLIENT": "claude"},
                                capture_output=True, text=True, check=True).stdout
         self.assertIn("CT_VC5_CANONICAL_SCRIPT=''", shell)
-        self.assertIn("CT_PENDING_TOOL_VC5_BOUNDARY_CHECK=", shell)
-        self.assertNotIn("CT_PENDING_TOOL_VC5_RUN", shell)
+        self.assertIn("CT_VC5_RECOVER_SCRIPT=vc5-claude-recover.sh", shell)
+        self.assertNotIn("CT_PENDING_", shell)
+        # 边界核对的四个轮次参数是 Claude 专属可选键：Codex 的专属键清单里有它们（Codex 参数文件写了即拒绝），Claude 不受影响。
+        self.assertEqual(CT.spec("claude")["exclusive_optional_keys"], BOUNDARY_KEYS)
+        self.assertEqual(CT.spec("codex")["exclusive_optional_keys"], ())
+        self.assertEqual(CT.foreign_keys("codex"), BOUNDARY_KEYS)
+        self.assertNotIn("PRODUCTION_COMMIT", CT.foreign_keys("claude"))
 
     def run_script(self, script: str, client: str, *args: str) -> subprocess.CompletedProcess[str]:
         fixture = driver_tests._DriverFixture(self.root / f"fixture-{client}-{script}-{len(args)}")
@@ -98,6 +110,7 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
             ("vc5-seal-receipts.sh", ("attempt-1", "2026-10-08T00:00:00Z"), "vc5-claude-seal.sh"),
             ("vc5-accept.sh", ("attempt-1",), "vc5-claude-accept.sh"),
             ("vc5-canonical2.sh", ("attempt-1",), "（无，本客户端没有这一步）"),
+            ("vc5-recover.sh", ("/bad-preview",), "vc5-claude-recover.sh"),
         )
         for script, args, owner in cases:
             with self.subTest(script=script):
@@ -105,9 +118,6 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 3, completed.stdout + completed.stderr)
                 self.assertIn(f"由 {owner} 负责", completed.stdout)
                 self.assertNotIn("阶段解析拒绝", completed.stdout + completed.stderr)
-        completed = self.run_script("vc5-recover.sh", "claude")
-        self.assertEqual(completed.returncode, 3)
-        self.assertIn("尚未接入：B4-05b", completed.stdout)
 
     def test_claude_scripts_refuse_codex(self) -> None:
         for script, args, owner in (
@@ -115,6 +125,7 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
             ("vc5-claude-switch.sh", ("candidate", "tag"), "vc5-start.sh"),
             ("vc5-claude-seal.sh", ("attempt-1",), "vc5-seal.sh"),
             ("vc5-claude-accept.sh", ("attempt-1",), "vc5-accept.sh"),
+            ("vc5-claude-recover.sh", ("/bad-preview",), "vc5-recover.sh"),
         ):
             with self.subTest(script=script):
                 completed = self.run_script(script, "codex", *args)
@@ -128,6 +139,11 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
                                    env={**os.environ, **fixture.env}, capture_output=True, text=True, cwd=str(DRIVER))
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("由 vc5-claude-start.sh 派发", completed.stderr)
+        # Codex 的续跑计划生成器同样只给 Codex 用（B4-05b-1）：Claude 在阶段解析之前就拒绝。
+        completed = subprocess.run([sys.executable, str(DRIVER / "gen_vc5_recovery_plans.py"), str(self.root), "c", "/bad-preview"],
+                                   env={**os.environ, **fixture.env}, capture_output=True, text=True, cwd=str(DRIVER))
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("由 vc5-claude-recover.sh 派发", completed.stderr)
 
 
 class ClaudeVc5HelperTests(unittest.TestCase):
@@ -213,28 +229,108 @@ class ClaudeVc5HelperTests(unittest.TestCase):
         with self.env(GATE_ROOT=str(self.root / "gates")), self.assertRaisesRegex(ValueError, "本机门禁记录还没注入"):
             self.module.gate_overrides()
 
-    def test_boundary_check_is_pending_then_only_codex_final_wire_acknowledges_live_requests(self) -> None:
-        with self.env(ATT="attempt-1"), self.assertRaisesRegex(ValueError, "边界核对尚未接入：B4-01 f 段"):
-            self.module.boundary_plan("codex-final-wire-isolation", self.root / "plan.json")
-        row = dict(CT.spec("claude"))
-        row["pending"] = {}
-        with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_row", return_value=row), contextlib.redirect_stdout(io.StringIO()):
+    def source_repo(self) -> tuple[Path, str]:
+        """本地临时 git 仓（零网络）：一个提交，作为候选源码仓与其中的生产提交。"""
+
+        repo = self.root / "candidate-source"
+        repo.mkdir()
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        subprocess.run([*git, "add", "a.txt"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "production"], check=True)
+        commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        return repo, commit
+
+    def boundary_env(self, commit: str, **overrides: str | None) -> dict[str, str]:
+        values = {"BOUNDARY_CODEX_ACCOUNT_ID": "42", "BOUNDARY_CODEX_API_KEY_ID": "7", "BOUNDARY_CODEX_MODEL": "gpt-5.6-codex",
+                  "PRODUCTION_COMMIT": commit, **overrides}
+        return {key: value for key, value in values.items() if value is not None}
+
+    def test_boundary_plans_carry_round_parameters_and_reuse_only_for_zero_request_check(self) -> None:
+        repo, commit = self.source_repo()
+        build = {"source": {"root": str(repo)}}
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(self.module, "_build_receipt", return_value=build))
+        stack.enter_context(mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS))
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        with self.env(ATT="attempt-1", **self.boundary_env(commit)):
             live = self.module.boundary_plan("codex-final-wire-isolation", self.root / "live.json")
             quiet = self.module.boundary_plan("third-party-ingress-rejection", self.root / "quiet.json")
             with self.assertRaisesRegex(ValueError, "未知边界核对"):
                 self.module.boundary_plan("kilo", self.root / "x.json")
-        for plan, check, live_flag in ((live, "codex-final-wire-isolation", True), (quiet, "third-party-ingress-rejection", False)):
-            [action] = plan["actions"]
-            self.assertEqual((action["action_id"], action["item_ids"]), (f"candidate-boundary-{check}", ["candidate-seal"]))
-            self.assertEqual(action["command"][2:], ["capture-candidate", "boundary-check", "--campaign-dir", str(self.root / "campaign"),
-                                                     "--candidate-id", "cand-1", "--attempt-id", "attempt-1", "--check", check,
-                                                     *(["--acknowledge-live-requests"] if live_flag else [])])
+        head = ["capture-candidate", "boundary-check", "--campaign-dir", str(self.root / "campaign"), "--candidate-id", "cand-1",
+                "--attempt-id", "attempt-1", "--check"]
+        [action] = live["actions"]
+        self.assertEqual((action["action_id"], action["item_ids"], action["timeout_seconds"]),
+                         ("candidate-boundary-codex-final-wire-isolation", ["candidate-seal"], 21600))
+        self.assertEqual(action["command"][2:], [*head, "codex-final-wire-isolation", "--acknowledge-live-requests",
+                                                 "--codex-account-id", "42", "--codex-api-key-id", "7", "--codex-model", "gpt-5.6-codex",
+                                                 "--production-commit", commit, "--max-wall-seconds", "21000"])
+        # 发真实请求的那项复用项为空：失败时按 execution-failure 收账，不被判成零请求后处理。
+        self.assertEqual((live["execute_item_ids"], live["reuse_item_ids"]), (["candidate-seal"], []))
+        [action] = quiet["actions"]
+        self.assertEqual((action["action_id"], action["timeout_seconds"]), ("candidate-boundary-third-party-ingress-rejection", 3600))
+        self.assertEqual(action["command"][2:], [*head, "third-party-ingress-rejection", "--max-wall-seconds", "3000"])
+        self.assertEqual(quiet["reuse_item_ids"], JOBS)
+        # 派发顺序：零请求的第三方入口拒绝在前。
+        self.assertEqual(self.module.BOUNDARY_CHECKS, ("third-party-ingress-rejection", "codex-final-wire-isolation"))
+
+    def test_boundary_parameters_refuse_missing_malformed_or_foreign_commit_before_any_write(self) -> None:
+        repo, commit = self.source_repo()
+        build = {"source": {"root": str(repo)}}
+        cases = (
+            ({"BOUNDARY_CODEX_MODEL": None}, "缺少边界核对 codex-final-wire-isolation 的轮次参数：BOUNDARY_CODEX_MODEL"),
+            ({"PRODUCTION_COMMIT": None, "BOUNDARY_CODEX_ACCOUNT_ID": None}, "BOUNDARY_CODEX_ACCOUNT_ID、PRODUCTION_COMMIT"),
+            ({"BOUNDARY_CODEX_ACCOUNT_ID": "0"}, "BOUNDARY_CODEX_ACCOUNT_ID 必须是"),
+            ({"BOUNDARY_CODEX_API_KEY_ID": "x7"}, "BOUNDARY_CODEX_API_KEY_ID 必须是"),
+            ({"BOUNDARY_CODEX_MODEL": "gpt 5"}, "BOUNDARY_CODEX_MODEL 必须是"),
+            ({"PRODUCTION_COMMIT": commit[:12]}, "PRODUCTION_COMMIT 必须是"),
+            ({"PRODUCTION_COMMIT": "0" * 40}, "不在候选源码仓"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides), self.env(ATT="attempt-1", **self.boundary_env(commit, **overrides)), \
+                    mock.patch.dict(os.environ, {key: "" for key, value in overrides.items() if value is None}), \
+                    mock.patch.object(self.module, "_build_receipt", return_value=build), \
+                    mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), \
+                    self.assertRaisesRegex(ValueError, message):
+                self.module.boundary_plan("codex-final-wire-isolation", self.root / "bad.json")
+            self.assertFalse((self.root / "bad.json").exists())
+        # 零请求那项不需要这些参数。
+        with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.module.boundary_plan("third-party-ingress-rejection", self.root / "quiet.json")
+
+    def test_seal_state_stops_on_invalid_boundary_receipt_and_orders_missing_checks(self) -> None:
+        receipt = self.root / "attempt" / "client-evidence" / "third-party-ingress-rejection.json"
+        files = {"client_bindings": {"claude-desktop": None},
+                 "boundary_checks": {"codex-final-wire-isolation": None, "third-party-ingress-rejection": receipt}}
+        checks = mock.Mock()
+        error = type("ConfigurationError", (Exception,), {})
+        checks.verify_boundary_receipt.side_effect = error("收据身份与 attempt 收据不一致")
+        real_managed = self.module._managed
+        with self.env(ATT="attempt-1", A=str(self.root / "attempt"), CAPTURE_RESULT=str(self.root / "missing-result.json")), \
+                mock.patch.object(self.module, "_client_files", return_value=files), \
+                mock.patch.object(self.module, "gate_overrides", return_value={}), \
+                mock.patch.object(self.module, "_managed", side_effect=lambda name: checks if name == "claude_upgrade_boundary_checks" else real_managed(name)):
+            state = self.module.seal_state()
+            self.assertEqual((state["next"], state["boundary_invalid"]),
+                             ("boundary_invalid", {"third-party-ingress-rejection": "收据身份与 attempt 收据不一致"}))
+            checks.verify_boundary_receipt.assert_called_once_with(self.root / "attempt", "third-party-ingress-rejection", receipt)
+            checks.verify_boundary_receipt.side_effect = None
+            state = self.module.seal_state()
+            self.assertEqual((state["next"], state["boundary_missing"], state["boundary_invalid"]),
+                             ("boundary", ["codex-final-wire-isolation"], {}))
+            files["boundary_checks"]["third-party-ingress-rejection"] = None
+            state = self.module.seal_state()
+            self.assertEqual(state["boundary_missing"], ["third-party-ingress-rejection", "codex-final-wire-isolation"])
 
     def test_seal_approval_needs_reviewed_digest_and_approver(self) -> None:
         files = {"client_bindings": {"claude-desktop": self.root / "d.json"}, "boundary_checks": {"third-party-ingress-rejection": self.root / "b.json"}}
         with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=files), \
                 mock.patch.object(self.module, "gate_overrides", return_value={"target-platform": {"host_id": "h", "architecture": "linux/aarch64"}}), \
-                contextlib.redirect_stdout(io.StringIO()):
+                mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), contextlib.redirect_stdout(io.StringIO()):
             for approve, approver in ((None, "reviewer-a"), ("0" * 64, None), ("not-a-digest", "reviewer-a"), ("0" * 64, "  ")):
                 with self.subTest(approve=approve, approver=approver), self.assertRaisesRegex(ValueError, "驱动不替审核人批准"):
                     self.module.seal_plan("approve", self.root / "a.json", approve=approve, approved_by=approver)
@@ -243,6 +339,8 @@ class ClaudeVc5HelperTests(unittest.TestCase):
             plan = self.module.seal_plan("approve", self.root / "a.json", approve="a" * 64, approved_by="reviewer-a")
         self.assertEqual([(item["action_id"], item["item_ids"]) for item in plan["actions"]],
                          [("candidate-seal-approve", ["candidate-seal"]), ("compare", ["compare"])])
+        # 候选 Job 之后的零请求批次复用全部候选 Job（与 Codex gen_vc5_plans 同一口径，post-run-tooling 判据第 3 条）。
+        self.assertEqual(plan["reuse_item_ids"], JOBS)
         argv = plan["actions"][0]["command"][2:]
         self.assertIn("--gate-execution-overrides", argv)
         self.assertEqual(argv[argv.index("--approve-seal-sha256") + 1:], ["a" * 64, "--approved-by", "reviewer-a"])
@@ -251,6 +349,147 @@ class ClaudeVc5HelperTests(unittest.TestCase):
         with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=missing), \
                 self.assertRaisesRegex(ValueError, "还没就位：claude-desktop"):
             self.module.seal_plan("preview", self.root / "p.json")
+
+    def test_existing_invalid_boundary_paths_are_never_treated_as_missing(self) -> None:
+        """悬空链接、目录和错误 JSON 都是已有非法收据，seal 链必须停下审计，不能自动派发替代收据。"""
+
+        attempt = self.root / "attempt"
+        directory = attempt / "client-evidence"
+        directory.mkdir(parents=True)
+        path = directory / "third-party-ingress-rejection.json"
+        seal = self.module._managed("claude_upgrade_seal")
+        plan = self.module._managed("claude_upgrade_plan")
+        scenarios = {"required_client_bindings": [], "required_boundary_checks": ["third-party-ingress-rejection"]}
+        with self.env(A=str(attempt)), \
+                mock.patch.object(self.module, "_manifest", return_value={"target_version": "2.1.285", "required_rules": []}), \
+                mock.patch.object(seal, "_frozen_input", return_value=self.root / "scenarios.json"), \
+                mock.patch.object(plan, "read_scenario_manifest", return_value=scenarios):
+            for kind in ("dangling-link", "directory", "invalid-json"):
+                with self.subTest(kind=kind):
+                    if kind == "dangling-link":
+                        path.symlink_to(directory / "missing.json")
+                    elif kind == "directory":
+                        path.mkdir()
+                    else:
+                        path.write_text("{}\n", encoding="utf-8")
+                    files = self.module._client_files()
+                    self.assertEqual(files["boundary_checks"]["third-party-ingress-rejection"], path)
+                    self.assertIn("third-party-ingress-rejection", self.module.boundary_receipt_problems(files))
+                    if kind == "directory":
+                        path.rmdir()
+                    else:
+                        path.unlink()
+            self.assertIsNone(self.module._client_files()["boundary_checks"]["third-party-ingress-rejection"])
+
+    def test_all_zero_request_plans_reuse_the_full_candidate_job_set(self) -> None:
+        """每个后处理入口都必须带齐候选 Job；只复用 candidate-run 或空集合无法满足监督器后处理判据。"""
+
+        files = {"client_bindings": {}, "boundary_checks": {}}
+        comparison = {"builder": {"script": "claude_build_rule_assertion_results.py", "config": {"path": "config.json"},
+                                   "output": "assertions.json", "results_dir": "rules", "evaluation_baseline": 0}}
+        with self.env(ATT="attempt-1", TOOLS=str(REPO_ROOT / "tools/official_client_capture"), GATE_ROOT=str(self.root / "gates")), \
+                mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), \
+                mock.patch.object(self.module, "_client_files", return_value=files), \
+                mock.patch.object(self.module, "gate_overrides", return_value={}), \
+                mock.patch.object(self.module, "_comparison", return_value=comparison), contextlib.redirect_stdout(io.StringIO()):
+            plans = {
+                "third-party": self.module.boundary_plan("third-party-ingress-rejection", self.root / "third-party.json"),
+                "seal-preview": self.module.seal_plan("preview", self.root / "seal-preview.json"),
+                "seal-approve": self.module.seal_plan("approve", self.root / "seal-approve.json", approve="a" * 64, approved_by="审核人"),
+                "compare": self.module.compare_plan(self.root / "compare.json"),
+                "assert": self.module.assert_plan(self.root / "assert.json"),
+                "accept": self.module.accept_plan(self.root / "accept.json"),
+            }
+            run = self.module.run_plan(self.root / "run.json")
+        for name, payload in plans.items():
+            with self.subTest(plan=name):
+                self.assertEqual(payload["reuse_item_ids"], JOBS)
+                self.assertTrue(set(payload["reuse_item_ids"]).isdisjoint(payload["execute_item_ids"]))
+        self.assertEqual(run["reuse_item_ids"], [])
+
+    def recovery_manifest(self, action: dict[str, Any], campaign: Path, sequence: int = 1) -> dict[str, Any]:
+        """离线批次结构：对账与失败终态另由正式验证器重放，这里锁定 Claude 身份与后继协议。"""
+
+        return {
+            "schema_version": supervisor.OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA, "client": "claude", "phase": "VC-5",
+            "campaign_id": "claude-code-2_1_285-recover", "campaign_plan_sha256": "a" * 64,
+            "original_deadline_at_utc": "2026-10-10T15:59:00Z", "predecessor_checkpoint": {"phase": "VC-4"},
+            "candidate_id": "cand-1", "candidate_revision": 1, "evaluation_baseline": None, "baseline_commit_sha256": None,
+            "batch_sequence": sequence, "no_op": False, "execute_items": ["candidate-run"], "reuse_items": [], "actions": [action],
+        }
+
+    def test_claude_recovery_plans_are_read_only_then_satisfy_successor_protocols(self) -> None:
+        """真实计划生成与监督器共用身份协议：失败采集→预览、预览重试、补跑失败→新预览都保留候选身份并调用父对账验证器。"""
+
+        campaign = self.root / "campaign"
+        manifests = campaign / "control/vc/run-manifests"
+        manifests.mkdir(parents=True)
+        preview_path = self.root / "approved-preview.json"
+        preview_path.write_text(json.dumps({"phase": "candidate", "candidate_id": "cand-1", "recovery_revision": None}), encoding="utf-8")
+        with self.env(NEW="claude-code-2_1_285-recover", CANDIDATE_REVISION="1"), contextlib.redirect_stdout(io.StringIO()):
+            capture = self.module.run_plan(self.root / "capture.json")["actions"][0]
+            parent = self.recovery_manifest(capture, campaign)
+            parent_path = manifests / "1-vc-5.json"
+            parent_path.write_text(json.dumps(parent), encoding="utf-8")
+            before = (parent_path.read_bytes(), preview_path.read_bytes())
+            plans = self.module.recovery_plans(preview_path, dry_run=True)
+            self.assertFalse(any((self.root / name).exists() for name in plans))
+            self.assertEqual(self.module.recovery_plans(preview_path), plans)
+            self.assertEqual((parent_path.read_bytes(), preview_path.read_bytes()), before)
+        adapter = upgrade_client_adapter.adapter_for("claude")
+        self.assertEqual(supervisor.candidate_recovery_identity_flags(adapter), ("--candidate-id",))
+        preview = plans[self.module.RECOVERY_PREVIEW_PLAN]["actions"][0]
+        rerun = plans[self.module.RECOVERY_RUN_PLAN]["actions"][0]
+        for name, action in (("capture", capture), ("preview", preview), ("run", rerun)):
+            with self.subTest(action=name):
+                manifest = self.recovery_manifest(action, campaign)
+                self.assertEqual(supervisor.candidate_recovery_parent_identity(manifest)[2], {"--candidate-id": "cand-1"})
+                self.assertEqual(supervisor.candidate_capture_recovery_route(manifest, action["action_id"], "execution-failure"), name)
+                self.assertIsNone(supervisor.candidate_capture_run_identity(capture["command"]))
+        for filename, payload in plans.items():
+            self.assertEqual(payload["reuse_item_ids"], [])
+            self.assertEqual(oct((self.root / filename).stat().st_mode & 0o777), "0o600")
+        cases = (
+            ("_validate_batched_candidate_recovery_preview_successor", capture, preview),
+            ("_validate_batched_candidate_recovery_preview_retry_successor", preview, preview),
+            ("_validate_batched_candidate_recovery_run_retry_successor", rerun, preview),
+        )
+        for name, prior_action, next_action in cases:
+            prior = self.recovery_manifest(prior_action, campaign, 1)
+            successor = self.recovery_manifest(next_action, campaign, 2)
+            with self.subTest(protocol=name), mock.patch.object(supervisor, "_verify_failed_official_recovery_parent") as verify:
+                self.assertTrue(getattr(supervisor, name)({}, prior, self.root, successor, campaign_dir=campaign))
+                self.assertEqual(verify.call_args.kwargs["action_id"], prior_action["action_id"])
+                changed = json.loads(json.dumps(successor))
+                changed["actions"][0]["command"][-1] = "other-candidate"
+                with self.assertRaises(supervisor.SupervisorError):
+                    getattr(supervisor, name)({}, prior, self.root, changed, campaign_dir=campaign)
+
+    def test_recovery_plan_refuses_foreign_identity_without_outputs(self) -> None:
+        """错客户端清单、错候选和恢复段预览不能借本轮驱动生成可派发计划。"""
+
+        campaign = self.root / "campaign"
+        manifests = campaign / "control/vc/run-manifests"
+        manifests.mkdir(parents=True)
+        preview_path = self.root / "approved-preview.json"
+        with self.env(NEW="claude-code-2_1_285-recover", CANDIDATE_REVISION="1"), contextlib.redirect_stdout(io.StringIO()):
+            capture = self.module.run_plan(self.root / "capture.json")["actions"][0]
+            parent = self.recovery_manifest(capture, campaign)
+            parent_path = manifests / "1-vc-5.json"
+            for preview, client in (({"candidate_id": "other", "recovery_revision": None}, "claude"),
+                                    ({"candidate_id": "cand-1", "recovery_revision": "ar1"}, "claude"),
+                                    ({"candidate_id": "cand-1", "recovery_revision": None}, "codex")):
+                with self.subTest(preview=preview, client=client):
+                    preview_path.write_text(json.dumps({"phase": "candidate", **preview}), encoding="utf-8")
+                    other = dict(parent)
+                    if client == "codex":
+                        other.pop("client")
+                        other["schema_version"] = supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+                    parent_path.write_text(json.dumps(other), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        self.module.recovery_plans(preview_path)
+                    self.assertFalse((self.root / self.module.RECOVERY_RUN_PLAN).exists())
+                    self.assertFalse((self.root / self.module.RECOVERY_PREVIEW_PLAN).exists())
 
     def test_helper_refuses_codex(self) -> None:
         with self.env("codex"), self.assertRaisesRegex(ValueError, "VC-5 派发脚本是 vc5-start.sh"):

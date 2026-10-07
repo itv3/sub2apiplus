@@ -64,6 +64,9 @@ CANDIDATE_PROBE_ACCOUNTING_CATEGORY = "claude_candidate_readiness_probe/v1"
 # 监督器 post-run-tooling 判据与 seal 链续派协议经适配器认它们（修好接着跑：VC-1 续跑路径）；动作 ID 与静态分析模块的
 # 常量逐字相同（测试核对），这里写字面量，免得适配器一导入就加载静态分析模块。
 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS = frozenset({"vc1-01-analyze-target", "vc1-02-seal-preview", "vc1-03-seal-approve"})
+# VC-5 候选采集续跑（B4-05b-1）：候选续跑命令逐字携带的身份参数。Claude 的候选身份只来自 VC-4 构建收据，resume 重走候选
+# 入口门、拒绝 Codex 用来重建候选身份的参数（claude_upgrade_recovery 第六节），所以只有 ``--candidate-id``。
+CANDIDATE_RECOVERY_IDENTITY_FLAGS = ("--candidate-id",)
 # Claude Campaign ID（如 ``claude-code-2_1_226-fw-g-production-replacement-v2-20260821``）不匹配根因模块的 Codex
 # Campaign ID 模式，必须在调用根因 API 前由适配器拒绝；版本号分隔符兼容点与下划线。
 CLAUDE_CAMPAIGN_ID_RE = re.compile(r"claude-code-\d+[._]\d+[._]\d+")

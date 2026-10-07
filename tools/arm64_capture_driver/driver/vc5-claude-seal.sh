@@ -1,7 +1,10 @@
 #!/bin/bash
 # Claude 的 VC-5 seal 链（Claude 升级 B5b-01b，客户端表 vc5_seal_script）：按客户端收据就位情况分步派发，每一步之前由
 #   claude_vc5.py seal-state 判定下一步——
-#   1. 两项 attempt 级边界核对（capture-candidate boundary-check，阶段项 candidate-seal；入口进主线前登记为待接入，到这里拒绝）；
+#   1. 两项 attempt 级边界核对（capture-candidate boundary-check，阶段项 candidate-seal，每项一个批次，零请求的第三方入口拒绝
+#      在前；codex-final-wire-isolation 带真实请求确认与参数文件的四个轮次参数）。某项批次失败：reconcile-supervisor-run 入账、
+#      修复后重起 vc5-all.sh，seal 链生成同一份计划，即 N+1 逐字重派这一项（不作废候选 attempt）；已在的收据不合法即中止，
+#      人工审计（不自动删除或重跑）；
 #   2. Desktop／VS Code 客户端收据（Mac 侧产出，放进 attempt 的 client-evidence 目录）没就位：暂停；
 #   3. 当前输入（attempt、客户端收据、门禁执行主机覆盖、工具身份）下没有 seal 预览：派发预览批次（批次内合法暂停点）；
 #   4. 闭合门禁 blocked：拒绝（SEAL_ABORT，处置阻断原因后重来）；
@@ -52,11 +55,17 @@ for round in 1 2 3 4 5 6; do
   NEXT=$(state_field next)
   echo "=== seal 链下一步：$NEXT"
   case "$NEXT" in
+    boundary_invalid)
+      echo "SEAL_ABORT 边界核对收据不合法（人工审计，不自动删除或重跑）：$(state_field boundary_invalid)"; exit 3 ;;
     boundary)
-      if [ -n "$CT_PENDING_TOOL_VC5_BOUNDARY_CHECK" ]; then echo "=== 边界核对尚未接入：${CT_PENDING_TOOL_VC5_BOUNDARY_CHECK}，拒绝"; exit 3; fi
       for CHECK in $(python3 -c "import json,sys; print(' '.join(json.loads(sys.argv[1])['boundary_missing']))" "$STATE"); do
         python3 "$DRV/claude_vc5.py" boundary-plan --check "$CHECK" --output "$W/action-plan-vc5-boundary-$CHECK.json"
-        SEQ=$(next_seq); echo "=== 批次 ${SEQ}：边界核对 $CHECK"; batch "$SEQ" "action-plan-vc5-boundary-$CHECK.json"
+        SEQ=$(next_seq); echo "=== 批次 ${SEQ}：边界核对 $CHECK"
+        if ! batch "$SEQ" "action-plan-vc5-boundary-$CHECK.json"; then
+          echo "BOUNDARY_FAILED check=$CHECK 批次 ${SEQ}：看 $W/batch-$SEQ.out 与 attempt 的 client-evidence/$CHECK/runs/ 下的 verdict.json；"
+          echo "  reconcile-supervisor-run 入账、按失败码修复后重起 vc5-all.sh（N+1 逐字重派这一项，不作废候选 attempt）"
+          exit 3
+        fi
       done ;;
     clients)
       python3 "$DRV/claude_vc5.py" pause --reason client_receipts_missing \

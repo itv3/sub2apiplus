@@ -9258,6 +9258,18 @@ CANDIDATE_RECOVERY_IDENTITY_FLAGS = (
 )
 # 父采集命令里除身份参数外允许出现、且不传给 resume 的参数。
 _CANDIDATE_CAPTURE_EXTRA_FLAGS = frozenset({"--max-wall-seconds"})
+
+
+def candidate_recovery_identity_flags(adapter: Any = None) -> tuple[str, ...]:
+    """候选续跑命令逐字携带的身份参数（Claude 升级 B4-05b-1）：按清单所属客户端的适配器成员
+    ``candidate_recovery_identity_flags`` 取；未给适配器即上面的 Codex 常量，Codex 的判定与命令构造逐字不变。Claude 的候选
+    身份只来自 VC-4 构建收据（resume 重走候选入口门），只有 ``--candidate-id``。"""
+
+    if adapter is None:
+        return CANDIDATE_RECOVERY_IDENTITY_FLAGS
+    return tuple(adapter.candidate_recovery_identity_flags)
+
+
 # 续跑批次必须逐字沿用父批次的批次级字段。
 _CANDIDATE_RECOVERY_FROZEN_FIELDS = (
     "campaign_id",
@@ -9316,40 +9328,49 @@ def candidate_capture_run_identity(
         acknowledged != 1
         or campaign is None
         or not Path(campaign).is_absolute()
-        or set(pairs) != set(CANDIDATE_RECOVERY_IDENTITY_FLAGS)
+        or set(pairs) != set(candidate_recovery_identity_flags(adapter))
     ):
         return None
-    return prefix, campaign, {flag: pairs[flag] for flag in CANDIDATE_RECOVERY_IDENTITY_FLAGS}
+    return prefix, campaign, {flag: pairs[flag] for flag in candidate_recovery_identity_flags(adapter)}
 
 
-def _candidate_identity_tokens(identity: Mapping[str, str]) -> list[str]:
+def _candidate_identity_tokens(
+    identity: Mapping[str, str], flags: Sequence[str] = CANDIDATE_RECOVERY_IDENTITY_FLAGS
+) -> list[str]:
     tokens: list[str] = []
-    for flag in CANDIDATE_RECOVERY_IDENTITY_FLAGS:
+    for flag in flags:
         tokens.extend([flag, str(identity[flag])])
     return tokens
 
 
 def candidate_recovery_preview_command(
-    prefix: Sequence[str], campaign: str, identity: Mapping[str, str]
+    prefix: Sequence[str], campaign: str, identity: Mapping[str, str], *, adapter: Any = None
 ) -> list[str]:
-    """VC-5 候选采集续跑的零请求恢复预览命令（驱动与后继协议共用同一构造）。"""
-
-    return [*prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--preview-recovery", *_candidate_identity_tokens(identity)]
-
-
-def candidate_recovery_run_command(
-    prefix: Sequence[str], campaign: str, identity: Mapping[str, str], preview_path: str
-) -> list[str]:
-    """VC-5 候选采集续跑的真实补跑命令（按已批准的恢复预览，只执行预览冻结的执行集合）。"""
+    """VC-5 候选采集续跑的零请求恢复预览命令（驱动与后继协议共用同一构造；身份参数按 ``adapter`` 所属客户端）。"""
 
     return [
-        *prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--recovery-preview", preview_path,
-        "--acknowledge-live-requests", *_candidate_identity_tokens(identity),
+        *prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--preview-recovery",
+        *_candidate_identity_tokens(identity, candidate_recovery_identity_flags(adapter)),
     ]
 
 
-def _candidate_recovery_command_identity(command: Any, *, preview: bool) -> tuple[list[str], str, dict[str, str], str | None] | None:
-    """解析 VC-5 续跑命令（预览或补跑）；形态不符返回 None。"""
+def candidate_recovery_run_command(
+    prefix: Sequence[str], campaign: str, identity: Mapping[str, str], preview_path: str, *, adapter: Any = None
+) -> list[str]:
+    """VC-5 候选采集续跑的真实补跑命令（按已批准的恢复预览，只执行预览冻结的执行集合；身份参数按 ``adapter`` 所属客户端）。"""
+
+    return [
+        *prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--recovery-preview", preview_path,
+        "--acknowledge-live-requests", *_candidate_identity_tokens(identity, candidate_recovery_identity_flags(adapter)),
+    ]
+
+
+def _candidate_recovery_command_identity(
+    command: Any, *, preview: bool, adapter: Any = None
+) -> tuple[list[str], str, dict[str, str], str | None] | None:
+    """解析 VC-5 续跑命令（预览或补跑，身份参数按 ``adapter`` 所属客户端）；形态不符返回 None。"""
+
+    flags = candidate_recovery_identity_flags(adapter)
 
     if not isinstance(command, list) or not all(isinstance(token, str) and token for token in command):
         return None
@@ -9361,7 +9382,7 @@ def _candidate_recovery_command_identity(command: Any, *, preview: bool) -> tupl
     # 头部词元：预览 resume --campaign-dir C --rerun-failed --preview-recovery（5 个）；
     # 补跑 resume --campaign-dir C --rerun-failed --recovery-preview P --acknowledge-live-requests（7 个）。
     head = 5 if preview else 7
-    if not prefix or len(tail) != head + 2 * len(CANDIDATE_RECOVERY_IDENTITY_FLAGS):
+    if not prefix or len(tail) != head + 2 * len(flags):
         return None
     if tail[1] != "--campaign-dir" or not Path(tail[2]).is_absolute() or tail[3] != "--rerun-failed":
         return None
@@ -9374,7 +9395,7 @@ def _candidate_recovery_command_identity(command: Any, *, preview: bool) -> tupl
             return None
         preview_path = tail[5]
     identity: dict[str, str] = {}
-    for offset, flag in enumerate(CANDIDATE_RECOVERY_IDENTITY_FLAGS):
+    for offset, flag in enumerate(flags):
         if tail[head + 2 * offset] != flag:
             return None
         identity[flag] = tail[head + 2 * offset + 1]
@@ -9394,17 +9415,18 @@ def candidate_recovery_parent_identity(manifest: Mapping[str, Any]) -> tuple[lis
     if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], Mapping):
         raise SupervisorError("候选采集续跑的父批次必须恰好一个动作。")
     command = actions[0].get("command")
-    parsed = candidate_capture_run_identity(command, adapter=_run_manifest_adapter(manifest, None))
+    adapter = _run_manifest_adapter(manifest, None)
+    parsed = candidate_capture_run_identity(command, adapter=adapter)
     if parsed is not None:
         return parsed
     if actions[0].get("action_id") == CANDIDATE_RECOVERY_RUN_ACTION_ID:
-        recovery = _candidate_recovery_command_identity(command, preview=False)
+        recovery = _candidate_recovery_command_identity(command, preview=False, adapter=adapter)
         if recovery is not None:
             prefix, campaign, identity, _preview = recovery
             return prefix, campaign, identity
     if actions[0].get("action_id") == CANDIDATE_RECOVERY_PREVIEW_ACTION_ID:
         # 续跑预览批次之后（其后可能有 seal 链批次）重新生成续跑计划：身份参数与预览命令逐字相同。
-        preview_identity = _candidate_recovery_command_identity(command, preview=True)
+        preview_identity = _candidate_recovery_command_identity(command, preview=True, adapter=adapter)
         if preview_identity is not None:
             prefix, campaign, identity, _preview = preview_identity
             return prefix, campaign, identity
@@ -9455,16 +9477,17 @@ def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: st
         if not isinstance(action, Mapping) or action.get("action_id") != action_id:
             continue
         command = action.get("command")
-        if candidate_capture_run_identity(command, adapter=_run_manifest_adapter(manifest, None)) is not None:
+        adapter = _run_manifest_adapter(manifest, None)
+        if candidate_capture_run_identity(command, adapter=adapter) is not None:
             return "capture"
         if (
             action_id == CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
-            and _candidate_recovery_command_identity(command, preview=True) is not None
+            and _candidate_recovery_command_identity(command, preview=True, adapter=adapter) is not None
         ):
             return "preview"
         if (
             action_id == CANDIDATE_RECOVERY_RUN_ACTION_ID
-            and _candidate_recovery_command_identity(command, preview=False) is not None
+            and _candidate_recovery_command_identity(command, preview=False, adapter=adapter) is not None
         ):
             return "run"
         return None
@@ -9589,14 +9612,15 @@ def _validate_batched_candidate_recovery_preview_successor(
         or successor_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
     ):
         return _protocol_reject("前序不是单动作 VC-5 批次，或后继不是候选零请求恢复预览")
-    parent = candidate_capture_run_identity(prior_action.get("command"), adapter=_run_manifest_adapter(prior_manifest, None))
+    adapter = _run_manifest_adapter(prior_manifest, None)
+    parent = candidate_capture_run_identity(prior_action.get("command"), adapter=adapter)
     if parent is None:
         return _protocol_reject("前序动作不是普通 capture-candidate run")
     prefix, campaign, identity = parent
     expected = {
         "action_id": CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
         "operation": CANDIDATE_RECOVERY_OPERATION,
-        "command": candidate_recovery_preview_command(prefix, campaign, identity),
+        "command": candidate_recovery_preview_command(prefix, campaign, identity, adapter=adapter),
         "item_ids": prior_action.get("item_ids"),
     }
     if (
@@ -9640,7 +9664,9 @@ def _validate_batched_candidate_recovery_preview_retry_successor(
         return _protocol_reject("前序不是单动作的 VC-5 候选恢复预览批次")
     if (
         prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION
-        or _candidate_recovery_command_identity(prior_action.get("command"), preview=True) is None
+        or _candidate_recovery_command_identity(
+            prior_action.get("command"), preview=True, adapter=_run_manifest_adapter(prior_manifest, None)
+        ) is None
         or not _candidate_recovery_batch_fields_match(prior_manifest, successor_manifest)
         or successor_manifest.get("actions") != prior_manifest.get("actions")
     ):
@@ -9678,14 +9704,15 @@ def _validate_batched_candidate_recovery_run_retry_successor(
         or prior_action.get("action_id") != CANDIDATE_RECOVERY_RUN_ACTION_ID
     ):
         return _protocol_reject("前序不是单动作的 VC-5 候选真实补跑批次")
-    parsed = _candidate_recovery_command_identity(prior_action.get("command"), preview=False)
+    adapter = _run_manifest_adapter(prior_manifest, None)
+    parsed = _candidate_recovery_command_identity(prior_action.get("command"), preview=False, adapter=adapter)
     if parsed is None or prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION:
         raise SupervisorError("VC-5 补跑失败后的预览：父动作不是按预览的候选真实补跑。")
     prefix, campaign, identity, _preview_path = parsed
     expected = {
         "action_id": CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
         "operation": CANDIDATE_RECOVERY_OPERATION,
-        "command": candidate_recovery_preview_command(prefix, campaign, identity),
+        "command": candidate_recovery_preview_command(prefix, campaign, identity, adapter=adapter),
         "item_ids": prior_action.get("item_ids"),
     }
     if (
@@ -9893,7 +9920,9 @@ def _validate_batched_evolution_recovery_successor(
     execute = successor_manifest.get("execute_items")
     reuse = successor_manifest.get("reuse_items")
     if phase == "VC-5":
-        parsed = _candidate_recovery_command_identity(command, preview=True)
+        parsed = _candidate_recovery_command_identity(
+            command, preview=True, adapter=_run_manifest_adapter(successor_manifest, None)
+        )
         if (
             parsed is None
             or Path(parsed[1]).resolve(strict=False) != resolved_campaign
