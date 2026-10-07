@@ -50,6 +50,8 @@ from tools.official_client_capture.capturelib.security import ensure_private_dir
 from tools.official_client_capture import claude_tool_identity_policy
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import claude_upgrade_predecessor
+from tools.official_client_capture import codex_upgrade_evidence_manifest
+from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
@@ -85,9 +87,14 @@ EVALUATION_BASELINE_PREPARED_FILENAME = "PREPARED"
 EVALUATION_BASELINE_RECOVERY_FILENAME = "recovery.json"
 EVALUATION_CHECKPOINTS_DIRNAME = "checkpoints"
 EVALUATION_RUN_FILENAME = "evaluation-run.json"
+EVIDENCE_CONFLICT_DISPOSITIONS = frozenset({"compromised", "invalidated"})
 EVIDENCE_CONFLICT_QUARANTINE_DIR = Path("control") / "evidence-conflict"
+EVIDENCE_CONFLICT_QUARANTINE_RE = re.compile(r"^quarantine-(\d{2,})\.json$")
 EVIDENCE_CONFLICT_QUARANTINE_SCHEMA = "evidence-conflict-quarantine/v1"
 EVIDENCE_ROOT_SUPERSESSION_DIR = Path("control") / "evidence-roots"
+EVIDENCE_ROOT_SUPERSESSION_RE = re.compile(
+    r"^supersession-(?P<attempt>[A-Za-z0-9][A-Za-z0-9._-]{0,127})\.json$"
+)
 EVIDENCE_ROOT_SUPERSESSION_SCHEMA = "evidence-root-supersession/v1"
 FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = (
     PurePosixPath("/capture/runs"),
@@ -3142,7 +3149,93 @@ def _wait_for_monitor_finalization(run_dir: Path, state: Mapping[str, Any]) -> d
     return claude_upgrade_capture._wait_for_monitor_finalization(run_dir, state)
 
 
-# B2-07（seal 链幂等与四阶段化）
+# B2-07（seal 链幂等与四阶段化）：权限收口重放与证据根冲突隔离读取在这里；seal 的控制流程在 ``claude_upgrade_seal``，
+# 证据语义在 ``claude_upgrade_evidence``（经下方 evidence 根转调）。下列冲突隔离与取代归档函数照搬 Codex，与 Codex
+# 逐字一致由 ``test_orchestrator_surface_contract.COPIED`` 锁定。
+
+_SUPERSESSION_ROW_FIELDS = frozenset(
+    {
+        "job_id",
+        "logical_root",
+        "host_root",
+        "archived_logical_root",
+        "archived_host_root",
+        "device",
+        "inode",
+        "registered_by",
+    }
+)
+_ATTEMPT_REFERENCE_FIELDS = frozenset({"phase", "candidate_id", "attempt_id", "attempt_sha256"})
+
+
+def _permission_layout_data_root(root: Path) -> Path | None:
+    """证据收口根所在 Campaign 的宿主数据根（``<数据根>/evidence/campaigns/<id>/...``）；不在规范坐标下时为 None。"""
+
+    for ancestor in Path(root).parents:
+        if ancestor.parent.name == "campaigns" and ancestor.parent.parent.name == "evidence":
+            return ancestor.parents[2]
+    return None
+
+
+def _replay_permission_closeout_binding(
+    root: Path,
+    payload: Mapping[str, Any],
+    *,
+    success_status: str,
+    label: str,
+    root_relocations: Mapping[str, str] | None,
+) -> dict[str, Any] | None:
+    """按收据记录的收口参数（``evidence_permission_layout``）重放 ``evidence-permission-closeout/v2``。
+
+    判据与 Codex v3 attempt 相同：``success_status`` 必须有通过的收口收据；收口失败时只能留下 ``{type, message}`` 错误记录。
+    收口参数（受管数据根、逻辑 runs 根）必须与根所在 Campaign 的规范坐标一致（宿主 ``<数据根>`` 与 ``<数据根>/runs``），
+    不能由收据自己改写重放边界。
+    """
+
+    binding = payload.get("evidence_permission_closeout")
+    permission_error = payload.get("evidence_permission_error")
+    if payload.get("status") == success_status and (not isinstance(binding, Mapping) or permission_error is not None):
+        raise ConfigurationError(f"{success_status} {label}缺少通过的证据权限收口收据。")
+    if binding is None:
+        if (
+            not isinstance(permission_error, Mapping)
+            or set(permission_error) != {"type", "message"}
+            or not isinstance(permission_error.get("type"), str)
+            or not permission_error["type"]
+            or not isinstance(permission_error.get("message"), str)
+        ):
+            raise ConfigurationError(f"{label}缺少权限收口结果，或收口错误字段非法。")
+        return None
+    if permission_error is not None:
+        raise ConfigurationError(f"{label}同时声明权限收口成功与失败。")
+    raw_roots = payload.get("evidence_roots")
+    if not isinstance(raw_roots, list) or not raw_roots or any(not isinstance(value, str) for value in raw_roots):
+        raise ConfigurationError(f"{label}权限收口缺少证据根。")
+    layout = payload.get("evidence_permission_layout")
+    if (
+        not isinstance(layout, Mapping)
+        or set(layout) != {"managed_data_root", "logical_runs_roots"}
+        or not isinstance(layout.get("managed_data_root"), str)
+        or not isinstance(layout.get("logical_runs_roots"), list)
+        or not all(isinstance(item, str) for item in layout["logical_runs_roots"])
+    ):
+        raise ConfigurationError(f"{label}缺少合法的 evidence_permission_layout。")
+    managed = Path(layout["managed_data_root"])
+    logical = [Path(item) for item in layout["logical_runs_roots"]]
+    expected = _permission_layout_data_root(root)
+    if expected is None or managed.resolve(strict=False) != expected.resolve(strict=False) or logical != [managed / "runs"]:
+        raise ConfigurationError(f"{label}的收口参数与 Campaign 宿主数据根坐标不一致，拒绝按收据改写重放边界。")
+    try:
+        return codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+            root,
+            [Path(value) for value in raw_roots],
+            binding,
+            managed_data_root=managed,
+            logical_runs_roots=logical,
+            root_relocations=root_relocations,
+        )
+    except (OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
+        raise ConfigurationError(f"{label}证据权限收口收据未通过：{error}") from error
 
 
 def _replay_attempt_evidence_permissions(
@@ -3151,20 +3244,148 @@ def _replay_attempt_evidence_permissions(
     *,
     root_relocations: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """服务面成员（B2-07）：重放 Claude attempt（``claude-upgrade-capture-attempt/v1``）run 末的权限收口。
 
-    del attempt_root, payload, root_relocations
-    raise _pending("_replay_attempt_evidence_permissions", "B2-07（seal 链幂等与四阶段化）")
+    Claude 从第一个受管版本起 run 末就写 ``evidence-permission-closeout/v2``，没有 Codex 的 legacy v2 attempt 兼容分支；
+    收口参数取 attempt 的 ``evidence_permission_layout``（B2-06 写入），并核对它与 Campaign 宿主数据根坐标一致。
+    ``root_relocations`` 同 Codex：被后续续跑取代归档的外部根（原路径 → 同级归档路径）。
+    """
+
+    from tools.official_client_capture import claude_upgrade_capture
+
+    if payload.get("schema_version") != claude_upgrade_capture.CAPTURE_ATTEMPT_SCHEMA:
+        raise ConfigurationError("抓包 attempt schema_version 不受支持。")
+    return _replay_permission_closeout_binding(
+        attempt_root, payload, success_status="awaiting_receipts", label="attempt ", root_relocations=root_relocations
+    )
 
 
 def _replay_attempt_recovery_evidence_permissions(
     segment_root: Path,
     payload: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """服务面成员（B2-07）：重放恢复段的权限收口（与 attempt 同一判据：awaiting_receipts 必须有通过的收口收据）。
 
-    del segment_root, payload
-    raise _pending("_replay_attempt_recovery_evidence_permissions", "B2-07（seal 链幂等与四阶段化）")
+    恢复段本身（``recovery/ar<k>`` 的预约与 run-summary）由 B2-08 落实；这里只给出重放判据，收口参数同样取段收据的
+    ``evidence_permission_layout``。
+    """
+
+    return _replay_permission_closeout_binding(
+        segment_root, payload, success_status="awaiting_receipts", label="恢复段", root_relocations=None
+    )
+
+
+def _attempt_reference_matches(
+    item: Any, *, phase: str, candidate_id: str | None, attempt_id: str
+) -> bool:
+    return (
+        isinstance(item, Mapping)
+        and item.get("phase") == phase
+        and item.get("candidate_id") == candidate_id
+        and item.get("attempt_id") == attempt_id
+    )
+
+
+def _validate_attempt_reference(item: Any, label: str) -> None:
+    if (
+        not isinstance(item, Mapping)
+        or set(item) != _ATTEMPT_REFERENCE_FIELDS
+        or item.get("phase") not in {"official", "candidate"}
+        or (item.get("phase") == "official") != (item.get("candidate_id") is None)
+        or (item.get("candidate_id") is not None and not SAFE_ID_RE.fullmatch(str(item["candidate_id"])))
+        or not SAFE_ID_RE.fullmatch(str(item.get("attempt_id", "")))
+        or not SHA256_RE.fullmatch(str(item.get("attempt_sha256", "")))
+    ):
+        raise ConfigurationError(f"{label} 的 attempt 引用形态非法。")
+
+
+def _evidence_root_supersessions(campaign_dir: Path) -> list[dict[str, Any]]:
+    """读取并逐项核对取代收据（schema、Campaign、文件名与新 attempt 一致、自摘要、逐根记录形态），按写入时间排序。"""
+
+    directory = campaign_dir / EVIDENCE_ROOT_SUPERSESSION_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("证据根取代收据目录不可信。")
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    receipts: list[dict[str, Any]] = []
+    for child in sorted(directory.iterdir()):
+        match = EVIDENCE_ROOT_SUPERSESSION_RE.fullmatch(child.name)
+        if match is None or child.is_symlink() or not child.is_file():
+            raise ConfigurationError(f"证据根取代收据目录含非收据条目：{child.name}")
+        receipt = _read_json(child, "证据根取代收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        rows = receipt.get("roots")
+        phase = receipt.get("phase")
+        if (
+            receipt.get("schema_version") != EVIDENCE_ROOT_SUPERSESSION_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("superseding_attempt_id") != match.group("attempt")
+            or phase not in {"official", "candidate"}
+            or (phase == "official") != (receipt.get("candidate_id") is None)
+            or not _is_rfc3339_timestamp(receipt.get("recorded_at_utc"))
+            or not isinstance(rows, list)
+            or not rows
+            or _fingerprint(unsigned) != receipt.get("receipt_sha256")
+        ):
+            raise ConfigurationError(f"证据根取代收据形态、Campaign 或自摘要不一致：{child.name}")
+        for row in rows:
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != _SUPERSESSION_ROW_FIELDS
+                or not SAFE_ID_RE.fullmatch(str(row.get("job_id", "")))
+                or not isinstance(row.get("device"), int)
+                or not isinstance(row.get("inode"), int)
+                or not isinstance(row.get("registered_by"), list)
+            ):
+                raise ConfigurationError(f"证据根取代收据 {child.name} 的逐根记录形态非法。")
+            for field in ("logical_root", "host_root", "archived_logical_root", "archived_host_root"):
+                value = Path(str(row.get(field, "")))
+                if not value.is_absolute() or ".." in value.parts:
+                    raise ConfigurationError(f"证据根取代收据 {child.name} 的 {field} 不是规范绝对路径。")
+            for source, target in (("logical_root", "archived_logical_root"), ("host_root", "archived_host_root")):
+                original = Path(str(row[source]))
+                archived = Path(str(row[target]))
+                if archived.parent != original.parent or not archived.name.startswith(
+                    original.name
+                    + codex_upgrade_evidence_permissions.SUPERSEDED_ROOT_INFIX
+                    + match.group("attempt")
+                ):
+                    raise ConfigurationError(f"证据根取代收据 {child.name} 的归档路径不是原根的同级取代目录。")
+            for item in row["registered_by"]:
+                _validate_attempt_reference(item, f"证据根取代收据 {child.name}")
+        receipts.append(receipt)
+    receipts.sort(key=lambda item: (str(item["recorded_at_utc"]), str(item["superseding_attempt_id"])))
+    return receipts
+
+
+def _supersession_row_state(row: Mapping[str, Any], all_rows: Sequence[Mapping[str, Any]]) -> str:
+    """archived：归档目录就是收据绑定的原目录；pending：收据已写、rename 未完成（原路径仍是原目录）；
+    taken_over：原目录后来由另一张收据归档（崩溃后下一次续跑接管）。其余不一致一律失败关闭。"""
+
+    # 修好接着跑第 66 项：rehearse-candidate-seal 在私有 mount namespace 的 OverlayFS 副本上复核取代状态时，目录 st_dev
+    # 必然与收据记录的正式设备号不同。与 EvidenceManifest 同一判据（预演标记为 1 且证据根确在 overlay 上）只忽略 device，
+    # inode 照常比较；正式目录上判据不变。
+    rehearsal = codex_upgrade_evidence_manifest._isolated_rehearsal_context([Path(str(row["host_root"])).parent])
+
+    def recorded(item: Mapping[str, Any]) -> tuple[int, int]:
+        return (0 if rehearsal else int(item["device"])), int(item["inode"])
+
+    identity = recorded(row)
+    if _directory_identity(Path(str(row["archived_host_root"])), ignore_device=rehearsal) == identity:
+        return "archived"
+    if _directory_identity(Path(str(row["host_root"])), ignore_device=rehearsal) == identity:
+        return "pending"
+    if any(
+        other is not row
+        and recorded(other) == identity
+        and _directory_identity(Path(str(other["archived_host_root"])), ignore_device=rehearsal) == identity
+        for other in all_rows
+    ):
+        return "taken_over"
+    raise ConfigurationError(
+        f"证据根取代状态不一致：{row['logical_root']} 的原目录既不在归档路径也不在原路径（inode 漂移）。"
+    )
 
 
 def _evidence_root_relocations(
@@ -3174,24 +3395,89 @@ def _evidence_root_relocations(
     candidate_id: str | None,
     attempt_id: str,
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """该 attempt 登记的外部证据根中已被后续续跑取代归档的部分：原逻辑路径 → 归档逻辑路径。"""
 
-    del campaign_dir, phase, candidate_id, attempt_id
-    raise _pending("_evidence_root_relocations", "B2-07（seal 链幂等与四阶段化）")
+    receipts = _evidence_root_supersessions(campaign_dir)
+    if not receipts:
+        return {}
+    all_rows = [row for receipt in receipts for row in receipt["roots"]]
+    relocations: dict[str, str] = {}
+    for row in all_rows:
+        if not any(
+            _attempt_reference_matches(item, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id)
+            for item in row["registered_by"]
+        ):
+            continue
+        state = _supersession_row_state(row, all_rows)
+        if state == "taken_over":
+            # 接管那一行的 registered_by 也会列出本 attempt，由它给出映射。
+            continue
+        if state == "pending":
+            continue
+        source = str(row["logical_root"])
+        target = str(row["archived_logical_root"])
+        if relocations.get(source, target) != target:
+            raise ConfigurationError(f"同一证据根被多张取代收据映射到不同目录：{source}")
+        relocations[source] = target
+    return relocations
 
 
 def _evidence_conflict_quarantines(campaign_dir: Path) -> list[dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """读取并逐项核对证据根冲突隔离收据链（序号连续、previous 成链、自摘要、Campaign 一致、处置闭集）。"""
 
-    del campaign_dir
-    raise _pending("_evidence_conflict_quarantines", "B2-07（seal 链幂等与四阶段化）")
+    directory = campaign_dir / EVIDENCE_CONFLICT_QUARANTINE_DIR
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("证据根冲突隔离收据目录不可信。")
+    indexed: list[tuple[int, Path]] = []
+    for child in directory.iterdir():
+        match = EVIDENCE_CONFLICT_QUARANTINE_RE.fullmatch(child.name)
+        if match is None:
+            raise ConfigurationError(f"证据根冲突隔离目录含非收据条目：{child.name}")
+        indexed.append((int(match.group(1)), child))
+    if not indexed:
+        return []
+    campaign_id = _read_json(campaign_dir / "campaign.json", "Campaign 核心清单").get("campaign_id")
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for position, (index, path) in enumerate(sorted(indexed), start=1):
+        if index != position or path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"证据根冲突隔离收据序号不连续或路径不可信：{path.name}")
+        receipt = _read_json(path, "证据根冲突隔离收据")
+        unsigned = {key: value for key, value in receipt.items() if key != "quarantine_sha256"}
+        attempts = receipt.get("attempts")
+        if (
+            receipt.get("schema_version") != EVIDENCE_CONFLICT_QUARANTINE_SCHEMA
+            or receipt.get("campaign_id") != campaign_id
+            or receipt.get("index") != index
+            or receipt.get("previous_quarantine_sha256") != previous
+            or not isinstance(attempts, list)
+            or not attempts
+            or not isinstance(receipt.get("conflicts"), list)
+            or not receipt["conflicts"]
+            or _fingerprint(unsigned) != receipt.get("quarantine_sha256")
+        ):
+            raise ConfigurationError(f"证据根冲突隔离收据形态、成链或自摘要不一致：{path.name}")
+        for item in attempts:
+            if not isinstance(item, Mapping) or item.get("disposition") not in EVIDENCE_CONFLICT_DISPOSITIONS:
+                raise ConfigurationError(f"证据根冲突隔离收据 {path.name} 的处置非法。")
+            _validate_attempt_reference(
+                {key: item.get(key) for key in _ATTEMPT_REFERENCE_FIELDS}, f"证据根冲突隔离收据 {path.name}"
+            )
+        previous = str(receipt["quarantine_sha256"])
+        chain.append(receipt)
+    return chain
 
 
 def _conflict_quarantined_attempts(campaign_dir: Path) -> set[tuple[str, str | None, str]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """被证据根冲突隔离的 attempt（phase, candidate_id, attempt_id）：永不 seal、永不复用，续跑全部重跑。"""
 
-    del campaign_dir
-    raise _pending("_conflict_quarantined_attempts", "B2-07（seal 链幂等与四阶段化）")
+    return {
+        (str(item["phase"]), item.get("candidate_id"), str(item["attempt_id"]))
+        for receipt in _evidence_conflict_quarantines(campaign_dir)
+        for item in receipt["attempts"]
+    }
 
 
 def _attempt_conflict_quarantine_receipt(
@@ -3200,10 +3486,13 @@ def _attempt_conflict_quarantine_receipt(
     candidate_id: str | None,
     attempt_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """覆盖该 attempt 的最早一份证据根冲突隔离收据及其条目；没有被隔离时返回 None。"""
 
-    del campaign_dir, phase, candidate_id, attempt_id
-    raise _pending("_attempt_conflict_quarantine_receipt", "B2-07（seal 链幂等与四阶段化）")
+    for receipt in _evidence_conflict_quarantines(campaign_dir):
+        for item in receipt["attempts"]:
+            if _attempt_reference_matches(item, phase=phase, candidate_id=candidate_id, attempt_id=attempt_id):
+                return receipt, dict(item)
+    return None
 
 
 # B2-08（VC-1 恢复接入共享对账）
@@ -3866,32 +4155,42 @@ def _scenario_job_execution_contract(payload: Mapping[str, Any]) -> dict[str, An
     return claude_upgrade_plan.scenario_job_execution_contract(payload)
 
 
-def scan_evidence(*arguments: Any, **options: Any) -> Any:
-    """evidence 根：扫描取证证据（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+# evidence 根（B2-07）：只转调 ``claude_upgrade_evidence`` 的证据语义，不读总计划、不打开 Store、不写文件；seal 链的控制
+# 流程（锁、总计划、Store 写入、checkpoint、计时账本）在 ``claude_upgrade_seal``。改控制流程只是 control 变化；evidence
+# 闭包涉及的模块集合由 ``test_claude_upgrade_seal`` 锁定。签名与 Codex 不同（Codex 的同名根是整个 seal 子命令），这几个
+# 根不在编排器服务面合同里。
 
-    del arguments, options
-    raise _pending("scan_evidence", "B2-07（seal 链幂等与四阶段化）")
+
+def scan_evidence(paths: Iterable[Path], label: str, *, base: Path) -> dict[str, Any]:
+    """evidence 根：在证据根里找全部 probe 目录，归一成有效连接序列与全 host／path 出站面（路径相对宿主数据根 ``base``）。"""
+
+    from tools.official_client_capture import claude_upgrade_evidence
+
+    return claude_upgrade_evidence.scan_relay_evidence(paths, label, base=base)
 
 
-def _evidence_inventory(*arguments: Any, **options: Any) -> Any:
-    """evidence 根：证据清单（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+def _evidence_inventory(roots: Iterable[Path], *, base: Path) -> dict[str, Any]:
+    """evidence 根：seal 预览阶段唯一一次深度扫描（逐文件字节数与 SHA-256，路径相对宿主数据根 ``base``）。"""
 
-    del arguments, options
-    raise _pending("_evidence_inventory", "B2-07（seal 链幂等与四阶段化）")
+    from tools.official_client_capture import claude_upgrade_evidence
+
+    return claude_upgrade_evidence.evidence_inventory(roots, base=base)
 
 
 def _finalize_scenario_receipt(*arguments: Any, **options: Any) -> Any:
-    """evidence 根：场景收据定稿（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+    """evidence 根：场景真实性收据定稿。Claude 场景清单不登记场景收据（``required_scenario_receipts`` 恒为空，B2-05），
+    封存时没有收据可定稿；保留这个根只为与 Codex 的 evidence 根名单一致，调用即失败关闭。"""
 
     del arguments, options
-    raise _pending("_finalize_scenario_receipt", "B2-07（seal 链幂等与四阶段化）")
+    raise ConfigurationError("Claude 场景清单不登记场景真实性收据（required_scenario_receipts 恒为空），没有收据可定稿。")
 
 
-def _seal_capture_attempt(*arguments: Any, **options: Any) -> Any:
-    """evidence 根：封存取证 attempt（Claude 编排器尚未实现，由 B2-07（seal 链幂等与四阶段化） 落实）。"""
+def _seal_capture_attempt(view: Mapping[str, Any], *, inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """evidence 根：由证据视图确定性生成封存草稿；给出深度扫描清单时绑定摘要并算出 EvidencePackage v3 与 Store 写入计划。"""
 
-    del arguments, options
-    raise _pending("_seal_capture_attempt", "B2-07（seal 链幂等与四阶段化）")
+    from tools.official_client_capture import claude_upgrade_evidence
+
+    return claude_upgrade_evidence.build_seal_drafts(view, inventory=inventory)
 
 
 def compare_campaign(*arguments: Any, **options: Any) -> Any:
@@ -3916,6 +4215,7 @@ def accept_campaign(*arguments: Any, **options: Any) -> Any:
 # ``plan`` 已由 B2-05 落实展开与校验（见 ``_plan_command``），``import-predecessor-evidence`` 已由 B2-09 落实（见
 # ``_import_predecessor_command``），不在此表。
 CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
+    # run 由 B2-06、seal 由 B2-07 落实（见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
     "classify": ("VC-2 规则分类", "B3-02（VC-2 分类 producer）"),
     "prepare-profile": ("VC-3 准备画像草案", "B3-03（VC-3 画像 producer）"),
@@ -3925,7 +4225,9 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
     "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
     "accept": ("逐规则正式验收门禁", "B4-06（accept 门禁 Claude 版）"),
-    "harden-evidence-permissions": ("证据权限收口", "B2-07（seal 链幂等与四阶段化）"),
+    # Claude 的 run 已内置 Job 级与 attempt 级两级收口（B2-06），没有需要事后补做收口的历史 attempt；独立补做入口只在恢复链
+    # 需要时出现，随 B2-08 定（B2-07 汇报偏离项）。
+    "harden-evidence-permissions": ("证据权限收口", "B2-08（VC-1 恢复接入共享对账）"),
     "wire-transition-intent": ("wire 层变化的两阶段过渡：意图", "B2-08（VC-1 恢复接入共享对账）"),
     "wire-transition-final": ("wire 层变化的两阶段过渡：终态", "B2-08（VC-1 恢复接入共享对账）"),
     "reconcile-supervisor-run": ("对账父监督器运行", "B2-08（VC-1 恢复接入共享对账）"),
@@ -4224,10 +4526,12 @@ def _build_parser() -> argparse.ArgumentParser:
         if name in {"capture-official", "capture-candidate"}:
             target.add_argument("capture_action", choices=("run", "seal"))
         if name == "capture-official":
-            # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数由 B2-07 增加。
+            # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数（B2-07）：attempt、批准摘要与静态输入。
             from tools.official_client_capture import claude_upgrade_capture
+            from tools.official_client_capture import claude_upgrade_seal
 
             claude_upgrade_capture.add_capture_official_run_arguments(target)
+            claude_upgrade_seal.add_seal_arguments(target)
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
     return parser
@@ -4314,8 +4618,8 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
-    import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），其余 Claude
-    专属子命令在动作体落实前报未实现。
+    import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
+    seal 封存官方证据（B2-07），其余 Claude 专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
@@ -4343,6 +4647,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_capture
 
             result, return_code = claude_upgrade_capture.capture_official_run_command(arguments)
+        elif arguments.command == "capture-official" and arguments.capture_action == "seal":
+            from tools.official_client_capture import claude_upgrade_seal
+
+            result, return_code = claude_upgrade_seal.seal_command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

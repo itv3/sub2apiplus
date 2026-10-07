@@ -644,8 +644,9 @@ class FormalRunTests(CaptureFixture):
             self.assertEqual(claude_upgrade._active_unsealed_attempts(campaign, "official"), [f"official:{result['attempt_id']}"])
             self.assertEqual(len(claude_upgrade._ordered_capture_attempts(campaign, "official", None)), 1)
             self.assertEqual([item[2].name for item in claude_upgrade._campaign_attempt_roots(campaign)], [result["attempt_id"]])
-            with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B2-07"):
-                claude_upgrade._load_capture_attempt(campaign, "official", None, result["attempt_id"])
+            # 默认重放 run 末权限收口（B2-07 落实 _replay_attempt_evidence_permissions），与只读核对状态得到同一份收据。
+            replayed_root, replayed = claude_upgrade._load_capture_attempt(campaign, "official", None, result["attempt_id"])
+            self.assertEqual((replayed_root, replayed["attempt_digest"]), (attempt_root, attempt["attempt_digest"]))
         code, _again, stderr = self.run_formal(campaign)
         self.assertEqual(code, 1)
         self.assertIn("未封存", stderr)

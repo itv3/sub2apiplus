@@ -29,6 +29,10 @@ COPIED = (
     "_read_campaign_lease", "CampaignLease", "_campaign_lock", "_campaign_operation_lease", "_write_campaign_lease_stop_once",
     "_validate_campaign_lease_stop_receipt", "_lease_identity_matches", "_campaign_coordinates", "_require_formal_campaign",
     "_campaign_effective_tool_identity", "_campaign_tool_evolutions", "_git_commit",
+    # B2-07：证据根取代归档与冲突隔离的读取（服务面四个成员与它们的辅助函数）
+    "_attempt_reference_matches", "_validate_attempt_reference", "_evidence_root_supersessions", "_supersession_row_state",
+    "_evidence_root_relocations", "_evidence_conflict_quarantines", "_conflict_quarantined_attempts",
+    "_attempt_conflict_quarantine_receipt",
 )
 
 
@@ -90,8 +94,8 @@ class SurfaceContractTests(unittest.TestCase):
             claude_upgrade.campaign_status(Path("/nonexistent"))
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_stage_result：由 B3-01"):
             claude_upgrade._load_stage_result(Path("/nonexistent"), "capture-official")
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"scan_evidence：由 B2-07"):
-            claude_upgrade.scan_evidence(Path("/nonexistent"))
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_isolation_invalidated_attempts：由 B2-08"):
+            claude_upgrade._isolation_invalidated_attempts(Path("/nonexistent"))
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
 
 
