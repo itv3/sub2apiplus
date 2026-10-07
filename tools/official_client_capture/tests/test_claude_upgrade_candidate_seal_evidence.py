@@ -41,6 +41,7 @@ import json
 import shutil
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -52,6 +53,7 @@ from tools.official_client_capture import claude_upgrade_capture as capture_modu
 from tools.official_client_capture import claude_upgrade_evaluation_recovery as evaluation_recovery
 from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan as plan
+from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade
@@ -543,6 +545,71 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
 # ---------------------------------------------------------------------------
 # 候选常量与 B4-01a 两边同值
 # ---------------------------------------------------------------------------
+
+
+class PredecessorSealedCoverTests(_CandidateSealCase):
+    """真实四阶段封存产物可证明前序覆盖；后续重绑不改证明，内容或绑定漂移仍拒绝。"""
+
+    def test_real_sealed_cover_replays_source_rebind_and_old_stage_remains_readable(self) -> None:
+        self.seal_candidate()
+        with self.seal_patched():
+            cover = predecessor_sealed.build_cover(self.campaign, CANDIDATE, ATTEMPT)
+            stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
+            self.assertNotIn(predecessor_sealed.STAGE_FIELD, stage)
+            original = predecessor_sealed.verify_cover(cover, required_roots=[self.job_root("candidate-transport-baseline")])
+        self.copy_back("candidate-transport-baseline", f"v4-native-tls-baseline/{evidence.RELAY_MANIFEST_FILENAME}")
+        with self.seal_patched():
+            with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError) as caught:
+                predecessor_sealed.verify_cover(cover)
+            self.assertEqual(caught.exception.failure_class, evidence_manifest.METADATA_DRIFT_FAILURE_CLASS)
+        code, _record, stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 0, stderr)
+        with self.seal_patched():
+            self.assertEqual(predecessor_sealed.verify_cover(cover), original)
+            self.assertEqual(predecessor_sealed.build_cover(self.campaign, CANDIDATE, ATTEMPT), cover)
+
+    def test_cover_refuses_content_change_and_forged_optional_stage_evidence(self) -> None:
+        attempt_root, _client, _sealed = self.seal_candidate()
+        with self.seal_patched():
+            cover = predecessor_sealed.build_cover(self.campaign, CANDIDATE, ATTEMPT)
+            stage_path, stage = candidate_seal.load_round_one_result(self.campaign, CANDIDATE)
+            stage[predecessor_sealed.STAGE_FIELD] = [{"job_id": "forged"}]
+            _write_json(stage_path, stage)
+            # 可选字段被旧合同读侧接受，但不能凭空声称复用了前序。
+            loaded = candidate_seal.load_stage_result(self.campaign, stage_path, CANDIDATE)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "前序封存证据登记"):
+                candidate_seal.verify_sealed_boundary(self.campaign, loaded, attempt_root, candidate_id=CANDIDATE)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "首轮阶段结果"):
+                predecessor_sealed.verify_cover(cover)
+            stage.pop(predecessor_sealed.STAGE_FIELD)
+            _write_json(stage_path, stage)
+            cover = predecessor_sealed.build_cover(self.campaign, CANDIDATE, ATTEMPT)
+        target = self.job_root("candidate-transport-baseline") / "v4-native-tls-baseline" / "results" / "debug.log"
+        target.write_bytes(target.read_bytes() + b"tampered")
+        with self.seal_patched():
+            with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError) as caught:
+                predecessor_sealed.verify_cover(cover)
+            self.assertEqual(caught.exception.failure_class, "evidence-integrity")
+        code, _record, _stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 1)
+
+
+class StepExpectationRelocationTests(unittest.TestCase):
+    def test_only_run_id_uses_original_producer_after_same_campaign_resume(self) -> None:
+        environment = {"RUN_ID": "successor-campaign/current-candidate/probe", "ACCOUNT_ID": "21", "API_KEY_ID": "31",
+                       "RELAY_PORT": "41", "GATEWAY_TRIGGER": "successor-campaign"}
+        job = SimpleNamespace(job_id="candidate-job", steps=[{"probe_id": "probe", "environment": environment}])
+        result = {"disposition": "reused", "reused_from": {
+            "campaign": {"campaign_id": "intermediate-campaign", "candidate_id": "intermediate-candidate"},
+            "producer": {"campaign": {"campaign_id": "original-campaign", "candidate_id": "original-candidate"}},
+        }}
+        actual = candidate_seal._step_expectations(job, result=result, campaign_id="successor-campaign", candidate_id="current-candidate")
+        self.assertEqual(actual["probe"], {"run_id": "original-campaign/original-candidate/probe", "account_id": 21,
+                                          "api_key_id": 31, "relay_port": 41, "trigger": "successor-campaign"})
+        del result["reused_from"]["campaign"]
+        self.assertEqual(candidate_seal._step_expectations(job, result=result, campaign_id="successor-campaign", candidate_id="current-candidate"), actual)
+        self.assertEqual(environment["RUN_ID"], "successor-campaign/current-candidate/probe")
+        self.assertEqual(candidate_seal._step_expectations(job)["probe"]["run_id"], environment["RUN_ID"])
 
 
 class CandidateConstantTests(unittest.TestCase):

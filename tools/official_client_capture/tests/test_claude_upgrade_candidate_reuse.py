@@ -1,4 +1,4 @@
-"""Claude 后继候选复用（Claude 升级控制面设计 B4-01 c3a：恢复侧、未封存来源）。
+"""Claude 后继候选复用（Claude 升级控制面设计 B4-01 c3：未封存和已封存来源）。
 
 沿用 c1 候选续跑的夹具（``test_claude_upgrade_candidate_recovery.CandidateRecoveryFixture``：宿主脚本替身、候选中继替身、
 网关事实与激活事实替身、正式入口门替身、官方已封存），在同一个宿主数据根里建两个 Formal Campaign：前序 P 先跑出一个等待
@@ -7,9 +7,10 @@
 
 覆盖：预览零写入零请求、批准后全部复用零请求（复用结果改绑执行摘要、``reused_from.campaign``／``producer.campaign``、
 证据根仍指向前序、复用来源收据、无连续性核对）、执行定义或工具依赖变化的 Job 进执行集合并核连续性、批准摘要漂移与
-各条拒绝（同 Campaign 跨 revision、没冻结前序、前序 ID 或 Store 身份不符、来源不是唯一待封存、已封存来源待 c3b、身份
+各条拒绝（同 Campaign 跨 revision、没冻结前序、前序 ID 或 Store 身份不符、来源不是唯一待封存、伪造已封存结果、身份
 不同、已有 attempt、缺参数、执行集合非空未确认真实请求）、复用 attempt 之后的承接链读法；以及项目总账跨 Campaign 的
-重复请求身份键不计数。
+重复请求身份键不计数。c3b 另覆盖真实封存清单、前序字节与权限不变、后继独立封存边界、跨 Campaign 后同 Campaign
+续跑继续保留原 producer 与封存覆盖，以及篡改拒绝。
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
 from tools.official_client_capture import claude_upgrade_candidate_reuse as candidate_reuse
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_recovery as recovery
+from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
+from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
@@ -171,6 +175,165 @@ class ReuseAllTests(CandidateReuseFixture):
             return claude_upgrade._load_capture_attempt(source, "candidate", CANDIDATE, attempt_id, _replay_evidence_permissions=False)
 
 
+class SealedReuseTests(CandidateReuseFixture):
+    """真实候选 run 闭环与真实封存清单；阶段结果用满足读侧合同的替身，Store 封存另由候选 seal 测试覆盖。"""
+
+    def sealed_predecessor(self) -> tuple[Path, str]:
+        source, attempt_id = self.predecessor()
+        root = source / "candidates" / CANDIDATE / "attempts" / attempt_id
+        manifest = evidence_manifest.build_evidence_manifest(
+            candidate_seal._sealed_evidence_roots(source, attempt_id, CANDIDATE), checkpoint_path=root / "fixture-seal-checkpoint.json"
+        )
+        manifest_path = root / candidate_seal.SEALED_EVIDENCE_MANIFEST_FILENAME
+        claude_upgrade._secure_write_json_once(manifest_path, manifest)
+        evaluation_path = root / "fixture-evaluation.json"
+        claude_upgrade._secure_write_json_once(evaluation_path, {})
+        stage = {name: None for name in candidate_seal.STAGE_RESULT_FIELDS}
+        stage.update({
+            "schema_version": candidate_seal.STAGE_RESULT_SCHEMA, "client": "claude", "campaign_id": PREDECESSOR,
+            "stage": "capture-candidate", "candidate_id": CANDIDATE, "status": "complete",
+            "attempt": candidate_seal._stage_binding(root / "attempt.json", source),
+            candidate_seal.SEALED_EVIDENCE_MANIFEST_FIELD: candidate_seal._stage_binding(manifest_path, source),
+            candidate_seal.ASSERTION_CONTEXT_FIELD: {
+                candidate_seal.EVALUATION_MANIFEST_FIELD: candidate_seal._stage_binding(evaluation_path, source)
+            },
+            "sealed_at_utc": "2026-10-08T00:00:00Z",
+        })
+        claude_upgrade._secure_write_json_once(candidate_capture.legacy_stage_result_path(source, CANDIDATE), stage)
+        return source, attempt_id
+
+    def source_boundary(self, source: Path, attempt_id: str) -> dict[str, Any]:
+        """同时记录内容与权限／元数据；后继即使 chmod 回同一模式也会改变 ctime，不能漏检。"""
+
+        snapshot = {}
+        for root in candidate_seal._sealed_evidence_roots(source, attempt_id, CANDIDATE):
+            for path in [root, *sorted(root.rglob("*"))] if root.is_dir() else [root]:
+                metadata = path.stat()
+                snapshot[str(path)] = (
+                    metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns,
+                    hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+                )
+        return snapshot
+
+    def test_sealed_source_all_reused_without_touching_predecessor(self) -> None:
+        source, source_attempt = self.sealed_predecessor()
+        campaign = self.successor()
+        before = self.source_boundary(source, source_attempt)
+        calls = len(self.candidate_calls())
+        preview = self.preview(campaign, source, source_attempt)
+        code, resumed, stderr = self.resume_reuse(
+            campaign, source, source_attempt, "--approve-candidate-reuse-sha256", preview["preview_sha256"]
+        )
+        self.assertIsNotNone(resumed, stderr)
+        self.assertEqual((code, resumed["status"]), (2, "awaiting_receipts"), stderr)
+        self.assertEqual(len(self.candidate_calls()), calls)
+        root, attempt = self.load_attempt(campaign, resumed["attempt_id"])
+        self.assertTrue(all(PREDECESSOR not in value for value in attempt["evidence_roots"]))
+        entries = predecessor_sealed.stage_evidence(attempt["results"])
+        self.assertEqual([entry["job_id"] for entry in entries], sorted([LIVE_JOB, REFRESH_JOB]))
+        for entry in entries:
+            cover = entry["producer"][predecessor_sealed.COVER_FIELD]
+            self.assertEqual((cover["campaign"]["campaign_id"], cover["attempt_id"]), (PREDECESSOR, source_attempt))
+            self.assertEqual(
+                next(row for row in preview["result_bindings"] if row["id"] == entry["job_id"])["producer_sha256"],
+                claude_upgrade._fingerprint(entry["producer"]),
+            )
+        with self.reuse_patched():
+            manifest = claude_upgrade.load_campaign_manifest(campaign)
+            self.assertEqual(candidate_seal._verify_predecessor_attempt(campaign, CANDIDATE, attempt, manifest=manifest), entries)
+            # 后继封存清单只含本轮根；候选扫描的旧根由经过核验的前序清单补足。
+            layout = capture._capture_layout(campaign, manifest)
+            documents = predecessor_sealed.verified_manifests(entries, layout)
+            with self.assertRaisesRegex(ConfigurationError, "与前序封存根重叠"):
+                predecessor_sealed.closeout_roots(
+                    [*attempt["results"], {"id": "conflict", "evidence_roots": attempt["results"][0]["evidence_roots"]}], layout
+                )
+            inventory = {"entries": []}
+            for document in documents[:1]:
+                for manifest_root in document["roots"]:
+                    base = Path(manifest_root["path"])
+                    prefix = manifest_root["prefix"] + "/"
+                    for item in document["entries"]:
+                        if item["path"].startswith(prefix):
+                            target = base / item["path"][len(prefix):] if base.is_dir() else base
+                            inventory["entries"].append({"path": target.relative_to(self.data).as_posix(), "sha256": item["sha256"]})
+            job_roots = [capture._host_path(item["evidence_roots"][0], layout).relative_to(self.data).as_posix() for item in attempt["results"]]
+            sealed_path = candidate_seal._seal_evidence_boundary(
+                campaign, root, root / "seal-fixture", candidate_id=CANDIDATE, data_root=self.data,
+                inventory=inventory, job_roots=job_roots, predecessor_entries=entries,
+            )
+            self.assertTrue(sealed_path.is_file())
+            self.assertTrue(all(PREDECESSOR not in item["path"] for item in json.loads(sealed_path.read_text())["roots"]))
+            stage = {
+                candidate_seal.SEALED_EVIDENCE_MANIFEST_FIELD: candidate_seal._stage_binding(sealed_path, campaign),
+                predecessor_sealed.STAGE_FIELD: entries,
+            }
+            candidate_seal.verify_sealed_boundary(campaign, stage, root, candidate_id=CANDIDATE)
+            del stage[predecessor_sealed.STAGE_FIELD]
+            with self.assertRaisesRegex(ConfigurationError, "前序封存证据登记"):
+                candidate_seal.verify_sealed_boundary(campaign, stage, root, candidate_id=CANDIDATE)
+        self.assertEqual(self.source_boundary(source, source_attempt), before)
+
+    def test_cross_campaign_then_same_campaign_resume_preserves_cover(self) -> None:
+        source, source_attempt = self.sealed_predecessor()
+        campaign = self.successor()
+        before = self.source_boundary(source, source_attempt)
+        with PartialReuseTests.changed_dependency(self):
+            preview = self.preview(campaign, source, source_attempt)
+            self.set_candidate_control({"precheck_fail": [REFRESH_PROBE]})
+            with mock.patch.object(claude_upgrade, "JOB_RETRY_LIMIT", 0):
+                code, first, stderr = self.resume_reuse(
+                    campaign, source, source_attempt, "--approve-candidate-reuse-sha256", preview["preview_sha256"], "--acknowledge-live-requests"
+                )
+            self.assertIsNotNone(first, stderr)
+            self.assertEqual((code, first["status"]), (2, "failed"), stderr)
+            self.set_candidate_control({})
+            _first_root, first_attempt = self.load_attempt(campaign, first["attempt_id"])
+            initial = next(item for item in first_attempt["results"] if item["id"] == LIVE_JOB)["reused_from"]["producer"]
+            plan = self.plan(campaign, first["attempt_id"])
+            self.assertEqual((plan["reuse_job_ids"], plan["execute_job_ids"]), ([LIVE_JOB], [REFRESH_JOB]))
+            approval = self.approve(campaign, first["attempt_id"], plan)
+            code, second, stderr = self.resume(campaign, "--rerun-failed", "--recovery-preview", str(approval), "--acknowledge-live-requests")
+        self.assertIsNotNone(second, stderr)
+        self.assertEqual((code, second["status"]), (2, "awaiting_receipts"), stderr)
+        second_root, second_attempt = self.load_attempt(campaign, second["attempt_id"])
+        reused = next(item for item in second_attempt["results"] if item["id"] == LIVE_JOB)
+        self.assertNotIn("campaign", reused["reused_from"])
+        self.assertEqual(recovery._producer(campaign, second_root, reused), initial)
+        with self.reuse_patched():
+            manifest = claude_upgrade.load_campaign_manifest(campaign)
+            job = next(job for job in claude_upgrade._campaign_jobs(campaign, manifest, "candidate", candidate_id=CANDIDATE) if job.job_id == LIVE_JOB)
+            expectations = candidate_seal._step_expectations(job, result=reused, campaign_id=SUCCESSOR, candidate_id=CANDIDATE)
+            self.assertTrue(all(PREDECESSOR in row["run_id"] and SUCCESSOR not in row["run_id"] for row in expectations.values()))
+        self.assertEqual(self.source_boundary(source, source_attempt), before)
+
+    def test_tampered_cover_stage_or_uncovered_root_is_refused(self) -> None:
+        source, source_attempt = self.sealed_predecessor()
+        with self.reuse_patched():
+            cover = predecessor_sealed.build_cover(source, CANDIDATE, source_attempt)
+            bad = json.loads(json.dumps(cover))
+            bad["stage_result"]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(ConfigurationError, "首轮阶段结果"):
+                predecessor_sealed.verify_cover(bad)
+            with self.assertRaisesRegex(ConfigurationError, "未覆盖"):
+                predecessor_sealed.verify_cover(cover, required_roots=[source / "campaign.json"])
+            with self.assertRaisesRegex(ConfigurationError, "合同非法"):
+                predecessor_sealed.verify_cover({**cover, "unknown": True})
+        campaign = self.successor()
+        preview = self.preview(campaign, source, source_attempt)
+        root = source / "candidates" / CANDIDATE / "attempts" / source_attempt
+        attempt = json.loads((root / "attempt.json").read_text())
+        with self.reuse_patched():
+            layout = capture._capture_layout(source, claude_upgrade.load_campaign_manifest(source))
+            target = capture._host_path(attempt["results"][0]["relay_checks"][0]["manifest"]["path"], layout)
+        target.write_bytes(target.read_bytes() + b"tampered")
+        calls = len(self.candidate_calls())
+        code, _result, _stderr = self.resume_reuse(campaign, source, source_attempt, "--approve-candidate-reuse-sha256", preview["preview_sha256"])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.candidate_calls()), calls)
+        self.assertFalse((campaign / "candidates" / CANDIDATE / "attempts").exists())
+
+
 class PartialReuseTests(CandidateReuseFixture):
     def changed_dependency(self):
         original = capture._job_tool_dependency_files
@@ -274,11 +437,11 @@ class ReuseRefusalTests(CandidateReuseFixture):
     def test_source_must_be_unique_unsealed_awaiting(self) -> None:
         source, source_attempt = self.predecessor()
         campaign = self.successor()
-        # 已封存的来源属于 c3b。
+        # 伪造的空阶段结果不能冒充已封存来源。
         result_path = candidate_capture.legacy_stage_result_path(source, CANDIDATE)
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text("{}", encoding="utf-8")
-        self.assert_refused(campaign, source, source_attempt, "B4-01 c3b")
+        self.assert_refused(campaign, source, source_attempt, "合同")
         result_path.unlink()
         # 来源有 seal 失败收据。
         failure = source / "candidates" / CANDIDATE / "attempts" / source_attempt / candidate_reuse.SEAL_FAILURE_FILENAME

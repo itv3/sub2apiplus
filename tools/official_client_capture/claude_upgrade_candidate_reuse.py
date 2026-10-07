@@ -24,9 +24,9 @@
   campaign_identity_sha256}``）；来源目录是同一宿主数据根下的另一个 Campaign，``campaign.json`` 的 ID 与它受管 Store 的
   Campaign 身份摘要都等于这份冻结绑定（复用来源在 VC-0 建 Campaign 时就定了，不能事后挑选）；两边 ``capture_root`` 相同
   （证据根的容器坐标映射到同一宿主路径）。前序 Campaign 没有未隔离的环境污染。
-* **来源 attempt**（c3a 只认未封存）：前序该候选没有阶段结果；attempt 是 ``awaiting_receipts``、是前序唯一待封存的候选
-  attempt、没有失败 Job、没有被隔离、冲突隔离或按工具演进作废对账、没有 ``seal-failure.json``，网关隔离恢复核验
-  ``passed``（激活事实副本由 attempt 读侧强制）。
+* **来源 attempt**：未封存时必须是前序唯一待封存的候选 attempt；已封存时必须由首轮阶段结果绑定，封存清单加重绑链完整，
+  且前序没有其它待封存候选。两种来源均要求 ``awaiting_receipts``、没有失败 Job、没有被隔离、冲突隔离或按工具演进作废
+  对账、没有 ``seal-failure.json``，网关隔离恢复核验 ``passed``（激活事实副本由 attempt 读侧强制）。
 * **候选身份**：``REUSE_IDENTITY_FIELDS``（跨 Campaign 不变的子集）逐项相等——目标版本与官方二进制、采集镜像与容器、
   官方客户端路径、网关坐标（服务／keeper／postgres、账号、API Key）、候选用途、部署版本、候选镜像引用／image ID／
   manifest 摘要、源码树摘要与提交、画像／Release／wire 摘要。不比 Campaign 专属字段（revision、构建收据绑定、Store 的
@@ -34,7 +34,7 @@
 * **逐 Job**（满足才复用，其余进执行集合并在预览里列原因）：① 来源结果 complete；② 把当前 Job 的执行定义里的
   Campaign／候选 ID 换回来源坐标后，执行摘要等于来源结果记录的摘要（同 Codex ``_successor_job_execution_matches``；脚本、
   参数、环境或证据根的其他变化都会使摘要不等）；③ 来源结果的 ``tool_dependency_files`` 逐文件等于当前工具算出的值；
-  ④ 证据逐项复核（c1 的 ``_verify_reusable_evidence``：Job 闭环收据、Job 级权限收口重放、relay 清单、逐步恢复报告），
+  ④ 证据逐项复核（c1 的 ``_verify_reusable_evidence``：Job 闭环收据、Job 级权限收口或前序封存覆盖、relay 清单、逐步恢复报告），
   不通过即失败关闭，不退化为重采。
 * **执行集合非空时**另核连续性（与 c1 同一判据：来源 attempt 的 after 探针、网关 after 快照分别等于本轮 before 探针与
   网关 before 快照）；执行集合为空时不发任何请求、不新增证据，不做连续性核对（``recovery.continuity`` 记 null），被复用
@@ -50,6 +50,9 @@
   ``_rebase_reused_result``），``evidence_roots`` 不变（仍指向前序的证据根）。
 * ``producer`` 始终指向最初执行它的 attempt；在别的 Campaign 时带 ``campaign``（同上四项）与 ``execution_sha256``（产出时的
   执行摘要，Job 闭环收据按它核对）。后来的同 Campaign 续跑与 seal 的坐标迁移都读 ``producer.campaign``。
+* 已封存来源另带 ``producer.predecessor_sealed_cover``：绑定来源总计划、首轮阶段结果与封存清单。后续只读重放该清单自己的
+  重绑链，前序根不进入后继权限收口。批准摘要同时绑定 producer 摘要；seal 只迁移 ``RUN_ID``，后继阶段结果以可选字段
+  ``predecessor_sealed_evidence`` 登记这份覆盖，旧结果不带该字段仍可读（B4-01 c3b）。
 * 新 attempt 根下与预约一起原子发布 ``candidate-reuse-source.json``（``claude-upgrade-candidate-reuse-source/v1``）：批准的
   预览全文、批准摘要与时刻、复用与执行集合、来源 attempt 的候选网关运行条件与恢复核验绑定；attempt 的 ``recovery.source``
   绑定它，``recovery.source_campaign_id`` 记来源 Campaign。
@@ -271,12 +274,14 @@ def source_context(campaign_dir: Path, manifest: Mapping[str, Any], arguments: a
         raise ConfigurationError("复用来源 Campaign 与当前 Campaign 的宿主数据根或 capture_root 不同，证据根坐标无法一一对应。")
     if claude_upgrade._campaign_contamination_records(source_dir, _manifest=source_manifest):
         raise ConfigurationError("复用来源 Campaign 有未隔离的环境污染：先在前序完成环境隔离，再复用其候选证据。")
-    # 来源 attempt（c3a 只认未封存）。
+    # 已封存来源改按封存清单加重绑链核对；未封存来源仍逐 Job 重放旧收口。
     from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+    from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 
     result_path = candidate_capture.legacy_stage_result_path(source_dir, source_candidate)
+    sealed_cover = None
     if result_path.exists() or result_path.is_symlink():
-        raise claude_upgrade._pending("复用已封存的前序候选证据", "B4-01 c3b（已封存来源与 seal 坐标迁移）")
+        sealed_cover = predecessor_sealed.build_cover(source_dir, source_candidate, source_attempt_id)
     key = (CANDIDATE_PHASE, source_candidate, source_attempt_id)
     if key in capture._invalidated_attempts(source_dir) or key in claude_upgrade._conflict_quarantined_attempts(source_dir):
         raise ConfigurationError("复用来源 attempt 已被环境隔离或证据根冲突隔离作废，结果永不复用。")
@@ -294,8 +299,8 @@ def source_context(campaign_dir: Path, manifest: Mapping[str, Any], arguments: a
     if claude_upgrade._failed_job_ids(source_attempt.get("results")):
         raise ConfigurationError("复用来源 attempt 仍有失败 Job，不是完整的待封存 attempt。")
     active = claude_upgrade._active_unsealed_attempts(source_dir, CANDIDATE_PHASE, _manifest=source_manifest)
-    if active != [f"{source_candidate}:{source_attempt_id}"]:
-        raise ConfigurationError(f"复用来源不是前序唯一的待封存候选 attempt（前序待封存：{active}）。")
+    if active != ([] if sealed_cover is not None else [f"{source_candidate}:{source_attempt_id}"]):
+        raise ConfigurationError(f"复用来源的封存状态与前序待封存候选不一致（未封存来源须唯一，已封存来源须无待封存；前序待封存：{active}）。")
     recovery = source_attempt.get("gateway_recovery")
     if not isinstance(recovery, Mapping) or recovery.get("status") != "passed":
         raise ConfigurationError("复用来源 attempt 的网关隔离恢复核验没有通过，结果不复用。")
@@ -311,6 +316,7 @@ def source_context(campaign_dir: Path, manifest: Mapping[str, Any], arguments: a
         "source_attempt": dict(source_attempt),
         "source_campaign": _campaign_object(source_dir, source_manifest, source_candidate),
         "store_identity_sha256": str(predecessor.get("campaign_identity_sha256")),
+        "source_sealed_cover": sealed_cover,
     }
 
 
@@ -349,11 +355,15 @@ def cross_campaign_producer(context: Mapping[str, Any], result: Mapping[str, Any
     """来源结果最初的产出（见文件头第三节）：在来源 Campaign 里产出的补上 ``campaign`` 与 ``execution_sha256``。"""
 
     from tools.official_client_capture import claude_upgrade_recovery as recovery
+    from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 
     producer = recovery._producer(Path(context["source_dir"]), Path(context["source_root"]), result)
     if "campaign" not in producer:
         producer["campaign"] = dict(context["source_campaign"])
         producer["execution_sha256"] = str(result.get("execution_sha256"))
+    # 承接链优先保留最初的封存覆盖；直接来源自身封存时，只给尚无覆盖的结果补上证明。
+    if predecessor_sealed.COVER_FIELD not in producer and context.get("source_sealed_cover") is not None:
+        producer[predecessor_sealed.COVER_FIELD] = copy.deepcopy(context["source_sealed_cover"])
     return producer
 
 
@@ -465,6 +475,8 @@ def build_preview(
             "id": job_id,
             "source_result_sha256": claude_upgrade._fingerprint(dict(plan["source_results"][job_id])),
             "evidence_roots": sorted(str(item) for item in plan["source_results"][job_id].get("evidence_roots") or []),
+            # 把本次新增的来源封存覆盖一并冻结进人工批准摘要，不能只绑定前序原始结果。
+            "producer_sha256": claude_upgrade._fingerprint(plan["reuse_results"][job_id]["reused_from"]["producer"]),
         }
         for job_id in plan["reuse_job_ids"]
     ]

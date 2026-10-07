@@ -284,6 +284,10 @@ def _producer(campaign_dir: Path, source_root: Path, result: Mapping[str, Any]) 
         if "campaign" in producer:
             carried["campaign"] = dict(producer["campaign"])
             carried["execution_sha256"] = str(producer.get("execution_sha256"))
+        from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
+
+        if predecessor_sealed.COVER_FIELD in producer:
+            carried[predecessor_sealed.COVER_FIELD] = copy.deepcopy(producer[predecessor_sealed.COVER_FIELD])
         return carried
     closure = result.get("job_closure")
     if not isinstance(closure, Mapping) or not isinstance(closure.get("path"), str):
@@ -348,13 +352,23 @@ def _verify_reusable_evidence(
         raise ConfigurationError(f"复用 Job {job_id} 的 Job 级收口绑定非法。")
     roots = [job_root / "evidence", job_root / "logs", *(Path(str(item)) for item in closure.get("host_evidence_roots") or [])]
     try:
-        codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
-            job_root,
-            roots,
-            {"path": receipt_name, "sha256": closeout.get("sha256"), "bytes": closeout.get("bytes")},
-            managed_data_root=layout.host_data_root,
-            logical_runs_roots=(layout.host_runs_root,),
-        )
+        from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
+
+        if predecessor_sealed.COVER_FIELD in producer:
+            if phase != CANDIDATE_PHASE or origin is None:
+                raise ConfigurationError("前序封存覆盖证明只能用于带产出 Campaign 的候选结果。")
+            predecessor_sealed.verify_cover(
+                producer[predecessor_sealed.COVER_FIELD],
+                required_roots=[*roots, *(capture._host_path(str(root), layout) for root in result.get("evidence_roots") or [])],
+            )
+        else:
+            codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+                job_root,
+                roots,
+                {"path": receipt_name, "sha256": closeout.get("sha256"), "bytes": closeout.get("bytes")},
+                managed_data_root=layout.host_data_root,
+                logical_runs_roots=(layout.host_runs_root,),
+            )
     except (OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
         raise ConfigurationError(f"复用 Job {job_id} 的 Job 级收口重放未通过（证据在收口之后被改动）：{error}") from error
     for row in result.get("relay_checks") or []:
@@ -2256,14 +2270,14 @@ def _run_recovery_attempt(
             capture_drifted=attempt_drift,
         )
         execution_error = execution_error or fields_error
-    container_roots = sorted(
-        {str(root) for result in results for root in [*(result.get("evidence_roots") or []), *(result.get("archived_evidence_roots") or [])]}
-    )
-    external_roots = capture._external_host_roots(container_roots, layout)
-    closeout_roots = [evidence_root, log_root, *external_roots]
+    closeout_roots = [evidence_root, log_root]
     permission_binding: dict[str, Any] | None = None
     permission_error: BaseException | None = None
     try:
+        from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
+
+        container_roots = predecessor_sealed.closeout_roots(results, layout, owned_roots=closeout_roots)
+        closeout_roots.extend(capture._external_host_roots(container_roots, layout))
         receipt_path, _receipt = codex_upgrade_evidence_permissions.close_evidence_permissions(
             attempt_root, closeout_roots, managed_data_root=layout.host_data_root, logical_runs_roots=(layout.host_runs_root,)
         )

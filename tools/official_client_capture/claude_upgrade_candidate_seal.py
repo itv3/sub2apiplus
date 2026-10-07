@@ -80,6 +80,7 @@ from tools.official_client_capture import claude_upgrade_boundary_checks
 from tools.official_client_capture import claude_upgrade_evidence
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import claude_upgrade_plan
+from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
@@ -898,6 +899,7 @@ STAGE_RESULT_FIELDS = frozenset(
     }
 )
 ROUND_RESULT_FIELDS = STAGE_RESULT_FIELDS | {"validation_round", "round_one_result"}
+OPTIONAL_STAGE_RESULT_FIELDS = frozenset({predecessor_sealed.STAGE_FIELD})
 
 
 def add_seal_arguments(target: Any) -> None:
@@ -1091,10 +1093,27 @@ def _verify_restoration_checks(job: Any, result: Mapping[str, Any], layout: Any,
             raise ConfigurationError(f"候选 Job {job.job_id} 的 {row['probe_id']} 恢复报告缺失、未通过或在 run／seal 之间漂移。")
 
 
-def _step_expectations(job: Any) -> dict[str, dict[str, Any]]:
-    """候选步骤冻结的 run-id、候选账号与 API Key 的 ID、中继端口与触发方式（来自已展开步骤的 environment）。"""
+def _step_expectations(
+    job: Any, *, result: Mapping[str, Any] | None = None, campaign_id: str | None = None, candidate_id: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """候选步骤冻结的运行条件；跨 Campaign 复用只把 RUN_ID 迁回最初生产者坐标，其它环境值保持当前冻结值。"""
 
     expectations: dict[str, dict[str, Any]] = {}
+    replacements: list[tuple[str, str]] = []
+    if result is not None and result.get("disposition") == "reused":
+        reused = result.get("reused_from")
+        producer = reused.get("producer") if isinstance(reused, Mapping) else None
+        origin = producer.get("campaign") if isinstance(producer, Mapping) else None
+        if origin is not None:
+            if not isinstance(origin, Mapping) or not campaign_id or not candidate_id:
+                raise ConfigurationError("跨 Campaign 候选 seal 缺少最初生产者坐标。")
+            for key, current in (("campaign_id", campaign_id), ("candidate_id", candidate_id)):
+                source = origin.get(key)
+                if not isinstance(source, str) or not _capture().SAFE_ID_RE.fullmatch(source):
+                    raise ConfigurationError("跨 Campaign 候选 seal 的最初生产者坐标非法。")
+                if source != current:
+                    replacements.append((current, source))
+            replacements.sort(key=lambda item: len(item[0]), reverse=True)
     for step in job.steps:
         environment = step.get("environment") if isinstance(step, Mapping) else None
         if not isinstance(environment, Mapping):
@@ -1105,8 +1124,11 @@ def _step_expectations(job: Any) -> dict[str, dict[str, Any]]:
             if not value.isdecimal() or int(value) <= 0:
                 raise ConfigurationError(f"候选 Job {job.job_id}／{step['probe_id']} 的 {key} 不是正整数（候选 Campaign 必须登记候选账号与 API Key）。")
             numbers[name] = int(value)
+        run_id = str(environment.get("RUN_ID", ""))
+        for old, new in replacements:
+            run_id = run_id.replace(old, new)
         expectations[str(step["probe_id"])] = {
-            "run_id": str(environment.get("RUN_ID", "")),
+            "run_id": run_id,
             "trigger": str(environment.get("GATEWAY_TRIGGER", "")),
             **numbers,
         }
@@ -1338,7 +1360,7 @@ def _preview_candidate_seal(
                 "job_id": job.job_id,
                 "evidence_root": root.relative_to(data_root).as_posix(),
                 "probe_ids": [str(step["probe_id"]) for step in job.steps],
-                "candidate_steps": _step_expectations(job),
+                "candidate_steps": _step_expectations(job, result=result, campaign_id=str(manifest["campaign_id"]), candidate_id=candidate_id),
             }
         )
     scanned = orchestrator.scan_evidence(roots, claude_upgrade_evidence.CANDIDATE_SIDE, base=data_root)
@@ -1580,12 +1602,15 @@ def _approve_candidate_seal(
     attempt_binding = _stage_binding(attempt_path, campaign_dir)
     if attempt_binding["sha256"] != draft["generation_key"]["attempt"]["sha256"]:
         raise ConfigurationError("attempt 收据与 seal 草稿绑定的摘要不一致。")
+    attempt = orchestrator._read_json(attempt_path, "候选 attempt")
+    predecessor_entries = _verify_predecessor_attempt(campaign_dir, candidate_id, attempt, manifest=manifest)
     sealed_manifest = _seal_evidence_boundary(
         campaign_dir,
         attempt_path.parent,
         seal_dir,
         candidate_id=candidate_id,
         data_root=data_root,
+        predecessor_entries=predecessor_entries,
         inventory=orchestrator._read_json(claude_upgrade_seal._verify_bound_file(campaign_dir, preview["evidence_manifest"], "深度扫描清单"), "深度扫描清单"),
         job_roots=[
             str(job["evidence_root"])
@@ -1649,6 +1674,8 @@ def _approve_candidate_seal(
         "scanned_bytes": int(preview["scanned_bytes"]),
         "sealed_at_utc": orchestrator._utc_now(),
     }
+    if predecessor_entries:
+        payload[predecessor_sealed.STAGE_FIELD] = predecessor_entries
     stage = claude_upgrade_seal._write_once_or_reuse(stage_path, payload, ignore=("sealed_at_utc",))
     return {
         "schema_version": SEAL_RESULT_SCHEMA,
@@ -1691,13 +1718,14 @@ def _load_round_document(
     campaign_id = (manifest or orchestrator._read_json(campaign_dir / "campaign.json", "Campaign 核心清单")).get("campaign_id")
     fields = STAGE_RESULT_FIELDS if validation_round == FIRST_ROUND else ROUND_RESULT_FIELDS
     if (
-        set(stage) != fields
+        not fields <= set(stage) <= fields | OPTIONAL_STAGE_RESULT_FIELDS
         or stage.get("schema_version") != STAGE_RESULT_SCHEMA
         or stage.get("client") != "claude"
         or stage.get("campaign_id") != campaign_id
         or stage.get("stage") != STAGE_NAME
         or stage.get("candidate_id") != candidate_id
         or stage.get("status") != "complete"
+        or (predecessor_sealed.STAGE_FIELD in stage and not isinstance(stage[predecessor_sealed.STAGE_FIELD], list))
         or not orchestrator._is_rfc3339_timestamp(stage.get("sealed_at_utc"))
         or (validation_round != FIRST_ROUND and stage.get("validation_round") != validation_round)
     ):
@@ -1763,7 +1791,11 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
             manifest=manifest,
             validation_round=validation_round,
         )
-        if document["round_one_result"]["sha256"] != round_one_sha256 or document["attempt"] != stage["attempt"]:
+        if (
+            document["round_one_result"]["sha256"] != round_one_sha256
+            or document["attempt"] != stage["attempt"]
+            or document.get(predecessor_sealed.STAGE_FIELD, []) != stage.get(predecessor_sealed.STAGE_FIELD, [])
+        ):
             raise ConfigurationError(f"第 {validation_round} 轮候选阶段结果没有承接这一份第 1 轮结果。")
         latest = document
     return latest
@@ -1801,6 +1833,10 @@ def load_round_one_result(campaign_dir: Path, candidate_id: str, *, manifest: Ma
 #
 # 清单生成时共享模块顺带做的启发式令牌形态扫描（``security.findings``）原样记在清单里，不作批准条件：候选证据的秘密扫描
 # 门禁是中继的逐字节已知秘密扫描与宿主脚本删除秘密文件，已作为 ``secret_scan`` 运行证据进 CandidateEvidencePackage。
+#
+# 后继复用已封存来源（B4-01 c3b）：前序根不进入本轮收口和本轮清单。阶段结果可选的 ``predecessor_sealed_evidence`` 从
+# attempt 结果确定性提取；批准时本轮清单加前序清单与深扫结果逐文件比对，封存读侧同时重放原 Job 闭环、前序清单及重绑链。
+# 没有前序覆盖的旧阶段结果仍按原合同读取，后续门禁轮次必须保留首轮的前序登记。
 
 
 class SealedEvidenceBoundaryError(ConfigurationError):
@@ -1860,26 +1896,32 @@ def _check_sealed_manifest_content(
     *,
     data_root: Path,
     job_roots: Sequence[str],
+    predecessor_manifests: Sequence[Mapping[str, Any]] = (),
 ) -> None:
-    """封存证据清单与预览的深度扫描清单在候选 Job 证据根内逐文件一致（路径集合与摘要），且清单覆盖每个 Job 证据根。"""
+    """本轮与已核验的前序封存清单共同覆盖 Job 根，并与预览深度扫描逐文件一致；相同路径不能有不同内容摘要。"""
 
     sealed: dict[str, str] = {}
     root_paths: list[str] = []
-    for root in manifest["roots"]:
-        base = Path(str(root["path"]))
-        try:
-            root_paths.append(base.relative_to(data_root).as_posix())
-        except ValueError as error:
-            raise ConfigurationError(f"封存证据清单的证据根不在宿主数据根内：{base}") from error
-        prefix = str(root["prefix"])
-        for entry in manifest["entries"]:
-            logical = str(entry["path"])
-            if logical == prefix or logical.startswith(prefix + "/"):
-                relative = logical[len(prefix) + 1 :]
-                # 证据根是单个文件时清单条目记「前缀/文件名」，对应的就是根本身。
-                target = base if base.is_file() else base / relative
-                sealed[target.relative_to(data_root).as_posix()] = str(entry["sha256"])
-    uncovered = sorted(root for root in job_roots if root not in root_paths)
+    for document in (manifest, *predecessor_manifests):
+        for root in document["roots"]:
+            base = Path(str(root["path"]))
+            try:
+                root_paths.append(base.relative_to(data_root).as_posix())
+            except ValueError as error:
+                raise ConfigurationError(f"封存证据清单的证据根不在宿主数据根内：{base}") from error
+            prefix = str(root["prefix"])
+            for entry in document["entries"]:
+                logical = str(entry["path"])
+                if logical == prefix or logical.startswith(prefix + "/"):
+                    relative = logical[len(prefix) + 1 :]
+                    # 证据根是单个文件时清单条目记「前缀/文件名」，对应的就是根本身。
+                    target = base if base.is_file() else base / relative
+                    relative_path = target.relative_to(data_root).as_posix()
+                    digest = str(entry["sha256"])
+                    if relative_path in sealed and sealed[relative_path] != digest:
+                        raise ConfigurationError(f"本轮与前序封存证据清单对同一路径的摘要不一致：{relative_path}")
+                    sealed[relative_path] = digest
+    uncovered = sorted(root for root in job_roots if not any(root == base or root.startswith(base + "/") for base in root_paths))
     if uncovered:
         raise ConfigurationError(f"封存证据清单没有覆盖候选 Job 证据根：{uncovered}")
 
@@ -1902,6 +1944,7 @@ def _seal_evidence_boundary(
     data_root: Path,
     inventory: Mapping[str, Any],
     job_roots: Sequence[str],
+    predecessor_entries: Sequence[Mapping[str, Any]] = (),
 ) -> Path:
     """批准时写（或被打断后复核）attempt 根的封存证据清单；返回清单路径。"""
 
@@ -1919,10 +1962,37 @@ def _seal_evidence_boundary(
             )
         except evidence_manifest.EvidenceManifestError as error:
             raise ConfigurationError(f"封存证据清单生成失败：{error}") from error
-    _check_sealed_manifest_content(manifest, inventory, data_root=data_root, job_roots=job_roots)
+    predecessor_manifests = []
+    if predecessor_entries:
+        current_manifest = _orchestrator().load_campaign_manifest(campaign_dir)
+        layout = _capture()._capture_layout(campaign_dir, current_manifest)
+        predecessor_manifests = predecessor_sealed.verified_manifests(list(predecessor_entries), layout)
+    _check_sealed_manifest_content(
+        manifest, inventory, data_root=data_root, job_roots=job_roots, predecessor_manifests=predecessor_manifests
+    )
     if not existing:
         _orchestrator()._secure_write_json_once(path, manifest)
     return path
+
+
+def _verify_predecessor_attempt(
+    campaign_dir: Path, candidate_id: str, attempt: Mapping[str, Any], *, manifest: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """按 attempt 的不可变结果复核前序覆盖和原 Job 完整性，供批准、封存读侧与半封存读侧共用。"""
+
+    entries = predecessor_sealed.stage_evidence(attempt.get("results") or [])
+    if not entries:
+        return []
+    from tools.official_client_capture import claude_upgrade_recovery as recovery
+
+    current_manifest = manifest if manifest is not None else _orchestrator().load_campaign_manifest(campaign_dir)
+    layout = _capture()._capture_layout(campaign_dir, current_manifest)
+    results = {str(result["id"]): result for result in attempt["results"]}
+    for entry in entries:
+        recovery._verify_reusable_evidence(
+            campaign_dir, results[entry["job_id"]], entry["producer"], layout, phase="candidate", candidate_id=candidate_id
+        )
+    return entries
 
 
 def verify_sealed_boundary(campaign_dir: Path, stage: Mapping[str, Any], attempt_root: Path, *, candidate_id: str) -> dict[str, Any]:
@@ -1940,7 +2010,12 @@ def verify_sealed_boundary(campaign_dir: Path, stage: Mapping[str, Any], attempt
     ):
         raise ConfigurationError("候选阶段结果绑定的封存证据清单缺失、不在 attempt 根或摘要漂移。")
     roots = _sealed_evidence_roots(Path(campaign_dir), Path(attempt_root).name, candidate_id)
-    return _verify_sealed_manifest(path, roots, attempt_id=Path(attempt_root).name, candidate_id=candidate_id)
+    document = _verify_sealed_manifest(path, roots, attempt_id=Path(attempt_root).name, candidate_id=candidate_id)
+    attempt = orchestrator._read_json(Path(attempt_root) / "attempt.json", "候选 attempt")
+    entries = _verify_predecessor_attempt(Path(campaign_dir), candidate_id, attempt)
+    if stage.get(predecessor_sealed.STAGE_FIELD, []) != entries:
+        raise ConfigurationError("阶段结果的前序封存证据登记与绑定 attempt 不一致。")
+    return document
 
 
 def sealed_attempt_context(campaign_dir: Path, stage: Mapping[str, Any], *, candidate_id: str) -> tuple[Path, dict[str, Any]]:
@@ -1994,6 +2069,7 @@ def half_sealed_attempt_context(
     if path.is_symlink() or not path.is_file():
         raise ConfigurationError(f"半封存的封存证据清单不是可信普通文件：{path}")
     _verify_sealed_manifest(path, _sealed_evidence_roots(Path(campaign_dir), attempt_id, candidate_id), attempt_id=attempt_id, candidate_id=candidate_id)
+    _verify_predecessor_attempt(Path(campaign_dir), candidate_id, attempt, manifest=manifest)
     return attempt_root, attempt
 
 
