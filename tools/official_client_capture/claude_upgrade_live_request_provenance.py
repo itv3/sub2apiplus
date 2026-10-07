@@ -39,7 +39,9 @@ Campaign 布局与 Codex 共用（设计 D3）：``campaign.json``／``campaign.
 Claude 的 Job 证据根（B2-05／B2-06 布局）：一个 Job 一个证据根 ``<runs>/claude-official/<campaign>/<job>``，它自身
 不是运行根，每步的 FW-E 中继运行根是它下面以 probe 命名的子目录。这样的根按 ``relay_runs`` 展开成逐 probe 的
 relay 分支，``producer_run_id`` 取 ``<Job 根的 run id>/<probe>``（即子目录相对同一基准的路径，不同 probe 的同坐标
-请求不撞键），世代号沿用 Job 根（取代归档与失败归档都在 Job 根这一级）。Job 根下不是中继运行根的条目使该根未决。
+请求不撞键），世代号沿用 Job 根（取代归档与失败归档都在 Job 根这一级）。Job 根下不是中继运行根的条目使该根未决；
+唯一例外是候选 Job 收据绑定且重新核过合同、候选坐标、执行步骤与摘要的恢复报告。目录名本身不构成信任依据，
+离线核算没有 Job 收据上下文时仍然未决，报告目录出现任何未绑定文件也仍然未决。
 总计划没有冻结任何 Job、attempt 却登记了 Job 证据根时，这些 Job 未决（失败关闭）；两者都没有时才是零请求的 complete。
 """
 
@@ -98,6 +100,13 @@ ZERO_BYTE_RELAY_EXCLUDED = "relay_excluded"
 ZERO_BYTE_UNEXCLUDED = "unexcluded"
 # Claude Job 证据根（自身不是运行根、probe 子目录是 FW-E 中继运行根）展开后的证据根类别。
 RELAY_RUNS_KIND = "relay_runs"
+# 与候选采集的恢复报告合同同值，由直接回归锁定；不导入采集编排器，避免把控制闭包并入请求计量。
+CANDIDATE_RESTORATION_DIRNAME = "candidate-gateway"
+CANDIDATE_RESTORATION_SCHEMA = "claude-candidate-gateway-restoration/v1"
+CANDIDATE_RESTORATION_EQUAL_FIELDS = (
+    "account_proxy_restored_equal", "account_gate_restored_equal", "hosts_sha256_equal",
+    "ca_bundle_sha256_equal", "runtime_secrets_removed",
+)
 CAMPAIGN_SCHEMA = "official-client-upgrade-campaign/v1"
 # mitm 插件按路径分类写出的 HTTP 记录文件（addons/mitm_capture._classify）：模型端点在 claude，token refresh 在 misc。
 MITM_HTTP_FILES = ("claude-http.jsonl", "misc-http.jsonl")
@@ -614,7 +623,10 @@ def _capture_branches(root: Path, *, producer_run_id: str, generation: int) -> l
     return branches
 
 
-def root_branches(root: Path, *, producer_run_id: str, generation: int = 0) -> tuple[str, list[dict[str, Any]]]:
+def root_branches(
+    root: Path, *, producer_run_id: str, generation: int = 0,
+    candidate_restoration_reports: Mapping[str, str] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     """识别证据根类别并返回其执行分支；一个根只能属于一个类别，都不是时为 ``unsupported``。"""
 
     kinds: list[str] = []
@@ -626,7 +638,7 @@ def root_branches(root: Path, *, producer_run_id: str, generation: int = 0) -> t
     if len(kinds) > 1:
         raise ProvenanceError(f"证据根 {root} 同时具备多种权威来源：{kinds}")
     if not kinds:
-        nested = _child_relay_run_roots(root)
+        nested = _child_relay_run_roots(root, candidate_restoration_reports=candidate_restoration_reports)
         if nested is None:
             return "unsupported", []
         return RELAY_RUNS_KIND, _relay_run_branches(root, nested, producer_run_id=producer_run_id, generation=generation)
@@ -635,7 +647,9 @@ def root_branches(root: Path, *, producer_run_id: str, generation: int = 0) -> t
     return "capture", _capture_branches(root, producer_run_id=producer_run_id, generation=generation)
 
 
-def _child_relay_run_roots(root: Path) -> tuple[list[Path], list[str]] | None:
+def _child_relay_run_roots(
+    root: Path, *, candidate_restoration_reports: Mapping[str, str] | None = None,
+) -> tuple[list[Path], list[str]] | None:
     """Claude Job 证据根的直接子目录里的 FW-E 中继运行根（含 ``relay/``），与不是运行根的条目名。
 
     一个子运行根都没有时返回 None：整个根仍按 ``unsupported`` 处理（由日志判定是否请求前失败）。子目录名进入
@@ -650,7 +664,10 @@ def _child_relay_run_roots(root: Path) -> tuple[list[Path], list[str]] | None:
     for child in sorted(root.iterdir(), key=lambda item: item.name):
         if child.is_symlink():
             raise ProvenanceError(f"Job 证据根下有符号链接：{child}")
-        if child.is_dir() and (child / "relay").exists():
+        if child.name == CANDIDATE_RESTORATION_DIRNAME:
+            if not _restoration_directory_matches(child, candidate_restoration_reports):
+                others.append(child.name)
+        elif child.is_dir() and (child / "relay").exists():
             if not SAFE_ID_RE.fullmatch(child.name):
                 raise ProvenanceError(f"Job 证据根下的中继运行根名称非法：{child.name!r}")
             if (child / "manifest.json").exists():
@@ -661,6 +678,21 @@ def _child_relay_run_roots(root: Path) -> tuple[list[Path], list[str]] | None:
     if not runs:
         return None
     return runs, others
+
+
+def _restoration_directory_matches(directory: Path, reports: Mapping[str, str] | None) -> bool:
+    """只接纳已核验报告的完整文件集合；再读一次摘要，未知文件、子目录和读取间漂移都不能被排除。"""
+
+    if not reports or directory.is_symlink() or not directory.is_dir():
+        return False
+    try:
+        files = list(directory.iterdir())
+        return {path.name for path in files} == set(reports) and all(
+            _sha256(closeout._read_stable_file(path, "候选恢复报告", maximum=closeout.MAX_JSON_BYTES)) == reports[path.name]
+            for path in files
+        )
+    except (OSError, ValueError, closeout.VC0CloseoutError):
+        return False
 
 
 def _relay_run_branches(
@@ -899,18 +931,116 @@ def _map_root(value: Any, *, configuration: Mapping[str, Any], host_data_root: P
     return closeout._map_container_evidence_root(value, capture_root=capture_root, host_data_root=host_data_root)
 
 
+def _candidate_restoration_bindings(
+    campaign_dir: Path, attempt: Path, payload: Mapping[str, Any], *,
+    configuration: Mapping[str, Any], host_data_root: Path,
+) -> tuple[Path, dict[str, str]] | None:
+    """从候选 Job 收据重新验证恢复报告；缺少任何绑定只是不授予目录例外，账务继续保留未决分支。
+
+    报告绑定只能用于收据明确登记的那个根，不能传播到同级失败归档。候选身份取收据所在路径，运行身份按
+    Campaign／候选／probe 的既有展开合同复核；执行步骤、报告路径和报告内容三者必须一致。
+    """
+
+    def mapped(value: Any) -> Path:
+        if not isinstance(value, str) or ".." in Path(value).parts:
+            raise ProvenanceError("候选恢复报告路径不规范")
+        return _map_root(value, configuration=configuration, host_data_root=host_data_root)
+
+    def argument(argv: list[str], name: str) -> str:
+        if argv.count(name) != 1 or argv.index(name) + 1 >= len(argv):
+            raise ProvenanceError("候选执行步骤缺少唯一参数")
+        return argv[argv.index(name) + 1]
+
+    try:
+        parts = attempt.relative_to(campaign_dir).parts
+        if len(parts) not in {4, 6} or parts[0] != "candidates" or parts[2] != "attempts":
+            return None
+        candidate_id = parts[1]
+        if not SAFE_ID_RE.fullmatch(candidate_id) or payload.get("phase") != "candidate" or payload.get("mode") != "formal":
+            return None
+        if any(not re.fullmatch(r"[1-9][0-9]{0,9}", str(configuration.get(name, "")))
+               for name in ("claude_account_id", "api_key_id")):
+            return None
+        roots, steps, checks = payload.get("evidence_roots"), payload.get("steps"), payload.get("restoration_checks")
+        if not isinstance(roots, list) or len(roots) != 1 or not isinstance(steps, list) or not isinstance(checks, list):
+            return None
+        root = mapped(roots[0])
+        run_prefix = f"{campaign_dir.name}-{candidate_id}"
+        logical_name = root.name.split(SUPERSEDED_ROOT_INFIX, 1)[0]
+        archive = FAILED_ATTEMPT_ROOT_RE.fullmatch(logical_name)
+        if archive is not None:
+            logical_name = archive.group("base")
+        if root.parent != host_data_root / "runs" / "claude-candidate" / run_prefix or logical_name != payload.get("id"):
+            return None
+        directory = root / CANDIDATE_RESTORATION_DIRNAME
+        if directory.is_symlink() or not directory.is_dir() or root.resolve(strict=True) != root:
+            return None
+        executed = {}
+        for step in steps:
+            if not isinstance(step, Mapping):
+                return None
+            if not step.get("argv"):
+                continue
+            probe = step.get("probe_id")
+            if not isinstance(probe, str) or not SAFE_ID_RE.fullmatch(probe) or probe in executed:
+                return None
+            executed[probe] = step
+        if len(checks) != len(executed) or {row.get("probe_id") for row in checks if isinstance(row, Mapping)} != set(executed):
+            return None
+        reports: dict[str, str] = {}
+        for row in checks:
+            probe = row["probe_id"]
+            step = executed[probe]
+            if (row.get("status") == "not_started" and row.get("report") is None
+                    and type(step.get("return_code")) is int and step["return_code"] in {1, 2}):
+                continue
+            binding, argv, code = row.get("report"), step.get("argv"), step.get("return_code")
+            if row.get("status") != "passed" or not isinstance(binding, Mapping) or not isinstance(argv, list):
+                return None
+            if not all(isinstance(value, str) for value in argv) or type(code) is not int or code == 97:
+                return None
+            scripts = [index for index, value in enumerate(argv) if Path(value).name == "claude_fw_e_relay.py"]
+            if len(scripts) != 1 or argv[scripts[0] + 1:scripts[0] + 2] != ["capture"]:
+                return None
+            relay_probe = argument(argv, "--probe-id")
+            if probe != relay_probe and probe != f"{argument(argv, '--model')}-{relay_probe}":
+                return None
+            run_id = f"{run_prefix}-{probe}"
+            path = directory / f"{probe}.json"
+            if (mapped(binding.get("path")) != path or mapped(argument(argv, "--output-root")) != root / probe
+                    or argument(argv, "--run-id") != run_id):
+                return None
+            raw = closeout._read_stable_file(path, "候选恢复报告", maximum=closeout.MAX_JSON_BYTES)
+            report = json.loads(raw)
+            if not isinstance(report, Mapping) or _sha256(raw) != binding.get("sha256"):
+                return None
+            wanted = {
+                "schema_version": CANDIDATE_RESTORATION_SCHEMA, "run_id": run_id, "probe_id": probe,
+                "status": "complete" if code == 0 else "capture_failed", "capture_exit_code": code,
+                "account_id": int(configuration["claude_account_id"]), "api_key_id": int(configuration["api_key_id"]),
+                **{name: True for name in CANDIDATE_RESTORATION_EQUAL_FIELDS},
+            }
+            if any(type(report.get(name)) is not type(value) or report.get(name) != value for name, value in wanted.items()):
+                return None
+            reports[path.name] = str(binding["sha256"])
+        return (root, reports) if reports else None
+    except (OSError, ValueError, TypeError, KeyError, closeout.VC0CloseoutError):
+        return None
+
+
 def _attempt_job_facts(
     campaign_dir: Path,
     *,
     configuration: Mapping[str, Any],
     host_data_root: Path,
     job_phases: Mapping[str, str],
-) -> tuple[dict[str, list[Path]], dict[str, list[Path]], dict[str, bool]]:
+) -> tuple[dict[str, list[Path]], dict[str, list[Path]], dict[str, bool], dict[Path, dict[str, str]]]:
     """从不可变 Job 收据读取实际证据根与日志，不用 Campaign 里的模板路径。"""
 
     roots_by_job: dict[str, list[Path]] = {}
     logs_by_job: dict[str, list[Path]] = {}
     attempts_present = {"official": False, "candidate": False}
+    restoration_reports: dict[Path, dict[str, str]] = {}
     for phase in ("official", "candidate"):
         attempts = _attempt_directories(campaign_dir, phase)
         attempts_present[phase] = bool(attempts)
@@ -949,7 +1079,13 @@ def _attempt_job_facts(
                     for root in _all_attempt_roots(mapped):
                         if root not in resolved_roots:
                             resolved_roots.append(root)
-    return roots_by_job, logs_by_job, attempts_present
+                if phase == "candidate":
+                    binding = _candidate_restoration_bindings(
+                        campaign_dir, attempt, payload, configuration=configuration, host_data_root=host_data_root
+                    )
+                    if binding is not None:
+                        restoration_reports[binding[0]] = binding[1]
+    return roots_by_job, logs_by_job, attempts_present, restoration_reports
 
 
 def _undeclared_attempt_jobs(campaign_dir: Path) -> list[dict[str, Any]]:
@@ -1056,7 +1192,7 @@ def collect_campaign_provenance(
         ):
             raise ProvenanceError("Formal Campaign Job 身份、阶段或唯一性非法")
         job_phases[job_id] = str(phase)
-    actual_roots, attempt_logs, attempts_present = _attempt_job_facts(
+    actual_roots, attempt_logs, attempts_present, restoration_reports = _attempt_job_facts(
         campaign_dir, configuration=configuration, host_data_root=host_data_root, job_phases=job_phases
     )
 
@@ -1092,8 +1228,12 @@ def collect_campaign_provenance(
                 root_cache[root] = ("pending", [], _superseded_generation(root))
         job_plans.append({"job_id": job_id, "phase": phase, "roots": roots, "logs": logs})
     run_ids = _producer_run_ids(list(root_cache), host_data_root)
+    official_roots = {root for plan in job_plans if plan["phase"] == "official" for root in plan["roots"]}
     for root, (_kind, _branches, generation) in list(root_cache.items()):
-        kind, branches = root_branches(root, producer_run_id=run_ids[root], generation=generation)
+        kind, branches = root_branches(
+            root, producer_run_id=run_ids[root], generation=generation,
+            candidate_restoration_reports=None if root in official_roots else restoration_reports.get(root),
+        )
         root_cache[root] = (kind, branches, generation)
     _apply_estimation(
         [(root, kind, branches) for root, (kind, branches, _generation) in root_cache.items() if kind != "unsupported"],
