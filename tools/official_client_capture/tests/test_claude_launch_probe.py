@@ -3,12 +3,15 @@
 
 覆盖：
 * 运行器纯函数：私有 HOME（合成凭据、隐私设置、全局状态规范化副本；只读全局状态文件，不碰凭据文件；文件不存在时也能
-  建）、信任撤销验收变更、客户端参数与中继 ``_run_tui_probe`` 逐项相同、驱动入口命令行、替身应答与请求记录（只记主机、
-  方法、路径与头部名称）、交互屏识别、参数闭集；
+  建）、与中继同法预置工作目录信任、信任撤销验收变更、客户端参数与中继 ``_run_tui_probe`` 逐项相同、驱动入口命令行、
+  替身应答与请求记录（只记主机、方法、路径与头部名称）、交互屏识别、运行判定、参数闭集；
 * 宿主侧：B2-05 真实 2.1.285 清单的 TUI 组合展开与去重、运行器参数与运行器校验互认；以 docker 替身端到端跑 run／verify：
   全部通过、失败组合以 48×160 窗口复跑诊断、注入未确认信任目录被识别为交互屏且报告不能放行、``/root/.claude.json``
   指纹漂移判失败、受管驱动与数据根不一致判失败、未知验收参数拒绝；verify 认客户端、拒绝验收参数报告并按适配器绑定
   预检 Campaign；
+* 驱动入口的信任框处理（2026-10-07 ARM64 实测 2.1.285 回归）：按选项文字定位确认项的纯函数与状态机，以及用伪终端里的
+  替身客户端端到端驱动（2.1.285 默认聚焦「No, exit」时选到 Yes；2.1.226 默认聚焦 Yes 时只发一个回车；共用状态机在
+  2.1.285 上选到「No, exit」作反向对照）；
 * 入口步骤与编排：Claude 的启动探测登记 Claude 运行器，Job 演练与启动探测的命令行追加 ``--client claude``。
 """
 
@@ -36,6 +39,7 @@ from tools.official_client_capture import claude_drive_tui_cli as drive_cli
 from tools.official_client_capture import claude_fw_e_relay as relay
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_plan as plan
+from tools.official_client_capture import drive_claude_tui
 from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
 from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
 from tools.official_client_capture.capturelib import environment as capture_environment
@@ -86,6 +90,33 @@ def _config(**overrides):
     return config
 
 
+# 2026-10-07 ARM64 实测（claude-code-2_1_285-b210-20261007t101832z-client-launch-probe 报告 tui_visible_tail，空格已被
+# 光标定位吃掉）：2.1.285 的信任框把取消项排在前面并默认聚焦。
+TRUST_SCREEN_285 = (
+    "\n\n" + "─" * 80 + "\n\nAccessingworkspace:\n\n\n\n/work/probe-run/results/workspace\n\n\n\n"
+    "Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?(Likeyour\n\nowncode,awell-knownopensourceproject,"
+    "orworkfromyourteam).Ifnot,\n\ntakeamomenttoreviewwhat'sinthisfolderfirst.\n\n\n\n"
+    "ClaudeCode'llbeabletoread,edit,andexecutefileshere.\n\n\n\nSecurityguide\n\n\n\n"
+    "❯No,exit\n\nYes,Itrustthisfolder\n\n\n\nEntertoconfirm·Esctocancel\n\n"
+)
+# 2.1.226 真实采集（local-analysis/fw-f/claude-code-2.1.226/complete-v16-*/attempts/v4-tui-usage 的 tui-transcript.log）：
+# 确认项在前、默认聚焦、带编号。
+TRUST_SCREEN_226 = (
+    "\n\nAccessingworkspace:\n\n\n\n/campaign/attempts/v4-tui-usage/attempt-001/results/workspace\n\n\n\n"
+    "Quicksafetycheck:Isthisaprojectyoucreatedoroneyoutrust?\n\nSecurityguide\n\n\n\n"
+    "❯1.Yes,Itrustthisfolder\n\n2.No,exit\n\n\n\nEntertoconfirm·Esctocancel\n\n"
+)
+
+
+def _client_trusts(state: dict, cwd: str) -> bool:
+    """2.1.285 判定工作目录已信任的参照实现（冻结二进制 chunk-n1qqpa0t.js 的 ``sU``／``QS``／``ZS``，工作目录不在 git 仓库
+    里时）：从启动目录起逐级向上，任一级 ``projects[<路径>].hasTrustDialogAccepted`` 为真即已信任，否则弹信任框。"""
+
+    projects = state.get("projects") or {}
+    path = PurePosixPath(cwd)
+    return any((projects.get(str(candidate)) or {}).get("hasTrustDialogAccepted") for candidate in (path, *path.parents))
+
+
 class RunnerPrivateHomeTests(unittest.TestCase):
     """私有 HOME：中继 TUI 临时 HOME 的同一布局，凭据合成、全局状态只读一份并规范化。"""
 
@@ -94,9 +125,13 @@ class RunnerPrivateHomeTests(unittest.TestCase):
         raw = json.dumps(state).encode("utf-8")
         payload, summary = runner.normalized_global_state(raw, TARGET)
         relay_payload, relay_fields = capture_environment._normalized_tui_global_state(raw, TARGET)
-        self.assertEqual(payload, relay_payload, "有账号且不带验收变更时与中继的规范化逐字相同")
+        # 中继在 TUI 临时 HOME 里对规范化副本再预置工作目录信任（claude_fw_e_relay._seed_tui_workspace_trust）。
+        relay_state = json.loads(relay_payload)
+        relay._seed_workspace_trust(relay_state, [str(runner.workspace_path())])
+        relay_seeded = (json.dumps(relay_state, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        self.assertEqual(payload, relay_seeded, "有账号且不带验收变更时与中继的规范化加信任预置逐字相同")
         self.assertEqual(summary, {"source": "present", "normalized_fields": relay_fields, "oauth_account": "global_state",
-                                   "untrusted_projects": []})
+                                   "trust_seeded_projects": [str(runner.workspace_path())], "untrusted_projects": []})
         absent, absent_summary = runner.normalized_global_state(None, TARGET)
         document = json.loads(absent)
         self.assertEqual((absent_summary["source"], absent_summary["oauth_account"]), ("absent", "synthetic"))
@@ -113,8 +148,11 @@ class RunnerPrivateHomeTests(unittest.TestCase):
                               "/srv": {"hasTrustDialogAccepted": True}}}
         payload, summary = runner.normalized_global_state(json.dumps(state).encode(), TARGET, mutations=["untrust:/work"])
         projects = json.loads(payload)["projects"]
-        self.assertEqual(sorted(summary["untrusted_projects"]), ["/", "/work"])
-        self.assertEqual({key: value["hasTrustDialogAccepted"] for key, value in projects.items()}, {"/work": False, "/": False, "/srv": True})
+        self.assertEqual(summary["trust_seeded_projects"], [str(workspace)])
+        self.assertEqual(sorted(summary["untrusted_projects"]), ["/", "/work", str(workspace)],
+                         "预置的工作目录信任也在链上，一并撤销")
+        self.assertEqual({key: value["hasTrustDialogAccepted"] for key, value in projects.items()},
+                         {"/work": False, "/": False, "/srv": True, str(workspace): False})
         for bad in ("untrust:/srv", "untrust:/work/probe-run/results/workspace/sub", "unack_migration:x", "untrust:relative"):
             with self.subTest(bad=bad), self.assertRaises(runner.ProbeError):
                 runner.normalized_global_state(json.dumps(state).encode(), TARGET, mutations=[bad])
@@ -154,6 +192,56 @@ class RunnerPrivateHomeTests(unittest.TestCase):
                     self.assertEqual(summary["credentials"], "synthetic")
                     self.assertNotIn("REAL-SECRET", json.dumps(summary))
             self.assertEqual(credentials.read_text(encoding="utf-8"), '{"claudeAiOauth": {"accessToken": "REAL-SECRET"}}')
+
+
+class RunnerTrustTests(unittest.TestCase):
+    """2026-10-07 ARM64 实测：私有 HOME 不预置工作目录信任时 2.1.285 弹信任框、共用驱动回车选到「No, exit」。"""
+
+    def test_private_home_trusts_the_workspace_so_the_normal_path_has_no_dialog(self) -> None:
+        workspace = str(runner.workspace_path())
+        for label, raw in (("全局状态不存在（ARM64 现状）", None),
+                           ("全局状态里只有别的目录", json.dumps({"oauthAccount": {"accountUuid": "u"}, "projects": {"/srv": {}}}).encode()),
+                           ("全局状态里工作目录被显式拒绝", json.dumps({"projects": {workspace: {"hasTrustDialogAccepted": False, "allowedTools": []}}}).encode())):
+            with self.subTest(label=label):
+                payload, summary = runner.normalized_global_state(raw, TARGET)
+                state = json.loads(payload)
+                self.assertTrue(_client_trusts(state, workspace), "正常路径：客户端认为工作目录已信任，不弹信任框")
+                self.assertEqual(summary["trust_seeded_projects"], [workspace])
+                self.assertEqual(summary["untrusted_projects"], [])
+                self.assertIs(state["projects"][workspace]["hasTrustDialogAccepted"], True)
+        kept = json.loads(runner.normalized_global_state(
+            json.dumps({"projects": {workspace: {"allowedTools": ["Bash"], "hasTrustDialogAccepted": False}}}).encode(), TARGET)[0])
+        self.assertEqual(kept["projects"][workspace], {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True}, "已有条目的其它键保留")
+
+    def test_untrust_brings_the_dialog_back_for_every_directory_on_the_chain(self) -> None:
+        workspace = runner.workspace_path()
+        state = {"projects": {"/": {"hasTrustDialogAccepted": True}, "/work": {"hasTrustDialogAccepted": True}}}
+        for directory in [str(workspace), *[str(parent) for parent in workspace.parents]]:
+            with self.subTest(directory=directory):
+                payload, summary = runner.normalized_global_state(json.dumps(state).encode(), TARGET, mutations=[f"untrust:{directory}"])
+                self.assertFalse(_client_trusts(json.loads(payload), str(workspace)), "untrust: 下信任框必然出现")
+                self.assertIn(str(workspace), summary["untrusted_projects"])
+
+    def test_detected_screens_still_identify_both_trust_dialogs(self) -> None:
+        self.assertEqual(runner.detect_screens(TRUST_SCREEN_285), ["trust_directory"])
+        self.assertEqual(runner.detect_screens(TRUST_SCREEN_226), ["trust_directory"])
+
+    def test_run_verdict(self) -> None:
+        verdict = runner.run_verdict
+        trust = ["trust_directory"]
+        self.assertEqual(verdict(token_observed=True, auth_gate=False, cli_exit_code=0, screens=[], mutations=[]),
+                         ("passed", "token_request_observed"))
+        self.assertEqual(verdict(token_observed=True, auth_gate=False, cli_exit_code=0, screens=trust, mutations=[]),
+                         ("failed", "trust_dialog_unexpected"), "正常路径出现信任框：预置信任失效，作业的驱动不会确认它")
+        self.assertEqual(verdict(token_observed=False, auth_gate=False, cli_exit_code=1, screens=trust, mutations=[]),
+                         ("failed", "trust_dialog_unexpected"))
+        self.assertEqual(verdict(token_observed=True, auth_gate=False, cli_exit_code=0, screens=trust, mutations=["untrust:/work"]),
+                         ("passed", "token_request_observed"), "untrust: 下信任框是预期的，驱动确认后照常判定")
+        self.assertEqual(verdict(token_observed=False, auth_gate=False, cli_exit_code=1, screens=trust, mutations=["untrust:/work"]),
+                         ("failed", "token_request_missing"))
+        self.assertEqual(verdict(token_observed=False, auth_gate=True, cli_exit_code=3, screens=["login"], mutations=[]), ("failed", "auth_gate"))
+        self.assertEqual(verdict(token_observed=False, auth_gate=False, cli_exit_code=None, screens=[], mutations=[]), ("failed", "timeout"))
+        self.assertEqual(verdict(token_observed=False, auth_gate=False, cli_exit_code=1, screens=[], mutations=[]), ("failed", "token_request_missing"))
 
 
 class RunnerLaunchTests(unittest.TestCase):
@@ -514,7 +602,7 @@ class DriveCliTests(unittest.TestCase):
             argv = ["--claude-bin", "/opt/claude/claude", "--model", "m", "--cwd", str(root), "--prompt", TOKEN, "--total-timeout", "70",
                     "--quiet-after", "5", "--transcript", str(transcript), "--", "--no-chrome"]
             stdout = io.StringIO()
-            with mock.patch.object(drive_cli.drive_claude_tui, "drive", fake_drive), mock.patch.dict(os.environ, {}, clear=False), \
+            with mock.patch.object(drive_cli, "drive", fake_drive), mock.patch.dict(os.environ, {}, clear=False), \
                     contextlib.redirect_stdout(stdout):
                 os.environ.pop("TERM", None)
                 code = drive_cli.main(argv)
@@ -532,13 +620,273 @@ class DriveCliTests(unittest.TestCase):
                 calls.append(("sequence", inputs, options))
                 return {"steps": [], "sent_inputs": [], "auth_gate_detected": True, "transcript": "Select login method"}
 
-            with mock.patch.object(drive_cli.drive_claude_tui, "drive_sequence", gate), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(drive_cli, "drive_sequence", gate), contextlib.redirect_stdout(io.StringIO()):
                 code = drive_cli.main(["--claude-bin", "/opt/claude/claude", "--model", "m", "--input", "a", "--input", "b"])
             self.assertEqual(code, drive_cli.EXIT_AUTH_GATE)
             self.assertEqual(calls[-1], ("sequence", ("a", "b"), {"extra_args": ()}))
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(drive_cli.main(["--claude-bin", "/opt/claude/claude", "--model", "m", "--prompt", "x", "--transcript", str(transcript)]),
                                  drive_cli.EXIT_USAGE, "会话文本文件已存在：拒绝覆盖")
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class DriveCliTrustDialogTests(unittest.TestCase):
+    """驱动入口的信任框处理：按选项文字定位确认项；焦点核对不了就绝不回车。"""
+
+    YES = "Yes, I trust this folder"
+
+    def test_trust_selection_by_option_text(self) -> None:
+        plan = drive_cli.trust_selection(TRUST_SCREEN_285)
+        self.assertEqual((plan["action"], plan["target"], plan["focused"], plan["keys"]), ("move", self.YES, "No, exit", drive_cli.KEY_END),
+                         "2.1.285：取消项在前且默认聚焦，用 End 把焦点移到末位的确认项")
+        self.assertEqual(plan["options"], ["No, exit", self.YES])
+        plan = drive_cli.trust_selection(TRUST_SCREEN_226)
+        self.assertEqual((plan["action"], plan["focused"], plan["keys"]), ("confirm", self.YES, b""), "2.1.226：焦点已在确认项上，直接回车")
+        cancel_variant = TRUST_SCREEN_285.replace("❯No,exit", "❯No,continuewithouttheseperm\nissions")
+        self.assertEqual(drive_cli.trust_selection(cancel_variant)["keys"], drive_cli.KEY_END)
+        middle = TRUST_SCREEN_285.replace("Yes,Itrustthisfolder", "Yes,Itrustthisfolder\n\nNo,continuewithoutthesepermissions")
+        self.assertEqual(drive_cli.trust_selection(middle)["keys"], drive_cli.KEY_HOME + drive_cli.KEY_DOWN, "确认项在中间：Home 再 Down")
+        legacy = "╭──╮│ Do you trust the files in this folder? │ ❯ 1. Yes, proceed │ 2. No, exit"
+        self.assertEqual(drive_cli.trust_selection(legacy)["action"], "confirm")
+        partial = TRUST_SCREEN_226.split("2.No,exit")[0]
+        self.assertEqual(drive_cli.trust_selection(partial), {"action": "wait"}, "取消项还没画出来：渲染不完整，不发键")
+        self.assertIsNone(drive_cli.trust_selection("Choose the text style\n❯ 1. Dark mode"), "不是信任框")
+        self.assertIsNone(drive_cli.trust_selection(TRUST_SCREEN_285.split("❯No,exit")[0]), "确认项还没画出来：不当信任框处理")
+        stale_then_redrawn = TRUST_SCREEN_285 + TRUST_SCREEN_226
+        self.assertEqual(drive_cli.trust_selection(stale_then_redrawn)["action"], "confirm", "只解析最后一次完整渲染")
+
+    def _handler(self) -> tuple[drive_cli.TrustDialogHandler, _Clock, list[bytes], list[str]]:
+        clock, writes, steps = _Clock(), [], []
+        handler = drive_cli.TrustDialogHandler(write=lambda fd, data: writes.append(data), clock=clock)
+        return handler, clock, writes, steps
+
+    def test_handler_moves_focus_verifies_the_redraw_then_confirms(self) -> None:
+        for label, redraw in (("只重绘指针所在格子（无颜色时的格子差分）", "\x1b[13;1H \x1b[15;1H❯"),
+                              ("整行重绘", "\x1b[13;1H  No, exit\x1b[15;1H❯ Yes, I trust this folder")):
+            with self.subTest(label=label):
+                handler, clock, writes, steps = self._handler()
+                transcript = bytearray(TRUST_SCREEN_285.encode("utf-8"))
+                self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending")
+                self.assertEqual(writes, [], "首次看到信任框先等它画完、按键处理器就绪")
+                clock.now += drive_cli.TRUST_SETTLE_SECONDS
+                self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending")
+                self.assertEqual(writes, [drive_cli.KEY_END])
+                transcript += redraw.encode("utf-8")
+                self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "pending", "核对前等重绘")
+                clock.now += drive_cli.TRUST_VERIFY_SECONDS
+                self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "confirmed")
+                self.assertEqual(writes, [drive_cli.KEY_END, drive_cli.KEY_ENTER])
+                self.assertEqual(steps, ["trust-focus-confirm-option", "enter-menu"])
+
+    def test_handler_confirms_2_1_226_with_a_single_enter(self) -> None:
+        handler, clock, writes, steps = self._handler()
+        transcript = bytearray(TRUST_SCREEN_226.encode("utf-8"))
+        handler.step(7, TRUST_SCREEN_226, transcript, steps.append)
+        clock.now += drive_cli.TRUST_SETTLE_SECONDS
+        self.assertEqual(handler.step(7, TRUST_SCREEN_226, transcript, steps.append), "confirmed")
+        self.assertEqual(writes, [drive_cli.KEY_ENTER], "与共用状态机发出的按键相同")
+
+    def test_handler_never_presses_enter_when_the_focus_cannot_be_verified(self) -> None:
+        for label, redraw in (("重绘显示焦点仍在取消项", "\x1b[13;1H❯ No, exit"), ("按键后客户端没有任何重绘", "")):
+            with self.subTest(label=label):
+                handler, clock, writes, steps = self._handler()
+                transcript = bytearray(TRUST_SCREEN_285.encode("utf-8"))
+                handler.step(7, TRUST_SCREEN_285, transcript, steps.append)
+                outcome = None
+                for _ in range(drive_cli.TRUST_MAX_MOVES + 2):
+                    clock.now += max(drive_cli.TRUST_SETTLE_SECONDS, drive_cli.TRUST_VERIFY_SECONDS)
+                    outcome = handler.step(7, TRUST_SCREEN_285, transcript, steps.append)
+                    transcript += redraw.encode("utf-8")
+                self.assertEqual(outcome, "unresolved")
+                self.assertNotIn(drive_cli.KEY_ENTER, writes, "信任框上拿不准就不回车（回车会按默认项选到退出）")
+                self.assertEqual(writes, [drive_cli.KEY_END] * drive_cli.TRUST_MAX_MOVES)
+                self.assertEqual(steps[-1], "trust-dialog-unresolved")
+                self.assertEqual(handler.step(7, TRUST_SCREEN_285, transcript, steps.append), "unresolved", "放弃后不再发任何键")
+                self.assertEqual(len(writes), drive_cli.TRUST_MAX_MOVES)
+
+    def test_handler_waits_for_a_complete_render_and_ignores_other_menus(self) -> None:
+        handler, clock, writes, steps = self._handler()
+        partial = TRUST_SCREEN_226.split("2.No,exit")[0]
+        for _ in range(3):
+            clock.now += 5
+            self.assertEqual(handler.step(7, partial, bytearray(partial.encode()), steps.append), "pending")
+        self.assertEqual(writes, [])
+        self.assertIsNone(handler.step(7, "Choose the text style\n❯ 1. Dark mode", bytearray(), steps.append))
+
+
+# 伪终端里的替身客户端：画信任框（FAKE_CLAUDE_MODE 取 2.1.285 或 2.1.226 的选项顺序与默认焦点），焦点变化时只重绘指针
+# 所在的格子（与客户端按格子差分、无颜色时的重绘同形），回车按焦点确认或取消（取消后保持存活，避免平台差异）；确认后进入
+# 主输入框，每收到一行就记下并重新画出空闲输入框。按键、选择与提交都记进 FAKE_CLAUDE_LOG。
+FAKE_CLAUDE_BODY = r'''
+import json, os, sys, time, tty
+
+MODE = os.environ["FAKE_CLAUDE_MODE"]
+LOG = os.environ["FAKE_CLAUDE_LOG"]
+tty.setraw(0)
+OPTIONS = ["No, exit", "Yes, I trust this folder"] if MODE == "285" else ["Yes, I trust this folder", "No, exit"]
+NUMBERED = MODE != "285"
+FIRST_ROW = 13
+state = {"focus": 0, "screen": "trust", "line": b""}
+
+
+def out(text):
+    os.write(1, text.encode("utf-8"))
+
+
+def record(kind, value):
+    with open(LOG, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"kind": kind, "value": value}) + "\n")
+
+
+def row(index):
+    pointer = "❯ " if index == state["focus"] else "  "
+    number = f"{index + 1}. " if NUMBERED else ""
+    return f"\x1b[{FIRST_ROW + 2 * index};1H{pointer}{number}{OPTIONS[index]}"
+
+
+def idle():
+    out("\r\n❯ \r\n  ? for shortcuts\r\n")
+
+
+out("\x1b[2J\x1b[H" + "─" * 40 + "\r\n Accessing workspace:\r\n\r\n /work/fake\r\n\r\n"
+    " Quick safety check: Is this a project you created or one you trust?\r\n\r\n Security guide\r\n"
+    + "".join(row(index) for index in range(len(OPTIONS))) + f"\x1b[{FIRST_ROW + 2 * len(OPTIONS) + 1};1H Enter to confirm · Esc to cancel\r\n")
+
+
+def move(target):
+    old = state["focus"]
+    state["focus"] = target % len(OPTIONS)
+    if state["focus"] != old:
+        out(f"\x1b[{FIRST_ROW + 2 * old};1H \x1b[{FIRST_ROW + 2 * state['focus']};1H❯")
+
+
+buffer = b""
+while True:
+    try:
+        data = os.read(0, 1024)
+    except OSError:
+        break
+    if not data:
+        break
+    record("bytes", data.decode("latin-1"))
+    buffer += data
+    while buffer:
+        if state["screen"] == "trust":
+            for sequence, action in ((b"\x1b[F", "end"), (b"\x1b[H", "home"), (b"\x1b[B", "down"), (b"\x1b[A", "up"), (b"\r", "enter")):
+                if buffer.startswith(sequence):
+                    buffer = buffer[len(sequence):]
+                    break
+            else:
+                if buffer.startswith(b"\x1b") and len(buffer) < 3:
+                    break
+                buffer, action = buffer[1:], None
+            if action == "end":
+                move(len(OPTIONS) - 1)
+            elif action == "home":
+                move(0)
+            elif action == "down":
+                move(state["focus"] + 1)
+            elif action == "up":
+                move(state["focus"] - 1)
+            elif action == "enter":
+                choice = OPTIONS[state["focus"]]
+                record("selected", choice)
+                if choice.startswith("Yes"):
+                    state["screen"] = "prompt"
+                    out("\x1b[2J\x1b[H Welcome back\r\n")
+                    idle()
+                else:
+                    state["screen"] = "exited"
+                    out("\x1b[2J\x1b[H exiting\r\n")
+        elif state["screen"] == "prompt":
+            if buffer.startswith(b"\r"):
+                buffer = buffer[1:]
+                record("prompt", state["line"].decode("utf-8"))
+                state["line"] = b""
+                out("\r\n  esc to interrupt\r\n")
+                time.sleep(0.2)
+                out("\r\n  RESPONSE\r\n")
+                idle()
+            else:
+                state["line"] += buffer[:1]
+                buffer = buffer[1:]
+        else:
+            buffer = b""
+'''
+
+
+class DriveCliTrustPtyTests(unittest.TestCase):
+    """在伪终端里端到端驱动替身客户端：驱动入口在 2.1.285 的信任框上选到 Yes；共用状态机作反向对照选到「No, exit」。"""
+
+    YES = "Yes, I trust this folder"
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.fake = self.root / "claude"
+        self.fake.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_BODY, encoding="utf-8")
+        self.fake.chmod(0o700)
+        self.log = self.root / "fake-claude.jsonl"
+
+    def environment(self, mode: str) -> dict[str, str]:
+        return {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_LOG": str(self.log), "PYTHONDONTWRITEBYTECODE": "1",
+                "PATH": os.environ.get("PATH", "")}
+
+    def events(self, kind: str) -> list[str]:
+        if not self.log.exists():
+            return []
+        return [item["value"] for item in map(json.loads, self.log.read_text(encoding="utf-8").splitlines()) if item["kind"] == kind]
+
+    def keys_before_prompt(self) -> list[str]:
+        chunks = self.events("bytes")
+        return chunks[:chunks.index(TOKEN)] if TOKEN in chunks else chunks
+
+    def test_cli_entry_selects_yes_when_2_1_285_focuses_no_exit(self) -> None:
+        """经运行器实际调用的入口 ``main``（与启动探测同样的参数形状）：信任框上先移焦点再确认，口令进了输入框。"""
+
+        transcript = self.root / "transcript.txt"
+        argv = ["--claude-bin", str(self.fake), "--model", "m", "--cwd", str(self.root), "--prompt", TOKEN,
+                "--total-timeout", "25", "--quiet-after", "1", "--transcript", str(transcript), "--", "--no-chrome"]
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, self.environment("285")), contextlib.redirect_stdout(stdout):
+            code = drive_cli.main(argv)
+        summary = json.loads(stdout.getvalue().strip().splitlines()[-1])
+        self.assertEqual(code, drive_cli.EXIT_COMPLETE, summary)
+        self.assertEqual(self.events("selected"), [self.YES])
+        self.assertEqual(self.events("prompt"), [TOKEN])
+        self.assertEqual(self.keys_before_prompt(), [drive_cli.KEY_END.decode(), "\r"], "先用 End 把焦点移到确认项，核对后再回车")
+        self.assertEqual([tag for _, tag in summary["steps"]][:3], ["trust-focus-confirm-option", "enter-menu", "sent-prompt"])
+        self.assertEqual(sum(1 for _, tag in summary["steps"] if tag == "enter-menu"), 1, "运行器的 menus_accepted 口径不变")
+        self.assertIn("Yes,Itrustthisfolder", "".join(transcript.read_text(encoding="utf-8").split()))
+
+    def test_shared_state_machine_selects_no_exit_on_2_1_285(self) -> None:
+        """反向对照：改动前驱动入口调用的共用状态机回车接受默认项，在 2.1.285 上选到「No, exit」（ARM64 实测的现象）。"""
+
+        result = drive_claude_tui.drive(str(self.fake), "m", TOKEN, self.environment("285"), total_timeout=4, quiet_after_prompt=1)
+        self.assertFalse(result["sent_prompt"])
+        self.assertEqual(self.events("selected"), ["No, exit"])
+        self.assertEqual(self.keys_before_prompt()[:1], ["\r"])
+
+    def test_cli_driver_sends_the_same_single_enter_on_2_1_226(self) -> None:
+        result = drive_cli.drive(str(self.fake), "m", TOKEN, self.environment("226"), total_timeout=25, quiet_after_prompt=1)
+        self.assertTrue(result["sent_prompt"], result["steps"])
+        self.assertEqual(self.events("selected"), [self.YES])
+        self.assertEqual(self.keys_before_prompt(), ["\r"], "焦点已在确认项上：只发一个回车，与共用状态机相同")
+
+    def test_cli_sequence_driver_confirms_the_trust_dialog(self) -> None:
+        result = drive_cli.drive_sequence(str(self.fake), "m", ("ALPHAINPUT", "BRAVOINPUT"), self.environment("285"),
+                                          total_timeout=30, quiet_after_last_input=1)
+        self.assertTrue(result["all_inputs_sent"], result["steps"])
+        self.assertEqual(self.events("selected"), [self.YES])
+        self.assertEqual(self.events("prompt"), ["ALPHAINPUT", "BRAVOINPUT"])
 
 
 class EntryWiringTests(unittest.TestCase):

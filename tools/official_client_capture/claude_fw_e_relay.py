@@ -318,6 +318,64 @@ def _rewrite_file(path: Path, content: bytes) -> None:
             os.close(descriptor)
 
 
+# ---------------------------------------------------------------------------
+# TUI 临时 HOME 的工作目录信任（2026-10-07，B2-10 启动探测在 ARM64 上用 2.1.285 实测发现）
+#
+# 交互模式启动时，工作目录没有信任确认就先弹信任框。2.1.226 的信任框默认焦点在「Yes, I trust this folder」，共用驱动
+# drive_claude_tui 回车即确认；2.1.285 的信任框把取消项排在前面并默认聚焦（「❯ No, exit」），回车就退出，TUI 场景一个请求
+# 都发不出去。共用驱动归 Codex wire 层不能改，所以在临时 HOME 的全局状态副本里预置工作目录信任：客户端判定「已信任」
+# 读 ``projects[<目录>].hasTrustDialogAccepted``（从启动目录逐级向上找，2.1.285 在 git 根处截止），官方自托管 runner 也是
+# 这样预置的。副本在 /dev/shm 的临时 HOME 里、用完即删，长期全局状态不受影响（temporary_claude_tui_state 照旧核对）。
+# 启动探测的私有 HOME（arm64_capture_driver/driver/claude_launch_probe_runner.seed_project_trust）按同一规则预置。
+# ---------------------------------------------------------------------------
+
+
+def _seed_workspace_trust(state: dict[str, Any], paths: Sequence[str]) -> list[str]:
+    """在全局状态里预置这些目录的信任确认，返回预置的目录；规则与启动探测运行器的 ``seed_project_trust`` 逐字相同。"""
+
+    projects = state.get("projects")
+    if not isinstance(projects, dict):
+        projects = state["projects"] = {}
+    seeded: list[str] = []
+    for path in paths:
+        entry = projects.get(path)
+        if not isinstance(entry, dict):
+            entry = projects[path] = {}
+        entry["hasTrustDialogAccepted"] = True
+        seeded.append(path)
+    return seeded
+
+
+def _tui_trust_paths(result_root: Path, process_cwd: Path) -> list[str]:
+    """TUI 会在哪些目录启动：v4／v5 的 TUI 场景在 ``<结果根>/workspace``（``claude_fw_f_v4._fixture_paths``），v3 的 TUI
+    场景（v5 清单里的 ``v4-replay-tui``）不切换目录、就在中继进程的工作目录。每个目录按字面与真实路径各登记一次（客户端
+    用操作系统给出的启动目录，即解析过符号链接的真实路径，查信任）。"""
+
+    paths: list[str] = []
+    for candidate in (result_root / "workspace", process_cwd):
+        for value in (os.path.normpath(str(candidate)), os.path.realpath(str(candidate))):
+            if value not in paths:
+                paths.append(value)
+    return paths
+
+
+def _seed_tui_workspace_trust(home: Path, paths: Sequence[str]) -> list[str]:
+    """改写 TUI 临时 HOME 里的 ``.claude.json`` 副本，预置工作目录信任；序列化与 ``_normalized_tui_global_state`` 相同。"""
+
+    target = home / ".claude.json"
+    if target.is_symlink() or not target.is_file():
+        raise ConfigurationError("TUI 临时 HOME 缺少全局状态副本。")
+    try:
+        state = json.loads(target.read_bytes())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("TUI 临时 HOME 的全局状态副本不是合法 JSON。") from error
+    if not isinstance(state, dict):
+        raise ConfigurationError("TUI 临时 HOME 的全局状态副本顶层必须是对象。")
+    seeded = _seed_workspace_trust(state, paths)
+    _rewrite_file(target, (json.dumps(state, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+    return seeded
+
+
 class HostsOverride:
     """只在当前隔离容器中追加域名覆盖，并证明退出后字节级恢复。"""
 
@@ -1571,6 +1629,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "privacy_settings_written": False,
         "onboarding_state_normalized": False,
         "onboarding_normalized_fields": [],
+        "workspace_trust_seeded": False,
         "source_global_state_modified": False,
         "archived_in_evidence": False,
         "removed": not requires_tui_state,
@@ -1808,6 +1867,10 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                                 expected_version=arguments.expected_version,
                             ) as (tui_home, _tui_config, state_receipt):
                                 tui_state_receipt = state_receipt
+                                # 预置 TUI 启动目录的信任：2.1.285 的信任框默认聚焦「No, exit」，共用驱动回车即退出。
+                                state_receipt["workspace_trust_seeded"] = bool(
+                                    _seed_tui_workspace_trust(tui_home, _tui_trust_paths(result_root, Path.cwd()))
+                                )
                                 environment.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
                                 # TUI 必须按默认 HOME 布局读取两份官方状态。
                                 environment.pop("CLAUDE_CONFIG_DIR", None)

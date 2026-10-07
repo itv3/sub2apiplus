@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -1353,6 +1354,101 @@ class ClaudeFWEV5CatalogTests(unittest.TestCase):
             write_json(root / "v5-summary.json", {**summary, "schema_version": "claude-code-fw-f-v4-probe-result/v1"})
             self.assertFalse(relay._invocation_binding_complete(summary, root, **options))
             self.assertFalse(relay._invocation_binding_complete(summary, root, **{**options, "fw_f_v5_summary": None}))
+
+
+class TuiWorkspaceTrustTests(unittest.TestCase):
+    """TUI 临时 HOME 预置工作目录信任（2026-10-07 ARM64 实测：2.1.285 信任框默认聚焦「No, exit」，共用驱动回车即退出）。"""
+
+    @staticmethod
+    def _client_trusts(state: dict, cwd: str) -> bool:
+        """2.1.285 的判定参照（``sU``／``QS``／``ZS``，不在 git 仓库里时）：启动目录及其任一上级登记了信任即已信任。"""
+
+        projects = state.get("projects") or {}
+        path = Path(cwd)
+        return any((projects.get(str(candidate)) or {}).get("hasTrustDialogAccepted") for candidate in (path, *path.parents))
+
+    def test_trust_paths_cover_the_v4_workspace_and_the_v3_process_cwd(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real-results"
+            real.mkdir()
+            link = root / "results"
+            link.symlink_to(real)
+            paths = relay._tui_trust_paths(link, Path("/"))
+            self.assertEqual(paths[0], os.path.normpath(str(link / "workspace")), "v4／v5 的 TUI 在 <结果根>/workspace 启动")
+            self.assertIn(os.path.realpath(str(link / "workspace")), paths, "结果根经过符号链接时另登记真实路径")
+            self.assertEqual(paths[-1], "/", "v3 的 TUI（v4-replay-tui）不切换目录，在中继进程的工作目录启动")
+            self.assertEqual(len(paths), len(set(paths)))
+            self.assertEqual(relay._tui_trust_paths(Path("/campaign/results"), Path("/")), ["/campaign/results/workspace", "/"])
+
+    def test_seed_rewrites_only_the_temporary_global_state_copy(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay
+        from tools.official_client_capture.capturelib.environment import temporary_claude_tui_state
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            credentials = root / "credentials.json"
+            credentials.write_text('{"claudeAiOauth": {"accessToken": "x"}}', encoding="utf-8")
+            credentials.chmod(0o600)
+            global_state = root / "claude.json"
+            original = json.dumps({"oauthAccount": {"accountUuid": "u"}, "projects": {"/srv": {"hasTrustDialogAccepted": False, "allowedTools": ["Bash"]}}})
+            global_state.write_text(original, encoding="utf-8")
+            global_state.chmod(0o600)
+            memory = root / "shm"
+            memory.mkdir()
+            workspace = "/campaign/attempts/v4-tui-usage/attempt-001/results/workspace"
+            with temporary_claude_tui_state(credentials, global_state, expected_version="2.1.285", memory_root=memory) as (home, _config, receipt):
+                before = json.loads((home / ".claude.json").read_bytes())
+                self.assertFalse(self._client_trusts(before, workspace), "不预置时 TUI 工作目录没有信任，客户端会弹信任框")
+                seeded = relay._seed_tui_workspace_trust(home, [workspace, "/srv"])
+                after = json.loads((home / ".claude.json").read_bytes())
+                self.assertEqual(seeded, [workspace, "/srv"])
+                self.assertTrue(self._client_trusts(after, workspace))
+                self.assertEqual(after["projects"]["/srv"], {"hasTrustDialogAccepted": True, "allowedTools": ["Bash"]}, "已有条目的其它键保留")
+                self.assertEqual({key: value for key, value in after.items() if key != "projects"},
+                                 {key: value for key, value in before.items() if key != "projects"}, "只改 projects")
+                self.assertEqual(oct((home / ".claude.json").stat().st_mode & 0o777), "0o600")
+                self.assertEqual(sorted(path.name for path in home.iterdir()), [".claude", ".claude.json"], "原地改写，不留暂存文件")
+            self.assertTrue(receipt["removed"])
+            self.assertFalse(receipt["source_global_state_modified"])
+            self.assertEqual(global_state.read_text(encoding="utf-8"), original, "长期全局状态逐字不变")
+
+    def test_seed_rejects_an_untrusted_copy(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay
+        from tools.official_client_capture.capturelib.model import ConfigurationError
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with self.assertRaises(ConfigurationError):
+                relay._seed_tui_workspace_trust(home, ["/w"])
+            for label, content in (("不是 JSON", b"not json"), ("顶层不是对象", b"[]")):
+                with self.subTest(label=label):
+                    (home / ".claude.json").write_bytes(content)
+                    with self.assertRaises(ConfigurationError):
+                        relay._seed_tui_workspace_trust(home, ["/w"])
+            (home / ".claude.json").unlink()
+            (home / "elsewhere.json").write_text("{}", encoding="utf-8")
+            (home / ".claude.json").symlink_to(home / "elsewhere.json")
+            with self.assertRaises(ConfigurationError):
+                relay._seed_tui_workspace_trust(home, ["/w"])
+
+    def test_capture_seeds_trust_inside_the_temporary_tui_state(self) -> None:
+        """接线：预置发生在 TUI 临时 HOME 建好之后、执行场景之前；收据缺省记 False。"""
+
+        import ast
+
+        source = (TOOL_ROOT / "claude_fw_e_relay.py").read_text(encoding="utf-8")
+        capture = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "_capture")
+        body = ast.get_source_segment(source, capture)
+        state = body.index("with temporary_claude_tui_state(")
+        seed = body.index("_seed_tui_workspace_trust(tui_home, _tui_trust_paths(result_root, Path.cwd()))")
+        run = body.index("scenario_summary = execute_selected_probe(environment)", state)
+        self.assertLess(state, seed)
+        self.assertLess(seed, run)
+        self.assertIn('state_receipt["workspace_trust_seeded"] = bool(', body)
+        self.assertIn('"workspace_trust_seeded": False,', body)
 
 
 if __name__ == "__main__":

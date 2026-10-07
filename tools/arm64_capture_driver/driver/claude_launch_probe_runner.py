@@ -18,19 +18,26 @@
   是全局状态文件的规范化副本（与中继同样补齐 ``theme``、``hasCompletedOnboarding``、``lastOnboardingVersion``）；全局
   状态文件不存在（ARM64 尚未做 Claude OAuth 登录）时从空对象开始，缺 ``oauthAccount`` 时补一份合成占位。``~/.claude``
   的其余内容不复制：作业的 TUI 临时 HOME 里也没有它们。
+* 工作目录信任：与中继（``claude_fw_e_relay._seed_tui_workspace_trust``）同法，在 ``.claude.json`` 副本里预置
+  ``projects[<工作目录>].hasTrustDialogAccepted = true``（客户端判定「已信任」读的就是这个键，从工作目录逐级向上找；
+  2.1.226 与 2.1.285 相同，官方自托管 runner 也这样预置）。2.1.285 的信任框默认焦点在「No, exit」，作业的共用驱动
+  回车会选到退出，所以作业靠预置信任不出现信任框。
 * 进程：本进程是私有 PID 命名空间的 1 号进程，退出时内核回收命名空间内全部子进程。
 
 判据
 ----
 按作业相同的方式启动 TUI：工作目录与夹具由受管 ``capturelib/claude_fw_f_v4._fixture_paths`` 建（与中继同一函数），
 客户端参数与 ``_run_tui_probe`` 的拼法相同，环境与中继 TUI 路径相同（最小白名单、隐私变量、``NODE_EXTRA_CA_CERTS``、私有
-HOME），经受管驱动入口 ``claude_drive_tui_cli.py``（同一状态机：引导菜单回车接受、登录页立即停）只把提示词换成探测口令。
-替身收到正文含完整口令的 ``POST /v1/messages`` 才算通过。交互屏（信任目录、登录、onboarding、主题选择、模型迁移等）
-从会话文本里识别，写进结果作诊断：驱动能自动确认的屏（例如信任目录）不影响判定，拦住首帧的屏让口令进不了输入框，
-替身收不到带口令的请求，判为失败。
+HOME），经受管驱动入口 ``claude_drive_tui_cli.py``（同一状态机：引导菜单回车接受、登录页立即停；信任框按选项文字确认）
+只把提示词换成探测口令。替身收到正文含完整口令的 ``POST /v1/messages`` 才算通过（``run_verdict``）。交互屏（信任目录、
+登录、onboarding、主题选择、模型迁移等）从会话文本里识别，写进结果作诊断：拦住首帧的屏让口令进不了输入框，替身收不到
+带口令的请求，判为失败。信任目录屏只在 ``untrust:`` 验收变更下是预期的（驱动确认它，不影响判定）；正常路径上出现它
+说明预置信任失效——作业的驱动不会确认它，所以即使驱动确认后收到了口令也判失败（``trust_dialog_unexpected``）。
 
-替身的应答：``POST /v1/messages`` 回 400（不触发重试），其余一律 404。结果只记录主机、方法、路径与头部名称（另有
-口令是否出现、正文能否解码与替身自己的应答码），任何头部取值与正文都不写进结果。
+替身的应答：``POST /v1/messages`` 回 400（不触发重试），其余一律 404。2.1.285 对启动期的四个请求都把 404 当作「没有」
+放行：``HEAD /api/hello`` 是预连接、结果被丢弃；``/api/oauth/profile`` 失败只记日志、沿用全局状态里的 ``oauthAccount``；
+``/api/claude_code/settings`` 把 404 定义为「没有远程设置」；``/api/claude_code/policy_limits`` 无缓存时 404 即本会话不限制。
+结果只记录主机、方法、路径与头部名称（另有口令是否出现、正文能否解码与替身自己的应答码），任何头部取值与正文都不写进结果。
 """
 
 from __future__ import annotations
@@ -146,12 +153,36 @@ def workspace_path() -> PurePosixPath:
 
 
 def untrusted_paths(directory: str, workspace: PurePosixPath) -> list[str]:
-    """``untrust:<目录>`` 要撤销信任的路径：该目录与它的全部上级。目录必须是工作目录本身或它的上级，否则注入对探测无效。"""
+    """``untrust:<目录>`` 要撤销信任的路径：工作目录信任链上的全部路径（工作目录本身与它的全部上级）。
+
+    目录必须是工作目录本身或它的上级，否则注入对探测无效。私有 HOME 预置了工作目录本身的信任（与中继同法），只撤销
+    该目录与它的上级挡不住它（客户端从工作目录逐级向上找，先找到的就是工作目录自己），所以撤销整条链，信任框必然出现。
+    """
 
     target = PurePosixPath(directory)
     if not target.is_absolute() or ".." in target.parts or (target != workspace and target not in workspace.parents):
         raise ProbeError(f"验收变更的目录不是探测工作目录或其上级：{directory}（工作目录 {workspace}）")
-    return [str(path) for path in (target, *target.parents)]
+    return [str(path) for path in (workspace, *workspace.parents)]
+
+
+def seed_project_trust(state: dict[str, Any], paths: Iterable[str]) -> list[str]:
+    """在全局状态里预置这些目录的信任确认（``projects[<目录>].hasTrustDialogAccepted = true``），返回预置的目录。
+
+    与中继 ``claude_fw_e_relay._seed_workspace_trust`` 逐字同一规则（测试对照两者的输出字节）：``projects`` 不是对象时
+    换成空对象，条目不是对象时换成空对象，已有条目的其它键保留。只写这一个键，与官方自托管 runner 预置的形状相同。
+    """
+
+    projects = state.get("projects")
+    if not isinstance(projects, dict):
+        projects = state["projects"] = {}
+    seeded: list[str] = []
+    for path in paths:
+        entry = projects.get(path)
+        if not isinstance(entry, dict):
+            entry = projects[path] = {}
+        entry["hasTrustDialogAccepted"] = True
+        seeded.append(path)
+    return seeded
 
 
 def normalized_global_state(
@@ -163,8 +194,9 @@ def normalized_global_state(
 ) -> tuple[bytes, dict[str, Any]]:
     """私有 HOME 里的 ``.claude.json``：全局状态的规范化副本（与中继同样补齐引导状态；缺账号时补合成占位）。
 
-    ``untrust:<目录>`` 验收变更撤销该目录及其全部上级在 ``projects`` 里的信任确认，使信任目录交互屏必然出现。返回规范化
-    后的字节与只含字段名和布尔事实的摘要（不含任何状态取值）。
+    与中继同法预置工作目录的信任确认（``seed_project_trust``），正常路径不出现信任框。``untrust:<目录>`` 验收变更随后
+    撤销工作目录信任链上（工作目录本身与它的全部上级）已登记的信任确认，使信任目录交互屏必然出现。返回规范化后的字节
+    与摘要（字段名、预置与撤销的目录、布尔事实；不含账号等状态取值）。
     """
 
     if raw is None:
@@ -188,12 +220,14 @@ def normalized_global_state(
     if not isinstance(state.get("oauthAccount"), dict) or not state["oauthAccount"]:
         state["oauthAccount"] = dict(SYNTHETIC_OAUTH_ACCOUNT)
         account = "synthetic"
+    workspace = workspace or workspace_path()
+    seeded = seed_project_trust(state, [str(workspace)])
     untrusted: list[str] = []
     for mutation in mutations:
         match = MUTATION_RE.fullmatch(mutation)
         if match is None:
             raise ProbeError(f"不支持的验收变更：{mutation}")
-        paths = untrusted_paths(match.group(1), workspace or workspace_path())
+        paths = untrusted_paths(match.group(1), workspace)
         projects = state.get("projects")
         if not isinstance(projects, dict):
             projects = state["projects"] = {}
@@ -207,6 +241,7 @@ def normalized_global_state(
         "source": source,
         "normalized_fields": normalized_fields,
         "oauth_account": account,
+        "trust_seeded_projects": seeded,
         "untrusted_projects": untrusted,
     }
 
@@ -333,6 +368,33 @@ def is_token_request(record: Mapping[str, Any]) -> bool:
     """判据：正文含完整口令的 ``POST /v1/messages``。"""
 
     return record.get("method") == "POST" and record.get("path") == MESSAGES_PATH and record.get("token_found") is True
+
+
+def run_verdict(
+    *,
+    token_observed: bool,
+    auth_gate: bool,
+    cli_exit_code: int | None,
+    screens: Iterable[str],
+    mutations: Iterable[str],
+) -> tuple[str, str]:
+    """一次运行的（状态，原因）。
+
+    没有 ``untrust:`` 验收变更时出现信任目录屏先判 ``trust_dialog_unexpected``：私有 HOME 与中继 TUI 临时 HOME 都预置了
+    工作目录信任，作业的共用驱动不会确认信任框（2.1.285 默认焦点在「No, exit」），探测这边驱动确认后收到口令也不能
+    代表作业能过。其余与原判定顺序相同：收到带口令的请求即通过，否则依次是登录门禁、超时、没收到口令。
+    """
+
+    trust_expected = any(str(mutation).startswith("untrust:") for mutation in mutations)
+    if "trust_directory" in set(screens) and not trust_expected:
+        return "failed", "trust_dialog_unexpected"
+    if token_observed:
+        return "passed", "token_request_observed"
+    if auth_gate:
+        return "failed", "auth_gate"
+    if cli_exit_code is None:
+        return "failed", "timeout"
+    return "failed", "token_request_missing"
 
 
 def validate_config(config: Any) -> dict[str, Any]:
@@ -719,15 +781,13 @@ def main() -> int:
         result["transcript_bytes"] = len(text.encode("utf-8"))
         result["tui_visible_tail"] = redact(text[-1500:])
         result["drive_output_tail"] = redact(cli_tail)
-        result["status"] = "passed" if hit is not None else "failed"
-        if hit is not None:
-            result["reason"] = "token_request_observed"
-        elif result["driver"]["auth_gate_detected"]:
-            result["reason"] = "auth_gate"
-        elif result["cli_exit_code"] is None:
-            result["reason"] = "timeout"
-        else:
-            result["reason"] = "token_request_missing"
+        result["status"], result["reason"] = run_verdict(
+            token_observed=hit is not None,
+            auth_gate=result["driver"]["auth_gate_detected"],
+            cli_exit_code=result["cli_exit_code"],
+            screens=result["detected_screens"],
+            mutations=config["test_mutations"],
+        )
     except (ProbeError, OSError, KeyError, TypeError, ValueError, ImportError, subprocess.SubprocessError) as error:
         result["reason"] = "probe_error"
         result["error"] = redact(f"{type(error).__name__}: {error}")[:600]
