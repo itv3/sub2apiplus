@@ -1,0 +1,105 @@
+{
+  "base_commit": "9992fd7d31514421e24003cb2855e82930bc2020",
+  "changed_path_count": 6,
+  "current_commit": "3897fe3064ffc5d64a227deb18524d5efee2d4e8",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5845,
+  "frozen_path_count": 2015,
+  "identity_sha256": "1d0cc984025bae2e854bf23e6ff527a6738ef9aba7a987c7b97e7e1dc4fc2906",
+  "issued_at_utc": "2026-10-07T11:00:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-b304b-release-pin-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "predecessor_sha256s": [
+        "48e926a45cb0a4408ac6489529b9426d26d92ba88cefa697dd1b4c8c28fd33d0"
+      ],
+      "reason": "Claude 升级 B3-04b：Go 侧 ClaudeFWG* 历史锚点钉住 2.1.226 Release，与 validation_candidate 解耦；路由目录改调跟随候选的加载函数 path=backend/internal/officialegress/claude_production_release.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "56a3583171bf652aace23584bdeab8c0aaeb677b68fd7c9daeef5d1c22832358"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/claude_profile.go",
+      "predecessor_sha256s": [
+        "226a2e2ac54e6af750d14c59963ac574b3542c67c9e3370ed1c22737aea8f565"
+      ],
+      "reason": "Claude 升级 B3-04b：Go 侧 ClaudeFWG* 历史锚点钉住 2.1.226 Release，与 validation_candidate 解耦；路由目录改调跟随候选的加载函数 path=backend/internal/officialegress/claude_profile.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bbf8cadd9be65d8c3044d3849c4ad47871d62d4071d882f2f468103803b29b4b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/claude_wire.go",
+      "predecessor_sha256s": [
+        "a0dfb3106949e2f7d7541c13094d77f93a0cbdab7f54522e55c0af405f4a6e99"
+      ],
+      "reason": "Claude 升级 B3-04b：Go 侧 ClaudeFWG* 历史锚点钉住 2.1.226 Release，与 validation_candidate 解耦；路由目录改调跟随候选的加载函数 path=backend/internal/officialegress/claude_wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ea83e9be18db9edec6a9278c708cecc49be3608407e09c85afafeb5158b4d615"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "predecessor_sha256s": [
+        "2eb3bcb8b10e7d7009ee61ad9967c03574362e2108ddcce5b6e2622e90239797"
+      ],
+      "reason": "Claude 升级 B3-04b：Go 侧 ClaudeFWG* 历史锚点钉住 2.1.226 Release，与 validation_candidate 解耦；路由目录改调跟随候选的加载函数 path=backend/internal/officialegress/route_catalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-0160-candidate-route-retirement-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6cf9e66a68928103de9d2c54152bcca9616f282cbaefba41f888978472f58632"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "backend/internal/officialegress/claude_release_pin.go",
+    "backend/internal/officialegress/claude_release_pin_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
