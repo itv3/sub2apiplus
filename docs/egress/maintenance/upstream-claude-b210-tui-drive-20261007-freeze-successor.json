@@ -1,0 +1,54 @@
+{
+  "base_commit": "db6a57aabb3075dfecb20dc0eb509c7d1f8731cd",
+  "changed_path_count": 9,
+  "current_commit": "0c5454a6c5e0d134d9e4bdf8d2c3993636f4622a",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5851,
+  "frozen_path_count": 2015,
+  "identity_sha256": "ededa4ccea9de4bfb37faf0e0f75641c30dcf0ceafdf4281432c3ef8b078964d",
+  "issued_at_utc": "2026-10-07T12:49:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-b210-tui-drive-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/capturelib/claude_fw_f_v4.py",
+      "predecessor_sha256s": [
+        "3f019b4305f76321ad0a2a713b0359b115f4b5923bcedcf20720d739b8f8dea9"
+      ],
+      "reason": "Claude 升级 B2-10 修正：2.1.285 主界面就绪识别，Claude 侧驱动循环移入 claude_fw_f_v3，v4 只改导入 path=tools/official_client_capture/capturelib/claude_fw_f_v4.py",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c5bb6677c23ede590528ec5483f49ead3b075162eee4457a00f84fcaa28e0203"
+    }
+  ],
+  "unregistered_path_count": 8,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/claude_launch_probe_runner.py",
+    "tools/arm64_capture_driver/driver/client_launch_probe.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/official_client_capture/capturelib/claude_fw_f_v3.py",
+    "tools/official_client_capture/claude_drive_tui_cli.py",
+    "tools/official_client_capture/claude_fw_e_relay.py",
+    "tools/official_client_capture/tests/test_claude_launch_probe.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
