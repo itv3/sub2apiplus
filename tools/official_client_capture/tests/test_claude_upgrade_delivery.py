@@ -14,6 +14,16 @@
 ⑤ finalize 重复调用返回原收据，换审核摘要被拒。
 另有：环境变化开新 delivery_id（含收口旧 delivery 推进中的段）、Store 与账本之间被打断后补账收敛、同根因达上限在 Store
 写入之前拒绝、执行器未登记报待落实、父监督器上下文拒绝阶段失效。
+
+B4-07 收尾（第八、九节）：夹具补齐编排器侧的 VC 封存链——VC 总计划、VC-0～VC-3 checkpoint、r1 的 VC-4 checkpoint（绑定
+与 Store 候选同一镜像 digest 的构建收据）与 VC-5 checkpoint（绑定 accept 阶段结果；结果登记的 Store 引用取自 Store 交接，
+证据封印登记 VC-4 构建收据），入口重放与 VC-6 checkpoint 写入真跑。另验：finalize 写交付阶段结果与 VC-6 checkpoint
+（validation_only）或只写结果、``production_activation_pending``（production_replacement，``ProductionReplacementDeliveryTests``）；
+入口重放的三处一致性失败关闭；直接 CLI 的交付写入被拒（不带批准的 finalize 照旧可查）。
+
+替身登记：本模块验交付链逻辑，直接调用编排器入口；交付写入「只经父批次」的限制（``claude_upgrade_delivery._require_parent_batch``）
+在 setUp 换成放行替身，``ParentBatchGuardTests`` 撤掉替身验限制本身。真实父批次派发、父批次退出码、批次失败后的对账与逐字
+重派由 ``test_claude_upgrade_vc6_batch`` 在 B4-06b 的真实 VC-5 链上验。
 """
 
 from __future__ import annotations
@@ -33,13 +43,16 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_delivery as delivery
+from tools.official_client_capture import claude_upgrade_acceptance
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_control.contracts import CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA, derive_identity_conditions
 from tools.official_client_control.store import ControlStore
-from tools.official_client_control.tests.fixtures import ROLLBACK_IMAGE, ManagedToolTree, SyntheticCampaign
+from tools.official_client_capture.tests.claude_vc6_delivery_fixture import FixtureExecutor
+from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
 
 CAMPAIGN_ID = "claude-code-2_1_285-b407"
 CANDIDATE = "synthetic-candidate-strict"
@@ -47,15 +60,8 @@ CANDIDATE = "synthetic-candidate-strict"
 BASELINE = "0.9.0"
 TARGET = "1.0.0"
 STAGES = list(delivery.STAGES)
-ENVIRONMENT = {
-    "host_id": "arm64-candidate",
-    "architecture": "linux/amd64",
-    "compose_sha256": "d" * 64,
-    "environment_sha256": "4" * 64,
-    "configuration_sha256": "5" * 64,
-    "network_sha256": "6" * 64,
-}
-ROLLBACK_PROFILE = "e" * 64
+# 父批次限制的真身（setUp 换成放行替身之前取，ParentBatchGuardTests 用它验限制本身）。
+REQUIRE_PARENT_BATCH = delivery._require_parent_batch
 
 
 def _now() -> str:
@@ -90,55 +96,10 @@ def tree_digests(*roots: Path) -> dict[str, str]:
     return digests
 
 
-class FixtureExecutor:
-    """交付环境执行器替身：按冻结计划给出观测；``failures``（段, 阶段）→ 根因（None 表示用缺省根因），
-    ``crash_at``（段, 阶段）在该阶段抛错模拟中途崩溃，``environment`` 可改动模拟环境漂移。"""
-
-    def __init__(self) -> None:
-        self.environment = dict(ENVIRONMENT)
-        self.failures: dict[tuple[str, str], str | None] = {}
-        self.crash_at: tuple[str, str] | None = None
-        self.failed_gates: set[str] = set()
-        self.freezes = 0
-        self.calls: list[tuple[str, str, str]] = []
-
-    def freeze(self, request: dict[str, Any]) -> dict[str, Any]:
-        self.freezes += 1
-        return {
-            "environment": dict(self.environment),
-            "rollback": {"image_digest": ROLLBACK_IMAGE, "runtime_profile_sha256": ROLLBACK_PROFILE},
-            "gates": [
-                {"id": gate, "result": "failed" if gate in self.failed_gates else "pass", "facts": {"probe": gate}}
-                for gate in request["delivery_gates"]
-            ],
-            "rollback_material": [{"id": "app-image", "result": "pass", "facts": {"image_digest": ROLLBACK_IMAGE}}],
-            "deployment_configuration": [{"id": "compose", "result": "pass", "facts": {"sha256": self.environment["compose_sha256"]}}],
-        }
-
-    def run_stage(self, request: dict[str, Any]) -> dict[str, Any]:
-        segment, stage, plan = request["segment"], request["stage"], request["plan"]
-        self.calls.append((segment, stage, request["run_nonce"]))
-        if self.crash_at == (segment, stage):
-            raise RuntimeError(f"执行器在 {segment} {stage} 中途崩溃")
-        rollback = stage == "rollback_verified"
-        failed = (segment, stage) in self.failures
-        observation: dict[str, Any] = {
-            "stage": stage,
-            "result": "failed" if failed else "pass",
-            "environment": dict(self.environment),
-            "image_digest": plan["rollback_image_digest"] if rollback else plan["candidate_image_digest"],
-            "runtime_profile_sha256": plan["rollback_runtime_profile_sha256"] if rollback else plan["runtime_profile_sha256"],
-            "checks": [{"id": check, "result": "pass", "facts": {"stage": stage}} for check in plan["stage_checks"]],
-            "observed_seconds": plan["observation_window_seconds"] if stage == "stable_observed" else 3,
-            "private_files": [{"name": "stage.log", "content": f"{segment} {stage} {request['run_nonce']}\n"}],
-        }
-        if failed and self.failures[(segment, stage)] is not None:
-            observation["root_cause_id"] = self.failures[(segment, stage)]
-        return observation
-
-
 class _DeliveryCase(unittest.TestCase):
     tree: ManagedToolTree
+    # Campaign 用途：Store 夹具、计时账本、VC 总计划与 Campaign 总计划同取（production_replacement 子类覆盖）。
+    PURPOSE = "validation_only"
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -166,10 +127,15 @@ class _DeliveryCase(unittest.TestCase):
         commit = self._revision()
         self.ledger = self._ledger(commit)
         self._manifest(conditions)
+        self.write_vc_chain()
         self.executor = FixtureExecutor()
         patcher = mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {"fixture": lambda: self.executor})
         patcher.start()
         self.addCleanup(patcher.stop)
+        # 替身（模块说明）：交付写入只经父批次的限制在这里放行；ParentBatchGuardTests 撤掉它验限制本身。
+        self.parent_guard = mock.patch.object(delivery, "_require_parent_batch", lambda label: None)
+        self.parent_guard.start()
+        self.addCleanup(self.parent_guard.stop)
 
     # ---- 夹具 ----
 
@@ -184,12 +150,12 @@ class _DeliveryCase(unittest.TestCase):
             platforms=["linux/arm64"],
             entrypoints=["claude-cli"],
             default_conditions=["privacy=default"],
-            campaign_purpose="validation_only",
+            campaign_purpose=self.PURPOSE,
             absolute_deadline_utc="2026-12-31T00:00:00Z",
         )
         fixture.discovery_and_evidence()
         fixture.profile_objects()
-        fixture.profile_approve("validation_only")
+        fixture.profile_approve(self.PURPOSE)
         fixture.store.append_fact(
             CAMPAIGN_ID,
             "candidate_revision_recorded",
@@ -228,7 +194,7 @@ class _DeliveryCase(unittest.TestCase):
         ledger = self.root / "timing-ledger"
         timing.create_ledger(
             ledger, upgrade_id=CAMPAIGN_ID, baseline_version=BASELINE, target_version=TARGET,
-            campaign_purpose="validation_only", evidence_decision="recapture", client="claude",
+            campaign_purpose=self.PURPOSE, evidence_decision="recapture", client="claude",
         )
 
         def append(event_id: str, phase: str, event_type: str, **fields: Any) -> None:
@@ -248,9 +214,16 @@ class _DeliveryCase(unittest.TestCase):
 
     def _manifest(self, conditions: dict[str, Any]) -> None:
         rules = _write_json(self.campaign / "inputs" / "rules.json", {"rules": []})
+        self.plan = vc_artifacts.build_campaign_plan(
+            campaign_id=CAMPAIGN_ID, campaign_mode="formal", campaign_purpose=self.PURPOSE, baseline_version=BASELINE,
+            target_version=TARGET, created_at_utc="2026-10-07T00:00:00Z", original_deadline_at_utc="2026-12-31T00:00:00Z",
+            timing_checkpoint_sha256="1" * 64, arm64_environment_sha256="2" * 64, job_rehearsal_sha256="3" * 64,
+            p0_gate_sha256="4" * 64,
+        )
+        plan_path = _write_json(self.campaign / "control" / "vc" / "campaign-plan.json", self.plan)
         manifest = {
             "schema_version": "official-client-upgrade-campaign/v1", "client": "claude", "campaign_id": CAMPAIGN_ID,
-            "created_at_utc": "2026-10-07T00:00:00Z", "campaign_mode": "formal", "campaign_purpose": "validation_only",
+            "created_at_utc": "2026-10-07T00:00:00Z", "campaign_mode": "formal", "campaign_purpose": self.PURPOSE,
             "baseline_version": BASELINE, "target_version": TARGET, "target_sha256": "a" * 64,
             "official_identity": {"npm": {}, "gcs": {}, "binary_sha256": "b" * 64, "binary_equivalence": "npm=gcs"},
             "baseline_identity": {}, "tool_identity": {"client": "claude"},
@@ -264,12 +237,77 @@ class _DeliveryCase(unittest.TestCase):
             "configuration": {
                 key: conditions[key] for key in ("platform", "entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256")
             },
-            "required_rules": [], "coverage_plan": {}, "jobs": [], "vc_control": {}, "predecessor": None,
+            "required_rules": [], "coverage_plan": {}, "jobs": [], "predecessor": None,
+            "vc_control": {"campaign_plan": {"path": "control/vc/campaign-plan.json", "sha256": claude_upgrade.file_sha256(plan_path)}},
         }
         raw = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
         (self.campaign / "campaign.json").write_bytes(raw)
         (self.campaign / "campaign.json").chmod(0o600)
         (self.campaign / "campaign.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n", encoding="utf-8")
+
+    def write_checkpoint(self, phase: str, stage: Path, previous: tuple[Path, dict[str, Any]] | None) -> tuple[Path, dict[str, Any]]:
+        revision = 1 if phase in claude_upgrade_vc.CANDIDATE_PHASES else None
+        checkpoint = vc_artifacts.build_vc_checkpoint(
+            campaign_plan=self.plan,
+            phase=phase,
+            status="complete",
+            predecessor_checkpoint=(
+                None if previous is None else claude_upgrade_vc.vc_checkpoint_reference(self.campaign, previous[0], previous[1])
+            ),
+            stage_receipt={"path": stage.relative_to(self.campaign).as_posix(), "sha256": claude_upgrade.file_sha256(stage)},
+            completed_at_utc="2026-10-07T01:00:00Z",
+            execute_item_ids=[],
+            reuse_item_ids=[],
+            live_request_count=0,
+            scanned_bytes=0,
+        )
+        path = claude_upgrade_vc.vc_checkpoint_path(self.campaign, phase, revision=revision)
+        _write_json(path, checkpoint)
+        return path, checkpoint
+
+    def write_vc_chain(self, *, store: dict[str, Any] | None = None, sealed_build: dict[str, Any] | None = None,
+                       image_digest: str | None = None) -> None:
+        """编排器侧 VC 封存链（模块说明）：VC-0～VC-3 → r1 的 VC-4（构建收据）→ VC-5（accept 阶段结果）。三个关键字参数各注入
+        一处不一致（accept 结果的 Store 引用、证据封印登记的构建收据、构建收据的镜像 digest），其余照常，供入口重放失败关闭用例。"""
+
+        handoff = self.handoff()
+        previous: tuple[Path, dict[str, Any]] | None = None
+        for phase in ("VC-0", "VC-1", "VC-2", "VC-3"):
+            stage = _write_json(self.campaign / "stages" / f"{phase.lower()}.json", {"phase": phase})
+            previous = self.write_checkpoint(phase, stage, previous)
+        build = _write_json(
+            claude_upgrade._candidate_build_receipt_path(self.campaign, CANDIDATE),
+            {"candidate_id": CANDIDATE, "image": {"manifest_digest": image_digest or handoff["candidate_image_digest"]}},
+        )
+        previous = self.write_checkpoint("VC-4", build, previous)
+        accept_dir = self.campaign / "acceptance" / CANDIDATE
+        bound = {
+            name: _write_json(accept_dir / f"{name}.json", {"fixture": name})
+            for name in ("comparison", "results", "evaluation-run", "runtime-audit")
+        }
+        binding = lambda path: {"path": path.relative_to(self.campaign).as_posix(), "sha256": claude_upgrade.file_sha256(path)}  # noqa: E731
+        seal = _write_json(accept_dir / "evidence-seal.json", {"build_receipt": sealed_build or binding(build)})
+        refs = {key: handoff[key] for key in ("validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref")}
+        accept = _write_json(
+            accept_dir / "result.json",
+            {
+                "schema_version": claude_upgrade_acceptance.ACCEPT_SCHEMA, "client": "claude", "campaign_id": CAMPAIGN_ID,
+                "stage": "accept", "candidate_id": CANDIDATE, "status": "complete", "accepted": True,
+                "campaign_purpose": self.PURPOSE, "candidate_purpose": self.PURPOSE, "production_state": "not_activated",
+                "candidate_revision": 1, "validation_round": 1, "evaluation_baseline": 0,
+                "comparison": binding(bound["comparison"]),
+                "assertions": {"results": binding(bound["results"]), "evaluation_run": binding(bound["evaluation-run"])},
+                "external_gate": {}, "runtime_audit": {**binding(bound["runtime-audit"]), "activation_fact": {}},
+                "client_evidence": {}, "pair_rows": {}, "store": {**refs, **(store or {})}, "evidence_seal": binding(seal),
+                "accepted_at_utc": "2026-10-07T02:00:00Z",
+            },
+        )
+        self.write_checkpoint("VC-5", accept, previous)
+
+    def handoff(self) -> dict[str, Any]:
+        manifest = claude_upgrade.load_campaign_manifest(self.campaign)
+        store, campaign = claude_upgrade_store.open_campaign_store(self.campaign, manifest)
+        return delivery._vc5_handoff(store, campaign, CANDIDATE)
 
     # ---- 入口与读侧 ----
 
@@ -574,6 +612,155 @@ class DeliveryRecoveryTests(_DeliveryCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("不是当前候选 revision r1 的候选", stderr)
+
+
+
+class Vc6CompletionTests(_DeliveryCase):
+    """第八节：入口重放、交付阶段结果与 VC-6 checkpoint（validation_only）、status 用的交付状态。"""
+
+    def vc6_checkpoint(self) -> Path:
+        return claude_upgrade_vc.vc_checkpoint_path(self.campaign, "VC-6", revision=1)
+
+    def test_finalize_writes_stage_result_and_vc6_checkpoint(self) -> None:
+        self.assertEqual(delivery.delivery_status(self.campaign, CANDIDATE)["status"], "ready")
+        review = self.complete_first_round()["package_review"]["review_sha256"]
+        status = delivery.delivery_status(self.campaign, CANDIDATE)
+        self.assertEqual((status["status"], status["review_sha256"]), ("delivery_awaiting_finalize", review))
+        code, finalized, stderr = self.finalize(review)
+        self.assertEqual((code, finalized["status"], finalized["vc6_status"]), (0, "finalized", "complete"), stderr)
+        result = delivery.load_stage_result(self.campaign, CANDIDATE)
+        self.assertEqual(finalized["stage_result"]["path"], f"delivery/{CANDIDATE}/result.json")
+        self.assertEqual(
+            (result["receipt_ref"], result["package_ref"], result["vc6_status"], result["release_state"], result["production_state"]),
+            (finalized["receipt_ref"], finalized["package_ref"], "complete", "ready_for_operator_release", "not_activated"),
+        )
+        vc5_path = claude_upgrade_vc.vc_checkpoint_path(self.campaign, "VC-5", revision=1)
+        self.assertEqual(result["vc5_checkpoint"]["path"], vc5_path.relative_to(self.campaign).as_posix())
+        self.assertEqual(result["accept_result"]["path"], f"acceptance/{CANDIDATE}/result.json")
+        self.assertEqual(result["store"]["acceptance_ref"], self.handoff()["acceptance_ref"])
+        # VC-6 checkpoint：前序是同 revision 的 VC-5，阶段收据是交付阶段结果，零请求、零扫描。
+        _path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(self.campaign, self.plan, "VC-6", revision=1)
+        self.assertEqual(checkpoint["stage_receipt"], finalized["stage_result"])
+        self.assertEqual(checkpoint["predecessor_checkpoint"], result["vc5_checkpoint"])
+        self.assertEqual(checkpoint["metrics"], {"live_request_count": 0, "scanned_bytes": 0})
+        self.assertEqual(finalized["vc6_checkpoint"]["checkpoint_sha256"], checkpoint["checkpoint_sha256"])
+        # stage_completed 由批次层在父 run 成功后补写；直接调用（替身放行）不写。
+        self.assertEqual(timing.phase_ledger_state(self.ledger)["active_phase"], "VC-6")
+        self.assertEqual(delivery.delivery_status(self.campaign, CANDIDATE)["status"], "ready_for_operator_release")
+        # 重复 finalize：收据、阶段结果与 checkpoint 逐字复用。
+        before = (self.vc6_checkpoint().read_bytes(), delivery.stage_result_path(self.campaign, CANDIDATE).read_bytes())
+        code, again, stderr = self.finalize(review)
+        self.assertEqual((code, again["reused"], again["stage_result"]), (0, True, finalized["stage_result"]), stderr)
+        self.assertEqual((self.vc6_checkpoint().read_bytes(), delivery.stage_result_path(self.campaign, CANDIDATE).read_bytes()), before)
+        code, reviewed, stderr = self.finalize()
+        self.assertEqual((code, reviewed["stage_result"]["vc6_status"]), (0, "complete"), stderr)
+
+    def test_interrupted_after_receipt_completes_on_rerun(self) -> None:
+        review = self.complete_first_round()["package_review"]["review_sha256"]
+        with mock.patch.object(claude_upgrade_vc, "complete_candidate_phase", side_effect=RuntimeError("模拟收据签发后被打断")):
+            code, _result, stderr = self.finalize(review)
+        self.assertEqual(code, 1)
+        self.assertIn("模拟收据签发后被打断", stderr)
+        self.assertEqual(len(self.store().list_receipt_refs("candidate_delivery")), 1)
+        self.assertFalse(self.vc6_checkpoint().exists())
+        self.assertEqual(delivery.delivery_status(self.campaign, CANDIDATE)["status"], "delivery_completion_pending")
+        code, finalized, stderr = self.finalize(review)
+        self.assertEqual((code, finalized["reused"], finalized["vc6_status"]), (0, True, "complete"), stderr)
+        self.assertTrue(self.vc6_checkpoint().is_file())
+
+    def test_entry_replay_fails_closed_without_writes(self) -> None:
+        other = {"kind": "fact", "dimension": "validation", "fact_id": "f" * 64, "sha256": "f" * 64}
+        cases = {
+            "accept 结果的 Store 引用": ({"store": {"acceptance_ref": other}}, "accept 阶段结果登记的 acceptance_ref 与 Store 交接不一致"),
+            "封印登记的构建收据": ({"sealed_build": {"path": "stages/vc-3.json", "sha256": "0" * 64}}, "不是 VC-4 checkpoint 绑定的那份"),
+            "构建收据的镜像": ({"image_digest": "sha256:" + "ab" * 32}, "镜像 digest 与 Store 交接"),
+        }
+        for label, (fields, message) in cases.items():
+            with self.subTest(label):
+                self.write_vc_chain(**fields)
+                snapshot = self.written()
+                code, _result, stderr = self.run_delivery()
+                self.assertEqual(code, 1)
+                self.assertIn(message, stderr)
+                self.assertEqual(self.written(), snapshot)
+                self.assertEqual(self.executor.calls, [])
+        self.write_vc_chain()
+        self.complete_first_round()
+
+    def test_other_revision_accept_result_is_rejected(self) -> None:
+        accept_path = self.campaign / "acceptance" / CANDIDATE / "result.json"
+        payload = json.loads(accept_path.read_text(encoding="utf-8"))
+        _write_json(accept_path, {**payload, "candidate_revision": 2})
+        vc4 = claude_upgrade_vc.replay_vc_checkpoint(self.campaign, self.plan, "VC-4", revision=1)
+        self.write_checkpoint("VC-5", accept_path, vc4)
+        code, _result, stderr = self.run_delivery()
+        self.assertEqual(code, 1)
+        self.assertIn("不属于当前候选 revision r1", stderr)
+
+
+class ProductionReplacementDeliveryTests(_DeliveryCase):
+    """production_replacement：候选交付终点同一份交付阶段结果，不写 VC-6 checkpoint，等 B4-08 生产分支。"""
+
+    PURPOSE = "production_replacement"
+
+    def test_finalize_records_delivery_endpoint_and_leaves_vc6_open(self) -> None:
+        review = self.complete_first_round()["package_review"]["review_sha256"]
+        code, finalized, stderr = self.finalize(review)
+        self.assertEqual((code, finalized["status"], finalized["vc6_status"]), (0, "finalized", "production_activation_pending"), stderr)
+        self.assertIsNone(finalized["vc6_checkpoint"])
+        self.assertIn("B4-08", finalized["next_command"])
+        result = delivery.load_stage_result(self.campaign, CANDIDATE)
+        self.assertEqual((result["campaign_purpose"], result["vc6_status"]), ("production_replacement", "production_activation_pending"))
+        self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(self.campaign, "VC-6", revision=1).exists())
+        self.assertEqual(timing.phase_ledger_state(self.ledger)["active_phase"], "VC-6")
+        status = delivery.delivery_status(self.campaign, CANDIDATE)
+        self.assertEqual(status["status"], "production_activation_pending")
+
+
+class ParentBatchGuardTests(_DeliveryCase):
+    """第九节：Formal Campaign 的交付写入只经父批次；不带批准的 finalize 照旧可以直接查看。"""
+
+    def test_direct_delivery_writes_are_rejected(self) -> None:
+        review = self.complete_first_round()["package_review"]["review_sha256"]
+        snapshot = self.written()
+        with mock.patch.object(delivery, "_require_parent_batch", REQUIRE_PARENT_BATCH):
+            code, _result, stderr = self.run_delivery()
+            self.assertEqual(code, 1)
+            self.assertIn("deliver-candidate run 是 VC-6 批次动作", stderr)
+            code, _result, stderr = self.finalize(review)
+            self.assertEqual(code, 1)
+            self.assertIn("deliver-candidate finalize --approve-sha256 是 VC-6 批次动作", stderr)
+            self.assertEqual(self.written(), snapshot)
+            self.assertFalse(delivery.stage_result_path(self.campaign, CANDIDATE).exists())
+            code, reviewed, stderr = self.finalize()
+            self.assertEqual((code, reviewed["status"], reviewed["package_review"]["review_sha256"]), (2, "awaiting_finalize", review), stderr)
+            # 父监督器上下文里限制放行（真实派发见 test_claude_upgrade_vc6_batch）。
+            with mock.patch.dict(os.environ, {codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1"}):
+                self.assertIsNone(delivery._require_parent_batch("deliver-candidate run"))
+
+    def test_batch_actions_are_recognized_only_in_exact_form(self) -> None:
+        manifest = {"phase": "VC-6", "campaign_id": CAMPAIGN_ID, "candidate_id": CANDIDATE}
+        run = delivery.run_action(self.campaign, CANDIDATE, environment_executor="fixture", observation_window_seconds=60)
+        finalize = delivery.finalize_action(self.campaign, CANDIDATE, "a" * 64)
+        self.assertEqual((run["timeout_seconds"], finalize["timeout_seconds"]), (60 + delivery.RUN_TIMEOUT_MARGIN_SECONDS, 900))
+        self.assertEqual(delivery.vc6_action_plan(run)["execute_item_ids"], [delivery.RUN_ACTION_ID])
+        self.assertEqual((delivery.batch_action_kind(run, manifest), delivery.batch_action_kind(finalize, manifest)), ("run", "finalize"))
+        swapped = dict(run, action_id=delivery.FINALIZE_ACTION_ID, item_ids=[delivery.FINALIZE_ACTION_ID])
+        refused = {
+            "别的阶段": (run, {**manifest, "phase": "VC-5"}),
+            "别的 Campaign": (run, {**manifest, "campaign_id": "claude-code-other"}),
+            "别的候选": (run, {**manifest, "candidate_id": "claude-cand-other"}),
+            "项名不同": (dict(run, item_ids=["compare"]), manifest),
+            "子命令与动作不对应": (swapped, manifest),
+            "多余旗标": (dict(run, command=[*run["command"], "--rerun-from", "candidate_active"]), manifest),
+            "缺旗标": (dict(finalize, command=finalize["command"][:-2]), manifest),
+            "批准摘要非法": (dict(finalize, command=[*finalize["command"][:-1], "x"]), manifest),
+            "别的解释器": (dict(run, command=["/bin/sh", *run["command"][1:]]), manifest),
+            "不是映射": ([run], manifest),
+        }
+        for label, (action, owner) in refused.items():
+            with self.subTest(refused=label):
+                self.assertIsNone(delivery.batch_action_kind(action, owner))
 
 
 if __name__ == "__main__":

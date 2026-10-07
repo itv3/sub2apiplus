@@ -276,7 +276,13 @@ class CampaignRunContextTests(unittest.TestCase):
     """父监督器上下文：草案、修订与预览的暂停点退出 0；批次控制面命令拒绝。"""
 
     def test_pause_statuses_and_control_plane_guard(self) -> None:
-        self.assertEqual(batch.CONTROL_PLANE_COMMANDS, frozenset(claude_upgrade.SHARED_SUBCOMMANDS) | {"tool-evolution"})
+        # B4-07 收尾：经批准的交付阶段失效同样是两批之间的控制面命令。
+        self.assertEqual(
+            batch.CONTROL_PLANE_COMMANDS,
+            frozenset(claude_upgrade.SHARED_SUBCOMMANDS) | {"tool-evolution", "delivery-stage-invalidate"},
+        )
+        self.assertLessEqual({"awaiting_finalize", "stage_failed"}, batch.CAMPAIGN_RUN_PAUSE_STATUSES)
+        self.assertNotIn("delivery_gates_failed", batch.CAMPAIGN_RUN_PAUSE_STATUSES)
         for status in sorted(batch.CAMPAIGN_RUN_PAUSE_STATUSES):
             with self.subTest(status=status):
                 self.assertEqual(batch.campaign_run_aware_exit_code({"status": status}, 2), 2)

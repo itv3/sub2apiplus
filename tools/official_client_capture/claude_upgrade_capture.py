@@ -2929,9 +2929,15 @@ def _active_unsealed_attempts(
     if _official_sealed(campaign_dir):
         stage = claude_upgrade._load_stage_result(campaign_dir, "capture-official", None, _verified_campaign_manifest=_manifest)
         reference = stage.get("attempt")
-        if not isinstance(reference, Mapping):
+        if stage.get("mode") == "predecessor_reuse":
+            # 只读复用前序证据（B2-09／B3-01）的官方阶段结果按合同不绑定 attempt（读侧已核 attempt 为 null）：本 Campaign 没有
+            # 被它封存的官方 attempt，目录里若有官方 attempt 一律按未封存列出。B4-07 收尾修：原先这里报「缺少 attempt 绑定」，
+            # 复用形态的 Campaign 在官方封存之后 status 与 capture-candidate run 的并行核对都走不下去。
+            sealed_attempt_id = None
+        elif not isinstance(reference, Mapping):
             raise ConfigurationError("已封存官方阶段缺少 attempt 绑定。")
-        sealed_attempt_id = Path(str(reference.get("path", ""))).parent.name
+        else:
+            sealed_attempt_id = Path(str(reference.get("path", ""))).parent.name
     invalidated = _invalidated_attempts(campaign_dir)
     active: list[str] = []
     for current_phase, candidate_id, attempt_root in claude_upgrade._campaign_attempt_roots(campaign_dir):

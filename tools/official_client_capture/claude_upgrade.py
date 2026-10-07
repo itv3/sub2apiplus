@@ -4742,7 +4742,7 @@ RECOVERY_SUBCOMMANDS: Mapping[str, str] = {
     "reconcile-supervisor-run": "对账尚无 attempt 的父监督器 run（派发前失败、强杀或中断），先入账后判定；可恢复时按 N+1 重派",
     "account-sealed-official": "把已封存官方阶段的模型请求写入项目总账（零请求、按 attempt 幂等）",
     "resume": "按 Campaign 状态续跑官方阶段：失败或已对账中断的 attempt 只经已批准的恢复预览 --rerun-failed",
-    "status": "显示 Campaign 状态和下一命令（官方阶段与候选采集阶段；--candidate-id 指定候选）",
+    "status": "显示 Campaign 状态和下一命令（官方阶段、候选采集与 VC-5／VC-6；--candidate-id 指定候选）",
     "environment-cleanup": "在明确批准下清理两个采集容器里的残留取证进程，前后探针与清理收据留证（Claude 新增）",
     "harden-evidence-permissions": "Claude 不提供：run 内置 Job 级与 run 末两级收口，失败收口经 resume 重新收口",
     "wire-transition-intent": "Claude 不提供：wire 层变化一律经 tool-evolution 登记",
@@ -5324,7 +5324,7 @@ def main(argv: list[str] | None = None) -> int:
     门禁计划与候选构建冻结（B3-04），revision-open 与 invalidate-candidate 在共享流程之外写 Store 侧两份登记（B3-05 编排器
     部分，``claude_upgrade_revision``），plan 带控制收据时建 preflight_only Campaign、analyze-target 做 VC-1 静态分析
     （B2-11），deliver-candidate 与 delivery-stage-invalidate 做 VC-6 候选交付、交付恢复段与经批准的阶段失效（B4-07 编排器
-    部分，``claude_upgrade_delivery``），compare 与 accept 是 VC-5 的两个评估读侧根（B4-06b，``claude_upgrade_compare``／
+    部分与收尾，``claude_upgrade_delivery``：交付写入只经父批次，finalize 之后写交付阶段结果与 VC-6 checkpoint），compare 与 accept 是 VC-5 的两个评估读侧根（B4-06b，``claude_upgrade_compare``／
     ``claude_upgrade_acceptance``），其余 Claude 专属子命令在动作体落实前报未实现。
 
     B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律

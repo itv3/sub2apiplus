@@ -91,7 +91,12 @@ attempt 收据），差别只在：
   恢复报告（``claude-candidate-gateway-cleanup/v1``）记进清理收据的 ``gateway_residue``。
 * 状态：``status --candidate-id``（或只有一个活跃候选时不带）给出候选采集状态，状态名与 Codex 同名（``profile_approved``、
   ``candidate_capture_failed``／``candidate_capture_interrupted``、``candidate_awaiting_client_checkpoint``、
-  ``candidate_awaiting_seal_approval``、``candidate_sealed``）；多个活跃候选时是 ``candidate_selection_required``。
+  ``candidate_awaiting_seal_approval``、``candidate_sealed``）；多个活跃候选时是 ``candidate_selection_required``。封存之后
+  （B4-07 收尾）接着是 VC-5 的 ``compared``、``ready``（VC-5 已完成），VC-6 的 ``delivery_in_progress``、
+  ``delivery_stage_failed``、``delivery_invalidation_pending``、``delivery_awaiting_finalize``（附交付包审核摘要）、
+  ``delivery_completion_pending``，终点 ``ready_for_operator_release``（validation_only，与 Codex 同名）或
+  ``production_activation_pending``（production_replacement，等 B4-08）；VC-5 封存链与 Store 交接对不上时是
+  ``delivery_state_inconsistent``。只读，不反映计时账本的暂停与审核（那些看对账输出）。
 """
 
 from __future__ import annotations
@@ -119,6 +124,7 @@ from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import file_sha256
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
+from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor
@@ -1290,7 +1296,9 @@ def _candidate_status(
 ) -> dict[str, Any]:
     """一个候选的采集状态与下一命令（只读浅检查；状态名与 Codex ``campaign_status`` 的候选部分同名）。
 
-    覆盖到候选采集封存为止（``candidate_sealed`` 的下一步是 compare，B4-03）；compare／accept／交付之后的状态随对应工作项。
+    封存之后（B4-07 收尾）接着给出 VC-5 与 VC-6 的状态（``_evaluation_and_delivery_status``）：``candidate_sealed``（下一步 compare
+    批次）、``compared``（assert-rules 与 accept 批次）、``ready``（VC-5 已完成，下一步 VC-6 交付 run 批次），以及交付各停点与
+    VC-6 终点（``claude_upgrade_delivery.delivery_status``）。
     """
 
     from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
@@ -1327,6 +1335,7 @@ def _candidate_status(
     failed = [f"{candidate_id}:{item['attempt_id']}" for item in summaries if item["status"] in {"failed", "environment_contaminated"}]
     latest = summaries[0] if summaries else None
     build_receipt = claude_upgrade._candidate_build_receipt_path(campaign_dir, candidate_id)
+    delivery: dict[str, Any] | None = None
     run_command = f"capture-candidate run --campaign-dir <Campaign> --candidate-id {candidate_id} --acknowledge-live-requests"
     resume_command = f"resume --candidate-id {candidate_id} --rerun-failed --recovery-preview <已批准的 recovery-preview> --acknowledge-live-requests"
     if decision["status"] != "clear":
@@ -1341,8 +1350,7 @@ def _candidate_status(
             "官方证据尚未封存却已有候选：人工审计" if not official_sealed else "候选已封存却还有未封存的预约或 attempt：人工审计"
         )
     elif sealed:
-        status = "candidate_sealed"
-        next_command = f"compare --candidate-id {candidate_id}（B4-03）"
+        status, next_command, delivery = _evaluation_and_delivery_status(campaign_dir, manifest, candidate_id)
     elif latest is None:
         status = "profile_approved"
         next_command = (
@@ -1397,7 +1405,42 @@ def _candidate_status(
         "failed_attempts": {"candidate": failed},
         "contamination_records": list(decision["records"]),
         "next_command": next_command,
+        **({"delivery": delivery} if delivery is not None else {}),
     }
+
+
+def _evaluation_and_delivery_status(
+    campaign_dir: Path, manifest: Mapping[str, Any], candidate_id: str
+) -> tuple[str, str, dict[str, Any] | None]:
+    """候选证据封存之后的状态（B4-07 收尾）：``(状态, 下一命令, 交付明细或 None)``。
+
+    比较收据与 accept 阶段结果按当前评估基线的读来源判断是否已写（与 ``_load_stage_result`` 同一坐标）；accept 结果与
+    VC-5 checkpoint 都在才算 VC-5 完成（accept 先写结果再写 checkpoint，只有结果是被打断的半成品，重派 accept 批次收敛）。
+    VC-5 完成之后交给 ``claude_upgrade_delivery.delivery_status``（入口重放、Store 交付链与交付阶段结果）；它失败关闭时报
+    ``delivery_state_inconsistent`` 并原样给出原因，交人工审计。
+    """
+
+    vc5_batch = "compile-and-run-vc-batch --phase VC-5"
+    compared = claude_upgrade._stage_path(campaign_dir, "compare", candidate_id)[1]
+    if not (compared.exists() or compared.is_symlink()):
+        return "candidate_sealed", f"VC-5：{vc5_batch} 派 compare 批次（compare --candidate-id {candidate_id}）", None
+    accepted = claude_upgrade._stage_path(campaign_dir, "accept", candidate_id)[1]
+    revision, _record = claude_upgrade._require_candidate_revision(campaign_dir, manifest, action="status")
+    checkpoint = claude_upgrade_vc.vc_checkpoint_path(campaign_dir, "VC-5", revision=revision)
+    if not (accepted.is_file() and checkpoint.is_file()):
+        return (
+            "compared",
+            f"VC-5：{vc5_batch} 依次派 assert-rules 批次（builder 按比较收据的配置）与 accept 批次（--external-gate-root、"
+            "--external-gate-receipt）；accept 结果已写而 VC-5 checkpoint 未写时逐字重派 accept 批次补写",
+            None,
+        )
+    from tools.official_client_capture import claude_upgrade_delivery
+
+    try:
+        delivery = claude_upgrade_delivery.delivery_status(campaign_dir, candidate_id)
+    except ConfigurationError as error:
+        return "delivery_state_inconsistent", f"人工审计 VC-5 封存链与交付状态：{error}", None
+    return str(delivery["status"]), str(delivery["next_command"]), delivery
 
 
 # ---------------------------------------------------------------------------

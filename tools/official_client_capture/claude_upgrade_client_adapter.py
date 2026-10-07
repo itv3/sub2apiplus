@@ -143,3 +143,24 @@ def official_attempt_free_post_run_action(action: Any, campaign_dir: Any) -> boo
     except Exception:  # noqa: BLE001 —— 判定失败一律按「不是」处理，由监督器沿用原分类
         return False
     return kind == action_id
+
+
+def candidate_post_run_extra_action(manifest: Any, action: Any) -> bool:
+    """候选级共享闭集之外的零请求后处理动作：只有 VC-6 两个交付动作（B4-07 收尾）。
+
+    ``deliver-candidate run``（``vc6-01-deliver-run``）与带批准的 ``deliver-candidate finalize``（``vc6-02-deliver-finalize``）
+    不发模型请求、重跑同一条命令即续跑（Store 只写一次、账本按 Store 补账），与 Codex VC-6 的 canonical 生产步骤同类：失败后
+    对账、修好接着逐字重派，不必作废已验收的候选。认定按形态精确闭合（``claude_upgrade_delivery.batch_action_kind``）：
+    阶段是 VC-6，动作 ID 与唯一项名相同，命令是受管 Python 对 ``claude_upgrade.py`` 的直接调用、子命令与动作对应、旗标闭集
+    精确、``--campaign-dir`` 指向本 Campaign——给别的命令套上这两个项名换不来可恢复分类。任何结构非法或判定失败都返回假。
+    """
+
+    try:
+        if __package__ in {None, ""}:
+            import claude_upgrade_delivery
+        else:
+            from . import claude_upgrade_delivery
+
+        return claude_upgrade_delivery.batch_action_kind(action, manifest) is not None
+    except Exception:  # noqa: BLE001 —— 判定失败一律按「不是」处理，由监督器沿用原分类
+        return False

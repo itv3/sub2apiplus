@@ -881,5 +881,18 @@ class HistoricalClearanceAcceptanceTests(_ClassifyCase):
         self.assertNotIn("input_reference_open", self.reason_codes(result))
 
 
+
+class SealedOfficialAttemptBindingTests(_ClassifyCase):
+    """B4-07 收尾修复：只读复用形态的官方阶段结果不绑定 attempt，官方封存之后的未封存 attempt 核对照常给出结果（原先报
+    「已封存官方阶段缺少 attempt 绑定」，status 与 capture-candidate run 的并行核对都走不下去）。采集形态按绑定排除的
+    路径由采集与续跑用例覆盖（本夹具的采集形态 attempt 没有原子预约收据）。"""
+
+    def test_reuse_mode_has_no_sealed_attempt(self) -> None:
+        reuse = self.build_campaign(official_reuse=True)
+        self.assertEqual(claude_upgrade._active_unsealed_attempts(reuse, "official"), [])
+        stage = claude_upgrade._load_stage_result(reuse, "capture-official")
+        self.assertEqual((stage["mode"], stage["attempt"]), ("predecessor_reuse", None))
+
+
 if __name__ == "__main__":
     unittest.main()

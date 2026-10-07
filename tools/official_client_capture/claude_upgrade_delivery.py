@@ -7,9 +7,12 @@
 * 输入只认 VC-5 已在 Store 形成的终态：当前候选 revision、当前评估基线下最后一条 ``validation_completed``，再沿它取
   AcceptanceFact、CandidateEvidencePackage、``candidate_frozen`` 与 CandidateBuildReceipt。编排器不重算 VC-5，也不调用
   accept 门禁（B4-06）的代码；B4-06 如另定「VC-6 交接清单」，只需改 ``_vc5_handoff`` 一处。
+* 编排器侧再重放 VC-5 的封存链（第八节）：交付只在 VC-5 checkpoint、accept 阶段结果与 Store 交接三者一致时进行。
 * 计时账本必须是当前 revision 的 VC-5 已完成、VC-6 进行中（VC-6 由批次层开始）；交付写入一律在这个前提下进行。
-* 暂不包含（B4-07 收尾，等 B4-06 合入后接上）：VC-6 checkpoint 与阶段完成登记、VC-6 批次接入（动作计划、阶段幂等重派
-  合同、父监督器退出码）。ARM64 隔离候选环境的真实执行器是 B4-07 遗留项，另行排期（第二节）。
+* 交付写入只经父批次（第九节）：Formal Campaign 里 ``deliver-candidate run`` 与带批准的 ``finalize`` 只能由
+  ``compile-and-run-vc-batch`` 派发；不带批准的 ``finalize`` 只看审核内容（零写入），``delivery-stage-invalidate`` 是批次
+  之间的控制面命令，两者可以直接执行。ARM64 隔离候选环境的真实执行器是 B4-07 遗留项，另行排期（第二节）；生产激活属
+  B4-08 生产分支（另批）。
 
 二、交付环境执行器
 ==================
@@ -52,17 +55,20 @@
 
 四、``deliver-candidate finalize``
 ==================================
-不带 ``--approve-sha256`` 时只输出交付包审核内容（零写入，退出 2）；带上且与审核摘要相同才封存私有归档清单、部署配置
-与交付包（同内容复用），再 ``candidate-delivery-finalize --allow-existing`` 签发 ``ready_for_operator_release`` 收据。交付包
-内容由 Store 交付链与证据确定性推出，所以重复 finalize 得到同一交付包，Store 返回原收据（``reused``）。交付包绑定有效链
-四阶段的最终 pass；公开证据索引取这四个阶段的证据清单；私有归档清单收录本 delivery 全部阶段（含失败阶段）的私有文件。
+不带 ``--approve-sha256`` 时只输出交付包审核内容（零写入，退出 2；已签收据时附交付阶段结果）；带上且与审核摘要相同才
+封存私有归档清单、部署配置与交付包（同内容复用），再 ``candidate-delivery-finalize --allow-existing`` 签发
+``ready_for_operator_release`` 收据，补账后写交付阶段结果与（validation_only）VC-6 checkpoint（第八节）。交付包内容由
+Store 交付链与证据确定性推出，所以重复 finalize 得到同一交付包，Store 返回原收据（``reused``），阶段结果与 checkpoint
+逐字复用。交付包绑定有效链四阶段的最终 pass；公开证据索引取这四个阶段的证据清单；私有归档清单收录本 delivery 全部阶段
+（含失败阶段）的私有文件。
 
 五、``delivery-stage-invalidate preview|apply``
 ===============================================
 只在 delivery 未 finalize、最新段已收口、没有待消费失效、被失效阶段在当前有效链上时允许。preview 零写入：证据清单的
 对象引用按内容现算（不封存），审核摘要由 Store 同名命令 ``--preview`` 给出；apply 核对批准摘要后封存证据清单，转调 Store
 ``delivery-stage-invalidate --approve-sha256 --allow-existing``，再记账本。重跑 apply 命中同一份待消费失效即复用。批次控制面
-命令：父监督器（campaign-run）上下文里一律拒绝。
+命令（与 invalidate-candidate、evaluation-recover 同类：批准一份恢复决定，不动环境、零请求，真正的重跑在下一个 run
+批次里）：父监督器（campaign-run）上下文里由 ``claude_upgrade_batch.CONTROL_PLANE_COMMANDS`` 统一拒绝。
 
 六、计时账本：先 Store 后账本
 =============================
@@ -76,6 +82,40 @@
 ========
 一条命令全程持交付级排他锁（``control/delivery/.delivery.lock``，非阻塞，另一个交付命令在跑即拒绝）；每一步 Store 写入与
 账本补账持 Campaign 锁。
+
+八、VC-6 入口重放、交付阶段结果与 VC-6 checkpoint（B4-07 收尾）
+================================================================
+* 入口重放（每条交付命令在任何写入之前，设计 §4.6.1「进入前重放 VC-5 完成事件与 AcceptanceFact 并核对 VC-4／VC-5 同一
+  条链」）：重放当前 revision 的 VC-5 checkpoint（逐级回溯，前序就是同 revision 的 VC-4 checkpoint）；读它绑定的 accept
+  阶段结果（``claude_upgrade_acceptance.load_stage_result`` 读侧核对），revision、用途与 ``production_state`` 一致，结果登记
+  的 ``validation_completed_ref``、``acceptance_ref``、``candidate_evidence_package_ref`` 必须就是 Store 交接取到的那几条；
+  accept 证据封印登记的构建收据必须就是 VC-4 checkpoint 绑定的那份，构建收据的候选与镜像 digest（``image.manifest_digest``）
+  与 Store 交接一致。任一不符零写入拒绝。
+* 交付阶段结果 ``delivery/<候选>/result.json``（``claude-upgrade-delivery/v1``）：finalize 签发收据、补账之后写，两种用途都写
+  （设计 §4.6.1 的「同一候选交付终点」）；绑定交付编号、交付计划、交付包、Store 交付收据、VC-5 checkpoint、accept 结果与
+  VC-4 构建收据，``release_state=ready_for_operator_release``、``production_state=not_activated``。只写一次，重跑逐字复用
+  （完成时刻除外）。
+* validation_only：紧接着以交付阶段结果为阶段收据写 VC-6 checkpoint（``claude_upgrade_vc.complete_candidate_phase``，执行项与
+  复用项为空、请求与扫描为 0，与 Codex VC-6 同一口径），``vc6_status=complete``。计时账本的 ``stage_completed`` 不在这里写：
+  finalize 批次父 run 成功、checkpoint 已存在时由批次层（``upgrade_control_plane._complete_timing_ledger_phase_after_batch``）补写。
+* production_replacement：只写交付阶段结果，不写 VC-6 checkpoint，``vc6_status=production_activation_pending``；VC-6 的生产激活
+  （Catalog 转换、构建发布、部署与验收、DeploymentFact、ProductionAcceptance）属 B4-08 生产分支（另批），落地时以生产完成收据
+  绑定这份交付结果再写 VC-6 checkpoint。账本 VC-6 保持进行中。
+
+九、VC-6 批次接入（B4-07 收尾）
+=============================
+* 动作计划（``run_action``／``finalize_action``／``vc6_action_plan``）：两批分开派发（批准摘要要人审）。run 批次的动作
+  ``vc6-01-deliver-run`` 命令为 ``deliver-candidate run --campaign-dir --candidate-id --environment-executor
+  --observation-window-seconds``（不带只作核对的 ``--rerun-from``：逐字重派到段中途时它必然被拒），动作超时取观察窗加
+  ``RUN_TIMEOUT_MARGIN_SECONDS``；finalize 批次的动作 ``vc6-02-deliver-finalize`` 带上一批输出的 ``--approve-sha256``。
+  复用项为空。
+* 父批次退出码（``claude_upgrade_batch.CAMPAIGN_RUN_PAUSE_STATUSES``，只在父监督器上下文里映射）：``awaiting_finalize`` 与
+  ``stage_failed`` 是合法停点、退出 0——阶段失败已写 Store 并由交付事件入账、同根因由交付侧计数，父批次再判失败会让同一次
+  失败在交付事件与监督器根因里各记一次；``delivery_gates_failed`` 零写入、没有交付记账，保持退出 3，交父批次失败收口。
+* 父批次失败的续跑（异常、强杀、超时、交付门禁未过）：两个动作经适配器 ``candidate_post_run_extra_action``（形态判定
+  ``batch_action_kind``）认作候选级零请求后处理动作，监督器收口为 ``recovery_required``（阶段保持进行中），
+  ``reconcile-supervisor-run`` 入账后以 ``compile-and-run-vc-batch`` 逐字重派同一批次；同根因达上限照常停线。与 Codex VC-6
+  的 canonical 生产步骤、Claude VC-5 的 compare／accept 同一条恢复路径，不另设阶段幂等重派合同。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层。
 """
@@ -100,6 +140,7 @@ if __package__ in {None, ""}:
 from tools.official_client_capture import claude_upgrade_batch
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 from tools.official_client_capture.capturelib.model import ConfigurationError
@@ -165,6 +206,51 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RESULTS = ("pass", "failed")
+# 八、交付阶段结果与 VC-6 完成（B4-07 收尾）。
+STAGE_RESULT_SCHEMA = "claude-upgrade-delivery/v1"
+STAGE_NAME = "deliver-candidate"
+STAGE_RESULT_DIRECTORY = Path("delivery")
+STAGE_RESULT_FILENAME = "result.json"
+STAGE_RESULT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "client",
+        "campaign_id",
+        "stage",
+        "candidate_id",
+        "candidate_revision",
+        "campaign_purpose",
+        "status",
+        "delivery_id",
+        "delivery_plan_ref",
+        "package_ref",
+        "receipt_ref",
+        "release_state",
+        "production_state",
+        "vc5_checkpoint",
+        "accept_result",
+        "vc4_build_receipt",
+        "store",
+        "vc6_status",
+        "completed_at_utc",
+    }
+)
+RELEASE_STATE = "ready_for_operator_release"
+CANDIDATE_PRODUCTION_STATE = "not_activated"
+VC6_STATUS_COMPLETE = "complete"
+VC6_STATUS_PRODUCTION_PENDING = "production_activation_pending"
+PRODUCTION_WORK_ITEM = "B4-08（生产分支，另批）"
+# 九、VC-6 批次动作（B4-07 收尾）：动作 ID 与唯一项名相同；run 的超时为观察窗加余量（默认 900 秒的动作超时装不下默认
+# 900 秒的观察窗与四个阶段）。
+RUN_ACTION_ID = "vc6-01-deliver-run"
+FINALIZE_ACTION_ID = "vc6-02-deliver-finalize"
+BATCH_ACTION_KINDS: Mapping[str, str] = {RUN_ACTION_ID: "run", FINALIZE_ACTION_ID: "finalize"}
+BATCH_ACTION_FLAGS: Mapping[str, frozenset[str]] = {
+    "run": frozenset({"--campaign-dir", "--candidate-id", "--environment-executor", "--observation-window-seconds"}),
+    "finalize": frozenset({"--campaign-dir", "--candidate-id", "--approve-sha256"}),
+}
+RUN_TIMEOUT_MARGIN_SECONDS = 1800
+FINALIZE_TIMEOUT_SECONDS = 900
 
 
 def _orchestrator() -> Any:
@@ -193,6 +279,7 @@ class DeliveryContext:
         ledger_dir: Path,
         data_root: Path,
         handoff: Mapping[str, Any],
+        entry: Mapping[str, Any],
     ) -> None:
         self.campaign_dir = campaign_dir
         self.manifest = manifest
@@ -205,6 +292,8 @@ class DeliveryContext:
         self.ledger_dir = ledger_dir
         self.data_root = data_root
         self.handoff = dict(handoff)
+        # 第八节入口重放的结论：VC-5 checkpoint、accept 结果与 VC-4 构建收据的绑定（交付阶段结果原样登记）。
+        self.entry = dict(entry)
         self.session = claude_upgrade_seal._StoreSession(
             Path(store.root), self.campaign_id, campaign_dir / STORE_SCRATCH_RELATIVE
         )
@@ -237,6 +326,7 @@ def _resolve(campaign_dir: Path, candidate_id: str, *, action: str) -> DeliveryC
     from tools.official_client_capture import claude_upgrade_capture
 
     data_root = claude_upgrade_capture._host_data_root(campaign_dir)
+    entry = _vc5_entry_replay(campaign_dir.resolve(strict=True), manifest, candidate_id, int(revision), handoff)
     return DeliveryContext(
         campaign_dir=campaign_dir.resolve(strict=True),
         manifest=manifest,
@@ -247,6 +337,7 @@ def _resolve(campaign_dir: Path, candidate_id: str, *, action: str) -> DeliveryC
         ledger_dir=ledger_dir,
         data_root=data_root,
         handoff=handoff,
+        entry=entry,
     )
 
 
@@ -285,6 +376,67 @@ def _vc5_handoff(store: Any, campaign: Mapping[str, Any], candidate_id: str) -> 
         "candidate_image_digest": str(candidate["image_digest"]),
         "architecture": str(candidate["target_architecture"]),
         "runtime_profile_sha256": str(build["profile_identity"]["profile_digest"]),
+    }
+
+
+def _campaign_path(campaign_dir: Path, raw: Any, label: str) -> Path:
+    """checkpoint／绑定里的路径：Campaign 相对路径落到 Campaign 目录下（不得逃出），绝对路径原样。"""
+
+    path = Path(str(raw))
+    if not path.is_absolute():
+        path = campaign_dir / path
+        if not path.resolve().is_relative_to(campaign_dir.resolve()):
+            raise ConfigurationError(f"{label} 的路径逃出了 Campaign 目录。")
+    return path
+
+
+def _vc5_entry_replay(
+    campaign_dir: Path, manifest: Mapping[str, Any], candidate_id: str, revision: int, handoff: Mapping[str, Any]
+) -> dict[str, Any]:
+    """第八节入口重放：VC-5 checkpoint → accept 阶段结果 → Store 交接，及 accept 证据封印 → VC-4 构建收据（只读）。
+
+    返回交付阶段结果要登记的三项绑定：``vc5_checkpoint``（文件绑定加内部身份）、``accept_result``、``vc4_build_receipt``。
+    """
+
+    from tools.official_client_capture import claude_upgrade_acceptance
+
+    plan = claude_upgrade_vc.vc_campaign_plan(campaign_dir, manifest)
+    vc5_path, vc5 = claude_upgrade_vc.replay_vc_checkpoint(campaign_dir, plan, "VC-5", revision=revision)
+    accept_path = _campaign_path(campaign_dir, vc5["stage_receipt"]["path"], "VC-5 checkpoint 的阶段收据")
+    accept = claude_upgrade_acceptance.load_stage_result(campaign_dir, accept_path, candidate_id, manifest=manifest)
+    if (
+        accept.get("candidate_revision") != revision
+        or accept.get("campaign_purpose") != manifest.get("campaign_purpose")
+        or accept.get("production_state") != CANDIDATE_PRODUCTION_STATE
+    ):
+        raise ConfigurationError(
+            f"VC-5 checkpoint 绑定的 accept 阶段结果不属于当前候选 revision r{revision}、本 Campaign 用途或未激活的候选："
+            "交付只承接当前 revision 的 VC-5 验收。"
+        )
+    store = accept.get("store") if isinstance(accept.get("store"), Mapping) else {}
+    for key in ("validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref"):
+        if store.get(key) != handoff[key]:
+            raise ConfigurationError(
+                f"accept 阶段结果登记的 {key} 与 Store 交接不一致：VC-5 的编排器侧封存与 Store 验收链不是同一条。"
+            )
+    seal_path = _campaign_path(campaign_dir, accept["evidence_seal"]["path"], "accept 验收证据封印")
+    seal = claude_upgrade_vc._read_json(seal_path, "accept 验收证据封印")
+    vc4_path, vc4 = claude_upgrade_vc.replay_vc_checkpoint(campaign_dir, plan, "VC-4", revision=revision)
+    build_binding = {"path": str(vc4["stage_receipt"]["path"]), "sha256": str(vc4["stage_receipt"]["sha256"])}
+    sealed_build = seal.get("build_receipt") if isinstance(seal.get("build_receipt"), Mapping) else {}
+    if {"path": sealed_build.get("path"), "sha256": sealed_build.get("sha256")} != build_binding:
+        raise ConfigurationError("accept 证据封印登记的构建收据不是 VC-4 checkpoint 绑定的那份：VC-4 与 VC-5 不是同一条链。")
+    build = claude_upgrade_vc._read_json(_campaign_path(campaign_dir, build_binding["path"], "VC-4 构建收据"), "VC-4 构建收据")
+    # 构建收据（official-client-upgrade-candidate-build-receipt/v1）的镜像 digest 记在 ``image.manifest_digest``，Store
+    # ``candidate_frozen`` 的 ``image_digest`` 取的就是它（``claude_upgrade_candidate`` 构建登记）。
+    image = build.get("image") if isinstance(build.get("image"), Mapping) else {}
+    if build.get("candidate_id") != candidate_id or image.get("manifest_digest") != handoff["candidate_image_digest"]:
+        raise ConfigurationError("VC-4 构建收据的候选或镜像 digest 与 Store 交接（candidate_frozen）不一致。")
+    del vc4_path
+    return {
+        "vc5_checkpoint": claude_upgrade_vc.vc_checkpoint_reference(campaign_dir, vc5_path, vc5),
+        "accept_result": claude_upgrade_vc.vc_control_binding(campaign_dir, accept_path),
+        "vc4_build_receipt": build_binding,
     }
 
 
@@ -1231,6 +1383,294 @@ def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain
 
 
 # ---------------------------------------------------------------------------
+# 六之二、交付阶段结果与 VC-6 完成（模块说明第八节）
+# ---------------------------------------------------------------------------
+
+
+def stage_result_path(campaign_dir: Path, candidate_id: str) -> Path:
+    """交付阶段结果坐标 ``delivery/<候选>/result.json``（与 accept 的 ``acceptance/<候选>/result.json`` 同一做法）。"""
+
+    if not SAFE_ID_RE.fullmatch(candidate_id or ""):
+        raise ConfigurationError("交付阶段结果的候选 ID 非法。")
+    return Path(campaign_dir) / STAGE_RESULT_DIRECTORY / candidate_id / STAGE_RESULT_FILENAME
+
+
+def load_stage_result(campaign_dir: Path, candidate_id: str, *, manifest: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """读取并核对交付阶段结果：没有时返回 None；合同、字段闭集、Campaign、候选、状态与三项文件绑定任一不符即失败关闭。"""
+
+    campaign_dir = Path(campaign_dir)
+    path = stage_result_path(campaign_dir, candidate_id)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ConfigurationError("交付阶段结果路径不可信。")
+    if not path.exists():
+        return None
+    result = claude_upgrade_vc._read_json(path, "交付阶段结果")
+    campaign_id = (manifest or claude_upgrade_vc._read_json(campaign_dir / "campaign.json", "Campaign 核心清单")).get("campaign_id")
+    if (
+        set(result) != STAGE_RESULT_FIELDS
+        or result.get("schema_version") != STAGE_RESULT_SCHEMA
+        or result.get("client") != "claude"
+        or result.get("campaign_id") != campaign_id
+        or result.get("stage") != STAGE_NAME
+        or result.get("candidate_id") != candidate_id
+        or result.get("status") != "complete"
+        or result.get("release_state") != RELEASE_STATE
+        or result.get("production_state") != CANDIDATE_PRODUCTION_STATE
+        or result.get("vc6_status") not in {VC6_STATUS_COMPLETE, VC6_STATUS_PRODUCTION_PENDING}
+        or not _orchestrator()._is_rfc3339_timestamp(result.get("completed_at_utc"))
+    ):
+        raise ConfigurationError("交付阶段结果合同、Campaign、候选或状态不一致。")
+    checkpoint = result.get("vc5_checkpoint") if isinstance(result.get("vc5_checkpoint"), Mapping) else {}
+    for label, binding in (
+        ("VC-5 checkpoint", {"path": checkpoint.get("path"), "sha256": checkpoint.get("sha256")}),
+        ("accept 阶段结果", result.get("accept_result")),
+        ("VC-4 构建收据", result.get("vc4_build_receipt")),
+    ):
+        claude_upgrade_vc._bound_file(campaign_dir, binding, f"交付阶段结果登记的{label}")
+    return result
+
+
+def _require_parent_batch(label: str) -> None:
+    """第九节：Formal Campaign 的交付写入只经父批次派发。直接 CLI 写的 VC-6 checkpoint 不会有批次层补写的 stage_completed，
+    而 checkpoint 已存在后共享入口又拒绝再编译 VC-6 批次——账本会永远停在 VC-6 进行中。"""
+
+    if not claude_upgrade_batch.in_campaign_run():
+        raise ConfigurationError(
+            f"{label} 是 VC-6 批次动作：Formal Campaign 里只能由 compile-and-run-vc-batch 经父监督器派发"
+            "（动作计划见 claude_upgrade_delivery.run_action／finalize_action）；不带 --approve-sha256 的 finalize 只看审核内容，"
+            "可以直接执行。"
+        )
+
+
+def _complete_vc6(
+    context: DeliveryContext, delivery: Mapping[str, Any], package_ref: Mapping[str, Any], receipt_ref: Mapping[str, Any]
+) -> dict[str, Any]:
+    """收据签发、补账之后：写交付阶段结果；validation_only 再写 VC-6 checkpoint（第八节）。只写一次，重跑逐字复用。"""
+
+    purpose = str(context.manifest.get("campaign_purpose"))
+    vc6_status = VC6_STATUS_COMPLETE if purpose == "validation_only" else VC6_STATUS_PRODUCTION_PENDING
+    payload = {
+        "schema_version": STAGE_RESULT_SCHEMA,
+        "client": "claude",
+        "campaign_id": context.campaign_id,
+        "stage": STAGE_NAME,
+        "candidate_id": context.candidate_id,
+        "candidate_revision": context.revision,
+        "campaign_purpose": purpose,
+        "status": "complete",
+        "delivery_id": str(delivery["delivery_id"]),
+        "delivery_plan_ref": dict(delivery["plan_ref"]),
+        "package_ref": dict(package_ref),
+        "receipt_ref": dict(receipt_ref),
+        "release_state": RELEASE_STATE,
+        "production_state": CANDIDATE_PRODUCTION_STATE,
+        "vc5_checkpoint": dict(context.entry["vc5_checkpoint"]),
+        "accept_result": dict(context.entry["accept_result"]),
+        "vc4_build_receipt": dict(context.entry["vc4_build_receipt"]),
+        "store": {
+            key: dict(context.handoff[key])
+            for key in ("validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref")
+        },
+        "vc6_status": vc6_status,
+        "completed_at_utc": _orchestrator()._utc_now(),
+    }
+    path = stage_result_path(context.campaign_dir, context.candidate_id)
+    ensure_private_directory(path.parent, context.campaign_dir)
+    sealed = claude_upgrade_seal._write_once_or_reuse(path, payload, ignore=("completed_at_utc",))
+    completion: dict[str, Any] = {
+        "vc6_status": vc6_status,
+        "stage_result": claude_upgrade_vc.vc_control_binding(context.campaign_dir, path),
+        "vc6_checkpoint": None,
+    }
+    if vc6_status == VC6_STATUS_COMPLETE:
+        checkpoint = claude_upgrade_vc.complete_candidate_phase(
+            context.campaign_dir,
+            context.manifest,
+            phase=DELIVERY_PHASE,
+            revision=context.revision,
+            stage_receipt_path=path,
+            completed_at_utc=str(sealed["completed_at_utc"]),
+            execute_item_ids=[],
+            reuse_item_ids=[],
+            live_request_count=0,
+            scanned_bytes=0,
+        )
+        checkpoint_path = claude_upgrade_vc.vc_checkpoint_path(context.campaign_dir, DELIVERY_PHASE, revision=context.revision)
+        completion["vc6_checkpoint"] = claude_upgrade_vc.vc_checkpoint_reference(context.campaign_dir, checkpoint_path, checkpoint)
+        completion["next_command"] = (
+            "VC-6 已完成（validation_only 候选交付终点）：本批次父 run 成功后由批次层登记 stage_completed；"
+            "候选交付收据与交付包交操作员发布"
+        )
+    else:
+        completion["next_command"] = (
+            f"候选交付终点已登记；production_replacement 的生产激活属 {PRODUCTION_WORK_ITEM}，尚未支持，VC-6 保持进行中"
+        )
+    return completion
+
+
+# ---------------------------------------------------------------------------
+# 六之三、VC-6 批次动作（模块说明第九节）
+# ---------------------------------------------------------------------------
+
+
+def run_action(
+    campaign_dir: Path,
+    candidate_id: str,
+    *,
+    environment_executor: str,
+    observation_window_seconds: int = DEFAULT_OBSERVATION_WINDOW_SECONDS,
+) -> dict[str, Any]:
+    """run 批次的唯一动作：受管 Python 直接调用 ``deliver-candidate run``，超时为观察窗加余量。"""
+
+    window = int(observation_window_seconds)
+    if window <= 0:
+        raise ConfigurationError("--observation-window-seconds 必须大于 0。")
+    return claude_upgrade_batch.managed_action(
+        RUN_ACTION_ID,
+        f"{DELIVERY_PHASE}:{RUN_ACTION_ID}",
+        [
+            "deliver-candidate", "run", "--campaign-dir", campaign_dir, "--candidate-id", candidate_id,
+            "--environment-executor", environment_executor, "--observation-window-seconds", window,
+        ],
+        item_ids=[RUN_ACTION_ID],
+        timeout_seconds=window + RUN_TIMEOUT_MARGIN_SECONDS,
+    )
+
+
+def finalize_action(campaign_dir: Path, candidate_id: str, approve_sha256: str) -> dict[str, Any]:
+    """finalize 批次的唯一动作：带上一批 run 输出的交付包审核摘要。"""
+
+    if not SHA256_RE.fullmatch(str(approve_sha256)):
+        raise ConfigurationError("--approve-sha256 必须是 64 位十六进制摘要。")
+    return claude_upgrade_batch.managed_action(
+        FINALIZE_ACTION_ID,
+        f"{DELIVERY_PHASE}:{FINALIZE_ACTION_ID}",
+        ["deliver-candidate", "finalize", "--campaign-dir", campaign_dir, "--candidate-id", candidate_id, "--approve-sha256", approve_sha256],
+        item_ids=[FINALIZE_ACTION_ID],
+        timeout_seconds=FINALIZE_TIMEOUT_SECONDS,
+    )
+
+
+def vc6_action_plan(action: Mapping[str, Any]) -> dict[str, Any]:
+    """一个交付动作的 VC-6 批次动作计划（按共享合同校验，复用项为空）。"""
+
+    return claude_upgrade_batch.action_plan([action], phase=DELIVERY_PHASE)
+
+
+def batch_action_kind(action: Any, manifest: Mapping[str, Any]) -> str | None:
+    """父批次清单里的动作是不是 VC-6 交付动作：是则返回 ``run``／``finalize``，否则 None（适配器
+    ``candidate_post_run_extra_action`` 的判定，第九节）。按形态精确闭合：阶段 VC-6，动作 ID 与唯一项名相同且是两者之一，命令是
+    受管 Python 对 ``claude_upgrade.py`` 的直接调用、子命令与动作对应，成对旗标恰好是该动作的闭集，``--campaign-dir`` 指向本
+    Campaign（目录名即 Campaign ID），``--candidate-id`` 是清单的候选，窗口与批准摘要形态合法。判定失败一律返回 None。"""
+
+    try:
+        if not isinstance(action, Mapping) or not isinstance(manifest, Mapping) or manifest.get("phase") != DELIVERY_PHASE:
+            return None
+        action_id = action.get("action_id")
+        kind = BATCH_ACTION_KINDS.get(action_id) if isinstance(action_id, str) else None
+        if kind is None or action.get("item_ids") != [action_id]:
+            return None
+        command = action.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(value, str) for value in command):
+            return None
+        argv = claude_upgrade_batch._orchestrator_argv(command)
+        if argv[:2] != ["deliver-candidate", kind]:
+            return None
+        flags = claude_upgrade_batch._paired_flags("deliver-candidate", argv[2:])
+        if set(flags) != BATCH_ACTION_FLAGS[kind]:
+            return None
+        campaign_id = manifest.get("campaign_id")
+        if not isinstance(campaign_id, str) or Path(flags["--campaign-dir"]).name != campaign_id:
+            return None
+        candidate = manifest.get("candidate_id")
+        if not SAFE_ID_RE.fullmatch(flags["--candidate-id"]) or (isinstance(candidate, str) and flags["--candidate-id"] != candidate):
+            return None
+        if kind == "run":
+            window = flags["--observation-window-seconds"]
+            if not SAFE_NAME_RE.fullmatch(flags["--environment-executor"]) or not window.isdigit() or int(window) <= 0:
+                return None
+        elif not SHA256_RE.fullmatch(flags["--approve-sha256"]):
+            return None
+    except Exception:  # noqa: BLE001 —— 判定失败一律按「不是」处理
+        return None
+    return kind
+
+
+# ---------------------------------------------------------------------------
+# 六之四、status 用的只读交付状态
+# ---------------------------------------------------------------------------
+
+
+def delivery_status(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
+    """VC-5 已完成之后的交付状态与下一命令（只读：入口重放、Store 交付链与交付阶段结果；``status`` 转调，状态名见
+    ``claude_upgrade_recovery`` 模块说明）。返回 ``{status, next_command, delivery_id, ...}``。"""
+
+    context = _resolve(Path(campaign_dir), candidate_id, action="status")
+    run_hint = (
+        f"compile-and-run-vc-batch --phase {DELIVERY_PHASE} 派交付 run 批次（动作取 claude_upgrade_delivery.run_action，"
+        f"候选 {candidate_id}）"
+    )
+    result = load_stage_result(context.campaign_dir, candidate_id, manifest=context.manifest)
+    if result is not None:
+        base = {"delivery_id": result["delivery_id"], "stage_result": claude_upgrade_vc.vc_control_binding(
+            context.campaign_dir, stage_result_path(context.campaign_dir, candidate_id))}
+        if result["vc6_status"] == VC6_STATUS_PRODUCTION_PENDING:
+            return {
+                **base,
+                "status": "production_activation_pending",
+                "next_command": f"候选交付终点已登记；production_replacement 的生产激活属 {PRODUCTION_WORK_ITEM}，尚未支持",
+            }
+        checkpoint = claude_upgrade_vc.vc_checkpoint_path(context.campaign_dir, DELIVERY_PHASE, revision=context.revision)
+        if checkpoint.is_file() and not checkpoint.is_symlink():
+            return {**base, "status": "ready_for_operator_release", "next_command": "validation_only 候选已完成 VC-6 交付登记"}
+        return {
+            **base,
+            "status": "delivery_completion_pending",
+            "next_command": "交付阶段结果已写、VC-6 checkpoint 未写：逐字重派 finalize 批次补写",
+        }
+    deliveries = _deliveries(context)
+    if not deliveries:
+        return {"status": "ready", "delivery_id": None, "next_command": f"VC-6：{run_hint}"}
+    current = deliveries[-1]
+    chain = _chain(context, current["delivery_id"])
+    base = {"delivery_id": current["delivery_id"]}
+    if chain["receipt_refs"]:
+        return {
+            **base,
+            "status": "delivery_completion_pending",
+            "next_command": "候选交付收据已签、交付阶段结果未写：逐字重派 finalize 批次补写",
+        }
+    if chain["complete"] and chain["pending_invalidation_ref"] is None:
+        review = _package_review(context, current, chain)["review_sha256"]
+        return {
+            **base,
+            "status": "delivery_awaiting_finalize",
+            "review_sha256": review,
+            "next_command": (
+                f"审核交付包（deliver-candidate finalize --candidate-id {candidate_id} 不带批准即输出审核内容）后，派 finalize 批次"
+                f"（动作取 claude_upgrade_delivery.finalize_action，--approve-sha256 {review}）"
+            ),
+        }
+    if chain["pending_invalidation_ref"] is not None:
+        return {
+            **base,
+            "status": "delivery_invalidation_pending",
+            "next_command": f"有已批准的阶段失效待消费：{run_hint}，以 approved_invalidation 恢复段从被失效的阶段起重跑",
+        }
+    if chain["latest_closed"]:
+        return {
+            **base,
+            "status": "delivery_stage_failed",
+            "next_command": f"修复后{run_hint}：自动预约下一恢复段，从失败阶段续跑；已通过的阶段要重跑先 delivery-stage-invalidate",
+        }
+    return {
+        **base,
+        "status": "delivery_in_progress",
+        "next_command": f"交付段尚未收口：{run_hint} 接着跑（父批次失败时先 reconcile-supervisor-run 对账、逐字重派）",
+    }
+
+
+# ---------------------------------------------------------------------------
 # 七、子命令
 # ---------------------------------------------------------------------------
 
@@ -1282,6 +1722,7 @@ def _summary(context: DeliveryContext, delivery: Mapping[str, Any] | None) -> di
 
 
 def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    _require_parent_batch("deliver-candidate run")
     context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action="deliver-candidate run")
     executor = _environment_executor(arguments.environment_executor)
     rerun_from = arguments.rerun_from
@@ -1403,9 +1844,11 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "status": "finalized" if finalized else "awaiting_finalize",
                 "receipt_refs": chain["receipt_refs"],
                 "package_review": review,
+                "stage_result": load_stage_result(context.campaign_dir, context.candidate_id, manifest=context.manifest),
             }, 0 if finalized else 2
         if arguments.approve_sha256 != review["review_sha256"]:
             raise ConfigurationError("--approve-sha256 与交付包审核摘要不一致：批准的不是这份交付包，请重新查看审核内容。")
+        _require_parent_batch("deliver-candidate finalize --approve-sha256")
         if not finalized:
             _require_vc6_open(context, _ledger_state(context))
         with _write_scope(context):
@@ -1422,14 +1865,16 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 ),
             )
             ledger_events = _catch_up_ledger(context)
+            completion = _complete_vc6(context, delivery, package_ref, dict(outcome["receipt_ref"]))
     return {
         **_summary(context, delivery),
         "status": "finalized",
         "receipt_ref": dict(outcome["receipt_ref"]),
         "reused": bool(outcome["reused"]),
         "package_ref": package_ref,
-        "release_state": "ready_for_operator_release",
+        "release_state": RELEASE_STATE,
         "ledger_events": ledger_events,
+        **completion,
     }, 0
 
 
@@ -1456,8 +1901,7 @@ def _invalidation_evidence(context: DeliveryContext, stage: str, stage_ref: Mapp
 
 
 def _invalidate(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    if claude_upgrade_batch.in_campaign_run():
-        raise ConfigurationError("delivery-stage-invalidate 是批次控制面命令，禁止由 campaign-run 动作派发。")
+    # 批次控制面命令：父监督器上下文里由 ``claude_upgrade.main`` 按 ``claude_upgrade_batch.CONTROL_PLANE_COMMANDS`` 先行拒绝。
     action = str(arguments.invalidation_action)
     context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action=f"delivery-stage-invalidate {action}")
     reason = str(arguments.reason or "").strip()

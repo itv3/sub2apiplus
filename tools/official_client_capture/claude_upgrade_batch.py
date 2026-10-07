@@ -81,21 +81,28 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
   的落盘都是只写一次或重放复用，逐字重派在已写半成品上续作。
 
   阶段审核只承接原样重派：经本合同进审核的批准批次若修复又改变了 seal 代号，本合同拒绝（旧预览不能再批准），只能显式
-  停线；同样的情形经 post-run-tooling 收账时由 seal 链续派协议改派新的预览批次。VC-5、VC-6 随 B4。
+  停线；同样的情形经 post-run-tooling 收账时由 seal 链续派协议改派新的预览批次。
+* VC-5、VC-6 没有阶段幂等重派合同：它们的零请求动作走候选级零请求后处理恢复（与 Codex 同一条路径，计时账本
+  ``CANDIDATE_STAGE_REPLAY_PHASES`` 的说明）——VC-5 的 compare、assert-rules、acceptance 在共享闭集里；VC-6 的两个交付动作
+  （``claude_upgrade_delivery.RUN_ACTION_ID``／``FINALIZE_ACTION_ID``，B4-07 收尾）经适配器 ``candidate_post_run_extra_action``
+  按形态精确认定。失败后收口为 ``recovery_required``（阶段保持进行中），``reconcile-supervisor-run`` 入账后逐字重派同一批次。
 
 四、父监督器上下文的退出码（``campaign_run_aware_exit_code``）
 =========================================================
 直接 CLI 里草案、修订与预览返回诊断码 2（等审核）；在父批次里它们是该批次的预期终点，退出 0，否则父监督器会把动作记成
 失败、把账本推进阶段审核。合法暂停点：``awaiting_seal_approval``／``seal_blocked``（seal 预览）、
 ``awaiting_classification_approval``／``classification_blocked``（分类草案与修订）、``awaiting_profile_preparation_approval``／
-``profile_blocked``（画像准备草案与修订）、``awaiting_profile_approval``（暂存预览）。机器草案按设计全部未决、门禁必然
+``profile_blocked``（画像准备草案与修订）、``awaiting_profile_approval``（暂存预览），以及 VC-6 交付（B4-07 收尾）的
+``awaiting_finalize``（四阶段全过、等交付包审核，下一批 finalize）与 ``stage_failed``（阶段失败已写 Store 并由交付事件入账、
+同根因由交付侧计数，下一批 run 自动预约恢复段；父批次再判失败会让同一次失败在两处各记一次根因）。交付门禁未过
+（``delivery_gates_failed``）零写入、没有交付记账，不是暂停点，交父批次失败收口。机器草案按设计全部未决、门禁必然
 blocked，所以 blocked 也是暂停点；批准与封存只有 ``complete`` 才算完成（它们本来就退出 0）。与 Codex
 ``_campaign_run_aware_exit_code`` 同一口径（Codex 的暂停状态名不同）。采集 ``awaiting_receipts`` 由 B2-06 的 run 自己映射。
 
 五、批次控制面命令不进动作队列（``reject_control_plane_in_campaign_run``）
 =====================================================================
-``compile-and-run-vc-batch``、``revision-open``、``invalidate-candidate``、评估恢复、延期、放弃、隔离、工具演进等是两个
-批次之间的控制面命令，在父监督器上下文里执行即拒绝（与 Codex ``_reject_unparented_formal_write`` 同一口径）；对账、
+``compile-and-run-vc-batch``、``revision-open``、``invalidate-candidate``、评估恢复、延期、放弃、隔离、工具演进、经批准的
+交付阶段失效（``delivery-stage-invalidate``，B4-07 收尾）等是两个批次之间的控制面命令，在父监督器上下文里执行即拒绝（与 Codex ``_reject_unparented_formal_write`` 同一口径）；对账、
 导入、冻结、环境清理等已由 Claude 适配器的禁止子命令表在预声明时拒绝。
 
 六、受管动作与动作计划（``managed_action``／``action_plan``）
@@ -195,6 +202,9 @@ CAMPAIGN_RUN_PAUSE_STATUSES = frozenset(
         "awaiting_profile_preparation_approval",
         "profile_blocked",
         "awaiting_profile_approval",
+        # B4-07 收尾：VC-6 交付的两个合法停点（模块说明第四节）。
+        "awaiting_finalize",
+        "stage_failed",
     }
 )
 
@@ -215,6 +225,8 @@ CONTROL_PLANE_COMMANDS = frozenset(
         "evidence-conflict-quarantine",
         "campaign-abandon",
         "tool-evolution",
+        # B4-07 收尾：经批准的交付阶段失效是两批之间的恢复决定（原先在交付模块里单独拒绝）。
+        "delivery-stage-invalidate",
     }
 )
 

@@ -428,6 +428,11 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # 形态精确闭合的静态分析）。
     "official_post_run_tooling_item_ids": "value",
     "official_attempt_free_post_run_action": "callable",
+    # 候选级（VC-5／VC-6）零请求后处理的额外动作（B4-07 收尾）：(run_manifest, action) → 该动作是否是本客户端额外认定的
+    # 候选级零请求后处理动作。监督器 ``candidate_post_run_recovery_action`` 在共享闭集（candidate-seal、compare、acceptance、
+    # assert-*、canonical 各步）之外按它放行，失败后进 recovery_required、对账后逐字重派。Codex 没有，恒为假（判定逐字不变）；
+    # Claude 只认 VC-6 两个交付动作（deliver-candidate run／finalize），按动作 ID、项名与命令形态精确闭合。
+    "candidate_post_run_extra_action": "callable",
     # VC-5 准入（B5b-01）：驱动 ``vc5_admission`` 的两项受管事实，参数一律按关键字给出。
     # ``catalog_stage_profile(campaign_dir, *, campaign_id, candidate_id, target_version, profile_id, candidate_source,
     # lifecycle_dir, candidate_commit)``：VC-3 暂存画像与 VC-4 候选构建收据的重放，返回两客户端同一组字段（profile_bytes、
@@ -483,6 +488,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         # VC-1 续跑路径：Codex 的阶段项闭集就是监督器原常量（原位不动），不绑定 attempt 的动作判定恒为假。
         "official_post_run_tooling_item_ids": ("codex_upgrade_supervisor", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),
         "official_attempt_free_post_run_action": ("codex_upgrade_client_adapter", "official_attempt_free_post_run_action"),
+        # B4-07 收尾：Codex 没有共享闭集之外的候选级零请求后处理动作，恒为假。
+        "candidate_post_run_extra_action": ("codex_upgrade_client_adapter", "candidate_post_run_extra_action"),
         # B5b-01：VC-5 准入两项事实，函数体是驱动原写在 vc5_admission 里的 Codex 逻辑，原样搬入。
         "catalog_stage_profile": ("codex_upgrade_client_adapter", "catalog_stage_profile"),
         "vc5_official_campaign": ("codex_upgrade_client_adapter", "vc5_official_campaign"),
@@ -519,6 +526,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "atomic_rehearsal_profile": ("claude_upgrade_atomic_rehearsal", None),  # B5a-09 续
         "official_post_run_tooling_item_ids": ("claude_upgrade_client_adapter", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),  # VC-1 续跑路径
         "official_attempt_free_post_run_action": ("claude_upgrade_client_adapter", "official_attempt_free_post_run_action"),  # VC-1 续跑路径
+        "candidate_post_run_extra_action": ("claude_upgrade_client_adapter", "candidate_post_run_extra_action"),  # B4-07 收尾
         "catalog_stage_profile": ("claude_upgrade_vc5_admission", "catalog_stage_profile"),  # B5b-01
         "vc5_official_campaign": ("claude_upgrade_vc5_admission", "vc5_official_campaign"),  # B5b-01
     }),

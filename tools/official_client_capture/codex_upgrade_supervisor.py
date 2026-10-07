@@ -9362,6 +9362,10 @@ def candidate_post_run_recovery_action(manifest: Mapping[str, Any], action_id: s
     这些动作幂等、不发请求：修好工具或环境后逐字重派同一批次即可，不必作废候选或停线。post-run-tooling
     五条判据不成立的残余情形（中断类失败、同 run 内开过 Kilo 窗口、awaiting attempt 数不为 1 等）也由此进入
     recovery_required，请求账交给对账核算；批次 execute 项含非后处理项时不放行。
+
+    Claude 升级 B4-07 收尾：共享闭集之外，清单所属客户端经适配器 ``candidate_post_run_extra_action`` 额外认定的动作
+    （Claude 只有 VC-6 两个交付动作，按动作 ID、项名与命令形态精确闭合）同样放行；Codex 的认定恒为假、额外项为空，
+    判定与改造前逐字相同。post-run-tooling 五条判据（``_post_run_tooling_item_allowed``）不认这些额外项，它们只走这里。
     """
 
     if manifest.get("phase") not in {"VC-5", "VC-6"}:
@@ -9382,8 +9386,36 @@ def candidate_post_run_recovery_action(manifest: Mapping[str, Any], action_id: s
             _post_run_tooling_item_allowed(item) for item in execute_items
         ):
             return "post-run"
+        extra = _candidate_post_run_extra_items(manifest, actions)
+        if extra and all(
+            _post_run_tooling_item_allowed(item) or (isinstance(item, str) and item in extra) for item in item_ids
+        ) and all(
+            _post_run_tooling_item_allowed(item) or (isinstance(item, str) and item in extra) for item in execute_items
+        ):
+            return "post-run"
         return None
     return None
+
+
+def _candidate_post_run_extra_items(manifest: Mapping[str, Any], actions: Sequence[Any]) -> frozenset[str]:
+    """清单所属客户端额外认定的候选级零请求后处理动作的项名（B4-07 收尾）。
+
+    逐个动作经适配器 ``candidate_post_run_extra_action`` 认定（不写客户端分支）；清单归属判不出或适配器取不到时按没有
+    额外项处理，判定退回共享闭集。Codex 的认定恒为假，返回空集。
+    """
+
+    try:
+        adapter = upgrade_client_adapter.adapter_for(run_manifest_client(manifest))
+    except (SupervisorError, upgrade_client_adapter.ClientAdapterError):
+        return frozenset()
+    items: set[str] = set()
+    for action in actions:
+        if not isinstance(action, Mapping) or not adapter.candidate_post_run_extra_action(manifest, action):
+            continue
+        item_ids = action.get("item_ids")
+        if isinstance(item_ids, list):
+            items.update(item for item in item_ids if isinstance(item, str))
+    return frozenset(items)
 
 
 def _candidate_recovery_batch_fields_match(

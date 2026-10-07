@@ -211,6 +211,8 @@ class CodexMemberValueTests(unittest.TestCase):
 
         self.assertIs(self.adapter.official_post_run_tooling_item_ids, codex_upgrade_supervisor.OFFICIAL_POST_RUN_TOOLING_ITEM_IDS)
         self.assertFalse(self.adapter.official_attempt_free_post_run_action({"action_id": "vc1-01-analyze-target"}, Path("/")))
+        # B4-07 收尾：Codex 没有共享闭集之外的候选级零请求后处理动作。
+        self.assertFalse(self.adapter.candidate_post_run_extra_action({"phase": "VC-6"}, {"action_id": "vc6-01-deliver-run"}))
 
     def test_member_patches_are_visible_through_adapter(self) -> None:
         from tools.official_client_capture import codex_upgrade_reconciler
@@ -277,6 +279,22 @@ class ClaudeBindingTests(unittest.TestCase):
                 with self.subTest(refused=label):
                     self.assertFalse(adapter.official_attempt_free_post_run_action(action, campaign))
             self.assertFalse(adapter.official_attempt_free_post_run_action(analyze, None))
+
+    def test_claude_candidate_post_run_extra_action(self) -> None:
+        """B4-07 收尾：只认 VC-6 两个交付动作的精确形态（详尽的拒绝矩阵见 test_claude_upgrade_delivery 与 vc6_batch）。"""
+
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+
+        adapter = uca.adapter_for("claude")
+        campaign = Path("/data/evidence/campaigns/claude-code-2_1_285-x")
+        manifest = {"phase": "VC-6", "campaign_id": campaign.name, "candidate_id": "cand-a"}
+        run = delivery.run_action(campaign, "cand-a", environment_executor="fixture")
+        finalize = delivery.finalize_action(campaign, "cand-a", "b" * 64)
+        self.assertTrue(adapter.candidate_post_run_extra_action(manifest, run))
+        self.assertTrue(adapter.candidate_post_run_extra_action(manifest, finalize))
+        self.assertFalse(adapter.candidate_post_run_extra_action({**manifest, "phase": "VC-5"}, run))
+        self.assertFalse(adapter.candidate_post_run_extra_action(manifest, dict(run, item_ids=["acceptance"])))
+        self.assertFalse(adapter.candidate_post_run_extra_action(manifest, None))
 
     def test_facade_exposes_only_surface_names(self) -> None:
         facade = uca.OrchestratorFacade("claude")

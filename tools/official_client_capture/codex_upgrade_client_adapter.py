@@ -72,6 +72,17 @@ def official_attempt_free_post_run_action(action: Any, campaign_dir: Any) -> boo
     return False
 
 
+def candidate_post_run_extra_action(manifest: Any, action: Any) -> bool:
+    """候选级（VC-5／VC-6）共享闭集之外的零请求后处理动作：Codex 没有，恒为假（B4-07 收尾）。
+
+    监督器 ``candidate_post_run_recovery_action`` 经适配器调用它；恒为假时额外项为空，判定与改造前逐字相同（Codex 的
+    VC-6 生产步骤本来就在共享闭集的 canonical 项里，validation_only 的 deliver 动作照旧进候选审核）。
+    """
+
+    del manifest, action
+    return False
+
+
 # ---------------------------------------------------------------------------
 # VC-5 准入的受管事实（B5b-01）：驱动 vc5_admission 原有的 Codex 逻辑，原样搬入
 # ---------------------------------------------------------------------------
